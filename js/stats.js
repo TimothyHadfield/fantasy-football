@@ -1,8 +1,9 @@
 // League statistics.
 //
-// These formulas are reverse-engineered from Tim's 2025 Google Sheet. Each one
-// below is marked CONFIRMED (verified to reproduce the sheet's numbers) or
-// UNKNOWN (formula not yet supplied — see PROGRESS.md).
+// These formulas come from Tim's 2025 Google Sheet. Most were reverse-engineered
+// from a PDF of it; the last five were read directly out of the sheet's xlsx
+// export on 2026-09-08 and are marked with the cell they came from. Everything
+// below is CONFIRMED — it reproduces the sheet's own numbers. See PROGRESS.md.
 //
 // Input shape (produced by demo.js, and eventually by espn.js):
 //   { season, weeks, teams: [{id, name}], games: [...], injuries: [...] }
@@ -34,6 +35,30 @@ export function stdev(values) {
   if (values.length < 2) return 0;
   const m = mean(values);
   return Math.sqrt(sum(values.map((v) => (v - m) ** 2)) / (values.length - 1));
+}
+
+/**
+ * How much luck decided a single game, from its final margin.
+ *
+ * CONFIRMED — this is the sheet's third Score Differential column, recovered
+ * verbatim from the xlsx:
+ *   =MIN(MAX((150/margin) - 7*SIGN(margin), -50), 50)
+ *
+ * Observed behaviour: the shape is inverse, so a one-point game returns a
+ * near-maximal +/-50 while a 71-point blowout returns about -4.9. The -7*SIGN
+ * term makes it cross zero around a 21-point margin, past which a comfortable
+ * win scores as *negative* luck.
+ *
+ * The reasoning behind 150, -7 and the +/-50 clamp is Tim's and he has not
+ * explained it yet. Do not infer it, retune it, or "simplify" it — reproduce it
+ * exactly until he does.
+ *
+ * Returns null for a tied game, where the sheet itself shows #DIV/0!.
+ */
+export function gameLuck(margin) {
+  if (!margin) return null;
+  const s = margin > 0 ? 1 : -1;
+  return Math.min(Math.max((150 / margin) - 7 * s, -50), 50);
 }
 
 /**
@@ -98,6 +123,8 @@ function buildWeeklyRows(data) {
         oppLuck: round1(side.oppActual - side.oppProjected),
         actualDiff: round1(side.actual - side.oppActual),
         projectedDiff: round1(side.projected - side.oppProjected),
+        // CONFIRMED: the sheet's third Score Differential column.
+        gameLuck: gameLuck(side.actual - side.oppActual),
         won: side.actual > side.oppActual,
         tied: side.actual === side.oppActual,
       });
@@ -110,7 +137,52 @@ function buildWeeklyRows(data) {
 
 // --------------------------------------------------------------- team metrics
 
-function teamMetrics(team, weekly, leagueAvgProjected) {
+/**
+ * The sheet's "Cumulative Luck (adjusted formula)" series, one value per week,
+ * each computed from weeks 1..w rather than from that week alone.
+ *
+ * CONFIRMED:  luck(w) = leagueAvgActual(1..w) - PTW(1..w) + SD(1..w)
+ *
+ * Per Tim, this is not a metric of its own — it is just LUCK evaluated at each
+ * week, since LUCK already folds in every week to date. The point of plotting
+ * it is the convergence: if luck really is random, every team's line should
+ * trend toward zero as the season lengthens, and the spread between them should
+ * shrink. That is what the sheet's STDEV row underneath was demonstrating.
+ *
+ * Recovered by residual analysis against the sheet's own 130 values: with this
+ * shape, the leftover term is identical across all ten teams to 15 significant
+ * figures, which is what pins it down.
+ *
+ * One deliberate difference from the sheet. Tim hardcoded the league-average
+ * term as a typed constant and updated it only occasionally — 122.7 for weeks
+ * 1-8, 121.4 for 9-10, 121.8 for 11-13 — and by week 13 it had drifted 4.64
+ * points above the league's actual average of 117.16. We compute it from the
+ * data instead, so our numbers sit a few points below the sheet's while the
+ * ordering, which is all LS and PS depend on, is unchanged.
+ */
+function cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual) {
+  const out = [];
+  let oppTotal = 0;
+  let luckTotal = 0;
+  const sds = [];
+
+  weekly.forEach((w, i) => {
+    oppTotal += w.oppActual;
+    luckTotal += w.luck;
+    if (w.gameLuck !== null) sds.push(w.gameLuck);
+
+    const n = i + 1;
+    const ptw = oppTotal / n - luckTotal / n;
+    const sd = sds.length ? mean(sds) : 0;
+    const league = cumulativeLeagueAvgActual.get(w.week) ?? 0;
+
+    out.push({ week: w.week, value: round1(league - ptw + sd) });
+  });
+
+  return out;
+}
+
+function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulativeLeagueAvgActual) {
   const actuals = weekly.map((w) => w.actual);
   const projecteds = weekly.map((w) => w.projected);
   const oppActuals = weekly.map((w) => w.oppActual);
@@ -119,6 +191,22 @@ function teamMetrics(team, weekly, leagueAvgProjected) {
   const pointsFor = sum(actuals);
   const pointsAgainst = sum(oppActuals);
   const n = weekly.length || 1;
+
+  // CONFIRMED: PTW = opponent avg actual - own avg luck. Recovered verbatim
+  // from the sheet as `=AU3-AR3`. It reads as "the score you would have needed
+  // to beat your average opponent, once your own luck is taken back out".
+  const pointsToWin = mean(oppActuals) - mean(weekly.map((w) => w.luck));
+
+  // CONFIRMED: SD averages the per-game luck figure over the season. Tied
+  // games contribute nothing rather than poisoning the average — the sheet
+  // shows #DIV/0! for Miles, who had one.
+  const gameLucks = weekly.map((w) => w.gameLuck).filter((v) => v !== null);
+  const scoreDiffLuck = gameLucks.length ? mean(gameLucks) : null;
+
+  // CONFIRMED: `=121.8-(AX3-AY3)`, i.e. leagueAvgActual - (PTW - SD). This is
+  // the standings LUCK column, and it equals the final cumulative-luck value.
+  const luckScore = leagueAvgActual - (pointsToWin - (scoreDiffLuck ?? 0));
+  const skill = mean(projecteds) - leagueAvgProjected;
 
   return {
     id: team.id,
@@ -145,7 +233,7 @@ function teamMetrics(team, weekly, leagueAvgProjected) {
 
     // CONFIRMED: skill = own avg projected - league avg projected.
     // Verified on all ten teams in the 2025 sheet.
-    skill: round1(mean(projecteds) - leagueAvgProjected),
+    skill: round1(skill),
 
     wins: weekly.filter((w) => w.won).length,
     losses: weekly.filter((w) => !w.won && !w.tied).length,
@@ -156,13 +244,28 @@ function teamMetrics(team, weekly, leagueAvgProjected) {
     projectedBox: boxStats(projecteds),
     actualStdev: round1(stdev(actuals)),
 
-    // --- UNKNOWN: formulas not yet supplied ---
-    pointsToWin: null,      // sheet column "PTW"
-    scoreDiffLuck: null,    // sheet column "SD" in the luck block
-    cumulativeLuck: null,   // the "Cumulative Luck (adjusted formula)" series
-    skillPlusLuck: null,    // = skill + cumulative luck, so blocked on the above
+    // --- Recovered from the sheet's xlsx on 2026-09-08. See PROGRESS.md. ---
+    pointsToWin: round1(pointsToWin),                       // "PTW"
+    scoreDiffLuck: scoreDiffLuck === null ? null : round1(scoreDiffLuck), // "SD"
+    luckScore: round1(luckScore),                           // "LUCK"
+    cumulativeLuck: cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual),
+    skillPlusLuck: round1(skill + luckScore),               // "S+L"
+
+    // Unrounded copies. Everything above is rounded for display, but two teams
+    // can sit thousandths apart in S+L — Stevenson and Mitch did in 2025 — and
+    // ranking the rounded values would swap them. Standings sort on these.
+    exact: { skill, luckScore, skillPlusLuck: skill + luckScore, pointsToWin },
   };
 }
+
+// Injury losses are deliberately NOT computed. Tim's sheet has two empty tables
+// for them; the site leaves the feature out. Keeping his method here in case it
+// ever comes back: for a manager holding an injured player, compare their team
+// projection after the injury against what it would have been with that player
+// available, assuming the player would have projected near their own season
+// average. The gap is the loss. Automating it needs per-week injury status plus
+// each player's season-average projection — ESPN has both, via mRoster per week
+// and kona_player_info — and a decision on suspensions, which Tim counted too.
 
 // ------------------------------------------------------------ league metrics
 
@@ -248,27 +351,43 @@ export function computeLeagueStats(data) {
   }
   const leagueAvgProjected = mean(allProjected);
 
+  const allActuals = [];
+  for (const rows of weeklyRows.values()) for (const r of rows) allActuals.push(r.actual);
+  const leagueAvgActual = mean(allActuals);
+
+  // League average actual score across weeks 1..w, for every w. The cumulative
+  // luck series needs the average as it stood at the time, not the final one.
+  const orderedWeeks = [...new Set(data.games.map((g) => g.week))].sort((a, b) => a - b);
+  const cumulativeLeagueAvgActual = new Map();
+  const seen = [];
+  for (const week of orderedWeeks) {
+    for (const rows of weeklyRows.values()) {
+      const r = rows.find((x) => x.week === week);
+      if (r) seen.push(r.actual);
+    }
+    cumulativeLeagueAvgActual.set(week, mean(seen));
+  }
+
   const teams = data.teams.map((t) =>
-    teamMetrics(t, weeklyRows.get(t.id) || [], leagueAvgProjected)
+    teamMetrics(t, weeklyRows.get(t.id) || [], leagueAvgProjected,
+                leagueAvgActual, cumulativeLeagueAvgActual)
   );
 
-  // Standings we can compute today.
+  // CONFIRMED: all four standings reproduce the sheet's own ranks, 10/10 each.
+  // AS breaks a tie on wins by total points; LS and PS are straight sorts.
   const actualRank = rankBy(teams, (t) => t.wins * 1000 + t.pointsFor);
-  const skillRank = rankBy(teams, (t) => t.skill);
+  const skillRank = rankBy(teams, (t) => t.exact.skill);
+  const luckRank = rankBy(teams, (t) => t.exact.luckScore);
+  const projectedRank = rankBy(teams, (t) => t.exact.skillPlusLuck);
   for (const t of teams) {
     t.actualStanding = actualRank.get(t.id);
     t.skillStanding = skillRank.get(t.id);
-    // UNKNOWN: luck standings and projected standings both depend on the
-    // cumulative-luck formula, so they stay null for now.
-    t.luckStanding = null;
-    t.projectedStanding = null;
+    t.luckStanding = luckRank.get(t.id);
+    t.projectedStanding = projectedRank.get(t.id);
   }
 
-  const allActuals = [];
-  for (const rows of weeklyRows.values()) for (const r of rows) allActuals.push(r.actual);
-
   // Per-week league averages.
-  const weekNumbers = [...new Set(data.games.map((g) => g.week))].sort((a, b) => a - b);
+  const weekNumbers = orderedWeeks;
   const weeklyLeagueAverages = weekNumbers.map((week) => {
     const scores = [];
     const projs = [];
@@ -293,7 +412,7 @@ export function computeLeagueStats(data) {
     weekNumbers,
     weeklyLeagueAverages,
     leagueAvgProjected: round1(leagueAvgProjected),
-    leagueAvgActual: round1(mean(allActuals)),
+    leagueAvgActual: round1(leagueAvgActual),
     predictionAccuracy: predictionAccuracy(data.games),
     distribution10: scoreDistribution(allActuals, 10),
     distribution20: scoreDistribution(allActuals, 20),

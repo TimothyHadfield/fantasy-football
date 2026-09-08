@@ -164,11 +164,30 @@ export async function fetchByeWeeks() {
 
 // ------------------------------------------------------------------ decoding
 
-function statTotal(stats, seasonId, sourceId) {
-  const hit = (stats || []).find(
+function statEntry(stats, seasonId, sourceId) {
+  return (stats || []).find(
     (s) => s.seasonId === seasonId && s.statSourceId === sourceId && s.statSplitTypeId === 0
   );
+}
+
+function statTotal(stats, seasonId, sourceId) {
+  const hit = statEntry(stats, seasonId, sourceId);
   return hit ? hit.appliedTotal : null;
+}
+
+// Raw (unscored) stat lines, keyed by ESPN's numeric stat ids. Only the
+// well-established ids are used here — ESPN publishes no schema for these, and
+// the community maps disagree past the common ones.
+const STAT_RUSH_YARDS = '24';
+const STAT_RUSH_TDS = '25';
+
+function rushingLine(stats, season) {
+  const proj = statEntry(stats, season, 1);
+  const raw = proj?.stats || {};
+  return {
+    rushYards: Number(raw[STAT_RUSH_YARDS]) || 0,
+    rushTds: Number(raw[STAT_RUSH_TDS]) || 0,
+  };
 }
 
 function normalizePlayer(entry, season) {
@@ -194,6 +213,10 @@ function normalizePlayer(entry, season) {
     draftRank: p.draftRanksByRankType?.PPR?.rank ?? null,
     injuryStatus: p.injuryStatus || 'ACTIVE',
     injured: Boolean(p.injured),
+    // Projected rushing production. The draft engine uses this to separate
+    // late-round QBs: since 2019 every overall QB1 has run for 350+ yards and
+    // 4+ touchdowns.
+    ...rushingLine(p.stats, season),
   };
 }
 
@@ -259,13 +282,34 @@ export function parseLeague(raw) {
 }
 
 // Receptions are scoring stat id 53.
+/**
+ * Name the scoring format from the reception rule (stat id 53).
+ *
+ * A league may score receptions per position rather than flat, in which case
+ * `points` is 0 and the real values live in `pointsOverrides`, keyed by
+ * defaultPositionId. Reading `points` alone reports such a league as
+ * "Standard", which is badly wrong — it is how a TE-premium half-PPR league
+ * gets mistaken for one that does not count catches at all.
+ */
 function detectScoringFormat(scoringSettings) {
   const rec = (scoringSettings?.scoringItems || []).find((i) => i.statId === 53);
-  const pts = rec?.points ?? 0;
-  if (pts >= 0.9) return 'PPR';
-  if (pts >= 0.4) return 'Half PPR';
-  if (pts > 0) return `${pts} PPR`;
-  return 'Standard';
+  if (!rec) return 'Standard';
+
+  const overrides = rec.pointsOverrides || {};
+  const perPos = Object.entries(overrides).map(([id, v]) => [Number(id), Number(v)]);
+
+  // Wide receiver is the reference point for naming the format.
+  const wr = perPos.find(([id]) => id === 3)?.[1];
+  const te = perPos.find(([id]) => id === 4)?.[1];
+  const base = wr ?? (perPos.length ? Math.max(...perPos.map(([, v]) => v)) : null)
+    ?? rec.points ?? 0;
+
+  const name = base >= 0.9 ? 'PPR'
+    : base >= 0.4 ? 'Half PPR'
+    : base > 0 ? `${base} PPR`
+    : 'Standard';
+
+  return te != null && wr != null && te > wr ? `${name} (TE premium)` : name;
 }
 
 /**

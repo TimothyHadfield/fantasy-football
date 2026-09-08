@@ -163,9 +163,16 @@ function renderMainTable() {
         <td>${signed(t.avgLuck)}</td>
         <td>${t.totalActual}</td>
         <td>${fmt(t.oppAvgActual)}</td>
+        <td>${fmt(t.pointsToWin)}</td>
+        <td>${t.scoreDiffLuck === null ? '—' : signed(t.scoreDiffLuck)}</td>
+        <td>${signed(t.luckScore)}</td>
         <td>${signed(t.skill)}</td>
+        <td>${signed(t.skillPlusLuck)}</td>
         <td>${signed(t.forMinusAgainst)}</td>
         <td>${fmt(t.actualStdev)}</td>
+        <td>${t.luckStanding}</td>
+        <td>${t.projectedStanding}</td>
+        <td>${t.actualStanding}</td>
       </tr>`)
     .join('');
 
@@ -176,10 +183,16 @@ function renderMainTable() {
 
 function renderPending() {
   $('pendingCols').innerHTML =
-    '<strong>Not built yet</strong> — these columns from your sheet need their formulas: ' +
-    '<code>PTW</code> (projection to win), <code>SD</code> in the luck block, ' +
-    'cumulative luck (the &ldquo;adjusted formula&rdquo;), the third column in your ' +
-    'Score Differential table, and the LS / PS standings that depend on them.';
+    '<strong>PTW</strong> = your average opponent&rsquo;s score minus your own average luck — ' +
+    'what you needed to score to win. <strong>SD</strong> weights each result by how close ' +
+    'it was, so a one-point game scores near &plusmn;50 and a blowout near zero. ' +
+    '<strong>LUCK</strong> = league average &minus; (PTW &minus; SD), and ' +
+    '<strong>S+L</strong> = Skill + LUCK. <strong>LS</strong>, <strong>PS</strong> and ' +
+    '<strong>AS</strong> rank the league by LUCK, by S+L, and by actual record.' +
+    '<br><br>One difference from your sheet: it subtracted a league average you had typed in ' +
+    'by hand (121.8 for actual, 122.3 for projected) and those had drifted a few points from ' +
+    'what the season really averaged. These columns recompute it from the games, so LUCK and ' +
+    'S+L sit a little below your sheet&rsquo;s. Every ranking is unchanged.';
 }
 
 // ---------------------------------------------------------------------- charts
@@ -214,6 +227,22 @@ function renderCharts() {
     series: seriesFor((r) => r.luck),
     xLabels,
     yLabel: 'Actual − projected',
+    height: 300,
+    zeroLine: true,
+    highlight: highlightName,
+  });
+
+  lineChart($('chartCumLuck'), {
+    series: s.teams.map((t, i) => ({
+      name: t.name,
+      color: SERIES_COLORS[i % SERIES_COLORS.length],
+      values: s.weekNumbers.map((w) => {
+        const row = t.cumulativeLuck.find((x) => x.week === w);
+        return row ? row.value : null;
+      }),
+    })),
+    xLabels,
+    yLabel: 'Cumulative luck',
     height: 300,
     zeroLine: true,
     highlight: highlightName,
