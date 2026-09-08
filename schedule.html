@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule &middot; Fantasy Football</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+/* Page-local styles. Everything else comes from css/app.css. */
+
+/* Matchup cards — the "scan one week at a time" view. */
+.matchups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 10px;
+}
+.week-block + .week-block { margin-top: 22px; }
+.week-head {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+.game {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.game.upcoming { background: transparent; border-style: dashed; }
+.side {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.side + .side { border-top: 1px solid var(--line); }
+.side .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side .tscore { flex: none; font-weight: 600; }
+.side.win { color: var(--text); font-weight: 650; }
+.side.win .tscore { color: var(--accent); }
+.side.lose { color: var(--dim); }
+.gmeta {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--dim);
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+}
+
+/* Head-to-head grid: rows are the team, columns are the opponent. */
+.h2h td, .h2h th { text-align: center; }
+.h2h td.name, .h2h th.name { text-align: left; }
+.h2h td.self { color: var(--line); }
+
+.select-wide { width: 210px; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Connection</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html" class="active">Schedule</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h1>Schedule <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">Showing a generated sample season so you can see the layout with real-looking results in it.</p>
+
+  <section class="panel">
+    <h2>Data source</h2>
+    <div class="row spread">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
+      </div>
+      <div class="form-select select-wide">
+        <label for="weekSelect">Week</label>
+        <select id="weekSelect"></select>
+      </div>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Season so far</h2>
+    <div class="stat-row" id="summary"></div>
+    <p class="panel-note" id="summaryNote"></p>
+  </section>
+
+  <section class="panel">
+    <h2 id="matchupsTitle">Matchups</h2>
+    <div id="matchups"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Every result</h2>
+    <div class="row spread mb-12">
+      <div class="form-select select-wide">
+        <label for="filterTeam">Only games involving</label>
+        <select id="filterTeam"></select>
+      </div>
+    </div>
+    <div class="table-scroll"><table id="resultsTable">
+      <thead><tr>
+        <th data-sort>Wk</th>
+        <th class="name" data-sort>Home</th>
+        <th data-sort>Home pts</th>
+        <th class="left" data-sort>Away</th>
+        <th data-sort>Away pts</th>
+        <th data-sort>Margin</th>
+        <th class="left" data-sort>Winner</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="resultsNote"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Head to head</h2>
+    <div class="table-scroll" id="h2hGrid"></div>
+    <p class="panel-note">
+      Each row is a team, each column an opponent: the cell is that row team&rsquo;s
+      record <em>against</em> that opponent. Green means a winning record, red a
+      losing one. Blank means they haven&rsquo;t played yet. Click a header to sort
+      by win differential in that column.
+    </p>
+  </section>
+
+</div>
+
+<script type="module" src="js/schedule-page.js"></script>
+</body>
+</html>

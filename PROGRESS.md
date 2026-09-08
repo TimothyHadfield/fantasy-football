@@ -113,15 +113,53 @@ These are stubbed as `null` in `js/stats.js` and surfaced on the stats page as a
 
 ## Site structure
 
+Pages (all default to demo data, with a toggle to the live ESPN league):
+
 - `index.html` — ESPN connection + raw data probes
-- `stats.html` — the data display (demo data by default)
+- `stats.html` — season stats, the rebuild of Tim's sheet
+- `analysis.html` — per-manager rosters for a chosen week
+- `schedule.html` — results, matchups, head-to-head grid
+
+Modules:
+
 - `css/app.css` — shared styles
 - `js/espn.js` — ESPN API connection layer
-- `js/season.js` — turns a real ESPN league into the canonical data shape
-- `js/demo.js` — generates realistic fake data for the demo view
+- `js/season.js` — ESPN → canonical shapes (`fetchSeasonData`, `fetchWeekRosters`, `fetchSchedule`)
+- `js/demo.js` — fake season scores
+- `js/demo-rosters.js` — fake weekly rosters + schedule, reconciled to `demo.js`
 - `js/stats.js` — all statistics
 - `js/charts.js` — inline-SVG line / histogram / box-plot rendering
-- `js/stats-page.js` — wires the stats page together
+- `js/sortable.js` — shared click-to-sort for every table
+- `js/stats-page.js`, `js/analysis-page.js`, `js/schedule-page.js` — page wiring
+
+### Table sorting
+
+Every table uses `js/sortable.js`: click a header to sort, click again to
+reverse. Mark headers `<th data-sort>`. When the displayed text isn't the sort
+value, put the real number on the cell as `data-v` — that is how a "10-3"
+record sorts by wins and how a lineup slot sorts in QB→RB→WR→TE→FLEX order
+rather than alphabetically. Missing values sort to the bottom in both
+directions. Clicks are delegated from the table element, so a table may rewrite
+its own `<thead>` freely; after re-rendering rows, call `resort(table)`.
+
+## Testing
+
+Six suites live in the session scratchpad (not committed — they depend on a
+locally installed `linkedom`):
+
+| Suite | Covers |
+|---|---|
+| `verify-stats.mjs` | every formula against Tim's real 2025 numbers |
+| `test-integration.mjs` | demo.js → stats.js end to end |
+| `test-charts-integration.mjs` | charts fed the exact shapes the pages build |
+| `test-sortable.mjs` | sorting against a real DOM, 21 assertions |
+| `test-demo-rosters.mjs` | roster/schedule contract + reconciliation |
+| `test-pages-render.mjs` | loads each page's real HTML and runs its real module |
+
+Note for anyone rebuilding these: `linkedom` implements neither the
+`HTMLTableElement` conveniences (`tBodies`, `tHead`, `rows`, `cells`) nor a
+settable `<select>.value`. Both are standard in real browsers, so page code
+using them is correct — the harness shims them.
 
 ### Weekly projections from ESPN: a real constraint
 

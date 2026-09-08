@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analysis &middot; Fantasy Football</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  /* Team names need more room than the 140px .form-select used for the week. */
+  .select-md { width: 280px; max-width: 100%; }
+
+  /* Bench rows stay readable but clearly secondary to the starting lineup. */
+  tbody tr.bench td { color: var(--dim); }
+  tbody tr.bench td.name { color: var(--dim); font-weight: 500; }
+
+  /* Slot tag in the first roster column — short, so it reads as a label. */
+  .slot-tag {
+    display: inline-block;
+    min-width: 42px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+  }
+  tbody tr.bench .slot-tag { color: var(--dim); background: transparent; }
+
+  /* Injury flag. Only shown for players who aren't ACTIVE. */
+  .inj {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #3a2f10;
+    border: 1px solid #5a4718;
+    color: var(--warn);
+  }
+  .inj.out { background: #33151a; border-color: #5b2129; color: var(--err); }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Connection</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html" class="active">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h1>Roster Analysis <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">Every manager&rsquo;s team for a single week &mdash; who started, who sat, and what each of them was projected to do.</p>
+
+  <section class="panel">
+    <h2>Data source</h2>
+    <div class="row spread">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
+      </div>
+      <div class="form-select">
+        <label for="weekSelect">Week</label>
+        <select id="weekSelect"></select>
+      </div>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <section class="panel">
+    <h2 id="overviewTitle">League overview</h2>
+    <div class="table-scroll" id="overviewWrap"><table id="overviewTable">
+      <thead><tr>
+        <th class="name" data-sort>Team</th>
+        <th data-sort>Projected</th>
+        <th data-sort>Actual</th>
+        <th data-sort>Diff</th>
+        <th data-sort>Bench</th>
+        <th data-sort>Season proj</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="empty hidden" id="overviewEmpty">No roster data for this week.</div>
+    <p class="panel-note">
+      <strong>Diff</strong> = actual &minus; projected for the starting lineup.
+      <strong>Bench</strong> is what the players left on the bench actually scored.
+      Click any header to sort.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Roster detail</h2>
+    <div class="row mb-12">
+      <div class="select-md">
+        <label for="teamSelect">Team</label>
+        <select id="teamSelect"></select>
+      </div>
+    </div>
+    <div class="stat-row" id="teamGlance"></div>
+    <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
+      <thead><tr>
+        <th data-sort>Slot</th>
+        <th class="name" data-sort>Player</th>
+        <th data-sort>Pos</th>
+        <th data-sort>NFL</th>
+        <th data-sort>Projected</th>
+        <th data-sort>Actual</th>
+        <th data-sort>Diff</th>
+        <th data-sort>Season proj</th>
+        <th data-sort>% own</th>
+        <th data-sort>Status</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="empty hidden" id="rosterEmpty">Pick a team to see its roster.</div>
+    <p class="panel-note" id="rosterNote"></p>
+  </section>
+
+</div>
+
+<script type="module" src="js/analysis-page.js"></script>
+</body>
+</html>
