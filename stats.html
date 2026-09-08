@@ -16,9 +16,22 @@
       <a href="stats.html" class="active">Stats</a>
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
+      <a href="draft.html">Draft</a>
     </nav>
   </div>
 </header>
+
+<div class="practice-bar">
+  <div class="wrap">
+    <p>
+      <strong>Practice draft</strong> &mdash; draft against 9 computer managers with the
+      assistant helping you pick.
+      <span class="pb-sub">No league, no login, no setup. Randomised draft order.</span>
+    </p>
+    <a class="practice-cta" href="draft.html?practice=1">Start a practice draft</a>
+  </div>
+</div>
+
 
 <div class="wrap">
 
@@ -56,9 +69,16 @@
         <th data-sort>Luck</th>
         <th data-sort>Total</th>
         <th data-sort>Opp Avg</th>
+        <th data-sort>PTW</th>
+        <th data-sort>SD</th>
+        <th data-sort>LUCK</th>
         <th data-sort>Skill</th>
+        <th data-sort>S+L</th>
         <th data-sort>F&minus;A</th>
         <th data-sort>Std Dev</th>
+        <th data-sort>LS</th>
+        <th data-sort>PS</th>
+        <th data-sort>AS</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -80,6 +100,16 @@
     <h2>Weekly luck &mdash; actual minus projected</h2>
     <div class="chart" id="chartLuck"></div>
     <p class="panel-note">Above the line means you beat your projection that week.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Cumulative luck</h2>
+    <div class="chart" id="chartCumLuck"></div>
+    <p class="panel-note">
+      Each point is computed from every week up to that one, not from that week alone,
+      so the lines converge as the season goes on and single results stop dominating.
+      Above zero means the season has broken your way.
+    </p>
   </section>
 
   <div class="grid-2">

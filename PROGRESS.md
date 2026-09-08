@@ -5,41 +5,121 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
 
 ## START HERE — open actions
 
-1. **Read Tim's 2025 Google Sheet and extract five formulas.**
+1. ~~Read Tim's 2025 Google Sheet and extract five formulas.~~ **DONE
+   2026-09-08.** All five recovered and implemented — see "RECOVERED" below.
+   Tim has been sent a list of follow-up questions about unlabelled parts of the
+   sheet; his answers are the next thing to fold in.
+
+   Method, for when the 2026 sheet needs the same treatment:
    `https://docs.google.com/spreadsheets/d/1_Rac3-9WFVkbpQv-5Smu0wvTiGBP6QTrlF5eXJxPIm8/edit`
-   The Drive connector must be signed in to the account that owns it. A session
-   started before the connector was reassigned will still hold the old token —
-   check with `list_recent_files` and look at the `owner` field before assuming
-   access. Note that Drive's `read_file_content` returns a *text rendering* of a
-   sheet, i.e. values, not formulas. To get formulas, `download_file_content`
-   with `exportMimeType` `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
-   and parse the xlsx XML (`<f>` elements) rather than reading it inline.
-   The five needed formulas are listed under "UNKNOWN" below.
+   Drive's `read_file_content` returns a *text rendering* — values, not
+   formulas. Use `download_file_content` with `exportMimeType`
+   `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` and parse
+   the xlsx `<f>` elements. The call is too big to return inline, so it lands in
+   a tool-results file; decode that with Python rather than transcribing base64.
 
-2. **The sheet has 7 tabs.** The "analyze" tabs (and a "week 3 Jonas" tab) detail
-   each manager's team and each player's role on it, based on season projection —
-   that is what `analysis.html` is modelled on, but it was built from Tim's verbal
-   description, NOT from the actual tabs. Compare against the real tabs and adjust.
-   The last tab is the schedule, which `schedule.html` covers.
+2. **Rework `analysis.html` against the real Analyze tabs.** It was built from
+   Tim's verbal description, not the tabs themselves. Now that the tabs have
+   been read and Tim has explained them (see "What the sheet's columns mean"),
+   the specific changes are:
+   - **Drop the "Missing" concept entirely.** In the sheet it is a layout hack
+     for teams with deeper benches, not data. Render each team's real bench at
+     whatever length it is. Tim asked for this explicitly.
+   - **FLEX = best of RB / WR / TE by projection.** Never QB; DST is not in the
+     table at all.
+   - **"Avg points"** is a per-week team total assuming every starter hits their
+     season-average projection. Excludes DST. Consider renaming it on the site —
+     it is not an average of anything.
+   - **"Est Total" = Avg points + 16**, a flat allowance for DST and K at ~8
+     each, left out because they are consistent and churn constantly.
+   The Analyze tabs are built on each player's season average projected points,
+   recorded after week 1, with bold = flex, dark red = IR, red = out.
+   Two tabs are one-offs, not templates: the Jonas tab was Tim working out a
+   possible 3-way trade, and the week 3 copies go with it.
 
-3. **The live ESPN path has never been run against a real league.** Every page
-   works on demo data; nothing has been tested against Tim's actual league
-   because his league ID has not been supplied. This is the largest untested
-   surface in the project.
+   Worth building properly: the **Predictions tab** was Tim testing whether Est
+   Total at a given week predicts the final ranking. He only ever did week 1 by
+   hand. The site can answer it across all 13 weeks.
 
-4. **The smart drafter still awaits Tim's spec.** Do not design it for him.
+3. **The live ESPN path has never been run against a real league in a browser.**
+   Every page works on demo data. Tim's 2025 league ID is **1485774672**, and it
+   was probed from the terminal on 2026-09-08: ESPN returns **401** ("not
+   authorized to view this League") for both season 2025 and season 2026, while
+   neighbouring IDs (`...671`, `...673`) return **404**. That 401-vs-404 split
+   confirms the league exists and is private — the expected answer for a
+   cookieless caller. The 2026 401 (rather than 404) suggests the league already
+   carries into 2026; Tim planned to create a new one, so confirm on espn.com
+   first.
+
+   Re-confirmed 2026-09-08: 401 on both seasons, and on `mSettings`, `mTeam` and
+   `mNav` alike — there is no unauthenticated view of this league.
+
+   What remains untested is the browser path: the site loaded in a browser where
+   Tim is logged into espn.com, so `credentials: 'include'` carries his cookies.
+   That cannot be tested from a terminal. Do not re-probe with curl and conclude
+   anything — a 401 there is the correct result and proves nothing new. The one
+   thing only Tim can do is open the live site while logged in and report what
+   the connect panel shows.
+
+4. **The smart drafter is BUILT — `draft.html`.** Tim's strategy is captured in
+   `DRAFT-STRATEGY.md` (Part 1 his words, Part 2 research, Part 3 what was
+   built). The engine is `js/draft-model.js`, pure and node-testable; the room
+   is `js/draft-page.js`. It works fully offline on `js/draft-demo.js`, a real
+   214-player 2026 pool scored under Tim's own rules.
+
+   **Practice mode** (`js/draft-sim.js`) runs a full mock draft against nine
+   simulated managers and grades the result — rank, letter grade, slot-by-slot
+   strengths, and what the assistant itself would have scored from the same
+   slot. Repeatable, with a record kept in the browser. This is also the
+   fastest way to check whether a `TUNING` change actually helps.
+
+   **Practice deliberately requires nothing** — no league, no login, no network.
+   A green bar on every page links to `draft.html?practice=1`, which boots
+   straight into a playable board; `test-practice-autostart.mjs` asserts that
+   flow makes zero network calls. Practice always uses the built-in pool even
+   if a league is configured. Do not reintroduce a dependency on ESPN here:
+   the whole point is that it works from a cold start.
+
+   **Before the next draft:** set the slot (the league randomises it an hour
+   beforehand), and decide whether the `TUNING` numbers match Tim's intent —
+   they are placeholders standing in for answers he has not given yet.
+
+   Still open here: the live ESPN draft feed has never run against a real draft,
+   and `draftDetail.inProgress` could not be verified. The poll loop therefore
+   keys off `picks.length` growing, never off `inProgress`. Manual mode is the
+   real fallback and is fully functional.
+
+5. **The drafter's spec questions are still Tim's to answer.** The build makes
+   choices he has not confirmed, all isolated in `TUNING`: how strictly to
+   follow the position rules vs pure best-available, what counts as "skipped for
+   a while" (currently 8 picks past ADP), and what "too far from the top" means.
+   Do not quietly re-tune these to taste — they are stand-ins for his judgement.
+
+   Also unexplained by Tim, and deliberately reproduced rather than rationalised:
+   **the score-differential curve** (`150/margin - 7*sign(margin)`, clamped
+   +/-50). He said he would explain it later. Do not simplify it in the meantime.
 
 ## What this is
 
 A site for fantasy football stats/analysis, and eventually a "smart drafter."
 Tim specs what it does; Claude builds it.
 
-**Status as of 2026-09-07: connection layer only. No features built yet, by design.**
+**Status as of 2026-09-08:** stats module complete and verified against Tim's own
+2025 numbers; draft assistant built to his stated strategy. Everything works on
+demo data. The live ESPN path is implemented but has never been exercised in a
+browser against a real league.
 
 ## Current state
 
-- `index.html` — bare scaffolding. Connect panel + raw data probes. No product UI.
-- `js/espn.js` — the ESPN API connection layer. Fetch + decode only, no strategy logic.
+- `index.html` — connect panel + raw data probes.
+- `stats.html` / `analysis.html` / `schedule.html` — season stats, weekly
+  rosters, results and head-to-head.
+- `draft.html` — the live draft room. See `DRAFT-STRATEGY.md`.
+- `js/espn.js` — the ESPN API connection layer. Fetch + decode only, no strategy.
+- `docs/espn-draft-api.md` — field-path reference for the ESPN endpoints,
+  verified against live public leagues. Read this before touching ESPN code;
+  it records several traps, including that a `sort*` clause is **mandatory** in
+  `x-fantasy-filter` (omit it and you get an empty player list, not an error).
 
 ## What's verified working
 
@@ -82,6 +162,11 @@ requests go through the league path rather than ESPN's defaults.
 
 ## Parked (built, then set aside)
 
+**Superseded 2026-09-08** — the drafter now exists, built to Tim's own stated
+strategy rather than to Claude's design. The note below is kept only as the
+record of why the first attempt was removed. The same maths came back, but this
+time subordinated to his rules.
+
 A draft recommendation engine was written and validated against real 2026 data
 before Tim scoped the project down. It implemented VORP with dynamic replacement
 levels, ADP-based survival probability, positional-run detection, and tier
@@ -94,13 +179,16 @@ reintroduce it without Tim's spec.
 
 ## Stats module — reverse-engineered from Tim's 2025 sheet
 
-The 2025 sheet arrived as a PDF, which carries computed values but not cell
-formulas. The formulas below were recovered from the numbers and verified by
-re-computing them from the real 2025 scores.
+The 2025 sheet first arrived as a PDF, which carries computed values but not
+cell formulas, so the metrics below were recovered from the numbers alone and
+verified by re-computing them from the real 2025 scores.
 
 **Verification: 79 of 80 assertions reproduce the sheet exactly.** See
 `js/stats.js`. The one miss is Autumn's Skill (-0.6 computed vs 0 shown), which
 is display rounding in the sheet, not a formula difference.
+
+The five that resisted that approach were later read straight out of the sheet's
+xlsx export — see "RECOVERED" below, a separate 116-assertion suite.
 
 ### CONFIRMED
 
@@ -118,24 +206,134 @@ is display rounding in the sheet, not a formula difference.
 Note: the sheet's histogram starts at "70s" and totals 128, but there are 130
 team-weeks. Miles's 49 and 67 are missing from it. The site bins all 130.
 
-### UNKNOWN — formulas still needed from Tim
+### RECOVERED 2026-09-08 — all five, from the xlsx
 
-1. **PTW** ("projection to win"). Roughly tracks average opponent actual score
-   but doesn't equal it — Nolan matches at 109, Autumn is 127 vs an opponent
-   average of 118.
-2. **SD** in the luck block. Autumn shows -3.9; the average score differential
-   is -4.85 and the average projected differential is -2.5, so it is neither.
-3. **Cumulative Luck**, labelled "adjusted formula" in the sheet. Its weekly
-   spread shrinks (stdev 43 -> 12 across the season), so something is being
-   normalized per week.
-4. **Third column of the Score Differential table.** It reaches +/-50 when a game
-   is decided by a point or two and falls near zero in blowouts, so it is
-   measuring how much luck decided the outcome — but the exact shape is unclear,
-   and it doesn't always take the sign of the margin.
-5. **LS and PS standings**, which depend on (3).
+The sheet was exported as xlsx and its `<f>` elements read directly. All five
+open formulas are now resolved and implemented in `js/stats.js`.
 
-These are stubbed as `null` in `js/stats.js` and surfaced on the stats page as a
-"not built yet" note rather than being guessed at.
+| Metric | Formula | Evidence |
+|---|---|---|
+| Third Score-Differential column | `MIN(MAX((150/margin) - 7*SIGN(margin), -50), 50)` | verbatim from cell D33 |
+| SD | mean of that value across the season | verbatim from AR33; 8/10 teams match the standings block to 15 s.f. |
+| PTW | `oppAvgActual - ownAvgLuck` | verbatim from AX3 (`=AU3-AR3`); 10/10 |
+| LUCK | `leagueAvgActual - (PTW - SD)` | verbatim from AZ3 (`=121.8-(AX3-AY3)`) |
+| Cumulative Luck | the LUCK formula run on weeks 1..w | 127/130 cells exact |
+| LS / PS / AS | rank by LUCK / by S+L / by wins then points | 10/10 each |
+
+The xlsx also carries Tim's own cell comments, which confirm every label
+independently: `PTW` = "projection to win", `SD` = "score differential",
+`S+L` = "skill +luck", `F-A` = "points for- points against", `LS` = "Luck
+Standings- postions based on luck", `PS` = "projected standings- based on luck
+and 'skill' (avg proj)", `AS` = "actual standings (post week 6)". The Analyze
+tabs carry "Recorded by each player's season avg. proj. pts. (After week 1)"
+with a colour key — bold = flex player, dark red = IR, red = out. The Schedule
+tab's is "Avg. starters' 2025 Season Projected".
+
+Two things the sheet does that the site deliberately does not — **both confirmed
+by Tim on 2026-09-08**:
+
+1. **The league-average terms were typed in by hand and had drifted.** The sheet
+   subtracts a hardcoded 121.8 (actual) and 122.3 (projected); the 2025 season
+   really averaged 117.16 and 122.49. Tim: *"I think I just typed in the season
+   average of whatever was in at the time, so they're slightly different."* They
+   were meant to be the live league average, so the site computes them from the
+   games. Its LUCK and S+L sit ~4.6 below the sheet's and Skill ~0.19 above;
+   every ranking is unchanged.
+2. **The formula changed mid-season** — that is what "adjusted formula" means.
+   Weeks 1-8 of the Cumulative Luck table use an older
+   `MIN(MAX(100/margin, -30), 30)`; weeks 9-13 use the current one. Tim: *"I just
+   discovered a better formula after week 9 [...] don't think about it too much,
+   it doesn't impact our site."* The site uses the current formula throughout, so
+   early-week numbers will not match the sheet. That is intended.
+
+**The score-differential curve itself (the 150, the -7, the +/-50 clamp) has a
+rationale Tim has not explained yet.** He will; do not guess at it, and do not
+"simplify" the formula in the meantime.
+
+### What the sheet's columns mean — answered by Tim, 2026-09-08
+
+Straight from Tim. These are intent, not inference, and they override any
+earlier guess in this file.
+
+- **p/p = "points per player."** A starting lineup is 9 players, so it is the
+  team's average score divided by 9. (In the sheet only Week 1 -> Act kept its
+  formula; the rest of the `avg` and `p/p` rows are pasted values, which is why
+  one cell looked hardcoded. They are all still `avg / 9`.)
+- **Cumulative Luck is not a separate metric.** It is simply LUCK evaluated at
+  each week, and LUCK already folds in every week to date. Tim: *"as time goes
+  on, cumulative luck gets more and more accurate, and if luck is truly random
+  it should get closer and closer to 0 for everyone."* That convergence is the
+  point of the chart, and the STDEV row underneath is there to show it.
+- **"Week 9 standings" is a stale label.** It was a running snapshot Tim updated
+  weekly and stopped updating near the end. The data under it is full-season —
+  the wins column totals 65, i.e. 13 weeks x 5 games. The site computes
+  standings live, so it does not reproduce the snapshot.
+- **AS ties really do break on total points.** Confirmed as the league's rule.
+- **FLEX is the best of RB / WR / TE only** — never QB, and DST is not in the
+  table at all.
+- **"Avg points" is per-week, not per-season.** It is what that team would score
+  in a week if every starter hit their season-average projection. Excludes DST.
+- **"Missing" columns are a layout artefact, not data.** Roster shapes differ —
+  Jonas carried 4 bench WRs, Miles 8 — so rather than pad every team to the
+  widest case, the overflow players went into three spare columns. Tim: *"We
+  will do this differently in our Player display on our site."* So
+  `analysis.html` should render each team's real bench, however long, and must
+  not reproduce "Missing" columns.
+- **"Est Total" = Avg points + 16.** A flat allowance for DST and K, which both
+  tend to score about 8. They are left out of the main table because they are
+  consistent and get dropped and traded constantly.
+- **The Jonas tab was trade exploration** — Tim working out a possible 3-way
+  trade with Jonas, and whether it could genuinely help both sides.
+- **The Predictions tab was a hypothesis test**: could Est Total at a given week
+  predict the final ranking? That is a question the site could answer properly
+  across all 13 weeks rather than just week 1.
+
+### Injury Losses — parked, with the method Tim used
+
+Both Injury Losses tables are empty and **injury tracking stays out of the
+site**. Recorded here at Tim's request so the method is not lost if it ever
+comes back.
+
+It was manual. For a manager holding an injured player, Tim compared their team
+projection after the injury against what it would have been with that player
+available, assuming the player would have projected near their own season
+average. The difference is the loss. The comments still in the lower table are
+the working: Jonas week 4 *"8 from ceedee lamb, 2 from james conner, 2 from mike
+evans"*; Miles week 13 *"6 from bucky irving, 7 from jamarr chase"*; Miles week
+12 *"Jamarr Chase suspension"*.
+
+Automating it needs a per-week injury status and each player's season-average
+projection — ESPN exposes both (`mRoster` per week, `kona_player_info`) — plus a
+decision on suspensions, which Tim counted alongside injuries.
+
+### Two bugs in the sheet, both from one game
+
+Miles played Jonas in week 9 and won by **0.4 points** (94.7 vs 95.1) — the only
+game all season decided by a fraction. The Score Differential block (rows 33-42)
+stores hand-typed integer margins, and that game broke both of its cells:
+
+- **`Z35` (Miles, week 9) is typed as `0`** rather than -0.4. `150/0` makes
+  `AB35` `#DIV/0!`, which poisons `AR35`, Miles's season SD.
+- **`Z34` (Jonas, week 9) is `=Z4-Z20`, pointing at the wrong team.** It is the
+  only formula cell in the whole block. Rows 33-42 are alphabetical (Jonas =
+  34), but the standings block above is not — row 4 is *Watkins*, row 5 is
+  Jonas. So it computes Watkins's score minus Jonas's opponent's, giving a
+  margin of +24.3 where Jonas's real margin was +0.4.
+
+The site computes margins from the game scores, so it gets both right: a
+0.4-point game saturates the clamp at +50 / -50 for the winner and loser, which
+is the formula behaving as intended. Expect the site and the sheet to disagree
+for Miles and Jonas — the site is correct.
+
+Also note rows 4-12 of the standings block hold pasted values, not formulas.
+Only row 3 kept its formulas, which is what made recovery possible at all. One
+consequence: those pasted values are a snapshot, so Miles's weeks 4-6 in the
+Cumulative Luck table carry a stale cell worth 3 points.
+
+**Verification: 116 of 116 assertions pass** against the real 2025 season, once
+the two drifted constants above are accounted for. See the note on `exact` in
+`js/stats.js`: standings must sort on unrounded values, because Stevenson and
+Mitch finished 0.002 apart in S+L and rounding to 1 dp swaps them.
 
 ## Site structure
 
@@ -181,6 +379,34 @@ locally installed `linkedom`):
 | `test-sortable.mjs` | sorting against a real DOM, 21 assertions |
 | `test-demo-rosters.mjs` | roster/schedule contract + reconciliation |
 | `test-pages-render.mjs` | loads each page's real HTML and runs its real module |
+| `test-recovered.mjs` | the five recovered formulas, 116 assertions, against the real 2025 season |
+| `test-draft-model.mjs` | the draft engine on a synthetic pool — 44 assertions, no external data |
+| `test-draft-render.mjs` | simulates a full 16-round draft from slots 1, 5 and 10 against the real demo pool — 107 assertions |
+| `test-draft-sim.mjs` | practice opponents, lineup optimiser and grading — 36 assertions |
+| `test-practice.mjs` | plays complete practice drafts through the page's own logic, then boots `draft-page.js` against the real DOM — 92 assertions |
+| `test-practice-autostart.mjs` | lands on `draft.html?practice=1` in an empty browser and asserts a playable draft with zero network calls |
+
+`test-practice-autostart.mjs` needs its own process: a module only initialises
+once, so the auto-start path cannot be tested in the same run as the normal one.
+
+`test-practice.mjs` is the only suite that actually executes `draft-page.js`. A
+missing element id or a typo in the page module sails through everything else
+and only shows up in a browser, so keep that boot check.
+
+Note for the harness: linkedom defines `<select>.value` on
+`HTMLSelectElement.prototype` and it returns `undefined`. Shimming it on
+`HTMLElement.prototype` does nothing — it is shadowed — and would break
+`<input>` too. Shim the select prototype specifically.
+
+`test-draft-render.mjs` is the important one and it is **randomised**, so run it
+several times, not once. Three real bugs surfaced only on repeat runs: the
+missing hard block on luxury picks in the last rounds, tight ends being stacked
+three deep, and — the subtle one — the scarcity term quietly cancelling the
+wait-on-QB penalty, because an elite QB in round 5 genuinely *is* scarce.
+
+`test-recovered.mjs` needs no `linkedom` but does need its fixture: rebuild it
+by re-exporting the sheet and running `export_2025.py`, which reconstructs the
+65 real games by pairing the Stats tab's scores through the Schedule tab.
 
 Note for anyone rebuilding these: `linkedom` implements neither the
 `HTMLTableElement` conveniences (`tBodies`, `tHead`, `rows`, `cells`) nor a
@@ -198,5 +424,7 @@ silently rendering zeroes.
 
 ## Next
 
-- Get the five unknown formulas from Tim.
+- Fold in Tim's answers to the sheet questions (see open action 1).
+- Compare `analysis.html` against the real "analyze" tabs (open action 2).
+- Have Tim run the live ESPN path in a browser (open action 3).
 - The smart drafter still awaits Tim's spec. Do not design it for him.
