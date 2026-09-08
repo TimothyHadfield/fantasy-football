@@ -3,6 +3,32 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
+## START HERE — open actions
+
+1. **Read Tim's 2025 Google Sheet and extract five formulas.**
+   `https://docs.google.com/spreadsheets/d/1_Rac3-9WFVkbpQv-5Smu0wvTiGBP6QTrlF5eXJxPIm8/edit`
+   The Drive connector must be signed in to the account that owns it. A session
+   started before the connector was reassigned will still hold the old token —
+   check with `list_recent_files` and look at the `owner` field before assuming
+   access. Note that Drive's `read_file_content` returns a *text rendering* of a
+   sheet, i.e. values, not formulas. To get formulas, `download_file_content`
+   with `exportMimeType` `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+   and parse the xlsx XML (`<f>` elements) rather than reading it inline.
+   The five needed formulas are listed under "UNKNOWN" below.
+
+2. **The sheet has 7 tabs.** The "analyze" tabs (and a "week 3 Jonas" tab) detail
+   each manager's team and each player's role on it, based on season projection —
+   that is what `analysis.html` is modelled on, but it was built from Tim's verbal
+   description, NOT from the actual tabs. Compare against the real tabs and adjust.
+   The last tab is the schedule, which `schedule.html` covers.
+
+3. **The live ESPN path has never been run against a real league.** Every page
+   works on demo data; nothing has been tested against Tim's actual league
+   because his league ID has not been supplied. This is the largest untested
+   surface in the project.
+
+4. **The smart drafter still awaits Tim's spec.** Do not design it for him.
+
 ## What this is
 
 A site for fantasy football stats/analysis, and eventually a "smart drafter."
