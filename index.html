@@ -4,161 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fantasy Football</title>
-<style>
-  :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --line: #272c36;
-    --text: #e6e8ec;
-    --dim: #8b93a1;
-    --accent: #3ba55d;
-    --err: #e0525f;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    padding: 32px 20px 80px;
-  }
-  main { max-width: 820px; margin: 0 auto; }
-  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--dim); font-size: 14px; margin: 0 0 28px; }
-
-  section {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 18px;
-    margin-bottom: 16px;
-  }
-  h2 {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--dim);
-    margin: 0 0 14px;
-    font-weight: 600;
-  }
-
-  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
-  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 5px; }
-  input {
-    background: #0d0f13;
-    border: 1px solid var(--line);
-    color: var(--text);
-    border-radius: 6px;
-    padding: 9px 11px;
-    font: inherit;
-    font-size: 14px;
-    width: 100%;
-  }
-  input:focus { outline: none; border-color: #46506a; }
-  .f-league { flex: 1 1 200px; }
-  .f-season { flex: 0 0 110px; }
-
-  button {
-    background: #232833;
-    border: 1px solid var(--line);
-    color: var(--text);
-    border-radius: 6px;
-    padding: 9px 15px;
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-  }
-  button:hover:not(:disabled) { background: #2b3140; }
-  button:disabled { opacity: 0.45; cursor: default; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #06210f; font-weight: 600; }
-  button.primary:hover:not(:disabled) { background: #45b869; }
-
-  #status { margin-top: 14px; font-size: 14px; min-height: 20px; }
-  #status.ok { color: var(--accent); }
-  #status.err { color: var(--err); }
-  #status.busy { color: var(--dim); }
-
-  #summary { margin-top: 14px; display: none; }
-  #summary dl {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 6px 18px;
-    margin: 0;
-    font-size: 14px;
-  }
-  #summary dt { color: var(--dim); }
-  #summary dd { margin: 0; }
-
-  .probe { display: flex; gap: 8px; flex-wrap: wrap; }
-  pre {
-    background: #0d0f13;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 12px;
-    overflow: auto;
-    max-height: 340px;
-    font-size: 12.5px;
-    line-height: 1.45;
-    margin: 14px 0 0;
-    color: #c3cad6;
-    display: none;
-  }
-  .note { color: var(--dim); font-size: 13px; margin: 12px 0 0; }
-  code { background: #0d0f13; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
-  .empty {
-    color: var(--dim);
-    font-size: 14px;
-    text-align: center;
-    padding: 28px 12px;
-    border: 1px dashed var(--line);
-    border-radius: 8px;
-  }
-</style>
+<link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<main>
-  <h1>Fantasy Football</h1>
-  <p class="sub">Scaffolding. The ESPN connection is live; nothing is built on top of it yet.</p>
 
-  <section>
+<header class="site">
+  <div class="wrap">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html" class="active">Connection</a>
+      <a href="stats.html">Stats</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap narrow-page">
+
+  <h1>Connection</h1>
+  <p class="sub">Link this site to your ESPN league.</p>
+
+  <section class="panel">
     <h2>League connection</h2>
     <div class="row">
-      <div class="f-league">
+      <div class="form-grow">
         <label for="leagueId">League ID</label>
         <input id="leagueId" placeholder="from your ESPN league URL" inputmode="numeric">
       </div>
-      <div class="f-season">
+      <div class="form-narrow">
         <label for="season">Season</label>
         <input id="season" value="2026" inputmode="numeric">
       </div>
       <button type="button" id="connect" class="primary">Connect</button>
     </div>
-    <div id="status"></div>
-    <div id="summary"><dl id="summaryList"></dl></div>
-    <p class="note">
+    <div id="status" class="status-line"></div>
+    <div id="summary" class="status-line hidden">
+      <dl id="summaryList" class="kv"></dl>
+    </div>
+    <p class="panel-note">
       Your league URL contains <code>leagueId=XXXXXXX</code>. For a private league,
       stay logged in to espn.com in this browser &mdash; your session is used automatically.
     </p>
   </section>
 
-  <section>
+  <section class="panel">
     <h2>Data probes</h2>
-    <div class="probe">
+    <div class="row">
       <button type="button" class="probe-btn" data-probe="players" disabled>Players</button>
       <button type="button" class="probe-btn" data-probe="draft" disabled>Draft</button>
       <button type="button" class="probe-btn" data-probe="rosters" disabled>Rosters</button>
       <button type="button" class="probe-btn" data-probe="matchups" disabled>Matchups</button>
       <button type="button" class="probe-btn" data-probe="transactions" disabled>Transactions</button>
     </div>
-    <pre id="output"></pre>
-    <p class="note">Confirms what ESPN actually returns, so we know what we can build on.</p>
+    <pre id="output" class="hidden"></pre>
+    <p class="panel-note">Confirms what ESPN actually returns, so we know what we can build on.</p>
   </section>
 
-  <section>
-    <h2>Features</h2>
-    <div class="empty">Nothing here yet &mdash; awaiting spec.</div>
-  </section>
-</main>
+</div>
 
 <script type="module">
 import * as espn from './js/espn.js';
@@ -168,19 +69,17 @@ const statusEl = $('status');
 const outputEl = $('output');
 const summaryEl = $('summary');
 
-let league = null;
-
 function setStatus(msg, kind = '') {
   statusEl.textContent = msg;
-  statusEl.className = kind;
+  statusEl.style.color =
+    kind === 'ok' ? 'var(--accent)' : kind === 'err' ? 'var(--err)' : 'var(--dim)';
 }
 
 function show(obj) {
-  outputEl.style.display = 'block';
+  outputEl.classList.remove('hidden');
   outputEl.textContent = JSON.stringify(obj, null, 2);
 }
 
-// Remember the league between visits so this isn't retyped every time.
 const saved = JSON.parse(localStorage.getItem('ff.config') || '{}');
 if (saved.leagueId) $('leagueId').value = saved.leagueId;
 if (saved.season) $('season').value = saved.season;
@@ -188,18 +87,17 @@ if (saved.season) $('season').value = saved.season;
 $('connect').addEventListener('click', async () => {
   const leagueId = $('leagueId').value.trim();
   const season = Number($('season').value.trim());
-
   if (!leagueId) { setStatus('Enter a league ID.', 'err'); return; }
 
   espn.configure({ leagueId, season });
   localStorage.setItem('ff.config', JSON.stringify({ leagueId, season }));
 
-  setStatus('Connecting…', 'busy');
-  summaryEl.style.display = 'none';
+  setStatus('Connecting…');
+  summaryEl.classList.add('hidden');
   $('connect').disabled = true;
 
   try {
-    league = await espn.testConnection();
+    const league = await espn.testConnection();
     setStatus('Connected.', 'ok');
 
     const d = league.draft;
@@ -214,7 +112,7 @@ $('connect').addEventListener('click', async () => {
       <dt>Roster</dt><dd>${league.rosterSize} (${league.benchSlots} bench)</dd>
       <dt>Draft</dt><dd>${escapeHtml(d.type)} &middot; ${draftState}</dd>
     `;
-    summaryEl.style.display = 'block';
+    summaryEl.classList.remove('hidden');
     document.querySelectorAll('.probe-btn').forEach((b) => (b.disabled = false));
   } catch (err) {
     setStatus(err.message, 'err');
@@ -227,7 +125,7 @@ $('connect').addEventListener('click', async () => {
 document.querySelectorAll('.probe-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
     const kind = btn.dataset.probe;
-    setStatus(`Fetching ${kind}…`, 'busy');
+    setStatus(`Fetching ${kind}…`);
     try {
       let result;
       if (kind === 'players') {

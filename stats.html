@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stats &middot; Fantasy Football</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Connection</a>
+      <a href="stats.html" class="active">Stats</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h1>League Stats <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">Showing generated sample data so you can see the layout with a full season in it.</p>
+
+  <section class="panel">
+    <h2>Data source</h2>
+    <div class="row spread">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
+      </div>
+      <div class="form-select">
+        <label for="highlightTeam">Highlight</label>
+        <select id="highlightTeam"></select>
+      </div>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Season at a glance</h2>
+    <div class="stat-row" id="glance"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Standings &amp; season totals</h2>
+    <div class="table-scroll"><table id="mainTable">
+      <thead><tr>
+        <th class="name" data-sort="name">Team</th>
+        <th data-sort="wins">W&ndash;L</th>
+        <th data-sort="avgActual">Avg</th>
+        <th data-sort="avgProjected">Proj</th>
+        <th data-sort="avgLuck">Luck</th>
+        <th data-sort="totalActual">Total</th>
+        <th data-sort="oppAvgActual">Opp Avg</th>
+        <th data-sort="skill">Skill</th>
+        <th data-sort="forMinusAgainst">F&minus;A</th>
+        <th data-sort="actualStdev">Std Dev</th>
+        <th data-sort="injuryTotal">Injury</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note">
+      <strong>Luck</strong> = actual &minus; projected. <strong>Skill</strong> = your average
+      projected score minus the league average projected. <strong>F&minus;A</strong> = points
+      for minus points against, per week. Click any header to sort.
+    </p>
+    <div class="pending" id="pendingCols"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Weekly scores</h2>
+    <div class="chart" id="chartWeekly"></div>
+    <p class="panel-note">Click a team in the legend to highlight just their line.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Weekly luck &mdash; actual minus projected</h2>
+    <div class="chart" id="chartLuck"></div>
+    <p class="panel-note">Above the line means you beat your projection that week.</p>
+  </section>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>Score distribution</h2>
+      <div class="chart" id="chartDist"></div>
+      <p class="panel-note">Every team&rsquo;s weekly score, in ten-point buckets.</p>
+    </section>
+    <section class="panel">
+      <h2>Projection accuracy</h2>
+      <div class="table-scroll"><table id="accuracyTable">
+        <thead><tr>
+          <th class="name">Margin</th><th>Games</th><th>Correct</th><th>Accuracy</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p class="panel-note">
+        How often the higher projection actually won, split by how big the projected
+        margin was. Bigger margins should predict better.
+      </p>
+      <p class="panel-note" id="accuracyNote"></p>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Score spread by team</h2>
+    <div class="chart" id="chartBox"></div>
+    <p class="panel-note">
+      Box shows the middle half of a team&rsquo;s weeks; the line is their median.
+      Dots are outlier weeks beyond 1.5&times; the interquartile range.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Week by week</h2>
+    <div class="row mb-12">
+      <div class="segmented" id="weeklyMetric">
+        <button type="button" data-metric="actual" class="on">Actual</button>
+        <button type="button" data-metric="projected">Projected</button>
+        <button type="button" data-metric="luck">Luck</button>
+        <button type="button" data-metric="actualDiff">Margin</button>
+      </div>
+    </div>
+    <div class="table-scroll"><table id="weeklyTable">
+      <thead><tr id="weeklyHead"></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Injury losses</h2>
+    <div id="injuryBlock"></div>
+    <p class="panel-note">
+      Points lost to injured starters. In your sheet these were entered by hand
+      with a note naming the player.
+    </p>
+  </section>
+
+</div>
+
+<script type="module" src="js/stats-page.js"></script>
+</body>
+</html>
