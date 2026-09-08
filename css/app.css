@@ -148,11 +148,14 @@ th {
   position: sticky;
   top: 0;
   background: var(--panel);
-  cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
 }
-th:hover { color: var(--text); }
+/* Only headers wired up by sortable.js advertise themselves as clickable. */
+th.sortable { cursor: pointer; }
+th.sortable:hover { color: var(--text); }
+th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+th.sorted { color: var(--text); }
 th.sorted::after { content: " \25BE"; color: var(--accent); }
 th.sorted.asc::after { content: " \25B4"; }
 td.name, th.name { text-align: left; font-weight: 550; position: sticky; left: 0; background: var(--panel); }

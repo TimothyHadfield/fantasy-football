@@ -46,6 +46,114 @@ async function inBatches(items, size, fn) {
 }
 
 /**
+ * One week's rosters for every team, with each player's slot and points.
+ *
+ * Rosters genuinely change week to week — trades, waivers, injuries — so this
+ * has to be fetched per week rather than derived from a season snapshot.
+ *
+ * @param {number} week scoring period
+ * @returns {{week, teams: [{id, name, starters, bench, projectedTotal, actualTotal}]}}
+ */
+export async function fetchWeekRosters(week) {
+  const raw = await espn.fetchRosters(week);
+  const season = espn.getConfig().season;
+
+  const teams = (raw.teams || []).map((t) => {
+    const players = (t.roster?.entries || []).map((e) => {
+      const p = e.playerPoolEntry?.player || {};
+      const stats = p.stats || [];
+
+      const find = (sourceId, weekly) =>
+        stats.find((s) =>
+          weekly
+            ? s.scoringPeriodId === week && s.statSourceId === sourceId
+            : s.seasonId === season && s.statSourceId === sourceId && s.statSplitTypeId === 0
+        );
+
+      const weekProj = find(1, true);
+      const weekActual = find(0, true);
+      const seasonProj = find(1, false);
+
+      return {
+        playerId: e.playerId,
+        name: p.fullName || '',
+        position: espn.POSITIONS[p.defaultPositionId] || 'UNK',
+        proTeam: espn.PRO_TEAMS[p.proTeamId] ?? 'FA',
+        lineupSlotId: e.lineupSlotId,
+        slot: espn.SLOT_LABELS[e.lineupSlotId] ?? String(e.lineupSlotId),
+        started: e.lineupSlotId !== BENCH_SLOT && e.lineupSlotId !== IR_SLOT,
+        projected: weekProj?.appliedTotal ?? null,
+        actual: weekActual?.appliedTotal ?? null,
+        seasonProjected: seasonProj?.appliedTotal ?? null,
+        injuryStatus: p.injuryStatus || 'ACTIVE',
+        percentOwned: p.ownership?.percentOwned ?? null,
+      };
+    });
+
+    const starters = players.filter((p) => p.started);
+    const bench = players.filter((p) => !p.started);
+    const total = (arr, key) =>
+      Math.round(arr.reduce((a, p) => a + (p[key] || 0), 0) * 10) / 10;
+
+    return {
+      id: t.id,
+      name: (t.name || `${t.location || ''} ${t.nickname || ''}`).trim() || `Team ${t.id}`,
+      abbrev: t.abbrev || '',
+      players,
+      starters,
+      bench,
+      projectedTotal: total(starters, 'projected'),
+      actualTotal: total(starters, 'actual'),
+      benchActualTotal: total(bench, 'actual'),
+      seasonProjectedTotal: total(starters, 'seasonProjected'),
+    };
+  });
+
+  return { week, teams };
+}
+
+/**
+ * The full season schedule, week by week, with results where they exist.
+ */
+export async function fetchSchedule() {
+  const raw = await espn.fetchMatchups();
+  const parsed = espn.parseLeague(raw);
+  const nameById = new Map(parsed.teams.map((t) => [t.id, t.name]));
+
+  const byWeek = new Map();
+  for (const m of raw.schedule || []) {
+    if (!m.home) continue;
+    const week = m.matchupPeriodId;
+    if (!byWeek.has(week)) byWeek.set(week, []);
+
+    const homePts = m.home.totalPoints ?? null;
+    const awayPts = m.away ? m.away.totalPoints ?? null : null;
+    const played = homePts !== null && awayPts !== null && (homePts > 0 || awayPts > 0);
+
+    byWeek.get(week).push({
+      week,
+      homeId: m.home.teamId,
+      homeName: nameById.get(m.home.teamId) || `Team ${m.home.teamId}`,
+      homeScore: homePts,
+      awayId: m.away ? m.away.teamId : null,
+      awayName: m.away ? nameById.get(m.away.teamId) || `Team ${m.away.teamId}` : 'BYE',
+      awayScore: awayPts,
+      played,
+      margin: played ? Math.round((homePts - awayPts) * 10) / 10 : null,
+      winner: played ? (homePts > awayPts ? 'home' : awayPts > homePts ? 'away' : 'tie') : null,
+    });
+  }
+
+  return {
+    leagueName: parsed.name,
+    teams: parsed.teams,
+    weeks: [...byWeek.keys()].sort((a, b) => a - b),
+    byWeek,
+    games: [...byWeek.values()].flat(),
+  };
+}
+
+/**
  * Build a full season of league data from ESPN.
  *
  * @param {function} onProgress optional (done, total, label) callback

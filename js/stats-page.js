@@ -5,6 +5,7 @@ import { computeLeagueStats } from './stats.js';
 import { fetchSeasonData } from './season.js';
 import * as espn from './espn.js';
 import { lineChart, histogram, boxPlot, SERIES_COLORS } from './charts.js';
+import { enableSort, resort } from './sortable.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,8 +14,6 @@ const state = {
   stats: null,
   highlight: null,      // team id to emphasise (charts.js also has its own
                         // click-to-highlight on the legend it draws)
-  sortKey: 'wins',
-  sortAsc: false,
   weeklyMetric: 'actual',
 };
 
@@ -151,22 +150,14 @@ function renderGlance() {
 }
 
 function renderMainTable() {
-  const tbody = $('mainTable').querySelector('tbody');
-  const teams = [...state.stats.teams].sort((a, b) => {
-    const key = state.sortKey;
-    let av = a[key];
-    let bv = b[key];
-    if (key === 'name') return state.sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
-    if (key === 'wins') { av = a.wins * 10000 + a.pointsFor; bv = b.wins * 10000 + b.pointsFor; }
-    av = av ?? -Infinity; bv = bv ?? -Infinity;
-    return state.sortAsc ? av - bv : bv - av;
-  });
+  const table = $('mainTable');
+  const tbody = table.querySelector('tbody');
 
-  tbody.innerHTML = teams
+  tbody.innerHTML = state.stats.teams
     .map((t) => `
       <tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>
-        <td>${t.wins}–${t.losses}</td>
+        <td data-v="${t.wins + t.pointsFor / 100000}">${t.wins}–${t.losses}</td>
         <td>${fmt(t.avgActual)}</td>
         <td>${fmt(t.avgProjected)}</td>
         <td>${signed(t.avgLuck)}</td>
@@ -178,10 +169,9 @@ function renderMainTable() {
       </tr>`)
     .join('');
 
-  $('mainTable').querySelectorAll('th[data-sort]').forEach((th) => {
-    th.classList.toggle('sorted', th.dataset.sort === state.sortKey);
-    th.classList.toggle('asc', th.dataset.sort === state.sortKey && state.sortAsc);
-  });
+  // Default to standings order; afterwards keep whatever the user picked.
+  enableSort(table, { defaultIndex: 1 });
+  resort(table);
 }
 
 function renderPending() {
@@ -254,17 +244,22 @@ function renderCharts() {
 
 function renderAccuracy() {
   const acc = state.stats.predictionAccuracy;
-  const tbody = $('accuracyTable').querySelector('tbody');
+  const table = $('accuracyTable');
+  const tbody = table.querySelector('tbody');
   tbody.innerHTML = acc
     .map((a) => `
       <tr>
-        <td class="name">${a.label}</td>
+        <td class="name" data-v="${a.threshold}">${a.label}</td>
         <td>${a.games}</td>
         <td>${a.correct}</td>
-        <td>${a.accuracy === null ? '<span class="muted">—</span>'
-              : `${Math.round(a.accuracy * 100)}%`}</td>
+        <td data-v="${a.accuracy === null ? '' : a.accuracy}">${
+          a.accuracy === null ? '<span class="muted">—</span>'
+            : `${Math.round(a.accuracy * 100)}%`}</td>
       </tr>`)
     .join('');
+
+  enableSort(table);
+  resort(table);
 
   const ties = acc.tiedProjections || 0;
   $('accuracyNote').textContent = ties
@@ -278,11 +273,12 @@ function renderWeeklyTable() {
   const metric = state.weeklyMetric;
 
   $('weeklyHead').innerHTML =
-    '<th class="name">Team</th>' +
-    s.weekNumbers.map((w) => `<th>${w}</th>`).join('') +
-    '<th>Avg</th>';
+    '<th class="name" data-sort>Team</th>' +
+    s.weekNumbers.map((w) => `<th data-sort>${w}</th>`).join('') +
+    '<th data-sort>Avg</th>';
 
-  const tbody = $('weeklyTable').querySelector('tbody');
+  const table = $('weeklyTable');
+  const tbody = table.querySelector('tbody');
   tbody.innerHTML = s.teams
     .map((t) => {
       const cells = s.weekNumbers.map((w) => {
@@ -301,6 +297,11 @@ function renderWeeklyTable() {
       </tr>`;
     })
     .join('');
+
+  // Headers are rebuilt above, but sortable.js delegates from the table
+  // itself, so the wiring survives.
+  enableSort(table);
+  resort(table);
 }
 
 // ----------------------------------------------------------------- interaction
@@ -319,15 +320,6 @@ $('weeklyMetric').addEventListener('click', (e) => {
   $('weeklyMetric').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
   state.weeklyMetric = btn.dataset.metric;
   renderWeeklyTable();
-});
-
-$('mainTable').addEventListener('click', (e) => {
-  const th = e.target.closest('th[data-sort]');
-  if (!th) return;
-  const key = th.dataset.sort;
-  if (state.sortKey === key) state.sortAsc = !state.sortAsc;
-  else { state.sortKey = key; state.sortAsc = false; }
-  renderMainTable();
 });
 
 $('highlightTeam').addEventListener('change', (e) => {
