@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draft Room &middot; Fantasy Football</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/draft.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Connection</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="draft.html" class="active">Draft</a>
+    </nav>
+  </div>
+</header>
+
+<div class="practice-bar">
+  <div class="wrap">
+    <p>
+      <strong>Practice draft</strong> &mdash; draft against 9 computer managers with the
+      assistant helping you pick.
+      <span class="pb-sub">No league, no login, no setup. Randomised draft order.</span>
+    </p>
+    <a class="practice-cta" href="#" id="barPracticeBtn">Start a practice draft</a>
+  </div>
+</div>
+
+
+<div class="wrap">
+
+  <!-- ============================================ setup, before the draft -->
+  <section class="panel" id="setupPanel">
+    <h2>Draft room setup</h2>
+    <p class="panel-note" id="setupIntro"></p>
+
+    <div class="row">
+      <div class="form-select">
+        <label for="setupMode">Mode</label>
+        <select id="setupMode">
+          <option value="practice">Practice draft &mdash; no league needed</option>
+          <option value="live">Real draft &mdash; my ESPN league</option>
+        </select>
+      </div>
+      <div class="form-select" id="fieldSource">
+        <label for="setupSource">Player pool</label>
+        <select id="setupSource">
+          <option value="demo">Built-in 2026 pool</option>
+          <option value="live">My ESPN league</option>
+        </select>
+      </div>
+      <div class="form-narrow" id="fieldLeague">
+        <label for="setupLeague">League ID</label>
+        <input id="setupLeague" type="text" inputmode="numeric" placeholder="1485774672">
+      </div>
+      <div class="form-narrow" id="fieldSlot">
+        <label for="setupSlot">Your draft slot</label>
+        <input id="setupSlot" type="number" min="1" max="16" value="1">
+      </div>
+      <div class="form-narrow">
+        <label for="setupTeams">Teams</label>
+        <input id="setupTeams" type="number" min="4" max="16" value="10">
+      </div>
+      <div class="form-narrow">
+        <label for="setupRounds">Rounds</label>
+        <input id="setupRounds" type="number" min="1" max="30" value="16">
+      </div>
+    </div>
+
+    <div class="row" id="practiceRow">
+      <div class="form-select">
+        <label for="setupLevel">Opponents</label>
+        <select id="setupLevel">
+          <option value="casual">Casual &mdash; they reach and panic</option>
+          <option value="normal" selected>Normal &mdash; roughly consensus</option>
+          <option value="sharp">Sharp &mdash; disciplined, punish mistakes</option>
+        </select>
+      </div>
+      <div class="form-select">
+        <label for="setupRandomSlot">Draft order</label>
+        <select id="setupRandomSlot">
+          <option value="random" selected>Randomise it, like the real thing</option>
+          <option value="fixed">Let me choose my slot</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" id="startBtn" class="primary">Start practice draft</button>
+      <span id="setupStatus" class="status-line"></span>
+    </div>
+
+    <div class="panel-note" id="slotAdvice"></div>
+    <div id="historyBox"></div>
+  </section>
+
+  <!-- ================================================= the live draft room -->
+  <div id="room" class="hidden">
+
+    <div class="draft-bar" id="draftBar">
+      <div class="db-left">
+        <span class="db-pick" id="barPick">1.01</span>
+        <span class="db-round" id="barRound">Round 1</span>
+      </div>
+      <div class="db-mid" id="barTurn">Waiting for the draft to start</div>
+      <div class="db-right">
+        <span id="barSync" class="db-sync">Manual</span>
+        <button type="button" id="undoBtn" class="ghost">Undo</button>
+        <button type="button" id="exitBtn" class="ghost">Setup</button>
+      </div>
+    </div>
+
+    <div id="alerts" class="alert-strip"></div>
+
+    <!-- The one thing you must be able to read in three seconds. -->
+    <section class="pick-card" id="pickCard">
+      <div class="pc-rank">1</div>
+      <div class="pc-main">
+        <div class="pc-name" id="pcName">—</div>
+        <div class="pc-meta" id="pcMeta"></div>
+        <div class="pc-why" id="pcWhy"></div>
+      </div>
+      <div class="pc-numbers">
+        <div class="pc-num"><span id="pcProj">—</span><small>proj</small></div>
+        <div class="pc-num"><span id="pcVorp">—</span><small>vs repl.</small></div>
+        <div class="pc-num"><span id="pcLast">—</span><small>lasts?</small></div>
+      </div>
+      <button type="button" class="pc-take" id="takeBtn">I drafted him</button>
+    </section>
+
+    <div class="alt-grid" id="altGrid"></div>
+
+    <div class="grid-2">
+      <section class="panel">
+        <h2>Your roster</h2>
+        <div id="rosterSlots" class="slot-grid"></div>
+        <div class="panel-note" id="rosterNote"></div>
+      </section>
+
+      <section class="panel">
+        <h2>If you wait until <span id="waitPick">—</span></h2>
+        <p class="panel-note">
+          What you can expect to still be there at your next pick, by position.
+          A small cost means waiting is safe. <strong>Chasing it</strong> counts how
+          many of the teams picking before you still need that position &mdash; that
+          is what empties a position faster than its draft position suggests.
+        </p>
+        <div class="table-scroll">
+          <table id="waitTable">
+            <thead><tr>
+              <th data-sort>Pos</th>
+              <th data-sort>Best now</th>
+              <th data-sort>Expected later</th>
+              <th data-sort>Cost of waiting</th>
+              <th data-sort>Chasing it</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Board</h2>
+      <div class="row spread">
+        <div class="form-grow">
+          <label for="search">Search — click a player to mark him drafted by someone else</label>
+          <input id="search" type="search" placeholder="Name…" autocomplete="off">
+        </div>
+        <div class="segmented" id="posFilter">
+          <button type="button" data-pos="ALL" class="on">All</button>
+          <button type="button" data-pos="QB">QB</button>
+          <button type="button" data-pos="RB">RB</button>
+          <button type="button" data-pos="WR">WR</button>
+          <button type="button" data-pos="TE">TE</button>
+          <button type="button" data-pos="K">K</button>
+          <button type="button" data-pos="DST">DST</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table id="boardTable">
+          <thead><tr>
+            <th data-sort>#</th>
+            <th class="name" data-sort>Player</th>
+            <th data-sort>Pos</th>
+            <th data-sort>Team</th>
+            <th data-sort>Bye</th>
+            <th data-sort>Proj</th>
+            <th data-sort>ADP</th>
+            <th data-sort>vs repl.</th>
+            <th data-sort>Lasts</th>
+            <th>Why</th>
+            <th><span class="visually-hidden">Mark drafted</span></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="panel-note">
+        Sorted by the engine's own ranking, not by projection — click any header to
+        re-sort. <strong>Lasts</strong> is the chance he survives to your next pick.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h2>Picks so far</h2>
+      <div id="pickLog" class="pick-log"></div>
+    </section>
+
+  </div>
+
+  <!-- ==================================== practice results, after the draft -->
+  <div id="results" class="hidden">
+    <section class="panel result-hero">
+      <div class="grade-badge" id="gradeBadge">B</div>
+      <div class="result-headline">
+        <h2 id="resultTitle">Draft complete</h2>
+        <p class="sub" id="resultSub"></p>
+        <ul id="resultNotes" class="result-notes"></ul>
+      </div>
+      <div class="result-actions">
+        <button type="button" id="againBtn" class="primary">Draft again</button>
+        <button type="button" id="resultsExitBtn" class="ghost dark">Back to setup</button>
+      </div>
+    </section>
+
+    <div class="grid-2">
+      <section class="panel">
+        <h2>Your starting lineup</h2>
+        <div class="table-scroll">
+          <table id="lineupTable">
+            <thead><tr>
+              <th data-sort>Slot</th>
+              <th class="name" data-sort>Player</th>
+              <th data-sort>Proj</th>
+              <th data-sort>League avg</th>
+              <th data-sort>Edge</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="panel-note" id="benchNote"></p>
+      </section>
+
+      <section class="panel">
+        <h2>How the room finished</h2>
+        <div class="table-scroll">
+          <table id="leagueTable">
+            <thead><tr>
+              <th data-sort>#</th>
+              <th class="name" data-sort>Team</th>
+              <th data-sort>Starting lineup</th>
+              <th data-sort>vs you</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="panel-note" id="benchmarkNote"></p>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Your practice record</h2>
+      <div class="table-scroll">
+        <table id="historyTable">
+          <thead><tr>
+            <th data-sort>When</th>
+            <th data-sort>Slot</th>
+            <th data-sort>Opponents</th>
+            <th data-sort>Finish</th>
+            <th data-sort>Lineup</th>
+            <th data-sort>Grade</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="panel-note">
+        Kept in this browser only. <button type="button" id="clearHistoryBtn" class="mark">Clear</button>
+      </p>
+    </section>
+  </div>
+</div>
+
+<script type="module" src="js/draft-page.js"></script>
+</body>
+</html>
