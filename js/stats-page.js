@@ -113,7 +113,6 @@ function render() {
   renderCharts();
   renderAccuracy();
   renderWeeklyTable();
-  renderInjuries();
 }
 
 function renderTeamPicker() {
@@ -176,7 +175,6 @@ function renderMainTable() {
         <td>${signed(t.skill)}</td>
         <td>${signed(t.forMinusAgainst)}</td>
         <td>${fmt(t.actualStdev)}</td>
-        <td>${t.injuryTotal ? signed(t.injuryTotal, 0) : '<span class="muted">0</span>'}</td>
       </tr>`)
     .join('');
 
@@ -303,37 +301,6 @@ function renderWeeklyTable() {
       </tr>`;
     })
     .join('');
-}
-
-function renderInjuries() {
-  const s = state.stats;
-  const withInjuries = s.teams.filter((t) => t.injuries.length);
-
-  if (!withInjuries.length) {
-    $('injuryBlock').innerHTML =
-      '<div class="empty">No injury data. ESPN doesn’t expose this, so it would ' +
-      'need to be entered by hand the way you did in the sheet.</div>';
-    return;
-  }
-
-  $('injuryBlock').innerHTML = `
-    <div class="table-scroll"><table>
-      <thead><tr>
-        <th class="name">Team</th><th>Week</th><th>Points</th><th class="left">Player</th>
-      </tr></thead>
-      <tbody>${withInjuries
-        .flatMap((t) =>
-          t.injuries.map(
-            (i) => `<tr>
-              <td class="name">${esc(t.name)}</td>
-              <td>${i.week}</td>
-              <td>${signed(i.points, 0)}</td>
-              <td class="left">${esc(i.note || '')}</td>
-            </tr>`
-          )
-        )
-        .join('')}</tbody>
-    </table></div>`;
 }
 
 // ----------------------------------------------------------------- interaction

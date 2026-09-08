@@ -110,7 +110,7 @@ function buildWeeklyRows(data) {
 
 // --------------------------------------------------------------- team metrics
 
-function teamMetrics(team, weekly, leagueAvgProjected, injuries) {
+function teamMetrics(team, weekly, leagueAvgProjected) {
   const actuals = weekly.map((w) => w.actual);
   const projecteds = weekly.map((w) => w.projected);
   const oppActuals = weekly.map((w) => w.oppActual);
@@ -119,8 +119,6 @@ function teamMetrics(team, weekly, leagueAvgProjected, injuries) {
   const pointsFor = sum(actuals);
   const pointsAgainst = sum(oppActuals);
   const n = weekly.length || 1;
-
-  const teamInjuries = injuries.filter((i) => i.teamId === team.id);
 
   return {
     id: team.id,
@@ -157,9 +155,6 @@ function teamMetrics(team, weekly, leagueAvgProjected, injuries) {
     actualBox: boxStats(actuals),
     projectedBox: boxStats(projecteds),
     actualStdev: round1(stdev(actuals)),
-
-    injuryTotal: sum(teamInjuries.map((i) => i.points)),
-    injuries: teamInjuries,
 
     // --- UNKNOWN: formulas not yet supplied ---
     pointsToWin: null,      // sheet column "PTW"
@@ -245,7 +240,6 @@ function rankBy(teams, valueFn, descending = true) {
  */
 export function computeLeagueStats(data) {
   const weeklyRows = buildWeeklyRows(data);
-  const injuries = data.injuries || [];
 
   // League average projected score — needed before per-team skill can be found.
   const allProjected = [];
@@ -255,7 +249,7 @@ export function computeLeagueStats(data) {
   const leagueAvgProjected = mean(allProjected);
 
   const teams = data.teams.map((t) =>
-    teamMetrics(t, weeklyRows.get(t.id) || [], leagueAvgProjected, injuries)
+    teamMetrics(t, weeklyRows.get(t.id) || [], leagueAvgProjected)
   );
 
   // Standings we can compute today.
