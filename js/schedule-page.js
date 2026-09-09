@@ -20,6 +20,22 @@ import { scope } from './prefs.js';
 const $ = (id) => document.getElementById(id);
 const prefs = scope('schedule');
 
+/**
+ * Run counts the simulation panel offers, and the seed it always uses.
+ *
+ * Measured on a 10-team, ~60-game season: 1,000 runs ≈ 15ms, 10,000 ≈ 120ms,
+ * 50,000 ≈ 580ms. The default is the middle one — fast enough not to be worth
+ * a spinner, and precise enough that the counting noise (see simNote) is under
+ * a percentage point.
+ *
+ * The seed is fixed rather than random. Flicking to another team and back, or
+ * reloading, must not quietly hand you different odds for the same season:
+ * numbers that move on their own read as noise even when they are not.
+ */
+const SIM_RUNS = [1000, 10000, 50000];
+const SIM_SEED = 20260901;
+const SIM_RUN_CHOICE = (v) => (SIM_RUNS.includes(Number(v)) ? Number(v) : 10000);
+
 const state = {
   source: prefs.get('source', 'demo'),
   data: null,               // normalised schedule (see normalizeSchedule)
@@ -35,6 +51,11 @@ const state = {
   strengthNote: '',         // how that strength was derived; shown, never implied
   strengthToken: 0,         // guards against a slow fetch landing after a reload
   projection: null,         // per-week optimal-lineup points; see buildProjection
+  // How many times to play the season out. See SIM_RUNS for why the choice is
+  // offered at all rather than fixed.
+  runs: SIM_RUN_CHOICE(prefs.get('runs', 10000)),
+  sim: null,                // {key, result} — see simInputs() for what invalidates it
+  simToken: 0,              // guards against a slow run landing after the data changed
 };
 
 // ------------------------------------------------------------------ formatting
@@ -292,6 +313,10 @@ function adopt(data) {
   state.strength = null;
   state.strengthNote = '';
   state.projection = null;
+  // A run still in flight is about the league we just replaced; retire it here
+  // rather than letting it land and be discarded on a key mismatch later.
+  state.sim = null;
+  state.simToken++;
   render();
   refreshStrength();
 }
@@ -594,6 +619,7 @@ async function refreshStrength() {
     renderMatchups();   // an unplayed card falls back to the strength ranking
     renderResults();    // the win-% column arrives with the projection
     renderForecast();   // and so does the whole season forecast
+    renderSimulation(); // which the simulation is built on top of, so it waits too
   }
 }
 
@@ -651,6 +677,7 @@ function render() {
   renderResults();
   renderH2H();
   renderForecast();
+  renderSimulation();
 }
 
 function syncSource() {
@@ -1689,6 +1716,335 @@ function renderForecast() {
     .join('<br>');
 }
 
+// ------------------------------------------------------------ season simulation
+//
+// The forecast panel answers "how many games will this team win", which has an
+// exact answer: the remaining games are independent coin flips, so the win
+// total is a Poisson-binomial and forecast.js convolves it.
+//
+// WHERE YOU FINISH has no such answer. A placing depends on the joint outcome
+// of every game in the league at once — a rival losing moves you up without you
+// playing — and then on the tiebreak, which is total points scored. So this
+// panel plays the rest of the season out many times and counts. Everything in
+// it is a count, and the note says so; none of it is solved for.
+//
+// It is the same model as the win percentages above, drawing each score as its
+// projection plus normal noise of the same sigma, so the two panels agree by
+// construction rather than by luck. The consistency that matters: a team's
+// simulated Proj. wins must land on the forecast panel's Expected wins.
+
+/** 10000 -> "10,000". A run count is a quantity, so it gets separators. */
+const commas = (n) => Number(n).toLocaleString('en-US');
+
+/**
+ * Everything simulateSeason needs, plus a key that changes exactly when the
+ * answer would.
+ *
+ * WHAT INVALIDATES THE CACHED RUN: the run count, the as-of week, the scoring
+ * spread, the set of teams, each team's banked wins and points, and every
+ * remaining game's two projections. All of those are in the key. Nothing else
+ * is — in particular NOT which team the picker is on, because that changes
+ * nothing about the season being simulated, only which row's distribution gets
+ * drawn. Re-running for that would burn half a second to redraw one chart.
+ *
+ * Banked results are split from remaining ones with isRemaining(), the same
+ * rule the forecast panel uses, rather than with the season-to-date split in
+ * standingsRows(). On live data the two are identical (isRemaining is exactly
+ * "not final"). In the demo, whose season is complete, they are not: the week
+ * picker chooses the point in time both panels forecast from, and a simulation
+ * that banked results the forecast above had not seen yet would contradict it.
+ */
+function simInputs() {
+  const d = state.data;
+  if (!d || !d.teams.length) return null;
+
+  const asOf = forecastAsOf();
+  const teamIds = d.teams.map((t) => t.id);
+  const banked = new Map(teamIds.map((id) => [id, { wins: 0, pointsFor: 0 }]));
+  const games = [];
+  let playable = 0;
+
+  for (const g of d.games) {
+    if (g.homeId == null || g.awayId == null) continue;        // bye: nothing to play out
+    if (!banked.has(g.homeId) || !banked.has(g.awayId)) continue;
+
+    if (isRemaining(g, asOf)) {
+      // The same projectedPoints() the cards, the results table and the
+      // forecast table read, so a game cannot be worth one thing here and
+      // another thing four panels up.
+      const homeProj = projectedPoints(g, 'home');
+      const awayProj = projectedPoints(g, 'away');
+      if (homeProj !== null && awayProj !== null) playable++;
+      games.push({ homeId: g.homeId, awayId: g.awayId, homeProj, awayProj });
+      continue;
+    }
+
+    // A game in progress is neither banked nor played out: half a scoreline is
+    // not a result, and winnerOf() returns null for it.
+    const winner = winnerOf(g);
+    if (winner === null) continue;
+
+    const h = banked.get(g.homeId);
+    const a = banked.get(g.awayId);
+    if (typeof g.homeScore === 'number') h.pointsFor += g.homeScore;
+    if (typeof g.awayScore === 'number') a.pointsFor += g.awayScore;
+    if (winner === 'tie') { h.wins += 0.5; a.wins += 0.5; }
+    else if (winner === 'home') h.wins += 1;
+    else a.wins += 1;
+  }
+
+  const sigma = scoringSpread().sigma;
+
+  const key = JSON.stringify([
+    state.runs,
+    asOf,
+    Math.round(sigma * 1000),
+    teamIds,
+    [...banked].map(([id, b]) => [id, b.wins, Math.round(b.pointsFor * 10)]),
+    games.map((g) => [g.homeId, g.awayId, g.homeProj, g.awayProj]),
+  ]);
+
+  return { teamIds, banked, games, sigma, asOf, playable, key };
+}
+
+/** Mark the run-count button that matches the current setting. */
+function syncRuns() {
+  $('simRuns')
+    .querySelectorAll('button')
+    .forEach((b) => b.classList.toggle('on', Number(b.dataset.runs) === state.runs));
+}
+
+/**
+ * Run the simulation off the critical path.
+ *
+ * 50,000 runs is well over half a second of straight-line arithmetic, and doing
+ * it inline would freeze the page with the "Simulating…" state never painted —
+ * the one frame that exists to say the wait is deliberate. rAF fires BEFORE the
+ * next paint, so it alone would not help; the setTimeout inside it is what
+ * lands the work in a fresh task after the browser has drawn.
+ *
+ * The token is the same guard refreshStrength() uses: a run that finishes after
+ * the data underneath it changed is thrown away rather than published.
+ */
+function runSimulation(inputs) {
+  const token = ++state.simToken;
+  const later = (fn) => setTimeout(fn, 0);
+  const kick = typeof requestAnimationFrame === 'function'
+    ? (fn) => requestAnimationFrame(() => later(fn))
+    : later;
+
+  kick(() => {
+    if (token !== state.simToken || !state.data) return;
+    const result = forecast.simulateSeason({
+      teamIds: inputs.teamIds,
+      banked: inputs.banked,
+      games: inputs.games,
+      sigma: inputs.sigma,
+      runs: state.runs,
+      seed: SIM_SEED,
+    });
+    if (token !== state.simToken || !state.data) return;
+    // Cached even when null, so a league the model cannot handle is reported
+    // once instead of being retried on every repaint.
+    state.sim = { key: inputs.key, result };
+    renderSimulation();
+  });
+}
+
+function renderSimulation() {
+  const d = state.data;
+  if (!d) return;
+
+  const table = $('simTable');
+  const tbody = table.querySelector('tbody');
+
+  syncRuns();
+
+  const blank = (reason, note) => {
+    $('simStats').innerHTML = '';
+    $('simCap').textContent = '';
+    $('simChart').innerHTML = '';
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${reason}</td></tr>`;
+    $('simNote').innerHTML = note;
+    resort(table);
+  };
+
+  const inputs = simInputs();
+  if (!inputs) {
+    blank(
+      'No teams in this league yet, so there is no season to simulate.',
+      'This panel plays the rest of the season out thousands of times and counts where ' +
+      'everyone finishes.'
+    );
+    return;
+  }
+
+  if (!inputs.games.length) {
+    blank(
+      d.isDemo
+        ? `Week ${inputs.asOf} is the last week of the demo season and it is already ` +
+          'played, so there is no season left to simulate. Step the week picker back to ' +
+          'simulate from an earlier point.'
+        : 'Every game on this schedule has been decided, so the table above is the final ' +
+          'one — there is nothing left to simulate.',
+      'A finished season has a result, not a distribution.'
+    );
+    return;
+  }
+
+  // Three distinct states, because "not yet" and "not going to happen" deserve
+  // different sentences. state.strengthNote is empty only while the roster read
+  // is still in flight.
+  if (!inputs.playable) {
+    const pending = !d.isDemo && !state.strengthNote;
+    blank(
+      pending
+        ? 'Working out what every roster is projected to score…'
+        : `${plural(inputs.games.length, 'game')} left to play, but no projection to put ` +
+          'against any of them, so there is no season to play out.',
+      pending
+        ? 'Reading this league’s rosters from ESPN. The simulation needs a projected score ' +
+          'for both sides of every remaining game.'
+        : d.isDemo
+          ? 'These games carry no projections, so there is nothing to simulate from.'
+          : 'ESPN’s matchup feed carries no projected scores, and this league’s rosters ' +
+            'could not be read, which is where the projections would otherwise come from. ' +
+            'Reload the page to try the roster read again.'
+    );
+    return;
+  }
+
+  // The cache. A miss shows the waiting state and hands off; the run repaints
+  // through here on the way back, and hits.
+  if (!state.sim || state.sim.key !== inputs.key) {
+    blank(
+      `Simulating ${commas(state.runs)} seasons…`,
+      `Playing the ${plural(inputs.playable, 'remaining game')} out ` +
+      `${commas(state.runs)} times and counting where everyone finishes.`
+    );
+    runSimulation(inputs);
+    return;
+  }
+
+  const sim = state.sim.result;
+  if (!sim) {
+    blank(
+      'This season could not be simulated.',
+      'The model needs at least one team and a positive scoring spread, and this league ' +
+      'gave neither.'
+    );
+    return;
+  }
+
+  paintSimulation(sim, inputs);
+}
+
+function paintSimulation(sim, inputs) {
+  const d = state.data;
+  const table = $('simTable');
+  const tbody = table.querySelector('tbody');
+  const nameById = new Map(d.teams.map((t) => [t.id, t.name]));
+  const team = forecastTeam();
+  const mine = team ? sim.teams.find((t) => t.teamId === team.id) : null;
+
+  // ---- headline: who wins it, who props it up, and where you stand ---------
+  const who = (id) => `<div class="who">${esc(nameById.get(id) || `Team ${id}`)}</div>`;
+  const stat = (k, v, id) =>
+    `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${id == null ? '' : who(id)}</div>`;
+
+  $('simStats').innerHTML = [
+    stat('Wins the season most', pctText(sim.champion.pFirst), sim.champion.teamId),
+    stat('Finishes last most', pctText(sim.wooden.pLast), sim.wooden.teamId),
+    mine ? stat('Title chance', pctText(mine.pFirst), mine.teamId) : '',
+    mine ? stat('Last-place chance', pctText(mine.pLast), mine.teamId) : '',
+  ]
+    .filter(Boolean)
+    .join('');
+
+  // ---- the selected team's own place distribution -------------------------
+  const chart = $('simChart');
+  if (mine) {
+    $('simCap').innerHTML =
+      `Where <strong>${esc(team.name)}</strong> finished across ${commas(sim.runs)} simulated ` +
+      `seasons. Most likely ${ordinal(mine.modePlace)}, averaging ${fmt(mine.meanPlace)}.`;
+    // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
+    // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
+    histogram(chart, {
+      bins: mine.places.map((_, i) => ordinal(i + 1)),
+      counts: mine.places.map((p) => p * 100),
+      yLabel: 'Chance (%)',
+      height: 240,
+    });
+  } else {
+    $('simCap').textContent = '';
+    chart.innerHTML = '';
+  }
+
+  // ---- the projected final table ------------------------------------------
+  // Emitted in average-place order so the default view is already the answer
+  // to "what is the most likely finishing order", before anyone clicks a header.
+  tbody.innerHTML = sim.byMean
+    .map((t) => {
+      const isMe = t.teamId === state.myTeamId;
+      const isPicked = Boolean(team) && t.teamId === team.id;
+      const cls = [isMe ? 'me' : '', isPicked ? 'picked' : ''].filter(Boolean).join(' ');
+      const tone = (p) => (p >= 0.25 ? 'pos' : p <= 0.02 ? 'muted' : '');
+
+      return `<tr${cls ? ` class="${cls}"` : ''}>
+          <td class="name">${esc(nameById.get(t.teamId) || `Team ${t.teamId}`)}</td>
+          <td data-v="${t.meanWins}">${fmt(t.meanWins)}</td>
+          <td data-v="${t.meanPlace}">${fmt(t.meanPlace)}</td>
+          <td data-v="${t.modePlace}">${ordinal(t.modePlace)}</td>
+          <td data-v="${t.pFirst}" class="${tone(t.pFirst)}">${pctText(t.pFirst)}</td>
+          <td data-v="${t.pLast}" class="${t.pLast >= 0.25 ? 'neg' : t.pLast <= 0.02 ? 'muted' : ''}">${pctText(t.pLast)}</td>
+        </tr>`;
+    })
+    .join('');
+  resort(table);
+
+  // ---- what this is, and what it is not -----------------------------------
+  const lastWeek = d.weeks[d.weeks.length - 1];
+
+  // Two standard errors at the worst case (p = 0.5): 100/sqrt(runs) points.
+  // Quoting it stops two teams a point apart being read as ranked.
+  const noise = 100 / Math.sqrt(sim.runs);
+
+  const timing = d.isDemo
+    ? `The demo season is already complete, so this simulates it forward from week ` +
+      `${inputs.asOf} — the same as-of point the forecast panel above uses, so the two ` +
+      `always agree. Step the week picker to move it.`
+    : 'Weeks already decided are banked exactly as they stand; everything still open is ' +
+      'simulated. Same as-of point as the forecast panel above.';
+
+  const gaps = sim.skipped
+    ? `${plural(sim.skipped, 'remaining game')} ${sim.skipped === 1 ? 'has' : 'have'} no ` +
+      'projection on one side, so ' + (sim.skipped === 1 ? 'it was' : 'they were') +
+      ' left out of every simulated season. Those wins are missing from every number here.'
+    : '';
+
+  $('simNote').innerHTML = [
+    `Every number in this panel is counted from a simulation, not solved for: the ` +
+      `${plural(sim.games, 'game')} still to play ${sim.games === 1 ? 'was' : 'were'} played ` +
+      `out ${commas(sim.runs)} times and the finishing order counted. There is no closed ` +
+      `form for a final placing — where you finish turns on everyone else’s results as much ` +
+      `as your own. “Wins the season” here means finishing first in the regular-season ` +
+      `standings after week ${lastWeek}; no playoffs are modelled, so it is not the same ` +
+      `question as who lifts the trophy.`,
+    timing,
+    `Each simulated season is ranked on wins first and total points scored second — this ` +
+      `league’s own tiebreak — which is why points are simulated as well as results. The run ` +
+      `is seeded, so the same inputs always give the same numbers.`,
+    `Counting noise: at ${commas(sim.runs)} runs a percentage here is good to roughly ` +
+      `±${fmt(noise)} points, so gaps narrower than that are not real. Raise the run count ` +
+      `to shrink it.`,
+    derivedCaveat(),
+    projectionCaveat(lastWeek),
+    gaps,
+  ]
+    .filter(Boolean)
+    .join('<br>');
+}
+
 // ----------------------------------------------------------------- interaction
 
 $('sourceToggle').addEventListener('click', (e) => {
@@ -1721,6 +2077,20 @@ $('forecastTeam').addEventListener('change', (e) => {
   state.forecastTeamId = Number.isFinite(id) ? id : null;
   prefs.set('forecastTeam', state.forecastTeamId);
   renderForecast();
+  // The simulation panel follows the same pick. Nothing about the season being
+  // simulated changed, so this hits the cache and only redraws the chart, the
+  // two "your chances" stats and the row highlight.
+  renderSimulation();
+});
+
+$('simRuns').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-runs]');
+  if (!btn) return;
+  const runs = SIM_RUN_CHOICE(btn.dataset.runs);
+  if (runs === state.runs) return;
+  state.runs = runs;
+  prefs.set('runs', runs);
+  renderSimulation();   // the run count IS in the cache key, so this re-runs
 });
 
 // Walking the season one week at a time used to mean thirteen trips through a
@@ -1767,6 +2137,9 @@ enableSort($('resultsTable'), { defaultIndex: 0, defaultAsc: true });
 enableSort($('standingsTable'), { defaultIndex: 1 });
 // The forecast reads forwards in time, so it opens in week order.
 enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
+// The projected table opens on the most likely finishing order: average place,
+// lowest first. That IS the ranking the panel exists to give.
+enableSort($('simTable'), { defaultIndex: 2, defaultAsc: true });
 
 /**
  * Go live on our own when the connection bar finds a league, so the page shows
@@ -1782,6 +2155,7 @@ onConnection((conn) => {
     if (state.data) {
       renderStandings();
       renderForecast();
+      renderSimulation();   // moves the "you" highlight and the selected team with it
     }
     return;
   }

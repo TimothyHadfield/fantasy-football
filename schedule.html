@@ -131,6 +131,32 @@ td.state-live { color: var(--warn); }
 #forecastChart { margin-top: 16px; }
 /* Nothing to chart is a sentence, not a blank rectangle. */
 #forecastChart:empty { display: none; }
+
+/* Season simulation. Unlike the forecast panel this table is the whole league
+   at once, so the two highlights have to mean two different things: tr.me is
+   you (the same green the standings uses), and the rule down the left edge is
+   whichever team the picker above is currently on — the team the chart is
+   drawn for. A row can be both, which is why the mark is an edge and not
+   another background. */
+#simTable tbody tr.picked td.name { box-shadow: inset 3px 0 0 var(--accent); }
+#simChart { margin-top: 4px; }
+#simChart:empty { display: none; }
+/* The chart is about one team; saying which one belongs next to it, not
+   several paragraphs down in the note. */
+#simCap { font-size: 12.5px; color: var(--dim); margin: 14px 0 0; }
+#simCap:empty { display: none; }
+/* A percentage means nothing without the team it belongs to, and the team is
+   context rather than the number itself — so it sits under the value at note
+   size instead of competing with it. */
+#simStats .stat .who {
+  font-size: 12.5px;
+  color: var(--dim);
+  margin-top: 1px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>
 </head>
 <body>
@@ -270,6 +296,38 @@ td.state-live { color: var(--warn); }
     </table></div>
     <div class="chart" id="forecastChart"></div>
     <p class="panel-note" id="forecastNote"></p>
+  </section>
+
+  <!-- Last panel on the page because it is the only one that needs every other
+       team's projection at once: a placing is not something you can work out
+       from your own results. It follows the "Forecast for" picker above rather
+       than carrying a second one, so the chart here and the table there are
+       always about the same team. -->
+  <section class="panel">
+    <div class="row spread mb-12">
+      <h2 id="simTitle" class="h2-inline">Simulate season</h2>
+      <div class="segmented seg-sm" id="simRuns"
+           title="How many times to play the rest of the season out. More runs means less counting noise and a slower answer.">
+        <button type="button" data-runs="1000">1,000</button>
+        <button type="button" data-runs="10000" class="on">10,000</button>
+        <button type="button" data-runs="50000">50,000</button>
+      </div>
+    </div>
+    <div class="stat-row" id="simStats"></div>
+    <p id="simCap"></p>
+    <div class="chart" id="simChart"></div>
+    <div class="table-scroll"><table id="simTable">
+      <thead><tr>
+        <th class="name" data-sort>Team</th>
+        <th data-sort title="Average number of regular-season wins across every simulated season, banked wins included.">Proj. wins</th>
+        <th data-sort title="Average finishing place across every simulated season. Lower is better.">Avg place</th>
+        <th data-sort title="The single place this team finished in most often — not where it usually finishes, just the most common one.">Most likely</th>
+        <th data-sort title="How often this team finished first in the regular-season standings. No playoffs are modelled.">Title %</th>
+        <th data-sort title="How often this team finished last in the regular-season standings.">Last %</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="simNote"></p>
   </section>
 
 </div>
