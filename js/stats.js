@@ -31,8 +31,15 @@ export function quartile(sortedValues, p) {
   return sortedValues[lo] + (pos - lo) * (sortedValues[hi] - sortedValues[lo]);
 }
 
+/**
+ * Sample standard deviation, or null when a single value cannot have one.
+ *
+ * It used to return 0, which the page printed as "Std Dev 0.0" — indis-
+ * tinguishable from a genuinely metronomic team, when all it meant was that
+ * one week had been played. Callers render null as a dash.
+ */
 export function stdev(values) {
-  if (values.length < 2) return 0;
+  if (values.length < 2) return null;
   const m = mean(values);
   return Math.sqrt(sum(values.map((v) => (v - m) ** 2)) / (values.length - 1));
 }
@@ -65,12 +72,16 @@ export function gameLuck(margin) {
  * Five-number summary plus Tukey outlier fences at 1.5 x IQR.
  * CONFIRMED: reproduces the sheet's "Under 49 / Over 183" for actual scores
  * (Q1 99, Q3 133, IQR 34) and "Under 95 / Over 151" for projected.
+ *
+ * Below `minCount` values there is no distribution to summarise — quartiles of
+ * two numbers are just those two numbers wearing a box, and the chart drew them
+ * as 1.5px slivers — so this returns null and charts.js falls through to its
+ * empty state. It bites on a single team in week 1; the league-wide boxes see
+ * one score per team per week and clear the floor immediately.
  */
-export function boxStats(values) {
+export function boxStats(values, minCount = 5) {
   const s = [...values].sort((a, b) => a - b);
-  if (!s.length) {
-    return { min: 0, q1: 0, median: 0, q3: 0, max: 0, iqr: 0, lowerFence: 0, upperFence: 0, outliers: [] };
-  }
+  if (s.length < minCount) return null;
   const q1 = quartile(s, 0.25);
   const median = quartile(s, 0.5);
   const q3 = quartile(s, 0.75);
@@ -207,6 +218,7 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
   // the standings LUCK column, and it equals the final cumulative-luck value.
   const luckScore = leagueAvgActual - (pointsToWin - (scoreDiffLuck ?? 0));
   const skill = mean(projecteds) - leagueAvgProjected;
+  const actualStdev = stdev(actuals);
 
   return {
     id: team.id,
@@ -240,9 +252,10 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
     ties: weekly.filter((w) => w.tied).length,
 
     // Spread of weekly scores — CONFIRMED (box chart section of the sheet).
+    // All three are null until there are enough weeks to have a spread at all.
     actualBox: boxStats(actuals),
     projectedBox: boxStats(projecteds),
-    actualStdev: round1(stdev(actuals)),
+    actualStdev: actualStdev === null ? null : round1(actualStdev),
 
     // --- Recovered from the sheet's xlsx on 2026-09-08. See PROGRESS.md. ---
     pointsToWin: round1(pointsToWin),                       // "PTW"
@@ -276,6 +289,13 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
  * CONFIRMED as a concept against the sheet's "Prediction Accuracy" block, which
  * reported 65 games overall at 0.69, and tighter buckets at larger margins.
  */
+
+// Below this many games a bucket has no percentage worth printing: with five
+// games the only answers available are 0, 20, 40, 60, 80 and 100%, and a single
+// correct call in the >30 bucket reads as a flawless projection model. The
+// games and correct counts are still reported — only the ratio is withheld.
+const MIN_GAMES_FOR_ACCURACY = 20;
+
 export function predictionAccuracy(games, thresholds = [0, 5, 10, 15, 20, 25, 30]) {
   // A game where both teams carry the same projection makes no prediction at
   // all, so it can be neither right nor wrong. Those are excluded from every
@@ -297,7 +317,9 @@ export function predictionAccuracy(games, thresholds = [0, 5, 10, 15, 20, 25, 30
       label: t === 0 ? 'All' : `>${t}`,
       games: relevant.length,
       correct: correct.length,
-      accuracy: relevant.length ? correct.length / relevant.length : null,
+      accuracy: relevant.length >= MIN_GAMES_FOR_ACCURACY
+        ? correct.length / relevant.length
+        : null,
     };
   });
 
@@ -326,12 +348,27 @@ export function scoreDistribution(allScores, binSize = 10) {
 
 // ------------------------------------------------------------------ standings
 
+/**
+ * Rank the teams by a value — or refuse to.
+ *
+ * Before a game has been played every value is identical, the comparator
+ * returns 0 for every pair, and the stable sort quietly hands out 1 through 10
+ * in whatever order ESPN happened to list the teams: a full ordinal standings
+ * table derived from nothing. When nothing separates the teams the rank is
+ * null, and the page shows a dash.
+ */
 function rankBy(teams, valueFn, descending = true) {
+  const ranks = new Map();
+  const values = teams.map(valueFn);
+  if (values.every((v) => v === values[0])) {
+    for (const t of teams) ranks.set(t.id, null);
+    return ranks;
+  }
+
   const ordered = [...teams].sort((a, b) => {
     const d = valueFn(b) - valueFn(a);
     return descending ? d : -d;
   });
-  const ranks = new Map();
   ordered.forEach((t, i) => ranks.set(t.id, i + 1));
   return ranks;
 }
