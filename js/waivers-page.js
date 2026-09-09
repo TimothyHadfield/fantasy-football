@@ -1327,8 +1327,17 @@ function rowIdentity(playerId, { addressable = true, cls = '' } = {}) {
   // The classes are built here rather than by each caller because the spotlight
   // has to merge with whatever else the row is wearing — two class attributes on
   // one element is not a document, and the second one silently loses.
-  const classes = [cls, playerId === state.spotlight ? 'spotlight' : '']
-    .filter(Boolean).join(' ');
+  //
+  // The spotlight follows `addressable` for exactly the reason the id does. A
+  // man who is both somebody's rostered player and your own "Your QB2" is ONE
+  // arrival at TWO rows, and marking both of them lit up a comparison row the
+  // link had not been aimed at while `scrollIntoView` went to the real one — so
+  // the page highlighted one row and moved to another. Found by `link-check`
+  // when the Trade page was added and its sample happened to pick such a man;
+  // every earlier sample had missed him, which is the whole argument for that
+  // suite existing.
+  const spotlit = addressable && playerId === state.spotlight;
+  const classes = [cls, spotlit ? 'spotlight' : ''].filter(Boolean).join(' ');
   return `${addressable ? ` id="p${esc(playerId)}"` : ''} data-player="${esc(playerId)}"` +
     (classes ? ` class="${classes}"` : '');
 }
