@@ -28,11 +28,13 @@ still holds; what changed:
   bottom of the home page). The dashboard is built on `fetchSchedule` +
   `fetchWeekRosters` and deliberately NOT on `fetchSeasonData`, which returns
   nothing until games are played.
-- **`analysis.html` shows all ten teams' starting lineups at once** —
-  QB/RB1/RB2/WR1/WR2/TE/FLEX + baseline week + Est Total — which was Tim's
-  headline ask. His sheet semantics are implemented exactly (see "What the
+- **`analysis.html` shows all ten teams' starting lineups at once**, which was
+  Tim's headline ask. His sheet semantics are implemented exactly (see "What the
   sheet's columns mean"): flex is computed by position, never from ESPN's
-  lineup slot, because ESPN's `OP` slot can hold a QB.
+  lineup slot, because ESPN's `OP` slot can hold a QB. *(It was seven columns
+  plus `Baseline week` and `Est Total` when this was written; later the same day
+  it became the two grids described under "The two all-teams grids" below —
+  nine spots, a real total, and the bench. Read that section, not this line.)*
 - **`stats.html` refuses to print numbers it cannot justify.** Below 3 weeks
   the trend charts and the volatile columns (SD/LUCK/S+L/LS/PS) are replaced
   by an "Early season" panel. See "Early-season honesty" below.
@@ -136,8 +138,50 @@ the man you would drop. "Worst" is the lowest Avg **over the weeks currently
 shown**, so widening the span can change which of your men appears; the label's
 number is your depth at that position. These rows are never greened (starting
 your own bench is a different question) and never counted on the position
-buttons (you cannot add a player you hold). This doubles the per-week cost —
-the wire AND your roster — so rosters are fetched only when a team is set.
+buttons (you cannot add a player you hold).
+
+**The taken table, and why a week now costs two requests unconditionally.**
+`waivers.html` is "Players" now, and the second panel is everyone who IS on a
+roster, priced over the same weeks, with the manager holding him and where he
+ranks on that manager's squad. It answers a different question from the wire —
+not "who can I add" but "who has what" — so it is a second table rather than
+more rows in the first.
+
+- **It carries NO colour at all.** Both greens above argue for a claim, and
+  nobody on this list can be claimed, so colouring them would answer a question
+  that does not arise. `taken-check.mjs` asserts zero `hot` and zero `beats`
+  cells *while* 20+ of those numbers clear the STARTABLE bar, so the check is
+  not vacuous, and that the wire above is still green.
+- **The rank is ours, not ESPN's depth chart**: QB3 is that manager's
+  third-best QB by the Avg this page computes over the weeks currently shown.
+  So it moves with the span, exactly as widening it can change which of your men
+  appears as "Your QB3". Same `meanOf` as the wire, shared verbatim — a
+  comparison between two differently-derived averages is not a comparison.
+- **The owner is who holds him in the EARLIEST week shown**, because that is the
+  squad as it stands now. His week numbers still come from each week's own
+  payload, so nothing is borrowed across weeks.
+- **The roster read is now unconditional** — the old `comparing()` gate is gone,
+  because this table needs every squad whether or not one of them is yours. So
+  **every week costs two requests for everybody**, and `renderCost()` says so:
+  "the wire and every squad in the league for each one". Understating that by
+  half would be the one kind of dishonesty this page exists to avoid. Three
+  assertions in `cmp-check.mjs` encoded the old conditional behaviour and were
+  updated to the new truth.
+- **An unranked man is the awkward case and has a documented answer.** A player
+  ESPN carried no number for over these weeks cannot be ranked, so he shows the
+  bare position. His Pos cell still keys as `POS_ORDER * 100 + 99` — nulls-last
+  applied INSIDE the position group, which is the only place it can go, since
+  his position is known and only his rank is not. **Do not "fix" this by
+  dropping the `data-v`**: that was tried, and `sortable.js` falls back to the
+  cell text, so a bare "TE" compares as the string `"te"` against numbers and
+  *leads* the column descending. His Avg, which really is absent, still carries
+  no `data-v` at all.
+- **Groundwork only:** every player row in both tables carries `data-player` and
+  the wire/taken rows carry `id="p{playerId}"`, so a later "click a player, jump
+  to him" feature is cheap. Comparison rows get `data-player` but no `id` — they
+  are a second appearance of a man who already has a row in the taken table, and
+  duplicate element ids are not a document. **The click-through is deliberately
+  not built**; Tim described it as a follow-on and has not specified it.
 
 **The second green on the wire (`td.beats`).** A wire cell is also shaded when
 that player out-projects your own worst man at his position **in that week
@@ -683,7 +727,8 @@ Pages (all default to demo data; real data arrives via the bridge):
 - `analysis.html` — all ten teams' lineups at once, plus a per-team drill-down
   whose lineup you can move around to see what it would score
 - `schedule.html` — standings, matchups, results, fixture / head-to-head grid
-- `waivers.html` — "Add players": everyone not on a roster, in a table whose
+- `waivers.html` — "Players": everyone not on a roster, and below it everyone
+  who is, in a table whose
   columns are week numbers and whose cells are ESPN's projection for that
   player in that week. Position filter, every column sortable.
 - `draft.html` — draft assistant + practice mode (parked)
@@ -703,7 +748,7 @@ Modules:
 - `js/projection.js` — rosters → what every team is projected to score in every
   week, plus the schedule-derived averages built on that. **Shared by the
   schedule page and the stats page; do not grow a second copy.** Pure.
-- `js/waivers-page.js` — the Add players page.
+- `js/waivers-page.js` — the Players page: the wire, and the taken table.
 - `js/forecast.js` — win probabilities, optimal lineups and season win-total
   distributions. Pure: no DOM, no fetching, so it is node-testable. The
   distribution is an exact Poisson-binomial convolution, not a simulation.
@@ -780,8 +825,9 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
+| `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
-| `hot-check.mjs` | both greens on the Add players table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
+| `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
 All green as of 2026-09-09: extension 38, bridge 34, draft-model 44, draft-sim
 36, practice 99, autostart 10, draft-render 107, recovered 116, plus the

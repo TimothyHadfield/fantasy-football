@@ -93,7 +93,7 @@ Everything Tim has asked for is built and live:
 | `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played |
 | `analysis.html` | All ten squads twice over — nine spots, a total and the bench, once on the season average and once on the selected week; a per-team drill-down whose lineup you can swap around to see what it would score; and "Season by week" — a whole squad against every week |
 | `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, and a Monte Carlo season simulation |
-| `waivers.html` | "Add players" — the wire priced by week, with your own worst man at each position dropped into the same list and every week that beats him shaded |
+| `waivers.html` | "Players" — the wire priced by week, with your own worst man at each position dropped into the same list and every week that beats him shaded; then "Taken players", the same table for everyone already rostered, uncoloured, with the owner and his rank on that squad |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
 
@@ -106,7 +106,7 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — around 1,100 assertions. They are in the
+`cd tests && npm install && npm test` — 13 suites, around 1,300 assertions. They are in the
 repo now; earlier sessions kept them in a temp directory and lost them each
 time. **Run them before and after any change**, and see `tests/README.md` for
 the two linkedom gotchas that otherwise waste an hour.
