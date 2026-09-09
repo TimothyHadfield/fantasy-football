@@ -8,12 +8,42 @@
 <style>
 /* Page-local styles. Everything else comes from css/app.css. */
 
-/* Matchup cards — the "scan one week at a time" view. */
-.matchups {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+/* The week rail. It sits between the season-wide panels above it and the
+   week-scoped panels below, so the reach of the control is visible in the
+   layout and not just claimed in a note. */
+.weekbar {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
+  padding: 10px 14px;
+  margin-bottom: 16px;
 }
+.weekbar .wk-label {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 600;
+  margin-bottom: 0;   /* app.css gives every label a bottom margin; not in a row */
+}
+.weekbar select { width: auto; min-width: 132px; }
+.weekbar .step { padding: 8px 13px; line-height: 1; }
+.weekbar .wk-note {
+  margin-left: auto;
+  text-align: right;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+/* Matchups. A 10-team league plays exactly five games a week, so any
+   multi-column grid leaves an orphan on the last row; one full-width row per
+   game scans in a single downward sweep and leaves room for the record and
+   projection each card now carries. */
+.matchups { display: grid; gap: 8px; }
 .week-block + .week-block { margin-top: 22px; }
 .week-head {
   font-size: 11.5px;
@@ -24,39 +54,68 @@
   margin: 0 0 8px;
 }
 .game {
+  display: grid;
+  grid-template-columns: 1fr 62px 18px 62px 1fr minmax(148px, 200px);
+  align-items: center;
+  gap: 8px;
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: var(--r-3);
+  padding: 9px 12px;
+  font-size: 14px;
 }
 .game.upcoming { background: transparent; border-style: dashed; }
-.side {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 14px;
-  padding: 3px 0;
-  font-variant-numeric: tabular-nums;
-}
-.side + .side { border-top: 1px solid var(--line); }
+.game.live { border-color: #4a3c17; }
+
+.side { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+/* Reversed so the away name sits next to its score and the two team names
+   frame the numbers rather than trailing off to the right. */
+.side.away { flex-direction: row-reverse; justify-content: flex-start; }
 .side .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.side .tscore { flex: none; font-weight: 600; }
-.side.win { color: var(--text); font-weight: 650; }
-.side.win .tscore { color: var(--accent); }
+.side .trec { flex: none; font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.side.win .tname { font-weight: 650; }
 .side.lose { color: var(--dim); }
+
+.tscore { text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tscore.win { color: var(--accent); }
+/* A projection is not a score, so it never gets a score's weight. */
+.tscore.proj { font-weight: 500; color: var(--dim); }
+.vs { text-align: center; color: var(--line); font-size: 12px; }
 .gmeta {
-  margin-top: 8px;
+  text-align: right;
   font-size: 12px;
   color: var(--dim);
-  border-top: 1px solid var(--line);
-  padding-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gmeta.live { color: var(--warn); }
+
+@media (max-width: 760px) {
+  .game { grid-template-columns: 1fr auto; }
+  .vs { display: none; }
+  .side.home  { grid-column: 1; grid-row: 1; }
+  .tscore.home { grid-column: 2; grid-row: 1; }
+  .side.away  { grid-column: 1; grid-row: 2; flex-direction: row; }
+  .tscore.away { grid-column: 2; grid-row: 2; }
+  .gmeta { grid-column: 1 / -1; grid-row: 3; text-align: left; }
 }
 
 /* Head-to-head grid: rows are the team, columns are the opponent. */
 .h2h td, .h2h th { text-align: center; }
 .h2h td.name, .h2h th.name { text-align: left; }
 .h2h td.self { color: var(--line); }
+/* Schedule mode: weeks already played recede, the week on screen stands out.
+   A pair can meet twice, so the state sits on the week number itself. */
+.h2h td.done { color: var(--dim); }
+.h2h td .done { color: var(--dim); }
+.h2h td .now { color: var(--accent); font-weight: 650; }
 
+.empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
+/* A game with one side still to play is not a result; it reads as a warning. */
+td.state-live { color: var(--warn); }
+
+.seg-sm button { padding: 6px 12px; font-size: 13px; }
 .select-wide { width: 210px; }
 </style>
 </head>
@@ -87,21 +146,38 @@
 
   <section class="panel">
     <h2>Data source</h2>
-    <div class="row spread">
-      <div class="segmented" id="sourceToggle">
-        <button type="button" data-src="demo" class="on">Demo data</button>
-        <button type="button" data-src="live">My ESPN league</button>
-      </div>
-      <div class="form-select select-wide">
-        <label for="weekSelect">Week</label>
-        <select id="weekSelect"></select>
-      </div>
+    <div class="segmented" id="sourceToggle">
+      <button type="button" data-src="demo" class="on">Demo data</button>
+      <button type="button" data-src="live">My ESPN league</button>
     </div>
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
   <section class="panel">
-    <h2>Season so far</h2>
+    <h2>Standings</h2>
+    <div class="table-scroll"><table id="standingsTable">
+      <thead><tr>
+        <th class="name" data-sort>Team</th>
+        <th data-sort>W&ndash;L</th>
+        <th data-sort>PF</th>
+        <th data-sort>PA</th>
+        <th data-sort title="Rank of the average strength of the opponents still to play: 1 is the hardest run-in.">Rest of season</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="standingsNote"></p>
+  </section>
+
+  <div class="weekbar">
+    <label class="wk-label" for="weekSelect">Week</label>
+    <button type="button" class="step" id="weekPrev" aria-label="Previous week">&lsaquo;</button>
+    <select id="weekSelect"></select>
+    <button type="button" class="step" id="weekNext" aria-label="Next week">&rsaquo;</button>
+    <span class="wk-note" id="weekNote"></span>
+  </div>
+
+  <section class="panel">
+    <h2 id="summaryTitle">Season so far</h2>
     <div class="stat-row" id="summary"></div>
     <p class="panel-note" id="summaryNote"></p>
   </section>
@@ -109,11 +185,17 @@
   <section class="panel">
     <h2 id="matchupsTitle">Matchups</h2>
     <div id="matchups"></div>
+    <p class="panel-note" id="matchupsNote"></p>
   </section>
 
   <section class="panel">
-    <h2>Every result</h2>
+    <h2>Results</h2>
     <div class="row spread mb-12">
+      <div class="segmented seg-sm" id="resultsView">
+        <button type="button" data-view="played" class="on">Played</button>
+        <button type="button" data-view="upcoming">Upcoming</button>
+        <button type="button" data-view="all">All</button>
+      </div>
       <div class="form-select select-wide">
         <label for="filterTeam">Only games involving</label>
         <select id="filterTeam"></select>
@@ -126,8 +208,8 @@
         <th data-sort>Home pts</th>
         <th class="left" data-sort>Away</th>
         <th data-sort>Away pts</th>
-        <th data-sort>Margin</th>
-        <th class="left" data-sort>Winner</th>
+        <th data-sort title="Home points minus away points.">Margin</th>
+        <th class="left" data-sort>State</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -135,14 +217,15 @@
   </section>
 
   <section class="panel">
-    <h2>Head to head</h2>
+    <h2 id="h2hTitle">Head to head</h2>
+    <div class="row mb-12">
+      <div class="segmented seg-sm" id="h2hView">
+        <button type="button" data-view="schedule">Who plays who</button>
+        <button type="button" data-view="records">Records</button>
+      </div>
+    </div>
     <div class="table-scroll" id="h2hGrid"></div>
-    <p class="panel-note">
-      Each row is a team, each column an opponent: the cell is that row team&rsquo;s
-      record <em>against</em> that opponent. Green means a winning record, red a
-      losing one. Blank means they haven&rsquo;t played yet. Click a header to sort
-      by win differential in that column.
-    </p>
+    <p class="panel-note" id="h2hNote"></p>
   </section>
 
 </div>
