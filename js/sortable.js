@@ -66,10 +66,6 @@ function headerCells(table) {
   return row ? Array.from(row.children) : [];
 }
 
-function bodyOf(table) {
-  return kids(table, 'TBODY')[0] || null;
-}
-
 function paintHeaders(table) {
   const st = STATE.get(table);
   headerCells(table).forEach((th, i) => {
@@ -87,30 +83,40 @@ function paintHeaders(table) {
   });
 }
 
-/** Re-apply the current sort. Call after re-rendering a table's rows. */
+/**
+ * Re-apply the current sort. Call after re-rendering a table's rows.
+ *
+ * EVERY <tbody> is sorted, and each one independently. Nearly every table on
+ * the site has exactly one, so for those this is what it always was. The one
+ * that does not is the roster detail — starters, a totals row, then the bench —
+ * and sorting each group on its own is what makes that grouping survive a
+ * click: sort by Projected and you get your starters ranked and then your bench
+ * ranked, instead of the two shuffled together and the total stranded in the
+ * middle of them. A tbody of one row is left alone, which is what pins the
+ * totals row where it belongs.
+ */
 export function resort(table) {
   const st = STATE.get(table);
   if (!st) return;
   if (st.index < 0) { paintHeaders(table); return; }
 
-  const tbody = bodyOf(table);
-  if (!tbody) return;
+  for (const tbody of kids(table, 'TBODY')) {
+    const rows = kids(tbody, 'TR');
+    if (rows.length < 2) continue;
 
-  const rows = kids(tbody, 'TR');
-  if (rows.length < 2) { paintHeaders(table); return; }
+    // Decorate-sort-undecorate: parse each cell once rather than once per
+    // comparison, and keep the original index so the sort is stable.
+    const keyed = rows.map((row, i) => {
+      const cell = row.children[st.index];
+      return { row, i, key: cell ? parseCell(cell) : null };
+    });
 
-  // Decorate-sort-undecorate: parse each cell once rather than once per
-  // comparison, and keep the original index so the sort is stable.
-  const keyed = rows.map((row, i) => {
-    const cell = row.children[st.index];
-    return { row, i, key: cell ? parseCell(cell) : null };
-  });
+    keyed.sort((a, b) => compare(a.key, b.key, st.asc) || a.i - b.i);
 
-  keyed.sort((a, b) => compare(a.key, b.key, st.asc) || a.i - b.i);
-
-  const frag = document.createDocumentFragment();
-  for (const k of keyed) frag.appendChild(k.row);
-  tbody.appendChild(frag);
+    const frag = document.createDocumentFragment();
+    for (const k of keyed) frag.appendChild(k.row);
+    tbody.appendChild(frag);
+  }
 
   paintHeaders(table);
 }
