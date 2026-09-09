@@ -3,7 +3,37 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-## START HERE — open actions
+## START HERE — read this first (updated 2026-09-09)
+
+**The live connection now works.** As of 2026-09-09 the bridge extension is
+installed in Tim's Edge and successfully read his private league 476225250.
+This was the single biggest blocker for the whole project and it is cleared.
+Do NOT re-litigate the "make the league public" question below — it is moot;
+the extension solved it without changing any ESPN setting.
+
+**Current focus, in Tim's words:** trade interaction, player analysis, and
+statistics — on the real connected league. The draft assistant is built and
+PARKED (he moved on from it before the season). Do not add to the drafter
+unless he asks.
+
+**Standing instructions (also in Claude memory):**
+- **Push every change to the live site when it is done.** Tim judges the work
+  by the deployed site, not the working tree. Never leave finished work
+  uncommitted. Split into sensible commits; never push failing tests.
+- **Give links, not prose directions.** When instructing Tim, link the
+  destination (deep links with his IDs, IDE-clickable file paths). `edge://`
+  addresses cannot be linked — give those as copy-paste and say why.
+
+**What to build next — Tim will specify, but the ground is prepared:**
+- Everything he wants (trades, player analysis, stats) is READ-ONLY and works
+  over the bridge now. Start there.
+- Writes (set lineup, add/drop, propose trade) and an in-ESPN suggestion panel
+  are a later phase he has asked about. See "The bridge & writes" section.
+  Build writes behind a popup confirmation, never through the open page bridge.
+
+---
+
+## Earlier open actions (mostly done)
 
 1. ~~Read Tim's 2025 Google Sheet and extract five formulas.~~ **DONE
    2026-09-08.** All five recovered and implemented — see "RECOVERED" below.
@@ -41,32 +71,13 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
    Total at a given week predicts the final ranking. He only ever did week 1 by
    hand. The site can answer it across all 13 weeks.
 
-3. **Connecting to the live league — the blocker is ESPN's privacy setting.**
-   Tim's 2026 league is **476225250** (the 2025 one, 1485774672, is retired).
-   Probed 2026-09-08: season 2026 returns **401**, season 2025 returns **404**,
-   which together confirm the ID is right and the league is new and private.
-
-   **A 401 from a terminal proves nothing** — it is the correct answer for a
-   cookieless caller. Do not re-probe with curl and conclude anything.
-
-   The real problem is that a private league cannot be read from a static site
-   at all, and being logged in to espn.com does not fix it:
-
-   - The page is served from `timothyhadfield.github.io`, so sending ESPN
-     cookies is a **third-party cookie**. Safari and Firefox block those
-     outright; Chrome increasingly does.
-   - A browser page **cannot set the `Cookie` header** itself, so the
-     `espn_s2` / `SWID` trick every server-side ESPN tool uses is unavailable.
-
-   **The fix is one ESPN setting:** LM Tools -> League Settings -> Basic
-   Settings -> "Make League Viewable to Public" = Yes. Verified that public
-   leagues return HTTP 200 with no cookies whatsoever (tested against public
-   leagues 1241838 and 899513). It is read-only visibility: nobody can join,
-   edit or transact.
-
-   If Tim will not make it public, the only remaining options are a small local
-   proxy holding the cookies, or a browser extension. Both are real work and
-   neither can be hosted on GitHub Pages.
+3. ~~Connecting to the live league.~~ **SOLVED 2026-09-09 by the bridge
+   extension.** Tim's 2026 league is **476225250** (the 2025 one, 1485774672,
+   is retired). It is private, and a static site cannot read a private league:
+   the page is served from github.io, so ESPN cookies are third-party (blocked)
+   and a page cannot set the `Cookie` header itself. The `extension/` bridge
+   fixes this — see "The bridge & writes". Confirmed working end to end in
+   Tim's browser. The old "make the league public" idea is no longer needed.
 
 4. **The smart drafter is BUILT — `draft.html`.** Tim's strategy is captured in
    `DRAFT-STRATEGY.md` (Part 1 his words, Part 2 research, Part 3 what was
@@ -111,44 +122,74 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
 A site for fantasy football stats/analysis, and eventually a "smart drafter."
 Tim specs what it does; Claude builds it.
 
-**Status as of 2026-09-08:** stats module complete and verified against Tim's own
-2025 numbers; draft assistant built to his stated strategy. Everything works on
-demo data. The live ESPN path is implemented but has never been exercised in a
-browser against a real league.
+**Status as of 2026-09-09:** stats module complete and verified against Tim's
+own 2025 numbers; draft assistant built and parked; the bridge extension is
+live and reading his real league. Focus now: trades, player analysis, stats on
+real data.
 
 ## Current state
 
 - `index.html` — connect panel + raw data probes.
 - `stats.html` / `analysis.html` / `schedule.html` — season stats, weekly
-  rosters, results and head-to-head.
-- `draft.html` — the live draft room. See `DRAFT-STRATEGY.md`.
-- `js/espn.js` — the ESPN API connection layer. Fetch + decode only, no strategy.
+  rosters, results and head-to-head. Every page carries the connection strip
+  (`js/connection.js`) that shows whether it is on real or demo data.
+- `draft.html` — the draft room + practice mode. See `DRAFT-STRATEGY.md`. Parked.
+- `extension/` — the bridge that reads the private league. See below.
+- `js/espn.js` — the ESPN connection layer. Fetch + decode only, no strategy.
+  Routes through the bridge when installed, direct fetch otherwise.
+- `js/bridge.js` — the site's half of the extension bridge.
 - `docs/espn-draft-api.md` — field-path reference for the ESPN endpoints,
   verified against live public leagues. Read this before touching ESPN code;
   it records several traps, including that a `sort*` clause is **mandatory** in
   `x-fantasy-filter` (omit it and you get an empty player list, not an error).
 
+## The bridge & writes
+
+`extension/` is a Manifest V3 browser extension (loaded unpacked in Edge). It
+exists because a static site cannot read a private ESPN league — third-party
+cookies are blocked and a page cannot set the `Cookie` header. The extension's
+background service worker makes the ESPN calls (cookies attach because
+espn.com is in host_permissions; extensions are same-site for permitted hosts,
+so even SameSite=Strict cookies are sent — no `cookies` permission needed) and
+`content-site.js` relays requests from the site over `window.postMessage`.
+
+- **How data flows:** site → `js/bridge.js` → postMessage → `content-site.js`
+  → `background.js` → ESPN → back. Nothing is stored; nothing leaves the
+  browser. `js/espn.js` auto-routes through it, so every existing page got
+  real-league access with no change.
+- **Security (a review hardened this — do not regress it):** `background.js`
+  builds URLs with the URL API from validated parts and re-checks host + path,
+  because string interpolation let a page inject the query or walk the path.
+  Both `content-site.js` and the worker enforce an allowed-origins set (the
+  manifest cannot pin a port). The worker checks sender id/origin. `test-
+  extension.mjs` is the regression guard.
+- **Writes are NOT built.** host_permissions holds only the read host. When
+  writes come (set lineup, add/drop, propose trade), they must go behind a
+  popup confirmation or a popup-issued nonce — never the open page bridge, or
+  any page on the origin could drop players. Tim wants an in-ESPN suggestion
+  panel eventually; that is the phase after read-only analysis proves useful.
+- **Edge gotchas:** service worker shows "Inactive" when idle (normal). After
+  editing extension files, Reload the extension AND refresh the site tab. The
+  extension must be in the same Edge profile where Tim is signed into ESPN (he
+  has three profiles). If ESPN refuses, the cause is usually Edge blocking
+  third-party cookies or Tracking Prevention on Strict — allow `[*.]espn.com`.
+
 ## What's verified working
 
-Confirmed against the live 2026 ESPN API on 2026-09-07:
+- **Public leagues** are readable by direct fetch, no cookies, HTTP 200
+  (tested against public leagues 1241838 and 899513 on 2026-09-08).
+- **Tim's private league (476225250)** is readable through the bridge
+  extension, confirmed end to end in his browser 2026-09-09.
+- **Projections come back scored under the queried league's own rules** because
+  requests go through the league path, not ESPN's defaults. Real data spot-
+  checked, e.g. Jahmyr Gibbs 2026.
 
-- **The API is reachable from a static GitHub Pages site.** ESPN reflects the
-  `Origin` header and sets `Access-Control-Allow-Credentials: true`, verified
-  for both `http://localhost` and `https://timothyhadfield.github.io`. So the
-  browser can call ESPN directly — no backend or proxy needed.
-- ~~**Private leagues work via your existing login.**~~ **WRONG — corrected
-  2026-09-08.** This was inferred from ESPN sending
-  `Access-Control-Allow-Credentials: true`, which only means ESPN is *willing*
-  to accept cookies. It does not mean the browser will *send* them: from a
-  github.io page these are third-party cookies, which Safari and Firefox block
-  outright. And a page cannot set the `Cookie` header itself, so there is no
-  workaround in pure client-side JS. Read a private league from a static site
-  and you get 401 no matter who is logged in. See open action 3 for the fix.
-  The original claim, left for context: because credentials are
-  allowed, `credentials: 'include'` sends your espn.com session cookies
-  automatically. You do not paste cookies anywhere.
-- **Real data confirmed available**, e.g. Jahmyr Gibbs: ADP 1.32, auction value
-  $70.77, 2026 projection 369.1 pts, 2025 actual 366.9, 99.93% owned.
+**Settled the hard way, so nobody relearns it:** a static site canNOT read a
+private league on its own. ESPN sends `Access-Control-Allow-Credentials: true`,
+but that only means ESPN will *accept* cookies — the browser still refuses to
+*send* third-party cookies from a github.io page, and JS cannot set the Cookie
+header. This is why the bridge extension exists. Do not attempt a pure
+client-side fix; it cannot work.
 
 ## What ESPN gives us
 
@@ -170,10 +211,14 @@ requests go through the league path rather than ESPN's defaults.
 
 - The ESPN fantasy API is undocumented. It's stable and widely used, but it is
   not a contract — endpoints can change without notice.
-- Reads only. Writing to ESPN (setting lineups, submitting picks) is
-  deliberately out of scope.
-- If a browser blocks cross-site cookies for espn.com, private-league reads will
-  fail. Not seen yet; the fallback would be a small local proxy.
+- **Reads only, for now.** No write to ESPN has been built. Writes are a planned
+  later phase (see "The bridge & writes"), not out of scope — Tim wants them.
+- A static site cannot read a private league; the bridge extension is the
+  answer, and it is what carries the cookie ESPN needs. If Edge blocks
+  third-party cookies or Tracking Prevention is Strict, allow `[*.]espn.com`.
+- ESPN ToS prohibits automated access; the practical risk for a personal league
+  is low but real and Tim's to carry. It already covers the reads; writes raise
+  it. Flagged, his call — do not silently expand automation.
 
 ## Parked (built, then set aside)
 
@@ -352,24 +397,35 @@ Mitch finished 0.002 apart in S+L and rounding to 1 dp swaps them.
 
 ## Site structure
 
-Pages (all default to demo data, with a toggle to the live ESPN league):
+Pages (all default to demo data; real data arrives via the bridge):
 
 - `index.html` — ESPN connection + raw data probes
 - `stats.html` — season stats, the rebuild of Tim's sheet
 - `analysis.html` — per-manager rosters for a chosen week
 - `schedule.html` — results, matchups, head-to-head grid
+- `draft.html` — draft assistant + practice mode (parked)
 
 Modules:
 
-- `css/app.css` — shared styles
-- `js/espn.js` — ESPN API connection layer
+- `css/app.css` — shared styles (incl. the connection strip)
+- `css/draft.css` — draft room styles
+- `js/espn.js` — ESPN API connection layer; routes through the bridge
+- `js/bridge.js` — site half of the extension bridge
+- `js/connection.js` — the connection strip on every page
 - `js/season.js` — ESPN → canonical shapes (`fetchSeasonData`, `fetchWeekRosters`, `fetchSchedule`)
 - `js/demo.js` — fake season scores
 - `js/demo-rosters.js` — fake weekly rosters + schedule, reconciled to `demo.js`
+- `js/draft-demo.js` — real 2026 player pool for the drafter (fallback data)
 - `js/stats.js` — all statistics
+- `js/draft-model.js` — draft engine (pure); `js/draft-sim.js` — practice opponents + grading
 - `js/charts.js` — inline-SVG line / histogram / box-plot rendering
 - `js/sortable.js` — shared click-to-sort for every table
-- `js/stats-page.js`, `js/analysis-page.js`, `js/schedule-page.js` — page wiring
+- `js/stats-page.js`, `js/analysis-page.js`, `js/schedule-page.js`, `js/draft-page.js` — page wiring
+
+Extension (`extension/`, loaded unpacked in Edge):
+
+- `manifest.json`, `background.js` (the ESPN calls), `content-site.js` (the
+  page relay), `popup.html`/`popup.js` (the test popup), `icons/`
 
 ### Table sorting
 
@@ -383,8 +439,11 @@ its own `<thead>` freely; after re-rendering rows, call `resort(table)`.
 
 ## Testing
 
-Six suites live in the session scratchpad (not committed — they depend on a
-locally installed `linkedom`):
+The test suites live in the session scratchpad, **NOT committed** — they depend
+on a locally installed `linkedom`, and each session's scratchpad is fresh, so a
+new session must expect to rebuild the ones it needs rather than find them. They
+are documented here because the coverage they encode is worth recreating. Their
+directory this session was the scratchpad path in the environment header.
 
 | Suite | Covers |
 |---|---|
@@ -398,8 +457,14 @@ locally installed `linkedom`):
 | `test-draft-model.mjs` | the draft engine on a synthetic pool — 44 assertions, no external data |
 | `test-draft-render.mjs` | simulates a full 16-round draft from slots 1, 5 and 10 against the real demo pool — 107 assertions |
 | `test-draft-sim.mjs` | practice opponents, lineup optimiser and grading — 36 assertions |
-| `test-practice.mjs` | plays complete practice drafts through the page's own logic, then boots `draft-page.js` against the real DOM — 92 assertions |
+| `test-practice.mjs` | complete practice drafts through the page's own logic, boots `draft-page.js` against the real DOM, and asserts the connection bar is mounted — 99 assertions |
 | `test-practice-autostart.mjs` | lands on `draft.html?practice=1` in an empty browser and asserts a playable draft with zero network calls |
+| `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
+| `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
+
+All green as of 2026-09-09: extension 38, bridge 34, draft-model 44, draft-sim
+36, practice 99, autostart 10, draft-render 107, recovered 116, plus the
+stats-render check.
 
 `test-practice-autostart.mjs` needs its own process: a module only initialises
 once, so the auto-start path cannot be tested in the same run as the normal one.
@@ -439,7 +504,25 @@ silently rendering zeroes.
 
 ## Next
 
-- Fold in Tim's answers to the sheet questions (see open action 1).
-- Compare `analysis.html` against the real "analyze" tabs (open action 2).
-- Have Tim run the live ESPN path in a browser (open action 3).
-- The smart drafter still awaits Tim's spec. Do not design it for him.
+Focus is trades, player analysis, and stats — on the now-connected real league.
+Tim will specify the first build. Prepared ground, in likely order:
+
+- **Point the existing pages at his real league and see them come alive.**
+  `stats.html`, `analysis.html`, `schedule.html` already run the live path
+  through `js/season.js`; the bridge now feeds it real data. First job is to
+  confirm they render correctly on 476225250 and fix whatever the real payload
+  breaks that demo data didn't.
+- **Trade interaction** — the feature he named first. Likely: evaluate a
+  proposed trade's effect on both rosters, and find mutually beneficial trades
+  using opponent-need logic (the same idea as the draft engine's). Build the
+  *analysis* with a send-it-yourself button; do not auto-send.
+- **Player analysis** — rework `analysis.html` per open action 2 (drop the
+  "Missing" columns, FLEX = best RB/WR/TE, etc.), now against real rosters.
+- **Writes / in-ESPN panel** — the later phase. See "The bridge & writes".
+
+Still parked, do not pursue unless asked:
+- The smart drafter (built; awaits his spec answers in `TUNING`).
+- Fold in Tim's remaining sheet-formula answers if he gives them.
+- The score-differential curve rationale (he will explain; reproduce, don't
+  rationalise).
+- Injury-loss automation (method recorded in `js/stats.js`; deliberately out).
