@@ -85,6 +85,40 @@ percentages on every upcoming game. Read this before touching any of it:
 - **The demo season is 100% played, so it forecasts "as of" the selected week**
   — the same code path, run where the answer can be checked. Live simply uses
   the last week with a final game.
+- **Any team can be forecast**, not just yours — the "Forecast for" picker.
+  Switching is a repaint, never a refetch: every team's per-week projection is
+  built in the same pass. A remembered pick is dropped when the data source
+  changes, because demo team ids count from 1 and ESPN uses its own.
+
+**Season simulation (`simulateSeason` in `js/forecast.js`, panel at the foot of
+`schedule.html`).** A single team's win total has an exact answer and gets one;
+a final PLACING does not, because it turns on the joint outcome of every game
+in the league at once and then on the tiebreak. So the rest of the season is
+played out N times (1k / 10k / 50k, default 10k) and the finishing order
+counted.
+
+- **It agrees with the head-to-head percentages by construction** — same normal
+  model, same sigma. Asserted, not assumed: over a one-game season the
+  simulated win rate matches `winProbability` to within 0.008. If you change
+  one, change the other, and keep that assertion.
+- **Points are simulated, not just wins**, because the league breaks ties on
+  total points. Ranking on wins alone would invent ties the real standings
+  separate.
+- **Deterministic.** Seeded, and the cache key is everything that changes the
+  answer (runs, as-of week, sigma, teams, banked record, every remaining
+  projection) and nothing that does not — the *selected team is deliberately
+  not in it*, so switching teams repaints without re-running. Do not let
+  re-rendering hand back different odds for the same season.
+- **"Wins the season" means finishing first in the regular-season standings.**
+  No playoff bracket is modelled, and the panel says so. If Tim ever wants real
+  championship odds this needs his league's bracket rules (size, seeding, byes)
+  — he has not given them.
+- Banked-vs-remaining uses the forecast panel's `isRemaining(g, forecastAsOf())`
+  rule, NOT `standingsRows()`'s season-to-date one. They agree on live data and
+  differ in the demo; using the wrong one makes the two panels contradict.
+- 50,000 runs of a 10-team, 60-game season is about 580ms, so it hands off
+  through rAF + setTimeout and shows a simulating state rather than blocking
+  the paint.
 
 **Two bugs fixed that were silently corrupting real numbers** — do not
 reintroduce:
@@ -587,6 +621,8 @@ directory this session was the scratchpad path in the environment header.
 | `test-draft-sim.mjs` | practice opponents, lineup optimiser and grading — 36 assertions |
 | `test-practice.mjs` | complete practice drafts through the page's own logic, boots `draft-page.js` against the real DOM, and asserts the connection bar is mounted — 99 assertions |
 | `test-practice-autostart.mjs` | lands on `draft.html?practice=1` in an empty browser and asserts a playable draft with zero network calls |
+| `test-sim.mjs` | the season simulator — 71 assertions. RNG mean/variance, the normal's mean/variance/kurtosis, **that the simulated win rate matches `winProbability`** (the check that keeps the two models honest with each other), place probabilities summing to 1 per team AND per place column, mean placings summing to 55, mean wins matching the exact Poisson-binomial, the points-for tiebreak, and a finished season yielding certainty rather than noise |
+| `fc-test.mjs` | the schedule page's forecast and simulation end to end — 375 assertions over 8 scenarios (demo, demo-mid, stubbed live at week 2, no team set, team picked later, switching through all ten teams, simulation interaction, roster fetch failing). Boots the real `schedule.html` with its real module in a child process per scenario |
 | `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
