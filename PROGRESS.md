@@ -106,6 +106,34 @@ at all. Those are different facts and the page draws and sorts them
 differently — a blank sorting as zero would put every unknown at the bottom of
 the wire and look deliberate.
 
+**`STARTABLE` on the waiver page greens a week worth starting**, per position:
+QB over 17, RB and WR over 12, TE over 9, D/ST over 7, K over 9 (Tim moved the
+kicker from 7 to 8.5 to 9). Fixed bars, not a ranking against the rest of the
+wire — a quiet week for everyone stays uncoloured rather than promoting the
+best of a bad set. The panel note lists the bars by reading the same constant,
+so changing a number updates the prose too. Colour AND weight, never colour
+alone. **The demo pool's ranges were nudged up so all six positions can clear
+their bar** — they used to top out just under it at RB/WR/TE, which made the
+feature look broken in demo.
+
+**"Your QB3" comparison rows.** Your own worst player at each position sits in
+the SAME tbody as the free agents and sorts and filters with them — the
+interleaving is the point, since sorting by Avg then shows exactly who beats
+the man you would drop. "Worst" is the lowest Avg **over the weeks currently
+shown**, so widening the span can change which of your men appears; the label's
+number is your depth at that position. These rows are never greened (starting
+your own bench is a different question) and never counted on the position
+buttons (you cannot add a player you hold). This doubles the per-week cost —
+the wire AND your roster — so rosters are fetched only when a team is set.
+
+**`analysis.html` has a "Season by week" grid**: a whole squad down the left,
+every week across the right. It reuses the page's existing team picker rather
+than adding a second one, and switching team costs **no** requests, because
+every team is in every week's payload. **Deliberately uncoloured** — Tim's
+call, and the note says why: everyone there is already rostered, so the waiver
+bars would light up nearly every cell and mean nothing. If colour ever comes to
+it, it needs a different scheme.
+
 **Schedule luck (`opponentProjections`, panel + column on `stats.html`).**
 The average projected score of the opponents a team has to play. It needs no
 games played, which is the point of it. Adding it forced the stats page's
