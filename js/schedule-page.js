@@ -8,7 +8,7 @@
 // over is the mistake this file used to make, and it went unnoticed because the
 // demo season it always booted into was complete by definition.
 
-import { fetchSchedule, fetchWeekRosters } from './season.js';
+import { fetchSchedule, fetchWeeksRosters } from './season.js';
 import { generateDemoLeague } from './demo.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
@@ -327,48 +327,23 @@ function setStatus(msg, isError = false) {
 // anyone on a bye that week is removed, anyone ruled out is removed, and
 // forecast.js fills the best legal lineup out of what is left.
 //
-// The per-player weekly number is ESPN's SEASON projection divided by 17. That
-// is the only forward-looking per-week figure ESPN reliably has: a weekly
-// projection for week 13 asked for in week 2 is usually simply absent, and
-// asking for one week at a time would be a request per week regardless. Total
-// cost here is two requests on top of the schedule — the rosters and the byes.
-
-/** ESPN's season projection is a 17-game regular-season total. */
-const SEASON_GAMES = 17;
-
-/**
- * Players who will not take the field, so the lineup must be filled without
- * them. QUESTIONABLE deliberately stays in: the rule is "plays their players
- * with the highest projection", and a questionable player usually plays.
- */
-const RULED_OUT = new Set(['OUT', 'INJURY_RESERVE']);
-
-/** What one player is worth in one week, and nothing if we cannot say. */
-function weeklyExpectation(p) {
-  if (typeof p.seasonProjected === 'number' && p.seasonProjected > 0) {
-    return p.seasonProjected / SEASON_GAMES;
-  }
-  if (typeof p.projected === 'number' && p.projected > 0) return p.projected;
-  return null;
-}
-
-// Bye weeks are a season-level fact, so one request answers the whole page.
-// A failure is cached too: retrying it on every re-render would turn one
-// missing request into dozens.
-let byeCache = { season: null, map: null };
-
-async function byeWeeks() {
-  const season = espn.getConfig().season;
-  if (byeCache.map && byeCache.season === season) return byeCache.map;
-  let map = {};
-  try {
-    map = (await espn.fetchByeWeeks()) || {};
-  } catch {
-    map = {}; // no byes known; every player is assumed to play every week
-  }
-  byeCache = { season, map };
-  return map;
-}
+// Each week's projection is ESPN's OWN per-week number for that week, fetched
+// per week. ESPN publishes one for every player in every future week — a
+// week-13 figure is there in week 1 — so there is nothing to extrapolate.
+//
+// This is deliberately the same number the ESPN site shows when you page a
+// lineup forward to a week and read the "proj" total under the starters, which
+// is what makes it checkable by hand. The one thing done on top is filling the
+// best legal lineup rather than the one currently set, so a bench player
+// projected above a starter is counted as started.
+//
+// A player on bye that week comes back projected 0.00, so byes need no lookup
+// and no filtering: they are already in the number. Injury status is left alone
+// for the same reason — ESPN's own projection carries availability, and second
+// guessing it would move our totals away from the ones being checked against.
+//
+// The cost is one request per remaining week. There is no bulk form; that was
+// checked rather than assumed.
 
 /**
  * The league's starting slots, counted off the lineups ESPN just sent us.
@@ -396,46 +371,48 @@ function slotCountsFromLineups(teams) {
 }
 
 /**
- * Turn one week's rosters into a projected score for every team in every week.
+ * Turn per-week rosters into a projected score for every team in every week.
  *
- * @param {Array} teams as returned by fetchWeekRosters
- * @returns {Promise<Object|null>} null when the snapshot cannot cover the league
+ * @param {Map<number, Array>} weekTeams week -> teams, from fetchWeeksRosters
+ * @returns {Object|null} null when the projection cannot cover the league
  */
-async function buildProjection(teams) {
-  const counts = slotCountsFromLineups(teams);
+function buildProjection(weekTeams) {
+  const anyWeek = [...weekTeams.values()][0];
+  const counts = slotCountsFromLineups(anyWeek);
   const slots = counts ? forecast.slotsFromCounts(counts) : forecast.DEFAULT_SLOTS.slice();
-  const byes = await byeWeeks();
-  const knownByes = Object.keys(byes).length > 0;
 
   const proj = new Map();
-  for (const w of state.data.weeks) {
+  for (const [w, teams] of weekTeams) {
     const forWeek = new Map();
     for (const t of teams) {
       const pool = [];
       for (const p of t.players || []) {
-        if (RULED_OUT.has(p.injuryStatus)) continue;
-        if (p.proTeamId != null && byes[p.proTeamId] === w) continue;
-        const v = weeklyExpectation(p);
-        if (v !== null) pool.push({ position: p.position, projected: v });
+        // Every player on the roster, bench included, at ESPN's number for
+        // this week. A player on bye is in here at 0.00 and simply loses his
+        // slot to someone better, which is the same thing a manager does.
+        if (typeof p.projected === 'number') {
+          pool.push({ position: p.position, projected: p.projected });
+        }
       }
       const total = forecast.optimalLineup(pool, slots).total;
       if (total > 0) forWeek.set(t.id, total);
     }
-    proj.set(w, forWeek);
+    if (forWeek.size) proj.set(w, forWeek);
   }
 
   // A projection that only covers some of the league would rank a run-in
   // against a hole. Better to hand back nothing and let the fallbacks speak.
-  const covered = proj.get(state.data.weeks[0]);
+  if (!proj.size) return null;
+  const covered = proj.get([...proj.keys()][0]);
   if (!covered || covered.size < state.data.teams.length) return null;
 
   // The comparable number per team: how many points they average over the
   // weeks still to play. Per WEEK, unlike the season-total basis below it,
   // which is what makes it safe to print on a card as a score.
-  const ahead = state.data.weeks.filter((w) =>
+  const ahead = [...proj.keys()].filter((w) =>
     (state.data.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
   );
-  const over = ahead.length ? ahead : state.data.weeks;
+  const over = ahead.length ? ahead : [...proj.keys()];
   const strength = new Map();
   for (const t of state.data.teams) {
     let total = 0;
@@ -453,15 +430,22 @@ async function buildProjection(teams) {
     ? `${plural(starters, 'starter')} read from the current lineups`
     : `${plural(starters, 'starter')} assumed — this league’s own lineup settings could not be read`;
 
+  const got = [...proj.keys()].sort((a, b) => a - b);
+  const reach =
+    got.length > 1 ? `weeks ${got[0]} to ${got[got.length - 1]}` : `week ${got[0]}`;
+
   return {
     proj,
     slots,
     strength,
-    knownByes,
+    weeksCovered: got,
     note:
-      `Strength is the best lineup ESPN’s projections allow each team each week ` +
-      `(${slotSource}), counting every player at his season projection ÷ ${SEASON_GAMES}` +
-      `${knownByes ? ', with bye weeks and ruled-out players taken out' : ' — bye weeks could not be read, so nobody is sat down for one'}.`,
+      `Strength is ESPN’s own projection for each week (${reach}), with the best ` +
+      `legal lineup filled rather than the one currently set (${slotSource}) — ` +
+      `the same total the ESPN site shows under a lineup paged forward to that ` +
+      `week, except that a bench player projected above a starter is counted as ` +
+      `starting. Players on bye come back at zero from ESPN, so they sit down on ` +
+      `their own.`,
   };
 }
 
@@ -524,27 +508,43 @@ async function refreshStrength() {
   // branch sets it, because a second unexplained notion of "how good is this
   // team" is how two panels end up disagreeing with each other in silence.
   //
-  // 1. The per-week optimal lineup. Forward-looking, aware of byes, and stated
-  //    per WEEK, which is what lets the same number be printed on a card as a
-  //    projected score. It needs the roster fetch, which the demo has no
-  //    endpoint for — and does not need, because its games carry projections.
+  // 1. ESPN's own projection for each week, with the best legal lineup filled.
+  //    Forward-looking, per WEEK, and checkable against the ESPN site by hand,
+  //    which is the property that matters most here. It costs a request per
+  //    week, so it asks only for the weeks still to play. The demo has no
+  //    endpoint for it and does not need one: its games carry projections.
   if (!state.data.isDemo) {
-    let teams = null;
+    const wanted = state.data.weeks.filter((w) =>
+      (state.data.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
+    );
+    const weeks = wanted.length ? wanted : [currentWeek()];
+
+    let weekTeams = new Map();
     try {
-      ({ teams } = await fetchWeekRosters(currentWeek()));
+      weekTeams = await fetchWeeksRosters(weeks, {
+        onProgress: (done, total) => {
+          if (stale() || done >= total) return;
+          setStatus(`Reading ESPN’s projections… week ${done} of ${total}.`);
+        },
+      });
     } catch {
-      teams = null;   // ESPN said no; the bases below need no network at all
+      weekTeams = new Map();   // ESPN said no; the bases below need no network
     }
     if (stale()) return;
 
-    if (teams && teams.length) {
-      const built = await buildProjection(teams);
+    const teams = weekTeams.get(weeks[0]) || [...weekTeams.values()][0] || null;
+
+    if (weekTeams.size) {
+      const built = buildProjection(weekTeams);
       if (stale()) return;
       if (built) {
         state.projection = built;
         apply(built.strength, built.note);
         return;
       }
+    }
+
+    if (teams && teams.length) {
 
       // 1b. ESPN's season projection for the current starters, from the payload
       //    we already have — so this costs no extra request. A season TOTAL
@@ -1432,14 +1432,13 @@ function projectionCaveat(lastWeek) {
       ? 'Team totals are the projections ESPN carried for those games at the time.'
       : '';
   }
-  const byes = state.projection.knownByes
-    ? 'anyone on a bye that week or ruled out taken off'
-    : 'anyone ruled out taken off (ESPN’s bye-week list could not be read, so nobody is sat down for one)';
   return (
-    'Team totals are the best lineup each roster could field that week on ESPN’s own ' +
-    `projections — every player at his season projection ÷ ${SEASON_GAMES}, ${byes}, then the ` +
-    'highest-scoring legal lineup filled. That is a snapshot of the rosters as they stand ' +
-    `today: the week ${lastWeek} line is the squad owned now, not the one that will be owned then.`
+    'Team totals are ESPN’s own projection for that week — the same number the ESPN ' +
+    'site shows under a lineup paged forward to it — with the best legal lineup filled ' +
+    'rather than the one currently set, so a bench player projected above a starter is ' +
+    'counted as starting. Players on bye are projected zero by ESPN, so they sit down on ' +
+    'their own. It is still a snapshot of the rosters as they stand today: the week ' +
+    `${lastWeek} line is the squad owned now, not the one that will be owned then.`
   );
 }
 

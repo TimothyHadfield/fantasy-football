@@ -128,6 +128,38 @@ export async function fetchWeekRosters(week) {
 }
 
 /**
+ * Rosters for several weeks at once, keyed by week.
+ *
+ * ESPN really does publish a per-player projection for every future week — a
+ * week-13 number is available in week 1, and a player on bye that week comes
+ * back as 0.00, so byes need no separate lookup. That is what the ESPN site
+ * itself shows when you page a lineup forward, and it is the number to match.
+ *
+ * It costs one request per week; there is no bulk form. Runs a few at a time so
+ * a 13-week season does not open thirteen sockets at once, and a week ESPN
+ * refuses is simply absent from the result rather than failing the whole set.
+ *
+ * @param {number[]} weeks
+ * @param {function} [onProgress] (done, total, week)
+ * @returns {Promise<Map<number, Array>>} week -> the teams array for that week
+ */
+export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
+  const out = new Map();
+  let done = 0;
+  await inBatches(weeks, 3, async (week) => {
+    try {
+      const { teams } = await fetchWeekRosters(week);
+      if (teams && teams.length) out.set(week, teams);
+    } catch {
+      /* that week is unavailable; the caller sees a gap, not an exception */
+    }
+    done++;
+    if (onProgress) onProgress(done, weeks.length, week);
+  });
+  return out;
+}
+
+/**
  * The full season schedule, week by week, with results where they exist.
  */
 export async function fetchSchedule() {
