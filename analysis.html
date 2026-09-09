@@ -86,6 +86,45 @@
      removed, so the sort machinery's column indexes stay put. */
   #rosterTable.no-own .own { display: none; }
 
+  /* ------------------------------------------------- season-long roster grid */
+
+  /* Thirteen week columns is a lot of table, so everything to the left of them
+     is squeezed and everything in them is narrow and centred. The identity
+     columns exist to tell two players apart; the week run is the point. */
+  #seasonTable td.slot-cell-n { padding-right: 10px; }
+  #seasonTable th, #seasonTable td { white-space: nowrap; }
+  #seasonTable td.wk, #seasonTable th.wk { padding-left: 7px; padding-right: 7px; }
+
+  /* The one column that orders the whole table into an answer, so it carries a
+     little more weight than a single week and a rule brackets it off. */
+  #seasonTable td.avg { font-weight: 650; color: var(--text); }
+
+  /* Deliberately NO value colouring in this table. Every player in it is
+     already rostered, so a per-position bar of the kind the Add players page
+     uses would light up nearly every cell and mean nothing. The three ways of
+     having no number are told apart by TEXT and WEIGHT only. */
+
+  /* ESPN's 0.00 for a player whose NFL team is off that week. Printing "0.0"
+     would read as a projection of nothing rather than as no game at all. */
+  #seasonTable td.bye {
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+  }
+  /* A week not read from ESPN yet: present, but not readable as a value. */
+  #seasonTable td.wait { color: var(--line); }
+  /* He was not on this roster that week — ESPN returns each past week's real
+     roster. Fainter than a missing number, because it is not a gap in the data. */
+  #seasonTable td.off { color: var(--line); }
+
+  /* The week the rest of the page is showing. A bracket, not a tint: it says
+     "you are here", and this table colours nothing. */
+  #seasonTable th.now, #seasonTable td.now {
+    border-left: 1px solid var(--line-2);
+    border-right: 1px solid var(--line-2);
+  }
+  #seasonTable th.now { color: var(--text); }
+
   /* Inline colour key in the panel note. */
   .key {
     display: inline-block;
@@ -202,6 +241,17 @@
     </table></div>
     <div class="empty hidden" id="rosterEmpty">Pick a team to see its roster.</div>
     <p class="panel-note" id="rosterNote"></p>
+  </section>
+
+  <section class="panel">
+    <h2 id="seasonTitle">Season by week</h2>
+    <div class="panel-note" id="seasonProgress"></div>
+    <div class="table-scroll" id="seasonWrap"><table id="seasonTable">
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="empty hidden" id="seasonEmpty"></div>
+    <p class="panel-note" id="seasonNote"></p>
   </section>
 
 </div>

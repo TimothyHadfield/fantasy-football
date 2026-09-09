@@ -11,7 +11,7 @@
 // Rosters move week to week — trades, waivers, injuries — so the week selector
 // stays the primary control. Everything else re-renders from whatever is picked.
 
-import { fetchWeekRosters, fetchSchedule } from './season.js';
+import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
@@ -41,6 +41,18 @@ const state = {
   teamId: null,     // team shown in the roster detail
   myTeamId: null,   // the reader's own team, when a live league says so
   isDemo: true,
+
+  // The season-by-week panel at the foot of the page. It costs one request per
+  // week, so everything about it is built to be paid for once: the cache is
+  // keyed on the LEAGUE, not on the team, because every team is in every week's
+  // payload already and switching teams must therefore be a repaint.
+  seasonKey: null,              // which league seasonWeeks belongs to
+  seasonWeeks: new Map(),       // week -> that week's teams array
+  seasonFailed: new Set(),      // weeks ESPN would not answer for
+  seasonPending: null,          // key of a run currently in flight
+  seasonProgress: null,         // { done, total } while weeks are arriving
+  seasonError: null,            // the whole run fell over
+  seasonToken: 0,               // drops an answer about a league we have left
 };
 
 // Cache per week so flipping back to a week already loaded is instant.
@@ -76,6 +88,21 @@ function shortName(name) {
   const parts = String(name).trim().split(/\s+/);
   if (parts.length < 2 || !parts[0]) return String(name);
   return `${parts[0][0]}. ${parts.slice(1).join(' ')}`;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** "weeks 1–13" / "week 4" — an en dash, the way the rest of the site writes ranges. */
+function weekRange(weeks) {
+  if (!weeks.length) return 'no weeks';
+  if (weeks.length === 1) return `week ${weeks[0]}`;
+  return `weeks ${weeks[0]}–${weeks[weeks.length - 1]}`;
+}
+
+/** "5 and 7" / "5, 7 and 9" — for naming the weeks that failed. */
+function andList(items) {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
 // Child traversal rather than tBodies/rows/cells, matching sortable.js: it copes
@@ -387,6 +414,11 @@ function render() {
   renderOverview();
   renderTeamPicker();
   renderRoster();
+  renderSeason();
+
+  // Last, and deliberately not awaited: the season grid costs one request per
+  // week, so everything above is on screen before it starts spending them.
+  ensureSeasonWeeks();
 }
 
 /**
@@ -547,7 +579,421 @@ function renderRoster() {
   resort(table);
 }
 
-/** Selecting a team touches three places, so nobody calls them separately. */
+// --------------------------------------------- the season-long roster grid
+//
+// One team's WHOLE roster down the side — starters and bench — and every week
+// of the season across the top, each cell being ESPN's own projection for that
+// player in that week. It is the Add players page's layout pointed at a squad
+// instead of at the wire, which is the comparison a manager actually makes
+// once the squad exists: who carries this team through the run-in, and which
+// week does the bye fall in.
+//
+// Two things it deliberately does NOT do:
+//
+//   - It does not colour a cell for being good. Every player here is rostered,
+//     so the per-position bar that means something on the waiver wire would
+//     light up almost every cell. If a highlight ever belongs in this table it
+//     needs a scheme of its own, built against rostered players.
+//   - It does not have a team picker. It shares the one above it, so the two
+//     panels can never disagree about whose squad you are looking at.
+//
+// THE COST IS THE DESIGN CONSTRAINT, exactly as on the waivers page: rosters
+// come back one week per request and there is no bulk form. So the panel is
+// filled in behind the rest of the page, a few weeks at a time, and the answer
+// is cached against the LEAGUE — every team is in every week's payload, so
+// switching teams is a repaint and costs nothing.
+
+/** Which league the week cache belongs to. Team ids collide across leagues. */
+function sourceKey() {
+  if (state.source === 'demo') return 'demo';
+  const cfg = espn.getConfig();
+  return `live:${cfg.leagueId}:${cfg.season}`;
+}
+
+/** Weeks fetched three at a time, so columns appear in groups rather than in
+ *  one lump at the end. Matches the batch size season.js uses internally. */
+const SEASON_BATCH = 3;
+
+function resetSeason(key) {
+  state.seasonKey = key;
+  state.seasonWeeks = new Map();
+  state.seasonFailed = new Set();
+  state.seasonPending = null;
+  state.seasonProgress = null;
+  state.seasonError = null;
+  state.seasonToken++; // anything still in the air belongs to the old league
+}
+
+/**
+ * Fill the panel, once per league, lazily.
+ *
+ * Called last out of render() and never awaited: the rest of the page is
+ * already on screen before this starts spending requests. It is a no-op on
+ * every repaint after the first, which is what makes the team picker free.
+ */
+function ensureSeasonWeeks() {
+  const key = sourceKey();
+  if (state.seasonKey !== key) resetSeason(key);
+
+  // Nothing to hang the rows off yet, and no week list to ask for.
+  if (!state.data || !state.weeks.length) return;
+  if (state.seasonPending === key) return;
+
+  const missing = state.weeks.filter(
+    (w) => !state.seasonWeeks.has(w) && !state.seasonFailed.has(w)
+  );
+  if (!missing.length) return;
+
+  if (state.source === 'demo') {
+    loadDemoSeason(key, missing);
+    return;
+  }
+  refreshSeason(key, missing);
+}
+
+/**
+ * Demo mode builds the whole grid with no network at all — demo-rosters.js
+ * answers synchronously — so there is no progress line and no partial state.
+ * The generator is still imported lazily, but loadWeek() has already resolved
+ * it by the time anything here runs.
+ */
+async function loadDemoSeason(key, missing) {
+  const token = state.seasonToken;
+  state.seasonPending = key;
+  const generate = await getDemoGenerator();
+  if (token !== state.seasonToken) return;
+  state.seasonPending = null;
+
+  if (!generate) {
+    state.seasonError =
+      'Demo roster data isn’t available yet (js/demo-rosters.js is missing).';
+    renderSeason();
+    return;
+  }
+  for (const w of missing) {
+    const built = generate(w);
+    if (built && built.teams && built.teams.length) state.seasonWeeks.set(w, built.teams);
+    else state.seasonFailed.add(w);
+  }
+  renderSeason();
+}
+
+/**
+ * The live version: one request per week, in batches, repainting between them.
+ *
+ * Guarded by a token so a slow batch landing after the league or the source
+ * changed is thrown away rather than painted over the top of the newer one.
+ * fetchWeeksRosters swallows a week ESPN refuses — it simply comes back absent
+ * — so a gap is recorded as a failed week and named in the note.
+ */
+async function refreshSeason(key, missing) {
+  const token = ++state.seasonToken;
+  const stale = () => token !== state.seasonToken || sourceKey() !== key;
+
+  state.seasonPending = key;
+  state.seasonError = null;
+  state.seasonProgress = { done: 0, total: missing.length };
+  renderSeason();
+
+  try {
+    for (let i = 0; i < missing.length; i += SEASON_BATCH) {
+      const batch = missing.slice(i, i + SEASON_BATCH);
+      const got = await fetchWeeksRosters(batch, {
+        onProgress: () => {
+          if (stale() || !state.seasonProgress) return;
+          state.seasonProgress.done++;
+          renderSeason();
+        },
+      });
+      if (stale()) return;
+      for (const w of batch) {
+        if (got.has(w)) state.seasonWeeks.set(w, got.get(w));
+        else state.seasonFailed.add(w);
+      }
+      renderSeason();
+    }
+  } catch (err) {
+    if (stale()) return;
+    state.seasonError = err && err.message ? err.message : String(err);
+  } finally {
+    if (!stale() && state.seasonPending === key) {
+      state.seasonPending = null;
+      state.seasonProgress = null;
+    }
+  }
+
+  if (stale()) return;
+  renderSeason();
+}
+
+/**
+ * week -> Map(playerId -> projection | null) for one team.
+ *
+ * A week whose payload has no row for this team at all maps to null, so "the
+ * league did not contain him that week" stays distinguishable from "the week
+ * has not been read yet".
+ */
+function seasonIndex(teamId) {
+  const byWeek = new Map();
+  for (const [week, teams] of state.seasonWeeks) {
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) { byWeek.set(week, null); continue; }
+    const byPlayer = new Map();
+    for (const p of team.players) {
+      byPlayer.set(p.playerId, typeof p.projected === 'number' ? p.projected : null);
+    }
+    byWeek.set(week, byPlayer);
+  }
+  return byWeek;
+}
+
+/**
+ * One player's projection for one week, in five distinguishable states:
+ *   'wait'    the week has not been read yet
+ *   'failed'  ESPN refused that week for everybody
+ *   'off'     he was not on this roster in that week
+ *   null      ESPN carried no number for him that week
+ *   number    the projection (0 means his NFL team is on bye)
+ */
+function seasonValue(index, week, playerId) {
+  const byPlayer = index.get(week);
+  if (byPlayer === undefined) return state.seasonFailed.has(week) ? 'failed' : 'wait';
+  if (byPlayer === null) return 'off';
+  if (!byPlayer.has(playerId)) return 'off';
+  return byPlayer.get(playerId);
+}
+
+/**
+ * The cell. No `data-v` at all — never data-v="" — for anything that is not a
+ * number, so an unknown sinks to the bottom whichever way the column is sorted.
+ */
+function seasonCell(v, week, name, isNow) {
+  const cls = (extra) => `wk${isNow ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
+
+  if (v === 'wait') {
+    return `<td class="${cls('wait')}" title="Week ${week} has not been read from ESPN yet.">·</td>`;
+  }
+  if (v === 'failed') {
+    return `<td class="${cls('muted')}" title="Week ${week} did not load — ESPN refused it, ` +
+      `so this column is empty for everyone. Reload the page to try again.">—</td>`;
+  }
+  if (v === 'off') {
+    return `<td class="${cls('off')}" title="${esc(name)} was not on this roster in week ${week}. ` +
+      `ESPN returns each past week’s real roster, and today’s roster for weeks still to come.">—</td>`;
+  }
+  if (v === null) {
+    return `<td class="${cls('muted')}" title="ESPN’s week ${week} roster carried no projection ` +
+      `for ${esc(name)}.">—</td>`;
+  }
+  if (v === 0) {
+    // ESPN's 0.00 IS its way of saying "no game that week". The sample data
+    // means something else by a zero — it pins a player it has ruled out — so
+    // demo mode prints the number rather than claiming a bye that isn't one.
+    if (state.isDemo) {
+      return `<td class="${cls()}" data-v="0" title="The sample data has ${esc(name)} ruled out ` +
+        `in week ${week}, so it projects nothing for him.">0.0</td>`;
+    }
+    return `<td class="${cls('bye')}" data-v="0" title="${esc(name)} is on bye in week ${week}. ` +
+      `ESPN returns 0.00 for a bye, which is not the same as having no number at all.">Bye</td>`;
+  }
+  return `<td class="${cls()}" data-v="${v}" ` +
+    `title="ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.">${fmt(v)}</td>`;
+}
+
+function renderSeasonHead(weeks) {
+  const cols = weeks
+    .map((w) => {
+      const failed = state.seasonFailed.has(w);
+      const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '']
+        .filter(Boolean).join(' ');
+      const title = failed
+        ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
+        : `ESPN’s projected points for week ${w}.`;
+      return `<th data-sort class="${cls}" title="${title}">${w}</th>`;
+    })
+    .join('');
+
+  $('seasonTable').querySelector('thead').innerHTML =
+    `<tr>
+       <th class="left" data-sort>Slot</th>
+       <th class="name" data-sort>Player</th>
+       <th class="left" data-sort>Pos</th>
+       <th class="left" data-sort>NFL</th>
+       <th class="grouped" data-sort title="The mean of the week columns that carry a number. Ours, not ESPN’s: a bye counts as the zero ESPN returns, and a week he is not on the roster for is left out.">Avg</th>
+       ${cols}
+     </tr>`;
+}
+
+function renderSeason() {
+  const table = $('seasonTable');
+  const tbody = bodyOf(table);
+  const team = currentTeam();
+  const weeks = state.weeks.slice();
+  const players = team ? team.players : [];
+
+  $('seasonTitle').textContent = team
+    ? `Season by week · ${team.name}`
+    : 'Season by week';
+
+  renderSeasonHead(weeks);
+  renderSeasonProgress(weeks);
+
+  const show = players.length > 0 && weeks.length > 0;
+  $('seasonWrap').classList.toggle('hidden', !show);
+  $('seasonEmpty').classList.toggle('hidden', show);
+
+  if (!show) {
+    $('seasonEmpty').textContent = seasonEmptyReason(team, weeks);
+    $('seasonNote').innerHTML = '';
+    tbody.innerHTML = '';
+    return;
+  }
+
+  const index = seasonIndex(team.id);
+
+  tbody.innerHTML = players
+    .map((p) => {
+      const values = weeks.map((w) => seasonValue(index, w, p.playerId));
+      const real = values.filter((v) => typeof v === 'number');
+      const avg = real.length ? round1(real.reduce((a, b) => a + b, 0) / real.length) : null;
+
+      const order = SLOT_ORDER[p.lineupSlotId] ?? 40;
+      const tier = injuryTier(p.injuryStatus);
+      const label = tier ? INJURY_LABELS[p.injuryStatus] || p.injuryStatus.replace(/_/g, ' ') : '';
+      // Availability, not a value judgement — so it is allowed a colour where
+      // the week columns are not. Kept to the pill this page already uses.
+      const tag = tier
+        ? ` <span class="inj${tier === 'q' ? '' : ` ${tier}`}" ` +
+          `title="ESPN lists ${esc(p.name)} as ${esc(p.injuryStatus.replace(/_/g, ' ').toLowerCase())}.">` +
+          `${esc(label)}</span>`
+        : '';
+
+      return `
+      <tr class="${p.started ? '' : 'bench'}">
+        <td class="left" data-v="${order}"><span class="slot-tag">${esc(p.slot)}</span></td>
+        <td class="name" title="${esc(p.name)} · ${esc(p.position)} · ${esc(p.proTeam)}">${esc(p.name)}${tag}</td>
+        <td class="left">${esc(p.position)}</td>
+        <td class="left">${esc(p.proTeam)}</td>
+        <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${fmt(avg)}</td>
+        ${values.map((v, i) => seasonCell(v, weeks[i], p.name, weeks[i] === state.week)).join('')}
+      </tr>`;
+    })
+    .join('');
+
+  renderSeasonNote(weeks, players.length);
+  resort(table);
+}
+
+/** An empty table says why it is empty and what to do about it. */
+function seasonEmptyReason(team, weeks) {
+  if (!weeks.length) {
+    return 'No weeks came back for this season, so there is nothing to lay out across the top. ' +
+      'Check the league on the Connection page, or switch to Demo data.';
+  }
+  if (!state.data) return 'No roster data for this week yet, so there are no players to follow.';
+  if (!team) return 'Pick a team above to follow its roster through the season.';
+  return `No players came back for ${team.name} in week ${state.week}, so there is no roster ` +
+    `to follow. Try another week.`;
+}
+
+/** The one visible sign that thirteen requests are being spent. */
+function renderSeasonProgress(weeks) {
+  const el = $('seasonProgress');
+  if (state.seasonError) {
+    el.innerHTML = `<span class="neg">${esc(state.seasonError)}</span>`;
+    return;
+  }
+  // Demo builds every week synchronously out of demo-rosters.js, so there is
+  // nothing to report progress on and a "reading from ESPN" line would be a lie.
+  if (state.isDemo) { el.textContent = ''; return; }
+
+  const pending = weeks.filter(
+    (w) => !state.seasonWeeks.has(w) && !state.seasonFailed.has(w)
+  );
+  if (!pending.length) { el.textContent = ''; return; }
+
+  const p = state.seasonProgress;
+  const done = p ? Math.min(p.done, p.total) : weeks.length - pending.length;
+  const total = p ? p.total : weeks.length;
+  el.textContent =
+    `Reading ESPN’s weekly projections… week ${done} of ${total}. ` +
+    `One request per week — there is no bulk form — so the columns fill in as they land.`;
+}
+
+/**
+ * What these numbers are, said every time they are shown.
+ *
+ * Four things have to be in here or the table is quietly misleading: whose
+ * projections these are, that a Bye cell and a dash mean different things,
+ * which weeks are covered, and — the one peculiar to this panel — that the
+ * rows are the roster AS OF the week selected at the top of the page, not some
+ * season-long squad that never existed.
+ */
+function renderSeasonNote(weeks, rowCount) {
+  const parts = [];
+  const team = currentTeam();
+
+  parts.push(
+    state.isDemo
+      ? 'These are generated sample rosters and generated projections — not ESPN’s, and not ' +
+        'your league’s. Switch to <strong>My ESPN league</strong> above to follow a real squad.'
+      : 'Every number in the week columns is ESPN’s own projection for that player in that week, ' +
+        'scored under this league’s rules — the same figure ESPN shows when you page a lineup ' +
+        'forward. Nothing here is ours except <strong>Avg</strong>.'
+  );
+
+  const loaded = weeks.filter((w) => state.seasonWeeks.has(w)).length;
+  parts.push(
+    `Covering ${weekRange(weeks)} — ${plural(weeks.length, 'week')} this season runs to` +
+    (loaded === weeks.length ? ', all loaded.' : `, ${loaded} loaded so far.`)
+  );
+
+  parts.push(
+    `The rows are ${team ? `${esc(team.name)}’s` : 'this team’s'} roster <strong>as it stands in ` +
+    `week ${state.week}</strong> — the same ${plural(rowCount, 'player')} as the table above, ` +
+    `starters in lineup order and then the bench. Change the week at the top of the page and this ` +
+    `row set changes with it.`
+  );
+
+  parts.push(
+    (state.isDemo
+      ? 'On a real league a cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a ' +
+        'player whose NFL team is off that week; in the sample data a zero only means he is ruled ' +
+        'out, so it is printed as a number. '
+      : 'A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team ' +
+        'is off that week. ') +
+    'A dash is not that: it means either that ESPN carried no number for him, or that he was not ' +
+    'on this roster in that week — ESPN hands back each past week’s real roster, and today’s ' +
+    'roster for every week still to come. Hover a cell to see which.'
+  );
+
+  parts.push(
+    'Avg is the mean of the weeks that carry a number and is ours, not ESPN’s: a bye counts as ' +
+    'the zero ESPN returns, and a week he is not on the roster for is left out.'
+  );
+
+  parts.push(
+    'Nothing in this table is highlighted, on purpose. Everyone here is already rostered, so the ' +
+    'per-position bar that flags a startable week on the <a href="waivers.html">Add players</a> ' +
+    'page would light up nearly every cell and tell you nothing.'
+  );
+
+  if (state.seasonFailed.size) {
+    const failed = [...state.seasonFailed].sort((a, b) => a - b).filter((w) => weeks.includes(w));
+    if (failed.length) {
+      parts.push(
+        `<span class="neg">ESPN did not return ${failed.length === 1 ? 'week' : 'weeks'} ` +
+        `${andList(failed.map(String))}, so ${failed.length === 1 ? 'that column is' : 'those columns are'} ` +
+        `blank for everyone and the average is taken from the weeks that did load. Reload the page ` +
+        `to try again.</span>`
+      );
+    }
+  }
+
+  $('seasonNote').innerHTML = parts.join(' ');
+}
+
+/** Selecting a team touches four places, so nobody calls them separately. */
 function selectTeam(id) {
   if (id === null || Number.isNaN(id) || id === state.teamId) return;
   state.teamId = id;
@@ -558,6 +1004,9 @@ function selectTeam(id) {
   if (sel.value !== String(id)) sel.value = String(id);
   renderOverview(); // the picked row is highlighted in the grid too
   renderRoster();
+  // A repaint and nothing else. Every team is in every week already fetched,
+  // so flicking through the managers never costs a request.
+  renderSeason();
 }
 
 // ----------------------------------------------------------------- interaction
@@ -596,6 +1045,11 @@ $('overviewTable').addEventListener('click', (e) => {
 // default and is entirely null in week 1, which sorted into insertion order.
 enableSort($('overviewTable'), { defaultIndex: 9 });
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
+
+// The season grid opens in lineup order — starters first, bench after — so it
+// reads as a squad rather than as a leaderboard. Avg is one click away for
+// anyone who wants the other question answered.
+enableSort($('seasonTable'), { defaultIndex: 0, defaultAsc: true });
 
 // ------------------------------------------------------------------- start up
 
