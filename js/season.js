@@ -79,6 +79,10 @@ export async function fetchWeekRosters(week) {
         name: p.fullName || '',
         position: espn.POSITIONS[p.defaultPositionId] || 'UNK',
         proTeam: espn.PRO_TEAMS[p.proTeamId] ?? 'FA',
+        // Kept as well as the abbreviation because bye weeks come back keyed by
+        // this id, and re-deriving it from the abbreviation would break on the
+        // seasons where ESPN changes its own casing.
+        proTeamId: p.proTeamId ?? null,
         lineupSlotId: e.lineupSlotId,
         slot: espn.SLOT_LABELS[e.lineupSlotId] ?? String(e.lineupSlotId),
         started: e.lineupSlotId !== BENCH_SLOT && e.lineupSlotId !== IR_SLOT,

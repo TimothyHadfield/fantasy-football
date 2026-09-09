@@ -22,9 +22,14 @@ let version = null;
 const listeners = new Set();
 const pending = new Map();
 
+// There is no bridge outside a browser. Guarding here rather than at each use
+// keeps this module importable from node, which is what lets the pure logic
+// modules that transitively import it (via espn.js) be unit-tested at all.
+const hasWindow = typeof window !== 'undefined';
+
 // The extension announces itself at document_start, which may be before this
 // module runs, so listen immediately and also treat any reply as proof of life.
-window.addEventListener('message', (event) => {
+if (hasWindow) window.addEventListener('message', (event) => {
   if (event.source !== window) return;
   const msg = event.data;
   if (!msg || msg.source !== EXT) return;
@@ -68,6 +73,9 @@ export function isAvailable() {
  */
 function ask(request, { timeoutMs } = {}) {
   const limit = timeoutMs ?? TIMEOUT_MS;
+  if (!hasWindow) {
+    return Promise.resolve({ ok: false, error: 'No browser context, so no bridge.' });
+  }
   return new Promise((resolve) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => {
