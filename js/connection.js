@@ -231,4 +231,11 @@ async function init() {
   if (available && state.leagueId) connect();
 }
 
-init();
+// The bar is decoration around the page's own data, so a failure probing the
+// bridge must never escape as an unhandled rejection and take the page with
+// it. Show the disconnected state and let the page carry on with demo data.
+init().catch((err) => {
+  state.extension = false;
+  state.error = err && err.message ? err.message : 'Could not reach the bridge.';
+  render();
+});

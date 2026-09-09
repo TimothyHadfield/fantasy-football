@@ -176,7 +176,14 @@ function buildSchedule(rand, teamIds) {
 // ------------------------------------------------------------------- injuries
 
 function buildInjuries(rand, teamIds) {
-  const count = INJURY_MIN + Math.floor(rand() * (INJURY_MAX - INJURY_MIN + 1));
+  // One injury per team-week, so there are only so many slots to fill. Asking
+  // for more than exist would spin the rejection loop below forever, which is
+  // reachable the moment anything shortens the season (a test harness running
+  // a two-week league, say).
+  const slots = teamIds.length * WEEKS;
+  const wanted = INJURY_MIN + Math.floor(rand() * (INJURY_MAX - INJURY_MIN + 1));
+  const count = Math.min(wanted, slots);
+
   const names = shuffle(rand, INJURY_NAMES);
   const injuries = [];
   const used = new Set();
@@ -185,12 +192,15 @@ function buildInjuries(rand, teamIds) {
     let teamId;
     let week;
     let key;
-    // One injury per team-week, so the annotation always maps to one box score.
+    // Random placement, retried until it lands somewhere free. Bounded so a
+    // near-full board degrades to fewer injuries rather than hanging.
+    let tries = 0;
     do {
       teamId = teamIds[Math.floor(rand() * teamIds.length)];
       week = 1 + Math.floor(rand() * WEEKS);
       key = `${teamId}:${week}`;
-    } while (used.has(key));
+    } while (used.has(key) && ++tries < slots * 4);
+    if (used.has(key)) break;
     used.add(key);
 
     injuries.push({
