@@ -41,25 +41,32 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
    Total at a given week predicts the final ranking. He only ever did week 1 by
    hand. The site can answer it across all 13 weeks.
 
-3. **The live ESPN path has never been run against a real league in a browser.**
-   Every page works on demo data. Tim's 2025 league ID is **1485774672**, and it
-   was probed from the terminal on 2026-09-08: ESPN returns **401** ("not
-   authorized to view this League") for both season 2025 and season 2026, while
-   neighbouring IDs (`...671`, `...673`) return **404**. That 401-vs-404 split
-   confirms the league exists and is private — the expected answer for a
-   cookieless caller. The 2026 401 (rather than 404) suggests the league already
-   carries into 2026; Tim planned to create a new one, so confirm on espn.com
-   first.
+3. **Connecting to the live league — the blocker is ESPN's privacy setting.**
+   Tim's 2026 league is **476225250** (the 2025 one, 1485774672, is retired).
+   Probed 2026-09-08: season 2026 returns **401**, season 2025 returns **404**,
+   which together confirm the ID is right and the league is new and private.
 
-   Re-confirmed 2026-09-08: 401 on both seasons, and on `mSettings`, `mTeam` and
-   `mNav` alike — there is no unauthenticated view of this league.
+   **A 401 from a terminal proves nothing** — it is the correct answer for a
+   cookieless caller. Do not re-probe with curl and conclude anything.
 
-   What remains untested is the browser path: the site loaded in a browser where
-   Tim is logged into espn.com, so `credentials: 'include'` carries his cookies.
-   That cannot be tested from a terminal. Do not re-probe with curl and conclude
-   anything — a 401 there is the correct result and proves nothing new. The one
-   thing only Tim can do is open the live site while logged in and report what
-   the connect panel shows.
+   The real problem is that a private league cannot be read from a static site
+   at all, and being logged in to espn.com does not fix it:
+
+   - The page is served from `timothyhadfield.github.io`, so sending ESPN
+     cookies is a **third-party cookie**. Safari and Firefox block those
+     outright; Chrome increasingly does.
+   - A browser page **cannot set the `Cookie` header** itself, so the
+     `espn_s2` / `SWID` trick every server-side ESPN tool uses is unavailable.
+
+   **The fix is one ESPN setting:** LM Tools -> League Settings -> Basic
+   Settings -> "Make League Viewable to Public" = Yes. Verified that public
+   leagues return HTTP 200 with no cookies whatsoever (tested against public
+   leagues 1241838 and 899513). It is read-only visibility: nobody can join,
+   edit or transact.
+
+   If Tim will not make it public, the only remaining options are a small local
+   proxy holding the cookies, or a browser extension. Both are real work and
+   neither can be hosted on GitHub Pages.
 
 4. **The smart drafter is BUILT — `draft.html`.** Tim's strategy is captured in
    `DRAFT-STRATEGY.md` (Part 1 his words, Part 2 research, Part 3 what was

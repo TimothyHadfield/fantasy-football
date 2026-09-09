@@ -77,10 +77,23 @@ async function request(path, { filter } = {}) {
   }
 
   if (res.status === 401 || res.status === 403) {
+    // This is the expected answer for a private league, and being logged in to
+    // espn.com is usually NOT enough to fix it. The page is served from a
+    // different site than ESPN, so sending your ESPN cookies is a third-party
+    // cookie — which Safari and Firefox block outright and Chrome increasingly
+    // does too. A browser page also cannot set the Cookie header itself, so
+    // the espn_s2/SWID trick that server-side tools use is not available here.
+    //
+    // The reliable fix is on ESPN's side: a league marked viewable to the
+    // public needs no cookies at all.
     throw new AuthError(
-      'ESPN refused the request. For a private league you must be logged in to ' +
-      'espn.com in this same browser, and your browser must allow cookies to be ' +
-      'sent to espn.com.'
+      `ESPN will not show league ${config.leagueId} to this site. The fix is one ` +
+      'setting: on espn.com open your league, then LM Tools → League Settings ' +
+      '→ Basic Settings, and set "Make League Viewable to Public" to Yes. ' +
+      'That makes the league readable without any login, which is what a site ' +
+      'like this one needs. It is read-only visibility — nobody can join, ' +
+      'edit or transact. Being logged in to espn.com does not help on its own, ' +
+      'because your browser will not send ESPN cookies to a different site.'
     );
   }
   if (res.status === 404) {
