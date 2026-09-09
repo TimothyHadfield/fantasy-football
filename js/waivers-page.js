@@ -608,7 +608,7 @@ function renderHead(weeks) {
  * position with no entry is never highlighted rather than being given a
  * borrowed number.
  */
-const STARTABLE = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 7 };
+const STARTABLE = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 8.5 };
 
 /** Strictly over the line: "over 17" does not include 17. */
 function isStartable(v, position) {
