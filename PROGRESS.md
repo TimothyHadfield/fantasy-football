@@ -29,6 +29,47 @@ still holds; what changed:
 - **New shared modules: `js/prefs.js`** (persist source/week/team/sort) and
   `savedConfig()` / `onConnection()` in `js/connection.js`.
 
+**Forecasting landed 2026-09-09 (same day, third piece).** `js/forecast.js` is
+a pure, node-testable engine; `schedule.html` has a "My season" panel and win
+percentages on every upcoming game. Read this before touching any of it:
+
+- **ESPN does NOT publish a win probability.** It publishes projections. Every
+  percentage on the site is derived here, and the page says so in those words.
+  Do not relabel it as ESPN's number — that was checked, not assumed.
+- **The win model** is a normal distribution on the margin: `P = Phi((projA -
+  projB) / (sigma * sqrt2))`. `sigma` is the per-team-week spread of
+  (actual - projected), **learned from the league's own games** by
+  `calibrateSigma`, falling back to a documented 27 below 12 residuals and
+  saying which it used. In week 1-2 live it will always be the assumed value,
+  because live games carry no projections at all (see below).
+- **Future weeks use `seasonProjected / 17` per player**, not a weekly
+  projection. ESPN publishes a season total plus roughly the imminent week;
+  **weekly projections for distant future weeks are UNVERIFIED and probably
+  absent.** Do not build a one-request-per-week fetch on them — it was
+  considered and rejected on the evidence in `docs/espn-draft-api.md`.
+- **Tim's rule, implemented exactly:** each manager is assumed to start their
+  highest-projected players. `optimalLineup` fills the most restrictive slots
+  first, which is optimal because the eligibility sets nest, so the flex can
+  provably never take a QB (a superflex still can). Verified against brute-force
+  enumeration.
+- **Bye weeks are handled** by dropping players whose `proTeamId` is on bye that
+  week (`espn.fetchByeWeeks()`, already existed). OUT/IR are dropped;
+  QUESTIONABLE is kept.
+- **Request budget is 3** and must stay there: the schedule fetch, ONE
+  `fetchWeekRosters(currentWeek)`, and ONE cached `fetchByeWeeks()`.
+- **The lineup shape is read from the rosters ESPN sends**, not guessed and not
+  a fourth request — ESPN rejects illegal lineups, so the non-bench slots in use
+  ARE the configuration, maxed across teams. The real league starts **ten**:
+  1 QB, 2 RB, **3 WR**, 1 TE, 1 FLEX, 1 D/ST, 1 K. A hand-written nine-slot
+  default would understate every team by a starter.
+- **`state.strength` now has ONE notion again.** The per-week optimal-lineup
+  projection is the preferred SOS basis, with the old three as fallbacks and a
+  single `state.strengthNote`. Beware the units trap the file warns about: two
+  of the fallbacks are points-per-WEEK, one is a season TOTAL.
+- **The demo season is 100% played, so it forecasts "as of" the selected week**
+  — the same code path, run where the answer can be checked. Live simply uses
+  the last week with a final game.
+
 **Two bugs fixed that were silently corrupting real numbers** — do not
 reintroduce:
 1. The connection bar wrote `ff.connection` while all three data pages read
@@ -475,6 +516,9 @@ Modules:
   colour across every chart.
 - `js/prefs.js` — one localStorage key behind `get`/`set`/`scope`. Persists
   data source, week, selected team and sort so they survive a reload.
+- `js/forecast.js` — win probabilities, optimal lineups and season win-total
+  distributions. Pure: no DOM, no fetching, so it is node-testable. The
+  distribution is an exact Poisson-binomial convolution, not a simulation.
 - `js/home-page.js`, `js/debug-page.js` — the dashboard and the probe page
 - `css/draft.css` — draft room styles
 - `js/espn.js` — ESPN API connection layer; routes through the bridge
@@ -527,6 +571,7 @@ directory this session was the scratchpad path in the environment header.
 | `test-draft-sim.mjs` | practice opponents, lineup optimiser and grading — 36 assertions |
 | `test-practice.mjs` | complete practice drafts through the page's own logic, boots `draft-page.js` against the real DOM, and asserts the connection bar is mounted — 99 assertions |
 | `test-practice-autostart.mjs` | lands on `draft.html?practice=1` in an empty browser and asserts a playable draft with zero network calls |
+| `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
 
