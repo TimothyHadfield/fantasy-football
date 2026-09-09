@@ -253,12 +253,18 @@ tbody tr.spotlight td.name {
     <div class="row spread mb-12">
       <div class="ctl">
         <span class="ctl-label" id="posLabel">Position</span>
+        <!-- FLEX sits after TE and before K because that is where a flex sits
+             in a lineup, and because the three positions it spans are the three
+             immediately to its left. It is a FILTER, not a position: it matches
+             every RB, WR and TE at once and changes nothing about the players
+             themselves. -->
         <div class="segmented seg-sm" id="posFilter" role="group" aria-labelledby="posLabel">
           <button type="button" data-pos="ALL" class="on">All<span class="seg-count"></span></button>
           <button type="button" data-pos="QB">QB<span class="seg-count"></span></button>
           <button type="button" data-pos="RB">RB<span class="seg-count"></span></button>
           <button type="button" data-pos="WR">WR<span class="seg-count"></span></button>
           <button type="button" data-pos="TE">TE<span class="seg-count"></span></button>
+          <button type="button" data-pos="FLEX" title="Every running back, receiver and tight end at once — the men who could fill a flex spot. A filter only: each one keeps his own position.">FLEX<span class="seg-count"></span></button>
           <button type="button" data-pos="K">K<span class="seg-count"></span></button>
           <button type="button" data-pos="DST">DST<span class="seg-count"></span></button>
         </div>
@@ -300,12 +306,17 @@ tbody tr.spotlight td.name {
     <div class="row spread mb-12">
       <div class="ctl">
         <span class="ctl-label" id="takenPosLabel">Position</span>
+        <!-- The same FLEX button, on this table's own set. Its count is this
+             table's — how many the league is holding — and it does not touch the
+             rank beside a name: a man is still his manager's RB2, never a
+             FLEX2. -->
         <div class="segmented seg-sm" id="takenPosFilter" role="group" aria-labelledby="takenPosLabel">
           <button type="button" data-pos="ALL" class="on">All<span class="seg-count"></span></button>
           <button type="button" data-pos="QB">QB<span class="seg-count"></span></button>
           <button type="button" data-pos="RB">RB<span class="seg-count"></span></button>
           <button type="button" data-pos="WR">WR<span class="seg-count"></span></button>
           <button type="button" data-pos="TE">TE<span class="seg-count"></span></button>
+          <button type="button" data-pos="FLEX" title="Every running back, receiver and tight end the league is holding. A filter only: each one keeps his own position and his own rank on his manager’s squad.">FLEX<span class="seg-count"></span></button>
           <button type="button" data-pos="K">K<span class="seg-count"></span></button>
           <button type="button" data-pos="DST">DST<span class="seg-count"></span></button>
         </div>

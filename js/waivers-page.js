@@ -77,6 +77,71 @@ const POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
 // should put the quarterbacks at one end, not the defenses.
 const POS_ORDER = new Map(POSITIONS.map((p, i) => [p, i + 1]));
 
+/**
+ * FLEX IS A FILTER, NOT A POSITION.
+ *
+ * It is a button on the position controls that matches every running back,
+ * receiver and tight end at once — the men who could fill a flex spot — because
+ * "who can I put in the flex" is a question you ask of the wire constantly and
+ * answering it otherwise meant pressing RB, then WR, then TE and holding three
+ * lists in your head.
+ *
+ * It is deliberately NOT in POSITIONS and never in POS_ORDER, and no player's
+ * own position changes when it is pressed. A tight end under a FLEX filter is
+ * still a TE: still measured against the TE bar in STARTABLE, still his
+ * manager's TE2 in the taken table, still "Your TE3" on a comparison row. The
+ * alternative — rewriting the Pos column to read FLEX while the button is
+ * pressed — would turn a filter into a claim about the player, and the ranks and
+ * the greens would both become lies. So this constant is consulted in exactly
+ * two places: whether a row survives the filter, and what the button's count is.
+ */
+const FLEX = 'FLEX';
+const FLEX_POSITIONS = ['RB', 'WR', 'TE'];
+
+/**
+ * Everything a position button can be, in the order the buttons are drawn.
+ *
+ * FLEX sits after TE and before K because that is where a flex sits in a lineup:
+ * the three positions it spans are the three immediately before it, so the
+ * button reads as a summary of the run it follows rather than as a seventh
+ * position dropped into the middle of the six.
+ *
+ * The list is also what a remembered filter is checked against. Both filters are
+ * persisted, so a value from an older build of this page — or a hand-edited one
+ * — can arrive from localStorage; anything not on this list falls back to ALL
+ * rather than filtering the table down to nothing with no button lit to press
+ * your way out of.
+ */
+const FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', FLEX, 'K', 'DST'];
+const FILTER_CHOICE = (v) => (FILTERS.includes(String(v)) ? String(v) : 'ALL');
+
+/**
+ * The selected filter as a headline label — "WR", "RB/WR/TE".
+ *
+ * The stat strips read "Available WR" and "Taken QB", which works because every
+ * other button IS a position. FLEX is not, and "Available FLEX" would be the
+ * button's own token quoted back rather than a count of anything nameable, so it
+ * is spelled out as the three positions it stands for. That is both shorter than
+ * a sentence and more precise than the token.
+ */
+const filterLabel = (position) => (position === FLEX ? FLEX_POSITIONS.join('/') : position);
+
+/**
+ * The selected filter as a noun phrase that reads inside a sentence.
+ *
+ * The empty states interpolate this into prose — "No … is available in this
+ * league right now" — and prose written for one position does not survive a
+ * token that means three. DST has needed this treatment since the beginning ("No
+ * DST is available" is not a sentence anybody says); FLEX needs more of it,
+ * because a reader who has not pressed the button cannot be assumed to know what
+ * it spans, and the empty state is the one moment the page has nothing else to
+ * show him. Singular on purpose, so the sentences around it are unchanged.
+ */
+const filterNoun = (position) => {
+  if (position === FLEX) return 'flex-eligible player (running back, receiver or tight end)';
+  return position === 'DST' ? 'defense' : position;
+};
+
 const state = {
   source: prefs.get('source', 'demo'),
   isDemo: true,
@@ -95,8 +160,12 @@ const state = {
   // budget, and both tables are priced over the same weeks. The taken panel
   // shows the same control rather than a second one, so the choice is reachable
   // from either end of the page without becoming two choices to spend.
-  position: prefs.get('position', 'ALL'),
-  takenPosition: prefs.get('takenPosition', 'ALL'),
+  //
+  // Both are read back through FILTER_CHOICE, so a saved FLEX comes back as
+  // FLEX and a saved anything-else comes back as ALL rather than wedging the
+  // page on a filter no button can turn off.
+  position: FILTER_CHOICE(prefs.get('position', 'ALL')),
+  takenPosition: FILTER_CHOICE(prefs.get('takenPosition', 'ALL')),
 
   // The man a `?player=` link landed on. `settled` records that we have found
   // him once and already pointed the page at him, so a later repaint does not
@@ -665,8 +734,20 @@ function buildRows(weeks) {
   return rows;
 }
 
-/** Does this row survive a position filter? Each table passes its own. */
-const matches = (row, position) => position === 'ALL' || row.p.position === position;
+/**
+ * Does this row survive a position filter? Each table passes its own.
+ *
+ * The FLEX branch is the whole of what FLEX does. It reads the player's real
+ * position and answers whether a flex spot would take him; it does not write
+ * anything back, which is why nothing downstream — the Pos column, the rank
+ * beside it, the STARTABLE bar, the "Your QB3" label — has to know this button
+ * exists.
+ */
+const matches = (row, position) => {
+  if (position === 'ALL') return true;
+  if (position === FLEX) return FLEX_POSITIONS.includes(row.p.position);
+  return row.p.position === position;
+};
 
 /** The wire's filter, which the comparison rows share — they are one table. */
 const matchesFilter = (row) => matches(row, state.position);
@@ -870,13 +951,23 @@ function buildTakenRows(weeks) {
  * are worth having separately: the wire's QB button says how many quarterbacks
  * you could add, the taken one says how many the league is holding. One shared
  * count could only ever have been true of one of them.
+ *
+ * FLEX has to be counted EXPLICITLY. The loop below only knows how to increment
+ * a key that a player's own position names, so a FLEX key seeded to zero and
+ * left to that loop would sit at zero for ever and the button would report,
+ * confidently, that there is nobody to flex. It is counted as its own sum of the
+ * three positions instead — which is also why FLEX is tested before the position
+ * key is touched rather than being folded into it: a man is counted once as a
+ * running back and once as flex-eligible, and those are two different questions
+ * about him, not two positions.
  */
 function countsOf(players) {
-  const counts = { ALL: 0 };
+  const counts = { ALL: 0, [FLEX]: 0 };
   for (const pos of POSITIONS) counts[pos] = 0;
   for (const p of players) {
     counts.ALL++;
-    if (counts[p.position] !== undefined) counts[p.position]++;
+    if (FLEX_POSITIONS.includes(p.position)) counts[FLEX]++;
+    if (POS_ORDER.has(p.position)) counts[p.position]++;
   }
   return counts;
 }
@@ -1358,8 +1449,7 @@ function emptyReason(totalPlayers) {
   if (progressText()) return 'Reading the waiver wire from ESPN…';
 
   if (totalPlayers > 0) {
-    const label = state.position === 'DST' ? 'defense' : state.position;
-    return `No ${label} is available in this league right now. ` +
+    return `No ${filterNoun(state.position)} is available in this league right now. ` +
       `Switch the filter back to All to see the other ${plural(totalPlayers, 'player')}.`;
   }
 
@@ -1474,8 +1564,7 @@ function takenEmptyReason(totalPlayers) {
   if (progressText()) return 'Reading the league’s rosters from ESPN…';
 
   if (totalPlayers > 0) {
-    const label = state.takenPosition === 'DST' ? 'defense' : state.takenPosition;
-    return `Nobody in this league is holding a ${label} right now. ` +
+    return `Nobody in this league is holding a ${filterNoun(state.takenPosition)} right now. ` +
       `Switch the filter back to All to see the other ${plural(totalPlayers, 'player')}.`;
   }
 
@@ -1506,7 +1595,9 @@ function renderTakenStats(weeks) {
 
   const rated = rows.filter((r) => r.avg !== null);
   const best = rated.length ? rated.reduce((a, b) => (b.avg > a.avg ? b : a)) : null;
-  const label = state.takenPosition === 'ALL' ? 'Taken' : `Taken ${state.takenPosition}`;
+  const label = state.takenPosition === 'ALL'
+    ? 'Taken'
+    : `Taken ${filterLabel(state.takenPosition)}`;
 
   const items = [
     [label, String(rows.length), `across ${plural(new Set(rows.map((r) => r.owner)).size, 'squad')}`],
@@ -1593,6 +1684,15 @@ function renderTakenNote(weeks) {
   );
 
   parts.push(
+    '<strong>FLEX</strong> here is the same filter as on the wire above — every running back, ' +
+    'receiver and tight end the league is holding, counted as those three added together — and ' +
+    'it leaves the rank beside a name completely alone. A man is his manager’s RB2 or WR1 at his ' +
+    'own position whichever button is pressed; there is no such thing as a FLEX2, because the ' +
+    'rank answers how deep a manager is at a position and the button only decides which rows you ' +
+    'are looking at.'
+  );
+
+  parts.push(
     'Every name here is a link. Clicking one puts the table on his position, widens the weeks to ' +
     'the rest of the season and marks his row — the same thing that happens when you click a ' +
     'player anywhere else on the site, which is what brings you here.'
@@ -1630,7 +1730,9 @@ function renderStats(weeks) {
 
   const rated = rows.filter((r) => r.avg !== null);
   const best = rated.length ? rated.reduce((a, b) => (b.avg > a.avg ? b : a)) : null;
-  const label = state.position === 'ALL' ? 'Available' : `Available ${state.position}`;
+  const label = state.position === 'ALL'
+    ? 'Available'
+    : `Available ${filterLabel(state.position)}`;
 
   const items = [
     [label, String(rows.length), state.position === 'ALL' ? '' : `of ${state.pool.size} in the pool`],
@@ -1774,6 +1876,18 @@ function renderNote(weeks) {
     'to price control is shared with that panel, because both tables are priced over the same ' +
     'weeks and widening is what actually spends requests. Every name is a link that jumps to that ' +
     'player and shows the rest of his season.'
+  );
+
+  // FLEX is the one button whose label is not self-explanatory, and it is a
+  // filter rather than a fact about anybody, so the note has to say both halves.
+  parts.push(
+    '<strong>FLEX</strong> is not a position but a filter across three: press it and the table ' +
+    'shows every running back, receiver and tight end at once — the men who could fill a flex ' +
+    'spot — with the count on the button being those three added together. It changes nothing ' +
+    'about the players themselves. Each one keeps his own position in the Pos column and is still ' +
+    'measured against his own position’s bar for the green above, so a receiver over 12 is green ' +
+    'under FLEX exactly as he is under WR; there is no separate flex bar, because what makes a ' +
+    'week worth starting does not depend on which button you pressed to find it.'
   );
 
   parts.push(...comparisonNote(weeks));

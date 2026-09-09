@@ -212,6 +212,86 @@ ok(/a bye is never shaded/.test(note), 'and says a bye cannot beat anybody', not
 ok(document.getElementById('waiverNote').querySelector('.beats-key') !== null,
   'the shading is shown in the note in the treatment it describes');
 
+// --- FLEX changes WHICH ROWS you see, and nothing about the colour ---------
+//
+// FLEX is a filter across RB, WR and TE, so the danger it introduces is that
+// somebody "helpfully" gives it a startable bar of its own, or measures a tight
+// end against a flex bar while it is pressed. Both would be invisible: the table
+// would still be full of plausible green. So the cues are recorded per player
+// per week BEFORE the button is pressed and compared cell for cell after, and
+// the note is re-read to prove no seventh bar appeared in it.
+const cueKey = (tr) => tr.getAttribute('data-player');
+function cuesOf(scope) {
+  const out = new Map();
+  for (const tr of [...scope.querySelectorAll('#waiverTable tbody tr')]) {
+    if (tr.classList.contains('empty-row')) continue;
+    const cells = [...tr.querySelectorAll('td')];
+    out.set(`${cueKey(tr)}|${tr.classList.contains('mine') ? 'mine' : 'wire'}`, {
+      pos: cells[posCol].textContent.trim(),
+      cues: cells.slice(firstWeekCol).map((td) =>
+        `${td.classList.contains('hot') ? 'H' : '-'}${td.classList.contains('beats') ? 'B' : '-'}` +
+        `:${td.getAttribute('data-v')}`),
+    });
+  }
+  return out;
+}
+
+const cuesBefore = cuesOf(document);
+document.querySelector('#posFilter button[data-pos="FLEX"]')
+  .dispatchEvent(new window.Event('click', { bubbles: true }));
+const cuesAfter = cuesOf(document);
+
+ok(cuesAfter.size > 0 && cuesAfter.size < cuesBefore.size,
+  'FLEX narrows the table', `${cuesAfter.size} of ${cuesBefore.size}`);
+ok([...cuesAfter.values()].every((r) => ['RB', 'WR', 'TE'].includes(r.pos)),
+  'to exactly the running backs, receivers and tight ends',
+  [...new Set([...cuesAfter.values()].map((r) => r.pos))].join(','));
+ok(new Set([...cuesAfter.values()].map((r) => r.pos)).size === 3,
+  'all three of them, so the check is not vacuous',
+  [...new Set([...cuesAfter.values()].map((r) => r.pos))].join(','));
+
+let movedCue = 0, firstMoved = '';
+for (const [key, after] of cuesAfter) {
+  const before = cuesBefore.get(key);
+  if (!before || JSON.stringify(before.cues) !== JSON.stringify(after.cues)) {
+    movedCue++;
+    if (!firstMoved) firstMoved = `${key}: ${JSON.stringify(before && before.cues)} -> ${JSON.stringify(after.cues)}`;
+  }
+}
+ok(movedCue === 0, 'NOT ONE CELL CHANGES COLOUR BECAUSE FLEX IS PRESSED', firstMoved);
+
+// And the greens are actually there to have been preserved, per position.
+const greensNow = {};
+for (const r of cuesAfter.values()) {
+  for (const cue of r.cues) if (cue.startsWith('H')) greensNow[r.pos] = (greensNow[r.pos] || 0) + 1;
+}
+ok(Object.keys(greensNow).length > 1,
+  'more than one of the three still has green weeks under FLEX', JSON.stringify(greensNow));
+ok((greensNow.WR || 0) > 0, 'a receiver over 12 is still green under FLEX', JSON.stringify(greensNow));
+const overBarWr = [...cuesAfter.values()].filter((r) => r.pos === 'WR')
+  .flatMap((r) => r.cues)
+  .filter((cue) => {
+    const v = cue.split(':')[1];
+    return v !== 'null' && Number(v) > BARS.WR;
+  });
+ok(overBarWr.length > 0 && overBarWr.every((cue) => cue.startsWith('H')),
+  'and every receiver week over the WR bar is green, by that bar and no other',
+  overBarWr.filter((cue) => !cue.startsWith('H')).slice(0, 3).join(','));
+ok([...cuesAfter.values()].some((r) => r.cues.some((cue) => cue.slice(1, 2) === 'B')),
+  'the second green survives it too');
+
+const flexNote = document.getElementById('waiverNote').textContent;
+for (const [pos, bar] of Object.entries(BARS)) {
+  ok(flexNote.includes(`${pos} over ${bar}`), `the note still states the ${pos} bar under FLEX`);
+}
+ok(!/FLEX over \d/.test(flexNote), 'and states no FLEX bar, because there is not one',
+  flexNote.slice(0, 200));
+ok(/FLEX<\/strong> is not a position but a filter across three/
+  .test(document.getElementById('waiverNote').innerHTML),
+  'the note says what FLEX is', flexNote.slice(0, 200));
+ok(/measured against his own position’s bar/.test(flexNote),
+  'and that a flex-eligible player is still measured against his own bar', flexNote.slice(0, 200));
+
 ok(errors.length === 0, 'no console errors', errors.slice(0, 2).join(' | '));
 
 console.log(`\n${pass} passed, ${fail} failed`);

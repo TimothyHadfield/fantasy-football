@@ -196,6 +196,28 @@ along with it. Now:
   spans would be two costs to spend and could disagree about which columns
   exist. `setCost()` writes the same line under both copies.
 
+**FLEX is a FILTER, not a seventh position.** Both position controls carry a
+FLEX button (after TE, before K — where a flex sits in a lineup) that shows
+every RB, WR and TE at once. The whole of its correctness is that nothing
+downstream knows it exists:
+
+- `FLEX` is deliberately **not in `POSITIONS` and never in `POS_ORDER`**.
+  `matches()` reads the player's real position and writes nothing back.
+- **A man keeps his own position and his own rank.** `RB2` stays `RB2` under
+  FLEX; there is no such thing as a `FLEX2`, because the rank answers how deep
+  a manager is at a position and the button only decides which rows you see.
+- **`STARTABLE` is untouched.** A receiver over 12 is green under FLEX exactly
+  as he is under WR. There is no flex bar — what makes a week worth starting
+  does not depend on which button you pressed to find it.
+- `countsOf()` counts FLEX **explicitly**. A `FLEX` key seeded to zero and left
+  to the `counts[p.position]++` loop would have sat at zero for ever and
+  reported "no flex-eligible players" with total confidence.
+- `FILTER_CHOICE()` sanitises both persisted filters, so a saved value that is
+  no longer valid falls back to `ALL` rather than wedging a table on a filter
+  with no lit button.
+- The strips read **`Available RB/WR/TE`** / **`Taken RB/WR/TE`**, not
+  "Available FLEX", which would only quote the button back.
+
 **The player click-through (`waivers.html?player=<espnPlayerId>`).** Every page
 that names a player links to his row here, by one contract:
 
@@ -912,6 +934,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
 | `link-check.mjs` | **the player click-through ACROSS pages** — 103 assertions. `index.html` and `analysis.html` MAKE links, `waivers.html` RESOLVES them, and no single-page suite can notice when the two halves stop agreeing. It boots each page in its own child process, checks every link against the contract, then FOLLOWS a sample of the ids the source pages actually produced and asserts each lands on exactly that man. It found a real defect the day it was written (see the union rule above), and it exists because the three halves were built by three authors at once against a contract agreed in prose |
+| `hot-check.mjs` (again) | records every green cue per player per week, presses FLEX, and compares cell for cell — **not one cell changes colour**, which is what proves a filter is only a filter |
 | `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |

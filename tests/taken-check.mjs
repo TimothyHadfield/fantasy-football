@@ -40,10 +40,14 @@ const SCENARIOS = {
     conn: { leagueId: '99', season: 2026, teamId: 1 },
     after: async ({ document, window }) => {
       const season = await import('./taken-stub-season.mjs');
+      const espn = await import('./wv-stub-espn.mjs');
       const click = (sel) =>
         document.querySelector(sel).dispatchEvent(new window.Event('click', { bubbles: true }));
 
-      const out = { rosterBefore: season.calls.rosterWeeks.slice() };
+      const out = {
+        rosterBefore: season.calls.rosterWeeks.slice(),
+        wireFetchesBefore: espn.calls.weeks.slice(),
+      };
 
       // Widening has to re-rank: over weeks 4-6 Cade Dunlow is the QB3, over
       // weeks 4-9 he is the QB1. The note claims the span moves the rank, so
@@ -69,6 +73,41 @@ const SCENARIOS = {
       out.qb = takenSnapshot(document);
       out.wireAfterTakenFilter = wireSnapshot(document);
       click('#takenPosFilter button[data-pos="ALL"]');
+
+      // FLEX. A filter across three positions rather than a seventh position,
+      // so the things to watch are that it narrows to exactly RB/WR/TE, that
+      // the ranks and the Pos keys come through it untouched, and that the two
+      // tables still answer only their own button. Pressed on each table in
+      // turn and left pressed on the first while the second is pressed, which
+      // is the only way to see one filter fail to leave the other alone.
+      const wireBefore = wireSnapshot(document);
+      // Taken here rather than at the top of this hook: the span was widened and
+      // narrowed again in between, which legitimately bought weeks 7-9, and the
+      // claim being made is about what FLEX costs, not about what the span did.
+      out.wireFetchesBeforeFlex = espn.calls.weeks.slice();
+      out.rosterBeforeFlex = season.calls.rosterWeeks.slice();
+      click('#takenPosFilter button[data-pos="FLEX"]');
+      out.takenFlex = takenSnapshot(document);
+      out.wireDuringTakenFlex = wireSnapshot(document);
+      out.takenFlexCount = document
+        .querySelector('#takenPosFilter button[data-pos="FLEX"] .seg-count').textContent.trim();
+      out.takenFlexLabel = (document.querySelector('#takenStats .stat .k') || {}).textContent || '';
+      out.takenFlexEmpty = document.querySelectorAll('#takenTable tbody tr.empty-row').length;
+
+      click('#posFilter button[data-pos="FLEX"]');
+      out.wireFlex = wireSnapshot(document);
+      out.takenDuringWireFlex = takenSnapshot(document);
+      out.wireFlexCount = document
+        .querySelector('#posFilter button[data-pos="FLEX"] .seg-count').textContent.trim();
+      out.wireFlexLabel = (document.querySelector('#waiverStats .stat .k') || {}).textContent || '';
+
+      click('#takenPosFilter button[data-pos="ALL"]');
+      out.wireStillFlex = wireSnapshot(document);
+      click('#posFilter button[data-pos="ALL"]');
+      out.wireBefore = wireBefore;
+      out.wireAfterFlex = wireSnapshot(document);
+      out.wireFetchesAfterFlex = espn.calls.weeks.slice();
+
       out.rosterAfterFilter = season.calls.rosterWeeks.slice();
 
       globalThis.__taken = out;
@@ -602,6 +641,12 @@ async function check(scenario, boot) {
     /counts on them are this table’s/.test(note), note);
   c.ok('and that they move nothing but this table',
     /move nothing but this table/.test(note), note);
+  c.ok('the note says what FLEX is, in English rather than as a token',
+    /FLEX here is the same filter as on the wire above/.test(note) &&
+    /every running back, receiver and tight end the league is holding/.test(note), note);
+  c.ok('and that FLEX leaves the rank beside a name alone',
+    /leaves the rank beside a name completely alone/.test(note) &&
+    /there is no such thing as a FLEX2/.test(note), note);
   c.ok('the note says the span is shared, and why',
     /the same one as at the top of the page/.test(note) &&
     /priced\s+over the same weeks/.test(note.replace(/\s+/g, ' ')), note);
@@ -613,10 +658,34 @@ async function check(scenario, boot) {
     .map((b) => [b.getAttribute('data-pos'), (b.querySelector('.seg-count') || {}).textContent]);
   const byPos = {};
   for (const r of rows) byPos[bareOf(r.pos)] = (byPos[bareOf(r.pos)] || 0) + 1;
+  // FLEX is not a position, so its count is the three flex-eligible ones added
+  // together — re-derived here from the rendered Pos column rather than from the
+  // page's own arithmetic, which is the only version of this check worth having.
+  const wantFlex = ['RB', 'WR', 'TE'].reduce((n, p) => n + (byPos[p] || 0), 0);
   c.ok('and the counts match the rows this table actually holds',
     takenCounts.every(([pos, n]) =>
-      pos === 'ALL' ? Number(n) === rows.length : Number(n) === (byPos[pos] || 0)),
+      pos === 'ALL' ? Number(n) === rows.length
+        : pos === 'FLEX' ? Number(n) === wantFlex
+          : Number(n) === (byPos[pos] || 0)),
     JSON.stringify(takenCounts) + ' vs ' + JSON.stringify(byPos));
+  c.ok('THE FLEX COUNT IS RB + WR + TE IN THIS TABLE’S OWN POOL',
+    Number((takenCounts.find(([p]) => p === 'FLEX') || [])[1]) === wantFlex,
+    `${JSON.stringify(takenCounts.find(([p]) => p === 'FLEX'))} vs ${wantFlex} from ${JSON.stringify(byPos)}`);
+  c.ok('and that is neither nobody nor everybody, so the check is not vacuous',
+    wantFlex > 0 && wantFlex < rows.length, `${wantFlex} of ${rows.length}`);
+
+  // ---- the FLEX button itself, on BOTH controls -----------------------------
+  for (const id of ['posFilter', 'takenPosFilter']) {
+    const btns = [...d.querySelectorAll(`#${id} button[data-pos]`)]
+      .map((b) => b.getAttribute('data-pos'));
+    c.ok(`#${id} carries a FLEX button`, btns.includes('FLEX'), btns.join(','));
+    c.ok(`and it sits where a flex sits in a lineup — after TE, before K (#${id})`,
+      btns.indexOf('FLEX') === btns.indexOf('TE') + 1 &&
+      btns.indexOf('K') === btns.indexOf('FLEX') + 1, btns.join(','));
+  }
+  c.ok('FLEX is not smuggled into the Pos column as a position',
+    rows.every((r) => bareOf(r.pos) !== 'FLEX'),
+    rows.filter((r) => /FLEX/.test(r.pos)).map((r) => `${r.name} ${r.pos}`).join(','));
 
   // ---- the stat strip -------------------------------------------------------
   const stats = [...$('takenStats').querySelectorAll('.stat')].map((s) => txt(s));
@@ -757,6 +826,101 @@ async function check(scenario, boot) {
       `${JSON.stringify(w.rosterAfterWiden)} -> ${JSON.stringify(w.rosterAfterFilter)}`);
     c.ok('clearing the filter brings every man back',
       rows.length === season.ALL.length, `${rows.length}`);
+
+    // ---- FLEX ---------------------------------------------------------------
+    //
+    // A filter across RB, WR and TE. Everything below is checked against the
+    // UNFILTERED table as rendered a moment earlier, so the page is being
+    // measured against its own output rather than against the stub's numbers.
+    const flexOf = (list) => list.filter((r) => ['RB', 'WR', 'TE'].includes(bareOf(r.pos)));
+    const wantTakenFlex = flexOf(rows);
+
+    c.ok('FLEX on the taken table shows exactly the RB, WR and TE rows',
+      (w.takenFlex || []).length === wantTakenFlex.length &&
+      JSON.stringify((w.takenFlex || []).map((r) => r.player).sort()) ===
+        JSON.stringify(wantTakenFlex.map((r) => r.player).sort()),
+      `${(w.takenFlex || []).length} shown, ${wantTakenFlex.length} eligible`);
+    c.ok('and nothing else — no quarterback, kicker or defense survives it',
+      (w.takenFlex || []).every((r) => ['RB', 'WR', 'TE'].includes(bareOf(r.pos))),
+      [...new Set((w.takenFlex || []).map((r) => bareOf(r.pos)))].join(','));
+    c.ok('it really did narrow the table, so that is not a vacuous check',
+      (w.takenFlex || []).length > 0 && (w.takenFlex || []).length < rows.length,
+      `${(w.takenFlex || []).length} of ${rows.length}`);
+    c.ok('and it is wider than any one position, which is the point of it',
+      new Set((w.takenFlex || []).map((r) => bareOf(r.pos))).size === 3,
+      [...new Set((w.takenFlex || []).map((r) => bareOf(r.pos)))].join(','));
+    c.ok('nobody is shown twice for being eligible three ways',
+      new Set((w.takenFlex || []).map((r) => r.player)).size === (w.takenFlex || []).length,
+      `${(w.takenFlex || []).length} rows`);
+
+    // THE ASSERTION THIS WHOLE BLOCK EXISTS FOR. A rank is a fact about a man's
+    // depth at HIS OWN position; a filter is a fact about what you are looking
+    // at. If FLEX ever leaks into the first, every rank in the table becomes a
+    // different and wrong number, and it would look perfectly plausible.
+    const before = new Map(rows.map((r) => [r.player, r]));
+    const movedRank = (w.takenFlex || []).filter((r) => {
+      const was = before.get(r.player);
+      return !was || was.pos !== r.pos || was.posKey !== r.posKey;
+    });
+    c.ok('EVERY RANK STILL READS BY HIS REAL POSITION UNDER FLEX',
+      movedRank.length === 0,
+      movedRank.slice(0, 4).map((r) =>
+        `${r.name} ${r.pos}/${r.posKey} was ${(before.get(r.player) || {}).pos}`).join(' | '));
+    c.ok('and no row reads FLEX in the Pos column',
+      (w.takenFlex || []).every((r) => !/FLEX/i.test(r.pos)),
+      (w.takenFlex || []).map((r) => r.pos).join(','));
+    const flexByName = new Map((w.takenFlex || []).map((r) => [r.name, r]));
+    c.ok('the man whose bye made him a WR2 is still a WR2, not a FLEX-anything',
+      flexByName.get('Ivor Jessop') && flexByName.get('Ivor Jessop').pos === 'WR2',
+      flexByName.get('Ivor Jessop') && flexByName.get('Ivor Jessop').pos);
+    c.ok('the only rated tight end on that squad is still the TE1',
+      flexByName.get('Merrick Nolan') && flexByName.get('Merrick Nolan').pos === 'TE1',
+      flexByName.get('Merrick Nolan') && flexByName.get('Merrick Nolan').pos);
+    c.ok('and the unrankable tight end still shows the bare position and keys 499',
+      flexByName.get('Kip Lund') && flexByName.get('Kip Lund').pos === 'TE' &&
+      flexByName.get('Kip Lund').posKey === '499',
+      flexByName.get('Kip Lund') && `${flexByName.get('Kip Lund').pos}/${flexByName.get('Kip Lund').posKey}`);
+
+    c.ok('the count on the FLEX button is what it shows',
+      Number(w.takenFlexCount) === wantTakenFlex.length,
+      `${w.takenFlexCount} vs ${wantTakenFlex.length}`);
+    c.ok('the stat strip names the three positions rather than quoting the button',
+      /^Taken RB\/WR\/TE$/.test((w.takenFlexLabel || '').trim()), w.takenFlexLabel);
+    c.ok('and there is no empty state, because FLEX matched people',
+      w.takenFlexEmpty === 0, String(w.takenFlexEmpty));
+
+    // Independence, which is new for FLEX and is exactly the kind of thing that
+    // regresses quietly: each table answers its own button, and holding one on
+    // FLEX while the other is pressed must change nothing on the first.
+    c.ok('FLEX ON THE TAKEN TABLE LEAVES THE WIRE ALONE',
+      (w.wireDuringTakenFlex || []).length === (w.wireBefore || []).length &&
+      (w.wireDuringTakenFlex || []).some((r) => !['RB', 'WR', 'TE'].includes(r.pos)),
+      `${(w.wireDuringTakenFlex || []).length} of ${(w.wireBefore || []).length} wire rows`);
+    c.ok('FLEX on the wire shows exactly its own RB, WR and TE',
+      (w.wireFlex || []).length === flexOf(w.wireBefore || []).length &&
+      (w.wireFlex || []).every((r) => ['RB', 'WR', 'TE'].includes(r.pos)),
+      `${(w.wireFlex || []).length} of ${(w.wireBefore || []).length}`);
+    c.ok('with its own count, which is the wire’s pool and not the taken one',
+      Number(w.wireFlexCount) === flexOf(w.wireBefore || []).length &&
+      Number(w.wireFlexCount) !== wantTakenFlex.length,
+      `${w.wireFlexCount} vs wire ${flexOf(w.wireBefore || []).length} / taken ${wantTakenFlex.length}`);
+    c.ok('and its own strip label',
+      /^Available RB\/WR\/TE$/.test((w.wireFlexLabel || '').trim()), w.wireFlexLabel);
+    c.ok('AND FLEX ON THE WIRE LEAVES THE TAKEN TABLE WHERE IT WAS',
+      JSON.stringify((w.takenDuringWireFlex || []).map((r) => r.player)) ===
+        JSON.stringify((w.takenFlex || []).map((r) => r.player)),
+      `${(w.takenDuringWireFlex || []).length} vs ${(w.takenFlex || []).length}`);
+    c.ok('and clearing the taken filter does not clear the wire’s',
+      (w.wireStillFlex || []).length === (w.wireFlex || []).length,
+      `${(w.wireStillFlex || []).length} vs ${(w.wireFlex || []).length}`);
+    c.ok('clearing both brings every wire row back',
+      (w.wireAfterFlex || []).length === (w.wireBefore || []).length,
+      `${(w.wireAfterFlex || []).length} of ${(w.wireBefore || []).length}`);
+    c.ok('SELECTING FLEX COSTS NO REQUEST — it is a repaint, on either table',
+      JSON.stringify(w.wireFetchesAfterFlex) === JSON.stringify(w.wireFetchesBeforeFlex) &&
+      JSON.stringify(w.rosterAfterFilter) === JSON.stringify(w.rosterBeforeFlex),
+      `wire ${JSON.stringify(w.wireFetchesBeforeFlex)} -> ${JSON.stringify(w.wireFetchesAfterFlex)}, ` +
+      `rosters ${JSON.stringify(w.rosterBeforeFlex)} -> ${JSON.stringify(w.rosterAfterFilter)}`);
   }
 
   // ---- (b) the real demo squads --------------------------------------------

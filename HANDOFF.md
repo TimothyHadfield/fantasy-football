@@ -106,7 +106,7 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — 14 suites, around 1,600 assertions. They are in the
+`cd tests && npm install && npm test` — 14 suites, around 2,000 assertions. They are in the
 repo now; earlier sessions kept them in a temp directory and lost them each
 time. **Run them before and after any change**, and see `tests/README.md` for
 the two linkedom gotchas that otherwise waste an hour.

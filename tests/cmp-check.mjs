@@ -67,8 +67,20 @@ const SCENARIOS = {
         })),
       });
 
+      const takenCount = (pos) =>
+        document.querySelector(`#takenPosFilter button[data-pos="${pos}"] .seg-count`)
+          .textContent.trim();
+      const takenPos = () =>
+        [...document.querySelectorAll('#takenTable tbody tr')]
+          .filter((tr) => !/\bempty-row\b/.test(tr.getAttribute('class') || ''))
+          .map((tr) => tr.children[1].textContent.trim().replace(/\d+$/, ''));
+
       const out = {
-        counts: { ALL: count('ALL'), QB: count('QB'), WR: count('WR'), DST: count('DST') },
+        counts: {
+          ALL: count('ALL'), QB: count('QB'), RB: count('RB'), WR: count('WR'),
+          TE: count('TE'), FLEX: count('FLEX'), DST: count('DST'),
+        },
+        takenFlexCount: takenCount('FLEX'),
         fetchesBefore: {
           roster: season.calls.rosterWeeks.slice(), wire: espn.calls.weeks.slice(),
         },
@@ -79,6 +91,28 @@ const SCENARIOS = {
       out.dst = snap();
       click('#posFilter button[data-pos="ALL"]');
       out.all = snap();
+
+      // FLEX. The comparison rows follow the wire's filter, so this is where a
+      // "Your FLEX3" row would appear if the filter ever leaked into a label.
+      click('#posFilter button[data-pos="FLEX"]');
+      out.flex = snap();
+      out.flexLabel = (document.querySelector('#waiverStats .stat .k') || {}).textContent || '';
+      click('#posFilter button[data-pos="ALL"]');
+
+      // The taken table in THIS league holds no defense at all — every squad but
+      // yours is a quarterback and a running back — so it is the one place in
+      // the suites where a filter can empty a table that has rows in it, which
+      // is the only way to read the empty state's prose as rendered.
+      click('#takenPosFilter button[data-pos="DST"]');
+      const emptyRow = document.querySelector('#takenTable tbody tr.empty-row');
+      out.takenDstEmpty = emptyRow ? emptyRow.textContent.replace(/\s+/g, ' ').trim() : '';
+      click('#takenPosFilter button[data-pos="FLEX"]');
+      out.takenFlexPos = takenPos();
+      out.takenFlexEmpty = document.querySelectorAll('#takenTable tbody tr.empty-row').length;
+      out.takenAll = (() => {
+        click('#takenPosFilter button[data-pos="ALL"]');
+        return takenPos();
+      })();
       out.fetchesAfter = {
         roster: season.calls.rosterWeeks.slice(), wire: espn.calls.weeks.slice(),
       };
@@ -428,6 +462,56 @@ async function check(scenario, boot) {
     c.ok('clearing the filter brings everything back',
       w.all.rows.length === 65 && w.all.rows.filter((r) => r.mine).length === 5,
       `${w.all.rows.length}`);
+
+    // ---- FLEX, and the labels it must not touch -----------------------------
+    //
+    // A comparison row's label is his real position and your depth there. FLEX
+    // spans three of them, so a label that followed the filter would read "Your
+    // FLEX11" and quietly claim you hold eleven flex men — which is not a thing.
+    const wantWireFlex = w.all.rows.filter((r) => !r.mine && ['RB', 'WR', 'TE'].includes(r.pos));
+    const flexMine = w.flex.rows.filter((r) => r.mine);
+    c.ok('FLEX keeps every available running back, receiver and tight end',
+      w.flex.rows.filter((r) => !r.mine).length === wantWireFlex.length,
+      `${w.flex.rows.filter((r) => !r.mine).length} of ${wantWireFlex.length}`);
+    c.ok('and nothing else',
+      w.flex.rows.every((r) => ['RB', 'WR', 'TE'].includes(r.pos)),
+      [...new Set(w.flex.rows.map((r) => r.pos))].join(','));
+    c.ok('YOUR OWN ROWS COME WITH THEM, STILL LABELLED BY THEIR REAL POSITION',
+      flexMine.length === 3 &&
+      JSON.stringify(flexMine.map((r) => r.name.split(' ').slice(0, 1)[0]).sort()) ===
+        JSON.stringify(['Your', 'Your', 'Your']) &&
+      ['Your RB4', 'Your WR5', 'Your TE2'].every((label) =>
+        flexMine.some((r) => r.name.startsWith(label))),
+      JSON.stringify(flexMine.map((r) => r.name)));
+    c.ok('and not one of them is relabelled for the filter',
+      flexMine.every((r) => !/FLEX/i.test(r.name)), JSON.stringify(flexMine.map((r) => r.name)));
+    c.ok('the FLEX count is RB + WR + TE, and available players only',
+      Number(w.counts.FLEX) ===
+        Number(w.counts.RB) + Number(w.counts.WR) + Number(w.counts.TE) &&
+      Number(w.counts.FLEX) === wantWireFlex.length,
+      `${w.counts.FLEX} vs ${w.counts.RB}+${w.counts.WR}+${w.counts.TE}, ` +
+      `${wantWireFlex.length} rows`);
+    c.ok('the strip label reads as the three positions, not as the button',
+      /^Available RB\/WR\/TE$/.test((w.flexLabel || '').trim()), w.flexLabel);
+
+    // ---- the empty state, in prose ------------------------------------------
+    c.ok('an emptied table names the position as English, not as a token',
+      /^Nobody in this league is holding a defense right now\./.test(w.takenDstEmpty || ''),
+      w.takenDstEmpty);
+    c.ok('and says how to get back out of it',
+      /Switch the filter back to All/.test(w.takenDstEmpty || ''), w.takenDstEmpty);
+    c.ok('while FLEX on the same table is not empty, because it spans three positions',
+      w.takenFlexEmpty === 0 && (w.takenFlexPos || []).length > 0,
+      `${w.takenFlexEmpty} empty rows, ${(w.takenFlexPos || []).length} rows`);
+    c.ok('and holds exactly the flex-eligible men the league is holding',
+      (w.takenFlexPos || []).every((p) => ['RB', 'WR', 'TE'].includes(p)) &&
+      (w.takenFlexPos || []).length ===
+        (w.takenAll || []).filter((p) => ['RB', 'WR', 'TE'].includes(p)).length,
+      `${JSON.stringify([...new Set(w.takenFlexPos || [])])} — ${(w.takenFlexPos || []).length} of ` +
+      `${(w.takenAll || []).length}`);
+    c.ok('which the count on its own button agrees with',
+      Number(w.takenFlexCount) === (w.takenFlexPos || []).length,
+      `${w.takenFlexCount} vs ${(w.takenFlexPos || []).length}`);
 
     c.ok('switching the position filter refetches no wire week',
       JSON.stringify(w.fetchesBefore.wire) === JSON.stringify(w.fetchesAfter.wire),

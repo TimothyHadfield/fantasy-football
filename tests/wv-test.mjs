@@ -53,6 +53,20 @@ const SCENARIOS = {
       click(document.querySelector('#posFilter button[data-pos="ALL"]'));
       out.backToAll = snap();
 
+      // --- FLEX: three positions at once, still costing nothing -------------
+      // The counts and the label are read while it is pressed, because both are
+      // claims about the set on screen and neither survives being read after.
+      click(document.querySelector('#posFilter button[data-pos="FLEX"]'));
+      out.flex = snap();
+      out.flexCount =
+        document.querySelector('#posFilter button[data-pos="FLEX"] .seg-count').textContent.trim();
+      out.flexLabel =
+        (document.querySelector('#waiverStats .stat .k') || {}).textContent || '';
+      out.flexEmpty = document.querySelectorAll('#waiverTable tbody tr.empty-row').length;
+      out.flexPrefs = globalThis.localStorage.getItem('ff.prefs');
+      out.fetchesAfterFlex = espn.calls.weeks.slice();
+      click(document.querySelector('#posFilter button[data-pos="ALL"]'));
+
       // --- sorting a week column -------------------------------------------
       const ths = [...table.querySelectorAll('thead th')];
       click(ths[5]);                       // week 5
@@ -79,6 +93,33 @@ const SCENARIOS = {
       out.prefs = globalThis.localStorage.getItem('ff.prefs');
 
       globalThis.__wv = out;
+    },
+  },
+  // Both position filters are remembered per table, so both can be handed back
+  // a value the page has to make sense of on the very first paint — before a
+  // button has been pressed and with nothing on screen to correct it.
+  'flex-saved': {
+    label: '(b*) a remembered FLEX comes back, and a remembered nonsense does not stick',
+    stub: true,
+    prefs: {
+      'waivers.source': 'live',
+      'waivers.position': 'FLEX',
+      // Not a filter this page has ever offered. A value like this can only come
+      // from an older build or a hand-edited store, and it must not be able to
+      // leave a table showing nobody with no button lit to press your way out.
+      'waivers.takenPosition': 'FLEX3',
+    },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      globalThis.__wv = {
+        on: [...document.querySelectorAll('#posFilter button.on')]
+          .map((b) => b.getAttribute('data-pos')),
+        takenOn: [...document.querySelectorAll('#takenPosFilter button.on')]
+          .map((b) => b.getAttribute('data-pos')),
+        pos: [...document.querySelectorAll('#waiverTable tbody tr')]
+          .map((tr) => tr.children[1].textContent.trim()),
+        empty: document.querySelectorAll('#waiverTable tbody tr.empty-row').length,
+      };
     },
   },
   'live-midload': {
@@ -338,6 +379,33 @@ async function check(scenario, boot) {
     c.ok('the position buttons carry counts',
       [...d.querySelectorAll('#posFilter .seg-count')].every((s) => /^\d+$/.test(txt(s))),
       [...d.querySelectorAll('#posFilter .seg-count')].map((s) => txt(s)).join(','));
+
+    // ---- the FLEX button, on BOTH controls ---------------------------------
+    // It is a filter across RB, WR and TE, not a seventh position, so it is
+    // checked for where a flex sits in a lineup — after TE and before K.
+    for (const id of ['posFilter', 'takenPosFilter']) {
+      const btns = [...d.querySelectorAll(`#${id} button[data-pos]`)]
+        .map((b) => b.getAttribute('data-pos'));
+      c.ok(`#${id} carries a FLEX button`, btns.includes('FLEX'), btns.join(','));
+      c.ok(`and it sits after TE and before K on #${id}`,
+        btns.indexOf('FLEX') === btns.indexOf('TE') + 1 &&
+        btns.indexOf('K') === btns.indexOf('FLEX') + 1, btns.join(','));
+      c.ok(`and it has a count slot of its own on #${id}`,
+        Boolean(d.querySelector(`#${id} button[data-pos="FLEX"] .seg-count`)), id);
+    }
+    // Re-derived from the rendered Pos column. The comparison rows are excluded
+    // because they are your own men and are never counted on these buttons.
+    const availableRows = rows.filter((r) => !/\bmine\b/.test(r.cls));
+    const flexRows = availableRows.filter((r) => ['RB', 'WR', 'TE'].includes(r.cells[1].text));
+    c.ok('the FLEX count is RB + WR + TE among the available players',
+      Number(txt(d.querySelector('#posFilter button[data-pos="FLEX"] .seg-count'))) === flexRows.length,
+      `${txt(d.querySelector('#posFilter button[data-pos="FLEX"] .seg-count'))} vs ${flexRows.length}`);
+    c.ok('and it is the sum of the three buttons beside it',
+      ['RB', 'WR', 'TE'].reduce((n, p) =>
+        n + Number(txt(d.querySelector(`#posFilter button[data-pos="${p}"] .seg-count`))), 0) ===
+        flexRows.length,
+      ['RB', 'WR', 'TE'].map((p) =>
+        `${p}=${txt(d.querySelector(`#posFilter button[data-pos="${p}"] .seg-count`))}`).join(','));
     c.ok('demo shows byes', rows.some((r) => r.cells.some((td) => /\bbye\b/.test(td.cls))),
       'no bye cell');
     c.ok('demo shows a blank week too',
@@ -450,6 +518,33 @@ async function check(scenario, boot) {
     c.ok('clearing the filter brings every row back',
       w.backToAll && w.backToAll.rows.length === 60, `${w.backToAll && w.backToAll.rows.length}`);
 
+    // ---- FLEX, re-derived from the unfiltered rows the page itself drew -----
+    // The Pos cell's sort key is the football order, so RB/WR/TE are 2, 3 and 4.
+    const FLEXKEYS = ['2', '3', '4'];
+    const wantFlex = (w.backToAll ? w.backToAll.rows : []).filter((r) => FLEXKEYS.includes(r[1]));
+    c.ok('FLEX shows exactly the running backs, receivers and tight ends',
+      w.flex && w.flex.rows.length === wantFlex.length &&
+      w.flex.rows.every((r) => FLEXKEYS.includes(r[1])),
+      `${w.flex && w.flex.rows.length} shown, ${wantFlex.length} eligible: ` +
+      JSON.stringify([...new Set((w.flex ? w.flex.rows : []).map((r) => r[1]))]));
+    c.ok('and all three of them, not one position dressed up as three',
+      w.flex && new Set(w.flex.rows.map((r) => r[1])).size === 3,
+      JSON.stringify([...new Set((w.flex ? w.flex.rows : []).map((r) => r[1]))]));
+    c.ok('it is narrower than All and wider than WR, so the check is not vacuous',
+      w.flex && w.flex.rows.length < 60 && w.flex.rows.length > (w.wr ? w.wr.rows.length : 0),
+      `${w.flex && w.flex.rows.length} vs 60 and ${w.wr && w.wr.rows.length}`);
+    c.ok('THE COUNT ON THE FLEX BUTTON IS RB + WR + TE IN THIS TABLE’S POOL',
+      Number(w.flexCount) === wantFlex.length, `${w.flexCount} vs ${wantFlex.length}`);
+    c.ok('the strip names the three positions rather than quoting the button',
+      /^Available RB\/WR\/TE$/.test((w.flexLabel || '').trim()), w.flexLabel);
+    c.ok('there is no empty state, because FLEX matched people',
+      w.flexEmpty === 0, String(w.flexEmpty));
+    c.ok('SELECTING FLEX FETCHES NOTHING — it is a repaint',
+      JSON.stringify(w.fetchesAfterFlex) === JSON.stringify(w.fetchesBefore),
+      `${JSON.stringify(w.fetchesBefore)} -> ${JSON.stringify(w.fetchesAfterFlex)}`);
+    c.ok('and the choice is remembered like any other',
+      /"waivers.position":"FLEX"/.test(w.flexPrefs || ''), w.flexPrefs);
+
     const col = (snap, i) => snap.rows.map((r) => (r[i] === null || r[i] === '—' ? null : Number(r[i])));
     const d5 = ordered(col(w.wk5desc, 5), false);
     const a5 = ordered(col(w.wk5asc, 5), true);
@@ -486,6 +581,22 @@ async function check(scenario, boot) {
       /"waivers.position":"ALL"/.test(w.prefs || '') && /"waivers.span":"3"/.test(w.prefs || ''), w.prefs);
     c.ok('the whole interaction cost nine requests',
       espn.calls.weeks.length === 6, JSON.stringify(espn.calls.weeks));
+  }
+
+  // ---- (b*) the remembered filters ----------------------------------------
+  if (scenario === 'flex-saved') {
+    const w = globalThis.__wv || {};
+    c.ok('a saved FLEX comes back as FLEX, with that button lit and no other',
+      JSON.stringify(w.on) === JSON.stringify(['FLEX']), JSON.stringify(w.on));
+    c.ok('and the table opens on the three positions it means',
+      (w.pos || []).length > 0 && (w.pos || []).every((p) => ['RB', 'WR', 'TE'].includes(p)),
+      JSON.stringify([...new Set(w.pos || [])]));
+    c.ok('which is fewer rows than All, so it really was applied',
+      (w.pos || []).length < 60, `${(w.pos || []).length}`);
+    c.ok('A SAVED VALUE THAT IS NO LONGER A FILTER FALLS BACK TO ALL',
+      JSON.stringify(w.takenOn) === JSON.stringify(['ALL']), JSON.stringify(w.takenOn));
+    c.ok('and nothing is wedged on an empty table',
+      w.empty === 0, String(w.empty));
   }
 
   // ---- (b++) widening mid-load --------------------------------------------
