@@ -542,6 +542,20 @@ async function check(scenario, boot) {
       'no zero cell at all');
     c.ok('the demo note says what a zero means here',
       /in the sample data a zero only means he is ruled out/.test(note), note);
+
+    // The grids follow the same rule, and demo is the mode Tim sees first.
+    const gridCells = (id) =>
+      [...d.querySelectorAll(`#${id}Table tbody td`)].map((td) => td.textContent.trim());
+    c.ok('neither grid claims a bye in demo, where a zero means something else',
+      !gridCells('overview').includes('Bye') && !gridCells('weekly').includes('Bye'),
+      'a Bye cell in a demo grid');
+    c.ok('a demo zero in the week grid is printed as the number it is',
+      gridCells('weekly').some((t) => t === '0.0' || /^0\.0 [A-Z]/.test(t)),
+      'no zero cell in the demo week grid at all');
+    c.ok('both grids are headed for what they actually are',
+      txt($('overviewTitle')).startsWith('All teams · proj avg') &&
+      /^All teams · week \d+$/.test(txt($('weeklyTitle'))),
+      `${txt($('overviewTitle'))} / ${txt($('weeklyTitle'))}`);
   }
 
   // ---- (b) live, every week resolves --------------------------------------
