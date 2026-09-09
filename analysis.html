@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Analysis &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="css/app.css">
 <style>
   /* Team names need more room than the 140px .form-select used for the week. */
@@ -42,15 +43,69 @@
     color: var(--warn);
   }
   .inj.out { background: #33151a; border-color: #5b2129; color: var(--err); }
+  .inj.ir  { background: #4a1119; border-color: #7c2531; color: #ff9ba4; }
+
+  /* ---------------------------------------------------------- all-teams grid */
+
+  /* Ten rows by seven positions is the whole point of this page, so the grid
+     cells are tuned for scanning: name left, average right, nothing wrapping. */
+  #overviewTable td.slot-cell { padding-right: 12px; }
+  .slot-cell .pa { color: var(--dim); font-size: 12px; margin-left: 7px; }
+  .slot-cell.is-flex .pn { font-weight: 700; }
+  #rosterTable td.name.is-flex { font-weight: 750; }
+
+  /* His sheet's colour key: red = out this week, dark red = on IR. Two tiers,
+     tinting the whole cell or row rather than a pill, so a hole in a lineup is
+     visible from across the table instead of needing to be read.
+
+     Written long-hand because row hover, the picked row and the sticky team
+     column all paint their own backgrounds; an injury has to beat all three. */
+  #overviewTable tbody tr td.st-out,
+  #overviewTable tbody tr:hover td.st-out { background: #3a171c; }
+  #overviewTable tbody tr td.st-ir,
+  #overviewTable tbody tr:hover td.st-ir { background: #56141e; }
+
+  #rosterTable tbody tr.st-out td, #rosterTable tbody tr.st-out td.name { background: #3a171c; }
+  #rosterTable tbody tr.st-ir td,  #rosterTable tbody tr.st-ir td.name  { background: #56141e; }
+  #rosterTable tbody tr.st-out:hover td,
+  #rosterTable tbody tr.st-out:hover td.name { background: #4a1d23; }
+  #rosterTable tbody tr.st-ir:hover td,
+  #rosterTable tbody tr.st-ir:hover td.name { background: #661a25; }
+
+  /* "Currently drilled into" — deliberately NOT .me, which means "your team"
+     in green everywhere else on the site and would claim a demo team is yours. */
+  #overviewTable tbody tr[data-team] { cursor: pointer; }
+  #overviewTable tbody tr.picked td { background: var(--panel-2); }
+  #overviewTable tbody tr.picked td.name {
+    background: var(--panel-2);
+    box-shadow: inset 3px 0 0 var(--good);
+  }
+
+  /* % own only exists when ESPN's roster view happens to carry ownership; the
+     column hides itself rather than showing ten rows of em dashes. Hidden, not
+     removed, so the sort machinery's column indexes stay put. */
+  #rosterTable.no-own .own { display: none; }
+
+  /* Inline colour key in the panel note. */
+  .key {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .key.out { background: #3a171c; }
+  .key.ir { background: #56141e; }
 </style>
 </head>
 <body>
 
 <header class="site">
-  <div class="wrap">
+  <div class="wrap wide">
     <span class="brand">Fantasy Football</span>
     <nav>
-      <a href="index.html">Connection</a>
+      <a href="index.html">Home</a>
       <a href="stats.html">Stats</a>
       <a href="analysis.html" class="active">Analysis</a>
       <a href="schedule.html">Schedule</a>
@@ -61,13 +116,13 @@
 
 
 
-<div class="wrap">
+<div class="wrap wide">
 
   <div id="connBar"></div>
 
 
   <h1>Roster Analysis <span id="modeBadge" class="badge demo">Demo</span></h1>
-  <p class="sub" id="pageSub">Every manager&rsquo;s team for a single week &mdash; who started, who sat, and what each of them was projected to do.</p>
+  <p class="sub" id="pageSub">Every manager&rsquo;s starting lineup on one screen &mdash; who they have at each position, and what that lineup is worth in a typical week.</p>
 
   <section class="panel">
     <h2>Data source</h2>
@@ -85,28 +140,42 @@
   </section>
 
   <section class="panel">
-    <h2 id="overviewTitle">League overview</h2>
+    <h2 id="overviewTitle">All teams</h2>
     <div class="table-scroll" id="overviewWrap"><table id="overviewTable">
       <thead><tr>
         <th class="name" data-sort>Team</th>
-        <th data-sort>Projected</th>
-        <th data-sort>Actual</th>
-        <th data-sort>Diff</th>
-        <th data-sort>Bench</th>
-        <th data-sort>Season proj</th>
+        <th class="left" data-sort>QB</th>
+        <th class="left" data-sort>RB1</th>
+        <th class="left" data-sort>RB2</th>
+        <th class="left" data-sort>WR1</th>
+        <th class="left" data-sort>WR2</th>
+        <th class="left" data-sort>TE</th>
+        <th class="left" data-sort>FLEX</th>
+        <th data-sort>Baseline week</th>
+        <th data-sort>Est Total</th>
+        <th data-sort>Wk proj</th>
+        <th data-sort>Wk actual</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
     <div class="empty hidden" id="overviewEmpty">No roster data for this week.</div>
     <p class="panel-note">
-      <strong>Diff</strong> = actual &minus; projected for the starting lineup.
-      <strong>Bench</strong> is what the players left on the bench actually scored.
-      Click any header to sort.
+      Each starter is shown with his <strong>season average</strong> &mdash; ESPN&rsquo;s full-season projection
+      divided by 17 games &mdash; so these are typical weeks, not this week&rsquo;s forecast.
+      <strong>FLEX</strong> is the best remaining RB, WR or TE by that average; never a QB.
+      <strong>Baseline week</strong> is those seven added up: what the lineup scores if everyone hits his average.
+      <strong>Est Total</strong> = Baseline week + 16, a flat allowance for the D/ST and kicker at about 8 each.
+      They are left out of the grid because they are consistent and get streamed constantly.
+      The last two columns are this week specifically: the whole nine-man lineup&rsquo;s projection and what it
+      has actually scored so far, D/ST and kicker included.
+      <br>
+      <strong>Bold</strong> = the flex player. <span class="key out">Out</span> this week.
+      <span class="key ir">IR</span>. Click a row to load that team below; click any header to sort.
     </p>
   </section>
 
   <section class="panel">
-    <h2>Roster detail</h2>
+    <h2 id="rosterTitle">Roster detail</h2>
     <div class="row mb-12">
       <div class="select-md">
         <label for="teamSelect">Team</label>
@@ -116,16 +185,17 @@
     <div class="stat-row" id="teamGlance"></div>
     <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
       <thead><tr>
-        <th data-sort>Slot</th>
+        <th class="left" data-sort>Slot</th>
         <th class="name" data-sort>Player</th>
-        <th data-sort>Pos</th>
-        <th data-sort>NFL</th>
+        <th class="left" data-sort>Pos</th>
+        <th class="left" data-sort>NFL</th>
         <th data-sort>Projected</th>
         <th data-sort>Actual</th>
         <th data-sort>Diff</th>
-        <th data-sort>Season proj</th>
-        <th data-sort>% own</th>
-        <th data-sort>Status</th>
+        <th data-sort>Avg/wk</th>
+        <th data-sort>Season total</th>
+        <th class="own" data-sort>% own</th>
+        <th class="left" data-sort>Status</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
