@@ -136,7 +136,15 @@ Confirmed against the live 2026 ESPN API on 2026-09-07:
   `Origin` header and sets `Access-Control-Allow-Credentials: true`, verified
   for both `http://localhost` and `https://timothyhadfield.github.io`. So the
   browser can call ESPN directly — no backend or proxy needed.
-- **Private leagues work via your existing login.** Because credentials are
+- ~~**Private leagues work via your existing login.**~~ **WRONG — corrected
+  2026-09-08.** This was inferred from ESPN sending
+  `Access-Control-Allow-Credentials: true`, which only means ESPN is *willing*
+  to accept cookies. It does not mean the browser will *send* them: from a
+  github.io page these are third-party cookies, which Safari and Firefox block
+  outright. And a page cannot set the `Cookie` header itself, so there is no
+  workaround in pure client-side JS. Read a private league from a static site
+  and you get 401 no matter who is logged in. See open action 3 for the fix.
+  The original claim, left for context: because credentials are
   allowed, `credentials: 'include'` sends your espn.com session cookies
   automatically. You do not paste cookies anywhere.
 - **Real data confirmed available**, e.g. Jahmyr Gibbs: ADP 1.32, auction value
