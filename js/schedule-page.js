@@ -12,6 +12,7 @@ import { fetchSchedule, fetchWeeksRosters } from './season.js';
 import { generateDemoLeague } from './demo.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
+import { projectionsFromWeekTeams } from './projection.js';
 import { histogram } from './charts.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -348,12 +349,16 @@ function setStatus(msg, isError = false) {
 
 // ------------------------------------------------------------------ projection
 //
-// A projected score for every team in every week, built from ONE roster fetch.
+// A projected score for every team in every week, built from ONE roster fetch
+// per week.
 //
-// The owner's rule: assume each manager starts whoever has the highest
-// projection. So each player is carried at his expected points for the week,
-// anyone on a bye that week is removed, anyone ruled out is removed, and
-// forecast.js fills the best legal lineup out of what is left.
+// The arithmetic itself now lives in js/projection.js — best legal lineup
+// rather than the one currently set, starting slots counted off the lineups,
+// byes already carried at 0.00 — because the stats page needs the same answer
+// and a second copy is how the two pages would start quietly disagreeing about
+// how good a team is. What is decided HERE is what this page does with it:
+// which weeks to ask for, whether the answer covers enough of the league to be
+// worth printing, and the sentence that explains it to the reader.
 //
 // Each week's projection is ESPN's OWN per-week number for that week, fetched
 // per week. ESPN publishes one for every player in every future week — a
@@ -361,76 +366,38 @@ function setStatus(msg, isError = false) {
 //
 // This is deliberately the same number the ESPN site shows when you page a
 // lineup forward to a week and read the "proj" total under the starters, which
-// is what makes it checkable by hand. The one thing done on top is filling the
-// best legal lineup rather than the one currently set, so a bench player
-// projected above a starter is counted as started.
-//
-// A player on bye that week comes back projected 0.00, so byes need no lookup
-// and no filtering: they are already in the number. Injury status is left alone
-// for the same reason — ESPN's own projection carries availability, and second
-// guessing it would move our totals away from the ones being checked against.
+// is what makes it checkable by hand. Injury status is left alone for the same
+// reason — ESPN's own projection carries availability, and second guessing it
+// would move our totals away from the ones being checked against.
 //
 // The cost is one request per remaining week. There is no bulk form; that was
 // checked rather than assumed.
 
 /**
- * The league's starting slots, counted off the lineups ESPN just sent us.
+ * Turn per-week rosters into everything this page needs from a projection.
  *
- * `parseLeague().starterSlots` is the canonical answer, but reading it means a
- * fourth request for something the roster payload already implies: ESPN will
- * not accept an illegal lineup, so the set of non-bench slots a team is using
- * IS the slot configuration. Taking the maximum across teams covers a manager
- * sitting on an empty slot. Guessing a two-receiver league when it has three
- * would understate every team by a starter, so this falls back to
- * DEFAULT_SLOTS only when the lineups say nothing at all — and says so.
- */
-function slotCountsFromLineups(teams) {
-  const counts = {};
-  for (const t of teams || []) {
-    const mine = {};
-    for (const p of t.players || []) {
-      if (!p.started) continue;
-      if (!espn.SLOT_ELIGIBILITY[p.lineupSlotId]) continue;  // a slot we cannot fill
-      mine[p.lineupSlotId] = (mine[p.lineupSlotId] || 0) + 1;
-    }
-    for (const [id, n] of Object.entries(mine)) counts[id] = Math.max(counts[id] || 0, n);
-  }
-  return Object.keys(counts).length ? counts : null;
-}
-
-/**
- * Turn per-week rosters into a projected score for every team in every week.
+ * projection.js works out the points; the rest is what only a page can judge —
+ * a comparable strength per team, a refusal to hand back a projection with a
+ * hole in it, and a note saying where the numbers came from.
+ *
+ * That note has to state how the starting slots were decided, because they can
+ * be either read or guessed: projection.js counts them off the lineups ESPN
+ * already sent (a fourth request for `parseLeague().starterSlots` buys nothing
+ * an illegal lineup could not already rule out), and only falls back to
+ * DEFAULT_SLOTS when the lineups say nothing at all. Guessing a two-receiver
+ * league when it has three understates every team by a whole starter, so that
+ * fallback is admitted in the note rather than passed off as read.
  *
  * @param {Map<number, Array>} weekTeams week -> teams, from fetchWeeksRosters
  * @returns {Object|null} null when the projection cannot cover the league
  */
 function buildProjection(weekTeams) {
-  const anyWeek = [...weekTeams.values()][0];
-  const counts = slotCountsFromLineups(anyWeek);
-  const slots = counts ? forecast.slotsFromCounts(counts) : forecast.DEFAULT_SLOTS.slice();
-
-  const proj = new Map();
-  for (const [w, teams] of weekTeams) {
-    const forWeek = new Map();
-    for (const t of teams) {
-      const pool = [];
-      for (const p of t.players || []) {
-        // Every player on the roster, bench included, at ESPN's number for
-        // this week. A player on bye is in here at 0.00 and simply loses his
-        // slot to someone better, which is the same thing a manager does.
-        if (typeof p.projected === 'number') {
-          pool.push({ position: p.position, projected: p.projected });
-        }
-      }
-      const total = forecast.optimalLineup(pool, slots).total;
-      if (total > 0) forWeek.set(t.id, total);
-    }
-    if (forWeek.size) proj.set(w, forWeek);
-  }
+  const built = projectionsFromWeekTeams(weekTeams);
+  if (!built) return null;
+  const { proj, slots, countsKnown } = built;
 
   // A projection that only covers some of the league would rank a run-in
   // against a hole. Better to hand back nothing and let the fallbacks speak.
-  if (!proj.size) return null;
   const covered = proj.get([...proj.keys()][0]);
   if (!covered || covered.size < state.data.teams.length) return null;
 
@@ -454,11 +421,11 @@ function buildProjection(weekTeams) {
   if (strength.size < state.data.teams.length) return null;
 
   const starters = slots.length;
-  const slotSource = counts
+  const slotSource = countsKnown
     ? `${plural(starters, 'starter')} read from the current lineups`
     : `${plural(starters, 'starter')} assumed — this league’s own lineup settings could not be read`;
 
-  const got = [...proj.keys()].sort((a, b) => a - b);
+  const got = built.weeks;
   const reach =
     got.length > 1 ? `weeks ${got[0]} to ${got[got.length - 1]}` : `week ${got[0]}`;
 
