@@ -90,6 +90,29 @@ percentages on every upcoming game. Read this before touching any of it:
   built in the same pass. A remembered pick is dropped when the data source
   changes, because demo team ids count from 1 and ESPN uses its own.
 
+**Free agents / the waiver wire (`espn.fetchFreeAgents`, `waivers.html`).**
+Two traps, both established by probing a real league on 2026-09-09, both
+silent — no error, just missing data:
+1. The week comes from `scoringPeriodId`, and it works **only when no
+   `filterStatsForTopScoringPeriodIds` is sent**. Send both — which is what
+   `fetchPlayers` does for the season totals it wants — and the weekly stat line
+   vanishes entirely.
+2. **There is no bulk form.** Thirteen weekly stat-set ids in `additionalValue`
+   returns only the current week. A season of weeks is a request per week, the
+   same as rosters. Four shapes of that request were tried; do not retry them.
+
+A player on bye comes back projected **0.00**; `null` means ESPN had no number
+at all. Those are different facts and the page draws and sorts them
+differently — a blank sorting as zero would put every unknown at the bottom of
+the wire and look deliberate.
+
+**Schedule luck (`opponentProjections`, panel + column on `stats.html`).**
+The average projected score of the opponents a team has to play. It needs no
+games played, which is the point of it. Adding it forced the stats page's
+"no completed matchups" early return to become a render path — see the
+early-season honesty note above; every result-derived cell dashes at zero games
+rather than reporting a confident 0.0.
+
 **Season simulation (`simulateSeason` in `js/forecast.js`, panel at the foot of
 `schedule.html`).** A single team's win total has an exact answer and gets one;
 a final PLACING does not, because it turns on the joint outcome of every game
@@ -552,6 +575,9 @@ Pages (all default to demo data; real data arrives via the bridge):
 - `stats.html` — season stats, the rebuild of Tim's sheet
 - `analysis.html` — all ten teams' lineups at once, plus a per-team drill-down
 - `schedule.html` — standings, matchups, results, fixture / head-to-head grid
+- `waivers.html` — "Add players": everyone not on a roster, in a table whose
+  columns are week numbers and whose cells are ESPN's projection for that
+  player in that week. Position filter, every column sortable.
 - `draft.html` — draft assistant + practice mode (parked)
 - `debug.html` — the raw ESPN data probes. Not in the nav; linked from the
   bottom of the home page. Its connect form deliberately does not persist,
@@ -566,6 +592,10 @@ Modules:
   colour across every chart.
 - `js/prefs.js` — one localStorage key behind `get`/`set`/`scope`. Persists
   data source, week, selected team and sort so they survive a reload.
+- `js/projection.js` — rosters → what every team is projected to score in every
+  week, plus the schedule-derived averages built on that. **Shared by the
+  schedule page and the stats page; do not grow a second copy.** Pure.
+- `js/waivers-page.js` — the Add players page.
 - `js/forecast.js` — win probabilities, optimal lineups and season win-total
   distributions. Pure: no DOM, no fetching, so it is node-testable. The
   distribution is an exact Poisson-binomial convolution, not a simulation.
