@@ -11,6 +11,8 @@
 import { fetchSchedule, fetchWeekRosters } from './season.js';
 import { generateDemoLeague } from './demo.js';
 import * as espn from './espn.js';
+import * as forecast from './forecast.js';
+import { histogram } from './charts.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
@@ -29,6 +31,7 @@ const state = {
   strength: null,           // Map teamId -> comparable strength, any scale
   strengthNote: '',         // how that strength was derived; shown, never implied
   strengthToken: 0,         // guards against a slow fetch landing after a reload
+  projection: null,         // per-week optimal-lineup points; see buildProjection
 };
 
 // ------------------------------------------------------------------ formatting
@@ -54,6 +57,21 @@ const recordText = (r) => (r.t ? `${r.w}${EN}${r.l}${EN}${r.t}` : `${r.w}${EN}${
 
 /** Margin with its sign kept: which way it went is the whole point. */
 const signed = (n) => (n > 0 ? `+${fmt(n)}` : fmt(n));
+
+/**
+ * A probability as a whole percent.
+ *
+ * One decimal place on a forecast this soft is false precision — a 50% game is
+ * a coin flip, not 50.3% — but rounding alone would print a live game as a
+ * certainty, so the two ends are named rather than rounded away.
+ */
+function pctText(p) {
+  if (!Number.isFinite(p)) return '—';
+  const v = Math.min(100, Math.max(0, p * 100));
+  if (v > 0 && v < 0.5) return '&lt;1%';
+  if (v < 100 && v >= 99.5) return '&gt;99%';
+  return `${Math.round(v)}%`;
+}
 
 /** First word of a team name, trimmed, for the head-to-head column headers. */
 function shortName(name) {
@@ -270,6 +288,7 @@ function adopt(data) {
   state.filterTeam = '';
   state.strength = null;
   state.strengthNote = '';
+  state.projection = null;
   render();
   refreshStrength();
 }
@@ -297,6 +316,153 @@ function setStatus(msg, isError = false) {
   const el = $('sourceStatus');
   el.innerHTML = msg;
   el.style.color = isError ? 'var(--err)' : 'var(--dim)';
+}
+
+// ------------------------------------------------------------------ projection
+//
+// A projected score for every team in every week, built from ONE roster fetch.
+//
+// The owner's rule: assume each manager starts whoever has the highest
+// projection. So each player is carried at his expected points for the week,
+// anyone on a bye that week is removed, anyone ruled out is removed, and
+// forecast.js fills the best legal lineup out of what is left.
+//
+// The per-player weekly number is ESPN's SEASON projection divided by 17. That
+// is the only forward-looking per-week figure ESPN reliably has: a weekly
+// projection for week 13 asked for in week 2 is usually simply absent, and
+// asking for one week at a time would be a request per week regardless. Total
+// cost here is two requests on top of the schedule — the rosters and the byes.
+
+/** ESPN's season projection is a 17-game regular-season total. */
+const SEASON_GAMES = 17;
+
+/**
+ * Players who will not take the field, so the lineup must be filled without
+ * them. QUESTIONABLE deliberately stays in: the rule is "plays their players
+ * with the highest projection", and a questionable player usually plays.
+ */
+const RULED_OUT = new Set(['OUT', 'INJURY_RESERVE']);
+
+/** What one player is worth in one week, and nothing if we cannot say. */
+function weeklyExpectation(p) {
+  if (typeof p.seasonProjected === 'number' && p.seasonProjected > 0) {
+    return p.seasonProjected / SEASON_GAMES;
+  }
+  if (typeof p.projected === 'number' && p.projected > 0) return p.projected;
+  return null;
+}
+
+// Bye weeks are a season-level fact, so one request answers the whole page.
+// A failure is cached too: retrying it on every re-render would turn one
+// missing request into dozens.
+let byeCache = { season: null, map: null };
+
+async function byeWeeks() {
+  const season = espn.getConfig().season;
+  if (byeCache.map && byeCache.season === season) return byeCache.map;
+  let map = {};
+  try {
+    map = (await espn.fetchByeWeeks()) || {};
+  } catch {
+    map = {}; // no byes known; every player is assumed to play every week
+  }
+  byeCache = { season, map };
+  return map;
+}
+
+/**
+ * The league's starting slots, counted off the lineups ESPN just sent us.
+ *
+ * `parseLeague().starterSlots` is the canonical answer, but reading it means a
+ * fourth request for something the roster payload already implies: ESPN will
+ * not accept an illegal lineup, so the set of non-bench slots a team is using
+ * IS the slot configuration. Taking the maximum across teams covers a manager
+ * sitting on an empty slot. Guessing a two-receiver league when it has three
+ * would understate every team by a starter, so this falls back to
+ * DEFAULT_SLOTS only when the lineups say nothing at all — and says so.
+ */
+function slotCountsFromLineups(teams) {
+  const counts = {};
+  for (const t of teams || []) {
+    const mine = {};
+    for (const p of t.players || []) {
+      if (!p.started) continue;
+      if (!espn.SLOT_ELIGIBILITY[p.lineupSlotId]) continue;  // a slot we cannot fill
+      mine[p.lineupSlotId] = (mine[p.lineupSlotId] || 0) + 1;
+    }
+    for (const [id, n] of Object.entries(mine)) counts[id] = Math.max(counts[id] || 0, n);
+  }
+  return Object.keys(counts).length ? counts : null;
+}
+
+/**
+ * Turn one week's rosters into a projected score for every team in every week.
+ *
+ * @param {Array} teams as returned by fetchWeekRosters
+ * @returns {Promise<Object|null>} null when the snapshot cannot cover the league
+ */
+async function buildProjection(teams) {
+  const counts = slotCountsFromLineups(teams);
+  const slots = counts ? forecast.slotsFromCounts(counts) : forecast.DEFAULT_SLOTS.slice();
+  const byes = await byeWeeks();
+  const knownByes = Object.keys(byes).length > 0;
+
+  const proj = new Map();
+  for (const w of state.data.weeks) {
+    const forWeek = new Map();
+    for (const t of teams) {
+      const pool = [];
+      for (const p of t.players || []) {
+        if (RULED_OUT.has(p.injuryStatus)) continue;
+        if (p.proTeamId != null && byes[p.proTeamId] === w) continue;
+        const v = weeklyExpectation(p);
+        if (v !== null) pool.push({ position: p.position, projected: v });
+      }
+      const total = forecast.optimalLineup(pool, slots).total;
+      if (total > 0) forWeek.set(t.id, total);
+    }
+    proj.set(w, forWeek);
+  }
+
+  // A projection that only covers some of the league would rank a run-in
+  // against a hole. Better to hand back nothing and let the fallbacks speak.
+  const covered = proj.get(state.data.weeks[0]);
+  if (!covered || covered.size < state.data.teams.length) return null;
+
+  // The comparable number per team: how many points they average over the
+  // weeks still to play. Per WEEK, unlike the season-total basis below it,
+  // which is what makes it safe to print on a card as a score.
+  const ahead = state.data.weeks.filter((w) =>
+    (state.data.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
+  );
+  const over = ahead.length ? ahead : state.data.weeks;
+  const strength = new Map();
+  for (const t of state.data.teams) {
+    let total = 0;
+    let n = 0;
+    for (const w of over) {
+      const v = proj.get(w)?.get(t.id);
+      if (typeof v === 'number') { total += v; n++; }
+    }
+    if (n) strength.set(t.id, total / n);
+  }
+  if (strength.size < state.data.teams.length) return null;
+
+  const starters = slots.length;
+  const slotSource = counts
+    ? `${plural(starters, 'starter')} read from the current lineups`
+    : `${plural(starters, 'starter')} assumed — this league’s own lineup settings could not be read`;
+
+  return {
+    proj,
+    slots,
+    strength,
+    knownByes,
+    note:
+      `Strength is the best lineup ESPN’s projections allow each team each week ` +
+      `(${slotSource}), counting every player at his season projection ÷ ${SEASON_GAMES}` +
+      `${knownByes ? ', with bye weeks and ruled-out players taken out' : ' — bye weeks could not be read, so nobody is sat down for one'}.`,
+  };
 }
 
 // -------------------------------------------------------------------- strength
@@ -354,19 +520,37 @@ async function refreshStrength() {
   const token = ++state.strengthToken;
   const stale = () => token !== state.strengthToken;
 
-  const fromProjections = strengthFromGameProjections();
-  if (fromProjections) {
-    apply(fromProjections, 'Strength is each team’s average projected points.');
-    return;
-  }
-
+  // Four bases, best first. There is exactly one state.strengthNote, and every
+  // branch sets it, because a second unexplained notion of "how good is this
+  // team" is how two panels end up disagreeing with each other in silence.
+  //
+  // 1. The per-week optimal lineup. Forward-looking, aware of byes, and stated
+  //    per WEEK, which is what lets the same number be printed on a card as a
+  //    projected score. It needs the roster fetch, which the demo has no
+  //    endpoint for — and does not need, because its games carry projections.
   if (!state.data.isDemo) {
-    // One request: this week's rosters carry ESPN's season projection for
-    // whoever is currently starting, which is the cheapest forward-looking
-    // signal available.
+    let teams = null;
     try {
-      const { teams } = await fetchWeekRosters(currentWeek());
+      ({ teams } = await fetchWeekRosters(currentWeek()));
+    } catch {
+      teams = null;   // ESPN said no; the bases below need no network at all
+    }
+    if (stale()) return;
+
+    if (teams && teams.length) {
+      const built = await buildProjection(teams);
       if (stale()) return;
+      if (built) {
+        state.projection = built;
+        apply(built.strength, built.note);
+        return;
+      }
+
+      // 1b. ESPN's season projection for the current starters, from the payload
+      //    we already have — so this costs no extra request. A season TOTAL
+      //    rather than a per-week number, so it
+      //    can rank a run-in but must never be shown as a score — see the note
+      //    in cardContext().
       const m = new Map(
         teams
           .filter((t) => typeof t.seasonProjectedTotal === 'number' && t.seasonProjectedTotal > 0)
@@ -376,13 +560,19 @@ async function refreshStrength() {
         apply(m, 'Strength is ESPN’s season projection for each team’s current starters.');
         return;
       }
-    } catch {
-      // ESPN said no; fall through to what we can compute from the scores.
     }
+  }
+
+  // 2. Projections already attached to the games themselves. Also per week.
+  const fromProjections = strengthFromGameProjections();
+  if (fromProjections) {
+    apply(fromProjections, 'Strength is each team’s average projected points.');
+    return;
   }
 
   if (stale()) return;
 
+  // 4. What actually happened.
   const fromScoring = strengthFromScoring();
   if (!fromScoring) {
     apply(null, 'No projections available and not every team has played, so the run-in is not ranked yet.');
@@ -399,6 +589,8 @@ async function refreshStrength() {
     state.strengthNote = note;
     renderStandings();
     renderMatchups();   // an unplayed card falls back to the strength ranking
+    renderResults();    // the win-% column arrives with the projection
+    renderForecast();   // and so does the whole season forecast
   }
 }
 
@@ -455,6 +647,7 @@ function render() {
   renderMatchups();
   renderResults();
   renderH2H();
+  renderForecast();
 }
 
 function syncSource() {
@@ -491,8 +684,16 @@ function renderWeekPicker() {
 
   const where =
     state.week === 'all' ? 'All weeks' : `Week ${state.week} of ${weeks[weeks.length - 1]}`;
-  $('weekNote').textContent =
-    `${where} · sets the summary, matchups and results below. Standings and the grid stay season-to-date.`;
+
+  // The forecast panel is season-wide on live data but week-driven in the demo,
+  // whose season is already complete — so the contract has to be stated for the
+  // data actually on screen rather than asserted once and hoped for.
+  const reach = state.data.isDemo
+    ? 'sets the summary, matchups and results below, and the week the forecast is made from. ' +
+      'Standings and the grid stay season-to-date.'
+    : 'sets the summary, matchups and results below. ' +
+      'Standings, the grid and the season forecast stay season-to-date.';
+  $('weekNote').textContent = `${where} · ${reach}`;
 }
 
 function renderTeamPicker() {
@@ -658,8 +859,9 @@ function cardContext() {
     }
     records.set(t.id, rec);
   }
-  // Season strength can be a season-long total (live), which would be nonsense
-  // printed as a score, so the fallback for a card is always points per game.
+  // Season strength can be a season-long total (basis 1b in refreshStrength),
+  // which would be nonsense printed as a score, so the fallback for a card is
+  // always points per game.
   const ppg = strengthFromScoring();
 
   // Before anyone has scored there is no per-week number to show at all. The
@@ -671,7 +873,7 @@ function cardContext() {
     ranks = new Map(order.map(([id], i) => [id, i + 1]));
   }
 
-  return { records, ppg, ranks };
+  return { records, ppg, ranks, sigma: scoringSpread().sigma };
 }
 
 /** 1st, 2nd, 3rd… */
@@ -681,14 +883,46 @@ function ordinal(n) {
   return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
 }
 
+/**
+ * Projected points for one side of one game — the single number the cards, the
+ * results table and the season forecast all read, so they cannot disagree.
+ *
+ * A projection carried on the game itself wins (the demo season has real ones);
+ * otherwise it is the optimal lineup that team could field that week.
+ */
+function projectedPoints(g, side) {
+  const own = side === 'home' ? g.homeProjected : g.awayProjected;
+  if (typeof own === 'number' && own > 0) return own;
+
+  const id = side === 'home' ? g.homeId : g.awayId;
+  const v = state.projection?.proj.get(g.week)?.get(id);
+  return typeof v === 'number' && v > 0 ? v : null;
+}
+
 /** A per-week points number for one side, and where it came from. */
 function expectedFor(g, side, ctx) {
-  const proj = side === 'home' ? g.homeProjected : g.awayProjected;
-  if (typeof proj === 'number' && proj > 0) return { v: proj, basis: 'Projected' };
+  const proj = projectedPoints(g, side);
+  if (proj !== null) return { v: proj, basis: 'Projected' };
 
   const id = side === 'home' ? g.homeId : g.awayId;
   const p = ctx.ppg?.get(id);
   return typeof p === 'number' ? { v: p, basis: 'Points so far' } : null;
+}
+
+/**
+ * The chance the home team wins, or null when the two projections needed to
+ * say anything do not exist.
+ *
+ * This is DERIVED. ESPN publishes projections, never a win probability, so the
+ * number below is ours: the gap between two projected totals read against how
+ * far this league's scores have historically landed from their projections.
+ * Every panel that shows one carries a sentence saying exactly that.
+ */
+function homeWinChance(g, sigma) {
+  const h = projectedPoints(g, 'home');
+  const a = projectedPoints(g, 'away');
+  if (h === null || a === null) return null;
+  return forecast.winProbability(h, a, sigma);
 }
 
 function renderMatchups() {
@@ -721,13 +955,20 @@ function renderMatchups() {
   if (upcoming.length) {
     if (upcoming.some((g) => typeof g.homeProjected === 'number')) {
       basis = 'The number against an unplayed game is that team’s projection.';
+    } else if (state.projection) {
+      basis =
+        'The number against an unplayed game is the most points that team’s current ' +
+        'roster could be projected to score in that week.';
     } else if (ctx.ppg) {
       basis = 'With no projections available, an unplayed game shows each team’s points per game so far.';
     } else if (ctx.ranks) {
       basis = 'Nobody has scored yet, so unplayed games are compared by strength ranking.';
     }
   }
-  $('matchupsNote').textContent = `Records are season-to-date. ${basis}`.trim();
+  const chance = upcoming.some((g) => homeWinChance(g, ctx.sigma) !== null)
+    ? ` ${derivedCaveat()}`
+    : '';
+  $('matchupsNote').textContent = `Records are season-to-date. ${basis}${chance}`.trim();
 }
 
 function gameCard(g, ctx) {
@@ -762,6 +1003,7 @@ function gameCard(g, ctx) {
 
   let meta = '';
   let metaClass = 'gmeta';
+  let metaTitle = '';
   if (bye) {
     meta = 'Bye week';
   } else if (st === 'live') {
@@ -780,10 +1022,26 @@ function gameCard(g, ctx) {
     const ar = ctx.ranks?.get(g.awayId);
     if (h && a) {
       const diff = h.v - a.v;
-      meta =
-        Math.abs(diff) < 0.5
+      const level = Math.abs(diff) < 0.5;
+      // The margin and the percentage are the same statement twice — the
+      // percentage IS that margin read against the scoring spread — so they can
+      // never point opposite ways. The basis moves into the tooltip to keep the
+      // cell short; the panel note carries it for everyone else.
+      const p = homeWinChance(g, ctx.sigma);
+      if (p === null) {
+        meta = level
           ? `${h.basis} · level`
           : `${h.basis} · ${esc(diff > 0 ? g.homeName : g.awayName)} by ${fmt(Math.abs(diff))}`;
+        metaTitle = `${h.basis} points.`;
+      } else {
+        meta = level
+          ? `Level · ${pctText(0.5)}`
+          : `${esc(diff > 0 ? g.homeName : g.awayName)} by ${fmt(Math.abs(diff))} · ` +
+            `${pctText(Math.max(p, 1 - p))}`;
+        metaTitle =
+          `${h.basis} points. The percentage is the favourite’s chance of winning, ` +
+          `derived here from that gap — ESPN publishes projections, not odds.`;
+      }
     } else if (hr && ar) {
       // Week 1, nobody has scored: a ranking is the only honest comparison left.
       meta = `Strength ${ordinal(hr)} v ${ordinal(ar)}`;
@@ -799,7 +1057,7 @@ function gameCard(g, ctx) {
       ${bye ? '<div class="tscore away">—</div>' : scoreCell('away', g.awayScore)}
       ${bye ? '<div class="side away"><span class="tname muted">Bye</span></div>'
             : side('away', g.awayName, g.awayId)}
-      <div class="${metaClass}">${meta}</div>
+      <div class="${metaClass}"${metaTitle ? ` title="${esc(metaTitle)}"` : ''}>${meta}</div>
     </div>`;
 }
 
@@ -830,6 +1088,8 @@ function renderResults() {
     upcoming: scoped.filter((g) => gameState(g) === 'upcoming').length,
   };
 
+  const sigma = scoringSpread().sigma;
+
   if (!rows.length) {
     const where = state.week === 'all' ? 'this league' : `week ${state.week}`;
     const hint =
@@ -838,9 +1098,9 @@ function renderResults() {
         : state.resultsView === 'upcoming'
           ? `Every game in ${where} has been played.`
           : `No games match that filter.`;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${hint}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${hint}</td></tr>`;
   } else {
-    tbody.innerHTML = rows.map(resultRow).join('');
+    tbody.innerHTML = rows.map((g) => resultRow(g, sigma)).join('');
   }
 
   // Keep whatever sort the user picked when the row set changes.
@@ -851,9 +1111,16 @@ function renderResults() {
   if (counts.live) parts.push(`${counts.live} in progress`);
   if (counts.upcoming) parts.push(`${counts.upcoming} upcoming`);
 
+  const anyChance = rows.some(
+    (g) => gameState(g) === 'upcoming' && homeWinChance(g, sigma) !== null
+  );
+
   $('resultsNote').textContent =
     `${VIEW_LABEL[state.resultsView]} — ${rows.length} of ${scoped.length} in scope: ` +
-    `${parts.join(', ') || 'nothing scheduled'}. Click any header to sort.`;
+    `${parts.join(', ') || 'nothing scheduled'}. Click any header to sort.` +
+    (anyChance
+      ? ` “Home win” is only filled in for games still to be played. ${derivedCaveat()}`
+      : '');
 }
 
 const STATE_CELL = {
@@ -862,7 +1129,7 @@ const STATE_CELL = {
   upcoming: '<td class="left muted" data-v="0">Upcoming</td>',
 };
 
-function resultRow(g) {
+function resultRow(g, sigma) {
   const st = gameState(g);
   const winner = winnerOf(g);
 
@@ -882,6 +1149,16 @@ function resultRow(g) {
   const m = st === 'final' ? marginOf(g) : null;
   const marginCell = m === null ? `<td>${dash}</td>` : `<td data-v="${m}">${signed(m)}</td>`;
 
+  // Only an undecided game has a chance attached to it; a played one has a
+  // result, and printing a forecast beside it would invite reading the forecast
+  // as a verdict on the result. `data-v` is omitted (never blanked) so the
+  // unknowns sink whichever way the column is sorted.
+  const p = st === 'upcoming' ? homeWinChance(g, sigma) : null;
+  const chanceCell =
+    p === null
+      ? `<td>${dash}</td>`
+      : `<td data-v="${p}" class="${p >= 0.6 ? 'pos' : p <= 0.4 ? 'neg' : 'muted'}">${pctText(p)}</td>`;
+
   return `<tr>
       <td data-v="${g.week}">${g.week}</td>
       ${nameCell('home', g.homeName, 'name')}
@@ -889,6 +1166,7 @@ function resultRow(g) {
       ${nameCell('away', g.awayName, 'left')}
       <td>${score(g.awayScore)}</td>
       ${marginCell}
+      ${chanceCell}
       ${STATE_CELL[st]}
     </tr>`;
 }
@@ -1075,6 +1353,306 @@ function scheduleGrid(teams, cols) {
   };
 }
 
+// -------------------------------------------------------------------- forecast
+//
+// Four questions in one panel: what is my next matchup, what are the ones after
+// it, what are my chances in each, and how many games am I likely to win.
+//
+// THE WIN CHANCE IS NOT ESPN'S. ESPN publishes projections; it publishes no win
+// probability through any endpoint a page like this can read. Every percentage
+// on this page is derived by forecast.js from two projected totals and the
+// spread this league's scores have shown around their projections, and every
+// panel that prints one carries derivedCaveat() saying exactly that.
+
+/**
+ * The week the forecast is made from: the first one still open.
+ *
+ * The demo season is 100% played, so on live data this is simply the next
+ * unplayed week, and in the demo it is whichever week the picker is on. That
+ * makes the demo a backtest — the identical code path, run against real
+ * projections, with the real results sitting underneath it.
+ */
+function forecastAsOf() {
+  const d = state.data;
+  if (!d || !d.weeks.length) return 0;
+  if (d.isDemo) return state.week === 'all' ? d.weeks[0] : Number(state.week);
+  const open = d.weeks.filter((w) =>
+    (d.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
+  );
+  return open.length ? open[0] : d.weeks[d.weeks.length - 1] + 1;
+}
+
+/** Is this game still ahead of the point the forecast is made from? */
+function isRemaining(g, asOf) {
+  return state.data.isDemo ? g.week >= asOf : gameState(g) !== 'final';
+}
+
+/**
+ * The per-team scoring spread, and whether it was measured or assumed.
+ *
+ * Only banked games feed it: a forecast may not learn from the results it is
+ * being asked to forecast. On live data early in the season there is usually
+ * nothing to learn from at all — ESPN's matchup payload carries no projections
+ * — so this falls back to forecast.js's default, and says which it did.
+ */
+function scoringSpread() {
+  const asOf = forecastAsOf();
+  const games = (state.data?.games || [])
+    .filter((g) => gameState(g) === 'final' && !isRemaining(g, asOf))
+    .map((g) => ({
+      homeActual: g.homeScore,
+      homeProjected: g.homeProjected,
+      awayActual: g.awayScore,
+      awayProjected: g.awayProjected,
+    }));
+  return forecast.calibrateSigma(games);
+}
+
+/** The sentence that stops a derived number being read as ESPN's own. */
+function derivedCaveat() {
+  const { sigma, calibrated, sample } = scoringSpread();
+  const basis = calibrated
+    ? `, measured from ${plural(sample, 'completed team-week')} in this league.`
+    : ` — assumed, because ${
+        sample
+          ? `only ${plural(sample, 'completed team-week')} carries`
+          : 'no completed game here carries'
+      } a projection to measure it from.`;
+  return (
+    'Win chances are worked out here, not published by ESPN: ESPN gives projections, ' +
+    `never odds. Each one is the projected gap read against a ${fmt(sigma)}-point ` +
+    `per-team scoring spread${basis}`
+  );
+}
+
+/** Where the projected team totals came from, and what they cannot know. */
+function projectionCaveat(lastWeek) {
+  if (!state.projection) {
+    return state.data.isDemo
+      ? 'Team totals are the projections ESPN carried for those games at the time.'
+      : '';
+  }
+  const byes = state.projection.knownByes
+    ? 'anyone on a bye that week or ruled out taken off'
+    : 'anyone ruled out taken off (ESPN’s bye-week list could not be read, so nobody is sat down for one)';
+  return (
+    'Team totals are the best lineup each roster could field that week on ESPN’s own ' +
+    `projections — every player at his season projection ÷ ${SEASON_GAMES}, ${byes}, then the ` +
+    'highest-scoring legal lineup filled. That is a snapshot of the rosters as they stand ' +
+    `today: the week ${lastWeek} line is the squad owned now, not the one that will be owned then.`
+  );
+}
+
+/** The team the forecast is about, or null when nobody has said who that is. */
+function forecastTeam() {
+  const d = state.data;
+  if (!d) return null;
+  const mine = d.teams.find((t) => t.id === state.myTeamId);
+  if (mine) return mine;
+  // The demo league has no owner, so the panel would sit empty forever on the
+  // page's default view. Forecasting its first team shows the real thing; the
+  // note says whose season it is.
+  return d.isDemo ? d.teams[0] || null : null;
+}
+
+/** One team's games, split into what is banked and what is still ahead. */
+function forecastGames(teamId, asOf) {
+  const remaining = [];
+  const banked = { w: 0, l: 0, t: 0 };
+
+  for (const g of state.data.games) {
+    if (g.homeId == null || g.awayId == null) continue;      // bye: no opponent
+    const mineHome = g.homeId === teamId;
+    if (!mineHome && g.awayId !== teamId) continue;
+
+    if (isRemaining(g, asOf)) {
+      remaining.push({
+        g,
+        mineHome,
+        oppName: mineHome ? g.awayName : g.homeName,
+        mine: projectedPoints(g, mineHome ? 'home' : 'away'),
+        theirs: projectedPoints(g, mineHome ? 'away' : 'home'),
+      });
+      continue;
+    }
+
+    const winner = winnerOf(g);
+    if (winner === null) continue;                            // in progress
+    if (winner === 'tie') banked.t++;
+    else if ((winner === 'home') === mineHome) banked.w++;
+    else banked.l++;
+  }
+
+  remaining.sort((a, b) => a.g.week - b.g.week);
+  return { remaining, banked };
+}
+
+function renderForecast() {
+  const d = state.data;
+  if (!d) return;
+
+  const table = $('forecastTable');
+  const tbody = table.querySelector('tbody');
+  const stats = $('forecastStats');
+  const chart = $('forecastChart');
+  const team = forecastTeam();
+
+  $('forecastTitle').textContent = team ? `My season — ${team.name}` : 'My season';
+
+  const blank = (reason, note) => {
+    stats.innerHTML = '';
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${reason}</td></tr>`;
+    chart.innerHTML = '';
+    $('forecastNote').innerHTML = note;
+    resort(table);
+  };
+
+  if (!team) {
+    blank(
+      'No team is set as yours, so there is no season to forecast.',
+      'Choose yourself in the “You are” menu in the connection bar at the top of this ' +
+      'page. This panel then lists every matchup you have left, a win chance for each, ' +
+      'and the spread of season win totals they add up to.'
+    );
+    return;
+  }
+
+  const asOf = forecastAsOf();
+  const { remaining, banked } = forecastGames(team.id, asOf);
+
+  if (!remaining.length) {
+    blank(
+      d.isDemo
+        ? `Week ${asOf} is the last week of the demo season, and it is already played, ` +
+          'so there is nothing left to forecast. Step the week picker back to forecast ' +
+          'from an earlier point in the season.'
+        : 'Every game on this schedule has been decided, so there is nothing left to forecast.',
+      `Final record ${recordText(banked)}.`
+    );
+    return;
+  }
+
+  const sigma = scoringSpread().sigma;
+
+  const rows = remaining.map((r) => ({
+    ...r,
+    p:
+      r.mine !== null && r.theirs !== null
+        ? forecast.winProbability(r.mine, r.theirs, sigma)
+        : null,
+  }));
+
+  const probs = rows.map((r) => r.p).filter((p) => Number.isFinite(p));
+  const missing = rows.length - probs.length;
+  const nextWeek = rows[0].g.week;
+  const lastWeek = rows[rows.length - 1].g.week;
+
+  // Banked wins alone are not a forecast. Printing them as "expected wins" with
+  // an 80% range of exactly themselves would report certainty about a season
+  // with games left in it.
+  if (!probs.length) {
+    // state.strengthNote is empty only while the roster read is still in
+    // flight, so this can tell "not yet" from "not going to happen" instead of
+    // reporting a failure that has not occurred.
+    const pending = !d.isDemo && !state.strengthNote;
+    blank(
+      pending
+        ? 'Working out what every roster is projected to score…'
+        : `${plural(rows.length, 'game')} left to play, but no projection to put against ` +
+          'any of them, so there is nothing to forecast from.',
+      pending
+        ? 'Reading this week’s rosters from ESPN.'
+        : `${recordText(banked)} so far. ` +
+          (d.isDemo
+            ? 'These games carry no projections, so there is nothing to forecast from.'
+            : 'ESPN’s matchup feed carries no projected scores, and this league’s rosters ' +
+              'could not be read, which is where the projections would otherwise come from. ' +
+              'Reload the page to try the roster read again.')
+    );
+    return;
+  }
+
+  // data-v is omitted, never blanked, so a missing projection sinks to the
+  // bottom whichever way the column is sorted.
+  const pts = (v) => (v === null ? `<td>${dash}</td>` : `<td data-v="${v}">${fmt(v)}</td>`);
+
+  tbody.innerHTML = rows
+    .map((r) => {
+      const w = r.g.week;
+      const gap = r.mine !== null && r.theirs !== null ? round1(r.mine - r.theirs) : null;
+      const chance =
+        r.p === null
+          ? `<td>${dash}</td>`
+          : `<td data-v="${r.p}" class="${r.p >= 0.6 ? 'pos' : r.p <= 0.4 ? 'neg' : 'muted'}" ` +
+            `title="A projected ${signed(gap)} against ${esc(r.oppName)}, read against a ` +
+            `${fmt(sigma)}-point scoring spread.">${pctText(r.p)}</td>`;
+
+      return `<tr${w === nextWeek ? ' class="now"' : ''}>
+          <td data-v="${w}">${w}</td>
+          <td class="name">${esc(r.oppName)}</td>
+          <td class="left muted" data-v="${r.mineHome ? 1 : 0}">${r.mineHome ? 'Home' : 'Away'}</td>
+          ${pts(r.mine)}
+          ${pts(r.theirs)}
+          ${chance}
+        </tr>`;
+    })
+    .join('');
+  resort(table);
+
+  const dist = forecast.winTotalDistribution(probs, banked.w);
+  const range = forecast.credibleRange(dist, 0.8);
+  const expected = forecast.expectedWins(probs, banked.w);
+
+  stats.innerHTML = [
+    ['Banked', recordText(banked)],
+    ['Games left', String(rows.length)],
+    ['Expected wins', fmt(expected)],
+    ['80% range', range ? (range.lo === range.hi ? `${range.lo}` : `${range.lo}${EN}${range.hi}`) : '—'],
+  ]
+    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+    .join('');
+
+  // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
+  // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
+  histogram(chart, {
+    bins: dist.map((x) => String(x.wins)),
+    counts: dist.map((x) => x.p * 100),
+    yLabel: 'Chance (%)',
+    height: 240,
+  });
+
+  const played = banked.w + banked.l + banked.t;
+  const timing = d.isDemo
+    ? `The demo season is already complete, so this is the forecast as it stood before ` +
+      `week ${asOf} was played — the same model, run where the results can be checked against it.`
+    : 'Weeks already decided are banked; everything still open is forecast.';
+
+  const shape = range
+    ? `Each bar is a final win total and its height is the chance of finishing on exactly ` +
+      `that many. ${range.lo === range.hi ? `${range.lo} wins alone holds` : `The ${range.lo}${EN}${range.hi} band holds`} ` +
+      `${pctText(range.p)} of it, which is how wide the honest answer is.`
+    : '';
+
+  const gaps = missing
+    ? `${plural(missing, 'game')} ${missing === 1 ? 'has' : 'have'} no projection on one ` +
+      'side, so they are listed but left out of the chart and the expected total.'
+    : '';
+
+  $('forecastNote').innerHTML = [
+    `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}, ` +
+      `${plural(rows.length, 'game')} from week ${nextWeek} to week ${lastWeek} still to play. ${timing}` +
+      (state.myTeamId === team.id
+        ? ''
+        : ' The demo league has no owner, so this is its first team.'),
+    shape,
+    derivedCaveat(),
+    projectionCaveat(lastWeek),
+    gaps,
+  ]
+    .filter(Boolean)
+    .join('<br>');
+}
+
 // ----------------------------------------------------------------- interaction
 
 $('sourceToggle').addEventListener('click', (e) => {
@@ -1137,6 +1715,8 @@ $('filterTeam').addEventListener('change', (e) => {
 enableSort($('resultsTable'), { defaultIndex: 0, defaultAsc: true });
 // Standings open on the standings order: most wins first.
 enableSort($('standingsTable'), { defaultIndex: 1 });
+// The forecast reads forwards in time, so it opens in week order.
+enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
 
 /**
  * Go live on our own when the connection bar finds a league, so the page shows
@@ -1145,9 +1725,14 @@ enableSort($('standingsTable'), { defaultIndex: 1 });
 onConnection((conn) => {
   if (!conn) return;
   if (state.source === 'live') {
-    // Already live: this is a team change, so only the highlight moves.
+    // Already live: this is a team change. The highlight moves — and so does
+    // the whole forecast, which is the one panel that is entirely about whose
+    // season it is.
     state.myTeamId = conn.teamId ?? null;
-    if (state.data) renderStandings();
+    if (state.data) {
+      renderStandings();
+      renderForecast();
+    }
     return;
   }
   if (prefs.get('source') === 'demo') return;

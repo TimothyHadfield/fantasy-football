@@ -118,6 +118,15 @@ td.state-live { color: var(--warn); }
 
 .seg-sm button { padding: 6px 12px; font-size: 13px; }
 .select-wide { width: 210px; }
+
+/* Forecast. Inside this panel every row is already your team, so the row
+   highlight is free to mean "the next one to be played" rather than "you" —
+   which is the row you look for first and the one the chart is anchored on. */
+#forecastTable tbody tr.now td { background: #14261a; }
+#forecastTable tbody tr.now td.name { background: #14261a; color: #7fd99b; }
+#forecastChart { margin-top: 16px; }
+/* Nothing to chart is a sentence, not a blank rectangle. */
+#forecastChart:empty { display: none; }
 </style>
 </head>
 <body>
@@ -210,6 +219,7 @@ td.state-live { color: var(--warn); }
         <th class="left" data-sort>Away</th>
         <th data-sort>Away pts</th>
         <th data-sort title="Home points minus away points.">Margin</th>
+        <th data-sort title="Our estimate of the home team's chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds. Blank once a game is decided.">Home win</th>
         <th class="left" data-sort>State</th>
       </tr></thead>
       <tbody></tbody>
@@ -227,6 +237,29 @@ td.state-live { color: var(--warn); }
     </div>
     <div class="table-scroll" id="h2hGrid"></div>
     <p class="panel-note" id="h2hNote"></p>
+  </section>
+
+  <!-- Season-wide, so it sits below the week-scoped panels rather than among
+       them; #weekNote states which way round it is for the data on screen.
+       (On live data the forecast simply runs from the next unplayed game. In
+       the demo, whose season is complete, the week picker chooses the point in
+       time the forecast is made from.) -->
+  <section class="panel">
+    <h2 id="forecastTitle">My season</h2>
+    <div class="stat-row" id="forecastStats"></div>
+    <div class="table-scroll"><table id="forecastTable">
+      <thead><tr>
+        <th data-sort>Wk</th>
+        <th class="name" data-sort>Opponent</th>
+        <th class="left" data-sort>Where</th>
+        <th data-sort title="Your projected points that week.">You</th>
+        <th data-sort title="Their projected points that week.">Them</th>
+        <th data-sort title="Our estimate of your chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds.">Win %</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="chart" id="forecastChart"></div>
+    <p class="panel-note" id="forecastNote"></p>
   </section>
 
 </div>
