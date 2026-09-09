@@ -132,10 +132,12 @@ const OPENS = 'open his next 13 weeks on the Players page';
  * `?player=undefined` is worse than no link at all, because it looks like it
  * would work.
  */
-function playerRef(p, inner, title) {
+function playerRef(p, inner, title, attr = 'title') {
   if (p.playerId === null || p.playerId === undefined) return inner;
+  // `attr` is 'aria-label' wherever a tip card of our own is doing the talking:
+  // a `title` there would have the browser draw a second tooltip on top of it.
   return (
-    `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" title="${esc(title)}">` +
+    `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" ${attr}="${esc(title)}">` +
     `${inner}</a>`
   );
 }
@@ -291,6 +293,41 @@ function benchEntries(team, measure = avgWeek) {
     .sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
 }
 
+/**
+ * Where each man ranks at his own position ON HIS OWN TEAM — RB4, WR5, TE2.
+ *
+ * Counted over the WHOLE squad, starters included, because that is what the
+ * number means to a manager: a bench running back sitting behind three better
+ * ones is his RB4 whether or not the other three are in the lineup this week.
+ *
+ * Ranked by the grid's own measure, so the number agrees with the column it is
+ * printed in — a man can be his team's RB2 for a typical week and their RB4 in
+ * a week two of them are on bye, and both are true.
+ *
+ * Only men with a number are ranked, which keeps the ranks 1..n contiguous: an
+ * RB3 really is the third-best of the backs this team has numbers for, rather
+ * than the third name in a list with holes in it. The playerId tiebreak stops
+ * two identical averages swapping places between repaints. Same rule as the
+ * Taken table's ranks on the Players page — deliberately, so the two agree.
+ */
+function positionRanks(team, measure = avgWeek) {
+  const byPosition = new Map();
+  for (const p of team.players || []) {
+    if (p.playerId === null || p.playerId === undefined) continue;
+    if (!byPosition.has(p.position)) byPosition.set(p.position, []);
+    byPosition.get(p.position).push({ p, v: measure(p) });
+  }
+
+  const ranks = new Map();
+  for (const group of byPosition.values()) {
+    group
+      .filter((e) => typeof e.v === 'number')
+      .sort((a, b) => b.v - a.v || a.p.playerId - b.p.playerId)
+      .forEach((e, i) => ranks.set(e.p.playerId, i + 1));
+  }
+  return ranks;
+}
+
 /** What the nine score between them. The real sum, not an estimate. */
 function totalOf(row) {
   const vals = GRID_SLOTS.map((s) => row[s.key] && row[s.key].v).filter((v) => typeof v === 'number');
@@ -310,53 +347,51 @@ function totalOf(row) {
 // turn that cache into exactly this shape. This is that machinery read a second
 // way, not a second copy of it, and no fetch belongs anywhere near here.
 
-/** Five weeks to a line. Thirteen on one line is a 100-character wall; five
- *  lands each line at about the width of the identity line above it, and 13
- *  weeks comes out as 5 + 5 + 3 rather than an awkward pair of long rows. */
-const RUN_PER_LINE = 5;
-
 /**
- * How a week reads in the run.
+ * How a week reads in the run, and which of the five states it is.
  *
- * The three ways of having no number stay three different things, exactly as
- * they are in the season grid — that table tells them apart by class, and a
- * plain-text tooltip has to tell them apart by word.
+ * The ways of having no number stay different things, exactly as they are in
+ * the season grid — that table tells them apart by class, and so does this.
  */
 function runToken(v) {
-  if (v === 'wait') return '…';
-  if (v === 'failed') return '—';
-  if (v === 'off') return 'off';
-  if (v === null) return '—';
+  if (v === 'wait') return { text: '·', kind: 'wait' };
+  if (v === 'failed') return { text: '—', kind: 'none' };
+  if (v === 'off') return { text: 'off', kind: 'off' };
+  if (v === null) return { text: '—', kind: 'none' };
   // Only ESPN means "no game that week" by a 0.00. The sample data means "we
   // have ruled him out", so demo prints the number rather than claiming a bye
   // it cannot know about — the same rule seasonCell() follows.
-  if (v === 0 && !state.isDemo) return 'Bye';
-  return fmt(v);
+  if (v === 0 && !state.isDemo) return { text: 'Bye', kind: 'bye' };
+  return { text: fmt(v), kind: 'num' };
 }
 
 /** Explained only when it actually turns up, so a clean run has no legend. */
-const RUN_KEYS = [
-  ['Bye', 'Bye = the 0.00 ESPN returns for a player whose NFL team is off that week'],
-  ['—', '— = ESPN carried no number for him that week'],
-  ['off', 'off = he was not on this roster that week'],
-  ['…', '… = that week has not been read from ESPN yet'],
-];
+const RUN_KEYS = {
+  bye: 'Bye = the 0.00 ESPN returns for a player whose NFL team is off that week',
+  none: '— = ESPN carried no number for him that week',
+  off: 'off = he was not on this roster that week',
+  wait: '· = that week has not been read from ESPN yet',
+};
 
 /**
- * One player's whole season as lines of text for a native `title`.
+ * One player's whole season, as the data a two-row chart is drawn from.
  *
- * Native, deliberately: a `title` needs no focus management, no touch story and
- * no z-index, and it already carries newlines. A hover card of our own would be
- * a far larger change for a tooltip that is read for two seconds.
+ * It used to be lines of text in a native `title`, which was the right first
+ * answer — no focus management, no z-index, no touch story — and Tim read it
+ * and said it was hard to scan. He is right, and the fix is not a better
+ * string: a native tooltip renders in the OS UI font, so "W1 12.5  W2 13.5"
+ * cannot be padded into columns that line up. Week numbers over their own
+ * projections needs real layout, so this returns structure and a card of our
+ * own draws it. See the tip card below for what that cost.
  *
  * The weeks arrive in batches behind the page, so this has to read correctly
- * when they are not all in — which is why an unread week is its own token and
- * why a run with nothing in it yet says so in words instead of printing
- * thirteen dots.
+ * when they are not all in — which is why an unread week is its own state and
+ * why a run with nothing in it yet says so in words rather than drawing
+ * thirteen empty columns.
  */
-function seasonRun(index, p) {
+function seasonRunData(index, p) {
   const weeks = state.weeks;
-  if (!index || !weeks.length) return '';
+  if (!index || !weeks.length) return null;
 
   const values = weeks.map((w) => seasonValue(index, w, p.playerId));
   const heading = state.isDemo
@@ -364,19 +399,162 @@ function seasonRun(index, p) {
     : `ESPN’s projection for ${weekRange(weeks)}`;
 
   if (values.every((v) => v === 'wait')) {
-    return `${heading}: not read yet — they fill in behind the page.`;
+    return { heading, pending: 'Not read yet — they fill in behind the page.', cols: [], legend: [] };
   }
 
-  const tokens = values.map((v, i) => `W${weeks[i]} ${runToken(v)}`);
-  const lines = [];
-  for (let i = 0; i < tokens.length; i += RUN_PER_LINE) {
-    lines.push(tokens.slice(i, i + RUN_PER_LINE).join('  '));
-  }
-
-  const used = new Set(values.map(runToken));
-  const legend = RUN_KEYS.filter(([t]) => used.has(t)).map(([, s]) => s);
-  return [`${heading}:`, ...lines, ...legend].join('\n');
+  const cols = values.map((v, i) => {
+    const t = runToken(v);
+    return { week: weeks[i], text: t.text, kind: t.kind, now: weeks[i] === state.week };
+  });
+  const used = new Set(cols.map((c) => c.kind));
+  const legend = Object.entries(RUN_KEYS).filter(([k]) => used.has(k)).map(([, s]) => s);
+  return { heading, pending: '', cols, legend };
 }
+
+// ------------------------------------------------------------- the tip card
+//
+// A hover card of our own, because Tim asked for the week run as a chart —
+// week numbers along the top, projections underneath — and a native `title`
+// cannot draw one. It renders in the OS UI font, where a space is narrower
+// than a digit and "Bye" is nothing like either, so no amount of padding lines
+// thirteen columns up. Two <tr>s do it exactly, and tabular figures keep every
+// column the same width whatever is in it.
+//
+// What that costs, and how each part is paid:
+//
+//   - Clipping. Both grids live in `.table-scroll`, which is `overflow:auto`,
+//     and a card inside one would be cut off at its edge. So the card is a
+//     child of <body> and positioned `fixed`.
+//   - Flicker. `pointer-events:none`, so the card can never be the thing the
+//     mouse is over and cannot chase itself around the screen.
+//   - Keyboard. Shown on focusin too, so tabbing the links reveals the same
+//     thing hovering does.
+//   - Escape closes it, because anything that appears over the page should.
+//
+// The data is registered by gridCell rather than written into the markup:
+// thirteen weeks on 170 cells in each of two grids is tens of kilobytes of
+// duplicated attribute for something read for two seconds.
+
+const TIPS = new Map();   // `${gridId}:${n}` -> { ident, run }
+let tipSeq = 0;           // just a counter: see the key note in gridCell
+
+let tipEl = null;
+
+function tipCard() {
+  if (tipEl) return tipEl;
+  tipEl = document.createElement('div');
+  tipEl.id = 'tipCard';
+  tipEl.className = 'tipcard';
+  tipEl.setAttribute('role', 'tooltip');
+  tipEl.hidden = true;
+  document.body.appendChild(tipEl);
+  return tipEl;
+}
+
+/** The two-row chart: week numbers over their own projections. */
+function tipHtml({ ident, run }) {
+  const head = `<div class="tc-ident">${esc(ident)}</div>`;
+  if (!run) return head;
+
+  const sub = `<div class="tc-head">${esc(run.heading)}</div>`;
+  if (run.pending) return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>`;
+
+  // A real table, so the two rows share one set of column widths and the
+  // numbers sit under their own week whatever is in them.
+  const weeks = run.cols
+    .map((c) => `<th${c.now ? ' class="now"' : ''} scope="col">${c.week}</th>`).join('');
+  const vals = run.cols
+    .map((c) => `<td class="k-${c.kind}${c.now ? ' now' : ''}">${esc(c.text)}</td>`).join('');
+
+  const legend = run.legend.length
+    ? `<div class="tc-legend">${run.legend.map((l) => esc(l)).join('<br>')}</div>`
+    : '';
+
+  return (
+    `${head}${sub}` +
+    `<div class="tc-scroll"><table class="tc-run">` +
+    `<thead><tr><th class="tc-lbl" scope="row">Week</th>${weeks}</tr></thead>` +
+    `<tbody><tr><th class="tc-lbl" scope="row">Proj</th>${vals}</tr></tbody>` +
+    `</table></div>${legend}`
+  );
+}
+
+function showTip(cell) {
+  const data = TIPS.get(cell.dataset.tip);
+  if (!data) return;
+  const el = tipCard();
+  el.innerHTML = tipHtml(data);
+  el.hidden = false;
+  placeTip(cell);
+}
+
+function hideTip() {
+  if (tipEl) tipEl.hidden = true;
+}
+
+/**
+ * Put it under the cell, and keep it on screen.
+ *
+ * Every measurement is guarded: a test harness has no layout, and a tooltip is
+ * never worth throwing an exception out of a render for. Without geometry it
+ * simply sits where it was told, which is still correct markup.
+ */
+function placeTip(cell) {
+  const el = tipEl;
+  if (!el || typeof cell.getBoundingClientRect !== 'function') return;
+  try {
+    const c = cell.getBoundingClientRect();
+    const t = el.getBoundingClientRect();
+    const vw = window.innerWidth || 1200;
+    const vh = window.innerHeight || 800;
+    const gap = 8;
+
+    // Below by default; above when there is no room, which there often is not
+    // for a row near the foot of a ten-team grid.
+    let top = c.bottom + gap;
+    if (top + t.height > vh - gap) top = Math.max(gap, c.top - t.height - gap);
+
+    // Left-aligned to the cell, then pulled back inside the window rather than
+    // allowed to run off the right of a wide table.
+    let left = c.left;
+    if (left + t.width > vw - gap) left = Math.max(gap, vw - t.width - gap);
+
+    el.style.top = `${Math.round(top)}px`;
+    el.style.left = `${Math.round(left)}px`;
+  } catch { /* no layout: the card is still correct, just unplaced */ }
+}
+
+/**
+ * One delegated pair per grid. `mouseover`/`mouseout` rather than enter/leave
+ * because only these bubble, and the cell is found with closest() so moving
+ * between the number and its link inside one cell is not a leave.
+ */
+function wireTips(table) {
+  const cellOf = (e) => (e.target.closest ? e.target.closest('td[data-tip]') : null);
+
+  table.addEventListener('mouseover', (e) => {
+    const cell = cellOf(e);
+    if (cell) showTip(cell);
+  });
+  table.addEventListener('mouseout', (e) => {
+    const cell = cellOf(e);
+    // Still inside the same cell — moving onto the link within it — is not a
+    // leave, and treating it as one is what makes a card flicker.
+    if (cell && e.relatedTarget && cell.contains(e.relatedTarget)) return;
+    if (cell) hideTip();
+  });
+  table.addEventListener('focusin', (e) => {
+    const cell = cellOf(e);
+    if (cell) showTip(cell);
+  });
+  table.addEventListener('focusout', (e) => {
+    if (cellOf(e)) hideTip();
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideTip();
+});
 
 /**
  * The season cache, but only when it belongs to the league on screen.
@@ -402,7 +580,7 @@ function seasonIndexFor(teamId) {
  * `index` is that team's season cache, built once per row by renderGrid, and it
  * is what puts the week run on the hover.
  */
-function gridCell(entry, { withPosition = false, byeAtZero = false, index = null } = {}) {
+function gridCell(entry, { withPosition = false, byeAtZero = false, index = null, tipKey = '', ranks = null } = {}) {
   if (!entry) return '<td class="slot-cell muted">—</td>';
 
   const { p, v } = entry;
@@ -418,13 +596,22 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
   const bye = v === 0 && byeAtZero;
   if (bye) cls.push('bye');
 
-  // The identity line first — name, position, NFL team, injury — and then his
-  // whole season under it. A `title` carries newlines, so both fit in one.
+  // The identity line — name, position, NFL team, injury — and then his whole
+  // season under it, drawn by the tip card rather than crammed into a `title`.
   const ident =
     `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}` +
     (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '');
-  const run = seasonRun(index, p);
-  const tip = run ? `${ident}\n${run}` : ident;
+
+  // Registered rather than serialised into the markup: thirteen weeks on every
+  // one of 170 cells per grid would be tens of kilobytes of attribute repeated
+  // in two tables.
+  //
+  // The key is a bare counter, NOT the playerId. It was the playerId first, and
+  // that quietly cost the hover to every man ESPN gave no id for — the card
+  // does not depend on the link and must not start to. A counter is unique by
+  // construction and needs nothing from the data.
+  const key = `${tipKey || 'g'}:${tipSeq++}`;
+  TIPS.set(key, { ident, run: seasonRunData(index, p) });
 
   const shown = v === null ? '—' : bye ? 'Bye' : fmt(v);
 
@@ -432,16 +619,29 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
   // included. The number and the position are two halves of one statement about
   // one man, so splitting them would leave a dead strip in the middle of a cell
   // that is already only a few characters wide.
-  const inner = `${shown}${withPosition ? ` <span class="pp">${esc(p.position)}</span>` : ''}`;
+  // The bench cell carries his position AND where he ranks at it on this team:
+  // "12.3 RB4". The position alone said what he is; the number says what he is
+  // worth having, which is the question a bench column is actually asked. A man
+  // with no number cannot be ranked, so he keeps the bare position rather than a
+  // rank invented for him.
+  const rank = ranks ? ranks.get(p.playerId) : undefined;
+  const posTag = withPosition
+    ? ` <span class="pp">${esc(p.position)}${rank === undefined ? '' : rank}</span>`
+    : '';
+  const inner = `${shown}${posTag}`;
 
+  // NO `title` ON EITHER ELEMENT. The card is the tooltip now, and a `title`
+  // alongside it would have the browser draw its own on top of ours a moment
+  // later — two tooltips for one cell. The link keeps an `aria-label` instead:
+  // it says the same thing to a screen reader and draws nothing.
+  //
   // `data-v` stays on the <td>, OUTSIDE the link: sortable.js reads the sort key
   // off the cell, and a key that moved inside an anchor would silently unsort
-  // every column in both grids. The <td> keeps its own title as well, so the
-  // hover is unchanged for anyone who lands on the cell's padding rather than
-  // on the number; the link repeats it and says where clicking would go.
+  // every column in both grids.
   return (
-    `<td class="${cls.join(' ')}"${v === null ? '' : ` data-v="${v}"`} title="${esc(tip)}">` +
-    `${playerRef(p, inner, `${tip}\nClick to ${OPENS}.`)}</td>`
+    `<td class="${cls.join(' ')}"${v === null ? '' : ` data-v="${v}"`}` +
+    ` data-tip="${esc(key)}">` +
+    `${playerRef(p, inner, `${ident}. Click to ${OPENS}.`, 'aria-label')}</td>`
   );
 }
 
@@ -706,7 +906,10 @@ function renderGrid(grid) {
 
   renderGridHead(table, benchCols);
 
-  const opts = { byeAtZero: grid.byeAtZero ? grid.byeAtZero() : false };
+  const opts = {
+    byeAtZero: grid.byeAtZero ? grid.byeAtZero() : false,
+    tipKey: grid.id,
+  };
   bodyOf(table).innerHTML = teams
     .map((t) => {
       const row = gridLineup(t, grid.measure);
@@ -720,7 +923,11 @@ function renderGrid(grid) {
       ].filter(Boolean).join(' ');
       // Built once per row, not once per cell: seventeen cells share one team's
       // week cache, and it is what puts the season run on every hover.
-      const cellOpts = { ...opts, index: seasonIndexFor(t.id) };
+      const cellOpts = {
+        ...opts,
+        index: seasonIndexFor(t.id),
+        ranks: positionRanks(t, grid.measure),
+      };
       const benchCells = Array.from({ length: benchCols }, (_, i) =>
         gridCell(bench[i] || null, { ...cellOpts, withPosition: true })).join('');
       return `
@@ -737,6 +944,12 @@ function renderGrid(grid) {
 }
 
 function renderOverview() {
+  // Cleared here rather than per grid: the rows are about to be replaced, so
+  // every key registered against the old ones is dead. Left to grow it would
+  // hold a whole other league's squads after a source switch.
+  TIPS.clear();
+  tipSeq = 0;
+  hideTip();          // the cell it was describing is being thrown away
   for (const grid of GRIDS) renderGrid(grid);
 }
 
@@ -1593,6 +1806,7 @@ for (const grid of GRIDS) {
   // The grids are the reason to be here, so they open on the number that ranks
   // teams: Total, high first. Column 10 — the team, the nine spots, then it.
   enableSort($(`${grid.id}Table`), { defaultIndex: GRID_SLOTS.length + 1 });
+  wireTips($(`${grid.id}Table`));
 }
 
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });

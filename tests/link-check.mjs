@@ -142,6 +142,8 @@ async function collect(page) {
   const links = [...document.querySelectorAll('a.pref')].map((a) => ({
     href: a.getAttribute('href') || '',
     title: a.getAttribute('title') || '',
+    // Whatever the link says, by whichever attribute says it.
+    says: `${a.getAttribute('title') || ''}${a.getAttribute('aria-label') || ''}`,
     text: a.textContent.trim(),
     inButton: Boolean(a.closest('button')),
     hasHref: a.hasAttribute('href'),
@@ -227,8 +229,12 @@ for (const page of SOURCES) {
     got.links.filter((l) => /player=(undefined|null|NaN|)$/.test(l.href)).slice(0, 2).map((l) => l.href).join(' | '));
   ok(`${page} has no competing second contract`, got.strayPlayerLinks === 0,
     `${got.strayPlayerLinks} player links that are not .pref`);
-  ok(`every ${page} link says where it goes`, got.links.every((l) => l.title.length > 0),
-    'a .pref with no title');
+  // A name carries a `title`; an analysis grid NUMBER carries an `aria-label`
+  // instead, because that cell draws a tip card of its own and a `title` beside
+  // it would have the browser put a second tooltip on top a moment later.
+  // Either way the link has to say where it goes.
+  ok(`every ${page} link says where it goes`, got.links.every((l) => l.says.length > 0),
+    'a .pref that says nothing');
   ok(`no ${page} link is empty to click`, got.links.every((l) => l.text.length > 0),
     'a .pref with no text');
 
@@ -281,8 +287,8 @@ ok('the analysis grids link their NUMBERS, not only their names', gridLinks.leng
   for (const l of sample) {
     const id = HREF.exec(l.href)[1];
     const got = run('land', `?player=${id}`);
-    // The link's own title names the man; the destination must agree.
-    const named = (l.title.split(/\s+[—·]\s+/)[0] || '').trim();
+    // The link's own label names the man; the destination must agree.
+    const named = (l.says.split(/\s+[—·]\s+/)[0] || '').trim();
     ok(`the number "${l.text}" lands on the man its tooltip names`,
       got.marked === 1 && named.length > 0 && got.who.startsWith(named),
       `tooltip says "${named}", landed on "${got.who}"`);

@@ -483,7 +483,7 @@ async function boot(scenario) {
   if (cfg.after) await cfg.after({ document, window });
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg };
+  return { document, window, errors, fetchCalls, rejections, cfg };
 }
 
 // ------------------------------------------------------------- assertions
@@ -531,6 +531,39 @@ function ordered(values, asc) {
   }
   const monotonic = nums.every((v, i) => i === 0 || (asc ? v >= nums[i - 1] : v <= nums[i - 1]));
   return { monotonic, nullsLast: !nullBeforeNumber, n: nums.length };
+}
+
+/**
+ * Hover a grid cell and read the tip card it draws.
+ *
+ * The week run used to be lines of text in a native `title`, and Tim read it
+ * and said it was hard to scan. It is a two-row chart now — week numbers over
+ * their own projections — which a `title` cannot do: it renders in the OS UI
+ * font, where a space is narrower than a digit, so no padding lines thirteen
+ * columns up. So there is a card, and this reads it.
+ *
+ * The card is a child of <body>, not of the table: both grids sit in an
+ * overflow:auto box that would clip it. `mouseover` rather than `mouseenter`,
+ * because only the former bubbles to the delegated handler.
+ */
+function hoverCard(d, window, td) {
+  td.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+  const card = d.getElementById('tipCard');
+  if (!card || card.hidden) return null;
+  const one = (sel) => (card.querySelector(sel) ? card.querySelector(sel).textContent.trim() : '');
+  const cells = [...card.querySelectorAll('.tc-run tbody td')];
+  return {
+    ident: one('.tc-ident'),
+    heading: one('.tc-head'),
+    pending: one('.tc-pending'),
+    // The first cell of each row is its label ("Week" / "Proj"), not data.
+    weeks: [...card.querySelectorAll('.tc-run thead th')].slice(1).map((t) => t.textContent.trim()),
+    values: cells.map((t) => t.textContent.trim()),
+    kinds: cells.map((t) => t.getAttribute('class') || ''),
+    legend: one('.tc-legend'),
+    rows: card.querySelectorAll('.tc-run tr').length,
+    text: card.textContent.replace(/\s+/g, ' ').trim(),
+  };
 }
 
 const IDENTITY = ['Slot', 'Player', 'Pos', 'NFL', 'Avg'];
@@ -620,13 +653,25 @@ async function check(scenario, boot) {
   c.ok('the href is relative, so it works from the repo root the pages share',
     refs.every((a) => !/^(https?:)?\/\//.test(href(a)) && !href(a).startsWith('/')),
     refs.map(href).filter((h) => /^\/|^https?:/.test(h)).slice(0, 2).join(' | '));
+  const says = (a) => `${a.getAttribute('title') || ''}${a.getAttribute('aria-label') || ''}`;
   c.ok('NO LINK IS EVER EMITTED FOR A PLAYER WITH NO ID',
     !/player=(undefined|null|NaN|&quot;|")/.test(d.body.innerHTML),
     (d.body.innerHTML.match(/player=[^"']{0,12}/g) || [])
       .filter((h) => !/^player=\d+$/.test(h)).slice(0, 3).join(' | '));
   c.ok('every reference says where it goes, in the site\u2019s voice',
-    refs.every((a) => /open his next 13 weeks on the Players page/.test(a.getAttribute('title') || '')),
-    refs.find((a) => !/open his next 13 weeks/.test(a.getAttribute('title') || ''))?.getAttribute('title'));
+    refs.every((a) => /open his next 13 weeks on the Players page/.test(says(a))),
+    refs.find((a) => !/open his next 13 weeks/.test(says(a)))?.outerHTML);
+  // `title` on the names, `aria-label` on the grid numbers: those cells draw a
+  // tip card of their own now, and a `title` beside it would have the browser
+  // put a second tooltip on top a moment later. Either way the link says where
+  // it goes; only one of them draws anything.
+  c.ok('a grid number says it without a title, so it cannot double the card',
+    [...d.querySelectorAll('table.grid td.slot-cell a.pref')]
+      .every((a) => !a.hasAttribute('title') && a.hasAttribute('aria-label')),
+    'a grid link still carries a title');
+  c.ok('and neither does the cell under it',
+    d.querySelectorAll('table.grid td.slot-cell[title]').length === 0,
+    `${d.querySelectorAll('table.grid td.slot-cell[title]').length} cells still titled`);
   c.ok('a link is never put inside the swap button, which would be invalid HTML',
     d.querySelectorAll('button a.pref').length === 0 &&
     d.querySelectorAll('a.pref button').length === 0,
@@ -729,22 +774,25 @@ async function check(scenario, boot) {
       `${txt($('overviewTitle'))} / ${txt($('weeklyTitle'))}`);
 
     // ---- the week run on the hover, in the mode Tim sees first ------------
-    const gridTitles = [...d.querySelectorAll('#overviewTable tbody td.slot-cell, ' +
-      '#weeklyTable tbody td.slot-cell')].map((td) => td.getAttribute('title') || '');
-    c.ok('every grid cell hover carries a week run, in demo too',
-      gridTitles.length > 0 && gridTitles.every((t) => /Sample projections for weeks 1–13:/.test(t)),
-      gridTitles[0]);
+    const tipCells = [...d.querySelectorAll('#overviewTable tbody td[data-tip], ' +
+      '#weeklyTable tbody td[data-tip]')];
+    c.ok('every grid cell has a card to draw', tipCells.length > 0, `${tipCells.length}`);
+
+    const cards = tipCells.map((td) => hoverCard(d, boot.window, td));
+    c.ok('every grid cell hover draws a week run, in demo too',
+      cards.every((k) => k && k.weeks.length === 13 && k.values.length === 13),
+      JSON.stringify(cards[0] && { w: cards[0].weeks.length, v: cards[0].values.length }));
     c.ok('and it is honest about whose numbers they are',
-      gridTitles.every((t) => !/ESPN’s projection/.test(t)), gridTitles[0]);
+      cards.every((k) => /Sample projections for weeks 1–13/.test(k.heading)), cards[0].heading);
+    c.ok('never claiming they are ESPN’s',
+      cards.every((k) => !/ESPN’s projection/.test(k.heading)), cards[0].heading);
     c.ok('THE DEMO RUN NEVER CLAIMS A BYE, because a zero means something else here',
-      gridTitles.every((t) => !/\bBye\b/.test(t)),
-      gridTitles.find((t) => /\bBye\b/.test(t)));
+      cards.every((k) => !k.values.includes('Bye')),
+      JSON.stringify(cards.find((k) => k.values.includes('Bye'))));
     c.ok('the run is filled in, not thirteen unread weeks',
-      gridTitles.every((t) => !/not read yet/.test(t)),
-      gridTitles.find((t) => /not read yet/.test(t)));
-    c.ok('the demo run still opens with the identity line it always had',
-      gridTitles.every((t) => /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4}/.test(t.split('\n')[0])),
-      gridTitles[0].split('\n')[0]);
+      cards.every((k) => !k.pending), cards.find((k) => k.pending)?.pending);
+    c.ok('the card still opens with the identity line it always had',
+      cards.every((k) => /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4}/.test(k.ident)), cards[0].ident);
   }
 
   // ---- (b) live, every week resolves --------------------------------------
@@ -887,72 +935,100 @@ async function check(scenario, boot) {
         cells.map((td) => td.getAttribute('data-v')).join(' '));
     }
 
-    // ---- the hover: identity line, then the whole week run ----------------
-    const titleOf = (td) => td.getAttribute('title') || '';
+    // ---- the hover card: identity line, then the run as a two-row chart ---
+    //
+    // It was lines of text in a native `title` and Tim said it was hard to
+    // scan. It is a chart now — week numbers along the top, projections
+    // directly under their own week — which a `title` cannot draw, because it
+    // renders in the OS UI font where padding cannot make columns line up.
     const cells = grid4('overview');
-    const t0 = titleOf(cells[0]);           // the QB — i=0, a clean run
-    c.ok('the hover still opens with name, position and NFL team',
-      /^T4 Player 00 · QB · BUF/.test(t0), t0.slice(0, 120));
-    c.ok('an injury designation is still on the hover',
-      /· OUT/.test(titleOf(cells[2])), titleOf(cells[2]).slice(0, 120));
-    c.ok('THE HOVER NOW CARRIES THE WHOLE WEEK RUN',
-      /ESPN’s projection for weeks 1–13:/.test(t0) &&
-      Array.from({ length: 13 }, (_, i) => `W${i + 1} `).every((w) => t0.includes(w)),
-      t0);
-    c.ok('the run is in week order, one entry per week of the season',
-      (() => {
-        const seen = [...t0.matchAll(/\bW(\d+) /g)].map((m) => Number(m[1]));
-        return JSON.stringify(seen) === JSON.stringify(Array.from({ length: 13 }, (_, i) => i + 1));
-      })(), t0);
-    c.ok('the identity line comes first and the run below it, on its own lines',
-      t0.split('\n')[0] === 'T4 Player 00 · QB · BUF' && t0.split('\n').length >= 4,
-      JSON.stringify(t0.split('\n')));
+    const card0 = hoverCard(d, boot.window, cells[0]);   // the QB, a clean run
+
+    c.ok('the card opens with name, position and NFL team',
+      card0 && /^T4 Player 00 · QB · BUF/.test(card0.ident), card0 && card0.ident);
+    c.ok('an injury designation is still on it',
+      /· OUT/.test(hoverCard(d, boot.window, cells[2]).ident),
+      hoverCard(d, boot.window, cells[2]).ident);
+    c.ok('and it says whose projections these are',
+      /ESPN’s projection for weeks 1–13/.test(card0.heading), card0.heading);
+
+    c.ok('IT IS A TWO-ROW CHART: WEEK NUMBERS OVER THEIR OWN PROJECTIONS',
+      card0.rows === 2, `${card0.rows} rows in the run table`);
+    c.ok('the top row is the weeks, in order, one per week of the season',
+      JSON.stringify(card0.weeks) ===
+        JSON.stringify(Array.from({ length: 13 }, (_, i) => String(i + 1))),
+      JSON.stringify(card0.weeks));
+    c.ok('the bottom row is a projection for every one of them',
+      card0.values.length === card0.weeks.length, `${card0.values.length} v ${card0.weeks.length}`);
+    c.ok('the two rows are one table, so a column cannot drift out of line',
+      card0.weeks.length === 13 && card0.values.length === 13, 'the rows are not paired');
+
     c.ok('every number in the run is the projection ESPN gave for that week',
       (() => {
         const bad = [];
         for (let i = 0; i < season.SIZE; i++) {
           if (!season.onRoster(i, 8)) continue;
-          const cell = grid4('overview')
-            .find((td) => titleOf(td).startsWith(season.playerName(teamId, i) + ' '));
+          const cell = grid4('overview').find((td) => {
+            const k = hoverCard(d, boot.window, td);
+            return k && k.ident.startsWith(season.playerName(teamId, i) + ' ');
+          });
           if (!cell) { bad.push(`p${i} has no cell`); continue; }
-          const t = titleOf(cell);
+          const k = hoverCard(d, boot.window, cell);
           for (let wk = 1; wk <= 13; wk++) {
-            const m = t.match(new RegExp(`\\bW${wk} (\\S+)`));
-            if (!m) { bad.push(`p${i} wk${wk} missing`); continue; }
+            const got = k.values[wk - 1];
             const v = season.onRoster(i, wk) ? season.projFor(i, wk) : 'off';
             const expect = v === 'off' ? 'off' : v === null ? '—' : v === 0 ? 'Bye' : v.toFixed(1);
-            if (m[1] !== expect) bad.push(`p${i} wk${wk} want ${expect} got ${m[1]}`);
+            if (got !== expect) bad.push(`p${i} wk${wk} want ${expect} got ${got}`);
           }
         }
         return bad.length === 0 ? true : bad.slice(0, 4).join(' | ');
       })() === true,
       'see the run');
-    c.ok('a BYE reads as a bye in the run, and is explained under it',
-      /W6 Bye\b/.test(titleOf(cells[3])) &&
-      /Bye = the 0\.00 ESPN returns/.test(titleOf(cells[3])),
-      titleOf(cells[3]));
-    c.ok('AND A MISSING NUMBER DOES NOT READ AS A BYE',
-      /W7 —/.test(titleOf(cells[4])) && !/Bye/.test(titleOf(cells[4])) &&
-      /ESPN carried no number for him/.test(titleOf(cells[4])),
-      titleOf(cells[4]));
-    c.ok('a week he was not on the roster for is its own third thing',
-      (() => {
-        const last = grid4('overview')
-          .find((td) => titleOf(td).startsWith(season.playerName(teamId, season.SIZE - 1) + ' '));
-        return last && /W1 off\b/.test(titleOf(last)) &&
-          /off = he was not on this roster that week/.test(titleOf(last));
-      })(), 'no off token');
+
+    {
+      const bye = hoverCard(d, boot.window, cells[3]);
+      c.ok('a BYE reads as a bye in the run, and is explained under it',
+        bye.values[5] === 'Bye' && /Bye = the 0\.00 ESPN returns/.test(bye.legend),
+        `${bye.values[5]} / ${bye.legend}`);
+      c.ok('and it is marked as its own kind, not just worded differently',
+        /k-bye/.test(bye.kinds[5]), bye.kinds[5]);
+
+      const gap = hoverCard(d, boot.window, cells[4]);
+      c.ok('AND A MISSING NUMBER DOES NOT READ AS A BYE',
+        gap.values[6] === '—' && !gap.values.includes('Bye') &&
+        /ESPN carried no number for him/.test(gap.legend),
+        `${gap.values[6]} / ${gap.legend}`);
+      c.ok('a week he was not on the roster for is its own third thing',
+        (() => {
+          const last = grid4('overview').find((td) => {
+            const k = hoverCard(d, boot.window, td);
+            return k && k.ident.startsWith(season.playerName(teamId, season.SIZE - 1) + ' ');
+          });
+          if (!last) return false;
+          const k = hoverCard(d, boot.window, last);
+          return k.values[0] === 'off' && /off = he was not on this roster that week/.test(k.legend);
+        })(), 'no off token');
+      c.ok('the three no-number states are told apart by class as well as by word',
+        new Set([bye.kinds[5], gap.kinds[6], 'k-off']).size === 3,
+        `${bye.kinds[5]} / ${gap.kinds[6]}`);
+    }
+
     c.ok('the legend only names the states that actually turn up',
-      !/Bye =/.test(t0) && !/off =/.test(t0) && !/carried no number/.test(t0), t0);
+      card0.legend === '', card0.legend);
+    c.ok('the week the page is showing is marked in the run',
+      card0.kinds[7].includes('now') && card0.kinds.filter((k) => k.includes('now')).length === 1,
+      JSON.stringify(card0.kinds));
     c.ok('the week grid carries the same run — it is the same man either way',
-      grid4('weekly')[0].getAttribute('title').includes('ESPN’s projection for weeks 1–13:'),
-      grid4('weekly')[0].getAttribute('title'));
-    c.ok('the link repeats the hover and adds where clicking would go',
-      (() => {
-        const a = cells[0].querySelector('a.pref');
-        const at = a.getAttribute('title');
-        return at.startsWith(t0) && /Click to open his next 13 weeks on the Players page\./.test(at);
-      })(), cells[0].querySelector('a.pref').getAttribute('title'));
+      /ESPN’s projection for weeks 1–13/
+        .test(hoverCard(d, boot.window, grid4('weekly')[0]).heading),
+      hoverCard(d, boot.window, grid4('weekly')[0]).heading);
+    c.ok('THE CELL CARRIES NO TITLE, so the browser cannot draw a second tooltip',
+      !cells[0].hasAttribute('title') && !cells[0].querySelector('a.pref').hasAttribute('title'),
+      cells[0].getAttribute('title'));
+    c.ok('the link still says where clicking would go, to a screen reader',
+      /Click to open his next 13 weeks on the Players page\./
+        .test(cells[0].querySelector('a.pref').getAttribute('aria-label') || ''),
+      cells[0].querySelector('a.pref').getAttribute('aria-label'));
 
     // AND IT COST NOTHING. The week run is the season panel's cache read a
     // second way; the two counts above already pin every request this page
@@ -1110,16 +1186,22 @@ async function check(scenario, boot) {
     c.ok('a lineup cell is a bare number',
       A.rows.every((r) => r.cells.slice(0, 9).every((td) => /^-?\d+\.\d$/.test(td.text))),
       JSON.stringify(A.rows[0].cells.slice(0, 9).map((td) => td.text)));
+    // The name moved from a `title` to the card, so it is read from there.
+    const lineupCells = [...d.querySelectorAll('#overviewTable tbody td[data-tip]')];
+    const someCards = lineupCells.slice(0, 12).map((td) => hoverCard(d, boot.window, td));
     c.ok('and the name is still there on hover',
-      A.rows.every((r) => r.cells.slice(0, 9).every((td) => /Player \d\d/.test(td.title))),
-      A.rows[0].cells[0].title);
-    c.ok('the hover carries the position and the NFL team too',
-      /· (QB|RB|WR|TE|DST|K) · /.test(A.rows[0].cells[0].title), A.rows[0].cells[0].title);
+      someCards.every((k) => k && /Player \d\d/.test(k.ident)), someCards[0] && someCards[0].ident);
+    c.ok('the card carries the position and the NFL team too',
+      someCards.every((k) => /· (QB|RB|WR|TE|DST|K) · /.test(k.ident)),
+      someCards[0] && someCards[0].ident);
 
     // -- the bench, with its position in the cell --------------------------
-    c.ok('a bench cell carries the position beside the number',
+    // "12.3 RB4" — the position AND where he ranks at it on his own team. The
+    // position alone said what he is; the number says what he is worth having,
+    // which is the question a bench column is actually asked.
+    c.ok('a bench cell carries the position AND his rank at it, beside the number',
       A.rows.every((r) => r.cells.slice(10).every((td) =>
-        /^\d+\.\d (QB|RB|WR|TE|DST|K)$/.test(td.text))),
+        /^\d+\.\d (QB|RB|WR|TE|DST|K)\d+$/.test(td.text))),
       JSON.stringify(A.rows[0].cells.slice(10).map((td) => td.text)));
     c.ok('and a lineup cell deliberately does not — its header already says it',
       A.rows.every((r) => r.cells.slice(0, 9).every((td) => !/[A-Z]{1,3}$/.test(td.text))),
@@ -1133,10 +1215,17 @@ async function check(scenario, boot) {
     c.ok('TOTAL IS THOSE NINE ADDED UP, NOT AN ESTIMATE',
       a4.cells[9].text === '144.0' && a4.cells[9].v === '144',
       `${a4.cells[9].text} / ${a4.cells[9].v}`);
-    c.ok('the bench follows it, best first, six deep',
+    // Ranks counted over the WHOLE squad, starters included, which is what the
+    // number means to a manager. Team 4 holds RBs at 19, 18, 11 and 6, so the
+    // bench pair are RB3 and RB4; WRs at 17, 16, 14, 10 and 7 make WR4 and WR5;
+    // two QBs make QB2 and two TEs make TE2.
+    c.ok('the bench follows it, best first, six deep, each with his rank',
       eq(a4.cells.slice(10).map((td) => td.text),
-        ['11.0 RB', '10.0 WR', '9.0 QB', '8.0 TE', '7.0 WR', '6.0 RB']),
+        ['11.0 RB3', '10.0 WR4', '9.0 QB2', '8.0 TE2', '7.0 WR5', '6.0 RB4']),
       JSON.stringify(a4.cells.slice(10).map((td) => td.text)));
+    c.ok('and a lineup cell still carries no position or rank at all',
+      a4.cells.slice(0, 9).every((td) => /^-?\d+(\.\d+)?$/.test(td.text)),
+      JSON.stringify(a4.cells.slice(0, 9).map((td) => td.text)));
 
     const w4 = teamRow(W, 'Team 4');
     c.ok('the week grid is the same nine men on that week’s numbers',
@@ -1202,8 +1291,13 @@ async function check(scenario, boot) {
       /nine real men, not an estimate/.test(w.notes.avg), w.notes.avg.slice(0, 400));
     c.ok('it says why the position is in the bench cell and not in the header',
       /every bench is a different shape/.test(w.notes.avg), w.notes.avg.slice(0, 500));
-    c.ok('it says the names are on hover',
-      /Names are on hover/.test(w.notes.avg), w.notes.avg.slice(0, 500));
+    c.ok('it says the name and the season are on hover, and that it is a chart',
+      /Hovering any number gives that man/.test(w.notes.avg) &&
+      /weeks along the top, his projection for each one underneath/.test(w.notes.avg),
+      w.notes.avg.slice(0, 600));
+    c.ok('and it says what the number after a bench position means',
+      /where he ranks at that position on his own team/.test(w.notes.avg) &&
+      /counting the starters too/.test(w.notes.avg), w.notes.avg.slice(0, 700));
     c.ok('the week note says which week it is measured on',
       /projection for the week selected at the top of the page/.test(w.notes.week),
       w.notes.week.slice(0, 300));
@@ -1251,11 +1345,11 @@ async function check(scenario, boot) {
         cells.filter((td) => !qb.includes(td) && !td.querySelector('a.pref')).length);
     }
 
-    c.ok('the hover is untouched for him — the run does not depend on the link',
+    c.ok('the card is untouched for him — the run does not depend on the link',
       (() => {
-        const t = [...d.querySelectorAll('#overviewTable tbody tr[data-team="4"] td.slot-cell')][0]
-          .getAttribute('title') || '';
-        return t.startsWith(`${noIdName} · QB · BUF`) && /W13 /.test(t);
+        const td = [...d.querySelectorAll('#overviewTable tbody tr[data-team="4"] td.slot-cell')][0];
+        const k = hoverCard(d, boot.window, td);
+        return k && k.ident.startsWith(`${noIdName} · QB · BUF`) && k.weeks.length === 13;
       })(), 'no run on the unlinked cell');
     c.ok('and the swap control is untouched — it never became a link either way',
       d.querySelectorAll('#rosterTable button[data-swap]').length === 15 &&

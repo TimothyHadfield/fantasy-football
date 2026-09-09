@@ -226,14 +226,48 @@ week 4 and week 13**, so a quarter of its links arrived here about a man the
 table had never heard of and were told he "may have been dropped". A confident,
 wrong answer. The owner is still the earliest week he actually appears in.
 
-**The analysis grids' hover carries the whole season.** Identity line, then that
-man's per-week projection run in week order, five to a line. Built from
-`state.seasonWeeks` — the data the "Season by week" panel already pays for —
-so it **adds no request**, which matters because one-request-per-week is that
-page's entire cost model. The grids now repaint once per arriving batch. The
-four no-number states are told apart by word rather than by class, since a
-tooltip has no classes: `Bye`, `—`, `off`, `…`, with a legend line appended only
-for the states that actually occur.
+**The analysis grids' hover is a two-row chart (the tip card).** Week numbers
+along the top, that man's projection for each one directly underneath, with the
+identity line above it.
+
+It was lines of text in a native `title` first — the right first answer, and
+Tim read it and said it was hard to scan. He is right, and **the fix could not
+be a better string**: a native tooltip renders in the OS UI font, where a space
+is narrower than a digit and "Bye" is nothing like either, so no amount of
+padding lines thirteen columns up. Two `<tr>`s in one table do it exactly.
+
+What a card of our own costs, and how each part is paid — do not undo any of
+these without replacing them:
+
+- **Clipping.** Both grids live in `.table-scroll` (`overflow:auto`), so a card
+  inside one would be cut off at its edge. It is a child of `<body>`,
+  positioned `fixed`.
+- **Flicker.** `pointer-events:none`, so the card can never be the thing the
+  mouse is over and cannot chase itself around the screen.
+- **Two tooltips.** The cells carry **no `title` at all** — one beside the card
+  would have the browser draw its own on top a moment later. The link carries
+  `aria-label` instead: same words, nothing drawn. `link-check.mjs` accepts
+  either attribute for "the link says where it goes".
+- **Keyboard**: shown on `focusin` too. **Escape** closes it.
+- The data is registered in a `Map` keyed by **a bare counter**, not the
+  playerId — it was the playerId first, and that quietly cost the hover to every
+  man ESPN gave no id for. The card does not depend on the link and must not
+  start to. Thirteen weeks written into 170 cells in each of two grids would be
+  tens of kilobytes of duplicated attribute.
+
+Still no request: it is `state.seasonWeeks` read a second way. The four
+no-number states are told apart by word AND by class — `Bye`, `—`, `off`, `·` —
+with a legend line only for the ones that actually occur, and demo never claims
+a bye.
+
+**Bench cells carry a positional rank: `12.3 RB4`.** Tim's ask. Counted over the
+WHOLE squad, starters included, because that is what the number means to a
+manager — a bench back sitting behind three better ones is his RB4 whether or
+not the other three start this week. Ranked by the grid's own measure, so the
+number agrees with the column it is printed in and a man can be his team's RB2
+for a typical week and their RB4 in a week two of them are on bye. Only men with
+a number are ranked, which keeps the ranks contiguous — the same rule the Taken
+table uses on the Players page, deliberately, so the two agree.
 
 **The second green on the wire (`td.beats`).** A wire cell is also shaded when
 that player out-projects your own worst man at his position **in that week

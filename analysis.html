@@ -126,6 +126,86 @@
   }
   /* The one column that ranks the teams. */
   table.grid td.grid-total { font-weight: 700; }
+
+  /* ------------------------------------------------------------- the tip card
+
+     The week run as a CHART: week numbers along the top, projections directly
+     under their own week. It is a real table so the two rows share one set of
+     column widths — this is exactly what a native `title` could not do, since
+     it renders in the OS UI font where a space is narrower than a digit.
+
+     A child of <body>, not of the table: both grids sit in `.table-scroll`,
+     which is `overflow:auto`, and a card inside one would be clipped at its
+     edge. Fixed, so it is positioned against the window it has to stay inside. */
+  .tipcard {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 60;               /* over the sticky headers, which claim 2 and 3 */
+    max-width: min(92vw, 720px);
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-3);
+    box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.75);
+    font-size: 12.5px;
+    color: var(--text);
+    /* The card can never be the thing the mouse is over, so it cannot chase
+       itself around the screen when it appears under the cursor. */
+    pointer-events: none;
+  }
+  .tc-ident { font-weight: 650; margin-bottom: 2px; }
+  .tc-head, .tc-pending, .tc-legend { color: var(--dim); font-size: 11.5px; }
+  .tc-head { margin-bottom: 7px; }
+  .tc-legend { margin-top: 7px; line-height: 1.5; }
+
+  /* Thirteen columns fit at this size, but a narrow window is a real thing. */
+  .tc-scroll { overflow-x: auto; max-width: 100%; }
+
+  /* Tabular figures, and a floor on the column width, so every projection sits
+     squarely under its own week however wide the word in it is. */
+  .tc-run {
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .tc-run th, .tc-run td {
+    border: none;
+    padding: 2px 7px;
+    text-align: center;
+    min-width: 34px;
+  }
+  /* The row labels down the left, quieter than the data they introduce. */
+  .tc-run .tc-lbl {
+    text-align: right;
+    padding-right: 10px;
+    color: var(--dim);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    position: static;          /* app.css makes every th sticky; not in here */
+    background: none;
+  }
+  /* Week numbers read as headings, projections as the data. */
+  .tc-run thead th {
+    color: var(--dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    position: static;
+    background: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .tc-run tbody td { font-size: 12.5px; padding-top: 4px; }
+
+  /* The same four states the season grid draws, told apart the same way. */
+  .tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+  .tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
+  .tc-run .k-wait { color: var(--line); }
+
+  /* The week the rest of the page is showing. A bracket, not a tint — the same
+     cue the season grid uses for the same fact. */
+  .tc-run .now { border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); }
+  .tc-run thead th.now { color: var(--text); }
   /* ESPN's 0.00 for a player whose NFL team is off that week. Printing "0.0"
      would read as a projection of nothing rather than as no game at all. */
   table.grid td.bye { color: var(--warn); font-size: 11.5px; letter-spacing: 0.04em; }
@@ -299,11 +379,13 @@
       The nine columns are the best lineup that squad could field, chosen by that average rather than by
       where the manager has parked people; <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB.
       <strong>Total</strong> is those nine added up &mdash; nine real men, not an estimate.
-      <strong>B1&hellip;</strong> are the bench, best first, with each man&rsquo;s position in the cell because
-      every bench is a different shape.
+      <strong>B1&hellip;</strong> are the bench, best first, with each man&rsquo;s position in the cell
+      because every bench is a different shape &mdash; and after it where he ranks at that position on
+      his own team, counting the starters too, so <strong>RB4</strong> is his squad&rsquo;s fourth-best
+      back whether or not the other three are in the lineup.
       <br>
-      Names are on hover, and under each one that man&rsquo;s whole run of weekly projections, week by
-      week; every name is in full in the roster detail below.
+      Hovering any number gives that man&rsquo;s name and his whole season as a chart: the weeks along
+      the top, his projection for each one underneath. Every name is in full in the roster detail below.
       <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
       <strong>Every number is a link</strong> to that man&rsquo;s next 13 weeks on the
       <a href="waivers.html">Players</a> page; click the row anywhere else to load that team below,
@@ -327,9 +409,10 @@
       A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is off that
       week, which is not the same as having no number at all.
       <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
-      Hovering a number gives that man&rsquo;s whole season week by week, and
-      <strong>every number is a link</strong> to his next 13 weeks on the
-      <a href="waivers.html">Players</a> page &mdash; both the same as in the grid above.
+      Hovering a number gives that man&rsquo;s whole season as a chart &mdash; weeks along the top,
+      his projection for each underneath &mdash; and <strong>every number is a link</strong> to his next
+      13 weeks on the <a href="waivers.html">Players</a> page. Both the same as in the grid above, and
+      the bench ranks there mean the same thing here, measured on this week instead of the average.
     </p>
   </section>
 
