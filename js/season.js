@@ -91,9 +91,20 @@ export async function fetchWeekRosters(week) {
     });
 
     const starters = players.filter((p) => p.started);
-    const bench = players.filter((p) => !p.started);
-    const total = (arr, key) =>
-      Math.round(arr.reduce((a, p) => a + (p[key] || 0), 0) * 10) / 10;
+    // ESPN returns bench entries in roster order, which looks random on screen.
+    // Best projection first matches what the demo data already does.
+    const bench = players
+      .filter((p) => !p.started)
+      .sort((a, b) => (b.projected ?? -Infinity) - (a.projected ?? -Infinity));
+
+    // Before kickoff every actual is null. Summing those as 0 would report a
+    // real-looking 0.0 for the team and a Diff of minus the whole projection,
+    // so a team row would claim data the player rows correctly show as "—".
+    const total = (arr, key) => {
+      const vals = arr.map((p) => p[key]).filter((v) => typeof v === 'number');
+      if (!vals.length) return null;
+      return Math.round(vals.reduce((a, v) => a + v, 0) * 10) / 10;
+    };
 
     return {
       id: t.id,
@@ -218,7 +229,22 @@ export async function fetchSeasonData({ onProgress } = {}) {
   // If ESPN gave us nothing usable for projections, say so rather than
   // silently rendering a season of zeroes.
   const withProjections = games.filter((g) => g.homeProjected > 0 && g.awayProjected > 0);
-  const projectionsAvailable = withProjections.length > games.length * 0.5;
+
+  // "More than half the games" was tuned against a 65-game season. In week 1
+  // there are five, so 3-of-5 passes the ratio while dropping two games
+  // entirely — and the four teams in them survive into `teams` with no rows at
+  // all. Those ghosts then compute skill = 0 - leagueAvgProjected (about -122)
+  // and luck = leagueAvgActual (about +117), which puts teams that never
+  // played at the TOP of the luck standings, with no warning shown. So the
+  // filtered set is only safe to use when it still covers every team.
+  const coveredTeams = new Set();
+  for (const g of withProjections) { coveredTeams.add(g.homeId); coveredTeams.add(g.awayId); }
+  const playedTeams = new Set();
+  for (const g of games) { playedTeams.add(g.homeId); playedTeams.add(g.awayId); }
+  const coversEveryone = [...playedTeams].every((id) => coveredTeams.has(id));
+
+  const projectionsAvailable =
+    withProjections.length > games.length * 0.5 && coversEveryone;
 
   return {
     season: espn.getConfig().season,

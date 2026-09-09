@@ -11,6 +11,8 @@ import * as bridge from './bridge.js';
 import { configure, AuthError } from './espn.js';
 
 const KEY = 'ff.connection';
+// index.html and the data pages predate this bar and speak this key.
+const LEGACY_KEY = 'ff.config';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -44,6 +46,13 @@ function save() {
       leagueId: state.leagueId, season: state.season,
       teamId: state.teamId, league: state.league, checkedAt: state.checkedAt,
     }));
+    // The pages read this second, older key, and index.html writes it. Keeping
+    // both in step is what makes "Connected" in this bar actually mean the
+    // Stats/Analysis/Schedule pages can go live — they silently could not
+    // before, because the bar wrote one key and every page read the other.
+    localStorage.setItem(LEGACY_KEY, JSON.stringify({
+      leagueId: state.leagueId, season: state.season,
+    }));
   } catch { /* nothing to do */ }
 }
 
@@ -57,6 +66,39 @@ export function currentConnection() {
     name: state.league.name,
     teams: state.league.teams || [],
   };
+}
+
+/**
+ * The saved league, whether or not it has been probed yet this page load.
+ *
+ * A page asking "can I go live?" wants this rather than `currentConnection()`,
+ * which only answers once the bar has finished its own round trip.
+ */
+export function savedConfig() {
+  for (const key of [KEY, LEGACY_KEY]) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || '{}');
+      if (saved.leagueId) {
+        return {
+          leagueId: String(saved.leagueId),
+          season: Number(saved.season) || bridge.currentSeason(),
+          teamId: saved.teamId ?? null,
+        };
+      }
+    } catch { /* try the next key */ }
+  }
+  return null;
+}
+
+/**
+ * Run `cb` with the live connection now (if there already is one) and again
+ * whenever it changes, so a page can switch itself to real data without the
+ * user clicking a second toggle.
+ */
+export function onConnection(cb) {
+  document.addEventListener('ff:connection', (e) => cb(e.detail));
+  const now = currentConnection();
+  if (now) cb(now);
 }
 
 function ago(ts) {
