@@ -95,6 +95,23 @@ export async function ping({ waitMs = 400 } = {}) {
   return res.ok ? { available: true, version: res.data?.version ?? null } : { available: false };
 }
 
+/**
+ * The league ID entered in the extension's popup, if any.
+ * Lets the site pick up where the popup left off instead of asking twice.
+ */
+export function getConfig({ timeoutMs } = {}) {
+  return ask({ type: 'GET_CONFIG' }, { timeoutMs });
+}
+
+/**
+ * The fantasy season is named for the year it starts, so from January until
+ * the summer the current season is still last calendar year. Using
+ * getFullYear() outright asks for a season that does not exist yet.
+ */
+export function currentSeason(now = new Date()) {
+  return now.getMonth() < 6 ? now.getFullYear() - 1 : now.getFullYear();
+}
+
 /** League identity and team list — the "are we connected" check. */
 export function probe({ leagueId, season, timeoutMs }) {
   return ask({ type: 'PROBE', leagueId: String(leagueId), season: Number(season) }, { timeoutMs });

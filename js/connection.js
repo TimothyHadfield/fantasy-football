@@ -19,7 +19,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
 const state = {
   extension: false,
   leagueId: '',
-  season: new Date().getFullYear(),
+  season: bridge.currentSeason(),
   league: null,      // { name, teams, ... } once probed
   teamId: null,
   checkedAt: null,
@@ -107,7 +107,6 @@ function render() {
 
   let body;
   if (connected) {
-    const me = (state.league.teams || []).find((t) => t.id === state.teamId);
     const options = (state.league.teams || [])
       .map((t) => `<option value="${t.id}"${t.id === state.teamId ? ' selected' : ''}>${esc(t.name)}</option>`)
       .join('');
@@ -177,6 +176,13 @@ async function init() {
 
   const { available } = await bridge.ping();
   state.extension = available;
+
+  // Pick up a league ID entered in the extension's popup, so it only has to be
+  // typed once.
+  if (available && !state.leagueId) {
+    const cfg = await bridge.getConfig();
+    if (cfg.ok && cfg.data?.leagueId) state.leagueId = String(cfg.data.leagueId);
+  }
   render();
 
   // Reconnect automatically when we already know which league to ask for.
