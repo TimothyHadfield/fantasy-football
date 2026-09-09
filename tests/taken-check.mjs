@@ -56,10 +56,19 @@ const SCENARIOS = {
       click('#spanFilter button[data-span="3"]');
       await new Promise((r) => setTimeout(r, 300));
 
-      // The position buttons drive BOTH tables, and cost nothing to press.
+      // EACH TABLE HAS ITS OWN position filter now. Pressing the wire's must
+      // leave this one alone — that independence is the whole point of the
+      // change, and it is the kind of thing that silently regresses — and
+      // pressing this one must not cost a request.
       click('#posFilter button[data-pos="QB"]');
-      out.qb = takenSnapshot(document);
+      out.takenAfterWireFilter = takenSnapshot(document);
+      out.wireAfterWireFilter = wireSnapshot(document);
       click('#posFilter button[data-pos="ALL"]');
+
+      click('#takenPosFilter button[data-pos="QB"]');
+      out.qb = takenSnapshot(document);
+      out.wireAfterTakenFilter = wireSnapshot(document);
+      click('#takenPosFilter button[data-pos="ALL"]');
       out.rosterAfterFilter = season.calls.rosterWeeks.slice();
 
       globalThis.__taken = out;
@@ -70,9 +79,98 @@ const SCENARIOS = {
     stub: false,
     prefs: { 'waivers.source': 'demo' },
   },
+
+  // ---- landing on one man from a ?player= link elsewhere on the site -------
+  //
+  // Cade Dunlow (7103) is Ridgeway Rovers' third-best QB over the default three
+  // weeks and their best over six, which makes him the right man to land on:
+  // the jump widens the span to the whole season, so his rank on arrival must
+  // be the WIDE one. The reader's own span preference is deliberately left at
+  // the narrow default in prefs, so a reload gives it back.
+  jump: {
+    label: '(c) a ?player= link lands on one man',
+    stub: true,
+    prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    search: '?player=7103',
+    after: async ({ document, window }) => {
+      const season = await import('./taken-stub-season.mjs');
+      const out = {
+        rows: takenSnapshot(document),
+        wire: wireSnapshot(document),
+        jump: document.getElementById('jumpNote').textContent.replace(/\s+/g, ' ').trim(),
+        jumpCls: document.getElementById('jumpNote').getAttribute('class') || '',
+        spot: [...document.querySelectorAll('#takenTable tbody tr.spotlight')]
+          .map((tr) => tr.getAttribute('data-player')),
+        spotAnywhere: [...document.querySelectorAll('tr.spotlight')].length,
+        takenOn: [...document.querySelectorAll('#takenPosFilter button.on')]
+          .map((b) => b.getAttribute('data-pos')),
+        wireOn: [...document.querySelectorAll('#posFilter button.on')]
+          .map((b) => b.getAttribute('data-pos')),
+        spanOn: [...document.querySelectorAll('#spanFilter button.on')]
+          .map((b) => b.getAttribute('data-span')),
+        takenSpanOn: [...document.querySelectorAll('#takenSpanFilter button.on')]
+          .map((b) => b.getAttribute('data-span')),
+        weekCols: [...document.querySelectorAll('#takenTable thead th')].length,
+        savedSpan: JSON.parse(localStorage.getItem('ff.prefs') || '{}')['waivers.span'],
+        rosterWeeks: season.calls.rosterWeeks.slice().sort((a, b) => a - b),
+      };
+
+      // Clearing drops the mark and the strip, and deliberately leaves the span
+      // and the filter where the jump put them — they are what is on screen now.
+      document.querySelector('#jumpNote button[data-clear]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      out.afterClear = {
+        jumpCls: document.getElementById('jumpNote').getAttribute('class') || '',
+        spot: [...document.querySelectorAll('tr.spotlight')].length,
+        takenOn: [...document.querySelectorAll('#takenPosFilter button.on')]
+          .map((b) => b.getAttribute('data-pos')),
+        spanOn: [...document.querySelectorAll('#spanFilter button.on')]
+          .map((b) => b.getAttribute('data-span')),
+      };
+      globalThis.__jump = out;
+    },
+  },
+
+  'jump-unknown': {
+    label: '(d) a ?player= link for somebody nobody holds',
+    stub: true,
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    search: '?player=424242',
+    after: async ({ document }) => {
+      globalThis.__jump = {
+        jump: document.getElementById('jumpNote').textContent.replace(/\s+/g, ' ').trim(),
+        jumpCls: document.getElementById('jumpNote').getAttribute('class') || '',
+        spot: [...document.querySelectorAll('tr.spotlight')].length,
+        rows: takenSnapshot(document).length,
+      };
+    },
+  },
 };
 
 // --------------------------------------------------------------- reading it
+
+/**
+ * The WIRE table's rows, so the two filters can be shown to be independent.
+ * Deliberately excludes the "Your …" comparison rows: they are your own men,
+ * not free agents, and they follow the wire's filter for their own reasons.
+ */
+function wireSnapshot(document) {
+  return [...document.querySelectorAll('#waiverTable tbody tr')]
+    .filter((tr) => {
+      const cls = tr.getAttribute('class') || '';
+      return !/\bempty-row\b/.test(cls) && !/\bmine\b/.test(cls);
+    })
+    .map((tr) => {
+      const c = [...tr.children];
+      return {
+        player: tr.getAttribute('data-player'),
+        name: c[0].textContent.replace(/\s+/g, ' ').trim(),
+        pos: c[1].textContent.trim(),
+      };
+    });
+}
 
 /** Every row of the taken table, as plain data. */
 function takenSnapshot(document) {
@@ -188,10 +286,12 @@ async function boot(scenario) {
 
   // js/bridge.js reads window.location.origin on every ping, and linkedom gives
   // the window no location at all.
+  // `search` is what a ?player= deep link arrives as, so a scenario can set it.
+  const search = cfg.search || '';
   if (!window.location) {
     window.location = {
-      href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:',
-      pathname: '/waivers.html', search: '', hash: '',
+      href: `http://localhost/waivers.html${search}`, origin: 'http://localhost',
+      protocol: 'http:', pathname: '/waivers.html', search, hash: '',
     };
   }
   globalThis.location = window.location;
@@ -269,6 +369,75 @@ async function check(scenario, boot) {
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
 
+  // ---- (c)/(d) the ?player= deep link --------------------------------------
+  //
+  // These two land the page on one man, so the shared assertions below — which
+  // all assume an unfiltered table — do not apply and the scenarios answer for
+  // themselves.
+  if (scenario === 'jump' || scenario === 'jump-unknown') {
+    const w = globalThis.__jump || {};
+
+    if (scenario === 'jump') {
+      c.ok('the strip names the man the link pointed at',
+        /Jumped to Cade Dunlow/.test(w.jump || ''), w.jump);
+      c.ok('and says whose roster he is on',
+        /Ridgeway Rovers/.test(w.jump || ''), w.jump);
+      c.ok('the strip is shown', !/\bhidden\b/.test(w.jumpCls || ''), w.jumpCls);
+
+      c.ok('HIS ROW IS MARKED, AND ONLY HIS',
+        JSON.stringify(w.spot) === JSON.stringify(['7103']) && w.spotAnywhere === 1,
+        `${JSON.stringify(w.spot)} / ${w.spotAnywhere} marked in the document`);
+
+      c.ok('THE SPAN IS WIDENED TO THE WHOLE SEASON — "his next 13 weeks"',
+        JSON.stringify(w.spanOn) === JSON.stringify(['all']), JSON.stringify(w.spanOn));
+      c.ok('and both copies of the span control agree, because there is one span',
+        JSON.stringify(w.takenSpanOn) === JSON.stringify(w.spanOn),
+        `${JSON.stringify(w.spanOn)} vs ${JSON.stringify(w.takenSpanOn)}`);
+      c.ok('BUT THE READER’S OWN SPAN PREFERENCE IS NOT OVERWRITTEN',
+        w.savedSpan === '3', String(w.savedSpan));
+
+      c.ok('the table he is in is put on HIS position',
+        JSON.stringify(w.takenOn) === JSON.stringify(['QB']), JSON.stringify(w.takenOn));
+      c.ok('and the OTHER table’s filter is left alone',
+        JSON.stringify(w.wireOn) === JSON.stringify(['ALL']), JSON.stringify(w.wireOn));
+      c.ok('so what is on screen is him among the men he is measured against',
+        (w.rows || []).length > 1 && (w.rows || []).every((r) => bareOf(r.pos) === 'QB'),
+        JSON.stringify((w.rows || []).map((r) => r.pos)));
+
+      // He is his squad's QB3 over three weeks and their best over the run-in.
+      // The jump widened the span, so the rank on arrival must be the WIDE one:
+      // that is the difference between landing on the right answer and landing
+      // on the one the reader happened to have set.
+      const him = (w.rows || []).find((r) => r.player === '7103');
+      c.ok('AND HIS RANK IS THE ONE FOR THE WIDENED SPAN, NOT THE OLD ONE',
+        him && him.pos === 'QB1', him && him.pos);
+
+      c.ok('clearing takes the mark and the strip away',
+        w.afterClear && w.afterClear.spot === 0 && /\bhidden\b/.test(w.afterClear.jumpCls),
+        JSON.stringify(w.afterClear));
+      c.ok('but leaves the span and the filter where the jump put them',
+        w.afterClear && JSON.stringify(w.afterClear.takenOn) === JSON.stringify(['QB']) &&
+        JSON.stringify(w.afterClear.spanOn) === JSON.stringify(['all']),
+        JSON.stringify(w.afterClear));
+
+      c.ok('and no roster week was bought twice getting there',
+        new Set(w.rosterWeeks || []).size === (w.rosterWeeks || []).length,
+        JSON.stringify(w.rosterWeeks));
+    }
+
+    if (scenario === 'jump-unknown') {
+      c.ok('an id nobody holds says so rather than failing silently',
+        /No player with id 424242/.test(w.jump || ''), w.jump);
+      c.ok('and offers a reason it might happen',
+        /dropped|another league/.test(w.jump || ''), w.jump);
+      c.ok('nothing is marked', w.spot === 0, String(w.spot));
+      c.ok('and the table is left showing everybody rather than nobody',
+        w.rows > 0, String(w.rows));
+    }
+
+    return c.out;
+  }
+
   // ---- the shape ------------------------------------------------------------
   const head = [...d.querySelectorAll('#takenTable thead th')].map((th) => txt(th));
   c.ok('the identity columns are Player, Pos, Tm, Owner and Avg',
@@ -310,14 +479,26 @@ async function check(scenario, boot) {
   const allIds = [...d.querySelectorAll('tr[id]')].map((tr) => tr.getAttribute('id'));
   c.ok('no element id is used twice in the document',
     new Set(allIds).size === allIds.length, `${allIds.length} ids, ${new Set(allIds).size} distinct`);
-  // The click-through Tim described is future tense and unspecified, so the
-  // rows are anchors and nothing else: no link, no button, nothing focusable.
-  // If somebody builds it, this is the assertion to delete deliberately rather
-  // than the thing that quietly stopped meaning anything.
-  c.ok('but nothing is wired up to them yet — the rows are inert',
-    d.querySelectorAll('#takenTable tbody a, #takenTable tbody button, ' +
-      '#takenTable tbody [role="button"], #takenTable tbody [tabindex]').length === 0,
-    'something clickable is already in the taken table');
+  // The click-through IS built now — this block used to assert the opposite,
+  // deliberately, and this is the considered replacement rather than a deletion.
+  const takenLinks = [...d.querySelectorAll('#takenTable tbody a.pref')];
+  c.ok('every taken row’s name is a link to that player',
+    takenLinks.length === rows.length, `${takenLinks.length} links, ${rows.length} rows`);
+  c.ok('the link is a real href carrying ESPN’s own id, not a click handler',
+    takenLinks.every((a) => /^waivers\.html\?player=\d+$/.test(a.getAttribute('href') || '')),
+    takenLinks[0] && takenLinks[0].getAttribute('href'));
+  c.ok('and the id in the href is the row’s own player',
+    takenLinks.every((a) => {
+      const tr = a.closest('tr');
+      return a.getAttribute('href') === `waivers.html?player=${tr.getAttribute('data-player')}`;
+    }), takenLinks[0] && takenLinks[0].getAttribute('href'));
+  c.ok('the wire’s names are links too, by the same contract',
+    wireRows.every((tr) => {
+      const a = tr.querySelector('td.name a.pref');
+      return a && a.getAttribute('href') === `waivers.html?player=${tr.getAttribute('data-player')}`;
+    }), 'a wire row has no link, or the wrong one');
+  c.ok('linking did not change what a name cell reads',
+    rows.every((r) => r.name && !/</.test(r.name)), JSON.stringify(rows[0] && rows[0].name));
 
   // ---- the rank, re-derived from the rendered Avg ---------------------------
   const want = ranksFromRendered(rows);
@@ -404,11 +585,38 @@ async function check(scenario, boot) {
   c.ok('the note distinguishes a Bye cell from a blank one',
     /Bye is the 0\.00 ESPN returns/.test(note) && /blank cell means/.test(note) &&
     /not the same thing/.test(note), note);
-  c.ok('the note says which week decides who owns whom',
-    /Owner is the manager holding him in week \d+/.test(note) &&
-    /the squad as it stands now/.test(note), note);
-  c.ok('the note says the position buttons count the wire, not this table',
-    /counts on those buttons are the available pool’s and not this table’s/.test(note), note);
+  c.ok('the note says the table covers any week shown, not just the first',
+    /on a roster in .{0,20}any.{0,20} of weeks/.test(note.replace(/\s+/g, ' ')), note);
+  c.ok('and which week decides who owns whom',
+    /Owner is the manager holding him in the earliest of those weeks he actually appears in/
+      .test(note.replace(/\s+/g, ' ')), note);
+  c.ok('and that a week he was not rostered for is blank rather than guessed',
+    /not rostered for is blank rather than guessed at/.test(note.replace(/\s+/g, ' ')), note);
+  // This used to assert the opposite — that the counts were the WIRE's, because
+  // the two tables shared one control. They do not any more, and the note has to
+  // say whose numbers these are or the buttons are quietly claiming the wrong
+  // pool. Deliberate replacement, not a deletion.
+  c.ok('the note says this table has its own position buttons',
+    /its own position buttons/.test(note), note);
+  c.ok('and that their counts are this table’s',
+    /counts on them are this table’s/.test(note), note);
+  c.ok('and that they move nothing but this table',
+    /move nothing but this table/.test(note), note);
+  c.ok('the note says the span is shared, and why',
+    /the same one as at the top of the page/.test(note) &&
+    /priced\s+over the same weeks/.test(note.replace(/\s+/g, ' ')), note);
+  c.ok('the note says the names are links and what following one does',
+    /Every name here is a link/.test(note) && /marks his row/.test(note), note);
+
+  // The counts on the buttons must actually BE this table's, not just claimed.
+  const takenCounts = [...d.querySelectorAll('#takenPosFilter button[data-pos]')]
+    .map((b) => [b.getAttribute('data-pos'), (b.querySelector('.seg-count') || {}).textContent]);
+  const byPos = {};
+  for (const r of rows) byPos[bareOf(r.pos)] = (byPos[bareOf(r.pos)] || 0) + 1;
+  c.ok('and the counts match the rows this table actually holds',
+    takenCounts.every(([pos, n]) =>
+      pos === 'ALL' ? Number(n) === rows.length : Number(n) === (byPos[pos] || 0)),
+    JSON.stringify(takenCounts) + ' vs ' + JSON.stringify(byPos));
 
   // ---- the stat strip -------------------------------------------------------
   const stats = [...$('takenStats').querySelectorAll('.stat')].map((s) => txt(s));
@@ -528,10 +736,22 @@ async function check(scenario, boot) {
       new Set(w.rosterAfterWiden || []).size === (w.rosterAfterWiden || []).length,
       JSON.stringify(w.rosterAfterWiden));
 
-    // The position filter drives this table too, and costs nothing.
-    c.ok('the position filter narrows the taken table',
+    // Each table's own filter narrows that table and nothing else. Costs
+    // nothing either way: every week already fetched stays fetched.
+    c.ok('the taken table’s own position filter narrows the taken table',
       (w.qb || []).length === 6 && (w.qb || []).every((r) => bareOf(r.pos) === 'QB'),
       `${(w.qb || []).length}: ${(w.qb || []).map((r) => r.pos).join(',')}`);
+    c.ok('THE WIRE’S FILTER LEAVES THE TAKEN TABLE ALONE',
+      (w.takenAfterWireFilter || []).length === season.ALL.length,
+      `${(w.takenAfterWireFilter || []).length} of ${season.ALL.length} taken rows survived`);
+    c.ok('and it really did narrow the wire, so that is not a vacuous check',
+      (w.wireAfterWireFilter || []).length > 0 &&
+      (w.wireAfterWireFilter || []).every((r) => r.pos === 'QB'),
+      JSON.stringify((w.wireAfterWireFilter || []).map((r) => r.pos)));
+    c.ok('AND THE TAKEN FILTER LEAVES THE WIRE ALONE',
+      (w.wireAfterTakenFilter || []).length > (w.wireAfterWireFilter || []).length &&
+      (w.wireAfterTakenFilter || []).some((r) => r.pos !== 'QB'),
+      `${(w.wireAfterTakenFilter || []).length} wire rows`);
     c.ok('filtering and narrowing again fetch nothing',
       JSON.stringify(w.rosterAfterFilter) === JSON.stringify(w.rosterAfterWiden),
       `${JSON.stringify(w.rosterAfterWiden)} -> ${JSON.stringify(w.rosterAfterFilter)}`);
@@ -544,21 +764,42 @@ async function check(scenario, boot) {
     const { generateDemoWeekRosters } = await import(
       pathToFileURL(path.join(REPO, 'js/demo-rosters.js')).href
     );
-    // Week 4 is the demo league's "current week", which is the earliest week
-    // shown and therefore the one ownership is read from.
-    const teams = generateDemoWeekRosters(4).teams;
+    // MEMBERSHIP IS THE UNION OVER EVERY WEEK ON SCREEN — weeks 4, 5 and 6 at
+    // the default span — and the owner is the earliest of those weeks the man
+    // actually appears in.
+    //
+    // This block asserted week 4 alone until the union replaced it. Rosters
+    // really do turn over in the demo (45 of 160 men differ between weeks 4 and
+    // 13), so the old rule left a man rostered in week 5 out of a table whose
+    // columns include week 5 — and made a link to him from another page land on
+    // "he may have been dropped". Re-derived here from demo-rosters.js the same
+    // way the page derives it, but written independently.
+    const SHOWN = [4, 5, 6];
+    const teams = generateDemoWeekRosters(SHOWN[0]).teams;
     const ownerOf = new Map();
-    for (const t of teams) for (const p of t.players) ownerOf.set(String(p.playerId), t.name);
+    for (const week of SHOWN) {
+      for (const t of generateDemoWeekRosters(week).teams) {
+        for (const p of t.players) {
+          if (!ownerOf.has(String(p.playerId))) ownerOf.set(String(p.playerId), t.name);
+        }
+      }
+    }
+    const weekFour = new Set(teams.flatMap((t) => t.players.map((p) => String(p.playerId))));
 
-    c.ok('every man on a demo roster is listed',
+    c.ok('every man on a demo roster in any week shown is listed',
       rows.length === ownerOf.size, `${rows.length} of ${ownerOf.size}`);
     c.ok('and every row is somebody who is really on one',
       rows.every((r) => ownerOf.has(r.player)),
       rows.filter((r) => !ownerOf.has(r.player)).slice(0, 3).map((r) => r.name).join(','));
+    c.ok('the union is genuinely wider than the first week, so that is not vacuous',
+      ownerOf.size > weekFour.size, `${ownerOf.size} over ${weekFour.size} in week 4`);
     const wrongOwner = rows.filter((r) => r.owner !== ownerOf.get(r.player));
-    c.ok('the Owner column names the demo manager who holds him',
+    c.ok('the Owner column names the manager holding him in the earliest week he appears',
       wrongOwner.length === 0,
       wrongOwner.slice(0, 3).map((r) => `${r.name} got ${r.owner} want ${ownerOf.get(r.player)}`).join(' | '));
+    c.ok('a man on a week-4 roster still takes his week-4 owner',
+      rows.filter((r) => weekFour.has(r.player))
+        .every((r) => r.owner === ownerOf.get(r.player)), 'a week-4 man has the wrong owner');
     c.ok('all ten demo squads are represented',
       new Set(rows.map((r) => r.owner)).size === teams.length,
       `${new Set(rows.map((r) => r.owner)).size}`);

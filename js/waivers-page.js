@@ -84,7 +84,26 @@ const state = {
   seasonWeeks: [],          // every week the league plays
   currentWeek: null,        // the week a claim made now would be for
   span: SPAN_CHOICE(prefs.get('span', '3')),
+
+  // A position filter PER TABLE. They were one filter driving both, which meant
+  // narrowing the taken table to running backs was a scroll back up past a
+  // hundred free agents to a control sitting in the other panel — and it
+  // dragged the wire along with it, which is rarely what you wanted. They are
+  // free (a repaint, never a request), so there is no reason to share one.
+  //
+  // The SPAN is deliberately still one setting for both: it is the request
+  // budget, and both tables are priced over the same weeks. The taken panel
+  // shows the same control rather than a second one, so the choice is reachable
+  // from either end of the page without becoming two choices to spend.
   position: prefs.get('position', 'ALL'),
+  takenPosition: prefs.get('takenPosition', 'ALL'),
+
+  // The man a `?player=` link landed on. `settled` records that we have found
+  // him once and already pointed the page at him, so a later repaint does not
+  // keep yanking the filters back or re-scrolling under the reader.
+  spotlight: null,
+  settled: false,
+  scrolled: false,
 
   // The cache. Fetching is keyed on the week and nothing else, so changing the
   // position filter — or narrowing the span and widening it again — never
@@ -646,8 +665,14 @@ function buildRows(weeks) {
   return rows;
 }
 
-const matchesFilter = (row) =>
-  state.position === 'ALL' || row.p.position === state.position;
+/** Does this row survive a position filter? Each table passes its own. */
+const matches = (row, position) => position === 'ALL' || row.p.position === position;
+
+/** The wire's filter, which the comparison rows share — they are one table. */
+const matchesFilter = (row) => matches(row, state.position);
+
+/** The taken table's own, entirely independent of the wire's. */
+const matchesTaken = (row) => matches(row, state.takenPosition);
 
 // ------------------------------------------------------- the comparison rows
 
@@ -771,18 +796,50 @@ function buildMineRows(weeks) {
  * buildMineRows, which will not call an unrated player the worst one.
  */
 function buildTakenRows(weeks) {
-  const anchor = weeks.find((w) => state.rosterWeeks.has(w));
-  if (anchor === undefined) return [];
+  const loaded = weeks.filter((w) => state.rosterWeeks.has(w));
+  if (!loaded.length) return [];
+
+  // MEMBERSHIP IS THE UNION OVER EVERY WEEK ON SCREEN, not just the first one.
+  //
+  // It used to be the earliest week alone, on the reasoning that the squad as
+  // it stands now is the one you are deciding against. That reasoning is right
+  // about the OWNER and wrong about who is in the table: the columns span
+  // weeks 4–6, so a man rostered in week 5 is part of what this table is
+  // about, and leaving him out meant the page could not answer a question it
+  // was visibly being asked.
+  //
+  // It also broke the click-through across pages. The analysis page can be
+  // pointed at any week of the season, so a link made from week 13 arrived
+  // here about a man the table had never heard of, and the page told Tim he
+  // "may have been dropped" — a confident, wrong answer. In the demo data 45
+  // of 160 men differ between week 4 and week 13; tests/link-check.mjs is what
+  // found it, and no single-page suite could have.
+  //
+  // The owner is still the earliest week he actually appears in: that is the
+  // most recent squad this page knows him to have been on, and it is a fact
+  // rather than a guess.
+  const seen = new Map();   // playerId -> { p, owner }
+  for (const week of loaded) {
+    for (const team of state.rosterWeeks.get(week) || []) {
+      const owner = (team.name || '').trim() || `Team ${team.id}`;
+      for (const p of team.players || []) {
+        if (p.playerId === null || p.playerId === undefined) continue;
+        if (!seen.has(p.playerId)) seen.set(p.playerId, { p, owner });
+      }
+    }
+  }
+
+  // Grouped by owner so the ranks are per manager, as they always were.
+  const squads = new Map();
+  for (const { p, owner } of seen.values()) {
+    if (!squads.has(owner)) squads.set(owner, []);
+    squads.get(owner).push(p);
+  }
 
   const rows = [];
-  for (const team of state.rosterWeeks.get(anchor) || []) {
-    // A league whose team names ESPN did not return still needs something to
-    // put in the column; the id is at least stable and tells two teams apart.
-    const owner = (team.name || '').trim() || `Team ${team.id}`;
-
+  for (const [owner, players] of squads) {
     const byPosition = new Map();
-    for (const p of team.players || []) {
-      if (p.playerId === null || p.playerId === undefined) continue;
+    for (const p of players) {
       const values = weeks.map((w) => rosterValueFor(p.playerId, w));
       const row = { p, values, avg: meanOf(values), owner, rank: null };
       rows.push(row);
@@ -806,11 +863,19 @@ function buildTakenRows(weeks) {
   return rows;
 }
 
-/** How many players sit behind each button on the position control. */
-function positionCounts() {
-  const counts = { ALL: state.pool.size };
+/**
+ * How many players sit behind each button on a position control.
+ *
+ * Each table counts its OWN pool, which is the whole reason the two controls
+ * are worth having separately: the wire's QB button says how many quarterbacks
+ * you could add, the taken one says how many the league is holding. One shared
+ * count could only ever have been true of one of them.
+ */
+function countsOf(players) {
+  const counts = { ALL: 0 };
   for (const pos of POSITIONS) counts[pos] = 0;
-  for (const p of state.pool.values()) {
+  for (const p of players) {
+    counts.ALL++;
     if (counts[p.position] !== undefined) counts[p.position]++;
   }
   return counts;
@@ -818,10 +883,143 @@ function positionCounts() {
 
 // --------------------------------------------------------------------- render
 
+// ------------------------------------------------------- the player deep link
+//
+// `waivers.html?player=<espnPlayerId>` lands on one man. Every page on the site
+// links here that way — a name, or a number standing for a player — and the
+// contract is deliberately a plain `href` rather than a click handler, so
+// middle-click and open-in-a-new-tab behave and the same markup works whether
+// you arrive from another page or click it on this one.
+//
+// Landing does three things, and each is answering a different half of what Tim
+// asked for ("bring you directly to their position … and show you their next 13
+// weeks proj"):
+//
+//   - widens the span to the whole rest of the season, because the span is what
+//     decides how many week columns exist. NOT persisted: it is this visit's
+//     answer to a link, not a change of mind, and a reload gives back the span
+//     actually chosen.
+//   - points the table he is in at HIS position, so he lands among the men he
+//     is measured against rather than alone in a list of everybody.
+//   - marks his row and scrolls to it, once.
+//
+// Nothing here fetches on its own. Widening the span costs whatever weeks are
+// not already held, exactly as pressing the control by hand would.
+
+/** `?player=` from the URL. Defensive: a harness may provide no location. */
+function requestedPlayer() {
+  try {
+    const m = /[?&]player=(\d+)/.exec((window.location && window.location.search) || '');
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;   // no location at all is simply "no player asked for"
+  }
+}
+
+/** Which table holds him, and what position he is, or null if not found yet. */
+function findSpotlight(weeks) {
+  const id = state.spotlight;
+  if (id === null) return null;
+
+  const wire = state.pool.get(id);
+  if (wire) return { where: 'wire', position: wire.position, name: wire.name };
+
+  const taken = buildTakenRows(weeks).find((r) => r.p.playerId === id);
+  if (taken) {
+    return { where: 'taken', position: taken.p.position, name: taken.p.name, owner: taken.owner };
+  }
+  return null;
+}
+
+/**
+ * Point the page at him, once.
+ *
+ * Runs before the tables are drawn, and only until it succeeds: the weeks
+ * arrive one request at a time, so the man being asked for may simply not be
+ * loaded yet on the first paint. Until he is, this is a no-op and the next
+ * repaint tries again.
+ */
+function settleSpotlight(weeks) {
+  if (state.spotlight === null || state.settled) return;
+
+  const found = findSpotlight(weeks);
+  if (!found) {
+    // Not found is not the same as not looked yet, and the difference matters:
+    // the rosters arrive after the first paint in BOTH modes — live fetches them
+    // a week at a time, and demo imports demo-rosters.js asynchronously — so
+    // giving up on the first pass would declare every rostered man missing.
+    //
+    // Give up only once there is somewhere to have looked: something in the
+    // roster cache, or every week we asked for refused outright. Anything still
+    // in flight is a reason to wait rather than to answer.
+    const looked = state.rosterWeeks.size > 0;
+    const hopeless = weeks.length > 0 && weeks.every((w) => state.failedRosterWeeks.has(w));
+    if (state.inFlight.size || !(looked || hopeless)) return;
+    state.settled = true;
+    return;
+  }
+
+  if (found.where === 'wire') state.position = found.position;
+  else state.takenPosition = found.position;
+  state.settled = true;
+}
+
+/** Scroll to the marked row after the tables exist. Once, never again. */
+function scrollToSpotlight() {
+  if (state.spotlight === null || state.scrolled) return;
+  const row = document.getElementById(`p${state.spotlight}`);
+  if (!row) return;
+  state.scrolled = true;
+  // Guarded: jsdom/linkedom have no scrollIntoView, and a harness must not die
+  // of a missing browser API.
+  try {
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  } catch { /* the row is marked either way, which is the part that matters */ }
+}
+
+/** The strip that says who we jumped to, and how to stop. */
+function renderJump(weeks) {
+  const el = $('jumpNote');
+  if (state.spotlight === null) {
+    el.className = 'jump hidden';
+    el.innerHTML = '';
+    return;
+  }
+
+  const found = findSpotlight(weeks);
+  el.className = 'jump';
+
+  if (!found) {
+    el.innerHTML = state.settled
+      ? `<span>No player with id ${esc(state.spotlight)} is on the wire or on a roster in ` +
+        `this league. He may have been dropped, or the link may be from another league.</span>` +
+        `<button type="button" data-clear>Clear</button>`
+      : `<span class="muted">Looking for the player this link points at…</span>`;
+    return;
+  }
+
+  el.innerHTML =
+    `<span>Jumped to <strong>${esc(found.name)}</strong>${
+      found.where === 'taken' ? ` — on ${esc(found.owner)}’s roster` : ' — on the wire'
+    }. Showing every remaining week, and the ${esc(found.position)} filter on the ` +
+    `${found.where === 'taken' ? 'Taken' : 'Available'} table.</span>` +
+    `<button type="button" data-clear>Clear</button>`;
+}
+
+// --------------------------------------------------------------------- render
+
 function render() {
+  // Before anything is painted: a `?player=` link may need to move the filters
+  // it is about to be drawn under. Idempotent once it has found its man.
+  settleSpotlight(shownWeeks());
+
   syncSource();
   syncSegmented('posFilter', 'pos', state.position);
+  syncSegmented('takenPosFilter', 'pos', state.takenPosition);
+  // One span, two controls showing it. Both are painted from the same state, so
+  // they can never drift apart and disagree about which weeks are on screen.
   syncSegmented('spanFilter', 'span', state.span);
+  syncSegmented('takenSpanFilter', 'span', state.span);
 
   $('modeBadge').className = 'badge ' + (state.isDemo ? 'demo' : 'live');
   $('modeBadge').textContent = state.isDemo ? 'Demo' : 'Live';
@@ -832,16 +1030,19 @@ function render() {
     : `${state.leagueName} · ${state.pool.size || 'no'} available players · ${weekRange(weeks)}`;
 
   renderCost(weeks);
-  renderCounts();
+  renderCounts(weeks);
   renderTable(weeks);
   renderStats(weeks);
   renderNote(weeks);
-  // The second panel is drawn from the same cache in the same pass, so the
-  // position filter and the span control move both tables at once and neither
-  // of them costs a request.
+  // The second panel is drawn from the same cache in the same pass, so neither
+  // its own position filter nor the shared span costs a request to answer.
   renderTaken(weeks);
   renderTakenStats(weeks);
   renderTakenNote(weeks);
+
+  // Last, because both are about rows that have to exist first.
+  renderJump(weeks);
+  scrollToSpotlight();
 }
 
 function syncSource() {
@@ -856,11 +1057,18 @@ function syncSegmented(id, key, value) {
     .forEach((b) => b.classList.toggle('on', b.dataset[key] === String(value)));
 }
 
-/** What the chosen span costs, said next to the control that spends it. */
+/**
+ * What the chosen span costs, said next to the control that spends it — and
+ * now next to BOTH copies of that control, because either one spends it.
+ */
+function setCost(text) {
+  $('spanCost').textContent = text;
+  $('takenSpanCost').textContent = text;
+}
+
 function renderCost(weeks) {
   if (state.isDemo) {
-    $('spanCost').textContent =
-      `${plural(weeks.length, 'week')} shown. Demo data costs nothing to widen.`;
+    setCost(`${plural(weeks.length, 'week')} shown. Demo data costs nothing to widen.`);
     return;
   }
   // A week costs the wire AND that week's rosters, always — the Taken players
@@ -882,19 +1090,27 @@ function renderCost(weeks) {
   if (todo) bits.push(`${todo} still to fetch`);
   if (gone) bits.push(`${gone} refused by ESPN`);
 
-  $('spanCost').textContent =
+  setCost(
     `${plural(weeks.length, 'week')} = ${plural(weeks.length * per, 'request')} to ESPN, ` +
     `the wire and every squad in the league for each one` +
-    ` — there is no bulk form.` + (bits.length ? ` ${bits.join(', ')}.` : '');
+    ` — there is no bulk form.` + (bits.length ? ` ${bits.join(', ')}.` : '')
+  );
 }
 
-function renderCounts() {
-  const counts = positionCounts();
-  $('posFilter').querySelectorAll('button[data-pos]').forEach((b) => {
+function paintCounts(id, counts) {
+  $(id).querySelectorAll('button[data-pos]').forEach((b) => {
     const n = counts[b.dataset.pos] ?? 0;
     const slot = b.querySelector('.seg-count');
-    if (slot) slot.textContent = state.pool.size ? String(n) : '';
+    // Blank rather than a row of zeroes before anything has loaded: a zero is a
+    // claim that there are none, which is not what "we have not read it yet"
+    // means anywhere else on this page.
+    if (slot) slot.textContent = counts.ALL ? String(n) : '';
   });
+}
+
+function renderCounts(weeks) {
+  paintCounts('posFilter', countsOf(state.pool.values()));
+  paintCounts('takenPosFilter', countsOf(buildTakenRows(weeks).map((r) => r.p)));
 }
 
 function renderHead(weeks) {
@@ -1007,12 +1223,7 @@ function cell(v, week, name, position, roster = false, yours = null) {
 /**
  * A row's addressable identity, so a later change can find one man's row.
  *
- * GROUNDWORK ONLY, and deliberately inert: Tim wants a player's name (and any
- * number that refers to him) to become a link that jumps to his row and shows
- * his next thirteen weeks. He has not specified how that should look or behave,
- * so nothing here clicks, scrolls or highlights — this is only the anchor such
- * a change would need, added now because retrofitting it later would mean
- * restructuring both tables.
+ * This is what `waivers.html?player=<id>` lands on, from anywhere on the site.
  *
  * `data-player` goes on every row; the `id` does not. A player appears at most
  * once on the wire and once in the Taken table — those sets are disjoint, since
@@ -1021,8 +1232,29 @@ function cell(v, week, name, position, roster = false, yours = null) {
  * two elements with the same id is not a document. So the comparison rows carry
  * the data attribute and let the Taken table own the id.
  */
-const rowIdentity = (playerId, addressable = true) =>
-  `${addressable ? ` id="p${esc(playerId)}"` : ''} data-player="${esc(playerId)}"`;
+function rowIdentity(playerId, { addressable = true, cls = '' } = {}) {
+  // The classes are built here rather than by each caller because the spotlight
+  // has to merge with whatever else the row is wearing — two class attributes on
+  // one element is not a document, and the second one silently loses.
+  const classes = [cls, playerId === state.spotlight ? 'spotlight' : '']
+    .filter(Boolean).join(' ');
+  return `${addressable ? ` id="p${esc(playerId)}"` : ''} data-player="${esc(playerId)}"` +
+    (classes ? ` class="${classes}"` : '');
+}
+
+/**
+ * A player's name, as the link every page on the site points at him with.
+ *
+ * A real href rather than a click handler, so middle-click and open-in-a-new-tab
+ * behave — and so the same markup works whether you arrive from another page or
+ * click it here. On this page the click is intercepted and answered without a
+ * reload, because everything needed to answer it is already in the cache.
+ */
+function playerLink(p, inner, why) {
+  if (p.playerId === null || p.playerId === undefined) return inner;
+  return `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" ` +
+    `title="${why}">${inner}</a>`;
+}
 
 /** The injury tag beside a name. Same markup wherever the player came from. */
 function injuryTag(status) {
@@ -1053,12 +1285,14 @@ function wireRow(row, weeks, mine) {
   const status = availability(p.injuryStatus);
   const yours = mine.get(p.position) || null;
 
-  return `<tr${rowIdentity(p.playerId)}${status && status.dim ? ' class="unavailable"' : ''}>
-      <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${esc(p.name)}${
-        p.percentOwned === null || p.percentOwned === undefined
-          ? ''
-          : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`
-      }">${esc(p.name)}${injuryTag(status)}</td>
+  const owned = p.percentOwned === null || p.percentOwned === undefined
+    ? ''
+    : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`;
+
+  return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
+      <td class="name" data-v="${esc(p.name.toLowerCase())}">${
+        playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row and show every ` +
+          `remaining week`)}${injuryTag(status)}</td>
       ${identityCells(row)}
       ${values
         .map((v, i) =>
@@ -1078,9 +1312,10 @@ function mineRow(row, weeks) {
     `${esc(p.name)} — on your roster, not on the wire. Your lowest-averaging ` +
     `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there.`;
 
-  return `<tr class="mine"${rowIdentity(p.playerId, false)}>
-      <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${why}">` +
-        `<span class="mine-tag">${esc(label)}</span> ${esc(p.name)}` +
+  return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
+      <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
+        `<span class="mine-tag">${esc(label)}</span> ` +
+        `${playerLink(p, esc(p.name), why)}` +
         `${injuryTag(availability(p.injuryStatus))}</td>
       ${identityCells(row)}
       ${values.map((v, i) => cell(v, weeks[i], p.name, p.position, true)).join('')}
@@ -1199,9 +1434,10 @@ function takenRow(row, weeks) {
       `${weekRange(weeks)}. That is our ordering, not ESPN’s depth chart, and widening ` +
       `the span can change it.`;
 
-  return `<tr${rowIdentity(p.playerId)}${status && status.dim ? ' class="unavailable"' : ''}>
-      <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${esc(p.name)} — on ${
-        esc(owner)}’s roster.">${esc(p.name)}${injuryTag(status)}</td>
+  return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
+      <td class="name" data-v="${esc(p.name.toLowerCase())}">${
+        playerLink(p, esc(p.name), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
+          `his row and show every remaining week`)}${injuryTag(status)}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" title="${posTitle}">${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
       <td class="left">${esc(p.proTeam)}</td>
@@ -1219,7 +1455,7 @@ function renderTaken(weeks) {
   renderTakenHead(weeks);
 
   const all = buildTakenRows(weeks);
-  const shown = all.filter(matchesFilter);
+  const shown = all.filter(matchesTaken);
   const cols = weeks.length + 5;
 
   if (!shown.length) {
@@ -1238,7 +1474,7 @@ function takenEmptyReason(totalPlayers) {
   if (progressText()) return 'Reading the league’s rosters from ESPN…';
 
   if (totalPlayers > 0) {
-    const label = state.position === 'DST' ? 'defense' : state.position;
+    const label = state.takenPosition === 'DST' ? 'defense' : state.takenPosition;
     return `Nobody in this league is holding a ${label} right now. ` +
       `Switch the filter back to All to see the other ${plural(totalPlayers, 'player')}.`;
   }
@@ -1261,7 +1497,7 @@ function takenEmptyReason(totalPlayers) {
 
 function renderTakenStats(weeks) {
   const el = $('takenStats');
-  const rows = buildTakenRows(weeks).filter(matchesFilter);
+  const rows = buildTakenRows(weeks).filter(matchesTaken);
 
   if (!rows.length) {
     el.innerHTML = '';
@@ -1270,7 +1506,7 @@ function renderTakenStats(weeks) {
 
   const rated = rows.filter((r) => r.avg !== null);
   const best = rated.length ? rated.reduce((a, b) => (b.avg > a.avg ? b : a)) : null;
-  const label = state.position === 'ALL' ? 'Taken' : `Taken ${state.position}`;
+  const label = state.takenPosition === 'ALL' ? 'Taken' : `Taken ${state.takenPosition}`;
 
   const items = [
     [label, String(rows.length), `across ${plural(new Set(rows.map((r) => r.owner)).size, 'squad')}`],
@@ -1309,10 +1545,12 @@ function renderTakenNote(weeks) {
   );
 
   parts.push(
-    `Everyone on a roster, over ${weekRange(weeks)}. Owner is the manager holding him in ` +
-    `week ${weeks[0]} — the earliest week shown, because that is the squad as it stands now ` +
-    `rather than as it will stand later in the season. His week numbers still come from each ` +
-    `week’s own payload, so no projection is borrowed across weeks.`
+    `Everyone on a roster in <strong>any</strong> of ${weekRange(weeks)} — a man picked up in ` +
+    `${weeks.length > 1 ? `week ${weeks[1]}` : 'a later week'} belongs in a table whose columns ` +
+    `include that week. Owner is the manager holding him in the earliest of those weeks he ` +
+    `actually appears in, which is the most recent squad this page knows him to have been on. ` +
+    `His week numbers still come from each week’s own payload, so no projection is borrowed ` +
+    `across weeks, and a week he was not rostered for is blank rather than guessed at.`
   );
 
   parts.push(
@@ -1345,9 +1583,19 @@ function renderTakenNote(weeks) {
   );
 
   parts.push(
-    'The position buttons and the week span above drive this table too. The counts on those ' +
-    'buttons are the available pool’s and not this table’s, because you cannot add a player who ' +
-    'is already on somebody’s roster.'
+    'This table has <strong>its own position buttons</strong>, and the counts on them are this ' +
+    'table’s — how many of each position the league is holding, not how many you could add. ' +
+    'They move nothing but this table, so you can read every taken running back while the wire ' +
+    'above stays on whatever you left it. The <strong>weeks to price</strong> control beside them ' +
+    'is the same one as at the top of the page rather than a second one: both tables are priced ' +
+    'over the same weeks, and widening costs requests, so that is one choice shown at both ends ' +
+    'of a long page instead of two choices that could disagree.'
+  );
+
+  parts.push(
+    'Every name here is a link. Clicking one puts the table on his position, widens the weeks to ' +
+    'the rest of the season and marks his row — the same thing that happens when you click a ' +
+    'player anywhere else on the site, which is what brings you here.'
   );
 
   const missing = weeks.filter((w) => state.failedRosterWeeks.has(w));
@@ -1520,6 +1768,14 @@ function renderNote(weeks) {
     );
   }
 
+  parts.push(
+    'The position buttons above drive <em>this</em> table only — the Taken players panel has its ' +
+    'own set — and filtering costs nothing: every week already fetched stays fetched. The weeks ' +
+    'to price control is shared with that panel, because both tables are priced over the same ' +
+    'weeks and widening is what actually spends requests. Every name is a link that jumps to that ' +
+    'player and shows the rest of his season.'
+  );
+
   parts.push(...comparisonNote(weeks));
 
   parts.push(
@@ -1560,24 +1816,81 @@ $('sourceToggle').addEventListener('click', (e) => {
 
 // Filtering by position is a repaint and nothing more: every week already
 // fetched stays fetched, so flicking through the positions costs no requests.
-$('posFilter').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-pos]');
-  if (!btn || btn.dataset.pos === state.position) return;
-  state.position = btn.dataset.pos;
-  prefs.set('position', state.position);
-  render();
-});
+// One handler per table, because the two filters are genuinely separate — a
+// shared one meant narrowing the taken table dragged the wire along with it.
+function onPositionClick(id, key) {
+  $(id).addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pos]');
+    if (!btn || btn.dataset.pos === state[key]) return;
+    state[key] = btn.dataset.pos;
+    prefs.set(key, state[key]);   // each table comes back the way you left it
+    render();
+  });
+}
+onPositionClick('posFilter', 'position');
+onPositionClick('takenPosFilter', 'takenPosition');
 
 // Widening the span DOES cost requests — but only for the weeks not already in
 // the cache and not already in the air, so narrowing and widening again is
 // free, and widening mid-load never pays for the same week twice.
-$('spanFilter').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-span]');
-  if (!btn || btn.dataset.span === state.span) return;
-  state.span = SPAN_CHOICE(btn.dataset.span);
-  prefs.set('span', state.span);
+//
+// Both copies of the control drive the SAME setting. That is the point: the
+// weeks are shared, so this is one choice reachable from either end of a long
+// page rather than two choices that could disagree and two costs to spend.
+function onSpanClick(id) {
+  $(id).addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-span]');
+    if (!btn || btn.dataset.span === state.span) return;
+    state.span = SPAN_CHOICE(btn.dataset.span);
+    prefs.set('span', state.span);
+    render();
+    refreshWeeks(state.token);
+  });
+}
+onSpanClick('spanFilter');
+onSpanClick('takenSpanFilter');
+
+/**
+ * Jump to a player without leaving the page.
+ *
+ * Everything a `?player=` link asks for is already in this module's cache, so
+ * following one from THIS page would be a reload that fetched nothing new and
+ * lost the weeks already paid for. So the click is answered here instead —
+ * `preventDefault` only for a plain left click, leaving middle-click,
+ * ctrl/cmd-click and "open in new tab" to the browser, which is the whole
+ * reason the contract is an `<a href>` and not a handler.
+ */
+function jumpTo(playerId) {
+  state.spotlight = playerId;
+  state.settled = false;
+  state.scrolled = false;
+  // The span is what decides how many week columns exist, so "show me his next
+  // 13 weeks" IS this. Not persisted: answering a link is not a change of mind
+  // about the setting, and a reload should give back the span actually chosen.
+  state.span = 'all';
   render();
   refreshWeeks(state.token);
+}
+
+document.addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const link = e.target.closest && e.target.closest('a.pref[href*="player="]');
+  if (!link) return;
+  const m = /[?&]player=(\d+)/.exec(link.getAttribute('href') || '');
+  if (!m) return;
+  e.preventDefault();
+  jumpTo(Number(m[1]));
+});
+
+$('jumpNote').addEventListener('click', (e) => {
+  if (!e.target.closest || !e.target.closest('button[data-clear]')) return;
+  // Only the mark and the strip go. The span and the filter it moved are left
+  // where they are: they are now what the reader is looking at, and yanking
+  // them back would undo a page he did not ask to leave.
+  state.spotlight = null;
+  state.settled = false;
+  state.scrolled = false;
+  render();
 });
 
 // The average is the only column that orders the whole table into an answer, so
@@ -1620,6 +1933,15 @@ onConnection((conn) => {
   syncSource();
   loadLive();
 });
+
+// A `?player=` link decides the span before the first request goes out, so the
+// weeks it needs are bought in the same pass rather than fetched three-wide and
+// then immediately widened. Set before the load, never after it.
+const landing = requestedPlayer();
+if (landing !== null) {
+  state.spotlight = landing;
+  state.span = 'all';
+}
 
 if (state.source === 'live' && savedConfig()) loadLive();
 else { state.source = 'demo'; loadDemo(); }

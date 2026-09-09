@@ -165,6 +165,48 @@ tbody tr.unavailable td.name { font-weight: 500; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A PLAYER REFERENCE. Every page on the site links to a man's row here the same
+   way, and so does this page. Restrained on purpose: there are hundreds of them
+   in these two tables, and painting each one blue would turn the wire into a
+   wall of links and lose the numbers, which are the point. The affordance shows
+   up on hover and on keyboard focus, which is when it is actually wanted. */
+a.pref { color: inherit; text-decoration: none; cursor: pointer; }
+a.pref:hover { text-decoration: underline; text-underline-offset: 2px; color: var(--accent); }
+a.pref:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--r-1);
+}
+
+/* THE MAN A LINK LANDED ON. The row keeps its own colours — it is still a wire
+   row or a taken row and still has to read as one — so this is an edge and a
+   tint rather than a repaint, the same treatment the comparison rows use for
+   the same reason. Written twice so it survives the zebra band and the hover,
+   both of which paint their own background. */
+tbody tr.spotlight td,
+tbody tr.spotlight:hover td { background: #16311f; }
+tbody tr.spotlight td.name {
+  background: #16311f;
+  box-shadow: inset 3px 0 0 var(--accent), 6px 0 7px -7px rgba(0, 0, 0, 0.85);
+  padding-left: 12px;
+}
+
+/* The strip that says who we jumped to. It sits above the panels rather than
+   inside one, because the jump moved settings in BOTH of them and a note in
+   either would be describing only half of what happened. */
+.jump {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 9px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-2);
+  background: #16311f;
+  font-size: 13.5px;
+}
+.jump button { padding: 4px 12px; font-size: 12.5px; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -189,6 +231,9 @@ tbody tr.unavailable td.name { font-weight: 500; }
 
   <div id="connBar"></div>
 
+
+  <!-- Filled by the module when a ?player= link lands. Hidden otherwise. -->
+  <div id="jumpNote" class="jump hidden"></div>
 
   <h1>Players <span id="modeBadge" class="badge demo">Demo</span></h1>
   <p class="sub" id="pageSub">Showing a generated sample waiver wire so you can see the layout with real-looking projections in it.</p>
@@ -240,13 +285,43 @@ tbody tr.unavailable td.name { font-weight: 500; }
     <p class="panel-note" id="waiverNote"></p>
   </section>
 
-  <!-- The other half of the league: everyone who IS on a roster. Same weeks,
-       same span control, same position buttons — the two panels are one table
-       split by whether you could actually claim the man. Deliberately without
-       its own controls: a second span control would be a second cost to spend
-       and the weeks are shared, so there is only one choice to make. -->
+  <!-- The other half of the league: everyone who IS on a roster. The two panels
+       are one table split by whether you could actually claim the man.
+
+       Its OWN position filter, because filtering is free and sharing one meant
+       narrowing this table was a scroll back up past a hundred free agents to a
+       control in the other panel — which then dragged the wire along with it.
+       The SAME span control, because that one is the request budget and both
+       tables are priced over the same weeks: one choice, shown at both ends of
+       a long page, never two choices that could disagree. -->
   <section class="panel">
     <h2>Taken players</h2>
+
+    <div class="row spread mb-12">
+      <div class="ctl">
+        <span class="ctl-label" id="takenPosLabel">Position</span>
+        <div class="segmented seg-sm" id="takenPosFilter" role="group" aria-labelledby="takenPosLabel">
+          <button type="button" data-pos="ALL" class="on">All<span class="seg-count"></span></button>
+          <button type="button" data-pos="QB">QB<span class="seg-count"></span></button>
+          <button type="button" data-pos="RB">RB<span class="seg-count"></span></button>
+          <button type="button" data-pos="WR">WR<span class="seg-count"></span></button>
+          <button type="button" data-pos="TE">TE<span class="seg-count"></span></button>
+          <button type="button" data-pos="K">K<span class="seg-count"></span></button>
+          <button type="button" data-pos="DST">DST<span class="seg-count"></span></button>
+        </div>
+      </div>
+
+      <div class="ctl">
+        <span class="ctl-label" id="takenSpanLabel">Weeks to price</span>
+        <div class="segmented seg-sm" id="takenSpanFilter" role="group" aria-labelledby="takenSpanLabel">
+          <button type="button" data-span="3" class="on">Next 3</button>
+          <button type="button" data-span="6">Next 6</button>
+          <button type="button" data-span="all">Rest of season</button>
+        </div>
+      </div>
+
+      <span class="cost" id="takenSpanCost"></span>
+    </div>
 
     <div class="stat-row" id="takenStats"></div>
 
