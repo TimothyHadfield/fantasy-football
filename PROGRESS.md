@@ -12,11 +12,40 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
 > [docs/espn-draft-api.md](docs/espn-draft-api.md) for ESPN's field-level
 > behaviour, [DRAFT-STRATEGY.md](DRAFT-STRATEGY.md) for the parked drafter.
 
+## Where to find things in here
+
+This file is long and organised by topic, not by importance. The sections that
+describe how the site works **today**:
+
+| Looking for | Section |
+|---|---|
+| The two all-teams grids, DEF/K, the real Total, the bench columns | "The two all-teams grids" |
+| The hover card — the week run as a chart, and why it is not a `title` | "The analysis grids' hover is a two-row chart" |
+| `12.3 RB4` on a bench cell | "Bench cells carry a positional rank" |
+| Swapping a lineup in the roster detail | "The roster detail is a lineup you can move" |
+| The wire's two greens | "`STARTABLE`…" and "The second green on the wire" |
+| "Your QB3" rows | "&quot;Your QB3&quot; comparison rows" |
+| The Taken players table, owners, ranks | "The taken table, and why a week now costs two requests" |
+| Per-table position filters, the shared span | "A position filter PER TABLE, and one span for both" |
+| FLEX | "FLEX is a FILTER, not a seventh position" |
+| Clicking a player anywhere on the site | "The player click-through" |
+| Why the taken table spans every week shown | "The taken table's membership is the UNION" |
+| Sorting, and why several `<tbody>`s | "Table sorting" |
+| What to do next | "Next", at the foot |
+
 ## What changed on 2026-09-09
 
-Three sessions ran that day and the site changed a great deal. Everything below
+Four sessions ran that day and the site changed a great deal. Everything below
 is the record of what was built and — more usefully — of what was tried, found
 to be wrong, and must not be tried again.
+
+**The fourth session** rebuilt the all-teams view into two grids, added the
+roster-detail swap, renamed the waiver page to "Players" and gave it a taken
+table, per-table filters and FLEX, and built the player click-through across
+every page. It also produced the one lesson worth carrying: **a feature split
+across two agents' file sets needs a test that spans them**, because every
+per-page suite was green while a quarter of the click-through was landing on a
+wrong answer. `link-check.mjs` is that test.
 
 **A large usability pass landed 2026-09-09 (second session that day).** The
 site was built and verified against a COMPLETE 2025 season and had never been
@@ -377,9 +406,11 @@ the total moves, with the difference from ESPN's own lineup beside it.
   season grid, so the two panels can never disagree about who is starting. The
   glance stats are totalled from it rather than taken from ESPN's team totals,
   so they move with a swap — and with nothing swapped they use season.js's own
-  rule and come out identical to the decimal. `Baseline week` and `Est Total`
-  deliberately do NOT move: they are the best seven by season average and never
-  depended on how the lineup was set. The note says so when a swap is live.
+  rule and come out identical to the decimal. **`Proj avg` deliberately does
+  NOT move**: it is the best nine by season average — the same figure the first
+  grid gives that team — and it never depended on how the lineup was set. The
+  note says so when a swap is live. (It was `Baseline week` + `Est Total` until
+  the grids were rebuilt; same reasoning, one number instead of two.)
 
 **Schedule luck (`opponentProjections`, panel + column on `stats.html`).**
 The average projected score of the opponents a team has to play. It needs no
@@ -998,23 +1029,36 @@ silently rendering zeroes.
 Focus is trades, player analysis, and stats — on the now-connected real league.
 Tim will specify the first build. Prepared ground, in likely order:
 
-- **Check the rebuilt pages against the real league.** The 2026-09-09 pass was
-  verified against demo data and stubs, and every page boots clean, but it has
-  NOT been seen against live 476225250 in a browser. That is the first job:
-  open each page on the real league and fix whatever the real payload breaks.
-  Two things to look at specifically — whether `% own` actually populates from
-  the `mRoster` view (the analysis grid hides that column when it does not),
-  and whether the strength-of-schedule basis on `schedule.html` picks the path
-  it should.
-- **Trade interaction** — the feature he named first. Likely: evaluate a
-  proposed trade's effect on both rosters, and find mutually beneficial trades
-  using opponent-need logic (the same idea as the draft engine's). Build the
-  *analysis* with a send-it-yourself button; do not auto-send. The all-teams
-  grid on `analysis.html` is the natural surface to build this onto — it
-  already computes each team's lineup and baseline by position.
-- **The Predictions tab** — the one genuinely unbuilt idea from his sheet.
-  He tested by hand, for week 1 only, whether Est Total at a given week
-  predicts the final ranking. The site can answer it across all 13 weeks.
+- **Check the rebuilt pages against the real league.** Everything here is
+  verified against demo data, stubs and public leagues, and every page boots
+  clean, but **none of it has been seen against live 476225250 in a browser**.
+  That is the first job. Specifically:
+  - whether `% own` actually populates from the `mRoster` view (the roster
+    detail hides that column when it does not);
+  - whether any week's projection drops implausibly far, which would mean bye
+    handling is over-firing;
+  - whether the strength-of-schedule basis on `schedule.html` picks the path it
+    should;
+  - whether the Players page's **two requests per week** — the wire and every
+    squad — is acceptable to him over a full thirteen-week span, since that is
+    26 requests for "Rest of season".
+- **Trade interaction** — the feature he named first, still unspecified. Likely:
+  evaluate a proposed trade's effect on both rosters, and find mutually
+  beneficial trades using opponent-need logic (the same idea as the draft
+  engine's). Build the *analysis* with a send-it-yourself button; do not
+  auto-send. The two all-teams grids are the natural surface — they already
+  compute every team's best nine, its real total and the bench behind it, on
+  two different measures, and `positionRanks()` already says how deep each
+  squad is at every position.
+- **The Predictions tab** — the one genuinely unbuilt idea from his sheet. He
+  tested by hand, for week 1 only, whether a team's projected total at a given
+  week predicts the final ranking. The site can answer it across all 13 weeks.
+  (His sheet called that number "Est Total"; the grid's column is just `Total`
+  now, and it is nine real men rather than seven plus an allowance.)
+- **The click-through, one step further.** It lands on a man and shows his rest
+  of season. Tim has not asked for more, but the obvious next step if he does is
+  landing from a *team* — "show me everyone Nolan holds" — which the taken
+  table's owner column already groups by.
 - **Writes / in-ESPN panel** — the later phase. See "The bridge & writes".
 
 Still parked, do not pursue unless asked:

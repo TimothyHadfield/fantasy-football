@@ -4,7 +4,7 @@ Headless suites for the site. They boot the **real** pages and import the
 **real** modules from [`../js`](../js) — nothing here reimplements site logic,
 so a rename or a broken selector fails a test rather than sailing past it.
 
-About 980 assertions in all.
+About 1,700 assertions in all, across 14 suites.
 
 ## Running them
 
@@ -41,10 +41,12 @@ process would see each other's DOM.
 | [`test-sim.mjs`](test-sim.mjs) | The Monte Carlo season simulation in [`js/forecast.js`](../js/forecast.js). | 71 |
 | [`test-projection.mjs`](test-projection.mjs) | [`js/projection.js`](../js/projection.js), the shared projection module. | 38 |
 | [`fc-test.mjs`](fc-test.mjs) | The schedule page's forecast and simulation panels, against demo data and a stubbed live league — including no team set, the owner picking a team afterwards, switching team, and a roster fetch that rejects. | 375 over 8 scenarios |
-| [`wv-test.mjs`](wv-test.mjs) | The waiver-wire page: filtering, sorting, widening the span mid-load, switching source while requests are in the air, weeks that reject, an empty pool. | 157 over 7 scenarios |
-| [`cmp-check.mjs`](cmp-check.mjs) | The waiver page compared against your own roster — the worst man at each position, nobody set as you, ESPN refusing some or all roster weeks. | 79 over 6 scenarios |
-| [`an-test.mjs`](an-test.mjs) | The analysis page: demo, a stubbed live league, weeks that reject, switching team and sorting a week column. | 146 over 4 scenarios |
-| [`hot-check.mjs`](hot-check.mjs) | The hot/cold thresholds on the analysis grid. | 43 |
+| [`wv-test.mjs`](wv-test.mjs) | The Players page's wire: filtering (incl. FLEX), sorting, widening the span mid-load, switching source while requests are in the air, weeks that reject, an empty pool, a saved filter that is no longer valid. | 188 over 8 scenarios |
+| [`cmp-check.mjs`](cmp-check.mjs) | The wire compared against your own roster — the worst man at each position, nobody set as you, ESPN refusing some or all roster weeks. | 90 over 6 scenarios |
+| [`taken-check.mjs`](taken-check.mjs) | The "Taken players" table: owners, per-squad positional ranks, nothing coloured, the two tables' independent filters, and landing a `?player=` link. Every rank is re-derived from the **rendered** Avg column, never from the stub's raw numbers. | 216 over 4 scenarios |
+| [`link-check.mjs`](link-check.mjs) | **The seam between pages.** `index.html` and `analysis.html` make player links; `waivers.html` resolves them. Boots each, checks every link against the contract, then *follows* a sample and asserts each lands on that man. No single-page suite can see this, and it found a real defect on its first run. | 103 |
+| [`an-test.mjs`](an-test.mjs) | The analysis page: demo, a stubbed live league, weeks that reject, switching team and sorting, the two all-teams grids, the roster-detail swap, the hover card, and a player ESPN gave no id for. | 451 over 7 scenarios |
+| [`hot-check.mjs`](hot-check.mjs) | Both greens on the Players page's wire — over the startable bar, and beating your own worst man that week — plus proof that pressing FLEX changes not one cell's colour. | 118 |
 | [`opp-check.mjs`](opp-check.mjs) | Opponent strength on the stats page, against a synthetic league with no network at all. | 6 scenarios |
 | [`stats-weeks.mjs`](stats-weeks.mjs) | The stats page at 1, 2, 3, 5 and 13 weeks of season — the early-season honesty rules: no fabricated zero std dev, no empty accuracy buckets, no percentage drawn from a handful of games. Copies the repo to a temp dir and shortens the demo season to do it. | 6 checks |
 | [`test-home.mjs`](test-home.mjs) | The home page (demo and pre-kickoff) and the debug page. | 2 pages |

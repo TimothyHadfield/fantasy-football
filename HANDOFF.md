@@ -44,13 +44,39 @@ the hard way.**
   is wrong, **he is usually right and has evidence** — he caught the projection
   model being built on the wrong source this way. Test the claim against a real
   league before defending the code.
-- He asks for things in his own vocabulary ("players" means managers/teams).
-  Read the intent, then confirm the interpretation in the reply.
-- He likes parallel subagents and speed. That has a real cost: two defects this
-  session came from concurrent edits (a CSS token deleted as "unused" while
-  another agent was starting to use it; a page pushed before its imports were
-  committed, which broke the live site for minutes). **When agents run in
-  parallel, give them disjoint file sets and verify the whole tree afterwards.**
+- He asks for things in his own vocabulary ("players" means managers/teams;
+  "sorting" has meant the position filter). **Read the intent, then say which
+  reading you took in the reply** so he can correct it cheaply.
+- **He iterates.** Several features here were built, shown to him, and changed
+  twice. When he says something is hard to read or in the wrong place, he is
+  describing a real defect — take it at face value rather than defending the
+  first answer. The tip card exists because the first answer to the same ask was
+  a native tooltip, which could not draw what he wanted.
+- He sends new asks mid-task. Finish what is in flight, then take the new one;
+  do not abandon a half-applied edit.
+
+### Running agents in parallel — he asks for this, and it has a cost
+
+Three separate defects have come from concurrent edits: a CSS token deleted as
+"unused" while another agent was starting to use it; a page pushed before its
+imports were committed; and a whole feature that passed every per-page suite
+while a quarter of its links landed on a wrong answer, because three authors
+built two halves of one contract at once.
+
+So:
+
+1. **Give each agent a disjoint file set, and name the files the others own.**
+   Every agent that has been told this has respected it.
+2. **Anything that spans two agents' files needs a test that spans them.**
+   `link-check.mjs` is that test for the player click-through, and it found the
+   defect the day it was written.
+3. **Verify the whole tree yourself afterwards.** Do not take an agent's "all
+   green" as the final word — its run may predate another agent's landing.
+   Agents legitimately see failures caused by work in flight elsewhere; that is
+   noise, but a real failure hides in it easily.
+4. Expect an agent to touch a test outside its set when the behaviour it was
+   asked to change is what that test asserts. That is usually correct — check
+   the diff and keep it if the assertion encoded the old truth.
 
 ## The rules that must not be re-litigated
 
@@ -83,6 +109,31 @@ These were each established by testing, and several by getting them wrong first.
 7. **State the basis of every derived number** in a panel note. That is the
    house style throughout, and it is why the pages are trustworthy.
 
+## Contracts that hold the site together
+
+Break one of these in one file and the break shows up in another.
+
+- **The player click-through.** Every page that names a player — or shows a
+  number standing for one — links to
+  `waivers.html?player=<espnPlayerId>` with `class="pref"`, as a real `<a href>`
+  so middle-click and open-in-new-tab work. ESPN's own id, never a name or a row
+  index. **One contract only**: a second way of naming a player is exactly how
+  the two halves drift apart. Add a new page to `link-check.mjs`'s `SOURCES`.
+- **`js/sortable.js` sorts EVERY `<tbody>`, each independently.** Nearly every
+  table has one. Several is how a table keeps groups apart under a sort — the
+  roster detail is starters, a totals band, then the bench — and a body of one
+  row is left alone, which is what pins the band.
+- **Two greens on the wire, and they are separate cues.** Green text = over the
+  startable bar; green shading = beats your own worst man at that position that
+  week. Do not merge them: they answer different questions, and the split is
+  also what keeps them apart for anyone who cannot separate the hues.
+- **FLEX is a filter, never a position.** It is not in `POSITIONS` or
+  `POS_ORDER`, and nothing downstream may learn it exists — ranks, labels and
+  the startable bars all read a player's real position.
+- **The analysis grids' hover is a card, not a `title`.** Do not put a `title`
+  back on those cells: the browser would draw a second tooltip over the card.
+  The link carries `aria-label` for the same reason.
+
 ## Where things stand
 
 Everything Tim has asked for is built and live:
@@ -91,9 +142,9 @@ Everything Tim has asked for is built and live:
 |---|---|
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
 | `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played |
-| `analysis.html` | All ten squads twice over — nine spots, a total and the bench, once on the season average and once on the selected week; a per-team drill-down whose lineup you can swap around to see what it would score; and "Season by week" — a whole squad against every week |
+| `analysis.html` | All ten squads **twice over** — nine spots, a total and the bench, once on the season average and once on the selected week, with a hover card carrying each man's whole season as a chart and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; and "Season by week" |
 | `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, and a Monte Carlo season simulation |
-| `waivers.html` | "Players" — the wire priced by week, with your own worst man at each position dropped into the same list and every week that beats him shaded; then "Taken players", the same table for everyone already rostered, uncoloured, with the owner and his rank on that squad |
+| `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
 
@@ -106,47 +157,49 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — 14 suites, around 2,000 assertions. They are in the
-repo now; earlier sessions kept them in a temp directory and lost them each
-time. **Run them before and after any change**, and see `tests/README.md` for
-the two linkedom gotchas that otherwise waste an hour.
+`cd tests && npm install && npm test` — 14 suites, around 1,700 assertions.
+They are in the repo now; earlier sessions kept them in a temp directory and
+lost them each time. **Run them before and after any change**, and see
+`tests/README.md` for the two linkedom gotchas that otherwise waste an hour.
 
-The one that catches most: `test-pages-render.mjs` boots every page's real HTML
-with its real modules, so a missing element id or a typo in a selector fails
-there instead of in Tim's browser.
+Three worth knowing by name:
 
-The one that catches what nothing else can: `link-check.mjs` tests the SEAM
-between pages — one page makes a player link, another resolves it. Every
-per-page suite passed while a quarter of the analysis page's links landed on
-"he may have been dropped". **If you add a page that names players, add it to
-that suite's `SOURCES`.**
+- `test-pages-render.mjs` boots every page's real HTML with its real modules, so
+  a missing element id or a typo in a selector fails there instead of in Tim's
+  browser. Cheapest high-value suite there is.
+- `link-check.mjs` tests the **seam between pages** — one page makes a player
+  link, another resolves it. Every per-page suite was green while a quarter of
+  the analysis page's links landed on "he may have been dropped".
+- `an-test.mjs` and `taken-check.mjs` are the two big end-to-end ones (451 and
+  216 assertions). Both re-derive their expected answers independently rather
+  than reading the page's own arithmetic back to it.
 
 ## What is genuinely open
 
 - **Nothing has been checked against his real league in a browser.** All of it
   is verified against demo data, stubs and public leagues. That is the first
   thing to do: open each page on 476225250 and fix what the real payload
-  breaks. Two specifics to watch — whether `% own` populates from the roster
-  view, and whether any week's projection drops implausibly far (which would
-  mean bye handling is over-firing).
+  breaks. Specifics to watch — whether `% own` populates from the roster view;
+  whether any week's projection drops implausibly far (bye handling over-firing);
+  and whether the Players page's two-requests-per-week feels acceptable to him
+  on a real thirteen-week span.
+- **Trade interaction**, the feature he named first and has still not specified.
+  The all-teams grids on `analysis.html` are the natural surface — they already
+  compute every team's best lineup, its total, and the bench behind it, on two
+  measures. Build the analysis with a send-it-yourself button; do not auto-send.
 - **Playoff odds.** The simulation reports who finishes first in the
   regular-season standings and says plainly that this is not a championship.
   Real title odds need his bracket rules — size, seeding, byes — and he has not
   given them.
-- **Trade interaction**, the feature he named first and has not yet specified.
-  The all-teams grid on `analysis.html` is the natural surface: it already
-  computes each team's lineup and baseline by position. Build the analysis with
-  a send-it-yourself button; do not auto-send.
 - **Writes to ESPN** (set lineup, add/drop, propose trade) are a later phase he
   has asked about. They must go behind a popup confirmation or a popup-issued
   nonce, **never the open page bridge** — any page on the origin could otherwise
   drop players. See "The bridge & writes" in `PROGRESS.md`. The roster detail's
   swap is the obvious first candidate — it already builds a legal lineup — but
   it is a what-if today and the page says so; do not quietly wire it up.
-- **The click-through is built.** Every page that names a player links to
-  `waivers.html?player=<espnPlayerId>` with `class="pref"`, as a real `<a href>`
-  so middle-click works. Keep that one contract: a second way of naming a player
-  is how the two halves drift apart.
+- **A FLEX-empty table is untested.** Every fixture pool contains running backs,
+  so the filter always matches somebody. The same empty-state wording is proven
+  through the reachable "no defense" case.
 - The drafter's `TUNING` numbers are placeholders standing in for answers he has
   not given, and the score-differential curve has a rationale he has promised
   and not yet explained. Reproduce it; do not simplify it.
