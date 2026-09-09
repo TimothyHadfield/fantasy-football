@@ -3,7 +3,20 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-## START HERE — read this first (updated 2026-09-09)
+> **New session? Read [HANDOFF.md](HANDOFF.md) first.** It is the short
+> orientation: what this is, how Tim works, the standing instructions, and the
+> rules that must not be re-litigated. This file is the detailed reference
+> behind it — long, and organised by topic rather than by importance.
+>
+> Also here: [tests/README.md](tests/README.md) for the suites,
+> [docs/espn-draft-api.md](docs/espn-draft-api.md) for ESPN's field-level
+> behaviour, [DRAFT-STRATEGY.md](DRAFT-STRATEGY.md) for the parked drafter.
+
+## What changed on 2026-09-09
+
+Three sessions ran that day and the site changed a great deal. Everything below
+is the record of what was built and — more usefully — of what was tried, found
+to be wrong, and must not be tried again.
 
 **A large usability pass landed 2026-09-09 (second session that day).** The
 site was built and verified against a COMPLETE 2025 season and had never been
@@ -202,31 +215,15 @@ show the layout full), but it means early-season behaviour is only visible
 against live data or a stub.
 
 
-**The live connection now works.** As of 2026-09-09 the bridge extension is
-installed in Tim's Edge and successfully read his private league 476225250.
-This was the single biggest blocker for the whole project and it is cleared.
-Do NOT re-litigate the "make the league public" question below — it is moot;
-the extension solved it without changing any ESPN setting.
+**The live connection works.** The bridge extension is installed in Tim's Edge
+and reads his private league 476225250. This was the single biggest blocker on
+the project and it is cleared. Do NOT re-litigate the "make the league public"
+question below — it is moot; the extension solved it without changing any ESPN
+setting.
 
-**Current focus, in Tim's words:** trade interaction, player analysis, and
-statistics — on the real connected league. The draft assistant is built and
-PARKED (he moved on from it before the season). Do not add to the drafter
-unless he asks.
-
-**Standing instructions (also in Claude memory):**
-- **Push every change to the live site when it is done.** Tim judges the work
-  by the deployed site, not the working tree. Never leave finished work
-  uncommitted. Split into sensible commits; never push failing tests.
-- **Give links, not prose directions.** When instructing Tim, link the
-  destination (deep links with his IDs, IDE-clickable file paths). `edge://`
-  addresses cannot be linked — give those as copy-paste and say why.
-
-**What to build next — Tim will specify, but the ground is prepared:**
-- Everything he wants (trades, player analysis, stats) is READ-ONLY and works
-  over the bridge now. Start there.
-- Writes (set lineup, add/drop, propose trade) and an in-ESPN suggestion panel
-  are a later phase he has asked about. See "The bridge & writes" section.
-  Build writes behind a popup confirmation, never through the open page bridge.
+> Standing instructions, current focus and what to build next have moved to
+> [HANDOFF.md](HANDOFF.md), so there is one copy of them rather than two that
+> can drift apart.
 
 ---
 
@@ -659,11 +656,21 @@ its own `<thead>` freely; after re-rendering rows, call `resort(table)`.
 
 ## Testing
 
-The test suites live in the session scratchpad, **NOT committed** — they depend
-on a locally installed `linkedom`, and each session's scratchpad is fresh, so a
-new session must expect to rebuild the ones it needs rather than find them. They
-are documented here because the coverage they encode is worth recreating. Their
-directory this session was the scratchpad path in the environment header.
+**The suites are in `tests/` now. Run them with `cd tests && npm install &&
+npm test`** — see [tests/README.md](tests/README.md).
+
+This changed on 2026-09-09. They used to live in the session scratchpad and be
+deliberately uncommitted, on the grounds that they needed a local `linkedom`.
+That reasoning did not survive contact with how much they had grown: by the end
+of the day they were about 900 assertions encoding things that had cost real
+effort to discover — the ESPN traps, the early-season honesty rules, a
+byte-identical check that proved a refactor was a no-op — and throwing them away
+every session meant each new session either rebuilt them badly or skipped them.
+A `package.json` naming one dependency was a smaller price.
+
+The table below still lists suites from earlier sessions that were NOT
+recovered (the draft and stats-formula ones). Those are documented rather than
+present: the coverage is worth recreating if that code is touched again.
 
 | Suite | Covers |
 |---|---|
