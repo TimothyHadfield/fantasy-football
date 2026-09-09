@@ -38,18 +38,25 @@
  * legend, click-to-highlight (which dims all other series), hover tooltips
  * that name each series in text, and <title> elements on the marks for
  * screen readers. Identity is never carried by hue alone.
+ *
+ * The values now live in css/app.css as --series-1..10 so the same team colour
+ * can be used outside a chart (swatches, table accents). Each slot below is a
+ * var() with the original hex as its fallback, so the palette still renders
+ * unchanged if the stylesheet is missing. Change a colour in BOTH places, and
+ * only after re-checking the measurements above - they hold for the set, not
+ * for any one slot.
  */
 export const SERIES_COLORS = [
-  '#3987e5', // 1  blue
-  '#d95926', // 2  orange
-  '#199e70', // 3  aqua
-  '#a540bb', // 4  purple
-  '#c98500', // 5  yellow
-  '#9085e9', // 6  violet
-  '#008300', // 7  green
-  '#d55181', // 8  magenta
-  '#105fd9', // 9  deep blue
-  '#e66767', // 10 red
+  'var(--series-1, #3987e5)',  // 1  blue
+  'var(--series-2, #d95926)',  // 2  orange
+  'var(--series-3, #199e70)',  // 3  aqua
+  'var(--series-4, #a540bb)',  // 4  purple
+  'var(--series-5, #c98500)',  // 5  yellow
+  'var(--series-6, #9085e9)',  // 6  violet
+  'var(--series-7, #008300)',  // 7  green
+  'var(--series-8, #d55181)',  // 8  magenta
+  'var(--series-9, #105fd9)',  // 9  deep blue
+  'var(--series-10, #e66767)', // 10 red
 ];
 
 /* ------------------------------------------------------------------ *
@@ -123,11 +130,34 @@ function niceScale(lo, hi, target = 5) {
   return { lo: start, hi: end, ticks };
 }
 
+/**
+ * A caller-pinned domain, in the same shape niceScale returns.
+ *
+ * The domain ends are used exactly as given - the whole point is that several
+ * charts can share one axis, and widening it to "nice" bounds per chart would
+ * undo that. Only the tick *positions* are borrowed from niceScale, then
+ * clipped to the domain so no label is drawn off the plot.
+ *
+ * Returns null for anything unusable, so the caller can fall back.
+ */
+function fixedScale(domain) {
+  if (!Array.isArray(domain) || domain.length !== 2) return null;
+  let [lo, hi] = domain;
+  if (!isNum(lo) || !isNum(hi)) return null;
+  if (lo > hi) [lo, hi] = [hi, lo];
+  if (hi - lo < 1e-9) return null; // degenerate: let niceScale pad it instead
+  const eps = (hi - lo) * 1e-9;
+  const ticks = niceScale(lo, hi, 5).ticks.filter((t) => t >= lo - eps && t <= hi + eps);
+  return { lo, hi, ticks: ticks.length ? ticks : [lo, hi] };
+}
+
 /** Rendered width to use for the viewBox, so 1 user unit == 1 CSS px and
  *  font sizes stay at their stated pixel size on a phone. */
 function measureWidth(container, fallback = 720) {
   const w = container && typeof container.clientWidth === 'number' ? container.clientWidth : 0;
-  return Math.max(280, Math.min(1200, w || fallback));
+  // Upper clamp tracks .wrap.wide (1600px) in css/app.css; if that grows and
+  // this does not, every chart silently stops widening at the old number.
+  return Math.max(280, Math.min(1600, w || fallback));
 }
 
 /** Approximate text width; good enough for legend wrapping and label fitting. */
@@ -305,6 +335,12 @@ function pointerPos(svg, container, evt) {
  *                                      adds its own rows below it
  * @param {boolean} [opts.zeroLine]  draw a reference rule at y = 0
  * @param {string}  [opts.highlight] series name to emphasize; others dim
+ * @param {number[]} [opts.yDomain]  explicit [lo, hi], replacing the computed
+ *                                   scale. For giving several small charts one
+ *                                   shared axis so their heights are comparable
+ *                                   - which the per-chart "nice" scale, fitted
+ *                                   to each chart's own data, cannot be.
+ *                                   Ignored if not two finite, unequal numbers.
  * @returns {SVGElement|null}
  */
 export function lineChart(container, opts) {
@@ -343,7 +379,7 @@ export function lineChart(container, opts) {
   let lo = Infinity, hi = -Infinity;
   for (const s of series) for (const v of s.values) if (isNum(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
   if (o.zeroLine) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
-  const yS = niceScale(lo, hi, 5);
+  const yS = fixedScale(o.yDomain) || niceScale(lo, hi, 5);
   const ySpan = yS.hi - yS.lo || 1;
   const y = (v) => M.top + plotH - ((v - yS.lo) / ySpan) * plotH;
 
@@ -734,9 +770,13 @@ export function histogram(container, opts) {
  *
  * @param {Element} container
  * @param {Object}  opts
- * @param {Array}   opts.rows  [{ name, min, q1, median, q3, max, outliers? }]
+ * @param {Array}   opts.rows  [{ name, min, q1, median, q3, max, outliers?, color? }]
+ *                             `color` pins a row to its team's palette slot -
+ *                             see the note on positional fallback below.
  * @param {string}  opts.xLabel
- * @param {number}  [opts.height]  overrides the row-derived height
+ * @param {number}  [opts.height]     overrides the row-derived height
+ * @param {string}  [opts.highlight]  row name to emphasize; the others dim,
+ *                                    matching lineChart's legend behaviour
  * @returns {SVGElement|null}
  */
 export function boxPlot(container, opts) {
@@ -755,7 +795,12 @@ export function boxPlot(container, opts) {
       name: String(r.name == null ? 'Row ' + (i + 1) : r.name),
       min: sorted[0], q1: sorted[1], median: sorted[2], q3: sorted[3], max: sorted[4],
       outliers,
-      color: SERIES_COLORS[i % SERIES_COLORS.length], // identity follows the team
+      // Prefer the caller's colour. Box-plot rows normally arrive sorted by
+      // median, so colouring by position here handed a team a different colour
+      // than the line charts gave it (which index the team list) - breaking the
+      // "a team keeps its colour everywhere" rule the palette is built on. The
+      // positional fallback only applies when the caller has no opinion.
+      color: r.color || SERIES_COLORS[i % SERIES_COLORS.length],
     });
   });
 
@@ -803,8 +848,14 @@ export function boxPlot(container, opts) {
   }
 
   const boxH = Math.max(8, Math.min(16, actualRowH * 0.52));
+  // Same contract as lineChart: an unknown name highlights nothing rather than
+  // dimming everything.
+  const highlight = o.highlight && rows.some((r) => r.name === o.highlight) ? o.highlight : null;
+
   rows.forEach((r, i) => {
     const cy = M.top + actualRowH * (i + 0.5);
+    const isDim = Boolean(highlight) && r.name !== highlight;
+    const rowOp = isDim ? 0.22 : 1;
     // clamp: a whisker end that sits inside the box would draw backwards
     const wLo = Math.min(r.min, r.q1);
     const wHi = Math.max(r.max, r.q3);
@@ -816,7 +867,7 @@ export function boxPlot(container, opts) {
       `Q3 ${fmt(r.q3)}, max ${fmt(r.max)}`;
 
     parts.push(
-      `<g><title>${esc(summary)}</title>` +
+      `<g opacity="${rowOp}"><title>${esc(summary)}</title>` +
       // whisker rule + end caps
       `<line x1="${x1.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${cy.toFixed(1)}" ` +
       `stroke="${esc(r.color)}" stroke-width="1.5" opacity="0.75"/>` +
@@ -837,7 +888,7 @@ export function boxPlot(container, opts) {
     for (const ov of r.outliers) {
       parts.push(
         `<circle cx="${x(ov).toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="${esc(r.color)}" ` +
-        `stroke="${C.surface}" stroke-width="1.5" opacity="0.9">` +
+        `stroke="${C.surface}" stroke-width="1.5" opacity="${(0.9 * rowOp).toFixed(2)}">` +
         `<title>${esc(r.name)} outlier: ${esc(fmt(ov))}</title></circle>`
       );
     }
@@ -848,7 +899,8 @@ export function boxPlot(container, opts) {
     const labelMax = M.left - 14;
     parts.push(
       `<text x="${(M.left - 10).toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="end" ` +
-      `fill="${C.text}" font-size="${LABEL_SIZE}">` +
+      `fill="${isDim ? C.dim : C.text}" font-size="${LABEL_SIZE}" ` +
+      `font-weight="${highlight && !isDim ? 600 : 400}">` +
       `<title>${esc(r.name)}</title>${esc(truncateToWidth(r.name, LABEL_SIZE, labelMax))}</text>`
     );
   });

@@ -4,15 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stats &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 
 <header class="site">
-  <div class="wrap">
+  <div class="wrap wide">
     <span class="brand">Fantasy Football</span>
     <nav>
-      <a href="index.html">Connection</a>
+      <a href="index.html">Home</a>
       <a href="stats.html" class="active">Stats</a>
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
@@ -23,7 +24,7 @@
 
 
 
-<div class="wrap">
+<div class="wrap wide">
 
   <div id="connBar"></div>
 
@@ -59,11 +60,11 @@
              reads the LAST header row, so this band is invisible to it, and
              leaving it static stops it fighting the label row for top:0. -->
         <tr class="colgroup">
-          <th style="position:static"></th>
-          <th style="position:static;text-align:center">Record</th>
-          <th colspan="6" id="thScoringGroup" style="position:static;text-align:center">Scoring</th>
-          <th colspan="6" style="position:static;text-align:center">Luck &amp; skill</th>
-          <th colspan="3" style="position:static;text-align:center">Ranks</th>
+          <th></th>
+          <th>Record</th>
+          <th colspan="6" id="thScoringGroup">Scoring</th>
+          <th colspan="6">Luck &amp; skill</th>
+          <th colspan="3">Ranks</th>
         </tr>
         <tr>
           <th class="name" data-sort title="Click any header to sort by that column.">Team</th>
