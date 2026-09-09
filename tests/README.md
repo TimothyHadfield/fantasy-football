@@ -4,7 +4,7 @@ Headless suites for the site. They boot the **real** pages and import the
 **real** modules from [`../js`](../js) — nothing here reimplements site logic,
 so a rename or a broken selector fails a test rather than sailing past it.
 
-About 1,700 assertions in all, across 14 suites.
+About 3,200 assertions in all, across 16 suites.
 
 ## Running them
 
@@ -36,16 +36,18 @@ process would see each other's DOM.
 
 | Suite | What it covers | Size |
 | --- | --- | --- |
-| [`test-pages-render.mjs`](test-pages-render.mjs) | Boots each page's real HTML with the real module scripts the page itself declares. Catches a missing element id, a typo'd `querySelector`, an import that doesn't resolve — the things unit tests miss and only a browser would show. | 4 pages |
+| [`test-pages-render.mjs`](test-pages-render.mjs) | Boots each page's real HTML with the real module scripts the page itself declares. Catches a missing element id, a typo'd `querySelector`, an import that doesn't resolve — the things unit tests miss and only a browser would show. | 5 pages |
 | [`test-forecast.mjs`](test-forecast.mjs) | [`js/forecast.js`](../js/forecast.js): win probability, sigma calibration, optimal lineup, the win-total distribution, credible ranges. Known-good values plus brute force. | 68 |
 | [`test-sim.mjs`](test-sim.mjs) | The Monte Carlo season simulation in [`js/forecast.js`](../js/forecast.js). | 71 |
 | [`test-projection.mjs`](test-projection.mjs) | [`js/projection.js`](../js/projection.js), the shared projection module. | 38 |
+| [`test-trade.mjs`](test-trade.mjs) | [`js/trade.js`](../js/trade.js): replacement level, the depth map and the trade finder. A hand-built two-team league where every answer is known by hand, then the real demo pool where **every offer is re-priced from the raw rosters** rather than read back off its own numbers. | 1,411 |
 | [`fc-test.mjs`](fc-test.mjs) | The schedule page's forecast and simulation panels, against demo data and a stubbed live league — including no team set, the owner picking a team afterwards, switching team, and a roster fetch that rejects. | 375 over 8 scenarios |
 | [`wv-test.mjs`](wv-test.mjs) | The Players page's wire: filtering (incl. FLEX), sorting, widening the span mid-load, switching source while requests are in the air, weeks that reject, an empty pool, a saved filter that is no longer valid. | 188 over 8 scenarios |
 | [`cmp-check.mjs`](cmp-check.mjs) | The wire compared against your own roster — the worst man at each position, nobody set as you, ESPN refusing some or all roster weeks. | 90 over 6 scenarios |
 | [`taken-check.mjs`](taken-check.mjs) | The "Taken players" table: owners, per-squad positional ranks, nothing coloured, the two tables' independent filters, and landing a `?player=` link. Every rank is re-derived from the **rendered** Avg column, never from the stub's raw numbers. | 216 over 4 scenarios |
-| [`link-check.mjs`](link-check.mjs) | **The seam between pages.** `index.html` and `analysis.html` make player links; `waivers.html` resolves them. Boots each, checks every link against the contract, then *follows* a sample and asserts each lands on that man. No single-page suite can see this, and it found a real defect on its first run. | 103 |
+| [`link-check.mjs`](link-check.mjs) | **The seam between pages.** `index.html`, `analysis.html` and `trade.html` make player links; `waivers.html` resolves them. Boots each, checks every link against the contract, then *follows* a sample and asserts each lands on that man. No single-page suite can see this, and it has now found a real defect twice — once on its first run, and once when the Trade page was added and its sample happened to pick a man who is also somebody's "Your QB2". | 135 |
 | [`an-test.mjs`](an-test.mjs) | The analysis page: demo, a stubbed live league, weeks that reject, switching team and sorting, the two all-teams grids, the roster-detail swap, the hover card, and a player ESPN gave no id for. | 451 over 7 scenarios |
+| [`tr-test.mjs`](tr-test.mjs) | The Trade page: the depth map (its columns, its per-column tinting, the bar chips), the finder, and every control — the shape buttons, the team and manager pickers, the measure. Asserts no control costs a request, and that a filter matching nothing **empties** the table rather than merely hiding it. | 75 over 3 scenarios |
 | [`hot-check.mjs`](hot-check.mjs) | Both greens on the Players page's wire — over the startable bar, and beating your own worst man that week — plus proof that pressing FLEX changes not one cell's colour. | 118 |
 | [`opp-check.mjs`](opp-check.mjs) | Opponent strength on the stats page, against a synthetic league with no network at all. | 6 scenarios |
 | [`stats-weeks.mjs`](stats-weeks.mjs) | The stats page at 1, 2, 3, 5 and 13 weeks of season — the early-season honesty rules: no fabricated zero std dev, no empty accuracy buckets, no percentage drawn from a handful of games. Copies the repo to a temp dir and shortens the demo season to do it. | 6 checks |

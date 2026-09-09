@@ -119,6 +119,8 @@ Break one of these in one file and the break shows up in another.
   so middle-click and open-in-new-tab work. ESPN's own id, never a name or a row
   index. **One contract only**: a second way of naming a player is exactly how
   the two halves drift apart. Add a new page to `link-check.mjs`'s `SOURCES`.
+  The landing marks the ONE addressable row — a man who is both rostered and
+  your own "Your QB2" appears twice, and only the row carrying the `id` is lit.
 - **`js/sortable.js` sorts EVERY `<tbody>`, each independently.** Nearly every
   table has one. Several is how a table keeps groups apart under a sort — the
   roster detail is starters, a totals band, then the bench — and a body of one
@@ -145,6 +147,7 @@ Everything Tim has asked for is built and live:
 | `analysis.html` | All ten squads **twice over** — nine spots, a total and the bench, once on the season average and once on the selected week, with a hover card carrying each man's whole season as a chart and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; and "Season by week" |
 | `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, and a Monte Carlo season simulation |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
+| `trade.html` | **Depth map** — ten managers by six positions, each cell the points his starters are above replacement, so reading down a column finds who is thin where you are deep. Then the **finder**: every 1-for-1, 2-for-1 and 1-for-2 in the league, keeping only the ones where **both** lineups improve |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
 
@@ -157,7 +160,7 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — 14 suites, around 1,700 assertions.
+`cd tests && npm install && npm test` — 16 suites, around 3,200 assertions.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
 `tests/README.md` for the two linkedom gotchas that otherwise waste an hour.
@@ -183,10 +186,15 @@ Three worth knowing by name:
   whether any week's projection drops implausibly far (bye handling over-firing);
   and whether the Players page's two-requests-per-week feels acceptable to him
   on a real thirteen-week span.
-- **Trade interaction**, the feature he named first and has still not specified.
-  The all-teams grids on `analysis.html` are the natural surface — they already
-  compute every team's best lineup, its total, and the bench behind it, on two
-  measures. Build the analysis with a send-it-yourself button; do not auto-send.
+- **Trade interaction** — the depth map and the finder are BUILT (`trade.html`,
+  `js/trade.js`), to Tim's "build 1 and 2" on 2026-09-09. What is deliberately
+  not built, and was on the same list of ideas he picked from: showing a trade's
+  effect in **expected wins** rather than points (`simulateSeason` already
+  exists), a **week-by-week strip** so a deal that is +5 on average and −12 in
+  the playoff weeks is visible, and an **auto-written pitch message**. Ask
+  before adding them; he asked for two of five on purpose.
+  **Nothing is ever sent to ESPN** and the page says so — writes are the later
+  phase below.
 - **Playoff odds.** The simulation reports who finishes first in the
   regular-season standings and says plainly that this is not a championship.
   Real title odds need his bracket rules — size, seeding, byes — and he has not

@@ -31,6 +31,8 @@ describe how the site works **today**:
 | Clicking a player anywhere on the site | "The player click-through" |
 | Why the taken table spans every week shown | "The taken table's membership is the UNION" |
 | Sorting, and why several `<tbody>`s | "Table sorting" |
+| The depth map, and what "replacement" means | "The Trade page" |
+| Why a trade can make BOTH squads better | "The Trade page" |
 | What to do next | "Next", at the foot |
 
 ## What changed on 2026-09-09
@@ -480,6 +482,127 @@ show the layout full), but it means early-season behaviour is only visible
 against live data or a stub.
 
 
+## The Trade page (`trade.html`, `js/trade.js`, `js/trade-page.js`)
+
+Built 2026-09-09, fifth session. Tim asked for research into how managers
+actually decide on trades, then picked **two** of the five ideas that came back:
+the depth map and the finder. The other three — showing a deal in expected
+wins, a week-by-week strip, an auto-written pitch — were deliberately NOT built.
+Do not add them uninvited.
+
+**Everything on this page is additive.** It is a new page with a new pure
+module; no existing page, module or behaviour was changed to make room for it.
+The only edits outside it were a nav link on each page, two test registries, and
+one bug the new page's tests exposed (below).
+
+**What the research said, because it shaped every decision here.** Every guide,
+every analyzer and every strategy piece reduces to the same five things: the
+only test is whether your STARTING lineup got better; trade your surplus for
+your hole; find the partner by reading *their* lineup rather than yours; value
+on rest-of-season, never last week's points; and send a sentence saying what it
+fixes for them. The commercial analyzers all price a player as "projection minus
+the last starter at his position" — which is replacement level under another
+name — and they do it because **they cannot see your league**. We can see all
+ten squads, so nothing here needs a value chart: a trade is priced by re-filling
+both lineups and looking at what changed. Two managers reading the same ESPN
+projections can both check it, which is a far better argument than a number off
+a website.
+
+**Why a trade can make both squads better, which is the whole premise.** A
+manager's team is worth what his starting lineup scores; his bench scores
+nothing. A man who cannot crack his own lineup is worth zero to him and can be
+worth ten a week to someone starting a worse player at that position. That is
+not a paradox, it is the normal case, and it is what the finder searches for.
+
+**Replacement level is not a constant, and that matters.** For each position it
+is **the best player at that position who is not starting anywhere in the
+league** — the man any manager could have instead. It falls out of the rosters,
+moves with the league, and needs no tuning number of the kind `draft-model.js`
+has to carry. Two consequences worth knowing:
+
+- **The Players page's `STARTABLE` bars are deliberately not reused.** Those are
+  fixed per-position thresholds answering "is this week worth starting at all",
+  which is right for a waiver claim and wrong for a trade: two managers can both
+  be over that bar and still have an obvious deal between them.
+- **When every player at a position is already starting, the position is
+  `exhausted`** and the worst starter stands in as the bar. The startable test
+  then has to go INCLUSIVE, and that was a real bug rather than a nicety: with a
+  strict test the bar-setter is ruled out of being startable, so a two-team stub
+  where both squads carried one identical quarterback reported BOTH of them as
+  short at QB. Same fix removed a false D/ST hole in demo.
+
+**The depth map's number is POINTS, not bodies, and it took building it to see
+why.** The obvious cell is "startable players minus lineup places", and it is
+useless: the bar is set at the last man starting anywhere, so by construction
+the number above it is about the number of places for them, and the count is
+zero for nearly every cell in a league of any balance. True, and unreadable down
+a column. So the cell is how far a manager's starters at that position are above
+replacement — continuous, never zero by accident, and reading down a column
+ranks the league at that position, which is the only job the table has.
+
+- **An unfilled slot counts the whole bar against him.** A manager with no
+  kicker is not neutral at kicker; he is scoring nothing there.
+- **`spare` beside the number** is what he could send WITHOUT weakening his own
+  lineup — the part of his squad a trade can actually reach.
+- **The tint is per COLUMN, top and bottom three.** An absolute threshold would
+  tint whole columns, because what counts as deep at quarterback is not what
+  counts as deep at kicker. Every cell prints its own sign, so **colour is never
+  the only cue** — same rule as the two greens on the Players page.
+
+**The finder is brute force on purpose.** Ten squads of sixteen is small enough
+to try every swap, and an exhaustive search cannot miss the deal a heuristic
+would have pruned. About 250ms, handed off through rAF then a timeout so the
+"searching" state actually paints. Shapes searched: 1-for-1, 2-for-1 and 1-for-2.
+2-for-2 is left out — rarely proposed, and it multiplies the search by two
+orders of magnitude for offers that are a 1-for-1 with two spare men attached.
+
+- **The forced cut is modelled.** A 2-for-1 leaves the receiving side a man over
+  the limit and he HAS to drop somebody; his worst man goes. Every guide flags
+  this as what makes lopsided packages worse than they look. The side left a man
+  SHORT is not credited with a waiver claim to fill the gap — that player is not
+  in this page's data and inventing him would flatter the trade. Those offers
+  are understated rather than flattered, which is the safe direction.
+- **The shape filter is a SEARCH option, not a filter over the results.** The
+  finder keeps one offer per man you could acquire, so a 1-for-1 and a 2-for-1
+  bringing in the same player compete for one row — and the bigger package
+  usually wins it, because throwing in a spare body is free to you. Filter
+  afterwards and the straight swap is already gone. `kinds` goes INTO
+  `findTrades`. The manager picker is the page's one true filter, and it is safe
+  because every offer belongs to exactly one partner.
+- **A superset of another equally good deal is dropped.** Deliberately a SUBSET
+  test and not merely a smaller-and-better one: two different trades with the
+  same manager that happen to be the same size are genuine alternatives, and
+  neither may silently delete the other. Before this existed the two-team stub
+  returned six rows that were two deals wearing different junk.
+- **"What changes" is two names, not a position delta.** Per-position deltas are
+  computed and kept, but they are not what the row shows, because a deal that
+  turns a receiver slot into a back — which is most of what a flex does — reads
+  as "RB +13.8, WR −12.0" for a net under two points. That is a true sentence
+  nobody can act on. `starts: … / drops out: …` is the same fact without the
+  arithmetic, and it is what makes an offer checkable against ESPN by eye.
+- **Nothing found is a real answer and gets a real sentence.** A win-win needs
+  two managers weak in opposite places, and a balanced league may simply not
+  have a pair — the demo league has **no** mutually-beneficial straight swap at
+  all. The page says so rather than relaxing its own rule until it can print
+  something.
+
+**`lineupValue` is `forecast.js`'s `optimalLineup`, wrapped and nothing else**,
+so the trade page and the season forecast can never disagree about what a squad
+is worth. The slot shape is read off the lineups via `slotCountsFromLineups`,
+never guessed. The default measure is the typical week (season projection ÷ 17),
+which is also what sidesteps byes: pricing a trade on a week one side happens to
+be off is nonsense. The selected week is offered as the second measure and says
+what it is.
+
+**A bug this work exposed in `waivers.html`** — worth recording because of HOW
+it was found. `rowIdentity()` put the `spotlight` class on every row carrying
+the player's id, including the non-addressable "Your QB2" comparison row. So
+landing on a man who is both rostered and your own worst at his position lit up
+TWO rows while `scrollIntoView` went to the other one. It had been there all
+along; `link-check.mjs` only caught it once `trade.html` was added to `SOURCES`
+and its sample happened to pick such a man. The spotlight now follows
+`addressable`, for the same reason the `id` does.
+
 **The live connection works.** The bridge extension is installed in Tim's Edge
 and reads his private league 476225250. This was the single biggest blocker on
 the project and it is cleared. Do NOT re-litigate the "make the league public"
@@ -594,6 +717,8 @@ real data.
 - `stats.html` / `analysis.html` / `schedule.html` — season stats, weekly
   rosters, results and head-to-head. Every page carries the connection strip
   (`js/connection.js`) that shows whether it is on real or demo data.
+- `trade.html` — the depth map and the trade finder, both built on one week of
+  rosters read two ways. Every control is a repaint; nothing here costs a request.
 - `draft.html` — the draft room + practice mode. See `DRAFT-STRATEGY.md`. Parked.
 - `extension/` — the bridge that reads the private league. See below.
 - `js/espn.js` — the ESPN connection layer. Fetch + decode only, no strategy.
@@ -870,6 +995,8 @@ Pages (all default to demo data; real data arrives via the bridge):
   who is, in a table whose
   columns are week numbers and whose cells are ESPN's projection for that
   player in that week. Position filter, every column sortable.
+- `trade.html` — the depth map (who is deep where you are thin) and the trade
+  finder (every swap that makes both squads better). See "The Trade page"
 - `draft.html` — draft assistant + practice mode (parked)
 - `debug.html` — the raw ESPN data probes. Not in the nav; linked from the
   bottom of the home page. Its connect form deliberately does not persist,
@@ -888,6 +1015,10 @@ Modules:
   week, plus the schedule-derived averages built on that. **Shared by the
   schedule page and the stats page; do not grow a second copy.** Pure.
 - `js/waivers-page.js` — the Players page: the wire, and the taken table.
+- `js/trade.js` — the trade engine: replacement level, the depth map and the
+  finder. Pure, so it is node-testable, and it wraps `forecast.js`'s
+  `optimalLineup` rather than growing a second copy of it.
+- `js/trade-page.js` — the Trade page's wiring.
 - `js/forecast.js` — win probabilities, optimal lineups and season win-total
   distributions. Pure: no DOM, no fetching, so it is node-testable. The
   distribution is an exact Poisson-binomial convolution, not a simulation.
@@ -967,6 +1098,8 @@ present: the coverage is worth recreating if that code is touched again.
 | `link-check.mjs` | **the player click-through ACROSS pages** — 103 assertions. `index.html` and `analysis.html` MAKE links, `waivers.html` RESOLVES them, and no single-page suite can notice when the two halves stop agreeing. It boots each page in its own child process, checks every link against the contract, then FOLLOWS a sample of the ids the source pages actually produced and asserts each lands on exactly that man. It found a real defect the day it was written (see the union rule above), and it exists because the three halves were built by three authors at once against a contract agreed in prose |
 | `hot-check.mjs` (again) | records every green cue per player per week, presses FLEX, and compares cell for cell — **not one cell changes colour**, which is what proves a filter is only a filter |
 | `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
+| `test-trade.mjs` | the trade engine — 1,411 assertions over two fixtures. A hand-built two-team league where every answer is known by hand (the 18-for-18 mirrored swap is worth exactly 12 to each side), then the real demo pool, where **every offer is re-priced from the raw rosters** rather than read back off its own numbers — so an engine that merely reported confident figures would fail rather than agree with itself. Also asserts roster legality both ways and that the in/out lists add up to the stated gain |
+| `tr-test.mjs` | the Trade page end to end — 75 assertions over 3 scenarios. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; and every control. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
 | `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
@@ -1042,14 +1175,20 @@ Tim will specify the first build. Prepared ground, in likely order:
   - whether the Players page's **two requests per week** — the wire and every
     squad — is acceptable to him over a full thirteen-week span, since that is
     26 requests for "Rest of season".
-- **Trade interaction** — the feature he named first, still unspecified. Likely:
-  evaluate a proposed trade's effect on both rosters, and find mutually
-  beneficial trades using opponent-need logic (the same idea as the draft
-  engine's). Build the *analysis* with a send-it-yourself button; do not
-  auto-send. The two all-teams grids are the natural surface — they already
-  compute every team's best nine, its real total and the bench behind it, on
-  two different measures, and `positionRanks()` already says how deep each
-  squad is at every position.
+- **Trade interaction** — the depth map and the finder are BUILT; see "The Trade
+  page". Tim was shown five ideas and picked two. The other three are ready to
+  build and should not be started without him asking:
+  1. **Wins, not points.** "+6.2 a week" is hard to weigh; `simulateSeason` and
+     `winProbability` already exist, so re-running the season with a trade
+     applied would give "6.1 → 6.8 expected wins, 11% → 19% to finish first".
+     No public tool can do this because none of them know his schedule.
+  2. **The weeks that matter.** A deal that is +5 on average and −12 in weeks
+     12–13 is a bad deal. Per-week projections for the rest of the season are
+     already fetched by the analysis page's season grid; the strip is a repaint.
+  3. **The pitch message.** The finder already knows why a trade helps the other
+     manager, so it can write the sentence and offer a copy button. Every guide
+     says an offer arriving with no message reads as an attempted robbery.
+     Copy only — **do not auto-send**; writes are the phase after this one.
 - **The Predictions tab** — the one genuinely unbuilt idea from his sheet. He
   tested by hand, for week 1 only, whether a team's projected total at a given
   week predicts the final ranking. The site can answer it across all 13 weeks.
