@@ -4,7 +4,7 @@ Headless suites for the site. They boot the **real** pages and import the
 **real** modules from [`../js`](../js) — nothing here reimplements site logic,
 so a rename or a broken selector fails a test rather than sailing past it.
 
-About 3,200 assertions in all, across 16 suites.
+About 3,300 assertions in all, across 16 suites.
 
 ## Running them
 
@@ -46,7 +46,7 @@ process would see each other's DOM.
 | [`cmp-check.mjs`](cmp-check.mjs) | The wire compared against your own roster — the worst man at each position, nobody set as you, ESPN refusing some or all roster weeks. | 90 over 6 scenarios |
 | [`taken-check.mjs`](taken-check.mjs) | The "Taken players" table: owners, per-squad positional ranks, nothing coloured, the two tables' independent filters, and landing a `?player=` link. Every rank is re-derived from the **rendered** Avg column, never from the stub's raw numbers. | 216 over 4 scenarios |
 | [`link-check.mjs`](link-check.mjs) | **The seam between pages.** `index.html`, `analysis.html` and `trade.html` make player links; `waivers.html` resolves them. Boots each, checks every link against the contract, then *follows* a sample and asserts each lands on that man. No single-page suite can see this, and it has now found a real defect twice — once on its first run, and once when the Trade page was added and its sample happened to pick a man who is also somebody's "Your QB2". | 135 |
-| [`an-test.mjs`](an-test.mjs) | The analysis page: demo, a stubbed live league, weeks that reject, switching team and sorting, the two all-teams grids, the roster-detail swap, the hover card, and a player ESPN gave no id for. | 451 over 7 scenarios |
+| [`an-test.mjs`](an-test.mjs) | The analysis page: demo, a stubbed live league, weeks that reject, switching team and sorting, the two all-teams grids, the roster-detail swap, the hover card, a player ESPN gave no id for, and "Who to start, week by week" — whose marks are re-derived by rebuilding every week's lineup from `demo-rosters.js` through `optimalLineup`, never read back off the page. | 565 over 8 scenarios |
 | [`tr-test.mjs`](tr-test.mjs) | The Trade page: the depth map (its columns, its per-column tinting, the bar chips), the finder, and every control — the shape buttons, the team and manager pickers, the measure. Asserts no control costs a request, and that a filter matching nothing **empties** the table rather than merely hiding it. | 75 over 3 scenarios |
 | [`hot-check.mjs`](hot-check.mjs) | Both greens on the Players page's wire — over the startable bar, and beating your own worst man that week — plus proof that pressing FLEX changes not one cell's colour. | 118 |
 | [`opp-check.mjs`](opp-check.mjs) | Opponent strength on the stats page, against a synthetic league with no network at all. | 6 scenarios |

@@ -31,6 +31,7 @@ describe how the site works **today**:
 | Clicking a player anywhere on the site | "The player click-through" |
 | Why the taken table spans every week shown | "The taken table's membership is the UNION" |
 | Sorting, and why several `<tbody>`s | "Table sorting" |
+| Which weeks a bench man actually starts | "Who to start, week by week" |
 | The depth map, and what "replacement" means | "The Trade page" |
 | Why a trade can make BOTH squads better | "The Trade page" |
 | What to do next | "Next", at the foot |
@@ -481,6 +482,67 @@ That is why none of the above was noticed. It is deliberate (the demo exists to
 show the layout full), but it means early-season behaviour is only visible
 against live data or a stub.
 
+
+## Who to start, week by week (`analysis.html`, foot of the page)
+
+Built 2026-09-09, sixth session, to Tim's spec: see who to start each week of
+the season to keep the lineup balanced, and know where and when the bench comes
+in to cover a bye or just a soft week for a starter. One position at a time,
+that squad's men at it in depth order, the same week run the season grid draws
+— and every week a man is in the BEST LEGAL LINEUP marked.
+
+**Read along a row for a starter's soft weeks; read down a column for who
+covers them.** That is the whole interaction, and it is why the panel is one
+position wide: the question is about one position's depth chart.
+
+**It costs nothing.** `state.seasonWeeks` is already bought by the season grid
+above — one request per week, no bulk form — and every team is in every week's
+payload, so both the position buttons and the shared team picker are repaints.
+
+- **`optimalLineup` is `js/forecast.js`'s, unchanged**, run once per week on
+  that week's own projections. Three features now share it — the schedule
+  page's forecast, the trade finder and this — so none of them can disagree
+  about who a squad ought to be starting.
+- **Byes need no handling of their own, and that IS the feature.** ESPN returns
+  0.00 for a bye, the man simply loses his place to somebody better, and the
+  mark moves to whoever covers. The panel shows you who.
+- **A flex start is marked differently (`F`).** "He starts" and "he starts
+  because the flex had nobody better" are different answers to the question the
+  panel exists to ask, and the second is the one worth spotting.
+- **The row set is the UNION over the weeks shown, not the selected week's
+  roster** — and this was a real defect caught by the tests, not by review.
+  Rosters change week to week, so a week whose lineup was filled by somebody
+  since dropped had a starter with no row, and the panel then showed a week
+  where apparently nobody at the position started at all. Autumn's week 7 in
+  demo is exactly that: the second back is Kellan Wainwright, who is not on the
+  week 4 roster the page opens on. **A mark that cannot be seen is worse than no
+  mark**, because the reader counts the shaded cells and concludes a slot went
+  empty. Same rule, same reason, as the Taken table's membership.
+- **But a departed man earns his row by having FILLED a slot, and nothing else.**
+  Left unfiltered the union ran the sample league's backs to fourteen rows, nine
+  of them men Tim no longer holds and seven of those never in a lineup at all.
+- **Only men on the roster in the selected week are RANKED.** A depth chart is a
+  statement about the squad you have; someone dropped in week 3 is there to
+  explain week 3 and is not this manager's RB2 today. He shows `—`, italic, and
+  sorts last INSIDE his position group via an explicit `data-v` — drop that and
+  `sortable.js` falls back to the cell text, where `—` leads the column. The
+  same trap the Taken table documents.
+- **A player ESPN gave no id for is left out of the table AND out of the
+  lineups it marks**, because nothing ties the man in week 5 to the man in week
+  6 and `seasonIndex` would collapse every one of them onto a single `undefined`
+  key. The note says how many were dropped. Disclosed and slightly incomplete
+  beats confident and unaccountable.
+- **`seasonCell` gained an optional `start` argument rather than a cell renderer
+  of its own.** The FIVE ways of having no number — not read yet, ESPN refused
+  the week, not on the roster, no number at all, and a bye — cost real effort to
+  tell apart and must not be reimplemented next door where the copies drift.
+  The season grid above passes nothing and is unchanged.
+- **FLEX is a filter here too.** Not in the position list, never a rank: a back
+  is `RB2` under FLEX exactly as he is under RB, and `an-test` asserts the two
+  agree name for name.
+- **The roster detail's what-if swaps are deliberately NOT applied.** Those are
+  one week's experiment; this is what the numbers say across the season, and
+  folding an override in would make a hand-moved lineup look like advice.
 
 ## The Trade page (`trade.html`, `js/trade.js`, `js/trade-page.js`)
 
@@ -988,8 +1050,10 @@ Pages (all default to demo data; real data arrives via the bridge):
 - `index.html` — season dashboard: this week's matchups with projections,
   roster strength, standings, injured starters, points left on the bench
 - `stats.html` — season stats, the rebuild of Tim's sheet
-- `analysis.html` — all ten teams' lineups at once, plus a per-team drill-down
-  whose lineup you can move around to see what it would score
+- `analysis.html` — all ten teams' lineups at once, a per-team drill-down
+  whose lineup you can move around to see what it would score, and "Who to
+  start, week by week": one position, the whole season, every week that man
+  makes the best legal lineup marked
 - `schedule.html` — standings, matchups, results, fixture / head-to-head grid
 - `waivers.html` — "Players": everyone not on a roster, and below it everyone
   who is, in a table whose
