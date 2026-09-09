@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add players &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="css/app.css">
+<style>
+/* Page-local styles. Everything else comes from css/app.css. */
+
+.seg-sm button { padding: 6px 12px; font-size: 13px; }
+
+/* The count of players behind each position button. It is the second thing you
+   read on the button, never the first, so it is quieter than the label. */
+.seg-count {
+  margin-left: 6px;
+  font-weight: 500;
+  opacity: 0.72;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A control needs to say what it is; these tables have two segmented controls
+   side by side and they answer completely different questions. */
+.ctl { display: flex; flex-direction: column; gap: 6px; }
+.ctl-label {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 600;
+}
+/* What the choice above costs, next to the choice rather than in the note
+   several paragraphs down. */
+.cost { color: var(--dim); font-size: 12.5px; align-self: flex-end; padding-bottom: 7px; }
+
+/* The mean of the weeks shown is the one column that orders the table into
+   something useful, so it carries a little more weight than a single week, and
+   a rule brackets it off from the run of weeks to its right. */
+td.avg { font-weight: 650; color: var(--text); }
+
+/* A bye is ESPN's 0.00, and printing "0.0" would read as a projection of
+   nothing rather than as no game at all. */
+td.bye {
+  color: var(--warn);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+/* A week that has not come back from ESPN yet: present, but deliberately not
+   readable as a value. */
+td.wait { color: var(--line); }
+
+/* Availability, as a tag beside the name. OUT and IR also dim the whole row:
+   a player who cannot play is still worth listing, but never worth reading
+   first. */
+.tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  margin-left: 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+.tag.bad { color: var(--err); border-color: #5a2424; }
+.tag.warn { color: var(--warn); border-color: #5a4718; }
+tbody tr.unavailable td { color: var(--dim); }
+tbody tr.unavailable td.name { font-weight: 500; }
+
+.empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
+
+/* A headline number means nothing without the player it belongs to, and the
+   player is context rather than the number itself. */
+#waiverStats .stat .who {
+  font-size: 12.5px;
+  color: var(--dim);
+  margin-top: 1px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap wide">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="waivers.html" class="active">Add players</a>
+      <a href="draft.html">Draft</a>
+    </nav>
+  </div>
+</header>
+
+
+
+<div class="wrap wide">
+
+  <div id="connBar"></div>
+
+
+  <h1>Add players <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">Showing a generated sample waiver wire so you can see the layout with real-looking projections in it.</p>
+
+  <section class="panel">
+    <h2>Data source</h2>
+    <div class="segmented" id="sourceToggle">
+      <button type="button" data-src="demo" class="on">Demo data</button>
+      <button type="button" data-src="live">My ESPN league</button>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Available players</h2>
+
+    <div class="row spread mb-12">
+      <div class="ctl">
+        <span class="ctl-label" id="posLabel">Position</span>
+        <div class="segmented seg-sm" id="posFilter" role="group" aria-labelledby="posLabel">
+          <button type="button" data-pos="ALL" class="on">All<span class="seg-count"></span></button>
+          <button type="button" data-pos="QB">QB<span class="seg-count"></span></button>
+          <button type="button" data-pos="RB">RB<span class="seg-count"></span></button>
+          <button type="button" data-pos="WR">WR<span class="seg-count"></span></button>
+          <button type="button" data-pos="TE">TE<span class="seg-count"></span></button>
+          <button type="button" data-pos="K">K<span class="seg-count"></span></button>
+          <button type="button" data-pos="DST">DST<span class="seg-count"></span></button>
+        </div>
+      </div>
+
+      <div class="ctl">
+        <span class="ctl-label" id="spanLabel">Weeks to price</span>
+        <div class="segmented seg-sm" id="spanFilter" role="group" aria-labelledby="spanLabel">
+          <button type="button" data-span="3" class="on">Next 3</button>
+          <button type="button" data-span="6">Next 6</button>
+          <button type="button" data-span="all">Rest of season</button>
+        </div>
+      </div>
+
+      <span class="cost" id="spanCost"></span>
+    </div>
+
+    <div class="stat-row" id="waiverStats"></div>
+
+    <div class="table-scroll"><table id="waiverTable">
+      <thead></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="waiverNote"></p>
+  </section>
+
+</div>
+
+<script type="module" src="js/waivers-page.js"></script>
+<script type="module" src="js/connection.js"></script>
+</body>
+</html>

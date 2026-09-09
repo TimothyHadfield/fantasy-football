@@ -193,6 +193,67 @@ export async function fetchPlayers(limit = 500) {
   return (data.players || []).map((e) => normalizePlayer(e, s));
 }
 
+/**
+ * Everyone who is not on a roster, with their projection for ONE week.
+ *
+ * Two traps here, both established by testing against a real league rather
+ * than reasoned about:
+ *
+ * 1. The week comes from `scoringPeriodId` on the URL, and it only works when
+ *    `filterStatsForTopScoringPeriodIds` is ABSENT. Sending both — which is
+ *    what `fetchPlayers` does for the season totals it wants — silently
+ *    suppresses the weekly stat line entirely and you get no projection at all.
+ * 2. There is no bulk form. Asking for thirteen weekly stat-set ids in
+ *    `additionalValue` returns only the current week. A season of weeks costs a
+ *    request per week, exactly like rosters do.
+ *
+ * @param {number} scoringPeriodId the week to price
+ * @param {number} [limit] how many players, ordered by how widely owned
+ * @returns {Promise<Array>} raw player entries; decode with parseFreeAgent
+ */
+export function fetchFreeAgents(scoringPeriodId, limit = 150) {
+  const filter = {
+    players: {
+      filterStatus: { value: ['FREEAGENT', 'WAIVERS'] },
+      limit,
+      // Most-owned first: that is the order in which a waiver wire is worth
+      // reading, and it is what ESPN's own list does.
+      sortPercOwned: { sortPriority: 1, sortAsc: false },
+    },
+  };
+  return leagueRead(['kona_player_info'], { filter, scoringPeriodId });
+}
+
+/**
+ * One free-agent entry, reduced to what the add-players table shows.
+ *
+ * @param {Object} entry a `players[]` element from fetchFreeAgents
+ * @param {number} week the scoringPeriodId that entry was fetched for
+ */
+export function parseFreeAgent(entry, week) {
+  const p = entry?.player || {};
+  const weekly = (p.stats || []).find(
+    (s) => s.statSourceId === 1 && s.statSplitTypeId === 1 && s.scoringPeriodId === week
+  );
+  const seasonProj = (p.stats || []).find(
+    (s) => s.statSourceId === 1 && s.statSplitTypeId === 0 && s.seasonId === config.season
+  );
+
+  return {
+    playerId: p.id,
+    name: p.fullName || '',
+    position: POSITIONS[p.defaultPositionId] || 'UNK',
+    proTeam: PRO_TEAMS[p.proTeamId] ?? 'FA',
+    proTeamId: p.proTeamId ?? null,
+    injuryStatus: p.injuryStatus || 'ACTIVE',
+    percentOwned: p.ownership?.percentOwned ?? null,
+    seasonProjected: seasonProj?.appliedTotal ?? null,
+    // The projection for the week this was fetched for. Null means ESPN had
+    // nothing, which is NOT the same as a bye — a bye comes back as 0.
+    projected: typeof weekly?.appliedTotal === 'number' ? weekly.appliedTotal : null,
+  };
+}
+
 /** Bye weeks by pro team id. */
 export async function fetchByeWeeks() {
   const view = 'proTeamSchedules_wl';
