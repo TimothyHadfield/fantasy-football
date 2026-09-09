@@ -119,7 +119,11 @@ td.state-live { color: var(--warn); }
 .seg-sm button { padding: 6px 12px; font-size: 13px; }
 .select-wide { width: 210px; }
 
-/* Forecast. Inside this panel every row is already your team, so the row
+/* A panel heading that shares its line with a control, rather than sitting on
+   its own line above one. */
+.h2-inline { margin-bottom: 0 !important; align-self: center; }
+
+/* Forecast. Inside this panel every row is already the chosen team, so the row
    highlight is free to mean "the next one to be played" rather than "you" —
    which is the row you look for first and the one the chart is anchored on. */
 #forecastTable tbody tr.now td { background: #14261a; }
@@ -245,16 +249,22 @@ td.state-live { color: var(--warn); }
        the demo, whose season is complete, the week picker chooses the point in
        time the forecast is made from.) -->
   <section class="panel">
-    <h2 id="forecastTitle">My season</h2>
+    <div class="row spread mb-12">
+      <h2 id="forecastTitle" class="h2-inline">Season forecast</h2>
+      <div class="form-select select-wide">
+        <label for="forecastTeam">Forecast for</label>
+        <select id="forecastTeam"></select>
+      </div>
+    </div>
     <div class="stat-row" id="forecastStats"></div>
     <div class="table-scroll"><table id="forecastTable">
       <thead><tr>
         <th data-sort>Wk</th>
         <th class="name" data-sort>Opponent</th>
         <th class="left" data-sort>Where</th>
-        <th data-sort title="Your projected points that week.">You</th>
-        <th data-sort title="Their projected points that week.">Them</th>
-        <th data-sort title="Our estimate of your chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds.">Win %</th>
+        <th data-sort id="thForecastMine" title="This team's projected points that week.">Them</th>
+        <th data-sort id="thForecastTheirs" title="The opponent's projected points that week.">Opp</th>
+        <th data-sort title="Our estimate of this team's chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds.">Win %</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>

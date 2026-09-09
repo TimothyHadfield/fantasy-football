@@ -28,6 +28,9 @@ const state = {
   resultsView: prefs.get('results', 'played'),  // played | upcoming | all
   h2hView: prefs.get('h2h', null),              // null = decide from what's played
   myTeamId: null,           // highlights one row, when we know who you are
+  // Whose season the forecast panel is about. null means "follow whoever I am",
+  // so the panel tracks you until you deliberately look at someone else.
+  forecastTeamId: prefs.get('forecastTeam', null),
   strength: null,           // Map teamId -> comparable strength, any scale
   strengthNote: '',         // how that strength was derived; shown, never implied
   strengthToken: 0,         // guards against a slow fetch landing after a reload
@@ -1442,16 +1445,37 @@ function projectionCaveat(lastWeek) {
   );
 }
 
-/** The team the forecast is about, or null when nobody has said who that is. */
+/**
+ * The team the forecast is about.
+ *
+ * An explicit pick wins. Otherwise it follows whoever you are, so the panel
+ * opens on your own season without being asked and moves with you if you set
+ * yourself later — but stays put once you have deliberately looked at someone
+ * else. Falling back to the first team rather than nothing matters: every
+ * team's projection is already computed, so there is no reason to show an
+ * empty panel just because nobody has said who they are.
+ */
 function forecastTeam() {
   const d = state.data;
-  if (!d) return null;
+  if (!d || !d.teams.length) return null;
+  const picked = d.teams.find((t) => t.id === state.forecastTeamId);
+  if (picked) return picked;
   const mine = d.teams.find((t) => t.id === state.myTeamId);
-  if (mine) return mine;
-  // The demo league has no owner, so the panel would sit empty forever on the
-  // page's default view. Forecasting its first team shows the real thing; the
-  // note says whose season it is.
-  return d.isDemo ? d.teams[0] || null : null;
+  return mine || d.teams[0];
+}
+
+/** Fill the "Forecast for" menu, marking which one is you. */
+function renderForecastPicker() {
+  const sel = $('forecastTeam');
+  const current = forecastTeam();
+  sel.innerHTML = (state.data?.teams || [])
+    .map(
+      (t) =>
+        `<option value="${t.id}"${t.id === current?.id ? ' selected' : ''}>` +
+        `${esc(t.name)}${t.id === state.myTeamId ? ' (you)' : ''}</option>`
+    )
+    .join('');
+  if (current) sel.value = String(current.id);
 }
 
 /** One team's games, split into what is banked and what is still ahead. */
@@ -1495,8 +1519,18 @@ function renderForecast() {
   const stats = $('forecastStats');
   const chart = $('forecastChart');
   const team = forecastTeam();
+  const isMine = Boolean(team) && team.id === state.myTeamId;
 
-  $('forecastTitle').textContent = team ? `My season — ${team.name}` : 'My season';
+  renderForecastPicker();
+  // The picker names the team too, but a heading that reads "Season forecast"
+  // alone loses the one word you scan for when flicking between teams.
+  $('forecastTitle').textContent = team
+    ? `${isMine ? 'My season' : 'Season forecast'} — ${team.name}`
+    : 'Season forecast';
+
+  // The two point columns are "You"/"Them" only when it really is you.
+  $('thForecastMine').textContent = isMine ? 'You' : 'Them';
+  $('thForecastTheirs').textContent = isMine ? 'Them' : 'Opp';
 
   const blank = (reason, note) => {
     stats.innerHTML = '';
@@ -1508,10 +1542,9 @@ function renderForecast() {
 
   if (!team) {
     blank(
-      'No team is set as yours, so there is no season to forecast.',
-      'Choose yourself in the “You are” menu in the connection bar at the top of this ' +
-      'page. This panel then lists every matchup you have left, a win chance for each, ' +
-      'and the spread of season win totals they add up to.'
+      'No teams in this league yet, so there is no season to forecast.',
+      'This panel lists every matchup a team has left, a win chance for each, and the ' +
+      'spread of season win totals they add up to.'
     );
     return;
   }
@@ -1640,9 +1673,13 @@ function renderForecast() {
   $('forecastNote').innerHTML = [
     `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}, ` +
       `${plural(rows.length, 'game')} from week ${nextWeek} to week ${lastWeek} still to play. ${timing}` +
-      (state.myTeamId === team.id
+      // Only explain whose season this is when nobody has said who YOU are.
+      // Once you have, picking another team is a deliberate act and needs no
+      // apology for itself.
+      (isMine || state.myTeamId != null
         ? ''
-        : ' The demo league has no owner, so this is its first team.'),
+        : ' Nobody is set as you, so this opens on the first team — set yourself in the ' +
+          '“You are” menu in the connection bar, or pick any team above.'),
     shape,
     derivedCaveat(),
     projectionCaveat(lastWeek),
@@ -1659,6 +1696,11 @@ $('sourceToggle').addEventListener('click', (e) => {
   if (!btn) return;
   state.source = btn.dataset.src;
   prefs.set('source', state.source);   // so the page comes back the way you left it
+  // Team ids mean different things in the two leagues -- demo counts from 1,
+  // ESPN uses its own -- so a remembered pick would silently land on a
+  // stranger. Forget it and fall back to following whoever you are.
+  state.forecastTeamId = null;
+  prefs.set('forecastTeam', null);
   syncSource();
   state.source === 'demo' ? loadDemo() : loadLive();
 });
@@ -1671,6 +1713,15 @@ function setWeek(value) {
 }
 
 $('weekSelect').addEventListener('change', (e) => setWeek(e.target.value));
+
+// Every team's projection is already built, so switching whose season this is
+// costs nothing and repaints only this panel.
+$('forecastTeam').addEventListener('change', (e) => {
+  const id = Number(e.target.value);
+  state.forecastTeamId = Number.isFinite(id) ? id : null;
+  prefs.set('forecastTeam', state.forecastTeamId);
+  renderForecast();
+});
 
 // Walking the season one week at a time used to mean thirteen trips through a
 // dropdown.
