@@ -42,21 +42,37 @@ percentages on every upcoming game. Read this before touching any of it:
   `calibrateSigma`, falling back to a documented 27 below 12 residuals and
   saying which it used. In week 1-2 live it will always be the assumed value,
   because live games carry no projections at all (see below).
-- **Future weeks use `seasonProjected / 17` per player**, not a weekly
-  projection. ESPN publishes a season total plus roughly the imminent week;
-  **weekly projections for distant future weeks are UNVERIFIED and probably
-  absent.** Do not build a one-request-per-week fetch on them — it was
-  considered and rejected on the evidence in `docs/espn-draft-api.md`.
+- **Future weeks use ESPN's OWN per-week projection, fetched per week.**
+  **VERIFIED 2026-09-09 against public league 1241838**: ESPN returns a
+  `statSourceId 1 / statSplitTypeId 1` projection for **every player in every
+  future week, through week 13**, and a player on his bye comes back at
+  **0.00**. So byes need no separate lookup and no filtering — they are already
+  in the number. (An earlier pass assumed distant weeks were unavailable and
+  used `seasonProjected / 17`; Tim corrected it — he reads exactly these numbers
+  off the ESPN site by paging a lineup forward. Do not reintroduce the average.)
+- **Match Tim's manual method, because he checks it by hand.** He opens a team,
+  picks a week, and reads the "proj" total under the starting lineup; he
+  compares two teams by doing that for both sides of a matchup. The site shows
+  the same number with ONE deliberate difference: it fills the best legal
+  lineup instead of the one currently set, which is the bench check he does by
+  eye. That difference is large and it is the point — measured against the real
+  league, weeks 1-2 gain 0-3 points (lineups are already set well), but weeks
+  5, 8 and 13 gain **10-20 points**, because a roster left as-is has bye-week
+  players still slotted in. Verified: over 50 real team-weeks the optimal
+  lineup was never worse than the set one.
+- **Injury status is deliberately NOT filtered.** ESPN's own projection already
+  carries availability, and second-guessing it would move the totals away from
+  the ones being checked against.
 - **Tim's rule, implemented exactly:** each manager is assumed to start their
   highest-projected players. `optimalLineup` fills the most restrictive slots
   first, which is optimal because the eligibility sets nest, so the flex can
   provably never take a QB (a superflex still can). Verified against brute-force
   enumeration.
-- **Bye weeks are handled** by dropping players whose `proTeamId` is on bye that
-  week (`espn.fetchByeWeeks()`, already existed). OUT/IR are dropped;
-  QUESTIONABLE is kept.
-- **Request budget is 3** and must stay there: the schedule fetch, ONE
-  `fetchWeekRosters(currentWeek)`, and ONE cached `fetchByeWeeks()`.
+- **Request budget is one per REMAINING week**, plus the schedule fetch. There
+  is no bulk form — that was checked, not assumed. `fetchWeeksRosters(weeks)` in
+  `js/season.js` runs them three at a time and reports progress; a week ESPN
+  refuses is simply absent rather than failing the set. Played weeks are never
+  refetched.
 - **The lineup shape is read from the rosters ESPN sends**, not guessed and not
   a fourth request — ESPN rejects illegal lineups, so the non-bench slots in use
   ARE the configuration, maxed across teams. The real league starts **ten**:
