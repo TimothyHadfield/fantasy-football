@@ -32,6 +32,7 @@ const SUITES = [
   ['fc-test.mjs', 'the schedule page forecast and simulation panels'],
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
+  ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
   ['an-test.mjs', 'the analysis page'],
 ];
 

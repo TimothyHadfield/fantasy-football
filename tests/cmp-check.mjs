@@ -360,7 +360,7 @@ async function check(scenario, boot) {
     c.ok('the cost line says six requests, not three',
       /3 weeks = 6 requests to ESPN/.test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('and says what the second one is for',
-      /the wire and your roster for each one/.test(txt($('spanCost'))), txt($('spanCost')));
+      /the wire and every squad in the league for each one/.test(txt($('spanCost'))), txt($('spanCost')));
 
     // The note.
     c.ok('the note says what a Your … row is',
@@ -441,10 +441,17 @@ async function check(scenario, boot) {
   if (scenario === 'no-team') {
     c.ok('there are no comparison rows', mine.length === 0, JSON.stringify(mine));
     c.ok('the wire is still there', allRows.length === 60, `${allRows.length}`);
-    c.ok('no roster request was spent at all',
-      season.calls.rosterWeeks.length === 0, JSON.stringify(season.calls.rosterWeeks));
-    c.ok('so the cost line is back to one request a week',
-      /3 weeks = 3 requests to ESPN, one per week/.test(txt($('spanCost'))), txt($('spanCost')));
+    // The rosters are bought anyway now, and these two assertions used to say
+    // the opposite. Nobody being set as you costs you the comparison rows and
+    // nothing else: the Taken players table needs every squad in the league
+    // whether or not one of them is yours, so the roster read is unconditional
+    // and a week costs two requests for everybody.
+    c.ok('the rosters are still bought, for the taken table',
+      JSON.stringify(season.calls.rosterWeeks.slice().sort((a, b) => a - b)) ===
+        JSON.stringify([4, 5, 6]), JSON.stringify(season.calls.rosterWeeks));
+    c.ok('so the cost line still says two requests a week, not one',
+      /3 weeks = 6 requests to ESPN, the wire and every squad in the league for each one/
+        .test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('the note says why there are none',
       /Nobody is set as you/.test(note), note);
     c.ok('and names the control that turns them on',

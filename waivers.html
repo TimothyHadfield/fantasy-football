@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Add players &middot; Fantasy Football</title>
+<title>Players &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="css/app.css">
 <style>
@@ -139,6 +139,21 @@ tbody tr.unavailable td.name { font-weight: 500; }
 
 .empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
 
+/* THE TAKEN TABLE carries no colour at all — no td.hot, no td.beats — because
+   both of those cues argue for a claim and nobody here can be claimed. The only
+   thing it needs of its own is the manager's name, which is free text and long
+   enough to push the week columns off the screen if it is left to size itself. */
+#takenTable td.owner {
+  color: var(--dim);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "QB3" — the position and where he ranks on his own manager's roster. The rank
+   is ours, so it is set apart from the position rather than run into it. */
+#takenTable td.pos .rank { color: var(--dim); font-variant-numeric: tabular-nums; }
+
 /* A headline number means nothing without the player it belongs to, and the
    player is context rather than the number itself. */
 #waiverStats .stat .who {
@@ -162,7 +177,7 @@ tbody tr.unavailable td.name { font-weight: 500; }
       <a href="stats.html">Stats</a>
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
-      <a href="waivers.html" class="active">Add players</a>
+      <a href="waivers.html" class="active">Players</a>
       <a href="draft.html">Draft</a>
     </nav>
   </div>
@@ -175,7 +190,7 @@ tbody tr.unavailable td.name { font-weight: 500; }
   <div id="connBar"></div>
 
 
-  <h1>Add players <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <h1>Players <span id="modeBadge" class="badge demo">Demo</span></h1>
   <p class="sub" id="pageSub">Showing a generated sample waiver wire so you can see the layout with real-looking projections in it.</p>
 
   <section class="panel">
@@ -223,6 +238,23 @@ tbody tr.unavailable td.name { font-weight: 500; }
       <tbody></tbody>
     </table></div>
     <p class="panel-note" id="waiverNote"></p>
+  </section>
+
+  <!-- The other half of the league: everyone who IS on a roster. Same weeks,
+       same span control, same position buttons — the two panels are one table
+       split by whether you could actually claim the man. Deliberately without
+       its own controls: a second span control would be a second cost to spend
+       and the weeks are shared, so there is only one choice to make. -->
+  <section class="panel">
+    <h2>Taken players</h2>
+
+    <div class="stat-row" id="takenStats"></div>
+
+    <div class="table-scroll"><table id="takenTable">
+      <thead></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="takenNote"></p>
   </section>
 
 </div>
