@@ -61,6 +61,40 @@ td.hot {
 /* The word "green" in the note, shown in the colour it is describing. */
 .hot-key { color: var(--accent); font-weight: 650; }
 
+/* YOUR OWN WORST PLAYER AT A POSITION, sitting in the same list as the men who
+   could replace him. It has to be unmistakably not-a-free-agent: this is the
+   one you would drop, not one you can add.
+
+   An edge and a bracketing rule rather than a filled background. The zebra
+   striping owns the backgrounds here — td.name is sticky and carries its own
+   opaque one — so a fill would have to be stated twice and would still lose the
+   banding. A rule survives both. --good, not --accent: green already means
+   "worth starting" two rules up, and it is deliberately not that. */
+tbody tr.mine td {
+  border-top: 1px solid var(--good);
+  border-bottom: 1px solid var(--good);
+}
+/* The frozen column's own drop shadow has to survive alongside the inset edge,
+   or the row loses the cue that more columns run off to the right. */
+tbody tr.mine td.name {
+  box-shadow: inset 3px 0 0 var(--good), 6px 0 7px -7px rgba(0, 0, 0, 0.85);
+  padding-left: 12px;
+}
+/* "Your QB3". The label is the identity on these rows, so it leads the cell
+   rather than trailing the name the way an injury tag does. */
+.mine-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  margin-right: 2px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--good);
+  color: var(--good);
+}
+/* "Your …" in the note, shown in the colour the rows are marked with. */
+.mine-key { color: var(--good); font-weight: 650; }
+
 /* Availability, as a tag beside the name. OUT and IR also dim the whole row:
    a player who cannot play is still worth listing, but never worth reading
    first. */

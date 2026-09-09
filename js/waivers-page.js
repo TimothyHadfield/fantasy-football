@@ -17,8 +17,16 @@
 //   - lets you choose how many weeks to price, and opens on three;
 //   - renders the shell first and fills the columns in as each week lands;
 //   - caches every week it has fetched, so the position filter is free.
+//
+// THE COMPARISON ROWS. A wire full of numbers still does not answer the only
+// question worth asking — "is any of this better than what I already have?" —
+// so your own worst player at each position is dropped into the SAME tbody,
+// labelled "Your QB3", and sorts and filters alongside everyone else. That
+// interleaving IS the answer: sort by Avg and the men above your row are the
+// ones worth a claim. It costs a second request per week (rosters as well as
+// free agents), cached the same way and keyed by the same week numbers.
 
-import { fetchSchedule } from './season.js';
+import { fetchSchedule, fetchWeeksRosters } from './season.js';
 import * as espn from './espn.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -71,7 +79,19 @@ const state = {
   pool: new Map(),          // playerId -> identity (name, position, team, status)
   weekData: new Map(),      // week -> Map(playerId -> projection | null)
   failedWeeks: new Set(),   // weeks ESPN refused; named in the note, not hidden
-  inFlight: new Set(),      // weeks already asked for, so nothing is asked twice
+
+  // Your own squad, cached the same way and keyed by the same week numbers, so
+  // the position filter and re-sorting still cost nothing and widening the span
+  // never re-buys a week already held.
+  rosterWeeks: new Map(),        // week -> the teams array for that week
+  rosterProj: new Map(),         // week -> Map(playerId -> projection | null)
+  failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
+  demoTeamId: null,              // the demo league has no owner; a team stands in
+
+  // Everything already asked for, so nothing is asked twice. Keyed "wire:4" /
+  // "roster:4" rather than by the bare week, because a week now costs two
+  // different requests and one of them can be in the air without the other.
+  inFlight: new Set(),
 
   // Guards a slow week landing after the source changed underneath it. It is
   // bumped ONLY when the league being read changes — widening the span must not
@@ -239,6 +259,10 @@ function resetData() {
   state.pool.clear();
   state.weekData.clear();
   state.failedWeeks.clear();
+  state.rosterWeeks.clear();
+  state.rosterProj.clear();
+  state.failedRosterWeeks.clear();
+  state.demoTeamId = null;
   // Anything still in the air belongs to the league we just left; the token
   // bump drops it when it lands, and clearing this lets the new league ask for
   // the same week numbers straight away.
@@ -270,6 +294,46 @@ async function loadDemo() {
     `Generated sample data — invented players, invented projections, not your real league. ` +
     `The season is pretended to be at week ${DEMO_CURRENT_WEEK}.`
   );
+  render();
+  loadDemoRosters(token);
+}
+
+/**
+ * The squads the comparison rows come from, in demo mode.
+ *
+ * demo-rosters.js is loaded lazily and defensively: it is the only thing on
+ * this page that needs it, live mode never does, and a missing or broken file
+ * should cost the comparison rows and nothing else.
+ *
+ * The demo league has no owner, so the first team stands in for yours — the
+ * same stand-in the schedule page's forecast panel makes when nobody is set as
+ * you, and the note says so out loud rather than letting a stranger's bench
+ * pass for your own.
+ */
+async function loadDemoRosters(token) {
+  let generate = null;
+  try {
+    const mod = await import('./demo-rosters.js');
+    if (typeof mod.generateDemoWeekRosters === 'function') generate = mod.generateDemoWeekRosters;
+  } catch { /* handled below, as a missing comparison rather than a broken page */ }
+
+  if (token !== state.token) return;
+
+  if (!generate) {
+    for (const w of state.seasonWeeks) state.failedRosterWeeks.add(w);
+    render();
+    return;
+  }
+
+  for (const w of state.seasonWeeks) {
+    try {
+      absorbRosterWeek(generate(w).teams, w);
+    } catch {
+      state.failedRosterWeeks.add(w);
+    }
+  }
+  const first = state.rosterWeeks.get(state.seasonWeeks[0]);
+  state.demoTeamId = first && first.length ? first[0].id : null;
   render();
 }
 
@@ -348,21 +412,30 @@ function shownWeeks() {
   return weeks.slice(0, Number(state.span));
 }
 
+/** A week's wire is worth asking for: not held, not refused, not already in the air. */
+const wantsWire = (w) =>
+  !state.weekData.has(w) && !state.failedWeeks.has(w) && !state.inFlight.has(`wire:${w}`);
+
+/** The same test for that week's rosters — only asked for when there is a you. */
+const wantsRoster = (w) =>
+  comparing() &&
+  !state.rosterWeeks.has(w) && !state.failedRosterWeeks.has(w) && !state.inFlight.has(`roster:${w}`);
+
 /**
  * Fetch whatever the chosen span needs and does not already have, filling the
  * columns in as each week lands.
  *
- * Two at a time rather than all at once: thirteen open sockets to ESPN is rude
- * and no faster, and a strict one-at-a-time makes the full season feel slow.
- * A week ESPN refuses is remembered as failed rather than retried in a loop —
- * the note names it, and reloading is the way to try again.
+ * Two weeks at a time rather than all at once: thirteen open sockets to ESPN is
+ * rude and no faster, and a strict one-at-a-time makes the full season feel
+ * slow. A week now costs up to two requests — the wire and the rosters — and
+ * they are tracked separately, so one failing loses only its half. A request
+ * ESPN refuses is remembered as failed rather than retried in a loop; the note
+ * names it, and reloading is the way to try again.
  */
 async function refreshWeeks(token) {
   if (state.isDemo) return;
 
-  const missing = shownWeeks().filter(
-    (w) => !state.weekData.has(w) && !state.failedWeeks.has(w) && !state.inFlight.has(w)
-  );
+  const missing = shownWeeks().filter((w) => wantsWire(w) || wantsRoster(w));
   if (!missing.length) {
     render();   // whatever is still in the air will repaint when it lands
     return;
@@ -374,13 +447,15 @@ async function refreshWeeks(token) {
     // Re-checked at the moment the requests are actually about to be spent, not
     // when the list was drawn up: another run started while this one was
     // awaiting may already have claimed one of these weeks.
-    const batch = missing.slice(i, i + 2).filter(
-      (w) => !state.weekData.has(w) && !state.failedWeeks.has(w) && !state.inFlight.has(w)
-    );
-    if (!batch.length) continue;
-    batch.forEach((w) => state.inFlight.add(w));
+    const batch = missing.slice(i, i + 2);
+    const wire = batch.filter(wantsWire);
+    const rosters = batch.filter(wantsRoster);
+    if (!wire.length && !rosters.length) continue;
 
-    await Promise.all(batch.map(async (week) => {
+    wire.forEach((w) => state.inFlight.add(`wire:${w}`));
+    rosters.forEach((w) => state.inFlight.add(`roster:${w}`));
+
+    const jobs = wire.map(async (week) => {
       let raw = null;
       let ok = false;
       try {
@@ -389,14 +464,36 @@ async function refreshWeeks(token) {
       } catch {
         ok = false;
       }
-      state.inFlight.delete(week);
+      state.inFlight.delete(`wire:${week}`);
 
       // A response about a league we have already left is dropped here, before
       // it can repaint a table it is no longer about.
       if (token !== state.token) return;
       if (ok) absorbWeek(raw, week);
       else state.failedWeeks.add(week);
-    }));
+    });
+
+    if (rosters.length) {
+      // fetchWeeksRosters swallows a week ESPN refuses — it simply comes back
+      // absent — so a gap in the result is what marks a failed roster week.
+      jobs.push((async () => {
+        let got = new Map();
+        try {
+          got = await fetchWeeksRosters(rosters);
+        } catch {
+          got = new Map();
+        }
+        rosters.forEach((w) => state.inFlight.delete(`roster:${w}`));
+
+        if (token !== state.token) return;
+        for (const week of rosters) {
+          if (got.has(week)) absorbRosterWeek(got.get(week), week);
+          else state.failedRosterWeeks.add(week);
+        }
+      })());
+    }
+
+    await Promise.all(jobs);
 
     if (token !== state.token) return;
     render();
@@ -406,9 +503,11 @@ async function refreshWeeks(token) {
 
   const shown = shownWeeks();
   const got = shown.filter((w) => state.weekData.has(w)).length;
+  const mineGot = shown.filter((w) => state.rosterWeeks.has(w)).length;
   setStatus(
     `Loaded ${plural(state.pool.size, 'available player')} from ${esc(state.leagueName)} ` +
-    `across ${plural(got, 'week')}.`
+    `across ${plural(got, 'week')}` +
+    (comparing() ? `, and your own squad for ${plural(mineGot, 'week')}` : '') + '.'
   );
   render();
 }
@@ -421,7 +520,13 @@ async function refreshWeeks(token) {
 function progressText() {
   if (state.isDemo) return '';
   const wanted = shownWeeks();
-  const pending = wanted.filter((w) => !state.weekData.has(w) && !state.failedWeeks.has(w));
+  // A week is done when BOTH halves of it are — the wire and, when there is a
+  // you to compare against, that week's rosters.
+  const pending = wanted.filter(
+    (w) =>
+      (!state.weekData.has(w) && !state.failedWeeks.has(w)) ||
+      (comparing() && !state.rosterWeeks.has(w) && !state.failedRosterWeeks.has(w))
+  );
   if (!pending.length) return '';
   return `Reading ESPN’s weekly projections… week ${wanted.length - pending.length} of ${wanted.length}.`;
 }
@@ -460,6 +565,28 @@ function absorbWeek(raw, week) {
   }
 
   state.weekData.set(week, byPlayer);
+}
+
+/**
+ * Merge one week's rosters into the cache.
+ *
+ * The whole teams array is kept, not just yours, for two reasons. Changing who
+ * "you" are in the connection bar then costs a repaint rather than a refetch.
+ * And a man you hold in week 4 can be somebody else's by week 9 — his week 9
+ * projection is still the number you are comparing against, so the per-week
+ * index is built across every team rather than only your own.
+ */
+function absorbRosterWeek(teams, week) {
+  state.rosterWeeks.set(week, teams);
+
+  const byPlayer = new Map();
+  for (const team of teams || []) {
+    for (const p of team.players || []) {
+      if (p.playerId === null || p.playerId === undefined) continue;
+      byPlayer.set(p.playerId, p.projected);
+    }
+  }
+  state.rosterProj.set(week, byPlayer);
 }
 
 // ---------------------------------------------------------------------- rows
@@ -503,6 +630,88 @@ function buildRows(weeks) {
 
 const matchesFilter = (row) =>
   state.position === 'ALL' || row.p.position === state.position;
+
+// ------------------------------------------------------- the comparison rows
+
+/**
+ * Whose squad the "Your …" rows are, or null if there is nobody to be.
+ *
+ * Never localStorage directly: `savedConfig()` is the one reader of that key,
+ * and going round it was a real bug once.
+ */
+function myTeamId() {
+  if (state.isDemo) return state.demoTeamId;
+  const saved = savedConfig();
+  const id = saved ? saved.teamId : null;
+  return id === null || id === undefined ? null : Number(id);
+}
+
+/** Whether the comparison rows can exist at all. Drives the extra request too. */
+const comparing = () => myTeamId() !== null;
+
+/** One of your players' projection for one week — the same three states as the wire. */
+function myValueFor(playerId, week) {
+  const forWeek = state.rosterProj.get(week);
+  if (!forWeek) return undefined;
+  const v = forWeek.get(playerId);
+  return v === undefined ? null : v;
+}
+
+/**
+ * Your worst player at each position you hold, as rows for the same table.
+ *
+ * "Worst" is the lowest Avg over the weeks currently shown, computed exactly
+ * the way the wire's is — byes counted as the zero ESPN returns, weeks with no
+ * number at all left out — because a comparison between two differently-derived
+ * averages is not a comparison.
+ *
+ * The squad is the one you hold in the EARLIEST week on screen: a claim made
+ * now replaces somebody on the roster as it stands now, not as it stood in some
+ * later week ESPN happens to have projected. So the label's number — QB3, K2 —
+ * is how many you hold at that position today.
+ */
+function buildMineRows(weeks) {
+  const teamId = myTeamId();
+  if (teamId === null) return [];
+
+  const anchor = weeks.find((w) => state.rosterWeeks.has(w));
+  if (anchor === undefined) return [];
+
+  const team = (state.rosterWeeks.get(anchor) || []).find((t) => t.id === teamId);
+  if (!team) return [];
+
+  const held = new Map();   // position -> rows
+  for (const p of team.players || []) {
+    if (!POS_ORDER.has(p.position)) continue;   // an unknown slot is not a position
+    const values = weeks.map((w) => myValueFor(p.playerId, w));
+    const real = values.filter((v) => typeof v === 'number');
+    if (!held.has(p.position)) held.set(p.position, []);
+    held.get(p.position).push({
+      p,
+      values,
+      avg: real.length ? real.reduce((a, b) => a + b, 0) / real.length : null,
+      mine: true,
+    });
+  }
+
+  const rows = [];
+  for (const [position, group] of held) {
+    // Only a player ESPN has actually projected can be called the worst one; a
+    // player with no number at all over these weeks is unknown, not bad, and
+    // naming him would be inventing the comparison. The depth still counts
+    // everybody held there, because that is what depth means.
+    const rated = group.filter((r) => r.avg !== null);
+    if (!rated.length) continue;
+    const worst = rated.reduce((a, b) =>
+      b.avg < a.avg || (b.avg === a.avg && b.p.playerId < a.p.playerId) ? b : a
+    );
+    rows.push({ ...worst, depth: group.length, label: `Your ${position}${group.length}` });
+  }
+
+  // Football's own order, so an unsorted set of them reads QB first.
+  rows.sort((a, b) => (POS_ORDER.get(a.p.position) ?? 9) - (POS_ORDER.get(b.p.position) ?? 9));
+  return rows;
+}
 
 /** How many players sit behind each button on the position control. */
 function positionCounts() {
@@ -555,9 +764,18 @@ function renderCost(weeks) {
       `${plural(weeks.length, 'week')} shown. Demo data costs nothing to widen.`;
     return;
   }
-  const have = weeks.filter((w) => state.weekData.has(w)).length;
-  const todo = weeks.filter((w) => !state.weekData.has(w) && !state.failedWeeks.has(w)).length;
-  const gone = weeks.filter((w) => state.failedWeeks.has(w)).length;
+  // A week costs the wire AND, once there is a you to compare against, that
+  // week's rosters. The line has to say so, or it understates the choice by half.
+  const withMine = comparing();
+  const per = withMine ? 2 : 1;
+
+  let have = weeks.filter((w) => state.weekData.has(w)).length;
+  let gone = weeks.filter((w) => state.failedWeeks.has(w)).length;
+  if (withMine) {
+    have += weeks.filter((w) => state.rosterWeeks.has(w)).length;
+    gone += weeks.filter((w) => state.failedRosterWeeks.has(w)).length;
+  }
+  const todo = weeks.length * per - have - gone;
 
   const bits = [];
   if (have) bits.push(`${have} already loaded`);
@@ -565,8 +783,9 @@ function renderCost(weeks) {
   if (gone) bits.push(`${gone} refused by ESPN`);
 
   $('spanCost').textContent =
-    `${plural(weeks.length, 'week')} = ${plural(weeks.length, 'request')} to ESPN, one per week ` +
-    `— there is no bulk form.` + (bits.length ? ` ${bits.join(', ')}.` : '');
+    `${plural(weeks.length, 'week')} = ${plural(weeks.length * per, 'request')} to ESPN, ` +
+    (withMine ? 'the wire and your roster for each one' : 'one per week') +
+    ` — there is no bulk form.` + (bits.length ? ` ${bits.join(', ')}.` : '');
 }
 
 function renderCounts() {
@@ -616,32 +835,102 @@ function isStartable(v, position) {
   return typeof bar === 'number' && typeof v === 'number' && v > bar;
 }
 
-function cell(v, week, name, position) {
+/**
+ * One week's cell.
+ *
+ * `mine` marks a cell on a comparison row, which changes two things: the week
+ * it is waiting on is the ROSTER read rather than the wire read, and it is
+ * never coloured green. The green flags a wire player worth starting — an
+ * argument for claiming him. On a man already on your bench it would be
+ * answering a different question, so those weeks stay uncoloured.
+ */
+function cell(v, week, name, position, mine = false) {
   if (v === undefined) {
     // Three ways to have no number, and a reader has to be able to tell them
     // apart: still coming, refused outright, or ESPN simply had nothing.
-    if (state.failedWeeks.has(week)) {
-      return `<td class="muted" title="Week ${week} did not load — ESPN refused it, ` +
-        `so this column is empty for everyone. Reload the page to try again.">${dash}</td>`;
+    if (mine ? state.failedRosterWeeks.has(week) : state.failedWeeks.has(week)) {
+      return `<td class="muted" title="${
+        mine
+          ? `ESPN refused week ${week}’s rosters, so there is no projection for your own ` +
+            `players that week. Reload the page to try again.`
+          : `Week ${week} did not load — ESPN refused it, so this column is empty for ` +
+            `everyone. Reload the page to try again.`
+      }">${dash}</td>`;
     }
-    return `<td class="wait" title="Week ${week} has not been read from ESPN yet.">·</td>`;
+    return `<td class="wait" title="${
+      mine
+        ? `Week ${week}’s rosters have not been read from ESPN yet.`
+        : `Week ${week} has not been read from ESPN yet.`
+    }">·</td>`;
   }
   if (v === null) {
     // No data-v at all — never data-v="" — so an unknown sinks to the bottom
     // whichever way the column is sorted.
-    return `<td title="ESPN’s week ${week} list carried no projection for ${esc(name)}.">${dash}</td>`;
+    return `<td title="ESPN’s week ${week} ${mine ? 'rosters carried' : 'list carried'} ` +
+      `no projection for ${esc(name)}.">${dash}</td>`;
   }
   if (v === 0) {
     return `<td class="bye" data-v="0" ` +
       `title="${esc(name)} is on bye in week ${week}. ESPN returns 0.00 for a bye, ` +
       `which is not the same as a projection of nothing.">Bye</td>`;
   }
-  if (isStartable(v, position)) {
+  if (!mine && isStartable(v, position)) {
     return `<td class="hot" data-v="${v}" ` +
       `title="${fmt(v)} projected in week ${week} — over the ${STARTABLE[position]} ` +
       `that makes a ${esc(position)} worth starting.">${fmt(v)}</td>`;
   }
   return `<td data-v="${v}">${fmt(v)}</td>`;
+}
+
+/** The injury tag beside a name. Same markup wherever the player came from. */
+function injuryTag(status) {
+  return status
+    ? ` <span class="tag ${status.cls}" title="${esc(status.why)}">${status.tag}</span>`
+    : '';
+}
+
+/** The three columns after the name, shared by both kinds of row. */
+function identityCells({ p, avg }) {
+  return `<td class="left" data-v="${POS_ORDER.get(p.position) ?? 9}">${esc(p.position)}</td>
+      <td class="left">${esc(p.proTeam)}</td>
+      <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${
+        avg === null ? dash : fmt(avg)
+      }</td>`;
+}
+
+/** A player you could claim. */
+function wireRow(row, weeks) {
+  const { p, values } = row;
+  const status = availability(p.injuryStatus);
+
+  return `<tr${status && status.dim ? ' class="unavailable"' : ''}>
+      <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${esc(p.name)}${
+        p.percentOwned === null || p.percentOwned === undefined
+          ? ''
+          : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`
+      }">${esc(p.name)}${injuryTag(status)}</td>
+      ${identityCells(row)}
+      ${values.map((v, i) => cell(v, weeks[i], p.name, p.position)).join('')}
+    </tr>`;
+}
+
+/**
+ * The man you would drop. Marked, not dimmed: an OUT free agent is not worth
+ * reading first, but your own man being out is the whole reason to look.
+ */
+function mineRow(row, weeks) {
+  const { p, values, label, depth } = row;
+  const why =
+    `${esc(p.name)} — on your roster, not on the wire. Your lowest-averaging ` +
+    `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there.`;
+
+  return `<tr class="mine">
+      <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${why}">` +
+        `<span class="mine-tag">${esc(label)}</span> ${esc(p.name)}` +
+        `${injuryTag(availability(p.injuryStatus))}</td>
+      ${identityCells(row)}
+      ${values.map((v, i) => cell(v, weeks[i], p.name, p.position, true)).join('')}
+    </tr>`;
 }
 
 function renderTable(weeks) {
@@ -650,37 +939,22 @@ function renderTable(weeks) {
   renderHead(weeks);
 
   const all = buildRows(weeks);
-  const rows = all.filter(matchesFilter);
+  const available = all.filter(matchesFilter);
+  const mine = buildMineRows(weeks).filter(matchesFilter);
   const cols = weeks.length + 4;
 
-  if (!rows.length) {
+  if (!available.length && !mine.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(emptyReason(all.length))}</td></tr>`;
     resort(table);
     return;
   }
 
-  tbody.innerHTML = rows
-    .map(({ p, values, avg }) => {
-      const status = availability(p.injuryStatus);
-      const tag = status
-        ? ` <span class="tag ${status.cls}" title="${esc(status.why)}">${status.tag}</span>`
-        : '';
-
-      return `<tr${status && status.dim ? ' class="unavailable"' : ''}>
-          <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${esc(p.name)}${
-            p.percentOwned === null || p.percentOwned === undefined
-              ? ''
-              : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`
-          }">${esc(p.name)}${tag}</td>
-          <td class="left" data-v="${POS_ORDER.get(p.position) ?? 9}">${esc(p.position)}</td>
-          <td class="left">${esc(p.proTeam)}</td>
-          <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${
-            avg === null ? dash : fmt(avg)
-          }</td>
-          ${values.map((v, i) => cell(v, weeks[i], p.name, p.position)).join('')}
-        </tr>`;
-    })
-    .join('');
+  // One tbody, deliberately. resort() then interleaves your own man with the
+  // players who might replace him, which is the entire point of the feature:
+  // sort by Avg and everyone above your row is an upgrade.
+  tbody.innerHTML =
+    available.map((r) => wireRow(r, weeks)).join('') +
+    mine.map((r) => mineRow(r, weeks)).join('');
 
   // Keep whatever sort the user picked when the row set changes.
   resort(table);
@@ -737,6 +1011,62 @@ function renderStats(weeks) {
 }
 
 /**
+ * What a "Your …" row is, why that player and not another, and what the number
+ * after the position means — plus, when there are none, how to turn them on.
+ */
+function comparisonNote(weeks) {
+  const parts = [];
+
+  if (!comparing()) {
+    parts.push(
+      state.isDemo
+        ? 'The demo squads could not be generated this time, so there are no ' +
+          '<span class="mine-key">Your …</span> rows to compare the wire against.'
+        : 'Nobody is set as you, so the table below is the wire on its own. Choose your team ' +
+          'in the “You are” menu in the connection bar and every position you hold gains a ' +
+          '<span class="mine-key">Your QB3</span> row — your worst man there, sorted in among ' +
+          'the players who could replace him.'
+    );
+    return parts;
+  }
+
+  parts.push(
+    'A row marked <span class="mine-key">Your QB3</span> is one of your own players rather ' +
+    'than someone you can add: the worst man you hold at that position, put in the same list ' +
+    'so you can see who on the wire beats him. Worst means the lowest Avg over the weeks ' +
+    'currently shown, worked out exactly the way the wire’s is — so widening the span can ' +
+    'change which of your men appears. The number is your depth there: QB3 because you hold ' +
+    'three quarterbacks, K2 because you hold two kickers. These rows sort and filter with ' +
+    'everything else, which is why they are in the table rather than beside it. They are never ' +
+    'coloured green — whether to start your own bench is a different question — and they are ' +
+    'never counted on the position buttons, because you cannot add a player you already have.'
+  );
+
+  if (state.isDemo) {
+    parts.push(
+      'The demo league has no owner, so those rows are the first team’s squad standing in ' +
+      'for yours.'
+    );
+  }
+
+  const missing = weeks.filter((w) => state.failedRosterWeeks.has(w));
+  if (missing.length) {
+    const named = andList(missing.map(String));
+    parts.push(
+      missing.length === weeks.length
+        ? `<span class="neg">ESPN refused your rosters for every week shown ` +
+          `(${named}), so there is nothing of yours to compare against. The wire below is ` +
+          `still ESPN’s. Reload the page to try again.</span>`
+        : `<span class="neg">ESPN refused your rosters for ` +
+          `${missing.length === 1 ? 'week' : 'weeks'} ${named}, so your own rows average only ` +
+          `the weeks that did load. Reload the page to try again.</span>`
+    );
+  }
+
+  return parts;
+}
+
+/**
  * What these numbers are, said every time they are shown.
  *
  * Four things have to be in here or the table is quietly misleading: whose
@@ -788,6 +1118,8 @@ function renderNote(weeks) {
     '. Those are set bars, not a ranking against the rest of the wire, so a quiet week for ' +
     'everyone stays uncoloured rather than promoting the best of a bad set.'
   );
+
+  parts.push(...comparisonNote(weeks));
 
   parts.push(
     state.isDemo
@@ -855,10 +1187,29 @@ enableSort($('waiverTable'), { defaultIndex: 3 });
  * Go live on our own when the connection bar finds a league, so the page shows
  * the real waiver wire without a second click — unless the user has parked it
  * on demo.
+ *
+ * Something on this page IS per-team now, so an already-live page also has to
+ * listen for who you are changing. Answering that costs no requests when the
+ * roster weeks are already held — every one of them carries every team — so
+ * this is a repaint, and refreshWeeks only spends anything when the rosters
+ * were never asked for because nobody was set as you.
  */
+let knownTeamId = (savedConfig() || {}).teamId ?? null;
+
 onConnection((conn) => {
   if (!conn) return;
-  if (state.source === 'live') return;      // already live; nothing here is per-team
+
+  if (state.source === 'live') {
+    const teamId = conn.teamId ?? null;
+    if (teamId === knownTeamId) return;
+    knownTeamId = teamId;
+    if (state.isDemo) return;
+    render();
+    refreshWeeks(state.token);
+    return;
+  }
+
+  knownTeamId = conn.teamId ?? null;
   if (prefs.get('source') === 'demo') return;
   state.source = 'live';
   syncSource();
