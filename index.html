@@ -3,16 +3,111 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fantasy Football</title>
+<title>Dashboard &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="css/app.css">
+<style>
+/* Page-local styles. Everything else comes from css/app.css. */
+
+/* How far into the season we are. Early on, the honest answer is "barely",
+   and the page should say so before it shows a single number. */
+.progress {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  margin-top: 14px;
+}
+.progress i { display: block; height: 100%; background: var(--accent); }
+
+/* Matchup cards. Three columns — team, projected, actual — so the projected
+   column still lines up on a week where nothing has kicked off. */
+.games {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+.game {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.game.upcoming { background: transparent; border-style: dashed; }
+.game.mine { border-color: #2c6b40; }
+.side {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 14px;
+  padding: 4px 0;
+  font-variant-numeric: tabular-nums;
+}
+.side + .side { border-top: 1px solid var(--line); }
+.side .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side .tproj { color: var(--dim); font-size: 12.5px; min-width: 46px; text-align: right; }
+.side .tscore { font-weight: 600; min-width: 46px; text-align: right; }
+.side.win { font-weight: 650; }
+.side.win .tscore { color: var(--accent); }
+.side.lose { color: var(--dim); }
+.side.fav .tproj { color: var(--text); }
+.gmeta {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+}
+.ghead {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+
+/* Ranked bars. A line chart of ten teams over one week draws no lines at all,
+   so week-1 rankings are bars. */
+.rank { list-style: none; margin: 0; padding: 0; }
+.rank li {
+  display: grid;
+  grid-template-columns: 20px minmax(90px, 1fr) 2fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+.rank .rk { color: var(--dim); font-size: 12px; text-align: right; }
+.rank .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank .bar { background: var(--panel-2); border-radius: 3px; height: 9px; }
+.rank .bar i { display: block; height: 100%; border-radius: 3px; background: var(--good); }
+.rank .vv { font-weight: 600; }
+.rank li.me .nm { color: #7fd99b; font-weight: 650; }
+.rank li.me .bar i { background: var(--accent); }
+
+/* Injury severity. Red for "he is not playing", amber for "he might not". */
+.badge.out { background: #3a1418; color: var(--err); border: 1px solid #5c2027; }
+.badge.doubt { background: #3a2f10; color: var(--warn); border: 1px solid #5a4718; }
+.badge.quest { background: #1f2430; color: var(--dim); border: 1px solid var(--line); }
+
+.footnote { margin: 26px 0 0; font-size: 12.5px; color: var(--dim); text-align: right; }
+.footnote a { color: var(--dim); }
+
+.select-wide { width: 190px; }
+</style>
 </head>
 <body>
 
 <header class="site">
-  <div class="wrap">
+  <div class="wrap wide">
     <span class="brand">Fantasy Football</span>
     <nav>
-      <a href="index.html" class="active">Connection</a>
+      <a href="index.html" class="active">Home</a>
       <a href="stats.html">Stats</a>
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
@@ -23,147 +118,68 @@
 
 
 
-<div class="wrap narrow-page">
+<div class="wrap wide">
 
   <div id="connBar"></div>
 
-  <h1>Connection</h1>
-  <p class="sub">Link this site to your ESPN league.</p>
+  <h1>Season dashboard <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">Showing a generated sample season so you can see the layout with real-looking numbers in it.</p>
 
   <section class="panel">
-    <h2>League connection</h2>
-    <div class="row">
-      <div class="form-grow">
-        <label for="leagueId">League ID</label>
-        <input id="leagueId" placeholder="from your ESPN league URL" inputmode="numeric">
+    <h2>Data source &amp; week</h2>
+    <div class="row spread">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
       </div>
-      <div class="form-narrow">
-        <label for="season">Season</label>
-        <input id="season" value="2026" inputmode="numeric">
+      <div class="form-select select-wide">
+        <label for="weekSelect">Week</label>
+        <select id="weekSelect"></select>
       </div>
-      <button type="button" id="connect" class="primary">Connect</button>
     </div>
-    <div id="status" class="status-line"></div>
-    <div id="summary" class="status-line hidden">
-      <dl id="summaryList" class="kv"></dl>
-    </div>
-    <p class="panel-note">
-      Your league URL contains <code>leagueId=XXXXXXX</code>. For a private league,
-      stay logged in to espn.com in this browser &mdash; your session is used automatically.
-    </p>
+    <div class="progress"><i id="progressBar"></i></div>
+    <div id="sourceStatus" class="panel-note"></div>
   </section>
 
   <section class="panel">
-    <h2>Data probes</h2>
-    <div class="row">
-      <button type="button" class="probe-btn" data-probe="players" disabled>Players</button>
-      <button type="button" class="probe-btn" data-probe="draft" disabled>Draft</button>
-      <button type="button" class="probe-btn" data-probe="rosters" disabled>Rosters</button>
-      <button type="button" class="probe-btn" data-probe="matchups" disabled>Matchups</button>
-      <button type="button" class="probe-btn" data-probe="transactions" disabled>Transactions</button>
-    </div>
-    <pre id="output" class="hidden"></pre>
-    <p class="panel-note">Confirms what ESPN actually returns, so we know what we can build on.</p>
+    <h2 id="matchupsTitle">This week</h2>
+    <div id="matchups"></div>
+    <p class="panel-note" id="matchupsNote"></p>
   </section>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>Roster strength</h2>
+      <div id="strength"></div>
+      <p class="panel-note" id="strengthNote"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Standings</h2>
+      <div id="standings"></div>
+      <p class="panel-note" id="standingsNote"></p>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>Injury report</h2>
+      <div id="injuries"></div>
+      <p class="panel-note" id="injuryNote"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Left on the bench</h2>
+      <div id="bench"></div>
+      <p class="panel-note" id="benchNote"></p>
+    </section>
+  </div>
+
+  <p class="footnote"><a href="debug.html">Data probes &amp; raw ESPN payloads</a></p>
 
 </div>
 
-<script type="module">
-import * as espn from './js/espn.js';
-
-const $ = (id) => document.getElementById(id);
-const statusEl = $('status');
-const outputEl = $('output');
-const summaryEl = $('summary');
-
-function setStatus(msg, kind = '') {
-  statusEl.textContent = msg;
-  statusEl.style.color =
-    kind === 'ok' ? 'var(--accent)' : kind === 'err' ? 'var(--err)' : 'var(--dim)';
-}
-
-function show(obj) {
-  outputEl.classList.remove('hidden');
-  outputEl.textContent = JSON.stringify(obj, null, 2);
-}
-
-const saved = JSON.parse(localStorage.getItem('ff.config') || '{}');
-if (saved.leagueId) $('leagueId').value = saved.leagueId;
-if (saved.season) $('season').value = saved.season;
-
-$('connect').addEventListener('click', async () => {
-  const leagueId = $('leagueId').value.trim();
-  const season = Number($('season').value.trim());
-  if (!leagueId) { setStatus('Enter a league ID.', 'err'); return; }
-
-  espn.configure({ leagueId, season });
-  localStorage.setItem('ff.config', JSON.stringify({ leagueId, season }));
-
-  setStatus('Connecting…');
-  summaryEl.classList.add('hidden');
-  $('connect').disabled = true;
-
-  try {
-    const league = await espn.testConnection();
-    setStatus('Connected.', 'ok');
-
-    const d = league.draft;
-    const draftState = d.complete ? 'complete'
-      : d.inProgress ? 'in progress'
-      : `not started${d.picks.length ? ` (${d.picks.length} picks recorded)` : ''}`;
-
-    $('summaryList').innerHTML = `
-      <dt>League</dt><dd>${escapeHtml(league.name)}</dd>
-      <dt>Teams</dt><dd>${league.size}</dd>
-      <dt>Scoring</dt><dd>${escapeHtml(league.scoringFormat)}</dd>
-      <dt>Roster</dt><dd>${league.rosterSize} (${league.benchSlots} bench)</dd>
-      <dt>Draft</dt><dd>${escapeHtml(d.type)} &middot; ${draftState}</dd>
-    `;
-    summaryEl.classList.remove('hidden');
-    document.querySelectorAll('.probe-btn').forEach((b) => (b.disabled = false));
-  } catch (err) {
-    setStatus(err.message, 'err');
-    document.querySelectorAll('.probe-btn').forEach((b) => (b.disabled = true));
-  } finally {
-    $('connect').disabled = false;
-  }
-});
-
-document.querySelectorAll('.probe-btn').forEach((btn) => {
-  btn.addEventListener('click', async () => {
-    const kind = btn.dataset.probe;
-    setStatus(`Fetching ${kind}…`);
-    try {
-      let result;
-      if (kind === 'players') {
-        const players = await espn.fetchPlayers(50);
-        result = { count: players.length, sample: players.slice(0, 5) };
-      } else if (kind === 'draft') {
-        result = espn.parseLeague(await espn.fetchDraft()).draft;
-      } else if (kind === 'rosters') {
-        const parsed = espn.parseLeague(await espn.fetchRosters());
-        result = parsed.teams.map((t) => ({ team: t.name, players: t.roster.length }));
-      } else if (kind === 'matchups') {
-        const raw = await espn.fetchMatchups();
-        result = { matchups: (raw.schedule || []).length, sample: (raw.schedule || []).slice(0, 3) };
-      } else if (kind === 'transactions') {
-        const raw = await espn.fetchTransactions();
-        result = { count: (raw.transactions || []).length, sample: (raw.transactions || []).slice(0, 3) };
-      }
-      show(result);
-      setStatus(`${kind} OK.`, 'ok');
-    } catch (err) {
-      setStatus(err.message, 'err');
-    }
-  });
-});
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
-  );
-}
-</script>
+<script type="module" src="js/home-page.js"></script>
 <script type="module" src="js/connection.js"></script>
 </body>
 </html>

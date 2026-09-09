@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debug &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="draft.html">Draft</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap narrow-page">
+
+  <div id="connBar"></div>
+
+  <h1>Debug</h1>
+  <p class="sub">
+    Developer tooling. Fires one ESPN read at a time and prints exactly what came
+    back, so a page is only ever built on fields that really exist.
+  </p>
+
+  <section class="panel">
+    <h2>Probe target</h2>
+    <div class="row">
+      <div class="form-grow">
+        <label for="leagueId">League ID</label>
+        <input id="leagueId" placeholder="from your ESPN league URL" inputmode="numeric">
+      </div>
+      <div class="form-narrow">
+        <label for="season">Season</label>
+        <input id="season" inputmode="numeric">
+      </div>
+      <button type="button" id="connect" class="primary">Check</button>
+    </div>
+    <div id="status" class="status-line"></div>
+    <div id="summary" class="status-line hidden">
+      <dl id="summaryList" class="kv"></dl>
+    </div>
+    <p class="panel-note">
+      Prefilled from the connection strip above, and only used by this page &mdash;
+      checking here does not change what the rest of the site is connected to, so
+      you can point a probe at another league or an older season safely. A private
+      league needs the Fantasy Football Bridge extension installed and enabled;
+      without it only leagues marked viewable to the public will answer.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Data probes</h2>
+    <div class="row">
+      <button type="button" class="probe-btn" data-probe="players" disabled>Players</button>
+      <button type="button" class="probe-btn" data-probe="draft" disabled>Draft</button>
+      <button type="button" class="probe-btn" data-probe="rosters" disabled>Rosters</button>
+      <button type="button" class="probe-btn" data-probe="matchups" disabled>Matchups</button>
+      <button type="button" class="probe-btn" data-probe="transactions" disabled>Transactions</button>
+    </div>
+    <pre id="output" class="hidden"></pre>
+    <p class="panel-note">Confirms what ESPN actually returns, so we know what we can build on.</p>
+  </section>
+
+</div>
+
+<script type="module" src="js/debug-page.js"></script>
+<script type="module" src="js/connection.js"></script>
+</body>
+</html>
