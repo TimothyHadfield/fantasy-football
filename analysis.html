@@ -212,6 +212,35 @@
   }
   .key.out { background: #3a171c; }
   .key.ir { background: #56141e; }
+
+  /* ------------------------------------------------------ player references */
+
+  /* Every name on this page, and every number that stands for one, is a link to
+     that man's row on the Players page. There are several hundred of them in
+     these four tables, so the one thing they must not do is repaint the whole
+     screen blue: at rest a .pref is exactly the text it wrapped — same colour,
+     no underline — and the affordance only turns up under the pointer. That is
+     also why it inherits rather than picks a colour: a bench number is dim, an
+     injured cell is tinted, a bye is amber, and the link has no business
+     overruling any of those statements just by existing. */
+  a.pref {
+    color: inherit;
+    text-decoration: none;
+    /* One box rather than a run of inline fragments, so the focus ring below
+       draws a single clean rectangle around the whole reference. */
+    display: inline-block;
+  }
+  a.pref:hover { color: var(--accent-hi); text-decoration: underline; text-underline-offset: 2px; }
+
+  /* These are keyboard-reachable now and there are a lot of them, so the ring
+     has to be findable while tabbing without nudging a single column: inset
+     offset, and no underline on top of it. */
+  a.pref:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+    border-radius: var(--r-1);
+    text-decoration: none;
+  }
 </style>
 </head>
 <body>
@@ -273,9 +302,12 @@
       <strong>B1&hellip;</strong> are the bench, best first, with each man&rsquo;s position in the cell because
       every bench is a different shape.
       <br>
-      Names are on hover, and in full in the roster detail below.
+      Names are on hover, and under each one that man&rsquo;s whole run of weekly projections, week by
+      week; every name is in full in the roster detail below.
       <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
-      Click a row to load that team below; click any header to sort.
+      <strong>Every number is a link</strong> to that man&rsquo;s next 13 weeks on the
+      <a href="waivers.html">Players</a> page; click the row anywhere else to load that team below,
+      and click any header to sort.
     </p>
   </section>
 
@@ -295,6 +327,9 @@
       A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is off that
       week, which is not the same as having no number at all.
       <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
+      Hovering a number gives that man&rsquo;s whole season week by week, and
+      <strong>every number is a link</strong> to his next 13 weeks on the
+      <a href="waivers.html">Players</a> page &mdash; both the same as in the grid above.
     </p>
   </section>
 

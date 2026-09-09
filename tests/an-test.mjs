@@ -9,9 +9,64 @@ import { parseHTML } from 'linkedom';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { register } from 'node:module';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
+
+// ------------------------------------------------- a league with a missing id
+//
+// The page must emit no link at all for a player ESPN gave no playerId for —
+// `waivers.html?player=undefined` looks like it would work and does not. The
+// ordinary stub gives every player an id, and it is not this suite's file to
+// change, so scenario (g) wraps it: a loader and an override module, both
+// expressed as data: URLs and registered from inside this process, blank the
+// id of one man on every team and leave everything else exactly as it was.
+//
+// Data URLs cannot carry relative imports, so the override reaches the stub by
+// its absolute file URL. That also means it can never resolve back through
+// './season.js' into itself.
+
+const STUB_URL = new URL('./an-stub-season.mjs', import.meta.url).href;
+const dataUrl = (src) => `data:text/javascript;base64,${Buffer.from(src, 'utf8').toString('base64')}`;
+
+const NO_ID_SEASON = dataUrl(`
+  import * as real from ${JSON.stringify(STUB_URL)};
+  export * from ${JSON.stringify(STUB_URL)};
+
+  // Player 00 — every team's QB, so the blank id lands in a lineup column of
+  // both grids, in the roster detail and in the season grid all at once.
+  const blank = (teams) => teams.map((t) => {
+    const players = t.players.map((p) =>
+      (p.name.endsWith('Player 00') ? { ...p, playerId: null } : p));
+    return {
+      ...t,
+      players,
+      starters: players.filter((p) => p.started),
+      bench: players.filter((p) => !p.started),
+    };
+  });
+
+  export async function fetchWeekRosters(week) {
+    const got = await real.fetchWeekRosters(week);
+    return { ...got, teams: blank(got.teams) };
+  }
+  export async function fetchWeeksRosters(weeks, opts) {
+    const got = await real.fetchWeeksRosters(weeks, opts);
+    const out = new Map();
+    for (const [w, teams] of got) out.set(w, blank(teams));
+    return out;
+  }
+`);
+
+const NO_ID_LOADER = dataUrl(`
+  export async function resolve(spec, ctx, next) {
+    if (spec.startsWith('.') && /\\/season\\.js$/.test(spec)) {
+      return next(${JSON.stringify(NO_ID_SEASON)}, ctx);
+    }
+    return next(spec, ctx);
+  }
+`);
 
 const SCENARIOS = {
   demo: {
@@ -160,6 +215,32 @@ const SCENARIOS = {
       await new Promise((r) => setTimeout(r, 120));
       out.picked = { team: $('teamSelect').value, snap: snap() };
 
+      // --- a click on a player link must NOT also repoint the drill-down -----
+      // The row is click-to-drill-into-a-team and the number inside it is now a
+      // link out of the page. Both handlers see the same click; only one of
+      // them may act, or the reader comes back to a team he never picked.
+      const link = document.querySelector(
+        '#overviewTable tbody tr[data-team="5"] td.slot-cell a.pref');
+      out.ref = link && { href: link.getAttribute('href'), title: link.getAttribute('title') };
+      if (link) fire(link);
+      await new Promise((r) => setTimeout(r, 80));
+      out.afterRefClick = {
+        team: $('teamSelect').value,
+        picked: [...document.querySelectorAll('#overviewTable tbody tr.picked')]
+          .map((tr) => tr.getAttribute('data-team')),
+      };
+
+      // ...and a click on the row anywhere ELSE still does drill in.
+      const nameCell = document.querySelector('#weeklyTable tbody tr[data-team="5"] td.name');
+      if (nameCell) fire(nameCell);
+      await new Promise((r) => setTimeout(r, 80));
+      out.afterNameClick = { team: $('teamSelect').value };
+
+      // put it back where the assertions below expect it
+      const back = document.querySelector('#weeklyTable tbody tr[data-team="2"] td.name');
+      if (back) fire(back);
+      await new Promise((r) => setTimeout(r, 80));
+
       // --- change the week: only the week grid moves ------------------------
       const wk = $('weekSelect');
       wk.value = '6';
@@ -290,12 +371,27 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+
+  // Every team's QB comes back with playerId: null. Nothing else changes, so
+  // the whole page still renders and every OTHER man is still linked — which
+  // is the point: the rule is "skip the link", not "give up on the row".
+  'no-id': {
+    label: '(g) a player ESPN gave no id for gets no link',
+    stub: false,          // this one registers a loader of its own, below
+    noId: true,
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+  },
 };
 
 // ------------------------------------------------------------------- child
 
 async function boot(scenario) {
   const cfg = SCENARIOS[scenario];
+  // Registered here rather than through --import, because the module it points
+  // at is built in this file. Every import after this point sees it, and the
+  // page module is imported at the foot of this function.
+  if (cfg.noId) register(NO_ID_LOADER);
   const html = readFileSync(path.join(REPO, 'analysis.html'), 'utf8');
   const { window, document } = parseHTML(html);
 
@@ -504,6 +600,81 @@ async function check(scenario, boot) {
       !/\b(hot|good|pos|neg|st-out|st-ir)\b/.test(td.cls))),
     JSON.stringify(rows[0] && rows[0].cells.slice(5).map((x) => x.cls)));
 
+  // ---- player references: every name, and every number standing for one ----
+  //
+  // Tim: "if you ever click on a player's name (or a number that refers to the
+  // player), it will bring you directly to their position in the players
+  // section". The contract is a real <a class="pref" href="waivers.html?
+  // player=<espnPlayerId>">, and these run in every scenario.
+  const refs = [...d.querySelectorAll('a.pref')];
+  const href = (a) => a.getAttribute('href') || '';
+  const SURFACES = ['#overviewTable', '#weeklyTable', '#rosterTable', '#seasonTable'];
+
+  c.ok('the page emits player reference links at all', refs.length > 0, `${refs.length}`);
+  c.ok('EVERY SURFACE THAT NAMES A PLAYER LINKS HIM',
+    SURFACES.every((s) => d.querySelectorAll(`${s} tbody a.pref`).length > 0),
+    SURFACES.map((s) => `${s}=${d.querySelectorAll(`${s} tbody a.pref`).length}`).join(' '));
+  c.ok('every reference is a real href, not a click handler',
+    refs.every((a) => /^waivers\.html\?player=\d+$/.test(href(a))),
+    refs.map(href).filter((h) => !/^waivers\.html\?player=\d+$/.test(h)).slice(0, 3).join(' | '));
+  c.ok('the href is relative, so it works from the repo root the pages share',
+    refs.every((a) => !/^(https?:)?\/\//.test(href(a)) && !href(a).startsWith('/')),
+    refs.map(href).filter((h) => /^\/|^https?:/.test(h)).slice(0, 2).join(' | '));
+  c.ok('NO LINK IS EVER EMITTED FOR A PLAYER WITH NO ID',
+    !/player=(undefined|null|NaN|&quot;|")/.test(d.body.innerHTML),
+    (d.body.innerHTML.match(/player=[^"']{0,12}/g) || [])
+      .filter((h) => !/^player=\d+$/.test(h)).slice(0, 3).join(' | '));
+  c.ok('every reference says where it goes, in the site\u2019s voice',
+    refs.every((a) => /open his next 13 weeks on the Players page/.test(a.getAttribute('title') || '')),
+    refs.find((a) => !/open his next 13 weeks/.test(a.getAttribute('title') || ''))?.getAttribute('title'));
+  c.ok('a link is never put inside the swap button, which would be invalid HTML',
+    d.querySelectorAll('button a.pref').length === 0 &&
+    d.querySelectorAll('a.pref button').length === 0,
+    `${d.querySelectorAll('button a.pref').length}`);
+  c.ok('the swap button is untouched \u2014 still a button carrying data-swap',
+    [...d.querySelectorAll('#rosterTable button[data-swap]')].length > 0 ||
+    rosterRows.length === 0,
+    'no swap buttons left');
+
+  // The sort key must stay on the cell. Inside an anchor it would be invisible
+  // to sortable.js and every column in both grids would silently stop sorting.
+  const keyed = [...d.querySelectorAll('#overviewTable tbody td[data-v], #weeklyTable tbody td[data-v], ' +
+    '#seasonTable tbody td[data-v], #rosterTable tbody td[data-v]')];
+  c.ok('THE SORT KEY STAYS ON THE CELL, OUTSIDE THE LINK',
+    keyed.length > 0 &&
+    d.querySelectorAll('a.pref[data-v]').length === 0 &&
+    d.querySelectorAll('a.pref [data-v]').length === 0,
+    `${keyed.length} keyed cells, ` +
+    `${d.querySelectorAll('a.pref[data-v], a.pref [data-v]').length} keys inside links`);
+
+  // Wrapping must not change a single character of what the tables read, which
+  // is what lets every existing text assertion above stand unaltered.
+  const gridCells = [...d.querySelectorAll('#overviewTable tbody td.slot-cell, ' +
+    '#weeklyTable tbody td.slot-cell')].filter((td) => td.querySelector('a.pref'));
+  c.ok('a grid link wraps the WHOLE cell, so the number itself is the target',
+    gridCells.length > 0 && gridCells.every((td) => td.querySelector('a.pref').textContent === td.textContent),
+    gridCells.slice(0, 2).map((td) => `[${td.textContent}] vs [${td.querySelector('a.pref').textContent}]`).join(' '));
+  c.ok('a bench cell keeps its position inside the link, beside the number it labels',
+    (() => {
+      const bench = gridCells.filter((td) => td.querySelector('.pp'));
+      return bench.length > 0 && bench.every((td) => td.querySelector('a.pref .pp'));
+    })(), 'a .pp span outside its link');
+  c.ok('the roster detail links the name and nothing else in the cell',
+    (() => {
+      const cells = [...d.querySelectorAll('#rosterTable tbody td.name')];
+      // (scenario (g) has one man per team with no id, and so no link at all)
+      const linked = cells.filter((td) => td.querySelector('a.pref'));
+      return linked.length > 0 &&
+        linked.every((td) => td.querySelector('a.pref').textContent === td.textContent);
+    })(), 'a name cell whose link does not cover it');
+  c.ok('the season grid links the name and leaves the injury pill beside it',
+    d.querySelectorAll('#seasonTable tbody td.name a.pref .inj').length === 0 &&
+    [...d.querySelectorAll('#seasonTable tbody td.name')].every((td) => {
+      const a = td.querySelector('a.pref');
+      return !a || td.textContent.startsWith(a.textContent);
+    }),
+    `${d.querySelectorAll('#seasonTable tbody td.name a.pref .inj').length} pills inside a link`);
+
   // ---- the note ----------------------------------------------------------
   c.ok('the note says these are ESPN\u2019s own per-week projections',
     /ESPN\u2019s own projection for that player in that week/.test(note) ||
@@ -556,6 +727,24 @@ async function check(scenario, boot) {
       txt($('overviewTitle')).startsWith('All teams · proj avg') &&
       /^All teams · week \d+$/.test(txt($('weeklyTitle'))),
       `${txt($('overviewTitle'))} / ${txt($('weeklyTitle'))}`);
+
+    // ---- the week run on the hover, in the mode Tim sees first ------------
+    const gridTitles = [...d.querySelectorAll('#overviewTable tbody td.slot-cell, ' +
+      '#weeklyTable tbody td.slot-cell')].map((td) => td.getAttribute('title') || '');
+    c.ok('every grid cell hover carries a week run, in demo too',
+      gridTitles.length > 0 && gridTitles.every((t) => /Sample projections for weeks 1–13:/.test(t)),
+      gridTitles[0]);
+    c.ok('and it is honest about whose numbers they are',
+      gridTitles.every((t) => !/ESPN’s projection/.test(t)), gridTitles[0]);
+    c.ok('THE DEMO RUN NEVER CLAIMS A BYE, because a zero means something else here',
+      gridTitles.every((t) => !/\bBye\b/.test(t)),
+      gridTitles.find((t) => /\bBye\b/.test(t)));
+    c.ok('the run is filled in, not thirteen unread weeks',
+      gridTitles.every((t) => !/not read yet/.test(t)),
+      gridTitles.find((t) => /not read yet/.test(t)));
+    c.ok('the demo run still opens with the identity line it always had',
+      gridTitles.every((t) => /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4}/.test(t.split('\n')[0])),
+      gridTitles[0].split('\n')[0]);
   }
 
   // ---- (b) live, every week resolves --------------------------------------
@@ -660,6 +849,118 @@ async function check(scenario, boot) {
     // injuries are shown, quietly, as availability
     c.ok('an injury designation is carried on the name, as elsewhere on this page',
       /class="inj/.test(table.innerHTML) && /\bOUT\b/.test(table.innerHTML), 'no injury pill');
+
+    // ---- the links carry ESPN's OWN id, re-derived from the stub ----------
+    // an-stub-season.mjs sets playerId = teamId * 100 + i, so the ids the page
+    // emits are computed here rather than read back off the page.
+    const want = [];
+    for (let i = 0; i < season.SIZE; i++) {
+      if (season.onRoster(i, 8)) want.push(`waivers.html?player=${teamId * 100 + i}`);
+    }
+    const hrefsIn = (sel) =>
+      [...d.querySelectorAll(sel)].map((a) => a.getAttribute('href')).sort();
+    const sorted = (a) => a.slice().sort();
+
+    c.ok('THE ROSTER DETAIL LINKS EVERY PLAYER BY THE ID ESPN GAVE',
+      JSON.stringify(hrefsIn('#rosterTable tbody td.name a.pref')) === JSON.stringify(sorted(want)),
+      JSON.stringify(hrefsIn('#rosterTable tbody td.name a.pref')).slice(0, 300));
+    c.ok('and the season grid links the same men, by the same ids',
+      JSON.stringify(hrefsIn('#seasonTable tbody td.name a.pref')) === JSON.stringify(sorted(want)),
+      JSON.stringify(hrefsIn('#seasonTable tbody td.name a.pref')).slice(0, 300));
+
+    // the grids: one row, all nine spots and the whole bench
+    const grid4 = (id) => {
+      const tr = d.querySelector(`#${id}Table tbody tr[data-team="${teamId}"]`);
+      return [...tr.children].filter((td) => /\bslot-cell\b/.test(td.getAttribute('class') || ''));
+    };
+    for (const id of ['overview', 'weekly']) {
+      const cells = grid4(id);
+      c.ok(`the ${id} grid links every one of its fifteen numbers`,
+        cells.length === 15 && cells.every((td) => td.querySelector('a.pref')),
+        `${cells.length} cells, ${cells.filter((td) => td.querySelector('a.pref')).length} linked`);
+      c.ok(`and every ${id} link is one of team ${teamId}’s own ESPN ids`,
+        cells.every((td) => want.includes(td.querySelector('a.pref').getAttribute('href'))),
+        cells.map((td) => td.querySelector('a.pref').getAttribute('href')).join(' '));
+      c.ok(`the ${id} grid keeps its sort key on the cell, outside the link`,
+        cells.every((td) => /^-?\d+(\.\d+)?$/.test(td.getAttribute('data-v') || '')) &&
+        cells.every((td) => !td.querySelector('a.pref').hasAttribute('data-v')),
+        cells.map((td) => td.getAttribute('data-v')).join(' '));
+    }
+
+    // ---- the hover: identity line, then the whole week run ----------------
+    const titleOf = (td) => td.getAttribute('title') || '';
+    const cells = grid4('overview');
+    const t0 = titleOf(cells[0]);           // the QB — i=0, a clean run
+    c.ok('the hover still opens with name, position and NFL team',
+      /^T4 Player 00 · QB · BUF/.test(t0), t0.slice(0, 120));
+    c.ok('an injury designation is still on the hover',
+      /· OUT/.test(titleOf(cells[2])), titleOf(cells[2]).slice(0, 120));
+    c.ok('THE HOVER NOW CARRIES THE WHOLE WEEK RUN',
+      /ESPN’s projection for weeks 1–13:/.test(t0) &&
+      Array.from({ length: 13 }, (_, i) => `W${i + 1} `).every((w) => t0.includes(w)),
+      t0);
+    c.ok('the run is in week order, one entry per week of the season',
+      (() => {
+        const seen = [...t0.matchAll(/\bW(\d+) /g)].map((m) => Number(m[1]));
+        return JSON.stringify(seen) === JSON.stringify(Array.from({ length: 13 }, (_, i) => i + 1));
+      })(), t0);
+    c.ok('the identity line comes first and the run below it, on its own lines',
+      t0.split('\n')[0] === 'T4 Player 00 · QB · BUF' && t0.split('\n').length >= 4,
+      JSON.stringify(t0.split('\n')));
+    c.ok('every number in the run is the projection ESPN gave for that week',
+      (() => {
+        const bad = [];
+        for (let i = 0; i < season.SIZE; i++) {
+          if (!season.onRoster(i, 8)) continue;
+          const cell = grid4('overview')
+            .find((td) => titleOf(td).startsWith(season.playerName(teamId, i) + ' '));
+          if (!cell) { bad.push(`p${i} has no cell`); continue; }
+          const t = titleOf(cell);
+          for (let wk = 1; wk <= 13; wk++) {
+            const m = t.match(new RegExp(`\\bW${wk} (\\S+)`));
+            if (!m) { bad.push(`p${i} wk${wk} missing`); continue; }
+            const v = season.onRoster(i, wk) ? season.projFor(i, wk) : 'off';
+            const expect = v === 'off' ? 'off' : v === null ? '—' : v === 0 ? 'Bye' : v.toFixed(1);
+            if (m[1] !== expect) bad.push(`p${i} wk${wk} want ${expect} got ${m[1]}`);
+          }
+        }
+        return bad.length === 0 ? true : bad.slice(0, 4).join(' | ');
+      })() === true,
+      'see the run');
+    c.ok('a BYE reads as a bye in the run, and is explained under it',
+      /W6 Bye\b/.test(titleOf(cells[3])) &&
+      /Bye = the 0\.00 ESPN returns/.test(titleOf(cells[3])),
+      titleOf(cells[3]));
+    c.ok('AND A MISSING NUMBER DOES NOT READ AS A BYE',
+      /W7 —/.test(titleOf(cells[4])) && !/Bye/.test(titleOf(cells[4])) &&
+      /ESPN carried no number for him/.test(titleOf(cells[4])),
+      titleOf(cells[4]));
+    c.ok('a week he was not on the roster for is its own third thing',
+      (() => {
+        const last = grid4('overview')
+          .find((td) => titleOf(td).startsWith(season.playerName(teamId, season.SIZE - 1) + ' '));
+        return last && /W1 off\b/.test(titleOf(last)) &&
+          /off = he was not on this roster that week/.test(titleOf(last));
+      })(), 'no off token');
+    c.ok('the legend only names the states that actually turn up',
+      !/Bye =/.test(t0) && !/off =/.test(t0) && !/carried no number/.test(t0), t0);
+    c.ok('the week grid carries the same run — it is the same man either way',
+      grid4('weekly')[0].getAttribute('title').includes('ESPN’s projection for weeks 1–13:'),
+      grid4('weekly')[0].getAttribute('title'));
+    c.ok('the link repeats the hover and adds where clicking would go',
+      (() => {
+        const a = cells[0].querySelector('a.pref');
+        const at = a.getAttribute('title');
+        return at.startsWith(t0) && /Click to open his next 13 weeks on the Players page\./.test(at);
+      })(), cells[0].querySelector('a.pref').getAttribute('title'));
+
+    // AND IT COST NOTHING. The week run is the season panel's cache read a
+    // second way; the two counts above already pin every request this page
+    // makes, so a tooltip that fetched would have moved one of them.
+    c.ok('THE HOVER ADDS NO REQUEST — it is the season cache read a second way',
+      season.calls.weeks.length === 13 && season.calls.week.length === 1 &&
+      season.calls.schedule === 1,
+      `weeks=${season.calls.weeks.length} week=${season.calls.week.length} sched=${season.calls.schedule}`);
   }
 
   // ---- (c) some weeks reject ----------------------------------------------
@@ -749,6 +1050,23 @@ async function check(scenario, boot) {
       `${JSON.stringify(w.fetchesAfterWeek)} vs ${JSON.stringify(w.fetchesAfterSort)}`);
     c.ok('the column set survives a week change',
       eq(w.before.cols, w.week3.cols), JSON.stringify(w.week3 && w.week3.cols));
+
+    // -- the links must not have touched the sort keys ---------------------
+    // Wrapping a cell's contents in an anchor is only safe while the sort key
+    // stays on the cell, so a sorted column must hold exactly the same set of
+    // keys, in the same shape, as it did before anybody clicked a header.
+    const shape = (v) => (v === null ? 'none' : /^-?\d+(\.\d+)?$/.test(v) ? 'num' : `BAD:${v}`);
+    const keysOf = (snap, i) => snap.rows.map((r) => r.cells[i].v);
+    const shapesOf = (snap, i) => keysOf(snap, i).map(shape).sort();
+    c.ok('A SORTED COLUMN’S SORT KEYS ARE UNCHANGED IN SHAPE',
+      eq(shapesOf(w.before, 11), shapesOf(w.wk7desc, 11)) &&
+      eq(shapesOf(w.before, 11), shapesOf(w.wk7asc, 11)) &&
+      shapesOf(w.before, 11).every((s) => s !== 'BAD'),
+      `${JSON.stringify(shapesOf(w.before, 11))} vs ${JSON.stringify(shapesOf(w.wk7desc, 11))}`);
+    c.ok('and the same values, only reordered — nothing was swallowed by a link',
+      eq(keysOf(w.before, 11).slice().sort(), keysOf(w.wk7desc, 11).slice().sort()) &&
+      eq(keysOf(w.before, 10).slice().sort(), keysOf(w.wk6asc, 10).slice().sort()),
+      `${JSON.stringify(keysOf(w.before, 11))} vs ${JSON.stringify(keysOf(w.wk7desc, 11))}`);
   }
 
   // ---- (f) the two all-teams grids ---------------------------------------
@@ -842,6 +1160,15 @@ async function check(scenario, boot) {
       /\bpicked\b/.test(teamRow(w.picked.snap.week, 'Team 2').cls),
       `${teamRow(w.picked.snap.avg, 'Team 2').cls} / ${teamRow(w.picked.snap.week, 'Team 2').cls}`);
 
+    // -- a player link does not drag the drill-down with it -----------------
+    c.ok('the grid link is a real href carrying that team’s own ESPN id',
+      w.ref && /^waivers\.html\?player=5\d\d$/.test(w.ref.href), w.ref && w.ref.href);
+    c.ok('CLICKING A PLAYER LINK LEAVES THE DRILLED-INTO TEAM ALONE',
+      w.afterRefClick.team === '2' && eq(w.afterRefClick.picked, ['2']),
+      `${w.afterRefClick.team} / ${JSON.stringify(w.afterRefClick.picked)}`);
+    c.ok('but clicking the row anywhere else still drills in, as it always did',
+      w.afterNameClick.team === '5', w.afterNameClick.team);
+
     // -- changing the week moves ONE of them -------------------------------
     const a4b = teamRow(w.week6.avg, 'Team 4');
     const w4b = teamRow(w.week6.week, 'Team 4');
@@ -884,6 +1211,56 @@ async function check(scenario, boot) {
       /re-picked on that week’s numbers/.test(w.notes.week), w.notes.week.slice(0, 300));
     c.ok('and explains a Bye against having no number at all',
       /0\.00 ESPN returns/.test(w.notes.week), w.notes.week.slice(0, 400));
+  }
+
+  // ---- (g) a player ESPN gave no id for -----------------------------------
+  //
+  // Every team's Player 00 comes back with playerId: null. He must be drawn
+  // exactly as he always was, but with no link on him — a link to
+  // ?player=undefined looks like it would work and would not.
+  if (scenario === 'no-id') {
+    const season = await import('./an-stub-season.mjs');
+    c.ok('badge says Live', txt($('modeBadge')) === 'Live', txt($('modeBadge')));
+
+    const named = (root, name) =>
+      [...d.querySelectorAll(root)].filter((td) => txt(td).startsWith(name));
+    const noIdName = season.playerName(4, 0);
+
+    const rosterCell = named('#rosterTable tbody td.name', noIdName)[0];
+    const seasonCell = named('#seasonTable tbody td.name', noIdName)[0];
+    c.ok('the man with no id is still on the page, drawn as he always was',
+      Boolean(rosterCell) && Boolean(seasonCell) && txt(rosterCell) === noIdName,
+      `${rosterCell && txt(rosterCell)} / ${seasonCell && txt(seasonCell)}`);
+    c.ok('NO LINK IS EMITTED FOR HIM, in the roster detail or the season grid',
+      rosterCell && !rosterCell.querySelector('a.pref') &&
+      seasonCell && !seasonCell.querySelector('a.pref'),
+      `${rosterCell && rosterCell.innerHTML} | ${seasonCell && seasonCell.innerHTML}`);
+
+    // He is every team's QB, so it is the QB column of both grids that loses
+    // its link — and only that column.
+    for (const id of ['overview', 'weekly']) {
+      const cells = [...d.querySelectorAll(`#${id}Table tbody tr[data-team] td.slot-cell`)];
+      const qb = [...d.querySelectorAll(`#${id}Table tbody tr[data-team]`)]
+        .map((tr) => [...tr.children].filter((td) =>
+          /\bslot-cell\b/.test(td.getAttribute('class') || ''))[0]);
+      c.ok(`the ${id} grid’s QB cell carries the number but no link`,
+        qb.length === 10 && qb.every((td) => /^\d+\.\d$/.test(txt(td)) && !td.querySelector('a.pref')),
+        qb.map((td) => `${txt(td)}:${td.querySelector('a.pref') ? 'linked' : '-'}`).join(' '));
+      c.ok(`and every OTHER ${id} cell is still linked — the rule skips a man, not a row`,
+        cells.filter((td) => !qb.includes(td)).every((td) => td.querySelector('a.pref')),
+        cells.filter((td) => !qb.includes(td) && !td.querySelector('a.pref')).length);
+    }
+
+    c.ok('the hover is untouched for him — the run does not depend on the link',
+      (() => {
+        const t = [...d.querySelectorAll('#overviewTable tbody tr[data-team="4"] td.slot-cell')][0]
+          .getAttribute('title') || '';
+        return t.startsWith(`${noIdName} · QB · BUF`) && /W13 /.test(t);
+      })(), 'no run on the unlinked cell');
+    c.ok('and the swap control is untouched — it never became a link either way',
+      d.querySelectorAll('#rosterTable button[data-swap]').length === 15 &&
+      d.querySelectorAll('#rosterTable button a').length === 0,
+      `${d.querySelectorAll('#rosterTable button[data-swap]').length} buttons`);
   }
 
   // ---- (e) the split, the total in it, and swapping across it -------------

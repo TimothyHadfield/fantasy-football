@@ -100,6 +100,46 @@ function diff(actual, projected) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// ------------------------------------------------------- player references
+//
+// Tim's rule, in his own words: "if you ever click on a player's name (or a
+// number that refers to the player), it will bring you directly to their
+// position in the players section and show you their next 13 weeks proj."
+//
+// So every reference to a specific man on this page — the numbers in the two
+// grids, the names in the roster detail and in the season grid — is a link to
+// his row on the Players page. Three things about it are not negotiable:
+//
+//   - It is a real <a href>, never a click handler, so middle-click and
+//     open-in-new-tab work the way the reader already expects them to.
+//   - It carries ESPN's own playerId, the same number `data-swap` and
+//     `state.lineup` use. Never a name, never a row index: the destination
+//     looks him up by that id and nothing else can identify him.
+//   - The class is always `pref`, so the destination side, the stylesheet and
+//     the tests all have one selector between them.
+
+/** Where a player reference goes, said the same way everywhere. */
+const OPENS = 'open his next 13 weeks on the Players page';
+
+/**
+ * Wrap `inner` in a link to this player's row on the Players page.
+ *
+ * `inner` is markup that is already escaped — the number, the name, the
+ * position span beside a bench number — and the link never changes it, so
+ * wrapping a cell cannot change what the cell reads.
+ *
+ * A player ESPN gave no id for is handed straight back unwrapped: a link to
+ * `?player=undefined` is worse than no link at all, because it looks like it
+ * would work.
+ */
+function playerRef(p, inner, title) {
+  if (p.playerId === null || p.playerId === undefined) return inner;
+  return (
+    `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" title="${esc(title)}">` +
+    `${inner}</a>`
+  );
+}
+
 /** "weeks 1–13" / "week 4" — an en dash, the way the rest of the site writes ranges. */
 function weekRange(weeks) {
   if (!weeks.length) return 'no weeks';
@@ -257,6 +297,100 @@ function totalOf(row) {
   return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
 }
 
+// ------------------------------------------------ the week run on the hover
+//
+// A grid cell is one number standing for one man, and the question it always
+// provoked was "yes, but is that his week, or is that him?". So the hover now
+// carries his whole season under the identity line: every week ESPN projects
+// for him, in week order.
+//
+// IT COSTS NOTHING. The numbers are already bought — the season panel at the
+// foot of the page spends one request per week and there is no bulk form, which
+// is this page's entire cost model — and `seasonIndex`/`seasonValue` already
+// turn that cache into exactly this shape. This is that machinery read a second
+// way, not a second copy of it, and no fetch belongs anywhere near here.
+
+/** Five weeks to a line. Thirteen on one line is a 100-character wall; five
+ *  lands each line at about the width of the identity line above it, and 13
+ *  weeks comes out as 5 + 5 + 3 rather than an awkward pair of long rows. */
+const RUN_PER_LINE = 5;
+
+/**
+ * How a week reads in the run.
+ *
+ * The three ways of having no number stay three different things, exactly as
+ * they are in the season grid — that table tells them apart by class, and a
+ * plain-text tooltip has to tell them apart by word.
+ */
+function runToken(v) {
+  if (v === 'wait') return '…';
+  if (v === 'failed') return '—';
+  if (v === 'off') return 'off';
+  if (v === null) return '—';
+  // Only ESPN means "no game that week" by a 0.00. The sample data means "we
+  // have ruled him out", so demo prints the number rather than claiming a bye
+  // it cannot know about — the same rule seasonCell() follows.
+  if (v === 0 && !state.isDemo) return 'Bye';
+  return fmt(v);
+}
+
+/** Explained only when it actually turns up, so a clean run has no legend. */
+const RUN_KEYS = [
+  ['Bye', 'Bye = the 0.00 ESPN returns for a player whose NFL team is off that week'],
+  ['—', '— = ESPN carried no number for him that week'],
+  ['off', 'off = he was not on this roster that week'],
+  ['…', '… = that week has not been read from ESPN yet'],
+];
+
+/**
+ * One player's whole season as lines of text for a native `title`.
+ *
+ * Native, deliberately: a `title` needs no focus management, no touch story and
+ * no z-index, and it already carries newlines. A hover card of our own would be
+ * a far larger change for a tooltip that is read for two seconds.
+ *
+ * The weeks arrive in batches behind the page, so this has to read correctly
+ * when they are not all in — which is why an unread week is its own token and
+ * why a run with nothing in it yet says so in words instead of printing
+ * thirteen dots.
+ */
+function seasonRun(index, p) {
+  const weeks = state.weeks;
+  if (!index || !weeks.length) return '';
+
+  const values = weeks.map((w) => seasonValue(index, w, p.playerId));
+  const heading = state.isDemo
+    ? `Sample projections for ${weekRange(weeks)}`
+    : `ESPN’s projection for ${weekRange(weeks)}`;
+
+  if (values.every((v) => v === 'wait')) {
+    return `${heading}: not read yet — they fill in behind the page.`;
+  }
+
+  const tokens = values.map((v, i) => `W${weeks[i]} ${runToken(v)}`);
+  const lines = [];
+  for (let i = 0; i < tokens.length; i += RUN_PER_LINE) {
+    lines.push(tokens.slice(i, i + RUN_PER_LINE).join('  '));
+  }
+
+  const used = new Set(values.map(runToken));
+  const legend = RUN_KEYS.filter(([t]) => used.has(t)).map(([, s]) => s);
+  return [`${heading}:`, ...lines, ...legend].join('\n');
+}
+
+/**
+ * The season cache, but only when it belongs to the league on screen.
+ *
+ * Team ids collide across leagues, and there is one paint — between a source
+ * switch and the ensureSeasonWeeks() that resets the cache — where the old
+ * league's weeks are still in hand. Reading them there would put another
+ * league's numbers on a hover, which is worse than an empty one.
+ */
+function seasonIndexFor(teamId) {
+  if (state.seasonKey !== sourceKey()) return null;
+  return seasonIndex(teamId);
+}
+
 /**
  * One cell.
  *
@@ -264,8 +398,11 @@ function totalOf(row) {
  * by a position the way a lineup spot can — every team's bench is a different
  * shape — so the position rides next to the number instead. The lineup columns
  * do not repeat it, because their header already says it.
+ *
+ * `index` is that team's season cache, built once per row by renderGrid, and it
+ * is what puts the week run on the hover.
  */
-function gridCell(entry, { withPosition = false, byeAtZero = false } = {}) {
+function gridCell(entry, { withPosition = false, byeAtZero = false, index = null } = {}) {
   if (!entry) return '<td class="slot-cell muted">—</td>';
 
   const { p, v } = entry;
@@ -281,14 +418,30 @@ function gridCell(entry, { withPosition = false, byeAtZero = false } = {}) {
   const bye = v === 0 && byeAtZero;
   if (bye) cls.push('bye');
 
-  const tip =
+  // The identity line first — name, position, NFL team, injury — and then his
+  // whole season under it. A `title` carries newlines, so both fit in one.
+  const ident =
     `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}` +
     (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '');
+  const run = seasonRun(index, p);
+  const tip = run ? `${ident}\n${run}` : ident;
 
   const shown = v === null ? '—' : bye ? 'Bye' : fmt(v);
+
+  // The whole of the cell goes inside the link, the bench cell's position span
+  // included. The number and the position are two halves of one statement about
+  // one man, so splitting them would leave a dead strip in the middle of a cell
+  // that is already only a few characters wide.
+  const inner = `${shown}${withPosition ? ` <span class="pp">${esc(p.position)}</span>` : ''}`;
+
+  // `data-v` stays on the <td>, OUTSIDE the link: sortable.js reads the sort key
+  // off the cell, and a key that moved inside an anchor would silently unsort
+  // every column in both grids. The <td> keeps its own title as well, so the
+  // hover is unchanged for anyone who lands on the cell's padding rather than
+  // on the number; the link repeats it and says where clicking would go.
   return (
     `<td class="${cls.join(' ')}"${v === null ? '' : ` data-v="${v}"`} title="${esc(tip)}">` +
-    `${shown}${withPosition ? ` <span class="pp">${esc(p.position)}</span>` : ''}</td>`
+    `${playerRef(p, inner, `${tip}\nClick to ${OPENS}.`)}</td>`
   );
 }
 
@@ -565,12 +718,15 @@ function renderGrid(grid) {
         t.id === state.teamId ? 'picked' : '',
         !state.isDemo && t.id === state.myTeamId ? 'me' : '',
       ].filter(Boolean).join(' ');
+      // Built once per row, not once per cell: seventeen cells share one team's
+      // week cache, and it is what puts the season run on every hover.
+      const cellOpts = { ...opts, index: seasonIndexFor(t.id) };
       const benchCells = Array.from({ length: benchCols }, (_, i) =>
-        gridCell(bench[i] || null, { ...opts, withPosition: true })).join('');
+        gridCell(bench[i] || null, { ...cellOpts, withPosition: true })).join('');
       return `
       <tr class="${cls}" data-team="${t.id}" title="Show ${esc(t.name)} below">
         <td class="name">${esc(t.name)}</td>
-        ${GRID_SLOTS.map((s) => gridCell(row[s.key], opts)).join('')}
+        ${GRID_SLOTS.map((s) => gridCell(row[s.key], cellOpts)).join('')}
         <td class="grid-total grouped" data-v="${total ?? ''}"><strong>${fmt(total)}</strong></td>
         ${benchCells}
       </tr>`;
@@ -748,8 +904,8 @@ function splitRow(proj, espnTotal, held, columns) {
 
   const label = lineupEdited() ? 'Your lineup' : 'Starting lineup';
   const hint = held
-    ? `Holding <strong>${esc(held.p.name)}</strong> — click a highlighted slot to put him ` +
-      `there, or his own again to drop it.`
+    ? `Holding <strong>${playerRef(held.p, esc(held.p.name), `${held.p.name} — ${OPENS}`)}` +
+      `</strong> — click a highlighted slot to put him there, or his own again to drop it.`
     : lineupEdited()
       ? 'A what-if only. Nothing on this page is sent to ESPN.'
       : 'Click any slot tag to pick that player up, then click another to swap them.';
@@ -835,7 +991,8 @@ function renderRoster() {
     return `
       <tr class="${cls}">
         ${slotControl(entry, held)}
-        <td class="name${isFlex ? ' is-flex' : ''}">${esc(p.name)}</td>
+        <td class="name${isFlex ? ' is-flex' : ''}">${
+          playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td>${fmt(p.projected)}</td>
@@ -876,7 +1033,9 @@ function renderRosterNote(view, team) {
     `Bench rows are dimmed and the flex player is in bold. Red is out this week, dark red is ` +
     `on IR. Season total is the whole ${SEASON_GAMES}-game projection; Avg/wk is that same ` +
     `number per game, which is what the grid above adds up. ` +
-    `${plural(hurt, 'player')} carrying an injury designation this week.`
+    `${plural(hurt, 'player')} carrying an injury designation this week. ` +
+    `<strong>Click any player’s name</strong> to open his next 13 weeks on the ` +
+    `<a href="waivers.html">Players</a> page.`
   );
 
   parts.push(
@@ -1004,6 +1163,7 @@ async function loadDemoSeason(key, missing) {
     else state.seasonFailed.add(w);
   }
   renderSeason();
+  renderOverview(); // the grids' hovers are made of these weeks too
 }
 
 /**
@@ -1039,6 +1199,14 @@ async function refreshSeason(key, missing) {
         else state.seasonFailed.add(w);
       }
       renderSeason();
+      // And the grids, because their hovers carry the same week run. Once per
+      // BATCH rather than once per week: the progress tick above fires while
+      // the batch is still in flight and state.seasonWeeks has not moved, so
+      // repainting there would rewrite ten rows to produce identical markup.
+      // Five repaints for thirteen weeks, all inside the first second or two.
+      // resort() keeps whatever sort the reader picked and the drilled-into row
+      // is recomputed from state, so neither can be knocked out by this.
+      renderOverview();
     }
   } catch (err) {
     if (stale()) return;
@@ -1194,6 +1362,12 @@ function renderSeason() {
       const label = tier ? INJURY_LABELS[p.injuryStatus] || p.injuryStatus.replace(/_/g, ' ') : '';
       // Availability, not a value judgement — so it is allowed a colour where
       // the week columns are not. Kept to the pill this page already uses.
+      //
+      // It sits BESIDE the player link rather than inside it. The pill is a
+      // fact about this week, not part of who he is, and it carries a title of
+      // its own: inside the link the two tooltips would fight over the same few
+      // pixels, and the link's hover underline would drag through the pill's
+      // rounded border. Outside, the name is the target and the pill is a label.
       const tag = tier
         ? ` <span class="inj${tier === 'q' ? '' : ` ${tier}`}" ` +
           `title="ESPN lists ${esc(p.name)} as ${esc(p.injuryStatus.replace(/_/g, ' ').toLowerCase())}.">` +
@@ -1203,7 +1377,8 @@ function renderSeason() {
       return `
       <tr class="${entry.started ? '' : 'bench'}">
         <td class="left" data-v="${order}"><span class="slot-tag">${esc(entry.slot)}</span></td>
-        <td class="name" title="${esc(p.name)} · ${esc(p.position)} · ${esc(p.proTeam)}">${esc(p.name)}${tag}</td>
+        <td class="name" title="${esc(p.name)} · ${esc(p.position)} · ${esc(p.proTeam)}">${
+          playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}${tag}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${fmt(avg)}</td>
@@ -1284,7 +1459,8 @@ function renderSeasonNote(weeks, rowCount) {
     `The rows are ${team ? `${esc(team.name)}’s` : 'this team’s'} roster <strong>as it stands in ` +
     `week ${state.week}</strong> — the same ${plural(rowCount, 'player')} as the table above, ` +
     `starters in lineup order and then the bench. Change the week at the top of the page and this ` +
-    `row set changes with it.`
+    `row set changes with it. <strong>Click any player’s name</strong> to open him on the ` +
+    `<a href="waivers.html">Players</a> page, priced against the wire.`
   );
 
   parts.push(
@@ -1404,7 +1580,14 @@ $('lineupReset').addEventListener('click', () => {
 // found would be a step for nothing. Either grid drives it.
 for (const grid of GRIDS) {
   $(`${grid.id}Table`).addEventListener('click', (e) => {
-    const tr = e.target.closest && e.target.closest('tr[data-team]');
+    if (!e.target.closest) return;
+    // A number in these cells is now a link to that player, and the row it sits
+    // in still drills into the team. Both would fire on one click: the reader
+    // would leave for the Players page while this page quietly re-pointed the
+    // three panels below at a team he never picked, and find them changed when
+    // he came back. The link wins, and the drill-down is left alone.
+    if (e.target.closest('a.pref')) return;
+    const tr = e.target.closest('tr[data-team]');
     if (tr) selectTeam(Number(tr.dataset.team));
   });
   // The grids are the reason to be here, so they open on the number that ranks

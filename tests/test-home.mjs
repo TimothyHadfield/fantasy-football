@@ -156,6 +156,76 @@ function preKickoff() {
   };
 }
 
+/**
+ * The same league with week 1 final.
+ *
+ * The bench panel is where two of the dashboard's player references live, and
+ * it only draws once a week is over, so the pre-kickoff fixture cannot reach it.
+ * Every squad here benched an RB who outscored the RB his owner started, which
+ * is the one comparison SLOT_ELIGIBILITY allows between these three starters —
+ * so every row has a miss, and the two men in it are known by name and by id.
+ *
+ * `blankIds` strips the ESPN id off named players, which is how the "no id, no
+ * link" rule is exercised without inventing a second fixture.
+ */
+function finishedWeek({ blankIds = [] } = {}) {
+  const fx = preKickoff();
+  const blank = new Set(blankIds);
+  const r1 = (n) => Math.round(n * 10) / 10;
+
+  const teams = fx.rosters.teams.map((t, i) => {
+    const withId = (p, actual) => ({
+      ...p,
+      playerId: blank.has(p.playerId) ? null : p.playerId,
+      actual,
+    });
+    const starters = t.starters.map((p) => withId(p, r1(p.projected - 2)));
+    // The benched RB beats the started RB by exactly 4 + i, so the "Cost"
+    // column has a value this file can predict rather than read back.
+    const bench = t.bench.map((p) => withId(p, r1(starters[1].actual + 4 + i)));
+    const sum = (arr) => r1(arr.reduce((a, p) => a + p.actual, 0));
+
+    return {
+      ...t,
+      players: [...starters, ...bench],
+      starters,
+      bench,
+      actualTotal: sum(starters),
+      benchActualTotal: sum(bench),
+    };
+  });
+
+  const scoreOf = new Map(teams.map((t) => [t.id, t.actualTotal]));
+  const games = fx.schedule.byWeek.get(1).map((g) => {
+    const homeScore = scoreOf.get(g.homeId);
+    const awayScore = scoreOf.get(g.awayId);
+    return {
+      ...g,
+      played: true,
+      homeScore,
+      awayScore,
+      margin: r1(homeScore - awayScore),
+      winner: homeScore === awayScore ? 'tie' : homeScore > awayScore ? 'home' : 'away',
+    };
+  });
+
+  const byWeek = new Map(fx.schedule.byWeek);
+  byWeek.set(1, games);
+
+  return {
+    ...fx,
+    schedule: { ...fx.schedule, byWeek, games: [...byWeek.values()].flat() },
+    rosters: { week: 1, teams },
+  };
+}
+
+// The one shape a player reference is allowed to take. Nothing on the page may
+// emit a name, an index, an empty id, or the string "undefined".
+const PREF_HREF = /^waivers\.html\?player=\d+$/;
+
+/** Every panel whose subject is a fantasy team, not an NFL player. */
+const TEAM_PANELS = ['#matchups', '#strength', '#standings'];
+
 // ------------------------------------------------------------------ child mode
 
 if (process.argv[2]) {
@@ -187,6 +257,40 @@ if (process.argv[2]) {
       if (!facts.demoBenchRows) problems.push('demo: bench panel is empty on a completed week');
       if (facts.demoWeekOptions !== 13) problems.push(`demo: ${facts.demoWeekOptions} week options, expected 13`);
       if (process.env.DUMP_DEMO) console.error($(process.env.DUMP_DEMO)?.innerHTML || '(none)');
+
+      // --- player references, against the real demo data -------------------
+      //
+      // The ids are checked against the roster payload the demo generator
+      // produces for this week, so a link can only pass by carrying an id that
+      // genuinely exists — a name, an index or a fabricated number all fail.
+      const demoLinks = Array.from(document.querySelectorAll('a.pref'));
+      facts.demoPrefs = demoLinks.length;
+      if (!demoLinks.length) problems.push('demo: no player references anywhere on the dashboard');
+
+      const demoBadHref = demoLinks
+        .map((a) => a.getAttribute('href'))
+        .filter((h) => !PREF_HREF.test(h || ''));
+      if (demoBadHref.length) {
+        problems.push(`demo: malformed player href ${JSON.stringify(demoBadHref.slice(0, 3))}`);
+      }
+
+      const demoWeek = Number((text('matchupsTitle').match(/Week (\d+)/) || [])[1]);
+      const demoMod = await import(pathToFileURL(path.join(REPO, 'js/demo-rosters.js')).href);
+      const realIds = new Set();
+      for (const t of demoMod.generateDemoWeekRosters(demoWeek).teams) {
+        for (const p of t.players) realIds.add(String(p.playerId));
+      }
+      const strangers = demoLinks
+        .map((a) => (a.getAttribute('href') || '').replace('waivers.html?player=', ''))
+        .filter((id) => !realIds.has(id));
+      if (strangers.length) {
+        problems.push(`demo: ${strangers.length} link(s) point at ids no roster carries: ${JSON.stringify(strangers.slice(0, 3))}`);
+      }
+
+      for (const sel of TEAM_PANELS) {
+        const n = document.querySelectorAll(`${sel} a`).length;
+        if (n) problems.push(`demo: ${n} link(s) inside ${sel} — team names are not players`);
+      }
 
       // --- pre-kickoff ---------------------------------------------------
       const home = mods['js/home-page.js'];
@@ -233,6 +337,175 @@ if (process.argv[2]) {
         facts.noRosterInjuries = text('injuries');
         if (!/unavailable/.test(facts.noRosterStrength)) problems.push('no-rosters: strength panel does not say why it is empty');
         if (!/unavailable/.test(facts.noRosterInjuries)) problems.push('no-rosters: injury panel does not say why it is empty');
+
+        // ------------------------------------------------- player references
+        //
+        // Every place the dashboard names a specific NFL player — or shows a
+        // number that is his rather than his team's — is an <a class="pref">
+        // pointed at waivers.html?player=<ESPN playerId>. Every id expected
+        // below is re-derived from the fixture, never read back off the page,
+        // so the page cannot pass by agreeing with itself.
+        home.render(model);
+
+        const cellText = (td) => (td.textContent || '').replace(/\s+/g, ' ').trim();
+        const rowsOf = (sel) => Array.from(document.querySelectorAll(`${sel} tbody tr`));
+        const hrefOf = (p) => `waivers.html?player=${p.playerId}`;
+
+        // (1) The injury table: the name and the projection, both his.
+        const injured = [];
+        for (const t of fx.rosters.teams) {
+          for (const p of t.starters) if (p.injuryStatus !== 'ACTIVE') injured.push(p);
+        }
+
+        const injuryLinks = Array.from(document.querySelectorAll('#injuries a.pref'));
+        facts.injuryLinks = injuryLinks.length;
+        if (injuryLinks.length !== injured.length * 2) {
+          problems.push(`pref: ${injuryLinks.length} links in the injury table, expected ${injured.length * 2} (name + Proj on ${injured.length} rows)`);
+        }
+        for (const a of injuryLinks) {
+          const href = a.getAttribute('href');
+          if (!PREF_HREF.test(href || '')) problems.push(`pref: malformed injury href "${href}"`);
+        }
+
+        for (const row of rowsOf('#injuries')) {
+          const c = Array.from(row.children);
+          const p = injured.find((x) => cellText(c[0]).startsWith(x.name));
+          if (!p) { problems.push(`pref: unrecognised injury row "${cellText(c[0])}"`); continue; }
+
+          // text must be exactly what it was before any of this existed
+          if (cellText(c[0]) !== `${p.name} ${p.position}`) {
+            problems.push(`pref: linking changed the name cell to "${cellText(c[0])}", expected "${p.name} ${p.position}"`);
+          }
+          if (cellText(c[4]) !== p.projected.toFixed(1)) {
+            problems.push(`pref: linking changed ${p.name}'s Proj cell to "${cellText(c[4])}"`);
+          }
+          if (c[4].getAttribute('data-v') !== String(p.projected)) {
+            problems.push(`pref: ${p.name}'s Proj cell lost its data-v; sortable.js reads that, not the text`);
+          }
+
+          const nameA = c[0].querySelector('a.pref');
+          const projA = c[4].querySelector('a.pref');
+          if (!nameA) { problems.push(`pref: ${p.name} is not a link`); continue; }
+          if (nameA.getAttribute('href') !== hrefOf(p)) {
+            problems.push(`pref: ${p.name} links to "${nameA.getAttribute('href')}", expected "${hrefOf(p)}"`);
+          }
+          if (!projA) problems.push(`pref: ${p.name}'s projection is not a link`);
+          else if (projA.getAttribute('href') !== nameA.getAttribute('href')) {
+            problems.push(`pref: ${p.name}'s name and projection point at different players`);
+          }
+
+          const title = nameA.getAttribute('title') || '';
+          if (!title.includes(p.name)) problems.push(`pref: ${p.name}'s link title does not name him: "${title}"`);
+          if (!/Players page/.test(title)) problems.push(`pref: a link title does not say where it goes: "${title}"`);
+
+          // The "Fantasy team" column is a manager, not a player.
+          if (c[2].querySelector('a')) problems.push('pref: the injury table linked a fantasy team name');
+        }
+
+        facts.injuryNote = text('injuryNote');
+        if (!/Players page/.test(facts.injuryNote)) {
+          problems.push(`pref: the injury note does not state what its links do: "${facts.injuryNote}"`);
+        }
+
+        for (const sel of TEAM_PANELS) {
+          const n = document.querySelectorAll(`${sel} a`).length;
+          if (n) problems.push(`pref: ${n} link(s) inside ${sel} — team and manager names are not players`);
+        }
+
+        // (2) The bench table, on a week that is actually over.
+        const fin = finishedWeek();
+        home.render(home.buildModel(fin));
+
+        const byTeamName = new Map(fin.rosters.teams.map((t) => [t.name, t]));
+        facts.finBenchRows = rowsOf('#bench').length;
+        facts.benchLinks = document.querySelectorAll('#bench a.pref').length;
+        if (facts.finBenchRows !== 10) problems.push(`fin: ${facts.finBenchRows} bench rows, expected 10`);
+        if (facts.benchLinks !== 20) {
+          problems.push(`pref: ${facts.benchLinks} links in the bench table, expected 20 (both men in 10 misses)`);
+        }
+
+        for (const row of rowsOf('#bench')) {
+          const c = Array.from(row.children);
+          const t = byTeamName.get(cellText(c[0]));
+          if (!t) { problems.push(`pref: unrecognised bench row "${cellText(c[0])}"`); continue; }
+
+          // Team name, and the two team-level totals, belong to nobody.
+          if (c[0].querySelector('a')) problems.push('pref: the bench table linked a team name');
+          if (c[1].querySelector('a') || c[2].querySelector('a')) {
+            problems.push(`pref: a team total in ${t.name}'s row was linked`);
+          }
+          // Cost is the gap between two players, so it is neither man's number.
+          if (c[4].querySelector('a')) problems.push(`pref: ${t.name}'s Cost cell was linked`);
+
+          const benched = t.bench[0];
+          const started = t.starters[1];
+          const want =
+            `${benched.name} (${benched.actual.toFixed(1)}) over ` +
+            `${started.name} (${started.actual.toFixed(1)})`;
+          if (cellText(c[3]) !== want) {
+            problems.push(`pref: linking changed ${t.name}'s miss cell to "${cellText(c[3])}", expected "${want}"`);
+          }
+
+          const links = c[3].querySelectorAll('a.pref');
+          if (links.length !== 2) {
+            problems.push(`pref: ${links.length} links in ${t.name}'s miss, expected 2`);
+            continue;
+          }
+          [benched, started].forEach((p, i) => {
+            const href = links[i].getAttribute('href');
+            if (href !== hrefOf(p)) {
+              problems.push(`pref: ${t.name}'s miss links ${p.name} to "${href}", expected "${hrefOf(p)}"`);
+            }
+            if (!(links[i].getAttribute('title') || '').includes(p.name)) {
+              problems.push(`pref: ${p.name}'s link in a miss has no title naming him`);
+            }
+          });
+        }
+
+        facts.benchNote = text('benchNote');
+        if (!/Players page/.test(facts.benchNote)) {
+          problems.push(`pref: the bench note does not state what its links do: "${facts.benchNote}"`);
+        }
+
+        // (3) A player ESPN gave no id: plain text, not "?player=undefined".
+        // Blanking the Aardvarks' benched RB and started RB covers both
+        // panels at once — that started RB is also their questionable starter.
+        const t0 = fin.rosters.teams[0];
+        const noId = finishedWeek({ blankIds: [t0.bench[0].playerId, t0.starters[1].playerId] });
+        home.render(home.buildModel(noId));
+
+        const anyBad = Array.from(document.querySelectorAll('a.pref'))
+          .map((a) => a.getAttribute('href'))
+          .filter((h) => !PREF_HREF.test(h || ''));
+        if (anyBad.length) problems.push(`pref: id-less players produced ${JSON.stringify(anyBad.slice(0, 3))}`);
+
+        const n0 = noId.rosters.teams[0];
+        const missRow = rowsOf('#bench').find((r) => cellText(r.children[0]) === n0.name);
+        facts.noIdMissLinks = missRow ? missRow.children[3].querySelectorAll('a.pref').length : -1;
+        if (facts.noIdMissLinks !== 0) {
+          problems.push(`pref: ${facts.noIdMissLinks} link(s) emitted for players carrying no id`);
+        }
+        const wantMiss =
+          `${n0.bench[0].name} (${n0.bench[0].actual.toFixed(1)}) over ` +
+          `${n0.starters[1].name} (${n0.starters[1].actual.toFixed(1)})`;
+        if (missRow && cellText(missRow.children[3]) !== wantMiss) {
+          problems.push(`pref: an unlinked miss cell reads "${cellText(missRow.children[3])}", expected "${wantMiss}"`);
+        }
+
+        facts.noIdInjuryLinks = document.querySelectorAll('#injuries a.pref').length;
+        if (facts.noIdInjuryLinks !== (injured.length - 1) * 2) {
+          problems.push(`pref: ${facts.noIdInjuryLinks} injury links with one id missing, expected ${(injured.length - 1) * 2}`);
+        }
+        const lame = n0.starters[1];
+        const lameRow = rowsOf('#injuries').find((r) => cellText(r.children[0]).startsWith(lame.name));
+        if (!lameRow) problems.push('pref: the id-less injured starter vanished from the table');
+        else {
+          if (lameRow.children[0].querySelector('a')) problems.push('pref: linked a player carrying no id');
+          if (lameRow.children[4].querySelector('a')) problems.push('pref: linked the projection of a player carrying no id');
+          if (cellText(lameRow.children[0]) !== `${lame.name} ${lame.position}`) {
+            problems.push(`pref: an unlinked name cell reads "${cellText(lameRow.children[0])}", expected "${lame.name} ${lame.position}"`);
+          }
+        }
       }
     }
 

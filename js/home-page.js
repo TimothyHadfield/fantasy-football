@@ -48,6 +48,36 @@ const esc = (s) =>
 
 const dash = '<span class="muted">—</span>';
 
+/**
+ * A reference to one specific NFL player — his name, or a number that is his.
+ *
+ * Wherever this page names a player it now sends you to his row on the Players
+ * page, which is the only screen that shows his next thirteen weeks. These are
+ * real `<a href>`s and not click handlers, deliberately: middle-click, ctrl-click
+ * and "open in new tab" then behave the way they do everywhere else on the web.
+ *
+ * The target is ESPN's own `playerId` — never a name, never a row index —
+ * because that is what the Players page addresses a row by, and two men in a
+ * ten-team league really can share a name. A player ESPN gave us no id for is
+ * rendered as plain text rather than pointed at `?player=undefined`.
+ *
+ * Note what does NOT get one of these: team and manager names. Tim's vocabulary
+ * calls managers "players", but they have no ESPN playerId and no row on the
+ * Players page, so the matchup cards, the strength bars, the standings and the
+ * bench table's Team column stay plain text.
+ *
+ * @param {number|string|null|undefined} id  ESPN's playerId
+ * @param {string} name   the player, for the title; escaped here
+ * @param {string} inner  already-escaped HTML to sit inside the link
+ */
+function pref(id, name, inner) {
+  if (id === null || id === undefined) return inner;
+  return (
+    `<a class="pref" href="waivers.html?player=${encodeURIComponent(id)}"` +
+    ` title="${esc(name)} — open his next 13 weeks on the Players page">${inner}</a>`
+  );
+}
+
 const isNum = (n) => typeof n === 'number' && !Number.isNaN(n);
 
 /** A null total means "no player has a value yet", which is not zero. */
@@ -59,11 +89,16 @@ const inline = (n, digits = 1) => (isNum(n) ? n.toFixed(digits) : dash);
  * A numeric cell. When the value is missing the cell carries no data-v at all,
  * so sortable.js treats it as missing and sinks it — an empty data-v would
  * parse as 0 and rank "unknown" above every real negative.
+ *
+ * `wrap` decorates the rendered number without touching the cell: it is how a
+ * number that belongs to one player becomes a link to him. It is applied to the
+ * text only, never to the dash — there is no number there to refer to anybody —
+ * and data-v stays on the <td>, so sorting reads the same value it always did.
  */
-function numCell(n, { digits = 1, sign = false, cls = '' } = {}) {
+function numCell(n, { digits = 1, sign = false, cls = '', wrap = null } = {}) {
   if (!isNum(n)) return `<td${cls ? ` class="${cls}"` : ''}>${dash}</td>`;
   const text = (sign && n > 0 ? '+' : '') + n.toFixed(digits);
-  return `<td${cls ? ` class="${cls}"` : ''} data-v="${n}">${text}</td>`;
+  return `<td${cls ? ` class="${cls}"` : ''} data-v="${n}">${wrap ? wrap(text) : text}</td>`;
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -210,6 +245,12 @@ function injuredStarters(rosters) {
       out.push({
         teamId: team.id,
         teamName: team.name,
+        // ESPN's own id, carried through so the row can link to the man rather
+        // than to a name lookup. Both season.js and demo-rosters.js supply it,
+        // and this is the only reason it survives the reduction. `?? null` is
+        // for a roster entry that arrives without one — that row renders
+        // unlinked rather than pointing at `?player=undefined`.
+        playerId: p.playerId ?? null,
         name: p.name,
         position: p.position,
         slot: p.slot,
@@ -230,6 +271,11 @@ function injuredStarters(rosters) {
  * Eligibility is the whole point: a benched receiver who beat the kicker is not
  * a start/sit miss, because he could never have taken that slot. A slot we have
  * no eligibility rule for is skipped rather than guessed at.
+ *
+ * `benched` and `started` are the roster player objects as they came from
+ * season.js, not reduced copies, which is what keeps their `playerId` available
+ * to the renderer. Do not narrow them to { name, actual } — the two names in
+ * this cell are links, and they would lose their target.
  */
 function biggestMiss(team) {
   let best = null;
@@ -579,14 +625,17 @@ function renderInjuries(m) {
     return;
   }
 
+  // Two references per row, both to the same man: his name, and the projection
+  // that is his. The fantasy team column is a manager, not a player, so it is
+  // left as plain text.
   const rows = m.injuries
     .map(
       (p) => `<tr${p.teamId === m.teamId ? ' class="me"' : ''}>
-          <td class="name">${esc(p.name)} <span class="muted">${esc(p.position)}</span></td>
+          <td class="name">${pref(p.playerId, p.name, `${esc(p.name)} <span class="muted">${esc(p.position)}</span>`)}</td>
           <td class="left" data-v="${p.rank}"><span class="badge ${injuryClass(p.status)}">${esc(injuryLabel(p.status))}</span></td>
           <td class="left">${esc(p.teamName)}</td>
           <td>${esc(p.slot)}</td>
-          ${numCell(p.projected)}
+          ${numCell(p.projected, { wrap: (t) => pref(p.playerId, p.name, t) })}
         </tr>`
     )
     .join('');
@@ -607,7 +656,9 @@ function renderInjuries(m) {
   $('injuryNote').textContent =
     `${plural(m.injuries.length, 'starter')} across the league carries a designation` +
     `${out ? `, ${out} of them ruled out` : ''}. Bench players are left out on purpose — ` +
-    'these are players someone is currently planning to start.';
+    'these are players someone is currently planning to start. ' +
+    'Every name and projection here links to that player on the Players page, ' +
+    'where his next 13 weeks are.';
 }
 
 function renderBench(m) {
@@ -621,11 +672,18 @@ function renderBench(m) {
     return;
   }
 
+  // The two men in a miss are the only players named in this panel — the Team
+  // column is a manager, and Started/Bench/Cost are team-level or two-player
+  // quantities, so none of those is a reference to anybody. Name and score go
+  // inside one link each, because the score is that player's just as much as
+  // his name is.
+  const who = (p) =>
+    pref(p.playerId, p.name, `${esc(p.name)} <span class="muted">(${fmt(p.actual)})</span>`);
+
   const rows = m.bench
     .map((r) => {
       const miss = r.miss
-        ? `${esc(r.miss.benched.name)} <span class="muted">(${fmt(r.miss.benched.actual)})</span> over ` +
-          `${esc(r.miss.started.name)} <span class="muted">(${fmt(r.miss.started.actual)})</span>`
+        ? `${who(r.miss.benched)} over ${who(r.miss.started)}`
         : '<span class="muted">started the right nine</span>';
       return `<tr${r.id === m.teamId ? ' class="me"' : ''}>
           <td class="name">${esc(r.name)}</td>
@@ -656,7 +714,8 @@ function renderBench(m) {
   $('benchNote').innerHTML =
     `${fmt(total)} points sat on benches in week ${m.week}. A <em>miss</em> counts only ` +
     'when the benched player was eligible for the slot he would have taken, so a receiver ' +
-    `out-scoring a kicker is not one. ${plural(missed, 'team')} left points behind.`;
+    `out-scoring a kicker is not one. ${plural(missed, 'team')} left points behind. ` +
+    'Both men in a miss link to their next 13 weeks on the Players page.';
 }
 
 // ----------------------------------------------------------------- interaction
