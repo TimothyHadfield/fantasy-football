@@ -21,6 +21,12 @@
   --on-accent: #06210f; /* text that sits on an --accent fill */
   --err: #e0525f;
   --warn: #d9a441;
+  /* Neutral informational blue, for a quantity that is neither good nor bad --
+   * a roster-strength bar, a "this is the row you picked" edge. Distinct from
+   * --accent on purpose: green here would read as "winning".
+   * It was briefly deleted as unused, which left the home page's strength bars
+   * with no fill at all, so: index.html and analysis.html both use it. */
+  --good: #4fb0e0;
 
   /* Focus deliberately is NOT --accent: green already means "positive" in the
    * tables, and a focus ring that reads as a value would be ambiguous. */

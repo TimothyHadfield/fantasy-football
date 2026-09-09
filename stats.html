@@ -6,6 +6,41 @@
 <title>Stats &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="css/app.css">
+<style>
+/* Ranked bars for the schedule-luck panel.
+ *
+ * Deliberately NOT charts.js's histogram. Ten average opponent projections all
+ * land between about 105 and 120, so a histogram - which scales from zero -
+ * draws ten bars of near-identical full height and hides the only thing worth
+ * looking at. These run from the easiest schedule in the league to the hardest,
+ * so the bar length IS the spread, and the gap from the league average is
+ * printed beside each one.
+ *
+ * Named .oppbars rather than .rank because app.css already has a .rank for the
+ * small ordinal in a table cell, and the two would fight. */
+.oppbars { list-style: none; margin: 0; padding: 0; --bar: #2f6f49; }
+.oppbars li {
+  display: grid;
+  grid-template-columns: 22px minmax(90px, 1fr) 2fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+.oppbars .rk { color: var(--dim); font-size: 12px; text-align: right; }
+.oppbars .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oppbars .bar { background: var(--panel-2); border-radius: 3px; height: 9px; }
+.oppbars .bar i { display: block; height: 100%; border-radius: 3px; background: var(--bar); }
+.oppbars .vv { font-weight: 600; min-width: 46px; text-align: right; }
+/* The gap from the league average. Amber for a harder-than-typical schedule,
+ * dim for an easier one - NOT the green/red of .pos/.neg, because here a
+ * positive number is bad news for the team, and green would say the opposite. */
+.oppbars .dd { min-width: 58px; text-align: right; font-size: 12.5px; color: var(--dim); }
+.oppbars .dd.hard { color: var(--warn); }
+.oppbars li.me .nm { color: #7fd99b; font-weight: 650; }
+.oppbars li.me .bar i { background: var(--accent); }
+</style>
 </head>
 <body>
 
@@ -52,6 +87,12 @@
     <div class="stat-row" id="glance"></div>
   </section>
 
+  <section class="panel" id="panelOppProj">
+    <h2>Schedule luck &mdash; average projected opponent</h2>
+    <div id="oppProjChart"></div>
+    <p class="panel-note" id="oppProjNote"></p>
+  </section>
+
   <section class="panel">
     <h2>Standings &amp; season totals</h2>
     <div class="table-scroll"><table id="mainTable">
@@ -63,7 +104,10 @@
           <th></th>
           <th>Record</th>
           <th colspan="6" id="thScoringGroup">Scoring</th>
-          <th colspan="6">Luck &amp; skill</th>
+          <!-- Seven, not six: Opp proj joined this group. The band is drawn with
+               colspans, so a column added below without widening one of these
+               shunts every heading after it one place to the left. -->
+          <th colspan="7">Luck &amp; skill</th>
           <th colspan="3">Ranks</th>
         </tr>
         <tr>
@@ -75,6 +119,7 @@
           <th data-sort id="thOppAvg" title="Average points your opponents scored against you.">Opp Avg</th>
           <th data-sort title="Points for minus points against, per week &mdash; your average weekly margin.">F&minus;A</th>
           <th data-sort title="Spread: the standard deviation of your weekly scores. Low means week-to-week consistency. Needs at least two weeks.">Spread</th>
+          <th data-sort id="thOppProj" title="Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play. High means a hard schedule, which is bad luck you had no part in. This is the one column that needs no games played &mdash; it comes from the fixture list and ESPN&rsquo;s own per-week player projections, so it is readable before week 1.">Opp proj</th>
           <th data-sort title="Luck per week: your average score minus your average projection. Positive means you keep beating your projection.">Luck/wk</th>
           <th data-sort title="Points to win: your average opponent&rsquo;s score minus your own average luck &mdash; what you needed to score to beat a typical opponent.">PTW</th>
           <th data-sort title="Close-game luck (your sheet&rsquo;s SD): weights each result by how close it was, so a one-point game scores near &plusmn;50 and a blowout near zero. Needs about three weeks to settle.">Close luck</th>
@@ -155,7 +200,7 @@
     </p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="panelWeekGrid">
     <h2>Week by week</h2>
     <div class="row mb-12">
       <div class="segmented" id="weeklyMetric">

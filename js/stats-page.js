@@ -7,8 +7,14 @@
 // single game.
 
 import { generateDemoLeague } from './demo.js';
+import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import { computeLeagueStats } from './stats.js';
-import { fetchSeasonData } from './season.js';
+import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
+import {
+  projectionsFromWeekTeams,
+  opponentProjections,
+  leagueAverageOpponent,
+} from './projection.js';
 import * as espn from './espn.js';
 import { lineChart, histogram, boxPlot, SERIES_COLORS } from './charts.js';
 import { enableSort, resort } from './sortable.js';
@@ -31,6 +37,15 @@ const state = {
                         // click-to-highlight on the legend it draws)
   weeklyMetric: 'actual',
   sourcePicked: false,  // the user chose a source by hand this page load
+
+  // Schedule luck. Built from the fixture list plus a per-week roster read, so
+  // it is the one thing here that is worth showing before a ball is kicked —
+  // and the only thing that costs a request per week, hence the cache, the
+  // pending flag and the token. See ensureOppProj().
+  oppProj: null,        // { key, byTeam, leagueAvg, ... } or { key, error }
+  oppPending: null,     // key of a run currently in flight
+  oppProgress: null,    // { done, total } while rosters are being read
+  oppToken: 0,
 };
 
 // "Which team am I" is the same answer every visit, so it is remembered; the
@@ -76,6 +91,16 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** Weeks with a completed game in them — the number every guard here turns on. */
 const weekCount = () => (state.stats ? state.stats.weekNumbers.length : 0);
 
+/**
+ * Nothing has been played.
+ *
+ * stats.js averages an empty week list to 0 rather than to null, which is the
+ * right answer for arithmetic and the wrong one to print: a column of 0.0s
+ * reads as ten teams who all scored nothing, not as a season that has not
+ * started. Everything derived from a result is dashed while this is true.
+ */
+const noGames = () => weekCount() === 0;
+
 const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };
 
 // --------------------------------------------------------------------- loading
@@ -110,13 +135,21 @@ async function loadLive() {
         setStatus(`${esc(label)} (${done}/${total})`),
     });
 
+    // No completed games used to return here, before render(), so the page
+    // showed nothing at all — at precisely the moment when the one number that
+    // needs no results (schedule luck, below) is the only thing worth reading.
+    // It renders now: every column built on a result reports itself empty, and
+    // the schedule-luck panel fills itself in from the fixture list.
     if (!data.games.length) {
+      state.stats = computeLeagueStats(data);
       setStatus(
-        `Connected to ${esc(data.name)}, but no completed matchups were found for ` +
-        `${data.season}. If the season hasn't started, try an earlier season.`,
-        true
+        `Connected to ${esc(data.name)}, but ESPN has no completed matchups for ` +
+        `${data.season} yet, so every number below that needs a result is blank. ` +
+        'Schedule luck does not need one and is shown. If you expected results, ' +
+        'the season may be the wrong one — pick an earlier one on the strip above.'
       );
-      return false;
+      render();
+      return true;
     }
 
     state.stats = computeLeagueStats(data);
@@ -181,20 +214,33 @@ function render() {
   const s = state.stats;
   if (!s) return;
 
+  // Schedule luck belonging to a league we are no longer showing has to go
+  // before anything is painted from it: team ids collide across leagues, so a
+  // stale map would print the demo season's schedule beside a real team's name.
+  const key = scheduleKey();
+  if (state.oppProj && state.oppProj.key !== key) state.oppProj = null;
+  if (state.oppPending && state.oppPending !== key) state.oppPending = null;
+
   const weeks = weekCount();
 
   $('modeBadge').className = 'badge ' + (s.isDemo ? 'demo' : 'live');
   $('modeBadge').textContent = s.isDemo ? 'Demo' : 'Live';
   $('pageSub').textContent = s.isDemo
     ? 'Showing generated sample data so you can see the layout with a full season in it.'
-    : `${s.name} · ${s.season} · ${plural(weeks, 'week')} played`;
+    : `${s.name} · ${s.season} · ` +
+      (weeks ? `${plural(weeks, 'week')} played` : 'no week played yet');
 
   renderTeamPicker();
   renderGlance();
   renderMainTable();
+  renderOppPanel();
   renderCharts();
   renderAccuracy();
   renderWeeklyTable();
+
+  // Last, and deliberately not awaited: the schedule-luck panel costs a request
+  // per week, so the rest of the page is on screen before it starts.
+  ensureOppProj();
 }
 
 function renderTeamPicker() {
@@ -232,15 +278,23 @@ function renderGlance() {
   const box = s.leagueActualBox;   // null before there are five scores in the league
   const overall = s.predictionAccuracy.find((a) => a.threshold === 0);
 
+  const none = noGames();
+
   const items = [
     ['Teams', s.teams.length],
     ['Weeks', weeks],
-    // With one week an "average" is just that week, so it says so.
-    [weeks === 1 ? `Week ${s.weekNumbers[0]} avg` : 'League avg', fmt(s.leagueAvgActual)],
-    [weeks === 1 ? 'Projected' : 'Avg projected', fmt(s.leagueAvgProjected)],
+    // With one week an "average" is just that week, so it says so; with none
+    // there is no average at all, and stats.js's 0 must not be printed as one.
+    [weeks === 1 ? `Week ${s.weekNumbers[0]} avg` : 'League avg',
+      none ? dash : fmt(s.leagueAvgActual)],
+    [weeks === 1 ? 'Projected' : 'Avg projected',
+      none ? dash : fmt(s.leagueAvgProjected)],
     ['Highest week', box ? fmt(box.max) : dash],
     ['Lowest week', box ? fmt(box.min) : dash],
-    ['Best record', top ? `${record(top)} ${esc(top.name)}` : dash],
+    ['Best record', top && !none ? `${record(top)} ${esc(top.name)}` : dash],
+    // The one tile that can say something before kickoff. It arrives late — the
+    // schedule read is asynchronous — so renderOppProjPanel() repaints this row.
+    ['Hardest schedule', hardestScheduleTile()],
     ['Projection accuracy', accuracyTile(overall)],
   ];
 
@@ -281,26 +335,34 @@ function renderMainTable() {
   const luck = (v) => (thin ? dash : signed(v));
   const rank = (v, hide) => (hide || v === null ? dash : `<span class="rank">${v}</span>`);
 
-  const heatAvg = heatScale(s.teams.map((t) => t.avgActual));
-  const heatProj = heatScale(s.teams.map((t) => t.avgProjected));
-  const heatOpp = heatScale(s.teams.map((t) => t.oppAvgActual));
+  // With no completed weeks every one of these is an average of nothing, which
+  // stats.js correctly computes as 0 and this must not print as a score.
+  const none = noGames();
+  const num = (v) => (none ? dash : fmt(v));
+  const sgn = (v) => (none ? dash : signed(v));
+
+  const heatAvg = heatScale(none ? [] : s.teams.map((t) => t.avgActual));
+  const heatProj = heatScale(none ? [] : s.teams.map((t) => t.avgProjected));
+  const heatOpp = heatScale(none ? [] : s.teams.map((t) => t.oppAvgActual));
+  const heatOppProj = heatScale(oppRows().map((r) => r.avgOpp));
 
   tbody.innerHTML = s.teams
     .map((t) => `
       <tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>
         <td data-v="${t.wins + t.pointsFor / 100000}">${record(t)}</td>
-        <td${heatAvg(t.avgActual)}>${fmt(t.avgActual)}</td>
-        <td${heatProj(t.avgProjected)}>${fmt(t.avgProjected)}</td>
-        <td data-v="${t.totalActual}">${int(t.totalActual)}</td>
-        <td${heatOpp(t.oppAvgActual)}>${fmt(t.oppAvgActual)}</td>
-        <td>${signed(t.forMinusAgainst)}</td>
-        <td>${fmt(t.actualStdev)}</td>
-        <td>${signed(t.avgLuck)}</td>
-        <td>${fmt(t.pointsToWin)}</td>
+        <td${heatAvg(t.avgActual)}>${num(t.avgActual)}</td>
+        <td${heatProj(t.avgProjected)}>${num(t.avgProjected)}</td>
+        <td${none ? '' : ` data-v="${t.totalActual}"`}>${none ? dash : int(t.totalActual)}</td>
+        <td${heatOpp(t.oppAvgActual)}>${num(t.oppAvgActual)}</td>
+        <td>${sgn(t.forMinusAgainst)}</td>
+        <td>${num(t.actualStdev)}</td>
+        ${oppProjCell(t.id, heatOppProj)}
+        <td>${sgn(t.avgLuck)}</td>
+        <td>${num(t.pointsToWin)}</td>
         <td>${luck(t.scoreDiffLuck)}</td>
         <td>${luck(t.luckScore)}</td>
-        <td>${signed(t.skill)}</td>
+        <td>${sgn(t.skill)}</td>
         <td>${luck(t.skillPlusLuck)}</td>
         <td>${rank(t.luckStanding, thin)}</td>
         <td>${rank(t.projectedStanding, thin)}</td>
@@ -316,15 +378,20 @@ function renderMainTable() {
 
   $('mainTableNote').innerHTML =
     'Hover any heading for what that column means. Click one to sort by it. ' +
-    '<strong>Luck/wk</strong> = actual − projected. <strong>PTW</strong> = what you ' +
+    '<strong>Opp proj</strong> = the average projected score of the opponents on your ' +
+    'schedule, which needs no games played. <strong>Luck/wk</strong> = actual − ' +
+    'projected. <strong>PTW</strong> = what you ' +
     'needed to score to beat a typical opponent. <strong>Skill</strong> = your average ' +
     'projected score minus the league&rsquo;s. <strong>LS</strong>, <strong>PS</strong> ' +
     'and <strong>AS</strong> rank the league by luck score, by skill + luck, and by ' +
     'actual record.' +
-    (thin
-      ? ` Close luck, luck score, S+L, LS and PS are held back until week ${MIN_WEEKS}: ` +
-        'from one or two games they swing further than a whole season of them does.'
-      : '');
+    (none
+      ? ' Nothing has been played yet, so every column drawn from a result is blank ' +
+        'rather than zero. Opp proj is the exception, and the panel above it explains why.'
+      : thin
+        ? ` Close luck, luck score, S+L, LS and PS are held back until week ${MIN_WEEKS}: ` +
+          'from one or two games they swing further than a whole season of them does.'
+        : '');
 
   // Default to standings order; afterwards keep whatever the user picked.
   enableSort(table, { defaultIndex: 1 });
@@ -358,10 +425,14 @@ function renderCharts() {
   show('panelCumLuck', trends);
   show('panelBox', trends);
   show('panelEarly', !trends);
+  // With no weeks the grid is ten team names and no columns to put beside them.
+  show('panelWeekGrid', weeks > 0);
 
   $('distNote').textContent = trends
     ? 'Every team’s weekly score, in ten-point buckets.'
-    : `Every team’s score so far, in ten-point buckets — ${plural(weeks * s.teams.length, 'score')}.`;
+    : weeks === 0
+      ? 'Nothing has been played, so there are no scores to bucket yet.'
+      : `Every team’s score so far, in ten-point buckets — ${plural(weeks * s.teams.length, 'score')}.`;
 
   if (!trends) {
     renderEarly();
@@ -461,9 +532,14 @@ function renderEarly() {
   const latest = s.weeklyLeagueAverages[s.weeklyLeagueAverages.length - 1];
 
   const lines = [
-    `<strong>${plural(weeks, 'week')} of data so far.</strong> Weekly scores, weekly ` +
+    (weeks === 0
+      ? '<strong>No week has been played yet.</strong> Weekly scores, weekly '
+      : `<strong>${plural(weeks, 'week')} of data so far.</strong> Weekly scores, weekly `) +
     `luck, cumulative luck and per-team spread appear from week ${MIN_WEEKS} — with ` +
-    'less than that they draw a shape that is not in the data.',
+    'less than that they draw a shape that is not in the data.' +
+    (weeks === 0
+      ? ' Schedule luck, at the top of the page, is the number that does not have to wait.'
+      : ''),
   ];
 
   if (latest) {
@@ -490,6 +566,328 @@ function renderEarly() {
     xLabel: 'Points',
     height: 110,
   });
+}
+
+// -------------------------------------------------------------- schedule luck
+//
+// Average projected opponent: for every fixture a team plays, what the other
+// side is projected to score that week, averaged over that team's fixtures.
+//
+// The point of it is that it needs ZERO completed games. Everything else on
+// this page is an average over results, so in week 0 the page has nothing to
+// say; this is a fact about the fixture list and everyone's rosters, and it is
+// true before the first ball is kicked. High means a hard schedule, which is
+// bad luck the manager had no hand in.
+//
+// The arithmetic all lives in js/projection.js, which the schedule page's
+// forecast also uses — one answer to "how good is this team in week w", not two
+// that can drift apart.
+
+/**
+ * What the current numbers were built from. Used as a cache key: while it is
+ * unchanged the panel never refetches, and a result that lands after it changed
+ * is discarded rather than shown against the wrong league.
+ */
+function scheduleKey() {
+  const s = state.stats;
+  if (!s) return null;
+  if (s.isDemo) return 'demo';
+  const cfg = savedConfig();
+  return `live:${cfg ? cfg.leagueId : '?'}:${s.season}`;
+}
+
+const oppFor = (id) => {
+  const p = state.oppProj;
+  return p && p.byTeam ? p.byTeam.get(id) || null : null;
+};
+
+/** Teams that have a number, hardest schedule first. */
+function oppRows() {
+  const p = state.oppProj;
+  if (!p || !p.byTeam || !state.stats) return [];
+  return state.stats.teams
+    .map((t) => {
+      const o = p.byTeam.get(t.id);
+      return o ? { id: t.id, name: t.name, avgOpp: o.avgOpp, own: o.own, games: o.games } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.avgOpp - a.avgOpp);
+}
+
+/**
+ * The Opp proj cell. data-v is omitted entirely when the number is unknown —
+ * an empty data-v parses as 0 and would rank a team we know nothing about as
+ * having the easiest schedule in the league.
+ */
+function oppProjCell(teamId, heat) {
+  const o = oppFor(teamId);
+  if (!o) return `<td>${dash}</td>`;
+  return `<td data-v="${o.avgOpp}"${heat(o.avgOpp)}>${fmt(o.avgOpp)}</td>`;
+}
+
+function hardestScheduleTile() {
+  const rows = oppRows();
+  if (!rows.length) return dash;
+  return `${fmt(rows[0].avgOpp)} <small class="muted">${esc(rows[0].name)}</small>`;
+}
+
+/**
+ * Fetch it once per league, lazily, and never again while the league is the
+ * same. A failure is cached too, so a league ESPN will not answer for is
+ * reported once instead of retried on every repaint.
+ */
+function ensureOppProj() {
+  const key = scheduleKey();
+  if (!key) return;
+  if (state.oppProj && state.oppProj.key === key) return;
+  if (state.oppPending === key) return;
+
+  // Demo mode makes no request at all: demo-rosters.js answers synchronously,
+  // so the panel is simply there on first paint.
+  if (key === 'demo') {
+    state.oppProj = buildOppProj(key, generateDemoSchedule(), demoWeekTeams());
+    afterOppProj();
+    return;
+  }
+  refreshOppProj(key);
+}
+
+function demoWeekTeams() {
+  const schedule = generateDemoSchedule();
+  return new Map(schedule.weeks.map((w) => [w, generateDemoWeekRosters(w).teams]));
+}
+
+/**
+ * The live version: one request for the schedule, then one per week for the
+ * rosters. Deliberately not awaited by render() — the page is already on screen
+ * and this fills in behind it — and guarded by a token, so a slow answer about
+ * last season cannot land on top of the league that replaced it.
+ */
+async function refreshOppProj(key) {
+  const token = ++state.oppToken;
+  const stale = () => token !== state.oppToken || scheduleKey() !== key;
+
+  state.oppPending = key;
+  state.oppProgress = null;
+  renderOppPanel();
+
+  try {
+    const schedule = await fetchSchedule();
+    if (stale()) return;
+
+    if (!schedule.weeks.length) {
+      state.oppProj = { key, error: 'ESPN has published no fixtures for this season yet.' };
+      return;
+    }
+
+    const weekTeams = await fetchWeeksRosters(schedule.weeks, {
+      onProgress: (done, total) => {
+        if (stale() || done >= total) return;
+        state.oppProgress = { done, total };
+        renderOppPanel();
+      },
+    });
+    if (stale()) return;
+
+    state.oppProj = buildOppProj(key, schedule, weekTeams);
+  } catch (err) {
+    if (stale()) return;
+    state.oppProj = { key, error: esc(err.message || String(err)) };
+  } finally {
+    if (state.oppPending === key) {
+      state.oppPending = null;
+      state.oppProgress = null;
+    }
+  }
+
+  if (stale()) return;
+  afterOppProj();
+}
+
+/** Turn a schedule plus a week→rosters map into the per-team averages. */
+function buildOppProj(key, schedule, weekTeams) {
+  const built = projectionsFromWeekTeams(weekTeams);
+  if (!built) {
+    return {
+      key,
+      error:
+        'ESPN returned no usable player projections for these weeks, so there is ' +
+        'nothing to project an opponent from. It usually means the season is not ' +
+        'open yet — try again once ESPN has published the week&rsquo;s lineups.',
+    };
+  }
+
+  const byTeam = opponentProjections(
+    schedule.games,
+    built.proj,
+    state.stats.teams.map((t) => t.id)
+  );
+  if (!byTeam.size) {
+    return {
+      key,
+      error:
+        'The fixture list and the weeks ESPN would project do not overlap, so no ' +
+        'opponent average can be formed.',
+    };
+  }
+
+  return {
+    key,
+    byTeam,
+    leagueAvg: leagueAverageOpponent(byTeam),
+    scheduleWeeks: schedule.weeks,
+    projectedWeeks: built.weeks,
+    countsKnown: built.countsKnown,
+    starters: built.slots.length,
+  };
+}
+
+/** Everything that shows a schedule-luck number, repainted where it stands. */
+function afterOppProj() {
+  renderGlance();
+  renderMainTable();
+  renderOppPanel();
+}
+
+function renderOppPanel() {
+  const chart = $('oppProjChart');
+  const note = $('oppProjNote');
+  if (!chart || !note) return;
+
+  if (state.oppPending) {
+    const p = state.oppProgress;
+    chart.innerHTML =
+      '<p class="pending">Reading ESPN&rsquo;s own projections' +
+      (p ? ` — <strong>week ${p.done} of ${p.total}</strong>` : '') +
+      '&hellip;</p>';
+    note.innerHTML =
+      'ESPN publishes projections one week at a time and has no bulk form, so this ' +
+      'costs one request per week of the season. Nothing else on the page is waiting ' +
+      'for it.';
+    return;
+  }
+
+  const data = state.oppProj;
+  if (!data) {
+    chart.innerHTML = '<p class="empty">Loading the schedule&hellip;</p>';
+    note.textContent = '';
+    return;
+  }
+
+  if (data.error) {
+    chart.innerHTML = `<p class="empty">${data.error}</p>`;
+    note.textContent = '';
+    return;
+  }
+
+  const rows = oppRows();
+  if (!rows.length) {
+    chart.innerHTML = '<p class="empty">No fixtures could be matched to a projected week.</p>';
+    note.textContent = '';
+    return;
+  }
+
+  chart.innerHTML = oppBars(rows, data.leagueAvg);
+  note.innerHTML = oppNote(rows, data);
+}
+
+/**
+ * Ranked horizontal bars, hardest schedule first.
+ *
+ * Not charts.js's histogram, which scales from zero: ten averages that all land
+ * between about 105 and 120 would draw ten bars of near-identical full height,
+ * hiding the differences that are the entire point. These run from the easiest
+ * schedule in the league to the hardest, so bar length IS the spread.
+ */
+function oppBars(rows, leagueAvg) {
+  const values = rows.map((r) => r.avgOpp);
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min || 1;
+
+  const items = rows
+    .map((r, i) => {
+      const width = 8 + 92 * ((r.avgOpp - min) / span);
+      const d = typeof leagueAvg === 'number' ? r.avgOpp - leagueAvg : null;
+      const gap =
+        d === null
+          ? ''
+          : `<span class="dd ${d > 0.05 ? 'hard' : ''}">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
+      return `<li class="${state.highlight === r.id ? 'me' : ''}">
+          <span class="rk">${i + 1}</span>
+          <span class="nm">${esc(r.name)}</span>
+          <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
+          <span class="vv">${fmt(r.avgOpp)}</span>
+          ${gap}
+        </li>`;
+    })
+    .join('');
+
+  return `<ol class="oppbars">${items}</ol>`;
+}
+
+/** What the number is, that it needs no games, how it was derived, and over what. */
+function oppNote(rows, data) {
+  const weeks = data.projectedWeeks;
+  const first = weeks[0];
+  const last = weeks[weeks.length - 1];
+  const span = weeks.length === 1 ? `week ${first}` : `weeks ${first}–${last}`;
+
+  const fixtures = rows.map((r) => r.games);
+  const loF = Math.min(...fixtures);
+  const hiF = Math.max(...fixtures);
+  const perTeam =
+    loF === hiF ? `${plural(loF, 'fixture')} each` : `${loF}–${hiF} fixtures each`;
+
+  const values = rows.map((r) => r.avgOpp);
+  const spread = Math.max(...values) - Math.min(...values);
+
+  const lines = [
+    '<strong>The average projected score of the opponents you have to play.</strong> ' +
+      'For every fixture on your schedule, take what the other side is projected to ' +
+      'score that week, then average those. High means a hard schedule — which is ' +
+      'luck, not skill: nobody picks their own opponents.',
+
+    'It needs <strong>no games played</strong>, which is the whole point of it. Each ' +
+      'weekly number is ESPN&rsquo;s own per-player projection for that week, with the ' +
+      `best legal lineup filled for every team (${plural(data.starters, 'starter')})` +
+      (data.countsKnown
+        ? ', using the starting slots read off the league&rsquo;s own lineups'
+        : ' — the league&rsquo;s slot counts could not be read off its lineups, so a ' +
+          'standard lineup is assumed and a league with unusual slots will be a little out') +
+      `. Those team totals are then averaged over ${span}: ${perTeam}.`,
+  ];
+
+  if (typeof data.leagueAvg === 'number') {
+    lines.push(
+      `The league&rsquo;s average opponent is <strong>${fmt(data.leagueAvg)}</strong>, so ` +
+        'the figure beside each bar is the gap from that: a positive number is that many ' +
+        'points a week harder than the league&rsquo;s typical schedule, a negative one that ' +
+        `much easier. Hardest to easiest spans only ${fmt(spread)} points, which is why the ` +
+        'bars run between those two rather than from zero — zero-based bars would all be ' +
+        'the same length and show nothing.'
+    );
+  }
+
+  const missing = (data.scheduleWeeks || []).filter((w) => !weeks.includes(w));
+  if (missing.length) {
+    lines.push(
+      `ESPN would not return rosters for ${plural(missing.length, 'week')} ` +
+        `(${missing.join(', ')}), so those fixtures are left out of every average above ` +
+        'rather than counted as zero.'
+    );
+  }
+
+  const missingTeams = state.stats.teams.length - rows.length;
+  if (missingTeams > 0) {
+    lines.push(
+      `${plural(missingTeams, 'team')} could not be projected at all and ${
+        missingTeams === 1 ? 'is' : 'are'
+      } left out of the ranking and of the league average.`
+    );
+  }
+
+  return lines.join(' ');
 }
 
 function renderAccuracy() {
@@ -630,6 +1028,7 @@ $('highlightTeam').addEventListener('change', (e) => {
   state.highlight = e.target.value ? Number(e.target.value) : null;
   prefs.set('highlight', state.highlight);
   renderMainTable();
+  renderOppPanel();
   renderCharts();
   renderWeeklyTable();
 });
