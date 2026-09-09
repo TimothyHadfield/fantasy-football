@@ -5,6 +5,61 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
 
 ## START HERE — read this first (updated 2026-09-09)
 
+**A large usability pass landed 2026-09-09 (second session that day).** The
+site was built and verified against a COMPLETE 2025 season and had never been
+looked at with a nearly-empty one. Almost everything below in "Current state"
+still holds; what changed:
+
+- **`index.html` is now a season dashboard**, not a connect form. The old raw
+  data probes moved to **`debug.html`** (not in the nav; linked from the
+  bottom of the home page). The dashboard is built on `fetchSchedule` +
+  `fetchWeekRosters` and deliberately NOT on `fetchSeasonData`, which returns
+  nothing until games are played.
+- **`analysis.html` shows all ten teams' starting lineups at once** —
+  QB/RB1/RB2/WR1/WR2/TE/FLEX + baseline week + Est Total — which was Tim's
+  headline ask. His sheet semantics are implemented exactly (see "What the
+  sheet's columns mean"): flex is computed by position, never from ESPN's
+  lineup slot, because ESPN's `OP` slot can hold a QB.
+- **`stats.html` refuses to print numbers it cannot justify.** Below 3 weeks
+  the trend charts and the volatile columns (SD/LUCK/S+L/LS/PS) are replaced
+  by an "Early season" panel. See "Early-season honesty" below.
+- **`schedule.html` works in September** — standings panel, played/upcoming
+  split, a fixture matrix that becomes the head-to-head grid once enough games
+  exist, and a strength-of-schedule rank.
+- **New shared modules: `js/prefs.js`** (persist source/week/team/sort) and
+  `savedConfig()` / `onConnection()` in `js/connection.js`.
+
+**Two bugs fixed that were silently corrupting real numbers** — do not
+reintroduce:
+1. The connection bar wrote `ff.connection` while all three data pages read
+   `ff.config`. The bar could say "Connected" while every page insisted no
+   league was configured. `connection.js` now writes both and exposes
+   `savedConfig()`; pages should use that, never read localStorage directly.
+2. `season.js`'s "projections available" test was `more than half the games`,
+   tuned for a 65-game season. In a 5-game week 1, a 3-of-5 pass silently
+   DROPPED two games while keeping all ten teams — the four teams in them then
+   computed skill from an empty set and ranked **first** in the luck
+   standings, with the warning suppressed. It now also requires that every
+   team be covered.
+
+**Early-season honesty (the theme of the whole pass).** With one week of data
+the old page rendered ten 4px dots in a vertical stripe three times over
+(a 10-series line chart draws no line from a single point), a box plot of
+ten 1.5px slivers, `Std Dev 0.0` for every team, and a projection-accuracy
+percentage from five games. None of it crashed; all of it looked authoritative.
+`js/stats.js` now returns `null` rather than a confident zero from `stdev`
+(<2 values), `boxStats` (<5), `predictionAccuracy` (<20 games) and `rankBy`
+(when every value ties), and `js/season.js` totals return `null` rather than
+`0` when no player has a value. **When adding a statistic, decide what it
+returns before it has enough data — that is the mistake this pass cleaned up.**
+
+**Still true, and worth knowing:** `js/demo-rosters.js` hardcodes
+`played: true` for every game, so **demo mode always shows a finished season**.
+That is why none of the above was noticed. It is deliberate (the demo exists to
+show the layout full), but it means early-season behaviour is only visible
+against live data or a stub.
+
+
 **The live connection now works.** As of 2026-09-09 the bridge extension is
 installed in Tim's Edge and successfully read his private league 476225250.
 This was the single biggest blocker for the whole project and it is cleared.
@@ -48,10 +103,12 @@ unless he asks.
    the xlsx `<f>` elements. The call is too big to return inline, so it lands in
    a tool-results file; decode that with Python rather than transcribing base64.
 
-2. **Rework `analysis.html` against the real Analyze tabs.** It was built from
-   Tim's verbal description, not the tabs themselves. Now that the tabs have
-   been read and Tim has explained them (see "What the sheet's columns mean"),
-   the specific changes are:
+2. ~~**Rework `analysis.html` against the real Analyze tabs.**~~ **DONE
+   2026-09-09.** All four points below are implemented, plus the all-teams
+   grid. The one still open is the **Predictions tab** at the end of this item.
+   It was built from Tim's verbal description, not the tabs themselves. Now
+   that the tabs have been read and Tim has explained them (see "What the
+   sheet's columns mean"), the specific changes are:
    - **Drop the "Missing" concept entirely.** In the sheet it is a layout hack
      for teams with deeper benches, not data. Render each team's real bench at
      whatever length it is. Tim asked for this explicitly.
@@ -399,15 +456,26 @@ Mitch finished 0.002 apart in S+L and rounding to 1 dp swaps them.
 
 Pages (all default to demo data; real data arrives via the bridge):
 
-- `index.html` — ESPN connection + raw data probes
+- `index.html` — season dashboard: this week's matchups with projections,
+  roster strength, standings, injured starters, points left on the bench
 - `stats.html` — season stats, the rebuild of Tim's sheet
-- `analysis.html` — per-manager rosters for a chosen week
-- `schedule.html` — results, matchups, head-to-head grid
+- `analysis.html` — all ten teams' lineups at once, plus a per-team drill-down
+- `schedule.html` — standings, matchups, results, fixture / head-to-head grid
 - `draft.html` — draft assistant + practice mode (parked)
+- `debug.html` — the raw ESPN data probes. Not in the nav; linked from the
+  bottom of the home page. Its connect form deliberately does not persist,
+  so probing another league cannot repoint the real pages.
 
 Modules:
 
-- `css/app.css` — shared styles (incl. the connection strip)
+- `css/app.css` — shared styles (incl. the connection strip). Tokens in
+  `:root`, including `--series-1..10`, which `js/charts.js` now reads via
+  `var()` instead of hardcoding. **Do not re-tune those ten colours** — they
+  were validated for colour-vision deficiency and for keeping a team the same
+  colour across every chart.
+- `js/prefs.js` — one localStorage key behind `get`/`set`/`scope`. Persists
+  data source, week, selected team and sort so they survive a reload.
+- `js/home-page.js`, `js/debug-page.js` — the dashboard and the probe page
 - `css/draft.css` — draft room styles
 - `js/espn.js` — ESPN API connection layer; routes through the bridge
 - `js/bridge.js` — site half of the extension bridge
@@ -473,6 +541,20 @@ once, so the auto-start path cannot be tested in the same run as the normal one.
 missing element id or a typo in the page module sails through everything else
 and only shows up in a browser, so keep that boot check.
 
+`test-pages-render.mjs` is the cheapest high-value suite to rebuild first, and
+it caught real breakage during the 2026-09-09 pass. Two things it needs that
+are easy to get wrong:
+- Load **each page in its own child process**. A module initialises once per
+  process and every page module self-boots on import, so one process cannot
+  render two pages.
+- Take the table prototype from `Object.getPrototypeOf(document.createElement
+  ('table'))`, NOT from `window.HTMLTableElement` — under linkedom those are
+  not always the same object, and defining on the wrong one leaves
+  `table.tBodies` undefined. Also shim `window.location`: `js/bridge.js` reads
+  `window.location.origin` on every ping, and linkedom provides no location, so
+  the throw surfaces as an unhandled rejection out of `connection.js` and kills
+  the child — which looks exactly like a page failure and is not one.
+
 Note for the harness: linkedom defines `<select>.value` on
 `HTMLSelectElement.prototype` and it returns `undefined`. Shimming it on
 `HTMLElement.prototype` does nothing — it is shadowed — and would break
@@ -507,17 +589,23 @@ silently rendering zeroes.
 Focus is trades, player analysis, and stats — on the now-connected real league.
 Tim will specify the first build. Prepared ground, in likely order:
 
-- **Point the existing pages at his real league and see them come alive.**
-  `stats.html`, `analysis.html`, `schedule.html` already run the live path
-  through `js/season.js`; the bridge now feeds it real data. First job is to
-  confirm they render correctly on 476225250 and fix whatever the real payload
-  breaks that demo data didn't.
+- **Check the rebuilt pages against the real league.** The 2026-09-09 pass was
+  verified against demo data and stubs, and every page boots clean, but it has
+  NOT been seen against live 476225250 in a browser. That is the first job:
+  open each page on the real league and fix whatever the real payload breaks.
+  Two things to look at specifically — whether `% own` actually populates from
+  the `mRoster` view (the analysis grid hides that column when it does not),
+  and whether the strength-of-schedule basis on `schedule.html` picks the path
+  it should.
 - **Trade interaction** — the feature he named first. Likely: evaluate a
   proposed trade's effect on both rosters, and find mutually beneficial trades
   using opponent-need logic (the same idea as the draft engine's). Build the
-  *analysis* with a send-it-yourself button; do not auto-send.
-- **Player analysis** — rework `analysis.html` per open action 2 (drop the
-  "Missing" columns, FLEX = best RB/WR/TE, etc.), now against real rosters.
+  *analysis* with a send-it-yourself button; do not auto-send. The all-teams
+  grid on `analysis.html` is the natural surface to build this onto — it
+  already computes each team's lineup and baseline by position.
+- **The Predictions tab** — the one genuinely unbuilt idea from his sheet.
+  He tested by hand, for week 1 only, whether Est Total at a given week
+  predicts the final ranking. The site can answer it across all 13 weeks.
 - **Writes / in-ESPN panel** — the later phase. See "The bridge & writes".
 
 Still parked, do not pursue unless asked:
