@@ -1,0 +1,16 @@
+{
+  "name": "fantasy-football-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless suites that boot the real pages and exercise the real engine modules.",
+  "type": "module",
+  "scripts": {
+    "test": "node run-all.mjs",
+    "pages": "node test-pages-render.mjs",
+    "dump:forecast": "node fc-dump.mjs",
+    "dump:sim": "node sim-dump.mjs"
+  },
+  "dependencies": {
+    "linkedom": "^0.18.13"
+  }
+}
