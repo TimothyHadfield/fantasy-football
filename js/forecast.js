@@ -214,6 +214,175 @@ export function expectedWins(probs, alreadyWon = 0) {
   return Math.round(((alreadyWon || 0) + add) * 10) / 10;
 }
 
+// ------------------------------------------------------- whole-season simulation
+//
+// Where a single team's win total has an exact answer (above), a FINAL PLACING
+// does not. Placing depends on the joint outcome of every game in the league at
+// once — your rivals' results move you without you playing — and on the
+// tiebreak, which is total points scored. There is no closed form for that, so
+// this plays the season out many times and counts.
+//
+// The run is deterministic for a given set of inputs. Re-rendering the page, or
+// flipping to another team and back, must not quietly hand you different odds
+// for the same season; that would make every number look like noise.
+
+/** mulberry32: small, fast, and good enough for counting outcomes. */
+export function makeRng(seed) {
+  let a = (seed >>> 0) || 1;
+  return function rng() {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Standard normal by Box-Muller.
+ *
+ * Returns one value per call and keeps its twin for the next one, because
+ * throwing half of every pair away doubles the cost of the whole simulation.
+ */
+export function makeNormal(rng) {
+  let spare = null;
+  return function normal() {
+    if (spare !== null) {
+      const v = spare;
+      spare = null;
+      return v;
+    }
+    let u = 0;
+    let v = 0;
+    let s = 0;
+    do {
+      u = rng() * 2 - 1;
+      v = rng() * 2 - 1;
+      s = u * u + v * v;
+    } while (s === 0 || s >= 1);
+    const f = Math.sqrt((-2 * Math.log(s)) / s);
+    spare = v * f;
+    return u * f;
+  };
+}
+
+/**
+ * Play the rest of the season many times and count where everyone finishes.
+ *
+ * Each team's score in a game is drawn as its projection plus normal noise of
+ * `sigma` — the same model the head-to-head win percentages use, so the two
+ * agree with each other by construction rather than by coincidence.
+ *
+ * Points scored are simulated too, not just wins, because the league breaks a
+ * tie on total points. Ranking on wins alone would invent ties that the real
+ * standings would have separated.
+ *
+ * @param {Object}   o
+ * @param {number[]} o.teamIds
+ * @param {Map}      o.banked      teamId -> {wins, pointsFor} already decided
+ * @param {Array}    o.games       [{homeId, awayId, homeProj, awayProj}] still to play
+ * @param {number}   o.sigma
+ * @param {number}   [o.runs=10000]
+ * @param {number}   [o.seed=1]
+ * @returns {Object|null}
+ */
+export function simulateSeason({ teamIds, banked, games, sigma, runs = 10000, seed = 1 }) {
+  const ids = (teamIds || []).slice();
+  const n = ids.length;
+  if (!n || !Number.isFinite(sigma) || sigma <= 0) return null;
+
+  const runCount = Math.max(1, Math.min(200000, Math.floor(runs) || 0));
+  const index = new Map(ids.map((id, i) => [id, i]));
+
+  const baseWins = new Float64Array(n);
+  const basePf = new Float64Array(n);
+  for (const id of ids) {
+    const b = banked?.get(id);
+    if (!b) continue;
+    baseWins[index.get(id)] = b.wins || 0;
+    basePf[index.get(id)] = b.pointsFor || 0;
+  }
+
+  // Only games both of whose projections are known can be played out. The rest
+  // are reported rather than silently treated as though they do not exist.
+  const home = [];
+  const away = [];
+  const homeProj = [];
+  const awayProj = [];
+  let skipped = 0;
+  for (const g of games || []) {
+    const h = index.get(g.homeId);
+    const a = index.get(g.awayId);
+    if (h === undefined || a === undefined ||
+        !Number.isFinite(g.homeProj) || !Number.isFinite(g.awayProj)) {
+      skipped++;
+      continue;
+    }
+    home.push(h); away.push(a);
+    homeProj.push(g.homeProj); awayProj.push(g.awayProj);
+  }
+
+  const gameCount = home.length;
+  const rng = makeRng(seed);
+  const normal = makeNormal(rng);
+
+  // placeCounts[team][place], place 0 = first.
+  const placeCounts = Array.from({ length: n }, () => new Float64Array(n));
+  const winTotals = new Float64Array(n);
+  const wins = new Float64Array(n);
+  const pf = new Float64Array(n);
+  const order = Array.from({ length: n }, (_, i) => i);
+
+  for (let r = 0; r < runCount; r++) {
+    wins.set(baseWins);
+    pf.set(basePf);
+
+    for (let g = 0; g < gameCount; g++) {
+      const hs = homeProj[g] + sigma * normal();
+      const as = awayProj[g] + sigma * normal();
+      const h = home[g];
+      const a = away[g];
+      pf[h] += hs;
+      pf[a] += as;
+      if (hs > as) wins[h] += 1;
+      else if (as > hs) wins[a] += 1;
+      else { wins[h] += 0.5; wins[a] += 0.5; }   // vanishingly rare, but defined
+    }
+
+    for (let i = 0; i < n; i++) order[i] = i;
+    // Wins first, then points scored — the league's own rule.
+    order.sort((x, y) => (wins[y] - wins[x]) || (pf[y] - pf[x]));
+    for (let place = 0; place < n; place++) placeCounts[order[place]][place] += 1;
+    for (let i = 0; i < n; i++) winTotals[i] += wins[i];
+  }
+
+  const teams = ids.map((id, i) => {
+    const counts = placeCounts[i];
+    const places = Array.from(counts, (c) => c / runCount);
+    let meanPlace = 0;
+    let best = 0;
+    for (let p = 0; p < n; p++) {
+      meanPlace += places[p] * (p + 1);
+      if (places[p] > places[best]) best = p;
+    }
+    return {
+      teamId: id,
+      places,                          // index 0 = chance of finishing first
+      meanPlace,
+      modePlace: best + 1,
+      pFirst: places[0],
+      pLast: places[n - 1],
+      meanWins: winTotals[i] / runCount,
+    };
+  });
+
+  const byMean = teams.slice().sort((a, b) => a.meanPlace - b.meanPlace);
+  const champion = teams.slice().sort((a, b) => b.pFirst - a.pFirst)[0];
+  const wooden = teams.slice().sort((a, b) => b.pLast - a.pLast)[0];
+
+  return { runs: runCount, games: gameCount, skipped, teams, byMean, champion, wooden, sigma };
+}
+
 /**
  * The narrowest run of win totals holding at least `mass` of the probability.
  *
