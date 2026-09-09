@@ -382,6 +382,73 @@ const SCENARIOS = {
     prefs: { 'analysis.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
   },
+  starters: {
+    label: '(i) who to start, week by week — every position, and a team switch',
+    stub: false,
+    prefs: { 'analysis.source': 'demo' },
+    after: async ({ document, window }) => {
+      const table = document.getElementById('startersTable');
+      const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+
+      const snap = () => ({
+        title: document.getElementById('startersTitle').textContent.trim(),
+        head: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
+        lit: [...document.querySelectorAll('#starterPosToggle button.on')]
+          .map((b) => b.dataset.pos),
+        note: document.getElementById('startersNote').textContent.replace(/\s+/g, ' ').trim(),
+        emptyHidden: (document.getElementById('startersEmpty').getAttribute('class') || '')
+          .includes('hidden'),
+        rows: [...table.querySelectorAll('tbody tr')].map((tr) => ({
+          cls: tr.getAttribute('class') || '',
+          depth: tr.children[0].textContent.trim(),
+          depthV: tr.children[0].getAttribute('data-v'),
+          name: tr.children[1].textContent.trim(),
+          pos: tr.children[2].textContent.trim(),
+          avg: tr.children[4].getAttribute('data-v'),
+          starts: Number(tr.children[5].getAttribute('data-v')),
+          // Only the week columns, in week order: the identity block is six wide.
+          weeks: [...tr.children].slice(6).map((td) => ({
+            text: td.textContent.trim(),
+            v: td.getAttribute('data-v'),
+            st: /\bst\b/.test(td.getAttribute('class') || ''),
+            fx: /\bfx\b/.test(td.getAttribute('class') || ''),
+            title: td.getAttribute('title') || '',
+          })),
+          links: [...tr.querySelectorAll('a.pref')].map((a) => a.getAttribute('href')),
+        })),
+      });
+
+      // Captured BEFORE the team switch below, because every byPos snapshot
+      // belongs to the team the page opened on — reading it afterwards built
+      // the expected lineups for the wrong squad and made the page look wrong.
+      const teamNow = () => document.getElementById('rosterTitle').textContent
+        .replace(/^Roster detail\s*·\s*/, '').trim();
+
+      const out = { byPos: {}, teamName: teamNow() };
+      for (const pos of ['QB', 'RB', 'WR', 'TE', 'FLEX', 'DST', 'K']) {
+        click(document.querySelector(`#starterPosToggle button[data-pos="${pos}"]`));
+        await new Promise((r) => setTimeout(r, 30));
+        out.byPos[pos] = snap();
+      }
+
+      // Back to RB, then switch team: the panel must follow the shared picker
+      // and must not cost a request to do it.
+      click(document.querySelector('#starterPosToggle button[data-pos="RB"]'));
+      await new Promise((r) => setTimeout(r, 30));
+      out.beforeSwitch = snap();
+
+      const sel = document.getElementById('teamSelect');
+      const other = [...sel.querySelectorAll('option')][3];
+      out.otherTeam = other.textContent.trim();
+      sel.value = other.getAttribute('value');
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 120));
+      out.afterSwitch = snap();
+      out.teamAfter = teamNow();
+
+      globalThis.__an = out;
+    },
+  },
 };
 
 // ------------------------------------------------------------------- child
@@ -1067,6 +1134,272 @@ async function check(scenario, boot) {
   }
 
   // ---- (d) switching team, sorting, changing week --------------------------
+  // ---- who to start, week by week ----------------------------------------
+  //
+  // The panel marks a week when a man is in the best legal lineup for it. That
+  // claim is checked by REBUILDING the lineups here — straight out of
+  // demo-rosters.js through forecast.js's optimalLineup — rather than by
+  // reading the page's own arithmetic back to it. A panel that marked the
+  // wrong cells confidently would agree with itself all day.
+  if (scenario === 'starters') {
+    const w = globalThis.__an || {};
+    const { generateDemoWeekRosters } = await import('../js/demo-rosters.js');
+    const { slotCountsFromLineups } = await import('../js/projection.js');
+    const { optimalLineup, slotsFromCounts } = await import('../js/forecast.js');
+
+    const WEEKS = Array.from({ length: 13 }, (_, i) => i + 1);
+    const FLEX_SLOTS = new Set([3, 5, 7, 23]);
+
+    const pool = [];
+    const weekTeams = new Map();
+    for (const wk of WEEKS) {
+      const { teams } = generateDemoWeekRosters(wk);
+      weekTeams.set(wk, teams);
+      pool.push(...teams);
+    }
+    const slots = slotsFromCounts(slotCountsFromLineups(pool));
+
+    /** week -> Map(playerId -> slotId) for one team, rebuilt from source. */
+    const truthFor = (teamName) => {
+      const out = new Map();
+      for (const wk of WEEKS) {
+        const t = weekTeams.get(wk).find((x) => x.name === teamName);
+        if (!t) continue;
+        const { starters } = optimalLineup(t.players || [], slots);
+        out.set(wk, new Map(starters.map((s) => [s.playerId, s.slotId])));
+      }
+      return out;
+    };
+
+    c.ok('the panel has its own table and controls',
+      Boolean(w.byPos) && Object.keys(w.byPos).length === 7, Object.keys(w.byPos || {}).length);
+
+    // ---- shape ----------------------------------------------------------
+    const rb = w.byPos.RB;
+    c.ok('the identity columns are Depth, Player, Pos, NFL, Avg and Starts',
+      JSON.stringify(rb.head.slice(0, 6)) ===
+        JSON.stringify(['Depth', 'Player', 'Pos', 'NFL', 'Avg', 'Starts']),
+      JSON.stringify(rb.head.slice(0, 6)));
+    c.ok('one column per week after them, thirteen of them',
+      JSON.stringify(rb.head.slice(6)) === JSON.stringify(WEEKS.map(String)),
+      JSON.stringify(rb.head.slice(6)));
+    c.ok('every header is sortable',
+      [...d.querySelectorAll('#startersTable thead th')].every((th) => th.hasAttribute('data-sort')));
+    c.ok('the table lives inside a .table-scroll',
+      $('startersWrap').getAttribute('class').includes('table-scroll'));
+
+    // ---- one button lit, and it is the one pressed -----------------------
+    for (const [pos, snap] of Object.entries(w.byPos)) {
+      c.ok(`${pos}: exactly that button is lit`,
+        snap.lit.length === 1 && snap.lit[0] === pos, JSON.stringify(snap.lit));
+      c.ok(`${pos}: the title names the team and the position`,
+        /^Who to start, week by week · .+ · .+$/.test(snap.title), snap.title);
+    }
+
+    // ---- the rows are the right men -------------------------------------
+    for (const pos of ['QB', 'RB', 'WR', 'TE', 'DST', 'K']) {
+      const snap = w.byPos[pos];
+      const label = pos === 'DST' ? 'DEF' : pos;
+      c.ok(`${pos}: every row really is a ${label}`,
+        snap.rows.length > 0 && snap.rows.every((r) => r.pos === label),
+        snap.rows.map((r) => r.pos).join(','));
+    }
+    c.ok('FLEX shows RB, WR and TE together',
+      new Set(w.byPos.FLEX.rows.map((r) => r.pos)).size === 3 &&
+      ['RB', 'WR', 'TE'].every((p) => w.byPos.FLEX.rows.some((r) => r.pos === p)),
+      [...new Set(w.byPos.FLEX.rows.map((r) => r.pos))].join(','));
+    c.ok('FLEX is exactly the three position tables put together',
+      w.byPos.FLEX.rows.length ===
+        w.byPos.RB.rows.length + w.byPos.WR.rows.length + w.byPos.TE.rows.length,
+      `${w.byPos.FLEX.rows.length} vs ${w.byPos.RB.rows.length}+${w.byPos.WR.rows.length}+${w.byPos.TE.rows.length}`);
+    // FLEX IS A FILTER, NEVER A POSITION. A man keeps his own depth rank under
+    // it — there is no such thing as a FLEX2 — and nothing downstream may learn
+    // the button exists.
+    c.ok('nobody is ranked FLEXn',
+      w.byPos.FLEX.rows.every((r) => !/FLEX/.test(r.depth)),
+      w.byPos.FLEX.rows.map((r) => r.depth).join(','));
+    {
+      const rank = new Map(w.byPos.RB.rows.map((r) => [r.name, r.depth]));
+      c.ok('and a back keeps the same rank under FLEX as under RB',
+        w.byPos.FLEX.rows.filter((r) => r.pos === 'RB')
+          .every((r) => rank.get(r.name) === r.depth),
+        w.byPos.FLEX.rows.filter((r) => r.pos === 'RB')
+          .map((r) => `${r.name}:${r.depth}/${rank.get(r.name)}`).join(' '));
+    }
+
+    // ---- depth order ------------------------------------------------------
+    // The table OPENS on Depth, ascending — a depth chart read out of order is
+    // not a depth chart — so the held men come first, in rank order, and anyone
+    // no longer on the roster trails them. Avg is one click away.
+    c.ok('rows open as a depth chart: RB1, RB2, RB3 …',
+      (() => {
+        const held = rb.rows.filter((r) => !/\bgone\b/.test(r.cls));
+        return held.length > 1 && held.every((r, i) => r.depth === `RB${i + 1}`);
+      })(),
+      rb.rows.map((r) => r.depth).join(','));
+    c.ok('and men no longer on the roster trail every ranked one',
+      (() => {
+        const firstGone = rb.rows.findIndex((r) => /\bgone\b/.test(r.cls));
+        return firstGone === -1 ||
+          rb.rows.slice(firstGone).every((r) => /\bgone\b/.test(r.cls));
+      })(),
+      rb.rows.map((r) => `${r.depth}${/\bgone\b/.test(r.cls) ? '*' : ''}`).join(','));
+    c.ok('the depth ranks really are the Avg order, deepest first',
+      (() => {
+        const held = rb.rows.filter((r) => !/\bgone\b/.test(r.cls));
+        return held.every((r, i) => i === 0 ||
+          Number(held[i - 1].avg ?? -Infinity) >= Number(r.avg ?? -Infinity));
+      })(),
+      rb.rows.map((r) => `${r.depth}:${r.avg}`).join(' '));
+    // An unranked man sorts INSIDE his position group, never at the head of the
+    // column: the data-v is the only thing stopping sortable.js falling back to
+    // the cell text, where "—" would lead.
+    c.ok('an unranked man still carries a sortable Depth value',
+      rb.rows.every((r) => r.depthV !== null && r.depthV !== '' && /^\d+$/.test(r.depthV)),
+      rb.rows.map((r) => `${r.depth}=${r.depthV}`).join(' '));
+    c.ok('and it sorts him last within his own position',
+      rb.rows.filter((r) => /\bgone\b/.test(r.cls))
+        .every((g) => rb.rows.filter((r) => !/\bgone\b/.test(r.cls) && r.pos === g.pos)
+          .every((h) => Number(h.depthV) < Number(g.depthV))),
+      rb.rows.map((r) => `${r.depth}=${r.depthV}`).join(' '));
+
+    // ---- THE ASSERTION THAT MATTERS -------------------------------------
+    {
+      const truth = truthFor(w.teamName);
+      let marks = 0, checked = 0, wrong = [];
+      for (const [pos, snap] of Object.entries(w.byPos)) {
+        for (const row of snap.rows) {
+          for (let i = 0; i < WEEKS.length; i++) {
+            const wk = WEEKS[i];
+            const cell = row.weeks[i];
+            const lineup = truth.get(wk);
+            if (!lineup) continue;
+            // The page keys on ESPN's playerId; the test only has names, so it
+            // matches on the name the page printed. Demo names are unique
+            // within a squad, which is what makes that safe here.
+            const slotId = [...lineup.entries()].find(([id]) => {
+              const t = weekTeams.get(wk).find((x) => x.name === w.teamName);
+              const p = (t.players || []).find((q) => q.playerId === id);
+              return p && p.name === row.name;
+            });
+            const shouldStart = Boolean(slotId);
+            checked++;
+            if (cell.st) marks++;
+            if (cell.st !== shouldStart) {
+              wrong.push(`${pos} ${row.name} wk${wk}: page ${cell.st ? 'marks' : 'does not mark'}, truth ${shouldStart}`);
+            } else if (shouldStart && cell.fx !== FLEX_SLOTS.has(slotId[1])) {
+              wrong.push(`${pos} ${row.name} wk${wk}: flex marker ${cell.fx} vs ${FLEX_SLOTS.has(slotId[1])}`);
+            }
+          }
+        }
+      }
+      c.ok('EVERY marked week is a week that man really is in the best legal lineup',
+        wrong.length === 0, `${wrong.length} wrong, e.g. ${wrong.slice(0, 3).join(' | ')}`);
+      c.ok('and the check is not vacuous — plenty of cells are marked',
+        marks > 100 && marks < checked, `${marks} marked of ${checked} checked`);
+    }
+
+    // ---- the count per week matches what the league actually starts -------
+    //
+    // The bug this catches is a marked cell with no row to sit on: rosters
+    // change week to week, so a lineup filled by somebody since dropped left a
+    // week looking as though nobody at the position started at all.
+    {
+      const truth = truthFor(w.teamName);
+      const bad = [];
+      for (const pos of ['QB', 'RB', 'WR', 'TE', 'DST', 'K']) {
+        const snap = w.byPos[pos];
+        for (let i = 0; i < WEEKS.length; i++) {
+          const wk = WEEKS[i];
+          const lineup = truth.get(wk);
+          if (!lineup) continue;
+          const t = weekTeams.get(wk).find((x) => x.name === w.teamName);
+          const expected = [...lineup.keys()].filter((id) => {
+            const p = (t.players || []).find((q) => q.playerId === id);
+            return p && p.position === pos;
+          }).length;
+          const shown = snap.rows.filter((r) => r.weeks[i].st).length;
+          if (shown !== expected) bad.push(`${pos} wk${wk}: ${shown} shaded vs ${expected} started`);
+        }
+      }
+      c.ok('EVERY started man has a row — no lineup spot goes missing',
+        bad.length === 0, `${bad.length} weeks off, e.g. ${bad.slice(0, 4).join(' | ')}`);
+    }
+
+    // ---- Starts agrees with the row it sits on ---------------------------
+    for (const [pos, snap] of Object.entries(w.byPos)) {
+      c.ok(`${pos}: the Starts column counts the row's own shaded weeks`,
+        snap.rows.every((r) => r.starts === r.weeks.filter((x) => x.st).length),
+        snap.rows.map((r) => `${r.name}:${r.starts}/${r.weeks.filter((x) => x.st).length}`).join(' '));
+    }
+
+    // ---- a man off the roster earns his row by having filled a slot ------
+    for (const [pos, snap] of Object.entries(w.byPos)) {
+      c.ok(`${pos}: nobody off the roster is here without a start to explain`,
+        snap.rows.filter((r) => /\bgone\b/.test(r.cls)).every((r) => r.starts > 0),
+        snap.rows.filter((r) => /\bgone\b/.test(r.cls) && r.starts === 0)
+          .map((r) => r.name).join(','));
+      c.ok(`${pos}: a man who never starts is marked as such`,
+        snap.rows.filter((r) => r.starts === 0).every((r) => /\bnever\b/.test(r.cls)),
+        snap.rows.filter((r) => r.starts === 0 && !/\bnever\b/.test(r.cls)).map((r) => r.name).join(','));
+    }
+
+    // ---- a start is said in words, not only in colour --------------------
+    {
+      const marked = rb.rows.flatMap((r) => r.weeks.filter((x) => x.st));
+      c.ok('every marked cell says in its title that he is in the lineup',
+        marked.length > 0 && marked.every((x) => /is in the best legal lineup/.test(x.title)),
+        marked.find((x) => !/is in the best legal lineup/.test(x.title))?.title);
+      c.ok('and a flex start says FLEX rather than a position',
+        marked.filter((x) => x.fx).every((x) => /in the FLEX/.test(x.title)),
+        marked.find((x) => x.fx && !/in the FLEX/.test(x.title))?.title);
+      c.ok('some starts really are through the flex, so the marker is exercised',
+        marked.some((x) => x.fx), `${marked.filter((x) => x.fx).length} flex starts`);
+    }
+
+    // ---- a bye is still a bye, and is exactly when cover shows up --------
+    {
+      const anyBye = Object.values(w.byPos).some((s) =>
+        s.rows.some((r) => r.weeks.some((x) => x.text === 'Bye')));
+      // Demo deliberately never claims a bye — a zero there means "ruled out",
+      // which is a different fact — so this asserts the ABSENCE, and the live
+      // scenarios cover the other side.
+      c.ok('demo never claims a bye it cannot know about', !anyBye,
+        'a demo cell read "Bye"');
+    }
+
+    // ---- the click-through contract holds here too -----------------------
+    {
+      const links = Object.values(w.byPos).flatMap((s) => s.rows.flatMap((r) => r.links));
+      c.ok('every name is a link to that man on the Players page',
+        links.length > 0 && links.every((h) => /^waivers\.html\?player=\d+$/.test(h)),
+        links.find((h) => !/^waivers\.html\?player=\d+$/.test(h)));
+      c.ok('one link per row and no more',
+        Object.values(w.byPos).every((s) => s.rows.every((r) => r.links.length === 1)));
+    }
+
+    // ---- the note states the basis ---------------------------------------
+    for (const phrase of ['best legal lineup', 'flex', 'Read along a row', 'read down a column']) {
+      c.ok(`the note explains "${phrase}"`, rb.note.includes(phrase), rb.note.slice(0, 200));
+    }
+    c.ok('the note says the swaps above are not applied here',
+      /what-if for one week and are deliberately not applied/.test(rb.note), rb.note.slice(-300));
+
+    // ---- switching team follows the shared picker, and costs nothing -----
+    c.ok('switching team repaints the panel with the other squad',
+      w.afterSwitch.title !== w.beforeSwitch.title &&
+      w.afterSwitch.title.includes(w.otherTeam),
+      `${w.beforeSwitch.title} -> ${w.afterSwitch.title}`);
+    c.ok('and it is a different set of men',
+      JSON.stringify(w.afterSwitch.rows.map((r) => r.name)) !==
+      JSON.stringify(w.beforeSwitch.rows.map((r) => r.name)),
+      'the same names came back for another team');
+    c.ok('the position button survives a team switch',
+      w.afterSwitch.lit.join(',') === 'RB', w.afterSwitch.lit.join(','));
+    c.ok('SWITCHING TEAM AND POSITION FETCHES NOTHING',
+      boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 3).join(' | '));
+  }
+
   if (scenario === 'team-switch') {
     const w = globalThis.__an || {};
     const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -1319,6 +1652,31 @@ async function check(scenario, boot) {
     const named = (root, name) =>
       [...d.querySelectorAll(root)].filter((td) => txt(td).startsWith(name));
     const noIdName = season.playerName(4, 0);
+
+    // "Who to start" cannot carry him and says so instead of pretending.
+    // He has no id, so nothing ties the man in week 5 to the man in week 6 —
+    // he is left out of the table AND out of the lineups it marks, because a
+    // shaded week with no row to sit on reads as a lineup slot going empty.
+    {
+      const starters = $('startersTable');
+      const btn = d.querySelector('#starterPosToggle button[data-pos="QB"]');
+      btn.dispatchEvent(new boot.window.Event('click', { bubbles: true }));
+      const rows = [...starters.querySelectorAll('tbody tr')];
+      const note = txt($('startersNote'));
+      c.ok('the id-less quarterback gets no row in Who to start',
+        rows.every((tr) => !txt(tr.children[1]).startsWith(noIdName)),
+        rows.map((tr) => txt(tr.children[1])).join(','));
+      c.ok('and the note says he was left out, and why',
+        /came back from ESPN with no player id/.test(note), note.slice(-320));
+      // The count still has to add up for everyone who IS shown: no shaded
+      // cell may be left without a row to sit on.
+      const shaded = rows.flatMap((tr) =>
+        [...tr.children].slice(6).filter((td) => /\bst\b/.test(td.getAttribute('class') || '')));
+      c.ok('every shaded cell that remains sits on a real row',
+        rows.length === 0 ? shaded.length === 0 : true, `${rows.length} rows, ${shaded.length} shaded`);
+      d.querySelector('#starterPosToggle button[data-pos="RB"]')
+        .dispatchEvent(new boot.window.Event('click', { bubbles: true }));
+    }
 
     const rosterCell = named('#rosterTable tbody td.name', noIdName)[0];
     const seasonCell = named('#seasonTable tbody td.name', noIdName)[0];

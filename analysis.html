@@ -281,6 +281,74 @@
   }
   #seasonTable th.now { color: var(--text); }
 
+  /* ------------------------------------------------- who to start, by week */
+
+  /* The same week run as the season grid, narrowed to one position and with
+     the weeks a man actually makes the lineup marked. The season grid above is
+     deliberately uncoloured — everyone in it is already rostered, so a value
+     scale would light up nearly every cell — but this is not a value scale. It
+     is a yes/no about a decision, and it is the whole point of the panel. */
+  #startersTable th, #startersTable td { white-space: nowrap; }
+  #startersTable td.wk, #startersTable th.wk { padding-left: 7px; padding-right: 7px; }
+  #startersTable td.avg { font-weight: 650; color: var(--text); }
+
+  /* In the best legal lineup that week. Tinted AND bold, never colour alone. */
+  #startersTable td.st { background: #16311f; font-weight: 700; color: var(--text); }
+  #startersTable tbody tr:hover td.st { background: #1b3b26; }
+
+  /* In it only through the FLEX. A quieter fill and an explicit marker, because
+     "he starts" and "he starts because the flex had nobody better" are
+     different answers to the question this panel exists to ask — and the second
+     is exactly the one a manager wants to spot. */
+  #startersTable td.st.fx { background: #16311f66; }
+  #startersTable tbody tr:hover td.st.fx { background: #1b3b2699; }
+  #startersTable td.st.fx::after {
+    content: 'F';
+    font-size: 9px;
+    font-weight: 700;
+    vertical-align: super;
+    margin-left: 2px;
+    color: var(--accent);
+  }
+
+  /* A man who never makes the lineup over the weeks shown. Still readable —
+     his numbers are why he is not starting — but clearly the back of the shelf. */
+  #startersTable tbody tr.never td { color: var(--dim); }
+  #startersTable tbody tr.never td.name { color: var(--dim); }
+
+  /* Not on the roster in the week the page is showing. He is in the table
+     because he filled a lineup spot in one of the weeks on screen, and a shaded
+     cell with no row to sit on would read as a slot going empty. Italic, so he
+     is distinguishable from a man who is simply deep on the bench. */
+  #startersTable tbody tr.gone td.name { font-style: italic; }
+
+  /* His depth at the position: RB1, RB2, RB3. Same idea as the bench ranks in
+     the grids above, measured on this panel's own Avg so it agrees with the
+     column it sits beside. */
+  .depth-tag {
+    display: inline-block;
+    min-width: 34px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+  }
+
+  /* How many of the weeks shown he starts. The column that answers "when does
+     my bench man actually come in". */
+  #startersTable td.starts { font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  /* The week the rest of the page is showing — a bracket, same cue as above. */
+  #startersTable th.now, #startersTable td.now {
+    border-left: 1px solid var(--line-2);
+    border-right: 1px solid var(--line-2);
+  }
+  #startersTable th.now { color: var(--text); }
+
   /* Inline colour key in the panel note. */
   .key {
     display: inline-block;
@@ -461,6 +529,27 @@
     </table></div>
     <div class="empty hidden" id="seasonEmpty"></div>
     <p class="panel-note" id="seasonNote"></p>
+  </section>
+
+  <section class="panel">
+    <h2 id="startersTitle">Who to start, week by week</h2>
+    <div class="row mb-12">
+      <div class="segmented" id="starterPosToggle">
+        <button type="button" data-pos="QB">QB</button>
+        <button type="button" data-pos="RB" class="on">RB</button>
+        <button type="button" data-pos="WR">WR</button>
+        <button type="button" data-pos="TE">TE</button>
+        <button type="button" data-pos="FLEX">FLEX</button>
+        <button type="button" data-pos="DST">DEF</button>
+        <button type="button" data-pos="K">K</button>
+      </div>
+    </div>
+    <div class="table-scroll" id="startersWrap"><table id="startersTable">
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="empty hidden" id="startersEmpty"></div>
+    <p class="panel-note" id="startersNote"></p>
   </section>
 
 </div>

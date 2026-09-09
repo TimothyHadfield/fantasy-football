@@ -20,6 +20,8 @@ import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js'
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
+import { optimalLineup, slotsFromCounts } from './forecast.js';
+import { slotCountsFromLineups } from './projection.js';
 import * as espn from './espn.js';
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +70,13 @@ const state = {
   lineupKey: null,
   lineup: new Map(),            // playerId -> the slot the reader has put him in
   held: null,                   // playerId picked up for a swap, or null
+
+  // The "Who to start, week by week" panel at the very foot. One position at a
+  // time, because the question it answers — when does my third back actually
+  // get in, and is it a bye or just a soft week — is a question about one
+  // position's depth chart and nothing else. FLEX is a filter over RB/WR/TE
+  // here exactly as it is on the Players page; it is never a position.
+  startersPos: 'RB',
 };
 
 // Cache per week so flipping back to a week already loaded is instant.
@@ -1475,9 +1484,25 @@ function seasonValue(index, week, playerId) {
 /**
  * The cell. No `data-v` at all — never data-v="" — for anything that is not a
  * number, so an unknown sinks to the bottom whichever way the column is sorted.
+ *
+ * `start` is the "Who to start" panel's marker and nothing else reads it: null
+ * from the season grid above, which stays deliberately uncoloured, and
+ * `{ slotId, flex }` from the panel at the foot when this man is in the best
+ * legal lineup that week. It is threaded through here rather than given a cell
+ * renderer of its own because the FIVE ways of having no number — not read yet,
+ * ESPN refused the week, not on the roster, no number at all, and a bye — cost
+ * real effort to tell apart and must not be reimplemented next door where the
+ * two copies can drift.
  */
-function seasonCell(v, week, name, isNow) {
-  const cls = (extra) => `wk${isNow ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
+function seasonCell(v, week, name, isNow, start = null) {
+  const mark = start ? ` st${start.flex ? ' fx' : ''}` : '';
+  const cls = (extra) => `wk${isNow ? ' now' : ''}${extra ? ` ${extra}` : ''}${mark}`;
+  // A start is a fact about the lineup, so it is said on every cell that has
+  // one — including a bye, which is exactly when a start is worth noticing.
+  const says = start
+    ? ` ${esc(name)} is in the best legal lineup for week ${week}` +
+      (start.flex ? ', in the FLEX.' : `, at ${esc(espn.SLOT_LABELS[start.slotId] || '')}.`)
+    : '';
 
   if (v === 'wait') {
     return `<td class="${cls('wait')}" title="Week ${week} has not been read from ESPN yet.">·</td>`;
@@ -1500,13 +1525,13 @@ function seasonCell(v, week, name, isNow) {
     // demo mode prints the number rather than claiming a bye that isn't one.
     if (state.isDemo) {
       return `<td class="${cls()}" data-v="0" title="The sample data has ${esc(name)} ruled out ` +
-        `in week ${week}, so it projects nothing for him.">0.0</td>`;
+        `in week ${week}, so it projects nothing for him.${says}">0.0</td>`;
     }
     return `<td class="${cls('bye')}" data-v="0" title="${esc(name)} is on bye in week ${week}. ` +
-      `ESPN returns 0.00 for a bye, which is not the same as having no number at all.">Bye</td>`;
+      `ESPN returns 0.00 for a bye, which is not the same as having no number at all.${says}">Bye</td>`;
   }
   return `<td class="${cls()}" data-v="${v}" ` +
-    `title="ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.">${fmt(v)}</td>`;
+    `title="ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.${says}">${fmt(v)}</td>`;
 }
 
 function renderSeasonHead(weeks) {
@@ -1558,6 +1583,7 @@ function renderSeason() {
     $('seasonEmpty').textContent = seasonEmptyReason(team, weeks);
     $('seasonNote').innerHTML = '';
     tbody.innerHTML = '';
+    renderStarters(); // it has an empty state of its own and must reach it
     return;
   }
 
@@ -1602,6 +1628,411 @@ function renderSeason() {
 
   renderSeasonNote(weeks, players.length);
   resort(table);
+
+  // Driven from here rather than from each of renderSeason's ten call sites:
+  // the two panels read the same week cache for the same team, so every reason
+  // to repaint one is a reason to repaint the other, and a new call site added
+  // later cannot forget this one.
+  renderStarters();
+}
+
+// ------------------------------------------- who to start, week by week
+//
+// Tim's ask, in his own words: see who to start each week of the season to keep
+// the lineup balanced, and know where and when the bench comes in to cover a
+// bye or just a soft week for a starter.
+//
+// So: one position at a time, that team's men at it in depth order, the same
+// week run the season grid draws — and every week a man is in the BEST LEGAL
+// LINEUP marked. Read along a row and you see a starter's soft weeks; read down
+// a column and you see who covers them.
+//
+// IT COSTS NOTHING. `state.seasonWeeks` is already bought by the panel above —
+// one request per week, no bulk form, which is this page's whole cost model —
+// and every team is in every week's payload, so the position buttons and the
+// team picker are both repaints. No fetch belongs anywhere near here.
+
+/** QB, RB, WR, TE, DEF, K — and FLEX, which is a filter over three of them. */
+const STARTER_POSITIONS = ['QB', 'RB', 'WR', 'TE', 'DST', 'K'];
+const FLEX_ELIGIBLE = ['RB', 'WR', 'TE'];
+
+/** ESPN's own slot ids that mean "the flex", as opposed to a position's own. */
+const FLEX_SLOTS = new Set([3, 5, 7, 23]);
+
+/**
+ * The league's starting slots, read off every lineup we hold.
+ *
+ * ESPN will not accept an illegal lineup, so the non-bench slots in use ARE the
+ * configuration — no extra request, and no hand-written default that would
+ * understate a three-receiver league by a whole starter if it guessed wrong.
+ * Pooled across every week as well as every team, because a manager sitting one
+ * slot empty in the week on screen must not shrink the league's shape.
+ */
+function leagueSlots() {
+  const pool = [];
+  if (state.data && state.data.teams) pool.push(...state.data.teams);
+  for (const teams of state.seasonWeeks.values()) pool.push(...teams);
+  const counts = slotCountsFromLineups(pool);
+  return counts ? slotsFromCounts(counts) : null;
+}
+
+/**
+ * Who this team should start in each week, and in which slot.
+ *
+ * `optimalLineup` is `js/forecast.js`'s, unchanged — the same function the
+ * schedule page's forecast and the trade finder both use, so the three can
+ * never disagree about who a squad ought to be starting. It fills the most
+ * restrictive slots first, which is provably optimal because the eligibility
+ * sets nest, and it reads `projected`, which in a week's payload IS that week's
+ * projection.
+ *
+ * A man on bye comes back from ESPN at 0.00 and simply loses his place to
+ * somebody better, which is what a manager would do — so byes need no handling
+ * of their own here. That they need none is the entire feature: the mark moves
+ * off him and onto whoever covers, and the panel shows you who.
+ *
+ * The reader's what-if swaps in the roster detail are deliberately NOT applied.
+ * Those are one week's experiment; this answers what the numbers say across the
+ * whole season, and folding an override into it would quietly make a hand-moved
+ * lineup look like advice.
+ *
+ * @returns {Map<number, Map<number, number>>} week -> playerId -> slotId
+ */
+function weeklyStarters(teamId, slots) {
+  const out = new Map();
+  if (!slots || teamId === null || teamId === undefined) return out;
+  for (const [week, teams] of state.seasonWeeks) {
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) continue;
+    const { starters } = optimalLineup(identified(team.players), slots);
+    out.set(week, new Map(starters.map((s) => [s.playerId, s.slotId])));
+  }
+  return out;
+}
+
+/**
+ * Only men ESPN gave an id for, and the lineup is solved over these alone.
+ *
+ * A player with no `playerId` cannot be followed from one week to the next —
+ * there is nothing to say that the man in week 5 is the man in week 6 — so he
+ * can have no row here, and `seasonIndex` would collapse every one of them onto
+ * a single `undefined` key if he did. Leaving him IN the solve would then mark a
+ * lineup spot that no row can carry, which is the one failure this panel must
+ * not have: the reader counts the shaded cells and concludes a slot went empty.
+ *
+ * So he is left out of both, and `renderStartersNote` says how many that was.
+ * Disclosed and slightly incomplete beats confident and unaccountable — and it
+ * is the same reason the click-through refuses to link him rather than pointing
+ * at `?player=undefined`.
+ */
+function identified(players) {
+  return (players || []).filter((p) => p.playerId !== null && p.playerId !== undefined);
+}
+
+/** How many men at this position the panel had to leave out, in the shown weeks. */
+function unidentifiedCount(team, weeks) {
+  const shown = new Set(weeks);
+  let worst = 0;
+  for (const [week, teams] of state.seasonWeeks) {
+    if (!shown.has(week)) continue;
+    const t = teams.find((x) => x.id === (team ? team.id : null));
+    const n = ((t && t.players) || [])
+      .filter((p) => (p.playerId === null || p.playerId === undefined) && inStarterPos(p)).length;
+    worst = Math.max(worst, n);
+  }
+  const now = ((team && team.players) || [])
+    .filter((p) => (p.playerId === null || p.playerId === undefined) && inStarterPos(p)).length;
+  return Math.max(worst, now);
+}
+
+/** Does this man belong under the button currently pressed? */
+function inStarterPos(p) {
+  return state.startersPos === 'FLEX'
+    ? FLEX_ELIGIBLE.includes(p.position)
+    : p.position === state.startersPos;
+}
+
+/**
+ * Everyone who held this position for this team across the weeks on screen.
+ *
+ * THE UNION, and not the selected week's roster alone. That was the first
+ * version and it was quietly wrong: rosters really do change week to week, so
+ * a week whose lineup was filled by somebody since dropped had a starter with
+ * no row — and the panel then showed a week where, apparently, nobody at the
+ * position started at all. Autumn's week 7 in the sample data is exactly that
+ * case: the second back is Kellan Wainwright, who is not on the week 4 roster
+ * the page happened to be showing.
+ *
+ * A mark that cannot be seen is worse than no mark, because the reader counts
+ * the shaded cells and concludes a lineup slot went empty. Same rule, and the
+ * same reason, as the Taken table's membership on the Players page.
+ *
+ * The identity comes from the LATEST week he appears in, so a man who changed
+ * NFL team mid-season reads as where he is now, and the selected week wins
+ * outright when it has him.
+ */
+function positionPool(team, weeks) {
+  const byId = new Map();
+  const shown = new Set(weeks);
+  for (const [week, teams] of [...state.seasonWeeks].sort((a, b) => a[0] - b[0])) {
+    if (!shown.has(week)) continue;
+    const t = teams.find((x) => x.id === (team ? team.id : null));
+    for (const p of (t && t.players) || []) {
+      if (p.playerId === null || p.playerId === undefined) continue;
+      byId.set(p.playerId, p);
+    }
+  }
+  for (const p of (team && team.players) || []) {
+    if (p.playerId === null || p.playerId === undefined) continue;
+    byId.set(p.playerId, p);
+  }
+  return [...byId.values()].filter(inStarterPos);
+}
+
+/**
+ * The rows: everyone who held the chosen position, deepest chart first.
+ *
+ * Ordered by their average over the weeks on screen, which is what "starter to
+ * bench" means once you are looking at a whole season rather than one week —
+ * ESPN's current slot only says where a manager has parked somebody today, and
+ * this panel exists precisely to disagree with that when the numbers do.
+ *
+ * The rank is computed HERE, off the same averages the panel prints, so the
+ * `RB2` beside a row always agrees with the Avg column next to it. Under FLEX
+ * every man keeps his OWN position's rank — there is no such thing as a FLEX2,
+ * because the rank says how deep this squad is at a position and the button
+ * only decides which rows you can see.
+ *
+ * Only men on the roster in the SELECTED week are ranked. A depth chart is a
+ * statement about the squad you have; someone dropped in week 3 is in the table
+ * to explain week 3's lineup and is not this manager's RB2 today.
+ */
+function starterRows(team, weeks, index, starters) {
+  const onRosterNow = new Set(
+    ((team && team.players) || []).map((p) => p.playerId)
+  );
+
+  const rows = positionPool(team, weeks)
+    .map((p) => {
+      const values = weeks.map((w) => seasonValue(index, w, p.playerId));
+      const real = values.filter((v) => typeof v === 'number');
+      const startsIn = weeks.filter((w) => {
+        const wk = starters.get(w);
+        return wk && wk.has(p.playerId);
+      });
+      return {
+        p,
+        values,
+        held: onRosterNow.has(p.playerId),
+        avg: real.length ? round1(real.reduce((a, b) => a + b, 0) / real.length) : null,
+        // Out of the weeks actually READ, never out of all of them: a squad
+        // half-loaded would otherwise look like a squad half-benched.
+        starts: startsIn.length,
+        decided: weeks.filter((w) => starters.has(w)).length,
+      };
+    })
+    // A man off the roster earns his row by having FILLED a slot, and by
+    // nothing else. That is the entire reason the pool is a union — to give
+    // every shaded cell somewhere to sit — so a departed player who never
+    // started has no mark to explain and is only clutter. Left in, the sample
+    // league's running backs ran to fourteen rows, nine of them men Tim no
+    // longer holds and seven of those never in a lineup at all.
+    .filter((row) => row.held || row.starts > 0)
+    .sort((a, b) => (b.avg ?? -Infinity) - (a.avg ?? -Infinity) || a.p.playerId - b.p.playerId);
+
+  // Depth rank, per real position, over the men actually held right now.
+  const seen = new Map();
+  for (const row of rows) {
+    const posIndex = STARTER_POSITIONS.indexOf(row.p.position);
+    if (row.held) {
+      const n = (seen.get(row.p.position) || 0) + 1;
+      seen.set(row.p.position, n);
+      row.depth = `${row.p.position === 'DST' ? 'DEF' : row.p.position}${n}`;
+      row.depthValue = posIndex * 100 + n;
+    } else {
+      row.depth = '—';
+      // Nulls-last INSIDE the position group, which is the only place it can
+      // go: his position is known and only his rank is absent. Dropping the
+      // data-v instead would let sortable.js fall back to the cell text, and
+      // "—" would lead the column. Same trick, and the same trap, as the Taken
+      // table's unranked players.
+      row.depthValue = posIndex * 100 + 99;
+    }
+  }
+  return rows;
+}
+
+function renderStartersHead(weeks) {
+  const cols = weeks
+    .map((w) => {
+      const failed = state.seasonFailed.has(w);
+      const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '']
+        .filter(Boolean).join(' ');
+      const title = failed
+        ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
+        : `ESPN’s projected points for week ${w}, and whether he starts.`;
+      return `<th data-sort class="${cls}" title="${title}">${w}</th>`;
+    })
+    .join('');
+
+  $('startersTable').querySelector('thead').innerHTML =
+    `<tr>
+       <th class="left" data-sort title="How deep he is at his own position on this squad, by the Avg beside it.">Depth</th>
+       <th class="name" data-sort>Player</th>
+       <th class="left" data-sort>Pos</th>
+       <th class="left" data-sort>NFL</th>
+       <th class="grouped" data-sort title="The mean of the week columns that carry a number. A bye counts as the zero ESPN returns; a week he is not on the roster for is left out.">Avg</th>
+       <th data-sort title="How many of the weeks read he is in the best legal lineup for.">Starts</th>
+       ${cols}
+     </tr>`;
+}
+
+function renderStarters() {
+  const table = $('startersTable');
+  const tbody = bodyOf(table);
+  const team = currentTeam();
+  const weeks = state.weeks.slice();
+  const label = state.startersPos === 'DST' ? 'DEF' : state.startersPos;
+
+  $('startersTitle').textContent = team
+    ? `Who to start, week by week · ${team.name} · ${label}`
+    : 'Who to start, week by week';
+
+  setStarterToggle();
+  renderStartersHead(weeks);
+
+  const slots = leagueSlots();
+  const index = team ? seasonIndex(team.id) : new Map();
+  const starters = team ? weeklyStarters(team.id, slots) : new Map();
+  const rows = starterRows(team, weeks, index, starters);
+
+  const show = rows.length > 0 && weeks.length > 0;
+  $('startersWrap').classList.toggle('hidden', !show);
+  $('startersEmpty').classList.toggle('hidden', show);
+  tbody.innerHTML = '';
+
+  if (!show) {
+    $('startersEmpty').textContent = startersEmptyReason(team, weeks, label);
+    $('startersNote').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = rows
+    .map((row) => {
+      const p = row.p;
+      const cells = row.values
+        .map((v, i) => {
+          const week = weeks[i];
+          const slotId = starters.has(week) ? starters.get(week).get(p.playerId) : undefined;
+          const start =
+            slotId === undefined ? null : { slotId, flex: FLEX_SLOTS.has(slotId) };
+          return seasonCell(v, week, p.name, week === state.week, start);
+        })
+        .join('');
+
+      const cls = [row.starts === 0 ? 'never' : '', row.held ? '' : 'gone']
+        .filter(Boolean).join(' ');
+      const who = row.held
+        ? `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam}`
+        : `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam} — not on this ` +
+          `roster in week ${state.week}. He is here because he filled a lineup spot in one of the ` +
+          `weeks shown, and a marked week with no row to put it on would read as an empty slot.`;
+
+      return `
+      <tr class="${cls}">
+        <td class="left" data-v="${row.depthValue}"><span class="depth-tag${row.held ? '' : ' muted'}">${esc(row.depth)}</span></td>
+        <td class="name" title="${esc(who)}">${
+          playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}</td>
+        <td class="left">${esc(p.position === 'DST' ? 'DEF' : p.position)}</td>
+        <td class="left">${esc(p.proTeam)}</td>
+        <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`}>${fmt(row.avg)}</td>
+        <td class="starts" data-v="${row.starts}">${row.starts}</td>
+        ${cells}
+      </tr>`;
+    })
+    .join('');
+
+  renderStartersNote(weeks, rows, slots, label, unidentifiedCount(team, weeks));
+  resort(table);
+}
+
+/** Which button is lit, decided by the code rather than by the last click. */
+function setStarterToggle() {
+  $('starterPosToggle')
+    .querySelectorAll('button')
+    .forEach((b) => b.classList.toggle('on', b.dataset.pos === state.startersPos));
+}
+
+function startersEmptyReason(team, weeks, label) {
+  if (!weeks.length) {
+    return 'No weeks came back for this season, so there is nothing to lay out across the top.';
+  }
+  if (!team) return 'Pick a team above to see who it should start.';
+  return `${team.name} has nobody at ${label} in week ${state.week}, so there is no depth chart ` +
+    `to follow. Try another position.`;
+}
+
+function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
+  const decided = rows.length ? rows[0].decided : 0;
+  const pending = weeks.length - decided;
+
+  // How many of this position the league actually starts, said out loud,
+  // because "why are two of my three receivers green" is the first question.
+  const dedicated = (slots || []).filter((id) => {
+    const el = espn.SLOT_ELIGIBILITY[id];
+    return el && el.length === 1 && el[0] === state.startersPos;
+  }).length;
+  const flexes = (slots || []).filter((id) => FLEX_SLOTS.has(id)).length;
+
+  const shape =
+    state.startersPos === 'FLEX'
+      ? `This league starts <strong>${plural(flexes, 'flex')}</strong>, and everyone here is eligible for one.`
+      : dedicated
+        ? `This league starts <strong>${plural(dedicated, label)}</strong>` +
+          (flexes && FLEX_ELIGIBLE.includes(state.startersPos)
+            ? `, plus ${plural(flexes, 'flex')} anyone here can fill.`
+            : '.')
+        : `This league has no dedicated ${label} slot.`;
+
+  const covered = rows.filter((r) => r.starts > 0 && r.starts < decided).length;
+  const gone = rows.filter((r) => !r.held).length;
+
+  $('startersNote').innerHTML =
+    `One position at a time, deepest first. A <strong class="key-st">shaded, bold</strong> number is a week ` +
+    `this man is in the <strong>best legal lineup</strong> that team could field — the same rule the ` +
+    `grids at the top of the page use, run once per week on that week&rsquo;s own projections. ` +
+    `A <strong>F</strong> beside it means he only gets in through the <strong>flex</strong>. ` +
+    `${shape} ` +
+    `<br>` +
+    `<strong>Read along a row</strong> to see a starter&rsquo;s soft weeks and his bye; ` +
+    `<strong>read down a column</strong> to see who covers them. A cell reading <strong>Bye</strong> is ` +
+    `the 0.00 ESPN returns for a player whose NFL team is off that week, which is exactly when the mark ` +
+    `moves to somebody else &mdash; ` +
+    (covered
+      ? `<strong>${plural(covered, 'man')}</strong> here starts some weeks and not others, which is the ` +
+        `bench doing its job.`
+      : `nobody here starts some weeks and not others, so this position needs no cover over these weeks.`) +
+    `<br>` +
+    `<br>` +
+    `<strong>Depth</strong> and <strong>Avg</strong> are ours, not ESPN&rsquo;s: the order is each ` +
+    `man&rsquo;s mean over the weeks shown, not the slot his manager has him parked in today. ` +
+    (gone
+      ? `<strong>${plural(gone, 'player')}</strong> here ${gone === 1 ? 'is' : 'are'} <em>italic</em> and ` +
+        `ranked &ldquo;&mdash;&rdquo;: not on this roster in week ${state.week}, but ${gone === 1 ? 'he' : 'they'} ` +
+        `filled a lineup spot in one of the weeks shown, and a shaded week with no row to sit on would ` +
+        `read as a slot going empty. `
+      : '') +
+    `<strong>Starts</strong> counts the weeks actually read from ESPN` +
+    (pending > 0 ? ` — <strong>${plural(pending, 'week')}</strong> still loading, so it will rise.` : '.') +
+    ` The swaps in the Roster detail above are a what-if for one week and are deliberately not ` +
+    `applied here. Every name is a link to that man&rsquo;s next 13 weeks on the ` +
+    `<a href="waivers.html">Players</a> page.` +
+    (unidentified
+      ? ` <br><strong>${plural(unidentified, label)}</strong> at this position came back from ESPN ` +
+        `with no player id, so ${unidentified === 1 ? 'he is' : 'they are'} left out of both the table ` +
+        `and the lineups above &mdash; there is nothing to say the man in one week is the man in the ` +
+        `next, and a shaded week with no row to sit on would read as a slot going empty.`
+      : '');
 }
 
 /** An empty table says why it is empty and what to do about it. */
@@ -1816,6 +2247,20 @@ enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
 // anyone who wants the other question answered.
 enableSort($('seasonTable'), { defaultIndex: 0, defaultAsc: true });
 
+// "Who to start" opens on Depth — RB1, RB2, RB3 — because a depth chart read
+// out of order is not a depth chart. Ascending, so the starter is at the top.
+enableSort($('startersTable'), { defaultIndex: 0, defaultAsc: true });
+
+$('starterPosToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-pos]');
+  if (!btn || btn.dataset.pos === state.startersPos) return;
+  state.startersPos = btn.dataset.pos;
+  prefs.set('startersPos', state.startersPos);
+  // A repaint and nothing else. Every week is already in the cache and every
+  // team is in every week, so changing position can never cost a request.
+  renderStarters();
+});
+
 // ------------------------------------------------------------------- start up
 
 const boot = savedConfig();
@@ -1823,6 +2268,13 @@ if (boot && boot.teamId != null) state.myTeamId = Number(boot.teamId);
 
 const rememberedTeam = prefs.get('team', null);
 if (rememberedTeam !== null) state.teamId = rememberedTeam;
+
+// A saved position that is no longer one of the buttons falls back rather than
+// wedging the panel on a filter with nothing lit.
+const rememberedPos = prefs.get('startersPos', null);
+if (STARTER_POSITIONS.includes(rememberedPos) || rememberedPos === 'FLEX') {
+  state.startersPos = rememberedPos;
+}
 
 const rememberedWeek = prefs.get('week', null);
 if (rememberedWeek !== null) state.week = rememberedWeek;
