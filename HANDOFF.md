@@ -91,9 +91,9 @@ Everything Tim has asked for is built and live:
 |---|---|
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
 | `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played |
-| `analysis.html` | All ten teams' lineups at once; a per-team drill-down; and "Season by week" — a whole squad against every week |
+| `analysis.html` | All ten teams' lineups at once; a per-team drill-down whose lineup you can swap around to see what it would score; and "Season by week" — a whole squad against every week |
 | `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, and a Monte Carlo season simulation |
-| `waivers.html` | "Add players" — the wire priced by week, with your own worst man at each position dropped into the same list |
+| `waivers.html` | "Add players" — the wire priced by week, with your own worst man at each position dropped into the same list and every week that beats him shaded |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
 
@@ -106,7 +106,7 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — around 900 assertions. They are in the
+`cd tests && npm install && npm test` — around 1,100 assertions. They are in the
 repo now; earlier sessions kept them in a temp directory and lost them each
 time. **Run them before and after any change**, and see `tests/README.md` for
 the two linkedom gotchas that otherwise waste an hour.
@@ -134,7 +134,9 @@ there instead of in Tim's browser.
 - **Writes to ESPN** (set lineup, add/drop, propose trade) are a later phase he
   has asked about. They must go behind a popup confirmation or a popup-issued
   nonce, **never the open page bridge** — any page on the origin could otherwise
-  drop players. See "The bridge & writes" in `PROGRESS.md`.
+  drop players. See "The bridge & writes" in `PROGRESS.md`. The roster detail's
+  swap is the obvious first candidate — it already builds a legal lineup — but
+  it is a what-if today and the page says so; do not quietly wire it up.
 - The drafter's `TUNING` numbers are placeholders standing in for answers he has
   not given, and the score-differential curve has a rationale he has promised
   and not yet explained. Reproduce it; do not simplify it.

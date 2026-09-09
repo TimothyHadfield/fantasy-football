@@ -139,6 +139,26 @@ your own bench is a different question) and never counted on the position
 buttons (you cannot add a player you hold). This doubles the per-week cost —
 the wire AND your roster — so rosters are fetched only when a team is set.
 
+**The second green on the wire (`td.beats`).** A wire cell is also shaded when
+that player out-projects your own worst man at his position **in that week
+specifically** — the number on the `Your RB5` row, same column. That is the
+question a claim actually asks, and Tim asked for it in those words. Two rules,
+two cues, deliberately not two shades of one colour:
+
+| Cue | Class | Means |
+|---|---|---|
+| Green text, bold | `hot` | over the `STARTABLE` bar — worth starting at all |
+| Green shading | `beats` | ahead of the man this claim would drop, that week |
+
+A cell can carry both, neither, or one. **Do not merge them into one class**:
+they answer different questions, and the split is also what keeps them apart
+for anyone who cannot separate green from grey. Strictly ahead — level does not
+count — and a bye is never shaded, because 0.00 beats nobody. The comparison
+map is built from the UNFILTERED `buildMineRows`, so the shading means the same
+thing whichever position button is pressed. `tests/hot-check.mjs` re-derives
+both rules from the rendered DOM and asserts that shaded ≠ all comparable
+cells, so a rule that lit up the whole table would fail rather than pass.
+
 **`analysis.html` has a "Season by week" grid**: a whole squad down the left,
 every week across the right. It reuses the page's existing team picker rather
 than adding a second one, and switching team costs **no** requests, because
@@ -146,6 +166,37 @@ every team is in every week's payload. **Deliberately uncoloured** — Tim's
 call, and the note says why: everyone there is already rostered, so the waiver
 bars would light up nearly every cell and mean nothing. If colour ever comes to
 it, it needs a different scheme.
+
+**The roster detail is a lineup you can move (`analysis.html`).** The table is
+split in three `<tbody>`s — starters, a band, the bench — and the band carries
+the starters' projected total, in the Projected column it is the total of.
+Clicking a slot tag picks that player up; clicking another's swaps the two and
+the total moves, with the difference from ESPN's own lineup beside it.
+
+- **It is a what-if and nothing else.** No write ever leaves this page. The
+  overrides live in `state.lineup` (only the slots that DIFFER from ESPN's, so
+  `size > 0` IS "edited" and swapping a man back removes him rather than
+  recording a change that is not one) and `lineupKeyNow()` throws them away the
+  moment the team, week or league changes. Writes are a later phase and go
+  behind the popup — see "The bridge & writes".
+- **Eligibility is ESPN's own `SLOT_ELIGIBILITY`.** Both directions must hold:
+  each man legal where the other stands. Bench-for-bench is refused (it changes
+  nothing) and **IR is not a lineup choice** — that tag stays a label. Illegal
+  targets are disabled in the markup AND refused by `applySwap`, which does not
+  trust the markup it just wrote.
+- **`sortable.js` now sorts every `<tbody>`, each independently.** That is what
+  makes the grouping survive a sort: sort by Projected and you get the starters
+  ranked and then the bench ranked, rather than the two shuffled together and
+  the total stranded among them. A body of one row is left alone, which pins
+  the band. Every other table on the site has exactly one body, so nothing else
+  changed.
+- **`rosterView(team)` is the one lineup**, shared by the roster detail and the
+  season grid, so the two panels can never disagree about who is starting. The
+  glance stats are totalled from it rather than taken from ESPN's team totals,
+  so they move with a swap — and with nothing swapped they use season.js's own
+  rule and come out identical to the decimal. `Baseline week` and `Est Total`
+  deliberately do NOT move: they are the best seven by season average and never
+  depended on how the lineup was set. The note says so when a swap is live.
 
 **Schedule luck (`opponentProjections`, panel + column on `stats.html`).**
 The average projected score of the opponents a team has to play. It needs no
@@ -599,6 +650,7 @@ Pages (all default to demo data; real data arrives via the bridge):
   roster strength, standings, injured starters, points left on the bench
 - `stats.html` — season stats, the rebuild of Tim's sheet
 - `analysis.html` — all ten teams' lineups at once, plus a per-team drill-down
+  whose lineup you can move around to see what it would score
 - `schedule.html` — standings, matchups, results, fixture / head-to-head grid
 - `waivers.html` — "Add players": everyone not on a roster, in a table whose
   columns are week numbers and whose cells are ESPN's projection for that
@@ -654,6 +706,12 @@ rather than alphabetically. Missing values sort to the bottom in both
 directions. Clicks are delegated from the table element, so a table may rewrite
 its own `<thead>` freely; after re-rendering rows, call `resort(table)`.
 
+**Every `<tbody>` is sorted, and each one independently.** Nearly every table
+has one, so for those this is what it always was. Several bodies is how a table
+keeps groups apart under a sort — the roster detail is starters, a totals band,
+then the bench — and a body of one row is left where it is, which is what pins
+a band in place.
+
 ## Testing
 
 **The suites are in `tests/` now. Run them with `cd tests && npm install &&
@@ -691,6 +749,8 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
+| `an-test.mjs` | the analysis page end to end — 211 assertions over 5 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, and the roster detail's split + swap). The swap scenario checks the arithmetic by hand: 165.6 for the stub's starters, 158.6 after trading a 20.4 out for a 13.4, and a −7.0 beside it |
+| `hot-check.mjs` | both greens on the Add players table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
 All green as of 2026-09-09: extension 38, bridge 34, draft-model 44, draft-sim
 36, practice 99, autostart 10, draft-render 107, recovered 116, plus the
