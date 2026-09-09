@@ -33,6 +33,7 @@ const SUITES = [
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
+  ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
 ];
 

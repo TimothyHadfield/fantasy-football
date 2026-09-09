@@ -176,12 +176,64 @@ more rows in the first.
   cell text, so a bare "TE" compares as the string `"te"` against numbers and
   *leads* the column descending. His Avg, which really is absent, still carries
   no `data-v` at all.
-- **Groundwork only:** every player row in both tables carries `data-player` and
-  the wire/taken rows carry `id="p{playerId}"`, so a later "click a player, jump
-  to him" feature is cheap. Comparison rows get `data-player` but no `id` — they
+- **Every player row carries `data-player`**, and the wire and taken rows carry
+  `id="p{playerId}"`. Comparison rows get the data attribute but no `id` — they
   are a second appearance of a man who already has a row in the taken table, and
-  duplicate element ids are not a document. **The click-through is deliberately
-  not built**; Tim described it as a follow-on and has not specified it.
+  duplicate element ids are not a document.
+
+**A position filter PER TABLE, and one span for both.** Tim asked to sort the
+two tables independently; sorting already was (each table has its own state and
+its own sticky header), so what he was actually reaching for was the controls —
+the taken panel had none of its own, so narrowing it meant scrolling up past a
+hundred free agents to a control in the other panel, which then dragged the wire
+along with it. Now:
+
+- **Position is per table**, with counts that are each table's own (how many the
+  league is holding vs how many you could add). Filtering is a repaint, never a
+  request, so there is no reason to share one.
+- **The span is ONE setting shown at both ends of the page.** It is the request
+  budget and both tables are priced over the same weeks, so two independent
+  spans would be two costs to spend and could disagree about which columns
+  exist. `setCost()` writes the same line under both copies.
+
+**The player click-through (`waivers.html?player=<espnPlayerId>`).** Every page
+that names a player links to his row here, by one contract:
+
+    <a class="pref" href="waivers.html?player=<espnPlayerId>">…</a>
+
+- **A real `href`, never a click handler**, so middle-click and open-in-new-tab
+  work. On the Players page itself the plain left click is intercepted and
+  answered without a reload — everything needed is already cached — while every
+  modified click is left to the browser.
+- Landing **widens the span to the rest of the season** (that is what "his next
+  13 weeks" means — the span decides how many columns exist), **puts the table
+  he is in on his position**, and marks and scrolls to his row. A strip says who
+  and offers a Clear.
+- **The span is not persisted by a jump.** Answering a link is not a change of
+  mind about the setting; a reload gives back the span actually chosen.
+- An id nobody holds says so rather than failing silently.
+- `playerId` is ESPN's own and nothing else identifies a player. Never a name,
+  never a row index — a grid cell is a bare number, so a link wired to the wrong
+  row would look perfectly fine on the page.
+
+**The taken table's membership is the UNION over every week on screen**, and
+this was a real bug found by `link-check.mjs` rather than by review. It used to
+be the earliest week alone, which is right about the OWNER and wrong about who
+belongs in the table: the columns span weeks 4–6, so a man rostered in week 5 is
+part of what the table is about. It also broke the click-through — the analysis
+page can be pointed at any week, and **45 of the demo's 160 men differ between
+week 4 and week 13**, so a quarter of its links arrived here about a man the
+table had never heard of and were told he "may have been dropped". A confident,
+wrong answer. The owner is still the earliest week he actually appears in.
+
+**The analysis grids' hover carries the whole season.** Identity line, then that
+man's per-week projection run in week order, five to a line. Built from
+`state.seasonWeeks` — the data the "Season by week" panel already pays for —
+so it **adds no request**, which matters because one-request-per-week is that
+page's entire cost model. The grids now repaint once per arriving batch. The
+four no-number states are told apart by word rather than by class, since a
+tooltip has no classes: `Bye`, `—`, `off`, `…`, with a legend line appended only
+for the states that actually occur.
 
 **The second green on the wire (`td.beats`).** A wire cell is also shaded when
 that player out-projects your own worst man at his position **in that week
@@ -825,6 +877,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
+| `link-check.mjs` | **the player click-through ACROSS pages** — 103 assertions. `index.html` and `analysis.html` MAKE links, `waivers.html` RESOLVES them, and no single-page suite can notice when the two halves stop agreeing. It boots each page in its own child process, checks every link against the contract, then FOLLOWS a sample of the ids the source pages actually produced and asserts each lands on exactly that man. It found a real defect the day it was written (see the union rule above), and it exists because the three halves were built by three authors at once against a contract agreed in prose |
 | `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |

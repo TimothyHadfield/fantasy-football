@@ -106,7 +106,7 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — 13 suites, around 1,300 assertions. They are in the
+`cd tests && npm install && npm test` — 14 suites, around 1,600 assertions. They are in the
 repo now; earlier sessions kept them in a temp directory and lost them each
 time. **Run them before and after any change**, and see `tests/README.md` for
 the two linkedom gotchas that otherwise waste an hour.
@@ -114,6 +114,12 @@ the two linkedom gotchas that otherwise waste an hour.
 The one that catches most: `test-pages-render.mjs` boots every page's real HTML
 with its real modules, so a missing element id or a typo in a selector fails
 there instead of in Tim's browser.
+
+The one that catches what nothing else can: `link-check.mjs` tests the SEAM
+between pages — one page makes a player link, another resolves it. Every
+per-page suite passed while a quarter of the analysis page's links landed on
+"he may have been dropped". **If you add a page that names players, add it to
+that suite's `SOURCES`.**
 
 ## What is genuinely open
 
@@ -137,6 +143,10 @@ there instead of in Tim's browser.
   drop players. See "The bridge & writes" in `PROGRESS.md`. The roster detail's
   swap is the obvious first candidate — it already builds a legal lineup — but
   it is a what-if today and the page says so; do not quietly wire it up.
+- **The click-through is built.** Every page that names a player links to
+  `waivers.html?player=<espnPlayerId>` with `class="pref"`, as a real `<a href>`
+  so middle-click works. Keep that one contract: a second way of naming a player
+  is how the two halves drift apart.
 - The drafter's `TUNING` numbers are placeholders standing in for answers he has
   not given, and the score-differential curve has a rationale he has promised
   and not yet explained. Reproduce it; do not simplify it.
