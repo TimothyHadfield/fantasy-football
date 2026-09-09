@@ -159,6 +159,37 @@ thing whichever position button is pressed. `tests/hot-check.mjs` re-derives
 both rules from the rendered DOM and asserts that shaded ≠ all comparable
 cells, so a rule that lit up the whole table would fail rather than pass.
 
+**The two all-teams grids (`analysis.html`).** The same table twice over, one
+row per team: nine lineup spots, what those nine total, then the bench. The
+only difference between them is the measure — a typical week in the first
+(ESPN's season projection ÷ 17), the week selected at the top of the page in
+the second — so `renderGrid` builds both from one `GRIDS` entry each and the
+comparison is reading straight down the page. Tim's spec, 2026-09-09, and every
+part of it was a deliberate replacement of something:
+
+| Was | Is | Why |
+|---|---|---|
+| "All teams · week 1" | "All teams · proj avg 2026" | the numbers were never that week's; the heading said they were |
+| Name + number per cell | number only | a name is the widest thing that could be in the cell and the least useful for comparing two teams. Names are on hover and in full below |
+| No D/ST, no K | `DEF` and `K` columns | they were a flat 16-point allowance; now they are two more real men |
+| `Baseline week` + `Est Total` | `Total` | nine actual men added up, not seven plus an estimate |
+| — | `B1…Bn` | the bench, best first. As many columns as the DEEPEST bench in the league, so every row is the same shape |
+| `Wk proj` + `Wk actual` columns | the second grid | two columns could not carry a week; a whole table can |
+
+Two rules inside it that are easy to get wrong:
+- **A bench column cannot be headed by a position** — every team's bench is a
+  different shape — so the position rides in the cell (`12.3 RB`). The nine
+  lineup columns deliberately do NOT repeat it: their header already says it.
+- **Only a WEEK's zero is a bye.** `byeAtZero` is a property of the grid, not
+  of the value: a season average of 0.00 is a man ESPN projects nothing for all
+  year, which is a different fact, and demo means something else again (a
+  player it has ruled out). The season grid never prints "Bye".
+
+The week grid **re-picks the lineup on that week's numbers**, so a squad's FLEX
+can be a different man than in the average grid — that is the point of having
+both, and the note says so. A man on bye sorts to the bottom of his position
+and lands in the FLEX, which reads correctly.
+
 **`analysis.html` has a "Season by week" grid**: a whole squad down the left,
 every week across the right. It reuses the page's existing team picker rather
 than adding a second one, and switching team costs **no** requests, because
@@ -749,7 +780,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
-| `an-test.mjs` | the analysis page end to end — 211 assertions over 5 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, and the roster detail's split + swap). The swap scenario checks the arithmetic by hand: 165.6 for the stub's starters, 158.6 after trading a 20.4 out for a 13.4, and a −7.0 beside it |
+| `an-test.mjs` | the analysis page end to end — 270 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Add players table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
 All green as of 2026-09-09: extension 38, bridge 34, draft-model 44, draft-sim

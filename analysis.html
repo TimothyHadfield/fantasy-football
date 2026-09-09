@@ -105,11 +105,30 @@
 
   /* ---------------------------------------------------------- all-teams grid */
 
-  /* Ten rows by seven positions is the whole point of this page, so the grid
-     cells are tuned for scanning: name left, average right, nothing wrapping. */
-  #overviewTable td.slot-cell { padding-right: 12px; }
-  .slot-cell .pa { color: var(--dim); font-size: 12px; margin-left: 7px; }
-  .slot-cell.is-flex .pn { font-weight: 700; }
+  /* Ten rows by nine spots plus a whole bench is a wide table, so the cells are
+     tuned to be scanned down a column rather than read across: numbers only,
+     right-aligned like every other figure on the site, nothing wrapping.
+
+     The names are gone on purpose. A name is the widest thing that could be in
+     one of these cells while being the thing you least need in order to compare
+     two teams — it is on hover, and the roster detail below names everybody. */
+  table.grid th, table.grid td { white-space: nowrap; }
+  table.grid td.slot-cell { font-variant-numeric: tabular-nums; }
+  /* The position beside a bench number. A bench column cannot be headed by one
+     — every team's bench is a different shape — so it rides in the cell, and
+     stays quieter than the number it is labelling. */
+  .slot-cell .pp {
+    color: var(--dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    margin-left: 4px;
+  }
+  /* The one column that ranks the teams. */
+  table.grid td.grid-total { font-weight: 700; }
+  /* ESPN's 0.00 for a player whose NFL team is off that week. Printing "0.0"
+     would read as a projection of nothing rather than as no game at all. */
+  table.grid td.bye { color: var(--warn); font-size: 11.5px; letter-spacing: 0.04em; }
   #rosterTable td.name.is-flex { font-weight: 750; }
 
   /* His sheet's colour key: red = out this week, dark red = on IR. Two tiers,
@@ -118,10 +137,10 @@
 
      Written long-hand because row hover, the picked row and the sticky team
      column all paint their own backgrounds; an injury has to beat all three. */
-  #overviewTable tbody tr td.st-out,
-  #overviewTable tbody tr:hover td.st-out { background: #3a171c; }
-  #overviewTable tbody tr td.st-ir,
-  #overviewTable tbody tr:hover td.st-ir { background: #56141e; }
+  table.grid tbody tr td.st-out,
+  table.grid tbody tr:hover td.st-out { background: #3a171c; }
+  table.grid tbody tr td.st-ir,
+  table.grid tbody tr:hover td.st-ir { background: #56141e; }
 
   #rosterTable tbody tr.st-out td, #rosterTable tbody tr.st-out td.name { background: #3a171c; }
   #rosterTable tbody tr.st-ir td,  #rosterTable tbody tr.st-ir td.name  { background: #56141e; }
@@ -132,9 +151,9 @@
 
   /* "Currently drilled into" — deliberately NOT .me, which means "your team"
      in green everywhere else on the site and would claim a demo team is yours. */
-  #overviewTable tbody tr[data-team] { cursor: pointer; }
-  #overviewTable tbody tr.picked td { background: var(--panel-2); }
-  #overviewTable tbody tr.picked td.name {
+  table.grid tbody tr[data-team] { cursor: pointer; }
+  table.grid tbody tr.picked td { background: var(--panel-2); }
+  table.grid tbody tr.picked td.name {
     background: var(--panel-2);
     box-shadow: inset 3px 0 0 var(--good);
   }
@@ -157,7 +176,7 @@
   #seasonTable td.avg { font-weight: 650; color: var(--text); }
 
   /* Deliberately NO value colouring in this table. Every player in it is
-     already rostered, so a per-position bar of the kind the Add players page
+     already rostered, so a per-position bar of the kind the Players page
      uses would light up nearly every cell and mean nothing. The three ways of
      having no number are told apart by TEXT and WEIGHT only. */
 
@@ -205,7 +224,7 @@
       <a href="stats.html">Stats</a>
       <a href="analysis.html" class="active">Analysis</a>
       <a href="schedule.html">Schedule</a>
-      <a href="waivers.html">Add players</a>
+      <a href="waivers.html">Players</a>
       <a href="draft.html">Draft</a>
     </nav>
   </div>
@@ -238,36 +257,44 @@
 
   <section class="panel">
     <h2 id="overviewTitle">All teams</h2>
-    <div class="table-scroll" id="overviewWrap"><table id="overviewTable">
-      <thead><tr>
-        <th class="name" data-sort>Team</th>
-        <th class="left" data-sort>QB</th>
-        <th class="left" data-sort>RB1</th>
-        <th class="left" data-sort>RB2</th>
-        <th class="left" data-sort>WR1</th>
-        <th class="left" data-sort>WR2</th>
-        <th class="left" data-sort>TE</th>
-        <th class="left" data-sort>FLEX</th>
-        <th data-sort>Baseline week</th>
-        <th data-sort>Est Total</th>
-        <th data-sort>Wk proj</th>
-        <th data-sort>Wk actual</th>
-      </tr></thead>
+    <!-- Head rendered by the module: the bench is as many columns as the
+         deepest bench in the league, so it cannot be written here. -->
+    <div class="table-scroll" id="overviewWrap"><table id="overviewTable" class="grid">
+      <thead><tr></tr></thead>
       <tbody></tbody>
     </table></div>
     <div class="empty hidden" id="overviewEmpty">No roster data for this week.</div>
     <p class="panel-note">
-      Each starter is shown with his <strong>season average</strong> &mdash; ESPN&rsquo;s full-season projection
-      divided by 17 games &mdash; so these are typical weeks, not this week&rsquo;s forecast.
-      <strong>FLEX</strong> is the best remaining RB, WR or TE by that average; never a QB.
-      <strong>Baseline week</strong> is those seven added up: what the lineup scores if everyone hits his average.
-      <strong>Est Total</strong> = Baseline week + 16, a flat allowance for the D/ST and kicker at about 8 each.
-      They are left out of the grid because they are consistent and get streamed constantly.
-      The last two columns are this week specifically: the whole nine-man lineup&rsquo;s projection and what it
-      has actually scored so far, D/ST and kicker included.
+      Every number here is a <strong>typical week</strong>: ESPN&rsquo;s full-season projection divided by
+      17 games. Nobody&rsquo;s week is in this table &mdash; the grid below is.
+      The nine columns are the best lineup that squad could field, chosen by that average rather than by
+      where the manager has parked people; <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB.
+      <strong>Total</strong> is those nine added up &mdash; nine real men, not an estimate.
+      <strong>B1&hellip;</strong> are the bench, best first, with each man&rsquo;s position in the cell because
+      every bench is a different shape.
       <br>
-      <strong>Bold</strong> = the flex player. <span class="key out">Out</span> this week.
-      <span class="key ir">IR</span>. Click a row to load that team below; click any header to sort.
+      Names are on hover, and in full in the roster detail below.
+      <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
+      Click a row to load that team below; click any header to sort.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2 id="weeklyTitle">All teams &middot; this week</h2>
+    <div class="table-scroll" id="weeklyWrap"><table id="weeklyTable" class="grid">
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="empty hidden" id="weeklyEmpty">No roster data for this week.</div>
+    <p class="panel-note">
+      The same table again, measured on <strong>ESPN&rsquo;s projection for the week selected at the top of
+      the page</strong> instead of on the season average &mdash; so read the two straight down to see who is
+      better this week than they usually are.
+      The lineup is re-picked on that week&rsquo;s numbers, so a squad&rsquo;s FLEX can be a different man here
+      than it is above.
+      A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is off that
+      week, which is not the same as having no number at all.
+      <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
     </p>
   </section>
 

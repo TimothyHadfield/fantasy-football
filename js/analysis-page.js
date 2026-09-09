@@ -1,12 +1,17 @@
-// Roster analysis: every manager's starting lineup, side by side, one week at a
-// time.
+// Roster analysis: every manager's squad, side by side.
 //
-// The top table is the point of the page. The owner's standing request is to see
-// the most important information for ALL teams at once, and until now this page
-// showed ten rows of totals plus exactly ONE team's actual players — so working
-// out who is thin at running back meant clicking through ten teams and holding
-// it in your head. The grid puts all ten starting sevens on one screen and lets
-// the per-team detail below be a drill-down instead of the only view.
+// The two grids at the top are the point of the page. The owner's standing
+// request is to see the most important information for ALL teams at once, and
+// this page once showed ten rows of totals plus exactly ONE team's actual
+// players — so working out who was thin at running back meant clicking through
+// ten managers and holding it in your head. The grids put all ten squads on one
+// screen, whole: nine lineup spots, what they total, and the bench behind them.
+//
+// They are the SAME table twice over, measured two ways — a typical week in the
+// first, the week selected at the top of the page in the second — so the
+// comparison a manager actually wants ("is this team better now than it usually
+// is?") is reading straight down the page rather than holding two numbers in
+// your head. Everything below them is a drill-down.
 //
 // Rosters move week to week — trades, waivers, injuries — so the week selector
 // stays the primary control. Everything else re-renders from whatever is picked.
@@ -27,10 +32,10 @@ const NFL_WEEKS = 18; // only used when ESPN won't tell us its own schedule
 // what turns a ~2,500-point number into the ~15-point one a manager thinks in.
 const SEASON_GAMES = 17;
 
-// The flat D/ST + kicker allowance behind "Est Total". Both sit around 8 points
-// a week and both get dropped and streamed constantly, so naming players in the
-// grid would be churn for no insight — the allowance is the honest version.
-const KDST_ALLOWANCE = 16;
+// The D/ST and the kicker used to be a flat 16-point allowance on top of a
+// seven-man baseline, on the grounds that both get streamed constantly and
+// naming them would be churn. They are real columns now — Tim's call — so the
+// grid totals nine actual men and there is no allowance to add.
 
 const state = {
   source: 'demo',
@@ -91,13 +96,6 @@ const round1 = (n) => Math.round(n * 10) / 10;
 function diff(actual, projected) {
   if (typeof actual !== 'number' || typeof projected !== 'number') return null;
   return round1(actual - projected);
-}
-
-/** "Dane Ashworth" -> "D. Ashworth". Seven names per row need the room. */
-function shortName(name) {
-  const parts = String(name).trim().split(/\s+/);
-  if (parts.length < 2 || !parts[0]) return String(name);
-  return `${parts[0][0]}. ${parts.slice(1).join(' ')}`;
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -171,11 +169,21 @@ function injuryCell(status) {
   return `<td class="left" data-v="${esc(label)}"><span class="${cls}">${esc(label)}</span></td>`;
 }
 
-// -------------------------------------------------------------- the team grid
+// -------------------------------------------------------------- the team grids
+//
+// Two tables of the same shape, one row per team: nine lineup spots, what those
+// nine total, and then the bench behind them. The only difference between the
+// two is the number in every cell — a typical week in one, the week selected at
+// the top of the page in the other — so they are built by one renderer handed a
+// different MEASURE, and comparing them is reading straight down the page.
+//
+// NO NAMES in the cells. Ten teams across nine spots plus a bench is a wide
+// table, and a name is the widest thing that could be in a cell while being the
+// thing you least need to compare two teams. Every name is on hover, and the
+// roster detail below names everybody.
 
-// One row per team, one column per lineup spot. No D/ST and no kicker: the
-// owner keeps them out because they are interchangeable, and their contribution
-// is carried by the flat allowance in Est Total instead.
+// The nine spots. D/ST and the kicker are real columns now rather than a flat
+// allowance, so the total is nine actual men.
 const GRID_SLOTS = [
   { key: 'QB', eligible: ['QB'] },
   { key: 'RB1', eligible: ['RB'] },
@@ -185,6 +193,8 @@ const GRID_SLOTS = [
   { key: 'TE', eligible: ['TE'] },
   // Best of what is left, and RB/WR/TE only — a superflex QB is not a flex.
   { key: 'FLEX', eligible: ['RB', 'WR', 'TE'] },
+  { key: 'DEF', eligible: ['DST'] },
+  { key: 'K', eligible: ['K'] },
 ];
 
 /**
@@ -201,20 +211,27 @@ function avgWeek(p) {
   return typeof p.projected === 'number' ? round1(p.projected) : null;
 }
 
+/** This week's own projection, which is what the second grid is made of. */
+function weekProj(p) {
+  return typeof p.projected === 'number' ? round1(p.projected) : null;
+}
+
 /**
- * Fill the grid's seven spots for one team.
+ * Fill the grid's nine spots for one team.
  *
- * Chosen by position and average rather than by ESPN's lineupSlotId, because
- * the slot label only says where a manager parked someone. Two RBs in a league
- * with an RB/WR flex land in RB1/RB2 and the flex goes to whoever is genuinely
- * next best, which is the comparison the owner is actually making.
+ * Chosen by position and by the measure rather than by ESPN's lineupSlotId,
+ * because the slot label only says where a manager parked someone. Two RBs in
+ * a league with an RB/WR flex land in RB1/RB2 and the flex goes to whoever is
+ * genuinely next best, which is the comparison the owner is actually making.
+ *
+ * The pool is who the manager has STARTING, not the whole roster: the bench
+ * gets its own columns to the right, and a man cannot be in both.
  */
-function gridLineup(team) {
+function gridLineup(team, measure = avgWeek) {
   const from = team.starters.length ? team.starters : team.players;
   const pool = from
-    .filter((p) => p.position !== 'DST' && p.position !== 'K')
-    .map((p) => ({ p, avg: avgWeek(p) }))
-    .sort((a, b) => (b.avg ?? -Infinity) - (a.avg ?? -Infinity));
+    .map((p) => ({ p, v: measure(p) }))
+    .sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
 
   const used = new Set();
   const row = {};
@@ -227,24 +244,51 @@ function gridLineup(team) {
   return row;
 }
 
-/** What the seven score between them if everyone has an ordinary week. */
-function baselineOf(row) {
-  const vals = GRID_SLOTS.map((s) => row[s.key]?.avg).filter((v) => typeof v === 'number');
+/** The bench behind those nine, best first by the same measure. */
+function benchEntries(team, measure = avgWeek) {
+  return (team.bench || [])
+    .map((p) => ({ p, v: measure(p) }))
+    .sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
+}
+
+/** What the nine score between them. The real sum, not an estimate. */
+function totalOf(row) {
+  const vals = GRID_SLOTS.map((s) => row[s.key] && row[s.key].v).filter((v) => typeof v === 'number');
   return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
 }
 
-function slotCell(entry, isFlex) {
-  if (!entry) return '<td class="left slot-cell muted" data-v="">—</td>';
-  const { p, avg } = entry;
-  const cls = ['left', 'slot-cell'];
+/**
+ * One cell.
+ *
+ * `withPosition` is what the bench columns use. A bench column cannot be headed
+ * by a position the way a lineup spot can — every team's bench is a different
+ * shape — so the position rides next to the number instead. The lineup columns
+ * do not repeat it, because their header already says it.
+ */
+function gridCell(entry, { withPosition = false, byeAtZero = false } = {}) {
+  if (!entry) return '<td class="slot-cell muted">—</td>';
+
+  const { p, v } = entry;
+  const cls = ['slot-cell'];
   const tier = injuryTier(p.injuryStatus);
   if (tier === 'out' || tier === 'ir') cls.push(`st-${tier}`);
-  if (isFlex) cls.push('is-flex');
-  const tip = `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}`;
+
+  // ESPN's 0.00 in a WEEK is how it says "no game that week". Only the week
+  // grid may read a zero that way: a season average of zero is a man ESPN
+  // projects nothing for all year, which is a different fact. And the sample
+  // data means something else again by a zero — it pins a player it has ruled
+  // out — so demo prints the number, the same rule the season grid follows.
+  const bye = v === 0 && byeAtZero;
+  if (bye) cls.push('bye');
+
+  const tip =
+    `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}` +
+    (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '');
+
+  const shown = v === null ? '—' : bye ? 'Bye' : fmt(v);
   return (
-    `<td class="${cls.join(' ')}" data-v="${avg ?? ''}" title="${esc(tip)}">` +
-    `<span class="pn">${esc(shortName(p.name))}</span> ` +
-    `<span class="pa">${fmt(avg)}</span></td>`
+    `<td class="${cls.join(' ')}"${v === null ? '' : ` data-v="${v}"`} title="${esc(tip)}">` +
+    `${shown}${withPosition ? ` <span class="pp">${esc(p.position)}</span>` : ''}</td>`
   );
 }
 
@@ -420,10 +464,8 @@ function render() {
     ? 'Generated sample rosters so you can see the layout with a full league in it.'
     : `Your ESPN league · ${espn.getConfig().season} season`;
 
-  $('overviewTitle').textContent = `All teams · week ${state.week}`;
-
-  // Settled before anything paints: the grid highlights the drilled-into row,
-  // so it has to know which one that is before it draws it.
+  // Settled before anything paints: the grids highlight the drilled-into row,
+  // so they have to know which one that is before they draw it.
   resolveTeam();
   renderOverview();
   renderTeamPicker();
@@ -454,38 +496,92 @@ function renderWeekPicker() {
     .join('');
 }
 
-function renderOverview() {
-  const table = $('overviewTable');
-  const tbody = bodyOf(table);
+/**
+ * The two grids, and everything that differs between them.
+ *
+ * They are the same table twice over — same rows, same nine spots, same bench —
+ * measured two different ways, so one renderer builds both and the pair can be
+ * read straight down the page.
+ */
+const GRIDS = [
+  {
+    id: 'overview',
+    measure: avgWeek,
+    heading: () => `All teams · proj avg ${espn.getConfig().season}`,
+  },
+  {
+    id: 'weekly',
+    measure: weekProj,
+    heading: () => `All teams · week ${state.week}`,
+    // Only a week's number can be a bye, and only ESPN means it that way.
+    byeAtZero: () => !state.isDemo,
+  },
+];
+
+/** The bench is as deep as the deepest bench, so every row has the same shape. */
+function benchWidth(teams) {
+  return teams.reduce((n, t) => Math.max(n, (t.bench || []).length), 0);
+}
+
+function renderGridHead(table, benchCols) {
+  const benchTip =
+    'the bench, best first by the column this table is measured in. Every team’s bench is a ' +
+    'different shape, so the position is in the cell rather than in this header.';
+  const bench = Array.from({ length: benchCols }, (_, i) =>
+    `<th data-sort${i === 0 ? ' class="grouped"' : ''} ` +
+    `title="Bench ${i + 1} of ${benchCols} — ${benchTip}">B${i + 1}</th>`
+  ).join('');
+
+  table.querySelector('thead').innerHTML =
+    `<tr>
+       <th class="name" data-sort>Team</th>
+       ${GRID_SLOTS.map((s) => `<th data-sort>${esc(s.key)}</th>`).join('')}
+       <th class="grid-total grouped" data-sort title="The nine spots to the left added up. ` +
+         `Nine real men, not an estimate.">Total</th>
+       ${bench}
+     </tr>`;
+}
+
+function renderGrid(grid) {
+  const table = $(`${grid.id}Table`);
   const teams = state.data ? state.data.teams : [];
+  const benchCols = benchWidth(teams);
 
-  $('overviewWrap').classList.toggle('hidden', teams.length === 0);
-  $('overviewEmpty').classList.toggle('hidden', teams.length > 0);
+  $(`${grid.id}Title`).textContent = grid.heading();
+  $(`${grid.id}Wrap`).classList.toggle('hidden', teams.length === 0);
+  $(`${grid.id}Empty`).classList.toggle('hidden', teams.length > 0);
 
-  tbody.innerHTML = teams
+  renderGridHead(table, benchCols);
+
+  const opts = { byeAtZero: grid.byeAtZero ? grid.byeAtZero() : false };
+  bodyOf(table).innerHTML = teams
     .map((t) => {
-      const row = gridLineup(t);
-      const base = baselineOf(row);
-      const est = base === null ? null : round1(base + KDST_ALLOWANCE);
+      const row = gridLineup(t, grid.measure);
+      const total = totalOf(row);
+      const bench = benchEntries(t, grid.measure);
       // "picked" is the drill-down; "me" stays reserved for the reader's own
       // team, and only means anything once a real league says which that is.
       const cls = [
         t.id === state.teamId ? 'picked' : '',
         !state.isDemo && t.id === state.myTeamId ? 'me' : '',
       ].filter(Boolean).join(' ');
+      const benchCells = Array.from({ length: benchCols }, (_, i) =>
+        gridCell(bench[i] || null, { ...opts, withPosition: true })).join('');
       return `
       <tr class="${cls}" data-team="${t.id}" title="Show ${esc(t.name)} below">
         <td class="name">${esc(t.name)}</td>
-        ${GRID_SLOTS.map((s) => slotCell(row[s.key], s.key === 'FLEX')).join('')}
-        <td data-v="${base ?? ''}">${fmt(base)}</td>
-        <td data-v="${est ?? ''}"><strong>${fmt(est)}</strong></td>
-        <td>${fmt(t.projectedTotal)}</td>
-        <td>${fmt(t.actualTotal)}</td>
+        ${GRID_SLOTS.map((s) => gridCell(row[s.key], opts)).join('')}
+        <td class="grid-total grouped" data-v="${total ?? ''}"><strong>${fmt(total)}</strong></td>
+        ${benchCells}
       </tr>`;
     })
     .join('');
 
   resort(table); // keep whatever sort the user picked across week changes
+}
+
+function renderOverview() {
+  for (const grid of GRIDS) renderGrid(grid);
 }
 
 function renderTeamPicker() {
@@ -696,7 +792,7 @@ function renderRoster() {
   }
 
   const grid = gridLineup(team);
-  const base = baselineOf(grid);
+  const avgTotal = totalOf(grid);
   const flexId = grid.FLEX ? grid.FLEX.p.playerId : null;
 
   const starters = view.filter((e) => e.started);
@@ -712,8 +808,7 @@ function renderRoster() {
 
   const glance = [
     ['Week', state.week],
-    ['Baseline week', fmt(base)],
-    ['Est Total', fmt(base === null ? null : round1(base + KDST_ALLOWANCE))],
+    ['Proj avg', fmt(avgTotal)],
     ['Projected', fmt(projTotal)],
     ['Actual', fmt(actualTotal)],
     ['Diff', signed(diff(actualTotal, projTotal))],
@@ -803,9 +898,9 @@ function renderRosterNote(view, team) {
     parts.push(
       `<span class="neg">This is not ${team ? `${esc(team.name)}’s` : 'the'} real lineup any ` +
       `more.</span> The number beside the total is the difference from the one ESPN has, and ` +
-      `<strong>Baseline week</strong> and <strong>Est Total</strong> above deliberately do not ` +
-      `move with it: those are built from the best seven by season average and never depended ` +
-      `on how the lineup was set.`
+      `<strong>Proj avg</strong> above deliberately does not move with it: that is the best ` +
+      `nine by season average, the same figure the first grid gives this team, and it never ` +
+      `depended on how the lineup was set.`
     );
   }
 
@@ -816,7 +911,7 @@ function renderRosterNote(view, team) {
 //
 // One team's WHOLE roster down the side — starters and bench — and every week
 // of the season across the top, each cell being ESPN's own projection for that
-// player in that week. It is the Add players page's layout pointed at a squad
+// player in that week. It is the Players page's layout pointed at a squad
 // instead of at the wire, which is the comparison a manager actually makes
 // once the squad exists: who carries this team through the run-in, and which
 // week does the bye fall in.
@@ -1211,7 +1306,7 @@ function renderSeasonNote(weeks, rowCount) {
 
   parts.push(
     'Nothing in this table is highlighted, on purpose. Everyone here is already rostered, so the ' +
-    'per-position bar that flags a startable week on the <a href="waivers.html">Add players</a> ' +
+    'per-position bar that flags a startable week on the <a href="waivers.html">Players</a> ' +
     'page would light up nearly every cell and tell you nothing.'
   );
 
@@ -1304,18 +1399,19 @@ $('lineupReset').addEventListener('click', () => {
   renderSeason();
 });
 
-// Clicking anywhere on a team's row drills into it — the grid is the thing
+// Clicking anywhere on a team's row drills into it — the grids are the thing
 // people scan, so making them go back to the select below to act on what they
-// found would be a step for nothing.
-$('overviewTable').addEventListener('click', (e) => {
-  const tr = e.target.closest && e.target.closest('tr[data-team]');
-  if (tr) selectTeam(Number(tr.dataset.team));
-});
+// found would be a step for nothing. Either grid drives it.
+for (const grid of GRIDS) {
+  $(`${grid.id}Table`).addEventListener('click', (e) => {
+    const tr = e.target.closest && e.target.closest('tr[data-team]');
+    if (tr) selectTeam(Number(tr.dataset.team));
+  });
+  // The grids are the reason to be here, so they open on the number that ranks
+  // teams: Total, high first. Column 10 — the team, the nine spots, then it.
+  enableSort($(`${grid.id}Table`), { defaultIndex: GRID_SLOTS.length + 1 });
+}
 
-// The grid is the reason to be here, so it opens on the number that ranks teams
-// before anyone has played: Est Total, high first. Actual points was the old
-// default and is entirely null in week 1, which sorted into insertion order.
-enableSort($('overviewTable'), { defaultIndex: 9 });
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
 
 // The season grid opens in lineup order — starters first, bench after — so it
