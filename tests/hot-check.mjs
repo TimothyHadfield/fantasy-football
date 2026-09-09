@@ -145,6 +145,58 @@ for (const tr of mineRows) {
 ok(mineHot === 0, 'not one comparison-row cell is green', `${mineHot} green`);
 ok(mineOverBar > 0, 'and some of them clear the bar, so that is not a vacuous check',
   `${mineOverBar} over`);
+ok(mineRows.every((tr) => ![...tr.querySelectorAll('td')].some((td) => td.classList.contains('beats'))),
+  'nor is one of them shaded — a row cannot beat itself');
+
+// --- the SECOND green: beating your own worst man at that position ---------
+// A separate cue answering a separate question, so it is a separate class. The
+// rule is: strictly ahead of the "Your …" row's number for that same week.
+const mineByPos = new Map();
+for (const tr of mineRows) {
+  const cells = [...tr.querySelectorAll('td')];
+  mineByPos.set(cells[posCol].textContent.trim(), cells);
+}
+ok(mineByPos.size >= 4, 'the demo squad covers several positions', `${mineByPos.size}`);
+
+let shadeChecked = 0, shades = 0, wrongShade = 0, missedShade = 0, comparable = 0;
+for (const tr of rows) {
+  const cells = [...tr.querySelectorAll('td')];
+  const pos = cells[posCol].textContent.trim();
+  const mineCells = mineByPos.get(pos);
+  for (let i = firstWeekCol; i < cells.length; i++) {
+    const td = cells[i];
+    const isShaded = td.classList.contains('beats');
+    if (isShaded) shades++;
+
+    const raw = td.getAttribute('data-v');
+    if (raw === null) { ok(!isShaded, 'a cell with no value is never shaded'); continue; }
+    if (td.classList.contains('bye')) { ok(!isShaded, 'a bye is never shaded — 0.00 beats nobody'); continue; }
+    if (!mineCells) { ok(!isShaded, `a position you hold nobody at (${pos}) is never shaded`); continue; }
+
+    const mineRaw = mineCells[i].getAttribute('data-v');
+    if (mineRaw === null) { ok(!isShaded, 'no number of yours that week means no comparison'); continue; }
+
+    comparable++;
+    const should = Number(raw) > Number(mineRaw);
+    shadeChecked++;
+    if (should && !isShaded) { missedShade++; console.log(`  missed shade: ${pos} ${raw} > ${mineRaw}`); }
+    if (!should && isShaded) { wrongShade++; console.log(`  wrong shade:  ${pos} ${raw} vs ${mineRaw}`); }
+  }
+}
+ok(shadeChecked > 50, 'checked a decent number of cells against your own men', `${shadeChecked}`);
+ok(missedShade === 0, 'every cell that beats your man is shaded', `${missedShade} missed`);
+ok(wrongShade === 0, 'no cell is shaded that does not beat him', `${wrongShade} wrong`);
+ok(shades > 0, 'some cells actually beat him', `${shades} shaded`);
+ok(shades < comparable, 'and some do not, so the table is not uniformly green',
+  `${shades} of ${comparable}`);
+// The two cues are independent, and the demo must actually exercise that.
+const both = rows.flatMap((tr) => [...tr.querySelectorAll('td')])
+  .filter((td) => td.classList.contains('hot') && td.classList.contains('beats')).length;
+const shadeOnly = rows.flatMap((tr) => [...tr.querySelectorAll('td')])
+  .filter((td) => td.classList.contains('beats') && !td.classList.contains('hot')).length;
+ok(both > 0, 'a cell can carry both greens at once', `${both}`);
+ok(shadeOnly > 0, 'and a cell can beat your man without clearing the startable bar', `${shadeOnly}`);
+console.log(`  shaded: ${shades} of ${comparable} comparable (${both} also over the bar)`);
 
 // --- the note explains the colour -----------------------------------------
 const note = document.getElementById('waiverNote').textContent;
@@ -154,6 +206,11 @@ for (const [pos, bar] of Object.entries(BARS)) {
 }
 ok(document.getElementById('waiverNote').querySelector('.hot-key') !== null,
   'the word green is shown in green');
+ok(/out-projects your own worst man at his position/.test(note),
+  'the note explains the shading too', note.slice(0, 200));
+ok(/a bye is never shaded/.test(note), 'and says a bye cannot beat anybody', note.slice(0, 200));
+ok(document.getElementById('waiverNote').querySelector('.beats-key') !== null,
+  'the shading is shown in the note in the treatment it describes');
 
 ok(errors.length === 0, 'no console errors', errors.slice(0, 2).join(' | '));
 

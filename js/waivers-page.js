@@ -843,8 +843,18 @@ function isStartable(v, position) {
  * never coloured green. The green flags a wire player worth starting — an
  * argument for claiming him. On a man already on your bench it would be
  * answering a different question, so those weeks stay uncoloured.
+ *
+ * `yours` is the matching "Your …" row's number for the SAME week, when you
+ * hold anyone at that position. A wire week that beats it is shaded, because
+ * that is the whole question a waiver claim asks. The two greens are separate
+ * cues answering separate questions and a cell can carry both at once:
+ *
+ *   the accent text  he is worth starting in his own right (the STARTABLE bar)
+ *   the green shade  he out-projects the man you would drop, that week
+ *
+ * So they are a colour AND a treatment apart, not two shades of one colour.
  */
-function cell(v, week, name, position, mine = false) {
+function cell(v, week, name, position, mine = false, yours = null) {
   if (v === undefined) {
     // Three ways to have no number, and a reader has to be able to tell them
     // apart: still coming, refused outright, or ESPN simply had nothing.
@@ -874,12 +884,23 @@ function cell(v, week, name, position, mine = false) {
       `title="${esc(name)} is on bye in week ${week}. ESPN returns 0.00 for a bye, ` +
       `which is not the same as a projection of nothing.">Bye</td>`;
   }
-  if (!mine && isStartable(v, position)) {
-    return `<td class="hot" data-v="${v}" ` +
-      `title="${fmt(v)} projected in week ${week} — over the ${STARTABLE[position]} ` +
-      `that makes a ${esc(position)} worth starting.">${fmt(v)}</td>`;
+  // A bye has already returned above, so neither cue can fire on one — which is
+  // right for both: 0.00 is never startable, and it cannot beat anybody.
+  const hot = !mine && isStartable(v, position);
+  const beats = !mine && yours !== null && typeof yours.value === 'number' && v > yours.value;
+  if (!hot && !beats) return `<td data-v="${v}">${fmt(v)}</td>`;
+
+  const why = [`${fmt(v)} projected in week ${week}`];
+  if (hot) why.push(`over the ${STARTABLE[position]} that makes a ${esc(position)} worth starting`);
+  if (beats) {
+    why.push(
+      `ahead of ${esc(yours.name)} on ${fmt(yours.value)} — your worst ${esc(position)}, ` +
+      `the man this claim would drop`
+    );
   }
-  return `<td data-v="${v}">${fmt(v)}</td>`;
+
+  const cls = [hot ? 'hot' : '', beats ? 'beats' : ''].filter(Boolean).join(' ');
+  return `<td class="${cls}" data-v="${v}" title="${why.join(', ')}.">${fmt(v)}</td>`;
 }
 
 /** The injury tag beside a name. Same markup wherever the player came from. */
@@ -898,10 +919,18 @@ function identityCells({ p, avg }) {
       }</td>`;
 }
 
-/** A player you could claim. */
-function wireRow(row, weeks) {
+/**
+ * A player you could claim.
+ *
+ * `mine` is the position -> comparison row map, so each week's cell can be
+ * measured against your own man's number for that same week. Built from the
+ * UNFILTERED set, so the shading means the same thing whichever position
+ * button is pressed.
+ */
+function wireRow(row, weeks, mine) {
   const { p, values } = row;
   const status = availability(p.injuryStatus);
+  const yours = mine.get(p.position) || null;
 
   return `<tr${status && status.dim ? ' class="unavailable"' : ''}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}" title="${esc(p.name)}${
@@ -910,7 +939,11 @@ function wireRow(row, weeks) {
           : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`
       }">${esc(p.name)}${injuryTag(status)}</td>
       ${identityCells(row)}
-      ${values.map((v, i) => cell(v, weeks[i], p.name, p.position)).join('')}
+      ${values
+        .map((v, i) =>
+          cell(v, weeks[i], p.name, p.position, false,
+            yours ? { name: yours.p.name, value: yours.values[i] } : null))
+        .join('')}
     </tr>`;
 }
 
@@ -940,7 +973,11 @@ function renderTable(weeks) {
 
   const all = buildRows(weeks);
   const available = all.filter(matchesFilter);
-  const mine = buildMineRows(weeks).filter(matchesFilter);
+  const mineAll = buildMineRows(weeks);
+  // Keyed by position for the shading, and built before the filter: a wire RB
+  // is measured against your worst RB whether or not the RB button is pressed.
+  const byPosition = new Map(mineAll.map((r) => [r.p.position, r]));
+  const mine = mineAll.filter(matchesFilter);
   const cols = weeks.length + 4;
 
   if (!available.length && !mine.length) {
@@ -953,7 +990,7 @@ function renderTable(weeks) {
   // players who might replace him, which is the entire point of the feature:
   // sort by Avg and everyone above your row is an upgrade.
   tbody.innerHTML =
-    available.map((r) => wireRow(r, weeks)).join('') +
+    available.map((r) => wireRow(r, weeks, byPosition)).join('') +
     mine.map((r) => mineRow(r, weeks)).join('');
 
   // Keep whatever sort the user picked when the row set changes.
@@ -1038,8 +1075,9 @@ function comparisonNote(weeks) {
     'change which of your men appears. The number is your depth there: QB3 because you hold ' +
     'three quarterbacks, K2 because you hold two kickers. These rows sort and filter with ' +
     'everything else, which is why they are in the table rather than beside it. They are never ' +
-    'coloured green — whether to start your own bench is a different question — and they are ' +
-    'never counted on the position buttons, because you cannot add a player you already have.'
+    'coloured green themselves — whether to start your own bench is a different question — and ' +
+    'they are never counted on the position buttons, because you cannot add a player you ' +
+    'already have. Their week numbers are what the green shading above is measured against.'
   );
 
   if (state.isDemo) {
@@ -1118,6 +1156,19 @@ function renderNote(weeks) {
     '. Those are set bars, not a ranking against the rest of the wire, so a quiet week for ' +
     'everyone stays uncoloured rather than promoting the best of a bad set.'
   );
+
+  if (comparing()) {
+    parts.push(
+      'A week on a <span class="beats-key">green background</span> is a different claim: that ' +
+      'player out-projects your own worst man at his position — the ' +
+      '<span class="mine-key">Your …</span> row further down — in that week specifically. It ' +
+      'does not say he is any good, only that he is better than the man the claim would drop, ' +
+      'so a shaded run against an unshaded one is the argument for making the move. Strictly ' +
+      'ahead: level does not count, and a bye is never shaded because 0.00 cannot beat anybody. ' +
+      'The two greens are independent — a cell can be worth starting, worth claiming, both or ' +
+      'neither.'
+    );
+  }
 
   parts.push(...comparisonNote(weeks));
 

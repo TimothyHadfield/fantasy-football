@@ -61,6 +61,30 @@ td.hot {
 /* The word "green" in the note, shown in the colour it is describing. */
 .hot-key { color: var(--accent); font-weight: 650; }
 
+/* A week where this free agent out-projects your own worst man at his position
+   — the "Your RB5" row he is sorted in among.
+
+   A SHADE rather than a text colour, because td.hot above has already spent the
+   text colour on a different question and the two answers are independent: a
+   cell can be worth starting, worth claiming, both, or neither. Both cues are
+   green because both say "look here"; they are told apart by treatment, which
+   is also what keeps them legible to anyone who cannot separate the hues.
+
+   Written twice, because the zebra band and the row hover each paint their own
+   background and this has to survive both. */
+#waiverTable tbody td.beats,
+#waiverTable tbody tr:hover td.beats { background: #16311f; }
+/* Over the shade, the startable green needs to stay clearly the brighter cue. */
+#waiverTable tbody td.hot.beats { color: var(--accent-hi); }
+/* The phrase in the note, shown in the treatment it is describing. */
+.beats-key {
+  background: #16311f;
+  border-radius: var(--r-1);
+  padding: 1px 6px;
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* YOUR OWN WORST PLAYER AT A POSITION, sitting in the same list as the men who
    could replace him. It has to be unmistakably not-a-free-agent: this is the
    one you would drop, not one you can add.
