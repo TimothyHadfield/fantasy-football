@@ -36,7 +36,7 @@ import path from 'node:path';
 import { REPO } from './repo.mjs';
 
 /** The pages that MAKE links, and the id of a panel each must have linked. */
-const SOURCES = ['index.html', 'analysis.html', 'waivers.html'];
+const SOURCES = ['index.html', 'analysis.html', 'trade.html', 'waivers.html'];
 
 // ---------------------------------------------------------------- the harness
 

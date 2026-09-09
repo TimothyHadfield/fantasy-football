@@ -24,6 +24,7 @@ const SUITES = [
   ['test-forecast.mjs', 'win probability, sigma calibration, optimal lineup, win-total distribution'],
   ['test-sim.mjs', 'the Monte Carlo season simulation'],
   ['test-projection.mjs', 'the shared projection module'],
+  ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],
   ['test-pages-render.mjs', 'every page boots its real modules against its real HTML'],
   ['test-home.mjs', 'the home page and the debug page, pre-kickoff included'],
@@ -35,6 +36,7 @@ const SUITES = [
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
+  ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
 ];
 
 // The dumps are not suites -- they print rendered panels so a refactor can be
