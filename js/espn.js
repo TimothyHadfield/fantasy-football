@@ -8,6 +8,8 @@
 // `credentials: 'include'` carries your existing espn.com login cookies.
 // Public leagues need no login at all.
 
+import * as bridge from './bridge.js';
+
 const HOST = 'https://lm-api-reads.fantasy.espn.com';
 
 // ---------------------------------------------------------------- ID decoding
@@ -111,32 +113,60 @@ function leaguePath(views = []) {
   return `/apis/v3/games/ffl/seasons/${config.season}/segments/0/leagues/${config.leagueId}${qs}`;
 }
 
+/**
+ * One league read, through the bridge extension when it is installed and by
+ * direct fetch when it is not.
+ *
+ * Routing here rather than at each call site means every page that already
+ * uses this module gets private-league access for free the moment the
+ * extension appears, with no changes of their own.
+ */
+async function leagueRead(views, { filter, scoringPeriodId } = {}) {
+  if (!config.leagueId) throw new Error('No league ID configured.');
+
+  if (bridge.isAvailable()) {
+    const res = await bridge.league({
+      leagueId: config.leagueId,
+      season: config.season,
+      views,
+      scoringPeriodId,
+      filter,
+    });
+    if (res.ok) return res.data;
+    if (res.status === 401 || res.status === 403) throw new AuthError(res.error);
+    throw new Error(res.error || 'The bridge extension could not read the league.');
+  }
+
+  let path = leaguePath(views);
+  if (scoringPeriodId) path += `&scoringPeriodId=${scoringPeriodId}`;
+  return request(path, { filter });
+}
+
 // --------------------------------------------------------------------- reads
 
 /** Raw league payload. Pass whichever views you need. */
 export function fetchLeague(views = ['mSettings', 'mTeam']) {
-  return request(leaguePath(views));
+  return leagueRead(views);
 }
 
 /** Draft picks and draft status. This is what you'd poll during a live draft. */
 export function fetchDraft() {
-  return request(leaguePath(['mDraftDetail']));
+  return leagueRead(['mDraftDetail']);
 }
 
 /** Every team's current roster. */
 export function fetchRosters(scoringPeriodId) {
-  const base = leaguePath(['mRoster', 'mTeam']);
-  return request(scoringPeriodId ? `${base}&scoringPeriodId=${scoringPeriodId}` : base);
+  return leagueRead(['mRoster', 'mTeam'], { scoringPeriodId });
 }
 
 /** Matchups and scores for the season. */
 export function fetchMatchups() {
-  return request(leaguePath(['mMatchupScore', 'mTeam']));
+  return leagueRead(['mMatchupScore', 'mTeam']);
 }
 
 /** Adds, drops, trades, waiver claims. */
 export function fetchTransactions() {
-  return request(leaguePath(['mTransactions2']));
+  return leagueRead(['mTransactions2']);
 }
 
 /**
@@ -159,15 +189,21 @@ export async function fetchPlayers(limit = 500) {
       sortDraftRanks: { sortPriority: 1, sortAsc: true, value: 'PPR' },
     },
   };
-  const data = await request(leaguePath(['kona_player_info']), { filter });
+  const data = await leagueRead(['kona_player_info'], { filter });
   return (data.players || []).map((e) => normalizePlayer(e, s));
 }
 
 /** Bye weeks by pro team id. */
 export async function fetchByeWeeks() {
-  const data = await request(
-    `/apis/v3/games/ffl/seasons/${config.season}?view=proTeamSchedules_wl`
-  );
+  const view = 'proTeamSchedules_wl';
+  let data;
+  if (bridge.isAvailable()) {
+    const res = await bridge.seasonView({ season: config.season, view });
+    if (!res.ok) throw new Error(res.error || 'Could not read the season schedule.');
+    data = res.data;
+  } else {
+    data = await request(`/apis/v3/games/ffl/seasons/${config.season}?view=${view}`);
+  }
   const byes = {};
   for (const t of data.settings?.proTeams || []) {
     if (t.byeWeek) byes[t.id] = t.byeWeek;

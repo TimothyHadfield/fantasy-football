@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px/1.45 system-ui, sans-serif; width: 290px; margin: 0; padding: 14px; color: #1b2430; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  p { margin: 0 0 10px; color: #556; }
+  .row { display: flex; gap: 6px; margin-bottom: 8px; }
+  input { flex: 1; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; }
+  button { padding: 7px 12px; border: 0; border-radius: 6px; background: #16a34a; color: #fff; font-weight: 600; cursor: pointer; }
+  button:hover { background: #15803d; }
+  a { color: #2563eb; }
+  #out { margin-top: 10px; padding: 9px 10px; border-radius: 7px; background: #f1f5f9; white-space: pre-wrap; }
+  #out.good { background: #dcfce7; }
+  #out.bad { background: #fee2e2; }
+</style>
+</head>
+<body>
+  <h1>Fantasy Football Bridge</h1>
+  <p>Lets your site read your private ESPN league. Sign in to espn.com first.</p>
+  <div class="row">
+    <input id="league" inputmode="numeric" placeholder="League ID">
+    <button id="test">Test</button>
+  </div>
+  <div id="out">Enter your league ID and press Test.</div>
+  <p style="margin-top:10px">
+    <a href="https://timothyhadfield.github.io/fantasy-football/" target="_blank">Open the site</a>
+  </p>
+  <script src="popup.js"></script>
+</body>
+</html>
