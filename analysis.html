@@ -30,6 +30,64 @@
   }
   tbody tr.bench .slot-tag { color: var(--dim); background: transparent; }
 
+  /* ------------------------------------------------ the roster-detail swap */
+
+  /* The slot tag IS the control, because the slot is exactly what a swap
+     changes: pick a man up by his slot, put him down on somebody else's. That
+     costs no column and puts the affordance on the thing it acts upon. */
+  button.slot-tag { cursor: pointer; font-family: inherit; }
+  button.slot-tag:hover:not(:disabled),
+  tbody tr.bench button.slot-tag:hover:not(:disabled) { background: var(--panel-3); }
+
+  /* The man currently picked up. Filled, so it is unmistakably the one in hand
+     rather than one of the places he could go. */
+  button.slot-tag.holding,
+  tbody tr.bench button.slot-tag.holding {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+    font-weight: 700;
+  }
+  /* Somewhere he may legally go. An outline, not a fill: these are offers. */
+  button.slot-tag.target,
+  tbody tr.bench button.slot-tag.target {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: transparent;
+  }
+  button.slot-tag.target:hover { background: #16311f; }
+  /* Somewhere he may not. Left readable, because the row still has numbers on
+     it worth reading; only the control is off. */
+  button.slot-tag:disabled { opacity: 0.4; cursor: default; }
+  /* Moved out of the slot ESPN has him in — a what-if, and marked as one. */
+  tbody tr.moved td.name { font-style: italic; }
+  tbody tr.moved td.name::after {
+    content: ' \2022 moved';
+    font-style: normal;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+
+  /* THE GAP between the starters and the bench, and the starters' total in it.
+     A band rather than blank space: the space is what separates the two groups,
+     and the number is the reason the separation is worth having. */
+  #rosterTable tbody.split td {
+    background: var(--panel-2);
+    border-top: 2px solid var(--line-2);
+    border-bottom: 2px solid var(--line-2);
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+  #rosterTable tbody.split .split-label {
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-align: left;
+  }
+  #rosterTable tbody.split .split-total { font-weight: 700; font-size: 15px; }
+  #rosterTable tbody.split .split-rest { text-align: left; color: var(--dim); font-size: 12.5px; }
+  #rosterTable tbody.split .split-delta { margin-left: 8px; font-size: 13px; }
+
   /* Injury flag. Only shown for players who aren't ACTIVE. */
   .inj {
     display: inline-block;
@@ -220,6 +278,7 @@
         <label for="teamSelect">Team</label>
         <select id="teamSelect"></select>
       </div>
+      <button type="button" id="lineupReset" class="hidden">Put the lineup back</button>
     </div>
     <div class="stat-row" id="teamGlance"></div>
     <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
@@ -236,7 +295,12 @@
         <th class="own" data-sort>% own</th>
         <th class="left" data-sort>Status</th>
       </tr></thead>
-      <tbody></tbody>
+      <!-- Three bodies, not one. The starters, the line that totals them, and
+           the bench. sortable.js sorts each independently, so the grouping and
+           the total's place in it survive every sort. -->
+      <tbody id="rosterStarters"></tbody>
+      <tbody id="rosterSplit" class="split"></tbody>
+      <tbody id="rosterBench"></tbody>
     </table></div>
     <div class="empty hidden" id="rosterEmpty">Pick a team to see its roster.</div>
     <p class="panel-note" id="rosterNote"></p>

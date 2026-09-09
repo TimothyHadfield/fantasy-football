@@ -53,6 +53,16 @@ const state = {
   seasonProgress: null,         // { done, total } while weeks are arriving
   seasonError: null,            // the whole run fell over
   seasonToken: 0,               // drops an answer about a league we have left
+
+  // The what-if lineup in the roster detail. `lineup` holds only the slots that
+  // DIFFER from ESPN's, so "has anything been changed" is just its size, and
+  // swapping a man back where he started removes him from it rather than
+  // recording a change that isn't one. `held` is the player picked up and
+  // waiting for somewhere to go. Both belong to one team in one week of one
+  // league, so `lineupKey` throws them away when any of those changes.
+  lineupKey: null,
+  lineup: new Map(),            // playerId -> the slot the reader has put him in
+  held: null,                   // playerId picked up for a swap, or null
 };
 
 // Cache per week so flipping back to a week already loaded is instant.
@@ -127,6 +137,10 @@ const SLOT_ORDER = {
   20: 50,                   // bench
   21: 51,                   // IR
 };
+
+// ESPN's own slot ids for the two places that are not a lineup spot.
+const BENCH_SLOT = 20;
+const IR_SLOT = 21;
 
 const INJURY_LABELS = {
   QUESTIONABLE: 'Q',
@@ -489,10 +503,174 @@ function currentTeam() {
   return state.data.teams.find((t) => t.id === state.teamId) || null;
 }
 
+// ------------------------------------------------------------ the what-if lineup
+//
+// The roster detail lets you move a man out of the starting lineup and another
+// in, and shows what that does to the total. It is a WHAT-IF and nothing else.
+// Nothing here is ever sent to ESPN — writes are a later phase and will go
+// behind the extension popup, never behind an open page — so the only place a
+// changed lineup exists is the override map below, and it is gone the moment
+// you change team, week or league. The note says so in as many words.
+
+/** Which team, in which week, of which league the overrides belong to. */
+function lineupKeyNow() {
+  return `${sourceKey()}:${state.week}:${state.teamId}`;
+}
+
+/** Drop the what-if when it stops being about the squad on screen. */
+function syncLineup() {
+  const key = lineupKeyNow();
+  if (state.lineupKey === key) return;
+  state.lineupKey = key;
+  state.lineup = new Map();
+  state.held = null;
+}
+
+/** Whether the reader has moved anybody at all. */
+const lineupEdited = () => state.lineup.size > 0;
+
+/**
+ * The roster as the page is showing it: ESPN's lineup with the reader's swaps
+ * applied on top. One shape, used by both panels below, so the two can never
+ * disagree about who is starting.
+ */
+function rosterView(team) {
+  syncLineup();
+  return (team ? team.players : []).map((p) => {
+    const slotId = state.lineup.has(p.playerId) ? state.lineup.get(p.playerId) : p.lineupSlotId;
+    return {
+      p,
+      slotId,
+      slot: espn.SLOT_LABELS[slotId] ?? String(slotId),
+      started: slotId !== BENCH_SLOT && slotId !== IR_SLOT,
+      moved: slotId !== p.lineupSlotId,
+    };
+  });
+}
+
+/**
+ * Sum one of a player's numbers over a set of entries.
+ *
+ * Deliberately the same rule season.js uses for its own totals: nulls are left
+ * out, and all-null is null rather than a real-looking 0.0. That is what makes
+ * an unswapped lineup total exactly what ESPN said it would.
+ */
+function sumOf(entries, key) {
+  const vals = entries.map((e) => e.p[key]).filter((v) => typeof v === 'number');
+  return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
+}
+
+/** Whether a slot may legally hold a player of this position. */
+function slotAccepts(slotId, position) {
+  if (slotId === BENCH_SLOT) return true;   // the bench takes anyone
+  // IR is ESPN's call about an injury, not a lineup choice, so it is not a
+  // place this page will move anybody into or out of.
+  if (slotId === IR_SLOT) return false;
+  const eligible = espn.SLOT_ELIGIBILITY[slotId];
+  return Array.isArray(eligible) && eligible.includes(position);
+}
+
+/**
+ * Two men may trade places only if each is legal where the other is standing.
+ *
+ * Bench-for-bench is refused because it changes nothing: both totals, both
+ * groups and every number on the page would be identical afterwards.
+ */
+function canSwap(a, b) {
+  if (!a || !b || a.p.playerId === b.p.playerId) return false;
+  if (a.slotId === IR_SLOT || b.slotId === IR_SLOT) return false;
+  if (!a.started && !b.started) return false;
+  return slotAccepts(b.slotId, a.p.position) && slotAccepts(a.slotId, b.p.position);
+}
+
+/** Record a slot, or forget it again when it is the one ESPN already has. */
+function setSlot(p, slotId) {
+  if (slotId === p.lineupSlotId) state.lineup.delete(p.playerId);
+  else state.lineup.set(p.playerId, slotId);
+}
+
+function applySwap(idA, idB) {
+  const view = rosterView(currentTeam());
+  const a = view.find((e) => e.p.playerId === idA);
+  const b = view.find((e) => e.p.playerId === idB);
+  if (!canSwap(a, b)) return false;
+  setSlot(a.p, b.slotId);
+  setSlot(b.p, a.slotId);
+  return true;
+}
+
+/**
+ * The slot cell: a control, not a label.
+ *
+ * The slot IS what a swap changes, so picking a man up by his slot and putting
+ * him down on somebody else's needs no extra column and no extra explanation.
+ * The cell keeps its lineup-order sort key either way.
+ */
+function slotControl(entry, held) {
+  const { p, slot, slotId } = entry;
+  const cell = (inner) => `<td class="left" data-v="${SLOT_ORDER[slotId] ?? 40}">${inner}</td>`;
+  const button = (cls, attrs) =>
+    cell(`<button type="button" class="slot-tag${cls}" data-swap="${p.playerId}"${attrs}>` +
+      `${esc(slot)}</button>`);
+
+  // IR is ESPN's call about an injury rather than a lineup choice, so its tag
+  // stays a plain label — there is nothing here to decide.
+  if (slotId === IR_SLOT) {
+    return cell(`<span class="slot-tag" title="ESPN has ${esc(p.name)} on injured reserve. ` +
+      `He cannot be started, so there is nothing to swap.">${esc(slot)}</span>`);
+  }
+
+  if (!held) {
+    return button('', ` title="Pick ${esc(p.name)} up, then click another player’s slot to swap ` +
+      `the two. A what-if only — nothing is sent to ESPN."`);
+  }
+  if (held.p.playerId === p.playerId) {
+    return button(' holding', ` title="Holding ${esc(p.name)}. Click a highlighted slot to put ` +
+      `him there, or click this one again to put him down."`);
+  }
+  if (canSwap(held, entry)) {
+    return button(' target', ` title="Swap ${esc(held.p.name)} into ${esc(slot)} and ` +
+      `${esc(p.name)} into ${esc(held.slot)}."`);
+  }
+  return button('', ` disabled title="${esc(held.p.name)} is a ${esc(held.p.position)} and ` +
+    `${esc(p.name)} is a ${esc(p.position)}, so these two cannot trade places."`);
+}
+
+/**
+ * The row between the two groups: the gap, and the starters' total in it.
+ *
+ * The total sits in the Projected column it is the total of, not off to one
+ * side, so it reads as the column's own sum. When the lineup has been changed
+ * it also carries the difference from the one ESPN has, because seeing that
+ * number move is the entire reason to be allowed to change it.
+ */
+function splitRow(proj, espnTotal, held, columns) {
+  // Only shown once something has actually been moved: against ESPN's own
+  // lineup the difference is zero by construction, and printing "+0.0" would
+  // invite the reader to wonder what it was measuring.
+  const delta = lineupEdited() ? diff(proj, espnTotal) : null;
+
+  const label = lineupEdited() ? 'Your lineup' : 'Starting lineup';
+  const hint = held
+    ? `Holding <strong>${esc(held.p.name)}</strong> — click a highlighted slot to put him ` +
+      `there, or his own again to drop it.`
+    : lineupEdited()
+      ? 'A what-if only. Nothing on this page is sent to ESPN.'
+      : 'Click any slot tag to pick that player up, then click another to swap them.';
+
+  return `<tr class="split-row">
+      <td class="split-label" colspan="4">${label}</td>
+      <td class="split-total">${fmt(proj)}${
+        delta === null ? '' : `<span class="split-delta">${signed(delta)}</span>`
+      }</td>
+      <td class="split-rest" colspan="${columns - 5}">${hint}</td>
+    </tr>`;
+}
+
 function renderRoster() {
   const table = $('rosterTable');
-  const tbody = bodyOf(table);
   const team = currentTeam();
+  const view = rosterView(team);
   const players = team ? team.players : [];
 
   $('rosterTitle').textContent = team ? `Roster detail · ${team.name}` : 'Roster detail';
@@ -509,8 +687,11 @@ function renderRoster() {
         : 'No roster data for this week.'
       : `No players came back for ${team.name} in week ${state.week}.`;
     $('teamGlance').innerHTML = '';
-    $('rosterNote').textContent = '';
-    tbody.innerHTML = '';
+    $('rosterNote').innerHTML = '';
+    $('rosterStarters').innerHTML = '';
+    $('rosterSplit').innerHTML = '';
+    $('rosterBench').innerHTML = '';
+    $('lineupReset').classList.add('hidden');
     return;
   }
 
@@ -518,37 +699,47 @@ function renderRoster() {
   const base = baselineOf(grid);
   const flexId = grid.FLEX ? grid.FLEX.p.playerId : null;
 
-  const teamDiff = diff(team.actualTotal, team.projectedTotal);
+  const starters = view.filter((e) => e.started);
+  const benched = view.filter((e) => !e.started);
+  const held = state.held === null ? null : view.find((e) => e.p.playerId === state.held) || null;
+
+  // Totalled from the lineup ON SCREEN rather than taken from ESPN's own team
+  // totals, so a swap moves them. With nothing swapped the rule is the one
+  // season.js uses, so these are the numbers ESPN gave, to the decimal.
+  const projTotal = sumOf(starters, 'projected');
+  const actualTotal = sumOf(starters, 'actual');
+  const benchActual = sumOf(benched, 'actual');
+
   const glance = [
     ['Week', state.week],
     ['Baseline week', fmt(base)],
     ['Est Total', fmt(base === null ? null : round1(base + KDST_ALLOWANCE))],
-    ['Projected', fmt(team.projectedTotal)],
-    ['Actual', fmt(team.actualTotal)],
-    ['Diff', signed(teamDiff)],
-    ['Bench points', fmt(team.benchActualTotal)],
-    ['Starters', team.starters.length],
-    ['Bench', team.bench.length],
+    ['Projected', fmt(projTotal)],
+    ['Actual', fmt(actualTotal)],
+    ['Diff', signed(diff(actualTotal, projTotal))],
+    ['Bench points', fmt(benchActual)],
+    ['Starters', starters.length],
+    ['Bench', benched.length],
   ];
   $('teamGlance').innerHTML = glance
     .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
     .join('');
 
-  tbody.innerHTML = players
-    .map((p) => {
-      const d = diff(p.actual, p.projected);
-      const order = SLOT_ORDER[p.lineupSlotId] ?? 40;
-      const avg = avgWeek(p);
-      const own = typeof p.percentOwned === 'number' ? `${p.percentOwned.toFixed(0)}%` : '—';
-      const tier = injuryTier(p.injuryStatus);
-      const cls = [
-        p.started ? '' : 'bench',
-        tier === 'out' || tier === 'ir' ? `st-${tier}` : '',
-      ].filter(Boolean).join(' ');
-      const isFlex = flexId !== null && p.playerId === flexId;
-      return `
+  const row = (entry) => {
+    const { p } = entry;
+    const d = diff(p.actual, p.projected);
+    const avg = avgWeek(p);
+    const own = typeof p.percentOwned === 'number' ? `${p.percentOwned.toFixed(0)}%` : '—';
+    const tier = injuryTier(p.injuryStatus);
+    const cls = [
+      entry.started ? '' : 'bench',
+      entry.moved ? 'moved' : '',
+      tier === 'out' || tier === 'ir' ? `st-${tier}` : '',
+    ].filter(Boolean).join(' ');
+    const isFlex = flexId !== null && p.playerId === flexId;
+    return `
       <tr class="${cls}">
-        <td class="left" data-v="${order}"><span class="slot-tag">${esc(p.slot)}</span></td>
+        ${slotControl(entry, held)}
         <td class="name${isFlex ? ' is-flex' : ''}">${esc(p.name)}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
@@ -560,8 +751,13 @@ function renderRoster() {
         <td class="own" data-v="${typeof p.percentOwned === 'number' ? p.percentOwned : ''}">${own}</td>
         ${injuryCell(p.injuryStatus)}
       </tr>`;
-    })
-    .join('');
+  };
+
+  const columns = table.querySelectorAll('thead th').length;
+  $('rosterStarters').innerHTML = starters.map(row).join('');
+  $('rosterSplit').innerHTML = splitRow(projTotal, team.projectedTotal, held, columns);
+  $('rosterBench').innerHTML = benched.map(row).join('');
+  $('lineupReset').classList.toggle('hidden', !lineupEdited());
 
   // ESPN's roster view carries ownership only sometimes, and a column of ten em
   // dashes is worse than no column. Hidden rather than removed, so the sort
@@ -569,14 +765,51 @@ function renderRoster() {
   const hasOwn = players.some((p) => typeof p.percentOwned === 'number');
   table.classList.toggle('no-own', !hasOwn);
 
-  const hurt = players.filter((p) => injuryTier(p.injuryStatus)).length;
-  $('rosterNote').textContent =
+  renderRosterNote(view, team);
+  resort(table);
+}
+
+/**
+ * What the table is, said every time it is shown — including, now, that the
+ * lineup in it can be changed and that changing it goes nowhere near ESPN.
+ */
+function renderRosterNote(view, team) {
+  const hurt = view.filter((e) => injuryTier(e.p.injuryStatus)).length;
+  const parts = [];
+
+  parts.push(
     `Bench rows are dimmed and the flex player is in bold. Red is out this week, dark red is ` +
     `on IR. Season total is the whole ${SEASON_GAMES}-game projection; Avg/wk is that same ` +
     `number per game, which is what the grid above adds up. ` +
-    `${hurt} player${hurt === 1 ? '' : 's'} carrying an injury designation this week.`;
+    `${plural(hurt, 'player')} carrying an injury designation this week.`
+  );
 
-  resort(table);
+  parts.push(
+    'The band across the middle is the line between the starting lineup and the bench, and the ' +
+    'number in it is what those starters are projected to score between them — the Projected ' +
+    'column added up, which is why it sits in that column. Sorting sorts the two groups ' +
+    'separately, so the line stays where it is however you order the table.'
+  );
+
+  parts.push(
+    '<strong>Click any slot tag</strong> to pick that player up, then click another player’s to ' +
+    'swap the two, and watch the total move. Only legal moves are offered: a slot lights up when ' +
+    'both men are eligible for each other’s, and a player on IR is not a lineup choice at all. ' +
+    '<strong>This is a what-if and nothing else</strong> — nothing on this page is ever sent to ' +
+    'ESPN, and the swaps are forgotten the moment you change team or week.'
+  );
+
+  if (lineupEdited()) {
+    parts.push(
+      `<span class="neg">This is not ${team ? `${esc(team.name)}’s` : 'the'} real lineup any ` +
+      `more.</span> The number beside the total is the difference from the one ESPN has, and ` +
+      `<strong>Baseline week</strong> and <strong>Est Total</strong> above deliberately do not ` +
+      `move with it: those are built from the best seven by season average and never depended ` +
+      `on how the lineup was set.`
+    );
+  }
+
+  $('rosterNote').innerHTML = parts.join(' ');
 }
 
 // --------------------------------------------- the season-long roster grid
@@ -829,6 +1062,9 @@ function renderSeason() {
   const tbody = bodyOf(table);
   const team = currentTeam();
   const weeks = state.weeks.slice();
+  // The same view the panel above draws, swaps included, so the two can never
+  // disagree about who is starting for the squad they are both showing.
+  const view = rosterView(team);
   const players = team ? team.players : [];
 
   $('seasonTitle').textContent = team
@@ -851,13 +1087,14 @@ function renderSeason() {
 
   const index = seasonIndex(team.id);
 
-  tbody.innerHTML = players
-    .map((p) => {
+  tbody.innerHTML = view
+    .map((entry) => {
+      const p = entry.p;
       const values = weeks.map((w) => seasonValue(index, w, p.playerId));
       const real = values.filter((v) => typeof v === 'number');
       const avg = real.length ? round1(real.reduce((a, b) => a + b, 0) / real.length) : null;
 
-      const order = SLOT_ORDER[p.lineupSlotId] ?? 40;
+      const order = SLOT_ORDER[entry.slotId] ?? 40;
       const tier = injuryTier(p.injuryStatus);
       const label = tier ? INJURY_LABELS[p.injuryStatus] || p.injuryStatus.replace(/_/g, ' ') : '';
       // Availability, not a value judgement — so it is allowed a colour where
@@ -869,8 +1106,8 @@ function renderSeason() {
         : '';
 
       return `
-      <tr class="${p.started ? '' : 'bench'}">
-        <td class="left" data-v="${order}"><span class="slot-tag">${esc(p.slot)}</span></td>
+      <tr class="${entry.started ? '' : 'bench'}">
+        <td class="left" data-v="${order}"><span class="slot-tag">${esc(entry.slot)}</span></td>
         <td class="name" title="${esc(p.name)} · ${esc(p.position)} · ${esc(p.proTeam)}">${esc(p.name)}${tag}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
@@ -1030,6 +1267,41 @@ $('weekSelect').addEventListener('change', (e) => {
 
 $('teamSelect').addEventListener('change', (e) => {
   selectTeam(Number(e.target.value));
+});
+
+/**
+ * The swap: pick a man up by his slot, put him down on somebody else's.
+ *
+ * Delegated from the table, so the rows may be rewritten as freely as they
+ * already are. sortable.js listens on the same element for `th[data-sort]`,
+ * which cannot be the same target as a button inside a `td`.
+ */
+$('rosterTable').addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('button[data-swap]');
+  if (!btn || btn.disabled) return;
+  const id = Number(btn.dataset.swap);
+
+  // Nobody in hand: pick him up. Him again: put him down unchanged.
+  if (state.held === null || state.held === id) {
+    state.held = state.held === null ? id : null;
+    renderRoster();
+    return;
+  }
+
+  // An illegal pair cannot get here — its button is disabled — but the model
+  // refuses it anyway rather than trusting the markup it just wrote.
+  const done = applySwap(state.held, id);
+  state.held = null;
+  renderRoster();
+  if (done) renderSeason();   // the two panels share one lineup
+});
+
+$('lineupReset').addEventListener('click', () => {
+  if (!lineupEdited() && state.held === null) return;
+  state.lineup = new Map();
+  state.held = null;
+  renderRoster();
+  renderSeason();
 });
 
 // Clicking anywhere on a team's row drills into it — the grid is the thing

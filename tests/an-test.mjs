@@ -101,6 +101,126 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+
+  // The roster detail's starters/bench split, the total that sits in the gap,
+  // and swapping a man across it. Team 4, week 8, from an-stub-season.mjs:
+  //
+  //   starters  400 QB · 401 RB · 402 RB · 403 WR · 404 WR · 405 TE
+  //             406 WR in FLEX · 407 D/ST · 408 K
+  //   bench     409 RB · 410 WR · 411 QB · 412 TE · 413 WR · 414 RB
+  //
+  // projected = (20 - i) + 2.4, so the starters total 165.6 and swapping 409
+  // (13.4) in for 402 (20.4) must land on 158.6, exactly seven points down.
+  swap: {
+    label: '(e) the starters/bench split, its total, and swapping across it',
+    stub: true,
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window }) => {
+      const season = await import('./an-stub-season.mjs');
+      const $ = (id) => document.getElementById(id);
+
+      const rowsOf = (id) =>
+        [...$(id).querySelectorAll('tr')].map((tr) => {
+          const b = tr.children[0].querySelector('button');
+          return {
+            cls: tr.getAttribute('class') || '',
+            slot: tr.children[0].textContent.trim(),
+            slotV: tr.children[0].getAttribute('data-v'),
+            name: tr.children[1].textContent.trim(),
+            proj: tr.children[4].textContent.trim(),
+            btn: b
+              ? {
+                  id: b.getAttribute('data-swap'),
+                  cls: b.getAttribute('class') || '',
+                  off: b.hasAttribute('disabled'),
+                }
+              : null,
+          };
+        });
+
+      const snap = () => {
+        const split = document.querySelector('#rosterSplit tr');
+        const delta = split && split.children[1].querySelector('.split-delta');
+        return {
+          starters: rowsOf('rosterStarters'),
+          bench: rowsOf('rosterBench'),
+          split: split && {
+            label: split.children[0].textContent.trim(),
+            total: split.children[1].textContent.trim(),
+            delta: delta ? delta.textContent.trim() : '',
+            hint: split.children[2].textContent.replace(/\s+/g, ' ').trim(),
+            spans: [...split.children].map((td) => Number(td.getAttribute('colspan') || 1)),
+            bodies: [...document.querySelectorAll('#rosterTable tbody')].map((b) => b.getAttribute('id')),
+          },
+          reset: ($('lineupReset').getAttribute('class') || ''),
+          note: $('rosterNote').textContent.replace(/\s+/g, ' ').trim(),
+          glance: [...document.querySelectorAll('#teamGlance .stat')].map((s) => [
+            s.querySelector('.k').textContent.trim(),
+            s.querySelector('.v').textContent.trim(),
+          ]),
+          // The season panel shares the lineup, so it has to move with it.
+          season: [...document.querySelectorAll('#seasonTable tbody tr')].map((tr) =>
+            `${tr.children[1].textContent.trim().replace(/\s+(OUT|IR|Q|D|SUSP|DTD)$/, '')}` +
+            `=${tr.children[0].textContent.trim()}` +
+            `${/\bbench\b/.test(tr.getAttribute('class') || '') ? 'B' : 'S'}`),
+        };
+      };
+
+      const fire = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      const tap = (id) => {
+        const b = document.querySelector(`#rosterTable button[data-swap="${id}"]`);
+        if (b) fire(b);
+        return Boolean(b);
+      };
+
+      const out = { initial: snap() };
+      out.fetchesBefore = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
+
+      // --- pick a bench RB up: only the legal landing places light up --------
+      tap(409);
+      out.holding = snap();
+
+      // --- his own slot again puts him down, changing nothing ---------------
+      tap(409);
+      out.putDown = snap();
+
+      // --- pick him up again and drop him on the second RB slot -------------
+      tap(409);
+      tap(402);
+      out.swapped = snap();
+      out.fetchesAfterSwap = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
+
+      // --- a swap that is not allowed: bench QB onto an RB slot --------------
+      tap(411);
+      out.holdingQB = snap();
+      tap(401);                       // refused — the lineup must not move
+      out.refused = snap();
+
+      // --- and back to ESPN's own lineup ------------------------------------
+      fire($('lineupReset'));
+      out.reset = snap();
+
+      // --- sorting must not merge the two groups ----------------------------
+      const ths = [...document.querySelectorAll('#rosterTable thead th')];
+      fire(ths[4]);                   // Projected, descending
+      out.sorted = snap();
+      fire(ths[0]);                   // back to Slot
+      fire(ths[0]);
+
+      // --- the what-if belongs to one squad in one week ---------------------
+      tap(409);
+      tap(402);
+      out.swappedAgain = snap();
+      const sel = $('teamSelect');
+      sel.value = '7';
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 120));
+      out.afterTeam = snap();
+
+      globalThis.__an = out;
+    },
+  },
 };
 
 // ------------------------------------------------------------------- child
@@ -220,14 +340,18 @@ function headers(table) {
 }
 
 function bodyRows(table) {
-  return [...table.querySelectorAll('tbody tr')].map((tr) => ({
-    cls: tr.getAttribute('class') || '',
-    cells: [...tr.children].map((td) => ({
-      text: txt(td),
-      v: td.getAttribute('data-v'),
-      cls: td.getAttribute('class') || '',
-    })),
-  }));
+  // The roster table's middle tbody is the starters/bench divider and its
+  // total, not a player, so it is never part of a row set.
+  return [...table.querySelectorAll('tbody tr')]
+    .filter((tr) => !/\bsplit-row\b/.test(tr.getAttribute('class') || ''))
+    .map((tr) => ({
+      cls: tr.getAttribute('class') || '',
+      cells: [...tr.children].map((td) => ({
+        text: txt(td),
+        v: td.getAttribute('data-v'),
+        cls: td.getAttribute('class') || '',
+      })),
+    }));
 }
 
 /** Monotonic check that ignores rows whose key is missing (they must trail). */
@@ -542,6 +666,166 @@ async function check(scenario, boot) {
       `${JSON.stringify(w.fetchesAfterWeek)} vs ${JSON.stringify(w.fetchesAfterSort)}`);
     c.ok('the column set survives a week change',
       eq(w.before.cols, w.week3.cols), JSON.stringify(w.week3 && w.week3.cols));
+  }
+
+  // ---- (e) the split, the total in it, and swapping across it -------------
+  if (scenario === 'swap') {
+    const w = globalThis.__an || {};
+    const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const lineup = (s) => ({
+      starters: s.starters.map((r) => `${r.name}=${r.slot}`),
+      bench: s.bench.map((r) => `${r.name}=${r.slot}`),
+      total: s.split.total,
+    });
+    const glance = (s, k) => (s.glance.find(([key]) => key === k) || [])[1];
+    const btn = (s, id) =>
+      [...s.starters, ...s.bench].find((r) => r.btn && r.btn.id === String(id));
+
+    // -- the shape of the split ------------------------------------------
+    const i0 = w.initial;
+    c.ok('the roster table has three bodies: starters, the split, the bench',
+      eq(i0.split.bodies, ['rosterStarters', 'rosterSplit', 'rosterBench']),
+      JSON.stringify(i0.split.bodies));
+    c.ok('the starters are in one and the bench in the other',
+      i0.starters.length === 9 && i0.bench.length === 6,
+      `${i0.starters.length} / ${i0.bench.length}`);
+    c.ok('every bench row is marked as one, and no starter is',
+      i0.bench.every((r) => /\bbench\b/.test(r.cls)) &&
+      i0.starters.every((r) => !/\bbench\b/.test(r.cls)),
+      i0.bench.map((r) => r.cls).join('|'));
+
+    // -- the total that sits in the gap -----------------------------------
+    c.ok('the total sits in the Projected column it is the total of',
+      eq(i0.split.spans, [4, 1, 6]), JSON.stringify(i0.split.spans));
+    c.ok('and it is the starters added up',
+      i0.split.total === '165.6', i0.split.total);
+    c.ok('which is also what the glance says the team is projected',
+      glance(i0, 'Projected') === '165.6', glance(i0, 'Projected'));
+    c.ok('an untouched lineup shows no difference, because there is none',
+      i0.split.delta === '' && i0.split.label === 'Starting lineup',
+      `${i0.split.label} / ${i0.split.delta}`);
+    c.ok('and offers no way to put back a lineup nobody has moved',
+      /\bhidden\b/.test(i0.reset), i0.reset);
+    c.ok('the note says what the band is and where the number comes from',
+      /line between the starting lineup and the bench/.test(i0.note) &&
+      /Projected column added up/.test(i0.note), i0.note.slice(0, 300));
+    c.ok('the note says how to swap, and that nothing is sent to ESPN',
+      /Click any slot tag/.test(i0.note) &&
+      /this is a what-if and nothing else/i.test(i0.note) &&
+      /nothing on this page is ever sent to ESPN/.test(i0.note),
+      i0.note.slice(0, 400));
+
+    // -- picking a man up --------------------------------------------------
+    const h = w.holding;
+    c.ok('the man in hand is marked as held',
+      /\bholding\b/.test(btn(h, 409).btn.cls), btn(h, 409).btn.cls);
+    c.ok('both RB slots and the FLEX are offered to a bench RB',
+      [401, 402, 406].every((id) => /\btarget\b/.test(btn(h, id).btn.cls)),
+      [401, 402, 406].map((id) => `${id}:${btn(h, id).btn.cls}`).join(' '));
+    c.ok('the slots he cannot legally take are not',
+      [400, 403, 404, 405, 407, 408].every((id) => btn(h, id).btn.off),
+      [400, 403, 404, 405, 407, 408].filter((id) => !btn(h, id).btn.off).join(','));
+    c.ok('and neither is another bench place, which would change nothing',
+      [410, 411, 412, 413, 414].every((id) => btn(h, id).btn.off),
+      [410, 411, 412, 413, 414].filter((id) => !btn(h, id).btn.off).join(','));
+    c.ok('the line in the gap says who is in hand',
+      /Holding T4 Player 09/.test(h.split.hint), h.split.hint);
+    c.ok('picking somebody up changes no lineup on its own',
+      eq(lineup(h), lineup(i0)), JSON.stringify(lineup(h)));
+    c.ok('clicking his own slot again puts him back down',
+      eq(lineup(w.putDown), lineup(i0)) &&
+      [...w.putDown.starters, ...w.putDown.bench].every((r) => !/\bholding\b/.test(r.btn?.cls || '')),
+      JSON.stringify(lineup(w.putDown)));
+
+    // -- the swap itself ---------------------------------------------------
+    const s = w.swapped;
+    c.ok('the swapped-in man is now a starter, in the slot he was dropped on',
+      s.starters.some((r) => r.name === 'T4 Player 09' && r.slot === 'RB'),
+      s.starters.map((r) => `${r.name}=${r.slot}`).join(' '));
+    c.ok('and the man he replaced is on the bench',
+      s.bench.some((r) => r.name === 'T4 Player 02' && r.slot === 'BE'),
+      s.bench.map((r) => `${r.name}=${r.slot}`).join(' '));
+    c.ok('the group sizes are unchanged — a swap moves two men, not one',
+      s.starters.length === 9 && s.bench.length === 6,
+      `${s.starters.length} / ${s.bench.length}`);
+    c.ok('both of them are marked as moved from where ESPN has them',
+      [...s.starters, ...s.bench].filter((r) => /\bmoved\b/.test(r.cls)).length === 2,
+      [...s.starters, ...s.bench].filter((r) => /\bmoved\b/.test(r.cls)).map((r) => r.name).join(','));
+    c.ok('THE TOTAL MOVES BY THE DIFFERENCE BETWEEN THE TWO',
+      s.split.total.startsWith('158.6') && s.split.delta === '-7.0',
+      `${s.split.total} / ${s.split.delta}`);
+    c.ok('and the panel stops calling it the starting lineup',
+      s.split.label === 'Your lineup', s.split.label);
+    c.ok('the glance follows it — projected, actual, and the bench behind it',
+      glance(s, 'Projected') === '158.6' && glance(s, 'Actual') === '104.9' &&
+      glance(s, 'Bench points') === '46.6',
+      JSON.stringify(s.glance));
+    c.ok('Diff is still actual minus projected, of the lineup on screen',
+      glance(s, 'Diff') === '-53.7', glance(s, 'Diff'));
+    c.ok('Est Total deliberately does not move: it never depended on the lineup',
+      glance(s, 'Est Total') === glance(i0, 'Est Total'),
+      `${glance(i0, 'Est Total')} -> ${glance(s, 'Est Total')}`);
+    c.ok('the way back appears once there is something to go back from',
+      !/\bhidden\b/.test(s.reset), s.reset);
+    c.ok('the note says out loud that this is no longer the real lineup',
+      /is not Team 4’s real lineup any more/.test(s.note), s.note.slice(0, 400));
+    c.ok('SWAPPING FETCHES NOTHING',
+      eq(w.fetchesBefore, w.fetchesAfterSwap),
+      `${JSON.stringify(w.fetchesBefore)} -> ${JSON.stringify(w.fetchesAfterSwap)}`);
+
+    // -- the season panel shares the lineup --------------------------------
+    c.ok('the season panel moves the same two men',
+      s.season.includes('T4 Player 09=RBS') && s.season.includes('T4 Player 02=BEB'),
+      s.season.join(' '));
+    c.ok('and had them the other way round before the swap',
+      i0.season.includes('T4 Player 09=BEB') && i0.season.includes('T4 Player 02=RBS'),
+      i0.season.join(' '));
+
+    // -- an illegal pair ---------------------------------------------------
+    c.ok('a bench QB is offered his own position and nothing else',
+      /\btarget\b/.test(btn(w.holdingQB, 400).btn.cls) &&
+      btn(w.holdingQB, 401).btn.off && btn(w.holdingQB, 402).btn.off,
+      `${btn(w.holdingQB, 400).btn.cls} / ${btn(w.holdingQB, 401).btn.off}`);
+    c.ok('AND CLICKING A SLOT HE CANNOT TAKE MOVES NOTHING',
+      eq(lineup(w.refused), lineup(s)), JSON.stringify(lineup(w.refused)));
+
+    // -- putting it back ---------------------------------------------------
+    c.ok('the reset restores ESPN’s own lineup exactly',
+      eq(lineup(w.reset), lineup(i0)), JSON.stringify(lineup(w.reset)));
+    c.ok('and takes the difference, the label and the button away with it',
+      w.reset.split.delta === '' && w.reset.split.label === 'Starting lineup' &&
+      /\bhidden\b/.test(w.reset.reset),
+      `${w.reset.split.label} / ${w.reset.split.delta} / ${w.reset.reset}`);
+    c.ok('nobody is left marked as moved',
+      [...w.reset.starters, ...w.reset.bench].every((r) => !/\bmoved\b/.test(r.cls)),
+      'a moved row survived the reset');
+
+    // -- sorting must not merge the two groups -----------------------------
+    const sorted = w.sorted;
+    const nums = (rows) => rows.map((r) => Number(r.proj));
+    const desc = (v) => v.every((x, i) => i === 0 || x <= v[i - 1]);
+    c.ok('sorting a column sorts the starters among themselves',
+      desc(nums(sorted.starters)) && sorted.starters.length === 9,
+      JSON.stringify(nums(sorted.starters)));
+    c.ok('and the bench among itself',
+      desc(nums(sorted.bench)) && sorted.bench.length === 6,
+      JSON.stringify(nums(sorted.bench)));
+    c.ok('THE SPLIT STAYS BETWEEN THEM, WITH ITS TOTAL INTACT',
+      eq(sorted.split.bodies, ['rosterStarters', 'rosterSplit', 'rosterBench']) &&
+      sorted.split.total === '165.6',
+      `${JSON.stringify(sorted.split.bodies)} ${sorted.split.total}`);
+
+    // -- the what-if belongs to one squad ----------------------------------
+    c.ok('the swap took a second time, after the sort',
+      w.swappedAgain.split.total.startsWith('158.6'), w.swappedAgain.split.total);
+    c.ok('SWITCHING TEAM THROWS THE WHAT-IF AWAY',
+      w.afterTeam.split.delta === '' && w.afterTeam.split.label === 'Starting lineup' &&
+      [...w.afterTeam.starters, ...w.afterTeam.bench].every((r) => !/\bmoved\b/.test(r.cls)),
+      `${w.afterTeam.split.label} / ${w.afterTeam.split.delta}`);
+    c.ok('and shows the other squad at its own full strength',
+      w.afterTeam.starters.every((r) => r.name.startsWith('T7 ')) &&
+      w.afterTeam.split.total === '165.6',
+      `${w.afterTeam.starters[0].name} ${w.afterTeam.split.total}`);
   }
 
   return c.out;
