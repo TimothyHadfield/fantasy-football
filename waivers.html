@@ -50,6 +50,17 @@ td.bye {
    readable as a value. */
 td.wait { color: var(--line); }
 
+/* A week worth actually starting the player for, by the per-position bar in
+   STARTABLE. Colour AND weight, never colour alone: this is the one cue on the
+   page that says "look here", and roughly one man in twelve cannot separate
+   the green from the grey around it. */
+td.hot {
+  color: var(--accent);
+  font-weight: 650;
+}
+/* The word "green" in the note, shown in the colour it is describing. */
+.hot-key { color: var(--accent); font-weight: 650; }
+
 /* Availability, as a tag beside the name. OUT and IR also dim the whole row:
    a player who cannot play is still worth listing, but never worth reading
    first. */

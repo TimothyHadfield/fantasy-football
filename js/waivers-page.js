@@ -155,7 +155,12 @@ const DEMO_TEAMS = [
 
 // Roughly the spread a real waiver wire has at the top of the ownership order.
 const DEMO_PLAN = [['QB', 6], ['RB', 9], ['WR', 12], ['TE', 4], ['K', 4], ['DST', 5]];
-const DEMO_BASE = { QB: 15, RB: 8.5, WR: 8.5, TE: 5.5, K: 7.5, DST: 6.5 };
+// Nudged up from where these started so the best demo player at each position
+// clears the startable bar in STARTABLE at least some weeks. They previously
+// topped out just under it for RB, WR and TE — arithmetically fine, but it
+// meant the green highlight could never appear for three of the six positions
+// and the feature looked broken to anyone reading the demo.
+const DEMO_BASE = { QB: 15, RB: 9.5, WR: 9.5, TE: 6.5, K: 7.5, DST: 6.5 };
 
 /** A tiny LCG, so the pool is identical on every load and in every browser. */
 function lcg(seed) {
@@ -595,7 +600,23 @@ function renderHead(weeks) {
      </tr>`;
 }
 
-function cell(v, week, name) {
+/**
+ * What counts as a genuinely startable week, by position — Tim's numbers.
+ *
+ * These are thresholds, not percentiles: a week is worth noticing on its own
+ * terms, not relative to whoever else happens to be on the wire this week. A
+ * position with no entry is never highlighted rather than being given a
+ * borrowed number.
+ */
+const STARTABLE = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 7 };
+
+/** Strictly over the line: "over 17" does not include 17. */
+function isStartable(v, position) {
+  const bar = STARTABLE[position];
+  return typeof bar === 'number' && typeof v === 'number' && v > bar;
+}
+
+function cell(v, week, name, position) {
   if (v === undefined) {
     // Three ways to have no number, and a reader has to be able to tell them
     // apart: still coming, refused outright, or ESPN simply had nothing.
@@ -614,6 +635,11 @@ function cell(v, week, name) {
     return `<td class="bye" data-v="0" ` +
       `title="${esc(name)} is on bye in week ${week}. ESPN returns 0.00 for a bye, ` +
       `which is not the same as a projection of nothing.">Bye</td>`;
+  }
+  if (isStartable(v, position)) {
+    return `<td class="hot" data-v="${v}" ` +
+      `title="${fmt(v)} projected in week ${week} — over the ${STARTABLE[position]} ` +
+      `that makes a ${esc(position)} worth starting.">${fmt(v)}</td>`;
   }
   return `<td data-v="${v}">${fmt(v)}</td>`;
 }
@@ -651,7 +677,7 @@ function renderTable(weeks) {
           <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${
             avg === null ? dash : fmt(avg)
           }</td>
-          ${values.map((v, i) => cell(v, weeks[i], p.name)).join('')}
+          ${values.map((v, i) => cell(v, weeks[i], p.name, p.position)).join('')}
         </tr>`;
     })
     .join('');
@@ -751,6 +777,16 @@ function renderNote(weeks) {
   parts.push(
     'Avg is the mean of the weeks shown and is ours, not ESPN’s: byes are counted as the zero ' +
     'ESPN returns, and weeks with no number at all are left out.'
+  );
+
+  // The green has to say what it means, or it is just decoration.
+  parts.push(
+    'A week in <span class="hot-key">green</span> is one worth starting the player for: ' +
+    Object.entries(STARTABLE)
+      .map(([pos, bar]) => `${esc(pos)} over ${bar}`)
+      .join(', ') +
+    '. Those are set bars, not a ranking against the rest of the wire, so a quiet week for ' +
+    'everyone stays uncoloured rather than promoting the best of a bad set.'
   );
 
   parts.push(
