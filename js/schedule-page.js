@@ -611,9 +611,12 @@ function renderArchiveNote(id, saved) {
 
   const limit =
     'What is kept is the schedule, the results as they stood, one projected total per team per ' +
-    'week, and the spread the win percentages were read against. <strong>The rosters behind those ' +
-    'numbers are not kept</strong>, so an archived week can be re-read but not re-derived — the ' +
-    'other pages always show today.';
+    'week, and the spread the win percentages were read against — the <em>inputs</em>. ' +
+    '<strong>The forecast and the simulation are worked out again from those when you look back</strong>, ' +
+    'so there is nothing you have to run for a week to save properly, and nothing to do per team: one ' +
+    'simulation covers all ten at once, and the picker only chooses whose chart is drawn. ' +
+    '<strong>The rosters behind those numbers are not kept</strong>, so an archived week can be ' +
+    're-read but not re-derived — the other pages always show today.';
 
   el.innerHTML =
     `${held} ${why}<br>${when}<br>${durability}<br>${limit}` +

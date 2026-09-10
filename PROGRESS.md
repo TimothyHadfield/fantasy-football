@@ -515,6 +515,16 @@ few kilobytes and a season of them is a few hundred.
 - **The rosters behind the numbers are deliberately NOT kept.** An archived week
   can be re-read but not re-derived, and the panel says so. The other pages
   always show today.
+- **A reading holds INPUTS, never outputs.** No simulation result is stored:
+  the forecast and the season simulation are worked out again on replay from
+  the stored schedule, projections and sigma. So nothing has to be run for a
+  week to save — Tim asked whether he had to sit through 50,000 runs for each
+  of ten teams — and nothing has to be run per team either, since one
+  simulation covers the whole league and the picker only chooses whose chart
+  is drawn. Because the run is seeded and deterministic, replaying reproduces
+  what was on screen; replaying at a HIGHER run count gives a more precise
+  answer to the same question rather than a different one, which is why the
+  run count is a display setting and is deliberately not part of a reading.
 - **Replaying is a SUBSTITUTION, not a second rendering path.** `hydrate()`
   returns exactly the shapes `normalizeSchedule` and `buildProjection` produce,
   they are swapped into `state.data` / `state.projection`, and the page renders
