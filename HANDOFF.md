@@ -3,13 +3,42 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-09.
+Last updated 2026-09-10.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
 reverse-engineered from Tim's spreadsheet. `docs/espn-draft-api.md` is the
 field-level ESPN reference. `DRAFT-STRATEGY.md` covers the parked drafter.
 `tests/README.md` says how to run the test suites.
+
+---
+
+## Say this to him first, in any session before the season ends
+
+**Nothing has been captured yet, and every week that passes without a capture
+is a week that can never be recovered.**
+
+The schedule page's time machine records what the forecast said, once a week,
+so it can be looked back on in December. ESPN keeps **no history of its own
+projections**, so this cannot be backfilled by any means — see rule 8 below.
+A reading is only taken when **Tim opens `schedule.html` on live data** in the
+Edge profile that has the bridge extension. A week he never visits is simply
+gone.
+
+As of 2026-09-10, `data/snapshots/` holds nothing but its README and no export
+has appeared in his Downloads, so either he has not opened the page yet or he
+has not exported. Two things to ask, in this order:
+
+1. **"Has the Time machine panel recorded this week?"** If not, that is the one
+   thing worth interrupting anything else for.
+2. **"Does the panel say any week is un-backed-up?"** If it is red, ask him to
+   press **Export archive** — the file lands in his Downloads and *you* commit
+   it to `data/snapshots/<league>-<season>.json`. Check
+   `C:\Users\timha\Downloads\fantasy-archive-*.json` yourself before asking; he
+   may have exported already and not said.
+
+An export is **cumulative** — one file holds every week — so it is a monthly
+job at most. Do not tell him to export weekly; he asked, and it is not true.
 
 ---
 
@@ -171,11 +200,18 @@ Shared modules worth knowing before touching anything:
 week), `js/projection.js` (rosters → per-week team points; **shared by two
 pages, do not grow a second copy**), `js/forecast.js` (win probability, optimal
 lineup, win-total distribution, season simulation — pure and node-testable),
+`js/trade.js` (replacement level, the depth map, the trade finder — pure, and it
+**wraps `forecast.js`'s `optimalLineup` rather than copying it**),
+`js/snapshots.js` (the time machine's format and storage),
 `js/prefs.js`, `js/connection.js`, `js/charts.js`, `js/sortable.js`.
+
+**Three features now share `optimalLineup`** — the schedule forecast, the trade
+finder and "Who to start". That is deliberate: it is the reason they cannot
+disagree about who a squad ought to be starting. Do not give any of them a copy.
 
 ## Tests
 
-`cd tests && npm install && npm test` — 17 suites, around 3,450 assertions.
+`cd tests && npm install && npm test` — 17 suites, over 3,500 assertions.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
 `tests/README.md` for the two linkedom gotchas that otherwise waste an hour.
@@ -188,12 +224,19 @@ Three worth knowing by name:
 - `link-check.mjs` tests the **seam between pages** — one page makes a player
   link, another resolves it. Every per-page suite was green while a quarter of
   the analysis page's links landed on "he may have been dropped".
-- `an-test.mjs` and `taken-check.mjs` are the two big end-to-end ones (451 and
-  216 assertions). Both re-derive their expected answers independently rather
-  than reading the page's own arithmetic back to it.
+- `an-test.mjs` and `fc-test.mjs` are the two big end-to-end ones (565 and 434
+  assertions). They re-derive their expected answers independently rather than
+  reading the page's own arithmetic back to it — `an-test` rebuilds every week's
+  lineup from `demo-rosters.js` to check the who-to-start marks, and `fc-test`
+  replays a **doctored** archive whose numbers the live page could not produce,
+  so "the time machine works" is falsifiable rather than a page agreeing with
+  itself.
 
 ## What is genuinely open
 
+- **The archive is empty and the clock is running.** See the block at the top of
+  this file. This is the only open item with a deadline: everything else can be
+  built in December just as well as today.
 - **Nothing has been checked against his real league in a browser.** All of it
   is verified against demo data, stubs and public leagues. That is the first
   thing to do: open each page on 476225250 and fix what the real payload

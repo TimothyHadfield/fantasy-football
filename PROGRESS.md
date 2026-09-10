@@ -37,11 +37,27 @@ describe how the site works **today**:
 | Why a trade can make BOTH squads better | "The Trade page" |
 | What to do next | "Next", at the foot |
 
-## What changed on 2026-09-09
+## What changed on 2026-09-09 and 2026-09-10
 
-Four sessions ran that day and the site changed a great deal. Everything below
-is the record of what was built and — more usefully — of what was tried, found
-to be wrong, and must not be tried again.
+Seven sessions ran across those two days and the site changed a great deal.
+Everything below is the record of what was built and — more usefully — of what
+was tried, found to be wrong, and must not be tried again.
+
+**Sessions five to seven (9th–10th)** added the Trade page, "Who to start, week
+by week", and the time machine with its committed archive. Each has its own
+section below. Three things they produced that outlive them:
+
+- **A test that rebuilds the answer beats a test that reads it back.** Both new
+  suites re-derive what the page should show from the source data rather than
+  from the page's own arithmetic, and both caught real defects that way — the
+  who-to-start union bug and the stale rows behind a hidden table.
+- **A blanket assertion hides which fact it is asserting.** `fc-test`'s "no
+  network calls" broke the moment an unrelated control arrived and told nobody
+  anything about network calls; it is now a named exception. The same happened
+  to "only one team picker on the page", which counted every `<select>`.
+- **Adding a page to `link-check.mjs` re-samples the click-through** and found a
+  defect that had been there all along. Any new page that names a player goes
+  into `SOURCES`, and it is worth doing for the resampling alone.
 
 **The fourth session** rebuilt the all-teams view into two grids, added the
 roster-detail swap, renamed the waiver page to "Players" and gave it a taken
@@ -1348,6 +1364,12 @@ silently rendering zeroes.
 Focus is trades, player analysis, and stats — on the now-connected real league.
 Tim will specify the first build. Prepared ground, in likely order:
 
+- **THE ONE ITEM WITH A DEADLINE: get a reading captured and committed.** The
+  time machine records what the forecast said, once a week, and ESPN keeps no
+  history of its own projections — so a week Tim never opens the schedule page
+  in is gone for good. As of 2026-09-10 `data/snapshots/` is empty. See the
+  block at the top of `HANDOFF.md` for exactly what to ask him. Everything else
+  on this list can be built in December just as well as today; this cannot.
 - **Check the rebuilt pages against the real league.** Everything here is
   verified against demo data, stubs and public leagues, and every page boots
   clean, but **none of it has been seen against live 476225250 in a browser**.

@@ -4,7 +4,7 @@ Headless suites for the site. They boot the **real** pages and import the
 **real** modules from [`../js`](../js) — nothing here reimplements site logic,
 so a rename or a broken selector fails a test rather than sailing past it.
 
-About 3,450 assertions in all, across 17 suites.
+Over 3,500 assertions in all, across 17 suites.
 
 ## Running them
 
@@ -42,7 +42,7 @@ process would see each other's DOM.
 | [`test-projection.mjs`](test-projection.mjs) | [`js/projection.js`](../js/projection.js), the shared projection module. | 38 |
 | [`test-snapshots.mjs`](test-snapshots.mjs) | [`js/snapshots.js`](../js/snapshots.js), the time machine's storage. Round-trips a week's reading through JSON, through an exported file and into an empty browser; proves a snapshot is a **copy** by moving the live season underneath one; covers a browser that blocks storage, a full one, an unreadable key and a file from a newer build; and covers the committed archive restoring a wiped browser without overwriting what it already held. | 123 |
 | [`test-trade.mjs`](test-trade.mjs) | [`js/trade.js`](../js/trade.js): replacement level, the depth map and the trade finder. A hand-built two-team league where every answer is known by hand, then the real demo pool where **every offer is re-priced from the raw rosters** rather than read back off its own numbers. | 1,411 |
-| [`fc-test.mjs`](fc-test.mjs) | The schedule page's forecast and simulation panels, against demo data and a stubbed live league — including no team set, the owner picking a team afterwards, switching team, a roster fetch that rejects, and the **time machine** — that booting live records a reading unasked, that replaying a doctored one puts ITS numbers on screen rather than the live ones, and that the whole round trip costs no extra request. | 433 over 9 scenarios |
+| [`fc-test.mjs`](fc-test.mjs) | The schedule page's forecast and simulation panels, against demo data and a stubbed live league — including no team set, the owner picking a team afterwards, switching team, a roster fetch that rejects, and the **time machine** — that booting live records a reading unasked, that replaying a doctored one puts ITS numbers on screen rather than the live ones, and that the whole round trip costs no extra request. | 434 over 9 scenarios |
 | [`wv-test.mjs`](wv-test.mjs) | The Players page's wire: filtering (incl. FLEX), sorting, widening the span mid-load, switching source while requests are in the air, weeks that reject, an empty pool, a saved filter that is no longer valid. | 188 over 8 scenarios |
 | [`cmp-check.mjs`](cmp-check.mjs) | The wire compared against your own roster — the worst man at each position, nobody set as you, ESPN refusing some or all roster weeks. | 90 over 6 scenarios |
 | [`taken-check.mjs`](taken-check.mjs) | The "Taken players" table: owners, per-squad positional ranks, nothing coloured, the two tables' independent filters, and landing a `?player=` link. Every rank is re-derived from the **rendered** Avg column, never from the stub's raw numbers. | 216 over 4 scenarios |
@@ -62,6 +62,32 @@ node test-pages-render.mjs waivers.html
 node test-pages-render.mjs draft.html
 node test-pages-render.mjs debug.html
 ```
+
+## Two ways to waste an hour on a suite that is working fine
+
+**Do not run a single scenario by hand and believe the result.** Several suites
+take a scenario name as `argv[2]` — that is how they run their OWN children —
+but the stubbed scenarios need a module loader that the parent supplies:
+
+```
+node fc-test.mjs archive        # WRONG: no loader, so js/season.js is real,
+                                # the page silently falls back to demo, and
+                                # every live assertion fails for no reason
+node fc-test.mjs                # right: the parent adds --import ./fc-register.mjs
+                                # for the scenarios that are marked stub: true
+```
+
+The same is true of `an-test.mjs` and `--import ./an-register.mjs`. If a
+hand-run scenario fails in ways the full run does not, this is why. Run the
+whole suite.
+
+**A harness stub that is missing a method fails silently and passes
+vacuously.** `localStorage` in these harnesses used to implement only
+`getItem`/`setItem`/`removeItem`. Real `Storage` also has `length` and `key(i)`,
+and `js/snapshots.js` enumerates keys to list the archive — so without them the
+time machine found nothing, and every assertion about it would have passed by
+being about an empty list. When a page module starts using a new browser API,
+check the stub implements enough of it to be wrong.
 
 ## The dumps are not tests
 
