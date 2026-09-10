@@ -24,6 +24,7 @@ const SUITES = [
   ['test-forecast.mjs', 'win probability, sigma calibration, optimal lineup, win-total distribution'],
   ['test-sim.mjs', 'the Monte Carlo season simulation'],
   ['test-projection.mjs', 'the shared projection module'],
+  ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],
   ['test-pages-render.mjs', 'every page boots its real modules against its real HTML'],

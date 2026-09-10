@@ -17,6 +17,7 @@ import { histogram } from './charts.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
+import * as snapshots from './snapshots.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('schedule');
@@ -57,6 +58,17 @@ const state = {
   runs: SIM_RUN_CHOICE(prefs.get('runs', 10000)),
   sim: null,                // {key, result} — see simInputs() for what invalidates it
   simToken: 0,              // guards against a slow run landing after the data changed
+
+  // The time machine. `replay` is null when the page is showing now, and the
+  // snapshot being replayed otherwise. It is deliberately the whole snapshot
+  // rather than just a week number: forecastAsOf() reads the week off it, and
+  // the banner needs to say when the reading was taken.
+  replay: null,
+  // The live season, put aside while an archived one is on screen, so coming
+  // back costs no request. See leaveReplay().
+  live: null,
+  snapMsg: '',              // the last thing the archive controls did, in words
+  snapErr: false,
 };
 
 // ------------------------------------------------------------------ formatting
@@ -306,8 +318,272 @@ async function loadLive() {
   }
 }
 
+// ------------------------------------------------------------ the time machine
+//
+// Everything on this page that looks forward is a reading taken at a moment,
+// and ESPN keeps no history of its own projections — ask it in week 9 what it
+// thought week 13 would be back in week 2 and the number is simply gone. So a
+// forecast that is not captured while it is on screen cannot be recovered.
+//
+// `js/snapshots.js` owns the format and the storage; this owns WHEN a reading
+// is taken and what happens when one is put back. Replaying is a substitution:
+// state.data and state.projection are swapped for the stored ones and the page
+// re-renders through its ordinary path, so an archived week cannot drift into
+// looking different from a live one.
+
+/** Which archive this league's snapshots belong to. Demo never mixes with real. */
+function archiveId() {
+  if (!state.data) return null;
+  if (state.data.isDemo) return { leagueId: 'demo', season: 0 };
+  const cfg = espn.getConfig();
+  if (!cfg.leagueId) return null;
+  return { leagueId: String(cfg.leagueId), season: Number(cfg.season) };
+}
+
+/** Take a reading of what is on screen now. */
+function captureNow() {
+  const id = archiveId();
+  if (!id || !state.data) return null;
+  const spread = state.replay ? { sigma: null } : scoringSpread();
+  return snapshots.snapshotFrom({
+    leagueId: id.leagueId,
+    season: id.season,
+    week: forecastAsOf(),
+    data: state.data,
+    projection: state.projection,
+    strengthNote: state.strengthNote,
+    sigma: spread.sigma,
+    calibrated: spread.calibrated,
+    sample: spread.sample,
+  });
+}
+
+/**
+ * Save this week automatically, once, the first time it can be saved properly.
+ *
+ * FIRST WRITE WINS. Tim's ask is for what the app knew "before every week", so
+ * the earliest complete reading of a week is the one worth keeping — a later
+ * load the same week has already watched some of the games it was forecasting.
+ * A deliberate "Save this week" overwrites; nothing else does.
+ *
+ * It waits for a real projection. A reading taken before ESPN's per-week
+ * numbers arrive would be a schedule with no forecast in it, and because first
+ * write wins it would then BLOCK the good one for the rest of the week. Better
+ * to save nothing and say so.
+ *
+ * Demo is never captured automatically: it is generated, it would fill the
+ * archive with weeks that never happened, and every reload would race to write
+ * them. The button still works there, which is how the feature can be tried
+ * before there is a real season to try it on.
+ */
+function autoCapture() {
+  if (state.replay) return;                 // never record a recording
+  if (!state.data || state.data.isDemo) return;
+  if (!state.projection) return;            // no forecast in it yet — wait
+  const id = archiveId();
+  if (!id) return;
+
+  const week = forecastAsOf();
+  if (!Number.isFinite(week) || week <= 0) return;
+  if (snapshots.get(id.leagueId, id.season, week)) return;   // already have it
+
+  const snap = captureNow();
+  if (!snap) return;
+  const res = snapshots.save(snap);
+  state.snapMsg = res.ok
+    ? `Saved a reading of week ${week} automatically — this is what the app knew today.`
+    : `Could not save week ${week}: ${res.reason}`;
+  state.snapErr = !res.ok;
+  renderArchive();
+}
+
+/** Put a stored week back on screen. */
+function replaySnapshot(week) {
+  const id = archiveId();
+  if (!id) return;
+  const snap = snapshots.get(id.leagueId, id.season, week);
+  if (!snap) {
+    state.snapMsg = `No reading was ever saved for week ${week}.`;
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+  const built = snapshots.hydrate(snap);
+  if (!built) {
+    state.snapMsg = `The saved week ${week} could not be read back.`;
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+
+  // Put the live season aside on the way in, so coming back is a repaint.
+  //
+  // Reloading instead would be correct and expensive: returning to now costs a
+  // schedule request plus one per remaining week, which on a thirteen-week
+  // run-in is a dozen calls every time somebody flicks back from an archived
+  // week. This page's whole cost model is one request per week with no bulk
+  // form; spending that on a control that only undoes a local substitution
+  // would be the worst-value request on the site. The stash is only as fresh as
+  // the last load, which is exactly as fresh as the page was anyway — nothing
+  // here polls — and the data-source toggle forces a real reload.
+  if (!state.replay) {
+    state.live = {
+      data: state.data,
+      projection: state.projection,
+      strength: state.strength,
+      strengthNote: state.strengthNote,
+      week: state.week,
+    };
+  }
+
+  state.replay = snap;
+  state.data = built.data;
+  state.projection = built.projection;
+  state.strength = built.projection ? built.projection.strength : null;
+  state.strengthNote = built.strengthNote;
+  // A run in flight is about the live season; retire it rather than letting it
+  // land on top of an archived one.
+  state.sim = null;
+  state.simToken++;
+  state.strengthToken++;   // and stop any live projection fetch from landing
+  if (!state.data.weeks.includes(state.week)) state.week = currentWeek(state.data);
+  state.snapMsg = '';
+  state.snapErr = false;
+  render();
+}
+
+/** Back to now: the season put aside on the way in, restored without a request. */
+function leaveReplay() {
+  if (!state.replay) return;
+  state.replay = null;
+  state.snapMsg = '';
+  state.snapErr = false;
+
+  const live = state.live;
+  state.live = null;
+  if (!live || !live.data) {
+    // Nothing was put aside — a reload while replaying, say. Fetch it properly
+    // rather than leaving the page on data it has just disowned.
+    state.source === 'demo' ? loadDemo() : loadLive();
+    return;
+  }
+
+  state.data = live.data;
+  state.projection = live.projection;
+  state.strength = live.strength;
+  state.strengthNote = live.strengthNote;
+  state.week = live.data.weeks.includes(live.week) ? live.week : currentWeek(live.data);
+  state.sim = null;        // the cached run belongs to the archived season
+  state.simToken++;
+  render();
+}
+
+function renderArchive() {
+  const id = archiveId();
+  const sel = $('asOfSelect');
+  const banner = $('replayBanner');
+  const status = $('snapStatus');
+
+  if (!id) {
+    sel.innerHTML = '<option value="live">Right now</option>';
+    banner.classList.add('hidden');
+    $('snapDelete').classList.add('hidden');
+    status.innerHTML =
+      'Connect a league to start keeping a weekly record of the forecast.';
+    return;
+  }
+
+  const saved = snapshots.list(id.leagueId, id.season);
+  const current = state.replay ? String(state.replay.week) : 'live';
+
+  sel.innerHTML =
+    `<option value="live"${current === 'live' ? ' selected' : ''}>Right now</option>` +
+    saved
+      .slice()
+      .reverse()
+      .map((s) => {
+        const when = new Date(s.takenAt);
+        const stamp = Number.isNaN(when.getTime())
+          ? ''
+          : ` · saved ${when.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+        return (
+          `<option value="${s.week}"${current === String(s.week) ? ' selected' : ''}>` +
+          `Week ${s.week}${esc(stamp)}</option>`
+        );
+      })
+      .join('');
+  if (sel.value !== current) sel.value = current;
+
+  $('snapDelete').classList.toggle('hidden', !state.replay);
+  $('snapSave').textContent = state.replay ? 'Re-save this week' : 'Save this week';
+  $('snapSave').disabled = Boolean(state.replay);
+
+  // The banner. Loud, because every number below it is historical and a reader
+  // who skims past it and reads the forecast as current has been misled.
+  if (state.replay) {
+    const when = new Date(state.replay.takenAt);
+    const stamp = Number.isNaN(when.getTime()) ? 'an earlier date' : when.toLocaleString();
+    banner.classList.remove('hidden');
+    banner.innerHTML =
+      `<strong>You are looking at the season as of week ${state.replay.week}</strong>, recorded on ` +
+      `${esc(stamp)}. Every number on this page — the standings, the results, the win ` +
+      `percentages, the forecast and the simulation — is what the app knew then, not what it ` +
+      `knows now. Choose <em>Right now</em> above to come back.`;
+  } else {
+    banner.classList.add('hidden');
+    banner.innerHTML = '';
+  }
+
+  renderArchiveNote(id, saved);
+}
+
+function renderArchiveNote(id, saved) {
+  const el = $('snapStatus');
+  const weeks = saved.map((s) => s.week);
+  const kb = Math.round(snapshots.sizeOf(id.leagueId, id.season) / 1024);
+
+  const held = weeks.length
+    ? `<strong>${plural(weeks.length, 'week')} kept</strong> (${weeks.join(', ')}) · about ${kb}KB.`
+    : '<strong>Nothing kept yet.</strong>';
+
+  const why =
+    'ESPN publishes a projection for every future week, but keeps no record of what it ' +
+    '<em>used</em> to project — ask it in week 9 what it thought of week 13 back in week 2 and ' +
+    'the number is gone. So a reading of the forecast that is not saved while it is on screen ' +
+    'cannot be recovered afterwards.';
+
+  const when = state.data && state.data.isDemo
+    ? 'Sample data is never recorded automatically — it is generated, not observed — but ' +
+      '<strong>Save this week</strong> works here so the feature can be tried before there is a ' +
+      'real season to try it on.'
+    : 'A reading is taken <strong>automatically, once per week</strong>, the first time the page ' +
+      'loads with ESPN&rsquo;s projections in it. The earliest complete reading of a week is the ' +
+      'one kept, because that is the one taken before any of the games it forecasts were played.';
+
+  const durability =
+    '<strong>This lives in this browser only.</strong> Clearing site data deletes it, and it is not ' +
+    'on your phone. <strong>Export archive</strong> writes the whole thing to one JSON file — do that ' +
+    'every few weeks, and the season&rsquo;s history outlives the browser.';
+
+  const limit =
+    'What is kept is the schedule, the results as they stood, one projected total per team per ' +
+    'week, and the spread the win percentages were read against. <strong>The rosters behind those ' +
+    'numbers are not kept</strong>, so an archived week can be re-read but not re-derived — the ' +
+    'other pages always show today.';
+
+  el.innerHTML =
+    `${held} ${why}<br>${when}<br>${durability}<br>${limit}` +
+    (state.snapMsg
+      ? `<br><span class="${state.snapErr ? 'neg' : 'pos'}">${esc(state.snapMsg)}</span>`
+      : '');
+}
+
 /** Take on a freshly loaded schedule and reset what belongs to the old one. */
 function adopt(data) {
+  // Adopting a freshly loaded league is by definition leaving an archived one,
+  // and the season put aside belongs to the league being replaced.
+  state.replay = null;
+  state.live = null;
   state.data = data;
   state.week = restoreWeek(data);
   state.filterTeam = '';
@@ -587,6 +863,9 @@ async function refreshStrength() {
     renderResults();    // the win-% column arrives with the projection
     renderForecast();   // and so does the whole season forecast
     renderSimulation(); // which the simulation is built on top of, so it waits too
+    // Last, and only now: this is the first moment the page holds a complete
+    // reading, and a reading is the thing worth keeping. See autoCapture().
+    autoCapture();
   }
 }
 
@@ -630,12 +909,22 @@ function render() {
 
   syncSource();
 
-  $('modeBadge').className = 'badge ' + (d.isDemo ? 'demo' : 'live');
-  $('modeBadge').textContent = d.isDemo ? 'Demo' : 'Live';
-  $('pageSub').textContent = d.isDemo
-    ? 'Showing a generated sample season so you can see the layout with real-looking results in it.'
-    : `${d.leagueName} · ${d.weeks.length} week${d.weeks.length === 1 ? '' : 's'} · ${d.teams.length} teams`;
+  // The badge says WHEN as well as what, because "Live" over a week-3 archive
+  // is the one label on this page that could actively mislead.
+  if (state.replay) {
+    $('modeBadge').className = 'badge archive';
+    $('modeBadge').textContent = `Week ${state.replay.week} archive`;
+  } else {
+    $('modeBadge').className = 'badge ' + (d.isDemo ? 'demo' : 'live');
+    $('modeBadge').textContent = d.isDemo ? 'Demo' : 'Live';
+  }
+  $('pageSub').textContent = state.replay
+    ? `${d.leagueName} · as the app saw it in week ${state.replay.week}`
+    : d.isDemo
+      ? 'Showing a generated sample season so you can see the layout with real-looking results in it.'
+      : `${d.leagueName} · ${d.weeks.length} week${d.weeks.length === 1 ? '' : 's'} · ${d.teams.length} teams`;
 
+  renderArchive();
   renderWeekPicker();
   renderTeamPicker();
   renderStandings();
@@ -1372,6 +1661,10 @@ function scheduleGrid(teams, cols) {
 function forecastAsOf() {
   const d = state.data;
   if (!d || !d.weeks.length) return 0;
+  // Replaying: the week is a recorded fact, not something to re-derive. Reading
+  // it back off the stored games would agree on live data and quietly disagree
+  // on demo, where "as of" follows the week picker rather than the results.
+  if (state.replay) return state.replay.week;
   if (d.isDemo) return state.week === 'all' ? d.weeks[0] : Number(state.week);
   const open = d.weeks.filter((w) =>
     (d.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
@@ -1393,6 +1686,18 @@ function isRemaining(g, asOf) {
  * — so this falls back to forecast.js's default, and says which it did.
  */
 function scoringSpread() {
+  // Sigma is LEARNED FROM RESULTS, so it moves as the season goes on. Replaying
+  // week 3 with the spread measured in week 12 would re-forecast the past with
+  // knowledge it did not have — a subtler version of the same mistake as
+  // showing today's projections against an old schedule. Every snapshot carries
+  // the figure that was in force when it was taken.
+  if (state.replay && typeof state.replay.sigma === 'number') {
+    return {
+      sigma: state.replay.sigma,
+      calibrated: Boolean(state.replay.sigmaCalibrated),
+      sample: state.replay.sigmaSample || 0,
+    };
+  }
   const asOf = forecastAsOf();
   const games = (state.data?.games || [])
     .filter((g) => gameState(g) === 'final' && !isRemaining(g, asOf))
@@ -2026,6 +2331,113 @@ $('sourceToggle').addEventListener('click', (e) => {
   prefs.set('forecastTeam', null);
   syncSource();
   state.source === 'demo' ? loadDemo() : loadLive();
+});
+
+// ---------------------------------------------------------- archive controls
+
+$('asOfSelect').addEventListener('change', (e) => {
+  const v = e.target.value;
+  if (v === 'live') leaveReplay();
+  else replaySnapshot(Number(v));
+});
+
+$('snapSave').addEventListener('click', () => {
+  const id = archiveId();
+  if (!id) {
+    state.snapMsg = 'Connect a league first.';
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+  const snap = captureNow();
+  if (!snap) {
+    state.snapMsg = 'There is nothing on screen to record yet.';
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+  const had = snapshots.get(id.leagueId, id.season, snap.week);
+  const res = snapshots.save(snap);
+  state.snapErr = !res.ok;
+  state.snapMsg = res.ok
+    ? `${had ? 'Replaced' : 'Saved'} the reading for week ${snap.week}` +
+      (state.projection ? '.' : ' — but ESPN’s per-week projections are not in it yet, so it has no forecast.')
+    : res.reason;
+  renderArchive();
+});
+
+$('snapDelete').addEventListener('click', () => {
+  const id = archiveId();
+  if (!id || !state.replay) return;
+  const week = state.replay.week;
+  snapshots.remove(id.leagueId, id.season, week);
+  leaveReplay();
+  state.snapMsg = `Deleted the reading for week ${week}.`;
+  state.snapErr = false;
+  renderArchive();
+});
+
+$('snapExport').addEventListener('click', () => {
+  const id = archiveId();
+  if (!id) return;
+  const file = snapshots.exportAll(id.leagueId, id.season);
+  if (!file.count) {
+    state.snapMsg = 'There is nothing in the archive to export yet.';
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+  try {
+    const blob = new Blob([file.json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoked on a timer rather than immediately: some browsers have not
+    // started reading the blob by the time click() returns.
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    state.snapMsg = `Exported ${plural(file.count, 'week')} to ${file.name}. Keep it somewhere that is not this browser.`;
+    state.snapErr = false;
+  } catch (err) {
+    state.snapMsg = `Could not export: ${err.message}`;
+    state.snapErr = true;
+  }
+  renderArchive();
+});
+
+$('snapImport').addEventListener('click', () => $('snapFile').click());
+
+$('snapFile').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';   // so choosing the same file twice fires again
+  if (!file) return;
+  let text;
+  try {
+    text = await file.text();
+  } catch (err) {
+    state.snapMsg = `Could not read that file: ${err.message}`;
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+
+  const { snapshots: found, error } = snapshots.parseImport(text);
+  if (error) {
+    state.snapMsg = error;
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+  const res = snapshots.importAll(found);
+  state.snapErr = res.failed.length > 0;
+  state.snapMsg =
+    `Imported ${plural(res.added, 'week')}` +
+    (res.kept ? `, kept ${res.kept} already here` : '') +
+    (res.failed.length ? ` — ${res.failed.join('; ')}` : '.');
+  renderArchive();
 });
 
 /** The week picker drives the whole page, so changing it re-renders the page. */

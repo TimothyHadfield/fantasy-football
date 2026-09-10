@@ -76,6 +76,95 @@ const SCENARIOS = {
       globalThis.__views = views;
     },
   },
+  archive: {
+    label: '(g) the time machine: a reading is taken, and replaying gives it back',
+    stub: true,
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window }) => {
+      const $ = (id) => document.getElementById(id);
+      const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+      const ls = globalThis.localStorage;
+      const out = {};
+
+      const snapPage = () => ({
+        badge: txt($('modeBadge')),
+        badgeCls: $('modeBadge').getAttribute('class') || '',
+        sub: txt($('pageSub')),
+        bannerHidden: ($('replayBanner').getAttribute('class') || '').includes('hidden'),
+        banner: txt($('replayBanner')),
+        asOf: $('asOfSelect').value,
+        options: [...$('asOfSelect').querySelectorAll('option')].map((o) => o.getAttribute('value')),
+        deleteHidden: ($('snapDelete').getAttribute('class') || '').includes('hidden'),
+        status: txt($('snapStatus')),
+        // The two panels the whole feature exists for.
+        forecast: [...$('forecastTable').querySelectorAll('tbody tr')]
+          .map((tr) => [...tr.children].map((td) => txt(td))),
+        forecastStats: txt($('forecastStats')),
+        forecastNote: txt($('forecastNote')),
+        sim: [...$('simTable').querySelectorAll('tbody tr')]
+          .map((tr) => [...tr.children].map((td) => td.getAttribute('data-v') ?? txt(td))),
+        standings: [...$('standingsTable').querySelectorAll('tbody tr')]
+          .map((tr) => [...tr.children].map((td) => txt(td))),
+      });
+
+      // ---- what booting live recorded on its own --------------------------
+      const keys = [];
+      for (let i = 0; i < ls.length; i++) {
+        const k = ls.key(i);
+        if (k && k.startsWith('ff.snap.')) keys.push(k);
+      }
+      out.keys = keys;
+      out.auto = keys.length ? JSON.parse(ls.getItem(keys[0])) : null;
+      out.live = snapPage();
+
+      // ---- a DOCTORED reading, so replay cannot be confused with live -----
+      //
+      // Within one boot the archive and the live page hold the same numbers, so
+      // "replay works" would be unfalsifiable. This writes a week 1 reading
+      // whose projections are all 200-something and whose spread is 5, none of
+      // which the live page could produce — so if those numbers reach the
+      // screen, they came out of storage and nowhere else.
+      if (out.auto) {
+        const doctored = JSON.parse(JSON.stringify(out.auto));
+        doctored.week = 1;
+        doctored.takenAt = '2026-09-01T10:00:00.000Z';
+        doctored.sigma = 5;
+        doctored.sigmaCalibrated = true;
+        doctored.sigmaSample = 40;
+        for (const w of Object.keys(doctored.proj)) {
+          for (const t of Object.keys(doctored.proj[w])) {
+            doctored.proj[w][t] = 200 + Number(t);
+          }
+        }
+        for (const t of Object.keys(doctored.strength)) doctored.strength[t] = 200 + Number(t);
+        out.doctored = doctored;
+        ls.setItem('ff.snap.99.2026.1', JSON.stringify(doctored));
+      }
+
+      // The page builds this option itself on its next render; the test adds it
+      // so the change handler — which is what is under test — can be reached
+      // without waiting for one.
+      const sel = $('asOfSelect');
+      const opt = document.createElement('option');
+      opt.setAttribute('value', '1');
+      opt.textContent = 'Week 1';
+      sel.appendChild(opt);
+      sel.value = '1';
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 250));
+      out.replayed = snapPage();
+
+      // ---- and back to now ------------------------------------------------
+      const sel2 = $('asOfSelect');
+      sel2.value = 'live';
+      sel2.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 400));
+      out.back = snapPage();
+
+      globalThis.__arch = out;
+    },
+  },
   'sim-interact': {
     label: '(f) simulation: switching team repaints, changing the run count re-runs',
     stub: false,
@@ -185,7 +274,13 @@ async function boot(scenario) {
   const store = new Map();
   if (cfg.prefs) store.set('ff.prefs', JSON.stringify(cfg.prefs));
   if (cfg.conn) store.set('ff.connection', JSON.stringify(cfg.conn));
+  // `length` and `key()` are part of the real Storage interface and were
+  // missing here. `js/snapshots.js` enumerates keys to list the archive, so
+  // without them the time machine would quietly find nothing and every
+  // assertion about it would pass by being vacuous.
   const localStorage = {
+    get length() { return store.size; },
+    key: (i) => [...store.keys()][i] ?? null,
     getItem: (k) => (store.has(k) ? store.get(k) : null),
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: (k) => store.delete(k),
@@ -527,8 +622,17 @@ async function check(scenario, boot) {
       txt($('simRuns').querySelector('button.on')) === '10,000', txt($('simRuns')));
     c.ok('run count control offers three choices',
       $('simRuns').querySelectorAll('button[data-runs]').length === 3);
-    c.ok('there is only one team picker on the page',
-      d.querySelectorAll('select').length === 3, `${d.querySelectorAll('select').length} selects`);
+    // Named rather than counted. The point of this assertion is that the
+    // simulation must not grow a SECOND team picker beside the forecast's —
+    // two of them disagreeing about whose season is on screen was the risk.
+    // Counting every <select> on the page made it fail the moment an unrelated
+    // control arrived (the time machine's week picker), which told nobody
+    // anything about team pickers.
+    const selectIds = [...d.querySelectorAll('select')].map((s) => s.id).sort();
+    c.ok('the page has exactly the four selects it should, and no second team picker',
+      JSON.stringify(selectIds) ===
+        JSON.stringify(['asOfSelect', 'filterTeam', 'forecastTeam', 'weekSelect']),
+      selectIds.join(','));
   }
 
   if (scenario === 'live' || scenario === 'live-pickteam') {
@@ -557,6 +661,120 @@ async function check(scenario, boot) {
   }
 
   // ---- (f): what re-runs the simulation and what merely repaints ----------
+  // ---- the time machine ---------------------------------------------------
+  //
+  // ESPN keeps no history of its own projections, so a forecast that is not
+  // captured while it is on screen cannot be recovered. These assertions are
+  // about the two halves of that: a reading really is taken, and putting one
+  // back really does show what it holds rather than what is live.
+  if (scenario === 'archive') {
+    const a = globalThis.__arch || {};
+
+    // ---- a reading is taken, on its own, without being asked -------------
+    c.ok('booting a live league records a reading by itself',
+      a.keys && a.keys.length >= 1, JSON.stringify(a.keys));
+    c.ok('and it is filed under this league and season',
+      a.keys && a.keys.every((k) => k.startsWith('ff.snap.99.2026.')), JSON.stringify(a.keys));
+    c.ok('the reading knows which week it is a view as of',
+      a.auto && Number.isFinite(a.auto.week), a.auto && a.auto.week);
+    c.ok('and when it was taken',
+      a.auto && !Number.isNaN(new Date(a.auto.takenAt).getTime()), a.auto && a.auto.takenAt);
+    c.ok('it carries the whole schedule, results included',
+      a.auto && Array.isArray(a.auto.games) && a.auto.games.length > 0,
+      a.auto && a.auto.games && a.auto.games.length);
+    c.ok('and a projected total per team per remaining week',
+      a.auto && Object.keys(a.auto.proj || {}).length > 0,
+      a.auto && Object.keys(a.auto.proj || {}).join(','));
+    // Sigma moves as results come in, so replaying without it would re-forecast
+    // the past with knowledge it did not have.
+    c.ok('and the scoring spread that was in force',
+      a.auto && (typeof a.auto.sigma === 'number'), a.auto && a.auto.sigma);
+    c.ok('a reading is small enough to keep a season of',
+      a.auto && JSON.stringify(a.auto).length < 60000,
+      a.auto && JSON.stringify(a.auto).length);
+
+    // ---- while live, the page says it is live ----------------------------
+    c.ok('the live page is not wearing the archive badge',
+      a.live && a.live.badge === 'Live' && !/archive/.test(a.live.badgeCls),
+      a.live && `${a.live.badge} / ${a.live.badgeCls}`);
+    c.ok('and the banner is hidden', a.live && a.live.bannerHidden, a.live && a.live.banner);
+    c.ok('and the picker is on "Right now"', a.live && a.live.asOf === 'live', a.live && a.live.asOf);
+    c.ok('and there is no delete button to press', a.live && a.live.deleteHidden);
+    c.ok('the recorded week is offered in the picker',
+      a.live && a.auto && a.live.options.includes(String(a.auto.week)),
+      a.live && a.live.options.join(','));
+    c.ok('the panel explains why the archive has to exist at all',
+      a.live && /keeps no record of what it/.test(a.live.status), a.live && a.live.status.slice(0, 200));
+    c.ok('and warns that browser storage is not durable',
+      a.live && /lives in this browser only/.test(a.live.status), a.live && a.live.status.slice(0, 300));
+    c.ok('and says what it does NOT keep',
+      a.live && /rosters behind those numbers are not kept/.test(a.live.status),
+      a.live && a.live.status.slice(-300));
+
+    // ---- REPLAY SHOWS THE ARCHIVE, NOT THE LIVE PAGE ---------------------
+    //
+    // The doctored reading's projections are all 200-something and its spread
+    // is 5. Neither is a number the live page could produce, so their arrival
+    // on screen proves the panels were rebuilt from storage.
+    c.ok('replaying puts the page in archive mode',
+      a.replayed && /archive/.test(a.replayed.badgeCls) && /Week 1/.test(a.replayed.badge),
+      a.replayed && `${a.replayed.badge} / ${a.replayed.badgeCls}`);
+    c.ok('and says so loudly, not just in the badge',
+      a.replayed && !a.replayed.bannerHidden &&
+      /looking at the season as of week 1/.test(a.replayed.banner),
+      a.replayed && a.replayed.banner.slice(0, 200));
+    c.ok('the banner names when the reading was taken',
+      a.replayed && /2026/.test(a.replayed.banner), a.replayed && a.replayed.banner.slice(0, 200));
+    c.ok('the sub-heading stops claiming to be current',
+      a.replayed && /as the app saw it in week 1/.test(a.replayed.sub), a.replayed && a.replayed.sub);
+    c.ok('a delete button appears for the week being viewed',
+      a.replayed && !a.replayed.deleteHidden);
+
+    const flat = (rows) => (rows || []).map((r) => r.join('|')).join('\n');
+    c.ok('THE FORECAST IS REBUILT FROM THE READING, not from live data',
+      /\b2\d\d(\.\d)?\b/.test(flat(a.replayed && a.replayed.forecast)),
+      flat(a.replayed && a.replayed.forecast).slice(0, 300));
+    c.ok('and it is genuinely different from what was live a moment ago',
+      flat(a.replayed && a.replayed.forecast) !== flat(a.live && a.live.forecast),
+      'the forecast did not change when the archive was opened');
+    c.ok('the simulation is re-run against the reading too',
+      flat(a.replayed && a.replayed.sim) !== flat(a.live && a.live.sim),
+      'the simulated table did not change');
+    c.ok('and the stored spread is used, not today’s',
+      a.replayed && /5\.0-point|5-point/.test(a.replayed.forecastNote),
+      a.replayed && a.replayed.forecastNote.slice(0, 400));
+
+    // ---- THE WHOLE ROUND TRIP COSTS NOTHING ------------------------------
+    //
+    // A reading is complete, so going back in time must never send the page off
+    // to ESPN — which could not answer the question anyway, since it keeps no
+    // history. Coming back must not either: returning to now used to reload,
+    // which cost a schedule call plus one per remaining week every time
+    // somebody flicked out of the archive, and this scenario is what caught it.
+    // Read from the stub's own call log, because the raw `fetch` is never
+    // reached in a stubbed scenario and asserting on it would pass vacuously.
+    {
+      const season = await import('./fc-stub-season.mjs');
+      c.ok('OPENING AND LEAVING THE ARCHIVE ADDS NO SCHEDULE FETCH',
+        season.calls.schedule === 1, `saw ${season.calls.schedule}`);
+      c.ok('AND NO EXTRA ROSTER REQUESTS',
+        season.calls.rosters.length === 12, `saw ${season.calls.rosters.length}`);
+    }
+
+    // ---- and back to now -------------------------------------------------
+    c.ok('choosing "Right now" leaves archive mode',
+      a.back && !/archive/.test(a.back.badgeCls), a.back && a.back.badgeCls);
+    c.ok('the banner goes with it', a.back && a.back.bannerHidden, a.back && a.back.banner);
+    c.ok('and the live numbers come back',
+      flat(a.back && a.back.forecast) === flat(a.live && a.live.forecast),
+      'the page did not return to what it was showing before');
+    c.ok('the archived week is still in the picker afterwards',
+      a.back && a.back.options.includes('1'), a.back && a.back.options.join(','));
+    c.ok('leaving archive mode did not delete anything',
+      a.back && a.auto && a.back.options.includes(String(a.auto.week)),
+      a.back && a.back.options.join(','));
+  }
+
   if (scenario === 'sim-interact') {
     const s = globalThis.__sim || {};
     const { before, duringTeam, afterTeam, duringRuns, afterRuns } = s;

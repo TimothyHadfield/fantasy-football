@@ -157,6 +157,42 @@ td.state-live { color: var(--warn); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------ time machine */
+
+/* Team names need more room than the narrow week select beside it. */
+.select-md { width: 280px; max-width: 100%; }
+
+/* The banner that says the page is NOT showing now. It has to be impossible
+   to miss: every number below it is historical, and a reader who scrolls past
+   this and reads the forecast as current has been actively misled. Amber, the
+   same colour the demo badge uses for the same reason — "this is not your
+   live league" — and a bar down the side so it survives being skimmed. */
+.replay-banner {
+  margin-top: 14px;
+  padding: 11px 14px;
+  border-radius: var(--r-3);
+  background: #3a2f10;
+  border: 1px solid #5a4718;
+  border-left: 4px solid var(--warn);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.replay-banner strong { color: var(--warn); }
+
+/* "Week 5 archive" in the page badge, so the state is visible from the top of
+   the page and not only from this panel. */
+.badge.archive { background: #3a2f10; color: var(--warn); border: 1px solid #5a4718; }
+
+/* The one destructive control here is held apart from the other three. */
+#snapDelete { border-color: #5b2129; color: var(--err); }
+#snapDelete:hover { background: #33151a; }
+
+/* An archive week that has never been captured reads as unavailable rather
+   than simply missing, because "there is no week 4" and "week 4 was never
+   saved" are different facts. */
+#asOfSelect option:disabled { color: var(--line-2); }
 </style>
 </head>
 <body>
@@ -193,6 +229,29 @@ td.state-live { color: var(--warn); }
       <button type="button" data-src="live">My ESPN league</button>
     </div>
     <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <!-- The time machine. It sits directly under the data source because that is
+       what it is: choosing an archived week replaces the whole page's data, so
+       the standings, the results, the forecast and the simulation all travel
+       together rather than one panel disagreeing with the four above it. -->
+  <section class="panel" id="timePanel">
+    <h2>Time machine</h2>
+    <div class="row spread">
+      <div class="select-md">
+        <label for="asOfSelect">Showing the season as of</label>
+        <select id="asOfSelect"></select>
+      </div>
+      <div class="row">
+        <button type="button" id="snapSave">Save this week</button>
+        <button type="button" id="snapExport">Export archive</button>
+        <button type="button" id="snapImport">Import&hellip;</button>
+        <button type="button" id="snapDelete" class="hidden">Delete this week</button>
+        <input type="file" id="snapFile" accept="application/json,.json" hidden>
+      </div>
+    </div>
+    <div id="replayBanner" class="replay-banner hidden"></div>
+    <div id="snapStatus" class="panel-note"></div>
   </section>
 
   <section class="panel">
