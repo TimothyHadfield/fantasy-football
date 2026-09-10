@@ -549,12 +549,39 @@ few kilobytes and a season of them is a few hundred.
   reader who skims past and reads the forecast as current has been actively
   misled — so the page badge says "Week 5 archive" too.
 
-**Not built, and worth knowing:** the archive is not read from the repo. Once
-Tim has exported files they can be committed under `data/` and the page taught
-to fetch them, which is what would make the history permanent and visible from
-any device. It was left out because a fetch on load would have to be threaded
-through every page suite's "no network calls" assertion for a feature with no
-files to read yet.
+**The repo IS the archive** (added the same day). `data/snapshots/<league>-<season>.json`
+— exactly what the Export button writes — is fetched once on every live load and
+imported. So the history restores itself: open the site in a browser that has
+never seen the league and the committed readings come back before anything is
+drawn.
+
+- **No index file.** That one path either exists or it does not. An index is one
+  more thing that can disagree with the directory beside it.
+- **Imported, not held separately**, so the picker, replaying and exporting all
+  read one source and cannot disagree about which archive is on screen. A week
+  the browser already holds is kept — it was recorded there at the time.
+- **Every failure is silent.** A missing file is the normal case for a league
+  nobody has exported, and being offline must not stop the page loading.
+- **Demo never asks.** There is nothing committed for a league that does not
+  exist, and it would be a guaranteed 404 on every sample page load.
+- **A person carries the file, deliberately.** A page cannot commit to a repo
+  without a token, and a token in client-side JavaScript is a public token —
+  anyone reading the site could write to the repo. One click every few weeks
+  against a backend to run, and it buys version history for nothing.
+- `fc-test`'s blanket "no network calls" became a NAMED exception: the archive
+  path is allowed, at most once, live only, and any other call still fails.
+  A blanket assertion hid which call was which.
+
+**Firebase was considered and is not the answer here** — for Tim, not in
+general. It works fine from a static site, the free tier is four orders of
+magnitude larger than this needs, and the public `apiKey` is safe by design
+(security is in the rules, not the key). But it front-loads about ten minutes of
+console work that **only Tim can do** — creating the project, enabling Firestore
+and Google sign-in, authorising the domain — and none of the Google connectors
+available here can provision a Firebase or GCP project. He asked for the option
+that costs him least; that is the committed file. If he ever wants zero clicks,
+Firestore slots in behind `snapshots.js`'s existing `list/get/save/remove` and
+is perhaps 120 lines.
 
 ## Who to start, week by week (`analysis.html`, foot of the page)
 
@@ -1240,7 +1267,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `test-trade.mjs` | the trade engine — 1,411 assertions over two fixtures. A hand-built two-team league where every answer is known by hand (the 18-for-18 mirrored swap is worth exactly 12 to each side), then the real demo pool, where **every offer is re-priced from the raw rosters** rather than read back off its own numbers — so an engine that merely reported confident figures would fail rather than agree with itself. Also asserts roster legality both ways and that the in/out lists add up to the stated gain |
 | `tr-test.mjs` | the Trade page end to end — 75 assertions over 3 scenarios. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; and every control. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
-| `test-snapshots.mjs` | the time machine's storage — 96 assertions. Round-trips a reading through JSON, through a file, and into an empty browser; proves a snapshot is a COPY by moving the live season underneath one and checking it does not follow; and covers a browser that blocks storage, a full one, an unreadable key, and a file from a newer build |
+| `test-snapshots.mjs` | the time machine's storage — 123 assertions. Round-trips a reading through JSON, through a file, and into an empty browser; proves a snapshot is a COPY by moving the live season underneath one and checking it does not follow; and covers a browser that blocks storage, a full one, an unreadable key, and a file from a newer build. Also the committed archive: that it restores a wiped browser, keeps the browser's own copy over the file's, takes only this league's weeks out of a file holding several, and stays silent through a 404, an offline network, an HTML error page and a body that will not read |
 | `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
