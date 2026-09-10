@@ -108,6 +108,11 @@ These were each established by testing, and several by getting them wrong first.
    while every page insisted no league was configured.
 7. **State the basis of every derived number** in a panel note. That is the
    house style throughout, and it is why the pages are trustworthy.
+8. **ESPN keeps no history of its own projections.** It publishes next week's
+   and week 13's; it cannot tell you what it thought last month. Anything the
+   site wants to compare across time must be captured while it is on screen —
+   that is why `js/snapshots.js` exists, and why nothing about it can be
+   "reconstructed later instead".
 
 ## Contracts that hold the site together
 
@@ -145,7 +150,7 @@ Everything Tim has asked for is built and live:
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
 | `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played |
 | `analysis.html` | All ten squads **twice over** — nine spots, a total and the bench, once on the season average and once on the selected week, with a hover card carrying each man's whole season as a chart and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; "Season by week"; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
-| `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, and a Monte Carlo season simulation |
+| `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation, and a **time machine** — a reading of the whole page is saved automatically once a week, and picking one replays the season as it looked then |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
 | `trade.html` | **Depth map** — ten managers by six positions, each cell the points his starters are above replacement, so reading down a column finds who is thin where you are deep. Then the **finder**: every 1-for-1, 2-for-1 and 1-for-2 in the league, keeping only the ones where **both** lineups improve |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
@@ -160,7 +165,7 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 
 ## Tests
 
-`cd tests && npm install && npm test` — 16 suites, around 3,300 assertions.
+`cd tests && npm install && npm test` — 17 suites, around 3,400 assertions.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
 `tests/README.md` for the two linkedom gotchas that otherwise waste an hour.

@@ -31,6 +31,7 @@ describe how the site works **today**:
 | Clicking a player anywhere on the site | "The player click-through" |
 | Why the taken table spans every week shown | "The taken table's membership is the UNION" |
 | Sorting, and why several `<tbody>`s | "Table sorting" |
+| Seeing the forecast as it was in an earlier week | "The time machine" |
 | Which weeks a bench man actually starts | "Who to start, week by week" |
 | The depth map, and what "replacement" means | "The Trade page" |
 | Why a trade can make BOTH squads better | "The Trade page" |
@@ -482,6 +483,78 @@ That is why none of the above was noticed. It is deliberate (the demo exists to
 show the layout full), but it means early-season behaviour is only visible
 against live data or a stub.
 
+
+## The time machine (`js/snapshots.js`, `schedule.html`)
+
+Built 2026-09-09, seventh session. Tim's ask: the forecast and the simulation
+move as players get hurt, traded and benched, and he wants to look back at the
+end of the season and see how they changed — so nothing shown before week 1, or
+before any week, should be lost.
+
+**THE CONSTRAINT THAT SHAPES EVERYTHING.** ESPN publishes a projection for
+every future week and keeps **no record of what it used to project**. Ask it in
+week 9 what it thought of week 13 back in week 2 and there is no endpoint, no
+parameter and no archive — the number was overwritten when it changed. So this
+could not be reconstructed later by any amount of cleverness: a reading not
+captured while it is on screen is gone permanently. That is the entire
+justification for a site that previously stored four preferences now storing
+history.
+
+**What is kept is small, and that is the design.** The obvious approach — every
+week's rosters — is about a megabyte per reading and would fill browser storage
+inside a month. It is also unnecessary: the forecast and the simulation consume
+the schedule with its results-so-far, one projected total per team per remaining
+week (~180 numbers), and the sigma. Everything else is derived. A reading is a
+few kilobytes and a season of them is a few hundred.
+
+- **Sigma is stored, and this is not incidental.** It is calibrated from
+  results, so it moves through the season; replaying week 3 with week 12's
+  spread would re-forecast the past with knowledge it did not have. Same class
+  of error as showing today's projections against an old schedule, and much
+  easier to miss.
+- **The rosters behind the numbers are deliberately NOT kept.** An archived week
+  can be re-read but not re-derived, and the panel says so. The other pages
+  always show today.
+- **Replaying is a SUBSTITUTION, not a second rendering path.** `hydrate()`
+  returns exactly the shapes `normalizeSchedule` and `buildProjection` produce,
+  they are swapped into `state.data` / `state.projection`, and the page renders
+  through its ordinary path — so the whole page travels together and an archived
+  week cannot drift into looking different from a live one.
+- **`forecastAsOf()` reads the week off the snapshot rather than re-deriving
+  it.** Deriving agrees on live data and quietly disagrees on demo, where "as
+  of" follows the week picker rather than the results.
+- **FIRST WRITE WINS on the automatic capture**, because the ask is for what was
+  known *before* each week — a later load the same week has already watched some
+  of the games it was forecasting. It waits for a real projection: a reading
+  taken before ESPN's per-week numbers arrive has no forecast in it, and
+  first-write-wins would then block the good one for the rest of the week.
+- **Demo is never captured automatically.** It is generated rather than
+  observed, every reload would race to write it, and it would fill the archive
+  with weeks that never happened. The button still works there, which is how the
+  feature can be tried before there is a real season to try it on.
+- **Coming back from an archive is a repaint, not a reload.** The live season is
+  put aside on the way in. Reloading was the first version and `fc-test` caught
+  it: returning to now cost a schedule call plus one per remaining week, a dozen
+  requests every time somebody flicked out of the archive, on a page whose whole
+  cost model is one request per week.
+- **One localStorage key per reading**, never one for the whole archive: a quota
+  failure while saving week 9 must not take weeks 1–8 with it. `js/prefs.js`
+  keeps its own small blob and is untouched — a few hundred kilobytes of history
+  rewritten on every sort-order change would be absurd.
+- **Browser storage is not durable and the panel says so in those words.**
+  `exportAll` writes the season to one JSON file; import keeps a week already
+  held rather than overwriting it, because the copy this browser took at the
+  time is the closer reading of the two.
+- **The banner is loud on purpose.** Every number below it is historical, and a
+  reader who skims past and reads the forecast as current has been actively
+  misled — so the page badge says "Week 5 archive" too.
+
+**Not built, and worth knowing:** the archive is not read from the repo. Once
+Tim has exported files they can be committed under `data/` and the page taught
+to fetch them, which is what would make the history permanent and visible from
+any device. It was left out because a fetch on load would have to be threaded
+through every page suite's "no network calls" assertion for a feature with no
+files to read yet.
 
 ## Who to start, week by week (`analysis.html`, foot of the page)
 
@@ -1078,6 +1151,9 @@ Modules:
 - `js/projection.js` — rosters → what every team is projected to score in every
   week, plus the schedule-derived averages built on that. **Shared by the
   schedule page and the stats page; do not grow a second copy.** Pure.
+- `js/snapshots.js` — the time machine: what a week's reading holds, how it is
+  stored, and how it is turned back into the shapes the schedule page renders.
+  Pure apart from localStorage, which it owns entirely.
 - `js/waivers-page.js` — the Players page: the wire, and the taken table.
 - `js/trade.js` — the trade engine: replacement level, the depth map and the
   finder. Pure, so it is node-testable, and it wraps `forecast.js`'s
@@ -1164,6 +1240,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `test-trade.mjs` | the trade engine — 1,411 assertions over two fixtures. A hand-built two-team league where every answer is known by hand (the 18-for-18 mirrored swap is worth exactly 12 to each side), then the real demo pool, where **every offer is re-priced from the raw rosters** rather than read back off its own numbers — so an engine that merely reported confident figures would fail rather than agree with itself. Also asserts roster legality both ways and that the in/out lists add up to the stated gain |
 | `tr-test.mjs` | the Trade page end to end — 75 assertions over 3 scenarios. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; and every control. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
+| `test-snapshots.mjs` | the time machine's storage — 96 assertions. Round-trips a reading through JSON, through a file, and into an empty browser; proves a snapshot is a COPY by moving the live season underneath one and checking it does not follow; and covers a browser that blocks storage, a full one, an unreadable key, and a file from a newer build |
 | `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
