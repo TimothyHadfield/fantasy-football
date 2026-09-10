@@ -568,6 +568,14 @@ drawn.
   without a token, and a token in client-side JavaScript is a public token —
   anyone reading the site could write to the repo. One click every few weeks
   against a backend to run, and it buys version history for nothing.
+- **The panel works out what still needs exporting**, and says so in red. An
+  export is CUMULATIVE — it writes every week held, not the newest one — so
+  "export weekly" was never true, and Tim asked whether it was. The weeks the
+  committed file already holds are compared against the weeks in this browser;
+  anything only in the browser is named. When they match it says so and asks
+  for nothing. **What IS weekly is opening the page**: a reading is only taken
+  when the schedule page loads on live data, and a week never visited can
+  never be recovered.
 - `fc-test`'s blanket "no network calls" became a NAMED exception: the archive
   path is allowed, at most once, live only, and any other call still fails.
   A blanket assertion hid which call was which.

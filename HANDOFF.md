@@ -115,9 +115,12 @@ These were each established by testing, and several by getting them wrong first.
    "reconstructed later instead".
 9. **The archive's durable home is the repo, not the browser.** Tim exports one
    JSON file; it is committed under `data/snapshots/<league>-<season>.json`;
-   the page pulls it back on every live load. **Ask him for a fresh export
-   every few weeks** — that click is the only part of it he has to do, and an
-   un-exported season lives in one browser's storage. Firebase was considered
+   the page pulls it back on every live load. An export is **cumulative** —
+   one file holds every week — so this is a monthly job, not a weekly one, and
+   the panel names in red any week that is still only in his browser. **What
+   is weekly is him opening the schedule page on live data**: that is when a
+   reading is taken, and a week he never visits cannot be recovered later.
+   **Ask him for a fresh export when the panel says one is outstanding.** Firebase was considered
    and rejected: it works, but the setup is ten minutes only he can do, and no
    connector here can provision a Google Cloud project.
 

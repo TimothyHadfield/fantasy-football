@@ -727,10 +727,16 @@ async function check(scenario, boot) {
       a.live && /taken in this browser/.test(a.live.status) &&
       /kept in the site/.test(a.live.status),
       a.live && a.live.status.slice(0, 400));
-    c.ok('and warns that until the file is committed there is only one copy',
-      a.live && /the only copy is here/.test(a.live.status) &&
+    // The one thing the reader has to act on, and the panel works it out
+    // rather than leaving it to them. Nothing is committed in this scenario, so
+    // the reading just taken must be named as existing only here.
+    c.ok('an un-backed-up week is named, not left to be noticed',
+      a.live && /exists? only in this browser/.test(a.live.status) &&
       /Export archive/.test(a.live.status),
-      a.live && a.live.status.slice(-400));
+      a.live && a.live.status.slice(-500));
+    c.ok('and the panel says outright that exporting is not a weekly job',
+      a.live && /not a weekly job/.test(a.live.status),
+      a.live && a.live.status.slice(-300));
     c.ok('and says what it does NOT keep',
       a.live && /rosters behind those numbers are not kept/.test(a.live.status),
       a.live && a.live.status.slice(-300));

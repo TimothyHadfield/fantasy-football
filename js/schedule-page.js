@@ -67,6 +67,9 @@ const state = {
   // The live season, put aside while an archived one is on screen, so coming
   // back costs no request. See leaveReplay().
   live: null,
+  // Which weeks the committed archive already holds. Anything in the browser
+  // and NOT in here has never been backed up anywhere.
+  committedWeeks: new Set(),
   snapMsg: '',              // the last thing the archive controls did, in words
   snapErr: false,
 };
@@ -303,12 +306,18 @@ async function loadLive() {
   // for a league that does not exist.
   try {
     const pulled = await snapshots.fetchRemote(saved.leagueId, saved.season);
+    // Which weeks are safely in the repo, so the panel can say which are still
+    // only in this browser. An empty set is the honest answer when the fetch
+    // found nothing — including when it failed — and the panel then treats
+    // every reading as un-backed-up, which is exactly what it is.
+    state.committedWeeks = new Set(pulled.weeks || []);
     if (pulled.added) {
       state.snapMsg = `Restored ${plural(pulled.added, 'week')} from the archive committed to the site.`;
       state.snapErr = false;
     }
   } catch {
     /* the archive is a bonus, never a reason the page fails to load */
+    state.committedWeeks = new Set();
   }
 
   try {
@@ -577,14 +586,28 @@ function renderArchiveNote(id, saved) {
       'loads with ESPN&rsquo;s projections in it. The earliest complete reading of a week is the ' +
       'one kept, because that is the one taken before any of the games it forecasts were played.';
 
+  // Which readings exist only in this browser. THE ONE THING TO ACT ON, so it
+  // is worked out rather than left to the reader to keep track of: an export is
+  // cumulative, so "do it every week" was never true and saying so would have
+  // made a monthly job feel like a weekly one.
+  const loose = weeks.filter((w) => !state.committedWeeks.has(w));
+
   const durability = state.data && state.data.isDemo
     ? '<strong>Sample readings live in this browser only</strong> and are not worth keeping — they ' +
       'describe a season that never happened.'
     : 'Readings are <strong>taken</strong> in this browser and <strong>kept</strong> in the site&rsquo;s ' +
-      'own repository. Press <strong>Export archive</strong> every few weeks and hand over the file it ' +
-      'writes; once it is committed, this page pulls it back automatically — on this machine, on your ' +
-      'phone, and in a browser that has never seen the league before. Until you do, the only copy is ' +
-      'here, and clearing site data would delete it.';
+      'own repository. Once a file is committed this page pulls it back by itself — on this machine, on ' +
+      'your phone, and in a browser that has never seen the league before. ' +
+      (!weeks.length
+        ? ''
+        : loose.length
+          ? `<br><span class="neg"><strong>${plural(loose.length, 'week')} ` +
+            `(${loose.join(', ')}) ${loose.length === 1 ? 'exists' : 'exist'} only in this browser.</strong></span> ` +
+            'Press <strong>Export archive</strong> and hand the file over; clearing site data before you ' +
+            'do would delete ' + (loose.length === 1 ? 'it' : 'them') + '. ' +
+            'One export covers every week at once, so this is not a weekly job.'
+          : '<br><span class="pos"><strong>Every reading is backed up.</strong></span> Nothing to export ' +
+            'until a new week is recorded.');
 
   const limit =
     'What is kept is the schedule, the results as they stood, one projected total per team per ' +

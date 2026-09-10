@@ -423,7 +423,11 @@ export async function fetchRemote(leagueId, season, { fetchImpl } = {}) {
   if (!mine.length) return { added: 0, kept: 0, found: found.length };
 
   const res = importAll(mine);
-  return { ...res, found: mine.length };
+  // The WEEKS, not just how many. A caller needs to know which readings are
+  // safely in the repo in order to say which ones are still only in this
+  // browser — which is the difference between "export sometime" and "export
+  // now", and the only thing about this feature the reader has to act on.
+  return { ...res, found: mine.length, weeks: mine.map((s) => s.week).sort((a, b) => a - b) };
 }
 
 /** Roughly how much room the archive is taking, for the panel note. */
