@@ -361,7 +361,25 @@ async function check(scenario, boot) {
 
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
-  c.ok('no network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
+  // The page makes exactly ONE raw fetch of its own, and only on a live league:
+  // the archive committed under data/snapshots/, which is what lets a cleared
+  // browser restore its history. Everything else goes through js/season.js and
+  // is counted below. A blanket "no network calls" hid which call was which, so
+  // this names the one that is allowed and still fails on any other.
+  const ARCHIVE = /^data\/snapshots\/[^/]+\.json$/;
+  const archiveCalls = boot.fetchCalls.filter((u) => ARCHIVE.test(u));
+  const unexpected = boot.fetchCalls.filter((u) => !ARCHIVE.test(u));
+  c.ok('no unexpected network calls', unexpected.length === 0, unexpected.slice(0, 2).join(' | '));
+  c.ok('the committed archive is asked for at most once',
+    archiveCalls.length <= 1, archiveCalls.join(' | '));
+  if (!boot.cfg.stub) {
+    // Sample data has no league, so there is nothing committed to ask for and
+    // asking would be a guaranteed 404 on every demo page load.
+    c.ok('demo asks for no archive at all', archiveCalls.length === 0, archiveCalls.join(' | '));
+  } else {
+    c.ok('a live league does look for a committed archive',
+      archiveCalls.length === 1, boot.fetchCalls.join(' | '));
+  }
 
   // ---- request budget, for the stubbed live scenarios ---------------------
   if (boot.cfg.stub) {
@@ -705,8 +723,14 @@ async function check(scenario, boot) {
       a.live && a.live.options.join(','));
     c.ok('the panel explains why the archive has to exist at all',
       a.live && /keeps no record of what it/.test(a.live.status), a.live && a.live.status.slice(0, 200));
-    c.ok('and warns that browser storage is not durable',
-      a.live && /lives in this browser only/.test(a.live.status), a.live && a.live.status.slice(0, 300));
+    c.ok('and says where readings are taken and where they are kept',
+      a.live && /taken in this browser/.test(a.live.status) &&
+      /kept in the site/.test(a.live.status),
+      a.live && a.live.status.slice(0, 400));
+    c.ok('and warns that until the file is committed there is only one copy',
+      a.live && /the only copy is here/.test(a.live.status) &&
+      /Export archive/.test(a.live.status),
+      a.live && a.live.status.slice(-400));
     c.ok('and says what it does NOT keep',
       a.live && /rosters behind those numbers are not kept/.test(a.live.status),
       a.live && a.live.status.slice(-300));

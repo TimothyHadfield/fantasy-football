@@ -294,6 +294,23 @@ async function loadLive() {
   state.myTeamId = saved.teamId ?? null;
   setStatus('Loading your schedule from ESPN…');
 
+  // Pull the committed archive down before anything else. This is what makes a
+  // cleared browser recoverable rather than merely regrettable: the history
+  // lives in the repo, and opening the page in a browser that has never seen
+  // this league restores it. Awaited, so the picker is complete the first time
+  // it is drawn rather than gaining rows a moment later. It is one request,
+  // every failure is silent, and demo never asks — there is nothing committed
+  // for a league that does not exist.
+  try {
+    const pulled = await snapshots.fetchRemote(saved.leagueId, saved.season);
+    if (pulled.added) {
+      state.snapMsg = `Restored ${plural(pulled.added, 'week')} from the archive committed to the site.`;
+      state.snapErr = false;
+    }
+  } catch {
+    /* the archive is a bonus, never a reason the page fails to load */
+  }
+
   try {
     const raw = await fetchSchedule();
     const data = normalizeSchedule(raw, { isDemo: false });
@@ -560,10 +577,14 @@ function renderArchiveNote(id, saved) {
       'loads with ESPN&rsquo;s projections in it. The earliest complete reading of a week is the ' +
       'one kept, because that is the one taken before any of the games it forecasts were played.';
 
-  const durability =
-    '<strong>This lives in this browser only.</strong> Clearing site data deletes it, and it is not ' +
-    'on your phone. <strong>Export archive</strong> writes the whole thing to one JSON file — do that ' +
-    'every few weeks, and the season&rsquo;s history outlives the browser.';
+  const durability = state.data && state.data.isDemo
+    ? '<strong>Sample readings live in this browser only</strong> and are not worth keeping — they ' +
+      'describe a season that never happened.'
+    : 'Readings are <strong>taken</strong> in this browser and <strong>kept</strong> in the site&rsquo;s ' +
+      'own repository. Press <strong>Export archive</strong> every few weeks and hand over the file it ' +
+      'writes; once it is committed, this page pulls it back automatically — on this machine, on your ' +
+      'phone, and in a browser that has never seen the league before. Until you do, the only copy is ' +
+      'here, and clearing site data would delete it.';
 
   const limit =
     'What is kept is the schedule, the results as they stood, one projected total per team per ' +

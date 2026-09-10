@@ -351,6 +351,115 @@ ok('so does a bare array of them',
   eq(got.error, null, 'and is not rejected wholesale');
 }
 
+// ------------------------------------------------------- the archive in the repo
+//
+// A committed archive is what makes a cleared browser recoverable rather than
+// merely regrettable. Everything here is about it being a BONUS: it restores
+// what it can and is silent about everything else, because a missing file is
+// the normal case for a league nobody has exported yet.
+
+eq(snapshots.remoteUrl('476225250', 2026), 'data/snapshots/476225250-2026.json',
+  'the committed archive lives at one predictable path');
+eq(snapshots.remoteUrl('demo', 0), 'data/snapshots/demo-0.json',
+  'and the path is built from the league and season, not guessed at');
+ok('a league id with a slash in it cannot escape the directory',
+  !snapshots.remoteUrl('../../etc', 2026).includes('../../etc'),
+  snapshots.remoteUrl('../../etc', 2026));
+
+{
+  const archive = JSON.stringify({
+    v: snapshots.SCHEMA, leagueId: '476225250', season: 2026,
+    snapshots: [capture(8), capture(9)],
+  });
+  const okFetch = async () => ({ ok: true, text: async () => archive });
+
+  store.clear();
+  const restored = await snapshots.fetchRemote('476225250', 2026, { fetchImpl: okFetch });
+  eq(restored.added, 2, 'a committed archive restores into an empty browser');
+  eq(restored.found, 2, 'and reports what it found');
+  same(snapshots.list(LEAGUE.leagueId, LEAGUE.season).map((s) => s.week), [8, 9],
+    'and the weeks are simply in the archive afterwards — one source, not two');
+
+  // A week this browser already holds was recorded HERE, at the time. That is
+  // closer to the truth than a copy that has been round a file.
+  const mine = capture(8, { sigma: 3.3 });
+  snapshots.remove(LEAGUE.leagueId, LEAGUE.season, 8);
+  snapshots.save(mine);
+  const again = await snapshots.fetchRemote('476225250', 2026, { fetchImpl: okFetch });
+  eq(again.added, 0, 'a second pull adds nothing that is already here');
+  eq(again.kept, 2, 'and keeps what it found instead');
+  eq(snapshots.get(LEAGUE.leagueId, LEAGUE.season, 8).sigma, 3.3,
+    'this browser’s own reading survives the pull');
+}
+
+// ---- every failure is silent, because the archive is never load-bearing ----
+{
+  const cases = [
+    ['a missing file', async () => ({ ok: false, status: 404, text: async () => '' })],
+    ['a network that is not there', async () => { throw new Error('offline'); }],
+    ['a server returning nonsense', async () => ({ ok: true, text: async () => '<!doctype html>' })],
+    ['a body that will not read', async () => ({ ok: true, text: async () => { throw new Error('nope'); } })],
+    ['an empty envelope', async () => ({ ok: true, text: async () => '{"v":1,"snapshots":[]}' })],
+  ];
+  for (const [name, impl] of cases) {
+    store.clear();
+    let threw = false;
+    let res = null;
+    try { res = await snapshots.fetchRemote('476225250', 2026, { fetchImpl: impl }); }
+    catch { threw = true; }
+    ok(`${name} does not throw`, !threw);
+    ok(`${name} restores nothing`, res && res.added === 0, JSON.stringify(res));
+  }
+  // No fetch at all — an environment that has none must not crash the page.
+  store.clear();
+  const none = await snapshots.fetchRemote('476225250', 2026, { fetchImpl: null });
+  eq(none.added, 0, 'no fetch available restores nothing, quietly');
+}
+
+// ---- a file holding somebody else's league is not imported into this one ---
+{
+  store.clear();
+  const foreign = JSON.stringify({
+    v: snapshots.SCHEMA,
+    snapshots: [
+      { ...capture(4), leagueId: '999' },
+      { ...capture(5), season: 2025 },
+      capture(6),
+    ],
+  });
+  const res = await snapshots.fetchRemote('476225250', 2026, {
+    fetchImpl: async () => ({ ok: true, text: async () => foreign }),
+  });
+  eq(res.added, 1, 'only this league and season are taken from the file');
+  same(snapshots.list(LEAGUE.leagueId, LEAGUE.season).map((s) => s.week), [6],
+    'and nobody else’s weeks land in this archive');
+  same(snapshots.list('999', 2026), [], 'nor is the other league written by a side effect');
+}
+
+// ---- the round trip the whole convention rests on -------------------------
+//
+// Export from a browser, commit the file, wipe the browser, open the page.
+{
+  store.clear();
+  snapshots.save(capture(1));
+  snapshots.save(capture(2));
+  const exported = snapshots.exportAll(LEAGUE.leagueId, LEAGUE.season);
+  ok('the exported filename is the committed path’s basename',
+    snapshots.remoteUrl(LEAGUE.leagueId, LEAGUE.season).endsWith('476225250-2026.json') &&
+    exported.name === 'fantasy-archive-476225250-2026.json',
+    `${exported.name} vs ${snapshots.remoteUrl(LEAGUE.leagueId, LEAGUE.season)}`);
+
+  store.clear();   // the browser is wiped
+  const back = await snapshots.fetchRemote(LEAGUE.leagueId, LEAGUE.season, {
+    fetchImpl: async () => ({ ok: true, text: async () => exported.json }),
+  });
+  eq(back.added, 2, 'the committed file restores the season into a fresh browser');
+  const week2 = snapshots.get(LEAGUE.leagueId, LEAGUE.season, 2);
+  eq(week2.sigma, 26.4, 'with the spread intact');
+  eq(snapshots.hydrate(week2).projection.proj.get(3).get(1), 110.5,
+    'and it still hydrates into the page shapes');
+}
+
 // ---------------------------------------------------------------------------
 
 if (fails.length) {

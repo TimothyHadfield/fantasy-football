@@ -363,6 +363,69 @@ export function importAll(snapshots, { replace = false } = {}) {
   return { added, kept, failed };
 }
 
+// ------------------------------------------------------- the archive in the repo
+//
+// Browser storage is where readings are TAKEN and the repo is where they are
+// KEPT. One export, committed under `data/snapshots/`, and the history stops
+// depending on one browser on one machine: it is versioned, readable from a
+// phone, and — the part that matters most — it restores itself. Open the page in
+// a browser that has never seen this league and the committed archive is pulled
+// back down before anything else happens.
+//
+// The route in is deliberately a person: a page cannot commit to a repo without
+// a token, and a token in client-side JavaScript is a public token. So the
+// export lands in a Downloads folder and gets committed by hand. That is one
+// click every few weeks against a backend to run, and it buys version history
+// for free.
+//
+// There is NO index file. `data/snapshots/<league>-<season>.json` either exists
+// or it does not, which is one request and nothing to keep in step — an index
+// is one more thing that can disagree with the directory beside it.
+
+/** Where this league's committed archive would live, if it has one. */
+export function remoteUrl(leagueId, season) {
+  return `data/snapshots/${encodeURIComponent(leagueId)}-${encodeURIComponent(season)}.json`;
+}
+
+/**
+ * Pull the committed archive into this browser.
+ *
+ * Imported rather than held separately, so everything downstream — the picker,
+ * replaying, exporting — has one source to read and cannot start disagreeing
+ * about which archive it is showing. A week this browser already holds is kept:
+ * it was recorded here at the time, which is closer to the truth than a copy
+ * that has been round a file.
+ *
+ * EVERY failure is silent and returns zero. A missing file is the normal case
+ * for a league nobody has exported yet, and being offline, or on a fork of the
+ * site with no `data/` directory, must not stop the page loading.
+ */
+export async function fetchRemote(leagueId, season, { fetchImpl } = {}) {
+  const f = fetchImpl || (typeof fetch === 'function' ? fetch : null);
+  if (!f) return { added: 0, kept: 0, found: 0 };
+
+  let text;
+  try {
+    const res = await f(remoteUrl(leagueId, season), { cache: 'no-cache' });
+    if (!res || !res.ok) return { added: 0, kept: 0, found: 0 };
+    text = await res.text();
+  } catch {
+    return { added: 0, kept: 0, found: 0 };
+  }
+
+  const { snapshots: found } = parseImport(text);
+  if (!found.length) return { added: 0, kept: 0, found: 0 };
+
+  // Only this league's, however the file was assembled by hand.
+  const mine = found.filter(
+    (s) => String(s.leagueId) === String(leagueId) && Number(s.season) === Number(season)
+  );
+  if (!mine.length) return { added: 0, kept: 0, found: found.length };
+
+  const res = importAll(mine);
+  return { ...res, found: mine.length };
+}
+
 /** Roughly how much room the archive is taking, for the panel note. */
 export function sizeOf(leagueId, season) {
   const s = store();
