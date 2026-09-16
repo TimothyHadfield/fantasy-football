@@ -1019,8 +1019,13 @@ async function check(scenario, boot) {
     c.ok('and it says whose projections these are',
       /ESPN’s projection for weeks 1–13/.test(card0.heading), card0.heading);
 
-    c.ok('IT IS A TWO-ROW CHART: WEEK NUMBERS OVER THEIR OWN PROJECTIONS',
-      card0.rows === 2, `${card0.rows} rows in the run table`);
+    // Three rows since Tim asked for "another row below proj that is act": the
+    // week numbers, the projection, and what he actually scored. The claim is
+    // still the same one — the rows are ONE table, so a column cannot drift out
+    // of line — it is just a row longer than it was. What the Act row itself
+    // says is asserted in touch-check.mjs, which owns the card.
+    c.ok('IT IS A THREE-ROW CHART: WEEK NUMBERS OVER PROJ OVER ACT',
+      card0.rows === 3, `${card0.rows} rows in the run table`);
     c.ok('the top row is the weeks, in order, one per week of the season',
       JSON.stringify(card0.weeks) ===
         JSON.stringify(Array.from({ length: 13 }, (_, i) => String(i + 1))),

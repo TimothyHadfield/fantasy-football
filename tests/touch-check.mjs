@@ -28,10 +28,40 @@
 //   no-id   a man ESPN gave no playerId for has no <a> in his cell at all, and
 //           his card must still open. The card has never depended on the link
 //           and must not start to; here it says so instead of offering one.
+//   part    a season that is only half played, on a phone-sized window: the
+//           Act row, and the run wrapping rather than scrolling. See below.
 //
 // Each scenario gets its own child process: a module initialises once per
 // process and analysis-page.js self-boots on import, so two of these in one
 // process would share a DOM and a Map of tips.
+//
+// ---------------------------------------------------------------------------
+// THE CHART IS THREE ROWS NOW, AND IT DOES NOT SCROLL.
+//
+// Tim asked for both, in these words: "add another row below proj that is act.
+// If it's week 5, all columns before week 5 should have a filled in act.
+// anything after leave blank", and "For the preview, remove scrolling on the
+// box, just show the whole thing, no matter how long it gets."
+//
+// So there are three claims here that were not here before, and each is the
+// kind that looks fine while being wrong:
+//
+//   1. THE ROWS LINE UP COLUMN FOR COLUMN. This is the entire reason the chart
+//      is a table rather than a string — a native `title` renders in the OS UI
+//      font and cannot be padded into columns — and a third row makes it
+//      easier to get wrong, not harder. Asserted per line of the run and again
+//      across the whole run.
+//   2. A WEEK WITH NO RESULT IS BLANK, AND A PLAYED ONE IS NOT. The demo season
+//      is 100% played, so it cannot show this at all; the `part` scenario
+//      doctors it so weeks 6–13 carry no actual. Note that the demo SCHEDULE
+//      still says every week was played — which is the point: the rule reads
+//      the data, not the calendar, and this fixture is the only thing that can
+//      tell the two apart.
+//   3. NOTHING INSIDE THE CARD SCROLLS. `.tc-scroll` and its `overflow-x: auto`
+//      are gone and the sheet's `max-height` with them; the run wraps onto more
+//      lines instead. A scrollbar quietly reintroduced anywhere in the card is
+//      the regression this suite is here to catch, so the CSS is read as text
+//      and every rule that touches the card is checked for one.
 
 import { parseHTML } from 'linkedom';
 import { readFileSync } from 'node:fs';
@@ -74,10 +104,52 @@ const NO_ID_DEMO = dataUrl(`
   }
 `);
 
-const NO_ID_LOADER = dataUrl(`
+// ------------------------------------------ a season that is only half played
+//
+// THE DEMO SEASON IS OVER BY DEFINITION — js/demo-rosters.js hardcodes
+// `played: true` on every game — so on demo data every column of the Act row
+// has a number in it and the half of the rule Tim actually stated ("anything
+// after leave blank") is never exercised at all. This blanks the actual for
+// weeks 6–13 and leaves everything else, INCLUDING the schedule, exactly as it
+// was: the schedule still claims all thirteen weeks were played, so a card that
+// filled the Act row from the calendar rather than from the data would fill in
+// all thirteen and fail here. That is the only way to tell the two rules apart.
+//
+// Week 1 also gets ONE man scoring an honest nothing. A zero in a played week
+// is a real result and the single worst thing this row could do is draw it as
+// one of the four ways of having no number.
+
+const PLAYED_THROUGH = 5;
+
+const PART_DEMO = dataUrl(`
+  import * as real from ${JSON.stringify(DEMO_URL)};
+  export * from ${JSON.stringify(DEMO_URL)};
+
+  export function generateDemoWeekRosters(week) {
+    const got = real.generateDemoWeekRosters(week);
+    const teams = got.teams.map((t) => {
+      const zeroed = t.starters[0] && t.starters[0].playerId;
+      const players = t.players.map((p) => {
+        if (week > ${PLAYED_THROUGH}) return { ...p, actual: null };
+        if (week === 1 && p.playerId === zeroed) return { ...p, actual: 0 };
+        return p;
+      });
+      return {
+        ...t,
+        players,
+        starters: players.filter((p) => p.started),
+        bench: players.filter((p) => !p.started),
+      };
+    });
+    return { ...got, teams };
+  }
+`);
+
+/** Swap js/demo-rosters.js for a doctored copy, from inside the child. */
+const loaderFor = (mod) => dataUrl(`
   export async function resolve(spec, ctx, next) {
     if (spec.startsWith('.') && /\\/demo-rosters\\.js$/.test(spec)) {
-      return next(${JSON.stringify(NO_ID_DEMO)}, ctx);
+      return next(${JSON.stringify(mod)}, ctx);
     }
     return next(spec, ctx);
   }
@@ -86,14 +158,27 @@ const NO_ID_LOADER = dataUrl(`
 const SCENARIOS = {
   touch: { label: '(a) a coarse pointer: a tap opens the card as a sheet', coarse: true },
   mouse: { label: '(b) a mouse: the click-through is untouched', coarse: false },
-  'no-id': { label: '(c) a man ESPN gave no id: a card, and no link to offer', coarse: true, noId: true },
+  'no-id': {
+    label: '(c) a man ESPN gave no id: a card, and no link to offer',
+    coarse: true, demo: NO_ID_DEMO, noId: true,
+  },
+  // A phone-shaped window as well as a phone-shaped pointer. 390px is an
+  // iPhone 14, and it is the width at which a 13-week run laid out on one line
+  // is about 130px wider than the screen — which is what the scroller used to
+  // be for and what the wrap now has to absorb.
+  part: {
+    label: '(d) half a season, on a 390px screen: the Act row, and the wrap',
+    coarse: true,
+    demo: PART_DEMO,
+    width: 390,
+  },
 };
 
 // ------------------------------------------------------------------- booting
 
 async function boot(scenario) {
   const cfg = SCENARIOS[scenario];
-  if (cfg.noId) register(NO_ID_LOADER);
+  if (cfg.demo) register(loaderFor(cfg.demo));
 
   const html = readFileSync(path.join(REPO, 'analysis.html'), 'utf8');
   const { window, document } = parseHTML(html);
@@ -192,6 +277,17 @@ async function boot(scenario) {
   });
   window.localStorage = localStorage;
   window.matchMedia = matchMedia;
+  // HOW WIDE THE WINDOW IS, which is a different fact from whether there is a
+  // pointer — an iPad in landscape is coarse and wide, a narrowed desktop
+  // window is fine-pointered and narrow. The card asks matchMedia for the one
+  // and window.innerWidth for the other, and this suite sets them separately
+  // for exactly that reason. Left undefined unless a scenario says otherwise,
+  // so the default stays "no layout at all", which is the case every other
+  // suite boots in.
+  if (cfg.width) {
+    window.innerWidth = cfg.width;
+    window.innerHeight = 844;
+  }
   window.ResizeObserver = globalThis.ResizeObserver;
   window.requestAnimationFrame = globalThis.requestAnimationFrame;
 
@@ -234,6 +330,90 @@ function hideTitleish(document, window) {
   const esc = new window.Event('keydown', { bubbles: true });
   esc.key = 'Escape';
   document.dispatchEvent(esc);
+}
+
+// ------------------------------------------------------------- reading the run
+
+/**
+ * Read the chart out of an open card, one LINE at a time.
+ *
+ * A line is one `<table class="tc-run">`: the week numbers in its `<thead>`,
+ * the projections in its `<tbody>`, the actuals in its `<tfoot>`. The run wraps
+ * onto as many of them as the window needs, so anything that wants the whole
+ * run has to walk the lines in order rather than assume there is one.
+ *
+ * The first cell of every row is its label — "Week" / "Proj" / "Act" — and is
+ * dropped here, because it is not data and counting it as a column is exactly
+ * how a three-row alignment check passes while being wrong.
+ */
+function readRun(card) {
+  return [...card.querySelectorAll('.tc-chart .tc-run')].map((t) => {
+    const row = (sel) => [...t.querySelectorAll(sel)];
+    const drop = (cells) => cells.filter((el) => !el.classList.contains('tc-lbl'));
+    const label = (sel) => {
+      const first = t.querySelector(sel);
+      return first ? first.textContent.trim() : '';
+    };
+    return {
+      labels: [label('thead th'), label('tbody th'), label('tfoot th')],
+      weeks: drop(row('thead th')).map((el) => el.textContent.trim()),
+      projs: drop(row('tbody td')).map((el) => el.textContent.trim()),
+      acts: drop(row('tfoot td')).map((el) => el.textContent.trim()),
+      projKinds: drop(row('tbody td')).map((el) => el.getAttribute('class') || ''),
+      actKinds: drop(row('tfoot td')).map((el) => el.getAttribute('class') || ''),
+    };
+  });
+}
+
+/**
+ * The whole run, lines flattened back into one sequence of columns.
+ *
+ * A missing cell comes back as `null` rather than throwing. A row that has lost
+ * a column is the exact defect the assertions below are for, and a suite that
+ * crashes on it reports "boot failed" and throws away every other result in the
+ * scenario — which is a worse answer than the one it was asked for.
+ */
+function runColumns(lines) {
+  const out = [];
+  for (const l of lines) {
+    for (let i = 0; i < l.weeks.length; i++) {
+      out.push({
+        week: Number(l.weeks[i]),
+        proj: l.projs[i] ?? null, projKind: l.projKinds[i] ?? '',
+        act: l.acts[i] ?? null, actKind: l.actKinds[i] ?? '',
+      });
+    }
+  }
+  return out;
+}
+
+// The four ways of having NO number, each of which means something specific in
+// the Proj row. None of them may ever appear in the Act row: a week with no
+// result is blank there, and a zero is a real zero.
+const NO_NUMBER_MARKS = ['Bye', '—', 'off'];
+
+/**
+ * No element inside the card may scroll, and the only honest way to check that
+ * without a layout engine is to read the page's own CSS.
+ *
+ * Every rule whose selector mentions the card is inspected for an
+ * `overflow: auto|scroll` in any axis. This is the assertion that would have
+ * caught the scroller being quietly put back — which is a tempting fix for any
+ * later "the card is too wide" report, and is precisely what Tim asked to have
+ * removed.
+ */
+function cssScrollers(html) {
+  const style = html.slice(html.indexOf('<style'), html.lastIndexOf('</style>'));
+  const bad = [];
+  for (const block of style.split('}')) {
+    const at = block.lastIndexOf('{');
+    if (at < 0) continue;
+    const selector = block.slice(0, at).split('\n').pop().trim();
+    const body = block.slice(at + 1);
+    if (!/\.tipcard|\.tc-/.test(selector)) continue;
+    if (/overflow(-x|-y)?\s*:\s*(auto|scroll)/.test(body)) bad.push(selector);
+  }
+  return bad;
 }
 
 /** Dispatch a click the way a browser does, and say whether anything cancelled it. */
@@ -374,11 +554,118 @@ function check(scenario, { document, window, errors, rejections }) {
       `card "${ident}" vs cell "${label}"`);
   }
 
-  // --- the two-row chart is still two rows of the same length ------------
-  const heads = card.querySelectorAll('.tc-run thead th');
-  const vals = card.querySelectorAll('.tc-run tbody td');
-  c.ok('the week run is in the sheet', heads.length > 2, `${heads.length} columns`);
-  c.eq('and every week has its own projection under it', vals.length, Math.max(0, heads.length - 1));
+  // --- the chart: three rows, and they line up column for column ---------
+  //
+  // The alignment IS the feature. The card exists because a native `title`
+  // renders in the OS UI font and no amount of padding lines thirteen columns
+  // up; a third row under the projections is a third chance to get that wrong.
+  // Checked per line and then again across the whole run, because a run that
+  // wraps can be internally consistent on each line and still have lost a
+  // column between them.
+  const lines = readRun(card);
+  c.ok('the week run is in the sheet', lines.length >= 1, 'no .tc-run in the card');
+
+  c.ok('every line of the run is labelled Week / Proj / Act',
+    lines.every((l) => JSON.stringify(l.labels) === JSON.stringify(['Week', 'Proj', 'Act'])),
+    JSON.stringify(lines.map((l) => l.labels)));
+  c.ok('EVERY WEEK HAS A PROJECTION AND AN ACTUAL DIRECTLY UNDER IT',
+    lines.every((l) => l.weeks.length === l.projs.length && l.weeks.length === l.acts.length),
+    JSON.stringify(lines.map((l) => [l.weeks.length, l.projs.length, l.acts.length])));
+  c.ok('and no line is empty, which would be a column lost in the wrap',
+    lines.every((l) => l.weeks.length > 0), JSON.stringify(lines.map((l) => l.weeks.length)));
+
+  const cols = runColumns(lines);
+  c.eq('the run covers the whole demo season', cols.length, 13);
+  c.ok('the weeks read 1 to 13 in order, across however many lines it took',
+    JSON.stringify(cols.map((k) => k.week)) ===
+      JSON.stringify(Array.from({ length: 13 }, (_, i) => i + 1)),
+    JSON.stringify(cols.map((k) => k.week)));
+  c.eq('exactly one column is marked as the week the page is showing',
+    cols.filter((k) => k.projKind.includes('now')).length, 1);
+  c.ok('and the Act row marks the same one, not a different one',
+    cols.findIndex((k) => k.actKind.includes('now')) ===
+      cols.findIndex((k) => k.projKind.includes('now')),
+    `${cols.findIndex((k) => k.actKind.includes('now'))} vs ` +
+    `${cols.findIndex((k) => k.projKind.includes('now'))}`);
+
+  // --- an actual is never dressed up as one of the four no-number marks ---
+  // `Bye`, `—`, `off` and `·` each say something specific in the Proj row, and
+  // the Act row has nothing to say with them: a week with no result is blank.
+  c.ok('the Act row never borrows one of the Proj row’s no-number marks',
+    cols.every((k) => !NO_NUMBER_MARKS.includes(k.act)),
+    JSON.stringify(cols.filter((k) => NO_NUMBER_MARKS.includes(k.act)).map((k) => k.week)));
+  c.ok('every filled Act cell is a number and says so in its class',
+    cols.filter((k) => k.act !== '' && k.act !== '·')
+      .every((k) => /^\d+\.\d$/.test(k.act) && /\ba-num\b/.test(k.actKind)),
+    JSON.stringify(cols.filter((k) => k.act !== '' && k.act !== '·')
+      .map((k) => `${k.act}/${k.actKind}`).slice(0, 4)));
+  c.ok('and every empty one is marked as blank rather than left unclassed',
+    cols.filter((k) => k.act === '').every((k) => /\ba-blank\b/.test(k.actKind)),
+    JSON.stringify(cols.filter((k) => k.act === '').map((k) => k.actKind).slice(0, 4)));
+
+  // --- nothing in the card scrolls ---------------------------------------
+  c.ok('no element in the card carries an inline overflow',
+    ![...card.querySelectorAll('*')].some((el) => /overflow/.test(el.getAttribute('style') || '')),
+    'an inline overflow appeared inside the card');
+  c.eq('and the old .tc-scroll box is gone rather than merely emptied',
+    card.querySelectorAll('.tc-scroll').length, 0);
+  const scrollers = cssScrollers(readFileSync(path.join(REPO, 'analysis.html'), 'utf8'));
+  c.ok('NO RULE FOR THE CARD DECLARES A SCROLLING OVERFLOW',
+    scrollers.length === 0, `these still scroll: ${scrollers.join(' | ')}`);
+
+  // --- the wrap, and the half-played season ------------------------------
+  if (cfg.width) {
+    // 390px cannot hold thirteen 34px columns plus the row labels, and there is
+    // no scroller to hide the rest in any more, so the run MUST have wrapped.
+    c.ok('ON A PHONE THE RUN WRAPS ONTO MORE THAN ONE LINE',
+      lines.length > 1, `${lines.length} line(s) for 13 weeks at ${cfg.width}px`);
+    // Each line has to actually fit: the label column plus its own columns at
+    // the 32px floor the phone stylesheet sets, inside the screen.
+    const widest = Math.max(...lines.map((l) => l.weeks.length));
+    c.ok('and every line fits the screen it wrapped for',
+      56 + widest * 34 + 28 <= cfg.width, `${widest} columns wide at ${cfg.width}px`);
+    c.ok('the lines are balanced rather than leaving an orphan at the end',
+      lines[lines.length - 1].weeks.length >= 3,
+      JSON.stringify(lines.map((l) => l.weeks.length)));
+
+    // THE RULE IS THE DATA, NOT THE CALENDAR. The demo schedule still says all
+    // thirteen weeks were played; only the actuals say otherwise. A card that
+    // filled the Act row from the week number would fill in all thirteen here.
+    c.ok(`weeks after ${PLAYED_THROUGH} have no actual, though the schedule claims they were played`,
+      cols.filter((k) => k.week > PLAYED_THROUGH && /\bk-num\b/.test(k.projKind))
+        .every((k) => k.act === ''),
+      JSON.stringify(cols.filter((k) => k.week > PLAYED_THROUGH).map((k) => `w${k.week}:${k.act}`)));
+    c.ok(`and every week up to ${PLAYED_THROUGH} that he played has one`,
+      cols.filter((k) => k.week <= PLAYED_THROUGH && /\bk-num\b/.test(k.projKind))
+        .every((k) => /^\d+\.\d$/.test(k.act)),
+      JSON.stringify(cols.filter((k) => k.week <= PLAYED_THROUGH).map((k) => `w${k.week}:${k.act}`)));
+    c.ok('which is a real split, not every column falling the same way',
+      cols.some((k) => k.act !== '') && cols.some((k) => k.act === ''),
+      JSON.stringify(cols.map((k) => k.act)));
+
+    // A ZERO IN A PLAYED WEEK IS A RESULT. One man was doctored to score
+    // nothing in week 1; his card has to read "0.0" there rather than a blank,
+    // a dash or a bye — the one mistake this row could make that would quietly
+    // turn a bad week into no week at all.
+    const everyCard = [...row.querySelectorAll('td[data-tip]')].map((td) => {
+      clickOn(window, td.querySelector('a.pref') || td);
+      return runColumns(readRun(document.getElementById('tipCard')));
+    });
+    const zeroes = everyCard.filter((k) => k[0] && k[0].act === '0.0');
+    c.ok('a man who played and scored nothing reads 0.0 in week 1',
+      zeroes.length === 1, `${zeroes.length} of ${everyCard.length} cards show a week-1 zero`);
+    c.ok('every card in the row tells the same story about which weeks are blank',
+      everyCard.every((k) =>
+        k.filter((x) => x.week > PLAYED_THROUGH && /\bk-num\b/.test(x.projKind))
+          .every((x) => x.act === '')),
+      'a card filled in a week that has no result');
+    hideTitleish(document, window);
+    clickOn(window, link || cell);   // leave the sheet open for what follows
+  } else {
+    // With no window to measure — which is a desktop, and is also every other
+    // suite's world — the whole run stays on one line, exactly as it was.
+    c.eq('with room for it, the run is still one unbroken line', lines.length, 1);
+  }
 
   // --- the link it gives back --------------------------------------------
   const open = card.querySelector('.tc-open');

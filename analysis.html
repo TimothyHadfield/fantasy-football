@@ -129,10 +129,15 @@
 
   /* ------------------------------------------------------------- the tip card
 
-     The week run as a CHART: week numbers along the top, projections directly
-     under their own week. It is a real table so the two rows share one set of
-     column widths — this is exactly what a native `title` could not do, since
-     it renders in the OS UI font where a space is narrower than a digit.
+     The week run as a CHART: week numbers along the top, the projection
+     directly under its own week, and what he ACTUALLY scored under that. It is
+     a real table so the three rows share one set of column widths — this is
+     exactly what a native `title` could not do, since it renders in the OS UI
+     font where a space is narrower than a digit.
+
+     The card is drawn by js/player-card.js, which the Trade page uses as well,
+     so this block is the page's half of that contract: any page that wants the
+     card needs these rules too.
 
      A child of <body>, not of the table: both grids sit in `.table-scroll`,
      which is `overflow:auto`, and a card inside one would be clipped at its
@@ -161,20 +166,23 @@
      window rather than floating beside a cell that may be half the screen wide.
      analysis-page.js adds `.sheet` and fills in the actions below.
 
-     Three things change and nothing else does: it is anchored to the bottom
-     edge, it is INTERACTIVE (a hover card sets `pointer-events: none` so it
+     Two things change and nothing else does: it is anchored to the bottom
+     edge, and it is INTERACTIVE (a hover card sets `pointer-events: none` so it
      cannot chase the cursor; a sheet has no cursor to chase and has a button
-     in it), and it scrolls, because thirteen weeks plus a legend can be taller
-     than a landscape phone. */
+     in it).
+
+     IT NO LONGER SCROLLS, in either axis. Tim: "For the preview, remove
+     scrolling on the box, just show the whole thing, no matter how long it
+     gets." It used to cap its height and scroll, which was the price of a run
+     laid out on one line that was wider than the phone it was on. The run wraps
+     now (see `.tc-chart`), so the sheet is short enough to show whole and the
+     cap and the scroller are both gone rather than merely raised. */
   .tipcard.sheet {
     top: auto;
     bottom: 0;
     left: 0;
     right: 0;
     max-width: none;
-    max-height: 76vh;
-    max-height: 72dvh;
-    overflow-y: auto;
     padding: 14px var(--pad-panel) 16px;
     border-width: 1px 0 0;
     border-radius: var(--r-4) var(--r-4) 0 0;
@@ -219,19 +227,22 @@
   .tc-close { flex: 0 0 auto; min-height: 44px; }
 
   .tc-ident { font-weight: 650; margin-bottom: 2px; }
-  .tc-head, .tc-pending, .tc-legend { color: var(--dim); font-size: 11.5px; }
+  .tc-head, .tc-pending, .tc-legend, .tc-note { color: var(--dim); font-size: 11.5px; }
   .tc-head { margin-bottom: 7px; }
   .tc-legend { margin-top: 7px; line-height: 1.5; }
+  .tc-note { margin-top: 7px; line-height: 1.5; }
 
-  /* Thirteen columns fit at this size, but a narrow window is a real thing.
-     In the sheet form this is the scroller that actually gets flicked — a
-     13-week run is wider than a phone — so it wants the same containment
-     `.table-scroll` has, or a flick past the end scrolls the page behind it
-     and takes the sheet with it. */
-  .tc-scroll { overflow-x: auto; max-width: 100%; overscroll-behavior-x: contain; }
+  /* NOTHING IN HERE SCROLLS. This used to be `.tc-scroll`, `overflow-x: auto`,
+     because a 13-week run on one line is wider than a phone. Tim asked for the
+     scrolling gone and the whole run shown "no matter how long it gets", so
+     player-card.js cuts the run into LINES that fit instead, and this is just
+     the stack they sit in. Do not put an overflow back on it: a scrollbar here
+     is the thing that was removed, not a safety net under it. */
+  .tc-chart { display: grid; gap: 9px; }
 
   /* Tabular figures, and a floor on the column width, so every projection sits
-     squarely under its own week however wide the word in it is. */
+     squarely under its own week however wide the word in it is — and so every
+     line of a wrapped run has columns the same width as the line above it. */
   .tc-run {
     border-collapse: collapse;
     font-variant-numeric: tabular-nums;
@@ -264,6 +275,20 @@
     border-bottom: 1px solid var(--line);
   }
   .tc-run tbody td { font-size: 12.5px; padding-top: 4px; }
+
+  /* The Act row: what he actually scored, under the projection it is the
+     verdict on. Quieter than the projection and separated by a hairline,
+     because Proj is what the grid above is measured in and Act is the thing
+     you look down at afterwards. A blank cell here means "no result recorded
+     for that week" and is deliberately not any of the four marks below. */
+  .tc-run tfoot td, .tc-run tfoot th {
+    font-size: 11.5px;
+    padding-top: 3px;
+    border-top: 1px solid var(--line);
+  }
+  .tc-run tfoot td { color: var(--dim); }
+  .tc-run .a-num { color: var(--text); }
+  .tc-run .a-wait { color: var(--line); }
 
   /* The same four states the season grid draws, told apart the same way. */
   .tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
@@ -485,9 +510,14 @@
     #startersTable td.wk, #startersTable th.wk { padding-left: 5px; padding-right: 5px; }
 
     /* A tap-opened card is read at arm's length rather than leant into, so the
-       week run inside it keeps its desktop size while the card around it is
-       what shrinks. It scrolls sideways within the sheet either way. */
+       week run inside it keeps its type size while the card around it is what
+       shrinks. The columns give up two pixels of floor and two of padding
+       each — which is what buys a couple more weeks per line now that the run
+       wraps rather than scrolling. */
     .tc-run th, .tc-run td { min-width: 32px; padding: 2px 6px; }
+    /* The row labels are the widest fixed thing in a line, and on a phone they
+       are competing with the weeks for the same 300 pixels. */
+    .tc-run .tc-lbl { padding-right: 7px; }
   }
 </style>
 </head>

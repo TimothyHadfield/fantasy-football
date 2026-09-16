@@ -18,7 +18,19 @@
 
 import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js';
 import { enableSort, resort } from './sortable.js';
-import { savedConfig, onConnection, coarsePointer } from './connection.js';
+// `coarsePointer` is no longer imported here: the only two things on this page
+// that turned on it — whether the card opens as a sheet, and whether a tap on a
+// grid cell counts as a click on a player — both live in js/player-card.js now,
+// and it imports it from the same one place the connection bar does.
+import { savedConfig, onConnection } from './connection.js';
+// The hover/tap card that carries a man's whole season. It lives in its own
+// module because the Trade page shows the same card on every player it names,
+// and two copies of it is how the two pages start disagreeing about what a
+// bye, an unread week and a zero each look like. See the API block at the top
+// of js/player-card.js.
+import {
+  weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
+} from './player-card.js';
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
@@ -355,346 +367,51 @@ function totalOf(row) {
 // is this page's entire cost model — and `seasonIndex`/`seasonValue` already
 // turn that cache into exactly this shape. This is that machinery read a second
 // way, not a second copy of it, and no fetch belongs anywhere near here.
+//
+// The same cache carries what he ACTUALLY scored, which is the Act row under
+// the projections. It is the same fetch: `fetchWeekRosters` has always returned
+// `actual` beside `projected` on every roster entry, and this page simply never
+// read it here.
 
 /**
- * How a week reads in the run, and which of the five states it is.
- *
- * The ways of having no number stay different things, exactly as they are in
- * the season grid — that table tells them apart by class, and so does this.
- */
-function runToken(v) {
-  if (v === 'wait') return { text: '·', kind: 'wait' };
-  if (v === 'failed') return { text: '—', kind: 'none' };
-  if (v === 'off') return { text: 'off', kind: 'off' };
-  if (v === null) return { text: '—', kind: 'none' };
-  // Only ESPN means "no game that week" by a 0.00. The sample data means "we
-  // have ruled him out", so demo prints the number rather than claiming a bye
-  // it cannot know about — the same rule seasonCell() follows.
-  if (v === 0 && !state.isDemo) return { text: 'Bye', kind: 'bye' };
-  return { text: fmt(v), kind: 'num' };
-}
-
-/** Explained only when it actually turns up, so a clean run has no legend. */
-const RUN_KEYS = {
-  bye: 'Bye = the 0.00 ESPN returns for a player whose NFL team is off that week',
-  none: '— = ESPN carried no number for him that week',
-  off: 'off = he was not on this roster that week',
-  wait: '· = that week has not been read from ESPN yet',
-};
-
-/**
- * One player's whole season, as the data a two-row chart is drawn from.
+ * One player's whole season, as the data the three-row chart is drawn from.
  *
  * It used to be lines of text in a native `title`, which was the right first
  * answer — no focus management, no z-index, no touch story — and Tim read it
  * and said it was hard to scan. He is right, and the fix is not a better
  * string: a native tooltip renders in the OS UI font, so "W1 12.5  W2 13.5"
  * cannot be padded into columns that line up. Week numbers over their own
- * projections needs real layout, so this returns structure and a card of our
- * own draws it. See the tip card below for what that cost.
- *
- * The weeks arrive in batches behind the page, so this has to read correctly
- * when they are not all in — which is why an unread week is its own state and
- * why a run with nothing in it yet says so in words rather than drawing
- * thirteen empty columns.
+ * projections needs real layout, so this returns structure and the card in
+ * js/player-card.js draws it.
  */
 function seasonRunData(index, p) {
   const weeks = state.weeks;
   if (!index || !weeks.length) return null;
 
-  const values = weeks.map((w) => seasonValue(index, w, p.playerId));
-  const heading = state.isDemo
-    ? `Sample projections for ${weekRange(weeks)}`
-    : `ESPN’s projection for ${weekRange(weeks)}`;
-
-  if (values.every((v) => v === 'wait')) {
-    return { heading, pending: 'Not read yet — they fill in behind the page.', cols: [], legend: [] };
-  }
-
-  const cols = values.map((v, i) => {
-    const t = runToken(v);
-    return { week: weeks[i], text: t.text, kind: t.kind, now: weeks[i] === state.week };
-  });
-  const used = new Set(cols.map((c) => c.kind));
-  const legend = Object.entries(RUN_KEYS).filter(([k]) => used.has(k)).map(([, s]) => s);
-  return { heading, pending: '', cols, legend };
-}
-
-// ------------------------------------------------------------- the tip card
-//
-// A hover card of our own, because Tim asked for the week run as a chart —
-// week numbers along the top, projections underneath — and a native `title`
-// cannot draw one. It renders in the OS UI font, where a space is narrower
-// than a digit and "Bye" is nothing like either, so no amount of padding lines
-// thirteen columns up. Two <tr>s do it exactly, and tabular figures keep every
-// column the same width whatever is in it.
-//
-// What that costs, and how each part is paid:
-//
-//   - Clipping. Both grids live in `.table-scroll`, which is `overflow:auto`,
-//     and a card inside one would be cut off at its edge. So the card is a
-//     child of <body> and positioned `fixed`.
-//   - Flicker. `pointer-events:none`, so the card can never be the thing the
-//     mouse is over and cannot chase itself around the screen.
-//   - Keyboard. Shown on focusin too, so tabbing the links reveals the same
-//     thing hovering does.
-//   - Escape closes it, because anything that appears over the page should.
-//
-// The data is registered by gridCell rather than written into the markup:
-// thirteen weeks on 170 cells in each of two grids is tens of kilobytes of
-// duplicated attribute for something read for two seconds.
-//
-// ON A PHONE THERE IS NO HOVER, and this is the one thing on the site that
-// would simply cease to exist rather than merely look cramped: every one of
-// these cells is a bare number, the card is the only place the man's NAME
-// appears, and a tap on the cell followed the link straight off the page. So a
-// touch screen gets the same card as a SHEET — the tap opens it instead of
-// navigating, and the navigation it replaced becomes a button inside it, which
-// is strictly more than the hover offers.
-//
-// The two modes differ in three ways and share everything else:
-//
-//   hover:  floats under the cell, `pointer-events: none`, closes on mouseout.
-//   sheet:  pinned to the bottom of the window, interactive, closes on Escape,
-//           on its own Close, or on a tap anywhere outside it.
-//
-// The mode is decided per event by `coarsePointer()` rather than once at load,
-// so a tablet with a keyboard attached mid-session gets the right one, and a
-// desktop window narrowed to a phone's width keeps its hover card — that is
-// about width, and this is about whether there is a pointer at all.
-
-const TIPS = new Map();   // `${gridId}:${n}` -> { ident, run, href }
-let tipSeq = 0;           // just a counter: see the key note in gridCell
-
-let tipEl = null;
-let tipSheet = false;     // is the card currently open as a tap-opened sheet?
-
-// `coarsePointer` is imported from connection.js rather than written again
-// here. Two things turn on it — whether this card opens as a tap-opened sheet,
-// and whether the connection bar tells a reader to install an extension their
-// browser cannot load — and two copies of one question is how two answers start.
-
-/**
- * Did this click land on a PLAYER, or on the team's row around him?
- *
- * Both grids are one clickable row per team — clicking one drills into it
- * below — with a cell per player inside. Every click therefore belongs to
- * exactly one of the two, and something has to decide which.
- *
- * With a mouse the LINK decides: a number is an `<a class="pref">`, it is
- * followed, and the row lets it through. A finger has no link to decide with —
- * the tap opens the card instead of navigating — and a man ESPN gave no
- * playerId for has no `<a>` in his cell AT ALL, so on a touch screen the
- * question has to be asked of the cell rather than of what happens to be
- * inside it. That gap was a real defect: a tap on such a cell opened his card
- * AND silently re-pointed the three panels below at a team nobody picked.
- *
- * Shared by the row handler and read in the same terms by wireTips, so the two
- * cannot come to different answers about one click.
- */
-function clickIsPlayer(e) {
-  if (!e.target || !e.target.closest) return false;
-  if (e.target.closest('a.pref')) return true;
-  return coarsePointer() && !!e.target.closest('td[data-tip]');
-}
-
-function tipCard() {
-  if (tipEl) return tipEl;
-  tipEl = document.createElement('div');
-  tipEl.id = 'tipCard';
-  tipEl.className = 'tipcard';
-  tipEl.setAttribute('role', 'tooltip');
-  tipEl.hidden = true;
-  document.body.appendChild(tipEl);
-  return tipEl;
-}
-
-/**
- * The footer a SHEET gets and a hover card does not.
- *
- * On a phone the tap that opened this card is the tap that used to follow the
- * link, so the link has to come back somewhere — here, as a real `<a href>` so
- * it is still the site's one player-link contract and still opens in a new tab
- * from a long-press. The Close button is beside it because a sheet that can
- * only be dismissed by guessing where "outside" is is a trap.
- */
-function tipActions(href) {
-  if (!tipSheet) return '';
-  const open = href
-    ? `<a class="tc-open" href="${esc(href)}">His next 13 weeks &rarr;</a>`
-    : '<span class="tc-open tc-open-off">ESPN gives this man no id to look up</span>';
-  return `<div class="tc-actions">${open}<button type="button" class="tc-close">Close</button></div>`;
-}
-
-/** The two-row chart: week numbers over their own projections. */
-function tipHtml({ ident, run, href }) {
-  const head = `<div class="tc-ident">${esc(ident)}</div>`;
-  if (!run) return `${head}${tipActions(href)}`;
-
-  const sub = `<div class="tc-head">${esc(run.heading)}</div>`;
-  if (run.pending) {
-    return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>${tipActions(href)}`;
-  }
-
-  // A real table, so the two rows share one set of column widths and the
-  // numbers sit under their own week whatever is in them.
-  const weeks = run.cols
-    .map((c) => `<th${c.now ? ' class="now"' : ''} scope="col">${c.week}</th>`).join('');
-  const vals = run.cols
-    .map((c) => `<td class="k-${c.kind}${c.now ? ' now' : ''}">${esc(c.text)}</td>`).join('');
-
-  const legend = run.legend.length
-    ? `<div class="tc-legend">${run.legend.map((l) => esc(l)).join('<br>')}</div>`
-    : '';
-
-  return (
-    `${head}${sub}` +
-    `<div class="tc-scroll"><table class="tc-run">` +
-    `<thead><tr><th class="tc-lbl" scope="row">Week</th>${weeks}</tr></thead>` +
-    `<tbody><tr><th class="tc-lbl" scope="row">Proj</th>${vals}</tr></tbody>` +
-    `</table></div>${legend}${tipActions(href)}`
-  );
-}
-
-/**
- * @param {Element} cell
- * @param {boolean} sheet  open it as a tap-opened sheet rather than a hover card
- */
-function showTip(cell, sheet = false) {
-  const data = TIPS.get(cell.dataset.tip);
-  if (!data) return;
-  const el = tipCard();
-  tipSheet = sheet;                       // read by tipHtml, so set it first
-  el.innerHTML = tipHtml(data);
-  el.classList.toggle('sheet', sheet);
-  // A hover card is a tooltip; a thing you opened, can read and must dismiss is
-  // a dialog, and the difference is what a screen reader announces.
-  el.setAttribute('role', sheet ? 'dialog' : 'tooltip');
-  el.hidden = false;
-  // A sheet is pinned to the foot of the window by CSS and needs no measuring —
-  // which is also what makes it reliable on a screen where the cell it came
-  // from may be most of the viewport wide. The inline top/left are cleared
-  // rather than overridden: on a touchscreen laptop a hover can have placed the
-  // card already, and an inline style beats any class rule that follows it.
-  if (sheet) {
-    el.style.top = '';
-    el.style.left = '';
-  } else {
-    placeTip(cell);
-  }
-}
-
-function hideTip() {
-  if (tipEl) tipEl.hidden = true;
-  tipSheet = false;
-}
-
-/**
- * Put it under the cell, and keep it on screen.
- *
- * Every measurement is guarded: a test harness has no layout, and a tooltip is
- * never worth throwing an exception out of a render for. Without geometry it
- * simply sits where it was told, which is still correct markup.
- */
-function placeTip(cell) {
-  const el = tipEl;
-  if (!el || typeof cell.getBoundingClientRect !== 'function') return;
-  try {
-    const c = cell.getBoundingClientRect();
-    const t = el.getBoundingClientRect();
-    const vw = window.innerWidth || 1200;
-    const vh = window.innerHeight || 800;
-    const gap = 8;
-
-    // Below by default; above when there is no room, which there often is not
-    // for a row near the foot of a ten-team grid.
-    let top = c.bottom + gap;
-    if (top + t.height > vh - gap) top = Math.max(gap, c.top - t.height - gap);
-
-    // Left-aligned to the cell, then pulled back inside the window rather than
-    // allowed to run off the right of a wide table.
-    let left = c.left;
-    if (left + t.width > vw - gap) left = Math.max(gap, vw - t.width - gap);
-
-    el.style.top = `${Math.round(top)}px`;
-    el.style.left = `${Math.round(left)}px`;
-  } catch { /* no layout: the card is still correct, just unplaced */ }
-}
-
-/**
- * One delegated set per grid. `mouseover`/`mouseout` rather than enter/leave
- * because only these bubble, and the cell is found with closest() so moving
- * between the number and its link inside one cell is not a leave.
- *
- * The `click` handler is the touch half, and it does three things in order that
- * all matter:
- *
- *   1. It only acts on a coarse pointer. A mouse click on one of these cells
- *      must still follow the link, which is what every other page's click does
- *      and what `link-check.mjs` follows.
- *   2. It leaves every MODIFIED click alone — ctrl/cmd/shift/middle — so
- *      open-in-new-tab keeps working on a tablet with a keyboard.
- *   3. It stops the event before it reaches the document, where the handler
- *      that closes a sheet on an outside tap is waiting — the tap that OPENED
- *      it is not an outside tap, and without this the sheet would be dismissed
- *      by the gesture that asked for it.
- *
- * What it does NOT do is keep the row underneath from drilling into the team:
- * that handler is on this same element and registered first, so it has already
- * run by the time anything here could stop it. `clickIsPlayer` is where that is
- * settled, by both sides asking the same question.
- */
-function wireTips(table) {
-  const cellOf = (e) => (e.target.closest ? e.target.closest('td[data-tip]') : null);
-
-  table.addEventListener('mouseover', (e) => {
-    const cell = cellOf(e);
-    if (cell && !tipSheet) showTip(cell);
-  });
-  table.addEventListener('mouseout', (e) => {
-    if (tipSheet) return;   // a sheet is dismissed deliberately, never by drift
-    const cell = cellOf(e);
-    // Still inside the same cell — moving onto the link within it — is not a
-    // leave, and treating it as one is what makes a card flicker.
-    if (cell && e.relatedTarget && cell.contains(e.relatedTarget)) return;
-    if (cell) hideTip();
-  });
-  table.addEventListener('focusin', (e) => {
-    const cell = cellOf(e);
-    if (cell && !tipSheet) showTip(cell);
-  });
-  table.addEventListener('focusout', (e) => {
-    if (cellOf(e) && !tipSheet) hideTip();
-  });
-
-  table.addEventListener('click', (e) => {
-    if (!coarsePointer()) return;
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
-    const cell = cellOf(e);
-    if (!cell) return;
-    e.preventDefault();
-    e.stopPropagation();
-    showTip(cell, true);
+  return weekRun({
+    heading: state.isDemo
+      ? `Sample projections for ${weekRange(weeks)}`
+      : `ESPN’s projection for ${weekRange(weeks)}`,
+    weeks,
+    projections: weeks.map((w) => seasonValue(index, w, p.playerId)),
+    actuals: weeks.map((w) => seasonActual(index, w, p.playerId)),
+    currentWeek: state.week,
+    demo: state.isDemo,
   });
 }
 
-/**
- * Dismissing a sheet. Three ways, because a sheet that can only be closed one
- * way is a sheet somebody gets stuck under: its own Close button, Escape, and
- * a tap anywhere outside it. The cell taps that OPEN one call stopPropagation,
- * so the outside-tap handler never sees the tap that arrived a moment ago.
- */
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') hideTip();
-});
-
-document.addEventListener('click', (e) => {
-  if (!tipSheet || !tipEl || tipEl.hidden) return;
-  const inside = typeof tipEl.contains === 'function' && tipEl.contains(e.target);
-  // Inside, but on the Close button, or anywhere outside: gone. The link is the
-  // one thing inside that is left to do its own job.
-  if (!inside || (e.target.closest && e.target.closest('.tc-close'))) hideTip();
-});
+// ----------------------------------------------------------- the tip card
+//
+// The card itself — how it draws, where it floats, how it opens as a sheet
+// under a finger, and every comment explaining what each of those cost — is in
+// js/player-card.js, imported at the top of this file. It moved there when the
+// Trade page needed the identical card on every player it names: one copy is
+// the only reason the two pages cannot come to different answers about what a
+// bye, an unread week and a plain zero look like.
+//
+// This page's part of the contract is three lines: build a run (above),
+// register it and put the key in the markup (gridCell, below), and call
+// wireTips on each grid once (at the foot of the file).
 
 /**
  * The season cache, but only when it belongs to the league on screen.
@@ -746,22 +463,21 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
   // one of 170 cells per grid would be tens of kilobytes of attribute repeated
   // in two tables.
   //
-  // The key is a bare counter, NOT the playerId. It was the playerId first, and
-  // that quietly cost the hover to every man ESPN gave no id for — the card
-  // does not depend on the link and must not start to. A counter is unique by
-  // construction and needs nothing from the data.
+  // The key `registerRun` hands back is a bare counter, NOT the playerId. It
+  // was the playerId first, and that quietly cost the hover to every man ESPN
+  // gave no id for — the card does not depend on the link and must not start
+  // to. A counter is unique by construction and needs nothing from the data.
   // `href` is only read when the card opens as a tap-opened sheet, where it
   // becomes the button that replaces the navigation the tap preempted. Built
   // from the same playerId and the same one contract as playerRef below —
   // never a second way of naming a player — and `null` for a man ESPN gave no
   // id for, which is the case the sheet says out loud rather than offering a
   // link that goes nowhere.
-  const key = `${tipKey || 'g'}:${tipSeq++}`;
   const href =
     p.playerId === null || p.playerId === undefined
       ? null
       : `waivers.html?player=${encodeURIComponent(p.playerId)}`;
-  TIPS.set(key, { ident, run: seasonRunData(index, p), href });
+  const key = registerRun({ ident, run: seasonRunData(index, p), href }, tipKey || 'g');
 
   const shown = v === null ? '—' : bye ? 'Bye' : fmt(v);
 
@@ -790,7 +506,7 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
   // every column in both grids.
   return (
     `<td class="${cls.join(' ')}"${v === null ? '' : ` data-v="${v}"`}` +
-    ` data-tip="${esc(key)}">` +
+    `${tipAttr(key)}>` +
     `${playerRef(p, inner, `${ident}. Click to ${OPENS}.`, 'aria-label')}</td>`
   );
 }
@@ -1097,8 +813,7 @@ function renderOverview() {
   // Cleared here rather than per grid: the rows are about to be replaced, so
   // every key registered against the old ones is dead. Left to grow it would
   // hold a whole other league's squads after a source switch.
-  TIPS.clear();
-  tipSeq = 0;
+  clearRuns();
   hideTip();          // the cell it was describing is being thrown away
   for (const grid of GRIDS) renderGrid(grid);
 }
@@ -1586,11 +1301,18 @@ async function refreshSeason(key, missing) {
 }
 
 /**
- * week -> Map(playerId -> projection | null) for one team.
+ * week -> Map(playerId -> { projected, actual }) for one team.
  *
  * A week whose payload has no row for this team at all maps to null, so "the
  * league did not contain him that week" stays distinguishable from "the week
  * has not been read yet".
+ *
+ * BOTH numbers, from the one pass. `fetchWeekRosters` has always returned
+ * `actual` beside `projected` and this page only ever read the projection; the
+ * card's Act row is that second field, not a second fetch. Building one index
+ * with both in it is also what keeps the two rows of the chart honest — they
+ * cannot be about different weeks, or different men, because they came out of
+ * the same entry.
  */
 function seasonIndex(teamId) {
   const byWeek = new Map();
@@ -1599,7 +1321,10 @@ function seasonIndex(teamId) {
     if (!team) { byWeek.set(week, null); continue; }
     const byPlayer = new Map();
     for (const p of team.players) {
-      byPlayer.set(p.playerId, typeof p.projected === 'number' ? p.projected : null);
+      byPlayer.set(p.playerId, {
+        projected: typeof p.projected === 'number' ? p.projected : null,
+        actual: typeof p.actual === 'number' ? p.actual : null,
+      });
     }
     byWeek.set(week, byPlayer);
   }
@@ -1607,19 +1332,37 @@ function seasonIndex(teamId) {
 }
 
 /**
- * One player's projection for one week, in five distinguishable states:
+ * One field of one player's week, in five distinguishable states:
  *   'wait'    the week has not been read yet
  *   'failed'  ESPN refused that week for everybody
  *   'off'     he was not on this roster in that week
  *   null      ESPN carried no number for him that week
- *   number    the projection (0 means his NFL team is on bye)
+ *   number    the value itself
+ *
+ * The three string states are facts about the WEEK and the ROSTER rather than
+ * about either number, so they are decided once here and both readers below
+ * get the same answer. Splitting them would be two copies of the hardest part.
  */
-function seasonValue(index, week, playerId) {
+function seasonField(index, week, playerId, field) {
   const byPlayer = index.get(week);
   if (byPlayer === undefined) return state.seasonFailed.has(week) ? 'failed' : 'wait';
   if (byPlayer === null) return 'off';
   if (!byPlayer.has(playerId)) return 'off';
-  return byPlayer.get(playerId);
+  return byPlayer.get(playerId)[field];
+}
+
+/** His projection for that week. 0 means his NFL team is on bye. */
+function seasonValue(index, week, playerId) {
+  return seasonField(index, week, playerId, 'projected');
+}
+
+/**
+ * What he ACTUALLY scored that week — null until the game has been played and
+ * ESPN has a number for it, which is what makes the card's Act row blank for
+ * every week still to come without this page having to consult a calendar.
+ */
+function seasonActual(index, week, playerId) {
+  return seasonField(index, week, playerId, 'actual');
 }
 
 /**
