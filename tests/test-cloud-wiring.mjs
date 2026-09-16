@@ -182,7 +182,13 @@ const SEASON = 2026;
 // make, and a count is the only way to assert it — a substitution that read the
 // cloud and then discarded the answer would look identical from the outside.
 
-function makeFake({ user = { uid: 'uid-tim', email: 'tim@example.com', name: 'Tim' } } = {}) {
+// The fake user is the league's owner. The repo pins a real ownerUid in
+// DEFAULT_CONFIG, and cloud.js refuses any other account before it writes, so a
+// made-up uid here would be turned away as a stranger.
+const OWNER_UID = (readFileSync(repoFile('js/cloud.js'), 'utf8')
+  .match(/ownerUid:\s*'([^']*)'/) || [])[1] || 'uid-tim';
+
+function makeFake({ user = { uid: OWNER_UID, email: 'tim@example.com', name: 'Tim' } } = {}) {
   const docs = new Map();
   const log = { reads: 0, writes: 0 };
   return {

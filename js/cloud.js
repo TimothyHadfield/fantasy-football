@@ -280,7 +280,7 @@ export const DEFAULT_CONFIG = {
   authDomain: 'fantasy-football-th.firebaseapp.com',
   projectId: 'fantasy-football-th',
   appId: '1:1008636616586:web:3932f2d5a69cd6f9177273',
-  ownerUid: '',        // filled in once Tim has signed in (sitting two)
+  ownerUid: 'rYpbExZGM0fCeuuYakAxR6OzG452',   // timhadfield7@gmail.com
 };
 
 // --------------------------------------------------------------------- state

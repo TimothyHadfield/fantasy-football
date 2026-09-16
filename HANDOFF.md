@@ -389,13 +389,15 @@ information on firebase."*
   the thing that decays rather than picked: the wire goes stale after a day.
 - **The project exists: `fantasy-football-th`** (owner timhadfield7@gmail.com,
   Firestore in `nam5`), created 2026-09-16 by Claude through the signed-in
-  `firebase` CLI, and its config is in `js/cloud.js`. The locked interim rules
-  are published. **Still to do:** Tim enables the Google provider in the
-  console (the CLI cannot — it needs the OAuth client only the console
-  creates); then the authorized domain `timothyhadfield.github.io` is added;
-  then he signs in once, and his uid goes into the rules and `ownerUid`.
-  Until then every cloud call fails silently and the site behaves as before.
-  `docs/firebase-setup.md` is still the click-by-click.
+  `firebase` CLI, and its config is in `js/cloud.js`. **Setup is complete as of
+  2026-09-16**: Google sign-in enabled (Tim, in the console — the CLI cannot,
+  it needs the OAuth client only the console creates), `timothyhadfield.github.io`
+  authorised, and the rules published with his uid `rYpbExZGM0fCeuuYakAxR6OzG452`,
+  which is also `ownerUid`. The rules live in `firebase/firestore.rules`;
+  publish with `firebase deploy --only firestore:rules` from `firebase/`. The
+  CLI's own login can reach the admin APIs the CLI lacks commands for
+  (authorised domains, enabling APIs) — see how it was done in git history.
+  **Unconfirmed: the first successful Send to phone and the phone read.**
 
 ## Trades, and what the site will and will not do to ESPN
 

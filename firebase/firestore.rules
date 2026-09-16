@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The one account this data belongs to.
+    //
+    // Sitting two replaces the string below with your own user id. Until it
+    // does, isOwner() is false for everybody — including you — so nothing can
+    // be read or written. That is the correct state to leave it in overnight:
+    // an empty locked box is fine, an open one is not.
+    function isOwner() {
+      return request.auth != null
+          && request.auth.uid == 'rYpbExZGM0fCeuuYakAxR6OzG452';
+    }
+
+    // Everything the site stores lives under /leagues. Both matches are
+    // needed: the outer one for the league document itself, the inner one for
+    // every season, week and wire document beneath it.
+    match /leagues/{league} {
+      allow read, write: if isOwner();
+
+      match /{rest=**} {
+        allow read, write: if isOwner();
+      }
+    }
+  }
+}
