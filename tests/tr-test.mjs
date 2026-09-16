@@ -233,7 +233,21 @@ const num = (s) => Number(String(s).replace(/−/g, '-').replace(/\+/g, '').trim
 function readWeekTable(el) {
   const table = el ? el.querySelector('table.weeks') : null;
   if (!table) return null;
-  const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
+  const all = [...table.querySelectorAll('tbody tr')];
+  const cls = (tr) => tr.getAttribute('class') || '';
+  const divider = all.find((tr) => cls(tr).includes('divider'));
+  // PLAYED WEEKS sit above a divider, uncoloured, in no total — Tim's ask. They
+  // are read separately so nothing below mistakes them for priced weeks.
+  const past = all.filter((tr) => cls(tr).includes('past')).map((tr) => {
+    const tds = [...tr.children];
+    return {
+      label: text(tds[0]),
+      delta: num(text(tds[3])),
+      coloured: /\b(up|down)\b/.test(tds[3].getAttribute('class') || ''),
+      aboveLine: !!divider && all.indexOf(tr) < all.indexOf(divider),
+    };
+  });
+  const rows = all.filter((tr) => !/past|divider/.test(cls(tr))).map((tr) => {
     const tds = [...tr.children];
     return {
       label: text(tds[0]),
@@ -246,6 +260,8 @@ function readWeekTable(el) {
   return {
     weeks: rows.filter((r) => !r.total),
     totals: rows.filter((r) => r.total),
+    past,
+    divider: divider ? text(divider) : '',
     // By LABEL, not position: Tim asked for per week first and the total under
     // it, and a reader keyed on order silently swaps the two.
     totalRow: rows.find((r) => r.total && /^All /.test(r.label)) || null,
@@ -1821,9 +1837,30 @@ if (!live.boot) {
       Math.abs(stale.delta - fresh.delta) > 0.15,
       `${weekLabel(unplayed)} ${fresh.delta} vs ${weekLabel(withPlayed)} ${stale.delta}`);
 
-    ok('no row of the week-by-week table is a week that has been played',
+    ok('no PRICED row of the week-by-week table is a week that has been played',
       live.deal.weeks.weeks.every((r) => Number(String(r.label).replace(/\D/g, '')) > live.played),
       live.deal.weeks.weeks.map((r) => r.label).join(','));
+
+    // Tim, 2026-09-16: show the played weeks, but above a line and in white.
+    const past = live.deal.weeks.past;
+    eq(past.map((r) => r.label).join(','),
+      Array.from({ length: live.played }, (_, i) => `Week ${i + 1}`).join(','),
+      'every played week is shown, in order, for reference');
+    ok('all of them above the line', past.length > 0 && past.every((r) => r.aboveLine));
+    ok('and none of them red or green', past.every((r) => !r.coloured));
+    ok('the line says they are not counted', /not counted/.test(live.deal.weeks.divider),
+      live.deal.weeks.divider);
+    // THE NUMBER TIM CHECKED BY HAND: the total must be the priced rows alone.
+    // If a played week leaked in, the total would be off by that week's delta.
+    {
+      const sumPriced = live.deal.weeks.weeks.reduce((a, r) => a + r.delta, 0);
+      const sumPast = past.reduce((a, r) => a + r.delta, 0);
+      const total = live.deal.weeks.totalRow.delta;
+      ok('the total is the rows below the line, and only those',
+        Math.abs(sumPriced - total) <= 0.05 * live.deal.weeks.weeks.length + 0.051 &&
+          (Math.abs(sumPast) < 0.05 || Math.abs(sumPriced + sumPast - total) > 0.05),
+        `below ${sumPriced.toFixed(1)}, above ${sumPast.toFixed(1)}, total ${total}`);
+    }
   }
 
   // The fixture's loud played week: Cy's tight end projects 30 in weeks 1-4 and

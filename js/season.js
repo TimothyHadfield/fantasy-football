@@ -90,6 +90,13 @@ function realLeague(leagueId) {
  * exactly as before", which is what makes the cloud's absence a non-event.
  */
 function cloudDown() {
+  // Decided only once the extension has had its chance to say hello: asked any
+  // earlier, "no bridge" is merely "not yet", and the page would read the cloud
+  // (or ESPN directly) on a desktop that has the extension. See bridge.settled.
+  return bridge.settled().then(cloudDownNow);
+}
+
+function cloudDownNow() {
   // The bridge is live data and it is the only thing that reads a private
   // league. If it is here, the cloud is not even asked — this is what makes
   // "with the extension, zero cloud reads" true rather than merely likely.
@@ -356,6 +363,7 @@ export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
 export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
   const w = Number(week);
 
+  await bridge.settled();
   if (!bridge.isAvailable() && cloud.isConfigured()) {
     const { leagueId, season } = espn.getConfig();
     if (realLeague(leagueId)) {

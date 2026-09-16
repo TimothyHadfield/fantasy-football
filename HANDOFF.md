@@ -39,7 +39,13 @@ raise it before anything else he asked for. Two things to ask, in this order:
    `C:\Users\timha\Downloads\fantasy-archive-*.json` yourself before asking; he
    may have exported already and not said.
 
-**He reads the site on his phone, and that is the likeliest reason.** A
+**A second candidate, found 2026-09-16:** every page raced the extension's
+hello, so a page's FIRST ESPN read went direct and a private league refused
+it — the schedule page's included. Fixed (`bridge.settled()`); if readings
+start appearing after that deploy, this was the cause. See PROGRESS.md, "a race
+with the extension".
+
+**He reads the site on his phone, and that is the other likely reason.** A
 snapshot is only captured when `schedule.html` loads on LIVE data; live data
 needs the bridge extension; **no phone browser can install one**. So if he is
 only opening the site on the phone, the archive stays empty however good the

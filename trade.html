@@ -178,6 +178,17 @@
   table.weeks td.delta.up { color: var(--accent); }
   table.weeks td.delta.down { color: var(--err); }
   table.weeks tbody tr.total td { border-top: 1px solid var(--line-2); font-weight: 700; }
+  /* Played weeks: plain white, never red or green — they are in no total. The
+     line under them is the boundary of the calculation, so it is drawn heavy. */
+  table.weeks tbody tr.past td { color: var(--text); }
+  table.weeks tbody tr.divider td {
+    border-bottom: 2px solid var(--text);
+    color: var(--dim);
+    font-size: 11px;
+    font-weight: 600;
+    padding-top: 6px;
+    white-space: normal;
+  }
 
   .deal-head { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
   .deal-side { min-width: 180px; }

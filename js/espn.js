@@ -124,6 +124,10 @@ function leaguePath(views = []) {
 async function leagueRead(views, { filter, scoringPeriodId } = {}) {
   if (!config.leagueId) throw new Error('No league ID configured.');
 
+  // Wait for the extension's hello before choosing a route — see
+  // `bridge.settled`. Asking too early sent a private league's first read
+  // straight to ESPN, which refused it.
+  await bridge.settled();
   if (bridge.isAvailable()) {
     const res = await bridge.league({
       leagueId: config.leagueId,
@@ -258,6 +262,7 @@ export function parseFreeAgent(entry, week) {
 export async function fetchByeWeeks() {
   const view = 'proTeamSchedules_wl';
   let data;
+  await bridge.settled();
   if (bridge.isAvailable()) {
     const res = await bridge.seasonView({ season: config.season, view });
     if (!res.ok) throw new Error(res.error || 'Could not read the season schedule.');

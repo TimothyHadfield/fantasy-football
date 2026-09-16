@@ -25,6 +25,7 @@ const SUITES = [
   ['test-sim.mjs', 'the Monte Carlo season simulation'],
   ['test-projection.mjs', 'the shared projection module'],
   ['test-extension.mjs', 'the bridge worker: URL injection, who may drive it, and the staged trade'],
+  ['test-bridge-settle.mjs', 'a private league’s first read waits for the extension’s hello'],
   ['test-espn-tick.mjs', 'ticking your own side on ESPN’s trade page — and never submitting'],
   ['owner-names.mjs', 'real names instead of team names: the ESPN members join'],
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],

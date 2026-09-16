@@ -1328,6 +1328,33 @@ for one man is the contradiction a shared divisor exists to prevent.
 `tr-test.mjs` grew from 75 assertions to **224** across this work, and the
 engine suites came through byte-identical: 1,411 and 4,009, both untouched.
 
+### Played weeks inside a trade's total: a race with the extension (2026-09-16)
+
+Tim caught week 1 — played — inside a deal's −13.6, with the pop-up listing
+weeks 1–**18** when his season is 14. Both facts say the schedule read FAILED:
+the page then knows no played week and falls back to `NFL_WEEKS`.
+
+**It failed because of a race, on every page.** The extension says hello at
+document_start (before any page module is listening) and at DOMContentLoaded
+(queued behind the module scripts). A page that reads ESPN at top level asked
+`bridge.isAvailable()` too early, got false, went DIRECT, and a private league
+refused it. The roster reads a moment later went through the bridge, so the
+page looked live and was wrong. **`bridge.settled()`** now waits (≤0.8s, once
+per page) for the hello, and every transport decision — `espn.leagueRead`,
+`fetchByeWeeks`, `season.cloudDown`, `fetchWireWeek` — awaits it.
+`tests/test-bridge-settle.mjs` posts the hello a tick after the first read
+starts, and fails without the wait.
+
+**This may also be why the archive is empty**: the schedule page reads at top
+level too, and a failed schedule read there means no live reading to capture.
+Unproven — worth checking the time machine panel once this is deployed.
+
+Also: the Trade page retries the schedule once and says in red when it still
+cannot read it; the pop-up shows played weeks **above a heavy line, in plain
+white, in no total** (Tim's ask, and `tr-test` checks the total is the rows
+below the line only); and a pop-up kept open through a re-rank now swaps in
+the same deal from the new search, which fixes every man reading "—".
+
 ### The pop-up that never closed (2026-09-16, Tim's report)
 
 He opened the Trade page to a pop-up reading "This trade, week by week" over

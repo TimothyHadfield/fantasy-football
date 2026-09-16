@@ -115,6 +115,43 @@ export function isAvailable() {
   return detected;
 }
 
+/**
+ * Resolves once the extension has said hello, or once it clearly is not going
+ * to — whichever is first. Resolves to `isAvailable()`.
+ *
+ * WHY THIS EXISTS: a page module runs BEFORE the extension's hello reaches it.
+ * The content script says hello at document_start (before this module has a
+ * listener) and again at DOMContentLoaded, which is queued behind the module
+ * scripts. So a page that reads ESPN at top level — the Trade page does — asked
+ * `isAvailable()`, got false, went DIRECT to ESPN, and was refused, because a
+ * private league needs the extension. Its schedule read failed that way while
+ * the roster reads a moment later went through the bridge fine; the page then
+ * believed no week had been played and priced week 1 into every trade.
+ *
+ * Every transport decision waits on this first. Memoised: with the extension
+ * it costs nothing measurable; without it (a phone) one wait per page load.
+ */
+const SETTLE_MS = 800;
+let settledPromise = null;
+
+export function settled() {
+  if (detected || !hasWindow) return Promise.resolve(detected);
+  if (!settledPromise) {
+    settledPromise = new Promise((resolve) => {
+      let timer = null;
+      const done = () => {
+        clearTimeout(timer);
+        listeners.delete(onHello);
+        resolve(detected);
+      };
+      const onHello = (s) => { if (s && s.available) done(); };
+      listeners.add(onHello);
+      timer = setTimeout(done, SETTLE_MS);
+    });
+  }
+  return settledPromise;
+}
+
 /** The extension's manifest version, as it announced itself; null if unknown. */
 export function extensionVersion() {
   return version;

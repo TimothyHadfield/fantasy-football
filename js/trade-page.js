@@ -122,6 +122,7 @@ const state = {
   week: 1,
   weeks: [],
   playedWeeks: [],
+  scheduleError: null, // why the live schedule could not be read, if it could not
   data: null,          // {week, teams:[...]} for the selected week
   slots: null,         // the league's starting slots, read off the lineups
   myTeamId: null,      // the squad the finder trades FROM
@@ -252,6 +253,15 @@ function playedWeeks() {
 function weeklySpan() {
   const played = new Set(playedWeeks());
   return state.weeks.filter((w) => !played.has(w));
+}
+
+/**
+ * The played weeks the pop-up SHOWS — above a line, uncoloured, and in no total.
+ * Tim asked to see them marked as out of the calculation rather than hidden.
+ */
+function pastWeeksShown() {
+  const played = new Set(playedWeeks());
+  return state.weeks.filter((w) => played.has(w));
 }
 
 /**
@@ -454,9 +464,9 @@ async function loadWeekly() {
  * but must NOT re-run the search — `runSearch` shuts the pop-up, so buying the
  * weeks through the page button would close the very thing that asked for them.
  */
-async function buyMissingWeeks() {
+async function buyMissingWeeks(list = null) {
   const key = sourceKey();
-  const missing = missingWeeks();
+  const missing = list ? list.filter((w) => !haveWeek(w)) : missingWeeks();
   if (!missing.length) return true;
 
   const token = ++weekly.token;
@@ -761,7 +771,11 @@ const posTag = (position) =>
  * unit on a quantity that is not there.
  */
 function perWeekValue(p) {
-  return basis() === 'weeks' ? p.perWeek : p.projected;
+  if (basis() !== 'weeks') return p.projected;
+  // An offer found on a scalar measure carries no `perWeek` — it happens when a
+  // pop-up opened on one stays open while the page re-ranks week by week — and
+  // printed "—" for every man. `weeklyMean` is the same arithmetic, byes out.
+  return Number.isFinite(p.perWeek) ? p.perWeek : weeklyMean(p);
 }
 
 function manLine(p) {
@@ -1618,6 +1632,18 @@ function runSearch({ keepDeal = false } = {}) {
     if (token !== runSearch.token) return;
     state.search = result;
     state.searching = false;
+    // A pop-up kept open through the re-rank is holding the OLD search's offer,
+    // priced on the old measure — its churn line and per-man figures would be
+    // the old answer. Swap in the same deal from the new search when it is
+    // still there (same manager, same men both ways).
+    if (keepDeal && state.deal && !state.deal.combined) {
+      const ids = (list) => list.map((p) => p.playerId).sort().join(',');
+      const was = state.deal;
+      const same = result.offers.find((o) =>
+        o.partner && was.partner && o.partner.id === was.partner.id &&
+        ids(o.send) === ids(was.send) && ids(o.receive) === ids(was.receive));
+      if (same) state.deal = same;
+    }
     paint();
     runCombo();
   };
@@ -1648,7 +1674,27 @@ runSearch.token = 0;
 // the difference column is signed and coloured, so a deal that is +5 on average
 // and −12 in the weeks that decide the season is one glance.
 
-function weekTableHtml(byWeek, total, { label = 'With the trade' } = {}) {
+function weekTableHtml(byWeek, total, { label = 'With the trade', past = [] } = {}) {
+  // PLAYED WEEKS: above a line, in plain text, and in no total. Tim, 2026-09-16:
+  // "draw a line below the previous weeks ... and turn all the numbers above it
+  // white (not red or green) to show it's not in the calculation." No up/down
+  // class, so no colour; the sign stays, because it is still what the trade
+  // would have done that week.
+  const pastRows = past
+    .map(
+      (w) =>
+        `<tr class="past">` +
+        `<td class="name">Week ${w.week}</td>` +
+        `<td>${fmt(w.before)}</td>` +
+        `<td>${fmt(w.after)}</td>` +
+        `<td class="delta">${signedText(w.delta)}</td>` +
+        `</tr>`
+    )
+    .join('');
+  const divider = past.length
+    ? `<tr class="divider"><td colspan="4">Played — not counted. ` +
+      `Only the ${plural(byWeek.length, 'week')} below are in the totals.</td></tr>`
+    : '';
   const rows = byWeek
     .map(
       (w) =>
@@ -1670,12 +1716,13 @@ function weekTableHtml(byWeek, total, { label = 'With the trade' } = {}) {
     `<table class="weeks">` +
     `<thead><tr><th class="name">Week</th><th>As you are now</th>` +
     `<th>${esc(label)}</th><th>Difference</th></tr></thead>` +
-    `<tbody>${rows}` +
+    `<tbody>${pastRows}${divider}${rows}` +
     // Per week FIRST, the total under it — Tim's order for every figure here.
     `<tr class="total"><td class="name">Per week</td>` +
     `<td>${fmt(beforeTotal / n)}</td><td>${fmt(afterTotal / n)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total / n)}</td></tr>` +
-    `<tr class="total sub-row"><td class="name">All ${plural(byWeek.length, 'week')}</td>` +
+    `<tr class="total sub-row"><td class="name">All ${plural(byWeek.length, 'week')}` +
+    `${past.length ? ' left' : ''}</td>` +
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total)}</td></tr>` +
     `</tbody></table>`
@@ -1791,10 +1838,27 @@ function renderDeal() {
               'manager’s roster in the week being shown.'
       }</span></p>`;
 
+  // The played weeks, priced the same way but SEPARATELY, so nothing about them
+  // can reach `priced` — they are shown for reference and counted nowhere. Only
+  // weeks actually in hand; one still loading simply appears when it lands.
+  const pastSpan = pastWeeksShown().filter((w) => weekly.byWeek.has(w));
+  const pastPriced = pastSpan.length
+    ? priceTradeAcrossWeeks({
+      players: me.players,
+      send: offer.send,
+      receive: offer.receive,
+      slots: state.slots,
+      weeks: pastSpan,
+      projFor,
+      zeroIsBye: zeroIsBye(),
+    }).byWeek
+    : [];
+
   $('dealBody').innerHTML =
     head +
     weekTableHtml(priced.byWeek, priced.delta, {
       label: offer.combined ? 'With the combination' : 'With the trade',
+      past: pastPriced,
     }) +
     cut +
     espnBlock;
@@ -1866,9 +1930,14 @@ function openDeal(offer, key) {
 async function loadWeeksForDeal(offer) {
   if (weekly.key !== sourceKey()) resetWeekly();
   rememberSelectedWeek();
-  if (weeklyReady() || weekly.loading || !weeklySpan().length) { paint(); return; }
-  const done = await buyMissingWeeks();
+  // The remaining weeks, which are priced, AND the played ones, which the
+  // pop-up shows above a line for reference and leaves out of every total.
+  const needed = [...pastWeeksShown(), ...weeklySpan()];
+  const wasReady = weeklyReady();
+  if (weekly.loading || !weeklySpan().length || needed.every(haveWeek)) { paint(); return; }
+  const done = await buyMissingWeeks(needed);
   if (!done) return;
+  if (wasReady) { if (state.deal === offer) paint(); else renderCost(); return; }
   // The page button may have been pressed while this was reading, switching
   // the whole page to the weekly measure; its own load bailed out on seeing
   // ours in flight, so the re-rank it owes is paid here.
@@ -2298,7 +2367,12 @@ function describeSource() {
   const played = state.playedWeeks.includes(state.week);
   return (
     `Week ${state.week} · ${plural(teams, 'team')} from ESPN · ${shape}` +
-    (played ? '.' : ' · <strong>not played yet</strong> — projections only.')
+    (played ? '.' : ' · <strong>not played yet</strong> — projections only.') +
+    (state.scheduleError
+      ? ` <strong style="color:var(--err)">The league schedule could not be read ` +
+        `(${esc(state.scheduleError)}), so this page cannot tell which weeks are already ` +
+        `played and is pricing every week 1–${NFL_WEEKS}. Reload before trusting a trade.</strong>`
+      : '')
   );
 }
 
@@ -2361,6 +2435,7 @@ function setToggle(id, attr, value) {
 async function useDemo() {
   state.source = 'demo';
   state.isDemo = true;
+  state.scheduleError = null;
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The demo season really is over: `js/demo-rosters.js` hardcodes a result
   // against every one of its thirteen games. Kept honest here, and handled
@@ -2405,13 +2480,23 @@ async function useLive() {
 
   setStatus('Reading the league schedule…');
   let scheduleWeeks = [];
-  try {
-    const schedule = await fetchSchedule();
-    scheduleWeeks = schedule.weeks || [];
-    state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
-      .sort((a, b) => a - b);
-  } catch {
-    state.playedWeeks = [];
+  state.scheduleError = null;
+  // Once more on failure. The schedule is what says which weeks are PLAYED, and
+  // without it every played week is priced into every trade — Tim caught week 1
+  // inside a total this way. A second try is cheap against that.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const schedule = await fetchSchedule();
+      scheduleWeeks = schedule.weeks || [];
+      state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
+        .sort((a, b) => a - b);
+      state.scheduleError = null;
+      break;
+    } catch (err) {
+      state.playedWeeks = [];
+      state.scheduleError = (err && err.message) || String(err);
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
+    }
   }
   state.weeks = scheduleWeeks.length
     ? scheduleWeeks
