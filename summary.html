@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weekly summary &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="css/app.css">
+<style>
+/* The share card.
+ *
+ * The canvas is the thing that LEAVES the site: it is what lands in a Messages
+ * thread and gets read by nine people who have none of the context this page
+ * has. So the preview is shown at the size it will actually be read at rather
+ * than shrunk to a thumbnail - if it is not legible here it will not be legible
+ * there, and that is the one thing this page exists to get right.
+ *
+ * The canvas's own width/height ATTRIBUTES are set in js/summary-page.js at 2x
+ * for retina; this only ever sets its CSS box. Setting the pixel size from CSS
+ * would stretch a 1x bitmap and undo the whole point of drawing at 2x. */
+.card-wrap {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  padding: 12px;
+  overflow-x: auto;
+  /* The card is a fixed-aspect image, so a narrow screen scrolls it sideways
+   * rather than reflowing it - the same decision as the wide tables. */
+  overscroll-behavior-x: contain;
+}
+.card-wrap canvas {
+  display: block;
+  /* Never wider than the panel, never upscaled past its own logical size. */
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-2);
+}
+
+/* The plain-text version of the same chart. It is not a consolation prize: on a
+ * laptop, pasting text into a group chat is often better than an image, and it
+ * is the one form that survives being quoted, searched and read aloud. Always
+ * on screen and always selectable, so a failed clipboard write costs nothing -
+ * the words are already there to select by hand. */
+.sharetext {
+  margin: 0;
+  padding: 12px;
+  background: #0d0f13;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  color: var(--text);
+  font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* The three send controls sit on one line on a desktop and stack on a phone,
+ * where the first of them is the only one that does anything. */
+.send-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px 0 12px; }
+.send-row button { min-height: 40px; }
+
+/* LUCK, title and loser all read better with the digits aligned. */
+#summaryTable td.num, #summaryTable th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------------------- phone
+   css/app.css is linked BEFORE this block, so a page-local fixed width can only
+   be overridden page-locally - see the phone section of PROGRESS.md. */
+@media (max-width: 760px) {
+  .form-select { width: 100%; }
+  .send-row { gap: 8px; }
+  .send-row button { flex: 1 1 100%; min-height: 44px; }
+  .sharetext { font-size: 11.5px; padding: 10px; }
+  .card-wrap { padding: 8px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap wide">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="waivers.html">Players</a>
+      <a href="trade.html">Trade</a>
+      <a href="draft.html">Draft</a>
+      <a href="summary.html" class="active">Summary</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div id="connBar"></div>
+
+  <h1>Weekly summary <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">
+    One line per manager &mdash; season luck, title odds and wooden-spoon odds &mdash;
+    drawn as a picture you can send to the group chat.
+  </p>
+
+  <section class="panel">
+    <h2>Data source</h2>
+    <div class="row spread">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
+      </div>
+      <div class="form-select">
+        <label for="weekSelect">Summary through week</label>
+        <select id="weekSelect"></select>
+      </div>
+    </div>
+    <p class="ctl-hint" id="weekHint">
+      Everything up to and including this week is treated as decided; every week
+      after it is played out by the simulation.
+    </p>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <section class="panel">
+    <h2>The chart</h2>
+    <div class="table-scroll"><table id="summaryTable">
+      <thead><tr>
+        <th class="name" data-sort title="The person, not their ESPN team name. Resolved from ESPN's own member list.">Member</th>
+        <th class="num" data-sort title="Your sheet's LUCK column, for the season so far: league average actual &minus; (points to win &minus; close-game luck). Above zero means the season has broken your way.">LUCK</th>
+        <th class="num" data-sort title="How often this manager wins the CHAMPIONSHIP ROUND across the simulated seasons. Not the same as topping the table.">Title %</th>
+        <th class="num" data-sort title="How often this manager finishes LAST IN THE REGULAR-SEASON STANDINGS. Tim's league rule, and nothing to do with the consolation ladder.">Loser %</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="simStatus"></p>
+    <p class="panel-note" id="summaryNote"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Send it</h2>
+    <div class="card-wrap" id="cardWrap">
+      <canvas id="shareCanvas" aria-label="The weekly summary chart, drawn as an image."></canvas>
+    </div>
+    <div class="send-row" id="sendRow">
+      <button type="button" id="shareBtn" class="primary" hidden>Share the image&hellip;</button>
+      <button type="button" id="downloadBtn">Download the image</button>
+      <button type="button" id="copyBtn">Copy as text</button>
+    </div>
+    <p class="ctl-hint" id="shareHint"></p>
+    <p class="panel-note" id="shareStatus"></p>
+    <pre class="sharetext" id="shareText" tabindex="0"></pre>
+    <p class="panel-note">
+      Nothing is sent anywhere by this page. Sharing hands the image to your own
+      phone&rsquo;s share sheet, where you pick the app and the people and see the
+      message before it goes.
+    </p>
+  </section>
+
+</div>
+
+<script type="module" src="js/summary-page.js"></script>
+<script type="module" src="js/connection.js"></script>
+<!-- A title attribute draws nothing on iOS, and this page puts its column
+     definitions in them. One tag, no page-module changes: js/touch-titles.js. -->
+<script type="module" src="js/touch-titles.js"></script>
+</body>
+</html>

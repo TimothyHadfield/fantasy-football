@@ -28,6 +28,7 @@ const SUITES = [
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['test-cloud.mjs', 'the phone bridge: what is synced up, what comes back down, and how old it is'],
+  ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],
   ['test-trade-weekly.mjs', 'the weekly measure: depth across the season, and the combo packer'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],
   ['test-pages-render.mjs', 'every page boots its real modules against its real HTML'],
@@ -41,6 +42,7 @@ const SUITES = [
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
+  ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],
   ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],
 ];
 

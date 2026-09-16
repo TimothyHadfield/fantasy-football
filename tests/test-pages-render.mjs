@@ -19,7 +19,9 @@ import { REPO } from './repo.mjs';
 
 // index.html's module is discovered from the page itself, so a renamed module
 // is caught rather than hard-coded around.
-const PAGES = ['index.html', 'stats.html', 'analysis.html', 'schedule.html', 'trade.html'];
+const PAGES = [
+  'index.html', 'stats.html', 'analysis.html', 'schedule.html', 'trade.html', 'summary.html',
+];
 
 /** Parse the <script type="module" src="..."> tags a page actually declares. */
 function moduleSrcs(html) {
