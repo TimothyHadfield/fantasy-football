@@ -59,6 +59,26 @@ A static site (GitHub Pages, vanilla ES modules, no build step, no framework)
 for Tim's 10-team ESPN fantasy football league. **Tim specifies what it does;
 Claude builds it.** It is 2026 season, week 1-2.
 
+**His league's settings, pasted from ESPN 2026-09-16** — these were unknown for
+a long time and several features were blocked on them:
+
+| | |
+|---|---|
+| Regular season | **14** matchups, 1 week each, starting NFL week 1 |
+| Matchup tie breaker | **None** — a tie stands |
+| Playoff teams | **6** (so seeds 1–2 get a first-round bye) |
+| Playoff rounds | 1 week each: round 1, round 2, championship |
+| Seeding tie breaker | Total points for |
+| Reseeding | **Off** — the bracket is fixed |
+| Home field advantage | None |
+| Consolation ladder | Yes — and deliberately NOT modelled |
+
+So the playoffs are NFL weeks **15, 16, 17**, which is past the week-13 horizon
+in rule 2 below. **The title is winning the championship round. The "loser" is
+last in the REGULAR-season standings**, not the consolation ladder — Tim's rule,
+in his words. Note he said "4 players make the playoffs" in prose while his
+settings say 6; the settings were taken as authoritative.
+
 His league is **476225250**, and it is private. A static page cannot read a
 private league — ESPN's cookies are third-party from github.io and JS cannot
 set the `Cookie` header — so `extension/` is a browser extension that makes the
@@ -153,7 +173,24 @@ These were each established by testing, and several by getting them wrong first.
    site wants to compare across time must be captured while it is on screen —
    that is why `js/snapshots.js` exists, and why nothing about it can be
    "reconstructed later instead".
-9. **The archive's durable home is the repo, not the browser.** Tim exports one
+9. **A squad is identified by its team id, never by its label.** Since squads
+   are labelled with the PERSON holding them, two can render the same string —
+   two owners sharing a display name, or two that do not resolve. Anything that
+   groups by the displayed name merges them silently and computes one answer
+   over two rosters. The Taken table did exactly that.
+10. **A trade is priced by the lineup you would field EACH WEEK**, not by one
+   season-average lineup. Tim's own example is the proof: three QBs projecting
+   15–19 give you an 18–19 starter most weeks, so a fourth good QB adds almost
+   nothing — which the average cannot see. Positional depth needs no separate
+   rule; it falls out of taking the per-week maximum. `js/trade.js` keeps the
+   scalar measures as options and the weekly gains are **rest-of-season
+   totals, ~9x a per-week number** — any page showing them must say which
+   scale, or be wrong by a factor of nine and look fine.
+11. **A combo's gain is not the sum of its trades' gains.** Each offer was
+   priced against the current roster, so two deals upgrading the same slot
+   overlap. Price the combined move once. `naiveDelta` is kept to show how far
+   the addition would have been out.
+12. **The archive's durable home is the repo, not the browser.** Tim exports one
    JSON file; it is committed under `data/snapshots/<league>-<season>.json`;
    the page pulls it back on every live load. An export is **cumulative** —
    one file holds every week — so this is a monthly job, not a weekly one, and
@@ -187,9 +224,19 @@ Break one of these in one file and the break shows up in another.
 - **FLEX is a filter, never a position.** It is not in `POSITIONS` or
   `POS_ORDER`, and nothing downstream may learn it exists — ranks, labels and
   the startable bars all read a player's real position.
-- **The analysis grids' hover is a card, not a `title`.** Do not put a `title`
-  back on those cells: the browser would draw a second tooltip over the card.
-  The link carries `aria-label` for the same reason.
+- **The player card is `js/player-card.js`, and there is one of it.** The
+  analysis grids and the Trade page both use it. It draws three rows — the
+  weeks, the projection, and the ACTUAL for weeks already played — and it
+  **does not scroll at any length**: the run wraps onto balanced lines instead
+  (13 weeks at 390px become 7 + 6). A scrollbar reintroduced anywhere inside it
+  is a regression `touch-check.mjs` exists to catch. Do not put a `title` back
+  on those cells: the browser would draw a second tooltip over the card. The
+  link carries `aria-label` for the same reason.
+- **The Act row reads the DATA, never the calendar.** A week with no actual
+  recorded is blank whatever the date says. This matters because the demo
+  season hardcodes every game as played, so a card filling the row from the
+  week number looks perfectly correct in demo and is wrong everywhere else.
+  A played zero is `0.0` and is never drawn as one of the four no-number states.
 - **Nothing may be reachable only by hovering.** Tim reads the site on his
   phone. Where a hover reveals something, a tap has to reveal the same thing —
   the analysis grids' card opens as a sheet on a coarse pointer, and
@@ -286,7 +333,17 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 `js/snapshots.js` (the time machine's format and storage),
 `js/prefs.js`, `js/connection.js` (also exports `coarsePointer()`, the one
 canonical "is this a finger" test), `js/charts.js`, `js/sortable.js`,
-`js/touch-titles.js` (self-installing; makes every `title` on the page tappable).
+`js/touch-titles.js` (self-installing; makes every `title` on the page tappable),
+`js/player-card.js` (the one player card, shared by the analysis grids and the
+Trade page), `js/cloud.js` (Firestore sync so the phone can read the league the
+desktop fetched — transport is injectable, which is what makes it testable).
+
+**Real names come out of `js/espn.js` and nowhere else.** `members[].firstName`
+/`.lastName` joined to `teams[].owners[]` by SWID, and **only under
+`view=mTeam`** — `members` arrives on other requests with the name fields
+silently missing, and `view=mMembers` is a decoy that returns no names AND
+strips the owner arrays. Resolution lives in one place so no page module knows
+about it; `teamName` rides alongside for anywhere the joke name is still wanted.
 
 **Three features now share `optimalLineup`** — the schedule forecast, the trade
 finder and "Who to start". That is deliberate: it is the reason they cannot
