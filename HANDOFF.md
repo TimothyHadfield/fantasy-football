@@ -145,11 +145,24 @@ These were each established by testing, and several by getting them wrong first.
 1. **ESPN publishes projections, never odds.** Every percentage on the site is
    our model, and the pages say so in those words. Do not relabel any of it as
    ESPN's number.
-2. **ESPN DOES publish a per-week projection for every future week**, through
-   week 13, for rostered players and free agents alike. A player on bye comes
-   back at **0.00** — which is a different fact from `null` (ESPN had nothing),
-   and the pages draw and sort them differently. Verified against public league
-   1241838.
+2. **ESPN DOES publish a per-week projection for every future week**, for
+   rostered players and free agents alike. A player on bye comes back at
+   **0.00** — a different fact from `null` (ESPN had nothing), and the pages
+   draw and sort them differently.
+
+   **CORRECTED 2026-09-16: the horizon is NOT week 13.** This file said "through
+   week 13" as a verified fact from 2026-09-09, and it is wrong — that was the
+   furthest week anyone happened to ask for. Re-probing public league 1241838
+   for 2026, every one of its 174 rostered players carries a
+   `statSourceId 1 / statSplitTypeId 1` projection in **weeks 13, 14, 15, 16,
+   17 and 18**, with plausible values throughout (week 17 tops at 24.4, median
+   10.3) and exactly one 0.00 per week, which is the bye behaving as described.
+
+   This matters because his playoffs are NFL weeks 15–17. They can be forecast
+   on ESPN's own numbers like any other week — no modelling from a team's
+   scoring distribution, and no caveat on the page. **Do not reintroduce a
+   13-week ceiling.** The `DEMO_WEEKS = 13` constants are a different thing and
+   are correct: the demo season really is thirteen weeks.
 3. **There is no bulk form.** One request per week, for rosters and for the
    waiver wire. Asking for thirteen weekly stat ids at once returns only the
    current week. Four shapes of that request were tried; do not retry them.

@@ -109,11 +109,28 @@ percentages on every upcoming game. Read this before touching any of it:
 - **Future weeks use ESPN's OWN per-week projection, fetched per week.**
   **VERIFIED 2026-09-09 against public league 1241838**: ESPN returns a
   `statSourceId 1 / statSplitTypeId 1` projection for **every player in every
-  future week, through week 13**, and a player on his bye comes back at
-  **0.00**. So byes need no separate lookup and no filtering — they are already
-  in the number. (An earlier pass assumed distant weeks were unavailable and
-  used `seasonProjected / 17`; Tim corrected it — he reads exactly these numbers
-  off the ESPN site by paging a lineup forward. Do not reintroduce the average.)
+  future week**, and a player on his bye comes back at **0.00**. So byes need
+  no separate lookup and no filtering — they are already in the number. (An
+  earlier pass assumed distant weeks were unavailable and used
+  `seasonProjected / 17`; Tim corrected it — he reads exactly these numbers off
+  the ESPN site by paging a lineup forward. Do not reintroduce the average.)
+
+  **"through week 13" was WRONG and is corrected 2026-09-16.** That phrase sat
+  here as a verified fact for a week; it was never verified, it was simply the
+  furthest week anybody had asked for. Re-probing the same public league for
+  2026, all 174 rostered players carry a projection in weeks **13, 14, 15, 16,
+  17 and 18** — plausible values throughout (week 17 tops at 24.4, median 10.3)
+  and exactly one 0.00 a week, the bye behaving as described.
+
+  This was load-bearing: Tim's regular season is **14** matchups and his
+  playoffs are NFL weeks **15–17**, so under the old claim there would have been
+  no real numbers for a single playoff game and the bracket would have had to be
+  modelled from each team's scoring distribution and caveated on the page. It
+  does not. **Do not reintroduce a 13-week ceiling** — the `DEMO_WEEKS = 13`
+  constants are a different thing and are right, because the demo season really
+  is thirteen weeks. The lesson worth keeping: *the furthest thing anyone tried*
+  is not the same fact as *the limit*, and writing it down as "verified" made it
+  cost a week before anyone re-asked.
 - **Match Tim's manual method, because he checks it by hand.** He opens a team,
   picks a week, and reads the "proj" total under the starting lineup; he
   compares two teams by doing that for both sides of a matchup. The site shows
