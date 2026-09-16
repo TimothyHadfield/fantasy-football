@@ -241,11 +241,25 @@ fixed width defined page-locally can only be overridden page-locally.
   `white-space: nowrap`, so a `max-width` alone caps the box and lets the text
   run out of it — and that column is sticky with an opaque background, so the
   overflow paints on top of the numbers scrolling underneath.
-- **The connection bar says something different on a phone.** The bridge is an
-  unpacked extension and no phone browser can load one, so telling a reader to
-  install it sends them looking for a button that does not exist. It now says
-  the live numbers are on his computer. **A private league genuinely cannot be
-  read from a phone** — same third-party-cookie wall as ever.
+- **The connection bar works with no extension, and that was a real bug.** It
+  used to render a sentence and NO input whenever the bridge was absent, and
+  `connect()` went only through `bridge.probe()` — so with no extension there
+  was no way to connect to anything. `js/espn.js` has always fallen back to a
+  plain fetch for data reads and a public league needs no cookies, so the
+  transport was ready and the bar in front of it was not: **a public league was
+  unreachable from any browser without the extension**, desktop included.
+  Nobody noticed because the only league anyone connects to here is private and
+  always had the extension. `directProbe()` fixes it; the bridge is still
+  preferred when present, being the only one of the two that reads a private
+  league. It also says something different on a phone, because "install the
+  extension" is advice nobody there can take.
+- **A private league still cannot be read from a phone**, and that is settled —
+  same third-party-cookie wall as ever. The ONE route that works on a phone is
+  Tim marking league 476225250 viewable to the public in ESPN's settings
+  (LM Tools → League Settings → Basic Settings). `espn.js`'s `AuthError` already
+  spells that out and the bar now shows it. **It is his call and has not been
+  made** — it makes the league readable by anyone with the ID. Do not assume it
+  either way; ask.
 
 ## Where things stand
 

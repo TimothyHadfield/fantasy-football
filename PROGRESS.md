@@ -592,6 +592,27 @@ rather than once at load.
   full-width invisible hit band feeding the same shared tooltip: the whole row
   and the label gutter, because a whisker is 1.5px of ink and a median a 2px
   gap, and aiming a thumb at either is not a thing that happens.
+- **A league can now be connected with NO extension, and that was a real bug
+  hiding behind the phone question.** The bar rendered a sentence and no input
+  whenever the bridge was absent, and `connect()` went through `bridge.probe()`
+  and only that. But `js/espn.js` has always fallen back to a plain fetch for
+  every data read, and a public league needs no cookies at all — so the
+  transport layer was ready and the bar in front of it was not. **A public
+  league was unreachable from any browser without the extension, desktop
+  included.** Nobody noticed because the only league anyone connects to here is
+  private and always had the extension installed. `directProbe()` returns the
+  same `{ ok, data }` shape `bridge.probe()` does, deliberately, so `connect()`
+  has one answer to handle rather than two. The bridge is still preferred when
+  present: it is the only one of the two that can read a private league.
+- **The one route to live numbers on a phone is making the league public.**
+  Not a new idea — `espn.js`'s `AuthError` has carried the exact ESPN setting
+  all along (LM Tools → League Settings → Basic Settings → "Make League
+  Viewable to Public") — but it was unreachable, because the bar had no input
+  to type an ID into and no direct probe behind it. **Tim has not been asked and
+  has not decided.** It is read-only visibility and nobody can join or transact,
+  but anyone with the ID could look. HANDOFF used to say not to re-litigate
+  "make the league public"; that was written when the extension had just solved
+  the desktop and the phone was not in question. The premise changed.
 - **The connection bar no longer tells a phone to install the extension.** The
   bridge is an unpacked Manifest V3 extension and neither iOS Safari nor Chrome
   on Android can load one, so the old sentence sent Tim looking for a button
