@@ -155,8 +155,14 @@ tbody tr.unavailable td.name { font-weight: 500; }
 #takenTable td.pos .rank { color: var(--dim); font-variant-numeric: tabular-nums; }
 
 /* A headline number means nothing without the player it belongs to, and the
-   player is context rather than the number itself. */
-#waiverStats .stat .who {
+   player is context rather than the number itself.
+
+   BOTH stat rows, not just the wire's: the taken panel builds its tiles with
+   the same `.who` line and was never named here, so its player names were
+   rendering at body size with no ellipsis and pushing the tile beside them off
+   the row. */
+#waiverStats .stat .who,
+#takenStats .stat .who {
   font-size: 12.5px;
   color: var(--dim);
   margin-top: 1px;
@@ -207,6 +213,46 @@ tbody tr.spotlight td.name {
   font-size: 13.5px;
 }
 .jump button { padding: 4px 12px; font-size: 12.5px; margin-left: auto; }
+
+/* ------------------------------------------------------------------- phone
+   css/app.css already turns every .segmented into a wrapping grid of real tap
+   targets; the work left here is the two things this page puts INSIDE those
+   buttons, and the three cells whose desktop pixel caps are wider than the
+   screen. */
+@media (max-width: 760px) {
+  /* Each control takes the full width: the position filter is eight buttons
+     and the span filter is three, and side by side they would each get half a
+     phone and wrap into unreadable stacks of two. */
+  .ctl { flex: 1 1 100%; }
+
+  /* The count goes UNDER its label rather than beside it. Eight buttons on a
+     390px screen is about 46px each, and "WR 31" on one line does not fit in
+     that — but "WR" over "31" does, and the count was always meant to be read
+     second anyway. */
+  .seg-sm button { padding: 6px 4px; font-size: 12.5px; line-height: 1.25; }
+  .seg-count {
+    display: block;
+    margin-left: 0;
+    font-size: 10.5px;
+  }
+  /* The span buttons carry no count, so they keep their single centred line
+     rather than sitting high in a box sized for two. */
+  #spanFilter button, #takenSpanFilter button { line-height: 1.4; }
+
+  /* What the span costs belongs under the control it is about, not pinned to
+     the bottom of a row it no longer shares. */
+  .cost { align-self: flex-start; padding-bottom: 0; flex: 1 1 100%; }
+
+  /* Desktop pixel caps, restated as a share of the screen. 150px of owner name
+     is 40% of a phone; 200px is more than half. */
+  #takenTable td.owner { max-width: 30vw; }
+  #waiverStats .stat .who, #takenStats .stat .who { max-width: 44vw; }
+
+  /* The jump strip is a sentence and a Clear button; at this width the button
+     needs its own line rather than a 30px column at the end of the sentence. */
+  .jump { flex-wrap: wrap; gap: 8px; }
+  .jump button { margin-left: 0; }
+}
 </style>
 </head>
 <body>

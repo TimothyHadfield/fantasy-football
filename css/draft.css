@@ -286,3 +286,42 @@ td.neg-edge { color: #b91c1c; font-weight: 600; }
   .result-hero { grid-template-columns: auto 1fr; }
   .result-actions { grid-column: 1 / -1; flex-direction: row; }
 }
+
+/* ------------------------------------------------------------------- phone
+ *
+ * The draft room is parked, so this is a fit-on-the-screen pass and not a
+ * redesign: nothing here changes what the page does or what it recommends.
+ * The one thing that had to move is the recommendation itself — the whole page
+ * is built around it being readable at a glance in 90 seconds, and at 34px on a
+ * 390px screen "Christian McCaffrey" wrapped to three lines and pushed the
+ * button that takes him below the fold.
+ */
+@media (max-width: 760px) {
+  .draft-bar {
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding: 9px 12px;
+  }
+  .db-pick { font-size: 21px; }
+  .db-mid { flex: 1 1 100%; font-size: 14px; }
+  .db-right { flex: 1 1 100%; }
+  /* Two small ghost buttons in a sticky bar a thumb has to hit while a clock
+     is running. Undo in particular is the one that gets pressed in a hurry. */
+  .draft-bar button.ghost { min-height: 38px; padding: 5px 14px; }
+
+  .pick-card { padding: 15px 14px; gap: 12px 14px; }
+  .pc-name { font-size: 23px; }
+  .pc-numbers { gap: 12px; justify-content: space-between; }
+  .pc-num span { font-size: 19px; }
+  /* The action is the point of the card, so it gets the full width rather than
+     whatever is left at the end of a row of statistics. */
+  .pc-take { width: 100%; padding: 13px 16px; }
+
+  /* 190px twice over does not fit, so the alternatives stack. They are read one
+     at a time anyway — the card above is what is read at a glance. */
+  .alt-grid { grid-template-columns: 1fr; }
+  .slot-grid { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+
+  .grade-badge { width: 72px; height: 72px; font-size: 34px; border-radius: 14px; }
+  .result-actions { flex-wrap: wrap; }
+}

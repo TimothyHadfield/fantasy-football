@@ -193,6 +193,36 @@ td.state-live { color: var(--warn); }
    than simply missing, because "there is no week 4" and "week 4 was never
    saved" are different facts. */
 #asOfSelect option:disabled { color: var(--line-2); }
+
+/* ------------------------------------------------------------------- phone
+   The .game rule above already reflows a matchup into two rows at 760px; these
+   are the controls and panels around it. css/app.css carries the rest. */
+@media (max-width: 760px) {
+  /* Fixed widths measured on a desktop. In a wrapping row each one is now its
+     own full-width line rather than a ragged half of one. */
+  .select-wide { width: 100%; }
+
+  /* The week rail: the label, the two steppers and the select want one line,
+     and the note that says what the week covers wants the next one. Pinning
+     the note right with `margin-left: auto` was what put it on a line of its
+     own with a screen's worth of empty space to its left. */
+  .weekbar { padding: 9px 11px; gap: 8px; }
+  .weekbar select { flex: 1 1 auto; min-width: 0; width: auto; }
+  .weekbar .step { flex: 0 0 auto; }
+  .weekbar .wk-note {
+    margin-left: 0;
+    text-align: left;
+    flex: 1 1 100%;
+  }
+
+  /* A panel heading that shares its line with a control on a wide screen has
+     nothing to share it with here. */
+  .h2-inline { margin-bottom: 8px !important; }
+
+  /* The team under a simulation percentage is already an ellipsis away from
+     fitting; at this width the cap was cutting names that would now fit. */
+  #simStats .stat .who { max-width: 44vw; }
+}
 </style>
 </head>
 <body>

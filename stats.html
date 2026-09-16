@@ -40,6 +40,26 @@
 .oppbars .dd.hard { color: var(--warn); }
 .oppbars li.me .nm { color: #7fd99b; font-weight: 650; }
 .oppbars li.me .bar i { background: var(--accent); }
+
+/* ------------------------------------------------------------------- phone
+   Five things on one line — rank, team, bar, value, gap — and the bar is the
+   only one that can be squeezed to nothing while the row still looks intact,
+   which is exactly the wrong one to lose: the bar length IS the spread this
+   panel exists to show. It takes a line of its own; the four labels keep the
+   line above it. */
+@media (max-width: 760px) {
+  .oppbars li {
+    grid-template-columns: 22px minmax(0, 1fr) auto auto;
+    row-gap: 5px;
+    column-gap: 8px;
+    padding: 6px 0;
+  }
+  .oppbars .rk  { grid-row: 1; grid-column: 1; }
+  .oppbars .nm  { grid-row: 1; grid-column: 2; }
+  .oppbars .vv  { grid-row: 1; grid-column: 3; min-width: 0; }
+  .oppbars .dd  { grid-row: 1; grid-column: 4; min-width: 0; }
+  .oppbars .bar { grid-row: 2; grid-column: 1 / -1; }
+}
 </style>
 </head>
 <body>

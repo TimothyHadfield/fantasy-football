@@ -66,6 +66,15 @@
 
 * { box-sizing: border-box; }
 
+/* iOS Safari inflates the text of any block it decides is too narrow to read,
+ * which on a rotate silently re-sizes half the page and pulls every table out
+ * of alignment with the one above it. The phone layout below sets its own
+ * sizes; this stops the browser second-guessing them. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -308,8 +317,16 @@ tbody tr:nth-child(even) td.name { background: var(--row-alt); }
 tbody tr.me td { background: #14261a; }
 tbody tr.me td.name { background: #14261a; color: #7fd99b; }
 
-tbody tr:hover td { background: var(--panel-3); }
-tbody tr:hover td.name { background: var(--panel-3); }
+/* Row hover is behind `hover: hover` because a touch screen has no hover to
+ * leave: iOS resolves :hover on tap and then keeps it painted until something
+ * else is tapped, so on a phone the row you last touched stays lit as though it
+ * were selected. These tables already say "you" (tr.me) and "the one you
+ * picked" (tr.picked) with their own colours, and a third, meaningless
+ * highlight competing with them is worse than no hover at all. */
+@media (hover: hover) {
+  tbody tr:hover td { background: var(--panel-3); }
+  tbody tr:hover td.name { background: var(--panel-3); }
+}
 
 /* Result emphasis in the schedule table. These were only ever defined as
  * `.side.win` / `.side.lose` inside schedule.html, so the results table -
@@ -486,4 +503,196 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   flex: 1 1 100%;
   color: var(--err);
   font-size: 12.5px;
+}
+
+/* ====================================================================== phone
+ *
+ * The site was designed on a wide screen and every page is a dense table, so
+ * the question here is not "how do these tables become phone-shaped" — they
+ * cannot, and turning ten teams by twenty columns into stacked cards would
+ * destroy the one thing the tables are for, which is comparing a column down
+ * the league. The answer is the one the desktop layout already reaches for:
+ * `.table-scroll` scrolls sideways with the team frozen down the left. What
+ * this block does is make everything AROUND that fit a 390px screen, and make
+ * every affordance that was behind a hover reachable with a thumb.
+ *
+ * Two media features, deliberately separate, because they are different facts:
+ *
+ *   `max-width: 760px`  — the screen is narrow. About layout.
+ *   `hover: none`       — there is no pointer to hover. About capability.
+ *
+ * An iPad in landscape is the second without being the first, and a narrow
+ * desktop window is the first without being the second. Keeping them apart is
+ * what stops a resized laptop window losing its hover card.
+ */
+
+/* ------------------------------------------------------------ touch: any size
+ *
+ * Nothing on this site may be reachable ONLY by hovering. Where a hover reveals
+ * something, the same thing has to be reachable by tapping — see the tip card
+ * in analysis.html, which becomes a sheet a tap opens.
+ */
+@media (hover: none) {
+  /* A finger has no precision and no hover to aim with, so every control that
+   * is a control in its own right gets a real target. Deliberately NOT applied
+   * to `button.slot-tag`: that is a tag inside a dense roster row, and 44px of
+   * height on it would double the height of the table it lives in. It gets its
+   * own smaller bump in analysis.html instead. */
+  button:not(.slot-tag),
+  .conn-btn,
+  .segmented button {
+    min-height: 44px;
+  }
+
+  /* Sorting a table is a tap on its header, and a header cell is ~24px tall.
+   * Padding is the only thing that can grow it without changing the type. */
+  th.sortable { padding-top: 10px; padding-bottom: 10px; }
+}
+
+/* ------------------------------------------------------------ narrow screens */
+@media (max-width: 760px) {
+  :root {
+    /* One token moves the panel padding AND the table bleed together — they
+     * are defined as exact negatives of each other, so changing only one
+     * would pull every table out of line with its panel edge. */
+    --pad-panel: 13px;
+  }
+
+  body { font-size: 15px; padding-bottom: 48px; }
+
+  /* 20px of gutter each side is 10% of the screen. The tables want it back. */
+  .wrap, .wrap.wide { padding: 0 14px; }
+
+  h1 { font-size: 20px; }
+  .sub { font-size: 13.5px; margin-bottom: 18px; }
+  section.panel { margin-bottom: 12px; }
+  section.panel > h2 { margin-bottom: 11px; }
+
+  /* --- header ---
+   * The nav is seven links and cannot sit on the brand's line at this width.
+   * Given its own row it wraps to two, and `flex: 1` spreads the links so each
+   * one is a full-width-sharing target rather than a 40px word — which also
+   * keeps them all VISIBLE. A horizontally scrolling strip would fit on one
+   * line and hide the last two pages behind a gesture nothing advertises. */
+  header.site { padding: 10px 0; margin-bottom: 18px; }
+  header.site .wrap { gap: 9px; }
+  header.site .brand { flex: 1 1 100%; }
+  header.site nav {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  header.site nav a {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 38px;
+    padding: 6px 12px;
+    background: var(--panel-2);
+  }
+
+  /* --- form controls ---
+   * 16px is not a taste decision: iOS zooms the whole page in when a field
+   * smaller than 16px takes focus, and then leaves it zoomed, which is how a
+   * single tap on the league-ID box leaves every table half off the screen. */
+  input, select, textarea,
+  .conn-input, .conn-team select { font-size: 16px; }
+
+  /* Every fixed-width control is a desktop measurement. In a wrapping .row a
+   * full-width field is one clean line per control instead of two ragged ones.
+   * (Page-local widths — .select-md, .select-wide — are overridden in their own
+   * pages: a page's <style> comes after this file and wins the tie.) */
+  .form-select, .form-narrow { width: 100%; flex: 1 1 100%; }
+  .form-grow { flex: 1 1 100%; }
+  .row { gap: 9px; }
+  .row.spread { justify-content: flex-start; }
+
+  /* --- segmented controls ---
+   * Eight position buttons do not fit on one line, and the control is built as
+   * a single track with `overflow: hidden` and left borders between the
+   * buttons, so simply letting it wrap leaves hairlines in the wrong places. As
+   * a grid with a 1px gap over a --line background, the gaps ARE the dividers,
+   * every row is separated correctly, and each button is a proper target. */
+  .segmented {
+    display: grid;
+    /* 72px gives four tracks on a 390px phone, which is what makes the two
+     * eight-button position filters fall as a tidy 4 + 4 and the seven-button
+     * one as 4 + 3. At 62px they fit five and broke 5 + 3, which reads as two
+     * unrelated controls. Two- and three-button toggles have fewer items than
+     * tracks, so auto-fit collapses the empties and they still fill the width. */
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    width: 100%;
+  }
+  .segmented button {
+    background: var(--panel);
+    padding: 8px 6px;
+  }
+  /* The track's own border drew these; the grid gap draws them now, and the
+   * leftovers would double up on the first button of every row. */
+  .segmented button + button { border-left: none; }
+  .segmented button.on { background: var(--accent); }
+
+  /* --- tables ---
+   * Denser type and tighter cells, because the width saved here is a column
+   * that does not have to be scrolled to. Everything else about the table is
+   * unchanged: it still scrolls sideways with the name frozen down the left. */
+  table { font-size: 12.5px; }
+  th, td { padding: 5px 7px; }
+  th { font-size: 10.5px; letter-spacing: 0.04em; }
+  tr.colgroup th { font-size: 9.5px; }
+
+  /* The frozen column is the only one that cannot be scrolled away from, so it
+   * is the only one that must not be allowed to eat the screen. ~44vw is about
+   * 27 characters at this size — longer than any name in the league — so this
+   * is a ceiling that normally does not bite rather than a truncation.
+   * (`overflow: hidden` clips children, not the cell's own drop shadow, so the
+   * "there is more to the right" cue survives.) */
+  td.name, th.name { max-width: 44vw; }
+
+  /* `dvh`, not `vh`: on iOS `vh` is measured against the viewport with the
+   * address bar COLLAPSED, so 70vh is most of the screen while the bar is
+   * still showing and the page around the table is unreachable until the
+   * table's own scroll bottoms out. `dvh` follows the bar. The `vh` line stays
+   * as the fallback for anything that does not know `dvh`. */
+  .table-scroll {
+    max-height: 70vh;
+    max-height: 62dvh;
+    /* A sideways flick inside a table must scroll the table, never trigger
+     * Safari's swipe-back. Only the X axis is contained: vertical overscroll
+     * still chains to the page, which is what lets a thumb carry on past the
+     * end of a table instead of getting stuck in it. */
+    overscroll-behavior-x: contain;
+  }
+
+  /* --- misc --- */
+  .stat-row { gap: 16px; }
+  .stat .v { font-size: 19px; }
+  .empty { padding: 20px 10px; }
+  .panel-note { font-size: 12.5px; }
+  .kv { gap: 5px 12px; font-size: 13.5px; }
+  pre { font-size: 11.5px; max-height: 260px; }
+
+  /* --- connection bar ---
+   * Its 220px minimum is wider than the room left beside a Sync button, so the
+   * bar reflows into a mess of one-word lines. Here the sentence takes a line
+   * of its own and the controls share the one under it. */
+  .conn { padding: 10px 12px; gap: 8px 10px; }
+  .conn-main { flex: 1 1 auto; min-width: 0; }
+  .conn-input { width: auto; flex: 1 1 130px; min-width: 0; }
+  .conn-team { flex: 1 1 100%; }
+  .conn-team select { flex: 1 1 auto; min-width: 0; width: auto; }
+  .conn-btn { flex: 0 0 auto; }
+}
+
+/* A phone turned sideways has about 320px of usable height, and 62% of that is
+ * seven rows. The cap is RAISED rather than removed: the max-height is the only
+ * reason the sticky header sticks at all (it is what gives the header something
+ * to scroll inside), and on the screen with the least room to spare, a header
+ * that stays put is worth more than the two extra rows losing it would buy. */
+@media (max-height: 560px) and (orientation: landscape) {
+  .table-scroll { max-height: 78dvh; }
 }

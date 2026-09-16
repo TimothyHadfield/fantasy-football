@@ -123,6 +123,36 @@ a.pref:focus-visible {
 .footnote a { color: var(--dim); }
 
 .select-wide { width: 190px; }
+
+/* ------------------------------------------------------------------- phone
+   css/app.css carries everything shared; these are the two things on this page
+   that are its own. */
+@media (max-width: 760px) {
+  /* A fixed 190px in a wrapping row leaves a ragged half-line beside it. */
+  .select-wide { width: 100%; }
+
+  /* Matchup cards: 280px is wider than the panel, so auto-fill gives one
+     column anyway — but it gives it by overflowing rather than by fitting. */
+  .games { grid-template-columns: 1fr; }
+
+  /* The ranked bars are four things on one line — rank, team, bar, value — and
+     the bar is the one that can be squeezed to nothing without the row looking
+     broken, which is exactly the wrong one to lose: the bar IS the comparison.
+     So it drops to a line of its own at full width and the three labels keep
+     the line above. */
+  .rank li {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    row-gap: 5px;
+    column-gap: 8px;
+    padding: 6px 0;
+  }
+  .rank .rk  { grid-row: 1; grid-column: 1; }
+  .rank .nm  { grid-row: 1; grid-column: 2; }
+  .rank .vv  { grid-row: 1; grid-column: 3; }
+  .rank .bar { grid-row: 2; grid-column: 1 / -1; }
+
+  .footnote { text-align: left; }
+}
 </style>
 </head>
 <body>

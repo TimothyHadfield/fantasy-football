@@ -122,6 +122,24 @@
     border-radius: var(--r-1);
     text-decoration: none;
   }
+
+  /* ------------------------------------------------------------------ phone */
+  @media (max-width: 760px) {
+    /* Two selects, each on its own line rather than two ragged halves. */
+    .select-md { width: 100%; }
+
+    /* The shape filter's four labels are sentences — "You consolidate" does not
+       fit a quarter of a phone — so it goes two-by-two instead of taking the
+       four-track default every other toggle on the site wants. */
+    #kindToggle { grid-template-columns: repeat(2, 1fr); }
+
+    /* The package columns still need enough room for a name and its number on
+       one line, but 190px twice over is most of the screen spent before the
+       gains are reached. The table scrolls sideways either way; this decides
+       how much of it a first glance covers. */
+    #tradeTable td.pkg { min-width: 132px; }
+    #tradeTable td.gain { font-size: 14px; }
+  }
 </style>
 </head>
 <body>
