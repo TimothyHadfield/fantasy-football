@@ -165,6 +165,60 @@ section.panel > h2 {
 }
 .panel-note { color: var(--dim); font-size: 13px; margin: 12px 0 0; }
 
+/* ------------------------------------------------ reading aids (2026-09-16)
+ *
+ * Tim: "the site is really messy and wordy". Two pieces, used on every page:
+ *
+ *   .lede         ONE short sentence under a panel's title, always visible —
+ *                 what the panel shows, in plain words. Aim for under 25.
+ *   details.explain
+ *                 everything else a panel used to print under its table: the
+ *                 method, the caveats, the edge cases. Closed by default, one
+ *                 click away, and still a real part of the document (so search,
+ *                 screen readers and the test suites all still reach it).
+ *
+ *   <p class="lede">Every trade where both lineups get better.</p>
+ *   …table…
+ *   <details class="explain">
+ *     <summary>How this works</summary>
+ *     <p class="panel-note" id="tradeNote"></p>
+ *   </details>
+ *
+ * The notes keep their ids and their class, so page modules fill them exactly
+ * as before; only where they sit changed. */
+.lede { color: var(--dim); font-size: 13.5px; margin: -6px 0 14px; max-width: 72ch; }
+
+details.explain {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+details.explain > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  font-size: 12.5px;
+  font-weight: 600;
+  user-select: none;
+}
+details.explain > summary::-webkit-details-marker { display: none; }
+details.explain > summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+details.explain[open] > summary::before { transform: rotate(45deg); }
+details.explain > summary:hover { color: var(--text); }
+details.explain > .panel-note,
+details.explain > p { margin-top: 8px; max-width: 90ch; line-height: 1.6; }
+
 /* ------------------------------------------------------------------ controls */
 
 .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }

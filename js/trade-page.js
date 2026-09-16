@@ -1407,7 +1407,10 @@ function offerRow(offer, i, key) {
     `<button type="button" class="wk-open" data-open="${esc(key)}">Week by week</button>`;
 
   return (
-    `<tr class="row${picked}" data-i="${i}" data-key="${esc(key)}">` +
+    // `offer`, NOT `row`: app.css's `.row` is the flex control bar, and a <tr>
+    // wearing it became a wrapping flex box — every offer's cells stacked
+    // down the page instead of across it.
+    `<tr class="offer${picked}" data-i="${i}" data-key="${esc(key)}">` +
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
     `<td class="name"><span class="mgr">${esc(offer.partner.name)}</span>${merged}</td>` +

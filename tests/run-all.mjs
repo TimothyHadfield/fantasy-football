@@ -51,7 +51,7 @@ const SUITES = [
 
 // The dumps are not suites -- they print rendered panels so a refactor can be
 // proved a no-op by diffing before against after. See the README.
-const NOT_SUITES = ['fc-dump.mjs', 'sim-dump.mjs'];
+const NOT_SUITES = ['fc-dump.mjs', 'sim-dump.mjs', 'text-audit.mjs'];
 
 /** Pull a headline count out of a suite's own summary line. */
 function summarise(out) {
