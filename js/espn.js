@@ -426,6 +426,45 @@ function normalizePlayer(entry, season) {
 }
 
 /** Flatten ESPN's league payload into something readable. */
+/**
+ * THE BRACKET, READ FROM THE LEAGUE RATHER THAN GUESSED.
+ *
+ * `settings.scheduleSettings` carries the whole playoff shape and nothing here
+ * decoded it, so the season simulation had to carry a hardcoded fallback for
+ * the one number that decides who is even in the bracket. It is a real
+ * per-league answer, not a constant that happens to be right: probing two
+ * public leagues on 2026-09-16 returned `playoffTeamCount` 6 and 4, and
+ * `matchupPeriodCount` 14 and 15.
+ *
+ * This is also what settles a contradiction in Tim's own account of his league
+ * — he said four teams make his playoffs and his pasted settings said six. The
+ * league is asked rather than either being believed.
+ *
+ * `matchupPeriodCount` is the length of the REGULAR season, and the matchup
+ * feed stops there, so the playoff weeks are the numbers straight after it.
+ * `playoffSeedingRule` differs between leagues too (`H2H_RECORD` vs
+ * `TOTAL_POINTS_SCORED`) and is passed through rather than interpreted here.
+ *
+ * Every field is optional. A payload without `scheduleSettings` — an older
+ * archived reading, a stub, anything fetched without `mSettings` — yields
+ * nulls, and a caller must treat a null as "ESPN did not say" rather than as a
+ * number. That is the same rule the rest of this file follows for a missing
+ * projection.
+ */
+function parsePlayoffs(settings) {
+  const s = settings.scheduleSettings || {};
+  const num = (v) => (Number.isFinite(v) && v > 0 ? Number(v) : null);
+  return {
+    regularSeasonWeeks: num(s.matchupPeriodCount),
+    playoffTeams: num(s.playoffTeamCount),
+    weeksPerPlayoffRound: num(s.playoffMatchupPeriodLength),
+    // Deliberately `=== true`: absent must not read as "reseeding is on".
+    reseed: s.playoffReseed === true,
+    seedingRule: typeof s.playoffSeedingRule === 'string' ? s.playoffSeedingRule : null,
+    divisions: Array.isArray(s.divisions) ? s.divisions.length : null,
+  };
+}
+
 export function parseLeague(raw) {
   const settings = raw.settings || {};
   const roster = settings.rosterSettings || {};
@@ -471,6 +510,7 @@ export function parseLeague(raw) {
     benchSlots: bench,
     irSlots: ir,
     rosterSize: Object.values(starterSlots).reduce((a, b) => a + b, 0) + bench,
+    playoffs: parsePlayoffs(settings),
     teams,
     draft: {
       type: draft.type || 'SNAKE',
