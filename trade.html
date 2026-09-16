@@ -108,6 +108,226 @@
 
   .searching { color: var(--dim); font-style: italic; }
 
+  /* ------------------------------------------------ the weekly measure's cost
+
+     The page buys ONE week of rosters. Pricing every remaining week needs one
+     request per WEEK — there is no bulk form — so the button that starts it has
+     to carry the price on its face, and the line under it has to say the same
+     thing in words before anything is spent. */
+  .cost-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
+  .cost-row .spent { color: var(--dim); font-size: 12px; }
+  .cost-row .working { color: var(--dim); font-size: 12px; font-style: italic; }
+
+  /* ------------------------------------------------------ the spare-men strip
+
+     The depth map's cells are numbers; this is the one place on that panel a
+     player is NAMED. It is the part of a squad a trade can actually reach, so
+     it is also the part worth putting a week run on. */
+  .spares { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .spare-chip {
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--dim);
+  }
+  .spare-chip strong { color: var(--text); font-weight: 600; }
+  .spare-chip .pp { margin: 0 4px; letter-spacing: 0.04em; font-size: 10.5px; }
+
+  /* --------------------------------------------------------- the drill-down
+
+     A deal, week by week. Four columns and nine to thirteen rows, so it is a
+     table rather than a chart: the three numbers on a row are meant to be
+     checked against ESPN by eye, and a chart would show the shape of the
+     season while hiding every value it is made of. */
+  table.weeks td, table.weeks th { font-variant-numeric: tabular-nums; }
+  table.weeks td.delta.up { color: var(--accent); }
+  table.weeks td.delta.down { color: var(--err); }
+  table.weeks tbody tr.total td { border-top: 1px solid var(--line-2); font-weight: 700; }
+
+  .deal-head { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
+  .deal-side { min-width: 180px; }
+  .deal-side h3 {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 4px;
+    font-weight: 650;
+  }
+  .deal-cut { color: var(--err); font-size: 12px; margin-top: 8px; }
+
+  /* The ESPN deep link. Deliberately not styled as the page's primary action:
+     it leaves the site, and what it opens is half-filled by design. */
+  .espn-open {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 11px;
+    border-radius: var(--r-2);
+    border: 1px solid var(--line-2);
+    background: var(--panel-2);
+    color: var(--text);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .espn-open:hover { border-color: var(--accent); color: var(--accent-hi); }
+  .espn-off { color: var(--dim); font-size: 11.5px; }
+
+  /* ------------------------------------------------------------- best combo */
+  .combo-head { font-size: 13.5px; margin-bottom: 8px; }
+  .combo-head .big { font-size: 19px; font-weight: 750; font-variant-numeric: tabular-nums; }
+  .combo-list { margin: 0 0 10px; padding-left: 18px; }
+  .combo-list li { margin: 3px 0; line-height: 1.6; }
+  .combo-alt {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .combo-alt h3 { font-size: 13px; margin: 0 0 6px; }
+
+  /* A rest-of-season number with its per-week twin beside it. The two scales
+     differ by a factor of nine or more, so neither is ever printed alone. */
+  .per { color: var(--dim); font-size: 10.5px; font-weight: 600; margin-left: 5px; }
+
+  /* A finder row opens the deal below it. */
+  #tradeTable tbody tr { cursor: pointer; }
+  #tradeTable tbody tr.picked td { background: var(--panel-2); }
+
+  /* ------------------------------------------------------------- the tip card
+
+     COPIED from analysis.html, not shared: this is the page's half of the
+     js/player-card.js contract, and that module draws nothing without it. The
+     card is a child of <body> and `position: fixed` because both of this page's
+     tables live in `.table-scroll`, which is `overflow: auto` — a card inside
+     one would be clipped at its edge. */
+  .tipcard {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 60;               /* over the sticky headers, which claim 2 and 3 */
+    max-width: min(92vw, 720px);
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-3);
+    box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.75);
+    font-size: 12.5px;
+    color: var(--text);
+    /* The card can never be the thing the mouse is over, so it cannot chase
+       itself around the screen when it appears under the cursor. */
+    pointer-events: none;
+  }
+  /* The same card as a SHEET, which is what a finger gets: pinned to the foot
+     of the window, interactive, and carrying the link the tap preempted. */
+  .tipcard.sheet {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-width: none;
+    padding: 14px var(--pad-panel) 16px;
+    border-width: 1px 0 0;
+    border-radius: var(--r-4) var(--r-4) 0 0;
+    box-shadow: 0 -14px 34px -10px rgba(0, 0, 0, 0.8);
+    pointer-events: auto;
+    font-size: 13px;
+  }
+  .tipcard.sheet .tc-ident { font-size: 15px; }
+
+  .tc-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 11px;
+    border-top: 1px solid var(--line);
+  }
+  .tc-open {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px 14px;
+    border-radius: var(--r-2);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+    font-size: 13.5px;
+    text-decoration: none;
+  }
+  /* ESPN gives some men no id, and there is nothing to link to for them. */
+  .tc-open-off {
+    background: transparent;
+    color: var(--dim);
+    font-weight: 500;
+    text-align: center;
+  }
+  .tc-close { flex: 0 0 auto; min-height: 44px; }
+
+  .tc-ident { font-weight: 650; margin-bottom: 2px; }
+  .tc-head, .tc-pending, .tc-legend, .tc-note { color: var(--dim); font-size: 11.5px; }
+  .tc-head { margin-bottom: 7px; }
+  .tc-legend { margin-top: 7px; line-height: 1.5; }
+  .tc-note { margin-top: 7px; line-height: 1.5; }
+
+  /* NOTHING IN HERE SCROLLS — the run is cut into lines that fit instead. Do
+     not put an overflow back on it. */
+  .tc-chart { display: grid; gap: 9px; }
+
+  .tc-run {
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .tc-run th, .tc-run td {
+    border: none;
+    padding: 2px 7px;
+    text-align: center;
+    min-width: 34px;
+  }
+  .tc-run .tc-lbl {
+    text-align: right;
+    padding-right: 10px;
+    color: var(--dim);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    position: static;          /* app.css makes every th sticky; not in here */
+    background: none;
+  }
+  .tc-run thead th {
+    color: var(--dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    position: static;
+    background: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .tc-run tbody td { font-size: 12.5px; padding-top: 4px; }
+
+  .tc-run tfoot td, .tc-run tfoot th {
+    font-size: 11.5px;
+    padding-top: 3px;
+    border-top: 1px solid var(--line);
+  }
+  .tc-run tfoot td { color: var(--dim); }
+  .tc-run .a-num { color: var(--text); }
+  .tc-run .a-wait { color: var(--line); }
+
+  /* The same four no-number states the analysis grids draw, told apart the
+     same way. */
+  .tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+  .tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
+  .tc-run .k-wait { color: var(--line); }
+
+  /* The week the rest of the page is showing: a bracket, not a tint. */
+  .tc-run .now { border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); }
+  .tc-run thead th.now { color: var(--text); }
+
   /* ------------------------------------------------------ player references */
 
   /* The site-wide contract: every name is a link to that man's next 13 weeks on
@@ -139,6 +359,18 @@
        how much of it a first glance covers. */
     #tradeTable td.pkg { min-width: 132px; }
     #tradeTable td.gain { font-size: 14px; }
+
+    /* A tap-opened card is read at arm's length, so the run inside it keeps its
+       type size while the card around it is what shrinks. Same two pixels of
+       floor and padding the analysis page gives up, for the same reason: it is
+       what buys a couple more weeks per line. */
+    .tc-run th, .tc-run td { min-width: 32px; padding: 2px 6px; }
+    .tc-run .tc-lbl { padding-right: 7px; }
+
+    /* The deal's two package columns stack rather than sitting half a phone
+       apart with a name wrapped in each. */
+    .deal-head { gap: 12px; }
+    .deal-side { min-width: 100%; }
   }
 </style>
 </head>
@@ -155,6 +387,7 @@
       <a href="waivers.html">Players</a>
       <a href="trade.html" class="active">Trade</a>
       <a href="draft.html">Draft</a>
+      <a href="summary.html">Summary</a>
     </nav>
   </div>
 </header>
@@ -183,14 +416,24 @@
         <label for="teamSelect">Your team</label>
         <select id="teamSelect"></select>
       </div>
-      <div class="form-select">
+      <div class="select-md">
         <label for="measureSelect">Value on</label>
         <select id="measureSelect">
           <option value="typical" selected>A typical week</option>
           <option value="week">The selected week</option>
+          <option value="weeks">Every remaining week</option>
         </select>
       </div>
     </div>
+    <!-- The weekly measure is the only control on this page that spends
+         anything, so it is the only one with a button in front of it. The cost
+         is on the button's face and in the line under it, and neither is
+         written after the fact. -->
+    <div class="cost-row" id="costRow">
+      <button type="button" id="loadWeeks">Price every remaining week</button>
+      <span class="spent" id="costSpent"></span>
+    </div>
+    <p class="panel-note" id="costNote"></p>
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
@@ -202,6 +445,7 @@
     </table></div>
     <div class="empty hidden" id="depthEmpty">No roster data for this week.</div>
     <div class="bars" id="depthBars"></div>
+    <div class="spares" id="spareStrip"></div>
     <p class="panel-note" id="depthNote"></p>
   </section>
 
@@ -225,14 +469,29 @@
         <th class="left" data-sort>Deal</th>
         <th class="left" data-sort>You send</th>
         <th class="left" data-sort>You get</th>
-        <th data-sort>Your lineup</th>
-        <th data-sort>You gain</th>
-        <th data-sort>He gains</th>
+        <th data-sort id="thLineup">Your lineup</th>
+        <th data-sort id="thMyGain">You gain</th>
+        <th data-sort id="thTheirGain">He gains</th>
+        <th class="left">ESPN</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
     <div class="empty hidden" id="tradeEmpty"></div>
     <p class="panel-note" id="tradeNote"></p>
+  </section>
+
+  <!-- The drill-down. Hidden until a row above is clicked, because it is about
+       one deal and there is no sensible default deal. -->
+  <section class="panel hidden" id="dealPanel">
+    <h2 id="dealTitle">This trade, week by week</h2>
+    <div id="dealBody"></div>
+    <p class="panel-note" id="dealNote"></p>
+  </section>
+
+  <section class="panel" id="comboPanel">
+    <h2>Best combo</h2>
+    <div id="comboBody"></div>
+    <p class="panel-note" id="comboNote"></p>
   </section>
 
 </div>

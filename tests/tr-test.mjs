@@ -16,11 +16,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-import { REPO } from './repo.mjs';
+import { REPO, moduleUrl } from './repo.mjs';
 
 // ------------------------------------------------------------------ harness
 
-async function boot(page = 'trade.html', search = '') {
+async function boot(page = 'trade.html', search = '', seed = null) {
   const html = readFileSync(path.join(REPO, page), 'utf8');
   const { window, document } = parseHTML(html);
 
@@ -77,7 +77,10 @@ async function boot(page = 'trade.html', search = '') {
   globalThis.location = window.location;
   if (!window.postMessage) window.postMessage = () => {};
 
-  const store = new Map();
+  // Seeded BEFORE the page's modules are imported, because connection.js and
+  // prefs.js both read storage on first touch — a league written afterwards
+  // would arrive too late to put the page on live data.
+  const store = new Map(Object.entries(seed || {}));
   const localStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),
     setItem: (k, v) => store.set(k, String(v)),
@@ -114,8 +117,15 @@ async function boot(page = 'trade.html', search = '') {
   return { document, window, errors, fetchCalls };
 }
 
-/** Let the deferred search finish: it hands off through rAF then a timeout. */
-const settle = () => new Promise((r) => setTimeout(r, 400));
+/**
+ * Let the deferred work finish: it hands off through rAF then a timeout.
+ *
+ * The default covers a scalar search, which is a quarter of a second. The
+ * WEEKLY search is a different animal — every offer is priced by re-filling
+ * nine to thirteen lineups — and needs seconds rather than milliseconds, which
+ * is itself a cost the page states.
+ */
+const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
 
 function fire(el, type = 'change') {
   const ev = new globalThis.Event(type, { bubbles: true });
@@ -155,11 +165,122 @@ function readTrades(document) {
       receive: [...tds[3].querySelectorAll('.man')].map(text),
       churn: text(tds[3].querySelector('.churn')),
       beforeAfter: text(tds[4]),
+      gainText: text(tds[5]),
       myGain: Number(tds[5].getAttribute('data-v')),
       theirGain: Number(tds[6].getAttribute('data-v')),
+      espn: (() => {
+        const a = tds[7] ? tds[7].querySelector('a') : null;
+        return a ? a.getAttribute('href') : text(tds[7] || null);
+      })(),
+      // Every man named carries a card key. The card itself is opened below;
+      // this is only "was one registered at all".
+      cards: [...tr.querySelectorAll('.man[data-tip]')].length,
       links: [...tr.querySelectorAll('a.pref')].map((a) => a.getAttribute('href')),
     };
   });
+}
+
+/** "+12.3" / "−4.0" / "12.3" -> a number. The minus sign is U+2212. */
+const num = (s) => Number(String(s).replace(/−/g, '-').replace(/\+/g, '').trim());
+
+/** The week-by-week table inside a container: one row per week, then totals. */
+function readWeekTable(el) {
+  const table = el ? el.querySelector('table.weeks') : null;
+  if (!table) return null;
+  const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
+    const tds = [...tr.children];
+    return {
+      label: text(tds[0]),
+      total: (tr.getAttribute('class') || '').includes('total'),
+      before: num(text(tds[1])),
+      after: num(text(tds[2])),
+      delta: num(text(tds[3])),
+    };
+  });
+  return {
+    weeks: rows.filter((r) => !r.total),
+    totals: rows.filter((r) => r.total),
+    heads: [...table.querySelectorAll('thead th')].map(text),
+  };
+}
+
+function readCost(document) {
+  return {
+    button: text(document.getElementById('loadWeeks')),
+    spent: text(document.getElementById('costSpent')),
+    note: text(document.getElementById('costNote')),
+  };
+}
+
+function readDeal(document) {
+  const panel = document.getElementById('dealPanel');
+  const body = document.getElementById('dealBody');
+  return {
+    hidden: (panel.getAttribute('class') || '').includes('hidden'),
+    title: text(document.getElementById('dealTitle')),
+    note: text(document.getElementById('dealNote')),
+    body: text(body),
+    weeks: readWeekTable(body),
+    espn: (() => {
+      const a = body.querySelector('a.espn-open');
+      return a ? a.getAttribute('href') : '';
+    })(),
+    cards: [...body.querySelectorAll('.man[data-tip]')].length,
+  };
+}
+
+/**
+ * The combo panel. The BEST packing and the "most trades" alternative are read
+ * separately on purpose: they are two different packings of the same offers, so
+ * a man may legitimately appear in both, and a reader that pooled them would
+ * report a disjointness failure that is not one.
+ */
+function readCombo(document) {
+  const body = document.getElementById('comboBody');
+  const best = body.querySelector('.combo-best') || body;
+  const alt = body.querySelector('.combo-alt');
+  const ids = (el) =>
+    el ? [...el.querySelectorAll('.combo-list li a.pref')].map((a) => a.getAttribute('href')) : [];
+  // Each trade's two sides, as ESPN ids, so the whole packing can be re-priced
+  // from the engine rather than read back off the page that printed it.
+  const side = (li, cls) =>
+    [...li.querySelectorAll(`.${cls} a.pref`)].map((a) =>
+      Number((a.getAttribute('href') || '').replace(/^\D+/, '')));
+  const perTrade = [...best.querySelectorAll('.combo-list li')].map((li) => ({
+    send: side(li, 'c-send'),
+    receive: side(li, 'c-receive'),
+  }));
+  return {
+    head: text(best.querySelector('.combo-head')),
+    items: [...best.querySelectorAll('.combo-list li')].map(text),
+    // The men, by ESPN's own id rather than by their printed name: the cell
+    // text runs a name into a position into two numbers, and the whole point
+    // of the site's link contract is that the id is the identity.
+    names: ids(best),
+    altNames: ids(alt),
+    perTrade,
+    alt: text(alt),
+    weeks: readWeekTable(best),
+    body: text(body),
+    note: text(document.getElementById('comboNote')),
+  };
+}
+
+/** Open the hover card on one named player, and read what it drew. */
+function openCard(document, selector) {
+  const man = document.querySelector(selector);
+  if (!man) return null;
+  man.dispatchEvent(new globalThis.Event('mouseover', { bubbles: true }));
+  const el = document.getElementById('tipCard');
+  if (!el) return null;
+  return {
+    hidden: !!el.hidden,
+    ident: text(el.querySelector('.tc-ident')),
+    heading: text(el.querySelector('.tc-head')),
+    weeks: [...el.querySelectorAll('.tc-run thead th')].map(text).filter((t) => /^\d+$/.test(t)),
+    projs: [...el.querySelectorAll('.tc-run tbody td')].map(text),
+    hovered: text(man),
+  };
 }
 
 // ------------------------------------------------------------------ scenarios
@@ -257,6 +378,117 @@ const SCENARIOS = {
       afterPartner, afterQuietPartner, afterReset, afterMeasure,
     };
   },
+
+  /**
+   * The weekly measure on demo data: pressed for, then read everywhere.
+   *
+   * Demo generates its weeks inside the page, so this costs no requests — which
+   * is exactly why it is the scenario that can check the whole of the weekly
+   * path (the drill-down, the combo, the cards) while still asserting that the
+   * page made no network call at all.
+   */
+  async weekly() {
+    const { document, errors, fetchCalls } = await boot();
+    const before = {
+      cost: readCost(document),
+      depth: readDepth(document),
+      trades: readTrades(document),
+      combo: readCombo(document),
+      weeks: [...document.querySelectorAll('#weekSelect option')].map((o) => o.getAttribute('value')),
+      week: document.getElementById('weekSelect').value,
+    };
+
+    document
+      .getElementById('loadWeeks')
+      .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(12000); // 13 weeks of lineup fills per offer; it is not quick
+
+    const after = {
+      cost: readCost(document),
+      depth: readDepth(document),
+      trades: readTrades(document),
+      combo: readCombo(document),
+      heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+      note: text(document.getElementById('tradeNote')),
+      depthNote: text(document.getElementById('depthNote')),
+      spares: [...document.querySelectorAll('#spareStrip .spare-chip[data-tip]')].map(text),
+      measure: document.getElementById('measureSelect').value,
+    };
+
+    // Click the first offer: the drill-down is the whole of ask 3.
+    const row = document.querySelector('#tradeTable tbody tr');
+    if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(1200);
+    const deal = readDeal(document);
+
+    // And a card on a player name, which is ask 1.
+    const card = openCard(document, '#tradeTable .man[data-tip]');
+    const spareCard = openCard(document, '#spareStrip .spare-chip[data-tip]');
+
+    return {
+      errors, fetchCalls, before, after, deal, card, spareCard,
+      // What the parent needs to rebuild the same league and price the same
+      // packing independently.
+      myTeamId: document.getElementById('teamSelect').value,
+      week: Number(document.getElementById('weekSelect').value),
+    };
+  },
+
+  /**
+   * A real league, stubbed: what the weekly measure COSTS, and what the ESPN
+   * deep link says.
+   *
+   * The stub is four squads built so the two measures disagree on purpose —
+   * see tr-stub-season.mjs. Everything here is re-derived from that fixture
+   * rather than read back off the page.
+   */
+  async live() {
+    const seed = {
+      'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+      'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+    };
+    const { document, errors } = await boot('trade.html', '', seed);
+    const stub = await import('./tr-stub-season.mjs');
+
+    const before = {
+      week: document.getElementById('weekSelect').value,
+      badge: text(document.getElementById('modeBadge')),
+      cost: readCost(document),
+      trades: readTrades(document),
+      requests: stub.calls.week.length,
+      asked: stub.calls.week.slice(),
+    };
+
+    document
+      .getElementById('loadWeeks')
+      .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(6000);
+
+    const after = {
+      cost: readCost(document),
+      trades: readTrades(document),
+      combo: readCombo(document),
+      heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+      note: text(document.getElementById('tradeNote')),
+      requests: stub.calls.week.length,
+      asked: stub.calls.week.slice(),
+      measure: document.getElementById('measureSelect').value,
+    };
+
+    // Drill into the offer with Cy, which survives both measures.
+    const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
+    const idx = after.trades.findIndex((t) => t.partner === 'Cy');
+    if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(1500);
+    const deal = readDeal(document);
+
+    return {
+      errors, before, after, deal,
+      offer: idx >= 0 ? after.trades[idx] : null,
+      rosters: { 1: stub.rosterIds(1), 2: stub.rosterIds(2), 3: stub.rosterIds(3) },
+      span: stub.WEEKS - stub.PLAYED_THROUGH + 1,
+    };
+  },
 };
 
 // --------------------------------------------------------------- child runner
@@ -275,8 +507,10 @@ if (process.argv[2]) {
   }
 }
 
-function run(name) {
-  const res = spawnSync(process.execPath, [self, name], {
+/** `stub: true` redirects js/season.js to tr-stub-season.mjs in the child. */
+function run(name, { stub = false } = {}) {
+  const args = stub ? ['--import', './tr-register.mjs', self, name] : [self, name];
+  const res = spawnSync(process.execPath, args, {
     encoding: 'utf8', cwd: path.dirname(self),
   });
   const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
@@ -508,6 +742,349 @@ if (!ctl.boot) {
     'the measure toggle changed nothing, so one of the two is being ignored');
   ok('and the note says which basis is in use',
     /selected week/.test(ctl.afterMeasure.note), ctl.afterMeasure.note.slice(0, 200));
+}
+
+// ------------------------------------------------- re-deriving, not reading
+//
+// The suite's own copy of the arithmetic, built from the SAME demo generator
+// the page uses but with nothing of the page in it. Everything here is the
+// engine called directly, so a page that printed a plausible wrong number has
+// nowhere to hide.
+
+/** Price one packing of trades across the rest of the season, from scratch. */
+async function repriceCombo(week, teamId, perTrade) {
+  if (!perTrade || !perTrade.length) return null;
+  const { generateDemoWeekRosters } = await import(moduleUrl('js/demo-rosters.js'));
+  const { priceTradeAcrossWeeks, slotsForLeague } = await import(moduleUrl('js/trade.js'));
+  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
+
+  const base = generateDemoWeekRosters(week);
+  const slots = slotsForLeague(slotCountsFromLineups(base.teams));
+
+  const span = [];
+  for (let w = week; w <= 13; w++) span.push(w);
+
+  const byWeek = new Map();
+  for (const w of span) {
+    const idx = new Map();
+    for (const t of generateDemoWeekRosters(w).teams) {
+      for (const p of t.players) idx.set(p.playerId, p.projected);
+    }
+    byWeek.set(w, idx);
+  }
+  const projFor = (p, w) => {
+    const idx = byWeek.get(w);
+    const v = idx ? idx.get(p.playerId) : undefined;
+    return typeof v === 'number' ? v : null;
+  };
+
+  const me = base.teams.find((t) => String(t.id) === String(teamId));
+  if (!me) return null;
+  const byId = new Map();
+  for (const t of base.teams) for (const p of t.players) byId.set(p.playerId, p);
+
+  // Every send and every receive TOGETHER, in one pricing — which is the only
+  // honest way to price a set of trades, and the thing the page must be doing.
+  const send = [];
+  const receive = [];
+  for (const t of perTrade) {
+    for (const id of t.send) send.push(byId.get(id) || id);
+    for (const id of t.receive) if (byId.get(id)) receive.push(byId.get(id));
+  }
+  return priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor });
+}
+
+/** What the page would have claimed if it had added the offers' own gains up. */
+const naiveOf = (items) =>
+  items.reduce((a, s) => {
+    const m = s.match(/on its own ([+−]?[\d.]+)/);
+    return a + (m ? num(m[1]) : 0);
+  }, 0);
+
+// ---- the weekly measure, on demo data -------------------------------------
+//
+// Three asks land here: the 13-week card on every name, the per-week drill-down
+// and the best-combo section. All three only exist once the weeks are priced,
+// and the press that prices them is the first thing asserted.
+
+const wk = run('weekly');
+ok('the weekly scenario boots', !wk.boot, wk.boot);
+if (!wk.boot) {
+  ok('no console errors on the weekly path', wk.errors.length === 0,
+    wk.errors.slice(0, 2).join(' | '));
+  // The whole point of demo: the weekly measure can be shown off for nothing.
+  ok('pricing every week on DEMO data still costs no network call',
+    wk.fetchCalls.length === 0, wk.fetchCalls.slice(0, 2).join(' | '));
+
+  // -- the cost is on screen BEFORE it is spent ----------------------------
+  const spanLen = wk.before.weeks.filter((w) => Number(w) >= Number(wk.before.week) &&
+    Number(w) <= 13).length;
+  ok('the page opens on a week with a rest of season to price', spanLen > 1,
+    `week ${wk.before.week} of ${wk.before.weeks.join(',')}`);
+  ok('the button names the span before it is pressed',
+    /Price weeks \d+–\d+/.test(wk.before.cost.button), wk.before.cost.button);
+  ok('and the cost note names the real number of weeks',
+    wk.before.cost.note.includes(`${spanLen} weeks`), wk.before.cost.note.slice(0, 220));
+  ok('and says what it would cost on a real league — one request per week',
+    /one per week/.test(wk.before.cost.note) &&
+    new RegExp(`${spanLen - 1} requests`).test(wk.before.cost.note),
+    wk.before.cost.note.slice(0, 260));
+  ok('and says demo data itself costs nothing',
+    /no requests at all/.test(wk.before.cost.note), wk.before.cost.note.slice(0, 200));
+  ok('there is no combo before the weeks are priced, and it says why',
+    /every remaining week/i.test(wk.before.combo.body), wk.before.combo.body.slice(0, 160));
+
+  // -- pressing it switches the measure ------------------------------------
+  eq(wk.after.measure, 'weeks', 'pressing the button selects the weekly measure');
+  ok('the button then says the span is priced', /priced/.test(wk.after.cost.button),
+    wk.after.cost.button);
+
+  // -- THE SCALE IS STATED, which is the trap worth nine times the truth ----
+  ok('the gain column says which weeks it is totalling',
+    /You gain \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
+  ok('the note says these are rest-of-season totals, not weekly figures',
+    /rest-of-season total/.test(wk.after.note), wk.after.note.slice(0, 400));
+  ok('and every gain carries its per-week twin',
+    wk.after.trades.length > 0 && wk.after.trades.every((t) => /\/wk/.test(t.gainText)),
+    (wk.after.trades[0] || {}).gainText);
+  ok('the depth map says it is still per week, unlike the panels below it',
+    /per week/.test(wk.after.depthNote), wk.after.depthNote.slice(0, 400));
+
+  // The two bases must actually produce different numbers, or one of them is
+  // being ignored — the failure this whole scenario exists to catch.
+  ok('the weekly basis moves the depth numbers',
+    JSON.stringify(wk.before.depth.rows.map((r) => r.cells.map((c) => c.v))) !==
+    JSON.stringify(wk.after.depth.rows.map((r) => r.cells.map((c) => c.v))));
+  ok('and the gains are on a different scale entirely',
+    wk.after.trades.length > 0 && wk.before.trades.length > 0 &&
+    wk.after.trades[0].myGain > wk.before.trades[0].myGain * 2,
+    `${wk.before.trades[0] && wk.before.trades[0].myGain} -> ${wk.after.trades[0] && wk.after.trades[0].myGain}`);
+
+  // -- ask 6: the depth map and the drill-down cannot contradict each other -
+  ok('the depth note explains that a surplus is not a gain',
+    /surplus is not the same as a gain/i.test(wk.after.depthNote),
+    wk.after.depthNote.slice(0, 500));
+  ok('and says the two panels are the same projections',
+    /cannot disagree/.test(wk.after.depthNote), wk.after.depthNote.slice(-300));
+
+  // -- ask 1: a card on every name -----------------------------------------
+  ok('every man in the finder carries a card',
+    wk.after.trades.every((t) => t.cards === t.send.length + t.receive.length),
+    JSON.stringify(wk.after.trades.map((t) => [t.cards, t.send.length + t.receive.length])));
+  ok('your spare men are named under the depth map', wk.after.spares.length > 0,
+    wk.after.spares.join(' | '));
+
+  ok('hovering a player name opens the card', wk.card && wk.card.hidden === false,
+    JSON.stringify(wk.card));
+  if (wk.card) {
+    ok('the card names the man it was opened on',
+      wk.card.ident.length > 0 && wk.card.hovered.includes(wk.card.ident.split(' · ')[0]),
+      `${wk.card.ident} vs ${wk.card.hovered}`);
+    ok('and draws the whole run, one column per week priced',
+      wk.card.weeks.length === spanLen, `${wk.card.weeks.length} columns for ${spanLen} weeks`);
+    ok('and says whose numbers they are, and for which weeks',
+      /projections for weeks \d+–\d+/i.test(wk.card.heading), wk.card.heading);
+  }
+  ok('a spare chip opens the same card', wk.spareCard && wk.spareCard.hidden === false,
+    JSON.stringify(wk.spareCard));
+
+  // -- ask 3: the drill-down -----------------------------------------------
+  ok('clicking an offer opens the deal', wk.deal && !wk.deal.hidden, JSON.stringify(wk.deal).slice(0, 200));
+  if (wk.deal && wk.deal.weeks) {
+    eq(wk.deal.weeks.weeks.length, spanLen, 'one row per remaining week');
+    ok('the columns are current, changed and the difference',
+      /As you are now/.test(wk.deal.weeks.heads.join(' ')) &&
+      /With the trade/.test(wk.deal.weeks.heads.join(' ')) &&
+      /Difference/.test(wk.deal.weeks.heads.join(' ')),
+      wk.deal.weeks.heads.join(' | '));
+
+    // RE-DERIVED: the rows must add up to the total printed beside them, and
+    // the total must be the gain the finder's own row claimed. Rounding is a
+    // tenth a row and no more.
+    const rows = wk.deal.weeks.weeks;
+    const totalRow = wk.deal.weeks.totals[0];
+    const sum = rows.reduce((a, r) => a + r.delta, 0);
+    ok('the per-week differences sum to the stated total',
+      Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
+      `rows sum to ${sum.toFixed(2)}, total says ${totalRow.delta}`);
+    ok('and each row IS after minus before',
+      rows.every((r) => Math.abs((r.after - r.before) - r.delta) <= 0.051),
+      JSON.stringify(rows.slice(0, 3)));
+    ok('and the total matches the gain the finder advertised',
+      Math.abs(totalRow.delta - wk.after.trades[0].myGain) <= 0.2,
+      `deal ${totalRow.delta} vs row ${wk.after.trades[0].myGain}`);
+    ok('the per-week average is shown as well as the total',
+      wk.deal.weeks.totals.length === 2 &&
+      Math.abs(wk.deal.weeks.totals[1].delta - totalRow.delta / rows.length) <= 0.06,
+      JSON.stringify(wk.deal.weeks.totals));
+    ok('and the note says both lineups are picked week by week',
+      /best legal lineup .{0,20}in that week/.test(wk.deal.note), wk.deal.note.slice(0, 300));
+    ok('the deal names its players with cards too', wk.deal.cards >= 2, `${wk.deal.cards} cards`);
+    ok('and says there is no ESPN league in demo rather than offering a dead link',
+      /no ESPN league to open in demo/.test(wk.deal.body) && wk.deal.espn === '',
+      wk.deal.body.slice(-200));
+  }
+
+  // -- ask 4: the combo ----------------------------------------------------
+  const combo = wk.after.combo;
+  ok('the combo section has an answer once the weeks are priced',
+    /\d/.test(combo.head), combo.head);
+  ok('it states the gain and the number of trades',
+    /[+−]\d/.test(combo.head) && /trade/.test(combo.head), combo.head);
+  ok('it says a player can only be traded once',
+    /only be traded once/.test(combo.note), combo.note.slice(0, 200));
+  ok('and warns against adding the offers up',
+    /Never add the gains up/.test(combo.note), combo.note.slice(0, 300));
+  ok('the naive sum is shown beside the real one',
+    /Adding the offers’ own gains/.test(combo.body), combo.body.slice(0, 300));
+
+  // DISJOINTNESS, re-derived from the names on screen rather than trusted.
+  ok('no player appears in two trades of the combo',
+    combo.names.length > 0 && new Set(combo.names).size === combo.names.length,
+    combo.names.join(' | '));
+  ok('and none appears twice in the "most trades" packing either',
+    new Set(combo.altNames).size === combo.altNames.length, combo.altNames.join(' | '));
+
+  if (combo.weeks) {
+    const rows = combo.weeks.weeks;
+    const totalRow = combo.weeks.totals[0];
+    const sum = rows.reduce((a, r) => a + r.delta, 0);
+    ok('the combo is priced week by week too, and those rows add up',
+      Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
+      `rows sum to ${sum.toFixed(2)}, total says ${totalRow.delta}`);
+  }
+
+  // THE NUMBER ITSELF, RE-DERIVED. Everything above reads the page back to
+  // itself; this rebuilds the same demo league from scratch, takes the packing
+  // the page printed, applies every send and every receive TOGETHER, and prices
+  // it with the engine. A combo whose headline was the sum of its trades — the
+  // one mistake this section exists to avoid — fails here and nowhere else.
+  const priced = await repriceCombo(wk.week, wk.myTeamId, combo.perTrade);
+  const claimed = num(combo.head.split(' ')[0]);
+  ok('the combo headline survives an independent re-pricing of the same move',
+    priced && Math.abs(priced.delta - claimed) <= 0.15,
+    `page says ${claimed}, a fresh priceTradeAcrossWeeks says ${priced && priced.delta}`);
+  // The naive figure the page prints must BE the sum of the listed offers'
+  // own gains — otherwise the warning beside it is decoration — and the real
+  // answer must differ from it, which is the whole reason the warning exists.
+  const naiveSum = naiveOf(combo.items);
+  // The trailing full stop is not part of the number, and a regex that eats it
+  // hands Number() a NaN that looks like a mismatch.
+  const naiveShown = (combo.body.match(/own gains would have given ([+−]\d+(?:\.\d+)?)/) || [])[1];
+  ok('the naive sum shown is exactly the offers’ own gains added up',
+    naiveShown !== undefined && Math.abs(num(naiveShown) - naiveSum) <= 0.15,
+    `shown ${naiveShown}, the rows add to ${naiveSum.toFixed(1)}`);
+  ok('and the real answer is not that sum',
+    combo.perTrade.length < 2 || Math.abs(priced.delta - naiveSum) > 0.15 ||
+      /coincidence rather than a rule/.test(combo.body),
+    `${priced && priced.delta} vs naive ${naiveSum.toFixed(1)}`);
+}
+
+// ---- a real league, stubbed: the cost, the ranking, and the ESPN link ------
+
+const live = run('live', { stub: true });
+ok('the live scenario boots', !live.boot, live.boot);
+if (!live.boot) {
+  ok('no console errors on live data', live.errors.length === 0,
+    live.errors.slice(0, 2).join(' | '));
+  eq(live.before.badge, 'Live', 'the stubbed league puts the page on live data');
+
+  // -- THE COST, stated before it is spent and counted after ---------------
+  eq(live.before.requests, 1, 'the page opens on ONE week of rosters, as it always has');
+  const span = live.span; // weeks 4..13 inclusive
+  ok('the cost note names the real number of requests still to spend',
+    live.before.cost.note.includes(`${span - 1} requests`),
+    live.before.cost.note.slice(0, 300));
+  ok('and the button carries the same number on its face',
+    live.before.cost.button.includes(`${span - 1} requests`), live.before.cost.button);
+  ok('and the note says what the page costs in total on this measure',
+    live.before.cost.note.includes(`${span} requests in total`),
+    live.before.cost.note.slice(0, 400));
+  ok('nothing was spent before the button was pressed', live.before.requests === 1,
+    `${live.before.requests} requests`);
+
+  eq(live.after.requests, span, 'pressing it spends exactly one request per week');
+  ok('and it asked for each remaining week exactly once',
+    new Set(live.after.asked).size === live.after.asked.length &&
+    live.after.asked.length === span,
+    live.after.asked.join(','));
+  ok('the spent line then says how many went',
+    live.after.cost.spent.includes(`${span - 1} requests spent`), live.after.cost.spent);
+
+  // -- THE RANKING ACTUALLY CHANGES ----------------------------------------
+  //
+  // The fixture's point: Ana holds two quarterbacks who alternate 19 and 7, so
+  // on one scalar per man she looks weak at QB and Bo's steady 17 is a +4
+  // upgrade — while across the weeks she already starts a 19 every week and the
+  // 17 is worth nothing. The scalar basis must offer that trade and the weekly
+  // one must not.
+  const gotQB = (list) => list.filter((t) => /Bo QB/.test(t.receive.join(' ')));
+  ok('on a typical week the page offers the steady quarterback',
+    gotQB(live.before.trades).length > 0,
+    live.before.trades.map((t) => t.receive.join('+')).join(' | '));
+  ok('and across the weeks it does NOT — three quarterbacks already cover it',
+    gotQB(live.after.trades).length === 0,
+    gotQB(live.after.trades).map((t) => t.receive.join('+')).join(' | '));
+  ok('while the deal that survives both measures is still there',
+    live.after.trades.some((t) => t.partner === 'Cy'),
+    live.after.trades.map((t) => t.partner).join(','));
+
+  // -- THE ESPN DEEP LINK ---------------------------------------------------
+  ok('the offer drilled into is with Cy', live.offer && live.offer.partner === 'Cy',
+    JSON.stringify(live.offer && live.offer.partner));
+  if (live.offer) {
+    const url = live.offer.espn;
+    ok('every live offer carries an ESPN deep link',
+      /^https:\/\/fantasy\.espn\.com\/football\/team\/trade\?/.test(url), url);
+
+    const q = new URLSearchParams(url.split('?')[1] || '');
+    eq(q.get('leagueId'), '476225250', 'the link names the league');
+    eq(q.get('seasonId'), '2026', 'and the season');
+    eq(q.get('teamId'), '3', 'teamId is the PARTNER — whose screen it opens');
+    eq(q.get('fromTeamId'), '1', 'fromTeamId is you');
+    eq(q.get('step'), '1', 'and it starts at step 1');
+
+    const ids = (q.get('players') || '').split(',').filter(Boolean);
+    ok('it pre-ticks at least one player', ids.length > 0, q.get('players'));
+    // An id not on that roster is ignored by ESPN in silence, which is the
+    // worst kind of wrong: a screen that opens with one man ticked and no
+    // explanation. Re-derived from the fixture's own rosters.
+    ok('and every id it names is on THAT manager’s roster',
+      ids.every((id) => live.rosters[3].includes(Number(id))),
+      `${ids.join(',')} vs ${live.rosters[3].join(',')}`);
+    ok('and none of them is one of your own men',
+      ids.every((id) => !live.rosters[1].includes(Number(id))),
+      ids.join(','));
+    ok('it names exactly the men you would receive',
+      ids.length === live.offer.receive.length,
+      `${ids.length} ids for ${live.offer.receive.length} incoming`);
+
+  }
+  // A button that pre-ticks half a trade and says nothing reads as broken on
+  // the first click, so the words are part of the feature rather than a
+  // courtesy.
+  ok('the finder note explains that only HIS side is ticked',
+    /HIS players ticked only/.test(live.after.note), live.after.note.slice(-500));
+  ok('and that nothing is sent to ESPN from here',
+    /Nothing is sent to ESPN/.test(live.after.note), live.after.note.slice(-500));
+
+  if (live.deal && !live.deal.hidden) {
+    ok('the deal panel offers the same deep link',
+      /^https:\/\/fantasy\.espn\.com\/football\/team\/trade\?/.test(live.deal.espn),
+      live.deal.espn);
+    ok('and says in words that your own side is not ticked',
+      /no parameter for your own side/.test(live.deal.body), live.deal.body.slice(-400));
+    ok('the deal covers every remaining week',
+      live.deal.weeks && live.deal.weeks.weeks.length === span,
+      live.deal.weeks ? `${live.deal.weeks.weeks.length} rows` : 'no table');
+    if (live.deal.weeks) {
+      const rows = live.deal.weeks.weeks;
+      const sum = rows.reduce((a, r) => a + r.delta, 0);
+      ok('and its rows sum to its total',
+        Math.abs(sum - live.deal.weeks.totals[0].delta) <= 0.05 * rows.length + 0.051,
+        `${sum} vs ${live.deal.weeks.totals[0].delta}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
