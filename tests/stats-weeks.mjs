@@ -133,10 +133,23 @@ if (process.argv[2]) {
       .reduce((n, th) => n + (Number(th.getAttribute('colspan')) || 1), 0);
     if (groupCols !== 18) problems.push(`group header spans ${groupCols} columns`);
 
-    if (thin) {
-      for (const [i, label] of [[7, 'Spread'], [11, 'Close'], [12, 'LuckScore'], [14, 'S+L'], [15, 'LS'], [16, 'PS']]) {
-        if (weeks === 1 && cells[i] !== '—') problems.push(`${label} = "${cells[i]}" at 1 week, expected dash`);
+    // FROM WEEK 1 NOW, with a ± — Tim, 2026-09-16. Close, Luck and S+L print a
+    // signed figure and a margin; LS and PS rank. Spread still needs two weeks.
+    for (const [i, label] of [[11, 'Close'], [12, 'LuckScore'], [14, 'S+L']]) {
+      const allRows = Array.from(rows).map((r) => r.children[i].textContent.trim());
+      const bad = allRows.filter((c) => !/^[+−-]?\d+\.\d±\d+$/.test(c));
+      // A tied game has no close luck; every other cell must carry both halves.
+      if (bad.length && !(label === 'Close' && bad.every((c) => c === '—'))) {
+        problems.push(`${label} at ${weeks} weeks: ${bad.slice(0, 2).join(', ')} — expected "+12.3±8"`);
       }
+    }
+    for (const [i, label] of [[15, 'LS'], [16, 'PS']]) {
+      if (!/^\d+$/.test(cells[i])) problems.push(`${label} = "${cells[i]}" at ${weeks} weeks, expected a rank`);
+    }
+    if (!/two times in three/.test(text('mainTableNote'))) problems.push('note does not explain the ±');
+
+    if (thin) {
+      if (weeks === 1 && cells[7] !== '—') problems.push(`Spread = "${cells[7]}" at 1 week, expected dash`);
       if (cells[17] === '—') problems.push('AS should still rank on record');
       if (!text('earlyNote').includes('projection')) problems.push('early note missing projection error');
     } else {
@@ -248,10 +261,12 @@ check(boxStats([1, 2]) === null, 'boxStats of 2 values should be null');
 check(boxStats([1, 2, 3, 4, 5]) !== null, 'boxStats of 5 values should compute');
 check(predictionAccuracy([]).every((b) => b.accuracy === null), 'no games -> no accuracy');
 
+const marginAt = {};
 for (const weeks of [0, 1, 2, 13]) {
   let s;
   try {
     s = computeLeagueStats(synthetic(weeks));
+    marginAt[weeks] = s.teams.map((t) => t.margins);
   } catch (err) {
     dataProblems.push(`${weeks}wk threw: ${err.message}`);
     continue;
@@ -276,6 +291,30 @@ for (const weeks of [0, 1, 2, 13]) {
     check(s.predictionAccuracy[0].accuracy !== null, '13wk: overall accuracy should show');
     check(s.teams.every((t) => t.actualStdev !== null), '13wk: stdev should compute');
   }
+}
+
+// The margin is WIDE EARLY AND NARROWS — the whole of Tim's ask. Same league
+// shape, one week against thirteen, every team and every one of the three.
+check(marginAt[0].every((m) => m.luckScore === null), '0wk: no games, no margin');
+for (const key of ['luckScore', 'skillPlusLuck', 'scoreDiffLuck']) {
+  check(marginAt[1].every((m) => m[key] > 0), `1wk: ${key} margin should be a positive number`);
+  check(marginAt[13].every((m, i) => m[key] < marginAt[1][i][key]),
+    `${key}: margin at 13 weeks should be narrower than at 1 ` +
+    `(${marginAt[13][0][key]} vs ${marginAt[1][0][key]})`);
+}
+// And the √n is the TEAM's own: the same pooled spread over 13 games is a
+// 1/√13 of it over one. With the synthetic league's spread barely moving,
+// the ratio has to land near that.
+{
+  const r = marginAt[13][0].luckScore / marginAt[1][0].luckScore;
+  check(r > 0.1 && r < 0.6, `luck margin ratio 13wk/1wk = ${r.toFixed(3)}, expected about 1/√13`);
+}
+// The VALUES are untouched — the margin is beside them, not folded in.
+{
+  const s = computeLeagueStats(synthetic(13));
+  const t = s.teams[0];
+  check(Math.abs(t.luckScore - Math.round((t.exact.luckScore) * 10) / 10) < 1e-9,
+    'luck score is still the sheet formula, unrounded copy agrees');
 }
 
 if (dataProblems.length) {

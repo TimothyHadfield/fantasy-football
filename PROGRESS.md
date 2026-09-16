@@ -575,6 +575,15 @@ percentage from five games. None of it crashed; all of it looked authoritative.
 `0` when no player has a value. **When adding a statistic, decide what it
 returns before it has enough data — that is the mistake this pass cleaned up.**
 
+**Revised 2026-09-16, on Tim's ask:** Close luck, the luck score, S+L, LS and PS
+are no longer held back until week 3. They show from week 1 with a **±** —
+one standard error of the team's average of the per-game term, the spread
+pooled across the league and divided by √(that team's games) — so it is wide
+after a game and narrows each week (demo league: luck score ±30 at week 1,
+±18 at week 2, ±10 at week 13). `attachLuckMargins` in `js/stats.js`; the
+values themselves are the sheet's formulas, untouched. The trend charts are
+still gated at week 3 — he asked about the columns, not the charts.
+
 **Still true, and worth knowing:** `js/demo-rosters.js` hardcodes
 `played: true` for every game, so **demo mode always shows a finished season**.
 That is why none of the above was noticed. It is deliberate (the demo exists to

@@ -325,19 +325,22 @@ function renderMainTable() {
   const s = state.stats;
   const table = $('mainTable');
   const tbody = table.querySelector('tbody');
-  const thin = weekCount() < MIN_WEEKS;
-
-  // Everything downstream of the close-game luck curve is suppressed while the
-  // season is short. The curve clamps to ±50 for any margin under about 5.5
-  // points, so a 3-point week-1 win prints +41 and a 3-point loss −51: a
-  // 92-point spread out of one game, where the whole verified 2025 column
-  // spanned about ±15. The maths is untouched; it is simply not shown yet.
-  const luck = (v) => (thin ? dash : signed(v));
-  const rank = (v, hide) => (hide || v === null ? dash : `<span class="rank">${v}</span>`);
-
   // With no completed weeks every one of these is an average of nothing, which
   // stats.js correctly computes as 0 and this must not print as a score.
   const none = noGames();
+
+  // SHOWN FROM WEEK 1, WITH A MARGIN. These were held back until week 3,
+  // because the close-game curve clamps to ±50 under a ~5.5-point margin and a
+  // single game swings them further than a whole season does. Tim asked for
+  // them from the start with "a wide margin for the first few games" instead,
+  // so each carries a ± (one standard error — see attachLuckMargins in
+  // stats.js) that is huge after one game and narrows every week.
+  const luck = (v, m) => {
+    if (none || v === null || v === undefined) return `<td>${dash}</td>`;
+    const pm = m === null || m === undefined ? '' : `<span class="pm">±${Math.round(m)}</span>`;
+    return `<td data-v="${v}">${signed(v)}${pm}</td>`;
+  };
+  const rank = (v) => (none || v === null ? dash : `<span class="rank">${v}</span>`);
   const num = (v) => (none ? dash : fmt(v));
   const sgn = (v) => (none ? dash : signed(v));
 
@@ -360,13 +363,13 @@ function renderMainTable() {
         ${oppProjCell(t.id, heatOppProj)}
         <td>${sgn(t.avgLuck)}</td>
         <td>${num(t.pointsToWin)}</td>
-        <td>${luck(t.scoreDiffLuck)}</td>
-        <td>${luck(t.luckScore)}</td>
+        ${luck(t.scoreDiffLuck, t.margins && t.margins.scoreDiffLuck)}
+        ${luck(t.luckScore, t.margins && t.margins.luckScore)}
         <td>${sgn(t.skill)}</td>
-        <td>${luck(t.skillPlusLuck)}</td>
-        <td>${rank(t.luckStanding, thin)}</td>
-        <td>${rank(t.projectedStanding, thin)}</td>
-        <td>${rank(t.actualStanding, false)}</td>
+        ${luck(t.skillPlusLuck, t.margins && t.margins.skillPlusLuck)}
+        <td>${rank(t.luckStanding)}</td>
+        <td>${rank(t.projectedStanding)}</td>
+        <td>${rank(t.actualStanding)}</td>
       </tr>`)
     .join('');
 
@@ -392,10 +395,12 @@ function renderMainTable() {
     (none
       ? ' Nothing has been played yet, so every column drawn from a result is blank ' +
         'rather than zero. Opp proj is the exception, and the panel above it explains why.'
-      : thin
-        ? ` Close luck, luck score, S+L, LS and PS are held back until week ${MIN_WEEKS}: ` +
-          'from one or two games they swing further than a whole season of them does.'
-        : '');
+      : ' <strong>±</strong> beside Close, Luck and S+L is how far that figure could still ' +
+        'move: one standard error of an average of this team&rsquo;s games, from how much ' +
+        'the per-game number varies across the league. About two times in three the ' +
+        'figure a full season settles on is inside it. It is wide after a game or two — ' +
+        'a 3-point result alone swings Close luck by up to 50 — and narrows every week, ' +
+        'so LS and PS early on are a guess with the range beside it, not a verdict.');
 
   // Default to standings order; afterwards keep whatever the user picked.
   enableSort(table, { defaultIndex: 1 });

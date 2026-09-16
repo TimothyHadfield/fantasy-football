@@ -7,6 +7,10 @@
 <link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="css/app.css">
 <style>
+/* The ± beside Close luck, the luck score and S+L: how far each could still
+ * move. Quieter than the figure, wide in week 1 and narrowing every week. */
+.pm { color: var(--dim); font-size: 10.5px; font-weight: 600; margin-left: 4px; }
+
 /* Ranked bars for the schedule-luck panel.
  *
  * Deliberately NOT charts.js's histogram. Ten average opponent projections all
@@ -145,7 +149,7 @@
           <th data-sort id="thOppProj" title="Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play. High means a hard schedule, which is bad luck you had no part in. This is the one column that needs no games played &mdash; it comes from the fixture list and ESPN&rsquo;s own per-week player projections, so it is readable before week 1.">Opp proj</th>
           <th data-sort title="Luck per week: your average score minus your average projection. Positive means you keep beating your projection.">Luck/wk</th>
           <th data-sort title="Points to win: your average opponent&rsquo;s score minus your own average luck &mdash; what you needed to score to beat a typical opponent.">PTW</th>
-          <th data-sort title="Close-game luck (your sheet&rsquo;s SD): weights each result by how close it was, so a one-point game scores near &plusmn;50 and a blowout near zero. Needs about three weeks to settle.">Close luck</th>
+          <th data-sort title="Close-game luck (your sheet&rsquo;s SD): weights each result by how close it was, so a one-point game scores near &plusmn;50 and a blowout near zero. The &plusmn; beside it is how far it could still move, and it narrows every week.">Close luck</th>
           <th data-sort title="Luck score (your sheet&rsquo;s LUCK) = league average &minus; (PTW &minus; close luck). Above zero means the season has broken your way.">Luck score</th>
           <th data-sort title="Skill = your average projected score minus the league&rsquo;s average projected score.">Skill</th>
           <th data-sort title="Skill + luck score (your sheet&rsquo;s S+L).">S+L</th>

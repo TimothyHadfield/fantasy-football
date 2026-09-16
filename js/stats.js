@@ -373,6 +373,61 @@ function rankBy(teams, valueFn, descending = true) {
   return ranks;
 }
 
+// ------------------------------------------------------------- luck margins
+
+/**
+ * How far Close luck, the luck score and S+L could still move: a ± per team.
+ *
+ * Tim, 2026-09-16: these used to be held back until week 3. He wants them from
+ * week 1, "with a wide margin for the first few games" that evens out. So the
+ * values are exactly as before — the sheet's formulas, untouched — and each now
+ * carries a margin, which is what does the evening out.
+ *
+ * Each of the three is (a constant plus) an AVERAGE over the team's games of a
+ * per-game term:
+ *   Close luck  = mean(gameLuck)
+ *   Luck score  = leagueAvg − mean(oppActual − luck) + mean(gameLuck)
+ *   S+L         = the luck score + mean(projected) − leagueAvgProjected
+ * so the margin is one standard error of that average: the spread of the
+ * per-game term ÷ √games. The spread is POOLED across the whole league, since a
+ * team's own one or two games cannot have a spread of their own, while the √n
+ * is the team's own — which is exactly "wide early, narrower each week".
+ *
+ * One standard error, not two: about two times in three the figure a season of
+ * games settles on is inside it. Ties count 0 towards gameLuck here, a
+ * deliberate simplification of a margin, never of a value. Null when the league
+ * has too few games to have a spread (`stdev` needs two).
+ */
+function attachLuckMargins(teams) {
+  const closeTerms = [];
+  const luckTerms = [];
+  const plusTerms = [];
+  for (const t of teams) {
+    for (const w of t.weekly) {
+      const gl = w.gameLuck ?? 0;
+      if (w.gameLuck !== null) closeTerms.push(w.gameLuck);
+      const luckTerm = gl - (w.oppActual - w.luck);
+      luckTerms.push(luckTerm);
+      plusTerms.push(luckTerm + w.projected);
+    }
+  }
+  const sdClose = stdev(closeTerms);
+  const sdLuck = stdev(luckTerms);
+  const sdPlus = stdev(plusTerms);
+  const se = (sd, n) => (sd === null || !n ? null : Math.round((sd / Math.sqrt(n)) * 10) / 10);
+
+  for (const t of teams) {
+    const games = t.weekly.length;
+    const decided = t.weekly.filter((w) => w.gameLuck !== null).length;
+    t.margins = {
+      scoreDiffLuck: se(sdClose, decided),
+      luckScore: se(sdLuck, games),
+      skillPlusLuck: se(sdPlus, games),
+      games,
+    };
+  }
+}
+
 // ---------------------------------------------------------------- entrypoint
 
 /**
@@ -409,6 +464,8 @@ export function computeLeagueStats(data) {
     teamMetrics(t, weeklyRows.get(t.id) || [], leagueAvgProjected,
                 leagueAvgActual, cumulativeLeagueAvgActual)
   );
+
+  attachLuckMargins(teams);
 
   // CONFIRMED: all four standings reproduce the sheet's own ranks, 10/10 each.
   // AS breaks a tie on wins by total points; LS and PS are straight sorts.
