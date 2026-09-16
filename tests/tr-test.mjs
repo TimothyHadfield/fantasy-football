@@ -946,9 +946,11 @@ if (!ctl.boot) {
  * `playedWeeks()` in js/trade-page.js; this is the suite's own copy of it, which
  * is the point — if the page changed its mind, these two would disagree.
  */
+const DEMO_WEEKS = 13;   // js/demo-rosters.js really is a thirteen-week season
+
 const demoSpan = (week) => {
   const out = [];
-  for (let w = Number(week) + 1; w <= 13; w++) out.push(w);
+  for (let w = Number(week) + 1; w <= DEMO_WEEKS; w++) out.push(w);
   return out;
 };
 
@@ -1406,7 +1408,7 @@ if (!live.boot) {
 
   // -- THE COST, stated before it is spent and counted after ---------------
   eq(live.before.requests, 1, 'the page opens on ONE week of rosters, as it always has');
-  const span = live.span; // weeks 5..13 inclusive — the unplayed ones
+  const span = live.span; // every week with no result against it
   // MOVED, and the old number encoded the old truth. It used to be `span - 1`
   // because the span STARTED at the selected week, which the page already had
   // in hand. The span now starts after the last week played, so none of it is
@@ -1523,8 +1525,13 @@ if (!live.boot) {
     priceTradeAcrossWeeks, mergeComboByPartner, depthTable, findTrades,
   } = await import(moduleUrl('js/trade.js'));
 
-  const unplayed = weekRange(live.played + 1, 13);   // what the page must price
-  const withPlayed = weekRange(live.played, 13);     // what it used to price
+  // FROM THE STUB'S OWN SEASON LENGTH, never a literal 13. The stub plays
+  // FOURTEEN regular-season weeks, the way Tim's league does, precisely so the
+  // week-13 cap the page used to enforce is visible here — with a 13-week
+  // fixture the cap and the schedule agreed and this suite passed either way.
+  const lastWeek = (await import('./tr-stub-season.mjs')).WEEKS;
+  const unplayed = weekRange(live.played + 1, lastWeek);   // what the page must price
+  const withPlayed = weekRange(live.played, lastWeek);     // what it used to price
   const me = L.teams.find((t) => t.id === 1);
   const priceOver = (weeks, sendIds, receiveIds) =>
     priceTradeAcrossWeeks({

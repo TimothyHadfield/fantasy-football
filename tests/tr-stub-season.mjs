@@ -56,7 +56,17 @@
 
 export const calls = { schedule: 0, week: [], weeks: [] };
 
-export const WEEKS = 13;
+// FOURTEEN, not thirteen, and that is the point of the number.
+//
+// Tim's real league plays 14 regular-season matchups. The trade page used to
+// cap its weekly span at week 13, citing a rule that claimed ESPN published
+// nothing beyond it — a rule that turned out to be wrong. With a 13-week
+// fixture that cap was invisible: the span ended at 13 either way, so the suite
+// passed whether the page read the schedule or ignored it.
+//
+// At 14 the cap becomes visible. A page still enforcing it drops week 14 from
+// every span, every request count and every offer it prices.
+export const WEEKS = 14;
 export const PLAYED_THROUGH = 4;   // so useLive() opens on week 4
 export const LEAGUE = '476225250';
 export const SEASON = 2026;

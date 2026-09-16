@@ -63,13 +63,6 @@ const IR_SLOT = 21;
 // page behaves exactly as it does today. Same rule as `snapshots.fetchRemote`.
 
 /**
- * ESPN publishes a per-week projection through week 13 and no further, so
- * there is nothing to sync past it — except a week that has actually been
- * PLAYED, whose rosters carry real results the stats page reads.
- */
-const PROJECTED_THROUGH = 13;
-
-/**
  * How many free agents a wire document holds. The same number the Players page
  * asks ESPN for, deliberately: a phone reading a shorter list than the desktop
  * showed would be a quiet disagreement about what the wire is.
@@ -680,16 +673,20 @@ export async function buildCloudPayload({ onProgress } = {}) {
 
   const schedule = await fetchSchedule();
 
-  // Which weeks are worth a request. ESPN publishes a per-week projection
-  // through week 13 and nothing beyond it, so a week 14 roster would carry no
-  // projection to sync — EXCEPT once it has been played, when its rosters
-  // carry real results the stats page reads. Both halves matter: a league with
-  // playoff weeks would otherwise lose its December results.
-  const playedWeeks = new Set();
-  for (const [w, games] of schedule.byWeek) {
-    if (games.some((g) => g.played)) playedWeeks.add(w);
-  }
-  const weeks = schedule.weeks.filter((w) => w <= PROJECTED_THROUGH || playedWeeks.has(w));
+  // EVERY WEEK THE SCHEDULE KNOWS ABOUT, and there is no week ceiling.
+  //
+  // This used to stop at week 13, on the authority of a rule saying ESPN
+  // published no projection beyond it. **That rule was wrong** — 13 was simply
+  // the furthest week anybody had asked for, and re-probing found real per-week
+  // projections through week 18. The cap was therefore refusing to sync the
+  // last week of a fourteen-week regular season, so a phone reading the synced
+  // copy had a hole in it exactly where the season is decided.
+  //
+  // The schedule is the honest bound and needs no filter: ESPN's matchup feed
+  // ends with the regular season, so `schedule.weeks` IS the list of weeks
+  // there are. A league whose feed carries playoff weeks syncs those too, which
+  // is what keeps its December results.
+  const weeks = schedule.weeks.slice();
 
   // Schedule, then a roster request and a wire request per week, then the byes.
   const total = weeks.length * 2 + 2;

@@ -65,12 +65,28 @@ const prefs = scope('trade');
 const DEMO_WEEKS = 13;
 const NFL_WEEKS = 18; // only used when ESPN won't tell us its own schedule
 
-// ESPN publishes a per-week projection for every week through 13 and nothing
-// beyond it — rule 2 in HANDOFF.md, verified against public league 1241838. So
-// that is where the weekly span stops. Asking for week 14 would spend a request
-// to be handed a column of nulls, which would drag every squad's total down by
-// the same amount and tell nobody anything.
-const PROJECTED_THROUGH = 13;
+// THE WEEKLY SPAN IS THE REST OF THE SCHEDULE, AND THERE IS NO WEEK CEILING.
+//
+// This used to stop at 13, on the authority of a rule in HANDOFF.md that said
+// ESPN published nothing beyond that week. **That rule was wrong** — it was
+// simply the furthest week anybody had asked for, and re-probing found real
+// per-week projections through week 18. It is corrected there now.
+//
+// Leaving the cap in was not harmless. Tim's regular season is FOURTEEN
+// matchups, so a 13-week ceiling silently dropped the last week of it from
+// every trade he priced — the week before his playoffs, and the one most likely
+// to decide whether he is in them.
+//
+// The span is bounded by the schedule instead, which is the honest bound: ESPN's
+// matchup feed stops at the end of the regular season, so `state.weeks` is
+// exactly the weeks there are. A week ESPN refuses is already absent rather
+// than fatal, so a genuine gap costs a column and not a wrong answer.
+//
+// What this deliberately does NOT do is price the playoff weeks. They are not
+// in the schedule feed at all, so reaching them means fetching by week number
+// the way the schedule page's bracket does — worth doing, and noted as open in
+// PROGRESS.md, but it is a different question: a trade for weeks 15-17 is only
+// worth anything if you get there.
 
 // How many weekly requests to have in the air at once, and it is the same three
 // the analysis page uses. Written here rather than imported from that page: it
@@ -235,7 +251,7 @@ function playedWeeks() {
  */
 function weeklySpan() {
   const played = new Set(playedWeeks());
-  return state.weeks.filter((w) => !played.has(w) && w <= PROJECTED_THROUGH);
+  return state.weeks.filter((w) => !played.has(w));
 }
 
 /**
