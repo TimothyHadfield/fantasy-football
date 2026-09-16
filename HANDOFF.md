@@ -25,10 +25,12 @@ A reading is only taken when **Tim opens `schedule.html` on live data** in the
 Edge profile that has the bridge extension. A week he never visits is simply
 gone.
 
-**Checked again 2026-09-16 and still empty**: `data/snapshots/` holds nothing
-but its README and there is no `fantasy-archive-*.json` in his Downloads. That
-is a week of the season gone with no reading taken, and none of it can be
-recovered. **Check both places yourself at the start of every session** and
+**Checked again at the end of 2026-09-16 and still empty**: `data/snapshots/`
+holds nothing but its README and there is no `fantasy-archive-*.json` in his
+Downloads. Week 1 is gone with no reading taken, and none of it can be
+recovered. He was asked, at the end of that session, to open the schedule page
+on his computer once the race fix below had deployed — **ask whether he did,
+and whether the panel now shows a reading.** **Check both places yourself at the start of every session** and
 raise it before anything else he asked for. Two things to ask, in this order:
 
 1. **"Has the Time machine panel recorded this week?"** If not, that is the one
@@ -423,11 +425,11 @@ Everything Tim has asked for is built and live:
 | Page | What it does |
 |---|---|
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
-| `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played |
+| `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played. Close luck, luck score, S+L, LS and PS show **from week 1 with a ±** (one standard error; wide early, narrowing weekly) — Tim's ask, replacing a week-3 hold-back |
 | `analysis.html` | All ten squads **twice over** — nine spots, a total and the bench, once on the season average and once on the selected week, with a card (hover, or tap on a phone) carrying each man's whole season as a three-row chart — weeks, projection, and actual for weeks already played and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; "Season by week"; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
 | `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation **including the playoff bracket** — where a team finishes is the bracket for places 1–6 and the regular-season table below that, which is how this league ranks people — and a **time machine** — a reading of the whole page is saved automatically once a week, picking one replays the season as it looked then, and the archive committed under `data/snapshots/` restores itself into any browser |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
-| `trade.html` | **Depth map**, then the **finder**: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked |
+| `trade.html` | **Depth map**, then the **finder**: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked. **Every figure is per week first, the rest-of-season total as the small sub-number** (Tim's display rule). The pop-up fetches its own weeks on the click and shows played weeks above a heavy line, in white, in no total. After an ESPN click a line at the foot of the page says what became of your side (extension absent / too old / refused / handed over) |
 | `summary.html` | The weekly chart for his group chat — member, season LUCK, title %, loser %, at 100,000 runs — rendered to an image and handed to the phone's share sheet |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
@@ -466,7 +468,8 @@ signatures breaks three features at once, and only the full suite will tell you.
 
 ## Tests
 
-`cd tests && npm install && npm test` — 25 suites, over 8,900 assertions.
+`cd tests && npm install && npm test` — 26 suites, over 9,400 assertions.
+`node tests/text-audit.mjs` is not a suite: it counts visible prose per panel.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
 `tests/README.md` for the two linkedom gotchas that otherwise waste an hour.
@@ -491,7 +494,10 @@ Five worth knowing by name:
   48 against 51 and calls the single good QB better; week by week they are 54
   against 51. If anyone reverts the weekly measure, that disagreement vanishes
   and the suite fails.
-- `an-test.mjs` and `fc-test.mjs` are the two big end-to-end ones (565 and 707
+- `test-bridge-settle.mjs` is small and guards the costliest bug of
+  2026-09-16: a page's first ESPN read racing the extension's hello, going
+  direct, and being refused — which made the Trade page price played weeks.
+- `an-test.mjs` and `fc-test.mjs` are the two big end-to-end ones (567 and 707
   assertions). They re-derive their expected answers independently rather than
   reading the page's own arithmetic back to it — `an-test` rebuilds every week's
   lineup from `demo-rosters.js` to check the who-to-start marks, and `fc-test`
@@ -510,7 +516,24 @@ Ordered by what would hurt most to get wrong.
   needs the bridge extension, and **the extension cannot exist on his phone** —
   so if he has moved to reading the site there, no reading will ever be taken.
   Firebase sync makes the archive *readable* on the phone; it cannot make one
-  be *taken* there.
+  be *taken* there. A second possible cause (the extension race) was fixed on
+  2026-09-16 — whether readings now appear is the first thing to ask.
+- **Waiting on Tim, from the end of 2026-09-16** — ask about each:
+  1. **Tick-your-side.** He reported his own players still unticked on ESPN.
+     Unreproducible here (private league). Every silent failure now speaks: a
+     line on the Trade page after the click, and a badge on ESPN's page. He was
+     asked to reload the extension (must show **0.3.2**), hard-refresh, make
+     sure "Your team" is his own, try again and **report both messages**. The
+     likeliest cause was an extension never reloaded after 0.3.0.
+  2. **The race fix in real Edge.** A trade's pop-up should now list only weeks
+     ≥ 2 below the line (week 1 above it) and stop at week 14, not 18. If it
+     still shows 18, the schedule read is still failing — the Trade page now
+     says so in red.
+  3. **The declutter.** Every page went to lede + key + "How this works"
+     toggle. He has not reacted yet. **The 390px headless screenshots ran off
+     the right edge on every page, header included** — almost certainly
+     headless Edge's minimum window width, but ask whether anything scrolls
+     sideways on his iPhone.
 - **Almost none of this has been seen against his real league in a browser.**
   Everything is verified against demo data, stubs and public leagues.
   476225250 is private and returns 401 to anything without his cookie, so the
@@ -523,8 +546,10 @@ Ordered by what would hurt most to get wrong.
   should match `manifest.json`, 0.3.2 as of 2026-09-16). The Trade page now
   says so itself after an Open in ESPN click when the running version is older
   than `MIN_TICK_VERSION` in `js/trade-page.js` — raise that with any extension
-  change the page depends on. Bump the version with
-  every extension change so he can tell.
+  change the page depends on. Bump the version with every extension change so
+  he can tell.
+- **The Trade page does not price the playoff weeks (15–17)** — his call; see
+  PROGRESS.md "Next".
 - **The trade tick-your-side has never run in a real browser.** ESPN's markup
   and the React click path were read out of their shipped bundle and the suite
   proves the logic, but linkedom cannot prove ESPN's own store updates. The

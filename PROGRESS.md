@@ -43,6 +43,13 @@ describe how the site works **today**:
 | Reading the real league on a phone | "The cloud sync" |
 | The chart for the group chat | "The weekly summary page" |
 | Why a fixture that matches the bug cannot see the bug | "The week-13 cap that outlived the rule" |
+| The Trade pop-up that never closed; `[hidden]` losing to a class | "The pop-up that never closed" |
+| Why Open in ESPN did nothing (`noopener` returns null) | "\"Open in ESPN\" did nothing" |
+| Why his side can still arrive unticked, and what now says so | "\"My side still has no players selected\"" |
+| Played weeks leaking into a trade; the extension race | "Played weeks inside a trade's total" |
+| The ± on the luck columns | "Early-season honesty" (revised note) |
+| Per week first, total as the sub-number | HANDOFF rule 10 |
+| Lede / "How this works" toggle — how a panel reads | HANDOFF "How a panel reads" |
 | What to do next | "Next", at the foot |
 
 ## What changed on 2026-09-09 and 2026-09-10
@@ -1489,7 +1496,7 @@ URL made it — their side ticked, yours not, which is the behaviour that alread
 worked.
 
 **None of this has run in a real browser yet.** ESPN's markup and the React
-click path were read out of their bundle and 77 assertions prove the logic, but
+click path were read out of their bundle and 82 assertions prove the logic, but
 linkedom cannot prove ESPN's own store updates. The first real test is Tim
 opening a link. It fails LOUDLY if it fails — the badge says "ESPN did not
 record the selection for: …" rather than proposing less than he intended.
@@ -2283,9 +2290,10 @@ a band in place.
 **The suites are in `tests/` now. Run them with `cd tests && npm install &&
 npm test`** — see [tests/README.md](tests/README.md).
 
-**25 suites, over 8,900 assertions.** A full run on 2026-09-16 was green in 230
-seconds at **9,386 counted assertions**, plus four suites that report pages or
-scenarios rather than a count (`test-pages-render` 6 pages, `test-home` 2 pages,
+**26 suites, over 9,400 assertions.** The last full run on 2026-09-16 was green
+in about 230 seconds (it was 25 suites and 9,386 counted assertions earlier the
+same day; `test-bridge-settle.mjs` and several new page assertions came after),
+plus four suites that report pages or scenarios rather than a count (`test-pages-render` 6 pages, `test-home` 2 pages,
 `stats-weeks` and `opp-check` 6 scenarios each). Those figures are the run, not
 an estimate.
 
@@ -2416,8 +2424,9 @@ to get wrong.
 - **THE ONE ITEM WITH A DEADLINE: get a reading captured and committed.** The
   time machine records what the forecast said, once a week, and ESPN keeps no
   history of its own projections — so a week Tim never opens the schedule page
-  in is gone for good. **Still empty as of 2026-09-15**, which is five days and
-  a further game week worse than the last check. See the block at the top of
+  in is gone for good. **Still empty at the end of 2026-09-16**; week 1 is
+  lost. The extension race fixed that day may have been a cause — ask whether
+  a reading has appeared since. See the block at the top of
   `HANDOFF.md` for exactly what to ask him, and check `data/snapshots/` and his
   Downloads yourself before anything else. **The likeliest reason is now known
   and is worth saying to him plainly:** a reading is only taken when
@@ -2445,8 +2454,20 @@ to get wrong.
   - whether the strength-of-schedule basis on `schedule.html` picks the path it
     should;
   - whether the Players page's **two requests per week** — the wire and every
-    squad — is acceptable to him over a full thirteen-week span, since that is
-    26 requests for "Rest of season".
+    squad — is acceptable to him over a full fourteen-week span, since that is
+    28 requests for "Rest of season".
+- **Three things he was asked to check at the end of 2026-09-16** — the full
+  list is in HANDOFF "What is genuinely open": whether his side now ticks (and
+  what the two new messages say if not), whether a trade pop-up now lists weeks
+  only through 14 with week 1 above the line, and how the decluttered pages
+  look on his phone.
+- **The declutter is a first pass.** Visible prose went ~5,700 → ~1,050 words
+  (`tests/text-audit.mjs`). Known leftovers: a few facts deliberately appear
+  twice (a short visible line and the full text in the toggle, because tests
+  read the latter); the Analysis "Who to start" key is ~47 words; the
+  Matchups lede says win chances are our estimate even for a fully played week;
+  the Analysis key/toolbar styles (`.key-line`, `.lg-mark`, `.toolbar`) are
+  page-local and could move to `css/app.css` if other pages grow keys.
 - **The trade tick-your-side has never run in a real browser.** ESPN's markup
   and the React click path were read out of their shipped bundle and 77
   assertions prove the logic, but linkedom cannot prove ESPN's own store
@@ -2504,7 +2525,8 @@ to get wrong.
   through the reachable "no defence" case.
 - **The Predictions tab** — the one genuinely unbuilt idea from his sheet. He
   tested by hand, for week 1 only, whether a team's projected total at a given
-  week predicts the final ranking. The site can answer it across all 13 weeks.
+  week predicts the final ranking. The site can answer it across every week of
+  the regular season (14 in his league).
   (His sheet called that number "Est Total"; the grid's column is just `Total`
   now, and it is nine real men rather than seven plus an allowance.)
 - **The click-through, one step further.** It lands on a man and shows his rest
