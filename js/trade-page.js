@@ -954,9 +954,8 @@ function renderDepthNote(map) {
         `reach it. A man’s average leaves his <strong>byes</strong> out: a 0.00 is a fact about ` +
         `the fixture list, not about him, and counting it would price him as the weeks he is off ` +
         `rather than the weeks he plays. ` +
-        `The panels below are rest-of-season totals, which are about ${span.length} times larger — ` +
-        `and because byes are out of the average here, a man’s figure deliberately does not ` +
-        `multiply back up to them. ` +
+        `The panels below are per week too, but a deal’s gain is spread over every week in the ` +
+        `span, byes and all, so a man’s figure here is deliberately not the same arithmetic. ` +
         `<strong>Lineup</strong> is what those averages would field. Picking each week separately ` +
         `always beats it, and the gap between the two is precisely what depth is worth: a squad ` +
         `whose men swing about has a higher week-by-week total than its averages suggest, and a ` +
@@ -1331,18 +1330,53 @@ function espnCell(offer) {
  * restoration: `f:3` is the finder's fourth row, `c:0` the combo's first. It is
  * a string rather than an index because the two tables share one modal.
  */
+/**
+ * PER WEEK FIRST, THE TOTAL UNDERNEATH. Tim, 2026-09-16: "measure everything by
+ * per/week with the total as a sub-number, not the other way around."
+ *
+ * The engine still prices a deal as a rest-of-season total — that is what the
+ * weekly measure IS, and rule 10 in HANDOFF.md — so these take the total and
+ * print it divided by the span, with the total in small type. A gain divides
+ * exactly: it is a sum over exactly these weeks. That is NOT true of the figure
+ * beside a player, which skips his byes — see `manLine`.
+ *
+ * Sort keys (`data-v`) stay the totals. Every row shares one span, so dividing
+ * would not change a single comparison, and the re-derivations in tr-test check
+ * the engine's own totals against them.
+ */
+const perWeekOf = (total) => total / (weeklySpan().length || 1);
+
+function weeklyGainHtml(total) {
+  return (
+    `${signedText(perWeekOf(total))}<span class="unit">/wk</span>` +
+    `<span class="sub">${signedText(total)} total</span>`
+  );
+}
+
+function weeklyLineupHtml(before, after) {
+  return (
+    `${fmt(perWeekOf(before))} → ${fmt(perWeekOf(after))}<span class="unit">/wk</span>` +
+    `<span class="sub">${fmt(before)} → ${fmt(after)} total</span>`
+  );
+}
+
+/** For prose: "+4.5 a week (+53.7 over weeks 2–13)". */
+function weeklyPhrase(total) {
+  return (
+    `<strong>${signedText(perWeekOf(total))} a week</strong> ` +
+    `(${signedText(total)} over ${weekRange(weeklySpan())})`
+  );
+}
+
+/** "You gain a week (wk 2–13)" — per week either way; the span says which weeks. */
+const GAIN_HEAD = (who, weeks, span) =>
+  weeks && span.length ? `${who} a week (${weekRange(span)})` : `${who}, a week`;
+
 function offerRow(offer, i, key) {
   const send = offer.send.map(manLine).join('');
   const receive = offer.receive.map(manLine).join('');
-  const weeks = basis() === 'weeks';
-  const span = weeklySpan();
-  // A GAIN still multiplies: it is a season total over exactly these weeks, so
-  // dividing by the span is exact. That is NOT true of the per-week figure
-  // beside a player, which now skips his byes — see `manLine`.
-  const per = (v) =>
-    weeks && span.length && Number.isFinite(v)
-      ? `<span class="per">${signedText(v / span.length)}/wk</span>`
-      : '';
+  const weeks = basis() === 'weeks' && weeklySpan().length > 0;
+  const gain = (v) => (weeks && Number.isFinite(v) ? weeklyGainHtml(v) : signedText(v));
   const picked = state.deal && state.deal === offer ? ' picked' : '';
 
   const merged = offer.merged
@@ -1370,9 +1404,12 @@ function offerRow(offer, i, key) {
     `<td class="left pkg">${send}</td>` +
     `<td class="left pkg">${receive}${churnHtml(offer.yourChurn)}</td>` +
     `<td class="before-after" data-v="${offer.myAfter}">` +
-      `${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}</td>` +
-    `<td class="gain pos" data-v="${offer.myGain}">${signedText(offer.myGain)}${per(offer.myGain)}</td>` +
-    `<td class="their-gain pos" data-v="${offer.theirGain}">${signedText(offer.theirGain)}${per(offer.theirGain)}</td>` +
+      (weeks && Number.isFinite(offer.myBefore) && Number.isFinite(offer.myAfter)
+        ? weeklyLineupHtml(offer.myBefore, offer.myAfter)
+        : `${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}`) +
+      `</td>` +
+    `<td class="gain pos" data-v="${offer.myGain}">${gain(offer.myGain)}</td>` +
+    `<td class="their-gain pos" data-v="${offer.theirGain}">${gain(offer.theirGain)}</td>` +
     `<td class="left">${espnCell(offer)}</td>` +
     `</tr>`
   );
@@ -1401,9 +1438,9 @@ function renderFinder() {
   // heading says which, every time, rather than the note alone.
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
-  $('thMyGain').textContent = weeks ? `You gain (${weekRange(span)})` : 'You gain, a week';
-  $('thTheirGain').textContent = weeks ? `He gains (${weekRange(span)})` : 'He gains, a week';
-  $('thLineup').textContent = weeks ? 'Your lineup, all weeks' : 'Your lineup, a week';
+  $('thMyGain').textContent = GAIN_HEAD('You gain', weeks, span);
+  $('thTheirGain').textContent = GAIN_HEAD('He gains', weeks, span);
+  $('thLineup').textContent = 'Your lineup, a week';
 
   // Both halves are written on EVERY path, and that is not tidiness. Hiding
   // the table without emptying it left the previous search's rows sitting in
@@ -1485,16 +1522,16 @@ function renderFinderNote() {
     `deal can help both sides at once. Valued on ${esc(m.label)} (${m.basis}). ` +
     `<br>` +
     (weeks
-      ? `<strong>The two gain columns are rest-of-season totals over ${weekRange(span)}</strong> ` +
-        `— not weekly figures. The per-week figure is printed beside each in smaller type, and it ` +
-        `is exactly the total over ${plural(span.length, 'week')}. Each lineup is filled separately ` +
+      ? `<strong>Every figure is per week</strong>, averaged over ${weekRange(span)}, with the ` +
+        `rest-of-season total in small type underneath — the per-week number is exactly that total ` +
+        `divided by ${plural(span.length, 'week')}. Each lineup is filled separately ` +
         `in each week, on that week’s own projections, so a man on bye is simply replaced that week ` +
         `rather than dragging an average down. ` +
         `<strong>Only weeks still to be played are priced</strong> — ${weekRange(span)} — because a ` +
         `trade changes the rest of the season and cannot move points already banked. ` +
         `<strong>The number beside each player is what he is worth in a week he PLAYS</strong>, his ` +
-        `byes left out of the average, so it deliberately does <em>not</em> multiply back up to the ` +
-        `gains in this table. `
+        `byes left out of the average — whereas a gain is spread over every week in the span, byes ` +
+        `and all — so the two are deliberately <em>not</em> the same arithmetic. `
       : `<strong>You gain</strong> and <strong>He gains</strong> are points per week added to each ` +
         `best lineup, and so is the figure beside each player. `) +
     `Currently searching ${kindNote}` +
@@ -1634,12 +1671,13 @@ function weekTableHtml(byWeek, total, { label = 'With the trade' } = {}) {
     `<thead><tr><th class="name">Week</th><th>As you are now</th>` +
     `<th>${esc(label)}</th><th>Difference</th></tr></thead>` +
     `<tbody>${rows}` +
-    `<tr class="total"><td class="name">All ${plural(byWeek.length, 'week')}</td>` +
-    `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
-    `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total)}</td></tr>` +
+    // Per week FIRST, the total under it — Tim's order for every figure here.
     `<tr class="total"><td class="name">Per week</td>` +
     `<td>${fmt(beforeTotal / n)}</td><td>${fmt(afterTotal / n)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total / n)}</td></tr>` +
+    `<tr class="total sub-row"><td class="name">All ${plural(byWeek.length, 'week')}</td>` +
+    `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
+    `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total)}</td></tr>` +
     `</tbody></table>`
   );
 }
@@ -1771,9 +1809,10 @@ function renderDeal() {
     `<strong>As you are now</strong> and <strong>With the trade</strong> are both your best legal ` +
     `lineup <em>in that week</em>, filled from that week’s own projections — so both sides of the ` +
     `comparison assume you start whoever is highest that week, which is what you would actually ` +
-    `do. The rows add up to the total: ${signedText(sumOfRows)} across ${plural(span.length, 'week')}, ` +
-    `printed as ${signedText(priced.delta)} (they differ by at most a rounding tenth a row). ` +
-    `That is ${signedText(priced.delta / (span.length || 1))} a week on average — and the point of ` +
+    `do. <strong>Per week</strong> is the average of the rows, ` +
+    `${signedText(priced.delta / (span.length || 1))}; the rows add up to the total underneath, ` +
+    `${signedText(sumOfRows)} across ${plural(span.length, 'week')}, printed as ` +
+    `${signedText(priced.delta)} (they differ by at most a rounding tenth a row) — and the point of ` +
     `the table is that the average is not the story: the weeks where the difference collapses are ` +
     `byes and soft matchups you already cover, and the weeks where it opens up are the ones the ` +
     `trade is really buying. ` +
@@ -1903,9 +1942,9 @@ function comboTableHtml(rows, from, id) {
     `<th class="left">Deal</th>` +
     `<th class="left">You send</th>` +
     `<th class="left">You get</th>` +
-    `<th>${weeks ? 'Your lineup, all weeks' : 'Your lineup, a week'}</th>` +
-    `<th>${weeks ? `You gain (${esc(weekRange(span))})` : 'You gain, a week'}</th>` +
-    `<th>${weeks ? `He gains (${esc(weekRange(span))})` : 'He gains, a week'}</th>` +
+    `<th>Your lineup, a week</th>` +
+    `<th>${esc(GAIN_HEAD('You gain', weeks, span))}</th>` +
+    `<th>${esc(GAIN_HEAD('He gains', weeks, span))}</th>` +
     `<th class="left">ESPN</th>` +
     `</tr></thead><tbody>` +
     rows.map((o, k) => offerRow(o, from + k, `c:${from + k}`)).join('') +
@@ -1924,12 +1963,11 @@ function comboTableHtml(rows, from, id) {
  */
 function comboBlockHtml(entry, rows, from, id, allIndex, { heading = '', lead = '' } = {}) {
   const span = weeklySpan();
-  const perWeek = entry.delta / (span.length || 1);
   return (
     (heading ? `<h3>${esc(heading)}</h3>` : '') +
     (lead ? `<p>${lead}</p>` : '') +
-    `<div class="combo-head"><span class="big">${signedText(entry.delta)}</span> over ` +
-    `${weekRange(span)} (${signedText(perWeek)} a week) from ` +
+    `<div class="combo-head"><span class="big">${signedText(perWeekOf(entry.delta))}</span> a week ` +
+    `<span class="sub-inline">(${signedText(entry.delta)} total over ${weekRange(span)})</span> from ` +
     `<strong>${plural(entry.count, 'trade')}</strong>` +
     (rows.length && rows.length < entry.count
       ? ` — sent as ${plural(rows.length, 'offer')}, because two of them are with one manager`
@@ -2030,8 +2068,8 @@ function renderCombo() {
   );
 
   const naive =
-    `Adding the offers’ own gains would have given <strong>${signedText(best.naiveDelta)}</strong>. ` +
-    `Together they are actually worth <strong>${signedText(best.delta)}</strong>` +
+    `Adding the offers’ own gains would have given ${weeklyPhrase(best.naiveDelta)}. ` +
+    `Together they are actually worth ${weeklyPhrase(best.delta)}` +
     (best.delta < best.naiveDelta
       ? ` — <em>less</em>, because two upgrades compete for the same lineup places and only the ` +
         `better of them can start.`
@@ -2054,8 +2092,7 @@ function renderCombo() {
             `question from the most points. This packing makes ` +
             `<strong>${plural(most.count, 'trade')}</strong> instead of ` +
             `<strong>${plural(best.count, 'trade')}</strong> and is worth ` +
-            `<strong>${signedText(most.delta)}</strong> rather than ` +
-            `<strong>${signedText(best.delta)}</strong>. More deals, ` +
+            `${weeklyPhrase(most.delta)} rather than ${weeklyPhrase(best.delta)}. More deals, ` +
             (most.delta < best.delta ? 'fewer points' : 'the same points or better') +
             ` — the one above is the one to make.`,
         }) +
@@ -2074,7 +2111,7 @@ function renderCombo() {
       ? `Every manager involved was re-priced on his combined side as well, and a packing any of ` +
         `them would refuse is thrown out: ` +
         partners
-          .map((p) => `${esc(p.partner.name)} ${signedText(p.delta)}`)
+          .map((p) => `${esc(p.partner.name)} ${signedText(perWeekOf(p.delta))}/wk`)
           .join(', ') + '. '
       : '') +
     (best.repeatPartners
@@ -2093,7 +2130,8 @@ function renderCombo() {
         `${combo.considered} of them survive the no-player-twice rule. `
       : `The search was capped at ${combo.considered} combinations, so this is the best of what ` +
         `was tried rather than provably the best of all. `) +
-    `All of it is rest-of-season over ${weekRange(span)}; nothing here is sent to ESPN.`;
+    `Every figure is per week over ${weekRange(span)}, with the rest-of-season total beside it; ` +
+    `nothing here is sent to ESPN.`;
 }
 
 /**

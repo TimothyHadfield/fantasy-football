@@ -210,7 +210,11 @@ These were each established by testing, and several by getting them wrong first.
    rule; it falls out of taking the per-week maximum. `js/trade.js` keeps the
    scalar measures as options and the weekly gains are **rest-of-season
    totals, ~9x a per-week number** — any page showing them must say which
-   scale, or be wrong by a factor of nine and look fine.
+   scale, or be wrong by a factor of nine and look fine. **Tim's display rule
+   (2026-09-16): per week first, the total as the small sub-number** — the
+   Trade page's gains, lineups, combo headline and the pop-up's summary rows
+   all follow it (`weeklyGainHtml` / `weeklyPhrase` in `js/trade-page.js`).
+   The engine and the sort keys stay totals; only the printing divides.
 11. **A combo's gain is not the sum of its trades' gains.** Each offer was
    priced against the current roster, so two deals upgrading the same slot
    overlap. Price the combined move once. `naiveDelta` is kept to show how far

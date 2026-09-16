@@ -246,9 +246,21 @@
   }
   .combo-alt h3 { font-size: 13px; margin: 0 0 6px; }
 
-  /* A rest-of-season number with its per-week twin beside it. The two scales
-     differ by a factor of nine or more, so neither is ever printed alone. */
-  .per { color: var(--dim); font-size: 10.5px; font-weight: 600; margin-left: 5px; }
+  /* PER WEEK ON TOP, the rest-of-season total underneath in small type — Tim's
+     order. The two scales differ by a factor of nine or more, so the unit is
+     always printed and the total is never dropped. */
+  .unit { color: var(--dim); font-size: 0.72em; font-weight: 600; margin-left: 2px; }
+  .sub {
+    display: block;
+    color: var(--dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    margin-top: 1px;
+  }
+  .sub-inline { color: var(--dim); font-size: 11.5px; }
+  table.weeks tbody tr.total.sub-row td {
+    color: var(--dim); font-size: 11.5px; font-weight: 500; border-top: 0;
+  }
 
   /* A finder row opens the deal. */
   #tradeTable tbody tr { cursor: pointer; }

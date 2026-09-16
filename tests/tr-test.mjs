@@ -246,6 +246,11 @@ function readWeekTable(el) {
   return {
     weeks: rows.filter((r) => !r.total),
     totals: rows.filter((r) => r.total),
+    // By LABEL, not position: Tim asked for per week first and the total under
+    // it, and a reader keyed on order silently swaps the two.
+    totalRow: rows.find((r) => r.total && /^All /.test(r.label)) || null,
+    perRow: rows.find((r) => r.total && r.label === 'Per week') || null,
+    perFirst: rows.filter((r) => r.total).map((r) => r.label)[0] === 'Per week',
     heads: [...table.querySelectorAll('thead th')].map(text),
   };
 }
@@ -1253,8 +1258,20 @@ if (!wk.boot) {
     wk.after.cost.button);
 
   // -- THE SCALE IS STATED, which is the trap worth nine times the truth ----
-  ok('the gain column says which weeks it is totalling',
-    /You gain \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
+  ok('the gain column says it is per week, and over which weeks',
+    /You gain a week \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
+  // PER WEEK LEADS, the total follows — Tim, 2026-09-16. The leading number is
+  // re-derived from the row's own total (its sort key) over the demo span.
+  {
+    const n = demoSpan(wk.week).length;
+    const bad = wk.after.trades.filter((t) => {
+      const m = t.gainText.match(/^([+−]?\d+(?:\.\d+)?)\/wk([+−]?\d+(?:\.\d+)?) total$/);
+      return !m || Math.abs(num(m[1]) - t.myGain / n) > 0.051 || Math.abs(num(m[2]) - t.myGain) > 0.051;
+    });
+    ok('every gain leads with per week and carries the total underneath',
+      wk.after.trades.length > 0 && bad.length === 0,
+      bad.slice(0, 2).map((t) => `${t.gainText} (total ${t.myGain})`).join(' | '));
+  }
   ok('the note says these are rest-of-season totals, not weekly figures',
     /rest-of-season total/.test(wk.after.note), wk.after.note.slice(0, 400));
   ok('and every gain carries its per-week twin',
@@ -1319,7 +1336,7 @@ if (!wk.boot) {
     // the total must be the gain the finder's own row claimed. Rounding is a
     // tenth a row and no more.
     const rows = wk.deal.weeks.weeks;
-    const totalRow = wk.deal.weeks.totals[0];
+    const totalRow = wk.deal.weeks.totalRow;
     const sum = rows.reduce((a, r) => a + r.delta, 0);
     ok('the per-week differences sum to the stated total',
       Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
@@ -1331,9 +1348,11 @@ if (!wk.boot) {
       Math.abs(totalRow.delta - wk.after.trades[0].myGain) <= 0.2,
       `deal ${totalRow.delta} vs row ${wk.after.trades[0].myGain}`);
     ok('the per-week average is shown as well as the total',
-      wk.deal.weeks.totals.length === 2 &&
-      Math.abs(wk.deal.weeks.totals[1].delta - totalRow.delta / rows.length) <= 0.06,
+      wk.deal.weeks.totals.length === 2 && wk.deal.weeks.perRow &&
+      Math.abs(wk.deal.weeks.perRow.delta - totalRow.delta / rows.length) <= 0.06,
       JSON.stringify(wk.deal.weeks.totals));
+    ok('and per week comes FIRST, the total under it', wk.deal.weeks.perFirst,
+      JSON.stringify(wk.deal.weeks.totals.map((r) => r.label)));
     ok('and the note says both lineups are picked week by week',
       /best legal lineup .{0,20}in that week/.test(wk.deal.note), wk.deal.note.slice(0, 300));
     ok('the deal names its players with cards too', wk.deal.cards >= 2, `${wk.deal.cards} cards`);
@@ -1375,7 +1394,12 @@ if (!wk.boot) {
   // it with the engine. A combo whose headline was the sum of its trades — the
   // one mistake this section exists to avoid — fails here and nowhere else.
   const priced = await repriceCombo(wk.week, wk.myTeamId, combo.perTrade);
-  const claimed = num(combo.head.split(' ')[0]);
+  const claimed = num((combo.head.match(/\(([+−]\d+(?:\.\d+)?) total over/) || [])[1]);
+  const headPer = num(combo.head.split(' ')[0]);
+  ok('the combo headline leads with the PER-WEEK figure',
+    !!priced && /^[+−]?\d[\d.]* a week/.test(combo.head) &&
+      Math.abs(headPer - priced.delta / demoSpan(wk.week).length) <= 0.06,
+    `${combo.head.slice(0, 80)} vs ${priced && (priced.delta / demoSpan(wk.week).length).toFixed(2)}`);
   ok('the combo headline survives an independent re-pricing of the same move',
     priced && Math.abs(priced.delta - claimed) <= 0.15,
     `page says ${claimed}, a fresh priceTradeAcrossWeeks says ${priced && priced.delta}`);
@@ -1395,7 +1419,9 @@ if (!wk.boot) {
     `${naive.matched} finder offers matched ${combo.rows.length} combo rows`);
   // The trailing full stop is not part of the number, and a regex that eats it
   // hands Number() a NaN that looks like a mismatch.
-  const naiveShown = (combo.body.match(/own gains would have given ([+−]\d+(?:\.\d+)?)/) || [])[1];
+  // Per week first now; the total the finder's gains add up to is in brackets.
+  const naiveShown =
+    (combo.body.match(/own gains would have given [+−]\d+(?:\.\d+)? a week \(([+−]\d+(?:\.\d+)?) over/) || [])[1];
   ok('the naive sum shown is exactly the offers’ own gains added up',
     naiveShown !== undefined && Math.abs(num(naiveShown) - naive.total) <= 0.15,
     `shown ${naiveShown}, the finder's own gains add to ${naive.total.toFixed(1)}`);
@@ -1516,7 +1542,7 @@ if (!md.boot) {
     md.wholeCombo.weeks.heads.join(' | '));
   if (md.wholeCombo.weeks) {
     const rows = md.wholeCombo.weeks.weeks;
-    const totalRow = md.wholeCombo.weeks.totals[0];
+    const totalRow = md.wholeCombo.weeks.totalRow;
     const sum = rows.reduce((a, r) => a + r.delta, 0);
     ok('the combination’s own rows add up to its own total',
       Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
@@ -1737,8 +1763,8 @@ if (!live.boot) {
       const rows = live.deal.weeks.weeks;
       const sum = rows.reduce((a, r) => a + r.delta, 0);
       ok('and its rows sum to its total',
-        Math.abs(sum - live.deal.weeks.totals[0].delta) <= 0.05 * rows.length + 0.051,
-        `${sum} vs ${live.deal.weeks.totals[0].delta}`);
+        Math.abs(sum - live.deal.weeks.totalRow.delta) <= 0.05 * rows.length + 0.051,
+        `${sum} vs ${live.deal.weeks.totalRow.delta}`);
     }
   }
 
