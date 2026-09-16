@@ -11,7 +11,8 @@ Three levels of confidence are used throughout:
   `lm-api-reads.fantasy.espn.com` against public leagues `1241838` (10-team,
   auction, keeper, half-PPR w/ TE premium) and `899513` (10/12-team, TQB league;
   auction in 2025, SNAKE in 2026), seasons 2025 and 2026, plus the league-less
-  player endpoints.
+  player endpoints. §7 adds a second capture on **2026-09-16** across six public
+  leagues — the two above plus `511328`, `643894`, `991817` and `860621`.
 - **CORROBORATED** — matches a well-known open-source wrapper as well.
 - **UNVERIFIED** — could not be observed or confirmed; flagged inline. Do not
   build a hard dependency on these without a fallback.
@@ -731,7 +732,157 @@ Season 2026 returned `"ATL"`, `"WSH"`, `"LAR"`; season 2025 returned `"Atl"`,
 
 ---
 
-## 6. Summary of gotchas that affect live-draft code
+## 7. `members` — the PEOPLE behind the teams
+
+Captured 2026-09-16 against six public leagues: `1241838`, `899513`, `511328`,
+`643894`, `991817`, `860621` (seasons 2025 and 2026 for the first two).
+
+A squad's `teams[i].name` is a joke name people change mid-season. The person is
+in a **separate league-level array**, `raw.members`, joined to a team by SWID.
+
+### 7.1 Where the names are (VERIFIED live)
+
+`raw.members` sits **alongside** `raw.teams`, not inside it. Complete observed
+key set — there are only five keys, and this was identical in all six leagues:
+
+```json
+{
+  "id":            "{3A2C2DB2-7702-429A-8C0E-BC6C84DAA2EF}",
+  "displayName":   "justlikepudge",
+  "firstName":     "Austin",
+  "lastName":      "Binish",
+  "notificationSettings": 15
+}
+```
+
+| What | Path |
+|---|---|
+| SWID (the join key) | `raw.members[j].id` |
+| Real first name | `raw.members[j].firstName` |
+| Real last name | `raw.members[j].lastName` |
+| ESPN handle | `raw.members[j].displayName` |
+
+And on the team side (VERIFIED live, both keys present in every `mTeam`
+response observed):
+
+| What | Path |
+|---|---|
+| All owners of a squad | `raw.teams[i].owners` (array of SWID strings) |
+| The owner ESPN treats as holding it | `raw.teams[i].primaryOwner` (one SWID) |
+
+`notificationSettings` came back as a bare integer (`14` or `15`) in every
+league, not the object some wrappers expect. Ignore it.
+
+### 7.2 THE TRAP: the name fields only exist under `view=mTeam`
+
+**`members` comes back on requests that do not ask for it, but with the name
+fields MISSING.** Same array, same length, same ids, `displayName` populated —
+and no `firstName`/`lastName` at all. So "ESPN withholds real names" is an easy
+and completely wrong conclusion to reach from the wrong view.
+
+Measured on league 1241838, season 2026 (identical in all six leagues, both
+seasons):
+
+| request | `members` | `firstName` populated | `teams[].owners` |
+|---|---|---|---|
+| *(no view at all)* | 10 | **0 of 10** | present |
+| `view=mTeam` | 10 | **10 of 10** | present |
+| `view=mMembers` | 10 | **0 of 10** | **empty arrays** |
+| `view=mRoster` | absent | — | **empty arrays** |
+| `view=mSettings` | **absent** | — | absent |
+| `view=mDraftDetail` | **absent** | — | absent |
+| `view=mRoster&view=mTeam` | 10 | 10 of 10 | present |
+| `view=mMatchupScore&view=mTeam` | 10 | 10 of 10 | present |
+
+Two consequences:
+
+1. **`mMembers` is a decoy.** It is accepted, returns 200, and is strictly worse
+   than `mTeam` — no names *and* it strips the owner arrays off the teams. Do
+   not request it; there is nothing it gives that `mTeam` does not.
+2. **Every existing call site in `js/espn.js` is already correct**, because each
+   one that produces teams pairs its view with `mTeam`: `fetchLeague`
+   (`mSettings`+`mTeam`), `fetchRosters` (`mRoster`+`mTeam`), `fetchMatchups`
+   (`mMatchupScore`+`mTeam`), `testConnection`. `fetchDraft` (`mDraftDetail`
+   alone) returns neither teams nor members, which is why `parseLeague` on it
+   yields `teams: []` and has always been used only for `.draft`.
+
+### 7.3 Coverage — are the names actually there? (VERIFIED live)
+
+Yes, in every account observed. Across the six leagues: **47 of 47 members had
+BOTH `firstName` and `lastName` non-empty**, and 47 of 47 had a `displayName`.
+Not one account withheld a name.
+
+That does **not** make them trustworthy strings. Real values observed include
+`"Andrew" / "L"` (a one-letter surname), `"Bracket man" / "DM"` (junk typed into
+the profile), `"matt" / "westlund"` (lower-case), and
+`"Michael" / "von Schalscha"` (a space inside the surname). Render them; do not
+parse them.
+
+The community claim that `firstName`/`lastName` can be withheld for privacy
+while `displayName` survives was **not reproduced** — it remains plausible and
+is **UNVERIFIED**. Fall back to `displayName`, then to the team name.
+
+### 7.4 Joining teams to members — three things that break a naive version
+
+All VERIFIED live:
+
+1. **`primaryOwner` is not always `owners[0]`.** League 643894, team 9:
+   `owners: ["{0B0FBF46-…}", "{ED823757-…}"]`, `primaryOwner: "{ED823757-…}"` —
+   the second entry. Read `primaryOwner` first and treat `owners` as the rest.
+2. **`members` can be LONGER than `teams`.** League 899513 season 2026 has 11
+   members for 10 teams — a league member who owns no squad. Never index
+   `members[i]` by team position; always join on the SWID.
+3. **A team can have two owners.** 1 of 20 teams in the first capture, 2 of 46
+   overall. No team with more than two was observed, and no team with **zero**
+   owners was observed under `mTeam` — but an abandoned squad plausibly has
+   none, so handle it.
+
+Team ids are also neither contiguous nor 1-based (league 860621 runs
+1, 2, 6, 10, 11, 13, 15, 16, 17, 18, 19, 20), which matters for anything that
+assumes `teams[i].id === i + 1`.
+
+Every owner SWID observed matched a member id exactly, casing included, in all
+six leagues — so an upper-casing normalisation on both sides of the join is
+insurance, not a fix for anything seen.
+
+### 7.5 Where the project does this
+
+`js/espn.js` exports two functions, and **they are the only place name
+resolution lives** — the seven page modules were deliberately not touched:
+
+- `memberNames(raw)` → `Map<SWID, personName>`, keyed upper-case.
+  `firstName + lastName`, falling back to `displayName`, else the member is
+  absent from the map.
+- `teamIdentity(t, names)` → `{ name, teamName, owner, ownerNames }`.
+
+The display rule it implements:
+
+| case | `name` (what every page renders) |
+|---|---|
+| one owner, named | `"Jonas Larson"` |
+| two owners | `"Kyle Perea & Tyler Grovogel"` (primaryOwner first) |
+| three or more | `"A & B +2"` |
+| owner has only a handle | `"albrechtk15"` |
+| no owner / no member / no name | the ESPN team name, unchanged |
+
+`teamName` always carries ESPN's own team name, and `owner` is `null` when
+nothing resolved — so a page can tell "this IS the team name" from "this is a
+person who happens to be called that".
+
+`parseLeague()` and `js/season.js`'s `fetchWeekRosters()` both spread
+`teamIdentity()` into the team object, which is what makes `fetchSchedule()`,
+`fetchSeasonData()` and every page downstream show people with no changes of
+their own. `teams[].owners` is still the raw SWID array — that contract did not
+change.
+
+**This is inert on a payload with no `members`**: every label falls back to the
+team name, which is exactly what the code did before. That is what keeps the
+test stubs in `tests/` and the archived snapshots under `data/snapshots/`
+working. `tests/owner-names.mjs` asserts it.
+
+---
+
+## 8. Summary of gotchas that affect live-draft code
 
 1. **A `sort*` clause is mandatory in `x-fantasy-filter`.** Without one, `limit`
    and `filterStatus` both yield `players: []`. VERIFIED.
@@ -760,3 +911,8 @@ Season 2026 returned `"ATL"`, `"WSH"`, `"LAR"`; season 2025 returned `"Atl"`,
     questionable/doubtful indicator.
 12. **`draftDetail.inProgress === true` during a live draft is UNVERIFIED.**
     Drive the polling loop off `picks.length` and `drafted !== true`.
+13. **Real owner names need `view=mTeam`.** `members` arrives on other requests
+    with `firstName`/`lastName` silently absent, and `view=mMembers` is worse
+    than useless. §7.2.
+14. **`teams[].primaryOwner` is not always `owners[0]`,** `members` can outnumber
+    `teams`, and team ids are neither contiguous nor 1-based. §7.4.

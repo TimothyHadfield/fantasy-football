@@ -272,6 +272,101 @@ export async function fetchByeWeeks() {
   return byes;
 }
 
+// ------------------------------------------------- people, not team names
+//
+// A squad's ESPN `name` is a joke name people change mid-season. The PERSON
+// behind it is in a separate league-level array, `raw.members`, and the join is
+// `teams[i].owners[]` / `teams[i].primaryOwner` -> `members[j].id` (both are
+// SWID strings like `{XXXXXXXX-....}`).
+//
+// Two traps, both established by probing live leagues — see
+// `docs/espn-draft-api.md` §7:
+//
+// 1. **`members[].firstName` / `.lastName` are only populated when the request
+//    asks for `view=mTeam`.** Every other shape — no view at all, or the
+//    plausible-looking `view=mMembers` — returns the same `members` array with
+//    `displayName` present and the name fields MISSING. So "no real names" can
+//    mean "wrong view", not "ESPN withholds them".
+// 2. **`members` can be longer than `teams`** (a league member who owns no
+//    squad), and a team can carry two owners, whose `primaryOwner` is not
+//    necessarily `owners[0]`.
+//
+// Everything here degrades to the team name, so a payload with no members (a
+// bridge read without mTeam, a stub, an old snapshot) behaves exactly as it did
+// before names existed.
+
+/** The person behind one `members[]` entry, or null if ESPN named nobody. */
+function personName(member) {
+  const full = [member?.firstName, member?.lastName]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean)
+    .join(' ');
+  // displayName is the ESPN handle ("justlikepudge"). It is a poor label but a
+  // far better one than a SWID, so it is the last resort before giving up.
+  return full || (member?.displayName || '').trim() || null;
+}
+
+/**
+ * SWID -> person's name, from a league payload's `members` array.
+ *
+ * Keys are upper-cased: ESPN returned matching casing on both sides of the join
+ * in every league observed, but a lookup that silently misses would show a joke
+ * name with no error, so the normalisation is cheap insurance.
+ *
+ * @param {Object} raw a league payload fetched with `view=mTeam`
+ * @returns {Map<string, string>} empty when the payload carries no members
+ */
+export function memberNames(raw) {
+  const out = new Map();
+  for (const m of raw?.members || []) {
+    const name = personName(m);
+    if (m?.id && name) out.set(String(m.id).toUpperCase(), name);
+  }
+  return out;
+}
+
+/** Two co-owners are shown; beyond that the rest are counted, not listed. */
+function joinOwners(names) {
+  if (names.length <= 2) return names.join(' & ');
+  return `${names[0]} & ${names[1]} +${names.length - 2}`;
+}
+
+/**
+ * How a squad should be labelled on every page.
+ *
+ * The person's name is the primary label, because that is what the league calls
+ * each other; the ESPN team name is kept alongside it as `teamName` so a page
+ * can still show the thing he sees inside ESPN.
+ *
+ * @param {Object} t one `raw.teams[]` entry
+ * @param {Map<string,string>} names from `memberNames(raw)`
+ * @returns {{name: string, teamName: string, owner: ?string, ownerNames: string[]}}
+ */
+export function teamIdentity(t, names) {
+  const teamName =
+    (t?.name || `${t?.location || ''} ${t?.nickname || ''}`).trim() || `Team ${t?.id}`;
+
+  // primaryOwner first: in a two-owner squad it was NOT owners[0] (league
+  // 643894, team 9), and the primary owner is the one the league thinks of as
+  // holding the team.
+  const ids = [];
+  for (const id of [t?.primaryOwner, ...(t?.owners || [])]) {
+    const key = id ? String(id).toUpperCase() : '';
+    if (key && !ids.includes(key)) ids.push(key);
+  }
+
+  const ownerNames = ids.map((id) => names.get(id)).filter(Boolean);
+
+  return {
+    // No owner, or an owner ESPN names nobody for, falls back to the team name
+    // — which is exactly what every page showed before this existed.
+    name: ownerNames.length ? joinOwners(ownerNames) : teamName,
+    teamName,
+    owner: ownerNames.length ? joinOwners(ownerNames) : null,
+    ownerNames,
+  };
+}
+
 // ------------------------------------------------------------------ decoding
 
 function statEntry(stats, seasonId, sourceId) {
@@ -348,9 +443,13 @@ export function parseLeague(raw) {
     else starterSlots[id] = count;
   }
 
+  const names = memberNames(raw);
+
   const teams = (raw.teams || []).map((t) => ({
     id: t.id,
-    name: (t.name || `${t.location || ''} ${t.nickname || ''}`).trim() || `Team ${t.id}`,
+    // `name` is the PERSON — see teamIdentity(). The ESPN team name is still
+    // here as `teamName`, and `owners` is still the raw SWID array.
+    ...teamIdentity(t, names),
     abbrev: t.abbrev || '',
     owners: t.owners || [],
     roster: (t.roster?.entries || []).map((e) => ({

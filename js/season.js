@@ -57,6 +57,11 @@ async function inBatches(items, size, fn) {
 export async function fetchWeekRosters(week) {
   const raw = await espn.fetchRosters(week);
   const season = espn.getConfig().season;
+  // Who each squad actually belongs to. `fetchRosters` asks for mRoster+mTeam,
+  // and mTeam is what makes ESPN populate the member name fields — see
+  // `teamIdentity()` in espn.js. A payload without members degrades to the
+  // ESPN team name, which is what this returned before.
+  const names = espn.memberNames(raw);
 
   const teams = (raw.teams || []).map((t) => {
     const players = (t.roster?.entries || []).map((e) => {
@@ -112,7 +117,7 @@ export async function fetchWeekRosters(week) {
 
     return {
       id: t.id,
-      name: (t.name || `${t.location || ''} ${t.nickname || ''}`).trim() || `Team ${t.id}`,
+      ...espn.teamIdentity(t, names),
       abbrev: t.abbrev || '',
       players,
       starters,
@@ -213,7 +218,9 @@ export async function fetchSeasonData({ onProgress } = {}) {
   const raw = await espn.fetchMatchups();
   const parsed = espn.parseLeague(raw);
 
-  const teams = parsed.teams.map((t) => ({ id: t.id, name: t.name }));
+  // `name` is the person; `teamName` is the joke name he sees inside ESPN, kept
+  // alongside so a page can show both without another request.
+  const teams = parsed.teams.map((t) => ({ id: t.id, name: t.name, teamName: t.teamName }));
   const teamIds = new Set(teams.map((t) => t.id));
 
   // Only completed matchups: both sides must have actually scored.
