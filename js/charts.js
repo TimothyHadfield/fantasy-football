@@ -738,11 +738,17 @@ export function histogram(container, opts) {
     for (const hit of hits) {
       const i = hit.getAttribute('data-i');
       const bar = barByIndex[i];
-      hit.addEventListener('pointermove', (evt) => {
+      const enter = (evt) => {
         const p = pointerPos(svg, container, evt);
         if (bar) bar.setAttribute('opacity', '0.8');
         tip.show(bins[+i], [{ color, name: (o.yLabel || 'count'), value: fmt(counts[+i]) }], p.px, p.py);
-      });
+      };
+      hit.addEventListener('pointermove', enter);
+      // A finger produces no `pointermove` before it lands, so on a phone a tap
+      // on a bar did nothing at all and the counts behind this chart were
+      // unreadable. `pointerdown` is what a tap actually is. The line chart
+      // above already listens for both, for the same reason.
+      hit.addEventListener('pointerdown', enter);
       hit.addEventListener('pointerleave', () => {
         if (bar) bar.removeAttribute('opacity');
         tip.hide();
