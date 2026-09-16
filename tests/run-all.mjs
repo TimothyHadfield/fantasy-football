@@ -38,6 +38,7 @@ const SUITES = [
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
+  ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],
 ];
 
 // The dumps are not suites -- they print rendered panels so a refactor can be

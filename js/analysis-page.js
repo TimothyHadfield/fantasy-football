@@ -443,11 +443,71 @@ function seasonRunData(index, p) {
 // The data is registered by gridCell rather than written into the markup:
 // thirteen weeks on 170 cells in each of two grids is tens of kilobytes of
 // duplicated attribute for something read for two seconds.
+//
+// ON A PHONE THERE IS NO HOVER, and this is the one thing on the site that
+// would simply cease to exist rather than merely look cramped: every one of
+// these cells is a bare number, the card is the only place the man's NAME
+// appears, and a tap on the cell followed the link straight off the page. So a
+// touch screen gets the same card as a SHEET — the tap opens it instead of
+// navigating, and the navigation it replaced becomes a button inside it, which
+// is strictly more than the hover offers.
+//
+// The two modes differ in three ways and share everything else:
+//
+//   hover:  floats under the cell, `pointer-events: none`, closes on mouseout.
+//   sheet:  pinned to the bottom of the window, interactive, closes on Escape,
+//           on its own Close, or on a tap anywhere outside it.
+//
+// The mode is decided per event by `coarsePointer()` rather than once at load,
+// so a tablet with a keyboard attached mid-session gets the right one, and a
+// desktop window narrowed to a phone's width keeps its hover card — that is
+// about width, and this is about whether there is a pointer at all.
 
-const TIPS = new Map();   // `${gridId}:${n}` -> { ident, run }
+const TIPS = new Map();   // `${gridId}:${n}` -> { ident, run, href }
 let tipSeq = 0;           // just a counter: see the key note in gridCell
 
 let tipEl = null;
+let tipSheet = false;     // is the card currently open as a tap-opened sheet?
+
+/**
+ * Is the thing pointing at this page a finger?
+ *
+ * Guarded because the test harness has no `matchMedia` at all, and the honest
+ * answer without one is "assume a pointer": that keeps every existing suite
+ * asserting the hover behaviour it was written against, and an environment
+ * with no pointer events cannot be a touch screen anyway.
+ */
+function coarsePointer() {
+  try {
+    return typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Did this click land on a PLAYER, or on the team's row around him?
+ *
+ * Both grids are one clickable row per team — clicking one drills into it
+ * below — with a cell per player inside. Every click therefore belongs to
+ * exactly one of the two, and something has to decide which.
+ *
+ * With a mouse the LINK decides: a number is an `<a class="pref">`, it is
+ * followed, and the row lets it through. A finger has no link to decide with —
+ * the tap opens the card instead of navigating — and a man ESPN gave no
+ * playerId for has no `<a>` in his cell AT ALL, so on a touch screen the
+ * question has to be asked of the cell rather than of what happens to be
+ * inside it. That gap was a real defect: a tap on such a cell opened his card
+ * AND silently re-pointed the three panels below at a team nobody picked.
+ *
+ * Shared by the row handler and read in the same terms by wireTips, so the two
+ * cannot come to different answers about one click.
+ */
+function clickIsPlayer(e) {
+  if (!e.target || !e.target.closest) return false;
+  if (e.target.closest('a.pref')) return true;
+  return coarsePointer() && !!e.target.closest('td[data-tip]');
+}
 
 function tipCard() {
   if (tipEl) return tipEl;
@@ -460,13 +520,32 @@ function tipCard() {
   return tipEl;
 }
 
+/**
+ * The footer a SHEET gets and a hover card does not.
+ *
+ * On a phone the tap that opened this card is the tap that used to follow the
+ * link, so the link has to come back somewhere — here, as a real `<a href>` so
+ * it is still the site's one player-link contract and still opens in a new tab
+ * from a long-press. The Close button is beside it because a sheet that can
+ * only be dismissed by guessing where "outside" is is a trap.
+ */
+function tipActions(href) {
+  if (!tipSheet) return '';
+  const open = href
+    ? `<a class="tc-open" href="${esc(href)}">His next 13 weeks &rarr;</a>`
+    : '<span class="tc-open tc-open-off">ESPN gives this man no id to look up</span>';
+  return `<div class="tc-actions">${open}<button type="button" class="tc-close">Close</button></div>`;
+}
+
 /** The two-row chart: week numbers over their own projections. */
-function tipHtml({ ident, run }) {
+function tipHtml({ ident, run, href }) {
   const head = `<div class="tc-ident">${esc(ident)}</div>`;
-  if (!run) return head;
+  if (!run) return `${head}${tipActions(href)}`;
 
   const sub = `<div class="tc-head">${esc(run.heading)}</div>`;
-  if (run.pending) return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>`;
+  if (run.pending) {
+    return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>${tipActions(href)}`;
+  }
 
   // A real table, so the two rows share one set of column widths and the
   // numbers sit under their own week whatever is in them.
@@ -484,21 +563,41 @@ function tipHtml({ ident, run }) {
     `<div class="tc-scroll"><table class="tc-run">` +
     `<thead><tr><th class="tc-lbl" scope="row">Week</th>${weeks}</tr></thead>` +
     `<tbody><tr><th class="tc-lbl" scope="row">Proj</th>${vals}</tr></tbody>` +
-    `</table></div>${legend}`
+    `</table></div>${legend}${tipActions(href)}`
   );
 }
 
-function showTip(cell) {
+/**
+ * @param {Element} cell
+ * @param {boolean} sheet  open it as a tap-opened sheet rather than a hover card
+ */
+function showTip(cell, sheet = false) {
   const data = TIPS.get(cell.dataset.tip);
   if (!data) return;
   const el = tipCard();
+  tipSheet = sheet;                       // read by tipHtml, so set it first
   el.innerHTML = tipHtml(data);
+  el.classList.toggle('sheet', sheet);
+  // A hover card is a tooltip; a thing you opened, can read and must dismiss is
+  // a dialog, and the difference is what a screen reader announces.
+  el.setAttribute('role', sheet ? 'dialog' : 'tooltip');
   el.hidden = false;
-  placeTip(cell);
+  // A sheet is pinned to the foot of the window by CSS and needs no measuring —
+  // which is also what makes it reliable on a screen where the cell it came
+  // from may be most of the viewport wide. The inline top/left are cleared
+  // rather than overridden: on a touchscreen laptop a hover can have placed the
+  // card already, and an inline style beats any class rule that follows it.
+  if (sheet) {
+    el.style.top = '';
+    el.style.left = '';
+  } else {
+    placeTip(cell);
+  }
 }
 
 function hideTip() {
   if (tipEl) tipEl.hidden = true;
+  tipSheet = false;
 }
 
 /**
@@ -534,18 +633,37 @@ function placeTip(cell) {
 }
 
 /**
- * One delegated pair per grid. `mouseover`/`mouseout` rather than enter/leave
+ * One delegated set per grid. `mouseover`/`mouseout` rather than enter/leave
  * because only these bubble, and the cell is found with closest() so moving
  * between the number and its link inside one cell is not a leave.
+ *
+ * The `click` handler is the touch half, and it does three things in order that
+ * all matter:
+ *
+ *   1. It only acts on a coarse pointer. A mouse click on one of these cells
+ *      must still follow the link, which is what every other page's click does
+ *      and what `link-check.mjs` follows.
+ *   2. It leaves every MODIFIED click alone — ctrl/cmd/shift/middle — so
+ *      open-in-new-tab keeps working on a tablet with a keyboard.
+ *   3. It stops the event before it reaches the document, where the handler
+ *      that closes a sheet on an outside tap is waiting — the tap that OPENED
+ *      it is not an outside tap, and without this the sheet would be dismissed
+ *      by the gesture that asked for it.
+ *
+ * What it does NOT do is keep the row underneath from drilling into the team:
+ * that handler is on this same element and registered first, so it has already
+ * run by the time anything here could stop it. `clickIsPlayer` is where that is
+ * settled, by both sides asking the same question.
  */
 function wireTips(table) {
   const cellOf = (e) => (e.target.closest ? e.target.closest('td[data-tip]') : null);
 
   table.addEventListener('mouseover', (e) => {
     const cell = cellOf(e);
-    if (cell) showTip(cell);
+    if (cell && !tipSheet) showTip(cell);
   });
   table.addEventListener('mouseout', (e) => {
+    if (tipSheet) return;   // a sheet is dismissed deliberately, never by drift
     const cell = cellOf(e);
     // Still inside the same cell — moving onto the link within it — is not a
     // leave, and treating it as one is what makes a card flicker.
@@ -554,15 +672,39 @@ function wireTips(table) {
   });
   table.addEventListener('focusin', (e) => {
     const cell = cellOf(e);
-    if (cell) showTip(cell);
+    if (cell && !tipSheet) showTip(cell);
   });
   table.addEventListener('focusout', (e) => {
-    if (cellOf(e)) hideTip();
+    if (cellOf(e) && !tipSheet) hideTip();
+  });
+
+  table.addEventListener('click', (e) => {
+    if (!coarsePointer()) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+    const cell = cellOf(e);
+    if (!cell) return;
+    e.preventDefault();
+    e.stopPropagation();
+    showTip(cell, true);
   });
 }
 
+/**
+ * Dismissing a sheet. Three ways, because a sheet that can only be closed one
+ * way is a sheet somebody gets stuck under: its own Close button, Escape, and
+ * a tap anywhere outside it. The cell taps that OPEN one call stopPropagation,
+ * so the outside-tap handler never sees the tap that arrived a moment ago.
+ */
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') hideTip();
+});
+
+document.addEventListener('click', (e) => {
+  if (!tipSheet || !tipEl || tipEl.hidden) return;
+  const inside = typeof tipEl.contains === 'function' && tipEl.contains(e.target);
+  // Inside, but on the Close button, or anywhere outside: gone. The link is the
+  // one thing inside that is left to do its own job.
+  if (!inside || (e.target.closest && e.target.closest('.tc-close'))) hideTip();
 });
 
 /**
@@ -619,8 +761,18 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
   // that quietly cost the hover to every man ESPN gave no id for — the card
   // does not depend on the link and must not start to. A counter is unique by
   // construction and needs nothing from the data.
+  // `href` is only read when the card opens as a tap-opened sheet, where it
+  // becomes the button that replaces the navigation the tap preempted. Built
+  // from the same playerId and the same one contract as playerRef below —
+  // never a second way of naming a player — and `null` for a man ESPN gave no
+  // id for, which is the case the sheet says out loud rather than offering a
+  // link that goes nowhere.
   const key = `${tipKey || 'g'}:${tipSeq++}`;
-  TIPS.set(key, { ident, run: seasonRunData(index, p) });
+  const href =
+    p.playerId === null || p.playerId === undefined
+      ? null
+      : `waivers.html?player=${encodeURIComponent(p.playerId)}`;
+  TIPS.set(key, { ident, run: seasonRunData(index, p), href });
 
   const shown = v === null ? '—' : bye ? 'Bye' : fmt(v);
 
@@ -2230,7 +2382,7 @@ for (const grid of GRIDS) {
     // would leave for the Players page while this page quietly re-pointed the
     // three panels below at a team he never picked, and find them changed when
     // he came back. The link wins, and the drill-down is left alone.
-    if (e.target.closest('a.pref')) return;
+    if (clickIsPlayer(e)) return;
     const tr = e.target.closest('tr[data-team]');
     if (tr) selectTeam(Number(tr.dataset.team));
   });
