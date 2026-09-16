@@ -266,6 +266,83 @@ export function makeNormal(rng) {
   };
 }
 
+// ------------------------------------------------------------ playoff bracket
+//
+// The regular season decides an ORDER. The title is decided by a knockout on
+// top of it, and the two are different questions — a team can top the table in
+// four seasons out of ten and lift the trophy in one, because three one-week
+// games are three coin flips with a thumb on the scale.
+//
+// The shape is read from the league where it can be. These are the fallbacks,
+// and they are Tim's league's own ESPN settings (league 476225250, pasted from
+// ESPN's Basic Settings page on 2026-09-16):
+//
+//     Playoff Teams: 6          Allow for Playoff Bracket Reseeding: Off
+//     Weeks In Round 1 / Round 2 / Championship Round: 1 each
+//     Playoff Seeding Tie Breaker: Total Points For
+//     Playoff Home Field Advantage: None
+//
+// ESPN publishes all of this under `settings.scheduleSettings` as
+// `playoffTeamCount`, `playoffMatchupPeriodLength` and `playoffReseed`
+// (confirmed by probing public leagues 1241838 and 899513 on 2026-09-16 —
+// 1241838 returns exactly 6 / 1 / false, 899513 returns 4 / 1 / false). Callers
+// that can read those should pass them; a caller that cannot gets these
+// numbers and must say on screen that it assumed them.
+//
+// CONSOLATION IS DELIBERATELY NOT MODELLED. The league runs a consolation
+// ladder and Tim's rule is explicit: the wooden spoon is last in the REGULAR
+// season, not last in the consolation bracket, and no game outside the
+// championship bracket needs playing out. So the only knockout games simulated
+// are the ones that can still produce a champion.
+
+/** Tim's league, and the fallback when a league's own settings cannot be read. */
+export const DEFAULT_PLAYOFF_TEAMS = 6;
+
+/**
+ * The first-round seed order of a standard single-elimination bracket.
+ *
+ * Built by repeated reflection: [1] -> [1,2] -> [1,4,2,3] -> [1,8,4,5,2,7,3,6].
+ * Read in pairs, that last one is 1v8, 4v5, 2v7, 3v6 — which is the bracket
+ * everybody draws, with 1 and 2 landing in opposite halves so they can only
+ * meet in the final.
+ *
+ * A field that is not a power of two is padded up to one, and the padding seeds
+ * are PHANTOMS: a real seed drawn against a phantom has a bye. Six teams pad to
+ * eight, so seeds 7 and 8 are phantoms and seeds 1 and 2 skip round one —
+ * exactly the two byes ESPN's six-team bracket gives. Four teams pad to four
+ * and nobody gets a bye. So "how many byes" is not a separate setting to get
+ * wrong; it falls out of the field size.
+ *
+ * @param {number} fieldSize how many teams make the playoffs
+ * @returns {number[]} seed numbers in bracket order, length a power of two
+ */
+export function bracketSeeds(fieldSize) {
+  const k = Math.max(2, Math.floor(fieldSize) || 0);
+  let size = 2;
+  while (size < k) size *= 2;
+
+  let order = [1];
+  while (order.length < size) {
+    const n = order.length * 2;
+    const next = [];
+    for (const s of order) next.push(s, n + 1 - s);
+    order = next;
+  }
+  return order;
+}
+
+/**
+ * How many rounds a field of this size needs.
+ *
+ * Derived, not configured. ESPN's settings page lists three round lengths for
+ * a six-team bracket ("Round 1", "Round 2", "Championship"), which is the same
+ * three log2(8) gives — so reading the count off the field size cannot drift
+ * out of step with the field size the way a second setting could.
+ */
+export function playoffRoundCount(fieldSize) {
+  return Math.round(Math.log2(bracketSeeds(fieldSize).length));
+}
+
 /**
  * Play the rest of the season many times and count where everyone finishes.
  *
@@ -277,6 +354,24 @@ export function makeNormal(rng) {
  * tie on total points. Ranking on wins alone would invent ties that the real
  * standings would have separated.
  *
+ * WHY AN EXACT REGULAR-SEASON TIE NEVER HAPPENS HERE, and why that is correct.
+ * The league's setting is `Matchup Tie Breaker: No tie breakers`, so a tied
+ * regular-season game really is a tie and really does go down as half a win
+ * each. The model gives it probability zero: two scores drawn from a continuous
+ * distribution are equal only on a set of measure zero, and in floating point
+ * only on a coincidence of the last bits. That is not an oversight — a fantasy
+ * score is quantised to a tenth of a point in real life, so real ties happen at
+ * something like one game in a few hundred, which moves a season win total by
+ * well under the counting noise of even 100,000 runs. The half-win branch below
+ * is kept anyway so the rule is written down rather than merely improbable.
+ *
+ * A PLAYOFF tie cannot stand, because somebody has to advance. ESPN's own rule
+ * is that the higher seed advances (support.espn.com, "Playoff Tiebreakers":
+ * "The higher-seeded team advances", the default in both standard and League
+ * Manager leagues). That is what `playoffs()` does. It is established rather
+ * than assumed, and like the regular-season case it is a branch that will
+ * essentially never be taken.
+ *
  * @param {Object}   o
  * @param {number[]} o.teamIds
  * @param {Map}      o.banked      teamId -> {wins, pointsFor} already decided
@@ -284,9 +379,15 @@ export function makeNormal(rng) {
  * @param {number}   o.sigma
  * @param {number}   [o.runs=10000]
  * @param {number}   [o.seed=1]
+ * @param {Object}   [o.playoff]   null/omitted = no bracket, exactly as before.
+ *   `{teams, weeks, proj}` — how many qualify, which scoring weeks the rounds
+ *   fall in (one per round, longest-first order), and week -> Map(teamId ->
+ *   projected points) for those weeks when ESPN published them.
  * @returns {Object|null}
  */
-export function simulateSeason({ teamIds, banked, games, sigma, runs = 10000, seed = 1 }) {
+export function simulateSeason({
+  teamIds, banked, games, sigma, runs = 10000, seed = 1, playoff = null,
+}) {
   const ids = (teamIds || []).slice();
   const n = ids.length;
   if (!n || !Number.isFinite(sigma) || sigma <= 0) return null;
@@ -326,12 +427,43 @@ export function simulateSeason({ teamIds, banked, games, sigma, runs = 10000, se
   const rng = makeRng(seed);
   const normal = makeNormal(rng);
 
+  // ---- the bracket, prepared once rather than per run ----------------------
+  //
+  // Everything here is a fact about the LEAGUE, not about one simulated season:
+  // who plays whom in round one is fixed by seed, and only WHICH team holds
+  // each seed changes run to run. So it is built once and indexed by seed
+  // inside the loop.
+  const bracket = playoff ? prepareBracket({
+    ids, playoff, home, away, homeProj, awayProj,
+  }) : null;
+
   // placeCounts[team][place], place 0 = first.
   const placeCounts = Array.from({ length: n }, () => new Float64Array(n));
   const winTotals = new Float64Array(n);
   const wins = new Float64Array(n);
   const pf = new Float64Array(n);
   const order = Array.from({ length: n }, (_, i) => i);
+
+  // Bracket counters. seedCounts[team][seed-1] is how often that team took that
+  // seed, which is what makes "seeds are computed per simulated season" a
+  // testable claim rather than a promise.
+  const titleCounts = bracket ? new Float64Array(n) : null;
+  const madeCounts = bracket ? new Float64Array(n) : null;
+  const byeCounts = bracket ? new Float64Array(n) : null;
+  const finalCounts = bracket ? new Float64Array(n) : null;
+  const seedCounts = bracket ? Array.from({ length: n }, () => new Float64Array(n)) : null;
+  // Scratch, reused every run so a 100,000-run loop allocates nothing.
+  const alive = bracket ? new Int32Array(bracket.size) : null;
+  const seedOfTeam = bracket ? new Int32Array(n) : null;
+
+  // THE KNOCKOUT DRAWS FROM ITS OWN STREAM, and that is not fussiness. Sharing
+  // the league's generator would mean every playoff game shifted the regular
+  // season of the NEXT simulated year along by a couple of draws — so asking
+  // for a bracket would quietly change the standings numbers beside it, and
+  // switching the field size from six to four would move "expected wins" for
+  // no reason a reader could ever guess at. Two streams, one seed: still
+  // completely deterministic, and the two halves cannot contaminate each other.
+  const poNormal = bracket ? makeNormal(makeRng((seed ^ 0x9e3779b9) >>> 0)) : null;
 
   for (let r = 0; r < runCount; r++) {
     wins.set(baseWins);
@@ -350,10 +482,67 @@ export function simulateSeason({ teamIds, banked, games, sigma, runs = 10000, se
     }
 
     for (let i = 0; i < n; i++) order[i] = i;
-    // Wins first, then points scored — the league's own rule.
+    // Wins first, then points scored — the league's own rule. This is also the
+    // PLAYOFF SEEDING rule (ESPN: "Playoff Seeding Tie Breaker: Total Points
+    // For"), so the seeds below are this same order read from the top, not a
+    // second notion of who finished above whom.
     order.sort((x, y) => (wins[y] - wins[x]) || (pf[y] - pf[x]));
     for (let place = 0; place < n; place++) placeCounts[order[place]][place] += 1;
     for (let i = 0; i < n; i++) winTotals[i] += wins[i];
+
+    // ---- and then the knockout ---------------------------------------------
+    // Seeds are taken from THIS season's standings, not from today's, which is
+    // the whole reason the bracket has to live inside the loop.
+    if (bracket) {
+      const K = bracket.field;
+      for (let s = 0; s < K; s++) {
+        const team = order[s];
+        seedOfTeam[team] = s;                 // 0-based: seed 1 is index 0
+        seedCounts[team][s] += 1;
+        madeCounts[team] += 1;
+      }
+      // alive[i] holds the team sitting in bracket position i, or -1 for a
+      // phantom seed (the padding that turns a six-team field into an
+      // eight-slot bracket, and so hands seeds 1 and 2 their byes).
+      for (let i = 0; i < bracket.size; i++) {
+        const seat = bracket.order[i] - 1;    // seed number -> 0-based seed
+        alive[i] = seat < K ? order[seat] : -1;
+      }
+
+      let width = bracket.size;
+      for (let round = 0; round < bracket.rounds; round++) {
+        const mean = bracket.roundMean[round];
+        // Whoever is still standing when two are left IS the pair contesting
+        // the championship round. Counted here rather than after the round, so
+        // a two-team bracket (which has no earlier round) still has finalists.
+        if (width === 2) {
+          if (alive[0] >= 0) finalCounts[alive[0]] += 1;
+          if (alive[1] >= 0) finalCounts[alive[1]] += 1;
+        }
+        for (let i = 0; i < width; i += 2) {
+          const a = alive[i];
+          const b = alive[i + 1];
+          let winner;
+          if (a < 0) winner = b;
+          else if (b < 0) {
+            winner = a;
+            // A real team drawn against a phantom has a first-round bye. Only
+            // round 0 can produce one — every later round's phantoms have
+            // already been walked over.
+            if (round === 0) byeCounts[a] += 1;
+          } else {
+            const sa = mean[a] + sigma * poNormal();
+            const sb = mean[b] + sigma * poNormal();
+            // Higher seed on an exact tie — ESPN's own rule. seedOfTeam is
+            // 0-based, so the SMALLER number is the better seed.
+            winner = sa > sb ? a : sb > sa ? b : (seedOfTeam[a] < seedOfTeam[b] ? a : b);
+          }
+          alive[i >> 1] = winner;
+        }
+        width >>= 1;
+      }
+      if (alive[0] >= 0) titleCounts[alive[0]] += 1;
+    }
   }
 
   const teams = ids.map((id, i) => {
@@ -370,17 +559,156 @@ export function simulateSeason({ teamIds, banked, games, sigma, runs = 10000, se
       places,                          // index 0 = chance of finishing first
       meanPlace,
       modePlace: best + 1,
+      // FIRST IN THE TABLE, which is not the title. See `pTitle`.
       pFirst: places[0],
+      // LAST IN THE REGULAR-SEASON TABLE. Tim's rule, in his own words: "we
+      // mark the loser as the person in last place by the end of the regular
+      // season, not the playoffs". So this is deliberately untouched by the
+      // bracket and owes nothing to the consolation ladder.
       pLast: places[n - 1],
       meanWins: winTotals[i] / runCount,
+      // Bracket outcomes. All null when no bracket was asked for, so a caller
+      // that does not want playoffs sees exactly what it always saw.
+      pTitle: bracket ? titleCounts[i] / runCount : null,
+      pPlayoffs: bracket ? madeCounts[i] / runCount : null,
+      pBye: bracket ? byeCounts[i] / runCount : null,
+      pFinal: bracket ? finalCounts[i] / runCount : null,
+      // index 0 = chance of being the 1 seed. Only the first `field` entries
+      // can be non-zero; the rest exist so the array lines up with `places`.
+      seeds: bracket ? Array.from(seedCounts[i], (c) => c / runCount) : null,
     };
   });
 
   const byMean = teams.slice().sort((a, b) => a.meanPlace - b.meanPlace);
-  const champion = teams.slice().sort((a, b) => b.pFirst - a.pFirst)[0];
+  // DELIBERATELY NOT CALLED `champion`. It used to be, and that was the
+  // confusion this whole pass exists to remove: topping the table is not
+  // winning the league. The champion is `titleFavourite`.
+  const tableWinner = teams.slice().sort((a, b) => b.pFirst - a.pFirst)[0];
   const wooden = teams.slice().sort((a, b) => b.pLast - a.pLast)[0];
+  const titleFavourite = bracket
+    ? teams.slice().sort((a, b) => b.pTitle - a.pTitle)[0]
+    : null;
 
-  return { runs: runCount, games: gameCount, skipped, teams, byMean, champion, wooden, sigma };
+  return {
+    runs: runCount,
+    games: gameCount,
+    skipped,
+    teams,
+    byMean,
+    tableWinner,
+    wooden,
+    titleFavourite,
+    // Everything the page has to be able to say out loud about the bracket it
+    // just played — including, when ESPN had no projection for a playoff week,
+    // that the week was modelled rather than projected.
+    playoff: bracket ? bracket.meta : null,
+    sigma,
+  };
+}
+
+/**
+ * Work out the bracket once: its shape, and what each side is expected to score
+ * in each round.
+ *
+ * THE PROJECTION HORIZON, which is the thing most likely to be wrong here.
+ * ESPN publishes a per-player projection for every future week, and — probed on
+ * 2026-09-16 against public leagues 1241838 and 899513 — that really does reach
+ * the playoff weeks: weeks 15, 16 and 17 came back with a projection for
+ * 100% of rostered players, and the numbers are genuinely per-week rather than
+ * one figure repeated (only 1 player in 174 carried the same value across all
+ * three, the same rate as any adjacent pair of regular-season weeks). So the
+ * good case is the normal case: a playoff round uses ESPN's own number for the
+ * week it falls in, exactly as a regular-season week does.
+ *
+ * When a week is missing anyway — the demo season has no roster endpoint, an
+ * archived reading predates this feature, ESPN refuses a week — the round falls
+ * back to the team's own mean projection over its remaining regular-season
+ * games, with the same sigma around it. That is a weaker number and the caller
+ * is told so in `meta.roundBasis` so it can say so on screen. It must never be
+ * passed off as ESPN's.
+ */
+function prepareBracket({ ids, playoff, home, away, homeProj, awayProj }) {
+  const n = ids.length;
+  const field = Math.max(2, Math.min(n, Math.floor(playoff.teams) || 0));
+  const order = bracketSeeds(field);
+  const size = order.length;
+  const rounds = Math.round(Math.log2(size));
+
+  // The fallback mean: what this team is projected to score in a typical week
+  // still to come. Built from the same remaining-game projections the regular
+  // season is simulated from, so a modelled playoff week and a projected one
+  // are at least on the same scale.
+  const total = new Float64Array(n);
+  const count = new Float64Array(n);
+  for (let g = 0; g < home.length; g++) {
+    total[home[g]] += homeProj[g]; count[home[g]] += 1;
+    total[away[g]] += awayProj[g]; count[away[g]] += 1;
+  }
+  const fallback = new Float64Array(n);
+  let known = 0;
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    if (count[i] > 0) { fallback[i] = total[i] / count[i]; known++; sum += fallback[i]; }
+  }
+  // A team with no remaining games at all (rare: a bye-heavy fixture list, or a
+  // season simulated from its final week) gets the league's own average rather
+  // than a zero, because a zero would quietly guarantee it loses every playoff
+  // game it reached.
+  const leagueMean = known ? sum / known : 0;
+  for (let i = 0; i < n; i++) if (count[i] === 0) fallback[i] = leagueMean;
+
+  const weeks = Array.isArray(playoff.weeks) ? playoff.weeks.slice(0, rounds) : [];
+  const roundMean = [];
+  const roundBasis = [];
+  for (let r = 0; r < rounds; r++) {
+    const week = weeks[r];
+    const forWeek = week != null ? playoff.proj?.get?.(week) : null;
+    const mean = new Float64Array(n);
+    let covered = 0;
+    if (forWeek) {
+      for (let i = 0; i < n; i++) {
+        const v = forWeek.get(ids[i]);
+        if (Number.isFinite(v) && v > 0) { mean[i] = v; covered++; }
+      }
+    }
+    // All or nothing per round. Half a round of real projections against half a
+    // round of averages would put two teams on different footings in the same
+    // game, which is worse than putting both on the weaker one.
+    if (covered === n) {
+      roundMean.push(mean);
+      roundBasis.push('projected');
+    } else {
+      roundMean.push(fallback);
+      roundBasis.push('modelled');
+    }
+  }
+
+  const projectedRounds = roundBasis.filter((b) => b === 'projected').length;
+
+  // A round that has to fall back needs something to fall back TO. With no
+  // remaining regular-season game carrying a projection there is no such
+  // number, and every side would be drawn around the same zero — a title
+  // decided purely by noise, which is worse than no title at all. A bracket
+  // whose every round is projected does not need the fallback and is built
+  // regardless: a season decided down to its last week still has playoffs.
+  if (projectedRounds < rounds && !known) return null;
+
+  return {
+    field, order, size, rounds, roundMean,
+    meta: {
+      teams: field,
+      rounds,
+      byes: size - field,          // seeds 1..(size-field) skip round one
+      weeks: weeks.slice(0, rounds),
+      roundBasis,
+      basis: projectedRounds === rounds ? 'projected'
+        : projectedRounds === 0 ? 'modelled'
+        : 'mixed',
+      reseed: false,               // ESPN: "Allow for Playoff Bracket Reseeding: Off"
+      seedingTiebreak: 'points for',
+      tieRule: 'higher seed advances',
+    },
+  };
 }
 
 /**

@@ -25,18 +25,46 @@ const prefs = scope('schedule');
 /**
  * Run counts the simulation panel offers, and the seed it always uses.
  *
- * Measured on a 10-team, ~60-game season: 1,000 runs ≈ 15ms, 10,000 ≈ 120ms,
- * 50,000 ≈ 580ms. The default is the middle one — fast enough not to be worth
- * a spinner, and precise enough that the counting noise (see simNote) is under
- * a percentage point.
+ * Measured on a 10-team, ~60-game season WITH the three-round playoff bracket
+ * on top (2026-09-16, node 24): 1,000 runs ≈ 26ms, 10,000 ≈ 160ms,
+ * 50,000 ≈ 880ms, 100,000 ≈ 1.4s. The bracket itself is nearly free — five more
+ * games on top of about sixty — so those are barely above the same run counts
+ * without it. The default is still 10,000: fast enough not to be worth a
+ * spinner, and precise enough that the counting noise (see simNote) is under a
+ * percentage point.
+ *
+ * 100,000 is offered because Tim asked for it for a summary elsewhere, and it
+ * is well over a second of straight-line arithmetic — which is exactly why
+ * runSimulation() hands off through rAF + setTimeout instead of running inline.
  *
  * The seed is fixed rather than random. Flicking to another team and back, or
  * reloading, must not quietly hand you different odds for the same season:
  * numbers that move on their own read as noise even when they are not.
  */
-const SIM_RUNS = [1000, 10000, 50000];
+const SIM_RUNS = [1000, 10000, 50000, 100000];
 const SIM_SEED = 20260901;
 const SIM_RUN_CHOICE = (v) => (SIM_RUNS.includes(Number(v)) ? Number(v) : 10000);
+
+/**
+ * How many teams make the playoffs. ONE named constant, deliberately.
+ *
+ * Tim's ESPN settings say `Playoff Teams: 6`; his prose alongside them said
+ * four. The settings win — but the two disagreeing is exactly why this is a
+ * single line rather than a number sprinkled through the bracket code, and why
+ * the panel states the field size on screen. Change this to 4 and the bracket,
+ * the byes, the round count, the column headers and the note all follow; a
+ * wrong value shows up in the first sentence under the table rather than hiding
+ * in the arithmetic.
+ *
+ * It is a FALLBACK. `js/season.js` does not surface ESPN's own
+ * `settings.scheduleSettings.playoffTeamCount` (it exists — probed 2026-09-16,
+ * league 1241838 returns 6 and 899513 returns 4 — but nothing on the path this
+ * page uses decodes it, and espn.js is not this feature's to change). So the
+ * page assumes this number and SAYS it assumed it. If season.js ever exposes
+ * the setting, read it here and the note below will start saying "read from
+ * your league" on its own.
+ */
+const PLAYOFF_TEAMS = forecast.DEFAULT_PLAYOFF_TEAMS;   // 6, from Tim's settings
 
 const state = {
   source: prefs.get('source', 'demo'),
@@ -749,22 +777,68 @@ function buildProjection(weekTeams) {
     : `${plural(starters, 'starter')} assumed — this league’s own lineup settings could not be read`;
 
   const got = built.weeks;
+
+  // The playoff weeks ride along in the same map — which is how a snapshot gets
+  // them for free, since js/snapshots.js stores whatever weeks `proj` holds —
+  // but they are NOT part of the strength figure and must not be described as
+  // though they were. `reach` is the regular season only; the bracket weeks get
+  // their own sentence, because "weeks 2 to 17" on a 14-week season reads like
+  // a bug.
+  const lastRegular = regularSeasonLastWeek();
+  const regular = got.filter((w) => w <= lastRegular);
+  const bracketWeeks = got.filter((w) => w > lastRegular);
+  const span = regular.length ? regular : got;
   const reach =
-    got.length > 1 ? `weeks ${got[0]} to ${got[got.length - 1]}` : `week ${got[0]}`;
+    span.length > 1 ? `weeks ${span[0]} to ${span[span.length - 1]}` : `week ${span[0]}`;
+  const bracketNote = bracketWeeks.length
+    ? ` The playoff weeks (${bracketWeeks.join(', ')}) are read the same way and ` +
+      `used only by the simulation below — they are not on ESPN’s schedule, which ` +
+      `stops at week ${lastRegular}, so they are asked for by number.`
+    : '';
 
   return {
     proj,
     slots,
     strength,
     weeksCovered: got,
+    playoffWeeksCovered: bracketWeeks,
     note:
       `Strength is ESPN’s own projection for each week (${reach}), with the best ` +
       `legal lineup filled rather than the one currently set (${slotSource}) — ` +
       `the same total the ESPN site shows under a lineup paged forward to that ` +
       `week, except that a bench player projected above a starter is counted as ` +
       `starting. Players on bye come back at zero from ESPN, so they sit down on ` +
-      `their own.`,
+      `their own.${bracketNote}`,
   };
+}
+
+// ------------------------------------------------------------ playoff weeks
+//
+// THE SCHEDULE IS THE SOURCE OF TRUTH for where the regular season ends. ESPN's
+// matchup feed carries exactly `matchupPeriodCount` weeks and nothing after it
+// (verified 2026-09-16 against public leagues 1241838 — 14 weeks — and 899513 —
+// 15), so the last week on the schedule IS the last regular-season week, in
+// every league, without reading a setting. The demo season is 13 weeks and gets
+// the same treatment; that is the point of deriving it rather than writing 14
+// down somewhere.
+//
+// The number of ROUNDS follows from PLAYOFF_TEAMS, not from a second setting —
+// see playoffRoundCount() in forecast.js. Six teams is a three-round bracket in
+// weeks 15, 16 and 17 of Tim's league, which is exactly what his ESPN settings
+// list as Round 1 / Round 2 / Championship at one week each.
+
+/** The last week of the regular season, read off the schedule. */
+function regularSeasonLastWeek() {
+  const w = state.data?.weeks || [];
+  return w.length ? w[w.length - 1] : 0;
+}
+
+/** The scoring weeks the bracket falls in, one per round, earliest first. */
+function playoffWeeks() {
+  const last = regularSeasonLastWeek();
+  if (!last) return [];
+  const rounds = forecast.playoffRoundCount(PLAYOFF_TEAMS);
+  return Array.from({ length: rounds }, (_, i) => last + 1 + i);
 }
 
 // -------------------------------------------------------------------- strength
@@ -837,9 +911,24 @@ async function refreshStrength() {
     );
     const weeks = wanted.length ? wanted : [currentWeek()];
 
+    // The playoff weeks are fetched too, and they are NOT on the schedule —
+    // ESPN's matchup feed stops at the last regular-season week and only fills
+    // the bracket in once it exists (checked 2026-09-16: league 1241838 returns
+    // 14 matchup periods and nothing beyond, 899513 returns 15). So they are
+    // derived from where the regular season ends, and asked for by number.
+    //
+    // It really is worth the requests: ESPN publishes a per-player projection
+    // for those weeks exactly as it does for week 4, so the bracket can be
+    // simulated off the same numbers as everything else rather than off an
+    // average. Only asked for while there is still a regular season to play —
+    // once it is decided the simulation panel has nothing to run, so three
+    // requests for a bracket nobody is being shown would be pure cost.
+    const extra = wanted.length ? playoffWeeks() : [];
+    const asking = weeks.concat(extra);
+
     let weekTeams = new Map();
     try {
-      weekTeams = await fetchWeeksRosters(weeks, {
+      weekTeams = await fetchWeeksRosters(asking, {
         onProgress: (done, total) => {
           if (stale() || done >= total) return;
           setStatus(`Reading ESPN’s projections… week ${done} of ${total}.`);
@@ -2114,6 +2203,21 @@ function simInputs() {
 
   const sigma = scoringSpread().sigma;
 
+  // ---- the bracket -------------------------------------------------------
+  //
+  // The knockout adds inputs, so it adds to the key: the field size, the weeks
+  // the rounds fall in, and every projection those weeks carry. Miss any of
+  // them and switching from a projected bracket to a modelled one — or, in the
+  // demo, stepping the week picker so the bracket moves — would repaint the old
+  // answer. What is still NOT in the key is the selected team, for the same
+  // reason as before: the bracket is the same bracket whoever is looking at it.
+  const weeks = playoffWeeks();
+  const playoff = { teams: PLAYOFF_TEAMS, weeks, proj: state.projection?.proj || null };
+  const playoffProjKey = weeks.map((w) => {
+    const forWeek = state.projection?.proj?.get(w);
+    return forWeek ? teamIds.map((id) => forWeek.get(id) ?? null) : null;
+  });
+
   const key = JSON.stringify([
     state.runs,
     asOf,
@@ -2121,9 +2225,12 @@ function simInputs() {
     teamIds,
     [...banked].map(([id, b]) => [id, b.wins, Math.round(b.pointsFor * 10)]),
     games.map((g) => [g.homeId, g.awayId, g.homeProj, g.awayProj]),
+    PLAYOFF_TEAMS,
+    weeks,
+    playoffProjKey,
   ]);
 
-  return { teamIds, banked, games, sigma, asOf, playable, key };
+  return { teamIds, banked, games, sigma, asOf, playable, playoff, key };
 }
 
 /** Mark the run-count button that matches the current setting. */
@@ -2161,6 +2268,7 @@ function runSimulation(inputs) {
       sigma: inputs.sigma,
       runs: state.runs,
       seed: SIM_SEED,
+      playoff: inputs.playoff,
     });
     if (token !== state.simToken || !state.data) return;
     // Cached even when null, so a league the model cannot handle is reported
@@ -2183,7 +2291,10 @@ function renderSimulation() {
     $('simStats').innerHTML = '';
     $('simCap').textContent = '';
     $('simChart').innerHTML = '';
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${reason}</td></tr>`;
+    // Nine columns now the bracket has its own four. A colspan that has drifted
+    // short leaves the message boxed into the left of the table rather than
+    // spanning it, which reads as a broken row rather than a sentence.
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${reason}</td></tr>`;
     $('simNote').innerHTML = note;
     resort(table);
   };
@@ -2266,15 +2377,25 @@ function paintSimulation(sim, inputs) {
   const team = forecastTeam();
   const mine = team ? sim.teams.find((t) => t.teamId === team.id) : null;
 
-  // ---- headline: who wins it, who props it up, and where you stand ---------
+  // ---- headline: who lifts it, who tops the table, who props it up ---------
+  //
+  // TWO DIFFERENT FACTS, named so they cannot be read as one. Tim's words: "the
+  // title is the person who wins the league" — so "Wins the title" is the
+  // championship round, and topping the regular-season table is its own,
+  // separate line that is never called a title anywhere on this page.
   const who = (id) => `<div class="who">${esc(nameById.get(id) || `Team ${id}`)}</div>`;
   const stat = (k, v, id) =>
     `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${id == null ? '' : who(id)}</div>`;
+  const po = sim.playoff;
 
   $('simStats').innerHTML = [
-    stat('Wins the season most', pctText(sim.champion.pFirst), sim.champion.teamId),
+    po && sim.titleFavourite
+      ? stat('Wins the title most', pctText(sim.titleFavourite.pTitle), sim.titleFavourite.teamId)
+      : '',
+    stat('Tops the table most', pctText(sim.tableWinner.pFirst), sim.tableWinner.teamId),
     stat('Finishes last most', pctText(sim.wooden.pLast), sim.wooden.teamId),
-    mine ? stat('Title chance', pctText(mine.pFirst), mine.teamId) : '',
+    mine && po ? stat('Title chance', pctText(mine.pTitle), mine.teamId) : '',
+    mine && po ? stat('Makes the playoffs', pctText(mine.pPlayoffs), mine.teamId) : '',
     mine ? stat('Last-place chance', pctText(mine.pLast), mine.teamId) : '',
   ]
     .filter(Boolean)
@@ -2309,12 +2430,23 @@ function paintSimulation(sim, inputs) {
       const cls = [isMe ? 'me' : '', isPicked ? 'picked' : ''].filter(Boolean).join(' ');
       const tone = (p) => (p >= 0.25 ? 'pos' : p <= 0.02 ? 'muted' : '');
 
+      // A team with no bracket (the run could not be bracketed at all) gets a
+      // dash rather than a 0%: "cannot be worked out" and "never happens" are
+      // different facts, and 0% is a strong claim to make by accident.
+      const pcell = (p, cls) =>
+        p === null || p === undefined
+          ? `<td>${dash}</td>`
+          : `<td data-v="${p}" class="${cls(p)}">${pctText(p)}</td>`;
+
       return `<tr${cls ? ` class="${cls}"` : ''}>
           <td class="name">${esc(nameById.get(t.teamId) || `Team ${t.teamId}`)}</td>
           <td data-v="${t.meanWins}">${fmt(t.meanWins)}</td>
           <td data-v="${t.meanPlace}">${fmt(t.meanPlace)}</td>
           <td data-v="${t.modePlace}">${ordinal(t.modePlace)}</td>
+          ${pcell(t.pPlayoffs, (p) => (p >= 0.6 ? 'pos' : p <= 0.02 ? 'muted' : ''))}
+          ${pcell(t.pBye, tone)}
           <td data-v="${t.pFirst}" class="${tone(t.pFirst)}">${pctText(t.pFirst)}</td>
+          ${pcell(t.pTitle, tone)}
           <td data-v="${t.pLast}" class="${t.pLast >= 0.25 ? 'neg' : t.pLast <= 0.02 ? 'muted' : ''}">${pctText(t.pLast)}</td>
         </tr>`;
     })
@@ -2341,14 +2473,59 @@ function paintSimulation(sim, inputs) {
       ' left out of every simulated season. Those wins are missing from every number here.'
     : '';
 
+  // ---- what the bracket is, said out loud ---------------------------------
+  //
+  // THE FIELD SIZE IS ON SCREEN ON PURPOSE. Tim's pasted ESPN settings say six
+  // teams and his prose alongside them said four; the settings win, but a wrong
+  // value has to be visible rather than buried in the arithmetic, so the panel
+  // states how many qualify, how many get a bye, and which weeks the rounds
+  // fall in. One constant drives all of it — see PLAYOFF_TEAMS.
+  const teamCount = d.teams.length;
+  const bracket = po
+    ? `<strong>${po.teams} of ${teamCount} teams make the playoffs.</strong> ` +
+      `The bracket is ${plural(po.rounds, 'round')} of one week each, in ` +
+      `${po.weeks.length ? `week${po.weeks.length > 1 ? 's' : ''} ${po.weeks.join(', ')}` : 'the weeks after the regular season'} — ` +
+      (po.byes
+        ? `the top ${plural(po.byes, 'seed')} skip round one, and seeds ${po.byes + 1}–${po.teams} play it. `
+        : 'every qualifier plays every round. ') +
+      `Seeding is the regular-season table, so it uses the same wins-then-points ` +
+      `rule as the standings, worked out fresh in every simulated season. The bracket ` +
+      `is fixed once seeded — this league has reseeding off — and a tied playoff game ` +
+      `is won by the higher seed, which is ESPN’s own rule. The consolation ladder is ` +
+      `deliberately not modelled: nothing in it can produce a champion, and last place ` +
+      `here is measured on the regular season.`
+    : `No playoff bracket could be built for this season, so the title column is blank. ` +
+      `Everything else in the panel is the regular-season table.`;
+
+  const bracketBasis = po
+    ? po.basis === 'projected'
+      ? `Each playoff round is scored from ESPN’s own projection for that week, exactly ` +
+        `as the regular-season weeks are. Those weeks are not on ESPN’s schedule — it ` +
+        `stops at week ${lastWeek} — but the per-player projections for them are ` +
+        `published, so they are fetched by number and the best legal lineup filled.`
+      : po.basis === 'modelled'
+        ? `ESPN published no per-week projection for ${po.weeks.length > 1 ? 'these playoff weeks' : 'this playoff week'}, ` +
+          `so each side is drawn from its own average projection over the games it has ` +
+          `left, with the same scoring spread. That is a weaker number than the ` +
+          `regular-season weeks use, and it is said here rather than passed off as ESPN’s.`
+        : `Some playoff rounds use ESPN’s own projection for that week and some — ` +
+          `${po.roundBasis.map((b, i) => (b === 'modelled' ? `round ${i + 1}` : null)).filter(Boolean).join(', ')} — ` +
+          `have none published, so those are drawn from each side’s average projection ` +
+          `over its remaining games instead. Which is which is stated rather than blurred.`
+    : '';
+
   $('simNote').innerHTML = [
     `Every number in this panel is counted from a simulation, not solved for: the ` +
       `${plural(sim.games, 'game')} still to play ${sim.games === 1 ? 'was' : 'were'} played ` +
-      `out ${commas(sim.runs)} times and the finishing order counted. There is no closed ` +
-      `form for a final placing — where you finish turns on everyone else’s results as much ` +
-      `as your own. “Wins the season” here means finishing first in the regular-season ` +
-      `standings after week ${lastWeek}; no playoffs are modelled, so it is not the same ` +
-      `question as who lifts the trophy.`,
+      `out ${commas(sim.runs)} times, and the bracket played on top of each one. There is ` +
+      `no closed form for a final placing — where you finish turns on everyone else’s ` +
+      `results as much as your own. <strong>“Title %” is winning the championship round.</strong> ` +
+      `“1st in table” is a different question: finishing first in the regular-season ` +
+      `standings after week ${lastWeek}, which decides the seeds and nothing else. ` +
+      `<strong>“Last %” is last in the regular-season table</strong>, not last in the ` +
+      `playoffs and not the consolation ladder.`,
+    bracket,
+    bracketBasis,
     timing,
     `Each simulated season is ranked on wins first and total points scored second — this ` +
       `league’s own tiebreak — which is why points are simulated as well as results. The run ` +

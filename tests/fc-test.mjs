@@ -205,8 +205,30 @@ const SCENARIOS = {
       await new Promise((r) => setTimeout(r, 4000));
       const afterRuns = snap();
 
+      // --- and the 100,000 Tim asked for -----------------------------------
+      // The one that would actually freeze a browser if it ran inline: over a
+      // second of arithmetic, plus a three-round bracket on top of each season.
+      // Read synchronously straight after the click, so the "Simulating…" frame
+      // being on screen proves the work was handed off rather than blocking.
+      const big = [...$('simRuns').querySelectorAll('button')]
+        .find((b) => b.getAttribute('data-runs') === '100000');
+      const t0 = Date.now();
+      big.dispatchEvent(new window.Event('click', { bubbles: true }));
+      const duringBig = snap();
+      // Polled rather than slept through, so `bigMs` is how long the run
+      // actually took rather than how long the test was willing to wait.
+      let afterBig = null;
+      for (let i = 0; i < 120 && !afterBig; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        const now = snap();
+        if (now.rows.length === 10) afterBig = now;
+      }
+      const bigMs = Date.now() - t0;
+      if (!afterBig) afterBig = snap();
+
       globalThis.__sim = {
-        before, duringTeam, afterTeam, duringRuns, afterRuns, pickedName,
+        before, duringTeam, afterTeam, duringRuns, afterRuns, duringBig, afterBig, bigMs,
+        pickedName,
         prefs: globalThis.localStorage.getItem('ff.prefs'),
       };
     },
@@ -390,7 +412,18 @@ async function check(scenario, boot) {
     // bulk form, so the cost is one request per REMAINING week -- weeks 2..13
     // here -- and never a played week, which would be wasted.
     const got = season.calls.rosters.slice().sort((a, b) => a - b);
-    c.ok('one roster request per remaining week', JSON.stringify(got) === JSON.stringify([2,3,4,5,6,7,8,9,10,11,12,13]),
+    // Weeks 2..13 are the rest of the stub's 13-week regular season; 14, 15 and
+    // 16 are the three playoff rounds, which are NOT on ESPN's schedule (it
+    // stops at the last regular-season week) and so are asked for by number.
+    // ESPN really does publish per-player projections for them — verified
+    // 2026-09-16 against public leagues 1241838 and 899513, right through week
+    // 18 — which is why the bracket is simulated from the same numbers as
+    // everything else rather than from an average.
+    c.ok('one roster request per remaining week, plus the three playoff weeks',
+      JSON.stringify(got) === JSON.stringify([2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]),
+      `saw ${JSON.stringify(season.calls.rosters)}`);
+    c.ok('the playoff weeks follow the regular season rather than being hardcoded',
+      [14, 15, 16].every((w) => season.calls.rosters.includes(w)),
       `saw ${JSON.stringify(season.calls.rosters)}`);
     c.ok('no played week refetched', !season.calls.rosters.includes(1), `saw ${JSON.stringify(season.calls.rosters)}`);
     // Byes arrive inside the weekly projections (a bye player is projected 0),
@@ -455,7 +488,7 @@ async function check(scenario, boot) {
     // Switching is a repaint, not a refetch.
     const season = await import('./fc-stub-season.mjs');
     c.ok('switching teams triggers no extra roster reads',
-      season.calls.rosters.length === 12, `saw ${season.calls.rosters.length}`);
+      season.calls.rosters.length === 15, `saw ${season.calls.rosters.length}`);
   }
 
   // ---- (d): roster fetch rejected ----------------------------------------
@@ -552,12 +585,90 @@ async function check(scenario, boot) {
     c.ok('average place is inside the league', meanPlaces.every((v) => v >= 1 && v <= teamNames.length),
       JSON.stringify(meanPlaces));
 
-    // Exactly one team finishes first in every simulated season, and exactly
-    // one finishes last, so both columns are complete distributions.
-    const sumFirst = simRows.reduce((a, r) => a + Number(r.v[4]), 0);
-    const sumLast = simRows.reduce((a, r) => a + Number(r.v[5]), 0);
-    c.ok('title chances sum to 100%', Math.abs(sumFirst - 1) < 0.005, String(sumFirst));
-    c.ok('last-place chances sum to 100%', Math.abs(sumLast - 1) < 0.005, String(sumLast));
+    // The columns, by index, now the bracket has arrived:
+    //   0 Team  1 Proj. wins  2 Avg place  3 Most likely
+    //   4 Playoffs %  5 Bye %  6 1st in table %  7 Title %  8 Last %
+    const COL = { playoffs: 4, bye: 5, first: 6, title: 7, last: 8 };
+    c.ok('the simulated table has all nine columns',
+      simRows.every((r) => r.cells.length === 9),
+      JSON.stringify(simRows[0] && simRows[0].cells));
+
+    // Exactly one team wins the title in every simulated season, exactly one
+    // tops the table, and exactly one finishes last — so all three are complete
+    // distributions. Six teams qualify and two get byes, in every season, so
+    // those columns have their own exact totals to hit.
+    const colSum = (i) => simRows.reduce((a, r) => a + Number(r.v[i]), 0);
+    c.ok('title chances sum to 100%', Math.abs(colSum(COL.title) - 1) < 0.005, String(colSum(COL.title)));
+    c.ok('first-in-the-table chances sum to 100%',
+      Math.abs(colSum(COL.first) - 1) < 0.005, String(colSum(COL.first)));
+    c.ok('last-place chances sum to 100%', Math.abs(colSum(COL.last) - 1) < 0.005, String(colSum(COL.last)));
+    // Re-derived from the note rather than hardcoded, so changing PLAYOFF_TEAMS
+    // moves the assertion with the page instead of breaking it.
+    const fieldSize = Number((/(\d+) of \d+ teams make the playoffs/.exec(simNote) || [])[1]);
+    c.ok('the panel states how many teams make the playoffs',
+      Number.isFinite(fieldSize) && fieldSize >= 2, simNote.slice(0, 160));
+    const byeCount = Math.pow(2, Math.ceil(Math.log2(fieldSize))) - fieldSize;
+    c.ok('exactly the stated number of teams qualify in every season',
+      Math.abs(colSum(COL.playoffs) - fieldSize) < 0.005, String(colSum(COL.playoffs)));
+    c.ok('exactly the derived number of byes is handed out in every season',
+      Math.abs(colSum(COL.bye) - byeCount) < 0.005, `${colSum(COL.bye)} vs ${byeCount}`);
+
+    // A team can only win a title it qualified for, and can only top the table
+    // if it qualified. Both hold row by row, not merely in total.
+    c.ok('nobody wins a title without making the playoffs',
+      simRows.every((r) => Number(r.v[COL.title]) <= Number(r.v[COL.playoffs]) + 1e-9),
+      simRows.map((r) => `${r.cells[0]}:${r.v[COL.title]}>${r.v[COL.playoffs]}`).join(','));
+    c.ok('nobody tops the table without making the playoffs',
+      simRows.every((r) => Number(r.v[COL.first]) <= Number(r.v[COL.playoffs]) + 1e-9),
+      simRows.map((r) => `${r.cells[0]}:${r.v[COL.first]}/${r.v[COL.playoffs]}`).join(','));
+    // Only the top seeds can have a bye, so a bye is never more likely than
+    // topping the table plus being second.
+    c.ok('a bye is rarer than qualifying',
+      simRows.every((r) => Number(r.v[COL.bye]) <= Number(r.v[COL.playoffs]) + 1e-9),
+      simRows.map((r) => `${r.cells[0]}:${r.v[COL.bye]}/${r.v[COL.playoffs]}`).join(','));
+
+    // THE TWO FACTS MUST BE ABLE TO DISAGREE. If title % were secretly the old
+    // first-place number under a new heading, these two columns would be
+    // identical down the table. They must not be.
+    c.ok('title % is not just first-in-the-table renamed',
+      simRows.some((r) => Math.abs(Number(r.v[COL.title]) - Number(r.v[COL.first])) > 0.01),
+      simRows.map((r) => `${r.cells[0]} ${r.v[COL.first]}/${r.v[COL.title]}`).join(' | '));
+    // And a team outside the playoff places must have a title % of exactly
+    // zero, not a rounded-down small number.
+    const missers = simRows.filter((r) => Number(r.v[COL.playoffs]) === 0);
+    c.ok('a team that cannot reach the playoffs has a title % of exactly 0',
+      missers.every((r) => Number(r.v[COL.title]) === 0),
+      missers.map((r) => `${r.cells[0]}:${r.v[COL.title]}`).join(',') || '(none in this season)');
+
+    if (scenario === 'demo') {
+      // The demo season is simulated from its last week, so the bottom of the
+      // table really is mathematically out. Asserted so the "exactly 0" check
+      // above is known to have something to bite on rather than passing
+      // vacuously over an empty set.
+      c.ok('the demo season contains a team that cannot reach the playoffs at all',
+        missers.length > 0, `${missers.length} such teams`);
+      // TIM'S RULE, ON THE PAGE. The wooden spoon is last in the REGULAR
+      // season — so here it is a team that never plays a playoff game, and
+      // therefore cannot possibly be the beaten finalist. If last % had been
+      // wired to the bracket, this team could not carry it.
+      const byCol = (i) => simRows.slice().sort((a, b) => Number(b.v[i]) - Number(a.v[i]))[0];
+      const spoon = byCol(COL.last);
+      const topTitle = byCol(COL.title);
+      const topTable = byCol(COL.first);
+      c.ok('the wooden spoon is decided before the playoffs start',
+        Number(spoon.v[COL.last]) === 1 && Number(spoon.v[COL.playoffs]) === 0 &&
+        Number(spoon.v[COL.title]) === 0,
+        `${spoon.cells[0]} last=${spoon.v[COL.last]} playoffs=${spoon.v[COL.playoffs]}`);
+      // And the title goes to somebody else entirely.
+      c.ok('the title favourite and the wooden spoon are different teams',
+        topTitle.cells[0] !== spoon.cells[0], `${topTitle.cells[0]} vs ${spoon.cells[0]}`);
+      // Topping the table does not win it: the two headline names differ here,
+      // which is the confusion the split exists to make visible.
+      c.ok('topping the table and winning the title are separately reported',
+        topTable.cells[0] !== topTitle.cells[0] ||
+        Math.abs(Number(topTable.v[COL.first]) - Number(topTitle.v[COL.title])) > 0.01,
+        `${topTable.cells[0]}@${topTable.v[COL.first]} vs ${topTitle.cells[0]}@${topTitle.v[COL.title]}`);
+    }
 
     // ---- the selected team's place distribution ---------------------------
     const simSvg = $('simChart').querySelector('svg');
@@ -580,33 +691,52 @@ async function check(scenario, boot) {
     const simStats = Array.from($('simStats').querySelectorAll('.stat')).map((s) => ({
       k: txt(s.querySelector('.k')), v: txt(s.querySelector('.v')), who: txt(s.querySelector('.who')),
     }));
-    c.ok('four headline numbers', simStats.length === 4, JSON.stringify(simStats));
-    c.ok('headline names who wins the season most',
-      simStats[0] && simStats[0].k === 'Wins the season most' && teamNames.includes(simStats[0].who),
+    const statBy = (k) => simStats.find((s) => s.k === k);
+    c.ok('six headline numbers', simStats.length === 6, JSON.stringify(simStats));
+    // "Wins the title" and "Tops the table" are separate headlines and neither
+    // borrows the other's word. Tim's rule: the title is who wins the league.
+    c.ok('headline names who wins the TITLE most',
+      statBy('Wins the title most') && teamNames.includes(statBy('Wins the title most').who),
       JSON.stringify(simStats[0]));
-    c.ok('headline names who finishes last most',
-      simStats[1] && simStats[1].k === 'Finishes last most' && teamNames.includes(simStats[1].who),
+    c.ok('headline names who tops the table most',
+      statBy('Tops the table most') && teamNames.includes(statBy('Tops the table most').who),
       JSON.stringify(simStats[1]));
-    c.ok('both headline names carry a probability',
-      pctOf(simStats[0] && simStats[0].v) !== null && pctOf(simStats[1] && simStats[1].v) !== null,
-      JSON.stringify(simStats.slice(0, 2)));
+    c.ok('no headline calls topping the table a title',
+      !simStats.some((s) => /table/i.test(s.k) && /title/i.test(s.k)) &&
+      !simStats.some((s) => s.k === 'Wins the season most'),
+      simStats.map((s) => s.k).join(' | '));
+    c.ok('headline names who finishes last most',
+      statBy('Finishes last most') && teamNames.includes(statBy('Finishes last most').who),
+      JSON.stringify(simStats[2]));
+    c.ok('every headline carries a probability',
+      simStats.every((s) => pctOf(s.v) !== null), JSON.stringify(simStats));
 
-    const bestFirst = simRows.slice().sort((a, b) => Number(b.v[4]) - Number(a.v[4]))[0];
-    const worstLast = simRows.slice().sort((a, b) => Number(b.v[5]) - Number(a.v[5]))[0];
-    c.ok('headline champion is the table’s highest title %',
-      simStats[0] && bestFirst.cells[0] === simStats[0].who,
-      `${bestFirst.cells[0]} vs ${simStats[0] && simStats[0].who}`);
+    const bestTitle = simRows.slice().sort((a, b) => Number(b.v[COL.title]) - Number(a.v[COL.title]))[0];
+    const bestFirst = simRows.slice().sort((a, b) => Number(b.v[COL.first]) - Number(a.v[COL.first]))[0];
+    const worstLast = simRows.slice().sort((a, b) => Number(b.v[COL.last]) - Number(a.v[COL.last]))[0];
+    c.ok('headline title favourite is the table’s highest title %',
+      statBy('Wins the title most') && bestTitle.cells[0] === statBy('Wins the title most').who,
+      `${bestTitle.cells[0]} vs ${statBy('Wins the title most') && statBy('Wins the title most').who}`);
+    c.ok('headline table-topper is the table’s highest first-in-the-table %',
+      statBy('Tops the table most') && bestFirst.cells[0] === statBy('Tops the table most').who,
+      `${bestFirst.cells[0]} vs ${statBy('Tops the table most') && statBy('Tops the table most').who}`);
     c.ok('headline wooden spoon is the table’s highest last %',
-      simStats[1] && worstLast.cells[0] === simStats[1].who,
-      `${worstLast.cells[0]} vs ${simStats[1] && simStats[1].who}`);
+      statBy('Finishes last most') && worstLast.cells[0] === statBy('Finishes last most').who,
+      `${worstLast.cells[0]} vs ${statBy('Finishes last most') && statBy('Finishes last most').who}`);
 
     const myRow = simRows.find((r) => r.cells[0] === picked);
+    const own = ['Title chance', 'Makes the playoffs', 'Last-place chance'];
     c.ok('headline shows the selected team’s own chances',
-      simStats[2] && simStats[3] && simStats[2].who === picked && simStats[3].who === picked,
-      JSON.stringify(simStats.slice(2)));
+      own.every((k) => statBy(k) && statBy(k).who === picked),
+      JSON.stringify(simStats.slice(3)));
     c.ok('selected team’s headline chances match its row',
-      myRow && simStats[2] && myRow.cells[4] === simStats[2].v && myRow.cells[5] === simStats[3].v,
-      myRow ? `${myRow.cells[4]}/${myRow.cells[5]} vs ${simStats[2].v}/${simStats[3].v}` : 'no row');
+      myRow &&
+      myRow.cells[COL.title] === statBy('Title chance').v &&
+      myRow.cells[COL.playoffs] === statBy('Makes the playoffs').v &&
+      myRow.cells[COL.last] === statBy('Last-place chance').v,
+      myRow ? `${myRow.cells[COL.title]}/${myRow.cells[COL.playoffs]}/${myRow.cells[COL.last]} vs ` +
+              `${statBy('Title chance').v}/${statBy('Makes the playoffs').v}/${statBy('Last-place chance').v}`
+            : 'no row');
     c.ok('the selected team’s row is marked',
       simRows.filter((r) => /\bpicked\b/.test(r.cls)).length === 1 &&
       /\bpicked\b/.test((myRow || {}).cls || ''),
@@ -626,9 +756,51 @@ async function check(scenario, boot) {
       /played out [\d,]+ times/.test(simNote), simNote);
     c.ok('note states how many runs', /played out 10,000 times/.test(simNote), simNote);
     c.ok('note says there is no closed form', /no closed form for a final placing/.test(simNote), simNote);
-    c.ok('note refuses to call first place a championship',
-      /finishing first in the regular-season standings/.test(simNote) &&
-      /no playoffs are modelled/.test(simNote), simNote);
+
+    // ---- the bracket, stated on screen --------------------------------------
+    //
+    // Tim's settings say six teams and his prose said four. The settings win,
+    // and the number has to be VISIBLE so a wrong one is caught by reading the
+    // page rather than by reading the code.
+    c.ok('note states the field size and the league size',
+      /\d+ of \d+ teams make the playoffs/.test(simNote), simNote);
+    c.ok('note states the number of rounds and how long each is',
+      /\d+ rounds? of one week each/.test(simNote), simNote);
+    c.ok('note names the weeks the rounds fall in', /in weeks? [\d, ]+ —/.test(simNote), simNote);
+    c.ok('note says who gets a bye',
+      /top \d+ seeds? skip round one/.test(simNote) || /every qualifier plays every round/.test(simNote),
+      simNote);
+    c.ok('note says how the seeds are decided',
+      /Seeding is the regular-season table/.test(simNote) &&
+      /worked out fresh in every simulated season/.test(simNote), simNote);
+    c.ok('note says the bracket does not reseed', /reseeding off/.test(simNote), simNote);
+    c.ok('note states the playoff tie rule',
+      /tied playoff game is won by the higher seed/.test(simNote) &&
+      /ESPN’s own rule/.test(simNote), simNote);
+    c.ok('note says the consolation ladder is not modelled',
+      /consolation ladder is deliberately not modelled/.test(simNote), simNote);
+
+    // The two facts, named apart, in the words Tim used.
+    c.ok('note defines Title % as the championship round',
+      /“Title %” is winning the championship round/.test(simNote), simNote);
+    c.ok('note defines 1st in table as a DIFFERENT question',
+      /is a different question: finishing first in the regular-season standings/.test(simNote), simNote);
+    c.ok('note says last place is the regular season, not the playoffs',
+      /“Last %” is last in the regular-season table/.test(simNote) &&
+      /not last in the playoffs and not the consolation ladder/.test(simNote), simNote);
+    // The old sentence must be gone: the panel used to say first place WAS the
+    // answer and that no playoffs existed. Both are now false.
+    c.ok('note no longer claims no playoffs are modelled',
+      !/no playoffs are modelled/i.test(simNote), simNote);
+    c.ok('note never calls first place the title',
+      !/“Title %” (is|means) finishing first/i.test(simNote), simNote);
+
+    // Where the playoff scores came from, stated either way — the house rule is
+    // that a derived number says what it was derived from.
+    c.ok('note states the basis of the playoff weeks',
+      /Each playoff round is scored from ESPN’s own projection/.test(simNote) ||
+      /drawn from its own average projection/.test(simNote) ||
+      /drawn from each side’s average projection/.test(simNote), simNote);
     c.ok('note states the points tiebreak',
       /wins first and total points scored second/.test(simNote) &&
       /league’s own tiebreak/.test(simNote), simNote);
@@ -638,8 +810,10 @@ async function check(scenario, boot) {
     c.ok('note quotes the counting noise', /Counting noise: at [\d,]+ runs/.test(simNote), simNote);
     c.ok('run count control defaults to 10,000',
       txt($('simRuns').querySelector('button.on')) === '10,000', txt($('simRuns')));
-    c.ok('run count control offers three choices',
-      $('simRuns').querySelectorAll('button[data-runs]').length === 3);
+    c.ok('run count control offers four choices, including the 100,000 Tim asked for',
+      $('simRuns').querySelectorAll('button[data-runs]').length === 4 &&
+      Boolean($('simRuns').querySelector('button[data-runs="100000"]')),
+      [...$('simRuns').querySelectorAll('button')].map((b) => b.getAttribute('data-runs')).join(','));
     // Named rather than counted. The point of this assertion is that the
     // simulation must not grow a SECOND team picker beside the forecast's —
     // two of them disagreeing about whose season is on screen was the risk.
@@ -703,6 +877,17 @@ async function check(scenario, boot) {
     c.ok('and a projected total per team per remaining week',
       a.auto && Object.keys(a.auto.proj || {}).length > 0,
       a.auto && Object.keys(a.auto.proj || {}).join(','));
+    // THE PLAYOFF WEEKS RIDE ALONG IN THE SAME MAP, which is the only reason
+    // the time machine can replay a bracket at all: js/snapshots.js stores
+    // whatever weeks `proj` holds, so the bracket needed no change there. A
+    // reading missing them would replay as a MODELLED bracket while the live
+    // page showed a projected one — the same reading giving two answers.
+    c.ok('a reading carries the playoff weeks too, so a replayed bracket is the projected one',
+      a.auto && [14, 15, 16].every((w) => Object.keys(a.auto.proj || {}).includes(String(w))),
+      a.auto && Object.keys(a.auto.proj || {}).join(','));
+    c.ok('and every team is in each playoff week',
+      a.auto && [14, 15, 16].every((w) => Object.keys(a.auto.proj[w] || {}).length === 10),
+      a.auto && [14, 15, 16].map((w) => Object.keys(a.auto.proj[w] || {}).length).join(','));
     // Sigma moves as results come in, so replaying without it would re-forecast
     // the past with knowledge it did not have.
     c.ok('and the scoring spread that was in force',
@@ -788,7 +973,7 @@ async function check(scenario, boot) {
       c.ok('OPENING AND LEAVING THE ARCHIVE ADDS NO SCHEDULE FETCH',
         season.calls.schedule === 1, `saw ${season.calls.schedule}`);
       c.ok('AND NO EXTRA ROSTER REQUESTS',
-        season.calls.rosters.length === 12, `saw ${season.calls.rosters.length}`);
+        season.calls.rosters.length === 15, `saw ${season.calls.rosters.length}`);
     }
 
     // ---- and back to now -------------------------------------------------
@@ -846,7 +1031,37 @@ async function check(scenario, boot) {
       JSON.stringify(afterRuns.on));
     c.ok('more runs sharpens the numbers rather than repeating them',
       JSON.stringify(afterRuns.rows) !== JSON.stringify(before.rows), 'identical');
-    c.ok('the run count is remembered', /"schedule.runs":50000/.test(s.prefs || ''), s.prefs);
+
+    // ---- 100,000 runs, the count Tim asked for -----------------------------
+    const { duringBig, afterBig } = s;
+    c.ok('100,000 runs shows the simulating state rather than freezing',
+      duringBig && /Simulating 100,000 seasons/.test(duringBig.empty), duringBig && duringBig.empty);
+    // The proof that the work was HANDED OFF: the table was blanked and the
+    // waiting sentence painted inside the same tick as the click. If the run
+    // had gone inline, this snapshot would already hold the finished table and
+    // the browser would have spent a second and a half unable to paint.
+    c.ok('the hand-off happens before any of the work does',
+      duringBig && duringBig.rows.length === 1 &&      // the empty row, and nothing else
+      /Playing the \d+ remaining games out 100,000 times/.test(duringBig.note),
+      duringBig && `${duringBig.rows.length} rows — ${duringBig.note}`);
+    c.ok('100,000 runs lands and refills the table',
+      afterBig && afterBig.rows.length === 10 && afterBig.empty === '', afterBig && afterBig.empty);
+    c.ok('the note reports 100,000 runs and the sharper noise figure',
+      afterBig && /played out 100,000 times/.test(afterBig.note) &&
+      /Counting noise: at 100,000 runs a percentage here is good to roughly ±0\.3/.test(afterBig.note),
+      afterBig && afterBig.note);
+    c.ok('the control marks 100,000', JSON.stringify(afterBig.on) === '["100,000"]',
+      JSON.stringify(afterBig.on));
+    c.ok('the bracket survives the bigger run',
+      afterBig && /6 of 10 teams make the playoffs/.test(afterBig.note), afterBig && afterBig.note);
+    // Measured, not assumed: the panel's own note promises the run count is a
+    // wait rather than a hang, and 100,000 seasons with a three-round bracket
+    // is the slowest thing this page can be asked to do. Generous here because
+    // linkedom and a loaded CI box are both slower than a browser, but a
+    // regression that made it minutes would be caught.
+    c.ok('100,000 runs with a bracket lands in seconds, not minutes',
+      s.bigMs > 0 && s.bigMs < 10000, `${s.bigMs}ms`);
+    c.ok('the run count is remembered', /"schedule.runs":100000/.test(s.prefs || ''), s.prefs);
   }
 
   // ---- every game carries a chance, and the pair sums to 100 --------------

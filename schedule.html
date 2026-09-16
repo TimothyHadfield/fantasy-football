@@ -238,6 +238,7 @@ td.state-live { color: var(--warn); }
       <a href="waivers.html">Players</a>
       <a href="trade.html">Trade</a>
       <a href="draft.html">Draft</a>
+      <a href="summary.html">Summary</a>
     </nav>
   </div>
 </header>
@@ -408,6 +409,12 @@ td.state-live { color: var(--warn); }
           <button type="button" data-runs="1000">1,000</button>
           <button type="button" data-runs="10000" class="on">10,000</button>
           <button type="button" data-runs="50000">50,000</button>
+          <!-- 100,000 is about 1.4 seconds of arithmetic including the playoff
+               bracket. It is offered because Tim asked for it, and it is why
+               the run is handed off through rAF + setTimeout rather than run
+               inline: a second and a half of blocked paint would look like a
+               crash rather than a wait. -->
+          <button type="button" data-runs="100000">100,000</button>
         </div>
       </div>
     </div>
@@ -420,8 +427,15 @@ td.state-live { color: var(--warn); }
         <th data-sort title="Average number of regular-season wins across every simulated season, banked wins included.">Proj. wins</th>
         <th data-sort title="Average finishing place across every simulated season. Lower is better.">Avg place</th>
         <th data-sort title="The single place this team finished in most often — not where it usually finishes, just the most common one.">Most likely</th>
-        <th data-sort title="How often this team finished first in the regular-season standings. No playoffs are modelled.">Title %</th>
-        <th data-sort title="How often this team finished last in the regular-season standings.">Last %</th>
+        <th data-sort title="How often this team finished inside the playoff places in the regular-season table.">Playoffs %</th>
+        <th data-sort title="How often this team seeded high enough to skip the first playoff round. The bracket pads up to the next power of two, so a six-team field gives the top two a bye.">Bye %</th>
+        <!-- Topping the table and winning the league are two different facts and
+             are two different columns. The old page called first-in-the-table
+             "Title %", which is the confusion this split exists to remove: seeds
+             are all that finishing first buys you. -->
+        <th data-sort title="How often this team finished first in the regular-season standings. That decides the top seed — it is NOT the championship.">1st in table %</th>
+        <th data-sort title="How often this team won the championship round. This is the title: the winner of the last playoff game, not the top of the regular-season table.">Title %</th>
+        <th data-sort title="How often this team finished last in the REGULAR-SEASON standings. Deliberately not the consolation ladder — the wooden spoon here is decided before the playoffs start.">Last %</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
