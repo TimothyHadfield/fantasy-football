@@ -24,6 +24,8 @@ const SUITES = [
   ['test-forecast.mjs', 'win probability, sigma calibration, optimal lineup, win-total distribution'],
   ['test-sim.mjs', 'the Monte Carlo season simulation'],
   ['test-projection.mjs', 'the shared projection module'],
+  ['test-extension.mjs', 'the bridge worker: URL injection, who may drive it, and the staged trade'],
+  ['test-espn-tick.mjs', 'ticking your own side on ESPN’s trade page — and never submitting'],
   ['owner-names.mjs', 'real names instead of team names: the ESPN members join'],
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],

@@ -8,6 +8,54 @@
 // Everything degrades: with no extension the site still runs on demo data, and
 // a public league still works over a direct fetch. Nothing here is required for
 // the site to load.
+//
+// ---------------------------------------------------------------------------
+// THE CONTRACT FOR stageTrade() — this comment is the spec, read it before
+// wiring a page into it.
+// ---------------------------------------------------------------------------
+//
+//   const res = await stageTrade({
+//     leagueId,        // digits, as a string or a number
+//     season,          // four-digit year
+//     myTeamId,        // YOUR team id in the league (digits)
+//     theirTeamId,     // the counterparty's team id (digits)
+//     myPlayers: [     // the men YOU give up — the side ESPN cannot pre-tick
+//       { id: 4362628, name: 'Jahmyr Gibbs' },
+//       ...
+//     ],
+//     theirPlayerIds: [3139477, ...],   // the men you RECEIVE, ids only
+//   });
+//
+//   if (res.ok) window.open(res.data.url, '_blank', 'noopener');
+//
+// `res.data` is `{ url, expiresAt, count }`:
+//   url        the ESPN deep link to open — BUILT BY THE EXTENSION, with their
+//              side already in `players=`. Open this one; do not build your own,
+//              or the two halves will drift.
+//   expiresAt  epoch ms. The staged trade is thrown away a few minutes after
+//              staging, so open the link now, not later.
+//   count      how many of your players were staged.
+//
+// `res.ok === false` gives `res.error`, a sentence fit to show a person. The
+// commonest one is simply that the extension is not installed, which is not an
+// error worth shouting about — the deep link still works, it just opens with
+// only their side ticked, which is what the Trade page does today.
+//
+// WHY THE SHAPE IS LIKE THIS, and why `myPlayers` carries names while
+// `theirPlayerIds` does not:
+//
+//   Their side is ticked by ESPN, from the id, server-side. Ours is ticked by
+//   a content script reading the rendered page — and a player's ESPN id is not
+//   written into that page as an attribute anywhere. It is recoverable from the
+//   headshot URL (.../players/full/<id>.png), which covers everybody EXCEPT a
+//   D/ST, whose row carries a team logo instead. The name is the fallback that
+//   makes a D/ST work, and it is also what the on-page badge says when a man
+//   cannot be found at all. Pass ESPN's own `fullName` — anything else risks
+//   not matching.
+//
+// NOTHING IS SENT TO ESPN BY THIS CALL. It stores a note in the extension for
+// a few minutes. The single write is still the owner's own click on ESPN's own
+// Propose Trade button, on a page he opened himself.
 
 const SITE = 'ff-site';
 const EXT = 'ff-ext';
@@ -140,4 +188,38 @@ export function league({ leagueId, season, views = [], scoringPeriodId, filter, 
 /** A season-level read, e.g. view: 'proTeamSchedules_wl' */
 export function seasonView({ season, view, timeoutMs }) {
   return ask({ type: 'SEASON', season: Number(season), view }, { timeoutMs });
+}
+
+/**
+ * Stage a trade so ESPN's own trade page opens with BOTH sides ticked.
+ *
+ * See the contract at the top of this file. In one line: this hands the deal to
+ * the extension, which hands it to a content script on ESPN's trade page, which
+ * ticks your own side's checkboxes — the one thing ESPN's `players=` parameter
+ * cannot do. It ticks, and stops. The trade is still proposed by hand.
+ *
+ * Coercion here is deliberately shallow: ids are turned into numbers and names
+ * into strings, and everything else is left for the worker to refuse. The
+ * worker is the only side that can be trusted to validate, so it does — this is
+ * a convenience layer, not a gate.
+ */
+export function stageTrade({
+  leagueId, season, myTeamId, theirTeamId, myPlayers, theirPlayerIds, timeoutMs,
+}) {
+  const one = (p) => {
+    const entry = (p && typeof p === 'object') ? p : { id: p };
+    const out = { id: Number(entry.id) };
+    if (entry.name != null) out.name = String(entry.name);
+    return out;
+  };
+
+  return ask({
+    type: 'STAGE_TRADE',
+    leagueId: String(leagueId),
+    season: Number(season),
+    myTeamId: String(myTeamId),
+    theirTeamId: String(theirTeamId),
+    myPlayers: (myPlayers || []).map(one),
+    theirPlayerIds: (theirPlayerIds || []).map(Number),
+  }, { timeoutMs });
 }

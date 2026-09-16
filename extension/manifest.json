@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fantasy Football Bridge",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Connects your private ESPN fantasy league to your Fantasy Football site, without making the league public.",
   "permissions": [
     "storage"
@@ -23,6 +23,15 @@
         "content-site.js"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://fantasy.espn.com/football/team/trade*"
+      ],
+      "js": [
+        "content-espn-trade.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {
