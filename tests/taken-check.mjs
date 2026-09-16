@@ -33,6 +33,25 @@ import { REPO } from './repo.mjs';
 const BARS = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 9 };
 
 const SCENARIOS = {
+  // TWO SQUADS WEARING ONE NAME. The table groups the league into per-manager
+  // depth charts, and it used to group them by the LABEL on screen. That was
+  // unique often enough to hide the bug while a squad was labelled with ESPN's
+  // team name, and it got likelier the moment a squad started being labelled
+  // with the person holding it: two owners can share a display name, and a
+  // squad whose owner does not resolve falls back to a shared shape.
+  //
+  // Merged, both squads get one depth chart computed over thirty-two players,
+  // so every rank on BOTH of them is wrong and nothing on screen says so. The
+  // stub gives teams 1 and 2 the same name under TAKEN_SAME_LABEL and leaves
+  // their ids alone, which is exactly the shape that used to merge.
+  'same-label': {
+    label: '(e) two squads that render the same name stay two squads',
+    stub: true,
+    env: { TAKEN_SAME_LABEL: '1' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    after: async ({ document }) => ({ rows: takenSnapshot(document) }),
+  },
   live: {
     label: '(a) three stub squads: owners, ranks, and nothing coloured',
     stub: true,
@@ -407,6 +426,44 @@ async function check(scenario, boot) {
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
+
+  // ---- (e) two squads, one label -------------------------------------------
+  //
+  // Teams 1 and 2 both render "Jordan Vance". The claim is that they are still
+  // two depth charts, and the way to prove it is to count RANKS rather than to
+  // read the page's own owner column back to it: if the squads merged, the two
+  // rosters are ranked as one, so the quarterbacks — three on team 1, two on
+  // team 2 — come out QB1..QB5 instead of QB1..QB3 and QB1..QB2.
+  if (scenario === 'same-label') {
+    const all = takenSnapshot(d);
+    const label = 'Jordan Vance';
+    const merged = all.filter((r) => r.owner === label);
+
+    c.ok('both squads are in the table under one label',
+      merged.length === 20, `${merged.length} rows labelled ${label}`);
+
+    const qbRanks = merged
+      .filter((r) => /^QB/.test(r.pos))
+      .map((r) => r.pos.replace(/[^0-9]/g, ''))
+      .filter(Boolean)
+      .sort();
+
+    // Team 1 holds three QBs, team 2 holds two. Kept apart that is 1,1,2,2,3.
+    // Merged it would be 1,2,3,4,5 — and every one of those numbers would be a
+    // confident statement about a depth chart that does not exist.
+    c.ok('the quarterbacks are ranked within their own squads, not across both',
+      qbRanks.join(',') === '1,1,2,2,3', `ranks were ${qbRanks.join(',')}`);
+
+    c.ok('so no rank runs past the deepest single squad',
+      !qbRanks.some((r) => Number(r) > 3), qbRanks.join(','));
+
+    // And the ranks really are keyed on something other than the label: each
+    // squad has to own a QB1, which cannot happen if they share a chart.
+    const ones = qbRanks.filter((r) => r === '1').length;
+    c.ok('each squad keeps its own QB1', ones === 2, `${ones} men ranked QB1`);
+
+    return c.out;
+  }
 
   // ---- (c)/(d) the ?player= deep link --------------------------------------
   //

@@ -91,6 +91,24 @@ const FAIL_ROSTER = new Set(
   (process.env.TAKEN_FAIL_ROSTER_WEEKS || '').split(',').filter(Boolean).map(Number)
 );
 
+/**
+ * TWO SQUADS WEARING THE SAME LABEL.
+ *
+ * The taken table groups a league into per-manager depth charts, and it used to
+ * group them by the DISPLAYED NAME. That was unique often enough to hide the
+ * bug while a squad was labelled with ESPN's team name; it is likelier to
+ * collide now that a squad is labelled with the person holding it, because two
+ * owners can share a display name and an unresolved one falls back to a shared
+ * shape. Two squads merged into one means a depth chart computed over both
+ * rosters at once — every rank on BOTH squads silently wrong, with nothing on
+ * screen to suggest it.
+ *
+ * Under this flag teams 1 and 2 report an identical name and keep their own
+ * ids, which is exactly the shape that used to merge them.
+ */
+const SAME_LABEL = process.env.TAKEN_SAME_LABEL === '1';
+const labelFor = (t) => (SAME_LABEL && (t.id === 1 || t.id === 2) ? 'Jordan Vance' : t.name);
+
 export async function fetchSchedule() {
   calls.schedule++;
 
@@ -111,7 +129,7 @@ export async function fetchSchedule() {
 
   return {
     leagueName: 'Stub League',
-    teams: TEAMS.map((t) => ({ id: t.id, name: t.name })),
+    teams: TEAMS.map((t) => ({ id: t.id, name: labelFor(t) })),
     weeks: [...byWeek.keys()],
     byWeek,
     games: [...byWeek.values()].flat(),
@@ -138,7 +156,7 @@ export async function fetchWeekRosters(week) {
       }));
       return {
         id: t.id,
-        name: t.name,
+        name: labelFor(t),
         abbrev: `T${t.id}`,
         players,
         starters: [],

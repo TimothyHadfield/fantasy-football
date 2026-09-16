@@ -899,26 +899,35 @@ function buildTakenRows(weeks) {
   // The owner is still the earliest week he actually appears in: that is the
   // most recent squad this page knows him to have been on, and it is a fact
   // rather than a guess.
-  const seen = new Map();   // playerId -> { p, owner }
+  const seen = new Map();   // playerId -> { p, ownerId, owner }
   for (const week of loaded) {
     for (const team of state.rosterWeeks.get(week) || []) {
       const owner = (team.name || '').trim() || `Team ${team.id}`;
       for (const p of team.players || []) {
         if (p.playerId === null || p.playerId === undefined) continue;
-        if (!seen.has(p.playerId)) seen.set(p.playerId, { p, owner });
+        if (!seen.has(p.playerId)) seen.set(p.playerId, { p, ownerId: team.id, owner });
       }
     }
   }
 
-  // Grouped by owner so the ranks are per manager, as they always were.
+  // GROUPED BY TEAM ID, NOT BY THE LABEL. The ranks are per manager, as they
+  // always were — but the thing that identifies a manager has to be his id.
+  // Keying on the displayed string merges any two squads that happen to render
+  // the same label, and then BOTH of them get a depth chart computed over
+  // thirty-two players: every rank on both squads silently wrong, with nothing
+  // on screen to suggest it. The label was unique often enough to hide this
+  // while it was ESPN's team name; it is likelier to collide now that a squad
+  // is labelled with the person holding it, since two owners can share a
+  // display name and an unresolved one falls back to a shared shape. The id is
+  // ESPN's own and is unique by construction.
   const squads = new Map();
-  for (const { p, owner } of seen.values()) {
-    if (!squads.has(owner)) squads.set(owner, []);
-    squads.get(owner).push(p);
+  for (const { p, ownerId, owner } of seen.values()) {
+    if (!squads.has(ownerId)) squads.set(ownerId, { owner, players: [] });
+    squads.get(ownerId).players.push(p);
   }
 
   const rows = [];
-  for (const [owner, players] of squads) {
+  for (const { owner, players } of squads.values()) {
     const byPosition = new Map();
     for (const p of players) {
       const values = weeks.map((w) => rosterValueFor(p.playerId, w));
