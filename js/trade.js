@@ -662,11 +662,12 @@ function dropRedundant(offers) {
  * @param {number} [opts.limit]   how many offers to return
  * @param {number[]} [opts.weeks] remaining weeks — switches to the WEEKLY measure
  * @param {function} [opts.projFor] `(player, week) -> number|null`, with `weeks`
+ * @param {boolean} [opts.zeroIsBye] is a 0.00 a bye? See `scoreAcrossWeeks`.
  * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
 export function findTrades({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
-  weeks = null, projFor = null,
+  weeks = null, projFor = null, zeroIsBye = true,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -678,7 +679,7 @@ export function findTrades({
   const weekly = Array.isArray(weeks) && weeks.length > 0 && typeof projFor === 'function';
 
   const myScored = weekly
-    ? scoreAcrossWeeks(mine.players, weeks, projFor).season
+    ? scoreAcrossWeeks(mine.players, weeks, projFor, zeroIsBye).season
     : scored(mine.players, measure);
 
   let offers = [];
@@ -687,7 +688,7 @@ export function findTrades({
     offers = offers.concat(
       weekly
         ? tradesAcrossWeeks(
-            myScored, scoreAcrossWeeks(theirs.players, weeks, projFor).season,
+            myScored, scoreAcrossWeeks(theirs.players, weeks, projFor, zeroIsBye).season,
             theirs, slots, kinds, weeks
           )
         : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
@@ -773,14 +774,50 @@ export function findTrades({
  *                cuts by, so both of them work here unchanged.
  *   `weekly[i]`  a ready-made player object for `weeks[i]`, whose `projected`
  *                is that week's number. `optimalLineup` reads these directly.
- *   `perWeek`    the season total spread back over the weeks, for a page that
- *                wants a number on the scale a manager thinks in.
+ *   `perWeek`    what he is worth IN A WEEK HE PLAYS — see below.
  *
  * A week ESPN has no number for is `null`, which `optimalLineup` drops from the
  * pool entirely — a different fact from a 0.00 bye, and that distinction is the
  * one rule 2 in HANDOFF.md exists to protect.
+ *
+ * ---------------------------------------------------------------------------
+ * `perWeek` DELIBERATELY EXCLUDES BYES, AND SO NO LONGER MULTIPLIES BACK UP
+ *
+ * The owner's words: "ignore the bye week when calculating per week." He is
+ * right, and the reason is worth writing down. A bye comes back from ESPN as
+ * **0.00** — a true fact about that week, and no evidence at all about what the
+ * man is worth in a week he actually plays. Averaging it in says a 14-a-week
+ * receiver with one bye left in a nine-week span is a 12.4 receiver, which is a
+ * sentence about the calendar wearing the clothes of a sentence about him.
+ *
+ * So `perWeek` is the mean over his PLAYABLE weeks — the span with his byes
+ * taken out of the divisor, and ONLY his byes. Three states stay three states,
+ * exactly as `projToken` in js/player-card.js tells them apart:
+ *
+ *   0.00   a bye, WHEN the numbers came from ESPN. It stays in `projected` —
+ *          those are points he genuinely will not score — and comes out of the
+ *          divisor, which is the whole of this change.
+ *   0.00   a genuine projection of zero, when they did NOT come from ESPN.
+ *          `js/demo-rosters.js` returns 0 for a man it has ruled OUT, which is
+ *          a real zero and not a bye. So the caller says which kind of data
+ *          this is with `zeroIsBye`, and demo passes `false` — the same
+ *          distinction, in the same direction, as `projToken(v, demo)`.
+ *   null   ESPN carried no number for him that week. DELIBERATELY UNCHANGED:
+ *          it is still in the divisor, exactly as it was before byes were
+ *          taken out. A man ESPN is quiet about is not a man on bye, and
+ *          quietly promoting "we do not know" into "he does not play" would
+ *          inflate every player the data is thin on. The owner asked for byes;
+ *          this is byes.
+ *
+ * The consequence has to be stated wherever both numbers appear: `projected` is
+ * no longer `perWeek × weeks.length`. It is `perWeek × weeksPlayable`, give or
+ * take a rounding tenth, which is why `weeksPlayable` comes back beside them
+ * rather than being left for a page to infer. A man with NO playable week left
+ * has no per-week value at all and gets `null` — never a division by zero, and
+ * never a 0.0 that would read as "he is worth nothing" rather than "there is
+ * nothing to say".
  */
-function scoreAcrossWeeks(players, weeks, projFor) {
+function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
   const ws = (weeks || []).slice();
   const read = typeof projFor === 'function' ? projFor : () => null;
 
@@ -788,17 +825,26 @@ function scoreAcrossWeeks(players, weeks, projFor) {
     const weekly = new Array(ws.length);
     let sum = 0;
     let counted = 0;
+    let byes = 0;
     for (let i = 0; i < ws.length; i++) {
       const raw = read(p, ws[i]);
       const v = Number.isFinite(raw) ? raw : null;
       weekly[i] = { ...p, projected: v, week: ws[i] };
-      if (v !== null) { sum += v; counted++; }
+      if (v !== null) {
+        sum += v;
+        counted++;
+        if (zeroIsBye && v === 0) byes++;
+      }
     }
+    // The span less his byes — not "the weeks that answered". See the note
+    // above: a null stays in the divisor, a bye does not.
+    const playable = ws.length - byes;
     return {
       ...p,
       projected: counted ? round1(sum) : null,
-      perWeek: counted && ws.length ? round1(sum / ws.length) : null,
+      perWeek: counted && playable > 0 ? round1(sum / playable) : null,
       weeksCounted: counted,
+      weeksPlayable: playable,
       weekly,
     };
   });
@@ -850,6 +896,8 @@ function fillAcrossWeeks(roster, slots, ws) {
  * @returns {{total:number, byWeek: Array<{week:number, total:number, starters:Array}>}}
  */
 export function seasonLineupValue(players, slots, weeks, projFor) {
+  // No `zeroIsBye` here on purpose: this returns totals and lineups, neither of
+  // which the bye rule touches. A bye is a real 0 in a real week either way.
   const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor);
   return fillAcrossWeeks(season, slots, ws);
 }
@@ -892,15 +940,16 @@ function rosterAcrossWeeksAfter(season, send, joining) {
  * @param {number[]} opts.slots
  * @param {number[]} opts.weeks
  * @param {function} opts.projFor
+ * @param {boolean} [opts.zeroIsBye] is a 0.00 a bye? See `scoreAcrossWeeks`.
  * @returns {{before:Object, after:Object, delta:number,
  *            byWeek:Array<{week:number, before:number, after:number, delta:number}>,
- *            cut:Array, roster:Array}}
+ *            churn:{in:Array, out:Array}, cut:Array, roster:Array}}
  */
 export function priceTradeAcrossWeeks({
-  players, send = [], receive = [], slots, weeks, projFor,
+  players, send = [], receive = [], slots, weeks, projFor, zeroIsBye = true,
 }) {
-  const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor);
-  const joining = scoreAcrossWeeks(receive, ws, projFor).season;
+  const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor, zeroIsBye);
+  const joining = scoreAcrossWeeks(receive, ws, projFor, zeroIsBye).season;
 
   const before = fillAcrossWeeks(season, slots, ws);
   const kept = rosterAcrossWeeksAfter(season, send, joining);
@@ -923,6 +972,13 @@ export function priceTradeAcrossWeeks({
       after: after.byWeek[i].total,
       delta: round1(after.byWeek[i].total - before.byWeek[i].total),
     })),
+    // Who gains lineup time and who loses it, in the same shape the finder's
+    // rows print. It is computed here rather than by the caller because the two
+    // fills it needs are already in hand — asking a page to rebuild them would
+    // be nine more lineup fills for numbers that are sitting right there, and a
+    // second way of deriving one answer. Same `in` minus `out` IS the gain
+    // property the finder's own churn has.
+    churn: weeklyChurn(contributions(before), contributions(after)),
     cut,
     roster: kept,
   };
@@ -1260,6 +1316,7 @@ function greedyPacking(pool) {
  * @param {Array}   [opts.teams]   every squad — makes the partner side checked too
  * @param {boolean} [opts.requirePartnersGain] drop a packing a partner would refuse
  * @param {boolean} [opts.onePerPartner] never combine two deals with one manager
+ * @param {boolean} [opts.zeroIsBye] is a 0.00 a bye? See `scoreAcrossWeeks`.
  * @param {number}  [opts.maxOffers]
  * @param {number}  [opts.maxPackings]
  * @returns {{combo:Array, count:number, delta:number, pricing:Object,
@@ -1271,6 +1328,7 @@ export function bestCombo(offers, {
   teams = null,
   requirePartnersGain = true,
   onePerPartner = false,
+  zeroIsBye = true,
   maxOffers = COMBO_OFFER_CAP,
   maxPackings = COMBO_PACKING_CAP,
 } = {}) {
@@ -1296,7 +1354,7 @@ export function bestCombo(offers, {
     const send = chosen.flatMap((c) => c.offer.send);
     const receive = chosen.flatMap((c) => c.offer.receive);
     const pricing = priceTradeAcrossWeeks({
-      players, send, receive, slots, weeks: ws, projFor,
+      players, send, receive, slots, weeks: ws, projFor, zeroIsBye,
     });
 
     const partners = [];
@@ -1314,7 +1372,7 @@ export function bestCombo(offers, {
         if (!team) continue;
         const p = priceTradeAcrossWeeks({
           players: team.players, send: side.out, receive: side.in,
-          slots, weeks: ws, projFor,
+          slots, weeks: ws, projFor, zeroIsBye,
         });
         partners.push({
           partner: team, delta: p.delta,
@@ -1423,4 +1481,138 @@ export function bestCombo(offers, {
     exhaustive,
     offers: pool.map((c) => c.offer),
   };
+}
+
+// ===========================================================================
+// One packing, read as OFFERS — merged per manager
+// ===========================================================================
+//
+// The owner's ask: "In the best combo box, it should display the trades as a
+// list just like the regular trade box, and you should be able to click on the
+// link to fantasy in the same way as well. If there are multiple trades with a
+// single user in the best combo box, combine them."
+//
+// THE MERGING IS NOT COSMETIC — IT IS MORE CORRECT THAN LISTING THEM APART.
+//
+// `bestCombo` deliberately allows two disjoint deals with the SAME manager
+// (see the note above `COMBO_OFFER_CAP`), because they are legal and are
+// genuinely one bigger deal he might take. But nothing about them is two
+// transactions: they are proposed on one ESPN screen, accepted or refused
+// together, and — this is the part that matters — the engine has already priced
+// them as ONE combined roster change. That is the whole point of
+// `priceTradeAcrossWeeks` taking a package rather than a trade, and the whole
+// reason `naiveDelta` exists. So presenting them as two rows with two gains
+// would be showing the reader the exact arithmetic the engine refuses to do.
+//
+// Hence one row per manager: the send lists unioned, the receive lists unioned,
+// one ESPN link carrying every id of his that is coming to you, and ONE gain.
+//
+// WHERE THAT GAIN COMES FROM, because this is the trap. It is NOT the two
+// offers' gains added together. It is a fresh `priceTradeAcrossWeeks` of the
+// merged move — everything sent and everything received, applied at once,
+// against your roster as it is today. Two upgrades competing for one lineup
+// slot cancel here exactly as they do in the combo total above.
+//
+// And the merged gains still do not add up to the combo's own figure, for the
+// same reason one level up: each merged deal was priced against the CURRENT
+// roster, and after the first of them that roster is gone. The combo's headline
+// stays the only number that prices the whole slate, and the page says so.
+
+/**
+ * One packing, as one offer per manager.
+ *
+ * @param {Object} entry a `best`/`most` entry out of `bestCombo`
+ * @param {Object} opts
+ * @param {Array}    opts.players your roster
+ * @param {number[]} opts.slots
+ * @param {number[]} opts.weeks
+ * @param {function} opts.projFor
+ * @param {boolean} [opts.zeroIsBye]
+ * @returns {Array} offers shaped like `findTrades`', plus `merged`/`mergedFrom`
+ */
+export function mergeComboByPartner(entry, {
+  players, slots, weeks, projFor, zeroIsBye = true,
+} = {}) {
+  if (!entry || !Array.isArray(entry.combo) || !entry.combo.length) return [];
+  const ws = Array.isArray(weeks) ? weeks.slice() : [];
+
+  // Grouped in the order the packing chose them, so a page that prints them in
+  // this order is printing the engine's own preference rather than a re-sort
+  // that could disagree with the list above it.
+  const groups = [];
+  const seenPartner = new Map();
+  for (const offer of entry.combo) {
+    const id = offer.partner ? offer.partner.id : null;
+    let group = seenPartner.get(id);
+    if (!group) {
+      group = { partner: offer.partner, offers: [] };
+      seenPartner.set(id, group);
+      groups.push(group);
+    }
+    group.offers.push(offer);
+  }
+
+  // What each partner's COMBINED side came out at, already priced by
+  // `bestCombo` when it was handed the squads. Re-deriving it here would be a
+  // second way of knowing one number, and the two could drift.
+  const hisSide = new Map();
+  for (const p of entry.partners || []) {
+    if (p && p.partner) hisSide.set(p.partner.id, p);
+  }
+
+  /** A man can only be traded once, so a repeat here would be a bug upstream. */
+  const uniqueById = (list) => {
+    const seen = new Set();
+    const out = [];
+    for (const p of list) {
+      const id = idOf(p);
+      if (id !== null && id !== undefined && seen.has(id)) continue;
+      if (id !== null && id !== undefined) seen.add(id);
+      out.push(p);
+    }
+    return out;
+  };
+
+  return groups
+    .map((group) => {
+      const send = uniqueById(group.offers.flatMap((o) => o.send));
+      const receive = uniqueById(group.offers.flatMap((o) => o.receive));
+
+      // THE RE-PRICE. Everything at once, against the roster as it stands.
+      const pricing = priceTradeAcrossWeeks({
+        players, send, receive, slots, weeks: ws, projFor, zeroIsBye,
+      });
+      const his = hisSide.get(group.partner ? group.partner.id : null) || null;
+
+      return {
+        partner: group.partner,
+        // The entries the offers already carry, so `perWeek` and every other
+        // derived field is the one the finder's rows are printing. Re-scoring
+        // them here would compute the same numbers a second way.
+        send,
+        receive,
+        kind: packageKind(send, receive),
+        shape: `${send.length}-for-${receive.length}`,
+        basis: 'weeks',
+        weeks: ws,
+        // Said on the row, because a four-player trade is a different
+        // conversation from two two-player ones and the reader has to know
+        // which one he is about to send.
+        merged: group.offers.length > 1,
+        mergedFrom: group.offers.length,
+        myGain: pricing.delta,
+        myBefore: pricing.before.total,
+        myAfter: pricing.after.total,
+        theirGain: his ? his.delta : null,
+        theirBefore: his ? his.before : null,
+        theirAfter: his ? his.after : null,
+        yourChurn: pricing.churn,
+        byWeek: pricing.byWeek,
+        cut: pricing.cut,
+        pricing,
+      };
+    })
+    // Best first, the same order and the same tie-breaks the finder uses, so
+    // the two tables read the same way down the page.
+    .sort((a, b) => b.myGain - a.myGain || a.send.length + a.receive.length - (b.send.length + b.receive.length));
 }

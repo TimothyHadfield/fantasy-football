@@ -154,15 +154,53 @@ function readDepth(document) {
   return { heads, rows, bars: [...document.querySelectorAll('#depthBars .bar-chip')].map(text) };
 }
 
-function readTrades(document) {
-  const table = document.getElementById('tradeTable');
+/** The ESPN id out of a `waivers.html?player=123` href, which is the identity. */
+const idOfHref = (href) => {
+  const m = String(href || '').match(/player=(-?\d+)/);
+  return m ? Number(m[1]) : null;
+};
+
+/**
+ * One man as the page drew him.
+ *
+ * `pos` is the POSITION TAG and is '' when the page suppressed it, which is the
+ * whole of the D/ST assertion. `val` is the one number beside him — there must
+ * only ever be one now, so `vals` counts them and a second would fail.
+ */
+function readMan(m) {
+  const a = m.querySelector('a.pref');
+  return {
+    id: a ? idOfHref(a.getAttribute('href')) : null,
+    text: text(m),
+    pos: text(m.querySelector('.pp')),
+    val: text(m.querySelector('.val')),
+    vals: [...m.querySelectorAll('.val')].map(text),
+    // The per-week twin the packages USED to carry beside a season total. It
+    // must not come back: one number per player, and it is the per-week one.
+    extras: [...m.querySelectorAll('.per')].map(text),
+  };
+}
+
+/**
+ * Every offer row of one table — the finder's and the combo's are the same
+ * markup now, so they get the same reader. A second reader would let the two
+ * drift apart without any test noticing, which is exactly the failure mode the
+ * shared row builder exists to prevent.
+ */
+function readOfferRows(table) {
+  if (!table) return [];
   return [...table.querySelectorAll('tbody tr')].map((tr) => {
     const tds = [...tr.children];
+    const men = (td) => [...td.querySelectorAll('.man')].map(readMan);
     return {
-      partner: text(tds[0]),
+      // The name only — the merged badge lives beside it in the same cell and
+      // is a different fact.
+      partner: text(tds[0].querySelector('.mgr') || tds[0]),
+      merged: !!tr.querySelector('.merged-tag'),
+      mergedText: text(tr.querySelector('.merged-tag')),
       shape: text(tds[1]),
-      send: [...tds[2].querySelectorAll('.man')].map(text),
-      receive: [...tds[3].querySelectorAll('.man')].map(text),
+      send: men(tds[2]),
+      receive: men(tds[3]),
       churn: text(tds[3].querySelector('.churn')),
       beforeAfter: text(tds[4]),
       gainText: text(tds[5]),
@@ -176,9 +214,17 @@ function readTrades(document) {
       // this is only "was one registered at all".
       cards: [...tr.querySelectorAll('.man[data-tip]')].length,
       links: [...tr.querySelectorAll('a.pref')].map((a) => a.getAttribute('href')),
+      // The keyboard route into the pop-up, and the key focus returns to.
+      openKey: tr.getAttribute('data-key'),
+      opener: !!tr.querySelector('button.wk-open'),
     };
   });
 }
+
+const readTrades = (document) => readOfferRows(document.getElementById('tradeTable'));
+
+/** Just the printed names, for the assertions that only care about who. */
+const names = (men) => men.map((m) => m.text).join(' ');
 
 /** "+12.3" / "−4.0" / "12.3" -> a number. The minus sign is U+2212. */
 const num = (s) => Number(String(s).replace(/−/g, '-').replace(/\+/g, '').trim());
@@ -212,11 +258,34 @@ function readCost(document) {
   };
 }
 
+/**
+ * The drill-down, which is now a MODAL.
+ *
+ * `hidden` is the element's own `hidden` property rather than a class, because
+ * that is what the page sets — and `present` is the separate question Tim's
+ * fifth ask turns on: a week table that is merely invisible is still in the
+ * document, still findable, still read out by a screen reader. Both are
+ * asserted, and they are not the same claim.
+ */
 function readDeal(document) {
-  const panel = document.getElementById('dealPanel');
+  const modal = document.getElementById('dealModal');
   const body = document.getElementById('dealBody');
   return {
-    hidden: (panel.getAttribute('class') || '').includes('hidden'),
+    hidden: !!modal.hidden,
+    present: !!body.querySelector('table.weeks'),
+    bodyLength: (body.innerHTML || '').length,
+    dialog: (() => {
+      const card = document.getElementById('dealPanel');
+      return {
+        role: card.getAttribute('role'),
+        modal: card.getAttribute('aria-modal'),
+        labelledby: card.getAttribute('aria-labelledby'),
+      };
+    })(),
+    closeButton: (() => {
+      const b = document.getElementById('dealClose');
+      return b ? b.tagName : '';
+    })(),
     title: text(document.getElementById('dealTitle')),
     note: text(document.getElementById('dealNote')),
     body: text(body),
@@ -226,6 +295,7 @@ function readDeal(document) {
       return a ? a.getAttribute('href') : '';
     })(),
     cards: [...body.querySelectorAll('.man[data-tip]')].length,
+    men: [...body.querySelectorAll('.man')].map(readMan),
   };
 }
 
@@ -239,26 +309,24 @@ function readCombo(document) {
   const body = document.getElementById('comboBody');
   const best = body.querySelector('.combo-best') || body;
   const alt = body.querySelector('.combo-alt');
-  const ids = (el) =>
-    el ? [...el.querySelectorAll('.combo-list li a.pref')].map((a) => a.getAttribute('href')) : [];
-  // Each trade's two sides, as ESPN ids, so the whole packing can be re-priced
-  // from the engine rather than read back off the page that printed it.
-  const side = (li, cls) =>
-    [...li.querySelectorAll(`.${cls} a.pref`)].map((a) =>
-      Number((a.getAttribute('href') || '').replace(/^\D+/, '')));
-  const perTrade = [...best.querySelectorAll('.combo-list li')].map((li) => ({
-    send: side(li, 'c-send'),
-    receive: side(li, 'c-receive'),
-  }));
+  const rows = readOfferRows(document.getElementById('comboTable'));
+  const altRows = readOfferRows(document.getElementById('comboAltTable'));
+  // The men, by ESPN's own id rather than by their printed name: the cell text
+  // runs a name into a position into a number, and the whole point of the
+  // site's link contract is that the id is the identity.
+  const ids = (list) => list.flatMap((r) => r.links);
   return {
     head: text(best.querySelector('.combo-head')),
-    items: [...best.querySelectorAll('.combo-list li')].map(text),
-    // The men, by ESPN's own id rather than by their printed name: the cell
-    // text runs a name into a position into two numbers, and the whole point
-    // of the site's link contract is that the id is the identity.
-    names: ids(best),
-    altNames: ids(alt),
-    perTrade,
+    rows,
+    altRows,
+    names: ids(rows),
+    altNames: ids(altRows),
+    // Each row's two sides, as ESPN ids, so the whole packing can be re-priced
+    // from the engine rather than read back off the page that printed it.
+    perTrade: rows.map((r) => ({
+      send: r.send.map((m) => m.id).filter((v) => v !== null),
+      receive: r.receive.map((m) => m.id).filter((v) => v !== null),
+    })),
     alt: text(alt),
     weeks: readWeekTable(best),
     body: text(body),
@@ -435,6 +503,107 @@ const SCENARIOS = {
   },
 
   /**
+   * The drill-down as a POP-UP: Tim's fifth ask, and every way out of it.
+   *
+   * "Only show the weekly current/change if the user clicks on it (including
+   * the best combo), and show it as a pop-up, not a separate box below
+   * everything."
+   *
+   * Three things have to be true and they are three different claims: it does
+   * not EXIST until something is clicked; it opens from the finder AND from a
+   * combo row; and it closes all three ways a modal has to close — its own
+   * button, Escape, and a click outside it. A pop-up that only closes one way
+   * is one somebody gets stuck under, which is the same rule the player card's
+   * sheet already follows.
+   */
+  async modal() {
+    const { document, errors, fetchCalls } = await boot();
+    const click = (el) => {
+      if (el) el.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    };
+    const key = (k) => {
+      const ev = new globalThis.Event('keydown', { bubbles: true });
+      ev.key = k;
+      document.dispatchEvent(ev);
+    };
+
+    click(document.getElementById('loadWeeks'));
+    await settle(12000);
+
+    // Nothing has been clicked yet, so there must be no dialog and no table.
+    const before = readDeal(document);
+
+    // -- from a finder row, by its KEYBOARD route rather than the row click,
+    //    because that is the half a <tr> cannot do on its own.
+    click(document.querySelector('#tradeTable tbody tr button.wk-open'));
+    await settle(1200);
+    const opened = readDeal(document);
+
+    // -- closed by its own button
+    click(document.getElementById('dealClose'));
+    await settle(600);
+    const closedByButton = readDeal(document);
+
+    // -- opened again, closed by Escape
+    click(document.querySelector('#tradeTable tbody tr'));
+    await settle(1200);
+    const reopened = readDeal(document);
+    key('Escape');
+    await settle(600);
+    const closedByEscape = readDeal(document);
+
+    // -- opened again, closed by a click anywhere outside the card
+    click(document.querySelector('#tradeTable tbody tr'));
+    await settle(1200);
+    click(document.getElementById('depthNote'));
+    await settle(600);
+    const closedByOutside = readDeal(document);
+
+    // -- and from a COMBO row, which is the other half of the ask
+    const comboRow = document.querySelector('#comboTable tbody tr');
+    click(comboRow);
+    await settle(1200);
+    const fromCombo = readDeal(document);
+
+    // A click INSIDE the card must not close it — the backdrop is outside, the
+    // thing you are reading is not.
+    click(document.getElementById('dealNote'));
+    await settle(400);
+    const stillOpen = readDeal(document);
+
+    // And the WHOLE packing, which is the other thing that used to be printed
+    // inline under the list. "Including the best combo" is the half of ask 5
+    // that is about this button.
+    key('Escape');
+    await settle(400);
+    const headButton = document.querySelector('#comboBody .combo-head button.wk-open');
+    click(headButton);
+    await settle(1500);
+    const wholeCombo = readDeal(document);
+
+    return {
+      errors, fetchCalls,
+      before, opened, closedByButton, reopened, closedByEscape, closedByOutside,
+      fromCombo, stillOpen, wholeCombo,
+      hadHeadButton: !!headButton,
+      headLabel: text(headButton),
+      // Nothing may be printing a week-by-week table outside the pop-up now.
+      strayWeekTables: document.querySelectorAll('#comboBody table.weeks').length +
+        document.querySelectorAll('#tradeTable table.weeks').length,
+      hadComboRow: !!comboRow,
+      comboPartner: comboRow ? text(comboRow.querySelector('.mgr')) : '',
+      // The modal frame is a direct child of <body>, not of a scrolling panel:
+      // a `position: fixed` box inside `overflow: auto` is positioned against
+      // that box rather than the window.
+      parent: (document.getElementById('dealModal').parentNode || {}).tagName || '',
+      // Nothing may lock the page's own scrolling. A modal that sets an
+      // overflow on <body> and then fails to unset it leaves a page nobody can
+      // scroll and no way to tell why.
+      bodyStyle: document.body.getAttribute('style') || '',
+    };
+  },
+
+  /**
    * A real league, stubbed: what the weekly measure COSTS, and what the ESPN
    * deep link says.
    *
@@ -468,6 +637,7 @@ const SCENARIOS = {
       cost: readCost(document),
       trades: readTrades(document),
       combo: readCombo(document),
+      depth: readDepth(document),
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
       note: text(document.getElementById('tradeNote')),
       requests: stub.calls.week.length,
@@ -486,7 +656,24 @@ const SCENARIOS = {
       errors, before, after, deal,
       offer: idx >= 0 ? after.trades[idx] : null,
       rosters: { 1: stub.rosterIds(1), 2: stub.rosterIds(2), 3: stub.rosterIds(3) },
-      span: stub.WEEKS - stub.PLAYED_THROUGH + 1,
+      // Every man the page drew anywhere, so the per-week arithmetic and the
+      // D/ST rule can be checked against the fixture's own numbers rather than
+      // against a hand-picked row.
+      men: [
+        ...after.trades.flatMap((t) => [...t.send, ...t.receive]),
+        ...after.combo.rows.flatMap((t) => [...t.send, ...t.receive]),
+        ...deal.men,
+      ],
+      // The scalar basis draws a different set of offers, and it is the one
+      // that puts a quarterback on screen — which is what the D/ST rule is
+      // checked AGAINST, since a rule that suppressed every tag would pass a
+      // test that only looked at defences.
+      menBefore: before.trades.flatMap((t) => [...t.send, ...t.receive]),
+      // Weeks 5..13 — everything with NO result against it. Week 4 is the
+      // selected week and is played, so it is deliberately not in here.
+      span: stub.WEEKS - stub.PLAYED_THROUGH,
+      played: stub.PLAYED_THROUGH,
+      byeWeek: stub.BYE_WEEK,
     };
   },
 };
@@ -751,6 +938,20 @@ if (!ctl.boot) {
 // engine called directly, so a page that printed a plausible wrong number has
 // nowhere to hide.
 
+/**
+ * The weeks a demo page prices, re-derived here rather than read off the page.
+ *
+ * `js/demo-rosters.js` marks every game played, so the page treats the SELECTED
+ * week as "now" and prices what comes after it. That rule lives in
+ * `playedWeeks()` in js/trade-page.js; this is the suite's own copy of it, which
+ * is the point — if the page changed its mind, these two would disagree.
+ */
+const demoSpan = (week) => {
+  const out = [];
+  for (let w = Number(week) + 1; w <= 13; w++) out.push(w);
+  return out;
+};
+
 /** Price one packing of trades across the rest of the season, from scratch. */
 async function repriceCombo(week, teamId, perTrade) {
   if (!perTrade || !perTrade.length) return null;
@@ -761,8 +962,7 @@ async function repriceCombo(week, teamId, perTrade) {
   const base = generateDemoWeekRosters(week);
   const slots = slotsForLeague(slotCountsFromLineups(base.teams));
 
-  const span = [];
-  for (let w = week; w <= 13; w++) span.push(w);
+  const span = demoSpan(week);
 
   const byWeek = new Map();
   for (const w of span) {
@@ -794,12 +994,84 @@ async function repriceCombo(week, teamId, perTrade) {
   return priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor });
 }
 
-/** What the page would have claimed if it had added the offers' own gains up. */
-const naiveOf = (items) =>
-  items.reduce((a, s) => {
-    const m = s.match(/on its own ([+−]?[\d.]+)/);
-    return a + (m ? num(m[1]) : 0);
-  }, 0);
+/**
+ * What the page WOULD have claimed if it had added the offers' own gains up.
+ *
+ * Re-derived from the page's own two tables rather than from a phrase printed
+ * in the combo list, which no longer exists — the combo's rows are merged per
+ * manager and carry a re-priced gain, so their own numbers are deliberately not
+ * the finder's. Each combo row is matched back to the finder rows it was built
+ * from (the finder offers whose players are all inside it), and THOSE gains are
+ * what the naive sum is made of. Which is the only honest way to check the
+ * warning: it has to be the sum of the things somebody would have added up.
+ */
+function naiveFromFinder(comboRows, finderRows) {
+  let total = 0;
+  let matched = 0;
+  for (const c of comboRows) {
+    const ids = new Set([...c.send, ...c.receive].map((m) => m.id));
+    for (const f of finderRows) {
+      const fIds = [...f.send, ...f.receive].map((m) => m.id);
+      if (!fIds.length || !fIds.every((id) => ids.has(id))) continue;
+      // Only the offers with this same partner: a different manager's deal
+      // cannot be a part of this row however its ids fall.
+      if (f.partner !== c.partner) continue;
+      total += f.myGain;
+      matched++;
+    }
+  }
+  return { total: Math.round(total * 10) / 10, matched };
+}
+
+/** `[a, a+1, … b]`, and a label for it that reads like the page's own. */
+const weekRange = (a, b) => {
+  const out = [];
+  for (let w = a; w <= b; w++) out.push(w);
+  return out;
+};
+const weekLabel = (weeks) => `weeks ${weeks[0]}–${weeks[weeks.length - 1]}`;
+
+/**
+ * The stubbed league, rebuilt in THIS process, with a `projFor` that reads the
+ * fixture's own week functions.
+ *
+ * Nothing of the page is in here: the rosters come from the stub, the slot
+ * shape from `slotCountsFromLineups` as the page derives it, and every weekly
+ * number from `projectionFor`. So the engine can be run over any span at all —
+ * including the span the page is NOT supposed to be using, which is how "a
+ * played week changes nothing" becomes a thing that can fail.
+ */
+async function stubLeague() {
+  const stub = await import('./tr-stub-season.mjs');
+  const { slotsForLeague } = await import(moduleUrl('js/trade.js'));
+  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
+  const { teams } = await stub.fetchWeekRosters(stub.PLAYED_THROUGH);
+  const slots = slotsForLeague(slotCountsFromLineups(teams));
+  const byId = new Map();
+  for (const t of teams) for (const p of t.players) byId.set(p.playerId, p);
+  // ESPN's id, the way the stub mints it: team * 100 + roster slot.
+  const projFor = (p, w) => {
+    const id = p ? p.playerId : null;
+    if (id === null || id === undefined) return null;
+    const v = stub.projectionFor(Math.floor(id / 100), id % 100, w);
+    return typeof v === 'number' ? v : null;
+  };
+  return { stub, teams, slots, byId, projFor };
+}
+
+/** Two offers with the same partner that share no player — a mergeable pair. */
+function disjointPair(offers) {
+  const idsOf = (o) => new Set([...o.send, ...o.receive].map((p) => p.playerId));
+  for (let i = 0; i < offers.length; i++) {
+    for (let j = i + 1; j < offers.length; j++) {
+      if (offers[i].partner.id !== offers[j].partner.id) continue;
+      const a = idsOf(offers[i]);
+      if ([...idsOf(offers[j])].some((id) => a.has(id))) continue;
+      return [offers[i], offers[j]];
+    }
+  }
+  return null;
+}
 
 // ---- the weekly measure, on demo data -------------------------------------
 //
@@ -817,7 +1089,12 @@ if (!wk.boot) {
     wk.fetchCalls.length === 0, wk.fetchCalls.slice(0, 2).join(' | '));
 
   // -- the cost is on screen BEFORE it is spent ----------------------------
-  const spanLen = wk.before.weeks.filter((w) => Number(w) >= Number(wk.before.week) &&
+  //
+  // MOVED, and the old line encoded the old truth: the span used to START at
+  // the selected week. It is now the weeks with no result against them, and in
+  // demo — where every sample game is marked played — that is everything AFTER
+  // the week picker. Same derivation as `demoSpan` above.
+  const spanLen = wk.before.weeks.filter((w) => Number(w) > Number(wk.before.week) &&
     Number(w) <= 13).length;
   ok('the page opens on a week with a rest of season to price', spanLen > 1,
     `week ${wk.before.week} of ${wk.before.weeks.join(',')}`);
@@ -827,7 +1104,7 @@ if (!wk.boot) {
     wk.before.cost.note.includes(`${spanLen} weeks`), wk.before.cost.note.slice(0, 220));
   ok('and says what it would cost on a real league — one request per week',
     /one per week/.test(wk.before.cost.note) &&
-    new RegExp(`${spanLen - 1} requests`).test(wk.before.cost.note),
+    new RegExp(`${spanLen} requests`).test(wk.before.cost.note),
     wk.before.cost.note.slice(0, 260));
   ok('and says demo data itself costs nothing',
     /no requests at all/.test(wk.before.cost.note), wk.before.cost.note.slice(0, 200));
@@ -880,8 +1157,12 @@ if (!wk.boot) {
     ok('the card names the man it was opened on',
       wk.card.ident.length > 0 && wk.card.hovered.includes(wk.card.ident.split(' · ')[0]),
       `${wk.card.ident} vs ${wk.card.hovered}`);
-    ok('and draws the whole run, one column per week priced',
-      wk.card.weeks.length === spanLen, `${wk.card.weeks.length} columns for ${spanLen} weeks`);
+    // The card draws every week the page HOLDS, which is the span plus the one
+    // the depth map is showing — that week is bought, has a result, and is
+    // exactly the week the card's Act row is for. It is priced into nothing.
+    ok('and draws the whole run, one column per week held',
+      wk.card.weeks.length === spanLen + 1,
+      `${wk.card.weeks.length} columns for ${spanLen} priced weeks plus the one on screen`);
     ok('and says whose numbers they are, and for which weeks',
       /projections for weeks \d+–\d+/i.test(wk.card.heading), wk.card.heading);
   }
@@ -945,14 +1226,12 @@ if (!wk.boot) {
   ok('and none appears twice in the "most trades" packing either',
     new Set(combo.altNames).size === combo.altNames.length, combo.altNames.join(' | '));
 
-  if (combo.weeks) {
-    const rows = combo.weeks.weeks;
-    const totalRow = combo.weeks.totals[0];
-    const sum = rows.reduce((a, r) => a + r.delta, 0);
-    ok('the combo is priced week by week too, and those rows add up',
-      Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
-      `rows sum to ${sum.toFixed(2)}, total says ${totalRow.delta}`);
-  }
+  // MOVED. This used to check the combo's own week-by-week table, which was
+  // printed inline under the list. Ask 5 put it in the pop-up — "including the
+  // best combo" — so the claim now is that it is NOT here, and the rows-add-up
+  // check went with it to the `modal` scenario where the table actually lives.
+  ok('the combo prints no week-by-week table inline any more', combo.weeks === null,
+    'a week table is still sitting under the combo list');
 
   // THE NUMBER ITSELF, RE-DERIVED. Everything above reads the page back to
   // itself; this rebuilds the same demo league from scratch, takes the packing
@@ -964,20 +1243,156 @@ if (!wk.boot) {
   ok('the combo headline survives an independent re-pricing of the same move',
     priced && Math.abs(priced.delta - claimed) <= 0.15,
     `page says ${claimed}, a fresh priceTradeAcrossWeeks says ${priced && priced.delta}`);
-  // The naive figure the page prints must BE the sum of the listed offers'
-  // own gains — otherwise the warning beside it is decoration — and the real
-  // answer must differ from it, which is the whole reason the warning exists.
-  const naiveSum = naiveOf(combo.items);
+  // The naive figure the page prints must BE the sum of the offers' own gains
+  // — otherwise the warning beside it is decoration — and the real answer must
+  // differ from it, which is the whole reason the warning exists.
+  //
+  // MOVED, and the old reading encoded the old markup: the combo used to print
+  // each offer's own gain in its list ("on its own +12.4") and the sum was read
+  // back out of those words. The rows are merged per manager now and carry a
+  // RE-PRICED gain, so the naive sum has to come from the finder's table — the
+  // place those original gains still live. Same claim, derived from the page
+  // rather than from a sentence the page writes about itself.
+  const naive = naiveFromFinder(combo.rows, wk.after.trades);
+  ok('every combo row can be traced back to the finder offers it was built from',
+    naive.matched >= combo.rows.length,
+    `${naive.matched} finder offers matched ${combo.rows.length} combo rows`);
   // The trailing full stop is not part of the number, and a regex that eats it
   // hands Number() a NaN that looks like a mismatch.
   const naiveShown = (combo.body.match(/own gains would have given ([+−]\d+(?:\.\d+)?)/) || [])[1];
   ok('the naive sum shown is exactly the offers’ own gains added up',
-    naiveShown !== undefined && Math.abs(num(naiveShown) - naiveSum) <= 0.15,
-    `shown ${naiveShown}, the rows add to ${naiveSum.toFixed(1)}`);
+    naiveShown !== undefined && Math.abs(num(naiveShown) - naive.total) <= 0.15,
+    `shown ${naiveShown}, the finder's own gains add to ${naive.total.toFixed(1)}`);
   ok('and the real answer is not that sum',
-    combo.perTrade.length < 2 || Math.abs(priced.delta - naiveSum) > 0.15 ||
+    naive.matched < 2 || Math.abs(priced.delta - naive.total) > 0.15 ||
       /coincidence rather than a rule/.test(combo.body),
-    `${priced && priced.delta} vs naive ${naiveSum.toFixed(1)}`);
+    `${priced && priced.delta} vs naive ${naive.total.toFixed(1)}`);
+
+  // ---- ask 6: the combo is a LIST OF OFFERS, in the finder's own shape -----
+  ok('the combo draws its trades as offer rows, not a summary',
+    combo.rows.length > 0, combo.body.slice(0, 200));
+  ok('every combo row names a manager, a package each way and a gain',
+    combo.rows.every((r) => r.partner && r.send.length && r.receive.length &&
+      Number.isFinite(r.myGain)),
+    JSON.stringify(combo.rows.map((r) => [r.partner, r.send.length, r.receive.length, r.myGain])));
+  ok('and says who starts and who drops out, exactly as the finder does',
+    combo.rows.every((r) => /starts/.test(r.churn)),
+    combo.rows.map((r) => r.churn.slice(0, 40)).join(' | '));
+  ok('and offers the same week-by-week pop-up',
+    combo.rows.every((r) => r.opener && /^c:\d+$/.test(r.openKey || '')),
+    JSON.stringify(combo.rows.map((r) => r.openKey)));
+  ok('and every man in it links to his row on the Players page',
+    combo.names.length >= combo.rows.length * 2 &&
+    combo.names.every((h) => /^waivers\.html\?player=\d+$/.test(h)),
+    combo.names.slice(0, 3).join(' | '));
+  // Demo has no ESPN league, so the cell says so rather than offering a dead
+  // link — the same sentence the finder's rows carry. The deep link itself is
+  // checked on the stubbed live league below, where there is one to build.
+  ok('and the ESPN column is present and honest about demo',
+    combo.rows.every((r) => /No ESPN league in demo/.test(r.espn)),
+    combo.rows.map((r) => r.espn).join(' | '));
+
+  // ---- ask 2: ONE number per player, and it is the per-week one ------------
+  const everyMan = [
+    ...wk.after.trades.flatMap((t) => [...t.send, ...t.receive]),
+    ...combo.rows.flatMap((t) => [...t.send, ...t.receive]),
+    ...((wk.deal && wk.deal.men) || []),
+  ];
+  ok('there are men on screen to check', everyMan.length > 0);
+  ok('every player carries exactly ONE number',
+    everyMan.every((m) => m.vals.length === 1),
+    JSON.stringify(everyMan.filter((m) => m.vals.length !== 1).slice(0, 3)));
+  ok('and it is the per-week one — no rest-of-season total beside a name',
+    everyMan.every((m) => /\/wk$/.test(m.val) || m.val === '—'),
+    JSON.stringify(everyMan.filter((m) => !/\/wk$/.test(m.val)).slice(0, 3)));
+  ok('and the second number that used to sit beside it is gone',
+    everyMan.every((m) => m.extras.length === 0),
+    JSON.stringify(everyMan.filter((m) => m.extras.length).slice(0, 3)));
+}
+
+// ---- ask 5: the drill-down is a POP-UP, and only on demand -----------------
+
+const md = run('modal');
+ok('the modal scenario boots', !md.boot, md.boot);
+if (!md.boot) {
+  ok('no console errors driving the pop-up', md.errors.length === 0,
+    md.errors.slice(0, 2).join(' | '));
+  ok('and opening and closing it costs no request', md.fetchCalls.length === 0,
+    md.fetchCalls.join(' | '));
+
+  // IT DOES NOT EXIST UNTIL SOMETHING IS CLICKED. Two separate claims: the
+  // dialog is hidden, AND there is no week table sitting in the document where
+  // a search or a screen reader would still find it. The panel this replaced
+  // was only ever hidden, and this page has twice been caught leaving a stale
+  // answer in a hidden container.
+  ok('no pop-up before anything is clicked', md.before.hidden, 'the modal is open on load');
+  ok('and no week-by-week table in the document at all', !md.before.present);
+  eq(md.before.bodyLength, 0, 'and its body is empty rather than merely hidden');
+
+  // It is a dialog, and it says so — which is what a screen reader announces.
+  eq(md.opened.dialog.role, 'dialog', 'the pop-up is a dialog');
+  eq(md.opened.dialog.labelledby, 'dealTitle', 'and is named by its own heading');
+  // NOT `aria-modal`, and that is the decision rather than the omission: it
+  // would tell a screen reader to ignore everything outside this element, and
+  // the player card is a <body> child drawn OVER it. See trade.html.
+  eq(md.opened.dialog.modal, null,
+    'and does not claim modality it cannot honour — the player card is outside it');
+  eq(md.opened.closeButton, 'BUTTON',
+    'the close control is a real button — in the tab order, and worked by Enter');
+  eq(md.parent, 'BODY',
+    'the pop-up is a child of <body>, not of a scrolling panel');
+  ok('nothing locked the page’s own scrolling',
+    !/overflow/.test(md.bodyStyle), md.bodyStyle);
+
+  // -- it opens from the finder, BY KEYBOARD ---------------------------------
+  ok('the Week by week button opens it', !md.opened.hidden, JSON.stringify(md.opened).slice(0, 200));
+  ok('and it holds the deal week by week', md.opened.present && md.opened.weeks &&
+    md.opened.weeks.weeks.length > 1,
+    md.opened.weeks ? `${md.opened.weeks.weeks.length} rows` : 'no table');
+
+  // -- THREE WAYS OUT, and all three are tested ------------------------------
+  ok('its own Close button shuts it', md.closedByButton.hidden);
+  ok('and empties it on the way out', !md.closedByButton.present);
+  ok('a row click opens it again', !md.reopened.hidden);
+  ok('Escape shuts it', md.closedByEscape.hidden);
+  ok('a click outside shuts it', md.closedByOutside.hidden);
+  ok('but a click INSIDE it does not', !md.stillOpen.hidden,
+    'clicking the note inside the pop-up closed it');
+
+  // -- and it is reachable from the best combo, which is the other half ------
+  ok('the combo has a row to open', md.hadComboRow, 'no combo row rendered');
+  ok('clicking a combo row opens the same pop-up', !md.fromCombo.hidden);
+  ok('and it is about THAT deal — the one with that manager',
+    md.fromCombo.title.includes(md.comboPartner),
+    `${md.fromCombo.title} vs ${md.comboPartner}`);
+  ok('the combo’s pop-up is priced week by week too',
+    md.fromCombo.weeks && md.fromCombo.weeks.weeks.length > 1,
+    md.fromCombo.weeks ? `${md.fromCombo.weeks.weeks.length} rows` : 'no table');
+
+  // -- and the WHOLE packing, which used to be a box under the list ---------
+  ok('the combo headline offers its own week-by-week button',
+    md.hadHeadButton && /week by week/i.test(md.headLabel), md.headLabel);
+  ok('it opens the pop-up on the whole combination',
+    !md.wholeCombo.hidden && md.wholeCombo.present,
+    JSON.stringify(md.wholeCombo).slice(0, 200));
+  ok('and says it is the combination rather than one trade',
+    /combination/i.test(md.wholeCombo.weeks.heads.join(' ')),
+    md.wholeCombo.weeks.heads.join(' | '));
+  if (md.wholeCombo.weeks) {
+    const rows = md.wholeCombo.weeks.weeks;
+    const totalRow = md.wholeCombo.weeks.totals[0];
+    const sum = rows.reduce((a, r) => a + r.delta, 0);
+    ok('the combination’s own rows add up to its own total',
+      Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
+      `rows sum to ${sum.toFixed(2)}, total says ${totalRow.delta}`);
+  }
+  ok('and says there is no single ESPN screen for a combination',
+    /no one ESPN screen/.test(md.wholeCombo.body), md.wholeCombo.body.slice(-240));
+
+  // NOT A BOX BELOW EVERYTHING any more. The whole of ask 5 is that this stuff
+  // lives in the pop-up, so a week table anywhere else on the page is the
+  // defect coming back.
+  eq(md.strayWeekTables, 0, 'no week-by-week table is printed outside the pop-up');
 }
 
 // ---- a real league, stubbed: the cost, the ranking, and the ESPN link ------
@@ -991,25 +1406,33 @@ if (!live.boot) {
 
   // -- THE COST, stated before it is spent and counted after ---------------
   eq(live.before.requests, 1, 'the page opens on ONE week of rosters, as it always has');
-  const span = live.span; // weeks 4..13 inclusive
+  const span = live.span; // weeks 5..13 inclusive — the unplayed ones
+  // MOVED, and the old number encoded the old truth. It used to be `span - 1`
+  // because the span STARTED at the selected week, which the page already had
+  // in hand. The span now starts after the last week played, so none of it is
+  // in hand and every week of it is a request.
   ok('the cost note names the real number of requests still to spend',
-    live.before.cost.note.includes(`${span - 1} requests`),
+    live.before.cost.note.includes(`${span} requests`),
     live.before.cost.note.slice(0, 300));
   ok('and the button carries the same number on its face',
-    live.before.cost.button.includes(`${span - 1} requests`), live.before.cost.button);
+    live.before.cost.button.includes(`${span} requests`), live.before.cost.button);
   ok('and the note says what the page costs in total on this measure',
     live.before.cost.note.includes(`${span} requests in total`),
     live.before.cost.note.slice(0, 400));
   ok('nothing was spent before the button was pressed', live.before.requests === 1,
     `${live.before.requests} requests`);
 
-  eq(live.after.requests, span, 'pressing it spends exactly one request per week');
-  ok('and it asked for each remaining week exactly once',
+  // The page opened on week 4 (one request), then bought weeks 5-13.
+  eq(live.after.requests, span + 1, 'pressing it spends exactly one request per week');
+  ok('and it asked for each week exactly once — the opening one included',
     new Set(live.after.asked).size === live.after.asked.length &&
-    live.after.asked.length === span,
+    live.after.asked.length === span + 1,
+    live.after.asked.join(','));
+  ok('and never asked for a week that has already been played',
+    live.after.asked.filter((w) => w > 4).length === span,
     live.after.asked.join(','));
   ok('the spent line then says how many went',
-    live.after.cost.spent.includes(`${span - 1} requests spent`), live.after.cost.spent);
+    live.after.cost.spent.includes(`${span} requests spent`), live.after.cost.spent);
 
   // -- THE RANKING ACTUALLY CHANGES ----------------------------------------
   //
@@ -1018,13 +1441,13 @@ if (!live.boot) {
   // upgrade — while across the weeks she already starts a 19 every week and the
   // 17 is worth nothing. The scalar basis must offer that trade and the weekly
   // one must not.
-  const gotQB = (list) => list.filter((t) => /Bo QB/.test(t.receive.join(' ')));
+  const gotQB = (list) => list.filter((t) => /Bo QB/.test(names(t.receive)));
   ok('on a typical week the page offers the steady quarterback',
     gotQB(live.before.trades).length > 0,
-    live.before.trades.map((t) => t.receive.join('+')).join(' | '));
+    live.before.trades.map((t) => names(t.receive)).join(' | '));
   ok('and across the weeks it does NOT — three quarterbacks already cover it',
     gotQB(live.after.trades).length === 0,
-    gotQB(live.after.trades).map((t) => t.receive.join('+')).join(' | '));
+    gotQB(live.after.trades).map((t) => names(t.receive)).join(' | '));
   ok('while the deal that survives both measures is still there',
     live.after.trades.some((t) => t.partner === 'Cy'),
     live.after.trades.map((t) => t.partner).join(','));
@@ -1084,6 +1507,226 @@ if (!live.boot) {
         Math.abs(sum - live.deal.weeks.totals[0].delta) <= 0.05 * rows.length + 0.051,
         `${sum} vs ${live.deal.weeks.totals[0].delta}`);
     }
+  }
+
+  // =========================================================================
+  // RE-DERIVED FROM THE FIXTURE, with the engine and none of the page
+  // =========================================================================
+  //
+  // Everything above this line reads the page and checks it is self-consistent.
+  // Everything below rebuilds the same four squads from tr-stub-season.mjs,
+  // prices them with js/trade.js directly, and insists the page agrees. A page
+  // printing a plausible wrong number has nowhere to hide in here.
+
+  const L = await stubLeague();
+  const {
+    priceTradeAcrossWeeks, mergeComboByPartner, depthTable, findTrades,
+  } = await import(moduleUrl('js/trade.js'));
+
+  const unplayed = weekRange(live.played + 1, 13);   // what the page must price
+  const withPlayed = weekRange(live.played, 13);     // what it used to price
+  const me = L.teams.find((t) => t.id === 1);
+  const priceOver = (weeks, sendIds, receiveIds) =>
+    priceTradeAcrossWeeks({
+      players: me.players,
+      send: sendIds.map((id) => L.byId.get(id) || id),
+      receive: receiveIds.map((id) => L.byId.get(id)).filter(Boolean),
+      slots: L.slots,
+      weeks,
+      projFor: L.projFor,
+      zeroIsBye: true,
+    });
+
+  // ---- ask 1: a week already played changes nothing -----------------------
+
+  eq(unplayed.length, span, 'the weeks with no result against them are the span');
+
+  if (live.offer && live.deal && live.deal.weeks) {
+    const sendIds = live.offer.send.map((m) => m.id);
+    const recIds = live.offer.receive.map((m) => m.id);
+    const fresh = priceOver(unplayed, sendIds, recIds);
+    const stale = priceOver(withPlayed, sendIds, recIds);
+
+    ok('the offer’s gain is the deal priced over the UNPLAYED weeks, exactly',
+      Math.abs(fresh.delta - live.offer.myGain) <= 0.15,
+      `page ${live.offer.myGain}, engine over ${weekLabel(unplayed)} ${fresh.delta}`);
+    // The half that makes the assertion above falsifiable: the old span really
+    // would have produced a different number, so agreeing with the new one is
+    // a fact rather than a coincidence.
+    ok('and the old span — the selected week, which is PLAYED, included — differs',
+      Math.abs(stale.delta - fresh.delta) > 0.15,
+      `${weekLabel(unplayed)} ${fresh.delta} vs ${weekLabel(withPlayed)} ${stale.delta}`);
+
+    ok('no row of the week-by-week table is a week that has been played',
+      live.deal.weeks.weeks.every((r) => Number(String(r.label).replace(/\D/g, '')) > live.played),
+      live.deal.weeks.weeks.map((r) => r.label).join(','));
+  }
+
+  // The fixture's loud played week: Cy's tight end projects 30 in weeks 1-4 and
+  // 4 from week 5 on. The depth map's per-week basis must be built from the 4.
+  const meanOver = (weeks) => (p) => {
+    let sum = 0;
+    let counted = 0;
+    let byes = 0;
+    for (const w of weeks) {
+      const v = L.projFor(p, w);
+      if (v === null) continue;
+      sum += v;
+      counted++;
+      if (v === 0) byes++;
+    }
+    const playable = weeks.length - byes;
+    return counted && playable > 0 ? Math.round((sum / playable) * 10) / 10 : null;
+  };
+  const mapRight = depthTable(L.teams, L.slots, meanOver(unplayed));
+  const mapWrong = depthTable(L.teams, L.slots, meanOver(withPlayed));
+  const cyRow = live.after.depth.rows.find((r) => r.team === 'Cy');
+  if (cyRow) {
+    // His LINEUP, not his tight-end cell: the cell is points above the
+    // replacement bar, and Cy's tight end IS the bar — he is the worst in the
+    // league at it either way, so the cell reads 0.0 on both spans and could
+    // never tell them apart. The lineup total is the number the 30 would move.
+    const shown = Number(cyRow.total);
+    const right = mapRight.rows.find((r) => r.team.name === 'Cy').total;
+    const wrong = mapWrong.rows.find((r) => r.team.name === 'Cy').total;
+    ok('the depth map’s per-week basis is the unplayed weeks too',
+      Math.abs(shown - right) <= 0.15, `page ${shown}, engine ${right}`);
+    ok('and week 4’s 30-point tight end is nowhere in it',
+      Math.abs(right - wrong) > 0.15 && Math.abs(shown - wrong) > 0.15,
+      `unplayed ${right}, with the played week ${wrong}, page ${shown}`);
+  }
+
+  // The bar every tight-end cell is measured against is the same fact said out
+  // loud, and the page prints it in a chip. It must be Cy's 4, not his 6.6.
+  const teBar = (map) => {
+    const r = map.replacement.get('TE');
+    return r ? r.value : null;
+  };
+  const teChip = live.after.depth.bars.find((b) => /^TE /.test(b)) || '';
+  ok('and the replacement bar it prints says the same',
+    teChip.includes(teBar(mapRight).toFixed(1)) &&
+    !teChip.includes(teBar(mapWrong).toFixed(1)),
+    `chip "${teChip}" — unplayed ${teBar(mapRight)}, with the played week ${teBar(mapWrong)}`);
+
+  // ---- ask 3: the per-week figure ignores the bye, hand-computed ----------
+  //
+  // `Bills D/ST` is Ana's spare defence: 11 a week, and 0.00 in week 8 because
+  // his NFL team is off. Nine weeks are priced and one of them is a bye, so the
+  // arithmetic is 88 / 8 and not 88 / 9. Both are written out here rather than
+  // imported, because a test that took the divisor from the code it is testing
+  // would agree with any divisor.
+  const BILLS = 112;   // team 1, roster slot 12 — see tr-stub-season.mjs
+  const run112 = unplayed.map((w) => L.stub.projectionFor(1, 12, w));
+  const byeCount = run112.filter((v) => v === 0).length;
+  const total112 = run112.reduce((a, v) => a + v, 0);
+  const perPlayed = total112 / (unplayed.length - byeCount);
+  const perSpan = total112 / unplayed.length;
+
+  eq(byeCount, 1, 'the fixture really does put a bye inside the priced span');
+  ok('and the two readings of it are far enough apart to tell apart',
+    Math.abs(perPlayed - perSpan) > 0.5,
+    `${perPlayed.toFixed(1)} vs ${perSpan.toFixed(1)}`);
+
+  const bills = live.men.find((m) => m.id === BILLS);
+  ok('the man with the bye is on screen', !!bills,
+    live.men.map((m) => m.id).join(','));
+  if (bills) {
+    eq(bills.val, `${perPlayed.toFixed(1)}/wk`,
+      `his per-week figure is ${total112} over ${unplayed.length - byeCount} weeks he PLAYS`);
+    ok('and it is not the average that counts the bye as a week',
+      bills.val !== `${perSpan.toFixed(1)}/wk`,
+      `${bills.val} is ${total112}/${unplayed.length}, which counts his bye`);
+  }
+
+  // ---- ask 4: no position label on a defence, and still one on a QB -------
+
+  const posOf = (id) => {
+    const team = L.stub.TEAMS.find((t) => t.id === Math.floor(id / 100));
+    const p = team ? team.players[id % 100] : null;
+    return p ? p.position : null;
+  };
+  const named = [...live.men, ...live.menBefore].filter((m) => m.id !== null);
+  const defences = named.filter((m) => posOf(m.id) === 'DST');
+  const quarterbacks = named.filter((m) => posOf(m.id) === 'QB');
+
+  ok('a defence is actually rendered somewhere, or this proves nothing',
+    defences.length > 0, named.map((m) => `${m.id}:${posOf(m.id)}`).join(' '));
+  ok('and no defence carries a position tag — his name already says D/ST',
+    defences.every((m) => m.pos === ''),
+    JSON.stringify(defences.filter((m) => m.pos !== '').slice(0, 3)));
+  ok('and the name really does carry it, which is why the tag is redundant',
+    defences.every((m) => /D\/ST/.test(m.text)),
+    defences.map((m) => m.text).join(' | '));
+  ok('a quarterback is rendered too, so the rule is not "suppress everything"',
+    quarterbacks.length > 0);
+  ok('and he still carries his position tag',
+    quarterbacks.every((m) => m.pos === 'QB'),
+    JSON.stringify(quarterbacks.slice(0, 3)));
+
+  // ---- ask 6: the merged combo row ---------------------------------------
+
+  const merged = live.after.combo.rows.find((r) => r.merged);
+  ok('two deals with one manager are shown as ONE offer',
+    !!merged, JSON.stringify(live.after.combo.rows.map((r) => [r.partner, r.merged])));
+  if (merged) {
+    ok('and the row says so, because a four-player trade is a different conversation',
+      /deals? as one/.test(merged.mergedText), merged.mergedText);
+
+    // ONE LINK, CARRYING ALL OF IT. A merged deal that opened ESPN with half
+    // its players ticked would be worse than two rows.
+    const q = new URLSearchParams((merged.espn || '').split('?')[1] || '');
+    const linkIds = (q.get('players') || '').split(',').filter(Boolean).map(Number);
+    const incoming = merged.receive.map((m) => m.id);
+    ok('one ESPN link, carrying every man coming from that manager',
+      incoming.length > 1 &&
+      linkIds.length === incoming.length &&
+      incoming.every((id) => linkIds.includes(id)),
+      `link ${linkIds.join(',')} for incoming ${incoming.join(',')}`);
+    ok('and every one of them is on that manager’s roster',
+      linkIds.every((id) => live.rosters[3].includes(id)), linkIds.join(','));
+
+    // THE GAIN IS A RE-PRICE OF THE MERGED MOVE.
+    const re = priceOver(unplayed, merged.send.map((m) => m.id), incoming);
+    ok('and its gain is that whole move priced once',
+      Math.abs(re.delta - merged.myGain) <= 0.15,
+      `page ${merged.myGain}, a fresh priceTradeAcrossWeeks ${re.delta}`);
+  }
+
+  // AND IT IS NOT READ OFF THE OFFERS. The check above would still pass if the
+  // page happened to add two gains that summed to the right answer, which in a
+  // fixture this small it can. So this doctors the inputs: the same two offers
+  // with their own `myGain` replaced by nonsense. A merger that added them up
+  // would return the nonsense; one that re-prices cannot see it at all.
+  const found = findTrades({
+    teams: L.teams, myTeamId: 1, slots: L.slots,
+    weeks: unplayed, projFor: L.projFor, zeroIsBye: true,
+  });
+  const pair = disjointPair(found.offers);
+  ok('the fixture offers two disjoint deals with one manager to merge',
+    !!pair, `${found.offers.length} offers, none disjoint with a shared partner`);
+  if (pair) {
+    const opts = {
+      players: me.players, slots: L.slots, weeks: unplayed,
+      projFor: L.projFor, zeroIsBye: true,
+    };
+    const honest = mergeComboByPartner({ combo: pair, partners: [] }, opts);
+    const doctored = mergeComboByPartner(
+      { combo: pair.map((o) => ({ ...o, myGain: 9999 })), partners: [] },
+      opts
+    );
+    eq(honest.length, 1, 'two deals with one manager merge into one offer');
+    eq(honest[0].mergedFrom, 2, 'and the row remembers there were two of them');
+    ok('the merged send list is the union of both',
+      honest[0].send.length === new Set([...pair[0].send, ...pair[1].send]).size,
+      `${honest[0].send.length} sent`);
+    ok('and the merged receive list is the union of both',
+      honest[0].receive.length === new Set([...pair[0].receive, ...pair[1].receive]).size,
+      `${honest[0].receive.length} received`);
+    ok('a merged gain ignores the offers’ own gains entirely',
+      doctored[0].myGain === honest[0].myGain,
+      `${honest[0].myGain} became ${doctored[0].myGain} when the inputs were doctored`);
+    ok('and it is not their sum, which here would be 19998',
+      honest[0].myGain !== 19998);
   }
 }
 

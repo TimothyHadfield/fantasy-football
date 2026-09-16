@@ -16,11 +16,39 @@
 //   basis and be GONE on the weekly one.
 //
 //   Ana ↔ Cy is flat on both sides, so it survives both measures and the table
-//   is never empty. Cy is thin at tight end and has a spare back; Ana is the
-//   other way round.
+//   is never empty. Cy is thin at tight end AND at defence, and has backs and
+//   receivers to spare; Ana is the other way round. Two holes rather than one
+//   is what lets two DISJOINT Ana/Cy deals both be worth making, which is what
+//   puts a merged row — two trades with one manager, shown as one offer — on
+//   the page at all.
 //
 //   Di is filler: a balanced squad with a junk bench, so the league is four
 //   teams rather than two.
+//
+// THREE MORE THINGS ARE BUILT IN, each so that an assertion about them can
+// actually FAIL rather than passing by luck:
+//
+//   A PLAYED WEEK THAT WOULD CHANGE THE ANSWER. Cy's tight end projects 30 in
+//   weeks 1-4 and 4 from week 5 on. Weeks 1-4 have results against them, so a
+//   trade cannot reach them and none of those 30s may show up in any number on
+//   the page. If the span ever slips back to including a played week — which is
+//   exactly what it used to do, since the page opens on the last week PLAYED —
+//   Cy stops looking thin at tight end for that week and the Ana/Cy deal is
+//   priced differently. The test prices both spans and insists they differ,
+//   so "played weeks are excluded" is falsifiable rather than decorative.
+//
+//   A BYE, IN AN UNPLAYED WEEK. `Bills D/ST` projects 11 in every week of the
+//   span except week 8, where ESPN returns 0.00. Nine weeks are priced, so his
+//   per-week figure must be 88 / 8 = 11.0 — not 88 / 9 = 9.8. Hand-computable,
+//   and far enough apart that a page still dividing by the whole span cannot
+//   round into agreement.
+//
+//   A D/ST WORTH TRADING. Ana carries TWO defences: she starts the 12 and the
+//   11 sits on her bench, and Cy is on a 2. That is what puts a defence into a
+//   rendered package at all, so the "no position tag on a D/ST" rule has
+//   something to be tested against — and they are named the way ESPN names
+//   them (`"<Franchise> D/ST"`, per docs/espn-draft-api.md), which is the whole
+//   reason the tag is redundant.
 //
 // `calls` counts what the page actually spends, which is what the cost note is
 // tested against. One request per week, and no bulk form — the same rule the
@@ -39,6 +67,13 @@ const LABEL = { 0: 'QB', 2: 'RB', 4: 'WR', 6: 'TE', 23: 'FLEX', 16: 'D/ST', 17: 
 const flat = (v) => () => v;
 /** 19 on odd weeks and 7 on even, or the other way round. Mean is the same. */
 const swing = (hi, lo, oddHigh) => (w) => ((w % 2 === 1) === oddHigh ? hi : lo);
+/** Loud in the weeks that are already played, ordinary in the ones that are not. */
+const spike = (played, rest) => (w) => (w <= PLAYED_THROUGH ? played : rest);
+/** ESPN's 0.00 for a bye — a real number, and not the same thing as a null. */
+const bye = (v, week) => (w) => (w === week ? 0 : v);
+
+/** The one unplayed week `Bills D/ST` is off. Named so a test can import it. */
+export const BYE_WEEK = 8;
 
 /** name, position, slot, the weekly projection, and the season mean per game. */
 const P = (name, position, slot, week, mean) => ({ name, position, slot, week, mean });
@@ -55,11 +90,16 @@ export const TEAMS = [
       P('Ana WR2', 'WR', SLOT.WR, flat(12), 12),
       P('Ana TE1', 'TE', SLOT.TE, flat(12), 12),
       P('Ana WR3', 'WR', SLOT.FLEX, flat(12), 12),
-      P('Ana DST', 'DST', SLOT.DST, flat(7), 7),
+      // Named as ESPN names one. The position is IN the name, which is the
+      // whole of Tim's fourth ask.
+      P('Ravens D/ST', 'DST', SLOT.DST, flat(12), 12),
       P('Ana K', 'K', SLOT.K, flat(7), 7),
       P('Ana QB2', 'QB', SLOT.BE, swing(19, 7, false), 13),
       P('Ana TE2', 'TE', SLOT.BE, flat(11), 11),
       P('Ana WR4', 'WR', SLOT.BE, flat(11), 11),
+      // The second defence: on her bench, better than anyone else's starter,
+      // and off in week 8. He is the man the bye arithmetic is checked on.
+      P('Bills D/ST', 'DST', SLOT.BE, bye(11, BYE_WEEK), 11),
     ],
   },
   {
@@ -73,7 +113,7 @@ export const TEAMS = [
       P('Bo WR2', 'WR', SLOT.WR, flat(5), 5),
       P('Bo TE1', 'TE', SLOT.TE, flat(10), 10),
       P('Bo RB3', 'RB', SLOT.FLEX, flat(11), 11),
-      P('Bo DST', 'DST', SLOT.DST, flat(7), 7),
+      P('Bears D/ST', 'DST', SLOT.DST, flat(7), 7),
       P('Bo K', 'K', SLOT.K, flat(7), 7),
       P('Bo QB2', 'QB', SLOT.BE, flat(14), 14),
       P('Bo WR3', 'WR', SLOT.BE, flat(4), 4),
@@ -89,9 +129,15 @@ export const TEAMS = [
       P('Cy RB2', 'RB', SLOT.RB, flat(16), 16),
       P('Cy WR1', 'WR', SLOT.WR, flat(16), 16),
       P('Cy WR2', 'WR', SLOT.WR, flat(15), 15),
-      P('Cy TE1', 'TE', SLOT.TE, flat(4), 4),
+      // Loud in the weeks already played, and ordinary in the ones a trade
+      // can actually reach. See the note at the top of this file.
+      P('Cy TE1', 'TE', SLOT.TE, spike(30, 4), 4),
       P('Cy WR3', 'WR', SLOT.FLEX, flat(16), 16),
-      P('Cy DST', 'DST', SLOT.DST, flat(7), 7),
+      // Cy is thin at DEFENCE as well as at tight end, and that is what puts
+      // Ana's spare D/ST into a rendered package — without it no defence ever
+      // reaches the screen and the "no position tag on a D/ST" rule has
+      // nothing to be tested against.
+      P('Colts D/ST', 'DST', SLOT.DST, flat(2), 2),
       P('Cy K', 'K', SLOT.K, flat(7), 7),
       P('Cy RB3', 'RB', SLOT.BE, flat(15), 15),
       P('Cy WR4', 'WR', SLOT.BE, flat(5), 5),
@@ -109,7 +155,7 @@ export const TEAMS = [
       P('Di WR2', 'WR', SLOT.WR, flat(10), 10),
       P('Di TE1', 'TE', SLOT.TE, flat(9), 9),
       P('Di WR3', 'WR', SLOT.FLEX, flat(10), 10),
-      P('Di DST', 'DST', SLOT.DST, flat(7), 7),
+      P('Dolphins D/ST', 'DST', SLOT.DST, flat(7), 7),
       P('Di K', 'K', SLOT.K, flat(7), 7),
       P('Di QB2', 'QB', SLOT.BE, flat(6), 6),
       P('Di RB3', 'RB', SLOT.BE, flat(5), 5),
