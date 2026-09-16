@@ -500,6 +500,136 @@ show the layout full), but it means early-season behaviour is only visible
 against live data or a stub.
 
 
+## The phone (2026-09-15)
+
+Tim's ask, in his words: the site "is really not formatted or designed for the
+iPhone", fix it so it works great there, and "make sure it has all the same
+capabilities with connection and everything". Read that last clause as two
+different problems, because it is:
+
+**1. Layout.** The site had ONE media query in its shared stylesheet. The
+seven-link nav ran off the header, the eight-button position filters overflowed
+their panel, 20px gutters plus 18px panel padding spent a tenth of the screen
+before a table began, and every form field was under 16px — which is not a
+typographic detail on iOS, it is the rule that makes the browser zoom the whole
+page in on focus and then leave it zoomed. All of it is in the "phone" section
+at the foot of `css/app.css` plus one block per page.
+
+- **The wide tables are unchanged, and that is the decision, not an omission.**
+  Ten teams by twenty columns cannot be made phone-shaped; stacking them into
+  cards would destroy the one thing they exist for, which is reading a column
+  DOWN the league. `.table-scroll` already scrolls sideways with the team frozen
+  down the left, which IS the phone answer — so the work was making everything
+  around it fit and making the scroller behave under a thumb.
+- **`overscroll-behavior-x: contain`**, so a sideways flick inside a table
+  scrolls the table rather than triggering Safari's swipe-back. **Only the X
+  axis**: vertical overscroll must still chain to the page, or a thumb gets
+  stuck inside a table it has already read to the end of.
+- **`dvh`, not `vh`.** On iOS `vh` is measured against the viewport with the
+  address bar collapsed, so `70vh` is most of the screen while the bar is still
+  showing. The `vh` line stays first, as the fallback.
+- **`--pad-panel` is overridden on `:root` inside the media query**, so the
+  panel padding and the table's negative-margin bleed move together. They are
+  defined as exact negatives of each other and changing one alone pulls every
+  table out of line with its panel edge.
+- **`.segmented` becomes a grid**, 1px gaps over a `--line` background so the
+  gaps ARE the dividers. The control is one track with `overflow: hidden` and
+  left borders between buttons, so simply letting it wrap leaves hairlines in
+  the wrong places. 72px tracks, chosen so the two eight-button position filters
+  fall as a tidy 4 + 4 rather than 5 + 3, which reads as two unrelated controls.
+- **Row hover is behind `@media (hover: hover)`.** iOS resolves `:hover` on tap
+  and leaves it painted, so the last row touched stayed lit as though it were
+  selected — competing with `tr.me` and `tr.picked`, which mean something.
+- **Page-local fixed widths must be overridden page-locally.** `css/app.css` is
+  linked before each page's `<style>`, so a media-query rule in the shared file
+  ties on specificity with `.select-wide { width: 210px }` and loses on order.
+  Every page therefore carries its own small block.
+- **Two media features, kept apart.** `max-width: 760px` is "the screen is
+  narrow"; `hover: none` is "there is no pointer". An iPad in landscape is the
+  second without the first, a narrowed desktop window the first without the
+  second. Keying a CAPABILITY off the width is the mistake this separation
+  exists to prevent.
+
+**2. Capability, which was the harder half.** The analysis grids' tip card is
+the only place a player's NAME appears on those tables — every cell is a bare
+number — and it was reachable by hover alone. On a phone it could not be
+reached at all, and a tap on a cell simply followed the link off the page. So
+the same card now opens as a SHEET on a coarse pointer, and the navigation the
+tap preempted comes back as a button inside it, which is strictly more than the
+hover offers. See the tip card section above; the mode is decided per event
+rather than once at load.
+
+- **A real defect fell out of testing it**, and it is the kind that looks fine:
+  the row under a grid cell drills into that team, and it bailed out only when
+  the click landed on an `<a class="pref">`. A man ESPN gives no `playerId` has
+  no `<a>` in his cell at all, so a tap on him opened his card AND silently
+  re-pointed the three panels below at a team nobody picked. The row handler is
+  on the same element and registered first, so no amount of `stopPropagation`
+  could have caught it. Both sides now ask one shared `clickIsPlayer(e)`.
+- **`title` attributes draw NOTHING on iOS**, and this site puts real content in
+  them: seventeen column definitions on the stats page, the three different
+  reasons an analysis cell can read `—`, and the explanation of why a Players
+  cell is green. `js/touch-titles.js` is the answer — one self-installing module
+  loaded by a single script tag on every page, which on a coarse pointer opens
+  the same words as a sheet. The attribute is untouched, so it is still the
+  desktop tooltip and still what a screen reader reads.
+  - **It deliberately leaves links and buttons alone.** A `title` on an
+    `<a class="pref">` is the player click-through's own label and swallowing
+    that tap would break the one contract holding the pages together; a tap on
+    a button has to press the button. So a CONTROL whose only explanation is a
+    `title` has no explanation at all on a phone — which is why the FLEX
+    filters' sentence and the simulation's run count moved onto the page as a
+    `.ctl-hint`. Do not put an explanation a reader needs on a button again.
+  - **A table header still sorts.** The sort fires first, from the table's own
+    handler; this runs afterwards on the document and adds the glossary. So
+    tapping `PTW` sorts by it and says what it is, which is both things wanted.
+- **The histogram bars listened for `pointermove` only.** A finger produces no
+  move before it lands, so a tap did nothing and the counts behind the
+  distribution chart were unreadable. The line chart already listened for
+  `pointerdown` too, for exactly this reason. **The box plots had neither** —
+  their five-number summaries lived only in an SVG `<title>`, so on a phone
+  they were ten coloured smears against a "Points" axis. Each row now has a
+  full-width invisible hit band feeding the same shared tooltip: the whole row
+  and the label gutter, because a whisker is 1.5px of ink and a median a 2px
+  gap, and aiming a thumb at either is not a thing that happens.
+- **The connection bar no longer tells a phone to install the extension.** The
+  bridge is an unpacked Manifest V3 extension and neither iOS Safari nor Chrome
+  on Android can load one, so the old sentence sent Tim looking for a button
+  that does not exist and would have him conclude the site was broken. On a
+  coarse pointer it now says the live numbers are on his computer and that
+  everything else works the same. **A private league genuinely cannot be read
+  from a phone** — third-party cookies again, see "Settled the hard way" below —
+  and that is a browser constraint no layout fixes.
+- **`coarsePointer()` is exported from `js/connection.js` and imported by
+  `js/analysis-page.js`.** Two things turn on it and neither may grow its own
+  copy; two copies of one question is how two answers start.
+- **A cap on a table cell is three declarations or none**, and this was caught
+  in review rather than by looking at it: `td.name { max-width: 44vw }` alone
+  caps the BOX and does nothing to the text, because the table is
+  `white-space: nowrap` — and that column is sticky with an opaque background,
+  so a long name overflows and paints on top of the numbers scrolling
+  underneath. `overflow: hidden` and `text-overflow: ellipsis` go with it.
+  `overflow` clips children, never the cell's own drop shadow, so the "more to
+  the right" cue survives.
+- **A short landscape media query needs a width clause.** The rule that raises
+  the table cap on a phone turned sideways was written as
+  `(max-height: 560px) and (orientation: landscape)` — which a 1600x540 DESKTOP
+  window matches perfectly well, silently taking the phone's cap. And `dvh`
+  always wants a `vh` line before it: here the `max-height` IS what makes the
+  sticky header stick, so no cap means no sticky header.
+- **`tests/touch-check.mjs`** is the suite, 92 assertions over three scenarios
+  (a coarse pointer, a mouse, and a man with no id). It asserts the sheet's link
+  is the SAME href the cell carried — a second way of naming a player is exactly
+  how the click-through's two halves drift apart — and that the identical click
+  under a mouse is left completely alone, so the desktop path `link-check.mjs`
+  follows is provably unchanged.
+
+**The one thing this does NOT fix, and it matters:** a snapshot is only captured
+when `schedule.html` loads on live data, live data needs the bridge, and the
+bridge cannot exist on the phone. If Tim has moved to reading the site on his
+phone, that is the likeliest reason the archive is still empty — and the archive
+is the only thing on this project with a deadline.
+
 ## The time machine (`js/snapshots.js`, `schedule.html`)
 
 Built 2026-09-09, seventh session. Tim's ask: the forecast and the simulation
@@ -1215,6 +1345,10 @@ Modules:
 - `js/snapshots.js` — the time machine: what a week's reading holds, how it is
   stored, and how it is turned back into the shapes the schedule page renders.
   Pure apart from localStorage, which it owns entirely.
+- `js/touch-titles.js` — every `title` on the page, made tappable. Self-
+  installing, like `connection.js`: a page opts in with one script tag and no
+  page-module change. One delegated listener, one sheet element. Skips links
+  and buttons on purpose — a tap on a control has to work the control.
 - `js/waivers-page.js` — the Players page: the wire, and the taken table.
 - `js/trade.js` — the trade engine: replacement level, the depth map and the
   finder. Pure, so it is node-testable, and it wraps `forecast.js`'s
@@ -1297,6 +1431,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
 | `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
 | `link-check.mjs` | **the player click-through ACROSS pages** — 103 assertions. `index.html` and `analysis.html` MAKE links, `waivers.html` RESOLVES them, and no single-page suite can notice when the two halves stop agreeing. It boots each page in its own child process, checks every link against the contract, then FOLLOWS a sample of the ids the source pages actually produced and asserts each lands on exactly that man. It found a real defect the day it was written (see the union rule above), and it exists because the three halves were built by three authors at once against a contract agreed in prose |
+| `touch-check.mjs` | **the analysis grids on a screen with no hover** — 92 assertions over 3 scenarios. Boots the real page with `matchMedia` answering `(hover: none)` and asserts the tap opens the card as a sheet instead of following the link; that the sheet's link is the SAME href the cell carried, re-derived from the cell rather than read back off the card; that the tap does not ALSO drill into the team; that all three dismissals work; that a cmd-click is left to the browser; and that the identical click under a mouse is untouched, so the desktop path `link-check.mjs` follows is provably unchanged. The third scenario blanks one man's `playerId` on every team through a data:-URL loader, because the card has never depended on the link and must not start to — and that scenario is what found the drill-down defect. It also covers `js/touch-titles.js`: that a `title` opens as a sheet on a tap, that a titled LINK or BUTTON does **not** (or the click-through and every control would break), and that a mouse gets none of it |
 | `hot-check.mjs` (again) | records every green cue per player per week, presses FLEX, and compares cell for cell — **not one cell changes colour**, which is what proves a filter is only a filter |
 | `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `test-trade.mjs` | the trade engine — 1,411 assertions over two fixtures. A hand-built two-team league where every answer is known by hand (the 18-for-18 mirrored swap is worth exactly 12 to each side), then the real demo pool, where **every offer is re-priced from the raw rosters** rather than read back off its own numbers — so an engine that merely reported confident figures would fail rather than agree with itself. Also asserts roster legality both ways and that the in/out lists add up to the stated gain |

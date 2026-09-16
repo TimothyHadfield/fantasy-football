@@ -3,7 +3,7 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-10.
+Last updated 2026-09-15.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -25,9 +25,12 @@ A reading is only taken when **Tim opens `schedule.html` on live data** in the
 Edge profile that has the bridge extension. A week he never visits is simply
 gone.
 
-As of 2026-09-10, `data/snapshots/` holds nothing but its README and no export
-has appeared in his Downloads, so either he has not opened the page yet or he
-has not exported. Two things to ask, in this order:
+**Still true and now worse on 2026-09-15**: `data/snapshots/` holds nothing but
+its README and there is no `fantasy-archive-*.json` in his Downloads. That is
+five days and a further game week gone since the last check, and those weeks
+cannot be recovered — check both places yourself at the start of every session
+and raise it before anything else he asked for. Two things to ask, in this
+order:
 
 1. **"Has the Time machine panel recorded this week?"** If not, that is the one
    thing worth interrupting anything else for.
@@ -36,6 +39,14 @@ has not exported. Two things to ask, in this order:
    it to `data/snapshots/<league>-<season>.json`. Check
    `C:\Users\timha\Downloads\fantasy-archive-*.json` yourself before asking; he
    may have exported already and not said.
+
+**And now he reads the site on his phone**, which is the likeliest reason no
+reading has been taken: a snapshot is only captured when `schedule.html` loads
+on LIVE data, and live data needs the bridge extension, which is in his Edge
+desktop profile and cannot be in mobile Safari. If he is only opening the site
+on the phone, the archive will stay empty no matter how good the phone layout
+gets. Worth saying to him plainly — it is not obvious, and it is the one thing
+on this project with a deadline.
 
 An export is **cumulative** — one file holds every week — so it is a monthly
 job at most. Do not tell him to export weekly; he asked, and it is not true.
@@ -179,6 +190,62 @@ Break one of these in one file and the break shows up in another.
 - **The analysis grids' hover is a card, not a `title`.** Do not put a `title`
   back on those cells: the browser would draw a second tooltip over the card.
   The link carries `aria-label` for the same reason.
+- **Nothing may be reachable only by hovering.** Tim reads the site on his
+  phone. Where a hover reveals something, a tap has to reveal the same thing —
+  the analysis grids' card opens as a sheet on a coarse pointer, and
+  `touch-check.mjs` is what keeps the two modes agreeing.
+- **A `title` is invisible on iOS, and `js/touch-titles.js` is the answer.**
+  Every page loads it with one script tag; on a coarse pointer a tap on
+  anything carrying a `title` opens the words as a sheet. So `title` is still
+  the right place to put a column definition or a cell's explanation — but
+  **never on a link or a button**, which the module deliberately leaves alone
+  because a tap on a control has to work the control. A control that needs a
+  sentence gets a `.ctl-hint` on the page (the FLEX filters, the simulation's
+  run count), not a `title` nobody on a phone can read.
+- **Two media features, and they are different facts.** `max-width: 760px` is
+  "the screen is narrow"; `hover: none` is "there is no pointer". An iPad in
+  landscape is the second without the first and a narrowed desktop window is the
+  first without the second, so a capability must never be keyed off the width.
+
+## The phone layout
+
+Added 2026-09-15, on Tim's ask. The whole of it is in the "phone" section at the
+foot of `css/app.css` plus one `@media (max-width: 760px)` block in each page's
+own `<style>` — a page's inline styles come AFTER the linked stylesheet, so a
+fixed width defined page-locally can only be overridden page-locally.
+
+- **The wide tables are unchanged, deliberately.** Ten teams by twenty columns
+  cannot be made phone-shaped, and stacking them into cards would destroy the
+  one thing they are for: reading a column down the league. `.table-scroll`
+  already scrolls sideways with the team frozen down the left, and that IS the
+  phone answer. What changed is everything around it.
+- **`overscroll-behavior-x: contain` on `.table-scroll`**, so a sideways flick
+  inside a table scrolls the table instead of triggering Safari's swipe-back.
+  Only the X axis: vertical overscroll still has to chain to the page, or a
+  thumb gets stuck inside a table it has already read to the end of.
+- **`dvh`, not `vh`, for the table cap.** On iOS `vh` is measured against the
+  viewport with the address bar collapsed, so `70vh` is most of the screen while
+  the bar is still showing. The `vh` line stays first as the fallback.
+- **16px on every form control.** Not taste: iOS zooms the whole page in when a
+  field under 16px takes focus, and leaves it zoomed.
+- **`.segmented` becomes a grid on a phone**, 1px gaps over a `--line`
+  background so the gaps are the dividers. The eight-button position filters do
+  not fit on one line and the control is built as a single track with borders
+  between the buttons, so simply letting it wrap put hairlines in the wrong
+  places.
+- **Row hover is behind `hover: hover`.** iOS resolves `:hover` on tap and
+  leaves it painted, so the last row touched stayed lit as though selected,
+  competing with `tr.me` and `tr.picked`, which mean something.
+- **A cap on a table cell is three declarations or none.** `td.name` gets
+  `max-width` AND `overflow: hidden` AND `text-overflow: ellipsis`. The table is
+  `white-space: nowrap`, so a `max-width` alone caps the box and lets the text
+  run out of it — and that column is sticky with an opaque background, so the
+  overflow paints on top of the numbers scrolling underneath.
+- **The connection bar says something different on a phone.** The bridge is an
+  unpacked extension and no phone browser can load one, so telling a reader to
+  install it sends them looking for a button that does not exist. It now says
+  the live numbers are on his computer. **A private league genuinely cannot be
+  read from a phone** — same third-party-cookie wall as ever.
 
 ## Where things stand
 
@@ -203,7 +270,9 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 `js/trade.js` (replacement level, the depth map, the trade finder — pure, and it
 **wraps `forecast.js`'s `optimalLineup` rather than copying it**),
 `js/snapshots.js` (the time machine's format and storage),
-`js/prefs.js`, `js/connection.js`, `js/charts.js`, `js/sortable.js`.
+`js/prefs.js`, `js/connection.js` (also exports `coarsePointer()`, the one
+canonical "is this a finger" test), `js/charts.js`, `js/sortable.js`,
+`js/touch-titles.js` (self-installing; makes every `title` on the page tappable).
 
 **Three features now share `optimalLineup`** — the schedule forecast, the trade
 finder and "Who to start". That is deliberate: it is the reason they cannot
@@ -211,12 +280,12 @@ disagree about who a squad ought to be starting. Do not give any of them a copy.
 
 ## Tests
 
-`cd tests && npm install && npm test` — 17 suites, over 3,500 assertions.
+`cd tests && npm install && npm test` — 18 suites, over 3,600 assertions.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
 `tests/README.md` for the two linkedom gotchas that otherwise waste an hour.
 
-Three worth knowing by name:
+Four worth knowing by name:
 
 - `test-pages-render.mjs` boots every page's real HTML with its real modules, so
   a missing element id or a typo in a selector fails there instead of in Tim's
@@ -224,6 +293,12 @@ Three worth knowing by name:
 - `link-check.mjs` tests the **seam between pages** — one page makes a player
   link, another resolves it. Every per-page suite was green while a quarter of
   the analysis page's links landed on "he may have been dropped".
+- `touch-check.mjs` boots the analysis page with `matchMedia` answering
+  `(hover: none)` and asserts the tap-opened card — that the tap does not follow
+  the link, that the sheet's link is the SAME href the cell carried, and that
+  the same click with a mouse is left completely alone. It found a real defect
+  the day it was written: a tap on a man with no playerId opened his card AND
+  drilled into a team nobody picked.
 - `an-test.mjs` and `fc-test.mjs` are the two big end-to-end ones (565 and 434
   assertions). They re-derive their expected answers independently rather than
   reading the page's own arithmetic back to it — `an-test` rebuilds every week's
