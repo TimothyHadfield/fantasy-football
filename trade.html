@@ -319,6 +319,28 @@
   /* 44px so it is a real target for a thumb, not a 20px cross in a corner. */
   .modal-x { flex: 0 0 auto; min-height: 44px; }
 
+  .espn-outcome {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    z-index: 55;
+    max-width: 640px;
+    margin: 0 auto;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--line-2);
+    border-left: 4px solid var(--good);
+    border-radius: var(--r-4);
+    box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.8);
+  }
+  .espn-outcome.bad { border-left-color: var(--err); }
+  .espn-outcome span { flex: 1 1 auto; }
+  .espn-outcome button { flex: 0 0 auto; min-height: 36px; }
+
   /* ------------------------------------------------------------- the tip card
 
      COPIED from analysis.html, not shared: this is the page's half of the
@@ -672,6 +694,13 @@
     <div id="dealBody"></div>
     <p class="panel-note" id="dealNote"></p>
   </div>
+</div>
+
+<!-- What became of YOUR side after "Open in ESPN". A <body> child, fixed, and
+     above the pop-up (z 55) so it can be read with a deal still open. -->
+<div class="espn-outcome" id="espnOutcome" role="status" aria-live="polite" hidden>
+  <span id="espnOutcomeText"></span>
+  <button type="button" id="espnOutcomeClose">Dismiss</button>
 </div>
 
 <script type="module" src="js/trade-page.js"></script>

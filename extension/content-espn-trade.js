@@ -458,6 +458,21 @@
     // worker rather than here, because here is the untrusted half — this script
     // runs on espn.com.
     const res = await askWorker(claim);
+    if (res && res.ok && !res.data && res.mismatch) {
+      // A deal WAS staged, for a different screen. Say so, with the ids, rather
+      // than leaving him to wonder why nothing of his is ticked.
+      const s = res.mismatch.staged || {};
+      const p = res.mismatch.page || {};
+      showBadge(doc, {
+        ticked: [], already: [], missing: [], notRegistered: [], refused: [],
+        note:
+          'A trade was staged for a different screen, so nothing was ticked. ' +
+          `Staged: league ${s.leagueId}, your team ${s.myTeamId}, their team ${s.theirTeamId}. ` +
+          `This page: league ${p.leagueId || '?'}, your team ${p.myTeamId || '?'}, ` +
+          `their team ${p.theirTeamId || '?'}.`,
+      });
+      return { ran: false, reason: 'staged for a different page' };
+    }
     if (!res || !res.ok || !res.data) {
       log('nothing staged for this page', res && res.error);
       return { ran: false, reason: (res && res.error) || 'nothing staged' };

@@ -115,6 +115,11 @@ export function isAvailable() {
   return detected;
 }
 
+/** The extension's manifest version, as it announced itself; null if unknown. */
+export function extensionVersion() {
+  return version;
+}
+
 /**
  * Ask the extension for something. Resolves to { ok, data } or { ok:false, error }.
  * Never throws — callers get a result object either way.

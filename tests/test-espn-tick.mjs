@@ -394,6 +394,32 @@ const staged = (myPlayers, theirPlayerIds = [15847, 4241457]) => ({
 }
 
 // ===========================================================================
+// 6b. Staged, but for a different screen — said, not swallowed
+// ===========================================================================
+{
+  const page = buildPage({
+    theirs: THEIRS, mine: MINE, preTicked: [15847], search: SEARCH,
+  });
+  const chrome = fakeWorker({
+    ok: true,
+    data: null,
+    mismatch: {
+      staged: { leagueId: LEAGUE, myTeamId: '9', theirTeamId: THEIR_TEAM },
+      page: { leagueId: LEAGUE, myTeamId: MY_TEAM, theirTeamId: THEIR_TEAM },
+    },
+  });
+  const out = await runScript(page, chrome);
+
+  eq(out.ran, false, 'a deal staged for another screen ticks nothing');
+  eq(page.events.length, 0, 'not one event on the page');
+  sameSet(page.store, [15847], 'the page is exactly as the URL left it');
+  const text = badgeText(page) || '';
+  ok(/staged for a different screen/.test(text), 'but a badge says why nothing was ticked', text);
+  ok(text.includes('your team 9') && text.includes(`your team ${MY_TEAM}`),
+    'naming both team ids, so the mismatch can be read off the page', text);
+}
+
+// ===========================================================================
 // 7. The extension is not there / the worker is dead
 // ===========================================================================
 {

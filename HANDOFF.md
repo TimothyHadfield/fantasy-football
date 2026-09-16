@@ -500,7 +500,10 @@ Ordered by what would hurt most to get wrong.
   produces.
 - **The extension is unpacked, so a change to `extension/` reaches Tim only
   after he reloads it** at `edge://extensions` (and the version shown there
-  should match `manifest.json`, 0.3.1 as of 2026-09-16). Bump the version with
+  should match `manifest.json`, 0.3.2 as of 2026-09-16). The Trade page now
+  says so itself after an Open in ESPN click when the running version is older
+  than `MIN_TICK_VERSION` in `js/trade-page.js` — raise that with any extension
+  change the page depends on. Bump the version with
   every extension change so he can tell.
 - **The trade tick-your-side has never run in a real browser.** ESPN's markup
   and the React click path were read out of their shipped bundle and the suite

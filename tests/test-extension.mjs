@@ -400,6 +400,10 @@ for (const [field, value, why] of [
   await w.send(STAGE);
   const res = await w.send({ ...TAKE, [field]: value }, espnSender);
   eq(res.data, null, `${why} gets nothing`);
+  ok(res.mismatch && res.mismatch.page[field] === value && res.mismatch.staged[field] !== value,
+    `${why} is reported, with both ids`, JSON.stringify(res.mismatch));
+  ok(!JSON.stringify(res.mismatch || {}).includes('myPlayers'),
+    `${why}: no player is named to a page it does not fit`);
   ok(w.storage.session.has('stagedTrade'), `${why} leaves the record alone rather than eating it`);
   const right = await w.send(TAKE, espnSender);
   ok(right.data, 'so the tab it was meant for still works');

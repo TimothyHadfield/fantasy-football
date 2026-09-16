@@ -1368,6 +1368,30 @@ Three defects, none of which any suite exercised — nothing clicked the link.
   anything; and the staged link now drops ids not on his roster, as the plain
   link always did, so the two cannot disagree about who is ticked.
 
+### "My side still has no players selected" (same day, after the above)
+
+Not reproducible here — his league is private and ESPN's page only exists in
+his browser — so the answer was to make every silent branch speak, and to fix
+what reading the path turned up. ESPN's current trade bundle was re-fetched and
+still renders a trade as the `roster-action-checkbox` the script looks for.
+
+- **Every outcome is now said on the Trade page** (`#espnOutcome`, fixed at the
+  foot): extension not running; extension older than `MIN_TICK_VERSION`
+  (0.3.2 — it is unpacked, so it runs whatever was last *reloaded*, not what is
+  in the repo); the extension refusing, with its reason; or handed over, with
+  "a badge on ESPN's page says what was ticked — no badge, nothing ran".
+- **A staged deal that does not fit the ESPN screen is reported there** instead
+  of swallowed: the worker returns `mismatch` with both sets of team ids (no
+  player names), and the content script draws a badge. Extension **0.3.2**.
+- **No ESPN link from someone else's squad** ("Only from your own team"). ESPN
+  only proposes from yours, so such a link staged another manager's men against
+  your own roster.
+- **`resolveTeam` nulled the selection on every uncached week change**, because
+  the empty-state render runs before the fetch. That is also, by accident, the
+  only reason live mode ever opened on your own team. The guard is in, and
+  `useLive` now resets to the connected team on purpose. Both are falsified in
+  `tr-test` (`liveOtherTeam`).
+
 **linkedom does not run capture listeners first.** The page's ESPN handler is
 registered in the capture phase precisely so it runs before the outside-click
 handler repaints (which re-keys every link). Under linkedom the order is

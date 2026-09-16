@@ -50,7 +50,7 @@ import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
-import { stageTrade, isAvailable as bridgeAvailable } from './bridge.js';
+import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
   depthTable, findTrades, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
   priceTradeAcrossWeeks, bestCombo, mergeComboByPartner,
@@ -1129,6 +1129,40 @@ function offerKey(offer) {
  */
 const STAGE_TIMEOUT_MS = 4000;
 
+/**
+ * The oldest extension that ticks your side properly: 0.3.0 added the ticking,
+ * 0.3.1 stopped it refusing every trade with a D/ST in it, and 0.3.2 says on
+ * ESPN's page when a staged deal does not fit the screen. The extension is
+ * unpacked, so it runs whatever version was last RELOADED in Edge rather than
+ * what is in the repo — which is exactly the failure this check names.
+ */
+const MIN_TICK_VERSION = '0.3.2';
+
+function versionAtLeast(have, want) {
+  if (!have) return false;
+  const a = String(have).split('.').map(Number);
+  const b = String(want).split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+/**
+ * One line, fixed at the foot of the window, saying what became of your side.
+ * It stays until dismissed or replaced: it is what he reads when he comes back
+ * from ESPN wondering why nothing of his was ticked.
+ */
+function showEspnOutcome(outcome) {
+  const el = $('espnOutcome');
+  if (!el || !outcome) return;
+  el.classList.toggle('bad', !!outcome.bad);
+  $('espnOutcomeText').textContent = outcome.text;
+  el.hidden = false;
+}
+
 async function openInEspn(offer, href) {
   let tab = null;
   try {
@@ -1139,6 +1173,26 @@ async function openInEspn(offer, href) {
   }
 
   let url = href;
+  const names = offer.send.map((p) => p.name).join(' and ');
+  // What happened to YOUR side, said on this page once the tab has gone. Every
+  // branch below used to fall back to the plain link in silence, so "my side
+  // isn't ticked" had four possible causes and no way to tell them apart.
+  let outcome = null;
+  const version = extensionVersion();
+  if (!bridgeAvailable()) {
+    outcome = {
+      bad: true,
+      text: `ESPN will open with his players ticked, but not yours: the Fantasy Football Bridge ` +
+        `extension isn’t running on this page. Tick ${names} yourself.`,
+    };
+  } else if (!versionAtLeast(version, MIN_TICK_VERSION)) {
+    outcome = {
+      bad: true,
+      text: `Your extension is version ${version || 'unknown'}, and ticking your side needs ` +
+        `${MIN_TICK_VERSION} or later. Paste edge://extensions into the address bar and press ` +
+        `Reload on Fantasy Football Bridge, then reload this page. For now, tick ${names} yourself.`,
+    };
+  }
   if (bridgeAvailable()) try {
     const cfg = espn.getConfig();
     // The plain link's own filter, applied to the staged link too: an id not on
@@ -1160,10 +1214,31 @@ async function openInEspn(offer, href) {
       myPlayers: offer.send.map((p) => ({ id: p.playerId, name: p.name })),
       theirPlayerIds: offer.receive.map((p) => p.playerId).filter((id) => onLink.has(id)),
     });
-    if (res && res.ok && res.data && res.data.url) url = res.data.url;
-  } catch {
-    /* no extension, or it declined: the plain deep link still works */
+    if (res && res.ok && res.data && res.data.url) {
+      url = res.data.url;
+      outcome = outcome || {
+        bad: false,
+        text: `Handed ${names} to the extension. On ESPN’s page a badge in the bottom-left ` +
+          `corner says what it ticked — if no badge appears within half a minute, the ticking ` +
+          `didn’t run and ${names} need ticking by hand.`,
+      };
+    } else {
+      outcome = outcome || {
+        bad: true,
+        text: `The extension didn’t take your side (${(res && res.error) || 'no answer'}). ` +
+          `ESPN will open with his players ticked; tick ${names} yourself.`,
+      };
+    }
+  } catch (err) {
+    // The plain deep link still works; say why yours is not ticked.
+    outcome = outcome || {
+      bad: true,
+      text: `Couldn’t hand your side to the extension (${(err && err.message) || err}). ` +
+        `Tick ${names} yourself on ESPN.`,
+    };
   }
+
+  showEspnOutcome(outcome);
 
   if (tab) {
     // Closed while staging ran is his choice, and is left alone.
@@ -1176,10 +1251,20 @@ async function openInEspn(offer, href) {
   window.location.href = url;
 }
 
+/**
+ * Is the finder searching from someone else's squad? ESPN only lets you
+ * propose from your own, and overrides the link to say so — so a deal found
+ * from another manager's roster has no screen to open. Unknown (the connection
+ * bar was never told your team) is not "someone else".
+ */
+const tradingForSomeoneElse = () =>
+  !state.isDemo && state.espnTeamId != null && state.myTeamId !== state.espnTeamId;
+
 function espnTradeUrl(offer) {
   const cfg = espn.getConfig();
   if (state.isDemo || !state.data || !cfg.leagueId || !offer.partner) return null;
   if (state.myTeamId === null || state.myTeamId === undefined) return null;
+  if (tradingForSomeoneElse()) return null;
 
   const onHisRoster = new Set(
     ((state.data.teams.find((t) => t.id === offer.partner.id) || {}).players || [])
@@ -1229,7 +1314,9 @@ function espnCell(offer) {
     `<span class="espn-off">${
       state.isDemo
         ? 'No ESPN league in demo'
-        : 'ESPN can’t be deep-linked for this offer'
+        : tradingForSomeoneElse()
+          ? 'Only from your own team'
+          : 'ESPN can’t be deep-linked for this offer'
     }</span>`
   );
 }
@@ -1659,7 +1746,10 @@ function renderDeal() {
           : state.isDemo
             ? 'There is no ESPN league to open in demo — switch to <strong>My ESPN league</strong> ' +
               'for the deep link.'
-            : 'This offer cannot be deep-linked: none of the men you would receive is on that ' +
+            : tradingForSomeoneElse()
+              ? 'This deal is from another manager’s squad, and ESPN only lets you propose from ' +
+                'your own. Pick your team under <strong>Your team</strong> to get links.'
+              : 'This offer cannot be deep-linked: none of the men you would receive is on that ' +
               'manager’s roster in the week being shown.'
       }</span></p>`;
 
@@ -2125,6 +2215,11 @@ function renderWeekPicker() {
  */
 function resolveTeam() {
   const teams = state.data ? state.data.teams : [];
+  // No teams is a week still LOADING, not a league without your pick in it.
+  // Deciding here used to null the selection on every uncached week change —
+  // the empty-state render runs before the fetch — so a squad picked by hand
+  // was silently swapped back to your own the moment the week moved.
+  if (!teams.length) return;
   if (teams.some((t) => t.id === state.myTeamId)) return;
   const mine = teams.find((t) => t.id === state.espnTeamId);
   state.myTeamId = mine ? mine.id : teams.length ? teams[0].id : null;
@@ -2257,6 +2352,11 @@ async function useLive() {
     return;
   }
   if (saved.teamId != null) state.espnTeamId = Number(saved.teamId);
+  // Your real league opens on YOUR team. The remembered pick may be a demo
+  // squad — demo ids count from 1 just as ESPN's do, so it survives the switch
+  // looking valid — and every ESPN link built from it would then stage another
+  // manager's players against a trade screen that shows your own roster.
+  if (state.espnTeamId != null) state.myTeamId = state.espnTeamId;
 
   espn.configure({ leagueId: saved.leagueId, season: saved.season });
   state.source = 'live';
@@ -2459,6 +2559,12 @@ wireOfferClicks($('comboPanel'), () => state.comboRows);
 // and the same three: its own button, Escape, and a click outside it.
 
 $('dealClose').addEventListener('click', () => { closeDeal(); });
+
+$('espnOutcomeClose').addEventListener('click', (e) => {
+  // Not an outside click as far as the pop-up is concerned.
+  e.stopPropagation();
+  $('espnOutcome').hidden = true;
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !state.deal) return;

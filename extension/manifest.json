@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fantasy Football Bridge",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Connects your private ESPN fantasy league to your Fantasy Football site, without making the league public.",
   "permissions": [
     "storage"

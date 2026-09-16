@@ -379,7 +379,25 @@ function takeStagedTrade(msg) {
     const sameLeague = String(msg.leagueId || '') === record.leagueId;
     const sameMine = String(msg.myTeamId || '') === record.myTeamId;
     const sameTheirs = String(msg.theirTeamId || '') === record.theirTeamId;
-    if (!sameLeague || !sameMine || !sameTheirs) return { ok: true, data: null };
+    //
+    // But it is SAID, not swallowed: a staged deal that does not fit the page he
+    // just opened is almost always the deal he meant, on a screen ESPN pointed
+    // somewhere else — and silence there is "my side isn't ticked" with no way to
+    // tell why. Team ids only; no player is named to espn.com unless it matches.
+    if (!sameLeague || !sameMine || !sameTheirs) {
+      return {
+        ok: true,
+        data: null,
+        mismatch: {
+          staged: { leagueId: record.leagueId, myTeamId: record.myTeamId, theirTeamId: record.theirTeamId },
+          page: {
+            leagueId: String(msg.leagueId || ''),
+            myTeamId: String(msg.myTeamId || ''),
+            theirTeamId: String(msg.theirTeamId || ''),
+          },
+        },
+      };
+    }
 
     await area.remove([STAGE_KEY]);
     return {

@@ -645,6 +645,58 @@ const SCENARIOS = {
   unpricedWeeksChosen() { return SCENARIOS.unpriced(true); },
 
   /**
+   * A remembered team that is not yours, on a live league that knows yours.
+   *
+   * Demo ids count from 1 as ESPN's do, so a squad picked while browsing the
+   * sample survives the switch to live looking perfectly valid — and every ESPN
+   * link then stages another manager's players against a screen that shows
+   * your own roster.
+   */
+  async liveOtherTeam() {
+    const seed = {
+      'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+      'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.team': 2 }),
+    };
+    const { document, errors } = await boot('trade.html', '', seed);
+    // Read off the depth map's highlighted row, not the <select>: the harness's
+    // select shim falls back to the FIRST option, which is team 1 either way.
+    const nameOf = (id) =>
+      text([...document.querySelectorAll('#teamSelect option')].find((o) => o.getAttribute('value') === String(id)));
+    const mine = readDepth(document).rows.find((r) => r.me);
+    const opened = mine ? (mine.team === nameOf(1) ? '1' : mine.team === nameOf(2) ? '2' : mine.team) : '';
+    const ownLinks = document.querySelectorAll('#tradeTable a.espn-open').length;
+
+    const sel = document.getElementById('teamSelect');
+    sel.value = '2';
+    fire(sel);
+    await settle(1500);
+    const cells = [...document.querySelectorAll('#tradeTable tbody tr')]
+      .map((tr) => text(tr.lastElementChild));
+
+    // A hand-picked squad survives a change of week. The empty render while a
+    // week loads used to null it, and the page then fell back to your own.
+    const weekSel = document.getElementById('weekSelect');
+    const otherWeek = [...weekSel.querySelectorAll('option')]
+      .map((o) => o.getAttribute('value'))
+      .find((v) => v !== weekSel.value);
+    weekSel.value = otherWeek;
+    fire(weekSel);
+    await settle(1500);
+    const afterWeek = readDepth(document).rows.find((r) => r.me);
+    return {
+      afterWeek: afterWeek ? afterWeek.team : null,
+      otherName: nameOf(2),
+      errors, opened, ownLinks,
+      meRow: mine ? mine.team : null,
+      names: [nameOf(1), nameOf(2)],
+      saved: globalThis.localStorage.getItem('ff.prefs'),
+      otherLinks: document.querySelectorAll('#tradeTable a.espn-open').length,
+      otherRows: cells.length,
+      cells,
+    };
+  },
+
+  /**
    * A real league, stubbed: what the weekly measure COSTS, and what the ESPN
    * deep link says.
    *
@@ -726,7 +778,13 @@ const SCENARIOS = {
       landed: opened[0] ? opened[0].tab.location.href : '',
       opener: opened[0] ? (opened[0].tab.opener === null ? null : 'still set') : 'none',
       pageMoved: window.location.href !== startHref,
+      outcomeShown: !document.getElementById('espnOutcome').hidden,
+      outcomeBad: (document.getElementById('espnOutcome').getAttribute('class') || '').includes('bad'),
+      outcome: text(document.getElementById('espnOutcomeText')),
     };
+    document.getElementById('espnOutcomeClose')
+      .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    espnClick.outcomeDismissed = !!document.getElementById('espnOutcome').hidden;
 
     return {
       errors, before, after, deal, dealLinkKeyed, espnClick,
@@ -1494,6 +1552,21 @@ if (!md.boot) {
   }
 }
 
+// ---- live opens on YOUR team, and only your team links to ESPN -------------
+
+const lo = run('liveOtherTeam', { stub: true });
+ok('the other-team scenario boots', !lo.boot, lo.boot);
+if (!lo.boot) {
+  ok('no console errors', lo.errors.length === 0, lo.errors.slice(0, 2).join(' | '));
+  eq(lo.opened, '1', 'the live league opens on your own team, not a remembered one');
+  ok('your own team gets ESPN links', lo.ownLinks > 0, `${lo.ownLinks} links`);
+  ok('another manager’s squad has rows to judge', lo.otherRows > 0, `${lo.otherRows} rows`);
+  eq(lo.otherLinks, 0, 'but no ESPN link — ESPN only proposes from your own team');
+  ok('and every row says why', lo.cells.every((c) => /Only from your own team/.test(c)),
+    lo.cells.slice(0, 3).join(' | '));
+  eq(lo.afterWeek, lo.otherName, 'a squad picked by hand survives a change of week');
+}
+
 // ---- the pop-up fetches its own weeks: "not just words" --------------------
 
 const up = run('unpriced');
@@ -1642,6 +1715,13 @@ if (!live.boot) {
   eq(ec.landed, ec.href, 'and that tab lands on the trade link');
   eq(ec.opener, null, 'with its opener cut, as noopener would have done');
   ok('the Trade page itself stays put', !ec.pageMoved);
+  // Tim, same day: "my side of the trade still has no players selected". Every
+  // way that can happen used to be silent; the page now says which one it was.
+  ok('the page says what became of YOUR side', ec.outcomeShown);
+  ok('and, with no extension here, that it is not ticked and why',
+    ec.outcomeBad && /extension isn’t running/.test(ec.outcome) && /yourself/.test(ec.outcome),
+    ec.outcome);
+  ok('and the message can be dismissed', ec.outcomeDismissed);
 
   if (live.deal && !live.deal.hidden) {
     ok('the deal panel offers the same deep link',
