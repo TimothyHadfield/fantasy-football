@@ -438,8 +438,26 @@ async function loadWeekly() {
   // Already bought — switching to them is free, but the finder still has to be
   // re-run: its offers were priced on the OTHER measure, and repainting alone
   // would relabel them rather than recompute them.
+  if (!missingWeeks().length) { repaint(); return; }
+
+  if (!(await buyMissingWeeks())) return;
+  // A deal opened while these were reading is now priceable and stays open.
+  runSearch({ keepDeal: true });
+}
+
+/**
+ * Fetch (or generate) the span's missing weeks into the cache, and nothing
+ * else: no change of measure, no repaint, no search. Resolves true when it
+ * finished for the source it started on, false when something newer took over.
+ *
+ * Split out of `loadWeekly` for the week-by-week pop-up, which needs the weeks
+ * but must NOT re-run the search — `runSearch` shuts the pop-up, so buying the
+ * weeks through the page button would close the very thing that asked for them.
+ */
+async function buyMissingWeeks() {
+  const key = sourceKey();
   const missing = missingWeeks();
-  if (!missing.length) { repaint(); return; }
+  if (!missing.length) return true;
 
   const token = ++weekly.token;
   const stale = () => token !== weekly.token || sourceKey() !== key;
@@ -454,10 +472,10 @@ async function loadWeekly() {
   try {
     if (state.source === 'demo') {
       const generate = await getDemoGenerator();
-      if (stale()) return;
+      if (stale()) return false;
       // A missing generator is a message, not an early exit: returning here
-      // would skip the repaint at the foot of this function and leave the
-      // failure written into state where nobody can read it.
+      // would skip the caller's repaint and leave the failure written into
+      // state where nobody can read it.
       if (!generate) {
         weekly.error = 'Demo roster data isn’t available yet (js/demo-rosters.js is missing).';
       } else {
@@ -479,7 +497,7 @@ async function loadWeekly() {
             renderCost();
           },
         });
-        if (stale()) return;
+        if (stale()) return false;
         for (const w of batch) {
           // One request was spent on that week whether or not it answered, and
           // the count has to say so — understating a cost is the one dishonesty
@@ -493,7 +511,7 @@ async function loadWeekly() {
       }
     }
   } catch (err) {
-    if (stale()) return;
+    if (stale()) return false;
     weekly.error = err && err.message ? err.message : String(err);
   } finally {
     if (!stale()) {
@@ -502,9 +520,7 @@ async function loadWeekly() {
     }
   }
 
-  if (stale()) return;
-  paint();
-  runSearch();
+  return !stale();
 }
 
 // --------------------------------------------------------------- the cost line
@@ -1399,18 +1415,28 @@ function renderFinderNote() {
  * says which of the two is running. Same rAF-then-timeout shape as the season
  * simulation on the schedule page.
  */
-function runSearch() {
+function runSearch({ keepDeal = false } = {}) {
   const teams = state.data ? state.data.teams : [];
   // A new search invalidates the drill-down: it is holding an offer object out
   // of the PREVIOUS search, and leaving a pop-up open over a fresh table would
   // put two different answers on one page.
-  state.deal = null;
-  state.dealKey = null;
+  //
+  // `keepDeal` is the one exception: the remaining weeks have just landed, the
+  // search is re-ranking on them, and the open pop-up is ALREADY priced on
+  // those same weeks — so the two agree, and shutting it would throw away the
+  // thing the reader clicked to see. Its row may move, so the key is dropped
+  // rather than left pointing at whatever now sits in that position.
+  if (keepDeal && state.deal) state.dealKey = null;
+  else {
+    state.deal = null;
+    state.dealKey = null;
+  }
   state.combo = null;
   state.comboMerged = null;
   state.comboRows = [];
 
   if (!teams.length || state.myTeamId === null) {
+    state.deal = null;
     state.search = null;
     state.searching = false;
     paint();
@@ -1540,23 +1566,22 @@ function renderDeal() {
     `</div>` +
     churnHtml(offer.yourChurn);
 
-  if (basis() !== 'weeks') {
-    // Honest about what it cannot draw yet, and what that would cost. The
-    // alternative — spreading one scalar across thirteen identical rows — would
-    // be a chart of an assumption rather than of a season.
-    $('dealBody').innerHTML =
-      head +
-      `<p class="empty">A week-by-week analysis needs every remaining week’s projections, and ` +
-      `this page has only the one week it is showing. Press ` +
-      `<strong>${esc($('loadWeeks').textContent)}</strong> at the top to price them.</p>` +
-      `<p>On ${esc(meta().label)} this deal takes your best lineup from ` +
-      `<strong>${fmt(offer.myBefore)}</strong> to <strong>${fmt(offer.myAfter)}</strong> ` +
-      `(${signedText(offer.myGain)} a week), and his from ${fmt(offer.theirBefore)} to ` +
-      `${fmt(offer.theirAfter)} (${signedText(offer.theirGain)}).</p>`;
-    $('dealNote').innerHTML =
-      `Both figures assume each squad fields its best legal lineup, before and after. On this ` +
-      `measure that lineup is picked once, from one number per man — which is precisely the ` +
-      `thing <strong>Every remaining week</strong> fixes.`;
+  // The table needs every remaining week's projections, and it no longer waits
+  // for the page-wide button: opening a deal buys them (see `openDeal`). Until
+  // they land the pop-up says what it is reading — never a table spread from
+  // one scalar across identical rows, which would be an assumption dressed as a
+  // season.
+  if (!weeklyReady()) {
+    const span = weeklySpan();
+    const why = !span.length
+      ? 'Every week of the regular season has been played, so there is nothing left for a trade to change.'
+      : weekly.error && !weekly.loading
+        ? `Couldn’t read the remaining weeks: ${esc(weekly.error)}`
+        : state.isDemo
+          ? `Generating ${weekRange(span)}…`
+          : `Reading ${weekRange(span)} from ESPN — one request per week not already loaded…`;
+    $('dealBody').innerHTML = head + `<p class="empty">${why}</p>`;
+    $('dealNote').innerHTML = '';
     return;
   }
 
@@ -1613,6 +1638,11 @@ function renderDeal() {
 
   const sumOfRows = priced.byWeek.reduce((a, w) => a + w.delta, 0);
   $('dealNote').innerHTML =
+    (basis() !== 'weeks'
+      ? `<strong>The list behind this is ranked on ${esc(meta().label)}</strong>, not week by week, ` +
+        `so its figure for this deal will not match the total here. Choose ` +
+        `<strong>Every remaining week</strong> at the top to rank the whole list this way. `
+      : '') +
     `<strong>As you are now</strong> and <strong>With the trade</strong> are both your best legal ` +
     `lineup <em>in that week</em>, filled from that week’s own projections — so both sides of the ` +
     `comparison assume you start whoever is highest that week, which is what you would actually ` +
@@ -1657,6 +1687,32 @@ function openDeal(offer, key) {
   // reach and the natural first stop in a dialog. Everything inside is after it
   // in the tab order, so nothing is skipped by starting here.
   focusEl($('dealClose'));
+  loadWeeksForDeal(offer);
+}
+
+/**
+ * Buy the remaining weeks for the pop-up, if they are not already in hand.
+ *
+ * Tim's ask: the pop-up should show the week-by-week numbers, not a sentence
+ * telling him to press a button first. Clicking a deal IS the ask for them, so
+ * the click pays. It deliberately leaves the page's measure alone and runs no
+ * search — the list behind stays exactly as it was ranked, and `runSearch`
+ * would shut this pop-up besides.
+ */
+async function loadWeeksForDeal(offer) {
+  if (weekly.key !== sourceKey()) resetWeekly();
+  rememberSelectedWeek();
+  if (weeklyReady() || weekly.loading || !weeklySpan().length) { paint(); return; }
+  const done = await buyMissingWeeks();
+  if (!done) return;
+  // The page button may have been pressed while this was reading, switching
+  // the whole page to the weekly measure; its own load bailed out on seeing
+  // ours in flight, so the re-rank it owes is paid here.
+  if (state.measure === 'weeks') { runSearch({ keepDeal: true }); return; }
+  // Otherwise repaint only if the reader is still looking at the same deal —
+  // the cache is filled either way, so the next deal they open is free.
+  if (state.deal === offer) paint();
+  else renderCost();
 }
 
 /** Close it, and put the keyboard back where it came from. */

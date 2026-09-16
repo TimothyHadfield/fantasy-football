@@ -66,6 +66,14 @@
 
 * { box-sizing: border-box; }
 
+/* `hidden` MEANS hidden, whatever else the element's class says. The browser's
+ * own `[hidden] { display: none }` is the weakest rule there is, so any class
+ * that sets `display` quietly overrides it — which is exactly how the Trade
+ * page's pop-up (`.modal { display: flex }`) sat over the page from load with a
+ * Close button that set `hidden` and changed nothing on screen. Every page's
+ * JS toggles `.hidden`, so this is the one place to make it stick. */
+[hidden] { display: none !important; }
+
 /* iOS Safari inflates the text of any block it decides is too narrow to read,
  * which on a rotate silently re-sizes half the page and pulls every table out
  * of alignment with the one above it. The phone layout below sets its own

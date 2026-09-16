@@ -604,6 +604,47 @@ const SCENARIOS = {
   },
 
   /**
+   * The pop-up opened BEFORE anybody pressed the page's weekly button.
+   *
+   * Tim's report, 2026-09-16: the pop-up held "just words" — a sentence telling
+   * him to press a button at the top — rather than the week-by-week numbers. A
+   * click on a deal is the ask for them, so the click buys them, and it must
+   * neither move the page off the measure he chose nor re-run the search (which
+   * would shut the pop-up he just opened).
+   *
+   * `weeksChosen` is the other half: the measure already SET to every remaining
+   * week (it persists) but never pressed for. Then the list genuinely does need
+   * re-ranking once the weeks land — and the pop-up has to survive that.
+   */
+  async unpriced(weeksChosen = false) {
+    const seed = weeksChosen ? { 'ff.prefs': JSON.stringify({ 'trade.measure': 'weeks' }) } : null;
+    const { document, errors, fetchCalls } = await boot('trade.html', '', seed);
+    const before = {
+      deal: readDeal(document),
+      trades: readTrades(document),
+      measure: document.getElementById('measureSelect').value,
+    };
+    const row = document.querySelector('#tradeTable tbody tr');
+    const title = row ? text(row.querySelector('.mgr')) : '';
+    if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    const immediately = readDeal(document);
+    await settle(weeksChosen ? 12000 : 1500);
+    const deal = readDeal(document);
+    const trades = readTrades(document);
+    document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(300);
+    return {
+      errors, fetchCalls, before, immediately, deal, title,
+      closed: readDeal(document),
+      afterTrades: trades,
+      measure: document.getElementById('measureSelect').value,
+      cost: readCost(document),
+    };
+  },
+
+  unpricedWeeksChosen() { return SCENARIOS.unpriced(true); },
+
+  /**
    * A real league, stubbed: what the weekly measure COSTS, and what the ESPN
    * deep link says.
    *
@@ -1395,6 +1436,70 @@ if (!md.boot) {
   // lives in the pop-up, so a week table anywhere else on the page is the
   // defect coming back.
   eq(md.strayWeekTables, 0, 'no week-by-week table is printed outside the pop-up');
+}
+
+// ---- `hidden` has to WIN over the pop-up's own `display` ------------------
+//
+// Tim's report, 2026-09-16: the pop-up sat over the page from load and Close
+// did nothing. The JS was right all along — every assertion above passed —
+// because linkedom reads the `hidden` PROPERTY and applies no CSS. In a browser
+// `.modal { display: flex }` outranks the user agent's `[hidden]` rule, so the
+// element was hidden in the DOM and fully drawn on screen. Only the stylesheet
+// can be checked here, so it is.
+{
+  const css = readFileSync(path.join(REPO, 'css/app.css'), 'utf8');
+  ok('the shared stylesheet makes [hidden] beat any class’s display',
+    /\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/.test(css),
+    'css/app.css has no `[hidden] { display: none !important }`');
+  for (const page of ['trade.html', 'analysis.html', 'schedule.html', 'waivers.html',
+    'stats.html', 'index.html', 'summary.html']) {
+    const html = readFileSync(path.join(REPO, page), 'utf8');
+    ok(`${page} links the stylesheet that carries it`,
+      /<link[^>]+href="css\/app\.css/.test(html));
+  }
+}
+
+// ---- the pop-up fetches its own weeks: "not just words" --------------------
+
+const up = run('unpriced');
+ok('the unpriced scenario boots', !up.boot, up.boot);
+if (!up.boot) {
+  ok('no console errors', up.errors.length === 0, up.errors.slice(0, 2).join(' | '));
+  ok('demo still costs no request', up.fetchCalls.length === 0, up.fetchCalls.join(' | '));
+  eq(up.before.measure, 'typical', 'the page opens on a typical week');
+  ok('no pop-up on load', up.before.deal.hidden && !up.before.deal.present);
+  ok('clicking a deal opens it at once', !up.immediately.hidden);
+  ok('and it does not tell him to press a button first',
+    !/Press/.test(up.immediately.body) && !/Press/.test(up.deal.body), up.deal.body.slice(0, 200));
+  ok('it fills with the week-by-week table without the page button',
+    !up.deal.hidden && up.deal.weeks && up.deal.weeks.weeks.length > 1,
+    up.deal.weeks ? `${up.deal.weeks.weeks.length} rows` : up.deal.body.slice(0, 200));
+  ok('one row per remaining week, with numbers in it',
+    up.deal.weeks && up.deal.weeks.weeks.every((r) => Number.isFinite(r.before) && Number.isFinite(r.after)),
+    JSON.stringify(up.deal.weeks && up.deal.weeks.weeks.slice(0, 2)));
+  ok('it is the deal that was clicked', up.deal.title.includes(up.title), `${up.deal.title} vs ${up.title}`);
+  ok('and it says the list behind was ranked another way',
+    /ranked on a typical week/.test(up.deal.note), up.deal.note.slice(0, 200));
+  eq(up.measure, 'typical', 'the page measure is left as he chose it');
+  ok('and the list behind is not re-ranked',
+    JSON.stringify(up.afterTrades.map((t) => t.myGain)) === JSON.stringify(up.before.trades.map((t) => t.myGain)));
+  ok('the weeks it bought are offered to the page for free',
+    /already loaded, no requests/.test(up.cost.button), up.cost.button);
+  ok('Close still shuts it', up.closed.hidden && !up.closed.present);
+}
+
+const uw = run('unpricedWeeksChosen');
+ok('the weeks-chosen scenario boots', !uw.boot, uw.boot);
+if (!uw.boot) {
+  ok('no console errors', uw.errors.length === 0, uw.errors.slice(0, 2).join(' | '));
+  ok('the pop-up survives the re-rank the weeks force',
+    !uw.deal.hidden && uw.deal.weeks && uw.deal.weeks.weeks.length > 1,
+    uw.deal.weeks ? `${uw.deal.weeks.weeks.length} rows` : uw.deal.body.slice(0, 200));
+  ok('and has no ranked-another-way caveat, because now it was not',
+    !/ranked on/.test(uw.deal.note), uw.deal.note.slice(0, 120));
+  ok('the list behind it WAS re-ranked week by week',
+    /priced/.test(uw.cost.button), uw.cost.button);
+  ok('Close still shuts it', uw.closed.hidden);
 }
 
 // ---- a real league, stubbed: the cost, the ranking, and the ESPN link ------

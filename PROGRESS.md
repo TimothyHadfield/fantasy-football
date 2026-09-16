@@ -1319,6 +1319,30 @@ for one man is the contradiction a shared divisor exists to prevent.
 `tr-test.mjs` grew from 75 assertions to **224** across this work, and the
 engine suites came through byte-identical: 1,411 and 4,009, both untouched.
 
+### The pop-up that never closed (2026-09-16, Tim's report)
+
+He opened the Trade page to a pop-up reading "This trade, week by week" over
+everything, a Close button that did nothing, and a body with no numbers in it.
+
+- **It was CSS, and the suite could not see it.** `.modal { display: flex }`
+  outranks the browser's own `[hidden] { display: none }`, so the element was
+  `hidden` in the DOM — which is all linkedom checks — and fully drawn on
+  screen. Close set `hidden` again and nothing changed. The fix is site-wide:
+  `[hidden] { display: none !important }` in `css/app.css`, because every page
+  toggles `.hidden` and any class that sets `display` would do the same thing.
+  `tr-test` now asserts the rule is there. **A test that reads the `hidden`
+  property is not a test that the thing is hidden.**
+- **The pop-up buys its own weeks.** It used to show a sentence saying "press
+  the button at the top" whenever the page was not on the weekly measure — which
+  is the default. Clicking a deal is now the ask: `loadWeeksForDeal` fetches the
+  missing weeks (`buyMissingWeeks`, split out of `loadWeekly`) WITHOUT changing
+  the measure or re-running the search, because `runSearch` shuts the pop-up.
+  The note says when the list behind was ranked on another measure. If the
+  measure was already set to every remaining week but never pressed, the weeks
+  arriving do force a re-rank, and `runSearch({ keepDeal: true })` keeps the
+  pop-up open through it — it is priced on those same weeks, so the two agree.
+  On live data this spends one request per week not already held, on the click.
+
 ## Ticking your own side of a trade (`extension/content-espn-trade.js`)
 
 Tim asked for a deep link that arrives with BOTH sides already selected.
