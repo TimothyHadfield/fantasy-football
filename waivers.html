@@ -207,6 +207,64 @@ tbody tr.spotlight td.name {
 }
 .jump button { padding: 4px 12px; font-size: 12.5px; margin-left: auto; }
 
+/* ------------------------------------------------------------ reading layout
+   The controls sit in one quiet toolbar box so they read as "settings for the
+   table below" rather than as more content. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px 28px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+}
+.toolbar .ctl-hint { margin-top: 1px; }
+/* The cost of the span, under the control that spends it. */
+.toolbar .ctl .cost { align-self: auto; padding-bottom: 0; max-width: 44ch; }
+
+/* Short, always-visible status for the table: the demo notice, what is still
+   loading, what ESPN refused, and how to turn the comparison rows on. */
+.status { margin: 10px 0 0; font-size: 13px; color: var(--dim); }
+.status p { margin: 0 0 4px; }
+.status:empty { display: none; }
+
+/* THE COLOUR KEY. Each cue shown in the very treatment the table uses, with a
+   few words beside it. Plain text, so a phone reads it without hovering; the
+   full rules are in "How to read this table". */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 0 8px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .key[hidden] { display: none; }
+.legend .sw {
+  display: inline-block;
+  min-width: 34px;
+  padding: 1px 6px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.legend .sw.hot { color: var(--accent); font-weight: 650; }
+.legend .sw.beats { background: #16311f; }
+.legend .sw.bye { color: var(--warn); font-size: 11px; letter-spacing: 0.04em; }
+.legend .mine-tag { margin-right: 0; }
+
+/* The long explanation, opened: one idea per paragraph, each led by a short
+   bold label so it can be scanned. */
+details.explain > .panel-note p { margin: 0 0 10px; }
+details.explain > .panel-note p:last-child { margin-bottom: 0; }
+details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
+
 /* ------------------------------------------------------------------- phone
    css/app.css already turns every .segmented into a wrapping grid of real tap
    targets; the work left here is the two things this page puts INSIDE those
@@ -234,7 +292,8 @@ tbody tr.spotlight td.name {
 
   /* What the span costs belongs under the control it is about, not pinned to
      the bottom of a row it no longer shares. */
-  .cost { align-self: flex-start; padding-bottom: 0; flex: 1 1 100%; }
+  .cost { align-self: flex-start; padding-bottom: 0; }
+  .toolbar { padding: 10px; gap: 12px; }
 
   /* Desktop pixel caps, restated as a share of the screen. 150px of owner name
      is 40% of a phone; 200px is more than half. */
@@ -281,6 +340,7 @@ tbody tr.spotlight td.name {
 
   <section class="panel">
     <h2>Data source</h2>
+    <p class="lede">Sample data, or your real ESPN league.</p>
     <div class="segmented" id="sourceToggle">
       <button type="button" data-src="demo" class="on">Demo data</button>
       <button type="button" data-src="live">My ESPN league</button>
@@ -290,8 +350,9 @@ tbody tr.spotlight td.name {
 
   <section class="panel">
     <h2>Available players</h2>
+    <p class="lede">Free agents you could claim, with ESPN&rsquo;s projected points for each week.</p>
 
-    <div class="row spread mb-12">
+    <div class="toolbar">
       <div class="ctl">
         <span class="ctl-label" id="posLabel">Position</span>
         <!-- FLEX sits after TE and before K because that is where a flex sits
@@ -313,8 +374,8 @@ tbody tr.spotlight td.name {
              to live only in a `title` on the button. js/touch-titles.js leaves
              controls alone on purpose — a tap on a button must press it — so on
              a phone that sentence could never be read. Said here instead. -->
-        <span class="ctl-hint"><strong>FLEX</strong> shows every running back, receiver and tight
-          end at once. A filter only: each man keeps his own position.</span>
+        <span class="ctl-hint"><strong>FLEX</strong> = every RB, WR and TE together. A filter only:
+          each man keeps his own position.</span>
       </div>
 
       <div class="ctl">
@@ -324,18 +385,32 @@ tbody tr.spotlight td.name {
           <button type="button" data-span="6">Next 6</button>
           <button type="button" data-span="all">Rest of season</button>
         </div>
+        <span class="cost" id="spanCost"></span>
       </div>
-
-      <span class="cost" id="spanCost"></span>
     </div>
 
     <div class="stat-row" id="waiverStats"></div>
+    <div class="status" id="waiverStatus"></div>
+
+    <!-- Two greens, told apart by treatment: bold green TEXT (td.hot) and a
+         green SHADE (td.beats). The two comparison keys hide when nobody is set
+         as you, because then neither of those can appear. -->
+    <div class="legend" id="waiverLegend">
+      <span class="key"><span class="sw hot">14.2</span> worth starting</span>
+      <span class="key" data-compare><span class="sw beats">9.8</span> beats your worst man</span>
+      <span class="key" data-compare><span class="mine-tag">Your QB3</span> your own player</span>
+      <span class="key"><span class="sw bye">Bye</span> no game</span>
+      <span class="key"><span class="sw">&mdash;</span> no projection</span>
+    </div>
 
     <div class="table-scroll"><table id="waiverTable">
       <thead></thead>
       <tbody></tbody>
     </table></div>
-    <p class="panel-note" id="waiverNote"></p>
+    <details class="explain">
+      <summary>How to read this table</summary>
+      <div class="panel-note" id="waiverNote"></div>
+    </details>
   </section>
 
   <!-- The other half of the league: everyone who IS on a roster. The two panels
@@ -349,8 +424,9 @@ tbody tr.spotlight td.name {
        a long page, never two choices that could disagree. -->
   <section class="panel">
     <h2>Taken players</h2>
+    <p class="lede">Everyone already on a roster, who holds him, and his projected points each week.</p>
 
-    <div class="row spread mb-12">
+    <div class="toolbar">
       <div class="ctl">
         <span class="ctl-label" id="takenPosLabel">Position</span>
         <!-- The same FLEX button, on this table's own set. Its count is this
@@ -367,9 +443,8 @@ tbody tr.spotlight td.name {
           <button type="button" data-pos="K">K<span class="seg-count"></span></button>
           <button type="button" data-pos="DST">DST<span class="seg-count"></span></button>
         </div>
-        <span class="ctl-hint"><strong>FLEX</strong> shows every running back, receiver and tight
-          end the league is holding. A filter only: each man keeps his own position and his own
-          rank on his manager&rsquo;s squad.</span>
+        <span class="ctl-hint"><strong>FLEX</strong> = every RB, WR and TE held. A filter only:
+          each man keeps his own position and rank.</span>
       </div>
 
       <div class="ctl">
@@ -379,18 +454,28 @@ tbody tr.spotlight td.name {
           <button type="button" data-span="6">Next 6</button>
           <button type="button" data-span="all">Rest of season</button>
         </div>
+        <span class="cost" id="takenSpanCost"></span>
       </div>
-
-      <span class="cost" id="takenSpanCost"></span>
     </div>
 
     <div class="stat-row" id="takenStats"></div>
+    <div class="status" id="takenStatus"></div>
+
+    <div class="legend">
+      <span class="key"><span class="sw">QB<span class="muted">3</span></span> his rank on his own squad</span>
+      <span class="key"><span class="sw bye">Bye</span> no game</span>
+      <span class="key"><span class="sw">&mdash;</span> no projection</span>
+      <span class="key">No colours &mdash; nobody here can be claimed</span>
+    </div>
 
     <div class="table-scroll"><table id="takenTable">
       <thead></thead>
       <tbody></tbody>
     </table></div>
-    <p class="panel-note" id="takenNote"></p>
+    <details class="explain">
+      <summary>How to read this table</summary>
+      <div class="panel-note" id="takenNote"></div>
+    </details>
   </section>
 
 </div>

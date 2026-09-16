@@ -239,6 +239,16 @@ These were each established by testing, and several by getting them wrong first.
    archive. The committed JSON file is still the archive's durable home, and
    the cloud sync does not change that. See "The cloud, and the phone".
 
+## How a panel reads (2026-09-16, Tim: "messy and wordy")
+
+Every panel is: title → one short `.lede` sentence → the control toolbar → the
+table/chart → a small visible key or status line → `<details class="explain">`
+("How this works") holding the full method. The styles are in `css/app.css`.
+**Put new explanation behind the toggle, not under the table** — the site went
+from ~5,700 words of visible prose to ~1,050 in that pass, and
+`node tests/text-audit.mjs` measures it per panel. Warnings, errors, demo
+notices and anything that changes what a number means stay visible.
+
 ## Contracts that hold the site together
 
 Break one of these in one file and the break shows up in another.

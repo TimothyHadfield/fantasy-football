@@ -88,6 +88,24 @@ const record = (t) => `${t.wins}–${t.losses}${t.ties ? `–${t.ties}` : ''}`;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** A long note as short paragraphs. Empty entries are dropped. */
+const paras = (lines) =>
+  lines.filter(Boolean).map((l) => `<p>${l}</p>`).join('');
+
+/** Hide or show an element by its hidden attribute. */
+function setHidden(el, hide) {
+  if (!el) return;
+  if (hide) el.setAttribute('hidden', '');
+  else el.removeAttribute('hidden');
+}
+
+/** A "How this works" toggle with nothing in it is hidden rather than offered. */
+function tuckIfEmpty(noteId) {
+  const note = $(noteId);
+  const box = note && note.closest('details');
+  if (box) setHidden(box, !note.textContent.trim());
+}
+
 /** Weeks with a completed game in them — the number every guard here turns on. */
 const weekCount = () => (state.stats ? state.stats.weekNumbers.length : 0);
 
@@ -379,28 +397,39 @@ function renderMainTable() {
   $('thAvg').textContent = oneWeek ? 'Score' : 'Avg';
   $('thOppAvg').textContent = oneWeek ? 'Opp score' : 'Opp Avg';
 
-  $('mainTableNote').innerHTML =
-    // "Hover" alone was a lie on a phone: a `title` draws nothing on iOS.
-    // js/touch-titles.js makes the same words open as a sheet on a tap, and a
-    // tap still sorts — both happen, which is both of the things a reader who
-    // pressed an unfamiliar heading wanted.
-    'Tap or hover any heading for what that column means; a tap also sorts by it. ' +
+  // The one line under the table that stays on screen: what the ± means, or —
+  // before a game is played — why the result columns are dashes.
+  $('mainTableStatus').innerHTML = none
+    ? '<strong>Nothing played yet</strong>, so columns drawn from results are blank. ' +
+      'Opp proj needs no games.'
+    : '<strong>±</strong> = how far Close luck, Luck score and S+L could still move. ' +
+      'It narrows every week.';
+
+  // The full glossary, behind "What the columns mean". "Tap or hover a heading"
+  // is the lede above the table — a `title` draws nothing on iOS, and
+  // js/touch-titles.js opens the same words as a sheet on a tap.
+  $('mainTableNote').innerHTML = paras([
     '<strong>Opp proj</strong> = the average projected score of the opponents on your ' +
     'schedule, which needs no games played. <strong>Luck/wk</strong> = actual − ' +
     'projected. <strong>PTW</strong> = what you ' +
     'needed to score to beat a typical opponent. <strong>Skill</strong> = your average ' +
-    'projected score minus the league&rsquo;s. <strong>LS</strong>, <strong>PS</strong> ' +
+    'projected score minus the league&rsquo;s.',
+    '<strong>LS</strong>, <strong>PS</strong> ' +
     'and <strong>AS</strong> rank the league by luck score, by skill + luck, and by ' +
-    'actual record.' +
-    (none
-      ? ' Nothing has been played yet, so every column drawn from a result is blank ' +
+    'actual record.',
+    none
+      ? 'Nothing has been played yet, so every column drawn from a result is blank ' +
         'rather than zero. Opp proj is the exception, and the panel above it explains why.'
-      : ' <strong>±</strong> beside Close, Luck and S+L is how far that figure could still ' +
+      : '<strong>±</strong> beside Close, Luck and S+L is how far that figure could still ' +
         'move: one standard error of an average of this team&rsquo;s games, from how much ' +
         'the per-game number varies across the league. About two times in three the ' +
-        'figure a full season settles on is inside it. It is wide after a game or two — ' +
+        'figure a full season settles on is inside it.',
+    none
+      ? ''
+      : 'It is wide after a game or two — ' +
         'a 3-point result alone swings Close luck by up to 50 — and narrows every week, ' +
-        'so LS and PS early on are a guess with the range beside it, not a verdict.');
+        'so LS and PS early on are a guess with the range beside it, not a verdict.',
+  ]);
 
   // Default to standings order; afterwards keep whatever the user picked.
   enableSort(table, { defaultIndex: 1 });
@@ -762,17 +791,29 @@ function renderOppPanel() {
   const chart = $('oppProjChart');
   const note = $('oppProjNote');
   if (!chart || !note) return;
+  paintOppPanel(chart, note);
+  // The data gaps stay on screen; the method sits behind "How this works".
+  const warn = $('oppProjWarn');
+  const gaps = state.oppPending ? [] : oppGaps(state.oppProj);
+  if (warn) {
+    warn.innerHTML = gaps.length ? `<strong>Incomplete:</strong> ${gaps.join(' ')}` : '';
+    setHidden(warn, !gaps.length);
+  }
+  tuckIfEmpty('oppProjNote');
+}
 
+function paintOppPanel(chart, note) {
   if (state.oppPending) {
     const p = state.oppProgress;
     chart.innerHTML =
       '<p class="pending">Reading ESPN&rsquo;s own projections' +
       (p ? ` — <strong>week ${p.done} of ${p.total}</strong>` : '') +
       '&hellip;</p>';
-    note.innerHTML =
+    note.innerHTML = paras([
       'ESPN publishes projections one week at a time and has no bulk form, so this ' +
       'costs one request per week of the season. Nothing else on the page is waiting ' +
-      'for it.';
+      'for it.',
+    ]);
     return;
   }
 
@@ -857,7 +898,9 @@ function oppNote(rows, data) {
       'score that week, then average those. High means a hard schedule — which is ' +
       'luck, not skill: nobody picks their own opponents.',
 
-    'It needs <strong>no games played</strong>, which is the whole point of it. Each ' +
+    'It needs <strong>no games played</strong>, which is the whole point of it.',
+
+    'Each ' +
       'weekly number is ESPN&rsquo;s own per-player projection for that week, with the ' +
       `best legal lineup filled for every team (${plural(data.starters, 'starter')})` +
       (data.countsKnown
@@ -872,15 +915,27 @@ function oppNote(rows, data) {
       `The league&rsquo;s average opponent is <strong>${fmt(data.leagueAvg)}</strong>, so ` +
         'the figure beside each bar is the gap from that: a positive number is that many ' +
         'points a week harder than the league&rsquo;s typical schedule, a negative one that ' +
-        `much easier. Hardest to easiest spans only ${fmt(spread)} points, which is why the ` +
+        'much easier.',
+      `Hardest to easiest spans only ${fmt(spread)} points, which is why the ` +
         'bars run between those two rather than from zero — zero-based bars would all be ' +
         'the same length and show nothing.'
     );
   }
 
+  // The same gaps are also shown, above the toggle, by renderOppPanel().
+  lines.push(...oppGaps(data, rows));
+
+  return paras(lines);
+}
+
+/** What the schedule-luck numbers are missing, in words. Empty when complete. */
+function oppGaps(data, rows = oppRows()) {
+  if (!data || data.error || !data.byTeam || !state.stats) return [];
+  const out = [];
+  const weeks = data.projectedWeeks || [];
   const missing = (data.scheduleWeeks || []).filter((w) => !weeks.includes(w));
   if (missing.length) {
-    lines.push(
+    out.push(
       `ESPN would not return rosters for ${plural(missing.length, 'week')} ` +
         `(${missing.join(', ')}), so those fixtures are left out of every average above ` +
         'rather than counted as zero.'
@@ -888,15 +943,14 @@ function oppNote(rows, data) {
   }
 
   const missingTeams = state.stats.teams.length - rows.length;
-  if (missingTeams > 0) {
-    lines.push(
+  if (rows.length && missingTeams > 0) {
+    out.push(
       `${plural(missingTeams, 'team')} could not be projected at all and ${
         missingTeams === 1 ? 'is' : 'are'
       } left out of the ranking and of the league average.`
     );
   }
-
-  return lines.join(' ');
+  return out;
 }
 
 function renderAccuracy() {

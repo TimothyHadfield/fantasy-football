@@ -707,7 +707,10 @@ function renderTable(view, rows, sim, inputs) {
 
   const status = $('simStatus');
   if (!view.enough) {
-    status.textContent = '';
+    // The early-season refusal stays on screen; the reasoning is in the note.
+    status.textContent =
+      `Too early to say anything: ${plural(view.weeksPlayed, 'week')} played, and these ` +
+      `numbers need at least ${MIN_WEEKS}.`;
   } else if (state.projPending) {
     status.textContent =
       'Reading ESPN’s projections for the weeks still to play — one request per week, ' +
@@ -825,7 +828,8 @@ function renderNote(view, sim, inputs) {
     `projections; it has never published odds.`
   );
 
-  $('summaryNote').innerHTML = parts.filter(Boolean).join(' ');
+  // Short paragraphs, behind "What the numbers mean".
+  $('summaryNote').innerHTML = parts.filter(Boolean).map((t) => `<p>${t}</p>`).join('');
 }
 
 // -------------------------------------------------------------------- the card
@@ -1189,18 +1193,16 @@ function renderSendControls(view, noCanvas) {
   // disabled button swallows the click and explains nothing, which is exactly
   // the silent-failure trap this page was warned about; pressed, it says why.
   const parts = [];
+  // Kept short: the longer why is under "How sending works".
   parts.push(state.canShare
-    ? 'Share hands the image to your phone’s share sheet — pick Messages, pick the group, ' +
-      'and you see the message before it sends. Download and Copy as text are here too, ' +
-      'for a laptop.'
-    : 'This browser will not let a page share a file — desktop Chrome and Firefox mostly ' +
-      'cannot — so the Share button is hidden rather than offered and then failing. ' +
-      'Download saves the PNG; Copy as text puts the same chart on the clipboard. ' +
-      'Open this page on your iPhone to get the share sheet.');
+    ? 'Share opens your phone’s share sheet: pick the group, and you see the message ' +
+      'before it sends.'
+    : 'This browser will not let a page share a file, so use Download or Copy as text — ' +
+      'or open this page on your iPhone for the share sheet.');
   if (noCanvas) {
     parts.push(
-      'This browser cannot draw to a canvas, so there is no image here at all — the text ' +
-      'version below is the same chart and can be pasted into any chat.'
+      'This browser cannot draw to a canvas, so there is no image — the text below is ' +
+      'the same chart and pastes into any chat.'
     );
   }
   hint.textContent = parts.join(' ');

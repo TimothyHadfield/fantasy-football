@@ -122,6 +122,15 @@ td.state-live { color: var(--warn); }
 /* A panel heading that shares its line with a control, rather than sitting on
    its own line above one. */
 .h2-inline { margin-bottom: 0 !important; align-self: center; }
+/* Same look as every other panel title (app.css styles only `section > h2`). */
+section.panel h2.h2-inline {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 600;
+  margin-top: 0;
+}
 
 /* Forecast. Inside this panel every row is already the chosen team, so the row
    highlight is free to mean "the next one to be played" rather than "you" —
@@ -193,6 +202,50 @@ td.state-live { color: var(--warn); }
    than simply missing, because "there is no week 4" and "week 4 was never
    saved" are different facts. */
 #asOfSelect option:disabled { color: var(--line-2); }
+
+/* ---------------------------------------------------------------- toolbars */
+
+/* A row of controls that belong together: a picker on the left, its actions
+   on the right, sitting on the same tinted strip the week rail uses. */
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.toolbar label { margin-bottom: 4px; }
+.tool-group { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* Delete is the one control that loses something; keep it apart. */
+.tool-group #snapDelete { margin-left: 8px; }
+
+/* The run-count control: label, buttons, hint, stacked and right-aligned. */
+.runs-ctl { align-items: flex-end; gap: 4px; }
+.runs-ctl .ctl-hint { text-align: right; }
+
+/* What the archive holds, and whether anything still needs exporting. */
+.snap-state {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--dim);
+  line-height: 1.55;
+}
+.snap-state strong { color: var(--text); }
+.snap-state .neg strong { color: var(--err); }
+.snap-state .pos strong { color: var(--accent); }
+.snap-state p { margin: 0 0 4px; }
+
+/* Long explanations read as short paragraphs once opened. */
+details.explain .panel-note p { margin: 0 0 9px; }
+details.explain .panel-note p:last-child { margin-bottom: 0; }
+
+/* Stat tiles: the same footprint whichever panel they sit in. */
+#summary .stat, #forecastStats .stat, #simStats .stat { min-width: 132px; }
 
 /* ------------------------------------------------------------------- phone
    The .game rule above already reflows a matchup into two rows at 760px; these
@@ -268,12 +321,13 @@ td.state-live { color: var(--warn); }
        together rather than one panel disagreeing with the four above it. -->
   <section class="panel" id="timePanel">
     <h2>Time machine</h2>
-    <div class="row spread">
+    <p class="lede">See the whole page as it stood in an earlier week, from readings saved at the time.</p>
+    <div class="toolbar">
       <div class="select-md">
         <label for="asOfSelect">Showing the season as of</label>
         <select id="asOfSelect"></select>
       </div>
-      <div class="row">
+      <div class="tool-group">
         <button type="button" id="snapSave">Save this week</button>
         <button type="button" id="snapExport">Export archive</button>
         <button type="button" id="snapImport">Import&hellip;</button>
@@ -282,11 +336,18 @@ td.state-live { color: var(--warn); }
       </div>
     </div>
     <div id="replayBanner" class="replay-banner hidden"></div>
-    <div id="snapStatus" class="panel-note"></div>
+    <!-- What is kept, and the one thing to act on (weeks not yet exported).
+         Always visible; the why and how sit in #snapStatus below. -->
+    <div id="snapState" class="snap-state"></div>
+    <details class="explain">
+      <summary>How the archive works</summary>
+      <div id="snapStatus" class="panel-note"></div>
+    </details>
   </section>
 
   <section class="panel">
     <h2>Standings</h2>
+    <p class="lede">The league table so far. &ldquo;Rest of season&rdquo; ranks each team&rsquo;s remaining schedule: 1 is the hardest.</p>
     <div class="table-scroll"><table id="standingsTable">
       <thead><tr>
         <th class="name" data-sort>Team</th>
@@ -297,7 +358,10 @@ td.state-live { color: var(--warn); }
       </tr></thead>
       <tbody></tbody>
     </table></div>
-    <p class="panel-note" id="standingsNote"></p>
+    <details class="explain">
+      <summary>How the run-in is ranked</summary>
+      <p class="panel-note" id="standingsNote"></p>
+    </details>
   </section>
 
   <div class="weekbar">
@@ -316,13 +380,18 @@ td.state-live { color: var(--warn); }
 
   <section class="panel">
     <h2 id="matchupsTitle">Matchups</h2>
+    <p class="lede">Each game with both teams&rsquo; records. Win chances on unplayed games are our estimate, not ESPN&rsquo;s.</p>
     <div id="matchups"></div>
-    <p class="panel-note" id="matchupsNote"></p>
+    <details class="explain">
+      <summary>About these numbers</summary>
+      <p class="panel-note" id="matchupsNote"></p>
+    </details>
   </section>
 
   <section class="panel">
     <h2>Results</h2>
-    <div class="row spread mb-12">
+    <p class="lede">Every score in the chosen week. Tap a header to sort.</p>
+    <div class="toolbar">
       <div class="segmented seg-sm" id="resultsView">
         <button type="button" data-view="played" class="on">Played</button>
         <button type="button" data-view="upcoming">Upcoming</button>
@@ -346,11 +415,15 @@ td.state-live { color: var(--warn); }
       </tr></thead>
       <tbody></tbody>
     </table></div>
-    <p class="panel-note" id="resultsNote"></p>
+    <details class="explain">
+      <summary>About this table</summary>
+      <p class="panel-note" id="resultsNote"></p>
+    </details>
   </section>
 
   <section class="panel">
     <h2 id="h2hTitle">Head to head</h2>
+    <p class="lede">Every pairing in the league: when they meet, or how they have done against each other.</p>
     <div class="row mb-12">
       <div class="segmented seg-sm" id="h2hView">
         <button type="button" data-view="schedule">Who plays who</button>
@@ -358,7 +431,10 @@ td.state-live { color: var(--warn); }
       </div>
     </div>
     <div class="table-scroll" id="h2hGrid"></div>
-    <p class="panel-note" id="h2hNote"></p>
+    <details class="explain">
+      <summary>How to read the grid</summary>
+      <p class="panel-note" id="h2hNote"></p>
+    </details>
   </section>
 
   <!-- Season-wide, so it sits below the week-scoped panels rather than among
@@ -374,6 +450,7 @@ td.state-live { color: var(--warn); }
         <select id="forecastTeam"></select>
       </div>
     </div>
+    <p class="lede">Each game this team has left, its chance of winning it, and how many wins that adds up to. Chances are our model, not ESPN&rsquo;s.</p>
     <div class="stat-row" id="forecastStats"></div>
     <div class="table-scroll"><table id="forecastTable">
       <thead><tr>
@@ -387,7 +464,10 @@ td.state-live { color: var(--warn); }
       <tbody></tbody>
     </table></div>
     <div class="chart" id="forecastChart"></div>
-    <p class="panel-note" id="forecastNote"></p>
+    <details class="explain">
+      <summary>How the forecast works</summary>
+      <div class="panel-note" id="forecastNote"></div>
+    </details>
   </section>
 
   <!-- Last panel on the page because it is the only one that needs every other
@@ -403,8 +483,8 @@ td.state-live { color: var(--warn); }
            deliberately leaves controls alone — which means a control whose only
            explanation is a `title` has no explanation at all on a phone. This
            is the choice being asked for, so it says so in words that render. -->
-      <div class="ctl">
-        <span class="ctl-label" id="simRunsLabel">Runs &mdash; more is less noisy, and slower</span>
+      <div class="ctl runs-ctl">
+        <span class="ctl-label" id="simRunsLabel">Simulated seasons</span>
         <div class="segmented seg-sm" id="simRuns" role="group" aria-labelledby="simRunsLabel">
           <button type="button" data-runs="1000">1,000</button>
           <button type="button" data-runs="10000" class="on">10,000</button>
@@ -416,8 +496,10 @@ td.state-live { color: var(--warn); }
                crash rather than a wait. -->
           <button type="button" data-runs="100000">100,000</button>
         </div>
+        <span class="ctl-hint">More is less noisy, and slower.</span>
       </div>
     </div>
+    <p class="lede">The rest of the season and the playoffs, played out thousands of times. Our model, not ESPN&rsquo;s.</p>
     <div class="stat-row" id="simStats"></div>
     <p id="simCap"></p>
     <div class="chart" id="simChart"></div>
@@ -443,7 +525,10 @@ td.state-live { color: var(--warn); }
       </tr></thead>
       <tbody></tbody>
     </table></div>
-    <p class="panel-note" id="simNote"></p>
+    <details class="explain">
+      <summary>How the simulation works</summary>
+      <div class="panel-note" id="simNote"></div>
+    </details>
   </section>
 
 </div>

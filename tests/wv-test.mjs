@@ -165,7 +165,8 @@ const SCENARIOS = {
         available: trs.filter((tr) => !/\bmine\b/.test(tr.getAttribute('class') || ''))
           .map((tr) => tr.children[0].textContent.trim()),
         badge: document.getElementById('modeBadge').textContent.trim(),
-        note: document.getElementById('waiverNote').textContent.replace(/\s+/g, ' ').trim(),
+        note: (document.getElementById('waiverStatus').textContent + ' ' +
+          document.getElementById('waiverNote').textContent).replace(/\s+/g, ' ').trim(),
       };
     },
   },
@@ -331,7 +332,9 @@ async function check(scenario, boot) {
   const d = boot.document;
   const $ = (id) => d.getElementById(id);
   const table = $('waiverTable');
-  const note = txt($('waiverNote'));
+  // The short status line (demo notice, refusals, progress) sits visibly above
+  // the table; the rest is tucked in the explanation below it. Both are read.
+  const note = txt($('waiverStatus')) + ' ' + txt($('waiverNote'));
 
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
@@ -647,6 +650,9 @@ async function check(scenario, boot) {
     c.ok('a refused week has no sort key',
       rows.every((r) => r.cells[5].v === null && r.cells[6].v === null), 'sort key present');
     c.ok('the note says what to do about it', /Reload the page to try again/.test(note), note);
+    c.ok('the refusal is shown, not tucked behind the toggle',
+      /ESPN did not return weeks 5 and 6/.test(txt($('waiverStatus'))) &&
+      !$('waiverStatus').closest('details'), txt($('waiverStatus')));
     c.ok('the average is taken from the weeks that did load',
       /average is taken from the weeks that did load/.test(note), note);
   }

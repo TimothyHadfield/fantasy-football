@@ -1652,20 +1652,27 @@ function renderTakenStats(weeks) {
  * is coloured.
  */
 function renderTakenNote(weeks) {
+  // Two outputs: `status` is the short, always-visible line under the stat
+  // tiles (demo notice, errors, progress); `parts` is the full explanation,
+  // one paragraph each, behind the "How to read this table" toggle.
+  const status = [];
   const parts = [];
 
-  parts.push(
-    state.isDemo
-      ? 'These are the demo league’s invented squads with invented projections — not ESPN’s, ' +
-        'and not your league’s. Connect a league in the bar above, or use the toggle, to read ' +
-        'the real rosters.'
-      : 'Every number here is ESPN’s own projection for that player in that week, scored under ' +
-        'this league’s rules — the same figures as the table above, read off each week’s rosters ' +
-        'instead of the wire. Nothing on this table is our forecast except the average and the ' +
-        'rank beside the position.'
-  );
+  if (state.isDemo) {
+    status.push('Demo data: invented squads, not your real league.');
+    parts.push(lead('The numbers') +
+      'These are the demo league’s invented squads with invented projections — not ESPN’s, ' +
+      'and not your league’s. Connect a league in the bar above, or use the toggle, to read the real rosters.');
+  } else {
+    parts.push(lead('The numbers') +
+      'Every number here is ESPN’s own projection for that player in that week, scored under ' +
+      'this league’s rules — the same figures as the table above, read off each week’s rosters ' +
+      'instead of the wire. Nothing on this table is our forecast except the average and the ' +
+      'rank beside the position.');
+  }
 
   parts.push(
+    lead('Who is listed') +
     `Everyone on a roster in <strong>any</strong> of ${weekRange(weeks)} — a man picked up in ` +
     `${weeks.length > 1 ? `week ${weeks[1]}` : 'a later week'} belongs in a table whose columns ` +
     `include that week. Owner is the manager holding him in the earliest of those weeks he ` +
@@ -1675,12 +1682,14 @@ function renderTakenNote(weeks) {
   );
 
   parts.push(
+    lead('Avg') +
     'Avg is the mean of the weeks shown and is ours, not ESPN’s: byes are counted as the zero ' +
     'ESPN returns, and weeks with no number at all are left out. It is worked out exactly the ' +
     'way the Avg in the table above is, so the two can be read against each other.'
   );
 
   parts.push(
+    lead('The rank') +
     'The number after the position is where he ranks on his own manager’s roster by that Avg — ' +
     'QB3 is that manager’s third-best quarterback over the weeks currently shown, and 1 is the ' +
     'best. It is our ordering rather than ESPN’s depth chart, and it moves with the span: widen ' +
@@ -1692,18 +1701,21 @@ function renderTakenNote(weeks) {
   );
 
   parts.push(
+    lead('No colours') +
     'Nothing here is highlighted, on purpose: both greens in the table above argue for a waiver ' +
     'claim — worth starting at all, and better than the man the claim would drop — and nobody on ' +
     'this list can be claimed. Colouring them would be answering a question that does not arise.'
   );
 
   parts.push(
+    lead('Bye and blank') +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
     'a blank cell means that week’s rosters carried no number for him at all. Those are not the ' +
     'same thing, so they are not drawn the same way.'
   );
 
   parts.push(
+    lead('The controls') +
     'This table has <strong>its own position buttons</strong>, and the counts on them are this ' +
     'table’s — how many of each position the league is holding, not how many you could add. ' +
     'They move nothing but this table, so you can read every taken running back while the wire ' +
@@ -1723,6 +1735,7 @@ function renderTakenNote(weeks) {
   );
 
   parts.push(
+    lead('Links') +
     'Every name here is a link. Clicking one puts the table on his position, widens the weeks to ' +
     'the rest of the season and marks his row — the same thing that happens when you click a ' +
     'player anywhere else on the site, which is what brings you here.'
@@ -1731,7 +1744,7 @@ function renderTakenNote(weeks) {
   const missing = weeks.filter((w) => state.failedRosterWeeks.has(w));
   if (missing.length) {
     const named = andList(missing.map(String));
-    parts.push(
+    status.push(
       missing.length === weeks.length
         ? `<span class="neg">ESPN refused the rosters for every week shown (${named}), so ` +
           `there is nothing to list here. Reload the page to try again.</span>`
@@ -1744,9 +1757,23 @@ function renderTakenNote(weeks) {
   }
 
   const progress = progressText();
-  if (progress) parts.push(`<span class="muted">${esc(progress)}</span>`);
+  if (progress) status.push(`<span class="muted">${esc(progress)}</span>`);
 
-  $('takenNote').innerHTML = parts.join(' ');
+  $('takenStatus').innerHTML = paragraphs(status);
+  $('takenNote').innerHTML = paragraphs(parts);
+}
+
+/** A short bold label that opens a paragraph of the tucked explanation. */
+function lead(label) {
+  return `<span class="lead">${esc(label)}.</span> `;
+}
+
+/**
+ * One <p> per part. Joined with a newline so textContent still has a space
+ * between the paragraphs and a sentence never runs into the next one.
+ */
+function paragraphs(list) {
+  return list.map((t) => `<p>${t}</p>`).join('\n');
 }
 
 function renderStats(weeks) {
@@ -1781,11 +1808,13 @@ function renderStats(weeks) {
  * What a "Your …" row is, why that player and not another, and what the number
  * after the position means — plus, when there are none, how to turn them on.
  */
-function comparisonNote(weeks) {
+function comparisonNote(weeks, status) {
   const parts = [];
 
   if (!comparing()) {
-    parts.push(
+    // Said where it can be seen: it is the reason the table has no Your rows,
+    // and it tells you the one thing to do about it.
+    status.push(
       state.isDemo
         ? 'The demo squads could not be generated this time, so there are no ' +
           '<span class="mine-key">Your …</span> rows to compare the wire against.'
@@ -1798,6 +1827,7 @@ function comparisonNote(weeks) {
   }
 
   parts.push(
+    lead('Your rows') +
     'A row marked <span class="mine-key">Your QB3</span> is one of your own players rather ' +
     'than someone you can add: the worst man you hold at that position, put in the same list ' +
     'so you can see who on the wire beats him. Worst means the lowest Avg over the weeks ' +
@@ -1811,16 +1841,15 @@ function comparisonNote(weeks) {
   );
 
   if (state.isDemo) {
-    parts.push(
-      'The demo league has no owner, so those rows are the first team’s squad standing in ' +
-      'for yours.'
-    );
+    parts[parts.length - 1] +=
+      ' The demo league has no owner, so those rows are the first team’s squad standing in ' +
+      'for yours.';
   }
 
   const missing = weeks.filter((w) => state.failedRosterWeeks.has(w));
   if (missing.length) {
     const named = andList(missing.map(String));
-    parts.push(
+    status.push(
       missing.length === weeks.length
         ? `<span class="neg">ESPN refused your rosters for every week shown ` +
           `(${named}), so there is nothing of yours to compare against. The wire below is ` +
@@ -1843,42 +1872,49 @@ function comparisonNote(weeks) {
  * "available" is only true at the moment you looked.
  */
 function renderNote(weeks) {
+  // `status` is the short, always-visible line under the stat tiles: the demo
+  // notice, how to turn the comparison on, what ESPN refused, what is still
+  // loading. `parts` is the full explanation, one paragraph each, behind the
+  // "How to read this table" toggle.
+  const status = [];
   const parts = [];
 
+  const season = state.seasonWeeks.length;
+  const showing =
+    `Showing ${weekRange(weeks)} — ${plural(weeks.length, 'week')} of the ${season} this season ` +
+    `runs to` +
+    (state.isDemo ? '.' : `, for the ${POOL_LIMIT} most-owned unrostered players.`);
+
   if (state.isDemo) {
+    status.push('Demo data: invented players, not your real league.');
     parts.push(
+      lead('The numbers') +
       'These are invented players with invented projections — not ESPN’s, and not your ' +
-      'league’s. Connect a league in the bar above, or use the toggle, to read the real ' +
-      'waiver wire.'
+      'league’s. Connect a league in the bar above, or use the toggle, to read the real waiver wire. ' +
+      showing
     );
   } else {
     parts.push(
+      lead('The numbers') +
       'Every number here is ESPN’s own projection for that player in that week, scored under ' +
       'this league’s rules — the same figure the ESPN site shows against a player when you ' +
-      'page it forward to that week. Nothing in this table is our forecast except the average.'
+      'page it forward to that week. Nothing in this table is our forecast except the average. ' +
+      showing
     );
   }
 
-  const season = state.seasonWeeks.length;
   parts.push(
-    `Showing ${weekRange(weeks)} — ${plural(weeks.length, 'week')} of the ${season} this season ` +
-    `runs to` +
-    (state.isDemo ? '.' : `, for the ${POOL_LIMIT} most-owned unrostered players.`)
-  );
-
-  parts.push(
+    lead('Avg, Bye and blank') +
+    'Avg is the mean of the weeks shown and is ours, not ESPN’s: byes are counted as the zero ' +
+    'ESPN returns, and weeks with no number at all are left out. ' +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
     'a blank cell means that week’s list carried no number for him at all. Those are not the ' +
     'same thing, so they are not drawn the same way.'
   );
 
-  parts.push(
-    'Avg is the mean of the weeks shown and is ours, not ESPN’s: byes are counted as the zero ' +
-    'ESPN returns, and weeks with no number at all are left out.'
-  );
-
   // The green has to say what it means, or it is just decoration.
   parts.push(
+    lead('Green text') +
     'A week in <span class="hot-key">green</span> is one worth starting the player for: ' +
     Object.entries(STARTABLE)
       .map(([pos, bar]) => `${esc(pos)} over ${bar}`)
@@ -1889,6 +1925,7 @@ function renderNote(weeks) {
 
   if (comparing()) {
     parts.push(
+      lead('Green shading') +
       'A week on a <span class="beats-key">green background</span> is a different claim: that ' +
       'player out-projects your own worst man at his position — the ' +
       '<span class="mine-key">Your …</span> row further down — in that week specifically. It ' +
@@ -1900,13 +1937,7 @@ function renderNote(weeks) {
     );
   }
 
-  parts.push(
-    'The position buttons above drive <em>this</em> table only — the Taken players panel has its ' +
-    'own set — and filtering costs nothing: every week already fetched stays fetched. The weeks ' +
-    'to price control is shared with that panel, because both tables are priced over the same ' +
-    'weeks and widening is what actually spends requests. Every name is a link that jumps to that ' +
-    'player and shows the rest of his season.'
-  );
+  parts.push(...comparisonNote(weeks, status));
 
   // FLEX is the one button whose label is not self-explanatory, and it is a
   // filter rather than a fact about anybody, so the note has to say both halves.
@@ -1920,20 +1951,28 @@ function renderNote(weeks) {
     'week worth starting does not depend on which button you pressed to find it.'
   );
 
-  parts.push(...comparisonNote(weeks));
+  parts.push(
+    lead('The controls') +
+    'The position buttons above drive <em>this</em> table only — the Taken players panel has its ' +
+    'own set — and filtering costs nothing: every week already fetched stays fetched. The weeks ' +
+    'to price control is shared with that panel, because both tables are priced over the same ' +
+    'weeks and widening is what actually spends requests. Every name is a link that jumps to that ' +
+    'player and shows the rest of his season.'
+  );
 
   parts.push(
-    state.isDemo
+    lead('Availability') +
+    (state.isDemo
       ? 'On a real league, availability is a snapshot of the moment the page loaded — anyone here ' +
         'can be claimed by another team before you get to him.'
       : 'Availability is a snapshot of the moment each week was read. Anyone here can be claimed ' +
-        'by another team before you get to him, and this page never refreshes itself.'
+        'by another team before you get to him, and this page never refreshes itself.')
   );
 
   if (state.failedWeeks.size) {
     const failed = [...state.failedWeeks].sort((a, b) => a - b).filter((w) => weeks.includes(w));
     if (failed.length) {
-      parts.push(
+      status.push(
         `<span class="neg">ESPN did not return ${failed.length === 1 ? 'week' : 'weeks'} ` +
         `${andList(failed.map(String))}, so ${failed.length === 1 ? 'that column is' : 'those columns are'} ` +
         `blank and the average is taken from the weeks that did load. Reload the page to try again.</span>`
@@ -1942,9 +1981,19 @@ function renderNote(weeks) {
   }
 
   const progress = progressText();
-  if (progress) parts.push(`<span class="muted">${esc(progress)}</span>`);
+  if (progress) status.push(`<span class="muted">${esc(progress)}</span>`);
 
-  $('waiverNote').innerHTML = parts.join(' ');
+  $('waiverStatus').innerHTML = paragraphs(status);
+  $('waiverNote').innerHTML = paragraphs(parts);
+
+  // The key shows only the cues this table can actually draw right now: with
+  // nobody set as you there is no shading and no Your row to explain.
+  $('waiverLegend')
+    .querySelectorAll('[data-compare]')
+    .forEach((el) => {
+      if (comparing()) el.removeAttribute('hidden');
+      else el.setAttribute('hidden', '');
+    });
 }
 
 // ----------------------------------------------------------------- interaction

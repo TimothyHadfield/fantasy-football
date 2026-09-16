@@ -470,6 +470,15 @@ function renderWeekPicker(m) {
   sel.value = String(m.week);
 }
 
+/** Show or hide the "How this works" toggle a note sits in. An empty panel has
+ *  nothing to explain, so it offers no toggle. */
+function tuck(noteId, on) {
+  const box = $(noteId) && $(noteId).closest('details');
+  if (!box) return;
+  if (on) box.removeAttribute('hidden');
+  else box.setAttribute('hidden', '');
+}
+
 function renderMatchups(m) {
   $('matchupsTitle').textContent = `Week ${m.week} of ${m.weeks.length}`;
 
@@ -484,7 +493,7 @@ function renderMatchups(m) {
 
   if (!m.playedThisWeek) {
     $('matchupsNote').innerHTML = m.games.some((g) => g.projectedMargin !== null)
-      ? 'Nothing has kicked off. <strong>Proj</strong> is the sum of each starting lineup&rsquo;s projection for this week; the favourite is whoever projects higher, nothing cleverer than that.'
+      ? 'Nothing has kicked off. <strong>Proj</strong> is each starting lineup&rsquo;s projection for this week, summed; whoever projects higher is the favourite.'
       : 'Nothing has kicked off, and ESPN has published no projections for this week yet.';
   } else {
     $('matchupsNote').innerHTML =
@@ -539,6 +548,7 @@ function renderStrength(m) {
         : 'Rosters for this week are unavailable, so there is nothing to rank.'
     }</div>`;
     $('strengthNote').textContent = '';
+    tuck('strengthNote', false);
     return;
   }
 
@@ -565,6 +575,7 @@ function renderStrength(m) {
       .join('') +
     '</ol>';
 
+  tuck('strengthNote', true);
   $('strengthNote').innerHTML =
     'Season-long projected points for each team&rsquo;s <em>current</em> starting lineup, ' +
     'straight from ESPN. It needs no completed games, which makes it the only honest ' +
@@ -622,6 +633,7 @@ function renderInjuries(m) {
         : 'Rosters for this week are unavailable, so injuries cannot be checked.'
     }</div>`;
     $('injuryNote').textContent = '';
+    tuck('injuryNote', false);
     return;
   }
 
@@ -653,8 +665,10 @@ function renderInjuries(m) {
   enableSort($('injuryTable'));
 
   const out = m.injuries.filter((p) => p.rank === 3).length;
+  tuck('injuryNote', true);
   $('injuryNote').textContent =
-    `${plural(m.injuries.length, 'starter')} across the league carries a designation` +
+    `${plural(m.injuries.length, 'starter')} across the league ` +
+    `${m.injuries.length === 1 ? 'carries' : 'carry'} a designation` +
     `${out ? `, ${out} of them ruled out` : ''}. Bench players are left out on purpose — ` +
     'these are players someone is currently planning to start. ' +
     'Every name and projection here links to that player on the Players page, ' +
@@ -669,6 +683,7 @@ function renderBench(m) {
         : `Week ${m.week} has not finished. Bench points are exact facts, so they wait for final scores.`
     }</div>`;
     $('benchNote').textContent = '';
+    tuck('benchNote', false);
     return;
   }
 
@@ -711,6 +726,7 @@ function renderBench(m) {
 
   const total = round1(m.bench.reduce((a, r) => a + r.bench, 0));
   const missed = m.bench.filter((r) => r.miss).length;
+  tuck('benchNote', true);
   $('benchNote').innerHTML =
     `${fmt(total)} points sat on benches in week ${m.week}. A <em>miss</em> counts only ` +
     'when the benched player was eligible for the slot he would have taken, so a receiver ' +

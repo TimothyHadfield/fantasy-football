@@ -304,7 +304,10 @@ const SCENARIOS = {
             bodies: [...document.querySelectorAll('#rosterTable tbody')].map((b) => b.getAttribute('id')),
           },
           reset: ($('lineupReset').getAttribute('class') || ''),
-          note: $('rosterNote').textContent.replace(/\s+/g, ' ').trim(),
+          // The method is in the toggle; "not the real lineup" is on screen.
+          note: `${$('rosterNote').textContent} ${$('rosterEdited').textContent}`
+            .replace(/\s+/g, ' ').trim(),
+          editedShown: !/\bhidden\b/.test($('rosterEdited').getAttribute('class') || ''),
           glance: [...document.querySelectorAll('#teamGlance .stat')].map((s) => [
             s.querySelector('.k').textContent.trim(),
             s.querySelector('.v').textContent.trim(),
@@ -641,7 +644,9 @@ async function check(scenario, boot) {
   const $ = (id) => d.getElementById(id);
   const table = $('seasonTable');
   const roster = $('rosterTable');
-  const note = txt($('seasonNote'));
+  // The method sits in the "How this works" toggle; a failed week is an error,
+  // so it is said on screen in #seasonAlert. Read together, they are the note.
+  const note = `${txt($('seasonNote'))} ${txt($('seasonAlert'))}`.trim();
 
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
@@ -1130,6 +1135,10 @@ async function check(scenario, boot) {
     c.ok('the note names the weeks that failed',
       /ESPN did not return weeks 5 and 11/.test(note), note);
     c.ok('the note says what to do about it', /Reload the page to try again/.test(note), note);
+    c.ok('the failure is on screen, not tucked in the toggle',
+      /ESPN did not return weeks 5 and 11/.test(txt($('seasonAlert'))) &&
+      !/\bhidden\b/.test($('seasonAlert').getAttribute('class') || ''),
+      $('seasonAlert').getAttribute('class'));
     c.ok('the note says the average came from the weeks that loaded',
       /average is taken from the weeks that did load/.test(note), note);
     c.ok('the failed headers say so on hover',
@@ -1827,6 +1836,8 @@ async function check(scenario, boot) {
       !/\bhidden\b/.test(s.reset), s.reset);
     c.ok('the note says out loud that this is no longer the real lineup',
       /is not Team 4’s real lineup any more/.test(s.note), s.note.slice(0, 400));
+    c.ok('and says it on screen, not inside the How-this-works toggle',
+      s.editedShown === true && i0.editedShown === false, `${i0.editedShown} -> ${s.editedShown}`);
     c.ok('SWAPPING FETCHES NOTHING',
       eq(w.fetchesBefore, w.fetchesAfterSwap),
       `${JSON.stringify(w.fetchesBefore)} -> ${JSON.stringify(w.fetchesAfterSwap)}`);

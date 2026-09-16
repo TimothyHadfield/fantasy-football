@@ -420,7 +420,9 @@ async function check(scenario, boot) {
   const c = makeChecker();
   const d = boot.document;
   const $ = (id) => d.getElementById(id);
-  const note = txt($('takenNote'));
+  // The short status line (demo notice, refusals, progress) sits visibly above
+  // the table; the rest is tucked in the explanation below it. Both are read.
+  const note = txt($('takenStatus')) + ' ' + txt($('takenNote'));
   const rows = takenSnapshot(d);
 
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));

@@ -64,6 +64,16 @@
   .oppbars .dd  { grid-row: 1; grid-column: 4; min-width: 0; }
   .oppbars .bar { grid-row: 2; grid-column: 1 / -1; }
 }
+
+/* ------------------------------------------------------- reading aids
+   A note split into short paragraphs is a div of <p>s; space them like
+   paragraphs, not like separate notes. */
+div.panel-note > p { margin: 0 0 8px; }
+div.panel-note > p:last-child { margin-bottom: 0; }
+/* The one always-visible line under the standings: what the ± means, or why
+   the columns are blank. */
+.table-status { color: var(--dim); font-size: 13px; margin: 10px 0 0; }
+.table-status strong { color: var(--text); }
 </style>
 </head>
 <body>
@@ -116,12 +126,18 @@
 
   <section class="panel" id="panelOppProj">
     <h2>Schedule luck &mdash; average projected opponent</h2>
+    <p class="lede">Each team&rsquo;s average projected opponent, hardest schedule first. The last figure is the gap from the league average.</p>
     <div id="oppProjChart"></div>
-    <p class="panel-note" id="oppProjNote"></p>
+    <p class="panel-note" id="oppProjWarn" hidden></p>
+    <details class="explain">
+      <summary>How this works</summary>
+      <div class="panel-note" id="oppProjNote"></div>
+    </details>
   </section>
 
   <section class="panel">
     <h2>Standings &amp; season totals</h2>
+    <p class="lede">Record, scoring, luck and skill per team. Tap a heading for its meaning; a tap also sorts.</p>
     <div class="table-scroll"><table id="mainTable">
       <thead>
         <!-- Group row. Deliberately NOT sticky and NOT data-sort: sortable.js
@@ -160,49 +176,58 @@
       </thead>
       <tbody></tbody>
     </table></div>
-    <p class="panel-note" id="mainTableNote"></p>
+    <p class="table-status" id="mainTableStatus"></p>
+    <details class="explain">
+      <summary>What the columns mean</summary>
+      <div class="panel-note" id="mainTableNote"></div>
+    </details>
   </section>
 
   <section class="panel" id="panelEarly" hidden>
     <h2>Early season</h2>
-    <p class="panel-note" id="earlyNote"></p>
+    <p class="lede" id="earlyNote"></p>
     <div class="chart" id="chartLeagueBox"></div>
     <p class="panel-note">
-      Every team&rsquo;s score so far in one row, so you can see what a normal week
-      looked like before there is enough of a season to split it by team.
+      Every score so far as one box: what a normal week looks like, before there
+      is enough season to split it by team.
     </p>
   </section>
 
   <section class="panel" id="panelWeekly">
     <h2>Weekly scores</h2>
+    <p class="lede">Every team&rsquo;s score, week by week. Tap a team in the legend to pick out its line.</p>
     <div class="chart" id="chartWeekly"></div>
-    <p class="panel-note">Click a team in the legend to highlight just their line.</p>
   </section>
 
   <section class="panel" id="panelLuck">
     <h2>Weekly luck &mdash; actual minus projected</h2>
+    <p class="lede">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
     <div class="chart" id="chartLuck"></div>
-    <p class="panel-note">Above the line means you beat your projection that week.</p>
   </section>
 
   <section class="panel" id="panelCumLuck">
     <h2>Cumulative luck</h2>
+    <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
     <div class="chart" id="chartCumLuck"></div>
-    <p class="panel-note">
-      Each point is computed from every week up to that one, not from that week alone,
-      so the lines converge as the season goes on and single results stop dominating.
-      Above zero means the season has broken your way.
-    </p>
+    <details class="explain">
+      <summary>How this works</summary>
+      <p class="panel-note">
+        Each point is computed from every week up to that one, not from that week
+        alone, so the lines converge as the season goes on and single results stop
+        dominating.
+      </p>
+    </details>
   </section>
 
   <div class="grid-2">
     <section class="panel">
       <h2>Score distribution</h2>
+      <p class="lede" id="distNote">Every team&rsquo;s weekly score, in ten-point buckets.</p>
       <div class="chart" id="chartDist"></div>
-      <p class="panel-note" id="distNote">Every team&rsquo;s weekly score, in ten-point buckets.</p>
     </section>
     <section class="panel">
       <h2>Projection accuracy</h2>
+      <p class="lede">How often the higher projection won, split by how big the projected margin was.</p>
       <div class="table-scroll"><table id="accuracyTable">
         <thead><tr>
           <th class="name" data-sort>Margin</th><th data-sort>Games</th>
@@ -210,25 +235,33 @@
         </tr></thead>
         <tbody></tbody>
       </table></div>
-      <p class="panel-note">
-        How often the higher projection actually won, split by how big the projected
-        margin was. Bigger margins should predict better.
-      </p>
-      <p class="panel-note" id="accuracyNote"></p>
+      <details class="explain">
+        <summary>How to read it</summary>
+        <p class="panel-note">
+          Each row counts every game whose projected margin was bigger than the
+          row&rsquo;s figure, so the rows overlap. Bigger margins should predict better.
+        </p>
+        <p class="panel-note" id="accuracyNote"></p>
+      </details>
     </section>
   </div>
 
   <section class="panel" id="panelBox">
     <h2>Score spread by team</h2>
+    <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
     <div class="chart" id="chartBox"></div>
-    <p class="panel-note">
-      Box shows the middle half of a team&rsquo;s weeks; the line is their median.
-      Dots are outlier weeks beyond 1.5&times; the interquartile range.
-    </p>
+    <details class="explain">
+      <summary>How to read it</summary>
+      <p class="panel-note">
+        Dots are outlier weeks beyond 1.5&times; the interquartile range (the width
+        of the box).
+      </p>
+    </details>
   </section>
 
   <section class="panel" id="panelWeekGrid">
     <h2>Week by week</h2>
+    <p class="lede">Every team&rsquo;s weeks side by side, in whole points. Pick what to show.</p>
     <div class="row mb-12">
       <div class="segmented" id="weeklyMetric">
         <button type="button" data-metric="actual" class="on">Actual</button>
@@ -244,7 +277,10 @@
            reorders the tbody, can never shuffle it in among the teams. -->
       <tfoot></tfoot>
     </table></div>
-    <p class="panel-note" id="weeklyNote"></p>
+    <details class="explain">
+      <summary>About the League row</summary>
+      <p class="panel-note" id="weeklyNote"></p>
+    </details>
   </section>
 
 </div>

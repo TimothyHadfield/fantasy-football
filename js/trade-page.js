@@ -619,22 +619,32 @@ function renderCost() {
       : `Nothing has been played yet according to the league schedule, so the whole season ` +
         `ahead is priced.`;
 
+  // The method, behind the toggle: which weeks, why those, and what they cost.
   $('costNote').innerHTML =
-    `<strong>Every remaining week</strong> prices ${spanWords}. ${spanReason} ` +
-    `There is no bulk form at ESPN — asking for thirteen weeks in one call returns ` +
-    `only the current one, and four shapes of that request were tried — so ${costLine} ` +
-    `The search is also slower on this basis: every offer is priced by re-filling ` +
-    `${plural(span.length, 'lineup')} instead of one, which takes a few seconds rather ` +
-    `than a fraction of one. ` +
-    (weekly.error ? `<br><strong>${esc(weekly.error)}</strong> ` : '') +
-    (failed.length
-      ? `<br>ESPN returned nothing for ${failed.map((w) => `week ${w}`).join(', ')}; ` +
-        `those weeks are simply absent from every number below rather than counted as zero. `
-      : '') +
-    (state.measure === 'weeks' && !weeklyReady()
-      ? `<br><strong>Every remaining week is selected but not loaded</strong>, so the page is ` +
-        `drawing <strong>a typical week</strong> until the button above is pressed.`
-      : '');
+    `<strong>Every remaining week</strong> prices ${spanWords}. ${spanReason}` +
+    `<br><br>` +
+    `<strong>Cost.</strong> ESPN has no bulk form — asking for thirteen weeks in one call ` +
+    `returns only the current one, and four shapes of that request were tried — so ${costLine}` +
+    `<br><br>` +
+    `<strong>Speed.</strong> Every offer is priced by re-filling ` +
+    `${plural(span.length, 'lineup')} instead of one, so the search takes a few seconds rather ` +
+    `than a fraction of one.`;
+
+  // What changes the meaning of a number stays in view, never behind the toggle.
+  const warns = [
+    weekly.error ? `<strong>${esc(weekly.error)}</strong>` : '',
+    failed.length
+      ? `ESPN returned nothing for ${failed.map((w) => `week ${w}`).join(', ')}; ` +
+        `those weeks are left out of every number below, not counted as zero.`
+      : '',
+    state.measure === 'weeks' && !weeklyReady()
+      ? `<strong>Every remaining week is selected but not loaded</strong>, so the page is ` +
+        `showing <strong>a typical week</strong> until the button above is pressed.`
+      : '',
+  ].filter(Boolean);
+  const warnEl = $('costWarn');
+  warnEl.innerHTML = warns.join('<br>');
+  warnEl.hidden = !warns.length;
 }
 
 // -------------------------------------------------------- player references
@@ -871,6 +881,8 @@ function renderDepth() {
     $('depthBars').innerHTML = '';
     $('spareStrip').innerHTML = '';
     $('depthNote').innerHTML = '';
+    $('depthWarn').innerHTML = '';
+    $('depthWarn').hidden = true;
     return;
   }
 
@@ -955,42 +967,42 @@ function renderDepthNote(map) {
   const span = weeklySpan();
 
   $('depthNote').innerHTML =
-    `Every number is <strong>points above replacement</strong> — how much better this ` +
-    `manager’s starters at that position are than the man anybody could have instead. ` +
-    `<strong>Replacement</strong> is not a constant somebody typed in: it is the best player ` +
-    `at that position who is <strong>not starting anywhere in the league</strong>, and the chips ` +
-    `above show what that came out at, valued on ${esc(m.label)} ` +
-    `(${m.basis}). ` +
+    `<strong>What the number is.</strong> Every number is <strong>points above replacement</strong> ` +
+    `— how much better this manager’s starters at that position are than the man anybody could ` +
+    `have instead. <strong>Replacement</strong> is not a typed-in constant: it is the best player ` +
+    `at that position who is <strong>not starting anywhere in the league</strong>. The chips ` +
+    `under the table show what that came out at, valued on ${esc(m.label)} (${m.basis}).` +
+    `<br><br>` +
     (basis() === 'weeks'
-      ? `Every figure in this table is <strong>per week</strong>, over ${weekRange(span)} — ` +
-        `<strong>the weeks still to be played</strong>, read off the league schedule rather than ` +
-        `off the calendar, because a week with a result against it is banked and no trade can ` +
-        `reach it. A man’s average leaves his <strong>byes</strong> out: a 0.00 is a fact about ` +
-        `the fixture list, not about him, and counting it would price him as the weeks he is off ` +
-        `rather than the weeks he plays. ` +
-        `The panels below are per week too, but a deal’s gain is spread over every week in the ` +
-        `span, byes and all, so a man’s figure here is deliberately not the same arithmetic. ` +
+      ? `<strong>Per week.</strong> Every figure in this table is <strong>per week</strong>, over ` +
+        `${weekRange(span)} — <strong>the weeks still to be played</strong>, read off the league ` +
+        `schedule rather than the calendar, because a week with a result against it is banked and ` +
+        `no trade can reach it. A man’s average leaves his <strong>byes</strong> out: a 0.00 is a ` +
+        `fact about the fixture list, not about him, and counting it would price him on the weeks ` +
+        `he is off rather than the weeks he plays. The panels below are per week too, but a deal’s ` +
+        `gain is spread over every week in the span, byes and all, so a man’s figure here is ` +
+        `deliberately not the same arithmetic.` +
+        `<br><br>` +
         `<strong>Lineup</strong> is what those averages would field. Picking each week separately ` +
-        `always beats it, and the gap between the two is precisely what depth is worth: a squad ` +
-        `whose men swing about has a higher week-by-week total than its averages suggest, and a ` +
-        `squad of metronomes has none. That is why the deals below are priced week by week and ` +
-        `this table is not. `
+        `always beats it, and the gap between the two is what depth is worth: a squad whose men ` +
+        `swing about has a higher week-by-week total than its averages suggest, and a squad of ` +
+        `metronomes has none. That is why the deals below are priced week by week and this table ` +
+        `is not.` +
+        `<br><br>`
       : '') +
-    `<br>` +
-    `A high number means depth worth trading from; a low one means a lineup spot going to ` +
-    `waste. <strong>Read down a column</strong>, not across a row — the manager worth talking to ` +
-    `is the one whose number is low where yours is high. ` +
+    `<strong>How to read it.</strong> A high number is depth worth trading from; a low one is a ` +
+    `lineup spot going to waste. <strong>Read down a column</strong>, not across a row — the ` +
+    `manager worth talking to is the one whose number is low where yours is high. ` +
     `<strong>spare</strong> beside a number is what that manager could send ` +
-    `<em>without weakening his own lineup</em>, which is the part of his squad a trade can ` +
-    `actually reach; your own spare men are named under the table. ` +
-    `The three deepest and three thinnest squads at each position are tinted; every cell ` +
-    `prints its sign either way. ` +
+    `<em>without weakening his own lineup</em> — the part of his squad a trade can actually ` +
+    `reach; your own spare men are named under the table. The three deepest and three thinnest ` +
+    `squads at each position are tinted; every cell prints its sign either way.` +
     (anyExhausted
-      ? `A <strong>*</strong> means every player at that position is already in somebody’s ` +
+      ? ` A <strong>*</strong> means every player at that position is already in somebody’s ` +
         `lineup, so there is no spare man in the league to set a bar with and the worst ` +
-        `starter stands in for one. `
+        `starter stands in for one.`
       : '') +
-    `<br>` +
+    `<br><br>` +
     // Tim's question, answered where it is asked: "if we trade an RB for a QB,
     // we might get +1.3, however if we have 3RBs, and 3QBs, then that trade
     // might not be too good." It needs no second rule — the weekly measure
@@ -1011,15 +1023,19 @@ function renderDepthNote(map) {
       : `On a single scalar per man it cannot be priced at all — only one quarterback can ever ` +
         `count, so a fourth good one looks like a straight upgrade. <strong>Every remaining week</strong> ` +
         `is the measure that answers it, because it picks each week’s lineup separately.`) +
-    (basis() === 'week' && playedWeeks().includes(state.week)
-      ? ` <br><strong>Week ${state.week} has already been played.</strong> You asked for that ` +
-        `week by name, so it is what this table is drawn from — but those points are banked and ` +
-        `no trade can move them. <strong>Every remaining week</strong> prices only the weeks a ` +
-        `trade can actually reach.`
-      : '') +
-    ` ` +
+    `<br><br>` +
     `Nobody here can be claimed off the wire, so nothing on this page is a waiver ` +
     `suggestion — the <a href="waivers.html">Players</a> page answers that.`;
+
+  // A played week changes what every number in the table means, so it is said
+  // in view rather than behind the toggle.
+  const playedPick = basis() === 'week' && playedWeeks().includes(state.week);
+  $('depthWarn').innerHTML = playedPick
+    ? `<strong>Week ${state.week} has already been played.</strong> You asked for it by name, ` +
+      `so this table uses it — but those points are banked and no trade can move them. ` +
+      `<strong>Every remaining week</strong> prices only the weeks a trade can reach.`
+    : '';
+  $('depthWarn').hidden = !playedPick;
 }
 
 // ----------------------------------------------------------- the trade finder
@@ -1531,13 +1547,23 @@ function renderFinderNote() {
           ? 'packages where you send two and receive one'
           : 'packages where you send one and receive two';
 
+  // The one line in view: what is being searched, how many came back, and
+  // what they are valued on.
+  // Nothing when there are no rows: the empty message already says so.
+  $('tradeCount').innerHTML = state.searching || !shown
+    ? ''
+    : `<strong>${plural(shown, 'offer')}</strong> · ` +
+      `${kindNote}${state.partner === 'all' ? '' : ', with one manager'} · ` +
+      `valued on ${esc(m.label)}.`;
+
   $('tradeNote').innerHTML =
-    `Every offer here was found by <strong>re-filling both starting lineups</strong> — before ` +
-    `the trade and after it — and keeping only the ones where <strong>both totals go up</strong>. ` +
-    `There is no trade-value chart anywhere in this: a bench player is worth nothing to the ` +
-    `manager holding him and can be worth a starter to somebody else, which is exactly why a ` +
-    `deal can help both sides at once. Valued on ${esc(m.label)} (${m.basis}). ` +
-    `<br>` +
+    `<strong>How offers are found.</strong> Every offer here was found by ` +
+    `<strong>re-filling both starting lineups</strong> — before the trade and after it — and ` +
+    `keeping only the ones where <strong>both totals go up</strong>. There is no trade-value ` +
+    `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
+    `starter to somebody else, which is why a deal can help both sides at once. ` +
+    `Valued on ${esc(m.label)} (${m.basis}).` +
+    `<br><br>` +
     (weeks
       ? `<strong>Every figure is per week</strong>, averaged over ${weekRange(span)}, with the ` +
         `rest-of-season total in small type underneath — the per-week number is exactly that total ` +
@@ -1548,27 +1574,31 @@ function renderFinderNote() {
         `trade changes the rest of the season and cannot move points already banked. ` +
         `<strong>The number beside each player is what he is worth in a week he PLAYS</strong>, his ` +
         `byes left out of the average — whereas a gain is spread over every week in the span, byes ` +
-        `and all — so the two are deliberately <em>not</em> the same arithmetic. `
+        `and all — so the two are deliberately <em>not</em> the same arithmetic.`
       : `<strong>You gain</strong> and <strong>He gains</strong> are points per week added to each ` +
-        `best lineup, and so is the figure beside each player. `) +
-    `Currently searching ${kindNote}` +
-    (state.partner === 'all' ? '' : ', with one manager') +
-    `${shown ? ` · <strong>${plural(shown, 'offer')}</strong>` : ''}. ` +
+        `best lineup, and so is the figure beside each player.`) +
+    `<br><br>` +
+    `<strong>Two-for-ones.</strong> A <strong>two-for-one</strong> forces the side receiving two ` +
+    `to drop somebody, and that cut is modelled — his worst man goes — because it is what makes ` +
+    `lopsided packages worse than they look. The side left a man short is <em>not</em> credited ` +
+    `with a waiver claim to fill the gap, so those offers are understated rather than flattered.` +
+    `<br><br>` +
     `<strong>Click any row</strong> — or its <strong>Week by week</strong> button — to open that ` +
-    `deal week by week in a pop-up. ` +
-    `A <strong>two-for-one</strong> forces the side receiving two to drop somebody, and that cut ` +
-    `is modelled — his worst man goes — because it is what makes lopsided packages worse than ` +
-    `they look. The side left a man short is <em>not</em> credited with a waiver claim to fill ` +
-    `the gap, so those offers are understated rather than flattered. ` +
-    `<br>` +
-    `This is analysis, not a transaction. <strong>Nothing is sent to ESPN</strong> — ` +
+    `deal week by week in a pop-up.` +
+    `<br><br>` +
+    `<strong>Sending it.</strong> This is analysis, not a transaction. ` +
+    `<strong>Nothing is sent to ESPN</strong> — ` +
     (state.isDemo
       ? `and there is no ESPN league to open in demo, so the <em>Open in ESPN</em> links are off ` +
         `here; switch to <strong>My ESPN league</strong> for them. `
       : `<strong>Open in ESPN</strong> is a deep link and nothing more: it opens ESPN’s own trade ` +
         `screen with <strong>HIS players ticked only</strong>. There is no parameter for your own ` +
-        `side, so the men you are sending have to be ticked by hand once you are there — that is ` +
-        `ESPN’s screen, not a fault here. `) +
+        `side, so ` +
+        (bridgeAvailable()
+          ? `the Fantasy Football Bridge extension ticks the men you are sending once ESPN’s ` +
+            `page loads — check both sides before you press Propose. `
+          : `the men you are sending have to be ticked by hand once you are there — or install ` +
+            `the Fantasy Football Bridge extension, which ticks them for you. `)) +
     `Send the deal with a line saying what it fixes for him, which is the part that gets offers ` +
     `accepted. Both managers are reading the same ESPN projections, so he can check every number ` +
     `here himself.`;
@@ -2099,16 +2129,20 @@ function renderCombo() {
     note.innerHTML =
       `Two trades cannot be added up honestly on a single number per man: both of them re-fill ` +
       `the same one lineup, so their gains overlap and adding them promises twice what arrives. ` +
+      `<br><br>` +
       `Pricing a combination means applying every send and every receive together and filling ` +
       `every remaining week again — which is why this section waits for those weeks rather than ` +
       `estimating without them.`;
+    $('comboExplain').hidden = false;
     return;
   }
 
+  // No note on the two paths below, so no empty "How" toggle either.
   if (state.comboRunning) {
     body.innerHTML = '<p class="empty"><span class="searching">Trying every set of trades that ' +
       'can all be made at once…</span></p>';
     note.innerHTML = '';
+    $('comboExplain').hidden = true;
     return;
   }
 
@@ -2117,8 +2151,10 @@ function renderCombo() {
     body.innerHTML =
       `<p class="empty">Nothing to combine: the finder has no offers for this squad.</p>`;
     note.innerHTML = '';
+    $('comboExplain').hidden = true;
     return;
   }
+  $('comboExplain').hidden = false;
 
   const best = combo.best;
   const most = combo.most;
@@ -2173,7 +2209,8 @@ function renderCombo() {
   const partners = best.partners || [];
   note.innerHTML =
     `A player can only be traded once, so these ${plural(best.count, 'trade')} share no player ` +
-    `between them — not one you send, not one you receive. ` +
+    `between them — not one you send, not one you receive.` +
+    `<br><br>` +
     `<strong>Never add the gains up.</strong> Each offer’s gain was measured against your roster as ` +
     `it is today; after one trade that roster no longer exists, so the combination is priced by ` +
     `applying every send and every receive <em>together</em> and re-filling every week once. ` +
@@ -2186,6 +2223,7 @@ function renderCombo() {
           .map((p) => `${esc(p.partner.name)} ${signedText(perWeekOf(p.delta))}/wk`)
           .join(', ') + '. '
       : '') +
+    `<br><br>` +
     (best.repeatPartners
       ? `<strong>Two of these are with the same manager, and they are shown as ONE offer.</strong> ` +
         `That is not tidying up: he would be sent one trade, he accepts or refuses it once, and the ` +
@@ -2193,7 +2231,7 @@ function renderCombo() {
         `two rows with two gains would be showing you exactly the arithmetic this section exists to ` +
         `refuse. The merged row is <em>re-priced from scratch</em> as one move; its gain is not the ` +
         `two gains added up. Read it before you send it: a four-player trade is a different ` +
-        `conversation from two two-player ones. `
+        `conversation from two two-player ones.<br><br>`
       : '') +
     `The gains in the table are each measured against your roster <em>as it is today</em>, so they ` +
     `do not add up to the headline either — only the figure at the top prices the whole slate. ` +

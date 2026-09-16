@@ -72,6 +72,12 @@
   .sharetext { font-size: 11.5px; padding: 10px; }
   .card-wrap { padding: 8px; }
 }
+
+/* ------------------------------------------------------- reading aids
+   A note split into short paragraphs is a div of <p>s. */
+div.panel-note > p { margin: 0 0 8px; }
+div.panel-note > p:last-child { margin-bottom: 0; }
+.sharetext { margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -98,8 +104,8 @@
 
   <h1>Weekly summary <span id="modeBadge" class="badge demo">Demo</span></h1>
   <p class="sub" id="pageSub">
-    One line per manager &mdash; season luck, title odds and wooden-spoon odds &mdash;
-    drawn as a picture you can send to the group chat.
+    Season luck, title odds and wooden-spoon odds for every manager, as a picture
+    for the group chat.
   </p>
 
   <section class="panel">
@@ -115,14 +121,15 @@
       </div>
     </div>
     <p class="ctl-hint" id="weekHint">
-      Everything up to and including this week is treated as decided; every week
-      after it is played out by the simulation.
+      Weeks up to and including this one count as decided; the simulation plays out
+      the rest.
     </p>
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
   <section class="panel">
     <h2>The chart</h2>
+    <p class="lede">Each manager&rsquo;s luck so far, chance of winning the title, and chance of finishing last.</p>
     <div class="table-scroll"><table id="summaryTable">
       <thead><tr>
         <th class="name" data-sort title="The person, not their ESPN team name. Resolved from ESPN's own member list.">Member</th>
@@ -133,11 +140,15 @@
       <tbody></tbody>
     </table></div>
     <p class="panel-note" id="simStatus"></p>
-    <p class="panel-note" id="summaryNote"></p>
+    <details class="explain">
+      <summary>What the numbers mean</summary>
+      <div class="panel-note" id="summaryNote"></div>
+    </details>
   </section>
 
   <section class="panel">
     <h2>Send it</h2>
+    <p class="lede">The chart as an image for the group chat, with a plain-text copy underneath.</p>
     <div class="card-wrap" id="cardWrap">
       <canvas id="shareCanvas" aria-label="The weekly summary chart, drawn as an image."></canvas>
     </div>
@@ -149,11 +160,19 @@
     <p class="ctl-hint" id="shareHint"></p>
     <p class="panel-note" id="shareStatus"></p>
     <pre class="sharetext" id="shareText" tabindex="0"></pre>
-    <p class="panel-note">
-      Nothing is sent anywhere by this page. Sharing hands the image to your own
-      phone&rsquo;s share sheet, where you pick the app and the people and see the
-      message before it goes.
-    </p>
+    <details class="explain">
+      <summary>How sending works</summary>
+      <p class="panel-note">
+        Nothing is sent anywhere by this page. Sharing hands the image to your own
+        phone&rsquo;s share sheet, where you pick the app and the people and see the
+        message before it goes.
+      </p>
+      <p class="panel-note">
+        Desktop Chrome and Firefox mostly cannot share a file from a page, so there
+        the Share button is hidden rather than offered and then failing. Download
+        saves the PNG; Copy as text puts the same chart on the clipboard.
+      </p>
+    </details>
   </section>
 
 </div>

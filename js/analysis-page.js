@@ -807,6 +807,32 @@ function renderGrid(grid) {
     .join('');
 
   resort(table); // keep whatever sort the user picked across week changes
+
+  // The key names only the marks this grid is actually showing.
+  const body = bodyOf(table);
+  const dash = [...body.querySelectorAll('td.slot-cell')]
+    .some((td) => td.textContent.trim().startsWith('—'));
+  renderKey(`${grid.id}Legend`, teams.length ? [
+    body.querySelector('td.st-out') && ['<span class="key out">Out</span>', 'this week'],
+    body.querySelector('td.st-ir') && ['<span class="key ir">IR</span>', 'injured reserve'],
+    body.querySelector('td.bye') && ['<span class="lg-mark bye">Bye</span>', 'no game that week'],
+    dash && ['<span class="lg-mark faint">—</span>', 'empty spot or no number'],
+  ] : [], teams.length ? 'Tap or hover a number for the player · tap a row to load that team' : '');
+}
+
+/**
+ * The compact key under a table: each mark as the table draws it, then a few
+ * words. `items` may hold falsy entries for marks not on screen; they are
+ * dropped. `hint` is how to use the table, said in a few words, last.
+ */
+function renderKey(id, items, hint = '') {
+  const el = $(id);
+  if (!el) return;
+  const parts = items
+    .filter(Boolean)
+    .map(([mark, words]) => `<span class="lg">${mark}<span>${words}</span></span>`);
+  if (hint) parts.push(`<span class="lg lg-hint">${hint}</span>`);
+  el.innerHTML = parts.join('');
 }
 
 function renderOverview() {
@@ -1018,6 +1044,9 @@ function renderRoster() {
       : `No players came back for ${team.name} in week ${state.week}.`;
     $('teamGlance').innerHTML = '';
     $('rosterNote').innerHTML = '';
+    $('rosterLegend').innerHTML = '';
+    $('rosterEdited').innerHTML = '';
+    $('rosterEdited').classList.add('hidden');
     $('rosterStarters').innerHTML = '';
     $('rosterSplit').innerHTML = '';
     $('rosterBench').innerHTML = '';
@@ -1105,13 +1134,26 @@ function renderRoster() {
  */
 function renderRosterNote(view, team) {
   const hurt = view.filter((e) => injuryTier(e.p.injuryStatus)).length;
+  const tiers = new Set(view.map((e) => injuryTier(e.p.injuryStatus)));
   const parts = [];
+
+  // The key: what the row treatments mean, always on screen.
+  renderKey('rosterLegend', [
+    ['<span class="lg-mark dim">Bench</span>', 'dimmed'],
+    ['<span class="lg-mark bold">Name</span>', 'in the flex'],
+    tiers.has('out') && ['<span class="key out">Out</span>', 'this week'],
+    tiers.has('ir') && ['<span class="key ir">IR</span>', 'injured reserve'],
+    view.some((e) => e.moved) && ['<span class="lg-mark ital">• moved</span>', 'swapped by you'],
+  ], 'Tap a slot tag to swap · tap a name for his Players page');
 
   parts.push(
     `Bench rows are dimmed and the flex player is in bold. Red is out this week, dark red is ` +
-    `on IR. Season total is the whole ${SEASON_GAMES}-game projection; Avg/wk is that same ` +
-    `number per game, which is what the grid above adds up. ` +
-    `${plural(hurt, 'player')} carrying an injury designation this week. ` +
+    `on IR. ${plural(hurt, 'player')} carrying an injury designation this week.`
+  );
+
+  parts.push(
+    `<strong>Season total</strong> is the whole ${SEASON_GAMES}-game projection; ` +
+    `<strong>Avg/wk</strong> is that same number per game, which is what the grid above adds up. ` +
     `<strong>Click any player’s name</strong> to open his next 13 weeks on the ` +
     `<a href="waivers.html">Players</a> page.`
   );
@@ -1126,22 +1168,26 @@ function renderRosterNote(view, team) {
   parts.push(
     '<strong>Click any slot tag</strong> to pick that player up, then click another player’s to ' +
     'swap the two, and watch the total move. Only legal moves are offered: a slot lights up when ' +
-    'both men are eligible for each other’s, and a player on IR is not a lineup choice at all. ' +
+    'both men are eligible for each other’s, and a player on IR is not a lineup choice at all.'
+  );
+
+  parts.push(
     '<strong>This is a what-if and nothing else</strong> — nothing on this page is ever sent to ' +
     'ESPN, and the swaps are forgotten the moment you change team or week.'
   );
 
-  if (lineupEdited()) {
-    parts.push(
-      `<span class="neg">This is not ${team ? `${esc(team.name)}’s` : 'the'} real lineup any ` +
+  $('rosterNote').innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
+
+  // A changed lineup is said where it cannot be missed, not in the toggle.
+  const edited = $('rosterEdited');
+  edited.innerHTML = lineupEdited()
+    ? `<span class="neg">This is not ${team ? `${esc(team.name)}’s` : 'the'} real lineup any ` +
       `more.</span> The number beside the total is the difference from the one ESPN has, and ` +
       `<strong>Proj avg</strong> above deliberately does not move with it: that is the best ` +
       `nine by season average, the same figure the first grid gives this team, and it never ` +
       `depended on how the lineup was set.`
-    );
-  }
-
-  $('rosterNote').innerHTML = parts.join(' ');
+    : '';
+  edited.classList.toggle('hidden', !lineupEdited());
 }
 
 // --------------------------------------------- the season-long roster grid
@@ -1466,6 +1512,9 @@ function renderSeason() {
   if (!show) {
     $('seasonEmpty').textContent = seasonEmptyReason(team, weeks);
     $('seasonNote').innerHTML = '';
+    $('seasonLegend').innerHTML = '';
+    $('seasonAlert').innerHTML = '';
+    $('seasonAlert').classList.add('hidden');
     tbody.innerHTML = '';
     renderStarters(); // it has an empty state of its own and must reach it
     return;
@@ -1798,6 +1847,8 @@ function renderStarters() {
   if (!show) {
     $('startersEmpty').textContent = startersEmptyReason(team, weeks, label);
     $('startersNote').innerHTML = '';
+    $('startersLegend').innerHTML = '';
+    $('startersShape').innerHTML = '';
     return;
   }
 
@@ -1881,13 +1932,26 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
   const covered = rows.filter((r) => r.starts > 0 && r.starts < decided).length;
   const gone = rows.filter((r) => !r.held).length;
 
-  $('startersNote').innerHTML =
+  // The league's shape for this position answers the first question the
+  // shading raises, so it sits beside the position picker rather than in the toggle.
+  $('startersShape').innerHTML = shape;
+
+  const table = $('startersTable');
+  const body = bodyOf(table);
+  renderKey('startersLegend', [
+    body.querySelector('td.st:not(.fx)') && ['<span class="lg-mark st">12.3</span>', 'in the best lineup'],
+    body.querySelector('td.st.fx') && ['<span class="lg-mark st fx">12.3</span>', 'in it through the flex'],
+    gone && ['<span class="lg-mark ital">Name</span>', `not on the roster in week ${state.week}`],
+    // The demo notice is already on screen in the Season panel just above.
+    ...seasonMarks(table).slice(1),
+  ], 'Across a row: his weeks · down a column: who covers');
+
+  const paras = [
     `One position at a time, deepest first. A <strong class="key-st">shaded, bold</strong> number is a week ` +
     `this man is in the <strong>best legal lineup</strong> that team could field — the same rule the ` +
     `grids at the top of the page use, run once per week on that week&rsquo;s own projections. ` +
-    `A <strong>F</strong> beside it means he only gets in through the <strong>flex</strong>. ` +
-    `${shape} ` +
-    `<br>` +
+    `A <strong>F</strong> beside it means he only gets in through the <strong>flex</strong>.`,
+
     `<strong>Read along a row</strong> to see a starter&rsquo;s soft weeks and his bye; ` +
     `<strong>read down a column</strong> to see who covers them. A cell reading <strong>Bye</strong> is ` +
     `the 0.00 ESPN returns for a player whose NFL team is off that week, which is exactly when the mark ` +
@@ -1895,9 +1959,8 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
     (covered
       ? `<strong>${plural(covered, 'man')}</strong> here starts some weeks and not others, which is the ` +
         `bench doing its job.`
-      : `nobody here starts some weeks and not others, so this position needs no cover over these weeks.`) +
-    `<br>` +
-    `<br>` +
+      : `nobody here starts some weeks and not others, so this position needs no cover over these weeks.`),
+
     `<strong>Depth</strong> and <strong>Avg</strong> are ours, not ESPN&rsquo;s: the order is each ` +
     `man&rsquo;s mean over the weeks shown, not the slot his manager has him parked in today. ` +
     (gone
@@ -1907,16 +1970,21 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
         `read as a slot going empty. `
       : '') +
     `<strong>Starts</strong> counts the weeks actually read from ESPN` +
-    (pending > 0 ? ` — <strong>${plural(pending, 'week')}</strong> still loading, so it will rise.` : '.') +
-    ` The swaps in the Roster detail above are a what-if for one week and are deliberately not ` +
+    (pending > 0 ? ` — <strong>${plural(pending, 'week')}</strong> still loading, so it will rise.` : '.'),
+
+    `The swaps in the Roster detail above are a what-if for one week and are deliberately not ` +
     `applied here. Every name is a link to that man&rsquo;s next 13 weeks on the ` +
-    `<a href="waivers.html">Players</a> page.` +
-    (unidentified
-      ? ` <br><strong>${plural(unidentified, label)}</strong> at this position came back from ESPN ` +
-        `with no player id, so ${unidentified === 1 ? 'he is' : 'they are'} left out of both the table ` +
-        `and the lineups above &mdash; there is nothing to say the man in one week is the man in the ` +
-        `next, and a shaded week with no row to sit on would read as a slot going empty.`
-      : '');
+    `<a href="waivers.html">Players</a> page.`,
+  ];
+  if (unidentified) {
+    paras.push(
+      `<strong>${plural(unidentified, label)}</strong> at this position came back from ESPN ` +
+      `with no player id, so ${unidentified === 1 ? 'he is' : 'they are'} left out of both the table ` +
+      `and the lineups above &mdash; there is nothing to say the man in one week is the man in the ` +
+      `next, and a shaded week with no row to sit on would read as a slot going empty.`
+    );
+  }
+  $('startersNote').innerHTML = paras.map((t) => `<p>${t}</p>`).join('');
 }
 
 /** An empty table says why it is empty and what to do about it. */
@@ -2014,19 +2082,39 @@ function renderSeasonNote(weeks, rowCount) {
     'page would light up nearly every cell and tell you nothing.'
   );
 
-  if (state.seasonFailed.size) {
-    const failed = [...state.seasonFailed].sort((a, b) => a - b).filter((w) => weeks.includes(w));
-    if (failed.length) {
-      parts.push(
-        `<span class="neg">ESPN did not return ${failed.length === 1 ? 'week' : 'weeks'} ` +
-        `${andList(failed.map(String))}, so ${failed.length === 1 ? 'that column is' : 'those columns are'} ` +
-        `blank for everyone and the average is taken from the weeks that did load. Reload the page ` +
-        `to try again.</span>`
-      );
-    }
-  }
+  $('seasonNote').innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 
-  $('seasonNote').innerHTML = parts.join(' ');
+  // Weeks ESPN refused are an error, so they are said on screen, not in the toggle.
+  const failed = [...state.seasonFailed].sort((a, b) => a - b).filter((w) => weeks.includes(w));
+  const alert = $('seasonAlert');
+  alert.innerHTML = failed.length
+    ? `<span class="neg">ESPN did not return ${failed.length === 1 ? 'week' : 'weeks'} ` +
+      `${andList(failed.map(String))}, so ${failed.length === 1 ? 'that column is' : 'those columns are'} ` +
+      `blank for everyone and the average is taken from the weeks that did load. Reload the page ` +
+      `to try again.</span>`
+    : '';
+  alert.classList.toggle('hidden', !failed.length);
+
+  renderKey('seasonLegend', seasonMarks($('seasonTable')),
+    'Tap or hover a cell for what it means');
+}
+
+/**
+ * The marks a week run can carry that are not a plain number, for whichever of
+ * the two week-run tables is passed in — only those actually on screen.
+ */
+function seasonMarks(table) {
+  const body = bodyOf(table);
+  const has = (sel) => !!body.querySelector(sel);
+  return [
+    state.isDemo && ['<span class="badge demo">Demo</span>', 'generated projections, not ESPN’s'],
+    state.isDemo && has('td.wk[data-v="0"]') &&
+      ['<span class="lg-mark">0.0</span>', 'ruled out in the sample data'],
+    has('td.wk.bye') && ['<span class="lg-mark bye">Bye</span>', 'no game (ESPN’s 0.00)'],
+    has('td.wk.off') && ['<span class="lg-mark faint">—</span>', 'not on this roster that week'],
+    has('td.wk.muted') && ['<span class="lg-mark faint">—</span>', 'no number from ESPN'],
+    has('td.wk.wait') && ['<span class="lg-mark faint">·</span>', 'not loaded yet'],
+  ];
 }
 
 /** Selecting a team touches four places, so nobody calls them separately. */

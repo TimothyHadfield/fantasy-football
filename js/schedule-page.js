@@ -579,8 +579,9 @@ function renderArchive() {
     sel.innerHTML = '<option value="live">Right now</option>';
     banner.classList.add('hidden');
     $('snapDelete').classList.add('hidden');
-    status.innerHTML =
+    $('snapState').innerHTML =
       'Connect a league to start keeping a weekly record of the forecast.';
+    status.innerHTML = '';
     return;
   }
 
@@ -662,17 +663,19 @@ function renderArchiveNote(id, saved) {
       'describe a season that never happened.'
     : 'Readings are <strong>taken</strong> in this browser and <strong>kept</strong> in the site&rsquo;s ' +
       'own repository. Once a file is committed this page pulls it back by itself — on this machine, on ' +
-      'your phone, and in a browser that has never seen the league before. ' +
-      (!weeks.length
-        ? ''
-        : loose.length
-          ? `<br><span class="neg"><strong>${plural(loose.length, 'week')} ` +
-            `(${loose.join(', ')}) ${loose.length === 1 ? 'exists' : 'exist'} only in this browser.</strong></span> ` +
-            'Press <strong>Export archive</strong> and hand the file over; clearing site data before you ' +
-            'do would delete ' + (loose.length === 1 ? 'it' : 'them') + '. ' +
-            'One export covers every week at once, so this is not a weekly job.'
-          : '<br><span class="pos"><strong>Every reading is backed up.</strong></span> Nothing to export ' +
-            'until a new week is recorded.');
+      'your phone, and in a browser that has never seen the league before.';
+
+  // Backup state: the part to act on, so it is shown, not tucked away.
+  const backup = (state.data && state.data.isDemo) || !weeks.length
+    ? ''
+    : loose.length
+      ? `<span class="neg"><strong>${plural(loose.length, 'week')} ` +
+        `(${loose.join(', ')}) ${loose.length === 1 ? 'exists' : 'exist'} only in this browser.</strong></span> ` +
+        'Press <strong>Export archive</strong> and hand the file over; clearing site data before you ' +
+        'do would delete ' + (loose.length === 1 ? 'it' : 'them') + '. ' +
+        'One export covers every week at once, so this is not a weekly job.'
+      : '<span class="pos"><strong>Every reading is backed up.</strong></span> Nothing to export ' +
+        'until a new week is recorded.';
 
   const limit =
     'What is kept is the schedule, the results as they stood, one projected total per team per ' +
@@ -683,11 +686,20 @@ function renderArchiveNote(id, saved) {
     '<strong>The rosters behind those numbers are not kept</strong>, so an archived week can be ' +
     're-read but not re-derived — the other pages always show today.';
 
-  el.innerHTML =
-    `${held} ${why}<br>${when}<br>${durability}<br>${limit}` +
-    (state.snapMsg
-      ? `<br><span class="${state.snapErr ? 'neg' : 'pos'}">${esc(state.snapMsg)}</span>`
-      : '');
+  // Shown: what is kept, whether it is backed up, and the last action's result.
+  $('snapState').innerHTML = [
+    held,
+    backup,
+    state.snapMsg
+      ? `<span class="${state.snapErr ? 'neg' : 'pos'}">${esc(state.snapMsg)}</span>`
+      : '',
+  ]
+    .filter(Boolean)
+    .map((s) => `<p>${s}</p>`)
+    .join('');
+
+  // Tucked away: why the archive exists and how it works.
+  el.innerHTML = [why, when, durability, limit].map((s) => `<p>${s}</p>`).join('');
 }
 
 /** Take on a freshly loaded schedule and reset what belongs to the old one. */
@@ -2063,7 +2075,8 @@ function renderForecast() {
       pending
         ? 'Working out what every roster is projected to score…'
         : `${plural(rows.length, 'game')} left to play, but no projection to put against ` +
-          'any of them, so there is nothing to forecast from.',
+          'any of them, so there is nothing to forecast from.' +
+          (d.isDemo ? '' : ' Reload the page to try again.'),
       pending
         ? 'Reading this week’s rosters from ESPN.'
         : `${recordText(banked)} so far. ` +
@@ -2158,7 +2171,8 @@ function renderForecast() {
     gaps,
   ]
     .filter(Boolean)
-    .join('<br>');
+    .map((s) => `<p>${s}</p>`)
+    .join('');
 }
 
 // ------------------------------------------------------------ season simulation
@@ -2368,7 +2382,8 @@ function renderSimulation() {
       pending
         ? 'Working out what every roster is projected to score…'
         : `${plural(inputs.games.length, 'game')} left to play, but no projection to put ` +
-          'against any of them, so there is no season to play out.',
+          'against any of them, so there is no season to play out.' +
+          (d.isDemo ? '' : ' Reload the page to try again.'),
       pending
         ? 'Reading this league’s rosters from ESPN. The simulation needs a projected score ' +
           'for both sides of every remaining game.'
@@ -2552,8 +2567,11 @@ function paintSimulation(sim, inputs) {
         ? `Everyone who missed the bracket keeps the place the table gave them, which is why ` +
           `${ordinal(teamCount)} is the worst regular-season team — the same team, and the same ` +
           `number, as “Last %”. `
-        : '') +
-      (po.teams > 2
+        : '')
+    : '';
+
+  const tieSplit = po
+    ? (po.teams > 2
         ? `<strong>Two teams knocked out in the same round are split by seed, and that is an ` +
           `assumption rather than a result.</strong> No game played here separates 3rd from 4th` +
           (po.teams > 4 ? ` or ${ordinal(po.teams - 1)} from ${ordinal(po.teams)}` : '') +
@@ -2612,13 +2630,15 @@ function paintSimulation(sim, inputs) {
       `${plural(sim.games, 'game')} still to play ${sim.games === 1 ? 'was' : 'were'} played ` +
       `out ${commas(sim.runs)} times, and the bracket played on top of each one. There is ` +
       `no closed form for a final placing — where you finish turns on everyone else’s ` +
-      `results as much as your own. <strong>“Title %” is winning the championship round</strong>, ` +
+      `results as much as your own.`,
+    `<strong>“Title %” is winning the championship round</strong>, ` +
       `which is the same thing as finishing 1st. “1st in table” is a different question: ` +
       `finishing first in the regular-season standings after week ${lastWeek}, which decides the ` +
       `seeds and nothing else — top the table and lose a playoff game and you did not finish 1st. ` +
       `<strong>“Last %” is last in the regular-season table</strong>, not last in the ` +
       `playoffs and not the consolation ladder.`,
     placing,
+    tieSplit,
     bracket,
     bracketBasis,
     timing,
@@ -2633,7 +2653,8 @@ function paintSimulation(sim, inputs) {
     gaps,
   ]
     .filter(Boolean)
-    .join('<br>');
+    .map((s) => `<p>${s}</p>`)
+    .join('');
 }
 
 // ----------------------------------------------------------------- interaction

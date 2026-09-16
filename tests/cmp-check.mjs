@@ -266,7 +266,9 @@ async function check(scenario, boot) {
   const c = makeChecker();
   const d = boot.document;
   const $ = (id) => d.getElementById(id);
-  const note = txt($('waiverNote'));
+  // The short status line (demo notice, refusals, progress) sits visibly above
+  // the table; the rest is tucked in the explanation below it. Both are read.
+  const note = txt($('waiverStatus')) + ' ' + txt($('waiverNote'));
   const season = await import('./cmp-stub-season.mjs');
   const espn = await import('./wv-stub-espn.mjs');
 
@@ -395,6 +397,11 @@ async function check(scenario, boot) {
       /3 weeks = 6 requests to ESPN/.test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('and says what the second one is for',
       /the wire and every squad in the league for each one/.test(txt($('spanCost'))), txt($('spanCost')));
+
+    c.ok('the colour key shows the shading and the Your row',
+      [...$('waiverLegend').querySelectorAll('[data-compare]')].length === 2 &&
+      [...$('waiverLegend').querySelectorAll('[data-compare]')].every((k) => !k.hasAttribute('hidden')),
+      'a comparison key is hidden');
 
     // The note.
     c.ok('the note says what a Your … row is',
@@ -542,6 +549,12 @@ async function check(scenario, boot) {
       /“You are” menu in the connection bar/.test(note), note);
     c.ok('and says what turning them on would give you',
       /Your QB3/.test(note) && /worst man there/.test(note), note);
+    c.ok('that reason is shown, not tucked behind the toggle',
+      /Nobody is set as you/.test(txt($('waiverStatus'))) && !$('waiverStatus').closest('details'),
+      txt($('waiverStatus')));
+    c.ok('and the colour key drops the two cues that cannot appear',
+      [...$('waiverLegend').querySelectorAll('[data-compare]')].every((k) => k.hasAttribute('hidden')),
+      'a comparison key is still showing');
   }
 
   // ---- (e) every roster week refused ---------------------------------------

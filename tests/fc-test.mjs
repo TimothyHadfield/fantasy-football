@@ -123,7 +123,11 @@ const SCENARIOS = {
         asOf: $('asOfSelect').value,
         options: [...$('asOfSelect').querySelectorAll('option')].map((o) => o.getAttribute('value')),
         deleteHidden: ($('snapDelete').getAttribute('class') || '').includes('hidden'),
-        status: txt($('snapStatus')),
+        // The visible state (what is kept, what still needs exporting) and the
+        // tucked explanation, read together: every fact must be on the panel.
+        status: txt($('snapStatus')) + ' ' + txt($('snapState')),
+        // What needs acting on must be visible, not tucked in <details>.
+        state: txt($('snapState')),
         // The two panels the whole feature exists for.
         forecast: [...$('forecastTable').querySelectorAll('tbody tr')]
           .map((tr) => [...tr.children].map((td) => txt(td))),
@@ -1084,13 +1088,14 @@ async function check(scenario, boot) {
     // The one thing the reader has to act on, and the panel works it out
     // rather than leaving it to them. Nothing is committed in this scenario, so
     // the reading just taken must be named as existing only here.
+    // Checked against the VISIBLE state line, not the tucked explanation.
     c.ok('an un-backed-up week is named, not left to be noticed',
-      a.live && /exists? only in this browser/.test(a.live.status) &&
-      /Export archive/.test(a.live.status),
-      a.live && a.live.status.slice(-500));
+      a.live && /exists? only in this browser/.test(a.live.state) &&
+      /Export archive/.test(a.live.state),
+      a.live && a.live.state);
     c.ok('and the panel says outright that exporting is not a weekly job',
-      a.live && /not a weekly job/.test(a.live.status),
-      a.live && a.live.status.slice(-300));
+      a.live && /not a weekly job/.test(a.live.state),
+      a.live && a.live.state);
     c.ok('and says what it does NOT keep',
       a.live && /rosters behind those numbers are not kept/.test(a.live.status),
       a.live && a.live.status.slice(-300));
