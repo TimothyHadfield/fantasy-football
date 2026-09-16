@@ -545,17 +545,20 @@ SCENARIOS['bridge-live'] = async () => {
 
 // ---------------------------------------------------------------- no-cloud
 //
-// The state the repo actually ships in, and the one that has to be boring:
-// DEFAULT_CONFIG is blank, so js/cloud.js is inert and nothing about season.js
-// is different from what it was before any of this was written.
+// The state the repo shipped in until Tim's project existed, and the one that
+// has to be boring: with no project, js/cloud.js is inert and nothing about
+// season.js is different from what it was before any of this was written.
+// The repo now carries a real project (2026-09-16), so the blank config is
+// made here rather than assumed — the "Turn it off" route in
+// docs/firebase-setup.md is exactly this, and it must keep working.
 
 SCENARIOS['no-cloud'] = async () => {
   const cloud = await import(moduleUrl('js/cloud.js'));
   const espn = await import(moduleUrl('js/espn.js'));
   const season = await import(moduleUrl('js/season.js'));
 
-  eq(cloud.isConfigured(), false, 'the repo ships with no Firebase project configured');
-  eq(cloud.DEFAULT_CONFIG.apiKey, '', 'and no key pasted into it');
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+  eq(cloud.isConfigured(), false, 'with the four strings blanked, no Firebase project is configured');
 
   const calls = installFetch(LIVE.scale, LIVE.name);
   espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
@@ -683,11 +686,12 @@ SCENARIOS['page-stale'] = async () => {
 
 // ----------------------------------------------------------------- page-plain
 //
-// The control. No Firebase project, exactly as the repo ships: the page must
-// be indistinguishable from what it was before any of this existed.
+// The control. No Firebase project (blanked here, as "Turn it off" does): the
+// page must be indistinguishable from what it was before any of this existed.
 
 SCENARIOS['page-plain'] = async () => {
   const cloud = await import(moduleUrl('js/cloud.js'));
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
   eq(cloud.isConfigured(), false, 'no project configured');
 
   const { document, store } = await bootPage('index.html', {});

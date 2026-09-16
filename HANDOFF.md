@@ -387,10 +387,15 @@ information on firebase."*
   read as fresh by accident.
 - **Syncing fires at most once every six hours**, and that number is pinned to
   the thing that decays rather than picked: the wire goes stale after a day.
-- **It is switched off until Tim does the console setup.** `docs/firebase-setup.md`
-  is click-by-click, ~15 minutes, **two sittings** — his user id does not exist
-  until he has signed in once. Unconfigured is the normal case and every failure
-  is silent; the site behaves exactly as it did before.
+- **The project exists: `fantasy-football-th`** (owner timhadfield7@gmail.com,
+  Firestore in `nam5`), created 2026-09-16 by Claude through the signed-in
+  `firebase` CLI, and its config is in `js/cloud.js`. The locked interim rules
+  are published. **Still to do:** Tim enables the Google provider in the
+  console (the CLI cannot — it needs the OAuth client only the console
+  creates); then the authorized domain `timothyhadfield.github.io` is added;
+  then he signs in once, and his uid goes into the rules and `ownerUid`.
+  Until then every cloud call fails silently and the site behaves as before.
+  `docs/firebase-setup.md` is still the click-by-click.
 
 ## Trades, and what the site will and will not do to ESPN
 

@@ -276,11 +276,11 @@ const MAX_DOC_BYTES = 700 * 1024;
  * permission error. The rule that actually enforces it lives in the console.
  */
 export const DEFAULT_CONFIG = {
-  apiKey: '',
-  authDomain: '',
-  projectId: '',
-  appId: '',
-  ownerUid: '',
+  apiKey: 'AIzaSyDLatA-0XyFDeeqVbrglvKcxk3k6B5zlGw',
+  authDomain: 'fantasy-football-th.firebaseapp.com',
+  projectId: 'fantasy-football-th',
+  appId: '1:1008636616586:web:3932f2d5a69cd6f9177273',
+  ownerUid: '',        // filled in once Tim has signed in (sitting two)
 };
 
 // --------------------------------------------------------------------- state
