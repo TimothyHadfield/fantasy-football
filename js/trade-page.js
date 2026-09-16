@@ -1115,19 +1115,40 @@ function offerKey(offer) {
  * reason, including the extension simply not being installed, the same tab goes
  * to the plain link and the page behaves exactly as it did before: their side
  * ticked, his side to tick by hand.
+ *
+ * NO `noopener` IN THE FEATURES. It was here, and it broke the button: with
+ * `noopener` the browser opens the tab but `window.open` returns `null` — by
+ * spec, always — so the page lost its handle on the blank tab it had just
+ * opened, then called `window.open` a second time after the await, with the
+ * click's permission spent. Tim got a blank tab, and the real one was blocked.
+ * The handle is kept instead and the tab's `opener` cut by hand, which is the
+ * same protection `noopener` gives ESPN's page.
+ *
+ * And the extension is only asked when it has said hello. Absent, nothing ever
+ * answers and the ask sits out its full timeout while the tab stays blank.
  */
+const STAGE_TIMEOUT_MS = 4000;
+
 async function openInEspn(offer, href) {
   let tab = null;
   try {
-    tab = window.open('', '_blank', 'noopener');
+    tab = window.open('about:blank', '_blank');
+    if (tab) tab.opener = null;
   } catch {
     tab = null;
   }
 
   let url = href;
-  try {
+  if (bridgeAvailable()) try {
     const cfg = espn.getConfig();
+    // The plain link's own filter, applied to the staged link too: an id not on
+    // his roster this week is dropped rather than sent, or the two links would
+    // disagree about who is ticked.
+    const onLink = new Set(
+      (new URL(href).searchParams.get('players') || '').split(',').filter(Boolean).map(Number)
+    );
     const res = await stageTrade({
+      timeoutMs: STAGE_TIMEOUT_MS,
       leagueId: cfg.leagueId,
       season: cfg.season,
       myTeamId: state.myTeamId,
@@ -1137,15 +1158,22 @@ async function openInEspn(offer, href) {
       // way a D/ST can be found at all (its row carries a team logo, not a
       // headshot with an id in the URL).
       myPlayers: offer.send.map((p) => ({ id: p.playerId, name: p.name })),
-      theirPlayerIds: offer.receive.map((p) => p.playerId),
+      theirPlayerIds: offer.receive.map((p) => p.playerId).filter((id) => onLink.has(id)),
     });
     if (res && res.ok && res.data && res.data.url) url = res.data.url;
   } catch {
     /* no extension, or it declined: the plain deep link still works */
   }
 
-  if (tab) tab.location = url;
-  else window.open(url, '_blank', 'noopener');
+  if (tab) {
+    // Closed while staging ran is his choice, and is left alone.
+    if (!tab.closed) tab.location.href = url;
+    return;
+  }
+  // No tab at all — a blocker refused the open. Opening again here has no click
+  // behind it and would be refused too, so this tab goes instead: the Trade
+  // page is one Back away.
+  window.location.href = url;
 }
 
 function espnTradeUrl(offer) {
@@ -1606,13 +1634,20 @@ function renderDeal() {
 
   const href = espnTradeUrl(offer);
   const espnBlock = href
-    ? `<p><a class="espn-open" href="${esc(href)}" target="_blank" rel="noopener">` +
-      `Open this trade in ESPN · his players only</a><br>` +
+    // `data-offer` too, or the capture handler finds nothing registered and the
+    // pop-up's link never asks the extension to tick your side.
+    ? `<p><a class="espn-open" href="${esc(href)}" target="_blank" rel="noopener"` +
+      ` data-offer="${esc(offerKey(offer))}">` +
+      `Open this trade in ESPN${bridgeAvailable() ? '' : ' · his players only'}</a><br>` +
       `<span class="espn-off">ESPN’s screen opens with <strong>${offer.receive
         .map((p) => esc(p.name))
-        .join(' and ')}</strong> already ticked on his side. There is no parameter for your own ` +
-      `side, so you tick ${offer.send.map((p) => esc(p.name)).join(' and ')} by hand once you are ` +
-      `there. Nothing is sent from this site.</span></p>`
+        .join(' and ')}</strong> already ticked on his side. ` +
+      (bridgeAvailable()
+        ? `The extension ticks ${offer.send.map((p) => esc(p.name)).join(' and ')} on yours; ` +
+          `check both sides before you press Propose. `
+        : `There is no parameter for your own side, so you tick ` +
+          `${offer.send.map((p) => esc(p.name)).join(' and ')} by hand once you are there. `) +
+      `Nothing is sent from this site.</span></p>`
     // A whole packing has no single manager on the other side of it, so there
     // is no one screen to open — which is a fact about the combination rather
     // than a failure, and it is said as one. Each manager's own row carries his

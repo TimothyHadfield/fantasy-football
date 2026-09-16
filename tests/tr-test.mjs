@@ -692,9 +692,44 @@ const SCENARIOS = {
     if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     await settle(1500);
     const deal = readDeal(document);
+    const dealLinkKeyed = !!document.querySelector('#dealBody a.espn-open[data-offer]');
+
+    // CLICKING "Open in ESPN". A browser's window.open, faithfully: with
+    // `noopener` in the features it opens the tab and hands back NULL, always.
+    // Tim's report was this button doing nothing, and that rule is why — so a
+    // stub that returned a tab regardless would pass the broken page.
+    const { window } = globalThis;
+    const opened = [];
+    window.open = (u, target, features) => {
+      const tab = { closed: false, opener: window, location: { href: u } };
+      opened.push({ u, target, features: features || '', tab });
+      return /noopener/.test(features || '') ? null : tab;
+    };
+    // Pop-up shut first. linkedom does not run capture listeners ahead of
+    // bubbling ones, so with it open the outside-click handler would repaint
+    // (and re-key every link) before the ESPN handler — an order no browser
+    // uses. The pop-up's own link is checked separately above.
+    const esc = new globalThis.Event('keydown', { bubbles: true });
+    esc.key = 'Escape';
+    document.dispatchEvent(esc);
+    await settle(100);
+    const startHref = window.location.href;
+    const tableLink = document.querySelector('#tradeTable a.espn-open');
+    const click = new globalThis.Event('click', { bubbles: true, cancelable: true });
+    if (tableLink) tableLink.dispatchEvent(click);
+    await settle(200);
+    const espnClick = {
+      had: !!tableLink,
+      href: tableLink ? tableLink.getAttribute('href') : '',
+      prevented: click.defaultPrevented,
+      opens: opened.length,
+      landed: opened[0] ? opened[0].tab.location.href : '',
+      opener: opened[0] ? (opened[0].tab.opener === null ? null : 'still set') : 'none',
+      pageMoved: window.location.href !== startHref,
+    };
 
     return {
-      errors, before, after, deal,
+      errors, before, after, deal, dealLinkKeyed, espnClick,
       offer: idx >= 0 ? after.trades[idx] : null,
       rosters: { 1: stub.rosterIds(1), 2: stub.rosterIds(2), 3: stub.rosterIds(3) },
       // Every man the page drew anywhere, so the per-week arithmetic and the
@@ -1598,12 +1633,23 @@ if (!live.boot) {
   ok('and that nothing is sent to ESPN from here',
     /Nothing is sent to ESPN/.test(live.after.note), live.after.note.slice(-500));
 
+  // -- clicking it actually gets him to ESPN (Tim, 2026-09-16: "the open in
+  //    espn isn't working") ------------------------------------------------
+  const ec = live.espnClick;
+  ok('there is an Open in ESPN link to click', ec.had);
+  ok('the click is taken over, to stage your side first', ec.prevented);
+  eq(ec.opens, 1, 'exactly one tab is opened — not a blank one and then a blocked one');
+  eq(ec.landed, ec.href, 'and that tab lands on the trade link');
+  eq(ec.opener, null, 'with its opener cut, as noopener would have done');
+  ok('the Trade page itself stays put', !ec.pageMoved);
+
   if (live.deal && !live.deal.hidden) {
     ok('the deal panel offers the same deep link',
       /^https:\/\/fantasy\.espn\.com\/football\/team\/trade\?/.test(live.deal.espn),
       live.deal.espn);
     ok('and says in words that your own side is not ticked',
       /no parameter for your own side/.test(live.deal.body), live.deal.body.slice(-400));
+    ok('the pop-up’s link is registered, so it can stage your side too', live.dealLinkKeyed);
     ok('the deal covers every remaining week',
       live.deal.weeks && live.deal.weeks.weeks.length === span,
       live.deal.weeks ? `${live.deal.weeks.weeks.length} rows` : 'no table');

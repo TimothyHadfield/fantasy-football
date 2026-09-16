@@ -250,7 +250,13 @@ function requirePlayerId(value, what) {
   // Integers, and integers only. A string that happens to look numeric is
   // refused rather than coerced: the site knows these come from ESPN's API as
   // numbers, so anything else means something upstream is confused.
-  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value > 1e9) {
+  //
+  // A D/ST is the one NEGATIVE id ESPN uses: -16000 minus the NFL team id, so
+  // -16001 to -16034 (docs/espn-draft-api.md). Refusing it refused every trade
+  // with a defence in it, on either side. Only that band is let through — any
+  // other negative is still nonsense.
+  const dst = value <= -16001 && value >= -16034;
+  if (typeof value !== 'number' || !Number.isInteger(value) || (!dst && (value <= 0 || value > 1e9))) {
     throw new Error(`${what} must be whole ESPN player ids.`);
   }
   return value;

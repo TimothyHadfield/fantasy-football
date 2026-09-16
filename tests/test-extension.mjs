@@ -444,6 +444,9 @@ for (const { patch, why } of [
   badStage({ myPlayers: [{ id: 1.5 }] }, 'a fractional player id'),
   badStage({ myPlayers: [{ id: NaN }] }, 'a player id that is NaN'),
   badStage({ myPlayers: [{ id: -3 }] }, 'a negative player id'),
+  badStage({ myPlayers: [{ id: -16000 }] }, 'a negative id just outside the D/ST band'),
+  badStage({ myPlayers: [{ id: -16035 }] }, 'a negative id just past the D/ST band'),
+  badStage({ myPlayers: [{ id: -14001 }] }, 'a head coach, which is not a D/ST'),
   badStage({ myPlayers: [{ id: 0 }] }, 'a zero player id'),
   badStage({ myPlayers: [{ id: 1e12 }] }, 'an absurdly large player id'),
   badStage({ myPlayers: [{ id: null }] }, 'a null player id'),
@@ -475,6 +478,21 @@ for (const { patch, why } of [
   const w = makeWorker();
   const res = await w.send({ ...STAGE, surprise: 'hello' });
   ok(res && res.ok === false && /Unexpected field/.test(res.error), 'an unexpected top-level field is named and refused');
+}
+{
+  // A D/ST's id IS negative — -16000 minus the NFL team — and refusing it
+  // refused every trade with a defence in it, on either side.
+  const w = makeWorker();
+  const res = await w.send({
+    ...STAGE,
+    myPlayers: [{ id: -16001, name: 'Falcons D/ST' }],
+    theirPlayerIds: [-16034, 15847],
+  });
+  ok(res.ok, 'a D/ST on both sides stages', res.error);
+  ok(res.ok && /players=-16034%2C15847|players=-16034,15847/.test(res.data.url),
+    'and its id rides in the link', res.data && res.data.url);
+  const got = await w.send(TAKE, espnSender);
+  eq(got.data && got.data.myPlayers[0].id, -16001, 'and comes back to ESPN’s page intact');
 }
 {
   // A bare id, with no name, is a legitimate caller — it just cannot find a D/ST.

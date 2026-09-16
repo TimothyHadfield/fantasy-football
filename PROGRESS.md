@@ -1343,6 +1343,36 @@ everything, a Close button that did nothing, and a body with no numbers in it.
   pop-up open through it — it is priced on those same weeks, so the two agree.
   On live data this spends one request per week not already held, on the click.
 
+### "Open in ESPN" did nothing (2026-09-16, Tim's report, same day)
+
+Three defects, none of which any suite exercised — nothing clicked the link.
+
+- **`window.open('', '_blank', 'noopener')` returns `null`, by spec, always**,
+  while still opening the tab. So `openInEspn` lost its handle on the blank tab
+  it had just claimed, awaited the extension, then called `window.open` a second
+  time with the click's permission spent — a blank tab, and the real one
+  blocked. It now opens `about:blank` WITHOUT `noopener`, keeps the handle, and
+  sets `tab.opener = null` itself. `tr-test`'s stubbed `window.open` returns
+  null under `noopener` exactly as a browser does; a stub that returned a tab
+  regardless would have passed the broken page.
+- **The extension was asked even when absent**, and `ask()` then sits out its
+  15-second timeout with the tab blank. It is now asked only after it has said
+  hello, with a 4-second limit.
+- **A D/ST's ESPN id is negative** (`-16000 - proTeamId`), and the extension's
+  `requirePlayerId` refused anything `<= 0` — so every trade with a defence on
+  either side failed to stage and fell back to his side unticked. The band
+  -16001..-16034 is now accepted; any other negative still is not. Extension
+  bumped to **0.3.1**: it is unpacked, so **Tim has to reload it** at
+  `edge://extensions` before the fix reaches him.
+- Also: the pop-up's own ESPN link carried no `data-offer`, so it never staged
+  anything; and the staged link now drops ids not on his roster, as the plain
+  link always did, so the two cannot disagree about who is ticked.
+
+**linkedom does not run capture listeners first.** The page's ESPN handler is
+registered in the capture phase precisely so it runs before the outside-click
+handler repaints (which re-keys every link). Under linkedom the order is
+reversed, so the test shuts the pop-up before clicking a table link.
+
 ## Ticking your own side of a trade (`extension/content-espn-trade.js`)
 
 Tim asked for a deep link that arrives with BOTH sides already selected.

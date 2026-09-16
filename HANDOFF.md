@@ -498,6 +498,10 @@ Ordered by what would hurt most to get wrong.
   there: the real-names join; the playoff field size read from his settings;
   whether `% own` populates; and every number the Trade page's weekly measure
   produces.
+- **The extension is unpacked, so a change to `extension/` reaches Tim only
+  after he reloads it** at `edge://extensions` (and the version shown there
+  should match `manifest.json`, 0.3.1 as of 2026-09-16). Bump the version with
+  every extension change so he can tell.
 - **The trade tick-your-side has never run in a real browser.** ESPN's markup
   and the React click path were read out of their shipped bundle and the suite
   proves the logic, but linkedom cannot prove ESPN's own store updates. The
