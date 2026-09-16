@@ -18,6 +18,34 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
 
+/**
+ * Is the thing pointing at this page a finger?
+ *
+ * Exported because two very different things need it and neither may grow its
+ * own copy: the analysis grids decide whether their hover card opens as a
+ * tap-opened sheet, and this bar decides whether "install the extension" is
+ * advice a reader can actually act on.
+ *
+ * `hover: none` is deliberately not a width test. A narrow desktop window has a
+ * mouse and can install an extension; an iPad in landscape is wide and can do
+ * neither. It is also the closest honest signal available — there is no feature
+ * query for "this browser can run extensions", and neither iOS Safari nor
+ * Chrome on Android can load an unpacked one — so every sentence built on it is
+ * worded as the likelihood it is rather than as a certainty.
+ *
+ * Guarded because the test harness has no `matchMedia`, and the honest answer
+ * without one is "assume a pointer".
+ */
+export function coarsePointer() {
+  try {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(hover: none)').matches;
+  } catch {
+    return false;
+  }
+}
+
 const state = {
   extension: false,
   leagueId: '',
@@ -175,6 +203,23 @@ function render() {
       <input id="connLeague" class="conn-input" inputmode="numeric" placeholder="League ID"
              value="${esc(state.leagueId)}">
       <button type="button" id="connSync" class="conn-btn">${state.busy ? 'Connecting…' : 'Connect'}</button>`;
+  } else if (coarsePointer()) {
+    // TELLING SOMEBODY TO INSTALL SOMETHING THEY CANNOT INSTALL IS WORSE THAN
+    // SAYING NOTHING. The bridge is an unpacked Manifest V3 extension, and
+    // neither iOS Safari nor Chrome on Android can load one — so on a phone the
+    // desktop sentence below sends the reader off to look for a button that is
+    // not there and to conclude the site is broken. It is not: a private league
+    // is unreadable from a phone by design (ESPN's cookies are third-party from
+    // github.io and a page cannot set the Cookie header), and that is a browser
+    // constraint, not something a better layout fixes. Every other page works
+    // here exactly as it does on the desktop, which is the part worth saying.
+    body = `
+      <span class="conn-dot"></span>
+      <span class="conn-main">
+        <strong>Demo data on this device.</strong> Reading your private league needs the
+        bridge extension, and a phone or tablet browser cannot install one &mdash; open the
+        site on your computer for live numbers. Everything else here works the same.
+      </span>`;
   } else {
     body = `
       <span class="conn-dot"></span>

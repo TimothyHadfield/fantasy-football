@@ -909,6 +909,21 @@ export function boxPlot(container, opts) {
       `font-weight="${highlight && !isDim ? 600 : 400}">` +
       `<title>${esc(r.name)}</title>${esc(truncateToWidth(r.name, LABEL_SIZE, labelMax))}</text>`
     );
+
+    // A FULL-WIDTH INVISIBLE BAND PER ROW, so the five numbers can be read on a
+    // phone. Everything above puts them in an SVG <title>, which iOS Safari
+    // draws nothing for — so a box plot there was ten coloured smears against a
+    // "Points" axis and no way to get a number out of it. The band is the whole
+    // row rather than the box, because a whisker is 1.5px of ink and a median a
+    // 2px gap: aiming a thumb at either is not a thing that happens.
+    //
+    // Drawn LAST so it sits above the marks and takes the pointer, and it
+    // includes the label gutter so tapping a team's name works too, which is
+    // the obvious thing to try.
+    parts.push(
+      `<rect class="ff-box-hit" data-i="${i}" x="0" y="${(cy - actualRowH / 2).toFixed(1)}" ` +
+      `width="${W}" height="${actualRowH.toFixed(1)}" fill="transparent"/>`
+    );
   });
 
   const markup =
@@ -918,6 +933,34 @@ export function boxPlot(container, opts) {
 
   const svg = mount(container, markup);
   if (!svg) return null;
+
+  // The same shared tooltip the line chart and the histogram use, so a box
+  // plot's numbers arrive looking like every other number on the site. Five
+  // rows, because a five-number summary is five facts and running them into one
+  // sentence is what the <title> was already doing badly.
+  const tip = createTooltip(container);
+  const hits = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-box-hit') : [];
+  if (tip) {
+    for (const hit of hits) {
+      const r = rows[+hit.getAttribute('data-i')];
+      if (!r) continue;
+      // `pointerdown` as well as `pointermove`: a finger produces no move before
+      // it lands, so without it a tap does nothing at all. Same pair, and the
+      // same reason, as the histogram's bars.
+      const enter = (evt) => {
+        const p = pointerPos(svg, container, evt);
+        tip.show(r.name, [
+          { color: r.color, name: 'median', value: fmt(r.median) },
+          { name: 'Q1 – Q3', value: `${fmt(r.q1)} – ${fmt(r.q3)}` },
+          { name: 'min – max', value: `${fmt(r.min)} – ${fmt(r.max)}` },
+        ], p.px, p.py);
+      };
+      hit.addEventListener('pointermove', enter);
+      hit.addEventListener('pointerdown', enter);
+      hit.addEventListener('pointerleave', () => tip.hide());
+    }
+  }
+
   observeWidth(container, () => boxPlot(container, o));
   return svg;
 }
