@@ -8,11 +8,151 @@
 // refetch each week's rosters and re-add the projections of whoever was in the
 // starting lineup that week. That is what the ESPN site itself displays, but it
 // costs one request per week.
+//
+// It is also the file that decides where a page's numbers come from at all —
+// live ESPN, or the copy the desktop synced for the phone. See THE CLOUD
+// SUBSTITUTION below; no page module knows the difference, which is the point.
 
 import * as espn from './espn.js';
+import * as bridge from './bridge.js';
+import * as cloud from './cloud.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
+
+// ===========================================================================
+// THE CLOUD SUBSTITUTION
+// ===========================================================================
+//
+// WHY IT IS IN THIS FILE AND NOT IN THE PAGES.
+//
+// Tim's league is private, so it can only be read through the bridge
+// extension, and no phone browser can install one. `js/cloud.js` is the answer
+// — the desktop publishes the league, the phone reads it back — but a cloud
+// that pages had to ASK for would mean six page modules each learning when to
+// prefer it, each with its own idea of what "no extension" means, and each
+// free to drift. That is the defect the house style keeps naming: two ways of
+// getting the same thing is how the two halves start disagreeing.
+//
+// So the seam is here, in the three functions every page already calls.
+// `readDown` was built to return EXACTLY the shapes below produce — `rosters`
+// as a `Map<week, teams[]>`, `schedule` carrying the `byWeek` Map — precisely
+// so this could be a SUBSTITUTION rather than a second rendering path. It is
+// the same decision `snapshots.hydrate()` made for the time machine, for the
+// same reason: the whole page travels together, and a synced week cannot drift
+// into looking different from a live one.
+//
+// The upshot is that NO PAGE MODULE CHANGED. Every page works on the phone
+// because every page already goes through here.
+//
+// THE ORDER OF PREFERENCE, and why it is this way round:
+//
+//   1. The bridge, whenever it is there. It is live, and it is the only one of
+//      the two that can read a private league at all. When it is present the
+//      cloud is not read — not even checked — so a desktop pays nothing.
+//   2. The cloud, when the bridge is absent AND a sync exists for this exact
+//      league and season. ESPN is not tried first: on the device this is for,
+//      ESPN cannot answer, so trying would buy a guaranteed failed request and
+//      a visible stall on every single week.
+//   3. ESPN directly, exactly as before. A public league nobody has synced is
+//      untouched by all of this, and so is demo.
+//
+// EVERY FAILURE IS SILENT. Not configured (which is the normal case until Tim
+// finishes `docs/firebase-setup.md`), not signed in, offline, over quota, a
+// document that will not parse — all of them come back as "no cloud" and the
+// page behaves exactly as it does today. Same rule as `snapshots.fetchRemote`.
+
+/**
+ * ESPN publishes a per-week projection through week 13 and no further, so
+ * there is nothing to sync past it — except a week that has actually been
+ * PLAYED, whose rosters carry real results the stats page reads.
+ */
+const PROJECTED_THROUGH = 13;
+
+/**
+ * How many free agents a wire document holds. The same number the Players page
+ * asks ESPN for, deliberately: a phone reading a shorter list than the desktop
+ * showed would be a quiet disagreement about what the wire is.
+ */
+const WIRE_LIMIT = 150;
+
+/**
+ * ONE `readDown` per league per page load, shared by all three fetchers.
+ *
+ * A page calls `fetchSchedule` and then `fetchWeeksRosters`; asking the cloud
+ * twice would double the document reads for nothing. Keyed by league+season so
+ * that connecting to a different league cannot be served the old one's cache.
+ */
+let downCache = null; // { key, promise }
+
+/** A real ESPN league id is a number. 'demo' is not, and neither is ''. */
+function realLeague(leagueId) {
+  return /^\d+$/.test(String(leagueId ?? '').trim());
+}
+
+/**
+ * The synced league, or null when there is no cloud to speak of.
+ *
+ * Never throws and never rejects: every caller below treats null as "carry on
+ * exactly as before", which is what makes the cloud's absence a non-event.
+ */
+function cloudDown() {
+  // The bridge is live data and it is the only thing that reads a private
+  // league. If it is here, the cloud is not even asked — this is what makes
+  // "with the extension, zero cloud reads" true rather than merely likely.
+  if (bridge.isAvailable()) return Promise.resolve(null);
+  if (!cloud.isConfigured()) return Promise.resolve(null);
+
+  const { leagueId, season } = espn.getConfig();
+  if (!realLeague(leagueId)) return Promise.resolve(null);
+
+  const key = `${leagueId}::${season}`;
+  if (!downCache || downCache.key !== key) {
+    const entry = { key, promise: null };
+    // A HIT is cached for the life of the page — a page calls `fetchSchedule`
+    // and then `fetchWeeksRosters`, and asking the cloud twice would double
+    // the document reads to be told the same thing.
+    //
+    // A MISS IS NOT CACHED, and that asymmetry matters. Signing in is what
+    // turns a miss into a hit, and on a phone it happens after the first page
+    // load as often as before it — a remembered "no" would leave every page on
+    // demo data until a reload, with a bar above them saying the league was
+    // connected. The cost of not remembering is one index read per call on a
+    // device with nothing synced, against a daily allowance of fifty thousand.
+    //
+    // 'wire' is deliberately not asked for. Four of the six pages never touch
+    // it, and the one that does (Players) reads ESPN's RAW free-agent payload
+    // through `espn.fetchFreeAgents` rather than going through this module, so
+    // there is nothing here to substitute it into yet. Asking would be thirteen
+    // document reads a page load that nothing renders.
+    entry.promise = Promise.resolve()
+      .then(() => cloud.readDown(leagueId, season, { shapes: ['rosters', 'schedule'] }))
+      .then((res) => {
+        const found = res && res.ok && res.found ? res : null;
+        if (!found && downCache === entry) downCache = null;
+        return found;
+      })
+      .catch(() => {
+        if (downCache === entry) downCache = null;
+        return null;
+      });
+    downCache = entry;
+  }
+  return downCache.promise;
+}
+
+/**
+ * What the cloud is serving this page, or null — with `ages` on it.
+ *
+ * The one honest answer to "where did these numbers come from", shared with the
+ * fetchers rather than worked out again, so nothing can say one thing while the
+ * page draws another. `js/connection.js` does its own single-document probe
+ * instead of calling this: the bar needs the league's identity before any page
+ * has fetched anything, and it needs one read rather than fifteen to get it.
+ */
+export function cloudSource() {
+  return cloudDown();
+}
 
 /**
  * Sum the projected points of every starter on a roster for one week.
@@ -55,6 +195,14 @@ async function inBatches(items, size, fn) {
  * @returns {{week, teams: [{id, name, starters, bench, projectedTotal, actualTotal}]}}
  */
 export async function fetchWeekRosters(week) {
+  // The synced copy first when there is no bridge — see "THE CLOUD
+  // SUBSTITUTION" at the top. A week the cloud does not hold falls through to
+  // ESPN rather than being reported as empty: on a public league that still
+  // works, and on a private one the page gets the same error it gets today.
+  const down = await cloudDown();
+  const synced = down && down.rosters instanceof Map ? down.rosters.get(Number(week)) : null;
+  if (synced && synced.length) return { week: Number(week), teams: synced };
+
   const raw = await espn.fetchRosters(week);
   const season = espn.getConfig().season;
   // Who each squad actually belongs to. `fetchRosters` asks for mRoster+mTeam,
@@ -151,6 +299,26 @@ export async function fetchWeekRosters(week) {
 export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
   const out = new Map();
   let done = 0;
+
+  // The whole span comes down in ONE read of the cloud, so this costs no
+  // requests at all. `onProgress` is still called for every week: the pages
+  // clear their "reading week n of m" line when it reaches the end, and a
+  // progress line that never finishes is worse than no progress line.
+  //
+  // Only taken when the cloud actually holds one of the weeks asked for — a
+  // sync that carried nothing but a schedule must not turn every roster week
+  // into a silent gap.
+  const down = await cloudDown();
+  if (down && down.rosters instanceof Map && weeks.some((w) => down.rosters.has(Number(w)))) {
+    for (const week of weeks) {
+      const teams = down.rosters.get(Number(week));
+      if (teams && teams.length) out.set(Number(week), teams);
+      done++;
+      if (onProgress) onProgress(done, weeks.length, week);
+    }
+    return out;
+  }
+
   await inBatches(weeks, 3, async (week) => {
     try {
       const { teams } = await fetchWeekRosters(week);
@@ -165,9 +333,82 @@ export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
 }
 
 /**
+ * ONE WEEK OF THE WAIVER WIRE, ALREADY PARSED.
+ *
+ * The Players page used to call `espn.fetchFreeAgents` directly and parse the
+ * raw payload itself, which made it the one page the cloud substitution could
+ * not reach — on a phone its Taken half worked from the synced rosters while
+ * the wire above it, the half the page is named for, had nothing at all.
+ *
+ * So the parse moved here, and this returns parsed players from either source.
+ * `espn.parseFreeAgent` is pure, so moving WHERE it is called changes no
+ * number; the cloud stores what it returns, which is why a synced week needs
+ * no parsing on the way back.
+ *
+ * ITS OWN READ, not `cloudDown()`'s. That one deliberately asks for rosters and
+ * schedule only, because four of the six pages never touch the wire and
+ * thirteen wire documents on every page load would be reads nothing renders.
+ * This asks for exactly the week wanted — one index document plus one wire
+ * document — so the cost lands on the page that actually wants it.
+ *
+ * Throws on a week neither source can answer, because the caller distinguishes
+ * "ESPN refused this week" from "this week is empty" and draws them
+ * differently. A cloud miss falls through to ESPN rather than reporting an
+ * empty wire: a public league nobody has synced still works.
+ *
+ * @param {number} week
+ * @param {number} [limit] how many free agents to ask ESPN for
+ * @returns {Promise<Array>} `espn.parseFreeAgent` results for that week
+ */
+export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
+  const w = Number(week);
+
+  if (!bridge.isAvailable() && cloud.isConfigured()) {
+    const { leagueId, season } = espn.getConfig();
+    if (realLeague(leagueId)) {
+      try {
+        const res = await cloud.readDown(leagueId, season, { shapes: ['wire'], weeks: [w] });
+        const players = res && res.ok && res.wire instanceof Map ? res.wire.get(w) : null;
+        if (players && players.length) return players;
+      } catch {
+        /* no cloud: fall through to ESPN, exactly as if it were not configured */
+      }
+    }
+  }
+
+  const raw = await espn.fetchFreeAgents(w, limit);
+  return (raw?.players || [])
+    .map((entry) => espn.parseFreeAgent(entry, w))
+    .filter((p) => p.playerId !== null && p.playerId !== undefined);
+}
+
+/**
  * The full season schedule, week by week, with results where they exist.
  */
 export async function fetchSchedule() {
+  // Rebuilt rather than handed straight out, even though `readDown` already
+  // returns this exact shape. The cached document is shared by every caller on
+  // the page, and the live path has always given each caller its own objects —
+  // so a page that edits a game in place (the schedule page normalises into
+  // its own state, but nothing promises the next one will) cannot poison what
+  // the next caller sees. Sixty-five games; the copy is free.
+  const down = await cloudDown();
+  if (down && down.schedule && Array.isArray(down.schedule.games)) {
+    const games = down.schedule.games.map((g) => ({ ...g }));
+    const byWeek = new Map();
+    for (const g of games) {
+      if (!byWeek.has(g.week)) byWeek.set(g.week, []);
+      byWeek.get(g.week).push(g);
+    }
+    return {
+      ...down.schedule,
+      teams: (down.schedule.teams || []).map((t) => ({ ...t })),
+      weeks: [...byWeek.keys()].sort((a, b) => a - b),
+      byWeek,
+      games,
+    };
+  }
+
   const raw = await espn.fetchMatchups();
   const parsed = espn.parseLeague(raw);
   const nameById = new Map(parsed.teams.map((t) => [t.id, t.name]));
@@ -206,6 +447,104 @@ export async function fetchSchedule() {
 }
 
 /**
+ * The last third of `fetchSeasonData`, given a season's completed games.
+ *
+ * Pulled out so the cloud path below can reach the same answer through the
+ * same rule. The "do the projections cover everybody" test is subtle enough
+ * that a second copy of it would be a second thing to get wrong, and getting
+ * it wrong once already put teams that had never played at the top of the luck
+ * standings.
+ */
+function assembleSeason({ season, name, teams, games }) {
+  // If ESPN gave us nothing usable for projections, say so rather than
+  // silently rendering a season of zeroes.
+  const withProjections = games.filter((g) => g.homeProjected > 0 && g.awayProjected > 0);
+
+  // "More than half the games" was tuned against a 65-game season. In week 1
+  // there are five, so 3-of-5 passes the ratio while dropping two games
+  // entirely — and the four teams in them survive into `teams` with no rows at
+  // all. Those ghosts then compute skill = 0 - leagueAvgProjected (about -122)
+  // and luck = leagueAvgActual (about +117), which puts teams that never
+  // played at the TOP of the luck standings, with no warning shown. So the
+  // filtered set is only safe to use when it still covers every team.
+  const coveredTeams = new Set();
+  for (const g of withProjections) { coveredTeams.add(g.homeId); coveredTeams.add(g.awayId); }
+  const playedTeams = new Set();
+  for (const g of games) { playedTeams.add(g.homeId); playedTeams.add(g.awayId); }
+  const coversEveryone = [...playedTeams].every((id) => coveredTeams.has(id));
+
+  const projectionsAvailable =
+    withProjections.length > games.length * 0.5 && coversEveryone;
+
+  return {
+    season,
+    isDemo: false,
+    name,
+    weeks: [...new Set(games.map((g) => g.week))].length,
+    teams,
+    games: projectionsAvailable ? withProjections : games,
+    injuries: [], // entered by hand in the sheet; no ESPN equivalent
+    projectionsAvailable,
+    gamesFound: games.length,
+    gamesWithProjections: withProjections.length,
+  };
+}
+
+/**
+ * The same season, assembled out of what the desktop synced.
+ *
+ * Every number here was DECODED BY THIS FILE before it went up —
+ * `projectedTotal` is what `fetchWeekRosters` worked out from that week's
+ * starting lineup, with its null-vs-zero rule intact. Re-deriving it from the
+ * synced players would be a second copy of that rule, free to disagree with
+ * the first the day either is touched. It is the same reason `cloud.js` stores
+ * the team totals verbatim rather than re-adding them on the way down.
+ */
+function seasonFromCloud(down) {
+  const schedule = down.schedule;
+  if (!schedule || !Array.isArray(schedule.games)) return null;
+
+  const teamList = (down.teams && down.teams.length ? down.teams : schedule.teams || [])
+    .map((t) => ({ id: t.id, name: t.name, teamName: t.teamName }));
+  const teamIds = new Set(teamList.map((t) => t.id));
+
+  // week -> teamId -> what that squad's starters were projected to score.
+  const projByWeek = new Map();
+  for (const [week, teams] of down.rosters || new Map()) {
+    const row = new Map();
+    for (const t of teams) row.set(t.id, typeof t.projectedTotal === 'number' ? t.projectedTotal : 0);
+    projByWeek.set(Number(week), row);
+  }
+
+  const games = [];
+  for (const g of schedule.games) {
+    // Only completed matchups, and only real head-to-heads — the same two
+    // conditions the live path applies, a BYE having no second side to score.
+    if (!g.played || g.awayId === null || g.awayId === undefined) continue;
+    if (!teamIds.has(g.homeId) || !teamIds.has(g.awayId)) continue;
+    if (typeof g.homeScore !== 'number' || typeof g.awayScore !== 'number') continue;
+
+    const proj = projByWeek.get(Number(g.week)) || new Map();
+    games.push({
+      week: g.week,
+      homeId: g.homeId,
+      awayId: g.awayId,
+      homeActual: Math.round(g.homeScore * 10) / 10,
+      awayActual: Math.round(g.awayScore * 10) / 10,
+      homeProjected: Math.round((proj.get(g.homeId) || 0) * 10) / 10,
+      awayProjected: Math.round((proj.get(g.awayId) || 0) * 10) / 10,
+    });
+  }
+
+  return assembleSeason({
+    season: Number(down.season) || espn.getConfig().season,
+    name: down.leagueName || schedule.leagueName || '',
+    teams: teamList,
+    games,
+  });
+}
+
+/**
  * Build a full season of league data from ESPN.
  *
  * @param {function} onProgress optional (done, total, label) callback
@@ -215,6 +554,20 @@ export async function fetchSeasonData({ onProgress } = {}) {
   const report = (done, total, label) => onProgress && onProgress(done, total, label);
 
   report(0, 1, 'Loading league…');
+
+  // The synced copy, when there is no bridge. Without this the stats page is
+  // the one page that would still fall over on the phone — it is the only
+  // caller of this function, and it would ask ESPN for a private league and be
+  // refused while every other page rendered fine.
+  const down = await cloudDown();
+  if (down) {
+    const built = seasonFromCloud(down);
+    if (built && built.games.length) {
+      report(1, 1, 'Reading the copy synced from your computer…');
+      return built;
+    }
+  }
+
   const raw = await espn.fetchMatchups();
   const parsed = espn.parseLeague(raw);
 
@@ -269,36 +622,111 @@ export async function fetchSeasonData({ onProgress } = {}) {
     });
   }
 
-  // If ESPN gave us nothing usable for projections, say so rather than
-  // silently rendering a season of zeroes.
-  const withProjections = games.filter((g) => g.homeProjected > 0 && g.awayProjected > 0);
+  return assembleSeason({
+    season: espn.getConfig().season,
+    name: parsed.name,
+    teams,
+    games,
+  });
+}
 
-  // "More than half the games" was tuned against a 65-game season. In week 1
-  // there are five, so 3-of-5 passes the ratio while dropping two games
-  // entirely — and the four teams in them survive into `teams` with no rows at
-  // all. Those ghosts then compute skill = 0 - leagueAvgProjected (about -122)
-  // and luck = leagueAvgActual (about +117), which puts teams that never
-  // played at the TOP of the luck standings, with no warning shown. So the
-  // filtered set is only safe to use when it still covers every team.
-  const coveredTeams = new Set();
-  for (const g of withProjections) { coveredTeams.add(g.homeId); coveredTeams.add(g.awayId); }
-  const playedTeams = new Set();
-  for (const g of games) { playedTeams.add(g.homeId); playedTeams.add(g.awayId); }
-  const coversEveryone = [...playedTeams].every((id) => coveredTeams.has(id));
+// ===========================================================================
+// GATHERING WHAT GETS PUBLISHED
+// ===========================================================================
 
-  const projectionsAvailable =
-    withProjections.length > games.length * 0.5 && coversEveryone;
+/**
+ * Everything `cloud.syncUp` needs, read from ESPN in one pass.
+ *
+ * Only ever run on the machine with the bridge — it is the only one that can
+ * see a private league — and `js/connection.js` decides when. It lives here
+ * rather than there because this is the file that knows how to ask ESPN for a
+ * week, and a second place that knew would be a second place to get the
+ * one-request-per-week rule wrong.
+ *
+ * THE WHOLE SPAN GOES, not just this week. On live data the week controls buy
+ * new weeks with new ESPN requests; on synced data there is nothing to buy, so
+ * a sync that carried only the current week would leave the phone's week
+ * pickers silently showing gaps. `cloud.js` says the same thing from its end.
+ *
+ * A week ESPN refuses is simply absent — the same contract every fetcher above
+ * already has, and the reason a half-answered sync is a visible gap rather
+ * than a failure.
+ *
+ * @param {Object} [opts]
+ * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
+ */
+export async function buildCloudPayload({ onProgress } = {}) {
+  const report = (done, total, label) => {
+    if (!onProgress) return;
+    try { onProgress(done, total, label); } catch { /* a bad listener must not stop a sync */ }
+  };
+
+  const schedule = await fetchSchedule();
+
+  // Which weeks are worth a request. ESPN publishes a per-week projection
+  // through week 13 and nothing beyond it, so a week 14 roster would carry no
+  // projection to sync — EXCEPT once it has been played, when its rosters
+  // carry real results the stats page reads. Both halves matter: a league with
+  // playoff weeks would otherwise lose its December results.
+  const playedWeeks = new Set();
+  for (const [w, games] of schedule.byWeek) {
+    if (games.some((g) => g.played)) playedWeeks.add(w);
+  }
+  const weeks = schedule.weeks.filter((w) => w <= PROJECTED_THROUGH || playedWeeks.has(w));
+
+  // Schedule, then a roster request and a wire request per week, then the byes.
+  const total = weeks.length * 2 + 2;
+  let done = 1;
+  report(done, total, 'Schedule');
+
+  const rosters = new Map();
+  await inBatches(weeks, 3, async (week) => {
+    try {
+      const { teams } = await fetchWeekRosters(week);
+      if (teams && teams.length) rosters.set(week, teams);
+    } catch { /* that week is unavailable; it is a gap, not a failed sync */ }
+    report(++done, total, `Week ${week} squads`);
+  });
+
+  // The wire is decoded here rather than stored raw, for the same reason the
+  // rosters are: what goes up is what the pages render from, which is an order
+  // of magnitude smaller than ESPN's payload and cannot rot into an ESPN
+  // schema change nobody is watching for.
+  const wire = new Map();
+  await inBatches(weeks, 3, async (week) => {
+    try {
+      const raw = await espn.fetchFreeAgents(week, WIRE_LIMIT);
+      const players = (raw?.players || [])
+        .map((entry) => espn.parseFreeAgent(entry, week))
+        // A man ESPN gives no id for cannot be linked to and cannot be matched
+        // week to week, which is exactly what the Players page keys on.
+        .filter((p) => p.playerId !== null && p.playerId !== undefined);
+      if (players.length) wire.set(week, players);
+    } catch { /* same: a gap */ }
+    report(++done, total, `Week ${week} wire`);
+  });
+
+  let byes = {};
+  try {
+    byes = await espn.fetchByeWeeks();
+  } catch { /* byes are a nicety; a sync without them is still a sync */ }
+  report(++done, total, 'Bye weeks');
 
   return {
-    season: espn.getConfig().season,
-    isDemo: false,
-    name: parsed.name,
-    weeks: weeks.length,
-    teams,
-    games: projectionsAvailable ? withProjections : games,
-    injuries: [], // entered by hand in the sheet; no ESPN equivalent
-    projectionsAvailable,
-    gamesFound: games.length,
-    gamesWithProjections: withProjections.length,
+    leagueName: schedule.leagueName || '',
+    // `name` is the person and `teamName` is the joke name inside ESPN. Both
+    // go up: re-joining the members list on a phone would mean another ESPN
+    // request, which is the one thing a phone cannot make.
+    teams: (schedule.teams || []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      teamName: t.teamName || '',
+      abbrev: t.abbrev || '',
+    })),
+    byes,
+    schedule,
+    rosters,
+    wire,
+    weeks,
   };
 }

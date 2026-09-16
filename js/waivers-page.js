@@ -39,7 +39,7 @@
 // cost line says so; understating it by half would be the one kind of dishonesty
 // this page exists to avoid.
 
-import { fetchSchedule, fetchWeeksRosters } from './season.js';
+import { fetchSchedule, fetchWeeksRosters, fetchWireWeek } from './season.js';
 import * as espn from './espn.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -567,10 +567,13 @@ async function refreshWeeks(token) {
     rosters.forEach((w) => state.inFlight.add(`roster:${w}`));
 
     const jobs = wire.map(async (week) => {
-      let raw = null;
+      // Through season.js rather than straight at ESPN, so a phone reading the
+      // copy his computer synced gets the wire too. It falls through to ESPN
+      // when there is no cloud, which is every case that worked before.
+      let players = null;
       let ok = false;
       try {
-        raw = await espn.fetchFreeAgents(week, POOL_LIMIT);
+        players = await fetchWireWeek(week, POOL_LIMIT);
         ok = true;
       } catch {
         ok = false;
@@ -580,7 +583,7 @@ async function refreshWeeks(token) {
       // A response about a league we have already left is dropped here, before
       // it can repaint a table it is no longer about.
       if (token !== state.token) return;
-      if (ok) absorbWeek(raw, week);
+      if (ok) absorbWeek(players, week);
       else state.failedWeeks.add(week);
     });
 
@@ -642,12 +645,21 @@ function progressText() {
   return `Reading ESPN’s weekly projections… week ${wanted.length - pending.length} of ${wanted.length}.`;
 }
 
-/** Merge one week's payload into the cache, keyed by playerId. */
-function absorbWeek(raw, week) {
+/**
+ * Merge one week's wire into the cache, keyed by playerId.
+ *
+ * Takes PARSED players now, not ESPN's raw payload. The parse moved into
+ * `js/season.js`'s `fetchWireWeek` so this page could stop being the one that
+ * talks to ESPN directly — which was what left it as the only page the cloud
+ * substitution could not reach. On a phone its Taken half worked from the
+ * synced rosters while the wire above it, the half the page is named for, had
+ * nothing at all. `espn.parseFreeAgent` is pure, so moving where it is called
+ * changed no number here.
+ */
+function absorbWeek(players, week) {
   const byPlayer = new Map();
 
-  for (const entry of raw?.players || []) {
-    const p = espn.parseFreeAgent(entry, week);
+  for (const p of players || []) {
     if (p.playerId === null || p.playerId === undefined) continue;
 
     const known = state.pool.get(p.playerId);

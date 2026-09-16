@@ -251,7 +251,9 @@ to"* instead of a bare permission error. Commit, push, hard-refresh.
 
 ### 11. Check it
 
-On the desktop, press **Sync**. It should report writing 28 documents. Then
+On the desktop, press **Send to phone** in the connection bar. (Not **Sync now** —
+that one re-checks the ESPN connection and has nothing to do with the cloud.)
+It should report writing 28 documents. Then
 open the site on your phone: it should show your real league, with a note
 saying how old the numbers are.
 
@@ -290,7 +292,7 @@ renders as normal. Nothing else on the site depends on this.
 | `auth/popup-blocked` | Allow pop-ups for the site, then press the button again. |
 | "permission denied" on sync | The uid in the rules does not match the account you are signed in as. Re-check step 9 against **Authentication → Users**, including the quotes. |
 | "Nothing has been synced for this league yet" on the phone | The desktop has not successfully synced. Do that first; the phone only ever reads. |
-| Sync says a document is too big | Something upstream changed shape and started carrying ESPN's raw payload. The largest document this normally writes is 54 KB against a 1 MB limit, so this is a bug, not a capacity problem. |
+| Send to phone says a document is too big | Something upstream changed shape and started carrying ESPN's raw payload. The largest document this normally writes is 54 KB against a 1 MB limit, so this is a bug, not a capacity problem. |
 | Everything works but the numbers are old | That is the design. The phone shows what the desktop last published; open the site on the computer to refresh it. |
 
 ## What is actually stored up there

@@ -179,3 +179,23 @@ export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
 }
 
 export async function fetchSeasonData() { throw new Error('not used by the waivers page'); }
+
+// ------------------------------------------------------------ the wire
+//
+// `js/season.js` parses the free-agent payload now, rather than the Players
+// page doing it — that move is what let a phone read the synced wire, since
+// the page used to be the one thing talking to ESPN directly. The stub has to
+// carry the same export or the page cannot import it, and it has to go through
+// the STUBBED espn so this suite's own fixture still drives what comes back.
+//
+// Deliberately the real `parseFreeAgent` (the espn stub re-exports it), not a
+// reimplementation: a stub that parsed differently from the site would make
+// every projection assertion below a statement about the stub.
+import * as espn from './espn.js';
+
+export async function fetchWireWeek(week, limit = 150) {
+  const raw = await espn.fetchFreeAgents(week, limit);
+  return (raw?.players || [])
+    .map((entry) => espn.parseFreeAgent(entry, week))
+    .filter((p) => p.playerId !== null && p.playerId !== undefined);
+}

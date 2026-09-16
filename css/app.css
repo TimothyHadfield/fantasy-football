@@ -524,6 +524,86 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   font-size: 12.5px;
 }
 
+/* ------------------------------------------------------- the synced copy
+ *
+ * A fourth state, added with the phone bridge: the numbers on this page are
+ * not live, they are the copy the desktop published, and the reader has to be
+ * told so in words rather than by the absence of a claim. The class names are
+ * fixed by js/connection.js along with the three above.
+ *
+ * `.conn.stale` is the loud one, and it is loud on purpose. It fires when the
+ * synced squads are past the age js/cloud.js calls stale, which means every
+ * number below the bar is out of date — the same situation, and the same
+ * answer, as the time machine's archive banner. Red, not amber: amber is
+ * already "connected but not yet reading a league", which is a prompt rather
+ * than a warning, and a reader who has learnt to skim one will skim the other.
+ */
+.conn.stale {
+  background: #2a1214;
+  border-color: #6b2429;
+  color: #f0b3b6;
+}
+.conn.stale .conn-dot { background: var(--err); box-shadow: 0 0 0 3px rgba(209, 74, 74, 0.2); }
+.conn.stale .conn-btn { background: var(--err); color: #ffffff; }
+.conn.stale .conn-btn:hover { background: #e06a6a; }
+
+/* One chip per shape, because they do not decay at the same rate: js/cloud.js
+ * calls the waiver wire stale after a day and the squads after a week. Showing
+ * one timestamp for all of it would flatten exactly the distinction that
+ * matters — four-day-old squads are fine and a four-day-old wire lists men who
+ * were claimed on Tuesday. */
+.conn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 0 1 auto;
+}
+.conn-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+/* A stale chip stops being a quiet label. It keeps its own colour even inside
+ * the green bar, because a fresh roster set and a day-old wire is a real and
+ * common combination — the whole point of splitting them. */
+.conn-chip.is-stale {
+  border-color: var(--err);
+  background: rgba(209, 74, 74, 0.16);
+  color: #f0b3b6;
+  font-weight: 600;
+  opacity: 1;
+}
+.conn-chip.is-missing { opacity: 0.55; }
+
+/* The cloud's own line: who is signed in, when it last published. Secondary to
+ * the league sentence beside it, so it is dimmer and it wraps last. */
+.conn-note {
+  font-size: 12px;
+  opacity: 0.85;
+  flex: 0 1 auto;
+}
+.conn-bad { color: var(--err); opacity: 1; }
+
+/* Sign in / Send to phone / Sign out sit beside Connect and Sync now, which
+ * are the page's primary actions. An outlined button keeps them available
+ * without competing for the eye. */
+.conn-btn-ghost {
+  background: transparent;
+  border-color: currentColor;
+  color: inherit;
+  font-weight: 600;
+}
+.conn-btn-ghost:hover { background: rgba(255, 255, 255, 0.08); }
+.conn.stale .conn-btn-ghost,
+.conn.warn .conn-btn-ghost {
+  background: transparent;
+  color: inherit;
+}
+
 /* ====================================================================== phone
  *
  * The site was designed on a wide screen and every page is a dense table, so
@@ -744,6 +824,22 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   .conn-team { flex: 1 1 100%; }
   .conn-team select { flex: 1 1 auto; min-width: 0; width: auto; }
   .conn-btn { flex: 0 0 auto; }
+
+  /* The ages and the cloud's note each take a full line of their own.
+   * A phone is the device that READS synced data — it is the only one that
+   * has to — so on this screen these are the most important words in the bar,
+   * not an afterthought squeezed in beside a button. Squeezed in beside one,
+   * "Squads 4 days ago" wraps to two words a line and stops being readable at
+   * a glance, which is the only way it is any use. */
+  .conn-chips, .conn-note { flex: 1 1 100%; }
+  .conn-chip { font-size: 12px; padding: 3px 9px; }
+
+  /* Sign in with Google is the widest label in the bar and on this screen it
+   * is usually the ONLY thing to press, so it takes the row. Height comes
+   * from the `hover: none` block above, which is the right place for it:
+   * 44px of target is about there being no pointer, not about the screen
+   * being narrow, and a mouse on a 700px window does not need it. */
+  .conn-btn-ghost { flex: 1 1 100%; }
 }
 
 /* ------------------------------------------------ the tappable-title sheet
