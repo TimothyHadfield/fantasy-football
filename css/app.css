@@ -195,6 +195,25 @@ button.primary {
 }
 button.primary:hover:not(:disabled) { background: var(--accent-hi); }
 
+/* A labelled control. A segmented toggle says what its OPTIONS are and never
+ * what the CHOICE is, which is fine alone and ambiguous the moment there are
+ * two of them side by side. It matters more on a phone than it reads here:
+ * js/touch-titles.js deliberately leaves buttons alone — a tap on a control has
+ * to work the control — so a control whose only explanation is a `title` has no
+ * explanation at all there. Shared by the Players page's four filters and the
+ * schedule page's run count. */
+.ctl { display: flex; flex-direction: column; gap: 6px; }
+.ctl-label {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 600;
+}
+/* One option that needs a sentence, said under the control rather than in a
+ * `title` on the button — which is a sentence a phone can never read. */
+.ctl-hint { font-size: 12px; color: var(--dim); max-width: 62ch; }
+
 /* Segmented toggle */
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-2); overflow: hidden; }
 .segmented button { border: none; border-radius: 0; background: transparent; padding: 8px 16px; }
@@ -534,11 +553,14 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
  */
 @media (hover: none) {
   /* A finger has no precision and no hover to aim with, so every control that
-   * is a control in its own right gets a real target. Deliberately NOT applied
-   * to `button.slot-tag`: that is a tag inside a dense roster row, and 44px of
-   * height on it would double the height of the table it lives in. It gets its
-   * own smaller bump in analysis.html instead. */
-  button:not(.slot-tag),
+   * is a control in its own right gets a real target.
+   *
+   * The two exceptions are both buttons that live INSIDE a table row, where
+   * 44px of height is 44px on every row of a long table: `button.slot-tag` is
+   * the roster detail's swap control, and `.mark` is the draft board's two
+   * Mine/Taken buttons on every one of a couple of hundred rows. Both get a
+   * smaller bump of their own instead — in analysis.html and draft.css. */
+  button:not(.slot-tag):not(.mark),
   .conn-btn,
   .segmented button {
     min-height: 44px;
@@ -547,6 +569,15 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   /* Sorting a table is a tap on its header, and a header cell is ~24px tall.
    * Padding is the only thing that can grow it without changing the type. */
   th.sortable { padding-top: 10px; padding-bottom: 10px; }
+
+  /* 16px is not a taste decision and it is not about width either, which is why
+   * it lives here: iOS zooms the whole page in when a field smaller than 16px
+   * takes focus, and then leaves it zoomed. That happens in landscape too,
+   * where a phone is 844px wide and none of the narrow-screen rules below
+   * apply — so a single tap on the league-ID box would leave every table half
+   * off the screen on the one orientation that was meant to show more of it. */
+  input, select, textarea,
+  .conn-input, .conn-team select { font-size: 16px; }
 }
 
 /* ------------------------------------------------------------ narrow screens */
@@ -558,7 +589,7 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
     --pad-panel: 13px;
   }
 
-  body { font-size: 15px; padding-bottom: 48px; }
+  body { padding-bottom: 48px; }
 
   /* 20px of gutter each side is 10% of the screen. The tables want it back. */
   .wrap, .wrap.wide { padding: 0 14px; }
@@ -594,13 +625,11 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   }
 
   /* --- form controls ---
-   * 16px is not a taste decision: iOS zooms the whole page in when a field
-   * smaller than 16px takes focus, and then leaves it zoomed, which is how a
-   * single tap on the league-ID box leaves every table half off the screen. */
-  input, select, textarea,
-  .conn-input, .conn-team select { font-size: 16px; }
-
-  /* Every fixed-width control is a desktop measurement. In a wrapping .row a
+   * (The 16px that stops iOS zooming on focus is in the `hover: none` block
+   * above, not here: it has to hold in landscape too, where a phone is wider
+   * than this query.)
+   *
+   * Every fixed-width control is a desktop measurement. In a wrapping .row a
    * full-width field is one clean line per control instead of two ragged ones.
    * (Page-local widths — .select-md, .select-wide — are overridden in their own
    * pages: a page's <style> comes after this file and wins the tie.) */
@@ -630,11 +659,21 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   .segmented button {
     background: var(--panel);
     padding: 8px 6px;
+    /* A grid item's `min-width` is `auto`, so a button whose longest word is
+     * wider than its track overflows it — and the track is `overflow: hidden`,
+     * which clips the word dead with no ellipsis rather than wrapping it.
+     * Nothing clips today; this is what keeps the next label added from
+     * silently losing its tail. */
+    min-width: 0;
   }
   /* The track's own border drew these; the grid gap draws them now, and the
    * leftovers would double up on the first button of every row. */
   .segmented button + button { border-left: none; }
-  .segmented button.on { background: var(--accent); }
+  /* On desktop a segmented button is transparent, so `opacity: 0.45` only dims
+   * its ink against the panel. Here it is an opaque --panel over a --line
+   * track, and at 45% it composites LIGHTER than its neighbours — a disabled
+   * button would read as the selected one. */
+  .segmented button:disabled { opacity: 1; color: var(--line-2); }
 
   /* --- tables ---
    * Denser type and tighter cells, because the width saved here is a column
@@ -649,9 +688,20 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
    * is the only one that must not be allowed to eat the screen. ~44vw is about
    * 27 characters at this size — longer than any name in the league — so this
    * is a ceiling that normally does not bite rather than a truncation.
-   * (`overflow: hidden` clips children, not the cell's own drop shadow, so the
-   * "there is more to the right" cue survives.) */
-  td.name, th.name { max-width: 44vw; }
+   *
+   * ALL THREE DECLARATIONS OR NONE. A `max-width` alone caps the box and does
+   * nothing to the text: the table is `white-space: nowrap`, so a long name
+   * overflows to the right — and because this column is sticky with an opaque
+   * background, the overflowing glyphs paint on top of the number columns
+   * scrolling underneath. `overflow: hidden` clips CHILDREN, never the cell's
+   * own drop shadow, so the "there is more to the right" cue survives.
+   * (`#takenTable td.owner` in waivers.html is the same three together, for the
+   * same reason.) */
+  td.name, th.name {
+    max-width: 44vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* `dvh`, not `vh`: on iOS `vh` is measured against the viewport with the
    * address bar COLLAPSED, so 70vh is most of the screen while the bar is
@@ -661,10 +711,15 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   .table-scroll {
     max-height: 70vh;
     max-height: 62dvh;
-    /* A sideways flick inside a table must scroll the table, never trigger
-     * Safari's swipe-back. Only the X axis is contained: vertical overscroll
-     * still chains to the page, which is what lets a thumb carry on past the
-     * end of a table instead of getting stuck in it. */
+    /* Stops a sideways flick that runs off the end of a table from scrolling
+     * the PAGE sideways behind it, and on Android Chrome stops it becoming a
+     * pull-to-navigate. It does NOT stop iOS Safari's back gesture — that is a
+     * system edge swipe resolved before any scrolling begins, and no value of
+     * overscroll-behavior cancels it. Worth knowing, because the tables bleed
+     * to the panel edge and a phone's gutter is only 14px, so a flick that
+     * starts at x≈0 will navigate back whatever this file says.
+     * Only the X axis: vertical overscroll still has to chain to the page, or a
+     * thumb gets stuck inside a table it has already read to the end of. */
     overscroll-behavior-x: contain;
   }
 
@@ -674,7 +729,10 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   .empty { padding: 20px 10px; }
   .panel-note { font-size: 12.5px; }
   .kv { gap: 5px 12px; font-size: 13.5px; }
-  pre { font-size: 11.5px; max-height: 260px; }
+  /* debug.html prints raw ESPN JSON in here, whose lines are far wider than a
+   * phone: it is the only horizontal scroller on the site that is not a table,
+   * and it wants the same containment they get. */
+  pre { font-size: 11.5px; max-height: 260px; overscroll-behavior-x: contain; }
 
   /* --- connection bar ---
    * Its 220px minimum is wider than the room left beside a Sync button, so the
@@ -688,11 +746,71 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   .conn-btn { flex: 0 0 auto; }
 }
 
+/* ------------------------------------------------ the tappable-title sheet
+ *
+ * What js/touch-titles.js opens when a `title` is tapped. A `title` draws a
+ * native tooltip on a desktop and draws nothing at all on iOS, and this site
+ * puts real content in them — seventeen column definitions on the stats page
+ * alone — so on a touch screen they need somewhere to go.
+ *
+ * Pinned to the foot of the window rather than floated beside what was tapped:
+ * the thing tapped is often a sticky table header inside a sideways scroller,
+ * and there is no reliable room beside it. Deliberately its own class and NOT
+ * a share of analysis.html's `.tipcard.sheet` — that one carries a chart, a
+ * legend and a link and is positioned by its own code; this is two lines of
+ * text. One of them growing a feature must not silently move the other.
+ *
+ * Outside the phone media query on purpose: it is opened by a POINTER test, not
+ * a width one, so an iPad in landscape at 1100px must still be able to style it.
+ */
+.tipsheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;              /* over the sticky headers, which claim 2 and 3 */
+  max-height: 70vh;
+  max-height: 66dvh;
+  overflow-y: auto;
+  padding: 15px 16px 17px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line-2);
+  border-radius: var(--r-4) var(--r-4) 0 0;
+  box-shadow: 0 -14px 34px -10px rgba(0, 0, 0, 0.8);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+/* What was tapped, so the reader can see the sheet is about the "S+L" they
+ * pressed and not about anything else. */
+.tipsheet .ts-label {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 3px;
+}
+.tipsheet .ts-text { color: var(--text); }
+.tipsheet .ts-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+}
+.tipsheet .ts-close { min-height: 44px; padding: 8px 20px; }
+
 /* A phone turned sideways has about 320px of usable height, and 62% of that is
  * seven rows. The cap is RAISED rather than removed: the max-height is the only
  * reason the sticky header sticks at all (it is what gives the header something
  * to scroll inside), and on the screen with the least room to spare, a header
- * that stays put is worth more than the two extra rows losing it would buy. */
-@media (max-height: 560px) and (orientation: landscape) {
-  .table-scroll { max-height: 78dvh; }
+ * that stays put is worth more than the two extra rows losing it would buy.
+ *
+ * `max-width` is in here and it is not decoration: a 1600x540 DESKTOP window
+ * matches short-and-landscape perfectly well, and without the width clause
+ * those users would silently pick this rule up instead of the 70vh they are
+ * meant to have. 940px covers a landscape phone (844px) and stops short of any
+ * real desktop. The `vh` line is the fallback, for the same reason as above —
+ * without one, a browser that does not know `dvh` gets no cap at all here, and
+ * no cap means the sticky header stops sticking. */
+@media (max-width: 940px) and (max-height: 560px) and (orientation: landscape) {
+  .table-scroll { max-height: 78vh; max-height: 78dvh; }
 }

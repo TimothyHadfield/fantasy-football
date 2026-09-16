@@ -324,4 +324,11 @@ td.neg-edge { color: #b91c1c; font-weight: 600; }
 
   .grade-badge { width: 72px; height: 72px; font-size: 34px; border-radius: 14px; }
   .result-actions { flex-wrap: wrap; }
+
+  /* Mine / Taken, two of them in every one of a couple of hundred board rows.
+     This is why css/app.css's 44px touch target explicitly skips `.mark`: at
+     44px the rows go from ~24px to ~54px and the board visible inside its
+     scroller drops from about twenty rows to nine. A smaller bump instead —
+     enough to hit under time pressure, not enough to halve the board. */
+  td .mark { padding: 7px 11px; }
 }

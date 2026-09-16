@@ -223,8 +223,12 @@
   .tc-head { margin-bottom: 7px; }
   .tc-legend { margin-top: 7px; line-height: 1.5; }
 
-  /* Thirteen columns fit at this size, but a narrow window is a real thing. */
-  .tc-scroll { overflow-x: auto; max-width: 100%; }
+  /* Thirteen columns fit at this size, but a narrow window is a real thing.
+     In the sheet form this is the scroller that actually gets flicked — a
+     13-week run is wider than a phone — so it wants the same containment
+     `.table-scroll` has, or a flick past the end scrolls the page behind it
+     and takes the sheet with it. */
+  .tc-scroll { overflow-x: auto; max-width: 100%; overscroll-behavior-x: contain; }
 
   /* Tabular figures, and a floor on the column width, so every projection sits
      squarely under its own week however wide the word in it is. */
@@ -549,8 +553,10 @@
       his own team, counting the starters too, so <strong>RB4</strong> is his squad&rsquo;s fourth-best
       back whether or not the other three are in the lineup.
       <br>
-      Hovering any number gives that man&rsquo;s name and his whole season as a chart: the weeks along
-      the top, his projection for each one underneath. Every name is in full in the roster detail below.
+      <strong>Tap or hover any number</strong> for that man&rsquo;s name and his whole season as a chart:
+      the weeks along the top, his projection for each one underneath. On a phone it opens as a panel at
+      the foot of the screen, with a button through to his next 13 weeks.
+      Every name is in full in the roster detail below.
       <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
       <strong>Every number is a link</strong> to that man&rsquo;s next 13 weeks on the
       <a href="waivers.html">Players</a> page; click the row anywhere else to load that team below,
@@ -574,8 +580,9 @@
       A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is off that
       week, which is not the same as having no number at all.
       <span class="key out">Out</span> this week. <span class="key ir">IR</span>.
-      Hovering a number gives that man&rsquo;s whole season as a chart &mdash; weeks along the top,
-      his projection for each underneath &mdash; and <strong>every number is a link</strong> to his next
+      <strong>Tapping or hovering a number</strong> gives that man&rsquo;s whole season as a chart
+      &mdash; weeks along the top, his projection for each underneath &mdash; and
+      <strong>every number is a link</strong> to his next
       13 weeks on the <a href="waivers.html">Players</a> page. Both the same as in the grid above, and
       the bench ranks there mean the same thing here, measured on this week instead of the average.
     </p>
@@ -652,5 +659,8 @@
 
 <script type="module" src="js/analysis-page.js"></script>
 <script type="module" src="js/connection.js"></script>
+<!-- A title attribute draws nothing on iOS, and this site puts real content in
+     them. One tag, no page-module changes: see js/touch-titles.js. -->
+<script type="module" src="js/touch-titles.js"></script>
 </body>
 </html>
