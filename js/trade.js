@@ -50,6 +50,15 @@ export const SEASON_GAMES = 17;
 
 const round1 = (n) => Math.round(n * 10) / 10;
 
+/**
+ * A player id, whether you were handed the player or just his id.
+ *
+ * The finder passes whole roster entries around; `bestCombo` and
+ * `priceTradeAcrossWeeks` are called from a page that may only be holding ids.
+ * One coercion in one place beats two call sites that disagree about which.
+ */
+const idOf = (p) => (p && typeof p === 'object' ? p.playerId : p);
+
 // --------------------------------------------------------------- the measures
 
 /**
@@ -467,7 +476,7 @@ function packages(list, max = MAX_PACKAGE) {
  * which is the safe direction to be wrong in.
  */
 function afterTrade(scoredPlayers, outgoing, incoming) {
-  const gone = new Set(outgoing.map((p) => p.playerId));
+  const gone = new Set((outgoing || []).map(idOf));
   const kept = scoredPlayers.filter((p) => !gone.has(p.playerId)).concat(incoming);
 
   const over = kept.length - scoredPlayers.length;
@@ -651,21 +660,37 @@ function dropRedundant(offers) {
  * @param {function} [opts.measure]
  * @param {string[]} [opts.kinds] package shapes to search — see PACKAGE_KINDS
  * @param {number} [opts.limit]   how many offers to return
- * @returns {{offers: Array, mine: Object|null, considered: number}}
+ * @param {number[]} [opts.weeks] remaining weeks — switches to the WEEKLY measure
+ * @param {function} [opts.projFor] `(player, week) -> number|null`, with `weeks`
+ * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
 export function findTrades({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
+  weeks = null, projFor = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
-  if (!mine) return { offers: [], mine: null, considered: 0 };
+  if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
 
-  const myScored = scored(mine.players, measure);
+  // The weekly measure is opt-in and needs BOTH halves — a week list and a way
+  // to read a projection for it. Anything less falls back to the scalar
+  // measure, which is what every existing caller gets and must keep getting
+  // byte for byte.
+  const weekly = Array.isArray(weeks) && weeks.length > 0 && typeof projFor === 'function';
+
+  const myScored = weekly
+    ? scoreAcrossWeeks(mine.players, weeks, projFor).season
+    : scored(mine.players, measure);
 
   let offers = [];
   for (const theirs of teams) {
     if (theirs.id === mine.id) continue;
     offers = offers.concat(
-      tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
+      weekly
+        ? tradesAcrossWeeks(
+            myScored, scoreAcrossWeeks(theirs.players, weeks, projFor).season,
+            theirs, slots, kinds, weeks
+          )
+        : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
   }
 
@@ -678,5 +703,724 @@ export function findTrades({
       a.partner.id - b.partner.id
   );
 
-  return { offers: ranked.slice(0, limit), mine, considered };
+  return {
+    offers: ranked.slice(0, limit),
+    mine,
+    considered,
+    basis: weekly ? 'weeks' : 'measure',
+  };
+}
+
+// ===========================================================================
+// The weekly measure: a roster is worth what it can field EVERY week
+// ===========================================================================
+//
+// THE FLAW THIS FIXES, in the owner's words:
+//
+//   "I have 3 QBs that all avg low counts, however QB proj avg is much higher,
+//    because their proj has wide ranges (15-19) and with 3 players I often can
+//    always have a QB with a high (18-19) proj. This means getting a 19 proj QB
+//    doesn't really change my team, even though my starter only ever has a
+//    season proj of around 17."
+//
+// He is right, and `lineupValue` above is where it goes wrong. That function
+// prices a squad ONCE, on one scalar per man — the season projection over 17 —
+// and under a scalar only one quarterback can ever count. Three men averaging
+// 16 are worth 16 a week, and a fourth averaging 19 looks like a +3 upgrade.
+//
+// A real season does not work like that. Each of those three has his own weekly
+// number, they move independently, and the manager starts whichever of them is
+// at the top of his range THAT WEEK. Three men whose weekly projections swing
+// 15-19 will, between them, put an 18 or a 19 in the lineup most weeks — so the
+// squad is already getting the value the fourth man was supposed to add, and the
+// upgrade is worth almost nothing. That is exactly what he is describing.
+//
+// So: value a roster as the SUM, over every remaining week, of the best legal
+// lineup it could field THAT WEEK on THAT WEEK's own projections. Positional
+// depth then falls out with nothing to tune and no new constant — it is simply
+// what a max-over-the-week does that a max-over-the-average cannot.
+//
+// Three consequences worth stating before the code:
+//
+//   - The numbers are SEASON TOTALS, not weekly ones. A +40 here is +40 over
+//     the whole remaining season, roughly +4.4 a week over nine weeks. It is
+//     not on the same scale as anything `typicalWeek` produces, and a page
+//     showing both must say which one it is showing.
+//   - Byes stop being a special case and become the point. ESPN returns 0.00
+//     for a man on bye, which is a number and not a null, so `optimalLineup`
+//     ranks him last and the week re-picks around him — which is what the
+//     manager does. `typicalWeek` had to AVOID byes; this measure handles them
+//     by construction, and a squad with no cover in week 12 is correctly worth
+//     less than one that has some.
+//   - `optimalLineup` is still `js/forecast.js`'s, run once per week. Three
+//     features share that function so they cannot disagree about who a squad
+//     ought to be starting; this is the fourth, and it does not get a copy
+//     either.
+
+/**
+ * Score one roster ONCE for every remaining week.
+ *
+ * This is the weekly answer to the comment on `scored()` above, and for the
+ * same reason: the finder's inner loop runs tens of thousands of times, and
+ * doing nine lineup fills inside each is already nine times the work. Calling
+ * `projFor` and rebuilding player objects in there as well would be nine times
+ * the allocation on top, for numbers that never change.
+ *
+ * Each entry that comes back carries both views of the same man:
+ *
+ *   `projected`  his REST-OF-SEASON total — every week added up. That is what
+ *                the existing `candidates()` ranks by and what `afterTrade()`
+ *                cuts by, so both of them work here unchanged.
+ *   `weekly[i]`  a ready-made player object for `weeks[i]`, whose `projected`
+ *                is that week's number. `optimalLineup` reads these directly.
+ *   `perWeek`    the season total spread back over the weeks, for a page that
+ *                wants a number on the scale a manager thinks in.
+ *
+ * A week ESPN has no number for is `null`, which `optimalLineup` drops from the
+ * pool entirely — a different fact from a 0.00 bye, and that distinction is the
+ * one rule 2 in HANDOFF.md exists to protect.
+ */
+function scoreAcrossWeeks(players, weeks, projFor) {
+  const ws = (weeks || []).slice();
+  const read = typeof projFor === 'function' ? projFor : () => null;
+
+  const season = (players || []).map((p) => {
+    const weekly = new Array(ws.length);
+    let sum = 0;
+    let counted = 0;
+    for (let i = 0; i < ws.length; i++) {
+      const raw = read(p, ws[i]);
+      const v = Number.isFinite(raw) ? raw : null;
+      weekly[i] = { ...p, projected: v, week: ws[i] };
+      if (v !== null) { sum += v; counted++; }
+    }
+    return {
+      ...p,
+      projected: counted ? round1(sum) : null,
+      perWeek: counted && ws.length ? round1(sum / ws.length) : null,
+      weeksCounted: counted,
+      weekly,
+    };
+  });
+
+  return { weeks: ws, season };
+}
+
+/** The roster as it looks in one week — the objects `optimalLineup` reads. */
+const atWeek = (roster, i) => roster.map((p) => p.weekly[i]);
+
+/**
+ * Totals only, for the inner loop. The lineups are thrown away, because nothing
+ * in the search reads them and ten thousand discarded lineups is ten thousand
+ * arrays of nine copied players.
+ */
+function totalAcrossWeeks(roster, slots, weekCount) {
+  const weekTotals = new Array(weekCount);
+  let total = 0;
+  for (let i = 0; i < weekCount; i++) {
+    const t = optimalLineup(atWeek(roster, i), slots).total;
+    weekTotals[i] = t;
+    total += t;
+  }
+  return { total: round1(total), weekTotals };
+}
+
+/** The same thing with the lineups kept — for the handful of results reported. */
+function fillAcrossWeeks(roster, slots, ws) {
+  const byWeek = [];
+  let total = 0;
+  for (let i = 0; i < ws.length; i++) {
+    const lineup = optimalLineup(atWeek(roster, i), slots);
+    total += lineup.total;
+    byWeek.push({ week: ws[i], total: lineup.total, starters: lineup.starters });
+  }
+  return { total: round1(total), byWeek };
+}
+
+/**
+ * What a roster is worth across the rest of the season.
+ *
+ * The sum, over every remaining week, of the best legal lineup that roster
+ * could field in that week on that week's own projections.
+ *
+ * @param {Array}  players roster entries as `fetchWeekRosters` returns them
+ * @param {number[]} slots lineupSlotIds the league starts
+ * @param {number[]} weeks the remaining weeks, ascending
+ * @param {(player:Object, week:number) => number|null} projFor
+ * @returns {{total:number, byWeek: Array<{week:number, total:number, starters:Array}>}}
+ */
+export function seasonLineupValue(players, slots, weeks, projFor) {
+  const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor);
+  return fillAcrossWeeks(season, slots, ws);
+}
+
+// --------------------------------------------------------- pricing one trade
+
+/**
+ * ONE forced cut for the whole season, not a fresh one every week.
+ *
+ * `afterTrade` already models the cut a lopsided package forces: take two, send
+ * one, and you are a man over the limit, so your worst man goes. Across weeks
+ * there is a choice about WHEN that decision is made, and it matters:
+ *
+ *   - Cut per week, and the model quietly keeps the best sixteen available in
+ *     every single week — a manager who drops his fifth receiver in week 9 and
+ *     has him back in week 10. That flatters every package that forces a cut,
+ *     which is the wrong direction to be wrong in.
+ *   - Cut once, on rest-of-season value, and the same man is gone for all of
+ *     them. That is what actually happens, and it is what this does.
+ *
+ * `afterTrade` needs no change to do it: the entries it ranks carry `projected`
+ * = the rest-of-season total, so "his worst man" already means worst over the
+ * weeks that are left rather than worst this Sunday.
+ */
+function rosterAcrossWeeksAfter(season, send, joining) {
+  return afterTrade(season, send || [], joining);
+}
+
+/**
+ * Price one trade across every remaining week.
+ *
+ * `send` may be players or bare ids; `receive` must be the partner's actual
+ * roster entries, because `projFor` is asked for THEIR projections and an id
+ * carries none.
+ *
+ * @param {Object} opts
+ * @param {Array}  opts.players  your roster
+ * @param {Array}  opts.send     what leaves (players or ids)
+ * @param {Array}  opts.receive  what arrives (the partner's roster entries)
+ * @param {number[]} opts.slots
+ * @param {number[]} opts.weeks
+ * @param {function} opts.projFor
+ * @returns {{before:Object, after:Object, delta:number,
+ *            byWeek:Array<{week:number, before:number, after:number, delta:number}>,
+ *            cut:Array, roster:Array}}
+ */
+export function priceTradeAcrossWeeks({
+  players, send = [], receive = [], slots, weeks, projFor,
+}) {
+  const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor);
+  const joining = scoreAcrossWeeks(receive, ws, projFor).season;
+
+  const before = fillAcrossWeeks(season, slots, ws);
+  const kept = rosterAcrossWeeksAfter(season, send, joining);
+  const after = fillAcrossWeeks(kept, slots, ws);
+
+  // Who the roster limit forced out, as distinct from who was traded away — a
+  // page that does not name him is hiding the cost of the deal.
+  const survived = new Set(kept);
+  const gone = new Set((send || []).map(idOf));
+  const cut = season.concat(joining)
+    .filter((p) => !survived.has(p) && !gone.has(p.playerId));
+
+  return {
+    before,
+    after,
+    delta: round1(after.total - before.total),
+    byWeek: ws.map((week, i) => ({
+      week,
+      before: before.byWeek[i].total,
+      after: after.byWeek[i].total,
+      delta: round1(after.byWeek[i].total - before.byWeek[i].total),
+    })),
+    cut,
+    roster: kept,
+  };
+}
+
+// --------------------------------------- explaining a weekly trade in words
+//
+// The scalar finder explains an offer with `positionDeltas` and `lineupChurn`,
+// both of which compare ONE lineup against ONE lineup. Across nine weeks there
+// are nine lineups a side, and a man can start in six of them before and eight
+// of them after. So the weekly versions work on what each man and each position
+// actually CONTRIBUTED over the whole span, and each entry carries the CHANGE
+// in that contribution rather than a projection.
+//
+// That keeps the property the scalar version has and the tests lean on: what
+// walks in minus what walks out IS the gain. A list that does not add up to the
+// number beside it is decoration.
+
+/** Season points each man and each position put into the lineups. */
+function contributions(fill) {
+  const byPlayer = new Map();
+  const byPosition = new Map();
+  for (const wk of fill.byWeek) {
+    for (const s of wk.starters) {
+      const held = byPlayer.get(s.playerId);
+      if (held) {
+        held.points += s.projected;
+        held.weeks += 1;
+      } else {
+        byPlayer.set(s.playerId, {
+          playerId: s.playerId,
+          name: s.name,
+          position: s.position,
+          points: s.projected,
+          weeks: 1,
+        });
+      }
+      byPosition.set(s.position, (byPosition.get(s.position) || 0) + s.projected);
+    }
+  }
+  return { byPlayer, byPosition };
+}
+
+/** Where the season's points moved, position by position. */
+function weeklyPositionDeltas(was, now) {
+  const out = [];
+  for (const position of new Set([...was.byPosition.keys(), ...now.byPosition.keys()])) {
+    const delta = round1(
+      (now.byPosition.get(position) || 0) - (was.byPosition.get(position) || 0)
+    );
+    if (delta !== 0) out.push({ position, delta });
+  }
+  return out.sort((a, b) => b.delta - a.delta);
+}
+
+/**
+ * Who gains lineup time and who loses it.
+ *
+ * `value` is the CHANGE in a man's season contribution, not his projection, so
+ * a starter who merely picks up two extra weeks appears with what those two
+ * weeks are worth rather than with his whole season. `weeks` beside it is how
+ * many weeks he starts afterwards (in) or beforehand (out), which is what makes
+ * the number readable, and `wasStarting`/`nowStarting` separate "he is new to
+ * the lineup" from "he is in it more often".
+ */
+function weeklyChurn(was, now) {
+  const ids = new Set([...was.byPlayer.keys(), ...now.byPlayer.keys()]);
+  const gained = [];
+  const lost = [];
+  for (const id of ids) {
+    const a = was.byPlayer.get(id);
+    const b = now.byPlayer.get(id);
+    const delta = round1((b ? b.points : 0) - (a ? a.points : 0));
+    if (delta === 0) continue;
+    const who = b || a;
+    const entry = {
+      playerId: who.playerId,
+      name: who.name,
+      position: who.position,
+      value: Math.abs(delta),
+      weeks: delta > 0 ? (b ? b.weeks : 0) : (a ? a.weeks : 0),
+      wasStarting: !!a,
+      nowStarting: !!b,
+    };
+    (delta > 0 ? gained : lost).push(entry);
+  }
+  const bySize = (x, y) => y.value - x.value;
+  return { in: gained.sort(bySize), out: lost.sort(bySize) };
+}
+
+// --------------------------------------------- the finder, on weekly numbers
+
+/**
+ * Every trade with this partner that makes BOTH squads better over the rest of
+ * the season — the weekly twin of `tradesWith`.
+ *
+ * Shape for shape it is the same search and the same offer object, so a page
+ * can render either. Three things differ, all of them forced by the measure:
+ *
+ *   - Nine lineup fills replace one, hence `totalAcrossWeeks` in the loop and
+ *     the full `fillAcrossWeeks` only for the offers that survive it.
+ *   - The gain floor scales with the span. `MIN_GAIN` is 0.1 because a tenth of
+ *     a point a week is float noise; across nine weeks the same noise adds up to
+ *     nearly a point, so the floor has to add up with it.
+ *   - `myBefore`/`myAfter`/`myGain` are SEASON totals. `basis: 'weeks'` says so
+ *     on every offer, because a page that mixed the two scales would be wrong by
+ *     a factor of nine and look perfectly plausible doing it.
+ *
+ * THE FREE-GIFT CEILING is what keeps this affordable. A package cannot
+ * possibly be worth more to you than being handed those players for nothing —
+ * nobody sent back, nobody cut — because the roster a trade actually leaves you
+ * is a SUBSET of your roster plus theirs, and a best lineup over a subset can
+ * never beat the best lineup over the whole. So the ceiling is computed ONCE per
+ * incoming package, and every package whose ceiling is below the floor is thrown
+ * out before a single send is tried. Same for the partner, per outgoing package.
+ * That is 342 extra fills a partner to skip tens of thousands, and it cannot
+ * change the answer — it only ever rules out packages that could not have made
+ * the floor anyway.
+ */
+function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks) {
+  const n = weeks.length;
+  const floor = MIN_GAIN * Math.max(1, n);
+
+  const myBase = totalAcrossWeeks(myScored, slots, n);
+  const theirBase = totalAcrossWeeks(theirScored, slots, n);
+
+  // Hoisted for the same reason `scored()` is: these two never change, and
+  // re-filling eighteen lineups inside the loop would be most of the cost.
+  const myBaseFill = fillAcrossWeeks(myScored, slots, weeks);
+  const theirBaseFill = fillAcrossWeeks(theirScored, slots, weeks);
+  const mineWas = contributions(myBaseFill);
+  const theirsWas = contributions(theirBaseFill);
+
+  const myPackages = packages(candidates(myScored));
+  const theirPackages = packages(candidates(theirScored));
+
+  // What each of my packages is worth to HIM at the very most.
+  const ceilingForThem = myPackages.map((send) =>
+    round1(totalAcrossWeeks(theirScored.concat(send), slots, n).total - theirBase.total)
+  );
+
+  const found = [];
+  // Receive is the outer loop now, so a package that cannot help me at all
+  // skips every send rather than being re-rejected once per send.
+  for (const receive of theirPackages) {
+    // The gifted roster — mine plus theirs, nothing sent, nobody cut. Its
+    // lineups are the ceiling AND, below, the shortcut.
+    const giftedPool = myScored.concat(receive);
+    const gifted = fillAcrossWeeks(giftedPool, slots, weeks);
+    if (round1(gifted.total - myBase.total) < floor) continue;
+    const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
+
+    for (let k = 0; k < myPackages.length; k++) {
+      const send = myPackages[k];
+      if (ceilingForThem[k] < floor) continue;
+      if (send.length === 2 && receive.length === 2) continue;
+
+      const kind = packageKind(send, receive);
+      if (!kinds.includes(kind)) continue;
+
+      // Mine first, and bail before touching theirs — the same reason as the
+      // scalar search, and nine times as good a reason.
+      const myRoster = afterTrade(myScored, send, receive);
+
+      // Which men the gifted roster has that the real one does not: the ones
+      // sent away, plus anyone the roster limit forced out.
+      const kept = new Set(myRoster.map((p) => p.playerId));
+      const missing = [];
+      for (const p of giftedPool) if (!kept.has(p.playerId)) missing.push(p.playerId);
+
+      // A week where none of those men was going to START is a week the trade
+      // does not touch: taking a bench player off a roster cannot change the
+      // best lineup that roster could field, because the lineup it already
+      // fields is still available. So that week's fill is skipped outright and
+      // the gifted total stands. Exact, not an approximation — and it is most
+      // of the loop, because most packages move men who were not starting.
+      let total = 0;
+      const weekTotals = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const t = missing.some((id) => giftedStarters[i].has(id))
+          ? optimalLineup(atWeek(myRoster, i), slots).total
+          : gifted.byWeek[i].total;
+        weekTotals[i] = t;
+        total += t;
+      }
+      const myAfter = { total: round1(total), weekTotals };
+      const myGain = round1(myAfter.total - myBase.total);
+      if (myGain < floor) continue;
+
+      const theirRoster = afterTrade(theirScored, receive, send);
+      const theirAfter = totalAcrossWeeks(theirRoster, slots, n);
+      const theirGain = round1(theirAfter.total - theirBase.total);
+      if (theirGain < floor) continue;
+
+      // Only now is it worth keeping the lineups, for the two lists the row
+      // actually prints.
+      const mineNow = contributions(fillAcrossWeeks(myRoster, slots, weeks));
+      const theirsNow = contributions(fillAcrossWeeks(theirRoster, slots, weeks));
+
+      found.push({
+        partner: theirs,
+        send,
+        receive,
+        kind,
+        shape: `${send.length}-for-${receive.length}`,
+        basis: 'weeks',
+        weeks: weeks.slice(),
+        myGain,
+        theirGain,
+        myBefore: myBase.total,
+        myAfter: myAfter.total,
+        theirBefore: theirBase.total,
+        theirAfter: theirAfter.total,
+        // Per week, so a deal that is +5 on average and −12 in the weeks that
+        // decide the season is visible rather than averaged away.
+        byWeek: weeks.map((week, i) => ({
+          week,
+          before: myBase.weekTotals[i],
+          after: myAfter.weekTotals[i],
+          delta: round1(myAfter.weekTotals[i] - myBase.weekTotals[i]),
+        })),
+        yourMoves: weeklyPositionDeltas(mineWas, mineNow),
+        theirMoves: weeklyPositionDeltas(theirsWas, theirsNow),
+        yourChurn: weeklyChurn(mineWas, mineNow),
+        theirChurn: weeklyChurn(theirsWas, theirsNow),
+      });
+    }
+  }
+  return found;
+}
+
+// ===========================================================================
+// bestCombo — the best set of offers that can all be made at once
+// ===========================================================================
+//
+// THE TRAP THIS EXISTS TO AVOID, and it produces confident wrong numbers in
+// silence: a combo's gain is NOT the sum of its trades' gains.
+//
+// Every offer's `myGain` was measured against your CURRENT roster. Make two of
+// them and the second one's gain was measured against a roster that no longer
+// exists. Both of them re-fill the same lineup, so their benefits OVERLAP: two
+// trades that each upgrade your quarterback do not both upgrade it — they
+// compete for the same slot, and the better one wins. Add the two gains up and
+// you have promised the manager twice what he is going to get.
+//
+// So there is exactly one way to price a combo, and it is the one below: apply
+// every send and every receive TOGETHER, and price the resulting roster ONCE
+// with `priceTradeAcrossWeeks`. The naive sum is still computed — as
+// `naiveDelta`, so a page can SHOW the gap rather than the engine hiding it.
+//
+// ---------------------------------------------------------------------------
+// What makes two offers compatible
+//
+// A player can only be traded once. That is the owner's constraint, and it is a
+// disjointness condition over the UNION of `send` and `receive` ids: you cannot
+// send the same man to two managers, you cannot receive him from two, and you
+// cannot send a man you have just traded away.
+//
+// TWO OFFERS WITH THE SAME PARTNER are treated as compatible when their player
+// sets are disjoint, and that is a DECISION rather than an obvious truth. In
+// practice one manager proposes one deal, and two separate trades with the same
+// man on the same day is not how a league tends to work — but they are not
+// illegal, and two disjoint deals with him are genuinely one bigger deal he
+// might take. So the engine allows them, flags any packing that repeats a
+// partner as `repeatPartners`, and takes `onePerPartner: true` for a page that
+// would rather not offer something socially odd. Worth confirming with the
+// owner; it is the one place here where the rule is a judgement call.
+//
+// ---------------------------------------------------------------------------
+// Roster size
+//
+// A combo moves several players at once, so the forced cut has to be applied to
+// the COMBINED result and not offer by offer. Two 1-for-2s leave you two men
+// over the limit and cost you two players; pricing them separately would charge
+// you one cut twice over, which is a different and smaller number.
+// `priceTradeAcrossWeeks` takes the whole package, so it gets this right by
+// construction, and the `cut` list it returns names who went.
+//
+// ---------------------------------------------------------------------------
+// And the partner has to still want it
+//
+// Each offer was a win-win on its own. Two of them with the SAME manager can
+// still leave him worse off together, for exactly the reason above running the
+// other way. When `teams` is supplied every partner's combined result is priced
+// too, and a packing any partner would refuse is dropped. Without `teams` that
+// check cannot be made and the packing is reported unchecked.
+
+/**
+ * How many offers the exhaustive search will consider.
+ *
+ * Every subset of the offers is a candidate packing, so the work is 2^n before
+ * disjointness prunes it. Twelve is comfortably exhaustive and is already more
+ * trades than any league makes in a week — and because the pool is sorted by
+ * gain first, the offers dropped are the ones nobody would have proposed.
+ */
+const COMBO_OFFER_CAP = 12;
+
+/**
+ * A hard stop on packings priced, so a pathological offer set cannot hang the
+ * page. Reached only when the offers barely overlap, which a real league's do
+ * not. When it trips, `exhaustive: false` comes back and the answer is at worst
+ * the greedy packing below.
+ */
+const COMBO_PACKING_CAP = 4000;
+
+/** Take offers best-first, skipping any that clashes — the documented fallback. */
+function greedyPacking(pool) {
+  const used = new Set();
+  const chosen = [];
+  for (const o of pool) {
+    if ([...o.ids].some((id) => used.has(id))) continue;
+    chosen.push(o);
+    for (const id of o.ids) used.add(id);
+  }
+  return chosen;
+}
+
+/**
+ * The best set of offers that can all be made at once.
+ *
+ * Returns BOTH answers, because the owner asked for "the most trades possible"
+ * and the section is called "best combo", and those two disagree: three trades
+ * worth +2 between them is a worse season than two worth +15. Rather than pick
+ * one and be quietly wrong for him, both packings come back — `best` maximises
+ * the gain and is the headline, `most` maximises the NUMBER of disjoint trades
+ * and is tie-broken by gain — with `mostIsBest` saying whether they are the same
+ * packing, so the page never has to compare them itself.
+ *
+ * @param {Array} offers offers as `findTrades` returns them
+ * @param {Object} opts
+ * @param {Array}    opts.players  your roster
+ * @param {number[]} opts.slots
+ * @param {number[]} opts.weeks    the remaining weeks
+ * @param {function} opts.projFor  `(player, week) -> number|null`
+ * @param {Array}   [opts.teams]   every squad — makes the partner side checked too
+ * @param {boolean} [opts.requirePartnersGain] drop a packing a partner would refuse
+ * @param {boolean} [opts.onePerPartner] never combine two deals with one manager
+ * @param {number}  [opts.maxOffers]
+ * @param {number}  [opts.maxPackings]
+ * @returns {{combo:Array, count:number, delta:number, pricing:Object,
+ *            naiveDelta:number, best:Object, most:Object, mostIsBest:boolean,
+ *            considered:number, exhaustive:boolean, offers:Array}}
+ */
+export function bestCombo(offers, {
+  players, slots, weeks, projFor,
+  teams = null,
+  requirePartnersGain = true,
+  onePerPartner = false,
+  maxOffers = COMBO_OFFER_CAP,
+  maxPackings = COMBO_PACKING_CAP,
+} = {}) {
+  const ws = Array.isArray(weeks) ? weeks.slice() : [];
+
+  // Every offer, reduced to the only two things a packing cares about: which
+  // players it moves, and how good it looked on its own.
+  const pool = (offers || [])
+    .filter((o) => o && Array.isArray(o.send) && Array.isArray(o.receive))
+    .map((offer) => ({
+      offer,
+      ids: new Set([...offer.send, ...offer.receive].map(idOf).filter((id) => id != null)),
+      gain: Number.isFinite(offer.myGain) ? offer.myGain : 0,
+    }))
+    .sort((a, b) => b.gain - a.gain)
+    .slice(0, Math.max(0, maxOffers));
+
+  const byId = new Map();
+  for (const t of teams || []) byId.set(t.id, t);
+
+  /** Price one packing properly: everything applied together, once. */
+  const price = (chosen) => {
+    const send = chosen.flatMap((c) => c.offer.send);
+    const receive = chosen.flatMap((c) => c.offer.receive);
+    const pricing = priceTradeAcrossWeeks({
+      players, send, receive, slots, weeks: ws, projFor,
+    });
+
+    const partners = [];
+    if (byId.size) {
+      const byPartner = new Map();
+      for (const c of chosen) {
+        const id = c.offer.partner && c.offer.partner.id;
+        if (!byPartner.has(id)) byPartner.set(id, { out: [], in: [] });
+        const side = byPartner.get(id);
+        side.out.push(...c.offer.receive); // what he sends me
+        side.in.push(...c.offer.send);     // what I send him
+      }
+      for (const [id, side] of byPartner) {
+        const team = byId.get(id);
+        if (!team) continue;
+        const p = priceTradeAcrossWeeks({
+          players: team.players, send: side.out, receive: side.in,
+          slots, weeks: ws, projFor,
+        });
+        partners.push({
+          partner: team, delta: p.delta,
+          before: p.before.total, after: p.after.total,
+        });
+      }
+    }
+
+    return { pricing, partners };
+  };
+
+  let considered = 0;
+  let exhaustive = true;
+  let best = null;
+  let most = null;
+
+  const consider = (chosen) => {
+    considered++;
+    const { pricing, partners } = price(chosen);
+    if (requirePartnersGain && partners.some((p) => p.delta < 0)) return;
+
+    const entry = {
+      combo: chosen.map((c) => c.offer),
+      count: chosen.length,
+      delta: pricing.delta,
+      pricing,
+      partners,
+      // The trap, reported rather than buried: what you would have believed if
+      // you had added the offers' own gains up.
+      naiveDelta: round1(chosen.reduce((a, c) => a + c.gain, 0)),
+      repeatPartners:
+        new Set(chosen.map((c) => c.offer.partner && c.offer.partner.id)).size < chosen.length,
+    };
+
+    // Ties on gain go to the SMALLER packing. Two trades that buy exactly what
+    // one trade buys is one more manager to talk round for nothing, and the
+    // second deal is the one the page should not be recommending.
+    if (!best || entry.delta > best.delta ||
+        (entry.delta === best.delta && entry.count < best.count)) {
+      best = entry;
+    }
+    if (!most || entry.count > most.count ||
+        (entry.count === most.count && entry.delta > most.delta)) {
+      most = entry;
+    }
+  };
+
+  // Depth-first over disjoint subsets, best-first. EVERY subset is a candidate
+  // — a bigger packing is not always a better one, because two upgrades can
+  // compete for the same lineup slot — so nothing here prunes on value, only on
+  // compatibility. The empty packing is priced too: "make none of them" is a
+  // real answer when every offer turns out to be worth less on the weekly
+  // numbers than it looked on the season average.
+  const chosen = [];
+  const used = new Set();
+  const partnersUsed = new Set();
+
+  const walk = (from) => {
+    if (considered >= maxPackings) { exhaustive = false; return; }
+    consider(chosen);
+    for (let i = from; i < pool.length; i++) {
+      if (considered >= maxPackings) { exhaustive = false; return; }
+      const c = pool[i];
+      if ([...c.ids].some((id) => used.has(id))) continue;
+      const partnerId = c.offer.partner && c.offer.partner.id;
+      if (onePerPartner && partnersUsed.has(partnerId)) continue;
+
+      chosen.push(c);
+      for (const id of c.ids) used.add(id);
+      const hadPartner = partnersUsed.has(partnerId);
+      partnersUsed.add(partnerId);
+
+      walk(i + 1);
+
+      chosen.pop();
+      for (const id of c.ids) used.delete(id);
+      if (!hadPartner) partnersUsed.delete(partnerId);
+    }
+  };
+  walk(0);
+
+  // The cap tripped, so the search was not exhaustive. Make sure the greedy
+  // packing has at least been priced, so the answer is never worse than the
+  // obvious one a manager would have reached by hand.
+  if (!exhaustive) {
+    const greedy = greedyPacking(pool);
+    if (greedy.length) consider(greedy);
+  }
+
+  const same = !!best && !!most &&
+    best.count === most.count &&
+    best.combo.every((o, i) => o === most.combo[i]);
+
+  return {
+    // The headline IS the best-gain packing, so a caller that reads
+    // `combo`/`count`/`delta` and nothing else still gets the right answer.
+    combo: best ? best.combo : [],
+    count: best ? best.count : 0,
+    delta: best ? best.delta : 0,
+    pricing: best ? best.pricing : null,
+    naiveDelta: best ? best.naiveDelta : 0,
+    best,
+    most,
+    mostIsBest: same,
+    considered,
+    exhaustive,
+    offers: pool.map((c) => c.offer),
+  };
 }
