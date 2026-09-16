@@ -20,7 +20,7 @@ describe how the site works **today**:
 | Looking for | Section |
 |---|---|
 | The two all-teams grids, DEF/K, the real Total, the bench columns | "The two all-teams grids" |
-| The hover card — the week run as a chart, and why it is not a `title` | "The analysis grids' hover is a two-row chart" |
+| The player card — the week run as a chart, the Act row, and why it never scrolls | "The player card is `js/player-card.js`, and there is one of it" |
 | `12.3 RB4` on a bench cell | "Bench cells carry a positional rank" |
 | Swapping a lineup in the roster detail | "The roster detail is a lineup you can move" |
 | The wire's two greens | "`STARTABLE`…" and "The second green on the wire" |
@@ -35,6 +35,14 @@ describe how the site works **today**:
 | Which weeks a bench man actually starts | "Who to start, week by week" |
 | The depth map, and what "replacement" means | "The Trade page" |
 | Why a trade can make BOTH squads better | "The Trade page" |
+| Why a trade is priced week by week and not on an average | "Per-week trade valuation" |
+| The weekly measure's button, the per-offer pop-up, best combo | "The Trade page as it stands" |
+| Opening ESPN's trade screen with BOTH sides ticked | "Ticking your own side of a trade" |
+| Title %, the bracket, and where a team actually finishes | "The playoffs, and the hybrid final placing" |
+| Why squads are labelled with people | "Real names, and the two traps in getting them" |
+| Reading the real league on a phone | "The cloud sync" |
+| The chart for the group chat | "The weekly summary page" |
+| Why a fixture that matches the bug cannot see the bug | "The week-13 cap that outlived the rule" |
 | What to do next | "Next", at the foot |
 
 ## What changed on 2026-09-09 and 2026-09-10
@@ -131,6 +139,20 @@ percentages on every upcoming game. Read this before touching any of it:
   is thirteen weeks. The lesson worth keeping: *the furthest thing anyone tried*
   is not the same fact as *the limit*, and writing it down as "verified" made it
   cost a week before anyone re-asked.
+
+  **The code kept enforcing it for four commits after the rule was corrected**,
+  which is the part worth remembering. Correcting a rule in a document does not
+  correct the constant somebody wrote on its authority: `js/trade-page.js` and
+  `js/season.js` both carried `PROJECTED_THROUGH = 13`, and one of them was
+  behaviour rather than a comment. Both were fixed the same day the doc pass
+  found them — see "The week-13 cap that outlived the rule" below — and both now
+  take their bound from the schedule, which is the honest one: ESPN's matchup
+  feed ends with the regular season, so its week list IS the list of weeks there
+  are.
+
+  **Nothing in this file repeats the old claim** — checked line by line on
+  2026-09-16; the other mentions of week 13 here are about the demo season, or
+  are examples in the time machine's prose.
 - **Match Tim's manual method, because he checks it by hand.** He opens a team,
   picks a week, and reads the "proj" total under the starting lineup; he
   compares two teams by doing that for both sides of a matchup. The site shows
@@ -314,22 +336,57 @@ week 4 and week 13**, so a quarter of its links arrived here about a man the
 table had never heard of and were told he "may have been dropped". A confident,
 wrong answer. The owner is still the earliest week he actually appears in.
 
-**The analysis grids' hover is a two-row chart (the tip card).** Week numbers
-along the top, that man's projection for each one directly underneath, with the
-identity line above it.
+**The player card is `js/player-card.js`, and there is one of it.** Week
+numbers along the top, that man's projection for each one directly underneath,
+what he ACTUALLY scored under that, and the identity line above the lot.
+
+*(This section used to be headed "the analysis grids' hover is a two-row
+chart". Both halves of that are now wrong: the card is three rows, and it is
+not the analysis grids' — the Trade page draws the same one. The corrections
+are below, and they are separate pieces of work.)*
 
 It was lines of text in a native `title` first — the right first answer, and
 Tim read it and said it was hard to scan. He is right, and **the fix could not
 be a better string**: a native tooltip renders in the OS UI font, where a space
 is narrower than a digit and "Bye" is nothing like either, so no amount of
-padding lines thirteen columns up. Two `<tr>`s in one table do it exactly.
+padding lines thirteen columns up. Rows of one table do it exactly.
+
+**It moved out of `js/analysis-page.js` into `js/player-card.js`** when the
+Trade page wanted the same card. That is not tidying: a second way of drawing a
+player is how two drift apart, and the Trade page names players in four panels.
+The module's own header comment is the API — `weekRun`, `registerRun`,
+`tipAttr`, `wireTips`, `hideTip`, `clickIsPlayer` — and a page that wants the
+card also needs the `.tipcard` / `.tc-*` CSS block. `coarsePointer()` is
+imported here from `js/connection.js`; `analysis-page.js` no longer imports it,
+because neither of the two things that turned on it lives there any more.
+
+**There is an Act row, and it reads the DATA, never the calendar.** Actual
+points sit under the projection, filled for weeks already played and blank for
+weeks still to come. Deciding that from the week number would have looked
+perfectly correct in demo and been wrong everywhere else — `js/demo-rosters.js`
+hardcodes every game as played — so the rule is "is there an actual recorded",
+and `touch-check.mjs`'s fourth scenario blanks the actuals while leaving the
+schedule claiming all thirteen weeks were played, which is the only fixture
+that can tell the two rules apart. **A played zero is `0.0`** and is never
+drawn as one of the four no-number states.
+
+**IT NO LONGER SCROLLS, AT ANY LENGTH.** `overflow-x` is gone and the run
+**wraps onto balanced lines** instead — thirteen weeks at 390px become 7 + 6,
+each line carrying its own Week / Proj / Act labels. Shrinking the columns was
+the alternative and was rejected on arithmetic: 390px leaves about 300px inside
+the padding, so thirteen columns is 23px each and "18.2" does not fit at any
+readable size. **Wrapping gets no worse as the season grows; shrinking gets
+worse every week.** A scrollbar reintroduced anywhere inside this card is a
+regression, and `touch-check.mjs` is what catches it.
 
 What a card of our own costs, and how each part is paid — do not undo any of
 these without replacing them:
 
-- **Clipping.** Both grids live in `.table-scroll` (`overflow:auto`), so a card
-  inside one would be cut off at its edge. It is a child of `<body>`,
-  positioned `fixed`.
+- **Clipping.** The analysis grids live in `.table-scroll` (`overflow:auto`),
+  so a card inside one would be cut off at its edge. It is a child of `<body>`,
+  positioned `fixed`. That is also why the Trade page's pop-up deliberately
+  does not claim `aria-modal`: the card is outside the dialog, and claiming
+  modality would hide it from a screen reader.
 - **Flicker.** `pointer-events:none`, so the card can never be the thing the
   mouse is over and cannot chase itself around the screen.
 - **Two tooltips.** The cells carry **no `title` at all** — one beside the card
@@ -343,10 +400,14 @@ these without replacing them:
   start to. Thirteen weeks written into 170 cells in each of two grids would be
   tens of kilobytes of duplicated attribute.
 
-Still no request: it is `state.seasonWeeks` read a second way. The four
-no-number states are told apart by word AND by class — `Bye`, `—`, `off`, `·` —
-with a legend line only for the ones that actually occur, and demo never claims
-a bye.
+On the analysis page it is still no request: it is `state.seasonWeeks` read a
+second way. The four no-number states are told apart by word AND by class —
+`Bye`, `—`, `off`, `·` — with a legend line only for the ones that actually
+occur, and demo never claims a bye. **A `0.00` is a bye only when the numbers
+came from ESPN**; demo passes `demo: true` and a zero there is a man ruled out,
+which is a real zero. `projToken(v, demo)` is where that distinction lives, and
+the Trade page's `zeroIsBye()` is the second place the same fact is needed —
+the same rule read twice, not decided twice.
 
 **Bench cells carry a positional rank: `12.3 RB4`.** Tim's ask. Counted over the
 WHOLE squad, starters included, because that is what the number means to a
@@ -475,10 +536,14 @@ counted.
   projection) and nothing that does not — the *selected team is deliberately
   not in it*, so switching teams repaints without re-running. Do not let
   re-rendering hand back different odds for the same season.
-- **"Wins the season" means finishing first in the regular-season standings.**
-  No playoff bracket is modelled, and the panel says so. If Tim ever wants real
-  championship odds this needs his league's bracket rules (size, seeding, byes)
-  — he has not given them.
+- **"Wins the season" meant finishing first in the regular-season standings**
+  when this was written, because no bracket was modelled and Tim had not given
+  his league's rules. **CORRECTED 2026-09-16: he gave them, and the bracket is
+  simulated.** Topping the table is now `tableWinner` and the **title** is
+  winning the championship round — two different facts, both shown. A final
+  placing is the bracket for places 1..field and the regular-season table below
+  it. See "The playoffs, and the hybrid final placing"; everything else in this
+  bullet list still holds.
 - Banked-vs-remaining uses the forecast panel's `isRemaining(g, forecastAsOf())`
   rule, NOT `standingsRows()`'s season-to-date one. They agree on live data and
   differ in the demo; using the wrong one makes the two panels contradict.
@@ -573,7 +638,9 @@ number — and it was reachable by hover alone. On a phone it could not be
 reached at all, and a tap on a cell simply followed the link off the page. So
 the same card now opens as a SHEET on a coarse pointer, and the navigation the
 tap preempted comes back as a button inside it, which is strictly more than the
-hover offers. See the tip card section above; the mode is decided per event
+hover offers. See the player card section above — it is still the "tip card" in
+the markup (`.tipcard`, `data-tip`), which is why both names appear; the mode is
+decided per event
 rather than once at load.
 
 - **A real defect fell out of testing it**, and it is the kind that looks fine:
@@ -638,9 +705,12 @@ rather than once at load.
   everything else works the same. **A private league genuinely cannot be read
   from a phone** — third-party cookies again, see "Settled the hard way" below —
   and that is a browser constraint no layout fixes.
-- **`coarsePointer()` is exported from `js/connection.js` and imported by
-  `js/analysis-page.js`.** Two things turn on it and neither may grow its own
-  copy; two copies of one question is how two answers start.
+- **`coarsePointer()` is exported from `js/connection.js`** and neither of the
+  two things that turn on it may grow its own copy; two copies of one question
+  is how two answers start. *(It was imported by `js/analysis-page.js` when this
+  was written. The card moved to `js/player-card.js` and took the import with
+  it, and `analysis-page.js` carries a comment saying so rather than leaving the
+  reader to wonder where it went.)*
 - **A cap on a table cell is three declarations or none**, and this was caught
   in review rather than by looking at it: `td.name { max-width: 44vw }` alone
   caps the BOX and does nothing to the text, because the table is
@@ -655,18 +725,70 @@ rather than once at load.
   window matches perfectly well, silently taking the phone's cap. And `dvh`
   always wants a `vh` line before it: here the `max-height` IS what makes the
   sticky header stick, so no cap means no sticky header.
-- **`tests/touch-check.mjs`** is the suite, 92 assertions over three scenarios
-  (a coarse pointer, a mouse, and a man with no id). It asserts the sheet's link
-  is the SAME href the cell carried — a second way of naming a player is exactly
-  how the click-through's two halves drift apart — and that the identical click
-  under a mouse is left completely alone, so the desktop path `link-check.mjs`
-  follows is provably unchanged.
+- **`tests/touch-check.mjs`** is the suite, now 187 assertions over four
+  scenarios (a coarse pointer, a mouse, a man with no id, and half a season on a
+  390px screen). It asserts the sheet's link is the SAME href the cell carried —
+  a second way of naming a player is exactly how the click-through's two halves
+  drift apart — and that the identical click under a mouse is left completely
+  alone, so the desktop path `link-check.mjs` follows is provably unchanged. The
+  fourth scenario is the card's: the Act row, and that a thirteen-week run wraps
+  onto balanced lines rather than scrolling.
 
 **The one thing this does NOT fix, and it matters:** a snapshot is only captured
 when `schedule.html` loads on live data, live data needs the bridge, and the
 bridge cannot exist on the phone. If Tim has moved to reading the site on his
 phone, that is the likeliest reason the archive is still empty — and the archive
 is the only thing on this project with a deadline.
+
+**Checked again on 2026-09-16 and still accurate**, with two things landing on
+top of it. The cloud sync (below) now lets a phone read the real league, so the
+"a private league cannot be read from a phone" paragraphs above are about the
+DIRECT route and remain true of it — what changed is that the desktop can
+publish what it read, not that the phone can read ESPN. And a snapshot is still
+only *taken* on the desktop: syncing makes the archive readable on the phone
+and can never make a reading be captured there, so the deadline above is
+untouched. The connection bar's phone wording, the `.ctl-hint` rule, the
+`hover: none` / `max-width` split and the three-declaration cell cap all still
+hold as written.
+
+## The week-13 cap that outlived the rule (2026-09-16)
+
+Worth its own heading, because the shape of this mistake will recur.
+
+Rule 2 in `HANDOFF.md` said ESPN published per-week projections "through week
+13". It was never verified — 13 was simply the furthest week anybody had asked
+for — and it was recorded as a fact. Two files then wrote
+`const PROJECTED_THROUGH = 13` **citing that rule as their authority**.
+
+When the rule was disproved (real projections run through at least week 18), the
+rule was corrected and the constants were not. One of them, in
+`js/trade-page.js`, had been written in a commit that landed *after* the
+correction.
+
+**It was not harmless.** Tim's regular season is FOURTEEN matchups:
+
+- every trade he priced silently dropped week 14 — the last week of his regular
+  season, and the one most likely to decide whether he is in the playoffs;
+- `buildCloudPayload` refused to sync that week, so a phone reading the synced
+  copy had a hole in it exactly where the season is decided.
+
+**The suite could not have caught it, and that is the more useful half.**
+`tr-stub-season.mjs` played a 13-week season, so the cap and the schedule agreed
+and every assertion passed whether the page read the schedule or ignored it. The
+stub plays fourteen now, the way his league does; reinstating the cap under it
+fails ten assertions across the request count, the drill-down's rows and two
+independently re-priced gains. Three assertions had also hardcoded 13 in their
+own re-derivations and now read the season length off the fixture.
+
+Three lessons, in order of how much they cost:
+
+1. **A fixture that matches the bug cannot see the bug.** A thirteen-week
+   fixture for a fourteen-week league is not a smaller version of reality, it is
+   a version in which the defect is invisible.
+2. **Correcting a document does not correct the code written on its authority.**
+   Grep for the constant, not just the sentence.
+3. **A doc pass reads code nobody has re-read in a while**, which is how this
+   was found at all. That is an argument for doing them.
 
 ## The time machine (`js/snapshots.js`, `schedule.html`)
 
@@ -685,8 +807,15 @@ justification for a site that previously stored four preferences now storing
 history.
 
 **What is kept is small, and that is the design.** The obvious approach — every
-week's rosters — is about a megabyte per reading and would fill browser storage
-inside a month. It is also unnecessary: the forecast and the simulation consume
+week's rosters as ESPN sends them — is about a megabyte per reading and would
+fill browser storage inside a month. **That megabyte is ESPN's RAW payload, and
+this file used to quote it as though it were the size of the data itself.** It
+is not: the DECODED shapes the pages actually render from are **53 KB a week**,
+measured by `tests/test-cloud.mjs` against a realistic fixture, which is why
+`js/cloud.js` needs no sharding to put a week inside Firestore's 1 MiB document
+cap. The reasoning here is unchanged — it is still unnecessary to store rosters
+at all — but the figure is about the wire, not about the week. The forecast and
+the simulation consume
 the schedule with its results-so-far, one projected total per team per remaining
 week (~180 numbers), and the sigma. Everything else is derived. A reading is a
 few kilobytes and a season of them is a few hundred.
@@ -785,6 +914,13 @@ that costs him least; that is the committed file. If he ever wants zero clicks,
 Firestore slots in behind `snapshots.js`'s existing `list/get/save/remove` and
 is perhaps 120 lines.
 
+**That verdict is about THIS job only, and it has not been reversed.** Firebase
+was built afterwards for a different one — letting the phone read the league at
+all, see "The cloud sync" below — where there is no committed-file equivalent,
+because nobody is going to hand-commit thirteen weeks of rosters every Sunday.
+The archive is still a file in the repo. Do not read "Firebase is wired in now"
+as permission to move the archive into it.
+
 ## Who to start, week by week (`analysis.html`, foot of the page)
 
 Built 2026-09-09, sixth session, to Tim's spec: see who to start each week of
@@ -852,7 +988,9 @@ Built 2026-09-09, fifth session. Tim asked for research into how managers
 actually decide on trades, then picked **two** of the five ideas that came back:
 the depth map and the finder. The other three — showing a deal in expected
 wins, a week-by-week strip, an auto-written pitch — were deliberately NOT built.
-Do not add them uninvited.
+Do not add them uninvited. **(The week-by-week strip has since been asked for
+and built, as the per-offer pop-up — see "The Trade page as it stands". The
+other two are still unasked.)**
 
 **Everything on this page is additive.** It is a new page with a new pure
 module; no existing page, module or behaviour was changed to make room for it.
@@ -956,7 +1094,11 @@ is worth. The slot shape is read off the lineups via `slotCountsFromLineups`,
 never guessed. The default measure is the typical week (season projection ÷ 17),
 which is also what sidesteps byes: pricing a trade on a week one side happens to
 be off is nonsense. The selected week is offered as the second measure and says
-what it is.
+what it is. **There is now a third — "every remaining week" — and it is the one
+that answers Tim's complaint about depth. It is not the default, it costs a
+request per week, and it produces season totals rather than per-week points.
+Read "Per-week trade valuation" and "The Trade page as it stands" before
+touching any of this.**
 
 **A bug this work exposed in `waivers.html`** — worth recording because of HOW
 it was found. `rowIdentity()` put the `spotlight` class on every row carrying
@@ -969,13 +1111,541 @@ and its sample happened to pick such a man. The spotlight now follows
 
 **The live connection works.** The bridge extension is installed in Tim's Edge
 and reads his private league 476225250. This was the single biggest blocker on
-the project and it is cleared. Do NOT re-litigate the "make the league public"
-question below — it is moot; the extension solved it without changing any ESPN
-setting.
+the project and it is cleared — the extension solved it without changing any
+ESPN setting.
+
+*(This paragraph used to end "do NOT re-litigate the make-the-league-public
+question — it is moot". That was true while the desktop was the only place
+anyone read the site. It stopped being true the day Tim started reading it on
+his phone, where no extension can exist, and the phone section above records
+why. The question is open, it is his, and he has not been asked.)*
 
 > Standing instructions, current focus and what to build next have moved to
 > [HANDOFF.md](HANDOFF.md), so there is one copy of them rather than two that
 > can drift apart.
+
+## Per-week trade valuation (`js/trade.js`, 2026-09-16)
+
+**The flaw Tim found, in his own words**, and he is right:
+
+> "I have 3 QBs that all avg low counts, however QB proj avg is much higher,
+> because their proj has wide ranges (15-19) and with 3 players I often can
+> always have a QB with a high (18-19) proj. This means getting a 19 proj QB
+> doesn't really change my team, even though my starter only ever has a season
+> proj of around 17."
+
+`lineupValue` is where that goes wrong. It prices a squad ONCE, on one scalar
+per man — the season projection over 17 — and **under a scalar only one
+quarterback can ever count**. Three men averaging 16 are worth 16 a week, and a
+fourth averaging 19 reads as a +3 upgrade. A real season does not work that way:
+each of the three has his own weekly number, they move independently, and the
+manager starts whichever of them is at the top of his range THAT WEEK. Between
+them they put an 18 or a 19 in the lineup most weeks, so the squad already has
+what the fourth man was supposed to add.
+
+So a roster is now valued as the **sum, over every remaining week, of the best
+legal lineup it could field in that week on that week's own projections**.
+Three things fall out of that and each is worth knowing:
+
+- **Positional depth needs no rule of its own.** It is simply what a maximum
+  taken per week does that a maximum taken over an average cannot. There is no
+  new constant and nothing to tune — compare `js/draft-model.js`, which has to
+  carry `TUNING` numbers standing in for Tim's judgement.
+- **The numbers are SEASON TOTALS, not weekly ones.** A +40 here is +40 over
+  the whole remaining span, roughly +4.4 a week over nine weeks. It is not on
+  the same scale as anything `typicalWeek` produces, and **any page showing
+  both must say which it is showing** or be wrong by a factor of nine and look
+  entirely plausible.
+- **Byes stop being a special case and become the point.** ESPN returns 0.00
+  for a man on bye — a number, not a null — so `optimalLineup` ranks him last
+  and the week re-picks around him, which is exactly what the manager does.
+  `typicalWeek` had to AVOID byes; this measure handles them by construction,
+  and a squad with no cover in week 12 is correctly worth less than one that has
+  some.
+
+`optimalLineup` is still `js/forecast.js`'s, run once per week. Four features
+now share it and none of them gets a copy.
+
+**The fixture that makes the complaint falsifiable** is the whole reason this
+can never be quietly reverted. `tests/test-trade-weekly.mjs` builds three QBs
+rotating 18/15/15, each averaging exactly 16, against one steady 17. **The
+season average prices them 48 against 51 and calls the single good QB better;
+week by week they are 54 against 51.** The two measures disagree about which
+squad is stronger, which is the disagreement Tim described. Adding a
+19-every-week quarterback is then worth **+3** where the average claims +9. It
+is the biggest single suite on the project (4,009 assertions) and if anyone
+puts the scalar measure back as the answer, that disagreement vanishes and the
+suite fails rather than passing quietly.
+
+**A COMBO'S GAIN IS NOT THE SUM OF ITS TRADES' GAINS**, and this produces
+confident wrong numbers in silence. Every offer's `myGain` was measured against
+your CURRENT roster. Make two of them and the second one's gain was measured
+against a roster that no longer exists — both re-fill the same lineup, so their
+benefits OVERLAP: two trades that each upgrade your quarterback do not both
+upgrade it, they compete for one slot and the better one wins. Two offers worth
+24 and 18 alone are worth **24** together, not 42. So `bestCombo` applies every
+send and every receive TOGETHER and prices the resulting roster ONCE.
+**`naiveDelta` is kept and printed beside the real figure** rather than the
+engine hiding the gap: demo reads +43.6 naive against +71.2 real.
+
+Three more decisions inside `bestCombo`:
+
+- **Two packings come back, not one.** Tim asked literally for "the most trades
+  possible" while calling the section "best", and those disagree — three trades
+  worth +2 between them is a worse season than two worth +15. `best` maximises
+  gain and is the headline; `most` maximises the number of disjoint deals;
+  `mostIsBest` says whether they are the same packing, so no page has to compare
+  them itself.
+- **A player cannot be traded twice**, which is a disjointness condition over
+  the union of every `send` and `receive` id. Two deals with the SAME manager
+  are treated as compatible when their player sets are disjoint — a judgement
+  call rather than an obvious truth, flagged as `repeatPartners`, with
+  `onePerPartner: true` available for a page that would rather not offer
+  something socially odd. Worth confirming with Tim.
+- **The forced cut is applied to the COMBINED result.** Two 1-for-2s leave you
+  two men over the limit and cost you two players; pricing them one at a time
+  would charge one cut twice and come out at a different, smaller number.
+- **The partner still has to want it.** Each offer was a win-win alone; two of
+  them with one manager can leave him worse off together, for the same reason
+  running the other way. When `teams` is supplied every partner's combined side
+  is priced too and a packing he would refuse is dropped.
+
+Cost: the weekly search is about **8x** the scalar finder — 19 seconds for ten
+squads over nine weeks — after two exact, answer-preserving prunes. Every
+existing export is untouched and the default path is byte-identical, asserted
+offer for offer, which is what made the change safe to land at all.
+
+## The Trade page as it stands (2026-09-16)
+
+The page now has four panels and they are four halves of one question: the
+depth map says WHO to talk to, the finder says WHAT to offer him, clicking an
+offer opens the deal week by week, and the combo section says which offers can
+all be made at once. Everything in "The Trade page" above still describes the
+depth map and the finder's search; what follows is what changed around them.
+
+**THE WEEKLY MEASURE IS NOT THE DEFAULT AND IS ONE LABELLED PRESS AWAY.** It
+cannot be made cheap: valuing a squad at what it can field in every remaining
+week needs every remaining week's projections, and there is no bulk form (rule
+3 in HANDOFF, established by trying four shapes of the request). So it is **one
+request per week** — nine to thirteen of them — **plus about four seconds of
+CPU** against a quarter of one, because the search re-fills nine to thirteen
+lineups per offer instead of one. Both costs are on the button's face and in the
+note under it BEFORE anything is spent, and **nothing fetches those weeks until
+that button is pressed**: not on load, not when a remembered preference says
+"weekly", not when the connection bar flips the page live. Spending both unasked
+on Tim's phone is exactly the surprise this page exists not to spring. Between
+the ask and the press the page draws the typical week and says so in every note
+— **one function decides that for the whole page**, because two panels
+disagreeing about which basis they are on is the one failure this page cannot
+have.
+
+**PLAYED WEEKS CANNOT AFFECT A TRADE.** Tim: *"don't let any data on weeks that
+have already been played be able to affect the trade."* He is right and the
+reason is not a matter of taste — a trade changes the REST of the season and
+nothing else, so week 3's points are banked, no deal can move them, and a
+valuation that includes them is answering a question nobody can act on. The
+span is now **derived from the schedule** (every week with no result, through
+13) rather than anchored on the week picker. The old rule was "the selected
+week → week 13", which let a played week into every number on the page whenever
+the picker sat in the past — and since the page OPENS on the last played week,
+that was the normal case rather than an edge one. **Demo is the awkward case and
+says so on screen**: the sample season marks all thirteen games played, so there
+the picker stands in for "now" and the sample season is replayed as it stood
+after it.
+
+**PER WEEK IGNORES BYES BUT NOT NULLS, and the asymmetry is deliberate.** Tim:
+*"ignore the bye week when calculating per week."* A bye comes back from ESPN as
+**0.00** — a true fact about that week and no evidence at all about what the man
+is worth in a week he plays. Averaging it in says a 14-a-week receiver with one
+bye left in a nine-week span is a 12.4 receiver, which is a sentence about the
+calendar wearing the clothes of a sentence about him. So `perWeek` is the mean
+over his PLAYABLE weeks — his byes out of the divisor, and **only** his byes:
+
+| The value | What it means | In the divisor? |
+|---|---|---|
+| `0.00`, on ESPN data | a bye | **no** — it comes out |
+| `0.00`, on demo data | a man demo has ruled OUT; a real zero | yes |
+| `null` | ESPN carried no number for him | **yes**, unchanged |
+
+A null stays in because *"we do not know"* is not *"he does not play"*, and
+quietly promoting one into the other would flatter every thinly-covered player.
+The caller says which kind of data it is holding with `zeroIsBye`, and demo
+passes `false` — the same distinction, in the same direction, as
+`projToken(v, demo)` in the player card.
+
+**The consequence has to be stated wherever both numbers appear: `projected` is
+no longer `perWeek × weeks.length`.** It is `perWeek × weeksPlayable`, give or
+take a rounding tenth, which is why `weeksPlayable` comes back beside them
+rather than being left for a page to infer. A man with no playable week left has
+`perWeek: null` — never a division by zero, and never a `0.0` that would read as
+"he is worth nothing" rather than "there is nothing to say".
+
+This does NOT move the finder's rankings, and that is structural rather than
+lucky: `perWeek` is display-only, while `candidates()`, the forced cut and
+`optimalLineup` all read the per-week numbers themselves. It DOES move the
+depth map, deliberately — two panels printing two different per-week figures
+for one man is the contradiction a shared divisor exists to prevent.
+
+**The rest of what landed, each of them Tim's ask:**
+
+- **One number per player, and it is per week.** The rest-of-season total is
+  gone from beside every name.
+- **The week-by-week breakdown is a pop-up, on demand.** Current and changed
+  projection for every remaining week, the difference, and the totals, with both
+  sides assuming the best lineup available THAT WEEK. A table rather than a
+  chart, **because these numbers exist to be checked against ESPN by eye**. It
+  closes on its button, on Escape and on an outside click, is a bottom sheet on
+  a phone, and places and returns focus. **Deliberately no `aria-modal`**: the
+  player card is a `<body>` child outside the dialog and claiming modality would
+  hide it from a screen reader.
+- **Best combo is a list of real offers, merged per manager.** Same row builder
+  as the finder, so the same packages, churn, gains, pop-up and ESPN link. Two
+  deals with one manager become ONE row with one link carrying all his incoming
+  ids — and that is **more correct than showing them apart**, not merely tidier,
+  because the engine has already priced the combo as one roster change.
+  Presenting them as two rows with two gains would be showing the reader the
+  exact arithmetic the engine refuses to do. **The merged gain is re-priced, not
+  added up**, and the merged gains still do not sum to the combo's own headline
+  for the same reason one level up — each was priced against the roster as it is
+  today. The headline stays the only figure that prices the whole slate, and the
+  page says so.
+- **No position tag on a defence.** Tim: *"the position is in the name (chargers
+  def)"*. Suppressed on the position being DST, never on the name, which would
+  be a second way of knowing the same thing.
+- **Every player named anywhere on the page carries the same card** as the
+  analysis grids, including a chip strip under the depth map — that panel named
+  nobody at all before.
+
+`tr-test.mjs` grew from 75 assertions to **224** across this work, and the
+engine suites came through byte-identical: 1,411 and 4,009, both untouched.
+
+## Ticking your own side of a trade (`extension/content-espn-trade.js`)
+
+Tim asked for a deep link that arrives with BOTH sides already selected.
+**ESPN's URL cannot do it, and that is verified rather than assumed.** Read out
+of their own shipped bundle (`trade.page.js`, 2026-09-16), `players=` is matched
+against the COUNTERPARTY's roster alone:
+
+    p = t.find(e => e.teamId === x);   // x = fromTeamId — YOUR roster
+    m = t.find(e => e.teamId === d);   // d = teamId     — THEIR roster
+    y && i.length && m.players.forEach(e => {
+      includes(i, e.id) && j.addPlayer(e, TRADE)         // only ever `m`
+    })
+
+Your own roster is fetched, rendered, and never pre-selected. There is no second
+parameter for it, and swapping `teamId`/`fromTeamId` fails: ESPN overrides
+`fromTeamId` to a team you own and then refuses with "You are trying to propose
+trade to yourself." **The decisive evidence is ESPN's own Decline & Counter
+button, which ships a trade link with no players on it at all** — if any
+encoding for a full trade existed, that is the button that would use it.
+
+So the extension does the other half. The site leaves a note, a content script
+on ESPN's trade page reads it and ticks his men, and **he clicks ESPN's own
+Propose Trade button himself**.
+
+**NOTHING IS SENT TO ESPN BY ANY OF THIS.** `host_permissions` still holds only
+the read host — the suite asserts it deep-equals the read host alone, and that
+neither file so much as names the write host. The content script is forbidden
+from touching Propose Trade, Cancel or the confirmation modal, and every
+scenario asserts **zero events reached any of them**. That is the whole safety
+model, and "finishing the job" by pressing the button too would destroy it.
+
+Three things that would each have shipped looking perfectly fine:
+
+- **A checkbox is a TOGGLE, and the URL has already ticked their side.** A
+  script that clicked blindly would UNTICK them and propose a smaller trade than
+  intended. State is read first; a click only happens where it changes
+  something.
+- **The click must go to the `<input>`, not the span that carries
+  `aria-checked`.** React synthesises `onChange` for a checkbox from the click
+  event, so clicking the span — or writing the attribute — repaints and selects
+  nobody. The fake page in the suite has a store only a dispatched click can
+  move and renders `aria-checked` FROM it, so an implementation that faked the
+  attribute fails rather than passes.
+- **A player's ESPN id is not in that page's DOM.** It is recoverable from the
+  headshot URL, which covers everybody except a D/ST, whose row carries a team
+  logo instead — so the name is the fallback, and **two men of one name are
+  refused rather than guessed**.
+
+A staged trade **expires after a few minutes and is consumed on read**, because
+one staged and then abandoned must not silently tick boxes on an unrelated visit
+a week later. Failure everywhere is silent and non-fatal: with no staged trade,
+a changed ESPN build, or an exception anywhere, the page is left exactly as the
+URL made it — their side ticked, yours not, which is the behaviour that already
+worked.
+
+**None of this has run in a real browser yet.** ESPN's markup and the React
+click path were read out of their bundle and 77 assertions prove the logic, but
+linkedom cannot prove ESPN's own store updates. The first real test is Tim
+opening a link. It fails LOUDLY if it fails — the badge says "ESPN did not
+record the selection for: …" rather than proposing less than he intended.
+
+## The playoffs, and the hybrid final placing (`js/forecast.js`)
+
+His league's settings are in the table at the top of [HANDOFF.md](HANDOFF.md)
+and are not repeated here. They were unknown for months and several features
+were blocked on them.
+
+**Two rules of Tim's, in his own words, and they point in different
+directions.** *"The title is the person who wins the league"* — so **title % is
+winning the CHAMPIONSHIP round**, not topping the table, and the old number is
+renamed `tableWinner` so the two can never be confused. And *"we mark the loser
+as the person in last place by the end of the regular season, not the
+playoffs"* — so **loser % is measured on the regular season**, which is exactly
+why the consolation ladder is deliberately not modelled at all. Only the games
+that can still produce a champion are played out.
+
+**The final placing is a hybrid, and that was Tim's correction:** *"right now
+the simulate season shows the data that corresponds to the regular season
+positions, not the playoffs. Positions 1-6 should be based on the playoffs, and
+7-10 should be based on the regular season."* So one placing is built per
+simulated season:
+
+| Places | From |
+|---|---|
+| 1 .. field size | the bracket — champion, beaten finalist, then each earlier round's losers, latest round first |
+| field size + 1 .. N | the regular-season table, in order |
+
+**The two halves agree by construction, and that agreement is ASSERTED rather
+than computed twice.** The seeds ARE the top `field` of the table, so the teams
+that miss are exactly the bottom four, and place 10 is the worst regular-season
+team — which is also Tim's definition of the loser. The final placing's last
+column is compared element-wise against the table's and throws if they ever
+differ. It is an unreachable branch kept on purpose: **a silently wrong wooden
+spoon is worse than a loud failure**, and two ways of working out "last" is
+precisely how they start disagreeing.
+
+**The test that proves the change** is worth keeping: a team projecting 180 a
+week against everyone else's 100 tops the table over 90% of the time, but in the
+playoff weeks everyone projects 110, so its bye plus two coin flips give it an
+average FINAL place of **2.25** against a regular-season **1.0**. Under the old
+behaviour those two numbers were identical.
+
+**Splitting 3rd from 4th is an ASSUMPTION and says so on the page.** No game
+simulated here separates two teams knocked out in the same round; in the real
+league the consolation ladder does, and Tim was explicit that it is not to be
+modelled — *"besides the [teams] who actually make the playoffs, you don't need
+to simulate any other games"*. So the seed breaks the tie, which is defensible
+because reseeding is off and the seed IS the league's own ordering of those two
+teams. It moves an average placing by at most half a place and moves nothing
+else. **State it on screen; do not let a reader think 3rd-vs-4th was played
+out.**
+
+**The field size is read from ESPN, not from our constant — and it was being
+dropped twice on the way.** `settings.scheduleSettings` carries the whole
+playoff shape (`playoffTeamCount`, `matchupPeriodCount`,
+`playoffMatchupPeriodLength`, `playoffReseed`, `playoffSeedingRule`) and nothing
+decoded it. Once `parseLeague` did, **it stopped at two separate hops —
+`fetchSchedule`'s return, and then `normalizeSchedule` — so nothing on the page
+could see it.** Both are fixed and the panel now says whether the number was
+**read** or **assumed**. The new `fc-test` scenario declares FOUR where the
+fallback is six, so it fails if the setting is ignored, and reverting either hop
+drops it back to a 6-team, 3-round bracket saying "assumed". This is not a
+constant that happens to be right: probing two public leagues on 2026-09-16
+returned `playoffTeamCount` **6 and 4** and `matchupPeriodCount` **14 and 15**.
+
+**It also settles a contradiction in Tim's own account.** He said four teams
+make his playoffs; the settings he pasted said six. Neither is believed now —
+the league is asked, and live data will settle it.
+
+Three more things established here:
+
+- **Playoff ties go to the higher seed**, established from ESPN's own
+  documentation ("Playoff Tiebreakers": *"The higher-seeded team advances"*,
+  the default in both standard and League Manager leagues) rather than assumed.
+  Tested by forcing the branch with a vanishing sigma, since nothing else can
+  reach it.
+- **The bracket has its own RNG stream off the same seed.** It drew from the
+  league's stream first, so *asking for playoffs shifted the regular-season
+  numbers printed beside them* — a real bug, with a test now asserting the
+  standings are byte-identical with and without a bracket.
+- **It is cheap.** 100,000 runs with the bracket costs 1425ms against 1419ms
+  without: five extra games on top of sixty. The hand-off through rAF is
+  asserted rather than assumed.
+
+Every field of `parsePlayoffs` is optional and nulls out on a payload without
+`scheduleSettings`, so an older archived reading or a stub degrades to "ESPN did
+not say" rather than to a number. `reseed` is tested with `=== true`
+specifically, so **absent cannot read as reseeding being on**.
+
+## Real names, and the two traps in getting them (`js/espn.js`)
+
+Tim: *"I want to start naming each user by their real name, not their team name
+(ex: 'ricky the blazers' should be replaced with 'Jonas Larson')"*. ESPN does
+publish them: `members[].firstName` / `.lastName`, joined to `teams[].owners[]`
+by SWID. Verified live across six public leagues — **47 of 47 members had both
+names**, and the community claim that names can be withheld did not reproduce.
+
+**The two traps, both of which would have made this look impossible:**
+
+1. **`members` arrives on requests that never asked for it, with the name
+   fields SILENTLY MISSING** — same array, same ids, `displayName` populated,
+   `firstName`/`lastName` simply absent. They appear **only under
+   `view=mTeam`**. So "ESPN does not give real names" can mean "wrong view",
+   and it did.
+2. **`view=mMembers` is a decoy.** It is the obvious guess, it returns 200 OK,
+   it carries no names at all, **and it strips the owner arrays off the teams as
+   well** — so it is strictly worse than asking for nothing.
+
+Three join hazards, all verified real and all handled: `primaryOwner` is not
+always `owners[0]`; `members` can outnumber `teams` (a league member who owns no
+squad); and team ids are neither contiguous nor 1-based.
+
+- **Resolution lives in `js/espn.js` alone**, so no page module changed — the
+  name that reaches every page is already the person's. `teamName` rides
+  alongside for anywhere the joke name is still wanted.
+- **Names are rendered, never parsed.** The real data includes "Andrew" / "L"
+  and "Bracket man" / "DM".
+- Two owners render as a pair; an unresolved one falls back to ESPN's team name.
+- **Demo is inert here** — it never routes through `espn.js` — and any payload
+  with no members degrades to the team name, which is what keeps every stub and
+  every archived snapshot working unchanged.
+
+**A SQUAD IS IDENTIFIED BY ITS TEAM ID, NEVER BY ITS DISPLAYED LABEL**, and
+this is the defect that arrived with the names. The Taken table built its
+per-manager depth charts by grouping on the string it was DISPLAYING. **Two
+squads rendering the same string merged into one**, and both then got a depth
+chart computed over thirty-two players — every rank on both wrong, with nothing
+on screen to suggest it. That was unique often enough to hide while a squad was
+labelled with ESPN's team name; it stops being safe the moment a squad is
+labelled with a PERSON, because two owners can share a display name and a squad
+whose owner does not resolve falls back to a shared shape. The new scenario
+gives two teams one name and keeps their ids: reverting the fix under it reports
+the quarterbacks as QB1 through QB5 across a merged chart instead of 1,1,2,2,3,
+**so the test fails without the fix rather than passing for the wrong reason.**
+Anything anywhere on this site that groups by a displayed name is the same bug
+waiting to happen.
+
+## The cloud sync (`js/cloud.js`, wired through `js/season.js`)
+
+**Desktop writes, phone reads.** Tim's proposal, in his words:
+
+> "the information connected to the league can be updated every time they log
+> onto their computer (which has the extension), and then the information is
+> saved to the user's account, and then when the user uses the site on their
+> iphone, it will connect to the information on firebase, not the site... It
+> wouldn't be perfectly live, but if they logged on weekly or so, it would be
+> good enough."
+
+That is exactly right and it is the **only** route that works: the desktop is
+the only machine that can see a private league, so the desktop has to be the one
+that publishes. The phone never talks to ESPN at all, and the league stays
+private.
+
+**The sizes, which correct a figure elsewhere in this file.** A megabyte a week
+is ESPN's RAW payload — what `snapshots.js` refuses to store. What goes up here
+is the DECODED shape the pages render from, and it is **53 KB a week** for
+rosters and 36 KB for the wire, **measured** by `tests/test-cloud.mjs` against a
+realistic fixture rather than estimated. That is 19x under Firestore's 1 MiB
+document cap, so there is no sharding machinery and there should not be one. The
+one strip that mattered: `fetchWeekRosters` returns `players` AND
+`starters`/`bench` over the same objects, so storing all three writes every man
+twice — only `players` goes up, with two short index arrays naming the views.
+
+**Staleness is tracked PER SHAPE, and never flattened to one timestamp.** A
+week-old wire is actively wrong: the whole purpose of the wire is "who can I
+add". Week-old rosters answer a season-shape question almost as well as live
+ones, and fixtures never move. So `MAX_AGE` is **one day for the wire** and a
+week for rosters and schedule, exported so no page can invent its own policy.
+**Nothing may read as fresh by accident, so never-synced counts as stale.**
+Squads and schedule are quoted separately from the wire, and the wire chip
+appears ONLY when it is stale — a reassuring "wire 2 hours ago" would be about
+a number nothing on screen was drawing, while a chip that only ever says "old"
+cannot mislead.
+
+**The substitution is inside `js/season.js`'s fetchers, so NO PAGE MODULE
+CHANGED** — the same design constraint that kept the real-names work clean. The
+order of preference is **bridge, then cloud, then direct ESPN**, written
+identically in `season.js` and in the connection bar, because the two must agree
+or the bar labels the wrong thing. With the bridge present the cloud is not
+merely unpreferred, **it is not asked** — asserted with a read counter.
+
+- **Syncing fires at most once every six hours per league**, and the interval is
+  pinned to the thing that decays rather than picked to taste: `cloud.js` calls
+  the wire stale after a day, so a longer interval would deliver a wire already
+  at the edge of stale. Six hours means a morning and an evening sitting each
+  publish once, while flicking between six pages publishes none. The button
+  ignores it.
+- **The Players page was the one page this could not reach**, because it called
+  `espn.fetchFreeAgents` directly instead of going through `season.js` — so on a
+  phone its Taken half worked while the wire above it, the half the page is
+  named for, had nothing at all. The parse moved into `season.js`'s
+  `fetchWireWeek`, which reads one index and one wire document rather than the
+  thirteen `cloudDown` would spend on pages that never draw a wire.
+  `parseFreeAgent` is pure, so moving where it is called changed no number.
+- **Two things had to be fixed to make it work at all:** `connect()` now falls
+  back to the cloud when the direct probe fails, or his phone could never
+  connect to a private league; and nothing chooses a source until `bridge.ping()`
+  has answered, or a desktop WITH the extension would label itself by whichever
+  responded first.
+- **Every function returns; none of them throw.** Offline, not signed in, no
+  project configured, quota exceeded, a document that will not parse — all come
+  back as `{ok: false, reason}` and the page renders exactly as it does today.
+  The same rule as `snapshots.fetchRemote`, and it matters doubly here because
+  the cloud is absent on every page load until the console setup is done.
+- **Demo is never synced.** Same rule and same reasons as the snapshot archive,
+  enforced by requiring the league id to be all digits — which a real ESPN league
+  id is and `'demo'` is not — as well as honouring an explicit `isDemo`.
+- The six transport methods hold all the Firebase knowledge and are
+  **injectable**, which is what lets 190 assertions run against a fake that
+  enforces Firestore's real rules rather than a Map that would agree with
+  anything.
+
+**IT IS UNCONFIGURED UNTIL TIM DOES THE CONSOLE SETUP**, and nothing about the
+site changes until he has. `docs/firebase-setup.md` is click-by-click with the
+rules ready to paste; it is about **15 minutes only he can do**, and it is
+**two sittings**, because his own user id does not exist until he has signed in
+once. The public `apiKey` is safe by design — security is in the rules, not the
+key.
+
+## The weekly summary page (`summary.html`, `js/summary-page.js`)
+
+Tim's ask: *"I want to be able to send weekly summaries as text messages to your
+league friends. In this message, I want to share a chart that has the league
+members, Overall LUCK (across the season), title %, and loser % (using 100,000
+simulations)."*
+
+**He chose the phone's share sheet over automated SMS**, and the page is shaped
+around that decision: the site draws the chart as an image and hands it to iOS,
+he picks Messages and the group, and he reads the message before it sends. No
+backend, no per-message cost, no phone numbers stored anywhere, and nothing here
+ever sends anything.
+
+**THE IMAGE IS THE PRODUCT, not the table.** The table is there so he can check
+it before it goes; the PNG is the thing that leaves the site and gets read by
+nine people with none of this page's context. So the definitions, the run count,
+"our model and not ESPN's", and an amber **DEMO DATA** band when it is not real
+are all drawn ON the image rather than only written beside it.
+
+- **It computes nothing twice.** LUCK is `luckScore` straight off
+  `computeLeagueStats` — the column recovered verbatim from Tim's spreadsheet —
+  and title/loser come from `simulateSeason` **on the same seed the schedule
+  page uses**, so the two pages cannot print different odds for the same season.
+- **Title and loser are different questions and must never be collapsed.**
+  Title is winning the championship round; loser is **last in the REGULAR-season
+  standings**, which is why a season whose table is already decided can report a
+  loser while the title column is still open.
+- **Early in the season it refuses to print ten near-identical percentages**
+  and says why instead.
+
+Two defects the tests caught, both of which would have shipped looking fine:
+
+- **The caveat was being cut off the picture.** The definitions line was one
+  string, too wide for the card, and `clip()` truncated it — so the image read
+  "Loser % = LAST IN THE REGULAR SEASON" and silently dropped the half that
+  stops nine people reading it as the consolation ladder. Footnotes wrap now,
+  never truncate, and the card height is measured from the wrapped count.
+- **A saved "live" preference was being ignored**, because booting demo WRITES
+  the source preference, so reading it afterwards always said demo. A connected
+  owner would have been put back on sample data every visit **with the page
+  looking entirely correct**.
+
+One piece of wiring worth knowing: exactly ONE function on the page —
+`adaptSimTeam` — knows what a `simulateSeason` result row is called, because the
+bracket work was landing while this page was being written. It accepts `pTitle`
+/`pLast` (probabilities) and `titlePct`/`lastPct` (per cent) and divides by a
+hundred only for the latter. **Getting that backwards would put a 4,100% title
+chance on the image**, which is at least the loud kind of wrong.
 
 ---
 
@@ -1075,14 +1745,25 @@ own 2025 numbers; draft assistant built and parked; the bridge extension is
 live and reading his real league. Focus now: trades, player analysis, stats on
 real data.
 
+**Status as of 2026-09-16:** everything Tim has asked for is built and live —
+nine pages, the phone layout, the per-week trade measure, the playoff bracket,
+real names, the cloud sync and the weekly summary image. What is left is
+almost entirely *seeing it against his real league*, plus the console setup only
+he can do. See "Next" at the foot, and "What is genuinely open" in HANDOFF.
+
 ## Current state
 
-- `index.html` — connect panel + raw data probes.
+- `index.html` — the season dashboard. *(It was the connect panel and the raw
+  data probes when this line was written; those moved to `debug.html`.)*
 - `stats.html` / `analysis.html` / `schedule.html` — season stats, weekly
   rosters, results and head-to-head. Every page carries the connection strip
-  (`js/connection.js`) that shows whether it is on real or demo data.
-- `trade.html` — the depth map and the trade finder, both built on one week of
-  rosters read two ways. Every control is a repaint; nothing here costs a request.
+  (`js/connection.js`) that shows whether it is on real or demo data, and now
+  also whether it is reading the cloud rather than ESPN.
+- `trade.html` — the depth map and the trade finder, built on one week of
+  rosters read two ways. Every control is a repaint and nothing costs a request
+  — **except the weekly measure**, which is one request per remaining week and
+  is behind a labelled button carrying that cost on its face.
+- `summary.html` — the weekly chart for his group chat, as an image.
 - `draft.html` — the draft room + practice mode. See `DRAFT-STRATEGY.md`. Parked.
 - `extension/` — the bridge that reads the private league. See below.
 - `js/espn.js` — the ESPN connection layer. Fetch + decode only, no strategy.
@@ -1118,6 +1799,11 @@ so even SameSite=Strict cookies are sent — no `cookies` permission needed) and
   popup confirmation or a popup-issued nonce — never the open page bridge, or
   any page on the origin could drop players. Tim wants an in-ESPN suggestion
   panel eventually; that is the phase after read-only analysis proves useful.
+  **The staged trade added a second content script and no write.** The manifest
+  gained a `content_scripts` entry for
+  `https://fantasy.espn.com/football/team/trade*`; `host_permissions` is
+  unchanged and still the read host alone. See "Ticking your own side of a
+  trade".
 - **Edge gotchas:** service worker shows "Inactive" when idle (normal). After
   editing extension files, Reload the extension AND refresh the site tab. The
   extension must be in the same Edge profile where Tim is signed into ESPN (he
@@ -1133,6 +1819,20 @@ so even SameSite=Strict cookies are sent — no `cookies` permission needed) and
 - **Projections come back scored under the queried league's own rules** because
   requests go through the league path, not ESPN's defaults. Real data spot-
   checked, e.g. Jahmyr Gibbs 2026.
+- **Per-week projections run through at least week 18** (re-probed 1241838 for
+  2026 on 2026-09-16: all 174 rostered players carry one in weeks 13–18, week 17
+  topping at 24.4 with a median of 10.3, one 0.00 a week). They are genuinely
+  per-week and not one figure repeated — only 1 player in 174 carries the same
+  value across weeks 15, 16 and 17, the same rate as any adjacent
+  regular-season pair. **This is what makes his playoffs forecastable from
+  ESPN's own numbers** rather than modelled from a scoring distribution.
+- **`settings.scheduleSettings` really does differ per league** (2026-09-16:
+  `playoffTeamCount` 6 and 4, `matchupPeriodCount` 14 and 15,
+  `playoffSeedingRule` `H2H_RECORD` and `TOTAL_POINTS_SCORED` across 1241838 and
+  899513). It is read, not assumed.
+- **Real names are populated**, under `view=mTeam` and only there: 47 of 47
+  members across six public leagues carried both `firstName` and `lastName`.
+  The community claim that they can be withheld did not reproduce.
 
 **Settled the hard way, so nobody relearns it:** a static site canNOT read a
 private league on its own. ESPN sends `Access-Control-Allow-Credentials: true`,
@@ -1163,6 +1863,14 @@ requests go through the league path rather than ESPN's defaults.
   not a contract — endpoints can change without notice.
 - **Reads only, for now.** No write to ESPN has been built. Writes are a planned
   later phase (see "The bridge & writes"), not out of scope — Tim wants them.
+  **Neither the deep link nor the staged trade is a write**, and that is worth
+  stating plainly because both of them end up on ESPN's own screen.
+  `trade.html`'s "Open in ESPN" builds a URL; `extension/content-espn-trade.js`
+  ticks checkboxes on the page that URL opened. The single write is still Tim's
+  own click on ESPN's own Propose Trade button, and the content script is
+  forbidden from going anywhere near it. **`host_permissions` still holds only
+  the read host** — `test-extension.mjs` asserts it deep-equals the read host
+  alone, and that neither file so much as names the write host.
 - A static site cannot read a private league; the bridge extension is the
   answer, and it is what carries the cookie ESPN needs. If Edge blocks
   third-party cookies or Tracking Prevention is Strict, allow `[*.]espn.com`.
@@ -1362,7 +2070,13 @@ Pages (all default to demo data; real data arrives via the bridge):
   columns are week numbers and whose cells are ESPN's projection for that
   player in that week. Position filter, every column sortable.
 - `trade.html` — the depth map (who is deep where you are thin) and the trade
-  finder (every swap that makes both squads better). See "The Trade page"
+  finder (every swap that makes both squads better), priced across every
+  remaining week when the button is pressed for it, with a per-offer week-by-week
+  pop-up and a best-combo list merged per manager. See "The Trade page" and
+  "The Trade page as it stands"
+- `summary.html` — the weekly chart for his group chat: member, season LUCK,
+  title % and loser % at 100,000 runs, rendered to an image and handed to the
+  phone's share sheet. See "The weekly summary page"
 - `draft.html` — draft assistant + practice mode (parked)
 - `debug.html` — the raw ESPN data probes. Not in the nav; linked from the
   bottom of the home page. Its connect form deliberately does not persist,
@@ -1387,6 +2101,20 @@ Modules:
   installing, like `connection.js`: a page opts in with one script tag and no
   page-module change. One delegated listener, one sheet element. Skips links
   and buttons on purpose — a tap on a control has to work the control.
+- `js/player-card.js` — **the one player card**, shared by the analysis grids
+  and the Trade page: a man's identity and his whole season as a three-row
+  chart (weeks, projection, actual), which wraps rather than scrolling and opens
+  as a sheet on a coarse pointer. Its header comment is the API; a page that
+  wants it also needs the `.tipcard` / `.tc-*` CSS. **Do not grow a second one.**
+- `js/cloud.js` — the phone bridge: the desktop publishes the decoded league to
+  Firestore and a device with no extension reads it back. The six transport
+  methods are injectable, which is what makes it testable without Firebase. Its
+  header comment is the contract. Unconfigured until Tim does the console setup,
+  and inert until then.
+- `js/summary-page.js` — the weekly summary and the image it draws. Computes no
+  statistic of its own: LUCK comes from `js/stats.js` and the percentages from
+  `js/forecast.js`, through the same entry points the stats and schedule pages
+  use.
 - `js/waivers-page.js` — the Players page: the wire, and the taken table.
 - `js/trade.js` — the trade engine: replacement level, the depth map and the
   finder. Pure, so it is node-testable, and it wraps `forecast.js`'s
@@ -1414,6 +2142,11 @@ Extension (`extension/`, loaded unpacked in Edge):
 
 - `manifest.json`, `background.js` (the ESPN calls), `content-site.js` (the
   page relay), `popup.html`/`popup.js` (the test popup), `icons/`
+- `content-espn-trade.js` — runs on ESPN's own trade page and ticks **your**
+  side of a staged trade, which is the one thing ESPN's `players=` parameter
+  cannot do. It ticks checkboxes and nothing else: it must never click Propose
+  Trade, never touch the confirmation modal, and never dispatch an event on
+  either. See "Ticking your own side of a trade".
 
 ### Table sorting
 
@@ -1435,6 +2168,23 @@ a band in place.
 
 **The suites are in `tests/` now. Run them with `cd tests && npm install &&
 npm test`** — see [tests/README.md](tests/README.md).
+
+**25 suites, over 8,900 assertions.** A full run on 2026-09-16 was green in 230
+seconds at **9,386 counted assertions**, plus four suites that report pages or
+scenarios rather than a count (`test-pages-render` 6 pages, `test-home` 2 pages,
+`stats-weeks` and `opp-check` 6 scenarios each). Those figures are the run, not
+an estimate.
+
+**`test-extension.mjs` HAD BEEN LOST FROM THE REPO, and that is a lesson rather
+than a footnote.** This file documented it at 38 assertions as though it were
+present; it was not there at all, and nobody noticed because the table below is
+read more often than the directory is listed. It was recreated on 2026-09-16 at
+**234** assertions, covering the injection and origin refusals it used to plus
+everything the staged trade added. **A suite that is documented is not a suite
+that exists — check `tests/` against this table before trusting either.**
+`test-bridge.mjs` is in the same position right now: the table below still lists
+it at 34 assertions and there is no such file. The coverage is worth recreating
+if `js/bridge.js` is touched again.
 
 This changed on 2026-09-09. They used to live in the session scratchpad and be
 deliberately uncommitted, on the grounds that they needed a local `linkedom`.
@@ -1463,24 +2213,33 @@ present: the coverage is worth recreating if that code is touched again.
 | `test-draft-sim.mjs` | practice opponents, lineup optimiser and grading — 36 assertions |
 | `test-practice.mjs` | complete practice drafts through the page's own logic, boots `draft-page.js` against the real DOM, and asserts the connection bar is mounted — 99 assertions |
 | `test-practice-autostart.mjs` | lands on `draft.html?practice=1` in an empty browser and asserts a playable draft with zero network calls |
-| `test-sim.mjs` | the season simulator — 71 assertions. RNG mean/variance, the normal's mean/variance/kurtosis, **that the simulated win rate matches `winProbability`** (the check that keeps the two models honest with each other), place probabilities summing to 1 per team AND per place column, mean placings summing to 55, mean wins matching the exact Poisson-binomial, the points-for tiebreak, and a finished season yielding certainty rather than noise |
-| `fc-test.mjs` | the schedule page's forecast and simulation end to end — 375 assertions over 8 scenarios (demo, demo-mid, stubbed live at week 2, no team set, team picked later, switching through all ten teams, simulation interaction, roster fetch failing). Boots the real `schedule.html` with its real module in a child process per scenario |
+| `test-trade-weekly.mjs` | **the biggest single suite on the project — 4,009 assertions.** The per-week measure, and its hand fixture is Tim's own complaint made falsifiable: three QBs rotating 18/15/15, each averaging exactly 16, against one steady 17. The season average prices them 48 against 51 and calls the single good QB better; week by week they are 54 against 51. Revert the weekly measure and that disagreement vanishes and this fails. Also the combo packer: that a combo is priced ONCE as one roster change, that `naiveDelta` is the sum it refuses to report, and that both packings (most gain, most trades) come back |
+| `test-cloud.mjs` | the phone bridge — 190 assertions. What goes up, what comes back down, and how old each shape is. Runs against a fake transport that **enforces Firestore's real rules** rather than a Map that would agree with anything, and it is what MEASURES the 53 KB-a-week figure, against a fixture built at genuinely realistic size |
+| `test-cloud-wiring.mjs` | the phone bridge WIRED IN — 126 assertions over 9 scenarios. The substitution inside `js/season.js` and the bar above it: that the order of preference is bridge → cloud → direct in both places, that **with the bridge present the cloud is not asked at all** (asserted with a read counter), that the Players page's wire comes down too, and that staleness is quoted per shape |
+| `test-summary.mjs` | the weekly summary page — 203 assertions. LUCK, title %, loser %, and the image that actually gets sent: that the footnotes WRAP rather than truncate (the defect that cut "not the playoffs" off the caveat), that a saved "live" preference survives demo booting first, and that the two probability spellings are adapted the right way round |
+| `owner-names.mjs` | real names instead of team names — 55 assertions. The `members` → `owners[]` join by SWID, that `primaryOwner` is not assumed to be `owners[0]`, more members than teams, non-contiguous team ids, a two-owner squad, and a payload with no members degrading to the team name |
+| `test-espn-tick.mjs` | ticking your own side on ESPN's trade page — 77 assertions. A fake ESPN page whose store only a **dispatched click** can move, rendering `aria-checked` FROM it, so an implementation that wrote the attribute fails. Asserts a box already ticked is left alone (a checkbox is a toggle), that ids come off the headshot URL with the name as the D/ST fallback, that two men of one name are refused rather than guessed, and — in every scenario — that **zero events reached Propose Trade, Cancel or the confirmation modal** |
+| `test-sim.mjs` | the season simulator — 415 assertions. RNG mean/variance, the normal's mean/variance/kurtosis, **that the simulated win rate matches `winProbability`** (the check that keeps the two models honest with each other), place probabilities summing to 1 per team AND per place column, mean placings summing to 55, mean wins matching the exact Poisson-binomial, the points-for tiebreak, and a finished season yielding certainty rather than noise |
+| `fc-test.mjs` | the schedule page's forecast and simulation end to end — 707 assertions over 10 scenarios (demo, demo-mid, stubbed live at week 2, no team set, team picked later, switching through all ten teams, simulation interaction, the time machine's archive, roster fetch failing, and a league declaring FOUR playoff teams where the fallback is six — that last one fails if the field size read off ESPN's `scheduleSettings` is ignored at either of the two hops that used to drop it). Boots the real `schedule.html` with its real module in a child process per scenario |
 | `test-forecast.mjs` | the forecast engine — 68 assertions. The normal CDF against textbook values, `optimalLineup` against brute-force enumeration over 350 random rosters in three league shapes (including superflex), and `winTotalDistribution` against exhaustive enumeration of every win/loss combination |
-| `test-bridge.mjs` | the site half of the bridge: a stand-in extension answers postMessage, and `js/espn.js` is proven to route through it — 34 assertions |
-| `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — 38 assertions |
-| `link-check.mjs` | **the player click-through ACROSS pages** — 103 assertions. `index.html` and `analysis.html` MAKE links, `waivers.html` RESOLVES them, and no single-page suite can notice when the two halves stop agreeing. It boots each page in its own child process, checks every link against the contract, then FOLLOWS a sample of the ids the source pages actually produced and asserts each lands on exactly that man. It found a real defect the day it was written (see the union rule above), and it exists because the three halves were built by three authors at once against a contract agreed in prose |
-| `touch-check.mjs` | **the analysis grids on a screen with no hover** — 92 assertions over 3 scenarios. Boots the real page with `matchMedia` answering `(hover: none)` and asserts the tap opens the card as a sheet instead of following the link; that the sheet's link is the SAME href the cell carried, re-derived from the cell rather than read back off the card; that the tap does not ALSO drill into the team; that all three dismissals work; that a cmd-click is left to the browser; and that the identical click under a mouse is untouched, so the desktop path `link-check.mjs` follows is provably unchanged. The third scenario blanks one man's `playerId` on every team through a data:-URL loader, because the card has never depended on the link and must not start to — and that scenario is what found the drill-down defect. It also covers `js/touch-titles.js`: that a `title` opens as a sheet on a tap, that a titled LINK or BUTTON does **not** (or the click-through and every control would break), and that a mouse gets none of it |
+| `test-bridge.mjs` | **NOT IN THE REPO.** Documented here at 34 assertions — the site half of the bridge, a stand-in extension answering postMessage and `js/espn.js` proven to route through it — and there is no such file in `tests/`. Same class of loss as `test-extension.mjs` above, and worth recreating if `js/bridge.js` is touched |
+| `test-extension.mjs` | runs `extension/background.js` with chrome+fetch stubbed and asserts URL injection / path traversal / bad origins are refused before any request — **234 assertions**, having been recreated after being lost from the repo (see above). It now also covers the staged trade: that a stage expires and is consumed on read, and that `host_permissions` **deep-equals the read host alone** with neither file so much as naming the write host |
+| `link-check.mjs` | **the player click-through ACROSS pages** — 135 assertions. `index.html`, `analysis.html` and `trade.html` MAKE links, `waivers.html` RESOLVES them, and no single-page suite can notice when the two halves stop agreeing. It boots each page in its own child process, checks every link against the contract, then FOLLOWS a sample of the ids the source pages actually produced and asserts each lands on exactly that man. It found a real defect the day it was written (see the union rule above), and it exists because the three halves were built by three authors at once against a contract agreed in prose |
+| `touch-check.mjs` | **the analysis grids on a screen with no hover** — 187 assertions over 4 scenarios. Boots the real page with `matchMedia` answering `(hover: none)` and asserts the tap opens the card as a sheet instead of following the link; that the sheet's link is the SAME href the cell carried, re-derived from the cell rather than read back off the card; that the tap does not ALSO drill into the team; that all three dismissals work; that a cmd-click is left to the browser; and that the identical click under a mouse is untouched, so the desktop path `link-check.mjs` follows is provably unchanged. The third scenario blanks one man's `playerId` on every team through a data:-URL loader, because the card has never depended on the link and must not start to — and that scenario is what found the drill-down defect. The fourth is the card's own: half a season on a 390px screen, where it asserts the Act row is filled only for weeks with an actual RECORDED and that a thirteen-week run **wraps onto balanced lines rather than scrolling**. It also covers `js/touch-titles.js`: that a `title` opens as a sheet on a tap, that a titled LINK or BUTTON does **not** (or the click-through and every control would break), and that a mouse gets none of it |
 | `hot-check.mjs` (again) | records every green cue per player per week, presses FLEX, and compares cell for cell — **not one cell changes colour**, which is what proves a filter is only a filter |
-| `taken-check.mjs` | the Taken players table — 126 assertions over 2 scenarios (a hand-built three-squad stub where every answer is known, and the real `demo-rosters.js`). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
+| `taken-check.mjs` | the Taken players table — 223 assertions over 5 scenarios (a hand-built three-squad stub where every answer is known, the real `demo-rosters.js`, and one that gives TWO teams the same displayed name while keeping their ids — revert the id keying under it and the quarterbacks come back QB1..QB5 across a merged chart instead of 1,1,2,2,3). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `test-trade.mjs` | the trade engine — 1,411 assertions over two fixtures. A hand-built two-team league where every answer is known by hand (the 18-for-18 mirrored swap is worth exactly 12 to each side), then the real demo pool, where **every offer is re-priced from the raw rosters** rather than read back off its own numbers — so an engine that merely reported confident figures would fail rather than agree with itself. Also asserts roster legality both ways and that the in/out lists add up to the stated gain |
-| `tr-test.mjs` | the Trade page end to end — 75 assertions over 3 scenarios. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; and every control. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
+| `tr-test.mjs` | the Trade page end to end — 224 assertions. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; every control; the weekly measure's button and the fact that **nothing fetches a week until it is pressed**; the per-offer pop-up; and the combo list merged per manager. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
 | `test-snapshots.mjs` | the time machine's storage — 123 assertions. Round-trips a reading through JSON, through a file, and into an empty browser; proves a snapshot is a COPY by moving the live season underneath one and checking it does not follow; and covers a browser that blocks storage, a full one, an unreadable key, and a file from a newer build. Also the committed archive: that it restores a wiped browser, keeps the browser's own copy over the file's, takes only this league's weeks out of a file holding several, and stays silent through a 404, an offline network, an HTML error page and a body that will not read |
-| `an-test.mjs` | the analysis page end to end — 273 assertions over 6 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
-| `hot-check.mjs` | both greens on the Players page’s wire table — 101 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
+| `an-test.mjs` | the analysis page end to end — 565 assertions over 8 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
+| `hot-check.mjs` | both greens on the Players page’s wire table — 118 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |
 
-All green as of 2026-09-09: extension 38, bridge 34, draft-model 44, draft-sim
-36, practice 99, autostart 10, draft-render 107, recovered 116, plus the
-stats-render check.
+*(Superseded.)* "All green as of 2026-09-09: extension 38, bridge 34,
+draft-model 44, draft-sim 36, practice 99, autostart 10, draft-render 107,
+recovered 116, plus the stats-render check." Every suite in that line except
+the first is one of the documented-but-absent ones; the first was absent too
+until it was recreated. **The current run is the one at the top of this
+section**, and it is what `npm test` prints.
 
 `test-practice-autostart.mjs` needs its own process: a module only initialises
 once, so the auto-start path cannot be tested in the same run as the normal one.
@@ -1534,19 +2293,37 @@ silently rendering zeroes.
 
 ## Next
 
-Focus is trades, player analysis, and stats — on the now-connected real league.
-Tim will specify the first build. Prepared ground, in likely order:
+Everything Tim has asked for is built and live. **This is the long version of
+"What is genuinely open" in [HANDOFF.md](HANDOFF.md)** — that list is the short
+one and it is correct; if the two ever disagree, HANDOFF is what a fresh session
+reads first, so fix this one. Ordered, as it is there, by what would hurt most
+to get wrong.
 
 - **THE ONE ITEM WITH A DEADLINE: get a reading captured and committed.** The
   time machine records what the forecast said, once a week, and ESPN keeps no
   history of its own projections — so a week Tim never opens the schedule page
-  in is gone for good. As of 2026-09-10 `data/snapshots/` is empty. See the
-  block at the top of `HANDOFF.md` for exactly what to ask him. Everything else
-  on this list can be built in December just as well as today; this cannot.
-- **Check the rebuilt pages against the real league.** Everything here is
-  verified against demo data, stubs and public leagues, and every page boots
-  clean, but **none of it has been seen against live 476225250 in a browser**.
-  That is the first job. Specifically:
+  in is gone for good. **Still empty as of 2026-09-15**, which is five days and
+  a further game week worse than the last check. See the block at the top of
+  `HANDOFF.md` for exactly what to ask him, and check `data/snapshots/` and his
+  Downloads yourself before anything else. **The likeliest reason is now known
+  and is worth saying to him plainly:** a reading is only taken when
+  `schedule.html` loads on LIVE data, live data needs the bridge extension, and
+  **the extension cannot exist on his phone** — so if he has moved to reading
+  the site there, no reading will ever be taken. The cloud sync makes the
+  archive *readable* on the phone; it cannot make one be *taken* there.
+  Everything else on this list can be built in December just as well as today;
+  this cannot.
+- **Almost none of this has been seen against his real league in a browser.**
+  Everything is verified against demo data, stubs and public leagues, and every
+  page boots clean, but 476225250 is private and returns 401 to anything without
+  his cookie, so **the first load through the bridge is where reality arrives**.
+  Specifically unproven there:
+  - the **real-names join** — `members[].firstName` under `view=mTeam`, and
+    whether any of his nine leaguemates fails to resolve;
+  - the **playoff field size** read off his `scheduleSettings`, which is what
+    settles his own 4-vs-6 contradiction;
+  - **every number the Trade page's weekly measure produces**, including the
+    per-week figures with byes out of the divisor;
   - whether `% own` actually populates from the `mRoster` view (the roster
     detail hides that column when it does not);
   - whether any week's projection drops implausibly far, which would mean bye
@@ -1556,20 +2333,61 @@ Tim will specify the first build. Prepared ground, in likely order:
   - whether the Players page's **two requests per week** — the wire and every
     squad — is acceptable to him over a full thirteen-week span, since that is
     26 requests for "Rest of season".
-- **Trade interaction** — the depth map and the finder are BUILT; see "The Trade
-  page". Tim was shown five ideas and picked two. The other three are ready to
-  build and should not be started without him asking:
+- **The trade tick-your-side has never run in a real browser.** ESPN's markup
+  and the React click path were read out of their shipped bundle and 77
+  assertions prove the logic, but linkedom cannot prove ESPN's own store
+  updates. The first real test is Tim opening a link. It fails loudly if it
+  fails — the badge says "ESPN did not record the selection for: …" rather than
+  proposing less than he intended. See "Ticking your own side of a trade".
+- **Firebase is built and wired but not switched on.** `docs/firebase-setup.md`
+  is click-by-click; it needs about 15 minutes of console work only he can do,
+  in **two sittings**, because his own user id does not exist until he has
+  signed in once. Until he does it, `js/cloud.js` is unconfigured and every page
+  behaves exactly as it did before. See "The cloud sync".
+- **Three decisions of his that are open**, all flagged and none urgent:
+  whether his league really has 6 playoff teams (his prose said 4, his pasted
+  settings said 6, and the page now reads it from ESPN — so live data settles
+  it); whether 3rd-vs-4th should keep being split by seed or should follow the
+  consolation ladder; and whether the joke team names should appear anywhere now
+  that squads are labelled with people. A fourth, smaller one: whether the combo
+  packer should be allowed to propose two disjoint deals to the SAME manager, or
+  run with `onePerPartner: true`.
+- **"Make the league public" is open again, and it is his call.** It was settled
+  and then unsettled: the extension solved the desktop, and then he started
+  reading the site on a phone where no extension can exist. The cloud sync is
+  the answer that keeps the league private, so this is now the fallback rather
+  than the only route — but do not assume it either way, and do not re-close it
+  in this file. See the phone section.
+- **Writes to ESPN are still not built, and the deep link is why.** He chose
+  deep-linking over auto-send deliberately. If it ever comes back: there is **no
+  dry run** (`VALIDATE` is not an accepted `executionType`), a two-team test
+  league violates ESPN's Fair Play policy whose stated remedy is a ban, and a
+  flagged account mid-season would cost him the league and this tool at once,
+  because the bridge reads through his cookie. **The staged-trade flow is not a
+  write and changes none of that** — see "Known constraints".
+- **The Trade page does not price the PLAYOFF weeks**, and this is a real
+  question rather than an oversight. The week-13 cap is gone, so the whole
+  remaining regular season is priced — but weeks 15–17 are not in ESPN's matchup
+  feed at all, so reaching them means fetching by week number the way the
+  schedule page's bracket already does. Whether it should is Tim's call: a trade
+  for the playoff weeks is only worth anything if he gets there, and weighting a
+  deal towards weeks he may not play is its own kind of wrong.
+- **Trade ideas he deliberately did not pick**, from the list of five on
+  2026-09-09: a deal's effect in **expected wins** rather than points, and an
+  **auto-written pitch message**. (The third, a week-by-week strip, now exists
+  as the per-offer pop-up.) Ask before adding either.
   1. **Wins, not points.** "+6.2 a week" is hard to weigh; `simulateSeason` and
      `winProbability` already exist, so re-running the season with a trade
      applied would give "6.1 → 6.8 expected wins, 11% → 19% to finish first".
-     No public tool can do this because none of them know his schedule.
-  2. **The weeks that matter.** A deal that is +5 on average and −12 in weeks
-     12–13 is a bad deal. Per-week projections for the rest of the season are
-     already fetched by the analysis page's season grid; the strip is a repaint.
-  3. **The pitch message.** The finder already knows why a trade helps the other
+     No public tool can do this because none of them know his schedule — and now
+     that the bracket is modelled it could give title % as well.
+  2. **The pitch message.** The finder already knows why a trade helps the other
      manager, so it can write the sentence and offer a copy button. Every guide
      says an offer arriving with no message reads as an attempted robbery.
      Copy only — **do not auto-send**; writes are the phase after this one.
+- **A FLEX-empty table is untested.** Every fixture pool contains running backs,
+  so the filter always matches somebody. The same empty-state wording is proven
+  through the reachable "no defence" case.
 - **The Predictions tab** — the one genuinely unbuilt idea from his sheet. He
   tested by hand, for week 1 only, whether a team's projected total at a given
   week predicts the final ranking. The site can answer it across all 13 weeks.
@@ -1582,8 +2400,10 @@ Tim will specify the first build. Prepared ground, in likely order:
 - **Writes / in-ESPN panel** — the later phase. See "The bridge & writes".
 
 Still parked, do not pursue unless asked:
-- The smart drafter (built; awaits his spec answers in `TUNING`).
+- The smart drafter (built; awaits his spec answers in `TUNING`, and the live
+  ESPN draft feed has still never run against a real draft).
 - Fold in Tim's remaining sheet-formula answers if he gives them.
 - The score-differential curve rationale (he will explain; reproduce, don't
   rationalise).
 - Injury-loss automation (method recorded in `js/stats.js`; deliberately out).
+- The consolation ladder, which he was explicit about not modelling.
