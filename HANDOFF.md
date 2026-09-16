@@ -3,7 +3,7 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-15.
+Last updated 2026-09-16.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -25,12 +25,11 @@ A reading is only taken when **Tim opens `schedule.html` on live data** in the
 Edge profile that has the bridge extension. A week he never visits is simply
 gone.
 
-**Still true and now worse on 2026-09-15**: `data/snapshots/` holds nothing but
-its README and there is no `fantasy-archive-*.json` in his Downloads. That is
-five days and a further game week gone since the last check, and those weeks
-cannot be recovered — check both places yourself at the start of every session
-and raise it before anything else he asked for. Two things to ask, in this
-order:
+**Checked again 2026-09-16 and still empty**: `data/snapshots/` holds nothing
+but its README and there is no `fantasy-archive-*.json` in his Downloads. That
+is a week of the season gone with no reading taken, and none of it can be
+recovered. **Check both places yourself at the start of every session** and
+raise it before anything else he asked for. Two things to ask, in this order:
 
 1. **"Has the Time machine panel recorded this week?"** If not, that is the one
    thing worth interrupting anything else for.
@@ -40,13 +39,18 @@ order:
    `C:\Users\timha\Downloads\fantasy-archive-*.json` yourself before asking; he
    may have exported already and not said.
 
-**And now he reads the site on his phone**, which is the likeliest reason no
-reading has been taken: a snapshot is only captured when `schedule.html` loads
-on LIVE data, and live data needs the bridge extension, which is in his Edge
-desktop profile and cannot be in mobile Safari. If he is only opening the site
-on the phone, the archive will stay empty no matter how good the phone layout
-gets. Worth saying to him plainly — it is not obvious, and it is the one thing
-on this project with a deadline.
+**He reads the site on his phone, and that is the likeliest reason.** A
+snapshot is only captured when `schedule.html` loads on LIVE data; live data
+needs the bridge extension; **no phone browser can install one**. So if he is
+only opening the site on the phone, the archive stays empty however good the
+phone layout gets.
+
+**The cloud sync does NOT fix this, and do not let anyone think it does.** It
+makes the archive *readable* on his phone; it cannot make a reading be *taken*
+there, because a reading needs the live ESPN data only the desktop can fetch.
+The weekly desktop visit is now the entire remaining purpose of the desktop,
+which makes it easier to forget, not harder. Say that to him plainly — it is not
+obvious, and it is the one thing on this project with a deadline.
 
 An export is **cumulative** — one file holds every week — so it is a monthly
 job at most. Do not tell him to export weekly; he asked, and it is not true.
@@ -57,7 +61,7 @@ job at most. Do not tell him to export weekly; he asked, and it is not true.
 
 A static site (GitHub Pages, vanilla ES modules, no build step, no framework)
 for Tim's 10-team ESPN fantasy football league. **Tim specifies what it does;
-Claude builds it.** It is 2026 season, week 1-2.
+Claude builds it.** It is 2026 season, week 2-3.
 
 **His league's settings, pasted from ESPN 2026-09-16** — these were unknown for
 a long time and several features were blocked on them:
@@ -137,6 +141,14 @@ So:
 4. Expect an agent to touch a test outside its set when the behaviour it was
    asked to change is what that test asserts. That is usually correct — check
    the diff and keep it if the assertion encoded the old truth.
+5. **Make a fix falsifiable before believing it.** Revert it, watch the new test
+   fail, restore it. That is how the depth-chart keying and the playoff field
+   size were confirmed rather than assumed — both looked right on inspection and
+   both had tests that would have passed either way until this was done.
+6. **Re-probe a "verified" fact when something depends on it.** "ESPN projects
+   through week 13" sat in this file as verified for a week; it was simply the
+   furthest week anyone had asked for. It was load-bearing for the playoffs and
+   it was wrong.
 
 ## The rules that must not be re-litigated
 
@@ -181,8 +193,8 @@ These were each established by testing, and several by getting them wrong first.
    while every page insisted no league was configured.
 7. **State the basis of every derived number** in a panel note. That is the
    house style throughout, and it is why the pages are trustworthy.
-8. **ESPN keeps no history of its own projections.** It publishes next week's
-   and week 13's; it cannot tell you what it thought last month. Anything the
+8. **ESPN keeps no history of its own projections.** It publishes every future
+   week's; it cannot tell you what it thought last month. Anything the
    site wants to compare across time must be captured while it is on screen —
    that is why `js/snapshots.js` exists, and why nothing about it can be
    "reconstructed later instead".
@@ -210,9 +222,12 @@ These were each established by testing, and several by getting them wrong first.
    the panel names in red any week that is still only in his browser. **What
    is weekly is him opening the schedule page on live data**: that is when a
    reading is taken, and a week he never visits cannot be recovered later.
-   **Ask him for a fresh export when the panel says one is outstanding.** Firebase was considered
-   and rejected: it works, but the setup is ten minutes only he can do, and no
-   connector here can provision a Google Cloud project.
+   **Ask him for a fresh export when the panel says one is outstanding.**
+
+   Firebase was once considered for this and set aside; it is now BUILT, but
+   for a different job — reading the league on his phone, not storing the
+   archive. The committed JSON file is still the archive's durable home, and
+   the cloud sync does not change that. See "The cloud, and the phone".
 
 ## Contracts that hold the site together
 
@@ -313,13 +328,73 @@ fixed width defined page-locally can only be overridden page-locally.
   preferred when present, being the only one of the two that reads a private
   league. It also says something different on a phone, because "install the
   extension" is advice nobody there can take.
-- **A private league still cannot be read from a phone**, and that is settled —
-  same third-party-cookie wall as ever. The ONE route that works on a phone is
-  Tim marking league 476225250 viewable to the public in ESPN's settings
-  (LM Tools → League Settings → Basic Settings). `espn.js`'s `AuthError` already
-  spells that out and the bar now shows it. **It is his call and has not been
-  made** — it makes the league readable by anyone with the ID. Do not assume it
-  either way; ask.
+- **A private league cannot be read DIRECTLY from a phone**, and that is
+  settled — same third-party-cookie wall as ever, and no phone browser can load
+  the extension that gets around it. There are exactly two ways round it and Tim
+  has chosen the second:
+  1. Mark the league viewable to the public in ESPN's settings (LM Tools →
+     League Settings → Basic Settings). Free, instant, live, works for everyone's
+     phone — at the cost of anyone with the league ID being able to look.
+     `espn.js`'s `AuthError` spells it out and the connection bar shows it.
+     **He has not done this and it remains his call.**
+  2. **The cloud sync, which is what he picked.** The desktop that has the
+     extension publishes his league to Firestore; the phone reads it. Private,
+     but only as fresh as his last desktop visit. See "The cloud" below.
+
+## The cloud, and the phone
+
+Built 2026-09-16 on Tim's own proposal, which was sound: *"the information ... is
+updated every time they log onto their computer (which has the extension), and
+then ... when the user uses the site on their iphone, it will connect to the
+information on firebase."*
+
+- **The substitution lives in `js/season.js`, inside every fetcher**, so **no
+  page module knows the cloud exists** — the same constraint that kept the
+  real-names work clean. Order of preference is **bridge → cloud → direct
+  ESPN**, identical there and in the connection bar, because the two must agree
+  or the bar labels the wrong thing. With the bridge present the cloud is not
+  merely unpreferred, it is **not asked**.
+- **Sizes: 53 KB a week, not a megabyte.** The megabyte figure elsewhere in
+  `PROGRESS.md` is ESPN's RAW payload; the decoded shapes the pages render from
+  are far smaller, so the whole season is ~815 KB over 28 documents — four
+  orders of magnitude inside Firestore's free tier, and no sharding.
+- **Staleness is tracked per shape and never flattened.** A week-old wire is
+  actively wrong — its whole question is "who can I add" and it would list men
+  claimed on Tuesday — while week-old rosters answer a season-shape question
+  almost as well as live ones. "Never synced" counts as stale so nothing can
+  read as fresh by accident.
+- **Syncing fires at most once every six hours**, and that number is pinned to
+  the thing that decays rather than picked: the wire goes stale after a day.
+- **It is switched off until Tim does the console setup.** `docs/firebase-setup.md`
+  is click-by-click, ~15 minutes, **two sittings** — his user id does not exist
+  until he has signed in once. Unconfigured is the normal case and every failure
+  is silent; the site behaves exactly as it did before.
+
+## Trades, and what the site will and will not do to ESPN
+
+- **A trade is priced by the lineup each squad would field EACH REMAINING
+  WEEK.** See rule 10. Already-played weeks are excluded entirely — banked
+  points are banked and no trade can move them.
+- **Per-week averages skip byes but NOT nulls**, and the asymmetry is
+  deliberate: ESPN's 0.00 for a bye is a week he does not play, while a `null`
+  is ESPN being quiet, and promoting one into the other would flatter every
+  thinly-covered player. A consequence worth remembering: `perWeek × weeks` no
+  longer equals the rest-of-season total, and every note showing both says so.
+- **ESPN's trade URL can only ever tick the OTHER side.** Verified against their
+  shipped bundle: `players=` is matched against the counterparty's roster alone,
+  there is no parameter for your own, and swapping `teamId`/`fromTeamId` fails
+  because ESPN overrides it to a team you own and then refuses. The decisive
+  evidence is their own **Decline & Counter** button, which ships a trade link
+  with **no players on it at all**.
+- **So the extension ticks his side, on the page.** The site stages a note, a
+  content script reads it and ticks, he clicks ESPN's own Propose button.
+  **This is not a write.** `host_permissions` still holds only the read host and
+  the suite asserts it; the content script is forbidden from touching Propose,
+  Cancel or the confirmation modal. A checkbox is a TOGGLE and their side is
+  already ticked, so it reads state before clicking — blind clicking would untick
+  them and propose a smaller trade than intended.
+- **Nothing on this site sends anything to ESPN.** The single write is always
+  his own click, inside ESPN.
 
 ## Where things stand
 
@@ -329,10 +404,11 @@ Everything Tim has asked for is built and live:
 |---|---|
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
 | `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played |
-| `analysis.html` | All ten squads **twice over** — nine spots, a total and the bench, once on the season average and once on the selected week, with a hover card carrying each man's whole season as a chart and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; "Season by week"; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
-| `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation, and a **time machine** — a reading of the whole page is saved automatically once a week, picking one replays the season as it looked then, and the archive committed under `data/snapshots/` restores itself into any browser |
+| `analysis.html` | All ten squads **twice over** — nine spots, a total and the bench, once on the season average and once on the selected week, with a card (hover, or tap on a phone) carrying each man's whole season as a three-row chart — weeks, projection, and actual for weeks already played and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; "Season by week"; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
+| `schedule.html` | Standings, matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation **including the playoff bracket** — where a team finishes is the bracket for places 1–6 and the regular-season table below that, which is how this league ranks people — and a **time machine** — a reading of the whole page is saved automatically once a week, picking one replays the season as it looked then, and the archive committed under `data/snapshots/` restores itself into any browser |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
-| `trade.html` | **Depth map** — ten managers by six positions, each cell the points his starters are above replacement, so reading down a column finds who is thin where you are deep. Then the **finder**: every 1-for-1, 2-for-1 and 1-for-2 in the league, keeping only the ones where **both** lineups improve |
+| `trade.html` | **Depth map**, then the **finder**: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked |
+| `summary.html` | The weekly chart for his group chat — member, season LUCK, title %, loser %, at 100,000 runs — rendered to an image and handed to the phone's share sheet |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
 
@@ -358,18 +434,24 @@ silently missing, and `view=mMembers` is a decoy that returns no names AND
 strips the owner arrays. Resolution lives in one place so no page module knows
 about it; `teamName` rides alongside for anywhere the joke name is still wanted.
 
-**Three features now share `optimalLineup`** — the schedule forecast, the trade
-finder and "Who to start". That is deliberate: it is the reason they cannot
+**Four features now share `optimalLineup`** — the schedule forecast (regular
+season AND the playoff bracket), the trade finder, "Who to start", and the
+per-week trade valuation. That is deliberate: it is the reason they cannot
 disagree about who a squad ought to be starting. Do not give any of them a copy.
+
+**`js/forecast.js` is the most shared file in the repo.** `optimalLineup`,
+`slotsFromCounts` and `winProbability` are imported by `js/trade.js` and
+`js/analysis-page.js` as well as the schedule page. Changing one of those
+signatures breaks three features at once, and only the full suite will tell you.
 
 ## Tests
 
-`cd tests && npm install && npm test` — 18 suites, over 3,600 assertions.
+`cd tests && npm install && npm test` — 25 suites, over 8,900 assertions.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
 `tests/README.md` for the two linkedom gotchas that otherwise waste an hour.
 
-Four worth knowing by name:
+Five worth knowing by name:
 
 - `test-pages-render.mjs` boots every page's real HTML with its real modules, so
   a missing element id or a typo in a selector fails there instead of in Tim's
@@ -383,7 +465,13 @@ Four worth knowing by name:
   the same click with a mouse is left completely alone. It found a real defect
   the day it was written: a tap on a man with no playerId opened his card AND
   drilled into a team nobody picked.
-- `an-test.mjs` and `fc-test.mjs` are the two big end-to-end ones (565 and 434
+- `test-trade-weekly.mjs` is the biggest single suite (4,009). Its hand fixture
+  is Tim's own complaint made falsifiable: three QBs rotating 18/15/15, each
+  averaging exactly 16, against one steady 17. The season average prices them
+  48 against 51 and calls the single good QB better; week by week they are 54
+  against 51. If anyone reverts the weekly measure, that disagreement vanishes
+  and the suite fails.
+- `an-test.mjs` and `fc-test.mjs` are the two big end-to-end ones (565 and 707
   assertions). They re-derive their expected answers independently rather than
   reading the page's own arithmetic back to it — `an-test` rebuilds every week's
   lineup from `demo-rosters.js` to check the who-to-start marks, and `fc-test`
@@ -393,38 +481,54 @@ Four worth knowing by name:
 
 ## What is genuinely open
 
-- **The archive is empty and the clock is running.** See the block at the top of
-  this file. This is the only open item with a deadline: everything else can be
-  built in December just as well as today.
-- **Nothing has been checked against his real league in a browser.** All of it
-  is verified against demo data, stubs and public leagues. That is the first
-  thing to do: open each page on 476225250 and fix what the real payload
-  breaks. Specifics to watch — whether `% own` populates from the roster view;
-  whether any week's projection drops implausibly far (bye handling over-firing);
-  and whether the Players page's two-requests-per-week feels acceptable to him
-  on a real thirteen-week span.
-- **Trade interaction** — the depth map and the finder are BUILT (`trade.html`,
-  `js/trade.js`), to Tim's "build 1 and 2" on 2026-09-09. What is deliberately
-  not built, and was on the same list of ideas he picked from: showing a trade's
-  effect in **expected wins** rather than points (`simulateSeason` already
-  exists), a **week-by-week strip** so a deal that is +5 on average and −12 in
-  the playoff weeks is visible, and an **auto-written pitch message**. Ask
-  before adding them; he asked for two of five on purpose.
-  **Nothing is ever sent to ESPN** and the page says so — writes are the later
-  phase below.
-- **Playoff odds.** The simulation reports who finishes first in the
-  regular-season standings and says plainly that this is not a championship.
-  Real title odds need his bracket rules — size, seeding, byes — and he has not
-  given them.
-- **Writes to ESPN** (set lineup, add/drop, propose trade) are a later phase he
-  has asked about. They must go behind a popup confirmation or a popup-issued
-  nonce, **never the open page bridge** — any page on the origin could otherwise
-  drop players. See "The bridge & writes" in `PROGRESS.md`. The roster detail's
-  swap is the obvious first candidate — it already builds a legal lineup — but
-  it is a what-if today and the page says so; do not quietly wire it up.
+Ordered by what would hurt most to get wrong.
+
+- **THE ARCHIVE IS STILL EMPTY AND WEEKS ARE GONE.** See the block at the top of
+  this file, and check `data/snapshots/` and his Downloads yourself before
+  anything else. The likeliest reason is now known and is worth saying to him:
+  a reading is only taken when `schedule.html` loads on LIVE data, live data
+  needs the bridge extension, and **the extension cannot exist on his phone** —
+  so if he has moved to reading the site there, no reading will ever be taken.
+  Firebase sync makes the archive *readable* on the phone; it cannot make one
+  be *taken* there.
+- **Almost none of this has been seen against his real league in a browser.**
+  Everything is verified against demo data, stubs and public leagues.
+  476225250 is private and returns 401 to anything without his cookie, so the
+  first load through the bridge is where reality arrives. Specifically unproven
+  there: the real-names join; the playoff field size read from his settings;
+  whether `% own` populates; and every number the Trade page's weekly measure
+  produces.
+- **The trade tick-your-side has never run in a real browser.** ESPN's markup
+  and the React click path were read out of their shipped bundle and the suite
+  proves the logic, but linkedom cannot prove ESPN's own store updates. The
+  first real test is him opening a link. It fails loudly if it fails — the badge
+  says "ESPN did not record the selection for: …" rather than proposing less
+  than he intended.
+- **Firebase is built and wired but not switched on.** `docs/firebase-setup.md`
+  is click-by-click; it needs ~15 minutes of console work only he can do, in
+  **two sittings**, because his own user id does not exist until he has signed
+  in once. Until he does it, `cloud.js` is unconfigured and every page behaves
+  exactly as it did before.
+- **Three decisions of his that are open**, all flagged to him and none urgent:
+  whether his league really has 6 playoff teams (his prose said 4; his pasted
+  settings said 6; the page now reads it from ESPN, so live data settles it);
+  whether 3rd-vs-4th should keep being split by seed or should follow the
+  consolation ladder; and whether the joke team names should appear anywhere
+  now that squads are labelled with people.
+- **Writes to ESPN are still not built, and the deep link is why.** He chose
+  deep-linking over auto-send deliberately. If it ever comes back: there is **no
+  dry run** (`VALIDATE` is not an accepted `executionType`), a two-team test
+  league violates ESPN's Fair Play policy whose stated remedy is a ban, and a
+  flagged account mid-season would cost him the league and this tool at once,
+  because the bridge reads through his cookie. The staged-trade flow is not a
+  write and does not change any of that.
+- **Trade ideas he deliberately did not pick**, from a list of five on
+  2026-09-09: a deal's effect in **expected wins** rather than points, and an
+  **auto-written pitch message**. (The third, a week-by-week strip, now exists
+  as the per-offer pop-up.) Ask before adding them.
 - **A FLEX-empty table is untested.** Every fixture pool contains running backs,
   so the filter always matches somebody. The same empty-state wording is proven
-  through the reachable "no defense" case.
+  through the reachable "no defence" case.
 - The drafter's `TUNING` numbers are placeholders standing in for answers he has
   not given, and the score-differential curve has a rationale he has promised
   and not yet explained. Reproduce it; do not simplify it.
