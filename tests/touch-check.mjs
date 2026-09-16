@@ -263,11 +263,25 @@ function check(scenario, { document, window, errors, rejections }) {
   const bar = document.getElementById('connBar');
   const advice = bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '';
   c.ok('the connection bar rendered', advice.length > 10, `bar read "${advice}"`);
+
+  // THE FIELD EXISTS WITH NO EXTENSION, and this is the half that was a real
+  // bug rather than a wording problem. The bar used to render a sentence and
+  // nothing else when the bridge was absent, so there was no way to connect at
+  // all — which quietly made a PUBLIC league unreachable from any browser
+  // without the extension, phone or desktop, even though js/espn.js has always
+  // read one over a plain fetch. Asserted in BOTH scenarios: it is not a phone
+  // feature, it is the thing that was missing everywhere.
+  c.ok('there is a league ID field even with no extension',
+    !!document.getElementById('connLeague'), 'no #connLeague in the bar');
+  c.ok('and a button to submit it', !!document.getElementById('connSync'), 'no #connSync');
+
   if (cfg.coarse) {
     c.ok('a phone is not told to install an extension it cannot install',
       !/Install the Fantasy Football/i.test(advice), advice);
-    c.ok('it is told where the live numbers are instead',
-      /cannot install one/i.test(advice) && /on your computer/i.test(advice), advice);
+    c.ok('it is told where a private league has to be read instead',
+      /cannot install/i.test(advice) && /on your computer/i.test(advice), advice);
+    c.ok('and that a public league does work here',
+      /public league works here/i.test(advice), advice);
   } else {
     c.ok('a desktop still gets the install prompt',
       /Install the Fantasy Football/i.test(advice), advice);

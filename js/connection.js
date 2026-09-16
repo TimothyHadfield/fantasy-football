@@ -8,7 +8,7 @@
 // page opts in simply by including that div and this script.
 
 import * as bridge from './bridge.js';
-import { configure, AuthError } from './espn.js';
+import { configure, fetchLeague, AuthError } from './espn.js';
 
 const KEY = 'ff.connection';
 // index.html and the data pages predate this bar and speak this key.
@@ -138,6 +138,46 @@ function ago(ts) {
   return `${Math.floor(s / 86400)} d ago`;
 }
 
+/**
+ * Identify the league WITHOUT the extension, by asking ESPN directly.
+ *
+ * This is the whole of what a public league needs, and until now nothing called
+ * it: `connect()` went through `bridge.probe()` and only that, so with no
+ * extension there was no way to connect at all — while `js/espn.js` has always
+ * fallen back to a direct fetch for every actual data read. The transport layer
+ * was ready and the bar in front of it was not, which meant a public league was
+ * unreachable from any browser without the extension, phone or desktop.
+ *
+ * Returns the same `{ ok, data }` shape `bridge.probe()` does, deliberately, so
+ * `connect()` below has one answer to handle rather than two.
+ */
+async function directProbe() {
+  try {
+    const raw = await fetchLeague(['mTeam', 'mSettings']);
+    const teams = (raw.teams || []).map((t) => ({
+      id: t.id,
+      name: [t.location, t.nickname].filter(Boolean).join(' ').trim() || t.name || `Team ${t.id}`,
+      abbrev: t.abbrev,
+    }));
+    return {
+      ok: true,
+      data: {
+        leagueId: String(state.leagueId),
+        season: Number(state.season),
+        name: raw.settings?.name || `League ${state.leagueId}`,
+        teamCount: raw.settings?.size ?? teams.length,
+        currentWeek: raw.status?.currentMatchupPeriod ?? null,
+        teams,
+      },
+    };
+  } catch (err) {
+    // espn.js's AuthError already carries the one useful sentence — the ESPN
+    // setting that makes a league readable without any login — so it is passed
+    // through rather than replaced with something shorter and less actionable.
+    return { ok: false, error: err instanceof AuthError ? err.message : String(err.message || err) };
+  }
+}
+
 async function connect() {
   if (!state.leagueId) {
     state.error = 'Enter your league ID.';
@@ -149,7 +189,13 @@ async function connect() {
   render();
 
   configure({ leagueId: state.leagueId, season: state.season });
-  const res = await bridge.probe({ leagueId: state.leagueId, season: state.season });
+  // The extension when it is there, ESPN directly when it is not. The bridge is
+  // preferred because it is the only one of the two that can read a PRIVATE
+  // league; the direct path is what makes a public one work with no extension
+  // at all, which is the only way a phone can ever show live numbers.
+  const res = bridge.isAvailable()
+    ? await bridge.probe({ leagueId: state.leagueId, season: state.season })
+    : await directProbe();
 
   state.busy = false;
   if (res.ok) {
@@ -203,30 +249,33 @@ function render() {
       <input id="connLeague" class="conn-input" inputmode="numeric" placeholder="League ID"
              value="${esc(state.leagueId)}">
       <button type="button" id="connSync" class="conn-btn">${state.busy ? 'Connecting…' : 'Connect'}</button>`;
-  } else if (coarsePointer()) {
-    // TELLING SOMEBODY TO INSTALL SOMETHING THEY CANNOT INSTALL IS WORSE THAN
-    // SAYING NOTHING. The bridge is an unpacked Manifest V3 extension, and
-    // neither iOS Safari nor Chrome on Android can load one — so on a phone the
-    // desktop sentence below sends the reader off to look for a button that is
-    // not there and to conclude the site is broken. It is not: a private league
-    // is unreadable from a phone by design (ESPN's cookies are third-party from
-    // github.io and a page cannot set the Cookie header), and that is a browser
-    // constraint, not something a better layout fixes. Every other page works
-    // here exactly as it does on the desktop, which is the part worth saying.
-    body = `
-      <span class="conn-dot"></span>
-      <span class="conn-main">
-        <strong>Demo data on this device.</strong> Reading your private league needs the
-        bridge extension, and a phone or tablet browser cannot install one &mdash; open the
-        site on your computer for live numbers. Everything else here works the same.
-      </span>`;
   } else {
+    // NO EXTENSION. This used to be a dead end: a sentence and no input, so
+    // there was no way to connect at all — which quietly meant a PUBLIC league
+    // was unreachable from any browser without the extension, even though
+    // js/espn.js has always read one over a plain fetch. The field is here now,
+    // and `connect()` probes ESPN directly when the bridge is absent.
+    //
+    // Two different sentences, because the advice really is different. On a
+    // phone, "install the extension" is advice nobody can take: the bridge is
+    // an unpacked Manifest V3 extension and neither iOS Safari nor Chrome on
+    // Android can load one. Sending a reader to look for a button that does not
+    // exist is how they conclude the site is broken, when in fact every page
+    // works there — it is only a PRIVATE league that cannot be read, because
+    // ESPN's cookies are third-party from github.io and a page cannot set the
+    // Cookie header. That is a browser wall, not a layout problem.
+    const phone = coarsePointer();
+    const advice = phone
+      ? 'A phone cannot install the bridge extension, so a <strong>private</strong> league ' +
+        'has to be read on your computer. A public league works here &mdash; try your ID:'
+      : 'Showing demo data. Install the Fantasy Football Bridge extension to read a ' +
+        'private league, or enter the ID of a public one:';
     body = `
       <span class="conn-dot"></span>
-      <span class="conn-main">
-        <strong>Not connected.</strong> Showing demo data. Install the Fantasy Football
-        Bridge extension to read your real league.
-      </span>`;
+      <span class="conn-main"><strong>Not connected.</strong> ${advice}</span>
+      <input id="connLeague" class="conn-input" inputmode="numeric" placeholder="League ID"
+             value="${esc(state.leagueId)}">
+      <button type="button" id="connSync" class="conn-btn">${state.busy ? 'Connecting…' : 'Connect'}</button>`;
   }
 
   el.className = cls;
