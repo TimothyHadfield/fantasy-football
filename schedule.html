@@ -425,16 +425,20 @@ td.state-live { color: var(--warn); }
       <thead><tr>
         <th class="name" data-sort>Team</th>
         <th data-sort title="Average number of regular-season wins across every simulated season, banked wins included.">Proj. wins</th>
-        <th data-sort title="Average finishing place across every simulated season. Lower is better.">Avg place</th>
-        <th data-sort title="The single place this team finished in most often — not where it usually finishes, just the most common one.">Most likely</th>
-        <th data-sort title="How often this team finished inside the playoff places in the regular-season table.">Playoffs %</th>
+        <!-- A PLACE HERE IS THE FINAL PLACING, not the league table: the playoff
+             bracket decides the top places and the table decides the rest. Top
+             the table and lose your semi-final and you did not finish 1st. The
+             note under the table spells the rule out in full. -->
+        <th data-sort title="Average FINAL place across every simulated season — the playoff bracket for the top places, the regular-season table below them. Lower is better, and it is not the same as where the table put you.">Avg place</th>
+        <th data-sort title="The single final place this team finished in most often — not where it usually finishes, just the most common one.">Most likely</th>
+        <th data-sort title="How often this team finished inside the playoff places in the regular-season table. Since the bracket fills exactly those places, it is also how often this team finished that high overall.">Playoffs %</th>
         <th data-sort title="How often this team seeded high enough to skip the first playoff round. The bracket pads up to the next power of two, so a six-team field gives the top two a bye.">Bye %</th>
         <!-- Topping the table and winning the league are two different facts and
              are two different columns. The old page called first-in-the-table
              "Title %", which is the confusion this split exists to remove: seeds
              are all that finishing first buys you. -->
-        <th data-sort title="How often this team finished first in the regular-season standings. That decides the top seed — it is NOT the championship.">1st in table %</th>
-        <th data-sort title="How often this team won the championship round. This is the title: the winner of the last playoff game, not the top of the regular-season table.">Title %</th>
+        <th data-sort title="How often this team finished first in the regular-season standings. That decides the top seed — it is NOT the championship, and it is NOT the same as finishing 1st.">1st in table %</th>
+        <th data-sort title="How often this team won the championship round. This is the title: the winner of the last playoff game, not the top of the regular-season table. It is also how often this team finished 1st — the champion is 1st in the final placing.">Title %</th>
         <th data-sort title="How often this team finished last in the REGULAR-SEASON standings. Deliberately not the consolation ladder — the wooden spoon here is decided before the playoffs start.">Last %</th>
       </tr></thead>
       <tbody></tbody>

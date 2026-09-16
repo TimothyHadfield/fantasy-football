@@ -96,6 +96,11 @@ for (const t of big.teams) {
   close(t.places.reduce((x, y) => x + y, 0), 1, 1e-9, `team ${t.teamId} places sum to 1`);
   ok(t.places.every((p) => p >= 0 && p <= 1), `team ${t.teamId} probabilities in range`);
   ok(t.meanPlace >= 1 && t.meanPlace <= 10, `team ${t.teamId} mean place in range`);
+  // With no bracket there is nothing to hybridise, so the final placing IS the
+  // table. Asserted rather than assumed: it is what keeps every caller that
+  // never asks for playoffs exactly where it was.
+  ok(JSON.stringify(t.places) === JSON.stringify(t.tablePlaces),
+    `team ${t.teamId} final placing is the table when no bracket is played`);
 }
 // Every place is filled exactly once per run, so each place column sums to 1.
 for (let p = 0; p < 10; p++) {
@@ -260,6 +265,110 @@ for (const s of [7, 8, 9, 10]) {
   ok(bySeed(s).pBye === 0 && bySeed(s).pFinal === 0, `seed ${s} reaches no round at all`);
 }
 
+// ---------- THE FINAL PLACING, WORKED OUT BY HAND ---------------------------
+//
+// Same fixture, and now the whole placing rather than just the title. Every
+// number below is arithmetic on coin flips, done here rather than read back off
+// the simulator.
+//
+// The bracket is bracketSeeds(6) = 1,8,4,5,2,7,3,6 — so round one is 4v5 and
+// 3v6, seeds 1 and 2 have byes, half A is {1,4,5} and half B is {2,3,6}. Every
+// game is a coin flip. Places come out as:
+//
+//   1st = champion, 2nd = beaten finalist,
+//   3rd/4th = the two losing semi-finalists, better seed 3rd,
+//   5th/6th = the two losing first-rounders, better seed 5th,
+//   7th-10th = the four who never qualified, in table order.
+//
+// Seed 1: wins its semi half the time; of those it wins the final half the
+//   time. So 1/4 and 1/4. When it loses the semi, the OTHER semi loser came out
+//   of half B and is therefore always a worse seed — so seed 1 is 3rd every
+//   time it loses, never 4th.
+// Seed 2: the mirror, except that the other semi loser can be seed 1 (half the
+//   time), which outranks it. So its 1/2 of semi losses splits evenly into 3rd
+//   and 4th.
+// Seed 3: loses round one half the time, and the other first-round loser is
+//   seed 4 or seed 5 — both worse — so that half is 5th, never 6th. The
+//   remaining half splits 1/8 each into the final's two places and into the
+//   semi-loss tier, where half B's loser meets half A's, which is seed 1 half
+//   the time (so 4th) and seed 4 or 5 otherwise (so 3rd).
+// Seed 6: the mirror of seed 3 — beaten in round one it is always the WORSE of
+//   the two, so 6th; beaten in the semi it is worse than anyone half A can
+//   send, so 4th.
+// Seeds 4 and 5 come out identical, and that is not a bug: they play each
+//   other, so the loser's tier-mate is always the 3v6 loser and the winner's
+//   semi-loss tier-mate is always half B's loser. Neither seed's number ever
+//   enters the comparison, so the two distributions cannot differ.
+const PLACING = {
+  1: [1 / 4, 1 / 4, 1 / 2, 0, 0, 0, 0, 0, 0, 0],
+  2: [1 / 4, 1 / 4, 1 / 4, 1 / 4, 0, 0, 0, 0, 0, 0],
+  3: [1 / 8, 1 / 8, 1 / 8, 1 / 8, 1 / 2, 0, 0, 0, 0, 0],
+  4: [1 / 8, 1 / 8, 1 / 16, 3 / 16, 1 / 4, 1 / 4, 0, 0, 0, 0],
+  5: [1 / 8, 1 / 8, 1 / 16, 3 / 16, 1 / 4, 1 / 4, 0, 0, 0, 0],
+  6: [1 / 8, 1 / 8, 0, 1 / 4, 0, 1 / 2, 0, 0, 0, 0],
+  7: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+  8: [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+  9: [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+  10: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+};
+for (const [seed, want] of Object.entries(PLACING)) {
+  const got = bySeed(Number(seed)).places;
+  for (let p = 0; p < 10; p++) {
+    close(got[p], want[p], 0.006, `seed ${seed} finishes ${p + 1}${['st','nd','rd'][p] || 'th'}`);
+  }
+  // The mean falls straight out of the same numbers, so it is spelled out from
+  // them rather than quoted as a constant somebody could mistype.
+  const mean = want.reduce((a, p, i) => a + p * (i + 1), 0);
+  close(bySeed(Number(seed)).meanPlace, mean, 0.02, `seed ${seed} averages ${mean}`);
+}
+// A permutation of 1..10 in every season, so the columns and the means are
+// exact totals rather than approximations.
+for (let p = 0; p < 10; p++) {
+  close(coin.teams.reduce((a, t) => a + t.places[p], 0), 1, 1e-9,
+    `place ${p + 1} is taken by exactly one team per season`);
+}
+close(coin.teams.reduce((a, t) => a + t.meanPlace, 0), 55, 1e-9,
+  'mean FINAL places still sum to 55');
+
+// A team that cannot reach the top six has P(place <= 6) of EXACTLY zero — not
+// a rounded-down small number — and its placing is not a distribution at all,
+// it is its regular-season rank.
+for (const s of [7, 8, 9, 10]) {
+  const t = bySeed(s);
+  const topSix = t.places.slice(0, 6).reduce((a, p) => a + p, 0);
+  ok(topSix === 0, `seed ${s} has P(top six) of exactly 0`, String(topSix));
+  ok(t.places[s - 1] === 1, `seed ${s} finishes ${s}th every single season`, String(t.places[s - 1]));
+  ok(t.meanPlace === s, `seed ${s} averages exactly ${s}`, String(t.meanPlace));
+}
+// "Finishes in the top six" and "makes the playoffs" are the same event, because
+// the six qualifiers are exactly the six who fill places 1-6. Checked for every
+// team rather than for the ones that make it obvious.
+for (const t of coin.teams) {
+  close(t.places.slice(0, 6).reduce((a, p) => a + p, 0), t.pPlayoffs, 1e-12,
+    `team ${t.teamId}: P(top six) is P(makes the playoffs)`);
+}
+// The title IS first place and the final IS the top two places. Both are read
+// off the placing in forecast.js rather than counted separately; this is the
+// assertion that says so out loud.
+for (const t of coin.teams) {
+  ok(t.pTitle === t.places[0], `team ${t.teamId}: title % is P(1st)`);
+  ok(Math.abs(t.pFinal - (t.places[0] + t.places[1])) < 1e-12,
+    `team ${t.teamId}: reaching the final is P(1st) + P(2nd)`);
+}
+// And topping the table is emphatically NOT finishing 1st. Seeds 1..10 are
+// nailed down here, so team 1 tops the table every season and wins the title a
+// quarter of the time.
+close(bySeed(1).pFirst, 1, 1e-12, 'seed 1 tops the table every season');
+close(bySeed(1).places[0], 0.25, 0.006, 'and finishes 1st a quarter of the time');
+ok(bySeed(1).pFirst !== bySeed(1).places[0],
+  'topping the table and finishing 1st are different numbers');
+// tablePlaces is the table, untouched by the knockout: seeds are fixed here, so
+// every team's table place is a certainty even while its finish is not.
+for (const t of coin.teams) {
+  ok(t.tablePlaces[t.teamId - 1] === 1,
+    `team ${t.teamId} takes table place ${t.teamId} every season`);
+}
+
 // ---------- the three columns are complete distributions ----------
 // One champion, six qualifiers, two byes, two finalists — per simulated season,
 // every season, so these are exact and not approximate.
@@ -348,6 +457,91 @@ ok(spoon.tableWinner.teamId === 1 && spoon.titleFavourite.teamId === 3,
 close(spoonTeam(1).pFirst, 1, 1e-12, 'team 1 tops the table every season');
 ok(spoonTeam(1).pTitle < 0.1, 'and still almost never wins it', String(spoonTeam(1).pTitle));
 
+// ---------- PLACE 10 AND "LAST IN THE REGULAR SEASON" NEVER DISAGREE --------
+// The seeds are the top six of the table, so the four left out are exactly the
+// bottom four and the last of them is the worst team in the league. That is an
+// invariant of the placing, not a property of these fixtures, so it is checked
+// team by team on every bracketed season built above. forecast.js asserts the
+// same thing internally and throws if it ever fails; this is the visible half.
+for (const [label, res] of [['coin', coin], ['spoon', spoon]]) {
+  const n = res.teams.length;
+  for (const t of res.teams) {
+    ok(t.places[n - 1] === t.tablePlaces[n - 1],
+      `${label}: team ${t.teamId}'s last-place chance is the same either way`,
+      `${t.places[n - 1]} vs ${t.tablePlaces[n - 1]}`);
+    ok(t.pLast === t.tablePlaces[n - 1], `${label}: team ${t.teamId}'s pLast is the table's`);
+  }
+  ok(res.wooden.teamId === res.byMean[res.byMean.length - 1].teamId,
+    `${label}: the wooden spoon is also the worst average finish`,
+    `${res.wooden.teamId} vs ${res.byMean[res.byMean.length - 1].teamId}`);
+}
+
+// ---------- THE CASE THAT PROVES THE CHANGE ---------------------------------
+//
+// One team walks the regular season and is then thrown in with everyone else
+// for three weeks of knockout. Its average FINAL place must be materially worse
+// than its average REGULAR-SEASON place. Under the old behaviour the two were
+// the same number by definition, so this assertion cannot pass by accident —
+// it fails outright without the hybrid placing.
+//
+// Team 1 projects 180 a week against everyone else's 100 over three weeks, from
+// a level start, so it wins each game with P = Phi(80 / (27*sqrt2)) ~ 0.982 and
+// tops the table nearly always (and on points-for when it does not go 3-0, at
+// ~540 against ~300). In the playoff weeks EVERY team projects 110 — the run-in
+// tells you nothing about a one-week game — so as the 1 seed it has a bye and
+// then two coin flips: 1/4 of the time 1st, 1/4 2nd, and 1/2 3rd, averaging
+// 2.25. Regular-season average: barely over 1.
+const TOPPLE_IDS = [1,2,3,4,5,6,7,8,9,10];
+const topple = simulateSeason({
+  teamIds: TOPPLE_IDS,
+  banked: new Map(TOPPLE_IDS.map((id) => [id, { wins: 0, pointsFor: 0 }])),
+  games: (() => {
+    const gs = [];
+    for (let w = 0; w < 3; w++) {
+      for (let i = 0; i < 5; i++) {
+        // A different partner each week, so nobody plays the same side twice.
+        const h = TOPPLE_IDS[i];
+        const a = TOPPLE_IDS[5 + ((i + w) % 5)];
+        gs.push({ homeId: h, awayId: a, homeProj: h === 1 ? 180 : 100, awayProj: a === 1 ? 180 : 100 });
+      }
+    }
+    return gs;
+  })(),
+  sigma: 27, runs: 100000, seed: 64,
+  playoff: { teams: 6, weeks: [14, 15, 16], proj: poProj(() => 110) },
+});
+const topTeam = topple.teams.find((t) => t.teamId === 1);
+const meanOf = (dist) => dist.reduce((a, p, i) => a + p * (i + 1), 0);
+const rsMean = meanOf(topTeam.tablePlaces);
+
+ok(topTeam.pFirst > 0.9, 'the run-away team tops the table almost every season',
+  String(topTeam.pFirst));
+close(rsMean, 1, 0.1, 'so its average REGULAR-SEASON place is barely over 1');
+close(topTeam.meanPlace, 2.25, 0.05, 'while its average FINAL place is the 1-seed’s 2.25');
+ok(topTeam.meanPlace - rsMean > 1,
+  'the bracket costs the table-topper more than a whole place',
+  `final ${topTeam.meanPlace.toFixed(3)} vs table ${rsMean.toFixed(3)}`);
+// The same fact stated the way a reader meets it: it tops the table four times
+// as often as it actually wins the thing.
+ok(topTeam.pFirst > 3 * topTeam.pTitle,
+  'it tops the table far more often than it lifts the trophy',
+  `${topTeam.pFirst} vs ${topTeam.pTitle}`);
+// And the place distribution is the bracket's, not the table's: it can finish
+// 2nd or 3rd often despite almost never being 2nd or 3rd in the standings.
+ok(topTeam.places[1] > 0.2 && topTeam.tablePlaces[1] < 0.1,
+  'it finishes 2nd often and is runner-up in the table almost never',
+  `final ${topTeam.places[1]}, table ${topTeam.tablePlaces[1]}`);
+close(topTeam.places.reduce((a, p) => a + p, 0), 1, 1e-9, 'and it is still a distribution');
+close(topple.teams.reduce((a, t) => a + t.meanPlace, 0), 55, 1e-9,
+  'mean final places still sum to 55 with a real season in front of the bracket');
+for (let p = 0; p < 10; p++) {
+  close(topple.teams.reduce((a, t) => a + t.places[p], 0), 1, 1e-9,
+    `topple: place ${p + 1} column sums to 1`);
+}
+for (const t of topple.teams) {
+  ok(t.places[9] === t.tablePlaces[9], `topple: team ${t.teamId} agrees about last place`);
+}
+
 // ---------- a tied playoff game goes to the higher seed ---------------------
 // ESPN's rule (support.espn.com, "Playoff Tiebreakers": "The higher-seeded team
 // advances"). A tie has probability zero under a continuous model, so it is
@@ -380,13 +574,37 @@ const withPo = simulateSeason({
   ...cfg, runs: 8000, seed: 31,
   playoff: { teams: 4, weeks: [14, 15], proj: null },
 });
-const strip = (r) => r.teams.map((t) => [t.teamId, t.places, t.meanWins, t.meanPlace]);
+// MOVED, DELIBERATELY: this used to compare `places`, which was the standings.
+// `places` is now the FINAL placing and must respond to the bracket — that is
+// the whole point of the change — so the standings are compared through
+// `tablePlaces`, which is the same array under a name that still means the
+// table. `pFirst` and `pLast` ride along because both are table facts too.
+const strip = (r) => r.teams.map((t) => [t.teamId, t.tablePlaces, t.meanWins, t.pFirst, t.pLast]);
 ok(JSON.stringify(strip(noPo)) === JSON.stringify(strip(withPo)),
   'adding a bracket leaves the regular-season standings untouched');
+// The other half of the same claim, and the reason the test had to move: the
+// FINAL placing does change, because four teams from four now play a knockout
+// for places 1-4 instead of being ranked on wins.
+ok(JSON.stringify(withPo.teams.map((t) => t.places)) !==
+   JSON.stringify(withPo.teams.map((t) => t.tablePlaces)),
+  'but the final placing is not the standings once a bracket is played');
+ok(JSON.stringify(noPo.teams.map((t) => t.places)) ===
+   JSON.stringify(noPo.teams.map((t) => t.tablePlaces)),
+  'and with no bracket the two are the same array of numbers');
 ok(noPo.teams.every((t) => t.pTitle === null && t.pPlayoffs === null && t.seeds === null),
   'with no bracket asked for, the playoff fields are null rather than zero');
+ok(noPo.teams.every((t) => t.pFinal === null && t.pBye === null),
+  'including the two read back off the placing');
 ok(noPo.playoff === null && noPo.titleFavourite === null,
   'and the result carries no bracket');
+// A field as big as the league has no teams left over, so the placing is the
+// bracket the whole way down and "last in the table" is then a different
+// question from "last overall". forecast.js skips its last-place assertion in
+// exactly this case, so the case is exercised rather than merely described.
+ok(strong.teams.some((t) => t.places[7] !== t.tablePlaces[7]),
+  'with everyone in the bracket, last overall and last in the table can differ');
+ok(strong.teams.every((t) => t.pLast === t.tablePlaces[7]),
+  'and pLast stays the table’s answer, which is Tim’s rule');
 
 // ---------- falling back when a playoff week has no projection --------------
 // Not the normal case — ESPN publishes per-week projections right through the

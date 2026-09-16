@@ -26,12 +26,16 @@ const prefs = scope('schedule');
  * Run counts the simulation panel offers, and the seed it always uses.
  *
  * Measured on a 10-team, ~60-game season WITH the three-round playoff bracket
- * on top (2026-09-16, node 24): 1,000 runs ≈ 26ms, 10,000 ≈ 160ms,
- * 50,000 ≈ 880ms, 100,000 ≈ 1.4s. The bracket itself is nearly free — five more
- * games on top of about sixty — so those are barely above the same run counts
- * without it. The default is still 10,000: fast enough not to be worth a
- * spinner, and precise enough that the counting noise (see simNote) is under a
- * percentage point.
+ * and the final placing on top (re-measured 2026-09-16 after the placing
+ * landed, node 24, median of five warmed runs): 1,000 ≈ 6ms, 10,000 ≈ 53ms,
+ * 50,000 ≈ 290ms, 100,000 ≈ 590ms. A COLD first run — which is what the first
+ * click after a page load actually gets — is more like 700-900ms at 100,000,
+ * and a phone is slower again. The bracket and the placing together cost about
+ * a sixth on top of the same run count without them (100,000 is ~500ms with no
+ * bracket at all): five knockout games and one sort of at most four teams,
+ * against sixty league games. The default is still 10,000 — fast enough not to
+ * be worth a spinner, and precise enough that the counting noise (see simNote)
+ * is under a percentage point.
  *
  * 100,000 is offered because Tim asked for it for a summary elsewhere, and it
  * is well over a second of straight-line arithmetic — which is exactly why
@@ -56,15 +60,38 @@ const SIM_RUN_CHOICE = (v) => (SIM_RUNS.includes(Number(v)) ? Number(v) : 10000)
  * wrong value shows up in the first sentence under the table rather than hiding
  * in the arithmetic.
  *
- * It is a FALLBACK. `js/season.js` does not surface ESPN's own
- * `settings.scheduleSettings.playoffTeamCount` (it exists — probed 2026-09-16,
- * league 1241838 returns 6 and 899513 returns 4 — but nothing on the path this
- * page uses decodes it, and espn.js is not this feature's to change). So the
- * page assumes this number and SAYS it assumed it. If season.js ever exposes
- * the setting, read it here and the note below will start saying "read from
- * your league" on its own.
+ * IT IS ONLY A FALLBACK NOW. `js/espn.js`'s `parseLeague` decodes ESPN's own
+ * `scheduleSettings` and `js/season.js`'s `fetchSchedule` carries it through,
+ * so on live data the real field size is used and the note below says it was
+ * read from the league rather than assumed. Probed 2026-09-16: league 1241838
+ * returns 6 and 899513 returns 4, so this genuinely differs between leagues and
+ * a constant would be wrong for somebody.
+ *
+ * The fallback still earns its place: demo has no ESPN settings at all, and an
+ * archived reading taken before this existed carries none either. Both get this
+ * number and both say so.
  */
-const PLAYOFF_TEAMS = forecast.DEFAULT_PLAYOFF_TEAMS;   // 6, from Tim's settings
+const DEFAULT_PLAYOFF_TEAMS = forecast.DEFAULT_PLAYOFF_TEAMS;   // 6, from Tim's settings
+
+/**
+ * How many teams make the playoffs, for the season on screen.
+ *
+ * A function rather than a constant because the answer arrives with the data:
+ * demo and an old archive have no settings, and a different league has a
+ * different bracket. Clamped to the league size, because a six-team bracket in
+ * a four-team stub is not a thing and would seat teams that do not exist.
+ */
+function playoffTeams() {
+  const n = state.data?.teams?.length || 0;
+  const said = state.data?.playoffs?.playoffTeams;
+  const want = Number.isFinite(said) && said > 0 ? said : DEFAULT_PLAYOFF_TEAMS;
+  return n ? Math.min(want, n) : want;
+}
+
+/** Did ESPN tell us the field size, or are we assuming it? Drives the note. */
+function playoffTeamsKnown() {
+  return Number.isFinite(state.data?.playoffs?.playoffTeams);
+}
 
 const state = {
   source: prefs.get('source', 'demo'),
@@ -297,6 +324,16 @@ function normalizeSchedule(raw, { isDemo }) {
   return {
     leagueName: raw.leagueName || (isDemo ? 'Demo League' : 'Your league'),
     teams: teams.map((t) => ({ id: t.id, name: t.name })),
+    // Carried through, not rebuilt. This page normalises into its own shape and
+    // everything downstream reads `state.data`, so a field dropped here is a
+    // field the bracket can never see — which is exactly what happened: the
+    // league's own playoff settings reached `fetchSchedule` and then stopped at
+    // this return, leaving the panel assuming a six-team field and saying so.
+    //
+    // Null for demo and for an archived reading taken before ESPN's settings
+    // were decoded, and `playoffTeams()` falls back for both. A null here means
+    // "ESPN did not say", never a number.
+    playoffs: raw.playoffs || null,
     weeks,
     byWeek,
     games,
@@ -822,7 +859,7 @@ function buildProjection(weekTeams) {
 // the same treatment; that is the point of deriving it rather than writing 14
 // down somewhere.
 //
-// The number of ROUNDS follows from PLAYOFF_TEAMS, not from a second setting —
+// The number of ROUNDS follows from the field size, not from a second setting —
 // see playoffRoundCount() in forecast.js. Six teams is a three-round bracket in
 // weeks 15, 16 and 17 of Tim's league, which is exactly what his ESPN settings
 // list as Round 1 / Round 2 / Championship at one week each.
@@ -837,7 +874,7 @@ function regularSeasonLastWeek() {
 function playoffWeeks() {
   const last = regularSeasonLastWeek();
   if (!last) return [];
-  const rounds = forecast.playoffRoundCount(PLAYOFF_TEAMS);
+  const rounds = forecast.playoffRoundCount(playoffTeams());
   return Array.from({ length: rounds }, (_, i) => last + 1 + i);
 }
 
@@ -2212,7 +2249,7 @@ function simInputs() {
   // answer. What is still NOT in the key is the selected team, for the same
   // reason as before: the bracket is the same bracket whoever is looking at it.
   const weeks = playoffWeeks();
-  const playoff = { teams: PLAYOFF_TEAMS, weeks, proj: state.projection?.proj || null };
+  const playoff = { teams: playoffTeams(), weeks, proj: state.projection?.proj || null };
   const playoffProjKey = weeks.map((w) => {
     const forWeek = state.projection?.proj?.get(w);
     return forWeek ? teamIds.map((id) => forWeek.get(id) ?? null) : null;
@@ -2225,7 +2262,7 @@ function simInputs() {
     teamIds,
     [...banked].map(([id, b]) => [id, b.wins, Math.round(b.pointsFor * 10)]),
     games.map((g) => [g.homeId, g.awayId, g.homeProj, g.awayProj]),
-    PLAYOFF_TEAMS,
+    playoffTeams(),
     weeks,
     playoffProjKey,
   ]);
@@ -2402,11 +2439,20 @@ function paintSimulation(sim, inputs) {
     .join('');
 
   // ---- the selected team's own place distribution -------------------------
+  //
+  // THE FINAL PLACING, not the league table. The caption says which, because
+  // this chart is the one thing on the panel a reader interprets without
+  // reading a header, and the two answers differ by a place and a half for a
+  // team that tops the table and then loses a semi-final.
   const chart = $('simChart');
   if (mine) {
     $('simCap').innerHTML =
       `Where <strong>${esc(team.name)}</strong> finished across ${commas(sim.runs)} simulated ` +
-      `seasons. Most likely ${ordinal(mine.modePlace)}, averaging ${fmt(mine.meanPlace)}.`;
+      `seasons. Most likely ${ordinal(mine.modePlace)}, averaging ${fmt(mine.meanPlace)}. ` +
+      (po
+        ? `Places 1–${po.teams} are the playoff bracket; ${po.teams + 1}–${d.teams.length} are the ` +
+          `regular-season table.`
+        : `No bracket could be built, so these are regular-season places.`);
     // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
     // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
     histogram(chart, {
@@ -2479,10 +2525,57 @@ function paintSimulation(sim, inputs) {
   // teams and his prose alongside them said four; the settings win, but a wrong
   // value has to be visible rather than buried in the arithmetic, so the panel
   // states how many qualify, how many get a bye, and which weeks the rounds
-  // fall in. One constant drives all of it — see PLAYOFF_TEAMS.
+  // fall in. One function drives all of it — see playoffTeams().
   const teamCount = d.teams.length;
+
+  // ---- what a PLACE is, which is the thing this panel used to get wrong ----
+  //
+  // It reported the regular-season standings as the finish, so a team that
+  // topped the table and lost its semi-final came out as 1st. Tim's rule, in
+  // his words: "Positions 1-6 should be based on the playoffs, and 7-10 should
+  // be based on the regular season. this is how the graph should be
+  // interpreted." Said here in full because "Avg place" is a number a reader
+  // will act on without ever asking what it counts.
+  //
+  // THE 3rd-vs-4th ASSUMPTION IS ON SCREEN ON PURPOSE. Nothing simulated
+  // separates the two teams knocked out in the same round — the real league's
+  // consolation ladder does, and Tim said not to simulate it — so the seed
+  // breaks it. A reader who is not told that will assume those games were
+  // played out, and this is the one number here that is an assumption rather
+  // than a count.
+  const placing = po
+    ? `<strong>Where a team finishes is the bracket for places 1–${po.teams}` +
+      (po.teams < teamCount ? ` and the regular-season table for ${po.teams + 1}–${teamCount}` : '') +
+      `.</strong> The champion is 1st and the beaten finalist 2nd; the teams knocked out in the ` +
+      `round before that take the places under them, and so on down to the round-one losers. ` +
+      (po.teams < teamCount
+        ? `Everyone who missed the bracket keeps the place the table gave them, which is why ` +
+          `${ordinal(teamCount)} is the worst regular-season team — the same team, and the same ` +
+          `number, as “Last %”. `
+        : '') +
+      (po.teams > 2
+        ? `<strong>Two teams knocked out in the same round are split by seed, and that is an ` +
+          `assumption rather than a result.</strong> No game played here separates 3rd from 4th` +
+          (po.teams > 4 ? ` or ${ordinal(po.teams - 1)} from ${ordinal(po.teams)}` : '') +
+          `: the league’s consolation ladder ` +
+          `decides those in real life, it cannot change who is in the top ${po.teams}, and it is ` +
+          `deliberately not simulated. Since this league does not reseed, the seed is its own ` +
+          `ordering of the two.`
+        : '')
+    : '';
+
   const bracket = po
-    ? `<strong>${po.teams} of ${teamCount} teams make the playoffs.</strong> ` +
+    ? `<strong>${po.teams} of ${teamCount} teams make the playoffs</strong>` +
+      // READ, OR ASSUMED — and the difference is worth a clause. ESPN publishes
+      // the field size in its own league settings, so on live data this is the
+      // league's answer and nobody has to take our word for it. Demo has no
+      // settings at all and an archived reading taken before we decoded them
+      // carries none either, so those two say plainly that a number was
+      // assumed. Tim's prose said four and his pasted settings said six, which
+      // is exactly why "where did this number come from" is on the screen.
+      (playoffTeamsKnown()
+        ? `, read from your league’s own ESPN settings. `
+        : ` — assumed, because this season carries no league settings to read it from. `) +
       `The bracket is ${plural(po.rounds, 'round')} of one week each, in ` +
       `${po.weeks.length ? `week${po.weeks.length > 1 ? 's' : ''} ${po.weeks.join(', ')}` : 'the weeks after the regular season'} — ` +
       (po.byes
@@ -2519,11 +2612,13 @@ function paintSimulation(sim, inputs) {
       `${plural(sim.games, 'game')} still to play ${sim.games === 1 ? 'was' : 'were'} played ` +
       `out ${commas(sim.runs)} times, and the bracket played on top of each one. There is ` +
       `no closed form for a final placing — where you finish turns on everyone else’s ` +
-      `results as much as your own. <strong>“Title %” is winning the championship round.</strong> ` +
-      `“1st in table” is a different question: finishing first in the regular-season ` +
-      `standings after week ${lastWeek}, which decides the seeds and nothing else. ` +
+      `results as much as your own. <strong>“Title %” is winning the championship round</strong>, ` +
+      `which is the same thing as finishing 1st. “1st in table” is a different question: ` +
+      `finishing first in the regular-season standings after week ${lastWeek}, which decides the ` +
+      `seeds and nothing else — top the table and lose a playoff game and you did not finish 1st. ` +
       `<strong>“Last %” is last in the regular-season table</strong>, not last in the ` +
       `playoffs and not the consolation ladder.`,
+    placing,
     bracket,
     bracketBasis,
     timing,

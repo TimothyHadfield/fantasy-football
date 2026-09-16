@@ -17,6 +17,33 @@ import path from 'node:path';
 import { REPO } from './repo.mjs';
 
 const SCENARIOS = {
+  // THE FIELD SIZE COMES FROM THE LEAGUE, NOT FROM OUR CONSTANT.
+  //
+  // The page falls back to six when a season carries no ESPN settings, and six
+  // is also what Tim's league happens to use — so every other scenario here
+  // would pass whether the page read the setting or ignored it entirely. This
+  // one makes the stub declare FOUR. If the page is reading, the bracket is two
+  // rounds with no byes and the note says it was read; if it is not, everything
+  // below fails.
+  'playoff-four': {
+    label: '(h) the league declares a 4-team bracket, and the page uses it',
+    stub: true,
+    env: { FC_PLAYOFF_TEAMS: '4' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    conn: { leagueId: '99', season: 2026, teamId: 3 },
+    // The simulation hands off through rAF and a timeout so it cannot block the
+    // paint, so the panel is empty for a moment after boot. Wait for the note to
+    // actually arrive rather than for a fixed delay — a fixed one is either
+    // flaky or slow, and on a failure this reports "never rendered" instead of
+    // an empty-string mismatch that says nothing about why.
+    after: async ({ document }) => {
+      for (let i = 0; i < 100; i++) {
+        const el = document.getElementById('simNote');
+        if (el && el.textContent.trim().length > 40) return;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    },
+  },
   demo: {
     label: '(a) demo data, default week',
     stub: false,
@@ -383,6 +410,51 @@ async function check(scenario, boot) {
 
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
+
+  // ---- (h) the league's own bracket, not ours -----------------------------
+  //
+  // The stub declares FOUR playoff teams where the page's fallback is six, so
+  // every claim here fails if the setting is being ignored. Four teams is a
+  // two-round bracket with nobody on a bye, against six teams / three rounds /
+  // two byes — so the round count and the byes are independent evidence that
+  // the number really reached the bracket rather than only the sentence.
+  if (scenario === 'playoff-four') {
+    const note = (d.getElementById('simNote')?.textContent || '').replace(/\s+/g, ' ');
+
+    c.ok('the panel says four of ten qualify', /\b4 of 10 teams make the playoffs/.test(note), note.slice(0, 220));
+    // Scoped to the field-size SENTENCE, not the whole note: the scoring-spread
+    // paragraph legitimately says "assumed, because" about sigma, and a
+    // note-wide search for that phrase would fail for the wrong reason.
+    const fieldSentence = note.slice(
+      note.indexOf('teams make the playoffs'),
+      note.indexOf('teams make the playoffs') + 140
+    );
+    c.ok('and says the number was READ rather than assumed',
+      /read from your league/i.test(fieldSentence) && !/assumed/i.test(fieldSentence),
+      fieldSentence);
+    c.ok('six is nowhere in the field-size sentence',
+      !/\b6 of 10 teams make the playoffs/.test(note), note.slice(0, 200));
+
+    // Four teams is two rounds and no byes. Six would be three and two.
+    c.ok('the bracket is two rounds', /\b2 rounds of one week each/.test(note), note.slice(0, 300));
+    c.ok('and nobody gets a bye',
+      /every qualifier plays every round/.test(note) && !/skip round one/.test(note), note.slice(0, 320));
+
+    // And the arithmetic followed, not just the prose: exactly four teams can
+    // have any chance of the title, and the other six must be exactly zero.
+    const rows = [...d.querySelectorAll('#simTable tbody tr')];
+    const titles = rows.map((tr) => {
+      const cells = [...tr.children];
+      const cell = cells.find((td) => (td.getAttribute('class') || '').includes('title'));
+      const v = cell ? Number(cell.getAttribute('data-v')) : NaN;
+      return Number.isFinite(v) ? v : 0;
+    });
+    const canWin = titles.filter((v) => v > 0).length;
+    c.ok('at most four teams have any title chance', rows.length === 0 || canWin <= 4,
+      `${canWin} of ${rows.length} teams had a non-zero title %`);
+
+    return c.out;
+  }
   // The page makes exactly ONE raw fetch of its own, and only on a live league:
   // the archive committed under data/snapshots/, which is what lets a cleared
   // browser restore its history. Everything else goes through js/season.js and
@@ -584,6 +656,14 @@ async function check(scenario, boot) {
       JSON.stringify(meanPlaces));
     c.ok('average place is inside the league', meanPlaces.every((v) => v >= 1 && v <= teamNames.length),
       JSON.stringify(meanPlaces));
+    // A placing is a permutation of 1..N in every simulated season, whichever
+    // half of it came from the bracket, so the averages have to sum to
+    // N(N+1)/2. Re-derived from the league size rather than written as 55, so a
+    // fixture with a different number of teams still checks something true.
+    const nTeams = teamNames.length;
+    c.ok('average places sum to N(N+1)/2, so the placing is still a permutation',
+      Math.abs(meanPlaces.reduce((a, v) => a + v, 0) - (nTeams * (nTeams + 1)) / 2) < 0.02,
+      `${meanPlaces.reduce((a, v) => a + v, 0)} for ${nTeams} teams`);
 
     // The columns, by index, now the bracket has arrived:
     //   0 Team  1 Proj. wins  2 Avg place  3 Most likely
@@ -686,6 +766,61 @@ async function check(scenario, boot) {
       simBars.length > 0 && simBars.every((b) => /^\d+(st|nd|rd|th):/.test(txt(b.querySelector('title')))),
       simBars.map((b) => txt(b.querySelector('title'))).slice(0, 3).join(' | '));
     c.ok('chart caption names the team it is about', txt($('simCap')).includes(picked), txt($('simCap')));
+
+    // ---- THE CHART IS THE FINAL PLACING, NOT THE LEAGUE TABLE --------------
+    //
+    // This is the assertion the whole change exists for, and it is checkable on
+    // the page without trusting a word of the note, because three of the
+    // placing's entries are also columns in the table beside it:
+    //
+    //   P(1st)      == Title %      the champion finishes 1st, by definition
+    //   P(last)     == Last %       the teams outside the bracket keep their
+    //                               table order, so the worst of them is last
+    //   P(1st..6th) == Playoffs %   the six qualifiers fill places 1-6
+    //
+    // Under the old behaviour the first of those would have been "1st in
+    // table %" instead, and in this season those two columns differ — so this
+    // cannot pass by accident.
+    const myChartRow = simRows.find((r) => r.cells[0] === picked);
+    // The page's own ordinal, re-derived rather than imported, so a change to
+    // the page's spelling of "10th" is caught here instead of silently making
+    // the lookup below miss and compare against a zero.
+    const ordinalOf = (v) => {
+      const s = v % 100;
+      const suffix = s >= 11 && s <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][v % 10] || 'th';
+      return `${v}${suffix}`;
+    };
+    const barPct = (label) => {
+      const bar = simBars.find((b) => txt(b.querySelector('title')).startsWith(`${label}:`));
+      if (!bar) return 0;   // a zero bar is not drawn at all
+      const m = /:\s*([\d.,]+)$/.exec(txt(bar.querySelector('title')));
+      return m ? Number(m[1].replace(/,/g, '')) : 0;
+    };
+    // The bar carries one decimal place of per cent; the cell carries the raw
+    // probability. Compare on the bar's precision, which is 0.05 points.
+    const cellPct = (i) => Number(myChartRow.v[i]) * 100;
+    c.ok('P(finishing 1st) on the chart is the team’s Title %, not its 1st-in-table %',
+      myChartRow && Math.abs(barPct('1st') - cellPct(COL.title)) < 0.06,
+      `chart ${barPct('1st')} vs title ${cellPct(COL.title)} / table ${cellPct(COL.first)}`);
+    c.ok('P(finishing last) on the chart is the team’s Last %',
+      myChartRow && Math.abs(barPct(ordinalOf(nTeams)) - cellPct(COL.last)) < 0.06,
+      `chart ${barPct(ordinalOf(nTeams))} vs cell ${cellPct(COL.last)}`);
+    const topSix = simBars
+      .map((b) => txt(b.querySelector('title')))
+      .filter((t) => {
+        const n = Number(/^(\d+)/.exec(t)[1]);
+        return n >= 1 && n <= fieldSize;
+      })
+      .reduce((a, t) => a + Number((/:\s*([\d.,]+)$/.exec(t) || [0, 0])[1].replace(/,/g, '')), 0);
+    // Summed over `fieldSize` bars, so the tolerance is that many bars' worth of
+    // the chart's one-decimal rounding rather than one bar's.
+    c.ok('P(finishing in the playoff places) on the chart is the team’s Playoffs %',
+      myChartRow && Math.abs(topSix - cellPct(COL.playoffs)) < 0.05 * fieldSize + 1e-6,
+      `chart ${topSix} vs cell ${cellPct(COL.playoffs)}`);
+    // And the two must be able to disagree, or the check above proves nothing.
+    c.ok('the selected team’s Title % and 1st-in-table % are not the same number',
+      myChartRow && Math.abs(cellPct(COL.title) - cellPct(COL.first)) > 0.5,
+      `${cellPct(COL.title)} vs ${cellPct(COL.first)}`);
 
     // ---- headline numbers -------------------------------------------------
     const simStats = Array.from($('simStats').querySelectorAll('.stat')).map((s) => ({
@@ -794,6 +929,40 @@ async function check(scenario, boot) {
       !/no playoffs are modelled/i.test(simNote), simNote);
     c.ok('note never calls first place the title',
       !/“Title %” (is|means) finishing first/i.test(simNote), simNote);
+
+    // ---- WHERE A PLACE COMES FROM, SAID ON THE PAGE -----------------------
+    //
+    // "Avg place" is the number a reader acts on without asking what it counts,
+    // and it used to count the regular-season table. The panel now has to say
+    // which half of the placing is which, and — the part that is an assumption
+    // rather than a count — that 3rd-vs-4th was decided by seed and not played.
+    c.ok('note says which places come from the bracket and which from the table',
+      /Where a team finishes is the bracket for places 1–\d+ and the regular-season table for \d+–\d+/
+        .test(simNote), simNote);
+    c.ok('note says the champion is 1st and the beaten finalist 2nd',
+      /champion is 1st and the beaten finalist 2nd/.test(simNote), simNote);
+    c.ok('note says the non-qualifiers keep their table place',
+      /missed the bracket keeps the place the table gave them/.test(simNote), simNote);
+    c.ok('note ties last place to the worst regular-season team',
+      /the worst regular-season team — the same team, and the same number, as “Last %”/
+        .test(simNote), simNote);
+    c.ok('note flags the within-round split as an ASSUMPTION, not a result',
+      /knocked out in the same round are split by seed, and that is an assumption rather than a result/
+        .test(simNote), simNote);
+    c.ok('note says no game separates 3rd from 4th',
+      /No game played here separates 3rd from 4th/.test(simNote), simNote);
+    c.ok('note says the consolation ladder is what really decides those places',
+      /consolation ladder decides those in real life/.test(simNote), simNote);
+    // The old reading must be gone: "1st in table" is no longer where you
+    // finished, and nothing may still describe the placing as the standings.
+    c.ok('note says topping the table is not finishing 1st',
+      /top the table and lose a playoff game and you did not finish 1st/.test(simNote), simNote);
+    c.ok('note no longer calls the placing the regular-season standings',
+      !/finishes first in the regular-season standings/i.test(simNote), simNote);
+    // The chart's caption has to carry it too — the chart is read on its own.
+    c.ok('chart caption says which places come from the bracket',
+      /Places 1–\d+ are the playoff bracket; \d+–\d+ are the regular-season table/
+        .test(txt($('simCap'))), txt($('simCap')));
 
     // Where the playoff scores came from, stated either way — the house rule is
     // that a derived number says what it was derived from.

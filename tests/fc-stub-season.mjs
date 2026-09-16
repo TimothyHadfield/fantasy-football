@@ -66,6 +66,26 @@ export async function fetchSchedule() {
   return {
     leagueName: 'Stub Live League',
     teams: TEAMS.map((t) => ({ ...t })),
+    // THE BRACKET ESPN DECLARES, when this stub is asked to declare one.
+    //
+    // `js/season.js` carries `playoffs` through from `parseLeague`, and the
+    // page prefers it over its own fallback of six. Without a flag this stub
+    // says nothing, which is the case every existing scenario was written
+    // against — the page falls back and says on screen that it assumed.
+    //
+    // FC_PLAYOFF_TEAMS makes it declare a different number, which is the only
+    // way to tell "reads the league" apart from "happens to agree with the
+    // fallback". A stub that always said six would make that claim untestable.
+    playoffs: process.env.FC_PLAYOFF_TEAMS
+      ? {
+        regularSeasonWeeks: WEEKS[WEEKS.length - 1],
+        playoffTeams: Number(process.env.FC_PLAYOFF_TEAMS),
+        weeksPerPlayoffRound: 1,
+        reseed: false,
+        seedingRule: 'TOTAL_POINTS_SCORED',
+        divisions: 1,
+      }
+      : null,
     weeks: WEEKS.slice(),
     byWeek,
     games: WEEKS.flatMap((w) => byWeek.get(w)),

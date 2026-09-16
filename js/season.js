@@ -440,6 +440,23 @@ export async function fetchSchedule() {
   return {
     leagueName: parsed.name,
     teams: parsed.teams,
+    // THE BRACKET, CARRIED THROUGH. `parseLeague` decodes ESPN's own
+    // `scheduleSettings` — how many teams make the playoffs, how long the
+    // regular season is, whether the bracket reseeds — and without this line
+    // none of it could reach the schedule page, which was left assuming a
+    // six-team field and saying on screen that it had assumed it.
+    //
+    // It is a real per-league answer: two public leagues probed on 2026-09-16
+    // returned playoff fields of 6 and 4. It is also what settles a
+    // contradiction in Tim's own account of his league — he said four teams
+    // make his playoffs and the settings he pasted said six — because now
+    // neither is believed and the league is asked.
+    //
+    // Every field is null on a payload that carried no `scheduleSettings`, so a
+    // caller must read a null as "ESPN did not say" and fall back, never as a
+    // number. An archived reading taken before this existed is exactly that
+    // case, and so is every test stub.
+    playoffs: parsed.playoffs || null,
     weeks: [...byWeek.keys()].sort((a, b) => a - b),
     byWeek,
     games: [...byWeek.values()].flat(),

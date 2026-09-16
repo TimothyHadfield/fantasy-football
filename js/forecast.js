@@ -343,6 +343,42 @@ export function playoffRoundCount(fieldSize) {
   return Math.round(Math.log2(bracketSeeds(fieldSize).length));
 }
 
+// -------------------------------------------------------------- final placing
+//
+// WHERE A TEAM FINISHES, which is a different question from where it finished
+// in the regular-season table and was being answered with the table's answer.
+// Tim, in his words: "right now the simulate season shows the data that
+// corresponds to the regular season positions, not the playoffs. Positions 1-6
+// should be based on the playoffs, and 7-10 should be based on the regular
+// season. this is how the graph should be interpreted."
+//
+// So one placing per simulated season, built from two halves:
+//
+//   places 1..field   the bracket   — champion, beaten finalist, then the
+//                                     losers of each earlier round, latest
+//                                     round first
+//   places field+1..N the table     — the teams that missed the bracket, in
+//                                     regular-season order
+//
+// THE TWO HALVES CANNOT OVERLAP OR LEAVE A GAP, because the seeds ARE the top
+// `field` of the table: the teams that miss the playoffs are exactly the bottom
+// N - field of the standings, and the last of them is the worst team in the
+// league — which is also Tim's definition of the loser. That agreement is
+// asserted in simulateSeason() rather than being arranged by computing "last"
+// twice; two ways of working out the wooden spoon is exactly how they start
+// disagreeing.
+//
+// WITHIN A TIER, THE BETTER SEED IS PLACED HIGHER, AND THAT IS AN ASSUMPTION.
+// Three one-week rounds settle who wins, who loses the final, who lost in round
+// two and who lost in round one — but nothing in them separates 3rd from 4th or
+// 5th from 6th. In the real league a consolation ladder does, and Tim was
+// explicit that it is not to be simulated: "besides the [teams] who actually
+// make the playoffs, you don't need to simulate any other games". So the seed
+// breaks the tie — reseeding is off, so the seed IS the league's own ordering
+// of those two teams — and the page says so out loud rather than letting a
+// reader think 3rd-vs-4th was played out. It moves an average placing by at
+// most half a place and moves nothing else at all.
+
 /**
  * Play the rest of the season many times and count where everyone finishes.
  *
@@ -371,6 +407,13 @@ export function playoffRoundCount(fieldSize) {
  * Manager leagues). That is what `playoffs()` does. It is established rather
  * than assumed, and like the regular-season case it is a branch that will
  * essentially never be taken.
+ *
+ * WHAT A "PLACE" MEANS HERE. With a bracket, `places` is the FINAL placing —
+ * the knockout for 1..field and the regular-season table below it, as set out
+ * above `bracketSeeds`. The table's own placing is kept alongside as
+ * `tablePlaces`, because topping the table and finishing 1st are two different
+ * facts and the page shows both. With no bracket the two are identical, which
+ * is how a caller that never asks for playoffs is left exactly as it was.
  *
  * @param {Object}   o
  * @param {number[]} o.teamIds
@@ -437,8 +480,18 @@ export function simulateSeason({
     ids, playoff, home, away, homeProj, awayProj,
   }) : null;
 
-  // placeCounts[team][place], place 0 = first.
-  const placeCounts = Array.from({ length: n }, () => new Float64Array(n));
+  // TWO PLACINGS, COUNTED SEPARATELY, because they answer two questions.
+  //
+  //   tableCounts — where the REGULAR-SEASON table put this team. Still what
+  //                 "1st in table" and the wooden spoon are measured on, and
+  //                 still what decides the seeds.
+  //   placeCounts — where the team FINISHED: the hybrid described above.
+  //
+  // With no bracket there is nothing to hybridise and the two are the same
+  // thing, so they are literally the same array — one increment, and a caller
+  // that never asks for playoffs sees exactly the numbers it always saw.
+  const tableCounts = Array.from({ length: n }, () => new Float64Array(n));
+  const placeCounts = bracket ? Array.from({ length: n }, () => new Float64Array(n)) : tableCounts;
   const winTotals = new Float64Array(n);
   const wins = new Float64Array(n);
   const pf = new Float64Array(n);
@@ -447,14 +500,25 @@ export function simulateSeason({
   // Bracket counters. seedCounts[team][seed-1] is how often that team took that
   // seed, which is what makes "seeds are computed per simulated season" a
   // testable claim rather than a promise.
-  const titleCounts = bracket ? new Float64Array(n) : null;
+  //
+  // There is deliberately NO title counter and no finalist counter: the
+  // champion is whoever the placing put 1st and the beaten finalist is whoever
+  // it put 2nd, so those are read back off `places` below. A second counter for
+  // a number the placing already holds is a second number that can drift.
   const madeCounts = bracket ? new Float64Array(n) : null;
   const byeCounts = bracket ? new Float64Array(n) : null;
-  const finalCounts = bracket ? new Float64Array(n) : null;
   const seedCounts = bracket ? Array.from({ length: n }, () => new Float64Array(n)) : null;
   // Scratch, reused every run so a 100,000-run loop allocates nothing.
   const alive = bracket ? new Int32Array(bracket.size) : null;
   const seedOfTeam = bracket ? new Int32Array(n) : null;
+  // Who lost in each round, so the tiers under the final can be placed. Round r
+  // has at most `size / 2^(r+1)` games and therefore that many losers; a game
+  // against a phantom produces none, which is exactly why a bye leaves a hole
+  // in round one rather than a beaten team.
+  const roundLosers = bracket
+    ? Array.from({ length: bracket.rounds }, (_, r) => new Int32Array(bracket.size >> (r + 1)))
+    : null;
+  const roundLoserN = bracket ? new Int32Array(bracket.rounds) : null;
 
   // THE KNOCKOUT DRAWS FROM ITS OWN STREAM, and that is not fussiness. Sharing
   // the league's generator would mean every playoff game shifted the regular
@@ -487,7 +551,7 @@ export function simulateSeason({
     // For"), so the seeds below are this same order read from the top, not a
     // second notion of who finished above whom.
     order.sort((x, y) => (wins[y] - wins[x]) || (pf[y] - pf[x]));
-    for (let place = 0; place < n; place++) placeCounts[order[place]][place] += 1;
+    for (let place = 0; place < n; place++) tableCounts[order[place]][place] += 1;
     for (let i = 0; i < n; i++) winTotals[i] += wins[i];
 
     // ---- and then the knockout ---------------------------------------------
@@ -510,15 +574,10 @@ export function simulateSeason({
       }
 
       let width = bracket.size;
+      roundLoserN.fill(0);
       for (let round = 0; round < bracket.rounds; round++) {
         const mean = bracket.roundMean[round];
-        // Whoever is still standing when two are left IS the pair contesting
-        // the championship round. Counted here rather than after the round, so
-        // a two-team bracket (which has no earlier round) still has finalists.
-        if (width === 2) {
-          if (alive[0] >= 0) finalCounts[alive[0]] += 1;
-          if (alive[1] >= 0) finalCounts[alive[1]] += 1;
-        }
+        const beaten = roundLosers[round];
         for (let i = 0; i < width; i += 2) {
           const a = alive[i];
           const b = alive[i + 1];
@@ -528,7 +587,7 @@ export function simulateSeason({
             winner = a;
             // A real team drawn against a phantom has a first-round bye. Only
             // round 0 can produce one — every later round's phantoms have
-            // already been walked over.
+            // already been walked over. No loser is recorded: nobody was beaten.
             if (round === 0) byeCounts[a] += 1;
           } else {
             const sa = mean[a] + sigma * poNormal();
@@ -536,18 +595,82 @@ export function simulateSeason({
             // Higher seed on an exact tie — ESPN's own rule. seedOfTeam is
             // 0-based, so the SMALLER number is the better seed.
             winner = sa > sb ? a : sb > sa ? b : (seedOfTeam[a] < seedOfTeam[b] ? a : b);
+            beaten[roundLoserN[round]++] = winner === a ? b : a;
           }
           alive[i >> 1] = winner;
         }
         width >>= 1;
       }
-      if (alive[0] >= 0) titleCounts[alive[0]] += 1;
+
+      // ---- and now where everybody FINISHED --------------------------------
+      //
+      // Champion first, then each round's losers from the last round backwards:
+      // the beaten finalist is 2nd, the teams knocked out a round earlier share
+      // the next tier, and so on down to the round-one losers. Within a tier the
+      // better seed is placed higher — see the note above `bracketSeeds`; those
+      // games are not played here and the page says so.
+      let place = 0;
+      placeCounts[alive[0]][place++] += 1;
+      for (let round = bracket.rounds - 1; round >= 0; round--) {
+        const tier = roundLosers[round];
+        const m = roundLoserN[round];
+        // Insertion sort by seed. A tier is at most half the field — two teams
+        // in Tim's six-team bracket — so this beats anything cleverer and,
+        // unlike Array#sort, allocates nothing on a 100,000-run loop.
+        // seedOfTeam is only written for teams IN the field, which is fine:
+        // every team in a tier played a playoff game, so its seed is this
+        // season's rather than a leftover from the last one.
+        for (let i = 1; i < m; i++) {
+          const v = tier[i];
+          let j = i - 1;
+          while (j >= 0 && seedOfTeam[tier[j]] > seedOfTeam[v]) { tier[j + 1] = tier[j]; j--; }
+          tier[j + 1] = v;
+        }
+        for (let i = 0; i < m; i++) placeCounts[tier[i]][place++] += 1;
+      }
+      // A knockout among K teams produces exactly one champion and K-1 losers,
+      // so `place` is now K and the rest of the league takes the table's order
+      // from there down. That is what makes the two halves a permutation of
+      // 1..N with no gap and no team counted twice.
+      for (let s = place; s < n; s++) placeCounts[order[s]][s] += 1;
+    }
+  }
+
+  // THE WOODEN SPOON, CHECKED RATHER THAN COMPUTED TWICE.
+  //
+  // The seeds are the top `field` of the table, so the teams left out of the
+  // bracket are exactly the bottom N - field of it and the last place of the
+  // final placing has to be the last place of the table. That is an invariant of
+  // the loop above, not a property of the data — so it is asserted here, over
+  // the finished counts, at a cost of N comparisons for the whole run.
+  //
+  // It throws rather than degrading quietly. Nothing a league can contain
+  // reaches this; only a mistake in the placing can, and a wrong wooden spoon
+  // printed confidently is worse for Tim than a panel that fails loudly.
+  //
+  // When every team qualifies (field === n) there is no such tie-in — the
+  // bracket owns the bottom of the placing too — and "last in the table" and
+  // "last overall" are then genuinely different questions. `pLast` stays the
+  // table's answer either way, because that is Tim's rule.
+  if (bracket && bracket.field < n) {
+    for (let i = 0; i < n; i++) {
+      if (placeCounts[i][n - 1] !== tableCounts[i][n - 1]) {
+        throw new Error(
+          'simulateSeason: the final placing and the regular-season table disagree about last place'
+        );
+      }
     }
   }
 
   const teams = ids.map((id, i) => {
-    const counts = placeCounts[i];
-    const places = Array.from(counts, (c) => c / runCount);
+    // THE FINAL PLACING — the bracket for 1..field, the table below that. This
+    // is what every placing figure on the page reads, and with no bracket it is
+    // the table, unchanged.
+    const places = Array.from(placeCounts[i], (c) => c / runCount);
+    // The regular-season table on its own. Still a real question — it decides
+    // the seeds and it is where the wooden spoon is measured — so it keeps its
+    // own array rather than being inferred back out of the placing.
+    const tablePlaces = Array.from(tableCounts[i], (c) => c / runCount);
     let meanPlace = 0;
     let best = 0;
     for (let p = 0; p < n; p++) {
@@ -556,23 +679,29 @@ export function simulateSeason({
     }
     return {
       teamId: id,
-      places,                          // index 0 = chance of finishing first
+      places,                          // index 0 = chance of FINISHING first
+      tablePlaces,                     // index 0 = chance of TOPPING THE TABLE
       meanPlace,
       modePlace: best + 1,
-      // FIRST IN THE TABLE, which is not the title. See `pTitle`.
-      pFirst: places[0],
+      // FIRST IN THE TABLE, which is not the title and is not 1st place. It
+      // buys the top seed and nothing else. See `pTitle`.
+      pFirst: tablePlaces[0],
       // LAST IN THE REGULAR-SEASON TABLE. Tim's rule, in his own words: "we
       // mark the loser as the person in last place by the end of the regular
       // season, not the playoffs". So this is deliberately untouched by the
-      // bracket and owes nothing to the consolation ladder.
-      pLast: places[n - 1],
+      // bracket and owes nothing to the consolation ladder. It is also 10th in
+      // the final placing — asserted above, not computed a second time.
+      pLast: tablePlaces[n - 1],
       meanWins: winTotals[i] / runCount,
       // Bracket outcomes. All null when no bracket was asked for, so a caller
       // that does not want playoffs sees exactly what it always saw.
-      pTitle: bracket ? titleCounts[i] / runCount : null,
+      //
+      // The title IS first place and the final IS the top two places, so both
+      // are read off the placing rather than counted again beside it.
+      pTitle: bracket ? places[0] : null,
+      pFinal: bracket ? places[0] + places[1] : null,
       pPlayoffs: bracket ? madeCounts[i] / runCount : null,
       pBye: bracket ? byeCounts[i] / runCount : null,
-      pFinal: bracket ? finalCounts[i] / runCount : null,
       // index 0 = chance of being the 1 seed. Only the first `field` entries
       // can be non-zero; the rest exist so the array lines up with `places`.
       seeds: bracket ? Array.from(seedCounts[i], (c) => c / runCount) : null,
@@ -629,6 +758,10 @@ export function simulateSeason({
  */
 function prepareBracket({ ids, playoff, home, away, homeProj, awayProj }) {
   const n = ids.length;
+  // A knockout needs two teams to knock out. A one-team league is not a real
+  // case, but the field size is clamped UP to two below, so without this the
+  // bracket would seat a team that does not exist and place a NaN.
+  if (n < 2) return null;
   const field = Math.max(2, Math.min(n, Math.floor(playoff.teams) || 0));
   const order = bracketSeeds(field);
   const size = order.length;
@@ -707,6 +840,14 @@ function prepareBracket({ ids, playoff, home, away, homeProj, awayProj }) {
       reseed: false,               // ESPN: "Allow for Playoff Bracket Reseeding: Off"
       seedingTiebreak: 'points for',
       tieRule: 'higher seed advances',
+      // How the final placing was built, so the page can say it rather than
+      // imply it. `placesFromBracket` is also how many teams qualify — they are
+      // the same number by construction, and naming it twice here is what lets
+      // the note talk about "places 1-6" without re-deriving the six.
+      placesFromBracket: field,
+      // THE ASSUMPTION, CARRIED OUT OF THE MODEL. Nothing simulated separates
+      // 3rd from 4th or 5th from 6th; the seed does. Tim may want to confirm it.
+      withinTierRule: 'seed',
     },
   };
 }
