@@ -202,6 +202,10 @@ async function boot(scenario) {
   process.on('unhandledRejection', (r) => rejections.push(String((r && r.stack) || r)));
 
   await import(pathToFileURL(path.join(REPO, 'js/analysis-page.js')).href);
+  // Every page carries this as its own <script> tag. linkedom does not run
+  // script tags, so the suite imports it the way a browser would load it —
+  // after the page module, which is the order the markup states.
+  await import(pathToFileURL(path.join(REPO, 'js/touch-titles.js')).href);
   await new Promise((r) => setTimeout(r, 600));
   console.error = origError;
 
@@ -221,6 +225,17 @@ function makeChecker() {
   };
 }
 
+/**
+ * Close anything already open before a fresh claim is made about what opens.
+ * Both sheets dismiss on an outside tap, and a stale one left over from the
+ * assertions above would make the next "it opened" pass for the wrong reason.
+ */
+function hideTitleish(document, window) {
+  const esc = new window.Event('keydown', { bubbles: true });
+  esc.key = 'Escape';
+  document.dispatchEvent(esc);
+}
+
 /** Dispatch a click the way a browser does, and say whether anything cancelled it. */
 function clickOn(window, el, init = {}) {
   const ev = new window.Event('click', { bubbles: true, cancelable: true });
@@ -235,6 +250,28 @@ function check(scenario, { document, window, errors, rejections }) {
 
   c.eq('the page booted with no console errors', errors.length, 0);
   c.eq('and no unhandled rejections', rejections.length, 0);
+
+  // --- the connection bar's advice -----------------------------------------
+  //
+  // The other thing that turns on a coarse pointer, and it shares one exported
+  // `coarsePointer()` with the card so the two cannot disagree about what kind
+  // of device this is. The bridge is an unpacked extension: no phone or tablet
+  // browser can load one, so telling a reader there to install it sends them
+  // looking for a button that does not exist and leaves them thinking the site
+  // is broken. Asserted in both directions, because a message that appeared
+  // everywhere would be just as wrong as one that appeared nowhere.
+  const bar = document.getElementById('connBar');
+  const advice = bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '';
+  c.ok('the connection bar rendered', advice.length > 10, `bar read "${advice}"`);
+  if (cfg.coarse) {
+    c.ok('a phone is not told to install an extension it cannot install',
+      !/Install the Fantasy Football/i.test(advice), advice);
+    c.ok('it is told where the live numbers are instead',
+      /cannot install one/i.test(advice) && /on your computer/i.test(advice), advice);
+  } else {
+    c.ok('a desktop still gets the install prompt',
+      /Install the Fantasy Football/i.test(advice), advice);
+  }
 
   const grid = document.getElementById('overviewTable');
   const cells = [...grid.querySelectorAll('td[data-tip]')];
@@ -282,6 +319,20 @@ function check(scenario, { document, window, errors, rejections }) {
       c.eq('with no sheet class', hover.classList.contains('sheet'), false);
       c.eq('and no actions in it', hover.querySelectorAll('.tc-actions').length, 0);
       c.ok('and it names the player', hover.querySelector('.tc-ident').textContent.trim().length > 3);
+    }
+
+    // And the title sheet stays out of the way entirely: with a pointer, a
+    // `title` already draws a native tooltip, and a second panel opening on
+    // every click would be an answer to a question nobody asked. A mechanism
+    // that fired everywhere would be as wrong as one that fired nowhere.
+    const titled = [...document.querySelectorAll('#seasonTable td[title], #seasonTable th[title]')]
+      .find((el) => !el.closest('a, button'));
+    c.ok('the season grid still explains its cells with a title', !!titled);
+    if (titled) {
+      clickOn(window, titled);
+      const ts = document.getElementById('titleSheet');
+      c.ok('and a mouse click on one opens no title sheet', !ts || ts.hidden,
+        'the title sheet opened under a mouse');
     }
     return c.out;
   }
@@ -366,6 +417,49 @@ function check(scenario, { document, window, errors, rejections }) {
     c.ok('tapping the team still loads it below',
       document.getElementById('rosterTitle').textContent.trim() !== rosterTitleBefore,
       'the roster detail did not change');
+  }
+
+  // --- `title` attributes, which draw nothing at all on iOS ---------------
+  //
+  // The site puts real content in them — three different reasons a cell can
+  // read `—`, seventeen column definitions on the stats page — and a phone
+  // could read none of it. js/touch-titles.js opens the same words as a sheet.
+  // Asserted here on the analysis page's season grid because that is a page
+  // this suite already boots; the module is generic and every page loads it.
+  hideTitleish(document, window);
+  const titled = [...document.querySelectorAll('#seasonTable td[title], #seasonTable th[title]')]
+    .find((el) => !el.closest('a, button'));
+  c.ok('the season grid still explains its cells with a title', !!titled,
+    'no titled cell found — did the explanations move?');
+  if (titled) {
+    const want = titled.getAttribute('title');
+    clickOn(window, titled);
+    const ts = document.getElementById('titleSheet');
+    c.ok('tapping it opens the title sheet', ts && !ts.hidden, 'no #titleSheet after the tap');
+    if (ts) {
+      c.ok('and the sheet carries the words the title carried',
+        ts.textContent.includes(want), `sheet read "${ts.textContent.trim().slice(0, 120)}"`);
+      clickOn(window, ts.querySelector('.ts-close'));
+      c.eq('Close dismisses it', ts.hidden, true);
+    }
+  }
+
+  // A CONTROL MUST STILL WORK. A `title` on a link is the player click-through's
+  // own label, and swallowing that tap would break the one contract holding the
+  // pages together; a tap on a button has to press the button. Both are why the
+  // FLEX filters' and the run count's explanations were moved onto the page.
+  const titledLink = document.querySelector('a[title]');
+  if (titledLink) {
+    const ev3 = clickOn(window, titledLink);
+    const ts = document.getElementById('titleSheet');
+    c.eq('a titled LINK is not swallowed', ev3.defaultPrevented, false);
+    c.ok('and opens no title sheet', !ts || ts.hidden, 'a link tap opened the sheet');
+  }
+  const titledButton = document.querySelector('button[title]');
+  if (titledButton) {
+    clickOn(window, titledButton);
+    const ts = document.getElementById('titleSheet');
+    c.ok('nor does a titled BUTTON', !ts || ts.hidden, 'a button tap opened the sheet');
   }
 
   // --- the second grid is wired the same way -----------------------------

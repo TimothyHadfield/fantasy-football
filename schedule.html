@@ -397,11 +397,18 @@ td.state-live { color: var(--warn); }
   <section class="panel">
     <div class="row spread mb-12">
       <h2 id="simTitle" class="h2-inline">Simulate season</h2>
-      <div class="segmented seg-sm" id="simRuns"
-           title="How many times to play the rest of the season out. More runs means less counting noise and a slower answer.">
-        <button type="button" data-runs="1000">1,000</button>
-        <button type="button" data-runs="10000" class="on">10,000</button>
-        <button type="button" data-runs="50000">50,000</button>
+      <!-- The label is on the page rather than in a `title` on the container.
+           A tap on a button has to press the button, so js/touch-titles.js
+           deliberately leaves controls alone — which means a control whose only
+           explanation is a `title` has no explanation at all on a phone. This
+           is the choice being asked for, so it says so in words that render. -->
+      <div class="ctl">
+        <span class="ctl-label" id="simRunsLabel">Runs &mdash; more is less noisy, and slower</span>
+        <div class="segmented seg-sm" id="simRuns" role="group" aria-labelledby="simRunsLabel">
+          <button type="button" data-runs="1000">1,000</button>
+          <button type="button" data-runs="10000" class="on">10,000</button>
+          <button type="button" data-runs="50000">50,000</button>
+        </div>
       </div>
     </div>
     <div class="stat-row" id="simStats"></div>
@@ -425,5 +432,8 @@ td.state-live { color: var(--warn); }
 
 <script type="module" src="js/schedule-page.js"></script>
 <script type="module" src="js/connection.js"></script>
+<!-- A title attribute draws nothing on iOS, and this site puts real content in
+     them. One tag, no page-module changes: see js/touch-titles.js. -->
+<script type="module" src="js/touch-titles.js"></script>
 </body>
 </html>

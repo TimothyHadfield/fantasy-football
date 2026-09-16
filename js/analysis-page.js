@@ -18,7 +18,7 @@
 
 import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js';
 import { enableSort, resort } from './sortable.js';
-import { savedConfig, onConnection } from './connection.js';
+import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
@@ -469,21 +469,10 @@ let tipSeq = 0;           // just a counter: see the key note in gridCell
 let tipEl = null;
 let tipSheet = false;     // is the card currently open as a tap-opened sheet?
 
-/**
- * Is the thing pointing at this page a finger?
- *
- * Guarded because the test harness has no `matchMedia` at all, and the honest
- * answer without one is "assume a pointer": that keeps every existing suite
- * asserting the hover behaviour it was written against, and an environment
- * with no pointer events cannot be a touch screen anyway.
- */
-function coarsePointer() {
-  try {
-    return typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches;
-  } catch {
-    return false;
-  }
-}
+// `coarsePointer` is imported from connection.js rather than written again
+// here. Two things turn on it — whether this card opens as a tap-opened sheet,
+// and whether the connection bar tells a reader to install an extension their
+// browser cannot load — and two copies of one question is how two answers start.
 
 /**
  * Did this click land on a PLAYER, or on the team's row around him?
@@ -2268,7 +2257,7 @@ function renderSeasonNote(weeks, rowCount) {
         'is off that week. ') +
     'A dash is not that: it means either that ESPN carried no number for him, or that he was not ' +
     'on this roster in that week — ESPN hands back each past week’s real roster, and today’s ' +
-    'roster for every week still to come. Hover a cell to see which.'
+    'roster for every week still to come. Tap or hover a cell to see which.'
   );
 
   parts.push(

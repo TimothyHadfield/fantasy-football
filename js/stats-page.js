@@ -377,7 +377,11 @@ function renderMainTable() {
   $('thOppAvg').textContent = oneWeek ? 'Opp score' : 'Opp Avg';
 
   $('mainTableNote').innerHTML =
-    'Hover any heading for what that column means. Click one to sort by it. ' +
+    // "Hover" alone was a lie on a phone: a `title` draws nothing on iOS.
+    // js/touch-titles.js makes the same words open as a sheet on a tap, and a
+    // tap still sorts — both happen, which is both of the things a reader who
+    // pressed an unfamiliar heading wanted.
+    'Tap or hover any heading for what that column means; a tap also sorts by it. ' +
     '<strong>Opp proj</strong> = the average projected score of the opponents on your ' +
     'schedule, which needs no games played. <strong>Luck/wk</strong> = actual − ' +
     'projected. <strong>PTW</strong> = what you ' +

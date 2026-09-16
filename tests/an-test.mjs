@@ -1624,8 +1624,14 @@ async function check(scenario, boot) {
       /nine real men, not an estimate/.test(w.notes.avg), w.notes.avg.slice(0, 400));
     c.ok('it says why the position is in the bench cell and not in the header',
       /every bench is a different shape/.test(w.notes.avg), w.notes.avg.slice(0, 500));
-    c.ok('it says the name and the season are on hover, and that it is a chart',
-      /Hovering any number gives that man/.test(w.notes.avg) &&
+    // It used to read "Hovering any number gives that man's name…", which was a
+    // true sentence on a desktop and a lie on a phone — there is no hover
+    // there, and this card is the only place these cells name anybody. The
+    // behaviour was changed to open on a tap as well (see touch-check.mjs), so
+    // the note has to say so; a feature reachable two ways whose instructions
+    // name one of them is the half of the change that gets forgotten.
+    c.ok('it says the name and the season are a tap OR a hover away, and that it is a chart',
+      /[Tt]ap or hover any number/.test(w.notes.avg) &&
       /weeks along the top, his projection for each one underneath/.test(w.notes.avg),
       w.notes.avg.slice(0, 600));
     c.ok('and it says what the number after a bench position means',
