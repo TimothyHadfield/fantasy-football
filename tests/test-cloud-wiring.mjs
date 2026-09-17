@@ -190,7 +190,7 @@ const OWNER_UID = (readFileSync(repoFile('js/cloud.js'), 'utf8')
 
 function makeFake({ user = { uid: OWNER_UID, email: 'tim@example.com', name: 'Tim' } } = {}) {
   const docs = new Map();
-  const log = { reads: 0, writes: 0 };
+  const log = { reads: 0, writes: 0, paths: [] };
   return {
     docs,
     log,
@@ -206,6 +206,7 @@ function makeFake({ user = { uid: OWNER_UID, email: 'tim@example.com', name: 'Ti
     },
     async setDoc(p, data) {
       log.writes++;
+      log.paths.push(p);
       docs.set(p, JSON.stringify(data));
     },
   };
@@ -743,8 +744,10 @@ SCENARIOS['desktop-sync'] = async () => {
   ok('the desktop connected live through the extension', /connected to/i.test(text), text);
   ok('and it says it is the live league', text.includes(LIVE.name), text);
 
-  // 3 roster weeks + 3 wire weeks + the schedule + the league index.
-  eq(fake.log.writes, 8, 'it published the whole season without being asked');
+  // 3 roster weeks + 3 wire weeks + the schedule + the league index. The
+  // account's saved league (users/<uid>) is a separate, one-off write.
+  const seasonWrites = fake.log.paths.filter((p) => !p.startsWith('users/')).length;
+  eq(seasonWrites, 8, 'it published the whole season without being asked');
   ok('the whole span went up, not just this week',
     [...fake.docs.keys()].filter((k) => /\/rosters\//.test(k)).length === WEEKS.length,
     [...fake.docs.keys()].join(' '));
@@ -764,6 +767,95 @@ SCENARIOS['desktop-sync'] = async () => {
   // import, before any of this, and that one request is not the bar's.)
   ok('the bar never fell back to a direct probe',
     store.espnCalls.filter((u) => /mSettings/.test(u)).length === 0, store.espnCalls.join(' '));
+};
+
+// ------------------------------------------------------------ profile-saved
+//
+// Typed once: the desktop that connects while signed in puts the league and
+// the team on the ACCOUNT, and does it once rather than on every page load.
+
+SCENARIOS['profile-saved'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake();
+  cloud.configure({ transport: fake });
+
+  const { store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'live' },
+    connection: { leagueId: LEAGUE_ID, season: SEASON, teamId: 3 },
+    withBridge: LIVE,
+    waitMs: 3000,
+  });
+
+  const doc = fake.docs.get(`users/${OWNER_UID}`);
+  ok('the account now holds the league', !!doc, [...fake.docs.keys()].join(' '));
+  const p = doc ? JSON.parse(doc) : {};
+  eq(p.leagueId, String(LEAGUE_ID), 'the league id');
+  eq(p.teamId, 3, 'and the team chosen on this device');
+  eq(p.season, SEASON, 'and the season');
+  eq(fake.log.paths.filter((x) => x.startsWith('users/')).length, 1, 'written exactly once');
+  ok('this browser noted it, so the next page load does not write again',
+    (store.saved.get('ff.profileSaved') || '').includes(String(LEAGUE_ID)), store.saved.get('ff.profileSaved'));
+
+  // Demo is never remembered: nothing but the owner's own document was written.
+  ok('no other account document', [...fake.docs.keys()].filter((k) => k.startsWith('users/')).length === 1);
+};
+
+// ------------------------------------------------------------ profile-phone
+//
+// The other device: nothing saved in this browser at all — a new iPhone, or
+// the home-screen app with its own storage — but signed in to the same
+// account. It must find the league and team by itself and connect.
+
+SCENARIOS['profile-phone'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+
+  const fake = makeFake();
+  const seeded = await seedCloud(cloud, espn, season, fake);
+  ok('a season was published', seeded.res.ok, seeded.res.reason);
+  await fake.setDoc(`users/${OWNER_UID}`, { leagueId: String(LEAGUE_ID), season: SEASON, teamId: 2, updatedAt: 'x' });
+  const writesBefore = fake.log.writes;
+
+  const { document, store } = await bootPage('index.html', {
+    espnScale: LIVE,   // anything ESPN answers with would be wrong here
+    waitMs: 3000,
+  });
+
+  const bar = document.getElementById('connBar');
+  const text = bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '';
+  ok('THE PHONE CONNECTED WITHOUT BEING TOLD THE LEAGUE', /synced copy/i.test(text), text);
+  ok('to the account\'s league', text.includes(CLOUD.name), text);
+
+  const conn = JSON.parse(store.saved.get('ff.connection') || '{}');
+  eq(conn.leagueId, String(LEAGUE_ID), 'the league id is now saved in this browser');
+  eq(conn.teamId, 2, 'and so is the team, from the account');
+  const picked = document.querySelector('#connTeam option[selected]');
+  eq(picked && picked.getAttribute('value'), '2', 'the team picker shows it');
+
+  eq(fake.log.writes, writesBefore, 'and it wrote nothing back — the account already said so');
+  eq(store.espnCalls.length, 0, 'ESPN was never asked');
+};
+
+// A device that already has a league of its own keeps it.
+SCENARIOS['profile-no-override'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake();
+  cloud.configure({ transport: fake });
+  await fake.setDoc(`users/${OWNER_UID}`, { leagueId: '999999', season: SEASON, teamId: 7, updatedAt: 'x' });
+
+  const { store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'live' },
+    connection: { leagueId: LEAGUE_ID, season: SEASON, teamId: 1 },
+    withBridge: LIVE,
+    waitMs: 3000,
+  });
+
+  const conn = JSON.parse(store.saved.get('ff.connection') || '{}');
+  eq(conn.leagueId, String(LEAGUE_ID), 'the league typed on this device is kept');
+  eq(conn.teamId, 1, 'and its team');
+  const p = JSON.parse(fake.docs.get(`users/${OWNER_UID}`));
+  eq(p.leagueId, String(LEAGUE_ID), 'and the account follows the device that last connected');
 };
 
 // ----------------------------------------------------------- desktop-throttled
@@ -787,7 +879,8 @@ SCENARIOS['desktop-throttled'] = async () => {
     waitMs: 3000,
   });
 
-  eq(fake.log.writes, 0, 'an hour after a good sync, it does not publish again');
+  eq(fake.log.paths.filter((p) => !p.startsWith('users/')).length, 0,
+    'an hour after a good sync, it does not publish again');
 
   const bar = document.getElementById('connBar');
   const text = bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '';

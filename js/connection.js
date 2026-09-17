@@ -370,6 +370,7 @@ async function connect() {
       state.teamId = res.data.teams[0].id;
     }
     save();
+    rememberProfile();
   } else {
     state.source = 'espn';
     state.league = null;
@@ -578,10 +579,9 @@ async function signIn() {
     state.cloudKnown = true;
     render();
     // Signing in is usually the last thing standing between a phone and its
-    // league, so try the connection again straight away rather than making him
-    // press a second button.
-    if (state.leagueId && (!state.league || state.source === 'cloud')) connect();
-    else maybeAutoSync();
+    // league, so fill in the league from the account and connect straight away
+    // rather than making him press a second button.
+    onSignedIn();
   } else {
     state.error = (res && res.reason) || 'Sign-in did not complete.';
     render();
@@ -684,6 +684,84 @@ function cloudControls() {
 
   return `<span class="conn-note">${note}</span>` +
     `<button type="button" id="connCloudSync" class="conn-btn conn-btn-ghost">Send to phone</button>`;
+}
+
+// ------------------------------------------------------ the league, per account
+//
+// Typed once, on any device. When a signed-in browser is connected, the league
+// and team go to the account (`cloud.saveProfile`); a signed-in browser that
+// has no league yet — his iPhone, or the home-screen app, which keeps storage
+// of its own — takes them from the account and connects by itself.
+
+const PROFILE_KEY = 'ff.profileSaved';
+
+/** What this browser last wrote for this account, so a page load is not a write. */
+function profileNote(uid) {
+  try { return (JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}') || {})[uid] || ''; } catch { return ''; }
+}
+function setProfileNote(uid, value) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}') || {};
+    all[uid] = value;
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(all));
+  } catch { /* storage refused; at worst the next load writes again */ }
+}
+
+/** Save the connected league and team to the signed-in account, if changed. */
+async function rememberProfile() {
+  if (!cloud.isConfigured() || !state.cloudUser || !state.league) return;
+  if (!/^\d+$/.test(String(state.leagueId))) return;   // never demo
+  const uid = state.cloudUser.uid;
+  const value = JSON.stringify({ leagueId: String(state.leagueId), season: state.season, teamId: state.teamId ?? null });
+  if (profileNote(uid) === value) return;
+  setProfileNote(uid, value);
+  try {
+    const res = await cloud.saveProfile({ leagueId: state.leagueId, season: state.season, teamId: state.teamId });
+    if (!res || !res.ok) setProfileNote(uid, '');   // try again next time
+  } catch {
+    setProfileNote(uid, '');
+  }
+}
+
+/**
+ * Fill in the league (and team) from the signed-in account.
+ *
+ * Only ever FILLS GAPS: a league typed on this device is never replaced, and a
+ * saved team is taken only when it belongs to the same league and none is
+ * chosen here. Returns true when the league was filled in.
+ */
+async function adoptProfile() {
+  if (!cloud.isConfigured() || !state.cloudUser) return false;
+  if (state.leagueId && state.teamId != null) return false;
+  let res;
+  try { res = await cloud.loadProfile(); } catch { return false; }
+  if (!res || !res.found || !res.profile) return false;
+  const p = res.profile;
+  let filled = false;
+  if (!state.leagueId) {
+    state.leagueId = p.leagueId;
+    if (p.season) state.season = p.season;
+    filled = true;
+  }
+  if (String(state.leagueId) === String(p.leagueId) && state.teamId == null && p.teamId != null) {
+    state.teamId = p.teamId;
+  }
+  // Note what the ACCOUNT holds, so `rememberProfile` writes only if this
+  // device's choice differs from it.
+  setProfileNote(state.cloudUser.uid, JSON.stringify({ leagueId: p.leagueId, season: p.season ?? state.season, teamId: p.teamId ?? null }));
+  save();
+  render();
+  return filled;
+}
+
+/** A signed-in account has just become known: fill gaps, then connect or save. */
+async function onSignedIn() {
+  await adoptProfile();
+  if (state.leagueId && (!state.league || state.source === 'cloud')) connect();
+  else {
+    rememberProfile();
+    maybeAutoSync();
+  }
 }
 
 function render() {
@@ -824,6 +902,7 @@ function render() {
     team.addEventListener('change', (e) => {
       state.teamId = e.target.value ? Number(e.target.value) : null;
       save();
+      rememberProfile();
       document.dispatchEvent(new CustomEvent('ff:connection', { detail: currentConnection() }));
     });
   }
@@ -859,8 +938,7 @@ function watchCloudAuth() {
     if (!bridgeChecked) return;
     // A session restored from a previous visit arrives here, not through the
     // button. On a phone that is the moment the league becomes readable.
-    if (state.leagueId && (!state.league || state.source === 'cloud')) connect();
-    else maybeAutoSync();
+    onSignedIn();
   });
 }
 
@@ -887,6 +965,10 @@ async function init() {
     if (cfg.ok && cfg.data?.leagueId) state.leagueId = String(cfg.data.leagueId);
   }
   render();
+
+  // A signed-in account already knows the league, even on a device that has
+  // never been told it.
+  if (cloud.isConfigured() && state.cloudUser) await adoptProfile();
 
   // Reconnect automatically when we already know which league to ask for.
   //

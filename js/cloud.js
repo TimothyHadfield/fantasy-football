@@ -564,6 +564,76 @@ function docPath(leagueId, season, kind, id) {
   return `${seasonPath(leagueId, season)}/${kind}/${enc(id)}`;
 }
 
+// ------------------------------------------------------------------ profile
+//
+// Which league this Google account uses, so it is typed ONCE. Sign in on the
+// laptop and connect, and every other device that signs in with the same
+// account (his iPhone, and the home-screen app, which has storage of its own)
+// is connected to the same league and team without asking. One tiny document
+// per account, at `users/<uid>`, readable and writable only by that account —
+// see firebase/firestore.rules.
+
+function profilePath(uid) {
+  return `users/${enc(uid)}`;
+}
+
+/**
+ * The signed-in account's saved league, or `found: false`. Never throws.
+ *
+ * @returns {Promise<{ok:boolean, found:boolean, profile:({leagueId:string, season:number|null, teamId:number|null}|null), reason:string}>}
+ */
+export async function loadProfile() {
+  const none = (reason) => ({ ok: false, found: false, profile: null, reason });
+  if (!isConfigured()) return none(notConfigured().reason);
+  const t = await getTransport();
+  if (!t) return none('Could not load Firebase.');
+  const user = currentUser() || (typeof t.currentUser === 'function' ? t.currentUser() : null);
+  if (!user) return none('Not signed in.');
+  try {
+    const doc = await t.getDoc(profilePath(user.uid));
+    const id = doc && String(doc.leagueId ?? '').trim();
+    if (!id || !/^\d+$/.test(id)) return { ok: true, found: false, profile: null, reason: '' };
+    return {
+      ok: true,
+      found: true,
+      profile: {
+        leagueId: id,
+        season: Number.isFinite(Number(doc.season)) && doc.season ? Number(doc.season) : null,
+        teamId: doc.teamId == null || doc.teamId === '' ? null : Number(doc.teamId),
+      },
+      reason: '',
+    };
+  } catch (err) {
+    return none(readable(err, 'Could not read your saved league.'));
+  }
+}
+
+/**
+ * Remember this account's league and team. Demo is refused, like every write.
+ *
+ * @returns {Promise<{ok:boolean, reason:string}>}
+ */
+export async function saveProfile({ leagueId, season = null, teamId = null } = {}) {
+  if (!isConfigured()) return { ok: false, reason: notConfigured().reason };
+  const id = String(leagueId ?? '').trim();
+  if (!/^\d+$/.test(id)) return { ok: false, reason: 'Only a real ESPN league is remembered.' };
+  const t = await getTransport();
+  if (!t) return { ok: false, reason: 'Could not load Firebase.' };
+  const user = currentUser() || (typeof t.currentUser === 'function' ? t.currentUser() : null);
+  if (!user) return { ok: false, reason: 'Not signed in.' };
+  try {
+    await t.setDoc(profilePath(user.uid), {
+      leagueId: id,
+      season: Number(season) || null,
+      teamId: teamId == null || teamId === '' ? null : Number(teamId),
+      updatedAt: new Date().toISOString(),
+    });
+    return { ok: true, reason: '' };
+  } catch (err) {
+    return { ok: false, reason: readable(err, 'Could not save your league.') };
+  }
+}
+
 // ---------------------------------------------------------------- demo guard
 
 /**

@@ -17,6 +17,13 @@ service cloud.firestore {
     // Everything the site stores lives under /leagues. Both matches are
     // needed: the outer one for the league document itself, the inner one for
     // every season, week and wire document beneath it.
+    // Which league an account uses, so it is typed once on any device
+    // (cloud.saveProfile / loadProfile). An account reads and writes only its
+    // own document, and only the owner's account at all.
+    match /users/{uid} {
+      allow read, write: if isOwner() && request.auth.uid == uid;
+    }
+
     match /leagues/{league} {
       allow read, write: if isOwner();
 
