@@ -924,6 +924,16 @@ function hoverCard(d, window, td) {
 
 const IDENTITY = ['Slot', 'Player', 'Pos', 'NFL', 'Avg'];
 
+// THE WEEK RUN REACHES THE PLAYOFFS (Tim, 2026-09-17). Both leagues here —
+// the demo and the stub — are thirteen-week, ten-team seasons, so
+// capture.playoffWeeks puts a six-team bracket in weeks 14–16. The first of
+// them is headed "PO" and every playoff header says "(playoffs)" in words.
+const REGULAR_WEEKS = Array.from({ length: 13 }, (_, i) => i + 1);
+const PLAYOFF_WEEKS = [14, 15, 16];
+const PLAYOFF_COLS = ['14PO (playoffs)', '15 (playoffs)', '16 (playoffs)'];
+const SEASON_COLS = [...REGULAR_WEEKS.map(String), ...PLAYOFF_COLS];
+const isPo = (cls) => String(cls || '').split(/\s+/).includes('po-start');
+
 async function check(scenario, boot) {
   const c = makeChecker();
   const d = boot.document;
@@ -947,10 +957,39 @@ async function check(scenario, boot) {
   c.ok('identity columns are Slot, Player, Pos, NFL and Avg',
     JSON.stringify(head.slice(0, 5)) === JSON.stringify(IDENTITY), JSON.stringify(head));
   c.ok('nothing but week numbers after them',
-    head.length > 5 && head.slice(5).every((h) => /^\d+$/.test(h)), JSON.stringify(head));
-  c.ok('one column per week of the season, thirteen of them',
-    JSON.stringify(head.slice(5)) ===
-      JSON.stringify(Array.from({ length: 13 }, (_, i) => String(i + 1))), JSON.stringify(head));
+    head.length > 5 && head.slice(5).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)), JSON.stringify(head));
+  c.ok('one column per week of the season, thirteen of them, then the three playoff weeks',
+    JSON.stringify(head.slice(5)) === JSON.stringify(SEASON_COLS), JSON.stringify(head));
+
+  // ---- the playoff line ----------------------------------------------------
+  {
+    const ths = [...table.querySelectorAll('thead th')];
+    const lined = ths.map((th, i) => (isPo(th.getAttribute('class')) ? i : -1)).filter((i) => i >= 0);
+    const col = 5 + REGULAR_WEEKS.length;
+    c.ok('SEASON GRID: the playoff line is on week 14\u2019s header, and only there',
+      lined.length === 1 && lined[0] === col, JSON.stringify(lined));
+    c.ok('SEASON GRID: and on every row\u2019s week-14 cell, and no other',
+      rows.length > 0 && rows.every((r) => isPo(r.cells[col].cls) &&
+        r.cells.filter((x) => isPo(x.cls)).length === 1),
+      JSON.stringify(rows[0] && rows[0].cells.map((x) => x.cls)));
+    // Avg is the REGULAR season: re-derived from the rendered weeks 1–13.
+    const mean = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
+    const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
+    let wrong = 0;
+    let moved = 0;
+    for (const r of rows) {
+      const shown = r.cells[4].v === null ? null : Number(r.cells[4].v);
+      const regular = mean(nums(r.cells.slice(5, col)));
+      const all = mean(nums(r.cells.slice(5)));
+      if (shown !== regular) wrong++;
+      if (regular !== null && all !== null && regular !== all) moved++;
+    }
+    c.ok('SEASON GRID: AVG IGNORES THE PLAYOFF WEEKS', wrong === 0, `${wrong} rows disagree`);
+    if (rows.some((r) => nums(r.cells.slice(col)).length)) {
+      c.ok('SEASON GRID: and the playoff weeks would have moved it, so that has teeth',
+        moved > 0, String(moved));
+    }
+  }
   c.ok('Avg sits immediately before the week run', head[4] === 'Avg', JSON.stringify(head));
   c.ok('every header is sortable',
     [...table.querySelectorAll('thead th')].every((th) => th.hasAttribute('data-sort')),
@@ -1141,10 +1180,10 @@ async function check(scenario, boot) {
 
     const cards = tipCells.map((td) => hoverCard(d, boot.window, td));
     c.ok('every grid cell hover draws a week run, in demo too',
-      cards.every((k) => k && k.weeks.length === 13 && k.values.length === 13),
+      cards.every((k) => k && k.weeks.length === 16 && k.values.length === 16),
       JSON.stringify(cards[0] && { w: cards[0].weeks.length, v: cards[0].values.length }));
     c.ok('and it is honest about whose numbers they are',
-      cards.every((k) => /Sample projections for weeks 1–13/.test(k.heading)), cards[0].heading);
+      cards.every((k) => /Sample projections for weeks 1–16/.test(k.heading)), cards[0].heading);
     c.ok('never claiming they are ESPN’s',
       cards.every((k) => !/ESPN’s projection/.test(k.heading)), cards[0].heading);
     c.ok('THE DEMO RUN NEVER CLAIMS A BYE, because a zero means something else here',
@@ -1172,9 +1211,10 @@ async function check(scenario, boot) {
       txt($('weeklyTitle')).endsWith(`week ${season.SCHEDULE_PLAYED_THROUGH + 1}`),
       txt($('weeklyTitle')));
 
-    c.ok('the season grid costs exactly one request per week',
+    // The playoff weeks cost one request each, like any other week.
+    c.ok('the season grid costs exactly one request per week, the playoff weeks included',
       JSON.stringify(season.calls.weeks.slice().sort((a, b) => a - b)) ===
-        JSON.stringify(Array.from({ length: 13 }, (_, i) => i + 1)),
+        JSON.stringify(Array.from({ length: 16 }, (_, i) => i + 1)),
       JSON.stringify(season.calls.weeks));
     c.ok('the selected week is still fetched by the panels above, once',
       JSON.stringify(season.calls.week) === JSON.stringify([8]), JSON.stringify(season.calls.week));
@@ -1315,7 +1355,7 @@ async function check(scenario, boot) {
       /· OUT/.test(hoverCard(d, boot.window, cells[2]).ident),
       hoverCard(d, boot.window, cells[2]).ident);
     c.ok('and it says whose projections these are',
-      /ESPN’s projection for weeks 1–13/.test(card0.heading), card0.heading);
+      /ESPN’s projection for weeks 1–16/.test(card0.heading), card0.heading);
 
     // Three rows since Tim asked for "another row below proj that is act": the
     // week numbers, the projection, and what he actually scored. The claim is
@@ -1324,14 +1364,27 @@ async function check(scenario, boot) {
     // says is asserted in touch-check.mjs, which owns the card.
     c.ok('IT IS A THREE-ROW CHART: WEEK NUMBERS OVER PROJ OVER ACT',
       card0.rows === 3, `${card0.rows} rows in the run table`);
-    c.ok('the top row is the weeks, in order, one per week of the season',
-      JSON.stringify(card0.weeks) ===
-        JSON.stringify(Array.from({ length: 13 }, (_, i) => String(i + 1))),
+    c.ok('the top row is the weeks, in order, one per week of the season, then the playoffs',
+      JSON.stringify(card0.weeks) === JSON.stringify(SEASON_COLS),
       JSON.stringify(card0.weeks));
+    {
+      // THE CARD'S PLAYOFF LINE: week 14's column carries it in all three rows,
+      // and the card says what PO means.
+      const card = d.getElementById('tipCard');
+      const lined = [...card.querySelectorAll('.tc-run th, .tc-run td')]
+        .filter((x) => isPo(x.getAttribute('class')));
+      c.ok('CARD: the playoff line is on week 14 in the week, Proj and Act rows — and only there',
+        lined.length === 3 && lined[0].textContent.trim().startsWith('14') &&
+        [...card.querySelectorAll('.tc-run thead th.po-start')].length === 1,
+        lined.map((x) => x.outerHTML).join(' '));
+      c.ok('CARD: and says what PO means in words',
+        /PO = the playoffs \(weeks 14–16\), after the heavy line/.test(card.textContent),
+        card.textContent);
+    }
     c.ok('the bottom row is a projection for every one of them',
       card0.values.length === card0.weeks.length, `${card0.values.length} v ${card0.weeks.length}`);
     c.ok('the two rows are one table, so a column cannot drift out of line',
-      card0.weeks.length === 13 && card0.values.length === 13, 'the rows are not paired');
+      card0.weeks.length === 16 && card0.values.length === 16, 'the rows are not paired');
 
     c.ok('every number in the run is the projection ESPN gave for that week',
       (() => {
@@ -1389,7 +1442,7 @@ async function check(scenario, boot) {
       card0.kinds[7].includes('now') && card0.kinds.filter((k) => k.includes('now')).length === 1,
       JSON.stringify(card0.kinds));
     c.ok('the week grid carries the same run — it is the same man either way',
-      /ESPN’s projection for weeks 1–13/
+      /ESPN’s projection for weeks 1–16/
         .test(hoverCard(d, boot.window, grid4('weekly')[0]).heading),
       hoverCard(d, boot.window, grid4('weekly')[0]).heading);
     c.ok('THE CELL CARRIES NO TITLE, so the browser cannot draw a second tooltip',
@@ -1404,7 +1457,7 @@ async function check(scenario, boot) {
     // second way; the two counts above already pin every request this page
     // makes, so a tooltip that fetched would have moved one of them.
     c.ok('THE HOVER ADDS NO REQUEST — it is the season cache read a second way',
-      season.calls.weeks.length === 13 && season.calls.week.length === 1 &&
+      season.calls.weeks.length === 16 && season.calls.week.length === 1 &&
       season.calls.schedule === 1,
       `weeks=${season.calls.weeks.length} week=${season.calls.week.length} sched=${season.calls.schedule}`);
   }
@@ -1437,7 +1490,7 @@ async function check(scenario, boot) {
     c.ok('the failed headers say so on hover',
       /Week 5 did not load/.test(table.innerHTML), 'no failed header tooltip');
     c.ok('the note still counts only the weeks it has',
-      /11 loaded so far/.test(note), note);
+      /14 of 16 loaded so far/.test(note), note);
   }
 
   // ---- (d) switching team, sorting, changing week --------------------------
@@ -1454,7 +1507,9 @@ async function check(scenario, boot) {
     const { slotCountsFromLineups } = await import('../js/projection.js');
     const { optimalLineup, slotsFromCounts } = await import('../js/forecast.js');
 
-    const WEEKS = Array.from({ length: 13 }, (_, i) => i + 1);
+    // The playoff weeks are rebuilt too: the best lineup is marked in them by
+    // the same rule, and that is checked the same way.
+    const WEEKS = [...REGULAR_WEEKS, ...PLAYOFF_WEEKS];
     const FLEX_SLOTS = new Set([3, 5, 7, 23]);
 
     const pool = [];
@@ -1487,9 +1542,23 @@ async function check(scenario, boot) {
       JSON.stringify(rb.head.slice(0, 6)) ===
         JSON.stringify(['Depth', 'Player', 'Pos', 'NFL', 'Avg', 'Starts']),
       JSON.stringify(rb.head.slice(0, 6)));
-    c.ok('one column per week after them, thirteen of them',
-      JSON.stringify(rb.head.slice(6)) === JSON.stringify(WEEKS.map(String)),
+    c.ok('one column per week after them, thirteen of them, then the three playoff weeks',
+      JSON.stringify(rb.head.slice(6)) === JSON.stringify(SEASON_COLS),
       JSON.stringify(rb.head.slice(6)));
+    {
+      const ths = [...d.querySelectorAll('#startersTable thead th')];
+      const lined = ths.map((th, i) => (isPo(th.getAttribute('class')) ? i : -1)).filter((i) => i >= 0);
+      const col = 6 + REGULAR_WEEKS.length;
+      const trs = [...d.querySelectorAll('#startersTable tbody tr')];
+      c.ok('WHO TO START: the playoff line is on week 14, header and every row',
+        lined.length === 1 && lined[0] === col && trs.length > 0 &&
+        trs.every((tr) => isPo([...tr.children][col].getAttribute('class')) &&
+          [...tr.children].filter((td) => isPo(td.getAttribute('class'))).length === 1),
+        JSON.stringify(lined));
+      c.ok('WHO TO START: a playoff week is marked like any other — some are shaded',
+        Object.values(w.byPos).some((snap) => snap.rows.some((r) =>
+          r.weeks.slice(REGULAR_WEEKS.length).some((x) => x.st))));
+    }
     c.ok('every header is sortable',
       [...d.querySelectorAll('#startersTable thead th')].every((th) => th.hasAttribute('data-sort')));
     c.ok('the table lives inside a .table-scroll',
@@ -2020,7 +2089,7 @@ async function check(scenario, boot) {
       (() => {
         const td = [...d.querySelectorAll('#overviewTable tbody tr[data-team="4"] td.slot-cell')][0];
         const k = hoverCard(d, boot.window, td);
-        return k && k.ident.startsWith(`${noIdName} · QB · BUF`) && k.weeks.length === 13;
+        return k && k.ident.startsWith(`${noIdName} · QB · BUF`) && k.weeks.length === 16;
       })(), 'no run on the unlinked cell');
     c.ok('and the swap control is untouched — it never became a link either way',
       d.querySelectorAll('#rosterTable button[data-swap]').length === 15 &&
@@ -2296,7 +2365,7 @@ async function check(scenario, boot) {
     c.ok('A HOVERED CARD STAYS OPEN ACROSS EVERY BATCH REPAINT',
       w.hoverStillOpen, 'the card closed under the reader');
     c.ok('and it redrew from the newer data: every week filled in, same man',
-      /^T4 Player 01/.test(w.hoverIdent) && w.hoverValues.length === 13 && !w.hoverValues.includes('·'),
+      /^T4 Player 01/.test(w.hoverIdent) && w.hoverValues.length === 16 && !w.hoverValues.includes('·'),
       `${w.hoverIdent} ${JSON.stringify(w.hoverValues)}`);
     c.ok('it still closes when the pointer leaves the (new) cell', w.hoverClosesOnLeave, 'still open');
     c.ok('A TAP-OPENED SHEET SURVIVES A REPAINT TOO, still a sheet, still him',

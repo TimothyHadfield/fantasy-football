@@ -58,6 +58,16 @@ const ROSTER_SHAPE = { QB: 2, RB: 5, WR: 5, TE: 2, K: 1, DST: 1 };
 const SEED = 12345;
 const WEEKS = 13;
 
+// THE SAMPLE LEAGUE'S PLAYOFF WEEKS, 14–16: `capture.playoffWeeks` for a
+// thirteen-week, ten-team season with the default six-team field. The pages
+// show them after the regular season, so this file answers for them too — with
+// PROJECTIONS ONLY. demo.js has no games in them, so there is no team total to
+// fit to and nothing has been played: every actual is null. Weeks 1–13 are
+// untouched by this — the churn and every draw are seeded per week, so adding
+// later weeks cannot move an earlier one.
+export const DEMO_PLAYOFF_WEEKS = 3;
+const LAST_WEEK = WEEKS + DEMO_PLAYOFF_WEEKS;
+
 // ------------------------------------------------------------- scoring priors
 //
 // Means are per-week fantasy points by depth-chart rank. The nine-starter sum
@@ -360,7 +370,7 @@ function pickWeighted(rand, pairs) {
  * of ~25 swaps.
  */
 function rosterStateForWeek(week) {
-  const target = clamp(Math.round(week), 1, WEEKS);
+  const target = clamp(Math.round(week), 1, LAST_WEEK);
   if (rosterStateCache.has(target)) return rosterStateCache.get(target);
 
   const uni = buildUniverse();
@@ -537,10 +547,14 @@ const weekRosterCache = new Map();
  * Guarantee: every team's `actualTotal` and `projectedTotal` equal that team's
  * score in demo.js's game for this week.
  *
- * @param {number} week 1-13
+ * Weeks 14–16 are the sample playoffs: projections only, actuals null, and no
+ * fit (there is no game to fit to). See DEMO_PLAYOFF_WEEKS.
+ *
+ * @param {number} week 1-16
  */
 export function generateDemoWeekRosters(week) {
-  const target = clamp(Math.round(week) || 1, 1, WEEKS);
+  const target = clamp(Math.round(week) || 1, 1, LAST_WEEK);
+  const playoff = target > WEEKS;
   if (weekRosterCache.has(target)) return weekRosterCache.get(target);
 
   const uni = buildUniverse();
@@ -577,18 +591,26 @@ export function generateDemoWeekRosters(week) {
     );
     const projWeights = starters.map((e) => (isOut(e.status) ? 0 : e.rawProjected + 2));
 
-    const fittedActual = fitToTotal(starters.map((e) => e.rawActual), liveWeights, goal.actual);
-    const fittedProj = fitToTotal(
-      starters.map((e) => e.rawProjected), projWeights, goal.projected
-    );
+    if (playoff) {
+      // Not played, and no game total to fit: the raw projection stands.
+      for (const entry of [...starters, ...bench]) {
+        entry.actual = null;
+        entry.projected = round1(entry.rawProjected);
+      }
+    } else {
+      const fittedActual = fitToTotal(starters.map((e) => e.rawActual), liveWeights, goal.actual);
+      const fittedProj = fitToTotal(
+        starters.map((e) => e.rawProjected), projWeights, goal.projected
+      );
 
-    starters.forEach((entry, i) => {
-      entry.actual = fittedActual[i];
-      entry.projected = fittedProj[i];
-    });
-    for (const entry of bench) {
-      entry.actual = round1(entry.rawActual);
-      entry.projected = round1(entry.rawProjected);
+      starters.forEach((entry, i) => {
+        entry.actual = fittedActual[i];
+        entry.projected = fittedProj[i];
+      });
+      for (const entry of bench) {
+        entry.actual = round1(entry.rawActual);
+        entry.projected = round1(entry.rawProjected);
+      }
     }
 
     const toPlayer = (entry) => ({
@@ -614,7 +636,9 @@ export function generateDemoWeekRosters(week) {
       .map(toPlayer);
 
     const total = (arr, key) =>
-      Math.round(arr.reduce((a, p) => a + (p[key] || 0), 0) * 10) / 10;
+      playoff && key === 'actual'
+        ? null
+        : Math.round(arr.reduce((a, p) => a + (p[key] || 0), 0) * 10) / 10;
 
     return {
       id: team.id,

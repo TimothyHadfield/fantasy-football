@@ -378,7 +378,8 @@ function runColumns(lines) {
   for (const l of lines) {
     for (let i = 0; i < l.weeks.length; i++) {
       out.push({
-        week: Number(l.weeks[i]),
+        // parseInt, not Number: a playoff week's header reads "14PO (playoffs)".
+        week: parseInt(l.weeks[i], 10),
         proj: l.projs[i] ?? null, projKind: l.projKinds[i] ?? '',
         act: l.acts[i] ?? null, actKind: l.actKinds[i] ?? '',
       });
@@ -575,11 +576,31 @@ function check(scenario, { document, window, errors, rejections }) {
     lines.every((l) => l.weeks.length > 0), JSON.stringify(lines.map((l) => l.weeks.length)));
 
   const cols = runColumns(lines);
-  c.eq('the run covers the whole demo season', cols.length, 13);
-  c.ok('the weeks read 1 to 13 in order, across however many lines it took',
+  // Thirteen regular weeks and the sample league's three playoff weeks (14–16),
+  // which every week preview now carries after a heavy line (Tim, 2026-09-17).
+  c.eq('the run covers the whole demo season and its playoffs', cols.length, 16);
+  c.ok('the weeks read 1 to 16 in order, across however many lines it took',
     JSON.stringify(cols.map((k) => k.week)) ===
-      JSON.stringify(Array.from({ length: 13 }, (_, i) => i + 1)),
+      JSON.stringify(Array.from({ length: 16 }, (_, i) => i + 1)),
     JSON.stringify(cols.map((k) => k.week)));
+
+  // --- the playoff line ----------------------------------------------------
+  // One column carries it — week 14, the first playoff week — in all three
+  // rows, whichever wrapped line it landed on; and the header says so in words.
+  {
+    const lined = [...card.querySelectorAll('.tc-run th, .tc-run td')]
+      .filter((el) => el.classList.contains('po-start'));
+    const head = lined.find((el) => el.tagName === 'TH');
+    c.ok('THE PLAYOFF LINE IS ON WEEK 14, IN THE WEEK, PROJ AND ACT ROWS, AND NOWHERE ELSE',
+      lined.length === 3 && head && parseInt(head.textContent, 10) === 14 &&
+      lined.filter((el) => el.tagName === 'TD').length === 2,
+      lined.map((el) => `${el.tagName}:${el.textContent.trim()}`).join(' '));
+    c.ok('and its header says PO, with "playoffs" for a screen reader',
+      head && /PO/.test(head.textContent) && /playoffs/.test(head.textContent),
+      head && head.textContent);
+    c.ok('the card explains the line in words',
+      /PO = the playoffs \(weeks 14–16\)/.test(card.textContent), card.textContent.slice(0, 300));
+  }
   c.eq('exactly one column is marked as the week the page is showing',
     cols.filter((k) => k.projKind.includes('now')).length, 1);
   c.ok('and the Act row marks the same one, not a different one',
@@ -618,7 +639,14 @@ function check(scenario, { document, window, errors, rejections }) {
     // 390px cannot hold thirteen 34px columns plus the row labels, and there is
     // no scroller to hide the rest in any more, so the run MUST have wrapped.
     c.ok('ON A PHONE THE RUN WRAPS ONTO MORE THAN ONE LINE',
-      lines.length > 1, `${lines.length} line(s) for 13 weeks at ${cfg.width}px`);
+      lines.length > 1, `${lines.length} line(s) for 16 weeks at ${cfg.width}px`);
+    // The line still reads on a wrapped run: the week-14 column opens a
+    // playoff stretch INSIDE a line here (16 weeks at 390px are 8 + 8), and
+    // every column of that line is still there under it.
+    c.ok('the playoff line survives the wrap — its column is whole in its own line',
+      lines.some((l) => l.weeks.some((w) => /^14PO/.test(w)) &&
+        l.weeks.length === l.projs.length && l.weeks.length === l.acts.length),
+      JSON.stringify(lines.map((l) => l.weeks)));
     // Each line has to actually fit: the label column plus its own columns at
     // the 32px floor the phone stylesheet sets, inside the screen.
     const widest = Math.max(...lines.map((l) => l.weeks.length));

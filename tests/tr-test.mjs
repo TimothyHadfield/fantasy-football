@@ -235,7 +235,26 @@ function readWeekTable(el) {
   if (!table) return null;
   const all = [...table.querySelectorAll('tbody tr')];
   const cls = (tr) => tr.getAttribute('class') || '';
-  const divider = all.find((tr) => cls(tr).includes('divider'));
+  const has = (tr, c) => cls(tr).split(/\s+/).includes(c);
+  // Two lines now: the played weeks' (above the priced rows) and the playoff
+  // weeks' (below the totals). Each is read as itself.
+  const divider = all.find((tr) => has(tr, 'divider') && !has(tr, 'po-divider'));
+  const poDivider = all.find((tr) => has(tr, 'po-divider'));
+  // THE PLAYOFF WEEKS: after the totals, below their own line, uncoloured, and
+  // in no figure (Tim, 2026-09-17: shown, not priced — his call).
+  const playoff = all.filter((tr) => has(tr, 'po')).map((tr) => {
+    const tds = [...tr.children];
+    return {
+      label: text(tds[0]),
+      week: parseInt(text(tds[0]).replace(/^Week /, ''), 10),
+      before: num(text(tds[1])),
+      after: num(text(tds[2])),
+      delta: num(text(tds[3])),
+      coloured: /\b(up|down)\b/.test(tds[3].getAttribute('class') || ''),
+      belowLine: !!poDivider && all.indexOf(tr) > all.indexOf(poDivider),
+      afterTotals: all.indexOf(tr) > Math.max(...all.map((x, i) => (has(x, 'total') ? i : -1))),
+    };
+  });
   // PLAYED WEEKS sit above a divider, uncoloured, in no total — Tim's ask. They
   // are read separately so nothing below mistakes them for priced weeks.
   const past = all.filter((tr) => cls(tr).includes('past')).map((tr) => {
@@ -247,7 +266,7 @@ function readWeekTable(el) {
       aboveLine: !!divider && all.indexOf(tr) < all.indexOf(divider),
     };
   });
-  const rows = all.filter((tr) => !/past|divider/.test(cls(tr))).map((tr) => {
+  const rows = all.filter((tr) => !has(tr, 'past') && !has(tr, 'divider') && !has(tr, 'po')).map((tr) => {
     const tds = [...tr.children];
     return {
       label: text(tds[0]),
@@ -261,7 +280,9 @@ function readWeekTable(el) {
     weeks: rows.filter((r) => !r.total),
     totals: rows.filter((r) => r.total),
     past,
+    playoff,
     divider: divider ? text(divider) : '',
+    poDivider: poDivider ? text(poDivider) : '',
     // By LABEL, not position: Tim asked for per week first and the total under
     // it, and a reader keyed on order silently swaps the two.
     totalRow: rows.find((r) => r.total && /^All /.test(r.label)) || null,
@@ -1448,6 +1469,19 @@ if (!wk.boot) {
       JSON.stringify(wk.deal.weeks.totals));
     ok('and per week comes FIRST, the total under it', wk.deal.weeks.perFirst,
       JSON.stringify(wk.deal.weeks.totals.map((r) => r.label)));
+    // The sample league's playoff weeks (14–16) come after the totals.
+    const po = wk.deal.weeks.playoff;
+    ok('DEMO: the playoff weeks 14–16 are shown, after the totals and below their line',
+      po.map((r) => r.week).join(',') === '14,15,16' &&
+        po.every((r) => r.belowLine && r.afterTotals && !r.coloured),
+      JSON.stringify(po));
+    ok('DEMO: and the line says they are for reference, not in the total',
+      /Playoffs \(weeks 14–16\) — shown for reference, not in the total/.test(wk.deal.weeks.poDivider),
+      wk.deal.weeks.poDivider);
+    ok('DEMO: each playoff row is still after minus before, each side’s own lineup',
+      po.every((r) => Number.isFinite(r.before) && Number.isFinite(r.after) &&
+        Math.abs((r.after - r.before) - r.delta) <= 0.051),
+      JSON.stringify(po));
     ok('and the note says both lineups are picked week by week',
       /best legal lineup .{0,20}in that week/.test(wk.deal.note), wk.deal.note.slice(0, 300));
     ok('the deal names its players with cards too', wk.deal.cards >= 2, `${wk.deal.cards} cards`);
@@ -1936,6 +1970,39 @@ if (!live.boot) {
     ok('and none of them red or green', past.every((r) => !r.coloured));
     ok('the line says they are not counted', /not counted/.test(live.deal.weeks.divider),
       live.deal.weeks.divider);
+
+    // ---- the playoff weeks: shown after the totals, priced into nothing ------
+    //
+    // The stub is a 14-week, four-team league, so capture.playoffWeeks gives a
+    // two-round bracket in weeks 15–16. Re-derived with the engine: each row is
+    // that week's own before/after, and the offer's figure is still the
+    // unplayed REGULAR weeks alone — while pricing the playoff weeks in would
+    // have moved it, so the agreement is a fact and not a coincidence.
+    {
+      const po = live.deal.weeks.playoff;
+      const poWeeks = [lastWeek + 1, lastWeek + 2];
+      ok('LIVE: the playoff weeks are shown after the totals, below their own line, uncoloured',
+        po.map((r) => r.week).join(',') === poWeeks.join(',') &&
+          po.every((r) => r.belowLine && r.afterTotals && !r.coloured),
+        JSON.stringify(po));
+      const truth = priceOver(poWeeks, sendIds, recIds).byWeek;
+      ok('LIVE: each playoff row is the engine’s own lineup for that week',
+        po.length === truth.length && po.every((r, i) =>
+          Math.abs(r.before - truth[i].before) <= 0.051 &&
+          Math.abs(r.after - truth[i].after) <= 0.051 &&
+          Math.abs(r.delta - truth[i].delta) <= 0.051),
+        `${JSON.stringify(po)} vs ${JSON.stringify(truth)}`);
+      const withPo = priceOver([...unplayed, ...poWeeks], sendIds, recIds);
+      ok('LIVE: THE TOTAL AND THE PER-WEEK FIGURE ARE UNCHANGED BY THEM',
+        Math.abs(live.deal.weeks.totalRow.delta - fresh.delta) <= 0.15 &&
+          Math.abs(live.deal.weeks.perRow.delta - fresh.delta / unplayed.length) <= 0.06 &&
+          Math.abs(live.offer.myGain - fresh.delta) <= 0.15,
+        `total ${live.deal.weeks.totalRow.delta}, per week ${live.deal.weeks.perRow.delta}, ` +
+        `row ${live.offer.myGain}, engine ${fresh.delta}`);
+      ok('LIVE: and pricing the playoff weeks in WOULD have moved it',
+        Math.abs(withPo.delta - fresh.delta) > 0.15,
+        `${fresh.delta} vs ${withPo.delta} with the playoffs`);
+    }
     // THE NUMBER TIM CHECKED BY HAND: the total must be the priced rows alone.
     // If a played week leaked in, the total would be off by that week's delta.
     {

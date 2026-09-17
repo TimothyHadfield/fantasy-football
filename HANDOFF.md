@@ -576,6 +576,14 @@ ESPN's app already shows; link to it instead. Still open from the audit: the
 December playoff gaps (Home/Players/Who-to-start stop at 14, the simulation
 stops, a useless week-15 reading) and the 2027 season rollover.
 
+**Playoff weeks in every week preview (Tim, 2026-09-17):** Players, Analysis
+(season grid, who-to-start, the player card) and the Trade pop-up show the
+playoff weeks (`capture.playoffWeeks`, 15–17 for him) after a heavy line —
+class `po-start` in css/app.css, headed "PO". **Avg and every total stay
+regular-season only**, and the Trade page shows playoff weeks for reference
+but does not price them (still his call). Demo generates weeks 14–16
+(projections only; weeks 1–13 byte-identical).
+
 **Decisions left with him from that pass:** readings from the synced copy
 (currently never); "Avg" counts a bye as 0 on Players/Analysis but skips it on
 the Trade page — pick one; (Summary now shows LUCK, title % and loser % from

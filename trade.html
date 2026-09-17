@@ -215,6 +215,13 @@
     white-space: normal;
   }
 
+  /* Playoff weeks: after the totals, below the same heavy line, plain white —
+     shown for reference and in no figure (Tim has not decided whether a trade
+     should be priced on them). */
+  table.weeks tbody tr.po td { color: var(--text); }
+  table.weeks tbody tr.po-divider td { border-top: 1px solid var(--line-2); }
+  .po-tag-inline { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; color: var(--warn); }
+
   .deal-head { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
   .deal-side { min-width: 180px; }
   .deal-side h3 {

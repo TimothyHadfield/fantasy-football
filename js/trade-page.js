@@ -53,6 +53,8 @@ import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
+// The ONE definition of the playoff weeks (last regular week + one per round).
+import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
   depthTable, findTrades, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
@@ -91,6 +93,13 @@ const NFL_WEEKS = 18; // only used when ESPN won't tell us its own schedule
 // the way the schedule page's bracket does — worth doing, and noted as open in
 // PROGRESS.md, but it is a different question: a trade for weeks 15-17 is only
 // worth anything if you get there.
+//
+// SHOWN, NOT PRICED (2026-09-17). Tim asked for weeks 15–17 wherever a week
+// preview appears, and has not decided whether a trade should be priced on
+// them. So the pop-up reads them — on the click, like every week it shows —
+// and lays each side's lineup out after a line, below the totals, uncoloured;
+// the player card's run carries them too. They never reach `weeklySpan()`,
+// so no per-week figure, total or ranking on this page moves because of them.
 
 // How many weekly requests to have in the air at once, and it is the same three
 // the analysis page uses. Written here rather than imported from that page: it
@@ -127,6 +136,8 @@ const state = {
   weekPickedLive: false, // the reader chose a live week during THIS visit; see openingWeek()
   weeks: [],
   playedWeeks: [],
+  poWeeks: [],         // the playoff weeks: shown for reference, never priced
+  poPlayed: [],        // of those, the ones with a result (December)
   scheduleError: null, // why the live schedule could not be read, if it could not
   data: null,          // {week, teams:[...]} for the selected week
   slots: null,         // the league's starting slots, read off the lineups
@@ -269,6 +280,16 @@ function weeklySpan() {
 function pastWeeksShown() {
   const played = new Set(playedWeeks());
   return state.weeks.filter((w) => played.has(w));
+}
+
+/**
+ * The playoff weeks the pop-up SHOWS — after a line, uncoloured, in no total,
+ * and never in `weeklySpan()`. Only those still to be played: a bracket week
+ * with a result is banked like any other.
+ */
+function playoffWeeksShown() {
+  const played = new Set(state.poPlayed);
+  return state.poWeeks.filter((w) => !played.has(w) && !state.weeks.includes(w));
 }
 
 /**
@@ -640,9 +661,20 @@ function renderCost() {
       : `Nothing has been played yet according to the league schedule, so the whole season ` +
         `ahead is priced.`;
 
+  // The playoff weeks cost requests too, when a deal is opened, and are never
+  // priced — both said here, where the cost of the weekly measure is said.
+  const po = playoffWeeksShown();
+  const poLine = po.length
+    ? `<br><br><strong>Playoffs.</strong> Opening a deal also reads ${weekRange(po)} ` +
+      (state.isDemo
+        ? '(generated, no requests)'
+        : `(${plural(po.length, 'more request')}, once)`) +
+      ` and shows them after a line for reference. They are not in any figure on this page.`
+    : '';
+
   // The method, behind the toggle: which weeks, why those, and what they cost.
   $('costNote').innerHTML =
-    `<strong>Every remaining week</strong> prices ${spanWords}. ${spanReason}` +
+    `<strong>Every remaining week</strong> prices ${spanWords}. ${spanReason}` + poLine +
     `<br><br>` +
     `<strong>Cost.</strong> ESPN has no bulk form — asking for thirteen weeks in one call ` +
     `returns only the current one, and four shapes of that request were tried — so ${costLine}` +
@@ -732,6 +764,8 @@ function cardFor(p) {
       demo: state.isDemo,
       // A 0.00 is "Bye" only in his team's bye week; see `zeroKind`.
       byeWeek: byeWeekOf(p, state.byes),
+      // The heavy line before the first playoff week, when the run reaches it.
+      playoffWeeks: state.poWeeks,
       injuryStatus: weeks.map((w) => {
         const e = weekly.byWeek.get(w)?.get(p.playerId);
         return (e && e.injuryStatus) || p.injuryStatus || null;
@@ -1736,7 +1770,7 @@ runSearch.token = 0;
 // the difference column is signed and coloured, so a deal that is +5 on average
 // and −12 in the weeks that decide the season is one glance.
 
-function weekTableHtml(byWeek, total, { label = 'With the trade', past = [] } = {}) {
+function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], playoff = [] } = {}) {
   // PLAYED WEEKS: above a line, in plain text, and in no total. Tim, 2026-09-16:
   // "draw a line below the previous weeks ... and turn all the numbers above it
   // white (not red or green) to show it's not in the calculation." No up/down
@@ -1774,6 +1808,11 @@ function weekTableHtml(byWeek, total, { label = 'With the trade', past = [] } = 
   const afterTotal = byWeek.reduce((a, w) => a + w.after, 0);
   const n = byWeek.length || 1;
 
+  // THE PLAYOFF WEEKS: after the totals, below a line, uncoloured — each side's
+  // best lineup that week, for reference. Tim has not decided whether a trade
+  // should be priced on them, so they are in no figure above.
+  const poBlock = playoffTableRows(playoff);
+
   return (
     `<table class="weeks">` +
     `<thead><tr><th class="name">Week</th><th>As you are now</th>` +
@@ -1787,8 +1826,48 @@ function weekTableHtml(byWeek, total, { label = 'With the trade', past = [] } = 
     `${past.length ? ' left' : ''}</td>` +
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total)}</td></tr>` +
+    poBlock +
     `</tbody></table>`
   );
+}
+
+/** The playoff rows and the line above them, or nothing. */
+function playoffTableRows(playoff) {
+  if (!playoff || !playoff.length) return '';
+  const range = weekRange(playoff.map((w) => w.week));
+  return (
+    `<tr class="divider po-divider"><td colspan="4">Playoffs (${range}) — ` +
+    `shown for reference, not in the total.</td></tr>` +
+    playoff
+      .map(
+        (w) =>
+          `<tr class="po">` +
+          `<td class="name">Week ${w.week} <span class="po-tag-inline">PO</span></td>` +
+          `<td>${fmt(w.before)}</td>` +
+          `<td>${fmt(w.after)}</td>` +
+          `<td class="delta">${signedText(w.delta)}</td>` +
+          `</tr>`
+      )
+      .join('')
+  );
+}
+
+/**
+ * The playoff weeks for one deal, priced the same way as the rest but on their
+ * OWN, so nothing about them can reach the priced span. Only weeks in hand.
+ */
+function playoffPriced(me, offer) {
+  const weeks = playoffWeeksShown().filter((w) => weekly.byWeek.has(w));
+  if (!weeks.length || !me) return [];
+  return priceTradeAcrossWeeks({
+    players: me.players,
+    send: offer.send,
+    receive: offer.receive,
+    slots: state.slots,
+    weeks,
+    projFor,
+    zeroIsBye: zeroIsBye(),
+  }).byWeek;
 }
 
 function sideHtml(title, players) {
@@ -1836,13 +1915,22 @@ function renderDeal() {
   if (!weeklyReady()) {
     const span = weeklySpan();
     const why = !span.length
-      ? 'Every week of the regular season has been played, so there is nothing left for a trade to change.'
+      ? 'Every week of the regular season has been played, so there is nothing left for a trade to change' +
+        (playoffWeeksShown().length ? ' — the playoff weeks are below, for reference only.' : '.')
       : weekly.error && !weekly.loading
         ? `Couldn’t read the remaining weeks: ${esc(weekly.error)}`
         : state.isDemo
           ? `Generating ${weekRange(span)}…`
           : `Reading ${weekRange(span)} from ESPN — one request per week not already loaded…`;
-    $('dealBody').innerHTML = head + `<p class="empty">${why}</p>`;
+    // Once the regular season is over the bracket weeks are all that is left:
+    // shown (in no total — there is none) rather than nothing.
+    const po = !span.length ? playoffPriced(me, offer) : [];
+    $('dealBody').innerHTML = head + `<p class="empty">${why}</p>` +
+      (po.length
+        ? `<table class="weeks"><thead><tr><th class="name">Week</th><th>As you are now</th>` +
+          `<th>${esc(offer.combined ? 'With the combination' : 'With the trade')}</th>` +
+          `<th>Difference</th></tr></thead><tbody>${playoffTableRows(po)}</tbody></table>`
+        : '');
     $('dealNote').innerHTML = '';
     return;
   }
@@ -1921,6 +2009,7 @@ function renderDeal() {
     weekTableHtml(priced.byWeek, priced.delta, {
       label: offer.combined ? 'With the combination' : 'With the trade',
       past: pastPriced,
+      playoff: playoffPriced(me, offer),
     }) +
     cut +
     espnBlock;
@@ -1944,6 +2033,10 @@ function renderDeal() {
     `trade is really buying. ` +
     `<strong>Only ${weekRange(span)} appear here</strong>, because those are the weeks still to be ` +
     `played; a week with a result against it is banked and no trade can reach it. ` +
+    (playoffWeeksShown().length
+      ? `<strong>The playoff weeks</strong> (${weekRange(playoffWeeksShown())}) are shown after the ` +
+        `totals for reference and are in no figure on this page. `
+      : '') +
     `The per-week number beside each player above is a different arithmetic again — it is what he ` +
     `is worth in a week he PLAYS, with his byes left out — so it does not multiply up to these ` +
     `totals, and is not meant to. ` +
@@ -1993,10 +2086,12 @@ async function loadWeeksForDeal(offer) {
   if (weekly.key !== sourceKey()) resetWeekly();
   rememberSelectedWeek();
   // The remaining weeks, which are priced, AND the played ones, which the
-  // pop-up shows above a line for reference and leaves out of every total.
-  const needed = [...pastWeeksShown(), ...weeklySpan()];
+  // pop-up shows above a line for reference and leaves out of every total —
+  // and the playoff weeks, shown after the totals and priced nowhere.
+  const needed = [...pastWeeksShown(), ...weeklySpan(), ...playoffWeeksShown()];
   const wasReady = weeklyReady();
-  if (weekly.loading || !weeklySpan().length || needed.every(haveWeek)) { paint(); return; }
+  if (weekly.loading || (!weeklySpan().length && !playoffWeeksShown().length) ||
+      needed.every(haveWeek)) { paint(); return; }
   const done = await buyMissingWeeks(needed);
   if (!done) return;
   if (wasReady) { if (state.deal === offer) paint(); else renderCost(); return; }
@@ -2510,6 +2605,9 @@ async function useDemo() {
   state.byes = {};
   state.scheduleError = null;
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
+  // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
+  state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
+  state.poPlayed = [];
   // The demo season really is over: `js/demo-rosters.js` hardcodes a result
   // against every one of its thirteen games. Kept honest here, and handled
   // deliberately in `playedWeeks()` — which is the ONE place that decides the
@@ -2570,10 +2668,15 @@ async function useLive() {
       scheduleWeeks = schedule.weeks || [];
       state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
         .sort((a, b) => a - b);
+      state.poWeeks = leaguePlayoffWeeks(schedule);
+      state.poPlayed = [...new Set((schedule.playoffGames || [])
+        .filter((g) => g.played).map((g) => g.week))];
       state.scheduleError = null;
       break;
     } catch (err) {
       state.playedWeeks = [];
+      state.poWeeks = [];
+      state.poPlayed = [];
       state.scheduleError = (err && err.message) || String(err);
       if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
     }

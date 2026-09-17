@@ -122,6 +122,15 @@ const SCENARIOS = {
       };
     },
   },
+  // DECEMBER: every regular-season game is decided. The page must still show
+  // what is left — the playoff weeks — rather than nothing.
+  'live-december': {
+    label: '(e) the regular season is over: the playoff weeks are what is shown',
+    stub: true,
+    env: { WV_PLAYED_THROUGH: '13' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+  },
   'live-midload': {
     label: '(b++) the span is widened while the first weeks are still in the air',
     stub: true,
@@ -347,8 +356,9 @@ async function check(scenario, boot) {
   c.ok('identity columns are Player, Pos, Tm and Avg',
     JSON.stringify(head.slice(0, 4)) === JSON.stringify(['Player', 'Pos', 'Tm', 'Avg']),
     JSON.stringify(head));
+  // A playoff week's header carries its label: "14PO (playoffs)", "15 (playoffs)".
   c.ok('nothing but weeks after them',
-    head.slice(4).every((h) => /^\d+$/.test(h)) && head.length > 4, JSON.stringify(head));
+    head.slice(4).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)) && head.length > 4, JSON.stringify(head));
   const defaultSpan = scenario !== 'live-midload';
   if (defaultSpan) {
     c.ok('one column per week, three of them by default',
@@ -609,13 +619,61 @@ async function check(scenario, boot) {
       w.inFlight && w.inFlight.length > 0 && w.inFlight.length < 10, JSON.stringify(w.inFlight));
     c.ok('no week is ever fetched twice',
       w.fetches && new Set(w.fetches).size === w.fetches.length, JSON.stringify(w.fetches));
-    c.ok('every remaining week is fetched exactly once',
+    // REST OF SEASON RUNS THROUGH THE PLAYOFFS (Tim, 2026-09-17). The stub is a
+    // 13-week, ten-team league, so capture.playoffWeeks puts its six-team
+    // bracket in weeks 14–16 — and those are bought like any other week.
+    c.ok('every remaining week is fetched exactly once — the playoff weeks included',
       JSON.stringify(w.fetches.slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6, 7, 8, 9, 10, 11, 12, 13]), JSON.stringify(w.fetches));
-    c.ok('the table ends up with a column for every week',
+        JSON.stringify([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]), JSON.stringify(w.fetches));
+    c.ok('the table ends up with a column for every week, the playoffs labelled',
       JSON.stringify(w.cols.slice(4)) ===
-        JSON.stringify(['4', '5', '6', '7', '8', '9', '10', '11', '12', '13']),
+        JSON.stringify(['4', '5', '6', '7', '8', '9', '10', '11', '12', '13',
+          '14PO (playoffs)', '15 (playoffs)', '16 (playoffs)']),
       JSON.stringify(w.cols));
+
+    // THE LINE: `po-start` on the first playoff week's header and on every body
+    // cell under it — and nowhere else.
+    const isPo = (cls) => String(cls || '').split(/ +/).includes('po-start');
+    const ths = [...table.querySelectorAll('thead th')];
+    const poHeads = ths.map((th, i) => (isPo(th.getAttribute('class') || '') ? i : -1))
+      .filter((i) => i >= 0);
+    c.ok('the playoff line is on the week-14 header, and only there',
+      poHeads.length === 1 && txt(ths[poHeads[0]]).startsWith('14'), JSON.stringify(poHeads));
+    const col = poHeads[0];
+    const wire = rows.filter((r) => r.cells.length === head.length);
+    c.ok('every row carries the line on that column',
+      wire.length > 0 && wire.every((r) => isPo(r.cells[col].cls)),
+      JSON.stringify(wire.filter((r) => !isPo(r.cells[col].cls)).slice(0, 2)));
+    c.ok('and on no other column',
+      wire.every((r) => r.cells.filter((x) => isPo(x.cls)).length === 1));
+    c.ok('the playoff header says so in words, not by the line alone',
+      /playoffs/.test(txt(ths[col])) && /PO/.test(txt(ths[col])), txt(ths[col]));
+
+    // AVG IS THE REGULAR SEASON. Re-derived from the rendered week cells 4–13
+    // (a bye's data-v="0" counts, a blank has none), never from the page's own
+    // arithmetic — and a row where the playoff weeks WOULD move it proves the
+    // check can fail.
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
+    let wrong = 0;
+    let moved = 0;
+    for (const r of wire) {
+      const shown = r.cells[3].v === null ? null : Number(r.cells[3].v);
+      const regular = mean(nums(r.cells.slice(4, col)));
+      const everything = mean(nums(r.cells.slice(4)));
+      if (regular === null ? shown !== null : Math.abs(shown - regular) > 1e-9) wrong++;
+      if (regular !== null && everything !== null && Math.abs(regular - everything) > 0.05) moved++;
+    }
+    c.ok('AVG IGNORES THE PLAYOFF WEEKS — every row is the mean of weeks 4–13 only',
+      wrong === 0, `${wrong} rows disagree`);
+    c.ok('and the playoff weeks would have moved it, so that check has teeth',
+      moved > 0, `${moved}`);
+    c.ok('the cost line counts the playoff weeks it is paying for',
+      /13 weeks \(3 of them playoff\) = 26 requests/.test(txt($('spanCost'))), txt($('spanCost')));
+    c.ok('the key names the line while it is drawn',
+      !$('waiverLegend').querySelector('.po-key').closest('[data-when]').hasAttribute('hidden'));
+    c.ok('the explanation says the playoff weeks are not in Avg',
+      /left out of Avg/.test(note), note);
     c.ok('every column filled in', w.wait === 0, `${w.wait} cells still pending`);
     c.ok('every player is still listed once', w.rows === 60, `${w.rows}`);
   }
@@ -655,6 +713,26 @@ async function check(scenario, boot) {
       !$('waiverStatus').closest('details'), txt($('waiverStatus')));
     c.ok('the average is taken from the weeks that did load',
       /average is taken from the weeks that did load/.test(note), note);
+  }
+
+  // ---- (e) December --------------------------------------------------------
+  if (scenario === 'live-december') {
+    c.ok('DECEMBER: the columns are the playoff weeks, the first one labelled',
+      JSON.stringify(head.slice(4)) === JSON.stringify(['14PO (playoffs)', '15 (playoffs)', '16 (playoffs)']),
+      JSON.stringify(head));
+    c.ok('DECEMBER: and they are filled in, not left waiting',
+      rows.length > 0 && rows.every((r) => r.cells.slice(4).every((x) => !x.cls.split(' ').includes('wait'))),
+      JSON.stringify(rows[0]));
+    // With no regular week left to show, Avg averages what there is.
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const wrong = rows.filter((r) => {
+      const xs = r.cells.slice(4).map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
+      const want = mean(xs);
+      const got = r.cells[3].v === null ? null : Number(r.cells[3].v);
+      return want === null ? got !== null : Math.abs(got - want) > 1e-9;
+    });
+    c.ok('DECEMBER: with only playoff weeks left, Avg is their mean rather than blank',
+      wrong.length === 0 && rows.some((r) => r.cells[3].v !== null), `${wrong.length} rows disagree`);
   }
 
   // ---- (d) empty pool ------------------------------------------------------

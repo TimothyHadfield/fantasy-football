@@ -39,6 +39,8 @@ import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
 import * as espn from './espn.js';
+// The ONE definition of the playoff weeks (last regular week + one per round).
+import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('analysis');
@@ -58,7 +60,11 @@ const SEASON_GAMES = 17;
 const state = {
   source: 'demo',
   week: DEMO_WEEKS,
-  weeks: [],        // weeks offered in the dropdown
+  weeks: [],        // weeks offered in the dropdown — the regular season
+  // The playoff weeks, laid out after the regular season in every week-across
+  // view (Tim, 2026-09-17) behind a heavy line, and kept out of every Avg and
+  // Starts count. Not offered in the dropdown. See spanWeeks().
+  poWeeks: [],
   playedWeeks: [],  // of those, the ones that have actually been played
   data: null,       // {week, teams:[...]} for the selected week
   teamId: null,     // team shown in the roster detail
@@ -368,6 +374,48 @@ function totalOf(row) {
   return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
 }
 
+// ------------------------------------------------------------ the playoffs
+//
+// "From now on, when you show the 14 week preview, could you also show weeks
+// 15, 16, and 17 to represent the playoffs. Just put a line between 14 and 15."
+// — Tim, 2026-09-17. The week-across views (the season grid, who to start, and
+// the card's run) run through the playoff weeks; the line is `po-start` in
+// css/app.css; the averages stay regular-season.
+
+/** Every week a week-across view lays out: the regular season, then the playoffs. */
+function spanWeeks() {
+  return [...state.weeks, ...state.poWeeks.filter((w) => !state.weeks.includes(w))];
+}
+
+const isPlayoff = (w) => state.poWeeks.includes(w);
+
+/** The mean of a row's REGULAR-SEASON numbers — playoff columns are shown, not averaged. */
+function regularAvg(values, weeks) {
+  const real = values.filter((v, i) => !isPlayoff(weeks[i]) && typeof v === 'number');
+  return real.length ? round1(real.reduce((a, b) => a + b, 0) / real.length) : null;
+}
+
+/** The first playoff week in a run of columns — the one the line goes before. */
+const firstPlayoffIn = (weeks) => weeks.find(isPlayoff);
+
+/** `po-start` on a week cell, merged into the class it already carries. */
+function withPo(td, week, weeks) {
+  if (week !== firstPlayoffIn(weeks)) return td;
+  return td.replace(/^<td(?: class="([^"]*)")?/, (m, c) => `<td class="${c ? `${c} ` : ''}po-start"`);
+}
+
+/** A week's header cell; a playoff week says so in words, not by the line alone. */
+function weekHead(w, weeks, cls, title) {
+  const start = w === firstPlayoffIn(weeks);
+  const classes = [cls, start ? 'po-start' : ''].filter(Boolean).join(' ');
+  const label = isPlayoff(w)
+    ? `${w}${start ? '<span class="po-tag" aria-hidden="true">PO</span>' : ''}` +
+      '<span class="sr-only"> (playoffs)</span>'
+    : String(w);
+  const why = isPlayoff(w) ? `${title} A playoff week: shown, not counted in Avg.` : title;
+  return `<th data-sort class="${classes}" title="${why}">${label}</th>`;
+}
+
 // ------------------------------------------------ the week run on the hover
 //
 // A grid cell is one number standing for one man, and the question it always
@@ -398,7 +446,7 @@ function totalOf(row) {
  * js/player-card.js draws it.
  */
 function seasonRunData(index, p) {
-  const weeks = state.weeks;
+  const weeks = spanWeeks();
   if (!index || !weeks.length) return null;
 
   return weekRun({
@@ -413,6 +461,7 @@ function seasonRunData(index, p) {
     // Whether a 0.00 is his bye or a man ruled out — player-card.js decides.
     byeWeek: byeWeekOf(p, state.byes),
     injuryStatus: weeks.map((w) => seasonStatus(index, w, p)),
+    playoffWeeks: state.poWeeks,
   });
 }
 
@@ -670,6 +719,8 @@ async function useDemo() {
   // Never asked for on demo: a sample zero is a man ruled out, never a bye.
   state.byes = {};
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
+  // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
+  state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
   state.playedWeeks = state.weeks.slice(); // the demo season is over by definition
   if (!state.weeks.includes(state.week)) state.week = DEMO_WEEKS;
   setToggle('demo');
@@ -705,12 +756,14 @@ async function useLive() {
 
   setStatus('Reading the league schedule…');
   let scheduleWeeks = [];
+  let poWeeks = [];
   // The bye weeks ride alongside the schedule rather than after it. They only
   // decide how a 0.00 is drawn, so a failure is an empty map, never an error.
   const byesRead = loadByes();
   try {
     const schedule = await fetchSchedule();
     scheduleWeeks = schedule.weeks || [];
+    poWeeks = leaguePlayoffWeeks(schedule);
     state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
       .sort((a, b) => a - b);
   } catch {
@@ -721,6 +774,8 @@ async function useLive() {
   state.weeks = scheduleWeeks.length
     ? scheduleWeeks
     : Array.from({ length: NFL_WEEKS }, (_, i) => i + 1);
+  // No schedule, no bracket: the 18-week guess already covers every week.
+  state.poWeeks = scheduleWeeks.length ? poWeeks : [];
 
   state.week = openingWeek();
 
@@ -1396,7 +1451,7 @@ function ensureSeasonWeeks() {
   if (!state.data || !state.weeks.length) return;
   if (state.seasonPending === key) return;
 
-  const missing = state.weeks.filter(
+  const missing = spanWeeks().filter(
     (w) => !state.seasonWeeks.has(w) && !state.seasonFailed.has(w)
   );
   if (!missing.length) return;
@@ -1429,7 +1484,11 @@ async function loadDemoSeason(key, missing) {
   }
   for (const w of missing) {
     const built = generate(w);
-    if (built && built.teams && built.teams.length) state.seasonWeeks.set(w, built.teams);
+    // A generator that clamps a week it does not have to one it does would
+    // hand back another week's numbers; that is a gap, never a borrowed week.
+    const same = built && (built.week === undefined || Number(built.week) === Number(w));
+    if (same && built.teams && built.teams.length) state.seasonWeeks.set(w, built.teams);
+    else if (isPlayoff(w)) state.poWeeks = state.poWeeks.filter((x) => x !== w);
     else state.seasonFailed.add(w);
   }
   renderSeason();
@@ -1642,7 +1701,7 @@ function renderSeasonHead(weeks) {
       const title = failed
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : `ESPN’s projected points for week ${w}.`;
-      return `<th data-sort class="${cls}" title="${title}">${w}</th>`;
+      return weekHead(w, weeks, cls, title);
     })
     .join('');
 
@@ -1652,7 +1711,7 @@ function renderSeasonHead(weeks) {
        <th class="name" data-sort>Player</th>
        <th class="left" data-sort>Pos</th>
        <th class="left" data-sort>NFL</th>
-       <th class="grouped" data-sort title="The mean of the week columns that carry a number. Ours, not ESPN’s: a bye counts as the zero ESPN returns, and a week he is not on the roster for is left out.">Avg</th>
+       <th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are not counted. Ours, not ESPN’s: a bye counts as the zero ESPN returns, and a week he is not on the roster for is left out.">Avg</th>
        ${cols}
      </tr>`;
 }
@@ -1661,7 +1720,7 @@ function renderSeason() {
   const table = $('seasonTable');
   const tbody = bodyOf(table);
   const team = currentTeam();
-  const weeks = state.weeks.slice();
+  const weeks = spanWeeks();
   // The same view the panel above draws, swaps included, so the two can never
   // disagree about who is starting for the squad they are both showing.
   const view = rosterView(team);
@@ -1695,8 +1754,7 @@ function renderSeason() {
     .map((entry) => {
       const p = entry.p;
       const values = weeks.map((w) => seasonValue(index, w, p.playerId));
-      const real = values.filter((v) => typeof v === 'number');
-      const avg = real.length ? round1(real.reduce((a, b) => a + b, 0) / real.length) : null;
+      const avg = regularAvg(values, weeks);
 
       const order = SLOT_ORDER[entry.slotId] ?? 40;
       const tier = injuryTier(p.injuryStatus);
@@ -1723,8 +1781,8 @@ function renderSeason() {
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${fmt(avg)}</td>
-        ${values.map((v, i) => seasonCell(v, weeks[i], p, weeks[i] === state.week, null,
-          seasonStatus(index, weeks[i], p))).join('')}
+        ${values.map((v, i) => withPo(seasonCell(v, weeks[i], p, weeks[i] === state.week, null,
+          seasonStatus(index, weeks[i], p)), weeks[i], weeks)).join('')}
       </tr>`;
     })
     .join('');
@@ -1918,7 +1976,6 @@ function starterRows(team, weeks, index, starters) {
   const rows = positionPool(team, weeks)
     .map((p) => {
       const values = weeks.map((w) => seasonValue(index, w, p.playerId));
-      const real = values.filter((v) => typeof v === 'number');
       const startsIn = weeks.filter((w) => {
         const wk = starters.get(w);
         return wk && wk.has(p.playerId);
@@ -1927,9 +1984,12 @@ function starterRows(team, weeks, index, starters) {
         p,
         values,
         held: onRosterNow.has(p.playerId),
-        avg: real.length ? round1(real.reduce((a, b) => a + b, 0) / real.length) : null,
+        avg: regularAvg(values, weeks),
         // Out of the weeks actually READ, never out of all of them: a squad
-        // half-loaded would otherwise look like a squad half-benched.
+        // half-loaded would otherwise look like a squad half-benched. The
+        // playoff weeks count here: Starts is the number of marked cells on
+        // the row, and a playoff week is marked like any other. Only Avg is
+        // kept to the regular season.
         starts: startsIn.length,
         decided: weeks.filter((w) => starters.has(w)).length,
       };
@@ -1974,7 +2034,7 @@ function renderStartersHead(weeks) {
       const title = failed
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : `ESPN’s projected points for week ${w}, and whether he starts.`;
-      return `<th data-sort class="${cls}" title="${title}">${w}</th>`;
+      return weekHead(w, weeks, cls, title);
     })
     .join('');
 
@@ -1984,8 +2044,8 @@ function renderStartersHead(weeks) {
        <th class="name" data-sort>Player</th>
        <th class="left" data-sort>Pos</th>
        <th class="left" data-sort>NFL</th>
-       <th class="grouped" data-sort title="The mean of the week columns that carry a number. A bye counts as the zero ESPN returns; a week he is not on the roster for is left out.">Avg</th>
-       <th data-sort title="How many of the weeks read he is in the best legal lineup for.">Starts</th>
+       <th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are not counted. A bye counts as the zero ESPN returns; a week he is not on the roster for is left out.">Avg</th>
+       <th data-sort title="How many of the weeks read he is in the best legal lineup for, playoff weeks included.">Starts</th>
        ${cols}
      </tr>`;
 }
@@ -1994,7 +2054,7 @@ function renderStarters() {
   const table = $('startersTable');
   const tbody = bodyOf(table);
   const team = currentTeam();
-  const weeks = state.weeks.slice();
+  const weeks = spanWeeks();
   const label = state.startersPos === 'DST' ? 'DEF' : state.startersPos;
 
   $('startersTitle').textContent = team
@@ -2031,7 +2091,8 @@ function renderStarters() {
           const slotId = starters.has(week) ? starters.get(week).get(p.playerId) : undefined;
           const start =
             slotId === undefined ? null : { slotId, flex: FLEX_SLOTS.has(slotId) };
-          return seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p));
+          return withPo(seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p)),
+            week, weeks);
         })
         .join('');
 
@@ -2139,6 +2200,10 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
         `filled a lineup spot in one of the weeks shown, and a shaded week with no row to sit on would ` +
         `read as a slot going empty. `
       : '') +
+    (state.poWeeks.length
+      ? `The <strong>playoff weeks</strong> (${weekRange(state.poWeeks)}) sit after a heavy line, ` +
+        `headed PO, with the best lineup marked the same way. They count in Starts and are left out of Avg. `
+      : '') +
     `<strong>Starts</strong> counts the weeks actually read from ESPN` +
     (pending > 0 ? ` — <strong>${plural(pending, 'week')}</strong> still loading, so it will rise.` : '.'),
 
@@ -2216,9 +2281,12 @@ function renderSeasonNote(weeks, rowCount) {
   );
 
   const loaded = weeks.filter((w) => state.seasonWeeks.has(w)).length;
+  const regular = weeks.filter((w) => !isPlayoff(w));
+  const po = weeks.filter(isPlayoff);
   parts.push(
-    `Covering ${weekRange(weeks)} — ${plural(weeks.length, 'week')} this season runs to` +
-    (loaded === weeks.length ? ', all loaded.' : `, ${loaded} loaded so far.`)
+    `Covering ${weekRange(regular)} — ${plural(regular.length, 'week')} this season runs to` +
+    (po.length ? `, then the playoffs (${weekRange(po)}) after the heavy line` : '') +
+    (loaded === weeks.length ? ', all loaded.' : `, ${loaded} of ${weeks.length} loaded so far.`)
   );
 
   parts.push(
@@ -2245,7 +2313,8 @@ function renderSeasonNote(weeks, rowCount) {
 
   parts.push(
     'Avg is the mean of the weeks that carry a number and is ours, not ESPN’s: a bye counts as ' +
-    'the zero ESPN returns, so does a ruled-out week, and a week he is not on the roster for is left out.'
+    'the zero ESPN returns, so does a ruled-out week, and a week he is not on the roster for is left out. ' +
+    'It is a regular-season average: the playoff weeks are shown but not counted.'
   );
 
   parts.push(
@@ -2290,6 +2359,8 @@ function seasonMarks(table) {
     has('td.wk.off') && ['<span class="lg-mark faint">—</span>', 'not on this roster that week'],
     has('td.wk.muted') && ['<span class="lg-mark faint">—</span>', 'no number from ESPN'],
     has('td.wk.wait') && ['<span class="lg-mark faint">·</span>', 'not loaded yet'],
+    has('td.po-start') &&
+      ['<span class="lg-mark po-key"><span class="po-tag">PO</span></span>', 'playoff weeks — not in Avg'],
   ];
 }
 

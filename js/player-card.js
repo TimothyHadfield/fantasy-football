@@ -28,6 +28,10 @@
 //     `currentWeek` the week the rest of the page is showing; it is bracketed.
 //     `heading`     the sub-line under the identity, e.g. "ESPN's projection
 //                   for weeks 1–13". Say whose numbers they are.
+//     `playoffWeeks` the league's playoff weeks (`capture.playoffWeeks`), or [].
+//                   The first of them that is in the run gets the heavy
+//                   `po-start` line and a "PO" label, so the regular season and
+//                   the bracket read apart on every wrapped line.
 //   Returns null when there is nothing to draw, which the card handles.
 //
 // Registering one, and getting the key that goes in the markup:
@@ -279,6 +283,7 @@ export function weekRun({
   demo = false,
   byeWeek = null,
   injuryStatus = null,
+  playoffWeeks = [],
 } = {}) {
   if (!weeks.length) return null;
 
@@ -289,11 +294,19 @@ export function weekRun({
   // One status for the whole run, or one per week when the page has them.
   const statusAt = (i) => (Array.isArray(injuryStatus) ? injuryStatus[i] : injuryStatus);
 
+  // THE PLAYOFFS START AT A LINE. Tim: "put a line between 14 and 15 so that
+  // it's clear that it's separated from the full season." The first playoff
+  // week in this run carries it — whichever line of the wrapped chart it lands
+  // on — and every playoff week says so in words for a screen reader.
+  const po = new Set((playoffWeeks || []).map(Number));
+  const poFirst = weeks.find((w) => po.has(Number(w)));
   const cols = weeks.map((week, i) => ({
     week,
     proj: projToken(projections[i], demo, { week, byeWeek, injuryStatus: statusAt(i) }),
     act: actToken(actuals[i]),
     now: week === currentWeek,
+    po: po.has(Number(week)),
+    poStart: poFirst !== undefined && week === poFirst,
   }));
 
   // The legend names a mark only where it occurs, and BOTH rows can put one on
@@ -489,15 +502,25 @@ function chartLines(cols, cap) {
  * something.
  */
 function lineHtml(cols) {
+  // The heavy line before the first playoff week is a class on that column in
+  // all three rows; its "PO" label stacks under the number like `.tc-mk`, so the
+  // column keeps its width and `perLine` stays right.
+  const extra = (c, base = '') => {
+    const cls = [base, c.now ? 'now' : '', c.poStart ? 'po-start' : ''].filter(Boolean).join(' ');
+    return cls ? ` class="${cls}"` : '';
+  };
   const weeks = cols
-    .map((c) => `<th${c.now ? ' class="now"' : ''} scope="col">${c.week}</th>`).join('');
+    .map((c) => `<th${extra(c)} scope="col">${c.week}` +
+      (c.poStart ? '<span class="tc-po" aria-hidden="true">PO</span>' : '') +
+      (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
+      '</th>').join('');
   // A ruled-out zero stacks its word UNDER the number (`.tc-mk` is a block), so
   // the column stays the 34px floor and `perLine` stays right.
   const projs = cols
-    .map((c) => `<td class="k-${c.proj.kind}${c.now ? ' now' : ''}">${esc(c.proj.text)}` +
+    .map((c) => `<td${extra(c, `k-${c.proj.kind}`)}>${esc(c.proj.text)}` +
       `${c.proj.mark ? `<span class="tc-mk">${esc(c.proj.mark)}</span>` : ''}</td>`).join('');
   const acts = cols
-    .map((c) => `<td class="a-${c.act.kind}${c.now ? ' now' : ''}">${esc(c.act.text)}</td>`).join('');
+    .map((c) => `<td${extra(c, `a-${c.act.kind}`)}>${esc(c.act.text)}</td>`).join('');
   return (
     '<table class="tc-run">' +
     `<thead><tr><th class="tc-lbl" scope="row">Week</th>${weeks}</tr></thead>` +
@@ -532,7 +555,14 @@ function cardHtml({ ident, run, href }, sheet) {
     ? `<div class="tc-legend">${run.legend.map((l) => esc(l)).join('<br>')}</div>`
     : '';
 
-  return `${head}${sub}<div class="tc-chart">${lines}</div>${note}${legend}${actionsHtml(href)}`;
+  const poWeeks = run.cols.filter((c) => c.po).map((c) => c.week);
+  const poNote = poWeeks.length
+    ? `<div class="tc-note">PO = the playoffs (week${poWeeks.length === 1 ? '' : 's'} ` +
+      `${poWeeks.length === 1 ? poWeeks[0] : `${poWeeks[0]}–${poWeeks[poWeeks.length - 1]}`}), ` +
+      'after the heavy line.</div>'
+    : '';
+
+  return `${head}${sub}<div class="tc-chart">${lines}</div>${note}${poNote}${legend}${actionsHtml(href)}`;
 }
 
 /**

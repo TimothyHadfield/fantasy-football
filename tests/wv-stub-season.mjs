@@ -2,7 +2,9 @@
 export const calls = { schedule: 0 };
 
 const WEEKS = 13;
-const PLAYED_THROUGH = 3;   // so the "current week" is 4
+// 3, so the "current week" is 4 — or, with WV_PLAYED_THROUGH=13, December:
+// the regular season is over and only the playoff weeks are left.
+const PLAYED_THROUGH = Number(process.env.WV_PLAYED_THROUGH || 3);
 
 export async function fetchSchedule() {
   calls.schedule++;
