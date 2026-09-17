@@ -114,6 +114,24 @@ for (const n of navs) {
   }
 }
 
+// The home-screen app. Every page must name the same manifest, and its scope
+// must cover every page: on iOS a link to a page outside the scope drops out of
+// the app into a browser view, which is exactly what "Home → Stats turns back
+// into a website" was.
+const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'manifest.webmanifest'), 'utf8'));
+ok(manifest.scope === './', 'the manifest scope is the whole site folder', manifest.scope);
+ok(manifest.display === 'standalone', 'the manifest opens as an app', manifest.display);
+ok(fs.existsSync(path.join(REPO, manifest.start_url)), 'the manifest start page exists', manifest.start_url);
+for (const icon of manifest.icons || []) {
+  ok(fs.existsSync(path.join(REPO, icon.src)), `manifest icon ${icon.src} exists`);
+}
+for (const page of pages) {
+  const html = fs.readFileSync(path.join(REPO, page), 'utf8');
+  ok(/<link rel="manifest" href="manifest\.webmanifest">/.test(html), `${page} links the manifest`);
+  ok(/<link rel="apple-touch-icon" href="apple-touch-icon\.png">/.test(html), `${page} has the home-screen icon`);
+  ok(/<meta name="apple-mobile-web-app-capable" content="yes">/.test(html), `${page} stays in the app on iOS`);
+}
+
 for (const w of warnings) console.log(`WARN ${w}`);
 console.log(fail
   ? `${pass} passed, ${fail} failed`

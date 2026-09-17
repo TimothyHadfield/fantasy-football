@@ -535,6 +535,19 @@ reads are shared for 60s; `js/site-status.js` on every page (Site updated
 stamp, newer-version bar, failed-to-load strip); iPhone home-screen icon;
 GitHub Actions runs the tests on every push.
 
+**Added 2026-09-17, second ask:** (1) the league is typed once per ACCOUNT —
+a signed-in, connected browser saves `{leagueId, season, teamId}` to
+`users/<uid>` (`cloud.saveProfile`), and a signed-in browser with no league
+fills it from there and connects (`adoptProfile` in `js/connection.js`; it only
+fills gaps, never replaces a league typed on that device). Rules allow only the
+owner's own document. (2) `manifest.webmanifest` with `scope: "./"` and
+`display: standalone`, linked from every page — without it iOS dropped out of
+the home-screen app into a browser view on the first link to another page.
+**Standalone iOS keeps its own storage**, so he must sign in once inside the
+app; **popup sign-in inside an iOS home-screen app is unverified** — ask
+whether it worked. He must delete and re-add the home-screen icon for the
+manifest to take effect.
+
 **Decisions left with him from that pass:** readings from the synced copy
 (currently never); "Avg" counts a bye as 0 on Players/Analysis but skips it on
 the Trade page — pick one; Summary still blank before week 3 while Stats shows
