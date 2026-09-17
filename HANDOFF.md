@@ -3,7 +3,7 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-16.
+Last updated 2026-09-17.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -21,9 +21,15 @@ is a week that can never be recovered.**
 The schedule page's time machine records what the forecast said, once a week,
 so it can be looked back on in December. ESPN keeps **no history of its own
 projections**, so this cannot be backfilled by any means — see rule 8 below.
-A reading is only taken when **Tim opens `schedule.html` on live data** in the
-Edge profile that has the bridge extension. A week he never visits is simply
-gone.
+**Since 2026-09-17 a reading is taken when Tim opens ANY page of the site on
+his computer** in the Edge profile that has the bridge extension — the
+connection bar calls `captureIfDue()` in `js/capture.js`, which builds the
+exact reading the schedule page would. The schedule page's time-machine panel
+now says in one line whether this week was recorded and, if not, why; the
+bar shows a red "Week N NOT recorded" chip when an attempt failed. **Readings
+are never taken from the synced (cloud) copy** — Claude's call on 2026-09-17,
+matching the original design; Tim was told and may overrule it. A week he never
+opens the site on his computer is simply gone.
 
 **Checked again at the end of 2026-09-16 and still empty**: `data/snapshots/`
 holds nothing but its README and there is no `fantasy-archive-*.json` in his
@@ -48,7 +54,7 @@ start appearing after that deploy, this was the cause. See PROGRESS.md, "a race
 with the extension".
 
 **He reads the site on his phone, and that is the other likely reason.** A
-snapshot is only captured when `schedule.html` loads on LIVE data; live data
+snapshot is only captured on LIVE data; live data
 needs the bridge extension; **no phone browser can install one**. So if he is
 only opening the site on the phone, the archive stays empty however good the
 phone layout gets.
@@ -514,6 +520,32 @@ Five worth knowing by name:
 
 ## What is genuinely open
 
+**2026-09-17 improvement pass — landed, and not yet seen by him:** a game is
+played only when ESPN's `winner` is decided (so Thursday–Monday no longer
+count half-weeks as results); playoff-tier games are kept out of the regular
+season (`playoffGames`); ties count half a win in every standings sort; a live
+0.00 is "Bye" only in the player's real bye week (`zeroKind()` in
+`js/player-card.js`) — ESPN projects OUT/IR men at 0 too, verified; waiver
+tag "W · Fri" on the Players page; Home goes live on a new device and leads
+with his game and win chance; Analysis opens on the coming week, keeps the
+card open while loading, scrolls to the detail on a tap, and shows a "Best
+lineup" line; Summary and Schedule simulate with identical inputs (so the
+Schedule page now also reads played weeks, one request each); identical league
+reads are shared for 60s; `js/site-status.js` on every page (Site updated
+stamp, newer-version bar, failed-to-load strip); iPhone home-screen icon;
+GitHub Actions runs the tests on every push.
+
+**Decisions left with him from that pass:** readings from the synced copy
+(currently never); "Avg" counts a bye as 0 on Players/Analysis but skips it on
+the Trade page — pick one; Summary still blank before week 3 while Stats shows
+luck from week 1; HANDOFF/PROGRESS are served publicly by Pages (emails,
+league id, Firebase uid — rules still protect the data). **December:** once
+week 14 is decided the simulation says "nothing left to simulate", so there
+are no title odds during the bracket. **Not done:** Trade finder in a Web
+Worker, a persistent phone cache for the synced copy, moving the duplicated
+player-card CSS (in `analysis.html` and `trade.html`) into `css/app.css`, and
+the analysis page's remaining `title`s on name links and slot buttons.
+
 Ordered by what would hurt most to get wrong.
 
 - **THE ARCHIVE IS STILL EMPTY AND WEEKS ARE GONE.** See the block at the top of
@@ -529,7 +561,7 @@ Ordered by what would hurt most to get wrong.
   1. **Tick-your-side.** He reported his own players still unticked on ESPN.
      Unreproducible here (private league). Every silent failure now speaks: a
      line on the Trade page after the click, and a badge on ESPN's page. He was
-     asked to reload the extension (must show **0.3.2**), hard-refresh, make
+     asked to reload the extension (must show **0.3.3** now), hard-refresh, make
      sure "Your team" is his own, try again and **report both messages**. The
      likeliest cause was an extension never reloaded after 0.3.0.
   2. **The race fix in real Edge.** A trade's pop-up should now list only weeks
@@ -550,7 +582,7 @@ Ordered by what would hurt most to get wrong.
   produces.
 - **The extension is unpacked, so a change to `extension/` reaches Tim only
   after he reloads it** at `edge://extensions` (and the version shown there
-  should match `manifest.json`, 0.3.2 as of 2026-09-16). The Trade page now
+  should match `manifest.json`, **0.3.3 as of 2026-09-17** — that version limits the extension to `/fantasy-football/` on his github.io origin, so it protects him only once he has reloaded it). The Trade page now
   says so itself after an Open in ESPN click when the running version is older
   than `MIN_TICK_VERSION` in `js/trade-page.js` — raise that with any extension
   change the page depends on. Bump the version with every extension change so
@@ -563,11 +595,9 @@ Ordered by what would hurt most to get wrong.
   first real test is him opening a link. It fails loudly if it fails — the badge
   says "ESPN did not record the selection for: …" rather than proposing less
   than he intended.
-- **Firebase is built and wired but not switched on.** `docs/firebase-setup.md`
-  is click-by-click; it needs ~15 minutes of console work only he can do, in
-  **two sittings**, because his own user id does not exist until he has signed
-  in once. Until he does it, `cloud.js` is unconfigured and every page behaves
-  exactly as it did before.
+- **Firebase is set up and on (2026-09-16)** — see "The cloud, and the phone".
+  Unconfirmed: the first successful **Send to phone**, and the phone reading
+  it after signing in with Google there too.
 - **Three decisions of his that are open**, all flagged to him and none urgent:
   whether his league really has 6 playoff teams (his prose said 4; his pasted
   settings said 6; the page now reads it from ESPN, so live data settles it);
