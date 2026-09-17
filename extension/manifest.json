@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fantasy Football Bridge",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Connects your private ESPN fantasy league to your Fantasy Football site, without making the league public.",
   "permissions": [
     "storage"
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://timothyhadfield.github.io/*",
+        "https://timothyhadfield.github.io/fantasy-football/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],

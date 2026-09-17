@@ -9,13 +9,24 @@
 // Match patterns cannot pin a port reliably — Chromium ignores ports in
 // host_permissions — so the origin check that actually matters happens here.
 // Without it, any local dev server on any port could drive the bridge.
-const ALLOWED_ORIGINS = new Set([
-  'https://timothyhadfield.github.io',
-  'http://localhost:8000',
-  'http://127.0.0.1:8000',
-]);
+//
+// The ORIGIN is not enough on github.io. Every project Tim publishes shares
+// https://timothyhadfield.github.io, and the root of it is a different site
+// altogether — any of them could otherwise read his private league through his
+// ESPN cookie or stage a trade. So the live site is pinned to its PATH as well.
+// The manifest says the same thing; this is the belt to its braces, and
+// background.js checks the sender's path a third time. Keep all three in step.
+const ALLOWED_SCOPES = [
+  { origin: 'https://timothyhadfield.github.io', path: '/fantasy-football/' },
+  // Local dev serves the repo at the root, on one port only.
+  { origin: 'http://localhost:8000', path: '/' },
+  { origin: 'http://127.0.0.1:8000', path: '/' },
+];
 
-if (ALLOWED_ORIGINS.has(window.location.origin)) {
+const inScope = ALLOWED_SCOPES.some((s) =>
+  window.location.origin === s.origin && window.location.pathname.startsWith(s.path));
+
+if (inScope) {
   const SITE = 'ff-site';   // messages from the page
   const EXT = 'ff-ext';     // messages from us
 

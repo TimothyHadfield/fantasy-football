@@ -34,12 +34,33 @@
 const READ_HOST = 'https://lm-api-reads.fantasy.espn.com';
 const API_PREFIX = '/apis/v3/games/ffl/';
 
-/** Pages allowed to drive the bridge. Kept in step with content-site.js. */
-const ALLOWED_ORIGINS = new Set([
-  'https://timothyhadfield.github.io',
-  'http://localhost:8000',
-  'http://127.0.0.1:8000',
-]);
+/**
+ * Pages allowed to drive the bridge: an origin AND a path under it. Kept in
+ * step with content-site.js and the manifest's content_scripts matches.
+ *
+ * The path is not decoration. Every project Tim publishes shares the
+ * timothyhadfield.github.io origin, and its root is a different site of his,
+ * so an origin-only check would let any of them read the private league or
+ * stage a trade.
+ */
+const ALLOWED_SCOPES = [
+  { origin: 'https://timothyhadfield.github.io', path: '/fantasy-football/' },
+  { origin: 'http://localhost:8000', path: '/' },
+  { origin: 'http://127.0.0.1:8000', path: '/' },
+];
+
+/**
+ * Is this sender a page of the site? Both the origin Chrome vouches for and
+ * the URL of the frame must agree, and the URL — parsed, so "/x/../" and
+ * "%2e%2e" are already resolved — must sit under the allowed path.
+ */
+function senderIsSite(sender) {
+  if (typeof sender.url !== 'string' || typeof sender.origin !== 'string') return false;
+  let url;
+  try { url = new URL(sender.url); } catch { return false; }
+  if (url.origin !== sender.origin) return false;
+  return ALLOWED_SCOPES.some((s) => url.origin === s.origin && url.pathname.startsWith(s.path));
+}
 
 // Where ESPN's trade builder lives. This is NOT an API host and NOT in
 // host_permissions — it is where content-espn-trade.js runs, and the only
@@ -212,8 +233,8 @@ async function probe({ season, leagueId }) {
 //   his mind about.
 //
 // And the input is validated to the same standard as the URL builders above —
-// the site is trusted only as far as the allowed-origins check, and a page on
-// an allowed origin can still be wrong.
+// the site is trusted only as far as the allowed-scope check, and a page in
+// that scope can still be wrong.
 
 const STAGE_KEY = 'stagedTrade';
 const STAGE_TTL_MS = 5 * 60 * 1000;
@@ -451,7 +472,7 @@ const HANDLERS = {
 /**
  * Who may ask for what.
  *
- * Everything defaults to the site's allowed origins. TAKE_STAGED_TRADE is the
+ * Everything defaults to the site's allowed scopes. TAKE_STAGED_TRADE is the
  * one exception: it is asked for by our content script on ESPN's trade page,
  * which is NOT an allowed site origin and must never become one — a page on
  * espn.com can reach the bridge only for this, and this returns a note we put
@@ -475,7 +496,7 @@ function senderMayAsk(type, sender) {
     return Boolean(sender.tab) && sender.origin === TRADE_ORIGIN;
   }
   const fromExtension = sender.url?.startsWith(chrome.runtime.getURL(''));
-  return Boolean(fromExtension) || ALLOWED_ORIGINS.has(sender.origin);
+  return Boolean(fromExtension) || senderIsSite(sender);
 }
 
 // Registered synchronously at the top level, which MV3 requires.
@@ -483,7 +504,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Only our own popup, or a page we explicitly trust, may drive this.
   //
   // When writes are added they must NOT simply join this table: any page on an
-  // allowed origin could then drop players or send trades. Route writes behind
+  // allowed page could then drop players or send trades. Route writes behind
   // a popup confirmation, or a nonce the popup issues. Staging a trade is not
   // a write — see the block above HANDLERS — and is the only thing here that
   // any espn.com page may touch at all.

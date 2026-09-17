@@ -15,7 +15,8 @@
 //      behalf of a web page. Every input from that page is hostile until
 //      proven otherwise. A leagueId of "1?view=x" rewrites the query string; a
 //      leagueId containing "../.." walks to a different endpoint entirely.
-//   2. Only an allowed origin may drive it at all.
+//   2. Only the site may drive it at all — its origin AND its /fantasy-football/
+//      path, because every project Tim publishes shares the github.io origin.
 //   3. host_permissions holds the READ host and NOTHING else. No write to ESPN
 //      is possible from this extension, and that is not a policy — it is the
 //      absence of a permission.
@@ -58,6 +59,8 @@ const stripComments = (src) => src
 
 const EXT_ID = 'abcdefghijklmnopabcdefghijklmnop';
 const SITE = 'https://timothyhadfield.github.io';
+/** The site lives under a PATH of that origin, which it shares with every other project. */
+const SITE_PAGE = SITE + '/fantasy-football/index.html';
 const ESPN = 'https://fantasy.espn.com';
 
 /**
@@ -120,7 +123,7 @@ function makeWorker({ reply } = {}) {
   vm.runInContext(BACKGROUND, context, { filename: 'background.js' });
 
   /** Send a message the way Chrome would, and wait for the reply. */
-  const send = (msg, sender = { id: EXT_ID, origin: SITE, url: SITE + '/index.html' }) =>
+  const send = (msg, sender = { id: EXT_ID, origin: SITE, url: SITE_PAGE }) =>
     new Promise((resolve) => {
       let answered = false;
       const kept = listener(msg, sender, (res) => { answered = true; resolve(res); });
@@ -218,10 +221,51 @@ for (const origin of ['https://evil.example', 'http://localhost:3000', 'https://
   ok(res && res.ok === false, `origin ${String(origin)} may not read the league`);
   eq(w.calls.length, 0, `origin ${String(origin)} makes no request`);
 }
-for (const origin of ['https://timothyhadfield.github.io', 'http://localhost:8000', 'http://127.0.0.1:8000']) {
+for (const url of [
+  'https://timothyhadfield.github.io/fantasy-football/index.html',
+  'https://timothyhadfield.github.io/fantasy-football/',
+  'https://timothyhadfield.github.io/fantasy-football/trade.html?x=1#y',
+  'http://localhost:8000/index.html',
+  'http://127.0.0.1:8000/trade.html',
+]) {
   const w = makeWorker();
-  await w.send(okMsg(), { id: EXT_ID, origin, url: origin + '/index.html' });
-  eq(w.calls.length, 1, `origin ${origin} is allowed`);
+  await w.send(okMsg(), { id: EXT_ID, origin: new URL(url).origin, url });
+  eq(w.calls.length, 1, `${url} is allowed`);
+}
+
+// ---- the same ORIGIN is not the same site --------------------------------
+// Every project Tim publishes shares timothyhadfield.github.io, and its root is
+// a different site of his. Only the /fantasy-football/ path may drive this.
+for (const [url, why] of [
+  [SITE + '/', 'the root of the shared origin'],
+  [SITE + '/index.html', 'the other site at the root'],
+  [SITE + '/other-project/index.html', 'another project on the same origin'],
+  [SITE + '/fantasy-football', 'the path without its slash, which is a different prefix'],
+  [SITE + '/fantasy-football-evil/index.html', 'a look-alike project name'],
+  [SITE + '/Fantasy-Football/index.html', 'the path in another case'],
+  [SITE + '/other/fantasy-football/index.html', 'the path buried under another project'],
+  [SITE + '/fantasy-football/../other/index.html', 'a dot-dot walk out of the path'],
+  [SITE + '/fantasy-football/%2e%2e/other/index.html', 'an encoded dot-dot walk'],
+  [SITE + '/other/?/fantasy-football/', 'the path only in the query'],
+  ['not a url', 'a sender URL that does not parse'],
+]) {
+  const w = makeWorker();
+  const res = await w.send(okMsg(), { id: EXT_ID, origin: SITE, url });
+  ok(res && res.ok === false, `refused: ${why}`);
+  eq(w.calls.length, 0, `no request after: ${why}`);
+  const st = await w.send({ type: 'STAGE_TRADE' }, { id: EXT_ID, origin: SITE, url });
+  ok(st && st.ok === false && /not allowed/.test(st.error), `may not stage either: ${why}`);
+}
+{
+  // The origin Chrome vouches for and the frame URL must agree.
+  const w = makeWorker();
+  const res = await w.send(okMsg(), { id: EXT_ID, origin: 'https://evil.example', url: SITE_PAGE });
+  ok(res && res.ok === false, 'a URL claiming the site from another origin is refused');
+  const res2 = await w.send(okMsg(), { id: EXT_ID, url: SITE_PAGE });
+  ok(res2 && res2.ok === false, 'a site URL with no origin behind it is refused');
+  const res3 = await w.send(okMsg(), { id: EXT_ID, origin: SITE });
+  ok(res3 && res3.ok === false, 'the site origin with no URL behind it is refused');
+  eq(w.calls.length, 0, 'and none of them made a request');
 }
 {
   // Another extension's message is ignored outright — no reply at all.
@@ -544,6 +588,83 @@ eq(JSON.stringify(MANIFEST.permissions), JSON.stringify(['storage']), 'and the o
 
   const site = scripts.find((s) => (s.js || []).includes('content-site.js'));
   ok(site && !site.matches.some((m) => m.includes('espn.com')), 'the site bridge is still nowhere near espn.com');
+  // The live site is matched by its PATH, never by the whole shared origin.
+  eq(
+    JSON.stringify(site.matches),
+    JSON.stringify([
+      'https://timothyhadfield.github.io/fantasy-football/*',
+      'http://localhost/*',
+      'http://127.0.0.1/*',
+    ]),
+    'the site bridge runs on /fantasy-football/ and local dev only'
+  );
+  ok(!site.matches.includes('https://timothyhadfield.github.io/*'), 'and not on the whole github.io origin');
+  ok(!site.all_frames, 'and only in the top frame');
+}
+
+// ---- the page-side half: content-site.js answers only inside the scope ----
+{
+  const SITE_SCRIPT = fs.readFileSync(repoFile('extension/content-site.js'), 'utf8');
+
+  /** Run content-site.js as if loaded at `href`; report what it wired up. */
+  const bootSiteScript = (href) => {
+    const loc = new URL(href);
+    const posted = [];
+    const listeners = [];
+    const sent = [];
+    const win = {
+      location: { origin: loc.origin, pathname: loc.pathname, href: loc.href },
+      postMessage: (data, target) => posted.push({ data, target }),
+      addEventListener: (type, fn) => listeners.push({ type, fn }),
+    };
+    const context = {
+      window: win,
+      chrome: {
+        runtime: {
+          getManifest: () => ({ version: MANIFEST.version }),
+          sendMessage: (req, cb) => { sent.push(req); cb({ ok: true, data: 'x' }); },
+          lastError: undefined,
+        },
+      },
+    };
+    vm.createContext(context);
+    vm.runInContext(SITE_SCRIPT, context, { filename: 'content-site.js' });
+    const onMessage = listeners.find((l) => l.type === 'message');
+    const ask = () => onMessage && onMessage.fn({
+      source: win, origin: loc.origin,
+      data: { source: 'ff-site', id: 'q1', request: { type: 'PING' } },
+    });
+    return { posted, listeners, sent, ask };
+  };
+
+  for (const href of [
+    'https://timothyhadfield.github.io/fantasy-football/',
+    'https://timothyhadfield.github.io/fantasy-football/trade.html',
+    'http://localhost:8000/index.html',
+    'http://127.0.0.1:8000/',
+  ]) {
+    const b = bootSiteScript(href);
+    ok(b.posted.some((p) => p.data.type === 'HELLO' && p.data.version === MANIFEST.version),
+      `content-site says hello on ${href}`);
+    b.ask();
+    eq(b.sent.length, 1, `content-site forwards a request on ${href}`);
+  }
+  for (const href of [
+    'https://timothyhadfield.github.io/',
+    'https://timothyhadfield.github.io/index.html',
+    'https://timothyhadfield.github.io/other-project/',
+    'https://timothyhadfield.github.io/fantasy-football-evil/',
+    'https://timothyhadfield.github.io/fantasy-football',
+    'http://localhost:3000/',
+    'https://evil.example/fantasy-football/',
+  ]) {
+    const b = bootSiteScript(href);
+    eq(b.posted.length, 0, `content-site stays silent on ${href}`);
+    eq(b.listeners.length, 0, `content-site listens for nothing on ${href}`);
+    b.ask();
+    eq(b.sent.length, 0, `content-site forwards nothing on ${href}`);
+  }
+  eq(MANIFEST.version, '0.3.3', 'the scoped bridge ships as 0.3.3');
 }
 
 {
