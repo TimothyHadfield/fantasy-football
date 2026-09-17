@@ -61,12 +61,12 @@ if (state.highlight === null) {
 const fmt = (n, digits = 1) =>
   n === null || n === undefined || Number.isNaN(n) ? '—' : n.toFixed(digits);
 
-/** Whole points, thousands-separated. A raw 1467 next to one-decimal
- *  neighbours was the only unformatted number on the page. */
-const int = (n) =>
+/** Points for, as ESPN shows it: one decimal, thousands-separated (1,845.6).
+ *  Whole points used to be shown, which read 1845.60 as 1,846. */
+const pf = (n) =>
   n === null || n === undefined || Number.isNaN(n)
     ? '—'
-    : Math.round(n).toLocaleString('en-US');
+    : n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 const dash = '<span class="muted">—</span>';
 
@@ -391,7 +391,7 @@ function renderMainTable() {
         <td data-v="${recordKey(t)}">${record(t)}</td>
         <td${heatAvg(t.avgActual)}>${num(t.avgActual)}</td>
         <td${heatProj(t.avgProjected)}>${num(t.avgProjected)}</td>
-        <td${none ? '' : ` data-v="${t.totalActual}"`}>${none ? dash : int(t.totalActual)}</td>
+        <td${none ? '' : ` data-v="${t.pointsFor}"`}>${none ? dash : pf(t.totalActual)}</td>
         <td${heatOpp(t.oppAvgActual)}>${num(t.oppAvgActual)}</td>
         <td>${sgn(t.forMinusAgainst)}</td>
         <td>${num(t.actualStdev)}</td>

@@ -44,8 +44,11 @@ export async function fetchSchedule() {
   for (const w of WEEKS) {
     const games = fixturesFor(w).map(([homeId, awayId]) => {
       const played = w === 1;
-      const hs = played ? Math.round((92 + rnd(homeId, w) * 50) * 10) / 10 : null;
-      const as = played ? Math.round((92 + rnd(awayId, w + 40) * 50) * 10) / 10 : null;
+      // FC_IN_PROGRESS: week 2 is under way — points on both sides, no winner
+      // yet — so the league has moved past week 1. Unset, week 2 is untouched.
+      const going = !!process.env.FC_IN_PROGRESS && w === 2;
+      const hs = played ? Math.round((92 + rnd(homeId, w) * 50) * 10) / 10 : going ? 41.5 : null;
+      const as = played ? Math.round((92 + rnd(awayId, w + 40) * 50) * 10) / 10 : going ? 38.2 : null;
       return {
         week: w,
         homeId,

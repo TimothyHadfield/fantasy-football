@@ -17,13 +17,22 @@
 // this week's projected totals, each roster's season-long projection, injured
 // starters, and — once a week is final — bench points and start/sit misses.
 // No season-long averages over one game, which is noise wearing a number's suit.
+//
+// The one exception is the win chance on the cards, which is the Schedule
+// page's figure and is built by the same code (js/capture.js `matchupOdds`).
+// That needs the played weeks' rosters as well, so it is filled in a moment
+// after the cards themselves — see loadOdds().
 
-import { fetchSchedule, fetchWeekRosters } from './season.js';
+// A namespace import, not named ones: some suites stand a stub in for
+// season.js that lacks `fetchWeeksRosters`, and a missing NAMED import would
+// fail the whole module at link time.
+import * as season from './season.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import { savedConfig, onConnection } from './connection.js';
 import * as espn from './espn.js';
 import * as prefs from './prefs.js';
-import { winProbability, DEFAULT_SIGMA } from './forecast.js';
+import * as capture from './capture.js';
+import { DEFAULT_SIGMA, MIN_GAMES_TO_CALIBRATE } from './forecast.js';
 import { enableSort } from './sortable.js';
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +57,14 @@ const state = {
   benchWeek: null,
   benchRosters: null,
   teamId: savedConfig()?.teamId ?? null,
+  // The win chance: capture.matchupOdds() for the league on screen, or null
+  // while its played weeks are still being read (`oddsPending`).
+  odds: null,
+  oddsPending: false,
+  // week -> teams, every roster week read for the odds so far. Reset with the
+  // league; a week change only reads the weeks this map does not hold.
+  oddsTeams: new Map(),
+  oddsToken: 0,
 };
 
 // ------------------------------------------------------------------ formatting
@@ -116,6 +133,15 @@ const round1 = (n) => Math.round(n * 10) / 10;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** A chance as the Schedule page prints it: whole percent, never 0% or 100%. */
+function pctText(p) {
+  if (!Number.isFinite(p)) return '—';
+  const v = Math.min(100, Math.max(0, p * 100));
+  if (v > 0 && v < 0.5) return '&lt;1%';
+  if (v < 100 && v >= 99.5) return '&gt;99%';
+  return `${Math.round(v)}%`;
+}
+
 // ------------------------------------------------------------------- injuries
 
 // ESPN's status strings, worst first. Anything unrecognised is kept rather than
@@ -154,10 +180,13 @@ function injuryClass(status) {
 export function buildModel({
   schedule, rosters, week, teamId = null, isDemo = false,
   benchWeek = week, benchRosters = null,
+  odds = null, oddsPending = false,
 }) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
 
   const games = (schedule.byWeek.get(week) || []).map((g) => {
+    // Proj on the card: the lineup AS SET, which is what the manager has
+    // actually told ESPN and the number ESPN's own matchup page shows.
     const hp = roster.get(g.homeId)?.projectedTotal ?? null;
     const ap = roster.get(g.awayId)?.projectedTotal ?? null;
 
@@ -165,20 +194,49 @@ export function buildModel({
     // a prediction, it is half a number.
     const both = isNum(hp) && isNum(ap);
     const mine = teamId != null && (g.homeId === teamId || g.awayId === teamId);
-    // The owner's own chance, from the two projections already on screen and
-    // forecast.js's default spread — no extra request, and our model, not
-    // ESPN's. Only for his game, only before it is final, only with both sides.
-    let myWinPct = null;
-    if (mine && both && !g.played && g.awayId != null) {
-      const p = winProbability(hp, ap, DEFAULT_SIGMA);
-      if (p !== null) myWinPct = g.homeId === teamId ? p : 1 - p;
+    const bye = g.awayId === null || g.awayId === undefined;
+
+    // THE WIN CHANCE IS THE SCHEDULE PAGE'S, NOT A SECOND MODEL. It compares
+    // the BEST legal lineup each side could field that week, read against the
+    // spread measured from this league's played weeks (or 27 below twelve
+    // team-weeks) — js/capture.js's `matchupOdds`, the same pieces Schedule
+    // calls. Only for a game nobody has kicked off in, exactly as Schedule:
+    // half a scoreline is neither a result nor a forecast.
+    const upcoming = !bye && capture.gameState(g) === 'upcoming';
+    let homeWinPct = null;
+    let homeBest = null;
+    let awayBest = null;
+    if (odds && upcoming) {
+      homeBest = odds.points(g, 'home');
+      awayBest = odds.points(g, 'away');
+      homeWinPct = odds.forGame(g);
     }
+    const hasOdds = isNum(homeWinPct);
+    const myWinPct = mine && hasOdds ? (g.homeId === teamId ? homeWinPct : 1 - homeWinPct) : null;
+
+    // The favourite the card names is the one the percentage is about, so the
+    // highlight, the margin and the chance can never point different ways.
+    let favourite = null;
+    let projectedMargin = null;
+    if (hasOdds) {
+      favourite = Math.abs(homeBest - awayBest) < 0.5 ? null : homeBest > awayBest ? 'home' : 'away';
+      projectedMargin = round1(Math.abs(homeBest - awayBest));
+    } else if (both) {
+      favourite = hp !== ap ? (hp > ap ? 'home' : 'away') : null;
+      projectedMargin = round1(Math.abs(hp - ap));
+    }
+
     return {
       ...g,
       homeProjected: hp,
       awayProjected: ap,
-      favourite: both && hp !== ap ? (hp > ap ? 'home' : 'away') : null,
-      projectedMargin: both ? round1(Math.abs(hp - ap)) : null,
+      homeBest,
+      awayBest,
+      homeWinPct,
+      favourite,
+      projectedMargin,
+      marginBasis: hasOdds ? 'best' : both ? 'set' : null,
+      oddsPending: Boolean(oddsPending && upcoming && !hasOdds),
       mine,
       myWinPct,
     };
@@ -200,6 +258,7 @@ export function buildModel({
     teamCount: schedule.teams.length,
     teamId,
     games,
+    spread: odds ? { sigma: odds.sigma, calibrated: odds.calibrated, sample: odds.sample } : null,
     hasRosters: Boolean(rosters?.teams?.length),
     playedThisWeek: games.filter((g) => g.played).length,
     totalGames: schedule.games.length,
@@ -412,6 +471,7 @@ function loadDemo(note = '') {
   state.benchWeek = benchWeekFor(schedule, week);
   state.benchRosters =
     state.benchWeek === week ? null : generateDemoWeekRosters(state.benchWeek);
+  startOdds();   // clears any live odds: demo games are all final
 
   setStatus(
     (note ? `${note} ` : '') +
@@ -445,7 +505,7 @@ async function loadLiveNow(cfg) {
 
   setStatus('Loading your league from ESPN…');
   try {
-    const schedule = await fetchSchedule();
+    const schedule = await season.fetchSchedule();
     if (!schedule.games.length) {
       setStatus(
         `Connected to ${esc(schedule.leagueName)}, but ESPN has no matchups for ` +
@@ -460,10 +520,13 @@ async function loadLiveNow(cfg) {
     state.schedule = schedule;
     state.week = week;
     state.isDemo = false;
+    // A new schedule is a new league as far as the odds are concerned.
+    state.odds = null;
+    state.oddsTeams = new Map();
     state.rosters = await loadRosters(week);
+    const odds = startOdds();
     await loadBench();
-    reportLive();
-    draw();
+    await paintWhenOdds(odds);
   } catch (err) {
     // Demo data is already on screen from boot, so a failed live load costs the
     // user a sentence, not the page.
@@ -478,7 +541,7 @@ async function loadLiveNow(cfg) {
  */
 async function loadRosters(week) {
   try {
-    return await fetchWeekRosters(week);
+    return await season.fetchWeekRosters(week);
   } catch {
     return null;
   }
@@ -511,9 +574,94 @@ async function loadBench() {
 async function changeWeek(week) {
   state.week = week;
   state.rosters = state.isDemo ? generateDemoWeekRosters(week) : await loadRosters(week);
+  const odds = startOdds();
   await loadBench();
+  await paintWhenOdds(odds);
+}
+
+// ------------------------------------------------------------ the win chance
+
+/**
+ * How long the first paint waits for the win chance. Long enough that on the
+ * usual visit — the played weeks already shared from another page's read in
+ * the last minute, or coming down from the synced copy in one go — the cards
+ * arrive with their percentages and nothing jumps; short enough that a slow
+ * ESPN never holds the matchups back. Past it the cards are drawn without the
+ * percentage ("working out…") and it is filled in when it lands.
+ */
+const ODDS_GRACE_MS = 400;
+
+/** Every roster week asked for, in one call where season.js has one. */
+async function readWeeks(weeks) {
+  if (typeof season.fetchWeeksRosters === 'function') {
+    return (await season.fetchWeeksRosters(weeks)) || new Map();
+  }
+  const out = new Map();
+  for (const w of weeks) {
+    const r = await loadRosters(w);
+    if (r?.teams?.length) out.set(w, r.teams);
+  }
+  return out;
+}
+
+/**
+ * The Schedule page's odds for `week`, reading only the roster weeks this page
+ * does not already hold. See `capture.oddsWeeks` for which weeks, and why.
+ */
+async function loadOdds(week) {
+  const data = capture.normalizeSchedule(state.schedule, { isDemo: false });
+  const have = state.oddsTeams;
+  const r = state.rosters;
+  if (r && Number(r.week) === week && r.teams?.length) have.set(week, r.teams);
+
+  const missing = capture.oddsWeeks(data, week).filter((w) => !have.has(w));
+  if (missing.length) {
+    for (const [w, teams] of await readWeeks(missing)) {
+      if (teams?.length) have.set(Number(w), teams);
+    }
+  }
+  return capture.matchupOdds(data, have);
+}
+
+/**
+ * Start working out the odds for the week on screen. Resolves when they are
+ * in `state` (or have failed, which leaves the cards without a percentage —
+ * the same as Schedule when ESPN refuses the rosters). Never rejects.
+ */
+function startOdds() {
+  const token = ++state.oddsToken;
+  if (state.isDemo || !state.schedule) {
+    // Every demo game is final, so there is no chance to quote.
+    state.odds = null;
+    state.oddsPending = false;
+    return Promise.resolve();
+  }
+  state.oddsPending = true;
+  const week = state.week;
+  return loadOdds(week).then(
+    (odds) => {
+      if (token !== state.oddsToken) return;
+      state.odds = odds;
+      state.oddsPending = false;
+    },
+    () => {
+      if (token !== state.oddsToken) return;
+      state.oddsPending = false;
+    }
+  );
+}
+
+/** Paint now if the odds come within the grace period; otherwise paint, then again when they do. */
+async function paintWhenOdds(odds) {
+  const token = state.oddsToken;
+  let settled = false;
+  const done = odds.then(() => { settled = true; });
+  await Promise.race([done, new Promise((r) => setTimeout(r, ODDS_GRACE_MS))]);
   if (!state.isDemo) reportLive();
   draw();
+  if (settled) return;
+  await done;
+  if (token === state.oddsToken && !state.isDemo) draw();
 }
 
 /** Build the model from current state and paint it. */
@@ -527,6 +675,8 @@ function draw() {
     isDemo: state.isDemo,
     benchWeek: state.benchWeek ?? state.week,
     benchRosters: state.benchRosters,
+    odds: state.isDemo ? null : state.odds,
+    oddsPending: !state.isDemo && state.oddsPending,
   }));
 }
 
@@ -585,31 +735,55 @@ function renderMatchups(m) {
   $('matchups').innerHTML =
     `<div class="games">${m.games.map((g) => gameCard(g, m.teamId)).join('')}</div>`;
 
+  const withChance = m.games.some((g) => g.homeWinPct !== null);
   if (!m.playedThisWeek) {
-    $('matchupsNote').innerHTML = m.games.some((g) => g.projectedMargin !== null)
-      ? 'Nothing has kicked off. <strong>Proj</strong> is each starting lineup&rsquo;s projection for this week, summed; whoever projects higher is the favourite.'
-      : 'Nothing has kicked off, and ESPN has published no projections for this week yet.';
+    $('matchupsNote').innerHTML = withChance
+      ? 'Nothing has kicked off. <strong>Proj</strong> is each lineup as set.'
+      : m.games.some((g) => g.projectedMargin !== null)
+        ? 'Nothing has kicked off. <strong>Proj</strong> is each starting lineup&rsquo;s projection for this week, summed; whoever projects higher is the favourite.'
+        : 'Nothing has kicked off, and ESPN has published no projections for this week yet.';
   } else {
     $('matchupsNote').innerHTML =
       `${plural(m.playedThisWeek, 'game')} final of ${m.games.length}. ` +
       '<strong>Proj</strong> is what the starting lineup was projected to score, <strong>Pts</strong> what it did.';
   }
-  // The basis of the one percentage on this page, in the words rule 1 asks
-  // for: it is ours, and it is built from ESPN's projections, not quoted.
-  const withChance = m.games.some((g) => g.myWinPct !== null);
+  // The basis of the percentages, in the words rule 1 asks for: they are
+  // ours, built from ESPN's projections, not quoted — and they are the
+  // Schedule page's, on the best lineups rather than the ones set.
   if (withChance) {
     $('matchupsNote').innerHTML +=
-      ' <strong>Win chance</strong> is our model, not ESPN&rsquo;s.';
-    $('matchupsExplain').innerHTML =
-      'Your win chance comes from the two projections on your card alone: each ' +
-      `team&rsquo;s actual score is taken to land within about ${DEFAULT_SIGMA} points of its ` +
-      'projection, as a typical fantasy week does. That spread is a general figure, not ' +
-      'one measured on this league, and no extra data is read for it. ESPN publishes ' +
-      'projections, never odds.';
+      ' The win chance compares each side&rsquo;s <strong>best</strong> lineup, as the ' +
+      'Schedule page does &mdash; our model, not ESPN&rsquo;s.';
+    $('matchupsExplain').innerHTML = oddsExplain(m.spread);
   } else {
     $('matchupsExplain').textContent = '';
   }
   tuck('matchupsExplain', withChance);
+}
+
+/** The method behind the percentages, including where the spread came from. */
+function oddsExplain(spread) {
+  const sigma = spread?.sigma ?? DEFAULT_SIGMA;
+  const sample = spread?.sample ?? 0;
+  const spreadText = spread?.calibrated
+    ? `a per-team scoring spread of ${fmt(sigma)} points, measured from ` +
+      `${plural(sample, 'completed team-week')} in this league (each score set against ` +
+      'the projection of the lineup that team actually started)'
+    : `a per-team scoring spread of ${fmt(sigma, 0)} points &mdash; assumed, a general figure ` +
+      'and not one measured on this league, because ' +
+      (sample
+        ? `only ${plural(sample, 'completed team-week')} carries`
+        : 'no completed game here carries') +
+      ` a projection to measure it from (${MIN_GAMES_TO_CALIBRATE} are needed)`;
+  return (
+    'Each win chance compares the <strong>best legal lineup</strong> each team could ' +
+    'field this week, on ESPN&rsquo;s projections &mdash; a bench player projected above ' +
+    'a starter counts as starting &mdash; so the margin under a card can differ from the ' +
+    `two <strong>Proj</strong> figures, which are the lineups as set. The gap is read against ${spreadText}. ` +
+    'The Schedule page works its percentages out the same way from the same numbers, so ' +
+    'the two pages agree. A game already under way gets none. ESPN publishes ' +
+    'projections, never odds.'
+  );
 }
 
 function gameCard(g, teamId) {
@@ -633,18 +807,28 @@ function gameCard(g, teamId) {
   else if (g.played) {
     const winner = g.winner === 'home' ? g.homeName : g.awayName;
     meta = `${esc(winner)} by ${fmt(Math.abs(g.margin))}`;
+  } else if (isNum(g.homeWinPct)) {
+    // Schedule's wording: the favourite on the best lineups, and his chance.
+    // The margin and the percentage are one statement, so they agree.
+    const p = g.homeWinPct;
+    const lead = g.favourite
+      ? `Best lineups: ${esc(g.favourite === 'home' ? g.homeName : g.awayName)} by ${fmt(g.projectedMargin)}`
+      : 'Best lineups: level';
+    meta = isNum(g.myWinPct)
+      ? `${lead} · <strong>your win chance ${pctText(g.myWinPct)}</strong>`
+      : `${lead} · ${pctText(Math.max(p, 1 - p))}`;
   } else if (g.favourite) {
     const fav = g.favourite === 'home' ? g.homeName : g.awayName;
     meta = `Projected: ${esc(fav)} by ${fmt(g.projectedMargin)}`;
+    if (g.oddsPending && g.mine) meta += ' · <span class="muted">win chance: working out…</span>';
   } else {
     meta = 'Upcoming · no projection yet';
   }
 
-  if (isNum(g.myWinPct)) {
-    meta += ` · <strong>your win chance ${Math.round(g.myWinPct * 100)}%</strong>`;
-  }
-
-  return `<div class="game${g.played ? '' : ' upcoming'}${g.mine ? ' mine' : ''}">
+  // The unrounded chance rides on the card, so a suite can hold it to the
+  // Schedule page's figure more finely than the whole percent printed.
+  const exact = isNum(g.homeWinPct) ? ` data-home-win="${g.homeWinPct}"` : '';
+  return `<div class="game${g.played ? '' : ' upcoming'}${g.mine ? ' mine' : ''}"${exact}>
       <div class="ghead"><span>${g.played ? 'Final' : 'Upcoming'}</span><span>Proj · Pts</span></div>
       ${side('home', g.homeName, g.homeProjected, g.homeScore, g.homeId)}
       ${bye ? '' : side('away', g.awayName, g.awayProjected, g.awayScore, g.awayId)}

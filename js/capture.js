@@ -374,6 +374,89 @@ export function leagueSpread(data, banked, started) {
   return forecast.calibrateSigma(games);
 }
 
+// ------------------------------------------------------------ matchup odds
+
+/**
+ * The roster weeks a page needs to quote the win chance for `week`'s games
+ * the way the Schedule page does, and no more.
+ *
+ *   - every DECIDED week, because the spread is measured from them;
+ *   - the first week still to project, because the starting slots are counted
+ *     off the first week the Schedule page projects (`rosterPlan().project[0]`),
+ *     and a different week could count them differently;
+ *   - `week` itself, if it is a week the Schedule page projects at all. A week
+ *     already decided has no win chance to quote.
+ *
+ * Decided weeks first, the same order `rosterPlan().asking` uses.
+ */
+export function oddsWeeks(data, week) {
+  const plan = rosterPlan(data);
+  const want = plan.decided.slice();
+  if (plan.project.length) want.push(plan.project[0]);
+  if (plan.project.includes(week)) want.push(week);
+  return [...new Set(want)];
+}
+
+/**
+ * THE WIN CHANCE FOR ANY GAME, WORKED OUT EXACTLY AS THE SCHEDULE PAGE DOES.
+ *
+ * Home and Schedule once quoted different chances for the same game — Home
+ * compared the lineups as currently SET against an assumed 27-point spread,
+ * Schedule the BEST legal lineups against the spread measured from this
+ * league's played weeks. This is the Schedule page's route bundled into one
+ * call, built from the same pieces it calls one by one (`pickWeeks`,
+ * `buildProjection`, `startedProjections`, `leagueSpread`, `projectedPoints`),
+ * so a page that uses it cannot drift from Schedule without Schedule moving
+ * too. `tests/home-winpct-check.mjs` holds the two to the same figure.
+ *
+ * @param {Object} data       a normalised schedule
+ * @param {Map} weekTeams     week -> teams; `oddsWeeks()` says which it needs
+ * @param {Object} [o]
+ * @param {(g) => boolean} [o.banked]  may this game's result feed the spread?
+ *        On live data that is every final game, which is the default.
+ * @returns {{probability:Function, forGame:Function, points:Function,
+ *            projection:Object|null, sigma:number, calibrated:boolean, sample:number}}
+ */
+export function matchupOdds(data, weekTeams, { banked = () => true } = {}) {
+  const plan = rosterPlan(data);
+  const toProject = pickWeeks(weekTeams, plan.project);
+  const projection = toProject.size ? buildProjection(data, toProject) : null;
+  const started = startedProjections(weekTeams, plan.decided);
+  const { sigma, calibrated, sample } = leagueSpread(data, banked, started);
+  const proj = projection ? projection.proj : null;
+
+  /** One side's projected points: the best lineup, as on Schedule's cards. */
+  const points = (g, side) => projectedPoints(g, side, proj);
+
+  /** The HOME side's chance, or null without both projections. */
+  const forGame = (g) => {
+    if (!g || g.homeId == null || g.awayId == null) return null;
+    const h = points(g, 'home');
+    const a = points(g, 'away');
+    if (h === null || a === null) return null;
+    return forecast.winProbability(h, a, sigma);
+  };
+
+  /** `teamA`'s chance against `teamB` in `week`, whichever side is home. */
+  const probability = (teamA, teamB, week) => {
+    const games = data?.byWeek?.get(week) || [];
+    const g = games.find((x) =>
+      (x.homeId === teamA && x.awayId === teamB) || (x.homeId === teamB && x.awayId === teamA));
+    if (g) {
+      const p = forGame(g);
+      if (p === null) return null;
+      return g.homeId === teamA ? p : 1 - p;
+    }
+    // No such fixture: the same arithmetic on the two best lineups.
+    const a = proj?.get(week)?.get(teamA);
+    const b = proj?.get(week)?.get(teamB);
+    if (!(a > 0) || !(b > 0)) return null;
+    return forecast.winProbability(a, b, sigma);
+  };
+
+  return { probability, forGame, points, projection, sigma, calibrated, sample };
+}
+
 // ------------------------------------------------------------ the simulation
 
 /**

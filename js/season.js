@@ -16,6 +16,7 @@
 import * as espn from './espn.js';
 import * as bridge from './bridge.js';
 import * as cloud from './cloud.js';
+import * as capture from './capture.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -196,19 +197,32 @@ async function inBatches(items, size, fn) {
  * Rosters genuinely change week to week — trades, waivers, injuries — so this
  * has to be fetched per week rather than derived from a season snapshot.
  *
+ * THE BYE RULE is applied here, once, for the roster shape: a player whose NFL
+ * team is on bye this week is projected at exactly 0 (see
+ * `espn.byeAdjustedProjection` for why ESPN's own number cannot be trusted for
+ * a D/ST). The byes come from `fetchByeWeeks()`, cached for the page; a caller
+ * fetching many weeks passes them in so they are read once. A failed or empty
+ * bye read leaves every projection exactly as ESPN sent it.
+ *
  * @param {number} week scoring period
+ * @param {Object} [opts]
+ * @param {Object} [opts.byes] `{proTeamId: byeWeek}`, already read
  * @returns {{week, teams: [{id, name, starters, bench, projectedTotal, actualTotal}]}}
  */
-export async function fetchWeekRosters(week) {
+export async function fetchWeekRosters(week, { byes } = {}) {
   // The synced copy first when there is no bridge — see "THE CLOUD
   // SUBSTITUTION" at the top. A week the cloud does not hold falls through to
   // ESPN rather than being reported as empty: on a public league that still
   // works, and on a private one the page gets the same error it gets today.
+  // A synced week was decoded — bye rule included — on the desktop.
   const down = await cloudDown();
   const synced = down && down.rosters instanceof Map ? down.rosters.get(Number(week)) : null;
   if (synced && synced.length) return { week: Number(week), teams: synced };
 
-  const raw = await espn.fetchRosters(week);
+  const [raw, byeMap] = await Promise.all([
+    espn.fetchRosters(week),
+    byes && typeof byes === 'object' ? byes : fetchByeWeeks(),
+  ]);
   const season = espn.getConfig().season;
   // Who each squad actually belongs to. `fetchRosters` asks for mRoster+mTeam,
   // and mTeam is what makes ESPN populate the member name fields — see
@@ -244,7 +258,8 @@ export async function fetchWeekRosters(week) {
         lineupSlotId: e.lineupSlotId,
         slot: espn.SLOT_LABELS[e.lineupSlotId] ?? String(e.lineupSlotId),
         started: e.lineupSlotId !== BENCH_SLOT && e.lineupSlotId !== IR_SLOT,
-        projected: weekProj?.appliedTotal ?? null,
+        // ESPN's number, except in his team's bye week, which is exactly 0.
+        projected: espn.byeAdjustedProjection(weekProj?.appliedTotal ?? null, p.proTeamId ?? null, week, byeMap),
         actual: weekActual?.appliedTotal ?? null,
         seasonProjected: seasonProj?.appliedTotal ?? null,
         injuryStatus: p.injuryStatus || 'ACTIVE',
@@ -290,8 +305,9 @@ export async function fetchWeekRosters(week) {
  *
  * ESPN really does publish a per-player projection for every future week — a
  * week-13 number is available in week 1, and a player on bye that week comes
- * back as 0.00, so byes need no separate lookup. That is what the ESPN site
- * itself shows when you page a lineup forward, and it is the number to match.
+ * back as 0.00 — except a D/ST, which ESPN projects at a few points in its bye,
+ * so the byes ARE read (once, here) and `fetchWeekRosters` zeroes that week.
+ * Otherwise it is what the ESPN site shows when you page a lineup forward.
  *
  * It costs one request per week; there is no bulk form. Runs a few at a time so
  * a 13-week season does not open thirteen sockets at once, and a week ESPN
@@ -324,9 +340,12 @@ export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
     return out;
   }
 
+  // The byes once for the whole span — a failed read is `{}` and is not cached,
+  // so asking per week would re-ask a failing endpoint once per batch.
+  const byes = await fetchByeWeeks();
   await inBatches(weeks, 3, async (week) => {
     try {
-      const { teams } = await fetchWeekRosters(week);
+      const { teams } = await fetchWeekRosters(week, { byes });
       if (teams && teams.length) out.set(week, teams);
     } catch {
       /* that week is unavailable; the caller sees a gap, not an exception */
@@ -387,9 +406,10 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
     }
   }
 
-  const raw = await espn.fetchFreeAgents(w, limit);
+  // The synced list above was decoded with the bye rule already applied.
+  const [raw, byes] = await Promise.all([espn.fetchFreeAgents(w, limit), fetchByeWeeks()]);
   return (raw?.players || [])
-    .map((entry) => espn.parseFreeAgent(entry, w))
+    .map((entry) => espn.parseFreeAgent(entry, w, byes))
     .filter((p) => p.playerId !== null && p.playerId !== undefined);
 }
 
@@ -435,6 +455,15 @@ export function isDecidedEntry(m) {
   if (typeof m.winner === 'string') return m.winner !== 'UNDECIDED';
   return h > 0 || a > 0;
 }
+
+/**
+ * A final score as ESPN keeps it — to the hundredth, float noise removed.
+ *
+ * NOT to the tenth. This used to round to one decimal, which made 128.66 and
+ * 128.70 a tie on the stats page and summed a season of rounded scores into a
+ * points-for ESPN does not show. Display rounding is the page's job.
+ */
+const exactPoints = (v) => Math.round(v * 100) / 100;
 
 /** ESPN's winner in this file's spelling; falls back to the points. */
 function winnerOf(m) {
@@ -634,8 +663,8 @@ function seasonFromCloud(down) {
       week: g.week,
       homeId: g.homeId,
       awayId: g.awayId,
-      homeActual: Math.round(g.homeScore * 10) / 10,
-      awayActual: Math.round(g.awayScore * 10) / 10,
+      homeActual: exactPoints(g.homeScore),
+      awayActual: exactPoints(g.awayScore),
       homeProjected: Math.round((proj.get(g.homeId) || 0) * 10) / 10,
       awayProjected: Math.round((proj.get(g.awayId) || 0) * 10) / 10,
     });
@@ -719,8 +748,8 @@ export async function fetchSeasonData({ onProgress } = {}) {
       week,
       homeId: m.home.teamId,
       awayId: m.away.teamId,
-      homeActual: Math.round(m.home.totalPoints * 10) / 10,
-      awayActual: Math.round(m.away.totalPoints * 10) / 10,
+      homeActual: exactPoints(m.home.totalPoints),
+      awayActual: exactPoints(m.away.totalPoints),
       homeProjected: Math.round((proj.get(m.home.teamId) || 0) * 10) / 10,
       awayProjected: Math.round((proj.get(m.away.teamId) || 0) * 10) / 10,
     });
@@ -830,20 +859,40 @@ export async function buildCloudPayload({ onProgress } = {}) {
   // bracket exists (it did for every week of 2025), and those are kept apart
   // on `playoffGames`. Their squads are synced too — that is what keeps a
   // phone's December bracket and results — so the span is the union.
+  //
+  // THE PLAYOFF WEEKS ARE ADDED BY NUMBER TOO. Bracket games do not exist in
+  // ESPN's feed until the regular season is over and the field is seeded, so
+  // until December the union above stops at the last regular-season week —
+  // and the phone's simulation, finding no squads for weeks 15–17, fell back
+  // to a modelled bracket while the desktop's was projected. The weeks are the
+  // ones the desktop's reading asks for (`capture.playoffWeeks`, derived from
+  // the league's own field size), so the two cannot disagree about which.
+  // Three more weeks is about 160 KB of rosters plus their wire — well inside
+  // what the cloud stores.
   const weeks = [...new Set([
     ...schedule.weeks,
     ...(schedule.playoffGames || []).map((g) => g.week),
+    ...capture.playoffWeeks(schedule),
   ])].filter((w) => Number.isFinite(w)).sort((a, b) => a - b);
 
-  // Schedule, then a roster request and a wire request per week, then the byes.
+  // Schedule, the byes, then a roster request and a wire request per week.
   const total = weeks.length * 2 + 2;
   let done = 1;
   report(done, total, 'Schedule');
 
+  // The byes first, because both decoders below apply the bye rule with them.
+  // A failure is `{}`: projections go up as ESPN sent them, and the sync is
+  // still a sync.
+  let byes = {};
+  try {
+    byes = (await fetchByeWeeks()) || {};
+  } catch { /* byes are a nicety; a sync without them is still a sync */ }
+  report(++done, total, 'Bye weeks');
+
   const rosters = new Map();
   await inBatches(weeks, 3, async (week) => {
     try {
-      const { teams } = await fetchWeekRosters(week);
+      const { teams } = await fetchWeekRosters(week, { byes });
       if (teams && teams.length) rosters.set(week, teams);
     } catch { /* that week is unavailable; it is a gap, not a failed sync */ }
     report(++done, total, `Week ${week} squads`);
@@ -858,7 +907,7 @@ export async function buildCloudPayload({ onProgress } = {}) {
     try {
       const raw = await espn.fetchFreeAgents(week, WIRE_LIMIT);
       const players = (raw?.players || [])
-        .map((entry) => espn.parseFreeAgent(entry, week))
+        .map((entry) => espn.parseFreeAgent(entry, week, byes))
         // A man ESPN gives no id for cannot be linked to and cannot be matched
         // week to week, which is exactly what the Players page keys on.
         .filter((p) => p.playerId !== null && p.playerId !== undefined);
@@ -866,12 +915,6 @@ export async function buildCloudPayload({ onProgress } = {}) {
     } catch { /* same: a gap */ }
     report(++done, total, `Week ${week} wire`);
   });
-
-  let byes = {};
-  try {
-    byes = await espn.fetchByeWeeks();
-  } catch { /* byes are a nicety; a sync without them is still a sync */ }
-  report(++done, total, 'Bye weeks');
 
   return {
     leagueName: schedule.leagueName || '',

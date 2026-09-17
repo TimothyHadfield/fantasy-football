@@ -121,6 +121,40 @@ const gridTd = (document, grid, teamId, player) =>
       return a && a.getAttribute('href').endsWith(`player=${teamId * 100 + player}`);
     }) || null;
 
+/**
+ * One visit's worth of team choices, for (n) and (o): what it opens on, the
+ * connection bar changing "your team", a tap on the grid, what got saved, and
+ * a reload of the league in the same visit.
+ */
+async function teamVisit({ document, window }) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const title = () => document.getElementById('seasonTitle').textContent.trim();
+  const savedTeam = () => JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['analysis.team'];
+  const out = { opened: title() };
+
+  // The bar is told a different team is yours — only meaningful when one is set.
+  const conn = JSON.parse(globalThis.localStorage.getItem('ff.connection'));
+  if (conn.teamId != null) {
+    const moved = { ...conn, teamId: 6 };
+    globalThis.localStorage.setItem('ff.connection', JSON.stringify(moved));
+    document.dispatchEvent(new window.CustomEvent('ff:connection', { detail: moved }));
+    await sleep(200);
+    out.afterBar = title();
+  }
+
+  const row = document.querySelector('#overviewTable tbody tr[data-team="7"] td.name');
+  row.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await sleep(150);
+  out.tapped = title();
+  out.savedAfterTap = savedTeam() ?? null;
+
+  document.querySelector('#sourceToggle button[data-src="live"]')
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await sleep(700);
+  out.reloaded = title();
+  globalThis.__an = out;
+}
+
 const SCENARIOS = {
   demo: {
     label: '(a) demo mode, nothing connected',
@@ -621,6 +655,26 @@ const SCENARIOS = {
       out.s03w6 = row && row.children[4 + 6].textContent.trim();
       globalThis.__an = out;
     },
+  },
+  // ---- which team a visit opens on (2026-09-17) ------------------------------
+  //
+  // The drilled-into team used to be saved and restored on every visit, so the
+  // page reopened on whichever rival was tapped last. Now a visit opens on YOUR
+  // team; a tap holds for the visit only, and is saved only when the page has
+  // never been told which team is yours.
+  'team-own': {
+    label: '(n) a visit opens on your own team, not the last one tapped',
+    stub: true,
+    prefs: { 'analysis.source': 'live', 'analysis.team': 2 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: teamVisit,
+  },
+  'team-noown': {
+    label: '(o) with no team of your own known, the last tap is remembered',
+    stub: true,
+    prefs: { 'analysis.source': 'live', 'analysis.team': 2 },
+    conn: { leagueId: '99', season: 2026 },
+    after: teamVisit,
   },
   'card-repaint': {
     label: '(m) an open card stays open while the season loads behind it',
@@ -2206,6 +2260,31 @@ async function check(scenario, boot) {
     c.ok('WITH THE BYES UNKNOWN, A LIVE ZERO IS STILL READ AS A BYE (nothing regresses)',
       w.weekly02 && w.weekly02.text === 'Bye' && /\bbye\b/.test(w.weekly02.cls), JSON.stringify(w.weekly02));
     c.ok('in the season grid as well', w.s03w6 === 'Bye', w.s03w6);
+  }
+
+  // ---- (n) / (o) which team a visit opens on ---------------------------------
+  if (scenario === 'team-own') {
+    const w = globalThis.__an || {};
+    const T = (n) => `Season by week · Team ${n}`;
+    c.ok('A VISIT OPENS ON YOUR OWN TEAM, not the one tapped on an earlier visit',
+      w.opened === T(4), w.opened);
+    c.ok('the detail follows the connection bar when it says your team changed',
+      w.afterBar === T(6), w.afterBar);
+    c.ok('a tapped team is shown', w.tapped === T(7), w.tapped);
+    c.ok('BUT IT IS NOT SAVED: the old saved pick is left as it was',
+      w.savedAfterTap === 2, JSON.stringify(w.savedAfterTap));
+    c.ok('and it holds for the rest of the visit, through a reload of the league',
+      w.reloaded === T(7), w.reloaded);
+  }
+  if (scenario === 'team-noown') {
+    const w = globalThis.__an || {};
+    const T = (n) => `Season by week · Team ${n}`;
+    c.ok('with no team of your own known, the saved pick is where the visit opens',
+      w.opened === T(2), w.opened);
+    c.ok('a tapped team is shown', w.tapped === T(7), w.tapped);
+    c.ok('and, with nothing better to open on, it is saved for next time',
+      w.savedAfterTap === 7, JSON.stringify(w.savedAfterTap));
+    c.ok('and holds through a reload of the league', w.reloaded === T(7), w.reloaded);
   }
 
   if (scenario === 'card-repaint') {

@@ -69,6 +69,7 @@ const state = {
   source: prefs.get('source', 'demo'),
   data: null,               // normalised schedule (see normalizeSchedule)
   week: 'all',              // 'all' or a week number — drives the three week panels
+  weekPickedLive: false,    // picked on live data THIS visit; see restoreWeek()
   filterTeam: '',           // '' or a team id, for the results table only
   resultsView: prefs.get('results', 'played'),  // played | upcoming | all
   h2hView: prefs.get('h2h', null),              // null = decide from what's played
@@ -767,12 +768,34 @@ function adopt(data) {
   refreshStrength();
 }
 
-/** The remembered week if it still exists in this league, else the live one. */
+/**
+ * Which week a freshly loaded schedule opens on.
+ *
+ * The picker means two different things, and so a saved week expires
+ * differently in each:
+ *
+ *   - ON DEMO it is the "as of" point: the sample season is entirely played,
+ *     and the forecast and simulation are replayed from whichever week is
+ *     picked. A saved week there is a replay point, and never expires.
+ *   - ON LIVE DATA the forecast follows the results, whatever the picker says;
+ *     the picker only chooses which week's matchups and summary are shown. A
+ *     saved week the league has since moved PAST — the page would otherwise
+ *     open on a later week — is stale, and used to pin the page to week 2 for
+ *     the rest of the season. So it is dropped, and the page follows the
+ *     league. A saved week still ahead, or the current one, is kept; so is
+ *     "All weeks", which is not a week and cannot go stale.
+ *
+ * A week picked on live data during THIS visit always stands, past or not —
+ * the same rule as the Analysis and Trade pages.
+ */
 function restoreWeek(data) {
+  const current = currentWeek(data);
+  const usable = (w) => w === 'all' || (typeof w === 'number' && data.weeks.includes(w));
+  if (!data.isDemo && state.weekPickedLive && usable(state.week)) return state.week;
   const saved = prefs.get('week', null);
-  if (saved === 'all') return 'all';
-  if (typeof saved === 'number' && data.weeks.includes(saved)) return saved;
-  return currentWeek(data);
+  if (!usable(saved)) return current;
+  if (saved === 'all' || data.isDemo) return saved;
+  return typeof current === 'number' && saved < current ? current : saved;
 }
 
 /**
@@ -2691,6 +2714,9 @@ $('snapFile').addEventListener('change', async (e) => {
 function setWeek(value) {
   state.week = value === 'all' ? 'all' : Number(value);
   prefs.set('week', state.week);
+  // Only a pick on live data pins a live reload; a demo pick is a replay point
+  // in a sample season, and an archived week is a replay too.
+  state.weekPickedLive = Boolean(state.data && !state.data.isDemo && !state.replay);
   render();
 }
 

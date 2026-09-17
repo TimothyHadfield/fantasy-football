@@ -309,11 +309,6 @@ const SCENARIOS = {
     eq(leagueCalls(calls).length, 3, 'another league is another read');
     espn.configure({ leagueId: LEAGUE_ID });
 
-    // --- 10: the wire honours the limit, and carries the status (live path)
-    const wire = await season.fetchWireWeek(3, 100);
-    eq(wire.map((p) => p.status), ['WAIVERS', 'FREEAGENT', null, 'WAIVERS', 'FREEAGENT'], 'fetchWireWeek carries status');
-    ok('fetchWireWeek asked ESPN for the limit given', calls.some((u) => /kona_player_info/.test(u)));
-
     // --- 5: bye weeks, direct
     espn.clearReadCache();
     const byesFail = installFetch({ dead: true });
@@ -328,10 +323,18 @@ const SCENARIOS = {
     eq(calls.filter((u) => /proTeamSchedules_wl/.test(u)).length, 1, 'one bye request for the page');
     ok('the dead ESPN was asked once', byesFail.length === 1);
 
+    // --- 10: the wire honours the limit, and carries the status (live path).
+    // After the bye checks: the wire reads the byes too (the bye rule), and
+    // run first it would cache a good answer before the failure case.
+    const wire = await season.fetchWireWeek(3, 100);
+    eq(wire.map((p) => p.status), ['WAIVERS', 'FREEAGENT', null, 'WAIVERS', 'FREEAGENT'], 'fetchWireWeek carries status');
+    ok('fetchWireWeek asked ESPN for the limit given', calls.some((u) => /kona_player_info/.test(u)));
+
+
     espn.configure({ leagueId: 'demo' });
     const demo = await season.fetchByeWeeks();
     eq(demo, {}, 'demo never claims a bye');
-    eq(calls.filter((u) => /proTeamSchedules_wl/.test(u)).length, 1, 'and asks nobody');
+    eq(calls.filter((u) => /proTeamSchedules_wl/.test(u)).length, 1, 'and asks nobody (the wire reused the cached byes)');
   },
 
   // 2, 4, 5, 10 through the cloud: sync on a "desktop", read on a "phone".
@@ -518,11 +521,11 @@ async function homeScenario({ demoPref }) {
   ok('his game (Delta) is first', cards[0] && cards[0].classList.contains('mine') && /Delta/.test(cards[0].textContent));
   ok('and still highlighted', cards[0] && cards[0].className.includes('mine'));
   eq(cards.filter((c) => c.classList.contains('upcoming')).length, 2, 'the in-progress game is not shown as final');
-  // Delta projects 24 against Charlie's 23 (one QB each, 20 + team id).
-  const want = Math.round((1 - (0.5 * (1 + erf((23 - 24) / (27 * Math.SQRT2) / Math.SQRT2)))) * 100);
+  // His game is UNDER WAY (30–20, undecided), and since 2026-09-17 Home prices
+  // a game exactly as Schedule does — which quotes no win chance for a game in
+  // progress. tests/home-winpct-check.mjs covers the percentage itself.
   const meta = cards[0] ? cards[0].querySelector('.gmeta').textContent : '';
-  ok(`his win chance is shown (${want}%)`, meta.includes(`win chance ${want}%`), meta);
-  ok('no other card carries a win chance', !/win chance/.test(cards[1]?.textContent || ''));
+  ok('his in-progress game carries no win chance, as on Schedule', !/win chance \d/.test(meta), meta);
   ok('the basis is stated: our model, not ESPN’s', /our model, not ESPN/.test(text('matchupsNote')), text('matchupsNote'));
   ok('the method sits behind the toggle', /not one measured on this league/.test(text('matchupsExplain')) && !document.getElementById('matchupsExplain').closest('details').hasAttribute('hidden'), text('matchupsExplain'));
 
@@ -561,14 +564,6 @@ async function homeScenario({ demoPref }) {
   eq(mod.winPct({ w: 0, l: 0, t: 2 }), 0.5, 'two ties are .500');
   eq(mod.winPct({ w: 0, l: 0, t: 0 }), null, 'no games, no percentage');
   eq(mod.benchWeekFor(sched, 3), 3, 'a final week is its own bench week');
-}
-
-// Abramowitz–Stegun erf, independent of forecast.js's own normal CDF.
-function erf(x) {
-  const s = Math.sign(x); x = Math.abs(x);
-  const t = 1 / (1 + 0.3275911 * x);
-  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
-  return s * y;
 }
 
 // ------------------------------------------------------------------ run

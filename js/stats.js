@@ -229,7 +229,9 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
     avgActual: round1(mean(actuals)),
     avgProjected: round1(mean(projecteds)),
     avgLuck: round1(mean(weekly.map((w) => w.luck))),
-    totalActual: Math.round(pointsFor),
+    // One decimal, like ESPN's own "PF" (1845.6, not 1846). The whole-number
+    // version tied 128.66 with 129.02 and put them in the wrong order.
+    totalActual: round1(pointsFor),
     totalProjected: Math.round(sum(projecteds)),
 
     // Opponent block — CONFIRMED.
@@ -239,8 +241,11 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
 
     // CONFIRMED: the sheet's "F-A" is per-week average, not the season total.
     // (Autumn: (1467 - 1530) / 13 = -4.8, shown as -5.)
-    pointsFor: Math.round(pointsFor),
-    pointsAgainst: Math.round(pointsAgainst),
+    // Unrounded: points for is the standings tie-breaker (here and in
+    // stats-page.js's record sort), and a rounded one ties teams ESPN separates.
+    // Displayed through `totalActual` above, at one decimal.
+    pointsFor,
+    pointsAgainst: round1(pointsAgainst),
     forMinusAgainst: round1((pointsFor - pointsAgainst) / n),
 
     // CONFIRMED: skill = own avg projected - league avg projected.
@@ -267,7 +272,7 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
     // Unrounded copies. Everything above is rounded for display, but two teams
     // can sit thousandths apart in S+L — Stevenson and Mitch did in 2025 — and
     // ranking the rounded values would swap them. Standings sort on these.
-    exact: { skill, luckScore, skillPlusLuck: skill + luckScore, pointsToWin },
+    exact: { skill, luckScore, skillPlusLuck: skill + luckScore, pointsToWin, pointsFor },
   };
 }
 
@@ -472,7 +477,9 @@ export function computeLeagueStats(data) {
   // A tied game counts half a win, as ESPN orders it — his league has no
   // tiebreaker, so ties stand. Every team plays every week, so wins + ties/2
   // orders exactly as win percentage does.
-  const actualRank = rankBy(teams, (t) => (t.wins + (t.ties || 0) / 2) * 1000 + t.pointsFor);
+  // Points for is the UNROUNDED season total: 128.66 and 129.02 must not tie.
+  // A step of half a win is 500 here, far more than two teams' points differ.
+  const actualRank = rankBy(teams, (t) => (t.wins + (t.ties || 0) / 2) * 1e6 + t.exact.pointsFor);
   const skillRank = rankBy(teams, (t) => t.exact.skill);
   const luckRank = rankBy(teams, (t) => t.exact.luckScore);
   const projectedRank = rankBy(teams, (t) => t.exact.skillPlusLuck);

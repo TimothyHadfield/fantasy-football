@@ -291,12 +291,40 @@ export function fetchFreeAgents(scoringPeriodId, limit = 150) {
 }
 
 /**
+ * A week's projection with the BYE RULE applied: exactly 0 when his NFL team is
+ * off that week, whatever ESPN sent; otherwise ESPN's number untouched.
+ *
+ * WHY IT IS NEEDED (verified against public league 1241838, 2026-09-16): ESPN
+ * returns 0.00 on a bye for every position EXCEPT D/ST, which it projects at
+ * 3–7 points in its team's FUTURE bye weeks (Lions D/ST 4.41 in week 6, their
+ * bye) and sends no projection at all for in PAST bye weeks. Left alone, the
+ * optimal lineup starts a defence that is not playing, and the grids draw a
+ * past bye as "—".
+ *
+ * `byes` is `fetchByeWeeks()`'s `{proTeamId: byeWeek}`. An empty or missing map
+ * is "unknown" and changes nothing — which is demo, and a failed bye read. Only
+ * ever applied to a PROJECTION; an actual score is a fact and is never touched.
+ *
+ * Called in exactly two places, one per shape: `parseFreeAgent` below (the
+ * wire) and `fetchWeekRosters` in js/season.js (rosters). Every consumer —
+ * projection totals, optimal lineups, trade pricing, readings, the cloud copy —
+ * reads one of those two, so none of them needs to know about this.
+ */
+export function byeAdjustedProjection(projected, proTeamId, week, byes) {
+  if (!byes || proTeamId === null || proTeamId === undefined) return projected;
+  const bye = Number(byes[proTeamId]);
+  if (!Number.isFinite(bye) || bye <= 0) return projected;
+  return bye === Number(week) ? 0 : projected;
+}
+
+/**
  * One free-agent entry, reduced to what the add-players table shows.
  *
  * @param {Object} entry a `players[]` element from fetchFreeAgents
  * @param {number} week the scoringPeriodId that entry was fetched for
+ * @param {Object} [byes] `{proTeamId: byeWeek}`; see `byeAdjustedProjection`
  */
-export function parseFreeAgent(entry, week) {
+export function parseFreeAgent(entry, week, byes = null) {
   const p = entry?.player || {};
   const weekly = (p.stats || []).find(
     (s) => s.statSourceId === 1 && s.statSplitTypeId === 1 && s.scoringPeriodId === week
@@ -315,8 +343,14 @@ export function parseFreeAgent(entry, week) {
     percentOwned: p.ownership?.percentOwned ?? null,
     seasonProjected: seasonProj?.appliedTotal ?? null,
     // The projection for the week this was fetched for. Null means ESPN had
-    // nothing, which is NOT the same as a bye — a bye comes back as 0.
-    projected: typeof weekly?.appliedTotal === 'number' ? weekly.appliedTotal : null,
+    // nothing, which is NOT the same as a bye — a bye is 0 (forced to 0 when
+    // the byes are known, because ESPN's D/ST bye projection is not).
+    projected: byeAdjustedProjection(
+      typeof weekly?.appliedTotal === 'number' ? weekly.appliedTotal : null,
+      p.proTeamId ?? null,
+      week,
+      byes
+    ),
     // Whether he can be added straight away or has to clear waivers first.
     // Both ride on the ENTRY, not on `player` (verified against league 1241838,
     // 2026-09-16): `status` is 'FREEAGENT' or 'WAIVERS', and a WAIVERS entry

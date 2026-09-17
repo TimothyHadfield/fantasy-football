@@ -176,13 +176,23 @@ These were each established by testing, and several by getting them wrong first.
    **0.00** — a different fact from `null` (ESPN had nothing), and the pages
    draw and sort them differently.
 
+   **Except a D/ST** (verified 2026-09-17, league 1241838): ESPN projects a
+   defence at 3–7 points in its team's *future* bye week (Lions D/ST 4.41 in
+   week 6) and sends *no* projection (`null`) for a past one. OUT/IR players
+   are also 0.00 in ordinary weeks, so a 0 alone does not mean a bye. So the
+   site does not trust ESPN's bye-week number: `fetchWeekRosters` (rosters)
+   and `parseFreeAgent` (wire) force any player's projection to exactly 0 in
+   his team's known bye week (`espn.byeAdjustedProjection`,
+   `fetchByeWeeks()`); with byes unknown (demo, failed read) projections stay
+   as sent. A `null` in a known bye week renders "Bye" (`zeroKind`).
+
    **CORRECTED 2026-09-16: the horizon is NOT week 13.** This file said "through
    week 13" as a verified fact from 2026-09-09, and it is wrong — that was the
    furthest week anyone happened to ask for. Re-probing public league 1241838
    for 2026, every one of its 174 rostered players carries a
    `statSourceId 1 / statSplitTypeId 1` projection in **weeks 13, 14, 15, 16,
    17 and 18**, with plausible values throughout (week 17 tops at 24.4, median
-   10.3) and exactly one 0.00 per week, which is the bye behaving as described.
+   10.3) and exactly one 0.00 per week, which is the bye behaving as described (D/STs excepted — see below).
 
    This matters because his playoffs are NFL weeks 15–17. They can be forecast
    on ESPN's own numbers like any other week — no modelling from a team's
@@ -547,6 +557,24 @@ the home-screen app into a browser view on the first link to another page.
 app; **popup sign-in inside an iOS home-screen app is unverified** — ask
 whether it worked. He must delete and re-add the home-screen icon for the
 manifest to take effect.
+
+**Third pass, 2026-09-17 ("Fix now" from a real-league audit):** D/ST bye
+projections forced to 0 (rule 2); playoff weeks 15–17 now synced so the phone's
+bracket is projected, not modelled; Stats ranks and shows unrounded points
+(scores kept to the hundredth); Home's win chance is Schedule's
+(`capture.matchupOdds`: best lineup, learned spread) and so shows none for a
+game in progress; Trade opens on the first UNPLAYED week (it had been pricing
+last week's rosters); Schedule drops a saved live week once the league is past
+it; Analysis opens on HIS team, a tapped team lasting only the visit. The
+audit confirmed every score, projected total, lineup and record matches ESPN
+on public league 1241838 (190 team-weeks). His bracket (1–2 bye; 4v5, 3v6;
+1 v W(4/5), 2 v W(3/6); final) is exactly `bracketSeeds(6)`. **His waivers are
+rolling priority, no FAAB.** **Unanswered: does his league have divisions?**
+ESPN seeds division winners first in a divisional league and the site ignores
+divisions. **Direction (Tim):** the site ADDS to ESPN — never rebuild what
+ESPN's app already shows; link to it instead. Still open from the audit: the
+December playoff gaps (Home/Players/Who-to-start stop at 14, the simulation
+stops, a useless week-15 reading) and the 2027 season rollover.
 
 **Decisions left with him from that pass:** readings from the synced copy
 (currently never); "Avg" counts a bye as 0 on Players/Analysis but skips it on

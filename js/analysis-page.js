@@ -63,6 +63,9 @@ const state = {
   data: null,       // {week, teams:[...]} for the selected week
   teamId: null,     // team shown in the roster detail
   myTeamId: null,   // the reader's own team, when a live league says so
+  // Which source ('demo' | 'live') a team was tapped on THIS visit, or null.
+  // A pick on live data stands for the visit; see selectTeam().
+  teamPickedOn: null,
   isDemo: true,
   // proTeamId -> bye week, from `fetchByeWeeks()`. Empty means unknown, and
   // then a live 0.00 is read as a bye the way it always was.
@@ -689,6 +692,10 @@ async function useLive() {
     return;
   }
   if (saved.teamId != null) state.myTeamId = Number(saved.teamId);
+  // Your real league opens on YOUR team, unless you tapped one on it this
+  // visit. A demo pick does not carry over: demo ids count from 1 just as
+  // ESPN's do, so it would survive the switch looking valid and be a stranger.
+  if (state.myTeamId !== null && state.teamPickedOn !== 'live') state.teamId = state.myTeamId;
 
   espn.configure({ leagueId: saved.leagueId, season: saved.season });
   state.source = 'live';
@@ -774,6 +781,12 @@ function render() {
  */
 function resolveTeam() {
   const teams = state.data ? state.data.teams : [];
+  // No teams is a week still LOADING, not a league without the pick in it.
+  // Deciding here nulled the selection on every uncached load — the empty
+  // render runs before the fetch — so a tapped team, or a saved one, was
+  // swapped for your own (or the first) the moment a week was fetched. The
+  // Trade page had the same bug and the same fix.
+  if (!teams.length) return;
   if (teams.some((t) => t.id === state.teamId)) return;
   const mine = teams.find((t) => t.id === state.myTeamId);
   state.teamId = mine ? mine.id : teams.length ? teams[0].id : null;
@@ -2284,7 +2297,13 @@ function seasonMarks(table) {
 function selectTeam(id) {
   if (id === null || Number.isNaN(id) || id === state.teamId) return;
   state.teamId = id;
-  prefs.set('team', id);
+  // For THIS visit. It used to be saved, and every later visit reopened on
+  // whichever squad was tapped last — usually a rival glanced at once. A visit
+  // opens on your own team; the pick is remembered only when the connection
+  // bar has never been told which team is yours, since then there is nothing
+  // better to open on.
+  state.teamPickedOn = state.source;
+  if (state.myTeamId === null || state.myTeamId === undefined) prefs.set('team', id);
   // Nudged rather than re-rendered: this also runs from the select's own change
   // handler, and rewriting a control's options underneath it loses focus.
   const sel = $('teamSelect');
@@ -2427,8 +2446,10 @@ $('starterPosToggle').addEventListener('click', (e) => {
 const boot = savedConfig();
 if (boot && boot.teamId != null) state.myTeamId = Number(boot.teamId);
 
+// A remembered team only when the page has no idea which one is yours — with
+// one known, every visit opens on it and `resolveTeam()` picks it.
 const rememberedTeam = prefs.get('team', null);
-if (rememberedTeam !== null) state.teamId = rememberedTeam;
+if (rememberedTeam !== null && state.myTeamId === null) state.teamId = rememberedTeam;
 
 // A saved position that is no longer one of the buttons falls back rather than
 // wedging the panel on a filter with nothing lit.
@@ -2452,5 +2473,15 @@ onConnection((conn) => {
   if (!conn) return;
   if (conn.teamId != null) state.myTeamId = Number(conn.teamId);
   if (state.source !== 'live' && prefs.get('source') !== 'demo') useLive();
-  else if (!state.isDemo) renderOverview(); // "your team" may have just changed
+  else if (!state.isDemo) {
+    // "Your team" may have just changed. The detail follows it unless a team
+    // was tapped on this league this visit.
+    if (state.myTeamId !== null && state.teamPickedOn !== 'live' && state.teamId !== state.myTeamId &&
+        state.data && state.data.teams.some((t) => t.id === state.myTeamId)) {
+      state.teamId = state.myTeamId;
+      render();
+    } else {
+      renderOverview();
+    }
+  }
 });

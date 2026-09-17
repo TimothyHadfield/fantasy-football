@@ -32,7 +32,7 @@
 //   weeks 1-4 and 4 from week 5 on. Weeks 1-4 have results against them, so a
 //   trade cannot reach them and none of those 30s may show up in any number on
 //   the page. If the span ever slips back to including a played week — which is
-//   exactly what it used to do, since the page opens on the last week PLAYED —
+//   exactly what it used to do, when the page opened on the last week PLAYED —
 //   Cy stops looking thin at tight end for that week and the Ana/Cy deal is
 //   priced differently. The test prices both spans and insists they differ,
 //   so "played weeks are excluded" is falsifiable rather than decorative.
@@ -67,7 +67,7 @@ export const calls = { schedule: 0, week: [], weeks: [] };
 // At 14 the cap becomes visible. A page still enforcing it drops week 14 from
 // every span, every request count and every offer it prices.
 export const WEEKS = 14;
-export const PLAYED_THROUGH = 4;   // so useLive() opens on week 4
+export const PLAYED_THROUGH = 4;   // so useLive() opens on week 5, the coming week
 export const LEAGUE = '476225250';
 export const SEASON = 2026;
 
@@ -189,10 +189,28 @@ export function projectionFor(teamId, i, week) {
   return team ? team.players[i].week(week) : null;
 }
 
+/**
+ * A WAIVER MOVE IN THE COMING WEEK, only when TR_PICKUP is set.
+ *
+ * Ana drops `Ana WR4` (id 111) and picks up `Ana WR Pickup` (id 150) for
+ * week PLAYED_THROUGH + 1 onwards — same slot, same numbers, a new man. That
+ * is the whole of it: the prices do not move, so the only thing that can
+ * differ is WHICH man the page names. A page reading the last PLAYED week's
+ * rosters still offers the dropped 111 and has never heard of 150; a page on
+ * the coming week offers 150 and cannot name 111. Unset, nothing changes and
+ * every other scenario is untouched.
+ */
+export const PICKUP = { dropped: 111, added: 150, name: 'Ana WR Pickup' };
+
+function pickupApplies(team, i, week) {
+  return !!process.env.TR_PICKUP && team.id === 1 && i === PICKUP.dropped - 100 &&
+    week > PLAYED_THROUGH;
+}
+
 function playersFor(team, week) {
   return team.players.map((spec, i) => ({
-    playerId: playerId(team.id, i),
-    name: spec.name,
+    playerId: pickupApplies(team, i, week) ? PICKUP.added : playerId(team.id, i),
+    name: pickupApplies(team, i, week) ? PICKUP.name : spec.name,
     position: spec.position,
     proTeam: 'BUF',
     proTeamId: 1,

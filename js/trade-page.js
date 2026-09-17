@@ -124,6 +124,7 @@ const MEASURES = {
 const state = {
   source: 'demo',
   week: 1,
+  weekPickedLive: false, // the reader chose a live week during THIS visit; see openingWeek()
   weeks: [],
   playedWeeks: [],
   scheduleError: null, // why the live schedule could not be read, if it could not
@@ -249,8 +250,9 @@ function playedWeeks() {
  * It used to be "the selected week → week 13", anchored on the week picker so a
  * reader could ask what the rest of the season looked like from there. That is
  * gone: it let a played week into every number on the page whenever the picker
- * sat in the past, which — since `useLive` OPENS on the last played week — was
- * the normal case rather than an edge one.
+ * sat in the past, which — since `useLive` then OPENED on the last played week —
+ * was the normal case rather than an edge one. (It opens on the coming week
+ * now; see `openingWeek()`.)
  *
  * So the span is now a DERIVED FACT rather than the reader's pick, and every
  * note that names it says which weeks they are.
@@ -2435,7 +2437,9 @@ function describeSource() {
   const played = state.playedWeeks.includes(state.week);
   return (
     `Week ${state.week} · ${plural(teams, 'team')} from ESPN · ${shape}` +
-    (played ? '.' : ' · <strong>not played yet</strong> — projections only.') +
+    (played
+      ? ' · <strong>already played</strong> — the rosters as they stood that week, not today.'
+      : ' · <strong>not played yet</strong> — current rosters, projections only.') +
     (state.scheduleError
       ? ` <strong style="color:var(--err)">The league schedule could not be read ` +
         `(${esc(state.scheduleError)}), so this page cannot tell which weeks are already ` +
@@ -2582,17 +2586,37 @@ async function useLive() {
     ? scheduleWeeks
     : Array.from({ length: NFL_WEEKS }, (_, i) => i + 1);
 
-  // Not the last week offered: before the first kickoff nothing has been played
-  // and "last" would be a week of a season that has not happened.
-  const remembered = prefs.get('week', null);
-  state.week = state.weeks.includes(remembered)
-    ? remembered
-    : state.playedWeeks.length
-      ? state.playedWeeks[state.playedWeeks.length - 1]
-      : state.weeks[0];
+  state.week = openingWeek();
 
   renderWeekPicker();
   await loadWeek();
+}
+
+/**
+ * Which week a live league opens on: THE COMING ONE — the same rule as
+ * `openingWeek()` in js/analysis-page.js.
+ *
+ * It used to be the last week PLAYED, and a saved week was honoured forever.
+ * But the week picked here is also the week whose ROSTERS the page reads, and
+ * the finder, the depth map and the ESPN link are all built from them — so a
+ * page sitting on last week all week left out every pickup made since and
+ * still offered men who had been dropped. The coming week's rosters are the
+ * squads as they stand now. The priced span does not depend on this at all:
+ * it is read off the schedule in `playedWeeks()`.
+ *
+ *   - a week picked during THIS visit, on live data, stays picked, past or not;
+ *   - a saved week from an earlier visit is kept only while it is not played;
+ *   - otherwise the first week with no result against it;
+ *   - and a finished season opens on its last week.
+ */
+function openingWeek() {
+  const played = new Set(state.playedWeeks);
+  if (state.weekPickedLive && state.weeks.includes(state.week)) return state.week;
+  const remembered = prefs.get('week', null);
+  if (state.weeks.includes(remembered) && !played.has(remembered)) return remembered;
+  const coming = state.weeks.find((w) => !played.has(w));
+  if (coming !== undefined) return coming;
+  return state.weeks[state.weeks.length - 1];
 }
 
 // --------------------------------------------------------------------- render
@@ -2675,6 +2699,9 @@ $('kindToggle').addEventListener('click', (e) => {
 $('weekSelect').addEventListener('change', (e) => {
   state.week = Number(e.target.value);
   prefs.set('week', state.week);
+  // A demo pick is a replay point in a sample season, not a live week, so it
+  // does not pin the live league when the reader switches over.
+  state.weekPickedLive = state.source === 'live';
   // The span moves with the week, so the memoised means are about a span that
   // no longer exists. The WEEKS themselves are kept — they cost requests, and a
   // week already bought is still that week's projections.

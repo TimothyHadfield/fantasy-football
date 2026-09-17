@@ -41,9 +41,10 @@ export function slotCountsFromLineups(teams) {
  *
  * Each player is taken at ESPN's own projection for that week — the number the
  * ESPN site shows under a lineup paged forward — and the best legal lineup is
- * filled rather than the one currently set. A player on bye comes back from
- * ESPN at 0.00 and simply loses his place to someone better, which is what a
- * manager would do, so byes need no separate handling.
+ * filled rather than the one currently set. A player on bye arrives at 0 and
+ * simply loses his place to someone better, which is what a manager would do.
+ * (ESPN projects a D/ST at a few points in its bye; js/season.js zeroes that
+ * before it gets here, so this file needs no bye handling of its own.)
  *
  * @param {Map<number, Array>} weekTeams week -> teams, from fetchWeeksRosters
  * @returns {{proj: Map, slots: number[], countsKnown: boolean, weeks: number[]}|null}

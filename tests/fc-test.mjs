@@ -264,6 +264,45 @@ const SCENARIOS = {
       };
     },
   },
+  // A SAVED WEEK EXPIRES ON LIVE DATA ONCE THE LEAGUE HAS MOVED PAST IT.
+  //
+  // Week 1 is decided and week 2 is under way, so the page would open on week
+  // 2. A week 1 remembered from last Sunday used to pin it there all season.
+  // Then, in the same visit, the reader picks week 1 by hand and the league is
+  // reloaded: a pick made THIS visit stands.
+  'week-stale': {
+    label: '(i) a saved week the live league has moved past is dropped',
+    stub: true,
+    env: { FC_IN_PROGRESS: '1' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 1 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    reloads: true,   // the "Live" button is pressed once, so every request is paid twice
+    after: async ({ document, window }) => {
+      const sel = document.getElementById('weekSelect');
+      const opened = sel.value;
+      sel.value = '1';
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 50));
+      document.querySelector('#sourceToggle button[data-src="live"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 600));
+      globalThis.__weeks = { opened, reloaded: document.getElementById('weekSelect').value };
+    },
+  },
+  'week-ahead': {
+    label: '(i) a saved week still ahead of the live league is kept',
+    stub: true,
+    env: { FC_IN_PROGRESS: '1' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 6 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+  },
+  'week-all': {
+    label: '(i) "All weeks" is not a week, and never expires',
+    stub: true,
+    env: { FC_IN_PROGRESS: '1' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+  },
   'live-rosterfail': {
     label: '(d) same, roster fetch rejects',
     stub: true,
@@ -466,24 +505,26 @@ async function check(scenario, boot) {
   // this names the one that is allowed and still fails on any other.
   const ARCHIVE = /^data\/snapshots\/[^/]+\.json$/;
   const archiveCalls = boot.fetchCalls.filter((u) => ARCHIVE.test(u));
+  // A scenario that reloads the league on purpose pays for every load in full.
+  const loads = boot.cfg.reloads ? 2 : 1;
   const unexpected = boot.fetchCalls.filter((u) => !ARCHIVE.test(u));
   c.ok('no unexpected network calls', unexpected.length === 0, unexpected.slice(0, 2).join(' | '));
-  c.ok('the committed archive is asked for at most once',
-    archiveCalls.length <= 1, archiveCalls.join(' | '));
+  c.ok('the committed archive is asked for at most once per load',
+    archiveCalls.length <= loads, archiveCalls.join(' | '));
   if (!boot.cfg.stub) {
     // Sample data has no league, so there is nothing committed to ask for and
     // asking would be a guaranteed 404 on every demo page load.
     c.ok('demo asks for no archive at all', archiveCalls.length === 0, archiveCalls.join(' | '));
   } else {
     c.ok('a live league does look for a committed archive',
-      archiveCalls.length === 1, boot.fetchCalls.join(' | '));
+      archiveCalls.length === loads, boot.fetchCalls.join(' | '));
   }
 
   // ---- request budget, for the stubbed live scenarios ---------------------
   if (boot.cfg.stub) {
     const season = await import('./fc-stub-season.mjs');
     const espn = await import('./fc-stub-espn.mjs');
-    c.ok('one fetchSchedule', season.calls.schedule === 1, `saw ${season.calls.schedule}`);
+    c.ok('one fetchSchedule per load', season.calls.schedule === loads, `saw ${season.calls.schedule}`);
     // ESPN publishes a per-week projection for every future week but has no
     // bulk form, so the cost is one request per week, each asked for ONCE.
     const got = season.calls.rosters.slice().sort((a, b) => a - b);
@@ -501,13 +542,14 @@ async function check(scenario, boot) {
     // scoring spread is measured from — the same residuals the Summary page
     // uses, which is what makes the two pages' title chances agree.
     c.ok('one roster request per week — remaining, playoff, and decided — none twice',
-      JSON.stringify(got) === JSON.stringify([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]),
+      JSON.stringify(got) ===
+        JSON.stringify([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16].flatMap((w) => Array(loads).fill(w))),
       `saw ${JSON.stringify(season.calls.rosters)}`);
     c.ok('the playoff weeks follow the regular season rather than being hardcoded',
       [14, 15, 16].every((w) => season.calls.rosters.includes(w)),
       `saw ${JSON.stringify(season.calls.rosters)}`);
     c.ok('the played week is read exactly once, for the scoring spread',
-      season.calls.rosters.filter((w) => w === 1).length === 1, `saw ${JSON.stringify(season.calls.rosters)}`);
+      season.calls.rosters.filter((w) => w === 1).length === loads, `saw ${JSON.stringify(season.calls.rosters)}`);
     // Byes arrive inside the weekly projections (a bye player is projected 0),
     // so the separate bye-week request is gone.
     c.ok('bye weeks never fetched separately', espn.calls.byes === 0, `saw ${espn.calls.byes}`);
@@ -1376,6 +1418,29 @@ async function check(scenario, boot) {
 
   if (scenario === 'demo') {
     c.ok('default demo view is not blank', fcRows.length > 0 && !empty, `${fcRows.length} rows`);
+  }
+
+  // ---- (i) which week a live reload opens on --------------------------------
+  //
+  // On demo a saved week is the "as of" point and never expires — `demo-mid`
+  // above opens on its saved week 5, a week the sample season has played.
+  if (scenario === 'demo-mid') {
+    c.ok('DEMO keeps a saved week even though the sample season has played it',
+      $('weekSelect').value === '5', $('weekSelect').value);
+  }
+  if (scenario === 'week-stale') {
+    const w = globalThis.__weeks || {};
+    c.ok('A SAVED WEEK THE LIVE LEAGUE HAS MOVED PAST IS DROPPED: week 2 is under way, so week 2',
+      w.opened === '2', `opened on week ${w.opened}`);
+    c.ok('a week picked by hand THIS visit survives a reload, played or not',
+      w.reloaded === '1', `reloaded on week ${w.reloaded}`);
+  }
+  if (scenario === 'week-ahead') {
+    c.ok('a saved week still ahead of the league is honoured',
+      $('weekSelect').value === '6', $('weekSelect').value);
+  }
+  if (scenario === 'week-all') {
+    c.ok('"All weeks" is kept', $('weekSelect').value === 'all', $('weekSelect').value);
   }
 
   return c.out;

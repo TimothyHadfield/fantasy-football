@@ -824,8 +824,8 @@ const SCENARIOS = {
       // checked AGAINST, since a rule that suppressed every tag would pass a
       // test that only looked at defences.
       menBefore: before.trades.flatMap((t) => [...t.send, ...t.receive]),
-      // Weeks 5..13 — everything with NO result against it. Week 4 is the
-      // selected week and is played, so it is deliberately not in here.
+      // Weeks 5..14 — everything with NO result against it. Week 5 is also
+      // the week the page opens on; weeks 1-4 are played and not in here.
       span: stub.WEEKS - stub.PLAYED_THROUGH,
       played: stub.PLAYED_THROUGH,
       byeWeek: stub.BYE_WEEK,
@@ -859,6 +859,57 @@ SCENARIOS.liveByes = async function liveByes() {
   if (probe) probe.setAttribute('data-probe', '1');
   const card = probe ? openCard(document, '.man[data-probe="1"]') : null;
   return { errors, bills, card };
+};
+
+/**
+ * WHICH WEEK A LIVE LEAGUE OPENS ON, and so whose rosters the finder reads.
+ *
+ * Tim's complaint (2026-09-17): the page opened on the last PLAYED week all
+ * week, so his own pickups were missing and men he had dropped were still being
+ * offered. Run with TR_PICKUP set, the stub has Ana drop `Ana WR4` (111) and
+ * pick up `Ana WR Pickup` (150) for week 5 — the first week with no result.
+ *
+ * TR_SAVED_WEEK seeds a week remembered from an earlier visit. A played one
+ * (2) must be ignored; an unplayed one (7) must be honoured. After reading,
+ * the reader picks week 3 by hand and the league is re-entered: a week picked
+ * THIS visit stays picked, past or not.
+ */
+SCENARIOS.livePickup = async function livePickup() {
+  const prefsSeed = { 'trade.source': 'live' };
+  if (process.env.TR_SAVED_WEEK) prefsSeed['trade.week'] = Number(process.env.TR_SAVED_WEEK);
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify(prefsSeed),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  const stub = await import('./tr-stub-season.mjs');
+  const trades = readTrades(document);
+  // Every man the page names ANYWHERE, by ESPN id: depth map, spare strip,
+  // finder, combo. A dropped man must be on none of them.
+  const everyId = () => [...document.querySelectorAll('a.pref')]
+    .map((a) => idOfHref(a.getAttribute('href')));
+  const opened = {
+    week: document.getElementById('weekSelect').value,
+    asked: stub.calls.week.slice(),
+    sent: trades.flatMap((t) => t.send.map((m) => m.id)),
+    sentNames: trades.flatMap((t) => t.send.map((m) => m.text)),
+    ids: everyId(),
+    status: text(document.getElementById('sourceStatus')),
+  };
+
+  // Picked by hand this visit, then the league re-entered.
+  const sel = document.getElementById('weekSelect');
+  sel.value = '3';
+  fire(sel);
+  await settle(800);
+  document.querySelector('#sourceToggle button[data-src="live"]')
+    .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(1500);
+  const repicked = {
+    week: document.getElementById('weekSelect').value,
+    status: text(document.getElementById('sourceStatus')),
+  };
+  return { errors, opened, repicked, pickup: stub.PICKUP, played: stub.PLAYED_THROUGH };
 };
 
 // --------------------------------------------------------------- child runner
@@ -1691,33 +1742,40 @@ if (!live.boot) {
 
   // -- THE COST, stated before it is spent and counted after ---------------
   eq(live.before.requests, 1, 'the page opens on ONE week of rosters, as it always has');
+  // THE COMING WEEK, not the last one played (2026-09-17). The week picked is
+  // also the week whose ROSTERS the finder reads, so opening on week 4 left out
+  // every pickup made since. Weeks 1-4 have results; 5 is the first without.
+  eq(live.before.week, String(live.played + 1), 'a live league opens on the first week NOT yet played');
+  eq(live.before.asked.join(','), String(live.played + 1), 'and that is the one week of rosters it reads');
   const span = live.span; // every week with no result against it
-  // MOVED, and the old number encoded the old truth. It used to be `span - 1`
-  // because the span STARTED at the selected week, which the page already had
-  // in hand. The span now starts after the last week played, so none of it is
-  // in hand and every week of it is a request.
+  // MOVED TWICE, and each old number encoded the truth of its day. It was
+  // `span - 1` when the span started at the selected week; then `span` while
+  // the page opened on the last PLAYED week, which is outside the span. The
+  // page now opens on the coming week — the FIRST week of the span — so that
+  // week is in hand and one fewer is owed.
   ok('the cost note names the real number of requests still to spend',
-    live.before.cost.note.includes(`${span} requests`),
+    live.before.cost.note.includes(`${span - 1} requests still to spend`),
     live.before.cost.note.slice(0, 300));
   ok('and the button carries the same number on its face',
-    live.before.cost.button.includes(`${span} requests`), live.before.cost.button);
+    live.before.cost.button.includes(`${span - 1} requests`), live.before.cost.button);
   ok('and the note says what the page costs in total on this measure',
     live.before.cost.note.includes(`${span} requests in total`),
     live.before.cost.note.slice(0, 400));
   ok('nothing was spent before the button was pressed', live.before.requests === 1,
     `${live.before.requests} requests`);
 
-  // The page opened on week 4 (one request), then bought weeks 5-13.
-  eq(live.after.requests, span + 1, 'pressing it spends exactly one request per week');
+  // The page opened on week 5 (one request), then bought weeks 6-14.
+  eq(live.after.requests, span, 'pressing it spends exactly one request per week');
   ok('and it asked for each week exactly once — the opening one included',
     new Set(live.after.asked).size === live.after.asked.length &&
-    live.after.asked.length === span + 1,
+    live.after.asked.length === span,
     live.after.asked.join(','));
   ok('and never asked for a week that has already been played',
-    live.after.asked.filter((w) => w > 4).length === span,
+    live.after.asked.every((w) => w > live.played),
     live.after.asked.join(','));
+  // The button's own spend — the opening week is the page's, not the button's.
   ok('the spent line then says how many went',
-    live.after.cost.spent.includes(`${span} requests spent`), live.after.cost.spent);
+    live.after.cost.spent.includes(`${span - 1} requests spent`), live.after.cost.spent);
 
   // -- THE RANKING ACTUALLY CHANGES ----------------------------------------
   //
@@ -1861,7 +1919,7 @@ if (!live.boot) {
     // The half that makes the assertion above falsifiable: the old span really
     // would have produced a different number, so agreeing with the new one is
     // a fact rather than a coincidence.
-    ok('and the old span — the selected week, which is PLAYED, included — differs',
+    ok('and the old span — with the PLAYED week 4 included — differs',
       Math.abs(stale.delta - fresh.delta) > 0.15,
       `${weekLabel(unplayed)} ${fresh.delta} vs ${weekLabel(withPlayed)} ${stale.delta}`);
 
@@ -2085,6 +2143,50 @@ if (!live.boot) {
     JSON.stringify(byeRight.card));
   ok('and 0.0 when it is not — never Bye', at8(byeElsewhere.card) === '0.0' &&
     !byeElsewhere.card.projs.includes('Bye'), JSON.stringify(byeElsewhere.card));
+}
+
+// ---- the coming week's rosters: pickups in, drops out ---------------------
+//
+// Falsifiable by construction: with the page opening on the last PLAYED week
+// (4), the finder offers the dropped 111 and never names 150.
+{
+  const pk = run('livePickup', { stub: true, env: { TR_PICKUP: '1' } });
+  ok('the pickup scenario boots', !pk.boot, pk.boot);
+  if (!pk.boot) {
+    ok('no console errors', pk.errors.length === 0, pk.errors.slice(0, 2).join(' | '));
+    const coming = String(pk.played + 1);
+    eq(pk.opened.week, coming, 'with nothing saved, the page opens on the coming week');
+    eq(pk.opened.asked.join(','), coming, 'and reads that week’s rosters, not a played week’s');
+    ok('the finder offers the man picked up THIS week',
+      pk.opened.sent.includes(pk.pickup.added),
+      `sent ${pk.opened.sentNames.join(' | ')}`);
+    ok('and never the man he dropped',
+      !pk.opened.sent.includes(pk.pickup.dropped), pk.opened.sent.join(','));
+    ok('who is named nowhere on the page',
+      !pk.opened.ids.includes(pk.pickup.dropped), pk.opened.ids.join(','));
+    ok('the status says the week is still to play, on current rosters',
+      /not played yet/.test(pk.opened.status) && /current rosters/.test(pk.opened.status),
+      pk.opened.status);
+    eq(pk.repicked.week, '3', 'a week picked by hand THIS visit is kept, played or not');
+    ok('and the status says that week’s rosters are not today’s',
+      /already played/.test(pk.repicked.status), pk.repicked.status);
+  }
+
+  const stale = run('livePickup', { stub: true, env: { TR_PICKUP: '1', TR_SAVED_WEEK: '2' } });
+  ok('the saved-played-week scenario boots', !stale.boot, stale.boot);
+  if (!stale.boot) {
+    eq(stale.opened.week, String(stale.played + 1),
+      'A SAVED WEEK THAT HAS BEEN PLAYED IS IGNORED: the page opens on the coming week');
+    ok('and the pickup is still in the finder', stale.opened.sent.includes(stale.pickup.added),
+      stale.opened.sentNames.join(' | '));
+  }
+
+  const ahead = run('livePickup', { stub: true, env: { TR_PICKUP: '1', TR_SAVED_WEEK: '7' } });
+  ok('the saved-future-week scenario boots', !ahead.boot, ahead.boot);
+  if (!ahead.boot) {
+    eq(ahead.opened.week, '7', 'a saved week still to be played is honoured');
+    eq(ahead.opened.asked.join(','), '7', 'and it is the week whose rosters are read');
+  }
 }
 
 // ---------------------------------------------------------------------------

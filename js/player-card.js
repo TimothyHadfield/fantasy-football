@@ -177,6 +177,12 @@ export function byeWeekOf(p, byes) {
  * @param {{week?:number, byeWeek?:number|null, injuryStatus?:string, demo?:boolean}} ctx
  */
 export function zeroKind(v, { week = null, byeWeek = null, injuryStatus = null, demo = false } = {}) {
+  // NO NUMBER AT ALL in his known bye week is a bye too: ESPN sends no D/ST
+  // projection for a bye week already past (verified 2026-09-16). Only with
+  // the bye week known — an unknown bye never turns a null into a claim.
+  if (v === null || v === undefined) {
+    return !demo && Number.isFinite(byeWeek) && week !== null && Number(week) === byeWeek ? 'bye' : null;
+  }
   if (v !== 0) return null;
   if (!demo) {
     if (!Number.isFinite(byeWeek)) return 'bye';
@@ -203,8 +209,10 @@ export function projToken(v, demo = false, ctx = {}) {
   if (v === 'wait') return { text: '·', kind: 'wait' };
   if (v === 'failed') return { text: '—', kind: 'none' };
   if (v === 'off') return { text: 'off', kind: 'off' };
-  if (v === null || v === undefined) return { text: '—', kind: 'none' };
   const zero = zeroKind(v, { ...ctx, demo });
+  if (v === null || v === undefined) {
+    return zero === 'bye' ? { text: 'Bye', kind: 'bye' } : { text: '—', kind: 'none' };
+  }
   if (zero === 'bye') return { text: 'Bye', kind: 'bye' };
   // A ruled-out zero is the number AND the word, and a class of its own: the
   // word is what says it is not a bye, so colour is never the only cue.

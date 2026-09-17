@@ -76,6 +76,10 @@ const TEAMS = [
 ];
 const WEEKS = [1, 2, 3];
 const PLAYED_THROUGH = 2;      // weeks 1 and 2 have scores; week 3 has not
+// What a sync publishes: the regular season AND the playoff weeks, asked for by
+// number because bracket games do not exist until seeding. Four teams and no
+// playoff setting is a four-team field — two rounds — so weeks 4 and 5.
+const SYNCED_WEEKS = [1, 2, 3, 4, 5];
 
 // Nine starters then six on the bench, which is the shape every page assumes.
 const SLOTS = [0, 2, 2, 4, 4, 6, 23, 16, 17, 20, 20, 20, 20, 20, 20];
@@ -380,10 +384,10 @@ SCENARIOS.substitute = async () => {
   const fake = makeFake();
   const seeded = await seedCloud(cloud, espn, season, fake);
   ok('the desktop published a season', seeded.res.ok, seeded.res.reason);
-  eq(seeded.payload.rosters.size, WEEKS.length, 'every week of squads went up');
-  eq(seeded.payload.wire.size, WEEKS.length, 'and every week of the wire with it');
+  eq(seeded.payload.rosters.size, SYNCED_WEEKS.length, 'every week of squads went up, playoff weeks included');
+  eq(seeded.payload.wire.size, SYNCED_WEEKS.length, 'and every week of the wire with it');
   ok('the whole span went, not just this week',
-    [...seeded.payload.rosters.keys()].join(',') === WEEKS.join(','),
+    [...seeded.payload.rosters.keys()].join(',') === SYNCED_WEEKS.join(','),
     [...seeded.payload.rosters.keys()].join(','));
 
   // Three days old: past the wire's one-day limit, well inside the squads'
@@ -450,9 +454,10 @@ SCENARIOS.substitute = async () => {
   eq(seasonData.name, CLOUD.name, 'named as the synced league');
 
   // --- one read for all of it ----------------------------------------------
-  // 1 index + 3 roster weeks + 1 schedule. Four fetchers ran; if each had
-  // asked the cloud for itself this would be four times as many.
-  eq(fake.log.reads, 5, 'the whole page load cost five document reads');
+  // 1 index + 5 roster weeks (3 regular, 2 playoff) + 1 schedule. Four
+  // fetchers ran; if each had asked the cloud for itself this would be four
+  // times as many.
+  eq(fake.log.reads, 7, 'the whole page load cost seven document reads');
 
   // --- the ages the bar draws ----------------------------------------------
   const src = await season.cloudSource();
@@ -576,7 +581,9 @@ SCENARIOS['no-cloud'] = async () => {
 
   const weekTeams = await season.fetchWeeksRosters(WEEKS);
   eq(weekTeams.size, WEEKS.length, 'and so do the squads');
-  eq(calls.length, 1 + WEEKS.length, 'at exactly one request per week, as always');
+  const byeReads = calls.filter((u) => /proTeamSchedules_wl/.test(u)).length;
+  eq(calls.length - byeReads, 1 + WEEKS.length, 'at exactly one request per week, as always');
+  eq(byeReads, 1, 'plus ONE bye-week read for the whole span (the bye rule), not one per week');
   near(weekTeams.get(2)[0].players[0].projected, LIVE.scale + 0.2, 'with ESPN\'s numbers');
 
   const src = await season.cloudSource();
@@ -744,21 +751,22 @@ SCENARIOS['desktop-sync'] = async () => {
   ok('the desktop connected live through the extension', /connected to/i.test(text), text);
   ok('and it says it is the live league', text.includes(LIVE.name), text);
 
-  // 3 roster weeks + 3 wire weeks + the schedule + the league index. The
-  // account's saved league (users/<uid>) is a separate, one-off write.
+  // 5 roster weeks + 5 wire weeks (3 regular, 2 playoff) + the schedule +
+  // the league index. The account's saved league (users/<uid>) is a
+  // separate, one-off write.
   const seasonWrites = fake.log.paths.filter((p) => !p.startsWith('users/')).length;
-  eq(seasonWrites, 8, 'it published the whole season without being asked');
+  eq(seasonWrites, 12, 'it published the whole season without being asked');
   ok('the whole span went up, not just this week',
-    [...fake.docs.keys()].filter((k) => /\/rosters\//.test(k)).length === WEEKS.length,
+    [...fake.docs.keys()].filter((k) => /\/rosters\//.test(k)).length === SYNCED_WEEKS.length,
     [...fake.docs.keys()].join(' '));
   ok('and the wire with it',
-    [...fake.docs.keys()].filter((k) => /\/wire\//.test(k)).length === WEEKS.length);
+    [...fake.docs.keys()].filter((k) => /\/wire\//.test(k)).length === SYNCED_WEEKS.length);
   ok('the league index went LAST, so it never promises a week that is missing',
     [...fake.docs.keys()].pop() === `leagues/${LEAGUE_ID}/seasons/${SEASON}`,
     [...fake.docs.keys()].pop());
 
   ok('the bar says when it last sent', /sent to your phone/i.test(text), text);
-  ok('and how much went', /8 files/.test(text), text);
+  ok('and how much went', /12 files/.test(text), text);
   ok('there is a button to send again', !!document.getElementById('connCloudSync'));
   ok('it did NOT offer a sign-in, being signed in already', !/sign in with google/i.test(text), text);
   // THE BAR NEVER PROBED ESPN DIRECTLY. It waits for the extension's 400ms

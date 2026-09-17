@@ -162,8 +162,8 @@ if (process.argv[2]) {
       if (weeks < 5 && !explained) problems.push('box panel neither drew nor explained itself');
     }
 
-    // Total must be thousands-separated once it gets there.
-    if (weeks === 13 && !/^\d,\d{3}$/.test(cells[4])) problems.push(`Total not separated: "${cells[4]}"`);
+    // Total must be thousands-separated once it gets there, at one decimal as ESPN shows it.
+    if (weeks === 13 && !/^\d,\d{3}\.\d$/.test(cells[4])) problems.push(`Total not separated: "${cells[4]}"`);
 
     // Weekly table baseline row.
     const foot = $('weeklyTable').querySelector('tfoot');
