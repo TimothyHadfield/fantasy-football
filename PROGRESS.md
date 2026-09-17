@@ -50,7 +50,224 @@ describe how the site works **today**:
 | The ± on the luck columns | "Early-season honesty" (revised note) |
 | Per week first, total as the sub-number | HANDOFF rule 10 |
 | Lede / "How this works" toggle — how a panel reads | HANDOFF "How a panel reads" |
+| The lineup sheet on Analysis, and the red marks | "Season by week is a lineup sheet" |
+| Why a defence on bye is forced to 0 | "What the real-league audit found" |
+| Where the weekly reading is taken now | "Readings from any desktop page" |
+| Panel order, page by page | "The panels are in Tim's order" |
+| What the trade pop-up shows per week | "The trade pop-up's per-week breakdown" |
+| Mid-season strategy, and what the research says | docs/strategy-research.md |
+| The measured plan for condensing the pages | "The density audit" |
 | What to do next | "Next", at the foot |
+
+## 2026-09-17 — the day the site got its second pass
+
+A dozen sessions' worth of work in one day, all of it pushed. Every heading
+below is something a later session may need to undo or extend.
+
+### The cloud went live
+
+Firebase is no longer "built but off". The project is **`fantasy-football-th`**
+(owner timhadfield7@gmail.com, Firestore in `nam5`), created through the
+signed-in `firebase` CLI rather than by hand. One half could NOT be done from
+here and had to be Tim in the console: **enabling the Google sign-in provider**,
+because it needs an OAuth client only the console creates —
+`identityPlatform:initializeAuth` answers `BILLING_NOT_ENABLED`, and the admin
+`config` endpoint 404s until the console has initialised Auth. Everything else
+went over the admin APIs using the CLI's own credentials: enabling
+`firestore.googleapis.com` and `identitytoolkit.googleapis.com`, creating the
+database, registering the web app, and adding `timothyhadfield.github.io` to the
+authorised domains. The rules live in `firebase/firestore.rules` and are
+published with `firebase deploy --only firestore:rules` from `firebase/`.
+
+**The league is remembered per ACCOUNT.** A signed-in, connected browser writes
+`{leagueId, season, teamId}` to `users/<uid>`; a signed-in browser with no
+league fills it from there and connects by itself (`adoptProfile` /
+`rememberProfile` in `js/connection.js`, `loadProfile` / `saveProfile` in
+`js/cloud.js`). It only ever FILLS GAPS — a league typed on that device wins —
+and the last device to connect updates the account. This is what lets the
+iPhone, and the home-screen app with its separate storage, connect with nothing
+typed.
+
+### The home-screen app
+
+`manifest.webmanifest` with `scope: "./"` and `display: standalone`, linked from
+every page. Without a manifest iOS treated the first link to another page as
+leaving the app, which is exactly what Tim reported. **He must delete and re-add
+the icon** for iOS to read it. Standalone keeps its own storage, so he signs in
+once inside the app — and **popup sign-in inside an iOS home-screen app is still
+unverified**.
+
+### What the real-league audit found
+
+`js/season.js`, `js/espn.js`, `js/forecast.js`, `js/stats.js`, `js/trade.js` and
+`js/capture.js` were run against **public ESPN league 1241838** (2025 complete,
+2026 live) with every answer re-derived from the raw payload. **190 team-weeks
+matched ESPN exactly** — scores, projected totals, starting lineups, W-L-T and
+points for. What did not:
+
+- **A D/ST is projected 3–7 points in its team's FUTURE bye week** (Lions D/ST
+  4.41 in week 6) and `null` for a PAST one, while every other position returns
+  0.00 on a bye. So "0.00 means bye" was wrong in both directions. The site now
+  forces any player's weekly projection to exactly 0 in his team's known bye
+  week at decode (`espn.byeAdjustedProjection`, fed by `season.fetchByeWeeks()`,
+  applied in `fetchWeekRosters` and `parseFreeAgent`), and a `null` in a known
+  bye week renders "Bye". With byes unknown (demo, a failed read) projections
+  stay exactly as ESPN sent them. See HANDOFF rule 2.
+- **A game counted as played the moment either side had points**, so from
+  Thursday night to Monday half-played weeks entered records, luck, the Players
+  page's span and the Trade page's pricing. `played` is now
+  `winner !== 'UNDECIDED'`, with the old points rule as the fallback when no
+  `winner` is present (old synced copies, hand fixtures).
+- **Playoff and consolation games ride in the same schedule feed** once they
+  exist. `fetchSchedule` keeps them out of `games`/`byWeek`/`weeks` now and
+  returns them as `playoffGames`.
+- **Ties were ignored in every standings sort** (this league has no tiebreak). A
+  tie is half a win everywhere now, and the Stats page ranks on UNROUNDED points
+  — 128.66 and 129.02 had been tying at "129".
+- **Home and Schedule quoted different win chances for the same game** (41.6% vs
+  49.3% in week 2): Home used the lineup as set and a fixed 27-point spread,
+  Schedule the best lineup and the spread learned from the league. Home calls
+  `capture.matchupOdds` now, so they agree — and, like Schedule, Home shows no
+  percentage once a game is under way.
+- **The Trade page opened on the last PLAYED week**, so all week it priced last
+  week's rosters. It opens on the first unplayed week now, and a saved week is
+  dropped once it has been played (the same rule Analysis uses).
+- Backtested on 2025's 70 games: the spread learned from real residuals is
+  **21.8** (the 27 default is wide; 20.5 fits best), favourites actually won
+  **67.1%**, and the site's own method scores Brier 0.2199 / log loss 0.633.
+  Worth knowing before anyone "improves" the model.
+
+### Readings from any desktop page
+
+`js/capture.js` is new: the reading the schedule page used to build is a shared
+module now, and `js/connection.js` calls `captureIfDue()` on **every** page when
+the bridge is present. Same week rule, first-write-wins, the committed archive
+checked first, a failed attempt not retried for ten minutes. **A reading is
+never taken from the synced (cloud) copy** — Claude's call, matching the
+original design; Tim was told and may overrule. The time-machine panel says in
+one line whether this week was recorded and, if not, exactly why (demo on, no
+live connection, ESPN refused k of n roster weeks, replaying an archive, synced
+copy), and the connection bar carries a red "Week N NOT recorded" chip linking
+to `schedule.html#timePanel`.
+
+### Season by week is a lineup sheet
+
+Tim's redesign, and the biggest change of the day. The panel used to be one row
+per player on his roster. It is now **one row per lineup SLOT** — QB, RB1, RB2,
+WR1, WR2, WR3, TE, FLEX, D/ST, K, read from the league's own shape — and each
+week's cell is filled from **that week's best legal lineup**, ranked inside its
+slot, so WR2 is always the second-best receiver actually starting. A
+"Starting lineup" band totals the column, exactly as the roster detail does.
+
+- **Nothing carries a name**, so hover, tap or keyboard focus names the man on a
+  line above the table and lights every other week he holds a slot. The shared
+  player card still opens (a tap must be intercepted or it follows the link off
+  the page).
+- **Low numbers are marked** amber ▼ at 1 SD below and red ▼▼ at 2 SD, measured
+  **across all ten squads** for that slot over the weeks on screen — his own
+  roster would be both too small a sample and the thing being judged. The
+  thresholds are printed under the table so a reader can check a cell by eye,
+  and nothing is coloured at all when `stdev` returns null.
+- **The roster detail's what-if swaps are deliberately NOT applied here.** This
+  panel answers what the numbers say; folding a hand-moved lineup in would make
+  an experiment look like advice.
+- `js/lineup-slots.js` holds the vocabulary (`SLOT_ORDER`, `slotRows`,
+  `fillSlots`) and BOTH pages import it — the trade pop-up draws the same rows,
+  so the two cannot drift about what WR2 means.
+- `js/player-card.js` gained `clearRuns(prefix)`: `renderOverview()` used to
+  clear every registered card, which would have left this panel's tips pointing
+  at nothing on every repaint.
+
+### The trade pop-up's per-week breakdown
+
+Hover, tap or focus a week inside a deal's pop-up and it opens **that week's
+lineup slot by slot, before and after the trade**, with a totals row showing
+before → after → difference (which equals the gain already printed for that
+week). The man received is marked `IN`, the man sent `OUT`, and one of his own
+who is promoted or benched gets a quieter mark — word plus colour, never colour
+alone. A toggle flips to the other manager's side. It costs **no extra ESPN
+requests**: the pop-up already fetched those weeks.
+
+### The panels are in Tim's order
+
+- **Stats**: season at a glance → standings & season totals → week by week → the
+  rest. `tests/stats-order.mjs` pins it.
+- **Schedule**: my season → simulate season → one week-matchups panel with the
+  picker inside it → the rest. **The standings table is deleted** — ESPN's own
+  app opens on standings and this site adds to ESPN rather than repeating it —
+  but "Place now" and "Run-in" survive as tiles in My season, and seeding,
+  strength of schedule and the weekly reading still compute standings
+  internally.
+- **Trade**: finder → best combo → depth map. The reorder exposed a real
+  coupling: `renderCombo()` read the weekly button's label back off the DOM, so
+  it only worked because the toolbar painted first. That is `weeksButton()` now.
+- **Analysis**: one merged all-teams grid (week picker AND an
+  `A week / Proj avg <season>` switch inside the panel, remembered as
+  `analysis.measure`) → season by week → who to start → roster detail.
+
+### Smaller things that landed the same day
+
+- **Playoff weeks in every week preview.** Players, Analysis and the trade
+  pop-up run through the playoff weeks after a heavy line headed "PO"
+  (`po-start`). Averages and totals stay regular-season only.
+- **The summary page** shows LUCK, title % and loser % **from week 1** (it had
+  held back until week 3), with the Stats page's ± on screen. Its shared IMAGE
+  lost the explanation lines — table and demo band only — and its canvas height
+  is no longer pinned in CSS, which is what had stretched it tall on the iPhone.
+- **The coloured churn lines are gone from the trade rows** ("starts:" / "drops
+  out:"), because they mostly repeated the two columns beside them; the detail
+  lives in the pop-up, where a man of his own is tagged. The shape filter reads
+  **Any shape / 1 for 1 / 2 for 1 / 1 for 2**.
+- **The extension is 0.3.3** and is scoped to `/fantasy-football/` — any other
+  project on his github.io origin could previously drive it.
+- **`js/site-status.js`** on every page: a "Site updated" stamp, a "newer
+  version is live — Reload" bar, and a red strip if a module fails to load.
+- **GitHub Actions** runs the suite on every push (`.github/workflows/test.yml`).
+- **`docs/strategy-research.md`** — Tim's twelve mid-season strategy ideas with a
+  verdict and the published evidence for each, the numbers a feature could use,
+  and six candidate features. Read it before proposing new analysis.
+
+### The density audit (measured, not yet applied)
+
+Three read-only audits measured every page at 1500px and 390px. Nothing was
+changed; the plan waits on two answers from Tim (how tight, and one column or
+two). What they found:
+
+- **A third of every page is frame** — 7,279px of padding, headings, ledes and
+  closed explain rows on a laptop, 8,077px on a phone.
+- **`index.html` genuinely overflows a 390px phone** (content 571px): a
+  `.grid-2` child's automatic minimum is its `min-content`, so a wide table
+  blows the grid out instead of scrolling inside `.table-scroll`.
+  `.grid-2 > * { min-width: 0 }` fixes it, verified. This is the answer to the
+  standing "does anything scroll sideways on his iPhone" question: yes, Home.
+- **Four tap targets are under the 44px floor**, `details.explain > summary` at
+  **18.8px** worst — and it is on 27 panels.
+- Shared CSS alone (density tokens, a `.panel-grid` whose columns are
+  `minmax(min(--col-min, 100%), 1fr)` so they never overflow a phone, and
+  `.stat-line` replacing stat tiles) takes 22,021px → ~17,900px on a laptop and
+  25,537px → ~22,300px on a phone. The rest of Tim's 25–40% has to come from
+  content: eight charts at 300px, eighteen control rows (2,322px on a phone),
+  and seven Data-source panels (1,333px on a laptop) that mostly restate the
+  connection bar above them.
+- Panels worth DELETING rather than shrinking, with the argument: Home's
+  standings (ESPN, and Stats has it with more columns), Stats' "Season at a
+  glance" (five of nine tiles answer nothing), Schedule's Results table (the
+  same five games are the cards above it), Summary's plain-text block (the same
+  ten rows a third time), and the two FLEX hint sentences on Players.
+
+### How this was built, and what it cost
+
+Up to seven sub-agents ran at once on disjoint file sets, which is the practice
+HANDOFF already recommends. It held: no concurrent edit corrupted another's
+work. Two things to expect if you do the same:
+
+- **A full suite run during parallel work throws false reds.** Four suites
+  failed mid-run and passed alone, every time. Treat a failure as noise only
+  after re-running that suite on its own, and always run the whole suite once
+  at the end with nothing else in flight.
+- **Agents die.** Two were killed by a network error and one stalled; none had
+  written a partial edit, but check `git status` before restarting one, and
+  checkpoint (run the suite, commit, push) whenever a batch lands.
 
 ## What changed on 2026-09-09 and 2026-09-10
 
@@ -2421,21 +2638,35 @@ one and it is correct; if the two ever disagree, HANDOFF is what a fresh session
 reads first, so fix this one. Ordered, as it is there, by what would hurt most
 to get wrong.
 
-- **THE ONE ITEM WITH A DEADLINE: get a reading captured and committed.** The
-  time machine records what the forecast said, once a week, and ESPN keeps no
-  history of its own projections — so a week Tim never opens the schedule page
-  in is gone for good. **Still empty at the end of 2026-09-16**; week 1 is
-  lost. The extension race fixed that day may have been a cause — ask whether
-  a reading has appeared since. See the block at the top of
-  `HANDOFF.md` for exactly what to ask him, and check `data/snapshots/` and his
-  Downloads yourself before anything else. **The likeliest reason is now known
-  and is worth saying to him plainly:** a reading is only taken when
-  `schedule.html` loads on LIVE data, live data needs the bridge extension, and
-  **the extension cannot exist on his phone** — so if he has moved to reading
-  the site there, no reading will ever be taken. The cloud sync makes the
-  archive *readable* on the phone; it cannot make one be *taken* there.
+- **THE ONE ITEM WITH A DEADLINE: get a reading captured and committed.** ESPN
+  keeps no history of its own projections, so a week with no reading is gone for
+  good. **Still empty at the end of 2026-09-17**; week 1 is lost. What changed
+  that day: **any** page on his computer now takes the reading (`captureIfDue`
+  in `js/connection.js`), the panel says whether this week was recorded and why
+  not, and the bar shows a red chip when an attempt failed. So the ask is
+  smaller than it was — he only has to open the site on the machine with the
+  extension. **Check `data/snapshots/` and his Downloads yourself, then ask.**
   Everything else on this list can be built in December just as well as today;
   this cannot.
+- **THE DENSITY PASS IS THE NEXT BUILD, and it is measured and planned.** See
+  "The density audit" above for the numbers and the exact CSS. It needs two
+  answers from Tim first (comfortable ~25% or tight ~40%; two columns on a
+  laptop or one everywhere), plus a third worth asking: should the Data source
+  panel fold into the connection bar (~1,300px on a laptop, ~1,700 on a phone).
+  Two items in it are bug fixes and should land whatever he answers:
+  `.grid-2 > * { min-width: 0 }` (index.html really does scroll sideways on a
+  390px phone) and the four sub-44px tap targets, `details.explain > summary`
+  at 18.8px worst.
+- **December is still unfinished**, and it is now the nearest deadline after the
+  reading. Home, the Players page and "Who to start" stop at the last regular
+  week, so his playoff matchup never appears; the simulation says "nothing left
+  to simulate" once week 14 is decided, exactly when title odds matter most; and
+  a useless "week 15" reading gets filed that projects only week 14. The week
+  PREVIEWS already run through the playoff weeks — this is the rest of it.
+- **The 2027 rollover.** The season is saved per device and now also on the
+  account, and nothing moves it forward, so in August 2027 every device would
+  quietly still show 2026. Move it on once the new season's league reads, and
+  store only the league id on the account.
 - **Almost none of this has been seen against his real league in a browser.**
   Everything is verified against demo data, stubs and public leagues, and every
   page boots clean, but 476225250 is private and returns 401 to anything without

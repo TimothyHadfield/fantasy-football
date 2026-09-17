@@ -3,7 +3,8 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-17.
+Last updated 2026-09-17 (late). Everything below is pushed and live; 34 test
+suites, ~11,000 assertions, green, and GitHub Actions runs them on every push.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -612,17 +613,62 @@ Worker, a persistent phone cache for the synced copy, moving the duplicated
 player-card CSS (in `analysis.html` and `trade.html`) into `css/app.css`, and
 the analysis page's remaining `title`s on name links and slot buttons.
 
+### Open questions for Tim (asked, not answered)
+
+1. **Does his league have DIVISIONS?** He answered the bracket shape but not
+   this. ESPN seeds division winners first in a divisional league and
+   `js/forecast.js` ignores divisions, so title % would be wrong if it has any.
+2. **The density pass** (see "Next up" below): comfortable (~25% shorter) or
+   tight (~40%)? Two columns on the laptop, or one everywhere? **And should the
+   Data source panel disappear into the connection bar** (~1,300px on a laptop,
+   ~1,700 on a phone — the single biggest saving left)?
+3. **"Avg" and byes.** Players/Analysis count a bye as 0; the Trade page skips
+   it, so one player shows two averages. Pick one, or label each page.
+4. **Should trades be PRICED on the playoff weeks?** They are shown after the
+   line but left out of every total.
+5. Smaller, all previously flagged: readings from the synced copy (currently
+   never taken); whether 3rd-vs-4th follows seed or the consolation ladder;
+   whether the joke team names appear anywhere; whether the combo packer may
+   propose two deals to one manager; whether he minds that HANDOFF/PROGRESS are
+   publicly readable on Pages (emails, league id, Firebase uid — the rules
+   still protect the data).
+
+### Things he was asked to check in a browser and has not reported back on
+
+- A reading appearing in the Time machine panel (above).
+- **Send to phone** succeeding, and the phone reading the synced league after
+  signing in there.
+- Google sign-in **inside** the iOS home-screen app (unverified anywhere), and
+  whether the app now stays an app across pages after re-adding the icon.
+- Whether **Open in ESPN** ticks his own side (extension must show **0.3.3**
+  after a reload at `edge://extensions`).
+- Whether anything scrolls sideways on his iPhone. **We know one thing does:**
+  `index.html` at 390px is 571px wide — `.grid-2 > *` needs `min-width: 0`,
+  which the density pass will land.
+
+### Next up, with a measured plan already in hand
+
+**The density pass.** Three read-only audits measured every page (2026-09-17);
+their findings are summarised in PROGRESS.md under "The density audit". The
+short version: a THIRD of every page is frame (padding, headings, ledes, closed
+explain rows); shared-CSS tokens plus a `.panel-grid` (half-width panels that
+stack on a phone) plus `.stat-line` (tiles → one line) take the site from
+22,000px to ~17,900px on a laptop and 25,500px → ~22,300px on a phone; the rest
+of his 25–40% has to come from content (8 charts at 300px, 18 control rows,
+seven Data-source panels). It also found four tap targets under 44px —
+`details.explain > summary` is **18.8px** and is on 27 panels.
+
 Ordered by what would hurt most to get wrong.
 
-- **THE ARCHIVE IS STILL EMPTY AND WEEKS ARE GONE.** See the block at the top of
-  this file, and check `data/snapshots/` and his Downloads yourself before
-  anything else. The likeliest reason is now known and is worth saying to him:
-  a reading is only taken when `schedule.html` loads on LIVE data, live data
-  needs the bridge extension, and **the extension cannot exist on his phone** —
-  so if he has moved to reading the site there, no reading will ever be taken.
-  Firebase sync makes the archive *readable* on the phone; it cannot make one
-  be *taken* there. A second possible cause (the extension race) was fixed on
-  2026-09-16 — whether readings now appear is the first thing to ask.
+- **THE ARCHIVE IS STILL EMPTY AND WEEKS ARE GONE** — checked again at the end
+  of 2026-09-17: `data/snapshots/` holds only its README and there is no
+  `fantasy-archive-*.json` in his Downloads. What changed that day is that
+  **any** page on his computer now takes the week's reading (`captureIfDue` in
+  `js/connection.js` → `js/capture.js`), so he no longer has to remember the
+  schedule page — he only has to open the site on the machine with the
+  extension. The panel says in one line whether this week was recorded and why
+  not, and the bar shows a red chip when an attempt failed. **Ask him whether a
+  reading has appeared since, and check both places yourself first.**
 - **Waiting on Tim, from the end of 2026-09-16** — ask about each:
   1. **Tick-your-side.** He reported his own players still unticked on ESPN.
      Unreproducible here (private league). Every silent failure now speaks: a
