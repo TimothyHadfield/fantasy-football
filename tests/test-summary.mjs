@@ -282,6 +282,7 @@ function readPage(document) {
     cardHidden: document.getElementById('cardWrap').hasAttribute('hidden'),
     canvasW: Number(canvas.getAttribute('width')),
     canvasH: Number(canvas.getAttribute('height')),
+    canvasStyleH: (canvas.style && canvas.style.height) || '',
     weeks: [...document.querySelectorAll('#weekSelect option')].map((o) => o.getAttribute('value')),
     week: document.getElementById('weekSelect').value,
     headers: [...document.querySelectorAll('#summaryTable thead th')].map((th) => text(th)),
@@ -712,28 +713,26 @@ if (!early.boot) {
 
   for (const [label, got] of [['week 1', early.one], ['week 2', early.two]]) {
     eq(got.rows.length, demo.teams.length, `${label}: the members are still listed`);
-    ok(`${label}: LUCK refuses rather than printing a confident number`,
-      got.rows.every((r) => r.luck === null && r.luckText === '—'),
+    // SHOWN FROM WEEK 1 (Tim, 2026-09-17), like the Stats page's LUCK — with
+    // the same ± on screen, and an early-season line in the note.
+    ok(`${label}: LUCK is shown from the first week`,
+      got.rows.every((r) => r.luck !== null && /^[+-]?\d/.test(r.luckText)),
       JSON.stringify(got.rows.map((r) => r.luckText)));
-    ok(`${label}: title % refuses`,
-      got.rows.every((r) => r.title === null && r.titleText === '—'),
+    ok(`${label}: with the Stats page's ± beside it`,
+      got.rows.every((r) => /±\d+/.test(r.luckText)),
+      JSON.stringify(got.rows.map((r) => r.luckText)));
+    ok(`${label}: title % is shown`, got.rows.every((r) => r.title !== null),
       JSON.stringify(got.rows.map((r) => r.titleText)));
-    ok(`${label}: loser % refuses`,
-      got.rows.every((r) => r.last === null && r.lastText === '—'),
+    ok(`${label}: loser % is shown`, got.rows.every((r) => r.last !== null),
       JSON.stringify(got.rows.map((r) => r.lastText)));
-    ok(`${label}: and the page says WHY, in words`,
-      /Too early to say anything/.test(got.note) && /at least 3/.test(got.note),
-      got.note.slice(0, 220));
-    // The caveat has to survive a screenshot, which is the whole reason it is
-    // drawn onto the picture rather than only written beside it.
-    ok(`${label}: the refusal is on the IMAGE as well as the page`,
-      /Too early: only \d+ weeks? played/.test(got.cardText), got.cardText.slice(0, 200));
-    ok(`${label}: and the image carries no percentages at all`,
-      !/\d+%/.test(got.cardText), got.cardText);
+    near(got.rows.reduce((a, r) => a + r.title, 0) * 100, 100, 1e-6, `${label}: title % still sums to 100`);
+    ok(`${label}: and the note says it is early`,
+      /Early season/.test(got.note), got.note.slice(0, 220));
+    ok(`${label}: the shareable copy carries the percentages`,
+      /\d+%/.test(got.cardText), got.cardText);
   }
 
-  // A refusal that never lifts is a broken page, not an honest one.
-  ok('at week 4 the numbers come back',
+  ok('at week 4 the numbers are there',
     early.four.rows.every((r) => r.luck !== null && r.title !== null && r.last !== null),
     JSON.stringify(early.four.rows.slice(0, 3)));
   const sum4 = early.four.rows.reduce((a, r) => a + r.title, 0);
@@ -859,26 +858,31 @@ if (!drawn.boot) {
   // Every row's own three numbers reached the canvas, in the page's own
   // formatting — so a row cannot be on the image with its numbers missing.
   for (const r of drawn.page.rows) {
-    ok(`${r.name}: LUCK reached the canvas`, drawn.painted.includes(r.luckText), r.luckText);
+    const luckOnly = r.luckText.replace(/\s*±.*$/, '');   // the ± is on the page, not the image
+    ok(`${r.name}: LUCK reached the canvas`, drawn.painted.includes(luckOnly), r.luckText);
     ok(`${r.name}: title % reached the canvas`, drawn.painted.includes(r.titleText), r.titleText);
     ok(`${r.name}: loser % reached the canvas`, drawn.painted.includes(r.lastText), r.lastText);
   }
 
-  // THE CAVEATS ARE PAINTED, not merely written beside the picture.
-  ok('the definition of "title" is painted onto the image',
-    /Title % = wins the championship round/.test(painted), painted);
-  ok('the definition of "loser" is painted onto the image',
-    /Loser % = LAST IN THE REGULAR SEASON/.test(painted), painted);
-  // THE ASSERTION THAT FOUND A REAL DEFECT. This sentence was one line, it did
-  // not fit the card, and clip() truncated it — so the image said "LAST IN THE
-  // REGULAR SEASON" and silently dropped the half that stops nine people
-  // reading it as the consolation ladder. It is wrapped now, never cut.
-  ok('and so is "not the consolation ladder"', /not the consolation ladder/i.test(painted), painted);
-  ok('no painted line runs past the card, i.e. nothing was quietly cut',
-    !drawn.painted.some((s) => /…$/.test(s) && /consolation|championship|simulations|ESPN/.test(s)),
-    drawn.painted.filter((s) => /…$/.test(s)).join(' | '));
-  ok('the run count is painted onto the image', /100,000 simulations/.test(painted), painted);
-  ok('and so is "not ESPN’s"', /not ESPN/i.test(painted), painted);
+  // NO EXPLANATION LINES ON THE IMAGE (Tim, 2026-09-17). The definitions live
+  // on the page and in the plain-text copy; the picture is the table alone.
+  for (const [label, re] of [
+    ['title definition', /championship round/],
+    ['loser definition', /REGULAR SEASON/],
+    ['consolation ladder', /consolation ladder/i],
+    ['run count', /simulations/],
+    ['not ESPN’s', /not ESPN/i],
+    ['LUCK definition', /LUCK =/],
+  ]) {
+    ok(`the image carries no ${label} line`, !re.test(painted), painted);
+  }
+  // THE IPHONE STRETCH. A pixel height in CSS stays put while max-width
+  // shrinks the width on a phone, so the card was drawn tall and thin.
+  ok('the canvas height is never pinned in CSS, so a phone keeps its shape',
+    !/px$/.test(drawn.page.canvasStyleH), drawn.page.canvasStyleH);
+  ok('the card is exactly title + table tall, with no footnote block',
+    drawn.page.canvasH === (46 + 96 + 34 + drawn.page.rows.length * 38 + 20) * 2,
+    String(drawn.page.canvasH));
   ok('the DEMO stamp is painted', /DEMO DATA — NOT A REAL LEAGUE/.test(painted), painted);
   ok('and it is painted as a band across the top of the card, not buried',
     drawn.bands.some((r) => r.y === 0 && r.w >= 700 && r.h >= 30),

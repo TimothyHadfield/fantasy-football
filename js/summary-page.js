@@ -132,21 +132,16 @@ const SIM_SEED = 20260901;
 // the note says which.
 
 /**
- * Below this many played weeks, nothing on this page means anything.
+ * Below this many played weeks there is nothing to show.
  *
- * This is PROGRESS.md's rule — decide what a statistic returns before it has
- * enough data — and the threshold is the stats page's own MIN_WEEKS. With one
- * or two weeks played, LUCK is a single close game wearing a season's clothes
- * (its SD term is designed to be violent about one-score games, and there is
- * nothing yet to average that violence away), and the simulation is very nearly
- * uniform: ten managers at 9-11% each, which looks like a finding and is
- * actually just ten teams and a coin.
- *
- * So the page refuses, on screen AND on the image. Ten near-identical
- * percentages printed confidently would be worse than no chart at all, because
- * the chart is the half that leaves the site.
+ * It was three, matching the Stats page's old hold-back. Tim asked (2026-09-16)
+ * for LUCK from week 1 on the Stats page, with a ± that narrows, and then
+ * (2026-09-17) for this page to follow — the chart is for the group chat from
+ * the first week. So the page shows its numbers once one week is decided; the
+ * on-screen table carries the same ± as the Stats page, and the note says
+ * early numbers swing. Only a season with nothing decided yet is refused.
  */
-const MIN_WEEKS = 3;
+const MIN_WEEKS = 1;
 
 /**
  * Which week the demo opens on.
@@ -509,6 +504,7 @@ function buildView() {
     weeks: weeksPlayed, teams: L.teams, games: banked, injuries: [],
   });
   const luckById = new Map(stats.teams.map((t) => [t.id, t.luckScore]));
+  const luckMarginById = new Map(stats.teams.map((t) => [t.id, t.margins?.luckScore ?? null]));
 
   return {
     through,
@@ -516,6 +512,7 @@ function buildView() {
     weeksPlayed,
     enough: weeksPlayed >= MIN_WEEKS,
     luckById,
+    luckMarginById,
     teams: L.teams,
   };
 }
@@ -660,6 +657,7 @@ function buildRows(view, sim) {
       // below it there is no number to show, which is a different thing from a
       // number that happens to be zero.
       luck: view.enough ? view.luckById.get(t.id) ?? null : null,
+      luckMargin: view.enough ? view.luckMarginById.get(t.id) ?? null : null,
       title: view.enough && s ? s.title : null,
       last: view.enough && s ? s.last : null,
     };
@@ -704,7 +702,8 @@ function renderTable(view, rows, sim, inputs) {
   tbody.innerHTML = rows.map((r) => `
     <tr>
       <td class="name"${r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : ''}>${esc(r.name)}</td>
-      <td class="num" data-v="${r.luck ?? ''}">${view.enough ? signed(r.luck) : dash}</td>
+      <td class="num" data-v="${r.luck ?? ''}">${view.enough ? signed(r.luck) : dash}${
+        view.enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}</td>
       <td class="num" data-v="${r.title ?? ''}">${pctCell(r.title)}</td>
       <td class="num" data-v="${r.last ?? ''}">${pctCell(r.last)}</td>
     </tr>`).join('');
@@ -714,9 +713,7 @@ function renderTable(view, rows, sim, inputs) {
   const status = $('simStatus');
   if (!view.enough) {
     // The early-season refusal stays on screen; the reasoning is in the note.
-    status.textContent =
-      `Too early to say anything: ${plural(view.weeksPlayed, 'week')} played, and these ` +
-      `numbers need at least ${MIN_WEEKS}.`;
+    status.textContent = 'No week of this season has been decided yet, so there is nothing to show.';
   } else if (state.projPending) {
     status.textContent =
       'Reading ESPN’s projections for the weeks still to play — one request per week, ' +
@@ -756,15 +753,19 @@ function renderNote(view, sim, inputs) {
 
   if (!view.enough) {
     parts.push(
-      `<strong>Too early to say anything.</strong> ${plural(view.weeksPlayed, 'week')} ` +
-      `of this season ${view.weeksPlayed === 1 ? 'has' : 'have'} been played, and these ` +
-      `numbers need at least ${MIN_WEEKS}. LUCK weights close games heavily on purpose, ` +
-      `so one result swings it; and with almost the whole season still to play the ` +
-      `simulation puts every manager within a point or two of every other, which looks ` +
-      `like a finding and is really just ten teams and a coin. The chart says so too, ` +
-      `so a screenshot cannot lose the caveat.`
+      `<strong>Nothing decided yet.</strong> The chart fills in once the first week of the ` +
+      `season has a final result.`
     );
   } else {
+    if (view.weeksPlayed < 3) {
+      parts.push(
+        `<strong>Early season.</strong> Only ${plural(view.weeksPlayed, 'week')} played: LUCK ` +
+        `weights close games heavily on purpose, so one result swings it — the ± beside it ` +
+        `is one standard error, the same margin the Stats page shows, and it narrows every ` +
+        `week. The percentages are close together this early because most of the season is ` +
+        `still to play.`
+      );
+    }
     parts.push(
       `<strong>LUCK</strong> is your spreadsheet’s own column — league average score ` +
       `minus (points to win minus close-game luck) — computed over weeks ` +
@@ -856,12 +857,7 @@ function cardLines(view, sim, inputs) {
   const lines = [];
 
   if (!view.enough) {
-    lines.push(
-      `Too early: only ${plural(view.weeksPlayed, 'week')} played, and these numbers ` +
-      `need ${MIN_WEEKS}.`,
-      `LUCK swings on one close game this early, and every manager’s title chance is ` +
-      `within a point or two of every other’s.`
-    );
+    lines.push(`No week of this season has been decided yet.`);
     return lines;
   }
 
@@ -975,27 +971,28 @@ function renderCard(view, rows, sim, inputs) {
   // after the sizing rather than here.
   const ctx = safeContext(canvas);
 
-  const notes = cardLines(view, sim, inputs);
-  const wrapped = [];
-  if (ctx) {
-    ctx.font = font(15);
-    for (const line of notes) wrapped.push(...wrap(ctx, line, CARD_W - pad * 2));
-  } else {
-    wrapped.push(...notes);
-  }
+  // NO EXPLANATION LINES ON THE IMAGE — Tim's call, 2026-09-17: the picture is
+  // for the group chat and the words below the table were clutter there. The
+  // definitions stay on this page (the note) and in the plain-text copy. The
+  // demo band is not an explanation and stays: a demo chart must never be
+  // mistaken for his real league.
 
   const demoBand = L.isDemo ? 46 : 0;
   const rowH = 38;
   const top = demoBand + 96;                       // title block
   const headH = 34;
   const bodyH = rows.length * rowH;
-  const notesH = 18 + wrapped.length * 24;
-  const H = top + headH + bodyH + notesH + 20;
+  const H = top + headH + bodyH + 20;
 
   canvas.width = CARD_W * CARD_SCALE;
   canvas.height = H * CARD_SCALE;
+  // ONLY THE WIDTH IS SET IN CSS. The height follows from the bitmap's own
+  // aspect ratio. Setting both pinned the height while `max-width: 100%`
+  // shrank the width on a phone — which drew the card squashed sideways and
+  // stretched tall on Tim's iPhone.
   canvas.style.width = `${CARD_W}px`;
-  canvas.style.height = `${H}px`;
+  canvas.style.height = 'auto';
+  canvas.style.aspectRatio = `${CARD_W} / ${H}`;
 
   if (!ctx) {
     // No 2d canvas in this browser. Say so and point at the text version, which
@@ -1093,50 +1090,9 @@ function renderCard(view, rows, sim, inputs) {
     ctx.textAlign = 'left';
   });
 
-  // The footnotes, which are the half of the image that makes it checkable.
-  let ny = y + bodyH + 30;
-  ctx.strokeStyle = INK.line;
-  ctx.beginPath();
-  ctx.moveTo(pad, ny - 16.5);
-  ctx.lineTo(CARD_W - pad, ny - 16.5);
-  ctx.stroke();
-
-  ctx.font = font(15);
-  ctx.fillStyle = INK.dim;
-  ctx.textAlign = 'left';
-  for (const line of wrapped) {
-    ctx.fillText(line, pad, ny);
-    ny += 24;
-  }
 
   state.cardDrawn = true;
   renderSendControls(view, false);
-}
-
-/**
- * Break a sentence onto as many lines as it needs.
- *
- * The footnotes are WRAPPED and never truncated, which is the opposite of what
- * a name gets. A member's name cut short is obviously cut short; a definition
- * cut short reads as a complete sentence that happens to say something else —
- * and "Loser % = LAST IN THE REGULAR SEASON" losing its "not the consolation
- * ladder" is exactly the misreading this page exists to prevent. The suite
- * caught it doing precisely that.
- */
-function wrap(ctx, text, maxWidth) {
-  const words = String(text).split(/\s+/).filter(Boolean);
-  if (!words.length) return [''];
-  if (typeof ctx.measureText !== 'function') return [String(text)];
-
-  const lines = [];
-  let line = words[0];
-  for (let i = 1; i < words.length; i++) {
-    const next = `${line} ${words[i]}`;
-    if (ctx.measureText(next).width <= maxWidth) line = next;
-    else { lines.push(line); line = words[i]; }
-  }
-  lines.push(line);
-  return lines;
 }
 
 /** Truncate to fit, with a real ellipsis, measured rather than guessed at. */

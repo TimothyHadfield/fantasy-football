@@ -550,8 +550,11 @@ manifest to take effect.
 
 **Decisions left with him from that pass:** readings from the synced copy
 (currently never); "Avg" counts a bye as 0 on Players/Analysis but skips it on
-the Trade page — pick one; Summary still blank before week 3 while Stats shows
-luck from week 1; HANDOFF/PROGRESS are served publicly by Pages (emails,
+the Trade page — pick one; (Summary now shows LUCK, title % and loser % from
+week 1 — Tim, 2026-09-17 — with the Stats page's ± on screen; its shared
+IMAGE carries no explanation lines any more, only the table and the demo
+band, and its canvas height is no longer pinned in CSS, which had stretched it
+tall on the iPhone); HANDOFF/PROGRESS are served publicly by Pages (emails,
 league id, Firebase uid — rules still protect the data). **December:** once
 week 14 is decided the simulation says "nothing left to simulate", so there
 are no title odds during the bracket. **Not done:** Trade finder in a Web
