@@ -125,6 +125,10 @@ export function snapshotFrom({
     isDemo: Boolean(data.isDemo),
     leagueName: data.leagueName,
     teams: data.teams.map((t) => ({ id: t.id, name: t.name })),
+    // The league's own bracket settings, so a replayed week seeds the field
+    // size the league declared rather than falling back to six. Null when ESPN
+    // said nothing — and in every reading taken before this was added.
+    playoffs: data.playoffs || null,
     // Every field gameState(), winnerOf() and projectedPoints() read, and no
     // others. `played` matters as much as the scores: it is what separates a
     // finished game from one still being played.
@@ -261,6 +265,7 @@ export function hydrate(snap) {
   const data = {
     leagueName: snap.leagueName,
     teams: snap.teams.map((t) => ({ id: t.id, name: t.name })),
+    playoffs: snap.playoffs || null,
     weeks: [...byWeek.keys()].sort((a, b) => a - b),
     byWeek,
     games,
@@ -428,6 +433,49 @@ export async function fetchRemote(leagueId, season, { fetchImpl } = {}) {
   // browser — which is the difference between "export sometime" and "export
   // now", and the only thing about this feature the reader has to act on.
   return { ...res, found: mine.length, weeks: mine.map((s) => s.week).sort((a, b) => a - b) };
+}
+
+// ------------------------------------------------------- the last attempt
+//
+// Whether this week's reading was taken is a fact the Schedule page's panel
+// has to be able to state, with the real reason when it was not — and the
+// attempt may have been made by the connection bar on some other page. So the
+// outcome of the most recent attempt is kept, one small key per league and
+// season. Deliberately NOT under `ff.snap.`: `list()` and `sizeOf()` scan that
+// prefix, and a note about an attempt is not a reading.
+
+const ATTEMPT_PREFIX = 'ff.snapnote';
+
+export function attemptKey(leagueId, season) {
+  return `${ATTEMPT_PREFIX}.${leagueId}.${season}`;
+}
+
+/**
+ * Record how the latest attempt to take a reading went.
+ *
+ * @param {Object} rec {at, ok, week, code, text, source}
+ */
+export function saveAttempt(leagueId, season, rec) {
+  const s = store();
+  if (!s || !rec) return false;
+  try {
+    s.setItem(attemptKey(leagueId, season), JSON.stringify(rec));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The latest attempt's outcome, or null. */
+export function lastAttempt(leagueId, season) {
+  const s = store();
+  if (!s) return null;
+  try {
+    const rec = JSON.parse(s.getItem(attemptKey(leagueId, season)) || 'null');
+    return rec && typeof rec === 'object' ? rec : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Roughly how much room the archive is taking, for the panel note. */

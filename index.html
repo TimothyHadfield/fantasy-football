@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <style>
 /* Page-local styles. Everything else comes from css/app.css. */
@@ -161,7 +164,7 @@ a.pref:focus-visible {
   <div class="wrap wide">
     <span class="brand">Fantasy Football</span>
     <nav>
-      <a href="index.html" class="active">Home</a>
+      <a href="index.html" class="active" aria-current="page">Home</a>
       <a href="stats.html">Stats</a>
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
@@ -202,6 +205,10 @@ a.pref:focus-visible {
     <h2 id="matchupsTitle">This week</h2>
     <div id="matchups"></div>
     <p class="panel-note" id="matchupsNote"></p>
+    <details class="explain" hidden>
+      <summary>How this works</summary>
+      <p class="panel-note" id="matchupsExplain"></p>
+    </details>
   </section>
 
   <div class="grid-2">
@@ -237,6 +244,7 @@ a.pref:focus-visible {
       <h2>Left on the bench</h2>
       <p class="lede">Points each team left on its bench, and its costliest lineup call.</p>
       <div id="bench"></div>
+      <p class="panel-note" id="benchKey" hidden></p>
       <details class="explain">
         <summary>How this works</summary>
         <p class="panel-note" id="benchNote"></p>

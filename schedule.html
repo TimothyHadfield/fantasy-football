@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Schedule &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <style>
 /* Page-local styles. Everything else comes from css/app.css. */
@@ -240,6 +243,28 @@ section.panel h2.h2-inline {
 .snap-state .pos strong { color: var(--accent); }
 .snap-state p { margin: 0 0 4px; }
 
+/* Was this week recorded. One line, coloured by the answer — the red one is
+   the only thing on the page with a deadline. It is the summary of a fold that
+   is always open on a wide screen, so there it is not a control at all. */
+.snap-line {
+  display: block;
+  list-style: none;
+  margin: -4px 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.snap-line::-webkit-details-marker { display: none; }
+.snap-line.pos { color: var(--accent); }
+.snap-line.neg { color: var(--err); }
+.snap-line.dim { color: var(--dim); font-weight: 500; }
+@media (min-width: 761px) {
+  .tm-fold > summary { pointer-events: none; }
+}
+
+/* The jump row is for a phone; a wide screen shows those panels soon enough. */
+.jump { display: none; }
+
 /* Long explanations read as short paragraphs once opened. */
 details.explain .panel-note p { margin: 0 0 9px; }
 details.explain .panel-note p:last-child { margin-bottom: 0; }
@@ -275,6 +300,49 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
   /* The team under a simulation percentage is already an ellipsis away from
      fitting; at this width the cap was cutting names that would now fit. */
   #simStats .stat .who { max-width: 44vw; }
+
+  /* Three panels a thumb would otherwise scroll several wide tables to reach. */
+  .jump {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: -4px 0 14px;
+  }
+  .jump a {
+    flex: 1 1 0;
+    text-align: center;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-3);
+    background: var(--panel-2);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  /* The time machine folds down to its status line: tap to open. The chevron
+     is the same one the "How this works" toggles use. */
+  .tm-fold > summary {
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+  .tm-fold > summary::before {
+    content: '';
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    position: relative;
+    top: -1px;
+  }
+  .tm-fold[open] > summary::before { transform: rotate(45deg); }
+  .tm-fold[open] > summary { margin-bottom: 12px; }
 }
 </style>
 </head>
@@ -287,7 +355,7 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
       <a href="index.html">Home</a>
       <a href="stats.html">Stats</a>
       <a href="analysis.html">Analysis</a>
-      <a href="schedule.html" class="active">Schedule</a>
+      <a href="schedule.html" class="active" aria-current="page">Schedule</a>
       <a href="waivers.html">Players</a>
       <a href="trade.html">Trade</a>
       <a href="draft.html">Draft</a>
@@ -306,6 +374,14 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
   <h1>Schedule <span id="modeBadge" class="badge demo">Demo</span></h1>
   <p class="sub" id="pageSub">Showing a generated sample season so you can see the layout with real-looking results in it.</p>
 
+  <!-- On a phone the three panels people come here for sit below several
+       screens of wide tables. Hidden on a wide screen, where they do not. -->
+  <nav class="jump" aria-label="Jump to a panel">
+    <a href="#forecastPanel">My season</a>
+    <a href="#simPanel">Simulation</a>
+    <a href="#standingsPanel">Standings</a>
+  </nav>
+
   <section class="panel">
     <h2>Data source</h2>
     <div class="segmented" id="sourceToggle">
@@ -321,6 +397,12 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
        together rather than one panel disagreeing with the four above it. -->
   <section class="panel" id="timePanel">
     <h2>Time machine</h2>
+    <!-- The status line is the summary of a fold. On a wide screen the fold is
+         always open and the line is just a line; on a phone the panel
+         collapses to it, since whether this week was recorded is the one thing
+         to read here. -->
+    <details class="tm-fold" id="timeFold" open>
+    <summary id="snapLine" class="snap-line dim">Checking whether this week was recorded…</summary>
     <p class="lede">See the whole page as it stood in an earlier week, from readings saved at the time.</p>
     <div class="toolbar">
       <div class="select-md">
@@ -343,9 +425,10 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
       <summary>How the archive works</summary>
       <div id="snapStatus" class="panel-note"></div>
     </details>
+    </details>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="standingsPanel">
     <h2>Standings</h2>
     <p class="lede">The league table so far. &ldquo;Rest of season&rdquo; ranks each team&rsquo;s remaining schedule: 1 is the hardest.</p>
     <div class="table-scroll"><table id="standingsTable">
@@ -442,7 +525,7 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
        (On live data the forecast simply runs from the next unplayed game. In
        the demo, whose season is complete, the week picker chooses the point in
        time the forecast is made from.) -->
-  <section class="panel">
+  <section class="panel" id="forecastPanel">
     <div class="row spread mb-12">
       <h2 id="forecastTitle" class="h2-inline">Season forecast</h2>
       <div class="form-select select-wide">
@@ -475,7 +558,7 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
        from your own results. It follows the "Forecast for" picker above rather
        than carrying a second one, so the chart here and the table there are
        always about the same team. -->
-  <section class="panel">
+  <section class="panel" id="simPanel">
     <div class="row spread mb-12">
       <h2 id="simTitle" class="h2-inline">Simulate season</h2>
       <!-- The label is on the page rather than in a `title` on the container.

@@ -78,19 +78,38 @@ export function expectedAvg(playerId, weeks) {
   return real.length ? real.reduce((a, b) => a + b, 0) / real.length : null;
 }
 
+// ESPN's pro team ids for the abbreviations above. Roster players carry both,
+// and the bye weeks are keyed by the id.
+const PRO_ID = {
+  BUF: 2, CIN: 4, DAL: 6, DEN: 7, GB: 9, KC: 12, MIA: 15, NYJ: 20,
+  PHI: 21, SEA: 26, TB: 27, TEN: 10, SF: 25, LAR: 14,
+};
+
+// CMP_BYES: the bye-week map `fetchByeWeeks()` answers with (JSON), or '' for
+// "unknown", which is every scenario that predates the rule. CMP_OUT: Wynn
+// Larch is listed OUT, so his week-5 zero is a ruled-out man's unless week 5
+// really is his team's bye.
+const BYES = process.env.CMP_BYES || '';
+const OUT = process.env.CMP_OUT === '1';
+
+export async function fetchByeWeeks() {
+  return BYES ? JSON.parse(BYES) : {};
+}
+
 function entry(p, week, teamId) {
   return {
     playerId: p.playerId,
     name: p.name,
     position: p.position,
     proTeam: p.proTeam,
+    proTeamId: PRO_ID[p.proTeam] ?? null,
     lineupSlotId: 20,
     slot: 'BE',
     started: false,
     projected: p.proj(week),
     actual: null,
     seasonProjected: 120,
-    injuryStatus: 'ACTIVE',
+    injuryStatus: OUT && p.playerId === 7025 ? 'OUT' : 'ACTIVE',
     percentOwned: 50,
     _teamId: teamId,
   };

@@ -86,6 +86,23 @@ const esc = (s) =>
  *  and never shown, so a team that tied then won read as "1–0". */
 const record = (t) => `${t.wins}–${t.losses}${t.ties ? `–${t.ties}` : ''}`;
 
+/**
+ * Win percentage the way ESPN ranks a standings table: a tie is half a win.
+ * This league has no matchup tie-breaker, so a tie stands and has to count.
+ * Null before a game is played.
+ */
+const winPct = (t) => {
+  const games = t.wins + t.losses + t.ties;
+  return games ? (t.wins + t.ties / 2) / games : null;
+};
+
+/** ESPN's order: win percentage, then points for. */
+const byRecord = (a, b) => (winPct(b) ?? 0) - (winPct(a) ?? 0) || b.pointsFor - a.pointsFor;
+
+/** One sortable number for the same order. A step in win percentage is at
+ *  least 1/30 of a game, which times 1e6 dwarfs any season's points for. */
+const recordKey = (t) => (winPct(t) ?? 0) * 1e6 + t.pointsFor;
+
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** A long note as short paragraphs. Empty entries are dropped. */
@@ -292,7 +309,7 @@ function accuracyTile(bucket) {
 function renderGlance() {
   const s = state.stats;
   const weeks = weekCount();
-  const top = [...s.teams].sort((a, b) => b.wins - a.wins || b.pointsFor - a.pointsFor)[0];
+  const top = [...s.teams].sort(byRecord)[0];
   const box = s.leagueActualBox;   // null before there are five scores in the league
   const overall = s.predictionAccuracy.find((a) => a.threshold === 0);
 
@@ -371,7 +388,7 @@ function renderMainTable() {
     .map((t) => `
       <tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>
-        <td data-v="${t.wins + t.pointsFor / 100000}">${record(t)}</td>
+        <td data-v="${recordKey(t)}">${record(t)}</td>
         <td${heatAvg(t.avgActual)}>${num(t.avgActual)}</td>
         <td${heatProj(t.avgProjected)}>${num(t.avgProjected)}</td>
         <td${none ? '' : ` data-v="${t.totalActual}"`}>${none ? dash : int(t.totalActual)}</td>

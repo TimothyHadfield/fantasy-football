@@ -9,7 +9,12 @@ export const calls = { schedule: 0, week: [], weeks: [] };
 export const WEEKS = 13;
 export const NTEAMS = 10;
 export const SIZE = 15;          // 9 starters + 6 bench
-export const PLAYED_THROUGH = 8; // so the page opens on week 8
+export const PLAYED_THROUGH = 8; // actuals are recorded through week 8
+// The SCHEDULE has a result through week 7 only, so week 8 is the first week
+// not yet played and the page opens on it (it opens on the COMING week since
+// 2026-09-16). Kept one behind the actuals on purpose: the card's Act row reads
+// the data, never the schedule, and this is the fixture that keeps it honest.
+export const SCHEDULE_PLAYED_THROUGH = 7;
 export const SIGNED_WEEK = 5;    // the last bench player joins here
 
 const FAIL = new Set(
@@ -111,7 +116,7 @@ export async function fetchSchedule() {
   for (let w = 1; w <= WEEKS; w++) {
     const games = [];
     for (let t = 1; t <= NTEAMS; t += 2) {
-      const played = w <= PLAYED_THROUGH;
+      const played = w <= SCHEDULE_PLAYED_THROUGH;
       games.push({
         week: w,
         homeId: t, homeName: `Team ${t}`, homeScore: played ? 100 + t : null,

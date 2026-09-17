@@ -833,6 +833,34 @@ const SCENARIOS = {
   },
 };
 
+/**
+ * The bye rule on the Trade page (2026-09-16): a 0.00 is a bye only in his NFL
+ * team's bye week. Same stub league, with TR_BYES saying where team 1's bye
+ * really is; reads `Bills D/ST` (id 112, 0.00 in week 8) wherever he is drawn.
+ */
+SCENARIOS.liveByes = async function liveByes() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  document.getElementById('loadWeeks').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(6000);
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
+  const idx = readTrades(document).findIndex((t) => t.partner === 'Cy');
+  if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(1500);
+  const men = [...document.querySelectorAll('.man')].map(readMan);
+  const bills = men.find((m) => m.id === 112) || null;
+  const probe = [...document.querySelectorAll('.man')].find((m) => {
+    const a = m.querySelector('a.pref');
+    return a && /player=112$/.test(a.getAttribute('href'));
+  });
+  if (probe) probe.setAttribute('data-probe', '1');
+  const card = probe ? openCard(document, '.man[data-probe="1"]') : null;
+  return { errors, bills, card };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);
@@ -850,10 +878,10 @@ if (process.argv[2]) {
 }
 
 /** `stub: true` redirects js/season.js to tr-stub-season.mjs in the child. */
-function run(name, { stub = false } = {}) {
+function run(name, { stub = false, env = {} } = {}) {
   const args = stub ? ['--import', './tr-register.mjs', self, name] : [self, name];
   const res = spawnSync(process.execPath, args, {
-    encoding: 'utf8', cwd: path.dirname(self),
+    encoding: 'utf8', cwd: path.dirname(self), env: { ...process.env, ...env },
   });
   const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
   if (!line) throw new Error(`no result for ${name}\n${res.stdout}\n${res.stderr}`);
@@ -2029,6 +2057,34 @@ if (!live.boot) {
     ok('and it is not their sum, which here would be 19998',
       honest[0].myGain !== 19998);
   }
+}
+
+// ---- the bye rule: a 0.00 is a bye only in his team's bye week -----------
+//
+// Bills D/ST: 11 a week over weeks 5–14, 0.00 in week 8. With team 1's bye
+// known to BE week 8, that zero leaves the divisor (99 / 9 = 11.0); with it
+// known to be week 9, the week-8 zero is a real zero and counts (99 / 10 = 9.9)
+// — which is what an OUT man's 0.00 does now. Both by hand, not from the code.
+{
+  const span = [];
+  for (let w = 5; w <= 14; w++) span.push(w);
+  const total = span.reduce((a, w) => a + (w === 8 ? 0 : 11), 0);
+  const byeRight = run('liveByes', { stub: true, env: { TR_BYES: '{"1":8}' } });
+  const byeElsewhere = run('liveByes', { stub: true, env: { TR_BYES: '{"1":9}' } });
+  ok('both bye runs boot', !byeRight.boot && !byeElsewhere.boot, byeRight.boot || byeElsewhere.boot);
+  ok('and draw Bills D/ST', !!(byeRight.bills && byeElsewhere.bills),
+    JSON.stringify([byeRight.bills, byeElsewhere.bills]));
+  if (byeRight.bills && byeElsewhere.bills) {
+    eq(byeRight.bills.val, `${(total / (span.length - 1)).toFixed(1)}/wk`,
+      'week 8 IS his bye: it leaves the per-week divisor');
+    eq(byeElsewhere.bills.val, `${(total / span.length).toFixed(1)}/wk`,
+      'WEEK 8 IS NOT HIS BYE: the zero is a real zero and counts in his per-week figure');
+  }
+  const at8 = (card) => (card ? card.projs[card.weeks.indexOf('8')] : null);
+  ok('his card reads Bye in week 8 when that is his bye', at8(byeRight.card) === 'Bye',
+    JSON.stringify(byeRight.card));
+  ok('and 0.0 when it is not — never Bye', at8(byeElsewhere.card) === '0.0' &&
+    !byeElsewhere.card.projs.includes('Bye'), JSON.stringify(byeElsewhere.card));
 }
 
 // ---------------------------------------------------------------------------

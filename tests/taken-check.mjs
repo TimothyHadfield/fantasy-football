@@ -656,10 +656,25 @@ async function check(scenario, boot) {
     [...d.querySelectorAll('#waiverTable tbody td.hot')].length > 0, 'no green on the wire either');
 
   // ---- a bye is not a blank -------------------------------------------------
+  // Since 2026-09-16 a zero is a bye only in the bye week. The stub league's
+  // byes are unknown, so its zeros keep the old reading; the SAMPLE squads
+  // mean "ruled out" by a zero and never a bye, so demo draws "0.0 OUT".
   const byeCells = rows.flatMap((r) => r.week).filter((td) => /\bbye\b/.test(td.cls));
-  c.ok('a bye renders as Bye carrying the zero ESPN returned',
-    byeCells.length > 0 && byeCells.every((td) => td.text === 'Bye' && td.v === '0'),
-    JSON.stringify(byeCells.slice(0, 2)));
+  const zeroCells = rows.flatMap((r) => r.week).filter((td) => td.v === '0');
+  if (scenario === 'demo') {
+    c.ok('a demo zero is a ruled-out man, drawn 0.0 with the word, never Bye',
+      zeroCells.length > 0 && byeCells.length === 0 &&
+      zeroCells.every((td) => /^0\.0 (OUT|IR|SUSP)$/.test(td.text) && /\bzero-out\b/.test(td.cls)),
+      JSON.stringify(zeroCells.slice(0, 2)));
+    c.ok('and the key names that mark, and no Bye',
+      !d.querySelector('#takenLegend [data-when="td.zero-out"]').hasAttribute('hidden') &&
+      d.querySelector('#takenLegend [data-when="td.bye"]').hasAttribute('hidden'),
+      d.getElementById('takenLegend').outerHTML.slice(0, 300));
+  } else {
+    c.ok('a bye renders as Bye carrying the zero ESPN returned',
+      byeCells.length > 0 && byeCells.every((td) => td.text === 'Bye' && td.v === '0'),
+      JSON.stringify(byeCells.slice(0, 2)));
+  }
 
   // ---- the note -------------------------------------------------------------
   c.ok('the note says what Avg is and that it is ours',
@@ -838,8 +853,9 @@ async function check(scenario, boot) {
       JSON.stringify(w.rosterBefore));
     c.ok('the cost line says six requests for three weeks',
       /3 weeks = 6 requests to ESPN/.test(txt($('spanCost'))), txt($('spanCost')));
+    // The sentence was shortened for the phone on 2026-09-16.
     c.ok('and says what the second request is for',
-      /the wire and every squad in the league for each one/.test(txt($('spanCost'))), txt($('spanCost')));
+      /wire \+ rosters per week/.test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('and still says there is no bulk form',
       /there is no bulk form/.test(txt($('spanCost'))), txt($('spanCost')));
 

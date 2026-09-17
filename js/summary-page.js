@@ -30,9 +30,9 @@
 import { generateDemoLeague } from './demo.js';
 import { computeLeagueStats } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
-import { projectionsFromWeekTeams } from './projection.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
+import * as capture from './capture.js';
 import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -99,6 +99,11 @@ export function adaptSimTeam(row) {
 /**
  * Tim asked for 100,000 by name, so it is not a setting.
  *
+ * The Schedule page runs the SAME inputs through the same model at 10,000 by
+ * default (see js/capture.js's `simulationInputs`, which both pages call), so
+ * the two agree to within its counting noise of about a point; this page's
+ * run count is ten times larger and good to about ±0.3. The note says so.
+ *
  * Measured against this page's own demo season (10 teams, 30 regular-season
  * games left after week 8, plus the three-round bracket on top of each run) —
  * see the report in the session notes. It is well over a second of straight-line
@@ -118,15 +123,13 @@ const SIM_RUNS = 100000;
  */
 const SIM_SEED = 20260901;
 
-/**
- * How many teams make the playoffs, taken from forecast.js's own constant
- * rather than written down a second time (Tim's ESPN settings: 6).
- *
- * The `?? 6` is not defensive clutter: forecast.js is the file this page has a
- * contract with, and a fallback here means a rename there degrades to the right
- * answer for THIS league rather than to `NaN` teams making the playoffs.
- */
-const PLAYOFF_TEAMS = forecast.DEFAULT_PLAYOFF_TEAMS ?? 6;
+// HOW MANY TEAMS MAKE THE PLAYOFFS is read from the league, exactly as the
+// Schedule page reads it — `capture.simulationInputs` asks
+// `capture.playoffTeams` for it. This page used to use forecast.js's fallback
+// of six, always, so a league declaring a four-team bracket got two rounds
+// there and three here, and two title chances for one season. Six is still the
+// answer for demo and for a league whose settings did not come through, and
+// the note says which.
 
 /**
  * Below this many played weeks, nothing on this page means anything.
@@ -239,20 +242,38 @@ const commas = (n) => Number(n).toLocaleString('en-US');
 //   teams    [{id, name, teamName}]   `name` is the PERSON — see espn.js
 //   played   [{week, homeId, awayId, homeActual, awayActual,
 //              homeProjected, awayProjected}]   completed games only
-//   fixtures [{week, homeId, awayId, homeProjected, awayProjected}]  every game
 //   weeks    sorted week numbers the fixture list covers
+//   data     the schedule in the SHAPE THE SCHEDULE PAGE USES (see
+//            capture.normalizeSchedule) — what the simulation is built from,
+//            through the same function the Schedule page calls
+//   started  week -> teamId -> the started lineup's projection, for the
+//            weeks already played: what the scoring spread is measured from
+//   lastDecided  the last week with a final result in it
 
-function normalise({ season, name, isDemo, teams, played, fixtures }) {
-  const weeks = [...new Set(fixtures.map((f) => f.week))].sort((a, b) => a - b);
+function normalise({ season, name, isDemo, teams, played, data, started }) {
   return {
-    season, name, isDemo, teams, played, fixtures, weeks,
+    season, name, isDemo, teams, played, data, started,
+    weeks: data.weeks.slice(),
     // THE SCHEDULE IS THE SOURCE OF TRUTH for where the regular season ends.
-    // ESPN's matchup feed carries exactly `matchupPeriodCount` weeks and nothing
-    // after it, so the last week on the fixture list IS the last regular-season
-    // week — in any league, without reading a setting. The demo's thirteen get
-    // the same treatment, which is the point of deriving it.
-    lastRegularWeek: weeks.length ? weeks[weeks.length - 1] : 0,
+    // js/season.js hands over regular-season games only (bracket games are
+    // set aside as `playoffGames`), so the last week on it IS the last
+    // regular-season week — in any league, without reading a setting. Same
+    // rule as the Schedule page.
+    lastRegularWeek: capture.regularSeasonLastWeek(data),
+    lastDecided: capture.decidedWeeks(data).slice(-1)[0] || 0,
   };
+}
+
+/**
+ * Is this game still to be played out, as of the week the picker is on?
+ *
+ * After the cut-off, or not yet decided. At the default cut-off — the last
+ * week with a result — that is exactly the Schedule page's live rule ("not
+ * final"), which is what lets the two pages hand the simulation the same
+ * season. Moving the picker earlier puts decided weeks back into play.
+ */
+function isRemaining(g) {
+  return g.week > state.throughWeek || capture.gameState(g) !== 'final';
 }
 
 async function loadDemo() {
@@ -260,16 +281,27 @@ async function loadDemo() {
   const d = generateDemoLeague();
   // The demo carries a projection on every game, played or not, so it needs no
   // roster endpoint: a "remaining" demo game is scored off the number already
-  // sitting on it. That is the same thing the schedule page's projectedPoints()
-  // does with demo data.
+  // sitting on it, and a played one is calibrated against it. That is what the
+  // Schedule page does with demo data too, through the same functions.
+  const nameById = new Map(d.teams.map((t) => [t.id, t.name]));
+  const data = capture.normalizeSchedule({
+    leagueName: d.name,
+    teams: d.teams.map((t) => ({ id: t.id, name: t.name })),
+    games: d.games.map((g) => ({
+      week: g.week,
+      homeId: g.homeId, homeName: nameById.get(g.homeId), homeScore: g.homeActual,
+      homeProjected: g.homeProjected,
+      awayId: g.awayId, awayName: nameById.get(g.awayId), awayScore: g.awayActual,
+      awayProjected: g.awayProjected,
+      played: true,   // the demo season is complete; the picker decides "as of"
+    })),
+  }, { isDemo: true });
   state.league = normalise({
     season: d.season, name: d.name, isDemo: true,
     teams: d.teams.map((t) => ({ id: t.id, name: t.name, teamName: t.teamName || null })),
     played: d.games,
-    fixtures: d.games.map((g) => ({
-      week: g.week, homeId: g.homeId, awayId: g.awayId,
-      homeProjected: g.homeProjected, awayProjected: g.awayProjected,
-    })),
+    data,
+    started: null,
   });
   state.proj = null;
   state.projNote =
@@ -308,18 +340,33 @@ async function loadLive() {
     });
     const schedule = await fetchSchedule();
 
+    // The started lineups' projections for the played weeks, which
+    // fetchSeasonData has just read for LUCK. The Schedule page reads the same
+    // numbers off the same weeks' rosters; both measure the scoring spread from
+    // them, so both simulate with the same noise.
+    const started = new Map();
+    for (const g of data.games) {
+      if (!started.has(g.week)) started.set(g.week, new Map());
+      const row = started.get(g.week);
+      if (g.homeProjected > 0) row.set(g.homeId, g.homeProjected);
+      if (g.awayProjected > 0) row.set(g.awayId, g.awayProjected);
+    }
+
     state.league = normalise({
       season: data.season, name: data.name, isDemo: false,
       teams: data.teams,
       played: data.games,
-      fixtures: schedule.games.map((g) => ({
-        week: g.week, homeId: g.homeId, awayId: g.awayId,
-        homeProjected: null, awayProjected: null,
-      })),
+      data: capture.normalizeSchedule(schedule, { isDemo: false }),
+      started,
     });
 
-    const lastPlayed = data.games.reduce((a, g) => Math.max(a, g.week), 0);
+    // The last week with a DECIDED result on the schedule — the Schedule page's
+    // idea of "played" — rather than the last week anybody has scored in, which
+    // mid-week is a game still being played.
+    const lastPlayed = state.league.lastDecided;
     setThroughWeek(clampWeek(lastPlayed));
+    // LUCK counts only what is decided.
+    state.league.played = data.games.filter((g) => g.week <= lastPlayed);
 
     if (!data.projectionsAvailable && data.games.length) {
       setStatus(
@@ -347,12 +394,13 @@ async function loadLive() {
 }
 
 /**
- * ESPN's own per-week projection for every week still to play, plus the three
- * playoff weeks.
+ * ESPN's own per-week projection for every week still to play, plus the
+ * playoff weeks (as many as the league's bracket has rounds).
  *
- * The bracket weeks are NOT on the schedule — ESPN's matchup feed stops at the
- * last regular-season week and only fills the bracket in once it exists — so
- * they are derived from where the regular season ends and asked for by number.
+ * The bracket weeks are NOT on the regular-season schedule this page reads —
+ * js/season.js sets bracket games aside, and ESPN only creates them once the
+ * bracket is seeded — so they are derived from where the regular season ends
+ * and asked for by number.
  * ESPN really does publish a per-player projection for them (probed 2026-09-16
  * on public leagues 1241838 and 899513), which is what lets a playoff round be
  * scored off the same numbers as week 4 rather than off a season average.
@@ -367,8 +415,10 @@ async function refreshProjections() {
   const token = ++state.projToken;
   const stale = () => token !== state.projToken;
 
-  const ahead = L.weeks.filter((w) => w > state.throughWeek);
-  const asking = ahead.concat(playoffWeeks());
+  // Every week with a game still to play out, then the bracket weeks — at the
+  // default cut-off, exactly the weeks the Schedule page projects.
+  const ahead = L.weeks.filter((w) => (L.data.byWeek.get(w) || []).some(isRemaining));
+  const asking = ahead.concat(ahead.length ? playoffWeeks() : []);
   if (!asking.length) return;
 
   // Until these land, EVERY remaining game has a null projection, so running the
@@ -393,7 +443,9 @@ async function refreshProjections() {
   if (stale()) return;
   state.projPending = false;
 
-  const built = projectionsFromWeekTeams(weekTeams);
+  // Through the Schedule page's own builder, in the order asked for: the same
+  // best-lineup totals, and the same refusal of a projection with a hole in it.
+  const built = capture.buildProjection(L.data, capture.pickWeeks(weekTeams, asking));
   state.proj = built ? built.proj : null;
   state.projNote = built
     ? `Weeks still to play are scored from ESPN’s own per-player projection for ` +
@@ -408,7 +460,7 @@ async function refreshProjections() {
   }
   setStatus(built
     ? `Loaded ${esc(L.name)} — ESPN’s own projections read for ` +
-      `${plural(built.weeks.length, 'week')} ahead, including the bracket weeks.`
+      `${plural(built.weeksCovered.length, 'week')} ahead, including the bracket weeks.`
     : `Loaded ${esc(L.name)}, but ESPN returned no projection for any week still to ` +
       `play, so the simulation has nothing to play them out with.`, !built);
   render();
@@ -427,14 +479,9 @@ function setThroughWeek(w) {
   state.throughWeek = w;
 }
 
-/** The scoring weeks the bracket falls in, one per round, earliest first. */
+/** The scoring weeks the bracket falls in, one per round — the shared rule. */
 function playoffWeeks() {
-  const L = state.league;
-  if (!L || !L.lastRegularWeek) return [];
-  const rounds = typeof forecast.playoffRoundCount === 'function'
-    ? forecast.playoffRoundCount(PLAYOFF_TEAMS)
-    : 3;
-  return Array.from({ length: rounds }, (_, i) => L.lastRegularWeek + 1 + i);
+  return state.league ? capture.playoffWeeks(state.league.data) : [];
 }
 
 // --------------------------------------------------------------------- the view
@@ -487,64 +534,25 @@ function simInputs(view) {
   const L = state.league;
   if (!L || !L.teams.length) return null;
 
-  const teamIds = L.teams.map((t) => t.id);
-  const known = new Set(teamIds);
-  const banked = new Map(teamIds.map((id) => [id, { wins: 0, pointsFor: 0 }]));
-
-  for (const g of view.banked) {
-    if (!known.has(g.homeId) || !known.has(g.awayId)) continue;
-    const h = banked.get(g.homeId);
-    const a = banked.get(g.awayId);
-    h.pointsFor += g.homeActual;
-    a.pointsFor += g.awayActual;
-    // The league's matchup tie breaker is "None", so a tie stands and goes down
-    // as half a win each. Rare, and defined rather than merely improbable.
-    if (g.homeActual > g.awayActual) h.wins += 1;
-    else if (g.awayActual > g.homeActual) a.wins += 1;
-    else { h.wins += 0.5; a.wins += 0.5; }
-  }
-
-  const games = [];
-  let playable = 0;
-  for (const f of L.fixtures) {
-    if (f.week <= view.through) continue;
-    if (f.homeId == null || f.awayId == null) continue;   // a bye: nothing to play out
-    if (!known.has(f.homeId) || !known.has(f.awayId)) continue;
-    const homeProj = projectedFor(f, 'home');
-    const awayProj = projectedFor(f, 'away');
-    if (homeProj !== null && awayProj !== null) playable++;
-    games.push({ homeId: f.homeId, awayId: f.awayId, homeProj, awayProj });
-  }
-
   // Only banked games feed the spread: a forecast may not learn from the games
-  // it is being asked to forecast. Early in a real season there is nothing to
-  // learn from at all, and calibrateSigma says so rather than pretending.
-  const spread = forecast.calibrateSigma(view.banked);
+  // it is being asked to forecast. Each banked score is set against its started
+  // lineup's projection — the Schedule page's residuals exactly — and below
+  // twelve of them calibrateSigma says it assumed rather than pretending.
+  const spread = capture.leagueSpread(L.data, (g) => !isRemaining(g), L.started);
 
-  const weeks = playoffWeeks();
-  const playoff = { teams: PLAYOFF_TEAMS, weeks, proj: state.proj };
-  const playoffProjKey = weeks.map((w) => {
-    const forWeek = state.proj?.get(w);
-    return forWeek ? teamIds.map((id) => forWeek.get(id) ?? null) : null;
+  // THE SCHEDULE PAGE'S OWN BUILDER. Title % here and there is one question
+  // about one league, so it is asked with one banked table, one set of
+  // remaining games and projections, and one bracket — read from the league.
+  const built = capture.simulationInputs({
+    data: L.data,
+    isRemaining,
+    proj: state.proj,
+    sigma: spread.sigma,
   });
+  if (!built) return null;
 
-  const key = JSON.stringify([
-    SIM_RUNS, view.through, Math.round(spread.sigma * 1000), teamIds,
-    [...banked].map(([id, b]) => [id, b.wins, Math.round(b.pointsFor * 10)]),
-    games.map((g) => [g.homeId, g.awayId, g.homeProj, g.awayProj]),
-    PLAYOFF_TEAMS, weeks, playoffProjKey,
-  ]);
-
-  return { teamIds, banked, games, playable, spread, playoff, key };
-}
-
-/** A remaining game's projection for one side, or null when nobody has one. */
-function projectedFor(fixture, side) {
-  const own = side === 'home' ? fixture.homeProjected : fixture.awayProjected;
-  if (typeof own === 'number' && own > 0) return own;
-  const id = side === 'home' ? fixture.homeId : fixture.awayId;
-  const v = state.proj?.get(fixture.week)?.get(id);
-  return typeof v === 'number' && v > 0 ? v : null;
+  const key = JSON.stringify([SIM_RUNS, view.through, ...built.keyParts]);
+  return { ...built, spread, key };
 }
 
 /**
@@ -670,9 +678,7 @@ function renderWeekPicker() {
   const sel = $('weekSelect');
   // Live data can only be summarised up to the last week that has a result;
   // the demo's whole season is played, so its picker offers all of it.
-  const lastOffered = L.isDemo
-    ? L.lastRegularWeek
-    : Math.max(0, L.played.reduce((a, g) => Math.max(a, g.week), 0));
+  const lastOffered = L.isDemo ? L.lastRegularWeek : L.lastDecided;
 
   const weeks = L.weeks.filter((w) => w <= Math.max(lastOffered, L.weeks[0] ?? 0));
   sel.innerHTML = weeks
@@ -786,15 +792,21 @@ function renderNote(view, sim, inputs) {
             ? `, measured from ${plural(inputs.spread.sample, 'completed team-week')} in this league.`
             : ` — assumed, because there ${inputs && inputs.spread.sample === 1 ? 'is' : 'are'} ` +
               `only ${plural(inputs?.spread.sample ?? 0, 'completed team-week')} carrying a ` +
-              `projection to measure it from.`)
+              `projection to measure it from.`) +
+          ` The Schedule page plays out the same season from the same inputs, 10,000 times by ` +
+          `default, so the two agree to within about a point; ${commas(sim.result.runs)} runs ` +
+          `here are good to about ±${(100 / Math.sqrt(sim.result.runs)).toFixed(1)}.`
         );
       }
       if (po) {
         parts.push(
-          `<strong>${po.teams} of ${L.teams.length} teams make the playoffs</strong>, so ` +
+          `<strong>${po.teams} of ${L.teams.length} teams make the playoffs</strong>` +
+          (capture.playoffTeamsKnown(L.data)
+            ? ` (read from your league’s ESPN settings), so `
+            : ` (assumed — this season carries no league settings to read it from), so `) +
           (po.byes > 0 ? `seeds 1–${po.byes} get a bye; ` : `nobody gets a bye; `) +
           `${plural(po.rounds, 'round')} of one week each, in weeks ` +
-          `${po.weeks.join(', ')}. Seeding is wins then total points, the bracket is fixed once ` +
+          `${po.weeks.join(', ')}. Seeding is wins (a tie is half a win) then total points, the bracket is fixed once ` +
           `seeded, and a tied playoff game goes to the higher seed. ` +
           (po.basis === 'projected'
             ? `Each round is scored from ESPN’s own projection for that week.`

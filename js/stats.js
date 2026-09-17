@@ -469,7 +469,10 @@ export function computeLeagueStats(data) {
 
   // CONFIRMED: all four standings reproduce the sheet's own ranks, 10/10 each.
   // AS breaks a tie on wins by total points; LS and PS are straight sorts.
-  const actualRank = rankBy(teams, (t) => t.wins * 1000 + t.pointsFor);
+  // A tied game counts half a win, as ESPN orders it — his league has no
+  // tiebreaker, so ties stand. Every team plays every week, so wins + ties/2
+  // orders exactly as win percentage does.
+  const actualRank = rankBy(teams, (t) => (t.wins + (t.ties || 0) / 2) * 1000 + t.pointsFor);
   const skillRank = rankBy(teams, (t) => t.exact.skill);
   const luckRank = rankBy(teams, (t) => t.exact.luckScore);
   const projectedRank = rankBy(teams, (t) => t.exact.skillPlusLuck);

@@ -40,7 +40,13 @@
 // this page exists to avoid.
 
 import { fetchSchedule, fetchWeeksRosters, fetchWireWeek } from './season.js';
+// The namespace too, for `fetchByeWeeks`, read defensively: a season module
+// (or a test stub) without it simply means the bye weeks are unknown.
+import * as season from './season.js';
 import * as espn from './espn.js';
+// Only the zero rule — whether a 0.00 is a bye or a man ruled out — so this page
+// and the analysis and Trade pages cannot answer it differently.
+import { zeroKind, byeWeekOf, outMark } from './player-card.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
@@ -148,6 +154,9 @@ const state = {
   leagueName: '',
   seasonWeeks: [],          // every week the league plays
   currentWeek: null,        // the week a claim made now would be for
+  // proTeamId -> bye week. Empty = unknown, and then a live 0.00 reads as a bye
+  // the way it always did. The sample wire carries its own `byeWeek` instead.
+  byes: {},
   span: SPAN_CHOICE(prefs.get('span', '3')),
 
   // A position filter PER TABLE. They were one filter driving both, which meant
@@ -186,6 +195,7 @@ const state = {
   // never re-buys a week already held.
   rosterWeeks: new Map(),        // week -> the teams array for that week
   rosterProj: new Map(),         // week -> Map(playerId -> projection | null)
+  rosterStatus: new Map(),       // week -> Map(playerId -> injury status that week)
   failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
   demoTeamId: null,              // the demo league has no owner; a team stands in
 
@@ -259,6 +269,9 @@ const availability = (status) => INJURY[status] || null;
 const DEMO_SEED = 20260909;
 const DEMO_WEEKS = 13;
 const DEMO_CURRENT_WEEK = 4;
+// Friday 18 September 2026, midday UTC — a Friday in every timezone a reader
+// of this site is likely to be in.
+const DEMO_WAIVER_CLEARS = Date.UTC(2026, 8, 18, 12);
 
 const DEMO_FIRST = ['Ash', 'Bryce', 'Cal', 'Dane', 'Elias', 'Finn', 'Gray', 'Hollis', 'Ike', 'Jory', 'Knox', 'Lem'];
 const DEMO_LAST = [
@@ -319,6 +332,10 @@ function generateDemoPool() {
         proTeamId: null,
         byeWeek,
         injuryStatus: i === 4 ? 'OUT' : i === 12 ? 'INJURY_RESERVE' : i === 19 ? 'QUESTIONABLE' : 'ACTIVE',
+        // Two men still on waivers, so the demo shows the W tag. A fixed
+        // Friday rather than "now plus two days", so the sample never moves.
+        status: i === 2 || i === 17 ? 'WAIVERS' : 'FREEAGENT',
+        waiverClears: i === 2 || i === 17 ? DEMO_WAIVER_CLEARS : null,
         percentOwned: Math.round(46 * (quality / 1.3) * (0.35 + rand() * 0.65) * 10) / 10,
         base: DEMO_BASE[position] * quality,
         // The last player of each position group is the one ESPN sometimes
@@ -362,8 +379,10 @@ function resetData() {
   state.failedWeeks.clear();
   state.rosterWeeks.clear();
   state.rosterProj.clear();
+  state.rosterStatus.clear();
   state.failedRosterWeeks.clear();
   state.demoTeamId = null;
+  state.byes = {};
   // Anything still in the air belongs to the league we just left; the token
   // bump drops it when it lands, and clearing this lets the new league ask for
   // the same week numbers straight away.
@@ -455,6 +474,20 @@ async function loadLive() {
   state.leagueName = 'Your league';
   setStatus('Reading your league…');
   render();
+
+  // The bye weeks, alongside the schedule. They only decide how a 0.00 is
+  // drawn, so a failure is an empty map and never an error on screen. When they
+  // land, the table is repainted — a zero may turn from Bye into "0.0 OUT".
+  if (typeof season.fetchByeWeeks === 'function') {
+    Promise.resolve()
+      .then(() => season.fetchByeWeeks())
+      .then((byes) => {
+        if (token !== state.token || !byes || typeof byes !== 'object') return;
+        state.byes = byes;
+        if (Object.keys(byes).length) render();
+      })
+      .catch(() => { /* unknown byes: the old reading stands */ });
+  }
 
   // The league's own week list, so the columns are the weeks this league
   // actually plays rather than a guess at how long a season is. One request.
@@ -673,6 +706,10 @@ function absorbWeek(players, week) {
         injuryStatus: p.injuryStatus,
         percentOwned: p.percentOwned,
         seasonProjected: p.seasonProjected,
+        // On waivers or a free agent — a fact about NOW, the same in every
+        // week's payload. null is "ESPN did not say", never "free agent".
+        status: p.status ?? null,
+        waiverClears: p.waiverClears ?? null,
       });
     } else {
       // The same player comes back in every week's payload. Later weeks carry
@@ -680,6 +717,10 @@ function absorbWeek(players, week) {
       // of the list itself is not assumed to be identical week to week, which
       // is exactly why this merges on playerId rather than on position.
       known.injuryStatus = p.injuryStatus;
+      if (p.status !== undefined && p.status !== null) {
+        known.status = p.status;
+        known.waiverClears = p.waiverClears ?? null;
+      }
       if (p.percentOwned !== null) known.percentOwned = p.percentOwned;
       if (p.seasonProjected !== null) known.seasonProjected = p.seasonProjected;
     }
@@ -703,13 +744,27 @@ function absorbRosterWeek(teams, week) {
   state.rosterWeeks.set(week, teams);
 
   const byPlayer = new Map();
+  const status = new Map();
   for (const team of teams || []) {
     for (const p of team.players || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
       byPlayer.set(p.playerId, p.projected);
+      status.set(p.playerId, p.injuryStatus || null);
     }
   }
   state.rosterProj.set(week, byPlayer);
+  state.rosterStatus.set(week, status);
+}
+
+/**
+ * His injury status in that week's roster payload. A zero is judged by who he
+ * was THAT week: the sample squads rule a man out week by week, and the row's
+ * own status is only the one from the week that row was anchored on.
+ */
+function rosterStatusFor(p, week) {
+  const byWeek = state.rosterStatus.get(week);
+  const s = byWeek ? byWeek.get(p.playerId) : null;
+  return s || p.injuryStatus || null;
 }
 
 // ---------------------------------------------------------------------- rows
@@ -1151,10 +1206,28 @@ function render() {
   renderTaken(weeks);
   renderTakenStats(weeks);
   renderTakenNote(weeks);
+  syncKeys('waiverLegend', 'waiverTable');
+  syncKeys('takenLegend', 'takenTable');
 
   // Last, because both are about rows that have to exist first.
   renderJump(weeks);
   scrollToSpotlight();
+}
+
+/**
+ * A key names a mark only while the table is drawing it. Each such key carries
+ * `data-when`, the selector for the mark, and is hidden when nothing matches —
+ * so a wire with no byes in view says nothing about byes, and the W tag's key
+ * appears only when somebody on the list is on waivers.
+ */
+function syncKeys(legendId, tableId) {
+  const legend = $(legendId);
+  const body = $(tableId) && $(tableId).querySelector('tbody');
+  if (!legend || !body) return;
+  legend.querySelectorAll('[data-when]').forEach((el) => {
+    if (body.querySelector(el.getAttribute('data-when'))) el.removeAttribute('hidden');
+    else el.setAttribute('hidden', '');
+  });
 }
 
 function syncSource() {
@@ -1198,14 +1271,16 @@ function renderCost(weeks) {
   const todo = weeks.length * per - have - gone;
 
   const bits = [];
-  if (have) bits.push(`${have} already loaded`);
-  if (todo) bits.push(`${todo} still to fetch`);
-  if (gone) bits.push(`${gone} refused by ESPN`);
+  if (have) bits.push(`${have} loaded`);
+  if (todo) bits.push(`${todo} to fetch`);
+  if (gone) bits.push(`${gone} refused`);
 
+  // Short on purpose: on a phone this sat above the first row as three lines.
+  // It still says the count, what each week buys, and why it cannot be one.
   setCost(
-    `${plural(weeks.length, 'week')} = ${plural(weeks.length * per, 'request')} to ESPN, ` +
-    `the wire and every squad in the league for each one` +
-    ` — there is no bulk form.` + (bits.length ? ` ${bits.join(', ')}.` : '')
+    `${plural(weeks.length, 'week')} = ${plural(weeks.length * per, 'request')} to ESPN ` +
+    `(wire + rosters per week; there is no bulk form).` +
+    (bits.length ? ` ${bits.join(', ')}.` : '')
   );
 }
 
@@ -1283,7 +1358,8 @@ function isStartable(v, position) {
  *
  * So they are a colour AND a treatment apart, not two shades of one colour.
  */
-function cell(v, week, name, position, roster = false, yours = null) {
+function cell(v, week, p, roster = false, yours = null) {
+  const { name, position } = p;
   if (v === undefined) {
     // Three ways to have no number, and a reader has to be able to tell them
     // apart: still coming, refused outright, or ESPN simply had nothing.
@@ -1309,12 +1385,38 @@ function cell(v, week, name, position, roster = false, yours = null) {
       `no projection for ${esc(name)}.">${dash}</td>`;
   }
   if (v === 0) {
-    return `<td class="bye" data-v="0" ` +
-      `title="${esc(name)} is on bye in week ${week}. ESPN returns 0.00 for a bye, ` +
-      `which is not the same as a projection of nothing.">Bye</td>`;
+    // A 0.00 is a bye ONLY in his NFL team's bye week: ESPN also projects a man
+    // it has ruled out at 0.00. Decided in js/player-card.js, once for the site.
+    // The sample wire carries each man's bye week; the sample ROSTERS mean
+    // "ruled out" by a zero and never a bye, which is what `demo` says.
+    const status = roster ? rosterStatusFor(p, week) : p.injuryStatus;
+    const zero = zeroKind(v, {
+      week,
+      byeWeek: byeWeekOf(p, state.byes),
+      injuryStatus: status,
+      demo: roster && state.isDemo,
+    });
+    if (zero === 'bye') {
+      return `<td class="bye" data-v="0" ` +
+        `title="${esc(name)} is on bye in week ${week}. ESPN returns 0.00 for a bye, ` +
+        `which is not the same as a projection of nothing.">Bye</td>`;
+    }
+    const bye = byeWeekOf(p, state.byes);
+    const why = `${esc(name)} is projected at 0.0 in week ${week}` +
+      (bye ? `, which is not his bye (week ${bye})` : '') +
+      (zero === 'out' ? ` — listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())} that week.` : '.');
+    // A real zero. It cannot be startable and cannot beat anybody, so neither
+    // green applies; the word is what says it is not a bye.
+    if (zero === 'out') {
+      return `<td class="zero-out" data-v="0" title="${why}">0.0 ` +
+        `<span class="zmark">${esc(outMark(status))}</span></td>`;
+    }
+    return `<td class="zero" data-v="0" title="${why}">0.0</td>`;
   }
-  // A bye has already returned above, so neither cue can fire on one — which is
-  // right for both: 0.00 is never startable, and it cannot beat anybody.
+  // A zero has already returned above, so neither cue can fire on one — which
+  // is right for both: 0.00 is never startable, and it cannot beat anybody. A
+  // wire man IS shaded against your own man's zero, bye or ruled out: that
+  // zero is the week the claim would cover.
   const hot = !roster && isStartable(v, position);
   const beats = !roster && yours !== null && typeof yours.value === 'number' && v > yours.value;
   if (!hot && !beats) return `<td data-v="${v}">${fmt(v)}</td>`;
@@ -1373,8 +1475,12 @@ function rowIdentity(playerId, { addressable = true, cls = '' } = {}) {
  */
 function playerLink(p, inner, why) {
   if (p.playerId === null || p.playerId === undefined) return inner;
+  // `aria-label`, not `title`: a title on a link is the one thing HANDOFF's
+  // touch rule forbids — js/touch-titles.js leaves links alone, so the words
+  // could never be read on a phone, and the W and injury tags beside the name
+  // carry their own titles as spans.
   return `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" ` +
-    `title="${why}">${inner}</a>`;
+    `aria-label="${why}">${inner}</a>`;
 }
 
 /** The injury tag beside a name. Same markup wherever the player came from. */
@@ -1382,6 +1488,30 @@ function injuryTag(status) {
   return status
     ? ` <span class="tag ${status.cls}" title="${esc(status.why)}">${status.tag}</span>`
     : '';
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * "W · Fri" beside a man still on waivers; nothing for a free agent.
+ *
+ * A claim on him is not an add: it waits for the waiver run, and somebody with
+ * a better priority can take him first. That changes what a green cell is
+ * worth, so it is said on the row rather than in the toggle.
+ *
+ * A `title` on a SPAN, never on the player link: js/touch-titles.js makes a
+ * titled span tappable on a phone and deliberately leaves links alone.
+ */
+function waiverTag(p) {
+  if (p.status !== 'WAIVERS') return '';
+  const when = Number.isFinite(p.waiverClears) ? new Date(p.waiverClears) : null;
+  const day = when && !Number.isNaN(when.getTime()) ? DAYS[when.getDay()] : '';
+  const full = when && day
+    ? `${day} ${when.getDate()} ${when.toLocaleString('en-US', { month: 'short' })}`
+    : '';
+  const why = `On waivers${full ? ` until ${full}` : ''}: a claim waits for the waiver run, ` +
+    `and a team with a better priority can take him first.`;
+  return ` <span class="tag wv" title="${esc(why)}">W${day ? ` · ${day}` : ''}</span>`;
 }
 
 /** The three columns after the name, shared by both kinds of row. */
@@ -1413,11 +1543,11 @@ function wireRow(row, weeks, mine) {
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${
         playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row and show every ` +
-          `remaining week`)}${injuryTag(status)}</td>
+          `remaining week`)}${injuryTag(status)}${waiverTag(p)}</td>
       ${identityCells(row)}
       ${values
         .map((v, i) =>
-          cell(v, weeks[i], p.name, p.position, false,
+          cell(v, weeks[i], p, false,
             yours ? { name: yours.p.name, value: yours.values[i] } : null))
         .join('')}
     </tr>`;
@@ -1439,7 +1569,7 @@ function mineRow(row, weeks) {
         `${playerLink(p, esc(p.name), why)}` +
         `${injuryTag(availability(p.injuryStatus))}</td>
       ${identityCells(row)}
-      ${values.map((v, i) => cell(v, weeks[i], p.name, p.position, true)).join('')}
+      ${values.map((v, i) => cell(v, weeks[i], p, true)).join('')}
     </tr>`;
 }
 
@@ -1565,7 +1695,7 @@ function takenRow(row, weeks) {
       <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`}>${
         row.avg === null ? dash : fmt(row.avg)
       }</td>
-      ${values.map((v, i) => cell(v, weeks[i], p.name, p.position, true)).join('')}
+      ${values.map((v, i) => cell(v, weeks[i], p, true)).join('')}
     </tr>`;
 }
 
@@ -1711,7 +1841,7 @@ function renderTakenNote(weeks) {
     lead('Bye and blank') +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
     'a blank cell means that week’s rosters carried no number for him at all. Those are not the ' +
-    'same thing, so they are not drawn the same way.'
+    'same thing, so they are not drawn the same way. ' + ZERO_NOTE
   );
 
   parts.push(
@@ -1762,6 +1892,12 @@ function renderTakenNote(weeks) {
   $('takenStatus').innerHTML = paragraphs(status);
   $('takenNote').innerHTML = paragraphs(parts);
 }
+
+/** What a 0.0 is, said in both tables' notes. */
+const ZERO_NOTE =
+  'ESPN also returns 0.00 for a man it has ruled out, so a zero outside his NFL team’s bye week ' +
+  'is printed as 0.0 — with OUT, IR or SUSP beside it when that is why — and counts as a zero in ' +
+  'Avg. When the bye weeks could not be read, every zero is shown as a bye, as it always was.';
 
 /** A short bold label that opens a paragraph of the tucked explanation. */
 function lead(label) {
@@ -1909,8 +2045,18 @@ function renderNote(weeks) {
     'ESPN returns, and weeks with no number at all are left out. ' +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
     'a blank cell means that week’s list carried no number for him at all. Those are not the ' +
-    'same thing, so they are not drawn the same way.'
+    'same thing, so they are not drawn the same way. ' + ZERO_NOTE
   );
+
+  if (state.pool.size && [...state.pool.values()].some((p) => p.status === 'WAIVERS')) {
+    parts.push(
+      lead('W') +
+      'A <span class="tag wv">W</span> beside a name means he is still on waivers, with the day ' +
+      'the claim clears: a claim waits for the waiver run, and a team with a better priority can ' +
+      'take him first. No tag means ESPN lists him as a free agent you can add straight away ' +
+      '(or did not say).'
+    );
+  }
 
   // The green has to say what it means, or it is just decoration.
   parts.push(

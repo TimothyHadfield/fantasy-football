@@ -45,6 +45,9 @@
 // is wiring and markup.
 
 import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js';
+// The namespace as well, for `fetchByeWeeks`, read defensively: a season module
+// (or a test stub) without it simply means the bye weeks are unknown.
+import * as season from './season.js';
 import { slotCountsFromLineups } from './projection.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -57,6 +60,7 @@ import {
 } from './trade.js';
 import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
+  zeroKind, byeWeekOf,
 } from './player-card.js';
 
 const $ = (id) => document.getElementById(id);
@@ -128,6 +132,7 @@ const state = {
   myTeamId: null,      // the squad the finder trades FROM
   espnTeamId: null,    // the reader's own team, when a live league says so
   isDemo: true,
+  byes: {},            // proTeamId -> bye week; empty = unknown (a live 0.00 is then a bye)
   measure: 'typical',  // what the reader ASKED for; see basis() for what is drawn
   kind: 'all',         // which package shapes the finder searches
   partner: 'all',      // limit the results to one manager
@@ -265,15 +270,28 @@ function pastWeeksShown() {
 }
 
 /**
- * Is a 0.00 a bye, on this data?
+ * Is a 0.00 a bye — for THIS man, in THIS week?
  *
- * On ESPN it is: rule 2 in HANDOFF.md. On the sample data it is NOT — a 0 out
- * of `js/demo-rosters.js` means "we have ruled this man OUT this week", which
- * is a real projection of zero. `projToken(v, demo)` in js/player-card.js makes
- * exactly the same distinction in exactly the same direction, and this is the
- * second place that fact is needed rather than a second way of deciding it.
+ * Not simply "on ESPN, yes" any more. Verified on 2026-09-16: ESPN projects an
+ * OUT or IR man at 0.00 in ordinary weeks too, so a zero is a bye only in his
+ * NFL team's bye week. `zeroKind` in js/player-card.js decides that for the
+ * whole site; this hands its answer to js/trade.js as a `(player, week)`
+ * function. A ruled-out zero therefore stays IN the per-week divisor — it is a
+ * week he does not play, and a trade for him buys that — and only a real bye
+ * comes out. With the byes unknown the old reading stands.
+ *
+ * On the sample data a zero is never a bye — a 0 out of `js/demo-rosters.js`
+ * means "we have ruled this man OUT" — so demo still passes `false`, the same
+ * direction as `projToken(v, demo)`.
  */
-const zeroIsBye = () => !state.isDemo;
+const byeAt = (p, week) =>
+  zeroKind(0, {
+    week,
+    byeWeek: byeWeekOf(p, state.byes),
+    injuryStatus: p && p.injuryStatus,
+    demo: state.isDemo,
+  }) === 'bye';
+const zeroIsBye = () => (state.isDemo ? false : byeAt);
 
 const haveWeek = (w) => weekly.byWeek.has(w) || weekly.failed.has(w);
 
@@ -315,6 +333,7 @@ function indexTeams(teams) {
       byPlayer.set(p.playerId, {
         projected: typeof p.projected === 'number' ? p.projected : null,
         actual: typeof p.actual === 'number' ? p.actual : null,
+        injuryStatus: p.injuryStatus || null,
       });
     }
   }
@@ -395,7 +414,6 @@ function weeklyMean(p) {
   const held = weekly.means.get(p.playerId);
   if (held !== undefined) return held;
 
-  const bye = zeroIsBye();
   const span = weeklySpan();
   let sum = 0;
   let counted = 0;
@@ -405,7 +423,8 @@ function weeklyMean(p) {
     if (v === null) continue;   // still in the divisor, exactly as it always was
     sum += v;
     counted++;
-    if (bye && v === 0) byes++;
+    // Only his real bye leaves the divisor; a ruled-out zero counts as a zero.
+    if (v === 0 && !state.isDemo && byeAt(p, w)) byes++;
   }
   // The span less his byes, matching `scoreAcrossWeeks` line for line — that is
   // what stops the two panels disagreeing about one man.
@@ -709,6 +728,12 @@ function cardFor(p) {
       actuals: weeks.map((w) => tokenAt(p, w, 'actual')),
       currentWeek: state.week,
       demo: state.isDemo,
+      // A 0.00 is "Bye" only in his team's bye week; see `zeroKind`.
+      byeWeek: byeWeekOf(p, state.byes),
+      injuryStatus: weeks.map((w) => {
+        const e = weekly.byWeek.get(w)?.get(p.playerId);
+        return (e && e.injuryStatus) || p.injuryStatus || null;
+      }),
     }),
   };
 }
@@ -979,7 +1004,9 @@ function renderDepthNote(map) {
         `schedule rather than the calendar, because a week with a result against it is banked and ` +
         `no trade can reach it. A man’s average leaves his <strong>byes</strong> out: a 0.00 is a ` +
         `fact about the fixture list, not about him, and counting it would price him on the weeks ` +
-        `he is off rather than the weeks he plays. The panels below are per week too, but a deal’s ` +
+        `he is off rather than the weeks he plays. Only his real bye week counts as one: ESPN also ` +
+        `returns 0.00 for a man it has ruled out, and that zero stays in his average. ` +
+        `The panels below are per week too, but a deal’s ` +
         `gain is spread over every week in the span, byes and all, so a man’s figure here is ` +
         `deliberately not the same arithmetic.` +
         `<br><br>` +
@@ -2476,6 +2503,7 @@ function setToggle(id, attr, value) {
 async function useDemo() {
   state.source = 'demo';
   state.isDemo = true;
+  state.byes = {};
   state.scheduleError = null;
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The demo season really is over: `js/demo-rosters.js` hardcodes a result
@@ -2522,6 +2550,13 @@ async function useLive() {
   setStatus('Reading the league schedule…');
   let scheduleWeeks = [];
   state.scheduleError = null;
+  // The bye weeks, alongside the schedule and awaited with it: they decide
+  // which zeros leave a per-week divisor, so nothing is priced before they are
+  // in. A failure is an empty map — "unknown" — never an error.
+  state.byes = {};
+  const byesRead = typeof season.fetchByeWeeks === 'function'
+    ? Promise.resolve().then(() => season.fetchByeWeeks()).catch(() => ({}))
+    : Promise.resolve({});
   // Once more on failure. The schedule is what says which weeks are PLAYED, and
   // without it every played week is priced into every trade — Tim caught week 1
   // inside a total this way. A second try is cheap against that.
@@ -2539,6 +2574,10 @@ async function useLive() {
       if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
     }
   }
+  const byes = await byesRead;
+  if (state.source !== 'live') return;   // the reader went back to demo meanwhile
+  state.byes = byes && typeof byes === 'object' ? byes : {};
+  weekly.means = new Map();
   state.weeks = scheduleWeeks.length
     ? scheduleWeeks
     : Array.from({ length: NFL_WEEKS }, (_, i) => i + 1);

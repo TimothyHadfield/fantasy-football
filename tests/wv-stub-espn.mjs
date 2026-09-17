@@ -61,6 +61,10 @@ function projectionFor(p, week) {
 
 const FAIL = new Set((process.env.WV_FAIL_WEEKS || '').split(',').filter(Boolean).map(Number));
 const EMPTY = process.env.WV_EMPTY === '1';
+const WAIVERS = process.env.WV_WAIVERS === '1';
+// Player 03 is listed OUT; with this set ESPN projects him at 0.00 in week 4,
+// which is NOT his team's bye — the case "0.00 means bye" got wrong.
+const OUT_ZERO = process.env.WV_OUT_ZERO === '1';
 
 export async function fetchFreeAgents(scoringPeriodId, limit = 150) {
   const week = Number(scoringPeriodId);
@@ -90,11 +94,21 @@ export async function fetchFreeAgents(scoringPeriodId, limit = 150) {
         statSourceId: 1,
         statSplitTypeId: 1,
         scoringPeriodId: week,
-        appliedTotal: p.idx === 0 && week === 5 ? 0 : projectionFor(p, week),
+        appliedTotal: (p.idx === 0 && week === 5) || (OUT_ZERO && p.idx === 3 && week === 4)
+          ? 0
+          : projectionFor(p, week),
       });
     }
 
+    // WV_WAIVERS: Players 05 and 06 are still on waivers (clearing Friday 18
+    // September 2026, midday UTC); everyone else is a free agent. ESPN puts
+    // both fields on the ENTRY, not on `player`.
+    const onWaivers = WAIVERS && (p.idx === 5 || p.idx === 6);
+    const status = WAIVERS ? { status: onWaivers ? 'WAIVERS' : 'FREEAGENT' } : {};
+    if (onWaivers) status.waiverProcessDate = Date.UTC(2026, 8, 18, 12);
+
     players.push({
+      ...status,
       player: {
         id: p.id,
         fullName: p.name,
@@ -116,6 +130,7 @@ export function expected(playerId, week) {
   if (p.idx === 1 && week === 6) return null;
   if (p.idx === 2 && week === 4) return null;
   if (p.idx === 0 && week === 5) return 0;
+  if (OUT_ZERO && p.idx === 3 && week === 4) return 0;
   return projectionFor(p, week);
 }
 

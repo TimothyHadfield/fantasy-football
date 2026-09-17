@@ -133,6 +133,17 @@ const SCENARIOS = {
     prefs: LIVE, conn: CONN,
     env: { CMP_FAIL_ROSTER_WEEKS: '5' },
   },
+  // Bye weeks KNOWN: the wire's Player 00 (team 1) is on bye in week 5, which
+  // is still a Bye; Player 03 (team 4, OUT) is 0.00 in week 4, which is not;
+  // and your Wynn Larch (TEN = 10, OUT) is 0.00 in week 5, which is not his
+  // bye either. Plus two wire men on waivers.
+  'byes-waivers': {
+    label: '(g) a zero is a bye only in the bye week; the W tag; the phone jump link',
+    prefs: LIVE, conn: CONN,
+    env: {
+      CMP_BYES: '{"1":5,"4":9,"10":11}', CMP_OUT: '1', WV_OUT_ZERO: '1', WV_WAIVERS: '1',
+    },
+  },
 };
 
 /** The "Your …" rows as {label, name, pos, avg, hot, weekValues}. */
@@ -395,8 +406,9 @@ async function check(scenario, boot) {
       `${JSON.stringify(espn.calls.weeks)} / ${JSON.stringify(season.calls.rosterWeeks)}`);
     c.ok('the cost line says six requests, not three',
       /3 weeks = 6 requests to ESPN/.test(txt($('spanCost'))), txt($('spanCost')));
+    // The sentence was shortened for the phone on 2026-09-16.
     c.ok('and says what the second one is for',
-      /the wire and every squad in the league for each one/.test(txt($('spanCost'))), txt($('spanCost')));
+      /wire \+ rosters per week/.test(txt($('spanCost'))), txt($('spanCost')));
 
     c.ok('the colour key shows the shading and the Your row',
       [...$('waiverLegend').querySelectorAll('[data-compare]')].length === 2 &&
@@ -541,7 +553,7 @@ async function check(scenario, boot) {
       JSON.stringify(season.calls.rosterWeeks.slice().sort((a, b) => a - b)) ===
         JSON.stringify([4, 5, 6]), JSON.stringify(season.calls.rosterWeeks));
     c.ok('so the cost line still says two requests a week, not one',
-      /3 weeks = 6 requests to ESPN, the wire and every squad in the league for each one/
+      /3 weeks = 6 requests to ESPN \(wire \+ rosters per week/
         .test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('the note says why there are none',
       /Nobody is set as you/.test(note), note);
@@ -583,6 +595,89 @@ async function check(scenario, boot) {
       [...d.querySelectorAll('#waiverTable tbody tr:not(.mine)')]
         .filter((r) => r.children[5].getAttribute('data-v') !== null).length > 50,
       'week 5 empty on the wire too');
+  }
+
+  // ---- in every scenario that predates the bye rule: nothing new shows ------
+  if (scenario === 'mine') {
+    const key = (sel) => $('waiverLegend').querySelector(`[data-when="${sel}"]`);
+    c.ok('with no waiver status from ESPN there is no W tag, and no W in the key',
+      !d.querySelector('#waiverTable span.tag.wv') && key('span.tag.wv').hasAttribute('hidden'),
+      'a W tag or its key');
+    c.ok('with the byes unknown the key says Bye and nothing about a ruled-out zero',
+      !key('td.bye').hasAttribute('hidden') && key('td.zero-out').hasAttribute('hidden'),
+      $('waiverLegend').outerHTML.slice(0, 400));
+  }
+
+  // ---- (g) byes known, waivers, and the jump link ---------------------------
+  if (scenario === 'byes-waivers') {
+    const rowOf = (id) => d.querySelector(`#waiverTable tbody tr[data-player="${id}"]:not(.mine)`);
+    const at = (tr, week) => {
+      const td = tr && tr.children[4 + week - 4];
+      return td && {
+        text: td.textContent.replace(/\s+/g, ' ').trim(),
+        cls: td.getAttribute('class') || '',
+        v: td.getAttribute('data-v'),
+        title: td.getAttribute('title') || '',
+      };
+    };
+    const p00 = espn.roster[0].id;
+    const p03 = espn.roster[3].id;
+
+    c.ok('THE BYE WEEK IS STILL A BYE on the wire',
+      at(rowOf(p00), 5)?.text === 'Bye' && /\bbye\b/.test(at(rowOf(p00), 5).cls),
+      JSON.stringify(at(rowOf(p00), 5)));
+    const out4 = at(rowOf(p03), 4);
+    c.ok('AN OUT MAN’S 0.00 OUTSIDE HIS BYE IS "0.0 OUT", not Bye',
+      out4 && out4.text === '0.0 OUT' && /\bzero-out\b/.test(out4.cls) && out4.v === '0' &&
+      /not his bye \(week 9\)/.test(out4.title), JSON.stringify(out4));
+    c.ok('and it carries neither green',
+      out4 && !/\bhot\b|\bbeats\b/.test(out4.cls), out4 && out4.cls);
+
+    const wr = mine.find((m) => m.pos === 'WR');
+    c.ok('YOUR RUINED-WEEK MAN IS STILL THE ONE A CLAIM WOULD DROP: Your WR5 is Wynn Larch, by Avg',
+      wr && wr.name.includes('Wynn Larch') && near(wr.avg, 8 / 3), JSON.stringify(wr));
+    const mineTr = d.querySelector('#waiverTable tbody tr.mine[data-player="7025"]');
+    const his5 = at(mineTr, 5);
+    c.ok('and his week-5 zero reads "0.0 OUT", not Bye',
+      his5 && his5.text === '0.0 OUT' && /\bzero-out\b/.test(his5.cls), JSON.stringify(his5));
+    const wrWeek5 = [...d.querySelectorAll('#waiverTable tbody tr:not(.mine)')]
+      .filter((tr) => tr.children[1].textContent.trim() === 'WR')
+      .map((tr) => at(tr, 5))
+      .filter((c5) => c5 && c5.v !== null && Number(c5.v) > 0);
+    c.ok('every wire WR with a number in week 5 is shaded against that zero',
+      wrWeek5.length > 5 && wrWeek5.every((c5) => /\bbeats\b/.test(c5.cls)),
+      `${wrWeek5.filter((c5) => !/\bbeats\b/.test(c5.cls)).length} of ${wrWeek5.length} unshaded`);
+
+    const keyShown = (sel) => !$('waiverLegend').querySelector(`[data-when="${sel}"]`).hasAttribute('hidden');
+    c.ok('the key shows the ruled-out zero and the bye, because both are on screen',
+      keyShown('td.zero-out') && keyShown('td.bye'), $('waiverLegend').outerHTML.slice(0, 500));
+
+    // ---- the W tag ----
+    const tagOf = (idx) => rowOf(espn.roster[idx].id)?.querySelector('span.tag.wv') || null;
+    const w5 = tagOf(5);
+    c.ok('A MAN ON WAIVERS CARRIES "W · Fri", on a span with a title',
+      w5 && w5.textContent.trim() === 'W · Fri' && /On waivers until Fri 18 Sep/.test(w5.getAttribute('title') || ''),
+      w5 ? `${w5.textContent} / ${w5.getAttribute('title')}` : 'no tag');
+    c.ok('both waiver men do, and nobody else', !!tagOf(6) &&
+      d.querySelectorAll('#waiverTable tbody span.tag.wv').length === 2,
+      `${d.querySelectorAll('#waiverTable tbody span.tag.wv').length} tags`);
+    c.ok('a free agent carries nothing', !tagOf(7), 'a W on a free agent');
+    c.ok('no player link carries a title — the tag is where the words are',
+      [...d.querySelectorAll('#waiverTable a.pref, #takenTable a.pref')].every((a) =>
+        !a.hasAttribute('title') && (a.getAttribute('aria-label') || '').length > 0),
+      'a titled .pref');
+    c.ok('the key names the W tag now that one is on screen', keyShown('span.tag.wv'),
+      $('waiverLegend').outerHTML.slice(0, 300));
+    c.ok('and the note explains it', /still on waivers/.test(note), note);
+
+    // ---- the phone jump ----
+    const jump = d.querySelector('a.to-taken');
+    c.ok('the wire panel links straight down to Taken players',
+      jump && jump.getAttribute('href') === '#takenPanel' && !!$('takenPanel') &&
+      $('takenPanel').querySelector('#takenTable') && !jump.hasAttribute('title') &&
+      /Taken players/.test(jump.textContent), jump && jump.outerHTML);
+    c.ok('and it sits in the wire panel, above its table',
+      jump && jump.closest('section') === $('waiverTable').closest('section'), 'elsewhere');
   }
 
   return c.out;

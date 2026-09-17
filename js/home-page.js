@@ -3,8 +3,8 @@
 // Written for week 1, which is the hard case. Almost every interesting number
 // on this site — luck, skill, consistency, projection error — needs a stack of
 // completed weeks before it means anything, and fetchSeasonData() keeps only
-// games where BOTH sides scored, so a stats-driven landing page is literally
-// blank until the first Sunday night is over. That is the worst possible first
+// games ESPN has DECIDED, so a stats-driven landing page is literally blank
+// until the first week is final. That is the worst possible first
 // impression: an empty dashboard reads as broken, not as early.
 //
 // So this page is built on the two reads that already have something to say
@@ -23,19 +23,30 @@ import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js
 import { savedConfig, onConnection } from './connection.js';
 import * as espn from './espn.js';
 import * as prefs from './prefs.js';
+import { winProbability, DEFAULT_SIGMA } from './forecast.js';
 import { enableSort } from './sortable.js';
 
 const $ = (id) => document.getElementById(id);
 const store = prefs.scope('home');
 
 const state = {
-  // What the user picked, persisted. Separate from `isDemo`, which is what is
+  // What the page is trying to show. Separate from `isDemo`, which is what is
   // actually on screen — they differ while a live load is still in flight.
-  source: store.get('source') === 'live' ? 'live' : 'demo',
+  //
+  // LIVE UNLESS SOMEONE CHOSE DEMO. It used to be demo unless a 'live'
+  // preference had been saved, and that preference is per browser — so on a
+  // new phone the page sat on the demo league under a bar saying Connected.
+  // Only an explicit click on "Demo data" keeps it there now, the same rule
+  // the schedule page follows.
+  source: store.get('source') === 'demo' ? 'demo' : 'live',
   isDemo: true,
   schedule: null,   // { leagueName, teams, weeks, byWeek, games }
   rosters: null,    // { week, teams } for the selected week, or null
   week: null,
+  // The bench panel's own week: the selected week once it has a final score,
+  // else the latest week that has one. See benchWeekFor().
+  benchWeek: null,
+  benchRosters: null,
   teamId: savedConfig()?.teamId ?? null,
 };
 
@@ -140,7 +151,10 @@ function injuryClass(status) {
  * @param {object} input { schedule, rosters, week, teamId, isDemo }
  * @returns a plain object describing every panel on the page
  */
-export function buildModel({ schedule, rosters, week, teamId = null, isDemo = false }) {
+export function buildModel({
+  schedule, rosters, week, teamId = null, isDemo = false,
+  benchWeek = week, benchRosters = null,
+}) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
 
   const games = (schedule.byWeek.get(week) || []).map((g) => {
@@ -150,15 +164,33 @@ export function buildModel({ schedule, rosters, week, teamId = null, isDemo = fa
     // Only name a favourite when both sides have a projection; one-sided is not
     // a prediction, it is half a number.
     const both = isNum(hp) && isNum(ap);
+    const mine = teamId != null && (g.homeId === teamId || g.awayId === teamId);
+    // The owner's own chance, from the two projections already on screen and
+    // forecast.js's default spread — no extra request, and our model, not
+    // ESPN's. Only for his game, only before it is final, only with both sides.
+    let myWinPct = null;
+    if (mine && both && !g.played && g.awayId != null) {
+      const p = winProbability(hp, ap, DEFAULT_SIGMA);
+      if (p !== null) myWinPct = g.homeId === teamId ? p : 1 - p;
+    }
     return {
       ...g,
       homeProjected: hp,
       awayProjected: ap,
       favourite: both && hp !== ap ? (hp > ap ? 'home' : 'away') : null,
       projectedMargin: both ? round1(Math.abs(hp - ap)) : null,
-      mine: teamId != null && (g.homeId === teamId || g.awayId === teamId),
+      mine,
+      myWinPct,
     };
   });
+  // His own game leads the list; the rest keep ESPN's order.
+  games.sort((a, b) => Number(b.mine) - Number(a.mine));
+
+  // The bench panel may be reading an earlier week than the matchups — the
+  // latest one with a final score. Its games are that week's.
+  const benchSame = benchWeek === week;
+  const benchGames = benchSame ? games : schedule.byWeek.get(benchWeek) || [];
+  const benchFrom = benchSame ? rosters : benchRosters;
 
   return {
     isDemo,
@@ -176,7 +208,9 @@ export function buildModel({ schedule, rosters, week, teamId = null, isDemo = fa
     standings: standingsThrough(schedule, week),
     weeksCounted: countedWeeks(schedule, week),
     injuries: injuredStarters(rosters),
-    bench: benchReport(rosters, games),
+    bench: benchReport(benchFrom, benchGames),
+    benchWeek,
+    benchRostersMissing: !benchFrom?.teams?.length,
   };
 }
 
@@ -218,9 +252,23 @@ function standingsThrough(schedule, week) {
     else { away.w++; home.l++; }
   }
 
+  // ESPN's order: win percentage with a tie as half a win, then points for.
+  // This league has no matchup tie-breaker, so a tie stands and has to count —
+  // wins minus losses ranked a 1-0-1 team level with a 1-0, and a 0-0-2 team
+  // level with a 1-1.
   return [...rows.values()]
-    .map((r) => ({ ...r, pf: round1(r.pf), pa: round1(r.pa), diff: round1(r.pf - r.pa) }))
-    .sort((a, b) => (b.w - b.l) - (a.w - a.l) || b.pf - a.pf);
+    .map((r) => ({
+      ...r,
+      pf: round1(r.pf), pa: round1(r.pa), diff: round1(r.pf - r.pa),
+      pct: winPct(r),
+    }))
+    .sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0) || b.pf - a.pf);
+}
+
+/** Wins plus half the ties, over games played; null before any. */
+export function winPct(r) {
+  const games = r.w + r.l + r.t;
+  return games ? (r.w + r.t / 2) / games : null;
 }
 
 /** How many weeks the standings actually rest on — the sample size, stated. */
@@ -326,6 +374,20 @@ function currentWeek(schedule) {
   return pending ?? schedule.weeks[schedule.weeks.length - 1] ?? 1;
 }
 
+/**
+ * The week the bench panel reads: `week` itself once any of its games is
+ * final, otherwise the latest earlier week with a final score. Bench points
+ * are exact facts that only exist once a week is decided, so on a Thursday the
+ * useful answer is last week's, not "has not finished" for five days. Falls
+ * back to `week` when nothing at all is final, which is week 1's honest state.
+ */
+export function benchWeekFor(schedule, week) {
+  const final = (w) => (schedule.byWeek.get(w) || []).some((g) => g.played);
+  if (final(week)) return week;
+  const earlier = schedule.weeks.filter((w) => w < week && final(w));
+  return earlier.length ? earlier[earlier.length - 1] : week;
+}
+
 function setStatus(html, isError = false) {
   const el = $('sourceStatus');
   el.innerHTML = html;
@@ -347,6 +409,9 @@ function loadDemo(note = '') {
   state.schedule = schedule;
   state.week = week;
   state.rosters = generateDemoWeekRosters(week);
+  state.benchWeek = benchWeekFor(schedule, week);
+  state.benchRosters =
+    state.benchWeek === week ? null : generateDemoWeekRosters(state.benchWeek);
 
   setStatus(
     (note ? `${note} ` : '') +
@@ -355,13 +420,25 @@ function loadDemo(note = '') {
   draw();
 }
 
+/** One live load at a time: boot and the connection bar can both ask. */
+let liveLoading = false;
+
 async function loadLive() {
   const cfg = savedConfig();
   if (!cfg) {
     loadDemo('No league connected yet — use the strip above.');
     return;
   }
+  if (liveLoading) return;
+  liveLoading = true;
+  try {
+    await loadLiveNow(cfg);
+  } finally {
+    liveLoading = false;
+  }
+}
 
+async function loadLiveNow(cfg) {
   setToggle('live');
   espn.configure({ leagueId: cfg.leagueId, season: cfg.season });
   if (cfg.teamId != null) state.teamId = cfg.teamId;
@@ -384,6 +461,7 @@ async function loadLive() {
     state.week = week;
     state.isDemo = false;
     state.rosters = await loadRosters(week);
+    await loadBench();
     reportLive();
     draw();
   } catch (err) {
@@ -418,9 +496,22 @@ function reportLive() {
   );
 }
 
+/**
+ * The bench panel's week and, when it differs from the selected week, its
+ * rosters — one more request, made only on the days it is needed.
+ */
+async function loadBench() {
+  const bw = benchWeekFor(state.schedule, state.week);
+  state.benchWeek = bw;
+  if (bw === state.week) state.benchRosters = null;
+  else if (state.isDemo) state.benchRosters = generateDemoWeekRosters(bw);
+  else state.benchRosters = await loadRosters(bw);
+}
+
 async function changeWeek(week) {
   state.week = week;
   state.rosters = state.isDemo ? generateDemoWeekRosters(week) : await loadRosters(week);
+  await loadBench();
   if (!state.isDemo) reportLive();
   draw();
 }
@@ -434,6 +525,8 @@ function draw() {
     week: state.week,
     teamId: state.teamId,
     isDemo: state.isDemo,
+    benchWeek: state.benchWeek ?? state.week,
+    benchRosters: state.benchRosters,
   }));
 }
 
@@ -485,6 +578,7 @@ function renderMatchups(m) {
   if (!m.games.length) {
     $('matchups').innerHTML = '<div class="empty">No matchups scheduled for this week.</div>';
     $('matchupsNote').textContent = '';
+    tuck('matchupsExplain', false);
     return;
   }
 
@@ -500,6 +594,22 @@ function renderMatchups(m) {
       `${plural(m.playedThisWeek, 'game')} final of ${m.games.length}. ` +
       '<strong>Proj</strong> is what the starting lineup was projected to score, <strong>Pts</strong> what it did.';
   }
+  // The basis of the one percentage on this page, in the words rule 1 asks
+  // for: it is ours, and it is built from ESPN's projections, not quoted.
+  const withChance = m.games.some((g) => g.myWinPct !== null);
+  if (withChance) {
+    $('matchupsNote').innerHTML +=
+      ' <strong>Win chance</strong> is our model, not ESPN&rsquo;s.';
+    $('matchupsExplain').innerHTML =
+      'Your win chance comes from the two projections on your card alone: each ' +
+      `team&rsquo;s actual score is taken to land within about ${DEFAULT_SIGMA} points of its ` +
+      'projection, as a typical fantasy week does. That spread is a general figure, not ' +
+      'one measured on this league, and no extra data is read for it. ESPN publishes ' +
+      'projections, never odds.';
+  } else {
+    $('matchupsExplain').textContent = '';
+  }
+  tuck('matchupsExplain', withChance);
 }
 
 function gameCard(g, teamId) {
@@ -528,6 +638,10 @@ function gameCard(g, teamId) {
     meta = `Projected: ${esc(fav)} by ${fmt(g.projectedMargin)}`;
   } else {
     meta = 'Upcoming · no projection yet';
+  }
+
+  if (isNum(g.myWinPct)) {
+    meta += ` · <strong>your win chance ${Math.round(g.myWinPct * 100)}%</strong>`;
   }
 
   return `<div class="game${g.played ? '' : ' upcoming'}${g.mine ? ' mine' : ''}">
@@ -597,7 +711,7 @@ function renderStandings(m) {
       const diffCls = r.diff > 0 ? 'pos' : r.diff < 0 ? 'neg' : 'muted';
       return `<tr${r.id === m.teamId ? ' class="me"' : ''}>
           <td class="name">${esc(r.name)}</td>
-          <td data-v="${r.w - r.l}">${record}</td>
+          <td data-v="${(r.pct ?? 0) * 1e6 + r.pf}">${record}</td>
           ${numCell(r.pf)}
           ${numCell(r.pa)}
           ${numCell(r.diff, { sign: true, cls: diffCls })}
@@ -622,7 +736,7 @@ function renderStandings(m) {
     `so ${plural(m.weeksCounted, 'game')} per team. ` +
     (m.weeksCounted < 4
       ? '<strong>Far too thin to rank anyone by</strong> — roster strength is the better guide until about week 4.'
-      : 'Ordered by win differential, then points for.');
+      : 'Ordered as ESPN orders them: win percentage, a tie counting half a win, then points for.');
 }
 
 function renderInjuries(m) {
@@ -676,12 +790,27 @@ function renderInjuries(m) {
 }
 
 function renderBench(m) {
+  // Visible, not tucked: it changes which week every number here is about.
+  const earlier = m.benchWeek !== m.week;
+  const key = $('benchKey');
+  if (key) {
+    key.textContent = earlier
+      ? `Week ${m.benchWeek}, the latest final week — week ${m.week} is not final yet.`
+      : '';
+    if (earlier) key.removeAttribute('hidden');
+    else key.setAttribute('hidden', '');
+  }
+
   if (!m.bench.length) {
-    $('bench').innerHTML = `<div class="empty">${
-      m.playedThisWeek
-        ? 'No final bench scores for this week.'
-        : `Week ${m.week} has not finished. Bench points are exact facts, so they wait for final scores.`
-    }</div>`;
+    let why;
+    if (earlier && m.benchRostersMissing) {
+      why = `Rosters for week ${m.benchWeek} could not be read, so its bench points are unavailable.`;
+    } else if (earlier || m.playedThisWeek) {
+      why = `No final bench scores for week ${m.benchWeek}.`;
+    } else {
+      why = `Week ${m.week} has not finished. Bench points are exact facts, so they wait for final scores.`;
+    }
+    $('bench').innerHTML = `<div class="empty">${why}</div>`;
     $('benchNote').textContent = '';
     tuck('benchNote', false);
     return;
@@ -728,7 +857,7 @@ function renderBench(m) {
   const missed = m.bench.filter((r) => r.miss).length;
   tuck('benchNote', true);
   $('benchNote').innerHTML =
-    `${fmt(total)} points sat on benches in week ${m.week}. A <em>miss</em> counts only ` +
+    `${fmt(total)} points sat on benches in week ${m.benchWeek}. A <em>miss</em> counts only ` +
     'when the benched player was eligible for the slot he would have taken, so a receiver ' +
     `out-scoring a kicker is not one. ${plural(missed, 'team')} left points behind. ` +
     'Both men in a miss link to their next 13 weeks on the Players page.';
@@ -755,6 +884,10 @@ $('weekSelect').addEventListener('change', (e) => {
 // drawn the demo league. Take its answer when it lands: switch to the real
 // league the first time, and on later events — picking which team is yours —
 // just repaint the highlight.
+//
+// Going live needs no saved preference — only the absence of an explicit
+// "Demo data" click (see `state.source`). That is what makes a fresh phone
+// show the league its bar says is connected.
 onConnection((conn) => {
   if (!conn) return;
   const stillDemo = state.isDemo;

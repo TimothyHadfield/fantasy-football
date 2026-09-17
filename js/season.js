@@ -63,9 +63,15 @@ const IR_SLOT = 21;
 // page behaves exactly as it does today. Same rule as `snapshots.fetchRemote`.
 
 /**
- * How many free agents a wire document holds. The same number the Players page
- * asks ESPN for, deliberately: a phone reading a shorter list than the desktop
- * showed would be a quiet disagreement about what the wire is.
+ * How many free agents a wire document holds, and the default a caller of
+ * `fetchWireWeek` gets.
+ *
+ * It is deliberately NOT the Players page's own number: that page asks for 100,
+ * and the sync stores 150 so a page asking for any number up to that can be
+ * served from the cloud. `fetchWireWeek` slices the synced list to whatever
+ * limit it was asked for, which is what keeps a phone and a desktop listing the
+ * same men — a phone showing 150 where the desktop showed 100 would be a quiet
+ * disagreement about what the wire is.
  */
 const WIRE_LIMIT = 150;
 
@@ -120,11 +126,10 @@ function cloudDownNow() {
     // connected. The cost of not remembering is one index read per call on a
     // device with nothing synced, against a daily allowance of fifty thousand.
     //
-    // 'wire' is deliberately not asked for. Four of the six pages never touch
-    // it, and the one that does (Players) reads ESPN's RAW free-agent payload
-    // through `espn.fetchFreeAgents` rather than going through this module, so
-    // there is nothing here to substitute it into yet. Asking would be thirteen
-    // document reads a page load that nothing renders.
+    // 'wire' is deliberately not asked for here. Most pages never touch it, and
+    // the one that does (Players) goes through `fetchWireWeek` below, which
+    // makes its own read for exactly the week it wants. Asking here would be
+    // thirteen document reads a page load that nothing renders.
     entry.promise = Promise.resolve()
       .then(() => cloud.readDown(leagueId, season, { shapes: ['rosters', 'schedule'] }))
       .then((res) => {
@@ -370,7 +375,12 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
       try {
         const res = await cloud.readDown(leagueId, season, { shapes: ['wire'], weeks: [w] });
         const players = res && res.ok && res.wire instanceof Map ? res.wire.get(w) : null;
-        if (players && players.length) return players;
+        // Sliced to the limit asked for: the sync stores WIRE_LIMIT men, and a
+        // page asking for fewer must list the same ones it would list live.
+        // The stored list is most-owned first, the order ESPN returned it in,
+        // so the first `limit` are the ones ESPN would have sent.
+        const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : WIRE_LIMIT;
+        if (players && players.length) return players.slice(0, n);
       } catch {
         /* no cloud: fall through to ESPN, exactly as if it were not configured */
       }
@@ -383,8 +393,97 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
     .filter((p) => p.playerId !== null && p.playerId !== undefined);
 }
 
+// ===========================================================================
+// WHAT COUNTS AS A RESULT
+// ===========================================================================
+
 /**
- * The full season schedule, week by week, with results where they exist.
+ * Is this ESPN `schedule[]` entry a regular-season game?
+ *
+ * ESPN's matchup feed carries the playoff and consolation weeks in the same
+ * array (`playoffTierType` 'WINNERS_BRACKET', 'WINNERS_CONSOLATION_LADDER',
+ * 'LOSERS_CONSOLATION_LADDER'; 'NONE' for the regular season — verified
+ * against league 1241838). Left in, a December consolation game counts toward
+ * the standings and luck, and the "last week of the regular season" moves into
+ * the bracket. An entry with no tier at all (an old synced copy, a hand
+ * fixture) is taken as regular season, which is what it was always treated as.
+ */
+export function isRegularSeasonEntry(m) {
+  const tier = m?.playoffTierType;
+  return tier === undefined || tier === null || tier === 'NONE';
+}
+
+/**
+ * Has ESPN DECIDED this game?
+ *
+ * ESPN says so itself: `winner` is 'HOME', 'AWAY' or 'TIE' once the matchup is
+ * final and 'UNDECIDED' until then — including from Thursday night to Monday,
+ * when both sides already have points. Counting "somebody has points" as
+ * played, which is what this used to do, put half-played weeks into the
+ * standings, the luck columns and every "weeks played" count for four days a
+ * week.
+ *
+ * An entry with no `winner` at all — an old synced copy, a hand-written
+ * fixture — falls back to the old points rule, so nothing that worked before
+ * stops working. Both sides must exist either way: a bye is never a result.
+ */
+export function isDecidedEntry(m) {
+  if (!m?.home || !m?.away) return false;
+  const h = m.home.totalPoints;
+  const a = m.away.totalPoints;
+  if (typeof h !== 'number' || typeof a !== 'number') return false;
+  if (typeof m.winner === 'string') return m.winner !== 'UNDECIDED';
+  return h > 0 || a > 0;
+}
+
+/** ESPN's winner in this file's spelling; falls back to the points. */
+function winnerOf(m) {
+  if (m.winner === 'HOME') return 'home';
+  if (m.winner === 'AWAY') return 'away';
+  if (m.winner === 'TIE') return 'tie';
+  const h = m.home.totalPoints;
+  const a = m.away.totalPoints;
+  return h > a ? 'home' : a > h ? 'away' : 'tie';
+}
+
+/** One `schedule[]` entry in the shape every page reads. */
+function normaliseGame(m, nameById) {
+  const week = m.matchupPeriodId;
+  const homePts = m.home.totalPoints ?? null;
+  const awayPts = m.away ? m.away.totalPoints ?? null : null;
+  const played = isDecidedEntry(m);
+  return {
+    week,
+    homeId: m.home.teamId,
+    homeName: nameById.get(m.home.teamId) || `Team ${m.home.teamId}`,
+    homeScore: homePts,
+    awayId: m.away ? m.away.teamId : null,
+    awayName: m.away ? nameById.get(m.away.teamId) || `Team ${m.away.teamId}` : 'BYE',
+    awayScore: awayPts,
+    played,
+    margin: played ? Math.round((homePts - awayPts) * 10) / 10 : null,
+    winner: played ? winnerOf(m) : null,
+  };
+}
+
+/** Group games by week; returns [byWeek, sorted weeks]. */
+function groupByWeek(games) {
+  const byWeek = new Map();
+  for (const g of games) {
+    if (!byWeek.has(g.week)) byWeek.set(g.week, []);
+    byWeek.get(g.week).push(g);
+  }
+  return [byWeek, [...byWeek.keys()].sort((a, b) => a - b)];
+}
+
+/**
+ * The full REGULAR season schedule, week by week, with results where they
+ * exist.
+ *
+ * `games`, `byWeek` and `weeks` hold the regular season only — see
+ * `isRegularSeasonEntry`. The playoff and consolation games ESPN sends in the
+ * same feed are kept apart on `playoffGames` (same shape, plus `tier`, ESPN's
+ * `playoffTierType`) for any caller that wants them; nothing draws them yet.
  */
 export async function fetchSchedule() {
   // Rebuilt rather than handed straight out, even though `readDown` already
@@ -395,18 +494,20 @@ export async function fetchSchedule() {
   // the next caller sees. Sixty-five games; the copy is free.
   const down = await cloudDown();
   if (down && down.schedule && Array.isArray(down.schedule.games)) {
-    const games = down.schedule.games.map((g) => ({ ...g }));
-    const byWeek = new Map();
-    for (const g of games) {
-      if (!byWeek.has(g.week)) byWeek.set(g.week, []);
-      byWeek.get(g.week).push(g);
-    }
+    // A synced game carrying a `tier` is a playoff game that reached `games`
+    // somehow; the copies this build writes never put one there, but the rule
+    // is cheap to hold at both ends.
+    const games = down.schedule.games
+      .filter((g) => g.tier === undefined || g.tier === null || g.tier === 'NONE')
+      .map((g) => ({ ...g }));
+    const [byWeek, weeks] = groupByWeek(games);
     return {
       ...down.schedule,
       teams: (down.schedule.teams || []).map((t) => ({ ...t })),
-      weeks: [...byWeek.keys()].sort((a, b) => a - b),
+      weeks,
       byWeek,
       games,
+      playoffGames: (down.schedule.playoffGames || []).map((g) => ({ ...g })),
     };
   }
 
@@ -414,29 +515,14 @@ export async function fetchSchedule() {
   const parsed = espn.parseLeague(raw);
   const nameById = new Map(parsed.teams.map((t) => [t.id, t.name]));
 
-  const byWeek = new Map();
+  const regular = [];
+  const playoffGames = [];
   for (const m of raw.schedule || []) {
     if (!m.home) continue;
-    const week = m.matchupPeriodId;
-    if (!byWeek.has(week)) byWeek.set(week, []);
-
-    const homePts = m.home.totalPoints ?? null;
-    const awayPts = m.away ? m.away.totalPoints ?? null : null;
-    const played = homePts !== null && awayPts !== null && (homePts > 0 || awayPts > 0);
-
-    byWeek.get(week).push({
-      week,
-      homeId: m.home.teamId,
-      homeName: nameById.get(m.home.teamId) || `Team ${m.home.teamId}`,
-      homeScore: homePts,
-      awayId: m.away ? m.away.teamId : null,
-      awayName: m.away ? nameById.get(m.away.teamId) || `Team ${m.away.teamId}` : 'BYE',
-      awayScore: awayPts,
-      played,
-      margin: played ? Math.round((homePts - awayPts) * 10) / 10 : null,
-      winner: played ? (homePts > awayPts ? 'home' : awayPts > homePts ? 'away' : 'tie') : null,
-    });
+    if (isRegularSeasonEntry(m)) regular.push(normaliseGame(m, nameById));
+    else playoffGames.push({ ...normaliseGame(m, nameById), tier: m.playoffTierType });
   }
+  const [byWeek, weeks] = groupByWeek(regular);
 
   return {
     leagueName: parsed.name,
@@ -458,9 +544,10 @@ export async function fetchSchedule() {
     // number. An archived reading taken before this existed is exactly that
     // case, and so is every test stub.
     playoffs: parsed.playoffs || null,
-    weeks: [...byWeek.keys()].sort((a, b) => a - b),
+    weeks,
     byWeek,
-    games: [...byWeek.values()].flat(),
+    games: weeks.flatMap((w) => byWeek.get(w)),
+    playoffGames,
   };
 }
 
@@ -594,14 +681,13 @@ export async function fetchSeasonData({ onProgress } = {}) {
   const teams = parsed.teams.map((t) => ({ id: t.id, name: t.name, teamName: t.teamName }));
   const teamIds = new Set(teams.map((t) => t.id));
 
-  // Only completed matchups: both sides must have actually scored.
+  // Only DECIDED regular-season matchups — the same two rules `fetchSchedule`
+  // applies, from the same two functions, so the stats page and the standings
+  // cannot disagree about what has been played.
   const played = (raw.schedule || []).filter(
     (m) =>
-      m.home && m.away &&
-      teamIds.has(m.home.teamId) && teamIds.has(m.away.teamId) &&
-      typeof m.home.totalPoints === 'number' &&
-      typeof m.away.totalPoints === 'number' &&
-      (m.home.totalPoints > 0 || m.away.totalPoints > 0)
+      isRegularSeasonEntry(m) && isDecidedEntry(m) &&
+      teamIds.has(m.home.teamId) && teamIds.has(m.away.teamId)
   );
 
   const weeks = [...new Set(played.map((m) => m.matchupPeriodId))].sort((a, b) => a - b);
@@ -649,6 +735,55 @@ export async function fetchSeasonData({ onProgress } = {}) {
 }
 
 // ===========================================================================
+// BYE WEEKS
+// ===========================================================================
+
+let byesCache = null; // { key, promise }
+
+/**
+ * Every NFL team's bye week, `{ [proTeamId]: byeWeek }`.
+ *
+ * What tells a real bye (the week IS his team's bye) from a player ESPN
+ * projects at 0.00 because he is OUT or on IR — the two look identical in the
+ * projection alone.
+ *
+ * NEVER THROWS: `{}` on any failure, and `{}` is "unknown", so a caller must
+ * not read a missing team as "no bye". Demo (no real league configured) is
+ * always `{}` — the demo never claims a bye.
+ *
+ * Source follows the same order as everything else here: the synced copy when
+ * the cloud substitution is active (the desktop publishes the byes with every
+ * sync), otherwise ESPN. Cached for the page's lifetime per season; a failure
+ * or an empty answer is not cached, so a later call can still succeed.
+ */
+export async function fetchByeWeeks() {
+  const { leagueId, season } = espn.getConfig();
+  if (!realLeague(leagueId)) return {};
+
+  const key = `${leagueId}::${season}`;
+  // Each caller gets its own copy, so one page editing the map cannot change
+  // what the next caller is told.
+  if (byesCache && byesCache.key === key) return byesCache.promise.then((b) => ({ ...b }));
+
+  const entry = { key, promise: null };
+  entry.promise = (async () => {
+    try {
+      const down = await cloudDown();
+      if (down && down.byes && Object.keys(down.byes).length) return { ...down.byes };
+      const byes = await espn.fetchByeWeeks();
+      return byes && typeof byes === 'object' ? byes : {};
+    } catch {
+      return {};
+    }
+  })().then((byes) => {
+    if (!Object.keys(byes).length && byesCache === entry) byesCache = null;
+    return byes;
+  });
+  byesCache = entry;
+  return entry.promise.then((b) => ({ ...b }));
+}
+
+// ===========================================================================
 // GATHERING WHAT GETS PUBLISHED
 // ===========================================================================
 
@@ -690,11 +825,15 @@ export async function buildCloudPayload({ onProgress } = {}) {
   // last week of a fourteen-week regular season, so a phone reading the synced
   // copy had a hole in it exactly where the season is decided.
   //
-  // The schedule is the honest bound and needs no filter: ESPN's matchup feed
-  // ends with the regular season, so `schedule.weeks` IS the list of weeks
-  // there are. A league whose feed carries playoff weeks syncs those too, which
-  // is what keeps its December results.
-  const weeks = schedule.weeks.slice();
+  // The schedule is the honest bound. `schedule.weeks` is the regular season
+  // only; ESPN's feed also carries the playoff and consolation weeks once the
+  // bracket exists (it did for every week of 2025), and those are kept apart
+  // on `playoffGames`. Their squads are synced too — that is what keeps a
+  // phone's December bracket and results — so the span is the union.
+  const weeks = [...new Set([
+    ...schedule.weeks,
+    ...(schedule.playoffGames || []).map((g) => g.week),
+  ])].filter((w) => Number.isFinite(w)).sort((a, b) => a - b);
 
   // Schedule, then a roster request and a wire request per week, then the byes.
   const total = weeks.length * 2 + 2;

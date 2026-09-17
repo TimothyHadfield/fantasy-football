@@ -273,6 +273,19 @@ export async function fetchSchedule() {
   };
 }
 
+/**
+ * The bye-week map, keyed by pro team id (every stub player is team 1).
+ *
+ * TR_BYES unset means "unknown" — `{}` — which keeps the old reading, a live
+ * 0.00 is a bye, and so every scenario that predates the rule is unchanged. Set
+ * it to put team 1's bye somewhere else, and `Bills D/ST`'s week-8 zero stops
+ * being a bye: it is then a real zero, and it counts in his per-week figure.
+ */
+export async function fetchByeWeeks() {
+  const raw = process.env.TR_BYES || '';
+  return raw ? JSON.parse(raw) : {};
+}
+
 export async function fetchSeasonData() {
   throw new Error('fetchSeasonData is not used by the Trade page');
 }

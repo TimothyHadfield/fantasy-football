@@ -16,9 +16,13 @@
 //                     'failed'  ESPN refused that week for everybody
 //                     'off'     he was not on this roster that week
 //                     null      ESPN carried no number for him that week
-//                   A number 0 means "no game that week" on LIVE data and is
-//                   drawn "Bye"; on demo data a zero is a real zero, which is
-//                   what `demo: true` says.
+//                   A number 0 is drawn "Bye" only when `week` is his NFL
+//                   team's bye week (`byeWeek`); otherwise it is a real zero,
+//                   and a ruled-out man's zero carries the word (OUT / IR).
+//                   With `byeWeek` unknown a live 0 is a bye, as it always
+//                   was; on demo data a zero is never a bye. See `zeroKind`.
+//     `byeWeek`     his NFL team's bye week, or null — `byeWeekOf(p, byes)`.
+//     `injuryStatus` ESPN's status, one string or one per week.
 //     `actuals`     one entry per week, same order and same vocabulary. What
 //                   he ACTUALLY scored. See "the Act row" below.
 //     `currentWeek` the week the rest of the page is showing; it is bracketed.
@@ -118,23 +122,93 @@ const esc = (s) =>
 const fmt = (n) =>
   n === null || n === undefined || Number.isNaN(n) ? '—' : Number(n).toFixed(1);
 
+// ------------------------------------------- a zero: a bye, or a man ruled out?
+//
+// THE ONE PLACE THIS IS DECIDED. Every page that draws a week's projection asks
+// here, so the Players page, the analysis grids, the Trade page and this card
+// cannot come to different answers about the same 0.00.
+//
+// "A 0.00 means a bye" was the rule for a long time, and it is WRONG. Verified
+// against public league 1241838 on 2026-09-16: ESPN projects a player it has
+// ruled out — OUT, on injured reserve, and sometimes a day-to-day man too — at
+// exactly 0.00 in weeks that are NOT his team's bye. A.J. Brown (IR, bye week
+// 11) is 0.00 in weeks 2 and 5. A real bye is also 0.00. So the number alone
+// cannot say which, and the week has to be checked against his NFL team's bye
+// week (`fetchByeWeeks()` in js/season.js, keyed by `proTeamId`).
+//
+// When the bye weeks are NOT known — that read failed, or this is a player with
+// no NFL team — the old rule stands, so a failed lookup costs nothing that
+// worked before. And on the sample data a zero is never a bye at all: the demo
+// rosters pin a man they have ruled out at zero, which is the same rule
+// `projToken(v, demo)` has always followed.
+
+const OUT_MARKS = { OUT: 'OUT', INJURY_RESERVE: 'IR', SUSPENSION: 'SUSP' };
+
+/** 'OUT' / 'IR' / 'SUSP' for a man ESPN has ruled out, '' for anyone else. */
+export function outMark(status) {
+  return OUT_MARKS[status] || '';
+}
+
+/**
+ * His NFL team's bye week, or null when it is not known.
+ *
+ * A `byeWeek` carried on the player wins (the Players page's sample wire has
+ * one); otherwise it is looked up by `proTeamId` in the `fetchByeWeeks()` map.
+ */
+export function byeWeekOf(p, byes) {
+  if (!p) return null;
+  if (Number.isFinite(p.byeWeek)) return p.byeWeek;
+  if (!byes || p.proTeamId === null || p.proTeamId === undefined) return null;
+  const b = Number(byes[p.proTeamId]);
+  return Number.isFinite(b) && b > 0 ? b : null;
+}
+
+/**
+ * What a projection of exactly 0 means.
+ *
+ *   'bye'   his NFL team is off that week (or the bye weeks are unknown, and
+ *           the old rule is kept so nothing regresses)
+ *   'out'   a real zero for a man ESPN has ruled out — drawn "0.0" plus the
+ *           word (OUT / IR / SUSP), never as a bye
+ *   'zero'  a real zero for anyone else — drawn as the number
+ *   null    it is not a zero at all
+ *
+ * @param {*} v the week's value
+ * @param {{week?:number, byeWeek?:number|null, injuryStatus?:string, demo?:boolean}} ctx
+ */
+export function zeroKind(v, { week = null, byeWeek = null, injuryStatus = null, demo = false } = {}) {
+  if (v !== 0) return null;
+  if (!demo) {
+    if (!Number.isFinite(byeWeek)) return 'bye';
+    if (week === byeWeek) return 'bye';
+  }
+  return outMark(injuryStatus) ? 'out' : 'zero';
+}
+
+/** Is this value a bye week? The yes/no form of `zeroKind`. */
+export const isByeZero = (v, ctx) => zeroKind(v, ctx) === 'bye';
+
 // -------------------------------------------------------------- the run data
 
 /**
- * How a week's PROJECTION reads, and which of the five states it is.
+ * How a week's PROJECTION reads, and which of the six states it is.
  *
  * The ways of having no number stay different things, exactly as they are in
  * the season grid — that table tells them apart by class, and so does this.
+ *
+ * `ctx` is `{ week, byeWeek, injuryStatus }` for the zero rule above. Without
+ * it the bye week is unknown and a live zero is a bye, as it always was.
  */
-export function projToken(v, demo = false) {
+export function projToken(v, demo = false, ctx = {}) {
   if (v === 'wait') return { text: '·', kind: 'wait' };
   if (v === 'failed') return { text: '—', kind: 'none' };
   if (v === 'off') return { text: 'off', kind: 'off' };
   if (v === null || v === undefined) return { text: '—', kind: 'none' };
-  // Only ESPN means "no game that week" by a 0.00. The sample data means "we
-  // have ruled him out", so demo prints the number rather than claiming a bye
-  // it cannot know about — the same rule the season grid follows.
-  if (v === 0 && !demo) return { text: 'Bye', kind: 'bye' };
+  const zero = zeroKind(v, { ...ctx, demo });
+  if (zero === 'bye') return { text: 'Bye', kind: 'bye' };
+  // A ruled-out zero is the number AND the word, and a class of its own: the
+  // word is what says it is not a bye, so colour is never the only cue.
+  if (zero === 'out') return { text: fmt(v), kind: 'out', mark: outMark(ctx.injuryStatus) };
   return { text: fmt(v), kind: 'num' };
 }
 
@@ -174,6 +248,7 @@ export function actToken(v) {
 /** Explained only when it actually turns up, so a clean run has no legend. */
 export const RUN_KEYS = {
   bye: 'Bye = the 0.00 ESPN returns for a player whose NFL team is off that week',
+  out: '0.0 over OUT / IR = ESPN projects nothing because he is ruled out, not on bye',
   none: '— = ESPN carried no number for him that week',
   off: 'off = he was not on this roster that week',
   wait: '· = that week has not been read from ESPN yet',
@@ -194,6 +269,8 @@ export function weekRun({
   actuals = [],
   currentWeek = null,
   demo = false,
+  byeWeek = null,
+  injuryStatus = null,
 } = {}) {
   if (!weeks.length) return null;
 
@@ -201,9 +278,12 @@ export function weekRun({
     return { heading, pending: 'Not read yet — they fill in behind the page.', cols: [], legend: [] };
   }
 
+  // One status for the whole run, or one per week when the page has them.
+  const statusAt = (i) => (Array.isArray(injuryStatus) ? injuryStatus[i] : injuryStatus);
+
   const cols = weeks.map((week, i) => ({
     week,
-    proj: projToken(projections[i], demo),
+    proj: projToken(projections[i], demo, { week, byeWeek, injuryStatus: statusAt(i) }),
     act: actToken(actuals[i]),
     now: week === currentWeek,
   }));
@@ -230,9 +310,12 @@ export const TIP_ATTR = 'data-tip';
  * `prefix` is only a debugging courtesy — it lets you see which container a key
  * came from — and nothing reads it back. Uniqueness comes from the counter.
  */
-export function registerRun({ ident = '', run = null, href = null } = {}, prefix = 'p') {
+export function registerRun({ ident = '', run = null, href = null, id = null } = {}, prefix = 'p') {
   const key = `${prefix}:${seq++}`;
-  RUNS.set(key, { ident, run, href });
+  // `id` is optional and is NOT the key: it is a stable name for "this man in
+  // this place" (the analysis grids use grid + team + player), and it is only
+  // read by `reopenTip`, to find the same card again after a repaint.
+  RUNS.set(key, { ident, run, href, id });
   return key;
 }
 
@@ -255,6 +338,7 @@ export function clearRuns() {
 
 let cardEl = null;
 let asSheet = false;      // is the card currently open as a tap-opened sheet?
+let openId = null;        // the stable `id` of the run the open card shows, if it has one
 
 // `coarsePointer` is imported from connection.js rather than written again
 // here. Two things turn on it — whether this card opens as a tap-opened sheet,
@@ -399,8 +483,11 @@ function chartLines(cols, cap) {
 function lineHtml(cols) {
   const weeks = cols
     .map((c) => `<th${c.now ? ' class="now"' : ''} scope="col">${c.week}</th>`).join('');
+  // A ruled-out zero stacks its word UNDER the number (`.tc-mk` is a block), so
+  // the column stays the 34px floor and `perLine` stays right.
   const projs = cols
-    .map((c) => `<td class="k-${c.proj.kind}${c.now ? ' now' : ''}">${esc(c.proj.text)}</td>`).join('');
+    .map((c) => `<td class="k-${c.proj.kind}${c.now ? ' now' : ''}">${esc(c.proj.text)}` +
+      `${c.proj.mark ? `<span class="tc-mk">${esc(c.proj.mark)}</span>` : ''}</td>`).join('');
   const acts = cols
     .map((c) => `<td class="a-${c.act.kind}${c.now ? ' now' : ''}">${esc(c.act.text)}</td>`).join('');
   return (
@@ -449,6 +536,7 @@ function showTip(cell, sheet = false) {
   if (!data) return;
   const el = cardNode();
   asSheet = sheet;                        // read by cardHtml, so set it first
+  openId = data.id ?? null;
   el.innerHTML = cardHtml(data, sheet);
   el.classList.toggle('sheet', sheet);
   // A hover card is a tooltip; a thing you opened, can read and must dismiss is
@@ -472,6 +560,35 @@ function showTip(cell, sheet = false) {
 export function hideTip() {
   if (cardEl) cardEl.hidden = true;
   asSheet = false;
+  openId = null;
+}
+
+/**
+ * Keep an open card open across a repaint — call it AFTER the new markup is in.
+ *
+ * The analysis grids repaint once per batch of weeks while the season loads,
+ * and they used to close the card on every one: a card opened in the first
+ * seconds after load simply vanished under the reader, twice or three times.
+ * So a repaint no longer closes it. Instead the card looks for the SAME run —
+ * by the stable `id` it was registered with — among the cells now on the page,
+ * and redraws itself from that cell's (newer) data, in the same mode.
+ *
+ * If that man is no longer on screen, or the run had no `id` to find it by, the
+ * card closes: a card describing a cell that is gone is the thing to avoid.
+ */
+export function reopenTip() {
+  if (!cardEl || cardEl.hidden) return;
+  const id = openId;
+  const sheet = asSheet;
+  if (id === null) { hideTip(); return; }
+  for (const [key, data] of RUNS) {
+    if (data.id !== id) continue;
+    const cell = typeof document.querySelector === 'function'
+      ? document.querySelector(`[${TIP_ATTR}="${key.replace(/["\\]/g, '\\$&')}"]`)
+      : null;
+    if (cell) { showTip(cell, sheet); return; }
+  }
+  hideTip();
 }
 
 /**

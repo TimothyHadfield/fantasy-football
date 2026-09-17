@@ -8,11 +8,13 @@
 // over is the mistake this file used to make, and it went unnoticed because the
 // demo season it always booted into was complete by definition.
 
-import { fetchSchedule, fetchWeeksRosters } from './season.js';
+// A namespace import, not named ones: `cloudSource` is asked for only if the
+// module has it, and the test harnesses swap this file for stubs that do not.
+import * as season from './season.js';
 import { generateDemoLeague } from './demo.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
-import { projectionsFromWeekTeams } from './projection.js';
+import * as capture from './capture.js';
 import { histogram } from './charts.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -50,48 +52,18 @@ const SIM_SEED = 20260901;
 const SIM_RUN_CHOICE = (v) => (SIM_RUNS.includes(Number(v)) ? Number(v) : 10000);
 
 /**
- * How many teams make the playoffs. ONE named constant, deliberately.
- *
- * Tim's ESPN settings say `Playoff Teams: 6`; his prose alongside them said
- * four. The settings win — but the two disagreeing is exactly why this is a
- * single line rather than a number sprinkled through the bracket code, and why
- * the panel states the field size on screen. Change this to 4 and the bracket,
- * the byes, the round count, the column headers and the note all follow; a
- * wrong value shows up in the first sentence under the table rather than hiding
- * in the arithmetic.
- *
- * IT IS ONLY A FALLBACK NOW. `js/espn.js`'s `parseLeague` decodes ESPN's own
- * `scheduleSettings` and `js/season.js`'s `fetchSchedule` carries it through,
- * so on live data the real field size is used and the note below says it was
- * read from the league rather than assumed. Probed 2026-09-16: league 1241838
- * returns 6 and 899513 returns 4, so this genuinely differs between leagues and
- * a constant would be wrong for somebody.
- *
- * The fallback still earns its place: demo has no ESPN settings at all, and an
- * archived reading taken before this existed carries none either. Both get this
- * number and both say so.
- */
-const DEFAULT_PLAYOFF_TEAMS = forecast.DEFAULT_PLAYOFF_TEAMS;   // 6, from Tim's settings
-
-/**
  * How many teams make the playoffs, for the season on screen.
  *
- * A function rather than a constant because the answer arrives with the data:
- * demo and an old archive have no settings, and a different league has a
- * different bracket. Clamped to the league size, because a six-team bracket in
- * a four-team stub is not a thing and would seat teams that do not exist.
+ * ESPN's own `scheduleSettings` on live data (probed 2026-09-16: league 1241838
+ * says 6, 899513 says 4); forecast.js's fallback of six — Tim's pasted settings
+ * — for demo and for a reading that carries no settings, and the panel says
+ * which. The rule lives in js/capture.js because the Summary page asks the same
+ * question and must get the same answer: it used to hardcode six.
  */
-function playoffTeams() {
-  const n = state.data?.teams?.length || 0;
-  const said = state.data?.playoffs?.playoffTeams;
-  const want = Number.isFinite(said) && said > 0 ? said : DEFAULT_PLAYOFF_TEAMS;
-  return n ? Math.min(want, n) : want;
-}
+const playoffTeams = () => capture.playoffTeams(state.data);
 
 /** Did ESPN tell us the field size, or are we assuming it? Drives the note. */
-function playoffTeamsKnown() {
-  return Number.isFinite(state.data?.playoffs?.playoffTeams);
-}
+const playoffTeamsKnown = () => capture.playoffTeamsKnown(state.data);
 
 const state = {
   source: prefs.get('source', 'demo'),
@@ -127,6 +99,19 @@ const state = {
   committedWeeks: new Set(),
   snapMsg: '',              // the last thing the archive controls did, in words
   snapErr: false,
+
+  // week -> teamId -> what each squad's STARTED lineup was projected to score,
+  // for the weeks already decided. What the scoring spread is measured from;
+  // see capture.leagueSpread.
+  started: null,
+  // True when the live data on screen is the synced cloud copy rather than
+  // ESPN. A reading is never taken from it.
+  synced: false,
+  // Why the live load failed, when it did — for the time machine's status line.
+  loadError: '',
+  // How many of the roster weeks ESPN refused, in words, when that is why
+  // there is no projection.
+  rosterGap: '',
 };
 
 // ------------------------------------------------------------------ formatting
@@ -178,34 +163,11 @@ function shortName(name) {
 
 // ----------------------------------------------------------------- game state
 
-/**
- * final | live | upcoming, decided here rather than trusted from the source.
- *
- * season.js marks a game played when EITHER side has points. Mid-week that is
- * wrong in the worst possible way: one team's players have finished and the
- * other's have not, so the game flips to played, with a winner and an 80-point
- * margin, and the card confidently reports a final score for a game half of
- * which has not kicked off. Exactly one side on the board means in progress.
- */
-function gameState(g) {
-  const scored = (v) => typeof v === 'number' && v > 0;
-
-  // A bye has no away side to compare against; trust the source there.
-  if (g.awayId === null || g.awayId === undefined) return g.played ? 'final' : 'upcoming';
-
-  if (scored(g.homeScore) !== scored(g.awayScore)) return 'live';
-  if (!scored(g.homeScore) && !scored(g.awayScore)) return 'upcoming';
-  return g.played ? 'final' : 'live';
-}
-
-/** Recomputed from the scores, so a mis-set `winner` upstream can't leak in. */
-function winnerOf(g) {
-  if (gameState(g) !== 'final') return null;
-  if (typeof g.homeScore === 'number' && typeof g.awayScore === 'number') {
-    return g.homeScore > g.awayScore ? 'home' : g.awayScore > g.homeScore ? 'away' : 'tie';
-  }
-  return g.winner;
-}
+// final | live | upcoming, and who won — decided from the scores rather than
+// trusted from the source. Shared with the connection bar's reading and the
+// Summary page (js/capture.js), so a game cannot be final on one and live on
+// another.
+const { gameState, winnerOf } = capture;
 
 /** Home points minus away points. Positive means the home team won. */
 function marginOf(g) {
@@ -295,55 +257,31 @@ function withDemoProjections(data) {
 }
 
 /**
- * Fill in anything a source left out and guarantee byWeek is a real Map, so
- * the renderers never have to guess. Cheap insurance against a slightly
- * different demo-rosters.js.
+ * Fill in anything a source left out and guarantee byWeek is a real Map. It
+ * lives in js/capture.js because the connection bar's reading must normalise a
+ * schedule exactly as this page does — including carrying the league's own
+ * playoff settings through, which this page once dropped.
  */
-function normalizeSchedule(raw, { isDemo }) {
-  const games = raw.games || [...(raw.byWeek?.values?.() || [])].flat();
+const normalizeSchedule = capture.normalizeSchedule;
 
-  const byWeek = new Map();
-  for (const g of games) {
-    if (!byWeek.has(g.week)) byWeek.set(g.week, []);
-    byWeek.get(g.week).push(g);
+/**
+ * Is the live data the synced cloud copy? Asked of js/season.js, which is the
+ * one place that knows; a stub without `cloudSource` is taken as "no".
+ */
+async function syncedCopy() {
+  if (typeof season.cloudSource !== 'function') return false;
+  try {
+    return Boolean(await season.cloudSource());
+  } catch {
+    return false;
   }
-
-  const weeks = [...byWeek.keys()].sort((a, b) => a - b);
-
-  // Prefer the source's team list; otherwise recover it from the games.
-  let teams = raw.teams;
-  if (!teams || !teams.length) {
-    const seen = new Map();
-    for (const g of games) {
-      if (g.homeId != null && !seen.has(g.homeId)) seen.set(g.homeId, g.homeName);
-      if (g.awayId != null && !seen.has(g.awayId)) seen.set(g.awayId, g.awayName);
-    }
-    teams = [...seen].map(([id, name]) => ({ id, name }));
-  }
-
-  return {
-    leagueName: raw.leagueName || (isDemo ? 'Demo League' : 'Your league'),
-    teams: teams.map((t) => ({ id: t.id, name: t.name })),
-    // Carried through, not rebuilt. This page normalises into its own shape and
-    // everything downstream reads `state.data`, so a field dropped here is a
-    // field the bracket can never see — which is exactly what happened: the
-    // league's own playoff settings reached `fetchSchedule` and then stopped at
-    // this return, leaving the panel assuming a six-team field and saying so.
-    //
-    // Null for demo and for an archived reading taken before ESPN's settings
-    // were decoded, and `playoffTeams()` falls back for both. A null here means
-    // "ESPN did not say", never a number.
-    playoffs: raw.playoffs || null,
-    weeks,
-    byWeek,
-    games,
-    isDemo,
-  };
 }
 
 async function loadDemo() {
   setStatus('Generated sample data — not your real league.');
   state.myTeamId = null;
+  state.synced = false;
+  state.loadError = '';
   const raw = await demoSchedule();
   adopt(withDemoProjections(normalizeSchedule(raw, { isDemo: true })));
 }
@@ -354,9 +292,12 @@ async function loadLive() {
   // found a league saved by the other.
   const saved = savedConfig();
   if (!saved) {
+    state.loadError = 'no league is connected.';
     setStatus('No league connected yet. Connect one in the bar above, or on the Connection page.', true);
+    renderArchive();
     return;
   }
+  state.loadError = '';
 
   espn.configure({ leagueId: saved.leagueId, season: saved.season });
   state.myTeamId = saved.teamId ?? null;
@@ -386,15 +327,20 @@ async function loadLive() {
   }
 
   try {
-    const raw = await fetchSchedule();
+    const raw = await season.fetchSchedule();
     const data = normalizeSchedule(raw, { isDemo: false });
+    // Where it came from, settled once per load. The cloud read is cached by
+    // js/season.js, so asking again costs nothing.
+    state.synced = await syncedCopy();
 
     if (!data.games.length) {
+      state.loadError = 'ESPN returned no matchups for this season.';
       setStatus(
         `Connected to ${esc(data.leagueName)}, but ESPN returned no matchups. ` +
         `If the season hasn't started, try an earlier season on the Connection page.`,
         true
       );
+      renderArchive();
       return;
     }
 
@@ -405,7 +351,9 @@ async function loadLive() {
     );
     adopt(data);
   } catch (err) {
+    state.loadError = `ESPN refused the schedule (${err.message}).`;
     setStatus(err.message, true);
+    renderArchive();
   }
 }
 
@@ -431,22 +379,30 @@ function archiveId() {
   return { leagueId: String(cfg.leagueId), season: Number(cfg.season) };
 }
 
-/** Take a reading of what is on screen now. */
+/**
+ * Take a reading of what is on screen now.
+ *
+ * Through `capture.readingFrom`, the same call the connection bar's route
+ * makes — so a reading taken here and one taken from any other page are the
+ * same record for the same data (tests/test-capture.mjs holds them to it).
+ */
 function captureNow() {
   const id = archiveId();
   if (!id || !state.data) return null;
-  const spread = state.replay ? { sigma: null } : scoringSpread();
-  return snapshots.snapshotFrom({
+  return capture.readingFrom({
     leagueId: id.leagueId,
     season: id.season,
     week: forecastAsOf(),
     data: state.data,
     projection: state.projection,
     strengthNote: state.strengthNote,
-    sigma: spread.sigma,
-    calibrated: spread.calibrated,
-    sample: spread.sample,
+    spread: state.replay ? null : scoringSpread(),
   });
+}
+
+/** Note how an automatic attempt went, where the status line can read it. */
+function noteAttempt(id, rec) {
+  snapshots.saveAttempt(id.leagueId, id.season, { at: Date.now(), source: 'page', ...rec });
 }
 
 /**
@@ -466,21 +422,53 @@ function captureNow() {
  * archive with weeks that never happened, and every reload would race to write
  * them. The button still works there, which is how the feature can be tried
  * before there is a real season to try it on.
+ *
+ * NOR IS THE SYNCED COPY. On a phone the "live" data is what the desktop sent
+ * to the cloud, as old as the last desktop visit; filing it as this week's
+ * reading would record a stale forecast as a fresh one. HANDOFF: a reading is
+ * taken on the computer. A direct read of a public league is live ESPN data
+ * and is still captured.
+ *
+ * Every outcome that is not a success is noted with `snapshots.saveAttempt`,
+ * which the status line at the top of the panel reads — as it does the
+ * connection bar's attempts from other pages.
  */
 function autoCapture() {
   if (state.replay) return;                 // never record a recording
   if (!state.data || state.data.isDemo) return;
-  if (!state.projection) return;            // no forecast in it yet — wait
   const id = archiveId();
   if (!id) return;
 
   const week = forecastAsOf();
   if (!Number.isFinite(week) || week <= 0) return;
-  if (snapshots.get(id.leagueId, id.season, week)) return;   // already have it
+  if (snapshots.get(id.leagueId, id.season, week)) {   // already have it
+    renderArchive();
+    return;
+  }
+
+  if (state.synced) {
+    noteAttempt(id, { ok: false, week, code: 'cloud', text: capture.CLOUD_TEXT });
+    renderArchive();
+    return;
+  }
+
+  // No forecast in it — ESPN would not give the rosters. Saving the schedule
+  // alone would, under first-write-wins, block the good reading all week.
+  if (!state.projection) {
+    noteAttempt(id, {
+      ok: false, week, code: 'no-projection',
+      text: state.rosterGap || 'ESPN’s rosters could not be read, so there was no projection to record.',
+    });
+    renderArchive();
+    return;
+  }
 
   const snap = captureNow();
   if (!snap) return;
   const res = snapshots.save(snap);
+  noteAttempt(id, res.ok
+    ? { ok: true, week, code: 'ok', text: '' }
+    : { ok: false, week, code: 'save-failed', text: res.reason });
   state.snapMsg = res.ok
     ? `Saved a reading of week ${week} automatically — this is what the app knew today.`
     : `Could not save week ${week}: ${res.reason}`;
@@ -523,6 +511,7 @@ function replaySnapshot(week) {
       projection: state.projection,
       strength: state.strength,
       strengthNote: state.strengthNote,
+      started: state.started,
       week: state.week,
     };
   }
@@ -530,6 +519,9 @@ function replaySnapshot(week) {
   state.replay = snap;
   state.data = built.data;
   state.projection = built.projection;
+  // Today's lineups have no business calibrating an old week. A reading
+  // carries its own spread; one that does not falls back to the games' own.
+  state.started = null;
   state.strength = built.projection ? built.projection.strength : null;
   state.strengthNote = built.strengthNote;
   // A run in flight is about the live season; retire it rather than letting it
@@ -563,13 +555,57 @@ function leaveReplay() {
   state.projection = live.projection;
   state.strength = live.strength;
   state.strengthNote = live.strengthNote;
+  state.started = live.started || null;
   state.week = live.data.weeks.includes(live.week) ? live.week : currentWeek(live.data);
   state.sim = null;        // the cached run belongs to the archived season
   state.simToken++;
   render();
 }
 
+/**
+ * Was THIS week recorded — and if not, the real reason.
+ *
+ * The one line Tim needs from this panel, answered for his real league even
+ * when the page is on demo or replaying: the reading may have been taken by
+ * the connection bar on another page, and a week never recorded is gone.
+ */
+function captureStatus() {
+  const onLive = state.data && !state.data.isDemo;
+  let id = onLive ? archiveId() : null;
+  if (!id) {
+    const cfg = savedConfig();
+    if (cfg) id = { leagueId: String(cfg.leagueId), season: Number(cfg.season) };
+  }
+  if (!id) return capture.statusLine({ context: { code: 'no-league' } });
+
+  // The live season this week is measured against: the one on screen, or the
+  // one put aside while an archived week is replayed.
+  const live = state.replay ? state.live?.data || null : onLive ? state.data : null;
+  const attempt = snapshots.lastAttempt(id.leagueId, id.season);
+  const week = live ? capture.liveAsOf(live) : attempt?.week ?? null;
+  const snap = week ? snapshots.get(id.leagueId, id.season, week) : null;
+
+  let context = null;
+  if (state.source === 'demo') context = { code: 'demo' };
+  else if (state.loadError) context = { code: 'no-live', text: state.loadError };
+  else if (!state.data || state.data.isDemo) context = { code: 'pending' };
+  else if (state.replay) context = { code: 'replay' };
+  else if (state.synced) context = { code: 'cloud' };
+  else if (!state.strengthNote) context = { code: 'pending' };
+
+  return capture.statusLine({ week, snap, attempt, context });
+}
+
+function renderCaptureStatus() {
+  const el = $('snapLine');
+  if (!el) return;
+  const s = captureStatus();
+  el.className = `snap-line ${s.tone}`;
+  el.textContent = s.text;
+}
+
 function renderArchive() {
+  renderCaptureStatus();
   const id = archiveId();
   const sel = $('asOfSelect');
   const banner = $('replayBanner');
@@ -613,6 +649,9 @@ function renderArchive() {
   // The banner. Loud, because every number below it is historical and a reader
   // who skims past it and reads the forecast as current has been misled.
   if (state.replay) {
+    // Never folded away while an archive is on screen: the banner lives in the
+    // fold, and it is the one thing on the page that must not be missed.
+    $('timeFold')?.setAttribute('open', '');
     const when = new Date(state.replay.takenAt);
     const stamp = Number.isNaN(when.getTime()) ? 'an earlier date' : when.toLocaleString();
     banner.classList.remove('hidden');
@@ -648,9 +687,13 @@ function renderArchiveNote(id, saved) {
     ? 'Sample data is never recorded automatically — it is generated, not observed — but ' +
       '<strong>Save this week</strong> works here so the feature can be tried before there is a ' +
       'real season to try it on.'
-    : 'A reading is taken <strong>automatically, once per week</strong>, the first time the page ' +
-      'loads with ESPN&rsquo;s projections in it. The earliest complete reading of a week is the ' +
-      'one kept, because that is the one taken before any of the games it forecasts were played.';
+    : 'A reading is taken <strong>automatically, once per week</strong>: by this page the first ' +
+      'time it loads with ESPN&rsquo;s projections in it, and by the connection bar on <em>any</em> ' +
+      'page of the site opened on your computer with the extension. Both build it the same way. ' +
+      'The earliest complete reading of a week is the one kept, because that is the one taken ' +
+      'before any of the games it forecasts were played. A reading is never taken from demo data ' +
+      'or from the copy synced to your phone &mdash; a phone cannot read the league live, so what it ' +
+      'holds is only as fresh as your last visit on the computer.';
 
   // Which readings exist only in this browser. THE ONE THING TO ACT ON, so it
   // is worked out rather than left to the reader to keep track of: an export is
@@ -714,6 +757,8 @@ function adopt(data) {
   state.strength = null;
   state.strengthNote = '';
   state.projection = null;
+  state.started = null;
+  state.rosterGap = '';
   // A run still in flight is about the league we just replaced; retire it here
   // rather than letting it land and be discarded on a key mismatch later.
   state.sim = null;
@@ -735,10 +780,7 @@ function restoreWeek(data) {
  * or the first week of the season if nothing has been played at all.
  */
 function currentWeek(data = state.data) {
-  const started = data.weeks.filter((w) =>
-    (data.byWeek.get(w) || []).some((g) => gameState(g) !== 'upcoming')
-  );
-  return started.length ? started[started.length - 1] : data.weeks[0] ?? 'all';
+  return capture.currentWeek(data);
 }
 
 function setStatus(msg, isError = false) {
@@ -770,125 +812,29 @@ function setStatus(msg, isError = false) {
 // reason — ESPN's own projection carries availability, and second guessing it
 // would move our totals away from the ones being checked against.
 //
-// The cost is one request per remaining week. There is no bulk form; that was
-// checked rather than assumed.
+// The cost is one request per week of the season — the remaining ones for the
+// projection, the decided ones for the scoring spread — plus the playoff weeks.
+// There is no bulk form; that was checked rather than assumed.
 
 /**
- * Turn per-week rosters into everything this page needs from a projection.
- *
- * projection.js works out the points; the rest is what only a page can judge —
- * a comparable strength per team, a refusal to hand back a projection with a
- * hole in it, and a note saying where the numbers came from.
- *
- * That note has to state how the starting slots were decided, because they can
- * be either read or guessed: projection.js counts them off the lineups ESPN
- * already sent (a fourth request for `parseLeague().starterSlots` buys nothing
- * an illegal lineup could not already rule out), and only falls back to
- * DEFAULT_SLOTS when the lineups say nothing at all. Guessing a two-receiver
- * league when it has three understates every team by a whole starter, so that
- * fallback is admitted in the note rather than passed off as read.
- *
- * @param {Map<number, Array>} weekTeams week -> teams, from fetchWeeksRosters
- * @returns {Object|null} null when the projection cannot cover the league
+ * Turn per-week rosters into everything this page needs from a projection —
+ * points, a comparable strength, a refusal to hand back one with a hole in it,
+ * and the note saying where the numbers came from. It lives in js/capture.js
+ * so the connection bar builds a reading from exactly the same projection.
  */
-function buildProjection(weekTeams) {
-  const built = projectionsFromWeekTeams(weekTeams);
-  if (!built) return null;
-  const { proj, slots, countsKnown } = built;
-
-  // A projection that only covers some of the league would rank a run-in
-  // against a hole. Better to hand back nothing and let the fallbacks speak.
-  const covered = proj.get([...proj.keys()][0]);
-  if (!covered || covered.size < state.data.teams.length) return null;
-
-  // The comparable number per team: how many points they average over the
-  // weeks still to play. Per WEEK, unlike the season-total basis below it,
-  // which is what makes it safe to print on a card as a score.
-  const ahead = [...proj.keys()].filter((w) =>
-    (state.data.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
-  );
-  const over = ahead.length ? ahead : [...proj.keys()];
-  const strength = new Map();
-  for (const t of state.data.teams) {
-    let total = 0;
-    let n = 0;
-    for (const w of over) {
-      const v = proj.get(w)?.get(t.id);
-      if (typeof v === 'number') { total += v; n++; }
-    }
-    if (n) strength.set(t.id, total / n);
-  }
-  if (strength.size < state.data.teams.length) return null;
-
-  const starters = slots.length;
-  const slotSource = countsKnown
-    ? `${plural(starters, 'starter')} read from the current lineups`
-    : `${plural(starters, 'starter')} assumed — this league’s own lineup settings could not be read`;
-
-  const got = built.weeks;
-
-  // The playoff weeks ride along in the same map — which is how a snapshot gets
-  // them for free, since js/snapshots.js stores whatever weeks `proj` holds —
-  // but they are NOT part of the strength figure and must not be described as
-  // though they were. `reach` is the regular season only; the bracket weeks get
-  // their own sentence, because "weeks 2 to 17" on a 14-week season reads like
-  // a bug.
-  const lastRegular = regularSeasonLastWeek();
-  const regular = got.filter((w) => w <= lastRegular);
-  const bracketWeeks = got.filter((w) => w > lastRegular);
-  const span = regular.length ? regular : got;
-  const reach =
-    span.length > 1 ? `weeks ${span[0]} to ${span[span.length - 1]}` : `week ${span[0]}`;
-  const bracketNote = bracketWeeks.length
-    ? ` The playoff weeks (${bracketWeeks.join(', ')}) are read the same way and ` +
-      `used only by the simulation below — they are not on ESPN’s schedule, which ` +
-      `stops at week ${lastRegular}, so they are asked for by number.`
-    : '';
-
-  return {
-    proj,
-    slots,
-    strength,
-    weeksCovered: got,
-    playoffWeeksCovered: bracketWeeks,
-    note:
-      `Strength is ESPN’s own projection for each week (${reach}), with the best ` +
-      `legal lineup filled rather than the one currently set (${slotSource}) — ` +
-      `the same total the ESPN site shows under a lineup paged forward to that ` +
-      `week, except that a bench player projected above a starter is counted as ` +
-      `starting. Players on bye come back at zero from ESPN, so they sit down on ` +
-      `their own.${bracketNote}`,
-  };
-}
+const buildProjection = (weekTeams) => capture.buildProjection(state.data, weekTeams);
 
 // ------------------------------------------------------------ playoff weeks
 //
-// THE SCHEDULE IS THE SOURCE OF TRUTH for where the regular season ends. ESPN's
-// matchup feed carries exactly `matchupPeriodCount` weeks and nothing after it
-// (verified 2026-09-16 against public leagues 1241838 — 14 weeks — and 899513 —
-// 15), so the last week on the schedule IS the last regular-season week, in
-// every league, without reading a setting. The demo season is 13 weeks and gets
-// the same treatment; that is the point of deriving it rather than writing 14
-// down somewhere.
-//
-// The number of ROUNDS follows from the field size, not from a second setting —
-// see playoffRoundCount() in forecast.js. Six teams is a three-round bracket in
-// weeks 15, 16 and 17 of Tim's league, which is exactly what his ESPN settings
-// list as Round 1 / Round 2 / Championship at one week each.
+// THE SCHEDULE IS THE SOURCE OF TRUTH for where the regular season ends:
+// js/season.js hands this page the regular season only (ESPN's feed carries
+// the bracket and consolation games too once they exist; season.js sets them
+// aside as `playoffGames`), so its last week is the last regular-season week.
+// The number of ROUNDS follows from the field size; see playoffRoundCount() in
+// forecast.js. Both rules are in js/capture.js, shared with the Summary page.
 
-/** The last week of the regular season, read off the schedule. */
-function regularSeasonLastWeek() {
-  const w = state.data?.weeks || [];
-  return w.length ? w[w.length - 1] : 0;
-}
-
-/** The scoring weeks the bracket falls in, one per round, earliest first. */
-function playoffWeeks() {
-  const last = regularSeasonLastWeek();
-  if (!last) return [];
-  const rounds = forecast.playoffRoundCount(playoffTeams());
-  return Array.from({ length: rounds }, (_, i) => last + 1 + i);
-}
+const regularSeasonLastWeek = () => capture.regularSeasonLastWeek(state.data);
+const playoffWeeks = () => capture.playoffWeeks(state.data);
 
 // -------------------------------------------------------------------- strength
 //
@@ -952,32 +898,32 @@ async function refreshStrength() {
   // 1. ESPN's own projection for each week, with the best legal lineup filled.
   //    Forward-looking, per WEEK, and checkable against the ESPN site by hand,
   //    which is the property that matters most here. It costs a request per
-  //    week, so it asks only for the weeks still to play. The demo has no
-  //    endpoint for it and does not need one: its games carry projections.
+  //    week — see the plan below for which. The demo has no endpoint for it
+  //    and does not need one: its games carry projections.
   if (!state.data.isDemo) {
-    const wanted = state.data.weeks.filter((w) =>
-      (state.data.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
-    );
-    const weeks = wanted.length ? wanted : [currentWeek()];
-
-    // The playoff weeks are fetched too, and they are NOT on the schedule —
-    // ESPN's matchup feed stops at the last regular-season week and only fills
-    // the bracket in once it exists (checked 2026-09-16: league 1241838 returns
-    // 14 matchup periods and nothing beyond, 899513 returns 15). So they are
-    // derived from where the regular season ends, and asked for by number.
+    // WHICH WEEKS, decided in js/capture.js so the connection bar asks for the
+    // same ones (`rosterPlan`):
     //
-    // It really is worth the requests: ESPN publishes a per-player projection
-    // for those weeks exactly as it does for week 4, so the bracket can be
-    // simulated off the same numbers as everything else rather than off an
-    // average. Only asked for while there is still a regular season to play —
-    // once it is decided the simulation panel has nothing to run, so three
-    // requests for a bracket nobody is being shown would be pure cost.
-    const extra = wanted.length ? playoffWeeks() : [];
-    const asking = weeks.concat(extra);
+    //   - every week still to play, and the PLAYOFF weeks, which are not on
+    //     the regular-season schedule this page reads (js/season.js keeps
+    //     bracket games apart, and they do not exist until it is seeded) — so
+    //     they are asked for by number, counting on from the last regular week.
+    //     ESPN publishes per-player projections for them exactly as for week 4,
+    //     so the bracket is simulated off the same numbers as everything else.
+    //     Only while there is a regular season left to play: once it is decided
+    //     the simulation has nothing to run.
+    //   - every week already DECIDED, once each. Their started lineups'
+    //     projections, set against the scores, are what the scoring spread is
+    //     measured from — the same residuals the Summary page's LUCK column and
+    //     its simulation use. Without them this page had nothing to calibrate
+    //     from on live data (ESPN's matchup feed carries no projections) and
+    //     printed an assumed spread while the Summary page measured one, so the
+    //     two quoted different title chances for the same league.
+    const plan = capture.rosterPlan(state.data);
 
     let weekTeams = new Map();
     try {
-      weekTeams = await fetchWeeksRosters(asking, {
+      weekTeams = await season.fetchWeeksRosters(plan.asking, {
         onProgress: (done, total) => {
           if (stale() || done >= total) return;
           setStatus(`Reading ESPN’s projections… week ${done} of ${total}.`);
@@ -988,15 +934,28 @@ async function refreshStrength() {
     }
     if (stale()) return;
 
-    const teams = weekTeams.get(weeks[0]) || [...weekTeams.values()][0] || null;
+    // In the order asked for, never the order the answers arrived in: the
+    // starting slots are counted off the first week, and two routes to the same
+    // reading must count them off the same one.
+    const toProject = capture.pickWeeks(weekTeams, plan.project);
+    state.started = capture.startedProjections(weekTeams, plan.decided);
+    const missing = plan.project.length - toProject.size;
+    state.rosterGap = missing > 0
+      ? `ESPN refused ${missing} of ${plan.project.length} roster weeks, so there was no projection to record.`
+      : '';
 
-    if (weekTeams.size) {
-      const built = buildProjection(weekTeams);
+    const teams = toProject.get(plan.weeks[0]) || [...toProject.values()][0] || null;
+
+    if (toProject.size) {
+      const built = buildProjection(toProject);
       if (stale()) return;
       if (built) {
         state.projection = built;
         apply(built.strength, built.note);
         return;
+      }
+      if (!state.rosterGap) {
+        state.rosterGap = 'ESPN’s rosters did not cover every team, so there was no projection to record.';
       }
     }
 
@@ -1219,9 +1178,10 @@ function renderStandings() {
   tbody.innerHTML = rows
     .map(({ team, rec, pf, pa, sos }) => {
       const cls = rec.w > rec.l ? 'pos' : rec.w < rec.l ? 'neg' : 'muted';
-      // Wins first, points for as the tie-break — the same order the league
-      // itself uses, packed into the one number sortable.js reads.
-      const sortKey = rec.w + pf / 100000;
+      // ESPN's order: win percentage with a tie as HALF a win, then points
+      // for — packed into the one number sortable.js reads. The old key was
+      // raw wins, so a 2–0–1 team sat level with a 2–1 one.
+      const sortKey = capture.standingsKey(rec, pf);
 
       let sosCell = `<td>${dash}</td>`;
       if (sos) {
@@ -1362,12 +1322,7 @@ function ordinal(n) {
  * otherwise it is the optimal lineup that team could field that week.
  */
 function projectedPoints(g, side) {
-  const own = side === 'home' ? g.homeProjected : g.awayProjected;
-  if (typeof own === 'number' && own > 0) return own;
-
-  const id = side === 'home' ? g.homeId : g.awayId;
-  const v = state.projection?.proj.get(g.week)?.get(id);
-  return typeof v === 'number' && v > 0 ? v : null;
+  return capture.projectedPoints(g, side, state.projection?.proj);
 }
 
 /** A per-week points number for one side, and where it came from. */
@@ -1851,10 +1806,9 @@ function forecastAsOf() {
   // on demo, where "as of" follows the week picker rather than the results.
   if (state.replay) return state.replay.week;
   if (d.isDemo) return state.week === 'all' ? d.weeks[0] : Number(state.week);
-  const open = d.weeks.filter((w) =>
-    (d.byWeek.get(w) || []).some((g) => gameState(g) !== 'final')
-  );
-  return open.length ? open[0] : d.weeks[d.weeks.length - 1] + 1;
+  // Live: the first week still open. The connection bar files its reading
+  // under the same number, which is why the rule is shared.
+  return capture.liveAsOf(d);
 }
 
 /** Is this game still ahead of the point the forecast is made from? */
@@ -1866,9 +1820,14 @@ function isRemaining(g, asOf) {
  * The per-team scoring spread, and whether it was measured or assumed.
  *
  * Only banked games feed it: a forecast may not learn from the results it is
- * being asked to forecast. On live data early in the season there is usually
- * nothing to learn from at all — ESPN's matchup payload carries no projections
- * — so this falls back to forecast.js's default, and says which it did.
+ * being asked to forecast. ESPN's matchup payload carries no projections, so on
+ * live data each score is set against its STARTED lineup's projection for that
+ * week (`state.started`, read with the rosters). Below twelve team-weeks this
+ * falls back to forecast.js's default, and says which it did.
+ *
+ * `capture.leagueSpread` is the same call the Summary page and the connection
+ * bar's reading make, with the same inputs — the reason the two pages' title
+ * chances now agree.
  */
 function scoringSpread() {
   // Sigma is LEARNED FROM RESULTS, so it moves as the season goes on. Replaying
@@ -1884,15 +1843,7 @@ function scoringSpread() {
     };
   }
   const asOf = forecastAsOf();
-  const games = (state.data?.games || [])
-    .filter((g) => gameState(g) === 'final' && !isRemaining(g, asOf))
-    .map((g) => ({
-      homeActual: g.homeScore,
-      homeProjected: g.homeProjected,
-      awayActual: g.awayScore,
-      awayProjected: g.awayProjected,
-    }));
-  return forecast.calibrateSigma(games);
+  return capture.leagueSpread(state.data, (g) => !isRemaining(g, asOf), state.started);
 }
 
 /** The sentence that stops a derived number being read as ESPN's own. */
@@ -2218,70 +2169,26 @@ function simInputs() {
   if (!d || !d.teams.length) return null;
 
   const asOf = forecastAsOf();
-  const teamIds = d.teams.map((t) => t.id);
-  const banked = new Map(teamIds.map((id) => [id, { wins: 0, pointsFor: 0 }]));
-  const games = [];
-  let playable = 0;
-
-  for (const g of d.games) {
-    if (g.homeId == null || g.awayId == null) continue;        // bye: nothing to play out
-    if (!banked.has(g.homeId) || !banked.has(g.awayId)) continue;
-
-    if (isRemaining(g, asOf)) {
-      // The same projectedPoints() the cards, the results table and the
-      // forecast table read, so a game cannot be worth one thing here and
-      // another thing four panels up.
-      const homeProj = projectedPoints(g, 'home');
-      const awayProj = projectedPoints(g, 'away');
-      if (homeProj !== null && awayProj !== null) playable++;
-      games.push({ homeId: g.homeId, awayId: g.awayId, homeProj, awayProj });
-      continue;
-    }
-
-    // A game in progress is neither banked nor played out: half a scoreline is
-    // not a result, and winnerOf() returns null for it.
-    const winner = winnerOf(g);
-    if (winner === null) continue;
-
-    const h = banked.get(g.homeId);
-    const a = banked.get(g.awayId);
-    if (typeof g.homeScore === 'number') h.pointsFor += g.homeScore;
-    if (typeof g.awayScore === 'number') a.pointsFor += g.awayScore;
-    if (winner === 'tie') { h.wins += 0.5; a.wins += 0.5; }
-    else if (winner === 'home') h.wins += 1;
-    else a.wins += 1;
-  }
-
-  const sigma = scoringSpread().sigma;
-
-  // ---- the bracket -------------------------------------------------------
+  // THE SAME BUILDER THE SUMMARY PAGE CALLS. Remaining games are scored with
+  // the same projectedPoints() the cards, the results table and the forecast
+  // table read, so a game cannot be worth one thing here and another four
+  // panels up — and the banked table, the spread and the bracket (field size,
+  // round weeks, their projections) are built exactly as the Summary page
+  // builds them, so the two pages' title chances cannot drift apart.
   //
-  // The knockout adds inputs, so it adds to the key: the field size, the weeks
-  // the rounds fall in, and every projection those weeks carry. Miss any of
-  // them and switching from a projected bracket to a modelled one — or, in the
-  // demo, stepping the week picker so the bracket moves — would repaint the old
-  // answer. What is still NOT in the key is the selected team, for the same
-  // reason as before: the bracket is the same bracket whoever is looking at it.
-  const weeks = playoffWeeks();
-  const playoff = { teams: playoffTeams(), weeks, proj: state.projection?.proj || null };
-  const playoffProjKey = weeks.map((w) => {
-    const forWeek = state.projection?.proj?.get(w);
-    return forWeek ? teamIds.map((id) => forWeek.get(id) ?? null) : null;
+  // The key holds everything that changes the answer, the bracket's inputs
+  // included; NOT the selected team, because the season being simulated is the
+  // same whoever is looking at it.
+  const built = capture.simulationInputs({
+    data: d,
+    isRemaining: (g) => isRemaining(g, asOf),
+    proj: state.projection?.proj || null,
+    sigma: scoringSpread().sigma,
   });
+  if (!built) return null;
 
-  const key = JSON.stringify([
-    state.runs,
-    asOf,
-    Math.round(sigma * 1000),
-    teamIds,
-    [...banked].map(([id, b]) => [id, b.wins, Math.round(b.pointsFor * 10)]),
-    games.map((g) => [g.homeId, g.awayId, g.homeProj, g.awayProj]),
-    playoffTeams(),
-    weeks,
-    playoffProjKey,
-  ]);
-
-  return { teamIds, banked, games, sigma, asOf, playable, playoff, key };
+  const key = JSON.stringify([state.runs, asOf, ...built.keyParts]);
+  return { ...built, asOf, key };
 }
 
 /** Mark the run-count button that matches the current setting. */
@@ -2599,8 +2506,8 @@ function paintSimulation(sim, inputs) {
       (po.byes
         ? `the top ${plural(po.byes, 'seed')} skip round one, and seeds ${po.byes + 1}–${po.teams} play it. `
         : 'every qualifier plays every round. ') +
-      `Seeding is the regular-season table, so it uses the same wins-then-points ` +
-      `rule as the standings, worked out fresh in every simulated season. The bracket ` +
+      `Seeding is the regular-season table, so it uses the same rule as the standings — ` +
+      `wins, with a tie as half a win, then points — worked out fresh in every simulated season. The bracket ` +
       `is fixed once seeded — this league has reseeding off — and a tied playoff game ` +
       `is won by the higher seed, which is ESPN’s own rule. The consolation ladder is ` +
       `deliberately not modelled: nothing in it can produce a champion, and last place ` +
@@ -2611,9 +2518,9 @@ function paintSimulation(sim, inputs) {
   const bracketBasis = po
     ? po.basis === 'projected'
       ? `Each playoff round is scored from ESPN’s own projection for that week, exactly ` +
-        `as the regular-season weeks are. Those weeks are not on ESPN’s schedule — it ` +
-        `stops at week ${lastWeek} — but the per-player projections for them are ` +
-        `published, so they are fetched by number and the best legal lineup filled.`
+        `as the regular-season weeks are. The regular season ends at week ${lastWeek} and ` +
+        `the bracket has no games until it is seeded, but the per-player projections for ` +
+        `those weeks are published, so they are fetched by number and the best legal lineup filled.`
       : po.basis === 'modelled'
         ? `ESPN published no per-week projection for ${po.weeks.length > 1 ? 'these playoff weeks' : 'this playoff week'}, ` +
           `so each side is drawn from its own average projection over the games it has ` +
@@ -2884,6 +2791,31 @@ onConnection((conn) => {
   loadLive();
 });
 
+/**
+ * On a narrow screen the time machine starts folded to its status line.
+ *
+ * A LAYOUT decision, so it is keyed off the width — not a capability, which
+ * HANDOFF says must never be. The fold is open in the HTML, so a wide screen,
+ * or a browser with no matchMedia, shows the panel exactly as it always was.
+ */
+function foldTimeMachineOnPhone() {
+  try {
+    if (typeof globalThis.matchMedia === 'function' &&
+        globalThis.matchMedia('(max-width: 760px)').matches) {
+      $('timeFold')?.removeAttribute('open');
+    }
+  } catch { /* leave it open */ }
+}
+
+// The connection bar takes the week's reading on every page, this one
+// included. When it lands, the status line and the picker should say so now,
+// not on the next reload.
+document.addEventListener('ff:capture', () => {
+  if (state.data) renderArchive();
+  else renderCaptureStatus();
+});
+
+foldTimeMachineOnPhone();
 syncSource();
 if (state.source === 'live' && savedConfig()) loadLive();
 else { state.source = 'demo'; loadDemo(); }

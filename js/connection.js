@@ -9,6 +9,8 @@
 
 import * as bridge from './bridge.js';
 import * as cloud from './cloud.js';
+import * as capture from './capture.js';
+import * as snapshots from './snapshots.js';
 import { configure, fetchLeague, AuthError } from './espn.js';
 
 const KEY = 'ff.connection';
@@ -106,6 +108,11 @@ const state = {
   syncing: false,
   syncLabel: '',
   lastSync: null,      // {at, ok, wrote, reason} for THIS league and season
+
+  // --- the time machine ---------------------------------------------------
+  // How this page load's attempt to take the week's reading went; null until
+  // it has finished. See `maybeCapture()`.
+  capture: null,
 };
 
 /**
@@ -373,8 +380,82 @@ async function connect() {
 
   // Publishing is the desktop's job and it happens after the connection is
   // known good, never before: there is nothing to publish until we know the
-  // league reads.
-  if (res.ok && source === 'espn') maybeAutoSync();
+  // league reads. So is taking the week's reading.
+  if (res.ok && source === 'espn') {
+    maybeAutoSync();
+    maybeCapture();
+  }
+}
+
+// =========================================================================
+// THE WEEK'S READING, FROM ANY PAGE
+// =========================================================================
+//
+// ESPN keeps no history of its own projections, so a week whose reading is not
+// taken while it is live is lost for good — and until this existed, only the
+// Schedule page took one. Tim mostly reads the site on his phone, which never
+// can, and a desktop visit to any other page took nothing. Week 1 of 2026 was
+// lost that way.
+//
+// So every page, on the computer with the extension, takes the reading if this
+// week does not have one yet. `js/capture.js` builds it with the very functions
+// the Schedule page uses, so it is the same record either way.
+
+/**
+ * Take this week's reading if it is due. Silent; the outcome is kept.
+ *
+ * Only with the bridge (live ESPN — never the synced copy, never demo) and
+ * only for a real league. js/season.js is imported here rather than at the
+ * top, for the same reason as in `syncNow()`: the test harnesses swap it for
+ * stubs that lack some exports, and a static import of a missing one fails at
+ * link time and takes the page with it. It shares in-flight requests, so a page
+ * already reading the same weeks costs nothing extra.
+ */
+async function maybeCapture() {
+  if (!bridge.isAvailable() || state.source !== 'espn') return;
+  if (!/^\d+$/.test(String(state.leagueId))) return;
+  try {
+    const season = await import('./season.js');
+    state.capture = await capture.captureIfDue({
+      leagueId: state.leagueId,
+      season: state.season,
+      bridgePresent: bridge.isAvailable(),
+      fetchSchedule: season.fetchSchedule,
+      fetchWeeksRosters: season.fetchWeeksRosters,
+      cloudSource: typeof season.cloudSource === 'function' ? season.cloudSource : null,
+    });
+  } catch {
+    state.capture = null;   // never the page's problem
+  }
+  render();
+  // The Schedule page's status line listens, so a reading taken here shows
+  // there without a reload.
+  document.dispatchEvent(new CustomEvent('ff:capture', { detail: state.capture }));
+}
+
+/**
+ * The loud chip: this week's reading has FAILED on this computer.
+ *
+ * Only where a reading could have been taken (bridge, live league), and only
+ * for a real failure — a week that is simply not due yet, or already held,
+ * says nothing. Until this page load's own attempt finishes it shows the last
+ * recorded failure, provided that week is still missing.
+ */
+function captureChip() {
+  if (!bridge.isAvailable() || !state.league || state.source !== 'espn') return '';
+  let week = null;
+  const c = state.capture;
+  if (c) {
+    if (c.recorded || !c.code || ['no-bridge', 'no-league', 'no-fetchers'].includes(c.code)) return '';
+    week = c.week ?? null;
+  } else {
+    const a = snapshots.lastAttempt(state.leagueId, state.season);
+    if (!a || a.ok) return '';
+    if (a.week && snapshots.get(state.leagueId, state.season, a.week)) return '';
+    week = a.week ?? null;
+  }
+  return `<a class="conn-chip is-stale" id="connCapture" href="schedule.html#timePanel">` +
+    `${week ? `Week ${week}` : 'This week'} NOT recorded</a>`;
 }
 
 // =========================================================================
@@ -665,6 +746,7 @@ function render() {
         </select>
       </label>
       <button type="button" id="connSync" class="conn-btn">${state.busy ? 'Syncing…' : 'Sync now'}</button>
+      ${captureChip()}
       ${cloudControls()}`;
   } else if (state.extension) {
     body = `

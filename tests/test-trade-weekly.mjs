@@ -200,6 +200,42 @@ eq(seasonLineupValue(WIDE, QB_ONLY, WEEKS3, null).total, 0,
   'no way to read a projection is no value, not a throw');
 
 // ---------------------------------------------------------------------------
+// A 0.00 is a bye only in his bye week (2026-09-16)
+// ---------------------------------------------------------------------------
+//
+// ESPN projects an OUT or IR man at exactly 0.00 in ordinary weeks too. So
+// `zeroIsBye` may be a `(player, week)` function, and only the weeks it says
+// are byes leave the per-week divisor. A ruled-out zero is a week he does not
+// play for a reason a trade does not fix, and it counts as a zero.
+//
+//   Hurt: 0 10 10     bye week 1 -> 20 / 2 = 10.0 (week 1 is his bye)
+//                     bye week 3 -> 20 / 3 =  6.7 (week 1 is a ruled-out zero)
+{
+  const hurt = man('Hurt', 'RB', [0, 10, 10]);
+  const swapped = man('Swapped', 'RB', [5, 5, 5]);
+  const perWeekOf = (zeroIsBye) => {
+    const priced = priceTradeAcrossWeeks({
+      players: [wideA, swapped], send: [swapped], receive: [hurt],
+      slots: QB_RB, weeks: WEEKS3, projFor, zeroIsBye,
+    });
+    const joined = priced.roster.find((p) => p.playerId === hurt.playerId);
+    return joined ? { perWeek: joined.perWeek, playable: joined.weeksPlayable, total: joined.projected } : null;
+  };
+  const flagOn = perWeekOf(true);
+  const flagOff = perWeekOf(false);
+  const byeIs1 = perWeekOf((p, w) => p.playerId === hurt.playerId && w === 1);
+  const byeIs3 = perWeekOf((p, w) => p.playerId === hurt.playerId && w === 3);
+  close(flagOn && flagOn.perWeek, 10, 1e-9, 'the old flag still works: every zero a bye, 20 / 2');
+  close(flagOff && flagOff.perWeek, 6.7, 1e-9, 'and false still counts every zero, 20 / 3');
+  close(byeIs1 && byeIs1.perWeek, 10, 1e-9, 'a zero IN his bye week leaves the divisor: 20 / 2');
+  eq(byeIs1 && byeIs1.playable, 2, 'two playable weeks when week 1 is his bye');
+  close(byeIs3 && byeIs3.perWeek, 6.7, 1e-9,
+    'A RULED-OUT ZERO OUTSIDE HIS BYE WEEK COUNTS AS A ZERO: 20 / 3, not 20 / 2');
+  eq(byeIs3 && byeIs3.playable, 3, 'and all three weeks are playable — the bye week has a number in it');
+  close(byeIs3 && byeIs3.total, 20, 1e-9, 'the total is the same 20 either way; only the divisor moves');
+}
+
+// ---------------------------------------------------------------------------
 // priceTradeAcrossWeeks: the rows and the totals are one arithmetic
 // ---------------------------------------------------------------------------
 

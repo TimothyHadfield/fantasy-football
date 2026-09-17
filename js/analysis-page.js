@@ -17,6 +17,9 @@
 // stays the primary control. Everything else re-renders from whatever is picked.
 
 import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js';
+// The namespace as well, for `fetchByeWeeks`, which is read defensively: a
+// season module (or a test stub of one) without it just means "byes unknown".
+import * as season from './season.js';
 import { enableSort, resort } from './sortable.js';
 // `coarsePointer` is no longer imported here: the only two things on this page
 // that turned on it — whether the card opens as a sheet, and whether a tap on a
@@ -29,7 +32,8 @@ import { savedConfig, onConnection } from './connection.js';
 // bye, an unread week and a zero each look like. See the API block at the top
 // of js/player-card.js.
 import {
-  weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
+  weekRun, registerRun, tipAttr, clearRuns, wireTips, reopenTip, clickIsPlayer,
+  zeroKind, byeWeekOf, outMark,
 } from './player-card.js';
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
@@ -60,6 +64,12 @@ const state = {
   teamId: null,     // team shown in the roster detail
   myTeamId: null,   // the reader's own team, when a live league says so
   isDemo: true,
+  // proTeamId -> bye week, from `fetchByeWeeks()`. Empty means unknown, and
+  // then a live 0.00 is read as a bye the way it always was.
+  byes: {},
+  // A week the reader picked THIS visit. A saved week from an earlier visit is
+  // ignored once it has been played; one picked now is honoured, past or not.
+  weekPicked: false,
 
   // The season-by-week panel at the foot of the page. It costs one request per
   // week, so everything about it is built to be paid for once: the cache is
@@ -397,7 +407,34 @@ function seasonRunData(index, p) {
     actuals: weeks.map((w) => seasonActual(index, w, p.playerId)),
     currentWeek: state.week,
     demo: state.isDemo,
+    // Whether a 0.00 is his bye or a man ruled out — player-card.js decides.
+    byeWeek: byeWeekOf(p, state.byes),
+    injuryStatus: weeks.map((w) => seasonStatus(index, w, p)),
   });
+}
+
+/** How a zero in this man's week reads: see `zeroKind` in js/player-card.js. */
+function zeroOf(v, week, p, status = p.injuryStatus) {
+  return zeroKind(v, {
+    week,
+    byeWeek: byeWeekOf(p, state.byes),
+    injuryStatus: status,
+    demo: state.isDemo,
+  });
+}
+
+/**
+ * Read the bye weeks, once per live load. Never throws: a failed read is an
+ * empty map, and an empty map is "unknown", which keeps the old reading.
+ */
+async function loadByes() {
+  if (typeof season.fetchByeWeeks !== 'function') return {};
+  try {
+    const got = await season.fetchByeWeeks();
+    return got && typeof got === 'object' ? got : {};
+  } catch {
+    return {};
+  }
 }
 
 // ----------------------------------------------------------- the tip card
@@ -437,7 +474,7 @@ function seasonIndexFor(teamId) {
  * `index` is that team's season cache, built once per row by renderGrid, and it
  * is what puts the week run on the hover.
  */
-function gridCell(entry, { withPosition = false, byeAtZero = false, index = null, tipKey = '', ranks = null } = {}) {
+function gridCell(entry, { withPosition = false, weekGrid = false, index = null, tipKey = '', ranks = null, teamId = null } = {}) {
   if (!entry) return '<td class="slot-cell muted">—</td>';
 
   const { p, v } = entry;
@@ -445,19 +482,21 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
   const tier = injuryTier(p.injuryStatus);
   if (tier === 'out' || tier === 'ir') cls.push(`st-${tier}`);
 
-  // ESPN's 0.00 in a WEEK is how it says "no game that week". Only the week
-  // grid may read a zero that way: a season average of zero is a man ESPN
-  // projects nothing for all year, which is a different fact. And the sample
-  // data means something else again by a zero — it pins a player it has ruled
-  // out — so demo prints the number, the same rule the season grid follows.
-  const bye = v === 0 && byeAtZero;
+  // A 0.00 in a WEEK is either his bye or a man ESPN has ruled out, and only
+  // the week grid may read it either way: a season average of zero is a man
+  // ESPN projects nothing for all year, which is a different fact. Which of the
+  // two it is gets decided in js/player-card.js against his team's bye week.
+  const zero = weekGrid ? zeroOf(v, state.week, p) : null;
+  const bye = zero === 'bye';
   if (bye) cls.push('bye');
+  if (zero === 'out') cls.push('zero-out');
 
   // The identity line — name, position, NFL team, injury — and then his whole
   // season under it, drawn by the tip card rather than crammed into a `title`.
   const ident =
     `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}` +
-    (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '');
+    (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '') +
+    (zero === 'out' ? ' · projected at 0.0 because he is ruled out, not on bye' : '');
 
   // Registered rather than serialised into the markup: thirteen weeks on every
   // one of 170 cells per grid would be tens of kilobytes of attribute repeated
@@ -477,9 +516,19 @@ function gridCell(entry, { withPosition = false, byeAtZero = false, index = null
     p.playerId === null || p.playerId === undefined
       ? null
       : `waivers.html?player=${encodeURIComponent(p.playerId)}`;
-  const key = registerRun({ ident, run: seasonRunData(index, p), href }, tipKey || 'g');
+  // `id` is what lets an open card survive the next batch repaint: the same
+  // man, in the same grid, on the same team. A man with no playerId is named
+  // by his line instead, which is unique enough within one team's row.
+  const id = `${tipKey || 'g'}:${teamId}:${p.playerId ?? `x:${p.name}`}`;
+  const key = registerRun({ ident, run: seasonRunData(index, p), href, id }, tipKey || 'g');
 
-  const shown = v === null ? '—' : bye ? 'Bye' : fmt(v);
+  const shown = v === null
+    ? '—'
+    : bye
+      ? 'Bye'
+      : zero === 'out'
+        ? `${fmt(v)} <span class="zmark">${esc(outMark(p.injuryStatus))}</span>`
+        : fmt(v);
 
   // The whole of the cell goes inside the link, the bench cell's position span
   // included. The number and the position are two halves of one statement about
@@ -615,6 +664,8 @@ function setToggle(source) {
 async function useDemo() {
   state.source = 'demo';
   state.isDemo = true;
+  // Never asked for on demo: a sample zero is a man ruled out, never a bye.
+  state.byes = {};
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   state.playedWeeks = state.weeks.slice(); // the demo season is over by definition
   if (!state.weeks.includes(state.week)) state.week = DEMO_WEEKS;
@@ -647,6 +698,9 @@ async function useLive() {
 
   setStatus('Reading the league schedule…');
   let scheduleWeeks = [];
+  // The bye weeks ride alongside the schedule rather than after it. They only
+  // decide how a 0.00 is drawn, so a failure is an empty map, never an error.
+  const byesRead = loadByes();
   try {
     const schedule = await fetchSchedule();
     scheduleWeeks = schedule.weeks || [];
@@ -655,23 +709,41 @@ async function useLive() {
   } catch {
     state.playedWeeks = [];
   }
+  state.byes = await byesRead;
+  if (state.source !== 'live') return;   // the reader went back to demo meanwhile
   state.weeks = scheduleWeeks.length
     ? scheduleWeeks
     : Array.from({ length: NFL_WEEKS }, (_, i) => i + 1);
 
-  // Which week to open on. NOT the last week offered: before the first kickoff
-  // nothing has been played, the offered list is the whole regular season, and
-  // "last" meant week 14+ of a season that has not happened — so the page went
-  // and fetched rosters for it. Last week actually played, else week one.
-  const remembered = prefs.get('week', null);
-  state.week = state.weeks.includes(remembered)
-    ? remembered
-    : state.playedWeeks.length
-      ? state.playedWeeks[state.playedWeeks.length - 1]
-      : state.weeks[0];
+  state.week = openingWeek();
 
   renderWeekPicker();
   await loadWeek();
+}
+
+/**
+ * Which week a live league opens on: THE COMING ONE.
+ *
+ * It used to be the last week played, and a saved week was always preferred —
+ * so a reader who looked at week 2 once opened on week 2 for the rest of the
+ * season. What a manager opens this page for is the week he is about to set a
+ * lineup for, so:
+ *
+ *   - a week picked during THIS visit stays picked, past or not;
+ *   - a saved week from an earlier visit is kept only while it has not been
+ *     played — once it is in the past, it is ignored;
+ *   - otherwise the first week with no result against it, read off the
+ *     schedule and never off the calendar;
+ *   - and a finished season opens on its last week.
+ */
+function openingWeek() {
+  const played = new Set(state.playedWeeks);
+  if (state.weekPicked && state.weeks.includes(state.week)) return state.week;
+  const remembered = prefs.get('week', null);
+  if (state.weeks.includes(remembered) && !played.has(remembered)) return remembered;
+  const coming = state.weeks.find((w) => !played.has(w));
+  if (coming !== undefined) return coming;
+  return state.weeks[state.weeks.length - 1];
 }
 
 // --------------------------------------------------------------------- render
@@ -732,8 +804,8 @@ const GRIDS = [
     id: 'weekly',
     measure: weekProj,
     heading: () => `All teams · week ${state.week}`,
-    // Only a week's number can be a bye, and only ESPN means it that way.
-    byeAtZero: () => !state.isDemo,
+    // Only a week's number can be a bye (or a ruled-out zero).
+    weekGrid: true,
   },
 ];
 
@@ -773,7 +845,7 @@ function renderGrid(grid) {
   renderGridHead(table, benchCols);
 
   const opts = {
-    byeAtZero: grid.byeAtZero ? grid.byeAtZero() : false,
+    weekGrid: !!grid.weekGrid,
     tipKey: grid.id,
   };
   bodyOf(table).innerHTML = teams
@@ -793,11 +865,15 @@ function renderGrid(grid) {
         ...opts,
         index: seasonIndexFor(t.id),
         ranks: positionRanks(t, grid.measure),
+        teamId: t.id,
       };
       const benchCells = Array.from({ length: benchCols }, (_, i) =>
         gridCell(bench[i] || null, { ...cellOpts, withPosition: true })).join('');
+      // NO `title` on the row. On a phone js/touch-titles.js turned it into a
+      // sheet over the very tap that selects the team; the key line under the
+      // grid already says "tap a row to load that team".
       return `
-      <tr class="${cls}" data-team="${t.id}" title="Show ${esc(t.name)} below">
+      <tr class="${cls}" data-team="${t.id}">
         <td class="name">${esc(t.name)}</td>
         ${GRID_SLOTS.map((s) => gridCell(row[s.key], cellOpts)).join('')}
         <td class="grid-total grouped" data-v="${total ?? ''}"><strong>${fmt(total)}</strong></td>
@@ -816,6 +892,8 @@ function renderGrid(grid) {
     body.querySelector('td.st-out') && ['<span class="key out">Out</span>', 'this week'],
     body.querySelector('td.st-ir') && ['<span class="key ir">IR</span>', 'injured reserve'],
     body.querySelector('td.bye') && ['<span class="lg-mark bye">Bye</span>', 'no game that week'],
+    body.querySelector('td.zero-out') &&
+      ['<span class="lg-mark zero-out">0.0 <span class="zmark">OUT</span></span>', 'ruled out, not a bye'],
     dash && ['<span class="lg-mark faint">—</span>', 'empty spot or no number'],
   ] : [], teams.length ? 'Tap or hover a number for the player · tap a row to load that team' : '');
 }
@@ -840,8 +918,12 @@ function renderOverview() {
   // every key registered against the old ones is dead. Left to grow it would
   // hold a whole other league's squads after a source switch.
   clearRuns();
-  hideTip();          // the cell it was describing is being thrown away
   for (const grid of GRIDS) renderGrid(grid);
+  // NOT hideTip() before the repaint any more. This runs once per batch while
+  // the season loads, and closing the card each time made one opened in the
+  // first seconds vanish under the reader. The card finds its man again among
+  // the new cells and redraws from the newer data — or closes if he is gone.
+  reopenTip();
 }
 
 function renderTeamPicker() {
@@ -1047,6 +1129,7 @@ function renderRoster() {
     $('rosterLegend').innerHTML = '';
     $('rosterEdited').innerHTML = '';
     $('rosterEdited').classList.add('hidden');
+    $('rosterBest').innerHTML = '';
     $('rosterStarters').innerHTML = '';
     $('rosterSplit').innerHTML = '';
     $('rosterBench').innerHTML = '';
@@ -1124,8 +1207,51 @@ function renderRoster() {
   const hasOwn = players.some((p) => typeof p.percentOwned === 'number');
   table.classList.toggle('no-own', !hasOwn);
 
+  $('rosterBest').innerHTML = bestLineupLine(team, view, projTotal);
+
   renderRosterNote(view, team);
   resort(table);
+}
+
+/**
+ * One short line: what the best legal lineup this week would change.
+ *
+ * `optimalLineup` from js/forecast.js, the same one "Who to start" below and
+ * the schedule forecast use, over this week's roster as it is ON SCREEN — swaps
+ * included, so after a what-if the line answers "is this better than what I
+ * just made". IR is not a lineup choice and is left out of the pool. The slots
+ * are the league's own, read off the lineups already held, so this costs no
+ * request. Nothing when the slots are not known yet.
+ */
+function bestLineupLine(team, view, projTotal) {
+  const slots = leagueSlots();
+  if (!team || !slots || !view.length) return '';
+  const keyOf = (p) => (p.playerId === null || p.playerId === undefined ? `n:${p.name}` : p.playerId);
+
+  const pool = view.filter((e) => e.slotId !== IR_SLOT).map((e) => e.p);
+  const best = optimalLineup(pool, slots);
+  if (!best.starters.length) return '';
+
+  const gain = round1(best.total - (typeof projTotal === 'number' ? projTotal : 0));
+  const week = `week ${state.week}`;
+  if (!(gain > 0)) {
+    return `This lineup is already the best one for ${week}.`;
+  }
+
+  const current = new Set(view.filter((e) => e.started).map((e) => keyOf(e.p)));
+  const chosen = new Set(best.starters.map(keyOf));
+  const byKey = new Map(pool.map((p) => [keyOf(p), p]));
+  const ins = best.starters.filter((s) => !current.has(keyOf(s))).map((s) => byKey.get(keyOf(s)) || s);
+  const outs = view.filter((e) => e.started && !chosen.has(keyOf(e.p))).map((e) => e.p);
+  const name = (p) => playerRef(p, esc(p.name), `${p.name} — ${OPENS}`, 'aria-label');
+  const names = (list) => andList(list.map(name));
+
+  // A different set of men is the usual answer; the same men in different
+  // slots cannot add points, so `ins` is empty only if a slot was left open.
+  const move = ins.length
+    ? `start ${names(ins)}${outs.length ? ` over ${names(outs)}` : ''}`
+    : 'fill the empty slot';
+  return `Best lineup for ${week}: ${move}, <span class="pos">+${gain.toFixed(1)}</span>`;
 }
 
 /**
@@ -1169,6 +1295,13 @@ function renderRosterNote(view, team) {
     '<strong>Click any slot tag</strong> to pick that player up, then click another player’s to ' +
     'swap the two, and watch the total move. Only legal moves are offered: a slot lights up when ' +
     'both men are eligible for each other’s, and a player on IR is not a lineup choice at all.'
+  );
+
+  parts.push(
+    '<strong>Best lineup</strong>, above the table, is the best legal lineup this squad could field ' +
+    'this week on ESPN’s projections — the same solver “Who to start” uses below, over the roster ' +
+    'as shown (your swaps included, IR left out), in the league’s own slots. It names who would come ' +
+    'in, who would go out, and what that adds to the starters’ total.'
   );
 
   parts.push(
@@ -1370,6 +1503,8 @@ function seasonIndex(teamId) {
       byPlayer.set(p.playerId, {
         projected: typeof p.projected === 'number' ? p.projected : null,
         actual: typeof p.actual === 'number' ? p.actual : null,
+        // That week's own status, so a zero is judged by who he was THEN.
+        injuryStatus: p.injuryStatus || null,
       });
     }
     byWeek.set(week, byPlayer);
@@ -1412,6 +1547,17 @@ function seasonActual(index, week, playerId) {
 }
 
 /**
+ * His injury status in that week's payload, falling back to the one on the
+ * roster being shown. ESPN's is today's status in every week; the sample data
+ * varies it week by week, and a ruled-out zero has to be read against its own.
+ */
+function seasonStatus(index, week, p) {
+  const byPlayer = index ? index.get(week) : null;
+  const e = byPlayer ? byPlayer.get(p.playerId) : null;
+  return (e && e.injuryStatus) || p.injuryStatus || null;
+}
+
+/**
  * The cell. No `data-v` at all — never data-v="" — for anything that is not a
  * number, so an unknown sinks to the bottom whichever way the column is sorted.
  *
@@ -1424,7 +1570,8 @@ function seasonActual(index, week, playerId) {
  * real effort to tell apart and must not be reimplemented next door where the
  * two copies can drift.
  */
-function seasonCell(v, week, name, isNow, start = null) {
+function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus) {
+  const name = p.name;
   const mark = start ? ` st${start.flex ? ' fx' : ''}` : '';
   const cls = (extra) => `wk${isNow ? ' now' : ''}${extra ? ` ${extra}` : ''}${mark}`;
   // A start is a fact about the lineup, so it is said on every cell that has
@@ -1450,15 +1597,24 @@ function seasonCell(v, week, name, isNow, start = null) {
       `for ${esc(name)}.">—</td>`;
   }
   if (v === 0) {
-    // ESPN's 0.00 IS its way of saying "no game that week". The sample data
-    // means something else by a zero — it pins a player it has ruled out — so
-    // demo mode prints the number rather than claiming a bye that isn't one.
-    if (state.isDemo) {
-      return `<td class="${cls()}" data-v="0" title="The sample data has ${esc(name)} ruled out ` +
-        `in week ${week}, so it projects nothing for him.${says}">0.0</td>`;
+    // A 0.00 is his bye only when the week IS his team's bye; otherwise it is a
+    // real zero, and a ruled-out man's carries the word. Decided once, in
+    // js/player-card.js. The sample data never means a bye by a zero.
+    const zero = zeroOf(v, week, p, status);
+    if (zero === 'bye') {
+      return `<td class="${cls('bye')}" data-v="0" title="${esc(name)} is on bye in week ${week}. ` +
+        `ESPN returns 0.00 for a bye, which is not the same as having no number at all.${says}">Bye</td>`;
     }
-    return `<td class="${cls('bye')}" data-v="0" title="${esc(name)} is on bye in week ${week}. ` +
-      `ESPN returns 0.00 for a bye, which is not the same as having no number at all.${says}">Bye</td>`;
+    const why = state.isDemo
+      ? `The sample data has ${esc(name)} ruled out in week ${week}, so it projects nothing for him.`
+      : `ESPN projects nothing for ${esc(name)} in week ${week}` +
+        (byeWeekOf(p, state.byes) ? `, and it is not his bye (week ${byeWeekOf(p, state.byes)})` : '') +
+        (zero === 'out' ? ` — he is listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())}.` : '.');
+    if (zero === 'out') {
+      return `<td class="${cls('zero-out')}" data-v="0" title="${why}${says}">0.0 ` +
+        `<span class="zmark">${esc(outMark(status))}</span></td>`;
+    }
+    return `<td class="${cls('zero')}" data-v="0" title="${why}${says}">0.0</td>`;
   }
   return `<td class="${cls()}" data-v="${v}" ` +
     `title="ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.${says}">${fmt(v)}</td>`;
@@ -1554,7 +1710,8 @@ function renderSeason() {
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${fmt(avg)}</td>
-        ${values.map((v, i) => seasonCell(v, weeks[i], p.name, weeks[i] === state.week)).join('')}
+        ${values.map((v, i) => seasonCell(v, weeks[i], p, weeks[i] === state.week, null,
+          seasonStatus(index, weeks[i], p))).join('')}
       </tr>`;
     })
     .join('');
@@ -1861,7 +2018,7 @@ function renderStarters() {
           const slotId = starters.has(week) ? starters.get(week).get(p.playerId) : undefined;
           const start =
             slotId === undefined ? null : { slotId, flex: FLEX_SLOTS.has(slotId) };
-          return seasonCell(v, week, p.name, week === state.week, start);
+          return seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p));
         })
         .join('');
 
@@ -2065,7 +2222,9 @@ function renderSeasonNote(weeks, rowCount) {
         'player whose NFL team is off that week; in the sample data a zero only means he is ruled ' +
         'out, so it is printed as a number. '
       : 'A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team ' +
-        'is off that week. ') +
+        'is off that week. ESPN also returns 0.00 for a man it has ruled out, so a zero in any ' +
+        'other week is printed as <strong>0.0</strong>, with OUT, IR or SUSP beside it when that is ' +
+        'why — checked against his NFL team’s bye week, and read as a bye only when that is not known. ') +
     'A dash is not that: it means either that ESPN carried no number for him, or that he was not ' +
     'on this roster in that week — ESPN hands back each past week’s real roster, and today’s ' +
     'roster for every week still to come. Tap or hover a cell to see which.'
@@ -2073,7 +2232,7 @@ function renderSeasonNote(weeks, rowCount) {
 
   parts.push(
     'Avg is the mean of the weeks that carry a number and is ours, not ESPN’s: a bye counts as ' +
-    'the zero ESPN returns, and a week he is not on the roster for is left out.'
+    'the zero ESPN returns, so does a ruled-out week, and a week he is not on the roster for is left out.'
   );
 
   parts.push(
@@ -2108,8 +2267,12 @@ function seasonMarks(table) {
   const has = (sel) => !!body.querySelector(sel);
   return [
     state.isDemo && ['<span class="badge demo">Demo</span>', 'generated projections, not ESPN’s'],
-    state.isDemo && has('td.wk[data-v="0"]') &&
-      ['<span class="lg-mark">0.0</span>', 'ruled out in the sample data'],
+    has('td.wk.zero-out') &&
+      ['<span class="lg-mark zero-out">0.0 <span class="zmark">OUT</span></span>',
+        state.isDemo ? 'ruled out in the sample data' : 'ruled out, not a bye'],
+    has('td.wk.zero') &&
+      ['<span class="lg-mark">0.0</span>',
+        state.isDemo ? 'ruled out in the sample data' : 'projected at zero, not a bye'],
     has('td.wk.bye') && ['<span class="lg-mark bye">Bye</span>', 'no game (ESPN’s 0.00)'],
     has('td.wk.off') && ['<span class="lg-mark faint">—</span>', 'not on this roster that week'],
     has('td.wk.muted') && ['<span class="lg-mark faint">—</span>', 'no number from ESPN'],
@@ -2133,6 +2296,29 @@ function selectTeam(id) {
   renderSeason();
 }
 
+/**
+ * After a row tap, bring the roster detail on screen — but only if it is not.
+ *
+ * On a phone the two grids are most of a screen each, so the team a tap just
+ * loaded was two screens down and the tap looked like it had done nothing. On
+ * a desktop the detail is usually already in view, and yanking the page there
+ * would be the page moving on its own; so it scrolls only when the panel's
+ * heading is above the window or in the bottom stretch of it. Smooth, so the
+ * reader sees where it went. Guarded: a harness has no layout and no scrolling.
+ */
+function revealRoster() {
+  const head = $('rosterTitle');
+  if (!head || typeof head.getBoundingClientRect !== 'function') return;
+  try {
+    const r = head.getBoundingClientRect();
+    const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+    if (!vh) return;
+    const visible = r.top >= 0 && r.top <= vh - 120;
+    if (visible) return;
+    head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch { /* no layout: the team is selected either way */ }
+}
+
 // ----------------------------------------------------------------- interaction
 
 $('sourceToggle').addEventListener('click', (e) => {
@@ -2148,6 +2334,7 @@ $('sourceToggle').addEventListener('click', (e) => {
 
 $('weekSelect').addEventListener('change', (e) => {
   state.week = Number(e.target.value);
+  state.weekPicked = true;   // honoured for the rest of this visit, past or not
   prefs.set('week', state.week);
   loadWeek();
 });
@@ -2204,7 +2391,9 @@ for (const grid of GRIDS) {
     // he came back. The link wins, and the drill-down is left alone.
     if (clickIsPlayer(e)) return;
     const tr = e.target.closest('tr[data-team]');
-    if (tr) selectTeam(Number(tr.dataset.team));
+    if (!tr) return;
+    selectTeam(Number(tr.dataset.team));
+    revealRoster();
   });
   // The grids are the reason to be here, so they open on the number that ranks
   // teams: Total, high first. Column 10 — the team, the nine spots, then it.
@@ -2248,6 +2437,8 @@ if (STARTER_POSITIONS.includes(rememberedPos) || rememberedPos === 'FLEX') {
   state.startersPos = rememberedPos;
 }
 
+// Demo only: the sample season is over, so there is no "coming week" to prefer
+// and a saved week is simply honoured. Live mode decides in `openingWeek()`.
 const rememberedWeek = prefs.get('week', null);
 if (rememberedWeek !== null) state.week = rememberedWeek;
 

@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trade &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <style>
   /* Team names need more room than the 140px .form-select used for the week. */
@@ -506,6 +509,9 @@
   /* The same four no-number states the analysis grids draw, told apart the
      same way. */
   .tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+  /* A ruled-out zero (not a bye): the number, with OUT / IR stacked under it. */
+  .tc-run .k-out { color: var(--dim); line-height: 1.1; }
+  .tc-run .tc-mk { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--err); }
   .tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
   .tc-run .k-wait { color: var(--line); }
 
@@ -593,7 +599,7 @@
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
       <a href="waivers.html">Players</a>
-      <a href="trade.html" class="active">Trade</a>
+      <a href="trade.html" class="active" aria-current="page">Trade</a>
       <a href="draft.html">Draft</a>
       <a href="summary.html">Summary</a>
     </nav>

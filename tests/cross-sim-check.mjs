@@ -1,0 +1,164 @@
+// The Summary page and the Schedule page must give the same title %.
+//
+//   node cross-sim-check.mjs
+//
+// They are one question about one league. They used to be asked it
+// differently: the Summary page assumed a six-team bracket whatever the league
+// said, and measured the scoring spread from last week's lineups while the
+// Schedule page had nothing to measure it from and assumed one. So the two
+// pages printed different odds for the same season, each looking fine.
+//
+// THE STRONG FORM IS CHECKED, not just "close enough": both pages are booted on
+// the same stubbed league (cap-stub-season.mjs — a declared FOUR-team bracket,
+// three decided weeks with a tie among them, and started-lineup projections so
+// the spread is genuinely calibrated), every call each makes to
+// `simulateSeason` is recorded (cap-record-forecast.mjs), and the arguments
+// must be IDENTICAL apart from the run count — 10,000 on the Schedule page by
+// default, 100,000 on the Summary page, which is Tim's number. Then, as a
+// second witness, the rendered title % must agree within the counting noise.
+//
+// A cross-page seam, so it gets its own suite — the house rule is that
+// anything spanning two pages needs a test that spans them.
+
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+import { REPO, moduleUrl } from './repo.mjs';
+import { bootDom, waitFor, LEAGUE, SEASON } from './cap-harness.mjs';
+
+const self = fileURLToPath(import.meta.url);
+const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+const CONN = { leagueId: LEAGUE, season: SEASON, teamId: 1 };
+
+const CHILDREN = {
+  async schedule() {
+    const html = readFileSync(path.join(REPO, 'schedule.html'), 'utf8');
+    const { document } = bootDom({
+      html,
+      store: { 'ff.prefs': { 'schedule.source': 'live', 'schedule.week': 'all' }, 'ff.connection': CONN },
+    });
+    await import(moduleUrl('js/schedule-page.js'));
+    await waitFor(() => (globalThis.__simCalls || []).length &&
+      document.querySelectorAll('#simTable tbody tr:not(.empty-row)').length === 10, 20000);
+    await new Promise((r) => setTimeout(r, 50));
+    const title = {};
+    for (const tr of document.querySelectorAll('#simTable tbody tr')) {
+      const td = [...tr.children];
+      title[text(td[0])] = Number(td[7].getAttribute('data-v'));
+    }
+    return { calls: globalThis.__simCalls || [], title, note: text(document.getElementById('simNote')) };
+  },
+
+  async summary() {
+    const html = readFileSync(path.join(REPO, 'summary.html'), 'utf8');
+    const { document } = bootDom({
+      html,
+      store: { 'ff.prefs': { 'summary.source': 'live' }, 'ff.connection': CONN },
+    });
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+    await import(moduleUrl('js/summary-page.js'));
+    await import(moduleUrl('js/connection.js'));
+    await waitFor(() => /simulated seasons/.test(text(document.getElementById('simStatus'))), 30000);
+    await new Promise((r) => setTimeout(r, 50));
+    const title = {};
+    for (const tr of document.querySelectorAll('#summaryTable tbody tr')) {
+      const td = [...tr.children];
+      title[text(td[0])] = Number(td[2].getAttribute('data-v'));
+    }
+    return {
+      calls: globalThis.__simCalls || [],
+      title,
+      status: text(document.getElementById('simStatus')),
+      note: text(document.getElementById('summaryNote')),
+    };
+  },
+};
+
+if (process.argv[2]) {
+  try {
+    console.log('@@' + JSON.stringify(await CHILDREN[process.argv[2]]()));
+    process.exit(0);
+  } catch (err) {
+    console.log('@@' + JSON.stringify({ boot: String((err && err.stack) || err) }));
+    process.exit(1);
+  }
+}
+
+function child(name) {
+  const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, name], {
+    encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 32 * 1024 * 1024, timeout: 180000,
+  });
+  const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
+  if (!line) return { boot: `no result\n${res.stdout}\n${(res.stderr || '').slice(0, 2000)}` };
+  return JSON.parse(line.slice(2));
+}
+
+let pass = 0;
+const fails = [];
+const ok = (name, cond, detail = '') => {
+  if (cond) pass++;
+  else fails.push(`${name}${detail ? ` — ${String(detail).slice(0, 500)}` : ''}`);
+};
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+const sched = child('schedule');
+const summ = child('summary');
+ok('the Schedule page boots on the stub', !sched.boot, sched.boot);
+ok('the Summary page boots on the stub', !summ.boot, summ.boot);
+
+if (!sched.boot && !summ.boot) {
+  const a = sched.calls[sched.calls.length - 1];
+  const b = summ.calls[summ.calls.length - 1];
+  ok('the Schedule page simulated', Boolean(a), JSON.stringify(sched.calls.length));
+  ok('the Summary page simulated', Boolean(b), summ.status);
+
+  if (a && b) {
+    ok('at their own run counts: 10,000 and Tim’s 100,000', a.runs === 10000 && b.runs === 100000,
+      `${a.runs} / ${b.runs}`);
+    ok('on the same seed', a.seed === b.seed, `${a.seed} / ${b.seed}`);
+    ok('the same teams, in the same order', same(a.teamIds, b.teamIds));
+    ok('THE SAME BANKED TABLE — wins (the tie as half each) and points for',
+      same(a.banked, b.banked), `${JSON.stringify(a.banked)}\nvs ${JSON.stringify(b.banked)}`);
+    ok('THE SAME REMAINING GAMES AND PROJECTIONS', same(a.games, b.games),
+      `${a.games.length} vs ${b.games.length}; first ${JSON.stringify(a.games[0])} vs ${JSON.stringify(b.games[0])}`);
+    ok('THE SAME SCORING SPREAD', a.sigma === b.sigma, `${a.sigma} vs ${b.sigma}`);
+    ok('and it was MEASURED, not both falling back to the same default',
+      a.sigma !== 27, String(a.sigma));
+    ok('THE SAME BRACKET: the league’s declared four teams on both pages',
+      a.playoff && b.playoff && a.playoff.teams === 4 && b.playoff.teams === 4,
+      `${a.playoff && a.playoff.teams} / ${b.playoff && b.playoff.teams}`);
+    ok('in the same weeks', same(a.playoff.weeks, b.playoff.weeks) && same(a.playoff.weeks, [15, 16]),
+      `${JSON.stringify(a.playoff.weeks)} / ${JSON.stringify(b.playoff.weeks)}`);
+    ok('scored from the same projections', same(a.playoff.proj, b.playoff.proj));
+    ok('a banked tie really is in there',
+      a.banked.some(([, t]) => t.wins % 1 === 0.5), JSON.stringify(a.banked));
+  }
+
+  // The second witness: the numbers on the two screens.
+  const names = Object.keys(sched.title);
+  ok('both tables list all ten managers', names.length === 10 && Object.keys(summ.title).length === 10,
+    `${names.length} / ${Object.keys(summ.title).length}`);
+  const worst = Math.max(...names.map((n) => Math.abs(sched.title[n] - summ.title[n])));
+  // 10,000 runs: one standard error at p = 0.5 is 0.5 points; three is 1.5.
+  ok('and every manager’s title % agrees within the counting noise (±1.5 points)',
+    Number.isFinite(worst) && worst <= 0.015,
+    names.map((n) => `${n}: ${sched.title[n]} vs ${summ.title[n]}`).join(' | '));
+  ok('the title chances are a complete distribution on both pages',
+    Math.abs(names.reduce((s, n) => s + sched.title[n], 0) - 1) < 1e-6 &&
+    Math.abs(names.reduce((s, n) => s + summ.title[n], 0) - 1) < 1e-6);
+
+  ok('the Summary note says the field size was read from the league',
+    /4 of 10 teams make the playoffs \(read from your league’s ESPN settings\)/.test(summ.note), summ.note.slice(0, 600));
+  ok('as the Schedule note does', /4 of 10 teams make the playoffs, read from your league/.test(sched.note),
+    sched.note.slice(0, 300));
+  ok('and states its own run count against the Schedule page’s',
+    /Schedule page plays out the same season from the same inputs, 10,000 times/.test(summ.note) &&
+    /100,000 runs here are good to about ±0\.3/.test(summ.note), summ.note);
+}
+
+for (const f of fails) console.log('FAIL ' + f);
+console.log(fails.length ? `${pass} passed, ${fails.length} failed` : `All ${pass} assertions passed`);
+process.exit(fails.length ? 1 : 0);

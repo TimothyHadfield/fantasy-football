@@ -68,6 +68,59 @@ const NO_ID_LOADER = dataUrl(`
   }
 `);
 
+// ------------------------------------------ a league whose byes are known
+//
+// A 0.00 is a bye ONLY in his NFL team's bye week (verified against ESPN on
+// 2026-09-16: OUT and IR men are projected at exactly 0.00 in ordinary weeks).
+// This override wraps the ordinary stub and adds the two things that make the
+// rule testable: `fetchByeWeeks()`, answering from AN_BYES ('throw' makes it
+// fail), and AN_OUT_ZERO — Player 02, who the stub already lists OUT, projected
+// at 0.00 in weeks 8 and 10. Every stub player's proTeamId is 1.
+const BYES_SEASON = dataUrl(`
+  import * as real from ${JSON.stringify(STUB_URL)};
+  export * from ${JSON.stringify(STUB_URL)};
+
+  const BYES = process.env.AN_BYES || '';
+  export async function fetchByeWeeks() {
+    if (BYES === 'throw') throw new Error('ESPN refused the bye weeks.');
+    return BYES ? JSON.parse(BYES) : {};
+  }
+
+  const ZERO = new Set((process.env.AN_OUT_ZERO || '').split(',').filter(Boolean).map(Number));
+  const doctor = (teams, week) => teams.map((t) => {
+    const players = t.players.map((p) =>
+      (p.name.endsWith('Player 02') && ZERO.has(week) ? { ...p, projected: 0 } : p));
+    return { ...t, players, starters: players.filter((p) => p.started), bench: players.filter((p) => !p.started) };
+  });
+  export async function fetchWeekRosters(week) {
+    const got = await real.fetchWeekRosters(week);
+    return { ...got, teams: doctor(got.teams, week) };
+  }
+  export async function fetchWeeksRosters(weeks, opts) {
+    const got = await real.fetchWeeksRosters(weeks, opts);
+    const out = new Map();
+    for (const [w, teams] of got) out.set(w, doctor(teams, w));
+    return out;
+  }
+`);
+
+const BYES_LOADER = dataUrl(`
+  export async function resolve(spec, ctx, next) {
+    if (spec.startsWith('.') && /\\/season\\.js$/.test(spec)) {
+      return next(${JSON.stringify(BYES_SEASON)}, ctx);
+    }
+    return next(spec, ctx);
+  }
+`);
+
+/** Hover a cell in one of the grids and read the card, by team and player. */
+const gridTd = (document, grid, teamId, player) =>
+  [...document.querySelectorAll(`#${grid}Table tbody tr[data-team="${teamId}"] td[data-tip]`)]
+    .find((td) => {
+      const a = td.querySelector('a.pref');
+      return a && a.getAttribute('href').endsWith(`player=${teamId * 100 + player}`);
+    }) || null;
+
 const SCENARIOS = {
   demo: {
     label: '(a) demo mode, nothing connected',
@@ -452,6 +505,184 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+
+  // ---- the bye rule, the opening week, the row tap, the best-lineup line ----
+  'byes-known': {
+    label: '(j) byes known: a bye is only the bye week; an OUT man’s zero is 0.0 OUT',
+    stub: true,
+    byes: true,
+    env: { AN_BYES: '{"1":6}', AN_OUT_ZERO: '8,10' },
+    // A saved week that has since been PLAYED (the stub's schedule has results
+    // through week 7) must be ignored: the page opens on the coming week, 8.
+    prefs: { 'analysis.source': 'live', 'analysis.week': 3 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window }) => {
+      const out = {};
+      out.title = document.getElementById('weeklyTitle').textContent.trim();
+      out.rowTitles = [...document.querySelectorAll('table.grid tbody tr[data-team]')]
+        .filter((tr) => tr.hasAttribute('title')).length;
+
+      const cellInfo = (td) => td && {
+        text: td.textContent.replace(/\s+/g, ' ').trim(),
+        cls: td.getAttribute('class') || '',
+        v: td.getAttribute('data-v'),
+        title: td.getAttribute('title') || '',
+      };
+      const w2 = gridTd(document, 'weekly', 4, 2);
+      out.weekly02 = cellInfo(w2);
+      out.weeklyLegend = document.getElementById('weeklyLegend').textContent.replace(/\s+/g, ' ');
+
+      const seasonRow = (name) => [...document.querySelectorAll('#seasonTable tbody tr')]
+        .find((tr) => tr.children[1].textContent.includes(name));
+      const wk = (tr, w) => cellInfo(tr && tr.children[4 + w]);
+      out.s03w6 = wk(seasonRow('T4 Player 03'), 6);
+      out.s02w8 = wk(seasonRow('T4 Player 02'), 8);
+      out.s02w10 = wk(seasonRow('T4 Player 02'), 10);
+      out.s02w9 = wk(seasonRow('T4 Player 02'), 9);
+      out.seasonLegend = document.getElementById('seasonLegend').textContent.replace(/\s+/g, ' ');
+
+      // The card for the OUT man, hovered in the week grid.
+      w2.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+      const card = document.getElementById('tipCard');
+      const tds = [...card.querySelectorAll('.tc-run tbody td')];
+      out.card = {
+        texts: tds.map((t) => t.textContent.trim()),
+        kinds: tds.map((t) => t.getAttribute('class') || ''),
+        legend: (card.querySelector('.tc-legend') || { textContent: '' }).textContent,
+      };
+      w2.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+      const h3 = gridTd(document, 'weekly', 4, 3);
+      h3.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+      const tds3 = [...card.querySelectorAll('.tc-run tbody td')];
+      out.card03 = tds3.map((t) => t.textContent.trim());
+      h3.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+
+      // The best-lineup line: Player 02 (an RB starter) is at 0.0 this week,
+      // and Player 09 (a bench RB) is the best man who could replace him.
+      const best = document.getElementById('rosterBest');
+      out.best = best.textContent.replace(/\s+/g, ' ').trim();
+      out.bestLinks = [...best.querySelectorAll('a.pref')].map((a) => ({
+        href: a.getAttribute('href'), title: a.hasAttribute('title'),
+      }));
+
+      // A row tap scrolls the detail into view only when it is off screen.
+      const head = document.getElementById('rosterTitle');
+      let scrolls = 0;
+      let top = 2400;
+      window.innerHeight = 800;
+      head.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 0, width: 0, height: 20 });
+      head.scrollIntoView = () => { scrolls++; };
+      const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      click(document.querySelector('#weeklyTable tbody tr[data-team="2"] td.name'));
+      await new Promise((r) => setTimeout(r, 60));
+      out.scrollsOff = scrolls;
+      out.rosterAfter = document.getElementById('rosterTitle').textContent.trim();
+      top = 120;
+      click(document.querySelector('#weeklyTable tbody tr[data-team="3"] td.name'));
+      await new Promise((r) => setTimeout(r, 60));
+      out.scrollsOn = scrolls;
+      globalThis.__an = out;
+    },
+  },
+  'byes-other-week': {
+    label: '(k) byes known and not week 6: that zero is a real 0.0, and a future saved week is kept',
+    stub: true,
+    byes: true,
+    env: { AN_BYES: '{"1":11}' },
+    prefs: { 'analysis.source': 'live', 'analysis.week': 11 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const out = {};
+      out.title = document.getElementById('weeklyTitle').textContent.trim();
+      const row = [...document.querySelectorAll('#seasonTable tbody tr')]
+        .find((tr) => tr.children[1].textContent.includes('T4 Player 03'));
+      const td = row && row.children[4 + 6];
+      out.s03w6 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '', v: td.getAttribute('data-v') };
+      out.anyBye = [...document.querySelectorAll('#seasonTable tbody td, #startersTable tbody td')]
+        .some((c) => c.textContent.trim() === 'Bye');
+      out.seasonLegend = document.getElementById('seasonLegend').textContent.replace(/\s+/g, ' ');
+      out.best = document.getElementById('rosterBest').textContent.replace(/\s+/g, ' ').trim();
+      globalThis.__an = out;
+    },
+  },
+  'byes-unknown': {
+    label: '(l) the bye read fails: every live zero is a bye, exactly as before',
+    stub: true,
+    byes: true,
+    env: { AN_BYES: 'throw', AN_OUT_ZERO: '8' },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const out = {};
+      const td = gridTd(document, 'weekly', 4, 2);
+      out.weekly02 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '' };
+      const row = [...document.querySelectorAll('#seasonTable tbody tr')]
+        .find((tr) => tr.children[1].textContent.includes('T4 Player 03'));
+      out.s03w6 = row && row.children[4 + 6].textContent.trim();
+      globalThis.__an = out;
+    },
+  },
+  'card-repaint': {
+    label: '(m) an open card stays open while the season loads behind it',
+    stub: true,
+    byes: true,
+    env: { AN_DELAY: '70', AN_BYES: '{"1":6}' },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    wait: 0,
+    after: async ({ document, window }) => {
+      const out = {};
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const until = async (fn, ms = 6000) => {
+        for (let t = 0; t < ms; t += 20) { if (fn()) return true; await sleep(20); }
+        return false;
+      };
+      const card = () => document.getElementById('tipCard');
+      const read = () => [...card().querySelectorAll('.tc-run tbody td')].map((t) => t.textContent.trim());
+
+      // --- hover, while weeks are still arriving -------------------------------
+      out.gridUp = await until(() => gridTd(document, 'weekly', 4, 1));
+      gridTd(document, 'weekly', 4, 1).dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+      out.hoverOpen = !!card() && !card().hidden;
+      out.hoverPendingAtOpen = (card().textContent.includes('Not read yet') || read().includes('·'));
+      out.loaded = await until(() =>
+        document.getElementById('seasonProgress').textContent.trim() === '' &&
+        !document.querySelector('#seasonTable td.wait'));
+      await sleep(40);
+      out.hoverStillOpen = !card().hidden;
+      out.hoverIdent = card().querySelector('.tc-ident')?.textContent || '';
+      out.hoverValues = read();
+      out.hoverIsLive = !!gridTd(document, 'weekly', 4, 1) &&
+        document.body.contains(gridTd(document, 'weekly', 4, 1));
+      gridTd(document, 'weekly', 4, 1).dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+      out.hoverClosesOnLeave = card().hidden;
+
+      // --- the same as a tap-opened sheet, across a team switch's repaint ------
+      window.matchMedia = (q) => ({ matches: /hover:\s*none/.test(q), addEventListener() {}, removeEventListener() {} });
+      // Player 14 only joins his squad in week 5 (SIGNED_WEEK in the stub).
+      gridTd(document, 'weekly', 6, 14).dispatchEvent(new window.Event('click', { bubbles: true }));
+      out.sheetOpen = !card().hidden && card().classList.contains('sheet');
+      const sel = document.getElementById('teamSelect');
+      sel.value = '5';
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await sleep(40);
+      out.sheetAfterRepaint = !card().hidden && card().classList.contains('sheet');
+      out.sheetIdent = card().querySelector('.tc-ident')?.textContent || '';
+
+      // --- and it closes when its man is no longer on screen at all ------------
+      // A `change`, not a click: a click anywhere outside a sheet closes it on
+      // its own, which would make this pass for the wrong reason.
+      const wk = document.getElementById('weekSelect');
+      wk.value = '3';
+      wk.dispatchEvent(new window.Event('change', { bubbles: true }));
+      out.sheetBeforeWeekLands = !card().hidden;
+      await until(() => /week 3$/.test(document.getElementById('weeklyTitle').textContent.trim()) &&
+        !gridTd(document, 'weekly', 6, 14) && !!gridTd(document, 'weekly', 6, 1));
+      await sleep(20);
+      out.sheetGoneWithMan = card().hidden;
+      globalThis.__an = out;
+    },
+  },
 };
 
 // ------------------------------------------------------------------- child
@@ -462,6 +693,7 @@ async function boot(scenario) {
   // at is built in this file. Every import after this point sees it, and the
   // page module is imported at the foot of this function.
   if (cfg.noId) register(NO_ID_LOADER);
+  if (cfg.byes) register(BYES_LOADER);
   const html = readFileSync(path.join(REPO, 'analysis.html'), 'utf8');
   const { window, document } = parseHTML(html);
 
@@ -825,8 +1057,11 @@ async function check(scenario, boot) {
     // claim a bye it does not have.
     c.ok('demo never claims a bye it cannot know about',
       rows.every((r) => r.cells.slice(5).every((td) => td.text !== 'Bye')), 'a Bye cell in demo');
+    // A demo zero is a man the sample data has ruled out, and since 2026-09-16
+    // the word says so beside the number ("0.0 OUT"), never "Bye".
     c.ok('a demo zero is printed as the number it is, and still sorts',
-      rows.some((r) => r.cells.slice(5).some((td) => td.text === '0.0' && td.v === '0')),
+      rows.some((r) => r.cells.slice(5).some((td) =>
+        /^0\.0( (OUT|IR|SUSP))?$/.test(td.text) && td.v === '0')),
       'no zero cell at all');
     c.ok('the demo note says what a zero means here',
       /in the sample data a zero only means he is ruled out/.test(note), note);
@@ -876,7 +1111,11 @@ async function check(scenario, boot) {
   // scenario that has not been clicked about in afterwards.
   if (scenario === 'live') {
     const season = await import('./an-stub-season.mjs');
-    c.ok('the page opened on the last week played', txt($('weeklyTitle')).endsWith('week 8'),
+    // Since 2026-09-16 a live league opens on the COMING week — the first with
+    // no result on the schedule (the stub has results through week 7) — rather
+    // than the last one played.
+    c.ok('the page opened on the first week not yet played',
+      txt($('weeklyTitle')).endsWith(`week ${season.SCHEDULE_PLAYED_THROUGH + 1}`),
       txt($('weeklyTitle')));
 
     c.ok('the season grid costs exactly one request per week',
@@ -1895,6 +2134,96 @@ async function check(scenario, boot) {
       w.afterTeam.starters.every((r) => r.name.startsWith('T7 ')) &&
       w.afterTeam.split.total === '165.6',
       `${w.afterTeam.starters[0].name} ${w.afterTeam.split.total}`);
+  }
+
+  // ---- (j) byes known --------------------------------------------------------
+  if (scenario === 'byes-known') {
+    const w = globalThis.__an;
+    c.ok('A SAVED WEEK THAT HAS BEEN PLAYED IS IGNORED: the page opens on the coming week',
+      w.title === 'All teams · week 8', w.title);
+    c.ok('no grid row carries a title (touch-titles would sheet over the tap)',
+      w.rowTitles === 0, w.rowTitles);
+
+    c.ok('THE BYE WEEK IS STILL A BYE: week 6 for a team whose bye is 6',
+      w.s03w6 && w.s03w6.text === 'Bye' && /\bbye\b/.test(w.s03w6.cls) && w.s03w6.v === '0',
+      JSON.stringify(w.s03w6));
+    for (const [label, cell] of [['week 8', w.s02w8], ['week 10', w.s02w10]]) {
+      c.ok(`AN OUT MAN AT 0.00 IN ${label.toUpperCase()} IS NOT A BYE: "0.0 OUT", with its own class`,
+        cell && cell.text === '0.0 OUT' && /\bzero-out\b/.test(cell.cls) && !/\bbye\b/.test(cell.cls) &&
+        cell.v === '0' && /not his bye \(week 6\)/.test(cell.title),
+        JSON.stringify(cell));
+    }
+    c.ok('his other weeks are numbers as before',
+      w.s02w9 && /^\d+\.\d$/.test(w.s02w9.text), JSON.stringify(w.s02w9));
+    c.ok('the season key names the ruled-out zero, and the bye',
+      /ruled out, not a bye/.test(w.seasonLegend) && /Bye/.test(w.seasonLegend), w.seasonLegend);
+
+    c.ok('the WEEK grid draws his zero the same way',
+      w.weekly02 && w.weekly02.text === '0.0 OUT' && /\bzero-out\b/.test(w.weekly02.cls) &&
+      !/\bbye\b/.test(w.weekly02.cls), JSON.stringify(w.weekly02));
+    c.ok('and its key explains it, without a Bye nobody has',
+      /ruled out, not a bye/.test(w.weeklyLegend) && !/Bye/.test(w.weeklyLegend), w.weeklyLegend);
+
+    const k = w.card;
+    c.ok('the card agrees: weeks 8 and 10 are 0.0 with OUT under it, class k-out',
+      k.texts[7] === '0.0OUT' && k.texts[9] === '0.0OUT' &&
+      /\bk-out\b/.test(k.kinds[7]) && /\bk-out\b/.test(k.kinds[9]) && !k.texts.includes('Bye'),
+      JSON.stringify(k.texts));
+    c.ok('and its legend says why, only because it occurs',
+      /ruled out, not on bye/.test(k.legend) && !/Bye =/.test(k.legend), k.legend);
+    c.ok('the card of a man whose zero IS his bye still reads Bye in week 6',
+      w.card03[5] === 'Bye' && w.card03.filter((t) => t === 'Bye').length === 1, JSON.stringify(w.card03));
+
+    c.ok('BEST LINEUP: start the bench back over the ruled-out one, and by how much',
+      w.best === 'Best lineup for week 8: start T4 Player 09 over T4 Player 02, +13.4', w.best);
+    c.ok('both names are the site’s player link, with no title on either',
+      w.bestLinks.length === 2 &&
+      w.bestLinks[0].href === 'waivers.html?player=409' &&
+      w.bestLinks[1].href === 'waivers.html?player=402' &&
+      w.bestLinks.every((l) => !l.title), JSON.stringify(w.bestLinks));
+
+    c.ok('A ROW TAP WITH THE DETAIL OFF SCREEN SCROLLS TO IT, once',
+      w.scrollsOff === 1 && /Team 2$/.test(w.rosterAfter), `${w.scrollsOff} ${w.rosterAfter}`);
+    c.ok('and does not move the page when the detail is already in view',
+      w.scrollsOn === 1, w.scrollsOn);
+  }
+
+  if (scenario === 'byes-other-week') {
+    const w = globalThis.__an;
+    c.ok('a saved week still to come is honoured', w.title === 'All teams · week 11', w.title);
+    c.ok('A ZERO OUTSIDE THE BYE WEEK IS A REAL 0.0, not a Bye',
+      w.s03w6 && w.s03w6.text === '0.0' && /\bzero\b/.test(w.s03w6.cls) && !/\bbye\b/.test(w.s03w6.cls) &&
+      w.s03w6.v === '0', JSON.stringify(w.s03w6));
+    c.ok('so neither week table says Bye anywhere', !w.anyBye, 'a Bye cell');
+    c.ok('and the key says what that 0.0 is',
+      /projected at zero, not a bye/.test(w.seasonLegend) && !/Bye/.test(w.seasonLegend), w.seasonLegend);
+    c.ok('a lineup already at its best says so',
+      w.best === 'This lineup is already the best one for week 11.', w.best);
+  }
+
+  if (scenario === 'byes-unknown') {
+    const w = globalThis.__an;
+    c.ok('WITH THE BYES UNKNOWN, A LIVE ZERO IS STILL READ AS A BYE (nothing regresses)',
+      w.weekly02 && w.weekly02.text === 'Bye' && /\bbye\b/.test(w.weekly02.cls), JSON.stringify(w.weekly02));
+    c.ok('in the season grid as well', w.s03w6 === 'Bye', w.s03w6);
+  }
+
+  if (scenario === 'card-repaint') {
+    const w = globalThis.__an;
+    c.ok('the grid came up and the season was still loading when the card opened',
+      w.gridUp && w.hoverOpen && w.hoverPendingAtOpen,
+      JSON.stringify({ up: w.gridUp, open: w.hoverOpen, pending: w.hoverPendingAtOpen }));
+    c.ok('the whole season landed', w.loaded, 'still loading');
+    c.ok('A HOVERED CARD STAYS OPEN ACROSS EVERY BATCH REPAINT',
+      w.hoverStillOpen, 'the card closed under the reader');
+    c.ok('and it redrew from the newer data: every week filled in, same man',
+      /^T4 Player 01/.test(w.hoverIdent) && w.hoverValues.length === 13 && !w.hoverValues.includes('·'),
+      `${w.hoverIdent} ${JSON.stringify(w.hoverValues)}`);
+    c.ok('it still closes when the pointer leaves the (new) cell', w.hoverClosesOnLeave, 'still open');
+    c.ok('A TAP-OPENED SHEET SURVIVES A REPAINT TOO, still a sheet, still him',
+      w.sheetOpen && w.sheetAfterRepaint && /^T6 Player 14/.test(w.sheetIdent),
+      JSON.stringify({ open: w.sheetOpen, after: w.sheetAfterRepaint, ident: w.sheetIdent }));
+    c.ok('and closes once its man is no longer on the page', w.sheetGoneWithMan, 'still open');
   }
 
   return c.out;

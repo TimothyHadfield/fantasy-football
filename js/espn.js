@@ -114,20 +114,74 @@ function leaguePath(views = []) {
 }
 
 /**
+ * How long a finished league read is shared with later identical reads.
+ *
+ * Several parts of one page ask ESPN the same question within seconds — the
+ * stats page reads the matchups for its table and again for schedule luck, and
+ * the background cloud sync re-reads every week's rosters a page has just
+ * fetched. Sixty seconds covers those without letting anything go meaningfully
+ * stale; the wire, the shape that decays fastest, is fine at a minute.
+ */
+const SHARE_MS = 60 * 1000;
+
+/** key -> { promise, settledAt } — in flight when settledAt is null. */
+const shared = new Map();
+
+/** Views whose whole point is to change between two reads a few seconds apart. */
+const UNSHARED_VIEWS = new Set(['mDraftDetail', 'mTransactions2']);
+
+/**
  * One league read, through the bridge extension when it is installed and by
  * direct fetch when it is not.
  *
  * Routing here rather than at each call site means every page that already
  * uses this module gets private-league access for free the moment the
  * extension appears, with no changes of their own.
+ *
+ * IDENTICAL READS SHARE ONE PROMISE — same league, season, route, views, week
+ * and filter — while one is in flight and for SHARE_MS after it lands. A
+ * FAILURE IS NEVER SHARED: the entry is dropped the moment the read rejects,
+ * so a retry really does ask again. Callers must treat the payload as
+ * read-only, which every decoder in this file and in season.js already does.
  */
-async function leagueRead(views, { filter, scoringPeriodId } = {}) {
+async function leagueRead(views, opts = {}) {
   if (!config.leagueId) throw new Error('No league ID configured.');
 
   // Wait for the extension's hello before choosing a route — see
   // `bridge.settled`. Asking too early sent a private league's first read
   // straight to ESPN, which refused it.
   await bridge.settled();
+
+  // Reads that exist to be POLLED are never shared: the draft page asks for
+  // the draft every four seconds, and a minute-old answer would freeze it.
+  if (views.some((v) => UNSHARED_VIEWS.has(v))) return leagueReadNow(views, opts);
+
+  const key = JSON.stringify([
+    config.leagueId, config.season, bridge.isAvailable() ? 'bridge' : 'direct',
+    views, opts.scoringPeriodId ?? null, opts.filter ?? null,
+  ]);
+  const now = Date.now();
+  for (const [k, e] of shared) {
+    if (e.settledAt !== null && now - e.settledAt > SHARE_MS) shared.delete(k);
+  }
+  const hit = shared.get(key);
+  if (hit) return hit.promise;
+
+  const entry = { promise: null, settledAt: null };
+  entry.promise = leagueReadNow(views, opts).then(
+    (data) => { entry.settledAt = Date.now(); return data; },
+    (err) => { if (shared.get(key) === entry) shared.delete(key); throw err; }
+  );
+  shared.set(key, entry);
+  return entry.promise;
+}
+
+/** Forget every shared read. For tests, and for anything that must re-ask. */
+export function clearReadCache() {
+  shared.clear();
+}
+
+async function leagueReadNow(views, { filter, scoringPeriodId } = {}) {
   if (bridge.isAvailable()) {
     const res = await bridge.league({
       leagueId: config.leagueId,
@@ -163,9 +217,17 @@ export function fetchRosters(scoringPeriodId) {
   return leagueRead(['mRoster', 'mTeam'], { scoringPeriodId });
 }
 
-/** Matchups and scores for the season. */
+/**
+ * Matchups and scores for the season.
+ *
+ * `mSettings` rides along because nothing else on this read carries
+ * `settings`: without it (checked against league 1241838, 2026-09-16) the
+ * league's name decoded as "League" and every playoff setting — field size,
+ * regular-season length — as null, so the pages fell back to guesses. It adds
+ * about 8 KB to a 276 KB answer.
+ */
 export function fetchMatchups() {
-  return leagueRead(['mMatchupScore', 'mTeam']);
+  return leagueRead(['mMatchupScore', 'mTeam', 'mSettings']);
 }
 
 /** Adds, drops, trades, waiver claims. */
@@ -255,6 +317,16 @@ export function parseFreeAgent(entry, week) {
     // The projection for the week this was fetched for. Null means ESPN had
     // nothing, which is NOT the same as a bye — a bye comes back as 0.
     projected: typeof weekly?.appliedTotal === 'number' ? weekly.appliedTotal : null,
+    // Whether he can be added straight away or has to clear waivers first.
+    // Both ride on the ENTRY, not on `player` (verified against league 1241838,
+    // 2026-09-16): `status` is 'FREEAGENT' or 'WAIVERS', and a WAIVERS entry
+    // carries `waiverProcessDate`, epoch milliseconds. Anything else is null —
+    // "ESPN did not say", never "free agent".
+    status: entry?.status === 'WAIVERS' || entry?.status === 'FREEAGENT' ? entry.status : null,
+    waiverClears:
+      entry?.status === 'WAIVERS' && Number.isFinite(entry?.waiverProcessDate) && entry.waiverProcessDate > 0
+        ? entry.waiverProcessDate
+        : null,
   };
 }
 

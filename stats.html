@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stats &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <style>
 /* The ± beside Close luck, the luck score and S+L: how far each could still
@@ -83,7 +86,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <span class="brand">Fantasy Football</span>
     <nav>
       <a href="index.html">Home</a>
-      <a href="stats.html" class="active">Stats</a>
+      <a href="stats.html" class="active" aria-current="page">Stats</a>
       <a href="analysis.html">Analysis</a>
       <a href="schedule.html">Schedule</a>
       <a href="waivers.html">Players</a>
@@ -155,7 +158,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         </tr>
         <tr>
           <th class="name" data-sort title="Click any header to sort by that column.">Team</th>
-          <th data-sort title="Wins&ndash;losses, plus ties when there are any.">W&ndash;L</th>
+          <th data-sort title="Wins&ndash;losses, plus ties when there are any. Sorts the way ESPN ranks: win percentage with a tie as half a win, then points for.">W&ndash;L</th>
           <th data-sort id="thAvg" title="Average points you scored per week.">Avg</th>
           <th data-sort id="thProj" title="Average of ESPN&rsquo;s projection for you, per week.">Proj</th>
           <th data-sort title="Total points scored so far this season.">Total</th>

@@ -485,23 +485,29 @@ async function check(scenario, boot) {
     const espn = await import('./fc-stub-espn.mjs');
     c.ok('one fetchSchedule', season.calls.schedule === 1, `saw ${season.calls.schedule}`);
     // ESPN publishes a per-week projection for every future week but has no
-    // bulk form, so the cost is one request per REMAINING week -- weeks 2..13
-    // here -- and never a played week, which would be wasted.
+    // bulk form, so the cost is one request per week, each asked for ONCE.
     const got = season.calls.rosters.slice().sort((a, b) => a - b);
-    // Weeks 2..13 are the rest of the stub's 13-week regular season; 14, 15 and
-    // 16 are the three playoff rounds, which are NOT on ESPN's schedule (it
-    // stops at the last regular-season week) and so are asked for by number.
-    // ESPN really does publish per-player projections for them — verified
-    // 2026-09-16 against public leagues 1241838 and 899513, right through week
-    // 18 — which is why the bracket is simulated from the same numbers as
-    // everything else rather than from an average.
-    c.ok('one roster request per remaining week, plus the three playoff weeks',
-      JSON.stringify(got) === JSON.stringify([2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]),
+    // Weeks 2..13 are the rest of the stub's 13-week regular season and are
+    // the projection; 14, 15 and 16 are the three playoff rounds, which are NOT
+    // on ESPN's schedule (it stops at the last regular-season week) and so are
+    // asked for by number. ESPN really does publish per-player projections for
+    // them — verified 2026-09-16 against public leagues 1241838 and 899513,
+    // right through week 18 — which is why the bracket is simulated from the
+    // same numbers as everything else rather than from an average.
+    //
+    // CHANGED 2026-09-16: week 1, which is PLAYED, is now read too. This used
+    // to assert it never was ("wasted"). It is not wasted any more: its
+    // started lineups' projections, set against its scores, are what the
+    // scoring spread is measured from — the same residuals the Summary page
+    // uses, which is what makes the two pages' title chances agree.
+    c.ok('one roster request per week — remaining, playoff, and decided — none twice',
+      JSON.stringify(got) === JSON.stringify([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]),
       `saw ${JSON.stringify(season.calls.rosters)}`);
     c.ok('the playoff weeks follow the regular season rather than being hardcoded',
       [14, 15, 16].every((w) => season.calls.rosters.includes(w)),
       `saw ${JSON.stringify(season.calls.rosters)}`);
-    c.ok('no played week refetched', !season.calls.rosters.includes(1), `saw ${JSON.stringify(season.calls.rosters)}`);
+    c.ok('the played week is read exactly once, for the scoring spread',
+      season.calls.rosters.filter((w) => w === 1).length === 1, `saw ${JSON.stringify(season.calls.rosters)}`);
     // Byes arrive inside the weekly projections (a bye player is projected 0),
     // so the separate bye-week request is gone.
     c.ok('bye weeks never fetched separately', espn.calls.byes === 0, `saw ${espn.calls.byes}`);
@@ -563,9 +569,49 @@ async function check(scenario, boot) {
 
     // Switching is a repaint, not a refetch.
     const season = await import('./fc-stub-season.mjs');
+    // 16 = 13 regular weeks + 3 playoff weeks, read once each at load.
     c.ok('switching teams triggers no extra roster reads',
-      season.calls.rosters.length === 15, `saw ${season.calls.rosters.length}`);
+      season.calls.rosters.length === 16, `saw ${season.calls.rosters.length}`);
   }
+
+  // ---- was this week recorded: the status line -----------------------------
+  //
+  // The one line of the time machine that must always be visible, with the
+  // REAL reason when the answer is no. Stubbed live league: week 1 is played,
+  // so the reading is filed under week 2.
+  const snapLine = txt($('snapLine'));
+  const snapTone = $('snapLine').getAttribute('class') || '';
+  if (scenario === 'live-rosterfail') {
+    c.ok('status line: week 2 NOT recorded, because ESPN refused every roster week',
+      /^Week 2: NOT recorded — ESPN refused 15 of 15 roster weeks, so there was no projection to record\.$/.test(snapLine),
+      snapLine);
+    c.ok('and it is red', /\bneg\b/.test(snapTone), snapTone);
+    const note = JSON.parse(globalThis.localStorage.getItem('ff.snapnote.99.2026') || 'null');
+    c.ok('the failed attempt is kept, so another page can show it',
+      note && note.ok === false && note.week === 2 && note.code === 'no-projection', JSON.stringify(note));
+    c.ok('and no reading was saved in its place (first write must not be a hollow one)',
+      globalThis.localStorage.getItem('ff.snap.99.2026.2') === null);
+  }
+  if (['live', 'live-noteam', 'live-pickteam', 'archive'].includes(scenario)) {
+    c.ok('status line: week 2 recorded, with the day',
+      /^Week 2: recorded \S/.test(snapLine), snapLine);
+    c.ok('and it is green', /\bpos\b/.test(snapTone), snapTone);
+    const note = JSON.parse(globalThis.localStorage.getItem('ff.snapnote.99.2026') || 'null');
+    c.ok('the successful attempt is noted too', note && note.ok === true && note.week === 2, JSON.stringify(note));
+  }
+  if (scenario === 'demo' || scenario === 'demo-mid') {
+    c.ok('status line on demo with no league: NOT recorded, and says why',
+      /^This week: NOT recorded — no league is connected\.$/.test(snapLine), snapLine);
+  }
+  // The phone furniture: a jump row to the three panels, and a fold that is
+  // OPEN on a wide screen (this harness's matchMedia matches nothing).
+  const jumps = [...d.querySelectorAll('nav.jump a')].map((a) => a.getAttribute('href'));
+  c.ok('the jump row links My season, Simulation and Standings',
+    JSON.stringify(jumps) === JSON.stringify(['#forecastPanel', '#simPanel', '#standingsPanel']) &&
+    jumps.every((h) => d.getElementById(h.slice(1))), JSON.stringify(jumps));
+  c.ok('the time machine is unfolded on a wide screen', $('timeFold').hasAttribute('open'));
+  c.ok('and its status line is the fold’s summary, first in it',
+    $('timeFold').firstElementChild === $('snapLine') && $('snapLine').tagName === 'SUMMARY');
 
   // ---- (d): roster fetch rejected ----------------------------------------
   if (scenario === 'live-rosterfail') {
@@ -1147,7 +1193,7 @@ async function check(scenario, boot) {
       c.ok('OPENING AND LEAVING THE ARCHIVE ADDS NO SCHEDULE FETCH',
         season.calls.schedule === 1, `saw ${season.calls.schedule}`);
       c.ok('AND NO EXTRA ROSTER REQUESTS',
-        season.calls.rosters.length === 15, `saw ${season.calls.rosters.length}`);
+        season.calls.rosters.length === 16, `saw ${season.calls.rosters.length}`);
     }
 
     // ---- and back to now -------------------------------------------------

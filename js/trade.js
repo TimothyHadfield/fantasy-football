@@ -662,7 +662,7 @@ function dropRedundant(offers) {
  * @param {number} [opts.limit]   how many offers to return
  * @param {number[]} [opts.weeks] remaining weeks — switches to the WEEKLY measure
  * @param {function} [opts.projFor] `(player, week) -> number|null`, with `weeks`
- * @param {boolean} [opts.zeroIsBye] is a 0.00 a bye? See `scoreAcrossWeeks`.
+ * @param {boolean|function} [opts.zeroIsBye] is a 0.00 a bye? See `isBye`.
  * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
 export function findTrades({
@@ -794,7 +794,8 @@ export function findTrades({
  * taken out of the divisor, and ONLY his byes. Three states stay three states,
  * exactly as `projToken` in js/player-card.js tells them apart:
  *
- *   0.00   a bye, WHEN the numbers came from ESPN. It stays in `projected` —
+ *   0.00   a bye, WHEN the numbers came from ESPN AND it is his team's bye
+ *          week (or the byes are unknown) — see `isBye`. It stays in `projected` —
  *          those are points he genuinely will not score — and comes out of the
  *          divisor, which is the whole of this change.
  *   0.00   a genuine projection of zero, when they did NOT come from ESPN.
@@ -817,6 +818,23 @@ export function findTrades({
  * never a 0.0 that would read as "he is worth nothing" rather than "there is
  * nothing to say".
  */
+/**
+ * `zeroIsBye` is either a flag for the whole data set (the original contract,
+ * still accepted) or a function `(player, week) -> boolean` answering it per
+ * man per week.
+ *
+ * THE FUNCTION FORM EXISTS BECAUSE "0.00 MEANS BYE" IS WRONG ON ITS OWN.
+ * Verified against ESPN on 2026-09-16: an OUT or IR man is projected at 0.00 in
+ * ordinary weeks too. A ruled-out zero is a week he does not play for a reason
+ * a trade does not fix — so it counts as a zero in `perWeek`, and only his real
+ * bye week leaves the divisor. The Trade page passes a function that checks the
+ * week against his NFL team's bye (`zeroKind` in js/player-card.js); this file
+ * stays pure and knows nothing about where that answer comes from.
+ */
+function isBye(zeroIsBye, p, week) {
+  return typeof zeroIsBye === 'function' ? !!zeroIsBye(p, week) : !!zeroIsBye;
+}
+
 function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
   const ws = (weeks || []).slice();
   const read = typeof projFor === 'function' ? projFor : () => null;
@@ -833,7 +851,7 @@ function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
       if (v !== null) {
         sum += v;
         counted++;
-        if (zeroIsBye && v === 0) byes++;
+        if (v === 0 && isBye(zeroIsBye, p, ws[i])) byes++;
       }
     }
     // The span less his byes — not "the weeks that answered". See the note
@@ -940,7 +958,7 @@ function rosterAcrossWeeksAfter(season, send, joining) {
  * @param {number[]} opts.slots
  * @param {number[]} opts.weeks
  * @param {function} opts.projFor
- * @param {boolean} [opts.zeroIsBye] is a 0.00 a bye? See `scoreAcrossWeeks`.
+ * @param {boolean|function} [opts.zeroIsBye] is a 0.00 a bye? See `isBye`.
  * @returns {{before:Object, after:Object, delta:number,
  *            byWeek:Array<{week:number, before:number, after:number, delta:number}>,
  *            churn:{in:Array, out:Array}, cut:Array, roster:Array}}
@@ -1316,7 +1334,7 @@ function greedyPacking(pool) {
  * @param {Array}   [opts.teams]   every squad — makes the partner side checked too
  * @param {boolean} [opts.requirePartnersGain] drop a packing a partner would refuse
  * @param {boolean} [opts.onePerPartner] never combine two deals with one manager
- * @param {boolean} [opts.zeroIsBye] is a 0.00 a bye? See `scoreAcrossWeeks`.
+ * @param {boolean|function} [opts.zeroIsBye] is a 0.00 a bye? See `isBye`.
  * @param {number}  [opts.maxOffers]
  * @param {number}  [opts.maxPackings]
  * @returns {{combo:Array, count:number, delta:number, pricing:Object,
@@ -1527,7 +1545,7 @@ export function bestCombo(offers, {
  * @param {number[]} opts.slots
  * @param {number[]} opts.weeks
  * @param {function} opts.projFor
- * @param {boolean} [opts.zeroIsBye]
+ * @param {boolean|function} [opts.zeroIsBye]
  * @returns {Array} offers shaped like `findTrades`', plus `merged`/`mergedFrom`
  */
 export function mergeComboByPartner(entry, {

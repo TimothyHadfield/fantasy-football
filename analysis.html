@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Analysis &middot; Fantasy Football</title>
 <link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <style>
   /* Team names need more room than the 140px .form-select used for the week. */
@@ -292,6 +295,10 @@
 
   /* The same four states the season grid draws, told apart the same way. */
   .tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+  /* A ruled-out zero: the number, with the word stacked under it so the column
+     keeps its width. */
+  .tc-run .k-out { color: var(--dim); line-height: 1.1; }
+  .tc-run .tc-mk { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--err); }
   .tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
   .tc-run .k-wait { color: var(--line); }
 
@@ -545,6 +552,24 @@
   /* The things that must never be tucked away: a lineup that is no longer
      ESPN's, and weeks ESPN refused. */
   .edited-note { margin: 10px 0 0; font-size: 13px; color: var(--text); }
+  /* "Best lineup for week 9: start X over Y, +3.4" — one line, under the stat
+     row that carries the starters' total. */
+  .best-note { margin: 10px 0 12px; font-size: 13px; color: var(--dim); }
+  .best-note:empty { display: none; }
+  .best-note a.pref { color: var(--text); font-weight: 600; }
+
+  /* A REAL ZERO FOR A MAN RULED OUT — not a bye. ESPN projects OUT and IR men
+     at 0.00 in ordinary weeks, so the number is printed, and the word beside it
+     says why. Word AND colour, never colour alone. */
+  .zmark {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--err);
+    margin-left: 2px;
+  }
+  td.zero-out { color: var(--dim); }
+  .lg-mark.zero-out { color: var(--dim); }
   .progress-note { margin: 0 0 10px; }
   .progress-note:empty { display: none; }
 
@@ -602,7 +627,7 @@
     <nav>
       <a href="index.html">Home</a>
       <a href="stats.html">Stats</a>
-      <a href="analysis.html" class="active">Analysis</a>
+      <a href="analysis.html" class="active" aria-current="page">Analysis</a>
       <a href="schedule.html">Schedule</a>
       <a href="waivers.html">Players</a>
       <a href="trade.html">Trade</a>
@@ -690,7 +715,9 @@
           here than it is above. The bench ranks mean the same thing as above, measured on this week instead
           of the average.</p>
         <p>A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is off that
-          week, which is not the same as having no number at all.</p>
+          week, which is not the same as having no number at all. ESPN also returns 0.00 for a man it has
+          ruled out, so a zero outside his team&rsquo;s bye week reads <strong>0.0</strong> with OUT, IR or
+          SUSP beside it.</p>
         <p><strong>Tapping or hovering a number</strong> gives that man&rsquo;s whole season as a chart
           &mdash; weeks along the top, his projection for each underneath &mdash; and
           <strong>every number is a link</strong> to his next 13 weeks on the
@@ -711,6 +738,9 @@
     </div>
     <div class="stat-row" id="teamGlance"></div>
     <p class="edited-note hidden" id="rosterEdited"></p>
+    <!-- One line under the starters' total in the stat row: what the best legal
+         lineup this week would change. Filled by bestLineupLine(). -->
+    <p class="best-note" id="rosterBest"></p>
     <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
       <thead><tr>
         <th class="left" data-sort>Slot</th>
