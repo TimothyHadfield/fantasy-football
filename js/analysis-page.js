@@ -1,20 +1,24 @@
 // Roster analysis: every manager's squad, side by side.
 //
-// The two grids at the top are the point of the page. The owner's standing
+// The all-teams grid at the top is the point of the page. The owner's standing
 // request is to see the most important information for ALL teams at once, and
 // this page once showed ten rows of totals plus exactly ONE team's actual
 // players — so working out who was thin at running back meant clicking through
-// ten managers and holding it in your head. The grids put all ten squads on one
+// ten managers and holding it in your head. The grid puts all ten squads on one
 // screen, whole: nine lineup spots, what they total, and the bench behind them.
 //
-// They are the SAME table twice over, measured two ways — a typical week in the
-// first, the week selected at the top of the page in the second — so the
-// comparison a manager actually wants ("is this team better now than it usually
-// is?") is reading straight down the page rather than holding two numbers in
-// your head. Everything below them is a drill-down.
+// THERE USED TO BE TWO OF IT, one measured on the season average and one on the
+// selected week, stacked down the page. Tim, 2026-09-17: "combine the 2 all
+// teams boxes, put the week selection at the top of the all teams box, and
+// allow the user to select which week they want, as well as if they want to
+// show proj avg 2026." So there is one panel, one grid, and the MEASURE is a
+// control inside it — which is all the two ever differed by (see MEASURES).
 //
 // Rosters move week to week — trades, waivers, injuries — so the week selector
-// stays the primary control. Everything else re-renders from whatever is picked.
+// stays the primary control, and it now lives inside that panel. It still
+// drives the whole page: the roster detail, the season sheet's "you are here"
+// bracket and "who to start" all read the same selected week, whether or not
+// the grid is currently measured in it.
 
 import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js';
 // The namespace as well, for `fetchByeWeeks`, which is read defensively: a
@@ -46,6 +50,9 @@ import { stdev } from './stats.js';
 import * as espn from './espn.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
+// The slot vocabulary is shared with the Trade page's per-week breakdown, so
+// the two cannot disagree about what WR2 means. See js/lineup-slots.js.
+import { SLOT_ORDER, slotRows, fillSlots } from './lineup-slots.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('analysis');
@@ -84,6 +91,14 @@ const state = {
   // A week the reader picked THIS visit. A saved week from an earlier visit is
   // ignored once it has been played; one picked now is honoured, past or not.
   weekPicked: false,
+
+  // What the one all-teams grid is measured in: 'week' (the selected week's own
+  // projections) or 'avg' (the season projection spread over a typical week).
+  // It replaces the second grid the page used to stack underneath the first,
+  // and it is remembered in the page's own prefs. The DEFAULT is the week,
+  // because the coming week is what a manager opens this page to set a lineup
+  // for — the same reasoning openingWeek() is built on.
+  measure: 'week',
 
   // The season-by-week panel at the foot of the page. It costs one request per
   // week, so everything about it is built to be paid for once: the cache is
@@ -213,23 +228,6 @@ function bodyOf(table) {
   return Array.from(table.children).find((c) => c.tagName === 'TBODY') || null;
 }
 
-// Sort order for the Slot column: starters in lineup order, then bench, then IR.
-// Sorting on the visible text would put "BE" above "QB", which is nonsense.
-const SLOT_ORDER = {
-  0: 1, 1: 1,               // QB / team QB
-  2: 2,                     // RB
-  4: 3,                     // WR
-  6: 4,                     // TE
-  3: 5, 5: 5, 23: 5,        // the flex family
-  7: 6,                     // OP — reads next to the flex, but it can hold a QB,
-                            // so the grid's FLEX rule must never treat it as one
-  16: 7,                    // D/ST
-  17: 8,                    // K
-  18: 9, 19: 10,            // P, HC
-  20: 50,                   // bench
-  21: 51,                   // IR
-};
-
 // ESPN's own slot ids for the two places that are not a lineup spot.
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -263,13 +261,13 @@ function injuryCell(status) {
   return `<td class="left" data-v="${esc(label)}"><span class="${cls}">${esc(label)}</span></td>`;
 }
 
-// -------------------------------------------------------------- the team grids
+// --------------------------------------------------------------- the team grid
 //
-// Two tables of the same shape, one row per team: nine lineup spots, what those
-// nine total, and then the bench behind them. The only difference between the
-// two is the number in every cell — a typical week in one, the week selected at
-// the top of the page in the other — so they are built by one renderer handed a
-// different MEASURE, and comparing them is reading straight down the page.
+// One table, one row per team: nine lineup spots, what those nine total, and
+// then the bench behind them. It was two tables of exactly this shape until
+// 2026-09-17, differing only in the number in every cell — a typical week in
+// one, the selected week in the other — which is why merging them is a control,
+// not a rewrite: one renderer, handed one of the two MEASURES below.
 //
 // NO NAMES in the cells. Ten teams across nine spots plus a bench is a wide
 // table, and a name is the widest thing that could be in a cell while being the
@@ -868,26 +866,39 @@ function renderWeekPicker() {
 }
 
 /**
- * The two grids, and everything that differs between them.
+ * THE TWO MEASURES, and everything that differs between them.
  *
- * They are the same table twice over — same rows, same nine spots, same bench —
- * measured two different ways, so one renderer builds both and the pair can be
- * read straight down the page.
+ * These were two whole panels stacked down the page until 2026-09-17. They were
+ * never two tables: same rows, same nine spots, same bench, one renderer, and a
+ * single field — `measure` — deciding what number went in a cell. So the merge
+ * keeps each one's rules exactly as they were and simply lets the reader pick
+ * which is on screen.
+ *
+ * `weekGrid` is the one rule that must not drift: ONLY a week's number can be a
+ * bye (or a ruled-out zero). A season average of 0.00 is a man ESPN projects
+ * nothing for all year, which is a different fact and is printed as a number.
  */
-const GRIDS = [
-  {
-    id: 'overview',
-    measure: avgWeek,
-    heading: () => `All teams · proj avg ${espn.getConfig().season}`,
-  },
-  {
-    id: 'weekly',
+const MEASURES = {
+  week: {
+    key: 'week',
     measure: weekProj,
+    button: () => 'A week',
     heading: () => `All teams · week ${state.week}`,
-    // Only a week's number can be a bye (or a ruled-out zero).
     weekGrid: true,
   },
-];
+  avg: {
+    key: 'avg',
+    measure: avgWeek,
+    button: () => `Proj avg ${espn.getConfig().season}`,
+    heading: () => `All teams · proj avg ${espn.getConfig().season}`,
+    weekGrid: false,
+  },
+};
+
+/** The grid as it is to be drawn right now: the one table, and the measure on it. */
+function currentGrid() {
+  return { id: 'overview', ...(MEASURES[state.measure] || MEASURES.week) };
+}
 
 /** The bench is as deep as the deepest bench, so every row has the same shape. */
 function benchWidth(teams) {
@@ -994,16 +1005,115 @@ function renderKey(id, items, hint = '') {
 }
 
 function renderOverview() {
-  // Cleared per GRID, not wholesale: the rows are about to be replaced, so every
-  // key registered against the old ones is dead — but the season panel below
-  // registers cards of its own and is not being repainted here, and clearing
-  // the lot from in here left its `data-tip`s pointing at nothing.
-  for (const grid of GRIDS) { clearRuns(grid.id); renderGrid(grid); }
+  const grid = currentGrid();
+  // Cleared for THIS grid, not wholesale: the rows are about to be replaced, so
+  // every key registered against the old ones is dead — but the season panel
+  // below registers cards of its own and is not being repainted here, and
+  // clearing the lot from in here left its `data-tip`s pointing at nothing.
+  clearRuns(grid.id);
+  renderMeasureToggle(grid);
+  renderGrid(grid);
+  renderOverviewNote(grid);
   // NOT hideTip() before the repaint any more. This runs once per batch while
   // the season loads, and closing the card each time made one opened in the
   // first seconds vanish under the reader. The card finds its man again among
   // the new cells and redraws from the newer data — or closes if he is gone.
   reopenTip();
+}
+
+/**
+ * The measure control, and the one line that says what it does.
+ *
+ * Which button is lit is decided by the code rather than by the last click, the
+ * same rule the source and position toggles follow — the reader can arrive with
+ * a remembered measure, and a control that only moved when clicked would then
+ * be showing the wrong one.
+ *
+ * The explanation is a `.ctl-hint` on the page, never a `title`: a `title` on a
+ * button is invisible on iOS and js/touch-titles.js deliberately leaves controls
+ * alone, because a tap on a control has to work the control.
+ */
+function renderMeasureToggle(grid) {
+  const toggle = $('measureToggle');
+  if (toggle) {
+    for (const b of toggle.querySelectorAll('button[data-measure]')) {
+      const m = MEASURES[b.dataset.measure];
+      if (m) b.textContent = m.button();
+      b.classList.toggle('on', b.dataset.measure === grid.key);
+    }
+  }
+  const hint = $('measureHint');
+  if (hint) {
+    hint.textContent = grid.key === 'avg'
+      ? `Scored on the season projection per game. The week still sets the rest of the page.`
+      : `Scored on ESPN’s projection for week ${state.week}, which is also the week the panels below show.`;
+  }
+}
+
+/**
+ * The method behind the grid, written for whichever measure is on screen.
+ *
+ * It is one note now rather than two panels' worth, and the paragraph that
+ * changes is the FIRST one — what a number in a cell actually is. The bye
+ * paragraph only appears on the week measure, because only a week can have one.
+ */
+function renderOverviewNote(grid) {
+  const el = $('overviewNote');
+  if (!el) return;
+  const season = espn.getConfig().season;
+  const parts = [];
+
+  parts.push(
+    grid.key === 'avg'
+      ? `Every number is a <strong>typical week</strong>: ESPN’s full-season ${season} projection ` +
+        `divided by ${SEASON_GAMES} games. Nobody’s actual week is in the table on this setting — ` +
+        `switch to <strong>A week</strong> for that.`
+      : `Every number is <strong>ESPN’s own projection for week ${state.week}</strong>, the week ` +
+        `picked above. Switch to <strong>Proj avg ${season}</strong> for the same table measured on ` +
+        `the season projection per game, and read the two against each other to see who is better ` +
+        `this week than they usually are.`
+  );
+
+  parts.push(
+    `The nine columns are the best lineup that squad could field, chosen by the measure above rather ` +
+    `than by where the manager has parked people — so a squad’s FLEX can be a different man on the ` +
+    `two settings. <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB. ` +
+    `<strong>Total</strong> is those nine added up — nine real men, not an estimate.`
+  );
+
+  parts.push(
+    `<strong>B1…</strong> are the bench, best first by the same measure. Each man’s position is in ` +
+    `the cell because every bench is a different shape — and after it where he ranks at that ` +
+    `position on his own team, counting the starters too, so <strong>RB4</strong> is his squad’s ` +
+    `fourth-best back whether or not the other three are in the lineup.`
+  );
+
+  if (grid.weekGrid) {
+    parts.push(
+      `A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is ` +
+      `off that week, which is not the same as having no number at all. ESPN also returns 0.00 for ` +
+      `a man it has ruled out, so a zero outside his team’s bye week reads <strong>0.0</strong> ` +
+      `with OUT, IR or SUSP beside it. On the season average neither can happen: a zero there is a ` +
+      `man ESPN projects nothing for all year.`
+    );
+  }
+
+  parts.push(
+    `<strong>Tap or hover any number</strong> for that man’s name and his whole season as a chart: ` +
+    `the weeks along the top, his projection for each one underneath, and what he actually scored ` +
+    `under that. On a phone it opens as a panel at the foot of the screen, with a button through to ` +
+    `his next 13 weeks. Every name is in full in the roster detail at the foot of the page.`
+  );
+
+  parts.push(
+    `<strong>Every number is a link</strong> to that man’s next 13 weeks on the ` +
+    `<a href="waivers.html">Players</a> page. Click the row anywhere else to load that team into the ` +
+    `panels below, and click any header to sort. <strong>The week picked above drives the whole ` +
+    `page</strong> — the roster detail, the season sheet’s bracketed column and “who to start” all ` +
+    `follow it, whichever measure this grid is on.`
+  );
+
+  el.innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 }
 
 function renderTeamPicker() {
@@ -1359,7 +1469,8 @@ function renderRosterNote(view, team) {
 
   parts.push(
     `<strong>Season total</strong> is the whole ${SEASON_GAMES}-game projection; ` +
-    `<strong>Avg/wk</strong> is that same number per game, which is what the grid above adds up. ` +
+    `<strong>Avg/wk</strong> is that same number per game, which is what the all-teams grid adds ` +
+    `up on its <strong>Proj avg</strong> setting. ` +
     `<strong>Click any player’s name</strong> to open his next 13 weeks on the ` +
     `<a href="waivers.html">Players</a> page.`
   );
@@ -1397,8 +1508,8 @@ function renderRosterNote(view, team) {
     ? `<span class="neg">This is not ${team ? `${esc(team.name)}’s` : 'the'} real lineup any ` +
       `more.</span> The number beside the total is the difference from the one ESPN has, and ` +
       `<strong>Proj avg</strong> above deliberately does not move with it: that is the best ` +
-      `nine by season average, the same figure the first grid gives this team, and it never ` +
-      `depended on how the lineup was set.`
+      `nine by season average, the same figure the all-teams grid gives this team on its ` +
+      `<strong>Proj avg</strong> setting, and it never depended on how the lineup was set.`
     : '';
   edited.classList.toggle('hidden', !lineupEdited());
 }
@@ -1725,67 +1836,6 @@ function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus) {
 // highlight are for, and it is why these cells carry the same player card the
 // grids at the top do — on a phone there is no hover, and the card as a sheet
 // is the only thing that can answer "who is that" with a thumb.
-
-/**
- * The league's starting slots as ROWS: one per slot, in lineup order, numbered
- * within a position when there is more than one of it.
- *
- * `slots` is the league's own shape (`leagueSlots()`, read off the lineups ESPN
- * has already accepted), so a three-receiver league gets WR1/WR2/WR3 and a
- * two-receiver one gets WR1/WR2 without anything here being told which it is.
- * A position the league starts exactly one of keeps its bare label — "QB", not
- * "QB1" — because a number that can only ever be 1 is noise.
- *
- * @returns {Array<{key:string, base:string, slotId:number, rank:number, order:number}>}
- */
-function slotRows(slots) {
-  if (!slots || !slots.length) return [];
-  const counts = new Map();
-  for (const id of slots) counts.set(id, (counts.get(id) || 0) + 1);
-  const ids = [...counts.keys()]
-    .sort((a, b) => (SLOT_ORDER[a] ?? 40) - (SLOT_ORDER[b] ?? 40) || a - b);
-
-  const out = [];
-  for (const id of ids) {
-    const n = counts.get(id);
-    const base = espn.SLOT_LABELS[id] ?? String(id);
-    for (let i = 1; i <= n; i++) {
-      out.push({ key: n > 1 ? `${base}${i}` : base, base, slotId: id, rank: i, order: out.length });
-    }
-  }
-  return out;
-}
-
-/**
- * Hand one week's best lineup out to the slot rows.
- *
- * The solver says which SLOT ID each man fills; the ranking inside a slot is
- * this function's own, and it is done on that week's projection so "WR2" always
- * means the second-best receiver of the two the lineup actually contains. The
- * playerId tiebreak stops two identical projections trading rows between
- * repaints, which would light up as a change that never happened.
- *
- * @returns {Map<string, {p:object, v:number}|null>} slot key -> who is in it
- */
-function fillSlots(starters, rows) {
-  const bySlot = new Map();
-  for (const s of starters) {
-    if (!bySlot.has(s.slotId)) bySlot.set(s.slotId, []);
-    bySlot.get(s.slotId).push(s);
-  }
-  for (const list of bySlot.values()) {
-    list.sort((a, b) =>
-      (b.projected ?? -Infinity) - (a.projected ?? -Infinity) ||
-      (a.playerId ?? 0) - (b.playerId ?? 0));
-  }
-
-  const out = new Map();
-  for (const row of rows) {
-    const pick = (bySlot.get(row.slotId) || [])[row.rank - 1] || null;
-    out.set(row.key, pick ? { p: pick, v: round1(pick.projected) } : null);
-  }
-  return out;
-}
 
 /**
  * One team's best legal lineup in every week the cache holds.
@@ -2505,7 +2555,7 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
   const paras = [
     `One position at a time, deepest first. A <strong class="key-st">shaded, bold</strong> number is a week ` +
     `this man is in the <strong>best legal lineup</strong> that team could field — the same rule the ` +
-    `grids at the top of the page use, run once per week on that week&rsquo;s own projections. ` +
+    `grid at the top of the page uses, run once per week on that week&rsquo;s own projections. ` +
     `A <strong>F</strong> beside it means he only gets in through the <strong>flex</strong>.`,
 
     `<strong>Read along a row</strong> to see a starter&rsquo;s soft weeks and his bye; ` +
@@ -2896,28 +2946,45 @@ $('lineupReset').addEventListener('click', () => {
   renderSeason();
 });
 
-// Clicking anywhere on a team's row drills into it — the grids are the thing
+// Clicking anywhere on a team's row drills into it — the grid is the thing
 // people scan, so making them go back to the select below to act on what they
-// found would be a step for nothing. Either grid drives it.
-for (const grid of GRIDS) {
-  $(`${grid.id}Table`).addEventListener('click', (e) => {
-    if (!e.target.closest) return;
-    // A number in these cells is now a link to that player, and the row it sits
-    // in still drills into the team. Both would fire on one click: the reader
-    // would leave for the Players page while this page quietly re-pointed the
-    // three panels below at a team he never picked, and find them changed when
-    // he came back. The link wins, and the drill-down is left alone.
-    if (clickIsPlayer(e)) return;
-    const tr = e.target.closest('tr[data-team]');
-    if (!tr) return;
-    selectTeam(Number(tr.dataset.team));
-    revealRoster();
-  });
-  // The grids are the reason to be here, so they open on the number that ranks
-  // teams: Total, high first. Column 10 — the team, the nine spots, then it.
-  enableSort($(`${grid.id}Table`), { defaultIndex: GRID_SLOTS.length + 1 });
-  wireTips($(`${grid.id}Table`));
-}
+// found would be a step for nothing.
+//
+// Registered ONCE, on the table, not on the rows: the measure switch repaints
+// every row, and a handler that lived on a row would be thrown away with it.
+$('overviewTable').addEventListener('click', (e) => {
+  if (!e.target.closest) return;
+  // A number in these cells is now a link to that player, and the row it sits
+  // in still drills into the team. Both would fire on one click: the reader
+  // would leave for the Players page while this page quietly re-pointed the
+  // three panels below at a team he never picked, and find them changed when
+  // he came back. The link wins, and the drill-down is left alone.
+  if (clickIsPlayer(e)) return;
+  const tr = e.target.closest('tr[data-team]');
+  if (!tr) return;
+  selectTeam(Number(tr.dataset.team));
+  revealRoster();
+});
+// The grid is the reason to be here, so it opens on the number that ranks
+// teams: Total, high first. Column 10 — the team, the nine spots, then it.
+enableSort($('overviewTable'), { defaultIndex: GRID_SLOTS.length + 1 });
+wireTips($('overviewTable'));
+
+/**
+ * THE MEASURE SWITCH: a typical week, or the week picked beside it.
+ *
+ * A repaint and nothing else — both numbers are already on every player in the
+ * week already fetched, so flipping between them can never cost a request. The
+ * choice is remembered for the next visit; the WEEK is not changed by it, which
+ * is what keeps the panels below agreeing with the picker.
+ */
+$('measureToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('button[data-measure]');
+  if (!btn || !MEASURES[btn.dataset.measure] || btn.dataset.measure === state.measure) return;
+  state.measure = btn.dataset.measure;
+  prefs.set('measure', state.measure);
+  renderOverview();
+});
 
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
 
@@ -3005,6 +3072,12 @@ if (STARTER_POSITIONS.includes(rememberedPos) || rememberedPos === 'FLEX') {
 // and a saved week is simply honoured. Live mode decides in `openingWeek()`.
 const rememberedWeek = prefs.get('week', null);
 if (rememberedWeek !== null) state.week = rememberedWeek;
+
+// Which measure the all-teams grid is on, from the last visit. Anything that is
+// not one of the two falls back to the default rather than wedging the panel on
+// a measure with no renderer behind it.
+const rememberedMeasure = prefs.get('measure', null);
+if (rememberedMeasure && MEASURES[rememberedMeasure]) state.measure = rememberedMeasure;
 
 if (prefs.get('source') === 'live' && boot) useLive();
 else useDemo();

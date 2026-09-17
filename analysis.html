@@ -164,9 +164,10 @@
      so this block is the page's half of that contract: any page that wants the
      card needs these rules too.
 
-     A child of <body>, not of the table: both grids sit in `.table-scroll`,
-     which is `overflow:auto`, and a card inside one would be clipped at its
-     edge. Fixed, so it is positioned against the window it has to stay inside. */
+     A child of <body>, not of the table: every table here sits in
+     `.table-scroll`, which is `overflow:auto`, and a card inside one would be
+     clipped at its edge. Fixed, so it is positioned against the window it has
+     to stay inside. */
   .tipcard {
     position: fixed;
     top: 0;
@@ -722,7 +723,7 @@
 
 
   <h1>Roster Analysis <span id="modeBadge" class="badge demo">Demo</span></h1>
-  <p class="sub" id="pageSub">Every manager&rsquo;s starting lineup on one screen &mdash; who they have at each position, and what that lineup is worth in a typical week.</p>
+  <p class="sub" id="pageSub">Every manager&rsquo;s starting lineup on one screen &mdash; who they have at each position, and what that lineup is worth in the week you pick.</p>
 
   <section class="panel">
     <h2>Data source</h2>
@@ -731,17 +732,30 @@
         <button type="button" data-src="demo" class="on">Demo data</button>
         <button type="button" data-src="live">My ESPN league</button>
       </div>
-      <div class="form-select">
-        <label for="weekSelect">Week</label>
-        <select id="weekSelect"></select>
-      </div>
     </div>
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
+  <!-- ONE all-teams box, not two (Tim, 2026-09-17): "combine the 2 all teams
+       boxes, put the week selection at the top of the all teams box, and allow
+       the user to select which week they want, as well as if they want to show
+       proj avg 2026". The two grids only ever differed in the MEASURE, so the
+       measure is now a control inside the panel and the week picker — which
+       still drives every other panel on the page — sits beside it. -->
   <section class="panel">
     <h2 id="overviewTitle">All teams</h2>
-    <p class="lede">Each team&rsquo;s best lineup and bench, scored on a typical week this season.</p>
+    <p class="lede">Every squad&rsquo;s best lineup and bench, side by side.</p>
+    <div class="toolbar">
+      <div class="segmented" id="measureToggle">
+        <button type="button" data-measure="week" class="on">A week</button>
+        <button type="button" data-measure="avg">Proj avg</button>
+      </div>
+      <div class="form-select">
+        <label for="weekSelect">Week</label>
+        <select id="weekSelect"></select>
+      </div>
+      <span class="ctl-hint" id="measureHint"></span>
+    </div>
     <!-- Head rendered by the module: the bench is as many columns as the
          deepest bench in the league, so it cannot be written here. -->
     <div class="table-scroll" id="overviewWrap"><table id="overviewTable" class="grid">
@@ -752,98 +766,7 @@
     <p class="key-line" id="overviewLegend"></p>
     <details class="explain">
       <summary>How this grid works</summary>
-      <div class="panel-note">
-        <p>Every number is a <strong>typical week</strong>: ESPN&rsquo;s full-season projection divided by
-          17 games. Nobody&rsquo;s week is in this table &mdash; the grid below is.</p>
-        <p>The nine columns are the best lineup that squad could field, chosen by that average rather than by
-          where the manager has parked people. <strong>FLEX</strong> is the best remaining RB, WR or TE, never
-          a QB. <strong>Total</strong> is those nine added up &mdash; nine real men, not an estimate.</p>
-        <p><strong>B1&hellip;</strong> are the bench, best first. Each man&rsquo;s position is in the cell
-          because every bench is a different shape &mdash; and after it where he ranks at that position on
-          his own team, counting the starters too, so <strong>RB4</strong> is his squad&rsquo;s fourth-best
-          back whether or not the other three are in the lineup.</p>
-        <p><strong>Tap or hover any number</strong> for that man&rsquo;s name and his whole season as a chart:
-          the weeks along the top, his projection for each one underneath. On a phone it opens as a panel at
-          the foot of the screen, with a button through to his next 13 weeks.
-          Every name is in full in the roster detail below.</p>
-        <p><strong>Every number is a link</strong> to that man&rsquo;s next 13 weeks on the
-          <a href="waivers.html">Players</a> page. Click the row anywhere else to load that team below,
-          and click any header to sort.</p>
-      </div>
-    </details>
-  </section>
-
-  <section class="panel">
-    <h2 id="weeklyTitle">All teams &middot; this week</h2>
-    <p class="lede">The same comparison, scored on the selected week&rsquo;s projections instead.</p>
-    <div class="table-scroll" id="weeklyWrap"><table id="weeklyTable" class="grid">
-      <thead><tr></tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <div class="empty hidden" id="weeklyEmpty">No roster data for this week.</div>
-    <p class="key-line" id="weeklyLegend"></p>
-    <details class="explain">
-      <summary>How this grid works</summary>
-      <div class="panel-note">
-        <p>The same table again, measured on <strong>ESPN&rsquo;s projection for the week selected at the top of
-          the page</strong> instead of on the season average &mdash; so read the two straight down to see who is
-          better this week than they usually are.</p>
-        <p>The lineup is re-picked on that week&rsquo;s numbers, so a squad&rsquo;s FLEX can be a different man
-          here than it is above. The bench ranks mean the same thing as above, measured on this week instead
-          of the average.</p>
-        <p>A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is off that
-          week, which is not the same as having no number at all. ESPN also returns 0.00 for a man it has
-          ruled out, so a zero outside his team&rsquo;s bye week reads <strong>0.0</strong> with OUT, IR or
-          SUSP beside it.</p>
-        <p><strong>Tapping or hovering a number</strong> gives that man&rsquo;s whole season as a chart
-          &mdash; weeks along the top, his projection for each underneath &mdash; and
-          <strong>every number is a link</strong> to his next 13 weeks on the
-          <a href="waivers.html">Players</a> page, both the same as in the grid above.</p>
-      </div>
-    </details>
-  </section>
-
-  <section class="panel">
-    <h2 id="rosterTitle">Roster detail</h2>
-    <p class="lede">One team in the selected week: its starters, their projected total, then the bench.</p>
-    <div class="toolbar">
-      <div class="select-md">
-        <label for="teamSelect">Team</label>
-        <select id="teamSelect"></select>
-      </div>
-      <button type="button" id="lineupReset" class="hidden">Put the lineup back</button>
-    </div>
-    <div class="stat-row" id="teamGlance"></div>
-    <p class="edited-note hidden" id="rosterEdited"></p>
-    <!-- One line under the starters' total in the stat row: what the best legal
-         lineup this week would change. Filled by bestLineupLine(). -->
-    <p class="best-note" id="rosterBest"></p>
-    <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
-      <thead><tr>
-        <th class="left" data-sort>Slot</th>
-        <th class="name" data-sort>Player</th>
-        <th class="left" data-sort>Pos</th>
-        <th class="left" data-sort>NFL</th>
-        <th data-sort>Projected</th>
-        <th data-sort>Actual</th>
-        <th data-sort>Diff</th>
-        <th data-sort>Avg/wk</th>
-        <th data-sort>Season total</th>
-        <th class="own" data-sort>% own</th>
-        <th class="left" data-sort>Status</th>
-      </tr></thead>
-      <!-- Three bodies, not one. The starters, the line that totals them, and
-           the bench. sortable.js sorts each independently, so the grouping and
-           the total's place in it survive every sort. -->
-      <tbody id="rosterStarters"></tbody>
-      <tbody id="rosterSplit" class="split"></tbody>
-      <tbody id="rosterBench"></tbody>
-    </table></div>
-    <div class="empty hidden" id="rosterEmpty">Pick a team to see its roster.</div>
-    <p class="key-line" id="rosterLegend"></p>
-    <details class="explain">
-      <summary>How this table works</summary>
-      <div class="panel-note" id="rosterNote"></div>
+      <div class="panel-note" id="overviewNote"></div>
     </details>
   </section>
 
@@ -899,6 +822,50 @@
     <details class="explain">
       <summary>How this table works</summary>
       <div class="panel-note" id="startersNote"></div>
+    </details>
+  </section>
+
+  <section class="panel">
+    <h2 id="rosterTitle">Roster detail</h2>
+    <p class="lede">One team in the selected week: its starters, their projected total, then the bench.</p>
+    <div class="toolbar">
+      <div class="select-md">
+        <label for="teamSelect">Team</label>
+        <select id="teamSelect"></select>
+      </div>
+      <button type="button" id="lineupReset" class="hidden">Put the lineup back</button>
+    </div>
+    <div class="stat-row" id="teamGlance"></div>
+    <p class="edited-note hidden" id="rosterEdited"></p>
+    <!-- One line under the starters' total in the stat row: what the best legal
+         lineup this week would change. Filled by bestLineupLine(). -->
+    <p class="best-note" id="rosterBest"></p>
+    <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
+      <thead><tr>
+        <th class="left" data-sort>Slot</th>
+        <th class="name" data-sort>Player</th>
+        <th class="left" data-sort>Pos</th>
+        <th class="left" data-sort>NFL</th>
+        <th data-sort>Projected</th>
+        <th data-sort>Actual</th>
+        <th data-sort>Diff</th>
+        <th data-sort>Avg/wk</th>
+        <th data-sort>Season total</th>
+        <th class="own" data-sort>% own</th>
+        <th class="left" data-sort>Status</th>
+      </tr></thead>
+      <!-- Three bodies, not one. The starters, the line that totals them, and
+           the bench. sortable.js sorts each independently, so the grouping and
+           the total's place in it survive every sort. -->
+      <tbody id="rosterStarters"></tbody>
+      <tbody id="rosterSplit" class="split"></tbody>
+      <tbody id="rosterBench"></tbody>
+    </table></div>
+    <div class="empty hidden" id="rosterEmpty">Pick a team to see its roster.</div>
+    <p class="key-line" id="rosterLegend"></p>
+    <details class="explain">
+      <summary>How this table works</summary>
+      <div class="panel-note" id="rosterNote"></div>
     </details>
   </section>
 

@@ -73,6 +73,10 @@ import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
   zeroKind, byeWeekOf,
 } from './player-card.js';
+// The ONE lineup-slot layout rule — QB, RB1, RB2, WR1…, FLEX, D/ST, K — shared
+// with the analysis page's "Season by week" panel so the two cannot disagree
+// about which receiver is WR1. See js/lineup-slots.js.
+import { slotRows, fillSlots } from './lineup-slots.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('trade');
@@ -162,6 +166,8 @@ const state = {
   rows: [],            // the offers currently in the finder's table, in order
   deal: null,          // the offer the modal is showing; null = the modal is shut
   dealKey: null,       // which row opened it, so focus can go back there
+  dealWeek: null,      // which week's slot-by-slot breakdown is open inside it
+  dealSide: 'mine',    // whose lineup that breakdown shows: 'mine' | 'theirs'
   combo: null,         // the last bestCombo result
   comboRows: [],       // the combo's offers, MERGED per manager, in row order
   comboRunning: false,
@@ -1836,6 +1842,23 @@ runSearch.token = 0;
 // the difference column is signed and coloured, so a deal that is +5 on average
 // and −12 in the weeks that decide the season is one glance.
 
+/**
+ * The week label in the first column — and the way INTO that week's breakdown.
+ *
+ * A REAL BUTTON, for the same reason the finder's rows carry one: the row it
+ * sits in answers a hover and nothing else, and Tim reads this site on a phone
+ * where there is no hover at all. The button is the tap target, the keyboard
+ * stop, and the thing `focusin` fires on — three routes to one answer rather
+ * than a hover that a thumb and a Tab key can never reach.
+ *
+ * NO `title` ON IT. js/touch-titles.js deliberately leaves controls alone — a
+ * tap on a control has to work the control — so a `title` here would be
+ * invisible on his phone. What it needs to say is in the key under the table.
+ */
+const weekCell = (week, tail = '') =>
+  `<td class="name"><button type="button" class="wk-peek" data-wk="${week}" ` +
+  `aria-expanded="false" aria-controls="dealWeek">Week ${week}${tail}</button></td>`;
+
 function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], playoff = [] } = {}) {
   // PLAYED WEEKS: above a line, in plain text, and in no total. Tim, 2026-09-16:
   // "draw a line below the previous weeks ... and turn all the numbers above it
@@ -1845,8 +1868,8 @@ function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], pla
   const pastRows = past
     .map(
       (w) =>
-        `<tr class="past">` +
-        `<td class="name">Week ${w.week}</td>` +
+        `<tr class="past" data-wk="${w.week}">` +
+        weekCell(w.week) +
         `<td>${fmt(w.before)}</td>` +
         `<td>${fmt(w.after)}</td>` +
         `<td class="delta">${signedText(w.delta)}</td>` +
@@ -1860,8 +1883,8 @@ function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], pla
   const rows = byWeek
     .map(
       (w) =>
-        `<tr>` +
-        `<td class="name">Week ${w.week}</td>` +
+        `<tr data-wk="${w.week}">` +
+        weekCell(w.week) +
         `<td>${fmt(w.before)}</td>` +
         `<td>${fmt(w.after)}</td>` +
         `<td class="delta ${w.delta > 0 ? 'up' : w.delta < 0 ? 'down' : ''}">` +
@@ -1907,8 +1930,8 @@ function playoffTableRows(playoff) {
     playoff
       .map(
         (w) =>
-          `<tr class="po">` +
-          `<td class="name">Week ${w.week} <span class="po-tag-inline">PO</span></td>` +
+          `<tr class="po" data-wk="${w.week}">` +
+          weekCell(w.week, ' <span class="po-tag-inline">PO</span>') +
           `<td>${fmt(w.before)}</td>` +
           `<td>${fmt(w.after)}</td>` +
           `<td class="delta">${signedText(w.delta)}</td>` +
@@ -1918,22 +1941,94 @@ function playoffTableRows(playoff) {
   );
 }
 
+// ===========================================================================
+// ONE DEAL, PRICED ONCE — and read three ways
+// ===========================================================================
+//
+// The pop-up needs the same deal over three DIFFERENT spans, and they must stay
+// three: the weeks still to be played (which are the totals), the played weeks
+// (shown above a heavy line, in no total) and the playoff weeks (shown below
+// one, priced nowhere). Each is its own `priceTradeAcrossWeeks` call so nothing
+// about the second or third can leak into the first.
+//
+// It also needs BOTH MANAGERS' lineups, because Tim asked to be able to see the
+// other side of the deal — and a squad's lineup is filled from the same weekly
+// projections either way, so the partner's side is the same call with the two
+// packages swapped over. `priceTradeAcrossWeeks` is symmetric by construction:
+// `findTrades` already prices the counterparty exactly this way.
+//
+// WHAT THIS COSTS IN REQUESTS: NOTHING. Every number comes out of
+// `weekly.byWeek`, which the click on the deal already bought. Flipping the
+// side toggle, hovering a week, tabbing through the weeks — all of it is
+// arithmetic over projections that are already in the page. The one thing it
+// costs is lineup fills, so the answer is memoised per (deal, side) and thrown
+// away the moment anything underneath it moves.
+
+const dealCache = { key: null, offer: null, sets: null };
+
+/** Whose roster, and which way round the package runs, for one side. */
+function sideOf(offer, side) {
+  const teams = state.data ? state.data.teams : [];
+  if (side === 'theirs') {
+    // A whole combination has no single manager on the other side of it, so
+    // there is no "their lineup" to show. That is a fact about the combination
+    // rather than a failure, and the panel says so rather than guessing.
+    if (!offer.partner) return null;
+    const team = teams.find((t) => t.id === offer.partner.id);
+    return team ? { team, send: offer.receive, receive: offer.send } : null;
+  }
+  const team = teams.find((t) => t.id === state.myTeamId);
+  return team ? { team, send: offer.send, receive: offer.receive } : null;
+}
+
+function priceSide(offer, side, weeks) {
+  const s = sideOf(offer, side);
+  if (!s || !weeks.length) return null;
+  return priceTradeAcrossWeeks({
+    players: s.team.players,
+    send: s.send,
+    receive: s.receive,
+    slots: state.slots,
+    weeks,
+    projFor,
+    zeroIsBye: zeroIsBye(),
+  });
+}
+
+/**
+ * The three spans for one deal and one side, priced and kept.
+ *
+ * The cache key names every input: the league, how many weeks are in hand (so a
+ * week landing mid-read invalidates it rather than being ignored), the selected
+ * week, whose squad the finder is trading from, and the side. An identity check
+ * on the offer object completes it — `runSearch` builds fresh offer objects, so
+ * a re-rank cannot be served a previous search's lineups.
+ */
+function dealSets(offer, side) {
+  const key = `${sourceKey()}|${weekly.byWeek.size}|${weekly.failed.size}|` +
+    `${state.week}|${state.myTeamId}|${side}`;
+  if (dealCache.key === key && dealCache.offer === offer && dealCache.sets) return dealCache.sets;
+
+  const inHand = (ws) => ws.filter((w) => weekly.byWeek.has(w));
+  const sets = {
+    span: priceSide(offer, side, weeklySpan()),
+    past: priceSide(offer, side, inHand(pastWeeksShown())),
+    po: priceSide(offer, side, inHand(playoffWeeksShown())),
+  };
+  dealCache.key = key;
+  dealCache.offer = offer;
+  dealCache.sets = sets;
+  return sets;
+}
+
 /**
  * The playoff weeks for one deal, priced the same way as the rest but on their
  * OWN, so nothing about them can reach the priced span. Only weeks in hand.
  */
 function playoffPriced(me, offer) {
-  const weeks = playoffWeeksShown().filter((w) => weekly.byWeek.has(w));
-  if (!weeks.length || !me) return [];
-  return priceTradeAcrossWeeks({
-    players: me.players,
-    send: offer.send,
-    receive: offer.receive,
-    slots: state.slots,
-    weeks,
-    projFor,
-    zeroIsBye: zeroIsBye(),
-  }).byWeek;
+  if (!me) return [];
+  const po = dealSets(offer, 'mine').po;
+  return po ? po.byWeek : [];
 }
 
 function sideHtml(title, players) {
@@ -1999,22 +2094,19 @@ function renderDeal() {
       (po.length
         ? `<table class="weeks"><thead><tr><th class="name">Week</th><th>As you are now</th>` +
           `<th>${esc(offer.combined ? 'With the combination' : 'With the trade')}</th>` +
-          `<th>Difference</th></tr></thead><tbody>${playoffTableRows(po)}</tbody></table>`
+          `<th>Difference</th></tr></thead><tbody>${playoffTableRows(po)}</tbody></table>` +
+          BREAKDOWN_HOST
         : '');
     $('dealNote').innerHTML = '';
+    renderDealWeek();
     return;
   }
 
   const span = weeklySpan();
-  const priced = priceTradeAcrossWeeks({
-    players: me.players,
-    send: offer.send,
-    receive: offer.receive,
-    slots: state.slots,
-    weeks: span,
-    projFor,
-    zeroIsBye: zeroIsBye(),
-  });
+  // One pricing, kept — the week table reads its totals and the slot-by-slot
+  // breakdown below reads the very lineups those totals were added up from, so
+  // the two cannot come to different answers about one week.
+  const priced = dealSets(offer, 'mine').span;
 
   const cut = priced.cut.length
     ? `<p class="deal-cut">The roster limit forces you to drop ` +
@@ -2061,18 +2153,8 @@ function renderDeal() {
   // The played weeks, priced the same way but SEPARATELY, so nothing about them
   // can reach `priced` — they are shown for reference and counted nowhere. Only
   // weeks actually in hand; one still loading simply appears when it lands.
-  const pastSpan = pastWeeksShown().filter((w) => weekly.byWeek.has(w));
-  const pastPriced = pastSpan.length
-    ? priceTradeAcrossWeeks({
-      players: me.players,
-      send: offer.send,
-      receive: offer.receive,
-      slots: state.slots,
-      weeks: pastSpan,
-      projFor,
-      zeroIsBye: zeroIsBye(),
-    }).byWeek
-    : [];
+  const pastSet = dealSets(offer, 'mine').past;
+  const pastPriced = pastSet ? pastSet.byWeek : [];
 
   $('dealBody').innerHTML =
     head +
@@ -2081,6 +2163,7 @@ function renderDeal() {
       past: pastPriced,
       playoff: playoffPriced(me, offer),
     }) +
+    BREAKDOWN_HOST +
     cut +
     espnBlock;
 
@@ -2091,6 +2174,9 @@ function renderDeal() {
         `so its figure for this deal will not match the total here. Choose ` +
         `<strong>Every remaining week</strong> at the top to rank the whole list this way. `
       : '') +
+    `<strong>Hover, tap or Tab to a week</strong> to open that week slot by slot, before and ` +
+    `after — the same lineups these totals are added up from, laid out the way the Analysis ` +
+    `page lays them out, with the men you send and receive marked. Escape closes it. ` +
     `<strong>As you are now</strong> and <strong>With the trade</strong> are both your best legal ` +
     `lineup <em>in that week</em>, filled from that week’s own projections — so both sides of the ` +
     `comparison assume you start whoever is highest that week, which is what you would actually ` +
@@ -2119,6 +2205,264 @@ function renderDeal() {
     `between those two readings is exactly what depth is worth. So the two panels cannot ` +
     `contradict each other about a player; where they differ, it is the arithmetic differing, ` +
     `and that difference is the answer rather than a discrepancy.`;
+
+  // The slot-by-slot panel is re-rendered rather than rebuilt with the body, so
+  // that a hover can repaint it without the table under the pointer being
+  // replaced mid-gesture. It reads `state.dealWeek`, so a repaint of the whole
+  // page leaves the open week open.
+  renderDealWeek();
+}
+
+// ===========================================================================
+// ONE WEEK, SLOT BY SLOT — what the deal does to the lineup you would field
+// ===========================================================================
+//
+// Tim's ask, in his words: "if you hover over a specific week, it shows the
+// positions of each proj for that week, before and after your trade, with the
+// specific players that are being traded color coded so you can see how the new
+// player affected your lineup for that specific week."
+//
+// The week table above answers "how much"; this answers "through whom". A deal
+// that is +6 in week 9 is +6 because ONE man walked into ONE slot and pushed
+// ONE of yours out, and until you can see which, the column is a number you
+// have to take on trust.
+//
+// FOUR DECISIONS, and they are the whole of the panel:
+//
+//   THE SLOT SHAPE IS THE LEAGUE'S OWN, and it is the SAME layout the analysis
+//   page's "Season by week" uses — QB, RB1, RB2, WR1…, FLEX, D/ST, K, with each
+//   man ranked inside his own slot on that week's projection. That rule lives
+//   in js/lineup-slots.js and both pages import it, because "WR2" has to mean
+//   the same thing on both or the two panels are quietly describing different
+//   lineups. The lineups themselves are `optimalLineup`'s, reached through the
+//   same `priceTradeAcrossWeeks` the week table's totals come from — not a
+//   second solve, which would be a second chance to disagree.
+//
+//   COLOUR IS NEVER ALONE. The man arriving is marked IN, the man leaving OUT,
+//   and one of your own whose place the deal changes is marked "promoted",
+//   "benched" or "moved" — a word in every case, because the site's rule is
+//   that a hue is the second cue and never the first (HANDOFF: the two greens
+//   on the wire). A slot whose number moved is marked as changed as well, so a
+//   reader can find the three rows that did something among the ten that did
+//   not without comparing twenty figures by eye.
+//
+//   ONE SIDE AT A TIME, HIS OWN FIRST. Both lineups side by side is twenty
+//   columns on a phone. The toggle is one control and it defaults to the squad
+//   the finder is trading FROM, which is the question somebody came with; the
+//   other manager's is one press away, and it is the same arithmetic with the
+//   two packages swapped over.
+//
+//   IT COSTS NO REQUESTS. Every projection it reads was bought when the deal
+//   was opened. See `dealSets`.
+
+const BREAKDOWN_HOST = '<div id="dealWeek" class="wkx"></div>';
+
+/** An offer's entries are player objects; be tolerant of a bare id anyway. */
+const idKey = (p) => String(p && typeof p === 'object' ? p.playerId : p);
+
+/**
+ * One week out of whichever of the three spans holds it, with the LINEUPS.
+ *
+ * The played weeks and the playoff weeks get a breakdown too. They are in no
+ * total and the panel says so, but "what would this deal have done in week 3"
+ * is a fair question and the lineups for it are already priced.
+ */
+function weekSlice(offer, side, week) {
+  const sets = dealSets(offer, side);
+  for (const kind of ['past', 'span', 'po']) {
+    const set = sets[kind];
+    if (!set) continue;
+    const i = set.byWeek.findIndex((w) => w.week === week);
+    if (i < 0) continue;
+    return { kind, row: set.byWeek[i], before: set.before.byWeek[i], after: set.after.byWeek[i] };
+  }
+  return null;
+}
+
+/** "Ana’s lineup" / "Your lineup" — whose squad the breakdown is showing. */
+function sideLabel(offer, side) {
+  if (side === 'theirs') return offer.partner ? `${offer.partner.name}’s lineup` : 'His lineup';
+  return 'Your lineup';
+}
+
+/** The side toggle, or the reason there isn't one. */
+function sideToggleHtml(offer) {
+  if (!offer.partner) {
+    return (
+      `<span class="wkx-noside">A combination has several managers on the other side, so there ` +
+      `is no one lineup to compare against. Each manager’s own row opens his.</span>`
+    );
+  }
+  const btn = (side) =>
+    `<button type="button" class="wkx-side${state.dealSide === side ? ' on' : ''}" ` +
+    `data-side="${side}" aria-pressed="${state.dealSide === side}">` +
+    `${esc(sideLabel(offer, side))}</button>`;
+  return `<span class="wkx-sides" role="group" aria-label="Whose lineup">${btn('mine')}${btn('theirs')}</span>`;
+}
+
+/**
+ * One man in one slot, with the mark that says what the deal did to him.
+ *
+ * `column` is which half of the comparison this cell is, and it decides which
+ * marks are even possible: a man cannot ARRIVE in the before lineup and cannot
+ * LEAVE the after one. A traded man is always marked as traded rather than as
+ * displaced, even though he satisfies both tests — "OUT" is the truer sentence
+ * about the man you are sending away.
+ */
+function slotManHtml(entry, column, ctx) {
+  if (!entry || !entry.p) return `<span class="wkx-none">—</span>`;
+  const p = entry.p;
+  const id = idKey(p);
+
+  let mark = null;
+  if (column === 'before') {
+    if (ctx.leaving.has(id)) mark = { cls: 'gone', word: 'OUT' };
+    else if (!ctx.after.has(id)) mark = { cls: 'shift', word: 'benched' };
+  } else {
+    if (ctx.arriving.has(id)) mark = { cls: 'got', word: 'IN' };
+    else if (!ctx.before.has(id)) mark = { cls: 'shift', word: 'promoted' };
+    else if (ctx.before.get(id) !== ctx.after.get(id)) mark = { cls: 'shift', word: 'moved' };
+  }
+
+  const tag = mark ? `<span class="wkx-mark ${mark.cls}">${esc(mark.word)}</span>` : '';
+  const inner = `<span class="wkx-name">${esc(p.name)}</span>`;
+  return `${tag}${playerRef(p, inner)} <span class="wkx-v">${fmt(entry.v)}</span>`;
+}
+
+/**
+ * The whole breakdown for the open week, written into its own container.
+ *
+ * Deliberately NOT part of `renderDeal`'s markup pass: a hover has to be able
+ * to repaint this without replacing the table the pointer is sitting on.
+ */
+function renderDealWeek() {
+  const host = $('dealWeek');
+  if (!host) return;
+  const offer = state.deal;
+  if (!offer) { host.innerHTML = ''; return; }
+
+  // The row the reader is on, marked on the table itself as well as here, so
+  // the two halves of the panel are visibly one thing.
+  const week = state.dealWeek;
+  for (const btn of document.querySelectorAll('#dealBody .wk-peek')) {
+    const on = String(btn.getAttribute('data-wk')) === String(week);
+    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    const row = btn.closest ? btn.closest('tr') : null;
+    if (row) row.classList.toggle('peeking', on);
+  }
+
+  if (week === null || week === undefined) {
+    host.innerHTML =
+      `<p class="wkx-empty">Hover a week above — or tap one, or Tab to it — to see that week’s ` +
+      `starting lineup slot by slot, before the trade and after it.</p>`;
+    return;
+  }
+
+  const rows = slotRows(state.slots);
+  const side = offer.partner ? state.dealSide : 'mine';
+  const slice = rows.length ? weekSlice(offer, side, week) : null;
+  if (!slice) {
+    host.innerHTML =
+      `<div class="wkx-head"><h3 class="wkx-title">Week ${esc(week)}, slot by slot</h3>` +
+      `${sideToggleHtml(offer)}</div>` +
+      `<p class="wkx-empty">No lineup for week ${esc(week)} — that week’s projections are not in ` +
+      `hand.</p>`;
+    return;
+  }
+
+  const beforeFill = fillSlots(slice.before.starters, rows);
+  const afterFill = fillSlots(slice.after.starters, rows);
+
+  const s = sideOf(offer, side) || { send: [], receive: [] };
+  const ctx = {
+    leaving: new Set((s.send || []).map(idKey)),
+    arriving: new Set((s.receive || []).map(idKey)),
+    before: new Map(slice.before.starters.map((p) => [idKey(p), p.slotId])),
+    after: new Map(slice.after.starters.map((p) => [idKey(p), p.slotId])),
+  };
+
+  const body = rows
+    .map((row) => {
+      const b = beforeFill.get(row.key);
+      const a = afterFill.get(row.key);
+      const bv = b ? b.v : null;
+      const av = a ? a.v : null;
+      const moved =
+        (b ? idKey(b.p) : '') !== (a ? idKey(a.p) : '') ||
+        (Number.isFinite(bv) ? bv : null) !== (Number.isFinite(av) ? av : null);
+      const d = Number.isFinite(bv) && Number.isFinite(av) ? Math.round((av - bv) * 10) / 10 : null;
+      return (
+        `<tr class="${moved ? 'changed' : 'same'}">` +
+        `<th scope="row" class="wkx-slot">${esc(row.key)}</th>` +
+        `<td class="wkx-cell">${slotManHtml(b, 'before', ctx)}</td>` +
+        `<td class="wkx-cell">${slotManHtml(a, 'after', ctx)}</td>` +
+        `<td class="wkx-d ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">` +
+        `${d === null ? '—' : signedText(d)}</td>` +
+        `</tr>`
+      );
+    })
+    .join('');
+
+  // THE TOTALS ARE THE ENGINE'S OWN, not the sum of the tenths above them. The
+  // rows are rounded for reading; the week table's figure is not, and these two
+  // lines have to be the same number or the panel is arguing with the table it
+  // is attached to.
+  const foot =
+    `<tr class="wkx-total">` +
+    `<th scope="row" class="wkx-slot">Starting lineup</th>` +
+    `<td class="wkx-cell">${fmt(slice.row.before)}</td>` +
+    `<td class="wkx-cell">${fmt(slice.row.after)}</td>` +
+    `<td class="wkx-d ${slice.row.delta > 0 ? 'up' : slice.row.delta < 0 ? 'down' : ''}">` +
+    `${signedText(slice.row.delta)}</td>` +
+    `</tr>`;
+
+  // `scopeNote`, not `scope`: `scope` is js/prefs.js's, imported at the top of
+  // this file, and shadowing it inside one function is how a later edit here
+  // reaches for the preference store and gets a string.
+  const scopeNote =
+    slice.kind === 'past'
+      ? `<p class="wkx-scope">Week ${esc(week)} has been played, so this is what the deal ` +
+        `<em>would</em> have done. It is in no total.</p>`
+      : slice.kind === 'po'
+        ? `<p class="wkx-scope">Week ${esc(week)} is a playoff week — shown for reference, and in ` +
+          `no total on this page.</p>`
+        : '';
+
+  host.innerHTML =
+    `<div class="wkx-head">` +
+    `<h3 class="wkx-title">Week ${esc(week)}, slot by slot — ${esc(sideLabel(offer, side))}</h3>` +
+    sideToggleHtml(offer) +
+    `</div>` +
+    scopeNote +
+    `<div class="table-scroll"><table class="wkx-table">` +
+    `<thead><tr><th class="wkx-slot">Slot</th><th>As you are now</th>` +
+    `<th>${esc(offer.combined ? 'With the combination' : 'With the trade')}</th>` +
+    `<th>Difference</th></tr></thead>` +
+    `<tbody>${body}${foot}</tbody></table></div>` +
+    `<p class="wkx-key">` +
+    `<span class="wkx-mark got">IN</span> the man you receive · ` +
+    `<span class="wkx-mark gone">OUT</span> the man you send · ` +
+    `<span class="wkx-mark shift">promoted</span> / ` +
+    `<span class="wkx-mark shift">benched</span> / ` +
+    `<span class="wkx-mark shift">moved</span> one of your own whose place the deal changes. ` +
+    `A row whose number moved is drawn heavier; the rest are untouched that week.` +
+    `</p>`;
+}
+
+/** Open one week's breakdown. Hover, tap, focus and Enter all land here. */
+function setDealWeek(week) {
+  const w = Number(week);
+  if (!Number.isFinite(w) || state.dealWeek === w) return;
+  state.dealWeek = w;
+  renderDealWeek();
+}
+
+/** Which manager's lineup the breakdown shows. His own until asked otherwise. */
+function setDealSide(side) {
+  const want = side === 'theirs' ? 'theirs' : 'mine';
+  if (state.dealSide === want) return;
+  state.dealSide = want;
+  renderDealWeek();
 }
 
 /**
@@ -2135,6 +2479,11 @@ function openDeal(offer, key) {
   if (!offer) return;
   state.deal = offer;
   state.dealKey = key || null;
+  // A fresh pop-up opens with no week picked and on HIS side — the question
+  // somebody came with. Carrying the last deal's week over would answer a
+  // question about a different trade with a number that looks like this one's.
+  state.dealWeek = null;
+  state.dealSide = 'mine';
   paint();
   // The close button, because it is the one control a reader has to be able to
   // reach and the natural first stop in a dialog. Everything inside is after it
@@ -2181,6 +2530,8 @@ function closeDeal() {
   const key = state.dealKey;
   state.deal = null;
   state.dealKey = null;
+  state.dealWeek = null;
+  state.dealSide = 'mine';
   paint();
   if (key) focusEl(document.querySelector(`[data-open="${cssKey(key)}"]`));
 }
@@ -2975,6 +3326,66 @@ wireOfferClicks($('comboPanel'), () => state.comboRows);
 
 $('dealClose').addEventListener('click', () => { closeDeal(); });
 
+// ------------------------------------------ one week's lineup, three ways in
+//
+// HOVER, TAP AND FOCUS ALL LAND ON THE SAME FUNCTION, which is the whole of
+// HANDOFF's rule that nothing may be reachable only by hovering. Tim reads this
+// site on a phone, where `mouseover` never fires at all; a Tab key never fires
+// it either. So:
+//
+//   `mouseover`  a mouse resting on a week row
+//   `click`      a thumb on the week button — and a mouse click, which simply
+//                agrees with the hover that already happened
+//   `focusin`    the keyboard, arriving on the same button by Tab
+//
+// All three OPEN rather than toggle, deliberately. A toggle would fight itself
+// on a touch screen, where a tap fires a synthetic `mouseover` first and the
+// click would immediately undo it — the panel would flash and vanish under the
+// thumb. Escape is the way back out, which is the gesture a pop-up already
+// teaches, and it is handled below.
+//
+// Delegated on the PANEL because `#dealBody` is rebuilt on every repaint, and a
+// handler bound to the table inside it would be thrown away with the table.
+const dealPanel = $('dealPanel');
+
+function weekTargetOf(e) {
+  const t = e.target;
+  if (!t || typeof t.closest !== 'function') return null;
+  const host = t.closest('[data-wk]');
+  return host ? host.getAttribute('data-wk') : null;
+}
+
+dealPanel.addEventListener('mouseover', (e) => {
+  const wk = weekTargetOf(e);
+  if (wk !== null) setDealWeek(wk);
+});
+
+dealPanel.addEventListener('focusin', (e) => {
+  const wk = weekTargetOf(e);
+  if (wk !== null) setDealWeek(wk);
+});
+
+dealPanel.addEventListener('click', (e) => {
+  const t = e.target;
+  if (!t || typeof t.closest !== 'function') return;
+  // The side toggle first: it sits inside the breakdown, which sits inside the
+  // panel, so a week test would never reach it — but nor must a press on it be
+  // read as a week.
+  const sideBtn = t.closest('[data-side]');
+  if (sideBtn) {
+    e.stopPropagation();
+    setDealSide(sideBtn.getAttribute('data-side'));
+    return;
+  }
+  // A player link inside the breakdown has to navigate, exactly as it does in
+  // every other table on this site.
+  if (t.closest('a')) return;
+  const wk = weekTargetOf(e);
+  if (wk === null) return;
+  e.stopPropagation();
+  setDealWeek(wk);
+});
+
 $('espnOutcomeClose').addEventListener('click', (e) => {
   // Not an outside click as far as the pop-up is concerned.
   e.stopPropagation();
@@ -2989,6 +3400,16 @@ document.addEventListener('keydown', (e) => {
   // a <body> child with a known id, which is why this can be asked at all.
   const card = document.getElementById('tipCard');
   if (card && !card.hidden) return;
+  // ESCAPE CLOSES THE INNERMOST THING FIRST, which is the only reading of it
+  // that does not lose somebody their place: the week breakdown is open inside
+  // the pop-up, so the first press shuts that and the second shuts the pop-up.
+  // Closing the frame out from under the thing being read is exactly what the
+  // player-card check above exists to prevent, one layer up.
+  if (state.dealWeek !== null) {
+    state.dealWeek = null;
+    renderDealWeek();
+    return;
+  }
   closeDeal();
 });
 

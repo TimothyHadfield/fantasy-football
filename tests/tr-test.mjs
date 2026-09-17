@@ -404,6 +404,84 @@ function readDeal(document) {
 }
 
 /**
+ * ONE WEEK, SLOT BY SLOT — the panel that opens inside the pop-up when a week
+ * is hovered, tapped or tabbed to.
+ *
+ * Read out of the DOM element by element rather than by splitting text: a cell
+ * runs a mark into a name into a number, and a reader that split on spaces
+ * would call "IN" a player. `mark` and `markClass` are read separately on
+ * purpose — the mark's WORD is the half that survives greyscale, and the whole
+ * of the site's rule is that the colour is never carrying it alone.
+ */
+function readBreakdown(document) {
+  const host = document.getElementById('dealWeek');
+  if (!host) return null;
+  const table = host.querySelector('table.wkx-table');
+
+  const cellOf = (td) => {
+    const a = td.querySelector('a.pref');
+    const mark = td.querySelector('.wkx-mark');
+    return {
+      text: text(td),
+      name: text(td.querySelector('.wkx-name')),
+      id: a ? idOfHref(a.getAttribute('href')) : null,
+      v: text(td.querySelector('.wkx-v')),
+      mark: text(mark),
+      markClass: mark ? (mark.getAttribute('class') || '') : '',
+    };
+  };
+
+  const all = table
+    ? [...table.querySelectorAll('tbody tr')].map((tr) => {
+      const cells = [...tr.children];
+      const cls = tr.getAttribute('class') || '';
+      return {
+        slot: text(cells[0]),
+        isTotal: cls.includes('wkx-total'),
+        changed: cls.split(/\s+/).includes('changed'),
+        same: cls.split(/\s+/).includes('same'),
+        before: cellOf(cells[1]),
+        after: cellOf(cells[2]),
+        delta: text(cells[3]),
+      };
+    })
+    : [];
+
+  return {
+    present: !!table,
+    empty: !!host.querySelector('.wkx-empty'),
+    title: text(host.querySelector('.wkx-title')),
+    heads: table ? [...table.querySelectorAll('thead th')].map(text) : [],
+    slots: all.filter((r) => !r.isTotal).map((r) => r.slot),
+    rows: all.filter((r) => !r.isTotal),
+    totals: all.find((r) => r.isTotal) || null,
+    key: text(host.querySelector('.wkx-key')),
+    scope: text(host.querySelector('.wkx-scope')),
+    sides: [...host.querySelectorAll('[data-side]')].map((b) => ({
+      side: b.getAttribute('data-side'),
+      label: text(b),
+      pressed: b.getAttribute('aria-pressed'),
+    })),
+    // Every mark drawn in the TABLE, so "a word as well as a colour" can be
+    // asserted over all of them rather than over a chosen row. Read from the
+    // table alone: the key underneath prints one of each by design, and pooling
+    // the two would make an empty table look fully marked.
+    marks: table
+      ? [...table.querySelectorAll('.wkx-mark')].map((m) => ({
+        word: text(m), cls: m.getAttribute('class') || '',
+      }))
+      : [],
+    keyMarks: [...host.querySelectorAll('.wkx-key .wkx-mark')].map(text),
+    // What the WEEK TABLE says is open, which must agree with what is drawn.
+    expanded: [...document.querySelectorAll('#dealBody .wk-peek')]
+      .filter((b) => b.getAttribute('aria-expanded') === 'true')
+      .map((b) => b.getAttribute('data-wk')),
+    peeking: [...document.querySelectorAll('#dealBody tr.peeking')]
+      .map((tr) => tr.getAttribute('data-wk')),
+  };
+}
+
+/**
  * The combo panel. The BEST packing and the "most trades" alternative are read
  * separately on purpose: they are two different packings of the same offers, so
  * a man may legitimately appear in both, and a reader that pooled them would
@@ -925,6 +1003,129 @@ const SCENARIOS = {
       byeWeek: stub.BYE_WEEK,
     };
   },
+};
+
+/**
+ * HOVER A WEEK, SEE THAT WEEK'S LINEUP — Tim's ask, on the stubbed real league.
+ *
+ * His words: "if you hover over a specific week, it shows the positions of each
+ * proj for that week, before and after your trade, with the specific players
+ * that are being traded color coded so you can see how the new player affected
+ * your lineup for that specific week."
+ *
+ * The stub league is used rather than demo because every projection in it is
+ * hand-known (see tr-stub-season.mjs), so the parent can re-derive the lineups
+ * from the fixture and the engine alone — nothing read back off the page.
+ *
+ * Four routes in are exercised and they are four different claims: a HOVER on
+ * the row, a TAP on the button (which is all a phone has), a FOCUS from the
+ * keyboard, and Escape back out. Then the side toggle, then a plain mouse click
+ * on another offer — which must still open that offer, exactly as before.
+ */
+SCENARIOS.weekPeek = async function weekPeek() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  const stub = await import('./tr-stub-season.mjs');
+
+  document.getElementById('loadWeeks')
+    .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(6000);
+
+  const trades = readTrades(document);
+  const idx = trades.findIndex((t) => t.partner === 'Cy');
+  // RE-QUERIED EVERY TIME, never held. `paint()` rewrites the finder's tbody,
+  // so a row captured before a repaint is a detached element whose click
+  // bubbles to nothing — which is a silent no-op rather than a failure, and
+  // exactly how this scenario first passed while doing nothing at all.
+  const openOffer = async (i) => {
+    const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
+    if (rows[i]) rows[i].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(1500);
+  };
+  await openOffer(idx);
+
+  const fireOn = (el, type) => {
+    if (el) el.dispatchEvent(new globalThis.Event(type, { bubbles: true }));
+  };
+  const key = (k) => {
+    const ev = new globalThis.Event('keydown', { bubbles: true });
+    ev.key = k;
+    document.dispatchEvent(ev);
+  };
+  const weekRow = (w) => document.querySelector(`#dealBody table.weeks tr[data-wk="${w}"]`);
+  const weekBtn = (w) => document.querySelector(`#dealBody .wk-peek[data-wk="${w}"]`);
+
+  // The requests spent up to this point. NOTHING below may add to it: every
+  // projection the breakdown reads was bought when the deal was opened.
+  const requestsBefore = stub.calls.week.length;
+
+  const deal = readDeal(document);
+  const shut = readBreakdown(document);          // nothing hovered yet
+
+  fireOn(weekRow(7), 'mouseover');               // -- a mouse resting on a row
+  const hovered = readBreakdown(document);
+
+  fireOn(weekBtn(9), 'click');                   // -- a thumb on the button
+  const tapped = readBreakdown(document);
+
+  fireOn(weekBtn(11), 'focusin');                // -- the keyboard
+  const focused = readBreakdown(document);
+
+  key('Escape');                                 // -- Escape shuts the breakdown
+  const afterEscape = {
+    breakdown: readBreakdown(document),
+    dealStillOpen: !document.getElementById('dealModal').hidden,
+  };
+  key('Escape');                                 // -- and then the pop-up itself
+  const afterSecondEscape = { dealOpen: !document.getElementById('dealModal').hidden };
+
+  // Re-open, hover a week, and flip to the other manager's lineup.
+  await openOffer(idx);
+  fireOn(weekRow(7), 'mouseover');
+  const mineSide = readBreakdown(document);
+  fireOn(document.querySelector('#dealWeek [data-side="theirs"]'), 'click');
+  const theirSide = readBreakdown(document);
+  fireOn(document.querySelector('#dealWeek [data-side="mine"]'), 'click');
+  const backToMine = readBreakdown(document);
+
+  // A PLAYED week (above the heavy line) and a PLAYOFF week (below it) both
+  // open too, and each says it is in no total.
+  fireOn(weekRow(2), 'mouseover');
+  const playedWeek = readBreakdown(document);
+  const poWeek = deal.weeks && deal.weeks.playoff.length ? deal.weeks.playoff[0].week : null;
+  fireOn(poWeek ? weekRow(poWeek) : null, 'mouseover');
+  const playoff = poWeek ? readBreakdown(document) : null;
+
+  const requestsAfter = stub.calls.week.length;
+
+  // A PLAIN MOUSE CLICK ON ANOTHER OFFER still opens that offer — the whole of
+  // "a mouse click behaves as before".
+  const other = trades.findIndex((t) => t.partner !== 'Cy');
+  await openOffer(other);
+  const afterOtherClick = {
+    title: text(document.getElementById('dealTitle')),
+    partner: other >= 0 ? trades[other].partner : '',
+    breakdown: readBreakdown(document),
+  };
+
+  return {
+    errors, deal, shut, hovered, tapped, focused,
+    afterEscape, afterSecondEscape,
+    mineSide, theirSide, backToMine, playedWeek, playoff, poWeek,
+    afterOtherClick,
+    requestsBefore, requestsAfter,
+    offer: idx >= 0 ? trades[idx] : null,
+    partnerName: 'Cy',
+    // What the parent needs to re-derive the same lineups from the fixture.
+    baseWeek: Number(document.getElementById('weekSelect').value),
+    myTeamId: 1,
+    partnerId: 3,
+    weeks: stub.WEEKS,
+    playedThrough: stub.PLAYED_THROUGH,
+  };
 };
 
 /**
@@ -2410,6 +2611,293 @@ if (!live.boot) {
     JSON.stringify(byeRight.card));
   ok('and 0.0 when it is not — never Bye', at8(byeElsewhere.card) === '0.0' &&
     !byeElsewhere.card.projs.includes('Bye'), JSON.stringify(byeElsewhere.card));
+}
+
+// ---- hover a week, see that week's lineup slot by slot ---------------------
+//
+// Tim, 2026-09-17: "if you hover over a specific week, it shows the positions of
+// each proj for that week, before and after your trade, with the specific
+// players that are being traded color coded so you can see how the new player
+// affected your lineup for that specific week."
+//
+// EVERY NUMBER BELOW IS RE-DERIVED from tr-stub-season.mjs and the engine, never
+// read back off the page. The slot LAYOUT is re-implemented here as well —
+// deliberately, because js/lineup-slots.js is the thing under test and checking
+// it against itself would pass whatever it did.
+{
+  const SLOT_LINEUP_ORDER = {
+    0: 1, 1: 1, 2: 2, 4: 3, 6: 4, 3: 5, 5: 5, 23: 5, 7: 6, 16: 7, 17: 8,
+    18: 9, 19: 10, 20: 50, 21: 51,
+  };
+
+  /** The suite's own copy of the slot-row rule. See the note above. */
+  const ownSlotRows = (slots, LABELS) => {
+    const counts = new Map();
+    for (const id of slots) counts.set(id, (counts.get(id) || 0) + 1);
+    const out = [];
+    for (const id of [...counts.keys()].sort(
+      (a, b) => (SLOT_LINEUP_ORDER[a] ?? 40) - (SLOT_LINEUP_ORDER[b] ?? 40) || a - b)) {
+      const n = counts.get(id);
+      for (let i = 1; i <= n; i++) {
+        out.push({ key: n > 1 ? `${LABELS[id]}${i}` : LABELS[id], slotId: id, rank: i });
+      }
+    }
+    return out;
+  };
+
+  /** And its own copy of the fill: best projection first inside each slot. */
+  const ownFill = (starters, rows) => {
+    const bySlot = new Map();
+    for (const s of starters) {
+      if (!bySlot.has(s.slotId)) bySlot.set(s.slotId, []);
+      bySlot.get(s.slotId).push(s);
+    }
+    for (const list of bySlot.values()) {
+      list.sort((a, b) => (b.projected ?? -Infinity) - (a.projected ?? -Infinity) ||
+        (a.playerId ?? 0) - (b.playerId ?? 0));
+    }
+    return rows.map((r) => {
+      const pick = (bySlot.get(r.slotId) || [])[r.rank - 1] || null;
+      return pick
+        ? { slot: r.key, id: pick.playerId, name: pick.name, v: Math.round(pick.projected * 10) / 10 }
+        : { slot: r.key, id: null, name: '', v: null };
+    });
+  };
+
+  const stub = await import('./tr-stub-season.mjs');
+  const espnMod = await import(moduleUrl('js/espn.js'));
+  const { priceTradeAcrossWeeks, slotsForLeague } = await import(moduleUrl('js/trade.js'));
+  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
+
+  const range = (a, b) => { const o = []; for (let w = a; w <= b; w++) o.push(w); return o; };
+
+  /**
+   * One week of one side, priced from the fixture and laid out by hand.
+   *
+   * `span` matters and is passed in rather than assumed: the page prices the
+   * played weeks, the remaining weeks and the playoff weeks as three separate
+   * calls so nothing about the second or third can reach the first, and the
+   * forced cut is decided once per call. Re-deriving a week on the wrong span
+   * would be a different question with a plausible answer.
+   */
+  async function rederive({ week, span, side, sendIds, receiveIds, baseWeek, myTeamId, partnerId }) {
+    const base = await stub.fetchWeekRosters(baseWeek);
+    const slots = slotsForLeague(slotCountsFromLineups(base.teams));
+
+    const idx = new Map();
+    for (const w of span) {
+      const { teams } = await stub.fetchWeekRosters(w);
+      const m = new Map();
+      for (const t of teams) for (const p of t.players) m.set(p.playerId, p.projected);
+      idx.set(w, m);
+    }
+    const projFor = (p, w) => {
+      const m = idx.get(w);
+      const v = m ? m.get(p.playerId) : undefined;
+      return typeof v === 'number' ? v : null;
+    };
+
+    const byId = new Map();
+    for (const t of base.teams) for (const p of t.players) byId.set(p.playerId, p);
+    const mine = side !== 'theirs';
+    const team = base.teams.find((t) => t.id === (mine ? myTeamId : partnerId));
+    const send = (mine ? sendIds : receiveIds).map((i) => byId.get(i)).filter(Boolean);
+    const receive = (mine ? receiveIds : sendIds).map((i) => byId.get(i)).filter(Boolean);
+
+    const priced = priceTradeAcrossWeeks({
+      players: team.players, send, receive, slots, weeks: span, projFor,
+    });
+    const i = span.indexOf(week);
+    const rows = ownSlotRows(slots, espnMod.SLOT_LABELS);
+    return {
+      slots: rows.map((r) => r.key),
+      before: ownFill(priced.before.byWeek[i].starters, rows),
+      after: ownFill(priced.after.byWeek[i].starters, rows),
+      row: priced.byWeek[i],
+      startersBefore: priced.before.byWeek[i].starters.map((s) => s.playerId),
+      startersAfter: priced.after.byWeek[i].starters.map((s) => s.playerId),
+    };
+  }
+
+  const peek = run('weekPeek', { stub: true });
+  ok('the hover-a-week scenario boots', !peek.boot, peek.boot);
+
+  if (!peek.boot) {
+    ok('no console errors while hovering weeks', peek.errors.length === 0,
+      peek.errors.slice(0, 2).join(' | '));
+    ok('the Ana/Cy offer was found and opened', !!peek.offer && peek.deal.present,
+      JSON.stringify(peek.offer));
+
+    const SPAN = range(peek.playedThrough + 1, peek.weeks);   // 5–14
+    const PAST = range(1, peek.playedThrough);                // 1–4
+    const sendIds = peek.offer.send.map((m) => m.id);
+    const receiveIds = peek.offer.receive.map((m) => m.id);
+    const base = {
+      baseWeek: peek.baseWeek, myTeamId: peek.myTeamId, partnerId: peek.partnerId,
+      sendIds, receiveIds,
+    };
+
+    // ---- nothing is open until something asks for it ----------------------
+    ok('with no week hovered the panel is a prompt, not a table',
+      peek.shut && peek.shut.empty && !peek.shut.present, JSON.stringify(peek.shut));
+    eq(peek.shut.expanded.length, 0, 'and no week claims to be expanded');
+
+    // ---- three ways in, and they are three different claims ---------------
+    //
+    // A hover is what Tim asked for; a TAP is the only one of the three a phone
+    // has, and HANDOFF's rule is that nothing may be reachable by hover alone;
+    // focus is the keyboard, which a <tr> can never answer on its own.
+    eq(peek.hovered.title, 'Week 7, slot by slot — Your lineup', 'a HOVER opens that week');
+    eq(peek.tapped.title, 'Week 9, slot by slot — Your lineup', 'a TAP on the button opens that week');
+    eq(peek.focused.title, 'Week 11, slot by slot — Your lineup', 'and FOCUS opens it from the keyboard');
+    eq(peek.hovered.expanded.join(','), '7', 'the week table marks the open week, and only it');
+    eq(peek.hovered.peeking.join(','), '7', 'and lights that row');
+
+    // ---- Escape closes the breakdown, then the pop-up ---------------------
+    ok('Escape closes the breakdown first', peek.afterEscape.breakdown.empty &&
+      peek.afterEscape.breakdown.expanded.length === 0,
+      JSON.stringify(peek.afterEscape.breakdown.expanded));
+    ok('and leaves the pop-up open — the frame is not shut out from under it',
+      peek.afterEscape.dealStillOpen);
+    ok('a second Escape closes the pop-up', !peek.afterSecondEscape.dealOpen);
+
+    // ---- the slot rows are the league's own shape, in lineup order --------
+    eq(peek.hovered.slots.join(','), 'QB,RB1,RB2,WR1,WR2,TE,FLEX,D/ST,K',
+      'the rows are the league’s slots in lineup order, numbered within a position');
+    eq(peek.hovered.heads.join(' | '), 'Slot | As you are now | With the trade | Difference',
+      'and the columns are before, after and the difference');
+
+    // ---- the numbers are the engine's own, re-derived ---------------------
+    const cases = [
+      { name: 'week 7, your side', got: peek.backToMine, week: 7, span: SPAN, side: 'mine' },
+      { name: 'week 7, Cy’s side', got: peek.theirSide, week: 7, span: SPAN, side: 'theirs' },
+      { name: 'week 2, a played week', got: peek.playedWeek, week: 2, span: PAST, side: 'mine' },
+    ];
+    for (const c of cases) {
+      const want = await rederive({ ...base, week: c.week, span: c.span, side: c.side });
+      // Guarded rather than assumed: a panel that drew nothing at all would
+      // otherwise throw here and take the whole suite down instead of reporting
+      // the one thing that is wrong.
+      ok(`${c.name}: a table was drawn`, !!(c.got && c.got.present && c.got.totals),
+        JSON.stringify(c.got && { empty: c.got.empty, title: c.got.title }));
+      if (!c.got || !c.got.present || !c.got.totals) continue;
+      eq(c.got.slots.join(','), want.slots.join(','), `${c.name}: the same slot rows`);
+      const drawn = (col) => c.got.rows.map((r) => `${r.slot}=${r[col].id ?? '-'}@${r[col].v || '-'}`).join(' ');
+      const derived = (list) => list.map((e) => `${e.slot}=${e.id ?? '-'}@${e.v === null ? '-' : e.v.toFixed(1)}`).join(' ');
+      eq(drawn('before'), derived(want.before), `${c.name}: BEFORE is the engine’s own lineup`);
+      eq(drawn('after'), derived(want.after), `${c.name}: AFTER is the engine’s own lineup`);
+      eq(num(c.got.totals.before.text), want.row.before, `${c.name}: the totals line’s before`);
+      eq(num(c.got.totals.after.text), want.row.after, `${c.name}: the totals line’s after`);
+      eq(num(c.got.totals.delta), want.row.delta, `${c.name}: and its difference`);
+
+      // The marks, re-derived from the same two lineups. A man who was traded
+      // is marked as traded; one of your own who changed places is marked as
+      // that; nobody else is marked at all.
+      const wasIn = new Set(want.startersBefore);
+      const nowIn = new Set(want.startersAfter);
+      const sent = new Set(c.side === 'theirs' ? receiveIds : sendIds);
+      const got = new Set(c.side === 'theirs' ? sendIds : receiveIds);
+      const markWant = (id, col) => {
+        if (id === null) return '';
+        if (col === 'before') {
+          if (sent.has(id)) return 'OUT';
+          return nowIn.has(id) ? '' : 'benched';
+        }
+        if (got.has(id)) return 'IN';
+        return wasIn.has(id) ? '' : 'promoted';
+      };
+      // "moved" is the one mark the sets above cannot predict — it is a change
+      // of SLOT for a man in both lineups — so it is allowed wherever the
+      // derivation says no mark and the slot genuinely differs.
+      const markOk = c.got.rows.every((r) =>
+        ['before', 'after'].every((col) => {
+          const want2 = markWant(r[col].id, col);
+          return r[col].mark === want2 || (want2 === '' && r[col].mark === 'moved');
+        }));
+      ok(`${c.name}: every mark is the right one, and nobody else is marked`, markOk,
+        c.got.rows.map((r) => `${r.slot}:${r.before.mark}/${r.after.mark}`).join(' '));
+
+      // COLOUR IS NEVER ALONE. Every mark on the table carries a word.
+      ok(`${c.name}: every mark carries a word as well as a colour`,
+        c.got.marks.length > 0 && c.got.marks.every((m) => m.word.trim().length > 0),
+        JSON.stringify(c.got.marks));
+
+      // A ROW THAT CHANGED LOOKS DIFFERENT FROM ONE THAT DID NOT, and that is
+      // re-derived too rather than trusted: a row is changed exactly when the
+      // man or his number moved.
+      const changedOk = c.got.rows.every((r, i) => {
+        const moved = want.before[i].id !== want.after[i].id || want.before[i].v !== want.after[i].v;
+        return r.changed === moved && r.same === !moved;
+      });
+      ok(`${c.name}: the rows that changed are marked and the rest are not`, changedOk,
+        c.got.rows.map((r) => `${r.slot}:${r.changed ? 'CH' : '--'}`).join(' '));
+    }
+
+    // ---- the totals difference IS the week's printed gain ------------------
+    //
+    // The one number that ties the breakdown to the table above it. If these
+    // two ever disagree the panel is describing a different trade.
+    const printed = peek.deal.weeks.weeks.find((w) => w.label === 'Week 7');
+    ok('the breakdown’s difference is exactly the gain printed for that week',
+      printed && num(peek.backToMine.totals.delta) === printed.delta,
+      `panel ${peek.backToMine.totals.delta}, table ${printed && printed.delta}`);
+    ok('and its before/after are the row’s own two numbers',
+      printed && num(peek.backToMine.totals.before.text) === printed.before &&
+      num(peek.backToMine.totals.after.text) === printed.after,
+      JSON.stringify(printed));
+
+    // ---- one side at a time, his own first --------------------------------
+    eq(peek.mineSide.sides.map((s) => `${s.side}:${s.pressed}`).join(' '), 'mine:true theirs:false',
+      'it opens on YOUR lineup — both at once is too wide on a phone');
+    eq(peek.mineSide.sides[1].label, 'Cy’s lineup', 'and the toggle names the other manager');
+    eq(peek.theirSide.title, 'Week 7, slot by slot — Cy’s lineup',
+      'pressing it shows his lineup instead');
+    ok('his lineup is a different lineup, not yours relabelled',
+      peek.theirSide.rows.map((r) => r.before.id).join(',') !==
+      peek.mineSide.rows.map((r) => r.before.id).join(','));
+    ok('and the toggle goes back', peek.backToMine.title === peek.mineSide.title &&
+      peek.backToMine.sides[0].pressed === 'true');
+
+    // The man Cy SENDS is a starter of his, so "OUT" is drawn somewhere on his
+    // side — which makes that assertion a real one rather than vacuous. On
+    // Ana's side the man she sends is a bench defence and is correctly absent.
+    ok('the man being sent is marked OUT where he was starting',
+      peek.theirSide.marks.some((m) => m.word === 'OUT' && m.cls.includes('gone')),
+      JSON.stringify(peek.theirSide.marks));
+    ok('the man being received is marked IN on both sides',
+      peek.mineSide.marks.some((m) => m.word === 'IN' && m.cls.includes('got')) &&
+      peek.theirSide.marks.some((m) => m.word === 'IN' && m.cls.includes('got')));
+    ok('and one of his own men displaced by the deal carries the quiet mark',
+      peek.mineSide.marks.some((m) => m.cls.includes('shift')) &&
+      peek.theirSide.marks.some((m) => m.cls.includes('shift')),
+      JSON.stringify([peek.mineSide.marks, peek.theirSide.marks]));
+    eq(peek.mineSide.keyMarks.join(','), 'IN,OUT,promoted,benched,moved',
+      'the key under the table spells every mark out in words');
+
+    // ---- the played and playoff weeks open too, and say what they are ------
+    ok('a played week opens and says it is in no total',
+      /has been played/.test(peek.playedWeek.scope) && /no total/.test(peek.playedWeek.scope),
+      peek.playedWeek.scope);
+    ok('a playoff week opens and says it is shown for reference only',
+      !!peek.playoff && /playoff week/.test(peek.playoff.scope) && /no total/.test(peek.playoff.scope),
+      peek.playoff && peek.playoff.scope);
+
+    // ---- IT COSTS NOTHING -------------------------------------------------
+    //
+    // The pop-up already bought these weeks. Hovering thirteen of them, tapping,
+    // tabbing and flipping the side toggle are all arithmetic over projections
+    // that are already in the page.
+    eq(peek.requestsAfter, peek.requestsBefore,
+      'hovering, tapping, focusing and flipping sides cost NO extra ESPN requests');
+
+    // ---- and a plain mouse click still opens an offer ----------------------
+    ok('a mouse click on another offer still opens that offer',
+      peek.afterOtherClick.title.includes(peek.afterOtherClick.partner),
+      `${peek.afterOtherClick.title} for ${peek.afterOtherClick.partner}`);
+    ok('and the new pop-up opens with no week picked, not the last one',
+      peek.afterOtherClick.breakdown && peek.afterOtherClick.breakdown.empty,
+      JSON.stringify(peek.afterOtherClick.breakdown && peek.afterOtherClick.breakdown.title));
+  }
 }
 
 // ---- the coming week's rosters: pickups in, drops out ---------------------

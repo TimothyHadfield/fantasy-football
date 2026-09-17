@@ -120,7 +120,14 @@ const BYES_LOADER = dataUrl(`
   }
 `);
 
-/** Hover a cell in one of the grids and read the card, by team and player. */
+/**
+ * Hover a cell in the all-teams grid and read the card, by team and player.
+ *
+ * `grid` is 'overview' — the ONE grid, since the two were merged on 2026-09-17
+ * and the measure became a control inside the panel. It is still a parameter
+ * because every call site says which table it means, and a second grid-shaped
+ * table on this page would need one again.
+ */
 const gridTd = (document, grid, teamId, player) =>
   [...document.querySelectorAll(`#${grid}Table tbody tr[data-team="${teamId}"] td[data-tip]`)]
     .find((td) => {
@@ -258,7 +265,16 @@ const SCENARIOS = {
     },
   },
 
-  // The two all-teams grids: the season-average one and the week one below it.
+  // THE ONE all-teams grid, and the control that decides what is in it.
+  //
+  // There were TWO of these panels until 2026-09-17 — a season-average grid and
+  // a week grid stacked under it — and this scenario used to snapshot both. Tim:
+  // "combine the 2 all teams boxes, put the week selection at the top of the all
+  // teams box, and allow the user to select which week they want, as well as if
+  // they want to show proj avg 2026." So it is one grid and a measure switch,
+  // and what used to be "read the two straight down the page" is now "press the
+  // other button" — which means the assertions below have to prove the MEASURE
+  // still produces exactly the two sets of numbers the two panels did.
   //
   // Team 4 from an-stub-season.mjs makes the arithmetic checkable by hand.
   // seasonProjected is (20 - i) * 17, so avgWeek is exactly 20 - i:
@@ -271,20 +287,30 @@ const SCENARIOS = {
   // and projFor(i, week) is (20 - i) + week * 0.3, so week 8 is every one of
   // those plus 2.4 — a total of 165.6, which is also what the stub reports as
   // the team's own projectedTotal. Week 6 is the interesting one: i=3 is on
-  // bye there, so the lineup has to be re-picked around a 0.00.
+  // bye there, so the lineup has to be re-picked around a 0.00 — and a 0.00 may
+  // only READ as a bye on the week measure, never on the season average.
   grids: {
-    label: '(f) the season-average grid, the week grid, and the pair of them',
+    label: '(f) one all-teams grid: the measure switch, the week picker in the panel, and both measures',
     stub: true,
     prefs: { 'analysis.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document, window }) => {
       const season = await import('./an-stub-season.mjs');
       const $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-      const grab = (id) => {
-        const table = $(`${id}Table`);
+      // One grid, so a snapshot is one table plus the state of the control that
+      // decides what is in it. It used to take two of these.
+      const grab = () => {
+        const table = $('overviewTable');
         return {
-          title: $(`${id}Title`).textContent.trim(),
+          title: $('overviewTitle').textContent.trim(),
+          hint: $('measureHint').textContent.replace(/\s+/g, ' ').trim(),
+          measure: [...$('measureToggle').querySelectorAll('button[data-measure]')]
+            .filter((b) => /\bon\b/.test(b.getAttribute('class') || ''))
+            .map((b) => b.getAttribute('data-measure')),
+          buttons: [...$('measureToggle').querySelectorAll('button[data-measure]')]
+            .map((b) => `${b.getAttribute('data-measure')}=${b.textContent.trim()}`),
           head: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
           rows: [...table.querySelectorAll('tbody tr')].map((tr) => ({
             team: tr.children[0].textContent.trim(),
@@ -298,23 +324,76 @@ const SCENARIOS = {
           })),
         };
       };
-      const snap = () => ({ avg: grab('overview'), week: grab('weekly') });
       const fire = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      // The connection bar can finish its own round trip at any moment and send
+      // the page back through useLive(), which empties the grid for one paint
+      // while the week is refetched. A snapshot taken in that paint is ten rows
+      // short and says nothing about the measure, so every snapshot waits for
+      // the table to have its teams back first.
+      const settle = async (ms = 4000) => {
+        for (let t = 0; t < ms; t += 20) {
+          if (document.querySelectorAll('#overviewTable tbody tr').length === 10) return true;
+          await sleep(20);
+        }
+        return false;
+      };
+      const snap = async () => { await settle(); return grab(); };
+      const setMeasure = async (m) => {
+        await settle();
+        fire($('measureToggle').querySelector(`button[data-measure="${m}"]`));
+        await sleep(60);
+      };
+      const note = () => $('overviewNote').textContent.replace(/\s+/g, ' ').trim();
 
-      const out = { initial: snap() };
+      // Which week the REST of the page is on, read off two panels that have
+      // nothing to do with the grid's measure.
+      const elsewhere = () => ({
+        weekSelect: $('weekSelect').value,
+        seasonNow: [...$('seasonTable').querySelectorAll('thead th')]
+          .filter((th) => /\bnow\b/.test(th.getAttribute('class') || ''))
+          .map((th) => th.textContent.trim()),
+        glanceWeek: ([...document.querySelectorAll('#teamGlance .stat')]
+          .find((s) => s.querySelector('.k').textContent.trim() === 'Week') || null)
+          ?.querySelector('.v').textContent.trim() ?? null,
+      });
+
+      const out = { initial: await snap() };
       out.fetchesBefore = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
-      out.notes = {
-        avg: document.querySelector('#overviewWrap').parentElement
-          .querySelector('.panel-note').textContent.replace(/\s+/g, ' ').trim(),
-        week: document.querySelector('#weeklyWrap').parentElement
-          .querySelector('.panel-note').textContent.replace(/\s+/g, ' ').trim(),
+      out.notes = { week: note() };
+      out.elsewhereBefore = elsewhere();
+
+      // WHERE THE CONTROLS LIVE. The week picker moved out of the Data source
+      // panel and into this one, which is half of what Tim asked for; a picker
+      // that drifted back would be invisible to every other assertion here.
+      const panelOf = (sel) => document.querySelector(sel).closest('section.panel');
+      out.controls = {
+        weekInGridPanel: panelOf('#overviewWrap').contains($('weekSelect')),
+        toggleInGridPanel: panelOf('#overviewWrap').contains($('measureToggle')),
+        weekInSourcePanel: panelOf('#sourceToggle').contains($('weekSelect')),
+        // A control's explanation is a .ctl-hint on the page, never a `title`:
+        // js/touch-titles.js deliberately leaves controls alone, so a `title`
+        // here would be words no phone could read.
+        titledButtons: $('measureToggle').querySelectorAll('button[title]').length,
+        hintOnPage: !!$('measureHint'),
       };
 
-      // --- a click in the WEEK grid drives the drill-down too ---------------
-      const row = document.querySelector('#weeklyTable tbody tr[data-team="2"]');
+      // --- the measure switch: the same table, measured the other way -------
+      await setMeasure('avg');
+      out.avg = await snap();
+      out.notes.avg = note();
+      out.elsewhereAfterMeasure = elsewhere();
+      out.fetchesAfterMeasure = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
+      out.savedMeasure =
+        JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['analysis.measure'] ?? null;
+
+      await setMeasure('week');
+      out.backToWeek = await snap();
+
+      // --- a click in the grid drives the drill-down ------------------------
+      const row = document.querySelector('#overviewTable tbody tr[data-team="2"]');
       if (row) fire(row);
-      await new Promise((r) => setTimeout(r, 120));
-      out.picked = { team: $('teamSelect').value, snap: snap() };
+      await sleep(120);
+      out.picked = { team: $('teamSelect').value, snap: await snap() };
 
       // --- a click on a player link must NOT also repoint the drill-down -----
       // The row is click-to-drill-into-a-team and the number inside it is now a
@@ -324,7 +403,7 @@ const SCENARIOS = {
         '#overviewTable tbody tr[data-team="5"] td.slot-cell a.pref');
       out.ref = link && { href: link.getAttribute('href'), title: link.getAttribute('title') };
       if (link) fire(link);
-      await new Promise((r) => setTimeout(r, 80));
+      await sleep(80);
       out.afterRefClick = {
         team: $('teamSelect').value,
         picked: [...document.querySelectorAll('#overviewTable tbody tr.picked')]
@@ -332,23 +411,107 @@ const SCENARIOS = {
       };
 
       // ...and a click on the row anywhere ELSE still does drill in.
-      const nameCell = document.querySelector('#weeklyTable tbody tr[data-team="5"] td.name');
+      const nameCell = document.querySelector('#overviewTable tbody tr[data-team="5"] td.name');
       if (nameCell) fire(nameCell);
-      await new Promise((r) => setTimeout(r, 80));
+      await sleep(80);
       out.afterNameClick = { team: $('teamSelect').value };
 
       // put it back where the assertions below expect it
-      const back = document.querySelector('#weeklyTable tbody tr[data-team="2"] td.name');
+      const back = document.querySelector('#overviewTable tbody tr[data-team="2"] td.name');
       if (back) fire(back);
-      await new Promise((r) => setTimeout(r, 80));
+      await sleep(80);
 
-      // --- change the week: only the week grid moves ------------------------
+      // --- change the week: the grid follows it on the week measure ---------
       const wk = $('weekSelect');
       wk.value = '6';
       wk.dispatchEvent(new window.Event('change', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 400));
-      out.week6 = snap();
+      await sleep(400);
+      out.week6 = await snap();
+      // Week 6 is the one with a 0.00 in it, so it is where byeAtZero can be
+      // checked on BOTH measures against the very same fetched data.
+      await setMeasure('avg');
+      out.week6avg = await snap();
+      await setMeasure('week');
 
+      globalThis.__an = out;
+    },
+  },
+
+  // The measure is remembered between visits, exactly as the week and the
+  // position filter are. Same stub and the same league as (f) — only the saved
+  // pref differs, which is what makes the pair falsifiable.
+  'measure-saved': {
+    label: '(r) the measure last chosen is the one the page opens on',
+    stub: true,
+    prefs: { 'analysis.source': 'live', 'analysis.measure': 'avg' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const $ = (id) => document.getElementById(id);
+      globalThis.__an = {
+        title: $('overviewTitle').textContent.trim(),
+        lit: [...$('measureToggle').querySelectorAll('button[data-measure]')]
+          .filter((b) => /\bon\b/.test(b.getAttribute('class') || ''))
+          .map((b) => b.getAttribute('data-measure')),
+        // Team 4's QB cell: 20.0 on the season average, 22.4 in week 8.
+        qb: (document.querySelector('#overviewTable tbody tr[data-team="4"] td.slot-cell') || {})
+          .textContent?.trim() ?? null,
+        // ...while the REST of the page is still on the week the picker says.
+        week: $('weekSelect').value,
+        seasonNow: [...$('seasonTable').querySelectorAll('thead th')]
+          .filter((th) => /\bnow\b/.test(th.getAttribute('class') || ''))
+          .map((th) => th.textContent.trim()),
+      };
+    },
+  },
+
+  // BYEATZERO, WHICH THE MERGE HAD EVERY CHANCE TO LOSE.
+  //
+  // Only a WEEK's 0.00 can be a bye. A season average of 0.00 is a man ESPN
+  // projects nothing for all year, which is a different fact and is printed as
+  // a number. That was one flag on one of two grid definitions; it is now one
+  // flag on one of two measures, and nothing else in the fixtures can put a
+  // zero in front of both measures at once — the stub's season projections are
+  // all positive. So AN_ZERO_SEASON zeroes Player 07's SEASON line and
+  // AN_DST_ZERO zeroes his week 6, which is also his bye week (AN_BYES), and he
+  // is the only D/ST on the roster, so his zero really does reach the DEF
+  // column on both measures.
+  'bye-vs-zero': {
+    label: '(s) a 0.00 is a bye in a week and never on the season average',
+    stub: true,
+    byes: true,
+    env: { AN_BYES: '{"1":6}', AN_DST_ZERO: '6', AN_ZERO_SEASON: '7' },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window }) => {
+      const $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // The DEF column: nine lineup cells, then the bench, so index 7.
+      const def = () => {
+        const td = [...document.querySelectorAll(
+          '#overviewTable tbody tr[data-team="4"] td.slot-cell')][7];
+        return td && { text: td.textContent.trim(), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '' };
+      };
+      const setMeasure = async (m) => {
+        $('measureToggle').querySelector(`button[data-measure="${m}"]`)
+          .dispatchEvent(new window.Event('click', { bubbles: true }));
+        await sleep(60);
+      };
+
+      // Week 6 is in the past, so it has to be picked rather than opened on.
+      const wk = $('weekSelect');
+      wk.value = '6';
+      wk.dispatchEvent(new window.Event('change', { bubbles: true }));
+      // The rows AND the heading: the grid is repainted empty while the new
+      // week is in flight, and a snapshot taken there is a heading with no
+      // table under it.
+      for (let t = 0; t < 4000; t += 20) {
+        if (/week 6$/.test($('overviewTitle').textContent.trim()) && def()) break;
+        await sleep(20);
+      }
+      const out = { title: $('overviewTitle').textContent.trim(), week: def() };
+      await setMeasure('avg');
+      out.avgTitle = $('overviewTitle').textContent.trim();
+      out.avg = def();
       globalThis.__an = out;
     },
   },
@@ -674,7 +837,7 @@ const SCENARIOS = {
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document, window }) => {
       const out = {};
-      out.title = document.getElementById('weeklyTitle').textContent.trim();
+      out.title = document.getElementById('overviewTitle').textContent.trim();
       out.rowTitles = [...document.querySelectorAll('table.grid tbody tr[data-team]')]
         .filter((tr) => tr.hasAttribute('title')).length;
 
@@ -684,9 +847,9 @@ const SCENARIOS = {
         v: td.getAttribute('data-v'),
         title: td.getAttribute('title') || '',
       };
-      const w2 = gridTd(document, 'weekly', 4, 2);
-      out.weekly02 = cellInfo(w2);
-      out.weeklyLegend = document.getElementById('weeklyLegend').textContent.replace(/\s+/g, ' ');
+      const w2 = gridTd(document, 'overview', 4, 2);
+      out.weekCell02 = cellInfo(w2);
+      out.gridLegend = document.getElementById('overviewLegend').textContent.replace(/\s+/g, ' ');
 
       // The season panel's rows are SLOTS, so a zero only reaches one when
       // nobody better can fill it. Player 07 is the only D/ST on the roster,
@@ -719,7 +882,7 @@ const SCENARIOS = {
         legend: (card.querySelector('.tc-legend') || { textContent: '' }).textContent,
       };
       w2.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
-      const h3 = gridTd(document, 'weekly', 4, 3);
+      const h3 = gridTd(document, 'overview', 4, 3);
       h3.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
       const tds3 = [...card.querySelectorAll('.tc-run tbody td')];
       out.card03 = tds3.map((t) => t.textContent.trim());
@@ -741,12 +904,12 @@ const SCENARIOS = {
       head.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 0, width: 0, height: 20 });
       head.scrollIntoView = () => { scrolls++; };
       const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
-      click(document.querySelector('#weeklyTable tbody tr[data-team="2"] td.name'));
+      click(document.querySelector('#overviewTable tbody tr[data-team="2"] td.name'));
       await new Promise((r) => setTimeout(r, 60));
       out.scrollsOff = scrolls;
       out.rosterAfter = document.getElementById('rosterTitle').textContent.trim();
       top = 120;
-      click(document.querySelector('#weeklyTable tbody tr[data-team="3"] td.name'));
+      click(document.querySelector('#overviewTable tbody tr[data-team="3"] td.name'));
       await new Promise((r) => setTimeout(r, 60));
       out.scrollsOn = scrolls;
       globalThis.__an = out;
@@ -761,7 +924,7 @@ const SCENARIOS = {
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
       const out = {};
-      out.title = document.getElementById('weeklyTitle').textContent.trim();
+      out.title = document.getElementById('overviewTitle').textContent.trim();
       const row = [...document.querySelectorAll('#seasonSlots tr')]
         .find((tr) => tr.children[0].textContent.trim() === 'D/ST');
       const td = row && row.children[1 + 6];
@@ -782,8 +945,8 @@ const SCENARIOS = {
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
       const out = {};
-      const td = gridTd(document, 'weekly', 4, 2);
-      out.weekly02 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '' };
+      const td = gridTd(document, 'overview', 4, 2);
+      out.weekCell02 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '' };
       const row = [...document.querySelectorAll('#seasonSlots tr')]
         .find((tr) => tr.children[0].textContent.trim() === 'D/ST');
       out.dstW9 = row && row.children[1 + 9].textContent.trim();
@@ -829,8 +992,8 @@ const SCENARIOS = {
       const read = () => [...card().querySelectorAll('.tc-run tbody td')].map((t) => t.textContent.trim());
 
       // --- hover, while weeks are still arriving -------------------------------
-      out.gridUp = await until(() => gridTd(document, 'weekly', 4, 1));
-      gridTd(document, 'weekly', 4, 1).dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+      out.gridUp = await until(() => gridTd(document, 'overview', 4, 1));
+      gridTd(document, 'overview', 4, 1).dispatchEvent(new window.Event('mouseover', { bubbles: true }));
       out.hoverOpen = !!card() && !card().hidden;
       out.hoverPendingAtOpen = (card().textContent.includes('Not read yet') || read().includes('·'));
       out.loaded = await until(() =>
@@ -840,15 +1003,15 @@ const SCENARIOS = {
       out.hoverStillOpen = !card().hidden;
       out.hoverIdent = card().querySelector('.tc-ident')?.textContent || '';
       out.hoverValues = read();
-      out.hoverIsLive = !!gridTd(document, 'weekly', 4, 1) &&
-        document.body.contains(gridTd(document, 'weekly', 4, 1));
-      gridTd(document, 'weekly', 4, 1).dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+      out.hoverIsLive = !!gridTd(document, 'overview', 4, 1) &&
+        document.body.contains(gridTd(document, 'overview', 4, 1));
+      gridTd(document, 'overview', 4, 1).dispatchEvent(new window.Event('mouseout', { bubbles: true }));
       out.hoverClosesOnLeave = card().hidden;
 
       // --- the same as a tap-opened sheet, across a team switch's repaint ------
       window.matchMedia = (q) => ({ matches: /hover:\s*none/.test(q), addEventListener() {}, removeEventListener() {} });
       // Player 14 only joins his squad in week 5 (SIGNED_WEEK in the stub).
-      gridTd(document, 'weekly', 6, 14).dispatchEvent(new window.Event('click', { bubbles: true }));
+      gridTd(document, 'overview', 6, 14).dispatchEvent(new window.Event('click', { bubbles: true }));
       out.sheetOpen = !card().hidden && card().classList.contains('sheet');
       const sel = document.getElementById('teamSelect');
       sel.value = '5';
@@ -864,8 +1027,8 @@ const SCENARIOS = {
       wk.value = '3';
       wk.dispatchEvent(new window.Event('change', { bubbles: true }));
       out.sheetBeforeWeekLands = !card().hidden;
-      await until(() => /week 3$/.test(document.getElementById('weeklyTitle').textContent.trim()) &&
-        !gridTd(document, 'weekly', 6, 14) && !!gridTd(document, 'weekly', 6, 1));
+      await until(() => /week 3$/.test(document.getElementById('overviewTitle').textContent.trim()) &&
+        !gridTd(document, 'overview', 6, 14) && !!gridTd(document, 'overview', 6, 1));
       await sleep(20);
       out.sheetGoneWithMan = card().hidden;
       globalThis.__an = out;
@@ -1103,6 +1266,29 @@ async function check(scenario, boot) {
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
 
+  // ---- PANEL ORDER, which is Tim's and not a matter of taste --------------
+  //
+  // His order, 2026-09-17: one merged all-teams box (the week picker and the
+  // proj-avg switch inside it), then Season by week, then Who to start, then
+  // Roster detail — the drill-down last, because it is the thing you reach for
+  // after the whole league has told you where to look.
+  //
+  // Read off the DOM in document order, every `<section class="panel">` on the
+  // page and not a list anybody maintains, with the team or squad name that
+  // gets appended at paint time cut back to the half the markup owns. So
+  // swapping two sections in analysis.html fails this and nothing else would.
+  const panelOrder = [...d.querySelectorAll('section.panel')].map((s) => {
+    const h = s.querySelector('h2');
+    return txt(h).split(' · ')[0];
+  });
+  c.ok('THE PANELS ARE IN TIM’S ORDER, MERGED ALL-TEAMS BOX FIRST',
+    JSON.stringify(panelOrder) === JSON.stringify(
+      ['Data source', 'All teams', 'Season by week', 'Who to start, week by week', 'Roster detail']),
+    JSON.stringify(panelOrder));
+  c.ok('and there is exactly ONE all-teams panel, not the two it used to be',
+    panelOrder.filter((h) => h.startsWith('All teams')).length === 1,
+    JSON.stringify(panelOrder));
+
   const head = headers(table);
   const rows = bodyRows(table);
   const rosterRows = bodyRows(roster);
@@ -1250,7 +1436,10 @@ async function check(scenario, boot) {
   // player=<espnPlayerId>">, and these run in every scenario.
   const refs = [...d.querySelectorAll('a.pref')];
   const href = (a) => a.getAttribute('href') || '';
-  const SURFACES = ['#overviewTable', '#weeklyTable', '#rosterTable', '#seasonTable'];
+  // One all-teams grid since 2026-09-17, not two. If a second grid-shaped table
+  // ever comes back it belongs in this list, because the click-through contract
+  // is per SURFACE and a surface nobody listed is a surface nobody checked.
+  const SURFACES = ['#overviewTable', '#rosterTable', '#seasonTable'];
 
   c.ok('the page emits player reference links at all', refs.length > 0, `${refs.length}`);
   c.ok('EVERY SURFACE THAT NAMES A PLAYER LINKS HIM',
@@ -1291,8 +1480,8 @@ async function check(scenario, boot) {
     'no swap buttons left');
 
   // The sort key must stay on the cell. Inside an anchor it would be invisible
-  // to sortable.js and every column in both grids would silently stop sorting.
-  const keyed = [...d.querySelectorAll('#overviewTable tbody td[data-v], #weeklyTable tbody td[data-v], ' +
+  // to sortable.js and every column in the grid would silently stop sorting.
+  const keyed = [...d.querySelectorAll('#overviewTable tbody td[data-v], ' +
     '#seasonTable tbody td[data-v], #rosterTable tbody td[data-v]')];
   c.ok('THE SORT KEY STAYS ON THE CELL, OUTSIDE THE LINK',
     keyed.length > 0 &&
@@ -1303,8 +1492,8 @@ async function check(scenario, boot) {
 
   // Wrapping must not change a single character of what the tables read, which
   // is what lets every existing text assertion above stand unaltered.
-  const gridCells = [...d.querySelectorAll('#overviewTable tbody td.slot-cell, ' +
-    '#weeklyTable tbody td.slot-cell')].filter((td) => td.querySelector('a.pref'));
+  const gridCells = [...d.querySelectorAll('#overviewTable tbody td.slot-cell')]
+    .filter((td) => td.querySelector('a.pref'));
   c.ok('a grid link wraps the WHOLE cell, so the number itself is the target',
     gridCells.length > 0 && gridCells.every((td) => td.querySelector('a.pref').textContent === td.textContent),
     gridCells.slice(0, 2).map((td) => `[${td.textContent}] vs [${td.querySelector('a.pref').textContent}]`).join(' '));
@@ -1393,23 +1582,51 @@ async function check(scenario, boot) {
     c.ok('the demo note says what a zero means here',
       /in the sample data a zero only means he is ruled out/.test(note), note);
 
-    // The grids follow the same rule, and demo is the mode Tim sees first.
+    // The grid follows the same rule, and demo is the mode Tim sees first.
     const gridCells = (id) =>
       [...d.querySelectorAll(`#${id}Table tbody td`)].map((td) => td.textContent.trim());
-    c.ok('neither grid claims a bye in demo, where a zero means something else',
-      !gridCells('overview').includes('Bye') && !gridCells('weekly').includes('Bye'),
-      'a Bye cell in a demo grid');
-    c.ok('a demo zero in the week grid is printed as the number it is',
-      gridCells('weekly').some((t) => t === '0.0' || /^0\.0 [A-Z]/.test(t)),
-      'no zero cell in the demo week grid at all');
-    c.ok('both grids are headed for what they actually are',
-      txt($('overviewTitle')).startsWith('All teams · proj avg') &&
-      /^All teams · week \d+$/.test(txt($('weeklyTitle'))),
-      `${txt($('overviewTitle'))} / ${txt($('weeklyTitle'))}`);
+    c.ok('the grid never claims a bye in demo, where a zero means something else',
+      !gridCells('overview').includes('Bye'), 'a Bye cell in a demo grid');
+    c.ok('a demo zero is printed as the number it is',
+      gridCells('overview').some((t) => t === '0.0' || /^0\.0 [A-Z]/.test(t)),
+      'no zero cell in the demo grid at all');
+
+    // ---- THE MERGED PANEL, in the mode Tim sees first ---------------------
+    //
+    // One box, with the week picker and the measure switch in it, opening on a
+    // WEEK rather than on the season average — which is the default Tim's
+    // "select which week they want" asks for and the same rule openingWeek()
+    // follows. Pressing the other button must give the season-average table the
+    // second panel used to give, with no second panel anywhere on the page.
+    c.ok('THERE IS EXACTLY ONE ALL-TEAMS GRID',
+      d.querySelectorAll('table.grid').length === 1 && !d.getElementById('weeklyTable'),
+      `${d.querySelectorAll('table.grid').length} grids, weeklyTable=${!!d.getElementById('weeklyTable')}`);
+    c.ok('the panel opens on a WEEK, and says which',
+      /^All teams · week \d+$/.test(txt($('overviewTitle'))), txt($('overviewTitle')));
+    c.ok('the week picker is inside that panel, not in Data source',
+      d.querySelector('#overviewWrap').closest('section.panel').contains($('weekSelect')) &&
+      !d.querySelector('#sourceToggle').closest('section.panel').contains($('weekSelect')),
+      'the week picker is in the wrong panel');
+    {
+      const avg = d.querySelector('#measureToggle button[data-measure="avg"]');
+      const wkBtn = d.querySelector('#measureToggle button[data-measure="week"]');
+      const weekBefore = $('weekSelect').value;
+      c.ok('the measure switch offers the two measures and names the season on one',
+        !!avg && !!wkBtn && /^Proj avg \d{4}$/.test(txt(avg)), avg && txt(avg));
+      avg.dispatchEvent(new boot.window.Event('click', { bubbles: true }));
+      c.ok('PRESSING PROJ AVG RE-HEADS THE SAME PANEL AS A SEASON AVERAGE',
+        txt($('overviewTitle')).startsWith('All teams · proj avg'), txt($('overviewTitle')));
+      c.ok('and no bye can survive on an average — only a week has one',
+        !gridCells('overview').includes('Bye'), 'a Bye on the season average');
+      c.ok('the week picker is untouched by the measure',
+        $('weekSelect').value === weekBefore, `${weekBefore} -> ${$('weekSelect').value}`);
+      wkBtn.dispatchEvent(new boot.window.Event('click', { bubbles: true }));
+      c.ok('and pressing A week puts the week back in the heading',
+        /^All teams · week \d+$/.test(txt($('overviewTitle'))), txt($('overviewTitle')));
+    }
 
     // ---- the week run on the hover, in the mode Tim sees first ------------
-    const tipCells = [...d.querySelectorAll('#overviewTable tbody td[data-tip], ' +
-      '#weeklyTable tbody td[data-tip]')];
+    const tipCells = [...d.querySelectorAll('#overviewTable tbody td[data-tip]')];
     c.ok('every grid cell has a card to draw', tipCells.length > 0, `${tipCells.length}`);
 
     const cards = tipCells.map((td) => hoverCard(d, boot.window, td));
@@ -1442,8 +1659,8 @@ async function check(scenario, boot) {
     // no result on the schedule (the stub has results through week 7) — rather
     // than the last one played.
     c.ok('the page opened on the first week not yet played',
-      txt($('weeklyTitle')).endsWith(`week ${season.SCHEDULE_PLAYED_THROUGH + 1}`),
-      txt($('weeklyTitle')));
+      txt($('overviewTitle')).endsWith(`week ${season.SCHEDULE_PLAYED_THROUGH + 1}`),
+      txt($('overviewTitle')));
 
     // The playoff weeks cost one request each, like any other week.
     c.ok('the season grid costs exactly one request per week, the playoff weeks included',
@@ -1638,7 +1855,8 @@ async function check(scenario, boot) {
       const tr = d.querySelector(`#${id}Table tbody tr[data-team="${teamId}"]`);
       return [...tr.children].filter((td) => /\bslot-cell\b/.test(td.getAttribute('class') || ''));
     };
-    for (const id of ['overview', 'weekly']) {
+    // ONE grid since 2026-09-17, on whichever measure the panel is set to.
+    for (const id of ['overview']) {
       const cells = grid4(id);
       c.ok(`the ${id} grid links every one of its fifteen numbers`,
         cells.length === 15 && cells.every((td) => td.querySelector('a.pref')),
@@ -1753,10 +1971,6 @@ async function check(scenario, boot) {
     c.ok('the week the page is showing is marked in the run',
       card0.kinds[7].includes('now') && card0.kinds.filter((k) => k.includes('now')).length === 1,
       JSON.stringify(card0.kinds));
-    c.ok('the week grid carries the same run — it is the same man either way',
-      /ESPN’s projection for weeks 1–16/
-        .test(hoverCard(d, boot.window, grid4('weekly')[0]).heading),
-      hoverCard(d, boot.window, grid4('weekly')[0]).heading);
     c.ok('THE CELL CARRIES NO TITLE, so the browser cannot draw a second tooltip',
       !cells[0].hasAttribute('title') && !cells[0].querySelector('a.pref').hasAttribute('title'),
       cells[0].getAttribute('title'));
@@ -2197,29 +2411,47 @@ async function check(scenario, boot) {
     const teamRow = (g, name) => g.rows.find((r) => r.team === name);
     const nums = (row, from, to) => row.cells.slice(from, to).map((td) => td.v);
 
-    const A = w.initial.avg;
-    const W = w.initial.week;
+    // W is the panel as it OPENS — the week measure. A is the same panel with
+    // the switch pressed. They used to be two separate panels on one screen.
+    const W = w.initial;
+    const A = w.avg;
 
-    // -- the shape both grids share ---------------------------------------
-    c.ok('the season grid is headed as a season average, not as a week',
-      A.title === 'All teams · proj avg 2026', A.title);
-    c.ok('the week grid is headed by the week the page is on',
-      W.title === 'All teams · week 8', W.title);
+    // -- one box, with both controls in it ---------------------------------
+    c.ok('THERE IS ONE ALL-TEAMS GRID AND NO SECOND ONE',
+      d.querySelectorAll('table.grid').length === 1 && !d.getElementById('weeklyTable'),
+      `${d.querySelectorAll('table.grid').length} grid tables`);
+    c.ok('THE WEEK PICKER LIVES INSIDE THE ALL-TEAMS PANEL NOW',
+      w.controls.weekInGridPanel && !w.controls.weekInSourcePanel,
+      JSON.stringify(w.controls));
+    c.ok('and so does the measure switch',
+      w.controls.toggleInGridPanel, JSON.stringify(w.controls));
+    c.ok('the switch explains itself on the page, not in a title no phone can read',
+      w.controls.titledButtons === 0 && w.controls.hintOnPage, JSON.stringify(w.controls));
+    c.ok('the two measures are offered by name, the average carrying the season',
+      eq(W.buttons, ['week=A week', 'avg=Proj avg 2026']), JSON.stringify(W.buttons));
+
+    // -- what it opens on --------------------------------------------------
+    c.ok('IT OPENS ON THE COMING WEEK, not on the season average',
+      W.title === 'All teams · week 8' && eq(W.measure, ['week']),
+      `${W.title} / ${JSON.stringify(W.measure)}`);
+    c.ok('and the hint under the controls says what the numbers are',
+      /week 8/.test(W.hint) && /ESPN/.test(W.hint), W.hint);
+
+    // -- the shape, identical on both measures -----------------------------
     c.ok('the columns are the nine spots, the total, and then the bench',
-      eq(A.head, HEAD), JSON.stringify(A.head));
-    c.ok('and the week grid is the identical table',
-      eq(W.head, A.head), JSON.stringify(W.head));
-    c.ok('D/ST and the kicker are real columns now',
-      A.head.includes('DEF') && A.head.includes('K'), JSON.stringify(A.head));
-    c.ok('the old estimate columns are gone from both',
-      !A.head.some((h) => /Baseline|Est Total|Wk proj|Wk actual/.test(h)) &&
+      eq(W.head, HEAD), JSON.stringify(W.head));
+    c.ok('and the measure does not change a single column',
+      eq(A.head, W.head), JSON.stringify(A.head));
+    c.ok('D/ST and the kicker are real columns',
+      W.head.includes('DEF') && W.head.includes('K'), JSON.stringify(W.head));
+    c.ok('the old estimate columns are gone',
       !W.head.some((h) => /Baseline|Est Total|Wk proj|Wk actual/.test(h)),
-      JSON.stringify(A.head));
+      JSON.stringify(W.head));
     c.ok('every header is sortable',
       [...d.querySelectorAll('#overviewTable thead th')].every((th) => th.hasAttribute('data-sort')),
       'a header is not sortable');
-    c.ok('both grids carry every team',
-      A.rows.length === 10 && W.rows.length === 10, `${A.rows.length} / ${W.rows.length}`);
+    c.ok('both measures carry every team',
+      W.rows.length === 10 && A.rows.length === 10, `${W.rows.length} / ${A.rows.length}`);
 
     // -- NO NAMES in the cells, but every name on hover --------------------
     const cellText = A.rows.flatMap((r) => r.cells).map((td) => td.text);
@@ -2246,13 +2478,21 @@ async function check(scenario, boot) {
       A.rows.every((r) => r.cells.slice(10).every((td) =>
         /^\d+\.\d (QB|RB|WR|TE|DST|K)\d+$/.test(td.text))),
       JSON.stringify(A.rows[0].cells.slice(10).map((td) => td.text)));
+    c.ok('and the week measure ranks its bench the same way',
+      W.rows.every((r) => r.cells.slice(10).every((td) =>
+        /^\d+\.\d (QB|RB|WR|TE|DST|K)\d+$/.test(td.text))),
+      JSON.stringify(W.rows[0].cells.slice(10).map((td) => td.text)));
     c.ok('and a lineup cell deliberately does not — its header already says it',
       A.rows.every((r) => r.cells.slice(0, 9).every((td) => !/[A-Z]{1,3}$/.test(td.text))),
       JSON.stringify(A.rows[0].cells.slice(0, 9).map((td) => td.text)));
 
-    // -- team 4's arithmetic, by hand --------------------------------------
+    // -- team 4's arithmetic, by hand, on each measure ----------------------
+    //
+    // THE POINT OF THE WHOLE SCENARIO: the merge may move where these numbers
+    // live and nothing else. These are the same two sets of figures the two
+    // panels used to print, now one button apart.
     const a4 = teamRow(A, 'Team 4');
-    c.ok('the season grid fills the nine spots best-first by season average',
+    c.ok('PROJ AVG FILLS THE NINE SPOTS BEST-FIRST BY SEASON AVERAGE',
       eq(nums(a4, 0, 9), ['20', '19', '18', '17', '16', '15', '14', '13', '12']),
       JSON.stringify(nums(a4, 0, 9)));
     c.ok('TOTAL IS THOSE NINE ADDED UP, NOT AN ESTIMATE',
@@ -2271,26 +2511,45 @@ async function check(scenario, boot) {
       JSON.stringify(a4.cells.slice(0, 9).map((td) => td.text)));
 
     const w4 = teamRow(W, 'Team 4');
-    c.ok('the week grid is the same nine men on that week’s numbers',
+    c.ok('A WEEK IS THE SAME NINE MEN ON THAT WEEK’S NUMBERS',
       eq(nums(w4, 0, 9), ['22.4', '21.4', '20.4', '19.4', '18.4', '17.4', '16.4', '15.4', '14.4']),
       JSON.stringify(nums(w4, 0, 9)));
     c.ok('and its total is what ESPN itself says the team is projected',
       w4.cells[9].text === '165.6', w4.cells[9].text);
+    c.ok('the two measures really do disagree — this is not one table twice',
+      !eq(nums(w4, 0, 10), nums(a4, 0, 10)),
+      `${JSON.stringify(nums(w4, 0, 10))} vs ${JSON.stringify(nums(a4, 0, 10))}`);
 
     // -- ordering ----------------------------------------------------------
     const totals = (g) => g.rows.map((r) => Number(r.cells[9].v));
-    c.ok('both grids open ranked by Total, best first',
-      totals(A).every((v, i) => i === 0 || v <= totals(A)[i - 1]) &&
-      totals(W).every((v, i) => i === 0 || v <= totals(W)[i - 1]),
-      `${JSON.stringify(totals(A))} / ${JSON.stringify(totals(W))}`);
+    c.ok('the grid opens ranked by Total, best first, on either measure',
+      totals(W).every((v, i) => i === 0 || v <= totals(W)[i - 1]) &&
+      totals(A).every((v, i) => i === 0 || v <= totals(A)[i - 1]),
+      `${JSON.stringify(totals(W))} / ${JSON.stringify(totals(A))}`);
 
-    // -- clicking either grid drills in ------------------------------------
-    c.ok('a click in the WEEK grid drives the roster detail below',
+    // -- the switch is a repaint, and it moves nothing else -----------------
+    c.ok('SWITCHING THE MEASURE COSTS NO REQUEST — both numbers were already fetched',
+      eq(w.fetchesBefore, w.fetchesAfterMeasure),
+      `${JSON.stringify(w.fetchesBefore)} -> ${JSON.stringify(w.fetchesAfterMeasure)}`);
+    c.ok('AND IT DOES NOT MOVE THE WEEK THE REST OF THE PAGE IS SHOWING',
+      eq(w.elsewhereBefore, w.elsewhereAfterMeasure),
+      `${JSON.stringify(w.elsewhereBefore)} -> ${JSON.stringify(w.elsewhereAfterMeasure)}`);
+    c.ok('the panels below really were pinned to the selected week, so that means something',
+      w.elsewhereBefore.weekSelect === '8' && eq(w.elsewhereBefore.seasonNow, ['8']) &&
+      w.elsewhereBefore.glanceWeek === '8',
+      JSON.stringify(w.elsewhereBefore));
+    c.ok('the choice is remembered in the page’s own prefs',
+      w.savedMeasure === 'avg', String(w.savedMeasure));
+    c.ok('and pressing the other one back gives exactly the table it opened with',
+      eq(w.backToWeek.rows, W.rows) && w.backToWeek.title === W.title,
+      `${w.backToWeek.title} vs ${W.title}`);
+
+    // -- clicking the grid drills in ---------------------------------------
+    c.ok('a click in the grid drives the roster detail below',
       w.picked.team === '2', w.picked.team);
-    c.ok('and both grids mark the drilled-into row',
-      /\bpicked\b/.test(teamRow(w.picked.snap.avg, 'Team 2').cls) &&
-      /\bpicked\b/.test(teamRow(w.picked.snap.week, 'Team 2').cls),
-      `${teamRow(w.picked.snap.avg, 'Team 2').cls} / ${teamRow(w.picked.snap.week, 'Team 2').cls}`);
+    c.ok('and the grid marks the drilled-into row',
+      /\bpicked\b/.test(teamRow(w.picked.snap, 'Team 2').cls),
+      teamRow(w.picked.snap, 'Team 2').cls);
 
     // -- a player link does not drag the drill-down with it -----------------
     c.ok('the grid link is a real href carrying that team’s own ESPN id',
@@ -2301,16 +2560,15 @@ async function check(scenario, boot) {
     c.ok('but clicking the row anywhere else still drills in, as it always did',
       w.afterNameClick.team === '5', w.afterNameClick.team);
 
-    // -- changing the week moves ONE of them -------------------------------
-    const a4b = teamRow(w.week6.avg, 'Team 4');
-    const w4b = teamRow(w.week6.week, 'Team 4');
-    c.ok('changing the week leaves the season-average grid exactly as it was',
-      eq(a4b.cells.map((td) => td.text), a4.cells.map((td) => td.text)),
-      JSON.stringify(a4b.cells.map((td) => td.text)));
-    c.ok('and its heading still names the season, not the week',
-      w.week6.avg.title === 'All teams · proj avg 2026', w.week6.avg.title);
-    c.ok('the week grid follows the selector',
-      w.week6.week.title === 'All teams · week 6', w.week6.week.title);
+    // -- changing the week moves the grid only on the week measure ----------
+    const w4b = teamRow(w.week6, 'Team 4');
+    const a4b = teamRow(w.week6avg, 'Team 4');
+    c.ok('the grid follows the week picker',
+      w.week6.title === 'All teams · week 6', w.week6.title);
+    c.ok('and the season average is the same table in week 6 as in week 8 — an average is not a week',
+      eq(a4b.cells.map((td) => td.text), a4.cells.map((td) => td.text)) &&
+      w.week6avg.title === 'All teams · proj avg 2026',
+      `${w.week6avg.title} ${JSON.stringify(a4b.cells.map((td) => td.text))}`);
 
     // Week 6 puts i=3 (a WR) on bye, so the WR spots go to the two WRs who
     // still have a number and the man on 0.00 drops into the FLEX.
@@ -2322,12 +2580,16 @@ async function check(scenario, boot) {
       JSON.stringify(nums(w4b, 0, 9)));
     c.ok('and the total counts the bye as the zero ESPN returns',
       w4b.cells[9].text === '141.4', w4b.cells[9].text);
-    c.ok('the season-average grid never calls anything a bye — an average is not a week',
-      w.week6.avg.rows.every((r) => r.cells.every((td) => td.text !== 'Bye')),
-      'a Bye in the average grid');
+    // byeAtZero, which the merge had every chance to lose: the SAME week's data
+    // seen through the season average may not call anything a bye, because a
+    // season average of 0.00 is a man ESPN projects nothing for all year.
+    c.ok('THE SEASON AVERAGE NEVER CALLS ANYTHING A BYE, even in a week that has one',
+      w.week6avg.rows.every((r) => r.cells.every((td) =>
+        td.text !== 'Bye' && !/\bbye\b/.test(td.cls))),
+      'a Bye on the season average');
 
-    // -- the notes ---------------------------------------------------------
-    c.ok('the season note owns the average as a typical week over 17 games',
+    // -- the note, which changes with the measure --------------------------
+    c.ok('the average note owns it as a typical week over 17 games',
       /typical week/.test(w.notes.avg) && /divided by 17 games/.test(w.notes.avg),
       w.notes.avg.slice(0, 200));
     c.ok('it says the Total is nine real men rather than an estimate',
@@ -2347,13 +2609,49 @@ async function check(scenario, boot) {
     c.ok('and it says what the number after a bench position means',
       /where he ranks at that position on his own team/.test(w.notes.avg) &&
       /counting the starters too/.test(w.notes.avg), w.notes.avg.slice(0, 700));
-    c.ok('the week note says which week it is measured on',
-      /projection for the week selected at the top of the page/.test(w.notes.week),
-      w.notes.week.slice(0, 300));
-    c.ok('and warns that the lineup is re-picked, so the FLEX can differ',
-      /re-picked on that week’s numbers/.test(w.notes.week), w.notes.week.slice(0, 300));
+    c.ok('the week note names the week it is measured on',
+      /ESPN’s own projection for week 8/.test(w.notes.week), w.notes.week.slice(0, 300));
+    c.ok('and offers the other measure by name, so the pair can still be read against each other',
+      /Proj avg 2026/.test(w.notes.week) && /better this week than they usually are/.test(w.notes.week),
+      w.notes.week.slice(0, 500));
+    c.ok('it warns that the lineup is re-picked, so the FLEX can differ between the two',
+      /FLEX can be a different man on the two settings/.test(w.notes.week),
+      w.notes.week.slice(0, 500));
     c.ok('and explains a Bye against having no number at all',
-      /0\.00 ESPN returns/.test(w.notes.week), w.notes.week.slice(0, 400));
+      /0\.00 ESPN returns/.test(w.notes.week), w.notes.week.slice(0, 700));
+    c.ok('while the AVERAGE note does not, because an average cannot have one',
+      !/0\.00 ESPN returns/.test(w.notes.avg), w.notes.avg.slice(0, 900));
+    c.ok('and the note says the week picker drives the whole page, not just this grid',
+      /week picked above drives the whole page/.test(w.notes.week) &&
+      /week picked above drives the whole page/.test(w.notes.avg),
+      w.notes.avg.slice(-300));
+  }
+
+  // ---- (r) the measure is remembered between visits ------------------------
+  if (scenario === 'measure-saved') {
+    const w = globalThis.__an || {};
+    c.ok('the page opens on the measure the reader last chose',
+      w.title === 'All teams · proj avg 2026' && JSON.stringify(w.lit) === JSON.stringify(['avg']),
+      `${w.title} / ${JSON.stringify(w.lit)}`);
+    c.ok('and the numbers are that measure’s — 20.0, not week 8’s 22.4',
+      w.qb === '20.0', String(w.qb));
+    c.ok('while the WEEK is still the coming one, so the panels below are unaffected',
+      w.week === '8' && JSON.stringify(w.seasonNow) === JSON.stringify(['8']),
+      `${w.week} / ${JSON.stringify(w.seasonNow)}`);
+  }
+
+  // ---- (s) byeAtZero: the same zero, read two ways -------------------------
+  if (scenario === 'bye-vs-zero') {
+    const w = globalThis.__an || {};
+    c.ok('the grid really is on week 6, his bye week', w.title === 'All teams · week 6', w.title);
+    c.ok('A WEEK’S 0.00 IN HIS BYE WEEK IS DRAWN AS A BYE',
+      w.week && w.week.text === 'Bye' && w.week.v === '0' && /\bbye\b/.test(w.week.cls),
+      JSON.stringify(w.week));
+    c.ok('the same man on the season average is on the season average',
+      w.avgTitle === 'All teams · proj avg 2026', w.avgTitle);
+    c.ok('AND HIS 0.00 THERE IS PRINTED AS THE NUMBER IT IS, NEVER AS A BYE',
+      w.avg && w.avg.text === '0.0' && w.avg.v === '0' && !/\bbye\b/.test(w.avg.cls),
+      JSON.stringify(w.avg));
   }
 
   // ---- (g) a player ESPN gave no id for -----------------------------------
@@ -2424,7 +2722,7 @@ async function check(scenario, boot) {
 
     // He is every team's QB, so it is the QB column of both grids that loses
     // its link — and only that column.
-    for (const id of ['overview', 'weekly']) {
+    for (const id of ['overview']) {
       const cells = [...d.querySelectorAll(`#${id}Table tbody tr[data-team] td.slot-cell`)];
       const qb = [...d.querySelectorAll(`#${id}Table tbody tr[data-team]`)]
         .map((tr) => [...tr.children].filter((td) =>
@@ -2646,10 +2944,10 @@ async function check(scenario, boot) {
       /Bye/.test(w.seasonLegend), w.seasonLegend);
 
     c.ok('the WEEK grid draws his zero the same way',
-      w.weekly02 && w.weekly02.text === '0.0 OUT' && /\bzero-out\b/.test(w.weekly02.cls) &&
-      !/\bbye\b/.test(w.weekly02.cls), JSON.stringify(w.weekly02));
+      w.weekCell02 && w.weekCell02.text === '0.0 OUT' && /\bzero-out\b/.test(w.weekCell02.cls) &&
+      !/\bbye\b/.test(w.weekCell02.cls), JSON.stringify(w.weekCell02));
     c.ok('and its key explains it, without a Bye nobody has',
-      /ruled out, not a bye/.test(w.weeklyLegend) && !/Bye/.test(w.weeklyLegend), w.weeklyLegend);
+      /ruled out, not a bye/.test(w.gridLegend) && !/Bye/.test(w.gridLegend), w.gridLegend);
 
     const k = w.card;
     c.ok('the card agrees: weeks 8 and 10 are 0.0 with OUT under it, class k-out',
@@ -2691,7 +2989,7 @@ async function check(scenario, boot) {
   if (scenario === 'byes-unknown') {
     const w = globalThis.__an;
     c.ok('WITH THE BYES UNKNOWN, A LIVE ZERO IS STILL READ AS A BYE (nothing regresses)',
-      w.weekly02 && w.weekly02.text === 'Bye' && /\bbye\b/.test(w.weekly02.cls), JSON.stringify(w.weekly02));
+      w.weekCell02 && w.weekCell02.text === 'Bye' && /\bbye\b/.test(w.weekCell02.cls), JSON.stringify(w.weekCell02));
     c.ok('in the season panel as well, in the slot that had no cover',
       String(w.dstW9).startsWith('Bye'), w.dstW9);
   }

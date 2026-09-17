@@ -51,6 +51,16 @@ export const onRoster = (i, week) => !(i === SIZE - 1 && week < SIGNED_WEEK);
 const SOLO_K = process.env.AN_SOLO_K === '1';
 const hasPlayer = (teamId, i) => !(SOLO_K && POS[i] === 'K' && teamId !== 4);
 
+// AN_ZERO_SEASON gives the listed players a SEASON projection of exactly 0.
+// It exists for one question, and it is the one the merged all-teams grid had
+// every chance to get wrong: a 0.00 in a WEEK may read as a bye, and a season
+// average of 0.00 may never — it is a man ESPN projects nothing for all year.
+// Paired with a week whose projection is also 0 (AN_DST_ZERO), it is the only
+// way to put a zero in front of BOTH measures at once and watch them disagree.
+const ZERO_SEASON = new Set(
+  (process.env.AN_ZERO_SEASON || '').split(',').filter(Boolean).map(Number)
+);
+
 function playersFor(teamId, week) {
   const out = [];
   for (let i = 0; i < SIZE; i++) {
@@ -68,7 +78,7 @@ function playersFor(teamId, week) {
       started: slot !== 20,
       projected: projFor(i, week),
       actual: week <= PLAYED_THROUGH ? Math.round((15 - i * 0.7) * 10) / 10 : null,
-      seasonProjected: (20 - i) * 17,
+      seasonProjected: ZERO_SEASON.has(i) ? 0 : (20 - i) * 17,
       injuryStatus: i === 2 ? 'OUT' : i === 5 ? 'QUESTIONABLE' : 'ACTIVE',
       percentOwned: null,
     });

@@ -813,15 +813,36 @@ function check(scenario, { document, window, errors, rejections }) {
     c.ok('nor does a titled BUTTON', !ts || ts.hidden, 'a button tap opened the sheet');
   }
 
-  // --- the second grid is wired the same way -----------------------------
-  // Two grids are built by one renderGrid and wired by two calls to wireTips;
-  // one of them being missed is exactly the kind of thing that looks fine.
-  const weekCell = document.querySelector('#weeklyTable td[data-tip]');
-  c.ok('the week grid has tip cells too', !!weekCell);
-  if (weekCell) {
-    const ev2 = clickOn(window, weekCell.querySelector('a.pref') || weekCell);
-    c.eq('and a tap there opens a sheet as well', ev2.defaultPrevented, true);
-    c.eq('which is the same card', document.getElementById('tipCard').hidden, false);
+  // --- THE MEASURE SWITCH LEAVES THE GRID WIRED --------------------------
+  //
+  // The page used to stack TWO all-teams grids, and this block used to tap a
+  // cell in the second one, because two calls to wireTips is exactly the kind
+  // of pair where one gets missed. They were merged into one panel on
+  // 2026-09-17 and the measure became a control inside it, which moves the
+  // hazard rather than removing it: pressing it rebuilds every row under the
+  // reader, so a card wired to the ROWS would be thrown away with them and
+  // would look perfectly fine until a finger arrived. wireTips is registered
+  // once, on the table, and this is what says so.
+  {
+    const toggle = document.getElementById('measureToggle');
+    c.ok('the all-teams panel carries the measure switch', !!toggle, 'no #measureToggle');
+    const avg = toggle && toggle.querySelector('button[data-measure="avg"]');
+    c.ok('with a proj-avg setting on it', !!avg, 'no avg button');
+    if (avg) {
+      clickOn(window, avg);
+      c.ok('pressing it lights that button', /\bon\b/.test(avg.getAttribute('class') || ''),
+        avg.getAttribute('class') || '');
+      const repainted = document.querySelector('#overviewTable td[data-tip]');
+      c.ok('and the grid still carries tip cells after the repaint', !!repainted);
+      if (repainted) {
+        const ev2 = clickOn(window, repainted.querySelector('a.pref') || repainted);
+        c.eq('a tap on the repainted grid still opens a sheet', ev2.defaultPrevented, true);
+        c.eq('which is the same card', document.getElementById('tipCard').hidden, false);
+      }
+      // Put it back, so the blocks after this read the grid the page opens on.
+      const wk = toggle.querySelector('button[data-measure="week"]');
+      if (wk) clickOn(window, wk);
+    }
   }
 
   // --- "SEASON BY WEEK" UNDER A FINGER ------------------------------------
