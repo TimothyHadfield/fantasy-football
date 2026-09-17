@@ -10,6 +10,10 @@ rule below is expanded there, along with the history of how the numbers were
 reverse-engineered from Tim's spreadsheet. `docs/espn-draft-api.md` is the
 field-level ESPN reference. `DRAFT-STRATEGY.md` covers the parked drafter.
 `tests/README.md` says how to run the test suites.
+[`docs/strategy-research.md`](docs/strategy-research.md) is the mid-season
+STRATEGY file: Tim's own twelve ideas with a verdict and the published evidence
+for each, the numbers a feature could use, and a ranked list of features that
+would follow from it. Read it before proposing any new analysis feature.
 
 ---
 
