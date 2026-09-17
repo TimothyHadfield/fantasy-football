@@ -38,6 +38,11 @@ import {
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
+// The ONE standard deviation on this site, and the ONE rule about when there is
+// not enough data to have one: `stdev` returns null below two values, and the
+// season panel's red marks are switched off entirely when it does. See rule 5
+// in HANDOFF.md — deciding what a statistic returns before it has enough data.
+import { stdev } from './stats.js';
 import * as espn from './espn.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
@@ -91,6 +96,13 @@ const state = {
   seasonProgress: null,         // { done, total } while weeks are arriving
   seasonError: null,            // the whole run fell over
   seasonToken: 0,               // drops an answer about a league we have left
+
+  // The man under the pointer in the season panel, as a playerId (or null).
+  // The panel's rows are SLOTS now, so the same man turns up in several of
+  // them across the weeks and nowhere is his name written; lighting every cell
+  // he holds, and naming him on the line above the table, is what puts the
+  // person back into a grid made entirely of bare numbers.
+  seasonLit: null,
 
   // The what-if lineup in the roster detail. `lineup` holds only the slots that
   // DIFFER from ESPN's, so "has anything been changed" is just its size, and
@@ -982,11 +994,11 @@ function renderKey(id, items, hint = '') {
 }
 
 function renderOverview() {
-  // Cleared here rather than per grid: the rows are about to be replaced, so
-  // every key registered against the old ones is dead. Left to grow it would
-  // hold a whole other league's squads after a source switch.
-  clearRuns();
-  for (const grid of GRIDS) renderGrid(grid);
+  // Cleared per GRID, not wholesale: the rows are about to be replaced, so every
+  // key registered against the old ones is dead — but the season panel below
+  // registers cards of its own and is not being repainted here, and clearing
+  // the lot from in here left its `data-tip`s pointing at nothing.
+  for (const grid of GRIDS) { clearRuns(grid.id); renderGrid(grid); }
   // NOT hideTip() before the repaint any more. This runs once per batch while
   // the season loads, and closing the card each time made one opened in the
   // first seconds vanish under the reader. The card finds its man again among
@@ -1692,6 +1704,285 @@ function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus) {
     `title="ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.${says}">${fmt(v)}</td>`;
 }
 
+// ------------------------------------------- the season panel's slot rows
+//
+// TIM, 2026-09-17, in his own words: "Instead of showing my current starting
+// lineup and then the weekly proj of each player, I just want to label the
+// positions as QB, WR1, WR2, etc. and then put the player with the proj that
+// matches that position (2nd highest WR proj in WR2, etc.). ... This system is
+// much better at telling the true story because it shows what you will actually
+// be proj that week given the information we currently have."
+//
+// So the rows are LINEUP SLOTS, not men. Each week's cells are that week's BEST
+// LEGAL LINEUP — `optimalLineup` from js/forecast.js, the same solver "Who to
+// start" below and the schedule forecast use, so the three cannot disagree —
+// laid out with the chosen men RANKED inside their own slot, best first. WR1 is
+// therefore the best receiver in that week's lineup and WR2 the second, whoever
+// they happen to be, and a bye simply moves the names down a row.
+//
+// The price of that is the one thing this panel must pay back: NOBODY IS NAMED
+// ANYWHERE. That is what the identity line above the table and the cross-week
+// highlight are for, and it is why these cells carry the same player card the
+// grids at the top do — on a phone there is no hover, and the card as a sheet
+// is the only thing that can answer "who is that" with a thumb.
+
+/**
+ * The league's starting slots as ROWS: one per slot, in lineup order, numbered
+ * within a position when there is more than one of it.
+ *
+ * `slots` is the league's own shape (`leagueSlots()`, read off the lineups ESPN
+ * has already accepted), so a three-receiver league gets WR1/WR2/WR3 and a
+ * two-receiver one gets WR1/WR2 without anything here being told which it is.
+ * A position the league starts exactly one of keeps its bare label — "QB", not
+ * "QB1" — because a number that can only ever be 1 is noise.
+ *
+ * @returns {Array<{key:string, base:string, slotId:number, rank:number, order:number}>}
+ */
+function slotRows(slots) {
+  if (!slots || !slots.length) return [];
+  const counts = new Map();
+  for (const id of slots) counts.set(id, (counts.get(id) || 0) + 1);
+  const ids = [...counts.keys()]
+    .sort((a, b) => (SLOT_ORDER[a] ?? 40) - (SLOT_ORDER[b] ?? 40) || a - b);
+
+  const out = [];
+  for (const id of ids) {
+    const n = counts.get(id);
+    const base = espn.SLOT_LABELS[id] ?? String(id);
+    for (let i = 1; i <= n; i++) {
+      out.push({ key: n > 1 ? `${base}${i}` : base, base, slotId: id, rank: i, order: out.length });
+    }
+  }
+  return out;
+}
+
+/**
+ * Hand one week's best lineup out to the slot rows.
+ *
+ * The solver says which SLOT ID each man fills; the ranking inside a slot is
+ * this function's own, and it is done on that week's projection so "WR2" always
+ * means the second-best receiver of the two the lineup actually contains. The
+ * playerId tiebreak stops two identical projections trading rows between
+ * repaints, which would light up as a change that never happened.
+ *
+ * @returns {Map<string, {p:object, v:number}|null>} slot key -> who is in it
+ */
+function fillSlots(starters, rows) {
+  const bySlot = new Map();
+  for (const s of starters) {
+    if (!bySlot.has(s.slotId)) bySlot.set(s.slotId, []);
+    bySlot.get(s.slotId).push(s);
+  }
+  for (const list of bySlot.values()) {
+    list.sort((a, b) =>
+      (b.projected ?? -Infinity) - (a.projected ?? -Infinity) ||
+      (a.playerId ?? 0) - (b.playerId ?? 0));
+  }
+
+  const out = new Map();
+  for (const row of rows) {
+    const pick = (bySlot.get(row.slotId) || [])[row.rank - 1] || null;
+    out.set(row.key, pick ? { p: pick, v: round1(pick.projected) } : null);
+  }
+  return out;
+}
+
+/**
+ * One team's best legal lineup in every week the cache holds.
+ *
+ * The single call site for `optimalLineup` over the season cache: the slot rows
+ * here and the marks in "Who to start" below are the SAME answer read two ways,
+ * and a second solve would be a second chance for them to disagree about who a
+ * squad ought to be starting on the very same screen.
+ *
+ * @returns {Map<number, Array>} week -> the starters, each carrying its slotId
+ */
+function weeklyLineups(teamId, slots) {
+  const out = new Map();
+  if (!slots || teamId === null || teamId === undefined) return out;
+  for (const [week, teams] of state.seasonWeeks) {
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) continue;
+    out.set(week, optimalLineup(identified(team.players), slots).starters);
+  }
+  return out;
+}
+
+// -------------------------------------------------- how low is low, per slot
+//
+// Tim: "I also want to colorize numbers in red in this section for starting
+// positions that have a lower number than where they should be at (QB good
+// range should be 17+ or something like that). I'm thinking maybe 1-2 standard
+// deviations below the mean? (I'm not sure if the sample size should be based
+// on my own players or others, but whatever you think is best)."
+//
+// THE LEAGUE, not his own roster — decided here, and worth stating because he
+// asked the question. His own squad gives at most one value per slot per week,
+// and, worse, it is the thing being judged: a manager whose QB has been 11
+// points all year would have 11 sitting one standard deviation from ITS OWN
+// mean and the panel would call his weakest spot normal. Every squad's best
+// lineup, across every week on screen, is ~160 values per slot, and it
+// self-calibrates to this league's scoring rules without a single number being
+// hard-coded — which is what a "QB good range is 17+" would have been.
+//
+// Two levels, and the second is the loud one: below one standard deviation is a
+// warning, below two is bad. Both carry a MARK (▼ / ▼▼) as well as a colour,
+// because a mark is the half of it that survives a reader who cannot separate
+// the hues, and the thresholds themselves are printed under the table so the
+// claim can be checked by hand rather than believed.
+//
+// AND IT DRAWS NOTHING WHEN IT CANNOT BE SURE. `stdev` returns null below two
+// values (js/stats.js), and this returns null thresholds when it does: no
+// colour at all is the honest answer on a Tuesday in week 1, and a confident
+// one would be exactly the failure rule 5 in HANDOFF.md exists to prevent.
+
+const avgOf = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+/** Memoised against the league and how much of it has landed. */
+let slotBars = { key: null, bars: new Map() };
+
+/**
+ * Per slot label, the whole league's distribution over the weeks on screen.
+ *
+ * @returns {Map<string, {n:number, mean:number|null, sd:number|null,
+ *                        one:number|null, two:number|null}>}
+ */
+function slotThresholds(rows, slots, weeks) {
+  const key = `${sourceKey()}|${rows.map((r) => r.key).join(',')}|` +
+    `${[...state.seasonWeeks.keys()].sort((a, b) => a - b).join(',')}|${weeks.join(',')}`;
+  if (slotBars.key === key) return slotBars.bars;
+
+  const values = new Map(rows.map((r) => [r.key, []]));
+  const shown = new Set(weeks);
+  for (const [week, teams] of state.seasonWeeks) {
+    if (!shown.has(week)) continue;
+    for (const team of teams) {
+      const fill = fillSlots(optimalLineup(identified(team.players), slots).starters, rows);
+      for (const row of rows) {
+        const e = fill.get(row.key);
+        if (e && typeof e.v === 'number') values.get(row.key).push(e.v);
+      }
+    }
+  }
+
+  const bars = new Map();
+  for (const row of rows) {
+    const xs = values.get(row.key);
+    const sd = stdev(xs);
+    const m = avgOf(xs);
+    bars.set(row.key, sd === null
+      ? { n: xs.length, mean: m, sd: null, one: null, two: null }
+      // Rounded to the tenth, which is the number PRINTED in the key — so a
+      // reader checking a cell against the threshold gets the same answer the
+      // page did, rather than one hidden in a decimal nobody can see.
+      : { n: xs.length, mean: m, sd, one: round1(m - sd), two: round1(m - 2 * sd) });
+  }
+
+  slotBars = { key, bars };
+  return bars;
+}
+
+/** '', 'lo1' or 'lo2' — how far below its slot's league norm this number is. */
+function lowTier(v, bar) {
+  if (typeof v !== 'number' || !bar || bar.sd === null) return '';
+  if (v < bar.two) return 'lo2';
+  if (v < bar.one) return 'lo1';
+  return '';
+}
+
+const LOW_MARK = { lo1: '▼', lo2: '▼▼' };
+
+// ---------------------------------------------------------------- the cell
+
+/**
+ * One slot's week.
+ *
+ * FOUR ways of having no number, told apart by class and by word, exactly as
+ * the "Who to start" run below does — except that "he was not on this roster
+ * that week" cannot happen to a SLOT, and is replaced by the one that can:
+ * nobody eligible was available to fill it at all.
+ *
+ * `data-pid` is what the highlight is driven off. It is ESPN's own id and the
+ * same one the link carries — never a name and never a row index, the same one
+ * contract as everywhere else on this page.
+ *
+ * NO `title` ON A FILLED CELL. These carry the player card now, and a `title`
+ * beside it would have the browser draw a second tooltip on top of ours a
+ * moment later — the same rule the grids at the top of the page follow. The
+ * link keeps an `aria-label`, which says the same thing and draws nothing.
+ */
+function slotCell(entry, row, week, bar, index) {
+  const cls = (extra) => `wk${week === state.week ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
+
+  if (!state.seasonWeeks.has(week)) {
+    return state.seasonFailed.has(week)
+      ? `<td class="${cls('muted')}" title="Week ${week} did not load — ESPN refused it, so this ` +
+        `column is empty for everyone. Reload the page to try again.">—</td>`
+      : `<td class="${cls('wait')}" title="Week ${week} has not been read from ESPN yet.">·</td>`;
+  }
+  if (!entry) {
+    return `<td class="${cls('muted')}" title="Nobody could fill ${esc(row.key)} in week ${week} — ` +
+      `this squad had no ${esc(row.base)} with a projection that week.">—</td>`;
+  }
+
+  const { p, v } = entry;
+  const status = seasonStatus(index, week, p);
+  const tier = lowTier(v, bar);
+  const zero = v === 0 ? zeroOf(v, week, p, status) : null;
+
+  // The same identity line the grids draw, word for word — the card is shared,
+  // so a second spelling of "who is this" is how the two pages start to differ.
+  // The slot and the week are not in it: you are pointing at the cell that says
+  // both, and "QB · QB, week 1" reads as a stutter rather than as information.
+  const injured = injuryTier(p.injuryStatus);
+  const ident = `${p.name} · ${p.position} · ${p.proTeam}${injured ? ` · ${p.injuryStatus}` : ''}`;
+  const why =
+    zero === 'bye'
+      ? `${p.name} fills ${row.key} in week ${week} on a bye — ESPN returns 0.00 for one, ` +
+        `and nobody on this roster projected higher.`
+      : zero === 'out'
+        ? `${p.name} fills ${row.key} in week ${week} at 0.0: ESPN has ruled him out, and ` +
+          `nobody on this roster projected higher.`
+        : `${p.name} is this squad’s ${row.key} in week ${week}, projected ${fmt(v)}.`;
+  const says = tier
+    ? ` That is more than ${tier === 'lo2' ? 'two standard deviations' : 'one standard deviation'} ` +
+      `below what a ${row.key} gives across the league (${fmt(bar.one)} / ${fmt(bar.two)}).`
+    : '';
+
+  const shown = zero === 'bye'
+    ? 'Bye'
+    : zero === 'out'
+      ? `${fmt(v)} <span class="zmark">${esc(outMark(status))}</span>`
+      : fmt(v);
+  const mark = tier ? ` <span class="lowmark" aria-hidden="true">${LOW_MARK[tier]}</span>` : '';
+
+  const href = p.playerId === null || p.playerId === undefined
+    ? null
+    : `waivers.html?player=${encodeURIComponent(p.playerId)}`;
+  const id = `season:${row.key}:${p.playerId ?? `x:${p.name}`}`;
+  const key = registerRun({ ident, run: seasonRunData(index, p), href, id }, 'season');
+
+  const extra = [
+    zero === 'bye' ? 'bye' : zero === 'out' ? 'zero-out' : zero === 'zero' ? 'zero' : '',
+    tier,
+  ].filter(Boolean).join(' ');
+
+  return `<td class="${cls(extra)}" data-v="${v}" data-pid="${esc(p.playerId ?? '')}"` +
+    `${tipAttr(key)}>` +
+    `${playerRef(p, `${shown}${mark}`, `${why}${says} Click to ${OPENS}.`, 'aria-label')}</td>`;
+}
+
+/** What the totals band's cell says on a hover. It is a <td>, so a title is right. */
+function totalLabel(total, week, slotCount) {
+  if (total === null) {
+    return state.seasonFailed.has(week)
+      ? `Week ${week} did not load — ESPN refused it, so there is nothing to add up.`
+      : `Week ${week} has not been read from ESPN yet.`;
+  }
+  return `The best legal lineup for week ${week} projects ${fmt(total)} — the ${slotCount} ` +
+    `slots above added up.`;
+}
+
 function renderSeasonHead(weeks) {
   const cols = weeks
     .map((w) => {
@@ -1700,30 +1991,25 @@ function renderSeasonHead(weeks) {
         .filter(Boolean).join(' ');
       const title = failed
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
-        : `ESPN’s projected points for week ${w}.`;
+        : `The best legal lineup's projection for week ${w}, slot by slot.`;
       return weekHead(w, weeks, cls, title);
     })
     .join('');
 
   $('seasonTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="left" data-sort>Slot</th>
-       <th class="name" data-sort>Player</th>
-       <th class="left" data-sort>Pos</th>
-       <th class="left" data-sort>NFL</th>
-       <th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are not counted. Ours, not ESPN’s: a bye counts as the zero ESPN returns, and a week he is not on the roster for is left out.">Avg</th>
+       <th class="name" data-sort title="A starting slot in this league's own lineup, filled by that week's best legal lineup. Where a league starts more than one of a position, 1 is the best of them that week.">Slot</th>
+       <th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are shown but not counted.">Avg</th>
        ${cols}
      </tr>`;
 }
 
 function renderSeason() {
   const table = $('seasonTable');
-  const tbody = bodyOf(table);
   const team = currentTeam();
   const weeks = spanWeeks();
-  // The same view the panel above draws, swaps included, so the two can never
-  // disagree about who is starting for the squad they are both showing.
-  const view = rosterView(team);
+  const slots = leagueSlots();
+  const rows = slotRows(slots);
   const players = team ? team.players : [];
 
   $('seasonTitle').textContent = team
@@ -1733,62 +2019,101 @@ function renderSeason() {
   renderSeasonHead(weeks);
   renderSeasonProgress(weeks);
 
-  const show = players.length > 0 && weeks.length > 0;
+  const show = players.length > 0 && weeks.length > 0 && rows.length > 0;
   $('seasonWrap').classList.toggle('hidden', !show);
   $('seasonEmpty').classList.toggle('hidden', show);
 
   if (!show) {
-    $('seasonEmpty').textContent = seasonEmptyReason(team, weeks);
+    $('seasonEmpty').textContent = seasonEmptyReason(team, weeks, rows);
     $('seasonNote').innerHTML = '';
     $('seasonLegend').innerHTML = '';
+    $('seasonBars').innerHTML = '';
+    $('seasonPick').innerHTML = '';
     $('seasonAlert').innerHTML = '';
     $('seasonAlert').classList.add('hidden');
-    tbody.innerHTML = '';
+    $('seasonSlots').innerHTML = '';
+    $('seasonTotals').innerHTML = '';
     renderStarters(); // it has an empty state of its own and must reach it
     return;
   }
 
+  // This panel's own cards only: the two grids above keep theirs.
+  clearRuns('season');
+
   const index = seasonIndex(team.id);
+  const lineups = weeklyLineups(team.id, slots);
+  const bars = slotThresholds(rows, slots, weeks);
 
-  tbody.innerHTML = view
-    .map((entry) => {
-      const p = entry.p;
-      const values = weeks.map((w) => seasonValue(index, w, p.playerId));
-      const avg = regularAvg(values, weeks);
+  // week -> slot key -> who is in it. Built once and read by both the slot rows
+  // and the totals band, so the band can only ever be the column it sits under.
+  const byWeek = new Map();
+  for (const w of weeks) {
+    byWeek.set(w, lineups.has(w) ? fillSlots(lineups.get(w), rows) : null);
+  }
 
-      const order = SLOT_ORDER[entry.slotId] ?? 40;
-      const tier = injuryTier(p.injuryStatus);
-      const label = tier ? INJURY_LABELS[p.injuryStatus] || p.injuryStatus.replace(/_/g, ' ') : '';
-      // Availability, not a value judgement — so it is allowed a colour where
-      // the week columns are not. Kept to the pill this page already uses.
-      //
-      // It sits BESIDE the player link rather than inside it. The pill is a
-      // fact about this week, not part of who he is, and it carries a title of
-      // its own: inside the link the two tooltips would fight over the same few
-      // pixels, and the link's hover underline would drag through the pill's
-      // rounded border. Outside, the name is the target and the pill is a label.
-      const tag = tier
-        ? ` <span class="inj${tier === 'q' ? '' : ` ${tier}`}" ` +
-          `title="ESPN lists ${esc(p.name)} as ${esc(p.injuryStatus.replace(/_/g, ' ').toLowerCase())}.">` +
-          `${esc(label)}</span>`
-        : '';
+  // Who each id IS, for the line above the table. Kept here rather than written
+  // into every cell: one man holds up to sixteen of them, and his name is the
+  // widest thing that could be repeated 160 times for something read for two
+  // seconds. Rebuilt with the rows, so it can never describe a stale squad.
+  seasonWho.clear();
+
+  $('seasonSlots').innerHTML = rows
+    .map((row) => {
+      const values = weeks.map((w) => {
+        const fill = byWeek.get(w);
+        return fill ? fill.get(row.key) : undefined;
+      });
+      for (const e of values) {
+        if (e && e.p.playerId !== null && e.p.playerId !== undefined) {
+          seasonWho.set(String(e.p.playerId), `${e.p.name} · ${e.p.position} · ${e.p.proTeam}`);
+        }
+      }
+      const nums = values.map((e) => (e ? e.v : null));
+      const avg = regularAvg(nums, weeks);
+      const bar = bars.get(row.key);
 
       return `
-      <tr class="${entry.started ? '' : 'bench'}">
-        <td class="left" data-v="${order}"><span class="slot-tag">${esc(entry.slot)}</span></td>
-        <td class="name" title="${esc(p.name)} · ${esc(p.position)} · ${esc(p.proTeam)}">${
-          playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}${tag}</td>
-        <td class="left">${esc(p.position)}</td>
-        <td class="left">${esc(p.proTeam)}</td>
+      <tr data-slot="${esc(row.key)}">
+        <td class="name" data-v="${row.order}"><span class="slot-tag">${esc(row.key)}</span></td>
         <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${fmt(avg)}</td>
-        ${values.map((v, i) => withPo(seasonCell(v, weeks[i], p, weeks[i] === state.week, null,
-          seasonStatus(index, weeks[i], p)), weeks[i], weeks)).join('')}
+        ${values.map((e, i) =>
+          withPo(slotCell(e || null, row, weeks[i], bar, index), weeks[i], weeks)).join('')}
       </tr>`;
     })
     .join('');
 
-  renderSeasonNote(weeks, players.length);
+  // THE TOTALS BAND, the same one the Roster detail draws — Tim: "make a
+  // starting lineup line with the added up totals of the proj every week, just
+  // like how it's displayed in the roster detail box". Same `tbody.split`, same
+  // styles, and a body of one row is what sortable.js leaves alone, so it stays
+  // pinned under the last slot however the table is ordered.
+  const totals = weeks.map((w) => {
+    const fill = byWeek.get(w);
+    if (!fill) return null;
+    const vals = rows.map((r) => fill.get(r.key)).filter(Boolean).map((e) => e.v);
+    return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
+  });
+  const totalAvg = regularAvg(totals, weeks);
+  $('seasonTotals').innerHTML = `
+    <tr class="split-row">
+      <td class="name split-label">Starting lineup</td>
+      <td class="avg grouped split-total"${totalAvg === null ? '' : ` data-v="${totalAvg}"`}>${fmt(totalAvg)}</td>
+      ${totals.map((t, i) => withPo(
+        `<td class="wk split-total${weeks[i] === state.week ? ' now' : ''}"` +
+        `${t === null ? '' : ` data-v="${t}"`} title="${esc(totalLabel(t, weeks[i], rows.length))}">` +
+        `${fmt(t)}</td>`, weeks[i], weeks)).join('')}
+    </tr>`;
+
+  renderSeasonNote(weeks, rows, bars);
   resort(table);
+  // A repaint throws the highlight away with the cells that carried it, so it
+  // is put straight back: the season panel repaints once per batch of weeks
+  // while the league loads, and a highlight that vanished under the reader
+  // three times in the first two seconds is the same defect the card had.
+  paintLit();
+  // And an open card finds its cell again among the new ones, for the same
+  // reason and by the same route the grids use.
+  reopenTip();
 
   // Driven from here rather than from each of renderSeason's ten call sites:
   // the two panels read the same week cache for the same team, so every reason
@@ -1861,11 +2186,11 @@ function leagueSlots() {
  */
 function weeklyStarters(teamId, slots) {
   const out = new Map();
-  if (!slots || teamId === null || teamId === undefined) return out;
-  for (const [week, teams] of state.seasonWeeks) {
-    const team = teams.find((t) => t.id === teamId);
-    if (!team) continue;
-    const { starters } = optimalLineup(identified(team.players), slots);
+  // `weeklyLineups` is the single solve, shared with the "Season by week" panel
+  // above: the slot rows there and the marks here are the same answer read two
+  // ways, and a second call to optimalLineup would be a second chance for the
+  // two panels on one screen to disagree about who ought to be starting.
+  for (const [week, starters] of weeklyLineups(teamId, slots)) {
     out.set(week, new Map(starters.map((s) => [s.playerId, s.slotId])));
   }
   return out;
@@ -2223,14 +2548,18 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
 }
 
 /** An empty table says why it is empty and what to do about it. */
-function seasonEmptyReason(team, weeks) {
+function seasonEmptyReason(team, weeks, rows = null) {
   if (!weeks.length) {
     return 'No weeks came back for this season, so there is nothing to lay out across the top. ' +
       'Check the league on the Connection page, or switch to Demo data.';
   }
   if (!state.data) return 'No roster data for this week yet, so there are no players to follow.';
-  if (!team) return 'Pick a team above to follow its roster through the season.';
-  return `No players came back for ${team.name} in week ${state.week}, so there is no roster ` +
+  if (!team) return 'Pick a team above to follow its lineup through the season.';
+  if (rows && !rows.length) {
+    return 'The league’s starting slots aren’t known yet — they are read off the lineups ESPN ' +
+      'has already accepted, so they arrive with the first week of rosters.';
+  }
+  return `No players came back for ${team.name} in week ${state.week}, so there is no lineup ` +
     `to follow. Try another week.`;
 }
 
@@ -2261,13 +2590,12 @@ function renderSeasonProgress(weeks) {
 /**
  * What these numbers are, said every time they are shown.
  *
- * Four things have to be in here or the table is quietly misleading: whose
- * projections these are, that a Bye cell and a dash mean different things,
- * which weeks are covered, and — the one peculiar to this panel — that the
- * rows are the roster AS OF the week selected at the top of the page, not some
- * season-long squad that never existed.
+ * Five things have to be in here or the table is quietly misleading: whose
+ * projections these are, that the rows are SLOTS rather than men and who
+ * therefore fills one, what the totals band adds up, where the red thresholds
+ * came from, and that a Bye cell and a dash mean different things.
  */
-function renderSeasonNote(weeks, rowCount) {
+function renderSeasonNote(weeks, rows, bars) {
   const parts = [];
   const team = currentTeam();
 
@@ -2277,7 +2605,39 @@ function renderSeasonNote(weeks, rowCount) {
         'your league’s. Switch to <strong>My ESPN league</strong> above to follow a real squad.'
       : 'Every number in the week columns is ESPN’s own projection for that player in that week, ' +
         'scored under this league’s rules — the same figure ESPN shows when you page a lineup ' +
-        'forward. Nothing here is ours except <strong>Avg</strong>.'
+        'forward. What is ours is which man lands in which slot, the total, and the low marks.'
+  );
+
+  parts.push(
+    `<strong>Each row is a lineup slot, not a player.</strong> Every week is filled with the ` +
+    `<strong>best legal lineup</strong> ${team ? `${esc(team.name)} ` : 'that squad '} could field ` +
+    `that week — the same solver “Who to start” below and the schedule forecast use — and the men ` +
+    `it picks are then ranked inside their own slot on that week’s projection, so ` +
+    `<strong>WR1</strong> is the best receiver in that week’s lineup and <strong>WR2</strong> the ` +
+    `second. <strong>FLEX</strong> is whoever the flex actually is. Nobody is named in a cell: ` +
+    `hover or tap one and the line above the table names him and lights up every other week he holds ` +
+    `a slot.`
+  );
+
+  parts.push(
+    `<strong>Starting lineup</strong>, in the band under the last slot, is those slots added up for ` +
+    `that week — the same band, and the same arithmetic, as the Roster detail above. A week nobody ` +
+    `could fill a slot in is simply left out of it rather than counted as a zero.`
+  );
+
+  const withBar = rows.filter((r) => (bars.get(r.key) || {}).sd !== null);
+  const sample = withBar.length ? (bars.get(withBar[0].key) || {}).n : 0;
+  parts.push(
+    `<strong>A number turns amber ▼ below one standard deviation, and red ▼▼ below two</strong>, ` +
+    `measured per slot across <strong>every squad in the league</strong> over the weeks on screen ` +
+    (sample ? `(${sample} values a slot) ` : '') +
+    `— not against your own roster, which would have far too little of it and would quietly call ` +
+    `your weakest position normal. The thresholds are printed under the table, rounded to the tenth, ` +
+    `which is exactly the number the colour is decided against. ` +
+    (withBar.length === rows.length
+      ? 'Both marks carry a symbol as well as a colour.'
+      : '<strong>A slot with too little to go on is left uncoloured</strong> — fewer than two values ' +
+        'cannot have a standard deviation, and a confident colour there would be worse than none.')
   );
 
   const loaded = weeks.filter((w) => state.seasonWeeks.has(w)).length;
@@ -2286,41 +2646,32 @@ function renderSeasonNote(weeks, rowCount) {
   parts.push(
     `Covering ${weekRange(regular)} — ${plural(regular.length, 'week')} this season runs to` +
     (po.length ? `, then the playoffs (${weekRange(po)}) after the heavy line` : '') +
-    (loaded === weeks.length ? ', all loaded.' : `, ${loaded} of ${weeks.length} loaded so far.`)
-  );
-
-  parts.push(
-    `The rows are ${team ? `${esc(team.name)}’s` : 'this team’s'} roster <strong>as it stands in ` +
-    `week ${state.week}</strong> — the same ${plural(rowCount, 'player')} as the table above, ` +
-    `starters in lineup order and then the bench. Change the week at the top of the page and this ` +
-    `row set changes with it. <strong>Click any player’s name</strong> to open him on the ` +
-    `<a href="waivers.html">Players</a> page, priced against the wire.`
+    (loaded === weeks.length ? ', all loaded.' : `, ${loaded} of ${weeks.length} loaded so far.`) +
+    ' <strong>Avg</strong> is the mean of the regular-season columns that carry a number: the' +
+    ' playoff weeks are shown but never counted in it.'
   );
 
   parts.push(
     (state.isDemo
       ? 'On a real league a cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a ' +
-        'player whose NFL team is off that week; in the sample data a zero only means he is ruled ' +
-        'out, so it is printed as a number. '
+        'player whose NFL team is off that week — it only reaches a slot when nobody on the roster ' +
+        'projected higher; in the sample data a zero only means he is ruled out, so it is printed ' +
+        'as a number. '
       : 'A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team ' +
-        'is off that week. ESPN also returns 0.00 for a man it has ruled out, so a zero in any ' +
-        'other week is printed as <strong>0.0</strong>, with OUT, IR or SUSP beside it when that is ' +
-        'why — checked against his NFL team’s bye week, and read as a bye only when that is not known. ') +
-    'A dash is not that: it means either that ESPN carried no number for him, or that he was not ' +
-    'on this roster in that week — ESPN hands back each past week’s real roster, and today’s ' +
-    'roster for every week still to come. Tap or hover a cell to see which.'
+        'is off that week, and it only reaches a slot when nobody else on the roster projected ' +
+        'higher. ESPN also returns 0.00 for a man it has ruled out, so a zero in any other week is ' +
+        'printed as <strong>0.0</strong>, with OUT, IR or SUSP beside it. ') +
+    'A dash is not that: it means either that the week has not been read, or that nobody on this ' +
+    'squad could fill the slot at all. <strong>Every number is a link</strong> to that man’s next ' +
+    '13 weeks on the <a href="waivers.html">Players</a> page.'
   );
 
   parts.push(
-    'Avg is the mean of the weeks that carry a number and is ours, not ESPN’s: a bye counts as ' +
-    'the zero ESPN returns, so does a ruled-out week, and a week he is not on the roster for is left out. ' +
-    'It is a regular-season average: the playoff weeks are shown but not counted.'
-  );
-
-  parts.push(
-    'Nothing in this table is highlighted, on purpose. Everyone here is already rostered, so the ' +
-    'per-position bar that flags a startable week on the <a href="waivers.html">Players</a> ' +
-    'page would light up nearly every cell and tell you nothing.'
+    'The swaps in the Roster detail above are a what-if for one week and are deliberately not ' +
+    'applied here: this panel answers what the numbers say you would be projected each week, and ' +
+    'folding a hand-moved lineup into it would make an experiment look like advice. A man ESPN ' +
+    'gave no player id for is left out of the lineups for the same reason “Who to start” leaves ' +
+    'him out — nothing ties the man in one week to the man in the next.'
   );
 
   $('seasonNote').innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
@@ -2336,8 +2687,85 @@ function renderSeasonNote(weeks, rowCount) {
     : '';
   alert.classList.toggle('hidden', !failed.length);
 
-  renderKey('seasonLegend', seasonMarks($('seasonTable')),
-    'Tap or hover a cell for what it means');
+  const table = $('seasonTable');
+  const body = bodyOf(table);
+  renderKey('seasonLegend', [
+    ['<span class="lg-mark lit">12.3</span>', 'the same man, every week'],
+    body.querySelector('td.lo1') &&
+      ['<span class="lg-mark lo1">12.3 <span class="lowmark">▼</span></span>', '1 SD below the league'],
+    body.querySelector('td.lo2') &&
+      ['<span class="lg-mark lo2">9.8 <span class="lowmark">▼▼</span></span>', '2 SD below'],
+    ['<span class="lg-mark tot">165.6</span>', 'the slots added up'],
+    ...seasonMarks(table),
+    // No "hover or tap" hint here: the line above the table says it already,
+    // and saying it twice is the sort of thing the declutter pass removed.
+  ]);
+
+  // THE THRESHOLDS THEMSELVES, on screen. A reader can check any coloured cell
+  // against these by eye, which is the difference between a rule and a claim.
+  const barText = rows.map((r) => {
+    const b = bars.get(r.key);
+    return b && b.sd !== null
+      ? `<span class="lg"><strong>${esc(r.key)}</strong> ${fmt(b.one)} / ${fmt(b.two)}</span>`
+      : `<span class="lg"><strong>${esc(r.key)}</strong> —</span>`;
+  }).join('');
+  $('seasonBars').innerHTML =
+    `<span class="lg lg-lead" title="Below the first number a slot is marked ▼, below the second ▼▼. ` +
+    `Both are one and two standard deviations below what that slot gives across the whole league ` +
+    `over the weeks on screen.">Low below (1 SD / 2 SD):</span>${barText}`;
+}
+
+// ---------------------------------------- naming the man under the pointer
+//
+// Every cell in this panel is a bare number, and the row it sits in is a SLOT,
+// so unlike the old layout there is nowhere at all that a name appears. Tim's
+// own answer, and it is the right one: "if you hover over a number, it will
+// show you the name of the selected player at the top of the box, and
+// additionally, all other numbers for all weeks will be highlighted".
+//
+// Two rules it has to keep:
+//
+//   - NOTHING REACHABLE BY HOVER ALONE (HANDOFF). The same line is written on a
+//     tap and on keyboard focus, and the cells also carry the shared player
+//     card, which opens as a sheet under a finger — so a thumb gets the name,
+//     the man's whole season, and the link the tap preempted.
+//   - THE LINE MUST NOT REFLOW THE TABLE. It is always in the DOM and its
+//     height is reserved in CSS, so naming somebody moves nothing.
+
+/** playerId (as a string) -> "Name · POS · NFL", rebuilt with the rows. */
+const seasonWho = new Map();
+
+/** Paint whatever `state.seasonLit` says, over the cells that are there now. */
+function paintLit() {
+  const table = $('seasonTable');
+  if (!table || typeof table.querySelectorAll !== 'function') return;
+  for (const td of table.querySelectorAll('td.lit')) td.classList.remove('lit');
+
+  const pid = state.seasonLit;
+  const line = $('seasonPick');
+  if (pid === null || !seasonWho.has(pid)) {
+    if (line) {
+      line.innerHTML = '<span class="pick-idle">Hover or tap a number to name the player.</span>';
+    }
+    return;
+  }
+
+  const mine = [...table.querySelectorAll(`td[data-pid="${pid}"]`)];
+  for (const td of mine) td.classList.add('lit');
+  if (!line) return;
+  const slots = [...new Set(mine.map((td) => td.parentElement.getAttribute('data-slot')))]
+    .filter(Boolean);
+  line.innerHTML =
+    `<strong>${esc(seasonWho.get(pid))}</strong> — in the lineup ` +
+    `${plural(mine.length, 'week')}${slots.length ? `, at ${andList(slots.map(esc))}` : ''}.`;
+}
+
+/** Light one man across the whole grid, or clear it. */
+function lightPlayer(pid) {
+  const next = pid === null || pid === undefined || pid === '' ? null : String(pid);
+  if (state.seasonLit === next) return;
+  state.seasonLit = next;
+  paintLit();
 }
 
 /**
@@ -2493,10 +2921,54 @@ for (const grid of GRIDS) {
 
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
 
-// The season grid opens in lineup order — starters first, bench after — so it
-// reads as a squad rather than as a leaderboard. Avg is one click away for
-// anyone who wants the other question answered.
+// The season grid opens in LINEUP ORDER — QB, RB1, RB2, … — so it reads as a
+// lineup sheet rather than as a leaderboard. Avg is one click away for anyone
+// who wants the other question answered, and the totals band is a tbody of one
+// row, which sortable.js leaves alone, so it stays pinned under the last slot.
 enableSort($('seasonTable'), { defaultIndex: 0, defaultAsc: true });
+
+// The season panel's own card, on the same terms as the grids': a hover on a
+// desktop, a sheet under a finger. It is what answers "who is that number" with
+// a thumb, since nothing in this table is a name.
+wireTips($('seasonTable'));
+
+// NAMING THE MAN, AND LIGHTING HIS OTHER WEEKS.
+//
+// Registered on the table itself, alongside wireTips, and deliberately on the
+// same four events plus the click: the card's own click handler calls
+// stopPropagation on a coarse pointer, which stops the event reaching the
+// DOCUMENT but not another listener on this same element — so a tap opens the
+// sheet AND names him here, which is the pair Tim asked for.
+//
+// A mouse click follows the link and leaves the page, so the highlight it sets
+// on the way out costs nothing and is simply never seen.
+{
+  const season = $('seasonTable');
+  const cellOf = (e) => (e.target.closest ? e.target.closest('td[data-pid]') : null);
+  const light = (e) => {
+    const td = cellOf(e);
+    if (td) lightPlayer(td.getAttribute('data-pid'));
+  };
+  season.addEventListener('mouseover', light);
+  season.addEventListener('focusin', light);
+  season.addEventListener('click', light);
+  const leave = (e) => {
+    const td = cellOf(e);
+    if (!td) return;
+    // Moving onto the link INSIDE the same cell is not a leave, and treating it
+    // as one is what makes a highlight flicker. Same rule the card follows.
+    if (e.relatedTarget && td.contains(e.relatedTarget)) return;
+    lightPlayer(null);
+  };
+  season.addEventListener('mouseout', leave);
+  season.addEventListener('focusout', leave);
+}
+
+// Escape clears it, the same key that closes the card — so one press puts the
+// panel back to rest however it was opened.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') lightPlayer(null);
+});
 
 // "Who to start" opens on Depth — RB1, RB2, RB3 — because a depth chart read
 // out of order is not a depth chart. Ascending, so the starter is at the top.

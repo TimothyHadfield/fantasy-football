@@ -41,6 +41,7 @@ const SUITES = [
   ['test-pages-render.mjs', 'every page boots its real modules against its real HTML'],
   ['test-home.mjs', 'the home page and the debug page, pre-kickoff included'],
   ['stats-weeks.mjs', 'the stats page at 1/2/3/5/13 weeks of season'],
+  ['stats-order.mjs', 'the stats page’s panels, in the order Tim asked for'],
   ['opp-check.mjs', 'opponent strength on the stats page'],
   ['fc-test.mjs', 'the schedule page forecast and simulation panels'],
   ['test-capture.mjs', 'the weekly reading: identical from the schedule page and the bar, refusals, status line'],

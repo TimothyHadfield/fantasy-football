@@ -1,12 +1,21 @@
-// The Trade page: a depth map, a search for swaps that help both squads, and —
-// when you ask for it — the same question priced across every remaining week.
+// The Trade page: a search for swaps that help both squads, the best set of
+// them to make at once, and the depth map the two are built on — plus, when you
+// ask for it, the same question priced across every remaining week.
 //
-// Four panels, and they are four halves of one question. The depth map says WHO
-// to talk to — read down a column and find the manager whose sign is the
-// opposite of yours. The finder says WHAT to offer him. Clicking an offer opens
-// the deal week by week, which is the only place the real shape of it shows. And
-// the combo section says which of those offers can all be made at once, because
-// a player can only be traded once and their gains do not add up.
+// Four panels, and they are four halves of one question. THEY ARE IN ORDER OF
+// USEFULNESS, top to bottom (Tim, 2026-09-17), which is not the order they are
+// computed in:
+//
+//   1. the FINDER — what to offer, and to whom. The answer somebody came for.
+//   2. the BEST COMBO — which of those offers can all be made at once, because
+//      a player can only be traded once and their gains do not add up.
+//   3. the DEPTH MAP — who is deep where. The working behind both of the above:
+//      read down a column and find the manager whose sign is the opposite of
+//      yours. It used to be first, because it is what the engine computes
+//      first, which is a fact about the code and not about the reader.
+//
+// Clicking any offer opens the deal week by week in a pop-up, which is the only
+// place the real shape of it shows.
 //
 // ---------------------------------------------------------------------------
 // WHAT THIS PAGE COSTS, which is the one thing it must never understate
@@ -577,32 +586,45 @@ async function buyMissingWeeks(list = null) {
 
 // --------------------------------------------------------------- the cost line
 
-function renderCost() {
+/**
+ * What the weekly-measure button says, and whether it can be pressed.
+ *
+ * A FUNCTION OF STATE, not of the DOM, and that is the point of it. The combo
+ * panel quotes this button by name — "Press <the button> at the top" — and it
+ * used to do that by reading `$('loadWeeks').textContent` back off the page,
+ * which only ever gave the right answer because `renderCost()` happened to run
+ * earlier in `paint()` than `renderCombo()` did. That is a panel working
+ * because of the order it is painted in, and the panels have just been
+ * reordered; one shared derivation is the fix rather than a comment asking the
+ * next person not to move anything.
+ */
+function weeksButton() {
   const span = weeklySpan();
-  const missing = missingWeeks();
-  const btn = $('loadWeeks');
   const ready = weeklyReady();
   const showing = basis() === 'weeks';
 
-  // ------------------------------------------------------------- the button
-  if (!span.length) {
-    btn.disabled = true;
-    btn.textContent = 'No remaining weeks to price';
-  } else if (weekly.loading) {
-    btn.disabled = true;
-    btn.textContent = `Reading ${weekRange(span)}…`;
-  } else if (ready && showing) {
-    btn.disabled = true;
-    btn.textContent = `${weekRange(span)} priced`;
-  } else if (ready) {
-    btn.disabled = false;
-    btn.textContent = `Show ${weekRange(span)} — already loaded, no requests`;
-  } else {
-    btn.disabled = false;
-    btn.textContent = state.isDemo
-      ? `Price ${weekRange(span)} — generated, no requests`
-      : `Price ${weekRange(span)} — ${plural(missing.length, 'request')}`;
+  if (!span.length) return { label: 'No remaining weeks to price', disabled: true };
+  if (weekly.loading) return { label: `Reading ${weekRange(span)}…`, disabled: true };
+  if (ready && showing) return { label: `${weekRange(span)} priced`, disabled: true };
+  if (ready) {
+    return { label: `Show ${weekRange(span)} — already loaded, no requests`, disabled: false };
   }
+  return {
+    label: state.isDemo
+      ? `Price ${weekRange(span)} — generated, no requests`
+      : `Price ${weekRange(span)} — ${plural(missingWeeks().length, 'request')}`,
+    disabled: false,
+  };
+}
+
+function renderCost() {
+  const span = weeklySpan();
+  const btn = $('loadWeeks');
+
+  // ------------------------------------------------------------- the button
+  const face = weeksButton();
+  btn.disabled = face.disabled;
+  btn.textContent = face.label;
 
   // -------------------------------------------------- what has been spent
   const failed = [...weekly.failed].sort((a, b) => a - b);
@@ -1042,14 +1064,14 @@ function renderDepthNote(map) {
         `fact about the fixture list, not about him, and counting it would price him on the weeks ` +
         `he is off rather than the weeks he plays. Only his real bye week counts as one: ESPN also ` +
         `returns 0.00 for a man it has ruled out, and that zero stays in his average. ` +
-        `The panels below are per week too, but a deal’s ` +
+        `The panels above are per week too, but a deal’s ` +
         `gain is spread over every week in the span, byes and all, so a man’s figure here is ` +
         `deliberately not the same arithmetic.` +
         `<br><br>` +
         `<strong>Lineup</strong> is what those averages would field. Picking each week separately ` +
         `always beats it, and the gap between the two is what depth is worth: a squad whose men ` +
         `swing about has a higher week-by-week total than its averages suggest, and a squad of ` +
-        `metronomes has none. That is why the deals below are priced week by week and this table ` +
+        `metronomes has none. That is why the deals above are priced week by week and this table ` +
         `is not.` +
         `<br><br>`
       : '') +
@@ -1080,7 +1102,7 @@ function renderDepthNote(map) {
       // trade on history is the thing the weekly measure exists to stop.
       ? `On this basis it is priced properly: a manager starts whichever of his men is highest ` +
         `<em>that week</em>, so a fourth good quarterback adds nothing once three of them already ` +
-        `put an 18 in the lineup most weeks — which is why an offer below can be worth little ` +
+        `put an 18 in the lineup most weeks — which is why an offer above can be worth little ` +
         `even where this table says the other manager is thin. Click any offer to see it week by ` +
         `week; those rows and this table are the same projections, so they cannot disagree.`
       : `On a single scalar per man it cannot be priced at all — only one quarterback can ever ` +
@@ -1104,7 +1126,14 @@ function renderDepthNote(map) {
 // ----------------------------------------------------------- the trade finder
 
 /**
- * What the deal does to your starting lineup, in names.
+ * What the deal does to your starting lineup, in names. THE POP-UP ONLY.
+ *
+ * It used to sit on every row of the finder as well, and Tim had it removed
+ * (2026-09-17): "because we're building this new display ... that does the same
+ * thing but better, lets remove this". On a row it was two wrapped lines in two
+ * strong colours that mostly repeated the names already printed in the You send
+ * and You get columns beside it. The week-by-week pop-up is where the before
+ * and after belong, so this is drawn there and nowhere else.
  *
  * The two bases mean genuinely different things by this list and it must not
  * pretend otherwise. On a scalar measure there is ONE lineup before and one
@@ -1116,25 +1145,49 @@ function renderDepthNote(map) {
  *
  * What survives both readings is the property worth having: in minus out is
  * exactly the gain.
+ *
+ * THE ONE FACT THE COLUMNS CANNOT SAY is which of these men are HIS OWN. Both
+ * lists mix the traded players — already named twice over in the two package
+ * columns — with the men of his that the deal quietly promotes or benches, and
+ * the second kind is the whole reason a manager reads this at all: a receiver
+ * arriving means one of his own loses his place, and that man is named nowhere
+ * else on the page. So every entry that was not in the trade is tagged "yours",
+ * with the word as well as a colour (HANDOFF: colour is never the only cue).
  */
-function churnHtml(churn) {
+function churnHtml(churn, offer) {
   if (!churn) return '';
   const weeks = basis() === 'weeks';
+
+  // Who was in the deal, so that everybody else is one of his own. By ESPN's id
+  // rather than by name: the id is the identity everywhere else on this site.
+  const sides = offer ? [].concat(offer.send || [], offer.receive || []) : [];
+  const traded = new Set(sides.map((p) => String(p.playerId)));
+  const mine = (s) => !traded.has(String(s.playerId));
 
   // The D/ST rule again: his position is already in his name. Written as plain
   // text rather than through `posTag` because this line is a sentence, not a
   // row of tagged cells.
   const pos = (s) => (s.position === 'DST' ? '' : ` ${esc(s.position)}`);
 
-  const one = (s) => {
-    if (!weeks) return `<b>${esc(s.name)}</b>${pos(s)} ${fmt(s.value)}`;
-    const when = Number.isFinite(s.weeks) ? ` over ${plural(s.weeks, 'week')}` : '';
-    const how = s.wasStarting && s.nowStarting ? ' (already starting)' : '';
-    return `<b>${esc(s.name)}</b>${pos(s)} ${fmt(s.value)}${when}${how}`;
+  const tag = (s, dir) => {
+    if (!mine(s)) {
+      return weeks && s.wasStarting && s.nowStarting ? ' (already starting)' : '';
+    }
+    if (weeks && s.wasStarting && s.nowStarting) {
+      return dir === 'in' ? ' <span class="own">(yours, more weeks)</span>'
+        : ' <span class="own">(yours, fewer weeks)</span>';
+    }
+    return dir === 'in' ? ' <span class="own">(yours, promoted)</span>'
+      : ' <span class="own">(yours, benched)</span>';
+  };
+
+  const one = (dir) => (s) => {
+    const when = weeks && Number.isFinite(s.weeks) ? ` over ${plural(s.weeks, 'week')}` : '';
+    return `<b>${esc(s.name)}</b>${pos(s)} ${fmt(s.value)}${when}${tag(s, dir)}`;
   };
 
   const line = (list, cls, word) =>
-    list.length ? `<span class="${cls}">${word} ${list.map(one).join(', ')}</span>` : '';
+    list.length ? `<span class="${cls}">${word} ${list.map(one(cls)).join(', ')}</span>` : '';
 
   const parts = [
     line(churn.in, 'in', weeks ? 'starts more:' : 'starts:'),
@@ -1143,10 +1196,20 @@ function churnHtml(churn) {
   return parts.length ? `<div class="churn">${parts.join('<br>')}</div>` : '';
 }
 
+/**
+ * The package shape, in the only words that need no explaining.
+ *
+ * Tim, 2026-09-17: "I also don't understand what the straight swap, consolidate,
+ * or any shape trade categories means." They were "Straight swap", "You
+ * consolidate" and "You add depth" — each of them a description of the CONSEQUENCE
+ * of a shape rather than the shape itself. A count each way is the shape, it is
+ * shorter, and nobody has to be taught it; the consequence is said once, in the
+ * hint under the control, where an explanation of a control belongs.
+ */
 const SHAPE_LABEL = {
-  even: 'Straight swap',
-  consolidate: 'You consolidate',
-  depth: 'You add depth',
+  even: '1 for 1',
+  consolidate: '2 for 1',
+  depth: '1 for 2',
 };
 
 /**
@@ -1498,7 +1561,10 @@ function offerRow(offer, i, key) {
       `you receive ${plural(offer.receive.length, 'player')}.">` +
       `${esc(SHAPE_LABEL[offer.kind])}</span>${open}</td>` +
     `<td class="left pkg">${send}</td>` +
-    `<td class="left pkg">${receive}${churnHtml(offer.yourChurn)}</td>` +
+    // NO CHURN LINE HERE. It printed two coloured lists under this column and
+    // they mostly repeated the two columns either side of them; the week-by-week
+    // pop-up carries the before and after now. Tim, 2026-09-17.
+    `<td class="left pkg">${receive}</td>` +
     `<td class="before-after" data-v="${offer.myAfter}">` +
       (weeks && Number.isFinite(offer.myBefore) && Number.isFinite(offer.myAfter)
         ? weeklyLineupHtml(offer.myBefore, offer.myAfter)
@@ -1592,7 +1658,7 @@ function emptyMessage() {
       ? 'Try <em>Any shape</em> and every manager before reading much into that. '
       : 'That is a real answer rather than a gap: it needs two managers who are weak ' +
         'in opposite places, and this league may simply not have a pair. ') +
-    `The depth map above shows where the league is level and where it is not.`
+    `The depth map below shows where the league is level and where it is not.`
   );
 }
 
@@ -1603,9 +1669,9 @@ function renderFinderNote() {
   const shown = state.rows.length;
   const kindNote =
     state.kind === 'all'
-      ? 'straight swaps, two-for-ones and one-for-twos'
+      ? 'one-for-ones, two-for-ones and one-for-twos'
       : state.kind === 'even'
-        ? 'straight one-for-one swaps only'
+        ? 'one-for-one swaps only'
         : state.kind === 'consolidate'
           ? 'packages where you send two and receive one'
           : 'packages where you send one and receive two';
@@ -1897,7 +1963,9 @@ function renderDeal() {
   const me = state.data.teams.find((t) => t.id === state.myTeamId);
   $('dealTitle').textContent = offer.combined
     ? `${offer.label} · ${offer.shape}`
-    : `${SHAPE_LABEL[offer.kind]} with ${offer.partner.name} · ${offer.shape}` +
+    // `offer.shape` is "1-for-1" and the label is now "1 for 1", so printing
+    // both said the same thing twice with a middle dot between them.
+    : `${SHAPE_LABEL[offer.kind]} with ${offer.partner.name}` +
       (offer.merged ? ` · ${plural(offer.mergedFrom, 'deal')} sent as one` : '');
 
   const head =
@@ -1905,7 +1973,9 @@ function renderDeal() {
     sideHtml('You send', offer.send) +
     sideHtml('You get', offer.receive) +
     `</div>` +
-    churnHtml(offer.yourChurn);
+    // The offer goes with it so the line can say which of these men are HIS —
+    // the displaced starter is the one fact neither column above carries.
+    churnHtml(offer.yourChurn, offer);
 
   // The table needs every remaining week's projections, and it no longer waits
   // for the page-wide button: opening a deal buys them (see `openDeal`). Until
@@ -2249,7 +2319,9 @@ function renderCombo() {
   if (basis() !== 'weeks') {
     body.innerHTML =
       `<p class="empty">The best combo is only priced on <strong>every remaining week</strong>. ` +
-      `Press <strong>${esc($('loadWeeks').textContent)}</strong> at the top.</p>`;
+      // The button's face from `weeksButton()`, NOT read back off the element:
+      // this panel must not need the toolbar to have been painted first.
+      `Press <strong>${esc(weeksButton().label)}</strong> at the top.</p>`;
     note.innerHTML =
       `Two trades cannot be added up honestly on a single number per man: both of them re-fill ` +
       `the same one lineup, so their gains overlap and adding them promises twice what arrives. ` +
@@ -2740,11 +2812,21 @@ function paint() {
   // not clear them would grow one entry per offer for the life of the page.
   ESPN_OFFERS.clear();
   hideTip(); // it may be pointing at an element that is about to be replaced
+  // IN PANEL ORDER — toolbar, finder, combo, depth map — and the modal last,
+  // which is the only one not in the flow of the page.
+  //
+  // The order is for READING, not for correctness: each of these is a pure
+  // function of `state` and the caches, and none of them leaves anything behind
+  // for the next. There was exactly one exception and it is gone — the combo
+  // panel used to read the weekly-measure button's label straight off the
+  // element, so it silently depended on `renderCost()` having run first. Both
+  // now call `weeksButton()`. Keep it that way: a panel that only works second
+  // is a panel that breaks the next time somebody moves one.
   renderCost();
-  renderDepth();
   renderFinder();
-  renderDeal();
   renderCombo();
+  renderDepth();
+  renderDeal();
 }
 
 function render() {

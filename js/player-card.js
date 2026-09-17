@@ -349,12 +349,20 @@ export function tipAttr(key) {
  * Every registered run on the page is dead — call this when the markup
  * carrying the keys is about to be replaced.
  *
+ * With a `prefix`, only that container's are: a page with more than one table
+ * of cards repaints them separately, and clearing the lot from inside one
+ * renderer would leave every OTHER table's `data-tip` pointing at nothing —
+ * markup that looks perfectly correct and simply stops opening a card. The
+ * analysis page hit exactly that when its season panel grew cards of its own.
+ *
  * The counter is NOT wound back. It costs nothing to let it climb, and a key
  * that never repeats cannot collide with one still sitting in a container that
- * was not re-rendered — which matters now that a page can have more than one.
+ * was not re-rendered.
  */
-export function clearRuns() {
-  RUNS.clear();
+export function clearRuns(prefix = null) {
+  if (prefix === null) { RUNS.clear(); return; }
+  const head = `${prefix}:`;
+  for (const key of [...RUNS.keys()]) if (key.startsWith(head)) RUNS.delete(key);
 }
 
 let cardEl = null;

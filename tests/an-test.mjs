@@ -87,9 +87,16 @@ const BYES_SEASON = dataUrl(`
   }
 
   const ZERO = new Set((process.env.AN_OUT_ZERO || '').split(',').filter(Boolean).map(Number));
+  // AN_DST_ZERO does the same to Player 07, the D/ST — and he matters because
+  // he is the ONLY man on the roster eligible for that slot, so a zero of his
+  // is the one that must actually reach the season panel's D/ST row. Every
+  // other position has cover, and cover is exactly what the panel shows you.
+  const DZERO = new Set((process.env.AN_DST_ZERO || '').split(',').filter(Boolean).map(Number));
   const doctor = (teams, week) => teams.map((t) => {
     const players = t.players.map((p) =>
-      (p.name.endsWith('Player 02') && ZERO.has(week) ? { ...p, projected: 0 } : p));
+      ((p.name.endsWith('Player 02') && ZERO.has(week)) ||
+       (p.name.endsWith('Player 07') && DZERO.has(week))
+        ? { ...p, projected: 0 } : p));
     return { ...t, players, starters: players.filter((p) => p.started), bench: players.filter((p) => !p.started) };
   });
   export async function fetchWeekRosters(week) {
@@ -182,16 +189,22 @@ const SCENARIOS = {
     after: async ({ document, window }) => {
       const season = await import('./an-stub-season.mjs');
       const table = document.getElementById('seasonTable');
+      // The SLOT rows only — the totals band is a tbody of its own and would
+      // otherwise land in the middle of every "is this column sorted" check.
       const snap = () => ({
         cols: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
-        rows: [...table.querySelectorAll('tbody tr')].map((tr) => ({
+        rows: [...table.querySelectorAll('#seasonSlots tr')].map((tr) => ({
           cls: tr.getAttribute('class') || '',
+          slot: tr.children[0].textContent.trim(),
           cells: [...tr.children].map((td) => ({
             text: td.textContent.trim(),
             v: td.getAttribute('data-v'),
             cls: td.getAttribute('class') || '',
+            pid: td.getAttribute('data-pid'),
           })),
         })),
+        total8: (document.querySelector('#seasonTotals tr') || { children: [] })
+          .children[1 + 8]?.getAttribute('data-v') ?? null,
         title: document.getElementById('seasonTitle').textContent.trim(),
       });
       const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
@@ -216,18 +229,19 @@ const SCENARIOS = {
       out.fetchesAfterGridClick = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
 
       // --- sorting week columns ------------------------------------------------
+      // Slot, Avg, then one column per week — so week N is header N + 1.
       const ths = [...table.querySelectorAll('thead th')];
-      click(ths[11]);              // week 7 — one player has no number
+      click(ths[8]);               // week 7 — one man has no number that week
       out.wk7desc = snap();
-      click(ths[11]);
+      click(ths[8]);
       out.wk7asc = snap();
-      click(ths[10]);              // week 6 — one player is on bye
+      click(ths[7]);               // week 6 — one man is on bye
       out.wk6desc = snap();
-      click(ths[10]);
+      click(ths[7]);
       out.wk6asc = snap();
-      click(ths[5]);               // week 1 — one player is not on the roster
+      click(ths[2]);               // week 1 — the last bench man is not signed
       out.wk1desc = snap();
-      click(ths[5]);
+      click(ths[2]);
       out.wk1asc = snap();
       out.fetchesAfterSort = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
 
@@ -399,11 +413,16 @@ const SCENARIOS = {
             s.querySelector('.k').textContent.trim(),
             s.querySelector('.v').textContent.trim(),
           ]),
-          // The season panel shares the lineup, so it has to move with it.
-          season: [...document.querySelectorAll('#seasonTable tbody tr')].map((tr) =>
-            `${tr.children[1].textContent.trim().replace(/\s+(OUT|IR|Q|D|SUSP|DTD)$/, '')}` +
-            `=${tr.children[0].textContent.trim()}` +
-            `${/\bbench\b/.test(tr.getAttribute('class') || '') ? 'B' : 'S'}`),
+          // The season panel does NOT share the what-if: it answers what the
+          // numbers say you would be projected, and a hand-moved lineup folded
+          // into that would make an experiment look like advice. So it is
+          // captured to prove it does not move, not to prove it does.
+          season: [...document.querySelectorAll('#seasonSlots tr')].map((tr) =>
+            `${tr.children[0].textContent.trim()}=` +
+            `${tr.children[1 + 8].getAttribute('data-pid')}:` +
+            `${tr.children[1 + 8].getAttribute('data-v')}`),
+          seasonTotal: (document.querySelector('#seasonTotals tr') || { children: [] })
+            .children[1 + 8]?.getAttribute('data-v') ?? null,
         };
       };
 
@@ -540,12 +559,115 @@ const SCENARIOS = {
     },
   },
 
+  // ---- "Season by week", rebuilt as lineup slots (Tim, 2026-09-17) ---------
+  //
+  // Every claim this scenario makes is re-derived in `check` from
+  // demo-rosters.js through forecast.js's own optimalLineup, never read back
+  // off the page — including the red thresholds, which are recomputed over all
+  // ten squads. A panel that filled the wrong man into WR2, or coloured the
+  // wrong cell, would otherwise agree with itself all day.
+  'season-slots': {
+    label: '(p) season by week: the slots, the band, the red marks, the highlight',
+    stub: false,
+    prefs: { 'analysis.source': 'demo' },
+    after: async ({ document, window }) => {
+      const $ = (id) => document.getElementById(id);
+      const table = $('seasonTable');
+      const t = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+      const out = {};
+
+      out.team = t($('rosterTitle')).replace(/^Roster detail\s*·\s*/, '');
+      out.rows = [...document.querySelectorAll('#seasonSlots tr')].map((tr) => ({
+        slot: tr.children[0].textContent.trim(),
+        avg: tr.children[1].getAttribute('data-v'),
+        cells: [...tr.children].slice(2).map((td) => ({
+          text: td.textContent.trim(),
+          v: td.getAttribute('data-v'),
+          pid: td.getAttribute('data-pid'),
+          cls: td.getAttribute('class') || '',
+        })),
+      }));
+      out.totals = [...document.querySelector('#seasonTotals tr').children]
+        .slice(2).map((td) => td.getAttribute('data-v'));
+      out.bars = t($('seasonBars'));
+      out.idle = t($('seasonPick'));
+
+      // --- the highlight: name him at the top, light every week he holds ---
+      const litOf = () => [...table.querySelectorAll('td.lit')].map((td) =>
+        `${td.parentElement.getAttribute('data-slot')}:${td.getAttribute('data-pid')}`);
+      // The man who holds the most cells, so "all his other weeks" has
+      // something to prove rather than being a single cell lighting itself.
+      const counts = new Map();
+      for (const td of table.querySelectorAll('td[data-pid]')) {
+        const id = td.getAttribute('data-pid');
+        counts.set(id, (counts.get(id) || 0) + 1);
+      }
+      const [pid, held] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+      out.pid = pid;
+      out.held = held;
+      out.allHis = [...table.querySelectorAll(`td[data-pid="${pid}"]`)].map((td) =>
+        `${td.parentElement.getAttribute('data-slot')}:${td.getAttribute('data-pid')}`);
+
+      const cell = table.querySelector(`td[data-pid="${pid}"]`);
+      cell.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+      const card = document.getElementById('tipCard');
+      out.hover = {
+        pick: t($('seasonPick')),
+        lit: litOf(),
+        card: card && !card.hidden ? t(card.querySelector('.tc-ident')) : '',
+      };
+      cell.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+      out.afterOut = { pick: t($('seasonPick')), lit: litOf().length };
+
+      // --- the keyboard gets the same thing, and Escape clears it ----------
+      const link = cell.querySelector('a.pref');
+      link.dispatchEvent(new window.Event('focusin', { bubbles: true }));
+      out.focus = { pick: t($('seasonPick')), lit: litOf().length };
+      const esc = new window.Event('keydown', { bubbles: true });
+      esc.key = 'Escape';
+      document.dispatchEvent(esc);
+      out.afterEsc = { pick: t($('seasonPick')), lit: litOf().length };
+
+      globalThis.__an = out;
+    },
+  },
+
+  // The guard on a slot with too little behind it to have a standard
+  // deviation. AN_SOLO_K leaves team 4 the only squad with a kicker and
+  // AN_FAIL_WEEKS leaves week 8 the only readable week, so the K slot has
+  // exactly ONE value in the whole league — which `stdev` refuses, and the
+  // panel must therefore leave uncoloured while every other slot is marked.
+  'thin-slot': {
+    label: '(q) a slot with too little behind it draws no colour at all',
+    stub: true,
+    env: {
+      AN_SOLO_K: '1',
+      AN_FAIL_WEEKS: '1,2,3,4,5,6,7,9,10,11,12,13,14,15,16',
+    },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const out = {};
+      out.rows = [...document.querySelectorAll('#seasonSlots tr')].map((tr) => ({
+        slot: tr.children[0].textContent.trim(),
+        wk8: {
+          text: tr.children[1 + 8].textContent.trim(),
+          v: tr.children[1 + 8].getAttribute('data-v'),
+          cls: tr.children[1 + 8].getAttribute('class') || '',
+        },
+      }));
+      out.bars = document.getElementById('seasonBars').textContent.replace(/\s+/g, ' ').trim();
+      out.note = document.getElementById('seasonNote').textContent.replace(/\s+/g, ' ').trim();
+      globalThis.__an = out;
+    },
+  },
+
   // ---- the bye rule, the opening week, the row tap, the best-lineup line ----
   'byes-known': {
     label: '(j) byes known: a bye is only the bye week; an OUT man’s zero is 0.0 OUT',
     stub: true,
     byes: true,
-    env: { AN_BYES: '{"1":6}', AN_OUT_ZERO: '8,10' },
+    env: { AN_BYES: '{"1":6}', AN_OUT_ZERO: '8,10', AN_DST_ZERO: '6,9' },
     // A saved week that has since been PLAYED (the stub's schedule has results
     // through week 7) must be ignored: the page opens on the coming week, 8.
     prefs: { 'analysis.source': 'live', 'analysis.week': 3 },
@@ -566,13 +688,25 @@ const SCENARIOS = {
       out.weekly02 = cellInfo(w2);
       out.weeklyLegend = document.getElementById('weeklyLegend').textContent.replace(/\s+/g, ' ');
 
-      const seasonRow = (name) => [...document.querySelectorAll('#seasonTable tbody tr')]
-        .find((tr) => tr.children[1].textContent.includes(name));
-      const wk = (tr, w) => cellInfo(tr && tr.children[4 + w]);
-      out.s03w6 = wk(seasonRow('T4 Player 03'), 6);
-      out.s02w8 = wk(seasonRow('T4 Player 02'), 8);
-      out.s02w10 = wk(seasonRow('T4 Player 02'), 10);
-      out.s02w9 = wk(seasonRow('T4 Player 02'), 9);
+      // The season panel's rows are SLOTS, so a zero only reaches one when
+      // nobody better can fill it. Player 07 is the only D/ST on the roster,
+      // which is why AN_DST_ZERO is what puts a bye and a plain zero on screen.
+      const slotRow = (key) => [...document.querySelectorAll('#seasonSlots tr')]
+        .find((tr) => tr.children[0].textContent.trim() === key);
+      // A filled season cell carries NO `title` — it draws the player card, and
+      // a title beside one would have the browser put a second tooltip on top.
+      // The words are on the link's aria-label instead, so that is what is read.
+      const wk = (tr, w) => {
+        const td = tr && tr.children[1 + w];
+        const info = cellInfo(td);
+        const a = td && td.querySelector('a.pref');
+        if (info) info.label = (a && a.getAttribute('aria-label')) || '';
+        return info;
+      };
+      out.dstW6 = wk(slotRow('D/ST'), 6);     // his bye week
+      out.dstW9 = wk(slotRow('D/ST'), 9);     // not his bye: a real zero
+      out.dstW8 = wk(slotRow('D/ST'), 8);     // untouched
+      out.rb2w8 = wk(slotRow('RB2'), 8);      // the ruled-out back is replaced
       out.seasonLegend = document.getElementById('seasonLegend').textContent.replace(/\s+/g, ' ');
 
       // The card for the OUT man, hovered in the week grid.
@@ -622,16 +756,16 @@ const SCENARIOS = {
     label: '(k) byes known and not week 6: that zero is a real 0.0, and a future saved week is kept',
     stub: true,
     byes: true,
-    env: { AN_BYES: '{"1":11}' },
+    env: { AN_BYES: '{"1":11}', AN_DST_ZERO: '6' },
     prefs: { 'analysis.source': 'live', 'analysis.week': 11 },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
       const out = {};
       out.title = document.getElementById('weeklyTitle').textContent.trim();
-      const row = [...document.querySelectorAll('#seasonTable tbody tr')]
-        .find((tr) => tr.children[1].textContent.includes('T4 Player 03'));
-      const td = row && row.children[4 + 6];
-      out.s03w6 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '', v: td.getAttribute('data-v') };
+      const row = [...document.querySelectorAll('#seasonSlots tr')]
+        .find((tr) => tr.children[0].textContent.trim() === 'D/ST');
+      const td = row && row.children[1 + 6];
+      out.dstW6 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '', v: td.getAttribute('data-v') };
       out.anyBye = [...document.querySelectorAll('#seasonTable tbody td, #startersTable tbody td')]
         .some((c) => c.textContent.trim() === 'Bye');
       out.seasonLegend = document.getElementById('seasonLegend').textContent.replace(/\s+/g, ' ');
@@ -643,16 +777,16 @@ const SCENARIOS = {
     label: '(l) the bye read fails: every live zero is a bye, exactly as before',
     stub: true,
     byes: true,
-    env: { AN_BYES: 'throw', AN_OUT_ZERO: '8' },
+    env: { AN_BYES: 'throw', AN_OUT_ZERO: '8', AN_DST_ZERO: '9' },
     prefs: { 'analysis.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
       const out = {};
       const td = gridTd(document, 'weekly', 4, 2);
       out.weekly02 = td && { text: td.textContent.trim(), cls: td.getAttribute('class') || '' };
-      const row = [...document.querySelectorAll('#seasonTable tbody tr')]
-        .find((tr) => tr.children[1].textContent.includes('T4 Player 03'));
-      out.s03w6 = row && row.children[4 + 6].textContent.trim();
+      const row = [...document.querySelectorAll('#seasonSlots tr')]
+        .find((tr) => tr.children[0].textContent.trim() === 'D/ST');
+      out.dstW9 = row && row.children[1 + 9].textContent.trim();
       globalThis.__an = out;
     },
   },
@@ -871,6 +1005,8 @@ function bodyRows(table) {
         text: txt(td),
         v: td.getAttribute('data-v'),
         cls: td.getAttribute('class') || '',
+        // Which man the number stands for, in the season panel's slot rows.
+        pid: td.getAttribute('data-pid'),
       })),
     }));
 }
@@ -922,7 +1058,26 @@ function hoverCard(d, window, td) {
   };
 }
 
-const IDENTITY = ['Slot', 'Player', 'Pos', 'NFL', 'Avg'];
+// THE SEASON PANEL'S ROWS ARE LINEUP SLOTS, NOT PLAYERS (Tim, 2026-09-17):
+// "I just want to label the positions as QB, WR1, WR2, etc. and then put the
+// player with the proj that matches that position (2nd highest WR proj in WR2,
+// etc.)". Both leagues here — the demo and the stub — start the same nine.
+const IDENTITY = ['Slot', 'Avg'];
+const SLOT_ROWS = ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'TE', 'FLEX', 'D/ST', 'K'];
+/** Which column a week's numbers are in: Slot, Avg, then one per week. */
+const weekCol = (w) => w + 1;
+
+/** The totals band under the last slot — a tbody of its own, so bodyRows skips it. */
+function totalsRow(table) {
+  const tr = table.querySelector('tbody.split tr');
+  if (!tr) return null;
+  return {
+    label: txt(tr.children[0]),
+    cells: [...tr.children].map((td) => ({
+      text: txt(td), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '',
+    })),
+  };
+}
 
 // THE WEEK RUN REACHES THE PLAYOFFS (Tim, 2026-09-17). Both leagues here —
 // the demo and the stub — are thirteen-week, ten-team seasons, so
@@ -952,83 +1107,140 @@ async function check(scenario, boot) {
   const rows = bodyRows(table);
   const rosterRows = bodyRows(roster);
 
-  // ---- shape -------------------------------------------------------------
+  // ---- shape: the rows are LINEUP SLOTS, not players ----------------------
+  const totals = totalsRow(table);
   c.ok('the panel exists with its own table', Boolean(table), 'no #seasonTable');
-  c.ok('identity columns are Slot, Player, Pos, NFL and Avg',
-    JSON.stringify(head.slice(0, 5)) === JSON.stringify(IDENTITY), JSON.stringify(head));
+  c.ok('identity columns are Slot and Avg, and nothing else',
+    JSON.stringify(head.slice(0, 2)) === JSON.stringify(IDENTITY), JSON.stringify(head));
   c.ok('nothing but week numbers after them',
-    head.length > 5 && head.slice(5).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)), JSON.stringify(head));
+    head.length > 2 && head.slice(2).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)), JSON.stringify(head));
   c.ok('one column per week of the season, thirteen of them, then the three playoff weeks',
-    JSON.stringify(head.slice(5)) === JSON.stringify(SEASON_COLS), JSON.stringify(head));
+    JSON.stringify(head.slice(2)) === JSON.stringify(SEASON_COLS), JSON.stringify(head));
+  // (team-switch deliberately leaves the table sorted by a week column, so
+  // there the claim is about the SET of slots rather than their order.)
+  c.ok('THE ROWS ARE THIS LEAGUE’S STARTING SLOTS, IN LINEUP ORDER',
+    scenario === 'team-switch'
+      ? JSON.stringify(rows.map((r) => r.cells[0].text).slice().sort()) ===
+        JSON.stringify(SLOT_ROWS.slice().sort())
+      : JSON.stringify(rows.map((r) => r.cells[0].text)) === JSON.stringify(SLOT_ROWS),
+    JSON.stringify(rows.map((r) => r.cells[0].text)));
+  // A name still reaches a screen reader through the link's aria-label, which
+  // is the point: what is gone is the NAME COLUMN, not the identification.
+  c.ok('and not one player is named in anything the table DRAWS',
+    !/Player \d\d/.test(table.textContent),
+    (table.textContent.match(/Player \d\d/g) || []).slice(0, 2).join(' '));
+  c.ok('but every filled cell still says who it is, to a screen reader',
+    (() => {
+      const links = [...table.querySelectorAll('tbody td[data-pid] a.pref')];
+      return links.length > 0 && links.every((a) =>
+        /^.+ (is this squad’s|fills) [A-Z/]+\d? in week \d+/
+          .test(a.getAttribute('aria-label') || ''));
+    })(),
+    [...table.querySelectorAll('tbody td[data-pid] a.pref')][0]?.getAttribute('aria-label'));
 
   // ---- the playoff line ----------------------------------------------------
   {
     const ths = [...table.querySelectorAll('thead th')];
     const lined = ths.map((th, i) => (isPo(th.getAttribute('class')) ? i : -1)).filter((i) => i >= 0);
-    const col = 5 + REGULAR_WEEKS.length;
+    const col = weekCol(PLAYOFF_WEEKS[0]);
     c.ok('SEASON GRID: the playoff line is on week 14\u2019s header, and only there',
       lined.length === 1 && lined[0] === col, JSON.stringify(lined));
-    c.ok('SEASON GRID: and on every row\u2019s week-14 cell, and no other',
+    c.ok('SEASON GRID: and on every row\u2019s week-14 cell, the totals band included',
       rows.length > 0 && rows.every((r) => isPo(r.cells[col].cls) &&
-        r.cells.filter((x) => isPo(x.cls)).length === 1),
+        r.cells.filter((x) => isPo(x.cls)).length === 1) &&
+      Boolean(totals) && isPo(totals.cells[col].cls),
       JSON.stringify(rows[0] && rows[0].cells.map((x) => x.cls)));
     // Avg is the REGULAR season: re-derived from the rendered weeks 1–13.
     const mean = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
     const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
     let wrong = 0;
     let moved = 0;
-    for (const r of rows) {
-      const shown = r.cells[4].v === null ? null : Number(r.cells[4].v);
-      const regular = mean(nums(r.cells.slice(5, col)));
-      const all = mean(nums(r.cells.slice(5)));
+    for (const r of [...rows, ...(totals ? [totals] : [])]) {
+      const shown = r.cells[1].v === null ? null : Number(r.cells[1].v);
+      const regular = mean(nums(r.cells.slice(2, col)));
+      const all = mean(nums(r.cells.slice(2)));
       if (shown !== regular) wrong++;
       if (regular !== null && all !== null && regular !== all) moved++;
     }
-    c.ok('SEASON GRID: AVG IGNORES THE PLAYOFF WEEKS', wrong === 0, `${wrong} rows disagree`);
+    c.ok('SEASON GRID: AVG IGNORES THE PLAYOFF WEEKS, in the band as well as the slots',
+      wrong === 0, `${wrong} rows disagree`);
     if (rows.some((r) => nums(r.cells.slice(col)).length)) {
       c.ok('SEASON GRID: and the playoff weeks would have moved it, so that has teeth',
         moved > 0, String(moved));
     }
   }
-  c.ok('Avg sits immediately before the week run', head[4] === 'Avg', JSON.stringify(head));
+  c.ok('Avg sits immediately before the week run', head[1] === 'Avg', JSON.stringify(head));
   c.ok('every header is sortable',
     [...table.querySelectorAll('thead th')].every((th) => th.hasAttribute('data-sort')),
     [...table.querySelectorAll('thead th')].filter((th) => !th.hasAttribute('data-sort')).length);
   c.ok('the table lives inside a .table-scroll',
     $('seasonWrap').getAttribute('class').includes('table-scroll'), $('seasonWrap').getAttribute('class'));
-  c.ok('the player cell uses the sticky name treatment',
-    rows.length > 0 && rows.every((r) => /\bname\b/.test(r.cells[1].cls)),
-    rows[0] && rows[0].cells[1].cls);
-
-  // ---- the row set is the shown week's FULL roster ------------------------
-  const seasonNames = rows.map((r) => r.cells[1].text.replace(/\s+(OUT|IR|Q|D|SUSP|DTD)$/, ''));
-  const rosterNames = rosterRows.map((r) => r.cells[1].text);
-  c.ok('the row set matches the Roster detail panel exactly',
-    rows.length === rosterRows.length &&
-    JSON.stringify([...seasonNames].sort()) === JSON.stringify([...rosterNames].sort()),
-    `${rows.length} vs ${rosterRows.length}`);
-  c.ok('the bench is included, not just the starters',
-    rows.some((r) => /\bbench\b/.test(r.cls)) && rows.some((r) => !/\bbench\b/.test(r.cls)),
-    rows.map((r) => r.cls).join('|'));
-  // (team-switch deliberately leaves the table sorted by a week column.)
-  if (scenario !== 'team-switch') {
-    c.ok('rows open in lineup order, starters before bench',
-      (() => {
-        const flags = rows.map((r) => /\bbench\b/.test(r.cls));
-        return flags.indexOf(true) === -1 || !flags.slice(flags.indexOf(true)).includes(false);
-      })(), rows.map((r) => (/\bbench\b/.test(r.cls) ? 'B' : 'S')).join(''));
-  }
+  c.ok('the slot cell uses the sticky name treatment, so it freezes on a phone',
+    rows.length > 0 && rows.every((r) => /\bname\b/.test(r.cells[0].cls)),
+    rows[0] && rows[0].cells[0].cls);
   c.ok('the slot column sorts on lineup order, not on its label',
     rows.every((r) => /^\d+$/.test(r.cells[0].v || '')), rows[0] && rows[0].cells[0].v);
 
-  // ---- no colour highlighting --------------------------------------------
+  // ---- the totals band: the Roster detail's own band, reused --------------
+  //
+  // Tim: "below the last starter, make a starting lineup line with the added up
+  // totals of the proj every week, just like how it's displayed in the roster
+  // detail box." Same `tbody.split`, same label, and a body of one row is what
+  // sortable.js leaves alone \u2014 which is what pins it under the last slot.
+  c.ok('THE BAND IS A TBODY OF ITS OWN, so a sort cannot fold it into the slots',
+    JSON.stringify([...table.querySelectorAll('tbody')].map((b) => b.getAttribute('id'))) ===
+      JSON.stringify(['seasonSlots', 'seasonTotals']),
+    JSON.stringify([...table.querySelectorAll('tbody')].map((b) => b.getAttribute('id'))));
+  c.ok('and it is the same `split` band the Roster detail draws',
+    table.querySelector('tbody#seasonTotals').getAttribute('class') === 'split' &&
+    d.querySelector('#rosterSplit').getAttribute('class') === 'split',
+    table.querySelector('tbody#seasonTotals').getAttribute('class'));
+  c.ok('labelled the way that one is', totals && totals.label === 'Starting lineup',
+    totals && totals.label);
+  c.ok('THE BAND IS THE SLOT CELLS ADDED UP, WEEK BY WEEK',
+    (() => {
+      if (!totals) return false;
+      for (let i = 2; i < totals.cells.length; i++) {
+        const parts = rows.map((r) => r.cells[i].v).filter((v) => v !== null).map(Number);
+        const want = parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) * 10) / 10 : null;
+        const got = totals.cells[i].v === null ? null : Number(totals.cells[i].v);
+        if (want === null ? got !== null : Math.abs(got - want) > 0.051) return false;
+      }
+      return true;
+    })(), JSON.stringify(totals && totals.cells.map((x) => x.v)));
+
+  // ---- the only colouring is the LOW mark, and it is never colour alone ----
   c.ok('no cell carries the waiver page\u2019s green class',
     d.querySelectorAll('.hot').length === 0 && !/\bhot\b/.test(d.body.innerHTML),
     d.querySelectorAll('.hot').length);
-  c.ok('no week cell is highlighted for being good',
-    rows.every((r) => r.cells.slice(5).every((td) =>
-      !/\b(hot|good|pos|neg|st-out|st-ir)\b/.test(td.cls))),
-    JSON.stringify(rows[0] && rows[0].cells.slice(5).map((x) => x.cls)));
+  c.ok('no week cell is highlighted for being GOOD \u2014 only for being low',
+    rows.every((r) => r.cells.slice(2).every((td) =>
+      !/\b(hot|good|pos|neg|st-out|st-ir|st)\b/.test(td.cls))),
+    JSON.stringify(rows[0] && rows[0].cells.slice(2).map((x) => x.cls)));
+  c.ok('every low cell carries a \u25bc as well as a colour',
+    [...table.querySelectorAll('td.lo1, td.lo2')].every((td) => td.querySelector('.lowmark')),
+    `${table.querySelectorAll('td.lo1, td.lo2').length} low cells, ` +
+    `${table.querySelectorAll('td.lo1 .lowmark, td.lo2 .lowmark').length} marked`);
+  c.ok('and the loud one is a different MARK, not just a different hue',
+    [...table.querySelectorAll('td.lo2 .lowmark')].every((s) => txt(s) === '\u25bc\u25bc') &&
+    [...table.querySelectorAll('td.lo1 .lowmark')].every((s) => txt(s) === '\u25bc'),
+    [...table.querySelectorAll('.lowmark')].map((s) => txt(s)).join('|').slice(0, 60));
+  c.ok('no cell is both levels at once',
+    table.querySelectorAll('td.lo1.lo2').length === 0,
+    `${table.querySelectorAll('td.lo1.lo2').length}`);
+  c.ok('the totals band is never marked low \u2014 it is not a slot',
+    !totals || totals.cells.every((x) => !/\blo[12]\b/.test(x.cls)),
+    JSON.stringify(totals && totals.cells.map((x) => x.cls)));
+
+  // ---- the name line: outside the table, reserved, idle until pointed at ---
+  c.ok('the name line is above the table, not inside it',
+    Boolean($('seasonPick')) && !$('seasonWrap').contains($('seasonPick')), 'no #seasonPick');
+  c.ok('and while nothing is named it says what to do with it',
+    /Hover or tap a number to name the player/.test(txt($('seasonPick'))), txt($('seasonPick')));
+  c.ok('THE THRESHOLDS THEMSELVES ARE ON SCREEN, so a coloured cell can be checked',
+    /Low below \(1 SD \/ 2 SD\)/.test(txt($('seasonBars'))) &&
+    SLOT_ROWS.every((s) => txt($('seasonBars')).includes(s)),
+    txt($('seasonBars')));
 
   // ---- player references: every name, and every number standing for one ----
   //
@@ -1109,13 +1321,26 @@ async function check(scenario, boot) {
       return linked.length > 0 &&
         linked.every((td) => td.querySelector('a.pref').textContent === td.textContent);
     })(), 'a name cell whose link does not cover it');
-  c.ok('the season grid links the name and leaves the injury pill beside it',
-    d.querySelectorAll('#seasonTable tbody td.name a.pref .inj').length === 0 &&
-    [...d.querySelectorAll('#seasonTable tbody td.name')].every((td) => {
-      const a = td.querySelector('a.pref');
-      return !a || td.textContent.startsWith(a.textContent);
-    }),
-    `${d.querySelectorAll('#seasonTable tbody td.name a.pref .inj').length} pills inside a link`);
+  // The season panel's numbers stand for a man, so each is a link \u2014 and each
+  // carries the card, which is the ONLY place his name appears now that the
+  // rows are slots. So no `title` on the cell, exactly as in the grids.
+  c.ok('every filled season cell is a link, a card and nothing else',
+    (() => {
+      const cells = [...d.querySelectorAll('#seasonTable tbody td[data-pid]')];
+      return cells.length > 0 && cells.every((td) =>
+        td.querySelector('a.pref') && td.hasAttribute('data-tip') && !td.hasAttribute('title'));
+    })(),
+    `${d.querySelectorAll('#seasonTable tbody td[data-pid]').length} filled, ` +
+    `${d.querySelectorAll('#seasonTable tbody td[data-pid][title]').length} still titled`);
+  c.ok('and the link wraps the whole cell, mark and all',
+    [...d.querySelectorAll('#seasonTable tbody td[data-pid]')]
+      .every((td) => td.querySelector('a.pref').textContent === td.textContent),
+    'a season cell whose link does not cover it');
+  c.ok('the pid on the cell is ESPN\u2019s own id, the same one the link carries',
+    [...d.querySelectorAll('#seasonTable tbody td[data-pid]')].every((td) =>
+      td.querySelector('a.pref').getAttribute('href') ===
+      `waivers.html?player=${td.getAttribute('data-pid')}`),
+    'a cell whose data-pid and href disagree');
 
   // ---- the note ----------------------------------------------------------
   c.ok('the note says these are ESPN\u2019s own per-week projections',
@@ -1125,37 +1350,46 @@ async function check(scenario, boot) {
     /Bye/.test(note) && /0\.00 ESPN returns/.test(note) && /A dash is not that/.test(note), note);
   c.ok('the note says which weeks are covered',
     /Covering weeks 1\u201313 \u2014 13 weeks this season runs to/.test(note), note);
-  c.ok('the note says the rows are the roster as of the shown week',
-    /roster as it stands in week \d+/.test(note), note);
-  c.ok('the note owns the average as ours',
-    /Avg is the mean of the weeks that carry a number and is ours, not ESPN\u2019s/.test(note), note);
-  c.ok('the note explains why nothing is highlighted',
-    /Nothing in this table is highlighted, on purpose/.test(note), note);
+  c.ok('THE NOTE SAYS THE ROWS ARE SLOTS, AND WHO FILLS ONE',
+    /Each row is a lineup slot, not a player/.test(note) &&
+    /best legal lineup/.test(note) &&
+    /WR1<\/strong> is the best receiver in that week\u2019s lineup/.test($('seasonNote').innerHTML),
+    note);
+  c.ok('and that FLEX is whoever the flex actually is',
+    /FLEX<\/strong> is whoever the flex actually is/.test($('seasonNote').innerHTML), note);
+  c.ok('the note says what the band adds up',
+    /in the band under the last slot, is those slots added up for that week/.test(note), note);
+  c.ok('THE NOTE OWNS THE RED AS A LEAGUE-WIDE STANDARD DEVIATION, not his own roster',
+    /below one standard deviation, and red .{1,3} below two/.test(note) &&
+    /every squad in the league/.test(note) &&
+    /not against your own roster/.test(note), note);
+  c.ok('and says the printed thresholds are the ones the colour is decided against',
+    /rounded to the tenth, which is exactly the number the colour is decided against/.test(note),
+    note);
+  c.ok('the note owns Avg as the regular season only',
+    /Avg<\/strong> is the mean of the regular-season columns that carry a number/
+      .test($('seasonNote').innerHTML), note);
+  c.ok('and says the roster detail\u2019s what-if is deliberately not applied here',
+    /deliberately not applied here/.test(note), note);
 
   // ---- (a) demo -----------------------------------------------------------
   if (scenario === 'demo') {
     c.ok('badge says Demo', txt($('modeBadge')) === 'Demo', txt($('modeBadge')));
     c.ok('the demo grid is fully filled in — no week left pending',
-      rows.every((r) => r.cells.slice(5).every((td) => !/\bwait\b/.test(td.cls))),
+      rows.every((r) => r.cells.slice(2).every((td) => !/\bwait\b/.test(td.cls))),
       'pending cells present');
     c.ok('no progress line in demo, because nothing is fetched',
       txt($('seasonProgress')) === '', txt($('seasonProgress')));
     c.ok('the note admits the numbers are generated',
       /generated sample rosters and generated projections/.test(note), note);
-    c.ok('every demo row has an average', rows.every((r) => r.cells[4].v !== null),
-      rows.filter((r) => r.cells[4].v === null).length);
+    c.ok('every demo slot has an average', rows.every((r) => r.cells[1].v !== null),
+      rows.filter((r) => r.cells[1].v === null).length);
     c.ok('the title names the team', /^Season by week \u00b7 .+/.test(txt($('seasonTitle'))),
       txt($('seasonTitle')));
     // The sample data means "ruled out" by a zero, not "on bye", so it must not
     // claim a bye it does not have.
     c.ok('demo never claims a bye it cannot know about',
-      rows.every((r) => r.cells.slice(5).every((td) => td.text !== 'Bye')), 'a Bye cell in demo');
-    // A demo zero is a man the sample data has ruled out, and since 2026-09-16
-    // the word says so beside the number ("0.0 OUT"), never "Bye".
-    c.ok('a demo zero is printed as the number it is, and still sorts',
-      rows.some((r) => r.cells.slice(5).some((td) =>
-        /^0\.0( (OUT|IR|SUSP))?$/.test(td.text) && td.v === '0')),
-      'no zero cell at all');
+      rows.every((r) => r.cells.slice(2).every((td) => td.text !== 'Bye')), 'a Bye cell in demo');
     c.ok('the demo note says what a zero means here',
       /in the sample data a zero only means he is ruled out/.test(note), note);
 
@@ -1221,87 +1455,163 @@ async function check(scenario, boot) {
     c.ok('the progress line clears once every week has landed',
       txt($('seasonProgress')) === '', txt($('seasonProgress')));
 
-    // every cell carries the projection the stub handed back
-    const byName = new Map(rows.map((r) =>
-      [r.cells[1].text.replace(/\s+(OUT|IR|Q|D|SUSP|DTD)$/, ''), r]));
+    // ---- THE SLOTS, RE-DERIVED FROM THE STUB ------------------------------
+    //
+    // Not read back off the page: every week's teams are rebuilt here from the
+    // stub's own raw numbers, solved with forecast.js's REAL optimalLineup, and
+    // then ranked inside each slot the way the panel claims to rank them. A
+    // panel that filled the wrong man into WR2 confidently would agree with
+    // itself all day, and this is what stops it.
+    const { optimalLineup, slotsFromCounts } = await import('../js/forecast.js');
+    const { slotCountsFromLineups } = await import('../js/projection.js');
     const teamId = 4;
-    const wrong = [];
-    for (let i = 0; i < season.SIZE; i++) {
-      if (!season.onRoster(i, 8)) continue;
-      const row = byName.get(season.playerName(teamId, i));
-      if (!row) { wrong.push(`player ${i} missing`); continue; }
-      for (let w = 1; w <= 13; w++) {
-        const td = row.cells[4 + w];
-        if (!season.onRoster(i, w)) {
-          if (td.v !== null || !/\boff\b/.test(td.cls)) wrong.push(`p${i} wk${w} want off got ${td.text}/${td.cls}`);
+    const squad = (team, week) => {
+      const out = [];
+      for (let i = 0; i < season.SIZE; i++) {
+        if (!season.onRoster(i, week)) continue;
+        out.push({
+          playerId: team * 100 + i,
+          name: season.playerName(team, i),
+          position: season.POS[i],
+          lineupSlotId: season.SLOTS[i],
+          started: season.SLOTS[i] !== 20,
+          projected: season.projFor(i, week),
+        });
+      }
+      return out;
+    };
+    const wantSlots = slotsFromCounts(slotCountsFromLineups([{ players: squad(teamId, 8) }]));
+    c.ok('the stub league starts exactly the nine slots the panel draws',
+      wantSlots.length === SLOT_ROWS.length, JSON.stringify(wantSlots));
+
+    /** slot key -> {id, v} for one team in one week, built independently. */
+    const wantFill = (team, week) => {
+      const { starters } = optimalLineup(squad(team, week), wantSlots);
+      const bySlot = new Map();
+      for (const s of starters) {
+        if (!bySlot.has(s.slotId)) bySlot.set(s.slotId, []);
+        bySlot.get(s.slotId).push(s);
+      }
+      for (const list of bySlot.values()) {
+        list.sort((a, b) => b.projected - a.projected || a.playerId - b.playerId);
+      }
+      const counts = new Map();
+      const out = new Map();
+      // The slot ids in the same lineup order the labels are in.
+      const order = [0, 2, 2, 4, 4, 6, 23, 16, 17];
+      order.forEach((slotId, i) => {
+        const n = (counts.get(slotId) || 0) + 1;
+        counts.set(slotId, n);
+        const pick = (bySlot.get(slotId) || [])[n - 1] || null;
+        out.set(SLOT_ROWS[i], pick ? { id: pick.playerId, v: Math.round(pick.projected * 10) / 10 } : null);
+      });
+      return out;
+    };
+
+    const bySlotRow = new Map(rows.map((r) => [r.cells[0].text, r]));
+    const wrongSlot = [];
+    for (let w = 1; w <= 16; w++) {
+      const want = wantFill(teamId, w);
+      for (const key of SLOT_ROWS) {
+        const td = bySlotRow.get(key).cells[weekCol(w)];
+        const e = want.get(key);
+        if (!e) {
+          if (td.v !== null) wrongSlot.push(`${key} wk${w} want empty got ${td.v}`);
           continue;
         }
-        const want = season.projFor(i, w);
-        if (want === null) {
-          if (td.v !== null || td.text !== '\u2014') wrong.push(`p${i} wk${w} want blank got ${td.text}/${td.v}`);
-        } else if (want === 0) {
-          if (td.text !== 'Bye' || td.v !== '0') wrong.push(`p${i} wk${w} want Bye got ${td.text}/${td.v}`);
-        } else if (Math.abs(Number(td.v) - want) > 0.051) {
-          wrong.push(`p${i} wk${w} want ${want} got ${td.v}`);
-        }
+        if (Math.abs(Number(td.v) - e.v) > 0.051) wrongSlot.push(`${key} wk${w} want ${e.v} got ${td.v}`);
+        if (td.pid !== String(e.id)) wrongSlot.push(`${key} wk${w} want #${e.id} got #${td.pid}`);
       }
     }
-    c.ok('every cell carries the projection ESPN gave for that week',
-      wrong.length === 0, wrong.slice(0, 5).join(' | '));
+    c.ok('EVERY SLOT, EVERY WEEK, HOLDS THE MAN THE BEST LEGAL LINEUP PUTS THERE',
+      wrongSlot.length === 0, wrongSlot.slice(0, 6).join(' | '));
 
-    // bye vs missing vs not-on-roster, all three distinguishable
-    const flat = rows.flatMap((r) => r.cells.slice(5));
-    const byes = flat.filter((td) => /\bbye\b/.test(td.cls));
-    const blanks = flat.filter((td) => /\bmuted\b/.test(td.cls) && td.text === '\u2014');
-    const offs = flat.filter((td) => /\boff\b/.test(td.cls));
-    c.ok('a bye renders as the word Bye, not 0.0',
-      byes.length === 1 && byes[0].text === 'Bye' && byes[0].v === '0', JSON.stringify(byes));
-    c.ok('a bye still sorts as the zero it is', byes[0] && byes[0].v === '0', JSON.stringify(byes));
-    c.ok('a missing number renders as a dash with no sort key',
-      blanks.length === 1 && blanks[0].v === null, JSON.stringify(blanks));
-    c.ok('a week he was not on the roster renders as its own kind of dash',
-      offs.length === 4 && offs.every((td) => td.v === null && td.text === '\u2014'),
-      `${offs.length} off cells`);
-    c.ok('the three no-number states are told apart by class, not colour',
-      new Set([byes[0].cls, blanks[0].cls, offs[0].cls]).size === 3,
-      `${byes[0].cls} / ${blanks[0].cls} / ${offs[0].cls}`);
-    c.ok('a bye is explained on hover',
-      /on bye in week 6/.test(table.innerHTML) && /not the same as having no number/.test(table.innerHTML),
-      'no bye tooltip');
-    c.ok('an off-roster cell is explained on hover',
-      /was not on this roster in week 1/.test(table.innerHTML), 'no off tooltip');
+    // The claim Tim actually made, stated on its own so it cannot pass by
+    // accident: WR1 is the best receiver of that week's lineup, WR2 the second.
+    const rankWrong = [];
+    for (let w = 1; w <= 16; w++) {
+      const want = wantFill(teamId, w);
+      const a = want.get('WR1');
+      const b = want.get('WR2');
+      if (a && b && !(a.v >= b.v)) rankWrong.push(`wk${w} WR1 ${a.v} < WR2 ${b.v}`);
+      const r1 = bySlotRow.get('RB1').cells[weekCol(w)];
+      const r2 = bySlotRow.get('RB2').cells[weekCol(w)];
+      if (r1.v !== null && r2.v !== null && Number(r1.v) < Number(r2.v)) {
+        rankWrong.push(`wk${w} RB1 ${r1.v} < RB2 ${r2.v}`);
+      }
+    }
+    c.ok('WR1 IS NEVER BELOW WR2, AND RB1 NEVER BELOW RB2 — the rank is the projection',
+      rankWrong.length === 0, rankWrong.slice(0, 4).join(' | '));
 
-    // the average
-    const avgWant = (i) => {
+    // The FLEX is whoever the solver put in the flex, not "the next best man".
+    const flexWrong = [];
+    for (let w = 1; w <= 16; w++) {
+      const want = wantFill(teamId, w);
+      const td = bySlotRow.get('FLEX').cells[weekCol(w)];
+      const e = want.get('FLEX');
+      if (!e) { if (td.v !== null) flexWrong.push(`wk${w} want empty`); continue; }
+      if (td.pid !== String(e.id)) flexWrong.push(`wk${w} want #${e.id} got #${td.pid}`);
+    }
+    c.ok('THE FLEX IS THE ONE THE OPTIMAL LINEUP CHOSE', flexWrong.length === 0,
+      flexWrong.slice(0, 4).join(' | '));
+
+    // Week 6 is the bye (stub player 03, a receiver) and week 7 the missing
+    // number (player 04). Both must simply move the lineup on rather than
+    // leaving a hole, which is the whole reason the rows are slots.
+    c.ok('A BYE DOES NOT REACH A SLOT WHEN SOMEBODY BETTER IS AVAILABLE',
+      bySlotRow.get('WR1').cells[weekCol(6)].pid !== String(teamId * 100 + 3) &&
+      bySlotRow.get('WR2').cells[weekCol(6)].pid !== String(teamId * 100 + 3) &&
+      rows.every((r) => r.cells[weekCol(6)].text !== 'Bye'),
+      JSON.stringify(rows.map((r) => r.cells[weekCol(6)].text)));
+    c.ok('and neither does a week ESPN carried no number for',
+      rows.every((r) => r.cells[weekCol(7)].v !== null) &&
+      bySlotRow.get('WR1').cells[weekCol(7)].pid !== String(teamId * 100 + 4),
+      JSON.stringify(rows.map((r) => r.cells[weekCol(7)].v)));
+
+    // the average, re-derived from the same rebuild
+    const avgBad = [];
+    for (const key of SLOT_ROWS) {
       const vals = [];
       for (let w = 1; w <= 13; w++) {
-        if (!season.onRoster(i, w)) continue;
-        const v = season.projFor(i, w);
-        if (typeof v === 'number') vals.push(v);
+        const e = wantFill(teamId, w).get(key);
+        if (e) vals.push(e.v);
       }
-      return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
-    };
-    const bad = [];
-    for (let i = 0; i < season.SIZE; i++) {
-      if (!season.onRoster(i, 8)) continue;
-      const row = byName.get(season.playerName(teamId, i));
-      if (!row) continue;
-      if (Math.abs(Number(row.cells[4].v) - avgWant(i)) > 0.06) {
-        bad.push(`p${i} want ${avgWant(i)} got ${row.cells[4].v}`);
+      const want = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+      const got = Number(bySlotRow.get(key).cells[1].v);
+      if (Math.abs(got - want) > 0.06) avgBad.push(`${key} want ${want} got ${got}`);
+    }
+    c.ok('Avg is that slot’s own regular-season mean', avgBad.length === 0,
+      avgBad.slice(0, 3).join(' | '));
+
+    // the totals band, against the same rebuild rather than against the row
+    const totalBad = [];
+    for (let w = 1; w <= 16; w++) {
+      const want = [...wantFill(teamId, w).values()].filter(Boolean)
+        .reduce((a, e) => a + e.v, 0);
+      const got = Number(totals.cells[weekCol(w)].v);
+      if (Math.abs(got - Math.round(want * 10) / 10) > 0.051) {
+        totalBad.push(`wk${w} want ${Math.round(want * 10) / 10} got ${got}`);
       }
     }
-    c.ok('Avg counts a bye as zero and leaves the unknown weeks out',
-      bad.length === 0, bad.slice(0, 3).join(' | '));
+    c.ok('THE BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL, week by week',
+      totalBad.length === 0, totalBad.slice(0, 4).join(' | '));
+    // ESPN's own lineup for this squad in week 8 IS the best one, so the two
+    // panels have to agree about the number. Where they would not, they are
+    // measuring different lineups and the comparison is not made.
+    if (/already the best one for week 8/.test(txt($('rosterBest')))) {
+      c.ok('and it matches the Roster detail’s own total for the same week',
+        totals.cells[weekCol(8)].text ===
+          d.querySelector('#rosterSplit .split-total').textContent.trim(),
+        `${totals.cells[weekCol(8)].text} vs ` +
+        `${d.querySelector('#rosterSplit .split-total').textContent.trim()}`);
+    }
 
     // the week the page is showing is marked
-    c.ok('the shown week\u2019s column is bracketed',
-      rows.every((r) => /\bnow\b/.test(r.cells[4 + 8].cls)) &&
-      rows.every((r) => r.cells.slice(5).filter((td) => /\bnow\b/.test(td.cls)).length === 1),
-      JSON.stringify(rows[0] && rows[0].cells.slice(5).map((x) => x.cls)));
-
-    // injuries are shown, quietly, as availability
-    c.ok('an injury designation is carried on the name, as elsewhere on this page',
-      /class="inj/.test(table.innerHTML) && /\bOUT\b/.test(table.innerHTML), 'no injury pill');
+    c.ok('the shown week’s column is bracketed',
+      rows.every((r) => /\bnow\b/.test(r.cells[weekCol(8)].cls)) &&
+      rows.every((r) => r.cells.slice(2).filter((td) => /\bnow\b/.test(td.cls)).length === 1) &&
+      /\bnow\b/.test(totals.cells[weekCol(8)].cls),
+      JSON.stringify(rows[0] && rows[0].cells.slice(2).map((x) => x.cls)));
 
     // ---- the links carry ESPN's OWN id, re-derived from the stub ----------
     // an-stub-season.mjs sets playerId = teamId * 100 + i, so the ids the page
@@ -1317,9 +1627,11 @@ async function check(scenario, boot) {
     c.ok('THE ROSTER DETAIL LINKS EVERY PLAYER BY THE ID ESPN GAVE',
       JSON.stringify(hrefsIn('#rosterTable tbody td.name a.pref')) === JSON.stringify(sorted(want)),
       JSON.stringify(hrefsIn('#rosterTable tbody td.name a.pref')).slice(0, 300));
-    c.ok('and the season grid links the same men, by the same ids',
-      JSON.stringify(hrefsIn('#seasonTable tbody td.name a.pref')) === JSON.stringify(sorted(want)),
-      JSON.stringify(hrefsIn('#seasonTable tbody td.name a.pref')).slice(0, 300));
+    c.ok('and every season-panel link is one of this squad’s own ESPN ids',
+      (() => {
+        const hrefs = hrefsIn('#seasonTable tbody a.pref');
+        return hrefs.length > 0 && hrefs.every((h) => want.includes(h));
+      })(), JSON.stringify(hrefsIn('#seasonTable tbody a.pref')).slice(0, 300));
 
     // the grids: one row, all nine spots and the whole bench
     const grid4 = (id) => {
@@ -1464,19 +1776,21 @@ async function check(scenario, boot) {
 
   // ---- (c) some weeks reject ----------------------------------------------
   if (scenario === 'live-partial') {
-    const colOf = (w) => 4 + w;
-    c.ok('the table still renders every player', rows.length === 15, `${rows.length}`);
-    c.ok('the refused weeks are blank for everyone',
-      rows.every((r) => r.cells[colOf(5)].text === '\u2014' && r.cells[colOf(11)].text === '\u2014'),
+    const colOf = weekCol;
+    c.ok('the table still renders every slot', rows.length === SLOT_ROWS.length, `${rows.length}`);
+    c.ok('the refused weeks are blank for every slot, the band included',
+      rows.every((r) => r.cells[colOf(5)].text === '\u2014' && r.cells[colOf(11)].text === '\u2014') &&
+      totals.cells[colOf(5)].text === '\u2014' && totals.cells[colOf(11)].text === '\u2014',
       JSON.stringify(rows[0] && rows[0].cells.map((x) => x.text)));
     c.ok('a refused week has no sort key',
       rows.every((r) => r.cells[colOf(5)].v === null && r.cells[colOf(11)].v === null), 'sort key present');
     c.ok('a refused week does not masquerade as one still loading',
       rows.every((r) => !/\bwait\b/.test(r.cells[colOf(5)].cls)), 'still says wait');
-    // Week 2 is one of the four the last bench player is not yet rostered for.
-    c.ok('the weeks that did load still carry numbers',
-      rows.filter((r) => /^\d+\.\d$/.test(r.cells[colOf(2)].text)).length === 14 &&
-      rows.filter((r) => /\boff\b/.test(r.cells[colOf(2)].cls)).length === 1,
+    c.ok('and it names nobody, so no highlight can point at a week that never loaded',
+      rows.every((r) => r.cells[colOf(5)].pid === null && r.cells[colOf(11)].pid === null),
+      'a refused cell still carries a data-pid');
+    c.ok('the weeks that did load still fill every slot',
+      rows.every((r) => /^\d+\.\d/.test(r.cells[colOf(2)].text)),
       rows.map((r) => r.cells[colOf(2)].text).join(','));
     c.ok('the note names the weeks that failed',
       /ESPN did not return weeks 5 and 11/.test(note), note);
@@ -1779,56 +2093,76 @@ async function check(scenario, boot) {
   if (scenario === 'team-switch') {
     const w = globalThis.__an || {};
     const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    const names = (snap) => snap.rows.map((r) => r.cells[1].text.replace(/\s+(OUT|IR|Q|D|SUSP|DTD)$/, ''));
+    // The rows are SLOTS, so every squad's row LABELS are identical — what
+    // changes when the team changes is which men fill them, and that is what
+    // the ids on the cells say. Reading the labels would have passed forever.
+    const pids = (snap) => snap.rows.map((r) => r.cells[weekCol(8)].pid);
 
-    c.ok('switching team repaints the grid with the other squad',
-      w.team7 && names(w.team7)[0].startsWith('T7 ') && names(w.before)[0].startsWith('T4 '),
-      `${names(w.before)[0]} -> ${names(w.team7)[0]}`);
+    c.ok('the panel keeps the same slots whatever team is shown',
+      eq(w.before.rows.map((r) => r.slot), SLOT_ROWS) &&
+      eq(w.team7.rows.map((r) => r.slot), SLOT_ROWS) &&
+      eq(w.team2.rows.map((r) => r.slot), SLOT_ROWS),
+      JSON.stringify(w.team7 && w.team7.rows.map((r) => r.slot)));
+    c.ok('SWITCHING TEAM REFILLS EVERY SLOT WITH THE OTHER SQUAD',
+      pids(w.team7).every((id) => /^7\d\d$/.test(id)) &&
+      pids(w.before).every((id) => /^4\d\d$/.test(id)),
+      `${JSON.stringify(pids(w.before))} -> ${JSON.stringify(pids(w.team7))}`);
     c.ok('switching team renames the panel',
-      w.team7 && w.team7.title === 'Season by week \u00b7 Team 7', w.team7 && w.team7.title);
+      w.team7 && w.team7.title === 'Season by week · Team 7', w.team7 && w.team7.title);
     c.ok('SWITCHING TEAM FETCHES NOTHING',
       eq(w.fetchesBefore, w.fetchesAfterSwitch),
       `${JSON.stringify(w.fetchesBefore)} -> ${JSON.stringify(w.fetchesAfterSwitch)}`);
     c.ok('every week column is still filled after the switch',
-      w.team7 && w.team7.rows.every((r) => r.cells.slice(5).every((td) => !/\bwait\b/.test(td.cls))),
+      w.team7 && w.team7.rows.every((r) => r.cells.slice(2).every((td) => !/\bwait\b/.test(td.cls))),
       'pending cells after switch');
     c.ok('the column set is unchanged by the switch',
       eq(w.before.cols, w.team7.cols), JSON.stringify(w.team7 && w.team7.cols));
 
     c.ok('clicking a row in the all-teams grid drives the same panel',
-      w.team2 && names(w.team2)[0].startsWith('T2 '), w.team2 && names(w.team2)[0]);
+      w.team2 && pids(w.team2).every((id) => /^2\d\d$/.test(id)),
+      JSON.stringify(w.team2 && pids(w.team2)));
     c.ok('the shared picker follows the grid click, so the two cannot disagree',
       w.teamSelectValue === '2', w.teamSelectValue);
     c.ok('the grid click fetches nothing either',
       eq(w.fetchesAfterSwitch, w.fetchesAfterGridClick), JSON.stringify(w.fetchesAfterGridClick));
 
+    // Slot, Avg, then the weeks — so a week's column index is weekCol(w).
     const col = (snap, i) => snap.rows.map((r) => (r.cells[i].v === null ? null : Number(r.cells[i].v)));
-    const d7 = ordered(col(w.wk7desc, 11), false);
-    const a7 = ordered(col(w.wk7asc, 11), true);
-    c.ok('sorting a week column orders it descending', d7.monotonic && d7.n === 14,
-      JSON.stringify(col(w.wk7desc, 11)));
-    c.ok('clicking again reverses it', a7.monotonic && a7.n === 14, JSON.stringify(col(w.wk7asc, 11)));
-    c.ok('the missing number sinks in BOTH directions', d7.nullsLast && a7.nullsLast,
-      `desc=${d7.nullsLast} asc=${a7.nullsLast}`);
+    const C7 = weekCol(7);
+    const C6 = weekCol(6);
+    const C1 = weekCol(1);
+    const N = SLOT_ROWS.length;
+    const d7 = ordered(col(w.wk7desc, C7), false);
+    const a7 = ordered(col(w.wk7asc, C7), true);
+    c.ok('sorting a week column orders it descending', d7.monotonic && d7.n === N,
+      JSON.stringify(col(w.wk7desc, C7)));
+    c.ok('clicking again reverses it', a7.monotonic && a7.n === N, JSON.stringify(col(w.wk7asc, C7)));
+    c.ok('SORTING NEVER MOVES THE TOTALS BAND OUT OF THE FOOT',
+      w.wk7desc.total8 === w.before.total8 && w.wk1asc.total8 === w.before.total8,
+      `${w.before.total8} / ${w.wk7desc.total8} / ${w.wk1asc.total8}`);
+    c.ok('and never sorts a slot row into the band',
+      w.wk7desc.rows.length === N && w.wk6asc.rows.length === N,
+      `${w.wk7desc.rows.length} / ${w.wk6asc.rows.length}`);
 
-    const a6 = ordered(col(w.wk6asc, 10), true);
-    c.ok('the bye sorts as the zero it is, at the bottom ascending',
-      col(w.wk6asc, 10)[0] === 0 && a6.monotonic && a6.n === 15,
-      JSON.stringify(col(w.wk6asc, 10)));
-
-    const d1 = ordered(col(w.wk1desc, 5), false);
-    const a1 = ordered(col(w.wk1asc, 5), true);
-    c.ok('a week somebody was not rostered for still sorts, and he sinks both ways',
-      d1.monotonic && a1.monotonic && d1.nullsLast && a1.nullsLast && d1.n === 14,
-      `${JSON.stringify(col(w.wk1desc, 5))} / ${JSON.stringify(col(w.wk1asc, 5))}`);
+    const a6 = ordered(col(w.wk6asc, C6), true);
+    c.ok('a week column sorts the same way whichever week it is',
+      a6.monotonic && a6.n === N, JSON.stringify(col(w.wk6asc, C6)));
+    const d1 = ordered(col(w.wk1desc, C1), false);
+    const a1 = ordered(col(w.wk1asc, C1), true);
+    c.ok('week 1 sorts both ways as well',
+      d1.monotonic && a1.monotonic && d1.n === N,
+      `${JSON.stringify(col(w.wk1desc, C1))} / ${JSON.stringify(col(w.wk1asc, C1))}`);
     c.ok('sorting fetches nothing', eq(w.fetchesAfterGridClick, w.fetchesAfterSort),
       JSON.stringify(w.fetchesAfterSort));
 
-    c.ok('changing the week changes the row set',
-      w.week3 && w.week3.rows.length === 14 && w.before.rows.length === 15,
-      `${w.week3 && w.week3.rows.length} vs ${w.before.rows.length}`);
-    c.ok('the note follows the week it is describing',
-      /roster as it stands in week 3/.test(w.note3 || ''), w.note3);
+    // THE ROW SET NO LONGER MOVES WITH THE WEEK, which is the point of the
+    // rebuild: a lineup sheet has the same slots in week 3 as in week 8. What
+    // follows the week is the bracket, and the panel above it.
+    c.ok('CHANGING THE WEEK KEEPS THE SLOTS AND MOVES THE BRACKET',
+      w.week3 && eq(w.week3.rows.map((r) => r.slot).slice().sort(), SLOT_ROWS.slice().sort()) &&
+      w.week3.rows.every((r) => /\bnow\b/.test(r.cells[weekCol(3)].cls)) &&
+      w.week3.rows.every((r) => !/\bnow\b/.test(r.cells[weekCol(8)].cls)),
+      JSON.stringify(w.week3 && w.week3.rows.map((r) => r.slot)));
     c.ok('changing the week costs one request for the week itself and no more season weeks',
       w.fetchesAfterWeek.weeks.length === w.fetchesAfterSort.weeks.length &&
       w.fetchesAfterWeek.week.length === w.fetchesAfterSort.week.length + 1,
@@ -1844,14 +2178,14 @@ async function check(scenario, boot) {
     const keysOf = (snap, i) => snap.rows.map((r) => r.cells[i].v);
     const shapesOf = (snap, i) => keysOf(snap, i).map(shape).sort();
     c.ok('A SORTED COLUMN’S SORT KEYS ARE UNCHANGED IN SHAPE',
-      eq(shapesOf(w.before, 11), shapesOf(w.wk7desc, 11)) &&
-      eq(shapesOf(w.before, 11), shapesOf(w.wk7asc, 11)) &&
-      shapesOf(w.before, 11).every((s) => s !== 'BAD'),
-      `${JSON.stringify(shapesOf(w.before, 11))} vs ${JSON.stringify(shapesOf(w.wk7desc, 11))}`);
+      eq(shapesOf(w.before, C7), shapesOf(w.wk7desc, C7)) &&
+      eq(shapesOf(w.before, C7), shapesOf(w.wk7asc, C7)) &&
+      shapesOf(w.before, C7).every((s) => s !== 'BAD'),
+      `${JSON.stringify(shapesOf(w.before, C7))} vs ${JSON.stringify(shapesOf(w.wk7desc, C7))}`);
     c.ok('and the same values, only reordered — nothing was swallowed by a link',
-      eq(keysOf(w.before, 11).slice().sort(), keysOf(w.wk7desc, 11).slice().sort()) &&
-      eq(keysOf(w.before, 10).slice().sort(), keysOf(w.wk6asc, 10).slice().sort()),
-      `${JSON.stringify(keysOf(w.before, 11))} vs ${JSON.stringify(keysOf(w.wk7desc, 11))}`);
+      eq(keysOf(w.before, C7).slice().sort(), keysOf(w.wk7desc, C7).slice().sort()) &&
+      eq(keysOf(w.before, C6).slice().sort(), keysOf(w.wk6asc, C6).slice().sort()),
+      `${JSON.stringify(keysOf(w.before, C7))} vs ${JSON.stringify(keysOf(w.wk7desc, C7))}`);
   }
 
   // ---- (f) the two all-teams grids ---------------------------------------
@@ -2061,14 +2395,32 @@ async function check(scenario, boot) {
     }
 
     const rosterCell = named('#rosterTable tbody td.name', noIdName)[0];
-    const seasonCell = named('#seasonTable tbody td.name', noIdName)[0];
     c.ok('the man with no id is still on the page, drawn as he always was',
-      Boolean(rosterCell) && Boolean(seasonCell) && txt(rosterCell) === noIdName,
-      `${rosterCell && txt(rosterCell)} / ${seasonCell && txt(seasonCell)}`);
-    c.ok('NO LINK IS EMITTED FOR HIM, in the roster detail or the season grid',
-      rosterCell && !rosterCell.querySelector('a.pref') &&
-      seasonCell && !seasonCell.querySelector('a.pref'),
-      `${rosterCell && rosterCell.innerHTML} | ${seasonCell && seasonCell.innerHTML}`);
+      Boolean(rosterCell) && txt(rosterCell) === noIdName,
+      `${rosterCell && txt(rosterCell)}`);
+    c.ok('NO LINK IS EMITTED FOR HIM in the roster detail',
+      rosterCell && !rosterCell.querySelector('a.pref'),
+      `${rosterCell && rosterCell.innerHTML}`);
+
+    // "Season by week" leaves him out of the lineups for the same reason "Who
+    // to start" does: nothing ties the man in one week to the man in the next,
+    // so the QB slot goes to the OTHER quarterback — team 4's player 11, at
+    // (20 - 11) + 8 x 0.3 = 11.4 in the week the page opened on.
+    {
+      const qb = [...d.querySelectorAll('#seasonSlots tr')]
+        .find((tr) => tr.children[0].textContent.trim() === 'QB');
+      const cell = qb && qb.children[1 + 8];
+      c.ok('THE SEASON PANEL FILLS THE QB SLOT WITH THE MAN IT CAN FOLLOW',
+        cell && cell.getAttribute('data-pid') === '411' && cell.getAttribute('data-v') === '11.4',
+        cell && `${cell.getAttribute('data-pid')} / ${cell.getAttribute('data-v')}`);
+      c.ok('and the id-less man is nowhere in it',
+        !d.querySelector('#seasonTable').innerHTML.includes(noIdName) &&
+        [...d.querySelectorAll('#seasonSlots td[data-pid]')].every((td) => td.getAttribute('data-pid')),
+        'the id-less QB reached the season panel');
+      c.ok('the note says so, and why',
+        /gave no player id for is left out of the lineups/.test(txt($('seasonNote'))),
+        txt($('seasonNote')).slice(-300));
+    }
 
     // He is every team's QB, so it is the QB column of both grids that loses
     // its link — and only that column.
@@ -2204,12 +2556,16 @@ async function check(scenario, boot) {
       eq(w.fetchesBefore, w.fetchesAfterSwap),
       `${JSON.stringify(w.fetchesBefore)} -> ${JSON.stringify(w.fetchesAfterSwap)}`);
 
-    // -- the season panel shares the lineup --------------------------------
-    c.ok('the season panel moves the same two men',
-      s.season.includes('T4 Player 09=RBS') && s.season.includes('T4 Player 02=BEB'),
-      s.season.join(' '));
-    c.ok('and had them the other way round before the swap',
-      i0.season.includes('T4 Player 09=BEB') && i0.season.includes('T4 Player 02=RBS'),
+    // -- the season panel deliberately does NOT follow the what-if ----------
+    //
+    // It shows the BEST legal lineup each week. A swap the reader made by hand
+    // is one week's experiment; folding it in would quietly turn it into the
+    // page's own advice, which is the same rule "Who to start" follows.
+    c.ok('SWAPPING A MAN DOES NOT MOVE THE SEASON PANEL',
+      eq(s.season, i0.season) && s.seasonTotal === i0.seasonTotal,
+      `${JSON.stringify(i0.season)} -> ${JSON.stringify(s.season)}`);
+    c.ok('and it was showing the best lineup all along, not ESPN\u2019s',
+      i0.season.length === 9 && i0.season.every((x) => /^[A-Z/]+\d?=4\d\d:\d/.test(x)),
       i0.season.join(' '));
 
     // -- an illegal pair ---------------------------------------------------
@@ -2267,19 +2623,27 @@ async function check(scenario, boot) {
     c.ok('no grid row carries a title (touch-titles would sheet over the tap)',
       w.rowTitles === 0, w.rowTitles);
 
-    c.ok('THE BYE WEEK IS STILL A BYE: week 6 for a team whose bye is 6',
-      w.s03w6 && w.s03w6.text === 'Bye' && /\bbye\b/.test(w.s03w6.cls) && w.s03w6.v === '0',
-      JSON.stringify(w.s03w6));
-    for (const [label, cell] of [['week 8', w.s02w8], ['week 10', w.s02w10]]) {
-      c.ok(`AN OUT MAN AT 0.00 IN ${label.toUpperCase()} IS NOT A BYE: "0.0 OUT", with its own class`,
-        cell && cell.text === '0.0 OUT' && /\bzero-out\b/.test(cell.cls) && !/\bbye\b/.test(cell.cls) &&
-        cell.v === '0' && /not his bye \(week 6\)/.test(cell.title),
-        JSON.stringify(cell));
-    }
-    c.ok('his other weeks are numbers as before',
-      w.s02w9 && /^\d+\.\d$/.test(w.s02w9.text), JSON.stringify(w.s02w9));
-    c.ok('the season key names the ruled-out zero, and the bye',
-      /ruled out, not a bye/.test(w.seasonLegend) && /Bye/.test(w.seasonLegend), w.seasonLegend);
+    // Both carry the loud low mark as well, and that is the feature: a slot
+    // with nobody to cover a bye is exactly the number Tim asked to see in red.
+    c.ok('THE BYE WEEK IS STILL A BYE in the slot nobody else can fill',
+      w.dstW6 && w.dstW6.text.startsWith('Bye') && /\bbye\b/.test(w.dstW6.cls) && w.dstW6.v === '0',
+      JSON.stringify(w.dstW6));
+    c.ok('and it is marked as the worst kind of low, since nothing covered it',
+      w.dstW6 && /\blo2\b/.test(w.dstW6.cls) && w.dstW6.text.includes('▼▼'),
+      JSON.stringify(w.dstW6));
+    c.ok('A ZERO IN ANY OTHER WEEK IS A REAL 0.0, not a bye',
+      w.dstW9 && w.dstW9.text.startsWith('0.0') && /\bzero\b/.test(w.dstW9.cls) &&
+      !/\bbye\b/.test(w.dstW9.cls) && w.dstW9.v === '0', JSON.stringify(w.dstW9));
+    c.ok('and the cell says which threshold it fell under, in words',
+      w.dstW9 && /more than two standard deviations below what a D\/ST gives across the league/
+        .test(w.dstW9.label), w.dstW9 && w.dstW9.label);
+    c.ok('and an untouched week is a number as before',
+      w.dstW8 && /^\d+\.\d/.test(w.dstW8.text), JSON.stringify(w.dstW8));
+    c.ok('A RULED-OUT STARTER IS SIMPLY REPLACED: RB2 is the bench back, not his 0.00',
+      w.rb2w8 && w.rb2w8.v === '13.4' && w.rb2w8.label.startsWith('T4 Player 09'),
+      JSON.stringify(w.rb2w8));
+    c.ok('the season key names the bye it is showing',
+      /Bye/.test(w.seasonLegend), w.seasonLegend);
 
     c.ok('the WEEK grid draws his zero the same way',
       w.weekly02 && w.weekly02.text === '0.0 OUT' && /\bzero-out\b/.test(w.weekly02.cls) &&
@@ -2315,8 +2679,8 @@ async function check(scenario, boot) {
     const w = globalThis.__an;
     c.ok('a saved week still to come is honoured', w.title === 'All teams · week 11', w.title);
     c.ok('A ZERO OUTSIDE THE BYE WEEK IS A REAL 0.0, not a Bye',
-      w.s03w6 && w.s03w6.text === '0.0' && /\bzero\b/.test(w.s03w6.cls) && !/\bbye\b/.test(w.s03w6.cls) &&
-      w.s03w6.v === '0', JSON.stringify(w.s03w6));
+      w.dstW6 && w.dstW6.text.startsWith('0.0') && /\bzero\b/.test(w.dstW6.cls) &&
+      !/\bbye\b/.test(w.dstW6.cls) && w.dstW6.v === '0', JSON.stringify(w.dstW6));
     c.ok('so neither week table says Bye anywhere', !w.anyBye, 'a Bye cell');
     c.ok('and the key says what that 0.0 is',
       /projected at zero, not a bye/.test(w.seasonLegend) && !/Bye/.test(w.seasonLegend), w.seasonLegend);
@@ -2328,7 +2692,8 @@ async function check(scenario, boot) {
     const w = globalThis.__an;
     c.ok('WITH THE BYES UNKNOWN, A LIVE ZERO IS STILL READ AS A BYE (nothing regresses)',
       w.weekly02 && w.weekly02.text === 'Bye' && /\bbye\b/.test(w.weekly02.cls), JSON.stringify(w.weekly02));
-    c.ok('in the season grid as well', w.s03w6 === 'Bye', w.s03w6);
+    c.ok('in the season panel as well, in the slot that had no cover',
+      String(w.dstW9).startsWith('Bye'), w.dstW9);
   }
 
   // ---- (n) / (o) which team a visit opens on ---------------------------------
@@ -2354,6 +2719,227 @@ async function check(scenario, boot) {
     c.ok('and, with nothing better to open on, it is saved for next time',
       w.savedAfterTap === 7, JSON.stringify(w.savedAfterTap));
     c.ok('and holds through a reload of the league', w.reloaded === T(7), w.reloaded);
+  }
+
+  // ---- (p) SEASON BY WEEK, re-derived from demo-rosters.js ----------------
+  //
+  // The panel's three claims, each rebuilt from source rather than read back:
+  // who fills a slot, what the band totals, and where the red line sits. The
+  // last one is the one that could most easily be confidently wrong, so the
+  // whole league's distribution is recomputed here and every cell's class is
+  // checked against it — plus proof that cells exist on BOTH sides of each
+  // threshold, so a panel that coloured nothing could not pass.
+  if (scenario === 'season-slots') {
+    const w = globalThis.__an || {};
+    const { generateDemoWeekRosters } = await import('../js/demo-rosters.js');
+    const { slotCountsFromLineups } = await import('../js/projection.js');
+    const { optimalLineup, slotsFromCounts } = await import('../js/forecast.js');
+    const { stdev } = await import('../js/stats.js');
+
+    const WEEKS = [...REGULAR_WEEKS, ...PLAYOFF_WEEKS];
+    const weekTeams = new Map();
+    const pool = [];
+    for (const wk of WEEKS) {
+      const { teams } = generateDemoWeekRosters(wk);
+      weekTeams.set(wk, teams);
+      pool.push(...teams);
+    }
+    const slots = slotsFromCounts(slotCountsFromLineups(pool));
+
+    // The row labels, rebuilt from the league's own shape: lineup order, and a
+    // number only where the league starts more than one of a position.
+    const ORDER = { 0: 1, 1: 1, 2: 2, 4: 3, 6: 4, 3: 5, 5: 5, 23: 5, 7: 6, 16: 7, 17: 8 };
+    const LABEL = { 0: 'QB', 2: 'RB', 3: 'RB/WR', 4: 'WR', 5: 'WR/TE', 6: 'TE', 7: 'OP',
+      16: 'D/ST', 17: 'K', 23: 'FLEX' };
+    const perSlot = new Map();
+    for (const id of slots) perSlot.set(id, (perSlot.get(id) || 0) + 1);
+    const keys = [];
+    const keyOf = [];
+    for (const id of [...perSlot.keys()].sort((a, b) => (ORDER[a] ?? 40) - (ORDER[b] ?? 40) || a - b)) {
+      const n = perSlot.get(id);
+      for (let i = 1; i <= n; i++) { keys.push(n > 1 ? `${LABEL[id]}${i}` : LABEL[id]); keyOf.push([id, i]); }
+    }
+
+    /** slot key -> {id, v} for one team in one week, rebuilt from source. */
+    const fillOf = (team) => {
+      const { starters } = optimalLineup(
+        (team.players || []).filter((p) => p.playerId !== null && p.playerId !== undefined), slots);
+      const bySlot = new Map();
+      for (const s of starters) {
+        if (!bySlot.has(s.slotId)) bySlot.set(s.slotId, []);
+        bySlot.get(s.slotId).push(s);
+      }
+      for (const l of bySlot.values()) {
+        l.sort((a, b) => b.projected - a.projected || a.playerId - b.playerId);
+      }
+      const out = new Map();
+      keys.forEach((k, i) => {
+        const [id, rank] = keyOf[i];
+        const p = (bySlot.get(id) || [])[rank - 1] || null;
+        out.set(k, p ? { id: p.playerId, v: Math.round(p.projected * 10) / 10 } : null);
+      });
+      return out;
+    };
+
+    c.ok('THE ROWS ARE THE LEAGUE’S OWN SLOTS, rebuilt from demo-rosters.js',
+      JSON.stringify(w.rows.map((r) => r.slot)) === JSON.stringify(keys),
+      `${JSON.stringify(w.rows.map((r) => r.slot))} vs ${JSON.stringify(keys)}`);
+
+    const mine = new Map(WEEKS.map((wk) =>
+      [wk, weekTeams.get(wk).find((t) => t.name === w.team)]));
+    const byKey = new Map(w.rows.map((r) => [r.slot, r]));
+
+    const wrong = [];
+    const flexWrong = [];
+    WEEKS.forEach((wk, i) => {
+      const want = fillOf(mine.get(wk));
+      for (const k of keys) {
+        const cell = byKey.get(k).cells[i];
+        const e = want.get(k);
+        if (!e) { if (cell.v !== null) wrong.push(`${k} wk${wk} want empty got ${cell.v}`); continue; }
+        if (Math.abs(Number(cell.v) - e.v) > 0.051) wrong.push(`${k} wk${wk} want ${e.v} got ${cell.v}`);
+        if (cell.pid !== String(e.id)) wrong.push(`${k} wk${wk} want #${e.id} got #${cell.pid}`);
+      }
+      const f = want.get('FLEX');
+      const fc = byKey.get('FLEX').cells[i];
+      if (f && fc.pid !== String(f.id)) flexWrong.push(`wk${wk} want #${f.id} got #${fc.pid}`);
+    });
+    c.ok('EVERY SLOT IN EVERY WEEK HOLDS THE MAN THE BEST LEGAL LINEUP PUTS THERE',
+      wrong.length === 0, wrong.slice(0, 6).join(' | '));
+    c.ok('THE FLEX IS THE SOLVER’S OWN FLEX, not "the next best man"',
+      flexWrong.length === 0, flexWrong.slice(0, 4).join(' | '));
+
+    // The claim in Tim's own words: "2nd highest WR proj in WR2".
+    const wrKeys = keys.filter((k) => /^WR\d$/.test(k));
+    c.ok('the league starts more than one receiver, so the ranking has teeth',
+      wrKeys.length > 1, JSON.stringify(wrKeys));
+    const rankWrong = [];
+    WEEKS.forEach((wk, i) => {
+      for (const group of [wrKeys, keys.filter((k) => /^RB\d$/.test(k))]) {
+        for (let n = 1; n < group.length; n++) {
+          const a = byKey.get(group[n - 1]).cells[i].v;
+          const b = byKey.get(group[n]).cells[i].v;
+          if (a !== null && b !== null && Number(a) < Number(b)) {
+            rankWrong.push(`wk${wk} ${group[n - 1]} ${a} < ${group[n]} ${b}`);
+          }
+        }
+      }
+    });
+    c.ok('WR1 IS THE BEST RECEIVER OF THAT WEEK’S LINEUP, WR2 THE SECOND, and so down',
+      rankWrong.length === 0, rankWrong.slice(0, 4).join(' | '));
+
+    // The band, against the rebuild rather than against the row above it.
+    const bandWrong = [];
+    WEEKS.forEach((wk, i) => {
+      const want = [...fillOf(mine.get(wk)).values()].filter(Boolean).reduce((a, e) => a + e.v, 0);
+      const got = Number(w.totals[i]);
+      if (Math.abs(got - Math.round(want * 10) / 10) > 0.051) {
+        bandWrong.push(`wk${wk} want ${Math.round(want * 10) / 10} got ${got}`);
+      }
+    });
+    c.ok('THE STARTING LINEUP BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL',
+      bandWrong.length === 0, bandWrong.slice(0, 4).join(' | '));
+
+    // ---- the red marks, recomputed across ALL TEN SQUADS -------------------
+    const bars = new Map();
+    for (const k of keys) {
+      const vals = [];
+      for (const wk of WEEKS) {
+        for (const team of weekTeams.get(wk)) {
+          const e = fillOf(team).get(k);
+          if (e) vals.push(e.v);
+        }
+      }
+      const sd = stdev(vals);
+      const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+      bars.set(k, sd === null ? { n: vals.length, one: null, two: null }
+        : { n: vals.length, one: Math.round((m - sd) * 10) / 10, two: Math.round((m - 2 * sd) * 10) / 10 });
+    }
+    c.ok('the distribution is the WHOLE LEAGUE’S, not this squad’s',
+      [...bars.values()].every((b) => b.n >= weekTeams.get(1).length * WEEKS.length * 0.8),
+      JSON.stringify([...bars.entries()].map(([k, b]) => `${k}:${b.n}`)));
+
+    const colourWrong = [];
+    let lo1 = 0;
+    let lo2 = 0;
+    let clear = 0;
+    let nearest = null;   // the smallest UNCOLOURED number, per slot, vs its bar
+    WEEKS.forEach((wk, i) => {
+      for (const k of keys) {
+        const cell = byKey.get(k).cells[i];
+        if (cell.v === null) continue;
+        const v = Number(cell.v);
+        const b = bars.get(k);
+        const want = b.one === null ? '' : v < b.two ? 'lo2' : v < b.one ? 'lo1' : '';
+        const got = /\blo2\b/.test(cell.cls) ? 'lo2' : /\blo1\b/.test(cell.cls) ? 'lo1' : '';
+        if (want !== got) colourWrong.push(`${k} wk${wk} v=${v} want ${want || 'none'} got ${got || 'none'}`);
+        if (got === 'lo2') lo2++; else if (got === 'lo1') lo1++; else clear++;
+        if (got === '' && b.one !== null) {
+          const gap = v - b.one;
+          if (nearest === null || gap < nearest.gap) nearest = { gap, k, wk, v, one: b.one };
+        }
+      }
+    });
+    c.ok('EVERY CELL’S COLOUR MATCHES A THRESHOLD RECOMPUTED FROM SOURCE',
+      colourWrong.length === 0, colourWrong.slice(0, 6).join(' | '));
+    c.ok('and the sample really does straddle both lines, so that has teeth',
+      lo1 > 0 && lo2 > 0 && clear > 0, `lo1=${lo1} lo2=${lo2} clear=${clear}`);
+    c.ok('A CELL JUST ABOVE ITS THRESHOLD IS LEFT ALONE',
+      nearest !== null && nearest.gap >= 0 && nearest.gap < 1.5,
+      JSON.stringify(nearest));
+
+    // The printed thresholds ARE the ones the colour was decided against.
+    const barsWrong = keys.filter((k) => {
+      const b = bars.get(k);
+      return !w.bars.includes(b.one === null ? `${k} —` : `${k} ${b.one.toFixed(1)} / ${b.two.toFixed(1)}`);
+    });
+    c.ok('THE KEY PRINTS THOSE EXACT THRESHOLDS, so a reader can check a cell',
+      barsWrong.length === 0, `${barsWrong.join(',')} missing from "${w.bars}"`);
+
+    // ---- naming the man, and lighting every week he holds ------------------
+    c.ok('the line is idle until something is pointed at',
+      /Hover or tap a number to name the player/.test(w.idle), w.idle);
+    c.ok('the busiest man really does hold more than one cell', w.held > 1, String(w.held));
+    c.ok('A HOVER NAMES HIM ON THE LINE ABOVE THE TABLE',
+      /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4} — in the lineup \d+ weeks?/.test(w.hover.pick),
+      w.hover.pick);
+    c.ok('AND LIGHTS EVERY OTHER CELL HE HOLDS, ACROSS THE WHOLE SEASON',
+      JSON.stringify(w.hover.lit.slice().sort()) === JSON.stringify(w.allHis.slice().sort()) &&
+      w.hover.lit.length === w.held,
+      `${w.hover.lit.length} lit vs ${w.held} held`);
+    c.ok('the card opens on the same cell, so a phone gets the name too',
+      /· (QB|RB|WR|TE|DST|K) ·/.test(w.hover.card), w.hover.card);
+    c.ok('leaving the cell clears both the name and the highlight',
+      w.afterOut.lit === 0 && /Hover or tap a number/.test(w.afterOut.pick),
+      `${w.afterOut.lit} / ${w.afterOut.pick}`);
+    c.ok('KEYBOARD FOCUS SHOWS THE SAME THING A HOVER DOES',
+      w.focus.lit === w.held && w.focus.pick === w.hover.pick,
+      `${w.focus.lit} lit / ${w.focus.pick}`);
+    c.ok('and Escape puts it back to rest',
+      w.afterEsc.lit === 0 && /Hover or tap a number/.test(w.afterEsc.pick),
+      `${w.afterEsc.lit} / ${w.afterEsc.pick}`);
+  }
+
+  // ---- (q) too little to go on: no colour at all --------------------------
+  if (scenario === 'thin-slot') {
+    const w = globalThis.__an || {};
+    const k = w.rows.find((r) => r.slot === 'K');
+    const others = w.rows.filter((r) => r.slot !== 'K');
+    c.ok('the thin slot still carries its number', k && /^\d+\.\d/.test(k.wk8.text),
+      JSON.stringify(k));
+    c.ok('A SLOT WITH TOO LITTLE BEHIND IT IS NOT COLOURED',
+      k && !/\blo[12]\b/.test(k.wk8.cls), k && k.wk8.cls);
+    c.ok('and its threshold is printed as a dash rather than invented',
+      /K —/.test(w.bars), w.bars);
+    c.ok('while the slots that DO have a distribution still print theirs',
+      /QB \d+\.\d \/ \d+\.\d/.test(w.bars), w.bars);
+    c.ok('so the absence of colour is the guard, not an empty table',
+      others.some((r) => /^\d+\.\d/.test(r.wk8.text)),
+      JSON.stringify(others.map((r) => r.wk8.text)));
+    c.ok('and the note says a slot with too little to go on is left uncoloured',
+      /A slot with too little to go on is left uncoloured/.test(w.note) &&
+      /fewer than two values cannot have a standard deviation/.test(w.note),
+      w.note.slice(0, 900));
   }
 
   if (scenario === 'card-repaint') {

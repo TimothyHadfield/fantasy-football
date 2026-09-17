@@ -14,7 +14,8 @@
 // Three layers:
 //   1. js/capture.js driven directly against cap-stub-season.mjs — the gates,
 //      first-write-wins, the throttle, the recorded reasons, the status line,
-//      the standings order.
+//      the standings order (the RULE; the Schedule page no longer draws a
+//      standings table, but the bracket still seeds on this key).
 //   2. The REAL Schedule page booted on the same stub (child process, with
 //      cap-register.mjs), and the reading it takes compared field for field
 //      with the one layer 1 took.
@@ -53,16 +54,12 @@ const CHILDREN = {
     await import(moduleUrl('js/schedule-page.js'));
     await waitFor(() => map.get(SNAP_KEY) && /recorded/.test(text(document.getElementById('snapLine'))), 15000);
     const stub = await import('./cap-stub-season.mjs');
-    const standings = [...document.querySelectorAll('#standingsTable tbody tr')].map((tr) => ({
-      name: text(tr.children[0]), rec: text(tr.children[1]), v: Number(tr.children[1].getAttribute('data-v')),
-    }));
     return {
       snap: map.has(SNAP_KEY) ? JSON.parse(map.get(SNAP_KEY)) : null,
       note: JSON.parse(map.get(NOTE_KEY) || 'null'),
       line: text(document.getElementById('snapLine')),
       rosters: stub.calls.rosters,
       fetchCalls,
-      standings,
     };
   },
 
@@ -361,19 +358,11 @@ if (!page.boot) {
   ok('its only raw fetch was the committed archive',
     page.fetchCalls.every((u) => /^data\/snapshots\//.test(u)), page.fetchCalls.join(' | '));
 
-  // The standings sort key: the tie is half a win.
-  const pctOf = (rec) => {
-    const [w, l, t = 0] = rec.split('–').map(Number);
-    return (w + t / 2) / (w + l + t);
-  };
-  const tied = page.standings.filter((s) => /^\d+–\d+–1$/.test(s.rec));
-  ok('two teams carry the tie in their record', tied.length === 2, page.standings.map((s) => s.rec).join(' '));
-  ok('every row sorts by (wins + half a tie) / games, points only as the tie-break',
-    page.standings.length === 10 && page.standings.every((s) => Math.abs(s.v - pctOf(s.rec)) < 1e-5),
-    JSON.stringify(page.standings));
-  ok('and the table opens in that order, best percentage first',
-    page.standings.every((s, i, a) => i === 0 || pctOf(a[i - 1].rec) >= pctOf(s.rec)),
-    page.standings.map((s) => `${s.rec}:${s.v.toFixed(6)}`).join(' '));
+  // The Schedule page's standings TABLE was deleted on 2026-09-17 — Tim's
+  // direction that the site adds to ESPN rather than rebuilding it — so the
+  // four assertions that used to read it off that page are gone. The rule they
+  // were really about is `capture.standingsKey`, which is unchanged and is
+  // still exercised directly above; it is what seeds the simulated bracket.
 }
 
 const cloudPage = child('pageCloud', { CAP_CLOUD: '1' });

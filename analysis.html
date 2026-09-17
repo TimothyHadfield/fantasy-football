@@ -77,24 +77,41 @@
     color: var(--accent);
   }
 
-  /* THE GAP between the starters and the bench, and the starters' total in it.
-     A band rather than blank space: the space is what separates the two groups,
-     and the number is the reason the separation is worth having. */
-  #rosterTable tbody.split td {
+  /* THE TOTALS BAND. In the roster detail it is the gap between the starters
+     and the bench with the starters' total in it; in "Season by week" it is the
+     same band under the last lineup slot, totalling the same column for every
+     week at once ("just like how it's displayed in the roster detail box" —
+     Tim, 2026-09-17). ONE set of rules, deliberately not two: the two panels
+     are answering the same question a week apart and a second band that drifted
+     would read as a different kind of number.
+
+     Written `table tbody.split td` rather than `tbody.split td` on purpose: the
+     row-hover rule in css/app.css is `tbody tr:hover td`, and only a selector
+     of equal weight coming LATER (this file is linked after it) keeps the band
+     from repainting under the pointer. */
+  table tbody.split td,
+  table tbody tr:hover td.split-label,
+  table tbody tr:hover td.split-total {
     background: var(--panel-2);
     border-top: 2px solid var(--line-2);
     border-bottom: 2px solid var(--line-2);
     padding-top: 11px;
     padding-bottom: 11px;
   }
-  #rosterTable tbody.split .split-label {
+  /* The band's own label cell is sticky (it is a td.name), so it needs the
+     band's background stated or the frozen column stripes out of phase. */
+  table tbody.split td.name { background: var(--panel-2); }
+  tbody.split .split-label {
     font-weight: 650;
     letter-spacing: 0.02em;
     text-align: left;
   }
-  #rosterTable tbody.split .split-total { font-weight: 700; font-size: 15px; }
-  #rosterTable tbody.split .split-rest { text-align: left; color: var(--dim); font-size: 12.5px; }
-  #rosterTable tbody.split .split-delta { margin-left: 8px; font-size: 13px; }
+  tbody.split .split-total { font-weight: 700; font-size: 15px; }
+  /* A whole row of week totals at 15px would shout; the weight is what says
+     "this is the total", and it is the same weight as the roster detail's. */
+  #seasonTable tbody.split td.wk { font-weight: 700; font-size: 13.5px; }
+  tbody.split .split-rest { text-align: left; color: var(--dim); font-size: 12.5px; }
+  tbody.split .split-delta { margin-left: 8px; font-size: 13px; }
 
   /* Injury flag. Only shown for players who aren't ACTIVE. */
   .inj {
@@ -348,11 +365,13 @@
      removed, so the sort machinery's column indexes stay put. */
   #rosterTable.no-own .own { display: none; }
 
-  /* ------------------------------------------------- season-long roster grid */
+  /* ---------------------------------------- season by week: one row per SLOT */
 
-  /* Thirteen week columns is a lot of table, so everything to the left of them
-     is squeezed and everything in them is narrow and centred. The identity
-     columns exist to tell two players apart; the week run is the point. */
+  /* Sixteen week columns is a lot of table, so the two columns to the left of
+     them are the only ones there are: the slot, and its season average. The old
+     layout put a player, a position and an NFL team in front of the run as
+     well, which is four columns of scrolling on a phone to reach the point —
+     and the rows are lineup slots now, so none of them has an owner. */
   #seasonTable th, #seasonTable td { white-space: nowrap; }
   #seasonTable td.wk, #seasonTable th.wk { padding-left: 7px; padding-right: 7px; }
 
@@ -360,10 +379,27 @@
      little more weight than a single week and a rule brackets it off. */
   #seasonTable td.avg { font-weight: 650; color: var(--text); }
 
-  /* Deliberately NO value colouring in this table. Every player in it is
-     already rostered, so a per-position bar of the kind the Players page
-     uses would light up nearly every cell and mean nothing. The three ways of
-     having no number are told apart by TEXT and WEIGHT only. */
+  /* THE SAME MAN, EVERYWHERE ELSE HE PLAYS. Hovering, tapping or tabbing to a
+     number lights every other cell that man holds across the whole season —
+     which is the only way to follow a person through a table whose rows are
+     slots. Background AND weight AND a rule under it, never colour alone; the
+     rule is what survives a reader who cannot separate the hues, and it is also
+     what keeps a lit cell distinguishable from a merely bold one.
+
+     These come AFTER the low marks below on purpose: a cell can be both, and
+     when it is, the highlight owns the background while the red text and the
+     ▼▼ still say the number is bad. */
+  #seasonTable td.lo1 { color: var(--warn); }
+  #seasonTable td.lo2 { color: var(--err); font-weight: 750; background: #33151a; }
+  #seasonTable tbody tr:hover td.lo2 { background: #3d1920; }
+  .lowmark { font-size: 9px; font-weight: 700; letter-spacing: -0.08em; margin-left: 1px; }
+
+  #seasonTable td.lit,
+  #seasonTable tbody tr:hover td.lit {
+    background: #16311f;
+    font-weight: 750;
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
 
   /* ESPN's 0.00 for a player whose NFL team is off that week. Printing "0.0"
      would read as a projection of nothing rather than as no game at all. */
@@ -374,9 +410,33 @@
   }
   /* A week not read from ESPN yet: present, but not readable as a value. */
   #seasonTable td.wait { color: var(--line); }
-  /* He was not on this roster that week — ESPN returns each past week's real
-     roster. Fainter than a missing number, because it is not a gap in the data. */
+  /* Nobody on the squad could fill the slot at all. */
   #seasonTable td.off { color: var(--line); }
+
+  /* THE NAME LINE. Its height is reserved whether or not anybody is named, so
+     pointing at a number cannot make the table jump under the pointer that is
+     about to move along it. */
+  .pick-line {
+    min-height: 19px;
+    margin: 0 0 10px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--dim);
+    /* ONE LINE, ALWAYS. A long name plus the slots he fills wraps to two lines
+       on a phone, and a line that grows pushes the table down under the very
+       finger that is reading it. Three declarations or none, the same rule the
+       capped table cells follow: a nowrap without the other two just runs the
+       text out of its box. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pick-line strong { color: var(--text); font-weight: 650; }
+  .pick-line .pick-idle { color: var(--line-2); }
+
+  /* The thresholds, printed so a reader can check a coloured cell by hand. */
+  .bars-line .lg-lead { color: var(--dim); }
+  .bars-line { font-variant-numeric: tabular-nums; }
 
   /* The week the rest of the page is showing. A bracket, not a tint: it says
      "you are here", and this table colours nothing. */
@@ -543,6 +603,18 @@
   .lg-mark.dim { color: var(--dim); }
   .lg-mark.bold { font-weight: 750; }
   .lg-mark.ital { font-style: italic; font-weight: 500; }
+  /* The season panel's own marks, drawn in the key exactly as the table draws
+     them — a key that restated a mark in different ink would be a third thing
+     to learn rather than a translation of the two already on screen. */
+  .lg-mark.lit {
+    background: #16311f;
+    border-color: #16311f;
+    font-weight: 750;
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  .lg-mark.lo1 { color: var(--warn); }
+  .lg-mark.lo2 { color: var(--err); background: #33151a; border-color: #4a1b21; font-weight: 750; }
+  .lg-mark.tot { background: var(--panel-2); border-color: var(--line-2); font-weight: 700; }
   .lg-mark.st { background: #16311f; border-color: #16311f; font-weight: 700; }
   .lg-mark.st.fx { background: #16311f66; }
   .lg-mark.st.fx::after {
@@ -777,15 +849,26 @@
 
   <section class="panel">
     <h2 id="seasonTitle">Season by week</h2>
-    <p class="lede">The same roster&rsquo;s projection for every week of the season.</p>
+    <p class="lede">Every starting slot, every week, filled by the best lineup available.</p>
     <div class="panel-note progress-note" id="seasonProgress"></div>
     <p class="edited-note hidden" id="seasonAlert"></p>
+    <!-- THE NAME LINE. Nothing in the table below is a name — every row is a
+         lineup slot and every cell a bare number — so this is where the man
+         under the pointer is named. It is always in the DOM and its height is
+         reserved in CSS, so naming somebody cannot reflow the table. -->
+    <p class="pick-line" id="seasonPick" aria-live="polite"></p>
     <div class="table-scroll" id="seasonWrap"><table id="seasonTable">
       <thead><tr></tr></thead>
-      <tbody></tbody>
+      <!-- Two bodies, not one: the slots, and then the band that totals them.
+           sortable.js sorts each independently and leaves a body of one row
+           alone, which is what pins the totals under the last slot however the
+           table is ordered — the same trick the roster detail uses. -->
+      <tbody id="seasonSlots"></tbody>
+      <tbody id="seasonTotals" class="split"></tbody>
     </table></div>
     <div class="empty hidden" id="seasonEmpty"></div>
     <p class="key-line" id="seasonLegend"></p>
+    <p class="key-line bars-line" id="seasonBars"></p>
     <details class="explain">
       <summary>How this table works</summary>
       <div class="panel-note" id="seasonNote"></div>

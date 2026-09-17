@@ -35,52 +35,12 @@
   #sourceStatus { margin-top: 10px; }
   #tradeCount { margin-top: 10px; }
 
-  /* ------------------------------------------------------------- depth map */
+  /* ---------------------------------------------------------- trade finder
 
-  /* Ten rows by six positions. Everything is tuned to be read DOWN a column,
-     because the question the table answers is "who is thin where I am deep",
-     and that is a column comparison rather than a row one. */
-  table.depth th, table.depth td { white-space: nowrap; }
-  table.depth td.cell { font-variant-numeric: tabular-nums; }
-
-  /* Deep and thin at a position. The tint is a SECOND cue and never the only
-     one: every cell prints a signed number, so the sign is readable with the
-     colour off, printed in greyscale, or by anyone who cannot separate the two
-     hues. Same principle as the two greens on the Players page. */
-  table.depth tbody tr td.deep { background: #16311f; }
-  table.depth tbody tr td.thin { background: #33151a; }
-  /* Hover and the "your team" band both paint their own background, so these
-     have to be written loudly enough to survive both. */
-  table.depth tbody tr:hover td.deep { background: #1b3b26; }
-  table.depth tbody tr:hover td.thin { background: #3f1a20; }
-
-  /* The spare-value badge: what this manager could send without touching his
-     own lineup. Quieter than the number it hangs off — it is the follow-up
-     question, not the headline. */
-  .cell .spare {
-    color: var(--dim);
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    margin-left: 5px;
-  }
-  table.depth tbody tr td.deep .spare { color: #7fd99b; }
-
-  /* The replacement-level strip under the table: the bar each column is
-     measured against, stated rather than implied. */
-  .bars { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-  .bar-chip {
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-    padding: 3px 9px;
-    border-radius: var(--r-pill);
-    background: var(--panel-2);
-    border: 1px solid var(--line);
-    color: var(--dim);
-  }
-  .bar-chip strong { color: var(--text); font-weight: 650; }
-
-  /* ---------------------------------------------------------- trade finder */
+     THESE BLOCKS ARE IN PANEL ORDER — finder, combo, depth map — so the
+     stylesheet reads the way the page does. None of it is cascade-sensitive:
+     no selector here is repeated between blocks, so moving one cannot change
+     what another wins. */
 
   #tradeTable th, #tradeTable td { vertical-align: top; }
 
@@ -98,11 +58,18 @@
   }
   .pkg .val { font-variant-numeric: tabular-nums; }
 
-  /* What the deal actually does to your starting eleven, under the players it
-     moves. This is the line that makes an offer checkable by eye: two names
-     and two numbers rather than a net figure you have to trust. */
+  /* What the deal actually does to your starting eleven. IN THE POP-UP ONLY —
+     it used to sit on every finder row as well and Tim had it removed, because
+     beside the You send and You get columns it was two wrapped lines mostly
+     repeating the names already there. The pop-up is where before-and-after
+     belongs, and there it is what makes an offer checkable by eye.
+
+     `.own` marks a man who was NOT in the trade — one of his own, promoted or
+     benched by it. That is the only part of these lists the columns cannot say,
+     so it carries a word ("yours, benched") as well as its shade: colour is
+     never the only cue here. */
   .churn {
-    margin-top: 6px;
+    margin-top: 10px;
     font-size: 11.5px;
     line-height: 1.55;
     color: var(--dim);
@@ -110,8 +77,14 @@
   .churn .in { color: var(--accent); }
   .churn .out { color: var(--err); }
   .churn b { font-weight: 600; }
+  .churn .own { color: var(--dim); font-weight: 600; }
 
-  /* The shape of the package — a straight swap, or which way it consolidates. */
+  /* The shape filter's one sentence, on its own line under the controls rather
+     than squeezed beside them: `.row` wraps, and a hint sharing a line with a
+     four-button toggle is a hint nobody reads. */
+  #kindToggle ~ .ctl-hint { flex: 1 1 100%; margin: 2px 0 0; }
+
+  /* The shape of the package — 1 for 1, 2 for 1, 1 for 2. */
   .shape {
     display: inline-block;
     font-size: 10.5px;
@@ -174,24 +147,6 @@
   .cost-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
   .cost-row .spent { color: var(--dim); font-size: 12px; }
   .cost-row .working { color: var(--dim); font-size: 12px; font-style: italic; }
-
-  /* ------------------------------------------------------ the spare-men strip
-
-     The depth map's cells are numbers; this is the one place on that panel a
-     player is NAMED. It is the part of a squad a trade can actually reach, so
-     it is also the part worth putting a week run on. */
-  .spares { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  .spare-chip {
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-    padding: 3px 9px;
-    border-radius: var(--r-pill);
-    background: var(--panel-2);
-    border: 1px solid var(--line);
-    color: var(--dim);
-  }
-  .spare-chip strong { color: var(--text); font-weight: 600; }
-  .spare-chip .pp { margin: 0 4px; letter-spacing: 0.04em; font-size: 10.5px; }
 
   /* --------------------------------------------------------- the drill-down
 
@@ -288,6 +243,70 @@
     border-top: 1px solid var(--line);
   }
   .combo-alt h3 { font-size: 13px; margin: 0 0 6px; }
+
+  /* ------------------------------------------------------------- depth map
+
+     LAST, matching the panel it styles. It used to be the first block in this
+     file because the panel used to be the first on the page. */
+
+  /* Ten rows by six positions. Everything is tuned to be read DOWN a column,
+     because the question the table answers is "who is thin where I am deep",
+     and that is a column comparison rather than a row one. */
+  table.depth th, table.depth td { white-space: nowrap; }
+  table.depth td.cell { font-variant-numeric: tabular-nums; }
+
+  /* Deep and thin at a position. The tint is a SECOND cue and never the only
+     one: every cell prints a signed number, so the sign is readable with the
+     colour off, printed in greyscale, or by anyone who cannot separate the two
+     hues. Same principle as the two greens on the Players page. */
+  table.depth tbody tr td.deep { background: #16311f; }
+  table.depth tbody tr td.thin { background: #33151a; }
+  /* Hover and the "your team" band both paint their own background, so these
+     have to be written loudly enough to survive both. */
+  table.depth tbody tr:hover td.deep { background: #1b3b26; }
+  table.depth tbody tr:hover td.thin { background: #3f1a20; }
+
+  /* The spare-value badge: what this manager could send without touching his
+     own lineup. Quieter than the number it hangs off — it is the follow-up
+     question, not the headline. */
+  .cell .spare {
+    color: var(--dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    margin-left: 5px;
+  }
+  table.depth tbody tr td.deep .spare { color: #7fd99b; }
+
+  /* The replacement-level strip under the table: the bar each column is
+     measured against, stated rather than implied. */
+  .bars { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .bar-chip {
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--dim);
+  }
+  .bar-chip strong { color: var(--text); font-weight: 650; }
+
+  /* The spare-men strip. The depth map's cells are numbers; this is the one
+     place on that panel a player is NAMED. It is the part of a squad a trade
+     can actually reach, so it is also the part worth putting a week run on. */
+  .spares { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .spare-chip {
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--dim);
+  }
+  .spare-chip strong { color: var(--text); font-weight: 600; }
+  .spare-chip .pp { margin: 0 4px; letter-spacing: 0.04em; font-size: 10.5px; }
 
   /* PER WEEK ON TOP, the rest-of-season total underneath in small type — Tim's
      order. The two scales differ by a factor of nine or more, so the unit is
@@ -555,9 +574,10 @@
     .src-ctl { flex: 1 1 100%; }
     .src-ctl .segmented { width: 100%; }
 
-    /* The shape filter's four labels are sentences — "You consolidate" does not
-       fit a quarter of a phone — so it goes two-by-two instead of taking the
-       four-track default every other toggle on the site wants. */
+    /* The shape filter goes two-by-two rather than taking the four-track
+       default. The labels are short enough for four now ("1 for 1", not "You
+       consolidate"), but "Any shape" is not, and a track narrow enough to wrap
+       it puts the three counts on lines of different heights. */
     #kindToggle { grid-template-columns: repeat(2, 1fr); }
 
     /* The package columns still need enough room for a name and its number on
@@ -623,7 +643,9 @@
   <div id="connBar"></div>
 
   <h1>Trade <span id="modeBadge" class="badge demo">Demo</span></h1>
-  <p class="sub" id="pageSub">Who is deep where you are thin &mdash; and every swap that would make both squads better.</p>
+  <!-- Replaced by render() on the first paint; it leads with the swaps because
+       the panels do. -->
+  <p class="sub" id="pageSub">Every swap that would make both squads better &mdash; and who is deep where you are thin.</p>
 
   <section class="panel">
     <h2>Data source</h2>
@@ -672,37 +694,44 @@
     </details>
   </section>
 
-  <section class="panel">
-    <h2 id="depthTitle">Depth map</h2>
-    <p class="lede">How far each squad's starters sit above a free replacement, by position. Read down a column: high is depth to trade from, low is a need.</p>
-    <div class="table-scroll" id="depthWrap"><table id="depthTable" class="depth">
-      <thead><tr></tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <div class="empty hidden" id="depthEmpty">No roster data for this week.</div>
-    <div class="bars" id="depthBars"></div>
-    <div class="spares" id="spareStrip"></div>
-    <p class="panel-note warn-line" id="depthWarn" hidden></p>
-    <details class="explain">
-      <summary>How the depth numbers are worked out</summary>
-      <p class="panel-note" id="depthNote"></p>
-    </details>
-  </section>
+  <!-- PANEL ORDER, TOP TO BOTTOM: the finder, the combo, then the depth map.
+       Tim, 2026-09-17, and it is ordered by usefulness rather than by how the
+       page thinks. The finder answers the question somebody came here with —
+       "what deal should I offer?" — the combo answers "and how many of them at
+       once?", and the depth map is the WORKING behind both: who is deep where,
+       which is what you read when you want to check an offer or go looking for
+       a manager yourself. It used to be first, because it is what the engine
+       computes first; that is not a reason to make somebody scroll past a
+       ten-by-six table to reach the answer.
 
+       Nothing here depends on the order. `paint()` renders in this same
+       sequence, but only so a reading of the code matches a reading of the
+       page — the panels share no state that one of them paints for another. -->
   <section class="panel">
     <h2 id="finderTitle">Trades that help both squads</h2>
     <p class="lede">Every swap that raises both starting lineups. Tap a row to see it week by week.</p>
     <div class="row mb-12">
+      <!-- The COUNT each way is the shape, and it needs no teaching. These read
+           "Straight swap / You consolidate / You add depth" until Tim said he
+           did not know what any of them meant; what those words described was
+           the consequence, which is said once in the hint below instead. The
+           `data-kind` values are the stored preference and must not change. -->
       <div class="segmented" id="kindToggle">
         <button type="button" data-kind="all" class="on">Any shape</button>
-        <button type="button" data-kind="even">Straight swap</button>
-        <button type="button" data-kind="consolidate">You consolidate</button>
-        <button type="button" data-kind="depth">You add depth</button>
+        <button type="button" data-kind="even">1 for 1</button>
+        <button type="button" data-kind="consolidate">2 for 1</button>
+        <button type="button" data-kind="depth">1 for 2</button>
       </div>
       <div class="select-md">
         <label for="partnerSelect">Manager</label>
         <select id="partnerSelect"></select>
       </div>
+      <!-- A control's explanation goes here, never in a `title`: js/touch-titles.js
+           deliberately leaves controls alone, so a title on a button is invisible
+           on his phone. Same rule as the FLEX filters on the Players page. -->
+      <span class="ctl-hint"><strong>2 for 1</strong> = you send two and get one
+        better back — fewer, stronger men. <strong>1 for 2</strong> is the
+        reverse: you send one and get two, for more cover and a weaker top.</span>
     </div>
     <div class="table-scroll" id="tradeWrap"><table id="tradeTable">
       <thead><tr>
@@ -732,6 +761,26 @@
     <details class="explain" id="comboExplain">
       <summary>How the combination is priced</summary>
       <p class="panel-note" id="comboNote"></p>
+    </details>
+  </section>
+
+  <!-- LAST, and deliberately: this is the working behind the two panels above.
+       It is the panel to read when you want to check an offer, or go hunting
+       for a manager the finder has not paired you with yet. -->
+  <section class="panel">
+    <h2 id="depthTitle">Depth map</h2>
+    <p class="lede">How far each squad's starters sit above a free replacement, by position. Read down a column: high is depth to trade from, low is a need.</p>
+    <div class="table-scroll" id="depthWrap"><table id="depthTable" class="depth">
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="empty hidden" id="depthEmpty">No roster data for this week.</div>
+    <div class="bars" id="depthBars"></div>
+    <div class="spares" id="spareStrip"></div>
+    <p class="panel-note warn-line" id="depthWarn" hidden></p>
+    <details class="explain">
+      <summary>How the depth numbers are worked out</summary>
+      <p class="panel-note" id="depthNote"></p>
     </details>
   </section>
 

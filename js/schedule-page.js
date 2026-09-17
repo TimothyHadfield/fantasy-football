@@ -1,6 +1,15 @@
 // Wires the schedule page together: pick a data source, pick a week, and read
-// the league four ways — standings, this week's matchups, every result, and a
-// grid of who plays who.
+// the league four ways — your own season, the simulation, this week's matchups,
+// every result, and a grid of who plays who.
+//
+// THERE IS NO STANDINGS PANEL, and that is deliberate (Tim, 2026-09-17): this
+// site ADDS to ESPN and must not rebuild what ESPN's app already shows well, and
+// a plain league table is ESPN's job. What the table carried that ESPN does not
+// show — where you sit by this league's own rule, and how hard your run-in is —
+// is two figures inside "My season" (`tablePlaces`, `remainingSos`). Every
+// standings COMPUTATION anything else depends on is untouched: the bracket's
+// seeding is forecast.js's, off `capture.standingsKey`, and the weekly reading
+// in js/capture.js never read this page's table in the first place.
 //
 // The page is read from week 1 onwards, so most of what it shows is a game that
 // has NOT been played. Every view here therefore has to say something useful
@@ -658,7 +667,7 @@ function renderArchive() {
     banner.classList.remove('hidden');
     banner.innerHTML =
       `<strong>You are looking at the season as of week ${state.replay.week}</strong>, recorded on ` +
-      `${esc(stamp)}. Every number on this page — the standings, the results, the win ` +
+      `${esc(stamp)}. Every number on this page — the matchups, the results, the win ` +
       `percentages, the forecast and the simulation — is what the app knew then, not what it ` +
       `knows now. Choose <em>Right now</em> above to come back.`;
   } else {
@@ -1025,7 +1034,6 @@ async function refreshStrength() {
     if (stale() || !state.data) return;
     state.strength = map;
     state.strengthNote = note;
-    renderStandings();
     renderMatchups();   // an unplayed card falls back to the strength ranking
     renderResults();    // the win-% column arrives with the projection
     renderForecast();   // and so does the whole season forecast
@@ -1040,6 +1048,10 @@ async function refreshStrength() {
  * Remaining strength of schedule: the mean strength of the opponents a team has
  * still to play, shown as a rank because the raw mean means nothing on its own
  * and changes units with the basis. Rank 1 is the hardest run-in.
+ *
+ * It outlived the standings table it used to be a column of, and deliberately:
+ * ESPN publishes no run-in difficulty, so this is exactly the kind of number
+ * the site exists to add. "My season" shows the one rank that is about you.
  */
 function remainingSos() {
   if (!state.strength) return null;
@@ -1094,7 +1106,6 @@ function render() {
   renderArchive();
   renderWeekPicker();
   renderTeamPicker();
-  renderStandings();
   renderSummary();
   renderMatchups();
   renderResults();
@@ -1142,10 +1153,10 @@ function renderWeekPicker() {
   // whose season is already complete — so the contract has to be stated for the
   // data actually on screen rather than asserted once and hoped for.
   const reach = state.data.isDemo
-    ? 'sets the summary, matchups and results below, and the week the forecast is made from. ' +
-      'Standings and the grid stay season-to-date.'
-    : 'sets the summary, matchups and results below. ' +
-      'Standings, the grid and the season forecast stay season-to-date.';
+    ? 'sets this panel and the results below, and the week the forecast is made from. ' +
+      'The head-to-head grid stays season-to-date.'
+    : 'sets this panel and the results below. ' +
+      'The head-to-head grid and the season forecast stay season-to-date.';
   $('weekNote').textContent = `${where} · ${reach}`;
 }
 
@@ -1157,86 +1168,52 @@ function renderTeamPicker() {
   sel.value = state.filterTeam === '' ? '' : String(state.filterTeam);
 }
 
-// ------------------------------------------------------------------ standings
+// ----------------------------------------------------------------- the table
+//
+// THE TABLE IS NOT DRAWN. Tim's direction of 2026-09-17: the site adds to ESPN
+// rather than rebuilding it, and a league table is the thing ESPN's own app
+// does best. What survives is the one line of it that is about HIM — where he
+// sits right now — as a figure inside "My season", beside the run-in rank,
+// which ESPN does not publish at all.
 
-/** Season-to-date record, points for and against, and the run-in rank. */
-function standingsRows() {
-  const record = headToHead();
-  const totals = new Map(state.data.teams.map((t) => [t.id, { pf: 0, pa: 0, gp: 0 }]));
+/**
+ * Where every team sits in the table as of the forecast's own as-of point.
+ *
+ * Measured at the same point in time the rest of the panel forecasts from
+ * (`isRemaining`), not season-to-date: in the demo, whose season is complete,
+ * the week picker chooses when the forecast is made from, and a place read off
+ * the finished season would contradict the games listed beside it.
+ *
+ * The order is this league's — win percentage with a tie as half a win, then
+ * points for — through `capture.standingsKey`, the same rule the bracket seeds
+ * on, so "3rd now" and the simulated seeding cannot disagree.
+ *
+ * @returns {Map} teamId -> {place, of, rec, pf}
+ */
+function tablePlaces(asOf) {
+  const acc = new Map(state.data.teams.map((t) => [t.id, { w: 0, l: 0, t: 0, pf: 0 }]));
 
-  for (const g of finalGames()) {
-    const add = (id, mine, theirs) => {
-      const cur = totals.get(id);
-      if (!cur || typeof mine !== 'number' || typeof theirs !== 'number') return;
-      cur.pf += mine;
-      cur.pa += theirs;
-      cur.gp++;
-    };
-    add(g.homeId, g.homeScore, g.awayScore);
-    add(g.awayId, g.awayScore, g.homeScore);
+  for (const g of state.data.games) {
+    if (g.homeId == null || g.awayId == null) continue;        // bye
+    if (isRemaining(g, asOf)) continue;
+    const winner = winnerOf(g);
+    if (winner === null) continue;                             // in progress
+    const h = acc.get(g.homeId);
+    const a = acc.get(g.awayId);
+    if (!h || !a) continue;
+    if (typeof g.homeScore === 'number') h.pf += g.homeScore;
+    if (typeof g.awayScore === 'number') a.pf += g.awayScore;
+    if (winner === 'tie') { h.t++; a.t++; }
+    else if (winner === 'home') { h.w++; a.l++; }
+    else { a.w++; h.l++; }
   }
 
-  const sos = remainingSos();
-
-  return state.data.teams.map((t) => {
-    const row = record.get(t.id);
-    const rec = { w: 0, l: 0, t: 0 };
-    for (const opp of state.data.teams) {
-      if (opp.id === t.id) continue;
-      const r = row.get(opp.id);
-      rec.w += r.w;
-      rec.l += r.l;
-      rec.t += r.t;
-    }
-    const tot = totals.get(t.id);
-    return { team: t, rec, pf: round1(tot.pf), pa: round1(tot.pa), sos: sos?.get(t.id) || null };
-  });
-}
-
-function renderStandings() {
-  const table = $('standingsTable');
-  const tbody = table.querySelector('tbody');
-  const rows = standingsRows();
-
-  tbody.innerHTML = rows
-    .map(({ team, rec, pf, pa, sos }) => {
-      const cls = rec.w > rec.l ? 'pos' : rec.w < rec.l ? 'neg' : 'muted';
-      // ESPN's order: win percentage with a tie as HALF a win, then points
-      // for — packed into the one number sortable.js reads. The old key was
-      // raw wins, so a 2–0–1 team sat level with a 2–1 one.
-      const sortKey = capture.standingsKey(rec, pf);
-
-      let sosCell = `<td>${dash}</td>`;
-      if (sos) {
-        // Rank 1 is the hardest run-in, so the warning colour goes at the top.
-        const tone = sos.rank <= 3 ? 'neg' : sos.rank > sos.of - 3 ? 'pos' : '';
-        sosCell =
-          `<td data-v="${sos.rank}" class="${tone}" ` +
-          `title="Opponents still to play average ${fmt(sos.mean)} on this measure.">` +
-          `${sos.rank}<span class="muted">/${sos.of}</span></td>`;
-      }
-
-      return `<tr${team.id === state.myTeamId ? ' class="me"' : ''}>
-          <td class="name">${esc(team.name)}</td>
-          <td data-v="${sortKey}" class="${cls}">${recordText(rec)}</td>
-          <td data-v="${pf}">${fmt(pf)}</td>
-          <td data-v="${pa}">${fmt(pa)}</td>
-          ${sosCell}
-        </tr>`;
-    })
-    .join('');
-
-  resort(table);
-
-  const done = finalGames().length;
-  const left = state.data.games.length - done;
-  const runIn = left
-    ? `“Rest of season” ranks the average strength of the opponents each team has still ` +
-      `to play; 1 is the hardest run-in. ${state.strengthNote || 'Working out how hard the run-ins are…'}`
-    : 'Every game has been played, so there is no run-in left to rank.';
-
-  $('standingsNote').textContent =
-    `Season to date — ${done} of ${state.data.games.length} games decided. ${runIn}`;
+  const order = [...acc].sort(
+    (x, y) => capture.standingsKey(y[1], y[1].pf) - capture.standingsKey(x[1], x[1].pf)
+  );
+  return new Map(
+    order.map(([id, r], i) => [id, { place: i + 1, of: order.length, rec: r, pf: round1(r.pf) }])
+  );
 }
 
 // -------------------------------------------------------------------- summary
@@ -1247,7 +1224,8 @@ function renderSummary() {
   const live = scoped.filter((g) => gameState(g) === 'live').length;
   const scopeLabel = state.week === 'all' ? 'the season to date' : `week ${state.week}`;
 
-  $('summaryTitle').textContent = state.week === 'all' ? 'Season so far' : `Week ${state.week}`;
+  // The heading is the matchups panel's own — these numbers live inside it now,
+  // so a second heading over the stat row would name the same week twice.
 
   if (!played.length) {
     $('summary').innerHTML =
@@ -1381,6 +1359,8 @@ function renderMatchups() {
 
   $('matchupsTitle').textContent =
     state.week === 'all' ? 'Matchups — all weeks' : `Week ${state.week} matchups`;
+  // The week picker lives in this panel, so the panel's heading is what names
+  // the week — the summary strip below it no longer carries a heading of its own.
 
   const blocks = weeks
     .map((w) => {
@@ -1417,7 +1397,13 @@ function renderMatchups() {
   const chance = upcoming.some((g) => homeWinChance(g, ctx.sigma) !== null)
     ? ` ${derivedCaveat()}`
     : '';
-  $('matchupsNote').textContent = `Records are season-to-date. ${basis}${chance}`.trim();
+  // WHERE THE STRENGTH NUMBER CAME FROM. It used to be stated under the
+  // standings table, which is gone; it belongs with the cards, which are what
+  // print a projection or a strength ranking against an unplayed game. Rule 7:
+  // every derived number states its basis in a panel note.
+  const strength = state.strengthNote ? ` ${state.strengthNote}` : '';
+  $('matchupsNote').textContent =
+    `Records are season-to-date. ${basis}${chance}${strength}`.trim();
 }
 
 function gameCard(g, ctx) {
@@ -2094,9 +2080,18 @@ function renderForecast() {
   const range = forecast.credibleRange(dist, 0.8);
   const expected = forecast.expectedWins(probs, banked.w);
 
+  // THE TWO SURVIVORS OF THE STANDINGS TABLE, and the only two worth keeping:
+  // where this team sits right now, which is the one row of the table that is
+  // about you, and how hard its run-in is, which ESPN does not publish at all.
+  // Both are about the SELECTED team, so neither rebuilds a league table.
+  const place = tablePlaces(asOf).get(team.id) || null;
+  const sos = remainingSos()?.get(team.id) || null;
+
   stats.innerHTML = [
+    ['Place now', place ? `${ordinal(place.place)}<span class="muted"> of ${place.of}</span>` : '—'],
     ['Banked', recordText(banked)],
     ['Games left', String(rows.length)],
+    ['Run-in', sos ? `${ordinal(sos.rank)}<span class="muted"> hardest of ${sos.of}</span>` : '—'],
     ['Expected wins', fmt(expected)],
     ['80% range', range ? (range.lo === range.hi ? `${range.lo}` : `${range.lo}${EN}${range.hi}`) : '—'],
   ]
@@ -2129,6 +2124,24 @@ function renderForecast() {
       'side, so they are listed but left out of the chart and the expected total.'
     : '';
 
+  // The basis of the two figures that used to be columns of a standings table.
+  const standing = [
+    place
+      ? `<strong>Place now</strong> is where ${esc(team.name)} sits after the ` +
+        `${plural(played, 'game')} banked above, in this league’s own order — wins, with a tie ` +
+        `as half a win, then points for. It is the same rule the simulation seeds the bracket ` +
+        `on. The full league table is deliberately not repeated on this site: ESPN’s own app ` +
+        `already shows it.`
+      : '',
+    sos
+      ? `<strong>Run-in</strong> ranks the average strength of the opponents this team has ` +
+        `still to play — 1 is the hardest of ${sos.of}, and this one averages ` +
+        `${fmt(sos.mean)} on that measure. ${state.strengthNote}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   $('forecastNote').innerHTML = [
     `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}, ` +
       `${plural(rows.length, 'game')} from week ${nextWeek} to week ${lastWeek} still to play. ${timing}` +
@@ -2139,6 +2152,7 @@ function renderForecast() {
         ? ''
         : ' Nobody is set as you, so this opens on the first team — set yourself in the ' +
           '“You are” menu in the connection bar, or pick any team above.'),
+    standing,
     shape,
     derivedCaveat(),
     projectionCaveat(lastWeek),
@@ -2181,8 +2195,8 @@ const commas = (n) => Number(n).toLocaleString('en-US');
  * drawn. Re-running for that would burn half a second to redraw one chart.
  *
  * Banked results are split from remaining ones with isRemaining(), the same
- * rule the forecast panel uses, rather than with the season-to-date split in
- * standingsRows(). On live data the two are identical (isRemaining is exactly
+ * rule the forecast panel and tablePlaces() use, rather than a season-to-date
+ * split. On live data the two are identical (isRemaining is exactly
  * "not final"). In the demo, whose season is complete, they are not: the week
  * picker chooses the point in time both panels forecast from, and a simulation
  * that banked results the forecast above had not seen yet would contradict it.
@@ -2785,8 +2799,6 @@ $('filterTeam').addEventListener('change', (e) => {
 
 // Sorted by week, ascending, until the user says otherwise.
 enableSort($('resultsTable'), { defaultIndex: 0, defaultAsc: true });
-// Standings open on the standings order: most wins first.
-enableSort($('standingsTable'), { defaultIndex: 1 });
 // The forecast reads forwards in time, so it opens in week order.
 enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
 // The projected table opens on the most likely finishing order: average place,
@@ -2805,7 +2817,6 @@ onConnection((conn) => {
     // season it is.
     state.myTeamId = conn.teamId ?? null;
     if (state.data) {
-      renderStandings();
       renderForecast();
       renderSimulation();   // moves the "you" highlight and the selected team with it
     }

@@ -127,20 +127,15 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
+  <!-- PANEL ORDER IS TIM'S, 2026-09-17, most useful first: Season at a glance,
+       Standings & season totals, Week by week, then everything else in the order
+       it was already in. Nothing here depends on render order — stats-page.js
+       paints each panel by id — so the only thing holding the order is the
+       markup, and tests/stats-order.mjs reads the headings back to prove it. -->
+
   <section class="panel">
     <h2>Season at a glance</h2>
     <div class="stat-row" id="glance"></div>
-  </section>
-
-  <section class="panel" id="panelOppProj">
-    <h2>Schedule luck &mdash; average projected opponent</h2>
-    <p class="lede">Each team&rsquo;s average projected opponent, hardest schedule first. The last figure is the gap from the league average.</p>
-    <div id="oppProjChart"></div>
-    <p class="panel-note" id="oppProjWarn" hidden></p>
-    <details class="explain">
-      <summary>How this works</summary>
-      <div class="panel-note" id="oppProjNote"></div>
-    </details>
   </section>
 
   <section class="panel">
@@ -188,6 +183,41 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <details class="explain">
       <summary>What the columns mean</summary>
       <div class="panel-note" id="mainTableNote"></div>
+    </details>
+  </section>
+
+  <section class="panel" id="panelWeekGrid">
+    <h2>Week by week</h2>
+    <p class="lede">Every team&rsquo;s weeks side by side, in whole points. Pick what to show.</p>
+    <div class="row mb-12">
+      <div class="segmented" id="weeklyMetric">
+        <button type="button" data-metric="actual" class="on">Actual</button>
+        <button type="button" data-metric="projected">Projected</button>
+        <button type="button" data-metric="luck">Luck</button>
+        <button type="button" data-metric="actualDiff">Margin</button>
+      </div>
+    </div>
+    <div class="table-scroll"><table id="weeklyTable">
+      <thead><tr id="weeklyHead"></tr></thead>
+      <tbody></tbody>
+      <!-- The league baseline lives in a tfoot so click-to-sort, which only
+           reorders the tbody, can never shuffle it in among the teams. -->
+      <tfoot></tfoot>
+    </table></div>
+    <details class="explain">
+      <summary>About the League row</summary>
+      <p class="panel-note" id="weeklyNote"></p>
+    </details>
+  </section>
+
+  <section class="panel" id="panelOppProj">
+    <h2>Schedule luck &mdash; average projected opponent</h2>
+    <p class="lede">Each team&rsquo;s average projected opponent, hardest schedule first. The last figure is the gap from the league average.</p>
+    <div id="oppProjChart"></div>
+    <p class="panel-note" id="oppProjWarn" hidden></p>
+    <details class="explain">
+      <summary>How this works</summary>
+      <div class="panel-note" id="oppProjNote"></div>
     </details>
   </section>
 
@@ -264,30 +294,6 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         Dots are outlier weeks beyond 1.5&times; the interquartile range (the width
         of the box).
       </p>
-    </details>
-  </section>
-
-  <section class="panel" id="panelWeekGrid">
-    <h2>Week by week</h2>
-    <p class="lede">Every team&rsquo;s weeks side by side, in whole points. Pick what to show.</p>
-    <div class="row mb-12">
-      <div class="segmented" id="weeklyMetric">
-        <button type="button" data-metric="actual" class="on">Actual</button>
-        <button type="button" data-metric="projected">Projected</button>
-        <button type="button" data-metric="luck">Luck</button>
-        <button type="button" data-metric="actualDiff">Margin</button>
-      </div>
-    </div>
-    <div class="table-scroll"><table id="weeklyTable">
-      <thead><tr id="weeklyHead"></tr></thead>
-      <tbody></tbody>
-      <!-- The league baseline lives in a tfoot so click-to-sort, which only
-           reorders the tbody, can never shuffle it in among the teams. -->
-      <tfoot></tfoot>
-    </table></div>
-    <details class="explain">
-      <summary>About the League row</summary>
-      <p class="panel-note" id="weeklyNote"></p>
     </details>
   </section>
 

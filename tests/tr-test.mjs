@@ -136,6 +136,34 @@ function fire(el, type = 'change') {
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 
+/**
+ * THE PANELS, IN DOCUMENT ORDER — which is the whole of what this reads.
+ *
+ * Tim asked for them ordered by usefulness (2026-09-17): the finder, then the
+ * best combo, then the depth map, under the one toolbar that stays at the top.
+ * The depth map used to be first because it is what the engine computes first,
+ * and a reader had to scroll a ten-by-six table to reach the answer.
+ *
+ * `querySelectorAll` returns document order, so this is the real sequence of
+ * `<section class="panel">` on the page and not a list anybody maintains. The
+ * finder's heading has the reader's own squad appended to it at paint time
+ * ("Trades that help both squads · Alex"), so the name is cut back to the
+ * fixed half — the part the markup owns — and the id is carried alongside,
+ * because an id is what the module and every other test address a panel by.
+ *
+ * FALSIFIABLE: swap two sections in trade.html and the sequence this returns
+ * changes, so the assertion built on it fails. Nothing else on the page would.
+ */
+function readPanelOrder(document) {
+  return [...document.querySelectorAll('section.panel')].map((section) => {
+    const h = section.querySelector('h2');
+    return {
+      id: (h && h.getAttribute('id')) || '',
+      heading: text(h).split(' · ')[0],
+    };
+  });
+}
+
 function readDepth(document) {
   const table = document.getElementById('depthTable');
   const heads = [...table.querySelectorAll('thead th')].map((th) => text(th));
@@ -301,6 +329,35 @@ function readCost(document) {
 }
 
 /**
+ * The before-and-after list, entry by entry, out of the DOM rather than by
+ * splitting its text.
+ *
+ * It has to be the DOM: the tag on one of his own men reads "(yours, benched)"
+ * and a reader that split the line on commas would tear that in half and call
+ * "benched)" a player. Each `<b>` opens an entry and a following `.own` span
+ * belongs to it, which is exactly how the line is built.
+ */
+function readChurnEntries(root) {
+  const out = [];
+  if (!root) return out;
+  for (const dir of ['in', 'out']) {
+    const span = root.querySelector(`.churn .${dir}`);
+    if (!span) continue;
+    let cur = null;
+    for (const node of [...span.childNodes]) {
+      const tag = node.tagName || '';
+      if (tag === 'B') {
+        cur = { dir, name: text(node), own: '' };
+        out.push(cur);
+      } else if (tag === 'SPAN' && (node.getAttribute('class') || '').includes('own') && cur) {
+        cur.own = text(node);
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * The drill-down, which is now a MODAL.
  *
  * `hidden` is the element's own `hidden` property rather than a class, because
@@ -338,6 +395,11 @@ function readDeal(document) {
     })(),
     cards: [...body.querySelectorAll('.man[data-tip]')].length,
     men: [...body.querySelectorAll('.man')].map(readMan),
+    // What the deal does to the lineup. This lives ONLY here now — Tim had it
+    // taken off the finder's rows, where it mostly repeated the two package
+    // columns beside it.
+    churn: text(body.querySelector('.churn')),
+    churnEntries: readChurnEntries(body),
   };
 }
 
@@ -410,6 +472,17 @@ const SCENARIOS = {
       badge: text(document.getElementById('modeBadge')),
       teams: [...document.querySelectorAll('#teamSelect option')].map(text),
       partners: [...document.querySelectorAll('#partnerSelect option')].map(text),
+      // The shape filter, label by label. `kind` is the stored preference and
+      // `label` is only what it is called — the two must be able to move apart,
+      // which is the whole reason the buttons were relabelled without touching
+      // a single saved value.
+      kinds: [...document.querySelectorAll('#kindToggle button')].map((b) => ({
+        kind: b.getAttribute('data-kind'),
+        label: text(b),
+        title: b.getAttribute('title') || '',
+      })),
+      kindHint: text(document.querySelector('#kindToggle ~ .ctl-hint')),
+      panels: readPanelOrder(document),
     };
   },
 
@@ -980,6 +1053,33 @@ if (!fresh.boot) {
     fresh.fetchCalls.length === 0, fresh.fetchCalls.slice(0, 2).join(' | '));
   eq(fresh.badge, 'Demo', 'it opens on demo data and says so');
 
+  // ---- the panels are in order of usefulness -----------------------------
+  //
+  // Tim, 2026-09-17: the finder first, then the best combo, then the depth map,
+  // with the Data source toolbar above all three. The depth map had been first
+  // — it is what the engine computes first, which is a fact about the code and
+  // not about anybody reading the page.
+  //
+  // Asserted as a SEQUENCE rather than as "the finder is somewhere above the
+  // depth map", because the weaker claim passes with the combo panel anywhere
+  // at all, and where the combo sits is half of what he asked for. Both the
+  // heading and the id are checked: the heading is what he sees, the id is what
+  // every other test and the module itself address the panel by, and a rename
+  // of one without the other is its own defect.
+  eq(
+    fresh.panels.map((p) => p.heading).join(' > '),
+    'Data source > Trades that help both squads > Best combo > Depth map',
+    'the panels read finder, combo, depth map — under the toolbar'
+  );
+  eq(
+    fresh.panels.map((p) => p.id).join(','),
+    ',finderTitle,,depthTitle',
+    'and the two ids the module writes into are on the right panels'
+  );
+  ok('the depth map is genuinely last, not merely after the finder',
+    fresh.panels.length === 4 && fresh.panels[fresh.panels.length - 1].id === 'depthTitle',
+    fresh.panels.map((p) => p.heading).join(' > '));
+
   // ---- the depth map -----------------------------------------------------
   eq(fresh.depth.rows.length, 10, 'a row per manager');
   eq(fresh.teams.length, 10, 'every manager is offered as "your team"');
@@ -1060,11 +1160,18 @@ if (!fresh.boot) {
   ok('every offer shows your lineup before and after',
     fresh.trades.every((t) => /→/.test(t.beforeAfter)), fresh.trades[0].beforeAfter);
 
-  // THE LINE THAT MAKES AN OFFER CHECKABLE. A net figure asks to be trusted;
-  // two names and two numbers can be verified against ESPN by eye.
-  ok('every offer says who starts and who drops out',
-    fresh.trades.every((t) => /starts:/.test(t.churn)),
-    fresh.trades[0].churn);
+  // REPLACED, 2026-09-17. This used to assert that every row printed
+  // "starts: … / drops out: …" under the You get column. Tim had that removed —
+  // two wrapped lines in two strong colours, repeating the names already in the
+  // two columns either side — so the claim is now its absence, and the
+  // before-and-after is asserted in the pop-up where it moved to.
+  ok('no row carries the old churn block any more',
+    fresh.trades.every((t) => t.churn === ''),
+    fresh.trades.map((t) => t.churn).filter(Boolean).join(' | '));
+  ok('and no row says "starts:" or "drops out:" anywhere in it',
+    fresh.trades.every((t) => !/starts:|drops out:|starts more:|starts less:/.test(
+      [names(t.send), names(t.receive), t.shape, t.beforeAfter].join(' '))),
+    JSON.stringify(fresh.trades[0] || {}).slice(0, 200));
 
   // The site-wide click-through contract. link-check.mjs follows these ids to
   // the Players page; here we only insist the page emits them at all.
@@ -1073,6 +1180,35 @@ if (!fresh.boot) {
     links.length >= fresh.trades.length * 2 &&
     links.every((h) => /^waivers\.html\?player=\d+$/.test(h)),
     `${links.length} links, e.g. ${links[0]}`);
+
+  // ---- the shape filter says what a shape IS ------------------------------
+  //
+  // Tim, 2026-09-17: "I also don't understand what the straight swap,
+  // consolidate, or any shape trade categories means." A count each way needs
+  // no teaching, so the labels are counts and the consequence is said once,
+  // under the control. Two claims, and they are separate: the LABELS changed,
+  // and the stored preference values did NOT — a rename that quietly moved the
+  // saved key would log him out of his own filter.
+  const want = { all: 'Any shape', even: '1 for 1', consolidate: '2 for 1', depth: '1 for 2' };
+  ok('the shape filter offers the same four choices it always did',
+    fresh.kinds.map((k) => k.kind).join(',') === 'all,even,consolidate,depth',
+    fresh.kinds.map((k) => k.kind).join(','));
+  ok('and each is labelled with the count each way, not a description of it',
+    fresh.kinds.every((k) => k.label === want[k.kind]),
+    fresh.kinds.map((k) => `${k.kind}=${k.label}`).join(' | '));
+  ok('no old wording survives on any of them',
+    !/Straight swap|You consolidate|You add depth/.test(fresh.kinds.map((k) => k.label).join(' ')),
+    fresh.kinds.map((k) => k.label).join(' | '));
+  // HANDOFF: a control's explanation may never live in a `title`, because
+  // js/touch-titles.js deliberately leaves controls alone and a tap on a button
+  // has to work the button. So it is a `.ctl-hint`, in view.
+  ok('and none of them hides its meaning in a title nobody on a phone can read',
+    fresh.kinds.every((k) => k.title === ''),
+    fresh.kinds.map((k) => `${k.kind}:${k.title}`).join(' | '));
+  ok('the hint under the control explains 2 for 1 and 1 for 2',
+    /2 for 1/.test(fresh.kindHint) && /1 for 2/.test(fresh.kindHint) &&
+    /send two/.test(fresh.kindHint) && /send one/.test(fresh.kindHint),
+    fresh.kindHint);
 
   for (const phrase of ['both totals go up', 'Nothing is sent to ESPN', 'drop somebody']) {
     ok(`the finder note explains "${phrase}"`, fresh.tradeNote.includes(phrase),
@@ -1094,11 +1230,18 @@ if (!shapes.boot) {
     consolidate: (r) => r.send === 2 && r.get === 1,
     depth: (r) => r.send === 1 && r.get === 2,
   };
+  // The Deal column's own label, tied to the counts in the row beside it. This
+  // is what makes the relabelling falsifiable rather than cosmetic: a row that
+  // says "2 for 1" must be a row sending two men and receiving one.
+  const label = { even: '1 for 1', consolidate: '2 for 1', depth: '1 for 2' };
   for (const [kind, test] of Object.entries(want)) {
     const got = shapes.byKind[kind];
     ok(`the ${kind} button lights up when pressed`, /\bon\b/.test(got.on), got.on);
     ok(`searching ${kind} returns only that shape`, got.rows.every(test),
       JSON.stringify(got.rows.slice(0, 4)));
+    ok(`and every ${kind} row is headed "${label[kind]}", which is what it does`,
+      got.rows.every((r) => r.shape.startsWith(label[kind])),
+      got.rows.map((r) => r.shape).slice(0, 3).join(' | '));
   }
 
   // "Any shape" must be a superset — if it returned fewer than a narrowed
@@ -1171,6 +1314,12 @@ if (!ctl.boot) {
     ok('and the page says why in words',
       /No trade here makes both squads better/.test(ctl.afterQuietPartner.empty),
       ctl.afterQuietPartner.empty.slice(0, 140));
+    // And it sends the reader the right way. The message pointed at "the depth
+    // map above" while the map was first; the map is last now.
+    ok('and points DOWN to the depth map, which now sits under it',
+      /depth map below/.test(ctl.afterQuietPartner.empty) &&
+      !/depth map above/.test(ctl.afterQuietPartner.empty),
+      ctl.afterQuietPartner.empty.slice(-160));
   }
 
   ok('going back to "Any manager" restores the whole list',
@@ -1367,6 +1516,19 @@ if (!wk.boot) {
     /no requests at all/.test(wk.before.cost.note), wk.before.cost.note.slice(0, 200));
   ok('there is no combo before the weeks are priced, and it says why',
     /every remaining week/i.test(wk.before.combo.body), wk.before.combo.body.slice(0, 160));
+  // AND IT NAMES THE BUTTON EXACTLY. The combo panel tells the reader to press
+  // a control in the toolbar, quoting its face. It used to get those words by
+  // reading `#loadWeeks`'s textContent back off the page — a panel that was
+  // right only because the toolbar happened to be painted before it. That is a
+  // latent coupling rather than a bug anybody saw, and it is why the panels
+  // could not simply be reordered and left; both halves now derive the label
+  // from `weeksButton()` in js/trade-page.js, so the paint order is free.
+  //
+  // What this assertion holds down is the thing that WOULD be visible: the two
+  // labels agreeing character for character, whichever way they are derived.
+  ok('and quotes the weekly button word for word',
+    wk.before.cost.button.length > 0 && wk.before.combo.body.includes(wk.before.cost.button),
+    `button "${wk.before.cost.button}" vs combo "${wk.before.combo.body.slice(0, 200)}"`);
 
   // -- pressing it switches the measure ------------------------------------
   eq(wk.after.measure, 'weeks', 'pressing the button selects the weekly measure');
@@ -1393,8 +1555,16 @@ if (!wk.boot) {
   ok('and every gain carries its per-week twin',
     wk.after.trades.length > 0 && wk.after.trades.every((t) => /\/wk/.test(t.gainText)),
     (wk.after.trades[0] || {}).gainText);
-  ok('the depth map says it is still per week, unlike the panels below it',
+  ok('the depth map says it is still per week, unlike the panels above it',
     /per week/.test(wk.after.depthNote), wk.after.depthNote.slice(0, 400));
+  // THE PROSE HAS TO FOLLOW THE PANELS. The depth note pointed at "the panels
+  // below" and "the deals below" while the map sat first; it is last now, and a
+  // note telling a reader to look the wrong way is a defect of exactly the kind
+  // the reorder was meant to remove rather than create.
+  ok('and points UP at the deals, now that it sits under them',
+    /panels above/.test(wk.after.depthNote) && /deals above/.test(wk.after.depthNote) &&
+    !/(panels|deals|offer) below/.test(wk.after.depthNote),
+    wk.after.depthNote.slice(0, 600));
 
   // The two bases must actually produce different numbers, or one of them is
   // being ignored — the failure this whole scenario exists to catch.
@@ -1440,6 +1610,33 @@ if (!wk.boot) {
 
   // -- ask 3: the drill-down -----------------------------------------------
   ok('clicking an offer opens the deal', wk.deal && !wk.deal.hidden, JSON.stringify(wk.deal).slice(0, 200));
+
+  // THE BEFORE-AND-AFTER LIVES HERE NOW, and only here. The rows gave it up
+  // (Tim, 2026-09-17) because beside the two package columns it was mostly
+  // their own names again — so what has to be true of it is the opposite claim
+  // to the one the rows used to carry, plus the one fact those columns never
+  // could say: which of these men are HIS, promoted or benched by the deal
+  // without ever being part of it.
+  const churn = (wk.deal && wk.deal.churnEntries) || [];
+  ok('the pop-up still carries the before-and-after the rows gave up',
+    /starts/.test((wk.deal && wk.deal.churn) || '') && churn.length > 0,
+    ((wk.deal && wk.deal.churn) || '').slice(0, 200));
+  // The two packages, read off the pop-up's own head rather than assumed.
+  const dealt = (wk.deal.men || []).map((m) => m.text);
+  const inDeal = (name) => dealt.some((t) => t.startsWith(name));
+  ok('every man tagged "yours" is one who is NOT in the trade',
+    churn.filter((e) => e.own).every((e) => !inDeal(e.name)),
+    churn.filter((e) => e.own && inDeal(e.name)).map((e) => e.name).join(', '));
+  ok('and every man left untagged IS in one of the two packages',
+    churn.filter((e) => !e.own).every((e) => inDeal(e.name)),
+    churn.filter((e) => !e.own && !inDeal(e.name)).map((e) => e.name).join(', '));
+  ok('it names at least one man of his own that the deal moves',
+    churn.some((e) => e.own), JSON.stringify(churn));
+  // Colour is never the only cue (HANDOFF). The tag is a WORD — "benched",
+  // "promoted", "more weeks", "fewer weeks" — and the shade is beside it.
+  ok('and says in words what happened to him, not only in colour',
+    churn.filter((e) => e.own).every((e) => /benched|promoted|weeks/.test(e.own)),
+    churn.filter((e) => e.own).map((e) => e.own).join(' | '));
   if (wk.deal && wk.deal.weeks) {
     eq(wk.deal.weeks.weeks.length, spanLen, 'one row per remaining week');
     ok('the columns are current, changed and the difference',
@@ -1566,8 +1763,11 @@ if (!wk.boot) {
     combo.rows.every((r) => r.partner && r.send.length && r.receive.length &&
       Number.isFinite(r.myGain)),
     JSON.stringify(combo.rows.map((r) => [r.partner, r.send.length, r.receive.length, r.myGain])));
-  ok('and says who starts and who drops out, exactly as the finder does',
-    combo.rows.every((r) => /starts/.test(r.churn)),
+  // REPLACED with the finder's row: the combo's rows are the SAME markup, so
+  // when the churn block came off one it had to come off the other. That they
+  // agree is the point — one builder, one answer.
+  ok('and carries no churn block either, exactly as the finder does not',
+    combo.rows.every((r) => r.churn === ''),
     combo.rows.map((r) => r.churn.slice(0, 40)).join(' | '));
   ok('and offers the same week-by-week pop-up',
     combo.rows.every((r) => r.opener && /^c:\d+$/.test(r.openKey || '')),

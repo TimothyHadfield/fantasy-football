@@ -58,7 +58,7 @@ console.log('CHART  :', $('forecastChart').querySelectorAll('svg').length ? $('f
 console.log('NOTE   :');
 for (const line of $('forecastNote').innerHTML.split('<br>')) console.log('    -', line.replace(/<[^>]*>/g,'').replace(/\\s+/g,' ').trim());
 console.log('WEEK   :', t($('weekNote')));
-console.log('STAND  :', t($('standingsNote')));
+console.log('STATS2 :', Array.from($('summary').querySelectorAll('.stat')).map(s=>t(s)).join('   |   '));
 console.log('MATCH  :', t($('matchupsNote')));
 console.log('RESULT :', t($('resultsNote')));
 console.log('CARDS  :');

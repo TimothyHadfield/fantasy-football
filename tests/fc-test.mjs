@@ -135,8 +135,6 @@ const SCENARIOS = {
         forecastNote: txt($('forecastNote')),
         sim: [...$('simTable').querySelectorAll('tbody tr')]
           .map((tr) => [...tr.children].map((td) => td.getAttribute('data-v') ?? txt(td))),
-        standings: [...$('standingsTable').querySelectorAll('tbody tr')]
-          .map((tr) => [...tr.children].map((td) => txt(td))),
       });
 
       // ---- what booting live recorded on its own --------------------------
@@ -645,12 +643,41 @@ async function check(scenario, boot) {
     c.ok('status line on demo with no league: NOT recorded, and says why',
       /^This week: NOT recorded — no league is connected\.$/.test(snapLine), snapLine);
   }
-  // The phone furniture: a jump row to the three panels, and a fold that is
-  // OPEN on a wide screen (this harness's matchMedia matches nothing).
-  const jumps = [...d.querySelectorAll('nav.jump a')].map((a) => a.getAttribute('href'));
-  c.ok('the jump row links My season, Simulation and Standings',
-    JSON.stringify(jumps) === JSON.stringify(['#forecastPanel', '#simPanel', '#standingsPanel']) &&
-    jumps.every((h) => d.getElementById(h.slice(1))), JSON.stringify(jumps));
+  // ---- THE ORDER OF THE PAGE, TOP TO BOTTOM -------------------------------
+  //
+  // Tim's ask of 2026-09-17, made falsifiable: his own season first, then the
+  // simulation, then the week in front of him, then everything else in the
+  // order it was already in. Read in DOCUMENT order, so moving a panel without
+  // moving this line fails here rather than being noticed on the phone.
+  const panelIds = [...d.querySelectorAll('section.panel')].map((s) => s.getAttribute('id'));
+  c.ok('the panels are in Tim’s order, top to bottom',
+    JSON.stringify(panelIds) === JSON.stringify([
+      'forecastPanel', 'simPanel', 'matchupsPanel',
+      'sourcePanel', 'timePanel', 'resultsPanel', 'h2hPanel',
+    ]),
+    JSON.stringify(panelIds));
+  // The week picker is INSIDE the matchups panel, at the top of it — the whole
+  // point of the combine. A picker that floated between panels again would put
+  // it outside #matchupsPanel and fail here.
+  const wkPanel = d.getElementById('matchupsPanel');
+  const inPanel = wkPanel ? [...wkPanel.querySelectorAll('*')] : [];
+  const wkSel = $('weekSelect');
+  c.ok('the week picker lives inside the Week matchups panel',
+    Boolean(wkSel) && inPanel.includes(wkSel),
+    wkSel ? 'the picker is outside #matchupsPanel' : 'no picker');
+  c.ok('and it comes before the cards it scopes',
+    inPanel.indexOf(wkSel) >= 0 && inPanel.indexOf(wkSel) < inPanel.indexOf($('matchups')),
+    `picker at ${inPanel.indexOf(wkSel)}, cards at ${inPanel.indexOf($('matchups'))}`);
+  c.ok('the week summary was folded into the same panel, not left as a panel of its own',
+    inPanel.includes($('summary')) && !d.getElementById('summaryTitle'),
+    'the summary stat row is still somewhere else');
+  // THE STANDINGS PANEL IS GONE. Tim's direction: the site adds to ESPN and
+  // does not rebuild a league table ESPN already shows.
+  c.ok('there is no standings panel, table or note anywhere on the page',
+    !d.getElementById('standingsPanel') && !d.getElementById('standingsTable') &&
+    !d.getElementById('standingsNote') && !/<h2[^>]*>\s*Standings\s*</i.test(d.body.innerHTML),
+    'a standings element survived');
+
   c.ok('the time machine is unfolded on a wide screen', $('timeFold').hasAttribute('open'));
   c.ok('and its status line is the fold’s summary, first in it',
     $('timeFold').firstElementChild === $('snapLine') && $('snapLine').tagName === 'SUMMARY');
@@ -659,7 +686,11 @@ async function check(scenario, boot) {
   if (scenario === 'live-rosterfail') {
     c.ok('forecast states there is nothing to forecast from', empty && /no projection to put against/i.test(txt(empty)), txt(empty));
     c.ok('note names the cause and a fix', /rosters could not be read/.test(note) && /Reload the page/.test(note), note);
-    c.ok('standings still fall back', /points per game so far/.test(txt($('standingsNote'))), txt($('standingsNote')));
+    // The strength basis used to be stated under the standings table. That
+    // table is gone; the basis moved to the matchups panel, which is what
+    // prints a strength ranking against an unplayed card.
+    c.ok('the strength basis still falls back, and still says so',
+      /points per game so far/.test(txt($('matchupsNote'))), txt($('matchupsNote')));
     c.ok('no chart is drawn', $('forecastChart').querySelectorAll('svg').length === 0);
   }
 
@@ -1383,8 +1414,9 @@ async function check(scenario, boot) {
     c.ok('projections are week-sized, not season totals',
       [...mine.values()].every((v) => v > 40 && v < 260), JSON.stringify([...mine.entries()]));
 
-    // Strength basis is the new one, stated once.
-    const sn = txt($('standingsNote'));
+    // Strength basis is the new one, stated once — in the matchups panel now
+    // that there is no standings panel to carry it.
+    const sn = txt($('matchupsNote'));
     c.ok('strength note names the per-week projection basis',
       /ESPN’s own projection for each week/.test(sn) && /weeks 2 to 13/.test(sn), sn);
     c.ok('strength note says the lineup is optimised, not the one set',
@@ -1394,7 +1426,26 @@ async function check(scenario, boot) {
     c.ok('slots read from the lineups', /10 starters read from the current lineups/.test(sn), sn);
 
     c.ok('week note keeps the forecast out of the week contract',
-      /Standings, the grid and the season forecast stay season-to-date/.test(txt($('weekNote'))), txt($('weekNote')));
+      /The head-to-head grid and the season forecast stay season-to-date/.test(txt($('weekNote'))),
+      txt($('weekNote')));
+
+    // ---- what survived the standings table, inside "My season" -------------
+    //
+    // Two figures, both about the SELECTED team rather than the league: where
+    // he sits now (the one row of a table that is about him) and how hard the
+    // run-in is (which ESPN publishes nowhere). Anything more would be the
+    // table again.
+    const fcStats = Array.from($('forecastStats').querySelectorAll('.stat')).map((s) => txt(s));
+    c.ok('My season shows this team’s place now',
+      fcStats.some((s) => /^Place now\s?\d+(st|nd|rd|th) of 10$/.test(s)), fcStats.join(' | '));
+    c.ok('and how hard its run-in is',
+      fcStats.some((s) => /^Run-in\s?\d+(st|nd|rd|th) hardest of 10$/.test(s)), fcStats.join(' | '));
+    c.ok('the forecast note says which order “Place now” is in, and why there is no table',
+      /wins, with a tie as half a win, then points for/.test(note) &&
+      /full league table is deliberately not repeated/.test(note), note);
+    c.ok('and states the run-in’s basis where the run-in is shown',
+      /Run-in<\/strong> ranks the average strength/.test($('forecastNote').innerHTML) &&
+      /ESPN’s own projection for each week/.test(note), note);
   }
 
   if (scenario.startsWith('demo')) {

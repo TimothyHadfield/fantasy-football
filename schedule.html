@@ -17,9 +17,10 @@
 <style>
 /* Page-local styles. Everything else comes from css/app.css. */
 
-/* The week rail. It sits between the season-wide panels above it and the
-   week-scoped panels below, so the reach of the control is visible in the
-   layout and not just claimed in a note. */
+/* The week rail. It lives INSIDE the Week matchups panel, at the top of it,
+   because the panel it scopes is the panel it sits in — a control floating
+   between two panels belonged to neither and read as page furniture. It still
+   reaches the Results table below, which #weekNote says in words. */
 .weekbar {
   display: flex;
   align-items: center;
@@ -29,7 +30,7 @@
   border: 1px solid var(--line);
   border-radius: var(--r-4);
   padding: 10px 14px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;   /* the same gap .toolbar leaves above its table */
 }
 .weekbar .wk-label {
   font-size: 11.5px;
@@ -151,7 +152,7 @@ section.panel h2.h2-inline {
 
 /* Season simulation. Unlike the forecast panel this table is the whole league
    at once, so the two highlights have to mean two different things: tr.me is
-   you (the same green the standings uses), and the rule down the left edge is
+   you (the same green every table on the site uses), and the rule down the left edge is
    whichever team the picker above is currently on — the team the chart is
    drawn for. A row can be both, which is why the mark is an edge and not
    another background. */
@@ -267,9 +268,6 @@ section.panel h2.h2-inline {
   .tm-fold > summary { pointer-events: none; }
 }
 
-/* The jump row is for a phone; a wide screen shows those panels soon enough. */
-.jump { display: none; }
-
 /* Long explanations read as short paragraphs once opened. */
 details.explain .panel-note p { margin: 0 0 9px; }
 details.explain .panel-note p:last-child { margin-bottom: 0; }
@@ -305,26 +303,6 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
   /* The team under a simulation percentage is already an ellipsis away from
      fitting; at this width the cap was cutting names that would now fit. */
   #simStats .stat .who { max-width: 44vw; }
-
-  /* Three panels a thumb would otherwise scroll several wide tables to reach. */
-  .jump {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin: -4px 0 14px;
-  }
-  .jump a {
-    flex: 1 1 0;
-    text-align: center;
-    padding: 9px 10px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-3);
-    background: var(--panel-2);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 14px;
-    white-space: nowrap;
-  }
 
   /* The time machine folds down to its status line: tap to open. The chevron
      is the same one the "How this works" toggles use. */
@@ -379,160 +357,25 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
   <h1>Schedule <span id="modeBadge" class="badge demo">Demo</span></h1>
   <p class="sub" id="pageSub">Showing a generated sample season so you can see the layout with real-looking results in it.</p>
 
-  <!-- On a phone the three panels people come here for sit below several
-       screens of wide tables. Hidden on a wide screen, where they do not. -->
-  <nav class="jump" aria-label="Jump to a panel">
-    <a href="#forecastPanel">My season</a>
-    <a href="#simPanel">Simulation</a>
-    <a href="#standingsPanel">Standings</a>
-  </nav>
+  <!-- THE ORDER OF THIS PAGE IS TIM'S, TOP TO BOTTOM BY USEFULNESS (2026-09-17):
+       his own season, the simulation, then the week in front of him, then
+       everything else. tests/fc-test.mjs asserts it in document order, so a
+       panel moved here without moving the test fails rather than drifting.
 
-  <section class="panel">
-    <h2>Data source</h2>
-    <div class="segmented" id="sourceToggle">
-      <button type="button" data-src="demo" class="on">Demo data</button>
-      <button type="button" data-src="live">My ESPN league</button>
-    </div>
-    <div id="sourceStatus" class="panel-note"></div>
-  </section>
+       THE STANDINGS PANEL IS GONE ON PURPOSE. His direction: this site ADDS to
+       ESPN and must not rebuild what ESPN's own app already shows well, and a
+       plain league table is ESPN's job. The two things the table carried that
+       ESPN does NOT show — where you sit by this league's own rule, and how
+       hard your run-in is — survive as two figures inside "My season". Every
+       standings COMPUTATION other things depend on is untouched: seeding for
+       the bracket (capture.standingsKey, used inside forecast.js's simulation),
+       the banked table, and the weekly reading in js/capture.js. -->
 
-  <!-- The time machine. It sits directly under the data source because that is
-       what it is: choosing an archived week replaces the whole page's data, so
-       the standings, the results, the forecast and the simulation all travel
-       together rather than one panel disagreeing with the four above it. -->
-  <section class="panel" id="timePanel">
-    <h2>Time machine</h2>
-    <!-- The status line is the summary of a fold. On a wide screen the fold is
-         always open and the line is just a line; on a phone the panel
-         collapses to it, since whether this week was recorded is the one thing
-         to read here. -->
-    <details class="tm-fold" id="timeFold" open>
-    <summary id="snapLine" class="snap-line dim">Checking whether this week was recorded…</summary>
-    <p class="lede">See the whole page as it stood in an earlier week, from readings saved at the time.</p>
-    <div class="toolbar">
-      <div class="select-md">
-        <label for="asOfSelect">Showing the season as of</label>
-        <select id="asOfSelect"></select>
-      </div>
-      <div class="tool-group">
-        <button type="button" id="snapSave">Save this week</button>
-        <button type="button" id="snapExport">Export archive</button>
-        <button type="button" id="snapImport">Import&hellip;</button>
-        <button type="button" id="snapDelete" class="hidden">Delete this week</button>
-        <input type="file" id="snapFile" accept="application/json,.json" hidden>
-      </div>
-    </div>
-    <div id="replayBanner" class="replay-banner hidden"></div>
-    <!-- What is kept, and the one thing to act on (weeks not yet exported).
-         Always visible; the why and how sit in #snapStatus below. -->
-    <div id="snapState" class="snap-state"></div>
-    <details class="explain">
-      <summary>How the archive works</summary>
-      <div id="snapStatus" class="panel-note"></div>
-    </details>
-    </details>
-  </section>
-
-  <section class="panel" id="standingsPanel">
-    <h2>Standings</h2>
-    <p class="lede">The league table so far. &ldquo;Rest of season&rdquo; ranks each team&rsquo;s remaining schedule: 1 is the hardest.</p>
-    <div class="table-scroll"><table id="standingsTable">
-      <thead><tr>
-        <th class="name" data-sort>Team</th>
-        <th data-sort>W&ndash;L</th>
-        <th data-sort>PF</th>
-        <th data-sort>PA</th>
-        <th data-sort title="Rank of the average strength of the opponents still to play: 1 is the hardest run-in.">Rest of season</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <details class="explain">
-      <summary>How the run-in is ranked</summary>
-      <p class="panel-note" id="standingsNote"></p>
-    </details>
-  </section>
-
-  <div class="weekbar">
-    <label class="wk-label" for="weekSelect">Week</label>
-    <button type="button" class="step" id="weekPrev" aria-label="Previous week">&lsaquo;</button>
-    <select id="weekSelect"></select>
-    <button type="button" class="step" id="weekNext" aria-label="Next week">&rsaquo;</button>
-    <span class="wk-note" id="weekNote"></span>
-  </div>
-
-  <section class="panel">
-    <h2 id="summaryTitle">Season so far</h2>
-    <div class="stat-row" id="summary"></div>
-    <p class="panel-note" id="summaryNote"></p>
-  </section>
-
-  <section class="panel">
-    <h2 id="matchupsTitle">Matchups</h2>
-    <p class="lede">Each game with both teams&rsquo; records. Win chances on unplayed games are our estimate, not ESPN&rsquo;s.</p>
-    <div id="matchups"></div>
-    <details class="explain">
-      <summary>About these numbers</summary>
-      <p class="panel-note" id="matchupsNote"></p>
-    </details>
-  </section>
-
-  <section class="panel">
-    <h2>Results</h2>
-    <p class="lede">Every score in the chosen week. Tap a header to sort.</p>
-    <div class="toolbar">
-      <div class="segmented seg-sm" id="resultsView">
-        <button type="button" data-view="played" class="on">Played</button>
-        <button type="button" data-view="upcoming">Upcoming</button>
-        <button type="button" data-view="all">All</button>
-      </div>
-      <div class="form-select select-wide">
-        <label for="filterTeam">Only games involving</label>
-        <select id="filterTeam"></select>
-      </div>
-    </div>
-    <div class="table-scroll"><table id="resultsTable">
-      <thead><tr>
-        <th data-sort>Wk</th>
-        <th class="name" data-sort>Home</th>
-        <th data-sort>Home pts</th>
-        <th class="left" data-sort>Away</th>
-        <th data-sort>Away pts</th>
-        <th data-sort title="Home points minus away points.">Margin</th>
-        <th data-sort title="Our estimate of the home team's chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds. Blank once a game is decided.">Home win</th>
-        <th class="left" data-sort>State</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <details class="explain">
-      <summary>About this table</summary>
-      <p class="panel-note" id="resultsNote"></p>
-    </details>
-  </section>
-
-  <section class="panel">
-    <h2 id="h2hTitle">Head to head</h2>
-    <p class="lede">Every pairing in the league: when they meet, or how they have done against each other.</p>
-    <div class="row mb-12">
-      <div class="segmented seg-sm" id="h2hView">
-        <button type="button" data-view="schedule">Who plays who</button>
-        <button type="button" data-view="records">Records</button>
-      </div>
-    </div>
-    <div class="table-scroll" id="h2hGrid"></div>
-    <details class="explain">
-      <summary>How to read the grid</summary>
-      <p class="panel-note" id="h2hNote"></p>
-    </details>
-  </section>
-
-  <!-- Season-wide, so it sits below the week-scoped panels rather than among
-       them; #weekNote states which way round it is for the data on screen.
-       (On live data the forecast simply runs from the next unplayed game. In
-       the demo, whose season is complete, the week picker chooses the point in
-       time the forecast is made from.) -->
+  <!-- 1. His own season. Top of the page because it is the one panel that is
+          about him rather than about the league. -->
   <section class="panel" id="forecastPanel">
     <div class="row spread mb-12">
-      <h2 id="forecastTitle" class="h2-inline">Season forecast</h2>
+      <h2 id="forecastTitle" class="h2-inline">My season</h2>
       <div class="form-select select-wide">
         <label for="forecastTeam">Forecast for</label>
         <select id="forecastTeam"></select>
@@ -558,11 +401,10 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
     </details>
   </section>
 
-  <!-- Last panel on the page because it is the only one that needs every other
-       team's projection at once: a placing is not something you can work out
-       from your own results. It follows the "Forecast for" picker above rather
-       than carrying a second one, so the chart here and the table there are
-       always about the same team. -->
+  <!-- 2. The simulation. It needs every other team's projection at once — a
+          placing is not something you can work out from your own results — so
+          it follows "Forecast for" above rather than carrying a second picker,
+          and the chart here and the table there are always the same team. -->
   <section class="panel" id="simPanel">
     <div class="row spread mb-12">
       <h2 id="simTitle" class="h2-inline">Simulate season</h2>
@@ -616,6 +458,128 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
     <details class="explain">
       <summary>How the simulation works</summary>
       <div class="panel-note" id="simNote"></div>
+    </details>
+  </section>
+
+  <!-- 3. The week in front of him, as ONE panel: the week picker, the week's
+          headline numbers and the week's cards used to be three separate
+          things stacked up the page, and the control that drove all of them
+          sat outside every one of them. The picker is first inside the panel
+          because it names what the rest of the panel is about. It still
+          reaches the Results table lower down, which #weekNote says. -->
+  <section class="panel" id="matchupsPanel">
+    <h2 id="matchupsTitle">Week matchups</h2>
+    <p class="lede">Each game with both teams&rsquo; records. Win chances on unplayed games are our estimate, not ESPN&rsquo;s.</p>
+    <div class="weekbar">
+      <label class="wk-label" for="weekSelect">Week</label>
+      <button type="button" class="step" id="weekPrev" aria-label="Previous week">&lsaquo;</button>
+      <select id="weekSelect"></select>
+      <button type="button" class="step" id="weekNext" aria-label="Next week">&rsaquo;</button>
+      <span class="wk-note" id="weekNote"></span>
+    </div>
+    <div class="stat-row" id="summary"></div>
+    <div id="matchups"></div>
+    <p class="panel-note" id="summaryNote"></p>
+    <details class="explain">
+      <summary>About these numbers</summary>
+      <p class="panel-note" id="matchupsNote"></p>
+    </details>
+  </section>
+
+  <section class="panel" id="sourcePanel">
+    <h2>Data source</h2>
+    <div class="segmented" id="sourceToggle">
+      <button type="button" data-src="demo" class="on">Demo data</button>
+      <button type="button" data-src="live">My ESPN league</button>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <!-- The time machine. It sits directly under the data source because that is
+       what it is: choosing an archived week replaces the whole page's data, so
+       the results, the matchups, the forecast and the simulation all travel
+       together rather than one panel disagreeing with the rest. The connection
+       bar links to #timePanel, and its status line has to keep working — see
+       js/capture.js. -->
+  <section class="panel" id="timePanel">
+    <h2>Time machine</h2>
+    <!-- The status line is the summary of a fold. On a wide screen the fold is
+         always open and the line is just a line; on a phone the panel
+         collapses to it, since whether this week was recorded is the one thing
+         to read here. -->
+    <details class="tm-fold" id="timeFold" open>
+    <summary id="snapLine" class="snap-line dim">Checking whether this week was recorded…</summary>
+    <p class="lede">See the whole page as it stood in an earlier week, from readings saved at the time.</p>
+    <div class="toolbar">
+      <div class="select-md">
+        <label for="asOfSelect">Showing the season as of</label>
+        <select id="asOfSelect"></select>
+      </div>
+      <div class="tool-group">
+        <button type="button" id="snapSave">Save this week</button>
+        <button type="button" id="snapExport">Export archive</button>
+        <button type="button" id="snapImport">Import&hellip;</button>
+        <button type="button" id="snapDelete" class="hidden">Delete this week</button>
+        <input type="file" id="snapFile" accept="application/json,.json" hidden>
+      </div>
+    </div>
+    <div id="replayBanner" class="replay-banner hidden"></div>
+    <!-- What is kept, and the one thing to act on (weeks not yet exported).
+         Always visible; the why and how sit in #snapStatus below. -->
+    <div id="snapState" class="snap-state"></div>
+    <details class="explain">
+      <summary>How the archive works</summary>
+      <div id="snapStatus" class="panel-note"></div>
+    </details>
+    </details>
+  </section>
+
+  <section class="panel" id="resultsPanel">
+    <h2>Results</h2>
+    <p class="lede">Every score in the chosen week. Tap a header to sort.</p>
+    <div class="toolbar">
+      <div class="segmented seg-sm" id="resultsView">
+        <button type="button" data-view="played" class="on">Played</button>
+        <button type="button" data-view="upcoming">Upcoming</button>
+        <button type="button" data-view="all">All</button>
+      </div>
+      <div class="form-select select-wide">
+        <label for="filterTeam">Only games involving</label>
+        <select id="filterTeam"></select>
+      </div>
+    </div>
+    <div class="table-scroll"><table id="resultsTable">
+      <thead><tr>
+        <th data-sort>Wk</th>
+        <th class="name" data-sort>Home</th>
+        <th data-sort>Home pts</th>
+        <th class="left" data-sort>Away</th>
+        <th data-sort>Away pts</th>
+        <th data-sort title="Home points minus away points.">Margin</th>
+        <th data-sort title="Our estimate of the home team's chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds. Blank once a game is decided.">Home win</th>
+        <th class="left" data-sort>State</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <details class="explain">
+      <summary>About this table</summary>
+      <p class="panel-note" id="resultsNote"></p>
+    </details>
+  </section>
+
+  <section class="panel" id="h2hPanel">
+    <h2 id="h2hTitle">Head to head</h2>
+    <p class="lede">Every pairing in the league: when they meet, or how they have done against each other.</p>
+    <div class="row mb-12">
+      <div class="segmented seg-sm" id="h2hView">
+        <button type="button" data-view="schedule">Who plays who</button>
+        <button type="button" data-view="records">Records</button>
+      </div>
+    </div>
+    <div class="table-scroll" id="h2hGrid"></div>
+    <details class="explain">
+      <summary>How to read the grid</summary>
+      <p class="panel-note" id="h2hNote"></p>
     </details>
   </section>
 

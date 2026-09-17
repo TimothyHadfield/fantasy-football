@@ -529,6 +529,28 @@ function check(scenario, { document, window, errors, rejections }) {
       c.ok('and a mouse click on one opens no title sheet', !ts || ts.hidden,
         'the title sheet opened under a mouse');
     }
+
+    // --- "Season by week" under a MOUSE ------------------------------------
+    // Its rows are lineup slots and every cell is a bare number, so the two
+    // things that name the man — the line above the table and the highlight —
+    // have to be on the hover here and on the tap in the other mode. A click
+    // must still simply follow the link, which link-check.mjs relies on.
+    {
+      const season = document.getElementById('seasonTable');
+      const sc = season.querySelector('tbody td[data-pid]');
+      c.ok('the season panel has cells standing for a player', !!sc, 'no data-pid cells');
+      if (sc) {
+        const pid = sc.getAttribute('data-pid');
+        const his = season.querySelectorAll(`td[data-pid="${pid}"]`).length;
+        sc.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+        const pick = document.getElementById('seasonPick').textContent.replace(/\s+/g, ' ').trim();
+        c.ok('hovering a number names him above the table', /in the lineup \d+ week/.test(pick), pick);
+        c.eq('and lights every week he holds a slot',
+          season.querySelectorAll('td.lit').length, his);
+        const ev4 = clickOn(window, sc.querySelector('a.pref'));
+        c.eq('and a mouse click on one is not intercepted', ev4.defaultPrevented, false);
+      }
+    }
     return c.out;
   }
 
@@ -800,6 +822,48 @@ function check(scenario, { document, window, errors, rejections }) {
     const ev2 = clickOn(window, weekCell.querySelector('a.pref') || weekCell);
     c.eq('and a tap there opens a sheet as well', ev2.defaultPrevented, true);
     c.eq('which is the same card', document.getElementById('tipCard').hidden, false);
+  }
+
+  // --- "SEASON BY WEEK" UNDER A FINGER ------------------------------------
+  //
+  // Rebuilt on 2026-09-17 so its rows are lineup SLOTS: the cells are bare
+  // numbers, no row carries a name, and the two things that put a person back
+  // into the grid — the line above the table and the highlight across his other
+  // weeks — are on a hover. A phone has no hover, so a tap has to do all three
+  // (name him, light his weeks, open the sheet) instead of leaving the page by
+  // the link, which is exactly the defect this suite exists for.
+  {
+    const season = document.getElementById('seasonTable');
+    const sc = season.querySelector('tbody td[data-pid]');
+    c.ok('the season panel has cells standing for a player', !!sc, 'no data-pid cells');
+    if (sc) {
+      const pid = sc.getAttribute('data-pid');
+      const his = [...season.querySelectorAll(`td[data-pid="${pid}"]`)];
+      const seasonLink = sc.querySelector('a.pref');
+      const before = document.getElementById('seasonPick').textContent.trim();
+      const ev5 = clickOn(window, seasonLink || sc);
+      c.eq('A TAP ON A SEASON NUMBER DOES NOT FOLLOW ITS LINK', ev5.defaultPrevented, true);
+      const card2 = document.getElementById('tipCard');
+      c.ok('it opens the same card as a sheet',
+        card2 && !card2.hidden && card2.classList.contains('sheet'), 'no sheet after the tap');
+      const pick = document.getElementById('seasonPick').textContent.replace(/\s+/g, ' ').trim();
+      c.ok('THE TAP NAMES HIM ABOVE THE TABLE, WHERE A HOVER WOULD HAVE',
+        /in the lineup \d+ week/.test(pick) && pick !== before, pick);
+      c.eq('AND LIGHTS EVERY OTHER WEEK HE HOLDS A SLOT',
+        season.querySelectorAll('td.lit').length, his.length);
+      c.ok('which is more than the one cell that was tapped', his.length > 1, `${his.length}`);
+      if (seasonLink && card2) {
+        const open2 = card2.querySelector('.tc-open');
+        c.eq('and the sheet hands back the same href the cell carried',
+          open2 && open2.getAttribute('href'), seasonLink.getAttribute('href'));
+      }
+      // Escape clears both, so one gesture puts the panel back to rest.
+      const esc2 = new window.Event('keydown', { bubbles: true });
+      esc2.key = 'Escape';
+      document.dispatchEvent(esc2);
+      c.eq('Escape clears the highlight', season.querySelectorAll('td.lit').length, 0);
+      c.eq('and the sheet with it', document.getElementById('tipCard').hidden, true);
+    }
   }
 
   return c.out;

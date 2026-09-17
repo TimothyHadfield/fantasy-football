@@ -436,7 +436,8 @@ function renderMainTable() {
     'actual record.',
     none
       ? 'Nothing has been played yet, so every column drawn from a result is blank ' +
-        'rather than zero. Opp proj is the exception, and the panel above it explains why.'
+        'rather than zero. Opp proj is the exception, and the Schedule luck panel ' +
+        'further down the page explains why.'
       : '<strong>±</strong> beside Close, Luck and S+L is how far that figure could still ' +
         'move: one standard error of an average of this team&rsquo;s games, from how much ' +
         'the per-game number varies across the league. About two times in three the ' +
@@ -593,7 +594,7 @@ function renderEarly() {
     `luck, cumulative luck and per-team spread appear from week ${MIN_WEEKS} — with ` +
     'less than that they draw a shape that is not in the data.' +
     (weeks === 0
-      ? ' Schedule luck, at the top of the page, is the number that does not have to wait.'
+      ? ' Schedule luck, further down the page, is the number that does not have to wait.'
       : ''),
   ];
 

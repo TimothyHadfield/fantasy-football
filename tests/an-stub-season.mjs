@@ -23,9 +23,12 @@ const FAIL = new Set(
 const DELAY = Number(process.env.AN_DELAY || 0);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const SLOTS = [0, 2, 2, 4, 4, 6, 23, 16, 17, 20, 20, 20, 20, 20, 20];
+// Exported because an-test.mjs rebuilds every week's best legal lineup from
+// these raw numbers to check the season panel's slot rows — re-deriving the
+// answer rather than reading the page's own arithmetic back to it.
+export const SLOTS = [0, 2, 2, 4, 4, 6, 23, 16, 17, 20, 20, 20, 20, 20, 20];
 const LABEL = { 0: 'QB', 2: 'RB', 4: 'WR', 6: 'TE', 23: 'FLEX', 16: 'D/ST', 17: 'K', 20: 'BE' };
-const POS = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'WR', 'DST', 'K', 'RB', 'WR', 'QB', 'TE', 'WR', 'RB'];
+export const POS = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'WR', 'DST', 'K', 'RB', 'WR', 'QB', 'TE', 'WR', 'RB'];
 
 /** What the stub says ESPN projects. null = no number; 0 = bye. */
 export function projFor(i, week) {
@@ -39,10 +42,20 @@ export const playerName = (teamId, i) => `T${teamId} Player ${String(i).padStart
 /** Whether a player is on the roster in a given week. */
 export const onRoster = (i, week) => !(i === SIZE - 1 && week < SIGNED_WEEK);
 
+// AN_SOLO_K strips the kicker from every squad but team 4. It exists for ONE
+// question: what the season panel's red marks do when a slot has too few values
+// across the league to have a standard deviation at all. Combined with
+// AN_FAIL_WEEKS leaving a single week readable, the K slot ends up with exactly
+// one value in the whole league — which `stdev` refuses to take a deviation of,
+// and the panel must therefore refuse to colour.
+const SOLO_K = process.env.AN_SOLO_K === '1';
+const hasPlayer = (teamId, i) => !(SOLO_K && POS[i] === 'K' && teamId !== 4);
+
 function playersFor(teamId, week) {
   const out = [];
   for (let i = 0; i < SIZE; i++) {
     if (!onRoster(i, week)) continue;
+    if (!hasPlayer(teamId, i)) continue;
     const slot = SLOTS[i];
     out.push({
       playerId: teamId * 100 + i,
