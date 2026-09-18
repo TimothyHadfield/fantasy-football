@@ -434,6 +434,12 @@
   }
   .pick-line strong { color: var(--text); font-weight: 650; }
   .pick-line .pick-idle { color: var(--line-2); }
+  /* A number this man genuinely does not have, said rather than shown as 0.0. */
+  .pick-line .pick-none { color: var(--line-2); font-style: italic; }
+  /* The action the card's sheet used to carry. On a phone the tap is answered
+     by this line instead of by navigating, so this link is the only way out of
+     the panel to the player — it is not decoration. */
+  .pick-line .pick-open { margin-left: 4px; }
 
   /* The thresholds, printed so a reader can check a coloured cell by hand. */
   .bars-line .lg-lead { color: var(--dim); }
@@ -673,6 +679,22 @@
   /* ------------------------------------------------------------------ phone */
   @media (max-width: 760px) {
     .select-md { width: 100%; }
+
+    /* THE PICK LINE GETS TWO LINES HERE, AND BOTH ARE RESERVED.
+       It carries a name, a season projection and a scoring average now, which
+       does not fit 350px on one line — and the one-line rule above would clip
+       exactly the numbers Tim asked to see, since the name comes first and the
+       ellipsis eats the end. So it wraps, and `min-height` reserves the second
+       line whether or not it is in use: a line that GROWS when you point at a
+       number pushes the table down under the very finger reading it, which is
+       the thing the one-line rule existed to prevent. Two lines is enough for
+       the longest real content (a 26-character name, both numbers and the
+       link) measured at 390px. */
+    .pick-line {
+      white-space: normal;
+      overflow: visible;
+      min-height: 38px;
+    }
 
     /* The bench position and rank ride inside the cell — "12.3 RB4" — and at
        this size the gap between the number and its tag is most of what makes

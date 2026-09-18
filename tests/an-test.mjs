@@ -1510,16 +1510,20 @@ async function check(scenario, boot) {
       return linked.length > 0 &&
         linked.every((td) => td.querySelector('a.pref').textContent === td.textContent);
     })(), 'a name cell whose link does not cover it');
-  // The season panel's numbers stand for a man, so each is a link \u2014 and each
-  // carries the card, which is the ONLY place his name appears now that the
-  // rows are slots. So no `title` on the cell, exactly as in the grids.
-  c.ok('every filled season cell is a link, a card and nothing else',
+  // The season panel's numbers stand for a man, so each is a link \u2014 and, since
+  // Tim's 2026-09-18 change, NOTHING ELSE: no `data-tip`, because this panel
+  // draws no card ("we don't need to be providing the 14 week preview"), and
+  // still no `title`, because the cell's content is a link and
+  // js/touch-titles.js leaves links alone, which would make a title here a
+  // desktop-only explanation. Who he is lives on the line above the table.
+  c.ok('every filled season cell is a link and nothing else \u2014 no card, no title',
     (() => {
       const cells = [...d.querySelectorAll('#seasonTable tbody td[data-pid]')];
       return cells.length > 0 && cells.every((td) =>
-        td.querySelector('a.pref') && td.hasAttribute('data-tip') && !td.hasAttribute('title'));
+        td.querySelector('a.pref') && !td.hasAttribute('data-tip') && !td.hasAttribute('title'));
     })(),
     `${d.querySelectorAll('#seasonTable tbody td[data-pid]').length} filled, ` +
+    `${d.querySelectorAll('#seasonTable tbody td[data-pid][data-tip]').length} still carry a card, ` +
     `${d.querySelectorAll('#seasonTable tbody td[data-pid][title]').length} still titled`);
   c.ok('and the link wraps the whole cell, mark and all',
     [...d.querySelectorAll('#seasonTable tbody td[data-pid]')]
@@ -3198,15 +3202,26 @@ async function check(scenario, boot) {
     c.ok('the line is idle until something is pointed at',
       /Hover or tap a number to name the player/.test(w.idle), w.idle);
     c.ok('the busiest man really does hold more than one cell', w.held > 1, String(w.held));
+    // NAME, SEASON PROJ, CURRENT AVG — Tim's three, and in his words "that's
+    // it", so the old tail ("in the lineup N weeks, at RB1, FLEX") is gone:
+    // the highlight says both of those by lighting the cells themselves.
     c.ok('A HOVER NAMES HIM ON THE LINE ABOVE THE TABLE',
-      /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4} — in the lineup \d+ weeks?/.test(w.hover.pick),
+      /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4} — /.test(w.hover.pick),
+      w.hover.pick);
+    c.ok('WITH HIS SEASON PROJECTION AND WHAT HE IS AVERAGING',
+      /season proj \d|no season projection/.test(w.hover.pick) &&
+      /avg \d|nothing scored yet/.test(w.hover.pick),
       w.hover.pick);
     c.ok('AND LIGHTS EVERY OTHER CELL HE HOLDS, ACROSS THE WHOLE SEASON',
       JSON.stringify(w.hover.lit.slice().sort()) === JSON.stringify(w.allHis.slice().sort()) &&
       w.hover.lit.length === w.held,
       `${w.hover.lit.length} lit vs ${w.held} held`);
-    c.ok('the card opens on the same cell, so a phone gets the name too',
-      /· (QB|RB|WR|TE|DST|K) ·/.test(w.hover.card), w.hover.card);
+    // AND NO CARD. It used to be required here — "so a phone gets the name
+    // too" — and the line above the table is what covers the phone now, on a
+    // tap as well as a hover. The two grids at the top of the page still open
+    // the card and their own assertions still prove it.
+    c.ok('AND OPENS NO CARD: the 14-week preview is off this panel',
+      !w.hover.card || w.hover.card.trim() === '', `card said "${w.hover.card}"`);
     c.ok('leaving the cell clears both the name and the highlight',
       w.afterOut.lit === 0 && /Hover or tap a number/.test(w.afterOut.pick),
       `${w.afterOut.lit} / ${w.afterOut.pick}`);

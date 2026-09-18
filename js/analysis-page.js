@@ -29,7 +29,11 @@ import { enableSort, resort } from './sortable.js';
 // that turned on it — whether the card opens as a sheet, and whether a tap on a
 // grid cell counts as a click on a player — both live in js/player-card.js now,
 // and it imports it from the same one place the connection bar does.
-import { savedConfig, onConnection } from './connection.js';
+// `coarsePointer` is back here, and for a new reason: the season panel has no
+// player card any more, so THIS file is what has to answer a tap — see the
+// click handler at the foot. It is still the one canonical "is this a finger"
+// test and still lives in js/connection.js; player-card.js imports the same one.
+import { savedConfig, onConnection, coarsePointer } from './connection.js';
 // The hover/tap card that carries a man's whole season. It lives in its own
 // module because the Trade page shows the same card on every player it names,
 // and two copies of it is how the two pages start disagreeing about what a
@@ -1956,10 +1960,11 @@ const LOW_MARK = { lo1: '▼', lo2: '▼▼' };
  * same one the link carries — never a name and never a row index, the same one
  * contract as everywhere else on this page.
  *
- * NO `title` ON A FILLED CELL. These carry the player card now, and a `title`
- * beside it would have the browser draw a second tooltip on top of ours a
- * moment later — the same rule the grids at the top of the page follow. The
- * link keeps an `aria-label`, which says the same thing and draws nothing.
+ * NO `title` ON A FILLED CELL. It stays off even now the card has gone from
+ * this panel: the cell's content is a link, and `js/touch-titles.js`
+ * deliberately leaves links alone, so a `title` here would be a desktop-only
+ * explanation — exactly what HANDOFF forbids. The link keeps its `aria-label`,
+ * which says the same thing, draws nothing, and is what a screen reader reads.
  */
 function slotCell(entry, row, week, bar, index) {
   const cls = (extra) => `wk${week === state.week ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
@@ -1980,12 +1985,6 @@ function slotCell(entry, row, week, bar, index) {
   const tier = lowTier(v, bar);
   const zero = v === 0 ? zeroOf(v, week, p, status) : null;
 
-  // The same identity line the grids draw, word for word — the card is shared,
-  // so a second spelling of "who is this" is how the two pages start to differ.
-  // The slot and the week are not in it: you are pointing at the cell that says
-  // both, and "QB · QB, week 1" reads as a stutter rather than as information.
-  const injured = injuryTier(p.injuryStatus);
-  const ident = `${p.name} · ${p.position} · ${p.proTeam}${injured ? ` · ${p.injuryStatus}` : ''}`;
   const why =
     zero === 'bye'
       ? `${p.name} fills ${row.key} in week ${week} on a bye — ESPN returns 0.00 for one, ` +
@@ -2006,19 +2005,25 @@ function slotCell(entry, row, week, bar, index) {
       : fmt(v);
   const mark = tier ? ` <span class="lowmark" aria-hidden="true">${LOW_MARK[tier]}</span>` : '';
 
-  const href = p.playerId === null || p.playerId === undefined
-    ? null
-    : `waivers.html?player=${encodeURIComponent(p.playerId)}`;
-  const id = `season:${row.key}:${p.playerId ?? `x:${p.name}`}`;
-  const key = registerRun({ ident, run: seasonRunData(index, p), href, id }, 'season');
-
   const extra = [
     zero === 'bye' ? 'bye' : zero === 'out' ? 'zero-out' : zero === 'zero' ? 'zero' : '',
     tier,
   ].filter(Boolean).join(' ');
 
-  return `<td class="${cls(extra)}" data-v="${v}" data-pid="${esc(p.playerId ?? '')}"` +
-    `${tipAttr(key)}>` +
+  // NO PLAYER CARD ON THIS PANEL, and no `data-tip` — Tim, 2026-09-18: "because
+  // the player's season-wide proj is highlighted when you hover over that
+  // number, we don't need to be providing the 14 week preview when you hover
+  // over it as well. Just put the name of that player somewhere outside of the
+  // chart, and their season proj, and current avg. That's it."
+  //
+  // The whole point of this panel is reading a man ACROSS the weeks, and the
+  // lighting already does that on the table itself, so a card redrawing the
+  // same thirteen numbers beside it was answering a question the panel had
+  // already answered. What the card DID carry that the lighting does not —
+  // who he is, and the link — moves to the line above the table (`paintLit`).
+  // The two grids above keep their cards: there, one row is one team and a
+  // cell really is the only place a man appears.
+  return `<td class="${cls(extra)}" data-v="${v}" data-pid="${esc(p.playerId ?? '')}">` +
     `${playerRef(p, `${shown}${mark}`, `${why}${says} Click to ${OPENS}.`, 'aria-label')}</td>`;
 }
 
@@ -2087,9 +2092,6 @@ function renderSeason() {
     return;
   }
 
-  // This panel's own cards only: the two grids above keep theirs.
-  clearRuns('season');
-
   const index = seasonIndex(team.id);
   const lineups = weeklyLineups(team.id, slots);
   const bars = slotThresholds(rows, slots, weeks);
@@ -2115,7 +2117,18 @@ function renderSeason() {
       });
       for (const e of values) {
         if (e && e.p.playerId !== null && e.p.playerId !== undefined) {
-          seasonWho.set(String(e.p.playerId), `${e.p.name} · ${e.p.position} · ${e.p.proTeam}`);
+          const p = e.p;
+          const injured = injuryTier(p.injuryStatus);
+          const scored = scoredToDate(index, p);
+          seasonWho.set(String(p.playerId), {
+            // The same identity line the grids' card draws, word for word. Two
+            // spellings of "who is this" on one page is how two answers drift.
+            ident: `${p.name} · ${p.position} · ${p.proTeam}${injured ? ` · ${p.injuryStatus}` : ''}`,
+            seasonProj: typeof p.seasonProjected === 'number' ? p.seasonProjected : null,
+            avg: scored.avg,
+            games: scored.games,
+            href: `waivers.html?player=${encodeURIComponent(p.playerId)}`,
+          });
         }
       }
       const nums = values.map((e) => (e ? e.v : null));
@@ -2782,8 +2795,43 @@ function renderSeasonNote(weeks, rows, bars) {
 //   - THE LINE MUST NOT REFLOW THE TABLE. It is always in the DOM and its
 //     height is reserved in CSS, so naming somebody moves nothing.
 
-/** playerId (as a string) -> "Name · POS · NFL", rebuilt with the rows. */
+/**
+ * playerId (as a string) -> what the line above the table says about him:
+ * `{ ident, seasonProj, avg, games, href }`. Rebuilt with the rows, so it can
+ * never describe a stale squad.
+ *
+ * It holds the NUMBERS as well as the name because Tim asked for all three
+ * outside the chart, and because the alternative — reading them back off the
+ * cells — would give the wrong ones: a cell carries that WEEK's projection,
+ * and "season proj" and "current avg" are season-wide facts.
+ */
 const seasonWho = new Map();
+
+/**
+ * What a man has actually AVERAGED so far, over every week loaded.
+ *
+ * His actual, not his projection — the panel's own Avg column is already the
+ * mean of the projections, so repeating that on the line would say nothing
+ * new. A week with no actual recorded is not a game (see the Act row rule:
+ * read the DATA, never the calendar), and his BYE week is skipped rather than
+ * averaged in as a zero, which would quietly punish everyone who has had one.
+ *
+ * `games` comes back with the average so the line can print the basis. With no
+ * game played it is null, not 0.0 — rule 5: decide what a statistic returns
+ * before it has enough data.
+ */
+function scoredToDate(index, p) {
+  if (!index) return { avg: null, games: 0 };
+  const bye = byeWeekOf(p, state.byes);
+  const vals = [];
+  for (const week of index.keys()) {
+    if (bye !== null && Number(week) === Number(bye)) continue;
+    const v = seasonActual(index, week, p.playerId);
+    if (typeof v === 'number') vals.push(v);
+  }
+  if (!vals.length) return { avg: null, games: 0 };
+  return { avg: vals.reduce((a, v) => a + v, 0) / vals.length, games: vals.length };
+}
 
 /** Paint whatever `state.seasonLit` says, over the cells that are there now. */
 function paintLit() {
@@ -2803,11 +2851,35 @@ function paintLit() {
   const mine = [...table.querySelectorAll(`td[data-pid="${pid}"]`)];
   for (const td of mine) td.classList.add('lit');
   if (!line) return;
-  const slots = [...new Set(mine.map((td) => td.parentElement.getAttribute('data-slot')))]
-    .filter(Boolean);
-  line.innerHTML =
-    `<strong>${esc(seasonWho.get(pid))}</strong> — in the lineup ` +
-    `${plural(mine.length, 'week')}${slots.length ? `, at ${andList(slots.map(esc))}` : ''}.`;
+
+  // NAME, SEASON PROJ, CURRENT AVG — and nothing else. Tim's words were "just
+  // put the name of that player somewhere outside of the chart, and their
+  // season proj, and current avg. That's it", so the count of weeks he is in
+  // the lineup and the list of slots he fills came OUT: the highlight on the
+  // table already shows both, by lighting the cells.
+  //
+  // Each number says what it is. "214.6" and "14.2" beside a name are two
+  // unlabelled figures a reader has to guess at, and they answer different
+  // questions — ESPN's whole-season forecast, and what he has really been
+  // scoring per game. Either can legitimately be missing, and says so rather
+  // than printing a confident zero.
+  const who = seasonWho.get(pid);
+  const bits = [
+    who.seasonProj === null
+      ? '<span class="pick-none">no season projection</span>'
+      : `season proj <strong>${fmt(who.seasonProj)}</strong>`,
+    who.avg === null
+      ? '<span class="pick-none">nothing scored yet</span>'
+      : `avg <strong>${fmt(who.avg)}</strong> over ${plural(who.games, 'game')}`,
+  ];
+  // The link the card's sheet used to offer. It has to live here now: on a
+  // phone the tap is answered by this line instead of by navigation, so
+  // without it the click-through would be desktop-only from this panel.
+  const open = who.href
+    ? ` <a class="pref pick-open" href="${esc(who.href)}">Open player</a>`
+    : '';
+
+  line.innerHTML = `<strong>${esc(who.ident)}</strong> — ${bits.join(' · ')}${open}`;
 }
 
 /** Light one man across the whole grid, or clear it. */
@@ -2994,21 +3066,23 @@ enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
 // row, which sortable.js leaves alone, so it stays pinned under the last slot.
 enableSort($('seasonTable'), { defaultIndex: 0, defaultAsc: true });
 
-// The season panel's own card, on the same terms as the grids': a hover on a
-// desktop, a sheet under a finger. It is what answers "who is that number" with
-// a thumb, since nothing in this table is a name.
-wireTips($('seasonTable'));
+// NO `wireTips` HERE. This panel deliberately has no player card — Tim,
+// 2026-09-18 — so the line above the table and the highlight are the whole of
+// what pointing at a number does. See `slotCell`.
 
 // NAMING THE MAN, AND LIGHTING HIS OTHER WEEKS.
 //
-// Registered on the table itself, alongside wireTips, and deliberately on the
-// same four events plus the click: the card's own click handler calls
-// stopPropagation on a coarse pointer, which stops the event reaching the
-// DOCUMENT but not another listener on this same element — so a tap opens the
-// sheet AND names him here, which is the pair Tim asked for.
+// Registered on the table itself, on hover, focus and click, so the same
+// answer arrives from a mouse, a keyboard and a thumb — the card used to be
+// what covered the thumb, and with the card gone this is.
 //
-// A mouse click follows the link and leaves the page, so the highlight it sets
-// on the way out costs nothing and is simply never seen.
+// A MOUSE click follows the link and leaves the page, so the highlight it sets
+// on the way out costs nothing and is simply never seen. A TAP is intercepted
+// instead: on a phone, letting it navigate would mean the name, the season
+// projection and the average were reachable by hover alone, which HANDOFF
+// forbids outright. The line carries an "Open player" link so the action the
+// tap preempted is still one tap away — the same bargain the card's sheet
+// struck, minus the thirteen numbers he did not want.
 {
   const season = $('seasonTable');
   const cellOf = (e) => (e.target.closest ? e.target.closest('td[data-pid]') : null);
@@ -3018,7 +3092,16 @@ wireTips($('seasonTable'));
   };
   season.addEventListener('mouseover', light);
   season.addEventListener('focusin', light);
-  season.addEventListener('click', light);
+  season.addEventListener('click', (e) => {
+    const td = cellOf(e);
+    if (!td) return;
+    // Modified clicks are the browser's, always — open-in-new-tab has to work
+    // on a touch device with a keyboard attached too.
+    if (coarsePointer() && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.button !== 1) {
+      e.preventDefault();
+    }
+    light(e);
+  });
   const leave = (e) => {
     const td = cellOf(e);
     if (!td) return;
