@@ -426,6 +426,58 @@
      place on that panel a player is NAMED. It is the part of a squad a trade
      can actually reach, so it is also the part worth putting a week run on. */
   .spares { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+  /* ------------------------------------------------------- custom trades */
+  .cu-pick { margin-bottom: 12px; }
+  .cu-head { margin: 0 0 6px; font-size: 12px; color: var(--dim); font-weight: 600; }
+  /* A CAP AND A SCROLLER, not the whole roster at full height: sixteen men on
+     each side is a third of a phone screen before the price is reached, and
+     the price is the point of the panel. */
+  .cu-roster {
+    border: 1px solid var(--line);
+    border-radius: var(--r-3, 6px);
+    max-height: 210px;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    background: var(--panel-2);
+  }
+  .cu-man {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    /* 44px under a finger, and it has to be the WHOLE row: a bare checkbox is
+       about 16px and is the single worst tap target a list like this can
+       have. The label wraps the row, so anywhere on it toggles the man. */
+    min-height: 34px;
+    cursor: pointer;
+  }
+  @media (hover: none) { .cu-man { min-height: 44px; } }
+  .cu-man:last-child { border-bottom: 0; }
+  @media (hover: hover) { .cu-man:hover { background: var(--panel-3, #171a20); } }
+  .cu-man input { margin: 0; width: 16px; height: 16px; flex: 0 0 auto; }
+  .cu-man .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cu-man .pos { color: var(--dim); font-size: 11px; flex: 0 0 auto; }
+  .cu-man .pv { font-variant-numeric: tabular-nums; color: var(--dim); flex: 0 0 auto; }
+  .cu-man.on { background: #16311f; }
+  .cu-man.on .nm { font-weight: 650; }
+  /* Reserved, so ticking a man never moves the table under the pointer. */
+  .cu-preview { min-height: 34px; margin: 12px 0 4px; font-size: 13px; line-height: 1.45; }
+  .cu-preview .muted { color: var(--line-2); }
+  #cuTable td .sub, #cuTable td .unit { display: block; font-size: 11px; color: var(--dim); }
+  #cuTable td.gain { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cu-drop {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--dim);
+    border-radius: var(--r-2, 4px);
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .cu-drop:hover { color: var(--err); border-color: var(--err); }
   .spare-chip {
     font-size: 11.5px;
     font-variant-numeric: tabular-nums;
@@ -922,6 +974,78 @@
     <details class="explain">
       <summary>How the depth numbers are worked out</summary>
       <p class="panel-note" id="depthNote"></p>
+    </details>
+  </section>
+
+  <!-- CUSTOM TRADES — Tim, 2026-09-18: "I want to be able to pick whichever
+       trade I want in the trade menu. Maybe a new box that is 'custom trades'
+       and you can build a custom trade and it will be stored in the custom
+       trade box. This can be for any player with any team."
+
+       So BOTH sides are pickers, not just the partner: the finder always
+       trades from his own squad, and this deliberately does not — "any player
+       with any team" means he can price a deal between two other managers as
+       readily as one of his own.
+
+       LAST, so his panel order (finder -> best combo -> depth map, 2026-09-17)
+       is left exactly as he set it. Say so, and move it if he would rather it
+       sat under the finder it complements.
+
+       Priced by the SAME engine as the finder, on the same weeks, with the
+       same positional floor — a custom deal that priced differently from an
+       identical one the finder found would be two answers to one question. -->
+  <section class="panel" id="customPanel">
+    <h2>Custom trades</h2>
+    <p class="lede">Build any trade between any two squads and keep it here. Priced exactly as the finder prices its own.</p>
+
+    <div class="toolbar cu-pick">
+      <div class="select-md">
+        <label for="cuTeamA">Squad</label>
+        <select id="cuTeamA"></select>
+      </div>
+      <div class="select-md">
+        <label for="cuTeamB">Trades with</label>
+        <select id="cuTeamB"></select>
+      </div>
+      <div class="tool-group">
+        <button type="button" id="cuSave">Save this trade</button>
+        <button type="button" id="cuClear">Clear</button>
+      </div>
+    </div>
+
+    <!-- Two roster lists, side by side on a laptop and stacked on a phone by
+         the same `.panel-row` rule the pages use for their panels. -->
+    <div class="panel-row cu-lists" style="--col-min: 260px">
+      <div class="cu-side">
+        <p class="cu-head" id="cuHeadA">Sends</p>
+        <div class="cu-roster" id="cuListA"></div>
+      </div>
+      <div class="cu-side">
+        <p class="cu-head" id="cuHeadB">Sends</p>
+        <div class="cu-roster" id="cuListB"></div>
+      </div>
+    </div>
+
+    <!-- What the deal in the pickers is worth, before it is saved. Always in
+         the DOM with its height reserved, so ticking a player cannot make the
+         panel jump under the finger doing the ticking. -->
+    <p class="cu-preview" id="cuPreview" aria-live="polite"></p>
+
+    <div class="table-scroll" id="cuWrap" hidden><table id="cuTable">
+      <thead><tr>
+        <th class="name">Trade</th>
+        <th>Squad gains</th>
+        <th>Partner gains</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="cuRows"></tbody>
+    </table></div>
+    <div class="empty" id="cuEmpty">No custom trades saved yet. Pick two squads and tick who moves.</div>
+
+    <p class="panel-note warn-line" id="cuWarn" hidden></p>
+    <details class="explain">
+      <summary>How a custom trade is priced</summary>
+      <p class="panel-note" id="cuNote"></p>
     </details>
   </section>
 

@@ -536,6 +536,100 @@ function openCard(document, selector) {
 // ------------------------------------------------------------------ scenarios
 
 const SCENARIOS = {
+  /**
+   * CUSTOM TRADES (Tim, 2026-09-18): build a deal by hand between any two
+   * squads, price it, keep it.
+   *
+   * Driven through the real controls — change a picker, tick a checkbox, press
+   * Save — rather than by calling the module's functions, because what is being
+   * tested is that the panel WORKS, and every defect this page has had was in
+   * the wiring rather than in the arithmetic.
+   */
+  async custom() {
+    const { document, window, errors } = await boot();
+    const out = {};
+    const $ = (id) => document.getElementById(id);
+    const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+
+    out.teamOptions = [...$('cuTeamA').querySelectorAll('option')].map(text);
+    out.startsEmpty = text($('cuEmpty'));
+    out.wrapHiddenAtFirst = $('cuWrap').hidden;
+    out.saveDisabledAtFirst = $('cuSave').disabled;
+
+    // Two squads that are NOT his own, which is the half of "any player with
+    // any team" that the finder cannot do at all.
+    const ids = [...$('cuTeamA').querySelectorAll('option')].map((o) => Number(o.value));
+    const a = ids[ids.length - 1];
+    const b = ids[ids.length - 2];
+    $('cuTeamA').value = String(a);
+    fire($('cuTeamA'), 'change');
+    $('cuTeamB').value = String(b);
+    fire($('cuTeamB'), 'change');
+    out.picked = { a, b };
+    out.headA = text($('cuHeadA'));
+    out.headB = text($('cuHeadB'));
+    out.listA = $('cuListA').querySelectorAll('.cu-man').length;
+    out.listB = $('cuListB').querySelectorAll('.cu-man').length;
+
+    // One man each way.
+    const boxA = $('cuListA').querySelector('input[type="checkbox"]');
+    const boxB = $('cuListB').querySelector('input[type="checkbox"]');
+    out.men = { a: boxA.value, b: boxB.value };
+    boxA.checked = true;
+    fire(boxA, 'change');
+    out.previewOneSided = text($('cuPreview'));
+    boxB.checked = true;
+    fire(boxB, 'change');
+    out.preview = text($('cuPreview'));
+    out.saveEnabled = !$('cuSave').disabled;
+    // The list must NOT have been rebuilt under the finger that ticked it.
+    out.stillChecked = $('cuListA').querySelector('input[type="checkbox"]').checked;
+    out.litRow = ($('cuListA').querySelector('.cu-man').getAttribute('class') || '').includes('on');
+
+    fire($('cuSave'), 'click');
+    out.rowsAfterSave = [...$('cuRows').querySelectorAll('tr')].map((tr) => ({
+      name: text(tr.querySelector('td.name')),
+      a: text(tr.children[1]),
+      b: text(tr.children[2]),
+    }));
+    out.wrapShown = !$('cuWrap').hidden;
+    out.emptyHiddenAfterSave = ($('cuEmpty').getAttribute('class') || '').includes('hidden');
+    out.ticksClearedAfterSave =
+      $('cuListA').querySelectorAll('input:checked').length +
+      $('cuListB').querySelectorAll('input:checked').length;
+    out.pickersKept = { a: Number($('cuTeamA').value), b: Number($('cuTeamB').value) };
+    const readPrefs = () => {
+      try { return JSON.parse(window.localStorage.getItem('ff.prefs') || '{}'); } catch { return {}; }
+    };
+    out.stored = readPrefs()['trade.custom'] || null;
+
+    // The same deal a second time is one deal.
+    const boxA2 = $('cuListA').querySelector('input[type="checkbox"]');
+    const boxB2 = $('cuListB').querySelector('input[type="checkbox"]');
+    boxA2.checked = true; fire(boxA2, 'change');
+    boxB2.checked = true; fire(boxB2, 'change');
+    fire($('cuSave'), 'click');
+    out.rowsAfterDuplicate = $('cuRows').querySelectorAll('tr').length;
+
+    // A saved row opens the finder's own pop-up.
+    fire($('cuRows').querySelector('tr'), 'click');
+    out.modalOpen = !$('dealModal').hidden;
+    out.modalTitle = text($('dealTitle'));
+    out.modalWeeks = $('dealBody').querySelectorAll('tbody tr').length;
+    out.modalBody = text($('dealBody')).length;
+    const close = $('dealClose');
+    if (close) fire(close, 'click');
+
+    // Removing it empties the box again.
+    fire($('cuRows').querySelector('button[data-drop]'), 'click');
+    out.rowsAfterDrop = $('cuRows').querySelectorAll('tr').length;
+    out.storedAfterDrop = readPrefs()['trade.custom'] || null;
+
+    out.note = text($('cuNote'));
+    out.errors = errors;
+    return out;
+  },
+
   /** The page as it opens: demo data, both panels populated. */
   async fresh() {
     const { document, errors, fetchCalls } = await boot();
@@ -1267,18 +1361,25 @@ if (!fresh.boot) {
   // heading and the id are checked: the heading is what he sees, the id is what
   // every other test and the module itself address the panel by, and a rename
   // of one without the other is its own defect.
+  // CUSTOM TRADES was added on 2026-09-18 and went LAST, deliberately: his
+  // ordering of the three panels above is left exactly as he set it, and a new
+  // panel inserted among them would have quietly re-ordered a thing he chose.
+  // The sequence below still pins all of that — it is the same assertion with
+  // one more entry, not a weaker one.
   eq(
     fresh.panels.map((p) => p.heading).join(' > '),
-    'Data source > Trades that help both squads > Best combo > Depth map',
-    'the panels read finder, combo, depth map — under the toolbar'
+    'Data source > Trades that help both squads > Best combo > Depth map > Custom trades',
+    'the panels read finder, combo, depth map, custom — under the toolbar'
   );
   eq(
     fresh.panels.map((p) => p.id).join(','),
-    ',finderTitle,,depthTitle',
+    ',finderTitle,,depthTitle,',
     'and the two ids the module writes into are on the right panels'
   );
-  ok('the depth map is genuinely last, not merely after the finder',
-    fresh.panels.length === 4 && fresh.panels[fresh.panels.length - 1].id === 'depthTitle',
+  ok('the depth map still comes after the finder and the combo, and before custom',
+    fresh.panels.length === 5 &&
+    fresh.panels[3].id === 'depthTitle' &&
+    fresh.panels[4].heading === 'Custom trades',
     fresh.panels.map((p) => p.heading).join(' > '));
 
   // ---- the depth map -----------------------------------------------------
@@ -2942,6 +3043,98 @@ if (!live.boot) {
     eq(ahead.opened.week, '7', 'a saved week still to be played is honoured');
     eq(ahead.opened.asked.join(','), '7', 'and it is the week whose rosters are read');
   }
+}
+
+
+// ---- CUSTOM TRADES -------------------------------------------------------
+//
+// Tim, 2026-09-18: "I want to be able to pick whichever trade I want in the
+// trade menu... This can be for any player with any team."
+//
+// The finder always trades FROM his squad. This does not, and the scenario
+// deliberately builds a deal between two OTHER managers, because that is the
+// half of his ask the existing panel cannot do at all — and because a page
+// that priced it against his roster instead would produce numbers that look
+// perfectly reasonable and are about the wrong team.
+{
+  const cu = run('custom');
+
+  eq(cu.teamOptions.length, 10, 'both squads are pickable, all ten of them');
+  ok('the box starts empty and says so',
+    /No custom trades saved yet/.test(cu.startsEmpty), cu.startsEmpty);
+  eq(cu.wrapHiddenAtFirst, true, 'with no table until there is something in it');
+  eq(cu.saveDisabledAtFirst, true, 'and nothing to save');
+
+  ok('the two rosters are listed, one per side',
+    cu.listA > 10 && cu.listB > 10, `${cu.listA} / ${cu.listB}`);
+  ok('each side is headed by the squad that is sending',
+    /sends$/.test(cu.headA) && /sends$/.test(cu.headB), `${cu.headA} | ${cu.headB}`);
+  ok('and the squads picked are not his own',
+    cu.picked.a !== cu.picked.b, JSON.stringify(cu.picked));
+
+  // HALF A TRADE IS STILL A TRADE, and is priced: a manager giving somebody
+  // away for nothing is a real thing to want to price, and refusing it would
+  // be this panel having an opinion, which is the one thing it must not have.
+  ok('one man on one side already prices',
+    /a week/.test(cu.previewOneSided), cu.previewOneSided);
+  ok('BOTH SQUADS ARE PRICED, and each is named',
+    /a week/.test(cu.preview) && (cu.preview.match(/a week/g) || []).length === 2,
+    cu.preview);
+  ok('per week first, with the rest-of-season total beside it — his display rule',
+    /a week \(/.test(cu.preview), cu.preview);
+  eq(cu.saveEnabled, true, 'and the deal can be saved');
+
+  // The lists must NOT be rebuilt when a man is ticked: sixteen names is a
+  // scroller, and redrawing it would throw away the position under the very
+  // finger doing the ticking.
+  eq(cu.stillChecked, true, 'ticking a man leaves him ticked');
+  eq(cu.litRow, true, 'and lights his row');
+
+  eq(cu.rowsAfterSave.length, 1, 'saving puts one row in the box');
+  eq(cu.wrapShown, true, 'and reveals the table');
+  eq(cu.emptyHiddenAfterSave, true, 'and hides the empty state');
+  ok('the row names both squads', /⇄/.test(cu.rowsAfterSave[0].name), cu.rowsAfterSave[0].name);
+  ok('and names who moves which way',
+    cu.rowsAfterSave[0].name.includes('→'), cu.rowsAfterSave[0].name);
+  ok('with a gain for each squad, per week over the total',
+    /\/wk/.test(cu.rowsAfterSave[0].a) && /total/.test(cu.rowsAfterSave[0].a) &&
+    /\/wk/.test(cu.rowsAfterSave[0].b) && /total/.test(cu.rowsAfterSave[0].b),
+    `${cu.rowsAfterSave[0].a} | ${cu.rowsAfterSave[0].b}`);
+
+  eq(cu.ticksClearedAfterSave, 0, 'saving clears the ticks');
+  ok('but keeps the squads, so a second deal between the same two is quick',
+    cu.pickersKept.a === cu.picked.a && cu.pickersKept.b === cu.picked.b,
+    JSON.stringify(cu.pickersKept));
+
+  // ONLY THE IDENTITIES ARE STORED. A price kept from last week is wrong by
+  // this week's projections, so storing one is storing a number that will
+  // quietly go stale and never say so.
+  ok('the saved trade is kept in prefs', Array.isArray(cu.stored) && cu.stored.length === 1,
+    JSON.stringify(cu.stored));
+  if (Array.isArray(cu.stored) && cu.stored[0]) {
+    const keys = Object.keys(cu.stored[0]).sort().join(',');
+    eq(keys, 'a,b,sendA,sendB', 'and holds two squads and two lists — NO PRICE');
+  }
+
+  eq(cu.rowsAfterDuplicate, 1, 'saving the same deal twice keeps one row');
+
+  // The pop-up is the finder's own, which is the point of reusing its shape.
+  eq(cu.modalOpen, true, 'a saved row opens the finder’s own pop-up');
+  ok('and it is titled as a CUSTOM trade, not as one of the finder’s shapes',
+    /^Custom trade/.test(cu.modalTitle) && !/undefined/.test(cu.modalTitle), cu.modalTitle);
+  ok('naming the squad on the other side', cu.modalTitle.includes('with'), cu.modalTitle);
+  ok('and the pop-up has the deal in it', cu.modalBody > 40, String(cu.modalBody));
+
+  eq(cu.rowsAfterDrop, 0, 'removing the row empties the box');
+  ok('and forgets it', !cu.storedAfterDrop || cu.storedAfterDrop.length === 0,
+    JSON.stringify(cu.storedAfterDrop));
+
+  ok('the note says it prices whatever you build, good or bad',
+    /no opinion about whether a deal is good/i.test(cu.note), cu.note.slice(0, 300));
+  ok('and that any two squads can be priced',
+    /any two squads/i.test(cu.note), cu.note.slice(0, 400));
+  ok('and that only the players are saved, never the price',
+    /never the price/i.test(cu.note), cu.note.slice(0, 700));
 }
 
 // ---------------------------------------------------------------------------

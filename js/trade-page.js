@@ -176,6 +176,18 @@ const state = {
   dealKey: null,       // which row opened it, so focus can go back there
   dealWeek: null,      // which week's slot-by-slot breakdown is open inside it
   dealSide: 'mine',    // whose lineup that breakdown shows: 'mine' | 'theirs'
+  // CUSTOM TRADES (Tim, 2026-09-18). `custom` is the deal being BUILT in the
+  // pickers; `customSaved` is the box it gets kept in, persisted so a reload
+  // does not throw his work away.
+  //
+  // ONLY THE IDENTITIES ARE STORED — two team ids and two lists of playerIds —
+  // never a price. A price stored on Tuesday is a lie by Thursday: rosters
+  // move, ESPN's projections move, and the span shrinks by a week. Every saved
+  // trade is re-priced from the current data on every render, which is also
+  // why a man who has since been traded away can be reported as such rather
+  // than silently priced at zero.
+  custom: { a: null, b: null, sendA: [], sendB: [] },
+  customSaved: [],
   combo: null,         // the last bestCombo result
   comboRows: [],       // the combo's offers, MERGED per manager, in row order
   comboRunning: false,
@@ -1992,8 +2004,18 @@ function playoffTableRows(playoff) {
 const dealCache = { key: null, offer: null, sets: null };
 
 /** Whose roster, and which way round the package runs, for one side. */
+/**
+ * Which squad is on which side of an offer.
+ *
+ * `mine` is normally the reader's own team, because the finder only ever
+ * trades from it. A CUSTOM trade need not involve him at all — "this can be
+ * for any player with any team" — so one carries its own `mineTeamId` and
+ * that wins. Without this, a custom deal between two other managers would be
+ * priced against the reader's roster and quietly produce nonsense.
+ */
 function sideOf(offer, side) {
   const teams = state.data ? state.data.teams : [];
+  const mineId = offer && offer.mineTeamId != null ? offer.mineTeamId : state.myTeamId;
   if (side === 'theirs') {
     // A whole combination has no single manager on the other side of it, so
     // there is no "their lineup" to show. That is a fact about the combination
@@ -2002,7 +2024,7 @@ function sideOf(offer, side) {
     const team = teams.find((t) => t.id === offer.partner.id);
     return team ? { team, send: offer.receive, receive: offer.send } : null;
   }
-  const team = teams.find((t) => t.id === state.myTeamId);
+  const team = teams.find((t) => t.id === mineId);
   return team ? { team, send: offer.send, receive: offer.receive } : null;
 }
 
@@ -2089,7 +2111,14 @@ function renderDeal() {
     ? `${offer.label} · ${offer.shape}`
     // `offer.shape` is "1-for-1" and the label is now "1 for 1", so printing
     // both said the same thing twice with a middle dot between them.
-    : `${SHAPE_LABEL[offer.kind]} with ${offer.partner.name}` +
+    // A CUSTOM trade has no shape the finder recognises — it can be 3-for-1, or
+    // one-way — so it names its own shape rather than printing `undefined` from
+    // a lookup table that only knows the three the finder searches for. It also
+    // says which squad is which, because a custom deal need not involve him and
+    // "with Nolan" alone would not say who the other side is.
+    : offer.custom
+      ? `Custom trade · ${offer.shape.replace(/-/g, ' ')} with ${offer.partner.name}`
+      : `${SHAPE_LABEL[offer.kind]} with ${offer.partner.name}` +
       (offer.merged ? ` · ${plural(offer.mergedFrom, 'deal')} sent as one` : '');
 
   const head =
@@ -3225,7 +3254,335 @@ function paint() {
   renderFinder();
   renderCombo();
   renderDepth();
+  renderCustom();
   renderDeal();
+}
+
+
+// ===========================================================================
+// CUSTOM TRADES
+//
+// Tim, 2026-09-18: "I want to be able to pick whichever trade I want in the
+// trade menu. Maybe a new box that is 'custom trades' and you can build a
+// custom trade and it will be stored in the custom trade box. This can be for
+// any player with any team."
+//
+// The finder answers "what deals exist that help us both". This answers "what
+// is THIS deal worth" — the one he has in his head, or the one somebody has
+// offered him — and it deliberately has no opinion about whether it is good.
+// A custom trade that makes his squad worse still gets priced and still gets
+// kept, because knowing a deal is bad is the whole reason to ask.
+//
+// THREE RULES IT SHARES WITH THE FINDER, and they are not optional:
+//   - the same engine (`priceTradeAcrossWeeks`), the same weeks
+//     (`weeklySpan()`), the same projections (`projFor`) and the same
+//     positional floor (`state.floors`). A custom deal priced differently from
+//     an identical one the finder found would be two answers to one question,
+//     which is a defect this page has shipped before.
+//   - his display rule: per week first, the rest-of-season total as the small
+//     sub-number (`weeklyGainHtml`).
+//   - played weeks are never priced; `weeklySpan()` already excludes them.
+// ===========================================================================
+
+/** The teams available to pick, in the order the rest of the page lists them. */
+const customTeams = () => (state.data ? state.data.teams : []);
+
+const teamById = (id) => customTeams().find((t) => t.id === id) || null;
+
+/**
+ * Which two squads the pickers start on.
+ *
+ * His own first, when the league knows which is his, because that is the deal
+ * he is most often pricing — but nothing downstream assumes it, which is what
+ * makes "any player with any team" true rather than nearly true.
+ */
+function customDefaults() {
+  const teams = customTeams();
+  if (!teams.length) return { a: null, b: null };
+  const a = state.myTeamId !== null && teams.some((t) => t.id === state.myTeamId)
+    ? state.myTeamId
+    : teams[0].id;
+  const b = (teams.find((t) => t.id !== a) || teams[0]).id;
+  return { a, b };
+}
+
+/**
+ * Keep the pickers pointing at squads that exist.
+ *
+ * The league changes under this panel in three ways — switching to demo,
+ * connecting a real league, or moving to a week whose rosters name different
+ * men — and a picker left on a team id that is no longer there renders an
+ * empty list with no explanation. Reset rather than guess.
+ */
+function syncCustomPickers() {
+  const teams = customTeams();
+  if (!teams.length) { state.custom.a = null; state.custom.b = null; return; }
+  const has = (id) => id !== null && teams.some((t) => t.id === id);
+  if (!has(state.custom.a) || !has(state.custom.b) || state.custom.a === state.custom.b) {
+    const d = customDefaults();
+    state.custom.a = has(state.custom.a) ? state.custom.a : d.a;
+    state.custom.b = has(state.custom.b) && state.custom.b !== state.custom.a
+      ? state.custom.b
+      : (teams.find((t) => t.id !== state.custom.a) || teams[0]).id;
+    state.custom.sendA = [];
+    state.custom.sendB = [];
+  }
+}
+
+/**
+ * What one man is worth beside his name in the list.
+ *
+ * `measureFn()` — the page's OWN measure, the same one the depth map and the
+ * finder use — so the number here cannot disagree with the number the same man
+ * carries three panels up. Null when the measure has nothing for him, which is
+ * drawn as a dash rather than as a zero.
+ */
+function customValue(p) {
+  const v = measureFn()(p);
+  return Number.isFinite(v) ? v : null;
+}
+
+/** The men a squad could send, best first on the measure the page is using. */
+function customRoster(teamId) {
+  const team = teamById(teamId);
+  if (!team) return [];
+  return (team.players || [])
+    .filter((p) => p.playerId !== null && p.playerId !== undefined)
+    .slice()
+    .sort((a, b) => (customValue(b) ?? -Infinity) - (customValue(a) ?? -Infinity));
+}
+
+/** One roster list. The whole row is the label, so a tap anywhere toggles him. */
+function customList(teamId, picked, which) {
+  const men = customRoster(teamId);
+  if (!men.length) return '<div class="empty">No roster for this squad in this week.</div>';
+  const on = new Set(picked.map(String));
+  return men.map((p) => {
+    const lit = on.has(String(p.playerId));
+    const v = customValue(p);
+    return (
+      `<label class="cu-man${lit ? ' on' : ''}">` +
+      `<input type="checkbox" data-side="${which}" value="${esc(p.playerId)}"${lit ? ' checked' : ''}>` +
+      `<span class="nm">${esc(p.name)}</span>` +
+      `<span class="pos">${esc(p.position)}</span>` +
+      `<span class="pv">${v === null ? '—' : fmt(v)}</span>` +
+      `</label>`
+    );
+  }).join('');
+}
+
+/** The roster entries behind a list of ids, in the order they were picked. */
+function playersFor(teamId, ids) {
+  const team = teamById(teamId);
+  if (!team) return [];
+  const by = new Map((team.players || []).map((p) => [String(p.playerId), p]));
+  return ids.map((id) => by.get(String(id))).filter(Boolean);
+}
+
+/**
+ * Price one custom trade, from A's point of view and from B's.
+ *
+ * Both sides go through `priceTradeAcrossWeeks`, the same call the pop-up
+ * makes, so a saved row and the breakdown it opens can never disagree.
+ *
+ * `error` covers the case that really happens: a man on either list is no
+ * longer on the squad that was going to send him, because a saved trade
+ * outlives a waiver claim. It is reported rather than priced — silently
+ * dropping him would quote a price for a different deal from the one on
+ * screen, which is the worst of the three available answers.
+ */
+function priceCustom(entry) {
+  const weeks = weeklySpan();
+  const teamA = teamById(entry.a);
+  const teamB = teamById(entry.b);
+  if (!teamA || !teamB) return { error: 'One of these squads is not in the league this week.' };
+
+  const sendA = playersFor(entry.a, entry.sendA);
+  const sendB = playersFor(entry.b, entry.sendB);
+  const missing = (entry.sendA.length - sendA.length) + (entry.sendB.length - sendB.length);
+  if (missing > 0) {
+    return {
+      error: `${plural(missing, 'player')} in this trade ${missing === 1 ? 'is' : 'are'} no longer ` +
+        `on the squad that was sending ${missing === 1 ? 'him' : 'them'}.`,
+    };
+  }
+  if (!sendA.length && !sendB.length) return { error: 'Nobody is moving in this trade.' };
+  if (!weeks.length) return { error: 'Every week has been played, so there is nothing left to price.' };
+
+  const priceOne = (mine, send, receive) => priceTradeAcrossWeeks({
+    players: mine.players,
+    send,
+    receive,
+    slots: state.slots,
+    weeks,
+    projFor,
+    zeroIsBye: zeroIsBye(),
+    floors: state.floors,
+  });
+
+  const forA = priceOne(teamA, sendA, sendB);
+  const forB = priceOne(teamB, sendB, sendA);
+  return { weeks, teamA, teamB, sendA, sendB, forA, forB };
+}
+
+/**
+ * A custom trade, in the shape the pop-up already understands.
+ *
+ * Reusing that shape is the point: the per-week breakdown, the slot-by-slot
+ * before-and-after and the side toggle are all real work that already exists,
+ * and a second way of drawing the same deal is how two drift apart.
+ * `mineTeamId` is the one field the finder's offers do not carry — see
+ * `sideOf`, which needs it because a custom trade need not involve him.
+ */
+function customOffer(entry, priced) {
+  return {
+    custom: true,
+    mineTeamId: entry.a,
+    partner: priced.teamB,
+    send: priced.sendA,
+    receive: priced.sendB,
+    kind: 'custom',
+    shape: `${priced.sendA.length}-for-${priced.sendB.length}`,
+    basis: 'weeks',
+    weeks: priced.weeks.slice(),
+    myGain: priced.forA.delta,
+    theirGain: priced.forB.delta,
+    myBefore: priced.forA.before.total,
+    myAfter: priced.forA.after.total,
+    theirBefore: priced.forB.before.total,
+    theirAfter: priced.forB.after.total,
+    byWeek: priced.forA.byWeek,
+  };
+}
+
+/** "Ash Ardent + Bryce Cranmore" — or "nobody", which is a legal half of a trade. */
+const customNames = (men) =>
+  men.length ? men.map((p) => esc(p.name)).join(' + ') : '<span class="muted">nobody</span>';
+
+function renderCustomPickers() {
+  const teams = customTeams();
+  const opts = (selected) => teams
+    .map((t) => `<option value="${t.id}"${t.id === selected ? ' selected' : ''}>${esc(t.name)}</option>`)
+    .join('');
+  $('cuTeamA').innerHTML = opts(state.custom.a);
+  $('cuTeamB').innerHTML = opts(state.custom.b);
+
+  const a = teamById(state.custom.a);
+  const b = teamById(state.custom.b);
+  $('cuHeadA').textContent = a ? `${a.name} sends` : 'Sends';
+  $('cuHeadB').textContent = b ? `${b.name} sends` : 'Sends';
+  $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a');
+  $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b');
+}
+
+function renderCustomPreview() {
+  const el = $('cuPreview');
+  const { sendA, sendB } = state.custom;
+  if (!sendA.length && !sendB.length) {
+    el.innerHTML = '<span class="muted">Tick who moves on each side to price the deal.</span>';
+    $('cuSave').disabled = true;
+    return;
+  }
+  const priced = priceCustom(state.custom);
+  if (priced.error) {
+    el.innerHTML = `<span class="muted">${esc(priced.error)}</span>`;
+    $('cuSave').disabled = true;
+    return;
+  }
+  $('cuSave').disabled = false;
+  el.innerHTML =
+    `<strong>${esc(priced.teamA.name)}</strong> ${weeklyPhrase(priced.forA.delta)} · ` +
+    `<strong>${esc(priced.teamB.name)}</strong> ${weeklyPhrase(priced.forB.delta)}`;
+}
+
+function renderCustomSaved() {
+  const rows = state.customSaved;
+  $('cuWrap').hidden = rows.length === 0;
+  $('cuEmpty').classList.toggle('hidden', rows.length > 0);
+
+  $('cuRows').innerHTML = rows.map((entry, i) => {
+    const priced = priceCustom(entry);
+    const a = teamById(entry.a);
+    const b = teamById(entry.b);
+    const who = `${esc(a ? a.name : 'A squad')} ⇄ ${esc(b ? b.name : 'a squad')}`;
+    if (priced.error) {
+      return (
+        `<tr data-cu="${i}">` +
+        `<td class="name">${who}<span class="sub">${esc(priced.error)}</span></td>` +
+        `<td class="gain">—</td><td class="gain">—</td>` +
+        `<td><button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>` +
+        `</tr>`
+      );
+    }
+    return (
+      `<tr data-cu="${i}" class="clickable">` +
+      `<td class="name">${who}` +
+        `<span class="sub">${customNames(priced.sendA)} → ${esc(b ? b.name : '')} · ` +
+        `${customNames(priced.sendB)} → ${esc(a ? a.name : '')}</span></td>` +
+      `<td class="gain">${weeklyGainHtml(priced.forA.delta)}</td>` +
+      `<td class="gain">${weeklyGainHtml(priced.forB.delta)}</td>` +
+      `<td><button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>` +
+      `</tr>`
+    );
+  }).join('');
+}
+
+function renderCustomNote() {
+  const span = weeklySpan();
+  $('cuNote').innerHTML =
+    `<strong>Priced exactly as the finder prices its own offers.</strong> Both lineups are ` +
+    `re-filled week by week over ${span.length ? weekRange(span) : 'the weeks still to play'}, on ` +
+    `ESPN&rsquo;s own per-player projection for each of those weeks, and the difference is the gain. ` +
+    `Weeks already played are never priced &mdash; a trade cannot move points that are banked.` +
+    `<br><br>` +
+    `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
+    `shows trades where BOTH squads improve; this prices whatever you build, including a deal that ` +
+    `makes your squad worse &mdash; which is exactly the answer you want when somebody has offered ` +
+    `you one.` +
+    `<br><br>` +
+    `<strong>Any two squads, not just yours.</strong> A trade between two other managers is priced ` +
+    `the same way, which is how you tell whether a deal you have been shown helps the other side ` +
+    `more than it helps you.` +
+    `<br><br>` +
+    `Only the players and the squads are saved, never the price: one kept from last week would be ` +
+    `wrong by this week&rsquo;s projections, so every saved trade is re-priced from the current data ` +
+    `each time this page draws. A saved trade whose player has since changed squads says so rather ` +
+    `than quietly pricing a different deal.` +
+    (describeFloors(state.floors, { week: state.floorWeek })
+      ? `<br><br><strong>The same positional floor applies.</strong> ` +
+        describeFloors(state.floors, { week: state.floorWeek })
+      : '');
+}
+
+function renderCustom() {
+  syncCustomPickers();
+  renderCustomPickers();
+  renderCustomPreview();
+  renderCustomSaved();
+  renderCustomNote();
+}
+
+/** Saved trades outlive a reload; the price never does. */
+function saveCustomTrades() {
+  prefs.set('custom', state.customSaved);
+}
+
+function loadCustomTrades() {
+  const raw = prefs.get('custom', []);
+  if (!Array.isArray(raw)) return [];
+  // Sanitised on the way in. This is localStorage, so it can hold whatever a
+  // previous version — or a hand-edited browser — put there, and one malformed
+  // entry must not take the whole panel down with it.
+  return raw
+    .filter((e) => e && typeof e === 'object')
+    .map((e) => ({
+      a: Number(e.a),
+      b: Number(e.b),
+      sendA: Array.isArray(e.sendA) ? e.sendA.map(String) : [],
+      sendB: Array.isArray(e.sendB) ? e.sendB.map(String) : [],
+    }))
+    .filter((e) => Number.isFinite(e.a) && Number.isFinite(e.b) && e.a !== e.b &&
+      (e.sendA.length > 0 || e.sendB.length > 0));
 }
 
 function render() {
@@ -3525,11 +3882,134 @@ if (MEASURES[rememberedMeasure]) {
   $('measureSelect').value = state.measure;
 }
 
+
+// ---- custom trades: the controls ----------------------------------------
+//
+// Delegated on the panel rather than bound per row, because both roster lists
+// are rebuilt from scratch on every render and per-row handlers would be
+// re-bound sixteen times a repaint.
+
+$('cuTeamA').addEventListener('change', (e) => {
+  const id = Number(e.target.value);
+  if (!Number.isFinite(id)) return;
+  // Picking the squad that is already on the other side SWAPS them, rather
+  // than refusing: "trade Nolan with Bree" and "trade Bree with Nolan" are the
+  // same thought, and a picker that silently refused one of them would look
+  // broken. The ticks go with their men.
+  if (id === state.custom.b) {
+    state.custom.b = state.custom.a;
+    const held = state.custom.sendA;
+    state.custom.sendA = state.custom.sendB;
+    state.custom.sendB = held;
+  } else {
+    state.custom.sendA = [];
+  }
+  state.custom.a = id;
+  renderCustom();
+});
+
+$('cuTeamB').addEventListener('change', (e) => {
+  const id = Number(e.target.value);
+  if (!Number.isFinite(id)) return;
+  if (id === state.custom.a) {
+    state.custom.a = state.custom.b;
+    const held = state.custom.sendB;
+    state.custom.sendB = state.custom.sendA;
+    state.custom.sendA = held;
+  } else {
+    state.custom.sendB = [];
+  }
+  state.custom.b = id;
+  renderCustom();
+});
+
+for (const listId of ['cuListA', 'cuListB']) {
+  $(listId).addEventListener('change', (e) => {
+    const box = e.target.closest ? e.target.closest('input[type="checkbox"]') : null;
+    if (!box) return;
+    const side = box.getAttribute('data-side') === 'b' ? 'sendB' : 'sendA';
+    const id = String(box.value);
+    const held = state.custom[side].filter((x) => String(x) !== id);
+    state.custom[side] = box.checked ? held.concat(id) : held;
+    // The lists are NOT rebuilt here, only the price: redrawing them would
+    // throw away the scroll position of a sixteen-man list under the very
+    // finger that just ticked somebody in it.
+    const row = box.closest('.cu-man');
+    if (row) row.classList.toggle('on', box.checked);
+    renderCustomPreview();
+  });
+}
+
+$('cuSave').addEventListener('click', () => {
+  const priced = priceCustom(state.custom);
+  if (priced.error) return;
+  const entry = {
+    a: state.custom.a,
+    b: state.custom.b,
+    sendA: state.custom.sendA.map(String),
+    sendB: state.custom.sendB.map(String),
+  };
+  // The same deal twice is one deal. Saving it again would be two identical
+  // rows priced identically, which reads as a bug rather than as a list.
+  const key = (x) => `${x.a}|${x.b}|${x.sendA.slice().sort().join(',')}|${x.sendB.slice().sort().join(',')}`;
+  if (!state.customSaved.some((x) => key(x) === key(entry))) {
+    // Newest first: the one just built is the one being looked at.
+    state.customSaved = [entry].concat(state.customSaved);
+    saveCustomTrades();
+  }
+  // The pickers keep their squads and lose their ticks, so building a second
+  // deal between the same two managers is a couple of taps rather than a
+  // reset.
+  state.custom.sendA = [];
+  state.custom.sendB = [];
+  renderCustom();
+});
+
+$('cuClear').addEventListener('click', () => {
+  state.custom.sendA = [];
+  state.custom.sendB = [];
+  renderCustom();
+});
+
+$('cuRows').addEventListener('click', (e) => {
+  const drop = e.target.closest ? e.target.closest('button[data-drop]') : null;
+  if (drop) {
+    const i = Number(drop.getAttribute('data-drop'));
+    if (Number.isFinite(i)) {
+      state.customSaved = state.customSaved.filter((_, n) => n !== i);
+      saveCustomTrades();
+      renderCustom();
+    }
+    return;
+  }
+  // A saved row opens the SAME pop-up the finder's rows open — the per-week
+  // breakdown, the slot-by-slot before and after, the side toggle. All of it
+  // already exists and none of it needed to know a custom trade is custom.
+  const tr = e.target.closest ? e.target.closest('tr[data-cu]') : null;
+  if (!tr) return;
+  const i = Number(tr.getAttribute('data-cu'));
+  const entry = state.customSaved[i];
+  if (!entry) return;
+  const priced = priceCustom(entry);
+  if (priced.error) return;
+  // STOP THE CLICK HERE, exactly as the finder's rows do. A click that reaches
+  // the document is "outside the modal" to the handler that closes it, so
+  // without this the pop-up opened and the very same click shut it again — it
+  // looked like a row that did nothing at all.
+  e.stopPropagation();
+  openDeal(customOffer(entry, priced), `cu-${i}`);
+});
+
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {
   state.kind = rememberedKind;
 }
 setToggle('kindToggle', 'kind', state.kind);
+
+// The saved custom trades, read before the first render so the box is never
+// briefly empty on a reload. Only identities are stored, so this is cheap and
+// nothing in it can be stale — every row is re-priced when it is drawn.
+state.customSaved = loadCustomTrades();
 
 if (prefs.get('source') === 'live' && boot) useLive();
 else useDemo();
