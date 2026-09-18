@@ -3,8 +3,8 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-17 (late). Everything below is pushed and live; 34 test
-suites, ~11,000 assertions, green, and GitHub Actions runs them on every push.
+Last updated 2026-09-18. Everything below is pushed and live; 35 test suites,
+~11,600 assertions, green, and GitHub Actions runs them on every push.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -20,8 +20,27 @@ would follow from it. Read it before proposing any new analysis feature.
 
 ## Say this to him first, in any session before the season ends
 
-**Nothing has been captured yet, and every week that passes without a capture
-is a week that can never be recovered.**
+**CORRECTED 2026-09-18: THE CAPTURE IS WORKING. Weeks 1 and 2 are both
+recorded** (~31KB), which Tim confirmed off the Time machine panel. This file
+said for two sessions running that the archive was empty and week 1 lost for
+good. It was not. The reading takes itself when he opens any page on the
+machine with the extension, exactly as designed. **The lesson is worth
+keeping: the only place that answer lives is his browser, this repo cannot see
+it, and nobody had asked him.**
+
+**What is outstanding is the EXPORT.** Those two weeks live only in that
+browser and clearing site data would delete them. He was asked on 2026-09-18 to
+press **Export archive** on
+[the Time machine panel](https://timothyhadfield.github.io/fantasy-football/schedule.html#timePanel);
+the file lands in `C:\Users\timha\Downloads\fantasy-archive-*.json` and *you*
+commit it to `data/snapshots/<league>-<season>.json`. **Check that folder
+yourself at the start of every session** — he may have exported and not said.
+An export is cumulative, so it is a monthly job at most.
+
+The standing rule is unchanged and still true:
+
+**Every week that passes without a capture is a week that can never be
+recovered.**
 
 The schedule page's time machine records what the forecast said, once a week,
 so it can be looked back on in December. ESPN keeps **no history of its own
@@ -29,40 +48,31 @@ projections**, so this cannot be backfilled by any means — see rule 8 below.
 **Since 2026-09-17 a reading is taken when Tim opens ANY page of the site on
 his computer** in the Edge profile that has the bridge extension — the
 connection bar calls `captureIfDue()` in `js/capture.js`, which builds the
-exact reading the schedule page would. The schedule page's time-machine panel
-now says in one line whether this week was recorded and, if not, why; the
-bar shows a red "Week N NOT recorded" chip when an attempt failed. **Readings
-are never taken from the synced (cloud) copy** — Claude's call on 2026-09-17,
-matching the original design; Tim was told and may overrule it. A week he never
-opens the site on his computer is simply gone.
+exact reading the schedule page would. The panel says in one line whether this
+week was recorded and, if not, why; the bar shows a red "Week N NOT recorded"
+chip when an attempt failed. **Readings are never taken from the synced
+(cloud) copy** — Claude's call on 2026-09-17, matching the original design;
+Tim was told and may overrule it. A week he never opens the site on his
+computer is simply gone.
 
-**Checked again at the end of 2026-09-16 and still empty**: `data/snapshots/`
-holds nothing but its README and there is no `fantasy-archive-*.json` in his
-Downloads. Week 1 is gone with no reading taken, and none of it can be
-recovered. He was asked, at the end of that session, to open the schedule page
-on his computer once the race fix below had deployed — **ask whether he did,
-and whether the panel now shows a reading.** **Check both places yourself at the start of every session** and
-raise it before anything else he asked for. Two things to ask, in this order:
+`data/snapshots/` in the repo is still empty, and that is the EXPORT half
+above, not the capture half. Two things to ask, in this order:
 
-1. **"Has the Time machine panel recorded this week?"** If not, that is the one
-   thing worth interrupting anything else for.
-2. **"Does the panel say any week is un-backed-up?"** If it is red, ask him to
-   press **Export archive** — the file lands in his Downloads and *you* commit
-   it to `data/snapshots/<league>-<season>.json`. Check
-   `C:\Users\timha\Downloads\fantasy-archive-*.json` yourself before asking; he
-   may have exported already and not said.
+1. **"Has the Time machine panel recorded this week?"** It had weeks 1 and 2 as
+   of 2026-09-18. A later week missing is the one thing worth interrupting
+   anything else for.
+2. **"Have you pressed Export archive?"** Then commit the file out of his
+   Downloads. Check that folder yourself before asking.
 
-**A second candidate, found 2026-09-16:** every page raced the extension's
-hello, so a page's FIRST ESPN read went direct and a private league refused
-it — the schedule page's included. Fixed (`bridge.settled()`); if readings
-start appearing after that deploy, this was the cause. See PROGRESS.md, "a race
-with the extension".
-
-**He reads the site on his phone, and that is the other likely reason.** A
-snapshot is only captured on LIVE data; live data
-needs the bridge extension; **no phone browser can install one**. So if he is
-only opening the site on the phone, the archive stays empty however good the
-phone layout gets.
+**Why it had looked empty, now answered.** Two theories were on file: the
+extension race (every page's first ESPN read went direct and a private league
+refused it — fixed 2026-09-16 with `bridge.settled()`), and his reading the
+site mostly on the phone, where no extension can exist and so no reading can
+be taken. Readings did start appearing, so the race fix is the likely cause
+and both theories can be retired. **The phone limit is still real and still
+matters**: a reading needs live ESPN data, which needs the extension, which no
+phone browser can install. A week he only ever opens on the phone takes no
+reading.
 
 **The cloud sync does NOT fix this, and do not let anyone think it does.** It
 makes the archive *readable* on his phone; it cannot make a reading be *taken*
@@ -262,6 +272,17 @@ These were each established by testing, and several by getting them wrong first.
    archive. The committed JSON file is still the archive's durable home, and
    the cloud sync does not change that. See "The cloud, and the phone".
 
+13. **No slot is assessed below what the waiver wire would give you there**
+   (Tim, 2026-09-18). A bye's 0.00 is a fact about a PLAYER; every page was
+   using it as a fact about a TEAM, and no manager fields an empty kicker slot.
+   `js/floor.js` holds the rule; `season.fetchFloors(week)` is the one read.
+   **It never invents a number** — no floor without a real wire read, and
+   without floors every page is byte-for-byte what it was. **It never changes
+   who starts** — applied when a lineup is assessed, never when it is chosen.
+   An assumed number is orange with a dotted underline and says where it came
+   from. If either of those two guarantees is ever relaxed, the site starts
+   telling him to start different players because of a waiver-wire number.
+
 ## How a panel reads (2026-09-16, Tim: "messy and wordy")
 
 Every panel is: title → one short `.lede` sentence → the control toolbar → the
@@ -457,7 +478,7 @@ Everything Tim has asked for is built and live:
 | `analysis.html` | All ten squads in **one grid** — nine spots, a total and the bench — with the week picker and an `A week / Proj avg <season>` switch inside the panel (pref `analysis.measure`), and a card (hover, or tap on a phone) carrying each man's whole season as a three-row chart — weeks, projection, and actual for weeks already played and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; **"Season by week"** — since 2026-09-17 a LINEUP SHEET, not a roster list: one row per slot (QB, RB1, RB2, WR1…, FLEX, D/ST, K), each week showing that week's best legal lineup ranked inside its slot, a "Starting lineup" totals band, hover/tap/focus naming the man and lighting every week he holds, and low numbers marked amber ▼ (1 SD) / red ▼▼ (2 SD) against the LEAGUE's distribution for that slot, thresholds printed; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
 | `schedule.html` | **Ordered by usefulness (Tim, 2026-09-17): My season, Simulate season, Week matchups (the week picker lives inside that panel, with the week's headline numbers and its cards), then Data source, Time machine, Results, Head to head. THERE IS NO STANDINGS PANEL** — his direction that the site adds to ESPN rather than rebuilding a league table ESPN already shows; the two things it carried that ESPN does not publish, his place now and his run-in rank, are figures inside My season. `capture.standingsKey` is untouched and still seeds the bracket. Matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation **including the playoff bracket** — where a team finishes is the bracket for places 1–6 and the regular-season table below that, which is how this league ranks people — and a **time machine** — a reading of the whole page is saved automatically once a week, picking one replays the season as it looked then, and the archive committed under `data/snapshots/` restores itself into any browser |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
-| `trade.html` | The **finder**, then **Best combo**, then the **depth map** (Tim's order, 2026-09-17): every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked. **Every figure is per week first, the rest-of-season total as the small sub-number** (Tim's display rule). The pop-up fetches its own weeks on the click and shows played weeks above a heavy line, in white, in no total. After an ESPN click a line at the foot of the page says what became of your side (extension absent / too old / refused / handed over) |
+| `trade.html` | The **finder**, then **Best combo**, then the **depth map** (Tim's order, 2026-09-17), then **Custom trades** (2026-09-18) — build any deal between any two squads and keep it; only the players are saved, never the price, so every row is re-priced on each render: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked. **Every figure is per week first, the rest-of-season total as the small sub-number** (Tim's display rule). The pop-up fetches its own weeks on the click and shows played weeks above a heavy line, in white, in no total. After an ESPN click a line at the foot of the page says what became of your side (extension absent / too old / refused / handed over) |
 | `summary.html` | The weekly chart for his group chat — member, season LUCK, title %, loser %, at 100,000 runs — rendered to an image and handed to the phone's share sheet |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
@@ -535,95 +556,129 @@ Five worth knowing by name:
 
 ## What is genuinely open
 
-**2026-09-17 improvement pass — landed, and not yet seen by him:** a game is
-played only when ESPN's `winner` is decided (so Thursday–Monday no longer
-count half-weeks as results); playoff-tier games are kept out of the regular
-season (`playoffGames`); ties count half a win in every standings sort; a live
-0.00 is "Bye" only in the player's real bye week (`zeroKind()` in
-`js/player-card.js`) — ESPN projects OUT/IR men at 0 too, verified; waiver
-tag "W · Fri" on the Players page; Home goes live on a new device and leads
-with his game and win chance; Analysis opens on the coming week, keeps the
-card open while loading, scrolls to the detail on a tap, and shows a "Best
-lineup" line; Summary and Schedule simulate with identical inputs (so the
-Schedule page now also reads played weeks, one request each); identical league
-reads are shared for 60s; `js/site-status.js` on every page (Site updated
-stamp, newer-version bar, failed-to-load strip); iPhone home-screen icon;
-GitHub Actions runs the tests on every push.
+**2026-09-18 — four things landed, all pushed and live.** Read these first;
+they change numbers he checks by hand.
 
-**Added 2026-09-17, second ask:** (1) the league is typed once per ACCOUNT —
-a signed-in, connected browser saves `{leagueId, season, teamId}` to
-`users/<uid>` (`cloud.saveProfile`), and a signed-in browser with no league
-fills it from there and connects (`adoptProfile` in `js/connection.js`; it only
-fills gaps, never replaces a league typed on that device). Rules allow only the
-owner's own document. (2) `manifest.webmanifest` with `scope: "./"` and
-`display: standalone`, linked from every page — without it iOS dropped out of
-the home-screen app into a browser view on the first link to another page.
-**Standalone iOS keeps its own storage**, so he must sign in once inside the
-app; **popup sign-in inside an iOS home-screen app is unverified** — ask
-whether it worked. He must delete and re-add the home-screen icon for the
-manifest to take effect.
+**1. THE POSITIONAL FLOOR, and it moves every projection on the site.** His
+ask, in his words: "if you are determining your total proj for week 14, but
+your K has a BYE that week and you don't have a backup, don't assess that K
+position to be 0 pts, assess it to be the max number of points that is
+available on the waivers for that position." The rule lives in `js/floor.js`,
+pure and node-tested, and it is applied everywhere a position is assessed —
+Analysis, Trade, Stats (schedule luck), Schedule and Summary.
 
-**Third pass, 2026-09-17 ("Fix now" from a real-league audit):** D/ST bye
-projections forced to 0 (rule 2); playoff weeks 15–17 now synced so the phone's
-bracket is projected, not modelled; Stats ranks and shows unrounded points
-(scores kept to the hundredth); Home's win chance is Schedule's
-(`capture.matchupOdds`: best lineup, learned spread) and so shows none for a
-game in progress; Trade opens on the first UNPLAYED week (it had been pricing
-last week's rosters); Schedule drops a saved live week once the league is past
-it; Analysis opens on HIS team, a tapped team lasting only the visit. The
-audit confirmed every score, projected total, lineup and record matches ESPN
-on public league 1241838 (190 team-weeks). His bracket (1–2 bye; 4v5, 3v6;
-1 v W(4/5), 2 v W(3/6); final) is exactly `bracketSeeds(6)`. **His waivers are
-rolling priority, no FAAB.** **Unanswered: does his league have divisions?**
-ESPN seeds division winners first in a divisional league and the site ignores
-divisions. **Direction (Tim):** the site ADDS to ESPN — never rebuild what
-ESPN's app already shows; link to it instead. Still open from the audit: the
-December playoff gaps (Home/Players/Who-to-start stop at 14, the simulation
-stops, a useless week-15 reading) and the 2027 season rollover.
+Two decisions in it are HIS, chosen from options put to him:
 
-**Panel order is Tim's, page by page (2026-09-17)** — `tests/stats-order.mjs`
-and the order assertions in `fc-test`/`tr-test`/`an-test` pin it, so a later
-edit cannot silently reshuffle: **Stats** season at a glance → standings →
-week by week → the rest; **Schedule** my season → simulate → one week-matchups
-panel (picker inside) → the rest, and **the standings table is gone** (ESPN
-does that; "Place now" and "Run-in" survive as tiles in My season); **Trade**
-finder → best combo → depth map; **Analysis** one merged all-teams box (week
-picker and the proj-avg switch inside it) → season by week → who to start →
-roster detail.
+- **One wire read, used flat for every week.** A read per week is exact but
+  doubles the request count on Analysis and Trade (rest-of-season trade: ~12
+  requests → ~24). One read costs a single request per page load.
+- **It lifts anything below it, not only the zeros.** A kicker projecting 4.1
+  when the wire holds a 7.8 was never worth 4.1.
 
-**Playoff weeks in every week preview (Tim, 2026-09-17):** Players, Analysis
-(season grid, who-to-start, the player card) and the Trade pop-up show the
-playoff weeks (`capture.playoffWeeks`, 15–17 for him) after a heavy line —
-class `po-start` in css/app.css, headed "PO". **Avg and every total stay
-regular-season only**, and the Trade page shows playoff weeks for reference
-but does not price them (still his call). Demo generates weeks 14–16
-(projections only; weeks 1–13 byte-identical).
+Three rules inside it that must not be quietly undone:
 
-**Decisions left with him from that pass:** readings from the synced copy
-(currently never); "Avg" counts a bye as 0 on Players/Analysis but skips it on
-the Trade page — pick one; (Summary now shows LUCK, title % and loser % from
-week 1 — Tim, 2026-09-17 — with the Stats page's ± on screen; its shared
-IMAGE carries no explanation lines any more, only the table and the demo
-band, and its canvas height is no longer pinned in CSS, which had stretched it
-tall on the iPhone); HANDOFF/PROGRESS are served publicly by Pages (emails,
-league id, Firebase uid — rules still protect the data). **December:** once
-week 14 is decided the simulation says "nothing left to simulate", so there
-are no title odds during the bracket. **Not done:** Trade finder in a Web
-Worker, a persistent phone cache for the synced copy, moving the duplicated
-player-card CSS (in `analysis.html` and `trade.html`) into `css/app.css`, and
-the analysis page's remaining `title`s on name links and slot buttons.
+- **It never invents a floor.** No table of "a kicker is worth 7". Every number
+  is a real free agent in a real wire read; with no read there are NO floors
+  and every page shows exactly what it showed before. That is why demo, stubs
+  and archived readings are untouched, and why 35 suites stayed green.
+- **It never changes who starts.** Applied when a lineup is ASSESSED, never
+  when it is chosen. Folding it into the selection flattens real differences (a
+  FLEX choice between a 5 and a 4 is a tie once both are lifted to 8) and would
+  change which men the site tells him to start. `test-floor.mjs` asserts the
+  lineup is identical either way.
+- **A slot's floor is not a position's.** A FLEX takes the best of RB/WR/TE.
+
+On Analysis → Season by week an assumed number is **orange with a dotted
+underline** (`--assumed` in css/app.css, `td.assumed`), never colour alone: the
+cell names the free agent it came from, the legend carries the mark, and the
+note prints every floor so a cell can be checked by hand. A floored bye shows
+the number rather than the word "Bye" — the whole change is that it stopped
+being zero.
+
+**Still unproven on his real league**, like everything else here: what the
+floors actually come out at for league 476225250. If a number looks wrong to
+him, the floor is the first thing to check — it is new and it moves totals.
+
+**2. Custom trades** (`trade.html`, last panel). Build any deal between any two
+squads, price it, keep it. Both sides are pickers, not just the partner — "this
+can be for any player with any team" — so a deal between two OTHER managers
+prices correctly, which the finder cannot do at all. Only identities are saved,
+never a price; every saved trade is re-priced from current data on each render,
+and one whose player has changed squads says so. A saved row opens the finder's
+own pop-up. **It went last on the page so his 2026-09-17 panel order is
+untouched — offer to move it under the finder.**
+
+**3. Season by week: no player card.** His ask — "we don't need to be providing
+the 14 week preview when you hover over it as well. Just put the name of that
+player somewhere outside of the chart, and their season proj, and current avg.
+That's it." The line above the table carries exactly those three. A tap is now
+intercepted on that panel (letting it navigate would make the numbers
+hover-only), so the line carries an "Open player" link instead. **The two grids
+at the top of the page still open the card** — the change is one panel only.
+
+**4. Panels pair up where they fit.** His ask: "leave it as is for now, but
+anywhere we can condense horizontally and fit 2 boxes, we should. This might
+mean there is a mix between full-width boxes and half-width boxes." `.grid-2`
+became `.panel-row`; measured 21,798px → 20,810px at 1500px, most of it the
+Stats page's charts going two to a line. **Only ADJACENT panels are ever
+wrapped**, so his panel order is untouched — `tests/stats-order.mjs` and the
+fc/tr/an order assertions still pin it.
+
+Two bug fixes from the density audit landed with it, both measured in headless
+Edge rather than asserted:
+
+- `.panel-row > * { min-width: 0 }`. `index.html` really did scroll sideways on
+  a 390px phone (571px of content, the Injury report's table). **It no longer
+  does, on any page at any width tested** — that closes the standing "does
+  anything scroll sideways on his iPhone" question for the pages, though he
+  should still confirm on the real device.
+- "How this works" was 19px tall on 27 panels. It gets the 44px floor **under
+  `hover: none` only** — keyed off the pointer, never the width — so a mouse
+  keeps the tight row. Verified under touch emulation: 19px → 44px.
+
+**DIVISIONS ARE NO LONGER AN OPEN QUESTION.** ESPN publishes the count and
+`espn.parsePlayoffs` had decoded it all along — nothing read it.
+`capture.divisionCount` / `hasDivisions` do now, and the simulation panel says
+out loud that its seeding ignores divisions when the league really has more
+than one. It answers itself on his next live load. (He had already given the
+BRACKET — 6 teams, 1–2 on a bye, 4v5 and 3v6, no reseeding — and that was
+recorded and implemented all along as `bracketSeeds(6)`; divisions is a
+different fact about SEEDING, and he never mentioned it.)
+
+**There is now a way to measure the real layout.** Headless Edge over CDP, with
+`Emulation.setDeviceMetricsOverride` rather than `--window-size` — which is
+what confounded the earlier 390px audit, since headless Edge will not make a
+window narrower than about 500px and reported every page as overflowing. Two
+things it taught, both worth keeping:
+
+- **These pages settle asynchronously.** A fixed wait caught schedule.html
+  mid-render and reported it 600px shorter than it settles at, which read as a
+  dramatic saving that was not there. Poll until the height stops moving.
+- **A grid gap and a panel's own bottom margin add up.** Pairing panels cost
+  +101px on a phone until the row took ownership of the spacing.
+
+The script is not in the repo (it was a scratchpad tool). Worth rebuilding if
+the density pass goes further.
+
+**Earlier passes, still not seen by him:** everything under 2026-09-17 in
+PROGRESS.md — the cloud going live, the real-league audit's six fixes, Season
+by week becoming a lineup sheet, the trade pop-up's per-week breakdown, panel
+order, playoff weeks in every week preview.
 
 ### Open questions for Tim (asked, not answered)
 
-1. **Does his league have DIVISIONS?** He answered the bracket shape but not
-   this. ESPN seeds division winners first in a divisional league and
-   `js/forecast.js` ignores divisions, so title % would be wrong if it has any.
-2. **The density pass** (see "Next up" below): comfortable (~25% shorter) or
-   tight (~40%)? Two columns on the laptop, or one everywhere? **And should the
-   Data source panel disappear into the connection bar** (~1,300px on a laptop,
-   ~1,700 on a phone — the single biggest saving left)?
+1. **The density pass, part two.** He said "leave it as is for now" on
+   vertical density and asked only for horizontal pairing, which is done. The
+   rest of his original 25–40% would have to come from content: eight charts at
+   300px, eighteen control rows, and seven Data-source panels (~1,300px on a
+   laptop) that mostly restate the connection bar above them. **Should the Data
+   source panel fold into the connection bar?** That is the single biggest
+   saving left and he has not answered it.
+2. **Where should Custom trades sit?** It is last so his panel order was not
+   disturbed. Under the finder is the natural home if he wants it there.
 3. **"Avg" and byes.** Players/Analysis count a bye as 0; the Trade page skips
-   it, so one player shows two averages. Pick one, or label each page.
+   it, so one player shows two averages. Pick one, or label each page. (The
+   floor changes what a bye is worth but not this inconsistency.)
 4. **Should trades be PRICED on the playoff weeks?** They are shown after the
    line but left out of every total.
 5. Smaller, all previously flagged: readings from the synced copy (currently
@@ -635,101 +690,39 @@ the analysis page's remaining `title`s on name links and slot buttons.
 
 ### Things he was asked to check in a browser and has not reported back on
 
-- A reading appearing in the Time machine panel (above).
+- **Export archive**, and the file appearing in his Downloads (above).
 - **Send to phone** succeeding, and the phone reading the synced league after
   signing in there.
 - Google sign-in **inside** the iOS home-screen app (unverified anywhere), and
   whether the app now stays an app across pages after re-adding the icon.
 - Whether **Open in ESPN** ticks his own side (extension must show **0.3.3**
   after a reload at `edge://extensions`).
-- Whether anything scrolls sideways on his iPhone. **We know one thing does:**
-  `index.html` at 390px is 571px wide — `.grid-2 > *` needs `min-width: 0`,
-  which the density pass will land.
+- Whether anything still scrolls sideways on his iPhone. The one case we could
+  measure — `index.html` at 390px — is fixed and verified.
 
-### Next up, with a measured plan already in hand
+### Next up
 
-**The density pass.** Three read-only audits measured every page (2026-09-17);
-their findings are summarised in PROGRESS.md under "The density audit". The
-short version: a THIRD of every page is frame (padding, headings, ledes, closed
-explain rows); shared-CSS tokens plus a `.panel-grid` (half-width panels that
-stack on a phone) plus `.stat-line` (tiles → one line) take the site from
-22,000px to ~17,900px on a laptop and 25,500px → ~22,300px on a phone; the rest
-of his 25–40% has to come from content (8 charts at 300px, 18 control rows,
-seven Data-source panels). It also found four tap targets under 44px —
-`details.explain > summary` is **18.8px** and is on 27 panels.
-
-Ordered by what would hurt most to get wrong.
-
-- **THE ARCHIVE IS STILL EMPTY AND WEEKS ARE GONE** — checked again at the end
-  of 2026-09-17: `data/snapshots/` holds only its README and there is no
-  `fantasy-archive-*.json` in his Downloads. What changed that day is that
-  **any** page on his computer now takes the week's reading (`captureIfDue` in
-  `js/connection.js` → `js/capture.js`), so he no longer has to remember the
-  schedule page — he only has to open the site on the machine with the
-  extension. The panel says in one line whether this week was recorded and why
-  not, and the bar shows a red chip when an attempt failed. **Ask him whether a
-  reading has appeared since, and check both places yourself first.**
-- **Waiting on Tim, from the end of 2026-09-16** — ask about each:
-  1. **Tick-your-side.** He reported his own players still unticked on ESPN.
-     Unreproducible here (private league). Every silent failure now speaks: a
-     line on the Trade page after the click, and a badge on ESPN's page. He was
-     asked to reload the extension (must show **0.3.3** now), hard-refresh, make
-     sure "Your team" is his own, try again and **report both messages**. The
-     likeliest cause was an extension never reloaded after 0.3.0.
-  2. **The race fix in real Edge.** A trade's pop-up should now list only weeks
-     ≥ 2 below the line (week 1 above it) and stop at week 14, not 18. If it
-     still shows 18, the schedule read is still failing — the Trade page now
-     says so in red.
-  3. **The declutter.** Every page went to lede + key + "How this works"
-     toggle. He has not reacted yet. **The 390px headless screenshots ran off
-     the right edge on every page, header included** — almost certainly
-     headless Edge's minimum window width, but ask whether anything scrolls
-     sideways on his iPhone.
+- **Commit the archive export** the moment it appears in his Downloads. It is
+  the only thing here with a deadline.
+- **December**, now the nearest real deadline after that. Home, the Players
+  page and "Who to start" stop at the last regular week, so his playoff matchup
+  never appears; the simulation says "nothing left to simulate" once week 14 is
+  decided, exactly when title odds matter most; and a useless "week 15" reading
+  gets filed that projects only week 14. The week PREVIEWS already run through
+  the playoff weeks — this is the rest of it.
+- **The 2027 rollover.** The season is saved per device and on the account, and
+  nothing moves it forward, so in August 2027 every device would quietly still
+  show 2026.
 - **Almost none of this has been seen against his real league in a browser.**
-  Everything is verified against demo data, stubs and public leagues.
-  476225250 is private and returns 401 to anything without his cookie, so the
-  first load through the bridge is where reality arrives. Specifically unproven
-  there: the real-names join; the playoff field size read from his settings;
-  whether `% own` populates; and every number the Trade page's weekly measure
-  produces.
-- **The extension is unpacked, so a change to `extension/` reaches Tim only
-  after he reloads it** at `edge://extensions` (and the version shown there
-  should match `manifest.json`, **0.3.3 as of 2026-09-17** — that version limits the extension to `/fantasy-football/` on his github.io origin, so it protects him only once he has reloaded it). The Trade page now
-  says so itself after an Open in ESPN click when the running version is older
-  than `MIN_TICK_VERSION` in `js/trade-page.js` — raise that with any extension
-  change the page depends on. Bump the version with every extension change so
-  he can tell.
-- **The Trade page does not price the playoff weeks (15–17)** — his call; see
-  PROGRESS.md "Next".
-- **The trade tick-your-side has never run in a real browser.** ESPN's markup
-  and the React click path were read out of their shipped bundle and the suite
-  proves the logic, but linkedom cannot prove ESPN's own store updates. The
-  first real test is him opening a link. It fails loudly if it fails — the badge
-  says "ESPN did not record the selection for: …" rather than proposing less
-  than he intended.
-- **Firebase is set up and on (2026-09-16)** — see "The cloud, and the phone".
-  Unconfirmed: the first successful **Send to phone**, and the phone reading
-  it after signing in with Google there too.
-- **Three decisions of his that are open**, all flagged to him and none urgent:
-  whether his league really has 6 playoff teams (his prose said 4; his pasted
-  settings said 6; the page now reads it from ESPN, so live data settles it);
-  whether 3rd-vs-4th should keep being split by seed or should follow the
-  consolation ladder; and whether the joke team names should appear anywhere
-  now that squads are labelled with people.
-- **Writes to ESPN are still not built, and the deep link is why.** He chose
-  deep-linking over auto-send deliberately. If it ever comes back: there is **no
-  dry run** (`VALIDATE` is not an accepted `executionType`), a two-team test
-  league violates ESPN's Fair Play policy whose stated remedy is a ban, and a
-  flagged account mid-season would cost him the league and this tool at once,
-  because the bridge reads through his cookie. The staged-trade flow is not a
-  write and does not change any of that.
-- **Trade ideas he deliberately did not pick**, from a list of five on
-  2026-09-09: a deal's effect in **expected wins** rather than points, and an
-  **auto-written pitch message**. (The third, a week-by-week strip, now exists
-  as the per-offer pop-up.) Ask before adding them.
-- **A FLEX-empty table is untested.** Every fixture pool contains running backs,
-  so the filter always matches somebody. The same empty-state wording is proven
-  through the reachable "no defence" case.
-- The drafter's `TUNING` numbers are placeholders standing in for answers he has
-  not given, and the score-differential curve has a rationale he has promised
-  and not yet explained. Reproduce it; do not simplify it.
+  Everything is verified against demo data, stubs and public leagues. 476225250
+  is private and returns 401 to anything without his cookie, so the first load
+  through the bridge is where reality arrives. Specifically unproven: the
+  real-names join; `% own`; every number the Trade page's weekly measure
+  produces; and now **what the positional floors actually come out at**.
+- **The demo has no floors**, because the demo waiver wire lives inside
+  `js/waivers-page.js` rather than in a shared module. So the orange assumed
+  numbers cannot be seen without a live connection. Moving that pool into its
+  own module would fix it and is a contained job.
+- The rest of the older list — the trade tick-your-side never having run in a
+  real browser, writes to ESPN being deliberately unbuilt, the FLEX-empty
+  table, the parked drafter — is unchanged and expanded in PROGRESS.md.

@@ -55,9 +55,289 @@ describe how the site works **today**:
 | Where the weekly reading is taken now | "Readings from any desktop page" |
 | Panel order, page by page | "The panels are in Tim's order" |
 | What the trade pop-up shows per week | "The trade pop-up's per-week breakdown" |
+| The positional floor, and why a bye is not worth 0 | "The positional floor" |
+| The orange assumed numbers on Season by week | "The positional floor" |
+| Building a trade by hand, for any two squads | "Custom trades" |
+| Why Season by week has no player card | "Season by week lost its player card" |
+| Panels side by side, and `.panel-row` | "Panels pair up where they fit" |
+| Whether his league has divisions | "Divisions: the league answers it now" |
+| Measuring the real layout in headless Edge | "How the layout was measured" |
 | Mid-season strategy, and what the research says | docs/strategy-research.md |
 | The measured plan for condensing the pages | "The density audit" |
 | What to do next | "Next", at the foot |
+
+## 2026-09-18 — the floor, custom trades, and panels that pair up
+
+Four pieces, all pushed. The first is the one that matters most, because it
+changes numbers Tim checks by hand against ESPN's own site.
+
+### The positional floor (`js/floor.js`)
+
+His ask: "if you are determining your total proj for week 14, but your K has a
+BYE that week and you don't have a backup, don't assess that K position to be 0
+pts, assess it to be the max number of points that is available on the waivers
+for that position at any given time (maybe 7-8 for K). This will allow us to
+have a better idea of what the true future proj is going to be."
+
+He is right, and the reason is worth writing down: **ESPN's 0.00 for a bye is a
+fact about a PLAYER, and every page here was using it as a fact about a TEAM.**
+No manager fields an empty kicker slot; he streams one. So the honest
+assessment of that slot was never zero.
+
+Two decisions were put to him with the trade-offs and he took both
+recommendations:
+
+- **One wire read, used flat for every week**, rather than a read per week. A
+  per-week read is exact — who is available really does change — but it doubles
+  the request count on Analysis and Trade, taking a rest-of-season trade from
+  about 12 requests to about 24. A floor stands for "whoever I would stream",
+  and the man you stream is by definition playing, so a flat floor is closer to
+  right than it first looks. Every panel using it says so.
+- **It lifts anything below it, not only the zeros.** A kicker projecting 4.1
+  when the wire holds a 7.8 was never really worth 4.1. "A min standard for
+  positions", in his words — and the empty-slot case then falls out of the same
+  rule instead of being a special case.
+
+Three things the module refuses to do, and each is load-bearing:
+
+- **It never invents a floor.** There is no table of "a kicker is worth 7".
+  Every number is the best real free agent at that position in a real wire
+  read, and **with no read there are NO floors and every page shows exactly
+  what it showed before**. That is the same rule the bye handling follows (rule
+  2: byes unknown → projections stay as sent), and it is why demo, every stub
+  and every archived reading are untouched — which is in turn why 35 suites
+  stayed green while this went in.
+- **It never changes who starts.** The floor is applied when a lineup is
+  ASSESSED, never when it is chosen; `optimalLineup` still picks the best legal
+  lineup on ESPN's own numbers. Folding a floor into the selection would
+  flatten real differences — a FLEX choice between a 5 and a 4 becomes a tie
+  once both are lifted to 8 — and would quietly change which men the site tells
+  him to start, which is a different feature nobody asked for.
+  `test-floor.mjs` asserts the lineup is identical with floors and without.
+- **A slot's floor is not a position's.** A FLEX can be filled from RB, WR or
+  TE, so what it is worth at worst is the best of those three — the man you
+  would actually put in it. Using the RB floor there would understate every
+  empty flex.
+
+**Where it is applied**, which is everywhere he asked for: `js/projection.js`
+and `js/trade.js` take floors and are no-ops without them, so Analysis, Trade,
+Stats (schedule luck), Schedule and Summary all get it. **Schedule and Summary
+floor identically on purpose** — `tests/cross-sim-check.mjs` requires the two to
+hand the simulation the same inputs, so flooring one alone is a failing test
+rather than two pages quietly disagreeing about the title odds.
+
+**The read** is `season.fetchFloors(week)`, which goes through `fetchWireWeek`
+and is therefore cloud-aware: a phone with no extension gets the synced wire
+and so the same floors as the desktop, rather than silently falling back to no
+floor and showing different totals from the machine beside it. A failed read is
+an empty map, cached as such, because a league that refuses the wire would
+otherwise be asked again by every panel on the page.
+
+**On screen**: on Analysis → Season by week an assumed number is drawn in
+**orange with a dotted underline** (`--assumed`, `#e8833a`, in css/app.css;
+`#seasonTable td.assumed`). Deliberately orange and NOT the amber `--warn`
+already on `lo1`: the two appear on the same cells and mean opposite things —
+amber is "this number is bad", orange is "this number is not ESPN's" — and half
+a shade apart would make them one cue with two meanings. The orange rule comes
+last and wins, because what a reader most needs to know about a number nobody
+published is that nobody published it. Never colour alone: the dotted underline
+survives a reader who cannot separate the hues, the cell names the free agent
+the number came from, the legend carries the mark, and the panel note prints
+every floor so a cell can be checked by hand.
+
+**A floored bye shows the number, not the word "Bye".** The whole change is
+that it stopped being zero, so the word would contradict the total underneath.
+The bye is still in the explanation and still in the class.
+
+Two real defects the new tests caught, both of which would have looked fine:
+
+- **The Avg column averaged ESPN's own numbers while the cells beside it showed
+  the assessed ones**, so a row with a floored kicker reported an average no
+  reader could reproduce from the cells in front of them. Avg and the totals
+  band now both total the column exactly as drawn, an unfilled slot's floor
+  included.
+- **`js/trade.js` already had a local called `floor`** meaning the minimum
+  gain a deal must clear. Renamed `minGain` before the two meanings got
+  confused — two different floors in one function is how somebody later passes
+  the wrong one.
+
+`tests/test-floor.mjs` is 66 assertions against a hand-written wire whose
+answers can be redone by eye, and then tests the SEAM: that trade pricing and
+the per-week team points really do change when floors are passed. That second
+half matters — a pure module nobody wires up changes nothing, and every
+existing suite would still be green. `an-test` gains a `floors` scenario whose
+declared floors are nothing like a real wire (a 14.0 kicker, a 20.0 D/ST), so a
+page that ignored them could not pass by coincidence.
+
+**Not in demo.** The demo waiver wire lives inside `js/waivers-page.js` rather
+than in a shared module, and `js/floor.js` refuses to invent one, so demo shows
+no orange at all. Moving that pool into its own module is a contained job and
+is the only way he will see the feature without a live connection.
+
+### Custom trades (`trade.html`, last panel)
+
+His ask: "I want to be able to pick whichever trade I want in the trade menu.
+Maybe a new box that is 'custom trades' and you can build a custom trade and it
+will be stored in the custom trade box. This can be for any player with any
+team."
+
+The finder answers "what deals exist that help us both". This answers "what is
+THIS deal worth" — the one he has in his head, or the one somebody has offered
+him — and it deliberately has **no opinion about whether it is good**. A custom
+trade that makes his squad worse is still priced and still kept, because
+knowing a deal is bad is the whole reason to ask about it.
+
+- **Both sides are pickers**, not just the partner. That is the half of his ask
+  the finder cannot do at all: it always trades from his squad. It needed one
+  change outside the panel — `sideOf` took "mine" to be his own team, so a
+  custom deal between two other managers would have been priced against his
+  roster and produced numbers that look perfectly reasonable and are about the
+  wrong team. A custom offer carries its own `mineTeamId` and that wins.
+- **Priced by the same engine, the same weeks, the same projections and the
+  same floor** as the finder. A custom deal priced differently from an
+  identical one the finder found would be two answers to one question, which is
+  a defect this page has shipped before. His display rule holds: per week
+  first, the rest-of-season total as the small sub-number.
+- **Only the identities are saved** — two squads and two lists of playerIds,
+  never a price. A price stored on Tuesday is a lie by Thursday: rosters move,
+  projections move, the span loses a week. Every saved trade is re-priced from
+  current data on each render, which is also what lets one whose player has
+  since changed squads SAY so rather than quietly pricing a different deal.
+- **A saved row opens the finder's own pop-up** — the per-week breakdown, the
+  slot-by-slot before and after, the side toggle. All of that already existed
+  and none of it needed to know a custom trade is custom.
+- **It went LAST on the page** so his 2026-09-17 panel order (finder → best
+  combo → depth map) is left exactly as he set it rather than being quietly
+  re-ordered by a new arrival. Worth offering to move under the finder.
+
+Two defects the new scenario caught, both of which would have read as "the
+feature does nothing":
+
+- **A click on a saved row opened the pop-up and the same click closed it.**
+  The document-level handler treats anything outside the modal card as an
+  outside click, so a row must stop propagation before opening — exactly what
+  the finder's own rows already do.
+- **The pop-up title read "undefined with Nolan"**: it looked the shape up in a
+  table that only knows the three the finder searches for, and a custom trade
+  can be 3-for-1 or one-way. It names its own shape now.
+
+Tapping a man does not rebuild the list, only the price — redrawing a
+sixteen-name scroller would throw away the scroll position under the very
+finger that just ticked somebody in it. The whole row is the label and it is
+44px under a finger; a bare checkbox is about 16px and is the worst tap target
+a list like this could have.
+
+### Season by week lost its player card
+
+His ask: "because the player's season-wide proj is highlighted when you hover
+over that number, we don't need to be providing the 14 week preview when you
+hover over it as well. Just put the name of that player somewhere outside of
+the chart, and their season proj, and current avg. That's it."
+
+The card was answering a question the panel had already answered: reading a man
+ACROSS the weeks is what the whole table does, and the highlight already lights
+every week he holds. What the card carried that the lighting does not — who he
+is, and the link — moved to the line above the table. The old tail ("in the
+lineup 12 weeks, at RB1, FLEX") came off, because "that's it".
+
+- The average is his **actual**, over the weeks loaded, skipping his bye week
+  rather than averaging a zero in and quietly punishing everyone who has had
+  one. With no game played it says "nothing scored yet", not 0.0.
+- **A tap is now intercepted on this panel.** Letting it follow the link would
+  have made the name and both numbers reachable by hover alone, which HANDOFF
+  forbids, so the line carries an "Open player" link instead — the same bargain
+  the card's sheet struck, minus the thirteen numbers he did not want.
+- **The line gets two reserved lines on a phone.** It is capped to one line
+  with an ellipsis and the name comes first, so the numbers he asked for were
+  exactly what would have been clipped. Reserved, not merely allowed: a line
+  that grows when pointed at pushes the table down under the finger reading it.
+
+**The two grids at the top of the page still open the card**, and their own
+assertions still prove it. One check in touch-check was finding the GRID's
+card, still open from an earlier hover in the same scenario, and reporting this
+panel as broken; it dismisses it first now.
+
+### Panels pair up where they fit
+
+His ask: "leave it as is for now, but anywhere we can condense horizontally and
+fit 2 boxes, we should. This might mean there is a mix between full-width boxes
+and half-width boxes." So vertical density is untouched and `.grid-2` became
+`.panel-row`, which pairs panels while there is room and stacks them when there
+is not.
+
+Measured in headless Edge at 1500px: **21,798px → 20,810px**. The Stats page
+does most of it (4,620 → 3,804) with its five charts and the accuracy table two
+to a line; Schedule pairs Data source with the Time machine.
+
+- **Only ADJACENT panels are ever wrapped.** Panel order is his, and
+  `stats-order.mjs` plus the fc/tr/an order assertions read the rendered
+  document in document order — a wrapper leaves that untouched, but moving a
+  panel to find it a partner would break both the test and his order.
+- `auto-fit` + `minmax(min(<col>, 100%), 1fr)` does two things a fixed
+  `1fr 1fr` cannot: a row whose other panel is `[hidden]` gives the whole width
+  to the one that is left (`panelEarly` is hidden most of the season), and the
+  `min()` caps the track at the container so it stacks on a phone with no media
+  query.
+- **The row owns the spacing, not the panels in it.** A panel's own 16px bottom
+  margin added to the grid's 16px gap the moment a row stacked: +101px on a
+  phone, turning the saving into a regression on the one screen he reads it on.
+
+**Two bug fixes from the density audit landed with it**, and both are now
+measured rather than asserted:
+
+- `.panel-row > * { min-width: 0 }`. A grid item's automatic minimum is its
+  min-content, so the Injury report's table dragged the whole DOCUMENT
+  sideways: `index.html` measured 571px of content on a 390px phone. **It no
+  longer does, on any page at any width tested.**
+- "How this works" was 19px tall on 27 panels, the worst of the audit's four
+  sub-44px tap targets. It gets the 44px floor **under `hover: none` only** —
+  keyed off the pointer, never the width, per the two-media-features rule — so
+  a mouse keeps the tight row: 27 panels × 25px is 675px of height a cursor
+  does not need. Verified under touch emulation: 19px → 44px on every page.
+
+### Divisions: the league answers it now
+
+It had been an open question put to Tim twice, and it never needed to be one.
+**ESPN publishes `settings.scheduleSettings.divisions` and
+`espn.parsePlayoffs` had decoded the count all along — nothing read it.**
+`capture.divisionCount` / `hasDivisions` do now, and the simulation panel says
+out loud that its seeding ignores divisions when the league really has more
+than one: ESPN seeds division winners above every wildcard, which moves
+Playoffs %, Bye %, Title % and Avg place.
+
+Silence is not agreement — `hasDivisions` is true only when ESPN really said
+more than one, so demo, a stub and any older archived reading say "not known"
+rather than claiming one division.
+
+`fc-test` gets both halves of the pair: one division asserts the warning is
+ABSENT, two asserts it is present, so a page that ignored the setting and a
+page that warned everybody each fail exactly one. Falsified in both directions
+before it was believed.
+
+**Worth separating from the BRACKET**, which he had already given and which was
+recorded and implemented all along as `bracketSeeds(6)`: 6 playoff teams, seeds
+1–2 on a first-round bye, 4v5 and 3v6, then 1 v W(4/5) and 2 v W(3/6), then the
+final, no reseeding, seeding split on total points. Divisions is a different
+fact about how the SEEDS are assigned, and he had never mentioned it.
+
+### How the layout was measured, and two traps in it
+
+Headless Edge driven over CDP, using **`Emulation.setDeviceMetricsOverride`
+rather than `--window-size`**. That is the fix for the thing that confounded the
+earlier 390px audit: headless Edge will not make a window narrower than about
+500px, which is why that pass reported every page as overflowing, header
+included.
+
+- **These pages settle asynchronously** — the simulation hands off through rAF
+  and a timeout, the capture fires an event, charts redraw on a ResizeObserver.
+  A fixed 2.6s wait caught `schedule.html` mid-render and reported it 600px
+  shorter than it settles at, which read as a dramatic saving that was not
+  there. Poll until the height stops moving.
+- **A grid gap and a margin add up**, as above.
+
+The script lived in the scratchpad rather than the repo. Worth rebuilding if
+the density pass goes further — it turns "this should be narrower" into a
+number, and it caught a regression of my own.
 
 ## 2026-09-17 — the day the site got its second pass
 
@@ -2638,16 +2918,16 @@ one and it is correct; if the two ever disagree, HANDOFF is what a fresh session
 reads first, so fix this one. Ordered, as it is there, by what would hurt most
 to get wrong.
 
-- **THE ONE ITEM WITH A DEADLINE: get a reading captured and committed.** ESPN
-  keeps no history of its own projections, so a week with no reading is gone for
-  good. **Still empty at the end of 2026-09-17**; week 1 is lost. What changed
-  that day: **any** page on his computer now takes the reading (`captureIfDue`
-  in `js/connection.js`), the panel says whether this week was recorded and why
-  not, and the bar shows a red chip when an attempt failed. So the ask is
-  smaller than it was — he only has to open the site on the machine with the
-  extension. **Check `data/snapshots/` and his Downloads yourself, then ask.**
-  Everything else on this list can be built in December just as well as today;
-  this cannot.
+- **THE ONE ITEM WITH A DEADLINE, and half of it is now done.** **CORRECTED
+  2026-09-18: the capture is WORKING — weeks 1 and 2 are both recorded**, about
+  31KB, which Tim read off the Time machine panel. This file said "still empty,
+  week 1 is lost" for two sessions running and it was wrong both times; nobody
+  had asked him, and his browser is the only place that answer lives. What is
+  outstanding is the **export**: those weeks exist only in that browser, and
+  clearing site data would delete them. He has been asked to press **Export
+  archive**; the file lands in his Downloads and *you* commit it to
+  `data/snapshots/`. **Check that folder yourself, then ask.** Everything else
+  on this list can be built in December just as well as today; this cannot.
 - **THE DENSITY PASS IS THE NEXT BUILD, and it is measured and planned.** See
   "The density audit" above for the numbers and the exact CSS. It needs two
   answers from Tim first (comfortable ~25% or tight ~40%; two columns on a
@@ -2705,11 +2985,14 @@ to get wrong.
   updates. The first real test is Tim opening a link. It fails loudly if it
   fails — the badge says "ESPN did not record the selection for: …" rather than
   proposing less than he intended. See "Ticking your own side of a trade".
-- **Firebase is built and wired but not switched on.** `docs/firebase-setup.md`
-  is click-by-click; it needs about 15 minutes of console work only he can do,
-  in **two sittings**, because his own user id does not exist until he has
-  signed in once. Until he does it, `js/cloud.js` is unconfigured and every page
-  behaves exactly as it did before. See "The cloud sync".
+- **Firebase is LIVE, not "built but off"** — corrected 2026-09-18; this bullet
+  had said the opposite for a day while the top of this file and HANDOFF both
+  said it went live on 2026-09-17. The project is `fantasy-football-th`, Google
+  sign-in is enabled, the domain is authorised and the rules are published. See
+  "The cloud went live" at the top and "The cloud sync" below. What is still
+  unconfirmed is a successful **Send to phone** and the phone reading it.
+  `docs/firebase-setup.md` is now a record of how it was done rather than a
+  to-do list.
 - **Three decisions of his that are open**, all flagged and none urgent:
   whether his league really has 6 playoff teams (his prose said 4, his pasted
   settings said 6, and the page now reads it from ESPN — so live data settles
