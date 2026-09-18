@@ -159,3 +159,27 @@ export async function fetchSchedule() {
 }
 
 export async function fetchSeasonData() { throw new Error('not used by the analysis page'); }
+
+// THE POSITIONAL FLOOR, and it is OFF unless a scenario asks for it.
+//
+// That default is the point: every scenario written before 2026-09-18 asserts
+// numbers that are ESPN's own, and a stub that quietly floored them would
+// rewrite the expected answer of the whole suite. `AN_FLOORS` is a JSON object
+// of position -> value, so a scenario states the floors it is testing against
+// and the arithmetic stays checkable by eye.
+export function floorsFor() {
+  let raw = null;
+  try { raw = JSON.parse(process.env.AN_FLOORS || 'null'); } catch { raw = null; }
+  if (!raw || typeof raw !== 'object') return new Map();
+  return new Map(Object.entries(raw).map(([position, value]) => [position, {
+    value: Number(value),
+    name: `Wire ${position}`,
+    playerId: `wire-${position}`,
+    pool: 3,
+    week: 8,
+  }]));
+}
+
+export async function fetchFloors() {
+  return floorsFor();
+}

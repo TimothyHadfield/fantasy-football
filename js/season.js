@@ -17,6 +17,9 @@ import * as espn from './espn.js';
 import * as bridge from './bridge.js';
 import * as cloud from './cloud.js';
 import * as capture from './capture.js';
+// The positional floor's RULES are pure and live here; `fetchFloors` below is
+// the one read that feeds them. See js/floor.js.
+import * as floor from './floor.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -411,6 +414,61 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
   return (raw?.players || [])
     .map((entry) => espn.parseFreeAgent(entry, w, byes))
     .filter((p) => p.playerId !== null && p.playerId !== undefined);
+}
+
+// ------------------------------------------------------------ the floor read
+//
+// THE POSITIONAL FLOOR, fetched once. Tim, 2026-09-18: no slot should be
+// assessed below what the waiver wire would give you at that position, because
+// a manager whose kicker is on bye streams one rather than fielding nobody.
+// The rule itself lives in js/floor.js, which is pure; this is the one read
+// that feeds it.
+//
+// ONE READ, NOT ONE PER WEEK, and that was Tim's choice between two offered:
+// a read per week is exact but doubles the request count on Analysis and
+// Trade — a rest-of-season trade goes from about 12 requests to about 24 —
+// while one read used flat costs a single request per page. A floor stands for
+// "whoever I would stream", and the man you stream is by definition playing,
+// so a flat floor is closer to right than it first looks. Every panel that
+// uses it says so, in `floor.describeFloors`.
+//
+// It goes through `fetchWireWeek`, so it is the cloud-aware path: a phone with
+// no extension gets the synced wire and therefore the same floors as the
+// desktop, rather than silently falling back to no floor at all and quietly
+// showing different totals from the machine beside it.
+//
+// A FAILED READ IS NOT AN ERROR HERE. It returns an empty map, which every
+// reader treats as "no floor known" and leaves every number exactly as ESPN
+// sent it — the same rule the bye handling follows. A page must never fail to
+// render because the wire was busy.
+const floorCache = new Map();
+
+export async function fetchFloors(week) {
+  const w = Number(week);
+  if (!Number.isFinite(w) || w <= 0) return new Map();
+
+  const { leagueId, season } = espn.getConfig();
+  const key = `${leagueId}|${season}|${w}`;
+  if (floorCache.has(key)) return floorCache.get(key);
+
+  const job = (async () => {
+    try {
+      const wire = await fetchWireWeek(w);
+      return floor.positionFloors(wire, { week: w });
+    } catch {
+      // Cached as empty on purpose: a league that refuses the wire would
+      // otherwise be asked again by every panel on the page.
+      return new Map();
+    }
+  })();
+
+  floorCache.set(key, job);
+  return job;
+}
+
+/** Forget the floors — a league or season change makes them somebody else's. */
+export function clearFloors() {
+  floorCache.clear();
 }
 
 // ===========================================================================

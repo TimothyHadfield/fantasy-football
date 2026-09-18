@@ -39,6 +39,11 @@
 
 import { SLOT_ELIGIBILITY } from './espn.js';
 import { optimalLineup, slotsFromCounts, DEFAULT_SLOTS } from './forecast.js';
+// THE POSITIONAL FLOOR (Tim, 2026-09-18), and it matters most here: a trade is
+// priced on what each squad would field EACH REMAINING WEEK, so a bye-week hole
+// assessed at zero makes a deal that papers over it look far better than it is.
+// Pure, and a no-op when no floors are passed. See js/floor.js.
+import { assessLineup } from './floor.js';
 
 /** Reading order for a depth table: the lineup's own order, not alphabetical. */
 export const POSITIONS_IN_ORDER = ['QB', 'RB', 'WR', 'TE', 'DST', 'K'];
@@ -667,7 +672,7 @@ function dropRedundant(offers) {
  */
 export function findTrades({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
-  weeks = null, projFor = null, zeroIsBye = true,
+  weeks = null, projFor = null, zeroIsBye = true, floors = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -689,7 +694,7 @@ export function findTrades({
       weekly
         ? tradesAcrossWeeks(
             myScored, scoreAcrossWeeks(theirs.players, weeks, projFor, zeroIsBye).season,
-            theirs, slots, kinds, weeks
+            theirs, slots, kinds, weeks, floors
           )
         : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
@@ -878,11 +883,12 @@ const atWeek = (roster, i) => roster.map((p) => p.weekly[i]);
  * in the search reads them and ten thousand discarded lineups is ten thousand
  * arrays of nine copied players.
  */
-function totalAcrossWeeks(roster, slots, weekCount) {
+function totalAcrossWeeks(roster, slots, weekCount, floors = null) {
   const weekTotals = new Array(weekCount);
   let total = 0;
   for (let i = 0; i < weekCount; i++) {
-    const t = optimalLineup(atWeek(roster, i), slots).total;
+    const best = optimalLineup(atWeek(roster, i), slots);
+    const t = assessLineup(best.starters, slots, floors).total;
     weekTotals[i] = t;
     total += t;
   }
@@ -890,13 +896,20 @@ function totalAcrossWeeks(roster, slots, weekCount) {
 }
 
 /** The same thing with the lineups kept — for the handful of results reported. */
-function fillAcrossWeeks(roster, slots, ws) {
+function fillAcrossWeeks(roster, slots, ws, floors = null) {
   const byWeek = [];
   let total = 0;
   for (let i = 0; i < ws.length; i++) {
     const lineup = optimalLineup(atWeek(roster, i), slots);
-    total += lineup.total;
-    byWeek.push({ week: ws[i], total: lineup.total, starters: lineup.starters });
+    // The floor is applied to the ASSESSMENT, never to the choice: `lineup`
+    // is still the best legal lineup on ESPN's own numbers. `cells` carries
+    // which slots were lifted, so the pop-up can mark them.
+    const a = assessLineup(lineup.starters, slots, floors);
+    total += a.total;
+    byWeek.push({
+      week: ws[i], total: a.total, starters: lineup.starters,
+      raw: a.rawTotal, assumed: a.assumed, cells: a.cells,
+    });
   }
   return { total: round1(total), byWeek };
 }
@@ -911,13 +924,14 @@ function fillAcrossWeeks(roster, slots, ws) {
  * @param {number[]} slots lineupSlotIds the league starts
  * @param {number[]} weeks the remaining weeks, ascending
  * @param {(player:Object, week:number) => number|null} projFor
+ * @param {Map} [floors] the positional floor; omit for none (js/floor.js)
  * @returns {{total:number, byWeek: Array<{week:number, total:number, starters:Array}>}}
  */
-export function seasonLineupValue(players, slots, weeks, projFor) {
+export function seasonLineupValue(players, slots, weeks, projFor, floors = null) {
   // No `zeroIsBye` here on purpose: this returns totals and lineups, neither of
   // which the bye rule touches. A bye is a real 0 in a real week either way.
   const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor);
-  return fillAcrossWeeks(season, slots, ws);
+  return fillAcrossWeeks(season, slots, ws, floors);
 }
 
 // --------------------------------------------------------- pricing one trade
@@ -964,14 +978,14 @@ function rosterAcrossWeeksAfter(season, send, joining) {
  *            churn:{in:Array, out:Array}, cut:Array, roster:Array}}
  */
 export function priceTradeAcrossWeeks({
-  players, send = [], receive = [], slots, weeks, projFor, zeroIsBye = true,
+  players, send = [], receive = [], slots, weeks, projFor, zeroIsBye = true, floors = null,
 }) {
   const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor, zeroIsBye);
   const joining = scoreAcrossWeeks(receive, ws, projFor, zeroIsBye).season;
 
-  const before = fillAcrossWeeks(season, slots, ws);
+  const before = fillAcrossWeeks(season, slots, ws, floors);
   const kept = rosterAcrossWeeksAfter(season, send, joining);
-  const after = fillAcrossWeeks(kept, slots, ws);
+  const after = fillAcrossWeeks(kept, slots, ws, floors);
 
   // Who the roster limit forced out, as distinct from who was traded away — a
   // page that does not name him is hiding the cost of the deal.
@@ -1116,17 +1130,21 @@ function weeklyChurn(was, now) {
  * change the answer — it only ever rules out packages that could not have made
  * the floor anyway.
  */
-function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks) {
+function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, floors = null) {
   const n = weeks.length;
-  const floor = MIN_GAIN * Math.max(1, n);
+  // `minGain`, not `floor`. Since 2026-09-18 "the floor" means the POSITIONAL
+  // floor everywhere on this site — the wire's best man at a position, which
+  // no slot is assessed below — and two different floors in one function is
+  // how somebody later passes the wrong one.
+  const minGain = MIN_GAIN * Math.max(1, n);
 
-  const myBase = totalAcrossWeeks(myScored, slots, n);
-  const theirBase = totalAcrossWeeks(theirScored, slots, n);
+  const myBase = totalAcrossWeeks(myScored, slots, n, floors);
+  const theirBase = totalAcrossWeeks(theirScored, slots, n, floors);
 
   // Hoisted for the same reason `scored()` is: these two never change, and
   // re-filling eighteen lineups inside the loop would be most of the cost.
-  const myBaseFill = fillAcrossWeeks(myScored, slots, weeks);
-  const theirBaseFill = fillAcrossWeeks(theirScored, slots, weeks);
+  const myBaseFill = fillAcrossWeeks(myScored, slots, weeks, floors);
+  const theirBaseFill = fillAcrossWeeks(theirScored, slots, weeks, floors);
   const mineWas = contributions(myBaseFill);
   const theirsWas = contributions(theirBaseFill);
 
@@ -1135,7 +1153,7 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks) {
 
   // What each of my packages is worth to HIM at the very most.
   const ceilingForThem = myPackages.map((send) =>
-    round1(totalAcrossWeeks(theirScored.concat(send), slots, n).total - theirBase.total)
+    round1(totalAcrossWeeks(theirScored.concat(send), slots, n, floors).total - theirBase.total)
   );
 
   const found = [];
@@ -1145,13 +1163,13 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks) {
     // The gifted roster — mine plus theirs, nothing sent, nobody cut. Its
     // lineups are the ceiling AND, below, the shortcut.
     const giftedPool = myScored.concat(receive);
-    const gifted = fillAcrossWeeks(giftedPool, slots, weeks);
-    if (round1(gifted.total - myBase.total) < floor) continue;
+    const gifted = fillAcrossWeeks(giftedPool, slots, weeks, floors);
+    if (round1(gifted.total - myBase.total) < minGain) continue;
     const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
 
     for (let k = 0; k < myPackages.length; k++) {
       const send = myPackages[k];
-      if (ceilingForThem[k] < floor) continue;
+      if (ceilingForThem[k] < minGain) continue;
       if (send.length === 2 && receive.length === 2) continue;
 
       const kind = packageKind(send, receive);
@@ -1177,24 +1195,24 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks) {
       const weekTotals = new Array(n);
       for (let i = 0; i < n; i++) {
         const t = missing.some((id) => giftedStarters[i].has(id))
-          ? optimalLineup(atWeek(myRoster, i), slots).total
+          ? assessLineup(optimalLineup(atWeek(myRoster, i), slots).starters, slots, floors).total
           : gifted.byWeek[i].total;
         weekTotals[i] = t;
         total += t;
       }
       const myAfter = { total: round1(total), weekTotals };
       const myGain = round1(myAfter.total - myBase.total);
-      if (myGain < floor) continue;
+      if (myGain < minGain) continue;
 
       const theirRoster = afterTrade(theirScored, receive, send);
-      const theirAfter = totalAcrossWeeks(theirRoster, slots, n);
+      const theirAfter = totalAcrossWeeks(theirRoster, slots, n, floors);
       const theirGain = round1(theirAfter.total - theirBase.total);
-      if (theirGain < floor) continue;
+      if (theirGain < minGain) continue;
 
       // Only now is it worth keeping the lineups, for the two lists the row
       // actually prints.
-      const mineNow = contributions(fillAcrossWeeks(myRoster, slots, weeks));
-      const theirsNow = contributions(fillAcrossWeeks(theirRoster, slots, weeks));
+      const mineNow = contributions(fillAcrossWeeks(myRoster, slots, weeks, floors));
+      const theirsNow = contributions(fillAcrossWeeks(theirRoster, slots, weeks, floors));
 
       found.push({
         partner: theirs,

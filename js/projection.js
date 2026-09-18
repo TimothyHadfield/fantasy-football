@@ -9,6 +9,9 @@
 
 import { SLOT_ELIGIBILITY } from './espn.js';
 import { optimalLineup, slotsFromCounts, DEFAULT_SLOTS } from './forecast.js';
+// The positional floor: no slot assessed below what the wire would give you
+// there. Pure, and a no-op when no floors are passed. See js/floor.js.
+import { assessLineup } from './floor.js';
 
 /**
  * The league's starting slots, counted off the lineups ESPN sent.
@@ -46,10 +49,19 @@ export function slotCountsFromLineups(teams) {
  * (ESPN projects a D/ST at a few points in its bye; js/season.js zeroes that
  * before it gets here, so this file needs no bye handling of its own.)
  *
+ * THE POSITIONAL FLOOR RIDES HERE TOO (Tim, 2026-09-18). Pass `floors` and no
+ * slot is assessed below what the wire would give you at that position, so a
+ * squad whose kicker is on bye is not quietly projected as though it fielded
+ * nobody there. Omit it — demo, a stub, a failed wire read — and this returns
+ * exactly what it always returned, to the same rounding. The floor is applied
+ * when the lineup is ASSESSED, never when it is chosen: `optimalLineup` still
+ * picks the best legal lineup on ESPN's own numbers.
+ *
  * @param {Map<number, Array>} weekTeams week -> teams, from fetchWeeksRosters
+ * @param {Map} [floors] from `floor.positionFloors`, or null for none
  * @returns {{proj: Map, slots: number[], countsKnown: boolean, weeks: number[]}|null}
  */
-export function projectionsFromWeekTeams(weekTeams) {
+export function projectionsFromWeekTeams(weekTeams, floors = null) {
   if (!weekTeams || !weekTeams.size) return null;
 
   const anyWeek = [...weekTeams.values()][0];
@@ -67,7 +79,11 @@ export function projectionsFromWeekTeams(weekTeams) {
           pool.push({ position: p.position, projected: p.projected });
         }
       }
-      const total = optimalLineup(pool, slots).total;
+      const best = optimalLineup(pool, slots);
+      // `assessLineup` with no floors returns the same number `best.total`
+      // does, so the unfloored path is not merely equivalent — it is the same
+      // arithmetic — and a page with no wire read is untouched.
+      const total = assessLineup(best.starters, slots, floors).total;
       if (total > 0) forWeek.set(t.id, total);
     }
     if (forWeek.size) proj.set(w, forWeek);

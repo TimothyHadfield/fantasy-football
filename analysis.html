@@ -395,6 +395,26 @@
   #seasonTable tbody tr:hover td.lo2 { background: #3d1920; }
   .lowmark { font-size: 9px; font-weight: 700; letter-spacing: -0.08em; margin-left: 1px; }
 
+  /* AN ASSUMED NUMBER — one the waiver floor supplied because the man in the
+     slot (or the absence of one) was worth less than streaming a replacement.
+     Tim: "color code them in orange or something to show it's assumed."
+
+     ORANGE, NOT THE AMBER `--warn` ALREADY ON `lo1`. The two would be a
+     half-shade apart and mean opposite things — amber says "this number is
+     bad", orange says "this number is not ESPN's" — and a cell can carry
+     both, which is why this rule comes last and wins the colour: what a
+     reader most needs to know about a number nobody published is that nobody
+     published it.
+
+     AND NOT COLOUR ALONE, ever. The dotted underline is the part that
+     survives a reader who cannot separate orange from amber, and the cell's
+     title and the panel's legend say it in words. */
+  #seasonTable td.assumed {
+    color: var(--assumed);
+    text-decoration: underline dotted var(--assumed);
+    text-underline-offset: 3px;
+  }
+
   #seasonTable td.lit,
   #seasonTable tbody tr:hover td.lit {
     background: #16311f;
@@ -620,6 +640,13 @@
     box-shadow: inset 0 -2px 0 var(--accent);
   }
   .lg-mark.lo1 { color: var(--warn); }
+  /* The same two cues the cell carries, so the legend is a sample of the thing
+     rather than a description of it. */
+  .lg-mark.assumed {
+    color: var(--assumed);
+    text-decoration: underline dotted var(--assumed);
+    text-underline-offset: 3px;
+  }
   .lg-mark.lo2 { color: var(--err); background: #33151a; border-color: #4a1b21; font-weight: 750; }
   .lg-mark.tot { background: var(--panel-2); border-color: var(--line-2); font-weight: 700; }
   .lg-mark.st { background: #16311f; border-color: #16311f; font-weight: 700; }

@@ -57,6 +57,10 @@ import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // The slot vocabulary is shared with the Trade page's per-week breakdown, so
 // the two cannot disagree about what WR2 means. See js/lineup-slots.js.
 import { SLOT_ORDER, slotRows, fillSlots } from './lineup-slots.js';
+// THE POSITIONAL FLOOR — no slot assessed below what the wire would give you
+// there (Tim, 2026-09-18). Pure, and every one of these is a no-op when
+// `state.floors` is null, which is what keeps demo and a failed read honest.
+import { flooredValue, slotFloor, describeFloors } from './floor.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('analysis');
@@ -115,6 +119,14 @@ const state = {
   seasonProgress: null,         // { done, total } while weeks are arriving
   seasonError: null,            // the whole run fell over
   seasonToken: 0,               // drops an answer about a league we have left
+
+  // THE POSITIONAL FLOOR (Tim, 2026-09-18): a Map of position -> the best free
+  // agent there, read from the wire ONCE and used for every week. Null until
+  // the read lands, and null for ever in demo — which is the whole safety of
+  // it: with no floors every number on this page is exactly what ESPN sent,
+  // and nothing on screen claims otherwise. See js/floor.js.
+  floors: null,
+  floorWeek: null,
 
   // The man under the pointer in the season panel, as a playerId (or null).
   // The panel's rows are SLOTS now, so the same man turns up in several of
@@ -732,6 +744,13 @@ async function useDemo() {
   state.isDemo = true;
   // Never asked for on demo: a sample zero is a man ruled out, never a bye.
   state.byes = {};
+  // And no floors either. The demo wire lives on the Players page, not in a
+  // shared module, so there is nothing here to read a floor from — and an
+  // invented floor is the one thing js/floor.js refuses to do. Demo therefore
+  // shows ESPN-shaped numbers with no assumptions in them, which is what the
+  // legend says.
+  state.floors = null;
+  state.floorWeek = null;
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
   state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
@@ -793,8 +812,33 @@ async function useLive() {
 
   state.week = openingWeek();
 
+  // THE FLOOR READ. One request, for the week the page opens on, and its
+  // result is used for every week — Tim's choice between that and a read per
+  // week, which is exact but doubles the cost of this page. It rides alongside
+  // the rosters rather than blocking them: a failure is an empty map, which
+  // means "no floor known" and leaves every number as ESPN sent it, so the
+  // panel can never fail to render because the wire was busy.
+  // Guarded exactly as `loadByes` is: a stub, or any build of season.js
+  // without it, must leave this page rendering rather than fail at boot. A
+  // missing floor is the same thing as a refused wire read — no floors — and
+  // every reader already treats that as "leave the numbers alone".
+  state.floorWeek = state.week;
+  const floorRead = (typeof season.fetchFloors === 'function'
+    ? season.fetchFloors(state.week)
+    : Promise.resolve(null))
+    .then((f) => {
+      if (state.source !== 'live') return;
+      state.floors = f && f.size ? f : null;
+      // The season panel may already be on screen by the time this lands, and
+      // the floors change every number in it, so it repaints rather than
+      // waiting for the next thing the reader touches.
+      if (state.floors) renderSeason();
+    })
+    .catch(() => { state.floors = null; });
+
   renderWeekPicker();
   await loadWeek();
+  await floorRead;
 }
 
 /**
@@ -1976,14 +2020,37 @@ function slotCell(entry, row, week, bar, index) {
       : `<td class="${cls('wait')}" title="Week ${week} has not been read from ESPN yet.">·</td>`;
   }
   if (!entry) {
+    // AN EMPTY SLOT IS WORTH THE WIRE, NOT NOTHING (Tim, 2026-09-18). A squad
+    // with no kicker left does not field an empty kicker slot — it streams
+    // one — so the honest assessment is the best free agent there. With no
+    // wire read this stays the dash it always was.
+    const sf = slotFloor(row.slotId, state.floors);
+    if (sf) {
+      return `<td class="${cls('assumed')}" data-v="${sf.value}" ` +
+        `title="Nobody on this squad could fill ${esc(row.key)} in week ${week}, so it is ` +
+        `assessed at ${fmt(sf.value)} — the best ${esc(sf.position)} on the waiver wire, who is ` +
+        `who you would stream. ESPN projects nothing here.">${fmt(sf.value)}</td>`;
+    }
     return `<td class="${cls('muted')}" title="Nobody could fill ${esc(row.key)} in week ${week} — ` +
       `this squad had no ${esc(row.base)} with a projection that week.">—</td>`;
   }
 
-  const { p, v } = entry;
+  const { p, v: raw } = entry;
   const status = seasonStatus(index, week, p);
+
+  // THE POSITIONAL FLOOR. `v` from here on is the ASSESSED number — what the
+  // slot is really worth once you allow that a man below the wire would simply
+  // be replaced — and `raw` is what ESPN actually said. Everything that reads
+  // as a fact about ESPN (is this a bye, is he ruled out) is judged on `raw`;
+  // everything that is an assessment (the value, the low marks, the totals)
+  // uses `v`. Getting that split wrong would either hide a bye or colour a
+  // lifted cell as though the man himself were having a bad week.
+  const lifted = flooredValue({ position: p.position, projected: raw }, state.floors);
+  const v = lifted.value === null ? raw : lifted.value;
+  const assumed = lifted.assumed;
+
   const tier = lowTier(v, bar);
-  const zero = v === 0 ? zeroOf(v, week, p, status) : null;
+  const zero = raw === 0 ? zeroOf(raw, week, p, status) : null;
 
   const why =
     zero === 'bye'
@@ -1992,22 +2059,41 @@ function slotCell(entry, row, week, bar, index) {
       : zero === 'out'
         ? `${p.name} fills ${row.key} in week ${week} at 0.0: ESPN has ruled him out, and ` +
           `nobody on this roster projected higher.`
-        : `${p.name} is this squad’s ${row.key} in week ${week}, projected ${fmt(v)}.`;
+        : `${p.name} is this squad’s ${row.key} in week ${week}, projected ${fmt(raw)}.`;
+  // The assumption, said in full on the cell that carries it. It is a number
+  // ESPN never published, so a reader who cannot see where it came from has no
+  // way to check it — and this is a panel Tim checks by hand.
+  const assumedWhy = assumed
+    ? ` Assessed at ${fmt(v)} instead: that is the best ${esc(p.position)} on the waiver wire, ` +
+      `and a manager would stream him rather than take ${fmt(raw)} here.`
+    : '';
   const says = tier
     ? ` That is more than ${tier === 'lo2' ? 'two standard deviations' : 'one standard deviation'} ` +
       `below what a ${row.key} gives across the league (${fmt(bar.one)} / ${fmt(bar.two)}).`
     : '';
 
-  const shown = zero === 'bye'
-    ? 'Bye'
-    : zero === 'out'
-      ? `${fmt(v)} <span class="zmark">${esc(outMark(status))}</span>`
-      : fmt(v);
+  // WHAT IS DRAWN IS THE ASSESSED NUMBER, and "Bye" gives way to it. A bye
+  // that has been floored is no longer the answer to "what is this slot
+  // worth" — the whole change is that it stopped being zero — so printing the
+  // word would contradict the total underneath. The bye is still in the
+  // explanation and still in the class.
+  const shown = assumed
+    ? fmt(v)
+    : zero === 'bye'
+      ? 'Bye'
+      : zero === 'out'
+        ? `${fmt(v)} <span class="zmark">${esc(outMark(status))}</span>`
+        : fmt(v);
   const mark = tier ? ` <span class="lowmark" aria-hidden="true">${LOW_MARK[tier]}</span>` : '';
 
   const extra = [
     zero === 'bye' ? 'bye' : zero === 'out' ? 'zero-out' : zero === 'zero' ? 'zero' : '',
     tier,
+    // Tim: "if you're replacing a low or 0 proj with an assumed proj, just put
+    // the assumed proj # and color code them in orange or something to show
+    // it's assumed." Word as well as colour, via the title and the legend —
+    // colour alone is the one thing this site never does.
+    assumed ? 'assumed' : '',
   ].filter(Boolean).join(' ');
 
   // NO PLAYER CARD ON THIS PANEL, and no `data-tip` — Tim, 2026-09-18: "because
@@ -2024,7 +2110,7 @@ function slotCell(entry, row, week, bar, index) {
   // The two grids above keep their cards: there, one row is one team and a
   // cell really is the only place a man appears.
   return `<td class="${cls(extra)}" data-v="${v}" data-pid="${esc(p.playerId ?? '')}">` +
-    `${playerRef(p, `${shown}${mark}`, `${why}${says} Click to ${OPENS}.`, 'aria-label')}</td>`;
+    `${playerRef(p, `${shown}${mark}`, `${why}${assumedWhy}${says} Click to ${OPENS}.`, 'aria-label')}</td>`;
 }
 
 /** What the totals band's cell says on a hover. It is a <td>, so a title is right. */
@@ -2131,7 +2217,20 @@ function renderSeason() {
           });
         }
       }
-      const nums = values.map((e) => (e ? e.v : null));
+      // AVG AVERAGES WHAT THE ROW SHOWS, floors included. It used to average
+      // ESPN's own numbers while the cells beside it showed the assessed ones,
+      // so a row whose kicker was floored in three weeks reported an Avg no
+      // reader could reproduce from the cells in front of them. An unfilled
+      // slot contributes its floor here for the same reason it does in the
+      // band: that is what the cell says it is worth.
+      const nums = values.map((e) => {
+        if (!e) {
+          const sf = slotFloor(row.slotId, state.floors);
+          return sf ? sf.value : null;
+        }
+        const a = flooredValue({ position: e.p.position, projected: e.v }, state.floors);
+        return a.value === null ? e.v : a.value;
+      });
       const avg = regularAvg(nums, weeks);
       const bar = bars.get(row.key);
 
@@ -2150,11 +2249,29 @@ function renderSeason() {
   // like how it's displayed in the roster detail box". Same `tbody.split`, same
   // styles, and a body of one row is what sortable.js leaves alone, so it stays
   // pinned under the last slot however the table is ordered.
+  // THE BAND TOTALS THE COLUMN ABOVE IT, cell for cell — which now means the
+  // ASSESSED numbers, floors included, or the band would disagree with the
+  // very cells it is under. An unfilled slot contributes its slot floor for
+  // the same reason the cell shows one: a squad with no kicker fields a
+  // streamed kicker, not a hole. With no wire read every `flooredValue` is a
+  // no-op and this is the arithmetic it always was.
   const totals = weeks.map((w) => {
     const fill = byWeek.get(w);
     if (!fill) return null;
-    const vals = rows.map((r) => fill.get(r.key)).filter(Boolean).map((e) => e.v);
-    return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
+    let sum = 0;
+    let any = false;
+    for (const r of rows) {
+      const e = fill.get(r.key);
+      if (e) {
+        const a = flooredValue({ position: e.p.position, projected: e.v }, state.floors);
+        sum += a.value === null ? e.v : a.value;
+        any = true;
+      } else {
+        const sf = slotFloor(r.slotId, state.floors);
+        if (sf) { sum += sf.value; any = true; }
+      }
+    }
+    return any ? round1(sum) : null;
   });
   const totalAvg = regularAvg(totals, weeks);
   $('seasonTotals').innerHTML = `
@@ -2684,9 +2801,31 @@ function renderSeasonNote(weeks, rows, bars) {
 
   parts.push(
     `<strong>Starting lineup</strong>, in the band under the last slot, is those slots added up for ` +
-    `that week — the same band, and the same arithmetic, as the Roster detail above. A week nobody ` +
-    `could fill a slot in is simply left out of it rather than counted as a zero.`
+    `that week — the same band, and the same arithmetic, as the Roster detail above. It totals the ` +
+    `column exactly as drawn, assumed numbers included, so the band can never disagree with the ` +
+    `cells above it.`
   );
+
+  // THE FLOOR, SAID OUT LOUD. Rule 7, and it matters more here than usual: an
+  // assumed number is one ESPN never published, so a reader who cannot see
+  // where it came from has no way to check it — and this is a panel Tim checks
+  // by hand against ESPN's own site.
+  const floorSaid = describeFloors(state.floors, { week: state.floorWeek });
+  if (floorSaid) {
+    parts.push(
+      `<strong>No slot is assessed below what you could stream.</strong> ` + floorSaid +
+      ` Those cells are drawn in orange with a dotted underline, and the cell itself says who the ` +
+      `assumed number came from. It is an assessment, not a prediction that you will make the ` +
+      `claim — and it never changes which men the site says to start, only what a slot is counted ` +
+      `as being worth.`
+    );
+  } else if (!state.isDemo) {
+    parts.push(
+      `<strong>No waiver floor is in use</strong>, so every number here is ESPN's own and a slot ` +
+      `nobody can fill is a dash rather than a streamed replacement. The wire read either has not ` +
+      `landed yet or was refused.`
+    );
+  }
 
   const withBar = rows.filter((r) => (bars.get(r.key) || {}).sd !== null);
   const sample = withBar.length ? (bars.get(withBar[0].key) || {}).n : 0;
@@ -2899,6 +3038,12 @@ function seasonMarks(table) {
   const has = (sel) => !!body.querySelector(sel);
   return [
     state.isDemo && ['<span class="badge demo">Demo</span>', 'generated projections, not ESPN’s'],
+    // The assumed mark leads, and only when one is actually on screen: it is
+    // the only cue here that means "this number is not ESPN's", which is a
+    // bigger thing to know about a cell than any of the states below it.
+    has('td.wk.assumed') &&
+      ['<span class="lg-mark assumed">7.8</span>',
+        'assumed — the wire’s best at that position, because ESPN’s was lower'],
     has('td.wk.zero-out') &&
       ['<span class="lg-mark zero-out">0.0 <span class="zmark">OUT</span></span>',
         state.isDemo ? 'ruled out in the sample data' : 'ruled out, not a bye'],

@@ -24,6 +24,7 @@ const SUITES = [
   ['test-forecast.mjs', 'win probability, sigma calibration, optimal lineup, win-total distribution'],
   ['test-sim.mjs', 'the Monte Carlo season simulation'],
   ['test-projection.mjs', 'the shared projection module'],
+  ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
   ['test-bye-rule.mjs', 'a known bye week projects 0 (ESPN projects D/STs through theirs), playoff weeks in the phone copy, points for to the tenth'],
   ['test-season-rules.mjs', 'played means ESPN decided it, ties count half, playoff games kept apart, waiver status, byes'],
   ['nav-check.mjs','the hand-copied nav: the same links in the same order on every page'],

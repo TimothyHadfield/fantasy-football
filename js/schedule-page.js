@@ -77,6 +77,13 @@ const playoffTeamsKnown = () => capture.playoffTeamsKnown(state.data);
 const state = {
   source: prefs.get('source', 'demo'),
   data: null,               // normalised schedule (see normalizeSchedule)
+  // THE POSITIONAL FLOOR: position -> the wire's best man there, one read,
+  // used for every week. Null in demo and until the read lands, which forecasts
+  // exactly as this page always did. Kept on state rather than passed around
+  // because `buildProjection` is called from several places and every one of
+  // them has to use the same floors as the Summary page. See js/floor.js.
+  floors: null,
+  floorWeek: null,
   week: 'all',              // 'all' or a week number — drives the three week panels
   weekPickedLive: false,    // picked on live data THIS visit; see restoreWeek()
   filterTeam: '',           // '' or a team id, for the results table only
@@ -854,7 +861,17 @@ function setStatus(msg, isError = false) {
  * and the note saying where the numbers came from. It lives in js/capture.js
  * so the connection bar builds a reading from exactly the same projection.
  */
-const buildProjection = (weekTeams) => capture.buildProjection(state.data, weekTeams);
+// THE POSITIONAL FLOOR rides through it (Tim, 2026-09-18): no slot assessed
+// below what the wire would give you there. It reaches Home's win chance and
+// the season simulation by the same route this projection already takes, which
+// is the point of there being one builder.
+//
+// THE SUMMARY PAGE MUST PASS THE SAME THING. `tests/cross-sim-check.mjs`
+// records what each page hands the simulation and requires the two to be
+// identical, so flooring one and not the other is a failing test rather than
+// two pages quietly disagreeing about the title odds.
+const buildProjection = (weekTeams) =>
+  capture.buildProjection(state.data, weekTeams, state.floors);
 
 // ------------------------------------------------------------ playoff weeks
 //
@@ -953,6 +970,16 @@ async function refreshStrength() {
     //     two quoted different title chances for the same league.
     const plan = capture.rosterPlan(state.data);
 
+    // THE FLOOR READ, alongside the rosters rather than before them: one wire
+    // request for the first week being projected, used for all of them. It is
+    // awaited below with the rosters, and a failure is simply no floors — this
+    // panel must never fail to render because the wire was busy.
+    state.floorWeek = plan.asking.length ? plan.asking[0] : null;
+    const floorRead = (typeof season.fetchFloors === 'function' && state.floorWeek
+      ? season.fetchFloors(state.floorWeek)
+      : Promise.resolve(null)
+    ).then((f) => (f && f.size ? f : null)).catch(() => null);
+
     let weekTeams = new Map();
     try {
       weekTeams = await season.fetchWeeksRosters(plan.asking, {
@@ -964,6 +991,10 @@ async function refreshStrength() {
     } catch {
       weekTeams = new Map();   // ESPN said no; the bases below need no network
     }
+    // The floors, before anything is projected with them. Started here and
+    // awaited now so the wire request overlaps the roster requests rather than
+    // adding a round trip to the page load.
+    state.floors = await floorRead;
     if (stale()) return;
 
     // In the order asked for, never the order the answers arrived in: the

@@ -30,6 +30,12 @@
 import { generateDemoLeague } from './demo.js';
 import { computeLeagueStats } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
+// THE POSITIONAL FLOOR. This page MUST apply it exactly as the Schedule page
+// does: `tests/cross-sim-check.mjs` records what each hands the simulation and
+// requires the two to be identical, because they answer the same question
+// about the same league and used to answer it differently. Same one wire read,
+// same first week, same no-op when it fails. See js/floor.js.
+import * as season from './season.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
@@ -440,7 +446,18 @@ async function refreshProjections() {
 
   // Through the Schedule page's own builder, in the order asked for: the same
   // best-lineup totals, and the same refusal of a projection with a hole in it.
-  const built = capture.buildProjection(L.data, capture.pickWeeks(weekTeams, asking));
+  // One wire read, for the first week being projected — the same rule and the
+  // same week the Schedule page uses, so both pages floor identically.
+  let floors = null;
+  try {
+    if (typeof season.fetchFloors === 'function' && asking.length) {
+      const got = await season.fetchFloors(asking[0]);
+      floors = got && got.size ? got : null;
+    }
+  } catch { floors = null; }
+  if (stale()) return;
+
+  const built = capture.buildProjection(L.data, capture.pickWeeks(weekTeams, asking), floors);
   state.proj = built ? built.proj : null;
   state.projNote = built
     ? `Weeks still to play are scored from ESPN’s own per-player projection for ` +

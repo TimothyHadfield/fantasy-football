@@ -10,6 +10,13 @@ import { generateDemoLeague } from './demo.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import { computeLeagueStats } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
+// THE POSITIONAL FLOOR (Tim, 2026-09-18). Schedule luck is the average
+// PROJECTED opponent, so it is a per-position assessment like any other: an
+// opponent with a kicker on bye is not really worth zero there, and counting
+// him as such would flatter everyone who plays him. Read defensively, the way
+// the bye read is, so a stub or a refused wire leaves the old numbers exactly
+// as they were.
+import * as season from './season.js';
 import {
   projectionsFromWeekTeams,
   opponentProjections,
@@ -745,7 +752,18 @@ async function refreshOppProj(key) {
     });
     if (stale()) return;
 
-    state.oppProj = buildOppProj(key, schedule, weekTeams);
+    // One wire read, for the first week on screen, used for every week — the
+    // shape Tim chose. A failure is no floors at all, never an error.
+    let floors = null;
+    try {
+      if (typeof season.fetchFloors === 'function' && schedule.weeks.length) {
+        const got = await season.fetchFloors(schedule.weeks[0]);
+        floors = got && got.size ? got : null;
+      }
+    } catch { floors = null; }
+    if (stale()) return;
+
+    state.oppProj = buildOppProj(key, schedule, weekTeams, floors);
   } catch (err) {
     if (stale()) return;
     state.oppProj = { key, error: esc(err.message || String(err)) };
@@ -761,8 +779,8 @@ async function refreshOppProj(key) {
 }
 
 /** Turn a schedule plus a week→rosters map into the per-team averages. */
-function buildOppProj(key, schedule, weekTeams) {
-  const built = projectionsFromWeekTeams(weekTeams);
+function buildOppProj(key, schedule, weekTeams, floors = null) {
+  const built = projectionsFromWeekTeams(weekTeams, floors);
   if (!built) {
     return {
       key,

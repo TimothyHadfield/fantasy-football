@@ -283,12 +283,19 @@ export function startedProjections(weekTeams, weeks) {
  * were read off the lineups or assumed, because guessing a two-receiver league
  * when it has three understates every team by a whole starter.
  *
+ * THE POSITIONAL FLOOR passes straight through (Tim, 2026-09-18): no slot is
+ * assessed below what the wire would give you there. It has to arrive here
+ * rather than being read here, because this module is used by the weekly
+ * READING as well as by the live page, and a reading must record what was on
+ * screen at the time rather than fetching a wire of its own months later.
+ *
  * @param {Object} data a normalised schedule
  * @param {Map<number, Array>} weekTeams week -> teams, for the weeks to project
+ * @param {Map} [floors] from `floor.positionFloors`, or null for none
  * @returns {Object|null} null when the projection cannot cover the league
  */
-export function buildProjection(data, weekTeams) {
-  const built = projectionsFromWeekTeams(weekTeams);
+export function buildProjection(data, weekTeams, floors = null) {
+  const built = projectionsFromWeekTeams(weekTeams, floors);
   if (!built) return null;
   const { proj, slots, countsKnown } = built;
 

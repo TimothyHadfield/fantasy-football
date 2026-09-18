@@ -1,0 +1,252 @@
+// Checks js/floor.js — the positional floor Tim asked for on 2026-09-18.
+//
+//   node test-floor.mjs
+//
+// The floor is a MINIMUM STANDARD for what a lineup slot is worth: no slot is
+// assessed below what the waiver wire would give you at that position, because
+// a manager with a kicker on bye does not field an empty slot, he streams one.
+//
+// Every assertion here is about a rule that changes a number Tim reads, so the
+// fixture is deliberately hand-written rather than generated: the expected
+// answers are arithmetic anybody can redo by eye.
+
+import {
+  positionFloors, floorAt, slotFloor, flooredValue, assessLineup, describeFloors,
+  FLOOR_POSITIONS,
+} from '../js/floor.js';
+import { optimalLineup, DEFAULT_SLOTS } from '../js/forecast.js';
+import { seasonLineupValue } from '../js/trade.js';
+import { projectionsFromWeekTeams } from '../js/projection.js';
+
+let pass = 0, fail = 0;
+const eq = (a, b, msg) => {
+  if (Object.is(a, b)) { pass++; }
+  else { fail++; console.log(`FAIL ${msg}: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`); }
+};
+const ok = (cond, msg, detail = '') => {
+  if (cond) { pass++; }
+  else { fail++; console.log(`FAIL ${msg}${detail ? ` — ${detail}` : ''}`); }
+};
+const close = (a, b, tol, msg) => {
+  if (Number.isFinite(a) && Math.abs(a - b) <= tol) { pass++; }
+  else { fail++; console.log(`FAIL ${msg}: got ${a}, want ${b} (tol ${tol})`); }
+};
+
+// ---------------------------------------------------------------- the wire
+//
+// One read. Best available per position, by inspection:
+//   QB 16.2 (Nash)   RB 9.4 (Tate)   WR 11.1 (Voss)
+//   TE 6.2 (Iqbal)   K 7.8 (Sole)    DST 6.9 (Vipers)
+//
+// And three men who must NOT set a floor, each for a different reason — a
+// floor that counted any of them would be a number no manager could actually
+// get on the field.
+const WIRE = [
+  { playerId: 1, name: 'Nash', position: 'QB', projected: 16.2, injuryStatus: 'ACTIVE' },
+  { playerId: 2, name: 'Orme', position: 'QB', projected: 12.0, injuryStatus: 'ACTIVE' },
+  { playerId: 3, name: 'Tate', position: 'RB', projected: 9.4, injuryStatus: 'ACTIVE' },
+  { playerId: 4, name: 'Udall', position: 'RB', projected: 8.8, injuryStatus: 'ACTIVE' },
+  { playerId: 5, name: 'Voss', position: 'WR', projected: 11.1, injuryStatus: 'ACTIVE' },
+  { playerId: 6, name: 'Wren', position: 'WR', projected: 7.3, injuryStatus: 'ACTIVE' },
+  { playerId: 7, name: 'Iqbal', position: 'TE', projected: 6.2, injuryStatus: 'ACTIVE' },
+  { playerId: 8, name: 'Sole', position: 'K', projected: 7.8, injuryStatus: 'ACTIVE' },
+  { playerId: 9, name: 'Vipers', position: 'DST', projected: 6.9, injuryStatus: 'ACTIVE' },
+  // Ruled out. ESPN projects an OUT man at 0 anyway (rule 2), but this one
+  // carries a number as well, which is the case the status check is for.
+  { playerId: 10, name: 'Bench', position: 'RB', projected: 19.9, injuryStatus: 'OUT' },
+  // On his own bye that week: 0.00, and no use replacing anybody.
+  { playerId: 11, name: 'Byrne', position: 'K', projected: 0, injuryStatus: 'ACTIVE' },
+  // A position this league does not start. It must not appear at all.
+  { playerId: 12, name: 'Punter', position: 'P', projected: 4.0, injuryStatus: 'ACTIVE' },
+];
+
+const floors = positionFloors(WIRE, { week: 3 });
+
+// ---- the floor is the best AVAILABLE man, and nothing else ---------------
+close(floorAt('QB', floors).value, 16.2, 1e-9, 'QB floor is the best free agent');
+close(floorAt('RB', floors).value, 9.4, 1e-9, 'RB floor ignores the man who is OUT');
+close(floorAt('WR', floors).value, 11.1, 1e-9, 'WR floor');
+close(floorAt('TE', floors).value, 6.2, 1e-9, 'TE floor');
+close(floorAt('K', floors).value, 7.8, 1e-9, 'K floor ignores the man on his own bye');
+close(floorAt('DST', floors).value, 6.9, 1e-9, 'DST floor');
+eq(floors.has('P'), false, 'a position the league never starts gets no floor');
+eq(floorAt('QB', floors).name, 'Nash', 'the floor names the man it came from');
+eq(floorAt('QB', floors).week, 3, 'and the week it was read in');
+eq(floorAt('RB', floors).pool, 2, 'the pool counts only the men who could set it');
+
+// THE ABSENT CASE IS NOT ZERO. A position the wire said nothing about has no
+// floor, and every reader treats that as "leave the number alone" — a zero
+// would be a floor that lifts nothing and would read, in a panel note, as
+// though the wire had been checked and found worthless.
+eq(floorAt('QB', positionFloors([])), null, 'an empty wire yields no floors');
+eq(positionFloors([]).size, 0, 'and no entries at all');
+eq(floorAt('K', positionFloors(WIRE.filter((p) => p.position !== 'K'))), null,
+  'a position with nobody available is absent, not zero');
+eq(floorAt('RB', null), null, 'no floors at all is safe to ask');
+
+// ---- one player, assessed ------------------------------------------------
+const lift = flooredValue({ position: 'K', projected: 0 }, floors);
+eq(lift.value, 7.8, 'a kicker on bye is assessed at the floor');
+eq(lift.raw, 0, 'and still reports what ESPN actually said');
+eq(lift.assumed, true, 'and is marked assumed');
+
+const keep = flooredValue({ position: 'QB', projected: 22.4 }, floors);
+eq(keep.value, 22.4, 'a man above his floor keeps his own number');
+eq(keep.assumed, false, 'and is not marked assumed');
+
+// TIM'S SECOND DECISION: the floor lifts anything below it, not only zeros.
+const low = flooredValue({ position: 'TE', projected: 4.1 }, floors);
+eq(low.value, 6.2, 'a starter projecting BELOW the floor is lifted to it');
+eq(low.assumed, true, 'and marked assumed');
+// Exactly level is not below. A man who ties the floor is his own man.
+eq(flooredValue({ position: 'TE', projected: 6.2 }, floors).assumed, false,
+  'level with the floor is not assumed');
+// And with no floor known, nothing moves.
+eq(flooredValue({ position: 'K', projected: 0 }, positionFloors([])).value, 0,
+  'with no wire read a zero stays a zero');
+
+// ---- a SLOT's floor is not a position's ---------------------------------
+//
+// FLEX (23) takes RB, WR or TE, so what it is worth at worst is the best of
+// those three — the man you would actually put in it. Getting this wrong by
+// using, say, the RB floor would understate every empty flex by 1.7.
+eq(slotFloor(23, floors).value, 11.1, 'a FLEX floor is the best of RB/WR/TE');
+eq(slotFloor(23, floors).position, 'WR', 'and says which position it came from');
+eq(slotFloor(17, floors).value, 7.8, 'a kicker slot floor is the kicker floor');
+eq(slotFloor(0, floors).value, 16.2, 'a QB slot floor is the QB floor');
+eq(slotFloor(17, positionFloors([])), null, 'no floors, no slot floor');
+
+// ---------------------------------------------------------------- lineups
+//
+// The league's real shape: 1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 D/ST, 1 K.
+const SLOTS = DEFAULT_SLOTS;
+
+/** A squad with a hole at kicker and a weak tight end. */
+const SQUAD = [
+  { playerId: 100, name: 'A', position: 'QB', projected: 21.0 },
+  { playerId: 101, name: 'B', position: 'RB', projected: 14.0 },
+  { playerId: 102, name: 'C', position: 'RB', projected: 11.0 },
+  { playerId: 103, name: 'D', position: 'WR', projected: 15.0 },
+  { playerId: 104, name: 'E', position: 'WR', projected: 13.0 },
+  { playerId: 105, name: 'F', position: 'WR', projected: 12.0 },
+  { playerId: 106, name: 'G', position: 'TE', projected: 4.0 },   // below the 6.2 floor
+  { playerId: 107, name: 'H', position: 'RB', projected: 10.0 },  // takes the flex
+  { playerId: 108, name: 'I', position: 'DST', projected: 8.0 },
+  // NO KICKER AT ALL. This is Tim's example once the backup is gone too.
+];
+
+const best = optimalLineup(SQUAD, SLOTS);
+const plain = assessLineup(best.starters, SLOTS, null);
+const floored = assessLineup(best.starters, SLOTS, floors);
+
+// WITHOUT FLOORS, NOTHING CHANGES. A page with no wire read must show exactly
+// what it showed before this module existed, to the same rounding.
+close(plain.total, best.total, 1e-9, 'with no floors the total is unchanged');
+eq(plain.assumed, 0, 'and nothing is marked assumed');
+// The empty kicker slot is still a cell, which is the point: optimalLineup
+// simply omits a slot it cannot fill, and a lineup that quietly has nine
+// entries instead of ten is the same mistake as calling the tenth zero.
+eq(plain.cells.length, SLOTS.length, 'every slot produces a cell, filled or not');
+eq(plain.cells.filter((c) => c.player === null).length, 1, 'exactly one slot is empty');
+
+// WITH FLOORS: the empty kicker is worth 7.8 and the 4.0 tight end 6.2.
+// 108.0 raw + 7.8 (K) + 2.2 (TE lift) = 118.0
+close(floored.rawTotal, best.total, 1e-9, 'the raw total is still ESPN\'s own');
+close(floored.total, best.total + 7.8 + 2.2, 1e-9, 'the floored total lifts both');
+eq(floored.assumed, 2, 'two slots are assumed');
+
+const kCell = floored.cells.find((c) => c.slotId === 17);
+eq(kCell.player, null, 'the kicker slot has nobody in it');
+eq(kCell.value, 7.8, 'and is assessed at the wire\'s best kicker');
+eq(kCell.assumed, true, 'and says so');
+const teCell = floored.cells.find((c) => c.slotId === 6);
+eq(teCell.raw, 4.0, 'the tight end keeps his real number');
+eq(teCell.value, 6.2, 'and is assessed at the floor');
+
+// A SLOT THAT APPEARS TWICE HANDS OUT TWO DIFFERENT MEN. The league starts two
+// running backs, and both cells reading the first would double-count him —
+// a bug that would look perfectly plausible on screen.
+const rbCells = floored.cells.filter((c) => c.slotId === 2);
+eq(rbCells.length, 2, 'two RB slots, two cells');
+ok(rbCells[0].player.playerId !== rbCells[1].player.playerId,
+  'and two different running backs',
+  `${rbCells[0].player?.playerId} vs ${rbCells[1].player?.playerId}`);
+eq(rbCells[0].value, 14.0, 'best first');
+eq(rbCells[1].value, 11.0, 'then the next');
+
+// THE FLOOR DOES NOT CHANGE WHO STARTS. Same lineup either way — the floor is
+// applied when a lineup is ASSESSED, never when it is chosen. If this ever
+// fails, the site has started telling Tim to start different players because
+// of a waiver-wire number, which is a different feature nobody asked for.
+const ids = (r) => r.cells.map((c) => (c.player ? c.player.playerId : null)).join(',');
+eq(ids(floored), ids(plain), 'the floor changes no lineup, only its assessment');
+
+// A squad with nobody at all still totals the floors rather than zero.
+const empty = assessLineup([], SLOTS, floors);
+// QB 16.2 + RB 9.4 + RB 9.4 + WR 11.1 x3 + TE 6.2 + FLEX 11.1 + DST 6.9 + K 7.8
+close(empty.total, 16.2 + 9.4 * 2 + 11.1 * 3 + 6.2 + 11.1 + 6.9 + 7.8, 1e-9,
+  'an empty squad is worth its floors');
+eq(empty.assumed, SLOTS.length, 'and every slot is assumed');
+eq(assessLineup([], SLOTS, null).total, 0, 'with no floors it really is zero');
+
+// ---- the sentence a panel prints ----------------------------------------
+const said = describeFloors(floors, { week: 3 });
+ok(said.includes('K 7.8'), 'the note prints the kicker floor');
+ok(said.includes('QB 16.2'), 'and the quarterback floor');
+ok(said.includes('week 3'), 'and the week it was read in');
+ok(/read once and used for every week/.test(said),
+  'and says it is one read used flat, which is the approximation Tim chose');
+eq(describeFloors(positionFloors([])), '', 'no floors, no sentence');
+
+// Every position the note can mention is one this module will actually floor.
+for (const p of FLOOR_POSITIONS) {
+  ok(typeof p === 'string' && p.length <= 3, `FLOOR_POSITIONS entry ${p} looks like a position`);
+}
+
+// ================================================================ the seam
+//
+// THE FLOOR ACTUALLY REACHES THE PRICING. Everything above tests js/floor.js
+// against itself; these two test that the modules Tim named — "especially
+// trade" — are wired to it. A pure module nobody passes floors to is a pure
+// module that changes nothing, and every existing suite would still be green.
+
+// ---- js/trade.js: a squad with a bye-week hole is priced with it filled --
+const tradeWeeks = [5, 6];
+/** Our man's projection in a given week — the kicker is on bye in week 6. */
+const projFor = (p, week) => {
+  if (p.position === 'K' && week === 6) return 0;
+  return p.projected;
+};
+const ROSTER = SQUAD.concat([
+  { playerId: 109, name: 'K1', position: 'K', projected: 9.0 },
+]);
+
+const noFloor = seasonLineupValue(ROSTER, SLOTS, tradeWeeks, projFor, null);
+const withFloor = seasonLineupValue(ROSTER, SLOTS, tradeWeeks, projFor, floors);
+
+// Week 5: everyone plays. The only lift is the 4.0 tight end -> 6.2.
+close(withFloor.byWeek[0].total - noFloor.byWeek[0].total, 2.2, 1e-9,
+  'week 5 is lifted only by the weak tight end');
+// Week 6: the kicker is on bye at 0.00 and is assessed at the wire's 7.8,
+// on top of the same tight-end lift.
+close(withFloor.byWeek[1].total - noFloor.byWeek[1].total, 2.2 + 7.8, 1e-9,
+  'THE BYE-WEEK KICKER IS PRICED AT THE WIRE, NOT AT ZERO');
+ok(withFloor.total > noFloor.total, 'and the rest-of-season total moves with it',
+  `${withFloor.total} vs ${noFloor.total}`);
+// The per-week breakdown carries the assessment, so the pop-up can mark it.
+eq(withFloor.byWeek[1].assumed, 2, 'the week reports how many slots were assumed');
+eq(noFloor.byWeek[1].assumed, 0, 'and none are without floors');
+close(withFloor.byWeek[1].raw, noFloor.byWeek[1].total, 1e-9,
+  'while the raw total is still exactly what ESPN said');
+
+// ---- js/projection.js: the same rule, on the per-week team points --------
+const weekTeams = new Map([[6, [{ id: 1, players: ROSTER.map((p) => ({
+  position: p.position, projected: projFor(p, 6),
+})) }]]]);
+const projPlain = projectionsFromWeekTeams(weekTeams, null);
+const projFloor = projectionsFromWeekTeams(weekTeams, floors);
+close(projFloor.proj.get(6).get(1) - projPlain.proj.get(6).get(1), 2.2 + 7.8, 1e-9,
+  'a team\'s weekly projection is floored the same way');
+
+console.log(`${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

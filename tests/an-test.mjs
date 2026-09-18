@@ -915,6 +915,48 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+  // THE POSITIONAL FLOOR (Tim, 2026-09-18): no slot assessed below what the
+  // waiver wire would give you at that position, and the lifted ones drawn in
+  // orange. The floors here are deliberately HIGH — a 14.0 kicker and a 20.0
+  // D/ST are nothing like a real wire — so that a page which ignored them
+  // entirely could not accidentally agree with one that applies them. Week 6
+  // is the D/ST's bye, which is Tim's own example: a slot ESPN says is worth
+  // 0.00 and a manager would never field empty.
+  floors: {
+    label: '(t) the waiver floor: a bye is assessed at the wire, in orange',
+    stub: true,
+    byes: true,
+    env: { AN_BYES: '{"1":6}', AN_DST_ZERO: '6', AN_FLOORS: '{"K":14,"DST":20,"QB":3,"RB":3,"WR":3,"TE":3}' },
+    prefs: { 'analysis.source': 'live', 'analysis.week': 6 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const out = {};
+      const rowFor = (key) => [...document.querySelectorAll('#seasonSlots tr')]
+        .find((tr) => tr.children[0].textContent.trim() === key);
+      const cell = (key, week) => {
+        const tr = rowFor(key);
+        const td = tr && tr.children[1 + week];
+        return td && {
+          text: td.textContent.trim(),
+          cls: td.getAttribute('class') || '',
+          v: td.getAttribute('data-v'),
+          title: (td.querySelector('a') || td).getAttribute('aria-label') || td.getAttribute('title') || '',
+        };
+      };
+      out.dstW6 = cell('D/ST', 6);
+      out.kW6 = cell('K', 6);
+      out.qbW6 = cell('QB', 6);
+      // The band has to total the column as drawn, floors and all.
+      const band = document.querySelector('#seasonTotals tr');
+      out.bandW6 = band && band.children[1 + 6].getAttribute('data-v');
+      out.slotValues = ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'TE', 'FLEX', 'D/ST', 'K']
+        .map((k) => { const c = cell(k, 6); return c ? Number(c.v) : null; });
+      out.assumedCount = document.querySelectorAll('#seasonTable tbody td.assumed').length;
+      out.legend = document.getElementById('seasonLegend').textContent.replace(/\s+/g, ' ');
+      out.note = document.getElementById('seasonNote').textContent.replace(/\s+/g, ' ');
+      globalThis.__an = out;
+    },
+  },
   'byes-other-week': {
     label: '(k) byes known and not week 6: that zero is a real 0.0, and a future saved week is kept',
     stub: true,
@@ -2975,6 +3017,63 @@ async function check(scenario, boot) {
       w.scrollsOff === 1 && /Team 2$/.test(w.rosterAfter), `${w.scrollsOff} ${w.rosterAfter}`);
     c.ok('and does not move the page when the detail is already in view',
       w.scrollsOn === 1, w.scrollsOn);
+  }
+
+  // ---- THE POSITIONAL FLOOR -----------------------------------------------
+  //
+  // Tim, 2026-09-18: "don't assess that K position to be 0 pts, assess it to
+  // be the max number of points that is available on the waivers for that
+  // position... In the season by week display, if you're replacing a low or 0
+  // proj with an assumed proj, just put the assumed proj # and color code them
+  // in orange or something to show it's assumed."
+  //
+  // Every assertion here is about a number on screen changing, and the floors
+  // the scenario declares are far from any real wire, so a page that ignored
+  // them could not pass by coincidence.
+  if (scenario === 'floors') {
+    const w = globalThis.__an;
+
+    // THE BYE. Week 6 is this D/ST's bye, so ESPN says 0.00 and the site now
+    // says 20.0 — the wire's best defence, who is who you would stream.
+    c.ok('a D/ST on bye is assessed at the wire floor', Number(w.dstW6.v) === 20,
+      `data-v was ${w.dstW6.v}`);
+    c.ok('and is drawn in orange', /\bassumed\b/.test(w.dstW6.cls), w.dstW6.cls);
+    c.ok('showing the assumed number, not the word Bye', w.dstW6.text === '20.0',
+      `cell read "${w.dstW6.text}"`);
+    c.ok('while the cell still says the bye is why', /bye/i.test(w.dstW6.title), w.dstW6.title);
+    c.ok('and names where the assumed number came from',
+      /waiver wire/i.test(w.dstW6.title), w.dstW6.title);
+
+    // A LOW WEEK, NOT A ZERO. Tim's second decision: the floor lifts anything
+    // below it, so a kicker projecting under 14 is assessed at 14.
+    c.ok('a kicker below the floor is lifted to it', Number(w.kW6.v) === 14,
+      `data-v was ${w.kW6.v}`);
+    c.ok('and marked assumed too', /\bassumed\b/.test(w.kW6.cls), w.kW6.cls);
+
+    // AND IT LEAVES EVERYTHING ELSE ALONE. The QB floor is 3.0, far below any
+    // real quarterback here, so his cell must be untouched — a floor that
+    // lifted every cell would pass all of the above and be useless.
+    c.ok('a man above his floor keeps ESPN’s own number',
+      !/\bassumed\b/.test(w.qbW6.cls), `${w.qbW6.v} ${w.qbW6.cls}`);
+    c.ok('so only some cells are assumed, not all of them',
+      w.assumedCount > 0 && w.assumedCount < 40, String(w.assumedCount));
+
+    // THE BAND TOTALS THE COLUMN AS DRAWN. A band that summed ESPN's numbers
+    // while the cells above it showed floored ones would be a panel
+    // contradicting itself, which is worse than either number alone.
+    const drawn = w.slotValues.filter((v) => Number.isFinite(v));
+    const sum = Math.round(drawn.reduce((a, v) => a + v, 0) * 10) / 10;
+    c.ok('the Starting lineup band equals the cells above it',
+      Math.abs(Number(w.bandW6) - sum) < 0.051, `band ${w.bandW6} vs cells ${sum}`);
+
+    // SAID IN WORDS AS WELL AS IN COLOUR, in both places.
+    c.ok('the legend carries the assumed mark', /assumed/i.test(w.legend), w.legend.slice(0, 200));
+    c.ok('the note says no slot is assessed below what you could stream',
+      /assessed below what you could stream/i.test(w.note), w.note.slice(0, 200));
+    c.ok('and prints the floors themselves, so a reader can check a cell',
+      /K 14\.0/.test(w.note) && /DST 20\.0/.test(w.note), w.note.slice(0, 400));
+    c.ok('and says it is one wire read used for every week',
+      /read once and used for every week/.test(w.note), w.note.slice(0, 400));
   }
 
   if (scenario === 'byes-other-week') {

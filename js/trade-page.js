@@ -57,6 +57,9 @@ import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js'
 // The namespace as well, for `fetchByeWeeks`, read defensively: a season module
 // (or a test stub) without it simply means the bye weeks are unknown.
 import * as season from './season.js';
+// The positional floor's wording, so this page says the same thing the
+// Analysis page does about an assumed number. See js/floor.js.
+import { describeFloors } from './floor.js';
 import { slotCountsFromLineups } from './projection.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -154,6 +157,11 @@ const state = {
   scheduleError: null, // why the live schedule could not be read, if it could not
   data: null,          // {week, teams:[...]} for the selected week
   slots: null,         // the league's starting slots, read off the lineups
+  // THE POSITIONAL FLOOR (Tim, 2026-09-18): position -> the wire's best man
+  // there, read ONCE and used for every week. Null in demo and until the read
+  // lands, which prices exactly as this page always did. See js/floor.js.
+  floors: null,
+  floorWeek: null,
   myTeamId: null,      // the squad the finder trades FROM
   espnTeamId: null,    // the reader's own team, when a live league says so
   isDemo: true,
@@ -1712,6 +1720,16 @@ function renderFinderNote() {
         `and all — so the two are deliberately <em>not</em> the same arithmetic.`
       : `<strong>You gain</strong> and <strong>He gains</strong> are points per week added to each ` +
         `best lineup, and so is the figure beside each player.`) +
+    // THE FLOOR, SAID OUT LOUD, on the page Tim said it matters most. It moves
+    // every gain on screen, so a reader who cannot see where it came from
+    // cannot check any of them — rule 7, and this is a page he checks by hand.
+    (describeFloors(state.floors, { week: state.floorWeek })
+      ? `<br><br><strong>No slot is priced below what you could stream.</strong> ` +
+        describeFloors(state.floors, { week: state.floorWeek }) +
+        ` That applies to BOTH squads in every offer, so a manager with a hole at one position ` +
+        `is not made to look cheaper to trade with than he really is — which is exactly the ` +
+        `direction an unfloored price was wrong in.`
+      : '') +
     `<br><br>` +
     `<strong>Two-for-ones.</strong> A <strong>two-for-one</strong> forces the side receiving two ` +
     `to drop somebody, and that cut is modelled — his worst man goes — because it is what makes ` +
@@ -1796,6 +1814,13 @@ function runSearch({ keepDeal = false } = {}) {
       weeks,
       projFor: weeks ? projFor : null,
       zeroIsBye: zeroIsBye(),
+      // THE POSITIONAL FLOOR (Tim, 2026-09-18), and this is the page he said
+      // it mattered most on. A trade is priced on what each squad would field
+      // EACH REMAINING WEEK, so a bye-week hole assessed at zero makes any
+      // deal that papers over it look far better than it is — and makes the
+      // squad that has the hole look cheaper to trade with. Null until the
+      // wire read lands, which prices exactly as this page always did.
+      floors: state.floors,
     });
     if (token !== runSearch.token) return;
     state.search = result;
@@ -1992,6 +2017,10 @@ function priceSide(offer, side, weeks) {
     weeks,
     projFor,
     zeroIsBye: zeroIsBye(),
+    // The same floors the finder priced with. A pop-up that priced a deal
+    // differently from the row that opened it would be two answers to one
+    // question, which is the defect this page has had before.
+    floors: state.floors,
   });
 }
 
@@ -3026,6 +3055,11 @@ async function useDemo() {
   state.source = 'demo';
   state.isDemo = true;
   state.byes = {};
+  // No floors in demo: the demo wire lives on the Players page, not in a
+  // shared module, and js/floor.js refuses to invent one. Demo therefore
+  // prices exactly as it always has.
+  state.floors = null;
+  state.floorWeek = null;
   state.scheduleError = null;
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
@@ -3114,7 +3148,21 @@ async function useLive() {
 
   state.week = openingWeek();
 
+  // THE FLOOR READ: one request, for the week the page opens on, used for
+  // every week it prices. Guarded the way the bye read is — a stub or a
+  // refused wire leaves `floors` null, and null prices exactly as before.
+  state.floorWeek = state.week;
+  const floorRead = (typeof season.fetchFloors === 'function'
+    ? season.fetchFloors(state.week)
+    : Promise.resolve(null))
+    .then((f) => {
+      if (state.source !== 'live') return;
+      state.floors = f && f.size ? f : null;
+    })
+    .catch(() => { state.floors = null; });
+
   renderWeekPicker();
+  await floorRead;
   await loadWeek();
 }
 

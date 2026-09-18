@@ -21,6 +21,16 @@
   --on-accent: #06210f; /* text that sits on an --accent fill */
   --err: #e0525f;
   --warn: #d9a441;
+  /* AN ASSUMED NUMBER: one the site supplied because ESPN's was below what the
+   * waiver wire would give you at that position (Tim, 2026-09-18 — "color code
+   * them in orange or something to show it's assumed"). See js/floor.js.
+   *
+   * Deliberately a clear ORANGE and not the amber --warn above, because the two
+   * appear on the same cells and mean opposite things: amber is "this number is
+   * bad", orange is "this number is not ESPN's". Half a shade apart would make
+   * them one cue with two meanings. Never used alone — every place it appears
+   * carries a dotted underline and words as well. */
+  --assumed: #e8833a;
   /* Neutral informational blue, for a quantity that is neither good nor bad --
    * a roster-strength bar, a "this is the row you picked" edge. Distinct from
    * --accent on purpose: green here would read as "winning".
