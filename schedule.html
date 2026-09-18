@@ -430,6 +430,11 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
       </div>
     </div>
     <p class="lede">The rest of the season and the playoffs, played out thousands of times. Our model, not ESPN&rsquo;s.</p>
+    <!-- Shown only when ESPN says the league really has more than one division,
+         because the seeding here ignores divisions and ESPN's does not. Visible
+         rather than behind the fold: it changes what every seed-derived
+         percentage in this panel MEANS. See capture.hasDivisions(). -->
+    <p class="panel-note warn-line" id="simWarn" hidden></p>
     <div class="stat-row" id="simStats"></div>
     <p id="simCap"></p>
     <div class="chart" id="simChart"></div>
@@ -486,6 +491,12 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
     </details>
   </section>
 
+  <!-- Data source and the time machine share a line (Tim, 2026-09-18): both
+       answer "where did these numbers come from", the first is only a toggle
+       and a status line, and the panel below it was already the one directly
+       under it in his order. Adjacent panels only — the wrapper moves neither,
+       which is what fc-test's order assertions read. -->
+  <div class="panel-row">
   <section class="panel" id="sourcePanel">
     <h2>Data source</h2>
     <div class="segmented" id="sourceToggle">
@@ -495,7 +506,7 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
-  <!-- The time machine. It sits directly under the data source because that is
+  <!-- The time machine. It sits directly beside the data source because that is
        what it is: choosing an archived week replaces the whole page's data, so
        the results, the matchups, the forecast and the simulation all travel
        together rather than one panel disagreeing with the rest. The connection
@@ -533,6 +544,7 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
     </details>
     </details>
   </section>
+  </div>
 
   <section class="panel" id="resultsPanel">
     <h2>Results</h2>

@@ -216,8 +216,26 @@ details.explain > summary::before {
 }
 details.explain[open] > summary::before { transform: rotate(45deg); }
 details.explain > summary:hover { color: var(--text); }
+/* "How this works" is 18.8px tall, and it is on 27 panels — the worst of the
+ * four sub-44px tap targets the density audit measured. It gets the 44px floor
+ * only where there are FINGERS: keyed off `hover: none` (no pointer), never off
+ * the width, per the two-media-features rule. On a mouse it stays tight, which
+ * is the whole point of a density pass — 27 panels x 25px is 675px of height
+ * that a cursor does not need. */
+@media (hover: none) {
+  details.explain > summary { min-height: 44px; }
+}
 details.explain > .panel-note,
 details.explain > p { margin-top: 8px; max-width: 90ch; line-height: 1.6; }
+
+/* A note that changes what a number MEANS, so it stays visible rather than
+ * going behind the "How this works" fold. It was page-local to trade.html
+ * until the schedule page needed the same thing for a divisional league.
+ * Defined after `.panel-note` deliberately: an element carries both classes
+ * and they have equal specificity, so source order is the whole of why this
+ * one wins the colour. */
+.warn-line { color: var(--warn); }
+.warn-line strong { color: var(--warn); }
 
 /* ------------------------------------------------------------------ controls */
 
@@ -525,8 +543,47 @@ pre {
 }
 code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-size: 12.5px; }
 
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 820px) { .grid-2 { grid-template-columns: 1fr; } }
+/* ----------------------------------------------------- panels side by side
+ *
+ * Tim, 2026-09-18: "anywhere we can condense horizontally and fit 2 boxes, we
+ * should. This might mean there is a mix between full-width boxes and
+ * half-width boxes." So a page is exactly that mix: the wide tables — ten
+ * squads by twenty columns, which are the point of this site — stay full
+ * width, and the narrow panels around them pair up. Wrap the ones that should
+ * share a line in a `.panel-row`.
+ *
+ * ONLY EVER WRAP ADJACENT PANELS. Panel order is Tim's, page by page, and
+ * `tests/stats-order.mjs` and the order assertions in fc/tr/an-test read the
+ * rendered document in document order — a wrapper leaves that untouched, but
+ * moving a panel to find it a partner would break both the test and his
+ * order.
+ *
+ * `auto-fit` + `minmax(min(<col>, 100%), 1fr)` does two things a fixed
+ * `1fr 1fr` cannot:
+ *   - a row whose other panel is `[hidden]` gives the whole width to the one
+ *     that is left, instead of leaving it in column one with a hole beside it
+ *     (`panelEarly` on the Stats page is hidden most of the season);
+ *   - `min()` caps the track at the container, so it stacks on a phone with no
+ *     media query and can never be wider than the screen.
+ *
+ * `min-width: 0` on the children is NOT optional and is a bug fix, not tidying.
+ * A grid item's automatic minimum is its min-content, so one wide table inside
+ * a column pushed the row wider than the page and scrolled the whole DOCUMENT
+ * sideways instead of scrolling inside its own `.table-scroll`. Measured on
+ * index.html: 571px of content on a 390px phone. */
+.panel-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(var(--col-min, 420px), 100%), 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.panel-row > * { min-width: 0; }
+/* The ROW owns the spacing, not the panels in it. A panel keeps its own
+ * `margin-bottom: 16px` for when it stands alone; left on inside a row it is
+ * added to the grid's own 16px gap the moment the row stacks, which cost 16px
+ * of double spacing per pair on a phone — measured at +101px across the site,
+ * turning a saving into a regression on the one screen Tim reads it on. */
+.panel-row > .panel { margin-bottom: 0; }
 
 /* Small layout utilities, so pages don't need inline styles. */
 .hidden { display: none; }

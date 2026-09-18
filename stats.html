@@ -231,38 +231,47 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     </p>
   </section>
 
-  <section class="panel" id="panelWeekly">
-    <h2>Weekly scores</h2>
-    <p class="lede">Every team&rsquo;s score, week by week. Tap a team in the legend to pick out its line.</p>
-    <div class="chart" id="chartWeekly"></div>
-  </section>
+  <!-- The five charts and the accuracy table pair off two to a line (Tim,
+       2026-09-18). Every row holds exactly TWO panels, deliberately: three to a
+       row only fits above about a 1400px screen, and below that the odd one out
+       sits at half width with a hole beside it. Each pair is ADJACENT in Tim's
+       order, so the wrappers change no panel's position — which is what
+       tests/stats-order.mjs reads. -->
+  <div class="panel-row">
+    <section class="panel" id="panelWeekly">
+      <h2>Weekly scores</h2>
+      <p class="lede">Every team&rsquo;s score, week by week. Tap a team in the legend to pick out its line.</p>
+      <div class="chart" id="chartWeekly"></div>
+    </section>
+    <section class="panel" id="panelLuck">
+      <h2>Weekly luck &mdash; actual minus projected</h2>
+      <p class="lede">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
+      <div class="chart" id="chartLuck"></div>
+    </section>
+  </div>
 
-  <section class="panel" id="panelLuck">
-    <h2>Weekly luck &mdash; actual minus projected</h2>
-    <p class="lede">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
-    <div class="chart" id="chartLuck"></div>
-  </section>
-
-  <section class="panel" id="panelCumLuck">
-    <h2>Cumulative luck</h2>
-    <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
-    <div class="chart" id="chartCumLuck"></div>
-    <details class="explain">
-      <summary>How this works</summary>
-      <p class="panel-note">
-        Each point is computed from every week up to that one, not from that week
-        alone, so the lines converge as the season goes on and single results stop
-        dominating.
-      </p>
-    </details>
-  </section>
-
-  <div class="grid-2">
+  <div class="panel-row">
+    <section class="panel" id="panelCumLuck">
+      <h2>Cumulative luck</h2>
+      <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
+      <div class="chart" id="chartCumLuck"></div>
+      <details class="explain">
+        <summary>How this works</summary>
+        <p class="panel-note">
+          Each point is computed from every week up to that one, not from that week
+          alone, so the lines converge as the season goes on and single results stop
+          dominating.
+        </p>
+      </details>
+    </section>
     <section class="panel">
       <h2>Score distribution</h2>
       <p class="lede" id="distNote">Every team&rsquo;s weekly score, in ten-point buckets.</p>
       <div class="chart" id="chartDist"></div>
     </section>
+  </div>
+
+  <div class="panel-row">
     <section class="panel">
       <h2>Projection accuracy</h2>
       <p class="lede">How often the higher projection won, split by how big the projected margin was.</p>
@@ -282,20 +291,19 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         <p class="panel-note" id="accuracyNote"></p>
       </details>
     </section>
+    <section class="panel" id="panelBox">
+      <h2>Score spread by team</h2>
+      <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
+      <div class="chart" id="chartBox"></div>
+      <details class="explain">
+        <summary>How to read it</summary>
+        <p class="panel-note">
+          Dots are outlier weeks beyond 1.5&times; the interquartile range (the width
+          of the box).
+        </p>
+      </details>
+    </section>
   </div>
-
-  <section class="panel" id="panelBox">
-    <h2>Score spread by team</h2>
-    <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
-    <div class="chart" id="chartBox"></div>
-    <details class="explain">
-      <summary>How to read it</summary>
-      <p class="panel-note">
-        Dots are outlier weeks beyond 1.5&times; the interquartile range (the width
-        of the box).
-      </p>
-    </details>
-  </section>
 
 </div>
 

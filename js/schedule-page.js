@@ -2285,6 +2285,9 @@ function renderSimulation() {
   const blank = (reason, note) => {
     $('simStats').innerHTML = '';
     $('simCap').textContent = '';
+    // Nothing was simulated, so there are no seed-derived numbers for the
+    // divisions warning to be about.
+    $('simWarn').hidden = true;
     $('simChart').innerHTML = '';
     // Nine columns now the bracket has its own four. A colspan that has drifted
     // short leaves the message boxed into the left of the table rather than
@@ -2487,6 +2490,31 @@ function paintSimulation(sim, inputs) {
   // fall in. One function drives all of it — see playoffTeams().
   const teamCount = d.teams.length;
 
+  // ---- DIVISIONS, which this panel's seeding does not model ----------------
+  //
+  // ESPN seeds division winners ahead of every wildcard, so in a two-division
+  // league a 9-4 team can be seeded below an 8-5 division winner. The seeding
+  // here is the table and nothing else, so every seed-derived percentage in
+  // this panel — Playoffs %, Bye %, Title %, Avg place — would be wrong.
+  //
+  // It was twice put to Tim as a question when it never needed to be one:
+  // ESPN publishes the division count and `espn.parsePlayoffs` has decoded it
+  // all along. The league answers it here instead. Silence is not agreement —
+  // `hasDivisions` is true only when ESPN really said more than one, so demo,
+  // a stub and an old archived reading say nothing rather than claiming one
+  // division.
+  const divisions = capture.divisionCount(d);
+  const divWarn = $('simWarn');
+  divWarn.hidden = !capture.hasDivisions(d);
+  if (!divWarn.hidden) {
+    divWarn.innerHTML =
+      `<strong>Your league has ${divisions} divisions, and the seeding below ignores them.</strong> ` +
+      `ESPN seeds division winners ahead of every other qualifier, so a team can be seeded ` +
+      `lower here than it really would be — which moves Playoffs&nbsp;%, Bye&nbsp;%, ` +
+      `Title&nbsp;% and Avg place. Read them as the shape of the season rather than exact ` +
+      `numbers until divisions are modelled.`;
+  }
+
   // ---- what a PLACE is, which is the thing this panel used to get wrong ----
   //
   // It reported the regular-season standings as the finish, so a team that
@@ -2544,7 +2572,17 @@ function paintSimulation(sim, inputs) {
         ? `the top ${plural(po.byes, 'seed')} skip round one, and seeds ${po.byes + 1}–${po.teams} play it. `
         : 'every qualifier plays every round. ') +
       `Seeding is the regular-season table, so it uses the same rule as the standings — ` +
-      `wins, with a tie as half a win, then points — worked out fresh in every simulated season. The bracket ` +
+      `wins, with a tie as half a win, then points — worked out fresh in every simulated season. ` +
+      (capture.hasDivisions(d)
+        ? `<strong>Your league has ${divisions} divisions and that is NOT modelled here:</strong> ` +
+          `ESPN seeds division winners above every other qualifier and this seeds purely on the ` +
+          `table, so a seed here can be lower than the real one. `
+        : divisions === 1
+          ? `Your league is a single division, which is what makes the table the whole seeding rule. `
+          : `Whether the league has divisions is not known for this season — ESPN publishes it and ` +
+            `this data carries no settings — and a divisional league seeds its division winners ` +
+            `first, which this does not. `) +
+      `The bracket ` +
       `is fixed once seeded — this league has reseeding off — and a tied playoff game ` +
       `is won by the higher seed, which is ESPN’s own rule. The consolation ladder is ` +
       `deliberately not modelled: nothing in it can produce a champion, and last place ` +

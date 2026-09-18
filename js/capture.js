@@ -136,6 +136,34 @@ export function playoffTeamsKnown(data) {
 }
 
 /**
+ * How many DIVISIONS the league has — and it matters, because the seeding
+ * this site computes ignores them.
+ *
+ * ESPN seeds division winners ahead of every wildcard, so in a league with
+ * more than one division a 9-4 team can be seeded below an 8-5 one that won
+ * its division, and every title % downstream of the seeds would be wrong.
+ * `js/forecast.js` seeds purely on the table (wins, a tie as half a win, then
+ * points), which is right for a single-division league and only for that.
+ *
+ * This was an open question put to Tim twice. It should never have been a
+ * question: ESPN publishes `settings.scheduleSettings.divisions` and
+ * `espn.parsePlayoffs` has decoded the count all along — nothing read it. So
+ * the league answers it on the next live load, and until then `null` means
+ * "ESPN did not say" rather than "one", the same rule as every other field
+ * here. Demo, a stub and any reading archived before this all yield null.
+ */
+export function divisionCount(data) {
+  const n = data?.playoffs?.divisions;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** True only when the league REALLY said it has more than one division. */
+export function hasDivisions(data) {
+  const n = divisionCount(data);
+  return n !== null && n > 1;
+}
+
+/**
  * The last week of the regular season, read off the schedule.
  *
  * js/season.js's `fetchSchedule` hands over the REGULAR SEASON only — ESPN's

@@ -27,10 +27,10 @@
     color: var(--dim);
     margin-bottom: 5px;
   }
-  /* Short visible lines a reader must not miss — a warning that changes what
-     a number means. Never tucked into a "How this works" toggle. */
-  .warn-line { color: var(--warn); }
-  .warn-line strong { color: var(--warn); }
+  /* `.warn-line` — a short visible line a reader must not miss, for a warning
+     that changes what a number means. It lives in css/app.css now: the
+     schedule page needs the same thing for a divisional league, and two pages
+     is where a page-local style stops being page-local. */
   #sourceStatus:empty, #tradeCount:empty { display: none; }
   #sourceStatus { margin-top: 10px; }
   #tradeCount { margin-top: 10px; }

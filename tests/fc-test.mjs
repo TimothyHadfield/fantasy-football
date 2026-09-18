@@ -44,6 +44,31 @@ const SCENARIOS = {
       }
     },
   },
+  // DIVISIONS ARE READ, AND SAID OUT LOUD WHEN THEY ARE NOT MODELLED.
+  //
+  // ESPN seeds division winners above every wildcard; this site seeds purely
+  // on the table. So a divisional league's Playoffs %, Bye %, Title % and Avg
+  // place are all affected, and the panel has to say so where a reader will
+  // see it rather than behind the fold.
+  //
+  // This is the second half of a falsifiable pair. `playoff-four` declares ONE
+  // division and asserts the warning is absent; this one declares two and
+  // asserts it is present. A page that ignored the setting entirely, or one
+  // that warned unconditionally, fails exactly one of the two.
+  'playoff-divisions': {
+    label: '(h+) the league declares TWO divisions, and the page says seeding ignores them',
+    stub: true,
+    env: { FC_PLAYOFF_TEAMS: '6', FC_DIVISIONS: '2' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    conn: { leagueId: '99', season: 2026, teamId: 3 },
+    after: async ({ document }) => {
+      for (let i = 0; i < 100; i++) {
+        const el = document.getElementById('simNote');
+        if (el && el.textContent.trim().length > 40) return;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    },
+  },
   demo: {
     label: '(a) demo data, default week',
     stub: false,
@@ -493,6 +518,44 @@ async function check(scenario, boot) {
     const canWin = titles.filter((v) => v > 0).length;
     c.ok('at most four teams have any title chance', rows.length === 0 || canWin <= 4,
       `${canWin} of ${rows.length} teams had a non-zero title %`);
+
+    // ONE DIVISION, so there is nothing to warn about. This is the half of the
+    // pair that fails if the page ever warns unconditionally — without it,
+    // "the warning appears for two divisions" would pass for a page that
+    // showed the warning to everybody.
+    const warn = d.getElementById('simWarn');
+    c.ok('the divisions warning is absent in a single-division league',
+      Boolean(warn) && warn.hidden === true,
+      warn ? `hidden=${warn.hidden}: ${(warn.textContent || '').slice(0, 120)}` : 'no #simWarn element');
+    c.ok('and the note says the table IS the whole seeding rule',
+      /single division/i.test(note), note.slice(note.indexOf('Seeding is'), note.indexOf('Seeding is') + 260));
+
+    return c.out;
+  }
+
+  if (scenario === 'playoff-divisions') {
+    const note = (d.getElementById('simNote')?.textContent || '').replace(/\s+/g, ' ');
+    const warn = d.getElementById('simWarn');
+    const warnText = (warn?.textContent || '').replace(/\s+/g, ' ');
+
+    c.ok('the divisions warning is VISIBLE', Boolean(warn) && warn.hidden === false,
+      warn ? `hidden=${warn.hidden}` : 'no #simWarn element');
+    c.ok('it says how many divisions ESPN reported', /\b2 divisions\b/.test(warnText), warnText.slice(0, 200));
+    c.ok('and that the seeding ignores them', /ignores them/i.test(warnText), warnText.slice(0, 200));
+    // The four percentages a wrong seed actually moves are named, so a reader
+    // knows which numbers to discount rather than distrusting the whole panel.
+    for (const col of ['Playoffs', 'Bye', 'Title', 'Avg place']) {
+      c.ok(`it names ${col}`, warnText.includes(col), warnText.slice(0, 240));
+    }
+    c.ok('the note repeats it where the bracket is explained',
+      /NOT modelled here|not modelled here/.test(note) && /division winners/i.test(note),
+      note.slice(note.indexOf('Seeding is'), note.indexOf('Seeding is') + 320));
+    c.ok('and it does not claim a single division',
+      !/single division/i.test(note), note.slice(0, 200));
+
+    // The field size still comes from the league, so declaring divisions has
+    // not disturbed the setting beside it.
+    c.ok('six of ten still qualify', /\b6 of 10 teams make the playoffs/.test(note), note.slice(0, 220));
 
     return c.out;
   }

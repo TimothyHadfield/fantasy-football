@@ -86,7 +86,12 @@ export async function fetchSchedule() {
         weeksPerPlayoffRound: 1,
         reseed: false,
         seedingRule: 'TOTAL_POINTS_SCORED',
-        divisions: 1,
+        // DIVISIONS, for the same reason as the field size above: the page
+        // treats "one division" and "ESPN did not say" differently, and it
+        // warns only on more than one. A stub fixed at 1 could never tell a
+        // page that reads this from a page that ignores it, so FC_DIVISIONS
+        // makes it declare two.
+        divisions: Number(process.env.FC_DIVISIONS || 1),
       }
       : null,
     weeks: WEEKS.slice(),
