@@ -36,7 +36,7 @@ describe how the site works **today**:
 | The depth map, and what "replacement" means | "The Trade page" |
 | Why a trade can make BOTH squads better | "The Trade page" |
 | Why a trade is priced week by week and not on an average | "Per-week trade valuation" |
-| The weekly measure's button, the per-offer pop-up, best combo | "The Trade page as it stands" |
+| The per-offer pop-up, best combo, and how the page used to wait to be asked | "The Trade page as it stands" |
 | Opening ESPN's trade screen with BOTH sides ticked | "Ticking your own side of a trade" |
 | Title %, the bracket, and where a team actually finishes | "The playoffs, and the hybrid final placing" |
 | Why squads are labelled with people | "Real names, and the two traps in getting them" |
@@ -64,6 +64,17 @@ describe how the site works **today**:
 | Measuring the real layout in headless Edge | "How the layout was measured" |
 | Mid-season strategy, and what the research says | docs/strategy-research.md |
 | The measured plan for condensing the pages | "The density audit" |
+| Why a floor comes off the 3rd free agent, not the 1st | "The floor is the THIRD-best free agent" |
+| Why Proj avg stopped being a per-player number | "Proj avg is now the lineup, week by week" |
+| The team picker at the top of Season by week | "Season by week has its own team picker" |
+| The red/green scale, and what it replaced | "The one red/green scale" |
+| Why a flat column refuses to colour at all | "The one red/green scale", the HEAT_MIN_SPREAD note |
+| Why data survives moving between pages | "The weeks stay put between pages" |
+| Why the Trade page no longer has a price button | "The weeks stay put between pages" |
+| Why Best combo used to beat itself | "Best combo was priced on a different basis" |
+| The trade card's Act row, and the starts count | "The trade card, and the custom trade box" |
+| Whether panels really do pair up, measured | "Stats: two panels side by side" |
+| Roster strength as a week rather than a season | HANDOFF, the 2026-09-19 block, item 8 |
 | What to do next | "Next", at the foot |
 
 ## 2026-09-19 (later) — one colour scale, one local store, and the combo fixed
@@ -739,6 +750,14 @@ slot, so WR2 is always the second-best receiver actually starting. A
   roster would be both too small a sample and the thing being judged. The
   thresholds are printed under the table so a reader can check a cell by eye,
   and nothing is coloured at all when `stdev` returns null.
+
+  **SUPERSEDED 2026-09-19.** The ▼ / ▼▼ marks are gone, and so are `lo1`,
+  `lo2` and `.lowmark`. `js/heat.js` colours these cells now — a spectrum, full
+  colour at ±1 SD instead of a cliff at 1 and 2, and it marks GOOD as well as
+  bad, which was Tim's complaint. **The comparison group above is unchanged**
+  and is the half worth keeping: the same slot across all ten squads, never his
+  own roster, and no colour at all when there is not enough to be sure. See
+  "The one red/green scale" at the top of this file.
 - **The roster detail's what-if swaps are deliberately NOT applied here.** This
   panel answers what the numbers say; folding a hand-moved lineup in would make
   an experiment look like advice.
@@ -3102,13 +3121,20 @@ a band in place.
 **The suites are in `tests/` now. Run them with `cd tests && npm install &&
 npm test`** — see [tests/README.md](tests/README.md).
 
-**35 suites, 11,598 assertions**, counted off a green run on 2026-09-19 (it was
-26 suites and ~9,400 on 2026-09-16; the cloud, capture, bye-rule, floor and
-order suites came after). Four of the 35 report pages or scenarios rather than
-a count and are not in that total: `test-pages-render` 6 pages, `test-home`
-2 pages, `stats-weeks` and `opp-check` 6 scenarios each. Those figures are the
-run, not an estimate — and they drift, so if a number here disagrees with a
-run, the run is right.
+**37 suites, 12,089 assertions**, counted off a green run on 2026-09-19 (it was
+26 suites and ~9,400 on 2026-09-16; the cloud, capture, bye-rule, floor, order,
+heat and store suites came after). Four of the 37 report pages or scenarios
+rather than a count and are not in that total: `test-pages-render` 6 pages,
+`test-home` 2 pages, `stats-weeks` and `opp-check` 6 scenarios each. Those
+figures are the run, not an estimate — and they drift, so if a number here
+disagrees with a run, the run is right.
+
+**It takes about ten minutes now, not six to eight**, and `tr-test` alone is
+three and a half of them. That is not a regression to chase: the Trade page
+reads itself on load since 2026-09-19, so every scenario in that suite does
+real work on boot where it used to wait for a button. Seeding a scalar measure
+in the scenarios that do not need the weekly one would win most of it back if
+the wait ever becomes the thing that stops a session running the suite.
 
 **`test-extension.mjs` HAD BEEN LOST FROM THE REPO, and that is a lesson rather
 than a footnote.** This file documented it at 38 assertions as though it were
@@ -3164,7 +3190,7 @@ present: the coverage is worth recreating if that code is touched again.
 | `hot-check.mjs` (again) | records every green cue per player per week, presses FLEX, and compares cell for cell — **not one cell changes colour**, which is what proves a filter is only a filter |
 | `taken-check.mjs` | the Taken players table — 223 assertions over 5 scenarios (a hand-built three-squad stub where every answer is known, the real `demo-rosters.js`, and one that gives TWO teams the same displayed name while keeping their ids — revert the id keying under it and the quarterbacks come back QB1..QB5 across a merged chart instead of 1,1,2,2,3). Every rank assertion re-derives the ordering from the RENDERED Avg column, grouped by the rendered owner — never from the stub’s raw numbers or the page’s own arithmetic |
 | `test-trade.mjs` | the trade engine — 1,411 assertions over two fixtures. A hand-built two-team league where every answer is known by hand (the 18-for-18 mirrored swap is worth exactly 12 to each side), then the real demo pool, where **every offer is re-priced from the raw rosters** rather than read back off its own numbers — so an engine that merely reported confident figures would fail rather than agree with itself. Also asserts roster legality both ways and that the in/out lists add up to the stated gain |
-| `tr-test.mjs` | the Trade page end to end — 224 assertions. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; every control; the weekly measure's button and the fact that **nothing fetches a week until it is pressed**; the per-offer pop-up; and the combo list merged per manager. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
+| `tr-test.mjs` | the Trade page end to end — 224 assertions. The depth map's columns, its per-column tinting and its bar chips; the finder's ranking and its churn line; every control; the weekly measure's button — which **as of 2026-09-19 is a re-read rather than the only way in, because the page prices itself on load**, and the suite now waits for that where it used to press; the per-offer pop-up; and the combo list merged per manager. It caught a real defect the day it was written: a filter matching nothing HID the table without emptying it, so the previous search's rows sat in the document — invisible on screen, which is exactly why looking at the page would never have found it |
 | `test-snapshots.mjs` | the time machine's storage — 123 assertions. Round-trips a reading through JSON, through a file, and into an empty browser; proves a snapshot is a COPY by moving the live season underneath one and checking it does not follow; and covers a browser that blocks storage, a full one, an unreadable key, and a file from a newer build. Also the committed archive: that it restores a wiped browser, keeps the browser's own copy over the file's, takes only this league's weeks out of a file holding several, and stays silent through a 404, an offline network, an HTML error page and a body that will not read |
 | `an-test.mjs` | the analysis page end to end — 565 assertions over 8 scenarios (demo, stubbed live, weeks 5 and 11 refused, switching team / sorting / changing week, the two all-teams grids, and the roster detail's split + swap). Both new scenarios check the arithmetic by hand rather than against the page's own sums: 144 for the stub team's nine by average and 165.6 for the same nine in week 8; 158.6 after trading a 20.4 out for a 13.4, with a −7.0 beside it; and 141.4 in week 6, where a bye forces the lineup to be re-picked around a 0.00 |
 | `hot-check.mjs` | both greens on the Players page’s wire table — 118 assertions. Re-derives each rule from the rendered DOM: over the per-position bar, and ahead of your own worst man that week. Also asserts the shading is NOT on every comparable cell, so a rule that greened the whole table fails here |

@@ -535,11 +535,11 @@ Everything Tim has asked for is built and live:
 | Page | What it does |
 |---|---|
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
-| `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played. Close luck, luck score, S+L, LS and PS show **from week 1 with a ±** (one standard error; wide early, narrowing weekly) — Tim's ask, replacing a week-3 hold-back |
-| `analysis.html` | All ten squads in **one grid**, with the week picker and an `A week / Proj avg <season>` switch inside the panel (pref `analysis.measure`). **The two measures are now different tables** (Tim, 2026-09-19): `A week` is nine player spots, a total and the bench, with a card (hover, or tap on a phone) carrying each man's whole season as a three-row chart; **`Proj avg` is one column per LINEUP SLOT averaged over the season — the Avg column of "Season by week" computed for all ten squads**, so the two boxes cannot disagree. It names nobody, links nowhere (a slot's season is usually several men; the `title` says who filled it and how often), has no bench, and its Total is the week-by-week lineup averaged — the same figure the sheet's "Starting lineup" band shows. The roster detail's `Proj avg` tile is that same number. **"Season by week" has its own team picker** at the top of the panel, which is a second view of the page's one team setting, not a second setting — weeks, projection, and actual for weeks already played and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; **"Season by week"** — since 2026-09-17 a LINEUP SHEET, not a roster list: one row per slot (QB, RB1, RB2, WR1…, FLEX, D/ST, K), each week showing that week's best legal lineup ranked inside its slot, a "Starting lineup" totals band, hover/tap/focus lighting every week he holds and naming him on the line above the table — **with his season projection and what he is actually averaging, and NO card** since 2026-09-18 (Tim: the 14-week preview was answering a question the panel already answers) — low numbers marked amber ▼ (1 SD) / red ▼▼ (2 SD) against the LEAGUE's distribution for that slot, thresholds printed, and **numbers lifted by the waiver floor drawn in orange with a dotted underline** (see rule 13); and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
+| `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played. **The shared red/green scale is on the standings (with the two OPPONENT columns inverted, since a high projected opponent is a hard schedule) and on the week grid, scaled per WEEK COLUMN so a bad week for the whole league is not a red column.** Score distribution and Projection accuracy share a line (Tim, 2026-09-19). Close luck, luck score, S+L, LS and PS show **from week 1 with a ±** (one standard error; wide early, narrowing weekly) — Tim's ask, replacing a week-3 hold-back |
+| `analysis.html` | All ten squads in **one grid**, with the week picker and an `A week / Proj avg <season>` switch inside the panel (pref `analysis.measure`). **The two measures are different TABLES since 2026-09-19, not one table measured twice**: `A week` is nine player spots, a total and the bench, each cell carrying a card (hover, or tap on a phone) with that man's whole season as a three-row chart — the weeks, his projection, and what he actually scored for weeks already played — and bench ranks (`12.3 RB4`); `Proj avg` is **one column per LINEUP SLOT averaged over the season — the Avg column of "Season by week" computed for all ten squads**, so the two boxes cannot disagree. That one names nobody and links nowhere (a slot's season is usually several men; the `title` says who filled it and how often), has no bench, and its Total is the week-by-week lineup averaged, which is the figure the sheet's "Starting lineup" band shows. The roster detail's `Proj avg` tile is that same number. Then a per-team drill-down whose lineup you can **swap around** to see what it would score; **"Season by week"** — since 2026-09-17 a LINEUP SHEET, not a roster list: one row per slot (QB, RB1, RB2, WR1…, FLEX, D/ST, K), each week showing that week's best legal lineup ranked inside its slot, a "Starting lineup" totals band, hover/tap/focus lighting every week he holds and naming him on the line above the table with his season projection and what he is actually averaging, and **NO card** since 2026-09-18 (Tim: the 14-week preview was answering a question the panel already answers). **It has its own team picker** at the top (2026-09-19), which is a second view of the page's one team setting rather than a second setting. Its cells are coloured by the **shared red/green scale** (rule 14) since 2026-09-19 — the amber ▼ / red ▼▼ low marks are GONE — and **numbers lifted by the waiver floor are drawn in orange with a dotted underline** (rule 13), which composes with the scale rather than competing with it; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
 | `schedule.html` | **Ordered by usefulness (Tim, 2026-09-17): My season, Simulate season, Week matchups (the week picker lives inside that panel, with the week's headline numbers and its cards), then Data source, Time machine, Results, Head to head. THERE IS NO STANDINGS PANEL** — his direction that the site adds to ESPN rather than rebuilding a league table ESPN already shows; the two things it carried that ESPN does not publish, his place now and his run-in rank, are figures inside My season. `capture.standingsKey` is untouched and still seeds the bracket. Matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation **including the playoff bracket** — where a team finishes is the bracket for places 1–6 and the regular-season table below that, which is how this league ranks people — and a **time machine** — a reading of the whole page is saved automatically once a week, picking one replays the season as it looked then, and the archive committed under `data/snapshots/` restores itself into any browser |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
-| `trade.html` | The **finder**, then **Best combo**, then the **depth map** (Tim's order, 2026-09-17), then **Custom trades** (2026-09-18) — build any deal between any two squads and keep it; only the players are saved, never the price, so every row is re-priced on each render: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked. **Every figure is per week first, the rest-of-season total as the small sub-number** (Tim's display rule). The pop-up fetches its own weeks on the click and shows played weeks above a heavy line, in white, in no total. After an ESPN click a line at the foot of the page says what became of your side (extension absent / too old / refused / handed over) |
+| `trade.html` | **It prices itself on load now** (2026-09-19) — there is no button to press, and within six hours of a visit it costs no requests at all, because `js/store.js` keeps the weeks. The **finder**, then **Best combo** (which takes the positional floor since 2026-09-19, and could not before, so its numbers now reconcile against the rows above it), then the **depth map** (Tim's order, 2026-09-17), then **Custom trades** (2026-09-18) — build any deal between any two squads and keep it; only the players are saved, never the price, so every row is re-priced on each render: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked. **Every figure is per week first, the rest-of-season total as the small sub-number** (Tim's display rule). The pop-up fetches its own weeks on the click and shows played weeks above a heavy line, in white, in no total. After an ESPN click a line at the foot of the page says what became of your side (extension absent / too old / refused / handed over) |
 | `summary.html` | The weekly chart for his group chat — member, season LUCK, title %, loser %, at 100,000 runs — rendered to an image and handed to the phone's share sheet |
 | `draft.html` | Draft assistant + practice mode. **Parked** — do not add to it unless he asks |
 | `debug.html` | Raw ESPN probes. Not in the nav |
@@ -628,8 +628,55 @@ Five worth knowing by name:
 
 ## What is genuinely open
 
-**2026-09-18 — four things landed, all pushed and live.** Read these first;
-they change numbers he checks by hand.
+### 2026-09-19 — ten of his asks landed in one day. Read this block first.
+
+All pushed and live; **37 suites, 12,089 assertions, green**. Most of it
+changes numbers he checks by hand, so if he says a figure looks wrong, start
+here. The detail is in `PROGRESS.md` under the two 2026-09-19 headings.
+
+1. **The floor is the THIRD-best free agent, not the best.** `FLOOR_RANK = 3`.
+   His reason, and it is the right one: the floor was measuring what is ON the
+   wire when it has to measure what you would END UP WITH — the top man goes to
+   whoever has the waiver priority. **This lowers every assumed number on the
+   site.**
+2. **`Proj avg` on the all-teams grid is no longer about players.** It is the
+   "Season by week" Avg column computed for all ten squads: one column per
+   lineup slot, averaged week by week, floors included. Its Total IS the sheet's
+   "Starting lineup" band. No bench columns, no player links, league slots not
+   the old hard-coded nine. The roster detail's `Proj avg` tile is that same
+   number.
+3. **`js/heat.js` — one red/green scale, replacing the ▼/▼▼ marks.** Rule 14
+   below. Full colour at ±1 SD. Live on Season by week, the Proj avg grid, the
+   Stats standings and the Stats week grid.
+4. **`js/store.js` — the weeks survive a navigation.** Rule 15 below. **The
+   Trade page prices itself on load**; within six hours of a visit it costs zero
+   requests.
+5. **Best combo was priced without the floor** from the day the floor landed
+   until this one — see the correction inside rule 13. Fixed, and the invariant
+   is asserted: the best combo can never be worth less than the best single
+   trade.
+6. **The trade card covers weeks 1→17**, so the Act row is no longer always
+   empty, and it carries how many weeks that man makes the best lineup.
+7. **Season by week has its own team picker**; it is a second view of the page's
+   one team setting, not a second setting.
+8. **Roster strength on Home is points in a typical week** (~105), not a season
+   total. It is ESPN's season projection over 17 games for the lineup AS SET, so
+   it deliberately does **not** match Analysis's `Proj avg`; the note says so.
+9. **Custom trades**: lineup order, whole roster, no inner scroller, the
+   per-week figure under its own side, and a "Week by week" button on the
+   builder.
+10. **Stats: Score distribution and Projection accuracy share a line.** It makes
+    that page ~374px TALLER — six panels were three tidy pairs. His call.
+
+**Measured, and worth not re-deriving:** panel pairing works at 1500 / 1280 /
+1000px and stacks at 900 / 390px with no sideways overflow. He reported seeing
+none of it, which was a stale cache or a window under ~900px. The break is at
+2 × 420 + 16 = 856px of row, about a 916px viewport.
+
+### 2026-09-18 — four things landed, all pushed and live.
+
+Still true, and still the best description of the floor's own rules — but read
+the 2026-09-19 block above first, because two of these have moved since.
 
 **1. THE POSITIONAL FLOOR, and it moves every projection on the site.** His
 ask, in his words: "if you are determining your total proj for week 14, but
@@ -739,6 +786,26 @@ order, playoff weeks in every week preview.
 
 ### Open questions for Tim (asked, not answered)
 
+**Asked 2026-09-19, at the top because they are the live ones:**
+
+- **Should the `A week` grid take the red/green scale too?** It was left off,
+  argued at length in a comment above `renderGrid` that he can overrule: those
+  cells already spend colour on four state meanings (Bye, a ruled-out 0.0, OUT,
+  IR), which is the "unless it conflicts with something else we already have
+  built" exception he named himself. `Proj avg` is one button away and coloured.
+- **Is +374px on the Stats page an acceptable price for the pairing he asked
+  for?** Score distribution and Projection accuracy now share a line, which
+  breaks up two existing pairs and leaves Cumulative luck and Score spread
+  full-width. He asked for it by name; the measurement says it costs height.
+- **Where else should the scale go?** He said "virtually all charts across the
+  site". It is on Analysis and Stats. The Trade page, the Players page's own
+  two greens, and the actual CHARTS (as opposed to tables) are untouched.
+- **Six hours for a future week's projections** — the local store's clock,
+  pinned to the cloud sync interval rather than chosen. If he wants fresher, it
+  is one constant.
+
+**Older, still unanswered:**
+
 1. **The density pass, part two.** He said "leave it as is for now" on
    vertical density and asked only for horizontal pairing, which is done. The
    rest of his original 25–40% would have to come from content: eight charts at
@@ -776,6 +843,22 @@ order, playoff weeks in every week preview.
 
 - **Commit the archive export** the moment it appears in his Downloads. It is
   the only thing here with a deadline.
+- **Hard-refresh matters more than usual right now.** Ten changes landed on
+  2026-09-19 and several of them move numbers. If he reports something that
+  reads like yesterday's behaviour, ask before investigating.
+- **The store covers ROSTERS only.** The waiver wire (one request a page, and
+  it is what feeds the floors) and the bye weeks are the obvious next shapes,
+  and the wire is the one whose re-read actually costs him something per page.
+- **`store.forget(leagueId)` belongs in the 2027 rollover** below — nothing
+  prunes a past season's keys today.
+- **Demo still has no floors**, so the orange assumed numbers and the unfloored
+  combo pool are both demo-only artefacts. Giving demo a wire closes both at
+  once, and it is the same contained job as before: the demo pool lives inside
+  `js/waivers-page.js` rather than in a shared module.
+- **The layout measuring script exists again** but is still in a scratchpad,
+  not the repo — headless Edge over CDP, `Emulation.setDeviceMetricsOverride`,
+  polls until the height settles, can screenshot a selector. Worth committing
+  if the density pass goes further.
 - **December**, now the nearest real deadline after that. Home, the Players
   page and "Who to start" stop at the last regular week, so his playoff matchup
   never appears; the simulation says "nothing left to simulate" once week 14 is
@@ -813,7 +896,15 @@ order, playoff weeks in every week preview.
    then ask him about the export. It is the only thing here with a deadline,
    and the answer is not in this repo.
 2. **`cd tests && npm install && npm test`** before you change anything, so you
-   know whether a failure afterwards is yours. 35 suites, about 6-8 minutes.
-3. **Read "What is genuinely open" above.** Four things landed on 2026-09-18
-   that change numbers he checks by hand, and the positional floor is the one
-   most likely to be behind "that number looks wrong".
+   know whether a failure afterwards is yours. 37 suites, about 10 minutes.
+3. **Read the 2026-09-19 block at the top of "What is genuinely open" above.**
+   Ten of his asks landed that day and most of them move numbers he checks by
+   hand. If he opens with "that number looks wrong", the three most likely
+   causes in order are: **the floor now coming off the 3rd-best free agent**,
+   **`Proj avg` no longer being a per-player average**, and **a page reading
+   from the local store rather than ESPN** (`store.summary()` says what it is
+   holding and how old).
+4. **Tell him to hard-refresh** before investigating anything that reads like
+   the old behaviour. GitHub Pages caches for ten minutes and he has been
+   caught by it three times — once as recently as the panel pairing, which was
+   working all along.
