@@ -14,7 +14,7 @@
 // is not zero — it is what the wire would give him.
 //
 // ===========================================================================
-// THE TWO DECISIONS BEHIND IT, both Tim's, both taken on 2026-09-18
+// THE THREE DECISIONS BEHIND IT, all Tim's
 // ===========================================================================
 //
 // 1. WHERE THE FLOOR COMES FROM: one wire read, used flat for every remaining
@@ -30,6 +30,21 @@
 //    4.1 — you would have streamed the 7.8. So a slot is worth
 //    `max(his projection, the floor)`. "A min standard for positions", in his
 //    words, and the empty-slot case falls out of it rather than being special.
+//
+// 3. HOW DEEP INTO THE WIRE (Tim, 2026-09-19): "the assumed is a little higher
+//    than I would've expected and I think we should set the bar lower,
+//    especially considering there might be 5-6 users also wanting the player at
+//    the top of the waivers. Try moving the line down to around the 3rd best
+//    player in the waivers of that position."
+//
+//    He is right, and it is the difference between what is ON the wire and what
+//    you would actually END UP WITH. The top free agent at a position is the one
+//    every manager in the league has noticed; in a ten-team league he goes to
+//    whoever has the waiver priority or the biggest bid, which is nine times out
+//    of ten not you. The third-best is the one you can reasonably expect to get,
+//    and a floor is a claim about what you could field, not about what exists.
+//    So `FLOOR_RANK` is 3 — and where the wire is thinner than that, the floor
+//    falls back to the deepest man it actually holds rather than inventing one.
 //
 // ===========================================================================
 // WHAT THIS MODULE WILL NOT DO
@@ -73,14 +88,41 @@ export const FLOOR_POSITIONS = ['QB', 'RB', 'WR', 'TE', 'DST', 'K'];
 const CANNOT_PLAY = new Set(['OUT', 'IR', 'INJURY_RESERVE', 'SUSPENSION', 'NOT_ACTIVE']);
 
 /**
- * The floor at each position: the best free agent there, from ONE wire read.
+ * How deep into the wire a floor is taken from — Tim, 2026-09-19. Decision 3
+ * above: the best free agent at a position is the one every manager in the
+ * league is bidding for, so he is not the man you would end up with. The third
+ * is.
+ *
+ * It is a constant rather than a hard-coded 3 in the loop because it is the one
+ * number in this module that is a JUDGEMENT rather than a measurement, and
+ * because `describeFloors` has to be able to say it out loud.
+ */
+export const FLOOR_RANK = 3;
+
+/** 1st, 2nd, 3rd, 4th — for the sentence a panel prints. */
+function ordinal(n) {
+  const i = Math.abs(Math.floor(n));
+  if (i % 100 >= 11 && i % 100 <= 13) return `${i}th`;
+  return `${i}${['th', 'st', 'nd', 'rd'][i % 10] || 'th'}`;
+}
+
+/**
+ * The floor at each position: the Nth-best free agent there, from ONE wire read.
  *
  * @param {Array} freeAgents `season.fetchWireWeek()` output — each needs
  *   `position`, `projected`, and ideally `name` / `playerId` / `injuryStatus`.
  * @param {Object} [opts]
  * @param {number} [opts.week] the week the wire was read for, carried through
  *   so a page can say which week the floor was measured in.
- * @returns {Map<string, {value:number, name:string, playerId:*, pool:number, week:number|null}>}
+ * @param {number} [opts.rank] how deep to go; defaults to `FLOOR_RANK`.
+ * @returns {Map<string, {value:number, position:string, name:string, playerId:*,
+ *                        pool:number, rank:number, want:number, week:number|null}>}
+ *
+ * `rank` in the result is the place the floor was ACTUALLY taken from, which is
+ * `want` unless the wire is thinner than that — a position with only two men
+ * gives its second. That distinction is carried rather than smoothed over
+ * because a floor drawn from the last man on the wire is a weaker claim than
+ * one drawn from the third of forty, and the cell that shows it says which.
  *
  * A position with nobody available is ABSENT from the map rather than present
  * at zero. Absent means "no floor known", which every reader below treats as
@@ -94,26 +136,61 @@ const CANNOT_PLAY = new Set(['OUT', 'IR', 'INJURY_RESERVE', 'SUSPENSION', 'NOT_A
  * (rule 2), so the `> 0` test catches most of it and `CANNOT_PLAY` catches the
  * rest.
  */
-export function positionFloors(freeAgents, { week = null } = {}) {
-  const out = new Map();
+export function positionFloors(freeAgents, { week = null, rank = FLOOR_RANK } = {}) {
+  const want = Math.max(1, Math.floor(rank) || 1);
+
+  // Gathered per position first and ranked afterwards. The old "keep the best
+  // one as you go" could not answer this question at all: the third-best is not
+  // a running maximum, and there is no way to know who he is until the whole
+  // wire has been read.
+  const pools = new Map();
   for (const p of freeAgents || []) {
     if (!p || !FLOOR_POSITIONS.includes(p.position)) continue;
     const v = p.projected;
     if (!Number.isFinite(v) || v <= 0) continue;
     if (CANNOT_PLAY.has(String(p.injuryStatus || '').toUpperCase())) continue;
+    if (!pools.has(p.position)) pools.set(p.position, []);
+    pools.get(p.position).push(p);
+  }
 
-    const held = out.get(p.position);
-    if (held) held.pool += 1;
-    if (held && held.value >= v) continue;
-    out.set(p.position, {
-      value: v,
+  const out = new Map();
+  for (const [position, pool] of pools) {
+    // The playerId tiebreak keeps two identical projections in a fixed order,
+    // so the named man does not swap between reads of the same wire.
+    pool.sort((a, b) =>
+      b.projected - a.projected ||
+      (Number(a.playerId) || 0) - (Number(b.playerId) || 0));
+    const at = Math.min(want, pool.length);
+    const p = pool[at - 1];
+    out.set(position, {
+      value: p.projected,
+      position,
       name: p.name || '',
       playerId: p.playerId ?? null,
-      pool: held ? held.pool : 1,
+      pool: pool.length,
+      rank: at,
+      want,
       week: week === null ? null : Number(week),
     });
   }
   return out;
+}
+
+/**
+ * Where one floor came from, in words — "the 3rd-best WR on the waiver wire
+ * (Voss)". ONE spelling of it, because it is printed on the season sheet's
+ * cells, in its panel note and in the trade pop-up, and three hand-written
+ * versions is how the pages start making slightly different claims about the
+ * same number.
+ */
+export function floorSource(f, { withName = true } = {}) {
+  if (!f) return '';
+  const place = f.rank <= 1
+    ? `the best ${f.position || ''}`.trim()
+    : f.rank < f.want
+      ? `the ${ordinal(f.rank)}-best (and last) ${f.position || ''}`.trim()
+      : `the ${ordinal(f.rank)}-best ${f.position || ''}`.trim();
+  return `${place} on the waiver wire${withName && f.name ? ` (${f.name})` : ''}`;
 }
 
 /** The floor for one position, or null when the wire said nothing about it. */
@@ -245,9 +322,20 @@ export function describeFloors(floors, { week = null } = {}) {
     .map((p) => `${p} ${floors.get(p).value.toFixed(1)}`);
   if (!parts.length) return '';
   const w = week === null ? null : Number(week);
+  // The rank the floors were actually asked for, taken off the floors
+  // themselves rather than from the constant — a stub or an archived reading
+  // may carry floors built at a different depth, and the sentence has to
+  // describe the numbers beside it rather than what this build would do.
+  const want = [...floors.values()].map((f) => f.want).find((n) => Number.isFinite(n)) || FLOOR_RANK;
+  const depth = want > 1
+    ? `Each is the ${ordinal(want)}-best free agent at that position on the wire` +
+      `${w ? ` in week ${w}` : ''} — not the best, because the top of the wire is the man every ` +
+      `manager in the league is bidding for, and the ${ordinal(want)} is the one you could ` +
+      `actually expect to get — read once and used for every week.`
+    : `Each is the best free agent at that position on the wire${w ? ` in week ${w}` : ''}, ` +
+      `read once and used for every week.`;
   return `No slot is assessed below what the waiver wire would give you at that ` +
-    `position: ${parts.join(', ')}. Those are the best free agents on the wire` +
-    `${w ? ` in week ${w}` : ''}, read once and used for every week — a slot worth ` +
+    `position: ${parts.join(', ')}. ${depth} A slot worth ` +
     `less than its floor is shown at the floor instead, because that is the man you ` +
     `would stream. Averages and totals use the assessed number.`;
 }

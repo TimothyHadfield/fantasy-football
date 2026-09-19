@@ -227,12 +227,40 @@ const SCENARIOS = {
       out.team7 = snap();
       out.fetchesAfterSwitch = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
 
+      // --- the picker Tim asked for at the top of Season by week (2026-09-19) --
+      // It is the SAME setting as the one in the roster detail, so switching
+      // here has to move that one too, and vice versa.
+      const seasonSel = document.getElementById('seasonTeamSelect');
+      out.seasonPicker = {
+        exists: Boolean(seasonSel),
+        // Inside the Season by week panel, above its table — not borrowed from
+        // the panel at the foot of the page.
+        inPanel: Boolean(seasonSel) &&
+          seasonSel.closest('section.panel') ===
+            document.getElementById('seasonTable').closest('section.panel'),
+        aboveTable: Boolean(seasonSel) &&
+          !document.getElementById('seasonWrap').contains(seasonSel),
+        options: Boolean(seasonSel) && seasonSel.querySelectorAll('option').length,
+        followedTheOther: Boolean(seasonSel) && seasonSel.value,
+      };
+      if (seasonSel) {
+        seasonSel.value = '5';
+        seasonSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 120));
+        out.team5 = snap();
+        out.team5Pickers = { season: seasonSel.value, roster: sel.value };
+        out.team5Roster = document.getElementById('rosterTitle').textContent.trim();
+        out.fetchesAfterSeasonPick =
+          { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
+      }
+
       // --- and via a click on the all-teams grid, which drives the same thing --
       const row = document.querySelector('#overviewTable tbody tr[data-team="2"]');
       if (row) click(row);
       await new Promise((r) => setTimeout(r, 120));
       out.team2 = snap();
       out.teamSelectValue = sel.value;
+      out.team2Pickers = { season: seasonSel && seasonSel.value, roster: sel.value };
       out.fetchesAfterGridClick = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
 
       // --- sorting week columns ------------------------------------------------
@@ -338,6 +366,20 @@ const SCENARIOS = {
         return false;
       };
       const snap = async () => { await settle(); return grab(); };
+      // THE AVERAGE MEASURE IS MADE OF THE WHOLE SEASON (2026-09-19), so a
+      // snapshot of it taken while the weeks are still arriving is a table of
+      // partial averages — true at that instant and not what any assertion
+      // below means. The progress line clearing is the page's own "every week
+      // that is coming has come".
+      const settleSeason = async (ms = 8000) => {
+        for (let t = 0; t < ms; t += 20) {
+          if ($('seasonProgress').textContent.trim() === '' &&
+              document.querySelectorAll('#seasonTable tbody td.wait').length === 0 &&
+              document.querySelectorAll('#seasonTable tbody tr').length > 0) return true;
+          await sleep(20);
+        }
+        return false;
+      };
       const setMeasure = async (m) => {
         await settle();
         fire($('measureToggle').querySelector(`button[data-measure="${m}"]`));
@@ -377,9 +419,20 @@ const SCENARIOS = {
         hintOnPage: !!$('measureHint'),
       };
 
-      // --- the measure switch: the same table, measured the other way -------
+      // --- the measure switch: the same squads, a different question --------
+      await settleSeason();
       await setMeasure('avg');
+      await settleSeason();
       out.avg = await snap();
+      out.weeksRead = [...document.querySelectorAll('#seasonTable thead th')]
+        .map((th) => th.textContent.trim()).filter((t) => /^\d+/.test(t)).length;
+      // The Season by week band's own Avg for the drilled-into squad (team 4).
+      // The grid's Total on this measure has to BE this number — that is the
+      // whole of "use this exact information".
+      out.bandAvg = (() => {
+        const td = document.querySelector('#seasonTotals td.avg');
+        return td ? td.getAttribute('data-v') : null;
+      })();
       out.notes.avg = note();
       out.elsewhereAfterMeasure = elsewhere();
       out.fetchesAfterMeasure = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
@@ -447,13 +500,27 @@ const SCENARIOS = {
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
       const $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // The average is made of the whole season, so it is only itself once the
+      // weeks have landed. Waiting on the season panel's own progress line
+      // rather than on a fixed sleep — it is the page's "everything is in".
+      for (let t = 0; t < 8000; t += 20) {
+        if ($('seasonProgress').textContent.trim() === '' &&
+            document.querySelectorAll('#seasonTable tbody td.wait').length === 0 &&
+            document.querySelectorAll('#seasonTable tbody tr').length > 0) break;
+        await sleep(20);
+      }
       globalThis.__an = {
         title: $('overviewTitle').textContent.trim(),
         lit: [...$('measureToggle').querySelectorAll('button[data-measure]')]
           .filter((b) => /\bon\b/.test(b.getAttribute('class') || ''))
           .map((b) => b.getAttribute('data-measure')),
-        // Team 4's QB cell: 20.0 on the season average, 22.4 in week 8.
-        qb: (document.querySelector('#overviewTable tbody tr[data-team="4"] td.slot-cell') || {})
+        // Team 4's QB cell. On the average measure it is that squad's QB SLOT
+        // over the season — never week 8's 22.4, which is the point of the
+        // scenario: the page opened on the measure it was left on.
+        qb: (document.querySelector(
+          '#overviewTable tbody tr[data-team="4"] td.slot-avg, ' +
+          '#overviewTable tbody tr[data-team="4"] td.slot-cell') || {})
           .textContent?.trim() ?? null,
         // ...while the REST of the page is still on the week the picker says.
         week: $('weekSelect').value,
@@ -485,10 +552,12 @@ const SCENARIOS = {
     after: async ({ document, window }) => {
       const $ = (id) => document.getElementById(id);
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      // The DEF column: nine lineup cells, then the bench, so index 7.
+      // The DEF column, index 7 on either measure: the week grid's nine lineup
+      // cells (then the bench), and the average grid's nine lineup SLOTS.
       const def = () => {
         const td = [...document.querySelectorAll(
-          '#overviewTable tbody tr[data-team="4"] td.slot-cell')][7];
+          '#overviewTable tbody tr[data-team="4"] td.slot-cell, ' +
+          '#overviewTable tbody tr[data-team="4"] td.slot-avg')][7];
         return td && { text: td.textContent.trim(), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '' };
       };
       const setMeasure = async (m) => {
@@ -595,6 +664,19 @@ const SCENARIOS = {
         if (b) fire(b);
         return Boolean(b);
       };
+
+      // The glance's Proj avg is this squad's lineup in an average WEEK since
+      // 2026-09-19, so it is "—" until the season has landed. Every snapshot
+      // here is compared against another, so they all have to be taken on the
+      // same side of that — otherwise the swap assertions would be reading a
+      // week arriving as though it were the swap moving a number.
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      for (let t = 0; t < 8000; t += 20) {
+        if ($('seasonProgress').textContent.trim() === '' &&
+            document.querySelectorAll('#seasonTable tbody td.wait').length === 0 &&
+            document.querySelectorAll('#seasonTable tbody tr').length > 0) break;
+        await sleep(20);
+      }
 
       const out = { initial: snap() };
       out.fetchesBefore = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
@@ -1478,15 +1560,38 @@ async function check(scenario, boot) {
   // player=<espnPlayerId>">, and these run in every scenario.
   const refs = [...d.querySelectorAll('a.pref')];
   const href = (a) => a.getAttribute('href') || '';
+  // WHICH MEASURE THE GRID IS ON decides whether it is a surface that names
+  // players at all. Since 2026-09-19 its Proj avg setting has one column per
+  // LINEUP SLOT averaged over the season, and an average over fourteen weeks is
+  // usually several men — so it names nobody and links nobody, deliberately.
+  // Read off the lit button rather than passed in, so every scenario gets the
+  // right half of this contract without having to say which it is.
+  const litButton = d.querySelector('#measureToggle button.on');
+  const onAvg = Boolean(litButton) && litButton.getAttribute('data-measure') === 'avg';
   // One all-teams grid since 2026-09-17, not two. If a second grid-shaped table
   // ever comes back it belongs in this list, because the click-through contract
   // is per SURFACE and a surface nobody listed is a surface nobody checked.
-  const SURFACES = ['#overviewTable', '#rosterTable', '#seasonTable'];
+  const SURFACES = ['#rosterTable', '#seasonTable'].concat(onAvg ? [] : ['#overviewTable']);
 
   c.ok('the page emits player reference links at all', refs.length > 0, `${refs.length}`);
   c.ok('EVERY SURFACE THAT NAMES A PLAYER LINKS HIM',
     SURFACES.every((s) => d.querySelectorAll(`${s} tbody a.pref`).length > 0),
     SURFACES.map((s) => `${s}=${d.querySelectorAll(`${s} tbody a.pref`).length}`).join(' '));
+  // And the other half, which is the one that could rot silently: a slot
+  // average that quietly acquired a link would be pointing at whichever of its
+  // several men happened to be first, which looks perfectly fine on screen.
+  if (onAvg) {
+    c.ok('THE SLOT-AVERAGE GRID LINKS NOBODY, because a slot is not a player',
+      d.querySelectorAll('#overviewTable tbody a.pref').length === 0 &&
+      d.querySelectorAll('#overviewTable tbody [data-tip]').length === 0,
+      `${d.querySelectorAll('#overviewTable tbody a.pref').length} links, ` +
+      `${d.querySelectorAll('#overviewTable tbody [data-tip]').length} cards`);
+    c.ok('and answers "who is that" in a title instead, which a tap opens on a phone',
+      (() => {
+        const cells = [...d.querySelectorAll('#overviewTable tbody td.slot-avg')];
+        return cells.length > 0 && cells.every((td) => td.hasAttribute('title'));
+      })(), 'a slot-average cell with nothing to say');
+  }
   c.ok('every reference is a real href, not a click handler',
     refs.every((a) => /^waivers\.html\?player=\d+$/.test(href(a))),
     refs.map(href).filter((h) => !/^waivers\.html\?player=\d+$/.test(h)).slice(0, 3).join(' | '));
@@ -1536,14 +1641,16 @@ async function check(scenario, boot) {
   // is what lets every existing text assertion above stand unaltered.
   const gridCells = [...d.querySelectorAll('#overviewTable tbody td.slot-cell')]
     .filter((td) => td.querySelector('a.pref'));
-  c.ok('a grid link wraps the WHOLE cell, so the number itself is the target',
-    gridCells.length > 0 && gridCells.every((td) => td.querySelector('a.pref').textContent === td.textContent),
-    gridCells.slice(0, 2).map((td) => `[${td.textContent}] vs [${td.querySelector('a.pref').textContent}]`).join(' '));
-  c.ok('a bench cell keeps its position inside the link, beside the number it labels',
-    (() => {
-      const bench = gridCells.filter((td) => td.querySelector('.pp'));
-      return bench.length > 0 && bench.every((td) => td.querySelector('a.pref .pp'));
-    })(), 'a .pp span outside its link');
+  if (!onAvg) {
+    c.ok('a grid link wraps the WHOLE cell, so the number itself is the target',
+      gridCells.length > 0 && gridCells.every((td) => td.querySelector('a.pref').textContent === td.textContent),
+      gridCells.slice(0, 2).map((td) => `[${td.textContent}] vs [${td.querySelector('a.pref').textContent}]`).join(' '));
+    c.ok('a bench cell keeps its position inside the link, beside the number it labels',
+      (() => {
+        const bench = gridCells.filter((td) => td.querySelector('.pp'));
+        return bench.length > 0 && bench.every((td) => td.querySelector('a.pref .pp'));
+      })(), 'a .pp span outside its link');
+  }
   c.ok('the roster detail links the name and nothing else in the cell',
     (() => {
       const cells = [...d.querySelectorAll('#rosterTable tbody td.name')];
@@ -2378,11 +2485,41 @@ async function check(scenario, boot) {
     c.ok('the column set is unchanged by the switch',
       eq(w.before.cols, w.team7.cols), JSON.stringify(w.team7 && w.team7.cols));
 
+    // ---- the picker at the top of Season by week (Tim, 2026-09-19) ---------
+    //
+    // "I want to make it so that you can select which team you are viewing this
+    // information about at the top of this box." It is a second VIEW of the
+    // page's one team setting, not a second setting: three panels below are
+    // about one squad, and a panel with a team of its own would let the page
+    // show two at once with both headings claiming to be the same squad.
+    c.ok('SEASON BY WEEK HAS ITS OWN TEAM PICKER, inside the panel and above the table',
+      w.seasonPicker && w.seasonPicker.exists && w.seasonPicker.inPanel &&
+      w.seasonPicker.aboveTable,
+      JSON.stringify(w.seasonPicker));
+    c.ok('it offers every squad in the league',
+      w.seasonPicker && w.seasonPicker.options === 10, String(w.seasonPicker?.options));
+    c.ok('and it had already followed a switch made on the other picker',
+      w.seasonPicker && w.seasonPicker.followedTheOther === '7',
+      String(w.seasonPicker?.followedTheOther));
+    c.ok('SWITCHING ON IT REFILLS THE PANEL WITH THAT SQUAD',
+      w.team5 && pids(w.team5).every((id) => /^5\d\d$/.test(id)),
+      JSON.stringify(w.team5 && pids(w.team5)));
+    c.ok('and moves the roster detail with it — one team, three panels',
+      w.team5Roster === 'Roster detail · Team 5' &&
+      w.team5Pickers && w.team5Pickers.roster === '5' && w.team5Pickers.season === '5',
+      `${w.team5Roster} ${JSON.stringify(w.team5Pickers)}`);
+    c.ok('and it fetches nothing — every squad is in every week already read',
+      eq(w.fetchesAfterSwitch, w.fetchesAfterSeasonPick),
+      JSON.stringify(w.fetchesAfterSeasonPick));
+
     c.ok('clicking a row in the all-teams grid drives the same panel',
       w.team2 && pids(w.team2).every((id) => /^2\d\d$/.test(id)),
       JSON.stringify(w.team2 && pids(w.team2)));
     c.ok('the shared picker follows the grid click, so the two cannot disagree',
       w.teamSelectValue === '2', w.teamSelectValue);
+    c.ok('AND SO DOES THE SEASON PANEL’S, which is the same setting seen twice',
+      w.team2Pickers && w.team2Pickers.season === '2' && w.team2Pickers.roster === '2',
+      JSON.stringify(w.team2Pickers));
     c.ok('the grid click fetches nothing either',
       eq(w.fetchesAfterSwitch, w.fetchesAfterGridClick), JSON.stringify(w.fetchesAfterGridClick));
 
@@ -2486,8 +2623,16 @@ async function check(scenario, boot) {
     // -- the shape, identical on both measures -----------------------------
     c.ok('the columns are the nine spots, the total, and then the bench',
       eq(W.head, HEAD), JSON.stringify(W.head));
-    c.ok('and the measure does not change a single column',
-      eq(A.head, W.head), JSON.stringify(A.head));
+    // THE MEASURE CHANGES THE COLUMNS SINCE 2026-09-19, and that is the change
+    // rather than a regression: the average is one column per LINEUP SLOT read
+    // off the season sheet below, so it has the league's own ten (here nine,
+    // the stub starts two receivers) and no bench at all. It used to be the
+    // same nine player spots with a different number in them.
+    c.ok('THE AVERAGE IS ONE COLUMN PER LINEUP SLOT, the league’s own shape',
+      eq(A.head, ['Team', ...SLOT_ROWS, 'Total']), JSON.stringify(A.head));
+    c.ok('and it has no bench, because a slot average has no bench',
+      !A.head.some((h) => /^B\d+$/.test(h)) && W.head.some((h) => /^B\d+$/.test(h)),
+      JSON.stringify(A.head));
     c.ok('D/ST and the kicker are real columns',
       W.head.includes('DEF') && W.head.includes('K'), JSON.stringify(W.head));
     c.ok('the old estimate columns are gone',
@@ -2499,62 +2644,131 @@ async function check(scenario, boot) {
     c.ok('both measures carry every team',
       W.rows.length === 10 && A.rows.length === 10, `${W.rows.length} / ${A.rows.length}`);
 
-    // -- NO NAMES in the cells, but every name on hover --------------------
+    // -- NO NAMES in the cells --------------------------------------------
     const cellText = A.rows.flatMap((r) => r.cells).map((td) => td.text);
     c.ok('NOT ONE CELL CARRIES A PLAYER NAME',
       cellText.every((t) => !/Player \d/.test(t)),
       cellText.filter((t) => /Player \d/.test(t)).slice(0, 3).join(' | '));
-    c.ok('a lineup cell is a bare number',
-      A.rows.every((r) => r.cells.slice(0, 9).every((td) => /^-?\d+\.\d$/.test(td.text))),
-      JSON.stringify(A.rows[0].cells.slice(0, 9).map((td) => td.text)));
-    // The name moved from a `title` to the card, so it is read from there.
+    c.ok('every slot cell is a bare number',
+      A.rows.every((r) => r.cells.slice(0, SLOT_ROWS.length)
+        .every((td) => /^-?\d+\.\d$/.test(td.text))),
+      JSON.stringify(A.rows[0].cells.slice(0, SLOT_ROWS.length).map((td) => td.text)));
+    // The week measure still names men on a hover; the average deliberately
+    // does not, because a slot's season is usually several of them.
     const lineupCells = [...d.querySelectorAll('#overviewTable tbody td[data-tip]')];
-    const someCards = lineupCells.slice(0, 12).map((td) => hoverCard(d, boot.window, td));
-    c.ok('and the name is still there on hover',
-      someCards.every((k) => k && /Player \d\d/.test(k.ident)), someCards[0] && someCards[0].ident);
-    c.ok('the card carries the position and the NFL team too',
-      someCards.every((k) => /· (QB|RB|WR|TE|DST|K) · /.test(k.ident)),
-      someCards[0] && someCards[0].ident);
+    c.ok('the AVERAGE opens no player card at all — a slot is not a man',
+      A.rows.every((r) => r.cells.every((td) => !/\bslot-cell\b/.test(td.cls))),
+      JSON.stringify(A.rows[0].cells.map((td) => td.cls)));
+    c.ok('but it says who fills each slot, and how often, in a title a tap opens',
+      A.rows.every((r) => r.cells.slice(0, SLOT_ROWS.length)
+        .every((td) => /Player \d\d \(\d+\)/.test(td.title))),
+      A.rows[0].cells[0].title);
+    c.ok('and the WEEK measure still carries its cards',
+      lineupCells.length > 0 &&
+      [...lineupCells].slice(0, 6).map((td) => hoverCard(d, boot.window, td))
+        .every((k) => k && /Player \d\d/.test(k.ident)),
+      `${lineupCells.length} cells with a card`);
 
     // -- the bench, with its position in the cell --------------------------
     // "12.3 RB4" — the position AND where he ranks at it on his own team. The
     // position alone said what he is; the number says what he is worth having,
-    // which is the question a bench column is actually asked.
+    // which is the question a bench column is actually asked. Week measure
+    // only: the average has no bench columns to put one in.
     c.ok('a bench cell carries the position AND his rank at it, beside the number',
-      A.rows.every((r) => r.cells.slice(10).every((td) =>
-        /^\d+\.\d (QB|RB|WR|TE|DST|K)\d+$/.test(td.text))),
-      JSON.stringify(A.rows[0].cells.slice(10).map((td) => td.text)));
-    c.ok('and the week measure ranks its bench the same way',
       W.rows.every((r) => r.cells.slice(10).every((td) =>
         /^\d+\.\d (QB|RB|WR|TE|DST|K)\d+$/.test(td.text))),
       JSON.stringify(W.rows[0].cells.slice(10).map((td) => td.text)));
     c.ok('and a lineup cell deliberately does not — its header already says it',
-      A.rows.every((r) => r.cells.slice(0, 9).every((td) => !/[A-Z]{1,3}$/.test(td.text))),
-      JSON.stringify(A.rows[0].cells.slice(0, 9).map((td) => td.text)));
+      W.rows.every((r) => r.cells.slice(0, 9).every((td) => !/[A-Z]{1,3}$/.test(td.text))),
+      JSON.stringify(W.rows[0].cells.slice(0, 9).map((td) => td.text)));
 
-    // -- team 4's arithmetic, by hand, on each measure ----------------------
+    // -- team 4's arithmetic, RE-DERIVED, on each measure -------------------
     //
-    // THE POINT OF THE WHOLE SCENARIO: the merge may move where these numbers
-    // live and nothing else. These are the same two sets of figures the two
-    // panels used to print, now one button apart.
+    // TIM, 2026-09-19: the average must be "this exact information" — the Avg
+    // column of Season by week, for every squad. So it is rebuilt here from the
+    // stub's own raw projections through forecast.js's real optimalLineup,
+    // never read back off the page. A grid that averaged the wrong thing
+    // confidently would agree with itself all day.
+    const { optimalLineup: solve, slotsFromCounts: fromCounts } =
+      await import('../js/forecast.js');
+    const { slotCountsFromLineups: countSlots } = await import('../js/projection.js');
+    const stub = await import('./an-stub-season.mjs');
+    const squadOf = (team, week) => {
+      const out = [];
+      for (let i = 0; i < stub.SIZE; i++) {
+        if (!stub.onRoster(i, week)) continue;
+        out.push({
+          playerId: team * 100 + i,
+          name: stub.playerName(team, i),
+          position: stub.POS[i],
+          lineupSlotId: stub.SLOTS[i],
+          started: stub.SLOTS[i] !== 20,
+          projected: stub.projFor(i, week),
+        });
+      }
+      return out;
+    };
+    const gridSlots = fromCounts(countSlots([{ players: squadOf(4, 8) }]));
+    /** slot key -> that week's value, independently solved and ranked. */
+    const fillOf = (team, week) => {
+      const bySlot = new Map();
+      for (const s of solve(squadOf(team, week), gridSlots).starters) {
+        if (!bySlot.has(s.slotId)) bySlot.set(s.slotId, []);
+        bySlot.get(s.slotId).push(s);
+      }
+      for (const list of bySlot.values()) {
+        list.sort((a, b) => b.projected - a.projected || a.playerId - b.playerId);
+      }
+      const counts = new Map();
+      const out = new Map();
+      [0, 2, 2, 4, 4, 6, 23, 16, 17].forEach((slotId, i) => {
+        const n = (counts.get(slotId) || 0) + 1;
+        counts.set(slotId, n);
+        const pick = (bySlot.get(slotId) || [])[n - 1] || null;
+        out.set(SLOT_ROWS[i], pick ? Math.round(pick.projected * 10) / 10 : null);
+      });
+      return out;
+    };
+
     const a4 = teamRow(A, 'Team 4');
-    c.ok('PROJ AVG FILLS THE NINE SPOTS BEST-FIRST BY SEASON AVERAGE',
-      eq(nums(a4, 0, 9), ['20', '19', '18', '17', '16', '15', '14', '13', '12']),
+    const avgWrong = [];
+    SLOT_ROWS.forEach((key, i) => {
+      const vals = [];
+      for (let wk = 1; wk <= 13; wk++) {
+        const v = fillOf(4, wk).get(key);
+        if (typeof v === 'number') vals.push(v);
+      }
+      const want = Math.round((vals.reduce((x, y) => x + y, 0) / vals.length) * 10) / 10;
+      const got = Number(a4.cells[i].v);
+      if (Math.abs(got - want) > 0.06) avgWrong.push(`${key} want ${want} got ${got}`);
+    });
+    c.ok('PROJ AVG IS EACH LINEUP SLOT AVERAGED OVER THE REGULAR SEASON',
+      avgWrong.length === 0, avgWrong.slice(0, 4).join(' | '));
+
+    // And it really is a different answer from the one it replaced, which was
+    // each man's own season projection over 17 games: 20.0 / 19.0 / 18.0 …
+    c.ok('so it is NOT the old per-player season average any more',
+      !eq(nums(a4, 0, 9), ['20', '19', '18', '17', '16', '15', '14', '13', '12']),
       JSON.stringify(nums(a4, 0, 9)));
-    c.ok('TOTAL IS THOSE NINE ADDED UP, NOT AN ESTIMATE',
-      a4.cells[9].text === '144.0' && a4.cells[9].v === '144',
-      `${a4.cells[9].text} / ${a4.cells[9].v}`);
-    // Ranks counted over the WHOLE squad, starters included, which is what the
-    // number means to a manager. Team 4 holds RBs at 19, 18, 11 and 6, so the
-    // bench pair are RB3 and RB4; WRs at 17, 16, 14, 10 and 7 make WR4 and WR5;
-    // two QBs make QB2 and two TEs make TE2.
-    c.ok('the bench follows it, best first, six deep, each with his rank',
-      eq(a4.cells.slice(10).map((td) => td.text),
-        ['11.0 RB3', '10.0 WR4', '9.0 QB2', '8.0 TE2', '7.0 WR5', '6.0 RB4']),
-      JSON.stringify(a4.cells.slice(10).map((td) => td.text)));
-    c.ok('and a lineup cell still carries no position or rank at all',
-      a4.cells.slice(0, 9).every((td) => /^-?\d+(\.\d+)?$/.test(td.text)),
-      JSON.stringify(a4.cells.slice(0, 9).map((td) => td.text)));
+
+    // The total is the LINEUP averaged, not the columns added — and it has to
+    // be the very number the panel below prints for this squad.
+    const weekTotals = [];
+    for (let wk = 1; wk <= 13; wk++) {
+      weekTotals.push([...fillOf(4, wk).values()]
+        .filter((v) => typeof v === 'number').reduce((x, y) => x + y, 0));
+    }
+    const wantTotal = Math.round(
+      (weekTotals.map((t) => Math.round(t * 10) / 10)
+        .reduce((x, y) => x + y, 0) / weekTotals.length) * 10) / 10;
+    c.ok('TOTAL IS THE WHOLE LINEUP IN AN AVERAGE WEEK',
+      Math.abs(Number(a4.cells[SLOT_ROWS.length].v) - wantTotal) < 0.06,
+      `${a4.cells[SLOT_ROWS.length].v} vs ${wantTotal}`);
+    c.ok('and it is the same figure the Season by week band shows for that squad',
+      w.bandAvg !== null && Math.abs(Number(w.bandAvg) - wantTotal) < 0.06,
+      `band ${w.bandAvg} vs grid ${a4.cells[SLOT_ROWS.length].v}`);
+    c.ok('the whole regular season is in it, not just the week on screen',
+      w.weeksRead >= 13, String(w.weeksRead));
 
     const w4 = teamRow(W, 'Team 4');
     c.ok('A WEEK IS THE SAME NINE MEN ON THAT WEEK’S NUMBERS',
@@ -2635,42 +2849,45 @@ async function check(scenario, boot) {
       'a Bye on the season average');
 
     // -- the note, which changes with the measure --------------------------
-    c.ok('the average note owns it as a typical week over 17 games',
-      /typical week/.test(w.notes.avg) && /divided by 17 games/.test(w.notes.avg),
+    //
+    // The average's note is its own from top to bottom since 2026-09-19: its
+    // columns are slots rather than men, so the shared paragraphs would have
+    // been describing a table that is not on the screen.
+    c.ok('the average note says a cell is a lineup slot averaged, not a player',
+      /lineup slot averaged over the season, not a player/.test(w.notes.avg),
       w.notes.avg.slice(0, 200));
-    c.ok('it says the Total is nine real men rather than an estimate',
-      /nine real men, not an estimate/.test(w.notes.avg), w.notes.avg.slice(0, 400));
-    c.ok('it says why the position is in the bench cell and not in the header',
-      /every bench is a different shape/.test(w.notes.avg), w.notes.avg.slice(0, 500));
-    // It used to read "Hovering any number gives that man's name…", which was a
-    // true sentence on a desktop and a lie on a phone — there is no hover
-    // there, and this card is the only place these cells name anybody. The
-    // behaviour was changed to open on a tap as well (see touch-check.mjs), so
-    // the note has to say so; a feature reachable two ways whose instructions
-    // name one of them is the half of the change that gets forgotten.
-    c.ok('it says the name and the season are a tap OR a hover away, and that it is a chart',
-      /[Tt]ap or hover any number/.test(w.notes.avg) &&
-      /weeks along the top, his projection for each one underneath/.test(w.notes.avg),
-      w.notes.avg.slice(0, 600));
-    c.ok('and it says what the number after a bench position means',
-      /where he ranks at that position on his own team/.test(w.notes.avg) &&
-      /counting the starters too/.test(w.notes.avg), w.notes.avg.slice(0, 700));
+    c.ok('AND THAT IT IS THE SAME NUMBERS AS THE PANEL BELOW, which is the whole ask',
+      /Avg column of Season by week/.test(w.notes.avg) &&
+      /cannot disagree/.test(w.notes.avg), w.notes.avg.slice(0, 500));
+    c.ok('it owns up to what it replaced and why',
+      /over 17 games/.test(w.notes.avg) && /bye week/.test(w.notes.avg),
+      w.notes.avg.slice(0, 900));
+    c.ok('it says how much of the season is actually in the averages',
+      /13 of 13 regular-season weeks are in these averages/.test(w.notes.avg),
+      w.notes.avg.slice(0, 900));
+    c.ok('it says the Total is the lineup averaged, not the columns added',
+      /added up, then those totals averaged/.test(w.notes.avg) &&
+      /Starting lineup/.test(w.notes.avg), w.notes.avg.slice(0, 1200));
+    c.ok('it explains the orange, and that a tap says who filled the slot',
+      /orange with a dotted underline/.test(w.notes.avg) &&
+      /[Tt]ap or hover any number/.test(w.notes.avg), w.notes.avg.slice(0, 1600));
+    c.ok('and says out loud that nothing here is a link, with the reason',
+      /No cell here is a link/.test(w.notes.avg) &&
+      /usually several men/.test(w.notes.avg), w.notes.avg.slice(-600));
     c.ok('the week note names the week it is measured on',
       /ESPN’s own projection for week 8/.test(w.notes.week), w.notes.week.slice(0, 300));
     c.ok('and offers the other measure by name, so the pair can still be read against each other',
       /Proj avg 2026/.test(w.notes.week) && /better this week than they usually are/.test(w.notes.week),
       w.notes.week.slice(0, 500));
-    c.ok('it warns that the lineup is re-picked, so the FLEX can differ between the two',
-      /FLEX can be a different man on the two settings/.test(w.notes.week),
-      w.notes.week.slice(0, 500));
     c.ok('and explains a Bye against having no number at all',
       /0\.00 ESPN returns/.test(w.notes.week), w.notes.week.slice(0, 700));
-    c.ok('while the AVERAGE note does not, because an average cannot have one',
+    c.ok('while the AVERAGE note does not, because its cells are slots',
       !/0\.00 ESPN returns/.test(w.notes.avg), w.notes.avg.slice(0, 900));
-    c.ok('and the note says the week picker drives the whole page, not just this grid',
-      /week picked above drives the whole page/.test(w.notes.week) &&
-      /week picked above drives the whole page/.test(w.notes.avg),
-      w.notes.avg.slice(-300));
+    c.ok('the week note still says the picker drives the whole page',
+      /week picked above drives the whole page/.test(w.notes.week),
+      w.notes.week.slice(-300));
+    c.ok('and the average says the picker does NOT change these averages',
+      /does not change these averages/.test(w.notes.avg), w.notes.avg.slice(-400));
   }
 
   // ---- (r) the measure is remembered between visits ------------------------
@@ -2679,8 +2896,11 @@ async function check(scenario, boot) {
     c.ok('the page opens on the measure the reader last chose',
       w.title === 'All teams · proj avg 2026' && JSON.stringify(w.lit) === JSON.stringify(['avg']),
       `${w.title} / ${JSON.stringify(w.lit)}`);
-    c.ok('and the numbers are that measure’s — 20.0, not week 8’s 22.4',
-      w.qb === '20.0', String(w.qb));
+    // Team 4's QB slot is player 00 in every week — (20 - 0) + 0.3w — so over
+    // weeks 1 to 13 it averages 20 + 0.3 x 7 = 22.1. Not week 8's 22.4, and not
+    // the 20.0 the old per-player measure gave (his season line over 17 games).
+    c.ok('and the numbers are that measure’s — 22.1, neither 22.4 nor the old 20.0',
+      w.qb === '22.1', String(w.qb));
     c.ok('while the WEEK is still the coming one, so the panels below are unaffected',
       w.week === '8' && JSON.stringify(w.seasonNow) === JSON.stringify(['8']),
       `${w.week} / ${JSON.stringify(w.seasonNow)}`);
@@ -2693,11 +2913,18 @@ async function check(scenario, boot) {
     c.ok('A WEEK’S 0.00 IN HIS BYE WEEK IS DRAWN AS A BYE',
       w.week && w.week.text === 'Bye' && w.week.v === '0' && /\bbye\b/.test(w.week.cls),
       JSON.stringify(w.week));
-    c.ok('the same man on the season average is on the season average',
+    c.ok('the same squad on the season average is on the season average',
       w.avgTitle === 'All teams · proj avg 2026', w.avgTitle);
-    c.ok('AND HIS 0.00 THERE IS PRINTED AS THE NUMBER IT IS, NEVER AS A BYE',
-      w.avg && w.avg.text === '0.0' && w.avg.v === '0' && !/\bbye\b/.test(w.avg.cls),
+    // Since 2026-09-19 the average is a SLOT over the whole season, so the same
+    // fixture proves something stronger than it used to: one bye week cannot
+    // make the D/ST slot a bye, and a man ESPN projects nothing for all year
+    // (AN_ZERO_SEASON) no longer reaches this measure at all — it reads the
+    // week-by-week projections, never the season line.
+    c.ok('AND THE SLOT AVERAGE IS A NUMBER, NEVER A BYE',
+      w.avg && /^\d+\.\d$/.test(w.avg.text) && !/\bbye\b/.test(w.avg.cls),
       JSON.stringify(w.avg));
+    c.ok('a single bye week drags the average down without zeroing it',
+      w.avg && Number(w.avg.v) > 0, JSON.stringify(w.avg));
   }
 
   // ---- (g) a player ESPN gave no id for -----------------------------------

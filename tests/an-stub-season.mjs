@@ -173,9 +173,16 @@ export function floorsFor() {
   if (!raw || typeof raw !== 'object') return new Map();
   return new Map(Object.entries(raw).map(([position, value]) => [position, {
     value: Number(value),
+    position,
     name: `Wire ${position}`,
     playerId: `wire-${position}`,
-    pool: 3,
+    pool: 12,
+    // The shape `positionFloors` really returns since 2026-09-19: a floor is
+    // the THIRD man on the wire, and it says so. A stub that omitted these
+    // would have the page print "the best QB on the waiver wire" about a
+    // number the live page would describe differently.
+    rank: 3,
+    want: 3,
     week: 8,
   }]));
 }

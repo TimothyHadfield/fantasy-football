@@ -66,6 +66,125 @@ describe how the site works **today**:
 | The measured plan for condensing the pages | "The density audit" |
 | What to do next | "Next", at the foot |
 
+## 2026-09-19 — the floor drops to the 3rd man, and Proj avg stops being a player
+
+Three of Tim's asks, all pushed. The second and third are one idea: **the
+all-teams grid's Proj avg is no longer a fact about players at all.**
+
+### The floor is the THIRD-best free agent, not the best (`js/floor.js`)
+
+His ask: "the assumed is a little higher than I would've expected and I think we
+should set the bar lower, especially considering there might be 5-6 users also
+wanting the player at the top of the waivers. Try moving the line down to around
+the 3rd best player in the waivers of that position."
+
+He is right, and the reason is worth writing down: **the floor was measuring
+what is ON the wire, and what it needs to measure is what you would END UP
+WITH.** The top free agent at a position is the one every manager has noticed;
+in a ten-team league he goes to whoever has the waiver priority or the biggest
+bid, which is usually not you. The third is the one you can expect to get.
+
+- `FLOOR_RANK = 3`, a named constant because it is the one number in that module
+  that is a judgement rather than a measurement — and because `describeFloors`
+  has to say it out loud.
+- **A thinner wire falls back to the deepest man it holds**, never to a number
+  nobody could claim. A position with two men floors on the second and the entry
+  says so (`rank` is where it came from, `want` is where it meant to go), because
+  a floor drawn from the last man on the wire is a weaker claim than one drawn
+  from the third of forty.
+- `positionFloors` had to stop being a running maximum: the third-best cannot be
+  computed as you go. It gathers per position and ranks afterwards, with a
+  playerId tiebreak so two identical projections do not swap the named man
+  between reads.
+- **`floorSource(f)` is the one spelling** of "the 3rd-best WR on the waiver wire
+  (Voss)". It is printed on the season sheet's cells, in its panel note and in
+  the trade pop-up, and three hand-written versions is how three pages start
+  making slightly different claims about one number.
+- `test-floor.mjs` gained a wire deep enough to tell a third from a best (four
+  at most positions), and the fixture is arranged so **every assertion below the
+  wire is unchanged by the new rule** — a failure there is a regression, not a
+  rewritten expectation. It is falsified in both directions: the same wire read
+  at `rank: 1` gives the old answers, so a build that quietly went back to the
+  best available fails.
+
+### Season by week has its own team picker
+
+His ask: "I want to make it so that you can select which team you are viewing
+this information about at the top of this box."
+
+The obvious reading is a picker of that panel's own, and it is the wrong one.
+**Three panels down that page are about ONE squad** — season by week, who to
+start, the roster detail — so a panel with a team of its own would let the page
+show two squads at once with both headings claiming to be the same one. So
+`seasonTeamSelect` is a second VIEW of `state.teamId`: both selects write it,
+both are nudged to it, and a tap on a grid row moves both. `TEAM_PICKERS` is the
+list, so a third one cannot be added and forgotten.
+
+### Proj avg is now the lineup, week by week — not the player (Tim's ask)
+
+His ask: "there is an Avg column that shows the avg proj points of the players
+who are going to play that position, not just the same player every week. This
+is really good and I like it a lot. ... I want to use this exact information and
+apply it to the box above it (all teams, season proj avg), so that for that
+season avg, it doesn't use a single player's proj avg accross a season, it uses
+the avg proj points for each position that was calculated and predicted in the
+box below."
+
+**What it replaced was `seasonProjected / 17` per man**, which could not see the
+three things that decide a season: a bye week, a squad with two useful backs who
+never both start, and a slot with nobody in it. The new measure asks what each
+SLOT will be worth per week given whoever fills it — and byes, depth and the
+waiver floor all fall out of it rather than being ignored.
+
+Four consequences, each deliberate and each the price of "this exact
+information":
+
+- **The columns are the LEAGUE's own slots**, not the nine hard-coded
+  `GRID_SLOTS`. His league starts ten (three receivers), so the nine would have
+  dropped a starter from every total and could not have agreed with the panel
+  below — which is the whole point.
+- **A cell names nobody and links nowhere.** An average over fourteen weeks is
+  usually several men, and picking the first of them for the link is how a grid
+  quietly starts telling you about the wrong player. Who filled it and how often
+  is in the cell's `title`, which `js/touch-titles.js` makes a tap on a phone —
+  so nothing is hover-only.
+- **There is no bench.** The bench columns are "best first by the column this
+  table is measured in", and a slot average has no bench: the man covering RB1's
+  bye IS part of the RB1 average. Keeping them would have put a different kind
+  of number in the same row.
+- **It needs the whole season**, so it fills in as the weeks land rather than
+  arriving complete. An unread week is the faint dot the season sheet uses,
+  never a zero, and the note says how many weeks are in so far.
+
+**The Total is the lineup averaged, not the columns added** — each week's
+assessed lineup totalled, then those totals averaged. That is what makes it the
+very number the season sheet's "Starting lineup" band shows for that squad;
+rounding can leave it a tenth off adding across, and the note says so.
+`an-test`'s new assertion re-derives both from the stub's raw numbers through
+the real `optimalLineup` and then checks the grid's Total against the band's Avg
+— the two boxes agreeing is the feature, so it is asserted rather than assumed.
+
+Three things that had to move with it:
+
+- **One solve, read three ways.** `weeklyFills` memoises every squad's best
+  lineup per week, and the low marks, the season sheet's cells and the grid all
+  read it. Ten squads by seventeen weeks is 170 `optimalLineup` calls; three
+  copies would be three chances for one screen to disagree with itself.
+- **`assessed(entry, row)` is the one floor rule**, and `null` vs `undefined` in
+  it is load-bearing: `null` is a week we read in which nobody could fill the
+  slot (that is what a floor is for), `undefined` is a week that has not
+  arrived. Flooring the second would march every average upward as the page
+  loaded. The sheet's Avg column had been doing exactly that.
+- **The roster detail's "Proj avg" tile is the same number now.** It was the
+  best nine by season projection, which would have left two different numbers
+  under one label on one page. It is "—" until a week has been read rather than
+  falling back to the old figure: a number that silently changes meaning is
+  worse than one that is honestly not there yet. `renderSeason` repaints the
+  roster for it, or the tile sat at "—" until the reader touched something else.
+- **`sortBy` is new in `js/sortable.js`.** One table on the site changes shape,
+  so "the Total column" is not the same index on both measures; without it the
+  average would have been sorted by whatever sat at index 10.
+
 ## 2026-09-18 — the floor, custom trades, and panels that pair up
 
 Four pieces, all pushed. The first is the one that matters most, because it

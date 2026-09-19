@@ -24,7 +24,10 @@ import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js'
 // The namespace as well, for `fetchByeWeeks`, which is read defensively: a
 // season module (or a test stub of one) without it just means "byes unknown".
 import * as season from './season.js';
-import { enableSort, resort } from './sortable.js';
+// `sortBy` because ONE table on this page changes shape: the all-teams grid has
+// nine player columns on its week measure and one per lineup slot on its
+// average, so "the Total column" is not the same index in both.
+import { enableSort, resort, sortBy } from './sortable.js';
 // `coarsePointer` is no longer imported here: the only two things on this page
 // that turned on it — whether the card opens as a sheet, and whether a tap on a
 // grid cell counts as a click on a player — both live in js/player-card.js now,
@@ -60,7 +63,7 @@ import { SLOT_ORDER, slotRows, fillSlots } from './lineup-slots.js';
 // THE POSITIONAL FLOOR — no slot assessed below what the wire would give you
 // there (Tim, 2026-09-18). Pure, and every one of these is a no-op when
 // `state.floors` is null, which is what keeps demo and a failed read honest.
-import { flooredValue, slotFloor, describeFloors } from './floor.js';
+import { flooredValue, slotFloor, describeFloors, floorSource } from './floor.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('analysis');
@@ -392,6 +395,19 @@ function positionRanks(team, measure = avgWeek) {
       .forEach((e, i) => ranks.set(e.p.playerId, i + 1));
   }
   return ranks;
+}
+
+/**
+ * One squad's whole starting lineup in an average week — the figure the
+ * all-teams grid's Total carries on its Proj avg measure, and the one the
+ * Season by week band shows. Null until a week of the season has been read.
+ */
+function teamWeeklyAverage(teamId) {
+  const slots = leagueSlots();
+  const rows = slots ? slotRows(slots) : [];
+  if (!rows.length) return null;
+  const got = teamSlotAverages(rows, slots, spanWeeks()).get(teamId);
+  return got ? got.total : null;
 }
 
 /** What the nine score between them. The real sum, not an estimate. */
@@ -934,9 +950,18 @@ const MEASURES = {
     heading: () => `All teams · week ${state.week}`,
     weekGrid: true,
   },
+  // THE AVERAGE IS NO LONGER A PLAYER MEASURE AT ALL (Tim, 2026-09-19). It was
+  // `avgWeek` — each man's own season projection over 17 games — and he asked
+  // for the season sheet's Avg column instead: what each lineup SLOT is worth
+  // per week once you allow that whoever fills it changes from week to week.
+  // So this measure has no per-player function, and `renderAvgGrid` draws it
+  // from `teamSlotAverages` rather than from `gridLineup`. `measure` is kept
+  // null rather than removed so anything reaching for it fails loudly instead
+  // of quietly getting a number about the wrong question.
   avg: {
     key: 'avg',
-    measure: avgWeek,
+    measure: null,
+    slotGrid: true,
     button: () => `Proj avg ${espn.getConfig().season}`,
     heading: () => `All teams · proj avg ${espn.getConfig().season}`,
     weekGrid: false,
@@ -972,7 +997,160 @@ function renderGridHead(table, benchCols) {
      </tr>`;
 }
 
+// ------------------------------------- the grid on its Proj avg measure
+//
+// One row per squad, one column per LINEUP SLOT, and every cell the season
+// sheet's own Avg for that slot — Tim's 2026-09-19 ask, in his words: "it
+// doesn't use a single player's proj avg across a season, it uses the avg proj
+// points for each position that was calculated and predicted in the box below".
+//
+// FOUR THINGS ABOUT IT ARE DELIBERATE AND ARE THE PRICE OF THAT:
+//
+// - THE COLUMNS ARE THE LEAGUE'S OWN SLOTS, not the nine `GRID_SLOTS` the week
+//   measure uses. His league starts ten (three receivers), so the nine would
+//   have dropped a starter out of every total and could not have agreed with
+//   the box below — which is the entire point of the change.
+// - A CELL NAMES NOBODY AND LINKS NOWHERE. An average over fourteen weeks is
+//   usually several men; a link would have to pick one of them, and picking the
+//   first is how a grid quietly starts telling you about the wrong player. Who
+//   actually filled it, and how often, is in the cell's `title` — which
+//   js/touch-titles.js makes a tap on a phone, so nothing here is hover-only.
+// - THERE IS NO BENCH. The bench columns are "best first by the column this
+//   table is measured in", and a slot average has no bench: the man covering
+//   RB1's bye IS the RB1 average that week. Keeping them would have put a
+//   different kind of number in the same row.
+// - IT NEEDS THE WHOLE SEASON, so it fills in as the weeks land rather than
+//   arriving complete. Until a week is read its cells are the faint dot the
+//   season sheet uses, never a zero, and the note says how many weeks are in.
+function renderAvgGrid(grid) {
+  const table = $(`${grid.id}Table`);
+  const teams = state.data ? state.data.teams : [];
+  const slots = leagueSlots();
+  const rows = slots ? slotRows(slots) : [];
+  const weeks = spanWeeks();
+  const show = teams.length > 0 && rows.length > 0 && weeks.length > 0;
+
+  $(`${grid.id}Title`).textContent = grid.heading();
+  $(`${grid.id}Wrap`).classList.toggle('hidden', !show);
+  $(`${grid.id}Empty`).classList.toggle('hidden', show);
+
+  if (!show) {
+    $(`${grid.id}Empty`).textContent = teams.length === 0
+      ? 'No roster data for this week.'
+      : 'The league’s lineup shape is not known yet, so there are no slots to average.';
+    $(`${grid.id}Legend`).innerHTML = '';
+    bodyOf(table).innerHTML = '';
+    return;
+  }
+
+  table.querySelector('thead').innerHTML =
+    `<tr>
+       <th class="name" data-sort>Team</th>
+       ${rows.map((r) => `<th data-sort title="What this squad's ${esc(r.key)} is worth in an ` +
+         `average week: that slot's projection in every regular-season week read, averaged. ` +
+         `Whoever fills it — it is a slot, not a man.">${esc(r.key)}</th>`).join('')}
+       <th class="grid-total grouped" data-sort title="What this squad's whole starting lineup ` +
+         `projects in an average week. It is the week-by-week lineup total averaged, which is the ` +
+         `same number the Season by week panel's ‘Starting lineup’ band shows — so rounding can ` +
+         `leave it a tenth off adding the columns.">Total</th>
+     </tr>`;
+
+  const byTeam = teamSlotAverages(rows, slots, weeks);
+
+  bodyOf(table).innerHTML = teams
+    .map((t) => {
+      const got = byTeam.get(t.id);
+      const cls = [
+        t.id === state.teamId ? 'picked' : '',
+        !state.isDemo && t.id === state.myTeamId ? 'me' : '',
+      ].filter(Boolean).join(' ');
+      const cells = rows
+        .map((r) => avgCell(got ? got.slots.get(r.key) : null, r, t))
+        .join('');
+      const total = got ? got.total : null;
+      return `
+      <tr class="${cls}" data-team="${t.id}">
+        <td class="name">${esc(t.name)}</td>
+        ${cells}
+        <td class="grid-total grouped"${total === null ? '' : ` data-v="${total}"`} ` +
+        `title="${esc(totalAvgLabel(t, got))}"><strong>${fmt(total)}</strong></td>
+      </tr>`;
+    })
+    .join('');
+
+  sortShape(table, `avg:${rows.length}`, rows.length + 1);
+
+  const body = bodyOf(table);
+  renderKey(`${grid.id}Legend`, [
+    body.querySelector('td.assumed') &&
+      ['<span class="lg-mark assumed">7.8</span>',
+        'some of those weeks are assessed at the waiver floor'],
+    body.querySelector('td.wait') && ['<span class="lg-mark faint">·</span>', 'weeks still loading'],
+    body.querySelector('td.slot-avg.muted') &&
+      ['<span class="lg-mark faint">—</span>', 'no week read for this slot yet'],
+  ], 'Tap or hover a number for who fills that slot · tap a row to load that team');
+}
+
+/** One squad's average at one slot. A number about a SLOT, so it names nobody. */
+function avgCell(cell, row, team) {
+  const base = 'slot-avg';
+  if (!cell || cell.avg === null) {
+    // Nothing read yet is not the same as nothing there, and the two must not
+    // share a mark: one resolves itself in a few seconds, the other never does.
+    return state.seasonWeeks.size === 0
+      ? `<td class="${base} wait" title="No week has been read from ESPN yet, so there is nothing ` +
+        `to average. The Season by week panel below reports the progress.">·</td>`
+      : `<td class="${base} muted" title="No week read so far gives ${esc(team.name)} an ` +
+        `${esc(row.key)} at all.">—</td>`;
+  }
+
+  const who = cell.who.slice(0, 3)
+    .map((p) => `${p.name} (${p.n})`)
+    .join(', ');
+  const more = cell.who.length > 3 ? `, and ${cell.who.length - 3} more` : '';
+  const says =
+    `${team.name}'s ${row.key} is worth ${fmt(cell.avg)} in an average week — that slot's ` +
+    `projection over ${plural(cell.n, 'regular-season week')} read, whoever fills it` +
+    (who ? `: ${who}${more}.` : '.') +
+    (cell.assumed
+      ? ` ${cell.assumed} of those ${cell.assumed === 1 ? 'is' : 'are'} assessed at the waiver ` +
+        `floor rather than ESPN's own number.`
+      : '');
+
+  return `<td class="${base}${cell.assumed ? ' assumed' : ''}" data-v="${cell.avg}" ` +
+    `title="${esc(says)}">${fmt(cell.avg)}</td>`;
+}
+
+/** The Total cell's sentence — it is the one number that ties the two panels together. */
+function totalAvgLabel(team, got) {
+  if (!got || got.total === null) {
+    return `No week has been read yet, so ${team.name}'s lineup has nothing to average.`;
+  }
+  return `${team.name}'s best legal lineup projects ${fmt(got.total)} in an average week, over ` +
+    `${plural(got.weeks, 'regular-season week')} read. It is the same figure the Season by week ` +
+    `panel's Starting lineup band shows for this squad.`;
+}
+
+/**
+ * Point the sort at this shape's Total column when the shape CHANGES.
+ *
+ * The two measures have different column counts, so the index stored when the
+ * page loaded belongs to whichever was on screen then. Without this, switching
+ * to the average would sort the league by whatever column happened to sit at
+ * index 10 — a real ordering, quietly about the wrong thing. A re-render that
+ * keeps the shape falls through to `resort`, which is what preserves a column
+ * the reader picked for themselves.
+ */
+let gridShape = null;
+function sortShape(table, shape, totalIndex) {
+  if (gridShape === shape) { resort(table); return; }
+  gridShape = shape;
+  sortBy(table, totalIndex, false);
+}
+
 function renderGrid(grid) {
+  if (grid.slotGrid) return renderAvgGrid(grid);
+
   const table = $(`${grid.id}Table`);
   const teams = state.data ? state.data.teams : [];
   const benchCols = benchWidth(teams);
@@ -980,6 +1158,9 @@ function renderGrid(grid) {
   $(`${grid.id}Title`).textContent = grid.heading();
   $(`${grid.id}Wrap`).classList.toggle('hidden', teams.length === 0);
   $(`${grid.id}Empty`).classList.toggle('hidden', teams.length > 0);
+  // Put back, because the average grid writes its own reason in here and the
+  // two measures share the element.
+  $(`${grid.id}Empty`).textContent = 'No roster data for this week.';
 
   renderGridHead(table, benchCols);
 
@@ -1021,7 +1202,9 @@ function renderGrid(grid) {
     })
     .join('');
 
-  resort(table); // keep whatever sort the user picked across week changes
+  // Keeps whatever sort the reader picked across week changes; retargets Total
+  // only when the shape changed under it, which means a measure switch.
+  sortShape(table, `week:${GRID_SLOTS.length}`, GRID_SLOTS.length + 1);
 
   // The key names only the marks this grid is actually showing.
   const body = bodyOf(table);
@@ -1093,7 +1276,8 @@ function renderMeasureToggle(grid) {
   const hint = $('measureHint');
   if (hint) {
     hint.textContent = grid.key === 'avg'
-      ? `Scored on the season projection per game. The week still sets the rest of the page.`
+      ? `One column per lineup slot, averaged over the season week by week — the Avg column of ` +
+        `Season by week, for every squad. The week still sets the rest of the page.`
       : `Scored on ESPN’s projection for week ${state.week}, which is also the week the panels below show.`;
   }
 }
@@ -1111,22 +1295,70 @@ function renderOverviewNote(grid) {
   const season = espn.getConfig().season;
   const parts = [];
 
+  // THE AVERAGE HAS ITS OWN NOTE FROM TOP TO BOTTOM since 2026-09-19. It is not
+  // the same table measured differently any more — its columns are slots rather
+  // than men, it has no bench and no player links — so sharing the paragraphs
+  // below would have it describing a table that is not on the screen.
+  if (grid.slotGrid) {
+    const weeks = spanWeeks();
+    const read = [...state.seasonWeeks.keys()].filter((w) => !isPlayoff(w)).length;
+    const regular = weeks.filter((w) => !isPlayoff(w)).length;
+
+    parts.push(
+      `Every number is a <strong>lineup slot averaged over the season</strong>, not a player: the ` +
+      `QB column is what that squad’s quarterback spot is worth in an average week, filled each ` +
+      `week by whoever actually starts there. <strong>This is the Avg column of Season by week ` +
+      `below, computed for all ten squads</strong> — the same weeks, the same slots, the same ` +
+      `waiver floor — so a row here and that panel cannot disagree.`
+    );
+
+    parts.push(
+      `It replaced a per-player average (each man’s full-season ${season} projection over ` +
+      `${SEASON_GAMES} games) because that could not see the things that decide a season: a bye ` +
+      `week, a squad with two useful backs who never both start, or a slot with nobody in it. ` +
+      `<strong>${read} of ${regular} regular-season week${regular === 1 ? '' : 's'}</strong> ` +
+      `${read === 1 ? 'is' : 'are'} in these averages so far${read < regular
+        ? ' — the rest fill in as they arrive.' : '.'} Playoff weeks are never counted.`
+    );
+
+    parts.push(
+      `<strong>Total</strong> is the whole starting lineup in an average week — each week’s lineup ` +
+      `added up, then those totals averaged, which is exactly the “Starting lineup” band in the ` +
+      `panel below. Rounding can leave it a tenth away from adding the columns across.`
+    );
+
+    parts.push(
+      `A cell in <span class="lg-mark assumed">orange with a dotted underline</span> has at least one ` +
+      `week in it that ESPN did not publish: the slot was empty, or the man in it projected below ` +
+      `what the waiver wire would give you there, so it is assessed at the wire instead. ` +
+      `<strong>Tap or hover any number</strong> for who filled that slot and how often, and for ` +
+      `how many of its weeks were assumed.`
+    );
+
+    parts.push(
+      `<strong>No cell here is a link</strong>, and that is deliberate: an average over a season is ` +
+      `usually several men, so there is no one player to point at. The names are in Season by week ` +
+      `and in the roster detail below. Click a row to load that squad into both, and click any ` +
+      `header to sort. <strong>The week picked above still drives the rest of the page</strong>; ` +
+      `it does not change these averages, which are the whole season either way.`
+    );
+
+    el.innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
+    return;
+  }
+
   parts.push(
-    grid.key === 'avg'
-      ? `Every number is a <strong>typical week</strong>: ESPN’s full-season ${season} projection ` +
-        `divided by ${SEASON_GAMES} games. Nobody’s actual week is in the table on this setting — ` +
-        `switch to <strong>A week</strong> for that.`
-      : `Every number is <strong>ESPN’s own projection for week ${state.week}</strong>, the week ` +
-        `picked above. Switch to <strong>Proj avg ${season}</strong> for the same table measured on ` +
-        `the season projection per game, and read the two against each other to see who is better ` +
-        `this week than they usually are.`
+    `Every number is <strong>ESPN’s own projection for week ${state.week}</strong>, the week ` +
+    `picked above. Switch to <strong>Proj avg ${season}</strong> for the same squads measured on ` +
+    `what each lineup SLOT is worth in an average week, and read the two against each other to see ` +
+    `who is better this week than they usually are.`
   );
 
   parts.push(
     `The nine columns are the best lineup that squad could field, chosen by the measure above rather ` +
-    `than by where the manager has parked people — so a squad’s FLEX can be a different man on the ` +
-    `two settings. <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB. ` +
-    `<strong>Total</strong> is those nine added up — nine real men, not an estimate.`
+    `than by where the manager has parked people. <strong>FLEX</strong> is the best remaining RB, ` +
+    `WR or TE, never a QB. <strong>Total</strong> is those nine added up — nine real men, not an ` +
+    `estimate.`
   );
 
   parts.push(
@@ -1141,8 +1373,8 @@ function renderOverviewNote(grid) {
       `A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is ` +
       `off that week, which is not the same as having no number at all. ESPN also returns 0.00 for ` +
       `a man it has ruled out, so a zero outside his team’s bye week reads <strong>0.0</strong> ` +
-      `with OUT, IR or SUSP beside it. On the season average neither can happen: a zero there is a ` +
-      `man ESPN projects nothing for all year.`
+      `with OUT, IR or SUSP beside it. Neither can appear on <strong>Proj avg</strong>, whose ` +
+      `cells are slots rather than men: a bye there is simply the next man up, averaged in.`
     );
   }
 
@@ -1164,14 +1396,31 @@ function renderOverviewNote(grid) {
   el.innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 }
 
+/**
+ * The team pickers — plural since 2026-09-19, and deliberately not two settings.
+ *
+ * Tim asked for one at the top of "Season by week" ("select which team you are
+ * viewing this information about"). The obvious reading is a picker of that
+ * panel's own, and it is the wrong one: three panels down this page are about
+ * ONE squad — season by week, who to start, the roster detail — and a panel
+ * with a team of its own would let the page show two squads at once while both
+ * headings read "Season by week · …". So both selects write `state.teamId` and
+ * both are nudged to it; which one the reader used is not a fact worth keeping.
+ */
+const TEAM_PICKERS = ['teamSelect', 'seasonTeamSelect'];
+
 function renderTeamPicker() {
   const teams = state.data ? state.data.teams : [];
-  $('teamSelect').innerHTML = teams
+  const options = teams
     .map(
       (t) =>
         `<option value="${t.id}"${t.id === state.teamId ? ' selected' : ''}>${esc(t.name)}</option>`
     )
     .join('');
+  for (const id of TEAM_PICKERS) {
+    const sel = $(id);
+    if (sel) sel.innerHTML = options;
+  }
 }
 
 function currentTeam() {
@@ -1376,7 +1625,15 @@ function renderRoster() {
   }
 
   const grid = gridLineup(team);
-  const avgTotal = totalOf(grid);
+  // PROJ AVG IS THE SAME NUMBER THE ALL-TEAMS GRID GIVES THIS SQUAD, and that
+  // is the whole reason it moved (Tim, 2026-09-19). It used to be the best nine
+  // by ESPN's season projection over 17 games; the grid above now measures the
+  // average on the week-by-week lineup instead, and two different numbers under
+  // one label on one page is the defect this site works hardest to avoid. It is
+  // "—" until a week of the season has been read, rather than falling back to
+  // the old figure — a number that silently changes meaning is worse than one
+  // that is honestly not there yet.
+  const avgTotal = teamWeeklyAverage(team.id);
   const flexId = grid.FLEX ? grid.FLEX.p.playerId : null;
 
   const starters = view.filter((e) => e.started);
@@ -1516,9 +1773,10 @@ function renderRosterNote(view, team) {
   );
 
   parts.push(
-    `<strong>Season total</strong> is the whole ${SEASON_GAMES}-game projection; ` +
-    `<strong>Avg/wk</strong> is that same number per game, which is what the all-teams grid adds ` +
-    `up on its <strong>Proj avg</strong> setting. ` +
+    `<strong>Season total</strong> is the whole ${SEASON_GAMES}-game projection and ` +
+    `<strong>Avg/wk</strong> is that same number per game — one man's own average, which is a ` +
+    `different question from the <strong>Proj avg</strong> above: that is what this squad's ` +
+    `lineup is worth in an average week, slot by slot, whoever fills each slot that week. ` +
     `<strong>Click any player’s name</strong> to open his next 13 weeks on the ` +
     `<a href="waivers.html">Players</a> page.`
   );
@@ -1555,9 +1813,10 @@ function renderRosterNote(view, team) {
   edited.innerHTML = lineupEdited()
     ? `<span class="neg">This is not ${team ? `${esc(team.name)}’s` : 'the'} real lineup any ` +
       `more.</span> The number beside the total is the difference from the one ESPN has, and ` +
-      `<strong>Proj avg</strong> above deliberately does not move with it: that is the best ` +
-      `nine by season average, the same figure the all-teams grid gives this team on its ` +
-      `<strong>Proj avg</strong> setting, and it never depended on how the lineup was set.`
+      `<strong>Proj avg</strong> above deliberately does not move with it: that is what this ` +
+      `squad's best legal lineup is worth in an average week, the same figure the all-teams grid ` +
+      `gives this team on its <strong>Proj avg</strong> setting, and it never depended on how ` +
+      `the lineup was set.`
     : '';
   edited.classList.toggle('hidden', !lineupEdited());
 }
@@ -1936,26 +2195,93 @@ function weeklyLineups(teamId, slots) {
 
 const avgOf = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
+// ------------------------------------------ one solve, read three ways
+//
+// Every squad's best legal lineup, in every week the cache holds, handed out to
+// the league's slot rows. THREE panels are drawn from this one pass — the low
+// marks below, the season sheet's own cells, and (since 2026-09-19) the
+// all-teams grid on its Proj avg measure — and that is the point: ten squads
+// times seventeen weeks is 170 calls to `optimalLineup`, and three copies of it
+// would be three chances for the page to disagree with itself about who starts.
+
+/** Memoised against the league, the rows and how much of the season has landed. */
+let seasonFills = { key: null, byWeek: new Map() };
+
+/** The key every memo on this data shares. Floors are NOT in it — see below. */
+function fillsKey(rows, weeks) {
+  return `${sourceKey()}|${rows.map((r) => r.key).join(',')}|` +
+    `${[...state.seasonWeeks.keys()].sort((a, b) => a - b).join(',')}|${weeks.join(',')}`;
+}
+
+/** @returns {Map<number, Map<number, Map<string, {p:object, v:number}|null>>>} week -> team -> slots */
+function weeklyFills(rows, slots, weeks) {
+  const key = fillsKey(rows, weeks);
+  if (seasonFills.key === key) return seasonFills.byWeek;
+
+  const byWeek = new Map();
+  const shown = new Set(weeks);
+  for (const [week, teams] of state.seasonWeeks) {
+    if (!shown.has(week)) continue;
+    const perTeam = new Map();
+    for (const team of teams) {
+      perTeam.set(team.id, fillSlots(optimalLineup(identified(team.players), slots).starters, rows));
+    }
+    byWeek.set(week, perTeam);
+  }
+
+  seasonFills = { key, byWeek };
+  return byWeek;
+}
+
+/**
+ * What a slot is ASSESSED at in one week — the number the sheet draws.
+ *
+ * The floor is the whole reason this is not just `entry.v`: an empty slot is
+ * worth what you would stream into it, and a man below the wire was never
+ * really worth his own number. Shared by the sheet's Avg column, its totals
+ * band and the all-teams grid, so the three cannot disagree about a cell.
+ *
+ * `null` and `undefined` are DIFFERENT and the difference is load-bearing:
+ * `null` is a week we have read in which nobody could fill this slot, which is
+ * exactly what a floor is for; `undefined` is a week that has not arrived (or
+ * that ESPN refused), and flooring that would be a claim about a week nobody
+ * has looked at — it would also march every average up as the page loaded.
+ *
+ * @returns {{value:number|null, assumed:boolean}}
+ */
+function assessed(entry, row) {
+  if (entry === undefined) return { value: null, assumed: false };
+  if (entry === null) {
+    const sf = slotFloor(row.slotId, state.floors);
+    return { value: sf ? sf.value : null, assumed: Boolean(sf) };
+  }
+  const a = flooredValue({ position: entry.p.position, projected: entry.v }, state.floors);
+  return { value: a.value === null ? entry.v : a.value, assumed: a.assumed };
+}
+
 /** Memoised against the league and how much of it has landed. */
 let slotBars = { key: null, bars: new Map() };
 
 /**
  * Per slot label, the whole league's distribution over the weeks on screen.
  *
+ * ESPN'S OWN NUMBERS, deliberately unfloored. These bars say what a WR2 is
+ * worth around this league, and lifting every low value to the wire before
+ * measuring the spread would narrow the distribution using a number that is not
+ * a fact about anybody's squad. A cell is compared against it on its assessed
+ * value, which is the honest pairing: "given what this slot is really worth,
+ * how does it sit against what the league's are worth".
+ *
  * @returns {Map<string, {n:number, mean:number|null, sd:number|null,
  *                        one:number|null, two:number|null}>}
  */
 function slotThresholds(rows, slots, weeks) {
-  const key = `${sourceKey()}|${rows.map((r) => r.key).join(',')}|` +
-    `${[...state.seasonWeeks.keys()].sort((a, b) => a - b).join(',')}|${weeks.join(',')}`;
+  const key = fillsKey(rows, weeks);
   if (slotBars.key === key) return slotBars.bars;
 
   const values = new Map(rows.map((r) => [r.key, []]));
-  const shown = new Set(weeks);
-  for (const [week, teams] of state.seasonWeeks) {
-    if (!shown.has(week)) continue;
-    for (const team of teams) {
-      const fill = fillSlots(optimalLineup(identified(team.players), slots).starters, rows);
+  for (const perTeam of weeklyFills(rows, slots, weeks).values()) {
+    for (const fill of perTeam.values()) {
       for (const row of rows) {
         const e = fill.get(row.key);
         if (e && typeof e.v === 'number') values.get(row.key).push(e.v);
@@ -1978,6 +2304,120 @@ function slotThresholds(rows, slots, weeks) {
 
   slotBars = { key, bars };
   return bars;
+}
+
+// ------------------------------------ what a squad averages, slot by slot
+//
+// TIM, 2026-09-19: "In the analysis section, in week by week, there is an Avg
+// column that shows the avg proj points of the players who are going to play
+// that position, not just the same player every week. This is really good and I
+// like it a lot. ... I want to use this exact information and apply it to the
+// box above it (all teams, season proj avg), so that for that season avg, it
+// doesn't use a single player's proj avg across a season, it uses the avg proj
+// points for each position that was calculated and predicted in the box below."
+//
+// So this is the Avg column of "Season by week", computed for EVERY squad
+// rather than only the one on screen. It is the same pass, the same slot rows,
+// the same floor and the same regular-season-only rule — "this exact
+// information" — and the all-teams grid reads it straight off.
+//
+// WHY IT IS BETTER THAN WHAT IT REPLACES, in one line: the old Proj avg was
+// each man's own season projection over 17 games, so a squad's QB slot was
+// worth its quarterback's average even in the week he is on bye, and a manager
+// with two useful backs was credited for both in RB1 and RB2 every week whether
+// or not they play the same one. This asks a different question — what will
+// this SLOT actually be worth, week by week, given whoever fills it — and byes,
+// depth and the waiver floor all fall out of it instead of being ignored.
+
+/** Memoised on the same key as the fills, plus the floors, which move the numbers. */
+let slotAvgs = { key: null, byTeam: new Map() };
+
+/** A signature for the floors, so a late wire read repaints rather than being cached over. */
+function floorsKey() {
+  if (!state.floors) return 'nofloor';
+  return [...state.floors.entries()].map(([k, f]) => `${k}${f.value}`).join(',');
+}
+
+/**
+ * Every squad's per-slot average over the regular-season weeks on screen.
+ *
+ * @returns {Map<number, {slots: Map<string, {avg:number|null, n:number,
+ *   assumed:number, who:Array<{name:string, n:number, playerId:*}>}>,
+ *   total:number|null, weeks:number}>}
+ *
+ * The TOTAL is the whole lineup averaged — each week's assessed starting
+ * eleven added up, then those totals averaged — and NOT the sum of the ten
+ * column averages. They are the same arithmetic in principle and can differ by
+ * a tenth in practice, because each column is rounded before it is printed and
+ * because a week nobody could fill a slot in leaves that column one week short.
+ * Taking it this way is what makes the grid's Total the very number the season
+ * sheet's "Starting lineup" band shows for that squad; the note says so.
+ */
+function teamSlotAverages(rows, slots, weeks) {
+  const key = `${fillsKey(rows, weeks)}|${floorsKey()}`;
+  if (slotAvgs.key === key) return slotAvgs.byTeam;
+
+  const byWeek = weeklyFills(rows, slots, weeks);
+  const teamIds = new Set();
+  for (const perTeam of byWeek.values()) for (const id of perTeam.keys()) teamIds.add(id);
+
+  const byTeam = new Map();
+  for (const id of teamIds) {
+    const cells = new Map();
+    for (const row of rows) {
+      // Aligned to `weeks` so `regularAvg` can drop the playoff columns by
+      // index — the same function the sheet's own Avg column uses, which is
+      // what keeps "not counted in Avg" meaning one thing on this page.
+      const values = [];
+      const who = new Map();
+      let assumedWeeks = 0;
+      for (const w of weeks) {
+        const perTeam = byWeek.get(w);
+        const fill = perTeam ? perTeam.get(id) : null;
+        if (!fill) { values.push(null); continue; }
+        const e = fill.get(row.key) || null;
+        const a = assessed(e, row);
+        values.push(a.value);
+        if (a.assumed && !isPlayoff(w)) assumedWeeks += 1;
+        if (e && !isPlayoff(w)) {
+          const k = String(e.p.playerId ?? e.p.name);
+          const held = who.get(k);
+          if (held) held.n += 1;
+          else who.set(k, { name: e.p.name, playerId: e.p.playerId ?? null, n: 1 });
+        }
+      }
+      const counted = values.filter((v, i) => !isPlayoff(weeks[i]) && typeof v === 'number').length;
+      cells.set(row.key, {
+        avg: regularAvg(values, weeks),
+        n: counted,
+        assumed: assumedWeeks,
+        who: [...who.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)),
+      });
+    }
+
+    // The week totals, exactly as the season sheet's band builds them.
+    const totals = weeks.map((w) => {
+      const perTeam = byWeek.get(w);
+      const fill = perTeam ? perTeam.get(id) : null;
+      if (!fill) return null;
+      let sum = 0;
+      let any = false;
+      for (const row of rows) {
+        const a = assessed(fill.get(row.key) || null, row);
+        if (a.value !== null) { sum += a.value; any = true; }
+      }
+      return any ? round1(sum) : null;
+    });
+
+    byTeam.set(id, {
+      slots: cells,
+      total: regularAvg(totals, weeks),
+      weeks: totals.filter((v, i) => !isPlayoff(weeks[i]) && typeof v === 'number').length,
+    });
+  }
+
+  slotAvgs = { key, byTeam };
+  return byTeam;
 }
 
 /** '', 'lo1' or 'lo2' — how far below its slot's league norm this number is. */
@@ -2028,7 +2468,7 @@ function slotCell(entry, row, week, bar, index) {
     if (sf) {
       return `<td class="${cls('assumed')}" data-v="${sf.value}" ` +
         `title="Nobody on this squad could fill ${esc(row.key)} in week ${week}, so it is ` +
-        `assessed at ${fmt(sf.value)} — the best ${esc(sf.position)} on the waiver wire, who is ` +
+        `assessed at ${fmt(sf.value)} — ${esc(floorSource(sf))}, who is ` +
         `who you would stream. ESPN projects nothing here.">${fmt(sf.value)}</td>`;
     }
     return `<td class="${cls('muted')}" title="Nobody could fill ${esc(row.key)} in week ${week} — ` +
@@ -2064,7 +2504,7 @@ function slotCell(entry, row, week, bar, index) {
   // ESPN never published, so a reader who cannot see where it came from has no
   // way to check it — and this is a panel Tim checks by hand.
   const assumedWhy = assumed
-    ? ` Assessed at ${fmt(v)} instead: that is the best ${esc(p.position)} on the waiver wire, ` +
+    ? ` Assessed at ${fmt(v)} instead: that is ${esc(floorSource(lifted.floor))}, ` +
       `and a manager would stream him rather than take ${fmt(raw)} here.`
     : '';
   const says = tier
@@ -2145,7 +2585,29 @@ function renderSeasonHead(weeks) {
      </tr>`;
 }
 
+/**
+ * The season sheet, and — since 2026-09-19 — the all-teams grid with it.
+ *
+ * The grid's Proj avg measure is made of the very weeks this panel is made of,
+ * so a batch landing moves both, and every route that repaints one has to
+ * repaint the other or the two boxes would disagree about a squad's average
+ * for as long as the reader left the page open. Doing it here rather than at
+ * `renderSeason`'s twelve call sites is what stops the thirteenth forgetting.
+ * The grid on its WEEK measure is untouched by any of this, so it is not
+ * repainted for nothing.
+ */
 function renderSeason() {
+  paintSeason();
+  if (currentGrid().slotGrid) renderOverview();
+  // And the roster detail, for ONE figure in it: its Proj avg is this squad's
+  // lineup in an average week, which is made of these weeks too. Without this
+  // the tile sat at "—" until the reader happened to touch something else and
+  // then filled in, which reads as a bug in the number rather than as a week
+  // arriving. A repaint of it is cheap and is built entirely from state.
+  renderRoster();
+}
+
+function paintSeason() {
   const table = $('seasonTable');
   const team = currentTeam();
   const weeks = spanWeeks();
@@ -2179,14 +2641,17 @@ function renderSeason() {
   }
 
   const index = seasonIndex(team.id);
-  const lineups = weeklyLineups(team.id, slots);
   const bars = slotThresholds(rows, slots, weeks);
 
   // week -> slot key -> who is in it. Built once and read by both the slot rows
   // and the totals band, so the band can only ever be the column it sits under.
+  // Taken out of the one league-wide solve, so this squad's rows here and its
+  // row in the all-teams grid above are the same answer rather than two.
+  const fills = weeklyFills(rows, slots, weeks);
   const byWeek = new Map();
   for (const w of weeks) {
-    byWeek.set(w, lineups.has(w) ? fillSlots(lineups.get(w), rows) : null);
+    const perTeam = fills.get(w);
+    byWeek.set(w, (perTeam && perTeam.get(team.id)) || null);
   }
 
   // Who each id IS, for the line above the table. Kept here rather than written
@@ -2223,14 +2688,7 @@ function renderSeason() {
       // reader could reproduce from the cells in front of them. An unfilled
       // slot contributes its floor here for the same reason it does in the
       // band: that is what the cell says it is worth.
-      const nums = values.map((e) => {
-        if (!e) {
-          const sf = slotFloor(row.slotId, state.floors);
-          return sf ? sf.value : null;
-        }
-        const a = flooredValue({ position: e.p.position, projected: e.v }, state.floors);
-        return a.value === null ? e.v : a.value;
-      });
+      const nums = values.map((e) => assessed(e, row).value);
       const avg = regularAvg(nums, weeks);
       const bar = bars.get(row.key);
 
@@ -3070,10 +3528,16 @@ function selectTeam(id) {
   // better to open on.
   state.teamPickedOn = state.source;
   if (state.myTeamId === null || state.myTeamId === undefined) prefs.set('team', id);
-  // Nudged rather than re-rendered: this also runs from the select's own change
-  // handler, and rewriting a control's options underneath it loses focus.
-  const sel = $('teamSelect');
-  if (sel.value !== String(id)) sel.value = String(id);
+  // Nudged rather than re-rendered: this also runs from a select's own change
+  // handler, and rewriting a control's options underneath it loses focus. BOTH
+  // pickers are nudged — the one at the top of Season by week and the one in
+  // the roster detail are two views of a single setting, and a tap on a grid
+  // row has to move both or the page would be showing one squad while a control
+  // on it named another.
+  for (const pid of TEAM_PICKERS) {
+    const sel = $(pid);
+    if (sel && sel.value !== String(id)) sel.value = String(id);
+  }
   renderOverview(); // the picked row is highlighted in the grid too
   renderRoster();
   // A repaint and nothing else. Every team is in every week already fetched,
@@ -3124,9 +3588,10 @@ $('weekSelect').addEventListener('change', (e) => {
   loadWeek();
 });
 
-$('teamSelect').addEventListener('change', (e) => {
-  selectTeam(Number(e.target.value));
-});
+for (const pid of TEAM_PICKERS) {
+  const sel = $(pid);
+  if (sel) sel.addEventListener('change', (e) => selectTeam(Number(e.target.value)));
+}
 
 /**
  * The swap: pick a man up by his slot, put him down on somebody else's.

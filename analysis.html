@@ -409,11 +409,21 @@
      AND NOT COLOUR ALONE, ever. The dotted underline is the part that
      survives a reader who cannot separate orange from amber, and the cell's
      title and the panel's legend say it in words. */
-  #seasonTable td.assumed {
+  #seasonTable td.assumed,
+  #overviewTable td.assumed {
     color: var(--assumed);
     text-decoration: underline dotted var(--assumed);
     text-underline-offset: 3px;
   }
+
+  /* THE ALL-TEAMS GRID ON ITS PROJ AVG MEASURE (Tim, 2026-09-19). Its columns
+     are lineup SLOTS averaged over the season, not men, so a cell carries no
+     name and no link and the assumed mark above means "some of the weeks in
+     this average were assessed at the waiver floor" — the same colour for the
+     same reason, one step further out. A slot nobody has read a week for yet
+     is the faint dot the season sheet uses, not a zero. */
+  #overviewTable td.slot-avg { font-variant-numeric: tabular-nums; }
+  #overviewTable td.slot-avg.wait { color: var(--line-2); }
 
   #seasonTable td.lit,
   #seasonTable tbody tr:hover td.lit {
@@ -822,6 +832,19 @@
   <section class="panel">
     <h2 id="seasonTitle">Season by week</h2>
     <p class="lede">Every starting slot, every week, filled by the best lineup available.</p>
+    <!-- THE SQUAD THIS PANEL IS ABOUT (Tim, 2026-09-19): "I want to make it so
+         that you can select which team you are viewing this information about
+         at the top of this box." It is the SAME setting the Roster detail's
+         picker at the foot of the page carries — one team, three panels — so
+         the two selects stay in step and neither is a second notion of which
+         squad is on screen. -->
+    <div class="toolbar">
+      <div class="select-md">
+        <label for="seasonTeamSelect">Team</label>
+        <select id="seasonTeamSelect"></select>
+      </div>
+      <span class="ctl-hint">Drives &ldquo;Who to start&rdquo; and the roster detail below too.</span>
+    </div>
     <div class="panel-note progress-note" id="seasonProgress"></div>
     <p class="edited-note hidden" id="seasonAlert"></p>
     <!-- THE NAME LINE. Nothing in the table below is a name — every row is a

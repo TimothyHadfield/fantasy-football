@@ -167,6 +167,27 @@ export function enableSort(table, opts = {}) {
   else paintHeaders(table);
 }
 
+/**
+ * Point an already-enabled table at a different column and re-sort it.
+ *
+ * `enableSort`'s `defaultIndex` can only ever be a fact about a table's shape
+ * when the page loads, and one table on the site CHANGES shape: the analysis
+ * page's all-teams grid has nine player columns on its week measure and one per
+ * lineup slot on its average, so "the Total column" is not the same index in
+ * both. Without this the grid would carry the other shape's sort — silently
+ * ordering the league by, say, the kicker.
+ *
+ * Only call it when the COLUMNS have changed. A re-render that keeps the shape
+ * should use `resort`, which is what preserves a column the reader picked.
+ */
+export function sortBy(table, index, asc = false) {
+  const st = STATE.get(table);
+  if (!st) return;
+  st.index = index;
+  st.asc = asc;
+  resort(table);
+}
+
 /** Turn on sorting for every table under `root` that has sortable headers. */
 export function enableSortAll(root = document) {
   root.querySelectorAll('table').forEach((table) => {

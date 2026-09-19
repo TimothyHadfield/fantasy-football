@@ -841,6 +841,12 @@ function check(scenario, { document, window, errors, rejections }) {
   // reader, so a card wired to the ROWS would be thrown away with them and
   // would look perfectly fine until a finger arrived. wireTips is registered
   // once, on the table, and this is what says so.
+  //
+  // CHANGED 2026-09-19: the Proj avg measure is one column per LINEUP SLOT
+  // averaged over the season, so it opens NO card — an average over fourteen
+  // weeks is usually several men and there is nobody for a card to be about.
+  // That makes the round trip the thing worth asserting: away and back, and the
+  // cards have to be working again on the other side of it.
   {
     const toggle = document.getElementById('measureToggle');
     c.ok('the all-teams panel carries the measure switch', !!toggle, 'no #measureToggle');
@@ -850,16 +856,30 @@ function check(scenario, { document, window, errors, rejections }) {
       clickOn(window, avg);
       c.ok('pressing it lights that button', /\bon\b/.test(avg.getAttribute('class') || ''),
         avg.getAttribute('class') || '');
+      c.ok('THE SLOT AVERAGE OPENS NO CARD — a slot is not a man',
+        !document.querySelector('#overviewTable td[data-tip]') &&
+        !document.querySelector('#overviewTable tbody a.pref'),
+        `${document.querySelectorAll('#overviewTable td[data-tip]').length} tips, ` +
+        `${document.querySelectorAll('#overviewTable tbody a.pref').length} links`);
+      c.ok('but it says who fills the slot in a title, which a finger can open',
+        [...document.querySelectorAll('#overviewTable tbody td.slot-avg')]
+          .every((td) => td.hasAttribute('title')) &&
+        document.querySelectorAll('#overviewTable tbody td.slot-avg').length > 0,
+        'a slot-average cell with nothing to say');
+
+      // Back to the week measure, and the cards have to come back with it —
+      // which is the original hazard: the rows were rebuilt twice under the
+      // reader, and a card wired to a ROW rather than to the table would be
+      // gone by now and would look perfectly fine until a finger arrived.
+      const wk = toggle.querySelector('button[data-measure="week"]');
+      if (wk) clickOn(window, wk);
       const repainted = document.querySelector('#overviewTable td[data-tip]');
-      c.ok('and the grid still carries tip cells after the repaint', !!repainted);
+      c.ok('and the grid carries tip cells again after the round trip', !!repainted);
       if (repainted) {
         const ev2 = clickOn(window, repainted.querySelector('a.pref') || repainted);
         c.eq('a tap on the repainted grid still opens a sheet', ev2.defaultPrevented, true);
         c.eq('which is the same card', document.getElementById('tipCard').hidden, false);
       }
-      // Put it back, so the blocks after this read the grid the page opens on.
-      const wk = toggle.querySelector('button[data-measure="week"]');
-      if (wk) clickOn(window, wk);
     }
   }
 

@@ -12,7 +12,7 @@
 
 import {
   positionFloors, floorAt, slotFloor, flooredValue, assessLineup, describeFloors,
-  FLOOR_POSITIONS,
+  floorSource, FLOOR_POSITIONS, FLOOR_RANK,
 } from '../js/floor.js';
 import { optimalLineup, DEFAULT_SLOTS } from '../js/forecast.js';
 import { seasonLineupValue } from '../js/trade.js';
@@ -34,25 +34,50 @@ const close = (a, b, tol, msg) => {
 
 // ---------------------------------------------------------------- the wire
 //
-// One read. Best available per position, by inspection:
-//   QB 16.2 (Nash)   RB 9.4 (Tate)   WR 11.1 (Voss)
-//   TE 6.2 (Iqbal)   K 7.8 (Sole)    DST 6.9 (Vipers)
+// One read, and it is deliberately deep enough to tell the BEST free agent
+// apart from the THIRD-best — which is the whole of Tim's 2026-09-19 change and
+// could not be tested at all against a two-man wire.
 //
-// And three men who must NOT set a floor, each for a different reason — a
-// floor that counted any of them would be a number no manager could actually
-// get on the field.
+// Ranked by inspection, best first, with the floor (the 3rd) in bold:
+//   QB   20.9 Nash, 18.4 Orme, **16.2 Pike**, 12.0 Quill
+//   RB   12.6 Tate, 10.9 Udall, **9.4 Vane**, 8.8 Wilde   (19.9 Bench is OUT)
+//   WR   14.8 Voss, 12.5 Wren, **11.1 Xiu**, 7.3 Yeo
+//   TE   9.0 Iqbal, 7.4 Jost, **6.2 Kerr**
+//   K    9.9 Sole, 8.6 Toft, **7.8 Uziel**                (0.00 Byrne is on bye)
+//   DST  8.8 Vipers, 7.7 Wolves, **6.9 Xebecs**
+//
+// The third-best at every position is the same number the old "best available"
+// rule produced from the old fixture, on purpose: every assertion below the
+// wire — what gets lifted, what does not, what a lineup totals — is unchanged
+// by the new rule, so a failure there is a real regression and not a rewritten
+// expectation.
 const WIRE = [
-  { playerId: 1, name: 'Nash', position: 'QB', projected: 16.2, injuryStatus: 'ACTIVE' },
-  { playerId: 2, name: 'Orme', position: 'QB', projected: 12.0, injuryStatus: 'ACTIVE' },
-  { playerId: 3, name: 'Tate', position: 'RB', projected: 9.4, injuryStatus: 'ACTIVE' },
-  { playerId: 4, name: 'Udall', position: 'RB', projected: 8.8, injuryStatus: 'ACTIVE' },
-  { playerId: 5, name: 'Voss', position: 'WR', projected: 11.1, injuryStatus: 'ACTIVE' },
-  { playerId: 6, name: 'Wren', position: 'WR', projected: 7.3, injuryStatus: 'ACTIVE' },
-  { playerId: 7, name: 'Iqbal', position: 'TE', projected: 6.2, injuryStatus: 'ACTIVE' },
-  { playerId: 8, name: 'Sole', position: 'K', projected: 7.8, injuryStatus: 'ACTIVE' },
-  { playerId: 9, name: 'Vipers', position: 'DST', projected: 6.9, injuryStatus: 'ACTIVE' },
+  { playerId: 1, name: 'Pike', position: 'QB', projected: 16.2, injuryStatus: 'ACTIVE' },
+  { playerId: 2, name: 'Quill', position: 'QB', projected: 12.0, injuryStatus: 'ACTIVE' },
+  { playerId: 13, name: 'Nash', position: 'QB', projected: 20.9, injuryStatus: 'ACTIVE' },
+  { playerId: 14, name: 'Orme', position: 'QB', projected: 18.4, injuryStatus: 'ACTIVE' },
+  { playerId: 3, name: 'Vane', position: 'RB', projected: 9.4, injuryStatus: 'ACTIVE' },
+  { playerId: 4, name: 'Wilde', position: 'RB', projected: 8.8, injuryStatus: 'ACTIVE' },
+  { playerId: 15, name: 'Tate', position: 'RB', projected: 12.6, injuryStatus: 'ACTIVE' },
+  { playerId: 16, name: 'Udall', position: 'RB', projected: 10.9, injuryStatus: 'ACTIVE' },
+  { playerId: 5, name: 'Xiu', position: 'WR', projected: 11.1, injuryStatus: 'ACTIVE' },
+  { playerId: 6, name: 'Yeo', position: 'WR', projected: 7.3, injuryStatus: 'ACTIVE' },
+  { playerId: 17, name: 'Voss', position: 'WR', projected: 14.8, injuryStatus: 'ACTIVE' },
+  { playerId: 18, name: 'Wren', position: 'WR', projected: 12.5, injuryStatus: 'ACTIVE' },
+  { playerId: 7, name: 'Kerr', position: 'TE', projected: 6.2, injuryStatus: 'ACTIVE' },
+  { playerId: 19, name: 'Iqbal', position: 'TE', projected: 9.0, injuryStatus: 'ACTIVE' },
+  { playerId: 20, name: 'Jost', position: 'TE', projected: 7.4, injuryStatus: 'ACTIVE' },
+  { playerId: 8, name: 'Uziel', position: 'K', projected: 7.8, injuryStatus: 'ACTIVE' },
+  { playerId: 21, name: 'Sole', position: 'K', projected: 9.9, injuryStatus: 'ACTIVE' },
+  { playerId: 22, name: 'Toft', position: 'K', projected: 8.6, injuryStatus: 'ACTIVE' },
+  { playerId: 9, name: 'Xebecs', position: 'DST', projected: 6.9, injuryStatus: 'ACTIVE' },
+  { playerId: 23, name: 'Vipers', position: 'DST', projected: 8.8, injuryStatus: 'ACTIVE' },
+  { playerId: 24, name: 'Wolves', position: 'DST', projected: 7.7, injuryStatus: 'ACTIVE' },
   // Ruled out. ESPN projects an OUT man at 0 anyway (rule 2), but this one
-  // carries a number as well, which is the case the status check is for.
+  // carries a number as well, which is the case the status check is for. He
+  // would be the BEST running back on the wire, so a floor that counted him
+  // would move the RB floor two places up as well as being a man nobody can
+  // field.
   { playerId: 10, name: 'Bench', position: 'RB', projected: 19.9, injuryStatus: 'OUT' },
   // On his own bye that week: 0.00, and no use replacing anybody.
   { playerId: 11, name: 'Byrne', position: 'K', projected: 0, injuryStatus: 'ACTIVE' },
@@ -62,17 +87,56 @@ const WIRE = [
 
 const floors = positionFloors(WIRE, { week: 3 });
 
-// ---- the floor is the best AVAILABLE man, and nothing else ---------------
-close(floorAt('QB', floors).value, 16.2, 1e-9, 'QB floor is the best free agent');
-close(floorAt('RB', floors).value, 9.4, 1e-9, 'RB floor ignores the man who is OUT');
+// ---- THE FLOOR IS THE THIRD-BEST AVAILABLE MAN --------------------------
+//
+// Tim, 2026-09-19: "there might be 5-6 users also wanting the player at the top
+// of the waivers. Try moving the line down to around the 3rd best player."
+eq(FLOOR_RANK, 3, 'the floor is taken from the third man on the wire');
+close(floorAt('QB', floors).value, 16.2, 1e-9, 'QB floor is the THIRD-best free agent, not the best');
+close(floorAt('RB', floors).value, 9.4, 1e-9, 'RB floor ignores the man who is OUT, then takes the third');
 close(floorAt('WR', floors).value, 11.1, 1e-9, 'WR floor');
 close(floorAt('TE', floors).value, 6.2, 1e-9, 'TE floor');
 close(floorAt('K', floors).value, 7.8, 1e-9, 'K floor ignores the man on his own bye');
 close(floorAt('DST', floors).value, 6.9, 1e-9, 'DST floor');
 eq(floors.has('P'), false, 'a position the league never starts gets no floor');
-eq(floorAt('QB', floors).name, 'Nash', 'the floor names the man it came from');
+eq(floorAt('QB', floors).name, 'Pike', 'the floor names the man it came from');
 eq(floorAt('QB', floors).week, 3, 'and the week it was read in');
-eq(floorAt('RB', floors).pool, 2, 'the pool counts only the men who could set it');
+eq(floorAt('QB', floors).rank, 3, 'and says which place on the wire it came from');
+eq(floorAt('RB', floors).pool, 4, 'the pool counts only the men who could set it');
+
+// FALSIFIABLE IN BOTH DIRECTIONS. The same wire read at rank 1 gives the old
+// answer, so this suite would notice a build that quietly went back to the best
+// available — every value above would still be "right" under the old rule if
+// the fixture only had three men at each position.
+const tops = positionFloors(WIRE, { week: 3, rank: 1 });
+close(floorAt('QB', tops).value, 20.9, 1e-9, 'at rank 1 the QB floor is the best on the wire');
+close(floorAt('K', tops).value, 9.9, 1e-9, 'and the kicker floor is 2.1 higher than Tim now wants it');
+ok(floorAt('QB', tops).value > floorAt('QB', floors).value &&
+   floorAt('RB', tops).value > floorAt('RB', floors).value &&
+   floorAt('WR', tops).value > floorAt('WR', floors).value,
+  'THE THIRD-BEST REALLY IS LOWER THAN THE BEST, which is the whole of the change');
+
+// A WIRE THINNER THAN THE RANK FALLS BACK TO THE DEEPEST MAN IT HOLDS, rather
+// than inventing one or dropping the position. The module's first rule is that
+// every floor is a real free agent, and "the only kicker left" is still one.
+const thin = positionFloors([
+  { playerId: 30, name: 'Ash', position: 'K', projected: 8.0, injuryStatus: 'ACTIVE' },
+  { playerId: 31, name: 'Birch', position: 'K', projected: 6.5, injuryStatus: 'ACTIVE' },
+], { week: 3 });
+close(floorAt('K', thin).value, 6.5, 1e-9, 'a two-man wire floors on the second, not the third');
+eq(floorAt('K', thin).rank, 2, 'and says it only got two deep');
+eq(floorAt('K', thin).want, 3, 'while still reporting how deep it meant to go');
+eq(floorAt('K', positionFloors([{ playerId: 32, name: 'Cedar', position: 'K', projected: 5.0 }])).rank,
+  1, 'a one-man wire floors on him');
+
+// WHERE A FLOOR CAME FROM, IN WORDS — one spelling, used by every page.
+eq(floorSource(floorAt('QB', floors)), 'the 3rd-best QB on the waiver wire (Pike)',
+  'the source names the place and the man');
+eq(floorSource(floorAt('K', thin)), 'the 2nd-best (and last) K on the waiver wire (Birch)',
+  'and says when the wire ran out before the rank did');
+eq(floorSource(floorAt('QB', tops)), 'the best QB on the waiver wire (Nash)',
+  'rank 1 reads as the best, not as "the 1st-best"');
+eq(floorSource(null), '', 'no floor, no phrase');
 
 // THE ABSENT CASE IS NOT ZERO. A position the wire said nothing about has no
 // floor, and every reader treats that as "leave the number alone" — a zero
@@ -196,6 +260,15 @@ ok(said.includes('QB 16.2'), 'and the quarterback floor');
 ok(said.includes('week 3'), 'and the week it was read in');
 ok(/read once and used for every week/.test(said),
   'and says it is one read used flat, which is the approximation Tim chose');
+ok(/3rd-best free agent/.test(said),
+  'and that the floor is the third man on the wire, not the first');
+ok(/every manager in the league is bidding for/.test(said),
+  'and says WHY, which is the half a reader cannot work out from the number');
+// The sentence describes the floors beside it, not this build's constant: an
+// archived reading or a stub may carry floors taken at a different depth.
+ok(/\bbest free agent\b/.test(describeFloors(tops, { week: 3 })) &&
+   !/3rd-best/.test(describeFloors(tops, { week: 3 })),
+  'floors built at rank 1 are described as the best, not as the third');
 eq(describeFloors(positionFloors([])), '', 'no floors, no sentence');
 
 // Every position the note can mention is one this module will actually floor.
