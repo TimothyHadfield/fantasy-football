@@ -274,17 +274,45 @@ export function buildModel({
 }
 
 /**
+ * ESPN's season projection covers the 17-game regular season, so dividing by it
+ * turns a season total into a typical week.
+ *
+ * There are two other copies of this number — `js/trade.js` exports one and
+ * `js/analysis-page.js` keeps its own — and all three should be one constant.
+ * They were left alone deliberately today: both of those files are being worked
+ * on elsewhere as this goes in, and a shared constant landing under somebody
+ * mid-edit is how a one-line change becomes a merge nobody asked for.
+ */
+const SEASON_GAMES = 17;
+
+/**
  * Who has the best roster, before anyone has played a down.
  *
  * seasonProjectedTotal is the sum of the season-long projections of whoever is
  * in the lineup this week. It is the closest thing to an objective talent
  * ranking that exists in week 1, and it needs zero completed games.
+ *
+ * SHOWN PER WEEK, NOT PER SEASON (Tim, 2026-09-19: "right now the roster
+ * strength box has the numbers on the right displayed as across the season.
+ * This means nothing to the user. Show it as per week."). He is right, and the
+ * reason is that nobody has a feel for 1,780: a fantasy manager reads scores in
+ * the hundred-and-something a week that ESPN puts under a lineup, so a
+ * four-figure season total has to be divided by something in the reader's head
+ * before it says anything at all. The RANKING and the BARS are untouched by it
+ * — dividing every row by the same 17 cannot reorder them — so this changes
+ * what the column says, not what the panel claims.
+ *
+ * The season total is kept alongside it, because the note still has to be able
+ * to say where the per-week figure came from.
  */
 function rosterStrength(rosters) {
   const rows = (rosters?.teams || []).map((t) => ({
     id: t.id,
     name: t.name,
-    value: isNum(t.seasonProjectedTotal) ? t.seasonProjectedTotal : null,
+    seasonTotal: isNum(t.seasonProjectedTotal) ? round1(t.seasonProjectedTotal) : null,
+    value: isNum(t.seasonProjectedTotal)
+      ? round1(t.seasonProjectedTotal / SEASON_GAMES)
+      : null,
   }));
   rows.sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
   return rows.map((r, i) => ({ ...r, rank: i + 1 }));
@@ -863,11 +891,20 @@ function renderStrength(m) {
     rows
       .map((r) => {
         const width = 8 + 92 * ((r.value - min) / span);
-        return `<li${r.id === m.teamId ? ' class="me"' : ''}>
+        // The season total rides along in the title. It is the number ESPN
+        // actually published and the one a reader would find if they went
+        // looking, so the panel has to be able to hand it back — but it is not
+        // what the column says any more.
+        const says = r.seasonTotal === null
+          ? ''
+          : ` title="${esc(r.name)} projects ${r.value.toFixed(1)} points in a typical week — ` +
+            `ESPN's season-long projection for this lineup, ${r.seasonTotal.toFixed(0)} points, ` +
+            `over ${SEASON_GAMES} games."`;
+        return `<li${r.id === m.teamId ? ' class="me"' : ''}${says}>
             <span class="rk">${r.rank}</span>
             <span class="nm">${esc(r.name)}</span>
             <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
-            <span class="vv">${Math.round(r.value)}</span>
+            <span class="vv">${r.value.toFixed(1)}</span>
           </li>`;
       })
       .join('') +
@@ -875,10 +912,18 @@ function renderStrength(m) {
 
   tuck('strengthNote', true);
   $('strengthNote').innerHTML =
-    'Season-long projected points for each team&rsquo;s <em>current</em> starting lineup, ' +
-    'straight from ESPN. It needs no completed games, which makes it the only honest ' +
-    'answer to &ldquo;who is good&rdquo; this early. Bar length shows the gap between ' +
-    `first and last (${Math.round(max - min)} points), not the totals.`;
+    `<strong>Points in a typical week</strong>: ESPN&rsquo;s season-long projection for each ` +
+    `team&rsquo;s <em>current</em> starting lineup, divided by the ${SEASON_GAMES} games of an ` +
+    'NFL season. The season totals themselves are four figures, which nobody has a feel for; ' +
+    'a lineup is read in the hundred-and-something a week ESPN prints under it. Dividing every ' +
+    'team by the same number changes no rank and no bar. ' +
+    'It needs no completed games, which makes it the only honest answer to ' +
+    '&ldquo;who is good&rdquo; this early. Bar length shows the gap between first and last ' +
+    `(${(max - min).toFixed(1)} points a week), not the totals. ` +
+    '<strong>This is the lineup as it is set, averaged flat</strong> — it cannot see a bye week ' +
+    'or a squad whose depth never starts, so it will not match the ' +
+    '<a href="analysis.html">Analysis</a> page&rsquo;s <strong>Proj avg</strong>, which is built ' +
+    'from the best legal lineup in every individual week.';
 }
 
 function renderStandings(m) {

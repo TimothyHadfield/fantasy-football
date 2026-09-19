@@ -327,6 +327,49 @@ if (process.argv[2]) {
         if (!/has not finished/.test(facts.preBench)) problems.push(`pre: bench not empty-stated: "${facts.preBench.slice(0, 90)}"`);
         if (/0\.0/.test(facts.preBench + facts.preStandings)) problems.push('pre: a fabricated 0.0 reached the page');
         if (facts.preRankRows !== 10) problems.push(`pre: ${facts.preRankRows} strength rows, expected 10`);
+
+        // ---- ROSTER STRENGTH IS PER WEEK, NOT PER SEASON -------------------
+        //
+        // Tim, 2026-09-19: "right now the roster strength box has the numbers
+        // on the right displayed as across the season. This means nothing to
+        // the user. Show it as per week." A season total for a starting lineup
+        // is four figures; a week is the hundred-and-something ESPN prints
+        // under a lineup, which is the only one of the two a manager can place.
+        //
+        // Checked against the MODEL's own season totals rather than against a
+        // hard-coded number, so the fixture can change without this rotting —
+        // and the ranks are checked as unchanged, because dividing every row by
+        // the same 17 must not be able to reorder anybody.
+        const strengthRows = Array.from(document.querySelectorAll('#strength .rank li'))
+          .map((li) => Number(li.querySelector('.vv').textContent.trim()));
+        const modelStrength = model.strength.filter((r) => r.value !== null);
+        facts.preStrengthShown = strengthRows.slice(0, 3);
+        facts.preStrengthSeason = modelStrength.slice(0, 3).map((r) => r.seasonTotal);
+
+        if (!strengthRows.length || strengthRows.some((v) => !Number.isFinite(v))) {
+          problems.push(`pre: strength values unreadable ${JSON.stringify(strengthRows)}`);
+        } else {
+          if (strengthRows.some((v) => v > 400)) {
+            problems.push(`pre: a strength figure is still a season total ${JSON.stringify(strengthRows)}`);
+          }
+          const offBy = modelStrength
+            .map((r, i) => Math.abs(strengthRows[i] - r.seasonTotal / 17))
+            .filter((d) => d > 0.06);
+          if (offBy.length) {
+            problems.push(`pre: ${offBy.length} strength rows are not the season total over 17 games`);
+          }
+          const ordered = strengthRows.every((v, i) => i === 0 || v <= strengthRows[i - 1]);
+          if (!ordered) problems.push(`pre: strength is no longer best-first ${JSON.stringify(strengthRows)}`);
+          if (!/typical week/i.test(text('strengthNote'))) {
+            problems.push('pre: the strength note does not say the figure is a week');
+          }
+          // The season total is the number ESPN actually published, so the
+          // panel still has to be able to hand it back rather than losing it.
+          const titled = document.querySelector('#strength .rank li[title]');
+          if (!titled || !/season-long projection/.test(titled.getAttribute('title'))) {
+            problems.push('pre: a strength row no longer carries its season total');
+          }
+        }
         if (facts.preInjuryRows !== 5) problems.push(`pre: ${facts.preInjuryRows} injured starters, expected 5`);
         if (facts.preBadge !== 'Live') problems.push(`pre: badge "${facts.preBadge}", expected Live`);
 
