@@ -3,8 +3,8 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-19. Everything below is pushed and live; 35 test suites,
-11,598 assertions, green, and GitHub Actions runs them on every push.
+Last updated 2026-09-19. Everything below is pushed and live; 37 test suites,
+12,089 assertions, green, and GitHub Actions runs them on every push.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -292,6 +292,50 @@ These were each established by testing, and several by getting them wrong first.
    from. If either of those two guarantees is ever relaxed, the site starts
    telling him to start different players because of a waiver-wire number.
 
+   **A FLOOR THAT REACHES ONE PANEL AND NOT ITS NEIGHBOUR IS WORSE THAN NO
+   FLOOR.** `bestCombo` took no `floors` option from the day the floor landed
+   until 2026-09-19, so the whole Best combo panel was priced on raw ESPN
+   numbers while every row above it was floored — the same deal came out
+   **+5.5 to the finder and −10.9 to the combo**, and the panel recommended a
+   worse trade than the row above it. Tim found it. Anything that prices a
+   roster takes the same floors as everything beside it, or it is answering a
+   different question in the same column of pixels.
+
+14. **The red/green scale is `js/heat.js` and there is one of it** (Tim,
+   2026-09-19: "colorizing eveything red/green based on a comparision with
+   other positions … the range a lot tighter so it's easier to be in
+   green/red"). Four steps a side, full colour at **±1 SD** rather than ±2.
+   Two rules inside it must not be quietly undone:
+   - **The comparison group is the same SLOT or COLUMN across the league**,
+     never one position against another. A quarterback's 22 against a kicker's
+     8 is not a comparison.
+   - **The scale owns a cell's BACKGROUND and its WEIGHT, and nothing else.**
+     Every meaning already on this site owns the foreground — the orange
+     `--assumed`, the injury reds, Bye/OUT, `.pos`/`.neg` — so a cell can be
+     green *and* assumed at once and both claims survive. In CSS the tint is a
+     `linear-gradient` background-IMAGE, because zebra, row hover and
+     `#seasonTable td.lit` all own background-COLOR at higher specificity.
+
+   It replaced the season sheet's ▼ / ▼▼ (`lo1`/`lo2`/`.lowmark` are gone) and
+   the Stats page's own green tint, which painted the HARDEST schedule the
+   greenest. **A z-score has no sense of scale**, so a column the whole league
+   is inside one printed tenth of gets no colour at all (`HEAT_MIN_SPREAD`) —
+   that was a real defect, not a precaution: ten squads all printing 22.1 and
+   differing in the fifteenth decimal came out in full colour.
+
+15. **The weeks this browser has read outlive a navigation** (`js/store.js`,
+   2026-09-19, Tim: "it loads but then goes away and you have to re-load it
+   every time you switch between sectoins"). Wired into `js/season.js` at the
+   same seam as the cloud and in front of it, so **no page module knows**. The
+   freshness rule is two clocks, not one TTL: **a played week is final for the
+   season** (ESPN has decided it and it cannot change), **a week still to come
+   is a forecast good for six hours**, and **unknown is never final**. Which of
+   the two a week is comes off the SCHEDULE, never the date — the same rule the
+   player card's Act row follows, and for the same reason. Demo is never
+   written to disk. **The Trade page therefore prices itself on load**; the old
+   "nothing on that page fetches until the button is pressed" is no longer
+   true.
+
 ## How a panel reads (2026-09-16, Tim: "messy and wordy")
 
 Every panel is: title → one short `.lede` sentence → the control toolbar → the
@@ -516,6 +560,11 @@ Trade page — **not** by Season by week, which dropped it on 2026-09-18),
 `js/floor.js` (the positional floor — pure; `season.fetchFloors(week)` is the
 one read that feeds it; every function in it is a no-op when no floors are
 passed, which is what keeps demo and a failed wire read honest),
+`js/heat.js` (the ONE red/green scale — pure; compares a number only with the
+same slot or column across the league; returns null and colours nothing below
+two values or when the whole league is inside one printed tenth),
+`js/store.js` (the weeks this browser has already read, kept across a
+navigation — pure, injectable storage, and every failure is silent),
 `js/cloud.js` (Firestore sync so the phone can read the league the
 desktop fetched — transport is injectable, which is what makes it testable).
 
@@ -538,8 +587,9 @@ signatures breaks three features at once, and only the full suite will tell you.
 
 ## Tests
 
-`cd tests && npm install && npm test` — **35 suites, 11,598 assertions**,
-counted off a green run on 2026-09-19.
+`cd tests && npm install && npm test` — **37 suites, 12,089 assertions**,
+counted off a green run on 2026-09-19. About ten minutes now: `tr-test` alone is
+3½ of them, because the Trade page reads itself on load in every scenario.
 `node tests/text-audit.mjs` is not a suite: it counts visible prose per panel.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see

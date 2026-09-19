@@ -66,6 +66,178 @@ describe how the site works **today**:
 | The measured plan for condensing the pages | "The density audit" |
 | What to do next | "Next", at the foot |
 
+## 2026-09-19 (later) — one colour scale, one local store, and the combo fixed
+
+Four more of Tim's asks, built by two agents on disjoint file sets and verified
+by a full run with nothing in flight: **37 suites, 12,089 assertions, green.**
+
+### Best combo was priced on a different basis from the rows above it
+
+His report: "the best combo gives me a single trade that is a 2-1 that has a
+lower +/week than the top trade." He was right, and the cause is one omission
+with a large blast radius: **`bestCombo` took no `floors` option at all.**
+`priceTradeAcrossWeeks` has had one since 2026-09-18 and `findTrades` is passed
+`state.floors`, so from that day every row in the finder was priced WITH the
+waiver floor and the entire Best combo panel — his side, the partner check, and
+`mergeComboByPartner` — was priced WITHOUT it.
+
+Measured on the demo league over weeks 5–13, the same single deal:
+
+| priced the finder's way (floored) | priced the combo's way (unfloored) |
+|---|---|
+| mine **+5.5**, theirs +4.0 | mine **−10.9**, theirs +18.0 |
+
+So the panel was ranking packings on a basis nothing else on the page used, the
+best trade's own singleton scored badly on it, and a lesser deal won. Threaded
+through, the combo now prices the top offer identically to the finder, and the
+invariant that makes this impossible to regress silently is asserted: **the best
+combo can never be worth less than the best single trade**, because every single
+trade is itself a candidate packing. Reverting the fix fails seven assertions,
+one of which prints Tim's sentence back — "combo 0 vs top offer 5.8".
+
+**His second paragraph was already satisfied and must not be "fixed".** The
+engine has never added the gains up: `price()` flattens every send and every
+receive and prices the combined roster once, forced cut included. `naiveDelta`
+is the sum, computed deliberately and printed in exactly one sentence as the
+contrast ("adding the offers' own gains would have given X; together they are
+actually worth Y").
+
+**On his 3x**: across the demo league the ratio runs **1.1x to 3.8x**, not
+reliably ≥3. It depends on how many disjoint holes a squad has. The invariant is
+the thing to quote him, not a multiple.
+
+**`COMBO_OFFER_CAP` was measured rather than defended.** At cap 12 against 24:
+unfloored, the cap costs gain on 7 of 10 squads (+1.31/wk average); at floors
+×0.85, one squad; at full floors, none — because the floor legitimately thins
+the pool below twelve. His league reads a live wire, so the cap is not his
+constraint. Value unchanged, measurement written into the comment.
+
+### The one red/green scale (`js/heat.js`)
+
+His ask: "colorizing eveything red/green based on a comparision with other
+positions … I want the range to be a lot tighter so it's easier to be in
+green/red, not just the extreams … it will replace the current system we have
+with the colorization of the season week by week box."
+
+Four steps a side, boundaries at 0.25 / 0.5 / 0.75 / 1.0 SD — **full colour at
+±1 SD, not ±2**. Under a normal distribution that leaves ~20% of cells
+uncoloured and ~16% a side at the end of the scale; the old rule coloured 15.9%
+amber-or-red, 2.3% red, and **nothing at all for being good**, which was his
+complaint exactly.
+
+- **The comparison group is the same slot or column across the league.** A
+  quarterback's 22 against a kicker's 8 is not a comparison.
+- **The scale owns the BACKGROUND and the WEIGHT, and nothing else.** Every
+  meaning already on this site owns the foreground, so a cell can be green *and*
+  orange-assumed at once and both survive. The tint is a `linear-gradient`
+  background-IMAGE rather than a colour, because zebra striping, row hover and
+  `#seasonTable td.lit` all own background-COLOR at higher specificity — an
+  image composites over them with no specificity arms race, and `.lit`'s
+  `background` shorthand still wins outright, which is the precedence ▼▼ had.
+- **Never colour alone, four channels, three of them hue-free**: weight climbs
+  with every step; ▲/▼ at the end of the scale only (marking steps 3 and 4 would
+  glyph ~45% of a grid); the actual z in the cell's `title` ("0.9 SD above the
+  average for a WR2 across the league"); and the thresholds in points in the key
+  under every table.
+- **A real defect it caught, and this is the one to remember.** A z-score has no
+  sense of scale. Ten squads whose slot average printed 22.1 differed in the
+  FIFTEENTH decimal — each is a sum of floats over a count — so sd ≈ 1e-15,
+  every squad sat most of a standard deviation from the mean, and the whole
+  column came out in full colour: a confident verdict painted on rounding noise.
+  `HEAT_MIN_SPREAD = 0.05` refuses any column narrower than half the printed
+  tenth. "The whole league is inside one printed digit" is a claim Tim can check
+  by looking.
+
+Applied to: Season by week (replacing ▼/▼▼ — `lo1`/`lo2`/`.lowmark` are gone),
+the all-teams grid's Proj avg columns and Total, the Stats standings (with **Opp
+Avg and Opp proj INVERTED**, since a high projected opponent is a hard schedule
+— the old local ramp painted the hardest schedule greenest, which is the
+irreconcilable conflict that retired it), and the Stats week grid with **one
+scale per week column**, so a week the whole league scored badly is not a red
+column.
+
+Deliberately not applied: the wire's two documented greens, the orange assumed
+mark, injury reds and Bye/OUT, the Trade page, and — argued at length in a
+comment Tim can overrule — **the `A week` grid's nine player columns**, whose
+cells already spend colour on four state meanings.
+
+### The weeks stay put between pages (`js/store.js`)
+
+His ask: "when you load something, it loads but then goes away and you have to
+re-load it every time you switch between sectoins … I would prefer if it does
+all the loading and checking data with espn as soon as you open up the page."
+
+Every page here is a separate document, so every cache in `js/season.js` died on
+every navigation and the next page re-bought the same weeks. The store is that
+cache in `localStorage`, wired in at the same seam as the cloud and **in front
+of it** — no page module changed, and all six pages benefit.
+
+**The freshness rule is two clocks, not one TTL**, and it is the whole of the
+design: a **played week is final for the season** (ESPN has decided it; it
+cannot change), a **week still to come is a forecast good for six hours**
+(pinned to the cloud sync interval, so a desktop's copy can never be staler than
+what the phone is handed), and **unknown is never final** — the safe direction.
+Which of the two a week is comes off the SCHEDULE, never the date, the same rule
+the card's Act row follows and for the same reason. Demo is never written to
+disk. Quota eviction drops other leagues first and played weeks last, and every
+failure is silent.
+
+**The Trade page prices itself on load.** The old "nothing in this function runs
+without a press — that is the whole point of it" is overruled, and both HANDOFF
+and PROGRESS said it. The button is now a re-read whose face names what it will
+spend. Worst case on a cold cache is 19-20 requests; within six hours, **zero**.
+The one refusal: it does not auto-load when the schedule could not be read,
+because the page then cannot tell which weeks are played and would spend
+eighteen unasked requests on numbers it is simultaneously telling him not to
+trust.
+
+Two things that came with it, both flagged rather than buried: a latent crash
+auto-pricing exposed (`runCombo`'s deferred work read `state.search.offers`
+after `runSearch` had nulled it — impossible while only a button press re-ran
+the search, certain once the page reads itself), and the opening week is now
+counted in "requests spent", because there is no button left to keep honest.
+
+### The trade card, and the custom trade box
+
+- **The week run covers weeks 1 → the last playoff week**, so the Act row is no
+  longer always empty — his complaint that "that whole row is useless". The
+  played weeks are bought in a second phase, after the priced span, so the
+  finder re-ranks first. Falsified: with the history load disabled the Act row
+  is `· · · ·`; with it, real numbers for weeks 1–4 and blank after.
+- **The starts count** is on the card's heading line, from the same
+  `optimalLineup` four other features share. Whose lineup it is about is decided
+  per week off a playerId → teamId index, so a man who changed hands is not
+  credited with another manager's weeks.
+- **The custom trade box**: both pickers in lineup order via `slotRows`, the
+  whole roster with no inner scroller, and the per-week figure under **its own
+  side** — that was a real layout fault, one `<p>` under a two-column row lines
+  up under the left column. The builder gained a "Week by week" button: the
+  pop-up worked from saved rows all along, but there was no way to see a deal
+  week by week without committing it to the list first, which is backwards.
+
+### Stats: two panels side by side, and the pairing question answered
+
+**Pairing has been working since 2026-09-18; Tim has a stale cache.** Measured
+in headless Edge over CDP: at 1500px, 1280px and 1000px every `.panel-row` sits
+side by side (715px each at 1500); at 900px and 390px they stack, with no
+horizontal overflow anywhere. The break is at about a 916px viewport
+(2 × 420 + 16), so a half-width window on a 1440 screen genuinely does stack —
+which may be what he saw.
+
+Score distribution and Projection accuracy now share a line, as he asked. **The
+honest cost: the page gets TALLER**, 3,804px → 4,178px at 1500px, because six
+panels were three tidy pairs and pairing the two he named leaves Cumulative luck
+and Score spread full-width. On a phone it changes nothing. His judgement about
+content beats the measurement, and the trade-off is written above the wrappers.
+
+### What running two agents in parallel cost this time
+
+It held again — no concurrent edit corrupted another's work — with the usual
+tax: one suite failed mid-run and passed alone immediately after, twice. One
+agent legitimately edited a file outside its set (`opp-check.mjs`'s cell reader
+had to strip ▲/▼ or a perfectly correct arithmetic assertion read "122.0 ▼"),
+which is HANDOFF's rule 4 case and was kept.
+
 ## 2026-09-19 — the floor drops to the 3rd man, and Proj avg stops being a player
 
 Three of Tim's asks, all pushed. The second and third are one idea: **the
