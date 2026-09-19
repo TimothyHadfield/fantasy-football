@@ -10,8 +10,10 @@
 // costs one request per week.
 //
 // It is also the file that decides where a page's numbers come from at all —
-// live ESPN, or the copy the desktop synced for the phone. See THE CLOUD
-// SUBSTITUTION below; no page module knows the difference, which is the point.
+// live ESPN, the copy the desktop synced for the phone, or the weeks this
+// browser already read on the page you just came from. See THE CLOUD
+// SUBSTITUTION and THE LOCAL STORE below; no page module knows the difference,
+// which is the point.
 
 import * as espn from './espn.js';
 import * as bridge from './bridge.js';
@@ -20,6 +22,9 @@ import * as capture from './capture.js';
 // The positional floor's RULES are pure and live here; `fetchFloors` below is
 // the one read that feeds them. See js/floor.js.
 import * as floor from './floor.js';
+// The weeks this browser has already read, kept across a navigation. See
+// js/store.js for the freshness rule and THE LOCAL STORE below for the seam.
+import * as store from './store.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -65,6 +70,119 @@ const IR_SLOT = 21;
 // finishes `docs/firebase-setup.md`), not signed in, offline, over quota, a
 // document that will not parse — all of them come back as "no cloud" and the
 // page behaves exactly as it does today. Same rule as `snapshots.fetchRemote`.
+
+// ===========================================================================
+// THE LOCAL STORE
+// ===========================================================================
+//
+// Tim, 2026-09-19: "when you load something, it loads but then goes away and
+// you have to re-load it every time you switch between sectoins".
+//
+// Every page of this site is a separate HTML document, so every cache above
+// dies on every navigation and the next page re-buys the same weeks from ESPN,
+// one request each. `js/store.js` is that cache moved into `localStorage`,
+// where it outlives a navigation, and it is wired in HERE for the same reason
+// the cloud is: **no page module may know where its numbers came from.**
+//
+// It goes in FRONT of everything, the bridge included. A week read four minutes
+// ago on the page you just came from is the same answer, and buying it again is
+// the whole of what he is complaining about.
+//
+//   0. the local store, for a week it holds that is still fresh
+//   1. the bridge  2. the cloud  3. ESPN directly — all exactly as before
+//
+// THE FRESHNESS RULE IS NOT ONE TTL, and js/store.js carries the argument: a
+// PLAYED week never changes again and is kept for the season; a week still to
+// come is a forecast that ESPN revises, and is good for six hours. Which of the
+// two a week is, is decided HERE, off the league SCHEDULE — see `markPlayed`
+// below — because this is the file that reads the schedule and the store is
+// pure. Unknown is never "final".
+//
+// EVERY FAILURE IS SILENT, exactly as above: no store, a full store, an entry
+// that will not parse — all of them mean the fetchers do what they have always
+// done. A page must never fail to render because a cache was unhappy.
+
+/**
+ * Which weeks have a result against them, learned from the schedule.
+ *
+ * `week -> true` once `fetchSchedule` has been through, keyed by league and
+ * season so another league's answer cannot be read as this one's. It is the
+ * ONE thing that decides whether a stored week is frozen history or a forecast
+ * with six hours on it, and it is a fact about the SCHEDULE rather than about
+ * today's date — the same rule `isDecidedEntry` applies and the player card's
+ * Act row follows, because the demo season hardcodes every game as played and a
+ * calendar test looks perfectly correct there while being wrong everywhere
+ * else.
+ *
+ * UNKNOWN IS NOT FINAL. A page that fetches a week before it has read the
+ * schedule stores it on the six-hour clock, which costs at worst one request
+ * nobody needed — against a played week frozen for the season on numbers that
+ * were still moving, which is the failure worth avoiding.
+ */
+const playedSeen = new Map(); // `${leagueId}::${season}` -> Set<week>
+
+function markPlayed(games) {
+  const { leagueId, season } = espn.getConfig();
+  if (!realLeague(leagueId)) return;
+  const key = `${leagueId}::${season}`;
+  const set = playedSeen.get(key) || new Set();
+  for (const g of games || []) if (g && g.played) set.add(Number(g.week));
+  playedSeen.set(key, set);
+}
+
+function weekIsFinal(week) {
+  const { leagueId, season } = espn.getConfig();
+  const set = playedSeen.get(`${leagueId}::${season}`);
+  return !!(set && set.has(Number(week)));
+}
+
+/**
+ * Is this league allowed on disk at all?
+ *
+ * Demo is not, and never will be: the sample season is generated inside the
+ * page, costs nothing to make, and writing it to storage would put a fake
+ * league's squads one key away from a real one's.
+ */
+function storable() {
+  const { leagueId, season } = espn.getConfig();
+  return realLeague(leagueId) ? { leagueId, season } : null;
+}
+
+/**
+ * What this browser is holding, and how old it is.
+ *
+ * Exported so a page can SAY it — rule 7 in HANDOFF.md, and the entire reason a
+ * cache is allowed on this site: a stale number that cannot be told from a
+ * fresh one is worse than no cache at all. It is a LIST rather than one
+ * timestamp, because a season where weeks 1–4 are frozen history and week 9 was
+ * read two minutes ago has no single age.
+ *
+ * Reading this does not change what any fetcher returns, so a page that ignores
+ * it is byte-for-byte the page it was — which is what keeps "no page module
+ * knows where its numbers came from" true while still letting one say so.
+ */
+export function storedWeeks() {
+  const cfg = storable();
+  return cfg ? store.list(cfg.leagueId, cfg.season) : [];
+}
+
+/**
+ * THROW THE STORED WEEKS AWAY — the "force a fresh read" half of his ask.
+ *
+ * "or choose to sync it with espn" / "until you re-load it". Pressing **Sync**
+ * in the connection bar already does this by another route: `buildCloudPayload`
+ * below re-reads every week from ESPN with `fresh: true` and writes what it
+ * gets back over the top, so the store cannot be older than the last sync. This
+ * is the same thing without the upload, for a page that wants to re-read
+ * without publishing.
+ */
+export function forgetStored() {
+  const cfg = storable();
+  if (cfg) store.forget(cfg.leagueId, cfg.season);
+}
+
+/** Re-exported so a page can print an age without importing the store itself. */
+export const describeAge = store.describeAge;
 
 /**
  * How many free agents a wire document holds, and the default a caller of
@@ -210,17 +328,40 @@ async function inBatches(items, size, fn) {
  * @param {number} week scoring period
  * @param {Object} [opts]
  * @param {Object} [opts.byes] `{proTeamId: byeWeek}`, already read
- * @returns {{week, teams: [{id, name, starters, bench, projectedTotal, actualTotal}]}}
+ * @param {boolean} [opts.fresh] skip the local store and re-read from source.
+ *   This is what makes **Sync** in the connection bar a force-refresh: see
+ *   `buildCloudPayload`, which is the only caller that passes it.
+ * @returns {{week, teams, from}} `from` is 'store' | 'cloud' | 'espn' — which
+ *   source answered, so a page can count REQUESTS rather than weeks and state a
+ *   cost that is true. Nothing else reads it, and a caller that ignores it gets
+ *   exactly what it always got.
  */
-export async function fetchWeekRosters(week, { byes } = {}) {
-  // The synced copy first when there is no bridge — see "THE CLOUD
+export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
+  // THE LOCAL STORE FIRST, ahead of the bridge — see "THE LOCAL STORE" above.
+  // A week this browser read on the page you just came from is the same answer,
+  // and it is the re-buying of it that Tim asked to be rid of. A week that is
+  // absent, stale or unreadable simply falls through to everything below,
+  // exactly as if this block were not here.
+  const cfg = storable();
+  if (cfg && !fresh) {
+    const held = store.readWeek(cfg.leagueId, cfg.season, week);
+    if (held && held.teams.length) return { week: Number(week), teams: held.teams, from: 'store' };
+  }
+
+  // The synced copy next when there is no bridge — see "THE CLOUD
   // SUBSTITUTION" at the top. A week the cloud does not hold falls through to
   // ESPN rather than being reported as empty: on a public league that still
   // works, and on a private one the page gets the same error it gets today.
   // A synced week was decoded — bye rule included — on the desktop.
   const down = await cloudDown();
   const synced = down && down.rosters instanceof Map ? down.rosters.get(Number(week)) : null;
-  if (synced && synced.length) return { week: Number(week), teams: synced };
+  if (synced && synced.length) {
+    // Kept, because the phone that reads the cloud is the device most likely to
+    // walk between four pages on one connection — and a synced week is already
+    // a copy, so storing it costs nothing but the bytes.
+    if (cfg) store.writeWeek(cfg.leagueId, cfg.season, week, synced, { final: weekIsFinal(week) });
+    return { week: Number(week), teams: synced, from: 'cloud' };
+  }
 
   const [raw, byeMap] = await Promise.all([
     espn.fetchRosters(week),
@@ -300,7 +441,14 @@ export async function fetchWeekRosters(week, { byes } = {}) {
     };
   });
 
-  return { week, teams };
+  // Kept for the next page. `final` is read off the SCHEDULE, never off the
+  // date — see `weekIsFinal` — and a week whose played-ness nobody has
+  // established yet is stored as a forecast, which is the safe direction.
+  if (cfg && teams.length) {
+    store.writeWeek(cfg.leagueId, cfg.season, week, teams, { final: weekIsFinal(week) });
+  }
+
+  return { week, teams, from: 'espn' };
 }
 
 /**
@@ -316,11 +464,19 @@ export async function fetchWeekRosters(week, { byes } = {}) {
  * a 13-week season does not open thirteen sockets at once, and a week ESPN
  * refuses is simply absent from the result rather than failing the whole set.
  *
+ * Since 2026-09-19 a week may also come out of `js/store.js` — this browser's
+ * own copy, kept across a navigation — in which case it costs nothing either.
+ * `onProgress` says WHICH source answered, so a page can state a cost that is
+ * true rather than counting a cache hit as a request.
+ *
  * @param {number[]} weeks
- * @param {function} [onProgress] (done, total, week)
+ * @param {function} [onProgress] (done, total, week, from) — `from` is
+ *   'store' | 'cloud' | 'espn' | 'gap'. Existing callers take three arguments
+ *   and are untouched.
+ * @param {boolean} [fresh] re-read from source, ignoring the local store
  * @returns {Promise<Map<number, Array>>} week -> the teams array for that week
  */
-export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
+export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {}) {
   const out = new Map();
   let done = 0;
 
@@ -334,27 +490,44 @@ export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
   // into a silent gap.
   const down = await cloudDown();
   if (down && down.rosters instanceof Map && weeks.some((w) => down.rosters.has(Number(w)))) {
+    const cfg = storable();
     for (const week of weeks) {
       const teams = down.rosters.get(Number(week));
-      if (teams && teams.length) out.set(Number(week), teams);
+      if (teams && teams.length) {
+        out.set(Number(week), teams);
+        if (cfg) store.writeWeek(cfg.leagueId, cfg.season, week, teams, { final: weekIsFinal(week) });
+      }
       done++;
-      if (onProgress) onProgress(done, weeks.length, week);
+      if (onProgress) onProgress(done, weeks.length, week, teams && teams.length ? 'cloud' : 'gap');
     }
     return out;
   }
 
+  // THE STORE IS ASKED PER WEEK, not in one pass up here, because it is
+  // `fetchWeekRosters` that owns the decision — one place decides what is fresh
+  // and what is final, or this file grows a second copy of the rule that is
+  // free to disagree with the first. What this loop does own is the honest
+  // REPORT of which source answered, which is how the Trade page's cost line
+  // can say "four requests" when it read thirteen weeks.
+  //
   // The byes once for the whole span — a failed read is `{}` and is not cached,
-  // so asking per week would re-ask a failing endpoint once per batch.
+  // so asking per week would re-ask a failing endpoint once per batch. They are
+  // read even when every week turns out to be in the store; that is one request
+  // against the risk of reading a whole span with the bye rule switched off.
   const byes = await fetchByeWeeks();
   await inBatches(weeks, 3, async (week) => {
+    let from = 'gap';
     try {
-      const { teams } = await fetchWeekRosters(week, { byes });
-      if (teams && teams.length) out.set(week, teams);
+      const got = await fetchWeekRosters(week, { byes, fresh });
+      if (got.teams && got.teams.length) {
+        out.set(week, got.teams);
+        from = got.from || 'espn';
+      }
     } catch {
       /* that week is unavailable; the caller sees a gap, not an exception */
     }
     done++;
-    if (onProgress) onProgress(done, weeks.length, week);
+    if (onProgress) onProgress(done, weeks.length, week, from);
   });
   return out;
 }
@@ -588,6 +761,11 @@ export async function fetchSchedule() {
       .filter((g) => g.tier === undefined || g.tier === null || g.tier === 'NONE')
       .map((g) => ({ ...g }));
     const [byWeek, weeks] = groupByWeek(games);
+    // Which weeks are banked, for the local store's freshness rule. A synced
+    // schedule carries `played` exactly as the live one does, so the phone
+    // freezes the same weeks the desktop does.
+    markPlayed(games);
+    markPlayed(down.schedule.playoffGames || []);
     return {
       ...down.schedule,
       teams: (down.schedule.teams || []).map((t) => ({ ...t })),
@@ -610,6 +788,13 @@ export async function fetchSchedule() {
     else playoffGames.push({ ...normaliseGame(m, nameById), tier: m.playoffTierType });
   }
   const [byWeek, weeks] = groupByWeek(regular);
+
+  // THE ONE PLACE THE LOCAL STORE LEARNS WHAT IS BANKED. A week with a result
+  // against it can never change again, so it is kept for the season; everything
+  // else is a forecast on a six-hour clock. See "THE LOCAL STORE" at the top,
+  // and note that this is read off the SCHEDULE and never off the date.
+  markPlayed(regular);
+  markPlayed(playoffGames);
 
   return {
     leagueName: parsed.name,
@@ -892,6 +1077,15 @@ export async function fetchByeWeeks() {
  * already has, and the reason a half-answered sync is a visible gap rather
  * than a failure.
  *
+ * IT ALWAYS READS FRESH, AND THAT IS WHAT MAKES **SYNC** A FORCE-REFRESH.
+ * Tim's ask had two halves — "does all the loading ... as soon as you open up
+ * the page OR CHOOSE TO SYNC IT WITH ESPN, and then it's saved there UNTIL YOU
+ * RE-LOAD IT". This is the second half, and it needed no new control: pressing
+ * Sync in the connection bar already comes through here, so it now re-reads
+ * every week from ESPN rather than being served this browser's own copies, and
+ * `fetchWeekRosters` writes what comes back over the top. A sync that published
+ * the cache it was meant to refresh would be the worst of both.
+ *
  * @param {Object} [opts]
  * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
  */
@@ -950,7 +1144,9 @@ export async function buildCloudPayload({ onProgress } = {}) {
   const rosters = new Map();
   await inBatches(weeks, 3, async (week) => {
     try {
-      const { teams } = await fetchWeekRosters(week, { byes });
+      // `fresh` — the store is skipped on the way in and refreshed on the way
+      // out. See the note above: this is the press that means "re-read".
+      const { teams } = await fetchWeekRosters(week, { byes, fresh: true });
       if (teams && teams.length) rosters.set(week, teams);
     } catch { /* that week is unavailable; it is a gap, not a failed sync */ }
     report(++done, total, `Week ${week} squads`);

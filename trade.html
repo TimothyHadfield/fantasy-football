@@ -430,15 +430,21 @@
   /* ------------------------------------------------------- custom trades */
   .cu-pick { margin-bottom: 12px; }
   .cu-head { margin: 0 0 6px; font-size: 12px; color: var(--dim); font-weight: 600; }
-  /* A CAP AND A SCROLLER, not the whole roster at full height: sixteen men on
-     each side is a third of a phone screen before the price is reached, and
-     the price is the point of the panel. */
+  /* THE WHOLE ROSTER, AT FULL HEIGHT, AND NO SCROLLER (Tim, 2026-09-19: "just
+     show all 16-17 positions, don't make a scrolling space so the view is
+     limited").
+
+     It used to be capped at 210px with its own scroller, on the reasoning that
+     sixteen men a side is a third of a phone screen before the price is
+     reached. That reasoning was answered rather than overruled: the PRICE is no
+     longer below the lists, it is inside each column directly under its own
+     roster, so a reader scrolling the page arrives at the number that belongs
+     to the list he has just read. A box that scrolls inside a page that scrolls
+     is also the thing HANDOFF's phone notes keep coming back to — a thumb gets
+     caught in the inner one. */
   .cu-roster {
     border: 1px solid var(--line);
     border-radius: var(--r-3, 6px);
-    max-height: 210px;
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
     background: var(--panel-2);
   }
   .cu-man {
@@ -458,11 +464,61 @@
   .cu-man:last-child { border-bottom: 0; }
   @media (hover: hover) { .cu-man:hover { background: var(--panel-3, #171a20); } }
   .cu-man input { margin: 0; width: 16px; height: 16px; flex: 0 0 auto; }
+  /* The lineup slot, in a fixed column so QB / RB1 / WR1 / BE line up down the
+     list and the names all start at the same place. Three characters wide
+     covers every label the league can produce (`slotRows` numbers a slot only
+     when the league starts more than one of it). */
+  .cu-man .sl {
+    flex: 0 0 34px;
+    color: var(--dim);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .02em;
+  }
   .cu-man .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cu-man .pos { color: var(--dim); font-size: 11px; flex: 0 0 auto; }
   .cu-man .pv { font-variant-numeric: tabular-nums; color: var(--dim); flex: 0 0 auto; }
   .cu-man.on { background: #16311f; }
   .cu-man.on .nm { font-weight: 650; }
+  /* A slot the squad cannot fill is a row, not a gap: it is what a hole looks
+     like. No checkbox, because there is nobody there to trade — so the names
+     are nudged across by the width the box would have taken. */
+  .cu-man.empty-slot { cursor: default; padding-left: 33px; }
+  .cu-man .muted { color: var(--line-2); font-style: italic; }
+
+  /* A column, so the two gains line up with each other even when one squad
+     carries a man more than the other. The roster takes the slack; without
+     this the two big numbers sit at different heights and stop reading as a
+     pair. */
+  .cu-side { display: flex; flex-direction: column; }
+  .cu-side .cu-roster { flex: 1 0 auto; }
+
+  /* WHAT THIS SIDE GAINS, under this side. Per week big, the rest-of-season
+     total small underneath — Tim's display rule, and the same order every
+     other figure on this page follows. The sign is always printed, so the
+     colour is a second cue and never the only one. */
+  .cu-gain {
+    margin: 8px 0 0;
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .cu-gain .cu-num {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .cu-gain .cu-num .unit { font-size: 13px; font-weight: 600; color: var(--dim); margin-left: 2px; }
+  /* `--accent`, which is the green every other "this went up" on this page
+     already uses (the pop-up's delta column, the week breakdown). A second
+     green would be a second meaning nobody declared. */
+  .cu-gain .cu-num.up { color: var(--accent); }
+  .cu-gain .cu-num.down { color: var(--err); }
+  .cu-gain .cu-num.flat { color: var(--dim); }
+  .cu-gain .cu-sub { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+
   /* Reserved, so ticking a man never moves the table under the pointer. */
   .cu-preview { min-height: 34px; margin: 12px 0 4px; font-size: 13px; line-height: 1.45; }
   .cu-preview .muted { color: var(--line-2); }
@@ -857,12 +913,17 @@
         <label for="teamSelect">Your team</label>
         <select id="teamSelect"></select>
       </div>
+      <!-- EVERY REMAINING WEEK IS THE DEFAULT since 2026-09-19 (Tim: "it
+           should not load if it doesn't price it"). It is the measure this page
+           is for — a trade is priced by the lineup you would field EACH WEEK —
+           and the only reason it was not the default was that it had to be paid
+           for by hand. The page pays for it on load now. -->
       <div class="select-md">
         <label for="measureSelect">Value on</label>
         <select id="measureSelect">
-          <option value="typical" selected>A typical week</option>
+          <option value="typical">A typical week</option>
           <option value="week">The selected week</option>
-          <option value="weeks">Every remaining week</option>
+          <option value="weeks" selected>Every remaining week</option>
         </select>
       </div>
       <div class="form-select">
@@ -870,19 +931,26 @@
         <select id="weekSelect"></select>
       </div>
     </div>
-    <!-- The weekly measure is the only control on this page that spends
-         anything, so it is the only one with a button in front of it. The cost
-         is on the button's face, and the full price is behind the toggle below
-         — neither is written after the fact. -->
+    <!-- THE PAGE PRICES ITSELF, AND THIS BUTTON IS THE RE-READ (2026-09-19).
+         It used to be the only thing here that would spend anything, and it had
+         to be pressed. Tim overruled that — "make this price action an automatic
+         action with the page" — and the reason it could be overruled is that the
+         weeks are now kept in this browser between pages (js/store.js), so the
+         second visit of the day spends nothing.
+
+         What is left for a button is the OTHER half of his ask — "until you
+         re-load it" — so this one throws the stored weeks away and reads them
+         again. Its face still carries the number it is about to spend, and the
+         line beside it says how old the numbers on screen are. -->
     <div class="cost-row" id="costRow">
-      <button type="button" id="loadWeeks">Price every remaining week</button>
+      <button type="button" id="loadWeeks">Re-read every week from ESPN</button>
       <span class="spent" id="costSpent"></span>
     </div>
     <div id="sourceStatus" class="panel-note"></div>
     <!-- Anything that changes what a number means stays in view. -->
     <p class="panel-note warn-line" id="costWarn" hidden></p>
     <details class="explain">
-      <summary>What pricing every week costs</summary>
+      <summary>Which weeks are read, what they cost, and how old they are</summary>
       <p class="panel-note" id="costNote"></p>
     </details>
   </section>
@@ -1008,27 +1076,50 @@
         <select id="cuTeamB"></select>
       </div>
       <div class="tool-group">
+        <!-- THE SAME POP-UP EVERY OTHER TRADE ON THIS PAGE OPENS (Tim,
+             2026-09-19: "allow a trade analysis (identical to the box-pop up
+             that appears when you click on a pre-made trade) for this custom
+             trade just like any other trade that we have").
+
+             A SAVED row already did. The deal being BUILT did not, and that is
+             the gap he found: there was no way to look at a deal week by week
+             without committing it to the list first. -->
+        <!-- `data-open` is the key `closeDeal()` puts the keyboard back on, the
+             same contract the finder's own "Week by week" buttons use. Without
+             it, closing the pop-up would drop focus to the top of the page. -->
+        <button type="button" id="cuOpen" data-open="cu-build" disabled>Week by week</button>
         <button type="button" id="cuSave">Save this trade</button>
         <button type="button" id="cuClear">Clear</button>
       </div>
     </div>
 
     <!-- Two roster lists, side by side on a laptop and stacked on a phone by
-         the same `.panel-row` rule the pages use for their panels. -->
+         the same `.panel-row` rule the pages use for their panels.
+
+         EACH SIDE CARRIES ITS OWN GAIN, under its own roster. Tim, 2026-09-19:
+         "show the single # a week ... big and colorized in green or red under
+         their side of the trade (right now they're both under the first
+         players trade)". That was a real layout fault: both figures lived in
+         one paragraph below the whole row, which lines up under the LEFT
+         column on a laptop and reads as though both belonged to it. -->
     <div class="panel-row cu-lists" style="--col-min: 260px">
       <div class="cu-side">
         <p class="cu-head" id="cuHeadA">Sends</p>
         <div class="cu-roster" id="cuListA"></div>
+        <p class="cu-gain" id="cuGainA" aria-live="polite"></p>
       </div>
       <div class="cu-side">
         <p class="cu-head" id="cuHeadB">Sends</p>
         <div class="cu-roster" id="cuListB"></div>
+        <p class="cu-gain" id="cuGainB" aria-live="polite"></p>
       </div>
     </div>
 
-    <!-- What the deal in the pickers is worth, before it is saved. Always in
-         the DOM with its height reserved, so ticking a player cannot make the
-         panel jump under the finger doing the ticking. -->
+    <!-- What the deal in the pickers IS — who moves which way, and over which
+         weeks. The numbers are under their own squads above; this is the half
+         the two columns cannot say between them. Always in the DOM with its
+         height reserved, so ticking a player cannot make the panel jump under
+         the finger doing the ticking. -->
     <p class="cu-preview" id="cuPreview" aria-live="polite"></p>
 
     <div class="table-scroll" id="cuWrap" hidden><table id="cuTable">

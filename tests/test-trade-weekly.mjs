@@ -23,8 +23,12 @@ import { slotCountsFromLineups } from '../js/projection.js';
 import { optimalLineup } from '../js/forecast.js';
 import {
   typicalWeek, lineupValue, slotsForLeague,
-  seasonLineupValue, priceTradeAcrossWeeks, bestCombo, findTrades,
+  seasonLineupValue, priceTradeAcrossWeeks, bestCombo, findTrades, mergeComboByPartner,
 } from '../js/trade.js';
+// The positional floor, for the section at the foot of this file: the combo
+// packer has to be priced on the SAME basis as the rows above it, and for a day
+// it was not. See "THE FLOOR HAS TO REACH THE COMBO".
+import { positionFloors } from '../js/floor.js';
 
 let pass = 0;
 const fails = [];
@@ -649,6 +653,153 @@ ok('enough real combos were packed to mean something', combosChecked >= 3, `${co
 ok('and on real rosters the naive sum really does overstate at least one of them',
   disagreements > 0,
   'no multi-trade combo differed from the sum of its parts — check the fixture, not the engine');
+
+// ===========================================================================
+// THE FLOOR HAS TO REACH THE COMBO — and for a day it did not
+// ===========================================================================
+//
+// Tim, 2026-09-19: "Right now the best combination is actually really bad and
+// doesn't select the best combination at all. For example right now the best
+// combo gives me a single trade that is a 2-1 that has a lower +/week than the
+// top trade."
+//
+// He was right and the cause was one missing option. `findTrades` has taken
+// `floors` since the positional floor landed on 2026-09-18, and the Trade page
+// passes it — so every row in the finder is priced with the waiver floor
+// applied. `bestCombo` did not accept the option AT ALL, so it priced every
+// packing, and every partner check, WITHOUT it. One page, two questions, and no
+// warning: the panel was ranking packings on a basis the table above it does
+// not use, and printing a number nobody could reconcile against that table.
+//
+// Measured on the demo league over weeks 5-13 with a stand-in wire, before the
+// fix: Autumn's top row read +1.74 a week while the combo priced that very same
+// deal at +0.11 and printed a best packing of +0.57 — LOWER than the row above
+// it, which is exactly the sentence he wrote. In another squad it ran the other
+// way and printed +7.58 against a top row of +1.37.
+//
+// SO THE INVARIANTS BELOW ARE THE FIX MADE FALSIFIABLE:
+//
+//   1. THE COMBO IS NEVER WORSE THAN THE BEST SINGLE OFFER. It cannot be —
+//      taking only that one deal is a packing the search considers — so a combo
+//      that comes back smaller is proof it is pricing on another basis. This is
+//      Tim's own sentence turned into an assertion.
+//   2. A ONE-DEAL PACKING'S MERGED ROW IS THAT PACKING'S OWN GAIN, and no
+//      merged row is ever worth more than the packing it belongs to. The merged
+//      rows are what the page PRINTS, so this is where a basis mismatch becomes
+//      visible to a reader.
+//   3. The packing's own engine prices the top offer exactly as the finder did,
+//      which is the contract the other two rest on.
+//
+// FALSIFIED, and here is exactly what happened: take `floors` back out of the
+// two `priceTradeAcrossWeeks` calls inside `bestCombo`'s `price()` and run this
+// file. Seven assertions fail, among them
+//   "Autumn: the best combo is never worse than the best single trade —
+//    combo 0 vs top offer 5.8"
+// which is Tim's report in one line: a panel recommending NOTHING while a +5.8
+// deal sits in the table directly above it.
+{
+  // A wire deep enough for `positionFloors` to find a third man at a position
+  // — the rank the floor is taken at since 2026-09-19 — and pitched high
+  // enough to bite on the demo squads. It is nothing like a real wire on
+  // purpose, exactly as `an-test`'s floors are: a page or an engine that
+  // ignored these could not pass by coincidence.
+  const wire = [];
+  for (const [pos, top] of [['QB', 17], ['RB', 12], ['WR', 12], ['TE', 9], ['DST', 9], ['K', 9]]) {
+    for (let i = 0; i < 5; i++) {
+      wire.push({
+        playerId: `wire-${pos}-${i}`, name: `Wire ${pos}${i}`, position: pos,
+        projected: top - i * 0.5, injuryStatus: 'ACTIVE',
+      });
+    }
+  }
+  const floors = positionFloors(wire, { week: SEASON_WEEKS[0] });
+  ok('the stand-in wire really does produce floors', floors.size >= 5, `${floors.size} positions`);
+
+  let checked = 0;
+  let wouldHaveFailed = 0;
+  for (const me of demoTeams) {
+    const res = findTrades({
+      teams: demoTeams, myTeamId: me.id, slots: demoSlots,
+      weeks: SEASON_WEEKS, projFor: demoProjFor, floors,
+    });
+    if (res.offers.length < 2) continue;
+    checked++;
+
+    const packed = bestCombo(res.offers, {
+      players: me.players, slots: demoSlots, weeks: SEASON_WEEKS, projFor: demoProjFor,
+      teams: demoTeams, floors,
+    });
+
+    // 1. THE SINGLETON. Priced by the combo's own engine, against the offer's
+    //    own gain out of the finder. To the tenth, because both round there.
+    const top = res.offers[0];
+    const solo = priceTradeAcrossWeeks({
+      players: me.players, send: top.send, receive: top.receive,
+      slots: demoSlots, weeks: SEASON_WEEKS, projFor: demoProjFor, floors,
+    }).delta;
+    close(solo, top.myGain, 0.1,
+      `${me.name}: the combo's engine prices the top offer exactly as the finder did`);
+
+    // What the same comparison would have said with the floors dropped — which
+    // is what the panel was doing. Counted rather than asserted per squad,
+    // because not every squad's floor moves its top deal.
+    const unfloored = priceTradeAcrossWeeks({
+      players: me.players, send: top.send, receive: top.receive,
+      slots: demoSlots, weeks: SEASON_WEEKS, projFor: demoProjFor,
+    }).delta;
+    if (Math.abs(unfloored - top.myGain) > 0.1) wouldHaveFailed++;
+
+    // 2. THE INVARIANT. Every singleton is a candidate packing, so the best
+    //    packing is at least as good as the best single deal.
+    ok(`${me.name}: the best combo is never worse than the best single trade`,
+      packed.delta + 0.05 >= solo, `combo ${packed.delta} vs top offer ${solo}`);
+
+    // And the merged rows the page actually PRINTS are priced on the same basis
+    // too — a merged row is a re-price, so it is a third place the floor could
+    // have been dropped and nobody would have seen it.
+    const merged = mergeComboByPartner(packed.best, {
+      players: me.players, slots: demoSlots, weeks: SEASON_WEEKS, projFor: demoProjFor, floors,
+    });
+    if (packed.best.count === 1 && merged.length === 1) {
+      close(merged[0].myGain, packed.best.delta, 0.1,
+        `${me.name}: a one-deal packing's merged row is the packing's own gain`);
+    }
+    // A merged row can never be worth more than the whole packing it came from.
+    ok(`${me.name}: no merged row claims more than the packing it belongs to`,
+      merged.every((m) => m.myGain <= packed.best.delta + 0.1),
+      merged.map((m) => `${m.partner.name} ${m.myGain}`).join(', ') + ` vs ${packed.best.delta}`);
+
+    // 3. `requirePartnersGain` IS NOW ASKING THE SAME QUESTION THE FINDER ASKED,
+    //    and this is the assertion that says so rather than assuming it.
+    //
+    //    The finder only returns offers where BOTH squads improve, on these
+    //    weeks with these floors. So a packing of exactly that one offer is a
+    //    win-win by construction, and `requirePartnersGain` cannot refuse it —
+    //    which means a squad with an offer can never come back with a packing
+    //    of NOTHING. With the partner side unfloored it could and did: the
+    //    check was re-deriving his lineup on a basis the certification had not
+    //    used, and throwing out deals it had already approved.
+    //
+    //    "Making none of them" remains a legal answer in general (there is a
+    //    scenario above that asserts it) — but not when the offers themselves
+    //    were certified on this very basis.
+    ok(`${me.name}: a squad with offers gets a packing, not an empty one`,
+      packed.count >= 1,
+      `${res.offers.length} offers certified as win-wins, packing of ${packed.count}`);
+    ok(`${me.name}: no partner in the floored packing ends up worse off`,
+      packed.best.partners.every((p) => p.delta >= -0.05),
+      packed.best.partners.map((p) => `${p.partner.name} ${p.delta}`).join(', '));
+  }
+
+  ok('enough squads had a floored combo to mean anything', checked >= 3, `${checked}`);
+  // THE FIXTURE IS PROVED TO BITE. If the floor made no difference to any top
+  // deal, every assertion above would pass with the floors thrown away and the
+  // whole section would be measuring nothing.
+  ok('and the floor genuinely moves at least one of those top deals, so the ' +
+    'assertions above could actually fail without it',
+    wouldHaveFailed > 0,
+    'the stand-in wire is too weak to change any top offer — fix the fixture, not the engine');
+}
 
 // ---- the default path is untouched ----------------------------------------
 //

@@ -1309,6 +1309,28 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
  * disjointness prunes it. Twelve is comfortably exhaustive and is already more
  * trades than any league makes in a week — and because the pool is sorted by
  * gain first, the offers dropped are the ones nobody would have proposed.
+ *
+ * MEASURED 2026-09-19, because "the offers dropped are the ones nobody would
+ * have proposed" was an argument rather than a number, and it is only half
+ * true. Demo league, weeks 5-13, best packing at cap 12 against cap 24:
+ *
+ *   no floors     avg pool 34 offers / 6.4 partners
+ *                 the cap costs gain on 7 of 10 squads, +1.31 a week on average
+ *                 (worst: 5.99 -> 8.64 a week, 2 trades -> 6)
+ *   floors x0.85  avg pool 16 offers / 5.2 partners — 1 squad, +0.31 a week
+ *   floors x1.0   avg pool 13 offers / 4.2 partners — none at all
+ *
+ * So the cap binds on an UNFLOORED pool and stops binding once the positional
+ * floor is in, because the floor legitimately thins the pool below twelve: a
+ * marginal upgrade over a man you could stream off the wire really is worth
+ * almost nothing, and the finder stops reporting it. Tim's real league reads a
+ * live wire, so it is the floored column he is on.
+ *
+ * IT IS DELIBERATELY NOT WIDENED. Twenty-four offers is 2^24 subsets before
+ * disjointness, the packing cap below starts tripping, and the gain it buys is
+ * on the one configuration (no floors) that no live league is in. If demo ever
+ * grows a waiver wire of its own — noted as open in PROGRESS.md — this stops
+ * being an asymmetry worth thinking about at all.
  */
 const COMBO_OFFER_CAP = 12;
 
@@ -1365,6 +1387,28 @@ export function bestCombo(offers, {
   requirePartnersGain = true,
   onePerPartner = false,
   zeroIsBye = true,
+  // THE POSITIONAL FLOOR, AND ITS ABSENCE HERE WAS A REAL DEFECT (Tim,
+  // 2026-09-19: "the best combination is actually really bad and doesn't select
+  // the best combination at all ... the best combo gives me a single trade that
+  // is a 2-1 that has a lower +/week than the top trade").
+  //
+  // He is right, and this option is the whole of why. `findTrades` has taken
+  // `floors` since the floor landed on 2026-09-18 and js/trade-page.js passes
+  // it, so every row in the finder is priced with the waiver floor applied.
+  // This function did not accept the option at all, so `price()` below was
+  // pricing every packing WITHOUT it — for his side and for the partner check.
+  // **One page, two different questions, and no warning.** Measured on the demo
+  // league over weeks 5–13: the top offer priced the finder's way came out at
+  // mine +5.5 / theirs +4.0, and the very same offer priced the combo's way
+  // came out at mine −10.9 / theirs +18.0. A packing ranked on the second basis
+  // and printed beside rows ranked on the first cannot agree with them, and the
+  // number it prints is one nobody can reconcile against the table above it.
+  //
+  // It is `null` by default, which is a no-op — every function it reaches is a
+  // no-op without floors — so demo, every stub and every archived reading are
+  // byte-for-byte what they were. That is the same guarantee js/floor.js makes
+  // everywhere else.
+  floors = null,
   maxOffers = COMBO_OFFER_CAP,
   maxPackings = COMBO_PACKING_CAP,
 } = {}) {
@@ -1390,7 +1434,7 @@ export function bestCombo(offers, {
     const send = chosen.flatMap((c) => c.offer.send);
     const receive = chosen.flatMap((c) => c.offer.receive);
     const pricing = priceTradeAcrossWeeks({
-      players, send, receive, slots, weeks: ws, projFor, zeroIsBye,
+      players, send, receive, slots, weeks: ws, projFor, zeroIsBye, floors,
     });
 
     const partners = [];
@@ -1406,9 +1450,14 @@ export function bestCombo(offers, {
       for (const [id, side] of byPartner) {
         const team = byId.get(id);
         if (!team) continue;
+        // THE PARTNER'S SIDE TAKES THE FLOOR TOO, and it has to be the same
+        // floor. `requirePartnersGain` drops a packing that leaves a manager
+        // worse off, and with his side unfloored it was rejecting packings
+        // built out of deals the finder had already certified as win-wins —
+        // two functions disagreeing about one manager's own lineup.
         const p = priceTradeAcrossWeeks({
           players: team.players, send: side.out, receive: side.in,
-          slots, weeks: ws, projFor, zeroIsBye,
+          slots, weeks: ws, projFor, zeroIsBye, floors,
         });
         partners.push({
           partner: team, delta: p.delta,
@@ -1564,10 +1613,14 @@ export function bestCombo(offers, {
  * @param {number[]} opts.weeks
  * @param {function} opts.projFor
  * @param {boolean|function} [opts.zeroIsBye]
+ * @param {Map} [opts.floors] the positional floor — THE SAME ONE `bestCombo`
+ *   and `findTrades` were given. A merged row priced without it would carry a
+ *   gain the packing it belongs to does not agree with, which is the defect
+ *   Tim found one level up on 2026-09-19.
  * @returns {Array} offers shaped like `findTrades`', plus `merged`/`mergedFrom`
  */
 export function mergeComboByPartner(entry, {
-  players, slots, weeks, projFor, zeroIsBye = true,
+  players, slots, weeks, projFor, zeroIsBye = true, floors = null,
 } = {}) {
   if (!entry || !Array.isArray(entry.combo) || !entry.combo.length) return [];
   const ws = Array.isArray(weeks) ? weeks.slice() : [];
@@ -1616,7 +1669,7 @@ export function mergeComboByPartner(entry, {
 
       // THE RE-PRICE. Everything at once, against the roster as it stands.
       const pricing = priceTradeAcrossWeeks({
-        players, send, receive, slots, weeks: ws, projFor, zeroIsBye,
+        players, send, receive, slots, weeks: ws, projFor, zeroIsBye, floors,
       });
       const his = hisSide.get(group.partner ? group.partner.id : null) || null;
 

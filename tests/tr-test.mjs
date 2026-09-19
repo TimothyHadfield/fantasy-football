@@ -509,6 +509,17 @@ function readCombo(document) {
       send: r.send.map((m) => m.id).filter((v) => v !== null),
       receive: r.receive.map((m) => m.id).filter((v) => v !== null),
     })),
+    // THE HEADLINE, PER WEEK — the figure the whole packing is worth, off the
+    // big number the panel leads with. Read as a number so it can be compared
+    // against the finder's own rows, which is the comparison Tim's 2026-09-19
+    // report is about: a combo can never be worth less than the best single
+    // offer, because every singleton is a packing the search considers.
+    headlineGain: (() => {
+      const big = best.querySelector('.combo-head .big');
+      if (!big) return null;
+      const n = Number(text(big).replace('−', '-').replace('+', ''));
+      return Number.isFinite(n) ? n : null;
+    })(),
     alt: text(alt),
     weeks: readWeekTable(best),
     body: text(body),
@@ -529,6 +540,29 @@ function openCard(document, selector) {
     heading: text(el.querySelector('.tc-head')),
     weeks: [...el.querySelectorAll('.tc-run thead th')].map(text).filter((t) => /^\d+$/.test(t)),
     projs: [...el.querySelectorAll('.tc-run tbody td')].map(text),
+    // THE THREE ROWS, KEPT APART. The card draws the weeks, then Proj, then
+    // Act, and `projs` above flattens all of them — which is fine for counting
+    // cells and useless for the one claim Tim made on 2026-09-19: "it shows the
+    // act in the preview, but it doesn't actually display any previous weeks in
+    // the chart, so that whole row is useless." The Act row can only ever be
+    // filled from a week already PLAYED, so telling it from the Proj row is the
+    // whole test. A wrapped card has several `.tc-run` tables; the rows are
+    // read by their own label so the lines join up rather than being counted
+    // as more rows.
+    rows: (() => {
+      const out = new Map();
+      // `tbody tr` ALONE MISSES THE ACT ROW, which is the one this is for: the
+      // card puts Proj in a `<tbody>` and Act in a `<tfoot>` (js/player-card.js,
+      // so the two bands read apart on every wrapped line). A selector that
+      // only looked at the body would report the Act row as absent and every
+      // assertion about it would pass by being about nothing.
+      for (const tr of el.querySelectorAll('.tc-run tr')) {
+        const label = text(tr.querySelector('th')) || '?';
+        const cells = [...tr.querySelectorAll('td')].map(text);
+        out.set(label, (out.get(label) || []).concat(cells));
+      }
+      return Object.fromEntries(out);
+    })(),
     hovered: text(man),
   };
 }
@@ -570,10 +604,21 @@ const SCENARIOS = {
     out.headB = text($('cuHeadB'));
     out.listA = $('cuListA').querySelectorAll('.cu-man').length;
     out.listB = $('cuListB').querySelectorAll('.cu-man').length;
+    // BOTH SIDES AS A LINEUP (Tim, 2026-09-19: "display the two teams players
+    // ... with order of positions and overall starting lineup (QB, RB1, RB2,
+    // ... BE, BE, BE, etc.)"). The slot labels in document order are what the
+    // claim is about, so they are read rather than the names.
+    out.slotsA = [...$('cuListA').querySelectorAll('.cu-man .sl')].map(text);
+    out.slotsB = [...$('cuListB').querySelectorAll('.cu-man .sl')].map(text);
+    out.openDisabledAtFirst = $('cuOpen').disabled;
 
-    // One man each way.
-    const boxA = $('cuListA').querySelector('input[type="checkbox"]');
-    const boxB = $('cuListB').querySelector('input[type="checkbox"]');
+    // One man each way. NOT the first checkbox any more — the list is a lineup
+    // now, so the first row is the quarterback and picking him on both sides
+    // makes a QB-for-QB deal, which the engine prices at nearly nothing and
+    // would make the gain assertions below vacuous.
+    const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+    const boxA = boxes('cuListA')[0];
+    const boxB = boxes('cuListB')[1] || boxes('cuListB')[0];
     out.men = { a: boxA.value, b: boxB.value };
     boxA.checked = true;
     fire(boxA, 'change');
@@ -582,9 +627,35 @@ const SCENARIOS = {
     fire(boxB, 'change');
     out.preview = text($('cuPreview'));
     out.saveEnabled = !$('cuSave').disabled;
+    out.openEnabled = !$('cuOpen').disabled;
+    // EACH SIDE'S FIGURE, UNDER ITS OWN SIDE (Tim: "right now they're both
+    // under the first players trade"). Read out of the two containers, which is
+    // the only way to tell "under its own side" from "both in one paragraph".
+    const gain = (id) => ({
+      num: text($(id).querySelector('.cu-num')),
+      cls: ($(id).querySelector('.cu-num') || {}).getAttribute
+        ? $(id).querySelector('.cu-num').getAttribute('class')
+        : '',
+      sub: text($(id).querySelector('.cu-sub')),
+    });
+    out.gainA = gain('cuGainA');
+    out.gainB = gain('cuGainB');
     // The list must NOT have been rebuilt under the finger that ticked it.
-    out.stillChecked = $('cuListA').querySelector('input[type="checkbox"]').checked;
+    out.stillChecked = boxes('cuListA')[0].checked;
     out.litRow = ($('cuListA').querySelector('.cu-man').getAttribute('class') || '').includes('on');
+
+    // THE BUILDER'S OWN POP-UP — the deal being built, not one already saved.
+    // That is the half of his 2026-09-19 ask that did not exist: a saved row
+    // has opened the finder's pop-up since 2026-09-18, and there was no way to
+    // look at a deal week by week BEFORE committing it to the list.
+    fire($('cuOpen'), 'click');
+    out.builderModal = {
+      open: !$('dealModal').hidden,
+      title: text($('dealTitle')),
+      weeks: $('dealBody').querySelectorAll('tbody tr').length,
+    };
+    const closeBuilder = $('dealClose');
+    if (closeBuilder) fire(closeBuilder, 'click');
 
     fire($('cuSave'), 'click');
     out.rowsAfterSave = [...$('cuRows').querySelectorAll('tr')].map((tr) => ({
@@ -604,8 +675,8 @@ const SCENARIOS = {
     out.stored = readPrefs()['trade.custom'] || null;
 
     // The same deal a second time is one deal.
-    const boxA2 = $('cuListA').querySelector('input[type="checkbox"]');
-    const boxB2 = $('cuListB').querySelector('input[type="checkbox"]');
+    const boxA2 = boxes('cuListA')[0];
+    const boxB2 = boxes('cuListB')[1] || boxes('cuListB')[0];
     boxA2.checked = true; fire(boxA2, 'change');
     boxB2.checked = true; fire(boxB2, 'change');
     fire($('cuSave'), 'click');
@@ -735,7 +806,18 @@ const SCENARIOS = {
   },
 
   /**
-   * The weekly measure on demo data: pressed for, then read everywhere.
+   * The weekly measure on demo data — WHICH THE PAGE NOW BUYS ITSELF.
+   *
+   * Tim, 2026-09-19: "make this price action an automatic action with the page
+   * (it should not load if it doesn't price it)". So this scenario's `after` is
+   * what the page looks like having been left alone, and its `scalar` is what
+   * it looks like once a reader deliberately picks one of the cheap measures.
+   *
+   * THAT IS THE REVERSE OF WHAT IT USED TO BE, and it is why the comparison
+   * still works: the two bases have to produce genuinely different numbers or
+   * one of them is being ignored, and it does not matter which way round they
+   * are read. Every week is in hand either way by then, so switching costs
+   * nothing and the difference cannot be a loading artefact.
    *
    * Demo generates its weeks inside the page, so this costs no requests — which
    * is exactly why it is the scenario that can check the whole of the weekly
@@ -744,19 +826,9 @@ const SCENARIOS = {
    */
   async weekly() {
     const { document, errors, fetchCalls } = await boot();
-    const before = {
-      cost: readCost(document),
-      depth: readDepth(document),
-      trades: readTrades(document),
-      combo: readCombo(document),
-      weeks: [...document.querySelectorAll('#weekSelect option')].map((o) => o.getAttribute('value')),
-      week: document.getElementById('weekSelect').value,
-    };
-
-    document
-      .getElementById('loadWeeks')
-      .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(12000); // 13 weeks of lineup fills per offer; it is not quick
+    // Long enough for the auto-load AND the re-rank behind it: thirteen weeks
+    // of lineup fills per offer is seconds, not milliseconds.
+    await settle(12000);
 
     const after = {
       cost: readCost(document),
@@ -768,7 +840,29 @@ const SCENARIOS = {
       depthNote: text(document.getElementById('depthNote')),
       spares: [...document.querySelectorAll('#spareStrip .spare-chip[data-tip]')].map(text),
       measure: document.getElementById('measureSelect').value,
+      weeks: [...document.querySelectorAll('#weekSelect option')].map((o) => o.getAttribute('value')),
+      week: document.getElementById('weekSelect').value,
     };
+
+    // Now DOWN to a scalar measure, deliberately chosen. Nothing is fetched —
+    // every week is already held — so any difference below is the measure and
+    // nothing else.
+    const measure = document.getElementById('measureSelect');
+    measure.value = 'typical';
+    fire(measure);
+    await settle(2000);
+    const scalar = {
+      cost: readCost(document),
+      depth: readDepth(document),
+      trades: readTrades(document),
+      combo: readCombo(document),
+      measure: measure.value,
+    };
+    // And back, so everything below reads the weekly page.
+    measure.value = 'weeks';
+    fire(measure);
+    await settle(12000);
+    const before = scalar;
 
     // Click the first offer: the drill-down is the whole of ask 3.
     const row = document.querySelector('#tradeTable tbody tr');
@@ -814,7 +908,9 @@ const SCENARIOS = {
       document.dispatchEvent(ev);
     };
 
-    click(document.getElementById('loadWeeks'));
+    // The page buys its own weeks now (2026-09-19) and re-ranks behind the
+    // first paint, so this waits rather than pressing. The press is a RE-READ
+    // and would only spend the same weeks again.
     await settle(12000);
 
     // Nothing has been clicked yet, so there must be no dialog and no table.
@@ -899,12 +995,24 @@ const SCENARIOS = {
    * neither move the page off the measure he chose nor re-run the search (which
    * would shut the pop-up he just opened).
    *
-   * `weeksChosen` is the other half: the measure already SET to every remaining
-   * week (it persists) but never pressed for. Then the list genuinely does need
-   * re-ranking once the weeks land — and the pop-up has to survive that.
+   * SINCE 2026-09-19 THE PAGE BUYS THE WEEKS ITSELF, so "unpriced" is no longer
+   * a state a reader can be left in — but the claim underneath it is not about
+   * the button at all, and it is still exactly right: a reader who has chosen
+   * one of the cheap measures must still get the week-by-week numbers when he
+   * clicks a deal, and the page must not move him off the measure he chose to
+   * give them to him. So the seed is the OTHER way round now: `trade.measure`
+   * pinned to a typical week, which is the deliberate choice the default is no
+   * longer.
+   *
+   * `weeksChosen` is the second half: the page left entirely alone, on the
+   * weekly measure it now defaults to. The list is re-ranked week by week
+   * behind the reader, and a pop-up opened while that is happening has to
+   * survive it.
    */
   async unpriced(weeksChosen = false) {
-    const seed = weeksChosen ? { 'ff.prefs': JSON.stringify({ 'trade.measure': 'weeks' }) } : null;
+    const seed = weeksChosen
+      ? null
+      : { 'ff.prefs': JSON.stringify({ 'trade.measure': 'typical' }) };
     const { document, errors, fetchCalls } = await boot('trade.html', '', seed);
     const before = {
       deal: readDeal(document),
@@ -999,6 +1107,9 @@ const SCENARIOS = {
     const { document, errors } = await boot('trade.html', '', seed);
     const stub = await import('./tr-stub-season.mjs');
 
+    // THE PAGE HAS ALREADY BOUGHT ITS WEEKS by the time `boot` returns (Tim,
+    // 2026-09-19), so `before` is what a reader is handed having pressed
+    // nothing at all — which is the point of the whole change.
     const before = {
       week: document.getElementById('weekSelect').value,
       badge: text(document.getElementById('modeBadge')),
@@ -1006,12 +1117,43 @@ const SCENARIOS = {
       trades: readTrades(document),
       requests: stub.calls.week.length,
       asked: stub.calls.week.slice(),
+      measure: document.getElementById('measureSelect').value,
     };
 
+    // THE CARD, BEFORE ANY DEAL IS CLICKED. That timing is the whole point.
+    //
+    // This is the one scenario where "the whole season" and "the weeks this
+    // page prices" are genuinely different sets — the span is weeks 5-14 and
+    // weeks 1-4 have results — so it is the only place the Act row can be
+    // proved to have stopped being empty. On demo the two sets coincide and the
+    // claim is vacuous.
+    //
+    // And it has to be read BEFORE the deal below is opened, because opening a
+    // deal has always bought the played weeks for the pop-up's own reference
+    // rows. A card read after that click would pass on the old code too — the
+    // defect Tim reported is a card hovered in the finder, which is where
+    // almost every card on this page is hovered.
+    const liveCard = openCard(document, '#tradeTable .man[data-tip]');
+
+    // The scalar measure, deliberately chosen. Nothing is fetched — every week
+    // is in hand — so any difference is the measure and nothing else.
+    const measureSel = document.getElementById('measureSelect');
+    measureSel.value = 'typical';
+    fire(measureSel);
+    await settle(1500);
+    const scalar = {
+      trades: readTrades(document),
+      requests: stub.calls.week.length,
+    };
+    measureSel.value = 'weeks';
+    fire(measureSel);
+    await settle(6000);
+
+    // And the RE-READ, which is what the button does now.
     document
       .getElementById('loadWeeks')
       .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(6000);
+    await settle(8000);
 
     const after = {
       cost: readCost(document),
@@ -1074,7 +1216,7 @@ const SCENARIOS = {
     espnClick.outcomeDismissed = !!document.getElementById('espnOutcome').hidden;
 
     return {
-      errors, before, after, deal, dealLinkKeyed, espnClick,
+      errors, before, after, scalar, deal, dealLinkKeyed, espnClick, liveCard,
       offer: idx >= 0 ? after.trades[idx] : null,
       rosters: { 1: stub.rosterIds(1), 2: stub.rosterIds(2), 3: stub.rosterIds(3) },
       // Every man the page drew anywhere, so the per-week arithmetic and the
@@ -1089,11 +1231,19 @@ const SCENARIOS = {
       // that puts a quarterback on screen — which is what the D/ST rule is
       // checked AGAINST, since a rule that suppressed every tag would pass a
       // test that only looked at defences.
-      menBefore: before.trades.flatMap((t) => [...t.send, ...t.receive]),
+      menBefore: scalar.trades.flatMap((t) => [...t.send, ...t.receive]),
       // Weeks 5..14 — everything with NO result against it. Week 5 is also
       // the week the page opens on; weeks 1-4 are played and not in here.
       span: stub.WEEKS - stub.PLAYED_THROUGH,
       played: stub.PLAYED_THROUGH,
+      // EVERY week the page reads: the priced span, the played weeks behind it
+      // (for the card's whole-season run and its Act row) and the bracket in
+      // front. Counted off the requests the stub actually saw rather than
+      // derived from the fixture, because the number of bracket weeks is
+      // `capture.playoffWeeks`'s answer and not this file's to assume — but it
+      // is checked for exactly one request per DISTINCT week above, so a page
+      // that read a week twice cannot hide inside it.
+      weeksAll: new Set(before.asked).size,
       byeWeek: stub.BYE_WEEK,
     };
   },
@@ -1124,9 +1274,10 @@ SCENARIOS.weekPeek = async function weekPeek() {
   const { document, errors } = await boot('trade.html', '', seed);
   const stub = await import('./tr-stub-season.mjs');
 
-  document.getElementById('loadWeeks')
-    .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-  await settle(6000);
+  // Priced by the page itself (2026-09-19); pressing the button would only
+  // re-read the same weeks. Long enough for the weekly re-rank behind the
+  // first paint.
+  await settle(8000);
 
   const trades = readTrades(document);
   const idx = trades.findIndex((t) => t.partner === 'Cy');
@@ -1233,8 +1384,9 @@ SCENARIOS.liveByes = async function liveByes() {
     'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
   };
   const { document, errors } = await boot('trade.html', '', seed);
-  document.getElementById('loadWeeks').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-  await settle(6000);
+  // Priced by the page itself since 2026-09-19; this waits for the re-rank
+  // rather than pressing a button that would only read the same weeks again.
+  await settle(8000);
   const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
   const idx = readTrades(document).findIndex((t) => t.partner === 'Cy');
   if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
@@ -1272,6 +1424,10 @@ SCENARIOS.livePickup = async function livePickup() {
   };
   const { document, errors } = await boot('trade.html', '', seed);
   const stub = await import('./tr-stub-season.mjs');
+  // The page buys its weeks and re-ranks behind the first paint (2026-09-19),
+  // so the table read here has to be the settled one — a list caught mid-rerank
+  // would make this scenario intermittent rather than wrong.
+  await settle(8000);
   const trades = readTrades(document);
   // Every man the page names ANYWHERE, by ESPN id: depth map, spare strip,
   // finder, combo. A dropped man must be on none of them.
@@ -1802,40 +1958,74 @@ if (!wk.boot) {
   // the selected week. It is now the weeks with no result against them, and in
   // demo — where every sample game is marked played — that is everything AFTER
   // the week picker. Same derivation as `demoSpan` above.
-  const spanLen = wk.before.weeks.filter((w) => Number(w) > Number(wk.before.week) &&
+  const spanLen = wk.after.weeks.filter((w) => Number(w) > Number(wk.after.week) &&
     Number(w) <= 13).length;
   ok('the page opens on a week with a rest of season to price', spanLen > 1,
-    `week ${wk.before.week} of ${wk.before.weeks.join(',')}`);
-  ok('the button names the span before it is pressed',
-    /Price weeks \d+–\d+/.test(wk.before.cost.button), wk.before.cost.button);
-  ok('and the cost note names the real number of weeks',
-    wk.before.cost.note.includes(`${spanLen} weeks`), wk.before.cost.note.slice(0, 220));
-  ok('and says what it would cost on a real league — one request per week',
-    /one per week/.test(wk.before.cost.note) &&
-    new RegExp(`${spanLen} requests`).test(wk.before.cost.note),
-    wk.before.cost.note.slice(0, 260));
-  ok('and says demo data itself costs nothing',
-    /no requests at all/.test(wk.before.cost.note), wk.before.cost.note.slice(0, 200));
-  ok('there is no combo before the weeks are priced, and it says why',
-    /every remaining week/i.test(wk.before.combo.body), wk.before.combo.body.slice(0, 160));
-  // AND IT NAMES THE BUTTON EXACTLY. The combo panel tells the reader to press
-  // a control in the toolbar, quoting its face. It used to get those words by
-  // reading `#loadWeeks`'s textContent back off the page — a panel that was
-  // right only because the toolbar happened to be painted before it. That is a
-  // latent coupling rather than a bug anybody saw, and it is why the panels
-  // could not simply be reordered and left; both halves now derive the label
-  // from `weeksButton()` in js/trade-page.js, so the paint order is free.
+    `week ${wk.after.week} of ${wk.after.weeks.join(',')}`);
+
+  // -- THE PAGE PRICES ITSELF (Tim, 2026-09-19) ----------------------------
   //
-  // What this assertion holds down is the thing that WOULD be visible: the two
-  // labels agreeing character for character, whichever way they are derived.
+  // Nothing was pressed in this scenario at all, and the page is on the weekly
+  // measure with every week in hand. That is the whole of his ask — "it should
+  // not load if it doesn't price it" — and it is the exact reverse of what this
+  // block asserted for three days, when a press was the only thing that could
+  // spend anything. FALSIFIABLE: take `autoLoad()` out of `useDemo` and the
+  // measure is 'weeks' with no weeks behind it, so `basis()` falls back to the
+  // typical week and both of these fail.
+  eq(wk.after.measure, 'weeks', 'the page is on the weekly measure with nothing pressed');
+  ok('and it has actually priced them, not merely selected the measure',
+    /a week \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
+  ok('the button is now a RE-READ rather than a purchase',
+    /Rebuild|Re-read/.test(wk.after.cost.button), wk.after.cost.button);
+  ok('and the cost note names the real number of weeks',
+    wk.after.cost.note.includes(`${spanLen} weeks`), wk.after.cost.note.slice(0, 220));
+  ok('and says what it would cost on a real league — one request per week',
+    /one per week/.test(wk.after.cost.note), wk.after.cost.note.slice(0, 260));
+  ok('and says demo data itself costs nothing',
+    /no requests at all/.test(wk.after.cost.note), wk.after.cost.note.slice(0, 200));
+  ok('and says the page prices itself, and what is kept between pages',
+    /prices itself/.test(wk.after.cost.note), wk.after.cost.note.slice(0, 400));
+  ok('and names the weeks it reads but never prices',
+    /shows but does not price/.test(wk.after.cost.note), wk.after.cost.note.slice(0, 600));
+
+  // -- the combo is there too, unasked -------------------------------------
+  ok('the best combo is computed without a press', wk.after.combo.rows.length > 0,
+    wk.after.combo.body.slice(0, 200));
+
+  // TIM'S OWN COMPLAINT, AS A PAGE-LEVEL ASSERTION (2026-09-19): "the best
+  // combo gives me a single trade that is a 2-1 that has a lower +/week than
+  // the top trade". It cannot — every single offer is a packing the search
+  // considers — so a headline below the best row is proof the two panels are
+  // pricing on different bases. They were: `bestCombo` took no `floors` option
+  // at all, so the rows were floored and the packing was not.
+  //
+  // `test-trade-weekly.mjs` proves this in the engine, against a stand-in wire
+  // strong enough to make it fail without the fix. This is the same claim read
+  // off the rendered page, which is where he saw it.
+  {
+    const topRow = Math.max(...wk.after.trades.map((t) => t.myGain));
+    ok('the best combo is never worth less than the best single offer above it',
+      wk.after.combo.headlineGain === null ||
+      wk.after.combo.headlineGain * demoSpan(wk.week).length + 0.6 >= topRow,
+      `headline ${wk.after.combo.headlineGain}/wk vs top row ${topRow} total`);
+  }
+  ok('and the combo panel says it is priced on the same basis as the rows',
+    /same basis as the offers above/.test(wk.after.combo.note) ||
+    !/positional floor/.test(wk.after.combo.note),
+    wk.after.combo.note.slice(-400));
+  // A DELIBERATE SCALAR MEASURE STILL TURNS IT OFF, and the panel still names
+  // the control by its exact face. It used to get those words by reading
+  // `#loadWeeks`'s textContent back off the page — a panel that was right only
+  // because the toolbar happened to be painted first. Both halves derive the
+  // label from `weeksButton()` now, so the paint order is free; what this holds
+  // down is the thing that WOULD be visible, the two labels agreeing character
+  // for character.
+  ok('picking a scalar measure empties the combo, and it says why',
+    /every remaining week/i.test(wk.before.combo.body), wk.before.combo.body.slice(0, 160));
   ok('and quotes the weekly button word for word',
     wk.before.cost.button.length > 0 && wk.before.combo.body.includes(wk.before.cost.button),
     `button "${wk.before.cost.button}" vs combo "${wk.before.combo.body.slice(0, 200)}"`);
-
-  // -- pressing it switches the measure ------------------------------------
-  eq(wk.after.measure, 'weeks', 'pressing the button selects the weekly measure');
-  ok('the button then says the span is priced', /priced/.test(wk.after.cost.button),
-    wk.after.cost.button);
+  eq(wk.before.measure, 'typical', 'and a chosen scalar measure is honoured');
 
   // -- THE SCALE IS STATED, which is the trap worth nine times the truth ----
   ok('the gain column says it is per week, and over which weeks',
@@ -1875,7 +2065,8 @@ if (!wk.boot) {
     JSON.stringify(wk.after.depth.rows.map((r) => r.cells.map((c) => c.v))));
   ok('and the gains are on a different scale entirely',
     wk.after.trades.length > 0 && wk.before.trades.length > 0 &&
-    wk.after.trades[0].myGain > wk.before.trades[0].myGain * 2,
+    Math.max(...wk.after.trades.map((t) => t.myGain)) >
+      Math.max(...wk.before.trades.map((t) => t.myGain)) * 2,
     `${wk.before.trades[0] && wk.before.trades[0].myGain} -> ${wk.after.trades[0] && wk.after.trades[0].myGain}`);
 
   // -- ask 6: the depth map and the drill-down cannot contradict each other -
@@ -1898,14 +2089,29 @@ if (!wk.boot) {
     ok('the card names the man it was opened on',
       wk.card.ident.length > 0 && wk.card.hovered.includes(wk.card.ident.split(' · ')[0]),
       `${wk.card.ident} vs ${wk.card.hovered}`);
-    // The card draws every week the page HOLDS, which is the span plus the one
-    // the depth map is showing — that week is bought, has a result, and is
-    // exactly the week the card's Act row is for. It is priced into nothing.
-    ok('and draws the whole run, one column per week held',
-      wk.card.weeks.length === spanLen + 1,
-      `${wk.card.weeks.length} columns for ${spanLen} priced weeks plus the one on screen`);
+    // THE WHOLE SEASON, WEEK 1 ONWARDS (Tim, 2026-09-19: "it doesn't actually
+    // display any previous weeks in the chart, so that whole row is useless ...
+    // just start displaying all weeks 1-17").
+    //
+    // It used to be "every week the page HOLDS", which is the priced span plus
+    // the one on screen — so the run began at the current week and the Act row,
+    // which can only be filled from a week already PLAYED, was empty for every
+    // player on this page by construction. The heading names the real range.
+    ok('the run starts at week 1 and reaches the last playoff week',
+      /for weeks 1–\d+/i.test(wk.card.heading), wk.card.heading);
+    ok('and it is longer than the priced span, because the past is in it',
+      wk.card.projs.length > spanLen + 1,
+      `${wk.card.projs.length} cells for a ${spanLen}-week span`);
     ok('and says whose numbers they are, and for which weeks',
       /projections for weeks \d+–\d+/i.test(wk.card.heading), wk.card.heading);
+    // THE STARTS COUNT, his third ask of the day: "the number of starting weeks
+    // in that user's lineup". It says WHICH weeks it is over and WHOSE squad it
+    // is about, both of which move — a man who has changed hands has two
+    // managers in his season, and a half-loaded page has fewer weeks than a
+    // whole one.
+    ok('the card says how many weeks he is in the best lineup for',
+      /in the best lineup for .+ in \d+ of \d+ weeks read/.test(wk.card.heading),
+      wk.card.heading);
   }
   ok('a spare chip opens the same card', wk.spareCard && wk.spareCard.hidden === false,
     JSON.stringify(wk.spareCard));
@@ -2231,12 +2437,12 @@ ok('the unpriced scenario boots', !up.boot, up.boot);
 if (!up.boot) {
   ok('no console errors', up.errors.length === 0, up.errors.slice(0, 2).join(' | '));
   ok('demo still costs no request', up.fetchCalls.length === 0, up.fetchCalls.join(' | '));
-  eq(up.before.measure, 'typical', 'the page opens on a typical week');
+  eq(up.before.measure, 'typical', 'a saved choice of a typical week is honoured');
   ok('no pop-up on load', up.before.deal.hidden && !up.before.deal.present);
   ok('clicking a deal opens it at once', !up.immediately.hidden);
   ok('and it does not tell him to press a button first',
     !/Press/.test(up.immediately.body) && !/Press/.test(up.deal.body), up.deal.body.slice(0, 200));
-  ok('it fills with the week-by-week table without the page button',
+  ok('it fills with the week-by-week table whatever measure the page is on',
     !up.deal.hidden && up.deal.weeks && up.deal.weeks.weeks.length > 1,
     up.deal.weeks ? `${up.deal.weeks.weeks.length} rows` : up.deal.body.slice(0, 200));
   ok('one row per remaining week, with numbers in it',
@@ -2248,8 +2454,8 @@ if (!up.boot) {
   eq(up.measure, 'typical', 'the page measure is left as he chose it');
   ok('and the list behind is not re-ranked',
     JSON.stringify(up.afterTrades.map((t) => t.myGain)) === JSON.stringify(up.before.trades.map((t) => t.myGain)));
-  ok('the weeks it bought are offered to the page for free',
-    /already loaded, no requests/.test(up.cost.button), up.cost.button);
+  ok('and the button offers a re-read rather than a purchase',
+    /Rebuild|Re-read/.test(up.cost.button), up.cost.button);
   ok('Close still shuts it', up.closed.hidden && !up.closed.present);
 }
 
@@ -2257,13 +2463,12 @@ const uw = run('unpricedWeeksChosen');
 ok('the weeks-chosen scenario boots', !uw.boot, uw.boot);
 if (!uw.boot) {
   ok('no console errors', uw.errors.length === 0, uw.errors.slice(0, 2).join(' | '));
-  ok('the pop-up survives the re-rank the weeks force',
+  ok('the pop-up survives the re-rank the page does to itself',
     !uw.deal.hidden && uw.deal.weeks && uw.deal.weeks.weeks.length > 1,
     uw.deal.weeks ? `${uw.deal.weeks.weeks.length} rows` : uw.deal.body.slice(0, 200));
   ok('and has no ranked-another-way caveat, because now it was not',
     !/ranked on/.test(uw.deal.note), uw.deal.note.slice(0, 120));
-  ok('the list behind it WAS re-ranked week by week',
-    /priced/.test(uw.cost.button), uw.cost.button);
+  eq(uw.measure, 'weeks', 'the page is on the weekly measure with nothing pressed');
   ok('Close still shuts it', uw.closed.hidden);
 }
 
@@ -2276,54 +2481,118 @@ if (!live.boot) {
     live.errors.slice(0, 2).join(' | '));
   eq(live.before.badge, 'Live', 'the stubbed league puts the page on live data');
 
-  // -- THE COST, stated before it is spent and counted after ---------------
-  eq(live.before.requests, 1, 'the page opens on ONE week of rosters, as it always has');
+  // -- THE COST, COUNTED AND STATED -----------------------------------------
+  //
+  // THE PAGE BUYS THE WEEKS ITSELF NOW (Tim, 2026-09-19). What this block used
+  // to assert — "nothing was spent before the button was pressed", one request
+  // on load — was the truth of its day and is the exact thing he asked to be
+  // rid of. What has NOT changed, and is the half worth keeping, is that every
+  // request is counted and named: a page that spends sixteen and says ten is
+  // worse than one that waits to be asked.
+  //
   // THE COMING WEEK, not the last one played (2026-09-17). The week picked is
   // also the week whose ROSTERS the finder reads, so opening on week 4 left out
   // every pickup made since. Weeks 1-4 have results; 5 is the first without.
   eq(live.before.week, String(live.played + 1), 'a live league opens on the first week NOT yet played');
-  eq(live.before.asked.join(','), String(live.played + 1), 'and that is the one week of rosters it reads');
-  const span = live.span; // every week with no result against it
-  // MOVED TWICE, and each old number encoded the truth of its day. It was
-  // `span - 1` when the span started at the selected week; then `span` while
-  // the page opened on the last PLAYED week, which is outside the span. The
-  // page now opens on the coming week — the FIRST week of the span — so that
-  // week is in hand and one fewer is owed.
-  ok('the cost note names the real number of requests still to spend',
-    live.before.cost.note.includes(`${span - 1} requests still to spend`),
-    live.before.cost.note.slice(0, 300));
-  ok('and the button carries the same number on its face',
-    live.before.cost.button.includes(`${span - 1} requests`), live.before.cost.button);
-  ok('and the note says what the page costs in total on this measure',
-    live.before.cost.note.includes(`${span} requests in total`),
-    live.before.cost.note.slice(0, 400));
-  ok('nothing was spent before the button was pressed', live.before.requests === 1,
-    `${live.before.requests} requests`);
+  eq(live.before.asked[0], live.played + 1, 'and that is the FIRST week of rosters it reads');
+  const span = live.span;           // every week with no result against it
+  const whole = live.weeksAll;      // the span, the played weeks, and the bracket
+  ok('it reads the whole season, not just the span it prices',
+    live.before.requests === whole,
+    `${live.before.requests} requests for ${whole} weeks (span ${span}, played ${live.played})`);
+  ok('and asks for each week exactly once',
+    new Set(live.before.asked).size === live.before.asked.length,
+    live.before.asked.join(','));
+  ok('the span it PRICES is still the unplayed weeks only',
+    live.before.asked.slice(0, span).every((w) => w > live.played),
+    live.before.asked.slice(0, span).join(','));
+  ok('the played weeks come AFTER the priced ones — the answer first, the history behind it',
+    live.before.asked.slice(span, span + live.played).every((w) => w <= live.played),
+    live.before.asked.join(','));
+  ok('the spent line says how many went, and does not leave the opening week out',
+    live.before.cost.spent.includes(`${whole} requests spent`), live.before.cost.spent);
+  ok('the cost note still says what the priced span costs, one request per week',
+    live.before.cost.note.includes(`The span itself is ${span} requests`),
+    live.before.cost.note.slice(0, 500));
+  // AND THAT A CHEAP MEASURE IS NO LONGER A CHEAP PAGE. It used to say "this
+  // page costs ONE request on the other two measures", which stopped being
+  // true the day it started reading the whole season on load — the card and
+  // the pop-up want those weeks whichever measure is drawn. A note that still
+  // said the old thing would be the page understating what it spends.
+  ok('and says plainly that the other measures are not cheaper',
+    /does not make the page cheaper/.test(live.before.cost.note),
+    live.before.cost.note.slice(0, 700));
+  ok('and names the weeks it reads but never prices',
+    /shows but does not price/.test(live.before.cost.note),
+    live.before.cost.note.slice(0, 700));
+  // THE RE-READ'S FACE NAMES WHAT IT WILL ACTUALLY SPEND. It buys the played
+  // weeks and the bracket back too, so quoting the priced span alone would
+  // understate the press by about a third — understating a cost is the one
+  // dishonesty this project avoids, and the button's face is where that rule
+  // is enforced.
+  ok('the button is a re-read, and its face names the whole season',
+    /Re-read/.test(live.before.cost.button) &&
+    live.before.cost.button.includes(`${whole} requests`),
+    live.before.cost.button);
 
-  // The page opened on week 5 (one request), then bought weeks 6-14.
-  eq(live.after.requests, span, 'pressing it spends exactly one request per week');
-  ok('and it asked for each week exactly once — the opening one included',
-    new Set(live.after.asked).size === live.after.asked.length &&
-    live.after.asked.length === span,
-    live.after.asked.join(','));
-  ok('and never asked for a week that has already been played',
-    live.after.asked.every((w) => w > live.played),
-    live.after.asked.join(','));
-  // The button's own spend — the opening week is the page's, not the button's.
-  ok('the spent line then says how many went',
-    live.after.cost.spent.includes(`${span - 1} requests spent`), live.after.cost.spent);
+  // Pressing it really does read them all again, and counts from zero.
+  eq(live.after.requests, whole * 2, 'a re-read spends one request per week, again');
+  ok('and the spent line restarts rather than reporting a lifetime figure',
+    live.after.cost.spent.includes(`${whole} requests spent`), live.after.cost.spent);
 
-  // -- THE RANKING ACTUALLY CHANGES ----------------------------------------
+  // -- THE ACT ROW STOPPED BEING EMPTY -------------------------------------
+  //
+  // Tim, 2026-09-19: "right now in the trade section it shows the act in the
+  // preview, but it doesn't actually display any previous weeks in the chart,
+  // so that whole row is useless."
+  //
+  // He was right, and it was structural rather than a bug. The card's run
+  // covered the weeks this page HELD, and this page only ever bought the
+  // REMAINING span — because a trade cannot move banked points. An "Act" row is
+  // actual points, and actual points only exist for a week that has been
+  // PLAYED. So the row was empty for every player here, every time, by
+  // construction.
+  //
+  // THIS IS THE SCENARIO THAT CAN TELL, and demo is not: there the span and the
+  // season coincide. Here weeks 1-4 have results and the span is 5-14.
+  // FALSIFIABLE: make `loadHistory()` return early and the first four cells go
+  // back to the card's "not read" dot with nothing in Act at all.
+  if (live.liveCard) {
+    const act = live.liveCard.rows.Act || [];
+    const proj = live.liveCard.rows.Proj || [];
+    ok('the card runs from week 1', /for weeks 1–\d+/i.test(live.liveCard.heading),
+      live.liveCard.heading);
+    eq(act.length, proj.length, 'with an Act cell for every Proj cell');
+    const scored = act.filter((t) => /^\d+(\.\d+)?$/.test(t));
+    ok('and the Act row carries real numbers for the weeks already played',
+      scored.length >= live.played,
+      `${scored.length} actuals for ${live.played} played weeks — ${act.join(',')}`);
+    ok('and only for those weeks — a week still to come has no actual',
+      act.slice(live.played).every((t) => !/^\d+(\.\d+)?$/.test(t)),
+      act.join(','));
+    ok('the starts count names the squad and the weeks it is over',
+      /in the best lineup for \w+ in \d+ of \d+ weeks read/.test(live.liveCard.heading),
+      live.liveCard.heading);
+  } else {
+    ok('a card opened on the live page', false, 'no card');
+  }
+
+  // -- THE TWO BASES STILL DISAGREE ----------------------------------------
   //
   // The fixture's point: Ana holds two quarterbacks who alternate 19 and 7, so
   // on one scalar per man she looks weak at QB and Bo's steady 17 is a +4
   // upgrade — while across the weeks she already starts a 19 every week and the
   // 17 is worth nothing. The scalar basis must offer that trade and the weekly
   // one must not.
+  //
+  // READ THE OTHER WAY ROUND NOW, because the page opens on the weekly measure:
+  // `scalar` is what a reader sees having deliberately picked a typical week,
+  // and `after` is the page left alone. Which end the comparison starts from
+  // does not matter — that the two disagree is the whole claim.
   const gotQB = (list) => list.filter((t) => /Bo QB/.test(names(t.receive)));
   ok('on a typical week the page offers the steady quarterback',
-    gotQB(live.before.trades).length > 0,
-    live.before.trades.map((t) => names(t.receive)).join(' | '));
+    gotQB(live.scalar.trades).length > 0,
+    live.scalar.trades.map((t) => names(t.receive)).join(' | '));
   ok('and across the weeks it does NOT — three quarterbacks already cover it',
     gotQB(live.after.trades).length === 0,
     gotQB(live.after.trades).map((t) => names(t.receive)).join(' | '));
@@ -3012,11 +3281,23 @@ if (!live.boot) {
     ok('no console errors', pk.errors.length === 0, pk.errors.slice(0, 2).join(' | '));
     const coming = String(pk.played + 1);
     eq(pk.opened.week, coming, 'with nothing saved, the page opens on the coming week');
-    eq(pk.opened.asked.join(','), coming, 'and reads that week’s rosters, not a played week’s');
-    ok('the finder offers the man picked up THIS week',
-      pk.opened.sent.includes(pk.pickup.added),
+    eq(String(pk.opened.asked[0]), coming,
+      'and the FIRST rosters it reads are that week’s, not a played week’s');
+    // The page reads the whole season now (2026-09-19) — the played weeks for
+    // the card's Act row, the bracket for its run — so "which weeks were
+    // asked for" is no longer the test. Which SQUADS it believes in is, and
+    // that comes off the week it opened on.
+    //
+    // NAMED ON THE PAGE, not "in a package". A page reading the last PLAYED
+    // week has never heard of the man picked up since, so naming him anywhere
+    // is the claim; whether he lands in a SENT package is a fact about the
+    // measure — under the weekly one he is a 12.0 receiver nobody wants to
+    // move — and asserting it would tie this scenario to the finder's ranking
+    // rather than to the rosters it read.
+    ok('the man picked up THIS week is named on the page',
+      pk.opened.ids.includes(pk.pickup.added),
       `sent ${pk.opened.sentNames.join(' | ')}`);
-    ok('and never the man he dropped',
+    ok('and never in a package he is not on the roster for',
       !pk.opened.sent.includes(pk.pickup.dropped), pk.opened.sent.join(','));
     ok('who is named nowhere on the page',
       !pk.opened.ids.includes(pk.pickup.dropped), pk.opened.ids.join(','));
@@ -3033,7 +3314,7 @@ if (!live.boot) {
   if (!stale.boot) {
     eq(stale.opened.week, String(stale.played + 1),
       'A SAVED WEEK THAT HAS BEEN PLAYED IS IGNORED: the page opens on the coming week');
-    ok('and the pickup is still in the finder', stale.opened.sent.includes(stale.pickup.added),
+    ok('and the pickup is still named on the page', stale.opened.ids.includes(stale.pickup.added),
       stale.opened.sentNames.join(' | '));
   }
 
@@ -3041,7 +3322,10 @@ if (!live.boot) {
   ok('the saved-future-week scenario boots', !ahead.boot, ahead.boot);
   if (!ahead.boot) {
     eq(ahead.opened.week, '7', 'a saved week still to be played is honoured');
-    eq(ahead.opened.asked.join(','), '7', 'and it is the week whose rosters are read');
+    // THE FIRST week it reads, not the only one: the page reads the whole
+    // season now for the card's run, and which week it OPENS on is what this
+    // scenario is about.
+    eq(String(ahead.opened.asked[0]), '7', 'and it is the week whose rosters are read first');
   }
 }
 
@@ -3072,21 +3356,103 @@ if (!live.boot) {
   ok('and the squads picked are not his own',
     cu.picked.a !== cu.picked.b, JSON.stringify(cu.picked));
 
+  // -- BOTH SIDES ARE LAID OUT AS A LINEUP (Tim, 2026-09-19) ---------------
+  //
+  // "display the two teams players like most other boxes with order of
+  // positions and overall starting lineup (QB, RB1, RB2, ... BE, BE, BE, etc.)"
+  //
+  // It was best-first on the page's own measure, which is a fine order for a
+  // list of assets and the wrong one for a list of players. The slot labels
+  // come from `js/lineup-slots.js` — the SAME module the Analysis page's season
+  // sheet and this page's own deal pop-up use — so a reader seeing WR2 in all
+  // three is reading one claim rather than three.
+  //
+  // FALSIFIABLE: go back to sorting by value and the first label stops being QB
+  // and the bench stops being contiguous at the end.
+  for (const [side, slots] of [['A', cu.slotsA], ['B', cu.slotsB]]) {
+    ok(`side ${side} labels every row with its lineup slot`,
+      slots.length === (side === 'A' ? cu.listA : cu.listB) && slots.length > 10,
+      `${slots.length} labels for ${side === 'A' ? cu.listA : cu.listB} rows`);
+    eq(slots[0], 'QB', `side ${side} starts at quarterback, as a lineup does`);
+    ok(`side ${side} numbers a slot the league starts more than one of`,
+      slots.includes('RB1') && slots.includes('RB2'), slots.join(','));
+    ok(`side ${side} puts the bench last, and all of it together`,
+      slots.filter((s) => s === 'BE').length > 0 &&
+      slots.slice(slots.indexOf('BE')).every((s) => s === 'BE'),
+      slots.join(','));
+    ok(`side ${side} shows the WHOLE roster — every starter and every bench man`,
+      slots.length >= 16, `${slots.length} rows`);
+  }
+
   // HALF A TRADE IS STILL A TRADE, and is priced: a manager giving somebody
   // away for nothing is a real thing to want to price, and refusing it would
   // be this panel having an opinion, which is the one thing it must not have.
   ok('one man on one side already prices',
-    /a week/.test(cu.previewOneSided), cu.previewOneSided);
-  ok('BOTH SQUADS ARE PRICED, and each is named',
-    /a week/.test(cu.preview) && (cu.preview.match(/a week/g) || []).length === 2,
-    cu.preview);
-  ok('per week first, with the rest-of-season total beside it — his display rule',
-    /a week \(/.test(cu.preview), cu.preview);
+    /sends/.test(cu.previewOneSided) && /priced over/.test(cu.previewOneSided),
+    cu.previewOneSided);
+  ok('the line above the lists says who moves which way, and over which weeks',
+    /sends/.test(cu.preview) && /priced over weeks/.test(cu.preview), cu.preview);
   eq(cu.saveEnabled, true, 'and the deal can be saved');
 
-  // The lists must NOT be rebuilt when a man is ticked: sixteen names is a
-  // scroller, and redrawing it would throw away the position under the very
-  // finger doing the ticking.
+  // -- EACH SIDE'S FIGURE, UNDER ITS OWN SIDE ------------------------------
+  //
+  // "just show the single # a week (over weeks 2-14) big and colorized in green
+  // or red under their side of the trade (right now they're both under the
+  // first players trade)."
+  //
+  // He was describing a real layout fault: both figures lived in one paragraph
+  // below a two-column row, which lines up under the LEFT column on a laptop.
+  // Reading them out of two separate containers is the only way to tell "under
+  // its own side" from "both in one place", which is why this is not a regex
+  // over the preview line.
+  for (const [side, g] of [['A', cu.gainA], ['B', cu.gainB]]) {
+    ok(`side ${side} carries its own per-week figure`, /^[+−]\d/.test(g.num), JSON.stringify(g));
+    ok(`side ${side} leads with per week, not the season total`,
+      /\/wk$/.test(g.num), g.num);
+    ok(`side ${side} carries the rest-of-season total as the sub-number`,
+      /^[+−][\d.]+ over weeks? /.test(g.sub), g.sub);
+    ok(`side ${side} is coloured up or down`, /\b(up|down|flat)\b/.test(g.cls), g.cls);
+    // COLOUR IS NEVER THE ONLY CUE — the sign is printed either way, the same
+    // rule the depth map's tints and the Players page's two greens follow.
+    ok(`side ${side} prints the sign as well as the colour`,
+      /^[+−]/.test(g.num), g.num);
+  }
+  ok('and the two sides carry different numbers, or this proves nothing about ' +
+    'which figure belongs to which squad',
+    cu.gainA.num !== cu.gainB.num, `${cu.gainA.num} / ${cu.gainB.num}`);
+  // THE COLOUR AGREES WITH THE SIGN, which is the claim — not that one side is
+  // up and the other down. A custom trade can perfectly well be bad for both
+  // squads, and this panel deliberately has no opinion about that: pricing a
+  // deal somebody has offered you is the whole reason it exists.
+  for (const [side, g] of [['A', cu.gainA], ['B', cu.gainB]]) {
+    const want = g.num.startsWith('+') ? 'up' : g.num.startsWith('−') ? 'down' : 'flat';
+    ok(`side ${side}'s colour agrees with the sign it prints`,
+      g.cls.includes(want), `${g.num} drawn ${g.cls}`);
+  }
+
+  // -- THE BUILDER OPENS THE SAME POP-UP -----------------------------------
+  //
+  // "allow a trade analysis (identical to the box-pop up that appears when you
+  // click on a pre-made trade) for this custom trade just like any other trade
+  // that we have."
+  //
+  // A SAVED row already did this and still does, below. The deal being BUILT
+  // could not — there was no way to see a deal week by week without committing
+  // it to the list first, which is the wrong way round.
+  eq(cu.openDisabledAtFirst, true, 'the Week by week button is off until there is a deal');
+  eq(cu.openEnabled, true, 'and on once there is');
+  eq(cu.builderModal.open, true, 'the deal being BUILT opens the finder’s own pop-up');
+  ok('titled as a custom trade rather than printing undefined',
+    /^Custom trade/.test(cu.builderModal.title) && !/undefined/.test(cu.builderModal.title),
+    cu.builderModal.title);
+  ok('with one row per week in it',
+    cu.builderModal.weeks > 1, String(cu.builderModal.weeks));
+
+  // The lists must NOT be rebuilt when a man is ticked. The reason CHANGED on
+  // 2026-09-19 and the old one is gone: it used to be the scroll position of a
+  // capped scroller, and the scroller went ("don't make a scrolling space").
+  // What is left is focus — rebuilding replaces the checkbox that was just
+  // operated and sends the keyboard back to the top of the document.
   eq(cu.stillChecked, true, 'ticking a man leaves him ticked');
   eq(cu.litRow, true, 'and lights his row');
 

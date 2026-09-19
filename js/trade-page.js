@@ -31,11 +31,27 @@
 // thirteen of them, plus a search that re-fills nine to thirteen lineups per
 // offer instead of one and takes a few seconds rather than a quarter of one.
 //
-// Both costs are on the button's face and in the note under it BEFORE anything
-// is spent, and nothing on this page fetches those weeks until that button is
-// pressed. Not on load, not when a remembered preference says "weekly", not
-// when the connection bar flips the page live. A control that quietly spent
-// twelve requests would be the most expensive kind of convenience.
+// THE PAGE NOW PRICES ITSELF, AND THAT IS A REVERSAL. Tim, 2026-09-19: "make
+// this price action an automatic action with the page (it should not load if it
+// doesn't price it). ... I would prefer if it does all the loading and checking
+// data with espn as soon as you open up the page or choose to sync it with
+// espn, and then it's saved there until you re-load it."
+//
+// What used to be here, and why it was here, is worth keeping on the record:
+// nothing on this page fetched a week until a labelled button was pressed — not
+// on load, not when a remembered preference said "weekly", not when the
+// connection bar flipped the page live — because twelve unasked requests on his
+// phone was the surprise this page existed not to spring. He has now asked for
+// exactly that, and the reason the answer changed is `js/store.js`: the weeks
+// are kept in this browser across a navigation, so the second visit of the day
+// spends nothing and the first spends what it always would have spent one
+// button-press later. The cost is still named, still counted as it is spent,
+// and the button is still there — as a RE-READ, which is the other half of his
+// ask ("until you re-load it").
+//
+// THE COST LINE COUNTS REQUESTS, NOT WEEKS. A week served out of the store cost
+// nothing, and a page that counted it would be overstating — which is the same
+// dishonesty as understating, one direction over.
 //
 // ---------------------------------------------------------------------------
 // TWO SCALES, AND THEY DIFFER BY A FACTOR OF NINE OR MORE
@@ -72,6 +88,16 @@ import {
   depthTable, findTrades, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
   priceTradeAcrossWeeks, bestCombo, mergeComboByPartner,
 } from './trade.js';
+// THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
+// forecast, the trade finder, "Who to start" and the per-week valuation all
+// run on, and the reason they cannot disagree about who a squad ought to be
+// starting (HANDOFF, "Four features now share optimalLineup"). The card's
+// STARTS COUNT is the fifth reader of it and it gets no copy — a second solver
+// would let this page and the Analysis page's Starts column print two different
+// numbers for one man. `js/trade.js` wraps it rather than importing it here
+// because that module is pure; this file needs the STARTERS, which the wrapper
+// does not return.
+import { optimalLineup } from './forecast.js';
 import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
   zeroKind, byeWeekOf,
@@ -166,7 +192,13 @@ const state = {
   espnTeamId: null,    // the reader's own team, when a live league says so
   isDemo: true,
   byes: {},            // proTeamId -> bye week; empty = unknown (a live 0.00 is then a bye)
-  measure: 'typical',  // what the reader ASKED for; see basis() for what is drawn
+  // EVERY REMAINING WEEK IS THE DEFAULT since 2026-09-19 (Tim: "it should not
+  // load if it doesn't price it"). It is the measure the page is FOR — rule 10
+  // in HANDOFF.md — and the only reason it was not the default was that it had
+  // to be paid for by hand. The page pays for it on load now, so the other two
+  // are the deliberate choices and this is the plain one. A remembered
+  // preference still wins; see the boot block at the foot of this file.
+  measure: 'weeks',    // what the reader ASKED for; see basis() for what is drawn
   kind: 'all',         // which package shapes the finder searches
   partner: 'all',      // limit the results to one manager
   search: null,        // the last finder result
@@ -195,6 +227,13 @@ const state = {
 
 const cache = new Map(); // `${source}:${week}` -> {week, teams}
 
+// The five-second memo behind `storedAgeLine()` — declared up here with the
+// other module state rather than beside the function that fills it, because
+// `resetWeekly()` clears it and sits above it in the file. A `let` read before
+// its declaration is evaluated is a throw, not an undefined, and the only thing
+// keeping this safe otherwise is the order the boot block happens to run in.
+let ageLine = { at: 0, text: '' };
+
 /**
  * Every remaining week's numbers, and what they cost to get.
  *
@@ -207,13 +246,28 @@ const cache = new Map(); // `${source}:${week}` -> {week, teams}
 const weekly = {
   key: null,
   byWeek: new Map(),
+  // week -> Map(teamId -> that squad's players). The per-player index above
+  // cannot answer "whose squad was he on in week 4", and the STARTS COUNT
+  // (Tim, 2026-09-19) is exactly that question — "the number of starting weeks
+  // in that user's lineup" — so the rosters are kept as well as flattened.
+  // A man who changed hands mid-season is therefore counted against whoever
+  // actually held him each week, which is the only reading of the ask that is
+  // true of a real season.
+  rosters: new Map(),
   failed: new Set(),
   loading: false,
   progress: null,
   error: null,
+  // REQUESTS, NOT WEEKS. A week served out of js/store.js — this browser's own
+  // copy, kept across a navigation — cost nothing, and counting it would
+  // overstate the page's cost as surely as ignoring a real request understates
+  // it. `season.fetchWeeksRosters` reports which source answered each week.
   requests: 0,
+  fromStore: 0,
   token: 0,
   means: new Map(), // playerId -> his mean over the span; see weeklyMean()
+  // `${week}:${teamId}` -> Set(playerId) of who starts. See startersIn().
+  lineups: new Map(),
 };
 
 // ------------------------------------------------------------------ formatting
@@ -328,6 +382,23 @@ function playoffWeeksShown() {
 }
 
 /**
+ * EVERY WEEK THE PAGE READS — the priced span, the played weeks behind it, and
+ * the bracket in front.
+ *
+ * This is what a re-read costs, and it is deliberately not `weeklySpan()`.
+ * The button used to name the span because the span was the only thing the
+ * button bought; the page reads the whole season now (the played weeks for the
+ * player card's Act row, the bracket for the run and the pop-up), so quoting
+ * the span on a control that reads all of them would be understating the price
+ * by about a third. Understating a cost is the one dishonesty this project
+ * avoids.
+ */
+function readableWeeks() {
+  return [...new Set([...pastWeeksShown(), ...weeklySpan(), ...playoffWeeksShown()])]
+    .sort((a, b) => a - b);
+}
+
+/**
  * Is a 0.00 a bye — for THIS man, in THIS week?
  *
  * Not simply "on ESPN, yes" any more. Verified on 2026-09-16: ESPN projects an
@@ -398,13 +469,50 @@ function indexTeams(teams) {
   return byPlayer;
 }
 
+/**
+ * week -> Map(teamId -> that week's roster), kept beside the flattened index.
+ *
+ * The flattened one answers "what is he projected at" and cannot answer "whose
+ * squad was he on", which is the whole of the starts count. Each entry is the
+ * team's own `players` array, not a copy: the payload is already this page's
+ * and nothing mutates it.
+ */
+function indexRosters(teams) {
+  const byTeam = new Map();
+  // playerId -> teamId, so "whose squad was he on" is a lookup rather than a
+  // scan of ten rosters. The starts count asks it once per week per card, and
+  // a page draws fifty cards a paint.
+  const teamOf = new Map();
+  for (const t of teams || []) {
+    byTeam.set(t.id, t.players || []);
+    for (const p of t.players || []) {
+      if (p.playerId !== null && p.playerId !== undefined) teamOf.set(p.playerId, t.id);
+    }
+  }
+  return { byTeam, teamOf };
+}
+
+function rememberWeek(week, teams) {
+  weekly.byWeek.set(week, indexTeams(teams));
+  weekly.rosters.set(week, indexRosters(teams));
+  weekly.failed.delete(week);
+}
+
 function resetWeekly() {
   weekly.key = sourceKey();
   weekly.byWeek = new Map();
+  weekly.rosters = new Map();
   weekly.failed = new Set();
   weekly.error = null;
   weekly.requests = 0;
+  weekly.fromStore = 0;
   weekly.means = new Map();
+  weekly.lineups = new Map();
+  // The age line's five-second memo goes with them. A re-read makes every
+  // number on screen new, and a cached "3 hours ago" surviving it — even for
+  // five seconds — is exactly the stale-looking-fresh failure the line exists
+  // to prevent.
+  ageLine = { at: 0, text: '' };
   // The token invalidates anything still in the air, and the two flags are
   // cleared here as well as in loadWeekly's `finally`: that clause deliberately
   // leaves a STALE load's flags alone, so without this a source switch during a
@@ -423,8 +531,7 @@ function resetWeekly() {
 function rememberSelectedWeek() {
   if (!state.data) return;
   if (weekly.key !== sourceKey()) resetWeekly();
-  weekly.byWeek.set(state.data.week, indexTeams(state.data.teams));
-  weekly.failed.delete(state.data.week);
+  rememberWeek(state.data.week, state.data.teams);
   weekly.means = new Map();
 }
 
@@ -501,6 +608,24 @@ function measureFn() {
 // ------------------------------------------------------------ buying the weeks
 
 /**
+ * Every week the page draws ANYWHERE, priced or not: the whole season plus its
+ * playoff weeks.
+ *
+ * `weeklySpan()` is the priced span and is a strictly smaller thing. This is
+ * what the player card's run covers (Tim, 2026-09-19: "start displaying all
+ * weeks 1-17 in that preview so we can understand their past performance") and
+ * what the starts count is taken over. Weeks 1–14 come off the league schedule;
+ * 15–17 are the bracket weeks, which are never in the schedule feed until
+ * December and are derived from the league's own field size instead.
+ */
+function seasonWeeks() {
+  const all = [...new Set([...state.weeks, ...state.poWeeks])]
+    .filter((w) => Number.isFinite(w))
+    .sort((a, b) => a - b);
+  return all.length ? all : [state.week];
+}
+
+/**
  * Fetch (or generate) every week of the span that is not in hand.
  *
  * The live half is the same shape as the analysis page's season panel — one
@@ -508,28 +633,100 @@ function measureFn() {
  * ESPN refuses simply comes back absent — but written here rather than imported
  * from that page, which owns its own state and must not be reached into.
  *
- * Nothing in this function runs without a press. That is the whole point of it.
+ * IT USED TO SAY "nothing in this function runs without a press. That is the
+ * whole point of it." That was true for three days and Tim has overruled it —
+ * see the header. `autoLoad()` below is the press now, and this is still what
+ * the BUTTON calls, which is why the two flags exist rather than two functions:
+ * a re-read and an automatic first read differ in exactly two ways and nothing
+ * else about the path may be allowed to drift between them.
+ *
+ * @param {Object} [opts]
+ * @param {boolean} [opts.auto] this was not a press, so a remembered choice of
+ *   another measure is left exactly as the reader set it. The weeks are bought
+ *   either way — the card and the pop-up want them whichever measure is drawn.
+ * @param {boolean} [opts.fresh] ignore this browser's stored weeks and re-read
+ *   from ESPN. This is the button's job now ("until you re-load it").
  */
-async function loadWeekly() {
+async function loadWeekly({ auto = false, fresh = false } = {}) {
   const key = sourceKey();
   if (weekly.key !== key) resetWeekly();
   rememberSelectedWeek();
 
   const span = weeklySpan();
-  if (!span.length || weekly.loading) { paint(); return; }
+  // A finished season has nothing to price and a card still has a whole season
+  // to draw, so the history is bought either way.
+  if (!span.length || weekly.loading) { paint(); loadHistory(); return; }
 
-  state.measure = 'weeks';
-  prefs.set('measure', 'weeks');
-  $('measureSelect').value = 'weeks';
+  if (!auto) {
+    state.measure = 'weeks';
+    prefs.set('measure', 'weeks');
+    $('measureSelect').value = 'weeks';
+  }
 
-  // Already bought — switching to them is free, but the finder still has to be
+  // A RE-READ THROWS EVERY CACHE AWAY FIRST, all three of them: this browser's
+  // stored weeks, the weekly index, and the page's own per-week roster cache.
+  // Keeping any one of them would serve some of the same numbers straight back
+  // — a refresh button that refreshes most of it is the fastest way to lose a
+  // reader's trust in every other number on the page, and the SELECTED week is
+  // the one he is looking at while he presses it.
+  if (fresh) {
+    if (typeof season.forgetStored === 'function') {
+      try { season.forgetStored(); } catch { /* a cache that will not clear is not an error */ }
+    }
+    cache.clear();
+    resetWeekly();
+    // The selected week comes back through the ordinary path, which repaints
+    // and re-searches on the way — so the depth map and the finder are never
+    // drawn from numbers this press has just declared stale.
+    await loadWeek();
+    if (sourceKey() !== key) return;
+  }
+
+  // Already in hand — switching to them is free, but the finder still has to be
   // re-run: its offers were priced on the OTHER measure, and repainting alone
   // would relabel them rather than recompute them.
-  if (!missingWeeks().length) { repaint(); return; }
+  if (!missingWeeks().length && !fresh) { repaint(); loadHistory(); return; }
 
-  if (!(await buyMissingWeeks())) return;
+  if (!(await buyMissingWeeks(null, { fresh }))) return;
   // A deal opened while these were reading is now priceable and stays open.
   runSearch({ keepDeal: true });
+  // Then the weeks that are SHOWN but never priced — the played ones and the
+  // bracket. They are a second phase on purpose: the priced span is what the
+  // page is for, and making the reader wait for week 1's history before the
+  // finder re-ranks would be paying for the smaller answer first.
+  loadHistory();
+}
+
+/**
+ * The weeks the page SHOWS but never prices: the ones already played, and the
+ * playoff weeks.
+ *
+ * Tim's ask, in his words: "it doesn't actually display any previous weeks in
+ * the chart, so that whole row is useless. Instead of getting rid of that row,
+ * just start displaying all weeks 1-17 in that preview so we can understand
+ * their past performance."
+ *
+ * The "Act" row on the player card can only ever be filled from a week that has
+ * been READ, and this page never read a played week — the span deliberately
+ * excludes them, because a trade cannot move banked points. So the row was
+ * empty for everybody, always. It is these requests that fill it.
+ *
+ * NONE OF THIS REACHES A PRICE. `weeklySpan()` is unchanged, so no gain, total,
+ * ranking or per-week figure on this page moves by a thousandth because of
+ * them. They are history and reference, and the notes say so.
+ *
+ * The cost is real and is stated: on a cold cache it is one request per played
+ * week plus one per bracket week — about eight in mid-season, and none of them
+ * on a second visit, because a played week can never change again and
+ * `js/store.js` keeps it for the season on exactly that grounds.
+ */
+async function loadHistory() {
+  const rest = [...pastWeeksShown(), ...playoffWeeksShown()].filter((w) => !haveWeek(w));
+  if (!rest.length || weekly.loading) return;
+  if (!(await buyMissingWeeks(rest))) return;
+  // No search: not one of these weeks is priced, so nothing to re-rank. The
+  // cards and the pop-up read them straight out of the cache.
+  paint();
 }
 
 /**
@@ -541,7 +738,7 @@ async function loadWeekly() {
  * but must NOT re-run the search — `runSearch` shuts the pop-up, so buying the
  * weeks through the page button would close the very thing that asked for them.
  */
-async function buyMissingWeeks(list = null) {
+async function buyMissingWeeks(list = null, { fresh = false } = {}) {
   const key = sourceKey();
   const missing = list ? list.filter((w) => !haveWeek(w)) : missingWeeks();
   if (!missing.length) return true;
@@ -568,7 +765,7 @@ async function buyMissingWeeks(list = null) {
       } else {
         for (const w of missing) {
           const built = generate(w);
-          if (built && built.teams && built.teams.length) weekly.byWeek.set(w, indexTeams(built.teams));
+          if (built && built.teams && built.teams.length) rememberWeek(w, built.teams);
           else weekly.failed.add(w);
           weekly.progress.done++;
         }
@@ -577,8 +774,18 @@ async function buyMissingWeeks(list = null) {
     } else {
       for (let i = 0; i < missing.length; i += WEEK_BATCH) {
         const batch = missing.slice(i, i + WEEK_BATCH);
+        // WHERE EACH WEEK CAME FROM, counted separately. `season.js` answers
+        // 'store' for a week this browser already held, and one of those cost
+        // nothing — a page that counted it as a request would be overstating
+        // its own cost, which is the same dishonesty as understating it.
+        // A season module without the fourth argument (an older stub) reports
+        // `undefined`, which falls to 'espn': the safe direction, since it
+        // over-counts rather than hiding a real request.
+        const sources = new Map();
         const got = await fetchWeeksRosters(batch, {
-          onProgress: () => {
+          fresh,
+          onProgress: (done, total, week, from) => {
+            if (week !== undefined) sources.set(week, from || 'espn');
             if (stale() || !weekly.progress) return;
             weekly.progress.done++;
             renderCost();
@@ -586,11 +793,9 @@ async function buyMissingWeeks(list = null) {
         });
         if (stale()) return false;
         for (const w of batch) {
-          // One request was spent on that week whether or not it answered, and
-          // the count has to say so — understating a cost is the one dishonesty
-          // this project avoids.
-          weekly.requests++;
-          if (got.has(w)) weekly.byWeek.set(w, indexTeams(got.get(w)));
+          if (sources.get(w) === 'store') weekly.fromStore++;
+          else weekly.requests++;
+          if (got.has(w)) rememberWeek(w, got.get(w));
           else weekly.failed.add(w);
         }
         weekly.means = new Map();
@@ -624,23 +829,123 @@ async function buyMissingWeeks(list = null) {
  * reordered; one shared derivation is the fix rather than a comment asking the
  * next person not to move anything.
  */
+/**
+ * What the weekly-measure button says, and whether it can be pressed.
+ *
+ * ITS JOB CHANGED ON 2026-09-19. It used to be the only thing on the page that
+ * would spend a request, and its face was the cost being asked for. The page
+ * prices itself now, so the interesting press is the other one Tim named —
+ * "until you re-load it" — and the button is a RE-READ: throw this browser's
+ * stored weeks away and buy them again from ESPN. That is the one action a
+ * reader cannot get any other way, and it is what somebody reaches for when a
+ * number looks wrong.
+ *
+ * Three other faces remain, and each is a real state rather than a variation
+ * on one: a span with nothing in it, a load in flight, and a load that came
+ * back short (ESPN refused a week, or the page was switched mid-flight). The
+ * last of those is a RETRY and says the number it would spend, because that is
+ * the one case where a press is about to cost something the reader has not
+ * already paid.
+ *
+ * A FUNCTION OF STATE, not of the DOM, and that is the point of it. The combo
+ * panel quotes this button's face word for word when it has to name it, and it
+ * used to do that by reading `$('loadWeeks').textContent` back off the page —
+ * which only ever gave the right answer because `renderCost()` happened to run
+ * earlier in `paint()` than `renderCombo()` did. Both derive it from here now,
+ * so the paint order is free.
+ */
 function weeksButton() {
   const span = weeklySpan();
   const ready = weeklyReady();
-  const showing = basis() === 'weeks';
 
-  if (!span.length) return { label: 'No remaining weeks to price', disabled: true };
-  if (weekly.loading) return { label: `Reading ${weekRange(span)}…`, disabled: true };
-  if (ready && showing) return { label: `${weekRange(span)} priced`, disabled: true };
-  if (ready) {
-    return { label: `Show ${weekRange(span)} — already loaded, no requests`, disabled: false };
+  if (!span.length) return { label: 'No remaining weeks to price', disabled: true, act: 'none' };
+  if (weekly.loading) {
+    const p = weekly.progress;
+    return {
+      label: p ? `Reading week ${Math.min(p.done + 1, p.total)} of ${p.total}…` : 'Reading…',
+      disabled: true,
+      act: 'none',
+    };
   }
+  if (ready) {
+    // The whole season, not the span: a re-read buys the played weeks and the
+    // bracket back as well, and the face has to name what it will spend.
+    const all = readableWeeks();
+    return {
+      label: state.isDemo
+        ? 'Rebuild the sample weeks — generated, no requests'
+        : `Re-read ${weekRange(all)} from ESPN — ${plural(all.length, 'request')}`,
+      disabled: false,
+      act: 'fresh',
+    };
+  }
+  // Short of a full span: something refused, or the page changed underneath it.
   return {
     label: state.isDemo
       ? `Price ${weekRange(span)} — generated, no requests`
-      : `Price ${weekRange(span)} — ${plural(missingWeeks().length, 'request')}`,
+      : `Retry ${weekRange(span)} — ${plural(missingWeeks().length, 'request')}`,
     disabled: false,
+    act: 'retry',
   };
+}
+
+/**
+ * "read 12 minutes ago · weeks 1–4 are final" — or nothing at all.
+ *
+ * HOW OLD ARE THESE NUMBERS is a question this page could not be asked before,
+ * because nothing survived a reload. It can be now, and it has to be able to
+ * answer: a stale number that cannot be told from a fresh one is worse than no
+ * cache (see the freshness rule in js/store.js, which is where the argument
+ * lives).
+ *
+ * The age quoted is the OLDEST unfinal week, not the newest and not an average.
+ * A reader asking this wants to know whether anything on screen predates the
+ * news he has just heard, and the oldest week is the only one of the three that
+ * answers it. Played weeks are quoted separately and without an age, because
+ * they have none worth having — a result does not get staler.
+ */
+function storedAgeLine() {
+  if (state.isDemo || typeof season.storedWeeks !== 'function') return '';
+  // MEMOISED FOR FIVE SECONDS, and that is not premature. `renderCost()` runs
+  // on every repaint and once per week as a load progresses, and listing the
+  // store parses every entry it holds — seventeen weeks is the better part of a
+  // megabyte of JSON. Five seconds costs nothing in honesty, because the line
+  // it produces is coarse to the minute: "read 12 minutes ago" is the same
+  // sentence five seconds later.
+  const now = Date.now();
+  if (now - ageLine.at < 5000) return ageLine.text;
+
+  const build = () => {
+    let held;
+    try { held = season.storedWeeks(); } catch { return ''; }
+    if (!held || !held.length) return '';
+    return describeHeld(held);
+  };
+  ageLine = { at: now, text: build() };
+  return ageLine.text;
+}
+
+/**
+ * The words, given what the store says it is holding.
+ *
+ * Split from the memo above so the arithmetic is readable on its own — and so a
+ * test can reach it without waiting five seconds for a cache to expire.
+ */
+function describeHeld(held) {
+  const shown = new Set(seasonWeeks());
+  const mine = held.filter((e) => shown.has(e.week) && e.fresh);
+  if (!mine.length) return '';
+
+  const live = mine.filter((e) => !e.final);
+  const banked = mine.length - live.length;
+  const oldest = live.reduce((a, e) => (a === null || e.ageMs > a ? e.ageMs : a), null);
+
+  const bits = [];
+  if (oldest !== null && typeof season.describeAge === 'function') {
+    bits.push(`projections read ${season.describeAge(oldest)}`);
+  }
+  if (banked) bits.push(`${plural(banked, 'played week')} kept as final`);
+  return bits.join(', ');
 }
 
 function renderCost() {
@@ -653,18 +958,36 @@ function renderCost() {
   btn.textContent = face.label;
 
   // -------------------------------------------------- what has been spent
+  //
+  // AND HOW OLD IT IS. The page reads itself now, so a reader who did not press
+  // anything has no other way of telling a number read four minutes ago from
+  // one read this morning — which is rule 7 in HANDOFF.md, and the whole price
+  // of being allowed a cache at all. `season.storedWeeks()` is the honest
+  // answer; a season module without it (an older stub) simply says nothing.
   const failed = [...weekly.failed].sort((a, b) => a - b);
+  const spent = [];
+  // "on this reading", not "on this page": a re-read zeroes the counters and
+  // starts again, so "on this page" would be a lifetime figure this does not
+  // keep and would quietly under-report a browser that has pressed Re-read.
+  if (weekly.requests) spent.push(`${plural(weekly.requests, 'request')} spent on this reading`);
+  if (weekly.fromStore) {
+    spent.push(
+      `${plural(weekly.fromStore, 'week')} came from this browser — no request` +
+      (weekly.requests ? '' : ' at all')
+    );
+  }
+  const age = storedAgeLine();
+  if (age) spent.push(age);
+  if (failed.length) spent.push(`ESPN gave nothing for ${failed.map((w) => `week ${w}`).join(', ')}`);
+
   $('costSpent').innerHTML = weekly.loading
     ? `<span class="working">${esc(
         weekly.progress
-          ? `week ${Math.min(weekly.progress.done + 1, weekly.progress.total)} of ` +
+          ? `reading week ${Math.min(weekly.progress.done + 1, weekly.progress.total)} of ` +
             `${weekly.progress.total}…`
           : 'reading…'
       )}</span>`
-    : weekly.requests
-      ? `${plural(weekly.requests, 'request')} spent on this page so far` +
-        (failed.length ? ` · ESPN gave nothing for ${failed.map((w) => `week ${w}`).join(', ')}` : '')
-      : '';
+    : spent.map(esc).join(' · ');
 
   // ------------------------------------------------------------- the words
   //
@@ -685,10 +1008,32 @@ function renderCost() {
       `generated inside the page, so on demo data this costs ` +
       `<strong>no requests at all</strong>; on your ESPN league the same span would be ` +
       `<strong>${plural(owed, 'request')}</strong> — one per week.`
+    // "ONE request on the other two measures" used to live here and is gone:
+    // it stopped being true the day the page started reading the whole season
+    // on load, whichever measure is drawn. The card and the deal pop-up want
+    // those weeks either way, so choosing a cheap measure no longer buys a
+    // cheap page — it only changes which number is printed.
     : `this is <strong>${plural(owed, 'request')}</strong> ` +
       `still to spend — <strong>one request per week</strong>, less the ${already} ` +
-      `already in hand. This page costs ONE request on the other two measures; ` +
-      `on this one it costs ${plural(span.length, 'request')} in total.`;
+      `already in hand. The span itself is ${plural(span.length, 'request')}; ` +
+      `<strong>choosing one of the other two measures does not make the page cheaper</strong>, ` +
+      `because the weeks are read for the player cards and the deal pop-up whichever measure ` +
+      `is on screen.`;
+
+  // WHY IT NO LONGER WAITS TO BE ASKED. This used to be a button you pressed,
+  // and the change is worth stating on the page rather than only in the code:
+  // the weeks are kept in this browser between pages now, so the same reader
+  // opening the page twice pays once.
+  const autoLine = state.isDemo
+    ? `<strong>The page prices itself.</strong> On sample data every week is generated inside ` +
+      `the page, so this costs nothing whenever it happens.`
+    : `<strong>The page prices itself on load</strong>, rather than waiting to be asked. That ` +
+      `changed on 2026-09-19: the weeks are now kept <strong>in this browser</strong> between ` +
+      `pages, so a second visit spends nothing and a first spends what a button press would have ` +
+      `spent a moment later. A week that has been <strong>played is kept for the season</strong> — ` +
+      `it can never change again — and a week still to come is re-read after six hours, because ` +
+      `ESPN revises a future projection as injury news lands. The button above throws all of ` +
+      `that away and reads every week again.`;
 
   // WHICH WEEKS, AND WHY THOSE. The span used to be the reader's pick — the
   // week picker and everything after it — and it is now derived from the
@@ -709,20 +1054,36 @@ function renderCost() {
       : `Nothing has been played yet according to the league schedule, so the whole season ` +
         `ahead is priced.`;
 
-  // The playoff weeks cost requests too, when a deal is opened, and are never
-  // priced — both said here, where the cost of the weekly measure is said.
+  // THE WEEKS THAT ARE SHOWN BUT NEVER PRICED, and there are now two kinds of
+  // them: the ones already played (for the player card's whole-season run and
+  // its Act row) and the playoff weeks. Both cost a request each on a cold
+  // browser and neither reaches a single figure on this page, so both are
+  // stated where the cost is stated.
+  const past = pastWeeksShown();
   const po = playoffWeeksShown();
-  const poLine = po.length
-    ? `<br><br><strong>Playoffs.</strong> Opening a deal also reads ${weekRange(po)} ` +
+  const shownOnly = [...past, ...po];
+  const shownLine = shownOnly.length
+    ? `<br><br><strong>The weeks it shows but does not price.</strong> ` +
+      (past.length
+        ? `${weekRange(past)} ${past.length === 1 ? 'has' : 'have'} been played, and ` +
+          `${past.length === 1 ? 'is' : 'are'} read so a player’s card can show his whole ` +
+          `season — including what he ACTUALLY scored, which only a played week has. `
+        : '') +
+      (po.length
+        ? `${weekRange(po)} are the playoff weeks, shown after a line in a deal’s pop-up and in ` +
+          `every card’s run. `
+        : '') +
       (state.isDemo
-        ? '(generated, no requests)'
-        : `(${plural(po.length, 'more request')}, once)`) +
-      ` and shows them after a line for reference. They are not in any figure on this page.`
+        ? 'On sample data they are generated, so they cost nothing.'
+        : `Together that is <strong>${plural(shownOnly.length, 'request')}</strong> on a browser ` +
+          `that has not read them before, and none on one that has. ` +
+          `<strong>Not one of them is in any figure on this page.</strong>`)
     : '';
 
   // The method, behind the toggle: which weeks, why those, and what they cost.
   $('costNote').innerHTML =
-    `<strong>Every remaining week</strong> prices ${spanWords}. ${spanReason}` + poLine +
+    `<strong>Every remaining week</strong> prices ${spanWords}. ${spanReason}` + shownLine +
+    `<br><br>` + autoLine +
     `<br><br>` +
     `<strong>Cost.</strong> ESPN has no bulk form — asking for thirteen weeks in one call ` +
     `returns only the current one, and four shapes of that request were tried — so ${costLine}` +
@@ -738,9 +1099,18 @@ function renderCost() {
       ? `ESPN returned nothing for ${failed.map((w) => `week ${w}`).join(', ')}; ` +
         `those weeks are left out of every number below, not counted as zero.`
       : '',
+    // The page loads them itself now, so this is a PROGRESS line rather than an
+    // instruction — but it still changes what every number below means, which
+    // is what keeps it out in front of the toggle rather than behind it.
     state.measure === 'weeks' && !weeklyReady()
-      ? `<strong>Every remaining week is selected but not loaded</strong>, so the page is ` +
-        `showing <strong>a typical week</strong> until the button above is pressed.`
+      ? (weekly.loading
+        ? `<strong>Still reading ${weekRange(span)}</strong>` +
+          (weekly.progress ? ` — week ${Math.min(weekly.progress.done + 1, weekly.progress.total)} ` +
+            `of ${weekly.progress.total}` : '') +
+          `. Until they are all in, every figure below is <strong>a typical week</strong>, ` +
+          `which is a different number on a different scale.`
+        : `<strong>Every remaining week is selected but not loaded</strong>, so the page is ` +
+          `showing <strong>a typical week</strong>. Press the button above to read them again.`)
       : '',
   ].filter(Boolean);
   const warnEl = $('costWarn');
@@ -774,10 +1144,30 @@ function playerRef(p, inner) {
  *
  * Tim asked for this in one line — "whenever a player is named, show the 13
  * week preview just like the analysis section" — and it is the same card,
- * literally: `js/player-card.js` is the analysis page's, extracted. The run
- * covers the weeks THIS page holds numbers for, which is one week on the cheap
- * measures and the whole remaining span once the weekly measure is loaded. The
- * heading says which, so a short run is never mistaken for a short season.
+ * literally: `js/player-card.js` is the analysis page's, extracted.
+ *
+ * THE RUN IS THE WHOLE SEASON SINCE 2026-09-19, and that is Tim's second ask of
+ * the day: "right now in the trade section it shows the act in the preview, but
+ * it doesn't actually display any previous weeks in the chart, so that whole row
+ * is useless."
+ *
+ * He was exactly right, and the cause was structural rather than a bug. The run
+ * used to cover the weeks this page HELD, and this page only ever bought the
+ * REMAINING span — because a trade cannot move banked points, so a played week
+ * is not evidence about any deal. But an "Act" row is actual points, and actual
+ * points only exist for a week that has been played. So the card's third row
+ * was empty for every player on this page, every time, by construction.
+ *
+ * The run is now weeks 1 to the last playoff week; the played half is bought
+ * for the card and reaches no price at all (`loadHistory`). A week that has not
+ * arrived yet is the card's own faint dot rather than a gap or a zero.
+ *
+ * THE STARTS COUNT is his third ask in the same paragraph — "the number of
+ * starting weeks in that user's lineup ... based on the information we have in
+ * the who to start, week by week box" — and it is on the heading line, which is
+ * the only place it can go: `js/player-card.js` is shared with the Analysis
+ * page and is a HANDOFF contract, so it draws `ident` and `heading` as plain
+ * text and this page does not get to add a row to it.
  */
 function cardFor(p) {
   const weeks = cardWeeks();
@@ -795,10 +1185,7 @@ function cardFor(p) {
   const heading = state.isDemo
     ? `Sample projections for ${weekRange(weeks)}`
     : `ESPN’s projection for ${weekRange(weeks)}`;
-  const tail =
-    weeks.length > 1
-      ? ''
-      : ' — pick “Every remaining week” above to fill the rest of the run in';
+  const tail = startsPhrase(p);
 
   return {
     ident,
@@ -822,12 +1209,138 @@ function cardFor(p) {
   };
 }
 
-/** The weeks this page has actually read, in order. Never empty on live data. */
+/**
+ * THE WHOLE SEASON, weeks 1 to the last playoff week — not the weeks in hand.
+ *
+ * It used to be "the weeks this page has actually read", which is what left the
+ * Act row empty: this page reads the REMAINING span, and an actual only exists
+ * for a week already played. A run that is a fact about the PAGE'S CACHE also
+ * grows and shrinks under the reader as the weeks land, so a man's season
+ * appeared to change length while he looked at it.
+ *
+ * A week the page has not read yet is the card's own faint "not read" dot —
+ * `tokenAt` returns `wait` — which is honest and settles as the weeks arrive.
+ * A week ESPN refused stays distinct from that, and both stay distinct from a
+ * man who was on nobody's roster (`off`), because they are three different
+ * facts and the card draws them three different ways.
+ */
 function cardWeeks() {
-  const held = [...new Set([...weekly.byWeek.keys(), ...weekly.failed])]
-    .filter((w) => Number.isFinite(w))
-    .sort((a, b) => a - b);
-  return held.length ? held : [state.week];
+  return seasonWeeks();
+}
+
+/**
+ * Who starts for one squad in one week, solved once and remembered.
+ *
+ * `optimalLineup` is `js/forecast.js`'s — the same solver "Who to start" runs,
+ * which is why the Starts count here and the Starts column there cannot come to
+ * different answers about one man (HANDOFF, "Four features now share
+ * optimalLineup").
+ *
+ * NO FLOORS. HANDOFF rule 13: the positional floor is applied when a lineup is
+ * ASSESSED and never when it is CHOSEN, or a flex choice between a 5 and a 4
+ * becomes a tie once both are lifted to 8 and the site starts telling him to
+ * start different players because of a waiver-wire number. This is a question
+ * about who is chosen, so it uses ESPN's own projections and nothing else.
+ *
+ * Ten squads by seventeen weeks is at most 170 solves for the life of the
+ * cache, shared by every card on the page.
+ */
+function startersIn(week, teamId) {
+  const key = `${week}:${teamId}`;
+  const held = weekly.lineups.get(key);
+  if (held) return held;
+
+  const roster = weekly.rosters.get(week);
+  const players = roster ? roster.byTeam.get(teamId) : null;
+  // A man with no id cannot be followed from one week to the next and cannot be
+  // counted, so he is out of the solve as well — the same rule the analysis
+  // page's `identified()` applies, and for the same reason: leaving him in
+  // would mark a lineup spot no count can carry.
+  const pool = (players || []).filter((p) => p.playerId !== null && p.playerId !== undefined);
+  const set = new Set(
+    pool.length && state.slots
+      ? optimalLineup(pool, state.slots).starters.map((s) => s.playerId)
+      : []
+  );
+  weekly.lineups.set(key, set);
+  return set;
+}
+
+/**
+ * How many of the weeks read this man is in his OWN manager's best lineup.
+ *
+ * Tim, 2026-09-19: "I want to start showing that player's number of starting
+ * weeks in that user's lineup in this same preview that is shown, based on the
+ * information we have in the 'who to start, week by week' box."
+ *
+ * WHOSE LINEUP IS DECIDED PER WEEK, not once. A man traded or claimed in
+ * October was somebody else's in September, and counting his whole season
+ * against the squad that holds him today would credit one manager with weeks he
+ * never had. The roster index knows who held him in each week, so the question
+ * asked is the honest one: in the week in question, did the manager who ACTUALLY
+ * held him have him in his best legal lineup.
+ *
+ * OUT OF THE WEEKS READ, never out of all of them — the same rule the analysis
+ * page's Starts column follows. A page half-loaded would otherwise report a
+ * squad as half-benched, which is a fact about the page and not about the
+ * squad. The phrase says how many weeks that was.
+ *
+ * @returns {{starts:number, weeks:number, team:string, moved:boolean}|null}
+ */
+function startsFor(p) {
+  if (!p || p.playerId === null || p.playerId === undefined) return null;
+  if (!state.slots) return null;
+
+  let starts = 0;
+  let read = 0;
+  let last = null;
+  const holders = new Set();
+  for (const w of seasonWeeks()) {
+    const roster = weekly.rosters.get(w);
+    if (!roster) continue;
+    const holder = roster.teamOf.get(p.playerId);
+    if (holder === undefined) continue;   // nobody rostered him that week
+    read++;
+    holders.add(holder);
+    last = holder;
+    if (startersIn(w, holder).has(p.playerId)) starts++;
+  }
+  if (!read) return null;
+  return {
+    starts,
+    weeks: read,
+    // The MOST RECENT holder, which is the squad the reader is looking at him
+    // on. `moved` is the honest caveat for the other case: a man who changed
+    // hands in October did not earn his September weeks here, and naming one
+    // manager without saying so would credit him with somebody else's.
+    team: last === null ? '' : nameOfTeam(last),
+    moved: holders.size > 1,
+  };
+}
+
+/** A squad's manager, by id, off the week currently loaded. */
+function nameOfTeam(teamId) {
+  const t = (state.data ? state.data.teams : []).find((x) => x.id === teamId);
+  return t ? t.name : '';
+}
+
+/**
+ * The starts count as the tail of the card's heading line.
+ *
+ * It names the squad and the number of weeks the count is over, because both
+ * change: "9 of 14" over one manager's weeks is a completely different claim
+ * from "9 of 17", and a man who changed hands has two managers in his season.
+ * Silent on a man nobody has rostered in any week read — a zero there would be
+ * a statement about a squad rather than about him.
+ */
+function startsPhrase(p) {
+  const s = startsFor(p);
+  if (!s) return '';
+  const who = s.team ? ` for ${s.team}` : '';
+  return (
+    ` · in the best lineup${who} in ${s.starts} of ${plural(s.weeks, 'week')} read` +
+    (s.moved ? ' (he has changed squads this season, so some of those weeks were elsewhere)' : '')
+  );
 }
 
 /**
@@ -1798,6 +2311,12 @@ function runSearch({ keepDeal = false } = {}) {
   state.combo = null;
   state.comboMerged = null;
   state.comboRows = [];
+  // Cancel a combo still queued behind the LAST search. It would spend a few
+  // seconds re-pricing offers nobody is looking at any more and then paint them
+  // over the new table. Bumping the token here rather than only inside
+  // `runCombo` is what makes a re-rank — which the page now does to itself on
+  // every load — cheap instead of double.
+  runCombo.token++;
 
   if (!teams.length || state.myTeamId === null) {
     state.deal = null;
@@ -2726,11 +3245,27 @@ function renderCombo() {
   state.comboRows = [];
 
   if (basis() !== 'weeks') {
-    body.innerHTML =
-      `<p class="empty">The best combo is only priced on <strong>every remaining week</strong>. ` +
-      // The button's face from `weeksButton()`, NOT read back off the element:
-      // this panel must not need the toolbar to have been painted first.
-      `Press <strong>${esc(weeksButton().label)}</strong> at the top.</p>`;
+    // TWO DIFFERENT REASONS TO BE HERE, and they need different sentences. The
+    // page prices itself now (2026-09-19), so a reader sees this either because
+    // the weeks are still arriving — in which case there is nothing to press
+    // and saying so would be wrong — or because he has deliberately chosen one
+    // of the scalar measures, in which case the way back is the picker and not
+    // the button beside it.
+    //
+    // The button's face comes from `weeksButton()`, NOT read back off the
+    // element: this panel must not need the toolbar to have been painted first.
+    body.innerHTML = weekly.loading
+      ? `<p class="empty"><span class="working">Reading ${esc(weekRange(span))}` +
+        (weekly.progress
+          ? ` — week ${Math.min(weekly.progress.done + 1, weekly.progress.total)} of ` +
+            `${weekly.progress.total}`
+          : '') +
+        `…</span> The best combo is priced on every remaining week, so it waits for them.</p>`
+      : `<p class="empty">The best combo is only priced on <strong>every remaining week</strong>. ` +
+        `Set <strong>Value on</strong> to <strong>Every remaining week</strong> at the top` +
+        (weeklyReady() ? ' — the weeks are already read, so it costs nothing' : '') +
+        `. The button beside it — <strong>${esc(weeksButton().label)}</strong> — ` +
+        `${weeklyReady() ? 'reads them again from scratch' : 'buys the ones that are missing'}.</p>`;
     note.innerHTML =
       `Two trades cannot be added up honestly on a single number per man: both of them re-fill ` +
       `the same one lineup, so their gains overlap and adding them promises twice what arrives. ` +
@@ -2846,7 +3381,22 @@ function renderCombo() {
       : `The search was capped at ${combo.considered} combinations, so this is the best of what ` +
         `was tried rather than provably the best of all. `) +
     `Every figure is per week over ${weekRange(span)}, with the rest-of-season total beside it; ` +
-    `nothing here is sent to ESPN.`;
+    `nothing here is sent to ESPN.` +
+    // THE FLOOR, SAID HERE TOO — and until 2026-09-19 it was not applied here
+    // at all. `bestCombo` took no `floors` option, so this panel priced every
+    // packing WITHOUT the waiver floor while every row in the finder above was
+    // priced WITH it: two different questions on one page, and a headline
+    // nobody could reconcile against the table. Tim found it ("the best combo
+    // gives me a single trade that is a 2-1 that has a lower +/week than the
+    // top trade"). Saying it out loud is rule 7, and it is also what stops the
+    // same gap reopening quietly — a note claiming a floor the engine is not
+    // applying is a visible lie rather than an invisible one.
+    (describeFloors(state.floors, { week: state.floorWeek })
+      ? `<br><br><strong>Priced on exactly the same basis as the offers above</strong>, the ` +
+        `positional floor included. ` + describeFloors(state.floors, { week: state.floorWeek }) +
+        ` Both squads in every deal get it, and so does each partner’s combined side — so a ` +
+        `packing can never be ranked on a different question from the rows it is built out of.`
+      : '');
 }
 
 /**
@@ -2870,10 +3420,20 @@ function runCombo() {
   state.comboRunning = true;
   renderCombo();
 
+  // THE OFFER LIST IS HELD IN THE CLOSURE, not read back off state when the
+  // deferred work runs. `runSearch` nulls `state.search` the moment a new
+  // search starts, and this hands off through rAF then a timeout — so a search
+  // that begins in that gap left `go()` reading `.offers` off null. It could
+  // not happen while the only thing that re-ran the search was a button press;
+  // it happens every load now that the page prices itself, because the weekly
+  // re-rank arrives behind the first scalar one. The token still guards against
+  // a STALE combo being painted; this guards against a stale one being
+  // COMPUTED, which is a different failure and needs its own answer.
+  const offers = state.search.offers;
   const token = ++runCombo.token;
   const go = () => {
     if (token !== runCombo.token) return;
-    state.combo = bestCombo(state.search.offers, {
+    state.combo = bestCombo(offers, {
       players: me.players,
       slots: state.slots,
       weeks: weeklySpan(),
@@ -2890,6 +3450,14 @@ function runCombo() {
       // gain, rather than as two rows a reader would be tempted to add up.
       onePerPartner: false,
       zeroIsBye: zeroIsBye(),
+      // THE SAME FLOOR THE FINDER WAS GIVEN, and leaving it out was a real
+      // defect Tim found on 2026-09-19: "the best combination is actually
+      // really bad and doesn't select the best combination at all ... a single
+      // trade that is a 2-1 that has a lower +/week than the top trade." The
+      // rows above were floored and this panel was not, so the two were ranking
+      // on different questions and the combo's own number could not be
+      // reconciled against the table it sat under.
+      floors: state.floors,
     });
 
     // Merged here, once per search, and not in the renderer: each merged offer
@@ -2901,6 +3469,10 @@ function runCombo() {
       weeks: weeklySpan(),
       projFor,
       zeroIsBye: zeroIsBye(),
+      // Same floor again — a merged row is a re-price of the packing's own
+      // deals, so on any other basis it would print a gain the packing above it
+      // does not agree with.
+      floors: state.floors,
     };
     state.comboMerged = {
       best: mergeComboByPartner(state.combo.best, opts),
@@ -3019,7 +3591,14 @@ function describeSource() {
     (state.scheduleError
       ? ` <strong style="color:var(--err)">The league schedule could not be read ` +
         `(${esc(state.scheduleError)}), so this page cannot tell which weeks are already ` +
-        `played and is pricing every week 1–${NFL_WEEKS}. Reload before trusting a trade.</strong>`
+        `played and would have to treat every week 1–${NFL_WEEKS} as still to come. ` +
+        // IT DID NOT PRICE THEM, and saying so is the point: the page reads
+        // itself now, and the one thing it refuses to do unasked is spend
+        // eighteen requests on a span it has just admitted it cannot work out.
+        // See `autoLoad`.
+        `<strong>It has not priced them</strong> — that would be eighteen requests on a span ` +
+        `this page cannot vouch for. Reload; the button above will read them if you want them ` +
+        `anyway.</strong>`
       : '')
   );
 }
@@ -3041,6 +3620,8 @@ async function loadWeek() {
   // longer matches what is selected is dropped rather than painted over a
   // newer one.
   const stale = () => `${state.source}:${state.week}` !== key;
+  // Whether this week actually cost a request, or came out of js/store.js.
+  let fromEspn = false;
 
   if (state.source === 'demo') {
     const generate = await getDemoGenerator();
@@ -3066,10 +3647,29 @@ async function loadWeek() {
     }
     if (stale()) return;
     state.data = loaded;
+    // A season module that does not say where the week came from (an older
+    // stub) is taken to have spent one — over-counting rather than hiding a
+    // real request, which is the safe direction of the two.
+    fromEspn = loaded.from !== 'store';
   }
 
   cache.set(key, state.data);
   rememberSelectedWeek();
+  // THE OPENING WEEK IS COUNTED TOO, now that the page prices itself. It used
+  // not to be — "the opening week is the page's, not the button's" — and that
+  // distinction made sense while the button was the only thing that spent
+  // anything, because it kept the button's own price honest. There is no button
+  // to keep honest any more: every request on this page is the page's, and a
+  // spent line that quietly left one out would be understating, which is the
+  // one dishonesty this project avoids.
+  //
+  // AFTER `rememberSelectedWeek`, which may have reset the counters on a change
+  // of league. Counted before it, this week's request would be zeroed a line
+  // later and the page would report one fewer than it spent.
+  if (state.source !== 'demo') {
+    if (fromEspn) weekly.requests++;
+    else weekly.fromStore++;
+  }
   render();
   setStatus(describeSource());
 }
@@ -3107,6 +3707,7 @@ async function useDemo() {
   setToggle('sourceToggle', 'src', 'demo');
   renderWeekPicker();
   await loadWeek();
+  autoLoad();
 }
 
 /** Every failed route into live mode ends here, so none of them can lie. */
@@ -3193,6 +3794,43 @@ async function useLive() {
   renderWeekPicker();
   await floorRead;
   await loadWeek();
+  autoLoad();
+}
+
+/**
+ * THE PAGE PRICES ITSELF — Tim, 2026-09-19: "make this price action an
+ * automatic action with the page (it should not load if it doesn't price it)."
+ *
+ * Deliberately NOT awaited by its callers. `loadWeek()` has already painted a
+ * usable page on the cheap measure by the time this starts, and the weeks land
+ * behind it: a reader who wanted the depth map should not sit in front of an
+ * empty screen for thirteen requests to get it. The cost line says what is
+ * happening while it happens, and the warning above the finder says every
+ * figure is on the other scale until they are all in.
+ *
+ * `auto: true` is the one thing that distinguishes it from the button: a reader
+ * who has deliberately chosen "a typical week" keeps it, and the weeks are
+ * bought anyway because the player card and the deal pop-up want them whichever
+ * measure is on screen.
+ */
+function autoLoad() {
+  // A load already in flight is a load already in flight. The connection bar
+  // can flip the page live a moment after demo has started its own, and two
+  // overlapping spans would double every count on the cost line.
+  if (weekly.loading) return;
+
+  // NOT WHEN THE SCHEDULE COULD NOT BE READ, and this is the one case where
+  // the automatic load is refused. Without the schedule the page does not know
+  // which weeks are played — `state.weeks` falls back to all eighteen and
+  // `playedWeeks()` is empty — so the "span" is the whole NFL season and
+  // auto-pricing it would spend eighteen unasked requests on numbers the page
+  // is simultaneously telling him not to trust ("Reload before trusting a
+  // trade", in `describeSource`). Spending most on the read that is least
+  // likely to be right is the wrong way round. The button is still there, so
+  // it is a refusal to guess rather than a feature withdrawn.
+  if (!state.isDemo && state.scheduleError) { renderCost(); return; }
+
+  loadWeekly({ auto: true });
 }
 
 /**
@@ -3342,29 +3980,107 @@ function customValue(p) {
   return Number.isFinite(v) ? v : null;
 }
 
-/** The men a squad could send, best first on the measure the page is using. */
+/**
+ * A squad's whole roster AS A LINEUP: QB, RB1, RB2, WR1…, FLEX, D/ST, K, then
+ * the bench.
+ *
+ * Tim, 2026-09-19: "display the two teams players like most other boxes with
+ * order of positions and overall starting lineup (QB, RB1, RB2, ... BE, BE, BE,
+ * etc.)". It was best-first on the page's measure, which is a perfectly good
+ * order for a list of assets and the wrong one for a list of PLAYERS: a manager
+ * reading his own squad reads it as a lineup, and the rest of this site already
+ * does — "Season by week" on the Analysis page and this page's own deal pop-up
+ * both lay a lineup out through `js/lineup-slots.js`.
+ *
+ * SO IT USES THAT MODULE, and does not grow a second ordering. `slotRows` says
+ * what the league's slots are (read off the lineups ESPN has already accepted,
+ * so a three-receiver league gets WR1/WR2/WR3 without being told), and
+ * `fillSlots` hands one week's best legal lineup out to them. A manager reading
+ * WR2 here and WR2 in the pop-up is reading the same claim.
+ *
+ * THE LINEUP IS SOLVED ON THE PAGE'S OWN MEASURE, not on the raw week. The
+ * number printed beside each man is `customValue`, so solving on anything else
+ * would put a list in front of him whose order its own numbers contradict —
+ * under "every remaining week" the man who starts is the one with the best mean
+ * over the span, and that is the number in the column.
+ *
+ * WHO IS ON THE BENCH IS THIS PAGE'S ANSWER, NOT ESPN'S. A squad's `BE` here is
+ * "not in the best legal lineup", which is the same question every other panel
+ * on the site answers, and is deliberately not ESPN's `lineupSlotId` — that
+ * only says where a manager has parked somebody today.
+ */
 function customRoster(teamId) {
   const team = teamById(teamId);
   if (!team) return [];
-  return (team.players || [])
-    .filter((p) => p.playerId !== null && p.playerId !== undefined)
-    .slice()
+  const men = (team.players || [])
+    .filter((p) => p.playerId !== null && p.playerId !== undefined);
+  if (!men.length) return [];
+
+  // The pool the solver sees carries the page's measure as `projected`, which
+  // is what `optimalLineup` and `fillSlots` both read. The men handed back are
+  // the ORIGINALS — the copies exist only to be ranked.
+  const byId = new Map(men.map((p) => [p.playerId, p]));
+  const pool = men.map((p) => ({ ...p, projected: customValue(p) }));
+  const rows = state.slots ? slotRows(state.slots) : [];
+  const filled = rows.length ? fillSlots(optimalLineup(pool, state.slots).starters, rows) : new Map();
+
+  const out = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const pick = filled.get(row.key);
+    if (!pick || !byId.has(pick.p.playerId)) {
+      // A slot nobody can fill is still a row of the lineup, and saying so is
+      // the point — a squad with no kicker has a hole, not a shorter list.
+      out.push({ slot: row.key, p: null });
+      continue;
+    }
+    seen.add(pick.p.playerId);
+    out.push({ slot: row.key, p: byId.get(pick.p.playerId) });
+  }
+  // Then the bench, best first on the same measure — which is the order a
+  // manager thinks of his own bench in, and the order the roster detail on the
+  // Analysis page uses.
+  const bench = men
+    .filter((p) => !seen.has(p.playerId))
     .sort((a, b) => (customValue(b) ?? -Infinity) - (customValue(a) ?? -Infinity));
+  for (const p of bench) out.push({ slot: 'BE', p });
+  return out;
 }
 
-/** One roster list. The whole row is the label, so a tap anywhere toggles him. */
+/**
+ * One roster list. The whole row is the label, so a tap anywhere toggles him.
+ *
+ * EVERY ROW IS DRAWN, and the panel does not scroll (Tim: "just show all 16-17
+ * positions, don't make a scrolling space so the view is limited"). An empty
+ * slot draws as a row with no checkbox: there is nobody there to trade, and a
+ * missing row would make the lineup look one man shorter than it is.
+ */
 function customList(teamId, picked, which) {
-  const men = customRoster(teamId);
-  if (!men.length) return '<div class="empty">No roster for this squad in this week.</div>';
+  const rows = customRoster(teamId);
+  if (!rows.length) return '<div class="empty">No roster for this squad in this week.</div>';
   const on = new Set(picked.map(String));
-  return men.map((p) => {
+  return rows.map(({ slot, p }) => {
+    if (!p) {
+      return (
+        `<div class="cu-man empty-slot">` +
+        `<span class="sl">${esc(slot)}</span>` +
+        `<span class="nm muted">nobody</span>` +
+        `<span class="pv">—</span>` +
+        `</div>`
+      );
+    }
     const lit = on.has(String(p.playerId));
     const v = customValue(p);
     return (
       `<label class="cu-man${lit ? ' on' : ''}">` +
       `<input type="checkbox" data-side="${which}" value="${esc(p.playerId)}"${lit ? ' checked' : ''}>` +
+      `<span class="sl">${esc(slot)}</span>` +
       `<span class="nm">${esc(p.name)}</span>` +
-      `<span class="pos">${esc(p.position)}</span>` +
+      // The position is still here and is still NOT the slot: a man in the FLEX
+      // is a WR who happens to be there this week, and the two answer different
+      // questions. Suppressed on a defence for the same reason as everywhere
+      // else on this page — the position is in the name (see `posTag`).
+      `<span class="pos">${p.position === 'DST' ? '' : esc(p.position)}</span>` +
       `<span class="pv">${v === null ? '—' : fmt(v)}</span>` +
       `</label>`
     );
@@ -3475,24 +4191,73 @@ function renderCustomPickers() {
   $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b');
 }
 
+/**
+ * What a side gains, BIG, under that side.
+ *
+ * Tim, 2026-09-19: "just show the single # a week (over weeks 2-14) big and
+ * colorized in green or red under their side of the trade (right now they're
+ * both under the first players trade)."
+ *
+ * He is describing a layout bug and he is right about it. The preview was one
+ * `<p>` holding both figures, sitting below a two-column row — so on a laptop
+ * the whole sentence lined up under the LEFT column and read as though both
+ * numbers belonged to that squad. It was never wrong, and it was never
+ * readable. Each figure now lives inside its own `.cu-side`, under the roster
+ * it is about, so the column says whose it is and the words do not have to.
+ *
+ * HIS DISPLAY RULE, UNCHANGED (rule 10 in HANDOFF.md): per week first, the
+ * rest-of-season total as the small sub-number. The weekly gains this engine
+ * produces are season totals and are roughly nine times a per-week figure —
+ * printing one as the other is the factor-of-nine error this whole file's
+ * header is about.
+ *
+ * COLOUR IS NEVER THE ONLY CUE. The sign is always printed, which is the same
+ * rule the depth map's tints and the Players page's two greens follow, and it
+ * is what keeps the number readable to anyone who cannot separate the hues.
+ */
+function customGainHtml(delta) {
+  const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+  return (
+    `<span class="cu-num ${cls}">${signedText(perWeekOf(delta))}<span class="unit">/wk</span></span>` +
+    `<span class="cu-sub">${signedText(delta)} over ${esc(weekRange(weeklySpan()))}</span>`
+  );
+}
+
+/** Nothing to show under a side yet — reserved, so the panel cannot jump. */
+const CU_BLANK = '<span class="cu-num flat">—</span><span class="cu-sub">no deal yet</span>';
+
 function renderCustomPreview() {
   const el = $('cuPreview');
   const { sendA, sendB } = state.custom;
+  const blank = () => {
+    $('cuGainA').innerHTML = CU_BLANK;
+    $('cuGainB').innerHTML = CU_BLANK;
+    $('cuSave').disabled = true;
+    $('cuOpen').disabled = true;
+  };
+
   if (!sendA.length && !sendB.length) {
     el.innerHTML = '<span class="muted">Tick who moves on each side to price the deal.</span>';
-    $('cuSave').disabled = true;
+    blank();
     return;
   }
   const priced = priceCustom(state.custom);
   if (priced.error) {
     el.innerHTML = `<span class="muted">${esc(priced.error)}</span>`;
-    $('cuSave').disabled = true;
+    blank();
     return;
   }
   $('cuSave').disabled = false;
+  $('cuOpen').disabled = false;
+  $('cuGainA').innerHTML = customGainHtml(priced.forA.delta);
+  $('cuGainB').innerHTML = customGainHtml(priced.forB.delta);
+  // The sentence above them is now about the DEAL rather than about the
+  // numbers: who moves which way, which the two columns cannot say between
+  // them. The figures are under their own squads and do not need naming twice.
   el.innerHTML =
-    `<strong>${esc(priced.teamA.name)}</strong> ${weeklyPhrase(priced.forA.delta)} · ` +
-    `<strong>${esc(priced.teamB.name)}</strong> ${weeklyPhrase(priced.forB.delta)}`;
+    `<strong>${esc(priced.teamA.name)}</strong> sends ${customNames(priced.sendA)} · ` +
+    `<strong>${esc(priced.teamB.name)}</strong> sends ${customNames(priced.sendB)} · ` +
+    `priced over ${esc(weekRange(priced.weeks))}`;
 }
 
 function renderCustomSaved() {
@@ -3543,6 +4308,17 @@ function renderCustomNote() {
     `<strong>Any two squads, not just yours.</strong> A trade between two other managers is priced ` +
     `the same way, which is how you tell whether a deal you have been shown helps the other side ` +
     `more than it helps you.` +
+    `<br><br>` +
+    `<strong>Both squads are laid out as a lineup</strong> — QB, RB1, RB2, WR1… then the bench — ` +
+    `using the same slot rules the Analysis page&rsquo;s season sheet and this page&rsquo;s own deal ` +
+    `pop-up use, so WR2 means the same thing in all three. The slot is this page&rsquo;s answer, not ` +
+    `ESPN&rsquo;s: a man is on the bench here when he is not in the best legal lineup, whatever ` +
+    `ESPN&rsquo;s roster says he is parked as today. A slot nobody can fill is still a row, because ` +
+    `an empty slot is what a hole looks like.` +
+    `<br><br>` +
+    `<strong>Week by week</strong> opens the deal in the same pop-up a found trade opens &mdash; the ` +
+    `per-week breakdown, the slot-by-slot before and after, and the side toggle &mdash; before it is ` +
+    `saved as well as after.` +
     `<br><br>` +
     `Only the players and the squads are saved, never the price: one kept from last week would be ` +
     `wrong by this week&rsquo;s projections, so every saved trade is re-priced from the current data ` +
@@ -3684,7 +4460,13 @@ $('measureSelect').addEventListener('change', (e) => {
   repaint();
 });
 
-$('loadWeeks').addEventListener('click', () => { loadWeekly(); });
+// The button is a RE-READ now, not a purchase — see `weeksButton()`. `fresh`
+// is what makes it one: it throws this browser's stored weeks away first, so a
+// press that came back with the same numbers means the numbers really are what
+// ESPN is publishing rather than what this browser happened to be holding.
+$('loadWeeks').addEventListener('click', () => {
+  loadWeekly({ fresh: weeksButton().act === 'fresh' });
+});
 
 /**
  * A click on an offer row — in either table — opens that deal in the modal.
@@ -3876,11 +4658,15 @@ if (rememberedTeam !== null) state.myTeamId = rememberedTeam;
 const rememberedWeek = prefs.get('week', null);
 if (rememberedWeek !== null) state.week = rememberedWeek;
 
+// A DELIBERATE CHOICE STILL WINS. The default is now "every remaining week"
+// (the page buys it either way), but somebody who picked one of the two scalar
+// measures picked it, and a page that overrode that would be answering a
+// question he had already answered. The weeks are still bought — the card and
+// the pop-up want them whichever measure is drawn — so the choice costs him
+// nothing either way.
 const rememberedMeasure = prefs.get('measure', null);
-if (MEASURES[rememberedMeasure]) {
-  state.measure = rememberedMeasure;
-  $('measureSelect').value = state.measure;
-}
+if (MEASURES[rememberedMeasure]) state.measure = rememberedMeasure;
+$('measureSelect').value = state.measure;
 
 
 // ---- custom trades: the controls ----------------------------------------
@@ -3931,9 +4717,19 @@ for (const listId of ['cuListA', 'cuListB']) {
     const id = String(box.value);
     const held = state.custom[side].filter((x) => String(x) !== id);
     state.custom[side] = box.checked ? held.concat(id) : held;
-    // The lists are NOT rebuilt here, only the price: redrawing them would
-    // throw away the scroll position of a sixteen-man list under the very
-    // finger that just ticked somebody in it.
+    // THE LISTS ARE STILL NOT REBUILT HERE, only the price — but the reason has
+    // changed and the old one is gone. It used to be the scroll position: the
+    // roster was a capped scroller, and redrawing it would have thrown that
+    // away under the very finger that just ticked somebody in it. The scroller
+    // went on 2026-09-19 (Tim: "don't make a scrolling space"), so that reason
+    // went with it.
+    //
+    // What is left is FOCUS, and it is a better reason than the first one.
+    // Rebuilding the list replaces the checkbox that was just operated, which
+    // sends the keyboard back to the top of the document mid-deal — and it
+    // would reorder nothing, since the lineup order is a fact about the
+    // projections and not about who is ticked. So there is nothing to gain and
+    // a tab position to lose.
     const row = box.closest('.cu-man');
     if (row) row.classList.toggle('on', box.checked);
     renderCustomPreview();
@@ -3969,6 +4765,33 @@ $('cuClear').addEventListener('click', () => {
   state.custom.sendA = [];
   state.custom.sendB = [];
   renderCustom();
+});
+
+/**
+ * The deal being BUILT opens the same pop-up a found trade does.
+ *
+ * Tim, 2026-09-19: "allow a trade analysis (identical to the box-pop up that
+ * appears when you click on a pre-made trade) for this custom trade just like
+ * any other trade that we have."
+ *
+ * Worth being exact about what was and was not there, because PROGRESS.md said
+ * this already worked: a SAVED row has opened the finder's own pop-up since
+ * 2026-09-18 and still does. The BUILDER never could — there was no way to look
+ * at a deal week by week without committing it to the list first, which is the
+ * wrong way round: the week-by-week breakdown is how you decide whether a deal
+ * is worth keeping at all.
+ *
+ * `customOffer` was already the shape the pop-up understands, so this needed no
+ * second rendering path — only a control. `stopPropagation` for the same reason
+ * the finder's rows do it: the document-level handler treats anything outside
+ * the modal card as an outside click, so without it the press that opened the
+ * pop-up would reach that handler a moment later and shut it again.
+ */
+$('cuOpen').addEventListener('click', (e) => {
+  const priced = priceCustom(state.custom);
+  if (priced.error) return;
+  e.stopPropagation();
+  openDeal(customOffer(state.custom, priced), 'cu-build');
 });
 
 $('cuRows').addEventListener('click', (e) => {
