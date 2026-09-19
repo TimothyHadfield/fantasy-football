@@ -1,5 +1,13 @@
 # The archive
 
+> **Status, 2026-09-19: this directory is still empty, and that is the one
+> outstanding job on the project.** The capture itself IS working — Tim's
+> browser holds readings for weeks 1 and 2, about 31KB — but they live only in
+> that browser, where clearing site data would delete them. He needs to press
+> **Export archive** on the schedule page's Time machine panel; the file lands
+> in his Downloads and gets committed here. See HANDOFF.md, which a fresh
+> session reads first.
+
 This is where the schedule page's **time machine** keeps its history.
 
 ## Why it exists

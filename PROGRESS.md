@@ -507,21 +507,41 @@ requests**: the pop-up already fetched those weeks.
   verdict and the published evidence for each, the numbers a feature could use,
   and six candidate features. Read it before proposing new analysis.
 
-### The density audit (measured, not yet applied)
+### The density audit (measured; partly applied 2026-09-18)
 
 Three read-only audits measured every page at 1500px and 390px. Nothing was
-changed; the plan waits on two answers from Tim (how tight, and one column or
-two). What they found:
+changed that day; the plan waited on two answers from Tim.
+
+**He answered on 2026-09-18** — leave vertical density alone, pair panels
+horizontally wherever two fit — and that half is built, along with both of the
+bug fixes below. See "Panels pair up where they fit" at the top of this file
+for what shipped and what it measured. **Read the numbers below as the
+BEFORE state**; two of them have moved:
+
+- the sideways scroll on `index.html` at 390px is fixed and verified;
+- `details.explain > summary` is 44px under a finger (still 19px under a
+  mouse, deliberately).
+
+Its own caution about headless Edge is also now known to have been wrong: the
+390px screenshots ran off the right edge on every page because headless Edge
+will not make a window narrower than about 500px. Driving
+`Emulation.setDeviceMetricsOverride` over CDP instead measures 390px properly.
+
+What the audits found:
 
 - **A third of every page is frame** — 7,279px of padding, headings, ledes and
   closed explain rows on a laptop, 8,077px on a phone.
-- **`index.html` genuinely overflows a 390px phone** (content 571px): a
-  `.grid-2` child's automatic minimum is its `min-content`, so a wide table
-  blows the grid out instead of scrolling inside `.table-scroll`.
-  `.grid-2 > * { min-width: 0 }` fixes it, verified. This is the answer to the
-  standing "does anything scroll sideways on his iPhone" question: yes, Home.
+- **`index.html` genuinely overflows a 390px phone** (content 571px): a grid
+  child's automatic minimum is its `min-content`, so a wide table blows the
+  grid out instead of scrolling inside `.table-scroll`. That was the answer to
+  the standing "does anything scroll sideways on his iPhone" question: yes,
+  Home. **FIXED 2026-09-18** — `min-width: 0` on the children, and the class is
+  `.panel-row` now, not `.grid-2`, which no longer exists anywhere. Re-measured
+  at 390px: no page scrolls sideways.
 - **Four tap targets are under the 44px floor**, `details.explain > summary` at
-  **18.8px** worst — and it is on 27 panels.
+  **18.8px** worst — and it is on 27 panels. **That one is FIXED 2026-09-18**,
+  under `hover: none` only (19px → 44px, measured under touch emulation); the
+  other three were never named in the audit's summary and are still unknown.
 - Shared CSS alone (density tokens, a `.panel-grid` whose columns are
   `minmax(min(--col-min, 100%), 1fr)` so they never overflow a phone, and
   `.stat-line` replacing stat tiles) takes 22,021px → ~17,900px on a laptop and
@@ -1736,6 +1756,10 @@ offer opens the deal week by week, and the combo section says which offers can
 all be made at once. Everything in "The Trade page" above still describes the
 depth map and the finder's search; what follows is what changed around them.
 
+**A fifth panel, Custom trades, arrived on 2026-09-18** — the same question
+asked by hand, for any two squads. It is described at the top of this file
+under "Custom trades"; everything below still holds for the four it joined.
+
 **THE WEEKLY MEASURE IS NOT THE DEFAULT AND IS ONE LABELLED PRESS AWAY.** It
 cannot be made cheap: valuing a squad at what it can field in every remaining
 week needs every remaining week's projections, and there is no bulk form (rule
@@ -2787,12 +2811,13 @@ a band in place.
 **The suites are in `tests/` now. Run them with `cd tests && npm install &&
 npm test`** — see [tests/README.md](tests/README.md).
 
-**26 suites, over 9,400 assertions.** The last full run on 2026-09-16 was green
-in about 230 seconds (it was 25 suites and 9,386 counted assertions earlier the
-same day; `test-bridge-settle.mjs` and several new page assertions came after),
-plus four suites that report pages or scenarios rather than a count (`test-pages-render` 6 pages, `test-home` 2 pages,
-`stats-weeks` and `opp-check` 6 scenarios each). Those figures are the run, not
-an estimate.
+**35 suites, 11,598 assertions**, counted off a green run on 2026-09-19 (it was
+26 suites and ~9,400 on 2026-09-16; the cloud, capture, bye-rule, floor and
+order suites came after). Four of the 35 report pages or scenarios rather than
+a count and are not in that total: `test-pages-render` 6 pages, `test-home`
+2 pages, `stats-weeks` and `opp-check` 6 scenarios each. Those figures are the
+run, not an estimate — and they drift, so if a number here disagrees with a
+run, the run is right.
 
 **`test-extension.mjs` HAD BEEN LOST FROM THE REPO, and that is a lesson rather
 than a footnote.** This file documented it at 38 assertions as though it were
@@ -2928,15 +2953,22 @@ to get wrong.
   archive**; the file lands in his Downloads and *you* commit it to
   `data/snapshots/`. **Check that folder yourself, then ask.** Everything else
   on this list can be built in December just as well as today; this cannot.
-- **THE DENSITY PASS IS THE NEXT BUILD, and it is measured and planned.** See
-  "The density audit" above for the numbers and the exact CSS. It needs two
-  answers from Tim first (comfortable ~25% or tight ~40%; two columns on a
-  laptop or one everywhere), plus a third worth asking: should the Data source
-  panel fold into the connection bar (~1,300px on a laptop, ~1,700 on a phone).
-  Two items in it are bug fixes and should land whatever he answers:
-  `.grid-2 > * { min-width: 0 }` (index.html really does scroll sideways on a
-  390px phone) and the four sub-44px tap targets, `details.explain > summary`
-  at 18.8px worst.
+- **THE DENSITY PASS: HALF DONE, and the answered half is live.** Tim's answer
+  on 2026-09-18 was "leave it as is for now, but anywhere we can condense
+  horizontally and fit 2 boxes, we should. This might mean there is a mix
+  between full-width boxes and half-width boxes" — so vertical density is
+  untouched and the horizontal pairing is built (`.panel-row`; see "Panels pair
+  up where they fit"). Measured 21,798px → 20,810px at 1500px. **Both bug fixes
+  from the audit landed with it and are verified by measurement**: the sideways
+  scroll on index.html at 390px is gone, and `details.explain > summary` is
+  44px under a finger and still 19px under a mouse.
+
+  **What is left is the part he has not answered**: the rest of his original
+  25–40% can only come from content — eight charts at 300px, eighteen control
+  rows, and seven Data-source panels (~1,300px on a laptop, ~1,700 on a phone)
+  that mostly restate the connection bar above them. **Should the Data source
+  panel fold into the connection bar?** That is the single biggest saving left
+  and the one question worth putting to him again.
 - **December is still unfinished**, and it is now the nearest deadline after the
   reading. Home, the Players page and "Who to start" stop at the last regular
   week, so his playoff matchup never appears; the simulation says "nothing left

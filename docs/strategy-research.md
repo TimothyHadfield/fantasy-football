@@ -357,7 +357,13 @@ Measured in THIS project (public league 1241838, 2025, 70 games):
 
 ## Open questions for Tim
 
-- Does his league have **divisions**? (ESPN seeds division winners first; the
-  simulation ignores divisions.)
+- ~~Does his league have **divisions**?~~ **ANSWERED BY THE LEAGUE, 2026-09-18.**
+  It was never a question for Tim: ESPN publishes
+  `settings.scheduleSettings.divisions` and `espn.parsePlayoffs` had decoded the
+  count all along, with nothing reading it. `capture.divisionCount` /
+  `hasDivisions` read it now, and the simulation panel says out loud that its
+  seeding ignores divisions when the league really has more than one. The
+  simulation still does not MODEL them — that is the open part, and it only
+  matters if his league turns out to have any.
 - How many **IR slots**, and what is the **trade deadline** date?
 - Should trade values count the **playoff weeks** (15–17)?

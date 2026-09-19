@@ -3,8 +3,8 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-18. Everything below is pushed and live; 35 test suites,
-~11,600 assertions, green, and GitHub Actions runs them on every push.
+Last updated 2026-09-19. Everything below is pushed and live; 35 test suites,
+11,598 assertions, green, and GitHub Actions runs them on every push.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -56,7 +56,9 @@ Tim was told and may overrule it. A week he never opens the site on his
 computer is simply gone.
 
 `data/snapshots/` in the repo is still empty, and that is the EXPORT half
-above, not the capture half. Two things to ask, in this order:
+above, not the capture half. **Checked again 2026-09-19: still nothing in the
+repo and no `fantasy-archive-*.json` in his Downloads**, so the export has not
+happened yet. Two things to ask, in this order:
 
 1. **"Has the Time machine panel recorded this week?"** It had weeks 1 and 2 as
    of 2026-09-18. A later week missing is the one thing worth interrupting
@@ -317,7 +319,11 @@ Break one of these in one file and the break shows up in another.
   `POS_ORDER`, and nothing downstream may learn it exists — ranks, labels and
   the startable bars all read a player's real position.
 - **The player card is `js/player-card.js`, and there is one of it.** The
-  analysis grids and the Trade page both use it. It draws three rows — the
+  analysis grids and the Trade page use it. **"Season by week" deliberately
+  does NOT**, since 2026-09-18 — Tim asked for it off that panel, where the
+  highlight already reads a man across the weeks, so the line above the table
+  carries his name, season projection and average instead. That is one panel
+  opting out, not the card being retired. It draws three rows — the
   weeks, the projection, and the ACTUAL for weeks already played — and it
   **does not scroll at any length**: the run wraps onto balanced lines instead
   (13 weeks at 390px become 7 + 6). A scrollbar reintroduced anywhere inside it
@@ -332,7 +338,11 @@ Break one of these in one file and the break shows up in another.
 - **Nothing may be reachable only by hovering.** Tim reads the site on his
   phone. Where a hover reveals something, a tap has to reveal the same thing —
   the analysis grids' card opens as a sheet on a coarse pointer, and
-  `touch-check.mjs` is what keeps the two modes agreeing.
+  `touch-check.mjs` is what keeps the two modes agreeing. **Taking a card away
+  does not relax this**: when Season by week lost its card, the tap there had
+  to be intercepted rather than left to follow the link, or the name and the
+  two numbers would have become hover-only — so that line carries an "Open
+  player" link to give back the action the tap preempted.
 - **A `title` is invisible on iOS, and `js/touch-titles.js` is the answer.**
   Every page loads it with one script tag; on a coarse pointer a tap on
   anything carrying a `title` opens the words as a sheet. So `title` is still
@@ -475,7 +485,7 @@ Everything Tim has asked for is built and live:
 |---|---|
 | `index.html` | Season dashboard — this week's matchups with projections, roster strength, standings, injured starters, bench points |
 | `stats.html` | The rebuild of his 2025 spreadsheet, plus schedule luck (average projected opponent), which needs no games played. Close luck, luck score, S+L, LS and PS show **from week 1 with a ±** (one standard error; wide early, narrowing weekly) — Tim's ask, replacing a week-3 hold-back |
-| `analysis.html` | All ten squads in **one grid** — nine spots, a total and the bench — with the week picker and an `A week / Proj avg <season>` switch inside the panel (pref `analysis.measure`), and a card (hover, or tap on a phone) carrying each man's whole season as a three-row chart — weeks, projection, and actual for weeks already played and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; **"Season by week"** — since 2026-09-17 a LINEUP SHEET, not a roster list: one row per slot (QB, RB1, RB2, WR1…, FLEX, D/ST, K), each week showing that week's best legal lineup ranked inside its slot, a "Starting lineup" totals band, hover/tap/focus naming the man and lighting every week he holds, and low numbers marked amber ▼ (1 SD) / red ▼▼ (2 SD) against the LEAGUE's distribution for that slot, thresholds printed; and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
+| `analysis.html` | All ten squads in **one grid** — nine spots, a total and the bench — with the week picker and an `A week / Proj avg <season>` switch inside the panel (pref `analysis.measure`), and a card (hover, or tap on a phone) carrying each man's whole season as a three-row chart — weeks, projection, and actual for weeks already played and bench ranks (`12.3 RB4`); a per-team drill-down whose lineup you can **swap around** to see what it would score; **"Season by week"** — since 2026-09-17 a LINEUP SHEET, not a roster list: one row per slot (QB, RB1, RB2, WR1…, FLEX, D/ST, K), each week showing that week's best legal lineup ranked inside its slot, a "Starting lineup" totals band, hover/tap/focus lighting every week he holds and naming him on the line above the table — **with his season projection and what he is actually averaging, and NO card** since 2026-09-18 (Tim: the 14-week preview was answering a question the panel already answers) — low numbers marked amber ▼ (1 SD) / red ▼▼ (2 SD) against the LEAGUE's distribution for that slot, thresholds printed, and **numbers lifted by the waiver floor drawn in orange with a dotted underline** (see rule 13); and **"Who to start, week by week"** — one position at a time, the whole season across, every week that man makes the best legal lineup shaded (an `F` when he only gets in through the flex), so a starter's byes and soft weeks and whoever covers them are one glance apart |
 | `schedule.html` | **Ordered by usefulness (Tim, 2026-09-17): My season, Simulate season, Week matchups (the week picker lives inside that panel, with the week's headline numbers and its cards), then Data source, Time machine, Results, Head to head. THERE IS NO STANDINGS PANEL** — his direction that the site adds to ESPN rather than rebuilding a league table ESPN already shows; the two things it carried that ESPN does not publish, his place now and his run-in rank, are figures inside My season. `capture.standingsKey` is untouched and still seeds the bracket. Matchups, results, fixture/head-to-head grid, per-matchup win %, a season forecast per team, a Monte Carlo season simulation **including the playoff bracket** — where a team finishes is the bracket for places 1–6 and the regular-season table below that, which is how this league ranks people — and a **time machine** — a reading of the whole page is saved automatically once a week, picking one replays the season as it looked then, and the archive committed under `data/snapshots/` restores itself into any browser |
 | `waivers.html` | **"Players"** — the wire priced by week, your own worst man at each position in the same list, every week that beats him shaded; then **"Taken players"**, everyone rostered, uncoloured, with owner and squad rank. Each table has its own position filter (incl. FLEX); the week span is shared |
 | `trade.html` | The **finder**, then **Best combo**, then the **depth map** (Tim's order, 2026-09-17), then **Custom trades** (2026-09-18) — build any deal between any two squads and keep it; only the players are saved, never the price, so every row is re-priced on each render: every 1-for-1, 2-for-1 and 1-for-2 where **both** lineups improve, priced by the lineup each squad would field EACH REMAINING WEEK. Click an offer for a week-by-week pop-up; **Best combo** is the set of deals he can make at once (a player cannot be traded twice), merged per manager; **Open in ESPN** deep-links the trade with both sides ticked. **Every figure is per week first, the rest-of-season total as the small sub-number** (Tim's display rule). The pop-up fetches its own weeks on the click and shows played weeks above a heavy line, in white, in no total. After an ESPN click a line at the foot of the page says what became of your side (extension absent / too old / refused / handed over) |
@@ -495,7 +505,11 @@ lineup, win-total distribution, season simulation — pure and node-testable),
 canonical "is this a finger" test), `js/charts.js`, `js/sortable.js`,
 `js/touch-titles.js` (self-installing; makes every `title` on the page tappable),
 `js/player-card.js` (the one player card, shared by the analysis grids and the
-Trade page), `js/cloud.js` (Firestore sync so the phone can read the league the
+Trade page — **not** by Season by week, which dropped it on 2026-09-18),
+`js/floor.js` (the positional floor — pure; `season.fetchFloors(week)` is the
+one read that feeds it; every function in it is a no-op when no floors are
+passed, which is what keeps demo and a failed wire read honest),
+`js/cloud.js` (Firestore sync so the phone can read the league the
 desktop fetched — transport is injectable, which is what makes it testable).
 
 **Real names come out of `js/espn.js` and nowhere else.** `members[].firstName`
@@ -517,7 +531,8 @@ signatures breaks three features at once, and only the full suite will tell you.
 
 ## Tests
 
-`cd tests && npm install && npm test` — 26 suites, over 9,400 assertions.
+`cd tests && npm install && npm test` — **35 suites, 11,598 assertions**,
+counted off a green run on 2026-09-19.
 `node tests/text-audit.mjs` is not a suite: it counts visible prose per panel.
 They are in the repo now; earlier sessions kept them in a temp directory and
 lost them each time. **Run them before and after any change**, and see
@@ -723,6 +738,25 @@ order, playoff weeks in every week preview.
   `js/waivers-page.js` rather than in a shared module. So the orange assumed
   numbers cannot be seen without a live connection. Moving that pool into its
   own module would fix it and is a contained job.
+- **A way to measure the layout exists but is not in the repo.** Headless Edge
+  over CDP with `Emulation.setDeviceMetricsOverride` (NOT `--window-size`,
+  which will not go below ~500px and is what made the first 390px audit report
+  every page as overflowing). It turns "this should be narrower" into a number
+  and it caught a regression during the pairing work. Worth rebuilding if the
+  density pass goes further; see PROGRESS.md, "How the layout was measured".
 - The rest of the older list — the trade tick-your-side never having run in a
   real browser, writes to ESPN being deliberately unbuilt, the FLEX-empty
   table, the parked drafter — is unchanged and expanded in PROGRESS.md.
+
+---
+
+## If you are a fresh session, do this first
+
+1. **Check `data/snapshots/` and `C:\Users\timha\Downloads\fantasy-archive-*.json`**,
+   then ask him about the export. It is the only thing here with a deadline,
+   and the answer is not in this repo.
+2. **`cd tests && npm install && npm test`** before you change anything, so you
+   know whether a failure afterwards is yours. 35 suites, about 6-8 minutes.
+3. **Read "What is genuinely open" above.** Four things landed on 2026-09-18
+   that change numbers he checks by hand, and the positional floor is the one
+   most likely to be behind "that number looks wrong".

@@ -1,5 +1,12 @@
 # Connecting the site to Firebase
 
+> **DONE — this is a record, not a to-do list.** Firebase went live on
+> 2026-09-16: the project is `fantasy-football-th`, Google sign-in is enabled,
+> `timothyhadfield.github.io` is authorised, and the rules are published. Keep
+> this file for how it was done and for doing it again on a new project.
+> **What is still unconfirmed is a successful "Send to phone" and the phone
+> reading it** — see HANDOFF.md.
+
 This is the click-by-click for the one part of the phone bridge that nobody
 else can do for you. Everything in it happens in Google's console, signed in as
 you, and no tool on this project can reach it.
