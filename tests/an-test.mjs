@@ -175,6 +175,51 @@ const SCENARIOS = {
     stub: false,
     prefs: { 'analysis.source': 'demo' },
   },
+
+  // ---- the red/green scale on the all-teams grid (Tim, 2026-09-19) --------
+  //
+  // ON DEMO DATA, DELIBERATELY, and that is the whole reason this is its own
+  // scenario rather than more assertions inside `grids`. The live stub gives
+  // every squad IDENTICAL projections, so every column of the Proj avg grid is
+  // ten copies of one number and the scale correctly refuses to draw — which
+  // proves the flat-column guard and nothing else. demo-rosters.js builds ten
+  // genuinely different squads, so a column has a best, a worst and a middle,
+  // which is the table Tim was looking at when he asked for the colours.
+  'avg-heat': {
+    label: '(u) the red/green scale on the all-teams grid, per column',
+    stub: false,
+    prefs: { 'analysis.source': 'demo', 'analysis.measure': 'avg' },
+    after: async ({ document }) => {
+      const $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // The average is the whole season, so it is only itself once every week
+      // has landed. The season panel's own progress line is the page saying so.
+      for (let t = 0; t < 8000; t += 20) {
+        if ($('seasonProgress').textContent.trim() === '' &&
+            document.querySelectorAll('#seasonTable tbody td.wait').length === 0 &&
+            document.querySelectorAll('#seasonTable tbody tr').length > 0) break;
+        await sleep(20);
+      }
+      const table = $('overviewTable');
+      globalThis.__an = {
+        measure: [...$('measureToggle').querySelectorAll('button[data-measure]')]
+          .filter((b) => /\bon\b/.test(b.getAttribute('class') || ''))
+          .map((b) => b.getAttribute('data-measure')),
+        head: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
+        rows: [...table.querySelectorAll('tbody tr')].map((tr) => ({
+          team: tr.children[0].textContent.trim(),
+          cells: [...tr.children].slice(1).map((td) => ({
+            text: td.textContent.trim(),
+            v: td.getAttribute('data-v'),
+            cls: td.getAttribute('class') || '',
+            title: td.getAttribute('title') || '',
+          })),
+        })),
+        legend: $('overviewLegend').textContent.replace(/\s+/g, ' ').trim(),
+        note: $('overviewNote').textContent.replace(/\s+/g, ' ').trim(),
+      };
+    },
+  },
   live: {
     label: '(b) stubbed live league, every week resolves',
     stub: true,
@@ -434,6 +479,11 @@ const SCENARIOS = {
         return td ? td.getAttribute('data-v') : null;
       })();
       out.notes.avg = note();
+      // The key under the grid, captured WHILE the average is on screen — the
+      // boot switches back to the week measure further down, so reading it at
+      // assertion time would read the wrong table's key.
+      out.avgLegend = ($('overviewLegend') || { textContent: '' })
+        .textContent.replace(/\s+/g, ' ').trim();
       out.elsewhereAfterMeasure = elsewhere();
       out.fetchesAfterMeasure = { week: season.calls.week.slice(), weeks: season.calls.weeks.slice() };
       out.savedMeasure =
@@ -1519,27 +1569,62 @@ async function check(scenario, boot) {
       return true;
     })(), JSON.stringify(totals && totals.cells.map((x) => x.v)));
 
-  // ---- the only colouring is the LOW mark, and it is never colour alone ----
+  // ---- the shared red/green scale, and it is never colour alone ------------
+  //
+  // REWRITTEN 2026-09-19. Every assertion here USED to be about the two low
+  // marks (amber below 1 SD, red below 2, nothing at all for a good number) and
+  // every one of them would now fail: there are no `lo1`/`lo2` classes left,
+  // and the panel deliberately DOES colour a cell for being good, which the
+  // third assertion below used to forbid in so many words.
   c.ok('no cell carries the waiver page\u2019s green class',
     d.querySelectorAll('.hot').length === 0 && !/\bhot\b/.test(d.body.innerHTML),
     d.querySelectorAll('.hot').length);
-  c.ok('no week cell is highlighted for being GOOD \u2014 only for being low',
+  c.ok('THE OLD TWO-STEP LOW MARK IS GONE, not merely unused',
+    d.querySelectorAll('td.lo1, td.lo2, .lowmark').length === 0 &&
+    !/\blo[12]\b|lowmark/.test(d.body.innerHTML),
+    d.querySelectorAll('td.lo1, td.lo2, .lowmark').length);
+  // Skipped on `thin-slot` alone, and for a reason worth knowing: that
+  // scenario hands every squad the SAME value at a slot, so the whole league's
+  // spread is a rounding error and the one team on screen happens to sit under
+  // the mean at every slot. Everywhere else a squad has good weeks as well as
+  // bad ones, and the panel has to colour both.
+  if (scenario !== 'thin-slot') {
+    c.ok('A GOOD WEEK IS NOW COLOURED TOO, which the old marks never did',
+      table.querySelectorAll('td.heat-up-1, td.heat-up-2, td.heat-up-3, td.heat-up-4').length > 0,
+      `${table.querySelectorAll('[class*="heat-up"]').length} good cells`);
+    c.ok('and a poor one still is',
+      table.querySelectorAll('td.heat-dn-1, td.heat-dn-2, td.heat-dn-3, td.heat-dn-4').length > 0,
+      `${table.querySelectorAll('[class*="heat-dn"]').length} poor cells`);
+  }
+  c.ok('no week cell borrows another panel\u2019s colour vocabulary',
     rows.every((r) => r.cells.slice(2).every((td) =>
       !/\b(hot|good|pos|neg|st-out|st-ir|st)\b/.test(td.cls))),
     JSON.stringify(rows[0] && rows[0].cells.slice(2).map((x) => x.cls)));
-  c.ok('every low cell carries a \u25bc as well as a colour',
-    [...table.querySelectorAll('td.lo1, td.lo2')].every((td) => td.querySelector('.lowmark')),
-    `${table.querySelectorAll('td.lo1, td.lo2').length} low cells, ` +
-    `${table.querySelectorAll('td.lo1 .lowmark, td.lo2 .lowmark').length} marked`);
-  c.ok('and the loud one is a different MARK, not just a different hue',
-    [...table.querySelectorAll('td.lo2 .lowmark')].every((s) => txt(s) === '\u25bc\u25bc') &&
-    [...table.querySelectorAll('td.lo1 .lowmark')].every((s) => txt(s) === '\u25bc'),
-    [...table.querySelectorAll('.lowmark')].map((s) => txt(s)).join('|').slice(0, 60));
-  c.ok('no cell is both levels at once',
-    table.querySelectorAll('td.lo1.lo2').length === 0,
-    `${table.querySelectorAll('td.lo1.lo2').length}`);
-  c.ok('the totals band is never marked low \u2014 it is not a slot',
-    !totals || totals.cells.every((x) => !/\blo[12]\b/.test(x.cls)),
+  // NEVER COLOUR ALONE, on the two channels the DOM can see: the glyph at the
+  // end of the scale, and the fact that it points the right way.
+  c.ok('EVERY CELL AT THE END OF THE SCALE CARRIES A GLYPH AS WELL AS A COLOUR',
+    [...table.querySelectorAll('td.heat-up-4, td.heat-dn-4')]
+      .every((td) => td.querySelector('.heatmark')),
+    `${table.querySelectorAll('td.heat-up-4, td.heat-dn-4').length} end cells, ` +
+    `${table.querySelectorAll('td.heat-up-4 .heatmark, td.heat-dn-4 .heatmark').length} marked`);
+  c.ok('pointing up on the good side and down on the poor one',
+    [...table.querySelectorAll('td.heat-up-4 .heatmark')].every((s) => txt(s) === '\u25b2') &&
+    [...table.querySelectorAll('td.heat-dn-4 .heatmark')].every((s) => txt(s) === '\u25bc'),
+    [...table.querySelectorAll('.heatmark')].map((s) => txt(s)).join('|').slice(0, 60));
+  c.ok('AND ONLY THERE \u2014 a step-3 cell is tinted but unmarked, or the table is noise',
+    [...table.querySelectorAll('td.heat-up-3, td.heat-dn-3, td.heat-up-1, td.heat-dn-1')]
+      .every((td) => !td.querySelector('.heatmark')),
+    `${table.querySelectorAll('td.heat-up-3 .heatmark, td.heat-dn-3 .heatmark').length} marked`);
+  c.ok('the glyph is hidden from a screen reader, which gets the words instead',
+    [...table.querySelectorAll('.heatmark')].every((s) => s.getAttribute('aria-hidden') === 'true'),
+    [...table.querySelectorAll('.heatmark')].map((s) => s.getAttribute('aria-hidden')).join(','));
+  c.ok('no cell is two steps at once',
+    [...table.querySelectorAll('td[class*="heat-"]')].every((td) =>
+      (td.getAttribute('class').match(/heat-(?:up|dn)-\d|heat-0/g) || []).length === 1),
+    JSON.stringify([...table.querySelectorAll('td[class*="heat-"]')]
+      .map((td) => td.getAttribute('class')).slice(0, 3)));
+  c.ok('the totals band is never on the scale \u2014 it is not a slot',
+    !totals || totals.cells.every((x) => !/\bheat\b/.test(x.cls)),
     JSON.stringify(totals && totals.cells.map((x) => x.cls)));
 
   // ---- the name line: outside the table, reserved, idle until pointed at ---
@@ -1547,8 +1632,12 @@ async function check(scenario, boot) {
     Boolean($('seasonPick')) && !$('seasonWrap').contains($('seasonPick')), 'no #seasonPick');
   c.ok('and while nothing is named it says what to do with it',
     /Hover or tap a number to name the player/.test(txt($('seasonPick'))), txt($('seasonPick')));
+  // TWO THRESHOLDS A SLOT NOW, NOT ONE (2026-09-19). The scale runs both ways,
+  // so the green end has to be checkable by hand as well as the red — the
+  // single "Low below" line could not say where a cell turned green because
+  // nothing ever did.
   c.ok('THE THRESHOLDS THEMSELVES ARE ON SCREEN, so a coloured cell can be checked',
-    /Low below \(1 SD \/ 2 SD\)/.test(txt($('seasonBars'))) &&
+    /Full colour at \(red \/ green\)/.test(txt($('seasonBars'))) &&
     SLOT_ROWS.every((s) => txt($('seasonBars')).includes(s)),
     txt($('seasonBars')));
 
@@ -1701,13 +1790,22 @@ async function check(scenario, boot) {
     /FLEX<\/strong> is whoever the flex actually is/.test($('seasonNote').innerHTML), note);
   c.ok('the note says what the band adds up',
     /in the band under the last slot, is those slots added up for that week/.test(note), note);
-  c.ok('THE NOTE OWNS THE RED AS A LEAGUE-WIDE STANDARD DEVIATION, not his own roster',
-    /below one standard deviation, and red .{1,3} below two/.test(note) &&
+  // THE SHARED RED/GREEN SCALE replaced the two low marks on 2026-09-19 (Tim:
+  // "it will replace the current system we have with the colorization of the
+  // season week by week box"). What the note has to own is unchanged in kind
+  // and changed in content: where the distribution comes from, and that it is
+  // the LEAGUE's rather than his own roster's.
+  c.ok('THE NOTE OWNS THE SCALE AS A LEAGUE-WIDE STANDARD DEVIATION, not his own roster',
+    /Green is a good number for that slot and red is a poor one/.test(note) &&
+    /reaching full colour one standard deviation out/.test(note) &&
     /every squad in the league/.test(note) &&
     /not against your own roster/.test(note), note);
   c.ok('and says the printed thresholds are the ones the colour is decided against',
     /rounded to the tenth, which is exactly the number the colour is decided against/.test(note),
     note);
+  c.ok('AND SAYS A GOOD NUMBER IS COLOURED TOO, which the old marks never did',
+    /colours both directions/.test(note) &&
+    /easier to be in green\/red/.test(note), note);
   c.ok('the note owns Avg as the regular season only',
     /Avg<\/strong> is the mean of the regular-season columns that carry a number/
       .test($('seasonNote').innerHTML), note);
@@ -2751,6 +2849,25 @@ async function check(scenario, boot) {
       !eq(nums(a4, 0, 9), ['20', '19', '18', '17', '16', '15', '14', '13', '12']),
       JSON.stringify(nums(a4, 0, 9)));
 
+    // -- THE WEEK MEASURE IS DELIBERATELY NOT ON THE RED/GREEN SCALE -------
+    //
+    // See the long comment above renderGrid in js/analysis-page.js. Four state
+    // colours already live in those cells (Bye, a ruled-out 0.0, OUT, IR) and a
+    // spectrum underneath them would bury the states the grid exists to show.
+    // The SCALE'S own assertions are in the `avg-heat` scenario, on demo data:
+    // this stub gives every squad identical projections, so every column of
+    // the average grid is ten copies of one number and the flat-column guard
+    // correctly refuses to colour it.
+    c.ok('THE WEEK MEASURE IS DELIBERATELY NOT ON THE SCALE',
+      W.rows.every((r) => r.cells.every((td) => !/\bheat\b/.test(td.cls))),
+      JSON.stringify(W.rows[0].cells.map((td) => td.cls).slice(0, 4)));
+    c.ok('AND A COLUMN OF TEN IDENTICAL NUMBERS IS NOT COLOURED EITHER — the flat guard',
+      A.rows.every((r) => r.cells.every((td) => !/heat-(up|dn)/.test(td.cls))),
+      JSON.stringify(A.rows[0].cells.map((td) => td.cls)));
+    c.ok('so the key under it offers no swatch it cannot show',
+      !/end of the scale|never compared across columns/.test(w.avgLegend || ''),
+      w.avgLegend);
+
     // The total is the LINEUP averaged, not the columns added — and it has to
     // be the very number the panel below prints for this squad.
     const weekTotals = [];
@@ -3199,15 +3316,19 @@ async function check(scenario, boot) {
     c.ok('THE BYE WEEK IS STILL A BYE in the slot nobody else can fill',
       w.dstW6 && w.dstW6.text.startsWith('Bye') && /\bbye\b/.test(w.dstW6.cls) && w.dstW6.v === '0',
       JSON.stringify(w.dstW6));
-    c.ok('and it is marked as the worst kind of low, since nothing covered it',
-      w.dstW6 && /\blo2\b/.test(w.dstW6.cls) && w.dstW6.text.includes('▼▼'),
+    // The end of the red side of the scale, and the glyph with it. Under the
+    // old two-step mark this was `lo2` and ▼▼; the scale that replaced it on
+    // 2026-09-19 has four steps a side and one glyph, at the end.
+    c.ok('and it is at the far red end of the scale, since nothing covered it',
+      w.dstW6 && /\bheat-dn-4\b/.test(w.dstW6.cls) && w.dstW6.text.includes('▼'),
       JSON.stringify(w.dstW6));
     c.ok('A ZERO IN ANY OTHER WEEK IS A REAL 0.0, not a bye',
       w.dstW9 && w.dstW9.text.startsWith('0.0') && /\bzero\b/.test(w.dstW9.cls) &&
       !/\bbye\b/.test(w.dstW9.cls) && w.dstW9.v === '0', JSON.stringify(w.dstW9));
-    c.ok('and the cell says which threshold it fell under, in words',
-      w.dstW9 && /more than two standard deviations below what a D\/ST gives across the league/
-        .test(w.dstW9.label), w.dstW9 && w.dstW9.label);
+    c.ok('and the cell says where it stands, in words and in standard deviations',
+      w.dstW9 && /SD below the average for a D\/ST across the league/.test(w.dstW9.label) &&
+      /Full colour is [\d.]+ or below and [\d.]+ or above/.test(w.dstW9.label),
+      w.dstW9 && w.dstW9.label);
     c.ok('and an untouched week is a number as before',
       w.dstW8 && /^\d+\.\d/.test(w.dstW8.text), JSON.stringify(w.dstW8));
     c.ok('A RULED-OUT STARTER IS SIMPLY REPLACED: RB2 is the bench back, not his 0.00',
@@ -3265,8 +3386,15 @@ async function check(scenario, boot) {
     c.ok('a D/ST on bye is assessed at the wire floor', Number(w.dstW6.v) === 20,
       `data-v was ${w.dstW6.v}`);
     c.ok('and is drawn in orange', /\bassumed\b/.test(w.dstW6.cls), w.dstW6.cls);
-    c.ok('showing the assumed number, not the word Bye', w.dstW6.text === '20.0',
+    // The glyph may ride along — this fixture declares a 20.0 D/ST floor,
+    // which is far above what the league's defences give, so the cell is at
+    // the green end of the scale as well as assumed. Both claims on one cell
+    // is the case the two channels were designed to survive.
+    c.ok('showing the assumed number, not the word Bye',
+      w.dstW6.text.replace(/[▲▼]/g, '').trim() === '20.0',
       `cell read "${w.dstW6.text}"`);
+    c.ok('AND IT CARRIES BOTH CLAIMS AT ONCE: orange for assumed, the scale for good',
+      /\bassumed\b/.test(w.dstW6.cls) && /\bheat-up-\d\b/.test(w.dstW6.cls), w.dstW6.cls);
     c.ok('while the cell still says the bye is why', /bye/i.test(w.dstW6.title), w.dstW6.title);
     c.ok('and names where the assumed number came from',
       /waiver wire/i.test(w.dstW6.title), w.dstW6.title);
@@ -3468,7 +3596,18 @@ async function check(scenario, boot) {
     c.ok('THE STARTING LINEUP BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL',
       bandWrong.length === 0, bandWrong.slice(0, 4).join(' | '));
 
-    // ---- the red marks, recomputed across ALL TEN SQUADS -------------------
+    // ---- the red/green scale, recomputed across ALL TEN SQUADS -------------
+    //
+    // REWRITTEN 2026-09-19 for the shared scale (js/heat.js). The comparison
+    // group is unchanged and is the point of the panel — a WR2 against every
+    // squad's WR2, roughly 160 values — but the boundaries and the number of
+    // steps are not, so every expected answer here is rebuilt from the edges
+    // rather than from "one SD" and "two SD".
+    //
+    // The steps are recomputed BY HAND below (`Math.abs(z) >= edge`), not by
+    // calling heatOf: reading the module's own answer back to it would prove
+    // only that the page called the module, which the classes already show.
+    const EDGES = [0.25, 0.5, 0.75, 1];
     const bars = new Map();
     for (const k of keys) {
       const vals = [];
@@ -3480,46 +3619,92 @@ async function check(scenario, boot) {
       }
       const sd = stdev(vals);
       const m = vals.reduce((a, b) => a + b, 0) / vals.length;
-      bars.set(k, sd === null ? { n: vals.length, one: null, two: null }
-        : { n: vals.length, one: Math.round((m - sd) * 10) / 10, two: Math.round((m - 2 * sd) * 10) / 10 });
+      bars.set(k, sd === null || !(sd > 0)
+        ? { n: vals.length, mean: m, sd: null, lo: null, hi: null }
+        : {
+          n: vals.length,
+          mean: m,
+          sd,
+          lo: Math.round((m - sd) * 10) / 10,
+          hi: Math.round((m + sd) * 10) / 10,
+        });
     }
     c.ok('the distribution is the WHOLE LEAGUE’S, not this squad’s',
       [...bars.values()].every((b) => b.n >= weekTeams.get(1).length * WEEKS.length * 0.8),
       JSON.stringify([...bars.entries()].map(([k, b]) => `${k}:${b.n}`)));
 
+    /** '' or 'heat-up-N' / 'heat-dn-N', worked out from the raw distribution. */
+    const wantClass = (v, b) => {
+      if (b.sd === null) return '';
+      const z = (v - b.mean) / b.sd;
+      let step = 0;
+      for (const e of EDGES) if (Math.abs(z) >= e) step += 1;
+      if (!step) return 'heat-0';
+      return `heat-${z > 0 ? 'up' : 'dn'}-${step}`;
+    };
+
     const colourWrong = [];
-    let lo1 = 0;
-    let lo2 = 0;
-    let clear = 0;
-    let nearest = null;   // the smallest UNCOLOURED number, per slot, vs its bar
+    const seen = new Map();     // class -> how many cells carry it
+    let nearest = null;         // the smallest NEUTRAL number, vs its own band
     WEEKS.forEach((wk, i) => {
       for (const k of keys) {
         const cell = byKey.get(k).cells[i];
         if (cell.v === null) continue;
         const v = Number(cell.v);
         const b = bars.get(k);
-        const want = b.one === null ? '' : v < b.two ? 'lo2' : v < b.one ? 'lo1' : '';
-        const got = /\blo2\b/.test(cell.cls) ? 'lo2' : /\blo1\b/.test(cell.cls) ? 'lo1' : '';
-        if (want !== got) colourWrong.push(`${k} wk${wk} v=${v} want ${want || 'none'} got ${got || 'none'}`);
-        if (got === 'lo2') lo2++; else if (got === 'lo1') lo1++; else clear++;
-        if (got === '' && b.one !== null) {
-          const gap = v - b.one;
-          if (nearest === null || gap < nearest.gap) nearest = { gap, k, wk, v, one: b.one };
+        const want = wantClass(v, b);
+        const m = cell.cls.match(/\bheat-(?:up|dn)-\d\b|\bheat-0\b/);
+        const got = m ? m[0] : '';
+        if (want !== got) {
+          colourWrong.push(`${k} wk${wk} v=${v} want ${want || 'none'} got ${got || 'none'}`);
+        }
+        seen.set(got, (seen.get(got) || 0) + 1);
+        if (got === 'heat-0' && b.sd !== null) {
+          const gap = b.mean - v;
+          if (nearest === null || gap > nearest.gap) nearest = { gap, k, wk, v, sd: b.sd };
         }
       }
     });
-    c.ok('EVERY CELL’S COLOUR MATCHES A THRESHOLD RECOMPUTED FROM SOURCE',
+    c.ok('EVERY CELL’S STEP MATCHES ONE RECOMPUTED FROM SOURCE',
       colourWrong.length === 0, colourWrong.slice(0, 6).join(' | '));
-    c.ok('and the sample really does straddle both lines, so that has teeth',
-      lo1 > 0 && lo2 > 0 && clear > 0, `lo1=${lo1} lo2=${lo2} clear=${clear}`);
-    c.ok('A CELL JUST ABOVE ITS THRESHOLD IS LEFT ALONE',
-      nearest !== null && nearest.gap >= 0 && nearest.gap < 1.5,
+    // THE SPECTRUM IS REALLY A SPECTRUM. Tim asked for "more red or more green"
+    // rather than two levels, so a sample that only ever reached the ends would
+    // pass the assertion above while showing him nothing he asked for.
+    const stepsSeen = [...seen.keys()].filter((c) => /heat-(up|dn)-\d/.test(c));
+    c.ok('THE SAMPLE USES MORE THAN TWO STEPS, so "on a spectrum" is falsifiable',
+      stepsSeen.length >= 4,
+      JSON.stringify([...seen.entries()].sort()));
+    c.ok('and it straddles both sides as well as the neutral band',
+      stepsSeen.some((s) => s.includes('up')) && stepsSeen.some((s) => s.includes('dn')) &&
+      (seen.get('heat-0') || 0) > 0,
+      JSON.stringify([...seen.entries()].sort()));
+    // THE TIGHTENING, MEASURED. Under the old rule a cell was coloured only
+    // below one SD; this counts how many cells the new scale colours and
+    // insists it is comfortably more, which is the whole of Tim's ask.
+    const coloured = [...seen.entries()]
+      .filter(([c]) => /heat-(up|dn)-\d/.test(c)).reduce((a, [, n]) => a + n, 0);
+    const oldWouldColour = [...seen.entries()].reduce((a, [, n]) => a + n, 0);
+    let oldCount = 0;
+    WEEKS.forEach((wk, i) => {
+      for (const k of keys) {
+        const cell = byKey.get(k).cells[i];
+        if (cell.v === null) continue;
+        const b = bars.get(k);
+        if (b.sd !== null && Number(cell.v) < b.mean - b.sd) oldCount += 1;
+      }
+    });
+    c.ok('MANY MORE CELLS CARRY COLOUR THAN THE OLD 1-SD RULE WOULD HAVE COLOURED',
+      coloured > oldCount * 2,
+      `${coloured} of ${oldWouldColour} now, ${oldCount} under the old rule`);
+    c.ok('A CELL INSIDE THE MIDDLE BAND IS LEFT ALONE, and the band is a quarter of a SD',
+      nearest !== null && nearest.gap >= 0 && nearest.gap < nearest.sd * 0.25 + 0.05,
       JSON.stringify(nearest));
 
-    // The printed thresholds ARE the ones the colour was decided against.
+    // The printed thresholds ARE the ones the colour was decided against — both
+    // ends of the scale now, because both ends are drawn.
     const barsWrong = keys.filter((k) => {
       const b = bars.get(k);
-      return !w.bars.includes(b.one === null ? `${k} —` : `${k} ${b.one.toFixed(1)} / ${b.two.toFixed(1)}`);
+      return !w.bars.includes(b.sd === null ? `${k} —` : `${k} ${b.lo.toFixed(1)} / ${b.hi.toFixed(1)}`);
     });
     c.ok('THE KEY PRINTS THOSE EXACT THRESHOLDS, so a reader can check a cell',
       barsWrong.length === 0, `${barsWrong.join(',')} missing from "${w.bars}"`);
@@ -3560,6 +3745,14 @@ async function check(scenario, boot) {
   }
 
   // ---- (q) too little to go on: no colour at all --------------------------
+  //
+  // TWO WAYS A SCALE CANNOT EXIST, and this scenario now shows both. `K` has a
+  // single value in the whole league, so `stdev` is null; every other slot has
+  // ten values that are IDENTICAL, because this stub gives every squad the same
+  // projections and only one week is readable. Both must draw nothing — the
+  // second is the flat-column guard in js/heat.js, which is there because ten
+  // identical floats differ in the fifteenth decimal and produced a fully
+  // coloured column the first time the grid was wired up.
   if (scenario === 'thin-slot') {
     const w = globalThis.__an || {};
     const k = w.rows.find((r) => r.slot === 'K');
@@ -3567,11 +3760,14 @@ async function check(scenario, boot) {
     c.ok('the thin slot still carries its number', k && /^\d+\.\d/.test(k.wk8.text),
       JSON.stringify(k));
     c.ok('A SLOT WITH TOO LITTLE BEHIND IT IS NOT COLOURED',
-      k && !/\blo[12]\b/.test(k.wk8.cls), k && k.wk8.cls);
+      k && !/\bheat\b/.test(k.wk8.cls), k && k.wk8.cls);
     c.ok('and its threshold is printed as a dash rather than invented',
       /K —/.test(w.bars), w.bars);
-    c.ok('while the slots that DO have a distribution still print theirs',
-      /QB \d+\.\d \/ \d+\.\d/.test(w.bars), w.bars);
+    c.ok('A FLAT SLOT IS NOT COLOURED EITHER — ten identical numbers are not a distribution',
+      others.every((r) => !/\bheat\b/.test(r.wk8.cls)),
+      JSON.stringify(others.map((r) => `${r.slot}:${r.wk8.cls}`)));
+    c.ok('and a flat slot prints a dash too, rather than a threshold equal to its own mean',
+      !/\d+\.\d \/ \d+\.\d/.test(w.bars), w.bars);
     c.ok('so the absence of colour is the guard, not an empty table',
       others.some((r) => /^\d+\.\d/.test(r.wk8.text)),
       JSON.stringify(others.map((r) => r.wk8.text)));
@@ -3579,6 +3775,100 @@ async function check(scenario, boot) {
       /A slot with too little to go on is left uncoloured/.test(w.note) &&
       /fewer than two values cannot have a standard deviation/.test(w.note),
       w.note.slice(0, 900));
+  }
+
+  // ---- (u) the red/green scale on the all-teams grid, per column ----------
+  //
+  // Tim's own sentence, made falsifiable: "in this All teams, proj avg 2026
+  // chart, positions with higher proj than the others will be green and lower
+  // will be red." Demo data, because it is the only source here that gives ten
+  // genuinely different squads.
+  if (scenario === 'avg-heat') {
+    const w = globalThis.__an || {};
+    const stepOf = (cls) => {
+      const m = (cls || '').match(/heat-(up|dn)-(\d)/);
+      return m ? (m[1] === 'up' ? 1 : -1) * Number(m[2]) : 0;
+    };
+    const slots = w.head.slice(1, -1);          // between Team and Total
+    const colOf = (i) => w.rows.map((r) => ({
+      v: Number(r.cells[i].v), step: stepOf(r.cells[i].cls), team: r.team,
+    })).filter((x) => Number.isFinite(x.v));
+
+    c.ok('the page opened on the average measure, which is what this scenario is about',
+      JSON.stringify(w.measure) === JSON.stringify(['avg']), JSON.stringify(w.measure));
+    c.ok('and it is the ten squads by lineup slot', w.rows.length === 10 && slots.length >= 8,
+      `${w.rows.length} rows, ${slots.length} slot columns`);
+
+    const colourWrong = [];
+    const orderWrong = [];
+    for (let i = 0; i < slots.length; i++) {
+      const col = colOf(i).slice().sort((a, b) => b.v - a.v);
+      if (col.length < 2) continue;
+      if (col[0].step <= 0) colourWrong.push(`${slots[i]}: best ${col[0].v} not green`);
+      if (col[col.length - 1].step >= 0) {
+        colourWrong.push(`${slots[i]}: worst ${col[col.length - 1].v} not red`);
+      }
+      // No crossings: a bigger number in a column is never the redder cell.
+      for (let n = 1; n < col.length; n++) {
+        if (col[n].step > col[n - 1].step) {
+          orderWrong.push(`${slots[i]}: ${col[n].v} greener than ${col[n - 1].v}`);
+        }
+      }
+    }
+    c.ok('THE BEST SQUAD AT A SLOT IS GREEN AND THE WORST IS RED, in every column',
+      colourWrong.length === 0, colourWrong.slice(0, 4).join(' | '));
+    c.ok('and the shading never disagrees with the ordering inside a column',
+      orderWrong.length === 0, orderWrong.slice(0, 4).join(' | '));
+    c.ok('the Total column is on the scale too — ten whole lineups are one group',
+      w.rows.some((r) => stepOf(r.cells[r.cells.length - 1].cls) > 0) &&
+      w.rows.some((r) => stepOf(r.cells[r.cells.length - 1].cls) < 0),
+      JSON.stringify(w.rows.map((r) => r.cells[r.cells.length - 1].cls)));
+
+    // THE COMPARISON GROUP IS A COLUMN, NEVER THE TABLE. This is the rule the
+    // whole scale rests on: a quarterback's 22 beside a kicker's 8 is not a
+    // comparison, and one scale across the grid would paint every kicker red
+    // for being a kicker. The proof is that the best kicker is GREEN while
+    // every quarterback in the league outscores him.
+    const qbCol = colOf(slots.indexOf('QB'));
+    const kCol = colOf(slots.indexOf('K'));
+    c.ok('the two columns really are on different scales, so this has teeth',
+      qbCol.length && kCol.length &&
+      Math.min(...qbCol.map((x) => x.v)) > Math.max(...kCol.map((x) => x.v)),
+      `QB min ${Math.min(...qbCol.map((x) => x.v))} vs K max ${Math.max(...kCol.map((x) => x.v))}`);
+    c.ok('A COLUMN IS THE COMPARISON GROUP, NEVER THE TABLE: the best kicker is green ' +
+      'even though every quarterback outscores him',
+      kCol.some((x) => x.step > 0) && kCol.some((x) => x.step < 0),
+      JSON.stringify(kCol.map((x) => `${x.v}:${x.step}`)));
+
+    // A SPECTRUM, NOT TWO LEVELS. Tim asked for "more red or more green", so a
+    // table that only ever reached the ends would pass everything above while
+    // showing him nothing he asked for.
+    const used = new Set(w.rows.flatMap((r) => r.cells)
+      .map((td) => (td.cls.match(/heat-(?:up|dn)-\d/) || [''])[0]).filter(Boolean));
+    c.ok('THE TABLE USES MORE THAN TWO STEPS, so "on a spectrum" is falsifiable',
+      used.size >= 4, JSON.stringify([...used].sort()));
+
+    // NEVER COLOUR ALONE.
+    const cells = w.rows.flatMap((r) => r.cells);
+    const ends = cells.filter((td) => /heat-(up|dn)-4/.test(td.cls));
+    c.ok('every cell at the end of the scale carries a glyph as well as a colour',
+      ends.length > 0 && ends.every((td) => /[▲▼]/.test(td.text)),
+      `${ends.length} end cells: ${ends.slice(0, 3).map((td) => td.text).join(' | ')}`);
+    c.ok('and only there — a step-1-to-3 cell is tinted but unmarked, or the table is noise',
+      cells.filter((td) => /heat-(up|dn)-[123]\b/.test(td.cls))
+        .every((td) => !/[▲▼]/.test(td.text)),
+      cells.filter((td) => /heat-(up|dn)-[123]\b/.test(td.cls))
+        .map((td) => td.text).slice(0, 4).join(' | '));
+    c.ok('and every coloured cell says where it stands, in the title a tap opens',
+      cells.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
+        .every((td) => /SD (above|below)/.test(td.title)),
+      cells.filter((td) => /heat-dn-/.test(td.cls))[0]?.title);
+    c.ok('THE KEY UNDER THE GRID SAYS THE COLOUR IS PER COLUMN, which nobody would assume',
+      /never compared across columns/.test(w.legend), w.legend);
+    c.ok('and the note spells the rule out in a sentence',
+      /a quarterback is never measured against a kicker/.test(w.note), w.note.slice(0, 400));
+    c.ok('the note also says where full colour is reached',
+      /reaching full colour one standard deviation out/.test(w.note), w.note.slice(0, 400));
   }
 
   if (scenario === 'card-repaint') {

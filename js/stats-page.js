@@ -24,6 +24,10 @@ import {
 } from './projection.js';
 import * as espn from './espn.js';
 import { lineChart, histogram, boxPlot, SERIES_COLORS } from './charts.js';
+// THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
+// `heatScale()` that lived here — see `heatCell` below for what was wrong with
+// it and why the two could not coexist.
+import { heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn } from './heat.js';
 import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -345,22 +349,50 @@ function renderGlance() {
     .join('');
 }
 
+// ------------------------------------------------- the shared red/green scale
+//
+// WHAT WAS HERE BEFORE, AND WHY IT HAD TO GO. This page carried its own
+// `heatScale()`: a single green ramp from the column's minimum to its maximum,
+// written as an inline `rgba()` per cell. It encoded MAGNITUDE and nothing
+// else, so the biggest number in a column was the greenest and the smallest was
+// simply plain — including on Opp Avg, where the biggest number is the HARDEST
+// schedule and being green for it is backwards.
+//
+// Tim's 2026-09-19 ask is the opposite of that on both counts: two hues, and
+// good/bad rather than big/small. The two systems cannot sit on one page
+// without the green meaning two different things in two tables, so the local
+// one is gone and js/heat.js is the only scale here now. Three other things
+// came with the move: the boundaries are standard deviations rather than the
+// column's own min and max (one outlier no longer rescales everything under
+// it), the tints are CSS classes rather than inline styles (themeable, and
+// assertable in a test), and every cell carries the words that go with the
+// colour.
+//
+// WHICH DIRECTION IS GOOD IS DECIDED HERE, PER COLUMN, and js/heat.js refuses
+// to guess it. A high score is good; a high projected opponent is a hard
+// schedule, which is why those two columns pass `invert`.
+
 /**
- * A light background tint across one column, so the magnitude columns can be
- * scanned as a picture instead of read serially. It encodes size only — a big
- * Opp Avg is a hard schedule, not a good week — and the alpha ceiling keeps the
- * numbers legible on the dark surface. Inline because the ramp is per-render
- * data, not a fixed class.
+ * One heat-scaled cell, attributes and content together.
+ *
+ * @param {number|null} v
+ * @param {Object|null} scale from `heatScale`, or null to draw no colour at all
+ * @param {Object} [opts]
+ * @param {string} [opts.what] the comparison group, in words, for the title
+ * @param {string} [opts.text] what to print, when it is not just the number
+ * @param {string} [opts.extra] extra attributes (a `data-v` for the sort)
+ *
+ * The `title` is the "never colour alone" channel that carries the actual
+ * standing — js/touch-titles.js turns it into a tap on a phone, so it is not
+ * hover-only — and the ▲/▼ at the end of the scale is the one that needs no
+ * interaction at all.
  */
-function heatScale(values) {
-  const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v));
-  const lo = Math.min(...nums);
-  const hi = Math.max(...nums);
-  return (v) => {
-    if (typeof v !== 'number' || !Number.isFinite(v) || !(hi > lo)) return '';
-    const t = (v - lo) / (hi - lo);
-    return ` style="background:rgba(59,165,93,${(0.03 + t * 0.14).toFixed(3)})"`;
-  };
+function heatCell(v, scale, { what = 'the rest of the league', text = null, extra = '' } = {}) {
+  const shown = text === null ? fmt(v) : text;
+  const h = heatOf(v, scale, { what });
+  if (!h) return `<td${extra ? ` ${extra}` : ''}>${shown}</td>`;
+  return `<td class="${h.cls}"${extra ? ` ${extra}` : ''} title="${esc(h.words)}">` +
+    `${shown}${heatMarkHtml(h)}</td>`;
 }
 
 function renderMainTable() {
@@ -386,20 +418,32 @@ function renderMainTable() {
   const num = (v) => (none ? dash : fmt(v));
   const sgn = (v) => (none ? dash : signed(v));
 
+  // FOUR SCALES, ONE PER COLUMN, and never one across the table. A column is a
+  // comparison group precisely because every value in it is the same kind of
+  // number; the row is not (it holds an average, a total and two ranks), and a
+  // scale across the row would be the "quarterback against a kicker" mistake in
+  // another costume. See the header of js/heat.js.
   const heatAvg = heatScale(none ? [] : s.teams.map((t) => t.avgActual));
   const heatProj = heatScale(none ? [] : s.teams.map((t) => t.avgProjected));
-  const heatOpp = heatScale(none ? [] : s.teams.map((t) => t.oppAvgActual));
-  const heatOppProj = heatScale(oppRows().map((r) => r.avgOpp));
+  // INVERTED, both of them. A high opponent average is a hard schedule — the
+  // old local ramp painted exactly this column its greenest for being hardest,
+  // which is the defect that made the two systems irreconcilable.
+  const heatOpp = heatScale(none ? [] : s.teams.map((t) => t.oppAvgActual), { invert: true });
+  const heatOppProj = heatScale(oppRows().map((r) => r.avgOpp), { invert: true });
+
+  const W_AVG = 'what the league averages a week';
+  const W_PROJ = 'what the league is projected a week';
+  const W_OPP = 'the opponents the rest of the league has faced';
 
   tbody.innerHTML = s.teams
     .map((t) => `
       <tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>
         <td data-v="${recordKey(t)}">${record(t)}</td>
-        <td${heatAvg(t.avgActual)}>${num(t.avgActual)}</td>
-        <td${heatProj(t.avgProjected)}>${num(t.avgProjected)}</td>
+        ${heatCell(none ? null : t.avgActual, heatAvg, { what: W_AVG, text: num(t.avgActual) })}
+        ${heatCell(none ? null : t.avgProjected, heatProj, { what: W_PROJ, text: num(t.avgProjected) })}
         <td${none ? '' : ` data-v="${t.pointsFor}"`}>${none ? dash : pf(t.totalActual)}</td>
-        <td${heatOpp(t.oppAvgActual)}>${num(t.oppAvgActual)}</td>
+        ${heatCell(none ? null : t.oppAvgActual, heatOpp, { what: W_OPP, text: num(t.oppAvgActual) })}
         <td>${sgn(t.forMinusAgainst)}</td>
         <td>${num(t.actualStdev)}</td>
         ${oppProjCell(t.id, heatOppProj)}
@@ -422,12 +466,18 @@ function renderMainTable() {
   $('thOppAvg').textContent = oneWeek ? 'Opp score' : 'Opp Avg';
 
   // The one line under the table that stays on screen: what the ± means, or —
-  // before a game is played — why the result columns are dashes.
-  $('mainTableStatus').innerHTML = none
+  // before a game is played — why the result columns are dashes. Since
+  // 2026-09-19 it also has to say what the red and green mean, because a colour
+  // with no key is exactly the thing rule 7 forbids, and because the same green
+  // means the OPPOSITE thing on the two opponent columns.
+  $('mainTableStatus').innerHTML = (none
     ? '<strong>Nothing played yet</strong>, so columns drawn from results are blank. ' +
-      'Opp proj needs no games.'
+      'Opp proj needs no games. '
     : '<strong>±</strong> = how far Close luck, Luck score and S+L could still move. ' +
-      'It narrows every week.';
+      'It narrows every week. ') +
+    '<strong>Green is good for that team, red is bad</strong>, against the rest of the league ' +
+    'in that column — so on <strong>Opp Avg</strong> and <strong>Opp proj</strong> green is an ' +
+    '<em>easy</em> schedule. Full colour is one SD out, marked ▲ or ▼.';
 
   // The full glossary, behind "What the columns mean". "Tap or hover a heading"
   // is the lede above the table — a `title` draws nothing on iOS, and
@@ -454,6 +504,24 @@ function renderMainTable() {
       : 'It is wide after a game or two — ' +
         'a 3-point result alone swings Close luck by up to 50 — and narrows every week, ' +
         'so LS and PS early on are a guess with the range beside it, not a verdict.',
+    // THE SCALE, IN FULL AND IN POINTS. The visible line above says what the
+    // colours mean; this says where the lines actually fall, so a cell can be
+    // checked by hand rather than believed. `describeHeat` writes it off the
+    // scale the table was drawn with, so the two can never drift.
+    heatAvg
+      ? `<strong>Avg:</strong> ${describeHeat(heatAvg, {
+        what: 'what the other nine teams average a week',
+        high: 'scoring more than the league', low: 'scoring less',
+      })}`
+      : 'Nothing is coloured yet: a scale needs at least two teams with a number in the ' +
+        'column to compare them against each other.',
+    heatOpp
+      ? '<strong>Opp Avg</strong> and <strong>Opp proj</strong> are the same scale turned ' +
+        'over, because a big number there is a hard schedule rather than a good week: green ' +
+        'is the easier half of the league, red the harder. Every other column on this table ' +
+        'is left uncoloured on purpose — a rank is already an ordering, and a ± is a margin ' +
+        'rather than a quantity.'
+      : '',
   ]);
 
   // Default to standings order; afterwards keep whatever the user picked.
@@ -682,10 +750,13 @@ function oppRows() {
  * an empty data-v parses as 0 and would rank a team we know nothing about as
  * having the easiest schedule in the league.
  */
-function oppProjCell(teamId, heat) {
+function oppProjCell(teamId, scale) {
   const o = oppFor(teamId);
   if (!o) return `<td>${dash}</td>`;
-  return `<td data-v="${o.avgOpp}"${heat(o.avgOpp)}>${fmt(o.avgOpp)}</td>`;
+  return heatCell(o.avgOpp, scale, {
+    what: 'the schedules the rest of the league drew',
+    extra: `data-v="${o.avgOpp}"`,
+  });
 }
 
 function hardestScheduleTile() {
@@ -1058,17 +1129,50 @@ function renderWeeklyTable() {
 
   const table = $('weeklyTable');
   const tbody = table.querySelector('tbody');
+
+  // ONE SCALE PER WEEK COLUMN, never one across the grid (Tim's red/green
+  // system, 2026-09-19). The rule in js/heat.js is that a number is compared
+  // only with the same kind of number, and on this grid the kind is "a week":
+  // week 4 can be a low-scoring week for everybody, and a scale over the whole
+  // table would paint that entire column red for something no manager did.
+  // This is the colour version of the League row already in the tfoot below,
+  // whose whole purpose is "read each cell against the week it was played in".
+  //
+  // ALL FOUR METRICS POINT THE SAME WAY — more actual, more projected, more
+  // luck and a bigger margin are all good for the team — so none of them
+  // inverts. If a metric is ever added where that is not true, it needs its own
+  // `invert` here; js/heat.js will not guess it.
+  const weekScales = new Map(s.weekNumbers.map((w) => [w, heatScale(
+    s.teams.map((t) => {
+      const row = t.weekly.find((x) => x.week === w);
+      return row ? row[metric] : null;
+    })
+  )]));
+
+  const teamAvg = (t) => {
+    const vals = t.weekly.map((r) => r[metric]).filter((v) => typeof v === 'number');
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  // The Avg column is its own group: ten season averages, which are the same
+  // kind of number as each other and NOT the same kind as a single week.
+  const avgScale = showAvg ? heatScale(s.teams.map(teamAvg)) : null;
+
   tbody.innerHTML = s.teams
     .map((t) => {
       const cells = s.weekNumbers.map((w) => {
         const row = t.weekly.find((x) => x.week === w);
-        return row ? `<td>${cell(row[metric])}</td>` : `<td>${dash}</td>`;
+        if (!row) return `<td>${dash}</td>`;
+        return heatCell(row[metric], weekScales.get(w), {
+          what: `what the league did in week ${w}`,
+          text: cell(row[metric]),
+        });
       });
-      const vals = t.weekly.map((r) => r[metric]).filter((v) => typeof v === 'number');
-      const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      const avg = teamAvg(t);
       return `<tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>${cells.join('')}
-        ${showAvg ? `<td>${cell(avg)}</td>` : ''}
+        ${showAvg ? heatCell(avg, avgScale, {
+    what: 'what the rest of the league averages', text: cell(avg),
+  }) : ''}
       </tr>`;
     })
     .join('');
@@ -1094,11 +1198,29 @@ function renderWeeklyTable() {
     }
   }
 
-  $('weeklyNote').textContent = key
-    ? 'The League row is what all ten teams averaged that week, so each cell above ' +
-      'can be read against the week it was played in.'
-    : 'Margin is your score minus your opponent’s, so the league row would be zero ' +
-      'every week by construction and is left out.';
+  // The visible key, and it says the one thing a reader would otherwise get
+  // wrong: the colour runs DOWN a week, not across a team's season.
+  const anyScale = [...weekScales.values()].some(Boolean);
+  $('weeklyKey').innerHTML = anyScale
+    ? '<strong>Colour is down each week, not across the season</strong>: each cell against ' +
+      'what the other nine teams did that week. Green is above that week’s average, red ' +
+      'below, in four steps; the darkest carry ▲ or ▼. Tap a number for where it stands.'
+    : '<strong>Nothing is coloured yet</strong> — a week needs at least two teams with a ' +
+      'number in it before there is anything to compare.';
+
+  $('weeklyNote').innerHTML = paras([
+    key
+      ? 'The League row is what all ten teams averaged that week, so each cell above ' +
+        'can be read against the week it was played in. It is never coloured itself: it is ' +
+        'the baseline the colours are measured from, not a competitor in the table.'
+      : 'Margin is your score minus your opponent’s, so the league row would be zero ' +
+        'every week by construction and is left out. The colours are unaffected — they are ' +
+        'measured from each week’s own ten values, not from the league row.',
+    describeHeatPerColumn({ group: 'week', what: 'what the other nine teams did' }),
+    'All four measures point the same way here — more points, a better projection, more ' +
+    'luck and a bigger margin are all good for the team — so green always means good on ' +
+    'this grid whichever button is pressed.',
+  ]);
 
   // Headers are rebuilt above, but sortable.js delegates from the table
   // itself, so the wiring survives.

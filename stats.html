@@ -204,8 +204,13 @@ div.panel-note > p:last-child { margin-bottom: 0; }
            reorders the tbody, can never shuffle it in among the teams. -->
       <tfoot></tfoot>
     </table></div>
+    <!-- The visible key. A colour with no key is the one thing this site never
+         ships (HANDOFF rule 7), and the scale on this grid needs a sentence
+         more than most: it is measured DOWN each week column rather than across
+         the table, which nobody would assume. -->
+    <p class="table-status" id="weeklyKey"></p>
     <details class="explain">
-      <summary>About the League row</summary>
+      <summary>About the League row and the colours</summary>
       <p class="panel-note" id="weeklyNote"></p>
     </details>
   </section>
@@ -236,7 +241,35 @@ div.panel-note > p:last-child { margin-bottom: 0; }
        row only fits above about a 1400px screen, and below that the odd one out
        sits at half width with a hole beside it. Each pair is ADJACENT in Tim's
        order, so the wrappers change no panel's position — which is what
-       tests/stats-order.mjs reads. -->
+       tests/stats-order.mjs reads.
+
+       REGROUPED 2026-09-19 ON TIM'S OWN PAIRING. His words: "the score
+       distribution and projection accuracy are two boxes that would be a good
+       candidate for this because their columns / x-axis are extremely spread
+       apart and have a lot of empty space between them." He is right about
+       those two specifically — a ten-point bucket histogram and a four-row
+       table are the two narrowest things on the page — so Score distribution
+       and Projection accuracy now share a line.
+
+       THE TRADE-OFF IS REAL AND IS NOT HIDDEN. There are six panels here and
+       they were three tidy pairs; pairing the two he named leaves Cumulative
+       luck and Score spread standing alone at full width, so the page is
+       TALLER than it was, not shorter (measured in headless Edge over CDP at
+       1500px: 3,804px before, 4,178px after the regrouping alone — +374px.
+       On a 390px phone the regrouping changes nothing at all, 5,580px before
+       and 5,576px after, because every row stacks there either way. The page
+       is a further ~70px taller again once the red/green scale's key lines are
+       counted, which is a separate change on the same day.) The pairing he
+       asked for is a
+       READABILITY win on the two panels that were mostly whitespace, and a
+       height loss everywhere else. Tim's pairing wins because he is the one
+       reading it, and because "these might be the only two boxes I see that
+       can clearly be condensed" is a judgement about content, which the
+       measurement cannot make.
+
+       ORDER IS UNTOUCHED, as ever: Weekly scores, Weekly luck, Cumulative
+       luck, Score distribution, Projection accuracy, Score spread is exactly
+       the document order it was, and only the wrappers moved. -->
   <div class="panel-row">
     <section class="panel" id="panelWeekly">
       <h2>Weekly scores</h2>
@@ -250,28 +283,26 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     </section>
   </div>
 
+  <section class="panel" id="panelCumLuck">
+    <h2>Cumulative luck</h2>
+    <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
+    <div class="chart" id="chartCumLuck"></div>
+    <details class="explain">
+      <summary>How this works</summary>
+      <p class="panel-note">
+        Each point is computed from every week up to that one, not from that week
+        alone, so the lines converge as the season goes on and single results stop
+        dominating.
+      </p>
+    </details>
+  </section>
+
   <div class="panel-row">
-    <section class="panel" id="panelCumLuck">
-      <h2>Cumulative luck</h2>
-      <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
-      <div class="chart" id="chartCumLuck"></div>
-      <details class="explain">
-        <summary>How this works</summary>
-        <p class="panel-note">
-          Each point is computed from every week up to that one, not from that week
-          alone, so the lines converge as the season goes on and single results stop
-          dominating.
-        </p>
-      </details>
-    </section>
     <section class="panel">
       <h2>Score distribution</h2>
       <p class="lede" id="distNote">Every team&rsquo;s weekly score, in ten-point buckets.</p>
       <div class="chart" id="chartDist"></div>
     </section>
-  </div>
-
-  <div class="panel-row">
     <section class="panel">
       <h2>Projection accuracy</h2>
       <p class="lede">How often the higher projection won, split by how big the projected margin was.</p>
@@ -291,19 +322,20 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         <p class="panel-note" id="accuracyNote"></p>
       </details>
     </section>
-    <section class="panel" id="panelBox">
-      <h2>Score spread by team</h2>
-      <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
-      <div class="chart" id="chartBox"></div>
-      <details class="explain">
-        <summary>How to read it</summary>
-        <p class="panel-note">
-          Dots are outlier weeks beyond 1.5&times; the interquartile range (the width
-          of the box).
-        </p>
-      </details>
-    </section>
   </div>
+
+  <section class="panel" id="panelBox">
+    <h2>Score spread by team</h2>
+    <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
+    <div class="chart" id="chartBox"></div>
+    <details class="explain">
+      <summary>How to read it</summary>
+      <p class="panel-note">
+        Dots are outlier weeks beyond 1.5&times; the interquartile range (the width
+        of the box).
+      </p>
+    </details>
+  </section>
 
 </div>
 

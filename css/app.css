@@ -449,6 +449,85 @@ td.lose { color: var(--dim); }
 .neg { color: var(--err); }
 .muted { color: var(--dim); }
 
+/* ------------------------------------------- THE SHARED RED/GREEN SCALE
+ *
+ * Tim, 2026-09-19: "colorizing everything red/green based on a comparison with
+ * other positions ... I want the range to be a lot tighter so it's easier to be
+ * in green/red, not just the extremes ... on a spectrum or something so that
+ * the more red or more green shows better information."
+ *
+ * The arithmetic, the step boundaries and the defence of both live in
+ * js/heat.js; this is only how a step is painted. Classes rather than inline
+ * styles so the scale is themeable in ONE place and so a test can assert a
+ * cell's step — the thing this replaced on the Stats page was a per-render
+ * `rgba()` ramp that could be neither.
+ *
+ * IT OWNS THE BACKGROUND AND THE WEIGHT. NOTHING ELSE. That is what lets it sit
+ * on top of everything already built: this site spends the FOREGROUND of a cell
+ * on meanings that must not be overwritten — orange `--assumed` ("this number
+ * is not ESPN's"), the injury reds, "Bye" and "OUT", `.pos`/`.neg` — so a cell
+ * can be green here AND orange-assumed at the same time and both claims
+ * survive. Any page style that needs to own a cell's background back (the
+ * season sheet's cross-week `.lit`, for instance) simply comes later in its own
+ * stylesheet.
+ *
+ * THE TINT IS A `background-image`, NOT A `background-color`, and that is the
+ * load-bearing trick in this block rather than a stylistic choice. Three rules
+ * in this file already own a cell's background COLOUR and every one of them is
+ * more specific than a bare class: the zebra band
+ * (`tbody tr:nth-child(even) td`), row hover (`tbody tr:hover td`) and the
+ * season sheet's cross-week highlight. A background-color here would have been
+ * wiped off every even row on the site and would have needed a specificity
+ * arms race to get back. A background-IMAGE is a different property: the flat
+ * gradient composites ON TOP of whatever colour is underneath, so zebra and
+ * hover both show through the alpha and both keep working untouched, with no
+ * hover variants to maintain.
+ *
+ * It also gives the one override that IS wanted for free: a page rule using the
+ * `background` SHORTHAND resets background-image to none, so the season sheet's
+ * `#seasonTable td.lit` still takes a cell's background completely when a
+ * reader points at a man — the same precedence the ▼▼ low mark had before this
+ * replaced it, and the ▲/▼ and the weight still survive on that cell.
+ *
+ * FOUR ALPHAS, spaced so two ADJACENT steps are distinguishable without a
+ * legend on a dark ground. Step 4 stops at 0.34 because past about 0.4 the
+ * green starts competing with `.lit`, the red starts reading as an error state,
+ * and --text stops being comfortable on either.
+ *
+ * AND NEVER COLOUR ALONE. Two of the four cues are in here: the weight climbs
+ * with every step (a hue-free reading of magnitude), and `.heatmark` draws the
+ * ▲/▼ that js/heat.js puts on the end of the scale (a hue-free reading of
+ * direction). The other two are words — on the cell's title and in the key
+ * under the table — and are written by js/heat.js. */
+.heat { font-variant-numeric: tabular-nums; }
+/* A measured-but-normal cell. It draws nothing, but it carries the class so a
+ * stylesheet and a test can tell "inside the middle band" from "this scale
+ * refused to draw at all", which look identical otherwise. */
+.heat-0 {}
+
+.heat-up-1 { background-image: linear-gradient(rgba(59, 165, 93, 0.09), rgba(59, 165, 93, 0.09)); font-weight: 500; }
+.heat-up-2 { background-image: linear-gradient(rgba(59, 165, 93, 0.17), rgba(59, 165, 93, 0.17)); font-weight: 550; }
+.heat-up-3 { background-image: linear-gradient(rgba(59, 165, 93, 0.25), rgba(59, 165, 93, 0.25)); font-weight: 620; }
+.heat-up-4 { background-image: linear-gradient(rgba(59, 165, 93, 0.34), rgba(59, 165, 93, 0.34)); font-weight: 700; }
+
+.heat-dn-1 { background-image: linear-gradient(rgba(224, 82, 95, 0.09), rgba(224, 82, 95, 0.09)); font-weight: 500; }
+.heat-dn-2 { background-image: linear-gradient(rgba(224, 82, 95, 0.17), rgba(224, 82, 95, 0.17)); font-weight: 550; }
+.heat-dn-3 { background-image: linear-gradient(rgba(224, 82, 95, 0.25), rgba(224, 82, 95, 0.25)); font-weight: 620; }
+.heat-dn-4 { background-image: linear-gradient(rgba(224, 82, 95, 0.34), rgba(224, 82, 95, 0.34)); font-weight: 700; }
+
+/* The end-of-scale glyph. Sized like the season sheet's old `.lowmark`, which
+ * it replaces, so the tables it lands on do not change height. `aria-hidden` on
+ * the span is js/heat.js's job: the cell's own title says it in words, and a
+ * screen reader announcing "black up-pointing triangle" mid-number is worse
+ * than silence. */
+.heatmark {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: -0.08em;
+  margin-left: 1px;
+  opacity: 0.8;
+}
+
 /* A rank is an ordinal, not a quantity - shrinking and dimming it stops 1-10
  * from being scanned as though it were a points column. */
 .rank {

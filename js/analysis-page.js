@@ -54,6 +54,16 @@ import { slotCountsFromLineups } from './projection.js';
 // season panel's red marks are switched off entirely when it does. See rule 5
 // in HANDOFF.md — deciding what a statistic returns before it has enough data.
 import { stdev } from './stats.js';
+// THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED this page's own two
+// low marks on "Season by week" — his instruction, in his words: "it will
+// replace the current system we have with the colorization of the season week
+// by week box". One module, so the season sheet and the all-teams grid above it
+// cannot end up on two different scales for what is ultimately the same claim.
+// `describeHeatPerColumn` rather than `describeHeat`: both tables here carry
+// MANY scales — one per lineup slot — so there is no single pair of thresholds
+// to print in a sentence. The season sheet prints its nine pairs under the
+// table instead (`seasonBars`), which is the same promise kept table-shaped.
+import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn } from './heat.js';
 import * as espn from './espn.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
@@ -1057,6 +1067,48 @@ function renderAvgGrid(grid) {
 
   const byTeam = teamSlotAverages(rows, slots, weeks);
 
+  // ------------------------------------------- the red/green scale, per COLUMN
+  //
+  // THIS IS THE TABLE TIM WAS LOOKING AT when he asked for the scale, and his
+  // words are the specification: "in this All teams, proj avg 2026 chart,
+  // positions with higher proj than the others will be green and lower will be
+  // red." So a column is a comparison group and the table is not: a squad's WR2
+  // average against the other nine squads' WR2 averages, never against its own
+  // QB column. Ten values per scale, which is thin but real — and `heatScale`
+  // refuses outright below two, so a league with one squad reading colours
+  // nothing rather than colouring everything.
+  //
+  // NOT THE SAME DISTRIBUTION AS THE SEASON SHEET'S, and deliberately so. The
+  // sheet compares one WEEK against every squad's every week (~160 values,
+  // wide); this compares one SEASON AVERAGE against nine others (10 values,
+  // much tighter, because averaging has already taken the week-to-week noise
+  // out). Using the sheet's spread here would colour almost nothing, since
+  // every squad's season average sits well inside a single weekly standard
+  // deviation. Each table is measured on its own numbers.
+  //
+  // ON ESPN'S OWN VALUES OR ON THE ASSESSED ONES? On the ASSESSED ones — the
+  // numbers actually drawn in the cells — which is the opposite of the choice
+  // the season sheet's thresholds make, and the difference is worth stating.
+  // There, the spread describes what a slot is WORTH around the league and
+  // lifting the low end to the wire first would narrow it with a number that is
+  // nobody's actual projection. Here there is no separate population: the ten
+  // cells in the column ARE the distribution, so measuring anything other than
+  // what is drawn would colour a cell against a number the reader cannot see.
+  const colScale = new Map(rows.map((r) => [r.key, heatScale(
+    teams.map((t) => {
+      const got = byTeam.get(t.id);
+      const cell = got ? got.slots.get(r.key) : null;
+      return cell ? cell.avg : null;
+    })
+  )]));
+  // The Total column is a comparison group of exactly the same kind — ten whole
+  // starting lineups in an average week — so it takes the scale too. Leaving it
+  // plain in a coloured table would read as "this one could not be measured".
+  const totalScale = heatScale(teams.map((t) => {
+    const got = byTeam.get(t.id);
+    return got ? got.total : null;
+  }));
+
   bodyOf(table).innerHTML = teams
     .map((t) => {
       const got = byTeam.get(t.id);
@@ -1065,15 +1117,18 @@ function renderAvgGrid(grid) {
         !state.isDemo && t.id === state.myTeamId ? 'me' : '',
       ].filter(Boolean).join(' ');
       const cells = rows
-        .map((r) => avgCell(got ? got.slots.get(r.key) : null, r, t))
+        .map((r) => avgCell(got ? got.slots.get(r.key) : null, r, t, colScale.get(r.key)))
         .join('');
       const total = got ? got.total : null;
+      const th = heatOf(total, totalScale, { what: 'the other squads’ lineups' });
       return `
       <tr class="${cls}" data-team="${t.id}">
         <td class="name">${esc(t.name)}</td>
         ${cells}
-        <td class="grid-total grouped"${total === null ? '' : ` data-v="${total}"`} ` +
-        `title="${esc(totalAvgLabel(t, got))}"><strong>${fmt(total)}</strong></td>
+        <td class="grid-total grouped${th ? ` ${th.cls}` : ''}"` +
+        `${total === null ? '' : ` data-v="${total}"`} ` +
+        `title="${esc(totalAvgLabel(t, got) + (th ? ` ${th.words}` : ''))}">` +
+        `<strong>${fmt(total)}</strong>${heatMarkHtml(th)}</td>
       </tr>`;
     })
     .join('');
@@ -1082,6 +1137,15 @@ function renderAvgGrid(grid) {
 
   const body = bodyOf(table);
   renderKey(`${grid.id}Legend`, [
+    // THE SCALE FIRST, because it is now the loudest thing on the table and a
+    // colour with no key is the one thing this site never ships. Two swatches,
+    // the two ends; the shades between them are the steps.
+    body.querySelector('td.heat-up-4') &&
+      ['<span class="lg-mark heat heat-up-4">14.8 <span class="heatmark">▲</span></span>',
+        'best in that COLUMN — never compared across columns'],
+    body.querySelector('td.heat-dn-4') &&
+      ['<span class="lg-mark heat heat-dn-4">9.2 <span class="heatmark">▼</span></span>',
+        'worst in it; paler shades are the steps between'],
     body.querySelector('td.assumed') &&
       ['<span class="lg-mark assumed">7.8</span>',
         'some of those weeks are assessed at the waiver floor'],
@@ -1092,7 +1156,7 @@ function renderAvgGrid(grid) {
 }
 
 /** One squad's average at one slot. A number about a SLOT, so it names nobody. */
-function avgCell(cell, row, team) {
+function avgCell(cell, row, team, scale) {
   const base = 'slot-avg';
   if (!cell || cell.avg === null) {
     // Nothing read yet is not the same as nothing there, and the two must not
@@ -1117,8 +1181,15 @@ function avgCell(cell, row, team) {
         `floor rather than ESPN's own number.`
       : '');
 
-  return `<td class="${base}${cell.assumed ? ' assumed' : ''}" data-v="${cell.avg}" ` +
-    `title="${esc(says)}">${fmt(cell.avg)}</td>`;
+  // The scale, and the sentence that goes with it. Both claims can be on one
+  // cell — green because it is a good slot, orange because some of the weeks in
+  // it are the site's assumption rather than ESPN's number — and they survive
+  // together because the scale owns the background and `assumed` owns the text.
+  const h = heatOf(cell.avg, scale, { what: `the other squads’ ${row.key}` });
+
+  return `<td class="${base}${cell.assumed ? ' assumed' : ''}${h ? ` ${h.cls}` : ''}" ` +
+    `data-v="${cell.avg}" title="${esc(says + (h ? ` ${h.words}` : ''))}">` +
+    `${fmt(cell.avg)}${heatMarkHtml(h)}</td>`;
 }
 
 /** The Total cell's sentence — it is the one number that ties the two panels together. */
@@ -1148,6 +1219,42 @@ function sortShape(table, shape, totalIndex) {
   sortBy(table, totalIndex, false);
 }
 
+// THE `A WEEK` MEASURE DOES NOT TAKE THE RED/GREEN SCALE, and this is the
+// argument, because it is a judgement rather than an oversight and the next
+// person to read Tim's "virtually all charts across the site" will want it.
+//
+// FOR APPLYING IT. It is nine columns of one kind of number, ten squads deep;
+// the comparison group would be perfectly legitimate (this week's QBs against
+// this week's QBs, not against kickers), and it is the table a manager looks at
+// first. Tim asked for the scale nearly everywhere, and "nearly everywhere"
+// includes the page's headline grid unless something stops it.
+//
+// AGAINST, AND THIS IS WHY IT IS NOT APPLIED. Something does stop it, and it is
+// the exception Tim named himself — "unless it conflicts with something else we
+// already have built". These cells already spend colour on FOUR established
+// meanings: `bye` (amber "Bye"), `zero-out` (a ruled-out man's real 0.0),
+// `st-out` and `st-ir` (an injury), and every one of them answers "why is this
+// number what it is", which is a different question from "is this number good".
+// Laying a spectrum underneath four state colours makes the states harder to
+// pick out, and the states are the reason this grid exists — Tim reads it to
+// find who is on bye and who is hurt this week.
+//
+// The second reason is that the answer would be noise. One week of ESPN
+// projections at a slot is a much wider distribution than a season average of
+// the same slot, so most cells would sit in the middle band, and the ones that
+// did colour would change hue every time the week picker moved — a colour that
+// churns weekly teaches a reader to stop looking at it.
+//
+// AND THE QUESTION IS ALREADY ANSWERED ONE BUTTON AWAY. `Proj avg` is the same
+// ten squads, the same slots, measured over the whole season, and it IS
+// coloured. The note under the grid already tells the reader to read the two
+// against each other; that is where "who is strong at this slot" belongs, and
+// this is where "what is happening this week" belongs.
+//
+// If Tim asks for it here anyway, the change is small and the comparison group
+// must still be per column: `heatScale` over `GRID_SLOTS.map(...)` down the
+// ten teams, one scale per slot, exactly as `renderAvgGrid` does it. What must
+// NOT happen is one scale across the row, which would paint every kicker red.
 function renderGrid(grid) {
   if (grid.slotGrid) return renderAvgGrid(grid);
 
@@ -1325,6 +1432,15 @@ function renderOverviewNote(grid) {
       `<strong>Total</strong> is the whole starting lineup in an average week — each week’s lineup ` +
       `added up, then those totals averaged, which is exactly the “Starting lineup” band in the ` +
       `panel below. Rounding can leave it a tenth away from adding the columns across.`
+    );
+
+    // THE SCALE (Tim, 2026-09-19). This is the table he was looking at when he
+    // asked for it, so the note quotes the rule that makes it honest rather
+    // than just describing the colours.
+    parts.push(
+      `<strong>Green is a better number than the other squads have and red is a worse one</strong>, ` +
+      `deepening in four steps and reaching full colour one standard deviation out. ` +
+      describeHeatPerColumn({ group: 'column', what: 'the other nine squads' })
     );
 
     parts.push(
@@ -2182,16 +2298,24 @@ function weeklyLineups(teamId, slots) {
 // self-calibrates to this league's scoring rules without a single number being
 // hard-coded — which is what a "QB good range is 17+" would have been.
 //
-// Two levels, and the second is the loud one: below one standard deviation is a
-// warning, below two is bad. Both carry a MARK (▼ / ▼▼) as well as a colour,
-// because a mark is the half of it that survives a reader who cannot separate
-// the hues, and the thresholds themselves are printed under the table so the
-// claim can be checked by hand rather than believed.
+// REPLACED 2026-09-19 BY THE SHARED SCALE, on Tim's instruction — "it will
+// replace the current system we have with the colorization of the season week
+// by week box". What was here: two levels, both on the LOW side, amber ▼ below
+// one standard deviation and red ▼▼ below two. What is here now: js/heat.js,
+// four steps each way, full colour at one standard deviation, and a GOOD number
+// coloured as well as a bad one.
+//
+// THE COMPARISON GROUP IS UNCHANGED AND IS THE WHOLE VALUE OF THE PANEL: every
+// squad's best lineup, in every week on screen, ranked inside its own slot —
+// roughly 160 values per slot. A WR2 is only ever measured against other WR2s.
+// That was already the answer to his original question ("my own players or
+// others?") and the new scale inherits it rather than reopening it.
 //
 // AND IT DRAWS NOTHING WHEN IT CANNOT BE SURE. `stdev` returns null below two
-// values (js/stats.js), and this returns null thresholds when it does: no
-// colour at all is the honest answer on a Tuesday in week 1, and a confident
-// one would be exactly the failure rule 5 in HANDOFF.md exists to prevent.
+// values (js/stats.js), `heatScale` returns null when it does, and the cell
+// draws no colour at all: that is the honest answer on a Tuesday in week 1, and
+// a confident one would be exactly the failure rule 5 in HANDOFF.md exists to
+// prevent.
 
 const avgOf = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
@@ -2273,7 +2397,13 @@ let slotBars = { key: null, bars: new Map() };
  * how does it sit against what the league's are worth".
  *
  * @returns {Map<string, {n:number, mean:number|null, sd:number|null,
- *                        one:number|null, two:number|null}>}
+ *                        scale:Object|null, hi:number|null, lo:number|null}>}
+ *
+ * `scale` is js/heat.js's own object and is what every cell is coloured from.
+ * `hi` and `lo` are the two points where the colour reaches full saturation,
+ * rounded to the tenth — which is the number PRINTED in the key, so a reader
+ * checking a cell against the threshold gets the same answer the page did
+ * rather than one hidden in a decimal nobody can see.
  */
 function slotThresholds(rows, slots, weeks) {
   const key = fillsKey(rows, weeks);
@@ -2292,14 +2422,23 @@ function slotThresholds(rows, slots, weeks) {
   const bars = new Map();
   for (const row of rows) {
     const xs = values.get(row.key);
+    const scale = heatScale(xs);
     const sd = stdev(xs);
     const m = avgOf(xs);
-    bars.set(row.key, sd === null
-      ? { n: xs.length, mean: m, sd: null, one: null, two: null }
-      // Rounded to the tenth, which is the number PRINTED in the key — so a
-      // reader checking a cell against the threshold gets the same answer the
-      // page did, rather than one hidden in a decimal nobody can see.
-      : { n: xs.length, mean: m, sd, one: round1(m - sd), two: round1(m - 2 * sd) });
+    // `stdev` is still read here rather than taken off the scale: it is this
+    // page's existing "is there enough to be sure" test, `heatScale` makes the
+    // same call for the same reason, and having both agree in the open is
+    // cheaper than a comment claiming they do.
+    bars.set(row.key, scale === null
+      ? { n: xs.length, mean: m, sd: null, scale: null, hi: null, lo: null }
+      : {
+        n: xs.length,
+        mean: m,
+        sd,
+        scale,
+        hi: round1(m + scale.edges[scale.edges.length - 1] * sd),
+        lo: round1(m - scale.edges[scale.edges.length - 1] * sd),
+      });
   }
 
   slotBars = { key, bars };
@@ -2420,15 +2559,19 @@ function teamSlotAverages(rows, slots, weeks) {
   return byTeam;
 }
 
-/** '', 'lo1' or 'lo2' — how far below its slot's league norm this number is. */
-function lowTier(v, bar) {
-  if (typeof v !== 'number' || !bar || bar.sd === null) return '';
-  if (v < bar.two) return 'lo2';
-  if (v < bar.one) return 'lo1';
-  return '';
+/**
+ * Where one number stands against its own slot around the league — the shared
+ * scale, and the ONE place this panel asks for it.
+ *
+ * Returns null when the slot has no distribution, which is what makes the
+ * "draw nothing rather than guess" rule a single early return everywhere below
+ * rather than a condition repeated at four call sites.
+ */
+function slotHeat(v, bar, row) {
+  return bar && bar.scale
+    ? heatOf(v, bar.scale, { what: `a ${row.key} across the league` })
+    : null;
 }
-
-const LOW_MARK = { lo1: '▼', lo2: '▼▼' };
 
 // ---------------------------------------------------------------- the cell
 
@@ -2466,10 +2609,15 @@ function slotCell(entry, row, week, bar, index) {
     // wire read this stays the dash it always was.
     const sf = slotFloor(row.slotId, state.floors);
     if (sf) {
-      return `<td class="${cls('assumed')}" data-v="${sf.value}" ` +
+      // It carries a real assessed number, so it takes the scale like any
+      // other cell — a streamed replacement that is still well below what the
+      // league gets at this slot is exactly the thing worth seeing in red.
+      const h = slotHeat(sf.value, bar, row);
+      return `<td class="${cls(`assumed${h ? ` ${h.cls}` : ''}`)}" data-v="${sf.value}" ` +
         `title="Nobody on this squad could fill ${esc(row.key)} in week ${week}, so it is ` +
         `assessed at ${fmt(sf.value)} — ${esc(floorSource(sf))}, who is ` +
-        `who you would stream. ESPN projects nothing here.">${fmt(sf.value)}</td>`;
+        `who you would stream. ESPN projects nothing here.${h ? ` ${esc(h.words)}` : ''}">` +
+        `${fmt(sf.value)}${heatMarkHtml(h)}</td>`;
     }
     return `<td class="${cls('muted')}" title="Nobody could fill ${esc(row.key)} in week ${week} — ` +
       `this squad had no ${esc(row.base)} with a projection that week.">—</td>`;
@@ -2489,7 +2637,7 @@ function slotCell(entry, row, week, bar, index) {
   const v = lifted.value === null ? raw : lifted.value;
   const assumed = lifted.assumed;
 
-  const tier = lowTier(v, bar);
+  const heat = slotHeat(v, bar, row);
   const zero = raw === 0 ? zeroOf(raw, week, p, status) : null;
 
   const why =
@@ -2507,9 +2655,13 @@ function slotCell(entry, row, week, bar, index) {
     ? ` Assessed at ${fmt(v)} instead: that is ${esc(floorSource(lifted.floor))}, ` +
       `and a manager would stream him rather than take ${fmt(raw)} here.`
     : '';
-  const says = tier
-    ? ` That is more than ${tier === 'lo2' ? 'two standard deviations' : 'one standard deviation'} ` +
-      `below what a ${row.key} gives across the league (${fmt(bar.one)} / ${fmt(bar.two)}).`
+  // WHERE IT STANDS, IN WORDS. This is the channel of "never colour alone"
+  // that carries the actual figure, and it matters more here than the mark
+  // does: the mark says "end of the scale", the words say how far out and
+  // against what. Full colour is at ${bar.lo} / ${bar.hi}, which the key
+  // under the table also prints.
+  const says = heat
+    ? ` ${heat.words} Full colour is ${fmt(bar.lo)} or below and ${fmt(bar.hi)} or above.`
     : '';
 
   // WHAT IS DRAWN IS THE ASSESSED NUMBER, and "Bye" gives way to it. A bye
@@ -2524,11 +2676,15 @@ function slotCell(entry, row, week, bar, index) {
       : zero === 'out'
         ? `${fmt(v)} <span class="zmark">${esc(outMark(status))}</span>`
         : fmt(v);
-  const mark = tier ? ` <span class="lowmark" aria-hidden="true">${LOW_MARK[tier]}</span>` : '';
+  const mark = heatMarkHtml(heat);
 
   const extra = [
     zero === 'bye' ? 'bye' : zero === 'out' ? 'zero-out' : zero === 'zero' ? 'zero' : '',
-    tier,
+    // THE SCALE OWNS THE BACKGROUND AND THE WEIGHT, and nothing else — so the
+    // orange `assumed` below still owns the TEXT of a floored cell, and a cell
+    // can be green and assumed at once without either claim being lost. See
+    // the block above `.heat` in css/app.css.
+    heat ? heat.cls : '',
     // Tim: "if you're replacing a low or 0 proj with an assumed proj, just put
     // the assumed proj # and color code them in orange or something to show
     // it's assumed." Word as well as colour, via the title and the legend —
@@ -3288,16 +3444,30 @@ function renderSeasonNote(weeks, rows, bars) {
   const withBar = rows.filter((r) => (bars.get(r.key) || {}).sd !== null);
   const sample = withBar.length ? (bars.get(withBar[0].key) || {}).n : 0;
   parts.push(
-    `<strong>A number turns amber ▼ below one standard deviation, and red ▼▼ below two</strong>, ` +
-    `measured per slot across <strong>every squad in the league</strong> over the weeks on screen ` +
+    `<strong>Green is a good number for that slot and red is a poor one</strong>, deepening in ` +
+    `four steps and reaching full colour one standard deviation out — measured per slot across ` +
+    `<strong>every squad in the league</strong> over the weeks on screen ` +
     (sample ? `(${sample} values a slot) ` : '') +
     `— not against your own roster, which would have far too little of it and would quietly call ` +
-    `your weakest position normal. The thresholds are printed under the table, rounded to the tenth, ` +
-    `which is exactly the number the colour is decided against. ` +
+    `your weakest position normal. The two full-colour points are printed under the table, rounded ` +
+    `to the tenth, which is exactly the number the colour is decided against. ` +
     (withBar.length === rows.length
-      ? 'Both marks carry a symbol as well as a colour.'
+      ? 'The cells at either end also carry ▲ or ▼, and the type gets heavier the further out a ' +
+        'number is, so none of it depends on telling red from green.'
       : '<strong>A slot with too little to go on is left uncoloured</strong> — fewer than two values ' +
         'cannot have a standard deviation, and a confident colour there would be worse than none.')
+  );
+
+  // WHY THE SCALE CHANGED, said once. Tim asked for it and will see it move, and
+  // a number he read as "fine" last week reading as amber this week is exactly
+  // the kind of thing that looks like a bug when it is not explained.
+  parts.push(
+    `<strong>This scale replaced the old ▼ / ▼▼ low marks on 2026-09-19</strong> (Tim: “I want the ` +
+    `range to be a lot tighter so it’s easier to be in green/red, not just the extremes”). Those ` +
+    `coloured nothing for being GOOD and started only a full standard deviation below the mean; ` +
+    `this one colours both directions and starts a quarter of a standard deviation out, so most ` +
+    `cells carry some colour and the depth is the information. It is the same scale the ` +
+    `all-teams grid at the top of the page uses, and the Stats page with it.`
   );
 
   const loaded = weeks.filter((w) => state.seasonWeeks.has(w)).length;
@@ -3308,7 +3478,10 @@ function renderSeasonNote(weeks, rows, bars) {
     (po.length ? `, then the playoffs (${weekRange(po)}) after the heavy line` : '') +
     (loaded === weeks.length ? ', all loaded.' : `, ${loaded} of ${weeks.length} loaded so far.`) +
     ' <strong>Avg</strong> is the mean of the regular-season columns that carry a number: the' +
-    ' playoff weeks are shown but never counted in it.'
+    ' playoff weeks are shown but never counted in it. It is deliberately left uncoloured —' +
+    ' a season average is a different kind of number from a single week and does not belong on' +
+    ' the same scale. The all-teams grid at the top of the page colours it, against the other' +
+    ' nine squads, which is the comparison that makes sense for an average.'
   );
 
   parts.push(
@@ -3351,10 +3524,15 @@ function renderSeasonNote(weeks, rows, bars) {
   const body = bodyOf(table);
   renderKey('seasonLegend', [
     ['<span class="lg-mark lit">12.3</span>', 'the same man, every week'],
-    body.querySelector('td.lo1') &&
-      ['<span class="lg-mark lo1">12.3 <span class="lowmark">▼</span></span>', '1 SD below the league'],
-    body.querySelector('td.lo2') &&
-      ['<span class="lg-mark lo2">9.8 <span class="lowmark">▼▼</span></span>', '2 SD below'],
+    // The two ENDS of the scale and nothing in between — a key with eight
+    // swatches on it is a legend nobody reads, and the line under the table
+    // prints the points each slot reaches them at.
+    body.querySelector('td.heat-up-4') &&
+      ['<span class="lg-mark heat heat-up-4">18.7 <span class="heatmark">▲</span></span>',
+        'best of what this slot gives around the league'],
+    body.querySelector('td.heat-dn-4') &&
+      ['<span class="lg-mark heat heat-dn-4">9.8 <span class="heatmark">▼</span></span>',
+        'worst of it — lighter shades are the steps between'],
     ['<span class="lg-mark tot">165.6</span>', 'the slots added up'],
     ...seasonMarks(table),
     // No "hover or tap" hint here: the line above the table says it already,
@@ -3363,16 +3541,20 @@ function renderSeasonNote(weeks, rows, bars) {
 
   // THE THRESHOLDS THEMSELVES, on screen. A reader can check any coloured cell
   // against these by eye, which is the difference between a rule and a claim.
+  // Two numbers a slot now, not one: the scale runs both ways, so the green end
+  // has to be checkable as well as the red.
   const barText = rows.map((r) => {
     const b = bars.get(r.key);
     return b && b.sd !== null
-      ? `<span class="lg"><strong>${esc(r.key)}</strong> ${fmt(b.one)} / ${fmt(b.two)}</span>`
+      ? `<span class="lg"><strong>${esc(r.key)}</strong> ${fmt(b.lo)} / ${fmt(b.hi)}</span>`
       : `<span class="lg"><strong>${esc(r.key)}</strong> —</span>`;
   }).join('');
   $('seasonBars').innerHTML =
-    `<span class="lg lg-lead" title="Below the first number a slot is marked ▼, below the second ▼▼. ` +
-    `Both are one and two standard deviations below what that slot gives across the whole league ` +
-    `over the weeks on screen.">Low below (1 SD / 2 SD):</span>${barText}`;
+    `<span class="lg lg-lead" title="At or below the first number a slot is fully red and marked ▼; ` +
+    `at or above the second it is fully green and marked ▲. Both are one standard deviation from ` +
+    `what that slot gives across the whole league over the weeks on screen, and the shades between ` +
+    `them are quarter-deviation steps. A slot with too little behind it shows a dash and is never ` +
+    `coloured.">Full colour at (red / green):</span>${barText}`;
 }
 
 // ---------------------------------------- naming the man under the pointer

@@ -188,6 +188,97 @@ if (process.argv[2]) {
       }
     }
 
+    // ---- THE SHARED RED/GREEN SCALE (Tim, 2026-09-19) ---------------------
+    //
+    // Every check in this block would FAIL against what it replaced: a local
+    // `heatScale()` in js/stats-page.js that wrote an inline `rgba()` green
+    // ramp by MAGNITUDE — biggest number greenest, smallest number plain, and
+    // no red anywhere. See the header of js/heat.js.
+    {
+      const heatCells = (root, col) => Array.from(root.querySelectorAll('tbody tr'))
+        .map((r) => r.children[col])
+        .filter(Boolean);
+      const stepOf = (td) => {
+        const m = (td.getAttribute('class') || '').match(/heat-(up|dn)-(\d)/);
+        return m ? (m[1] === 'up' ? 1 : -1) * Number(m[2]) : 0;
+      };
+      const numOf = (td) => Number(td.textContent.replace(/[^\d.-]/g, ''));
+
+      // 1. THE OLD RAMP IS GONE, not merely unused.
+      if (/style="background:rgba/.test(main.innerHTML)) {
+        problems.push('the old inline green ramp is still being written');
+      }
+
+      // 2. AVG: the biggest number in the column is the greenest.
+      const avg = heatCells(main, 2);
+      if (avg.length === 10 && avg.some((td) => stepOf(td) !== 0)) {
+        const best = avg.reduce((a, b) => (numOf(b) > numOf(a) ? b : a));
+        const worst = avg.reduce((a, b) => (numOf(b) < numOf(a) ? b : a));
+        if (stepOf(best) <= 0) problems.push(`the league's top scorer is not green (${best.getAttribute('class')})`);
+        if (stepOf(worst) >= 0) problems.push(`the league's worst scorer is not red (${worst.getAttribute('class')})`);
+      } else if (avg.length === 10) {
+        problems.push('the Avg column is not on the scale at all');
+      }
+
+      // 3. OPP PROJ IS INVERTED, and this is the assertion the old ramp fails
+      //    outright: it painted the HARDEST schedule the greenest.
+      const opp = heatCells(main, 8).filter((td) => /\d/.test(td.textContent));
+      if (opp.length >= 3 && opp.some((td) => stepOf(td) !== 0)) {
+        const hardest = opp.reduce((a, b) => (numOf(b) > numOf(a) ? b : a));
+        const easiest = opp.reduce((a, b) => (numOf(b) < numOf(a) ? b : a));
+        if (stepOf(hardest) >= 0) {
+          problems.push(`the hardest schedule is not red (${hardest.getAttribute('class')})`);
+        }
+        if (stepOf(easiest) <= 0) {
+          problems.push(`the easiest schedule is not green (${easiest.getAttribute('class')})`);
+        }
+      }
+
+      // 4. NEVER COLOUR ALONE: the end of the scale carries a glyph, every
+      //    coloured cell carries words, and the panel carries a key.
+      const ends = Array.from(main.querySelectorAll('td.heat-up-4, td.heat-dn-4'));
+      if (ends.some((td) => !td.querySelector('.heatmark'))) {
+        problems.push('a cell at the end of the scale carries no glyph');
+      }
+      const tinted = Array.from(main.querySelectorAll('td[class*="heat-up-"], td[class*="heat-dn-"]'));
+      if (tinted.some((td) => !(td.getAttribute('title') || '').includes('SD'))) {
+        problems.push('a coloured cell does not say where it stands');
+      }
+      if (!/Green is good for that team, red is bad/.test(text('mainTableStatus'))) {
+        problems.push('the visible key does not say what the colours mean');
+      }
+      if (!/green is an <em>easy<\/em> schedule|green is an easy schedule/
+        .test($('mainTableStatus').innerHTML)) {
+        problems.push('the key does not warn that the opponent columns run the other way');
+      }
+
+      // 5. THE WEEK-BY-WEEK GRID IS COLOURED DOWN THE WEEK, NOT ACROSS THE
+      //    SEASON. With more than one week, two cells in one TEAM's row can
+      //    carry different steps while their week columns each hold their own
+      //    scale — so the sanity check is that each week column has both a
+      //    greenest and a reddest cell of its own.
+      const wk = $('weeklyTable');
+      const bodyRows = Array.from(wk.querySelectorAll('tbody tr'));
+      if (bodyRows.length === 10) {
+        for (let col = 1; col <= weeks; col++) {
+          const column = bodyRows.map((r) => r.children[col]).filter(Boolean);
+          if (column.length !== 10) continue;
+          const steps = column.map(stepOf);
+          if (!steps.some((s) => s > 0) || !steps.some((s) => s < 0)) {
+            problems.push(`week ${col} of the grid has no two-sided scale: ${steps.join(',')}`);
+          }
+        }
+        // The League baseline is never coloured: it is what the colour is
+        // measured FROM, and colouring it would be measuring it against itself.
+        if (foot && /\bheat-(up|dn)-\d\b/.test(foot.innerHTML)) {
+          problems.push('the League baseline row is on the scale');
+        }
+      }
+      if (!/Colour is down each week, not across the season/.test(text('weeklyKey'))) {
+        problems.push('the week grid has no visible key for its colours');
+      }
+    }
+
     // The toggle must still say Demo.
     const on = $('sourceToggle').querySelector('button.on');
     if (!on || on.getAttribute('data-src') !== 'demo') problems.push('source toggle not on demo');

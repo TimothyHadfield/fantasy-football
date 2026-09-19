@@ -387,24 +387,33 @@
      rule is what survives a reader who cannot separate the hues, and it is also
      what keeps a lit cell distinguishable from a merely bold one.
 
-     These come AFTER the low marks below on purpose: a cell can be both, and
-     when it is, the highlight owns the background while the red text and the
-     ▼▼ still say the number is bad. */
-  #seasonTable td.lo1 { color: var(--warn); }
-  #seasonTable td.lo2 { color: var(--err); font-weight: 750; background: #33151a; }
-  #seasonTable tbody tr:hover td.lo2 { background: #3d1920; }
-  .lowmark { font-size: 9px; font-weight: 700; letter-spacing: -0.08em; margin-left: 1px; }
+     `.lit` comes AFTER the shared red/green scale (css/app.css) on purpose: a
+     cell can be both, and when it is, the highlight owns the background while
+     the ▲/▼ and the heavier type still say where the number stands. That is
+     the same precedence the old ▼▼ low mark had, kept through the change.
+
+     THE OLD `lo1` / `lo2` RULES ARE GONE (2026-09-19). They were the two-step
+     amber/red low mark this panel carried since 2026-09-17, and Tim replaced
+     them in so many words: "it will replace the current system we have with
+     the colorization of the season week by week box". The scale that does the
+     job now is `.heat-*` in css/app.css, shared with the all-teams grid above
+     and with the Stats page, and it tints the BACKGROUND rather than the text
+     — which is what lets it coexist with the orange below. `.lowmark` went
+     with them; the glyph is `.heatmark` now, at the same size so the table
+     does not change height. */
 
   /* AN ASSUMED NUMBER — one the waiver floor supplied because the man in the
      slot (or the absence of one) was worth less than streaming a replacement.
      Tim: "color code them in orange or something to show it's assumed."
 
-     ORANGE, NOT THE AMBER `--warn` ALREADY ON `lo1`. The two would be a
-     half-shade apart and mean opposite things — amber says "this number is
-     bad", orange says "this number is not ESPN's" — and a cell can carry
-     both, which is why this rule comes last and wins the colour: what a
-     reader most needs to know about a number nobody published is that nobody
-     published it.
+     ORANGE, AND IT OWNS THE TEXT. The red/green scale owns a cell's
+     background and its weight and nothing else, precisely so this can survive
+     on top of it: a cell that is both green (a good number for that slot) and
+     assumed (a number ESPN never published) says both things at once, which
+     happens several times a season on the all-teams grid. Orange rather than
+     the amber `--warn` because the two would be a half-shade apart and mean
+     opposite things — "this number is bad" against "this number is not
+     ESPN's".
 
      AND NOT COLOUR ALONE, ever. The dotted underline is the part that
      survives a reader who cannot separate orange from amber, and the cell's
@@ -649,7 +658,6 @@
     font-weight: 750;
     box-shadow: inset 0 -2px 0 var(--accent);
   }
-  .lg-mark.lo1 { color: var(--warn); }
   /* The same two cues the cell carries, so the legend is a sample of the thing
      rather than a description of it. */
   .lg-mark.assumed {
@@ -657,7 +665,13 @@
     text-decoration: underline dotted var(--assumed);
     text-underline-offset: 3px;
   }
-  .lg-mark.lo2 { color: var(--err); background: #33151a; border-color: #4a1b21; font-weight: 750; }
+  /* The red/green scale's two ends, as swatches. The tint itself comes from
+     css/app.css's `.heat-*` classes, which are a background-IMAGE and so
+     compose straight over the swatch's own border and surface — the swatch
+     needs nothing but a border that matches the step it is showing. The old
+     `.lg-mark.lo1` / `.lo2` swatches went with the low marks they described. */
+  .lg-mark.heat-up-4 { border-color: #1d5330; }
+  .lg-mark.heat-dn-4 { border-color: #4a1b21; }
   .lg-mark.tot { background: var(--panel-2); border-color: var(--line-2); font-weight: 700; }
   .lg-mark.st { background: #16311f; border-color: #16311f; font-weight: 700; }
   .lg-mark.st.fx { background: #16311f66; }

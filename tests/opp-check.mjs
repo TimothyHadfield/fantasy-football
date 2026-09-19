@@ -109,7 +109,13 @@ async function boot(scenario) {
 
 // ------------------------------------------------------------ reading the DOM
 
-const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+// The ▲/▼ at the end of the shared red/green scale (js/heat.js, 2026-09-19) is
+// stripped here rather than asserted around: this suite is about the ARITHMETIC
+// of the opponent projection, and the glyph is a presentation mark that
+// js/heat.js and an-test/test-heat own between them. Without this, every cell
+// at either end of the Opp proj scale reads "122.0 ▼" and fails a numeric test
+// that is still perfectly correct.
+const clean = (s) => (s || '').replace(/[▲▼]/g, '').replace(/\s+/g, ' ').trim();
 
 function readPage(document) {
   const $ = (id) => document.getElementById(id);
