@@ -102,6 +102,22 @@ import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
   zeroKind, byeWeekOf,
 } from './player-card.js';
+// THE ONE RED/GREEN SCALE (HANDOFF rule 14). Pure, and it compares a number
+// only with the same COLUMN or the same POSITION — never a quarterback against
+// a kicker. Every table this page tints carries channel 4, "never colour
+// alone", and it is not optional — but it is SPLIT in two (see `heatKeyShort`):
+// one short sentence in view, the thresholds in points behind "How this works".
+import {
+  heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn,
+  HEAT_UP, HEAT_DOWN,
+} from './heat.js';
+// SUGGESTED PLAYERS in the custom box — who else could go in to even a deal up.
+// Pure and node-tested (js/trade-suggest.js); it prices every candidate through
+// the SAME `priceTradeAcrossWeeks` path with the same weeks, the same
+// projections and the same positional floor this page uses everywhere else.
+// There is no second pricing rule, which is the whole reason it is a module
+// rather than a loop in here.
+import { suggestAdditions, SUGGEST_LIMIT } from './trade-suggest.js';
 // The ONE lineup-slot layout rule — QB, RB1, RB2, WR1…, FLEX, D/ST, K — shared
 // with the analysis page's "Season by week" panel so the two cannot disagree
 // about which receiver is WR1. See js/lineup-slots.js.
@@ -218,8 +234,32 @@ const state = {
   // trade is re-priced from the current data on every render, which is also
   // why a man who has since been traded away can be reported as such rather
   // than silently priced at zero.
+  //
+  // "YOU" IS NO LONGER A PICKER (Tim, 2026-09-19: "the custom trade section has
+  // the user choose both users to trade, but the 'You' should always be the
+  // same user that is selected in the top of the trade section with 'select
+  // manager'"). `custom.a` FOLLOWS `state.myTeamId` and is written only by
+  // `syncCustomPickers`; there is exactly one control on the page that decides
+  // who "you" are, and it is the one at the top. `custom.b` is still a picker.
+  //
+  // A SAVED trade keeps its own `a` and `b` and is NOT rewritten when the top
+  // picker moves: it is a historical record of a deal he built, and silently
+  // re-pointing it at whoever is selected today would change what he saved.
   custom: { a: null, b: null, sendA: [], sendB: [] },
+  // The week-by-week breakdown that now sits BESIDE the builder (Tim,
+  // 2026-09-19: "I'd like it to be shown to the side of the custom trade setup
+  // while the trade is being chosen"). Its own week and side, kept apart from
+  // the modal's `dealWeek`/`dealSide` — the two panels can be open at once and
+  // a reader peeking week 7 inline must not move the pop-up's week under him.
+  customWeek: null,
+  customSide: 'mine',
+  // The deal in the pickers, in the pop-up's own shape — built once per render
+  // and reused by the inline breakdown, the roster cards and the modal, so all
+  // three read one pricing. Null while there is no deal.
+  customOffer: null,
+  customOfferKey: null, // which deal that object is, so a repaint keeps it
   customSaved: [],
+  customRows: [],      // the saved deals as offers, by row index; see renderCustomSaved
   combo: null,         // the last bestCombo result
   comboRows: [],       // the combo's offers, MERGED per manager, in row order
   comboRunning: false,
@@ -268,6 +308,10 @@ const weekly = {
   means: new Map(), // playerId -> his mean over the span; see weeklyMean()
   // `${week}:${teamId}` -> Set(playerId) of who starts. See startersIn().
   lineups: new Map(),
+  // `${offerId}:${side}:${week}` -> Set(playerId) of who starts AFTER a deal.
+  // The same 170-solve budget `startersIn` respects, one cache per offer rather
+  // than per card — every man on a row asks the same question of the same week.
+  tradeLineups: new Map(),
 };
 
 // ------------------------------------------------------------------ formatting
@@ -483,13 +527,22 @@ function indexRosters(teams) {
   // scan of ten rosters. The starts count asks it once per week per card, and
   // a page draws fifty cards a paint.
   const teamOf = new Map();
+  // playerId -> THAT WEEK'S player object, which is a third question again and
+  // the one the with-trade lineup solve needs (see `postTradeStarters`). An
+  // offer's own entries come out of `state.data` — the SELECTED week — so
+  // solving week 11 with them would fill the lineup from week 5's projections
+  // and quietly answer a different question. These objects carry week 11's.
+  const byPlayer = new Map();
   for (const t of teams || []) {
     byTeam.set(t.id, t.players || []);
     for (const p of t.players || []) {
-      if (p.playerId !== null && p.playerId !== undefined) teamOf.set(p.playerId, t.id);
+      if (p.playerId !== null && p.playerId !== undefined) {
+        teamOf.set(p.playerId, t.id);
+        byPlayer.set(p.playerId, p);
+      }
     }
   }
-  return { byTeam, teamOf };
+  return { byTeam, teamOf, byPlayer };
 }
 
 function rememberWeek(week, teams) {
@@ -508,6 +561,7 @@ function resetWeekly() {
   weekly.fromStore = 0;
   weekly.means = new Map();
   weekly.lineups = new Map();
+  weekly.tradeLineups = new Map();
   // The age line's five-second memo goes with them. A re-read makes every
   // number on screen new, and a cached "3 hours ago" surviving it — even for
   // five seconds — is exactly the stale-looking-fresh failure the line exists
@@ -1169,7 +1223,7 @@ function playerRef(p, inner) {
  * page and is a HANDOFF contract, so it draws `ident` and `heading` as plain
  * text and this page does not get to add a row to it.
  */
-function cardFor(p) {
+function cardFor(p, ctx = null) {
   const weeks = cardWeeks();
   const injured = p.injuryStatus && p.injuryStatus !== 'ACTIVE' ? ` · ${p.injuryStatus}` : '';
   // Same rule as `posTag`, and it has to hold here too: the card's identity line
@@ -1186,6 +1240,7 @@ function cardFor(p) {
     ? `Sample projections for ${weekRange(weeks)}`
     : `ESPN’s projection for ${weekRange(weeks)}`;
   const tail = startsPhrase(p);
+  const bold = startsRun(p, weeks, ctx);
 
   return {
     ident,
@@ -1205,6 +1260,17 @@ function cardFor(p) {
         const e = weekly.byWeek.get(w)?.get(p.playerId);
         return (e && e.injuryStatus) || p.injuryStatus || null;
       }),
+      // WHICH WEEKS HE ACTUALLY STARTS (Tim, 2026-09-19). Parallel to `weeks`:
+      // true = in the best lineup that week, false = not, null = not known.
+      // `js/player-card.js` draws the bold; this page decides WHOSE lineup the
+      // question is about, which is the half that needs the trade context.
+      starts: bold.starts,
+      // The heavy divider between what has happened and what has not. The
+      // played weeks are `false` rather than `null` above, deliberately, so the
+      // divider reads as a boundary in a run of known answers rather than as
+      // the edge of what the page has read.
+      splitAfter: state.week,
+      startsNote: bold.note,
     }),
   };
 }
@@ -1264,6 +1330,169 @@ function startersIn(week, teamId) {
   );
   weekly.lineups.set(key, set);
   return set;
+}
+
+// ===========================================================================
+// WHICH WEEKS HE STARTS — and whether the question is "today" or "after this"
+// ===========================================================================
+//
+// Tim, 2026-09-19: "in the 14 week preview when you hover over a player in the
+// trade section, if you are hovering over a player you currently own, then bold
+// all the week #s that that player is currently projected to start for you (and
+// stop bolding the current week, however put a line after the last week and
+// current week to separate what's already happened). If you're hovering over
+// another user's player (that you're trading for), then bold all the week #s
+// that that player would start for you IF the trade would be made."
+//
+// TWO DIFFERENT QUESTIONS, and the whole of the work is telling them apart:
+//
+//   HIS OWN SQUAD — is he in `startersIn(week, whoever held him that week)`.
+//   That is the question the Analysis page's Starts column asks, on the same
+//   solver, so the two cannot disagree about one man.
+//
+//   A MAN YOU ARE TRADING FOR — would he make YOUR best legal lineup that week
+//   WITH THE TRADE MADE. That needs a different pool: your roster that week,
+//   less the men you send, plus the men you receive. It is a genuinely
+//   different answer and it is the one worth having — a receiver who is his
+//   manager's WR1 may be your WR4 and start nowhere.
+//
+// NO FLOORS, EITHER WAY (HANDOFF rule 13). This decides who is CHOSEN, and the
+// positional floor is applied only when a lineup is ASSESSED. Folding it in
+// here would let a waiver-wire number decide which of his own men the site
+// tells him to start.
+//
+// THE PLAYED WEEKS ARE `false`, NOT `null`. A week that has been played is a
+// week no trade can reach, so bolding it would be claiming something about a
+// lineup that is already in the books — but it is a KNOWN answer, and the card
+// draws its divider between known answers. `null` is reserved for a week this
+// page has not read, which is a fact about the page rather than about him.
+
+/**
+ * A stable id for an offer object, so the with-trade lineups can be cached per
+ * (offer, side, week) rather than re-solved once per man on the row.
+ *
+ * A WeakMap rather than a field on the offer: `findTrades` builds fresh offer
+ * objects on every re-rank and they are also the engine's own, so this file
+ * does not get to write on them.
+ */
+const OFFER_IDS = new WeakMap();
+let offerIdSeq = 0;
+function offerId(offer) {
+  if (!offer || typeof offer !== 'object') return 'none';
+  let id = OFFER_IDS.get(offer);
+  if (id === undefined) {
+    id = `x${offerIdSeq++}`;
+    OFFER_IDS.set(offer, id);
+  }
+  return id;
+}
+
+/**
+ * Who starts for ONE side of ONE offer in ONE week, with the deal made.
+ *
+ * The pool is that side's roster in THAT WEEK — carrying that week's own
+ * projections, which is why it comes out of `weekly.rosters` and not off the
+ * offer's own player entries — less the men it sends, plus the men it receives
+ * as that same week knew them. A man neither week knows (traded out of the
+ * league, or a week ESPN refused) is simply absent, the same way
+ * `optimalLineup` already treats a null.
+ *
+ * Returns null when the week has not been read, which is a different answer
+ * from "he does not start" and the card draws the two differently.
+ */
+function postTradeStarters(offer, side, week) {
+  if (!offer || !state.slots) return null;
+  const key = `${offerId(offer)}:${side}:${week}`;
+  const held = weekly.tradeLineups.get(key);
+  if (held !== undefined) return held;
+
+  const roster = weekly.rosters.get(week);
+  const s = roster ? sideOf(offer, side) : null;
+  if (!roster || !s) {
+    // Not cached: a week that lands later must be able to answer properly.
+    return null;
+  }
+
+  const byPlayer = roster.byPlayer || new Map();
+  const sending = new Set((s.send || []).map((p) => String(p.playerId)));
+  const mine = (roster.byTeam.get(s.team.id) || []).filter(
+    (p) => p.playerId !== null && p.playerId !== undefined && !sending.has(String(p.playerId))
+  );
+  const incoming = (s.receive || [])
+    .map((p) => byPlayer.get(p.playerId))
+    .filter(Boolean);
+  const pool = mine.concat(incoming);
+
+  const set = new Set(
+    pool.length ? optimalLineup(pool, state.slots).starters.map((x) => x.playerId) : []
+  );
+  weekly.tradeLineups.set(key, set);
+  return set;
+}
+
+/**
+ * The bold weeks for one man's run, and the sentence that says what bold means.
+ *
+ * `ctx` is `{offer, side}` — which deal is being drawn and whose side of it the
+ * reader is looking at. A call with no context is the plain "his own squad"
+ * answer, which is what the depth map's spare chips and any future caller get
+ * without having to know this exists.
+ *
+ * @returns {{starts: Array<boolean|null>, note: string}}
+ */
+function startsRun(p, weeks, ctx) {
+  if (!p || p.playerId === null || p.playerId === undefined || !state.slots) {
+    return { starts: null, note: '' };
+  }
+
+  // IS HE A MAN THIS DEAL WOULD BRING IN? Asked of the offer rather than of the
+  // column he was printed in, so the custom box's roster lists get the right
+  // answer for nothing: an UNTICKED man on the other squad is not in the deal,
+  // so he falls through to his own manager's lineup, and ticking him moves him
+  // to the with-trade answer on the next paint.
+  const s = ctx && ctx.offer ? sideOf(ctx.offer, ctx.side || 'mine') : null;
+  const incoming =
+    s && (s.receive || []).some((x) => String(x.playerId) === String(p.playerId));
+
+  if (incoming) {
+    const who = s.team ? s.team.name : 'your';
+    return {
+      starts: weeks.map((w) => {
+        if (!weekly.rosters.has(w)) return null;
+        if (w <= state.week) return false;
+        const set = postTradeStarters(ctx.offer, ctx.side || 'mine', w);
+        return set ? set.has(p.playerId) : null;
+      }),
+      // A NOUN PHRASE, not a sentence: `js/player-card.js` writes it into
+      // "Bold, underlined week numbers are <this> — N of the weeks still to
+      // come", so a sentence here reads as two sentences jammed together.
+      note:
+        `the weeks he would make ${esc(who)}’s best lineup WITH THIS TRADE MADE, solved against ` +
+        `that squad’s roster in each week less the men it sends and plus the men it receives`,
+    };
+  }
+
+  // His own manager's lineup, decided PER WEEK: a man claimed in October was
+  // somebody else's in September, and asking the squad that holds him today
+  // would credit one manager with weeks he never had. Same rule `startsFor`
+  // follows for the count on the heading line.
+  let holderName = '';
+  const starts = weeks.map((w) => {
+    const roster = weekly.rosters.get(w);
+    if (!roster) return null;
+    const holder = roster.teamOf.get(p.playerId);
+    if (holder === undefined) return null;   // on nobody's roster that week
+    if (!holderName) holderName = nameOfTeam(holder);
+    if (w <= state.week) return false;
+    return startersIn(w, holder).has(p.playerId);
+  });
+  return {
+    starts,
+    // A noun phrase, for the same reason as above.
+    note:
+      `the weeks he makes ${holderName ? `${esc(holderName)}’s` : 'his manager’s'} best lineup ` +
+      `— his own squad’s, as it stands today, with no trade made`,
+  };
 }
 
 /**
@@ -1410,8 +1639,14 @@ function perWeekValue(p) {
   return Number.isFinite(p.perWeek) ? p.perWeek : weeklyMean(p);
 }
 
-function manLine(p) {
-  const key = registerRun(cardFor(p), 'pkg');
+/**
+ * @param {Object} p the man
+ * @param {Object|null} ctx `{offer, side}` — the deal he is being drawn inside,
+ *   so his card can answer "would he start for me if this were made" rather
+ *   than "does he start for his own manager". Null everywhere there is no deal.
+ */
+function manLine(p, ctx = null) {
+  const key = registerRun(cardFor(p, ctx), 'pkg');
   const v = perWeekValue(p);
   const val = Number.isFinite(v)
     ? `<span class="val">${fmt(v)}/wk</span>`
@@ -1752,6 +1987,23 @@ const SHAPE_LABEL = {
 };
 
 /**
+ * The shape label for ANY offer, including one the finder never searched for.
+ *
+ * `SHAPE_LABEL` knows the finder's three kinds and nothing else, so a CUSTOM
+ * deal — which can be 3-for-1, or one-way — printed `undefined` straight into
+ * the cell. That bug has been hit before on this page (see `renderDeal`, where
+ * the pop-up's title already had to work around it) and it is fixed here once
+ * rather than worked around twice: an offer carrying its own `shape`
+ * ("2-for-2") names itself in the same words the three fixed labels use.
+ */
+function shapeLabel(offer) {
+  const known = SHAPE_LABEL[offer && offer.kind];
+  if (known) return known;
+  if (offer && offer.shape) return String(offer.shape).replace(/-/g, ' ');
+  return '—';
+}
+
+/**
  * ESPN's own trade screen, opened with his side already ticked.
  *
  * The URL was established by reading ESPN's production bundle, and the one
@@ -1959,6 +2211,12 @@ function espnTradeUrl(offer) {
   if (state.isDemo || !state.data || !cfg.leagueId || !offer.partner) return null;
   if (state.myTeamId === null || state.myTeamId === undefined) return null;
   if (tradingForSomeoneElse()) return null;
+  // A CUSTOM deal carries its own sending squad, and a saved one may have been
+  // built from a squad that is not the one selected today. ESPN only ever lets
+  // you propose from a team you own and overrides `fromTeamId` to say so, so
+  // there is no screen to open for it — `espnCell` says that rather than
+  // building a link that would open somebody else's trade page.
+  if (offer.mineTeamId != null && offer.mineTeamId !== state.myTeamId) return null;
 
   const onHisRoster = new Set(
     ((state.data.teams.find((t) => t.id === offer.partner.id) || {}).players || [])
@@ -2067,15 +2325,67 @@ function weeklyPhrase(total) {
 const GAIN_HEAD = (who, weeks, span) =>
   weeks && span.length ? `${who} a week (${weekRange(span)})` : `${who}, a week`;
 
-function offerRow(offer, i, key) {
-  const send = offer.send.map(manLine).join('');
-  const receive = offer.receive.map(manLine).join('');
+/**
+ * @param {Object} offer
+ * @param {number} i its index in whichever `state.*Rows` array the click
+ *   handler will read
+ * @param {string} key `f:3` / `c:0` / `cu:2`
+ * @param {Object} [opts]
+ * @param {boolean} [opts.myGain=true] draw the "You gain" column. THE COMBO
+ *   TABLES PASS FALSE — see `comboTableHtml`: a per-row figure there is
+ *   measured against the roster as it is today and cannot be added to its
+ *   neighbour, which is precisely what confused Tim.
+ * @param {boolean} [opts.lineup=true] draw the "Your lineup, a week" column.
+ *   Off in the combo for the same reason: there is one before-and-after for the
+ *   whole packing and it belongs on the headline, once.
+ * @param {Object|null} [opts.myScale] a `heatScale` over the other rows' "You
+ *   gain" figures, or null for no colour.
+ * @param {Object|null} [opts.theirScale] the same for "He gains".
+ * @param {string} [opts.attrs] extra attributes for the <tr>
+ * @param {string} [opts.tail] extra cells after the ESPN one
+ */
+function offerRow(offer, i, key, opts = {}) {
+  const {
+    myGain: showMyGain = true, lineup: showLineup = true,
+    myScale = null, theirScale = null, attrs = '', tail = '',
+  } = opts;
+  // THE CARD KNOWS WHICH SIDE OF THE DEAL HE IS ON (Tim, 2026-09-19). A man in
+  // the "You get" column is one you would be trading FOR, so his week run bolds
+  // the weeks he would start for YOU with the deal made; a man in "You send" is
+  // still his own manager's until it is. `.map(manLine)` would hand the array
+  // index in as the context, which is why these are written out.
+  const ctx = { offer, side: 'mine' };
+  const send = offer.send.map((p) => manLine(p, ctx)).join('');
+  const receive = offer.receive.map((p) => manLine(p, ctx)).join('');
   const weeks = basis() === 'weeks' && weeklySpan().length > 0;
   const gain = (v) => (weeks && Number.isFinite(v) ? weeklyGainHtml(v) : signedText(v));
   const picked = state.deal && state.deal === offer ? ' picked' : '';
 
+  // THE RED/GREEN SCALE ON THE TWO GAIN COLUMNS (HANDOFF rule 14). The group is
+  // the other OFFERS ON SCREEN in the same column, which is an honest
+  // comparison: every one of them is the same quantity (points added to a best
+  // lineup) over the same span. It is emphatically NOT the two columns pooled —
+  // "what you gain" and "what he gains" are two different squads' answers, and
+  // one scale across both would rank you against him.
+  const heatCell = (v, scale, what) => {
+    const h = heatOf(v, scale, { what });
+    if (!h) return { cls: '', mark: '', title: '' };
+    return { cls: ` ${h.cls}`, mark: heatMarkHtml(h), title: ` title="${esc(h.words)}"` };
+  };
+  const mine = heatCell(offer.myGain, myScale, 'what these offers gain you');
+  const theirs = heatCell(offer.theirGain, theirScale, 'what these offers gain the other manager');
+
   const merged = offer.merged
     ? `<span class="merged-tag">${plural(offer.mergedFrom, 'deal')} as one</span>`
+    : '';
+  // A SAVED CUSTOM DEAL SENT FROM SOMEBODY ELSE'S SQUAD says so on its own row.
+  // Since 2026-09-19 "you" in the builder follows the top picker, so a new deal
+  // is always his — but a trade saved before that, or saved while another
+  // manager was selected, is a historical record and is priced as it was built.
+  // Without this the row's "You send" column would be another manager's men
+  // with nothing saying so.
+  const from = offer.fromLabel
+    ? `<span class="from-tag">${esc(offer.fromLabel)}</span>`
     : '';
 
   // A REAL BUTTON, not just a clickable row. The row still opens the modal on a
@@ -2091,32 +2401,55 @@ function offerRow(offer, i, key) {
     // `offer`, NOT `row`: app.css's `.row` is the flex control bar, and a <tr>
     // wearing it became a wrapping flex box — every offer's cells stacked
     // down the page instead of across it.
-    `<tr class="offer${picked}" data-i="${i}" data-key="${esc(key)}">` +
+    `<tr class="offer${picked}" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
-    `<td class="name"><span class="mgr">${esc(offer.partner.name)}</span>${merged}</td>` +
-    `<td class="left" data-v="${esc(offer.kind)}">` +
+    `<td class="name"><span class="mgr">${esc(offer.partner.name)}</span>${merged}${from}</td>` +
+    `<td class="left deal" data-v="${esc(offer.kind)}">` +
       `<span class="shape" title="${esc(offer.shape)} — you send ${plural(offer.send.length, 'player')}, ` +
       `you receive ${plural(offer.receive.length, 'player')}.">` +
-      `${esc(SHAPE_LABEL[offer.kind])}</span>${open}</td>` +
-    `<td class="left pkg">${send}</td>` +
+      `${esc(shapeLabel(offer))}</span>${open}</td>` +
+    `<td class="left pkg send">${send}</td>` +
     // NO CHURN LINE HERE. It printed two coloured lists under this column and
     // they mostly repeated the two columns either side of them; the week-by-week
     // pop-up carries the before and after now. Tim, 2026-09-17.
-    `<td class="left pkg">${receive}</td>` +
-    `<td class="before-after" data-v="${offer.myAfter}">` +
-      (weeks && Number.isFinite(offer.myBefore) && Number.isFinite(offer.myAfter)
-        ? weeklyLineupHtml(offer.myBefore, offer.myAfter)
-        : `${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}`) +
-      `</td>` +
-    `<td class="gain pos" data-v="${offer.myGain}">${gain(offer.myGain)}</td>` +
-    `<td class="their-gain pos" data-v="${offer.theirGain}">${gain(offer.theirGain)}</td>` +
-    `<td class="left">${espnCell(offer)}</td>` +
+    `<td class="left pkg recv">${receive}</td>` +
+    (showLineup
+      ? `<td class="before-after" data-v="${offer.myAfter}">` +
+        (weeks && Number.isFinite(offer.myBefore) && Number.isFinite(offer.myAfter)
+          ? weeklyLineupHtml(offer.myBefore, offer.myAfter)
+          : `${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}`) +
+        `</td>`
+      : '') +
+    (showMyGain
+      ? `<td class="gain pos${mine.cls}" data-v="${offer.myGain}"${mine.title}>` +
+        `${gain(offer.myGain)}${mine.mark}</td>`
+      : '') +
+    `<td class="their-gain pos${theirs.cls}" data-v="${offer.theirGain}"${theirs.title}>` +
+      `${gain(offer.theirGain)}${theirs.mark}</td>` +
+    `<td class="left espn">${espnCell(offer)}</td>` +
+    tail +
     `</tr>`
   );
 }
 
-const tradeRow = (offer, i) => offerRow(offer, i, `f:${i}`);
+/**
+ * The two scales for one table of offers, built once per render.
+ *
+ * Per COLUMN, never across the table — the two gain columns are two different
+ * squads' answers and pooling them would rank you against the manager you are
+ * trading with. Null (no colour at all) below two rows, and on a column the
+ * whole table is inside a printed tenth of; `js/heat.js` refuses both, and this
+ * page draws whatever it is handed.
+ */
+function gainScales(rows) {
+  return {
+    myScale: heatScale(rows.map((o) => o.myGain)),
+    theirScale: heatScale(rows.map((o) => o.theirGain)),
+  };
+}
+
+const tradeRow = (offer, i, scales) => offerRow(offer, i, `f:${i}`, scales);
 
 /** The offers currently on screen: the search, narrowed to the chosen manager. */
 function visibleOffers() {
@@ -2169,10 +2502,16 @@ function renderFinder() {
   state.rows = offers;
   $('tradeWrap').classList.toggle('hidden', offers.length === 0);
   empty.classList.toggle('hidden', offers.length > 0);
-  body.innerHTML = offers.map(tradeRow).join('');
+  // The scales are built from the offers ACTUALLY ON SCREEN, not from the whole
+  // search: narrowing to one manager narrows the comparison group with it,
+  // because the question a coloured cell answers is "how does this row compare
+  // with the rows beside it" and there is no honest way to colour against rows
+  // that have been filtered away.
+  const scales = gainScales(offers);
+  body.innerHTML = offers.map((o, i) => tradeRow(o, i, scales)).join('');
   empty.innerHTML = offers.length ? '' : emptyMessage();
 
-  renderFinderNote();
+  renderFinderNote(scales);
   if (offers.length) resort(table);
 }
 
@@ -2201,7 +2540,34 @@ function emptyMessage() {
   );
 }
 
-function renderFinderNote() {
+/**
+ * THE SHORT KEY — one sentence, in view, under anything this page tints.
+ *
+ * The house shape (HANDOFF, "How a panel reads"): the VISIBLE key says what a
+ * colour COMPARES and how to read it without separating the hues; the
+ * THRESHOLDS IN POINTS — the channel that makes a colour checkable by hand, and
+ * the one Tim actually uses — go behind "How this works" with the rest of the
+ * method. Nothing is deleted; the numbers move one tap away, in the same panel.
+ *
+ * MEASURED, 2026-09-19, which is why it changed. `describeHeat` and
+ * `describeHeatPerColumn` printed in full under every table took this page from
+ * 179 visible words to 365 (`node tests/text-audit.mjs trade.html`), and the
+ * words are height on the page he reads on his phone: at 390px it was +169px on
+ * the finder's one status line and **+585px on Best combo**, which prints the
+ * sentence once per packing (`tools/measure-layout.mjs --pages trade.html`).
+ *
+ * It is a whole sentence rather than a fragment because all three of the things
+ * in it are load-bearing: the GROUP (rule 14 — a quarterback is never measured
+ * against a kicker), the DIRECTION, and the fact that the far end carries a
+ * mark and heavier type, which is what makes the scale readable to anyone who
+ * cannot separate the hues.
+ */
+function heatKeyShort({ thing = 'figure', what = 'the others in its own column' } = {}) {
+  return `Colour compares each ${thing} only with ${what}; green high, red low, ` +
+    `${HEAT_UP} or ${HEAT_DOWN} and heavier type at the far end.`;
+}
+
+function renderFinderNote(scales = { myScale: null, theirScale: null }) {
   const m = meta();
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
@@ -2218,11 +2584,27 @@ function renderFinderNote() {
   // The one line in view: what is being searched, how many came back, and
   // what they are valued on.
   // Nothing when there are no rows: the empty message already says so.
+  // THE COLOUR KEY IS IN VIEW, under the table it describes — channel 4 of
+  // "never colour alone" (js/heat.js), and not optional. It is written per
+  // COLUMN because the two gain columns carry two different scales, and a
+  // reader told one set of thresholds for both would misread every cell in one
+  // of them. Nothing is said when nothing is coloured.
+  // ONE SHORT SENTENCE (`heatKeyShort`), not `describeHeatPerColumn`'s full 86.
+  // That one is in the toggle below with the thresholds in points, and every
+  // cell still carries its own exact standing in its `title`, which a tap
+  // reveals on a phone (js/touch-titles.js). MEASURED: the long version made
+  // this one line 206px tall at 390px and 37px short — `#tradeCount`, with
+  // `tools/measure-layout.mjs --selector`.
+  const anyHeat = !!(scales.myScale || scales.theirScale);
+  const heatKey = anyHeat
+    ? `<br>${heatKeyShort({ what: 'the other offers in the same column' })}`
+    : '';
+
   $('tradeCount').innerHTML = state.searching || !shown
     ? ''
     : `<strong>${plural(shown, 'offer')}</strong> · ` +
       `${kindNote}${state.partner === 'all' ? '' : ', with one manager'} · ` +
-      `valued on ${esc(m.label)}.`;
+      `valued on ${esc(m.label)}.` + heatKey;
 
   $('tradeNote').innerHTML =
     `<strong>How offers are found.</strong> Every offer here was found by ` +
@@ -2245,6 +2627,28 @@ function renderFinderNote() {
         `and all — so the two are deliberately <em>not</em> the same arithmetic.`
       : `<strong>You gain</strong> and <strong>He gains</strong> are points per week added to each ` +
         `best lineup, and so is the figure beside each player.`) +
+    // THE THRESHOLDS IN POINTS, behind the toggle where the method lives. The
+    // visible key says what the colour COMPARES; this says where the lines
+    // fall, so a green cell can be checked by hand.
+    (scales.myScale
+      ? `<br><br><strong>The colour on the two gain columns.</strong> ` +
+        // The "per column, never across the table" sentence moved down here
+        // from the status line with the thresholds, so the two halves of the
+        // same explanation are read together rather than one of them costing
+        // 86 words of page.
+        `${describeHeatPerColumn({ group: 'column', what: 'the other offers listed here' })} ` +
+        `<strong>You gain</strong>: ${describeHeat(scales.myScale, {
+          what: 'the other offers listed here', unit: false,
+        })}` +
+        (scales.theirScale
+          ? ` <strong>He gains</strong>: ${describeHeat(scales.theirScale, {
+            what: 'the other offers listed here', unit: false,
+          })}`
+          : '') +
+        ` The two are scaled separately on purpose: they are two different ` +
+        `squads’ answers, and one scale across both would be ranking you against the manager ` +
+        `you are trading with.`
+      : '') +
     // THE FLOOR, SAID OUT LOUD, on the page Tim said it matters most. It moves
     // every gain on screen, so a reader who cannot see where it came from
     // cannot check any of them — rule 7, and this is a page he checks by hand.
@@ -2415,7 +2819,22 @@ const weekCell = (week, tail = '') =>
   `<td class="name"><button type="button" class="wk-peek" data-wk="${week}" ` +
   `aria-expanded="false" aria-controls="dealWeek">Week ${week}${tail}</button></td>`;
 
-function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], playoff = [] } = {}) {
+/**
+ * `shortKey` splits the colour key the way HANDOFF's panel shape asks for, and
+ * WHERE this table is drawn decides which half it gets.
+ *
+ * In the POP-UP it keeps the full sentence with the thresholds in points: that
+ * is a drill-down somebody opened on purpose, it is the deepest view of one
+ * deal on the site, and it costs the page no height at all — nothing is in the
+ * document until a row is clicked.
+ *
+ * BESIDE THE BUILDER it is one of four things stacked inside a panel Tim asked
+ * to be CONDENSED, so it takes the short key and the thresholds are printed in
+ * "How a custom trade is priced" underneath. Same two channels either way.
+ */
+function weekTableHtml(
+  byWeek, total, { label = 'With the trade', past = [], playoff = [], shortKey = false } = {}
+) {
   // PLAYED WEEKS: above a line, in plain text, and in no total. Tim, 2026-09-16:
   // "draw a line below the previous weeks ... and turn all the numbers above it
   // white (not red or green) to show it's not in the calculation." No up/down
@@ -2436,17 +2855,44 @@ function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], pla
     ? `<tr class="divider"><td colspan="4">Played — not counted. ` +
       `Only the ${plural(byWeek.length, 'week')} below are in the totals.</td></tr>`
     : '';
+  // THE RED/GREEN SCALE ON THE DIFFERENCE COLUMN (HANDOFF rule 14). The
+  // comparison group is THE OTHER WEEKS OF THIS DEAL and nothing else — which
+  // is exactly the question the note under this table says the table is for:
+  // "the average is not the story", the weeks where the difference collapses
+  // are byes you already cover and the weeks where it opens up are what the
+  // trade is really buying. A z-score over those rows finds them at a glance.
+  //
+  // ONLY THE PRICED ROWS ARE IN THE GROUP. The played weeks above the line and
+  // the playoff weeks below it are in no total and are deliberately uncoloured
+  // (Tim, 2026-09-16: "turn all the numbers above it white"), so they are not
+  // in the scale either — putting them in would move the mean of a set they are
+  // not drawn from.
+  //
+  // It COMPOSES with the existing up/down colour rather than replacing it: that
+  // one is a foreground and says better-or-worse, this is a background and says
+  // how far from this deal's own normal. Rule 14's split, and the two survive
+  // each other.
+  const deltaScale = heatScale(byWeek.map((w) => w.delta));
+  const heatBits = (v) => {
+    const h = heatOf(v, deltaScale, { what: 'the other weeks of this deal' });
+    return h
+      ? { cls: ` ${h.cls}`, mark: heatMarkHtml(h), title: ` title="${esc(h.words)}"` }
+      : { cls: '', mark: '', title: '' };
+  };
+
   const rows = byWeek
-    .map(
-      (w) =>
+    .map((w) => {
+      const h = heatBits(w.delta);
+      return (
         `<tr data-wk="${w.week}">` +
         weekCell(w.week) +
         `<td>${fmt(w.before)}</td>` +
         `<td>${fmt(w.after)}</td>` +
-        `<td class="delta ${w.delta > 0 ? 'up' : w.delta < 0 ? 'down' : ''}">` +
-        `${signedText(w.delta)}</td>` +
+        `<td class="delta ${w.delta > 0 ? 'up' : w.delta < 0 ? 'down' : ''}${h.cls}"${h.title}>` +
+        `${signedText(w.delta)}${h.mark}</td>` +
         `</tr>`
-    )
+      );
+    })
     .join('');
 
   const beforeTotal = byWeek.reduce((a, w) => a + w.before, 0);
@@ -2472,7 +2918,18 @@ function weekTableHtml(byWeek, total, { label = 'With the trade', past = [], pla
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total)}</td></tr>` +
     poBlock +
-    `</tbody></table>`
+    `</tbody></table>` +
+    // Channel 4, in view under the table it describes. In POINTS, so a reader
+    // can check any shaded cell against the column by hand.
+    (deltaScale
+      ? `<p class="heat-key">${shortKey
+        ? heatKeyShort({ thing: 'week', what: 'the other priced weeks of this deal' })
+        : `${describeHeat(deltaScale, {
+          what: 'the other weeks of this deal',
+          high: 'a week the trade is really buying',
+          low: 'a week it does little or costs you',
+        })} Played and playoff weeks are in no total, so they are in no scale either.`}</p>`
+      : '')
   );
 }
 
@@ -2520,7 +2977,23 @@ function playoffTableRows(playoff) {
 // costs is lineup fills, so the answer is memoised per (deal, side) and thrown
 // away the moment anything underneath it moves.
 
-const dealCache = { key: null, offer: null, sets: null };
+/**
+ * ONE ENTRY WAS NOT ENOUGH ONCE THE BUILDER GREW A BREAKDOWN OF ITS OWN.
+ *
+ * This was `{key, offer, sets}` — a single slot — which was right while the
+ * pop-up was the only thing that priced a deal three ways. Since 2026-09-19 the
+ * custom box draws its own week-by-week panel BESIDE the builder (Tim: "I'd
+ * like it to be shown to the side of the custom trade setup"), so two different
+ * deals can be on screen at once and a single slot would thrash between them —
+ * every repaint re-pricing both, which is two fills of every remaining week for
+ * each of them.
+ *
+ * So it is a small Map, keyed by the state the answer depends on AND the
+ * offer's own identity, with the oldest entries dropped. Four is enough for the
+ * pop-up's two sides and the builder's two; nothing on this page holds more.
+ */
+const DEAL_CACHE_MAX = 6;
+const dealCache = new Map();
 
 /** Whose roster, and which way round the package runs, for one side. */
 /**
@@ -2576,8 +3049,9 @@ function priceSide(offer, side, weeks) {
  */
 function dealSets(offer, side) {
   const key = `${sourceKey()}|${weekly.byWeek.size}|${weekly.failed.size}|` +
-    `${state.week}|${state.myTeamId}|${side}`;
-  if (dealCache.key === key && dealCache.offer === offer && dealCache.sets) return dealCache.sets;
+    `${state.week}|${state.myTeamId}|${side}|${offerId(offer)}`;
+  const held = dealCache.get(key);
+  if (held) return held;
 
   const inHand = (ws) => ws.filter((w) => weekly.byWeek.has(w));
   const sets = {
@@ -2585,9 +3059,12 @@ function dealSets(offer, side) {
     past: priceSide(offer, side, inHand(pastWeeksShown())),
     po: priceSide(offer, side, inHand(playoffWeeksShown())),
   };
-  dealCache.key = key;
-  dealCache.offer = offer;
-  dealCache.sets = sets;
+  // A key names every input, so a stale entry cannot be served — but nothing
+  // ever removes one, and a page left open re-ranks all day. Oldest out first.
+  if (dealCache.size >= DEAL_CACHE_MAX) {
+    dealCache.delete(dealCache.keys().next().value);
+  }
+  dealCache.set(key, sets);
   return sets;
 }
 
@@ -2601,10 +3078,12 @@ function playoffPriced(me, offer) {
   return po ? po.byWeek : [];
 }
 
-function sideHtml(title, players) {
+function sideHtml(title, players, ctx = null) {
   return (
     `<div class="deal-side"><h3>${esc(title)}</h3>` +
-    (players.length ? players.map(manLine).join('') : '<span class="muted">nobody</span>') +
+    (players.length
+      ? players.map((p) => manLine(p, ctx)).join('')
+      : '<span class="muted">nobody</span>') +
     `</div>`
   );
 }
@@ -2640,10 +3119,15 @@ function renderDeal() {
       : `${SHAPE_LABEL[offer.kind]} with ${offer.partner.name}` +
       (offer.merged ? ` · ${plural(offer.mergedFrom, 'deal')} sent as one` : '');
 
+  // The card context, so the men in "You get" bold the weeks they would start
+  // for you WITH the deal made rather than the weeks they start for their own
+  // manager today. Always 'mine': the head of the pop-up is written from the
+  // reader's side whichever lineup the breakdown below is showing.
+  const cardCtx = { offer, side: 'mine' };
   const head =
     `<div class="deal-head">` +
-    sideHtml('You send', offer.send) +
-    sideHtml('You get', offer.receive) +
+    sideHtml('You send', offer.send, cardCtx) +
+    sideHtml('You get', offer.receive, cardCtx) +
     `</div>` +
     // The offer goes with it so the line can say which of these men are HIS —
     // the displaced starter is the one fact neither column above carries.
@@ -2832,7 +3316,47 @@ function renderDeal() {
 //   IT COSTS NO REQUESTS. Every projection it reads was bought when the deal
 //   was opened. See `dealSets`.
 
-const BREAKDOWN_HOST = '<div id="dealWeek" class="wkx"></div>';
+/**
+ * TWO PLACES DRAW THIS NOW, and they share every line of it.
+ *
+ * The pop-up has always had it. Since 2026-09-19 the custom builder has one
+ * too, beside the two roster lists (Tim: "the trade analysis pop-up box for the
+ * custom trade is great, but I'd like it to be shown to the side of the custom
+ * trade setup while the trade is being chosen by the user"). The obvious thing
+ * would have been a second copy of `renderDealWeek` reading `state.custom*`
+ * instead of `state.deal*`, and that is exactly how two panels claiming to show
+ * the same thing quietly stop showing it. So the renderer takes a CONTEXT —
+ * which container, which offer, which week, whose side — and there is still one
+ * of it.
+ *
+ * `scope` is the selector for the element holding the week TABLE whose rows
+ * this panel marks as open. The two are different elements in the two cases and
+ * the marking has to follow the right one, or hovering a week in the builder
+ * would light a row in the pop-up.
+ */
+const BREAKDOWNS = {
+  deal: {
+    host: 'dealWeek',
+    scope: '#dealBody',
+    offer: () => state.deal,
+    week: () => state.dealWeek,
+    side: () => state.dealSide,
+    setWeek: (w) => { state.dealWeek = w; },
+    setSide: (s) => { state.dealSide = s; },
+  },
+  custom: {
+    host: 'cuWeek',
+    scope: '#cuInline',
+    offer: () => state.customOffer,
+    week: () => state.customWeek,
+    side: () => state.customSide,
+    setWeek: (w) => { state.customWeek = w; },
+    setSide: (s) => { state.customSide = s; },
+  },
+};
+
+const breakdownHost = (which) => `<div id="${BREAKDOWNS[which].host}" class="wkx"></div>`;
+const BREAKDOWN_HOST = breakdownHost('deal');
 
 /** An offer's entries are player objects; be tolerant of a bare id anyway. */
 const idKey = (p) => String(p && typeof p === 'object' ? p.playerId : p);
@@ -2863,7 +3387,7 @@ function sideLabel(offer, side) {
 }
 
 /** The side toggle, or the reason there isn't one. */
-function sideToggleHtml(offer) {
+function sideToggleHtml(offer, current = 'mine') {
   if (!offer.partner) {
     return (
       `<span class="wkx-noside">A combination has several managers on the other side, so there ` +
@@ -2871,8 +3395,8 @@ function sideToggleHtml(offer) {
     );
   }
   const btn = (side) =>
-    `<button type="button" class="wkx-side${state.dealSide === side ? ' on' : ''}" ` +
-    `data-side="${side}" aria-pressed="${state.dealSide === side}">` +
+    `<button type="button" class="wkx-side${current === side ? ' on' : ''}" ` +
+    `data-side="${side}" aria-pressed="${current === side}">` +
     `${esc(sideLabel(offer, side))}</button>`;
   return `<span class="wkx-sides" role="group" aria-label="Whose lineup">${btn('mine')}${btn('theirs')}</span>`;
 }
@@ -2912,16 +3436,17 @@ function slotManHtml(entry, column, ctx) {
  * Deliberately NOT part of `renderDeal`'s markup pass: a hover has to be able
  * to repaint this without replacing the table the pointer is sitting on.
  */
-function renderDealWeek() {
-  const host = $('dealWeek');
+function renderDealWeek(which = 'deal') {
+  const cx = BREAKDOWNS[which];
+  const host = $(cx.host);
   if (!host) return;
-  const offer = state.deal;
+  const offer = cx.offer();
   if (!offer) { host.innerHTML = ''; return; }
 
   // The row the reader is on, marked on the table itself as well as here, so
   // the two halves of the panel are visibly one thing.
-  const week = state.dealWeek;
-  for (const btn of document.querySelectorAll('#dealBody .wk-peek')) {
+  const week = cx.week();
+  for (const btn of document.querySelectorAll(`${cx.scope} .wk-peek`)) {
     const on = String(btn.getAttribute('data-wk')) === String(week);
     btn.setAttribute('aria-expanded', on ? 'true' : 'false');
     const row = btn.closest ? btn.closest('tr') : null;
@@ -2936,12 +3461,12 @@ function renderDealWeek() {
   }
 
   const rows = slotRows(state.slots);
-  const side = offer.partner ? state.dealSide : 'mine';
+  const side = offer.partner ? cx.side() : 'mine';
   const slice = rows.length ? weekSlice(offer, side, week) : null;
   if (!slice) {
     host.innerHTML =
       `<div class="wkx-head"><h3 class="wkx-title">Week ${esc(week)}, slot by slot</h3>` +
-      `${sideToggleHtml(offer)}</div>` +
+      `${sideToggleHtml(offer, side)}</div>` +
       `<p class="wkx-empty">No lineup for week ${esc(week)} — that week’s projections are not in ` +
       `hand.</p>`;
     return;
@@ -3008,7 +3533,7 @@ function renderDealWeek() {
   host.innerHTML =
     `<div class="wkx-head">` +
     `<h3 class="wkx-title">Week ${esc(week)}, slot by slot — ${esc(sideLabel(offer, side))}</h3>` +
-    sideToggleHtml(offer) +
+    sideToggleHtml(offer, side) +
     `</div>` +
     scopeNote +
     `<div class="table-scroll"><table class="wkx-table">` +
@@ -3027,19 +3552,21 @@ function renderDealWeek() {
 }
 
 /** Open one week's breakdown. Hover, tap, focus and Enter all land here. */
-function setDealWeek(week) {
+function setDealWeek(week, which = 'deal') {
+  const cx = BREAKDOWNS[which];
   const w = Number(week);
-  if (!Number.isFinite(w) || state.dealWeek === w) return;
-  state.dealWeek = w;
-  renderDealWeek();
+  if (!Number.isFinite(w) || cx.week() === w) return;
+  cx.setWeek(w);
+  renderDealWeek(which);
 }
 
 /** Which manager's lineup the breakdown shows. His own until asked otherwise. */
-function setDealSide(side) {
+function setDealSide(side, which = 'deal') {
+  const cx = BREAKDOWNS[which];
   const want = side === 'theirs' ? 'theirs' : 'mine';
-  if (state.dealSide === want) return;
-  state.dealSide = want;
-  renderDealWeek();
+  if (cx.side() === want) return;
+  cx.setSide(want);
+  renderDealWeek(which);
 }
 
 /**
@@ -3144,6 +3671,19 @@ const cssKey = (k) => String(k).replace(/["\\]/g, '');
 // visible rather than hidden.
 
 /**
+ * The scales `comboTableHtml` built on this paint, so `renderCombo` can print
+ * their thresholds in points behind "How this works" — the other half of the
+ * key split described on `heatKeyShort`.
+ *
+ * A module-level list rather than a return value because this panel draws one
+ * or two tables through `comboBlockHtml`, which composes strings; threading a
+ * second value back out of a string builder would be a change to three
+ * signatures to carry one sentence. `renderCombo` clears it before it paints,
+ * which is the one thing that has to stay true.
+ */
+const comboHeatScales = [];
+
+/**
  * The combo's offers, as a table in the finder's own shape.
  *
  * Tim's ask: "In the best combo box, it should display the trades as a list
@@ -3156,9 +3696,43 @@ const cssKey = (k) => String(k).replace(/["\\]/g, '');
  * because the best packing and the "most trades" alternative are two tables
  * sharing one `state.comboRows` array and one modal.
  */
+/**
+ * NO "YOU GAIN" COLUMN, AND NO PER-ROW LINEUP. That is the whole of Tim's
+ * 2026-09-19 ask about this panel, in his words: "right now the best combo just
+ * shows the two trades separately. I want their stats to be combined because it
+ * should treat it as the same trade made at once. This means the +/week should
+ * be shown as 1 number not 2, (and it's probably not the sum of the two
+ * separate +/week's)."
+ *
+ * He is right twice over, and the second half is the reason the column had to
+ * GO rather than be relabelled. Each row's "you gain" was measured against his
+ * roster AS IT IS TODAY — that is what `findTrades` computes — so two of them
+ * overlap: both deals re-fill the same one lineup, and the better of two
+ * upgrades to the same slot is the only one that ever starts. Two numbers a
+ * reader cannot add are two numbers that should not be printed side by side
+ * under a heading that invites it. The ONE honest figure for the whole packing
+ * already existed — `entry.delta`, priced once with every send and every
+ * receive applied together — and it is now the only "you gain" on the panel,
+ * on the headline above this table.
+ *
+ * EACH MANAGER KEEPS HIS OWN GAIN, because that is a different person's roster
+ * and the figures are genuinely separate — no two of them share a lineup. It is
+ * his COMBINED side (`mergeComboByPartner` takes it from `entry.partners`), so
+ * a manager in two of these deals shows what both of them together do to him
+ * rather than one of the two.
+ */
 function comboTableHtml(rows, from, id) {
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
+  // Per column, and this table has only one coloured column left.
+  const theirScale = heatScale(rows.map((o) => o.theirGain));
+  // THE THRESHOLDS GO TO `#comboNote`, and this panel is why the split exists
+  // at all. It draws the key ONCE PER PACKING — twice whenever "the most trades
+  // possible" differs from the best — so `describeHeat`'s full sentence was
+  // printed two and a half times over: **+585px on this panel alone at 390px**
+  // (`tools/measure-layout.mjs --pages trade.html --selector '#comboPanel'`).
+  // `renderCombo` reads the list back after the body is built.
+  if (theirScale) comboHeatScales.push({ id, scale: theirScale });
   return (
     `<div class="table-scroll"><table id="${esc(id)}" class="offers">` +
     `<thead><tr>` +
@@ -3166,13 +3740,20 @@ function comboTableHtml(rows, from, id) {
     `<th class="left">Deal</th>` +
     `<th class="left">You send</th>` +
     `<th class="left">You get</th>` +
-    `<th>Your lineup, a week</th>` +
-    `<th>${esc(GAIN_HEAD('You gain', weeks, span))}</th>` +
     `<th>${esc(GAIN_HEAD('He gains', weeks, span))}</th>` +
     `<th class="left">ESPN</th>` +
     `</tr></thead><tbody>` +
-    rows.map((o, k) => offerRow(o, from + k, `c:${from + k}`)).join('') +
-    `</tbody></table></div>`
+    rows
+      .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
+        myGain: false, lineup: false, theirScale,
+      }))
+      .join('') +
+    `</tbody></table></div>` +
+    (theirScale
+      ? `<p class="heat-key">${heatKeyShort({
+        thing: 'manager', what: 'the others in this packing',
+      })}</p>`
+      : '')
   );
 }
 
@@ -3187,6 +3768,19 @@ function comboTableHtml(rows, from, id) {
  */
 function comboBlockHtml(entry, rows, from, id, allIndex, { heading = '', lead = '' } = {}) {
   const span = weeklySpan();
+  // YOUR LINEUP, ONCE, FOR THE WHOLE PACKING — not once per row. It is the same
+  // pricing the headline number comes out of (`entry.pricing`), so the two
+  // cannot disagree, and it is the figure a per-row column could never have
+  // been: there is one lineup, it is re-filled once, and it ends up where it
+  // ends up whichever order the deals are sent in.
+  const before = entry.pricing ? entry.pricing.before.total : null;
+  const after = entry.pricing ? entry.pricing.after.total : null;
+  const lineup =
+    Number.isFinite(before) && Number.isFinite(after)
+      ? `<div class="combo-lineup"><span class="lbl">Your lineup, a week</span> ` +
+        `${weeklyLineupHtml(before, after)}</div>`
+      : '';
+
   return (
     (heading ? `<h3>${esc(heading)}</h3>` : '') +
     (lead ? `<p>${lead}</p>` : '') +
@@ -3201,6 +3795,23 @@ function comboBlockHtml(entry, rows, from, id, allIndex, { heading = '', lead = 
         `All ${plural(entry.count, 'trade')} week by week</button>`
       : '') +
     `</div>` +
+    (entry.count ? lineup : '') +
+    // ONE NUMBER, AND WHY IT IS ONE. Said on the panel itself in one plain
+    // sentence, because the reader's own instinct — and the old table — was to
+    // add the rows up.
+    // SHORTENED 2026-09-19. The claim stays visible — it changes what the
+    // number means, and Tim really did add the two figures up — but the REASON
+    // was said twice on screen: the `lead` directly above prints the same point
+    // with this packing's own arithmetic in it ("adding them would have given
+    // X; together they are worth Y — less, because…"), and "Never add the gains
+    // up" is the first thing in "How this works" below. Two 55-word paragraphs
+    // of it cost 223px on this panel at 390px (`tools/measure-layout.mjs
+    // --selector '.combo-one'`), on the page he reads on his phone.
+    (entry.count > 1
+      ? `<p class="combo-one">One number, not ${plural(entry.count, 'number')}: these ` +
+        `${plural(entry.count, 'trade')} are priced as a single move. Each manager’s own gain ` +
+        `below is his own squad’s and really is separate.</p>`
+      : '') +
     (entry.count
       ? comboTableHtml(rows, from, id)
       : `<p class="empty">Making none of them is the best answer here — every offer is worth ` +
@@ -3243,6 +3854,9 @@ function renderCombo() {
   // Cleared on every path that draws no table, so a click on nothing can never
   // reach a row object left over from the last answer.
   state.comboRows = [];
+  // Same rule for the colour scales: a note describing a table that is not on
+  // screen is the hidden-table defect this page has shipped before.
+  comboHeatScales.length = 0;
 
   if (basis() !== 'weeks') {
     // TWO DIFFERENT REASONS TO BE HERE, and they need different sentences. The
@@ -3279,8 +3893,10 @@ function renderCombo() {
 
   // No note on the two paths below, so no empty "How" toggle either.
   if (state.comboRunning) {
-    body.innerHTML = '<p class="empty"><span class="searching">Trying every set of trades that ' +
-      'can all be made at once…</span></p>';
+    // A WORKING LINE, not an explanation: what a combination is, is the lede
+    // above it and the method below it. It was a sentence long.
+    body.innerHTML = '<p class="empty"><span class="searching">Trying every set of trades…' +
+      '</span></p>';
     note.innerHTML = '';
     $('comboExplain').hidden = true;
     return;
@@ -3335,14 +3951,16 @@ function renderCombo() {
       : `<div class="combo-alt">` +
         comboBlockHtml(most, merged.most, merged.best.length, 'comboAltTable', allMostIndex, {
           heading: `The most trades possible: ${plural(most.count, 'trade')}`,
+          // The numbers, and nothing else: the most trades is a different
+          // question from the most points, and the two figures say that on
+          // their own. The paragraph that spelled it out was 55 words above a
+          // table that repeats every one of them.
           lead:
-            `You asked for the most trades that can all be made at once, and that is a different ` +
-            `question from the most points. This packing makes ` +
             `<strong>${plural(most.count, 'trade')}</strong> instead of ` +
-            `<strong>${plural(best.count, 'trade')}</strong> and is worth ` +
-            `${weeklyPhrase(most.delta)} rather than ${weeklyPhrase(best.delta)}. More deals, ` +
-            (most.delta < best.delta ? 'fewer points' : 'the same points or better') +
-            ` — the one above is the one to make.`,
+            `<strong>${plural(best.count, 'trade')}</strong>, worth ` +
+            `${weeklyPhrase(most.delta)} rather than ${weeklyPhrase(best.delta)} — ` +
+            (most.delta < best.delta ? 'more deals, fewer points' : 'more deals, no fewer points') +
+            `, so the packing above is the one to make.`,
         }) +
         `</div>`);
 
@@ -3373,8 +3991,18 @@ function renderCombo() {
         `two gains added up. Read it before you send it: a four-player trade is a different ` +
         `conversation from two two-player ones.<br><br>`
       : '') +
-    `The gains in the table are each measured against your roster <em>as it is today</em>, so they ` +
-    `do not add up to the headline either — only the figure at the top prices the whole slate. ` +
+    // REWRITTEN 2026-09-19 with the column it described. This used to explain
+    // why the table's per-row "You gain" figures did not add up to the headline
+    // — which was an explanation for a defect rather than a fix, and Tim read
+    // the two numbers and added them anyway. The column is gone; what is left
+    // to say is what the one number IS and why each manager still has his own.
+    `<strong>There is one “you gain” on this panel and it is the headline.</strong> A per-deal ` +
+    `figure for your side was removed on 2026-09-19: every one of them was measured against your ` +
+    `roster <em>as it is today</em>, and after the first trade that roster is gone — so the two ` +
+    `could not be added, could not be compared, and invited exactly the arithmetic this section ` +
+    `exists to refuse. <strong>Each manager’s own gain stays on his row</strong>, because that is ` +
+    `a different squad’s lineup and the figures are genuinely separate; a manager in two of these ` +
+    `deals shows what <em>both</em> of them together do to him, not one of the two. ` +
     (combo.exhaustive
       ? `Every combination of the ${plural(combo.offers.length, 'offer')} was tried — ` +
         `${combo.considered} of them survive the no-player-twice rule. `
@@ -3396,6 +4024,27 @@ function renderCombo() {
         `positional floor included. ` + describeFloors(state.floors, { week: state.floorWeek }) +
         ` Both squads in every deal get it, and so does each partner’s combined side — so a ` +
         `packing can never be ranked on a different question from the rows it is built out of.`
+      : '') +
+    // THE COLOUR THRESHOLDS IN POINTS, one line per table on screen. The short
+    // key under each table says what the colour compares; this is what makes a
+    // shaded cell checkable against the column by hand, which is the channel
+    // Tim actually uses and the reason none of it was deleted.
+    (comboHeatScales.length
+      ? `<br><br><strong>The colour on “He gains”.</strong> ` +
+        comboHeatScales
+          .map(({ id, scale }, i) =>
+            (comboHeatScales.length > 1
+              ? `<em>${id === 'comboAltTable' ? 'The most trades possible' : 'The best combination'}:</em> `
+              : '') +
+            describeHeat(scale, {
+              what: 'what the other managers in that packing gain',
+              high: 'a manager it helps most', low: 'one it barely helps',
+              unit: false,
+            }) + (i < comboHeatScales.length - 1 ? ' ' : ''))
+          .join('') +
+        ` Each packing is scaled on its own rows, never across the two: they are different ` +
+        `slates of trades and one scale over both would rank a manager against a deal he is ` +
+        `not in.`
       : '');
 }
 
@@ -3934,35 +4583,47 @@ const teamById = (id) => customTeams().find((t) => t.id === id) || null;
  * he is most often pricing — but nothing downstream assumes it, which is what
  * makes "any player with any team" true rather than nearly true.
  */
-function customDefaults() {
-  const teams = customTeams();
-  if (!teams.length) return { a: null, b: null };
-  const a = state.myTeamId !== null && teams.some((t) => t.id === state.myTeamId)
-    ? state.myTeamId
-    : teams[0].id;
-  const b = (teams.find((t) => t.id !== a) || teams[0]).id;
-  return { a, b };
-}
-
 /**
- * Keep the pickers pointing at squads that exist.
+ * "YOU" IS THE MANAGER PICKED AT THE TOP OF THE PAGE, and nothing else.
  *
- * The league changes under this panel in three ways — switching to demo,
- * connecting a real league, or moving to a week whose rosters name different
- * men — and a picker left on a team id that is no longer there renders an
- * empty list with no explanation. Reset rather than guess.
+ * Tim, 2026-09-19: "the custom trade section has the user choose both users to
+ * trade, but the 'You' should always be the same user that is selected in the
+ * top of the trade section with 'select manager'."
+ *
+ * He is describing a real confusion rather than a preference. There were TWO
+ * controls saying who the reader is — `Your team` at the top, which the finder,
+ * the depth map, the combo and every ESPN link are built from, and this panel's
+ * own `Squad` picker — and they could disagree. When they did, the builder
+ * priced a deal for somebody else while every panel above it priced deals for
+ * him, and nothing on the page said so.
+ *
+ * SO THE A SIDE IS NO LONGER A PICKER. It follows `state.myTeamId`, the B side
+ * is still a picker, and a reader who wants to price a deal between two OTHER
+ * managers — which is a thing this panel could always do and still can — moves
+ * the one control at the top. That is said on the panel, because it is the one
+ * capability this change appears to take away and does not.
+ *
+ * THE TICKS GO WHEN THE SQUAD DOES. A list of playerIds from Nolan's roster
+ * means nothing against Bree's, and `priceCustom` would report them as men who
+ * have changed squads — which is true of a SAVED trade and nonsense in the
+ * builder.
  */
 function syncCustomPickers() {
   const teams = customTeams();
   if (!teams.length) { state.custom.a = null; state.custom.b = null; return; }
   const has = (id) => id !== null && teams.some((t) => t.id === id);
-  if (!has(state.custom.a) || !has(state.custom.b) || state.custom.a === state.custom.b) {
-    const d = customDefaults();
-    state.custom.a = has(state.custom.a) ? state.custom.a : d.a;
-    state.custom.b = has(state.custom.b) && state.custom.b !== state.custom.a
-      ? state.custom.b
-      : (teams.find((t) => t.id !== state.custom.a) || teams[0]).id;
+
+  const want = has(state.myTeamId) ? state.myTeamId : teams[0].id;
+  if (state.custom.a !== want) {
+    state.custom.a = want;
     state.custom.sendA = [];
+    // The other side may now be the same squad — you cannot trade with
+    // yourself — so it moves to whoever is not you rather than refusing.
+    if (state.custom.b === want) state.custom.b = null;
+  }
+
+  if (!has(state.custom.b) || state.custom.b === state.custom.a) {
+    state.custom.b = (teams.find((t) => t.id !== state.custom.a) || teams[0]).id;
     state.custom.sendB = [];
   }
 }
@@ -4055,33 +4716,370 @@ function customRoster(teamId) {
  * slot draws as a row with no checkbox: there is nobody there to trade, and a
  * missing row would make the lineup look one man shorter than it is.
  */
-function customList(teamId, picked, which) {
+// ===========================================================================
+// SUGGESTED PLAYERS — who else you could send to even this deal up
+// ===========================================================================
+//
+// Tim, 2026-09-19: "I also want to add a 'suggested player' in the custom trade
+// box which adds suggested players to send to make the trade more even. This
+// only appears in the player's box after you select a player. Make sure that
+// you do as many players that would be eligible to make the trade more even,
+// and not just 1 to make it perfect. Allow for some leeway so that the user can
+// do a 'fleece' trade and have the opponent have a -/week or something like
+// that."
+//
+// THREE THINGS IN THAT PARAGRAPH, and each one is a decision:
+//
+//   1. IT ONLY APPEARS AFTER HE PICKS SOMEBODY. With nothing ticked there is no
+//      imbalance to even, and marking half a roster before a deal exists would
+//      be the panel having an opinion — which is the one thing this box is not
+//      allowed to have (see `renderCustomNote`).
+//   2. EVERY MAN WHO WOULD HELP IS MARKED, not the single best one. "As many
+//      players that would be eligible... not just 1 to make it perfect" is the
+//      whole of it: he is choosing, and a list of one is a recommendation.
+//   3. THE RESULTING NUMBERS ARE ON SCREEN, both sides, per week. That is the
+//      "fleece" leeway — a deal that leaves the other manager at −1.2 a week is
+//      a deal he may well want to send, and the page's job is to let him SEE
+//      that rather than to stop him. Nothing here is auto-added; these are
+//      marks on rows he can tick.
+//
+// THE ARITHMETIC IS NOT HERE. `js/trade-suggest.js` is a pure, node-tested
+// module (another agent's, 2026-09-19) and it prices a candidate through the
+// SAME `priceTradeAcrossWeeks` path with the same weeks, the same projections
+// and the same floors as everything else on this page — never a second pricing
+// rule, which is the defect this page has shipped before. This file hands it
+// the page's own state and draws what comes back.
+//
+// WHAT IT COSTS, MEASURED (by the module's own author, 2026-09-19): 24–31ms
+// for a full pass — two sixteen-man squads, nine weeks, the pool capped at
+// fourteen — which is about 1.9ms a candidate. That is inside a checkbox tick's
+// budget, so this is computed ON the paint rather than deferred; deferring it
+// would put a visible flicker of un-marked rows in front of a reader for the
+// sake of thirty milliseconds. It IS memoised on the ticked set, because a
+// repaint that changes nothing (a sort, a card, the combo landing) must not
+// re-price thirty candidates to draw the same marks again.
+
+const suggestState = {
+  key: null,     // the deal these answers are about
+  list: [],      // ranked candidates, evenest first
+  base: null,    // what the deal is worth before any of them is added
+  reason: '',    // the module's own sentence when it can say nothing
+  capped: false,
+  ms: null,
+};
+
+/** Everything a suggestion depends on. A change in any of it invalidates them. */
+function customSignature() {
+  const c = state.custom;
+  if (!c.a || !c.b) return null;
+  if (!c.sendA.length && !c.sendB.length) return null;   // nothing ticked: no answer
+  return [
+    sourceKey(), state.week, weeklySpan().length, c.a, c.b,
+    c.sendA.map(String).sort().join(','), c.sendB.map(String).sort().join(','),
+  ].join('|');
+}
+
+/** The candidate for one man, if he is one. */
+function suggestFor(p, side) {
+  if (!p) return null;
+  return suggestState.list.find(
+    (s) => String(s.playerId) === String(p.playerId) && (!s.side || s.side === side)
+  ) || null;
+}
+
+/**
+ * The mark on a suggested row.
+ *
+ * NEVER COLOUR ALONE: the row is tinted, and it also carries its RANK, the
+ * WORD "evens it" and the two resulting per-week figures. Any one of those
+ * reads in greyscale; the tint is the fourth cue and not the first.
+ */
+function suggestBadgeHtml(sugg, p) {
+  if (!sugg || !p) return '';
+  const rank = sugg.rank ? `#${sugg.rank} ` : '';
+  const fair = Number.isFinite(sugg.deltaA) && Number.isFinite(sugg.deltaB);
+  // `fleece` is the module's blunt fact that the OTHER side ends up negative.
+  // It is a label, not a warning, and it is never filtered out: a deal that
+  // leaves the other manager worse off is one Tim explicitly asked to be able
+  // to build and to see.
+  const word = sugg.fleece
+    ? `${rank}also send — he goes negative`
+    : sugg.even
+      ? `${rank}also send — evens it`
+      : `${rank}also send — closer`;
+  return (
+    `<span class="cu-sug">` +
+    `<span class="cu-sug-word${sugg.fleece ? ' fleece' : ''}">${esc(word)}</span>` +
+    (fair
+      ? `<span class="cu-sug-num">then you ${signedText(perWeekOf(sugg.deltaA))}` +
+        ` · him ${signedText(perWeekOf(sugg.deltaB))}<span class="unit">/wk</span></span>`
+      : '') +
+    `</span>`
+  );
+}
+
+/**
+ * Work the suggestions out, off the paint, and patch them onto the rows.
+ *
+ * PATCHED RATHER THAN REDRAWN, so an answer arriving a moment after a tick does
+ * not replace the checkbox under the finger that ticked it — the same rule the
+ * tick handler follows, for the same reason.
+ */
+function ensureSuggestions() {
+  const key = customSignature();
+  if (key === suggestState.key) return;
+  suggestState.key = key;
+  suggestState.list = [];
+  suggestState.base = null;
+  suggestState.reason = '';
+  suggestState.capped = false;
+  suggestState.ms = null;
+  if (key === null) return;
+
+  const teamA = teamById(state.custom.a);
+  const teamB = teamById(state.custom.b);
+  if (!teamA || !teamB) return;
+
+  const started = Date.now();
+  let res = null;
+  try {
+    res = suggestAdditions({
+      rosterA: teamA.players || [],
+      rosterB: teamB.players || [],
+      // THE RESOLVED MEN, not the bare ids this page keeps. `state.custom.sendA`
+      // holds STRINGS (that is what a checkbox value is) and a roster's
+      // `playerId` is a NUMBER, so handing the ids over unresolved matched
+      // nothing and the module quite correctly reported that nothing was
+      // ticked. `playersFor` is the one place this page turns the one into the
+      // other, and it is already what `priceCustom` uses.
+      sendA: playersFor(state.custom.a, state.custom.sendA),
+      sendB: playersFor(state.custom.b, state.custom.sendB),
+      slots: state.slots,
+      weeks: weeklySpan(),
+      projFor,
+      zeroIsBye: zeroIsBye(),
+      // THE SAME FLOOR as every other price on this page, and it is
+      // load-bearing rather than tidy: with floors on, two of one squad's men
+      // even the demo deal; with them off, four do, in a different order. A
+      // suggestion priced on a different basis from the deal it is suggesting
+      // an addition to is HANDOFF rule 13's defect one panel further down, and
+      // it would be silently wrong rather than visibly wrong.
+      floors: state.floors,
+      // BOTH SIDES. A man can be thrown in from either squad to close the gap,
+      // and which side it is is a fact about the deal rather than a setting —
+      // 'auto' would pick one for him.
+      side: 'both',
+      limit: SUGGEST_LIMIT,
+    });
+  } catch {
+    res = null;
+  }
+  suggestState.ms = Date.now() - started;
+
+  if (!res || !res.ok) {
+    // The module writes its own sentence for every refusal it can make. Print
+    // that rather than inventing a second vocabulary for the same facts.
+    suggestState.reason = (res && res.reason) || '';
+    return;
+  }
+  suggestState.base = res.base || null;
+  suggestState.capped = !!res.limited;
+  suggestState.list = (res.candidates || []).map((c, i) => ({
+    playerId: c.playerId,
+    side: c.side || null,
+    // REST-OF-SEASON TOTALS coming out of the engine, printed per week by
+    // `perWeekOf` — the factor-of-nine trap this whole file's header is about.
+    deltaA: Number.isFinite(c.deltaA) ? c.deltaA : null,
+    deltaB: Number.isFinite(c.deltaB) ? c.deltaB : null,
+    fleece: !!c.fleece,
+    even: !!c.even,
+    rank: Number.isFinite(c.rank) ? c.rank : i + 1,
+  })).filter((c) => c.playerId !== undefined && c.playerId !== null);
+}
+
+/** The key line under the lists. The marks themselves go on in `customList`. */
+function paintSuggestions() {
+  const line = $('cuSuggest');
+  if (line) line.innerHTML = suggestLineHtml();
+}
+
+/** The key under the lists: what a marked row means, and what was tried. */
+function suggestLineHtml() {
+  // NOTHING AT ALL BEFORE ANYBODY IS TICKED. The line under the lists used to
+  // say "tick a player on either side…" three inches above `#cuPreview`, which
+  // says "tick who moves on each side to price the deal" — one instruction,
+  // printed twice, is two lines of a panel Tim asked to be condensed.
+  if (suggestState.key === null) return '';
+  // The module's own refusal sentence, printed rather than paraphrased: it
+  // knows why it could not answer and this file does not get to guess.
+  if (suggestState.reason) return `<span class="muted">${esc(suggestState.reason)}</span>`;
+  if (!suggestState.list.length) {
+    return `<strong>Nobody else would even this deal up.</strong> Every remaining man on either ` +
+      `squad makes the gap between the two sides wider, not narrower.`;
+  }
+  // SHORT, BECAUSE IT IS A KEY AND NOT AN EXPLANATION. The method — what is
+  // priced, on what basis, why a lopsided deal is labelled rather than hidden —
+  // is in "How a custom trade is priced" below. `node tests/text-audit.mjs
+  // trade.html` is what keeps this honest: the long version took this panel to
+  // 192 visible words on its own.
+  return (
+    `<strong>${plural(suggestState.list.length, 'suggested player')}</strong> — a row marked ` +
+    `“also send” brings the two sides’ gains closer together, evenest first. ` +
+    `<strong>Nobody is added for you.</strong>` +
+    (suggestState.capped ? ` Capped at ${SUGGEST_LIMIT} men.` : '') +
+    (suggestState.ms !== null ? ` <span class="muted">(priced in ${suggestState.ms}ms)</span>` : '')
+  );
+}
+
+/**
+ * THE RED/GREEN SCALE ON THE VALUE COLUMN — per POSITION, across the two squads
+ * on screen.
+ *
+ * Tim asked for the scale everywhere a number is compared (HANDOFF rule 14),
+ * and the only hard part here is choosing the comparison GROUP. Two candidates
+ * were on the table:
+ *
+ *   THE SAME LINEUP SLOT across the two squads — his QB against the other QB,
+ *   his WR2 against the other WR2. Rejected, and not for a reason of taste: it
+ *   is a group of TWO. With two values every cell lands the same distance from
+ *   the mean (±0.71 SD on a sample standard deviation), so every pair on the
+ *   list would come out coloured at step 3 in opposite directions, whether they
+ *   differ by fifteen points or by a tenth. That is a scale that says nothing
+ *   while looking confident, which is precisely what HEAT_MIN_SPREAD exists to
+ *   refuse.
+ *
+ *   THE SAME POSITION across the two squads — every RB on both lists together,
+ *   every WR, every QB. Eight to ten values in the big positions, two to four
+ *   at quarterback and kicker, and a real distribution to measure against. It
+ *   is still the rule rule 14 is about — a quarterback is never measured
+ *   against a kicker — and it is the group a reader building a trade is
+ *   actually thinking in: "is this running back a good running back, of the
+ *   ones in front of me".
+ *
+ * So: per position, over BOTH squads shown. The bench is in it too; a bench
+ * receiver is still a receiver, and leaving him out would measure the starters
+ * against a group chosen by the thing being measured.
+ */
+function customPositionScales(teamIds) {
+  const byPos = new Map();
+  for (const id of teamIds) {
+    const team = teamById(id);
+    for (const p of (team && team.players) || []) {
+      if (p.playerId === null || p.playerId === undefined) continue;
+      const v = customValue(p);
+      if (!Number.isFinite(v)) continue;
+      if (!byPos.has(p.position)) byPos.set(p.position, []);
+      byPos.get(p.position).push(v);
+    }
+  }
+  const out = new Map();
+  for (const [pos, values] of byPos) out.set(pos, heatScale(values));
+  return out;
+}
+
+/**
+ * One roster list. The whole row is the label, so a tap anywhere toggles him.
+ *
+ * EVERY ROW IS DRAWN, and the panel does not scroll (Tim: "just show all 16-17
+ * positions, don't make a scrolling space so the view is limited"). An empty
+ * slot draws as a row with no checkbox: there is nobody there to trade, and a
+ * missing row would make the lineup look one man shorter than it is.
+ *
+ * THE RIGHT-HAND LIST IS MIRRORED (Tim, 2026-09-19: "I want to mirror the
+ * opponent user's order of columns in the custom trade box so that both user's
+ * numbers are in the middle with the player's names on the outside and whatnot.
+ * This allows for easier comparison"). So the left list reads
+ * slot · name · pos · value with the value at its inner edge, and the right
+ * list reads value · pos · name · slot with the value at ITS inner edge and the
+ * checkbox on the far right. The two value columns face each other down the
+ * middle of the panel, which is the comparison he is making when he builds a
+ * deal — this man for that man — and it is now one glance instead of two.
+ *
+ * AND THE ROW TAKES THE SLACK IN THE MIDDLE. His specific complaint was the gap
+ * between the name and the position; the cause was `.nm { flex: 1 1 auto }`,
+ * which gave the NAME every spare pixel in the column and pushed the position
+ * and the value out to the far edge. The name is shrink-to-fit with an ellipsis
+ * cap now and an empty `.gap` takes the slack instead, so name, position and
+ * value sit together as one group against the middle of the panel and the slot
+ * label stays pinned to the outside.
+ */
+function customList(teamId, picked, which, { scales = new Map(), ctx = null } = {}) {
   const rows = customRoster(teamId);
   if (!rows.length) return '<div class="empty">No roster for this squad in this week.</div>';
   const on = new Set(picked.map(String));
+  const mirror = which === 'b';
+
   return rows.map(({ slot, p }) => {
     if (!p) {
+      const cells = [
+        `<span class="sl">${esc(slot)}</span>`,
+        `<span class="gap"></span>`,
+        `<span class="nm muted">nobody</span>`,
+        `<span class="pv">—</span>`,
+      ];
       return (
-        `<div class="cu-man empty-slot">` +
-        `<span class="sl">${esc(slot)}</span>` +
-        `<span class="nm muted">nobody</span>` +
-        `<span class="pv">—</span>` +
-        `</div>`
+        `<div class="cu-man empty-slot${mirror ? ' mirror' : ''}">` +
+        `<span class="cu-line">` +
+        (mirror ? cells.slice().reverse().join('') : cells.join('')) +
+        `</span></div>`
       );
     }
     const lit = on.has(String(p.playerId));
+    // A man already in the deal is not a suggestion to add him to it.
+    const sugg = lit ? null : suggestFor(p, which);
     const v = customValue(p);
-    return (
-      `<label class="cu-man${lit ? ' on' : ''}">` +
-      `<input type="checkbox" data-side="${which}" value="${esc(p.playerId)}"${lit ? ' checked' : ''}>` +
-      `<span class="sl">${esc(slot)}</span>` +
-      `<span class="nm">${esc(p.name)}</span>` +
+    const scale = scales.get(p.position) || null;
+    const h = heatOf(v, scale, { what: `a ${p.position} on these two squads` });
+    // The card knows which deal it is inside, so a man on the OTHER squad who
+    // is ticked bolds the weeks he would start FOR YOU with this trade made.
+    // An unticked man is in nobody's receive list, so he falls back to his own
+    // manager's lineup — which is the right answer and costs nothing to get.
+    const key = registerRun(cardFor(p, ctx), 'cu');
+
+    const cells = [
+      `<span class="sl">${esc(slot)}</span>`,
+      `<span class="gap"></span>`,
+      `<span class="nm">${esc(p.name)}</span>`,
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
       // questions. Suppressed on a defence for the same reason as everywhere
       // else on this page — the position is in the name (see `posTag`).
-      `<span class="pos">${p.position === 'DST' ? '' : esc(p.position)}</span>` +
-      `<span class="pv">${v === null ? '—' : fmt(v)}</span>` +
+      `<span class="pos">${p.position === 'DST' ? '' : esc(p.position)}</span>`,
+      // THE CARD HANGS OFF THE NUMBER, NOT OFF THE NAME, and that is a phone
+      // decision rather than a taste one. The whole row is a `<label>`, so a
+      // tap anywhere on it ticks the man — and `js/player-card.js` opens its
+      // sheet on a coarse pointer by calling `preventDefault()`, which would
+      // kill the label's own toggle. Putting the card on the name would
+      // therefore make the biggest, most obvious target on the row stop
+      // ticking, on the one device Tim actually reads this site on.
+      //
+      // The number is the right home for it anyway: it is "a number standing
+      // for a player", which is the site's own phrase for the thing that owes
+      // the reader an explanation, and a tap on a figure asking "where does
+      // this come from" is answered by his whole season. The name keeps the
+      // tap that ticks him.
+      `<span class="pv${h ? ` ${h.cls}` : ''}"${tipAttr(key)}` +
+        `${h ? ` title="${esc(h.words)}"` : ''}>` +
+        `${v === null ? '—' : fmt(v)}${h ? heatMarkHtml(h) : ''}</span>`,
+    ];
+    const box =
+      `<input type="checkbox" data-side="${which}" value="${esc(p.playerId)}"${lit ? ' checked' : ''}>`;
+
+    // THE CELLS LIVE ON THEIR OWN LINE INSIDE THE ROW, and the suggestion badge
+    // is a second line under it. Two reasons, and the second is the load-bearing
+    // one: the badge carries two figures and would squeeze every name on the
+    // list onto an ellipsis if it shared the line — and a row whose cells were
+    // allowed to WRAP (the obvious way to give the badge its own line) wraps the
+    // value column onto line two the moment a name is long, which is exactly the
+    // ragged layout the mirroring exists to fix. `.cu-line` never wraps; it
+    // shrinks the name instead.
+    return (
+      `<label class="cu-man${lit ? ' on' : ''}${sugg ? ' sug' : ''}${mirror ? ' mirror' : ''}" ` +
+      `data-man="${esc(p.playerId)}" data-side="${which}">` +
+      `<span class="cu-line">` +
+      (mirror ? cells.slice().reverse().join('') + box : box + cells.join('')) +
+      `</span>` +
+      suggestBadgeHtml(sugg, p) +
       `</label>`
     );
   }).join('');
@@ -4155,6 +5153,13 @@ function customOffer(entry, priced) {
     custom: true,
     mineTeamId: entry.a,
     partner: priced.teamB,
+    // A SAVED deal built from a squad that is not the one selected today says
+    // so on its own row. Since "you" follows the top picker (2026-09-19) every
+    // NEW custom deal is his, but a saved one is a historical record and is
+    // never rewritten — so the row has to be able to say whose "You send"
+    // column it is printing. Empty, and therefore silent, in the normal case.
+    fromLabel:
+      entry.a !== state.myTeamId && priced.teamA ? `from ${priced.teamA.name}` : '',
     send: priced.sendA,
     receive: priced.sendB,
     kind: 'custom',
@@ -4177,18 +5182,44 @@ const customNames = (men) =>
 
 function renderCustomPickers() {
   const teams = customTeams();
-  const opts = (selected) => teams
-    .map((t) => `<option value="${t.id}"${t.id === selected ? ' selected' : ''}>${esc(t.name)}</option>`)
-    .join('');
-  $('cuTeamA').innerHTML = opts(state.custom.a);
-  $('cuTeamB').innerHTML = opts(state.custom.b);
-
   const a = teamById(state.custom.a);
   const b = teamById(state.custom.b);
+
+  // ONE PLACE SAYS WHO "YOU" ARE, and it is the picker at the top of the page.
+  // This reads it back rather than offering a second one; the sentence names
+  // the control so a reader who wants somebody else knows where to go.
+  // SHORT: it names the one control that decides this, and the rest of the
+  // reasoning — that there used to be two and they could disagree — is in "How
+  // a custom trade is priced" below, where the method lives.
+  $('cuYou').innerHTML = a
+    ? `<strong>${esc(a.name)}</strong> — set by <em>Your team</em>, at the top of the page.`
+    : 'Pick a manager in <em>Your team</em> at the top of the page.';
+
+  // The B picker never offers the squad that is already "you": a trade with
+  // yourself is not a thing, and an option that silently swapped the sides was
+  // the old answer to a problem that no longer exists.
+  $('cuTeamB').innerHTML = teams
+    .filter((t) => t.id !== state.custom.a)
+    .map((t) => `<option value="${t.id}"${t.id === state.custom.b ? ' selected' : ''}>${esc(t.name)}</option>`)
+    .join('');
+
   $('cuHeadA').textContent = a ? `${a.name} sends` : 'Sends';
   $('cuHeadB').textContent = b ? `${b.name} sends` : 'Sends';
-  $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a');
-  $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b');
+
+  const scales = customPositionScales([state.custom.a, state.custom.b]);
+  const ctx = state.customOffer ? { offer: state.customOffer, side: 'mine' } : null;
+  $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a', { scales, ctx });
+  $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b', { scales, ctx });
+  paintSuggestions();
+
+  // Channel 4 of "never colour alone", in view under the lists it describes.
+  // SHORT, for the same reason the finder's is: a key says what the colour
+  // compares, and the method — why a position and not a lineup slot, where the
+  // thresholds fall — is in "How a custom trade is priced" below.
+  const any = [...scales.values()].some(Boolean);
+  $('cuHeatKey').innerHTML = any
+    ? heatKeyShort({ thing: 'man', what: 'the others at his own position on these two squads' })
+    : '';
 }
 
 /**
@@ -4224,9 +5255,9 @@ function customGainHtml(delta) {
 }
 
 /** Nothing to show under a side yet — reserved, so the panel cannot jump. */
-const CU_BLANK = '<span class="cu-num flat">—</span><span class="cu-sub">no deal yet</span>';
+const CU_BLANK = '<span class="cu-num flat">—</span>';
 
-function renderCustomPreview() {
+function renderCustomPreview(priced) {
   const el = $('cuPreview');
   const { sendA, sendB } = state.custom;
   const blank = () => {
@@ -4237,11 +5268,10 @@ function renderCustomPreview() {
   };
 
   if (!sendA.length && !sendB.length) {
-    el.innerHTML = '<span class="muted">Tick who moves on each side to price the deal.</span>';
+    el.innerHTML = '<span class="muted">Tick who moves on each side.</span>';
     blank();
     return;
   }
-  const priced = priceCustom(state.custom);
   if (priced.error) {
     el.innerHTML = `<span class="muted">${esc(priced.error)}</span>`;
     blank();
@@ -4260,40 +5290,103 @@ function renderCustomPreview() {
     `priced over ${esc(weekRange(priced.weeks))}`;
 }
 
+/**
+ * A SAVED CUSTOM TRADE LOOKS LIKE A FOUND ONE, because it is drawn by the same
+ * builder.
+ *
+ * Tim, 2026-09-19, pasting his own before and after: a saved row rendered as a
+ * squad name, a run-on sentence naming everybody who moves, and two bare gain
+ * figures — while a row in the finder three panels up is a proper table row
+ * with a manager, a shape, the two packages, his lineup before and after, both
+ * gains, a Week by week button and an ESPN link. Two tables claiming to list
+ * the same kind of thing and listing it two different ways.
+ *
+ * So this calls `offerRow` — the finder's own — through `customOffer`, which
+ * was already the shape the pop-up understands. Everything the row needs comes
+ * with it for nothing: the cards on every name, the per-week-over-total
+ * display rule, the ESPN cell, the "Week by week" button and the click that
+ * opens the deal. The Remove button is an extra cell on the end.
+ *
+ * `SHAPE_LABEL` has no 'custom' entry and printing `undefined` from it is a bug
+ * this page has hit before (see the comment in `renderDeal`); `shapeLabel`
+ * makes a custom deal name its own shape — "2 for 2" — instead.
+ *
+ * AND A DEAL WHOSE PLAYER HAS MOVED STILL SAYS SO rather than being priced as
+ * a different deal. That row cannot go through `offerRow` at all — there is no
+ * priced offer to hand it — so it spans the table and says what is wrong.
+ */
 function renderCustomSaved() {
   const rows = state.customSaved;
   $('cuWrap').hidden = rows.length === 0;
   $('cuEmpty').classList.toggle('hidden', rows.length > 0);
 
+  // Priced first, so the colour scale over the two gain columns is built from
+  // the rows that will actually be drawn — the same rule the finder follows.
+  const priced = rows.map((entry) => priceCustom(entry));
+  const offers = rows.map((entry, i) =>
+    priced[i].error ? null : customOffer(entry, priced[i]));
+  const good = offers.filter(Boolean);
+  const scales = gainScales(good);
+
+  // The click handler reads these by index, exactly as the finder's and the
+  // combo's do. A row whose deal would not price has no entry and cannot be
+  // opened, which is right: there is nothing to open.
+  state.customRows = offers;
+
+  const cols = 9;   // manager, deal, send, get, lineup, gain, his gain, espn, remove
   $('cuRows').innerHTML = rows.map((entry, i) => {
-    const priced = priceCustom(entry);
-    const a = teamById(entry.a);
-    const b = teamById(entry.b);
-    const who = `${esc(a ? a.name : 'A squad')} ⇄ ${esc(b ? b.name : 'a squad')}`;
-    if (priced.error) {
+    const drop = `<td class="cu-remove">` +
+      `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
+    if (priced[i].error) {
+      const a = teamById(entry.a);
+      const b = teamById(entry.b);
       return (
-        `<tr data-cu="${i}">` +
-        `<td class="name">${who}<span class="sub">${esc(priced.error)}</span></td>` +
-        `<td class="gain">—</td><td class="gain">—</td>` +
-        `<td><button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>` +
+        `<tr data-cu="${i}" class="cu-broken">` +
+        `<td class="name" colspan="${cols - 1}">` +
+        `${esc(a ? a.name : 'A squad')} ⇄ ${esc(b ? b.name : 'a squad')}` +
+        `<span class="sub">${esc(priced[i].error)}</span></td>` +
+        drop +
         `</tr>`
       );
     }
-    return (
-      `<tr data-cu="${i}" class="clickable">` +
-      `<td class="name">${who}` +
-        `<span class="sub">${customNames(priced.sendA)} → ${esc(b ? b.name : '')} · ` +
-        `${customNames(priced.sendB)} → ${esc(a ? a.name : '')}</span></td>` +
-      `<td class="gain">${weeklyGainHtml(priced.forA.delta)}</td>` +
-      `<td class="gain">${weeklyGainHtml(priced.forB.delta)}</td>` +
-      `<td><button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>` +
-      `</tr>`
-    );
+    return offerRow(offers[i], i, `cu:${i}`, {
+      ...scales,
+      attrs: ` data-cu="${i}"`,
+      tail: drop,
+    });
   }).join('');
+
+  // A SHORT POINTER, not a second copy of the finder's key. These are the same
+  // two columns on the same scale rule, one panel down; repeating eighty words
+  // of it would be the thing `text-audit.mjs` exists to catch.
+  const key = $('cuTableKey');
+  if (key) {
+    key.innerHTML = scales.myScale || scales.theirScale
+      ? heatKeyShort({ what: 'the other saved trades in the same column' })
+      : '';
+  }
+}
+
+/**
+ * The scale the inline breakdown's difference column is drawn on, so the note
+ * below can print its thresholds in points — the other half of the key split
+ * (`heatKeyShort`). Null whenever the breakdown is not on screen, because a
+ * note describing a table nobody can see is worse than no note.
+ *
+ * `dealSets` is memoised on the offer's own identity, so asking it again here
+ * costs nothing; that is also why `renderCustom` keeps one offer object alive
+ * while the deal stays the same.
+ */
+function inlineWeekScale() {
+  if (!roomBesideBuilder() || !state.customOffer || !weeklyReady()) return null;
+  const sets = dealSets(state.customOffer, 'mine');
+  if (!sets || !sets.span) return null;
+  return heatScale(sets.span.byWeek.map((w) => w.delta));
 }
 
 function renderCustomNote() {
   const span = weeklySpan();
+  const inlineScale = inlineWeekScale();
   $('cuNote').innerHTML =
     `<strong>Priced exactly as the finder prices its own offers.</strong> Both lineups are ` +
     `re-filled week by week over ${span.length ? weekRange(span) : 'the weeks still to play'}, on ` +
@@ -4305,9 +5398,60 @@ function renderCustomNote() {
     `makes your squad worse &mdash; which is exactly the answer you want when somebody has offered ` +
     `you one.` +
     `<br><br>` +
-    `<strong>Any two squads, not just yours.</strong> A trade between two other managers is priced ` +
-    `the same way, which is how you tell whether a deal you have been shown helps the other side ` +
-    `more than it helps you.` +
+    // REWRITTEN 2026-09-19 with the picker it described. "You" is no longer a
+    // choice made here; the capability it used to carry is not gone, it has
+    // moved to the one control that already decided who the reader is.
+    `<strong>“You” is the manager selected in <em>Your team</em> at the top of this page.</strong> ` +
+    `There used to be a second picker here, and two controls saying who you are could disagree — ` +
+    `so a deal built in this box could be priced for one manager while every panel above it was ` +
+    `priced for another, with nothing on the page saying so. <strong>Any two squads can still be ` +
+    `priced</strong>, which is how you tell whether a deal you have been shown helps the other ` +
+    `side more than it helps you: change <em>Your team</em> at the top and this box follows it. ` +
+    `A trade you have already saved keeps the squads it was built with and is never rewritten — ` +
+    `it is a record of a deal, not a view of the current one.` +
+    `<br><br>` +
+    // REWRITTEN 2026-09-19 with the width rule (`roomBesideBuilder`). It used
+    // to say the breakdown "drops below the two squads" on a narrow screen,
+    // which was true and was the defect: below the squads it added 767px to
+    // this panel at a 900px window and 191px at 390px, because it took enough
+    // width off the two rosters that they stacked as well.
+    `<strong>The week-by-week breakdown sits beside the lists</strong> and updates as you tick. ` +
+    `It is the same table the pop-up draws, from the same pricing — hover, tap or Tab to a week ` +
+    `in it to see that week slot by slot. <strong>Below about ${INLINE_MIN_WIDTH}px of window ` +
+    `there is no side to put it on</strong>, so it is not drawn at all and ` +
+    `<strong>Week by week</strong> above opens exactly the same thing in a pop-up — which is how ` +
+    `every other trade on this page has always shown its weeks. ` +
+    (inlineScale
+      ? `The colour on its difference column compares each week only with the other priced weeks ` +
+        `of this same deal. ` +
+        describeHeat(inlineScale, {
+          what: 'the other weeks of this deal',
+          high: 'a week the trade is really buying',
+          low: 'a week it does little or costs you',
+        }) + ` Played and playoff weeks are in no total, so they are in no scale either.`
+      : '') +
+    `<br><br>` +
+    // THE SUGGESTIONS, in full, behind the toggle. The visible line above the
+    // lists is a key; this is the method, and it is where the honest caveats
+    // about what was priced and what was not belong.
+    `<strong>Suggested players.</strong> Once anybody is ticked, every other man on either squad ` +
+    `is priced <em>with him added to the deal</em> — the same engine, the same weeks and the same ` +
+    `waiver floor as the two figures under the squads — and every man who brings the two sides’ ` +
+    `gains CLOSER together is marked “also send”, ranked evenest first. <strong>All of them are ` +
+    `marked, not just the one that would make it perfect</strong>, because the choice is yours. ` +
+    `Each marked row prints what the deal would then be worth to each side, per week, so a ` +
+    `deliberately lopsided offer is something you can see rather than something the page refuses ` +
+    `to draw: a row that says <em>he goes negative</em> is exactly that, labelled and left in. ` +
+    `<strong>Nobody is ever added for you</strong> — these are marks on rows you can tick. The ` +
+    `pool that gets priced is capped at ${SUGGEST_LIMIT} men and the line above says when the cap ` +
+    `was reached, because a search that silently stops looking is answering a different question.` +
+    `<br><br>` +
+    `<strong>The colour beside each man</strong> compares him only with the other men at ` +
+    `<em>his own position</em> across these two squads — never a quarterback against a kicker. ` +
+    `Two men in the same lineup slot would have been the tighter comparison and it is a group of ` +
+    `TWO, where every pair comes out equally far from its own average whether they differ by ` +
+    `fifteen points or by a tenth; a position across both squads is eight to ten men and a real ` +
+    `distribution. Tap or hover any number for exactly where it stands.` +
     `<br><br>` +
     `<strong>Both squads are laid out as a lineup</strong> — QB, RB1, RB2, WR1… then the bench — ` +
     `using the same slot rules the Analysis page&rsquo;s season sheet and this page&rsquo;s own deal ` +
@@ -4330,10 +5474,174 @@ function renderCustomNote() {
       : '');
 }
 
+/**
+ * IS THERE ROOM FOR THE BREAKDOWN BESIDE THE BUILDER?
+ *
+ * Tim asked for it "to the side of the custom trade setup", and he justified it
+ * by space: "(There will be enough space to the side of the box once we condense
+ * it…)". BELOW about 900px there is no side, and the condition he attached to
+ * the ask is simply not met — so this is the width at which his own sentence
+ * stops being true rather than a number somebody liked.
+ *
+ * THE ARITHMETIC, not a taste: the two mirrored rosters are a `.panel-row` at
+ * `--col-min: 232px`, so they need 232 + 16 + 232 = 480px to stay side by side —
+ * and side by side is the whole point of mirroring them. The breakdown's own
+ * flex basis is 320px, and the row's gap is 16. That is 816px of panel content,
+ * and the panel's content box is the viewport less 40 (the wrap's padding), 36
+ * (the panel's) and 2 (its border) — so 894px of window. 900 is the round
+ * number above it.
+ *
+ * WHAT IT COST TO LEARN: leaving the breakdown in at every width made
+ * `#customPanel` 1949px tall at a 900px window against 1182 at HEAD — +767px —
+ * because the breakdown took enough width off the rosters that THEY stacked
+ * instead, and each list is sixteen men. At 390px it was +191px, on the page he
+ * reads on his phone. Both measured with `tools/measure-layout.mjs --pages
+ * trade.html --selector '#customPanel'`.
+ *
+ * NARROWER THAN THAT, THE "Week by week" BUTTON IS THE ANSWER, and it already
+ * is one: it opens the same pop-up from the same pricing, it is a 44px target
+ * in the toolbar above, and it costs no height at all until it is pressed. So
+ * nothing is lost on a phone except the height.
+ *
+ * A WIDTH QUERY IS CORRECT HERE and that is worth saying, because HANDOFF's
+ * rule is that `max-width` is "the screen is narrow" and `hover: none` is
+ * "there is no pointer" and a CAPABILITY must never be keyed off the width.
+ * This is not a capability — the breakdown is reachable either way — it is a
+ * question about how many pixels are on the row, which is exactly what a width
+ * query answers. With no `matchMedia` at all the answer is "no room", so the
+ * fallback is the route that works everywhere.
+ */
+const INLINE_MIN_WIDTH = 900;
+
+function roomBesideBuilder() {
+  try {
+    return typeof globalThis.matchMedia === 'function'
+      && globalThis.matchMedia(`(min-width: ${INLINE_MIN_WIDTH}px)`).matches;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The host element, held as a reference rather than looked up, because it is
+ * REMOVED from the document when there is no room for it — and a detached node
+ * has no id to find it by. The wiring at the foot of this file takes the same
+ * reference, so its listeners survive every detach and re-attach.
+ */
+let cuInlineNode = null;
+function cuInlineHost() {
+  if (!cuInlineNode) cuInlineNode = $('cuInline');
+  return cuInlineNode;
+}
+
+/**
+ * THE WEEK-BY-WEEK BREAKDOWN, BESIDE THE BUILDER.
+ *
+ * Tim, 2026-09-19: "the trade analysis pop-up box for the custom trade is
+ * great, but I'd like it to be shown to the side of the custom trade setup
+ * while the trade is being chosen by the user. (There will be enough space to
+ * the side of the box once we condense it and drop all the extra space between
+ * the name and the position.)"
+ *
+ * He is right about the space and right about the reading: the week-by-week
+ * table is how you decide whether a deal is worth anything, and having to open
+ * a pop-up to see it means ticking, opening, reading, closing, re-ticking. This
+ * updates as he ticks.
+ *
+ * IT REUSES `weekTableHtml` AND `renderDealWeek`, not a second copy of either
+ * — the pop-up keeps working unchanged for found trades and for saved ones,
+ * and there is still one renderer for a deal's weeks. It costs no extra ESPN
+ * requests: every number comes out of `weekly.byWeek`, which the page bought on
+ * load.
+ *
+ * AND IT IS REMOVED FROM THE DOCUMENT when there is no room beside the builder
+ * (`roomBesideBuilder`), rather than hidden with CSS. That is not tidiness:
+ * this page has shipped the other thing, a table left in the document holding
+ * the PREVIOUS answer, and a `display: none` would keep every one of the costs
+ * this removal exists to get back — the flex item's slot in the row, the gap
+ * above it, and a stale week table one media query away from being shown again.
+ */
+function renderCustomInline(priced) {
+  const host = cuInlineHost();
+  if (!host) return;
+
+  // NO ROOM: out of the document entirely, and emptied on the way out so
+  // nothing stale can survive to be re-attached with the next window resize.
+  if (!roomBesideBuilder()) {
+    host.innerHTML = '';
+    if (host.parentNode) host.parentNode.removeChild(host);
+    return;
+  }
+  // Room again — put it back where it belongs, beside the two rosters.
+  const build = document.querySelector('.cu-build');
+  if (build && host.parentNode !== build) build.appendChild(host);
+
+  if (!state.customOffer) {
+    host.innerHTML =
+      `<p class="wkx-empty">${
+        priced && priced.error
+          ? esc(priced.error)
+          : 'Tick who moves on either side and this deal’s week-by-week breakdown appears here.'
+      }</p>`;
+    return;
+  }
+  if (!weeklyReady()) {
+    host.innerHTML =
+      `<p class="wkx-empty">${esc(
+        weekly.loading
+          ? `Reading ${weekRange(weeklySpan())}…`
+          : 'The remaining weeks are not in hand yet, so there is nothing to lay out week by week.'
+      )}</p>`;
+    return;
+  }
+
+  const sets = dealSets(state.customOffer, 'mine');
+  if (!sets.span) { host.innerHTML = `<p class="wkx-empty">Nothing left to price.</p>`; return; }
+  host.innerHTML =
+    `<h3 class="cu-inline-title">This deal, week by week</h3>` +
+    weekTableHtml(sets.span.byWeek, sets.span.delta, {
+      label: 'With the trade',
+      past: sets.past ? sets.past.byWeek : [],
+      playoff: sets.po ? sets.po.byWeek : [],
+      // The short key here, the thresholds in "How a custom trade is priced"
+      // below — see `weekTableHtml`. In the pop-up the same table keeps the
+      // full sentence, because a drill-down costs the page no height.
+      shortKey: true,
+    }) +
+    breakdownHost('custom');
+  renderDealWeek('custom');
+}
+
 function renderCustom() {
   syncCustomPickers();
+  // PRICED ONCE PER RENDER, and the offer object is built once from it. Three
+  // panels read the same answer — the two big figures, the inline breakdown and
+  // the card context on every roster row — and pricing it three times would be
+  // three chances to disagree as well as three times the work.
+  const building = !!(state.custom.sendA.length || state.custom.sendB.length);
+  const priced = building ? priceCustom(state.custom) : { error: null, empty: true };
+  // THE OFFER OBJECT IS KEPT WHILE THE DEAL IS THE SAME ONE, and that is not
+  // tidiness. `dealSets` caches on the offer's own IDENTITY — it has to, since
+  // nothing else distinguishes two deals with the same shape — so building a
+  // fresh object on every paint would miss that cache every time, and the
+  // inline breakdown would re-fill every remaining week twice on every repaint
+  // (a card clearing, the combo landing, a sort). The signature is the same one
+  // the suggestions are memoised on: a change in any of it is a different deal.
+  const key = customSignature();
+  const made = !building || priced.error ? null : customOffer(state.custom, priced);
+  if (made && state.customOffer && state.customOfferKey === key) {
+    // Same deal, freshly priced: keep the object the caches are keyed on, and
+    // take the new numbers, so a week landing mid-read still moves the figures.
+    Object.assign(state.customOffer, made);
+  } else {
+    state.customOffer = made;
+    state.customOfferKey = made ? key : null;
+    state.customWeek = made ? state.customWeek : null;
+  }
+  ensureSuggestions();
   renderCustomPickers();
-  renderCustomPreview();
+  renderCustomPreview(priced);
+  renderCustomInline(priced);
   renderCustomSaved();
   renderCustomNote();
 }
@@ -4675,37 +5983,21 @@ $('measureSelect').value = state.measure;
 // are rebuilt from scratch on every render and per-row handlers would be
 // re-bound sixteen times a repaint.
 
-$('cuTeamA').addEventListener('change', (e) => {
-  const id = Number(e.target.value);
-  if (!Number.isFinite(id)) return;
-  // Picking the squad that is already on the other side SWAPS them, rather
-  // than refusing: "trade Nolan with Bree" and "trade Bree with Nolan" are the
-  // same thought, and a picker that silently refused one of them would look
-  // broken. The ticks go with their men.
-  if (id === state.custom.b) {
-    state.custom.b = state.custom.a;
-    const held = state.custom.sendA;
-    state.custom.sendA = state.custom.sendB;
-    state.custom.sendB = held;
-  } else {
-    state.custom.sendA = [];
-  }
-  state.custom.a = id;
-  renderCustom();
-});
-
+// THERE IS NO A-SIDE PICKER ANY MORE (Tim, 2026-09-19). "You" is the manager
+// chosen in `Your team` at the top of the page, so the control that changes it
+// is `#teamSelect` and its handler already repaints this panel through
+// `paint()`. `syncCustomPickers` is what carries the value across, and it
+// clears the ticks when the squad moves — a list of playerIds from one man's
+// roster means nothing against another's.
 $('cuTeamB').addEventListener('change', (e) => {
   const id = Number(e.target.value);
-  if (!Number.isFinite(id)) return;
-  if (id === state.custom.a) {
-    state.custom.a = state.custom.b;
-    const held = state.custom.sendB;
-    state.custom.sendB = state.custom.sendA;
-    state.custom.sendA = held;
-  } else {
-    state.custom.sendB = [];
-  }
+  if (!Number.isFinite(id) || id === state.custom.a) return;
   state.custom.b = id;
+  state.custom.sendB = [];
+  // The week open in the inline breakdown belongs to the deal that is being
+  // replaced, so it goes with it rather than pointing at a week of a deal
+  // nobody is building any more.
+  state.customWeek = null;
   renderCustom();
 });
 
@@ -4713,26 +6005,37 @@ for (const listId of ['cuListA', 'cuListB']) {
   $(listId).addEventListener('change', (e) => {
     const box = e.target.closest ? e.target.closest('input[type="checkbox"]') : null;
     if (!box) return;
-    const side = box.getAttribute('data-side') === 'b' ? 'sendB' : 'sendA';
+    const which = box.getAttribute('data-side') === 'b' ? 'b' : 'a';
+    const side = which === 'b' ? 'sendB' : 'sendA';
     const id = String(box.value);
     const held = state.custom[side].filter((x) => String(x) !== id);
     state.custom[side] = box.checked ? held.concat(id) : held;
-    // THE LISTS ARE STILL NOT REBUILT HERE, only the price — but the reason has
-    // changed and the old one is gone. It used to be the scroll position: the
-    // roster was a capped scroller, and redrawing it would have thrown that
-    // away under the very finger that just ticked somebody in it. The scroller
-    // went on 2026-09-19 (Tim: "don't make a scrolling space"), so that reason
-    // went with it.
+    // THE LISTS ARE REBUILT HERE NOW, AND FOCUS IS PUT BACK BY HAND.
     //
-    // What is left is FOCUS, and it is a better reason than the first one.
-    // Rebuilding the list replaces the checkbox that was just operated, which
-    // sends the keyboard back to the top of the document mid-deal — and it
-    // would reorder nothing, since the lineup order is a fact about the
-    // projections and not about who is ticked. So there is nothing to gain and
-    // a tab position to lose.
-    const row = box.closest('.cu-man');
-    if (row) row.classList.toggle('on', box.checked);
-    renderCustomPreview();
+    // The old rule was "never rebuild on a tick", for two reasons in turn: the
+    // scroll position of a capped scroller (gone on 2026-09-19 — Tim: "don't
+    // make a scrolling space"), and then focus, which was a better reason
+    // because a rebuild replaces the very checkbox that was just operated and
+    // sends the keyboard back to the top of the document.
+    //
+    // Two of this session's asks make a rebuild unavoidable rather than
+    // optional. The SUGGESTED-PLAYER marks change with every tick — that is
+    // what they are for — and so does the card on every man of the other
+    // squad, because ticking him moves his week run from "the weeks he starts
+    // for his own manager" to "the weeks he would start for YOU with this trade
+    // made". Leaving the lists alone would leave both of those answering the
+    // previous deal.
+    //
+    // So the list is redrawn and the checkbox that was ticked is focused again,
+    // which is strictly better than what the old rule protected: the keyboard
+    // lands back where it was rather than merely never leaving.
+    const wasFocused = document.activeElement === box;
+    renderCustom();
+    if (wasFocused) {
+      focusEl(document.querySelector(
+        `#cuList${which === 'b' ? 'B' : 'A'} input[value="${cssKey(id)}"]`
+      ));
+    }
   });
 }
 
@@ -4805,23 +6108,93 @@ $('cuRows').addEventListener('click', (e) => {
     }
     return;
   }
+  // A saved row is a FINDER ROW now (see `renderCustomSaved`), so it carries
+  // player links and an ESPN link like any other — and those have to be left
+  // alone, exactly as the finder's own click handler leaves them alone.
+  if (clickIsPlayer(e)) return;
+  if (e.target.closest && e.target.closest('a')) return;
+
   // A saved row opens the SAME pop-up the finder's rows open — the per-week
   // breakdown, the slot-by-slot before and after, the side toggle. All of it
   // already exists and none of it needed to know a custom trade is custom.
   const tr = e.target.closest ? e.target.closest('tr[data-cu]') : null;
   if (!tr) return;
   const i = Number(tr.getAttribute('data-cu'));
-  const entry = state.customSaved[i];
-  if (!entry) return;
-  const priced = priceCustom(entry);
-  if (priced.error) return;
+  // The priced offer the row was DRAWN from, not a second pricing of the same
+  // entry: re-pricing here would build a different object every click, which is
+  // a cache miss in `dealSets` every time and a second chance to disagree with
+  // the numbers already on the row.
+  const offer = state.customRows[i];
+  if (!offer) return;
   // STOP THE CLICK HERE, exactly as the finder's rows do. A click that reaches
   // the document is "outside the modal" to the handler that closes it, so
   // without this the pop-up opened and the very same click shut it again — it
   // looked like a row that did nothing at all.
   e.stopPropagation();
-  openDeal(customOffer(entry, priced), `cu-${i}`);
+  openDeal(offer, `cu:${i}`);
 });
+
+// ---- custom trades: the breakdown beside the builder ---------------------
+//
+// The same three routes in the pop-up's own week table offers, for the same
+// reason (HANDOFF: nothing may be reachable only by hovering). Delegated on the
+// panel, because `#cuInline` is rewritten on every tick.
+// `cuInlineHost()` rather than `$('cuInline')`: the element is REMOVED from the
+// document when there is no room beside the builder, so an id lookup here would
+// find nothing on a narrow first paint and the listeners would never be hung.
+const cuInline = cuInlineHost();
+if (cuInline) {
+  const weekOf = (e) => {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return null;
+    const host = t.closest('[data-wk]');
+    return host ? host.getAttribute('data-wk') : null;
+  };
+  cuInline.addEventListener('mouseover', (e) => {
+    const wk = weekOf(e);
+    if (wk !== null) setDealWeek(wk, 'custom');
+  });
+  cuInline.addEventListener('focusin', (e) => {
+    const wk = weekOf(e);
+    if (wk !== null) setDealWeek(wk, 'custom');
+  });
+  cuInline.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    const sideBtn = t.closest('[data-side]');
+    if (sideBtn) { setDealSide(sideBtn.getAttribute('data-side'), 'custom'); return; }
+    if (t.closest('a')) return;
+    const wk = weekOf(e);
+    if (wk !== null) setDealWeek(wk, 'custom');
+  });
+  // The men named inside the breakdown get the same card as everywhere else.
+  wireTips(cuInline);
+}
+
+// AND THE DECISION IS RE-TAKEN WHEN THE WINDOW CHANGES, which is the half of a
+// width rule that is easy to leave out: a reader who narrows a laptop window
+// past 900px would otherwise keep a breakdown there is no longer room for until
+// the next reload, and one who widens it would never get it back.
+//
+// A `change` on the MediaQueryList rather than a `resize` listener: it fires
+// only when the answer actually flips, so dragging a window edge repaints this
+// panel once instead of sixty times a second. `addListener` is the fallback for
+// older Safari, which is a phone browser Tim could plausibly be on.
+try {
+  if (typeof globalThis.matchMedia === 'function') {
+    const mq = globalThis.matchMedia(`(min-width: ${INLINE_MIN_WIDTH}px)`);
+    const reflow = () => { if (state.data) renderCustom(); };
+    if (typeof mq.addEventListener === 'function') mq.addEventListener('change', reflow);
+    else if (typeof mq.addListener === 'function') mq.addListener(reflow);
+  }
+} catch {
+  // No matchMedia at all: `roomBesideBuilder()` already answers "no room", so
+  // the pop-up route is what this browser gets, and it works everywhere.
+}
+// And the two roster lists, whose names now carry a card of their own.
+wireTips($('cuListA'));
+wireTips($('cuListB'));
+wireTips($('cuRows'));
 
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {

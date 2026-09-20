@@ -449,9 +449,10 @@
   }
   .cu-man {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 9px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--line);
     font-size: 13px;
     /* 44px under a finger, and it has to be the WHOLE row: a bare checkbox is
@@ -463,28 +464,208 @@
   @media (hover: none) { .cu-man { min-height: 44px; } }
   .cu-man:last-child { border-bottom: 0; }
   @media (hover: hover) { .cu-man:hover { background: var(--panel-3, #171a20); } }
+  /* The cells, on one line that NEVER wraps — it shrinks the name instead. A
+     wrapping row drops the value column onto a second line the moment a name
+     is long, which is the ragged layout the mirroring exists to fix. */
+  .cu-line {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
   .cu-man input { margin: 0; width: 16px; height: 16px; flex: 0 0 auto; }
   /* The lineup slot, in a fixed column so QB / RB1 / WR1 / BE line up down the
      list and the names all start at the same place. Three characters wide
      covers every label the league can produce (`slotRows` numbers a slot only
      when the league starts more than one of it). */
   .cu-man .sl {
-    flex: 0 0 34px;
+    flex: 0 0 30px;
     color: var(--dim);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .02em;
   }
-  .cu-man .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* THE NAME SHRINKS TO FIT; THE ROW TAKES THE SLACK.
+     Tim, 2026-09-19: "condense the whole custom trade box horizontally so you
+     don't have to look so wide in order to see everything" and "drop all the
+     extra space between the name and the position".
+
+     The cause was `flex: 1 1 auto` on the name: it handed the name every spare
+     pixel in the column, so the position and the value were shoved out to the
+     far edge and the gap he is describing opened up between them. Now `.gap`
+     is the only thing that grows and it sits between the SLOT and the name, so
+     name · pos · value form one tight group against the inner edge of each
+     column and the slot stays pinned to the outer one. `max-width` + the two
+     overflow declarations are the three-declaration rule from HANDOFF's phone
+     notes — a cap alone lets the text run straight out of the box. */
+  .cu-man .gap { flex: 1 1 0; min-width: 0; }
+  .cu-man .nm {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .cu-man .pos { color: var(--dim); font-size: 11px; flex: 0 0 auto; }
-  .cu-man .pv { font-variant-numeric: tabular-nums; color: var(--dim); flex: 0 0 auto; }
+  .cu-man .pv {
+    font-variant-numeric: tabular-nums;
+    color: var(--dim);
+    flex: 0 0 auto;
+    /* A fixed width so the two columns of numbers line up with each other down
+       the middle of the panel, which is the whole point of mirroring them. */
+    min-width: 40px;
+    text-align: right;
+    padding: 0 2px;
+    border-radius: var(--r-1, 3px);
+    /* It carries the player card, so it says so — the same dotted affordance
+       the pop-up's week labels use. It is deliberately NOT the name: the whole
+       row is a label, and the card's tap calls preventDefault, which would stop
+       the biggest target on the row from ticking the man. */
+    border-bottom: 1px dotted var(--line-2);
+  }
+  /* THE RIGHT-HAND LIST IS THE LEFT ONE REVERSED, and the reversal is done in
+     the markup (the cells are emitted in the other order) rather than with
+     `flex-direction: row-reverse` — a reversed flex box also reverses the TAB
+     ORDER, so a keyboard would walk the right-hand roster backwards while the
+     eye read it forwards. Only the alignment is CSS. */
+  .cu-man.mirror { text-align: right; }
+  .cu-man.mirror .pv { text-align: left; }
   .cu-man.on { background: #16311f; }
   .cu-man.on .nm { font-weight: 650; }
   /* A slot the squad cannot fill is a row, not a gap: it is what a hole looks
      like. No checkbox, because there is nobody there to trade — so the names
      are nudged across by the width the box would have taken. */
   .cu-man.empty-slot { cursor: default; padding-left: 33px; }
+  .cu-man.empty-slot.mirror { padding-left: 9px; padding-right: 33px; }
   .cu-man .muted { color: var(--line-2); font-style: italic; }
+
+  /* A SUGGESTED MAN — one who, added to the deal, brings the two squads' gains
+     closer together.
+
+     NEVER COLOUR ALONE, and here it is four cues deep: the row is tinted, it
+     carries a RANK, it carries the WORD "also send — evens it", and it prints
+     the two resulting per-week figures. Any one of those reads in greyscale.
+     The badge takes a line of its own inside the row (`flex-basis: 100%` on a
+     wrapping row) rather than squeezing the name, because the numbers are the
+     point of it — that is how a deliberately lopsided "fleece" becomes visible
+     instead of being prevented. */
+  .cu-man.sug { background: #1b2330; }
+  .cu-man.on.sug { background: #16311f; }
+  .cu-sug {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-size: 10.5px;
+    line-height: 1.4;
+    margin-top: 2px;
+  }
+  .cu-man.mirror .cu-sug { justify-content: flex-end; }
+  .cu-sug-word {
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent-hi, #7fd99b);
+  }
+  /* A candidate that leaves the OTHER manager negative. A different colour
+     because it is a different fact, and the words say it either way — this is
+     the "fleece" leeway Tim asked for and it is labelled, never filtered. */
+  .cu-sug-word.fleece { color: var(--warn); }
+  .cu-sug-num { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* THE BUILDER AND ITS BREAKDOWN, SIDE BY SIDE — AND ONLY SIDE BY SIDE.
+     Narrower than 900px of window the breakdown is not in the document at all
+     (`roomBesideBuilder` in js/trade-page.js); the "Week by week" button opens
+     the same thing in a pop-up, which is how every other trade on this page has
+     always shown its weeks.
+
+     SO THE BASIS IS 480px, NOT 440, and the number is arithmetic rather than
+     taste: `.cu-lists` is a `.panel-row` at `--col-min: 232px`, so it needs
+     232 + 16 + 232 = 480 to keep the two rosters MIRRORED across the middle,
+     which is the whole point of them. At 440 the flex row handed it 476px at a
+     900px window — four pixels short — and the two rosters stacked instead,
+     which is where +767px of panel height came from (measured against HEAD with
+     `tools/measure-layout.mjs --selector '#customPanel'`).
+
+     `min-width: 0` on both halves is what stops a wide table inside the
+     right-hand one scrolling the whole document sideways (HANDOFF, "The phone
+     layout"). It still wraps, which is the belt to the braces: a window between
+     900px and whatever this row actually needs drops the breakdown onto its own
+     line rather than squeezing the rosters. */
+  .cu-build { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .cu-build > .cu-lists { flex: 1 1 480px; min-width: 0; margin-bottom: 0; }
+  .cu-build > .cu-inline { flex: 1 1 320px; min-width: 0; }
+  .cu-inline .wkx-empty { margin: 6px 0 0; }
+  .cu-inline-title {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 6px;
+    font-weight: 650;
+  }
+  /* The inline table is the pop-up's, in a narrower box. In the pop-up it sits
+     inside `.modal-card`, which is `overflow: auto` and does this for it; here
+     there is no such ancestor, so the panel scrolls sideways ITSELF rather than
+     pushing the page wider — the rule HANDOFF's phone notes keep coming back
+     to. X only: vertical overscroll has to chain to the page. */
+  .cu-inline { overflow-x: auto; overscroll-behavior-x: contain; }
+  .cu-inline table.weeks { width: 100%; }
+
+  /* "You" is a label now, not a picker. It looks like the other controls' value
+     without pretending to be one you can operate. */
+  .cu-you-box { min-width: 240px; max-width: 100%; }
+  .cu-you { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--dim); }
+  .cu-you strong { color: var(--text); font-size: 14px; }
+
+  /* The saved table is drawn by the finder's own row builder, so it inherits
+     `table.offers` wholesale. Only the extra cell is new. */
+  #cuTable td.cu-remove { white-space: nowrap; }
+  #cuTable tbody tr.cu-broken td.name { white-space: normal; }
+  #cuTable tbody tr.cu-broken { cursor: default; }
+
+  /* A saved deal built from a squad that is not the one selected today. Quiet,
+     because it is the unusual case and it is a caveat rather than a headline —
+     but it has to be there, or the row's "You send" column would be another
+     manager's men with nothing saying so. */
+  .from-tag {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 1px 6px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--line-2);
+    color: var(--dim);
+    white-space: nowrap;
+  }
+
+  /* The key under any table this page tints — channel 4 of "never colour
+     alone" (js/heat.js). It is in view, never behind the "How this works"
+     toggle: it says what a colour MEANS, and a colour whose meaning is hidden
+     is a colour that is being read as decoration. */
+  .heat-key {
+    color: var(--dim);
+    font-size: 11px;
+    line-height: 1.55;
+    margin: 8px 0 0;
+  }
+  .heat-key:empty { display: none; }
+  /* The suggestion line says nothing at all until somebody is ticked, and an
+     empty `.panel-note` is still a line of margin. */
+  #cuSuggest:empty { display: none; }
+
+  /* THE COMBO'S ONE NUMBER. Your lineup before and after, for the whole
+     packing, once — the per-row column that used to carry it is gone, because
+     each of those figures was measured against a roster the next deal destroys
+     (Tim, 2026-09-19: "I want their stats to be combined ... the +/week should
+     be shown as 1 number not 2"). */
+  .combo-lineup { font-size: 12.5px; color: var(--dim); margin-bottom: 8px; }
+  .combo-lineup .lbl { text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px; margin-right: 6px; }
+  .combo-lineup .sub { display: inline; margin-left: 6px; }
+  .combo-one { font-size: 12px; color: var(--dim); line-height: 1.55; margin: 0 0 10px; }
 
   /* A column, so the two gains line up with each other even when one squad
      carries a man more than the other. The roster takes the slack; without
@@ -522,8 +703,10 @@
   /* Reserved, so ticking a man never moves the table under the pointer. */
   .cu-preview { min-height: 34px; margin: 12px 0 4px; font-size: 13px; line-height: 1.45; }
   .cu-preview .muted { color: var(--line-2); }
-  #cuTable td .sub, #cuTable td .unit { display: block; font-size: 11px; color: var(--dim); }
-  #cuTable td.gain { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* REMOVED 2026-09-19 with the hand-built saved row it styled. It forced
+     `display: block` on `.unit` as well as `.sub`, which would now break the
+     "/wk" suffix onto its own line in every gain cell of this table — the
+     shared `table.offers` rules are what style it. */
   .cu-drop {
     background: none;
     border: 1px solid var(--line);
@@ -851,6 +1034,15 @@
     table.offers td.pkg { min-width: 132px; }
     table.offers td.gain { font-size: 14px; }
 
+    /* THE BUILDER IS ONE COLUMN. The two rosters keep their side-by-side
+       pairing for as long as `.panel-row` can give each one its 232px — that
+       comparison is the whole point of mirroring them. The week-by-week
+       breakdown is not here at all below 900px (see `.cu-build` above), so
+       there is nothing left to stack; this rule is the row's own spacing. */
+    .cu-build { gap: 12px; }
+    .cu-build > .cu-lists { flex: 1 1 100%; }
+    .cu-man .nm { max-width: 120px; }
+
     /* THE MODAL BECOMES A SHEET. Pinned to the foot of the window, full width,
        rounded only at the top — the same shape `.tipcard.sheet` takes and for
        the same reason: a centred box on a 390px screen is margins nobody asked
@@ -970,7 +1162,7 @@
        page — the panels share no state that one of them paints for another. -->
   <section class="panel">
     <h2 id="finderTitle">Trades that help both squads</h2>
-    <p class="lede">Every swap that raises both starting lineups. Tap a row to see it week by week.</p>
+    <p class="lede">Every swap that raises both starting lineups. Tap a row for its weeks.</p>
     <div class="row mb-12">
       <!-- The COUNT each way is the shape, and it needs no teaching. These read
            "Straight swap / You consolidate / You add depth" until Tim said he
@@ -990,9 +1182,8 @@
       <!-- A control's explanation goes here, never in a `title`: js/touch-titles.js
            deliberately leaves controls alone, so a title on a button is invisible
            on his phone. Same rule as the FLEX filters on the Players page. -->
-      <span class="ctl-hint"><strong>2 for 1</strong> = you send two and get one
-        better back — fewer, stronger men. <strong>1 for 2</strong> is the
-        reverse: you send one and get two, for more cover and a weaker top.</span>
+      <span class="ctl-hint"><strong>2 for 1</strong> = send two, get one better
+        back. <strong>1 for 2</strong> is the reverse: send one, get two.</span>
     </div>
     <div class="table-scroll" id="tradeWrap"><table id="tradeTable">
       <thead><tr>
@@ -1017,7 +1208,7 @@
 
   <section class="panel" id="comboPanel">
     <h2>Best combo</h2>
-    <p class="lede">The set of trades worth the most if you made them all at once.</p>
+    <p class="lede">The trades worth the most made all at once.</p>
     <div id="comboBody"></div>
     <details class="explain" id="comboExplain">
       <summary>How the combination is priced</summary>
@@ -1030,7 +1221,7 @@
        for a manager the finder has not paired you with yet. -->
   <section class="panel">
     <h2 id="depthTitle">Depth map</h2>
-    <p class="lede">How far each squad's starters sit above a free replacement, by position. Read down a column: high is depth to trade from, low is a need.</p>
+    <p class="lede">How far each squad's starters sit above a free replacement. Read down a column: high is depth, low is a need.</p>
     <div class="table-scroll" id="depthWrap"><table id="depthTable" class="depth">
       <thead><tr></tr></thead>
       <tbody></tbody>
@@ -1064,12 +1255,22 @@
        identical one the finder found would be two answers to one question. -->
   <section class="panel" id="customPanel">
     <h2>Custom trades</h2>
-    <p class="lede">Build any trade between any two squads and keep it here. Priced exactly as the finder prices its own.</p>
+    <!-- The lede is one line; "priced exactly as the finder prices its own" is
+         the first sentence of "How a custom trade is priced" below, and saying
+         it twice was two lines of a panel Tim asked to be condensed. -->
+    <p class="lede">Build any trade between any two squads and keep it here.</p>
 
+    <!-- "YOU" IS NOT A PICKER HERE (Tim, 2026-09-19: "the custom trade section
+         has the user choose both users to trade, but the 'You' should always be
+         the same user that is selected in the top of the trade section with
+         'select manager'"). There were two controls saying who the reader is
+         and they could disagree; there is now exactly one, at the top of the
+         page, and this reads it back and says where to change it. The partner
+         picker stays — that is the choice this panel is actually for. -->
     <div class="toolbar cu-pick">
-      <div class="select-md">
-        <label for="cuTeamA">Squad</label>
-        <select id="cuTeamA"></select>
+      <div class="cu-you-box">
+        <span class="src-label">You</span>
+        <p class="cu-you" id="cuYou"></p>
       </div>
       <div class="select-md">
         <label for="cuTeamB">Trades with</label>
@@ -1102,18 +1303,63 @@
          players trade)". That was a real layout fault: both figures lived in
          one paragraph below the whole row, which lines up under the LEFT
          column on a laptop and reads as though both belonged to it. -->
-    <div class="panel-row cu-lists" style="--col-min: 260px">
-      <div class="cu-side">
-        <p class="cu-head" id="cuHeadA">Sends</p>
-        <div class="cu-roster" id="cuListA"></div>
-        <p class="cu-gain" id="cuGainA" aria-live="polite"></p>
+    <!-- THE BUILDER AND ITS BREAKDOWN, SIDE BY SIDE (Tim, 2026-09-19: "the
+         trade analysis pop-up box for the custom trade is great, but I'd like
+         it to be shown to the side of the custom trade setup while the trade is
+         being chosen by the user. (There will be enough space to the side of
+         the box once we condense it and drop all the extra space between the
+         name and the position.)").
+
+         AND ONLY WHERE THERE IS A SIDE (2026-09-19). His ask carries its own
+         condition — "there will be enough space to the side of the box once we
+         condense it" — and below about 900px of window there is not: the
+         breakdown took enough width off the two rosters that THEY stacked, and
+         `#customPanel` went from 1182px tall at HEAD to 1949 at a 900px window
+         and +191px at 390px. So `roomBesideBuilder()` in js/trade-page.js keys
+         it off the WIDTH and removes `#cuInline` from the document entirely
+         when there is none — not `display: none`, which would keep the flex
+         slot, the gap and a stale week table. Narrower than that, the
+         "Week by week" button above opens the same breakdown in the same
+         pop-up, at no height until it is pressed.
+
+         `min-width: 0` on both halves is still what stops a wide table inside
+         the right-hand one scrolling the whole document sideways (see HANDOFF,
+         "The phone layout": a grid or flex child's default min-width is its
+         content). -->
+    <div class="cu-build">
+      <!-- THE TWO ROSTERS, MIRRORED AND CONDENSED. The right list reads
+           value · pos · name · slot so the two value columns face each other
+           down the middle, which is the comparison being made when a deal is
+           built. -->
+      <div class="panel-row cu-lists" style="--col-min: 232px">
+        <div class="cu-side">
+          <p class="cu-head" id="cuHeadA">Sends</p>
+          <div class="cu-roster" id="cuListA"></div>
+          <p class="cu-gain" id="cuGainA" aria-live="polite"></p>
+        </div>
+        <div class="cu-side">
+          <p class="cu-head" id="cuHeadB">Sends</p>
+          <div class="cu-roster" id="cuListB"></div>
+          <p class="cu-gain" id="cuGainB" aria-live="polite"></p>
+        </div>
       </div>
-      <div class="cu-side">
-        <p class="cu-head" id="cuHeadB">Sends</p>
-        <div class="cu-roster" id="cuListB"></div>
-        <p class="cu-gain" id="cuGainB" aria-live="polite"></p>
-      </div>
+      <!-- The live deal, week by week. The SAME table and the same slot-by-slot
+           panel the pop-up draws, from the same pricing — not a second copy.
+           It costs no ESPN requests: every projection in it was bought when the
+           page loaded.
+
+           IT IS IN THE MARKUP AND IT IS NOT ALWAYS IN THE DOCUMENT: the page
+           takes it out below 900px of window and puts it back when the window
+           widens (`renderCustomInline`). It is written here so the element,
+           its listeners and its player cards are wired exactly once. -->
+      <div class="cu-inline" id="cuInline"></div>
     </div>
+
+    <!-- What a marked row means, and what the colour on the value column is
+         measured against. Both in view rather than behind the toggle: they
+         change what a reader takes a number to mean. -->
+    <p class="panel-note" id="cuSuggest" aria-live="polite"></p>
+    <p class="panel-note heat-key" id="cuHeatKey"></p>
 
     <!-- What the deal in the pickers IS — who moves which way, and over which
          weeks. The numbers are under their own squads above; this is the half
@@ -1122,16 +1368,30 @@
          the finger doing the ticking. -->
     <p class="cu-preview" id="cuPreview" aria-live="polite"></p>
 
-    <div class="table-scroll" id="cuWrap" hidden><table id="cuTable">
+    <!-- A SAVED CUSTOM TRADE IS DRAWN BY THE FINDER'S OWN ROW BUILDER (Tim,
+         2026-09-19). It used to be a name, a run-on sentence and two bare
+         figures while a found trade three panels up was a proper table row —
+         two tables listing the same kind of thing two different ways. The
+         columns here therefore MATCH `offerRow`'s exactly, with Remove as one
+         extra cell on the end; change one and the other has to change with it.
+         `table.offers` is the same class the combo's tables carry, so the three
+         cannot drift apart visually either. -->
+    <div class="table-scroll" id="cuWrap" hidden><table id="cuTable" class="offers">
       <thead><tr>
-        <th class="name">Trade</th>
-        <th>Squad gains</th>
-        <th>Partner gains</th>
+        <th class="name">With</th>
+        <th class="left">Deal</th>
+        <th class="left">You send</th>
+        <th class="left">You get</th>
+        <th>Your lineup, a week</th>
+        <th>You gain</th>
+        <th>He gains</th>
+        <th class="left">ESPN</th>
         <th></th>
       </tr></thead>
       <tbody id="cuRows"></tbody>
     </table></div>
-    <div class="empty" id="cuEmpty">No custom trades saved yet. Pick two squads and tick who moves.</div>
+    <div class="empty" id="cuEmpty">No custom trades saved yet. Tick who moves on each side.</div>
+    <p class="panel-note heat-key" id="cuTableKey"></p>
 
     <p class="panel-note warn-line" id="cuWarn" hidden></p>
     <details class="explain">
