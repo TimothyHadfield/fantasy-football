@@ -821,9 +821,42 @@
     inset: 0;
     background: rgba(0, 0, 0, 0.62);
   }
+  /* THE WEEK LIST AND THE WEEK'S DETAIL, SIDE BY SIDE (Tim, 2026-09-20).
+     The detail used to sit BELOW the week table, and the card scrolls — so for
+     any week below the fold, reading the detail meant scrolling the hovered row
+     out from under the pointer, which is what produced the detail. The act of
+     reading the answer destroyed the question.
+
+     `deal-weeks` is the narrower column: its table is week / before / after /
+     difference and is content-sized. `deal-detail` takes the slack, because the
+     slot-by-slot table is four columns of names and numbers and is what
+     actually needs room.
+
+     STICKY, so a long week list scrolls past a detail panel that stays where
+     the eye left it. `top` clears the modal heading, which does not scroll
+     with the body. Sticky inside an `overflow: auto` card works because the
+     card is the scroll container — no extra machinery needed.
+
+     Stacked again under 900px, the same threshold `roomBesideBuilder` uses for
+     the custom builder and for the same arithmetic. Below that there is no side
+     to put anything on. */
+  .deal-cols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .deal-weeks { flex: 1 1 300px; min-width: 0; }
+  .deal-detail { flex: 1 1 360px; min-width: 0; }
+  @media (min-width: 900px) {
+    .deal-detail { position: sticky; top: 0; }
+  }
+  @media (max-width: 899px) {
+    .deal-cols { display: block; }
+    .deal-detail { margin-top: 12px; }
+  }
+
   .modal-card {
     position: relative;      /* over the backdrop, without a second z-index */
-    width: min(100%, 760px);
+    /* WIDER THAN IT WAS (760px), because it now holds two columns rather than
+       one. `min()` still caps it at the viewport, so a narrow window is
+       unaffected and the phone sheet below is untouched. */
+    width: min(100%, 1100px);
     max-height: 86vh;
     max-height: 86dvh;
     overflow: auto;

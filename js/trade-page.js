@@ -3250,14 +3250,44 @@ function renderDeal() {
   const pastSet = dealSets(offer, 'mine').past;
   const pastPriced = pastSet ? pastSet.byWeek : [];
 
+  // THE WEEK LIST AND THE WEEK'S DETAIL SIT SIDE BY SIDE (Tim, 2026-09-20:
+  // "for most weeks you can't hover over that week while also viewing the
+  // in-depth details of that week. Instead just move the in-depth week details
+  // to one of the sides of the box so that you can see it all at the same
+  // time.").
+  //
+  // He is describing a genuine impossibility rather than an inconvenience, and
+  // it is worth writing down because it is a trap any hover-driven detail panel
+  // falls into. The detail was rendered BELOW the week table. The modal card
+  // scrolls (`max-height: 86dvh`), so for any week below the fold the reader
+  // had to scroll down to read the detail — and scrolling moved the pointer off
+  // the row that was producing it. The panel is driven by hover, so the act of
+  // reading the answer destroyed the question. A keyboard user could hold it
+  // open with focus; a mouse user could not, which is most of the time.
+  //
+  // Side by side, the row stays under the pointer while its detail is in view,
+  // and NOTHING about the interaction had to change to make that true.
+  //
+  // The two columns are one `.deal-cols` flex row, stacked again under 900px
+  // (the same threshold the custom builder uses, and for the same arithmetic —
+  // see `roomBesideBuilder`). Below that there is no side to put anything on,
+  // and the old vertical order is the honest fallback: on a phone the card is
+  // a full-height sheet, the week table is short, and the detail lands within a
+  // thumb's scroll of it.
   $('dealBody').innerHTML =
     head +
-    weekTableHtml(priced.byWeek, priced.delta, {
-      label: offer.combined ? 'With the combination' : 'With the trade',
-      past: pastPriced,
-      playoff: playoffPriced(me, offer),
-    }) +
-    BREAKDOWN_HOST +
+    `<div class="deal-cols">` +
+      `<div class="deal-weeks">` +
+        weekTableHtml(priced.byWeek, priced.delta, {
+          label: offer.combined ? 'With the combination' : 'With the trade',
+          past: pastPriced,
+          playoff: playoffPriced(me, offer),
+        }) +
+      `</div>` +
+      // The detail column is STICKY inside the scrolling card, so a long week
+      // list scrolls past a detail panel that stays where the eye left it.
+      `<div class="deal-detail">${BREAKDOWN_HOST}</div>` +
+    `</div>` +
     cut +
     espnBlock;
 
