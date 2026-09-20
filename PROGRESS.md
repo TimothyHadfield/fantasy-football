@@ -3,7 +3,9 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-> **New session? Read [HANDOFF.md](HANDOFF.md) first.** It is the short
+> **New session? Read [HANDOFF.md](HANDOFF.md) first**, then go to
+> **[AUDIT.md](AUDIT.md), which is the work queue** — five audits ran on
+> 2026-09-20 and nothing they found has been fixed. HANDOFF is the short
 > orientation: what this is, how Tim works, the standing instructions, and the
 > rules that must not be re-litigated. This file is the detailed reference
 > behind it — long, and organised by topic rather than by importance.
@@ -85,6 +87,90 @@ describe how the site works **today**:
 | Why 38 green suites still shipped a regression | "The lesson of the day" |
 | The sub-44px tap targets, finally named | "`tools/measure-layout.mjs`" |
 | What to do next | "Next", at the foot |
+
+## 2026-09-20 (later) — five audits, and what 13,302 green assertions were not seeing
+
+Tim asked for a site-wide look at "where we might be making mistakes or not
+considering something, or the quality of display is lacking". Five read-only
+audits ran in parallel against `febca96`: numbers/consistency,
+display/density, edge cases/failure modes, product gaps, tests/tooling.
+
+**The findings and the fixes are in [`AUDIT.md`](AUDIT.md), which is the work
+queue. Nothing in it is done.** This entry records only what the exercise
+taught, which is the part that outlives the backlog.
+
+### The scale has been half-broken since the day it shipped
+
+**540 of 1,121 heat-classed cells draw no tint**, and which half is decided by
+row parity. Three `background` SHORTHANDS — zebra, `tr.me`, row hover — reset
+`background-image` to none. So his own row is never coloured, hovering wipes a
+row as he reads it, and every second row is blank.
+
+**HANDOFF rule 14 names the exact mechanism that was supposed to prevent
+this, and the sentence is factually wrong**: it says those rules own
+background-COLOR, and they do not. The design is right; the site never
+implemented it. `tr.picked` and `tbody.split` were converted to
+`background-color` on 2026-09-19 — the two that were found — and the three in
+`css/app.css` that every table on the site uses were not.
+
+**The lesson is about the comment, not the CSS.** A comment asserting that a
+collision cannot happen is worth nothing unless something checks it. Nothing
+did, in either direction: no test reads a computed background, and the rule
+was believed because it was written down.
+
+### Two audits found the same defect independently, which is the useful signal
+
+The Home/Schedule win-chance split — the floor reaching one page and not the
+other — was found by the numbers audit and the edge-case audit separately,
+one by reading, one by running the arithmetic (34.7% vs 49.5% on a measured
+fixture). Two independent routes to one finding is worth more than either
+alone, and it is an argument for running audits on overlapping evidence rather
+than carving them into strictly disjoint territory.
+
+It is also the SECOND time that exact defect has shipped, and `tests/home-winpct-check.mjs`
+exists because of the first. It cannot see the second: its fixture returns an
+empty wire, so both pages get no floors and agree by having nothing to
+disagree about. **A regression test written against the old cause does not
+cover the new one.**
+
+### The instruments were themselves unmeasured
+
+- **`text-audit.mjs` counts prose in the static HTML.** Most of this site's
+  prose is written at runtime, so it reports 1,413 words against 2,376
+  rendered. Best combo reads as 14 words and renders 267. The tool written on
+  2026-09-19 to catch a wordiness regression would miss the same regression
+  today, and it is excluded from `npm test` besides.
+- **The CI gates nothing.** Pages deploys off `main` in 39 seconds; the tests
+  take 7m18s; there is no branch protection and nothing consumes the result.
+  Every "38 suites green" claim in this file was true and bought less than it
+  appeared to.
+- **Nothing checks that assertion counts stop falling**, which is why a
+  deliberately disabled colour feature could take `fc-test` from 1,004 to 992
+  and still print PASS.
+
+### Assertions that pass whether the feature works or not — the third sweep
+
+Two more were demonstrated by deliberate breakage: three colour keys asserted
+through text alone (move them inside a closed `<details>` and both suites
+still pass — a colour with its key hidden, which rule 7 forbids), and an
+`if (shadedWin.length)` guard with no `else`. Both are three-line fixes.
+
+Against that: a mechanical sweep of every selector, id, class and attribute
+across all 72 test files found **zero** remaining instances of the
+"nothing has ever carried this class" pattern, and five of the newest and most
+load-bearing assertions were broken deliberately and all five caught it. So
+the practice is working; it is the OLDER assertions, written before the
+falsification habit, that are weak.
+
+### The archive is quietly the most expensive thing on the list
+
+Three separate findings converge on it, and all three degrade permanently
+because ESPN keeps no projection history (rule 8): week 15 files week 14's
+numbers and then blocks weeks 16–17 forever; the connection-bar reading is
+unfloored while the Schedule page's is floored, with first-write-wins deciding
+which is kept; and the snapshot stores team totals only, so every
+player-level question in `docs/strategy-research.md` is being discarded weekly
+from rows that are already in memory.
 
 ## 2026-09-20 — the per-week average was partly a fact about the cache
 

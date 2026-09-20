@@ -3,6 +3,30 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
+> ## → THERE IS A WORK QUEUE: [`AUDIT.md`](AUDIT.md)
+>
+> Five parallel audits ran on **2026-09-20** — numbers, display, edge cases,
+> product, tests — and none of what they found has been fixed. **Read this
+> file for the rules, then go to `AUDIT.md` and start.** It is ordered, every
+> item names its files and lines, and it ends with a four-way split for
+> parallel agents.
+>
+> The three to know before you touch anything:
+>
+> - **Nearly half the red/green scale never draws** (540 of 1,121 cells).
+>   Three `background` shorthands in `css/app.css` erase it — so **his own row
+>   is never coloured** and **hovering wipes a row as he reads it**. One word,
+>   three places. Rule 14 below states this cannot happen; **rule 14 is wrong**
+>   (see the correction in it).
+> - **38 suites and 13,302 assertions were green through every defect in that
+>   file.** Several are invisible to the suite by construction, the CI gates
+>   nothing, and `text-audit.mjs` misses two thirds of the site's prose.
+>   Do not read a green run as a clean site.
+> - **§2 of `AUDIT.md` is losing data that cannot be recovered** — week 15
+>   files week 14's numbers and blocks weeks 16–17 forever; the archived
+>   reading is unfloored while the page's is floored, and first-write-wins
+>   picks which survives.
+
 Last updated 2026-09-19. Everything below is pushed and live; 38 test suites,
 13,208 assertions, green, and GitHub Actions runs them on every push.
 
@@ -324,6 +348,16 @@ These were each established by testing, and several by getting them wrong first.
      green *and* assumed at once and both claims survive. In CSS the tint is a
      `linear-gradient` background-IMAGE, because zebra, row hover and
      `#seasonTable td.lit` all own background-COLOR at higher specificity.
+
+     **⚠ THE SENTENCE ABOVE IS FACTUALLY WRONG, measured 2026-09-20 — see
+     AUDIT.md §1.1.** Zebra (`css/app.css:421`), `tr.me` (`:426`) and row
+     hover (`:436`) are background **SHORTHANDS**, not background-COLOR, so
+     they RESET the tint rather than composite under it. **540 of 1,121
+     heat-classed cells across the site draw no tint at all** — his own row
+     never, any hovered row while he reads it, and every even row. The design
+     this rule describes is correct; the site does not implement it. Fix the
+     three rules (or raise the tint's specificity), THEN delete this warning
+     and let the sentence above stand.
 
      **THREE EXCEPTIONS TO "EVERYTHING ELSE OWNS THE FOREGROUND", all found
      2026-09-19 (later) and all of them background SHORTHANDS, which ERASE a
@@ -1085,11 +1119,16 @@ an honest comparison group; the sweep is done).
 
 ## If you are a fresh session, do this first
 
+0. **Open [`AUDIT.md`](AUDIT.md).** It is the work queue, it is ordered, and
+   nothing in it is done. Its "How to work on this list" section is short and
+   is the distilled version of everything this project has learned the hard
+   way. Do not start inventing work while that file has items in it.
 1. **Check `data/snapshots/` and `C:\Users\timha\Downloads\fantasy-archive-*.json`**,
    then ask him about the export. It is the only thing here with a deadline,
    and the answer is not in this repo.
 2. **`cd tests && npm install && npm test`** before you change anything, so you
-   know whether a failure afterwards is yours. 37 suites, about 10 minutes.
+   know whether a failure afterwards is yours. 38 suites, about 8–13 minutes.
+   **A green run is not a clean site** — see AUDIT.md §3.
 3. **Read the 2026-09-19 block at the top of "What is genuinely open" above.**
    Ten of his asks landed that day and most of them move numbers he checks by
    hand. If he opens with "that number looks wrong", the three most likely
