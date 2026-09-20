@@ -283,6 +283,34 @@ td.zero-out, td.zero { color: var(--dim); }
   margin-left: 2px;
 }
 .legend .sw.zero-out { color: var(--dim); }
+/* The scale's swatches sit in the legend as the table draws them — the tint is
+   a background-IMAGE from css/app.css, so it composites over the swatch's own
+   border and needs nothing of its own here. */
+
+/* THE COLOUR KEY UNDER EACH TABLE, and its thresholds a layer below it.
+   `#waiverHeatKey` / `#takenHeatKey` are the VISIBLE key: one short sentence
+   saying what the colour compares and that the ends of the scale carry an arrow
+   and heavier type, which is all a reader needs to know the colour is not the
+   only cue. `#waiverHeatBands` / `#takenHeatBands` carry the same scale in
+   POINTS, per position, and live inside the "How to read this table" toggle.
+
+   WHY THE SPLIT. The points are what makes a cell checkable by hand and they are
+   not optional — but six position pairs plus the sentence around them was 88
+   visible words under the wire and 105 under the taken table, which
+   `node tests/text-audit.mjs` measured as taking this page from 106 to 299
+   words of visible prose in one afternoon. HANDOFF's panel shape is "a small
+   visible key, the full method behind the toggle", so the method moved and the
+   key stayed. Every cell still carries its own exact standing in its `title`,
+   which js/touch-titles.js makes a tap on a phone.
+
+   Each is hidden when empty, so a paragraph with nothing to say cannot leave a
+   gap under a table that has no colours to explain. */
+#waiverHeatKey:empty, #takenHeatKey:empty,
+#waiverHeatBands:empty, #takenHeatBands:empty { display: none; }
+
+/* The thresholds read as a strip of pairs rather than a paragraph: tabular
+   figures so the two columns of numbers line up down the strip. */
+.bands-line { font-variant-numeric: tabular-nums; }
 
 /* The wire panel's title, with a jump to the Taken table beside it. The h2 is
    no longer a direct child of the panel, so app.css's panel-title rule is
@@ -471,6 +499,11 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <span class="key"><span class="sw hot">14.2</span> worth starting</span>
       <span class="key" data-compare><span class="sw beats">9.8</span> beats your worst man</span>
       <span class="key" data-compare><span class="mine-tag">Your QB3</span> your own player</span>
+      <!-- The shared red/green scale, which on this table is on the Avg column
+           ALONE — the week cells belong to the two greens above. Two swatches,
+           the two ends; the shades between them are the steps. -->
+      <span class="key" data-when="td.avg.heat-up-4" hidden><span class="sw heat heat-up-4">14.8 <span class="heatmark">&#9650;</span></span> Avg: best of the free agents at his position</span>
+      <span class="key" data-when="td.avg.heat-dn-4" hidden><span class="sw heat heat-dn-4">3.2 <span class="heatmark">&#9660;</span></span> Avg: worst of them</span>
       <!-- `data-when`: shown only while the table draws that mark. -->
       <span class="key" data-when="span.tag.wv" hidden><span class="tag wv">W &middot; Fri</span> on waivers until that day</span>
       <span class="key" data-when="td.bye"><span class="sw bye">Bye</span> no game</span>
@@ -484,9 +517,17 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <thead></thead>
       <tbody></tbody>
     </table></div>
+    <!-- THE VISIBLE COLOUR KEY: one sentence, naming the group the colour
+         compares and the two hue-free cues. The thresholds in points are in the
+         toggle below — see the note beside the CSS rule for these two ids. -->
+    <p class="panel-note" id="waiverHeatKey"></p>
     <details class="explain">
       <summary>How to read this table</summary>
       <div class="panel-note" id="waiverNote"></div>
+      <!-- The points each position reaches full colour at. Last inside the
+           toggle, so the prose that explains the scale is read before the
+           numbers it produces. -->
+      <p class="panel-note bands-line" id="waiverHeatBands"></p>
     </details>
   </section>
 
@@ -545,16 +586,26 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <span class="key" data-when="td.zero" hidden><span class="sw">0.0</span> projected at zero, not a bye</span>
       <span class="key"><span class="sw">&mdash;</span> no projection</span>
       <span class="key" data-when="td.po-start" hidden><span class="sw po-key"><span class="po-tag">PO</span></span> playoff weeks &mdash; not in Avg</span>
-      <span class="key">No colours &mdash; nobody here can be claimed</span>
+      <!-- The two ENDS of the shared scale, shown in the treatment the table
+           draws. This chip used to read "No colours — nobody here can be
+           claimed", which was true of the two CLAIM greens and is still true of
+           them; it was never true of a good/bad comparison, and since
+           2026-09-19b this table carries one. The claim half of that sentence
+           is kept, where it belongs, next to it. -->
+      <span class="key" data-when="td.heat-up-4" hidden><span class="sw heat heat-up-4">18.7 <span class="heatmark">&#9650;</span></span> best at his position in the league</span>
+      <span class="key" data-when="td.heat-dn-4" hidden><span class="sw heat heat-dn-4">9.8 <span class="heatmark">&#9660;</span></span> worst of them; paler shades are the steps between</span>
+      <span class="key">Neither claim green &mdash; nobody here can be claimed</span>
     </div>
 
     <div class="table-scroll"><table id="takenTable">
       <thead></thead>
       <tbody></tbody>
     </table></div>
+    <p class="panel-note" id="takenHeatKey"></p>
     <details class="explain">
       <summary>How to read this table</summary>
       <div class="panel-note" id="takenNote"></div>
+      <p class="panel-note bands-line" id="takenHeatBands"></p>
     </details>
   </section>
 

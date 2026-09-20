@@ -25,6 +25,13 @@ import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
 import { histogram } from './charts.js';
+// THE ONE RED/GREEN SCALE (HANDOFF rule 14). Two panels on this page take it —
+// the simulation's per-team table and the forecast's Win % column — and four
+// more were looked at and refused. Every one of those decisions is argued where
+// the table is built, because on this page "which direction is good" and "are
+// these ten numbers even the same kind of thing" are genuinely hard questions
+// and the answers are not guessable from the column headings.
+import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
@@ -59,6 +66,33 @@ const prefs = scope('schedule');
 const SIM_RUNS = [1000, 10000, 50000, 100000];
 const SIM_SEED = 20260901;
 const SIM_RUN_CHOICE = (v) => (SIM_RUNS.includes(Number(v)) ? Number(v) : 10000);
+
+/**
+ * THE FLAT-COLUMN GUARD FOR A COLUMN OF PROBABILITIES, and it is not the
+ * default.
+ *
+ * js/heat.js's `HEAT_MIN_SPREAD` is 0.05 and it is calibrated to one specific
+ * thing: half of one printed tenth of a POINT. Every number it was written for
+ * is printed as `12.3`, so a league whose whole spread is under 0.05 is a
+ * column the reader cannot see a difference in, and colouring it would be
+ * telling him that identical numbers differ.
+ *
+ * The percentages on this page are not points and are not printed to a tenth.
+ * `pctText` prints a WHOLE per cent, and the values it is handed are
+ * probabilities in 0..1 — so one printed digit is 0.01 here, and half of one is
+ * **0.005**. That is the same rule as 0.05, restated in the units the column
+ * actually uses, and it is a hundred times smaller because the numbers are a
+ * hundred times smaller. Leaving 0.05 in place would have been the real
+ * mistake: it would refuse to colour any column whose whole league span is
+ * under five percentage points, which is most of a Bye % column in September
+ * and all of a Title % column in a tight league — exactly the columns worth
+ * reading.
+ *
+ * Passing 0 instead would turn the guard off and let a simulation's counting
+ * noise (±0.5 points at 10,000 runs; see the note under the table) come out in
+ * full colour, which is the same defect HEAT_MIN_SPREAD exists to stop.
+ */
+const PCT_MIN_SPREAD = 0.005;
 
 /**
  * How many teams make the playoffs, for the season on screen.
@@ -1083,6 +1117,15 @@ async function refreshStrength() {
  * It outlived the standings table it used to be a column of, and deliberately:
  * ESPN publishes no run-in difficulty, so this is exactly the kind of number
  * the site exists to add. "My season" shows the one rank that is about you.
+ *
+ * IT IS NOT GIVEN THE RED/GREEN SCALE (2026-09-19), for two reasons. It is
+ * shown as a RANK — "3rd hardest of 10" — and a rank is already an ordering,
+ * which js/heat.js refuses by rule. And it reaches the page as a single stat
+ * tile rather than a column: there is one number on screen, and one number is
+ * not a distribution. The raw mean behind it is not a candidate either, because
+ * its units change with the basis (see refreshStrength: it can be a per-week
+ * projection, a season total, or points per game), so a threshold printed in a
+ * key would mean a different thing on different days.
  */
 function remainingSos() {
   if (!state.strength) return null;
@@ -1149,6 +1192,24 @@ function syncSource() {
   $('sourceToggle')
     .querySelectorAll('button')
     .forEach((b) => b.classList.toggle('on', b.dataset.src === state.source));
+}
+
+/**
+ * The visible key under a coloured table — channel 4 of "never colour alone",
+ * and the one that makes a colour checkable instead of decorative.
+ *
+ * It is deliberately NOT written into the `<details>` note beside it: a key
+ * folded away behind "How this works" is a key nobody reading the table has,
+ * which is the thing HANDOFF rule 7 exists to prevent. An empty string hides
+ * the line entirely, so a panel whose scale refused to draw does not leave a
+ * blank paragraph's worth of space behind.
+ */
+function setKey(id, html) {
+  const el = $(id);
+  if (!el) return;
+  el.innerHTML = html || '';
+  if (html) el.removeAttribute('hidden');
+  else el.setAttribute('hidden', '');
 }
 
 /** Mark the one button in a segmented control that matches `value`. */
@@ -1383,6 +1444,26 @@ function homeWinChance(g, sigma) {
   return forecast.winProbability(h, a, sigma);
 }
 
+/**
+ * THE MATCHUP CARDS TAKE NO RED/GREEN SCALE, and the reason is in
+ * `expectedFor` rather than in any judgement about cards.
+ *
+ * The number a card prints against an unplayed game is whatever basis was
+ * available for THAT SIDE: the optimal-lineup projection when there is one,
+ * this team's points per game when there is not, and nothing at all before
+ * anybody has scored. So one card can hold a projection beside a season
+ * average — two different kinds of number in the same column — and gathering
+ * them into one array to scale is precisely the mixing js/heat.js is shaped to
+ * make difficult. The basis is stated in the panel note for exactly this
+ * reason, and a colour cannot state it.
+ *
+ * On top of that the panel is usually showing "All weeks", so the array would
+ * pool the whole season; and the gmeta percentage is one number per FIXTURE,
+ * not per team, which is the same refusal the results table's "Home win"
+ * column makes above.
+ *
+ * Home's cards are uncoloured too, for a related reason written out there.
+ */
 function renderMatchups() {
   const d = state.data;
   const weeks = state.week === 'all' ? d.weeks : [Number(state.week)];
@@ -1531,6 +1612,31 @@ function gameCard(g, ctx) {
 
 const VIEW_LABEL = { played: 'Played games', upcoming: 'Upcoming games', all: 'All games' };
 
+/**
+ * THE RESULTS TABLE TAKES NO RED/GREEN SCALE, on purpose (2026-09-19).
+ *
+ * Three separate reasons, any one of which would be enough:
+ *
+ * 1. NO COLUMN HERE BELONGS TO A TEAM. Every row is a fixture with two sides in
+ *    it, so "Home pts" is not a measure of one squad down the table — it is
+ *    whichever squad happened to be at home. A green in that column and the
+ *    identical number one column right would be the same claim about two
+ *    different teams, and a reader scanning down would be comparing ten
+ *    different managers in no particular order.
+ * 2. THE SCOPE IS USUALLY MORE THAN ONE WEEK. "All weeks" is the default the
+ *    page opens on, and pooling every score of the season into one scale is the
+ *    mistake the Stats page's week grid exists to avoid: a low-scoring week for
+ *    the whole league would come out as ten bad managers.
+ * 3. THE STATS PAGE ALREADY DOES IT, PROPERLY. "Week by week" is exactly these
+ *    numbers, scaled down each week column, and the site's standing rule is to
+ *    add to what exists rather than draw it twice in two shapes.
+ *
+ * "Home win" keeps the `.pos`/`.neg` it has always had, and deliberately does
+ * NOT get the scale on top: that pair says which way ONE fixture leans, which
+ * is a fact about the matchup. There is no good end to a home win chance — 20%
+ * for the home side is 80% for the away side — so js/heat.js's rule is that the
+ * column gets nothing rather than a misleading verdict.
+ */
 function renderResults() {
   const table = $('resultsTable');
   const tbody = table.querySelector('tbody');
@@ -1698,6 +1804,26 @@ function h2hMode() {
   return total && finalGames().length / total >= 0.4 ? 'records' : 'schedule';
 }
 
+/**
+ * THE HEAD-TO-HEAD GRID TAKES NO RED/GREEN SCALE EITHER, in either of its two
+ * modes, and the two refusals have different reasons.
+ *
+ * In FIXTURES mode every cell is a week number. A week number has no good end
+ * at all — week 11 is not better than week 3 — so there is nothing for a scale
+ * to be about.
+ *
+ * In RECORDS mode a cell is one team's record against one opponent, and the
+ * panel's own note already says the thing that rules it out: even a finished
+ * season has only 25 of its 45 pairings meeting more than once, so most cells
+ * rest on a single game. A full-colour ▲ on one result is exactly the failure
+ * HANDOFF rule 5 exists to prevent, and the `.pos`/`.neg` already on those
+ * cells says the one thing a single game can honestly support — who won.
+ *
+ * The "Overall" column IS ten teams of the same kind of number, so it would
+ * qualify. It is left alone because it is the standings: Home's own standings
+ * table is the place that comparison is made, it is coloured there, and this
+ * site does not draw the same league table twice.
+ */
 function renderH2H() {
   const teams = state.data.teams;
   const mode = h2hMode();
@@ -2011,6 +2137,7 @@ function renderForecast() {
     stats.innerHTML = '';
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${reason}</td></tr>`;
     chart.innerHTML = '';
+    setKey('forecastKey', '');
     $('forecastNote').innerHTML = note;
     resort(table);
   };
@@ -2084,16 +2211,52 @@ function renderForecast() {
   // bottom whichever way the column is sorted.
   const pts = (v) => (v === null ? `<td>${dash}</td>` : `<td data-v="${v}">${fmt(v)}</td>`);
 
+  // THE RED/GREEN SCALE, ON EXACTLY ONE OF THIS TABLE'S THREE NUMERIC COLUMNS.
+  //
+  // This table is about ONE team, so there is no league dimension in it at all
+  // and the comparison group can only be "this team's other remaining games".
+  // That is a real group for one of the columns and a trap for the other two:
+  //
+  //   Win % — SCALED. It is the only column here that is comparable across
+  //     weeks, and the reason is worth stating: a win chance is a ratio of two
+  //     projections FROM THE SAME WEEK, so everything that makes a week
+  //     low-scoring for everybody has already cancelled out of it. Green is one
+  //     of this team's better chances, red one of its worse, and high is good
+  //     with nothing to argue about.
+  //
+  //   You / Opp (the two projected totals) — NOT scaled, and not out of
+  //     caution. Both move for two reasons at once: who the opponent is, and
+  //     which week it is. A squad with three starters on bye in week 9 projects
+  //     low that week and so does everyone else, so a red cell there would be
+  //     reporting the NFL calendar as a weakness in the roster — and an
+  //     inverted scale on Opp would call the same week an easy fixture. The
+  //     honest version of "how hard is this opponent" is measured down the
+  //     league in one week, which is the Stats page's Opp proj column, and that
+  //     one is already coloured and already inverted.
+  //
+  // `PCT_MIN_SPREAD`, not the points default: these are probabilities printed
+  // as whole per cent. A run-in where every game sits between 49% and 51% is a
+  // run-in with nothing to say, and should draw nothing.
+  const heatWin = heatScale(rows.map((r) => r.p), { minSpread: PCT_MIN_SPREAD });
+  const W_WIN = 'this team’s other remaining games';
+
   tbody.innerHTML = rows
     .map((r) => {
       const w = r.g.week;
       const gap = r.mine !== null && r.theirs !== null ? round1(r.mine - r.theirs) : null;
+      // The cell already carried a `title` saying where the percentage came
+      // from, and it keeps it: the scale's words are appended rather than
+      // substituted, because "a projected +6.2 against Badgers" and "0.9 SD
+      // above this team's other games" are two different things a reader wants
+      // and js/touch-titles.js can only open one sheet per tap.
+      const h = heatOf(r.p, heatWin, { what: W_WIN });
       const chance =
         r.p === null
           ? `<td>${dash}</td>`
-          : `<td data-v="${r.p}" class="${r.p >= 0.6 ? 'pos' : r.p <= 0.4 ? 'neg' : 'muted'}" ` +
+          : `<td data-v="${r.p}"${h ? ` class="${h.cls}"` : ''} ` +
             `title="A projected ${signed(gap)} against ${esc(r.oppName)}, read against a ` +
-            `${fmt(sigma)}-point scoring spread.">${pctText(r.p)}</td>`;
+            `${fmt(sigma)}-point scoring spread.${h ? ` ${esc(h.words)}` : ''}">` +
+            `${pctText(r.p)}${heatMarkHtml(h)}</td>`;
 
       return `<tr${w === nextWeek ? ' class="now"' : ''}>
           <td data-v="${w}">${w}</td>
@@ -2106,6 +2269,20 @@ function renderForecast() {
     })
     .join('');
   resort(table);
+
+  // VISIBLE: only what changes what a number means — that the comparison here
+  // is this team against itself rather than against the league, which nobody
+  // would assume. The thresholds go in the tucked note with the method, which
+  // is the split the Stats page already uses and what keeps the panel from
+  // gaining ninety words of prose.
+  // The comparison group is the whole point here and stays: this column is
+  // measured against THIS team's own remaining games, not the league, and
+  // nobody would assume that. Why the two point columns are plain went into
+  // `heatPara` with the rest of the method.
+  setKey('forecastKey', heatWin
+    ? '<strong>Win %</strong> is shaded against this team’s <em>own</em> remaining games, ' +
+      'not the league: green a better chance, red a worse. Ends carry ▲▼ and bold.'
+    : '<strong>Nothing is shaded</strong>: every game left is about the same chance.');
 
   const dist = forecast.winTotalDistribution(probs, banked.w);
   const range = forecast.credibleRange(dist, 0.8);
@@ -2173,6 +2350,20 @@ function renderForecast() {
     .filter(Boolean)
     .join(' ');
 
+  // The scale's thresholds, in per cent, tucked with the rest of the method so
+  // a shaded cell can be checked by hand. `unit: false` because these are
+  // probabilities, not points — " pts" after a percentage would be nonsense.
+  const heatPara = heatWin
+    ? `<strong>The colours.</strong> ${describeHeat(heatWin, {
+      what: 'this team’s other remaining games', unit: false,
+      high: 'one of its better chances', low: 'one of its worse',
+    })} The two point columns are deliberately left plain: they rise and fall with the week as ` +
+      'much as with the opponent, so a red there would be reporting a bye week as a weakness ' +
+      'in the roster. A win chance has no such problem — it is a ratio of two projections from ' +
+      'the same week, so everything that makes a week low-scoring for everybody has already ' +
+      'cancelled out of it.'
+    : '';
+
   $('forecastNote').innerHTML = [
     `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}, ` +
       `${plural(rows.length, 'game')} from week ${nextWeek} to week ${lastWeek} still to play. ${timing}` +
@@ -2185,6 +2376,7 @@ function renderForecast() {
           '“You are” menu in the connection bar, or pick any team above.'),
     standing,
     shape,
+    heatPara,
     derivedCaveat(),
     projectionCaveat(lastWeek),
     gaps,
@@ -2316,6 +2508,7 @@ function renderSimulation() {
   const blank = (reason, note) => {
     $('simStats').innerHTML = '';
     $('simCap').textContent = '';
+    setKey('simKey', '');
     // Nothing was simulated, so there are no seed-derived numbers for the
     // divisions warning to be about.
     $('simWarn').hidden = true;
@@ -2462,35 +2655,135 @@ function paintSimulation(sim, inputs) {
   // ---- the projected final table ------------------------------------------
   // Emitted in average-place order so the default view is already the answer
   // to "what is the most likely finishing order", before anyone clicks a header.
+  //
+  // THE RED/GREEN SCALE, SIX COLUMNS, TWO OF THEM INVERTED (2026-09-19). This
+  // is the table on the page that the shared scale was made for: ten teams, one
+  // row each, every column the same kind of number computed the same way.
+  //
+  // It REPLACES what was here — a hand-written `tone()` that went green above a
+  // fixed 25%, grey below 2%, with three different thresholds for four columns
+  // (Playoffs used 60%, Last used its own). Those constants were a guess at
+  // what "a lot" means and they answered the wrong question: in a tight league
+  // nobody clears 25% of a title and the whole column went grey, while in a
+  // league with a runaway leader half the table cleared it. A measured
+  // distribution follows the league; a constant does not. That is the same
+  // argument that retired the Stats page's local green ramp, and keeping two
+  // systems would have put two unrelated greens on one page.
+  //
+  // WHICH WAY IS GOOD, DECIDED PER COLUMN AND NEVER GUESSED:
+  //   Proj. wins   high is good.
+  //   Avg place    INVERTED — 1st is the good end. This is the exact column the
+  //                brief warns about: a scale that took "bigger is greener"
+  //                would paint the team most likely to finish last the
+  //                greenest number in the table.
+  //   Playoffs %   high is good.        Bye %   high is good.
+  //   1st in table high is good.        Title % high is good.
+  //   Last %       INVERTED — a high chance of the wooden spoon is bad news.
+  //
+  // AND ONE COLUMN IS DELIBERATELY LEFT PLAIN. "Most likely" is a modal PLACE —
+  // an ordering, not a quantity — and js/heat.js's own rule is that a column
+  // which is already an ordering gets no scale. It is also a column of
+  // integers where nine teams can share the value 4 and one sits at 1, which a
+  // standard deviation describes badly.
+  const pctScale = (pick, invert = false) =>
+    heatScale(sim.byMean.map(pick), { invert, minSpread: PCT_MIN_SPREAD });
+  const heatCols = {
+    wins: heatScale(sim.byMean.map((t) => t.meanWins)),
+    // Places are printed to a tenth, like points, so the POINTS guard is the
+    // right one here — 0.05 of a place really is half of one printed digit.
+    place: heatScale(sim.byMean.map((t) => t.meanPlace), { invert: true }),
+    playoffs: pctScale((t) => t.pPlayoffs),
+    bye: pctScale((t) => t.pBye),
+    first: pctScale((t) => t.pFirst),
+    title: pctScale((t) => t.pTitle),
+    last: pctScale((t) => t.pLast, true),
+  };
+  const W_SIM = {
+    wins: 'the wins the rest of the league is projected',
+    place: 'where the rest of the league finishes',
+    playoffs: 'the rest of the league’s chance of qualifying',
+    bye: 'the rest of the league’s chance of a bye',
+    first: 'the rest of the league’s chance of topping the table',
+    title: 'the rest of the league’s chance of the title',
+    last: 'the rest of the league’s chance of finishing last',
+  };
+
   tbody.innerHTML = sim.byMean
     .map((t) => {
       const isMe = t.teamId === state.myTeamId;
       const isPicked = Boolean(team) && t.teamId === team.id;
       const cls = [isMe ? 'me' : '', isPicked ? 'picked' : ''].filter(Boolean).join(' ');
-      const tone = (p) => (p >= 0.25 ? 'pos' : p <= 0.02 ? 'muted' : '');
 
       // A team with no bracket (the run could not be bracketed at all) gets a
       // dash rather than a 0%: "cannot be worked out" and "never happens" are
-      // different facts, and 0% is a strong claim to make by accident.
-      const pcell = (p, cls) =>
-        p === null || p === undefined
-          ? `<td>${dash}</td>`
-          : `<td data-v="${p}" class="${cls(p)}">${pctText(p)}</td>`;
+      // different facts, and 0% is a strong claim to make by accident. The
+      // scale agrees by construction — `heatOf` refuses a non-number.
+      //
+      // `tr.me` and `tr.picked` both still win over this, and that is not luck:
+      // css/app.css paints them with background-COLOR while the scale is a
+      // background-IMAGE, so a row can be yours, picked and deep green at once
+      // and all three claims survive.
+      const cell = (v, text, scale, what) => {
+        if (v === null || v === undefined || Number.isNaN(v)) return `<td>${dash}</td>`;
+        const h = heatOf(v, scale, { what });
+        return `<td data-v="${v}"${h ? ` class="${h.cls}" title="${esc(h.words)}"` : ''}>` +
+          `${text}${heatMarkHtml(h)}</td>`;
+      };
 
       return `<tr${cls ? ` class="${cls}"` : ''}>
           <td class="name">${esc(nameById.get(t.teamId) || `Team ${t.teamId}`)}</td>
-          <td data-v="${t.meanWins}">${fmt(t.meanWins)}</td>
-          <td data-v="${t.meanPlace}">${fmt(t.meanPlace)}</td>
+          ${cell(t.meanWins, fmt(t.meanWins), heatCols.wins, W_SIM.wins)}
+          ${cell(t.meanPlace, fmt(t.meanPlace), heatCols.place, W_SIM.place)}
           <td data-v="${t.modePlace}">${ordinal(t.modePlace)}</td>
-          ${pcell(t.pPlayoffs, (p) => (p >= 0.6 ? 'pos' : p <= 0.02 ? 'muted' : ''))}
-          ${pcell(t.pBye, tone)}
-          <td data-v="${t.pFirst}" class="${tone(t.pFirst)}">${pctText(t.pFirst)}</td>
-          ${pcell(t.pTitle, tone)}
-          <td data-v="${t.pLast}" class="${t.pLast >= 0.25 ? 'neg' : t.pLast <= 0.02 ? 'muted' : ''}">${pctText(t.pLast)}</td>
+          ${cell(t.pPlayoffs, pctText(t.pPlayoffs), heatCols.playoffs, W_SIM.playoffs)}
+          ${cell(t.pBye, pctText(t.pBye), heatCols.bye, W_SIM.bye)}
+          ${cell(t.pFirst, pctText(t.pFirst), heatCols.first, W_SIM.first)}
+          ${cell(t.pTitle, pctText(t.pTitle), heatCols.title, W_SIM.title)}
+          ${cell(t.pLast, pctText(t.pLast), heatCols.last, W_SIM.last)}
         </tr>`;
     })
     .join('');
   resort(table);
+
+  // The visible key. It has to name the two inverted columns out loud, because
+  // green on Avg place and green on Last % mean the OPPOSITE arithmetic to
+  // green on the four beside them, and a reader who assumes one rule for the
+  // whole table reads the wooden-spoon favourite as the team to beat.
+  // ONE COLUMN'S THRESHOLDS ARE SPELLED OUT, NOT ALL SEVEN — seven copies of
+  // the same sentence would be longer than the table. Avg place is the one
+  // chosen because it is the inverted column a reader is most likely to
+  // misread. `describeHeatPerColumn` is not used, because this table's columns
+  // are not all the same UNIT (wins, places and four percentages), so one
+  // sentence about "each column" could not print a threshold at all.
+  //
+  // And it is TUCKED, with the rest of the method. Visible is the short line
+  // below: which way green points, and which two columns are turned over —
+  // that changes what a number means, which is the house rule for what stays
+  // on screen.
+  const simExample = heatCols.place
+    ? describeHeat(heatCols.place, {
+      what: 'where the other nine teams finish', unit: false,
+      high: 'finishing higher', low: 'finishing lower',
+    })
+    : heatCols.wins
+      ? describeHeat(heatCols.wins, {
+        what: 'the wins the other nine teams are projected', unit: false,
+        high: 'more wins', low: 'fewer',
+      })
+      : '';
+  // TWO INVERTED COLUMNS, NAMED, AND THAT IS WHAT KEEPS THIS LINE ON SCREEN.
+  // Everything else the long version said — the four steps, one SD, "Most
+  // likely is a place not a quantity" — is method and is in the note below.
+  // Which columns are turned over is not: green on Avg place is the opposite
+  // arithmetic to green on Title %, and a reader who assumes one rule for the
+  // table reads the wooden-spoon favourite as the team to beat. 50 words here
+  // took this panel from 46 to 96 (node tests/text-audit.mjs schedule.html).
+  setKey('simKey', simExample
+    ? '<strong>Green good, red bad</strong>, down each column — but <strong>Avg place</strong> ' +
+      'and <strong>Last %</strong> are turned over: green is <em>low</em>. ' +
+      'Ends carry ▲▼ and bold.'
+    : '<strong>Nothing is shaded</strong>: every team’s season comes out close enough to ' +
+      'identical that there is nothing to tell apart.');
 
   // ---- what this is, and what it is not -----------------------------------
   const lastWeek = d.weeks[d.weeks.length - 1];
@@ -2652,6 +2945,16 @@ function paintSimulation(sim, inputs) {
       `playoffs and not the consolation ladder.`,
     placing,
     tieSplit,
+    // WHERE THE COLOURS TURN, in the units of the column quoted. Avg place is
+    // quoted because it is the inverted column most easily misread; the other
+    // six are measured the same way in their own units.
+    simExample
+      ? `<strong>The colours.</strong> Each column is measured on its own, down the ten teams, ` +
+        `never across the table — a chance of the title and a number of wins are not the same ` +
+        `kind of number. Taking <strong>Avg place</strong> as the worked example: ${simExample} ` +
+        `<strong>Most likely</strong> is left plain: it is a place, not a quantity — the ` +
+        `commonest finish rather than a measurement of one.`
+      : '',
     bracket,
     bracketBasis,
     timing,

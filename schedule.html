@@ -394,6 +394,13 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
       </tr></thead>
       <tbody></tbody>
     </table></div>
+    <!-- The red/green scale's key, and it is VISIBLE rather than tucked inside
+         "How the forecast works" below: a colour whose key is behind a closed
+         toggle is a colour with no key (HANDOFF rule 7, js/heat.js channel 4).
+         It also has to say that Win % is measured against this TEAM's other
+         remaining games rather than against the league, which nobody would
+         assume from the column heading alone. -->
+    <p class="panel-note" id="forecastKey" hidden></p>
     <div class="chart" id="forecastChart"></div>
     <details class="explain">
       <summary>How the forecast works</summary>
@@ -460,6 +467,12 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
       </tr></thead>
       <tbody></tbody>
     </table></div>
+    <!-- The red/green scale's key. Visible, for the same reason as the one in
+         the forecast panel above — and with one extra job here: TWO of this
+         table's columns are inverted (Avg place and Last %, where a low number
+         is the good one), so a reader who assumes one rule across the whole
+         table reads the wooden-spoon favourite as the team to beat. -->
+    <p class="panel-note" id="simKey" hidden></p>
     <details class="explain">
       <summary>How the simulation works</summary>
       <div class="panel-note" id="simNote"></div>

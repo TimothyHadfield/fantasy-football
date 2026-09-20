@@ -148,6 +148,15 @@ div.panel-note > p:last-child { margin-bottom: 0; }
       <tbody></tbody>
     </table></div>
     <p class="panel-note" id="simStatus"></p>
+    <!-- The red/green scale's key. VISIBLE, never tucked inside "What the
+         numbers mean" below: a colour whose key is behind a closed toggle is a
+         colour with no key (HANDOFF rule 7, js/heat.js channel 4). It has two
+         jobs here — printing the thresholds so a shaded cell can be checked by
+         hand, and saying out loud that LOSER % IS INVERTED, since green there
+         means a LOW number and a reader assuming one rule across the table
+         would read the wooden-spoon favourite as the man to beat.
+         A <div>, because it renders as short paragraphs. -->
+    <div class="panel-note" id="heatKey"></div>
     <details class="explain">
       <summary>What the numbers mean</summary>
       <div class="panel-note" id="summaryNote"></div>

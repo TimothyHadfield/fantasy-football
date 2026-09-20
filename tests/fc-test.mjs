@@ -448,9 +448,17 @@ function makeChecker() {
   };
 }
 
+// THE SHARED RED/GREEN SCALE puts a ▲ or ▼ INSIDE the cell at the end of the
+// scale (js/heat.js, channel 2), so every reader of a cell's text here has to
+// strip it first or "62% ▲" stops parsing as a percentage. The glyph is
+// stripped from CELLS only and never from note text, because the key sentences
+// legitimately talk about ▲ and ▼ and a suite that erased them could not tell
+// a key that mentions the marks from one that does not.
+const stripMark = (s) => String(s || '').replace(/[▲▼]/g, '').replace(/\s+/g, ' ').trim();
+
 /** "62%" | "<1%" | ">99%" | "—" -> number or null */
 function pctOf(text) {
-  const s = String(text || '').trim();
+  const s = stripMark(text);
   if (s === '—' || s === '') return null;
   if (s === '<1%') return 0.4;
   if (s === '>99%') return 99.6;
@@ -460,12 +468,50 @@ function pctOf(text) {
 
 const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 
+const HEAT_CLS = /\bheat-(up|dn)-([1-4])\b/;
+/** 'up' | 'dn' | null — which side of the shared scale a cell was painted. */
+const heatSide = (el) => {
+  const m = HEAT_CLS.exec((el && el.getAttribute('class')) || '');
+  return m ? m[1] : null;
+};
+
+/**
+ * Every green cell on the good side of its column's mean and every red cell on
+ * the bad side — the assertion a flipped `invert` fails outright.
+ *
+ * The direction is passed in rather than read off the page, because a test that
+ * infers it agrees with whatever the page did. It also refuses to pass on a
+ * column that drew no colour at all, so "the scale stopped working" cannot look
+ * like "every cell was fine".
+ */
+function heatDirection(cells, goodHigh) {
+  const usable = cells
+    .map((c) => [Number(c.getAttribute('data-v')), c])
+    .filter(([v]) => Number.isFinite(v));
+  if (usable.length < 2) return 'fewer than two readable values';
+  const mean = usable.reduce((a, [v]) => a + v, 0) / usable.length;
+  let ups = 0;
+  let downs = 0;
+  for (const [v, cell] of usable) {
+    const side = heatSide(cell);
+    if (!side) continue;
+    if (side === 'up') ups++; else downs++;
+    if ((side === 'up') !== (goodHigh ? v > mean : v < mean)) {
+      return `${v} (mean ${mean.toFixed(3)}) painted ${side} with goodHigh=${goodHigh}`;
+    }
+  }
+  if (!ups) return 'nothing green';
+  if (!downs) return 'nothing red';
+  return '';
+}
+
 function rowsOf(table) {
   return Array.from(table.querySelectorAll('tbody tr')).map((tr) => ({
     tr,
     cls: tr.getAttribute('class') || '',
-    cells: Array.from(tr.children).map((td) => txt(td)),
+    cells: Array.from(tr.children).map((td) => stripMark(txt(td))),
     v: Array.from(tr.children).map((td) => td.getAttribute('data-v')),
+    td: Array.from(tr.children),
   }));
 }
 
@@ -508,16 +554,41 @@ async function check(scenario, boot) {
 
     // And the arithmetic followed, not just the prose: exactly four teams can
     // have any chance of the title, and the other six must be exactly zero.
+    // Title % is column 7 (see COL below). This used to look for a cell whose
+    // CLASS contained "title" — nothing has ever carried such a class, so the
+    // lookup found nothing, every value came back as 0 and the assertion under
+    // it passed vacuously for any page at all. Fixed 2026-09-19 while the
+    // column's classes were being changed anyway, which is how it surfaced.
     const rows = [...d.querySelectorAll('#simTable tbody tr')];
     const titles = rows.map((tr) => {
-      const cells = [...tr.children];
-      const cell = cells.find((td) => (td.getAttribute('class') || '').includes('title'));
+      const cell = [...tr.children][7];
       const v = cell ? Number(cell.getAttribute('data-v')) : NaN;
       return Number.isFinite(v) ? v : 0;
     });
-    const canWin = titles.filter((v) => v > 0).length;
-    c.ok('at most four teams have any title chance', rows.length === 0 || canWin <= 4,
-      `${canWin} of ${rows.length} teams had a non-zero title %`);
+    c.ok('the title column really was read (not a lookup that always misses)',
+      rows.length === 0 || titles.some((v) => v > 0),
+      `every title % read as 0 across ${rows.length} rows`);
+    // WHAT THE FOUR-TEAM FIELD ACTUALLY CONSTRAINS, corrected 2026-09-19.
+    //
+    // This used to assert "at most four teams have any title chance", which is
+    // not true and was never tested: it was reading a cell that does not exist
+    // (see above), so every value came back 0 and the count was always 0. With
+    // the read fixed, all ten teams have a non-zero chance here — correctly,
+    // because with most of the season still to play every team qualifies in
+    // SOME simulated season. "Four make the playoffs" is a fact about each
+    // season, not about the league.
+    //
+    // So the real invariants are these two, and they are the ones that fail if
+    // the declared field size never reached the bracket: exactly four teams
+    // qualify in every season (the column sums to 4, not to 6), and no team can
+    // win a title in more seasons than it reached the playoffs in.
+    const numAt = (tr, i) => Number([...tr.children][i].getAttribute('data-v'));
+    const qualifySum = rows.reduce((a, tr) => a + numAt(tr, 4), 0);
+    c.ok('exactly FOUR teams qualify in every simulated season, not six',
+      rows.length === 0 || Math.abs(qualifySum - 4) < 0.005, String(qualifySum));
+    c.ok('and nobody wins a title in more seasons than they reached the bracket',
+      rows.every((tr) => numAt(tr, 7) <= numAt(tr, 4) + 1e-9),
+      rows.map((tr) => `${numAt(tr, 7)}>${numAt(tr, 4)}`).join(','));
 
     // ONE DIVISION, so there is nothing to warn about. This is the half of the
     // pair that fails if the page ever warns unconditionally — without it,
@@ -788,6 +859,59 @@ async function check(scenario, boot) {
       fcRows.filter((r) => /\bnow\b/.test(r.cls)).length === 1,
       fcRows.map((r) => r.cls).join(','));
 
+    // ---- the shared red/green scale, on the one column that can take it ----
+    //
+    // This table is about ONE team, so the comparison group is that team's own
+    // remaining games. Win % is the only column where that is honest, because
+    // a win chance is a ratio of two projections FROM THE SAME WEEK — every
+    // reason a week is low-scoring for everybody has already cancelled out of
+    // it. The two point columns have not, and the assertion that they stay
+    // plain is the half that fails if a later pass "finishes the job".
+    const winCells = fcRows.map((r) => r.td[5]);
+    const shadedWin = winCells.filter((td) => heatSide(td));
+    const fcKey = txt($('forecastKey'));
+
+    // The points columns stay plain in EVERY scenario, shaded or not — this is
+    // the half that fails if a later pass "finishes the job" and colours them.
+    c.ok('the two projected-points columns stay plain',
+      !fcRows.some((r) => heatSide(r.td[3]) || heatSide(r.td[4])),
+      fcRows.map((r) => `${r.td[3].getAttribute('class')}/${r.td[4].getAttribute('class')}`).join(','));
+
+    if (shadedWin.length) {
+      const whyWin = heatDirection(winCells, true);
+      c.ok('forecast Win % is shaded, higher-is-better', !whyWin, whyWin);
+      // The `title` already carried where the percentage came from, and the
+      // scale's words are APPENDED rather than substituted — two facts, one
+      // tap, because js/touch-titles.js can only open one sheet per element.
+      const titled = shadedWin[0];
+      c.ok('a shaded Win % keeps its original title and gains the scale’s words',
+        /scoring spread/.test(titled.getAttribute('title') || '') &&
+        /SD (above|below)/.test(titled.getAttribute('title') || ''),
+        titled.getAttribute('title'));
+      // THE KEY IS SPLIT, the way the Stats page splits it: VISIBLE is what
+      // changes what a number means, and the thresholds — the half that lets a
+      // shaded cell be checked by hand — sit in the tucked method note. Both
+      // halves are required, so both are asserted, AND SO IS THE BOUNDARY: an
+      // assertion that only checked the note passes just as happily when
+      // `describeHeat` creeps back under the table, which is the regression the
+      // split was made to undo (node tests/text-audit.mjs schedule.html).
+      c.ok('the forecast carries a visible key saying which comparison is being made',
+        /remaining games/.test(fcKey) && /green a better chance/i.test(fcKey),
+        fcKey.slice(0, 220));
+      c.ok('and the visible key names the glyph, not the thresholds',
+        /▲▼/.test(fcKey) && !/standard deviation|% or better/.test(fcKey),
+        fcKey.slice(0, 220));
+      c.ok('and the tucked note prints the thresholds it turns at',
+        /Colour compares each number/.test(note) && /standard deviation/.test(note),
+        note.slice(0, 260));
+    } else {
+      // A run-in with one game left, or ten games all at the same chance. Both
+      // are real, and both have to SAY they are — an unexplained absence of
+      // colour reads as the feature being broken.
+      c.ok('with nothing to tell apart, the key says so rather than going blank',
+        /Nothing is shaded/.test(fcKey), fcKey.slice(0, 200));
+    }
+
     // stat row
     const stats = Array.from($('forecastStats').querySelectorAll('.stat')).map((s) => txt(s));
     c.ok('banked record shown', stats.some((s) => /^Banked/.test(s)), stats.join(' | '));
@@ -863,6 +987,91 @@ async function check(scenario, boot) {
     // tops the table, and exactly one finishes last — so all three are complete
     // distributions. Six teams qualify and two get byes, in every season, so
     // those columns have their own exact totals to hit.
+    // ---- THE SHARED RED/GREEN SCALE, and the two inverted columns ----------
+    //
+    // Six of the nine columns are shaded and TWO OF THEM POINT THE OTHER WAY.
+    // Getting one of those two backwards is the single most damaging mistake
+    // available on this page — it would paint the team most likely to finish
+    // last, and the team most likely to take the wooden spoon, as the two
+    // brightest greens in the table — so each is asserted both generally (every
+    // green cell on the good side of the mean) and by NAMING A SPECIFIC CELL,
+    // which is what makes a flipped `invert` fail loudly instead of subtly.
+    const simCol = (i) => simRows.map((r) => r.td[i]);
+    for (const [label, i, goodHigh] of [
+      ['Proj. wins', 1, true],
+      ['Avg place', 2, false],       // INVERTED: 1st is the good end
+      ['Playoffs %', COL.playoffs, true],
+      ['1st in table %', COL.first, true],
+      ['Title %', COL.title, true],
+      ['Last %', COL.last, false],   // INVERTED: the wooden spoon is bad news
+    ]) {
+      const why = heatDirection(simCol(i), goodHigh);
+      c.ok(`simulation ${label} is shaded the right way round`, !why, `${label}: ${why}`);
+    }
+    // The named cells. simRows is emitted in average-place order, so the FIRST
+    // row is the team finishing highest and the LAST is the team finishing
+    // lowest — which makes both ends of the inverted Avg place column known
+    // without reading any number off the page.
+    c.ok('the team with the best average place is GREEN on Avg place',
+      heatSide(simRows[0].td[2]) === 'up',
+      `${simRows[0].cells[0]} @ ${simRows[0].v[2]} -> "${simRows[0].td[2].getAttribute('class')}"`);
+    c.ok('and the team with the worst average place is RED',
+      heatSide(simRows[simRows.length - 1].td[2]) === 'dn',
+      `${simRows[simRows.length - 1].cells[0]} -> "${simRows[simRows.length - 1].td[2].getAttribute('class')}"`);
+    {
+      const lasts = simRows.map((r) => Number(r.v[COL.last]));
+      const spoon = simRows[lasts.indexOf(Math.max(...lasts))];
+      const safest = simRows[lasts.indexOf(Math.min(...lasts))];
+      c.ok('the wooden-spoon favourite is RED on Last %, not green',
+        heatSide(spoon.td[COL.last]) === 'dn',
+        `${spoon.cells[0]} @ ${spoon.v[COL.last]} -> "${spoon.td[COL.last].getAttribute('class')}"`);
+      c.ok('and the team least likely to finish last is GREEN there',
+        heatSide(safest.td[COL.last]) === 'up',
+        `${safest.cells[0]} @ ${safest.v[COL.last]} -> "${safest.td[COL.last].getAttribute('class')}"`);
+    }
+    // "Most likely" is a modal PLACE — already an ordering — so js/heat.js's own
+    // rule says it gets nothing. A later pass that shaded the whole table fails.
+    c.ok('"Most likely" is left unshaded: it is a place, not a quantity',
+      !simCol(3).some((td) => heatSide(td)),
+      simCol(3).map((td) => td.getAttribute('class')).join(','));
+    // Every shaded cell must still sort as a number. sortable.js falls back to
+    // the cell's text without a data-v and strips only ", + $ %" and spaces, so
+    // a cell ending in ▲ would sort as a string.
+    c.ok('every shaded cell carries a data-v so its column still sorts numerically',
+      [...$('simTable').querySelectorAll('td[class*="heat-"]')]
+        .every((td) => td.getAttribute('data-v') !== null));
+    // Channel 4: the key, VISIBLE, naming the inverted columns. Without it the
+    // colour is unverifiable and the two inverted columns are a trap.
+    const simKey = txt($('simKey'));
+    c.ok('the simulation carries a visible key for the colours',
+      /Green good, red bad/.test(simKey), simKey.slice(0, 140));
+    c.ok('and the key says which two columns are turned over',
+      /Avg place/.test(simKey) && /Last %/.test(simKey) && /turned over/.test(simKey),
+      simKey.slice(0, 200));
+    c.ok('and the key names the glyph at the ends',
+      /▲▼/.test(simKey), simKey.slice(0, 200));
+    // AND THE THRESHOLDS ARE NOT IN IT. This is the half of the split that a
+    // "does the note mention it?" assertion cannot catch: `describeHeat` under
+    // the table passes every check below while putting ~50 words of permanently
+    // visible prose back on the panel (node tests/text-audit.mjs schedule.html).
+    c.ok('and the visible key does not carry the thresholds',
+      !/standard deviation/.test(simKey) && !/\d+ values\)/.test(simKey),
+      simKey.slice(0, 240));
+    // The thresholds are the tucked half of the key, with the method, exactly
+    // as the Stats page splits the same sentence. Both halves are required.
+    c.ok('and the tucked note prints the figures the colours turn at',
+      /Colour compares each number/.test(simNote) && /standard deviation/.test(simNote),
+      simNote.slice(simNote.indexOf('The colours'), simNote.indexOf('The colours') + 260));
+    c.ok('the tucked note says each column is measured on its own, never across the table',
+      /never across the table/.test(simNote), simNote.slice(0, 200));
+    // MOVED OUT OF THE VISIBLE KEY, NOT DELETED. An uncoloured column with no
+    // stated reason reads as the feature having missed it.
+    c.ok('and the tucked note says why Most likely is left plain',
+      /Most likely<\/strong> is left plain|Most likely is left plain/.test(simNote),
+      simNote.slice(0, 200));
+    c.ok('the key is not hidden while the table is showing',
+      $('simKey') && !$('simKey').hasAttribute('hidden'));
+
     const colSum = (i) => simRows.reduce((a, r) => a + Number(r.v[i]), 0);
     c.ok('title chances sum to 100%', Math.abs(colSum(COL.title) - 1) < 0.005, String(colSum(COL.title)));
     c.ok('first-in-the-table chances sum to 100%',

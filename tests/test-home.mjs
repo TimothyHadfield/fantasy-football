@@ -223,6 +223,53 @@ function finishedWeek({ blankIds = [] } = {}) {
 // emit a name, an index, an empty id, or the string "undefined".
 const PREF_HREF = /^waivers\.html\?player=\d+$/;
 
+// ------------------------------------------------- the shared red/green scale
+//
+// js/heat.js paints a cell by class and marks the end of the scale with a glyph
+// INSIDE the cell, so every reader of a number on this page has to strip the
+// glyph first. `Number("112.3 ▲")` is NaN, which would have made the roster
+// strength assertions below fail for a reason that has nothing to do with them.
+
+const HEAT_CLS = /\bheat-(up|dn)-([1-4])\b/;
+const stripMark = (s) => String(s || '').replace(/[▲▼]/g, '').trim();
+const clsOf = (el) => (el && el.getAttribute('class')) || '';
+const heatSide = (el) => {
+  const m = HEAT_CLS.exec(clsOf(el));
+  return m ? m[1] : null;          // 'up' | 'dn' | null
+};
+
+/**
+ * Does a coloured column point the RIGHT WAY?
+ *
+ * This is the assertion the brief asks for and it is built so that flipping a
+ * single `invert` fails it: every cell the page painted green must be on the
+ * good side of its own column's mean, and every red cell on the bad side. It
+ * takes the direction as an argument rather than inferring it, because
+ * inferring it from the page is how a test agrees with whatever the page did.
+ *
+ * It refuses to pass vacuously: a column with no green cell or no red cell
+ * reports as a failure rather than as "every cell was fine".
+ */
+function directionOk(values, cells, goodHigh) {
+  const usable = values.map((v, i) => [v, cells[i]]).filter(([v]) => Number.isFinite(v));
+  if (usable.length < 2) return 'fewer than two values';
+  const mean = usable.reduce((a, [v]) => a + v, 0) / usable.length;
+  let ups = 0;
+  let downs = 0;
+  for (const [v, cell] of usable) {
+    const side = heatSide(cell);
+    if (!side) continue;
+    if (side === 'up') ups++; else downs++;
+    const good = goodHigh ? v > mean : v < mean;
+    if ((side === 'up') !== good) {
+      return `${v} (mean ${mean.toFixed(2)}) painted ${side} with goodHigh=${goodHigh}`;
+    }
+  }
+  if (!ups) return 'nothing is green — the scale drew nothing, so this proves nothing';
+  if (!downs) return 'nothing is red — the scale drew nothing, so this proves nothing';
+  return '';
+}
+
 /** Every panel whose subject is a fantasy team, not an NFL player. */
 const TEAM_PANELS = ['#matchups', '#strength', '#standings'];
 
@@ -292,6 +339,180 @@ if (process.argv[2]) {
         if (n) problems.push(`demo: ${n} link(s) inside ${sel} — team names are not players`);
       }
 
+      // --- THE SHARED RED/GREEN SCALE, on the demo season ------------------
+      //
+      // The demo boots on a complete thirteen-week season, so every threshold
+      // this page holds back on (four weeks of standings, a bench week that is
+      // final for everybody) is cleared here. The early-season half — that the
+      // standings draw NO colour at one week — is asserted further down on the
+      // `finishedWeek` fixture, so both halves of each rule have a witness and
+      // a page that coloured everything and a page that coloured nothing each
+      // fail exactly one.
+
+      // (1) Roster strength: one column, ten squads, high is good.
+      const sRows = Array.from(document.querySelectorAll('#strength .rank li'));
+      // The step class sits INSIDE `.vv` rather than on it, because this page's
+      // own `.rank .vv { font-weight: 600 }` is two classes and would otherwise
+      // beat the scale's weight step — the tint would show and the weight would
+      // silently not. Read the inner element, and fall back to `.vv` so a page
+      // that moved the class back out fails on direction rather than on a
+      // missing node.
+      const sCells = sRows.map((li) => li.querySelector('.vv [class*="heat-"]') || li.querySelector('.vv'));
+      const sVals = sRows.map((li) => Number(stripMark(li.querySelector('.vv').textContent)));
+      facts.strengthHeat = sCells.filter((el) => heatSide(el)).length;
+      if (sVals.some((v) => !Number.isFinite(v))) {
+        problems.push(`heat: a strength value is unreadable ${JSON.stringify(sVals.slice(0, 3))}`);
+      }
+      const sBad = directionOk(sVals, sCells, true);
+      if (sBad) problems.push(`heat: roster strength points the wrong way — ${sBad}`);
+      // Rows are emitted best-first, so the top row must be on the green side
+      // and the bottom on the red. This is the assertion a flipped `invert`
+      // fails outright rather than subtly.
+      if (heatSide(sCells[0]) !== 'up') {
+        problems.push(`heat: the strongest roster is painted "${clsOf(sCells[0])}", expected green`);
+      }
+      if (heatSide(sCells[sCells.length - 1]) !== 'dn') {
+        problems.push(`heat: the weakest roster is painted "${clsOf(sCells[sCells.length - 1])}", expected red`);
+      }
+      // THE KEY IS SPLIT, the way the Stats page splits it: what is VISIBLE is
+      // what changes what a number means, and the thresholds — the half that
+      // lets a shaded cell be checked by hand — sit in the tucked note with the
+      // method. Both halves are required, so both are asserted, AND SO IS THE
+      // BOUNDARY BETWEEN THEM: an assertion that only checked the tucked note
+      // still passes when `describeHeat` creeps back under the table, which is
+      // exactly the regression this split was made to undo (2026-09-19, the
+      // colour sweep put ~90 words of thresholds on screen per panel; `node
+      // tests/text-audit.mjs index.html` measures it).
+      facts.strengthKey = text('strengthKey');
+      if (!/Green beats the other nine lineups/.test(facts.strengthKey)) {
+        problems.push(`heat: roster strength has no visible key line — "${facts.strengthKey.slice(0, 80)}"`);
+      }
+      // Channel 2 named in the key: without it a reader who cannot separate the
+      // hues has no way of knowing the ends are marked at all.
+      if (!/▲▼/.test(facts.strengthKey)) {
+        problems.push('heat: the strength key does not say the ends carry a glyph');
+      }
+      if (/pts or better|standard deviation/.test(facts.strengthKey)) {
+        problems.push(`heat: the thresholds are back in the VISIBLE strength key — "${facts.strengthKey.slice(0, 120)}"`);
+      }
+      const strengthMethod = text('strengthNote');
+      if (!/Colour compares each number/.test(strengthMethod)) {
+        problems.push('heat: the strength method note does not describe the scale');
+      }
+      if (!/\d+\.\d pts or better/.test(strengthMethod)) {
+        problems.push('heat: the strength note does not print its thresholds in points');
+      }
+
+      // (2) Standings: PF up, DIFF up, and PA INVERTED. The PA assertion is the
+      //     point of this block — conceding fewer points is the GOOD end, and a
+      //     scale that missed that would paint the leakiest defence green.
+      const stRows = Array.from(document.querySelectorAll('#standings tbody tr'))
+        .map((tr) => Array.from(tr.children));
+      const col = (i) => stRows.map((c) => c[i]);
+      const valOf = (cells) => cells.map((c) => Number(c.getAttribute('data-v')));
+      const checks = [
+        ['PF', 2, true], ['PA', 3, false], ['Diff', 4, true],
+      ];
+      for (const [label, i, goodHigh] of checks) {
+        const cells = col(i);
+        const bad = directionOk(valOf(cells), cells, goodHigh);
+        if (bad) problems.push(`heat: standings ${label} points the wrong way — ${bad}`);
+      }
+      // Named explicitly as well, because "PA is inverted" is the single claim
+      // most likely to be quietly undone: the team that has conceded the FEWEST
+      // points must be green, not red.
+      {
+        const paCells = col(3);
+        const paVals = valOf(paCells);
+        const best = paCells[paVals.indexOf(Math.min(...paVals))];
+        const worst = paCells[paVals.indexOf(Math.max(...paVals))];
+        facts.paBest = clsOf(best);
+        if (heatSide(best) !== 'up') {
+          problems.push(`heat: PA is not inverted — fewest points conceded is "${clsOf(best)}"`);
+        }
+        if (heatSide(worst) !== 'dn') {
+          problems.push(`heat: PA is not inverted — most points conceded is "${clsOf(worst)}"`);
+        }
+      }
+      // W–L is a compound sort key, not a quantity, and must stay plain.
+      if (col(1).some((c) => heatSide(c))) problems.push('heat: the W–L column was coloured');
+      facts.standingsKey = text('standingsNote');
+      if (!/Green good, red bad/.test(facts.standingsKey)) {
+        problems.push(`heat: standings have no visible key line — "${facts.standingsKey.slice(0, 100)}"`);
+      }
+      // THE INVERTED COLUMN IS THE ONE FACT THAT MAY NEVER MOVE INTO THE
+      // TOGGLE. Thresholds are method; "green on PA means conceding FEWER"
+      // changes what the colour means, and a reader who opens no toggle reads
+      // the leakiest defence as the best one without it.
+      if (!/PA<\/strong> turned over|PA turned over/.test($('standingsNote').innerHTML) ||
+          !/green concedes <em>fewer<\/em>|green concedes .?fewer/.test($('standingsNote').innerHTML)) {
+        problems.push('heat: the visible standings key does not say PA is inverted');
+      }
+      if (!/▲▼/.test(facts.standingsKey)) {
+        problems.push('heat: the standings key does not say the ends carry a glyph');
+      }
+      if (/pts or better|standard deviation/.test(facts.standingsKey)) {
+        problems.push(`heat: the thresholds are back in the VISIBLE standings key — "${facts.standingsKey.slice(0, 120)}"`);
+      }
+      const standingsMethod = text('standingsScale');
+      if (!/Colour compares each number/.test(standingsMethod) ||
+          !/\d+\.\d pts or better/.test(standingsMethod)) {
+        problems.push(`heat: the standings method note does not print thresholds — "${standingsMethod.slice(0, 100)}"`);
+      }
+      if (!/PA<\/strong> is the same scale inverted/.test($('standingsScale').innerHTML)) {
+        problems.push('heat: the standings method note does not repeat that PA is inverted');
+      }
+
+      // (3) Bench: Started is scaled, Bench and Cost are deliberately not.
+      const bRows = Array.from(document.querySelectorAll('#bench tbody tr'))
+        .map((tr) => Array.from(tr.children));
+      if (bRows.length) {
+        const started = bRows.map((c) => c[1]);
+        const bad = directionOk(started.map((c) => Number(c.getAttribute('data-v'))), started, true);
+        if (bad) problems.push(`heat: bench Started points the wrong way — ${bad}`);
+        if (bRows.some((c) => heatSide(c[2]))) {
+          problems.push('heat: the Bench column was coloured — neither direction is good there');
+        }
+        if (bRows.some((c) => heatSide(c[4]))) {
+          problems.push('heat: the Cost column was coloured — its best value is a dash, not a number');
+        }
+        facts.benchScaleKey = text('benchScaleKey');
+        // WHICH column carries the scale stays visible — three of the five are
+        // plain, and a reader comparing two numbers has to know which of them
+        // was measured. WHY the other two are plain is method, and the assertion
+        // below checks it landed in the note rather than vanishing.
+        if (!/Only Started is shaded/.test(facts.benchScaleKey)) {
+          problems.push(`heat: the bench panel has no visible key line — "${facts.benchScaleKey.slice(0, 80)}"`);
+        }
+        if (!/▲▼/.test(facts.benchScaleKey)) {
+          problems.push('heat: the bench key does not say the ends carry a glyph');
+        }
+        if (/pts or better|standard deviation/.test(facts.benchScaleKey)) {
+          problems.push(`heat: the thresholds are back in the VISIBLE bench key — "${facts.benchScaleKey.slice(0, 120)}"`);
+        }
+        const benchMethod = text('benchNote');
+        if (!/Colour compares each number/.test(benchMethod)) {
+          problems.push('heat: the bench method note does not describe the scale');
+        }
+        // The two refusals are stated where a reader can find them, not only in
+        // a source comment — an uncoloured column with no explanation reads as
+        // the feature having missed it.
+        if (!/Bench<\/strong> is not shaded|Bench is not shaded/.test(benchMethod) ||
+            !/Cost<\/strong> is not shaded|Cost is not shaded/.test(benchMethod)) {
+          problems.push('heat: the bench note does not say why Bench and Cost are left plain');
+        }
+      }
+
+      // (4) EVERY COLOURED CELL CARRIES A data-v. sortable.js falls back to the
+      //     cell's text when it does not, and it strips only ", + $ %" and
+      //     spaces — so a cell ending in ▲ would sort as a string and scatter
+      //     the column the first time a heading is clicked.
+      const noSortKey = Array.from(document.querySelectorAll('td[class*="heat-"]'))
+        .filter((td) => td.getAttribute('data-v') === null);
+      if (noSortKey.length) {
+        problems.push(`heat: ${noSortKey.length} coloured cell(s) carry no data-v, so the column sorts as text`);
+      }
+
       // --- pre-kickoff ---------------------------------------------------
       const home = mods['js/home-page.js'];
       if (!home?.buildModel || !home?.render) {
@@ -341,7 +562,7 @@ if (process.argv[2]) {
         // and the ranks are checked as unchanged, because dividing every row by
         // the same 17 must not be able to reorder anybody.
         const strengthRows = Array.from(document.querySelectorAll('#strength .rank li'))
-          .map((li) => Number(li.querySelector('.vv').textContent.trim()));
+          .map((li) => Number(stripMark(li.querySelector('.vv').textContent)));
         const modelStrength = model.strength.filter((r) => r.value !== null);
         facts.preStrengthShown = strengthRows.slice(0, 3);
         facts.preStrengthSeason = modelStrength.slice(0, 3).map((r) => r.seasonTotal);
@@ -445,6 +666,15 @@ if (process.argv[2]) {
           if (c[2].querySelector('a')) problems.push('pref: the injury table linked a fantasy team name');
         }
 
+        // THE INJURY TABLE'S Proj COLUMN MUST STAY PLAIN. It is a quarterback's
+        // 22 above a kicker's 8 above a defence's 6 — whoever happens to be
+        // hurt — which is the one comparison js/heat.js exists to refuse. This
+        // asserts the refusal rather than trusting the comment that states it.
+        const injHeat = document.querySelectorAll('#injuries td[class*="heat-"]').length;
+        if (injHeat) {
+          problems.push(`heat: ${injHeat} injury cell(s) were coloured — that column mixes positions`);
+        }
+
         facts.injuryNote = text('injuryNote');
         if (!/Players page/.test(facts.injuryNote)) {
           problems.push(`pref: the injury note does not state what its links do: "${facts.injuryNote}"`);
@@ -458,6 +688,32 @@ if (process.argv[2]) {
         // (2) The bench table, on a week that is actually over.
         const fin = finishedWeek();
         home.render(home.buildModel(fin));
+
+        // RULE 5, THE OTHER HALF. This fixture has exactly ONE week played, and
+        // the panel's own note has always said two weeks is far too thin to
+        // rank anyone by. So the numbers are on screen and NOTHING is shaded —
+        // a page that coloured everything it could would fail here, and the
+        // demo block above fails for a page that colours nothing. Neither
+        // passes both.
+        const earlyHeat = document.querySelectorAll('#standings td[class*="heat-"]').length;
+        facts.earlyStandingsHeat = earlyHeat;
+        if (earlyHeat) {
+          problems.push(`heat: ${earlyHeat} standings cell(s) coloured off a single week`);
+        }
+        if (!document.querySelectorAll('#standings tbody tr').length) {
+          problems.push('heat: the one-week fixture drew no standings at all, so it proves nothing');
+        }
+        facts.earlyStandingsNote = text('standingsNote');
+        if (!/nothing here is shaded/i.test(facts.earlyStandingsNote)) {
+          problems.push(`heat: the standings do not say why they are uncoloured — "${facts.earlyStandingsNote.slice(0, 120)}"`);
+        }
+        // The bench panel is not held back the same way and must not be: one
+        // week's ten scores ARE a comparison group, and that week is final.
+        const benchHeat = document.querySelectorAll('#bench td[class*="heat-"]').length;
+        facts.earlyBenchHeat = benchHeat;
+        if (!benchHeat) {
+          problems.push('heat: bench Started drew no colour on a week that is final for everybody');
+        }
 
         const byTeamName = new Map(fin.rosters.teams.map((t) => [t.name, t]));
         facts.finBenchRows = rowsOf('#bench').length;

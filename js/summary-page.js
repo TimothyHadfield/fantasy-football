@@ -40,6 +40,11 @@ import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
 import { enableSort, resort } from './sortable.js';
+// THE ONE RED/GREEN SCALE (HANDOFF rule 14). It goes on the TABLE and is
+// deliberately kept OFF THE IMAGE — the long argument for that split is above
+// renderCard(), and it is the most consequential decision in this file, because
+// the image is the thing that leaves the site.
+import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
 
@@ -150,6 +155,39 @@ const SIM_SEED = 20260901;
 const MIN_WEEKS = 1;
 
 /**
+ * Below this many decided weeks the LUCK column is shown but NOT shaded.
+ *
+ * It is the page's own existing threshold, used rather than merely printed:
+ * renderNote already switches to "Early season … LUCK weights close games
+ * heavily on purpose, so one result swings it" below three weeks. A red/green
+ * scale is a ranking, and ranking ten managers by a figure the same panel says
+ * one game can swing is the failure HANDOFF rule 5 exists to prevent. The
+ * number stays on screen with its ± beside it, which is the honest channel for
+ * "this is a guess with a range", and the key line says why nothing is shaded.
+ *
+ * THE TWO PERCENTAGE COLUMNS DO NOT WAIT, and the difference is real rather
+ * than a compromise: Title % and Loser % are not measured from the weeks
+ * played at all. They are counted from a hundred thousand playings-out of the
+ * whole REMAINING season, so in week 1 they rest on more football than they
+ * ever will again. What is thin in week 1 is the banked half, and only LUCK
+ * comes from it.
+ */
+const MIN_WEEKS_TO_SHADE_LUCK = 3;
+
+/**
+ * The flat-column guard for a column of probabilities — see the identical
+ * constant and the identical argument in js/schedule-page.js.
+ *
+ * js/heat.js's default is 0.05, which is half of one printed tenth of a POINT.
+ * These columns are probabilities in 0..1 printed as a whole per cent by
+ * `pct()`, so one printed digit is 0.01 and half of one is 0.005. Keeping the
+ * points default would refuse to shade any league whose whole title race spans
+ * under five percentage points, which is most leagues in September and is
+ * exactly the season this chart is sent out every week of.
+ */
+const PCT_MIN_SPREAD = 0.005;
+
+/**
  * Which week the demo opens on.
  *
  * The demo season is thirteen weeks and every one of them is played (see
@@ -195,6 +233,10 @@ const state = {
   sim: null,           // { key, result, ms }
   simPending: null,    // key of a run currently in flight
   simToken: 0,         // a run that lands after the data moved is thrown away
+  // The three red/green scales the table was last drawn with, so the tucked
+  // note can print their thresholds without recomputing them — and therefore
+  // without any chance of the key describing a scale the table did not use.
+  heat: null,
   cardText: '',        // the plain-text version of the same chart
   cardDrawn: false,    // whether the canvas holds a real picture
   canShare: false,     // navigator.canShare({files}) said yes, with a real probe
@@ -716,16 +758,52 @@ function renderTable(view, rows, sim, inputs) {
     return `${pct(p)}`;
   };
 
+  // THREE SCALES, ONE PER COLUMN, AND ONE OF THEM IS INVERTED.
+  //
+  //   LUCK    — high is good: the page's own definition is "above zero means
+  //             the season has broken your way". Held back until week
+  //             MIN_WEEKS_TO_SHADE_LUCK; see that constant.
+  //   Title % — high is good. Nothing to argue about.
+  //   Loser % — INVERTED. This is the one column on the site where getting the
+  //             direction wrong would be visible to nine other people: the
+  //             wooden-spoon favourite would be painted the brightest green in
+  //             the chart Tim sends to the group chat. Low is good.
+  //
+  // The comparison group is the same column down the ten managers, which is
+  // what this table is made of and nothing else. `PCT_MIN_SPREAD` on the two
+  // probability columns, the points default on LUCK, which is printed to a
+  // tenth like every other point figure on the site.
+  const shadeLuck = view.enough && view.weeksPlayed >= MIN_WEEKS_TO_SHADE_LUCK;
+  const heatLuck = shadeLuck ? heatScale(rows.map((r) => r.luck)) : null;
+  const heatTitle = heatScale(rows.map((r) => r.title), { minSpread: PCT_MIN_SPREAD });
+  const heatLast = heatScale(rows.map((r) => r.last), {
+    invert: true, minSpread: PCT_MIN_SPREAD,
+  });
+
+  /** One shaded cell. The `title` is channel 3; the key line below is channel 4. */
+  const shaded = (v, scale, what, inner) => {
+    const h = heatOf(v, scale, { what });
+    return `<td class="num${h ? ` ${h.cls}` : ''}" data-v="${v ?? ''}"` +
+      `${h ? ` title="${esc(h.words)}"` : ''}>${inner}${heatMarkHtml(h)}</td>`;
+  };
+
   tbody.innerHTML = rows.map((r) => `
     <tr>
       <td class="name"${r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : ''}>${esc(r.name)}</td>
-      <td class="num" data-v="${r.luck ?? ''}">${view.enough ? signed(r.luck) : dash}${
-        view.enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}</td>
-      <td class="num" data-v="${r.title ?? ''}">${pctCell(r.title)}</td>
-      <td class="num" data-v="${r.last ?? ''}">${pctCell(r.last)}</td>
+      ${shaded(r.luck, heatLuck, 'the rest of the league’s luck',
+    `${view.enough ? signed(r.luck) : dash}${
+      view.enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`)}
+      ${shaded(r.title, heatTitle, 'the rest of the league’s title chance', pctCell(r.title))}
+      ${shaded(r.last, heatLast, 'the rest of the league’s chance of finishing last', pctCell(r.last))}
     </tr>`).join('');
 
   resort(table);
+  // The scales are kept for renderNote, which prints their thresholds under
+  // "What the numbers mean". render() calls renderTable before renderNote, so
+  // this is always the scale the rows on screen were actually drawn with —
+  // which is the property that stops the key and the table drifting apart.
+  state.heat = { luck: heatLuck, title: heatTitle, last: heatLast, shadeLuck };
+  renderHeatKey(view, { heatLuck, heatTitle, heatLast, shadeLuck });
 
   const status = $('simStatus');
   if (!view.enough) {
@@ -761,6 +839,66 @@ function renderTable(view, rows, sim, inputs) {
         ? ` ${plural(sim.result.games - inputs.playable, 'game')} had no projection to play with.`
         : '');
   }
+}
+
+/**
+ * The VISIBLE half of the key — channel 4 of "never colour alone".
+ *
+ * It is split the way the Stats page splits the same thing, and the split is
+ * the house rule rather than a preference: what is on screen is only what
+ * changes what a number MEANS — which end is good, and the fact that Loser % is
+ * turned over — while `describeHeat`'s full sentence, the thresholds a reader
+ * checks a cell against, goes into the tucked note with the rest of the method
+ * (see renderNote). Putting all of it here added about ninety words to the
+ * panel, which is the prose creep `tests/text-audit.mjs` exists to measure.
+ *
+ * It sits on the PAGE and never on the image, which is the decision argued at
+ * length above renderCard().
+ *
+ * Three states, and they are three different facts that must not share a
+ * sentence — the same discipline the three empty-percentage states in
+ * `renderTable` already follow:
+ *   - nothing shaded at all, because the season has not started;
+ *   - the percentages shaded and LUCK deliberately not, because it is too early
+ *     for it to mean anything (and a reader would otherwise read the absence as
+ *     a bug);
+ *   - everything shaded.
+ */
+function renderHeatKey(view, { heatLuck, heatTitle, heatLast, shadeLuck }) {
+  const el = $('heatKey');
+  if (!el) return;
+
+  const parts = [];
+  if (heatTitle || heatLast || heatLuck) {
+    // ONE LINE. What must stay on screen is the direction of the scale and the
+    // one column that reverses it; the pointer at "What the numbers mean" is
+    // dropped because the toggle carrying it is the next thing under this line
+    // and is labelled. 47 words here took the panel from 29 to 76 — `node
+    // tests/text-audit.mjs summary.html` is the meter, and HANDOFF's panel
+    // shape is a SMALL visible key with the method behind the toggle.
+    parts.push(
+      '<strong>Green good, red bad</strong>, down each column — but <strong>Loser %</strong> ' +
+      'is turned over: green is <em>low</em>. Ends carry ▲▼ and bold.'
+    );
+  }
+  if (!heatLuck && view.enough && !shadeLuck) {
+    parts.push(
+      `<strong>LUCK is not shaded yet.</strong> ${plural(view.weeksPlayed, 'week')} in, one ` +
+      'close game still swings it further than a whole season does — the ± beside each figure ' +
+      `is how far it could move. It takes its colours from week ${MIN_WEEKS_TO_SHADE_LUCK}. ` +
+      'The two forecast columns are shaded from the start, because they are not measured from ' +
+      'the weeks played at all.'
+    );
+  }
+  if (!parts.length) {
+    parts.push(
+      view.enough
+        ? 'Nothing is shaded: the ten managers are close enough to identical in every column ' +
+          'that there is nothing to tell apart.'
+        : 'Nothing is shaded, because nothing has been decided yet.'
+    );
+  }
+  el.innerHTML = parts.map((p) => `<p>${p}</p>`).join('');
 }
 
 /** The house rule: state the basis of every derived number, in words, in a note. */
@@ -848,6 +986,25 @@ function renderNote(view, sim, inputs) {
           `works, because it only needs the regular-season table.`
         );
       }
+    }
+
+    // WHERE THE COLOURS TURN, in the units of each column. Tucked, because the
+    // thing that changes what a number means — that green is good and that
+    // Loser % is inverted — is already on screen in the key above the fold;
+    // this is the method, which is what a reader opens a toggle for.
+    const h = state.heat || {};
+    if (h.luck) {
+      parts.push(`<strong>The LUCK colours.</strong> ${describeHeat(h.luck, {
+        what: 'the rest of the league’s luck',
+        high: 'a season breaking your way', low: 'one breaking against you',
+      })}`);
+    }
+    if (h.title) {
+      parts.push(`<strong>The Title % colours</strong>, and Loser % is the same scale turned ` +
+        `over so its green end is the LOW one. ${describeHeat(h.title, {
+          what: 'the rest of the league’s title chance', unit: false,
+          high: 'a better shot at it', low: 'a worse one',
+        })}`);
     }
 
     parts.push(state.projNote);
@@ -960,7 +1117,49 @@ function buildCardText(view, rows, sim, inputs) {
 }
 
 /**
- * Draw the card.
+ * THE IMAGE DOES NOT TAKE THE RED/GREEN SCALE, and this is the one refusal on
+ * this whole pass that was worth thinking hardest about (2026-09-19).
+ *
+ * The table above and this canvas hold the same three columns, so it looks
+ * inconsistent to shade one and not the other. It is not. They are different
+ * objects with different readers, and the rule that decides it is the site's
+ * oldest one: NEVER COLOUR ALONE.
+ *
+ * On the page a shaded cell has four channels. On a PNG in a Messages thread it
+ * would have at most two:
+ *   - the `title` is gone. There is no hover and no tap target on a bitmap, so
+ *     js/touch-titles.js has nothing to open and the cell cannot say where it
+ *     stands.
+ *   - the KEY LINE is gone, and it cannot be brought back. Tim took the
+ *     explanation lines OFF this image on 2026-09-17 — his call, in his words
+ *     the words below the table were clutter in the group chat — so putting a
+ *     `describeHeat` sentence back under the rows to justify a colour would
+ *     undo a decision he made about this exact picture. A shaded chart with no
+ *     key, forwarded to nine people who have never seen this site, is precisely
+ *     the thing HANDOFF rule 7 forbids.
+ * That leaves weight and a glyph, which are the two channels that are supposed
+ * to be the BACKUP for the colour, not the whole of it.
+ *
+ * There is a second, independent reason, and it would be enough on its own: the
+ * LUCK column on this canvas ALREADY spends green and red, on the SIGN of the
+ * number (INK.accent / INK.err, a few lines down). A background tint in the
+ * same two hues, meaning "compared with the other nine", would put two
+ * different green claims on one number in one picture — and "unless it
+ * conflicts with something else we already have built" is Tim's own exception,
+ * in his own words.
+ *
+ * And a third: the image is the one artefact here that is read WITHOUT the
+ * page. Everything on it has to survive being screenshotted, forwarded and
+ * looked at in December. A relative scale does not — it is measured against
+ * this week's ten values, so the same 12% is green in one week's card and red
+ * in the next, with nothing on either picture to say so.
+ *
+ * What the image keeps instead is what it has always had: the rows in title
+ * order, so the person the chart is about is at the top, and the sign colour on
+ * LUCK. `tests/test-summary.mjs` asserts the canvas paints the same strings the
+ * table does — which is what would catch a ▲ leaking onto it.
+ *
+ * ---
  *
  * Sizes are in LOGICAL pixels and the context is scaled by CARD_SCALE, so the
  * bitmap is 2x and every number below reads as CSS pixels. The canvas's

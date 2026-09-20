@@ -95,6 +95,65 @@ const SCENARIOS = {
       globalThis.__wv = out;
     },
   },
+  // ---- the scale must not move when a FILTER moves -----------------------
+  //
+  // THE ONE WAY THIS FEATURE COULD BE QUIETLY WRONG. Every scale on this page
+  // is built from the UNFILTERED pool, so pressing RB — or FLEX, which is three
+  // positions at once — repaints both tables and changes not one cell's colour.
+  // Built the other way (from the rows on screen) it would still look perfectly
+  // reasonable: every cell would carry a class, the table would be green at the
+  // top and red at the bottom, and the colour would silently be about the
+  // FILTER rather than about the player. `hot-check.mjs` already pins exactly
+  // this for the two greens; this is the same promise for the third cue.
+  //
+  // Both tables, because they have independent filters and could drift apart.
+  'heat-filter': {
+    label: '(f) a position filter repaints the tables and moves no colour at all',
+    stub: false,
+    prefs: { 'waivers.source': 'demo' },
+    after: async ({ document, window }) => {
+      const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      // Keyed by the player's own id, so a row moving up or down the table (a
+      // filter changes the row SET, and a sort could change the order) cannot
+      // be mistaken for a colour changing.
+      const snap = (id, avgCol) => {
+        const out = {};
+        for (const tr of document.querySelectorAll(`#${id} tbody tr[data-player]`)) {
+          const cells = [...tr.children];
+          out[`${tr.getAttribute('data-player')}:${/\bmine\b/.test(tr.getAttribute('class') || '') ? 'm' : 'a'}`] =
+            cells.slice(avgCol).map((td) => (td.getAttribute('class') || '')
+              .split(/\s+/).filter((k) => /^heat/.test(k)).join('.'));
+        }
+        return out;
+      };
+      const both = () => ({
+        wire: snap('waiverTable', 3),
+        taken: snap('takenTable', 4),
+        wireKey: (document.getElementById('waiverHeatKey') || {}).textContent || '',
+        takenKey: (document.getElementById('takenHeatKey') || {}).textContent || '',
+        // The thresholds in points live inside "How to read this table" since
+        // 2026-09-19c, so the snapshot has to follow them there: comparing the
+        // short visible key across filters would prove nothing about the scale.
+        wireBands: (document.getElementById('waiverHeatBands') || {}).textContent || '',
+        takenBands: (document.getElementById('takenHeatBands') || {}).textContent || '',
+      });
+
+      const out = { all: both() };
+      click(document.querySelector('#posFilter button[data-pos="RB"]'));
+      out.wireRb = both();
+      click(document.querySelector('#posFilter button[data-pos="FLEX"]'));
+      out.wireFlex = both();
+      click(document.querySelector('#posFilter button[data-pos="ALL"]'));
+      click(document.querySelector('#takenPosFilter button[data-pos="WR"]'));
+      out.takenWr = both();
+      click(document.querySelector('#takenPosFilter button[data-pos="FLEX"]'));
+      out.takenFlex = both();
+      click(document.querySelector('#takenPosFilter button[data-pos="ALL"]'));
+      out.back = both();
+      globalThis.__wvHeat = out;
+    },
+  },
+
   // Both position filters are remembered per table, so both can be handed back
   // a value the page has to make sense of on the very first paint — before a
   // button has been pressed and with nothing on screen to correct it.
@@ -318,8 +377,17 @@ function bodyRows(table) {
       text: txt(td),
       v: td.getAttribute('data-v'),
       cls: td.getAttribute('class') || '',
+      // The sentence a coloured cell carries. On this page it is a `title` on a
+      // <td> with no link inside it, which js/touch-titles.js turns into a tap.
+      title: td.getAttribute('title') || '',
     })),
   }));
+}
+
+/** '' or 'heat-up-N' / 'heat-dn-N' off a class list; 0 for neither. */
+function stepOf(cls) {
+  const m = (cls || '').match(/heat-(up|dn)-(\d)/);
+  return m ? (m[1] === 'up' ? 1 : -1) * Number(m[2]) : 0;
 }
 
 /** Monotonic check that ignores rows whose key is missing (they must trail). */
@@ -334,6 +402,277 @@ function ordered(values, asc) {
   }
   const monotonic = nums.every((v, i) => i === 0 || (asc ? v >= nums[i - 1] : v <= nums[i - 1]));
   return { monotonic, nullsLast: !nullBeforeNumber, n: nums.length };
+}
+
+// =========================================================================
+// THE SHARED RED/GREEN SCALE ON THIS PAGE (js/heat.js, Tim 2026-09-19b)
+// =========================================================================
+//
+// "The coloring is good right now but it needs to be added to all the other
+// places a number is referred to across the whole site."
+//
+// This page was the hard case, because it is the one with TWO greens of its
+// own, and the collision is real rather than aesthetic: `td.beats` owns a
+// cell's BACKGROUND with a `background` SHORTHAND at higher specificity than
+// `.heat-up-3`, so a tint on a shaded week cell would be ERASED — the page
+// would have made a claim it never drew. So the scale went where nothing is
+// competing for the channel, and what is asserted here is that split:
+//
+//   - the wire's Avg column IS coloured, per position, over the wire;
+//   - the wire's WEEK cells are NOT, and both greens are still there;
+//   - the Taken table's Avg AND week columns are coloured, per position (and,
+//     for the weeks, per week), which is new — that table carried no colour of
+//     any kind before this;
+//   - a state cell — Bye, a ruled-out 0.0, a blank — is never coloured;
+//   - the colour key comes in TWO LAYERS and each is asserted WHERE IT BELONGS:
+//     a short sentence on screen naming the comparison group and the two
+//     hue-free cues, and the thresholds in points inside "How to read this
+//     table", so a cell can still be checked by hand. Asserting the words
+//     without the placement is what would let the thresholds creep back under
+//     the table — which is the +193 visible words `node tests/text-audit.mjs`
+//     caught on 2026-09-19c.
+//
+// The "a filter must not recolour anything" half is the `heat-filter` scenario.
+function checkHeat(c, d, scenario, note) {
+  const wire = bodyRows(d.getElementById('waiverTable'))
+    .filter((r) => !/\bempty-row\b/.test(r.cls));
+  const taken = bodyRows(d.getElementById('takenTable'))
+    .filter((r) => !/\bempty-row\b/.test(r.cls));
+  const AVG = 3;            // Player, Pos, Tm, Avg
+  const T_AVG = 4;          // Player, Pos, Tm, Owner, Avg
+  const wireAvg = wire.map((r) => r.cells[AVG]).filter(Boolean);
+  const takenAvg = taken.map((r) => r.cells[T_AVG]).filter(Boolean);
+  const wireWeeks = wire.flatMap((r) => r.cells.slice(AVG + 1));
+  const takenWeeks = taken.flatMap((r) => r.cells.slice(T_AVG + 1));
+
+  // ---- the wire: Avg yes, weeks no ---------------------------------------
+  c.ok('THE WIRE’S WEEK CELLS ARE NEVER ON THE SCALE — `td.beats` owns that ' +
+    'background, and a tint there would be erased rather than composed',
+    wireWeeks.every((td) => !/\bheat\b/.test(td.cls)),
+    JSON.stringify(wireWeeks.filter((td) => /\bheat\b/.test(td.cls))
+      .map((td) => td.cls).slice(0, 3)));
+  c.ok('and both greens are still on them, untouched',
+    wireWeeks.some((td) => /\bhot\b/.test(td.cls)) || wire.length === 0,
+    `${wireWeeks.filter((td) => /\bhot\b/.test(td.cls)).length} green-text cells`);
+  // THE POSITIVE ASSERTION COMES FIRST AND IS UNGUARDED. Everything below it
+  // reads the colours that are there, so a page that drew none would simply
+  // skip the lot and "pass" — which is exactly the vacuous green this suite
+  // exists to avoid. `live-empty` has no wire at all and is the one scenario
+  // where there is honestly nothing to colour.
+  if (wire.length > 2) {
+    c.ok('THE WIRE’S Avg COLUMN IS COLOURED AT ALL',
+      wireAvg.some((td) => /heat-(up|dn)-\d/.test(td.cls)),
+      JSON.stringify(wireAvg.map((td) => `${td.v}:${td.cls}`).slice(0, 4)));
+  }
+  if (taken.length > 2) {
+    c.ok('AND SO IS THE TAKEN TABLE, which carried no colour of any kind before this',
+      takenAvg.some((td) => /heat-(up|dn)-\d/.test(td.cls)) &&
+      takenWeeks.some((td) => /heat-(up|dn)-\d/.test(td.cls)),
+      `${takenAvg.filter((td) => /heat-(up|dn)/.test(td.cls)).length} avg, ` +
+      `${takenWeeks.filter((td) => /heat-(up|dn)/.test(td.cls)).length} week cells`);
+  }
+
+  if (wireAvg.some((td) => /\bheat\b/.test(td.cls))) {
+    c.ok('every wire Avg with a number carries the class',
+      wireAvg.filter((td) => td.v !== null).every((td) => /\bheat\b/.test(td.cls)),
+      JSON.stringify(wireAvg.map((td) => `${td.v}:${td.cls}`).slice(0, 4)));
+    c.ok('an Avg with no number is never coloured',
+      wireAvg.filter((td) => td.v === null).every((td) => !/\bheat\b/.test(td.cls)),
+      JSON.stringify(wireAvg.filter((td) => td.v === null).map((td) => td.cls).slice(0, 3)));
+    c.ok('and your own “Your …” row is measured too, against those same free agents',
+      wire.filter((r) => /\bmine\b/.test(r.cls))
+        .every((r) => r.cells[AVG].v === null || /\bheat\b/.test(r.cells[AVG].cls)),
+      JSON.stringify(wire.filter((r) => /\bmine\b/.test(r.cls))
+        .map((r) => `${r.cells[AVG].v}:${r.cells[AVG].cls}`)));
+    c.ok('and it says so on the cell, in words a tap opens',
+      wire.filter((r) => /\bmine\b/.test(r.cls) && /\bheat\b/.test(r.cells[AVG].cls))
+        .every((r) => /rather than counted among them/.test(r.cells[AVG].title)),
+      wire.filter((r) => /\bmine\b/.test(r.cls))[0]?.cells[AVG].title);
+    c.ok('THE COMPARISON GROUP IS HIS POSITION, said on every coloured Avg',
+      wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
+        .every((td) => /SD (above|below)/.test(td.title) && /free-agent/.test(td.title)),
+      wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls))[0]?.title);
+    // The swatch in the legend above the table, shown in the very treatment
+    // the table draws. `data-when` hides it unless the mark is on screen, so
+    // this also proves the selector in waivers.html addresses the right cells —
+    // `td.avg.heat-up-4`, the Avg column and nothing else.
+    const swatchShown = (id, sel) => {
+      const el = d.querySelector(`#${id} [data-when="${sel}"]`);
+      return el && !el.hasAttribute('hidden');
+    };
+    if (wireAvg.some((td) => /heat-up-4/.test(td.cls))) {
+      c.ok('the legend above the wire shows the scale’s green swatch when a cell has one',
+        swatchShown('waiverLegend', 'td.avg.heat-up-4'),
+        d.getElementById('waiverLegend').innerHTML.slice(0, 200));
+    }
+    // ---- WHERE EACH HALF OF THE COLOUR KEY LIVES ---------------------------
+    //
+    // Two layers, and the assertions check the LAYER as well as the words. A
+    // test that only asked "is this sentence somewhere on the page" would let
+    // the thresholds drift back under the table — which is exactly the
+    // regression this split fixed, and `node tests/text-audit.mjs` measured at
+    // +193 visible words on this page alone.
+    const wireKeyEl = d.getElementById('waiverHeatKey');
+    const wireBandsEl = d.getElementById('waiverHeatBands');
+    c.ok('THE VISIBLE KEY IS SHORT and names the group the colour compares',
+      /coloured against the other free agents at that position/.test(txt(wireKeyEl)) &&
+      txt(wireKeyEl).split(/\s+/).length <= 25,
+      txt(wireKeyEl));
+    c.ok('and it is OUTSIDE the toggle, so the colour is never unexplained on screen',
+      wireKeyEl && !wireKeyEl.closest('details'), txt(wireKeyEl));
+    c.ok('it names the two cues that do not need red told from green',
+      /arrow/.test(txt(wireKeyEl)) && /heavier type/.test(txt(wireKeyEl)), txt(wireKeyEl));
+    c.ok('and it does NOT carry the thresholds: that is what made the page wordy',
+      !/Full colour at \(red \/ green\)/.test(txt(wireKeyEl)), txt(wireKeyEl));
+    c.ok('THE THRESHOLDS IN POINTS SURVIVE, per position — a colour nobody can ' +
+      'check by hand is decoration',
+      /full colour at \(red \/ green\)/i.test(txt(wireBandsEl)) &&
+      /\bQB\b/.test(txt(wireBandsEl)) && /\bDST\b/.test(txt(wireBandsEl)),
+      txt(wireBandsEl));
+    c.ok('and they are INSIDE “How to read this table”, where the method lives',
+      wireBandsEl && !!wireBandsEl.closest('details.explain'),
+      wireBandsEl ? 'no details.explain above it' : 'no #waiverHeatBands at all');
+    c.ok('the toggle still says why the week columns keep the two greens instead',
+      /week cells are deliberately left off that scale/.test(note), note.slice(0, 1400));
+    c.ok('the note argues the pool: the wire at his position, not the whole league',
+      /compared only with the other free agents in that same position/.test(note) &&
+      /nobody wanted/.test(note), note.slice(0, 1400));
+  }
+
+  // ---- the taken table: a table that had no colour of any kind ------------
+  if (takenAvg.some((td) => /\bheat\b/.test(td.cls))) {
+    c.ok('THE TAKEN TABLE’S Avg COLUMN IS ON THE SCALE',
+      takenAvg.filter((td) => td.v !== null).every((td) => /\bheat\b/.test(td.cls)),
+      JSON.stringify(takenAvg.map((td) => `${td.v}:${td.cls}`).slice(0, 4)));
+    c.ok('AND SO ARE ITS WEEK COLUMNS, which carry no claim cue to collide with',
+      takenWeeks.some((td) => /heat-(up|dn)-\d/.test(td.cls)),
+      JSON.stringify(takenWeeks.map((td) => td.cls).slice(0, 5)));
+    c.ok('but NEITHER GREEN is on that table — nobody here can be claimed',
+      takenWeeks.every((td) => !/\b(hot|beats)\b/.test(td.cls)),
+      JSON.stringify(takenWeeks.filter((td) => /\b(hot|beats)\b/.test(td.cls))
+        .map((td) => td.cls).slice(0, 3)));
+    c.ok('A BYE, A RULED-OUT 0.0 AND A BLANK ARE NEVER COLOURED AND NEVER COUNTED',
+      takenWeeks.filter((td) => /\b(bye|zero|zero-out|wait)\b/.test(td.cls) || td.v === null)
+        .every((td) => !/\bheat\b/.test(td.cls)),
+      JSON.stringify(takenWeeks
+        .filter((td) => (/\b(bye|zero|zero-out|wait)\b/.test(td.cls) || td.v === null) &&
+          /\bheat\b/.test(td.cls)).map((td) => `${td.text}:${td.cls}`).slice(0, 3)));
+    c.ok('every coloured week cell says which position AND which week it was measured in',
+      takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
+        .every((td) => /SD (above|below)/.test(td.title) && /in week \d+/.test(td.title)),
+      takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls))[0]?.title);
+    c.ok('a cell at the end of the scale carries the glyph, and only there',
+      [...takenAvg, ...takenWeeks].filter((td) => /heat-(up|dn)-4/.test(td.cls))
+        .every((td) => /[▲▼]/.test(td.text)) &&
+      [...takenAvg, ...takenWeeks].filter((td) => /heat-(up|dn)-[123]\b/.test(td.cls))
+        .every((td) => !/[▲▼]/.test(td.text)),
+      JSON.stringify([...takenAvg, ...takenWeeks]
+        .filter((td) => /heat-(up|dn)-4/.test(td.cls)).map((td) => td.text).slice(0, 3)));
+    c.ok('no cell is two steps at once',
+      [...takenAvg, ...takenWeeks]
+        .every((td) => (td.cls.match(/heat-(?:up|dn)-\d|heat-0/g) || []).length <= 1),
+      JSON.stringify([...takenWeeks].map((td) => td.cls).slice(0, 4)));
+    // A POSITION IS THE GROUP, NEVER THE TABLE. The proof that survives a
+    // re-read: the best kicker is GREEN while every quarterback in the league
+    // outscores him, which one scale down the column could not produce.
+    const avgByPos = new Map();
+    for (const r of taken) {
+      const pos = r.cells[1].text.replace(/\d+$/, '');
+      const td = r.cells[T_AVG];
+      if (td.v === null) continue;
+      if (!avgByPos.has(pos)) avgByPos.set(pos, []);
+      avgByPos.get(pos).push({ v: Number(td.v), step: stepOf(td.cls) });
+    }
+    const k = avgByPos.get('K') || [];
+    if (k.length > 1) {
+      c.ok('a kicker can be green — a whole position is never painted one colour for being ' +
+        'that position',
+        k.some((x) => x.step > 0) && k.some((x) => x.step < 0),
+        JSON.stringify(k.map((x) => `${x.v}:${x.step}`)));
+    }
+    // THE PROOF THAT THE TABLE IS NOT ONE SCALE, and it is one line: somewhere
+    // in this table a GREEN number is SMALLER than a RED one. Under a single
+    // scale down the column that is impossible by construction, so this fails
+    // the moment the group stops being a position.
+    const flat = [...avgByPos.values()].flat();
+    const greens = flat.filter((x) => x.step > 0);
+    const reds = flat.filter((x) => x.step < 0);
+    c.ok('A POSITION IS THE COMPARISON GROUP, NEVER THE TABLE: a green number here is ' +
+      'smaller than a red one, which one scale down the column could not produce',
+      greens.length > 0 && reds.length > 0 &&
+      Math.min(...greens.map((x) => x.v)) < Math.max(...reds.map((x) => x.v)),
+      `green min ${Math.min(...greens.map((x) => x.v))} vs red max ${Math.max(...reds.map((x) => x.v))}`);
+    // And inside a position, the ordering and the colour never disagree.
+    const orderWrong = [];
+    for (const [pos, list] of avgByPos) {
+      const sorted = list.slice().sort((a, b) => b.v - a.v);
+      for (let n = 1; n < sorted.length; n++) {
+        if (sorted[n].step > sorted[n - 1].step) {
+          orderWrong.push(`${pos}: ${sorted[n].v} greener than ${sorted[n - 1].v}`);
+        }
+      }
+    }
+    c.ok('and inside a position the shading never disagrees with the ordering',
+      orderWrong.length === 0, orderWrong.slice(0, 3).join(' | '));
+
+    // A WEEK COLUMN IS ALSO A GROUP, and this is the half a per-position-only
+    // scale would silently get wrong: the same projection in two different
+    // weeks must be able to come out a different colour, because a heavy bye
+    // week is not a bad week for the man playing in it.
+    const byValue = new Map();
+    for (const r of taken) {
+      const pos = r.cells[1].text.replace(/\d+$/, '');
+      r.cells.slice(T_AVG + 1).forEach((td, i) => {
+        if (td.v === null || td.v === '0') return;
+        const key = `${pos}:${Number(td.v).toFixed(1)}`;
+        if (!byValue.has(key)) byValue.set(key, new Set());
+        byValue.get(key).add(`${i}:${stepOf(td.cls)}`);
+      });
+    }
+    const disagreeing = [...byValue.entries()].filter(([, set]) =>
+      new Set([...set].map((s) => s.split(':')[1])).size > 1);
+    const repeated = [...byValue.entries()].filter(([, set]) =>
+      new Set([...set].map((s) => s.split(':')[0])).size > 1);
+    if (repeated.length) {
+      c.ok('EACH WEEK COLUMN IS ITS OWN GROUP: the same projection comes out a different ' +
+        'colour in a different week, which one scale per position could not do',
+        disagreeing.length > 0,
+        JSON.stringify(repeated.slice(0, 4).map(([key, s]) => `${key}:${[...s]}`)));
+    }
+
+    if (takenAvg.some((td) => /heat-dn-4/.test(td.cls)) ||
+        takenWeeks.some((td) => /heat-dn-4/.test(td.cls))) {
+      const el = d.querySelector('#takenLegend [data-when="td.heat-dn-4"]');
+      c.ok('the legend above the taken table shows the scale’s red swatch',
+        el && !el.hasAttribute('hidden'),
+        d.getElementById('takenLegend').innerHTML.slice(0, 200));
+    }
+    c.ok('and the claim-green chip beside it still says why NEITHER green is on this table',
+      /Neither claim green/.test(txt(d.getElementById('takenLegend'))),
+      txt(d.getElementById('takenLegend')));
+
+    const takenKeyEl = d.getElementById('takenHeatKey');
+    const takenBandsEl = d.getElementById('takenHeatBands');
+    const takenKey = txt(takenKeyEl);
+    const takenBands = txt(takenBandsEl);
+    const takenNote = txt(d.getElementById('takenNote'));
+    c.ok('THE VISIBLE KEY SAYS THE GROUP IS THE POSITION, AND THE WEEK',
+      /compares men at the same position, week by week/.test(takenKey), takenKey);
+    c.ok('and it is short, and outside the toggle',
+      takenKeyEl && !takenKeyEl.closest('details') && takenKey.split(/\s+/).length <= 25,
+      takenKey);
+    c.ok('and it names the arrow and the weight, so none of it needs red told from green',
+      /arrow/.test(takenKey) && /heavier type/.test(takenKey), takenKey);
+    c.ok('THE QUARTERBACK-AND-KICKER RULE IS STILL WRITTEN OUT, in the toggle',
+      /a quarterback is never measured against a kicker/i.test(takenBands + ' ' + takenNote),
+      takenBands);
+    c.ok('the thresholds in points survive, inside “How to read this table”',
+      /full colour at \(red \/ green\)/i.test(takenBands) &&
+      takenBandsEl && !!takenBandsEl.closest('details.explain'),
+      takenBands);
+    c.ok('and the visible key does not repeat them',
+      !/full colour at/i.test(takenKey), takenKey);
+  }
 }
 
 async function check(scenario, boot) {
@@ -372,6 +711,8 @@ async function check(scenario, boot) {
     /Bye is the 0\.00 ESPN returns/.test(note) && /blank cell means/.test(note), note);
   c.ok('the note owns the average as ours',
     /Avg is the mean of the weeks shown and is ours, not ESPN’s/.test(note), note);
+
+  checkHeat(c, d, scenario, note);
 
   // ---- (a) demo ------------------------------------------------------------
   if (scenario === 'demo') {
@@ -747,6 +1088,60 @@ async function check(scenario, boot) {
     c.ok('no headline numbers are invented', txt($('waiverStats')) === '', txt($('waiverStats')));
     c.ok('the position counts stay blank',
       [...d.querySelectorAll('#posFilter .seg-count')].every((s) => txt(s) === ''), 'counts shown');
+  }
+
+  // ---- (f) a filter repaints, and moves no colour --------------------------
+  if (scenario === 'heat-filter') {
+    const w = globalThis.__wvHeat || {};
+    const same = (a, b, which) => {
+      const wrong = [];
+      for (const [k, v] of Object.entries(b[which])) {
+        const was = a[which][k];
+        if (was !== undefined && was.join('|') !== v.join('|')) {
+          wrong.push(`${k}: ${was.join('|')} -> ${v.join('|')}`);
+        }
+      }
+      return wrong;
+    };
+
+    c.ok('the baseline really is coloured, or none of this proves anything',
+      Object.values(w.all.wire).some((cells) => cells.some((k) => /heat-(up|dn)/.test(k))) &&
+      Object.values(w.all.taken).some((cells) => cells.some((k) => /heat-(up|dn)/.test(k))),
+      JSON.stringify(Object.entries(w.all.wire).slice(0, 3)));
+    c.ok('and the filters really did change the row sets, or it proves nothing either',
+      Object.keys(w.wireRb.wire).length < Object.keys(w.all.wire).length &&
+      Object.keys(w.takenWr.taken).length < Object.keys(w.all.taken).length,
+      `${Object.keys(w.all.wire).length} -> ${Object.keys(w.wireRb.wire).length} wire, ` +
+      `${Object.keys(w.all.taken).length} -> ${Object.keys(w.takenWr.taken).length} taken`);
+
+    for (const [label, state] of [['RB', w.wireRb], ['FLEX', w.wireFlex], ['back to ALL', w.back]]) {
+      c.ok(`PRESSING ${label} ON THE WIRE MOVES NOT ONE CELL’S COLOUR`,
+        same(w.all, state, 'wire').length === 0, same(w.all, state, 'wire').slice(0, 3).join(' | '));
+    }
+    for (const [label, state] of [['WR', w.takenWr], ['FLEX', w.takenFlex], ['back to ALL', w.back]]) {
+      c.ok(`PRESSING ${label} ON THE TAKEN TABLE MOVES NOT ONE CELL’S COLOUR`,
+        same(w.all, state, 'taken').length === 0, same(w.all, state, 'taken').slice(0, 3).join(' | '));
+    }
+    // And the thresholds inside each table's toggle are the same numbers too —
+    // they are the scale written out, so a moving strip would mean a moving
+    // scale even if the visible rows happened not to show it. Both layers are
+    // compared: the strip because it carries the numbers, the visible key
+    // because a key that changed under a filter would be claiming the scale had.
+    c.ok('THE PRINTED THRESHOLDS DO NOT MOVE EITHER, on either table',
+      w.all.wireBands.length > 0 && w.all.takenBands.length > 0 &&
+      w.wireFlex.wireBands === w.all.wireBands && w.takenFlex.takenBands === w.all.takenBands &&
+      w.back.wireBands === w.all.wireBands && w.back.takenBands === w.all.takenBands,
+      `${w.all.wireBands.slice(0, 120)}\n${w.wireFlex.wireBands.slice(0, 120)}`);
+    c.ok('and neither visible key moves under a filter',
+      w.wireFlex.wireKey === w.all.wireKey && w.takenFlex.takenKey === w.all.takenKey &&
+      w.back.wireKey === w.all.wireKey && w.back.takenKey === w.all.takenKey,
+      `${w.all.wireKey.slice(0, 120)}\n${w.wireFlex.wireKey.slice(0, 120)}`);
+    // The two tables' filters are independent, so one must not repaint the
+    // other's colours as a side effect either.
+    c.ok('and one table’s filter never touches the other table’s colours',
+      same(w.all, w.wireFlex, 'taken').length === 0 && same(w.all, w.takenFlex, 'wire').length === 0,
+      `${same(w.all, w.wireFlex, 'taken').slice(0, 2).join(' | ')} / ` +
+      `${same(w.all, w.takenFlex, 'wire').slice(0, 2).join(' | ')}`);
   }
 
   // ---- the summary strip ---------------------------------------------------

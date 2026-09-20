@@ -88,11 +88,20 @@
      Written `table tbody.split td` rather than `tbody.split td` on purpose: the
      row-hover rule in css/app.css is `tbody tr:hover td`, and only a selector
      of equal weight coming LATER (this file is linked after it) keeps the band
-     from repainting under the pointer. */
+     from repainting under the pointer.
+
+     `background-color`, NOT the `background` shorthand, since 2026-09-19b —
+     the same one-word fix the picked row needed, and for the same reason. The
+     season sheet's band is now COLOURED: each week's total against the other
+     nine squads' total for that week. The scale tints with a flat
+     `background-image` precisely so a rule like this one can keep owning the
+     background COLOUR underneath it, but the shorthand resets background-image
+     to none and this selector outranks a bare `.heat-up-3`. Written as the
+     shorthand, the band carried every heat class and drew not one tint. */
   table tbody.split td,
   table tbody tr:hover td.split-label,
   table tbody tr:hover td.split-total {
-    background: var(--panel-2);
+    background-color: var(--panel-2);
     border-top: 2px solid var(--line-2);
     border-bottom: 2px solid var(--line-2);
     padding-top: 11px;
@@ -355,7 +364,17 @@
   /* "Currently drilled into" — deliberately NOT .me, which means "your team"
      in green everywhere else on the site and would claim a demo team is yours. */
   table.grid tbody tr[data-team] { cursor: pointer; }
-  table.grid tbody tr.picked td { background: var(--panel-2); }
+  /* `background-color`, NOT the `background` shorthand, and the difference is
+     load-bearing since the red/green scale landed on both measures of this
+     grid (2026-09-19b). The scale tints a cell with a flat `background-image`
+     precisely so zebra, hover and this rule can keep owning the background
+     COLOUR underneath it (see the long block above `.heat` in css/app.css) —
+     but the shorthand RESETS background-image to none, and this selector is
+     more specific than a bare `.heat-up-3`. Written as the shorthand, the row
+     the reader had drilled into was the one row of ten with no colours on it,
+     silently: the ▲/▼ and the weight still said where a number stood while the
+     tint had been wiped. One word, and the picked row looks like every other. */
+  table.grid tbody tr.picked td { background-color: var(--panel-2); }
   table.grid tbody tr.picked td.name {
     background: var(--panel-2);
     box-shadow: inset 3px 0 0 var(--good);
@@ -480,7 +499,11 @@
      the panel to the player — it is not decoration. */
   .pick-line .pick-open { margin-left: 4px; }
 
-  /* The thresholds, printed so a reader can check a coloured cell by hand. */
+  /* The thresholds, printed so a reader can check a coloured cell by hand.
+     They live INSIDE each panel's "How this works" toggle since 2026-09-19c —
+     the method behind the toggle, a short key in view — so the top margin puts
+     `.key-line`'s own top margin is what sets them off from the paragraph of
+     the note above. */
   .bars-line .lg-lead { color: var(--dim); }
   .bars-line { font-variant-numeric: tabular-nums; }
 
@@ -840,6 +863,15 @@
     <details class="explain">
       <summary>How this grid works</summary>
       <div class="panel-note" id="overviewNote"></div>
+      <!-- THE FULL-COLOUR THRESHOLDS IN POINTS, one pair per column, INSIDE the
+           toggle. They are what makes a coloured cell checkable by hand rather
+           than taken on trust, so they are never deleted — but a strip of ten
+           pairs is method, not key, and it was 36 of this page's 346 visible
+           words while it sat under the grid (`node tests/text-audit.mjs`).
+           HANDOFF's panel shape: a small visible key on screen, the full method
+           behind the toggle. The key above still says what the colour compares
+           and that the ends carry an arrow and heavier type. -->
+      <p class="key-line bars-line" id="overviewBars"></p>
     </details>
   </section>
 
@@ -877,10 +909,19 @@
     </table></div>
     <div class="empty hidden" id="seasonEmpty"></div>
     <p class="key-line" id="seasonLegend"></p>
-    <p class="key-line bars-line" id="seasonBars"></p>
     <details class="explain">
       <summary>How this table works</summary>
       <div class="panel-note" id="seasonNote"></div>
+      <!-- Both sets of thresholds, in the toggle with the prose that argues
+           them — the same move the grid above made, and for the same measured
+           reason: these two lines were 73 of this page's 346 visible words.
+           TWO LINES, NOT ONE. The Avg column is on a DIFFERENT scale from the
+           week cells beside it — ten squads' season averages, not ~160 weekly
+           values — and two scales sharing one "full colour at" line would be
+           unreadable and, worse, would invite checking a cell against the wrong
+           pair. -->
+      <p class="key-line bars-line" id="seasonBars"></p>
+      <p class="key-line bars-line" id="seasonAvgBars"></p>
     </details>
   </section>
 

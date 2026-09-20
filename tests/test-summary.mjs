@@ -247,6 +247,22 @@ function fire(el, type = 'change') {
   el.dispatchEvent(new globalThis.Event(type, { bubbles: true }));
 }
 
+// THE SHARED RED/GREEN SCALE (js/heat.js) marks the end of the scale with a ▲
+// or ▼ INSIDE the cell. Every text read below strips it, and that is not only
+// housekeeping: several assertions compare a cell's text against what was
+// PAINTED ON THE CANVAS, and the canvas deliberately carries no scale at all
+// (see the long note above renderCard in js/summary-page.js). Stripping here is
+// what lets those comparisons keep working — and `imageCarriesNoScale` below is
+// what makes sure the glyph really did stay off the picture.
+const stripMark = (s) => String(s || '').replace(/[▲▼]/g, '').replace(/\s+/g, ' ').trim();
+
+const HEAT_CLS = /\bheat-(up|dn)-([1-4])\b/;
+/** 'up' | 'dn' | null — which side of the shared scale a cell was painted. */
+const heatSide = (el) => {
+  const m = HEAT_CLS.exec((el && el.getAttribute('class')) || '');
+  return m ? m[1] : null;
+};
+
 /** Read the chart off the page. `data-v` carries the raw value behind a cell. */
 function readTable(document) {
   const table = document.getElementById('summaryTable');
@@ -258,11 +274,41 @@ function readTable(document) {
     };
     return {
       name: text(td[0]),
-      luckText: text(td[1]), luck: v(1),
-      titleText: text(td[2]), title: v(2),
-      lastText: text(td[3]), last: v(3),
+      luckText: stripMark(text(td[1])), luck: v(1),
+      titleText: stripMark(text(td[2])), title: v(2),
+      lastText: stripMark(text(td[3])), last: v(3),
+      // Which side of the scale each of the three numeric cells was painted,
+      // and the words the cell carries for a phone tap.
+      heat: { luck: heatSide(td[1]), title: heatSide(td[2]), last: heatSide(td[3]) },
+      titles: [1, 2, 3].map((i) => td[i].getAttribute('title') || ''),
     };
   });
+}
+
+/**
+ * Every green cell on the good side of its column's mean and every red cell on
+ * the bad side — the shape a flipped `invert` fails.
+ *
+ * Direction is passed in rather than inferred, and a column that drew no colour
+ * at all reports as a failure rather than as "every cell was fine".
+ */
+function heatDirection(rows, key, goodHigh) {
+  const usable = rows.filter((r) => Number.isFinite(r[key]));
+  if (usable.length < 2) return 'fewer than two values';
+  const mean = usable.reduce((a, r) => a + r[key], 0) / usable.length;
+  let ups = 0;
+  let downs = 0;
+  for (const r of usable) {
+    const side = r.heat[key];
+    if (!side) continue;
+    if (side === 'up') ups++; else downs++;
+    if ((side === 'up') !== (goodHigh ? r[key] > mean : r[key] < mean)) {
+      return `${r.name} ${r[key]} (mean ${mean.toFixed(4)}) painted ${side}, goodHigh=${goodHigh}`;
+    }
+  }
+  if (!ups) return 'nothing green';
+  if (!downs) return 'nothing red';
+  return '';
 }
 
 function readPage(document) {
@@ -277,6 +323,7 @@ function readPage(document) {
     cardText: document.getElementById('shareText').textContent,
     hint: text(document.getElementById('shareHint')),
     sendStatus: text(document.getElementById('shareStatus')),
+    heatKey: text(document.getElementById('heatKey')),
     shareHidden: share.hasAttribute('hidden'),
     downloadDisabled: document.getElementById('downloadBtn').hasAttribute('disabled'),
     cardHidden: document.getElementById('cardWrap').hasAttribute('hidden'),
@@ -436,6 +483,12 @@ const SCENARIOS = {
       fontSizes: [...new Set(drawn.fonts.map((f) => Number((/(\d+(?:\.\d+)?)px/.exec(f) || [0, 0])[1])))],
       transforms: drawn.transforms,
       bands: drawn.rects.slice(0, 2),
+      // EVERY fill used on the card, text and rectangles alike. The image is
+      // deliberately NOT given the red/green scale, and this is what proves it:
+      // a scale leaking onto the canvas would show up either as a new rectangle
+      // colour behind a cell or as a ▲/▼ in the painted strings.
+      rectFills: [...new Set(drawn.rects.map((r) => r.fill))],
+      textFills: [...new Set(drawn.fills)],
       clicked: drawn.clicked || null,
       shared: shared.map((s) => ({
         title: s.title,
@@ -645,6 +698,102 @@ if (!fresh.boot) {
     fresh.rows.some((r) => Math.abs(r.title - r.last) > 0.01),
     JSON.stringify(fresh.rows.map((r) => [r.name, r.title, r.last])));
 
+  // ---- THE SHARED RED/GREEN SCALE, on the table ---------------------------
+  //
+  // The demo boots at week 8, so LUCK is past its hold-back and all three
+  // columns are shaded. The one that matters is LOSER %, which is INVERTED:
+  // this chart goes to the group chat, and painting the wooden-spoon favourite
+  // the brightest green in the picture is the most publicly wrong thing this
+  // page could do. It is asserted twice — once across the column, once by
+  // naming the manager at each end — so a flipped `invert` cannot slip through.
+  for (const [label, key, goodHigh] of [
+    ['LUCK', 'luck', true],
+    ['Title %', 'title', true],
+    ['Loser %', 'last', false],
+  ]) {
+    const why = heatDirection(fresh.rows, key, goodHigh);
+    ok(`${label} is shaded the right way round`, !why, why);
+  }
+  {
+    const byLast = [...fresh.rows].sort((a, b) => b.last - a.last);
+    ok('the manager most likely to finish last is RED, not green',
+      byLast[0].heat.last === 'dn', `${byLast[0].name} @ ${byLast[0].last} -> ${byLast[0].heat.last}`);
+    ok('and the one least likely to is GREEN',
+      byLast[byLast.length - 1].heat.last === 'up',
+      `${byLast[byLast.length - 1].name} -> ${byLast[byLast.length - 1].heat.last}`);
+    const byTitle = [...fresh.rows].sort((a, b) => b.title - a.title);
+    ok('the title favourite is GREEN on Title %',
+      byTitle[0].heat.title === 'up', `${byTitle[0].name} -> ${byTitle[0].heat.title}`);
+  }
+  ok('a shaded cell says where it stands in words, for a tap on a phone',
+    fresh.rows.some((r) => /SD (above|below)/.test(r.titles.join(' '))),
+    JSON.stringify(fresh.rows[0].titles));
+  // Channel 4. Without it the colour is unverifiable, and the inverted column
+  // is an active trap.
+  ok('the table carries a VISIBLE key for the colours',
+    /Green good, red bad/.test(fresh.heatKey), fresh.heatKey.slice(0, 160));
+  // THE INVERTED COLUMN IS THE ONE PART OF THE KEY THAT MAY NOT MOVE. The
+  // thresholds are method and belong in the toggle; "green on Loser % is a LOW
+  // number" changes what the colour means, and a reader who opens nothing reads
+  // the wooden-spoon favourite as the manager to beat without it.
+  ok('the key says Loser % is turned over',
+    /Loser %/.test(fresh.heatKey) && /turned over/i.test(fresh.heatKey) &&
+    /green is low/i.test(fresh.heatKey),
+    fresh.heatKey.slice(0, 220));
+  // Channel 2 named on the visible line: the glyph and the weight are what make
+  // the scale readable without separating the hues, and a key that never
+  // mentions them leaves a reader who cannot no way of knowing they exist.
+  ok('the key names the glyph and the weight at the ends of the scale',
+    /▲▼/.test(fresh.heatKey) && /bold/i.test(fresh.heatKey), fresh.heatKey.slice(0, 220));
+  // THE KEY IS SPLIT, the way the Stats page splits it: VISIBLE is what changes
+  // what a number means, and the thresholds — the half that makes a shaded cell
+  // checkable by hand — sit in the tucked note with the method. Both halves are
+  // required, so BOTH SIDES OF THE BOUNDARY are asserted: checking only that
+  // the note has them passes just as happily when `describeHeat` is ALSO under
+  // the table, which is the regression that took this panel from 29 visible
+  // words to 76 (node tests/text-audit.mjs summary.html).
+  ok('the visible key does not itself carry the thresholds',
+    !/standard deviation/.test(fresh.heatKey) && !/pts or better/.test(fresh.heatKey),
+    fresh.heatKey.slice(0, 320));
+  ok('and the tucked note prints them, in points for LUCK and per cent for the odds',
+    /The LUCK colours/.test(fresh.note) && /pts or better/.test(fresh.note) &&
+    /The Title % colours/.test(fresh.note),
+    fresh.note.slice(fresh.note.indexOf('The LUCK colours'), fresh.note.indexOf('The LUCK colours') + 320));
+  ok('the tucked note also repeats that Loser % is the scale turned over',
+    /Loser % is the same scale turned over/.test(fresh.note), fresh.note.slice(0, 200));
+  // Every shaded cell keeps its data-v, so the column still sorts as a number
+  // rather than as the string "41% ▲".
+  ok('shading did not cost the columns their numeric sort',
+    fresh.rows.every((r) => r.title !== null && r.last !== null),
+    JSON.stringify(fresh.rows.map((r) => [r.title, r.last])));
+
+  // ---- A PERCENTAGE IS NOT POINTS: the flat-column guard ------------------
+  //
+  // js/heat.js's HEAT_MIN_SPREAD is 0.05, and it means "half of one printed
+  // TENTH OF A POINT". These two columns are probabilities in 0..1 printed as a
+  // whole per cent, so one printed digit is 0.01 and half of one is 0.005 —
+  // which is what `PCT_MIN_SPREAD` in js/summary-page.js and js/schedule-page.js
+  // is set to.
+  //
+  // The demo league's title race is wide enough that either value would shade
+  // it, so this is pinned against js/heat.js directly rather than against the
+  // page: a realistically TIGHT title race — ten managers between 8% and 12% —
+  // must shade under the percentage guard and must NOT shade under the points
+  // one. Without this the choice of constant is only an argument in a comment,
+  // and a later pass could drop back to the default with every suite green.
+  {
+    const { heatScale } = await import(moduleUrl('js/heat.js'));
+    const tight = [0.08, 0.09, 0.095, 0.10, 0.10, 0.105, 0.11, 0.115, 0.12, 0.085];
+    ok('a tight title race shades under the percentage guard (0.005)',
+      heatScale(tight, { minSpread: 0.005 }) !== null);
+    ok('and would be refused outright under the points guard (0.05)',
+      heatScale(tight, { minSpread: 0.05 }) === null,
+      'the two constants make no difference here, so the choice is untested');
+    // And the guard still does its job: counting noise alone must not shade.
+    ok('while a column that is all the same number is still refused',
+      heatScale([0.1, 0.1, 0.1, 0.1], { minSpread: 0.005 }) === null);
+  }
+
   // ---- the note: the house rule about stating a basis ---------------------
   for (const phrase of [
     'championship round',
@@ -730,7 +879,31 @@ if (!early.boot) {
       /Early season/.test(got.note), got.note.slice(0, 220));
     ok(`${label}: the shareable copy carries the percentages`,
       /\d+%/.test(got.cardText), got.cardText);
+
+    // RULE 5, AND THE SPLIT THAT MAKES IT HONEST. LUCK comes out of the weeks
+    // PLAYED, and after one or two of them this same panel says in words that
+    // one close game swings it further than a whole season does — so it is
+    // shown, with its ±, and NOT shaded. The two percentages are not measured
+    // from the banked half at all: they are counted from a hundred thousand
+    // playings-out of the whole remaining season, which in week 1 is more
+    // football than it will ever be again. So they keep their colours.
+    ok(`${label}: LUCK is NOT shaded off one or two games`,
+      got.rows.every((r) => r.heat.luck === null),
+      JSON.stringify(got.rows.map((r) => [r.name, r.heat.luck])));
+    ok(`${label}: but the two forecast columns still are`,
+      got.rows.some((r) => r.heat.title) && got.rows.some((r) => r.heat.last),
+      JSON.stringify(got.rows.map((r) => [r.heat.title, r.heat.last])));
+    ok(`${label}: and the key SAYS why LUCK is plain, rather than leaving a gap`,
+      /LUCK is not shaded yet/.test(got.heatKey), got.heatKey.slice(0, 220));
   }
+
+  // The other half of the pair: by week 4 LUCK has its colours, so "held back"
+  // cannot be a page that never shades it at all.
+  ok('by week 4 LUCK is shaded',
+    early.four.rows.some((r) => r.heat.luck),
+    JSON.stringify(early.four.rows.map((r) => [r.name, r.heat.luck])));
+  ok('and the key stops apologising for it',
+    !/LUCK is not shaded yet/.test(early.four.heatKey), early.four.heatKey.slice(0, 200));
 
   ok('at week 4 the numbers are there',
     early.four.rows.every((r) => r.luck !== null && r.title !== null && r.last !== null),
@@ -832,6 +1005,33 @@ if (!drawn.boot) {
   // two or three fillText calls. Joined with a space they read back exactly as
   // written, which is what makes "the definition is on the image" checkable.
   const painted = drawn.painted.join(' ');
+
+  // ---- THE IMAGE CARRIES NO RED/GREEN SCALE, AND THAT IS DELIBERATE --------
+  //
+  // The table above it does. The picture does not, and the argument is written
+  // out in full above renderCard() in js/summary-page.js: on a PNG in a group
+  // chat two of the scale's four channels are simply gone — there is no `title`
+  // to tap and no key line under it, because Tim took the explanation lines OFF
+  // this image on 2026-09-17 — which would leave a colour with no key in the
+  // one artefact that gets forwarded to nine people who have never seen this
+  // site. The LUCK column on the canvas also already spends green and red on
+  // the SIGN of the number, so a second green would be two claims in one
+  // picture.
+  //
+  // Three separate witnesses, because "I decided not to" is not a test:
+  ok('no ▲ or ▼ from the scale was painted onto the card',
+    !/[▲▼]/.test(painted), painted.slice(0, 200));
+  // The only rectangles on the card are the ground, the demo band and the zebra
+  // rows. A heat tint would arrive as a new fill colour behind a cell.
+  ok('the card paints no background tints beyond its ground, band and zebra',
+    drawn.rectFills.every((f) => ['#171a21', '#3a2f10', '#1a1d25'].includes(String(f))),
+    JSON.stringify(drawn.rectFills));
+  // And the text colours stay the four the card has always used: dim, text,
+  // warn (the demo band) and the LUCK sign pair.
+  ok('and it paints no text colours it did not already have',
+    drawn.textFills.every((f) =>
+      ['#e6e8ec', '#8b93a1', '#3ba55d', '#e0525f', '#d9a441'].includes(String(f))),
+    JSON.stringify(drawn.textFills));
 
   // 2x, set on the CONTEXT rather than by stretching a 1x bitmap with CSS.
   ok('the context is scaled 2x in both axes for retina',

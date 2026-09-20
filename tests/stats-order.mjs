@@ -178,6 +178,111 @@ assert($('mainTable').querySelectorAll('tbody tr').length === 10,
 assert($('weeklyTable').querySelectorAll('tbody tr').length === 10,
   'Week by week rendered the wrong number of rows');
 
+// ---------------------------------------------- the shared red/green scale
+//
+// This suite boots the whole real page on a complete demo season, which makes
+// it the cheapest place to hold the standings table's colouring to its own
+// rules. It checks three separate things, and they fail for three different
+// mistakes:
+//
+//   1. the two columns added on 2026-09-19 (F−A and Luck/wk) really are
+//      coloured, and point the right way;
+//   2. the columns that are deliberately refused really are refused — a later
+//      pass that "finished the job" by colouring Spread or Skill fails here;
+//   3. Opp Avg stays INVERTED. That is pre-existing behaviour and it is the
+//      defect that retired this page's old local ramp (it painted the hardest
+//      schedule the greenest), so it gets an assertion of its own rather than
+//      being left to a comment.
+
+const HEAT_CLS = /\bheat-(up|dn)-([1-4])\b/;
+const heatSide = (el) => {
+  const m = HEAT_CLS.exec((el && el.getAttribute('class')) || '');
+  return m ? m[1] : null;
+};
+const mainRows = [...$('mainTable').querySelectorAll('tbody tr')].map((tr) => [...tr.children]);
+const column = (i) => mainRows.map((c) => c[i]);
+
+/**
+ * Every green cell above its column's mean and every red cell below it, or the
+ * other way round for an inverted column. Refuses to pass on a column that drew
+ * no colour at all, so a page that stopped colouring cannot pass by being
+ * uniformly blank.
+ */
+function direction(cells, goodHigh) {
+  const vals = cells.map((c) => Number(c.getAttribute('data-v')));
+  const usable = vals.map((v, i) => [v, cells[i]]).filter(([v]) => Number.isFinite(v));
+  if (usable.length < 2) return 'fewer than two readable values';
+  const mean = usable.reduce((a, [v]) => a + v, 0) / usable.length;
+  let ups = 0;
+  let downs = 0;
+  for (const [v, cell] of usable) {
+    const side = heatSide(cell);
+    if (!side) continue;
+    if (side === 'up') ups++; else downs++;
+    if ((side === 'up') !== (goodHigh ? v > mean : v < mean)) {
+      return `${v} (mean ${mean.toFixed(2)}) painted ${side} with goodHigh=${goodHigh}`;
+    }
+  }
+  if (!ups) return 'nothing green';
+  if (!downs) return 'nothing red';
+  return '';
+}
+
+// Column indices, from the second header row in stats.html.
+const C = { record: 1, avg: 2, total: 4, oppAvg: 5, fa: 6, spread: 7, luckWk: 9, ptw: 10, skill: 13 };
+
+for (const [label, idx, goodHigh] of [
+  ['F−A', C.fa, true],
+  ['Luck/wk', C.luckWk, true],
+  ['Avg', C.avg, true],
+  ['Opp Avg', C.oppAvg, false],   // INVERTED: a low opponent average is an easy run
+]) {
+  const why = direction(column(idx), goodHigh);
+  assert(!why, `standings ${label} points the wrong way — ${why}`);
+}
+
+for (const [label, idx] of [
+  ['Total', C.total], ['Spread', C.spread], ['PTW', C.ptw], ['Skill', C.skill],
+  ['W−L', C.record],
+]) {
+  assert(!column(idx).some((c) => heatSide(c)),
+    `standings ${label} was coloured, and it is on the refused list`);
+}
+
+// Every coloured cell on the page must be sortable as a NUMBER. sortable.js
+// falls back to the cell's text when there is no data-v and strips only
+// ", + $ %" and spaces — so a cell ending in ▲ would sort as a string.
+const unsortable = [...document.querySelectorAll('td[class*="heat-"]')]
+  .filter((td) => td.getAttribute('data-v') === null);
+assert(unsortable.length === 0,
+  `${unsortable.length} coloured cell(s) carry no data-v, so their column sorts as text`);
+
+// THE KEY IS SPLIT, AND THE SPLIT IS WHAT IS ASSERTED — not merely that each
+// fact exists somewhere. The visible line carries only what changes what a
+// number MEANS: which way green points, that Opp Avg and Opp proj are turned
+// over, and that the ends are marked with a glyph and heavier type. The
+// thresholds in points, and every per-column detail, live behind "What the
+// columns mean". Checking only the note would pass while `describeHeat` sat
+// under the table as well, which is the prose creep `node
+// tests/text-audit.mjs stats.html` exists to measure.
+const status = ($('mainTableStatus').textContent || '').replace(/\s+/g, ' ');
+assert(/Green is good for that team, red is bad/.test(status),
+  `the visible key does not say which way green points: "${status.slice(0, 160)}"`);
+assert(/Opp Avg/.test(status) && /Opp proj/.test(status) && /turned over/.test(status),
+  `the visible key does not name the two INVERTED columns: "${status.slice(0, 160)}"`);
+assert(/▲▼/.test(status),
+  `the visible key does not name the glyph at the ends: "${status.slice(0, 160)}"`);
+assert(!/standard deviation/.test(status) && !/pts or better/.test(status),
+  `the thresholds are back in the VISIBLE key: "${status.slice(0, 200)}"`);
+const noteText = ($('mainTableNote').textContent || '').replace(/\s+/g, ' ');
+assert(/Colour compares each number/.test(noteText) && /Spread/.test(noteText),
+  'the standings note does not print the new thresholds or say what is refused');
+// The two columns the sweep added: named in the tucked note, with their own
+// thresholds, since the visible line no longer confirms they follow the
+// default direction.
+assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
+  'the tucked note does not print the F−A and Luck/wk thresholds');
+
 if (problems.length) {
   console.log('FAIL stats panel order');
   for (const p of problems) console.log(`  - ${p}`);

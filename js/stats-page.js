@@ -386,12 +386,25 @@ function renderGlance() {
  * standing — js/touch-titles.js turns it into a tap on a phone, so it is not
  * hover-only — and the ▲/▼ at the end of the scale is the one that needs no
  * interaction at all.
+ *
+ * A COLOURED CELL ALWAYS CARRIES A `data-v`, and that is a bug fix rather than
+ * tidiness (2026-09-19). sortable.js's `parseCell` falls back to the cell's
+ * TEXT when there is no `data-v`, and it strips `, + $ %` and whitespace — not
+ * ▲ or ▼. So every cell at the end of this scale was sorting as the STRING
+ * "22.1 ▲" while its uncoloured neighbours sorted as numbers, which quietly put
+ * the best and worst rows of a column in the wrong places the moment anybody
+ * clicked the heading. The value is written unrounded, exactly as every other
+ * `data-v` on the page is; a caller that already supplies its own `data-v` in
+ * `extra` (oppProjCell) keeps it.
  */
 function heatCell(v, scale, { what = 'the rest of the league', text = null, extra = '' } = {}) {
   const shown = text === null ? fmt(v) : text;
   const h = heatOf(v, scale, { what });
-  if (!h) return `<td${extra ? ` ${extra}` : ''}>${shown}</td>`;
-  return `<td class="${h.cls}"${extra ? ` ${extra}` : ''} title="${esc(h.words)}">` +
+  const dv = typeof v === 'number' && Number.isFinite(v) && !/\bdata-v=/.test(extra)
+    ? ` data-v="${v}"`
+    : '';
+  if (!h) return `<td${extra ? ` ${extra}` : ''}${dv}>${shown}</td>`;
+  return `<td class="${h.cls}"${extra ? ` ${extra}` : ''}${dv} title="${esc(h.words)}">` +
     `${shown}${heatMarkHtml(h)}</td>`;
 }
 
@@ -431,9 +444,41 @@ function renderMainTable() {
   const heatOpp = heatScale(none ? [] : s.teams.map((t) => t.oppAvgActual), { invert: true });
   const heatOppProj = heatScale(oppRows().map((r) => r.avgOpp), { invert: true });
 
+  // TWO MORE COLUMNS, 2026-09-19 (Tim: the colouring "needs to be added to all
+  // the other places a number is referred to across the whole site"). These two
+  // were not left out on principle, they were simply missed — the sentence in
+  // the note below already listed the only two principles this table uses to
+  // refuse a column, and neither of them covers either of these:
+  //
+  //   F−A      = average points for minus average points against, i.e. the
+  //              average weekly margin. One unambiguous good end. It is NOT a
+  //              rescaling of a column already coloured: it is the DIFFERENCE
+  //              of the two that are (Avg and Opp Avg), so it carries an
+  //              ordering neither of them does.
+  //   Luck/wk  = average actual minus average projected. High is good for the
+  //              team, and that is not a fresh judgement invented here: the
+  //              week grid below already scales its `luck` metric with `invert`
+  //              off and says so in its own key, so the two would contradict
+  //              each other if this one inverted.
+  //
+  // THREE COLUMNS THAT LOOK LIKE CANDIDATES AND ARE DELIBERATELY NOT:
+  //   Total  — every team has played the same number of games, so points-for is
+  //            the Avg column times a constant and its z-scores are identical.
+  //            Colouring it paints a second copy of a colour already in the row.
+  //   Skill  — `avgProjected − leagueAvgProjected`, which is the Proj column
+  //            shifted by a constant. Same argument, exactly.
+  //   Spread — the standard deviation of a team's weekly scores. NEITHER
+  //            DIRECTION IS GOOD: a consistent bad team and a volatile good one
+  //            are both real, and js/heat.js's rule is that such a column gets
+  //            no scale rather than a misleading one.
+  const heatFA = heatScale(none ? [] : s.teams.map((t) => t.forMinusAgainst));
+  const heatLuckWk = heatScale(none ? [] : s.teams.map((t) => t.avgLuck));
+
   const W_AVG = 'what the league averages a week';
   const W_PROJ = 'what the league is projected a week';
   const W_OPP = 'the opponents the rest of the league has faced';
+  const W_FA = 'the margins the rest of the league is winning by';
+  const W_LUCK = 'how far the rest of the league is beating its projection';
 
   tbody.innerHTML = s.teams
     .map((t) => `
@@ -444,10 +489,10 @@ function renderMainTable() {
         ${heatCell(none ? null : t.avgProjected, heatProj, { what: W_PROJ, text: num(t.avgProjected) })}
         <td${none ? '' : ` data-v="${t.pointsFor}"`}>${none ? dash : pf(t.totalActual)}</td>
         ${heatCell(none ? null : t.oppAvgActual, heatOpp, { what: W_OPP, text: num(t.oppAvgActual) })}
-        <td>${sgn(t.forMinusAgainst)}</td>
+        ${heatCell(none ? null : t.forMinusAgainst, heatFA, { what: W_FA, text: sgn(t.forMinusAgainst) })}
         <td>${num(t.actualStdev)}</td>
         ${oppProjCell(t.id, heatOppProj)}
-        <td>${sgn(t.avgLuck)}</td>
+        ${heatCell(none ? null : t.avgLuck, heatLuckWk, { what: W_LUCK, text: sgn(t.avgLuck) })}
         <td>${num(t.pointsToWin)}</td>
         ${luck(t.scoreDiffLuck, t.margins && t.margins.scoreDiffLuck)}
         ${luck(t.luckScore, t.margins && t.margins.luckScore)}
@@ -475,9 +520,20 @@ function renderMainTable() {
       'Opp proj needs no games. '
     : '<strong>±</strong> = how far Close luck, Luck score and S+L could still move. ' +
       'It narrows every week. ') +
-    '<strong>Green is good for that team, red is bad</strong>, against the rest of the league ' +
-    'in that column — so on <strong>Opp Avg</strong> and <strong>Opp proj</strong> green is an ' +
-    '<em>easy</em> schedule. Full colour is one SD out, marked ▲ or ▼.';
+    // THE TWO INVERTED COLUMNS ARE THE REASON THIS CLAUSE IS ON SCREEN rather
+    // than in the toggle: green on Opp Avg is the opposite arithmetic to green
+    // on Avg, and a reader who misses it reads the softest schedule in the
+    // league as the hardest. Everything else — the four steps, where each
+    // column's colours turn in its own units — is method and is behind "What
+    // the columns mean". Naming F−A and Luck/wk separately went with it: they
+    // follow the general rule in the first clause, so saying so again was ten
+    // words spent confirming the default (node tests/text-audit.mjs stats.html).
+    // The opening clause keeps its full wording on purpose: tests/stats-weeks.mjs
+    // (another suite) asserts it verbatim as this table's key, and quietly
+    // renaming a thing two suites agree on is how a contract drifts.
+    '<strong>Green is good for that team, red is bad</strong>, down each column — but ' +
+    '<strong>Opp Avg</strong> and <strong>Opp proj</strong> are turned over: green is an ' +
+    '<em>easy</em> schedule. Ends carry ▲▼ and bold.';
 
   // The full glossary, behind "What the columns mean". "Tap or hover a heading"
   // is the lede above the table — a `title` draws nothing on iOS, and
@@ -518,10 +574,33 @@ function renderMainTable() {
     heatOpp
       ? '<strong>Opp Avg</strong> and <strong>Opp proj</strong> are the same scale turned ' +
         'over, because a big number there is a hard schedule rather than a good week: green ' +
-        'is the easier half of the league, red the harder. Every other column on this table ' +
-        'is left uncoloured on purpose — a rank is already an ordering, and a ± is a margin ' +
-        'rather than a quantity.'
+        'is the easier half of the league, red the harder.'
       : '',
+    heatFA
+      ? `<strong>F&minus;A:</strong> ${describeHeat(heatFA, {
+        what: 'the margins the other nine teams are winning or losing by',
+        high: 'winning by more', low: 'losing by more',
+      })}`
+      : '',
+    heatLuckWk
+      ? `<strong>Luck/wk:</strong> ${describeHeat(heatLuckWk, {
+        what: 'how far the other nine teams are landing from their own projections',
+        high: 'beating the projection', low: 'falling short of it',
+      })}`
+      : '',
+    // WHICH COLUMNS ARE LEFT ALONE, AND WHY. Kept as one sentence a reader can
+    // check against the table rather than a shrug: three different reasons, and
+    // every one of them is a rule in js/heat.js rather than a preference.
+    'Every other column on this table is left uncoloured on purpose. <strong>LS</strong>, ' +
+    '<strong>PS</strong> and <strong>AS</strong> are ranks, which are already an ordering. ' +
+    '<strong>Close luck</strong>, <strong>Luck score</strong> and <strong>S+L</strong> carry a ' +
+    '±, and early in a season that margin is wider than the gaps between the teams — a colour ' +
+    'would claim a ranking the ± says is not there yet. <strong>Total</strong> is the Avg ' +
+    'column multiplied by the same number of games for everyone and <strong>Skill</strong> is ' +
+    'the Proj column minus the same league average for everyone, so both would repeat a colour ' +
+    'that is already in the row. <strong>Spread</strong> and <strong>PTW</strong> have no good ' +
+    'end to point at: a low spread is consistency whether a team is good or bad, and PTW rises ' +
+    'both when your opponents score more and when your own luck runs against you.',
   ]);
 
   // Default to standings order; afterwards keep whatever the user picked.
@@ -1201,10 +1280,13 @@ function renderWeeklyTable() {
   // The visible key, and it says the one thing a reader would otherwise get
   // wrong: the colour runs DOWN a week, not across a team's season.
   const anyScale = [...weekScales.values()].some(Boolean);
+  // The four steps and the tap hint moved into `weeklyNote` with the rest of
+  // the method (`describeHeatPerColumn` there says both). What a reader gets
+  // wrong without this line is the DIRECTION of the comparison, and that has
+  // to stay in view.
   $('weeklyKey').innerHTML = anyScale
     ? '<strong>Colour is down each week, not across the season</strong>: each cell against ' +
-      'what the other nine teams did that week. Green is above that week’s average, red ' +
-      'below, in four steps; the darkest carry ▲ or ▼. Tap a number for where it stands.'
+      'what the other nine did that week, green above and red below. Ends carry ▲▼ and bold.'
     : '<strong>Nothing is coloured yet</strong> — a week needs at least two teams with a ' +
       'number in it before there is anything to compare.';
 

@@ -30,9 +30,47 @@
 // everyone who IS on a roster, priced over the same weeks, with the manager who
 // holds him and where he ranks on that manager's squad. It answers a different
 // question from the wire — not "who can I add" but "who has what" — so it is a
-// separate table rather than more rows in the first one, and it carries NO
-// colour at all: both greens above argue for a claim, and nobody here can be
-// claimed.
+// separate table rather than more rows in the first one, and it carries
+// NEITHER OF THE TWO GREENS: both of them argue for a claim, and nobody here
+// can be claimed.
+//
+// ============================================================================
+// THE RED/GREEN SCALE ON THIS PAGE, and the collision it had to be fitted round
+// ============================================================================
+//
+// Tim, 2026-09-19b: "the coloring is good right now but it needs to be added to
+// all the other places a number is referred to across the whole site." He had
+// already named the exception himself — "unless it conflicts with something
+// else we already have built" — and this page is where that exception bites
+// hardest, because it is the one page with TWO greens of its own.
+//
+// WHAT THE COLLISION ACTUALLY IS. `js/heat.js` owns a cell's BACKGROUND and its
+// WEIGHT. `td.beats` — "this free agent out-projects your own worst man that
+// week" — owns a cell's BACKGROUND, and it is written with the `background`
+// SHORTHAND at `#waiverTable tbody td.beats`, which both outranks a bare
+// `.heat-up-3` and RESETS `background-image` to none. So a scale laid on the
+// wire's week cells would be silently ERASED on exactly the cells that carry
+// the shading — the page would have made a claim it never drew. That is not a
+// styling problem to be worked around; it is the site telling us the channel is
+// already spoken for.
+//
+// SO THE SCALE GOES WHERE IT DOES NOT COLLIDE, and there are three such places:
+//
+//   1. THE WIRE'S Avg COLUMN. Neither green is ever on it — both are week cells
+//      — and Avg is the column that orders the table into an answer. Group: the
+//      other free agents AT HIS POSITION. See `wireAvgScales`.
+//   2. THE TAKEN TABLE'S Avg COLUMN, same group over the rostered pool.
+//   3. THE TAKEN TABLE'S WEEK COLUMNS, one scale per position and week.
+//
+// THE WIRE'S WEEK CELLS DELIBERATELY GET NOTHING, and that is the answer to
+// "why is half this page coloured". Those cells already answer two questions at
+// once — is he worth starting at all (green TEXT, an absolute bar), and does he
+// beat the man you would drop (green SHADE, a comparison with your own squad) —
+// and both are about the CLAIM. A third cue saying "and he is a good free agent
+// compared with the other free agents" would be a third meaning in a cell three
+// characters wide, and it would have to take the background off one of the two
+// cues that are already there. The Avg column answers that third question one
+// column to the left, where nothing else is competing for it.
 //
 // That table needs the weekly rosters whether or not a team is set as you, so
 // the roster read is now unconditional and every week costs TWO requests. The
@@ -48,6 +86,20 @@ import * as espn from './espn.js';
 // and the analysis and Trade pages cannot answer it differently.
 import { zeroKind, byeWeekOf, outMark } from './player-card.js';
 import { enableSort, resort } from './sortable.js';
+// THE ONE RED/GREEN SCALE (js/heat.js, rule 14). Imported for the two Avg
+// columns and the Taken table's week columns — see the block at the top of this
+// file for why the wire's own week cells are deliberately left to the two
+// greens. `describeHeatPerColumn` rather than `describeHeat` because both
+// tables here carry MANY scales, one per position, so there is no single pair
+// of thresholds to put in a sentence; the per-position pairs are printed as a
+// strip inside each table's "How to read this table" toggle instead, which is
+// the same promise kept in points. THE STRIP IS IN THE TOGGLE AND NOT UNDER THE
+// TABLE because it is method, not warning: `node tests/text-audit.mjs` scored
+// this page at 299 visible words with it on screen against 106 without, and
+// HANDOFF's panel shape is a small visible key over a full method behind the
+// toggle. Deleting it was never an option — Tim checks numbers against ESPN by
+// hand, and a threshold he cannot read is a colour he cannot check.
+import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn } from './heat.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
 // The ONE definition of which weeks are the playoffs — the league's last
@@ -1420,6 +1472,124 @@ function isStartable(v, position) {
   return typeof bar === 'number' && typeof v === 'number' && v > bar;
 }
 
+// ====================================================================
+// THE RED/GREEN SCALE'S COMPARISON GROUPS ON THIS PAGE
+// ====================================================================
+//
+// THE GROUP IS A POSITION, ALWAYS, and never a whole table. A column of this
+// page runs straight through every position — a quarterback's 18 sits two rows
+// above a kicker's 7 — so one scale down a column would paint every kicker red
+// for being a kicker, which is the exact failure rule 14 forbids. So every
+// scale here is built per position and a cell is only ever measured against
+// men who play the same one.
+//
+// WHICH POOL, and this is the decision worth arguing rather than the
+// arithmetic. Three groups were possible for a free agent's number:
+//
+//   - THE WIRE AT HIS POSITION — the other free agents you could claim. CHOSEN.
+//     The question this table exists to answer is "who should I claim", and a
+//     free agent's 9.2 only means something against the other men you could
+//     claim instead. Green here reads "the best of what is actually available",
+//     which is a claim the reader can act on.
+//   - THE WHOLE POSITION POOL, wire and rosters together. REJECTED, and not
+//     narrowly: free agents are by definition the men nobody wanted, so almost
+//     every wire cell would come out red. That is true and useless — a table
+//     that is red from top to bottom teaches a reader to stop looking at the
+//     colour, which costs the cue everywhere else it is used.
+//   - THE WEEK. REJECTED for the Avg column, because Avg spans several weeks
+//     and there is no single week to compare it in. It IS the group used on the
+//     Taken table's week columns, where each column really is one week.
+//
+// THE POOL IS ALWAYS THE UNFILTERED ONE. Every scale is built before the
+// position buttons are applied, so pressing RB — or FLEX, which is three
+// positions at once — repaints the table and changes NOT ONE CELL'S COLOUR.
+// That is the same rule the two greens already follow (`hot-check.mjs` asserts
+// it for them), and for the same reason: a colour that moved when you filtered
+// would be a colour about the filter rather than about the player.
+
+/**
+ * Whether a week's value is a PROJECTION or one of the states.
+ *
+ * A zero is never a claim about how good a man is — it is his bye, a man ESPN
+ * has ruled out, or ESPN saying nothing will happen — and the cell already
+ * spends its own treatment saying which. Leaving zeros in would also break the
+ * arithmetic: a position-week whose values cluster at 0 and at 12 is bimodal,
+ * and a couple of byes roughly double the standard deviation, which drags every
+ * real number back inside the middle band and switches the colour off exactly
+ * where it was wanted. The same rule, for the same two reasons, as the
+ * `A week` grid on the Analysis page.
+ */
+const measurable = (v) => typeof v === 'number' && v !== 0;
+
+/**
+ * position -> a scale over one number per row, for the rows at that position.
+ *
+ * @param {Array} rows the UNFILTERED rows (see the block above)
+ * @param {Function} pick row -> the number this scale is over
+ */
+function scalesByPosition(rows, pick) {
+  const byPos = new Map();
+  for (const r of rows) {
+    if (!byPos.has(r.p.position)) byPos.set(r.p.position, []);
+    byPos.get(r.p.position).push(pick(r));
+  }
+  return new Map([...byPos].map(([pos, vals]) => [pos, heatScale(vals)]));
+}
+
+/**
+ * position -> one scale per WEEK COLUMN, for the Taken table's week cells.
+ *
+ * Two facts at once, and both are needed: a tight end's week 9 is measured
+ * against the other tight ends' week 9 and against nothing else. Per position
+ * because a kicker is not a quarterback; per week because a heavy bye week is
+ * not a bad week for the man playing in it, and one scale across a row would
+ * paint the whole league's byes red.
+ */
+function weekScalesByPosition(rows, weeks) {
+  const byPos = new Map();
+  for (const r of rows) {
+    if (!byPos.has(r.p.position)) byPos.set(r.p.position, weeks.map(() => []));
+    const cols = byPos.get(r.p.position);
+    r.values.forEach((v, i) => { if (measurable(v) && i < cols.length) cols[i].push(v); });
+  }
+  return new Map([...byPos].map(([pos, cols]) => [pos, cols.map((vals) => heatScale(vals))]));
+}
+
+/**
+ * The points at which each position reaches full colour, as a strip of pairs.
+ *
+ * IN POINTS, because that is what makes a colour checkable rather than
+ * decorative — a reader looks at a green cell, reads the pair off this strip and
+ * decides for himself whether the cell deserves it. Six pairs is short enough
+ * to print; the Taken table's WEEK scales are six per week and are not, so
+ * those are left to each cell's own `title`, exactly as the Stats page's week
+ * grid does it.
+ *
+ * IT IS DRAWN INSIDE "How to read this table" AND NOT UNDER THE TABLE. That is
+ * the 2026-09-19c change and it is a placement, never a deletion: six pairs
+ * plus the sentence carrying them measured 88 visible words under the wire and
+ * 105 under the taken table, which `node tests/text-audit.mjs` scored as this
+ * page going from 106 to 299 words of visible prose. HANDOFF's panel shape puts
+ * the full method behind the toggle and keeps a small key on screen, so the
+ * strip moved into the toggle beside the prose that explains it and
+ * `renderWireHeatKey` / `renderTakenHeatKey` kept the one short sentence.
+ */
+function heatBandsHtml(scales) {
+  const drawn = [...scales.entries()].filter(([, s]) => s);
+  if (!drawn.length) return '';
+  const round1 = (v) => Math.round(v * 10) / 10;
+  return POSITIONS
+    .filter((pos) => scales.has(pos))
+    .map((pos) => {
+      const s = scales.get(pos);
+      if (!s) return `<strong>${esc(pos)}</strong> &mdash;`;
+      const edge = s.edges[s.edges.length - 1];
+      return `<strong>${esc(pos)}</strong> ${fmt(round1(s.mean - edge * s.sd))} / ` +
+        `${fmt(round1(s.mean + edge * s.sd))}`;
+    })
+    .join(' &middot; ');
+}
+
 /**
  * One week's cell.
  *
@@ -1439,8 +1609,15 @@ function isStartable(v, position) {
  *   the green shade  he out-projects the man you would drop, that week
  *
  * So they are a colour AND a treatment apart, not two shades of one colour.
+ *
+ * `scale` is the shared red/green scale for THIS position in THIS week, and it
+ * is passed only by the Taken table. The wire's week cells never get one: see
+ * the block at the top of this file — `td.beats` owns the background with a
+ * `background` shorthand of higher specificity, so a tint here would be erased
+ * rather than composed, and the two greens already answer the claim question
+ * these cells exist for.
  */
-function cell(v, week, p, roster = false, yours = null) {
+function cell(v, week, p, roster = false, yours = null, scale = null, what = '') {
   const { name, position } = p;
   if (v === undefined) {
     // Three ways to have no number, and a reader has to be able to tell them
@@ -1501,7 +1678,10 @@ function cell(v, week, p, roster = false, yours = null) {
   // zero is the week the claim would cover.
   const hot = !roster && isStartable(v, position);
   const beats = !roster && yours !== null && typeof yours.value === 'number' && v > yours.value;
-  if (!hot && !beats) return `<td data-v="${v}">${fmt(v)}</td>`;
+  // The scale, on the Taken table's cells only. `measurable` has already been
+  // satisfied by the returns above — every zero left before this line.
+  const heat = heatOf(v, scale, { what });
+  if (!hot && !beats && !heat) return `<td data-v="${v}">${fmt(v)}</td>`;
 
   const why = [`${fmt(v)} projected in week ${week}`];
   if (hot) why.push(`over the ${STARTABLE[position]} that makes a ${esc(position)} worth starting`);
@@ -1512,8 +1692,10 @@ function cell(v, week, p, roster = false, yours = null) {
     );
   }
 
-  const cls = [hot ? 'hot' : '', beats ? 'beats' : ''].filter(Boolean).join(' ');
-  return `<td class="${cls}" data-v="${v}" title="${why.join(', ')}.">${fmt(v)}</td>`;
+  const cls = [hot ? 'hot' : '', beats ? 'beats' : '', heat ? heat.cls : '']
+    .filter(Boolean).join(' ');
+  return `<td class="${cls}" data-v="${v}" ` +
+    `title="${why.join(', ')}.${heat ? ` ${esc(heat.words)}` : ''}">${fmt(v)}${heatMarkHtml(heat)}</td>`;
 }
 
 /**
@@ -1596,13 +1778,42 @@ function waiverTag(p) {
   return ` <span class="tag wv" title="${esc(why)}">W${day ? ` · ${day}` : ''}</span>`;
 }
 
-/** The three columns after the name, shared by both kinds of row. */
-function identityCells({ p, avg }) {
+/**
+ * The three columns after the name, shared by both kinds of row.
+ *
+ * THE Avg CELL IS WHERE THE RED/GREEN SCALE LIVES ON THIS PAGE. It is the
+ * column that orders the table into an answer, neither green is ever on it, and
+ * it has no link inside it — so a `title` is the right place for the words and
+ * js/touch-titles.js makes that a tap on a phone.
+ *
+ * ONE CHANNEL IS DELIBERATELY NOT USED HERE: the weight. `td.avg` in
+ * waivers.html is 650 because this column is the one that orders the table, and
+ * that rule outranks `.heat-up-1`. Left as it is rather than fought: the
+ * scale's steps run 500 / 550 / 620 / 700, so letting them through would draw a
+ * slightly-above-average cell LIGHTER than an exactly-average one, which is a
+ * worse cue than none. The other three channels all hold — the tint, the ▲/▼ at
+ * the ends, and the sentence on the cell.
+ */
+function identityCells({ p, avg }, heat = null, says = '') {
   return `<td class="left" data-v="${POS_ORDER.get(p.position) ?? 9}">${esc(p.position)}</td>
       <td class="left">${esc(p.proTeam)}</td>
-      <td class="avg grouped"${avg === null ? '' : ` data-v="${avg}"`}>${
-        avg === null ? dash : fmt(avg)
-      }</td>`;
+      ${avgCellHtml(avg, heat, says)}`;
+}
+
+/**
+ * The Avg cell itself, and there is ONE of it.
+ *
+ * Both tables draw this column and both put the scale on it, so a second
+ * spelling would be two chances for the wire and the Taken table to disagree
+ * about what a green Avg means — the same reason `cell()` is shared between
+ * them rather than copied.
+ */
+function avgCellHtml(avg, heat, says) {
+  const title = `${says}${says && heat ? ' ' : ''}${heat ? heat.words : ''}`;
+  return `<td class="avg grouped${heat ? ` ${heat.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`}` +
+    `${title ? ` title="${esc(title)}"` : ''}>${
+      avg === null ? dash : `${fmt(avg)}${heatMarkHtml(heat)}`
+    }</td>`;
 }
 
 /**
@@ -1613,7 +1824,7 @@ function identityCells({ p, avg }) {
  * UNFILTERED set, so the shading means the same thing whichever position
  * button is pressed.
  */
-function wireRow(row, weeks, mine) {
+function wireRow(row, weeks, mine, avgScales) {
   const { p, values } = row;
   const status = availability(p.injuryStatus);
   const yours = mine.get(p.position) || null;
@@ -1622,11 +1833,18 @@ function wireRow(row, weeks, mine) {
     ? ''
     : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`;
 
+  const heat = heatOf(row.avg, avgScales.get(p.position), {
+    what: `a free-agent ${p.position} over ${weekRange(weeks)}`,
+  });
+  const says = row.avg === null
+    ? ''
+    : `${p.name} averages ${fmt(row.avg)} over ${weekRange(weeks)}.`;
+
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${
         playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row and show every ` +
           `remaining week`)}${injuryTag(status)}${waiverTag(p)}</td>
-      ${identityCells(row)}
+      ${identityCells(row, heat, says)}
       ${values
         .map((v, i) =>
           withPo(cell(v, weeks[i], p, false,
@@ -1638,19 +1856,37 @@ function wireRow(row, weeks, mine) {
 /**
  * The man you would drop. Marked, not dimmed: an OUT free agent is not worth
  * reading first, but your own man being out is the whole reason to look.
+ *
+ * HIS Avg IS COLOURED AGAINST THE WIRE, and he is NOT in the distribution that
+ * sets it. That is deliberate and is the one comparison this row exists to
+ * make: the whole point of dropping your own worst man into the same tbody is
+ * that he can be read against the men who might replace him, so measuring him
+ * against them is the colour saying out loud what the row is for. A deep red
+ * "Your RB5" under a green wire is "claim somebody", which is the answer this
+ * page is here to give. He stays out of the distribution because he is not
+ * claimable: the scale describes what is ON the wire, and folding a rostered
+ * man into it would move the thresholds every other cell is measured against.
  */
-function mineRow(row, weeks) {
+function mineRow(row, weeks, avgScales) {
   const { p, values, label, depth } = row;
   const why =
     `${esc(p.name)} — on your roster, not on the wire. Your lowest-averaging ` +
     `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there.`;
+
+  const heat = heatOf(row.avg, avgScales.get(p.position), {
+    what: `a free-agent ${p.position} over ${weekRange(weeks)}`,
+  });
+  const says = row.avg === null
+    ? ''
+    : `${p.name} averages ${fmt(row.avg)} over ${weekRange(weeks)}. He is on your roster, so ` +
+      `he is measured against the free agents rather than counted among them.`;
 
   return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
         `<span class="mine-tag">${esc(label)}</span> ` +
         `${playerLink(p, esc(p.name), why)}` +
         `${injuryTag(availability(p.injuryStatus))}</td>
-      ${identityCells(row)}
+      ${identityCells(row, heat, says)}
       ${values.map((v, i) => withPo(cell(v, weeks[i], p, true), weeks[i], weeks)).join('')}
     </tr>`;
 }
@@ -1669,6 +1905,13 @@ function renderTable(weeks) {
   const mine = mineAll.filter(matchesFilter);
   const cols = weeks.length + 4;
 
+  // THE Avg COLUMN'S SCALES, from `all` and NOT from `available`: the filter
+  // must not be able to move a colour. See the long block above
+  // `scalesByPosition` for why the group is the wire at his position and not
+  // the whole pool.
+  const avgScales = scalesByPosition(all, (r) => r.avg);
+  renderWireHeatKey(avgScales, available.length + mine.length > 0);
+
   if (!available.length && !mine.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(emptyReason(all.length))}</td></tr>`;
     resort(table);
@@ -1679,11 +1922,48 @@ function renderTable(weeks) {
   // players who might replace him, which is the entire point of the feature:
   // sort by Avg and everyone above your row is an upgrade.
   tbody.innerHTML =
-    available.map((r) => wireRow(r, weeks, byPosition)).join('') +
-    mine.map((r) => mineRow(r, weeks)).join('');
+    available.map((r) => wireRow(r, weeks, byPosition, avgScales)).join('') +
+    mine.map((r) => mineRow(r, weeks, avgScales)).join('');
 
   // Keep whatever sort the user picked when the row set changes.
   resort(table);
+}
+
+/**
+ * The wire's colour key, in two layers.
+ *
+ * ON SCREEN, one sentence: the group the colour compares (the other free agents
+ * at that position — nobody would assume that, and it is the whole reason a
+ * green here means "best of what you can actually have"), scoped to Avg so the
+ * week columns are not read as unfinished, and the two cues that survive a
+ * reader who cannot separate the hues.
+ *
+ * BEHIND "How to read this table", the thresholds in points. They are not
+ * optional — they are what makes a cell checkable by hand — but the sentence
+ * carrying them was 88 of this page's 299 visible words on 2026-09-19c, which
+ * is what `node tests/text-audit.mjs` is for. See `heatBandsHtml`.
+ *
+ * The rest of the argument — why the pool is the wire and not the league, why
+ * your own row is measured against them without being counted among them, why
+ * the week cells keep the two greens instead — is in `renderNote`, where the
+ * method has always lived.
+ */
+function renderWireHeatKey(avgScales, anyRows) {
+  const el = $('waiverHeatKey');
+  const bandsEl = $('waiverHeatBands');
+  if (!el) return;
+  const bands = heatBandsHtml(avgScales);
+  const drawn = anyRows && bands;
+  el.innerHTML = !drawn
+    ? ''
+    : `<strong>Avg is coloured against the other free agents at that position</strong>; ends ` +
+      `carry an arrow and heavier type.`;
+  if (bandsEl) {
+    bandsEl.innerHTML = !drawn
+      ? ''
+      : `<strong>Avg, full colour at (red / green):</strong> ${bands}. Your own player’s row is ` +
+        `measured against those same free agents and is not counted among them.`;
+  }
 }
 
 /** An empty table says why it is empty and what to do about it. */
@@ -1754,10 +2034,11 @@ function renderTakenHead(weeks) {
  * — the opposite of sinking. The cells whose value really is absent — his Avg,
  * and any week ESPN had no number for — still carry no `data-v` at all.
  */
-function takenRow(row, weeks) {
+function takenRow(row, weeks, avgScales, weekScales) {
   const { p, values, owner, rank } = row;
   const status = availability(p.injuryStatus);
   const posOrder = POS_ORDER.get(p.position) ?? 9;
+  const cols = weekScales.get(p.position) || [];
 
   const posTitle = rank === null
     ? `ESPN carried no projection for ${esc(p.name)} over ${weekRange(weeks)}, so there is ` +
@@ -1774,10 +2055,16 @@ function takenRow(row, weeks) {
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
       <td class="left">${esc(p.proTeam)}</td>
       <td class="left owner" data-v="${esc(owner.toLowerCase())}" title="${esc(owner)}">${esc(owner)}</td>
-      <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`}>${
-        row.avg === null ? dash : fmt(row.avg)
-      }</td>
-      ${values.map((v, i) => withPo(cell(v, weeks[i], p, true), weeks[i], weeks)).join('')}
+      ${avgCellHtml(
+        row.avg,
+        heatOf(row.avg, avgScales.get(p.position), {
+          what: `a rostered ${p.position} over ${weekRange(weeks)}`,
+        }),
+        row.avg === null ? '' : `${p.name} averages ${fmt(row.avg)} over ${weekRange(weeks)}.`
+      )}
+      ${values.map((v, i) => withPo(
+        cell(v, weeks[i], p, true, null, cols[i] || null,
+          `a ${p.position} in week ${weeks[i]}, across the league`), weeks[i], weeks)).join('')}
     </tr>`;
 }
 
@@ -1790,6 +2077,12 @@ function renderTaken(weeks) {
   const shown = all.filter(matchesTaken);
   const cols = weeks.length + 5;
 
+  // Built from `all`, never from `shown`: this table's own position buttons
+  // must move which rows you see and nothing about their colour.
+  const avgScales = scalesByPosition(all, (r) => r.avg);
+  const weekScales = weekScalesByPosition(all, weeks);
+  renderTakenHeatKey(avgScales, shown.length > 0);
+
   if (!shown.length) {
     tbody.innerHTML =
       `<tr class="empty-row"><td colspan="${cols}">${esc(takenEmptyReason(all.length))}</td></tr>`;
@@ -1797,8 +2090,54 @@ function renderTaken(weeks) {
     return;
   }
 
-  tbody.innerHTML = shown.map((r) => takenRow(r, weeks)).join('');
+  tbody.innerHTML = shown.map((r) => takenRow(r, weeks, avgScales, weekScales)).join('');
   resort(table);
+}
+
+/**
+ * The visible key under the Taken table.
+ *
+ * WHY THIS TABLE TAKES THE SCALE AT ALL, when it has carried no colour since it
+ * was built: the two greens it refuses are CLAIM cues — worth starting, beats
+ * your man — and nobody here can be claimed, which is still true and still the
+ * reason they are absent. The red/green scale answers a different question
+ * entirely, and one this table is the only place on the site that can answer:
+ * of everyone in the league holding this position, how good is this one. So
+ * there is no collision to fit round here, which is exactly why it is the
+ * natural home for the scale on this page.
+ *
+ * TWO LAYERS, since 2026-09-19c. On screen: what the colour compares, and the
+ * two cues that do not depend on telling red from green. Behind the toggle: the
+ * Avg thresholds in points, six pairs, which is the channel that makes a cell
+ * checkable by hand. The sentence that carried both was 105 of this page's 299
+ * visible words — `node tests/text-audit.mjs` — and HANDOFF's panel shape wants
+ * the method behind the toggle, so that is where the numbers went.
+ *
+ * "Neither claim green is here" is not repeated: the legend above the table
+ * carries that chip, which is where it belongs and where it already was.
+ *
+ * The WEEK columns are six scales PER WEEK and cannot be printed anywhere
+ * without burying the table, so they are left to each cell's own `title` — the
+ * same choice the Stats page's week grid makes, and for the same reason.
+ */
+function renderTakenHeatKey(avgScales, anyRows) {
+  const el = $('takenHeatKey');
+  const bandsEl = $('takenHeatBands');
+  if (!el) return;
+  const bands = heatBandsHtml(avgScales);
+  const drawn = anyRows && bands;
+  el.innerHTML = !drawn
+    ? ''
+    : `<strong>Colour compares men at the same position, week by week</strong>; ends carry an ` +
+      `arrow and heavier type.`;
+  if (bandsEl) {
+    bandsEl.innerHTML = !drawn
+      ? ''
+      : `<strong>Avg, full colour at (red / green):</strong> ${bands}. A quarterback is never ` +
+        `measured against a kicker, and each week column only with that same week, so a heavy ` +
+        `bye week is not a red stripe. A Bye or a 0.0 is never coloured. Tap any number for ` +
+        `where it stands.`;
+  }
 }
 
 /** An empty taken table says why it is empty and what to do about it. */
@@ -1912,11 +2251,28 @@ function renderTakenNote(weeks) {
     'reason, and a blank Avg carries no sort key at all.'
   );
 
+  // THE CLAIM GREENS, AND WHY NEITHER IS HERE. The lead scopes the sentence to
+  // the two greens, which is what it was always about: this table has carried
+  // the shared red/green scale since 2026-09-19b and the exception is named in
+  // the same breath so the paragraph cannot be read as "no colour at all".
   parts.push(
-    lead('No colours') +
+    lead('Neither claim green') +
     'Nothing here is highlighted, on purpose: both greens in the table above argue for a waiver ' +
     'claim — worth starting at all, and better than the man the claim would drop — and nobody on ' +
-    'this list can be claimed. Colouring them would be answering a question that does not arise.'
+    'this list can be claimed. Colouring them would be answering a question that does not arise. ' +
+    'The red/green scale below is a different thing and asks a different question.'
+  );
+
+  parts.push(
+    lead('The red/green scale') +
+    describeHeatPerColumn({ group: 'position', what: 'everyone else in the league at that position' }) +
+    ' Avg is measured over the weeks shown; a week cell is measured against those same men ' +
+    '<strong>in that same week</strong>, so a heavy bye week is not a red stripe down the table. ' +
+    'A <strong>Bye</strong>, a ruled-out <strong>0.0</strong> and a blank are never coloured and ' +
+    'never counted: none of them is a claim about how good the man is, and a couple of zeros in a ' +
+    'column would roughly double its spread and switch the colour off for everybody else. ' +
+    'Pressing a position button changes which rows you see and <strong>not one cell’s ' +
+    'colour</strong> — every scale is built from the whole league before the filter is applied.'
   );
 
   parts.push(
@@ -2172,6 +2528,35 @@ function renderNote(weeks) {
       'neither.'
     );
   }
+
+  // THE THIRD CUE, AND WHERE IT IS NOT (Tim, 2026-09-19b: the scale "needs to
+  // be added to all the other places a number is referred to"). It goes after
+  // the two greens deliberately: a reader has to know what already owns those
+  // week cells before being told what the Avg column's colour is instead.
+  parts.push(
+    lead('The red/green scale, on Avg') +
+    describeHeatPerColumn({ group: 'position', what: 'the other free agents' }) +
+    ' Green reads “the best of what is actually available at this position”, which is the question ' +
+    'this table exists to answer. It is deliberately not measured against the whole league at ' +
+    'that position: free agents are by definition the men nobody wanted, so almost every cell ' +
+    'would come out red, which is true and useless. <strong>Your own player’s row is measured ' +
+    'against the same free agents and is not counted among them</strong> — a deep red “Your RB5” ' +
+    'under a green wire is the whole argument for a claim, in one column. The points each ' +
+    'position reaches full colour at are at the foot of this note; tap or hover any Avg for where ' +
+    'it stands. Pressing a position button — FLEX included — changes which rows you see and ' +
+    '<strong>not one cell’s colour</strong>, because every scale is built from the whole wire ' +
+    'before the filter is applied.'
+  );
+
+  parts.push(
+    lead('And not on the week columns') +
+    'The week cells are deliberately left off that scale. They already answer two questions at ' +
+    'once — worth starting at all, and better than the man you would drop — and both are about ' +
+    'the <em>claim</em>, which is what this table is for. A third cue in a cell three characters ' +
+    'wide would have to take the background off one of them, since the green shading and the ' +
+    'scale are the same channel. The Taken players table below has no claim cues in it at all, ' +
+    'so its week columns <em>are</em> on the scale, measured per position and per week.'
+  );
 
   parts.push(...comparisonNote(weeks, status));
 
