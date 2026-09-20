@@ -716,6 +716,44 @@ th.po-start, td.po-start,
   border: 0;
 }
 
+/* THE PLAYER CARD'S KEY, WHICH IS HEARD AND NEVER SEEN.
+ *
+ * Tim, 2026-09-20: "Also in the preview, I want all the words beneath the chart
+ * to dissapear-they're not needed." All four blocks that used to sit under the
+ * chart — the blank-Act note, the PO note, what bold means / where the heavy
+ * line falls / how to read the colour, and the glossary of marks — are still
+ * built, still correct and still in the markup, inside this one box. They were
+ * 164 of the hover card's 314 pixels at 1500px and 253 of the sheet's 562 at
+ * 390px. The argument, and what it costs a reader who cannot separate red from
+ * green, is at the top of js/player-card.js.
+ *
+ * IT REPEATS `.sr-only` RATHER THAN RELYING ON IT, and that is the whole reason
+ * this rule exists as well as the class. `.tc-note` and `.tc-legend` are styled
+ * in analysis.html's and trade.html's own <style> blocks — a page's inline
+ * styles come AFTER this stylesheet, so at equal specificity they win — and one
+ * of the things they set is `margin-top: 7px`. A card that had lost its words
+ * and kept four 7px margins would be a different defect from the one Tim
+ * reported, and would be invisible to every suite. `.tipcard .tc-key` is 0,2,0
+ * and beats a page-local `.tc-note` at 0,1,0; `position: absolute` then takes
+ * the whole box out of flow, so nothing inside it — margin, padding, border or
+ * line-height — can add a pixel to the card whatever a page says about it.
+ *
+ * Do not give it a `title`: a title anywhere in this card has the browser draw
+ * a second tooltip over the card, which is the one thing the card exists to
+ * avoid. sr-only and aria-label draw nothing, which is why they are what is
+ * used here. */
+.tipcard .tc-key {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ------------------------------------------------------------------- charts */
 
 .chart { width: 100%; margin-top: 4px; }

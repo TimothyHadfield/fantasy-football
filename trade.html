@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -429,7 +429,7 @@
 
   /* ------------------------------------------------------- custom trades */
   .cu-pick { margin-bottom: 12px; }
-  .cu-head { margin: 0 0 6px; font-size: 12px; color: var(--dim); font-weight: 600; }
+  .cu-head { margin: 0 0 6px; font-size: 12px; color: var(--cu-sub); font-weight: 600; }
   /* THE WHOLE ROSTER, AT FULL HEIGHT, AND NO SCROLLER (Tim, 2026-09-19: "just
      show all 16-17 positions, don't make a scrolling space so the view is
      limited").
@@ -442,6 +442,32 @@
      to the list he has just read. A box that scrolls inside a page that scrolls
      is also the thing HANDOFF's phone notes keep coming back to — a thumb gets
      caught in the inner one. */
+  /* BRIGHTER THAN --dim, AND ONE TOKEN RATHER THAN SIX HARD-CODED HEXES
+     (Tim, 2026-09-20: "the numbers and names and everything is dimmed down so
+     it's hard to read. Brighten it up so it's easier.").
+
+     He is right, and the cause is that this panel had reached for `--dim`
+     (#8b93a1) for EVERYTHING that was not the player's name — the slot, the
+     position, the per-week value, the column heading, the sub-figure under each
+     gain. `--dim` is the site's token for "this is secondary", and on a row
+     where four of the five cells wear it, nothing is secondary to anything; it
+     just reads as a greyed-out list. That is worse here than elsewhere because
+     this panel is the one place on the site a reader is picking men OUT of a
+     list rather than reading a table.
+
+     So: `--cu-sub` is a step up from `--dim` for the genuinely secondary cells
+     (slot, position, the sub-figures), and the VALUE — which is the number the
+     whole panel is about — goes to full `--text` alongside the name. Contrast
+     against `--panel-2` goes from about 4.4:1 to about 7:1 for the secondary
+     cells and about 12:1 for the value, so the AA floor is cleared with room
+     rather than scraped.
+
+     It is a local token and not a change to `--dim`, deliberately: `--dim` is
+     on every page of the site and a global brightening is a different decision
+     from the one he asked for. If he wants the whole site lifted, this is the
+     value to promote into css/app.css. */
+  #customPanel { --cu-sub: #b6bdc9; }
+
   .cu-roster {
     border: 1px solid var(--line);
     border-radius: var(--r-3, 6px);
@@ -481,7 +507,7 @@
      when the league starts more than one of it). */
   .cu-man .sl {
     flex: 0 0 30px;
-    color: var(--dim);
+    color: var(--cu-sub);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .02em;
@@ -508,10 +534,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .cu-man .pos { color: var(--dim); font-size: 11px; flex: 0 0 auto; }
+  .cu-man .pos { color: var(--cu-sub); font-size: 11px; flex: 0 0 auto; }
   .cu-man .pv {
     font-variant-numeric: tabular-nums;
-    color: var(--dim);
+    /* FULL --text, not a dimmed variant: this is the number the whole panel is
+       about, and it was the single worst casualty of the old greying. */
+    color: var(--text);
     flex: 0 0 auto;
     /* A fixed width so the two columns of numbers line up with each other down
        the middle of the panel, which is the whole point of mirroring them. */
@@ -539,7 +567,7 @@
      are nudged across by the width the box would have taken. */
   .cu-man.empty-slot { cursor: default; padding-left: 33px; }
   .cu-man.empty-slot.mirror { padding-left: 9px; padding-right: 33px; }
-  .cu-man .muted { color: var(--line-2); font-style: italic; }
+  .cu-man .muted { color: var(--dim); font-style: italic; }
 
   /* A SUGGESTED MAN — one who, added to the deal, brings the two squads' gains
      closer together.
@@ -572,7 +600,7 @@
      because it is a different fact, and the words say it either way — this is
      the "fleece" leeway Tim asked for and it is labelled, never filtered. */
   .cu-sug-word.fleece { color: var(--warn); }
-  .cu-sug-num { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .cu-sug-num { color: var(--cu-sub); font-variant-numeric: tabular-nums; }
 
   /* THE BUILDER AND ITS BREAKDOWN, SIDE BY SIDE — AND ONLY SIDE BY SIDE.
      Narrower than 900px of window the breakdown is not in the document at all
@@ -616,7 +644,7 @@
   /* "You" is a label now, not a picker. It looks like the other controls' value
      without pretending to be one you can operate. */
   .cu-you-box { min-width: 240px; max-width: 100%; }
-  .cu-you { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--dim); }
+  .cu-you { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--cu-sub); }
   .cu-you strong { color: var(--text); font-size: 14px; }
 
   /* The saved table is drawn by the finder's own row builder, so it inherits
@@ -670,19 +698,22 @@
   /* A column, so the two gains line up with each other even when one squad
      carries a man more than the other. The roster takes the slack; without
      this the two big numbers sit at different heights and stop reading as a
-     pair. */
+     pair. Both gains are now at the TOP of their columns (see the markup), so
+     they line up with each other for free — the roster taking the slack is
+     what keeps the two columns the same height underneath them. */
   .cu-side { display: flex; flex-direction: column; }
   .cu-side .cu-roster { flex: 1 0 auto; }
 
-  /* WHAT THIS SIDE GAINS, under this side. Per week big, the rest-of-season
-     total small underneath — Tim's display rule, and the same order every
-     other figure on this page follows. The sign is always printed, so the
-     colour is a second cue and never the only one. */
+  /* WHAT THIS SIDE GAINS, ABOVE this side's roster (Tim, 2026-09-20). Per week
+     big, the rest-of-season total small underneath — Tim's display rule, and
+     the same order every other figure on this page follows. The sign is always
+     printed, so the colour is a second cue and never the only one. */
   .cu-gain {
-    margin: 8px 0 0;
+    margin: 0 0 8px;
     min-height: 44px;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     gap: 1px;
   }
   .cu-gain .cu-num {
@@ -691,14 +722,14 @@
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
   }
-  .cu-gain .cu-num .unit { font-size: 13px; font-weight: 600; color: var(--dim); margin-left: 2px; }
+  .cu-gain .cu-num .unit { font-size: 13px; font-weight: 600; color: var(--cu-sub); margin-left: 2px; }
   /* `--accent`, which is the green every other "this went up" on this page
      already uses (the pop-up's delta column, the week breakdown). A second
      green would be a second meaning nobody declared. */
   .cu-gain .cu-num.up { color: var(--accent); }
   .cu-gain .cu-num.down { color: var(--err); }
   .cu-gain .cu-num.flat { color: var(--dim); }
-  .cu-gain .cu-sub { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .cu-gain .cu-sub { font-size: 11px; color: var(--cu-sub); font-variant-numeric: tabular-nums; }
 
   /* Reserved, so ticking a man never moves the table under the pointer. */
   .cu-preview { min-height: 34px; margin: 12px 0 4px; font-size: 13px; line-height: 1.45; }
@@ -1331,16 +1362,32 @@
            value · pos · name · slot so the two value columns face each other
            down the middle, which is the comparison being made when a deal is
            built. -->
+      <!-- THE GAIN SITS ABOVE ITS OWN ROSTER (Tim, 2026-09-20: "right now in the
+           custom trade section the overall +/week is at the bottom of the
+           players selection. Put it at the top.").
+
+           It was below, on the reasoning that a reader scrolling the page
+           arrives at the number after the list it belongs to. That is true and
+           it is the wrong priority: the number is the ANSWER and the roster is
+           the input, and a sixteen-man list is tall enough on a phone that the
+           answer was off the bottom of the screen while he was ticking. Now a
+           tick changes a figure he can already see. The heading and the figure
+           are one block, so the column still says whose number it is without
+           the words having to.
+
+           `.cu-gain`'s reserved height still matters and matters MORE here: an
+           empty block that fills on the first tick would push both rosters down
+           under the finger doing the ticking. -->
       <div class="panel-row cu-lists" style="--col-min: 232px">
         <div class="cu-side">
           <p class="cu-head" id="cuHeadA">Sends</p>
-          <div class="cu-roster" id="cuListA"></div>
           <p class="cu-gain" id="cuGainA" aria-live="polite"></p>
+          <div class="cu-roster" id="cuListA"></div>
         </div>
         <div class="cu-side">
           <p class="cu-head" id="cuHeadB">Sends</p>
-          <div class="cu-roster" id="cuListB"></div>
           <p class="cu-gain" id="cuGainB" aria-live="polite"></p>
+          <div class="cu-roster" id="cuListB"></div>
         </div>
       </div>
       <!-- The live deal, week by week. The SAME table and the same slot-by-slot

@@ -606,5 +606,63 @@ eq(waiting.scale, null, 'and no scale');
 ok(/Not read yet/.test(waiting.pending), 'and says so in words', waiting.pending);
 eq(weekRun({ weeks: [] }), null, 'and no weeks at all is still null, which the card handles');
 
+// ===========================================================================
+// THE WORDS ARE STILL BUILT, THOUGH THE CARD NO LONGER DRAWS THEM
+// ===========================================================================
+//
+// Tim, 2026-09-20: "Also in the preview, I want all the words beneath the chart
+// to dissapear-they're not needed." Four blocks came off the card — the
+// blank-Act note, the PO note, `run.notes` and `run.legend` — and they were 164
+// of the hover card's 314 pixels at 1500px and 253 of the sheet's 562 at 390px.
+//
+// THEY WERE HIDDEN, NOT DELETED. `js/player-card.js` renders the lot into one
+// `sr-only` block, because a screen-reader user and a reader who cannot
+// separate red from green were who the key was for, and a `title` cannot be
+// used inside this card (the browser would draw a second tooltip over it).
+//
+// WHICH LEAVES `weekRun` RETURNING THREE FIELDS THE CARD NO LONGER PUTS ON
+// SCREEN, and this block is why that is right rather than dead weight:
+//
+//   * they are what the sr-only block is built FROM, so deleting them would
+//     delete the meaning — which is not what he asked for;
+//   * `weekRun` is an API that more than one page codes against, and
+//     js/trade-page.js reads the run it gets back;
+//   * every sentence in them is asserted word for word above, which is what
+//     keeps "what bold means is the caller's sentence" and "the key never
+//     promises a heavier type" true for anyone who ever shows one again.
+//
+// THE OTHER HALF OF THE CLAIM — that the CARD draws none of it — needs a DOM
+// and is in tests/touch-check.mjs (`checkWordsAreGone`), in hover mode and in
+// sheet mode, against the card's VISIBLE text rather than its textContent. It
+// has to be against visible text: every one of these sentences is still in
+// `card.textContent`, so an assertion written that way passes whether they are
+// drawn or hidden and settles nothing.
+const still = weekRun({ ...RUN, playoffWeeks: [7, 8] });
+ok(Array.isArray(still.notes) && still.notes.length >= 3,
+  'THE NOTES ARE STILL BUILT — the card speaks them rather than drawing them, so losing them here ' +
+  'would take the explanation away from the one reader with no colour to fall back on',
+  JSON.stringify(still.notes.length));
+ok(still.notes.some((n) => /^Bold/.test(n)) && still.notes.some((n) => /heavy line/.test(n)) &&
+  still.notes.some((n) => /Colour on the Proj row/.test(n)),
+  'and all three of them: what bold means, where the line falls, and how to read the colour',
+  JSON.stringify(still.notes.map((n) => n.slice(0, 24))));
+const marks = weekRun({
+  weeks: [1, 2, 3, 4], projections: [12, 'off', null, 20], actuals: ['wait', 'wait', 'wait', 'wait'],
+  byeWeek: 9,
+});
+ok(marks.legend.length >= 3,
+  'THE LEGEND IS STILL BUILT, and still names a mark only where it occurs',
+  JSON.stringify(marks.legend));
+ok(marks.legend.some((l) => /^off =/.test(l)) && marks.legend.some((l) => /^— =/.test(l)) &&
+  marks.legend.some((l) => /^· =/.test(l)),
+  'naming every state this run actually put on screen', JSON.stringify(marks.legend));
+ok(!marks.legend.some((l) => /^Bye =/.test(l)),
+  'and none it did not — a glossary of marks nobody can see would be noise even to a screen reader',
+  JSON.stringify(marks.legend));
+ok(still.scale && Number.isFinite(still.scale.mean),
+  'AND THE SCALE IS STILL RETURNED, though its key line is now spoken rather than drawn: it is what ' +
+  'every cell’s aria-label is measured on, which is the channel that survived',
+  JSON.stringify(still.scale));
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

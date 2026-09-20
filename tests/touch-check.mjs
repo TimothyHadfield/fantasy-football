@@ -394,6 +394,104 @@ function runColumns(lines) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// THE WORDS BENEATH THE CHART, WHICH ARE GONE FROM SIGHT AND NOT FROM THE PAGE
+//
+// Tim, 2026-09-20: "Also in the preview, I want all the words beneath the chart
+// to dissapear-they're not needed." Four blocks went: the blank-Act note, the
+// PO note, `run.notes` (what bold means, where the heavy line falls, the colour
+// key) and `run.legend` (the glossary of marks). They were 164 of the hover
+// card's 314 pixels at 1500px and 253 of the sheet's 562 at 390px.
+//
+// THEY WERE HIDDEN, NOT DELETED — one `sr-only` wrapper, `.tc-key` — because a
+// screen-reader user and a reader who cannot separate red from green were the
+// two people the key was actually for, and `title` is not available inside this
+// card (the browser would draw a second tooltip over it). So every assertion
+// below is about VISIBILITY and not about presence, and the two halves have to
+// be asserted separately or each passes for the other's reason:
+//
+//   `card.textContent` STILL CONTAINS EVERY ONE OF THESE SENTENCES. Any
+//   assertion written against textContent — and two in this file were, plus
+//   several in an-test.mjs and tr-test.mjs — therefore passes whether the words
+//   are drawn or hidden, and proves nothing about what Tim sees. That is why
+//   `visibleText()` exists.
+
+/**
+ * The card's text with every `sr-only` subtree removed: what a sighted reader
+ * actually reads off the card.
+ *
+ * Walked rather than cloned-and-stripped, because a clone under linkedom is one
+ * more thing to be subtly wrong about and this is six lines.
+ */
+function visibleText(el) {
+  let out = '';
+  for (const node of el.childNodes || []) {
+    if (node.nodeType === 3) { out += node.textContent; continue; }
+    if (node.nodeType !== 1) continue;
+    if (node.classList && node.classList.contains('sr-only')) continue;
+    out += ` ${visibleText(node)}`;
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/** The other half: what only a screen reader gets. */
+function srText(el) {
+  return [...el.querySelectorAll('.sr-only')]
+    .map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+// Every block that used to sit under the chart, named so a failure says WHICH
+// one came back rather than "some prose is visible".
+const CARD_PROSE = [
+  ['the blank-Act note', /Act is what he actually scored/],
+  ['the PO note', /PO = the playoffs/],
+  ['what bold means', /Bold, underlined week numbers/],
+  ['where the heavy line falls', /heavy line before week/],
+  ['the colour key', /Colour on the Proj row/],
+  ['the glossary of marks', /Bye = the 0\.00 ESPN returns|off = he was not on this roster|= ESPN carried no number for him|that week has not been read from ESPN yet/],
+];
+
+/**
+ * The card shows the chart and, in a sheet, the actions — and below the chart,
+ * nothing else a reader can see.
+ *
+ * Three claims, because each can break without the others:
+ *
+ *   1. NOT ONE of the removed blocks is in the visible text. Unconditional: a
+ *      card that never had a given block passes it trivially and a card that
+ *      grew one back fails it by name.
+ *   2. Every `.tc-note` / `.tc-legend` element still in the markup is INSIDE
+ *      the `sr-only` wrapper. This is the one that catches the likely mistake —
+ *      a fifth block added later, correctly classed and rendered outside the
+ *      wrapper, which claim 1 would only catch if somebody also added its words
+ *      to the list above.
+ *   3. The card's own children, after the chart, are the `sr-only` key and (in
+ *      a sheet) the actions, and nothing else. A removed block that left an
+ *      empty `<div>` behind would still be a hole in the card with a margin on
+ *      it, and neither of the first two claims can see one.
+ */
+function checkWordsAreGone(c, card, where, { sheet }) {
+  const vis = visibleText(card);
+  for (const [name, re] of CARD_PROSE) {
+    c.ok(`${where}: ${name} is not drawn where a reader can see it`,
+      !re.test(vis), `visible text reads "${vis.slice(0, 220)}"`);
+  }
+
+  const blocks = [...card.querySelectorAll('.tc-note, .tc-legend')];
+  c.ok(`${where}: every explanation left in the markup is inside the sr-only key`,
+    blocks.every((el) => !!el.closest('.tc-key.sr-only')),
+    blocks.filter((el) => !el.closest('.tc-key.sr-only'))
+      .map((el) => el.textContent.slice(0, 60)).join(' | ') || 'none');
+
+  const after = [...card.children]
+    .slice([...card.children].findIndex((el) => el.classList.contains('tc-chart')) + 1)
+    .map((el) => el.getAttribute('class') || '(unclassed)');
+  const want = sheet ? ['tc-key sr-only', 'tc-actions'] : ['tc-key sr-only'];
+  c.ok(`${where}: below the chart there is the sr-only key${sheet ? ' and the actions' : ''}, and nothing else`,
+    JSON.stringify(after) === JSON.stringify(want),
+    `below the chart: ${JSON.stringify(after)}`);
+}
+
 // The four ways of having NO number, each of which means something specific in
 // the Proj row. None of them may ever appear in the Act row: a week with no
 // result is blank there, and a zero is a real zero.
@@ -562,12 +660,40 @@ async function checkStartsCard(c, document, window) {
     /border-left/.test(readFileSync(path.join(REPO, 'css/app.css'), 'utf8')
       .split('\n').find((l) => /\.tc-run td\.split-start/.test(l)) || ''),
     'no left border on .tc-run td.split-start in css/app.css');
-  c.ok('the card names the split week in words, so the line is never the only cue',
-    /heavy line before week 6/.test(card.textContent), card.textContent.slice(0, 400));
-  c.ok('and says what bold means, in the caller’s own sentence',
+  // THE WORDS ARE STILL SAID — to a screen reader. Read off `srText` rather
+  // than `textContent` on purpose: textContent cannot tell a drawn sentence
+  // from a hidden one, so a version of this assertion written against it would
+  // have gone on passing through the whole of Tim's 2026-09-20 change and
+  // proved nothing either way.
+  c.ok('the card still names the split week in words, so the line is never the only cue',
+    /heavy line before week 6/.test(srText(card)), srText(card).slice(0, 400));
+  c.ok('and still says what bold means, in the caller’s own sentence',
     /Bold, underlined week numbers are weeks he would make your best lineup after this trade/
-      .test(card.textContent),
-    card.textContent.slice(0, 400));
+      .test(srText(card)),
+    srText(card).slice(0, 400));
+
+  // --- AND NONE OF IT IS DRAWN (Tim, 2026-09-20) --------------------------
+  //
+  // This run is the worst case on purpose: it has all four blocks at once — a
+  // blank Act row, playoff weeks, bold with a `startsNote`, a heavy line and a
+  // scale — so every sentence that could be under a chart is under this one.
+  checkWordsAreGone(c, card, 'the hand-built sheet', { sheet: true });
+  c.ok('the sr-only key carries all four kinds of meaning, not merely some of them',
+    [/Act is what he actually scored/, /PO = the playoffs/, /Bold, underlined week numbers/,
+      /heavy line before week/, /Colour on the Proj row/]
+      .every((re) => re.test(srText(card))),
+    srText(card).slice(0, 400));
+  c.ok('and the thresholds in points are in it, which is what makes a colour checkable at all',
+    /pts or better/.test(srText(card)) && /pts or worse/.test(srText(card)),
+    srText(card).slice(-300));
+  // THE CONTROLS ARE NOT PROSE AND DID NOT GO. On a phone the tap that opened
+  // this sheet is the tap that would have followed the link, so a sheet without
+  // these is a trap and breaks HANDOFF's "nothing reachable only by hovering".
+  c.ok('the sheet still offers the link the tap preempted',
+    !!card.querySelector('.tc-actions a.tc-open[href]'),
+    card.querySelector('.tc-actions') ? card.querySelector('.tc-actions').innerHTML.slice(0, 160) : 'no .tc-actions');
+  c.ok('and still offers a Close button', !!card.querySelector('.tc-actions .tc-close'),
+    'no Close in the sheet');
 
   // --- and it composes with the playoff line ------------------------------
   const po = [...card.querySelectorAll('.tc-run th.po-start')];
@@ -629,8 +755,12 @@ async function checkStartsCard(c, document, window) {
     /\.heat\.heat-up-4:not\(html\), \.heat\.heat-dn-4:not\(html\) \{ font-weight: 700; \}/.test(appCss),
     'the heat weight ladder is back at single-class specificity, where .rank .vv beats it');
   c.ok('and the key says the colour is against HIS OWN weeks, not the league',
-    /compares each week with HIS OWN other weeks/.test(together.textContent),
-    together.textContent.slice(-400));
+    /compares each week with HIS OWN other weeks/.test(srText(together)),
+    srText(together).slice(-400));
+  c.ok('WHICH A SIGHTED READER NEVER SEES — that key is spoken, not drawn (Tim, 2026-09-20)',
+    !/compares each week with HIS OWN other weeks/.test(visibleText(together)),
+    visibleText(together).slice(0, 220));
+  checkWordsAreGone(c, together, 'the split-and-playoff sheet', { sheet: true });
 
   // --- nothing any of this added scrolls ---------------------------------
   c.eq('no scroller was reintroduced anywhere in the card',
@@ -649,9 +779,14 @@ async function checkStartsCard(c, document, window) {
     plainCols.every((k) => !/wk-start|split-start|heat/.test(
       `${k.cls(k.th)} ${k.cls(k.proj)} ${k.cls(k.act)}`)),
     plainCols.map((k) => k.cls(k.th)).join('|'));
+  // NOT BUILT AT ALL, which is a different claim from NOT DRAWN, and the only
+  // one of the two that `textContent` can still make honestly: these sentences
+  // are absent from the sr-only key as well, because the things they explain
+  // are not on this card.
   c.ok('and nothing is said about bold, a line or a colour that is not on screen',
     !/Bold, underlined|heavy line|Colour on the Proj row/.test(plain.textContent),
     plain.textContent.slice(-300));
+  checkWordsAreGone(c, plain, 'the plain sheet', { sheet: true });
   c.ok('nor does any cell carry the scale’s aria-label',
     !plainCols.some((k) => k.proj && k.proj.hasAttribute('aria-label')),
     'an aria-label survived heat:false');
@@ -758,6 +893,21 @@ async function check(scenario, { document, window, errors, rejections }) {
       c.eq('with no sheet class', hover.classList.contains('sheet'), false);
       c.eq('and no actions in it', hover.querySelectorAll('.tc-actions').length, 0);
       c.ok('and it names the player', hover.querySelector('.tc-ident').textContent.trim().length > 3);
+
+      // THE WORDS ARE GONE IN HOVER MODE TOO (Tim, 2026-09-20). Asserted in
+      // both modes rather than once, because `cardHtml` takes `sheet` as an
+      // argument and branches on it: a change that hid the prose in a sheet and
+      // left it drawn on a desktop hover would be exactly the half-fix this
+      // suite exists to catch, and the hover card is the one Tim reads most.
+      // With no actions in a hover card, the chart is the LAST visible thing in
+      // it — which is the whole of what he asked for.
+      checkWordsAreGone(c, hover, 'the hover card', { sheet: false });
+      c.ok('and the hover card still says it all to a screen reader',
+        srText(hover).length > 60, `sr-only text was "${srText(hover)}"`);
+      c.ok('THE CHART IS THE LAST THING A HOVER CARD DRAWS — nothing follows it with a height',
+        [...hover.children].filter((el) => !el.classList.contains('sr-only'))
+          .pop().classList.contains('tc-chart'),
+        [...hover.children].map((el) => el.getAttribute('class')).join(' | '));
     }
 
     // And the title sheet stays out of the way entirely: with a pointer, a
@@ -882,9 +1032,22 @@ async function check(scenario, { document, window, errors, rejections }) {
     c.ok('and its header says PO, with "playoffs" for a screen reader',
       head && /PO/.test(head.textContent) && /playoffs/.test(head.textContent),
       head && head.textContent);
-    c.ok('the card explains the line in words',
-      /PO = the playoffs \(weeks 14–16\)/.test(card.textContent), card.textContent.slice(0, 300));
+    c.ok('the card still explains the line in words, for a screen reader',
+      /PO = the playoffs \(weeks 14–16\)/.test(srText(card)), srText(card).slice(0, 300));
   }
+
+  // --- AND THE REAL PAGE'S CARD DRAWS NO PROSE EITHER ----------------------
+  //
+  // The block above drives js/player-card.js by hand; this is the card the
+  // Analysis page actually builds, opened as a sheet by a real tap, which is
+  // the thing Tim has in front of him. The two are asserted separately because
+  // the page passes a different set of options (no `starts`, no `splitAfter`)
+  // and could perfectly well grow a visible block that a hand-built run does
+  // not.
+  checkWordsAreGone(c, card, 'the Analysis sheet', { sheet: true });
+  c.ok('while the words themselves are still said to a screen reader',
+    /PO = the playoffs/.test(srText(card)) && srText(card).length > 60,
+    srText(card).slice(0, 200));
   c.eq('exactly one column is marked as the week the page is showing',
     cols.filter((k) => k.projKind.includes('now')).length, 1);
   c.ok('and the Act row marks the same one, not a different one',

@@ -59,8 +59,13 @@
 //     `bold`        the RENDERED decision: `start === true` AND not `past`
 //     `splitStart`  true on the first column after `splitAfter`
 //     `heat`        `heatOf()` for that week's projection, or null
-//   and the run carries `notes` (the plain-words lines under the chart) and
+//   and the run carries `notes` (the plain-words lines about the chart) and
 //   `scale` (the heat scale the Proj row was measured on, or null).
+//
+//   `notes` and `legend` ARE STILL RETURNED and are still what the card says —
+//   but SINCE 2026-09-20 THE CARD DRAWS NONE OF THEM WHERE A SIGHTED READER CAN
+//   SEE THEM. They go into one `sr-only` block instead. See "TIM TOOK THE WORDS
+//   OFF THE CARD" below before restoring anything.
 //
 // Registering one, and getting the key that goes in the markup:
 //
@@ -253,9 +258,80 @@
 // cells would have the browser draw its own tooltip on top of the card a moment
 // later, which is why the cells carry none and why the link carries an
 // `aria-label` instead. So the scale's words go to an `aria-label` on the cell
-// (no second tooltip, and a screen reader gets the whole sentence) and to a key
-// line under the chart, which is where a sighted reader can check a colour
-// against the numbers by hand.
+// (no second tooltip, and a screen reader gets the whole sentence) — and, until
+// 2026-09-20, to a key line under the chart as well. That key line is gone; see
+// the next section, which is the one to read before putting it back.
+//
+// ===========================================================================
+// TIM TOOK THE WORDS OFF THE CARD (2026-09-20). READ THIS BEFORE RESTORING ANY
+// OF THEM — INCLUDING AS AN ACCESSIBILITY FIX.
+// ===========================================================================
+//
+// His ask, in his words: "Also in the preview, I want all the words beneath the
+// chart to dissapear-they're not needed."
+//
+// "The preview" is this card, and "the words beneath the chart" were four
+// blocks, in this order: the blank-Act note, the PO note, `run.notes` (what
+// bold means, where the heavy line falls, and the colour key), and `run.legend`
+// (the glossary of marks — Bye, off, the unread dot, the failed dash). At 1500px
+// they were 164 of the hover card's 314 pixels; on a 390px phone they were 253
+// of the sheet's 562. More than half the card was prose about the card.
+//
+// This is the same instinct he showed on 2026-09-18 when he took the card off
+// "Season by week" — "Just put the name of that player somewhere outside of the
+// chart, and their season proj, and current avg. That's it." He reads this card
+// at a glance, in the two seconds a pointer rests on a cell, and every one of
+// those sentences was in the way of the thing he opened it for.
+//
+// WHAT WENT IS THE VISIBLE PROSE. WHAT DID NOT GO IS THE MEANING. Every one of
+// those sentences is still built — by the same pure, tested functions in
+// `weekRun` — and still in the markup, inside ONE `sr-only` block that costs
+// zero visible height (`.tc-key`, styled in css/app.css). A screen-reader user
+// hears exactly what they heard yesterday, in the same order, after the chart
+// rather than never. Deleting the sentences outright would have been cheaper to
+// write and would have taken the explanation away from the one reader who has
+// no colour, no weight and no underline to fall back on.
+//
+// A `title` IS STILL NOT THE ESCAPE HATCH. The rule above stands: a `title`
+// anywhere in this card has the browser draw a second tooltip over it. Only
+// `aria-label` and `sr-only` draw nothing, which is why they are what this uses.
+//
+// WHAT IT COSTS, SAID PLAINLY, BECAUSE IT IS A REAL COST:
+//
+//   A SIGHTED READER WHO CANNOT SEPARATE RED FROM GREEN HAS NO KEY ON THIS
+//   CARD ANY MORE. For BOLD (rule 17, "he starts") nothing is lost that matters
+//   — bold is also an accent underline, and both are hue-free. For the SCALE it
+//   is narrower than that: the weight ladder is deliberately off inside this
+//   card (see the section above), so the only hue-free cue left to a sighted
+//   reader is the ▲ / ▼ drawn at the two ENDS of the scale. He can still see
+//   which week is his best and which is his worst without telling the hues
+//   apart; he can no longer read the middle four steps, and he can no longer
+//   check a colour against a threshold in points, because the sentence that
+//   printed those thresholds is now sr-only.
+//
+// So the claim still does not rest on colour ALONE — direction survives at the
+// ends, and the numbers themselves are printed in every cell — but the fourth
+// channel HANDOFF rule 14 names, words in a key, is gone from THIS surface.
+// That is a deliberate, single-component exception at Tim's explicit request,
+// not a change to rule 14: every other coloured table on the site keeps its one
+// visible key sentence (rule 16), and nothing here licenses taking theirs away.
+//
+// THE THREE THINGS RULE 16 KEEPS VISIBLE HOWEVER SHORT A KEY GETS — that a
+// column is inverted, that a scale was refused, and anything that warns or
+// changes what a number means — are not at stake here and that is worth saying
+// rather than leaving to be noticed. This card's scale is never inverted (a
+// good week is a high number, always); a refused scale simply draws no colour
+// at all here, and there is no uncoloured-looking column for a reader to
+// mistake for broken, because every cell already prints its own number; and
+// nothing among these four blocks warned about anything.
+//
+// IF SOMEBODY LATER WANTS THE KEY BACK FOR ACCESSIBILITY, the honest move is to
+// ask Tim, not to re-add it. The words are still in the DOM and still in
+// `run.notes` / `run.legend`; a page that wants them visible can render them
+// itself from the run it already has. `tests/test-heat.mjs` asserts they are
+// still returned and `tests/touch-check.mjs` asserts the card renders none of
+// them visibly, in both modes, so re-adding a visible block fails a suite with
+// this comment's name on it rather than passing quietly.
 
 import { coarsePointer } from './connection.js';
 import { heatScale, heatOf } from './heat.js';
@@ -534,6 +610,27 @@ export function weekRun({
   // legend explains MARKS — "Bye =", "off =" — and names one only where it
   // actually occurs; these explain how to read the chart itself, and each turns
   // up only when the thing it explains is on screen.
+  //
+  // BOTH ARE STILL BUILT AND STILL RETURNED, and that was a decision rather
+  // than an oversight when the card stopped DRAWING them on 2026-09-20. Three
+  // reasons, in order of weight:
+  //
+  //   1. They are not dead. `cardHtml` renders the lot into an `sr-only` block,
+  //      so these two arrays are what a screen reader is read. Deleting them
+  //      would delete the meaning, which is not what Tim asked for — he asked
+  //      not to SEE them.
+  //   2. `weekRun` is an API more than one page codes against (the header at
+  //      the top of this file says so), and `js/trade-page.js` reads the run it
+  //      gets back. Dropping two documented fields to save building two arrays
+  //      nobody pays for is a breaking change bought with nothing.
+  //   3. They are pure, they are cheap, and they are the tested half: every
+  //      sentence here is asserted word by word in tests/test-heat.mjs, which
+  //      is how "what bold means is the caller's sentence" and "the key never
+  //      promises a heavier type" stay true. A page that ever wants one of
+  //      these visible again has it ready-made and correct.
+  //
+  // What is NOT defensible is a caller assuming these are on screen. They are
+  // not, anywhere, and touch-check.mjs fails if they come back.
   const notes = [];
   if (told && cols.some((c) => c.start !== null)) notes.push(startsLine(startsNote, cols));
   if (splitFirst !== undefined) notes.push(splitLine(splitFirst));
@@ -841,7 +938,31 @@ function lineHtml(cols) {
   );
 }
 
-/** The identity line, the chart, what the chart means, and the sheet's actions. */
+/**
+ * The identity line, the chart, and the sheet's actions — and, for a screen
+ * reader only, what the chart means.
+ *
+ * WHAT IS VISIBLE BELOW THE CHART IS THE SHEET'S ACTIONS AND NOTHING ELSE, and
+ * on a hover card not even those. Tim, 2026-09-20: "Also in the preview, I want
+ * all the words beneath the chart to dissapear-they're not needed." The long
+ * section near the top of this file has the whole argument, including what it
+ * costs a sighted reader who cannot separate the hues; do not restore a visible
+ * block without reading it.
+ *
+ * WHAT STAYS, AND WHY EACH IS NOT "WORDS BENEATH THE CHART":
+ *
+ *   - the identity line and the heading above the chart. He asked for exactly
+ *     those by name on 2026-09-18 ("Just put the name of that player somewhere
+ *     outside of the chart, and their season proj, and current avg");
+ *   - `actionsHtml`. Those are CONTROLS, not prose. On a phone the tap that
+ *     opened this sheet is the tap that would have followed the link, so
+ *     removing them would make the sheet a trap and would break HANDOFF's
+ *     "nothing may be reachable only by hovering";
+ *   - everything drawn INSIDE the chart: the state markers in the cells (Bye,
+ *     off, `—`, `·`, the OUT/IR word), the bold-and-underlined week numbers,
+ *     the heavy dividers and the ▲/▼ at the ends of the scale. Those are the
+ *     chart, and several of them are the hue-free channels rule 14 is about.
+ */
 function cardHtml({ ident, run, href }, sheet) {
   const head = `<div class="tc-ident">${esc(ident)}</div>`;
   if (!run) return `${head}${actionsHtml(href)}`;
@@ -855,8 +976,8 @@ function cardHtml({ ident, run, href }, sheet) {
     .map(lineHtml).join('');
 
   // A BLANK IN THE ACT ROW IS A CLAIM, so it is stated rather than left to be
-  // guessed at. It goes here rather than in the legend because the legend
-  // explains MARKS, and the whole point of a blank is that it is not one.
+  // guessed at. It is separate from the legend because the legend explains
+  // MARKS, and the whole point of a blank is that it is not one.
   const note = run.cols.some((c) => c.act.kind === 'blank')
     ? '<div class="tc-note">Act is what he actually scored. It is blank for a week with no ' +
       'result recorded yet.</div>'
@@ -877,12 +998,39 @@ function cardHtml({ ident, run, href }, sheet) {
   // each written by `weekRun` (so it is pure and testable) and each present only
   // when the thing it explains is actually on screen. They go BEFORE the legend
   // for the same reason the legend goes last: the legend is a glossary of marks
-  // and these are instructions for reading the chart.
+  // and these are instructions for reading the chart. That ORDER is the order a
+  // screen reader now hears them in, which is why it is still worth keeping.
   const extras = (run.notes || [])
     .map((n) => `<div class="tc-note">${esc(n)}</div>`).join('');
 
-  return `${head}${sub}<div class="tc-chart">${lines}</div>${note}${poNote}${extras}` +
-    `${legend}${actionsHtml(href)}`;
+  // ALL FOUR BLOCKS, IN ONE `sr-only` WRAPPER. This is the whole of Tim's ask of
+  // 2026-09-20 and the whole of what was done about it.
+  //
+  // The wrapper is what hides them, not a class on each block, for two reasons
+  // that both bit before this was written this way:
+  //
+  //   1. ONE PLACE OWNS THE HIDING. `.tc-key` is `position: absolute` and 1px
+  //      square in css/app.css, so it is out of flow and no margin, padding or
+  //      border on anything INSIDE it can add a pixel to the card. Hiding each
+  //      block individually leaves four chances for a page-local `.tc-note`
+  //      rule to win on document order and put a stray 7px margin back — and
+  //      `.tc-note`'s rules live in analysis.html and trade.html, whose inline
+  //      <style> comes AFTER css/app.css and beats it at equal specificity.
+  //   2. THE BLOCKS KEEP THEIR OWN CLASSES, deliberately. `.tc-note` and
+  //      `.tc-legend` are how tests/an-test.mjs and tests/tr-test.mjs read the
+  //      card's explanation back, and those suites are asserting that the words
+  //      EXIST and say the right thing — which is still true and still worth
+  //      asserting. What changed is whether a sighted reader sees them, and
+  //      that is asserted separately, in touch-check.mjs, against the visible
+  //      text rather than against `textContent`.
+  //
+  // It is rendered only when there is something in it: an empty `sr-only` div
+  // is an empty announcement, and a run with no marks, no bold, no line and no
+  // scale genuinely has nothing to explain.
+  const key = `${note}${poNote}${extras}${legend}`;
+  const keyHtml = key ? `<div class="tc-key sr-only">${key}</div>` : '';
+
+  return `${head}${sub}<div class="tc-chart">${lines}</div>${keyHtml}${actionsHtml(href)}`;
 }
 
 /**
