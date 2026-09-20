@@ -583,11 +583,33 @@ information on firebase."*
 - **A trade is priced by the lineup each squad would field EACH REMAINING
   WEEK.** See rule 10. Already-played weeks are excluded entirely — banked
   points are banked and no trade can move them.
-- **Per-week averages skip byes but NOT nulls**, and the asymmetry is
-  deliberate: ESPN's 0.00 for a bye is a week he does not play, while a `null`
-  is ESPN being quiet, and promoting one into the other would flatter every
-  thinly-covered player. A consequence worth remembering: `perWeek × weeks` no
-  longer equals the rest-of-season total, and every note showing both says so.
+- **A PER-WEEK AVERAGE IS THE MEAN OVER THE WEEKS THAT ACTUALLY PROJECT POINTS**
+  (Tim, 2026-09-20: "it should only calculate future weeks that actually project
+  any points at all, and then set the avg there"). A bye, a `null`, a genuine
+  0.00 and **a week this page has not read yet** all leave the divisor. No such
+  week left ⇒ `null`, never 0.0.
+
+  **THIS REVERSED A DELIBERATE DECISION, and the reversal is right.** The old
+  rule kept nulls in the divisor on the reasoning that "ESPN is quiet about him"
+  must not be promoted into "he does not play", or every thinly-covered player
+  would be flattered. That is sound about what a null MEANS and wrong about what
+  the printed number CLAIMS — and, fatally, `projFor` returns null for a week
+  the page has merely not fetched yet, so the figure beside a man's name was
+  partly a fact about the cache. Tim found it: a receiver printing 14.2 whose
+  every remaining week projects above 14.2.
+  - It is changed in `scoreAcrossWeeks` (js/trade.js) and `weeklyMean`
+    (js/trade-page.js) **line for line**. Two panels printing two per-week
+    numbers for one man is what both functions exist to prevent.
+  - `zeroIsBye` now decides nothing — every zero leaves the divisor, bye or
+    not. The parameter is kept in all four signatures and is inert; if it is
+    ever removed it must go from every one at once. **Rule 2 is untouched**: a
+    bye still renders "Bye" and a non-bye zero still renders "0.0", because
+    those are different facts about the player. Only the AVERAGE stopped caring.
+  - `perWeek × weeks` is further than ever from the rest-of-season total, and
+    every note showing both says so. `weeksScoring` comes back beside them.
+  - **It flatters an injured man**, deliberately: his 0.00 weeks no longer drag
+    him down, so the figure reads "what he is worth in a week he plays". Said in
+    prose in five notes rather than shown as a count. Easy to overrule.
 - **ESPN's trade URL can only ever tick the OTHER side.** Verified against their
   shipped bundle: `players=` is matched against the counterparty's roster alone,
   there is no parameter for your own, and swapping `teamId`/`fromTeamId` fails

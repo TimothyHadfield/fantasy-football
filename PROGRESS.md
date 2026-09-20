@@ -86,6 +86,88 @@ describe how the site works **today**:
 | The sub-44px tap targets, finally named | "`tools/measure-layout.mjs`" |
 | What to do next | "Next", at the foot |
 
+## 2026-09-20 — the per-week average was partly a fact about the cache
+
+Four of Tim's asks. **38 suites, 13,300 assertions, green.**
+
+### "100% of his future weeks are proj above 14.2"
+
+His report, and both of his guesses were wrong, which is why it is worth
+recording: "Nico Collins displays 14.2, however 100% of his future weeks are
+proj above 14.2, except for his BYE week. This might be because it's
+calculating the players bye week with the avg (which it shouldn't) or because
+it's calcualting it's past."
+
+The bye was already out of the divisor. The past was already excluded. **The
+cause was the third thing: a week with no projection was skipped when summing
+and LEFT IN THE DIVISOR** — and "no projection" covers both "ESPN is quiet" and
+"this page has not fetched that week yet", because `projFor` returns null for
+both. The Trade page buys its span in batches, so a partly-loaded page quietly
+deflated every average on it. The number beside a man's name was partly a fact
+about the cache.
+
+That asymmetry was DELIBERATE and argued at length in three places: promoting
+"we do not know" into "he does not play" would flatter every thinly-covered
+player. That argument is right about what a null MEANS and wrong about what the
+printed number CLAIMS, and Tim's rule replaces it — the mean is over the weeks
+that actually project points, and everything else leaves the divisor. See
+HANDOFF's Trades section for the full rule and its consequences.
+
+Changed in `scoreAcrossWeeks` and `weeklyMean` **line for line**, because two
+panels printing two per-week numbers for one man is what both exist to prevent.
+`zeroIsBye` now decides nothing and is inert. **Rule 2 is untouched** — a bye
+still draws "Bye" and a non-bye zero still draws "0.0"; only the average
+stopped caring which is which, and `tr-test`'s bye block was rewritten to
+assert exactly that split rather than being relaxed.
+
+The fixture is his case made falsifiable: `16 · 0 (bye) · 15 · null · 18 ·
+unread` prints **9.8** under the old rule — below every week he scores in — and
+**16.3** under the new one. Reverting the engine fails 12 assertions with the
+old numbers named.
+
+**It flatters an injured man**, deliberately, and that is said in prose in five
+notes rather than shown as a count: his 0.00 weeks no longer drag him down, so
+the figure means "what he is worth in a week he plays".
+
+### The card preview lost every word beneath the chart
+
+Tim: "in the preview, I want all the words beneath the chart to dissapear —
+they're not needed." Hover **314px → 148px**, the phone sheet **563px → 310px**,
+and the hover card is 53px NARROWER because it used to be sized by its longest
+sentence and is now sized by the chart. The sentences survive as `sr-only` text
+at zero visible height; the sheet's link and Close button stay, because they are
+controls and removing them would make the sheet a trap.
+
+**What a sighted colour-blind reader loses, recorded rather than glossed:** the
+▲/▼ still mark the best and worst weeks, so direction survives at the ends, but
+the middle four steps now have no hue-free cue on this card and the thresholds
+are no longer readable on screen. A deliberate single-component exception to
+rule 14 at his explicit request.
+
+**The trap it exposed:** two existing assertions read the card with
+`textContent`, which returns hidden text too — so they would pass whether the
+words were drawn or invisible and proved nothing either way. They read visible
+text and sr-only text separately now.
+
+### The custom box: the gain at the top, and readable again
+
+"the overall +/week is at the bottom of the players selection. Put it at the
+top." It was below on the reasoning that a reader arrives at the number after
+the list it belongs to. True, and the wrong priority: the roster is the INPUT
+and the figure is the ANSWER, and sixteen men is tall enough on a phone that the
+answer was off-screen while he was ticking.
+
+"the numbers and names and everything is dimmed down so it's hard to read."
+He is right, and the cause is that the panel had reached for `--dim` for
+everything that was not the player's name — slot, position, per-week value,
+column heading, sub-figures, suggestion numbers. When four of five cells in a
+row are marked secondary, nothing is secondary to anything. The value goes to
+full `--text` (it is the number the whole panel is about), the rest to a new
+`--cu-sub` scoped to the panel: about 4.4:1 → 7:1, and 12:1 for the value. The
+empty-slot "nobody" rows were the worst at about 2.5:1. **Scoped, not a change
+to `--dim`** — brightening every page is a different decision from the one he
+asked for, and this is the value to promote if he wants it.
+
 ## 2026-09-19 (later still) — the colour reaches every page, and the tool that caught what the tests could not
 
 Eight more of Tim's asks. Six agents on disjoint file sets, then three more on
