@@ -75,7 +75,224 @@ describe how the site works **today**:
 | The trade card's Act row, and the starts count | "The trade card, and the custom trade box" |
 | Whether panels really do pair up, measured | "Stats: two panels side by side" |
 | Roster strength as a week rather than a season | HANDOFF, the 2026-09-19 block, item 8 |
+| Where the red/green scale is NOT, and why | "Where the colour did NOT go" |
+| Why the wire's week cells stayed uncoloured | same section, first bullet |
+| Bold week numbers on a player card | "The player card: bold means &quot;he starts&quot;" |
+| Why the combo shows one gain and not one per row | "The combo prints one number" |
+| Suggested players for a custom trade | "`js/trade-suggest.js`" |
+| Why the custom box lost its second squad picker | "The custom trade box, rebuilt" |
+| Measuring page height, overflow and tap targets | "`tools/measure-layout.mjs`" |
+| Why 38 green suites still shipped a regression | "The lesson of the day" |
+| The sub-44px tap targets, finally named | "`tools/measure-layout.mjs`" |
 | What to do next | "Next", at the foot |
+
+## 2026-09-19 (later still) — the colour reaches every page, and the tool that caught what the tests could not
+
+Eight more of Tim's asks. Six agents on disjoint file sets, then three more on
+a density repair that only existed because a measurement found it: **38 suites,
+13,208 assertions, green.**
+
+### The lesson of the day, and it is not about colour
+
+**Every agent reported its work finished and green, and every one was right.**
+All 38 suites passed. The features worked. And the site had quietly grown from
+**1,258 to 1,970 visible words (+57%)** and up to **+2,212px of height on a
+phone** — because every table that gained the scale also gained a
+`describeHeat` sentence printed under it, and thirty-eight suites have nothing
+to say about that.
+
+`tests/text-audit.mjs` and the new `tools/measure-layout.mjs` are the only two
+things on this project that can see it. HANDOFF rule 16 now says to run both
+after anything that adds explanation to a panel. The repair took the site to
+**1,444 words** and every page back to within about +150px — and took Stats and
+the custom trade panel BELOW where they started.
+
+That is the whole argument for owning a measuring tool rather than reasoning
+about layout: it was written today, and it paid for itself inside an hour.
+
+### `tools/measure-layout.mjs` — in the repo at last
+
+Written and thrown away twice before. Headless Edge over CDP, no dependencies.
+It measures settled heights, sideways overflow, per-element overflow, a named
+selector, and sub-44px tap targets under touch emulation; it diffs two runs;
+it screenshots a selector. Both known traps are commented at the line that
+avoids them — `Emulation.setDeviceMetricsOverride` rather than `--window-size`
+(headless Edge will not go below ~500px, which is what made the first 390px
+audit call every page broken), and POLL until the height settles rather than
+waiting a fixed time (a fixed wait caught schedule.html mid-render and reported
+a 600px saving that did not exist). A third is recorded: the in-page probe is
+one template literal, so a backtick in a comment inside it surfaces as
+`scroll is not defined` rather than as a syntax error.
+
+**It was falsified before it was believed** — a deliberately broken copy
+reported `*** NOW SCROLLS SIDEWAYS (+310px) ***`, and an unchanged copy
+reported nothing moved.
+
+**It finally answers the sub-44px question**, open since the density audit
+guessed at four: **25 kinds, 869 instances at 390px.** The worst is the SITE
+NAV at 38px on every page — the most-used control here. Three `<select>`s are
+43px and Schedule's week steppers 32px wide. "How this works" is NOT in the
+list, so that fix is holding.
+
+Two things it found that nobody was looking for: **`schedule.html` gets taller
+as the window gets wider** (4,059px at 1000px, 4,254px at 1500px), backwards
+from every other page; and **`.panel-row > * { min-width: 0 }` is no longer
+load-bearing** — `minmax(min(420px,100%),1fr)` gives the track a definite
+minimum, so the automatic one never applies. Its comment still claims it is the
+fix for Home's overflow. Correct the comment, keep the rule.
+
+### Four defects the sweep exposed, every one of them already live
+
+- **Every cell at the end of the scale was sorting as a string.**
+  `js/sortable.js` falls back to a cell's TEXT without `data-v` and strips
+  `, + $ %` and spaces — not ▲ — so `"22.1 ▲"` sorted as text. Live on the
+  Stats standings and week grid from the day the scale shipped.
+- **`tr.picked td` and `tbody.split td` were background SHORTHANDS**, which
+  ERASE a tint rather than compose with it, so the drilled-into row and the
+  whole totals band were silently losing the Proj avg grid's existing colours.
+  The classes were there; nothing was drawn.
+- **`.rank .vv { font-weight: 600 }` out-specified the scale's weight channel.**
+  The tint drew and the hue-free channel vanished. The weight rules now sit at
+  0,2,1 — and deliberately NOT higher, because `table.grid td.grid-total` is
+  0,2,2 and must keep winning or every coloured totals cell gets lighter.
+- **`fc-test`'s "at most four teams have any title chance" was passing
+  vacuously**, looking for a class no cell has ever carried, so every value
+  read as 0. The claim is also false with most of a season left. Replaced with
+  what is true: exactly four teams qualify per simulated season, and no team
+  wins more titles than it reached brackets.
+
+### Where the colour did NOT go, which is the half worth keeping
+
+Each of these is an argument, not an oversight, and Tim can overrule any of
+them:
+
+- **The Players wire's WEEK cells.** `td.beats` — his "beats your own worst
+  man" green — sets the background with a SHORTHAND at higher specificity, so a
+  tint there is erased rather than composed and the page would make a claim it
+  never drew. Both of his greens already answer the question those cells exist
+  for. The scale went one column left, to `Avg`, and to the whole Taken table,
+  which had no colour of any kind.
+- **Bye / ruled-out 0.0 / OUT / IR cells anywhere.** Rendered both ways to
+  check rather than argued: letting them in draws `0.0 IR ▼` in full red over
+  the dark-red injury background, exactly as the original comment predicted. So
+  the `A week` grid IS coloured now (Tim's "all the other places" answered a
+  standing open question) and those cells are simply never measured — the two
+  claims never land on the same cell.
+- **Home's matchup cards.** The column is each side's lineup AS SET; the same
+  card's verdict uses the BEST lineup. Half the league has a stale lineup
+  midweek, so colouring it would partly score who has logged into ESPN, and a
+  green side could be the side the card says will lose. Roster strength below
+  makes that comparison honestly.
+- **The injury report, the bench columns, the roster detail, "Who to start".**
+  A QB's 22 above a kicker's 8; one squad's B1 is a back and the next squad's a
+  quarterback; a roster-detail column runs through every position at once; and
+  "Who to start"'s background already IS its yes/no answer.
+- **Fixture percentages on Schedule.** 20% for the home side is 80% for the
+  away side: no good end, so no scale.
+- **The Summary share image.** A PNG in his group chat has no tooltip to tap
+  and no key beneath it — he had the explanation lines removed himself — so
+  colour there would carry a relative claim with no way to check it, forwarded
+  to nine people. A relative scale does not survive a screenshot either: the
+  same 12% is green one week and red the next. Three assertions prove the
+  canvas stayed clean.
+
+### The player card: bold means "he starts"
+
+His ask: bold the weeks a man is projected to start for you, and for a man you
+are trading FOR, the weeks he would start **if the trade were made**.
+
+Two different questions, and the page asks the right one of each man: a man of
+your own against his own manager's best lineup that week, a man you are
+receiving against YOURS with the trade applied. No floors in the selection —
+rule 13, and this is a question about who is CHOSEN.
+
+**The weight collision had to be resolved rather than fudged.** The scale steps
+font weight as its hue-free channel and bold is also weight, so inside the card
+the scale's weight ladder is OFF: weight there means one thing only. A second,
+blunter reason — a heavier `18.2` is a WIDER `18.2`, and the run wraps on
+computed constants with no scrollbar to absorb it. The scale keeps background,
+▲/▼ and words; bold gets weight plus an underline plus `sr-only` words. The
+glyph is a CSS `::after` rather than a `<span>`, which would both widen the
+column and splice itself into text three suites read back as the projection;
+the words go on an `aria-label`, never a `title`, because a title here draws a
+second tooltip over the card.
+
+**A genuine played 0.0 stays on the scale**, argued deliberately: it is a real
+number for an available man and the cell a manager most needs to see. Dropping
+it would flatter him by hiding his worst week.
+
+### The combo prints one number
+
+His report: "the best combo just shows the two trades seperately… the +/week
+should be shown as 1 number not 2, (and it's probably not the sum of the two
+seperate +/week's)."
+
+He is right on both counts, and the parenthetical is the reason: the per-row
+"you gain" figures were each measured against his roster AS IT IS TODAY, and
+after one trade that roster does not exist. So those columns are gone. The
+headline carries the single combined figure and one before→after for the whole
+packing; each manager's row keeps his own gain, which is a different person's
+roster and genuinely separate. `naiveDelta`'s existing contrast sentence is now
+the direct evidence for what he guessed.
+
+### `js/trade-suggest.js` — suggested players, and a test that nearly lied
+
+His ask: suggested players to send to even a deal up, "as many players that
+would be eligable… not just 1 to make it perfect", with leeway for a "fleece".
+
+A pure module: every improving man is returned, ranked evenest-first, each
+carrying what BOTH sides end up at, and a candidate that leaves the other
+manager negative is LABELLED rather than filtered out. Priced through the same
+engine, the same weeks and the same floors as the deal itself — with floors on,
+2 of A's men even the demo deal; with them off, 4 do, in a different order.
+That asymmetry is what makes the seam falsifiable, and it is rule 13's defect
+one panel further down.
+
+**Nine deliberate breaks were run and one of them PASSED.** An engine ranking
+suggestions by a man's own value instead of by the gap he leaves was invisible,
+because in the first fixture the two orders happen to agree. A second fixture
+exists now where they disagree: a 9-point backup QB outranks a 10-point
+starting RB, because the partner's problem is that he has no quarterback and
+already has a good back. Without that fixture the module could have shipped
+sorting on the wrong key, green.
+
+### The custom trade box, rebuilt
+
+- **"You" follows the manager picked at the top of the page.** The second
+  picker is deleted. Pricing a deal between two OTHER managers still works — it
+  moved to that top picker, and the panel says so.
+- **The opponent's columns are mirrored**, so both value columns face each
+  other down the middle. Done in the MARKUP, not with `row-reverse`, which also
+  reverses tab order.
+- **A saved trade goes through `offerRow`** — the finder's own row builder — so
+  it cannot drift from a found one. It looks identical because it IS the same
+  row. A custom deal also names its own shape ("2 for 2") instead of printing
+  `undefined` from a table that only knows the finder's three.
+- **The breakdown renders beside the builder above 900px, and is REMOVED from
+  the document below it** — not hidden. 900 is arithmetic: two 232px rosters
+  plus a 16px gap plus a 320px breakdown plus a gap is 816px of panel, 894px of
+  window. **The real 900px defect was four pixels**: the flex row handed the
+  lists 476px against the 480 they need, so they stacked and the panel went
+  1,182 → 1,949px.
+- Measured after: the panel is **SMALLER than it was before any of this**
+  (1,182 → 1,162 at every desktop width), with three features added to it.
+
+### What running six agents in parallel cost this time
+
+It held again on disjoint file sets. Three things to expect:
+
+- **A suite run during parallel work reads a file mid-edit.** The first
+  baseline attempt failed on `startsRun is not defined` — an agent was halfway
+  through a function. The fix is a `git worktree add … HEAD` and run the
+  baseline THERE; that came back 37/37 and settled it.
+- **An agent broke `tests/node_modules`** by junctioning it into a scratchpad
+  worktree and then running `git worktree remove --force`, which followed the
+  junction and emptied `boolbase/dist`. `npm install` did not notice. Do not
+  junction `node_modules` into a worktree you intend to remove.
+- **Three agents independently reported the same class of weak test** — an
+  assertion guarded by `if (anything)` that passes when the feature produces
+  nothing. Each found it only by breaking its own code first. That is rule 5,
+  and it earns its place every time.
 
 ## 2026-09-19 (later) — one colour scale, one local store, and the combo fixed
 

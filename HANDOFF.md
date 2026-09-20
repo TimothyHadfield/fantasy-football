@@ -3,8 +3,8 @@
 Live: https://timothyhadfield.github.io/fantasy-football/
 Repo: https://github.com/TimothyHadfield/fantasy-football
 
-Last updated 2026-09-19. Everything below is pushed and live; 37 test suites,
-12,089 assertions, green, and GitHub Actions runs them on every push.
+Last updated 2026-09-19. Everything below is pushed and live; 38 test suites,
+13,208 assertions, green, and GitHub Actions runs them on every push.
 
 This is the orientation. **`PROGRESS.md` is the detailed reference** — every
 rule below is expanded there, along with the history of how the numbers were
@@ -305,16 +305,51 @@ These were each established by testing, and several by getting them wrong first.
    2026-09-19: "colorizing eveything red/green based on a comparision with
    other positions … the range a lot tighter so it's easier to be in
    green/red"). Four steps a side, full colour at **±1 SD** rather than ±2.
+   **It is now on every page** — he asked for the rest of the sweep the same
+   day ("it needs to be added to all the other places a number is reffered to
+   across the whole cite"). What it is deliberately NOT on is listed under the
+   2026-09-19 (later) block below, and that list is as load-bearing as the
+   scale: a column with no honest comparison group gets no colour rather than
+   a misleading one.
    Two rules inside it must not be quietly undone:
    - **The comparison group is the same SLOT or COLUMN across the league**,
      never one position against another. A quarterback's 22 against a kicker's
-     8 is not a comparison.
+     8 is not a comparison. **There is one further legitimate shape, added
+     2026-09-19 (later): ONE MAN AGAINST HIS OWN WEEKS**, on the player card's
+     run — "is this a good week for him". Still never one position against
+     another, which is the rule the sentence above is really making.
    - **The scale owns a cell's BACKGROUND and its WEIGHT, and nothing else.**
      Every meaning already on this site owns the foreground — the orange
      `--assumed`, the injury reds, Bye/OUT, `.pos`/`.neg` — so a cell can be
      green *and* assumed at once and both claims survive. In CSS the tint is a
      `linear-gradient` background-IMAGE, because zebra, row hover and
      `#seasonTable td.lit` all own background-COLOR at higher specificity.
+
+     **THREE EXCEPTIONS TO "EVERYTHING ELSE OWNS THE FOREGROUND", all found
+     2026-09-19 (later) and all of them background SHORTHANDS, which ERASE a
+     tint rather than compose with it**: `td.beats` on the Players wire (the
+     "beats your own man" green — which is why the wire's week cells are
+     deliberately uncoloured), and `st-out` / `st-ir` in analysis.html. A
+     shorthand is also how `tr.picked td` and `tbody.split td` were silently
+     wiping the Proj avg grid's existing colours; both are `background-color`
+     now. When a tint does not appear, look for a shorthand before anything
+     else.
+   - **The WEIGHT channel is fragile and has its own guard.** The weight rules
+     sit at specificity 0,2,1 (`.heat.heat-up-N:not(html)`) because a
+     page-local two-class rule (`.rank .vv { font-weight: 600 }`) beat the
+     single-class version and silently stripped the hue-free channel while the
+     tint still drew. It stops AT 0,2,1 on purpose: `table.grid td.grid-total`
+     is 0,2,2 and must keep winning, or every coloured totals cell on the site
+     gets lighter. Do not "tidy" either number.
+   - **Inside the player card the weight ladder is OFF**, because bold there
+     means "he starts" (rule 17) and two meanings on one channel is the thing
+     this rule exists to prevent. A heavier number is also a WIDER number, and
+     the card's wrap arithmetic has no scrollbar to absorb that.
+   - **A scaled cell must emit `data-v`.** `js/sortable.js` falls back to a
+     cell's TEXT and strips only `, + $ %` and spaces — not ▲ — so a cell at
+     the end of the scale sorts as the string `"22.1 ▲"`. That was live on the
+     Stats standings and week grid from the day the scale shipped until
+     2026-09-19 (later).
 
    It replaced the season sheet's ▼ / ▼▼ (`lo1`/`lo2`/`.lowmark` are gone) and
    the Stats page's own green tint, which painted the HARDEST schedule the
@@ -335,6 +370,47 @@ These were each established by testing, and several by getting them wrong first.
    written to disk. **The Trade page therefore prices itself on load**; the old
    "nothing on that page fetches until the button is pressed" is no longer
    true.
+
+16. **A KEY UNDER A COLOURED TABLE IS ONE SENTENCE; THE THRESHOLDS IN POINTS
+   GO BEHIND "How this works."** The colour sweep of 2026-09-19 (later) first
+   printed the full `describeHeat` sentence visibly under every table it
+   touched, and took the site from **1,258 to 1,970 visible words (+57%)** and
+   up to **+2,212px of height on a phone**. Every suite was green throughout:
+   **no test catches this**, and the two things that do are
+   `node tests/text-audit.mjs` and `node tools/measure-layout.mjs`. RUN BOTH
+   after anything that adds explanation to a panel. Both numbers were brought
+   back the same day (1,444 words; heights within ~+150px).
+
+   The thresholds in points are NOT deleted — Tim checks cells by hand and
+   that is the channel that makes a colour checkable. They move one tap away.
+   Three things stay VISIBLE however short the key gets, because each is a
+   fact that changes how a colour READS rather than an explanation of it:
+   - **that a column is INVERTED** (a high projected opponent is a hard
+     schedule; a low average place is good) — a reader who misses this reads
+     every cell backwards;
+   - **that a scale was REFUSED**, and why (too few values, or the whole
+     league inside one printed tenth) — said only in the toggle it is said
+     nowhere, and an uncoloured column just looks broken;
+   - anything that warns, errors, or changes what a number means.
+
+17. **On the player card's week run, BOLD MEANS "HE STARTS"** (Tim,
+   2026-09-19: "bold all the week #s that that player is currently projected
+   to start for you … If you're hovering over another user's player (that
+   you're trading for), then bold all the week #s that that player would start
+   for you IF the trade would be made"). Two different questions, and the page
+   must ask the right one of each man: a man of your own is measured against
+   **his own manager's** best lineup that week; a man you are receiving is
+   measured against **YOURS, with the trade applied** — an `optimalLineup`
+   solve over (your roster that week − what you send + what you receive).
+   - **Only weeks still to come are bold**, and the rule is enforced inside
+     `weekRun` rather than in the caller, so it holds for every caller. "Who
+     started week 3" is a fact, not a forecast, and no trade can reach it. A
+     heavy divider falls before the first week still to come.
+   - **No floors in the SELECTION** — rule 13. This is a question about who is
+     chosen, so it runs on ESPN's own projections and nothing else.
+   - The card SAYS which squad it solved against. A set comparison alone can
+     pass while the page answers the wrong question, because the two answers
+     legitimately coincide for a man who starts everywhere.
 
 ## How a panel reads (2026-09-16, Tim: "messy and wordy")
 
@@ -628,7 +704,69 @@ Five worth knowing by name:
 
 ## What is genuinely open
 
-### 2026-09-19 — ten of his asks landed in one day. Read this block first.
+### 2026-09-19 (later) — eight more asks, and the colour reached every page. Read THIS block first.
+
+All pushed and live; **38 suites, 13,208 assertions, green**. Six agents on
+disjoint file sets, then three more on the density repair below.
+
+1. **THE RED/GREEN SCALE IS NOW ON EVERY PAGE** (Tim: "it needs to be added to
+   all the other places a number is reffered to across the whole cite. For
+   example trade views, 14 week previews, etc."). Rule 14 has the mechanics.
+   **What it is NOT on is the half to read**, because each refusal is an
+   argument he may want to overrule: the Players wire's week cells (the two
+   greens own that background with a SHORTHAND, so a tint there is erased, not
+   composed); the `A week` grid's bench columns and its Bye/OUT/IR state cells
+   (letting them in draws `0.0 IR ▼` in full red on the injury background);
+   Home's matchup cards (the column is the lineup AS SET while the card's own
+   verdict uses the BEST lineup, so a green side could be the side the card
+   says will lose); the injury report (a QB's 22 above a kicker's 8); "Who to
+   start" and the roster detail (their backgrounds already mean something, and
+   a roster-detail column runs through every position at once); most of
+   Schedule's fixture tables (a percentage that belongs to a FIXTURE has no
+   good end — 20% for the home side is 80% for the away side); and **the
+   Summary share image** (a PNG in his group chat has no tooltip and no key, so
+   colour there carries a relative claim nobody can check).
+2. **Four real defects the sweep exposed, all of them live before today.**
+   (a) every scaled cell at the end of the scale was sorting as the string
+   `"22.1 ▲"` — see rule 14's `data-v` note; (b) `tr.picked td` and
+   `tbody.split td` were background SHORTHANDS silently wiping the Proj avg
+   grid's colours; (c) `.rank .vv` out-specified the scale's weight channel;
+   (d) `fc-test`'s "at most four teams have any title chance" was passing
+   VACUOUSLY against a class no cell has ever carried — and the claim is false
+   anyway with most of a season left.
+3. **`js/trade-suggest.js` — suggested players for a custom trade.** Pure,
+   node-tested, 182 assertions. Every improving man is returned (not just the
+   optimum), ranked evenest-first, each carrying what BOTH sides end up at, and
+   a "fleece" that leaves the other manager negative is labelled rather than
+   filtered out — that leeway is his explicit ask. Priced through the same
+   engine, weeks and floors as the deal itself; with floors on 2 men even the
+   demo deal, with them off 4 do and in a different order.
+4. **Best combo prints ONE gain, not one per row.** The per-row "you gain"
+   columns are gone: each was measured against the roster as it is today and
+   they cannot be added, which is what made the panel unreadable. Each
+   manager's row keeps his own gain.
+5. **The custom trade box**: "you" follows the manager picked at the top of the
+   page (the second picker is deleted — pricing a deal between two OTHER
+   managers still works, it moved to that top picker); the opponent's columns
+   are MIRRORED so both value columns face down the middle; a saved trade goes
+   through `offerRow`, the finder's own row builder, so it cannot drift; and
+   the breakdown renders beside the builder **above 900px only**, and is
+   REMOVED from the document below that, not hidden.
+6. **Bold week runs on the player card** — rule 17.
+7. **`tools/measure-layout.mjs` is in the repo at last**, after being written
+   and thrown away twice. It is what caught the density regression in rule 16
+   when all 38 suites were green. **It also finally answers the sub-44px
+   question**: 25 kinds, not the four the old audit guessed at. The worst is
+   **the site nav at 38px on every page** — the most-used control on the site.
+   Three `<select>`s are 43px and Schedule's week steppers are 32px wide. Four
+   one-line fixes, none of them made, none of them asked for.
+8. **Not fixed, and worth telling him**: `schedule.html` gets TALLER as the
+   window gets wider (4,059px at 1000px, 4,254px at 1500px), which is backwards
+   from every other page. And `.panel-row > * { min-width: 0 }` is **no longer
+   load-bearing** despite what its comment claims — `minmax(min(420px,100%),1fr)`
+   gives the track a definite minimum so the automatic one never applies.
+
+### 2026-09-19 — ten of his asks landed in one day.
 
 All pushed and live; **37 suites, 12,089 assertions, green**. Most of it
 changes numbers he checks by hand, so if he says a figure looks wrong, start
@@ -776,8 +914,12 @@ things it taught, both worth keeping:
 - **A grid gap and a panel's own bottom margin add up.** Pairing panels cost
   +101px on a phone until the row took ownership of the spacing.
 
-The script is not in the repo (it was a scratchpad tool). Worth rebuilding if
-the density pass goes further.
+**SUPERSEDED 2026-09-19 (later): the script IS in the repo now**, as
+`tools/measure-layout.mjs` with `tools/README.md`. Both traps above are
+commented at the line that avoids them, and a third is recorded (the in-page
+probe is one template literal, so a backtick in a comment inside it fails as
+`scroll is not defined` rather than loudly). It measures, diffs two runs,
+screenshots a selector, and reports sub-44px targets under touch emulation.
 
 **Earlier passes, still not seen by him:** everything under 2026-09-17 in
 PROGRESS.md — the cloud going live, the real-league audit's six fixes, Season
@@ -786,23 +928,39 @@ order, playoff weeks in every week preview.
 
 ### Open questions for Tim (asked, not answered)
 
-**Asked 2026-09-19, at the top because they are the live ones:**
+**Asked 2026-09-19 (later), at the top because they are the live ones:**
 
-- **Should the `A week` grid take the red/green scale too?** It was left off,
-  argued at length in a comment above `renderGrid` that he can overrule: those
-  cells already spend colour on four state meanings (Bye, a ruled-out 0.0, OUT,
-  IR), which is the "unless it conflicts with something else we already have
-  built" exception he named himself. `Proj avg` is one button away and coloured.
+- **Four tap targets miss the 44px floor, and the nav is the one that matters.**
+  Measured, finally, rather than guessed: the site nav is **38px on every
+  page**, three `<select>`s are 43px, and Schedule's week steppers are 32px
+  wide. He has never asked for these and they are four one-line fixes — worth
+  offering rather than doing unasked, since the nav's height is a visible
+  change on every page of the site.
+- **The colour refusals are each an argument he may want to overrule** — the
+  full list is item 1 of the 2026-09-19 (later) block above. The two most
+  likely to come back: the Players wire's WEEK cells (his two greens own that
+  background, so the scale went to `Avg` instead) and the Summary share image.
+- **`schedule.html` gets TALLER as the window gets WIDER** (4,059px at 1000px
+  against 4,254px at 1500px), which is backwards from every other page and
+  probably the forecast/sim charts growing with an aspect ratio. Nobody has
+  looked yet.
+- **Six hours for a future week's projections** — the local store's clock,
+  pinned to the cloud sync interval rather than chosen. If he wants fresher, it
+  is one constant.
+
+**Asked 2026-09-19 and still unanswered:**
+
 - **Is +374px on the Stats page an acceptable price for the pairing he asked
   for?** Score distribution and Projection accuracy now share a line, which
   breaks up two existing pairs and leaves Cumulative luck and Score spread
   full-width. He asked for it by name; the measurement says it costs height.
-- **Where else should the scale go?** He said "virtually all charts across the
-  site". It is on Analysis and Stats. The Trade page, the Players page's own
-  two greens, and the actual CHARTS (as opposed to tables) are untouched.
-- **Six hours for a future week's projections** — the local store's clock,
-  pinned to the cloud sync interval rather than chosen. If he wants fresher, it
-  is one constant.
+  (The density repair later that day took Stats BELOW its pre-colour height, so
+  this is less pressing than it was.)
+
+**ANSWERED 2026-09-19 (later), do not re-ask:** whether the `A week` grid takes
+the scale (yes — his "all the other places a number is reffered to" is the
+answer, and it is built), and where else the scale should go (everywhere it has
+an honest comparison group; the sweep is done).
 
 **Older, still unanswered:**
 
@@ -844,8 +1002,15 @@ order, playoff weeks in every week preview.
 - **Commit the archive export** the moment it appears in his Downloads. It is
   the only thing here with a deadline.
 - **Hard-refresh matters more than usual right now.** Ten changes landed on
-  2026-09-19 and several of them move numbers. If he reports something that
-  reads like yesterday's behaviour, ask before investigating.
+  2026-09-19 and eight more later the same day; several move numbers and the
+  whole site changed colour. If he reports something that reads like
+  yesterday's behaviour, ask before investigating.
+- **RUN THE TWO MEASURING TOOLS after anything that adds explanation or
+  content to a panel** — `node tests/text-audit.mjs` and
+  `node tools/measure-layout.mjs`. Rule 16 is there because 38 green suites
+  said the colour sweep was finished while the site had quietly grown 57%
+  wordier and a phone-screen taller. No test catches it. This is the single
+  most useful habit to come out of that day.
 - **The store covers ROSTERS only.** The waiver wire (one request a page, and
   it is what feeds the floors) and the bye weeks are the obvious next shapes,
   and the wire is the one whose re-read actually costs him something per page.
@@ -855,10 +1020,16 @@ order, playoff weeks in every week preview.
   combo pool are both demo-only artefacts. Giving demo a wire closes both at
   once, and it is the same contained job as before: the demo pool lives inside
   `js/waivers-page.js` rather than in a shared module.
-- **The layout measuring script exists again** but is still in a scratchpad,
-  not the repo — headless Edge over CDP, `Emulation.setDeviceMetricsOverride`,
-  polls until the height settles, can screenshot a selector. Worth committing
-  if the density pass goes further.
+- **The four sub-44px tap targets, now that they are finally named** — the nav
+  at 38px on every page first, then three 43px `<select>`s and Schedule's 32px
+  week steppers. Offer them rather than doing them: the nav's height changes
+  every page of the site.
+- **`schedule.html` growing taller as it grows wider** (see the open
+  questions). Probably a chart aspect ratio; nobody has looked.
+- **`.panel-row > * { min-width: 0 }` no longer does anything** — the grid
+  track has a definite minimum now, so the automatic min-content minimum never
+  applies. Its comment still claims it is the load-bearing fix for Home's
+  390px overflow. Correct the comment rather than removing the rule.
 - **December**, now the nearest real deadline after that. Home, the Players
   page and "Who to start" stop at the last regular week, so his playoff matchup
   never appears; the simulation says "nothing left to simulate" once week 14 is
