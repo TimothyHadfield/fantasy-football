@@ -3262,12 +3262,27 @@ function renderDeal() {
     espnBlock;
 
   const sumOfRows = priced.byWeek.reduce((a, w) => a + w.delta, 0);
-  $('dealNote').innerHTML =
-    (basis() !== 'weeks'
-      ? `<strong>The list behind this is ranked on ${esc(meta().label)}</strong>, not week by week, ` +
-        `so its figure for this deal will not match the total here. Choose ` +
-        `<strong>Every remaining week</strong> at the top to rank the whole list this way. `
-      : '') +
+  // NOTHING BUT A WARNING IS DRAWN UNDER THIS TABLE (Tim, 2026-09-20: "the
+  // popup still has the description below" — and before that, of the player
+  // card, "I want all the words beneath the chart to dissapear, they're not
+  // needed").
+  //
+  // THE CARD WAS FIXED FIRST AND THIS WAS NOT, because his earlier ask said
+  // "the preview" and this page has TWO pop-ups: the 14-week player card, and
+  // this week-by-week breakdown. Only the first was stripped, so he reported
+  // the same complaint twice and was right both times. Worth remembering: on
+  // this page "the pop-up" is ambiguous, and the answer is usually both.
+  //
+  // The split is rule 16's, the same one every coloured table follows:
+  //   - A WARNING STAYS VISIBLE. The basis mismatch changes what the number in
+  //     front of him MEANS — the list behind this modal is ranked on a
+  //     different measure, so its figure will not match this total. A reader
+  //     who misses that is reading two numbers as one. It is also the only
+  //     part of this note that is not there every single time.
+  //   - EVERYTHING ELSE GOES TO `sr-only`, not to a toggle and not to the bin:
+  //     it costs no pixels, a screen reader still gets the basis of every
+  //     derived number (rule 7), and nothing here is deleted.
+  const dealWords =
     `<strong>Hover, tap or Tab to a week</strong> to open that week slot by slot, before and ` +
     `after — the same lineups these totals are added up from, laid out the way the Analysis ` +
     `page lays them out, with the men you send and receive marked. Escape closes it. ` +
@@ -3301,6 +3316,14 @@ function renderDeal() {
     `between those two readings is exactly what depth is worth. So the two panels cannot ` +
     `contradict each other about a player; where they differ, it is the arithmetic differing, ` +
     `and that difference is the answer rather than a discrepancy.`;
+
+  $('dealNote').innerHTML =
+    (basis() !== 'weeks'
+      ? `<strong>The list behind this is ranked on ${esc(meta().label)}</strong>, not week by week, ` +
+        `so its figure for this deal will not match the total here. Choose ` +
+        `<strong>Every remaining week</strong> at the top to rank the whole list this way.`
+      : '') +
+    `<span class="sr-only">${dealWords}</span>`;
 
   // The slot-by-slot panel is re-rendered rather than rebuilt with the body, so
   // that a hover can repaint it without the table under the pointer being
@@ -3576,14 +3599,24 @@ function renderDealWeek(which = 'deal') {
     `<th>${esc(offer.combined ? 'With the combination' : 'With the trade')}</th>` +
     `<th>Difference</th></tr></thead>` +
     `<tbody>${body}${foot}</tbody></table></div>` +
+    // THE KEY IS ONE CLAUSE NOW (Tim, 2026-09-20: the words under a pop-up).
+    //
+    // Most of what was here restated marks that are already ENGLISH WORDS in
+    // the cells — "IN the man you receive" explains a cell that says IN. A key
+    // earns its place by explaining a cue a reader cannot decode from the cue
+    // itself, and four of these five could be read off the table.
+    //
+    // The heavier row is the exception and is the one that stays: weight is a
+    // cue with no word attached, so dropping its explanation would leave a
+    // claim on the table with nothing anywhere saying what it means. The rest
+    // goes to `sr-only` — a screen reader does not get colour or weight and so
+    // genuinely needs all five spelled out.
     `<p class="wkx-key">` +
-    `<span class="wkx-mark got">IN</span> the man you receive · ` +
-    `<span class="wkx-mark gone">OUT</span> the man you send · ` +
-    `<span class="wkx-mark shift">promoted</span> / ` +
-    `<span class="wkx-mark shift">benched</span> / ` +
-    `<span class="wkx-mark shift">moved</span> one of your own whose place the deal changes. ` +
-    `A row whose number moved is drawn heavier; the rest are untouched that week.` +
-    `</p>`;
+    `A row whose number moved is drawn heavier.` +
+    `<span class="sr-only"> ` +
+    `IN is the man you receive; OUT is the man you send; promoted, benched and moved mark one ` +
+    `of your own whose place the deal changes. The rest are untouched that week.` +
+    `</span></p>`;
 }
 
 /** Open one week's breakdown. Hover, tap, focus and Enter all land here. */

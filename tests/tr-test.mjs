@@ -541,6 +541,18 @@ function readBreakdown(document) {
       }))
       : [],
     keyMarks: [...host.querySelectorAll('.wkx-key .wkx-mark')].map(text),
+    // The key, split the way Tim's "no words under the pop-up" ask splits it:
+    // what a reader SEES, and what only a screen reader gets. Read separately
+    // and never through `textContent`, which returns the hidden half too and
+    // would pass whether the words were drawn or not.
+    keyVisible: (() => {
+      const p = host.querySelector('.wkx-key');
+      if (!p) return '';
+      const clone = p.cloneNode(true);
+      clone.querySelectorAll('.sr-only').forEach((n) => n.remove());
+      return text(clone);
+    })(),
+    keySr: text(host.querySelector('.wkx-key .sr-only')),
     // What the WEEK TABLE says is open, which must agree with what is drawn.
     expanded: [...document.querySelectorAll('#dealBody .wk-peek')]
       .filter((b) => b.getAttribute('aria-expanded') === 'true')
@@ -3886,8 +3898,26 @@ if (!live.boot) {
       peek.mineSide.marks.some((m) => m.cls.includes('shift')) &&
       peek.theirSide.marks.some((m) => m.cls.includes('shift')),
       JSON.stringify([peek.mineSide.marks, peek.theirSide.marks]));
-    eq(peek.mineSide.keyMarks.join(','), 'IN,OUT,promoted,benched,moved',
-      'the key under the table spells every mark out in words');
+    // THE KEY UNDER THE TABLE IS ONE CLAUSE NOW (Tim, 2026-09-20: "the popup
+    // still has the description below"). REPLACED, not relaxed: the old
+    // assertion required all five marks to be SPELLED OUT visibly, which
+    // encoded the behaviour he asked to be rid of — and four of the five were
+    // restating cells that already say IN, OUT, promoted, benched and moved in
+    // English. What is asserted now is the split itself.
+    ok('nothing but the heavier-row clause is drawn under the slot table',
+      /heavier/.test(peek.mineSide.keyVisible) &&
+      !/you receive|you send|untouched/.test(peek.mineSide.keyVisible),
+      JSON.stringify(peek.mineSide.keyVisible));
+    ok('and the visible key is one short clause, not a paragraph',
+      peek.mineSide.keyVisible.split(/\s+/).filter(Boolean).length <= 12,
+      peek.mineSide.keyVisible);
+    // THE MEANING IS MOVED, NOT DELETED. Weight is a cue with no word attached,
+    // so the visible clause keeps it; the four self-describing marks survive
+    // for a reader who gets neither colour nor weight.
+    ok('every mark is still spelled out for a screen reader',
+      ['IN', 'OUT', 'promoted', 'benched', 'moved']
+        .every((w) => peek.mineSide.keySr.includes(w)),
+      peek.mineSide.keySr);
 
     // ---- the played and playoff weeks open too, and say what they are ------
     ok('a played week opens and says it is in no total',
