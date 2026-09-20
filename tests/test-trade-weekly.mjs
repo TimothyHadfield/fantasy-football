@@ -204,16 +204,24 @@ eq(seasonLineupValue(WIDE, QB_ONLY, WEEKS3, null).total, 0,
   'no way to read a projection is no value, not a throw');
 
 // ---------------------------------------------------------------------------
-// A 0.00 is a bye only in his bye week (2026-09-16)
+// EVERY ZERO LEAVES THE PER-WEEK DIVISOR (Tim, 2026-09-20)
 // ---------------------------------------------------------------------------
 //
-// ESPN projects an OUT or IR man at exactly 0.00 in ordinary weeks too. So
-// `zeroIsBye` may be a `(player, week)` function, and only the weeks it says
-// are byes leave the per-week divisor. A ruled-out zero is a week he does not
-// play for a reason a trade does not fix, and it counts as a zero.
+// This block used to assert the opposite of half of itself, and the assertions
+// were right about the engine of the day: a bye left the divisor, and a
+// ruled-out 0.00 stayed in it, so `zeroIsBye` decided which of the two a zero
+// was and the number moved with it.
 //
-//   Hurt: 0 10 10     bye week 1 -> 20 / 2 = 10.0 (week 1 is his bye)
-//                     bye week 3 -> 20 / 3 =  6.7 (week 1 is a ruled-out zero)
+// Tim overruled that. `perWeek` is now the mean over the weeks that carry a
+// number ABOVE ZERO, so every zero is out of the divisor however it got there —
+// which means `zeroIsBye` cannot move this number at all any more. That is what
+// the four calls below now pin: same man, four different answers to "is this a
+// bye", one per-week figure.
+//
+//   Hurt: 0 10 10     20 / 2 = 10.0, whatever the zero in week 1 is called.
+//
+// If anyone restores the old divisor, `flagOff` and `byeIs3` go back to 6.7 and
+// these fail.
 {
   const hurt = man('Hurt', 'RB', [0, 10, 10]);
   const swapped = man('Swapped', 'RB', [5, 5, 5]);
@@ -223,20 +231,130 @@ eq(seasonLineupValue(WIDE, QB_ONLY, WEEKS3, null).total, 0,
       slots: QB_RB, weeks: WEEKS3, projFor, zeroIsBye,
     });
     const joined = priced.roster.find((p) => p.playerId === hurt.playerId);
-    return joined ? { perWeek: joined.perWeek, playable: joined.weeksPlayable, total: joined.projected } : null;
+    return joined ? { perWeek: joined.perWeek, scoring: joined.weeksScoring, total: joined.projected } : null;
   };
   const flagOn = perWeekOf(true);
   const flagOff = perWeekOf(false);
   const byeIs1 = perWeekOf((p, w) => p.playerId === hurt.playerId && w === 1);
   const byeIs3 = perWeekOf((p, w) => p.playerId === hurt.playerId && w === 3);
-  close(flagOn && flagOn.perWeek, 10, 1e-9, 'the old flag still works: every zero a bye, 20 / 2');
-  close(flagOff && flagOff.perWeek, 6.7, 1e-9, 'and false still counts every zero, 20 / 3');
+  close(flagOn && flagOn.perWeek, 10, 1e-9, 'every zero a bye: 20 / 2 = 10.0');
+  close(flagOff && flagOff.perWeek, 10, 1e-9,
+    'NO zero a bye: still 20 / 2 = 10.0, where the old rule said 20 / 3 = 6.7');
   close(byeIs1 && byeIs1.perWeek, 10, 1e-9, 'a zero IN his bye week leaves the divisor: 20 / 2');
-  eq(byeIs1 && byeIs1.playable, 2, 'two playable weeks when week 1 is his bye');
-  close(byeIs3 && byeIs3.perWeek, 6.7, 1e-9,
-    'A RULED-OUT ZERO OUTSIDE HIS BYE WEEK COUNTS AS A ZERO: 20 / 3, not 20 / 2');
-  eq(byeIs3 && byeIs3.playable, 3, 'and all three weeks are playable — the bye week has a number in it');
-  close(byeIs3 && byeIs3.total, 20, 1e-9, 'the total is the same 20 either way; only the divisor moves');
+  eq(byeIs1 && byeIs1.scoring, 2, 'two scoring weeks when week 1 is his bye');
+  close(byeIs3 && byeIs3.perWeek, 10, 1e-9,
+    'A RULED-OUT ZERO LEAVES IT TOO: 20 / 2, where the old rule said 20 / 3');
+  eq(byeIs3 && byeIs3.scoring, 2,
+    'two scoring weeks whichever week is called his bye — the option cannot move the divisor');
+  close(byeIs3 && byeIs3.total, 20, 1e-9,
+    'and the total is 20 in every one of them: the zero is still points he will not score');
+}
+
+// ---------------------------------------------------------------------------
+// TIM'S OWN CASE, MADE FALSIFIABLE (2026-09-20)
+// ---------------------------------------------------------------------------
+//
+// His report, verbatim: "the weekly avg in the trade menu of the player doesn't
+// actually reflect the real future proj averages. For example, Nico Collins
+// displays 14.2, however 100% of his future weeks are proj above 14.2, except
+// for his BYE week … it should only calculate future weeks that actually
+// project any points at all, and then set the avg there."
+//
+// The fixture is that sentence in one man, over a six-week span:
+//
+//   w1 16   w2 0 (bye)   w3 15   w4 null (ESPN quiet)   w5 18   w6 never read
+//
+// Weeks 4 and 6 are the same thing to `projFor` and that is the point — a week
+// this page has not fetched reads exactly like a week ESPN carried nothing for,
+// so the old divisor made the printed average partly a fact about the cache.
+//
+//   OLD RULE   sum 49, byes out of the divisor and nulls left in: 49 / 5 = 9.8,
+//              which is BELOW every single week he is projected to score in.
+//   NEW RULE   49 / 3 = 16.3, which is inside 15…18 where it belongs.
+//
+// Both numbers are worked out by hand here and both are asserted — the new one
+// as the answer, the old one as the answer the engine must NOT give.
+{
+  const WEEKS6 = [1, 2, 3, 4, 5, 6];
+  // Only weeks 1-5 are written to the fixture's map, so week 6 is a week this
+  // page has never read rather than a week with a null in it.
+  const nico = man('Nico', 'WR', [16, 0, 15, null, 18], [1, 2, 3, 4, 5]);
+
+  const entryFor = (player, zeroIsBye = true) => {
+    const priced = priceTradeAcrossWeeks({
+      players: [player], send: [], receive: [], slots: QB_RB, weeks: WEEKS6, projFor, zeroIsBye,
+    });
+    return priced.roster.find((p) => p.playerId === player.playerId) || null;
+  };
+
+  const e = entryFor(nico);
+  const weeksHeScores = [16, 15, 18];
+  const oldRule = 49 / 5; // byes out, nulls in — what this printed before today
+
+  close(e && e.projected, 49, 1e-9, 'his rest-of-season total is every week added up: 49');
+  eq(e && e.weeksScoring, 3, 'three of the six weeks carry a number above zero');
+  close(e && e.perWeek, 16.3, 1e-9, 'so his per-week figure is 49 / 3 = 16.3');
+  ok('and it sits INSIDE the range of the weeks it was made from (15…18)',
+    e && e.perWeek >= Math.min(...weeksHeScores) && e.perWeek <= Math.max(...weeksHeScores),
+    `${e && e.perWeek}`);
+  ok('the old answer was below every one of those weeks, which is what Tim reported',
+    oldRule < Math.min(...weeksHeScores), `${oldRule} vs ${Math.min(...weeksHeScores)}`);
+  ok('and the engine no longer gives it', Math.abs((e && e.perWeek) - oldRule) > 1,
+    `${e && e.perWeek} vs ${oldRule}`);
+
+  // The divisor cannot be moved by what anybody calls the zero…
+  close(entryFor(nico, false) && entryFor(nico, false).perWeek, 16.3, 1e-9,
+    'no zero called a bye: the same 16.3');
+  close(entryFor(nico, (p, w) => w === 5) && entryFor(nico, (p, w) => w === 5).perWeek, 16.3, 1e-9,
+    'a week he SCORES in called his bye: still 16.3 — only the number in the week counts');
+
+  // …nor by how much of the span has been bought yet, which is the half of the
+  // bug that no fixture caught before. Price him over the three weeks that were
+  // read and he comes out at the same figure.
+  {
+    const part = priceTradeAcrossWeeks({
+      players: [nico], send: [], receive: [], slots: QB_RB, weeks: [1, 2, 3], projFor,
+    }).roster.find((p) => p.playerId === nico.playerId);
+    close(part && part.perWeek, 15.5, 1e-9, 'weeks 1-3 alone: (16 + 15) / 2 = 15.5');
+    const half = priceTradeAcrossWeeks({
+      players: [nico], send: [], receive: [], slots: QB_RB, weeks: [1, 2, 3, 4, 6], projFor,
+    }).roster.find((p) => p.playerId === nico.playerId);
+    // Worth the arithmetic: over weeks 1-3 the old rule and this one AGREE at
+    // 15.5 (31 / 2, his bye out), because everything in that span was read.
+    // Add weeks 4 and 6, which this page has no number for, and the old rule
+    // divided the same 31 points by 4 and printed 7.8 for a man whose every
+    // scoring week is 15 or 16. That is the bug in two lines.
+    close(half && half.perWeek, 15.5, 1e-9,
+      'ADDING TWO UNREAD WEEKS CHANGES NOTHING: still 15.5, where the old rule sagged to 7.8');
+    ok('which is the defect itself: the printed average was partly a fact about the cache',
+      Math.abs(half.perWeek - part.perWeek) < 1e-9);
+  }
+
+  // THE CONSEQUENCE THAT FLATTERS, asserted rather than left to be discovered.
+  // A man ruled OUT for two of the six weeks is projected 0.00 in them, and
+  // those zeros are now out of his divisor as surely as a bye is.
+  {
+    const crocked = man('Crocked', 'RB', [14, 0, 0, 16, null], [1, 2, 3, 4, 5]);
+    const c = entryFor(crocked, false); // no week is his bye: these are OUT weeks
+    close(c && c.projected, 30, 1e-9, 'the zeros are still in his season total: 30');
+    eq(c && c.weeksScoring, 2, 'but only two weeks carry a number above zero');
+    close(c && c.perWeek, 15, 1e-9,
+      'so he prints 15.0 — what he is worth in a week he plays, not 5.0 over the whole span');
+    ok('THIS IS THE FLATTERING CASE, and it is deliberate: 30 / 6 = 5.0 is the season answer',
+      c.perWeek > c.projected / 6);
+  }
+
+  // Nothing to say is `null`, and never 0.0 and never a division by zero.
+  {
+    const ghost = man('Ghost', 'K', [0, 0, null], [1, 2, 3]);
+    const g = entryFor(ghost);
+    eq(g && g.weeksScoring, 0, 'a man with no scoring week has an empty divisor');
+    eq(g && g.perWeek, null, 'so his per-week figure is null — not 0.0, which would read as a claim');
+    const empty = priceTradeAcrossWeeks({
+      players: [ghost], send: [], receive: [], slots: QB_RB, weeks: [], projFor,
+    }).roster.find((p) => p.playerId === ghost.playerId);
+    eq(empty && empty.perWeek, null, 'and an empty span is null too rather than a throw');
+  }
 }
 
 // ---------------------------------------------------------------------------

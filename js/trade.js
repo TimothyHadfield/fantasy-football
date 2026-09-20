@@ -779,67 +779,99 @@ export function findTrades({
  *                cuts by, so both of them work here unchanged.
  *   `weekly[i]`  a ready-made player object for `weeks[i]`, whose `projected`
  *                is that week's number. `optimalLineup` reads these directly.
- *   `perWeek`    what he is worth IN A WEEK HE PLAYS — see below.
+ *   `perWeek`    what he is worth IN A WEEK HE SCORES — see below. DISPLAY
+ *                ONLY: nothing in this file prices, ranks or cuts on it.
  *
  * A week ESPN has no number for is `null`, which `optimalLineup` drops from the
  * pool entirely — a different fact from a 0.00 bye, and that distinction is the
- * one rule 2 in HANDOFF.md exists to protect.
+ * one rule 2 in HANDOFF.md exists to protect. IT IS STILL PROTECTED HERE, and
+ * the change of 2026-09-20 below does not touch it: a null and a 0.00 remain
+ * two different things in `weekly[i]`, in every lineup filled from it and in
+ * `projected`. What changed is one printed average, which now excludes both.
  *
  * ---------------------------------------------------------------------------
- * `perWeek` DELIBERATELY EXCLUDES BYES, AND SO NO LONGER MULTIPLIES BACK UP
+ * `perWeek` IS THE MEAN OVER THE WEEKS THAT CARRY A PROJECTION ABOVE ZERO
  *
- * The owner's words: "ignore the bye week when calculating per week." He is
- * right, and the reason is worth writing down. A bye comes back from ESPN as
- * **0.00** — a true fact about that week, and no evidence at all about what the
- * man is worth in a week he actually plays. Averaging it in says a 14-a-week
- * receiver with one bye left in a nine-week span is a 12.4 receiver, which is a
- * sentence about the calendar wearing the clothes of a sentence about him.
+ * Tim, 2026-09-20, about a man on his own roster: "the weekly avg in the trade
+ * menu of the player doesn't actually reflect the real future proj averages.
+ * For example, Nico Collins displays 14.2, however 100% of his future weeks are
+ * proj above 14.2, except for his BYE week … it should only calculate future
+ * weeks that actually project any points at all, and then set the avg there."
  *
- * So `perWeek` is the mean over his PLAYABLE weeks — the span with his byes
- * taken out of the divisor, and ONLY his byes. Three states stay three states,
- * exactly as `projToken` in js/player-card.js tells them apart:
+ * A printed average that is BELOW every week it was computed from is not a
+ * rounding quibble; it is the number failing to mean anything. So the divisor
+ * is now the weeks that actually carry a number greater than zero, and
+ * everything else leaves it outright:
  *
- *   0.00   a bye, WHEN the numbers came from ESPN AND it is his team's bye
- *          week (or the byes are unknown) — see `isBye`. It stays in `projected` —
- *          those are points he genuinely will not score — and comes out of the
- *          divisor, which is the whole of this change.
- *   0.00   a genuine projection of zero, when they did NOT come from ESPN.
- *          `js/demo-rosters.js` returns 0 for a man it has ruled OUT, which is
- *          a real zero and not a bye. So the caller says which kind of data
- *          this is with `zeroIsBye`, and demo passes `false` — the same
- *          distinction, in the same direction, as `projToken(v, demo)`.
- *   null   ESPN carried no number for him that week. DELIBERATELY UNCHANGED:
- *          it is still in the divisor, exactly as it was before byes were
- *          taken out. A man ESPN is quiet about is not a man on bye, and
- *          quietly promoting "we do not know" into "he does not play" would
- *          inflate every player the data is thin on. The owner asked for byes;
- *          this is byes.
+ *   0.00   a bye. Points he genuinely will not score, so it stays in
+ *          `projected` — and it is no evidence about what he is worth in a week
+ *          he plays, so it is out of the divisor. (This half was already true.)
+ *   0.00   a genuine zero — an OUT or IR man, whom ESPN also projects at
+ *          exactly 0.00 in an ordinary week, or a demo player ruled out. OUT of
+ *          the divisor now. See "the consequence" below; it is the one that
+ *          flatters.
+ *   null   ESPN carried no number for him that week — OR this page has not read
+ *          that week yet, which `projFor` cannot tell apart from the first
+ *          (a week absent from the cache reads null for everybody). OUT of the
+ *          divisor now.
  *
- * The consequence has to be stated wherever both numbers appear: `projected` is
- * no longer `perWeek × weeks.length`. It is `perWeek × weeksPlayable`, give or
- * take a rounding tenth, which is why `weeksPlayable` comes back beside them
- * rather than being left for a page to infer. A man with NO playable week left
+ * THE NULL RULE WAS THE OPPOSITE OF THIS UNTIL 2026-09-20, DELIBERATELY, AND
+ * TIM REVERSED IT. What stood here, at length, was: "a man ESPN is quiet about
+ * is not a man on bye, and quietly promoting 'we do not know' into 'he does not
+ * play' would inflate every player the data is thin on." That argument is not
+ * wrong about what a null MEANS — it is wrong about what the printed number
+ * CLAIMS. An average beside a man's name is read as "what he is worth in a week
+ * he plays", and a divisor holding weeks with no number in them cannot mean
+ * that: it prints a fact about how much of the span this browser happened to
+ * have read as though it were a fact about the player. That is exactly what Tim
+ * caught — the Trade page buys its weeks in batches, so a man's figure sagged
+ * while the span filled in. His reading wins, and it wins on the meaning of the
+ * words on screen rather than on the meaning of the data underneath.
+ *
+ * THE CONSEQUENCE, STATED RATHER THAN HIDDEN: a man who is OUT or on IR for
+ * several of the remaining weeks no longer has those zeros dragging his average
+ * down. His per-week figure becomes what he is worth in a week he actually
+ * plays, which is what was asked for and is the right number to trade on — but
+ * it is a FLATTERING number for an injured man, and it is not what he is worth
+ * to a season. The number that does count those weeks is the deal's own gain,
+ * which is a sum over every week in the span, zeros and all; the panel notes on
+ * js/trade-page.js say so in those words.
+ *
+ * So `projected` is NOT `perWeek × weeks.length`, and it is further from it
+ * than it used to be — the divisor is a smaller set of weeks than before. It is
+ * `perWeek × weeksScoring`, give or take a rounding tenth and any week with a
+ * negative projection in it, which is why `weeksScoring` comes back beside the
+ * numbers rather than being left for a page to infer. A man with NO such week
  * has no per-week value at all and gets `null` — never a division by zero, and
  * never a 0.0 that would read as "he is worth nothing" rather than "there is
- * nothing to say".
+ * nothing to say". `optimalLineup` drops a null from the pool, which is the
+ * existing and correct treatment.
+ *
+ * A NEGATIVE week (rare, and only a defence) is a real projection for a week he
+ * plays, and it stays in `projected` — but the test is "more than zero", so it
+ * is out of the divisor with the zeros. Stated because it is a real asymmetry
+ * and not an oversight: it is the same flattering direction as the OUT rule
+ * above, on a hundredth of the players.
  */
 /**
- * `zeroIsBye` is either a flag for the whole data set (the original contract,
- * still accepted) or a function `(player, week) -> boolean` answering it per
- * man per week.
+ * `zeroIsBye` — a flag, or `(player, week) -> boolean` — IS STILL ACCEPTED AND
+ * NO LONGER CHANGES A NUMBER.
  *
- * THE FUNCTION FORM EXISTS BECAUSE "0.00 MEANS BYE" IS WRONG ON ITS OWN.
- * Verified against ESPN on 2026-09-16: an OUT or IR man is projected at 0.00 in
- * ordinary weeks too. A ruled-out zero is a week he does not play for a reason
- * a trade does not fix — so it counts as a zero in `perWeek`, and only his real
- * bye week leaves the divisor. The Trade page passes a function that checks the
- * week against his NFL team's bye (`zeroKind` in js/player-card.js); this file
- * stays pure and knows nothing about where that answer comes from.
+ * It existed for one job: deciding which zeros left the `perWeek` divisor, back
+ * when a bye left it and a ruled-out zero did not. Under Tim's rule above EVERY
+ * zero leaves it, so the distinction has nothing left to decide here.
+ *
+ * It stays in the signature because four exported functions in this file and
+ * several call sites outside it pass it, and ripping a parameter out of a
+ * public contract is a different change from the one being made today. It is
+ * not dead weight in the caller either: js/trade-page.js needs the same
+ * bye/ruled-out distinction to DRAW a week (`zeroKind` in js/player-card.js),
+ * and the one it passes here is the one it already has.
+ *
+ * If it is ever removed, remove it from every exported signature at once — an
+ * option that silently stops being read is how one caller ends up believing it
+ * is asking for something.
  */
-function isBye(zeroIsBye, p, week) {
-  return typeof zeroIsBye === 'function' ? !!zeroIsBye(p, week) : !!zeroIsBye;
-}
-
 function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
   const ws = (weeks || []).slice();
   const read = typeof projFor === 'function' ? projFor : () => null;
@@ -848,7 +880,12 @@ function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
     const weekly = new Array(ws.length);
     let sum = 0;
     let counted = 0;
-    let byes = 0;
+    // The two halves of the average, kept apart from `sum` on purpose: a
+    // negative week belongs in the season total and not in the divisor, so
+    // adding `sum` up and dividing by a count of the positive weeks would be a
+    // third number that is neither.
+    let scoringSum = 0;
+    let scoring = 0;
     for (let i = 0; i < ws.length; i++) {
       const raw = read(p, ws[i]);
       const v = Number.isFinite(raw) ? raw : null;
@@ -856,18 +893,26 @@ function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
       if (v !== null) {
         sum += v;
         counted++;
-        if (v === 0 && isBye(zeroIsBye, p, ws[i])) byes++;
+        if (v > 0) {
+          scoringSum += v;
+          scoring++;
+        }
       }
     }
-    // The span less his byes — not "the weeks that answered". See the note
-    // above: a null stays in the divisor, a bye does not.
-    const playable = ws.length - byes;
     return {
       ...p,
       projected: counted ? round1(sum) : null,
-      perWeek: counted && playable > 0 ? round1(sum / playable) : null,
+      // The weeks that carry a number above zero, and only those. A bye, a
+      // ruled-out zero, a week ESPN is quiet about and a week this page has not
+      // read yet are all absent from the divisor — see the note above.
+      perWeek: scoring > 0 ? round1(scoringSum / scoring) : null,
       weeksCounted: counted,
-      weeksPlayable: playable,
+      // WAS `weeksPlayable` until 2026-09-20, and the rename is the point: the
+      // divisor is no longer "the weeks he could play", it is the weeks he is
+      // projected to score in. A man ruled out for three weeks is playable in
+      // none of them and the old name would now be a lie about the number
+      // beside it.
+      weeksScoring: scoring,
       weekly,
     };
   });
@@ -929,7 +974,9 @@ function fillAcrossWeeks(roster, slots, ws, floors = null) {
  */
 export function seasonLineupValue(players, slots, weeks, projFor, floors = null) {
   // No `zeroIsBye` here on purpose: this returns totals and lineups, neither of
-  // which the bye rule touches. A bye is a real 0 in a real week either way.
+  // which the zero rule touches. A bye is a real 0 in a real week either way —
+  // and since 2026-09-20 the option decides nothing at all (see
+  // `scoreAcrossWeeks`), so passing it would be theatre.
   const { weeks: ws, season } = scoreAcrossWeeks(players, weeks, projFor);
   return fillAcrossWeeks(season, slots, ws, floors);
 }

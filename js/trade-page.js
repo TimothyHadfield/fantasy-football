@@ -66,6 +66,14 @@
 //   - `send`/`receive` entries carry `projected` (the season total) AND
 //     `perWeek` (the mean), and this file never prints the first as the second.
 //
+// AND THE TWO ARE NOT A DIVISION APART. A gain divides exactly — it is a sum
+// over exactly the weeks in the span — but `perWeek` beside a player is a mean
+// over only the weeks he is projected to SCORE in, which since 2026-09-20 is
+// the smaller set it has ever been: his byes, the weeks ESPN is quiet about,
+// the weeks this page has not read yet and the weeks he is ruled out at 0.00
+// are all out of its divisor. Every note that prints both says so, because
+// "why doesn't that multiply up" is the first thing a reader asks.
+//
 // `js/trade.js` holds every decision worth arguing about and is pure. This file
 // is wiring and markup.
 
@@ -611,19 +619,35 @@ function projFor(p, week) {
  * its cells would be nine times the size of everything a manager thinks in. But
  * it must be made of the same projections the deals are priced from, or the two
  * panels could contradict each other. So it is the same weeks, averaged — with
- * the SAME arithmetic `scoreAcrossWeeks` uses for `perWeek`, byes and all.
+ * the SAME arithmetic `scoreAcrossWeeks` uses for `perWeek`.
  *
- * WHICH NOW MEANS BYES ARE LEFT OUT OF THE DIVISOR. Tim asked for that of the
- * per-week figure beside a player's name, and this table is the other place one
- * man gets a per-week number on this page. Two panels printing two different
- * per-week values for one player — because one of them counted his bye and the
- * other did not — is precisely the contradiction this function's whole reason
- * for existing is to prevent. `zeroIsBye()` decides which zeros count, so the
- * sample data (where a 0 means "ruled out", not "no game") is unaffected.
+ * WHICH SINCE 2026-09-20 MEANS THE DIVISOR IS THE WEEKS THAT CARRY A NUMBER
+ * ABOVE ZERO, and nothing else. Tim's report, on the figure beside a player's
+ * name: "100% of his future weeks are proj above 14.2, except for his BYE week
+ * … it should only calculate future weeks that actually project any points at
+ * all". So out of the divisor go his byes (already true), a week ESPN is quiet
+ * about, a week THIS PAGE HAS NOT READ YET — `projFor` returns null for both
+ * and cannot tell them apart — and a genuine 0.00 for a man who is ruled out.
  *
- * A man with no PLAYABLE week left comes back `null`, which `optimalLineup`
+ * The last two are the reversal. A null used to stay in the divisor, on the
+ * argument that "we do not know" must not be promoted into "he does not play";
+ * the whole of that argument, and why Tim's reading beats it, is written out
+ * over `scoreAcrossWeeks` in js/trade.js. The short version is that this page
+ * buys its weeks in batches, so the old figure was partly a fact about the
+ * cache rather than about the player.
+ *
+ * THE TWO MUST STAY LINE FOR LINE. This table is the other place one man gets a
+ * per-week number on this page, and two panels printing two different per-week
+ * values for one player is precisely the contradiction this function exists to
+ * prevent. If one of them is ever changed, the other is changed in the same
+ * commit.
+ *
+ * A man with no scoring week left comes back `null`, which `optimalLineup`
  * drops from the pool entirely — correct, and the same treatment as a man ESPN
- * carries no number for: he cannot be in a lineup in a week that is left.
+ * carries no number for. Note what that now does to a man projected 0.00 in
+ * every remaining week (out for the season): he used to score 0.0 here and
+ * could be shuffled into an otherwise empty lineup slot; he is now absent from
+ * the pool and the slot reads as the hole it is.
  *
  * Memoised because `depthTable` asks for the same player several times per
  * paint and the answer cannot change without the cache being rebuilt.
@@ -635,20 +659,18 @@ function weeklyMean(p) {
 
   const span = weeklySpan();
   let sum = 0;
-  let counted = 0;
-  let byes = 0;
+  let scoring = 0;
   for (const w of span) {
     const v = projFor(p, w);
-    if (v === null) continue;   // still in the divisor, exactly as it always was
+    // Above zero or it is not in the average: a bye, a ruled-out zero, a week
+    // ESPN was quiet about and a week not yet read all leave the divisor. The
+    // `> 0` test does the work of all four, which is why there is no `byeAt`
+    // call left in here — `scoreAcrossWeeks` has none either.
+    if (v === null || !(v > 0)) continue;
     sum += v;
-    counted++;
-    // Only his real bye leaves the divisor; a ruled-out zero counts as a zero.
-    if (v === 0 && !state.isDemo && byeAt(p, w)) byes++;
+    scoring++;
   }
-  // The span less his byes, matching `scoreAcrossWeeks` line for line — that is
-  // what stops the two panels disagreeing about one man.
-  const playable = span.length - byes;
-  const out = counted && playable > 0 ? Math.round((sum / playable) * 10) / 10 : null;
+  const out = scoring > 0 ? Math.round((sum / scoring) * 10) / 10 : null;
   weekly.means.set(p.playerId, out);
   return out;
 }
@@ -1635,7 +1657,8 @@ function perWeekValue(p) {
   if (basis() !== 'weeks') return p.projected;
   // An offer found on a scalar measure carries no `perWeek` — it happens when a
   // pop-up opened on one stays open while the page re-ranks week by week — and
-  // printed "—" for every man. `weeklyMean` is the same arithmetic, byes out.
+  // printed "—" for every man. `weeklyMean` is the same arithmetic: the mean
+  // over the weeks that carry a number above zero.
   return Number.isFinite(p.perWeek) ? p.perWeek : weeklyMean(p);
 }
 
@@ -1834,13 +1857,16 @@ function renderDepthNote(map) {
       ? `<strong>Per week.</strong> Every figure in this table is <strong>per week</strong>, over ` +
         `${weekRange(span)} — <strong>the weeks still to be played</strong>, read off the league ` +
         `schedule rather than the calendar, because a week with a result against it is banked and ` +
-        `no trade can reach it. A man’s average leaves his <strong>byes</strong> out: a 0.00 is a ` +
-        `fact about the fixture list, not about him, and counting it would price him on the weeks ` +
-        `he is off rather than the weeks he plays. Only his real bye week counts as one: ESPN also ` +
-        `returns 0.00 for a man it has ruled out, and that zero stays in his average. ` +
-        `The panels above are per week too, but a deal’s ` +
-        `gain is spread over every week in the span, byes and all, so a man’s figure here is ` +
-        `deliberately not the same arithmetic.` +
+        `no trade can reach it. <strong>A man’s average is taken over the weeks he is projected ` +
+        `to score in</strong>, and over nothing else: his byes, any week ESPN is quiet about or ` +
+        `this page has not read yet, and any week he is ruled out and projected 0.00 are all out ` +
+        `of the divisor. An average that sits below every week it came from is not describing the ` +
+        `player, and that is what counting those weeks did. ` +
+        `<strong>So an injured man’s figure flatters him</strong>: it is what he is worth in a ` +
+        `week he plays, not what he is worth to your season. The panels above are per week too, ` +
+        `but a deal’s gain is spread over <em>every</em> week in the span — byes, blanks and ` +
+        `ruled-out zeros included — so a man’s figure here is deliberately not the same ` +
+        `arithmetic and does not multiply up to one.` +
         `<br><br>` +
         `<strong>Lineup</strong> is what those averages would field. Picking each week separately ` +
         `always beats it, and the gap between the two is what depth is worth: a squad whose men ` +
@@ -2291,7 +2317,10 @@ function espnCell(offer) {
  * weekly measure IS, and rule 10 in HANDOFF.md — so these take the total and
  * print it divided by the span, with the total in small type. A gain divides
  * exactly: it is a sum over exactly these weeks. That is NOT true of the figure
- * beside a player, which skips his byes — see `manLine`.
+ * beside a player, whose divisor is only the weeks he is projected to score in
+ * — byes, blanks and ruled-out zeros are all out of it (see `manLine`), so it
+ * is a mean over FEWER weeks than a gain is spread over, and since 2026-09-20
+ * fewer still.
  *
  * Sort keys (`data-v`) stay the totals. Every row shares one span, so dividing
  * would not change a single comparison, and the re-derivations in tr-test check
@@ -2622,9 +2651,13 @@ function renderFinderNote(scales = { myScale: null, theirScale: null }) {
         `rather than dragging an average down. ` +
         `<strong>Only weeks still to be played are priced</strong> — ${weekRange(span)} — because a ` +
         `trade changes the rest of the season and cannot move points already banked. ` +
-        `<strong>The number beside each player is what he is worth in a week he PLAYS</strong>, his ` +
-        `byes left out of the average — whereas a gain is spread over every week in the span, byes ` +
-        `and all — so the two are deliberately <em>not</em> the same arithmetic.`
+        `<strong>The number beside each player is what he is worth in a week he SCORES</strong> — ` +
+        `averaged over the weeks he is projected to score in, with his byes, the weeks ESPN is ` +
+        `quiet about and any week he is ruled out and projected 0.00 all left out of the divisor. ` +
+        `That makes it a flattering number for an injured man, deliberately: it answers “what do ` +
+        `I get when he plays”. A gain is the opposite — spread over <em>every</em> week in the ` +
+        `span, those weeks included — so the two are <em>not</em> the same arithmetic and the ` +
+        `player figures do not add up to the gain.`
       : `<strong>You gain</strong> and <strong>He gains</strong> are points per week added to each ` +
         `best lineup, and so is the figure beside each player.`) +
     // THE THRESHOLDS IN POINTS, behind the toggle where the method lives. The
@@ -3255,8 +3288,10 @@ function renderDeal() {
         `totals for reference and are in no figure on this page. `
       : '') +
     `The per-week number beside each player above is a different arithmetic again — it is what he ` +
-    `is worth in a week he PLAYS, with his byes left out — so it does not multiply up to these ` +
-    `totals, and is not meant to. ` +
+    `is worth in a week he SCORES, averaged over only the weeks he is projected to score in, so ` +
+    `his byes, any week without a projection and any week he is ruled out at 0.00 are out of its ` +
+    `divisor while they are all in these totals. It does not multiply up to them, and is not ` +
+    `meant to; for an injured man it is the more flattering of the two on purpose. ` +
     (priced.cut.length
       ? `The forced cut above is applied <strong>once</strong>, for the whole season, rather than ` +
         `re-decided every week — a manager does not get his dropped man back in week 10. `
@@ -3974,6 +4009,14 @@ function renderCombo() {
     `applying every send and every receive <em>together</em> and re-filling every week once. ` +
     `The forced cut is applied to the combined result too — two one-for-twos leave you two men ` +
     `over the limit and cost you two players, which pricing them separately would miss. ` +
+    // The rows here are the finder's rows, so they carry the finder's per-man
+    // figures — and that number is a mean over a SMALLER set of weeks than the
+    // gain beside it is spread over. Said here as well as in the finder's note
+    // because a reader can open this toggle and not that one.
+    `<strong>The figure beside each player is not on the same arithmetic as these gains</strong>: ` +
+    `it is what he is worth in a week he scores, his byes and any week without a projection left ` +
+    `out of its divisor, whereas a gain is spread over every week in the span. The two are not ` +
+    `meant to multiply into each other. ` +
     (partners.length
       ? `Every manager involved was re-priced on his combined side as well, and a packing any of ` +
         `them would refuse is thrown out: ` +
@@ -5392,6 +5435,16 @@ function renderCustomNote() {
     `re-filled week by week over ${span.length ? weekRange(span) : 'the weeks still to play'}, on ` +
     `ESPN&rsquo;s own per-player projection for each of those weeks, and the difference is the gain. ` +
     `Weeks already played are never priced &mdash; a trade cannot move points that are banked.` +
+    // THE NUMBER BESIDE EACH MAN IS NOT THE SAME ARITHMETIC AS THE GAIN, and
+    // this box prints both within an inch of each other. Said here because it
+    // is said in the finder's note and the pop-up's, and a reader who only
+    // opens this panel would otherwise be the one person not told.
+    ` <strong>The figure beside each man</strong> is a different arithmetic from the gains under ` +
+    `the squads: it is what he is worth <em>in a week he scores</em>, averaged over only the ` +
+    `weeks he is projected to score in, so his byes, any week without a projection and any week ` +
+    `he is ruled out at 0.00 are out of its divisor &mdash; while a gain is spread over every week ` +
+    `in the span. For a man who is out for a while that figure flatters him, deliberately: it ` +
+    `answers what you get when he plays.` +
     `<br><br>` +
     `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
     `shows trades where BOTH squads improve; this prices whatever you build, including a deal that ` +

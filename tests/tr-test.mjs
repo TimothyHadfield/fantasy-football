@@ -3572,26 +3572,54 @@ if (!live.boot) {
   }
 }
 
-// ---- the bye rule: a 0.00 is a bye only in his team's bye week -----------
+// ---- the bye rule: where it still decides something, and where it no longer does
 //
-// Bills D/ST: 11 a week over weeks 5–14, 0.00 in week 8. With team 1's bye
-// known to BE week 8, that zero leaves the divisor (99 / 9 = 11.0); with it
-// known to be week 9, the week-8 zero is a real zero and counts (99 / 10 = 9.9)
-// — which is what an OUT man's 0.00 does now. Both by hand, not from the code.
+// REWRITTEN 2026-09-20, and the rewrite is the point. Tim: "it should only
+// calculate future weeks that actually project any points at all, and then set
+// the avg there." So EVERY zero now leaves the per-week divisor, not just a
+// bye — and the question "is this zero his bye?" stops deciding the average
+// altogether.
+//
+// This block used to assert the opposite half: bye elsewhere ⇒ the week-8 zero
+// counts, 99 / 10 = 9.9. That assertion encoded the old rule faithfully and is
+// exactly what HANDOFF's rule 4 describes, so it is REPLACED rather than
+// relaxed — and replaced with the stronger claim, that the two runs now agree.
+//
+// Bills D/ST: 11 a week over weeks 5–14, 0.00 in week 8. Either way the figure
+// is 99 / 9 = 11.0, by hand and not from the code.
+//
+// WHAT THE BYE STILL DECIDES IS WHAT IS DRAWN. Rule 2 is untouched: a 0.00 in
+// his team's bye week renders "Bye" and a 0.00 anywhere else renders "0.0",
+// because those are two different facts about the player. The last two
+// assertions here are that half, and they are why this block is still worth
+// running — the two halves have simply come apart, and a future reader needs
+// to see that the ONE that went is the average and not the rendering.
 {
   const span = [];
   for (let w = 5; w <= 14; w++) span.push(w);
   const total = span.reduce((a, w) => a + (w === 8 ? 0 : 11), 0);
+  const scoring = span.length - 1;   // every zero leaves the divisor now, bye or not
   const byeRight = run('liveByes', { stub: true, env: { TR_BYES: '{"1":8}' } });
   const byeElsewhere = run('liveByes', { stub: true, env: { TR_BYES: '{"1":9}' } });
   ok('both bye runs boot', !byeRight.boot && !byeElsewhere.boot, byeRight.boot || byeElsewhere.boot);
   ok('and draw Bills D/ST', !!(byeRight.bills && byeElsewhere.bills),
     JSON.stringify([byeRight.bills, byeElsewhere.bills]));
   if (byeRight.bills && byeElsewhere.bills) {
-    eq(byeRight.bills.val, `${(total / (span.length - 1)).toFixed(1)}/wk`,
-      'week 8 IS his bye: it leaves the per-week divisor');
-    eq(byeElsewhere.bills.val, `${(total / span.length).toFixed(1)}/wk`,
-      'WEEK 8 IS NOT HIS BYE: the zero is a real zero and counts in his per-week figure');
+    eq(byeRight.bills.val, `${(total / scoring).toFixed(1)}/wk`,
+      'week 8 IS his bye: a week with no points is out of the per-week divisor');
+    eq(byeElsewhere.bills.val, `${(total / scoring).toFixed(1)}/wk`,
+      'week 8 is NOT his bye: the zero is still out, because it is still a week ' +
+      'he scores nothing in — this is the rule Tim asked for');
+    // THE SHARP VERSION OF BOTH. Asserting two values that happen to be equal
+    // would pass if the page went back to caring which zero is a bye and the
+    // two numbers coincided for some other reason; asserting they are EQUAL,
+    // and that the figure is above every week he actually scores in, is the
+    // claim he made — "100% of his future weeks are proj above" the average.
+    eq(byeElsewhere.bills.val, byeRight.bills.val,
+      'and the two agree: where the bye falls no longer moves the per-week figure at all');
+    ok('the per-week figure is not below every week he scores in',
+      Number.parseFloat(byeRight.bills.val) >= 11,
+      `${byeRight.bills.val} against a man who scores 11 in every week he plays`);
   }
   const at8 = (card) => (card ? card.projs[card.weeks.indexOf('8')] : null);
   ok('his card reads Bye in week 8 when that is his bye', at8(byeRight.card) === 'Bye',
