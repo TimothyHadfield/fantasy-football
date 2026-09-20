@@ -30,6 +30,12 @@
 //           and must not start to; here it says so instead of offering one.
 //   part    a season that is only half played, on a phone-sized window: the
 //           Act row, and the run wrapping rather than scrolling. See below.
+//           It also carries THE WEEKS HE STARTS and the line under what has
+//           already happened (2026-09-19), driven through a hand-built run
+//           rather than through the page — see the long note above
+//           `checkStartsCard`. That block belongs to this scenario because both
+//           of its claims are about a WRAPPED chart, and with no window to
+//           measure the run never wraps.
 //
 // Each scenario gets its own child process: a module initialises once per
 // process and analysis-page.js self-boots on import, so two of these in one
@@ -417,6 +423,244 @@ function cssScrollers(html) {
   return bad;
 }
 
+// ---------------------------------------------------------------------------
+// THE WEEKS HE STARTS, AND THE LINE UNDER WHAT HAS ALREADY HAPPENED
+//
+// Tim, 2026-09-19: "bold all the week #s that that player is currently
+// projected to start for you (and stop bolding the current week, however put a
+// line after the last week and current week to seperate what's already
+// happened)". The Trade page computes who starts; the card draws it.
+//
+// This is the RENDERED half — test-heat.mjs holds the data half. It is here
+// because it needs a real DOM and a real stylesheet, and because the two things
+// most likely to go wrong are about layout rather than arithmetic: the divider
+// has to survive the WRAP (the run breaks onto balanced lines, so a border on
+// the wrong edge of the wrong column is simply invisible), and bold must not
+// push a column past the width `perLine` computed from a constant, because the
+// card has had no scroller since Tim asked for it gone.
+//
+// It drives js/player-card.js directly rather than through a page, and that is
+// deliberate rather than lazy: NO PAGE IN THIS REPO PASSES `starts` YET — the
+// Trade page is the first caller and this suite boots analysis.html — so a
+// test that waited for a page to pass it would assert nothing at all today and
+// would be the kind of "documented but not existing" coverage tests/README.md
+// warns about. The module instance is the same one analysis-page.js already
+// imported (same URL, one instance per process), so `wireTips` here is the
+// wiring the page uses, not a copy of it.
+
+/**
+ * Register a hand-built run, hang it on a cell of its own, and open it.
+ *
+ * Returns the card element, drawn as a SHEET — which is this suite's whole
+ * subject, and also the mode where the wrap actually bites, since a sheet is
+ * the width of the phone.
+ */
+async function openHandRun(document, window, opts) {
+  const card = await import(pathToFileURL(path.join(REPO, 'js/player-card.js')).href);
+  card.hideTip();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  card.wireTips(host);
+  const cell = document.createElement('span');
+  const key = card.registerRun({
+    ident: 'Hand Fixture · WR · TST',
+    href: 'waivers.html?player=999',
+    run: card.weekRun(opts),
+  }, 'hand');
+  cell.setAttribute(card.TIP_ATTR, key);
+  host.appendChild(cell);
+  // A tap, not a hover: the sheet is the mode this suite is about, and it is
+  // the one whose width the wrap has to fit.
+  const ev = new window.Event('click', { bubbles: true, cancelable: true });
+  Object.assign(ev, { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false });
+  cell.dispatchEvent(ev);
+  return document.getElementById('tipCard');
+}
+
+/** Every week column of an open card, in order, across however many lines it took. */
+function handColumns(card) {
+  const out = [];
+  for (const t of card.querySelectorAll('.tc-chart .tc-run')) {
+    const ths = [...t.querySelectorAll('thead th')].filter((el) => !el.classList.contains('tc-lbl'));
+    const tds = [...t.querySelectorAll('tbody td')];
+    const tfs = [...t.querySelectorAll('tfoot td')];
+    ths.forEach((th, i) => out.push({
+      week: parseInt(th.textContent, 10),
+      th, proj: tds[i] || null, act: tfs[i] || null,
+      cls: (c) => (c ? (c.getAttribute('class') || '') : ''),
+    }));
+  }
+  return out;
+}
+
+async function checkStartsCard(c, document, window) {
+  // Weeks 1–16 so the run WRAPS on the 390px screen this scenario sets, with
+  // the split inside one line and the playoff line inside another. Weeks 1–5
+  // have been played; he starts in 2, 4, 7, 9, 12 and 15 by the caller's
+  // reckoning, is benched in the rest, and week 8 is unknown.
+  const weeks = Array.from({ length: 16 }, (_, i) => i + 1);
+  const starts = weeks.map((w) => ([2, 4, 7, 9, 12, 15].includes(w) ? true : (w === 8 ? null : false)));
+  const projections = weeks.map((w) => 8 + ((w * 7) % 13));
+  const card = await openHandRun(document, window, {
+    heading: 'Sample projections for weeks 1–16',
+    weeks,
+    projections,
+    actuals: weeks.map((w) => (w <= 5 ? 11 + w : null)),
+    currentWeek: 5,
+    splitAfter: 5,
+    starts,
+    startsNote: 'weeks he would make your best lineup after this trade',
+    playoffWeeks: [14, 15, 16],
+  });
+  c.ok('the hand-built run opened a card', !!card && !card.hidden, 'no card');
+  if (!card || card.hidden) return;
+
+  const cols = handColumns(card);
+  c.eq('it draws all sixteen weeks', cols.length, 16);
+  c.ok('ON A PHONE IT STILL WRAPS RATHER THAN SCROLLING',
+    card.querySelectorAll('.tc-chart .tc-run').length > 1,
+    `${card.querySelectorAll('.tc-chart .tc-run').length} line(s)`);
+  c.ok('and every line still has a projection and an actual under every week',
+    [...card.querySelectorAll('.tc-chart .tc-run')].every((t) =>
+      [...t.querySelectorAll('thead th')].length === [...t.querySelectorAll('tbody td')].length + 1 &&
+      [...t.querySelectorAll('tbody td')].length === [...t.querySelectorAll('tfoot td')].length),
+    'a row lost a column');
+
+  // --- bold, and only where it is allowed --------------------------------
+  const bold = cols.filter((k) => /\bwk-start\b/.test(k.cls(k.th))).map((k) => k.week);
+  c.ok('BOLD IS ON THE FUTURE WEEKS HE STARTS AND NOWHERE ELSE',
+    JSON.stringify(bold) === JSON.stringify([7, 9, 12, 15]),
+    `bold on ${JSON.stringify(bold)} — weeks 2 and 4 are starts already played`);
+  c.ok('and it is on the WEEK NUMBER, never on the projection under it',
+    !cols.some((k) => /\bwk-start\b/.test(k.cls(k.proj)) || /\bwk-start\b/.test(k.cls(k.act))),
+    'wk-start leaked onto another row');
+  c.ok('a screen reader is told which future weeks he starts',
+    cols.filter((k) => /he starts/.test(k.th.textContent)).map((k) => k.week).join() === '7,9,12,15',
+    cols.filter((k) => /he starts/.test(k.th.textContent)).map((k) => k.week).join());
+  c.ok('AND WHICH ONES HE DOES NOT — a starting week has to be tellable from a benched one',
+    cols.filter((k) => /not in your lineup/.test(k.th.textContent)).map((k) => k.week).join() ===
+      '6,10,11,13,14,16',
+    cols.filter((k) => /not in your lineup/.test(k.th.textContent)).map((k) => k.week).join());
+  c.ok('while a week already played is spoken of neither way — its lineup is history, not a forecast',
+    cols.filter((k) => k.week <= 5)
+      .every((k) => !/he starts|not in your lineup/.test(k.th.textContent)),
+    cols.filter((k) => k.week <= 5).map((k) => k.th.textContent).join(' | '));
+  c.ok('and the week the caller could not answer for is spoken of neither way either',
+    !/he starts|not in your lineup/.test(cols[7].th.textContent), cols[7].th.textContent);
+
+  // --- the divider, which has to survive the wrap ------------------------
+  // Read defensively: a divider that reached one row and not the others is
+  // exactly what this asserts, and a suite that THREW on it would report "boot
+  // failed" and throw away every other result in the scenario.
+  const lined = [...card.querySelectorAll('.tc-run th.split-start, .tc-run td.split-start')];
+  const linedHead = lined.find((el) => el.tagName === 'TH');
+  c.ok('THE DIVIDER IS ON WEEK 6 — THE FIRST WEEK AFTER THE SPLIT — IN ALL THREE ROWS AND NOWHERE ELSE',
+    lined.length === 3 && lined.filter((el) => el.tagName === 'TH').length === 1 &&
+    !!linedHead && parseInt(linedHead.textContent, 10) === 6,
+    lined.map((el) => `${el.tagName}:${el.textContent.trim()}`).join(' ') || 'no split-start anywhere');
+  c.ok('drawn as a LEFT border, which is the only edge that survives a wrapped line',
+    /border-left/.test(readFileSync(path.join(REPO, 'css/app.css'), 'utf8')
+      .split('\n').find((l) => /\.tc-run td\.split-start/.test(l)) || ''),
+    'no left border on .tc-run td.split-start in css/app.css');
+  c.ok('the card names the split week in words, so the line is never the only cue',
+    /heavy line before week 6/.test(card.textContent), card.textContent.slice(0, 400));
+  c.ok('and says what bold means, in the caller’s own sentence',
+    /Bold, underlined week numbers are weeks he would make your best lineup after this trade/
+      .test(card.textContent),
+    card.textContent.slice(0, 400));
+
+  // --- and it composes with the playoff line ------------------------------
+  const po = [...card.querySelectorAll('.tc-run th.po-start')];
+  c.eq('the playoff line is still drawn, on its own column', po.length, 1);
+  c.eq('which is week 14, not the split', parseInt(po[0].textContent, 10), 14);
+
+  // The two on ONE column: a column can be both, and both rules set one
+  // border-left to one value, so it draws once rather than twice.
+  const together = await openHandRun(document, window, {
+    heading: 'Sample projections for weeks 1–16',
+    weeks, projections, actuals: [], currentWeek: 5, splitAfter: 13,
+    starts, playoffWeeks: [14, 15, 16],
+  });
+  const dual = [...together.querySelectorAll('.tc-run th')]
+    .filter((el) => el.classList.contains('split-start') && el.classList.contains('po-start'));
+  c.eq('A COLUMN CAN BE BOTH THE SPLIT AND THE PLAYOFF START, and carries both marks', dual.length, 1);
+  c.eq('and it is week 14', dual[0] ? parseInt(dual[0].textContent, 10) : null, 14);
+  c.eq('with still only one split column in the run',
+    together.querySelectorAll('.tc-run th.split-start').length, 1);
+  c.ok('and the PO tag still on it, which is what tells the two lines apart',
+    !!dual[0] && /PO/.test(dual[0].textContent), dual[0] && dual[0].textContent);
+  c.eq('CSS gives that column ONE border rather than two, because both rules set the same one',
+    (readFileSync(path.join(REPO, 'css/app.css'), 'utf8')
+      .match(/\.tc-run (th|td)\.(split-start|po-start)[^{]*\{\s*border-left: 2px solid var\(--dim\);/g) || [])
+      .length >= 1,
+    true);
+
+  // --- the scale on the Proj row -----------------------------------------
+  const heated = handColumns(together).filter((k) => /\bheat\b/.test(k.cls(k.proj)));
+  c.ok('THE PROJ ROW CARRIES THE RED/GREEN SCALE', heated.length > 0,
+    'no heat class on any projection');
+  c.ok('and the Week row and the Act row do not — one row, one meaning',
+    !handColumns(together).some((k) => /\bheat\b/.test(k.cls(k.th)) || /\bheat\b/.test(k.cls(k.act))),
+    'the scale leaked off the Proj row');
+  c.ok('every coloured cell carries its standing in words, for a reader who cannot see the colour',
+    heated.every((k) => /SD (above|below) the average for his own weeks/
+      .test(k.proj.getAttribute('aria-label') || '')),
+    heated[0] && heated[0].proj.getAttribute('aria-label'));
+  c.ok('AS AN aria-label AND NOT A title — a title here would draw a second tooltip over the card',
+    !handColumns(together).some((k) => k.proj && k.proj.hasAttribute('title')),
+    'a title came back onto the run’s cells');
+  c.ok('and the cell’s TEXT is still just the projection, with no glyph spliced into it',
+    heated.every((k) => /^\d+\.\d$/.test(k.proj.textContent.trim())),
+    heated.map((k) => k.proj.textContent.trim()).slice(0, 5).join(' '));
+  c.ok('the ▲/▼ is drawn from CSS instead, stacked under the number so the column keeps its width',
+    /\.tc-run td\.heat-up-4::after \{ content/.test(readFileSync(path.join(REPO, 'css/app.css'), 'utf8')),
+    'no ::after glyph rule for the card');
+  // Read as text, and both halves checked: the card's opt-out has to exist AND
+  // has to out-rank the ladder it is opting out of. The ladder sits at 0,2,1
+  // (`.heat.heat-up-N:not(html)`, raised there so a page's own typography
+  // cannot silently strip the weight channel), so an opt-out written at 0,2,1
+  // would depend on being further down the file — which is exactly the kind of
+  // thing that breaks when somebody moves a block.
+  const appCss = readFileSync(path.join(REPO, 'css/app.css'), 'utf8');
+  c.ok('THE SCALE GIVES UP ITS WEIGHT LADDER INSIDE THE CARD, because bold already means something there',
+    /\.tipcard \.tc-run td\.heat \{ font-weight: inherit; \}/.test(appCss),
+    'the run’s heat cells still step the font weight, which collides with the bold week numbers');
+  c.ok('and the ladder it overrides is itself written above a page’s own typography',
+    /\.heat\.heat-up-4:not\(html\), \.heat\.heat-dn-4:not\(html\) \{ font-weight: 700; \}/.test(appCss),
+    'the heat weight ladder is back at single-class specificity, where .rank .vv beats it');
+  c.ok('and the key says the colour is against HIS OWN weeks, not the league',
+    /compares each week with HIS OWN other weeks/.test(together.textContent),
+    together.textContent.slice(-400));
+
+  // --- nothing any of this added scrolls ---------------------------------
+  c.eq('no scroller was reintroduced anywhere in the card',
+    cssScrollers(readFileSync(path.join(REPO, 'analysis.html'), 'utf8')).length, 0);
+  c.ok('and no element inside it carries an inline overflow',
+    ![...together.querySelectorAll('*')].some((el) => /overflow/.test(el.getAttribute('style') || '')),
+    'an inline overflow appeared inside the card');
+
+  // --- and with none of it asked for, the card is what it was ------------
+  const plain = await openHandRun(document, window, {
+    heading: 'Sample projections for weeks 1–16',
+    weeks, projections, actuals: [], currentWeek: 5, heat: false,
+  });
+  const plainCols = handColumns(plain);
+  c.ok('WITH NO `starts` AND NO SPLIT, NOT ONE COLUMN IS MARKED — the Analysis page passes neither',
+    plainCols.every((k) => !/wk-start|split-start|heat/.test(
+      `${k.cls(k.th)} ${k.cls(k.proj)} ${k.cls(k.act)}`)),
+    plainCols.map((k) => k.cls(k.th)).join('|'));
+  c.ok('and nothing is said about bold, a line or a colour that is not on screen',
+    !/Bold, underlined|heavy line|Colour on the Proj row/.test(plain.textContent),
+    plain.textContent.slice(-300));
+  c.ok('nor does any cell carry the scale’s aria-label',
+    !plainCols.some((k) => k.proj && k.proj.hasAttribute('aria-label')),
+    'an aria-label survived heat:false');
+
+  const cardMod = await import(pathToFileURL(path.join(REPO, 'js/player-card.js')).href);
+  cardMod.clearRuns('hand');
+  cardMod.hideTip();
+}
+
 /** Dispatch a click the way a browser does, and say whether anything cancelled it. */
 function clickOn(window, el, init = {}) {
   const ev = new window.Event('click', { bubbles: true, cancelable: true });
@@ -425,7 +669,7 @@ function clickOn(window, el, init = {}) {
   return ev;
 }
 
-function check(scenario, { document, window, errors, rejections }) {
+async function check(scenario, { document, window, errors, rejections }) {
   const c = makeChecker();
   const cfg = SCENARIOS[scenario];
 
@@ -945,6 +1189,11 @@ function check(scenario, { document, window, errors, rejections }) {
     }
   }
 
+  // THE WEEKS HE STARTS, on the one scenario with a phone-sized window — the
+  // wrap is half of what these assert, and with no window to measure the run
+  // stays on one line and the divider surviving a wrap is untestable.
+  if (cfg.width) await checkStartsCard(c, document, window);
+
   return c.out;
 }
 
@@ -956,7 +1205,7 @@ if (process.argv[2]) {
   const scenario = process.argv[2];
   try {
     const booted = await boot(scenario);
-    const results = check(scenario, booted);
+    const results = await check(scenario, booted);
     console.log('@@' + JSON.stringify({ scenario, results }));
     process.exit(results.every((r) => r.pass) ? 0 : 1);
   } catch (err) {

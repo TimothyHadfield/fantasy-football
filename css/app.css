@@ -498,22 +498,66 @@ td.lose { color: var(--dim); }
  * with every step (a hue-free reading of magnitude), and `.heatmark` draws the
  * ▲/▼ that js/heat.js puts on the end of the scale (a hue-free reading of
  * direction). The other two are words — on the cell's title and in the key
- * under the table — and are written by js/heat.js. */
+ * under the table — and are written by js/heat.js.
+ *
+ * THE WEIGHT IS DECLARED SEPARATELY, BELOW THE TINTS, at a higher specificity.
+ * That is a bug fix rather than a layout preference — see the long note on it —
+ * and the two halves are kept apart because they need different specificities
+ * for opposite reasons: the tint is a background-IMAGE precisely so it does NOT
+ * have to out-rank anything, and the weight has to. */
 .heat { font-variant-numeric: tabular-nums; }
 /* A measured-but-normal cell. It draws nothing, but it carries the class so a
  * stylesheet and a test can tell "inside the middle band" from "this scale
  * refused to draw at all", which look identical otherwise. */
 .heat-0 {}
 
-.heat-up-1 { background-image: linear-gradient(rgba(59, 165, 93, 0.09), rgba(59, 165, 93, 0.09)); font-weight: 500; }
-.heat-up-2 { background-image: linear-gradient(rgba(59, 165, 93, 0.17), rgba(59, 165, 93, 0.17)); font-weight: 550; }
-.heat-up-3 { background-image: linear-gradient(rgba(59, 165, 93, 0.25), rgba(59, 165, 93, 0.25)); font-weight: 620; }
-.heat-up-4 { background-image: linear-gradient(rgba(59, 165, 93, 0.34), rgba(59, 165, 93, 0.34)); font-weight: 700; }
+.heat-up-1 { background-image: linear-gradient(rgba(59, 165, 93, 0.09), rgba(59, 165, 93, 0.09)); }
+.heat-up-2 { background-image: linear-gradient(rgba(59, 165, 93, 0.17), rgba(59, 165, 93, 0.17)); }
+.heat-up-3 { background-image: linear-gradient(rgba(59, 165, 93, 0.25), rgba(59, 165, 93, 0.25)); }
+.heat-up-4 { background-image: linear-gradient(rgba(59, 165, 93, 0.34), rgba(59, 165, 93, 0.34)); }
 
-.heat-dn-1 { background-image: linear-gradient(rgba(224, 82, 95, 0.09), rgba(224, 82, 95, 0.09)); font-weight: 500; }
-.heat-dn-2 { background-image: linear-gradient(rgba(224, 82, 95, 0.17), rgba(224, 82, 95, 0.17)); font-weight: 550; }
-.heat-dn-3 { background-image: linear-gradient(rgba(224, 82, 95, 0.25), rgba(224, 82, 95, 0.25)); font-weight: 620; }
-.heat-dn-4 { background-image: linear-gradient(rgba(224, 82, 95, 0.34), rgba(224, 82, 95, 0.34)); font-weight: 700; }
+.heat-dn-1 { background-image: linear-gradient(rgba(224, 82, 95, 0.09), rgba(224, 82, 95, 0.09)); }
+.heat-dn-2 { background-image: linear-gradient(rgba(224, 82, 95, 0.17), rgba(224, 82, 95, 0.17)); }
+.heat-dn-3 { background-image: linear-gradient(rgba(224, 82, 95, 0.25), rgba(224, 82, 95, 0.25)); }
+.heat-dn-4 { background-image: linear-gradient(rgba(224, 82, 95, 0.34), rgba(224, 82, 95, 0.34)); }
+
+/* THE WEIGHT CHANNEL, AND WHY IT IS WRITTEN AT A HIGHER SPECIFICITY THAN THE
+ * TINT ABOVE IT. Do not flatten this back into those eight rules as tidying;
+ * it is a bug fix, and the bug fails silently and looks correct.
+ *
+ * WHAT WENT WRONG (2026-09-19). Weight is one of the four "never colour alone"
+ * channels and it is the hue-free one — the reading of MAGNITUDE available to
+ * somebody who cannot separate red from green. It used to be declared on the
+ * single-class rules above, at specificity 0,1,0, which ANY page-local
+ * descendant rule out-ranks. The live case: `index.html`'s
+ * `.rank .vv { font-weight: 600 }` (0,2,0, and a page's own <style> is parsed
+ * after css/app.css) beats `.heat-up-3`, so a cell on the scale kept its TINT
+ * and silently lost its WEIGHT. Nothing looked broken, and no test could see it.
+ *
+ * SO: 0,2,1, and that number is chosen rather than maximised.
+ *   - `.heat.heat-up-1` is the two classes every cell on the scale carries;
+ *     `js/heat.js` always emits `heat` alongside the step, which is one of the
+ *     reasons it does.
+ *   - `:not(html)` matches every element in the document and contributes one
+ *     ELEMENT unit — it is a specificity bump, not a filter, and it is written
+ *     element-agnostically because a cell on the scale is a <td> on four pages
+ *     and a <span> inside an <li> on two others. Naming the elements instead
+ *     would put the same silent failure back the first time the scale landed on
+ *     a tag nobody had listed.
+ *   - It deliberately stops at 0,2,1 rather than going higher. An
+ *     ELEMENT-QUALIFIED page rule — `table.grid td.grid-total` (0,2,2), the
+ *     Proj avg grid's bold totals column, which is both a totals band and on
+ *     the scale — is a deliberate statement about that column and must still
+ *     win. Raising this to three classes would quietly lighten every coloured
+ *     totals cell on the site, which is a visible change nobody asked for.
+ *
+ * The four rules pair the two sides rather than spelling out eight, because the
+ * ladder is symmetrical by design: a cell far from the mean is heavy whichever
+ * side it is on, and the hue is what says which. */
+.heat.heat-up-1:not(html), .heat.heat-dn-1:not(html) { font-weight: 500; }
+.heat.heat-up-2:not(html), .heat.heat-dn-2:not(html) { font-weight: 550; }
+.heat.heat-up-3:not(html), .heat.heat-dn-3:not(html) { font-weight: 620; }
+.heat.heat-up-4:not(html), .heat.heat-dn-4:not(html) { font-weight: 700; }
 
 /* The end-of-scale glyph. Sized like the season sheet's old `.lowmark`, which
  * it replaces, so the tables it lands on do not change height. `aria-hidden` on
@@ -561,6 +605,99 @@ th.po-start, td.po-start,
   line-height: 1.1;
   color: var(--warn);
 }
+/* WHAT HAS ALREADY HAPPENED STOPS HERE. Tim (2026-09-19): "put a line after the
+ * last week and current week to seperate what's already happened". The same
+ * mechanism as `po-start` above, and deliberately the same declaration: a
+ * column can be BOTH the first week after the split and the first playoff week,
+ * and two rules setting one `border-left` to one value draw one line rather
+ * than two. The "PO" tag is what tells the two lines apart when they fall on
+ * different columns; `js/player-card.js` names the split week in words under
+ * the chart, so neither line is ever the only cue.
+ *
+ * A LEFT border on the first column AFTER, never a right border on the last
+ * column BEFORE: the card's run wraps onto balanced lines, and a right border
+ * on the last column of a line is drawn at the edge of a line with nothing
+ * after it, where nobody can see it.
+ *
+ * Scoped to `.tc-run` because the card is the only table that lays a season out
+ * in a wrapped run; a page table that wanted the same line would use
+ * `po-start`'s unscoped pair above. */
+.tc-run th.split-start, .tc-run td.split-start { border-left: 2px solid var(--dim); }
+
+/* THE WEEKS HE STARTS. Bold, as Tim asked — and because NEVER COLOUR OR WEIGHT
+ * ALONE is the rule here, also underlined in the accent colour, which is a cue
+ * that survives a reader who cannot see weight. `js/player-card.js` adds an
+ * `sr-only` word inside the same cell for a reader who sees neither.
+ *
+ * `text-decoration` rather than a `border-bottom`: a border would change the
+ * cell's box and nudge the header row's height, and the thead already carries a
+ * hairline under every cell. A decoration is drawn inside the line box and
+ * costs no layout at all.
+ *
+ * IT CANNOT CHANGE A COLUMN'S WIDTH, which matters more here than it looks: the
+ * card computes how many weeks fit a line from a CONSTANT (`CHART.col`) rather
+ * than by measuring, so a cell that outgrew it would wrap onto a line the
+ * arithmetic promised would fit — and the card has had no scroller since Tim
+ * asked for it gone. A week number is one or two digits at 10.5px inside a
+ * 34px floor, so the Week row never drives a column's width whatever its
+ * weight; the Proj row's four-character numbers do, which is why the scale's
+ * weight ladder is switched off below.
+ *
+ * Written at 0,2,2 so it outranks `.tc-run thead th` in the pages' own style
+ * blocks, which sets the quieter colour and weight this overrides. */
+.tc-run thead th.wk-start {
+  color: var(--text);
+  font-weight: 800;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+/* THE SCALE INSIDE THE CARD GIVES UP ITS WEIGHT LADDER, and keeps everything
+ * else. Two reasons, both argued at length at the top of js/player-card.js:
+ * bold on the week number already means "he starts" one line above, and two
+ * meanings on one channel a centimetre apart is what HANDOFF forbids; and a
+ * heavier "18.2" is a wider "18.2", which the constant above cannot absorb.
+ * The background tint, the ▲/▼ and the words all survive, so the cell is still
+ * readable without separating the hues — it loses a hue-free reading of
+ * MAGNITUDE in the middle steps and keeps one of DIRECTION at the ends, which
+ * is the claim a reader of one man's season actually wants.
+ *
+ * `font-weight: inherit` rather than a number, so the cell keeps whatever the
+ * card's own type is and this rule never has to be kept in step with it.
+ *
+ * `.tipcard` is in the selector for specificity, not for reach — the run only
+ * ever exists inside the card. It puts this at 0,3,2 against the ladder's
+ * 0,2,1, so the opt-out wins on specificity rather than on being further down
+ * the file, which is the kind of dependency that breaks when somebody moves a
+ * block. */
+.tipcard .tc-run td.heat { font-weight: inherit; }
+
+/* The end-of-scale glyph, drawn from CSS rather than as a `<span>`.
+ *
+ * `.heatmark` above is an inline span, and inline is exactly what this column
+ * cannot afford — it would widen a 34px cell and it would put a triangle inside
+ * the cell's TEXT, where the projection is read back as a number by the suites
+ * and by anyone checking a figure against ESPN. Generated content is in neither
+ * the text nor the box: `display: block` stacks it under the number the same way
+ * `.tc-mk` stacks OUT and `.tc-po` stacks PO, so the column keeps its width.
+ *
+ * It is decoration, which is why it is allowed to live in a stylesheet at all:
+ * the cell's `aria-label` carries the whole sentence, so nothing here is the
+ * only way to learn anything. */
+.tc-run td.heat-up-4::after,
+.tc-run td.heat-dn-4::after {
+  display: block;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: -0.08em;
+  line-height: 1;
+  opacity: 0.8;
+}
+.tc-run td.heat-up-4::after { content: '\25B2'; }
+.tc-run td.heat-dn-4::after { content: '\25BC'; }
+
 /* The key's swatch for that line. */
 .legend .key .sw.po-key,
 .key-line .lg .lg-mark.po-key { border-left: 2px solid var(--dim); }

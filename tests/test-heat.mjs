@@ -1,6 +1,16 @@
-// Checks js/heat.js — the shared red/green scale Tim asked for on 2026-09-19.
+// Checks js/heat.js — the shared red/green scale Tim asked for on 2026-09-19 —
+// and the two things the PLAYER CARD does with it and beside it, added the same
+// day: the scale on its Proj row, and bold on the weeks he starts.
 //
 //   node test-heat.mjs
+//
+// The card's half is at the foot of this file. It is here rather than in a
+// suite of its own because it asks this file's two questions — what is on the
+// scale, and what is NOT — of the one place on the site where the comparison
+// group is ONE MAN'S OWN SEASON rather than a column across the league. The
+// rendered half (classes, the underline, the divider surviving the wrap, the
+// run still not scrolling) is in touch-check.mjs, which has a DOM; this file
+// deliberately has none, so what it can assert is the data.
 //
 // The scale answers ONE question: is this number good, for a number of its own
 // kind? Everything here is arithmetic a reader can redo by eye, which is why
@@ -306,6 +316,295 @@ ok(typeof globalThis.document === 'undefined' || true, 'the module imported with
 const before = JSON.stringify(s);
 heatOf(25, s); heatClass(15, s); describeHeat(s); describeHeatPerColumn();
 eq(JSON.stringify(s), before, 'and nothing here mutates the scale it was handed');
+
+// ===========================================================================
+// THE PLAYER CARD'S WEEK RUN — the scale on the Proj row, and the weeks he
+// starts on the Week row. 2026-09-19, both of them Tim's asks of the same day.
+// ===========================================================================
+//
+// These live here rather than in a suite of their own because they are about
+// the same two questions this file already answers — what is on the scale, and
+// what is NOT — asked of the one place on the site where the comparison group
+// is a single man's own season rather than a column across the league. They are
+// the DATA half; touch-check.mjs holds the rendered half (the classes, the
+// underline, the divider surviving the wrap, and the run still not scrolling),
+// because that needs a DOM and this file deliberately has none.
+//
+// js/player-card.js registers two document-level listeners when it loads — one
+// for Escape and one for a tap outside a sheet — so it needs enough of a
+// document to import at all. The stub is four methods wide on purpose: a fuller
+// fake would start being able to pass assertions on its own behalf.
+
+globalThis.document = globalThis.document || {
+  addEventListener() {}, removeEventListener() {},
+  getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+  createElement: () => ({
+    style: {}, classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute() {}, appendChild() {},
+  }),
+  body: { appendChild() {} },
+};
+globalThis.window = globalThis.window || {
+  addEventListener() {}, location: { origin: 'http://localhost' },
+  matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+};
+globalThis.matchMedia = globalThis.matchMedia || globalThis.window.matchMedia;
+globalThis.localStorage = globalThis.localStorage || {
+  getItem: () => null, setItem() {}, removeItem() {}, length: 0, key: () => null,
+};
+
+const { weekRun } = await import('../js/player-card.js');
+
+// ---- ONLY REAL NUMBERS ARE ON THE SCALE ----------------------------------
+//
+// Hand-built so the answer can be redone by eye: the five weeks that ARE
+// numbers are the EXACT fixture from the top of this file — 15, 15, 20, 25, 25,
+// mean 20, sd exactly 5 — and every other week is one of the ways this site has
+// of NOT having a number. If any of those six leaked into the group the mean
+// would move off 20 and every assertion below it would go with it.
+//
+//   wk 1–5   real projections
+//   wk 6     'wait'    not read from ESPN yet
+//   wk 7     'failed'  ESPN refused that week for everybody
+//   wk 8     'off'     he was not on this roster that week
+//   wk 9     null      ESPN carried no number for him
+//   wk 10    0.00 in his NFL team's bye week
+//   wk 11    0.00 for a man ESPN has ruled OUT
+const STATES = {
+  heading: 'ESPN’s projection for weeks 1–11',
+  weeks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  projections: [15, 15, 20, 25, 25, 'wait', 'failed', 'off', null, 0, 0],
+  actuals: [],
+  byeWeek: 10,
+  injuryStatus: [null, null, null, null, null, null, null, null, null, null, 'OUT'],
+};
+const states = weekRun(STATES);
+
+eq(states.scale.n, 5, 'THE SCALE IS BUILT FROM THE FIVE REAL NUMBERS AND NOTHING ELSE');
+close(states.scale.mean, 20, 1e-9, 'so the mean is the one the five values have by hand');
+close(states.scale.sd, 5, 1e-9, 'and so is the spread');
+eq(states.cols.length, 11, 'while the chart still draws all eleven weeks');
+
+const kindOf = (i) => states.cols[i].proj.kind;
+const heatOfCol = (i) => states.cols[i].heat;
+ok([5, 6, 7, 8].every((i) => heatOfCol(i) === null),
+  'NONE OF THE FOUR NO-NUMBER STATES IS ON THE SCALE — a week nobody has read is not a week he scored nothing',
+  JSON.stringify([5, 6, 7, 8].map((i) => [kindOf(i), heatOfCol(i) && heatOfCol(i).cls])));
+eq(heatOfCol(9), null,
+  'A BYE IS NOT A VALUE — colouring it would paint a week he was never going to play red for being a bye');
+eq(kindOf(9), 'bye', 'and it is still drawn as a bye, which is the fact the cell carries');
+eq(heatOfCol(10), null, 'nor is a ruled-out man’s 0.00, which is ESPN saying he will not play');
+eq(kindOf(10), 'out', 'and that cell keeps its own kind too');
+
+// The five that ARE numbers land exactly where the boundaries above say they
+// should, which is what ties the card to the same scale as everything else.
+eq(heatOfCol(0).cls, 'heat heat-dn-4', 'his worst week is at the red end of HIS OWN scale');
+eq(heatOfCol(2).cls, 'heat heat-0', 'an average week is measured and left uncoloured');
+eq(heatOfCol(4).cls, 'heat heat-up-4', 'and his best week is at the green end');
+eq(heatOfCol(4).mark, HEAT_UP, 'the end of the scale still carries its glyph here');
+
+// ---- THE GROUP IS HIS OWN WEEKS, AND THE WORDS SAY SO --------------------
+//
+// This is a DIFFERENT comparison group from every other use of the scale on the
+// site — everywhere else it is one slot or one column across the league — so a
+// reader who assumed the usual meaning would read green as "good in the league"
+// rather than "a good week for him". The cell's words and the key line under
+// the chart both have to close that gap or the colour is misleading.
+ok(/his own weeks/.test(heatOfCol(4).words),
+  'THE CELL’S OWN WORDS NAME THE GROUP, because this group is not the site’s usual one',
+  heatOfCol(4).words);
+const heatNote = states.notes.find((n) => /Colour on the Proj row/.test(n));
+ok(!!heatNote, 'the card carries a key line for the colour', JSON.stringify(states.notes));
+ok(/HIS OWN other weeks/.test(heatNote), 'which says the comparison is with his own weeks', heatNote);
+ok(/never a comparison with another player or another position/.test(heatNote),
+  'and rules out the reading that would break HANDOFF rule 14', heatNote);
+ok(heatNote.includes('25.0') && heatNote.includes('15.0'),
+  'THE THRESHOLDS ARE IN POINTS, so a cell can be checked by hand rather than trusted', heatNote);
+ok(/average of 20\.0 over the 5 weeks/.test(heatNote),
+  'and it says what it averaged and over how many weeks', heatNote);
+ok(heatNote.includes(HEAT_UP) && heatNote.includes(HEAT_DOWN),
+  'the glyph is explained rather than left as a mystery', heatNote);
+ok(!/heavier/.test(heatNote),
+  'AND IT DOES NOT PROMISE A HEAVIER TYPE — the card gives the weight channel to bold, so a key ' +
+  'borrowed whole from describeHeat() would describe a cue that is not drawn',
+  heatNote);
+ok(!/NaN|undefined/.test(states.notes.join(' ')), 'no note leaks a NaN or an undefined',
+  states.notes.join(' '));
+
+// ---- A GENUINE PLAYED 0.0 IS A VALUE, AND IT IS MEANT TO BE --------------
+//
+// The three zeros on this site are three different facts and `zeroKind` is the
+// one place they are told apart: a bye, a man ESPN has ruled out, and a real
+// 0.00 for somebody who is available. Only the third is a number, and it is the
+// single cell a manager most needs to see under a projection row — dropping it
+// would flatter him by hiding his worst week.
+const ZERO = weekRun({
+  weeks: [1, 2, 3], projections: [0, 20, 40], actuals: [], byeWeek: 9, injuryStatus: null,
+});
+eq(ZERO.cols[0].proj.kind, 'num', 'a 0.00 that is neither a bye nor a ruled-out man is a number');
+eq(ZERO.scale.n, 3, 'AND IT COUNTS: the group is all three weeks, not the two that are not zero');
+ok(ZERO.cols[0].heat && ZERO.cols[0].heat.dir === -1,
+  'and it paints as the worst week it is, rather than being quietly left out',
+  JSON.stringify(ZERO.cols[0].heat));
+
+// ---- THE SCALE CAN BE SUPPRESSED, AND THEN NOTHING OF IT REMAINS ---------
+const off = weekRun({ ...STATES, heat: false });
+eq(off.scale, null, 'heat:false measures nothing');
+ok(off.cols.every((c) => c.heat === null), 'so no cell has a standing',
+  JSON.stringify(off.cols.map((c) => c.heat && c.heat.cls)));
+eq(off.notes.length, 0, 'and there is no key line for a colour nobody drew');
+ok(off.cols.every((c, i) => c.proj.text === states.cols[i].proj.text &&
+    c.proj.kind === states.cols[i].proj.kind),
+  'while every token is exactly what it was — the scale never touches what a cell SAYS');
+
+// A run the scale itself refuses: one number is not a distribution.
+const thin = weekRun({ weeks: [1, 2], projections: [12.5, 'wait'], actuals: [] });
+eq(thin.scale, null, 'ONE NUMBER IN THE WHOLE RUN IS NOT A DISTRIBUTION, so nothing is coloured');
+ok(thin.cols.every((c) => c.heat === null), 'and no cell claims a standing it cannot have');
+ok(!thin.notes.some((n) => /Colour on the Proj row/.test(n)),
+  'nor does the card explain a scale it did not draw', JSON.stringify(thin.notes));
+
+// ---- THE WEEKS HE STARTS -------------------------------------------------
+//
+// Tim: "bold all the week #s that that player is currently projected to start
+// for you (and stop bolding the current week, however put a line after the last
+// week and current week to seperate what's already happened)".
+//
+// Weeks 1–8; the page is showing week 4 and weeks 1–4 have been played. He
+// starts in 1, 2, 4, 6 and 8 by the caller's reckoning, is benched in 3 and 5,
+// and week 7 is unknown.
+const RUN = {
+  weeks: [1, 2, 3, 4, 5, 6, 7, 8],
+  projections: [15, 15, 20, 25, 25, 20, 15, 25],
+  actuals: [14, 16, 19, 24, null, null, null, null],
+  currentWeek: 4,
+  splitAfter: 4,
+  starts: [true, true, false, true, false, true, null, true],
+  startsNote: 'weeks he would make your best lineup after this trade',
+};
+const run = weekRun(RUN);
+const bolds = run.cols.filter((c) => c.bold).map((c) => c.week);
+
+eq(JSON.stringify(bolds), JSON.stringify([6, 8]),
+  'ONLY A FUTURE WEEK HE STARTS IS BOLD — weeks 1, 2 and 4 are starts that have already happened');
+ok(run.cols.slice(0, 4).every((c) => !c.bold),
+  'NOTHING AT OR BEFORE splitAfter IS EVER BOLD, whatever `starts` said about it',
+  JSON.stringify(run.cols.map((c) => [c.week, c.start, c.bold])));
+eq(run.cols[3].start, true,
+  'and the caller’s opinion is KEPT rather than overwritten — `start` is the fact, `bold` the decision');
+eq(run.cols[3].bold, false, 'which is exactly the pair that makes the rule falsifiable');
+eq(run.cols[4].bold, false, 'a future week he does NOT start is not bold either');
+eq(run.cols[4].start, false, 'and says so rather than saying nothing');
+eq(run.cols[6].start, null, 'a week the caller could not answer for stays unknown');
+eq(run.cols[6].bold, false, 'and unknown is never bold — silence is not a claim');
+ok(run.cols.every((c) => c.past === (c.week <= 4)),
+  'every column knows whether it has already happened',
+  JSON.stringify(run.cols.map((c) => [c.week, c.past])));
+
+// THE RULE IS ENFORCED HERE, NOT IN THE CALLER. A caller that bolded the past
+// would be corrected by this module rather than believed.
+const liar = weekRun({ ...RUN, starts: [true, true, true, true, true, true, true, true] });
+eq(JSON.stringify(liar.cols.filter((c) => c.bold).map((c) => c.week)),
+  JSON.stringify([5, 6, 7, 8]),
+  'A CALLER CLAIMING HE STARTED EVERY WEEK STILL GETS NO BOLD ON A PLAYED ONE');
+
+// ---- THE LINE UNDER WHAT HAS ALREADY HAPPENED ---------------------------
+const splits = run.cols.filter((c) => c.splitStart).map((c) => c.week);
+eq(JSON.stringify(splits), JSON.stringify([5]),
+  'THE DIVIDER IS ON THE FIRST WEEK AFTER splitAfter, and on exactly one column');
+const splitNote = run.notes.find((n) => /heavy line/.test(n));
+ok(splitNote && /before week 5/.test(splitNote),
+  'and the card names that week in words, so the line is never the only cue', splitNote);
+
+// It composes with the playoff line rather than fighting it: one column can be
+// both, and the class list has to carry both marks for the stylesheet to draw
+// ONE border rather than two.
+const both = weekRun({ ...RUN, playoffWeeks: [5, 6, 7, 8] });
+eq(both.cols[4].splitStart, true, 'week 5 opens what is still to come …');
+eq(both.cols[4].poStart, true, '… and is the first playoff week as well');
+eq(both.cols.filter((c) => c.poStart).length, 1, 'with the playoff line still on one column only');
+eq(both.cols.filter((c) => c.splitStart).length, 1, 'and the split line on one column only');
+
+// A split that falls outside the run draws nothing: a divider with nothing on
+// the far side of it is a line about nothing.
+const allPast = weekRun({ ...RUN, splitAfter: 20 });
+ok(allPast.cols.every((c) => !c.splitStart), 'A SPLIT PAST THE END OF THE RUN DRAWS NO LINE',
+  JSON.stringify(allPast.cols.map((c) => c.splitStart)));
+ok(!allPast.notes.some((n) => /heavy line/.test(n)), 'and explains no line it did not draw');
+ok(allPast.cols.every((c) => !c.bold),
+  'and with the whole run in the past, nothing is bold at all — which is the rule, taken to its end');
+const allFuture = weekRun({ ...RUN, splitAfter: null });
+eq(JSON.stringify(allFuture.cols.filter((c) => c.bold).map((c) => c.week)),
+  JSON.stringify([1, 2, 4, 6, 8]),
+  'WITH NO SPLIT THERE IS NO PAST, so every week he starts is bold — the rule needs the line to bite');
+
+// ---- WHAT BOLD MEANS IS THE CALLER'S SENTENCE, NOT THE CARD'S ------------
+//
+// It differs, and that is the whole reason it is passed in: "weeks he makes
+// your best lineup" for a man you own, "weeks he would make your best lineup
+// after this trade" for a man you are trading for. A card that guessed would
+// put a claim about a trade on a card that is not about one.
+const boldNote = run.notes.find((n) => /^Bold/.test(n));
+ok(!!boldNote, 'the card says what bold means', JSON.stringify(run.notes));
+ok(boldNote.includes(RUN.startsNote), 'in the caller’s own words', boldNote);
+ok(/2 of the weeks still to come/.test(boldNote),
+  'and counts them, so a reader can tell "none" from "not drawn"', boldNote);
+ok(/never bold/.test(boldNote) && /fact, not a forecast/.test(boldNote),
+  'AND SAYS WHY A PLAYED WEEK IS NOT BOLD, which is the half a reader would otherwise call a bug',
+  boldNote);
+const unsaid = weekRun({ ...RUN, startsNote: '' });
+ok(/weeks he makes your best lineup/.test(unsaid.notes.find((n) => /^Bold/.test(n))),
+  'with no sentence supplied it falls back to a plain one rather than leaving bold unexplained',
+  unsaid.notes.find((n) => /^Bold/.test(n)));
+const nobody = weekRun({ ...RUN, starts: [false, false, false, false, false, false, false, false] });
+ok(/none of the weeks still to come/.test(nobody.notes.find((n) => /^Bold/.test(n))),
+  'and a man who starts nowhere is TOLD he starts nowhere, rather than shown a chart with no bold in it',
+  nobody.notes.find((n) => /^Bold/.test(n)));
+
+// ---- `starts` ABSENT: THE CARD IS WHAT IT WAS ---------------------------
+//
+// The Analysis page passes none of these options and must be completely
+// unaffected. Asserted as an absence on every field that could possibly reach
+// the markup, because "I did not see it change" is not an assertion.
+const plain = weekRun({
+  heading: RUN.heading, weeks: RUN.weeks, projections: RUN.projections, actuals: RUN.actuals,
+  currentWeek: 4,
+});
+ok(plain.cols.every((c) => c.start === null),
+  'WITH NO `starts` THE CARD HAS NO OPINION about any week',
+  JSON.stringify(plain.cols.map((c) => c.start)));
+ok(plain.cols.every((c) => c.bold === false), 'so nothing is bold');
+ok(plain.cols.every((c) => c.splitStart === false && c.past === false),
+  'there is no divider and no week counts as past');
+ok(!plain.notes.some((n) => /^Bold/.test(n) || /heavy line/.test(n)),
+  'and the card explains neither, because neither is on screen', JSON.stringify(plain.notes));
+eq(plain.cols[3].now, true, 'while everything that was already there is untouched — the current week …');
+eq(plain.cols[0].proj.text, '15.0', '… the projection …');
+eq(plain.cols[0].act.text, '14.0', '… and the actual under it');
+
+// The narrowest reading of "byte-for-byte what it is today": with the scale off
+// as well, every field the markup is built from is exactly the old set.
+const asBefore = weekRun({
+  heading: RUN.heading, weeks: RUN.weeks, projections: RUN.projections, actuals: RUN.actuals,
+  currentWeek: 4, heat: false,
+});
+ok(asBefore.cols.every((c) =>
+  c.heat === null && c.bold === false && c.splitStart === false && c.start === null),
+  'A CALLER PASSING NOTHING AND heat:false GETS TODAY’S EXACT CHART — every new field inert',
+  JSON.stringify(asBefore.cols[0]));
+eq(asBefore.notes.length, 0, 'with not one line of new prose under it');
+eq(JSON.stringify(asBefore.legend), JSON.stringify(plain.legend),
+  'and the legend is the same legend, which is the one thing that was always there');
+
+// The run that has nothing to draw yet keeps its shape, new fields and all — a
+// page that read `notes` off it would otherwise throw on the one path that
+// happens on every load.
+const waiting = weekRun({ weeks: [1, 2, 3], projections: ['wait', 'wait', 'wait'], actuals: [] });
+eq(waiting.cols.length, 0, 'a run that has not been read yet draws no columns');
+eq(JSON.stringify(waiting.notes), '[]', 'carries no notes');
+eq(waiting.scale, null, 'and no scale');
+ok(/Not read yet/.test(waiting.pending), 'and says so in words', waiting.pending);
+eq(weekRun({ weeks: [] }), null, 'and no weeks at all is still null, which the card handles');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -7,7 +7,7 @@
 // Building a run (the data the chart is drawn from):
 //
 //   weekRun({ heading, weeks, projections, actuals, currentWeek, demo })
-//       -> { heading, pending, cols, legend } | null
+//       -> { heading, pending, cols, legend, notes, scale } | null
 //     `weeks`       [1,2,3,…]   the week numbers, in order.
 //     `projections` one entry per week, in the SAME order. Each is either a
 //                   number, or one of the four no-number states this site
@@ -32,7 +32,35 @@
 //                   The first of them that is in the run gets the heavy
 //                   `po-start` line and a "PO" label, so the regular season and
 //                   the bracket read apart on every wrapped line.
+//     `starts`      null, or one entry per week PARALLEL TO `weeks`:
+//                     true       he is in the best legal lineup that week
+//                     false      he is not
+//                     null/undef not known (that week is unread, or he was on
+//                                nobody's roster)
+//                   ABSENT ENTIRELY means the caller has no opinion and NOTHING
+//                   is bolded — the card is then byte-for-byte what it was
+//                   before this option existed, which is what keeps the
+//                   Analysis page (which passes none of these) unmoved.
+//     `splitAfter`  a week number, or null. A heavy divider is drawn BEFORE the
+//                   first week AFTER this one, separating what has already
+//                   happened from what is still to come.
+//     `startsNote`  one short sentence for the key saying what bold means in
+//                   THIS context, because it differs: "weeks he makes your best
+//                   lineup" on a man you own, "weeks he would make your best
+//                   lineup after this trade" on a man you are trading for.
+//     `heat`        the red/green scale on the Proj row. DEFAULT ON — see "THE
+//                   SCALE ON THE PROJ ROW" below for the argument, and pass
+//                   `heat: false` to suppress it.
 //   Returns null when there is nothing to draw, which the card handles.
+//
+//   Each entry of `cols` carries, besides the token it always did:
+//     `start`       the caller's opinion for that week, unchanged (true/false/null)
+//     `past`        the week is at or before `splitAfter`
+//     `bold`        the RENDERED decision: `start === true` AND not `past`
+//     `splitStart`  true on the first column after `splitAfter`
+//     `heat`        `heatOf()` for that week's projection, or null
+//   and the run carries `notes` (the plain-words lines under the chart) and
+//   `scale` (the heat scale the Proj row was measured on, or null).
 //
 // Registering one, and getting the key that goes in the markup:
 //
@@ -112,8 +140,125 @@
 // so a tablet with a keyboard attached mid-session gets the right one, and a
 // desktop window narrowed to a phone's width keeps its hover card — that is
 // about width, and this is about whether there is a pointer at all.
+//
+// ===========================================================================
+// THE WEEKS HE STARTS, AND THE LINE UNDER WHAT HAS ALREADY HAPPENED
+// ===========================================================================
+//
+// Tim, 2026-09-19, in his words: "if you are hovering over a player you
+// currently own, then bold all the week #s that that player is currently
+// projected to start for you (and stop bolding the current week, however put a
+// line after the last week and current week to seperate what's already
+// happened). If you're hovering over another user's player (that you're trading
+// for), then bold all the week #s that that player would start for you IF the
+// trade would be made."
+//
+// WHO STARTS IS NOT DECIDED HERE. It cannot be: "would he start for you after
+// this trade" is a question about two rosters and a lineup solver, and this
+// module has neither. The caller computes it (`js/trade-page.js`, off the same
+// `optimalLineup` "Who to start" runs) and hands it in as `starts`, parallel to
+// `weeks`. What IS decided here is the one rule that must hold for EVERY
+// caller:
+//
+//   BOLD IS FOR FUTURE WEEKS ONLY. A week at or before `splitAfter` is never
+//   bold whatever `starts` says. Bolding a week already played would be a
+//   forecast about the past — the lineup that week is a fact, not a projection,
+//   and ESPN has already settled it. `start` keeps the caller's opinion
+//   untouched so nothing is lost; `bold` is the rendered decision, and the two
+//   being separate fields is what makes the rule falsifiable in a test.
+//
+// The divider uses the SAME mechanism `poStart` already does — a class on that
+// column in all THREE rows, drawn as a heavy LEFT border — and that is not a
+// stylistic echo. The run WRAPS onto balanced lines (`chartLines`), so a
+// right-hand border on the last column of a line is invisible: it is drawn at
+// the edge of a line that has nothing after it. A left border on the first
+// column of the next group is visible wherever the wrap happens to fall. A
+// column can be both `splitStart` and `poStart` — both set the same
+// `border-left` to the same value, so it draws once, and the "PO" tag is what
+// tells the two lines apart when they do not coincide.
+//
+// NEVER WEIGHT ALONE, EITHER. A bold week number also carries an accent
+// underline (a cue that survives a reader who cannot see weight), an `sr-only`
+// word so a screen reader hears "week 9, he starts" against "week 10, not in
+// your lineup", and a plain-words line under the chart carrying `startsNote`.
+//
+// ===========================================================================
+// THE SCALE ON THE PROJ ROW, AND THE WEIGHT CHANNEL IT COLLIDES WITH
+// ===========================================================================
+//
+// Tim, same day: "the coloring is good right now but it needs to be added to
+// all the other places a number is reffered to across the whole cite. For
+// example trade views, 14 week previews, etc." This card IS the 14-week
+// preview, so the Proj row takes `js/heat.js`.
+//
+// THE COMPARISON GROUP IS THIS MAN'S OWN WEEKS, and it has to be said out loud
+// because it is a different group from every other use of the scale on the
+// site. Everywhere else the group is one slot or one column ACROSS THE LEAGUE;
+// here it is one man across his own season, which answers "is this a good week
+// for him" rather than "is he a good WR2". It is still legitimate under HANDOFF
+// rule 14 — it is never one position measured against another, which is the
+// thing that rule forbids — but a reader who assumed the league-wide meaning
+// would read a green week as "good in the league", so `heatOf(..., { what })`
+// names the group and the key line under the chart says it in full.
+//
+// ONLY REAL NUMBERS ARE ON THE SCALE, and the test is `kind === 'num'` rather
+// than `typeof v === 'number'`. That is deliberate: `projToken` is the one
+// place this site decides what a value means, so the four no-number states
+// ('wait', 'failed', 'off', null), a bye's 0.00 and a ruled-out man's 0.00 are
+// excluded by construction and cannot drift apart from the rest of the site.
+// Feeding a bye in would drag his mean down and paint the bye red for being a
+// bye, which is a verdict on a week he was never going to play.
+//
+// A GENUINE PLAYED 0.0 IS A VALUE, and that is the one case worth arguing. It
+// arrives here as `kind === 'num'` — `zeroKind` has already ruled out the bye
+// and the OUT/IR zero — so it is ESPN projecting nothing for a man who is
+// available. It is a real number about a real week, it is the worst week on the
+// row, and it is exactly the cell a manager most needs to see. Dropping it
+// would flatter him by hiding his worst week and would make the printed average
+// disagree with the row it sits under.
+//
+// THE WEIGHT CHANNEL. `js/heat.js` steps the FONT WEIGHT with the step, and
+// bold is also a font weight — two meanings on one channel is what HANDOFF
+// forbids. The Week row and the Proj row are different rows, so they could have
+// coexisted; they deliberately do not, for two reasons:
+//
+//   1. They sit one line apart in a table 34px wide. "This week number is
+//      heavy" and "this projection is heavy" are two different claims a
+//      centimetre apart, and a reader would have to remember which row meant
+//      which. Weight on this card means ONE thing: he starts.
+//   2. A heavier "18.2" is a WIDER "18.2". The card's line width is computed
+//      from `CHART.col` (a constant) rather than measured, because a test
+//      harness has no layout — so a cell that outgrew the constant would wrap
+//      onto a line the arithmetic promised would fit, and the card has no
+//      scroller left to hide it in. Week numbers cannot do this (one or two
+//      digits at 10.5px are far inside the 34px floor, so the Week row never
+//      drives a column's width), but a four-character projection can.
+//
+// So `css/app.css` turns the scale's weight ladder OFF inside `.tc-run`, and
+// the scale keeps its other three channels: the background tint (which is what
+// it is for), the ▲/▼ at the ends, and words. What it loses is a hue-free
+// reading of MAGNITUDE in the middle steps; what it keeps is a hue-free reading
+// of DIRECTION at the ends, which is the claim a reader of one man's season
+// actually wants.
+//
+// AND THE ▲/▼ CANNOT BE A `<span>` HERE, for two reasons that both matter. It
+// would add width to a column whose width is a constant (above), and it would
+// put a glyph inside the cell's TEXT — and the cell's text is the projection,
+// read back as such by three suites and by anyone checking a number against
+// ESPN. `css/app.css` draws it as a `::after` block under the number, the same
+// shape `.tc-mk` and `.tc-po` already use to say something extra without
+// widening a column.
+//
+// A `title` IS NOT AVAILABLE, and that is not a preference: a `title` on these
+// cells would have the browser draw its own tooltip on top of the card a moment
+// later, which is why the cells carry none and why the link carries an
+// `aria-label` instead. So the scale's words go to an `aria-label` on the cell
+// (no second tooltip, and a screen reader gets the whole sentence) and to a key
+// line under the chart, which is where a sighted reader can check a colour
+// against the numbers by hand.
 
 import { coarsePointer } from './connection.js';
+import { heatScale, heatOf } from './heat.js';
 
 // A local copy rather than an import: this module has to stand on its own for
 // any page that wants the card, and a four-line escaper is a smaller price
@@ -284,11 +429,34 @@ export function weekRun({
   byeWeek = null,
   injuryStatus = null,
   playoffWeeks = [],
+  starts = null,
+  splitAfter = null,
+  startsNote = '',
+  // DEFAULT ON, and it is a judgement call rather than an oversight.
+  //
+  // Tim asked for the scale "across the whole cite … trade views, 14 week
+  // previews", and this card IS the 14-week preview — on the Trade page and on
+  // the Analysis grids alike. A default of OFF would have meant the feature
+  // shipped only where a caller happened to opt in, which on the day it landed
+  // was one page of the two; a reader comparing the same man's card on the two
+  // pages would have found one coloured and one not, for no reason he could
+  // see, and that is worse than either answer applied everywhere.
+  //
+  // It is an option at all because the scale is a claim about a distribution,
+  // and a caller that knows its run is not one — a stub, a single week, a
+  // reading replayed out of the archive — has to be able to say so without
+  // being argued with. `heatScale` already refuses a run with fewer than two
+  // numbers or no visible spread, so OFF is for the cases arithmetic cannot
+  // see.
+  heat = true,
 } = {}) {
   if (!weeks.length) return null;
 
   if (projections.every((v) => v === 'wait')) {
-    return { heading, pending: 'Not read yet — they fill in behind the page.', cols: [], legend: [] };
+    return {
+      heading, pending: 'Not read yet — they fill in behind the page.',
+      cols: [], legend: [], notes: [], scale: null,
+    };
   }
 
   // One status for the whole run, or one per week when the page has them.
@@ -300,14 +468,60 @@ export function weekRun({
   // on — and every playoff week says so in words for a screen reader.
   const po = new Set((playoffWeeks || []).map(Number));
   const poFirst = weeks.find((w) => po.has(Number(w)));
-  const cols = weeks.map((week, i) => ({
-    week,
-    proj: projToken(projections[i], demo, { week, byeWeek, injuryStatus: statusAt(i) }),
-    act: actToken(actuals[i]),
-    now: week === currentWeek,
-    po: po.has(Number(week)),
-    poStart: poFirst !== undefined && week === poFirst,
-  }));
+
+  // THE LINE UNDER WHAT HAS ALREADY HAPPENED, drawn the same way for the same
+  // reason (see the note at the top of this file): on the FIRST week after
+  // `splitAfter`, as a left border, so it survives the wrap. `undefined` when
+  // there is no such week — a run entirely in the past draws no line, because a
+  // divider with nothing on the far side of it is a line about nothing.
+  const splitW = Number.isFinite(Number(splitAfter)) && splitAfter !== null && splitAfter !== ''
+    ? Number(splitAfter)
+    : null;
+  const splitFirst = splitW === null ? undefined : weeks.find((w) => Number(w) > splitW);
+
+  // "The caller has an opinion about who starts" is the ARRAY being there, not
+  // any particular entry in it: an array of nulls is a caller that looked and
+  // could not say, which is a different thing from a caller that never looked.
+  const told = Array.isArray(starts);
+  const startAt = (i) => {
+    if (!told) return null;
+    const v = starts[i];
+    return v === true ? true : v === false ? false : null;
+  };
+
+  // The tokens first, because the scale is built out of them: what counts as a
+  // number is `projToken`'s answer and nobody else's.
+  const tokens = weeks.map((week, i) =>
+    projToken(projections[i], demo, { week, byeWeek, injuryStatus: statusAt(i) }));
+
+  const scale = heat
+    ? heatScale(tokens.map((t, i) => (t.kind === 'num' ? Number(projections[i]) : null)))
+    : null;
+  // The words on every cell name the group, because this group is not the one
+  // the rest of the site's cells are measured against — see the long note above.
+  const WHAT = 'his own weeks in this run';
+
+  const cols = weeks.map((week, i) => {
+    const start = startAt(i);
+    const past = splitW !== null && Number(week) <= splitW;
+    const proj = tokens[i];
+    return {
+      week,
+      proj,
+      act: actToken(actuals[i]),
+      now: week === currentWeek,
+      po: po.has(Number(week)),
+      poStart: poFirst !== undefined && week === poFirst,
+      // The caller's opinion, kept exactly as given …
+      start,
+      past,
+      // … and the rendered decision, which is the rule this module enforces for
+      // every caller: a week already played is never bold.
+      bold: start === true && !past,
+      splitStart: splitFirst !== undefined && week === splitFirst,
+      heat: proj.kind === 'num' ? heatOf(Number(projections[i]), scale, { what: WHAT }) : null,
+    };
+  });
 
   // The legend names a mark only where it occurs, and BOTH rows can put one on
   // screen — the Act row's `·` is the same `·`, so it must be able to pull in
@@ -315,7 +529,63 @@ export function weekRun({
   const used = new Set();
   for (const c of cols) { used.add(c.proj.kind); used.add(c.act.kind); }
   const legend = Object.entries(RUN_KEYS).filter(([k]) => used.has(k)).map(([, s]) => s);
-  return { heading, pending: '', cols, legend };
+
+  // THE NOTES ARE NOT THE LEGEND, and they are kept apart on purpose. The
+  // legend explains MARKS — "Bye =", "off =" — and names one only where it
+  // actually occurs; these explain how to read the chart itself, and each turns
+  // up only when the thing it explains is on screen.
+  const notes = [];
+  if (told && cols.some((c) => c.start !== null)) notes.push(startsLine(startsNote, cols));
+  if (splitFirst !== undefined) notes.push(splitLine(splitFirst));
+  if (scale) notes.push(heatLine(scale));
+
+  return { heading, pending: '', cols, legend, notes, scale };
+}
+
+/**
+ * What BOLD means on this card — which is a different sentence depending on who
+ * is being looked at, and that is why the caller supplies it.
+ *
+ * "Weeks he makes your best lineup" for a man you already own; "weeks he would
+ * make your best lineup after this trade" for a man on somebody else's roster.
+ * The card cannot know which, and guessing would put a claim about a trade on a
+ * card that is not about one.
+ */
+function startsLine(note, cols) {
+  const what = note || 'weeks he makes your best lineup';
+  const n = cols.filter((c) => c.bold).length;
+  const count = n === 0
+    ? 'none of the weeks still to come, on these numbers'
+    : `${n} of the weeks still to come`;
+  return `Bold, underlined week numbers are ${what} — ${count}. ` +
+    'A week that has already been played is never bold: who started it is a fact, not a forecast.';
+}
+
+/** The heavy divider, said in words, because a line on its own is not a sentence. */
+function splitLine(week) {
+  return `The heavy line before week ${week} separates what has already happened, on its left, ` +
+    'from what is still to come.';
+}
+
+/**
+ * The scale under the chart — the channel that makes a colour CHECKABLE.
+ *
+ * In points rather than adjectives, the same standard `describeHeat` holds
+ * itself to. It is not `describeHeat` for one reason: that sentence promises
+ * "the type gets heavier the further out a number is", and inside this card it
+ * does not — the weight channel belongs to bold (see the note at the top of the
+ * file). A key that described a cue the card does not draw would be worse than
+ * no key at all.
+ */
+function heatLine(scale) {
+  const edge = scale.edges[scale.edges.length - 1];
+  const at = (v) => (Math.round(v * 10) / 10).toFixed(1);
+  return 'Colour on the Proj row compares each week with HIS OWN other weeks — green is a good ' +
+    'week for him, red a poor one. It is never a comparison with another player or another ' +
+    `position. Full colour ${edge} standard deviation out: ${at(scale.mean + edge * scale.sd)} pts ` +
+    `or better, ${at(scale.mean - edge * scale.sd)} pts or worse, against an average of ` +
+    `${at(scale.mean)} over the ${scale.n} week${scale.n === 1 ? '' : 's'} with a number. His best ` +
+    'and worst weeks also carry ▲ or ▼, so none of it depends on telling red from green.';
 }
 
 // --------------------------------------------------- registering and wiring
@@ -513,20 +783,53 @@ function lineHtml(cols) {
   // The heavy line before the first playoff week is a class on that column in
   // all three rows; its "PO" label stacks under the number like `.tc-mk`, so the
   // column keeps its width and `perLine` stays right.
+  //
+  // `split-start` is the SAME mechanism for the line between what has been
+  // played and what has not, and it composes with `po-start` for free: both set
+  // one `border-left` to the same value, so a column that is both draws one
+  // line rather than two. See the note at the top of the file for why it has to
+  // be a LEFT border on the first column after, rather than a right border on
+  // the last column before.
   const extra = (c, base = '') => {
-    const cls = [base, c.now ? 'now' : '', c.poStart ? 'po-start' : ''].filter(Boolean).join(' ');
+    const cls = [
+      base,
+      c.now ? 'now' : '',
+      c.poStart ? 'po-start' : '',
+      c.splitStart ? 'split-start' : '',
+    ].filter(Boolean).join(' ');
     return cls ? ` class="${cls}"` : '';
   };
+  // NEVER WEIGHT ALONE. A bold week number is also underlined in the accent
+  // colour (`wk-start` in css/app.css) and says which it is to a screen reader.
+  // The spoken word is only ever about a week STILL TO COME: for a week already
+  // played the card makes no claim either way, so it says nothing rather than
+  // announcing "not in your lineup" about a week whose lineup is history.
+  const spoken = (c) => {
+    if (c.bold) return '<span class="sr-only"> (he starts)</span>';
+    if (c.start === false && !c.past) return '<span class="sr-only"> (not in your lineup)</span>';
+    return '';
+  };
   const weeks = cols
-    .map((c) => `<th${extra(c)} scope="col">${c.week}` +
+    .map((c) => `<th${extra(c, c.bold ? 'wk-start' : '')} scope="col">${c.week}` +
       (c.poStart ? '<span class="tc-po" aria-hidden="true">PO</span>' : '') +
       (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
+      (c.splitStart ? '<span class="sr-only"> (first week still to come)</span>' : '') +
+      spoken(c) +
       '</th>').join('');
   // A ruled-out zero stacks its word UNDER the number (`.tc-mk` is a block), so
   // the column stays the 34px floor and `perLine` stays right.
+  //
+  // The scale's words go on an `aria-label`, NOT a `title`: a title here would
+  // have the browser draw a second tooltip over the card, which is the whole
+  // reason this card exists. An aria-label draws nothing and says everything,
+  // and the key line under the chart is the sighted reader's half of it.
   const projs = cols
-    .map((c) => `<td${extra(c, `k-${c.proj.kind}`)}>${esc(c.proj.text)}` +
-      `${c.proj.mark ? `<span class="tc-mk">${esc(c.proj.mark)}</span>` : ''}</td>`).join('');
+    .map((c) => {
+      const h = c.heat;
+      const label = h ? ` aria-label="${esc(`${c.proj.text} — ${h.words}`)}"` : '';
+      return `<td${extra(c, `k-${c.proj.kind}${h ? ` ${h.cls}` : ''}`)}${label}>${esc(c.proj.text)}` +
+        `${c.proj.mark ? `<span class="tc-mk">${esc(c.proj.mark)}</span>` : ''}</td>`;
+    }).join('');
   const acts = cols
     .map((c) => `<td${extra(c, `a-${c.act.kind}`)}>${esc(c.act.text)}</td>`).join('');
   return (
@@ -570,7 +873,16 @@ function cardHtml({ ident, run, href }, sheet) {
       'after the heavy line.</div>'
     : '';
 
-  return `${head}${sub}<div class="tc-chart">${lines}</div>${note}${poNote}${legend}${actionsHtml(href)}`;
+  // What bold means, where the heavy line falls, and how to read the colour —
+  // each written by `weekRun` (so it is pure and testable) and each present only
+  // when the thing it explains is actually on screen. They go BEFORE the legend
+  // for the same reason the legend goes last: the legend is a glossary of marks
+  // and these are instructions for reading the chart.
+  const extras = (run.notes || [])
+    .map((n) => `<div class="tc-note">${esc(n)}</div>`).join('');
+
+  return `${head}${sub}<div class="tc-chart">${lines}</div>${note}${poNote}${extras}` +
+    `${legend}${actionsHtml(href)}`;
 }
 
 /**
