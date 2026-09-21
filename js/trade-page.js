@@ -91,6 +91,16 @@ import { scope } from './prefs.js';
 import * as espn from './espn.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
+// And the rest of the Schedule page's season plumbing, for THE GOAL (Tim,
+// 2026-09-21): the same schedule shape, projection, spread and simulation
+// inputs the Schedule and Summary pages build their title % from — so the
+// baseline chance this page ranks trades against is the one those pages print.
+import * as capture from './capture.js';
+import { generateDemoLeague } from './demo.js';
+import {
+  goalOf, DEFAULT_GOAL, acceptChance, espnLookPerWeek, offerDeltas, simulateWith,
+  scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
+} from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
   depthTable, findTrades, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
@@ -154,18 +164,18 @@ const NFL_WEEKS = 18; // only used when ESPN won't tell us its own schedule
 // exactly the weeks there are. A week ESPN refuses is already absent rather
 // than fatal, so a genuine gap costs a column and not a wrong answer.
 //
-// What this deliberately does NOT do is price the playoff weeks. They are not
-// in the schedule feed at all, so reaching them means fetching by week number
-// the way the schedule page's bracket does — worth doing, and noted as open in
-// PROGRESS.md, but it is a different question: a trade for weeks 15-17 is only
-// worth anything if you get there.
+// The playoff weeks are not in the schedule feed at all, so they are fetched
+// by week number the way the schedule page's bracket is. A trade for weeks
+// 15-17 is only worth anything if you get there — which is exactly what the
+// season simulation behind the goal accounts for (see "THE GOAL" below).
 //
-// SHOWN, NOT PRICED (2026-09-17). Tim asked for weeks 15–17 wherever a week
-// preview appears, and has not decided whether a trade should be priced on
-// them. So the pop-up reads them — on the click, like every week it shows —
-// and lays each side's lineup out after a line, below the totals, uncoloured;
-// the player card's run carries them too. They never reach `weeklySpan()`,
-// so no per-week figure, total or ranking on this page moves because of them.
+// SHOWN, NOT PRICED (2026-09-17) — AND NOW PRICED UNDER THE TITLE GOAL
+// (2026-09-21). Tim asked for weeks 15–17 wherever a week preview appears and
+// left open whether a trade should be priced on them. His goal answers it:
+// under "Win it all" they are in `weeklySpan()` and priced like any other week,
+// and the season simulation weighs them by how likely you are to be playing
+// in them. Under "Don't finish last" they are still shown after a line,
+// uncoloured and in no total, because last place is settled before them.
 
 // How many weekly requests to have in the air at once, and it is the same three
 // the analysis page uses. Written here rather than imported from that page: it
@@ -271,6 +281,20 @@ const state = {
   combo: null,         // the last bestCombo result
   comboRows: [],       // the combo's offers, MERGED per manager, in row order
   comboRunning: false,
+  // THE GOAL (Tim, 2026-09-21): "the user should essentially open with a goal
+  // and all the data aligns with that goal … not losing or winning everything
+  // … The trade should be ranked by the increase/decrease in this chance."
+  // 'title' prices every week through the championship; 'last' prices the
+  // regular season only, because the playoffs cannot move last place. See
+  // `weeklySpan()` and js/trade-odds.js.
+  goal: DEFAULT_GOAL,
+  // The league's schedule in the Schedule page's shape (capture.normalizeSchedule),
+  // which the season simulation is built from. Null until it is read.
+  league: null,
+  // The simulation that ranks the finder's offers. `token` cancels a run that
+  // a newer search has overtaken; `why` says, in words, why there is no ranking
+  // when there is none.
+  goalRank: { token: 0, running: false, done: 0, total: 0, base: null, spread: null, why: null },
 };
 
 const cache = new Map(); // `${source}:${week}` -> {week, teams}
@@ -302,6 +326,7 @@ const weekly = {
   // actually held him each week, which is the only reading of the ask that is
   // true of a real season.
   rosters: new Map(),
+  teams: new Map(),    // week -> that week's teams payload; see rememberWeek()
   failed: new Set(),
   loading: false,
   progress: null,
@@ -408,10 +433,25 @@ function playedWeeks() {
  *
  * So the span is now a DERIVED FACT rather than the reader's pick, and every
  * note that names it says which weeks they are.
+ *
+ * AND IT FOLLOWS THE GOAL (Tim, 2026-09-21). Under "Win it all" the playoff
+ * weeks still to come are PRICED, after the regular season: the title is won
+ * in them, and a deal that makes a squad a monster in the championship and a
+ * little worse in October is the deal a title-chaser wants — which a span
+ * that stopped at the regular season could never see. Under "Don't finish
+ * last" they stay out: last place is decided by the regular-season table
+ * alone (`pLast` in js/forecast.js), so a playoff week is no evidence about it.
  */
 function weeklySpan() {
   const played = new Set(playedWeeks());
-  return state.weeks.filter((w) => !played.has(w));
+  const regular = state.weeks.filter((w) => !played.has(w));
+  return state.goal === 'title' ? regular.concat(bracketWeeksAhead()) : regular;
+}
+
+/** The playoff weeks still to be played. A bracket week with a result is banked. */
+function bracketWeeksAhead() {
+  const played = new Set(state.poPlayed);
+  return state.poWeeks.filter((w) => !played.has(w) && !state.weeks.includes(w));
 }
 
 /**
@@ -424,13 +464,12 @@ function pastWeeksShown() {
 }
 
 /**
- * The playoff weeks the pop-up SHOWS — after a line, uncoloured, in no total,
- * and never in `weeklySpan()`. Only those still to be played: a bracket week
- * with a result is banked like any other.
+ * The playoff weeks the pop-up SHOWS — after a line, uncoloured, in no total.
+ * Only when they are NOT priced: under the title goal they are inside
+ * `weeklySpan()` itself, and showing them again below would count them twice.
  */
 function playoffWeeksShown() {
-  const played = new Set(state.poPlayed);
-  return state.poWeeks.filter((w) => !played.has(w) && !state.weeks.includes(w));
+  return state.goal === 'title' ? [] : bracketWeeksAhead();
 }
 
 /**
@@ -556,6 +595,10 @@ function indexRosters(teams) {
 function rememberWeek(week, teams) {
   weekly.byWeek.set(week, indexTeams(teams));
   weekly.rosters.set(week, indexRosters(teams));
+  // The payload as it came, for the season simulation: js/capture.js builds
+  // its projection and its scoring spread from week -> teams, exactly as the
+  // Schedule page hands them over.
+  weekly.teams.set(week, teams || []);
   weekly.failed.delete(week);
 }
 
@@ -563,6 +606,7 @@ function resetWeekly() {
   weekly.key = sourceKey();
   weekly.byWeek = new Map();
   weekly.rosters = new Map();
+  weekly.teams = new Map();
   weekly.failed = new Set();
   weekly.error = null;
   weekly.requests = 0;
@@ -797,12 +841,26 @@ async function loadWeekly({ auto = false, fresh = false } = {}) {
  * `js/store.js` keeps it for the season on exactly that grounds.
  */
 async function loadHistory() {
-  const rest = [...pastWeeksShown(), ...playoffWeeksShown()].filter((w) => !haveWeek(w));
-  if (!rest.length || weekly.loading) return;
+  // The span's own missing weeks ride along: the goal can move the span while a
+  // load is in flight (the playoff weeks join it under "Win it all"), and the
+  // load that was running then was buying the OLD span.
+  const spanMissing = missingWeeks();
+  const rest = [...pastWeeksShown(), ...spanMissing, ...playoffWeeksShown()]
+    .filter((w, i, a) => !haveWeek(w) && a.indexOf(w) === i);
+  if (!rest.length || weekly.loading) {
+    // Everything is in hand already — which is the moment the season
+    // simulation has what it needs (the played weeks are what its spread is
+    // measured from), so the finder's ranking can start.
+    if (!weekly.loading && state.search && !state.search.goalRanked) runGoalRank();
+    return;
+  }
   if (!(await buyMissingWeeks(rest))) return;
-  // No search: not one of these weeks is priced, so nothing to re-rank. The
-  // cards and the pop-up read them straight out of the cache.
+  // A week of the SPAN arrived, so the finder's prices were short of it and
+  // have to be recomputed. The played weeks and a bracket that is only shown
+  // reach no price, so on their own they need no search.
+  if (spanMissing.length) { runSearch({ keepDeal: true }); return; }
   paint();
+  if (state.search && !state.search.goalRanked) runGoalRank();
 }
 
 /**
@@ -2375,7 +2433,7 @@ const GAIN_HEAD = (who, weeks, span) =>
  */
 function offerRow(offer, i, key, opts = {}) {
   const {
-    myGain: showMyGain = true, lineup: showLineup = true,
+    myGain: showMyGain = true, lineup: showLineup = true, goal: showGoal = false,
     myScale = null, theirScale = null, attrs = '', tail = '',
   } = opts;
   // THE CARD KNOWS WHICH SIDE OF THE DEAL HE IS ON (Tim, 2026-09-19). A man in
@@ -2434,6 +2492,9 @@ function offerRow(offer, i, key, opts = {}) {
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
     `<td class="name"><span class="mgr">${esc(offer.partner.name)}</span>${merged}${from}</td>` +
+    // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
+    // on the first screen rather than past four columns of names.
+    (showGoal ? goalCellHtml(offer) : '') +
     `<td class="left deal" data-v="${esc(offer.kind)}">` +
       `<span class="shape" title="${esc(offer.shape)} — you send ${plural(offer.send.length, 'player')}, ` +
       `you receive ${plural(offer.receive.length, 'player')}.">` +
@@ -2478,7 +2539,7 @@ function gainScales(rows) {
   };
 }
 
-const tradeRow = (offer, i, scales) => offerRow(offer, i, `f:${i}`, scales);
+const tradeRow = (offer, i, scales) => offerRow(offer, i, `f:${i}`, { ...scales, goal: true });
 
 /** The offers currently on screen: the search, narrowed to the chosen manager. */
 function visibleOffers() {
@@ -2504,6 +2565,7 @@ function renderFinder() {
   $('thMyGain').textContent = GAIN_HEAD('You gain', weeks, span);
   $('thTheirGain').textContent = GAIN_HEAD('He gains', weeks, span);
   $('thLineup').textContent = 'Your lineup, a week';
+  $('thGoal').textContent = state.goal === 'last' ? 'Chance of last' : 'Title chance';
 
   // Both halves are written on EVERY path, and that is not tidiness. Hiding
   // the table without emptying it left the previous search's rows sitting in
@@ -2523,7 +2585,7 @@ function renderFinder() {
     empty.innerHTML = `<span class="searching">Trying every swap in the league${
       weeks ? `, in each of ${plural(span.length, 'week')} — this one takes a few seconds` : ''
     }…</span>`;
-    renderFinderNote();
+    renderFinderNote({ myScale: null, theirScale: null });
     return;
   }
 
@@ -2591,12 +2653,65 @@ function emptyMessage() {
  * mark and heavier type, which is what makes the scale readable to anyone who
  * cannot separate the hues.
  */
+/**
+ * THE GOAL, in the method note: what the order means, how it is worked out,
+ * and the one judgement in it with its two constants — so a row can be
+ * checked by hand, which is how Tim reads this page.
+ */
+function goalMethodHtml(span) {
+  const g = goalOf(state.goal);
+  const r = state.goalRank;
+  const base = r.base ? goalChanceOf(r.base, state.myTeamId) : null;
+  const sigma = r.spread && Number.isFinite(r.spread.sigma) ? r.spread.sigma : null;
+  return (
+    `<strong>Your goal: ${esc(g.label)}.</strong> The list is ranked by what each deal does ` +
+    `to your <strong>${esc(g.chance)}</strong> — the change in it, times the chance he says ` +
+    `yes. Each offer is played out in the <strong>same season simulation as the Schedule ` +
+    `page</strong>, ${GOAL_RUNS.toLocaleString('en-US')} seasons, once as the league stands and ` +
+    `once with the deal made, on the same seed, so the difference is the deal and not two ` +
+    `different runs of luck (it still moves by about 0.1–0.4 percentage points between seeds; ` +
+    `treat offers closer than that as level). The deal reaches the simulation as the per-week ` +
+    `points it adds or takes away from BOTH lineups, exactly as priced in this row — so a deal ` +
+    `that makes a rival stronger costs you, and points in a game you would win anyway are worth ` +
+    `less than points in a coin flip.` +
+    (state.goal === 'title'
+      ? ` <strong>The playoff weeks are priced</strong>, because that is where the title is ` +
+        `won: ${weekRange(span)}. A deal that is weaker in October and stronger in the ` +
+        `championship can rank above one that is the other way round.`
+      : ` Last place is the bottom of the <strong>regular-season</strong> table, so only the ` +
+        `regular season is priced (${weekRange(span)}); the playoffs cannot change it.`) +
+    (base !== null ? ` As things stand your ${esc(g.chance)} is <strong>${pct(base)}</strong>.` : '') +
+    (sigma !== null ? ` Scores are drawn ±${fmt(sigma)} points around each projection, the ` +
+      `spread measured from this league’s played weeks.` : '') +
+    `<br><br>` +
+    `<strong>Will he say yes?</strong> That is an estimate, and the only judgement here. He is ` +
+    `taken to weigh two things equally: what the deal does to <em>his</em> lineup (He gains, ` +
+    `a week) and how it looks on ESPN’s trade screen — the ESPN projections of the men he gets ` +
+    `against the men he gives up, a week. The chance is 1 ÷ (1 + e<sup>−(that + ` +
+    `${ACCEPT_LEEWAY}) ÷ ${ACCEPT_SCALE}</sup>): 98% if he comes out 3 a week ahead, 88% at ` +
+    `dead even, 50% if he gives up ${ACCEPT_LEEWAY} a week, 12% at 6. Generous on purpose — a ` +
+    `deal only drops hard when it is a clear fleece.` +
+    `<br><br>`
+  );
+}
+
+/** One team's chance at the page's goal in a simulation result. */
+function goalChanceOf(result, teamId) {
+  const row = result && result.teams ? result.teams.find((t) => t.teamId === teamId) : null;
+  return goalOf(state.goal).read(row);
+}
+
+// The finder's last scales, so its note can be repainted on its own — the goal
+// ranking updates its progress there without rebuilding the table under it.
+let finderScales = { myScale: null, theirScale: null };
+
 function heatKeyShort({ thing = 'figure', what = 'the others in its own column' } = {}) {
   return `Colour compares each ${thing} only with ${what}; green high, red low, ` +
     `${HEAT_UP} or ${HEAT_DOWN} and heavier type at the far end.`;
 }
 
-function renderFinderNote(scales = { myScale: null, theirScale: null }) {
+function renderFinderNote(scales = finderScales) {
+  finderScales = scales;
   const m = meta();
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
@@ -2629,11 +2744,26 @@ function renderFinderNote(scales = { myScale: null, theirScale: null }) {
     ? `<br>${heatKeyShort({ what: 'the other offers in the same column' })}`
     : '';
 
+  // THE ORDER, said in view: it is the one thing on this panel that changed
+  // meaning, and a reader who still thinks the top row is the most points is
+  // misreading every row under it.
+  const g = goalOf(state.goal);
+  const r = state.goalRank;
+  const ranked = !!(state.search && state.search.goalRanked);
+  const order = r.running
+    ? ` · <span class="searching">playing each offer out in ${GOAL_RUNS.toLocaleString('en-US')} ` +
+      `simulated seasons (${r.done} of ${r.total})…</span>`
+    : ranked
+      ? ` · <strong>ranked by your ${esc(g.chance)}</strong>, allowing for how likely he is to say yes.`
+      : r.why && r.why !== 'waiting'
+        ? ` · <strong>not ranked by your ${esc(g.chance)}</strong>: ${esc(r.why)}. Ranked by points.`
+        : '.';
+
   $('tradeCount').innerHTML = state.searching || !shown
     ? ''
     : `<strong>${plural(shown, 'offer')}</strong> · ` +
       `${kindNote}${state.partner === 'all' ? '' : ', with one manager'} · ` +
-      `valued on ${esc(m.label)}.` + heatKey;
+      `valued on ${esc(m.label)}` + order + heatKey;
 
   $('tradeNote').innerHTML =
     `<strong>How offers are found.</strong> Every offer here was found by ` +
@@ -2643,6 +2773,7 @@ function renderFinderNote(scales = { myScale: null, theirScale: null }) {
     `starter to somebody else, which is why a deal can help both sides at once. ` +
     `Valued on ${esc(m.label)} (${m.basis}).` +
     `<br><br>` +
+    goalMethodHtml(span) +
     (weeks
       ? `<strong>Every figure is per week</strong>, averaged over ${weekRange(span)}, with the ` +
         `rest-of-season total in small type underneath — the per-week number is exactly that total ` +
@@ -2754,6 +2885,9 @@ function runSearch({ keepDeal = false } = {}) {
   // `runCombo` is what makes a re-rank — which the page now does to itself on
   // every load — cheap instead of double.
   runCombo.token++;
+  // And the goal ranking of the last search, for the same reason.
+  state.goalRank.token++;
+  state.goalRank.running = false;
 
   if (!teams.length || state.myTeamId === null) {
     state.deal = null;
@@ -2807,12 +2941,248 @@ function runSearch({ keepDeal = false } = {}) {
     }
     paint();
     runCombo();
+    // Then the season simulation re-ranks what was found by the goal. It waits
+    // (and says so) until the played weeks are in, because those are what its
+    // scoring spread is measured from; `loadHistory` starts it then.
+    runGoalRank();
   };
 
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(go, 0));
   else setTimeout(go, 0);
 }
 runSearch.token = 0;
+
+// ======================================================================
+// THE GOAL: every offer, played out in the season simulation
+// ======================================================================
+//
+// Tim, 2026-09-21: "the user should essentially open with a goal and all the
+// data aligns with that goal. They can either choose between not losing or
+// winning everything … The trade should be ranked by the increase/decrease in
+// this chance." And of the other manager: "rank by expected value, but add a
+// good amount of leeway."
+//
+// The finder above still does the searching, on points — it is exhaustive and
+// fast. What changes is the ORDER: each offer it finds is played out in the
+// same season simulation the Schedule and Summary pages run, and ranked by
+// (the change in your chance) × (the chance he says yes). js/trade-odds.js
+// holds every decision; this is the wiring.
+
+/**
+ * Is this game still to be played out? The same two rules `playedWeeks()`
+ * follows: live, a game is banked when it is final; demo, the sample season is
+ * replayed as it stood after the selected week.
+ */
+function goalIsRemaining(g) {
+  if (state.isDemo && g.week > state.week) return true;
+  return capture.gameState(g) !== 'final';
+}
+
+/** The demo league in the Schedule page's shape — built once, it never changes. */
+let demoLeague = null;
+function demoSeason() {
+  if (demoLeague) return demoLeague;
+  const d = generateDemoLeague();
+  const nameById = new Map(d.teams.map((t) => [t.id, t.name]));
+  // Exactly the Summary page's demo route: the sample games carry their own
+  // projections, so a regular-season week needs no roster read at all.
+  demoLeague = capture.normalizeSchedule({
+    leagueName: d.name,
+    teams: d.teams.map((t) => ({ id: t.id, name: t.name })),
+    games: d.games.map((g) => ({
+      week: g.week,
+      homeId: g.homeId, homeName: nameById.get(g.homeId), homeScore: g.homeActual,
+      homeProjected: g.homeProjected,
+      awayId: g.awayId, awayName: nameById.get(g.awayId), awayScore: g.awayActual,
+      awayProjected: g.awayProjected,
+      played: true,
+    })),
+  }, { isDemo: true });
+  return demoLeague;
+}
+
+/**
+ * What the season simulation needs — or, when it cannot be built yet, why not.
+ *
+ * THE SCHEDULE PAGE'S OWN PIECES, in its own order: the best-lineup projection
+ * of every week still to play plus the bracket weeks (`buildProjection`, with
+ * this page's floor), the spread measured from the played weeks' STARTED
+ * lineups (`startedProjections` → `leagueSpread`), and `simulationInputs`.
+ * Built from the weeks this page has already read — it buys nothing of its own.
+ *
+ * @returns {{inputs:Object|null, spread:Object|null, why:string|null}}
+ */
+function goalInputs() {
+  const data = state.league;
+  if (!data || !data.teams || !data.teams.length) {
+    return { inputs: null, spread: null, why: 'the league schedule could not be read' };
+  }
+  const ahead = data.weeks.filter((w) => (data.byWeek.get(w) || []).some(goalIsRemaining));
+  const bracket = capture.playoffWeeks(data).filter((w) => !state.poPlayed.includes(w));
+  const decided = data.weeks.filter((w) =>
+    (data.byWeek.get(w) || []).some((g) => !goalIsRemaining(g) && capture.gameState(g) === 'final'));
+
+  // Wait for the reads rather than simulate a season with holes in it: a game
+  // with no projection is not played out at all, and a spread measured from
+  // half the played weeks is a different spread.
+  const need = state.isDemo ? bracket : ahead.concat(ahead.length ? bracket : [], decided);
+  if (!need.every(haveWeek)) return { inputs: null, spread: null, why: 'waiting' };
+
+  let proj = null;
+  if (state.isDemo) {
+    // The sample games carry their own projections; only the bracket weeks
+    // have to come from the rosters, as they do on a live league.
+    const built = bracket.length
+      ? capture.buildProjection(data, capture.pickWeeks(weekly.teams, bracket), null)
+      : null;
+    proj = built ? built.proj : null;
+  } else {
+    const project = ahead.concat(ahead.length ? bracket : []);
+    const built = project.length
+      ? capture.buildProjection(data, capture.pickWeeks(weekly.teams, project), state.floors)
+      : null;
+    if (!built) {
+      return { inputs: null, spread: null, why: 'ESPN returned no usable projection for the weeks still to play' };
+    }
+    proj = built.proj;
+  }
+
+  const started = state.isDemo ? null : capture.startedProjections(weekly.teams, decided);
+  const spread = capture.leagueSpread(data, (g) => !goalIsRemaining(g), started);
+  const inputs = capture.simulationInputs({
+    data, isRemaining: goalIsRemaining, proj, sigma: spread.sigma,
+  });
+  if (!inputs || !inputs.playable) {
+    return { inputs: null, spread, why: 'there is no game left to play out' };
+  }
+  return { inputs, spread, why: null };
+}
+
+/**
+ * Rank the finder's offers by the goal, a few at a time.
+ *
+ * One simulation of the league as it stands, then one per offer, all on the
+ * same seed (js/trade-odds.js explains why that matters). Each is about a
+ * tenth of a second on a laptop, so forty offers would freeze the page for
+ * four seconds done in one go; instead it works in ~40ms slices and hands the
+ * browser back between them, repainting the progress as it goes.
+ */
+function runGoalRank() {
+  const r = state.goalRank;
+  const token = ++r.token;
+  r.running = false;
+  r.why = null;
+
+  const search = state.search;
+  if (!search || !search.offers.length) return;
+  if (basis() !== 'weeks') {
+    r.why = 'the goal needs every remaining week read, and they are not all in yet';
+    renderFinder();
+    return;
+  }
+  const span = weeklySpan();
+  const { inputs, spread, why } = goalInputs();
+  if (!inputs) {
+    r.why = why;
+    renderFinder();
+    return;
+  }
+
+  const offers = search.offers;
+  const goal = state.goal;
+  const me = state.myTeamId;
+  r.running = true;
+  r.done = 0;
+  r.total = offers.length;
+  r.spread = spread;
+  renderFinder();
+
+  let base = null;
+  let i = 0;
+  const step = () => {
+    if (token !== r.token || state.search !== search) return;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 40) {
+      if (!base) {
+        base = simulateWith(inputs);
+        if (!base) {
+          r.running = false;
+          r.why = 'the simulation could not run on this league';
+          renderFinder();
+          return;
+        }
+        continue;
+      }
+      if (i >= offers.length) break;
+      const o = offers[i];
+      const after = simulateWith(inputs, offerDeltas(o, me));
+      const accept = acceptChance({
+        lineupPerWeek: o.theirGain / (span.length || 1),
+        lookPerWeek: espnLookPerWeek(o, span.length),
+      });
+      o.goalScore = { ...scoreOffer({ base, after, myTeamId: me, partnerId: o.partner.id, goal, accept }), goal };
+      i++;
+      r.done = i;
+    }
+    if (i < offers.length || !base) {
+      renderFinderNote();
+      setTimeout(step, 0);
+      return;
+    }
+    r.running = false;
+    r.base = base;
+    // A NEW ARRAY, not a sort in place: the combo panel may be holding the old
+    // one, and its own order is its own business.
+    search.offers = offers.slice().sort(compareByGoal);
+    search.goalRanked = true;
+    paint();
+  };
+  setTimeout(step, 0);
+}
+
+const pct = (v, d = 1) => (Number.isFinite(v) ? `${(v * 100).toFixed(d)}%` : '—');
+/** "+3.1%" — percentage POINTS of chance, with a real minus sign. */
+const signedPct = (v, d = 1) => {
+  if (!Number.isFinite(v)) return '—';
+  const s = (Math.abs(v) * 100).toFixed(d);
+  if (Number(s) === 0) return `${s}%`;
+  return `${v > 0 ? '+' : '−'}${s}%`;
+};
+
+/**
+ * The goal's cell on a finder row: how the chance moves, from what to what,
+ * and how likely he is to say yes. `data-v` is the EXPECTED change — the rank
+ * key — so a sort on this column reproduces the page's own order.
+ */
+function goalCellHtml(offer) {
+  const g = goalOf(state.goal);
+  const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
+  if (!s || !Number.isFinite(s.mine.gain)) {
+    const r = state.goalRank;
+    const why = r.running
+      ? `Being played out in ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons…`
+      : r.why
+        ? `No ${g.chance} yet: ${r.why}.`
+        : `No ${g.chance} yet.`;
+    return `<td class="goal-cell goal-wait" data-v="-1" title="${esc(why)}">${r.running ? '…' : '—'}</td>`;
+  }
+  const change = s.mine.after - s.mine.before;
+  const good = s.mine.gain > 0.0005 ? ' pos' : s.mine.gain < -0.0005 ? ' neg' : '';
+  const yes = Number.isFinite(s.accept) ? Math.round(s.accept * 100) : null;
+  const words =
+    `Your ${g.chance}: ${pct(s.mine.before)} now, ${pct(s.mine.after)} with this deal, over ` +
+    `${GOAL_RUNS.toLocaleString('en-US')} simulated seasons. His: ${pct(s.theirs.before)} → ` +
+    `${pct(s.theirs.after)}.` +
+    (yes === null ? '' : ` Estimated ${yes}% that he says yes, so this deal is worth ` +
+      `${signedPct(s.value, 2)} to you on average — which is what the list is ranked by.`);
+  return (
+    `<td class="goal-cell${good}" data-v="${s.value}" title="${esc(words)}">` +
+    `${signedPct(change)}` +
+    `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
+    (yes === null ? '' : ` · ${yes}% yes`) +
+    `</span></td>`
+  );
+}
 
 // ======================================================================
 // The drill-down: one deal, week by week
@@ -4449,6 +4819,7 @@ async function useDemo() {
   // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
   state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
   state.poPlayed = [];
+  state.league = demoSeason();
   // The demo season really is over: `js/demo-rosters.js` hardcodes a result
   // against every one of its thirteen games. Kept honest here, and handled
   // deliberately in `playedWeeks()` — which is the ONE place that decides the
@@ -4513,12 +4884,16 @@ async function useLive() {
       state.poWeeks = leaguePlayoffWeeks(schedule);
       state.poPlayed = [...new Set((schedule.playoffGames || [])
         .filter((g) => g.played).map((g) => g.week))];
+      // Kept whole now, not just its week numbers: the season simulation that
+      // ranks trades by the goal is built from the fixtures and the results.
+      state.league = capture.normalizeSchedule(schedule, { isDemo: false });
       state.scheduleError = null;
       break;
     } catch (err) {
       state.playedWeeks = [];
       state.poWeeks = [];
       state.poPlayed = [];
+      state.league = null;
       state.scheduleError = (err && err.message) || String(err);
       if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
     }
@@ -5823,6 +6198,23 @@ $('sourceToggle').addEventListener('click', (e) => {
   btn.dataset.src === 'demo' ? useDemo() : useLive();
 });
 
+// THE GOAL. It moves the priced span (the playoff weeks are in it under "Win it
+// all" and out of it under "Don't finish last"), so every per-week figure on the
+// page is recomputed, and the finder is re-ranked on the new chance. A week the
+// new span needs and the page does not hold is bought first, through the same
+// path the page loads itself with.
+$('goalToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-goal]');
+  if (!btn || btn.dataset.goal === state.goal) return;
+  state.goal = goalOf(btn.dataset.goal).key;
+  prefs.set('goal', state.goal);
+  setToggle('goalToggle', 'goal', state.goal);
+  weekly.means = new Map();
+  if (weekly.loading) { paint(); return; }   // the load in flight re-checks the span
+  if (missingWeeks().length) loadWeekly({ auto: true });
+  else repaint();
+});
+
 $('kindToggle').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-kind]');
   if (!btn || btn.dataset.kind === state.kind) return;
@@ -6317,6 +6709,9 @@ if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {
   state.kind = rememberedKind;
 }
 setToggle('kindToggle', 'kind', state.kind);
+
+state.goal = goalOf(prefs.get('goal', DEFAULT_GOAL)).key;
+setToggle('goalToggle', 'goal', state.goal);
 
 // The saved custom trades, read before the first render so the box is never
 // briefly empty on a reload. Only identities are stored, so this is cheap and

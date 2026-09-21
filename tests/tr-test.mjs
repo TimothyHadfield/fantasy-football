@@ -94,6 +94,23 @@ async function boot(page = 'trade.html', search = '', seed = null, { wide = true
   // prefs.js both read storage on first touch — a league written afterwards
   // would arrive too late to put the page on live data.
   const store = new Map(Object.entries(seed || {}));
+  // THE GOAL IS PINNED, and to the one whose span is the regular season.
+  //
+  // Since 2026-09-21 the page opens on a goal, and "Win it all" — the default —
+  // PRICES the playoff weeks. Every scenario in this file was written, and
+  // re-derives its numbers, on the span that stops at the regular season and
+  // shows the bracket for reference; that is exactly "Don't finish last" now,
+  // where the page prices as it always did. So those scenarios run there, and
+  // the title goal has scenarios of its own (`goalTitle`, `goalLive`) that
+  // re-derive the playoff-weeks span instead. `TR_GOAL` picks; a seed that
+  // names a goal itself wins over both.
+  {
+    const goal = process.env.TR_GOAL || 'last';
+    let prefs = {};
+    try { prefs = JSON.parse(store.get('ff.prefs') || '{}'); } catch { prefs = {}; }
+    if (!('trade.goal' in prefs)) prefs['trade.goal'] = goal;
+    store.set('ff.prefs', JSON.stringify(prefs));
+  }
   const localStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),
     setItem: (k, v) => store.set(k, String(v)),
@@ -284,6 +301,23 @@ function readOfferRows(table) {
       gainText: textNoMark(gain),
       myGain: gain ? Number(gain.getAttribute('data-v')) : NaN,
       theirGain: their ? Number(their.getAttribute('data-v')) : NaN,
+      // THE GOAL CELL (2026-09-21): the headline change, the "before → after ·
+      // N% yes" line under it, and `data-v` — the expected change, the rank key.
+      goal: (() => {
+        const td = cell('goal-cell');
+        if (!td) return null;
+        const sub = td.querySelector('.sub');
+        const all = text(td);
+        const subText = text(sub);
+        return {
+          head: subText ? all.slice(0, all.length - subText.length).trim() : all,
+          sub: subText,
+          v: Number(td.getAttribute('data-v')),
+          cls: td.getAttribute('class') || '',
+          title: td.getAttribute('title') || '',
+          index: [...tr.children].indexOf(td),
+        };
+      })(),
       myHeat: heat(gain),
       theirHeat: heat(their),
       espn: (() => {
@@ -1804,6 +1838,70 @@ SCENARIOS.livePickup = async function livePickup() {
   return { errors, opened, repicked, pickup: stub.PICKUP, played: stub.PLAYED_THROUGH };
 };
 
+/**
+ * THE GOAL — "Win it all", the default (Tim, 2026-09-21).
+ *
+ * Demo, nothing pressed: the page opens on the title goal, prices the playoff
+ * weeks, plays every offer out in the season simulation and ranks by the
+ * expected change in the title chance. Then the reader flips to "Don't finish
+ * last" and the span, the heading and the order all follow.
+ *
+ * The parent re-derives the top row's chance from the demo generator and the
+ * engine alone — nothing of the page's in it — so a page that simulated a
+ * different season from the one it claims cannot pass.
+ */
+SCENARIOS.goalTitle = async function goalTitle() {
+  const { document, errors, fetchCalls } = await boot();
+  await settle(20000);
+  const read = () => ({
+    trades: readTrades(document),
+    heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+    count: text(document.getElementById('tradeCount')),
+    note: text(document.getElementById('tradeNote')),
+    goalOn: text(document.querySelector('#goalToggle button.on')),
+    week: document.getElementById('weekSelect').value,
+    team: document.getElementById('teamSelect').value,
+    teams: [...document.querySelectorAll('#teamSelect option')]
+      .map((o) => ({ id: o.getAttribute('value'), name: text(o) })),
+  });
+  const title = read();
+
+  // The top row's pop-up: under this goal the bracket weeks are IN the priced
+  // table, so there is no "for reference" section after it.
+  const row = document.querySelector('#tradeTable tbody tr');
+  if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(3000);
+  const deal = readDeal(document);
+  document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(300);
+
+  document.querySelector('#goalToggle button[data-goal="last"]')
+    .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(20000);
+  const last = read();
+  const stored = (() => {
+    try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.goal']; } catch { return null; }
+  })();
+  return { errors, fetchCalls, title, deal, last, stored };
+};
+
+/** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
+SCENARIOS.goalLive = async function goalLive() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  await settle(15000);
+  return {
+    errors,
+    trades: readTrades(document),
+    heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+    count: text(document.getElementById('tradeCount')),
+    note: text(document.getElementById('tradeNote')),
+  };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);
@@ -2162,6 +2260,77 @@ const demoSpan = (week) => {
   for (let w = Number(week) + 1; w <= DEMO_WEEKS; w++) out.push(w);
   return out;
 };
+
+/**
+ * One finder row's goal figures, re-derived with nothing of the page's in it.
+ *
+ * The demo league rebuilt from its generators; the deal priced for BOTH squads
+ * over the goal's weeks (the title goal adds the demo bracket, 14–16); the
+ * season built with the Schedule page's functions and simulated on
+ * js/trade-odds.js's seed; the yes-chance from the same two halves the page
+ * names. Returns `{before, after, accept}` for your side.
+ */
+async function rederiveGoal(page, row, goal) {
+  const { generateDemoWeekRosters } = await import(moduleUrl('js/demo-rosters.js'));
+  const { generateDemoLeague } = await import(moduleUrl('js/demo.js'));
+  const { priceTradeAcrossWeeks, slotsForLeague } = await import(moduleUrl('js/trade.js'));
+  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
+  const capture = await import(moduleUrl('js/capture.js'));
+  const odds = await import(moduleUrl('js/trade-odds.js'));
+
+  const week = Number(page.week);
+  const bracket = [14, 15, 16];
+  const span = demoSpan(week).concat(goal === 'title' ? bracket : []);
+  const base = generateDemoWeekRosters(week);
+  const slots = slotsForLeague(slotCountsFromLineups(base.teams));
+  const idx = new Map();
+  const weekTeams = new Map();
+  for (const w of [...span, ...bracket]) {
+    const r = generateDemoWeekRosters(w);
+    weekTeams.set(w, r.teams);
+    const m = new Map();
+    for (const t of r.teams) for (const p of t.players) m.set(p.playerId, p.projected);
+    idx.set(w, m);
+  }
+  const projFor = (p, w) => { const v = idx.get(w)?.get(p.playerId); return typeof v === 'number' ? v : null; };
+
+  const myId = Number(page.team);
+  const me = base.teams.find((t) => t.id === myId);
+  const partner = base.teams.find((t) => t.name === row.partner) ||
+    base.teams.find((t) => (page.teams.find((o) => o.name === row.partner) || {}).id === String(t.id));
+  if (!me || !partner) return null;
+  const byId = new Map();
+  for (const t of base.teams) for (const p of t.players) byId.set(p.playerId, p);
+  const send = row.send.map((m) => byId.get(m.id)).filter(Boolean);
+  const receive = row.receive.map((m) => byId.get(m.id)).filter(Boolean);
+  if (send.length !== row.send.length || receive.length !== row.receive.length) return null;
+
+  const mine = priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor });
+  const his = priceTradeAcrossWeeks({ players: partner.players, send: receive, receive: send, slots, weeks: span, projFor });
+  const deltas = odds.offerDeltas({ partner: { id: partner.id }, byWeek: mine.byWeek, theirByWeek: his.byWeek }, myId);
+
+  const d = generateDemoLeague();
+  const data = capture.normalizeSchedule({
+    teams: d.teams.map((t) => ({ id: t.id, name: t.name })),
+    games: d.games.map((g) => ({
+      week: g.week, homeId: g.homeId, homeScore: g.homeActual, homeProjected: g.homeProjected,
+      awayId: g.awayId, awayScore: g.awayActual, awayProjected: g.awayProjected, played: true,
+    })),
+  }, { isDemo: true });
+  const isRemaining = (g) => g.week > week || capture.gameState(g) !== 'final';
+  const built = capture.buildProjection(data, capture.pickWeeks(weekTeams, bracket), null);
+  const spread = capture.leagueSpread(data, (g) => !isRemaining(g), null);
+  const inputs = capture.simulationInputs({ data, isRemaining, proj: built ? built.proj : null, sigma: spread.sigma });
+  const before = odds.goalChance(odds.simulateWith(inputs), myId, goal);
+  const after = odds.goalChance(odds.simulateWith(inputs, deltas), myId, goal);
+
+  const ros = (list) => list.reduce((a, p) => a + span.reduce((s, w) => s + (projFor(p, w) ?? 0), 0), 0);
+  const accept = odds.acceptChance({
+    lineupPerWeek: his.delta / span.length,
+    lookPerWeek: (ros(send) - ros(receive)) / span.length,
+  });
+  return { before, after, accept };
+}
 
 /** Price one packing of trades across the rest of the season, from scratch. */
 async function repriceCombo(week, teamId, perTrade) {
@@ -4485,6 +4654,119 @@ if (!live.boot) {
     /never rewritten/i.test(cu.note), cu.note.slice(0, 1400));
   ok('and that only the players are saved, never the price',
     /never the price/i.test(cu.note), cu.note.slice(0, 700));
+}
+
+// ---- THE GOAL: "Win it all", the default (Tim, 2026-09-21) -----------------
+//
+// "the user should essentially open with a goal and all the data aligns with
+// that goal … The trade should be ranked by the increase/decrease in this
+// chance." Every scenario above is pinned to "Don't finish last" (see `boot`);
+// these two are the title goal, on demo and on the stubbed live league.
+
+const gt = run('goalTitle', { env: { TR_GOAL: 'title' } });
+ok('the title-goal scenario boots', !gt.boot, gt.boot);
+if (!gt.boot) {
+  const T = gt.title;
+  ok('no console errors under the title goal', gt.errors.length === 0, gt.errors.slice(0, 2).join(' | '));
+  ok('and demo still costs no request', gt.fetchCalls.length === 0, gt.fetchCalls.join(' | '));
+  eq(T.goalOn, 'Win it all', 'the page opens with the goal "Win it all" lit');
+
+  // -- the column, second, beside the manager --------------------------------
+  eq(T.heads[1], 'Title chance', 'the column right after Manager is the title chance');
+  ok('every row carries a goal cell in that position',
+    T.trades.length > 2 && T.trades.every((t) => t.goal && t.goal.index === 1),
+    JSON.stringify(T.trades.slice(0, 2).map((t) => t.goal)));
+
+  // -- THE SPAN REACHES THE PLAYOFF WEEKS -------------------------------------
+  // Demo's bracket is 14–16 (three rounds after a 13-week season). The gain
+  // heading names the priced weeks; under this goal they run to 16.
+  const firstWeek = Number(T.week) + 1;
+  ok('the playoff weeks are priced: the gains run through week 16',
+    T.heads.some((h) => h === `You gain a week (weeks ${firstWeek}–16)`), T.heads.join(' | '));
+  ok('and the method says so, and why',
+    /The playoff weeks are priced/.test(T.note) && /where the title is won/.test(T.note), T.note.slice(0, 400));
+  if (gt.deal && gt.deal.weeks) {
+    const labels = gt.deal.weeks.weeks.map((r) => Number(String(r.label).replace(/\D/g, '')));
+    ok('the pop-up’s priced table runs through the bracket, weeks 14–16 included',
+      [14, 15, 16].every((w) => labels.includes(w)) && labels[0] === firstWeek,
+      labels.join(','));
+    ok('so there is no "for reference" playoff section after it — they would count twice',
+      gt.deal.weeks.playoff.length === 0, JSON.stringify(gt.deal.weeks.playoff));
+  } else {
+    ok('the top row opens its pop-up', false, JSON.stringify(gt.deal).slice(0, 200));
+  }
+
+  // -- RANKED BY THE GOAL ------------------------------------------------------
+  ok('the status line says the list is ranked by the title chance',
+    /ranked by your title chance/.test(T.count), T.count.slice(0, 300));
+  const scored = T.trades.filter((t) => t.goal && Number.isFinite(t.goal.v) && /%/.test(t.goal.head));
+  ok('every offer was played out — each goal cell holds a percentage',
+    scored.length === T.trades.length, `${scored.length} of ${T.trades.length}`);
+  ok('and the rows are in the order of that expected change, best first',
+    T.trades.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
+    T.trades.map((t) => t.goal.v.toFixed(4)).join(','));
+  ok('which is NOT simply the points order — the goal really does re-rank',
+    T.trades.some((t, i, a) => i > 0 && a[i - 1].myGain < t.myGain),
+    T.trades.map((t) => t.myGain).join(','));
+  ok('each cell says before → after and how likely he is to say yes',
+    scored.every((t) => /^\d+\.\d% → \d+\.\d% · \d+% yes$/.test(t.goal.sub)),
+    scored.slice(0, 3).map((t) => t.goal.sub).join(' | '));
+  ok('and a green cell is one that helps, a red one one that hurts — by sign as well as hue',
+    scored.every((t) => (/\bpos\b/.test(t.goal.cls) ? /^\+/.test(t.goal.head) : true) &&
+      (/\bneg\b/.test(t.goal.cls) ? /^−/.test(t.goal.head) : true)),
+    scored.map((t) => `${t.goal.cls}:${t.goal.head}`).slice(0, 6).join(' '));
+  ok('the method prints the yes-curve with its two constants, so a row can be checked',
+    /Will he say yes\?/.test(T.note) && /3\) ÷ 1\.5/.test(T.note) && /88% at dead even/.test(T.note),
+    T.note.slice(T.note.indexOf('Will he'), T.note.indexOf('Will he') + 400));
+
+  // -- RE-DERIVED: the top row's title chance, from nothing of the page's -----
+  //
+  // The demo league rebuilt from its generators, the deal priced for BOTH
+  // squads with the engine over the same weeks, the season built with the
+  // Schedule page's own functions and simulated on the same seed. The page's
+  // printed before → after must be that answer. FALSIFIABLE: shift only your
+  // side (drop `theirByWeek`), or price the regular season alone, and it moves.
+  {
+    const top = scored[0];
+    const re = top ? await rederiveGoal(T, top, 'title') : null;
+    const shown = top ? top.goal.sub.match(/^(\d+\.\d)% → (\d+\.\d)% · (\d+)% yes$/) : null;
+    ok('the top row’s title chance re-derives from the engine alone',
+      !!re && !!shown && Math.abs(Number(shown[1]) - re.before * 100) <= 0.051 &&
+        Math.abs(Number(shown[2]) - re.after * 100) <= 0.151,
+      `page ${top && top.goal.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
+    ok('and so does the chance he says yes',
+      !!re && !!shown && Math.abs(Number(shown[3]) - re.accept * 100) <= 1.01,
+      `page ${shown && shown[3]}% vs engine ${re && (re.accept * 100).toFixed(1)}%`);
+  }
+
+  // -- AND THE OTHER GOAL ----------------------------------------------------
+  const L = gt.last;
+  eq(L.goalOn, 'Don’t finish last', 'pressing "Don’t finish last" lights it');
+  eq(gt.stored, 'last', 'and the choice is remembered');
+  eq(L.heads[1], 'Chance of last', 'the column becomes the chance of finishing last');
+  ok('and the span drops back to the regular season — the playoffs cannot move last place',
+    L.heads.some((h) => h === `You gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
+  ok('the status line names the new goal',
+    /chance of finishing last/.test(L.count), L.count.slice(0, 300));
+  ok('and the method says why the regular season alone is priced',
+    /regular-season<\/strong>|regular-season table/.test(L.note) || /bottom of the regular-season/.test(L.note),
+    L.note.slice(0, 500));
+}
+
+const gl = run('goalLive', { stub: true, env: { TR_GOAL: 'title' } });
+ok('the live title-goal scenario boots', !gl.boot, gl.boot);
+if (!gl.boot) {
+  ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
+  eq(gl.heads[1], 'Title chance', 'the live page carries the title-chance column');
+  ok('and every live offer was played out and ranked',
+    gl.trades.length > 0 && gl.trades.every((t) => t.goal && /%/.test(t.goal.head)) &&
+      /ranked by your title chance/.test(gl.count),
+    `${gl.count.slice(0, 200)} · ${JSON.stringify(gl.trades.slice(0, 2).map((t) => t.goal))}`);
+  ok('in order of the expected change',
+    gl.trades.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
+    gl.trades.map((t) => t.goal.v).join(','));
+  ok('and the live bracket weeks (15–16) are in the priced span',
+    gl.heads.some((h) => /You gain a week \(weeks \d+–16\)/.test(h)), gl.heads.join(' | '));
 }
 
 // ---------------------------------------------------------------------------

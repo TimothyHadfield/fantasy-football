@@ -134,6 +134,13 @@
      number rather than a footnote. */
   #tradeTable td.gain { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
   #tradeTable td.their-gain { font-variant-numeric: tabular-nums; }
+  /* THE GOAL COLUMN: the rank key, so it reads first and heaviest. Green or red
+     is carried by the sign as well as the hue — "+3.1%" / "−2.0%" — so the colour
+     is never the only channel. A cell still waiting on the simulation is dim —
+     `goal-wait`, NOT `pending`: app.css's `.pending` is a whole notice banner
+     (background, dashed border, margin) and a cell wearing it drew one. */
+  #tradeTable td.goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  #tradeTable td.goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
   #tradeTable td.before-after { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12.5px; }
 
   .searching { color: var(--dim); font-style: italic; }
@@ -1158,6 +1165,17 @@
     <!-- One tidy row of controls: where the data comes from, whose squad, how
          a man is valued, and which week. Wraps on a phone. -->
     <div class="row ctl-row">
+      <!-- THE GOAL (Tim, 2026-09-21): "the user should essentially open with a
+           goal and all the data aligns with that goal". First, because it
+           decides what every trade below is ranked by and which weeks are
+           priced. The `data-goal` values are the stored preference. -->
+      <div class="src-ctl">
+        <span class="src-label" id="goalLabel">Your goal</span>
+        <div class="segmented" id="goalToggle" role="group" aria-labelledby="goalLabel">
+          <button type="button" data-goal="title" class="on">Win it all</button>
+          <button type="button" data-goal="last">Don&rsquo;t finish last</button>
+        </div>
+      </div>
       <div class="src-ctl">
         <span class="src-label" id="sourceLabel">Source</span>
         <div class="segmented" id="sourceToggle" role="group" aria-labelledby="sourceLabel">
@@ -1226,7 +1244,7 @@
        page — the panels share no state that one of them paints for another. -->
   <section class="panel">
     <h2 id="finderTitle">Trades that help both squads</h2>
-    <p class="lede">Every swap that raises both starting lineups. Tap a row for its weeks.</p>
+    <p class="lede">Every swap that raises both starting lineups, best for your goal first. Tap a row for its weeks.</p>
     <div class="row mb-12">
       <!-- The COUNT each way is the shape, and it needs no teaching. These read
            "Straight swap / You consolidate / You add depth" until Tim said he
@@ -1252,6 +1270,7 @@
     <div class="table-scroll" id="tradeWrap"><table id="tradeTable">
       <thead><tr>
         <th class="name" data-sort>Manager</th>
+        <th data-sort id="thGoal">Title chance</th>
         <th class="left" data-sort>Deal</th>
         <th class="left" data-sort>You send</th>
         <th class="left" data-sort>You get</th>
