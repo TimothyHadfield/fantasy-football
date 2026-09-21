@@ -26,6 +26,12 @@ Repo: https://github.com/TimothyHadfield/fantasy-football
 >   files week 14's numbers and blocks weeks 16–17 forever; the archived
 >   reading is unfloored while the page's is floored, and first-write-wins
 >   picks which survives.
+>
+> **2026-09-21: Tim's direction is "the perfect trade".** The Trade page now
+> opens on a GOAL (win it all / don't finish last) and ranks every offer by
+> what it does to that chance in the season simulation, times the chance the
+> other manager says yes — **rule 18**. The next steps on that road are listed
+> in `PROGRESS.md` under 2026-09-21.
 
 Last updated 2026-09-19. Everything below is pushed and live; 38 test suites,
 13,208 assertions, green, and GitHub Actions runs them on every push.
@@ -445,6 +451,44 @@ These were each established by testing, and several by getting them wrong first.
    - The card SAYS which squad it solved against. A set comparison alone can
      pass while the page answers the wrong question, because the two answers
      legitimately coincide for a man who starts everywhere.
+
+18. **THE TRADE PAGE OPENS ON A GOAL, AND THE FINDER IS RANKED BY IT**
+   (Tim, 2026-09-21: "I want the site to offer virtually the perfect trade …
+   the user should essentially open with a goal and all the data aligns with
+   that goal. They can either choose between not losing or winning everything
+   … The trade should be ranked by the increase/decrease in this chance", and
+   of the other manager: "rank by expected value, but add a good amount of
+   leeway"). `js/trade-odds.js` holds every decision; the page is wiring.
+   - **Two goals.** "Win it all" = `pTitle`; "Don't finish last" = `pLast`
+     (last in the REGULAR-SEASON table, his rule). Pref `trade.goal`, default
+     title. First control in the Data source row.
+   - **The goal moves the priced span.** Under the title goal the playoff
+     weeks still to come are IN `weeklySpan()` and priced like any week — so
+     every per-week figure on the page includes them, and the pop-up shows
+     no "for reference" bracket section (it would count them twice). Under
+     "last" the span is the regular season, exactly as before 2026-09-21.
+   - **The ranking is the season simulation**, the Schedule/Summary one, run
+     once as the league stands and once per offer, **on one seed** (common
+     random numbers: the difference is the deal, not two samples of luck —
+     still ±0.1–0.4 points between seeds, and the note says so). A deal
+     reaches it as the per-week point change to BOTH squads, read off the
+     finder's own `byWeek`/`theirByWeek`, so a deal that strengthens a rival
+     costs you. The baseline is built with the Schedule page's own pieces
+     (`buildProjection` with this page's floor, `startedProjections` →
+     `leagueSpread`, `simulationInputs`).
+   - **Rank key = your gain in the chance × P(he says yes).** P is the ONE
+     judgement: his lineup gain and how the deal looks on ESPN's numbers (ROS
+     projections in vs out), a week, weighted equally, through
+     `1/(1+e^−((x+3)/1.5))` — 98% at +3, 88% even, 50% at −3, 12% at −6.
+     Constants `ACCEPT_LEEWAY`/`ACCEPT_SCALE`, printed in the method note.
+   - **Still true, and not yet changed:** the finder only KEEPS deals where
+     both lineups gain on points over the span, then the goal re-orders them.
+     A deal that loses points but wins the title is never a candidate. Best
+     combo, custom trades and the suggestions are NOT goal-ranked yet.
+   - Tests: `test-trade-odds.mjs` (66, pure); `tr-test`'s `goalTitle` and
+     `goalLive` scenarios re-derive the top row's chance from the engine
+     alone. **Every older `tr-test` scenario is pinned to "last"** (see
+     `boot`), because that is the span they were written against.
 
 ## How a panel reads (2026-09-16, Tim: "messy and wordy")
 

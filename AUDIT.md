@@ -437,9 +437,10 @@ tint own the sign and drop `.pos`/`.neg` to `--text`; or lighten `--err` to
 
 ### 4.2 On a phone, the answer is off-screen
 At 390px, first-screen columns vs hidden ones:
-- **`trade #tradeTable`** (1,124px in a 360px scroller): shows Manager, Deal,
+- ~~**`trade #tradeTable`** (1,124px in a 360px scroller): shows Manager, Deal,
   You send. **Hides You get, Your lineup, You gain, He gains, ESPN** — the
-  whole answer.
+  whole answer.~~ **Done 2026-09-21:** the goal column (the rank key) is now
+  second, beside Manager, and is on the first screen at 390px.
 - **`schedule #simTable`** (683px): shows Team, Proj. wins, Avg place, Most
   likely. **Hides Playoffs %, Bye %, 1st in table %, Title %, Last %.**
 - **`waivers #takenTable`** (557px): shows Player, Pos, Tm, Owner. **Hides Avg

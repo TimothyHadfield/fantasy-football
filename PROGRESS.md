@@ -86,7 +86,85 @@ describe how the site works **today**:
 | Measuring page height, overflow and tap targets | "`tools/measure-layout.mjs`" |
 | Why 38 green suites still shipped a regression | "The lesson of the day" |
 | The sub-44px tap targets, finally named | "`tools/measure-layout.mjs`" |
+| The Trade page's goal, and why offers are ranked by title chance | "2026-09-21 — the Trade page opens on a goal" |
 | What to do next | "Next", at the foot |
+
+## 2026-09-21 — the Trade page opens on a goal, and ranks by it
+
+Tim: "Something I want to get down really well is the Trading system. I want
+the site to offer virtually the perfect trade to the user." Asked what "best"
+should mean, he answered: open with a goal — "not losing or winning everything"
+— and rank "by the increase/decrease in this chance", with the other manager
+handled by "expected value, but add a good amount of leeway". HANDOFF rule 18
+has the mechanics; this is what was learned.
+
+### What the points ranking could not see, measured
+
+On demo as of week 5, the finder's 32 offers played out in the season
+simulation ran from **−5.5% to +3.1%** of title chance, and the order barely
+resembled the points order: the deal ranked **25th on points was 2nd** on
+title chance, and one the page was offering as a gain (+0.28 pts/week) was
+**−18 points in a semi-final week** and cut the title chance by 5.5%. The
+explanation was the playoff weeks every time — the old span stopped at the
+regular season, so the finder was structurally blind to the weeks the title is
+decided in. A title-chaser's best trade is often worse in October.
+
+### Common random numbers are what make the ranking usable
+
+At 10,000 runs a title chance carries about ±0.3 points of noise. Two offers
+simulated on DIFFERENT seeds would therefore swap places at random between
+page loads. On ONE seed the league-as-it-is and every deal face the same
+draws, and the between-seed spread of the DIFFERENCE fell to 0.1–0.4 points —
+small against a −5.5…+3.1 range. `test-trade-odds.mjs` proves the mechanism
+directly: because the bracket draws from its own stream, a change confined to a
+playoff week leaves the chance of last place **exactly** unchanged, not merely
+close — and giving the deal a different seed breaks that assertion.
+
+### The deal enters the simulation as points, not as a roster
+
+Rather than rebuilding each squad's projection from its post-trade roster, the
+finder's own per-week before/after for BOTH sides (`byWeek`, and the new
+`theirByWeek`) is added to each squad's game projection that week. So the
+simulation prices exactly the points the row prints, the same code serves demo
+(whose games carry their own projections) and live, and nothing is derived
+twice. `tr-test`'s `goalTitle` re-derives the top row's before → after from
+the demo generators and the engine alone; leaving his side out of the
+simulation fails it (page 7.1% vs engine 6.9%).
+
+### Falsified
+
+Test-level: no shared seed (3 fail), shift ignoring the week (5), `theirByWeek`
+from the wrong squad (10). Page-level: no re-sort (3 fail, demo and live), his
+side left out of the simulation (1), title goal not pricing the playoffs (7).
+
+### A trap worth knowing
+
+`css/app.css` has a `.pending` class that is a whole notice banner —
+background, dashed border, margin. A table cell given `pending` as a state
+class drew one. The goal cell's waiting state is `goal-wait`.
+
+### What the page looks like now
+
+The goal column is SECOND, beside the manager: "+2.0% · 5.9% → 7.9% · 47%
+yes". On a phone that is the first screen — which also closes the Trade half
+of AUDIT §4.2 (the answer used to be four columns off-screen). The page got
+**shorter** (−608px at 390px): pricing the bracket weeks leaves 29 demo offers
+where the regular season alone left 39.
+
+### Next on the road to "the perfect trade", in order
+
+1. **Let the goal choose the candidates, not just order them.** The finder
+   still only keeps deals where both lineups gain on POINTS over the span. A
+   deal that loses points in October and wins the title is never a
+   candidate. Relax the points gate (mine > −X, his judged by P(yes)) and
+   let the simulation decide — needs a cap on how many go to the simulation.
+2. **2-for-2.** Still skipped (`js/trade.js`, "2-for-2 is left out"). With the
+   ceiling pruning it may be affordable now; measure first.
+3. **Goal-rank Best combo and custom trades**, and show the goal on the
+   pop-up. Neither knows about the goal yet.
+4. **The emptied roster spot.** A 2-for-1 receiver's spare spot is priced at
+   nothing; the floor module already knows the third-best free agent.
+5. **The trade deadline line** (AUDIT §6.7) — a field read away.
 
 ## 2026-09-20 (later) — five audits, and what 13,302 green assertions were not seeing
 
