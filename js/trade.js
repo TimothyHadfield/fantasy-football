@@ -1283,6 +1283,15 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
           after: myAfter.weekTotals[i],
           delta: round1(myAfter.weekTotals[i] - myBase.weekTotals[i]),
         })),
+        // HIS side, the same shape. js/trade-odds.js plays both changes out
+        // in the season simulation: a deal that strengthens a rival is a
+        // different deal from one that strengthens a team you never meet.
+        theirByWeek: weeks.map((week, i) => ({
+          week,
+          before: theirBase.weekTotals[i],
+          after: theirAfter.weekTotals[i],
+          delta: round1(theirAfter.weekTotals[i] - theirBase.weekTotals[i]),
+        })),
         yourMoves: weeklyPositionDeltas(mineWas, mineNow),
         theirMoves: weeklyPositionDeltas(theirsWas, theirsNow),
         yourChurn: weeklyChurn(mineWas, mineNow),

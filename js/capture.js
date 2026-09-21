@@ -524,7 +524,9 @@ export function simulationInputs({ data, isRemaining, proj, sigma }) {
       const homeProj = projectedPoints(g, 'home', proj);
       const awayProj = projectedPoints(g, 'away', proj);
       if (homeProj !== null && awayProj !== null) playable++;
-      games.push({ homeId: g.homeId, awayId: g.awayId, homeProj, awayProj });
+      // `week` rides along for js/trade-odds.js, which shifts one squad's
+      // projection in the weeks a trade changes. simulateSeason ignores it.
+      games.push({ week: g.week, homeId: g.homeId, awayId: g.awayId, homeProj, awayProj });
       continue;
     }
 
