@@ -917,9 +917,8 @@ function valueFor(playerId, week) {
  *
  * The average is DERIVED — ESPN publishes no such number — and it exists
  * because a column per week has no single "who is best" ordering without one.
- * A bye counts as the zero ESPN returns, because a week he cannot play is part
- * of what you are getting; a week with no number at all is left out, because
- * counting it as zero would punish a player for a gap in ESPN's data.
+ * It is the mean of the weeks that project above zero — see meanOf() for why a
+ * bye, a ruled-out zero and a blank week are all left out.
  */
 function buildRows(weeks) {
   const rows = [];
@@ -989,20 +988,46 @@ function rosterValueFor(playerId, week) {
  * Shared rather than written out three times, because it is the one thing that
  * MUST be identical everywhere: a comparison between two differently-derived
  * averages is not a comparison, and the Taken table's Avg sits in a second
- * panel where the difference would be even harder to spot. A bye counts as the
- * zero ESPN returns; a week with no number at all is left out.
+ * panel where the difference would be even harder to spot.
+ *
+ * ONLY WEEKS PROJECTING ABOVE ZERO ARE IN IT (Tim, 2026-09-20, decision D7 —
+ * "it should only calculate future weeks that actually project any points at
+ * all, and then set the avg there"). A bye's 0.00, a ruled-out 0.00, a week
+ * ESPN carried no number for and a week not read yet all leave the divisor.
+ * It is the Trade page's rule (`perWeek` in js/trade.js `scoreAcrossWeeks`,
+ * and `weeklyMean` in js/trade-page.js), and it has to be: the Trade page's
+ * player link lands here, and until 2026-09-21 the same man read 16.3 there
+ * and 12.3 here. Neither of those is exported as a per-week helper, so the
+ * rule is restated here — keep all three in step. A man with no such week has
+ * no average (null), never a 0.0.
+ *
+ * ROUNDED TO THE TENTH HERE, the way the Trade engine rounds `perWeek`
+ * (Math.round of ten times the mean). Printing the raw mean with toFixed(1)
+ * instead split the two pages by 0.1 on a man whose mean sits on a half-tenth
+ * (measured: 8.8 here against 8.9 there on the test wire), because toFixed and
+ * Math.round break a floating-point tie differently. Sorting and "worst" read
+ * the same rounded figure, so a tie is broken by player id — as on Trade.
+ *
+ * Exported for tests/wv-test.mjs only; the page itself calls it via avgOf().
  */
-function meanOf(values) {
-  const real = values.filter((v) => typeof v === 'number');
-  return real.length ? real.reduce((a, b) => a + b, 0) / real.length : null;
+export function meanOf(values) {
+  let sum = 0;
+  let scoring = 0;
+  for (const v of values) {
+    if (typeof v === 'number' && v > 0) {
+      sum += v;
+      scoring++;
+    }
+  }
+  return scoring > 0 ? Math.round((sum / scoring) * 10) / 10 : null;
 }
 
 /**
  * Your worst player at each position you hold, as rows for the same table.
  *
  * "Worst" is the lowest Avg over the weeks currently shown, computed exactly
- * the way the wire's is — byes counted as the zero ESPN returns, weeks with no
- * number at all left out — because a comparison between two differently-derived
+ * the way the wire's is — only weeks projecting above zero, see meanOf() —
+ * because a comparison between two differently-derived
  * averages is not a comparison.
  *
  * The squad is the one you hold in the EARLIEST week on screen: a claim made
@@ -1451,7 +1476,7 @@ function renderHead(weeks) {
        <th class="name" data-sort>Player</th>
        <th class="left" data-sort>Pos</th>
        <th class="left" data-sort>Tm</th>
-       <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: a bye counts as the zero ESPN returns, a week with no number at all is left out.">Avg</th>
+       <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are left out, as on the Trade page.">Avg</th>
        ${cols}
      </tr>`;
 }
@@ -2013,7 +2038,7 @@ function renderTakenHead(weeks) {
        <th class="left" data-sort title="The position, and where he ranks on his own manager’s roster by the Avg below — best is 1. Ours, over the weeks shown, so widening the span can move him.">Pos</th>
        <th class="left" data-sort>Tm</th>
        <th class="left" data-sort title="The manager whose roster he is on, as of the earliest week shown.">Owner</th>
-       <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: a bye counts as the zero ESPN returns, a week with no number at all is left out. Worked out exactly the way the Avg above it is.">Avg</th>
+       <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are left out, as on the Trade page. Worked out exactly the way the Avg above it is.">Avg</th>
        ${cols}
      </tr>`;
 }
@@ -2234,8 +2259,9 @@ function renderTakenNote(weeks) {
 
   parts.push(
     lead('Avg') +
-    'Avg is the mean of the weeks shown and is ours, not ESPN’s: byes are counted as the zero ' +
-    'ESPN returns, and weeks with no number at all are left out. ' + PLAYOFF_NOTE + ' It is ' +
+    'Avg is the mean of the weeks shown and is ours, not ESPN’s: only weeks projecting above ' +
+    'zero count, so a bye, a man ruled out and a week with no number at all are all left out — ' +
+    'the same rule as the Trade page’s per-week figure. ' + PLAYOFF_NOTE + ' It is ' +
     'worked out exactly the way the Avg in the table above is, so the two can be read against each other.'
   );
 
@@ -2340,8 +2366,8 @@ const PLAYOFF_NOTE =
 /** What a 0.0 is, said in both tables' notes. */
 const ZERO_NOTE =
   'ESPN also returns 0.00 for a man it has ruled out, so a zero outside his NFL team’s bye week ' +
-  'is printed as 0.0 — with OUT, IR or SUSP beside it when that is why — and counts as a zero in ' +
-  'Avg. When the bye weeks could not be read, every zero is shown as a bye, as it always was.';
+  'is printed as 0.0 — with OUT, IR or SUSP beside it when that is why — and, like a bye, is left ' +
+  'out of Avg. When the bye weeks could not be read, every zero is shown as a bye, as it always was.';
 
 /** A short bold label that opens a paragraph of the tucked explanation. */
 function lead(label) {
@@ -2487,8 +2513,9 @@ function renderNote(weeks) {
 
   parts.push(
     lead('Avg, Bye and blank') +
-    'Avg is the mean of the weeks shown and is ours, not ESPN’s: byes are counted as the zero ' +
-    'ESPN returns, and weeks with no number at all are left out. ' + PLAYOFF_NOTE + ' ' +
+    'Avg is the mean of the weeks shown and is ours, not ESPN’s: only weeks projecting above ' +
+    'zero count, so a bye, a man ruled out and a week with no number at all are all left out — ' +
+    'the same rule as the Trade page’s per-week figure. ' + PLAYOFF_NOTE + ' ' +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
     'a blank cell means that week’s list carried no number for him at all. Those are not the ' +
     'same thing, so they are not drawn the same way. ' + ZERO_NOTE
