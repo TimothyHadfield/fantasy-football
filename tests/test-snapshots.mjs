@@ -460,6 +460,82 @@ ok('a league id with a slash in it cannot escape the directory',
     'and it still hydrates into the page shapes');
 }
 
+// ---- SCHEMA 2 NEXT TO SCHEMA 1: the weeks that exist nowhere else ----------
+//
+// Weeks 1–2 of Tim's 2026 season exist ONLY as v1 readings in one browser. The
+// v2 bump (player rows, floor record; AUDIT §2.3) must leave them readable and
+// untouched: listed, replayed, exported and restored BYTE FOR BYTE. The fixture
+// is two readings written by the v1 js/snapshots.js itself (commit 99e6783), a
+// 10-team, 14-week league with a six-team bracket — the real shape and size.
+{
+  const { readFileSync } = await import('node:fs');
+  const fixture = JSON.parse(readFileSync(new URL('./snap-v1-fixture.json', import.meta.url), 'utf8'));
+  const [v1w1, v1w2] = fixture.raw;
+  ok('the fixture really is v1', JSON.parse(v1w1).v === 1 && JSON.parse(v1w2).v === 1);
+
+  store.clear();
+  store.set(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 1), v1w1);
+  store.set(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 2), v1w2);
+
+  // A v2 reading written next to them, the way both routes now write one.
+  const v2 = capture(3, {
+    floors: new Map([['K', { value: 7.9, position: 'K', name: 'Wire K2', playerId: 5002, rank: 3 }]]),
+    floorWeek: 3,
+    players: {
+      teamId: 1, weeks: [3, 4], cols: ['id', 'name', 'pos', 'team', 'slot', 'inj', 'proj'],
+      mine: [[100, 'A QB', 'QB', 'DET', 0, 'ACTIVE', [19.42, 0]]],
+      starters: { 2: [[200, 'B QB', 'QB', 'GB', 0, 'ACTIVE', 17.1]] },
+    },
+  });
+  eq(v2.v, 2, 'a new reading is written at schema 2');
+  ok('saving it works', snapshots.save(v2).ok);
+  eq(store.get(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 1)), v1w1, 'writing week 3 leaves week 1’s bytes alone');
+  eq(store.get(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 2)), v1w2, 'and week 2’s');
+
+  same(snapshots.list(LEAGUE.leagueId, LEAGUE.season).map((s) => [s.week, s.v]), [[1, 1], [2, 1], [3, 2]],
+    'the archive lists the v1 weeks beside the v2 one');
+  eq(JSON.stringify(snapshots.get(LEAGUE.leagueId, LEAGUE.season, 1)), v1w1, 'a v1 week reads back exactly as stored');
+  const h = snapshots.hydrate(snapshots.get(LEAGUE.leagueId, LEAGUE.season, 2));
+  ok('a v1 week still hydrates into the page shapes', h && h.projection.proj.get(2) instanceof Map &&
+    h.projection.proj.get(17).size === 10 && h.data.games.length === 70);
+  eq(h && h.data.playoffs.playoffTeams, 6, 'with its bracket settings');
+
+  // THE EXPORT: every v1 entry in the file is the stored string, byte for byte.
+  const file = snapshots.exportAll(LEAGUE.leagueId, LEAGUE.season);
+  eq(file.count, 3, 'the export carries all three weeks');
+  const out = JSON.parse(file.json).snapshots;
+  eq(JSON.stringify(out[0]), v1w1, 'EXPORT: week 1 (v1) survives byte for byte');
+  eq(JSON.stringify(out[1]), v1w2, 'EXPORT: week 2 (v1) survives byte for byte');
+  eq(out[2]?.v, 2, 'and week 3 goes out as v2');
+  same(out[2]?.players, v2.players, 'with its player rows');
+  same(out[2]?.floors, { K: { value: 7.9, name: 'Wire K2', playerId: 5002, rank: 3 } }, 'and its floor record');
+
+  // …and back into a wiped browser, through the committed-archive route.
+  store.clear();
+  const back = await snapshots.fetchRemote(LEAGUE.leagueId, LEAGUE.season, {
+    fetchImpl: async () => ({ ok: true, text: async () => file.json }),
+  });
+  eq(back.added, 3, 'the mixed file restores every week into a fresh browser');
+  eq(store.get(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 1)), v1w1, 'week 1 comes back byte for byte');
+  eq(store.get(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 2)), v1w2, 'and week 2');
+
+  // An export an OLD build wrote (envelope v1) is still a file this build reads.
+  store.clear();
+  const oldFile = JSON.stringify({ v: 1, exportedAt: '2026-09-10T00:00:00.000Z', leagueId: LEAGUE.leagueId,
+    season: LEAGUE.season, snapshots: [JSON.parse(v1w1), JSON.parse(v1w2)] }, null, 2);
+  const parsed = snapshots.parseImport(oldFile);
+  eq(parsed.error, null, 'a v1 export file parses');
+  eq(parsed.snapshots.length, 2, 'with both weeks');
+  eq(snapshots.importAll(parsed.snapshots).added, 2, 'and imports');
+  eq(store.get(snapshots.keyOf(LEAGUE.leagueId, LEAGUE.season, 2)), v1w2, 'byte for byte');
+  eq(snapshots.parseImport('{"v":1,"snapshots":[]}').error, 'No snapshots in that file.',
+    'an empty v1 file is "no snapshots", not a version complaint');
+
+  // A v2 reading's extra weight is bounded: see the full-season measure in
+  // test-capture.mjs. Here, only that a v2 record with rows is still kilobytes.
+  ok('a v2 record is still kilobytes', JSON.stringify(v2).length < 8000, JSON.stringify(v2).length);
+}
+
 // ---------------------------------------------------------------------------
 
 if (fails.length) {

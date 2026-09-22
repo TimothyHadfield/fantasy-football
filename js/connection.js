@@ -421,8 +421,12 @@ async function maybeCapture() {
       leagueId: state.leagueId,
       season: state.season,
       bridgePresent: bridge.isAvailable(),
+      teamId: state.teamId ?? null,
       fetchSchedule: season.fetchSchedule,
       fetchWeeksRosters: season.fetchWeeksRosters,
+      // The Schedule page's floor read, so the bar's reading is floored the
+      // same way (AUDIT §2.2). Absent in a stub: no floor, as on that page.
+      fetchFloors: typeof season.fetchFloors === 'function' ? season.fetchFloors : null,
       cloudSource: typeof season.cloudSource === 'function' ? season.cloudSource : null,
     });
   } catch {
@@ -447,7 +451,7 @@ function captureChip() {
   let week = null;
   const c = state.capture;
   if (c) {
-    if (c.recorded || !c.code || ['no-bridge', 'no-league', 'no-fetchers'].includes(c.code)) return '';
+    if (c.recorded || !c.code || ['no-bridge', 'no-league', 'no-fetchers', 'season-over'].includes(c.code)) return '';
     week = c.week ?? null;
   } else {
     const a = snapshots.lastAttempt(state.leagueId, state.season);

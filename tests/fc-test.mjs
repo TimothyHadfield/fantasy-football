@@ -1487,8 +1487,14 @@ async function check(scenario, boot) {
     c.ok('and the panel says outright that exporting is not a weekly job',
       a.live && /not a weekly job/.test(a.live.state),
       a.live && a.live.state);
+    // Schema 2 (AUDIT §2.3) keeps your roster and the other starters, so the
+    // panel says exactly that much and that the rest is not kept.
+    c.ok('and says which player numbers it keeps',
+      a.live && /your own roster’s projection for every week/.test(a.live.status) &&
+        /other squad’s starters/.test(a.live.status),
+      a.live && a.live.status.slice(-300));
     c.ok('and says what it does NOT keep',
-      a.live && /rosters behind those numbers are not kept/.test(a.live.status),
+      a.live && /rest of the rosters are not kept/.test(a.live.status),
       a.live && a.live.status.slice(-300));
 
     // ---- REPLAY SHOWS THE ARCHIVE, NOT THE LIVE PAGE ---------------------

@@ -14,7 +14,9 @@
 // the connection bar — which runs on every page — calls `captureIfDue()`. The
 // Schedule page uses the very same functions, so there is ONE way of building a
 // reading and the two routes cannot drift into writing different ones. The
-// suite `tests/test-capture.mjs` holds them to byte-for-byte equality.
+// suite `tests/test-capture.mjs` holds them to byte-for-byte equality — on a
+// fixture with a NON-EMPTY waiver wire, because until AUDIT §2.2 the bar's
+// route built its projection unfloored and only floorless fixtures agreed.
 //
 // ---------------------------------------------------------------------------
 // WHAT ELSE LIVES HERE, AND WHY
@@ -111,6 +113,12 @@ export function normalizeSchedule(raw, { isDemo }) {
     weeks,
     byWeek,
     games,
+    // THE BRACKET'S GAMES, carried through for one reason: they are the only
+    // way to know that a playoff week has been DECIDED, and so which week a
+    // December reading is filed under (`liveAsOf`, AUDIT §2.1). js/season.js
+    // sets them apart from the regular season; nothing here draws them. Empty
+    // for demo, a stub, and any source that did not send them.
+    playoffGames: (raw.playoffGames || []).map((g) => ({ ...g })),
     isDemo,
   };
 }
@@ -184,6 +192,34 @@ export function playoffWeeks(data) {
   return Array.from({ length: rounds }, (_, i) => last + 1 + i);
 }
 
+/**
+ * Has this PLAYOFF week been decided?
+ *
+ * Read off the bracket's own games (`data.playoffGames`): decided once it has
+ * at least one real game and every real game in it is final. A bye entry in
+ * the bracket is never "played" by ESPN, so byes are left out rather than
+ * holding the week open forever. A week with no bracket games at all — not
+ * seeded yet, or a source that sent none — is NOT decided: the safe direction,
+ * because a week wrongly thought decided would never get its reading.
+ */
+export function playoffWeekDecided(data, week) {
+  const games = (data?.playoffGames || []).filter(
+    (g) => g.week === week && g.homeId != null && g.awayId != null
+  );
+  return games.length > 0 && games.every((g) => gameState(g) === 'final');
+}
+
+/** The playoff weeks still to be decided, earliest first. */
+export function playoffWeeksLeft(data) {
+  return playoffWeeks(data).filter((w) => !playoffWeekDecided(data, w));
+}
+
+/** Every regular-season game and every playoff week decided: nothing left to forecast. */
+export function seasonOver(data) {
+  return Boolean(data && data.weeks && data.weeks.length) &&
+    !openWeeks(data).length && !playoffWeeksLeft(data).length;
+}
+
 /** Weeks with at least one game not yet final. */
 export function openWeeks(data) {
   return data.weeks.filter((w) => (data.byWeek.get(w) || []).some((g) => gameState(g) !== 'final'));
@@ -211,12 +247,22 @@ export function currentWeek(data) {
  * The Schedule page's `forecastAsOf()` on live data, and the week the
  * connection bar records. One definition, so the two routes file a reading
  * under the same number and "first write wins" means the same thing to both.
- * Once every game is decided it is the week after the last one.
+ *
+ * ONCE THE REGULAR SEASON IS DECIDED it walks on through the bracket: the
+ * first playoff week not yet decided (AUDIT §2.1). It used to stop at the week
+ * after the regular season — 15 — for the rest of the season, so the reading
+ * filed as week 15 held week 14's numbers and weeks 16 and 17, the
+ * championship weeks, could never be recorded at all. After the last playoff
+ * week it is the week after that, which no reading describes.
  */
 export function liveAsOf(data) {
   if (!data || !data.weeks.length) return 0;
   const open = openWeeks(data);
-  return open.length ? open[0] : data.weeks[data.weeks.length - 1] + 1;
+  if (open.length) return open[0];
+  const left = playoffWeeksLeft(data);
+  if (left.length) return left[0];
+  const bracket = playoffWeeks(data);
+  return (bracket.length ? bracket[bracket.length - 1] : data.weeks[data.weeks.length - 1]) + 1;
 }
 
 // ---------------------------------------------------------------- projection
@@ -227,8 +273,12 @@ export function liveAsOf(data) {
  *   project — the weeks still to play, plus the playoff weeks, which are not
  *             regular-season weeks and are asked for by number (their games do
  *             not exist until the bracket is seeded). These become
- *             the projection. (Once the regular season is decided there is no
- *             bracket to show, so only the current week is asked for.)
+ *             the projection. Once the regular season is decided it is the
+ *             playoff weeks NOT YET DECIDED, and nothing else — so it always
+ *             starts at `liveAsOf()`, and a December reading describes the
+ *             week it is filed under (AUDIT §2.1: it used to be week 14 alone,
+ *             filed as week 15). Only when the bracket too is over does it fall
+ *             back to the current week, for the pages; no reading is taken then.
  *   decided — weeks with a result in them. Their STARTED lineups' projection,
  *             set against the score, is what the scoring spread is measured
  *             from — the same number the Summary page's LUCK column uses, so
@@ -237,8 +287,9 @@ export function liveAsOf(data) {
  */
 export function rosterPlan(data) {
   const open = openWeeks(data);
-  const weeks = open.length ? open : [currentWeek(data)];
-  const project = weeks.concat(open.length ? playoffWeeks(data) : []);
+  const left = open.length ? [] : playoffWeeksLeft(data);
+  const weeks = open.length ? open : left.length ? left : [currentWeek(data)];
+  const project = open.length ? open.concat(playoffWeeks(data)) : weeks.slice();
   const decided = decidedWeeks(data);
   const asking = [...new Set(decided.concat(project))];
   return { weeks, project, decided, asking };
@@ -623,10 +674,97 @@ export function standingsKey({ w, l, t }, pf) {
 
 // --------------------------------------------------------------- the reading
 
+const round2 = (n) => (typeof n === 'number' ? Math.round(n * 100) / 100 : null);
+
+/**
+ * THE PLAYERS BEHIND A READING (AUDIT §2.3), from rosters already in memory.
+ *
+ * Both routes read every roster week to build the projection and used to throw
+ * the player rows away, so the archive could say how wrong a week-12 TEAM
+ * number was and nothing at all about a player. The affordable version, about
+ * a tenth of everything:
+ *
+ *   mine     — every man on YOUR roster, with ESPN's projection for him in
+ *              each projected week (null where he was not on the roster that
+ *              week, or ESPN gave no number; 0.00 in his bye, rule 2). Slot and
+ *              injury status are as of the first projected week.
+ *   starters — every OTHER squad's starters in the first projected week, the
+ *              lineup they were actually fielding, with that week's number.
+ *
+ * Without a team of your own (`myTeamId` null) `mine` is null and `starters`
+ * covers every squad. ESPN's figures to the hundredth, as its site shows them.
+ *
+ * EACH MAN IS A ROW, NAMED BY `cols` — [id, name, pos, team, slot, inj, proj]
+ * — rather than an object repeating seven keys. Measured on a 17-week,
+ * 10-team season (test-capture.mjs): objects made the season's archive 441KB,
+ * rows keep it under 400KB, and a row with its header beside it still reads
+ * by hand. In `mine`, `proj` is an array lined up with `weeks`.
+ *
+ * @param {Map<number, Array>} weekTeams week -> teams (js/season.js shape)
+ * @param {number[]} weeks the projected weeks, earliest first
+ * @param {number|null} myTeamId
+ * @returns {Object|null} null when there are no rosters for the first week
+ */
+export function playersFrom(weekTeams, weeks, myTeamId = null) {
+  const list = (weeks || []).filter((w) => (weekTeams?.get(w) || []).length);
+  if (!list.length) return null;
+  const first = weekTeams.get(list[0]);
+  const me = myTeamId == null ? null : Number(myTeamId);
+
+  // [id, name, pos, team, slot, inj] — `proj` is appended by the caller.
+  const row = (p, slot = p.lineupSlotId ?? null) => [
+    p.playerId ?? null,
+    p.name || '',
+    p.position || '',
+    p.proTeam || '',
+    slot,
+    p.injuryStatus || 'ACTIVE',
+  ];
+
+  let mine = null;
+  if (me !== null && first.some((t) => t.id === me)) {
+    const byId = new Map();
+    for (const [i, w] of list.entries()) {
+      const team = (weekTeams.get(w) || []).find((t) => t.id === me);
+      for (const p of team?.players || []) {
+        const key = p.playerId ?? `${p.name}|${p.position}`;
+        if (!byId.has(key)) {
+          // Slot and status from the first week he appears in; a man who only
+          // arrives later carries no slot, because he had none in the as-of week.
+          byId.set(key, [...row(p, i === 0 ? p.lineupSlotId ?? null : null), list.map(() => null)]);
+        }
+        byId.get(key)[PROJ][i] = round2(p.projected);
+      }
+    }
+    mine = [...byId.values()];
+  }
+
+  const starters = {};
+  for (const t of first) {
+    if (me !== null && t.id === me) continue;
+    starters[t.id] = (t.players || [])
+      .filter((p) => p.started)
+      .map((p) => [...row(p), round2(p.projected)]);
+  }
+
+  return { teamId: mine ? me : null, weeks: list, cols: PLAYER_COLS.slice(), mine, starters };
+}
+
+/** What each position in a player row holds (`playersFrom`). */
+export const PLAYER_COLS = ['id', 'name', 'pos', 'team', 'slot', 'inj', 'proj'];
+const PROJ = PLAYER_COLS.indexOf('proj');
+
 /**
  * Freeze a reading. The one call both routes make, so the fields cannot drift.
+ *
+ * `floors` / `floorWeek` are the positional floor the projection was built
+ * with, recorded so every reading SAYS whether it was floored and on which
+ * week's wire (AUDIT §2.2); `weekTeams` + `myTeamId` give the player rows.
  */
-export function readingFrom({ leagueId, season, week, data, projection, strengthNote, spread }) {
+export function readingFrom({
+  leagueId, season, week, data, projection, strengthNote, spread,
+  floors = null, floorWeek = null, weekTeams = null, myTeamId = null,
+}) {
   return snapshots.snapshotFrom({
     leagueId,
     season,
@@ -637,7 +775,35 @@ export function readingFrom({ leagueId, season, week, data, projection, strength
     sigma: spread ? spread.sigma : null,
     calibrated: spread ? spread.calibrated : false,
     sample: spread ? spread.sample : 0,
+    floors,
+    floorWeek,
+    players: projection && weekTeams
+      ? playersFrom(weekTeams, projection.weeksCovered, myTeamId)
+      : null,
   });
+}
+
+/**
+ * Why a projection cannot be filed under `week`, or null when it can.
+ *
+ * A reading is only ever filed under the week it describes: its first
+ * projected week must BE that week (AUDIT §2.1 — week 14's numbers were filed
+ * as week 15 and reported as a success). Both routes ask this before saving.
+ * With `data`, a week past the last playoff week is named for what it is.
+ */
+export function readingGap(week, projection, data = null) {
+  if (data && data.weeks && data.weeks.length && seasonOver(data)) {
+    return { code: 'season-over', text: SEASON_OVER_TEXT };
+  }
+  const first = projection?.weeksCovered?.[0];
+  if (!projection || first === undefined) {
+    return { code: 'no-projection', text: 'there was no projection to record.' };
+  }
+  if (first === week) return null;
+  return {
+    code: 'wrong-week',
+    text: `ESPN’s rosters for week ${week} could not be read, so there was no projection of it to record.`,
+  };
 }
 
 /** Why a reading could not be built from what ESPN sent, in words. */
@@ -651,11 +817,32 @@ function projectionGap(asked, got) {
 /**
  * Fetch and build a live reading. Throws nothing; reports what happened.
  *
+ * FLOORED, EXACTLY AS THE SCHEDULE PAGE FLOORS (AUDIT §2.2). This used to
+ * build the projection with no floor while the Schedule page built it with
+ * one, so which record the archive kept for a week depended on which page
+ * happened to be opened first — 10–16 points a squad apart, and nothing in the
+ * record to tell them apart. Now the wire is read for `floorWeek(data)`, the
+ * week the Schedule page reads it for, through the same `fetchFloors`; a
+ * failed or absent read is no floor, which is what the Schedule page does too.
+ *
+ * @param {Object} o
+ * @param {Function} o.fetchWeeksRosters js/season.js's
+ * @param {Function} [o.fetchFloors]     js/season.js's; absent = no floor
+ * @param {number|null} [o.myTeamId]     whose roster is kept player by player
  * @returns {Promise<{snap:Object|null, code:string, text:string, week:number}>}
  */
-export async function takeReading({ leagueId, season, data, fetchWeeksRosters }) {
+export async function takeReading({
+  leagueId, season, data, fetchWeeksRosters, fetchFloors = null, myTeamId = null,
+}) {
   const week = liveAsOf(data);
+  if (seasonOver(data)) return { snap: null, week, code: 'season-over', text: SEASON_OVER_TEXT };
   const plan = rosterPlan(data);
+
+  const fw = floorWeek(data);
+  const floorRead = (typeof fetchFloors === 'function' && fw
+    ? Promise.resolve().then(() => fetchFloors(fw))
+    : Promise.resolve(null)
+  ).then((f) => (f && f.size ? f : null)).catch(() => null);
 
   let weekTeams = new Map();
   try {
@@ -663,18 +850,22 @@ export async function takeReading({ leagueId, season, data, fetchWeeksRosters })
   } catch {
     weekTeams = new Map();
   }
+  const floors = await floorRead;
 
   const toProject = pickWeeks(weekTeams, plan.project);
-  const projection = toProject.size ? buildProjection(data, toProject) : null;
+  const projection = toProject.size ? buildProjection(data, toProject, floors) : null;
   if (!projection) {
     return { snap: null, week, code: 'no-projection', text: projectionGap(plan.project.length, toProject.size) };
   }
+  const gap = readingGap(week, projection, data);
+  if (gap) return { snap: null, week, ...gap };
 
   const started = startedProjections(weekTeams, plan.decided);
   // On live data "banked" is exactly "final" — the as-of week is the first open one.
   const spread = leagueSpread(data, () => true, started);
   const snap = readingFrom({
     leagueId, season, week, data, projection, strengthNote: projection.note, spread,
+    floors, floorWeek: fw, weekTeams: toProject, myTeamId,
   });
   return { snap, week, code: 'ok', text: '' };
 }
@@ -713,8 +904,8 @@ export function captureIfDue(opts) {
 }
 
 async function runCapture({
-  leagueId, season, bridgePresent,
-  fetchSchedule, fetchWeeksRosters, cloudSource = null,
+  leagueId, season, bridgePresent, teamId = null,
+  fetchSchedule, fetchWeeksRosters, fetchFloors = null, cloudSource = null,
   fetchRemote = snapshots.fetchRemote, now = () => Date.now(),
 }) {
   const id = String(leagueId ?? '');
@@ -757,6 +948,9 @@ async function runCapture({
     }
 
     const week = liveAsOf(data);
+    // Every week decided, bracket included: no week is due, so nothing is
+    // attempted and nothing is noted — this is not a failure to record one.
+    if (seasonOver(data)) return { code: 'season-over', week: null };
     if (snapshots.get(id, season, week)) return { code: 'recorded', week, recorded: true };
 
     const last = snapshots.lastAttempt(id, season);
@@ -770,7 +964,9 @@ async function runCapture({
     try { await fetchRemote(id, season); } catch { /* silent, as everywhere */ }
     if (snapshots.get(id, season, week)) return { code: 'recorded', week, recorded: true };
 
-    const reading = await takeReading({ leagueId: id, season, data, fetchWeeksRosters });
+    const reading = await takeReading({
+      leagueId: id, season, data, fetchWeeksRosters, fetchFloors, myTeamId: teamId,
+    });
     if (!reading.snap) return record({ ok: false, week, code: reading.code, text: reading.text });
 
     // Re-checked after the awaits: the Schedule page may have written it
@@ -793,6 +989,9 @@ async function runCapture({
 
 export const CLOUD_TEXT =
   'this is the synced copy from your computer, and readings are only taken on your computer.';
+
+export const SEASON_OVER_TEXT =
+  'The season is over: every week has been decided, so there is no week left to record.';
 
 /** The words for a page's own reason a reading was not taken. */
 export const CONTEXT_TEXT = {
@@ -822,6 +1021,10 @@ export function statusLine({ week = null, snap = null, attempt = null, context =
       ? 'at an unknown time'
       : when.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
     return { recorded: true, tone: 'pos', text: `${label}: recorded ${stamp}` };
+  }
+
+  if (context && context.code === 'season-over') {
+    return { recorded: false, tone: 'dim', text: SEASON_OVER_TEXT };
   }
 
   if (context && context.code === 'pending') {

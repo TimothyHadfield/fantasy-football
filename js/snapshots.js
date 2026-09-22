@@ -30,9 +30,23 @@
 // few kilobytes, a whole season of them is a few hundred, and the format is
 // plain JSON that can be exported, committed to the repo, or read by hand.
 //
-// The rosters behind the numbers are deliberately NOT kept. That is a real
-// limit and it is stated on the page: you can replay what the app concluded,
-// not re-derive it from the players it concluded it from.
+// The WHOLE rosters behind the numbers are deliberately NOT kept. That is a
+// real limit and it is stated on the page: you can replay what the app
+// concluded, not re-derive it from the players it concluded it from.
+//
+// SCHEMA 2 (2026-09-21, AUDIT §2.3) keeps about a tenth of them, because
+// ESPN's player numbers are exactly as unrecoverable as its team totals and
+// were already in memory when the reading was taken: YOUR roster with its
+// projection in every projected week, and every other squad's starters in the
+// as-of week (`players`, built by `capture.playersFrom`). It also records the
+// positional floor the projection was built with (`floors`, `floorWeek`), so
+// a reading says whether it was floored (AUDIT §2.2). Nothing reads either
+// yet — the analysis is for later; the capture cannot wait.
+//
+// VERSION 1 READINGS ARE READ FOREVER, UNCHANGED. Weeks 1–2 of 2026 exist
+// only as v1 records in one browser. Every reader below accepts `READABLE`,
+// and nothing here rewrites, upgrades or reshapes a stored record: a v1
+// reading is listed, replayed, exported and imported exactly as it was saved.
 //
 // ---------------------------------------------------------------------------
 // WHERE IT LIVES
@@ -50,8 +64,18 @@
 
 const PREFIX = 'ff.snap';
 
-/** Bump only for a change old files cannot be read through. */
-export const SCHEMA = 1;
+/**
+ * The version NEW readings are written at. Bumped to 2 for the player rows and
+ * the floor record; every v2 field is an addition, so a v1 reading is a v2
+ * reading with those fields absent.
+ */
+export const SCHEMA = 2;
+
+/** Every version this build reads. Never drop one: those weeks are unrecoverable. */
+export const READABLE = [1, 2];
+
+/** Is this a reading this build can read? */
+export const readable = (snap) => Boolean(snap) && READABLE.includes(snap.v);
 
 /** Refuse to store something absurd rather than blowing the whole quota. */
 const MAX_BYTES = 400 * 1024;
@@ -96,9 +120,13 @@ export function keyOf(leagueId, season, week) {
  * @param {number} o.week      the week this is a view "as of"
  * @param {Object} o.data      state.data — the normalised schedule
  * @param {Object|null} o.projection  state.projection, when one was built
+ * @param {Map|null} [o.floors]       the positional floor it was built with
+ * @param {number|null} [o.floorWeek] the week that floor's wire was read for
+ * @param {Object|null} [o.players]   `capture.playersFrom()`
  */
 export function snapshotFrom({
   leagueId, season, week, data, projection, strengthNote, sigma, calibrated, sample,
+  floors = null, floorWeek = null, players = null,
 }) {
   if (!data) return null;
 
@@ -156,7 +184,30 @@ export function snapshotFrom({
     sigma: typeof sigma === 'number' ? sigma : null,
     sigmaCalibrated: Boolean(calibrated),
     sigmaSample: typeof sample === 'number' ? sample : 0,
+    // ---- v2 additions (see the header). Absent from every v1 reading.
+    // The floor each slot was held to, or null for none: a reading says
+    // whether its totals were floored and on which week's wire.
+    floors: floorRecord(floors),
+    floorWeek: floors && floors.size && Number.isFinite(floorWeek) ? floorWeek : null,
+    // A deep copy, so the archive cannot move when the live rosters do.
+    players: players ? JSON.parse(JSON.stringify(players)) : null,
   };
+}
+
+/** A floor map as plain JSON: position -> the man and number it came from. */
+function floorRecord(floors) {
+  if (!floors || !floors.size) return null;
+  const out = {};
+  for (const [position, f] of floors) {
+    if (!f || typeof f.value !== 'number') continue;
+    out[position] = {
+      value: Math.round(f.value * 100) / 100,
+      name: f.name || '',
+      playerId: f.playerId ?? null,
+      rank: f.rank ?? null,
+    };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -207,7 +258,7 @@ export function get(leagueId, season, week) {
     const raw = s.getItem(keyOf(leagueId, season, week));
     if (!raw) return null;
     const snap = JSON.parse(raw);
-    return snap && snap.v === SCHEMA ? snap : null;
+    return readable(snap) ? snap : null;
   } catch {
     return null;
   }
@@ -231,7 +282,7 @@ export function list(leagueId, season) {
       if (!k || !k.startsWith(want)) continue;
       try {
         const snap = JSON.parse(s.getItem(k));
-        if (snap && snap.v === SCHEMA) out.push(snap);
+        if (readable(snap)) out.push(snap);
       } catch {
         /* one unreadable key must not hide the rest */
       }
@@ -253,7 +304,7 @@ export function list(leagueId, season) {
  * disagreeing with the live page about what it is showing.
  */
 export function hydrate(snap) {
-  if (!snap || snap.v !== SCHEMA) return null;
+  if (!readable(snap)) return null;
 
   const games = snap.games.map((g) => ({ ...g }));
   const byWeek = new Map();
@@ -333,14 +384,14 @@ export function parseImport(text) {
       : [parsed];
 
   const snapshots = list_.filter(
-    (s) => s && s.v === SCHEMA && s.leagueId && Number.isFinite(s.week) && Array.isArray(s.games)
+    (s) => readable(s) && s.leagueId && Number.isFinite(s.week) && Array.isArray(s.games)
   );
   if (!snapshots.length) {
     return {
       snapshots: [],
       error:
-        parsed && parsed.v && parsed.v !== SCHEMA
-          ? `That file is version ${parsed.v}; this build reads version ${SCHEMA}.`
+        parsed && parsed.v && !READABLE.includes(parsed.v)
+          ? `That file is version ${parsed.v}; this build reads versions ${READABLE.join(' and ')}.`
           : 'No snapshots in that file.',
     };
   }

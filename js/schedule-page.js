@@ -158,6 +158,9 @@ const state = {
   // for the weeks already decided. What the scoring spread is measured from;
   // see capture.leagueSpread.
   started: null,
+  // week -> teams, for the weeks the projection was built from: what the
+  // reading's player rows are taken from (`capture.playersFrom`, AUDIT §2.3).
+  rosterWeeks: null,
   // True when the live data on screen is the synced cloud copy rather than
   // ESPN. A reading is never taken from it.
   synced: false,
@@ -437,12 +440,17 @@ function archiveId() {
  * Take a reading of what is on screen now.
  *
  * Through `capture.readingFrom`, the same call the connection bar's route
- * makes — so a reading taken here and one taken from any other page are the
- * same record for the same data (tests/test-capture.mjs holds them to it).
+ * makes, with the same inputs: the projection FLOORED on `capture.floorWeek`'s
+ * wire (the bar's `takeReading` reads the same wire for the same week — until
+ * AUDIT §2.2 it read none, and the two routes wrote different records), the
+ * floor itself, and the roster weeks the player rows come from. So a reading
+ * taken here and one taken from any other page are the same record for the
+ * same data — tests/test-capture.mjs holds them to it on a non-empty wire.
  */
 function captureNow() {
   const id = archiveId();
   if (!id || !state.data) return null;
+  const live = !state.replay;
   return capture.readingFrom({
     leagueId: id.leagueId,
     season: id.season,
@@ -450,7 +458,11 @@ function captureNow() {
     data: state.data,
     projection: state.projection,
     strengthNote: state.strengthNote,
-    spread: state.replay ? null : scoringSpread(),
+    spread: live ? scoringSpread() : null,
+    floors: live ? state.floors : null,
+    floorWeek: live ? state.floorWeek : null,
+    weekTeams: live ? state.rosterWeeks : null,
+    myTeamId: state.myTeamId ?? null,
   });
 }
 
@@ -495,6 +507,12 @@ function autoCapture() {
 
   const week = forecastAsOf();
   if (!Number.isFinite(week) || week <= 0) return;
+  // Every week decided, bracket included: nothing is due, and that is not a
+  // failure — the status line says the season is over.
+  if (capture.seasonOver(state.data)) {
+    renderArchive();
+    return;
+  }
   if (snapshots.get(id.leagueId, id.season, week)) {   // already have it
     renderArchive();
     return;
@@ -513,6 +531,15 @@ function autoCapture() {
       ok: false, week, code: 'no-projection',
       text: state.rosterGap || 'ESPN’s rosters could not be read, so there was no projection to record.',
     });
+    renderArchive();
+    return;
+  }
+
+  // Never filed under a week it does not describe (AUDIT §2.1): the first
+  // projected week must BE this week. The bar's route asks the same question.
+  const gap = capture.readingGap(week, state.projection, state.data);
+  if (gap) {
+    noteAttempt(id, { ok: false, week, code: gap.code, text: gap.text });
     renderArchive();
     return;
   }
@@ -645,6 +672,7 @@ function captureStatus() {
   else if (!state.data || state.data.isDemo) context = { code: 'pending' };
   else if (state.replay) context = { code: 'replay' };
   else if (state.synced) context = { code: 'cloud' };
+  else if (live && capture.seasonOver(live)) context = { code: 'season-over' };
   else if (!state.strengthNote) context = { code: 'pending' };
 
   return capture.statusLine({ week, snap, attempt, context });
@@ -780,7 +808,9 @@ function renderArchiveNote(id, saved) {
     '<strong>The forecast and the simulation are worked out again from those when you look back</strong>, ' +
     'so there is nothing you have to run for a week to save properly, and nothing to do per team: one ' +
     'simulation covers all ten at once, and the picker only chooses whose chart is drawn. ' +
-    '<strong>The rosters behind those numbers are not kept</strong>, so an archived week can be ' +
+    'Each reading also keeps <strong>your own roster’s projection for every week</strong> and every ' +
+    'other squad’s starters for that week, player by player, for looking back on later. ' +
+    '<strong>The rest of the rosters are not kept</strong>, so an archived week can be ' +
     're-read but not re-derived — the other pages always show today.';
 
   // Shown: what is kept, whether it is backed up, and the last action's result.
@@ -812,6 +842,7 @@ function adopt(data) {
   state.strengthNote = '';
   state.projection = null;
   state.started = null;
+  state.rosterWeeks = null;
   state.rosterGap = '';
   // A run still in flight is about the league we just replaced; retire it here
   // rather than letting it land and be discarded on a key mismatch later.
@@ -1054,6 +1085,7 @@ async function refreshStrength() {
       if (stale()) return;
       if (built) {
         state.projection = built;
+        state.rosterWeeks = toProject;
         apply(built.strength, built.note);
         return;
       }

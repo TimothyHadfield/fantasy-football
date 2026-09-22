@@ -31,7 +31,9 @@ import { REPO, moduleUrl } from './repo.mjs';
 import { bootDom, waitFor, comparable, LEAGUE, SEASON } from './cap-harness.mjs';
 
 const self = fileURLToPath(import.meta.url);
-const SNAP_KEY = `ff.snap.${LEAGUE}.${SEASON}.4`;     // weeks 1–3 decided: week 4 is due
+// Weeks 1–3 decided: week 4 is due. A December child names its own week.
+const SNAP_WEEK = Number(process.env.CAP_SNAP_WEEK || 4);
+const SNAP_KEY = `ff.snap.${LEAGUE}.${SEASON}.${SNAP_WEEK}`;
 const NOTE_KEY = `ff.snapnote.${LEAGUE}.${SEASON}`;
 const TEAMS = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Manager ${i + 1}` }));
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
@@ -166,17 +168,27 @@ globalThis.localStorage = {
   clear: () => store.clear(),
 };
 
+// A NON-EMPTY WIRE for the whole suite, parent and children alike (AUDIT
+// §2.2): the two routes used to agree only because the fixtures had no floor.
+// With CAP_WIRE the stub's `fetchFloors` answers with a real wire whose
+// third-best man at each position lifts the weak kickers and D/STs, so a route
+// that forgets the floor writes different numbers and the equality fails.
+process.env.CAP_WIRE = '1';
+
 const capture = await import(moduleUrl('js/capture.js'));
 const snapshots = await import(moduleUrl('js/snapshots.js'));
 const stub = await import('./cap-stub-season.mjs');
 
 const quietRemote = { calls: 0, fn: async () => { quietRemote.calls++; return { added: 0, kept: 0, found: 0 }; } };
 const base = () => ({
-  leagueId: LEAGUE, season: SEASON, bridgePresent: true,
+  leagueId: LEAGUE, season: SEASON, bridgePresent: true, teamId: 1,
   fetchSchedule: stub.fetchSchedule, fetchWeeksRosters: stub.fetchWeeksRosters,
+  fetchFloors: stub.fetchFloors,
   cloudSource: async () => null, fetchRemote: quietRemote.fn,
 });
-const reset = () => { store = new Map(); stub.calls.rosters.length = 0; stub.calls.schedule = 0; };
+const reset = () => {
+  store = new Map(); stub.calls.rosters.length = 0; stub.calls.schedule = 0; stub.calls.floors.length = 0;
+};
 
 // ---- the gates --------------------------------------------------------------
 {
@@ -226,6 +238,52 @@ let direct = null;
   ok('it is a week-4 reading with every game in it', direct && direct.week === 4 && direct.games.length === 70);
   const note = snapshots.lastAttempt(LEAGUE, SEASON);
   ok('the success is noted, by the bar', note && note.ok && note.week === 4 && note.source === 'bar', JSON.stringify(note));
+
+  // ---- AUDIT §2.2: the bar's reading is FLOORED, on the Schedule page's week.
+  eq(typeof stub.fetchFloors, 'function', 'the fixture really has a wire (CAP_WIRE)');
+  eq(stub.calls.floors, [4], 'the bar read the wire once, for capture.floorWeek — the current week');
+  eq(direct && direct.floorWeek, 4, 'and the reading records which week’s wire it was floored on');
+  ok('and the floor itself, position by position',
+    direct && direct.floors && ['QB', 'RB', 'WR', 'TE', 'K', 'DST'].every((p) => typeof direct.floors[p]?.value === 'number'),
+    JSON.stringify(direct && direct.floors));
+  {
+    // The floor must actually BITE on this fixture, or the equality below
+    // would hold whether or not either route floored.
+    const data = capture.normalizeSchedule(await stub.fetchSchedule(), { isDemo: false });
+    const plan = capture.rosterPlan(data);
+    const weekTeams = await stub.fetchWeeksRosters(plan.asking);
+    const bare = capture.buildProjection(data, capture.pickWeeks(weekTeams, plan.project), null);
+    const lifted = [...bare.proj].reduce((n, [w, row]) =>
+      n + [...row].filter(([id, v]) => direct.proj[w][id] > Math.round(v * 10) / 10).length, 0);
+    ok('the floor lifts real squads on this fixture (so an unfloored route would differ)', lifted >= 10,
+      `${lifted} team-weeks lifted`);
+    ok('the projection note says the floor was applied', /positional floor/.test(direct.projNote), direct.projNote);
+  }
+
+  // ---- AUDIT §2.3: the player rows, behind SCHEMA 2 ----------------------
+  eq(direct && direct.v, 2, 'a new reading is written at schema 2');
+  const pl = direct && direct.players;
+  eq(pl && pl.teamId, 1, 'the player rows know whose roster is yours');
+  eq(pl && pl.weeks, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], 'and cover exactly the projected weeks');
+  eq(pl && pl.mine && pl.mine.length, 14, 'your whole roster, bench included');
+  eq(pl && pl.cols, ['id', 'name', 'pos', 'team', 'slot', 'inj', 'proj'], 'each man is a row, named by cols');
+  const col = (r, k) => r[pl.cols.indexOf(k)];
+  ok('each of your men carries ESPN’s number for every projected week',
+    pl && pl.mine.every((p) => col(p, 'proj').length === 13 && col(p, 'proj').every((v) => typeof v === 'number')),
+    JSON.stringify(pl && pl.mine[0]));
+  {
+    // The rows are the rosters the reading was built from, not something else.
+    const r = await stub.fetchWeekRosters(7);
+    stub.calls.rosters.pop();
+    const qb = r.teams.find((t) => t.id === 1).players.find((p) => p.playerId === 100);
+    eq(pl && col(pl.mine.find((p) => col(p, 'id') === 100), 'proj')[3], Math.round(qb.projected * 100) / 100,
+      'and that number is the week-7 projection the rosters carried');
+  }
+  eq(pl && Object.keys(pl.starters).map(Number), [2, 3, 4, 5, 6, 7, 8, 9, 10], 'every OTHER squad’s starters');
+  ok('ten each, the lineup they set, with the as-of week’s number',
+    pl && Object.values(pl.starters).every((rows) => rows.length === 10 &&
+      rows.every((p) => typeof col(p, 'proj') === 'number' && col(p, 'slot') !== 20 && col(p, 'name'))),
+    JSON.stringify(pl && pl.starters[2]));
 
   // FIRST WRITE WINS.
   const before = store.get(`ff.snap.${LEAGUE}.${SEASON}.4`);
@@ -280,6 +338,149 @@ let direct = null;
   const r = await capture.captureIfDue({ ...base(), fetchSchedule: async () => { throw new Error('401'); } });
   eq(r.code, 'schedule-failed', 'a refused schedule is its own reason');
   ok('and says so', /ESPN refused the schedule \(401\)/.test(r.text), r.text);
+}
+
+// ---- DECEMBER: each playoff week gets its own honest reading (AUDIT §2.1) -------
+//
+// Tim's league shape: fourteen regular weeks, a six-team bracket in weeks
+// 15–17. Before the fix the plan dropped the playoff weeks once they were the
+// only weeks left, so "week 15" was week 14's numbers, reported as recorded,
+// and weeks 16–17 — the championship — could never be recorded at all.
+const DECEMBER = { CAP_DECIDED: '14', CAP_PLAYOFF_TEAMS: '6' };
+let december16 = null;
+{
+  reset();
+  Object.assign(process.env, DECEMBER);
+  const keys = () => [...store.keys()].filter((k) => k.startsWith('ff.snap.')).sort();
+  const weeksOf = (snap) => Object.keys(snap?.proj || {}).map(Number);
+
+  for (const [done, week, ahead] of [[0, 15, [15, 16, 17]], [1, 16, [16, 17]], [2, 17, [17]]]) {
+    process.env.CAP_PLAYOFF_DECIDED = String(done);
+    stub.calls.rosters.length = 0;
+    stub.calls.floors.length = 0;
+    const data = capture.normalizeSchedule(await stub.fetchSchedule(), { isDemo: false });
+    stub.calls.schedule--;
+    eq(capture.liveAsOf(data), week, `${done} playoff weeks decided: the week due is ${week}`);
+    eq(capture.rosterPlan(data).project, ahead, `and the plan projects weeks ${ahead.join(', ')}`);
+
+    const before = keys().map((k) => [k, store.get(k)]);
+    const r = await capture.captureIfDue(base());
+    eq(r.code, 'recorded', `week ${week} is recorded`);
+    eq(r.week, week, `under week ${week}`);
+    const snap = snapshots.get(LEAGUE, SEASON, week);
+    eq(weeksOf(snap), ahead, `the week-${week} reading holds weeks ${ahead.join(', ')} — never week 14`);
+    eq(snap && snap.weeksCovered[0], week, `its first projected week IS week ${week}`);
+    ok(`every team is in every week of it`, snap && ahead.every((w) => Object.keys(snap.proj[w] || {}).length === 10));
+    ok(`the rosters asked for include week ${week}`, stub.calls.rosters.includes(week), stub.calls.rosters.join(','));
+    eq(stub.calls.floors, [week], `the floor is read on week ${week}'s wire`);
+    eq(snap && snap.players && snap.players.weeks, ahead, 'and the player rows cover the same weeks');
+    ok('the readings already taken are left exactly as they were',
+      before.every(([k, v]) => store.get(k) === v), before.map(([k]) => k).join(','));
+    if (week === 16) december16 = snap;
+  }
+  eq(keys(), [15, 16, 17].map((w) => `ff.snap.${LEAGUE}.${SEASON}.${w}`), 'one reading per playoff week, and no others');
+
+  // The whole bracket decided: nothing is due, nothing is written, and it is
+  // not reported as a failure either.
+  process.env.CAP_PLAYOFF_DECIDED = '3';
+  const noteBefore = store.get(NOTE_KEY);
+  const over = await capture.captureIfDue(base());
+  eq(over.code, 'season-over', 'once the final is decided there is no week due');
+  ok('and it is not reported as recorded', !over.recorded, JSON.stringify(over));
+  eq(keys().length, 3, 'nothing is written');
+  eq(store.get(NOTE_KEY), noteBefore, 'and no failure is noted for the chip to shout about');
+
+  // A week ESPN refuses is a FAILURE, never week 17 filed as week 16.
+  reset();
+  process.env.CAP_PLAYOFF_DECIDED = '1';
+  process.env.CAP_ROSTERS_REFUSE = '16';
+  const refused = await capture.captureIfDue(base());
+  ok('ESPN refusing week 16 alone is not a success', refused.code !== 'recorded' && !refused.recorded, JSON.stringify(refused));
+  eq(keys(), [], 'nothing is filed under week 16');
+  const note = snapshots.lastAttempt(LEAGUE, SEASON);
+  ok('and the failure is noted for week 16, saying which week could not be read',
+    note && note.ok === false && note.week === 16 && /week 16/.test(note.text), JSON.stringify(note));
+  delete process.env.CAP_ROSTERS_REFUSE;
+
+  // Pure rules, on the bracket's own games.
+  process.env.CAP_PLAYOFF_DECIDED = '0';
+  const d0 = capture.normalizeSchedule(await stub.fetchSchedule(), { isDemo: false });
+  stub.calls.schedule--;
+  ok('the bracket games are carried through normalizeSchedule', d0.playoffGames.length === 14, d0.playoffGames.length);
+  eq(capture.playoffWeekDecided(d0, 15), false, 'a bracket week still to play is not decided');
+  process.env.CAP_PLAYOFF_DECIDED = '1';
+  const d1 = capture.normalizeSchedule(await stub.fetchSchedule(), { isDemo: false });
+  stub.calls.schedule--;
+  ok('the stub’s week 15 really has unplayed bye entries in it',
+    d1.playoffGames.filter((g) => g.week === 15 && g.awayId == null && !g.played).length === 2);
+  eq(capture.playoffWeekDecided(d1, 15), true, 'and those byes do not hold a decided week open');
+  eq(capture.playoffWeekDecided({ playoffGames: [] }, 15), false, 'a week with no bracket games is not decided');
+  eq(capture.readingGap(15, { weeksCovered: [14] }), { code: 'wrong-week',
+    text: 'ESPN’s rosters for week 15 could not be read, so there was no projection of it to record.' },
+    'a projection of week 14 can never be filed as week 15');
+
+  for (const k of [...Object.keys(DECEMBER), 'CAP_PLAYOFF_DECIDED']) delete process.env[k];
+}
+
+// ---- HOW BIG A SEASON OF v2 READINGS IS (AUDIT §2.3: watch MAX_BYTES) ----------
+//
+// Measured, not estimated: a reading for every week of a 17-week season (14
+// regular + 3 playoff weeks), 10 squads of 16 men (10 starters, 6 bench) with
+// names as long as real ones, all built through the real readingFrom. The
+// ceiling each reading must fit is snapshots.js's MAX_BYTES, 400KB; the
+// season as a whole is held to the same figure, so a year of history stays a
+// small file to commit.
+{
+  const NAMES = ['Amon-Ra St. Brown', 'Christian McCaffrey', 'Justin Jefferson', 'Travis Kelce', 'Harrison Butker'];
+  const SLOTS = [0, 2, 2, 4, 4, 6, 23, 23, 16, 17, 20, 20, 20, 20, 20, 21];
+  const POS = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'WR', 'RB', 'DST', 'K', 'QB', 'RB', 'WR', 'TE', 'RB', 'WR'];
+  const rosters = (week) => TEAMS.map((t) => {
+    const players = SLOTS.map((slot, i) => ({
+      playerId: 4000000 + t.id * 100 + i, name: `${NAMES[(t.id + i) % NAMES.length]}`,
+      position: POS[i], proTeam: 'DET', proTeamId: 8, lineupSlotId: slot,
+      started: slot !== 20 && slot !== 21, projected: Math.round((4 + ((t.id * 31 + i * 7 + week) % 19)) * 1000) / 1000,
+      injuryStatus: 'ACTIVE',
+    }));
+    const starters = players.filter((p) => p.started);
+    return { id: t.id, name: t.name, players, starters, projectedTotal: starters.reduce((a, p) => a + p.projected, 0) };
+  });
+  const floors = new Map(['QB', 'RB', 'WR', 'TE', 'K', 'DST'].map((p) =>
+    [p, { value: 7.25, position: p, name: 'Wire man', playerId: 9, rank: 3, want: 3, pool: 20, week: 1 }]));
+
+  const sizes = [];
+  for (let asOf = 1; asOf <= 17; asOf++) {
+    const games = [];
+    for (let w = 1; w <= 14; w++) {
+      for (let i = 0; i < 5; i++) {
+        const played = w < asOf;
+        games.push({ week: w, homeId: i + 1, homeName: `Manager ${i + 1}`, homeScore: played ? 111.24 : null,
+          awayId: 10 - i, awayName: `Manager ${10 - i}`, awayScore: played ? 98.6 : null, played });
+      }
+    }
+    const playoffGames = [];
+    for (let w = 15; w < asOf; w++) playoffGames.push({ week: w, homeId: 1, awayId: 2, homeScore: 120, awayScore: 110, played: true });
+    const data = capture.normalizeSchedule({ teams: TEAMS, games, playoffGames,
+      playoffs: { playoffTeams: 6, regularSeasonWeeks: 14 } }, { isDemo: false });
+    const plan = capture.rosterPlan(data);
+    const weekTeams = new Map(plan.asking.map((w) => [w, rosters(w)]));
+    const toProject = capture.pickWeeks(weekTeams, plan.project);
+    const projection = capture.buildProjection(data, toProject, floors);
+    const snap = capture.readingFrom({
+      leagueId: LEAGUE, season: SEASON, week: capture.liveAsOf(data), data, projection,
+      strengthNote: projection.note, spread: { sigma: 24.5, calibrated: true, sample: 40 },
+      floors, floorWeek: capture.floorWeek(data), weekTeams: toProject, myTeamId: 1,
+    });
+    eq(snap.week, asOf, `the week-${asOf} reading is filed under week ${asOf}`);
+    sizes.push(JSON.stringify(snap).length);
+  }
+  const season = sizes.reduce((a, b) => a + b, 0);
+  const biggest = Math.max(...sizes);
+  const exported = JSON.stringify({ v: 2, snapshots: sizes.map(() => null) }).length; // envelope only
+  console.log(`MEASURED: a 17-week, 10-team season of v2 readings is ${Math.round(season / 1024)}KB ` +
+    `(largest reading ${Math.round(biggest / 1024)}KB, week 1; smallest ${Math.round(Math.min(...sizes) / 1024)}KB)`);
+  ok('the largest single reading is far under MAX_BYTES (400KB)', biggest < 60 * 1024, `${biggest} bytes`);
+  ok('a whole season of readings fits under 400KB', season < 400 * 1024, `${season} bytes`);
+  void exported;
 }
 
 // ---- the status line ----------------------------------------------------------
@@ -363,6 +564,28 @@ if (!page.boot) {
   // four assertions that used to read it off that page are gone. The rule they
   // were really about is `capture.standingsKey`, which is unchanged and is
   // still exercised directly above; it is what seeds the simulated bracket.
+
+  ok('the page’s reading is floored too, on the same week', page.snap && page.snap.floors && page.snap.floorWeek === 4,
+    JSON.stringify(page.snap && page.snap.floorWeek));
+}
+
+// ---- DECEMBER, on the real Schedule page and the real bar -----------------------
+{
+  const env = { CAP_DECIDED: '14', CAP_PLAYOFF_TEAMS: '6', CAP_PLAYOFF_DECIDED: '1', CAP_SNAP_WEEK: '16' };
+  const decPage = child('page', env);
+  ok('the Schedule page boots in December', !decPage.boot, decPage.boot);
+  const decBar = child('bar', env);
+  ok('and so does the bar', !decBar.boot, decBar.boot);
+  if (!decPage.boot && !decBar.boot) {
+    ok('the page files week 16 with weeks 16–17 in it',
+      decPage.snap && decPage.snap.week === 16 && Object.keys(decPage.snap.proj).join(',') === '16,17',
+      decPage.snap && Object.keys(decPage.snap.proj).join(','));
+    ok('and says week 16 was recorded', /^Week 16: recorded \S/.test(decPage.line), decPage.line);
+    ok('the page and the bar write the same week-16 record',
+      comparable(decPage.snap) === comparable(decBar.snap), diffHint(decPage.snap, decBar.snap));
+    ok('and it is the record the direct route wrote',
+      comparable(decBar.snap) === comparable(december16), diffHint(decBar.snap, december16));
+  }
 }
 
 const cloudPage = child('pageCloud', { CAP_CLOUD: '1' });
