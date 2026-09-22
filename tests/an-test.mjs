@@ -120,6 +120,48 @@ const BYES_LOADER = dataUrl(`
   }
 `);
 
+// --------------------------------------- a league that starts THREE receivers
+//
+// AUDIT §1.2. Tim's own league starts ten — QB, RB, RB, WR, WR, WR, TE, FLEX,
+// D/ST, K — and the ordinary stub starts nine, which is exactly why the `A week`
+// grid's hard-coded nine went unnoticed. This override re-parks two men on
+// every squad so ESPN's accepted lineups say three WR slots: Player 06 (a WR,
+// the stub's FLEX) moves into a WR slot, and Player 09 (a bench RB, the best man
+// left) comes off the bench into the FLEX. So the starters ARE the best legal
+// ten, and the week grid and the season sheet have no excuse to differ.
+const THREE_WR_SEASON = dataUrl(`
+  import * as real from ${JSON.stringify(STUB_URL)};
+  export * from ${JSON.stringify(STUB_URL)};
+
+  const repark = (teams) => teams.map((t) => {
+    const players = t.players.map((p) => {
+      if (p.name.endsWith('Player 06')) return { ...p, lineupSlotId: 4, slot: 'WR', started: true };
+      if (p.name.endsWith('Player 09')) return { ...p, lineupSlotId: 23, slot: 'FLEX', started: true };
+      return p;
+    });
+    return { ...t, players, starters: players.filter((p) => p.started), bench: players.filter((p) => !p.started) };
+  });
+  export async function fetchWeekRosters(week) {
+    const got = await real.fetchWeekRosters(week);
+    return { ...got, teams: repark(got.teams) };
+  }
+  export async function fetchWeeksRosters(weeks, opts) {
+    const got = await real.fetchWeeksRosters(weeks, opts);
+    const out = new Map();
+    for (const [w, teams] of got) out.set(w, repark(teams));
+    return out;
+  }
+`);
+
+const THREE_WR_LOADER = dataUrl(`
+  export async function resolve(spec, ctx, next) {
+    if (spec.startsWith('.') && /\\/season\\.js$/.test(spec)) {
+      return next(${JSON.stringify(THREE_WR_SEASON)}, ctx);
+    }
+    return next(spec, ctx);
+  }
+`);
+
 /**
  * Hover a cell in the all-teams grid and read the card, by team and player.
  *
@@ -1304,7 +1346,115 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+  // AUDIT §1.2: the `A week` Total is the whole starting lineup the league
+  // actually starts, floored the way the Proj avg basis is. The K floor (16.0)
+  // sits above every kicker's week-8 projection (14.4) and below nobody else's
+  // floor, so exactly one slot per squad is lifted — a Total that ignored the
+  // floor is 1.6 short, and one that dropped WR3 is ~13 short. Neither can pass.
+  'three-wr': {
+    label: '(w) a league that starts three receivers: the A week Total is the whole floored lineup',
+    stub: true,
+    threeWr: true,
+    env: { AN_FLOORS: '{"K":16}' },
+    prefs: { 'analysis.source': 'live', 'analysis.week': 8, 'analysis.measure': 'week' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // Wait for the week grid to be ten rows AND the season sheet to hold week 8.
+      for (let t = 0; t < 6000; t += 20) {
+        const band = document.querySelector('#seasonTotals tr');
+        if (document.querySelectorAll('#overviewTable tbody tr').length === 10 &&
+          band && band.children[1 + 8] && band.children[1 + 8].getAttribute('data-v')) break;
+        await sleep(20);
+      }
+      const table = $('overviewTable');
+      const head = [...table.querySelectorAll('thead th')];
+      const totalAt = head.findIndex((th) => th.textContent.trim() === 'Total');
+      const out = {
+        title: $('overviewTitle').textContent.trim(),
+        head: head.map((th) => th.textContent.trim()),
+        totalTitle: totalAt >= 0 ? head[totalAt].getAttribute('title') || '' : '',
+        rows: [...table.querySelectorAll('tbody tr')].map((tr) => ({
+          team: Number(tr.getAttribute('data-team')),
+          total: totalAt >= 0 ? tr.children[totalAt].getAttribute('data-v') : null,
+          totalSays: totalAt >= 0 ? tr.children[totalAt].getAttribute('title') || '' : '',
+          // The kicker's own cell, which must stay ESPN's number: a man is
+          // never floored, only the squad's total is.
+          k: tr.children[head.findIndex((th) => th.textContent.trim() === 'K')]?.getAttribute('data-v') ?? null,
+        })),
+        seasonTeam: $('teamSelect') ? $('teamSelect').value : null,
+        bandW8: document.querySelector('#seasonTotals tr')?.children[1 + 8]?.getAttribute('data-v') ?? null,
+        note: $('overviewNote').textContent.replace(/\s+/g, ' '),
+      };
+      globalThis.__an = out;
+    },
+  },
 };
+
+/**
+ * AUDIT §1.2, checked against an answer this file works out for itself.
+ *
+ * The expected Total is rebuilt from an-stub-season.mjs's raw numbers with the
+ * same re-parking the loader applies: ten starters, greedy best-first into the
+ * league's ten slots (most restrictive first, FLEX last), then each assessed at
+ * max(projection, floor). Nothing is read back off the page to build it.
+ */
+async function checkThreeWr(c, boot) {
+  const w = globalThis.__an;
+  const stub = await import('./an-stub-season.mjs');
+  const WEEK = 8;
+  const FLOORS = { K: 16 };
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const men = Array.from({ length: stub.SIZE }, (_, i) => i)
+    .filter((i) => stub.onRoster(i, WEEK))
+    .map((i) => ({ i, pos: stub.POS[i], v: stub.projFor(i, WEEK) }))
+    .filter((m) => Number.isFinite(m.v))
+    .sort((a, b) => b.v - a.v);
+  const SLOTS = [['QB'], ['RB'], ['RB'], ['WR'], ['WR'], ['WR'], ['TE'], ['DST'], ['K'], ['RB', 'WR', 'TE']];
+  const used = new Set();
+  let expected = 0;
+  let unfloored = 0;
+  for (const elig of SLOTS) {
+    const m = men.find((x) => !used.has(x) && elig.includes(x.pos));
+    if (!m) continue;
+    used.add(m);
+    unfloored += m.v;
+    expected += Math.max(m.v, FLOORS[m.pos] ?? -Infinity);
+  }
+  expected = r1(expected);
+  unfloored = r1(unfloored);
+
+  c.ok('THREE-WR: the grid is on week 8', /week 8$/.test(w.title), w.title);
+  c.ok('THREE-WR: THE WEEK GRID HAS THE LEAGUE’S TEN SLOTS, WR3 AMONG THEM',
+    JSON.stringify(w.head.slice(0, 12)) ===
+      JSON.stringify(['Team', 'QB', 'RB1', 'RB2', 'WR1', 'WR2', 'WR3', 'TE', 'FLEX', 'DEF', 'K', 'Total']),
+    JSON.stringify(w.head));
+  c.ok('THREE-WR: ten squads on screen', w.rows.length === 10, String(w.rows.length));
+  const wrong = w.rows.filter((r) => r.total === null || Math.abs(Number(r.total) - expected) > 0.051);
+  c.ok(`THREE-WR: EVERY SQUAD’S A-WEEK TOTAL IS THE WHOLE FLOORED LINEUP (${expected})`,
+    w.rows.length === 10 && wrong.length === 0,
+    `expected ${expected} (unfloored ${unfloored}); got ${JSON.stringify(w.rows.map((r) => r.total))}`);
+  // The same week on the Proj avg basis, as the page itself draws it: the
+  // season sheet's Starting lineup band for the squad on screen (team 4).
+  const four = w.rows.find((r) => r.team === 4);
+  c.ok('THREE-WR: and it is the number Season by week’s band shows for that squad that week',
+    Boolean(four) && w.bandW8 !== null && Math.abs(Number(four.total) - Number(w.bandW8)) < 0.051,
+    `grid ${four && four.total} vs band ${w.bandW8} (team ${w.seasonTeam})`);
+  c.ok('THREE-WR: the kicker’s own cell stays ESPN’s number — only the Total is floored',
+    w.rows.every((r) => Number(r.k) === stub.projFor(8, WEEK)),
+    JSON.stringify(w.rows.map((r) => r.k)));
+  c.ok('THREE-WR: the Total header counts ten, not nine',
+    /\bten\b/i.test(w.totalTitle) && !/\bnine\b/i.test(w.totalTitle), w.totalTitle);
+  c.ok('THREE-WR: each Total says it is the best ten',
+    w.rows.every((r) => /best ten\b/.test(r.totalSays)), w.rows[0] && w.rows[0].totalSays);
+  c.ok('THREE-WR: the note says the Total takes the waiver floor and a man’s cell does not',
+    /Total is those ten/.test(w.note) && /waiver floor/i.test(w.note) && /own cell/i.test(w.note),
+    w.note.slice(0, 600));
+  c.ok('THREE-WR: and nothing in the note still says nine columns',
+    !/nine (columns|real men)/i.test(w.note), w.note.slice(0, 600));
+  return c.out;
+}
 
 // ------------------------------------------------------------------- child
 
@@ -1315,6 +1465,7 @@ async function boot(scenario) {
   // page module is imported at the foot of this function.
   if (cfg.noId) register(NO_ID_LOADER);
   if (cfg.byes) register(BYES_LOADER);
+  if (cfg.threeWr) register(THREE_WR_LOADER);
   const html = readFileSync(path.join(REPO, 'analysis.html'), 'utf8');
   const { window, document } = parseHTML(html);
 
@@ -1538,6 +1689,9 @@ async function check(scenario, boot) {
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
+  // A ten-slot league: every shape assertion below is written for the stub's
+  // nine, so this scenario is checked on its own terms.
+  if (scenario === 'three-wr') return checkThreeWr(c, boot);
 
   // ---- PANEL ORDER, which is Tim's and not a matter of taste --------------
   //
