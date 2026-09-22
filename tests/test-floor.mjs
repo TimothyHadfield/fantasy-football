@@ -213,11 +213,18 @@ eq(plain.assumed, 0, 'and nothing is marked assumed');
 eq(plain.cells.length, SLOTS.length, 'every slot produces a cell, filled or not');
 eq(plain.cells.filter((c) => c.player === null).length, 1, 'exactly one slot is empty');
 
-// WITH FLOORS: the empty kicker is worth 7.8 and the 4.0 tight end 6.2.
-// 108.0 raw + 7.8 (K) + 2.2 (TE lift) = 118.0
+// WITH FLOORS: the empty kicker is worth 7.8, the 4.0 tight end 6.2, and the
+// 10.0 RB in the FLEX 11.1 — the FLEX floor, best of RB/WR/TE (AUDIT §1.8).
+// Before that fix the flex man was floored at the RB floor (9.4) and so kept
+// his 10.0, which left this squad's flex worth LESS than an empty flex (11.1);
+// the old "118.0, two assumed" expected that bug.
+// 108.0 raw + 7.8 (K) + 2.2 (TE lift) + 1.1 (FLEX lift) = 119.1
 close(floored.rawTotal, best.total, 1e-9, 'the raw total is still ESPN\'s own');
-close(floored.total, best.total + 7.8 + 2.2, 1e-9, 'the floored total lifts both');
-eq(floored.assumed, 2, 'two slots are assumed');
+close(floored.total, best.total + 7.8 + 2.2 + 1.1, 1e-9, 'the floored total lifts all three');
+eq(floored.assumed, 3, 'three slots are assumed');
+const flexCell = floored.cells.find((c) => c.slotId === 23);
+eq(flexCell.raw, 10.0, 'the FLEX man keeps his real 10.0');
+eq(flexCell.value, 11.1, 'and is assessed at the FLEX floor');
 
 const kCell = floored.cells.find((c) => c.slotId === 17);
 eq(kCell.player, null, 'the kicker slot has nobody in it');
@@ -252,6 +259,93 @@ close(empty.total, 16.2 + 9.4 * 2 + 11.1 * 3 + 6.2 + 11.1 + 6.9 + 7.8, 1e-9,
   'an empty squad is worth its floors');
 eq(empty.assumed, SLOTS.length, 'and every slot is assumed');
 eq(assessLineup([], SLOTS, null).total, 0, 'with no floors it really is zero');
+
+// ---- A FILLED COMBO SLOT IS FLOORED AT THE SLOT, NOT AT THE MAN (AUDIT §1.8)
+//
+// A FLEX holding a bye-week tight end used to be assessed at the TE floor
+// (6.2), while an EMPTY flex was assessed at the slot's floor (11.1, the best
+// of RB 9.4 / WR 11.1 / TE 6.2). So a squad with a useless man in its flex
+// scored LOWER than the same squad with the flex left empty — and what you
+// would stream into that flex is the 11.1 WR either way. Every expected number
+// here is hand arithmetic off the wire table at the top of this file.
+const cell1 = (starter, slotId) => assessLineup([{ ...starter, slotId }], [slotId], floors).cells[0];
+
+const zeroTeFlex = cell1({ playerId: 200, position: 'TE', projected: 0 }, 23);
+eq(zeroTeFlex.value, 11.1, 'a FLEX filled by a 0.0 tight end is worth the FLEX floor (best of RB/WR/TE), not the TE floor');
+eq(zeroTeFlex.raw, 0, 'and still reports ESPN\'s 0.0');
+eq(zeroTeFlex.assumed, true, 'and is marked assumed');
+eq(zeroTeFlex.floor && zeroTeFlex.floor.position, 'WR', 'and says the floor came from a WR');
+eq(zeroTeFlex.floor && zeroTeFlex.floor.name, 'Xiu', 'named: the 3rd-best WR');
+eq(cell1({ playerId: 201, position: 'RB', projected: 0 }, 23).value, 11.1,
+  'a FLEX filled by a 0.0 running back is worth the FLEX floor too');
+// Between the man's position floor (RB 9.4) and the slot's (11.1): the wire's
+// WR would still beat him, so the slot is worth the WR.
+const midRbFlex = cell1({ playerId: 202, position: 'RB', projected: 10.0 }, 23);
+eq(midRbFlex.value, 11.1, 'a 10.0 RB in the FLEX is lifted to the 11.1 FLEX floor, not left at 10.0');
+eq(midRbFlex.assumed, true, 'and is marked assumed');
+// A genuine scorer is his own man.
+const realFlex = cell1({ playerId: 203, position: 'WR', projected: 13.0 }, 23);
+eq(realFlex.value, 13.0, 'a 13.0 WR in the FLEX keeps his own number');
+eq(realFlex.assumed, false, 'and is not marked assumed');
+eq(cell1({ playerId: 204, position: 'WR', projected: 11.1 }, 23).assumed, false,
+  'level with the FLEX floor is not assumed');
+
+// Every other combo slot ESPN has follows the same rule.
+eq(cell1({ playerId: 205, position: 'RB', projected: 0 }, 3).value, 11.1,
+  'RB/WR slot (3) holding a 0.0 RB is worth the best of RB 9.4 / WR 11.1');
+eq(cell1({ playerId: 206, position: 'TE', projected: 0 }, 5).value, 11.1,
+  'WR/TE slot (5) holding a 0.0 TE is worth the best of WR 11.1 / TE 6.2');
+eq(cell1({ playerId: 207, position: 'RB', projected: 0 }, 7).value, 16.2,
+  'OP slot (7) holding a 0.0 RB is worth the best of QB 16.2 / RB / WR / TE');
+// Single-position slots are untouched: a slot's floor there IS the position's.
+eq(cell1({ playerId: 208, position: 'TE', projected: 0 }, 6).value, 6.2,
+  'a TE slot holding a 0.0 TE is still worth the TE floor 6.2');
+eq(cell1({ playerId: 209, position: 'RB', projected: 0 }, 2).value, 9.4,
+  'an RB slot holding a 0.0 RB is still worth the RB floor 9.4');
+// flooredValue itself: with no slot it is the position floor, as before.
+eq(flooredValue({ position: 'TE', projected: 0 }, floors).value, 6.2,
+  'flooredValue without a slot is still the position floor');
+eq(flooredValue({ position: 'TE', projected: 0 }, floors, 23).value, 11.1,
+  'flooredValue in the FLEX is the FLEX floor');
+eq(flooredValue({ position: 'TE', projected: 0 }, positionFloors([]), 23).value, 0,
+  'and with no wire read a zero in the FLEX stays a zero');
+
+// THE WHOLE-SQUAD VERSION, through optimalLineup, with the league's real slots.
+// Every starter is above his floor except the flex, which the only man left —
+// a backup TE on his bye — fills at 0.0.
+//   raw: QB 21 + RB 14 + RB 11 + WR 15 + 13 + 12 + TE 8 + FLEX 0 + DST 8 + K 9 = 111.0
+const FLEXBASE = [
+  { playerId: 300, name: 'Q', position: 'QB', projected: 21.0 },
+  { playerId: 301, name: 'R1', position: 'RB', projected: 14.0 },
+  { playerId: 302, name: 'R2', position: 'RB', projected: 11.0 },
+  { playerId: 303, name: 'W1', position: 'WR', projected: 15.0 },
+  { playerId: 304, name: 'W2', position: 'WR', projected: 13.0 },
+  { playerId: 305, name: 'W3', position: 'WR', projected: 12.0 },
+  { playerId: 306, name: 'T1', position: 'TE', projected: 8.0 },
+  { playerId: 307, name: 'D', position: 'DST', projected: 8.0 },
+  { playerId: 308, name: 'K', position: 'K', projected: 9.0 },
+];
+const BYE_TE = { playerId: 309, name: 'T2', position: 'TE', projected: 0 };
+const withByeTe = optimalLineup(FLEXBASE.concat([BYE_TE]), SLOTS);
+const emptyFlex = optimalLineup(FLEXBASE, SLOTS);
+eq(withByeTe.starters.find((s) => s.slotId === 23)?.playerId, 309, 'fixture: the bye TE is the one in the FLEX');
+eq(emptyFlex.starters.some((s) => s.slotId === 23), false, 'fixture: without him the FLEX is empty');
+const aByeTe = assessLineup(withByeTe.starters, SLOTS, floors);
+const aEmpty = assessLineup(emptyFlex.starters, SLOTS, floors);
+close(aByeTe.rawTotal, 111.0, 1e-9, 'raw total with the bye TE in the FLEX');
+close(aByeTe.total, 122.1, 1e-9, 'the bye-TE FLEX is assessed at 11.1: 111.0 + 11.1 = 122.1 (not 117.2)');
+close(aEmpty.total, 122.1, 1e-9, 'an EMPTY FLEX on the same squad: 111.0 + 11.1 = 122.1');
+ok(aByeTe.total >= aEmpty.total, 'A FILLED FLEX NEVER SCORES BELOW AN EMPTY ONE',
+  `${aByeTe.total} vs ${aEmpty.total}`);
+eq(aByeTe.assumed, 1, 'one slot assumed: the FLEX');
+eq(ids(aByeTe), ids(assessLineup(withByeTe.starters, SLOTS, null)),
+  'the slot floor changes no lineup either');
+// Same squad with a real scorer instead: a 13.5 WR pushes the 12.0 WR into the
+// FLEX, above the 11.1 floor, so nothing moves. 111.0 + 13.5 = 124.5.
+const withScorer = assessLineup(optimalLineup(FLEXBASE.concat([
+  { playerId: 310, name: 'W4', position: 'WR', projected: 13.5 }]), SLOTS).starters, SLOTS, floors);
+close(withScorer.total, 124.5, 1e-9, 'a FLEX filled by a genuine 12.0 scorer is unchanged: 124.5');
+eq(withScorer.assumed, 0, 'and nothing is assumed');
 
 // ---- the sentence a panel prints ----------------------------------------
 const said = describeFloors(floors, { week: 3 });
@@ -297,17 +391,19 @@ const ROSTER = SQUAD.concat([
 const noFloor = seasonLineupValue(ROSTER, SLOTS, tradeWeeks, projFor, null);
 const withFloor = seasonLineupValue(ROSTER, SLOTS, tradeWeeks, projFor, floors);
 
-// Week 5: everyone plays. The only lift is the 4.0 tight end -> 6.2.
-close(withFloor.byWeek[0].total - noFloor.byWeek[0].total, 2.2, 1e-9,
-  'week 5 is lifted only by the weak tight end');
+// Week 5: everyone plays. The lifts are the 4.0 tight end -> 6.2 (+2.2) and
+// the 10.0 RB in the FLEX -> the 11.1 FLEX floor (+1.1; AUDIT §1.8 — this was
+// 2.2 while the flex man was floored at his own RB floor).
+close(withFloor.byWeek[0].total - noFloor.byWeek[0].total, 2.2 + 1.1, 1e-9,
+  'week 5 is lifted by the weak tight end and the below-floor flex');
 // Week 6: the kicker is on bye at 0.00 and is assessed at the wire's 7.8,
-// on top of the same tight-end lift.
-close(withFloor.byWeek[1].total - noFloor.byWeek[1].total, 2.2 + 7.8, 1e-9,
+// on top of the same two lifts.
+close(withFloor.byWeek[1].total - noFloor.byWeek[1].total, 2.2 + 1.1 + 7.8, 1e-9,
   'THE BYE-WEEK KICKER IS PRICED AT THE WIRE, NOT AT ZERO');
 ok(withFloor.total > noFloor.total, 'and the rest-of-season total moves with it',
   `${withFloor.total} vs ${noFloor.total}`);
 // The per-week breakdown carries the assessment, so the pop-up can mark it.
-eq(withFloor.byWeek[1].assumed, 2, 'the week reports how many slots were assumed');
+eq(withFloor.byWeek[1].assumed, 3, 'the week reports how many slots were assumed');
 eq(noFloor.byWeek[1].assumed, 0, 'and none are without floors');
 close(withFloor.byWeek[1].raw, noFloor.byWeek[1].total, 1e-9,
   'while the raw total is still exactly what ESPN said');
@@ -318,7 +414,8 @@ const weekTeams = new Map([[6, [{ id: 1, players: ROSTER.map((p) => ({
 })) }]]]);
 const projPlain = projectionsFromWeekTeams(weekTeams, null);
 const projFloor = projectionsFromWeekTeams(weekTeams, floors);
-close(projFloor.proj.get(6).get(1) - projPlain.proj.get(6).get(1), 2.2 + 7.8, 1e-9,
+// K 7.8 + TE 2.2 + FLEX 1.1 (AUDIT §1.8; was 2.2 + 7.8 before the fix).
+close(projFloor.proj.get(6).get(1) - projPlain.proj.get(6).get(1), 2.2 + 1.1 + 7.8, 1e-9,
   'a team\'s weekly projection is floored the same way');
 
 console.log(`${pass} passed, ${fail} failed`);
