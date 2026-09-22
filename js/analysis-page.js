@@ -88,7 +88,8 @@ const SEASON_GAMES = 17;
 // The D/ST and the kicker used to be a flat 16-point allowance on top of a
 // seven-man baseline, on the grounds that both get streamed constantly and
 // naming them would be churn. They are real columns now — Tim's call — so the
-// grid totals nine actual men and there is no allowance to add.
+// grid totals the league's whole starting lineup (ten men in Tim's league) and
+// there is no allowance to add.
 
 const state = {
   source: 'demo',
@@ -389,7 +390,7 @@ function injuryCell(status) {
 
 // --------------------------------------------------------------- the team grid
 //
-// One table, one row per team: nine lineup spots, what those nine total, and
+// One table, one row per team: the league's lineup spots, what they total, and
 // then the bench behind them. It was two tables of exactly this shape until
 // 2026-09-17, differing only in the number in every cell — a typical week in
 // one, the selected week in the other — which is why merging them is a control,
@@ -400,20 +401,51 @@ function injuryCell(status) {
 // thing you least need to compare two teams. Every name is on hover, and the
 // roster detail below names everybody.
 
-// The nine spots. D/ST and the kicker are real columns now rather than a flat
-// allowance, so the total is nine actual men.
+// THE SPOTS ARE THE LEAGUE'S OWN (AUDIT §1.2, 2026-09-21). This used to be a
+// hard-coded nine — QB, two RBs, two WRs, TE, FLEX, D/ST, K — and Tim's league
+// starts ten (three receivers), so every `A week` Total was one whole receiver
+// light and the Total's colour ranked ten squads on nine-man lineups, while the
+// `Proj avg` measure beside it (on `leagueSlots()`) counted ten. Now both read
+// the same slots: `gridSlots()` lays out `leagueSlots()` as the season sheet's
+// rows, and this nine is only the shape used before any lineup has been read.
 const GRID_SLOTS = [
-  { key: 'QB', eligible: ['QB'] },
-  { key: 'RB1', eligible: ['RB'] },
-  { key: 'RB2', eligible: ['RB'] },
-  { key: 'WR1', eligible: ['WR'] },
-  { key: 'WR2', eligible: ['WR'] },
-  { key: 'TE', eligible: ['TE'] },
+  { key: 'QB', eligible: ['QB'], slotId: 0 },
+  { key: 'RB1', eligible: ['RB'], slotId: 2 },
+  { key: 'RB2', eligible: ['RB'], slotId: 2 },
+  { key: 'WR1', eligible: ['WR'], slotId: 4 },
+  { key: 'WR2', eligible: ['WR'], slotId: 4 },
+  { key: 'TE', eligible: ['TE'], slotId: 6 },
   // Best of what is left, and RB/WR/TE only — a superflex QB is not a flex.
-  { key: 'FLEX', eligible: ['RB', 'WR', 'TE'] },
-  { key: 'DEF', eligible: ['DST'] },
-  { key: 'K', eligible: ['K'] },
+  { key: 'FLEX', eligible: ['RB', 'WR', 'TE'], slotId: 23 },
+  { key: 'DEF', eligible: ['DST'], slotId: 16 },
+  { key: 'K', eligible: ['K'], slotId: 17 },
 ];
+
+/**
+ * The week grid's spots: the league's starting slots, in lineup order.
+ *
+ * The rows are `slotRows(leagueSlots())` — the very rows the season sheet and
+ * the `Proj avg` measure are drawn on — so WR3 exists here exactly when the
+ * league starts one. Eligibility is ESPN's own (`SLOT_ELIGIBILITY`); a slot the
+ * site has no rule for (P, HC) is left out, as `optimalLineup` leaves it out.
+ * The D/ST column keeps the header this grid has always had, `DEF`.
+ */
+function gridSlots() {
+  const slots = leagueSlots();
+  const rows = (slots ? slotRows(slots) : [])
+    .filter((r) => (espn.SLOT_ELIGIBILITY[r.slotId] || []).length > 0);
+  if (!rows.length) return GRID_SLOTS;
+  return rows.map((r) => ({
+    key: r.base === 'D/ST' ? 'DEF' : r.key,
+    eligible: espn.SLOT_ELIGIBILITY[r.slotId],
+    slotId: r.slotId,
+  }));
+}
+
+/** A count in words, for the sentences that say how many spots there are. */
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+  'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen'];
+const countWord = (n) => COUNT_WORDS[n] || String(n);
 
 /**
  * A player's typical week: ESPN's season projection spread over the season.
@@ -435,7 +467,7 @@ function weekProj(p) {
 }
 
 /**
- * Fill the grid's nine spots for one team.
+ * Fill the grid's spots for one team — the league's own, see `gridSlots`.
  *
  * Chosen by position and by the measure rather than by ESPN's lineupSlotId,
  * because the slot label only says where a manager parked someone. Two RBs in
@@ -445,7 +477,7 @@ function weekProj(p) {
  * The pool is who the manager has STARTING, not the whole roster: the bench
  * gets its own columns to the right, and a man cannot be in both.
  */
-function gridLineup(team, measure = avgWeek) {
+function gridLineup(team, measure = avgWeek, slots = gridSlots()) {
   const from = team.starters.length ? team.starters : team.players;
   const pool = from
     .map((p) => ({ p, v: measure(p) }))
@@ -453,7 +485,7 @@ function gridLineup(team, measure = avgWeek) {
 
   const used = new Set();
   const row = {};
-  for (const slot of GRID_SLOTS) {
+  for (const slot of slots) {
     // The pool is already best-first, so "the next eligible one" IS the best.
     const pick = pool.find((e) => !used.has(e) && slot.eligible.includes(e.p.position));
     if (pick) used.add(pick);
@@ -462,7 +494,7 @@ function gridLineup(team, measure = avgWeek) {
   return row;
 }
 
-/** The bench behind those nine, best first by the same measure. */
+/** The bench behind the starting spots, best first by the same measure. */
 function benchEntries(team, measure = avgWeek) {
   return (team.bench || [])
     .map((p) => ({ p, v: measure(p) }))
@@ -517,10 +549,34 @@ function teamWeeklyAverage(teamId) {
   return got ? got.total : null;
 }
 
-/** What the nine score between them. The real sum, not an estimate. */
-function totalOf(row) {
-  const vals = GRID_SLOTS.map((s) => row[s.key] && row[s.key].v).filter((v) => typeof v === 'number');
-  return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
+/**
+ * What the starting spots are worth between them in the week — ASSESSED, the
+ * way the `Proj avg` measure and the season sheet's band total a week.
+ *
+ * THE TOTAL TAKES THE POSITIONAL FLOOR AND THE CELLS DO NOT (AUDIT §1.2,
+ * decided on purpose). A cell is a man, and a man on bye is not a bad
+ * quarterback, so his cell keeps ESPN's number. The Total is a claim about the
+ * SQUAD's week — rule 13's ground — and a manager would stream the wire's third
+ * man into a spot worth less than that, so each spot counts at no less than the
+ * floor and an empty spot counts at it. It is `assessed`, the one function the
+ * season sheet's band and the Proj avg Total use, so the two measures reconcile
+ * week for week; with no wire read it is the plain sum, exactly as before.
+ *
+ * @returns {{total:number|null, lifted:number}} lifted = spots assessed at the floor
+ */
+function totalOf(row, slots = gridSlots()) {
+  let sum = 0;
+  let any = false;
+  let lifted = 0;
+  for (const s of slots) {
+    const e = row[s.key];
+    const a = assessed(e && typeof e.v === 'number' ? e : null, s);
+    if (a.value === null) continue;
+    sum += a.value;
+    any = true;
+    if (a.assumed) lifted += 1;
+  }
+  return { total: any ? round1(sum) : null, lifted };
 }
 
 // ------------------------------------------------------------ the playoffs
@@ -1017,7 +1073,12 @@ async function useLive() {
       // The season panel may already be on screen by the time this lands, and
       // the floors change every number in it, so it repaints rather than
       // waiting for the next thing the reader touches.
-      if (state.floors) renderSeason();
+      if (state.floors) {
+        renderSeason();
+        // The `A week` Total takes the floor too (AUDIT §1.2), and renderSeason
+        // only repaints the grid on its Proj avg measure.
+        if (!currentGrid().slotGrid) renderOverview();
+      }
     })
     .catch(() => { state.floors = null; });
 
@@ -1147,7 +1208,7 @@ function benchWidth(teams) {
   return teams.reduce((n, t) => Math.max(n, (t.bench || []).length), 0);
 }
 
-function renderGridHead(table, benchCols) {
+function renderGridHead(table, benchCols, slots = gridSlots()) {
   const benchTip =
     'the bench, best first by the column this table is measured in. Every team’s bench is a ' +
     'different shape, so the position is in the cell rather than in this header.';
@@ -1159,9 +1220,10 @@ function renderGridHead(table, benchCols) {
   table.querySelector('thead').innerHTML =
     `<tr>
        <th class="name" data-sort>Team</th>
-       ${GRID_SLOTS.map((s) => `<th data-sort>${esc(s.key)}</th>`).join('')}
-       <th class="grid-total grouped" data-sort title="The nine spots to the left added up. ` +
-         `Nine real men, not an estimate.">Total</th>
+       ${slots.map((s) => `<th data-sort>${esc(s.key)}</th>`).join('')}
+       <th class="grid-total grouped" data-sort title="The ${countWord(slots.length)} spots to the ` +
+         `left added up, each counted at no less than the waiver floor for that spot — the same ` +
+         `basis as the Proj avg Total.">Total</th>
        ${bench}
      </tr>`;
 }
@@ -1175,8 +1237,8 @@ function renderGridHead(table, benchCols) {
 //
 // FOUR THINGS ABOUT IT ARE DELIBERATE AND ARE THE PRICE OF THAT:
 //
-// - THE COLUMNS ARE THE LEAGUE'S OWN SLOTS, not the nine `GRID_SLOTS` the week
-//   measure uses. His league starts ten (three receivers), so the nine would
+// - THE COLUMNS ARE THE LEAGUE'S OWN SLOTS — and since AUDIT §1.2 the week
+//   measure's are too (`gridSlots`). His league starts ten (three receivers), so a nine would
 //   have dropped a starter out of every total and could not have agreed with
 //   the box below — which is the entire point of the change.
 // - A CELL NAMES NOBODY AND LINKS NOWHERE. An average over fourteen weeks is
@@ -1498,7 +1560,10 @@ function renderGrid(grid) {
   // two measures share the element.
   $(`${grid.id}Empty`).textContent = 'No roster data for this week.';
 
-  renderGridHead(table, benchCols);
+  // The league's own starting spots, read once for the head, the cells, the
+  // scales and the Total, so the four cannot disagree about how many there are.
+  const slots = gridSlots();
+  renderGridHead(table, benchCols, slots);
 
   const opts = {
     weekGrid: !!grid.weekGrid,
@@ -1508,25 +1573,28 @@ function renderGrid(grid) {
   // ------------------------------------------- the red/green scale, per COLUMN
   //
   // One pass over the league to build the rows, so every scale below is over
-  // the same nine men per squad the cells are drawn from. See the long block
-  // above this function for why a column is the group and why a bench column
-  // and a state cell are both left out.
-  const lineups = new Map(teams.map((t) => [t.id, gridLineup(t, grid.measure)]));
-  const colScale = new Map(GRID_SLOTS.map((s) => [s.key, heatScale(
+  // the same starting men per squad the cells are drawn from. See the long
+  // block above this function for why a column is the group and why a bench
+  // column and a state cell are both left out.
+  const lineups = new Map(teams.map((t) => [t.id, gridLineup(t, grid.measure, slots)]));
+  const colScale = new Map(slots.map((s) => [s.key, heatScale(
     teams.map((t) => gridMeasure(lineups.get(t.id)[s.key], opts.weekGrid))
   )]));
   // The Total is a comparison group of exactly the same kind — ten whole
   // starting lineups in one week — so it takes the scale too. It is measured on
-  // what is DRAWN, byes included, because a total really is worth less when a
-  // man is on bye: a bye is a fact about a player in the columns above and a
-  // fact about the squad's week down here, and those are different claims.
-  const totals = new Map(teams.map((t) => [t.id, totalOf(lineups.get(t.id))]));
+  // the Total as DRAWN: the squad's week, assessed at the positional floor (see
+  // `totalOf`). A bye is a fact about a player in the columns above and a fact
+  // about the squad's week down here, and down here the squad would stream the
+  // wire's man into it — so the spot counts at the floor, not at zero.
+  const assessedTotals = new Map(teams.map((t) => [t.id, totalOf(lineups.get(t.id), slots)]));
+  const totals = new Map([...assessedTotals].map(([id, a]) => [id, a.total]));
   const totalScale = heatScale(teams.map((t) => totals.get(t.id)));
 
   bodyOf(table).innerHTML = teams
     .map((t) => {
       const row = lineups.get(t.id);
       const total = totals.get(t.id);
+      const lifted = assessedTotals.get(t.id).lifted;
       const bench = benchEntries(t, grid.measure);
       const th = heatOf(total, totalScale, { what: 'the other squads’ lineups this week' });
       // "picked" is the drill-down; "me" stays reserved for the reader's own
@@ -1554,11 +1622,14 @@ function renderGrid(grid) {
       // js/touch-titles.js makes it a tap on a phone.
       const totalSays = total === null
         ? `No projection for ${t.name} this week.`
-        : `${t.name}'s best nine project ${fmt(total)} in week ${state.week}.`;
+        : `${t.name}'s best ${countWord(slots.length)} project ${fmt(total)} in week ${state.week}` +
+          (lifted
+            ? `, with ${countWord(lifted)} spot${lifted === 1 ? '' : 's'} counted at the waiver floor.`
+            : '.');
       return `
       <tr class="${cls}" data-team="${t.id}">
         <td class="name">${esc(t.name)}</td>
-        ${GRID_SLOTS.map((s) => gridCell(row[s.key], {
+        ${slots.map((s) => gridCell(row[s.key], {
           ...cellOpts,
           scale: colScale.get(s.key),
           what: `a ${s.key} in week ${state.week}, across the league`,
@@ -1573,7 +1644,7 @@ function renderGrid(grid) {
 
   // Keeps whatever sort the reader picked across week changes; retargets Total
   // only when the shape changed under it, which means a measure switch.
-  sortShape(table, `week:${GRID_SLOTS.length}`, GRID_SLOTS.length + 1);
+  sortShape(table, `week:${slots.length}`, slots.length + 1);
 
   // The key names only the marks this grid is actually showing.
   const body = bodyOf(table);
@@ -1582,7 +1653,7 @@ function renderGrid(grid) {
   // The column list the thresholds are built from, named once: the key needs it
   // to say which columns took no scale, and the strip in the toggle to print
   // the ones that did.
-  const bandCols = [...GRID_SLOTS.map((s) => [s.key, colScale.get(s.key)]), ['Total', totalScale]];
+  const bandCols = [...slots.map((s) => [s.key, colScale.get(s.key)]), ['Total', totalScale]];
   const refused = heatRefusedHtml(bandCols, !!table.querySelector('td.heat'));
   renderKey(`${grid.id}Legend`, teams.length ? [
     // THE SCALE FIRST, the same two swatches and the same order the average
@@ -1756,11 +1827,29 @@ function renderOverviewNote(grid) {
     `who is better this week than they usually are.`
   );
 
+  // THE COUNT IS THE LEAGUE'S, from the lineups ESPN accepted (AUDIT §1.2) —
+  // never a hard-coded "nine", which undercounted Tim's three-receiver league.
+  const spots = countWord(gridSlots().length);
   parts.push(
-    `The nine columns are the best lineup that squad could field, chosen by the measure above rather ` +
-    `than by where the manager has parked people. <strong>FLEX</strong> is the best remaining RB, ` +
-    `WR or TE, never a QB. <strong>Total</strong> is those nine added up — nine real men, not an ` +
-    `estimate.`
+    `The ${spots} columns are the league’s own starting spots, filled with the best lineup that ` +
+    `squad could field, chosen by the measure above rather than by where the manager has parked ` +
+    `people. <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB.`
+  );
+
+  // THE TOTAL'S FLOOR, stated because it is the one number on this measure that
+  // is not ESPN's (rule 7). Decided on purpose: a cell is a man and stays
+  // unfloored; the Total is the squad's week and takes the floor (rule 13).
+  parts.push(
+    `<strong>Total</strong> is those ${spots} added up, on the same basis as the ` +
+    `<strong>Proj avg ${season}</strong> Total and the Starting lineup band in Season by week: a spot ` +
+    `whose man projects below the waiver floor for it — on bye, ruled out, or simply weak — counts ` +
+    `at the floor instead, because that is what the squad could stream in. A man’s own cell never ` +
+    `moves; the floor is a claim about the squad’s week, not about him. ` +
+    (state.floors
+      ? `Tap or hover a Total to see how many of its spots were counted at the floor.`
+      : state.isDemo
+        ? `The demo has no waiver wire, so here every spot counts at its own number.`
+        : `No waiver-wire read is in yet, so every spot counts at ESPN’s own number for now.`)
   );
 
   parts.push(
@@ -4349,7 +4438,8 @@ $('overviewTable').addEventListener('click', (e) => {
   revealRoster();
 });
 // The grid is the reason to be here, so it opens on the number that ranks
-// teams: Total, high first. Column 10 — the team, the nine spots, then it.
+// teams: Total, high first — the team, the spots, then it. This index is only
+// the opening guess; `sortShape` retargets Total once the league's slots are read.
 enableSort($('overviewTable'), { defaultIndex: GRID_SLOTS.length + 1 });
 wireTips($('overviewTable'));
 
