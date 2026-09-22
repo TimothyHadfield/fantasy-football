@@ -9,7 +9,8 @@ edge cases/failure modes, product gaps, and tests/tooling. Every item is
 measured or traced to a line of code. **Line numbers are as of `febca96` and
 will drift — grep for the quoted code rather than trusting the number.**
 
-Nothing here has been fixed. Tim has seen the summary and has not yet chosen
+**§1 (1.1–1.9) was fixed on 2026-09-21** — see PROGRESS.md Status; §2 onward
+is still open. Before that nothing here had been fixed. Tim had not chosen
 an order; the recommended one is §1 → §2 → §3, on the reasoning that §1 is
 wrong on screen today, §2 is losing data that cannot be recovered, and §3 is
 what lets the rest regress unnoticed.

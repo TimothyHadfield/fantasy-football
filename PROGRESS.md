@@ -11,7 +11,7 @@ Last updated: 2026-09-21.
 
 Read-before-touching (sections of `docs/archive/progress-2026-09-21.md` unless noted):
 - Trade engine / finder / combo → "The Trade page", "Per-week trade valuation", "2026-09-21 — the Trade page opens on a goal"; `js/trade.js`, `js/trade-odds.js` headers.
-- Colour scale → "The one red/green scale" (2026-09-19 later) + AUDIT §1.1 (half the tints never draw).
+- Colour scale → "The one red/green scale" (2026-09-19 later) + AUDIT §1.1 (fixed 2026-09-21).
 - Floor → "The positional floor" (2026-09-18), "The floor is the THIRD-best free agent" (2026-09-19).
 - Simulation / playoffs → "The playoffs, and the hybrid final placing".
 - Time machine / archive → "The time machine" + AUDIT §2 (data being lost weekly).
@@ -35,9 +35,17 @@ On what "best" means: "the user should essentially open with a goal and all the 
 
 **Tests (2026-09-21, on the merge):** `npm test` 39/39 green, tr-test 614/614. The two old-ranking assertions were re-aimed, not weakened: the own-man checks open offers in order until one moves a man of his own (demo: the 2nd); the merge checks run the live stub again with `TR_KIND=depth` (on the whole finder the combo takes Cy's 2-for-2 as one deal, so nothing merges; 1-for-2 still packs two Cy deals). Both were seen failing first. tr-test also pins older scenarios to goal "last" (`boot`) and waits with `settleGoal()`. Phone view at 393px: no page overflow, finder shows goal % and "% yes".
 
+**AUDIT §1 fixed and merged 2026-09-21** (builder wave, each fix seen failing first; full suite 40/40 incl. new `heat-draw-check.mjs`):
+- 1.1 heat tint draws on zebra/`tr.me`/hover/`td.name` rows (shorthand → `background-color`).
+- 1.2 Analysis `A week` grid uses the league's own slots (ten in Tim's league) and floors the Total like Proj avg.
+- 1.3 Home's win chance is floored like Schedule's (`capture.matchupOdds` floors option). 1.4 `capture.floorWeek()` = first projected week, used by Schedule/Stats/Home/Summary. 1.5 those pages disclose the floor via `describeFloors`; the "byes sit down on their own" note is corrected. 1.6 a tie counts as half a win in Expected wins. 1.9 Home rank sorts on raw totals; Stats chart highlight keyed on team id.
+- 1.7 Players page `meanOf` = D7 (only weeks > 0), rounded like the trade engine; taken-check/cmp-check stubs updated to match.
+- 1.8 `flooredValue(player, floors, slotId)`: a zero man in a combo slot (FLEX 23, 3, 5, 7) floors at the SLOT's floor; Analysis cells pass the slot too.
+New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX legend "best for that slot", floor sentences behind Schedule/Stats/Summary/Home toggles.
+
 ## Authorized next steps
 - ~~2026-09-21 · Finish and ship items 1–5~~ done, merged 75247c7.
-- 2026-09-21 · Tim: "alright start working on the projects you reccommend" — after shipping, taken to cover AUDIT.md §1 → §2 → §3 in the recommended order.
+- 2026-09-21 · Tim: "alright start working on the projects you reccommend" — taken to cover AUDIT.md §1 → §2 → §3 in the recommended order. §1 done; **§2 (data being lost) is next**, then §3.
 - 2026-09-20 · AUDIT.md order §1 → §2 → §3 recommended; Tim "has not yet chosen an order" (paraphrase from AUDIT). Not explicitly authorized.
 
 ## Standing instructions
@@ -67,7 +75,7 @@ On what "best" means: "the user should essentially open with a goal and all the 
 11. A combo's gain is not the sum of its trades' gains — price the combined move once.
 12. Archive's durable home is `data/snapshots/<league>-<season>.json` (export is cumulative, monthly).
 13. Positional floor = 3rd-best free agent (`FLOOR_RANK=3`); never invented; never changes who starts; a floor on one panel and not its neighbour is worse than none.
-14. One red/green scale (`js/heat.js`), ±1 SD, same slot/column only; scale owns background+weight. **Its CSS claim is wrong today — AUDIT §1.1.**
+14. One red/green scale (`js/heat.js`), ±1 SD, same slot/column only; the tint is a background-image and every row rule (zebra, `tr.me`, hover, `td.name`) sets `background-color` only, never the `background` shorthand, which erases it (fixed 2026-09-21, enforced by `tests/heat-draw-check.mjs`).
 15. `js/store.js`: played week final for the season, future week fresh 6 h, unknown never final.
 16. A key under a coloured table is one sentence; thresholds behind the toggle.
 17. Player card: bold = "he starts" (future weeks only; received men solved against YOUR roster with the trade).
@@ -75,7 +83,7 @@ On what "best" means: "the user should essentially open with a goal and all the 
 
 ## Traps
 - `css/app.css` `.pending` is a whole notice banner; a cell with class `pending` draws one. Goal cell uses `goal-wait`.
-- A `background` shorthand erases the heat tint (`background-image`); zebra, `tr.me`, row hover still do (AUDIT §1.1).
+- A `background` shorthand on a td/tr erases the heat tint (`background-image`) — fixed 2026-09-21; `heat-draw-check.mjs` fails on any new one in app.css.
 - `textContent` in tests reads sr-only text too — read visible and sr-only separately.
 - An assertion guarded by `if (x.length)` with no else passes when the feature produces nothing — three agents found this.
 - `tr-test` scenarios must wait for the page to FINISH (`settleGoal`), not a fixed time — the page now searches twice (points, then goal weights) and ranks.
@@ -101,6 +109,9 @@ On what "best" means: "the user should essentially open with a goal and all the 
 - The yes-chance curve against any real accepted/refused trade.
 - The first successful "Send to phone" and phone read of the cloud sync (archive HANDOFF).
 - Weeks 1–2 archived only in Tim's browser; export never done (no file in Downloads as of 2026-09-21).
+- AUDIT §1 floor wording on live data in a real browser (demo has no floors; only linkedom tests saw it). `tr.me` tint with real heat cells (demo has none in `tr.me`).
+- Stats still floors weeks already played (floor.js says never) — found by the §1.4 builder, not fixed.
+- Analysis `A week` picks from the manager's set starters, Proj avg from the best lineup — a benched better man still makes them differ.
 - Older archive sections were indexed by heading for this file, not re-extracted line by line (2026-09-21 checkpoint).
 
 ## Rejected / parked
