@@ -587,7 +587,8 @@ ESPN, it does not replace it.**
 6. **Delete Schedule's Results panel** — ESPN's scoreboard with a sort. The
    Week matchups panel above already carries the week plus win %. **Keep Head
    to head**: a full pairing grid is not one ESPN screen.
-7. **Two free facts nobody needs to ask Tim about.**
+7. **Deadline built 2026-09-21 on branch `goal-candidates`, not yet merged**
+   (`espn.parseTrades`, printed under the Trade page's title). IR slots still unread. **Two free facts nobody needs to ask Tim about.**
    `settings.tradeSettings.deadlineDate` and `rosterSettings` are already
    fetched (`fetchSchedule` rides `mSettings`; `js/espn.js:580` reads
    `rosterSettings`). So both open questions — IR slots, trade deadline — are a
