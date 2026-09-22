@@ -72,6 +72,24 @@
 // case is one request nobody needed, against a played week frozen forever on
 // numbers that were still moving.
 //
+// EVERY ENTRY ALSO SAYS WHETHER THE BYES WERE KNOWN when it was decoded
+// (`byesKnown`, AUDIT §2.4). The bye rule — a man on bye projects exactly 0 —
+// can only be applied when the bye read succeeded; when it failed, rule 2 says
+// the projections stay exactly as ESPN sent them, so a D/ST projecting a few
+// points in its own bye week is written down as-is. Without a note to say so,
+// that week would be served for six hours, or for the SEASON if it was played,
+// and nothing could tell it from a week decoded with the byes. So the entry
+// records it, and `js/season.js` re-reads such a week the first time the byes
+// ARE known. This file only keeps the fact; it does not act on it.
+//
+// AN ENTRY WRITTEN BEFORE THE FIELD EXISTED READS AS `byesKnown: false`. Nobody
+// can say now whether its bye read worked, and "unknown" is the safe direction
+// for the same reason unknown played-ness is not final: the cost is one re-read
+// per held week, once, on the first page load with working byes; the other
+// choice could keep a wrong D/ST number frozen for the rest of the season. The
+// schema is deliberately NOT bumped for this — a bump would make every held
+// week absent at once, which is the same one re-read without the fallback.
+//
 // EVERY ENTRY CARRIES `at`, so a page can SAY how old its numbers are. That is
 // rule 7 in HANDOFF.md — state the basis of every derived number — and it is
 // the whole reason a cache is allowed on this site at all. A stale number that
@@ -205,7 +223,10 @@ function fresh(e, now) {
  * timestamp would be exactly the stale-number-looking-fresh failure the whole
  * file is arranged to prevent.
  *
- * @returns {{teams:Array, at:number, final:boolean, ageMs:number}|null}
+ * `byesKnown` is true only when the entry was written saying so — an older
+ * entry without the field is unknown. See the note at the top.
+ *
+ * @returns {{teams:Array, at:number, final:boolean, byesKnown:boolean, ageMs:number}|null}
  */
 export function readWeek(leagueId, season, week) {
   const s = store();
@@ -213,7 +234,10 @@ export function readWeek(leagueId, season, week) {
   const now = Date.now();
   const e = entryAt(s, keyOf(leagueId, season, week));
   if (!fresh(e, now)) return null;
-  return { teams: e.teams, at: e.at, final: !!e.final, ageMs: Math.max(0, now - e.at) };
+  return {
+    teams: e.teams, at: e.at, final: !!e.final, byesKnown: e.byesKnown === true,
+    ageMs: Math.max(0, now - e.at),
+  };
 }
 
 /**
@@ -223,17 +247,20 @@ export function readWeek(leagueId, season, week) {
  * fact about the SCHEDULE, never about the date — see the note at the top.
  * Unknown must be passed as false.
  *
+ * `byesKnown` is whether the bye read had succeeded when these teams were
+ * decoded — whether the bye rule could be applied at all. Unknown is false.
+ *
  * @returns {boolean} whether it actually landed. Nothing depends on the answer;
  *   it exists so a test can tell "stored" from "silently dropped".
  */
-export function writeWeek(leagueId, season, week, teams, { final = false } = {}) {
+export function writeWeek(leagueId, season, week, teams, { final = false, byesKnown = false } = {}) {
   const s = store();
   if (!s || !Array.isArray(teams) || !teams.length) return false;
 
   const key = keyOf(leagueId, season, week);
   let json;
   try {
-    json = JSON.stringify({ v: SCHEMA, at: Date.now(), final: !!final, teams });
+    json = JSON.stringify({ v: SCHEMA, at: Date.now(), final: !!final, byesKnown: !!byesKnown, teams });
   } catch {
     return false; // a shape that will not serialise is not a shape to keep
   }
@@ -288,7 +315,9 @@ function evictFor(needBytes, mineKeyPrefix) {
       bytes: raw.length,
       at: e && Number.isFinite(e.at) ? e.at : 0,
       // A key we cannot parse is rank 0: it is bytes doing nothing for anybody.
-      rank: !e ? 0 : (!k.startsWith(mineKeyPrefix) ? 1 : (e.final ? 3 : 2)),
+      // A played week decoded WITHOUT the byes is waiting to be re-read anyway,
+      // so it is no more precious than a forecast.
+      rank: !e ? 0 : (!k.startsWith(mineKeyPrefix) ? 1 : (e.final && e.byesKnown === true ? 3 : 2)),
     });
   }
   rows.sort((a, b) => a.rank - b.rank || a.at - b.at);
@@ -330,6 +359,7 @@ export function list(leagueId, season) {
       week,
       at: e.at,
       final: !!e.final,
+      byesKnown: e.byesKnown === true,
       ageMs: Math.max(0, now - (Number.isFinite(e.at) ? e.at : now)),
       fresh: fresh(e, now),
     });

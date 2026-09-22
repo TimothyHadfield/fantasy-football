@@ -96,7 +96,7 @@ const TEAMS = [1, 2, 3, 4];
 
 /** One roster payload for a week. Projections move with the week, so a stale
  *  answer and a fresh one are told apart by their numbers and not by a flag. */
-function rosterPayload(week, bump = 0) {
+function rosterPayload(week, bump = 0, { dst = false } = {}) {
   return {
     teams: TEAMS.map((id) => ({
       id,
@@ -105,6 +105,20 @@ function rosterPayload(week, bump = 0) {
       nickname: String(id),
       roster: {
         entries: [
+          // AUDIT §2.4's own case: a D/ST ESPN projects at 4.41 in every week,
+          // its bye included. Team 1's only; its NFL team (30) is off in week 2.
+          ...(dst && id === 1 ? [{
+            playerId: 9001,
+            lineupSlotId: 16,
+            playerPoolEntry: {
+              player: {
+                fullName: 'Bye D/ST', defaultPositionId: 16, proTeamId: DST_PRO_TEAM,
+                stats: [
+                  { scoringPeriodId: week, statSourceId: 1, statSplitTypeId: 1, appliedTotal: 4.41 },
+                ],
+              },
+            },
+          }] : []),
           {
             playerId: id * 100 + 1,
             lineupSlotId: 0,
@@ -136,8 +150,21 @@ function rosterPayload(week, bump = 0) {
   };
 }
 
-/** Weeks 1-2 decided, 3-4 not. That is what makes a week "final" or not. */
-const schedulePayload = () => ({
+const DST_PRO_TEAM = 30;
+const DST_BYE = 2;
+/** The bye read as ESPN answers it: every fixture NFL team, one bye each. */
+const byePayload = () => ({
+  settings: {
+    proTeams: [
+      ...TEAMS.map((id) => ({ id, byeWeek: 9 })),
+      { id: DST_PRO_TEAM, byeWeek: DST_BYE },
+    ],
+  },
+});
+
+/** Weeks 1-2 decided, 3-4 not, unless told otherwise. That is what makes a
+ *  week "final" or not. */
+const schedulePayload = (decidedThrough = 2) => ({
   settings: {
     name: 'Store League',
     scheduleSettings: { matchupPeriodCount: 4, playoffTeamCount: 2 },
@@ -146,37 +173,44 @@ const schedulePayload = () => ({
   schedule: [1, 2, 3, 4].flatMap((week) => [
     {
       matchupPeriodId: week, playoffTierType: 'NONE',
-      home: { teamId: 1, totalPoints: week <= 2 ? 100 : 0 },
-      away: { teamId: 2, totalPoints: week <= 2 ? 90 : 0 },
-      winner: week <= 2 ? 'HOME' : 'UNDECIDED',
+      home: { teamId: 1, totalPoints: week <= decidedThrough ? 100 : 0 },
+      away: { teamId: 2, totalPoints: week <= decidedThrough ? 90 : 0 },
+      winner: week <= decidedThrough ? 'HOME' : 'UNDECIDED',
     },
     {
       matchupPeriodId: week, playoffTierType: 'NONE',
-      home: { teamId: 3, totalPoints: week <= 2 ? 80 : 0 },
-      away: { teamId: 4, totalPoints: week <= 2 ? 70 : 0 },
-      winner: week <= 2 ? 'HOME' : 'UNDECIDED',
+      home: { teamId: 3, totalPoints: week <= decidedThrough ? 80 : 0 },
+      away: { teamId: 4, totalPoints: week <= decidedThrough ? 70 : 0 },
+      winner: week <= decidedThrough ? 'HOME' : 'UNDECIDED',
     },
   ]),
 });
 
 /** ESPN, counted. `bump` shifts every projection so a re-read is visible. */
-function installFetch({ bump = 0 } = {}) {
+/** `byes`: 'empty' (the default — an answer with no teams, which is unknown),
+ *  'ok' (the real shape), or 'fail' (HTTP 429, what a rate limit looks like).
+ *  `decidedThrough`: the last week with a result. `dst`: add the bye D/ST. */
+function installFetch({ bump = 0, byes = 'empty', decidedThrough = 2, dst = false } = {}) {
   const calls = [];
   globalThis.fetch = async (url) => {
     const u = String(url);
     calls.push(u);
     let body;
-    if (/proTeamSchedules_wl/.test(u)) body = { settings: { proTeams: [] } };
+    if (/proTeamSchedules_wl/.test(u)) {
+      if (byes === 'fail') return { ok: false, status: 429, async json() { return {}; } };
+      body = byes === 'ok' ? byePayload() : { settings: { proTeams: [] } };
+    }
     else if (/kona_player_info/.test(u)) body = { players: [] };
     else if (/scoringPeriodId=(\d+)/.test(u) && /view=mRoster/.test(u)) {
-      body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), bump);
-    } else body = schedulePayload();
+      body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), bump, { dst });
+    } else body = schedulePayload(decidedThrough);
     return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify(body)); } };
   };
   return calls;
 }
 
 const rosterCalls = (calls) => calls.filter((u) => /view=mRoster/.test(u));
+const byeCalls = (calls) => calls.filter((u) => /proTeamSchedules_wl/.test(u));
 
 /** Move every stored entry's clock back, as though the browser sat idle. */
 function ageEverything(storage, ms) {
@@ -418,6 +452,199 @@ const SCENARIOS = {
     espn.configure({ leagueId: 'demo' });
     eq(season.storedWeeks(), [], 'a league that is not a number stores nothing');
     espn.configure({ leagueId: LEAGUE_ID });
+  },
+
+  // ---- AUDIT §2.5: a forecast for a week that has since been decided ------
+  //
+  // Read week 3 before kickoff (stored final:false, six hours on the clock),
+  // then ESPN puts a result against it, then another page asks for it. The
+  // pre-kickoff lineups must not come back as the week's history.
+  async decidedSince() {
+    const storage = makeStorage();
+    globalThis.localStorage = storage;
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '' });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+
+    let calls = installFetch({ byes: 'ok' });
+    await season.fetchSchedule();
+    const before = await season.fetchWeekRosters(3);
+    eq(before.from, 'espn', 'week 3 read before kickoff');
+    eq(season.storedWeeks().find((e) => e.week === 3).final, false, 'and stored as a forecast');
+
+    // An hour later — well inside the six hours — week 3 has a result.
+    ageEverything(storage, 1 * HOUR);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', decidedThrough: 3, bump: 3 });
+    const sched = await season.fetchSchedule();
+    ok('the schedule now has week 3 decided',
+      sched.games.filter((g) => g.week === 3).every((g) => g.played));
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', decidedThrough: 3, bump: 3 });
+    const after = await season.fetchWeekRosters(3);
+    eq(rosterCalls(calls).length, 1, 'the held forecast is refused: one re-read');
+    eq(after.from, 'espn', 'and the answer came from ESPN, not this browser');
+    eq(after.teams[0].players[0].projected, before.teams[0].players[0].projected + 3,
+      'with what ESPN says now');
+    const listed = season.storedWeeks().find((e) => e.week === 3);
+    eq(listed.final, true, 'and the re-read is stored FINAL');
+
+    // Final means kept: a fortnight on, no request at all.
+    ageEverything(storage, 14 * 24 * HOUR);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', decidedThrough: 3, bump: 50 });
+    const later = await season.fetchWeekRosters(3);
+    eq(rosterCalls(calls).length, 0, 'after that it is kept for the season');
+    eq(later.from, 'store', 'out of this browser');
+
+    // A forecast for a week STILL undecided is untouched by this.
+    await season.fetchWeekRosters(4);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', decidedThrough: 3, bump: 60 });
+    const w4 = await season.fetchWeekRosters(4);
+    eq(rosterCalls(calls).length, 0, 'an undecided week inside its six hours still costs nothing');
+    eq(w4.from, 'store', 'and still comes from the store');
+  },
+
+  // ---- AUDIT §2.4: a failed bye read, and the read that later works -------
+  async byesFailed() {
+    const storage = makeStorage();
+    globalThis.localStorage = storage;
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '' });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+    const dstOf = (teams) => teams.find((t) => t.id === 1).players.find((p) => p.playerId === 9001);
+
+    // PAGE 1: the bye read is rate-limited. Week 2 is the D/ST's bye AND a
+    // played week — the "frozen for the season" case.
+    let calls = installFetch({ byes: 'fail', dst: true });
+    await season.fetchSchedule();
+    let got = await season.fetchWeeksRosters([2, 3, 4]);
+    eq(rosterCalls(calls).length, 3, 'three weeks, three requests');
+    eq(dstOf(got.get(2)).projected, 4.41,
+      'with the byes unknown the D/ST keeps ESPN’s number (rule 2: nothing invented)');
+    let held = new Map(season.storedWeeks().map((e) => [e.week, e]));
+    eq(held.get(2).final, true, 'week 2 is played, so it is stored final');
+    eq([2, 3, 4].map((w) => held.get(w).byesKnown), [false, false, false],
+      'and every week is stored saying the byes were UNKNOWN');
+
+    // PAGE 2: still failing. A re-read would buy the same bye-less answer, so
+    // the held weeks are served and nothing is re-bought.
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'fail', dst: true, bump: 1 });
+    const sources = [];
+    got = await season.fetchWeeksRosters([2, 3, 4], {
+      onProgress: (d, t, week, from) => sources.push(from),
+    });
+    eq(rosterCalls(calls).length, 0, 'while the byes still fail, no week is re-bought');
+    eq(sources, ['store', 'store', 'store'], 'all three come from the store');
+
+    // PAGE 3: the byes work. Every byes-unknown week is bought ONCE, and the
+    // bye rule now applies — to the played week too.
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', dst: true });
+    got = await season.fetchWeeksRosters([2, 3, 4]);
+    eq(rosterCalls(calls).length, 3, 'the byes arrived: each byes-unknown week re-read once');
+    eq(dstOf(got.get(2)).projected, 0, 'and the D/ST is 0 in its bye week');
+    eq(dstOf(got.get(3)).projected, 4.41, 'and keeps its number outside it');
+    held = new Map(season.storedWeeks().map((e) => [e.week, e]));
+    eq([2, 3, 4].map((w) => held.get(w).byesKnown), [true, true, true],
+      'and every week is now stored with the byes known');
+    eq(held.get(2).final, true, 'week 2 still final');
+
+    // PAGE 4 — RULE 3: with the byes fine, a page load buys no roster week
+    // again. The bye read itself is one request per load (cached for the page).
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', dst: true, bump: 9 });
+    got = await season.fetchWeeksRosters([2, 3, 4]);
+    eq(rosterCalls(calls).length, 0, 'byes fine: zero roster requests on the next load');
+    ok('and at most one bye request', byeCalls(calls).length <= 1, String(byeCalls(calls).length));
+    eq(dstOf(got.get(2)).projected, 0, 'the stored week keeps the bye');
+    const single = await season.fetchWeekRosters(3);
+    eq(single.from, 'store', 'a single-week read is served from the store too');
+    eq(rosterCalls(calls).length, 0, 'still no roster request');
+  },
+
+  // ---- a byes-unknown week whose re-read fails is still served ------------
+  async byesArrivedReadFails() {
+    const storage = makeStorage();
+    globalThis.localStorage = storage;
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '' });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+
+    installFetch({ byes: 'fail', dst: true });
+    await season.fetchSchedule();
+    await season.fetchWeekRosters(2);
+    espn.clearReadCache();
+    // The byes answer now; the roster read does not.
+    const calls = installFetch({ byes: 'ok', dst: true });
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (/view=mRoster/.test(String(url))) { calls.push(String(url)); return { ok: false, status: 429, async json() { return {}; } }; }
+      return inner(url);
+    };
+    let got = null;
+    let threw = null;
+    try { got = await season.fetchWeekRosters(2); } catch (e) { threw = e; }
+    ok('a failed re-read does not turn a held week into a gap', !threw && got && got.teams.length === 4,
+      threw ? threw.message : '');
+    eq(got && got.from, 'store', 'it serves what it held');
+    eq(season.storedWeeks().find((e) => e.week === 2).byesKnown, false,
+      'and the week stays marked byes-unknown, so the next load tries again');
+  },
+
+  // ---- an entry written before `byesKnown` existed -----------------------
+  async oldEntry() {
+    const storage = makeStorage();
+    globalThis.localStorage = storage;
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '' });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    const store = await import(moduleUrl('js/store.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+
+    // Exactly the shape store.js wrote before this field: v, at, final, teams.
+    const oldTeams = [{ id: 1, name: 'Old', players: [{ playerId: 101, projected: 7, proTeamId: 1 }],
+      starters: [], bench: [], projectedTotal: 7 }];
+    storage.setItem(`ff.weeks.1.${LEAGUE_ID}.${SEASON}.1`,
+      JSON.stringify({ v: 1, at: Date.now(), final: true, teams: oldTeams }));
+
+    const raw = store.readWeek(LEAGUE_ID, SEASON, 1);
+    ok('an old entry still reads', !!raw && raw.teams[0].name === 'Old', JSON.stringify(raw));
+    eq(raw && raw.final, true, 'as final');
+    eq(raw && raw.byesKnown, false, 'and with its byes treated as unknown');
+    eq(store.list(LEAGUE_ID, SEASON).length, 1, 'and it lists');
+
+    // With the byes failing, it is served exactly as before this change.
+    let calls = installFetch({ byes: 'fail' });
+    await season.fetchSchedule();
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'fail' });
+    const a = await season.fetchWeekRosters(1);
+    eq(a.from, 'store', 'byes failing: the old entry is served from the store');
+    eq(a.teams[0].name, 'Old', 'unchanged');
+    eq(rosterCalls(calls).length, 0, 'at no roster cost');
+
+    // With the byes working it is refreshed ONCE, then served from the store.
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok' });
+    const b = await season.fetchWeekRosters(1);
+    eq(rosterCalls(calls).length, 1, 'byes working: the old entry is re-read once');
+    eq(b.from, 'espn', 'from ESPN');
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', bump: 4 });
+    const c = await season.fetchWeekRosters(1);
+    eq(rosterCalls(calls).length, 0, 'and never again');
+    eq(c.from, 'store', 'it is served from the store');
+    eq(season.storedWeeks().find((e) => e.week === 1).byesKnown, true, 'now marked byes-known');
   },
 
   // ---- with no storage at all, every fetcher behaves exactly as before ----
