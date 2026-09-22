@@ -399,7 +399,7 @@ td.name, th.name {
   font-weight: 550;
   position: sticky;
   left: 0;
-  background: var(--panel);
+  background-color: var(--panel);
   /* The frozen column casts an edge and a shadow over whatever it is covering,
    * which is also the standing cue that more columns run off to the right.
    * (A gradient on .table-scroll - the usual scroll-shadow trick - cannot work
@@ -417,14 +417,17 @@ th.name { z-index: 3; }
  * and scrolls over other cells), so it needs banding stated explicitly or the
  * frozen column stripes out of phase with the rest of its row.
  * This must stay ABOVE the hover and .me rules: they tie on specificity and
- * win only by coming later. */
+ * win only by coming later.
+ * All three set background-COLOR, never the `background` shorthand: the
+ * shorthand resets background-image to none and erases the red/green tint on
+ * every cell it matches (AUDIT §1.1; tests/heat-draw-check.mjs). */
 tbody tr:nth-child(even) td,
-tbody tr:nth-child(even) td.name { background: var(--row-alt); }
+tbody tr:nth-child(even) td.name { background-color: var(--row-alt); }
 
 /* Written as `tbody tr.me td` (not `tr.me td`) purely to out-specify the
  * zebra rule above; hover still comes later and still wins. */
-tbody tr.me td { background: #14261a; }
-tbody tr.me td.name { background: #14261a; color: #7fd99b; }
+tbody tr.me td { background-color: #14261a; }
+tbody tr.me td.name { background-color: #14261a; color: #7fd99b; }
 
 /* Row hover is behind `hover: hover` because a touch screen has no hover to
  * leave: iOS resolves :hover on tap and then keeps it painted until something
@@ -433,8 +436,8 @@ tbody tr.me td.name { background: #14261a; color: #7fd99b; }
  * picked" (tr.picked) with their own colours, and a third, meaningless
  * highlight competing with them is worse than no hover at all. */
 @media (hover: hover) {
-  tbody tr:hover td { background: var(--panel-3); }
-  tbody tr:hover td.name { background: var(--panel-3); }
+  tbody tr:hover td { background-color: var(--panel-3); }
+  tbody tr:hover td.name { background-color: var(--panel-3); }
 }
 
 /* Result emphasis in the schedule table. These were only ever defined as
