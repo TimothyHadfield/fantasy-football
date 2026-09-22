@@ -342,10 +342,38 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
   // and it is the re-buying of it that Tim asked to be rid of. A week that is
   // absent, stale or unreadable simply falls through to everything below,
   // exactly as if this block were not here.
+  //
+  // TWO KINDS OF HELD WEEK ARE REFUSED, and each for a fact learned since it
+  // was written (AUDIT §2.4, §2.5):
+  //
+  //   A FORECAST FOR A WEEK THAT HAS SINCE BEEN DECIDED. Read before kickoff,
+  //   stored on the six-hour clock, then ESPN put a result against it: serving
+  //   it would present pre-kickoff lineups as the week's history. It is re-read,
+  //   and the re-read is stored final.
+  //
+  //   A WEEK DECODED WITHOUT THE BYES, once the byes ARE known. A failed bye
+  //   read leaves projections as ESPN sent them (rule 2), which for a D/ST in
+  //   its own bye week is a few invented-looking points. Re-reading while the
+  //   byes are still unknown would buy the same answer, so it is served until
+  //   they are known — and then bought once, with the bye rule applied. If that
+  //   re-read fails, the held week is still better than a gap: it is exactly
+  //   what a bye-less read would have produced anyway.
   const cfg = storable();
+  let byeMap = byes && typeof byes === 'object' ? byes : null;
+  let fallback = null;
   if (cfg && !fresh) {
     const held = store.readWeek(cfg.leagueId, cfg.season, week);
-    if (held && held.teams.length) return { week: Number(week), teams: held.teams, from: 'store' };
+    if (held && held.teams.length) {
+      const decidedSince = !held.final && weekIsFinal(week);
+      let byesArrived = false;
+      if (!decidedSince && !held.byesKnown) {
+        if (!byeMap) byeMap = await fetchByeWeeks();
+        byesArrived = byesAreKnown(byeMap);
+      }
+      const served = { week: Number(week), teams: held.teams, from: 'store' };
+      if (!decidedSince && !byesArrived) return served;
+      if (byesArrived) fallback = served;
+    }
   }
 
   // The synced copy next when there is no bridge — see "THE CLOUD
@@ -359,14 +387,25 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
     // Kept, because the phone that reads the cloud is the device most likely to
     // walk between four pages on one connection — and a synced week is already
     // a copy, so storing it costs nothing but the bytes.
-    if (cfg) store.writeWeek(cfg.leagueId, cfg.season, week, synced, { final: weekIsFinal(week) });
+    // The desktop decoded it with the byes it published alongside, so those say
+    // whether the bye rule was applied.
+    if (cfg) {
+      store.writeWeek(cfg.leagueId, cfg.season, week, synced,
+        { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes) });
+    }
     return { week: Number(week), teams: synced, from: 'cloud' };
   }
 
-  const [raw, byeMap] = await Promise.all([
-    espn.fetchRosters(week),
-    byes && typeof byes === 'object' ? byes : fetchByeWeeks(),
-  ]);
+  let raw;
+  try {
+    [raw, byeMap] = await Promise.all([
+      espn.fetchRosters(week),
+      byeMap || fetchByeWeeks(),
+    ]);
+  } catch (err) {
+    if (fallback) return fallback;
+    throw err;
+  }
   const season = espn.getConfig().season;
   // Who each squad actually belongs to. `fetchRosters` asks for mRoster+mTeam,
   // and mTeam is what makes ESPN populate the member name fields — see
@@ -444,8 +483,10 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
   // Kept for the next page. `final` is read off the SCHEDULE, never off the
   // date — see `weekIsFinal` — and a week whose played-ness nobody has
   // established yet is stored as a forecast, which is the safe direction.
+  // `byesKnown` records whether the bye rule could be applied (AUDIT §2.4).
   if (cfg && teams.length) {
-    store.writeWeek(cfg.leagueId, cfg.season, week, teams, { final: weekIsFinal(week) });
+    store.writeWeek(cfg.leagueId, cfg.season, week, teams,
+      { final: weekIsFinal(week), byesKnown: byesAreKnown(byeMap) });
   }
 
   return { week, teams, from: 'espn' };
@@ -495,7 +536,10 @@ export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {
       const teams = down.rosters.get(Number(week));
       if (teams && teams.length) {
         out.set(Number(week), teams);
-        if (cfg) store.writeWeek(cfg.leagueId, cfg.season, week, teams, { final: weekIsFinal(week) });
+        if (cfg) {
+          store.writeWeek(cfg.leagueId, cfg.season, week, teams,
+            { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes) });
+        }
       }
       done++;
       if (onProgress) onProgress(done, weeks.length, week, teams && teams.length ? 'cloud' : 'gap');
@@ -1014,6 +1058,11 @@ export async function fetchSeasonData({ onProgress } = {}) {
 // ===========================================================================
 
 let byesCache = null; // { key, promise }
+
+/** A bye map that actually says something. `{}` is "unknown", never "no byes". */
+function byesAreKnown(byes) {
+  return !!byes && typeof byes === 'object' && Object.keys(byes).length > 0;
+}
 
 /**
  * Every NFL team's bye week, `{ [proTeamId]: byeWeek }`.
