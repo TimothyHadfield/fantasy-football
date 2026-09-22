@@ -48,7 +48,8 @@ export const MINE = [
   { playerId: 7022, name: 'Ward Inglis', position: 'WR', proTeam: 'PHI', proj: () => 13 },
   { playerId: 7023, name: 'Wilkes Joyner', position: 'WR', proTeam: 'SEA', proj: () => 11 },
   { playerId: 7024, name: 'Wray Kelso', position: 'WR', proTeam: 'TB', proj: () => 9 },
-  // 0 is ESPN's own answer for a bye, and the average has to count it as one.
+  // 0 is ESPN's own answer for a bye. Since D7 (2026-09-20) the average leaves
+  // it out, so he averages 4.0 over weeks 4-6 and is still the lowest WR.
   { playerId: 7025, name: 'Wynn Larch', position: 'WR', proTeam: 'TEN', proj: (w) => (w === 5 ? 0 : 4) },
 
   // null is "no number at all", which the average has to leave out -- so this
@@ -74,7 +75,8 @@ export function projFor(playerId, week) {
 
 /** What the page should compute as one of your men's average over `weeks`. */
 export function expectedAvg(playerId, weeks) {
-  const real = weeks.map((w) => projFor(playerId, w)).filter((v) => typeof v === 'number');
+  // D7: only weeks projecting above zero count, as on the Trade page.
+  const real = weeks.map((w) => projFor(playerId, w)).filter((v) => typeof v === 'number' && v > 0);
   return real.length ? real.reduce((a, b) => a + b, 0) / real.length : null;
 }
 

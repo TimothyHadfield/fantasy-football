@@ -338,13 +338,13 @@ async function check(scenario, boot) {
       wrongMan.map((m) => `${m.label} got ${m.name} want ${want.get(m.pos).p.name}`).join(' | '));
 
     const wrongAvg = mine.filter((m) => !near(m.avg, want.get(m.pos).avg));
-    c.ok('the Avg shown is the mean over the weeks shown, byes counted, blanks left out',
+    c.ok('the Avg shown is the mean over the weeks shown that project above zero',
       wrongAvg.length === 0,
       wrongAvg.map((m) => `${m.label} got ${m.avg} want ${want.get(m.pos).avg}`).join(' | '));
 
     const wr = mine.find((m) => m.pos === 'WR');
-    c.ok('a bye on one of your men counts as the zero ESPN returned',
-      wr && wr.week[1] === '0' && near(wr.avg, 8 / 3), JSON.stringify(wr));
+    c.ok('a bye on one of your men shows the zero ESPN returned, and leaves his Avg',
+      wr && wr.week[1] === '0' && near(wr.avg, 4), JSON.stringify(wr));
     const te = mine.find((m) => m.pos === 'TE');
     c.ok('and the better tight end is not punished for a week ESPN had no number for',
       te && te.name.includes('Tobin Nash'), te && te.name);
@@ -635,7 +635,7 @@ async function check(scenario, boot) {
 
     const wr = mine.find((m) => m.pos === 'WR');
     c.ok('YOUR RUINED-WEEK MAN IS STILL THE ONE A CLAIM WOULD DROP: Your WR5 is Wynn Larch, by Avg',
-      wr && wr.name.includes('Wynn Larch') && near(wr.avg, 8 / 3), JSON.stringify(wr));
+      wr && wr.name.includes('Wynn Larch') && near(wr.avg, 4), JSON.stringify(wr));
     const mineTr = d.querySelector('#waiverTable tbody tr.mine[data-player="7025"]');
     const his5 = at(mineTr, 5);
     c.ok('and his week-5 zero reads "0.0 OUT", not Bye',

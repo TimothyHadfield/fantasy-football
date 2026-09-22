@@ -15,7 +15,8 @@
 //       Merrick Nolan 8                                 -> TE1, the only rated one
 //
 //   WR  Ivor Jessop  0 in week 5 -- ESPN's own answer for a bye -- and 6
-//       otherwise, so his Avg over 4-6 is 4.0 and not 6.0.
+//       otherwise, so his Avg over 4-6 is 6.0: a bye leaves the average (D7,
+//       2026-09-20 — only weeks projecting above zero count, as on Trade).
 //
 // The player ids start at 7100, well clear of the 5000-block wv-stub-espn.mjs
 // hands out as free agents, so "no free agent is in this table" is a real check
@@ -83,7 +84,7 @@ const BY_ID = new Map(ALL.map((p) => [p.playerId, p]));
 export function expectedAvg(playerId, weeks) {
   const p = BY_ID.get(playerId);
   if (!p) return null;
-  const real = weeks.map((w) => p.proj(w)).filter((v) => typeof v === 'number');
+  const real = weeks.map((w) => p.proj(w)).filter((v) => typeof v === 'number' && v > 0);
   return real.length ? real.reduce((a, b) => a + b, 0) / real.length : null;
 }
 

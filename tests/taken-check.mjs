@@ -679,8 +679,10 @@ async function check(scenario, boot) {
   // ---- the note -------------------------------------------------------------
   c.ok('the note says what Avg is and that it is ours',
     /Avg is the mean of the weeks shown and is ours, not ESPN’s/.test(note), note);
-  c.ok('the note says byes are counted and blank weeks left out',
-    /byes are counted as the zero ESPN returns, and weeks with no number at all are left out/.test(note),
+  // D7 (2026-09-20): only weeks projecting above zero count — a bye, a man
+  // ruled out and a blank week all leave the average, as on the Trade page.
+  c.ok('the note says byes, ruled-out weeks and blank weeks are all left out',
+    /only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are all left out/.test(note),
     note);
   c.ok('the note says what the rank means',
     /where he ranks on his own manager’s roster/.test(note) &&
@@ -797,7 +799,7 @@ async function check(scenario, boot) {
       const expect = season.expectedAvg(p.playerId, [4, 5, 6]);
       return expect === null ? row.avg !== null : !near(row.avg, expect);
     });
-    c.ok('the Avg is the mean over the weeks shown, byes counted, blanks left out',
+    c.ok('the Avg is the mean over the weeks shown that project above zero',
       wrongAvg.length === 0,
       wrongAvg.slice(0, 3).map((p) =>
         `${p.name} got ${(rows.find((r) => r.player === String(p.playerId)) || {}).avg} ` +
@@ -836,14 +838,14 @@ async function check(scenario, boot) {
       byName.get('Merrick Nolan') && byName.get('Merrick Nolan').pos === 'TE1',
       byName.get('Merrick Nolan') && byName.get('Merrick Nolan').pos);
 
-    // A bye is the zero ESPN returned, and the average counts it.
+    // A bye is the zero ESPN returned, and the average leaves it out (D7).
     const jessop = byName.get('Ivor Jessop');
     c.ok('a bye on a rostered man renders as Bye',
       jessop && jessop.week[1].text === 'Bye' && jessop.week[1].v === '0',
       jessop && JSON.stringify(jessop.week));
-    c.ok('and drags his average down, because the week counts',
-      jessop && near(jessop.avg, 4), jessop && jessop.avg);
-    c.ok('which is what makes him the WR2 and not the WR1',
+    c.ok('and does not drag his average down, because the week leaves it',
+      jessop && near(jessop.avg, 6), jessop && jessop.avg);
+    c.ok('he is still the WR2 behind a 14-a-week receiver',
       jessop && jessop.pos === 'WR2' && byName.get('Hale Innis').pos === 'WR1',
       jessop && jessop.pos);
 
