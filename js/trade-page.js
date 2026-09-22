@@ -1337,6 +1337,7 @@ function cardFor(p, ctx = null) {
     : `ESPN’s projection for ${weekRange(weeks)}`;
   const tail = startsPhrase(p);
   const bold = startsRun(p, weeks, ctx);
+  const meet = meetingWeeks(ctx);
 
   return {
     ident,
@@ -1367,8 +1368,51 @@ function cardFor(p, ctx = null) {
       // the edge of what the page has read.
       splitAfter: state.week,
       startsNote: bold.note,
+      // The weeks the deal's two squads play each other — an arrow on each.
+      vsWeeks: meet.weeks,
+      vsName: meet.name,
     }),
   };
+}
+
+/**
+ * THE WEEKS YOU PLAY HIM. Tim, 2026-09-21: "add a little arrow pointing to the
+ * week that the user is playing you in the preview … In a trade with nick … it
+ * will show an arrow on week 4 when I play him."
+ *
+ * Read off the league schedule (`state.league`, the same games the simulation
+ * plays), for the deal's two squads: its "you" (`sideOf(offer, 'mine')`, so a
+ * custom trade built from another squad asks about THAT squad) and its partner.
+ * Every man on the deal's card gets the same arrows — the game is between the
+ * squads, not about him. A combination with more than one manager has no single
+ * opponent, so it gets none; so does a card outside any deal.
+ */
+function meetingWeeks(ctx) {
+  const none = { weeks: [], name: '' };
+  if (!ctx || !state.league || !state.league.games) return none;
+  let a;
+  let b;
+  let name;
+  if (ctx.offer) {
+    const offer = ctx.offer;
+    if (!offer.partner) return none;
+    const me = sideOf(offer, 'mine');
+    if (!me || !me.team || me.team.id === offer.partner.id) return none;
+    [a, b, name] = [String(me.team.id), String(offer.partner.id), offer.partner.name];
+  } else if (ctx.pair) {
+    // The custom box before anything is ticked: two squads, no deal yet.
+    [a, b, name] = [String(ctx.pair.a), String(ctx.pair.b), ctx.pair.name];
+  } else {
+    return none;
+  }
+  const weeks = [...new Set(state.league.games
+    .filter((g) => {
+      const h = String(g.homeId);
+      const w = String(g.awayId);
+      return (h === a && w === b) || (h === b && w === a);
+    })
+    .map((g) => Number(g.week)))].sort((x, y) => x - y);
+  return { weeks, name: name || '' };
 }
 
 /**
@@ -5928,7 +5972,11 @@ function renderCustomPickers() {
   $('cuHeadB').textContent = b ? `${b.name} sends` : 'Sends';
 
   const scales = customPositionScales([state.custom.a, state.custom.b]);
-  const ctx = state.customOffer ? { offer: state.customOffer, side: 'mine' } : null;
+  // With nobody ticked there is no deal yet, but the two squads are chosen, so
+  // the cards can still mark the weeks they meet (`meetingWeeks`).
+  const ctx = state.customOffer
+    ? { offer: state.customOffer, side: 'mine' }
+    : (a && b ? { pair: { a: a.id, b: b.id, name: b.name } } : null);
   $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a', { scales, ctx });
   $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b', { scales, ctx });
   paintSuggestions();

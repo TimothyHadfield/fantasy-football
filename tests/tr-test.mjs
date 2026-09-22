@@ -700,6 +700,15 @@ function openCard(document, selector) {
       .map((th) => (text(th).match(/^\d+/) || [''])[0])
       .filter(Boolean),
     projs: [...el.querySelectorAll('.tc-run tbody td')].map(text),
+    // The manager of the row the card was opened in (the list can re-rank
+    // between reading it and opening a card, so the row itself is asked).
+    rowPartner: text((man.closest('tr') || man).querySelector('.mgr')),
+    // The weeks carrying the "you play him" arrow, and what it says aloud.
+    vs: [...el.querySelectorAll('.tc-run thead th')]
+      .filter((th) => th.querySelector('.tc-vs'))
+      .map((th) => Number((text(th).match(/^\d+/) || ['0'])[0])),
+    vsSpoken: [...el.querySelectorAll('.tc-run thead th .sr-only')].map(text)
+      .filter((t) => /you play/.test(t)),
     // THE THREE ROWS, KEPT APART. The card draws the weeks, then Proj, then
     // Act, and `projs` above flattens all of them — which is fine for counting
     // cells and useless for the one claim Tim made on 2026-09-19: "it shows the
@@ -2794,6 +2803,34 @@ if (!wk.boot) {
       /in the best lineup for .+ in \d+ of \d+ weeks read/.test(wk.card.heading),
       wk.card.heading);
   }
+  // THE ARROW ON THE WEEKS YOU PLAY HIM (Tim, 2026-09-21: "add a little arrow
+  // pointing to the week that the user is playing you in the preview"). The
+  // card was opened on the first man of a finder row, so the arrows must sit on
+  // exactly the weeks the demo schedule has your squad meeting that row's
+  // manager — re-derived here from js/demo-rosters.js, not read off the page.
+  if (wk.card) {
+    const { generateDemoSchedule } = await import(moduleUrl('js/demo-rosters.js'));
+    const sched = generateDemoSchedule();
+    const partnerName = wk.card.rowPartner;
+    const partner = sched.teams.find((t) => t.name === partnerName);
+    const me = String(wk.myTeamId);
+    const want = partner
+      ? [...new Set(sched.games.filter((g) =>
+        (String(g.homeId) === me && String(g.awayId) === String(partner.id)) ||
+        (String(g.awayId) === me && String(g.homeId) === String(partner.id)))
+        .map((g) => g.week))].sort((a, b) => a - b)
+      : [];
+    ok('the fixture really has you meeting the top offer’s manager, or this proves nothing',
+      want.length > 0, `${partnerName} vs team ${me}`);
+    ok('the card marks exactly the weeks you play that manager',
+      JSON.stringify(wk.card.vs) === JSON.stringify(want),
+      `card ${JSON.stringify(wk.card.vs)} vs schedule ${JSON.stringify(want)} (${partnerName})`);
+    ok('and says so in words, naming him, for a screen reader',
+      wk.card.vsSpoken.length === want.length &&
+      wk.card.vsSpoken.every((t) => t.includes(partnerName)), JSON.stringify(wk.card.vsSpoken));
+  }
+  ok('a spare chip is about no deal, so it carries no arrow',
+    wk.spareCard && wk.spareCard.vs.length === 0, JSON.stringify(wk.spareCard && wk.spareCard.vs));
   ok('a spare chip opens the same card', wk.spareCard && wk.spareCard.hidden === false,
     JSON.stringify(wk.spareCard));
 

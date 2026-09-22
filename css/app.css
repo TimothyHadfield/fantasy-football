@@ -600,6 +600,15 @@ th.grouped, td.grouped { border-left: 1px solid var(--line-2); }
  * the file) and the card's `.tc-run .now` edge (page styles, same weight). */
 th.po-start, td.po-start,
 .tc-run th.po-start, .tc-run td.po-start { border-left: 2px solid var(--dim); }
+/* The week you play the other manager in the deal (Tim, 2026-09-21): an
+ * arrow stacked under the week number, like PO, so the column keeps its width. */
+.tc-run .tc-vs {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+}
 .po-tag, .tc-run .tc-po {
   display: block;
   font-size: 8.5px;

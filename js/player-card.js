@@ -508,6 +508,13 @@ export function weekRun({
   starts = null,
   splitAfter = null,
   startsNote = '',
+  // THE WEEKS YOU MEET HIM (Tim, 2026-09-21: "add a little arrow pointing to
+  // the week that the user is playing you in the preview"). Inside a deal the
+  // caller passes the weeks the deal's two squads play each other, and the
+  // manager's name; each such week gets an arrow under its number. Empty means
+  // no arrow anywhere — a card that is not about a deal is about nobody.
+  vsWeeks = [],
+  vsName = '',
   // DEFAULT ON, and it is a judgement call rather than an oversight.
   //
   // Tim asked for the scale "across the whole cite … trade views, 14 week
@@ -543,6 +550,7 @@ export function weekRun({
   // week in this run carries it — whichever line of the wrapped chart it lands
   // on — and every playoff week says so in words for a screen reader.
   const po = new Set((playoffWeeks || []).map(Number));
+  const vs = new Set((vsWeeks || []).map(Number));
   const poFirst = weeks.find((w) => po.has(Number(w)));
 
   // THE LINE UNDER WHAT HAS ALREADY HAPPENED, drawn the same way for the same
@@ -588,6 +596,7 @@ export function weekRun({
       now: week === currentWeek,
       po: po.has(Number(week)),
       poStart: poFirst !== undefined && week === poFirst,
+      vs: vs.has(Number(week)),
       // The caller's opinion, kept exactly as given …
       start,
       past,
@@ -635,8 +644,9 @@ export function weekRun({
   if (told && cols.some((c) => c.start !== null)) notes.push(startsLine(startsNote, cols));
   if (splitFirst !== undefined) notes.push(splitLine(splitFirst));
   if (scale) notes.push(heatLine(scale));
+  if (cols.some((c) => c.vs)) notes.push(vsLine(vsName, cols));
 
-  return { heading, pending: '', cols, legend, notes, scale };
+  return { heading, pending: '', cols, legend, notes, scale, vsName };
 }
 
 /**
@@ -656,6 +666,14 @@ function startsLine(note, cols) {
     : `${n} of the weeks still to come`;
   return `Bold, underlined week numbers are ${what} — ${count}. ` +
     'A week that has already been played is never bold: who started it is a fact, not a forecast.';
+}
+
+/** The arrow, said in words: which weeks it sits under and whose game that is. */
+function vsLine(name, cols) {
+  const ws = cols.filter((c) => c.vs).map((c) => c.week);
+  const who = name || 'the other manager in this deal';
+  return `The ↑ under week${ws.length === 1 ? '' : 's'} ${ws.join(', ')} marks ` +
+    `${ws.length === 1 ? 'the week' : 'the weeks'} you play ${who}.`;
 }
 
 /** The heavy divider, said in words, because a line on its own is not a sentence. */
@@ -876,7 +894,7 @@ function chartLines(cols, cap) {
  * empty cell in the Act row, which is the one row where empty already means
  * something.
  */
-function lineHtml(cols) {
+function lineHtml(cols, vsName = '') {
   // The heavy line before the first playoff week is a class on that column in
   // all three rows; its "PO" label stacks under the number like `.tc-mk`, so the
   // column keeps its width and `perLine` stays right.
@@ -906,9 +924,13 @@ function lineHtml(cols) {
     if (c.start === false && !c.past) return '<span class="sr-only"> (not in your lineup)</span>';
     return '';
   };
+  // The arrow stacks under the number like PO does, so the column keeps its
+  // width; a screen reader is told the matchup in words instead.
   const weeks = cols
     .map((c) => `<th${extra(c, c.bold ? 'wk-start' : '')} scope="col">${c.week}` +
       (c.poStart ? '<span class="tc-po" aria-hidden="true">PO</span>' : '') +
+      (c.vs ? '<span class="tc-vs" aria-hidden="true">↑</span>' : '') +
+      (c.vs ? `<span class="sr-only"> (you play ${esc(vsName || 'him')})</span>` : '') +
       (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
       (c.splitStart ? '<span class="sr-only"> (first week still to come)</span>' : '') +
       spoken(c) +
@@ -973,7 +995,7 @@ function cardHtml({ ident, run, href }, sheet) {
   }
 
   const lines = chartLines(run.cols, perLine(sheet))
-    .map(lineHtml).join('');
+    .map((l) => lineHtml(l, run.vsName)).join('');
 
   // A BLANK IN THE ACT ROW IS A CLAIM, so it is stated rather than left to be
   // guessed at. It is separate from the legend because the legend explains
