@@ -24,6 +24,7 @@
 //   8. the limit knob                              — and what it costs
 //   9. the refusals                                — nothing ticked, bad input
 //  10. the cost                                    — measured on the demo pool
+//  11. the goal                                    — weighted weeks reorder it
 
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
@@ -711,6 +712,101 @@ const tight = (extra = {}) => suggestAdditions({
   eq(small.considered, 4, 'the limit binds on a real roster');
   eq(small.limited, true, 'and says so');
   console.log(`  at limit 4: ${smallMs}ms`);
+}
+
+// ===========================================================================
+// 11. THE GOAL (2026-09-21) — even in the currency the finder uses
+// ===========================================================================
+//
+// Four weeks, the last a playoff week the title goal weighs at 2.8 (the other
+// three at 0.4 — mean 1, the way `weekWeights` normalises). Same QB + RB slots.
+//
+//   G   G-qb QB 10   G-rb RB 20   G-oct RB 8,8,8,0   G-fin RB 0,0,0,10
+//   H   H-qb QB 18   H-rb RB 2    H-junk RB 0.5
+//
+// G's spare backs never start for G (G-rb is 20), so each is worth exactly
+// what he adds to H's RB slot over H-rb's 2:
+//
+//   THE DEAL: G sends G-qb, H sends H-qb.  G +8 a week, H −8.
+//     points gap 32 − (−32) = 64          weighted gap the same (8 × Σw = 32)
+//   + G-oct: H gains 6,6,6,0  → points +18, weighted 0.4 × 18 = 7.2
+//   + G-fin: H gains 0,0,0,8  → points  +8, weighted 2.8 × 8  = 22.4
+//
+// On POINTS G-oct closes more (gap 46 vs 56). On the GOAL G-fin does (41.6 vs
+// 56.8). So with the weights G-fin must come first, and without them G-oct.
+
+{
+  const WEEKS4 = [1, 2, 3, 4];
+  const W4 = [0.4, 0.4, 0.4, 2.8];
+  const manBy = (name, position, byWeek) => {
+    const playerId = nextId++;
+    WEEKS4.forEach((w, i) => WEEKLY.set(key(playerId, w), byWeek[i]));
+    const mean = byWeek.reduce((a, x) => a + x, 0) / byWeek.length;
+    return { playerId, name, position, lineupSlotId: 20, seasonProjected: mean * 17, projected: mean };
+  };
+  const gQb = manBy('G-qb', 'QB', [10, 10, 10, 10]);
+  const gRb = manBy('G-rb', 'RB', [20, 20, 20, 20]);
+  const gOct = manBy('G-oct', 'RB', [8, 8, 8, 0]);
+  const gFin = manBy('G-fin', 'RB', [0, 0, 0, 10]);
+  const hQb = manBy('H-qb', 'QB', [18, 18, 18, 18]);
+  const hRb = manBy('H-rb', 'RB', [2, 2, 2, 2]);
+  const hJunk = manBy('H-junk', 'RB', [0.5, 0.5, 0.5, 0.5]);
+  const SQUAD_G = [gQb, gRb, gOct, gFin];
+  const SQUAD_H = [hQb, hRb, hJunk];
+  const run = (extra = {}) => suggestAdditions({
+    rosterA: SQUAD_G, rosterB: SQUAD_H, sendA: [gQb], sendB: [hQb],
+    slots: QB_RB, weeks: WEEKS4, projFor, side: 'both', ...extra,
+  });
+
+  const plain = run();
+  eq(plain.basis, 'points', 'with no weights the basis is points, and says so');
+  eq(plain.base.gap, 64, 'the deal: G +32, H −32, a points gap of 64');
+  eq(at(plain.candidates, 0).name, 'G-oct', 'ON POINTS: G-oct closes the gap most, so he is first');
+  ok('and G-fin below him', named(plain.candidates, 'G-fin').rank > named(plain.candidates, 'G-oct').rank,
+    plain.candidates.map((c) => c.name).join(','));
+  eq(named(plain.candidates, 'G-oct').gapAbs, 46, 'G-oct leaves a points gap of 46');
+  eq(named(plain.candidates, 'G-fin').gapAbs, 56, 'G-fin leaves 56');
+
+  const goal = run({ weightsA: W4, weightsB: W4 });
+  eq(goal.basis, 'goal', 'with weights the basis is the goal, and says so');
+  eq(goal.base.gap, 64, 'the deal itself is uniform, so its weighted gap is also 64');
+  eq(at(goal.candidates, 0).name, 'G-fin',
+    'ON THE GOAL: G-fin — the playoff-week man — is ranked FIRST');
+  ok('and the October man below him', named(goal.candidates, 'G-oct').rank > named(goal.candidates, 'G-fin').rank,
+    goal.candidates.map((c) => c.name).join(','));
+  close(named(goal.candidates, 'G-fin').gapAbs, 41.6, 0.05, 'G-fin leaves a weighted gap of 41.6');
+  close(named(goal.candidates, 'G-oct').gapAbs, 56.8, 0.05, 'G-oct leaves 56.8');
+  close(named(goal.candidates, 'G-fin').goalB, -9.6, 0.05, 'H’s weighted gain with G-fin: −32 + 22.4');
+  // The printed numbers stay points, whatever the basis.
+  eq(named(goal.candidates, 'G-fin').deltaB, -24, 'the row still prints H’s POINTS (−32 + 8)');
+  // A FLEECE IS STILL ALLOWED: H ends up negative with either man, and both are
+  // returned, labelled.
+  ok('a fleece is still returned and labelled under the goal',
+    named(goal.candidates, 'G-fin').fleece === true && named(goal.candidates, 'G-oct').fleece === true,
+    goal.candidates.map((c) => `${c.name}:${c.fleece}`).join(','));
+
+  // ONE SIDE'S WEIGHTS ONLY: the other side counts its weeks at 1 (its points).
+  // H is the only side the spares move, so weighting H alone flips the order.
+  const hOnly = run({ weightsB: W4 });
+  eq(hOnly.basis, 'goal', 'one side weighted is still the goal basis');
+  eq((hOnly.weighted || {}).a, false, 'and it says which side was');
+  eq(at(hOnly.candidates, 0).name, 'G-fin', 'H weighted alone: the playoff man first');
+  // Weights that do not fit the weeks are no weights at all.
+  eq(run({ weightsA: [1, 1], weightsB: [1] }).basis, 'points', 'misfit weights fall back to points');
+
+  // THE TIE-BREAK FOLLOWS THE FINDER: A's gain × P(yes). Two men who land the
+  // deal equally even — twins, one of whom H is likelier to take — must be
+  // ordered by the expected value, not by id.
+  const twin1 = manBy('G-twin1', 'RB', [0, 0, 0, 10]);
+  const twin2 = manBy('G-twin2', 'RB', [0, 0, 0, 10]);
+  const twins = suggestAdditions({
+    rosterA: [gQb, gRb, twin1, twin2], rosterB: SQUAD_H, sendA: [gQb], sendB: [hQb],
+    slots: QB_RB, weeks: WEEKS4, projFor, side: 'both', weightsA: W4, weightsB: W4,
+    accept: ({ sendA }) => (sendA.some((p) => p.name === 'G-twin2') ? 0.9 : 0.3),
+  });
+  eq(at(twins.candidates, 0).name, 'G-twin2', 'equal evenness: the likelier yes ranks first');
+  close(at(twins.candidates, 0).expected, 28.8, 0.05, 'expected = G’s weighted gain 32 × 0.9');
+  eq(at(twins.candidates, 0).accept, 0.9, 'and the chance rides on the candidate');
 }
 
 // ---------------------------------------------------------------------------

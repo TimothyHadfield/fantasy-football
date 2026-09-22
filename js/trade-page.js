@@ -5484,7 +5484,42 @@ const suggestState = {
   reason: '',    // the module's own sentence when it can say nothing
   capped: false,
   ms: null,
+  // WHAT "EVENER" WAS MEASURED IN (2026-09-21): 'goal' = each side's
+  // goal-weighted gain, the finder's own currency; 'points' = the raw points,
+  // with `why` saying why the goal was not used.
+  basis: 'points',
+  why: null,
 };
+
+/**
+ * THE GOAL, FOR THE SUGGESTIONS (2026-09-21) — the same weights the finder
+ * keeps its deals by (`goalWeightsFor`, js/trade-odds.js `weekWeights`, for
+ * "you", the deal's A side, which is the top picker's squad and so the
+ * finder's own cached set), applied to BOTH sides' weekly gains, plus the
+ * same yes-chance (`acceptFor`). Null weights until the goal context is ready
+ * (the played weeks are not all in), and then the suggestions work on points
+ * exactly as they did before, and say so.
+ *
+ * ONE SET, NOT ONE PER SQUAD, and measured: the other squad's own weights are
+ * a fresh `weekWeights` run — MEASURED 3.3s on the demo league under node on
+ * the first tick for a new partner, 5.7s after a goal switch — and it blocks
+ * the tick that asked for it. The finder's set is already paid for.
+ */
+function suggestGoal() {
+  if (basis() !== 'weeks') return { key: 'no-weeks', ready: false, why: 'weeks' };
+  const ctx = goalContext();
+  if (!ctx || !ctx.inputs || !ctx.base) return { key: 'no-goal', ready: false, why: 'waiting' };
+  const span = weeklySpan();
+  const W = goalWeightsFor(ctx, state.custom.a, span);
+  return {
+    key: ctx.key,
+    ready: true,
+    why: W ? null : 'settled',
+    weightsA: W ? W.weights : null,
+    weightsB: W ? W.weights : null,
+    accept: ({ sendA, sendB, forB }) => acceptFor(forB.delta, sendA, sendB, span),
+  };
+}
 
 /** Everything a suggestion depends on. A change in any of it invalidates them. */
 function customSignature() {
@@ -5544,7 +5579,11 @@ function suggestBadgeHtml(sugg, p) {
  * tick handler follows, for the same reason.
  */
 function ensureSuggestions() {
-  const key = customSignature();
+  const deal = customSignature();
+  // THE GOAL IS PART OF THE KEY: the same deal re-ranks when the goal changes,
+  // and again when the goal context lands after the played weeks are read.
+  const goal = deal === null ? null : suggestGoal();
+  const key = deal === null ? null : `${deal}|${state.goal}|${goal.key}`;
   if (key === suggestState.key) return;
   suggestState.key = key;
   suggestState.list = [];
@@ -5552,6 +5591,8 @@ function ensureSuggestions() {
   suggestState.reason = '';
   suggestState.capped = false;
   suggestState.ms = null;
+  suggestState.basis = 'points';
+  suggestState.why = goal ? goal.why : null;
   if (key === null) return;
 
   const teamA = teamById(state.custom.a);
@@ -5562,6 +5603,12 @@ function ensureSuggestions() {
   let res = null;
   try {
     res = suggestAdditions({
+      // THE GOAL'S WEEK WEIGHTS, the finder's own, on both sides — its currency —
+      // and the finder's yes-chance for the tie-break. Absent (null) until the
+      // goal is ready, which is the points pass this panel always ran.
+      weightsA: goal.ready ? goal.weightsA : null,
+      weightsB: goal.ready ? goal.weightsB : null,
+      accept: goal.ready ? goal.accept : null,
       rosterA: teamA.players || [],
       rosterB: teamB.players || [],
       // THE RESOLVED MEN, not the bare ids this page keeps. `state.custom.sendA`
@@ -5602,6 +5649,7 @@ function ensureSuggestions() {
   }
   suggestState.base = res.base || null;
   suggestState.capped = !!res.limited;
+  suggestState.basis = res.basis === 'goal' ? 'goal' : 'points';
   suggestState.list = (res.candidates || []).map((c, i) => ({
     playerId: c.playerId,
     side: c.side || null,
@@ -5640,9 +5688,17 @@ function suggestLineHtml() {
   // is in "How a custom trade is priced" below. `node tests/text-audit.mjs
   // trade.html` is what keeps this honest: the long version took this panel to
   // 192 visible words on its own.
+  // THE BASIS, in one clause (rule 7): the goal's weighted gains, or points
+  // and why. The method is behind the toggle.
+  const basisBit = suggestState.basis === 'goal'
+    ? `brings the two sides’ <strong>goal-weighted</strong> gains closer together, evenest first. `
+    : `brings the two sides’ gains closer together, evenest first — on points, ` +
+      (suggestState.why === 'settled'
+        ? `because your ${esc(goalOf(state.goal).chance)} barely moves. `
+        : `until the goal is ready. `);
   return (
     `<strong>${plural(suggestState.list.length, 'suggested player')}</strong> — a row marked ` +
-    `“also send” brings the two sides’ gains closer together, evenest first. ` +
+    `“also send” ` + basisBit +
     `<strong>Nobody is added for you.</strong>` +
     (suggestState.capped ? ` Capped at ${SUGGEST_LIMIT} men.` : '') +
     (suggestState.ms !== null ? ` <span class="muted">(priced in ${suggestState.ms}ms)</span>` : '')
@@ -6194,6 +6250,12 @@ function renderCustomNote() {
     `Each marked row prints what the deal would then be worth to each side, per week, so a ` +
     `deliberately lopsided offer is something you can see rather than something the page refuses ` +
     `to draw: a row that says <em>he goes negative</em> is exactly that, labelled and left in. ` +
+    `<strong>“Closer together” follows the goal</strong> once the season simulation is ready: ` +
+    `each side’s gain is weighted week by week with the same weights the finder keeps its offers ` +
+    `by (how far ten extra points that week move your ${esc(goalOf(state.goal).chance)}, ` +
+    `averaged to 1), and two men who land it equally even are ordered by your weighted gain × the ` +
+    `chance he says yes, as the finder orders its offers. Until then, or when the goal barely ` +
+    `moves, it is the points, and the line above says so. The figures on each row stay points a week. ` +
     `<strong>Nobody is ever added for you</strong> — these are marks on rows you can tick. The ` +
     `pool that gets priced is capped at ${SUGGEST_LIMIT} men and the line above says when the cap ` +
     `was reached, because a search that silently stops looking is answering a different question.` +

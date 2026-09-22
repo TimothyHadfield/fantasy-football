@@ -1961,6 +1961,39 @@ SCENARIOS.goalTitle = async function goalTitle() {
   return { errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, last, stored };
 };
 
+/**
+ * THE SUGGESTIONS FOLLOW THE GOAL (2026-09-21). A custom deal under "Win it
+ * all": once the simulation is ready the "also send" marks are ranked on each
+ * side's goal-weighted gain, and the key under the lists says which basis it
+ * used. The ranking arithmetic is test-trade-suggest.mjs §11's; this is the
+ * page's half — the weights reach the module, and the basis is printed.
+ */
+SCENARIOS.customGoal = async function customGoal() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  // Not the quarterbacks (row 0): a QB-for-QB deal prices at nearly nothing.
+  const pick = (id) => { const b = boxes(id); return b.length > 1 ? b[1] : b[0]; };
+  const a = pick('cuListA');
+  a.checked = true;
+  fire(a, 'change');
+  const b = pick('cuListB');
+  b.checked = true;
+  fire(b, 'change');
+  await settle(1500);
+  const marks = () => readCustomList(document, 'cuListA').concat(readCustomList(document, 'cuListB'))
+    .filter((r) => r.sug).map((r) => r.sugWord);
+  const title = { line: text($('cuSuggest')), marks: marks(), note: text($('cuNote')) };
+  document.querySelector('#goalToggle button[data-goal="last"]')
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settleGoal(document);
+  await settle(1500);
+  const last = { line: text($('cuSuggest')), marks: marks() };
+  return { errors, title, last };
+};
+
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
 SCENARIOS.goalLive = async function goalLive() {
   const seed = {
@@ -4893,6 +4926,27 @@ if (!gt.boot) {
   ok('and the method says why the regular season alone is priced',
     /regular-season<\/strong>|regular-season table/.test(L.note) || /bottom of the regular-season/.test(L.note),
     L.note.slice(0, 500));
+}
+
+// ---- THE CUSTOM BUILDER'S SUGGESTIONS FOLLOW THE GOAL (2026-09-21) ---------
+const cg = run('customGoal', { env: { TR_GOAL: 'title' } });
+ok('the custom-goal scenario boots', !cg.boot, cg.boot);
+if (!cg.boot) {
+  ok('no console errors in it', cg.errors.length === 0, cg.errors.slice(0, 2).join(' | '));
+  // NOT CONDITIONAL: the demo deal reliably has suggestions (the `custom`
+  // scenario asserts the same), so an empty list here is a failure.
+  ok('under the title goal the deal has suggestions', cg.title.marks.length > 0, cg.title.line.slice(0, 200));
+  ok('and they are ranked from #1', cg.title.marks.some((w) => /^#1 /.test(w)), JSON.stringify(cg.title.marks));
+  ok('once the goal is ready the key says they are measured on the goal-weighted gains',
+    /goal-weighted/.test(cg.title.line) && !/on points/.test(cg.title.line), cg.title.line.slice(0, 300));
+  ok('and the method behind the toggle says the suggestions follow the goal',
+    /Closer together” follows the goal/.test(cg.title.note), cg.title.note.slice(0, 200));
+  ok('after switching the goal the key still names its basis (rule 7)',
+    /goal-weighted/.test(cg.last.line) || /on points, because your chance of finishing last barely moves/.test(cg.last.line),
+    cg.last.line.slice(0, 300));
+  const ms = (cg.title.line.match(/priced in (\d+)ms/) || [])[1];
+  console.log(`customGoal: suggestions with the goal weights priced in ${ms}ms; ` +
+    `title ${cg.title.marks.length} marked, last ${cg.last.marks.length}; last line: ${cg.last.line.slice(0, 160)}`);
 }
 
 // 11.5 days out: "12 days left", and not yet red.
