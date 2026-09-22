@@ -20,15 +20,20 @@
 //   8. the playoff weeks           — they move the title and NEVER last place
 //   9. scoring and ranking         — value = gain × yes, and the tie-breaks
 //  10. the seam                    — theirByWeek is the partner's real change
+//  11. the goal weights            — what a point is worth, week by week
+//  12. the goal chooses candidates — deals that lose points and win the goal; 2-for-2; the combo
+//  13. the emptied roster spot     — already credited at the floor when the wire is read
+//  14. the trade deadline          — espn.parseTrades
 
 import * as capture from '../js/capture.js';
 import {
   GOALS, goalOf, goalChance, goalGain, acceptChance, espnLookPerWeek, offerDeltas,
   shiftSeason, simulateWith, scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE,
+  weekWeights, WEIGHT_FLOOR,
 } from '../js/trade-odds.js';
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
-import { findTrades, priceTradeAcrossWeeks, slotsForLeague } from '../js/trade.js';
+import { findTrades, priceTradeAcrossWeeks, slotsForLeague, bestCombo } from '../js/trade.js';
 
 let pass = 0;
 const fails = [];
@@ -295,6 +300,160 @@ ok('it never goes up as the deal gets worse for him',
   ok('and it adds up to He gains',
     res.offers.every((o) => Math.abs(o.theirByWeek.reduce((a, w) => a + w.delta, 0) - o.theirGain) < 0.25),
     res.offers.map((o) => `${o.theirByWeek.reduce((a, w) => a + w.delta, 0).toFixed(1)}/${o.theirGain}`).slice(0, 5).join(' '));
+}
+
+// ------------------------------------------------- 11. the goal weights
+//
+// Ten points in one week, played out, divided by ten — and normalised so an
+// average week counts its points once. The final can be worth a lot to the
+// title and must be worth next to nothing to last place.
+
+{
+  const W = weekWeights(inputs, 1, [1, 2, 3], 'title', { runs: RUNS, seed: 7 });
+  ok('the title goal weighs every week', !!W && W.weights.length === 3, JSON.stringify(W && W.weights));
+  near(W.weights.reduce((a, x) => a + x, 0) / 3, 1, 1e-9, 'normalised: the weights average 1');
+  ok('every weight is positive — more points never counts against you', W.weights.every((x) => x > 0));
+  const L = weekWeights(inputs, 1, [1, 2, 3], 'last', { runs: RUNS, seed: 7 });
+  ok('under "last", the final carries only the floor weight — it cannot move last place',
+    !!L && Math.abs(L.raw[2]) < 1e-12 &&
+      Math.abs(L.weights[2] - WEIGHT_FLOOR * Math.max(...L.weights)) < 1e-9,
+    JSON.stringify(L && { raw: L.raw, w: L.weights }));
+  ok('while the regular weeks carry real weight there', L.weights[0] > L.weights[2] * 5 && L.weights[1] > L.weights[2] * 5,
+    JSON.stringify(L && L.weights));
+
+  // A SETTLED GOAL HAS NO WEIGHTS. Team 1 made so strong it cannot finish
+  // last: ten more points anywhere move nothing, and the finder must then work
+  // on points exactly as before rather than on weights made of noise.
+  const walkover = shiftSeason(inputs, d([[1, [[1, 500], [2, 500], [3, 500]]]]));
+  ok('a goal that cannot move gives no weights at all',
+    weekWeights(walkover, 1, [1, 2], 'last', { runs: RUNS, seed: 7 }) === null);
+}
+
+// ------------------------------------------ 12. the goal chooses the candidates
+//
+// On the demo league, the finder given the title weights must find deals the
+// points finder never could: ones that LOSE points and still gain weighted
+// points — the October-for-the-final trade. And with no weights it must be
+// exactly the finder it always was.
+
+{
+  const d0 = await import('../js/demo.js');
+  const weeks = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+  const idx = new Map(weeks.map((w) => {
+    const m = new Map();
+    for (const t of generateDemoWeekRosters(w).teams) for (const p of t.players) m.set(p.playerId, p.projected);
+    return [w, m];
+  }));
+  const projFor = (p, w) => { const v = idx.get(w)?.get(p.playerId); return typeof v === 'number' ? v : null; };
+  const now = generateDemoWeekRosters(6);
+  const slots = slotsForLeague(slotCountsFromLineups(now.teams));
+  // Heavy on the bracket, as the simulation measures a title chase: the three
+  // playoff weeks at four times a regular one, normalised.
+  const raw = weeks.map((w) => (w >= 14 ? 4 : 1));
+  const mean = raw.reduce((a, x) => a + x, 0) / raw.length;
+  const weights = raw.map((x) => x / mean);
+  const plain = findTrades({ teams: now.teams, myTeamId: 9, slots, weeks, projFor, limit: 400 });
+  const goal = findTrades({ teams: now.teams, myTeamId: 9, slots, weeks, projFor, weights, theirMinPerWeek: -2, limit: 400 });
+  ok('with weights, every offer carries its weighted gain and it is positive',
+    goal.offers.length > 0 && goal.offers.every((o) => Number.isFinite(o.goalPoints) && o.goalPoints >= 0.1 * weeks.length),
+    goal.offers.slice(0, 3).map((o) => o.goalPoints).join(','));
+  ok('and it is Σ weight × that week’s change, exactly',
+    goal.offers.every((o) => Math.abs(o.goalPoints - o.byWeek.reduce((a, x, i) => a + weights[i] * x.delta, 0)) < 0.2),
+    goal.offers.slice(0, 3).map((o) => `${o.goalPoints} vs ${o.byWeek.reduce((a, x, i) => a + weights[i] * x.delta, 0).toFixed(2)}`).join(' | '));
+  ok('it finds deals that LOSE points and still help the goal — invisible to the points finder',
+    goal.offers.some((o) => o.myGain < 0) && plain.offers.every((o) => o.myGain > 0),
+    `${goal.offers.filter((o) => o.myGain < 0).length} such offers`);
+  ok('and deals where HE loses a little, down to −2 a week — never more',
+    goal.offers.some((o) => o.theirGain < 0) &&
+      goal.offers.every((o) => o.theirGain >= -2 * weeks.length - 0.05),
+    goal.offers.map((o) => o.theirGain).sort((a, b) => a - b).slice(0, 3).join(','));
+  ok('with no weights, no offer carries a weighted gain — the old finder, untouched',
+    plain.offers.every((o) => o.goalPoints === null && o.theirGain >= 0.1 * weeks.length));
+  ok('2-for-2 is searched now, as its own shape',
+    plain.offers.some((o) => o.kind === 'two' && o.send.length === 2 && o.receive.length === 2),
+    [...new Set(plain.offers.map((o) => o.kind))].join(','));
+  const twoOnly = findTrades({ teams: now.teams, myTeamId: 9, slots, weeks, projFor, kinds: ['two'] });
+  ok('and the 2 for 2 filter returns only 2-for-2s', twoOnly.offers.length > 0 &&
+    twoOnly.offers.every((o) => o.send.length === 2 && o.receive.length === 2));
+  ok('a 1-for-1 is never labelled 2-for-2', plain.offers.filter((o) => o.kind === 'even')
+    .every((o) => o.send.length === 1 && o.receive.length === 1));
+
+  // THE COMBO TAKES THE SAME TOLERANCE, or it empties. The finder above lets in
+  // deals where he loses up to 2 a week; a combo that still refused any partner
+  // loss rejected every packing built from them and printed "make none" under
+  // a list of forty (2026-09-21, found by tr-test's pop-up scenario).
+  const me = now.teams.find((t) => t.id === 9);
+  const combo = bestCombo(goal.offers, {
+    players: me.players, slots, weeks, projFor, teams: now.teams, weights,
+    partnerMin: -2 * weeks.length,
+  });
+  ok('Best combo, given the finder’s tolerance, finds a real packing', combo.count > 0, JSON.stringify({ count: combo.count }));
+  ok('and no partner in it loses more than that tolerance',
+    (combo.best.partners || []).every((p) => p.delta >= -2 * weeks.length - 0.05),
+    JSON.stringify((combo.best.partners || []).map((p) => p.delta)));
+  ok('and it is chosen by the weighted gain, never worse than the best single offer’s',
+    combo.best.score + 0.6 >= Math.max(...goal.offers.filter((o) => o.theirGain >= -2 * weeks.length).map((o) => o.goalPoints)),
+    `${combo.best.score} vs ${Math.max(...goal.offers.map((o) => o.goalPoints))}`);
+  void d0;
+}
+
+// ------------------------------------------- 13. the emptied roster spot
+//
+// THE SPOT A 2-FOR-1 LEAVES IS ALREADY CREDITED WHEN THE WIRE IS READ, and this
+// is the proof rather than the claim. A squad sends away its only kicker; with
+// a floor read, its empty kicker slot is assessed at the floor — the stream it
+// would pick up — every week, and without one at nothing. So there is no
+// separate "value of the free spot" to add: the floor IS that value, applied to
+// exactly the slots the shorter roster can no longer fill.
+
+{
+  const weeks = [7, 8, 9];
+  const idx = new Map(weeks.map((w) => {
+    const m = new Map();
+    for (const t of generateDemoWeekRosters(w).teams) for (const p of t.players) m.set(p.playerId, p.projected);
+    return [w, m];
+  }));
+  const projFor = (p, w) => { const v = idx.get(w)?.get(p.playerId); return typeof v === 'number' ? v : null; };
+  const now = generateDemoWeekRosters(6);
+  const slots = slotsForLeague(slotCountsFromLineups(now.teams));
+  const team = now.teams.find((t) => t.players.filter((p) => p.position === 'K').length === 1);
+  const other = now.teams.find((t) => t !== team);
+  ok('a squad with exactly one kicker exists to test on', !!team);
+  if (team) {
+    const k = team.players.find((p) => p.position === 'K');
+    const spare = team.players.filter((p) => !p.started && p.position !== 'K')[0];
+    const back = other.players.find((p) => p.position === 'RB');
+    const floors = new Map([['K', { value: 7, position: 'K', rank: 3, want: 3, pool: 20 }]]);
+    const price = (fl) => priceTradeAcrossWeeks({
+      players: team.players, send: [k, spare], receive: [back], slots, weeks, projFor, floors: fl,
+    });
+    const without = price(null);
+    const withFloor = price(floors);
+    ok('sending the only kicker, without a wire read the K slot is worth nothing',
+      without.after.byWeek.every((w, i) => withFloor.after.byWeek[i].total - w.total >= 7 - 0.051),
+      JSON.stringify(without.after.byWeek.map((w, i) => (withFloor.after.byWeek[i].total - w.total).toFixed(1))));
+    ok('with one it is the floor, every week — the stream the empty spot buys',
+      withFloor.after.byWeek.every((w) => (w.cells || []).some((c) => c && c.assumed)),
+      JSON.stringify(withFloor.after.byWeek.map((w) => (w.cells || []).filter((c) => c && c.assumed).length)));
+  }
+}
+
+// ------------------------------------------------ 14. the trade deadline
+//
+// `espn.parseTrades` — the league's own deadline and review window, off the
+// `mSettings` read. Absent means "ESPN did not say", never a number.
+{
+  const { parseTrades, parseLeague } = await import('../js/espn.js');
+  const got = parseTrades({ tradeSettings: { deadlineDate: 1763496000000, revisionHours: 24 } });
+  ok('the deadline is read as epoch milliseconds', got.deadline === 1763496000000, JSON.stringify(got));
+  ok('and the review window in hours', got.reviewHours === 24);
+  const none = parseTrades({});
+  ok('with no tradeSettings both are null — never a guessed date', none.deadline === null && none.reviewHours === null);
+  ok('a zero or junk deadline is null too', parseTrades({ tradeSettings: { deadlineDate: 0 } }).deadline === null &&
+    parseTrades({ tradeSettings: { deadlineDate: 'soon' } }).deadline === null);
+  const league = parseLeague({ settings: { tradeSettings: { deadlineDate: 1763496000000 } }, teams: [] });
+  ok('and parseLeague carries it through as `trades`', league.trades && league.trades.deadline === 1763496000000,
+    JSON.stringify(league.trades));
 }
 
 // ---------------------------------------------------------------------------

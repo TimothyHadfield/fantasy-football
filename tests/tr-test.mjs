@@ -163,6 +163,33 @@ async function boot(page = 'trade.html', search = '', seed = null, { wide = true
  */
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Wait until the Trade page has FINISHED, rather than for a guessed number of
+ * seconds (2026-09-21). Since the goal landed the page searches on points,
+ * re-searches on the goal's week weights once the simulation can be built,
+ * then plays every offer out — and a fixed wait long enough for the old page
+ * caught the new one between the two searches, reading a row that was about
+ * to be replaced. So: poll until the finder's line says how it was ranked and
+ * the combo is not still working, then a moment more for the last repaint.
+ */
+async function settleGoal(document, max = 45000) {
+  const t0 = Date.now();
+  await settle(1500);
+  const txt = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.textContent.replace(/\s+/g, ' ') : '';
+  };
+  while (Date.now() - t0 < max) {
+    const count = txt('tradeCount');
+    const done = /ranked by your|not ranked by your/.test(count) && !/playing each offer out/.test(count);
+    const empty = !document.querySelector('#tradeTable tbody tr') && !/Trying every swap/.test(txt('tradeEmpty')) &&
+      txt('tradeEmpty').length > 0;
+    if ((done || empty) && !/Trying every set/.test(txt('comboBody'))) break;
+    await settle(250);
+  }
+  await settle(400);
+}
+
 function fire(el, type = 'change') {
   const ev = new globalThis.Event(type, { bubbles: true });
   el.dispatchEvent(ev);
@@ -785,7 +812,7 @@ const SCENARIOS = {
     // The page prices itself on load; the suggestions and the inline breakdown
     // both want the weeks, so this waits for them exactly as the other weekly
     // scenarios do.
-    await settle(12000);
+    await settleGoal(document);
 
     // THERE IS NO A-SIDE PICKER ANY MORE (Tim, 2026-09-19). Both halves are
     // asserted: the select is gone from the document, and the label that
@@ -1014,7 +1041,7 @@ const SCENARIOS = {
     const out = { errors };
     const $ = (id) => document.getElementById(id);
     const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
-    await settle(12000);
+    await settleGoal(document);
 
     // Before a deal exists: the host is not in the document at all.
     out.hostBeforeTick = !!$('cuInline');
@@ -1057,10 +1084,16 @@ const SCENARIOS = {
   /** The page as it opens: demo data, both panels populated. */
   async fresh() {
     const { document, errors, fetchCalls } = await boot();
+    // SETTLED, since 2026-09-21: the page now searches on points, then again
+    // on the goal's week weights once the simulation can be built, then ranks
+    // — a table read mid-way is a list that is about to be replaced.
+    await settle(25000);
     return {
       errors, fetchCalls,
       depth: readDepth(document),
       trades: readTrades(document),
+      heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+      count: text(document.getElementById('tradeCount')),
       note: text(document.getElementById('depthNote')),
       tradeNote: text(document.getElementById('tradeNote')),
       empty: text(document.getElementById('tradeEmpty')),
@@ -1181,7 +1214,7 @@ const SCENARIOS = {
     const { document, errors, fetchCalls } = await boot();
     // Long enough for the auto-load AND the re-rank behind it: thirteen weeks
     // of lineup fills per offer is seconds, not milliseconds.
-    await settle(12000);
+    await settleGoal(document);
 
     const after = {
       cost: readCost(document),
@@ -1217,7 +1250,7 @@ const SCENARIOS = {
     // And back, so everything below reads the weekly page.
     measure.value = 'weeks';
     fire(measure);
-    await settle(12000);
+    await settleGoal(document);
     const before = scalar;
 
     // Click the first offer: the drill-down is the whole of ask 3.
@@ -1267,7 +1300,7 @@ const SCENARIOS = {
     // The page buys its own weeks now (2026-09-19) and re-ranks behind the
     // first paint, so this waits rather than pressing. The press is a RE-READ
     // and would only spend the same weeks again.
-    await settle(12000);
+    await settleGoal(document);
 
     // Nothing has been clicked yet, so there must be no dialog and no table.
     const before = readDeal(document);
@@ -1532,7 +1565,7 @@ const SCENARIOS = {
     document
       .getElementById('loadWeeks')
       .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(8000);
+    await settleGoal(document);
 
     const after = {
       cost: readCost(document),
@@ -1658,7 +1691,7 @@ SCENARIOS.weekPeek = async function weekPeek() {
   // Priced by the page itself (2026-09-19); pressing the button would only
   // re-read the same weeks. Long enough for the weekly re-rank behind the
   // first paint.
-  await settle(8000);
+  await settleGoal(document);
 
   const trades = readTrades(document);
   const idx = trades.findIndex((t) => t.partner === 'Cy');
@@ -1767,7 +1800,7 @@ SCENARIOS.liveByes = async function liveByes() {
   const { document, errors } = await boot('trade.html', '', seed);
   // Priced by the page itself since 2026-09-19; this waits for the re-rank
   // rather than pressing a button that would only read the same weeks again.
-  await settle(8000);
+  await settleGoal(document);
   const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
   const idx = readTrades(document).findIndex((t) => t.partner === 'Cy');
   if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
@@ -1808,7 +1841,7 @@ SCENARIOS.livePickup = async function livePickup() {
   // The page buys its weeks and re-ranks behind the first paint (2026-09-19),
   // so the table read here has to be the settled one — a list caught mid-rerank
   // would make this scenario intermittent rather than wrong.
-  await settle(8000);
+  await settleGoal(document);
   const trades = readTrades(document);
   // Every man the page names ANYWHERE, by ESPN id: depth map, spare strip,
   // finder, combo. A dropped man must be on none of them.
@@ -1872,8 +1905,24 @@ SCENARIOS.goalTitle = async function goalTitle() {
   if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
   await settle(3000);
   const deal = readDeal(document);
+  const dealGoal = text(document.querySelector('#dealBody .deal-goal'));
   document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
   await settle(300);
+
+  // A CUSTOM deal: one man ticked each side, then saved.
+  const tick = (sel) => {
+    const box = document.querySelector(sel);
+    if (!box) return false;
+    box.checked = true;
+    box.dispatchEvent(new globalThis.Event('change', { bubbles: true }));
+    return true;
+  };
+  const ticked = tick('#cuListA input[type="checkbox"]') && tick('#cuListB input[type="checkbox"]');
+  await settle(1500);
+  const cuPreview = text(document.getElementById('cuPreview'));
+  document.getElementById('cuSave').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(1500);
+  const cuRow = readOfferRows(document.getElementById('cuTable'))[0] || null;
 
   document.querySelector('#goalToggle button[data-goal="last"]')
     .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
@@ -1882,7 +1931,7 @@ SCENARIOS.goalTitle = async function goalTitle() {
   const stored = (() => {
     try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.goal']; } catch { return null; }
   })();
-  return { errors, fetchCalls, title, deal, last, stored };
+  return { errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, last, stored };
 };
 
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
@@ -1893,8 +1942,12 @@ SCENARIOS.goalLive = async function goalLive() {
   };
   const { document, errors } = await boot('trade.html', '', seed);
   await settle(15000);
+  const dl = document.getElementById('deadlineLine');
   return {
     errors,
+    deadline: { hidden: !!dl.hidden, text: text(dl), warn: /\bwarn-line\b/.test(dl.getAttribute('class') || '') },
+    combo: text(document.getElementById('comboBody')),
+    kinds: [...document.querySelectorAll('#kindToggle button')].map(text),
     trades: readTrades(document),
     heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
     count: text(document.getElementById('tradeCount')),
@@ -2047,14 +2100,23 @@ if (!fresh.boot) {
   ok('the finder is not left saying it is still searching',
     !/still searching|Trying every swap/.test(fresh.empty), fresh.empty);
 
-  ok('every offer helps YOU', fresh.trades.every((t) => t.myGain > 0),
-    JSON.stringify(fresh.trades.map((t) => t.myGain)));
-  ok('and every offer helps HIM — which is the whole premise',
-    fresh.trades.every((t) => t.theirGain > 0),
-    JSON.stringify(fresh.trades.map((t) => t.theirGain)));
-  ok('offers are ranked by what they are worth to you',
-    fresh.trades.every((t, i) => i === 0 || fresh.trades[i - 1].myGain >= t.myGain),
-    fresh.trades.map((t) => t.myGain).join(','));
+  // THE PREMISE MOVED ON 2026-09-21, and these say what replaced it. It was
+  // "every offer helps both squads, ranked by your points". With the goal the
+  // finder keeps a deal when it helps YOUR GOAL (points weighted by week) and
+  // lets HIM lose up to 2 a week, discounted by how likely he is to say yes —
+  // and the list is ranked by the goal's expected change, not by points.
+  {
+    const m = (fresh.heads.find((h) => /^You gain a week \(weeks/.test(h)) || '').match(/weeks (\d+)–(\d+)/);
+    const n = m ? Number(m[2]) - Number(m[1]) + 1 : null;
+    ok('the gain heading names the priced span', !!n, fresh.heads.join(' | '));
+    ok('no offer costs him more than 2 points a week — the tolerance, and no more',
+      !!n && fresh.trades.every((t) => t.theirGain >= -2 * n - 0.05),
+      JSON.stringify(fresh.trades.map((t) => t.theirGain)));
+    ok('offers are ranked by the expected change in your goal, best first',
+      /ranked by your chance of finishing last/.test(fresh.count) &&
+        fresh.trades.every((t, i) => i === 0 || fresh.trades[i - 1].goal.v >= t.goal.v - 0.0001),
+      `${fresh.count.slice(0, 160)} · ${fresh.trades.map((t) => t.goal && t.goal.v.toFixed(4)).join(',')}`);
+  }
 
   ok('every offer names who it is with',
     fresh.trades.every((t) => t.partner.length > 0));
@@ -2092,9 +2154,11 @@ if (!fresh.boot) {
   // under the control. Two claims, and they are separate: the LABELS changed,
   // and the stored preference values did NOT — a rename that quietly moved the
   // saved key would log him out of his own filter.
-  const want = { all: 'Any shape', even: '1 for 1', consolidate: '2 for 1', depth: '1 for 2' };
-  ok('the shape filter offers the same four choices it always did',
-    fresh.kinds.map((k) => k.kind).join(',') === 'all,even,consolidate,depth',
+  // FIVE since 2026-09-21: 2 for 2 is searched now. The four older values are
+  // unchanged, which is the half of this claim about his saved preference.
+  const want = { all: 'Any shape', even: '1 for 1', consolidate: '2 for 1', depth: '1 for 2', two: '2 for 2' };
+  ok('the shape filter keeps its four choices and adds 2 for 2',
+    fresh.kinds.map((k) => k.kind).join(',') === 'all,even,consolidate,depth,two',
     fresh.kinds.map((k) => k.kind).join(','));
   ok('and each is labelled with the count each way, not a description of it',
     fresh.kinds.every((k) => k.label === want[k.kind]),
@@ -2113,7 +2177,9 @@ if (!fresh.boot) {
     /send two/.test(fresh.kindHint) && /send one/.test(fresh.kindHint),
     fresh.kindHint);
 
-  for (const phrase of ['both totals go up', 'Nothing is sent to ESPN', 'drop somebody']) {
+  // "both totals go up" became "your goal-weighted total" on 2026-09-21: the
+  // finder keeps deals by the goal now, and the note has to say so.
+  for (const phrase of ['goal-weighted total', 'loses no more than 2 a week', 'Nothing is sent to ESPN', 'drop somebody']) {
     ok(`the finder note explains "${phrase}"`, fresh.tradeNote.includes(phrase),
       fresh.tradeNote.slice(0, 200));
   }
@@ -4739,6 +4805,34 @@ if (!gt.boot) {
       `page ${shown && shown[3]}% vs engine ${re && (re.accept * 100).toFixed(1)}%`);
   }
 
+  // -- THE CANDIDATES FOLLOW THE GOAL ------------------------------------------
+  ok('the method says which deals are found follows the goal, and prints the week weights',
+    /Which deals are found follows the goal too/.test(T.note) && /wk 16 ×\d+\.\d/.test(T.note),
+    T.note.slice(T.note.indexOf('Which deals'), T.note.indexOf('Which deals') + 300));
+  {
+    const m = T.note.match(/wk (\d+) ×(\d+\.\d)/g) || [];
+    const wt = new Map(m.map((s) => { const [, w, x] = s.match(/wk (\d+) ×(\d+\.\d)/); return [Number(w), Number(x)]; }));
+    const reg = [...wt].filter(([w]) => w <= 13).map(([, x]) => x);
+    const po = [...wt].filter(([w]) => w >= 14).map(([, x]) => x);
+    ok('and a playoff week weighs more than any regular week — that is where the title is won',
+      po.length === 3 && reg.length > 0 && Math.min(...po) > Math.max(...reg),
+      JSON.stringify([...wt]));
+  }
+  ok('the method says he may lose a little, and how much',
+    /loses no more than 2 a week/.test(T.note), T.note.slice(0, 500));
+
+  // -- THE POP-UP AND THE CUSTOM BOX SAY IT TOO ---------------------------------
+  ok('the pop-up leads with the same title chance as its row',
+    /^Your title chance/.test(gt.dealGoal) && scored[0] && gt.dealGoal.includes(scored[0].goal.head) &&
+      gt.dealGoal.includes(scored[0].goal.sub.split(' · ')[0]),
+    `${gt.dealGoal} vs ${scored[0] && `${scored[0].goal.head} ${scored[0].goal.sub}`}`);
+  ok('a custom deal was built by ticking a man each side', gt.ticked);
+  ok('the builder says what the deal does to the title chance as it is built',
+    /title chance [+−]?\d+\.\d%/.test(gt.cuPreview) && /he says yes/.test(gt.cuPreview), gt.cuPreview);
+  ok('and the saved row carries the goal column like a finder row',
+    !!gt.cuRow && gt.cuRow.goal && /%/.test(gt.cuRow.goal.head) && gt.cuRow.goal.index === 1,
+    JSON.stringify(gt.cuRow && gt.cuRow.goal));
+
   // -- AND THE OTHER GOAL ----------------------------------------------------
   const L = gt.last;
   eq(L.goalOn, 'Don’t finish last', 'pressing "Don’t finish last" lights it');
@@ -4753,9 +4847,22 @@ if (!gt.boot) {
     L.note.slice(0, 500));
 }
 
-const gl = run('goalLive', { stub: true, env: { TR_GOAL: 'title' } });
+// 11.5 days out: "12 days left", and not yet red.
+const DEADLINE = Date.now() + 11.5 * 86400000;
+const gl = run('goalLive', { stub: true, env: { TR_GOAL: 'title', TR_DEADLINE: String(DEADLINE) } });
 ok('the live title-goal scenario boots', !gl.boot, gl.boot);
 if (!gl.boot) {
+  // -- THE TRADE DEADLINE (AUDIT §6.7) ----------------------------------------
+  ok('the league’s trade deadline is on the page, with the days left',
+    !gl.deadline.hidden && /must be accepted by/.test(gl.deadline.text) && /12 days left/.test(gl.deadline.text),
+    JSON.stringify(gl.deadline));
+  ok('and the review window ESPN sent', /24 hours for league review/.test(gl.deadline.text), gl.deadline.text);
+  ok('not yet in red, with more than a week to go', !gl.deadline.warn);
+  // -- THE COMBO AND 2-FOR-2 --------------------------------------------------
+  ok('the combo headline says what the whole slate does to the title chance',
+    /Your title chance [+−]?\d+\.\d%/.test(gl.combo) || /Nothing to combine|Making none/.test(gl.combo),
+    gl.combo.slice(0, 240));
+  ok('the shape filter offers 2 for 2', gl.kinds.includes('2 for 2'), gl.kinds.join(' | '));
   ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
   eq(gl.heads[1], 'Title chance', 'the live page carries the title-chance column');
   ok('and every live offer was played out and ranked',

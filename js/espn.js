@@ -576,6 +576,25 @@ function parsePlayoffs(settings) {
   };
 }
 
+/**
+ * THE TRADE RULES, read from the league (AUDIT §6.7, 2026-09-21).
+ *
+ * `settings.tradeSettings` rides the same `mSettings` read as the bracket and
+ * nothing decoded it. `deadlineDate` is epoch milliseconds — the moment after
+ * which a trade can no longer be ACCEPTED — and `revisionHours` is the review
+ * window before an accepted trade goes through. Null means "ESPN did not say",
+ * never a number: a payload without `tradeSettings`, and every test stub,
+ * yields nulls and the Trade page says nothing about a deadline.
+ */
+export function parseTrades(settings) {
+  const t = (settings && settings.tradeSettings) || {};
+  const ms = Number(t.deadlineDate);
+  return {
+    deadline: Number.isFinite(ms) && ms > 0 ? ms : null,
+    reviewHours: Number.isFinite(t.revisionHours) && t.revisionHours >= 0 ? t.revisionHours : null,
+  };
+}
+
 export function parseLeague(raw) {
   const settings = raw.settings || {};
   const roster = settings.rosterSettings || {};
@@ -622,6 +641,7 @@ export function parseLeague(raw) {
     irSlots: ir,
     rosterSize: Object.values(starterSlots).reduce((a, b) => a + b, 0) + bench,
     playoffs: parsePlayoffs(settings),
+    trades: parseTrades(settings),
     teams,
     draft: {
       type: draft.type || 'SNAKE',

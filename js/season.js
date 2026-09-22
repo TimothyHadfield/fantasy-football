@@ -816,6 +816,9 @@ export async function fetchSchedule() {
     // number. An archived reading taken before this existed is exactly that
     // case, and so is every test stub.
     playoffs: parsed.playoffs || null,
+    // The trade deadline and review window (`espn.parseTrades`), for the
+    // Trade page's deadline line. Null on anything that did not carry them.
+    trades: parsed.trades || null,
     weeks,
     byWeek,
     games: weeks.flatMap((w) => byWeek.get(w)),
