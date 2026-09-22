@@ -26,6 +26,7 @@ const SUITES = [
   ['test-projection.mjs', 'the shared projection module'],
   ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],
+  ['heat-draw-check.mjs', 'the red/green tint draws on even rows, your own row and under hover (the CSS cascade, run)'],
   ['test-bye-rule.mjs', 'a known bye week projects 0 (ESPN projects D/STs through theirs), playoff weeks in the phone copy, points for to the tenth'],
   ['test-season-rules.mjs', 'played means ESPN decided it, ties count half, playoff games kept apart, waiver status, byes'],
   ['test-store.mjs', 'the weeks kept in this browser between pages: two freshness clocks, eviction, and the seam in season.js'],
