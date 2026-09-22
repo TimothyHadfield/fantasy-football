@@ -4,7 +4,7 @@ Live: https://timothyhadfield.github.io/fantasy-football/ · Repo: https://githu
 
 ## START HERE
 1. Read this file (short, current). Then `chat.md` (what each session asked and did).
-2. **Open work is on branch `goal-candidates` (b14add6), NOT merged** — see "Status". Finish it before anything else.
+2. Nothing is half-built: branch `goal-candidates` was merged to main on 2026-09-21 (75247c7).
 3. `AUDIT.md` is the other work queue (five audits, 2026-09-20; mostly unfixed). Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
 
 Last updated: 2026-09-21.
@@ -24,23 +24,20 @@ Tim, 2026-09-21: "I basically want to keep working on big improvements in the di
 On what "best" means: "the user should essentially open with a goal and all the data aligns with that goal. They can either choose between not losing or winning everything … The trade should be ranked by the increase/decrease in this chance." On acceptance: "rank by expected value, but add a good amount of leeway."
 
 ## Status
-**On `main` and live (9a11ccc):** the Trade page opens on a goal (Win it all / Don't finish last), prices the playoff weeks under the title goal, plays every finder offer out in the season simulation on one seed, ranks by (your chance gained) × P(he says yes). Goal column second, beside Manager. 39 suites green on 2026-09-21.
+**On `main` and live:** the Trade page opens on a goal (Win it all / Don't finish last), prices the playoff weeks under the title goal, plays every finder offer out in the season simulation on one seed, ranks by (your chance gained) × P(he says yes). Goal column second, beside Manager.
 
-**On branch `goal-candidates` (b14add6), pushed, NOT merged** — Tim: "yes go ahead and deploy 1-5 now":
+**Merged 2026-09-21 (75247c7, from branch `goal-candidates`)** — Tim: "yes go ahead and deploy 1-5 now":
 1. Goal chooses the CANDIDATES: per-week weights from the sim (`weekWeights`), finder keeps deals by weighted gain; `rankBy` = weighted gain × P(yes) (without it every finalist was a fleece); partner may lose ≤2/wk (`THEIR_MIN_PER_WEEK`). Demo wk5 title: best expected gain +2.4% → +6.8%.
 2. 2-for-2 searched (`kind:'two'`, top 10 pieces a side, `TWO_CAP`), own filter button.
 3. Best combo chooses by the same weights + `partnerMin` tolerance (without it the combo emptied — "make none"); headline shows slate's goal change and P(all say yes); custom builder + saved rows + pop-up show the goal (shared `goalContext()` in trade-page.js).
 4. Emptied roster spot: already credited at the floor when the wire is read — proved (`test-trade-odds.mjs` §13); the note that said otherwise is corrected.
 5. Trade deadline: `espn.parseTrades` → `fetchSchedule().trades` → line under the page title.
 
-**Branch test state (2026-09-21):** every suite passes except `tr-test.mjs` **601/603**. The two failures are fixture-dependent assertions that assume the old ranking:
-- "it names at least one man of his own that the deal moves" (weekly scenario — the top deal now moves only traded men). Fix: pick a deal in the scenario that has an own-man churn entry, rather than the top row.
-- "two deals with one manager are shown as ONE offer" (live stub — the combo no longer packs two Cy deals). Fix: assert the merge on a combo that has one, or seed the stub so the goal-chosen combo still packs two Cy deals; do NOT weaken to a vacuous pass.
-Then: full suite, `node tests/text-audit.mjs trade.html`, `node tools/measure-layout.mjs --pages trade.html`, merge to main, push, tell Tim to hard-refresh.
-Branch also carries edits to tr-test: older scenarios pinned to goal "last" (see `boot`), fixed waits replaced by `settleGoal()`.
+**Tests (2026-09-21, on the merge):** `npm test` 39/39 green, tr-test 614/614. The two old-ranking assertions were re-aimed, not weakened: the own-man checks open offers in order until one moves a man of his own (demo: the 2nd); the merge checks run the live stub again with `TR_KIND=depth` (on the whole finder the combo takes Cy's 2-for-2 as one deal, so nothing merges; 1-for-2 still packs two Cy deals). Both were seen failing first. tr-test also pins older scenarios to goal "last" (`boot`) and waits with `settleGoal()`. Phone view at 393px: no page overflow, finder shows goal % and "% yes".
 
 ## Authorized next steps
-- 2026-09-21 · Finish and ship items 1–5 above (branch `goal-candidates`).
+- ~~2026-09-21 · Finish and ship items 1–5~~ done, merged 75247c7.
+- 2026-09-21 · Tim: "alright start working on the projects you reccommend" — after shipping, taken to cover AUDIT.md §1 → §2 → §3 in the recommended order.
 - 2026-09-20 · AUDIT.md order §1 → §2 → §3 recommended; Tim "has not yet chosen an order" (paraphrase from AUDIT). Not explicitly authorized.
 
 ## Standing instructions
@@ -120,6 +117,6 @@ Branch also carries edits to tr-test: older scenarios pinned to goal "last" (see
 - Pages: index, stats, analysis, schedule, waivers (Players), trade, summary, draft (parked), debug.
 - Trade: `js/trade.js` (engine, pure), `js/trade-odds.js` (goal, pure), `js/trade-suggest.js`, `js/trade-page.js` (~6.5k lines, wiring).
 - Shared: `js/espn.js`, `js/season.js` (fetch; bridge → cloud → ESPN; store in front), `js/forecast.js` (optimalLineup, winProbability, simulateSeason — most shared file), `js/capture.js` (schedule shape, projection, spread, simulationInputs), `js/projection.js`, `js/floor.js`, `js/heat.js`, `js/store.js`, `js/cloud.js`, `js/player-card.js`, `js/sortable.js`.
-- Tests: `cd tests && npm test` (39 suites, ~10 min; `tr-test` ~6.5 min). Last full run 2026-09-21: main 39/39 green; branch 38/39 + tr-test 601/603. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
+- Tests: `cd tests && npm test` (39 suites, ~10 min; `tr-test` ~6.5 min). Last full run 2026-09-21 (merge 75247c7): 39/39 green; `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
 - Hosting: GitHub Pages `build_type: legacy` off `main` — every push to main redeploys in ~40 s; CI runs tests but gates nothing (AUDIT §3.1).
 - Project path: `C:\Users\timha\OneDrive\Desktop\my-website\Code Projects\Fantasy Football`. Tim's league 476225250 (private, 10 teams, 14 regular weeks, 6-team playoffs weeks 15–17).
