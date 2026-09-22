@@ -821,12 +821,50 @@ async function check(scenario, boot) {
       blankCells.length === 2 && blankCells.every((td) => td.v === null),
       JSON.stringify(blankCells));
 
-    // Averages: byes counted, blanks left out.
+    // Averages: only weeks projecting above zero (D7, the Trade page's rule) —
+    // so the bye leaves the divisor, and so does a blank.
     const bye = byName.get('Player 00 QB');
-    const want = ([4, 5, 6].map((w) => espn.expected(bye.cells[0] && 5000, w)));
-    const mean = want.reduce((a, b) => a + b, 0) / 3;
-    c.ok('the average counts a bye as the zero ESPN returned',
-      Math.abs(Number(bye.cells[3].v) - mean) < 0.02, `${bye.cells[3].v} vs ${mean}`);
+    const want = [4, 5, 6].map((w) => espn.expected(5000, w)).filter((v) => v > 0);
+    const mean = want.reduce((a, b) => a + b, 0) / want.length;
+    c.ok('the average leaves a bye out of the divisor (weeks projecting above zero only)',
+      want.length === 2 && Math.abs(Number(bye.cells[3].v) - mean) < 0.02, `${bye.cells[3].v} vs ${mean}`);
+
+    // AUDIT §1.7: the page's own averaging function on AUDIT's fixture
+    // `16 · 0(bye) · 15 · null · 18 · unread`. The old rule printed 12.3; the
+    // Trade page prints 16.3, and Tim's D7 says 16.3 is right.
+    const page = await import(pathToFileURL(path.join(REPO, 'js/waivers-page.js')).href);
+    const trade = await import(pathToFileURL(path.join(REPO, 'js/trade.js')).href);
+    const { DEFAULT_SLOTS } = await import(pathToFileURL(path.join(REPO, 'js/forecast.js')).href);
+    const FIXTURE = [16, 0, 15, null, 18, undefined];
+    const pageFig = page.meanOf(FIXTURE);
+    c.ok('§1.7 AUDIT fixture 16 · 0(bye) · 15 · null · 18 · unread averages 16.3 on the Players page',
+      pageFig !== null && pageFig.toFixed(1) === '16.3', String(pageFig));
+    c.ok('§1.7 a ruled-out 0.0 leaves the divisor too, and a man with no scoring week has no average',
+      page.meanOf([10, 0, 12]) === 11 && page.meanOf([0, null, undefined]) === null,
+      `${page.meanOf([10, 0, 12])} / ${page.meanOf([0, null, undefined])}`);
+    const enginePerWeek = (id, weeks, projFor) => trade.priceTradeAcrossWeeks({
+      players: [{ playerId: id, position: 'QB', name: String(id) }],
+      slots: DEFAULT_SLOTS, weeks, projFor,
+    }).roster[0].perWeek;
+    const fixWeeks = [4, 5, 6, 7, 8, 9];
+    const fixEngine = enginePerWeek(1, fixWeeks, (_, w) => FIXTURE[fixWeeks.indexOf(w)] ?? null);
+    c.ok('§1.7 and the Trade engine gives the same figure for the same fixture',
+      fixEngine === 16.3 && pageFig.toFixed(1) === fixEngine.toFixed(1), `${pageFig} vs ${fixEngine}`);
+
+    // Same man, same span, on the rendered page: every wire row's Avg as
+    // printed equals the Trade engine's perWeek for him over weeks 4–6.
+    const disagree = [];
+    let compared = 0;
+    for (const p of espn.roster) {
+      const row = byName.get(p.name);
+      if (!row) continue;
+      const eng = enginePerWeek(p.id, [4, 5, 6], (pl, w) => espn.expected(pl.playerId, w));
+      const shown = (row.cells[3].text.match(/^-?\d+\.\d|^—/) || [row.cells[3].text])[0];
+      compared++;
+      if ((eng === null ? '—' : eng.toFixed(1)) !== shown) disagree.push(`${p.name} Players ${shown} vs Trade ${eng}`);
+    }
+    c.ok('§1.7 PLAYERS AVG = TRADE ENGINE perWeek for every man over the same span (bye man included)',
+      compared === 60 && disagree.length === 0, `${compared} compared; ${disagree.slice(0, 3).join(' | ')}`);
 
     const blankGuy = byName.get('Player 02 WR') || byName.get('Player 02 QB');
     c.ok('the average leaves a blank week out',
@@ -991,11 +1029,12 @@ async function check(scenario, boot) {
       /playoffs/.test(txt(ths[col])) && /PO/.test(txt(ths[col])), txt(ths[col]));
 
     // AVG IS THE REGULAR SEASON. Re-derived from the rendered week cells 4–13
-    // (a bye's data-v="0" counts, a blank has none), never from the page's own
-    // arithmetic — and a row where the playoff weeks WOULD move it proves the
-    // check can fail.
-    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
-    const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
+    // (only weeks projecting above zero count — a bye's data-v="0" and a blank
+    // are both out, D7), never from the page's own arithmetic — and a row where
+    // the playoff weeks WOULD move it proves the check can fail.
+    // Rounded to the tenth the way the page and the Trade engine both round it.
+    const mean = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
+    const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number).filter((v) => v > 0);
     let wrong = 0;
     let moved = 0;
     for (const r of wire) {
@@ -1065,9 +1104,11 @@ async function check(scenario, boot) {
       rows.length > 0 && rows.every((r) => r.cells.slice(4).every((x) => !x.cls.split(' ').includes('wait'))),
       JSON.stringify(rows[0]));
     // With no regular week left to show, Avg averages what there is.
-    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    // Rounded to the tenth the way the page and the Trade engine both round it.
+    const mean = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
     const wrong = rows.filter((r) => {
-      const xs = r.cells.slice(4).map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
+      const xs = r.cells.slice(4).map((x) => x.v).filter((v) => v !== null && v !== '').map(Number)
+        .filter((v) => v > 0);
       const want = mean(xs);
       const got = r.cells[3].v === null ? null : Number(r.cells[3].v);
       return want === null ? got !== null : Math.abs(got - want) > 1e-9;
