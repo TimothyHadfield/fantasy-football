@@ -162,6 +162,51 @@ const THREE_WR_LOADER = dataUrl(`
   }
 `);
 
+// ------------------------------------ a tight end projecting 0 in the FLEX
+//
+// AUDIT §1.8 follow-up. A combo slot (FLEX takes RB, WR or TE) is floored at the
+// SLOT's floor — the best of its positions' — not the man's own. This override
+// puts Player 12 (a TE) in every squad's FLEX projecting 0.00 every week, and
+// takes away every other man who could fill it (Player 06, the stub's FLEX WR,
+// goes to the bench; he and the bench RBs/WRs 09, 10, 13 and 14 have no ESPN
+// number, the way an injured man's week often comes back). So the best legal
+// lineup and ESPN's own both have the zero TE in the FLEX, and every panel on
+// the page has to assess that spot at the flex floor.
+const FLEX_ZERO_SEASON = dataUrl(`
+  import * as real from ${JSON.stringify(STUB_URL)};
+  export * from ${JSON.stringify(STUB_URL)};
+
+  const GONE = ['06', '09', '10', '13', '14'];
+  const doctor = (teams) => teams.map((t) => {
+    const players = t.players.map((p) => {
+      if (p.name.endsWith('Player 12')) return { ...p, lineupSlotId: 23, slot: 'FLEX', started: true, projected: 0 };
+      if (p.name.endsWith('Player 06')) return { ...p, lineupSlotId: 20, slot: 'BE', started: false, projected: null };
+      if (GONE.some((n) => p.name.endsWith('Player ' + n))) return { ...p, projected: null };
+      return p;
+    });
+    return { ...t, players, starters: players.filter((p) => p.started), bench: players.filter((p) => !p.started) };
+  });
+  export async function fetchWeekRosters(week) {
+    const got = await real.fetchWeekRosters(week);
+    return { ...got, teams: doctor(got.teams) };
+  }
+  export async function fetchWeeksRosters(weeks, opts) {
+    const got = await real.fetchWeeksRosters(weeks, opts);
+    const out = new Map();
+    for (const [w, teams] of got) out.set(w, doctor(teams));
+    return out;
+  }
+`);
+
+const FLEX_ZERO_LOADER = dataUrl(`
+  export async function resolve(spec, ctx, next) {
+    if (spec.startsWith('.') && /\\/season\\.js$/.test(spec)) {
+      return next(${JSON.stringify(FLEX_ZERO_SEASON)}, ctx);
+    }
+    return next(spec, ctx);
+  }
+`);
+
 /**
  * Hover a cell in the all-teams grid and read the card, by team and player.
  *
@@ -1390,7 +1435,111 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+  // AUDIT §1.8 follow-up: a zero-projecting TE in the FLEX is assessed at the
+  // FLEX floor — the best of the RB, WR and TE floors, here the WR's 11.1 — in
+  // every panel, not at the TE floor (6.2). The two floors are far apart on
+  // purpose, so a panel that used the TE floor is 4.9 out and cannot pass.
+  'flex-floor': {
+    label: '(x) a TE projecting 0 in the FLEX: every panel assesses the spot at the flex floor',
+    stub: true,
+    flexZero: true,
+    env: { AN_FLOORS: '{"RB":3,"WR":11.1,"TE":6.2}' },
+    prefs: { 'analysis.source': 'live', 'analysis.week': 8, 'analysis.measure': 'week' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => {
+      const $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      for (let t = 0; t < 6000; t += 20) {
+        const band = document.querySelector('#seasonTotals tr');
+        if (document.querySelectorAll('#overviewTable tbody tr').length === 10 &&
+          band && band.children[1 + 13] && band.children[1 + 13].getAttribute('data-v') &&
+          !document.querySelector('#seasonTable td.wait')) break;
+        await sleep(20);
+      }
+      const sheetHead = [...document.querySelectorAll('#seasonTable thead th')].map((th) => th.textContent.trim());
+      const avgAt = sheetHead.findIndex((t) => /^Avg\b/.test(t));
+      const rowFor = (key) => [...document.querySelectorAll('#seasonSlots tr')]
+        .find((tr) => tr.children[0].textContent.trim() === key);
+      const flex = rowFor('FLEX');
+      const cellOf = (tr, week) => {
+        const td = tr && tr.children[1 + week];
+        return td && {
+          v: td.getAttribute('data-v'),
+          cls: td.getAttribute('class') || '',
+          says: (td.querySelector('a') || td).getAttribute('aria-label') || td.getAttribute('title') || '',
+        };
+      };
+      const table = $('overviewTable');
+      const head = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+      const totalAt = head.indexOf('Total');
+      const flexAt = head.indexOf('FLEX');
+      const band = document.querySelector('#seasonTotals tr');
+      globalThis.__an = {
+        title: $('overviewTitle').textContent.trim(),
+        sheetHead,
+        flexWeeks: Array.from({ length: 13 }, (_, i) => cellOf(flex, i + 1)),
+        flexAvg: flex && avgAt >= 0 ? flex.children[avgAt].getAttribute('data-v') : null,
+        w8: [...document.querySelectorAll('#seasonSlots tr')]
+          .map((tr) => Number(tr.children[1 + 8].getAttribute('data-v'))),
+        bandW8: band && band.children[1 + 8] ? band.children[1 + 8].getAttribute('data-v') : null,
+        grid: [...table.querySelectorAll('tbody tr')].map((tr) => ({
+          team: Number(tr.getAttribute('data-team')),
+          total: totalAt >= 0 ? tr.children[totalAt].getAttribute('data-v') : null,
+          flex: flexAt >= 0 ? tr.children[flexAt].getAttribute('data-v') : null,
+        })),
+        legend: $('seasonLegend').textContent.replace(/\s+/g, ' '),
+        note: $('seasonNote').textContent.replace(/\s+/g, ' '),
+      };
+    },
+  },
 };
+
+/**
+ * AUDIT §1.8 follow-up, against an answer worked out here from the stub's raw
+ * numbers: the FLEX floor is max(RB 3, WR 11.1, TE 6.2) = 11.1, and week 8's
+ * lineup is the stub's nine with the zero TE in the FLEX. Nothing is read back
+ * off the page to build it.
+ */
+async function checkFlexFloor(c, boot) {
+  const w = globalThis.__an;
+  const stub = await import('./an-stub-season.mjs');
+  const FLOORS = { RB: 3, WR: 11.1, TE: 6.2 };
+  const FLEX_FLOOR = Math.max(FLOORS.RB, FLOORS.WR, FLOORS.TE);
+  const r1 = (v) => Math.round(v * 10) / 10;
+  // Week 8, one slot at a time: QB 00, RB 01 02, WR 03 04, TE 05, FLEX (the
+  // zero TE, lifted to the flex floor), D/ST 07, K 08.
+  const fixed = [[0, 'QB'], [1, 'RB'], [2, 'RB'], [3, 'WR'], [4, 'WR'], [5, 'TE'], [7, 'DST'], [8, 'K']]
+    .map(([i, pos]) => Math.max(stub.projFor(i, 8), FLOORS[pos] ?? -Infinity));
+  const expectedW8 = r1(fixed.reduce((a, v) => a + v, 0) + FLEX_FLOOR);
+  const wrongW8 = r1(fixed.reduce((a, v) => a + v, 0) + FLOORS.TE);
+
+  c.ok('FLEX-FLOOR: the grid is on week 8', /week 8$/.test(w.title), w.title);
+  const flexVals = w.flexWeeks.map((x) => (x ? Number(x.v) : null));
+  c.ok(`FLEX-FLOOR: EVERY SEASON-BY-WEEK FLEX CELL IS THE FLEX FLOOR (${FLEX_FLOOR}), NOT THE TE FLOOR`,
+    flexVals.length === 13 && flexVals.every((v) => v === FLEX_FLOOR), JSON.stringify(flexVals));
+  c.ok('FLEX-FLOOR: and every one is drawn as assumed',
+    w.flexWeeks.every((x) => x && /\bassumed\b/.test(x.cls)), w.flexWeeks.map((x) => x && x.cls).join(' | '));
+  c.ok('FLEX-FLOOR: the cell names the WR it came from, not a TE',
+    /WR on the waiver wire/.test(w.flexWeeks[7].says) && !/TE on the waiver wire/.test(w.flexWeeks[7].says),
+    w.flexWeeks[7].says);
+  c.ok(`FLEX-FLOOR: THE SHEET'S FLEX AVG IS THE FLEX FLOOR (${FLEX_FLOOR})`,
+    w.flexAvg !== null && Number(w.flexAvg) === FLEX_FLOOR, `Avg ${w.flexAvg}; head ${JSON.stringify(w.sheetHead.slice(0, 3))}`);
+  const sumW8 = r1(w.w8.filter(Number.isFinite).reduce((a, v) => a + v, 0));
+  c.ok(`FLEX-FLOOR: THE WEEK-8 BAND IS THE HAND-COMPUTED LINEUP (${expectedW8}, not ${wrongW8})`,
+    w.bandW8 !== null && Math.abs(Number(w.bandW8) - expectedW8) < 0.051, `band ${w.bandW8}`);
+  c.ok('FLEX-FLOOR: and it totals the cells above it',
+    Math.abs(Number(w.bandW8) - sumW8) < 0.051, `band ${w.bandW8} vs cells ${sumW8}`);
+  const wrong = w.grid.filter((r) => r.total === null || Math.abs(Number(r.total) - expectedW8) > 0.051);
+  c.ok(`FLEX-FLOOR: EVERY SQUAD'S A-WEEK GRID TOTAL AGREES (${expectedW8})`,
+    w.grid.length === 10 && wrong.length === 0, JSON.stringify(w.grid.map((r) => r.total)));
+  c.ok('FLEX-FLOOR: while the grid’s own FLEX cell stays ESPN’s 0.0 — only the Total is floored',
+    w.grid.every((r) => r.flex !== null && Number(r.flex) === 0), JSON.stringify(w.grid.map((r) => r.flex)));
+  c.ok('FLEX-FLOOR: the legend does not call a flex cell’s floor "that position"',
+    /assumed/i.test(w.legend) && !/at that position/.test(w.legend), w.legend.slice(0, 300));
+  c.ok('FLEX-FLOOR: the note says a FLEX counts at the best of its positions’ floors',
+    /FLEX/.test(w.note) && /best of/i.test(w.note), w.note.slice(0, 900));
+  return c.out;
+}
 
 /**
  * AUDIT §1.2, checked against an answer this file works out for itself.
@@ -1466,6 +1615,7 @@ async function boot(scenario) {
   if (cfg.noId) register(NO_ID_LOADER);
   if (cfg.byes) register(BYES_LOADER);
   if (cfg.threeWr) register(THREE_WR_LOADER);
+  if (cfg.flexZero) register(FLEX_ZERO_LOADER);
   const html = readFileSync(path.join(REPO, 'analysis.html'), 'utf8');
   const { window, document } = parseHTML(html);
 
@@ -1692,6 +1842,7 @@ async function check(scenario, boot) {
   // A ten-slot league: every shape assertion below is written for the stub's
   // nine, so this scenario is checked on its own terms.
   if (scenario === 'three-wr') return checkThreeWr(c, boot);
+  if (scenario === 'flex-floor') return checkFlexFloor(c, boot);
 
   // ---- PANEL ORDER, which is Tim's and not a matter of taste --------------
   //

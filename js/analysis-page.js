@@ -2792,7 +2792,9 @@ function assessed(entry, row) {
     const sf = slotFloor(row.slotId, state.floors);
     return { value: sf ? sf.value : null, assumed: Boolean(sf) };
   }
-  const a = flooredValue({ position: entry.p.position, projected: entry.v }, state.floors);
+  // The SLOT's floor, not the man's position's (AUDIT §1.8): a zero TE in the
+  // FLEX is worth what an empty FLEX is, the best of RB/WR/TE on the wire.
+  const a = flooredValue({ position: entry.p.position, projected: entry.v }, state.floors, row.slotId);
   return { value: a.value === null ? entry.v : a.value, assumed: a.assumed };
 }
 
@@ -3158,7 +3160,9 @@ function slotCell(entry, row, week, bar, index) {
   // everything that is an assessment (the value, the low marks, the totals)
   // uses `v`. Getting that split wrong would either hide a bye or colour a
   // lifted cell as though the man himself were having a bad week.
-  const lifted = flooredValue({ position: p.position, projected: raw }, state.floors);
+  // At the SLOT's floor, as `assessed` does, so this cell and the Avg and band
+  // beside it cannot disagree about a FLEX (AUDIT §1.8).
+  const lifted = flooredValue({ position: p.position, projected: raw }, state.floors, row.slotId);
   const v = lifted.value === null ? raw : lifted.value;
   const assumed = lifted.assumed;
 
@@ -3987,6 +3991,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
   if (floorSaid) {
     parts.push(
       `<strong>No slot is assessed below what you could stream.</strong> ` + floorSaid +
+      ` A FLEX counts at the best of the floors for the positions it takes, whoever is in it.` +
       ` Those cells are drawn in orange with a dotted underline, and the cell itself says who the ` +
       `assumed number came from. It is an assessment, not a prediction that you will make the ` +
       `claim — and it never changes which men the site says to start, only what a slot is counted ` +
@@ -4291,7 +4296,7 @@ function seasonMarks(table) {
     // bigger thing to know about a cell than any of the states below it.
     has('td.wk.assumed') &&
       ['<span class="lg-mark assumed">7.8</span>',
-        'assumed — the wire’s best at that position, because ESPN’s was lower'],
+        'assumed — the wire’s best for that slot, because ESPN’s was lower'],
     has('td.wk.zero-out') &&
       ['<span class="lg-mark zero-out">0.0 <span class="zmark">OUT</span></span>',
         state.isDemo ? 'ruled out in the sample data' : 'ruled out, not a bye'],
