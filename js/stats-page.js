@@ -616,6 +616,7 @@ function renderMainTable() {
 
 function seriesFor(valueFn) {
   return state.stats.teams.map((t, i) => ({
+    id: t.id,
     name: t.name,
     color: SERIES_COLORS[i % SERIES_COLORS.length],
     values: state.stats.weekNumbers.map((w) => {
@@ -655,16 +656,16 @@ function renderCharts() {
   }
 
   const xLabels = s.weekNumbers.map(String);
-  const highlightName = state.highlight
-    ? s.teams.find((t) => t.id === state.highlight)?.name
-    : undefined;
+  // KEYED ON THE TEAM ID, never the name it renders as (rule 9, AUDIT §1.9):
+  // two managers showing the same string used to get both lines emphasised.
+  const highlightId = state.highlight ?? undefined;
 
   lineChart($('chartWeekly'), {
     series: seriesFor((r) => r.actual),
     xLabels,
     yLabel: 'Points',
     height: 320,
-    highlight: highlightName,
+    highlight: highlightId,
   });
 
   lineChart($('chartLuck'), {
@@ -673,11 +674,12 @@ function renderCharts() {
     yLabel: 'Actual − projected',
     height: 300,
     zeroLine: true,
-    highlight: highlightName,
+    highlight: highlightId,
   });
 
   lineChart($('chartCumLuck'), {
     series: s.teams.map((t, i) => ({
+      id: t.id,
       name: t.name,
       color: SERIES_COLORS[i % SERIES_COLORS.length],
       values: s.weekNumbers.map((w) => {
@@ -689,7 +691,7 @@ function renderCharts() {
     yLabel: 'Cumulative luck',
     height: 300,
     zeroLine: true,
-    highlight: highlightName,
+    highlight: highlightId,
   });
 
   renderDistribution();
@@ -709,6 +711,7 @@ function renderCharts() {
     rows: withBox
       .sort((a, b) => b.actualBox.median - a.actualBox.median)
       .map((t) => ({
+        id: t.id,
         name: t.name,
         min: t.actualBox.min,
         q1: t.actualBox.q1,
@@ -718,9 +721,7 @@ function renderCharts() {
         outliers: t.actualBox.outliers,
       })),
     xLabel: 'Points',
-    highlight: state.highlight
-      ? s.teams.find((t) => t.id === state.highlight)?.name
-      : undefined,
+    highlight: highlightId,
   });
 }
 

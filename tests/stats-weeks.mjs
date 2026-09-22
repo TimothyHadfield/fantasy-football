@@ -17,8 +17,8 @@ import os from 'node:os';
 import { REPO } from './repo.mjs';
 const WORK = path.join(os.tmpdir(), 'ff-weeks');
 
-function makeRepo(weeks) {
-  const dir = path.join(WORK, `w${weeks}`);
+function makeRepo(weeks, { dup = false } = {}) {
+  const dir = path.join(WORK, `w${weeks}${dup ? '-dup' : ''}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   cpSync(path.join(REPO, 'js'), path.join(dir, 'js'), { recursive: true });
@@ -29,16 +29,22 @@ function makeRepo(weeks) {
   // buildInjuries spins forever looking for unique team-week slots when there
   // are fewer slots than injuries, which only happens in this harness — the
   // real demo generator is fixed at 13 weeks. Cap the count so it terminates.
-  const patched = src
+  let patched = src
     .replace('const WEEKS = 13;', `const WEEKS = ${weeks};`)
     .replace(/const count = INJURY_MIN[^\n]*/, 'const count = Math.min(2, WEEKS);');
+  // DUP: two managers who render the SAME name (teams 1 and 2 both "Autumn"),
+  // for the rule-9 check on the chart highlight (AUDIT §1.9).
+  if (dup) {
+    if (!/'Autumn', 'Jonas',/.test(patched)) throw new Error('demo.js TEAM_NAMES moved');
+    patched = patched.replace("'Autumn', 'Jonas',", "'Autumn', 'Autumn',");
+  }
   writeFileSync(demo, patched);
   return dir;
 }
 
 const trace = (m) => { if (process.env.FF_TRACE) process.stderr.write(`[trace] ${m}\n`); };
 
-async function renderPage(dir) {
+async function renderPage(dir, seed = {}) {
   trace('renderPage ' + dir);
   const html = readFileSync(path.join(dir, 'stats.html'), 'utf8');
   const { window, document } = parseHTML(html);
@@ -64,7 +70,7 @@ async function renderPage(dir) {
   Object.defineProperty(TableProto, 'tBodies', { configurable: true, get() { return kids(this, 'TBODY'); } });
   Object.defineProperty(TableProto, 'tHead', { configurable: true, get() { return kids(this, 'THEAD')[0] || null; } });
 
-  const store = new Map();
+  const store = new Map(Object.entries(seed));
   const localStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),
     setItem: (k, v) => store.set(k, String(v)),
@@ -106,9 +112,13 @@ async function renderPage(dir) {
 if (process.argv[2]) {
   const dir = process.argv[2];
   const weeks = Number(process.argv[3]);
+  const dup = process.argv[4] === 'dup';
   const problems = [];
   try {
-    const { document, errors, fetchCalls } = await renderPage(dir);
+    // In the dup run the page opens with team 2 highlighted — the second of
+    // the two "Autumn"s.
+    const { document, errors, fetchCalls } = await renderPage(dir,
+      dup ? { 'ff.prefs': JSON.stringify({ 'stats.highlight': 2 }) } : {});
     const $ = (id) => document.getElementById(id);
     const hidden = (id) => $(id).hasAttribute('hidden');
     const text = (id) => ($(id) ? $(id).textContent : '');
@@ -279,6 +289,21 @@ if (process.argv[2]) {
       }
     }
 
+    // THE CHART HIGHLIGHT IS THE TEAM ID, NOT THE NAME (rule 9, AUDIT §1.9).
+    // Teams 1 and 2 both render as "Autumn" and only team 2 is chosen: exactly
+    // one line is emphasised on each chart, and one row of the box plot. Keyed
+    // on the name, both Autumns lit up.
+    if (dup) {
+      for (const id of ['chartWeekly', 'chartLuck', 'chartCumLuck']) {
+        const thick = $(id).querySelectorAll('path[stroke-width="2.5"]').length;
+        const dim = $(id).querySelectorAll('path[opacity="0.16"]').length;
+        if (thick !== 1) problems.push(`${id}: ${thick} lines emphasised for one chosen team, expected 1`);
+        if (dim !== 9) problems.push(`${id}: ${dim} lines dimmed, expected the other 9`);
+      }
+      const bold = Array.from($('chartBox').querySelectorAll('text[font-weight="600"]')).length;
+      if (bold !== 1) problems.push(`chartBox: ${bold} rows emphasised for one chosen team, expected 1`);
+    }
+
     // The toggle must still say Demo.
     const on = $('sourceToggle').querySelector('button.on');
     if (!on || on.getAttribute('data-src') !== 'demo') problems.push('source toggle not on demo');
@@ -306,9 +331,9 @@ if (process.argv[2]) {
 // ------------------------------------------------------------------ parent
 const self = fileURLToPath(import.meta.url);
 let failed = 0;
-for (const weeks of [1, 2, 3, 5, 13]) {
-  const dir = makeRepo(weeks);
-  const res = spawnSync(process.execPath, [self, dir, String(weeks)], { encoding: 'utf8' });
+for (const [weeks, dup] of [[1], [2], [3], [5], [13], [13, 'dup']]) {
+  const dir = makeRepo(weeks, { dup: Boolean(dup) });
+  const res = spawnSync(process.execPath, [self, dir, String(weeks), ...(dup ? [dup] : [])], { encoding: 'utf8' });
   const line = (res.stdout || '').trim().split('\n').filter(Boolean).pop();
   let parsed = null;
   try { parsed = JSON.parse(line); } catch { /* fall through */ }
@@ -316,10 +341,10 @@ for (const weeks of [1, 2, 3, 5, 13]) {
     console.log(`FAIL ${weeks}wk  no result\n  ${(res.stderr || res.stdout || '').slice(0, 1500)}`);
     failed++;
   } else if (parsed.ok) {
-    console.log(`PASS ${weeks}wk`);
+    console.log(`PASS ${weeks}wk${dup ? ' (two managers named alike)' : ''}`);
   } else {
     failed++;
-    console.log(`FAIL ${weeks}wk`);
+    console.log(`FAIL ${weeks}wk${dup ? ' dup' : ''}`);
     for (const p of parsed.problems) console.log(`  - ${p.slice(0, 700)}`);
   }
 }
