@@ -23,6 +23,10 @@ import {
   leagueAverageOpponent,
 } from './projection.js';
 import * as espn from './espn.js';
+// `floorWeek` — the one definition of which week's wire the floor is read for,
+// shared with Schedule, Home and Summary.
+import * as capture from './capture.js';
+import { describeFloors } from './floor.js';
 import { lineChart, histogram, boxPlot, SERIES_COLORS } from './charts.js';
 // THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
 // `heatScale()` that lived here — see `heatCell` below for what was wrong with
@@ -612,6 +616,7 @@ function renderMainTable() {
 
 function seriesFor(valueFn) {
   return state.stats.teams.map((t, i) => ({
+    id: t.id,
     name: t.name,
     color: SERIES_COLORS[i % SERIES_COLORS.length],
     values: state.stats.weekNumbers.map((w) => {
@@ -651,16 +656,16 @@ function renderCharts() {
   }
 
   const xLabels = s.weekNumbers.map(String);
-  const highlightName = state.highlight
-    ? s.teams.find((t) => t.id === state.highlight)?.name
-    : undefined;
+  // KEYED ON THE TEAM ID, never the name it renders as (rule 9, AUDIT §1.9):
+  // two managers showing the same string used to get both lines emphasised.
+  const highlightId = state.highlight ?? undefined;
 
   lineChart($('chartWeekly'), {
     series: seriesFor((r) => r.actual),
     xLabels,
     yLabel: 'Points',
     height: 320,
-    highlight: highlightName,
+    highlight: highlightId,
   });
 
   lineChart($('chartLuck'), {
@@ -669,11 +674,12 @@ function renderCharts() {
     yLabel: 'Actual − projected',
     height: 300,
     zeroLine: true,
-    highlight: highlightName,
+    highlight: highlightId,
   });
 
   lineChart($('chartCumLuck'), {
     series: s.teams.map((t, i) => ({
+      id: t.id,
       name: t.name,
       color: SERIES_COLORS[i % SERIES_COLORS.length],
       values: s.weekNumbers.map((w) => {
@@ -685,7 +691,7 @@ function renderCharts() {
     yLabel: 'Cumulative luck',
     height: 300,
     zeroLine: true,
-    highlight: highlightName,
+    highlight: highlightId,
   });
 
   renderDistribution();
@@ -705,6 +711,7 @@ function renderCharts() {
     rows: withBox
       .sort((a, b) => b.actualBox.median - a.actualBox.median)
       .map((t) => ({
+        id: t.id,
         name: t.name,
         min: t.actualBox.min,
         q1: t.actualBox.q1,
@@ -714,9 +721,7 @@ function renderCharts() {
         outliers: t.actualBox.outliers,
       })),
     xLabel: 'Points',
-    highlight: state.highlight
-      ? s.teams.find((t) => t.id === state.highlight)?.name
-      : undefined,
+    highlight: highlightId,
   });
 }
 
@@ -902,18 +907,23 @@ async function refreshOppProj(key) {
     });
     if (stale()) return;
 
-    // One wire read, for the first week on screen, used for every week — the
-    // shape Tim chose. A failure is no floors at all, never an error.
+    // One wire read, for the current week (the first still being projected —
+    // `capture.floorWeek`, the week Schedule, Home and Summary read), used for
+    // every week: the shape Tim chose. It was `schedule.weeks[0]`, week 1's
+    // wire for the whole season (AUDIT §1.4). A failure is no floors at all,
+    // never an error.
     let floors = null;
+    let floorWeek = null;
     try {
-      if (typeof season.fetchFloors === 'function' && schedule.weeks.length) {
-        const got = await season.fetchFloors(schedule.weeks[0]);
+      floorWeek = capture.floorWeek(capture.normalizeSchedule(schedule, { isDemo: false }));
+      if (typeof season.fetchFloors === 'function' && floorWeek) {
+        const got = await season.fetchFloors(floorWeek);
         floors = got && got.size ? got : null;
       }
     } catch { floors = null; }
     if (stale()) return;
 
-    state.oppProj = buildOppProj(key, schedule, weekTeams, floors);
+    state.oppProj = buildOppProj(key, schedule, weekTeams, floors, floorWeek);
   } catch (err) {
     if (stale()) return;
     state.oppProj = { key, error: esc(err.message || String(err)) };
@@ -929,7 +939,7 @@ async function refreshOppProj(key) {
 }
 
 /** Turn a schedule plus a week→rosters map into the per-team averages. */
-function buildOppProj(key, schedule, weekTeams, floors = null) {
+function buildOppProj(key, schedule, weekTeams, floors = null, floorWeek = null) {
   const built = projectionsFromWeekTeams(weekTeams, floors);
   if (!built) {
     return {
@@ -963,6 +973,9 @@ function buildOppProj(key, schedule, weekTeams, floors = null) {
     projectedWeeks: built.weeks,
     countsKnown: built.countsKnown,
     starters: built.slots.length,
+    // What the note has to say about the floor (rule 7, AUDIT §1.5): '' when
+    // none was applied.
+    floorSaid: describeFloors(floors, { week: floorWeek }),
   };
 }
 
@@ -1093,7 +1106,8 @@ function oppNote(rows, data) {
         ? ', using the starting slots read off the league&rsquo;s own lineups'
         : ' — the league&rsquo;s slot counts could not be read off its lineups, so a ' +
           'standard lineup is assumed and a league with unusual slots will be a little out') +
-      `. Those team totals are then averaged over ${span}: ${perTeam}.`,
+      `. Those team totals are then averaged over ${span}: ${perTeam}.` +
+      (data.floorSaid ? ` ${data.floorSaid}` : ''),
   ];
 
   if (typeof data.leagueAvg === 'number') {

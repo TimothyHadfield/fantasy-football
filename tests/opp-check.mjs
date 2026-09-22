@@ -269,6 +269,43 @@ function check(scenario, page, boot) {
     ok(!page.weekGridHidden, 'week-by-week grid hidden two weeks in');
   }
 
+  if (scenario === 'zero' || scenario === 'mid') {
+    // No floor was read, so the note must not claim one.
+    ok(!/No slot is assessed below/.test(page.note), `note claims a floor nobody read: ${page.note}`);
+  }
+
+  if (scenario === 'floor') {
+    // AUDIT §1.4: the wire is read ONCE, for week 3 — the first week still to
+    // play — not week 1's wire for the rest of the season.
+    const asked = calls.filter((c) => c.startsWith('fetchFloors:'));
+    ok(asked.length === 1 && asked[0] === 'fetchFloors:3', `floor read for ${asked.join(', ') || 'no week'}, expected week 3`);
+
+    // The numbers are the floored ones, worked on paper: every weekly total
+    // is max(projection, QB floor for week 3 = 115.0).
+    const F = boot.stub.qbFloor(3);
+    const pr = (id, w) => Math.max(boot.stub.proj(id, w), F);
+    const PAIRS = { 1: [[1, 2], [3, 4]], 2: [[1, 3], [2, 4]], 3: [[1, 4], [2, 3]] };
+    const want = {};
+    for (const id of [1, 2, 3, 4]) {
+      const opp = [1, 2, 3].map((w) => {
+        const [h, a] = PAIRS[w].find(([x, y]) => x === id || y === id);
+        return pr(h === id ? a : h, w);
+      });
+      want[id] = opp.reduce((a, v) => a + v, 0) / 3;
+    }
+    ok(Math.abs(want[2] - EXPECT[2]) > 3, `the floor does not move Team 2 by 3 points — the check would be vacuous`);
+    for (const b of page.bars) {
+      const id = Number(b.name.replace('Team ', ''));
+      ok(Math.abs(b.value - want[id]) < 0.05, `${b.name} bar shows ${b.value}, floored on week 3 it is ${want[id].toFixed(1)}`);
+    }
+
+    // Rule 7 (AUDIT §1.5): the note says so, with the number and the week.
+    ok(/No slot is assessed below what the waiver wire would give you/.test(page.note),
+      `note does not state the floor: ${page.note}`);
+    ok(page.note.includes(`QB ${F.toFixed(1)}`) && page.note.includes('in week 3'),
+      `note does not give the floor and its week: ${page.note}`);
+  }
+
   if (scenario === 'gap') {
     // Week 2 is missing, so each team has two fixtures left, not three, and the
     // panel has to say so rather than counting the missing week as zero.
@@ -334,7 +371,7 @@ if (SCEN) {
 
 const self = fileURLToPath(import.meta.url);
 let failed = 0;
-for (const scenario of ['demo', 'zero', 'mid', 'reject', 'slow', 'gap']) {
+for (const scenario of ['demo', 'zero', 'mid', 'reject', 'slow', 'gap', 'floor']) {
   const env = { ...process.env, FF_SCEN: scenario === 'demo' ? 'zero' : scenario };
   const res = spawnSync(process.execPath, [self, scenario], { encoding: 'utf8', env });
   const line = (res.stdout || '').trim().split('\n').filter(Boolean).pop();

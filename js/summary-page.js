@@ -39,6 +39,8 @@ import * as season from './season.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
+// The floor's one sentence, in the words Analysis and Trade use (rule 7).
+import { describeFloors } from './floor.js';
 import { enableSort, resort } from './sortable.js';
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14). It goes on the TABLE and is
 // deliberately kept OFF THE IMAGE — the long argument for that split is above
@@ -488,12 +490,15 @@ async function refreshProjections() {
 
   // Through the Schedule page's own builder, in the order asked for: the same
   // best-lineup totals, and the same refusal of a projection with a hole in it.
-  // One wire read, for the first week being projected — the same rule and the
-  // same week the Schedule page uses, so both pages floor identically.
+  // One wire read, for the current week — `capture.floorWeek`, the very
+  // function the Schedule page calls, so both pages floor identically wherever
+  // this page's week picker sits (at its default cut-off that is also the
+  // first week ahead, `asking[0]`).
+  const floorWeek = capture.floorWeek(L.data);
   let floors = null;
   try {
-    if (typeof season.fetchFloors === 'function' && asking.length) {
-      const got = await season.fetchFloors(asking[0]);
+    if (typeof season.fetchFloors === 'function' && floorWeek) {
+      const got = await season.fetchFloors(floorWeek);
       floors = got && got.size ? got : null;
     }
   } catch { floors = null; }
@@ -506,6 +511,11 @@ async function refreshProjections() {
       `that week, with the best legal lineup filled.`
     : `ESPN returned no usable projection for the weeks still to play, so the ` +
       `simulation has nothing to play them out with.`;
+
+  // THE FLOOR, SAID (rule 7, AUDIT §1.5): it moves every projected week the
+  // simulation plays, so the numbers it used are printed with the rest.
+  const floorSaid = built ? describeFloors(floors, { week: floorWeek }) : '';
+  if (floorSaid) state.projNote += ` ${floorSaid}`;
 
   if (built && !built.countsKnown) {
     state.projNote +=

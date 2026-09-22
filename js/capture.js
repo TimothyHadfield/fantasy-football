@@ -329,6 +329,17 @@ export function buildProjection(data, weekTeams, floors = null) {
 
   const got = built.weeks;
 
+  // WHAT HAPPENS TO A BYE, said truthfully either way (AUDIT §1.5). Without a
+  // floor a man on bye projects zero and the best lineup starts someone else;
+  // with one, a slot left below the wire's figure is lifted to it — so "they
+  // sit down on their own" would be false on exactly the numbers it sits under.
+  const floored = Boolean(floors && floors.size);
+  const byeNote = floored
+    ? `A player on bye projects zero, so the best lineup starts someone else where ` +
+      `it can; a slot still worth less than the waiver wire would give you at that ` +
+      `position is counted at the wire’s figure instead (the positional floor).`
+    : `Players on bye come back at zero from ESPN, so they sit down on their own.`;
+
   // The playoff weeks ride along in the same map — which is how a reading gets
   // them for free — but they are NOT part of the strength figure and must not
   // be described as though they were. `reach` is the regular season only.
@@ -357,8 +368,7 @@ export function buildProjection(data, weekTeams, floors = null) {
       `legal lineup filled rather than the one currently set (${slotSource}) — ` +
       `the same total the ESPN site shows under a lineup paged forward to that ` +
       `week, except that a bench player projected above a starter is counted as ` +
-      `starting. Players on bye come back at zero from ESPN, so they sit down on ` +
-      `their own.${bracketNote}`,
+      `starting. ${byeNote}${bracketNote}`,
   };
 }
 
@@ -412,6 +422,24 @@ export function leagueSpread(data, banked, started) {
 // ------------------------------------------------------------ matchup odds
 
 /**
+ * THE WEEK THE FLOOR'S ONE WIRE READ IS FOR: the first week still being
+ * projected — the current week (`rosterPlan().project[0]`).
+ *
+ * One definition for every page that floors a projection (Schedule, Home,
+ * Stats; Summary's first week ahead is the same week at its default cut-off),
+ * because a floor read for a different week is a different floor. It used to
+ * be the first DECIDED week on Schedule and the first fixture week on Stats —
+ * week 1's waiver wire, forever (AUDIT §1.4).
+ *
+ * @returns {number|null} null when the schedule has no weeks
+ */
+export function floorWeek(data) {
+  if (!data || !data.weeks || !data.weeks.length) return null;
+  const p = rosterPlan(data).project;
+  return p.length ? p[0] : null;
+}
+
+/**
  * The roster weeks a page needs to quote the win chance for `week`'s games
  * the way the Schedule page does, and no more.
  *
@@ -449,13 +477,17 @@ export function oddsWeeks(data, week) {
  * @param {Object} [o]
  * @param {(g) => boolean} [o.banked]  may this game's result feed the spread?
  *        On live data that is every final game, which is the default.
+ * @param {Map|null} [o.floors]  the positional floor, read for `floorWeek(data)`
+ *        exactly as Schedule reads it. Without it Home quoted the unfloored
+ *        chance while Schedule quoted the floored one — 34.7% against 49.5% for
+ *        a squad with its K and D/ST at 0.00 (AUDIT §1.3).
  * @returns {{probability:Function, forGame:Function, points:Function,
- *            projection:Object|null, sigma:number, calibrated:boolean, sample:number}}
+ *            projection:Object|null, floors:Map|null, sigma:number, calibrated:boolean, sample:number}}
  */
-export function matchupOdds(data, weekTeams, { banked = () => true } = {}) {
+export function matchupOdds(data, weekTeams, { banked = () => true, floors = null } = {}) {
   const plan = rosterPlan(data);
   const toProject = pickWeeks(weekTeams, plan.project);
-  const projection = toProject.size ? buildProjection(data, toProject) : null;
+  const projection = toProject.size ? buildProjection(data, toProject, floors) : null;
   const started = startedProjections(weekTeams, plan.decided);
   const { sigma, calibrated, sample } = leagueSpread(data, banked, started);
   const proj = projection ? projection.proj : null;
@@ -489,7 +521,11 @@ export function matchupOdds(data, weekTeams, { banked = () => true } = {}) {
     return forecast.winProbability(a, b, sigma);
   };
 
-  return { probability, forGame, points, projection, sigma, calibrated, sample };
+  return {
+    probability, forGame, points, projection,
+    floors: floors && floors.size ? floors : null,
+    sigma, calibrated, sample,
+  };
 }
 
 // ------------------------------------------------------------ the simulation

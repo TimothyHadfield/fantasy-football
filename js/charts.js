@@ -328,13 +328,17 @@ function pointerPos(svg, container, evt) {
  *
  * @param {Element} container
  * @param {Object}  opts
- * @param {Array}   opts.series     [{ name, values:number[], color? }]
+ * @param {Array}   opts.series     [{ name, values:number[], color?, id? }]
+ *                                  `id` is what `highlight` and the legend
+ *                                  match on (rule 9: a squad is its team id,
+ *                                  never its label); without one, the name.
  * @param {Array}   opts.xLabels    category labels, one per x position
  * @param {string}  opts.yLabel
  * @param {number}  [opts.height=300]   height of the plot block; the legend
  *                                      adds its own rows below it
  * @param {boolean} [opts.zeroLine]  draw a reference rule at y = 0
- * @param {string}  [opts.highlight] series name to emphasize; others dim
+ * @param {string|number} [opts.highlight] series id (or name, for a series
+ *                                   with no id) to emphasize; others dim
  * @param {number[]} [opts.yDomain]  explicit [lo, hi], replacing the computed
  *                                   scale. For giving several small charts one
  *                                   shared axis so their heights are comparable
@@ -352,11 +356,18 @@ export function lineChart(container, opts) {
   const rawSeries = Array.isArray(o.series) ? o.series : [];
   const series = rawSeries
     .filter((s) => s && Array.isArray(s.values))
-    .map((s, i) => ({
-      name: String(s.name == null ? 'Series ' + (i + 1) : s.name),
-      values: s.values.map((v) => (isNum(v) ? v : NaN)),
-      color: s.color || SERIES_COLORS[i % SERIES_COLORS.length],
-    }))
+    .map((s, i) => {
+      const name = String(s.name == null ? 'Series ' + (i + 1) : s.name);
+      return {
+        name,
+        // WHAT A HIGHLIGHT MATCHES ON (AUDIT §1.9, rule 9): the caller's id
+        // when it gives one, so two managers who render the same name are
+        // still two series and only the chosen one is emphasised.
+        key: s.id != null ? String(s.id) : name,
+        values: s.values.map((v) => (isNum(v) ? v : NaN)),
+        color: s.color || SERIES_COLORS[i % SERIES_COLORS.length],
+      };
+    })
     .filter((s) => s.values.some(isNum));
 
   if (!series.length) return emptyState(container, 'No data to chart', height);
@@ -365,7 +376,8 @@ export function lineChart(container, opts) {
   if (nPoints < 1) return emptyState(container, 'No data to chart', height);
 
   const xLabels = Array.isArray(o.xLabels) ? o.xLabels : [];
-  const highlight = o.highlight && series.some((s) => s.name === o.highlight) ? o.highlight : null;
+  const want = o.highlight == null || o.highlight === '' ? null : String(o.highlight);
+  const highlight = want !== null && series.some((s) => s.key === want) ? want : null;
 
   resetContainer(container);
   const W = measureWidth(container);
@@ -431,14 +443,14 @@ export function lineChart(container, opts) {
   // --- series paths -------------------------------------------------------
   // Non-finite values break the path into subpaths so a hole is a gap, not a
   // straight line through missing data. A run of length 1 gets a dot instead.
-  const dimmed = (name) => highlight && name !== highlight;
+  const dimmed = (key) => highlight && key !== highlight;
   const backParts = [];  // dimmed series - painted first
   const frontParts = []; // emphasized (or all, when nothing is highlighted)
   const dotParts = [];
   const labelParts = [];
 
   series.forEach((s) => {
-    const isDim = dimmed(s.name);
+    const isDim = dimmed(s.key);
     const opacity = isDim ? 0.16 : 1;
     const width = highlight && !isDim ? 2.5 : 2;
     let d = '';
@@ -523,14 +535,14 @@ export function lineChart(container, opts) {
       const label = truncateToWidth(s.name, LABEL_SIZE, maxLabel);
       const iw = 22 + textWidth(label, LABEL_SIZE) + 16;
       if (cx + iw > legendRight && cx > legendLeft) { cx = legendLeft; cy += rowH; rows++; }
-      const isDim = dimmed(s.name);
+      const isDim = dimmed(s.key);
       parts.push(
-        `<g class="ff-legend-item" data-name="${esc(s.name)}" style="cursor:pointer" ` +
+        `<g class="ff-legend-item" data-name="${esc(s.name)}" data-key="${esc(s.key)}" style="cursor:pointer" ` +
         `opacity="${isDim ? 0.4 : 1}" tabindex="0" role="button" aria-label="${esc(s.name)}">` +
         `<title>${esc(s.name)}</title>` +
         `<rect x="${cx}" y="${cy - 12}" width="${(iw - 10).toFixed(1)}" height="${rowH}" fill="transparent"/>` +
         `<line x1="${cx}" y1="${cy}" x2="${cx + 16}" y2="${cy}" stroke="${esc(s.color)}" ` +
-        `stroke-width="${highlight === s.name ? 3 : 2}" stroke-linecap="round"/>` +
+        `stroke-width="${highlight === s.key ? 3 : 2}" stroke-linecap="round"/>` +
         `<text x="${cx + 22}" y="${cy + 4}" fill="${C.text}" font-size="${LABEL_SIZE}">${esc(label)}</text>` +
         `</g>`
       );
@@ -574,7 +586,7 @@ export function lineChart(container, opts) {
       for (const s of series) {
         const v = s.values[i];
         if (!isNum(v)) continue;
-        if (!dimmed(s.name)) {
+        if (!dimmed(s.key)) {
           markers += `<circle cx="${px.toFixed(1)}" cy="${y(v).toFixed(1)}" r="4" ` +
             `fill="${esc(s.color)}" stroke="${C.surface}" stroke-width="2"/>`;
         }
@@ -597,12 +609,12 @@ export function lineChart(container, opts) {
   }
 
   // legend: click (or Enter/Space) a team to highlight it; again to clear
-  const rerenderWith = (name) => lineChart(container, Object.assign({}, o, { highlight: name }));
+  const rerenderWith = (key) => lineChart(container, Object.assign({}, o, { highlight: key }));
   const items = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-legend-item') : [];
   for (const item of items) {
     const toggle = () => {
-      const name = item.getAttribute('data-name');
-      rerenderWith(highlight === name ? null : name);
+      const key = item.getAttribute('data-key');
+      rerenderWith(highlight === key ? null : key);
     };
     item.addEventListener('click', toggle);
     item.addEventListener('keydown', (e) => {
@@ -781,7 +793,8 @@ export function histogram(container, opts) {
  *                             see the note on positional fallback below.
  * @param {string}  opts.xLabel
  * @param {number}  [opts.height]     overrides the row-derived height
- * @param {string}  [opts.highlight]  row name to emphasize; the others dim,
+ * @param {string|number} [opts.highlight] row id (or name, for a row with
+ *                                    no id) to emphasize; the others dim,
  *                                    matching lineChart's legend behaviour
  * @returns {SVGElement|null}
  */
@@ -797,8 +810,11 @@ export function boxPlot(container, opts) {
     if (!five.every(isNum)) return; // skip rows with missing/NaN summary stats
     const sorted = five.slice().sort((a, b) => a - b); // repair out-of-order input
     const outliers = (Array.isArray(r.outliers) ? r.outliers : []).filter(isNum);
+    const name = String(r.name == null ? 'Row ' + (i + 1) : r.name);
     rows.push({
-      name: String(r.name == null ? 'Row ' + (i + 1) : r.name),
+      name,
+      // Matched by `highlight`: the caller's id when given (rule 9), else the name.
+      key: r.id != null ? String(r.id) : name,
       min: sorted[0], q1: sorted[1], median: sorted[2], q3: sorted[3], max: sorted[4],
       outliers,
       // Prefer the caller's colour. Box-plot rows normally arrive sorted by
@@ -856,11 +872,12 @@ export function boxPlot(container, opts) {
   const boxH = Math.max(8, Math.min(16, actualRowH * 0.52));
   // Same contract as lineChart: an unknown name highlights nothing rather than
   // dimming everything.
-  const highlight = o.highlight && rows.some((r) => r.name === o.highlight) ? o.highlight : null;
+  const want = o.highlight == null || o.highlight === '' ? null : String(o.highlight);
+  const highlight = want !== null && rows.some((r) => r.key === want) ? want : null;
 
   rows.forEach((r, i) => {
     const cy = M.top + actualRowH * (i + 0.5);
-    const isDim = Boolean(highlight) && r.name !== highlight;
+    const isDim = Boolean(highlight) && r.key !== highlight;
     const rowOp = isDim ? 0.22 : 1;
     // clamp: a whisker end that sits inside the box would draw backwards
     const wLo = Math.min(r.min, r.q1);

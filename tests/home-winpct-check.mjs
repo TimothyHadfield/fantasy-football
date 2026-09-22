@@ -76,22 +76,59 @@ const r1 = (n) => Math.round(n * 10) / 10;
 
 /**
  * One team's roster for one week: [slot, position id, projected, actual|null].
- * Slots: 0 QB, 2 RB, 20 bench. Positions: 1 QB, 2 RB.
+ * Slots: 0 QB, 2 RB, 16 D/ST, 17 K, 20 bench. Positions: 1 QB, 2 RB, 5 K, 16 D/ST.
+ *
+ * DELTA'S KICKER AND D/ST PROJECT 0.00 (AUDIT §1.3): the case the positional
+ * floor exists for. Schedule lifts those two slots to the waiver wire's
+ * third-best at each position; a Home page that does not quotes a different
+ * chance for every Delta game. Everyone else's K and D/ST project above the
+ * floor, so only Delta moves.
  */
 function rosterFor(teamId, week, decided) {
   const qbStart = 15 + teamId;
   const rbStart = r1(10 + week * 0.5);
   const qbBench = teamId === 1 ? 30 : 5;          // team 1: best lineup starts him
   const rbBench = teamId === 3 ? 20 : 3;          // team 3: likewise at RB
+  const kProj = teamId === 4 ? 0 : 9;
+  const dstProj = teamId === 4 ? 0 : 8;
   const played = week <= decided;
   const qbActual = played ? qbStart + QB_DELTA[teamId][(week - 1) % 3] : null;
   const rbActual = played ? rbStart : null;
   return [
     { slot: 0, pos: 1, proj: qbStart, actual: qbActual },
     { slot: 2, pos: 2, proj: rbStart, actual: rbActual },
+    { slot: 16, pos: 16, proj: dstProj, actual: played ? dstProj : null },
+    { slot: 17, pos: 5, proj: kProj, actual: played ? kProj : null },
     { slot: 20, pos: 1, proj: qbBench, actual: played ? qbBench : null },
     { slot: 20, pos: 2, proj: rbBench, actual: played ? rbBench : null },
   ];
+}
+
+/**
+ * The waiver wire for one week, as ESPN's kona_player_info sends it: five free
+ * agents at each of QB, RB, K and D/ST. The third-best — the floor — moves with
+ * the week (K 5.0 + w/4, D/ST 4.0 + w/4), so a page that reads the wire for
+ * the wrong week lands on a different floor and a different chance.
+ */
+const WIRE_BASE = { 1: 12, 2: 6, 5: 5, 16: 4 };
+function wirePayload(week) {
+  const players = [];
+  for (const [pos, base] of Object.entries(WIRE_BASE)) {
+    for (let i = 0; i < 5; i++) {
+      const id = 9000 + Number(pos) * 10 + i;
+      // i = 2 is the third-best: base + week/4 exactly.
+      const proj = r1(base + week / 4 + (2 - i) * 0.7);
+      players.push({
+        id, status: 'FREEAGENT',
+        player: {
+          id, fullName: `Wire ${pos}-${i}`, defaultPositionId: Number(pos), proTeamId: 10 + i,
+          injuryStatus: 'ACTIVE',
+          stats: [{ scoringPeriodId: week, statSourceId: 1, statSplitTypeId: 1, appliedTotal: proj }],
+        },
+      });
+    }
+  }
+  return { players };
 }
 
 const startedScore = (teamId, week, decided) =>
@@ -122,7 +159,7 @@ function leaguePayload(decided) {
       name: 'Odds League',
       size: 4,
       scheduleSettings: { matchupPeriodCount: REGULAR_WEEKS, playoffTeamCount: 2 },
-      rosterSettings: { lineupSlotCounts: { 0: 1, 2: 1, 20: 2 } },
+      rosterSettings: { lineupSlotCounts: { 0: 1, 2: 1, 16: 1, 17: 1, 20: 2 } },
     },
     members: [],
     teams: TEAMS.map((t) => ({ id: t.id, name: t.name, abbrev: t.abbrev, roster: { entries: [] } })),
@@ -174,7 +211,7 @@ function installFetch(decided, { slowWeeks = [], slowMs = 0 } = {}) {
     if (!/fantasy\.espn\.com/.test(u)) return notFound;
     let body;
     if (/proTeamSchedules_wl/.test(u)) body = { settings: { proTeams: [] } };
-    else if (/kona_player_info/.test(u)) body = { players: [] };
+    else if (/kona_player_info/.test(u)) body = wirePayload(wk);
     else if (/scoringPeriodId=(\d+)/.test(u)) body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), decided);
     else {
       body = leaguePayload(decided);
@@ -381,7 +418,14 @@ async function referenceChild(league) {
   const data = capture.normalizeSchedule(await season.fetchSchedule(), { isDemo: false });
   const plan = capture.rosterPlan(data);
   const weekTeams = await season.fetchWeeksRosters(plan.asking);
-  const projection = capture.buildProjection(data, capture.pickWeeks(weekTeams, plan.project));
+  // THE FLOOR, as Schedule reads it: one wire read, for the first week still to
+  // be played — spelt out here as `plan.project[0]` rather than through any
+  // helper the pages share, so the reference is not the pages agreeing with
+  // themselves.
+  const floorWeek = plan.project[0];
+  const floors = await season.fetchFloors(floorWeek);
+  const projection = capture.buildProjection(data, capture.pickWeeks(weekTeams, plan.project), floors);
+  const bare = capture.buildProjection(data, capture.pickWeeks(weekTeams, plan.project));
   const started = capture.startedProjections(weekTeams, plan.decided);
   const spread = capture.leagueSpread(data, (g) => capture.gameState(g) === 'final', started);
 
@@ -391,14 +435,21 @@ async function referenceChild(league) {
     const a = capture.projectedPoints(g, 'away', projection?.proj);
     const p = forecast.winProbability(h, a, spread.sigma);
     const old = forecast.winProbability(setTotals.get(g.homeId), setTotals.get(g.awayId), forecast.DEFAULT_SIGMA);
+    // The same game with no floor — what Home quoted before AUDIT §1.3.
+    const unfloored = forecast.winProbability(
+      capture.projectedPoints(g, 'home', bare?.proj), capture.projectedPoints(g, 'away', bare?.proj), spread.sigma);
     return {
       home: nameOf(g.homeId), away: nameOf(g.awayId),
       homeBest: h, awayBest: a,
       homeSet: setTotals.get(g.homeId), awaySet: setTotals.get(g.awayId),
-      p, old,
+      p, old, unfloored,
     };
   });
-  return { spread, games, projectionOk: Boolean(projection) };
+  return {
+    spread, games, projectionOk: Boolean(projection),
+    floorWeek,
+    floors: Object.fromEntries([...(floors || new Map())].map(([k, f]) => [k, f.value])),
+  };
 }
 
 // ------------------------------------------------------------------ run
@@ -463,6 +514,16 @@ for (const league of Object.keys(LEAGUES)) {
   const moved = Math.max(...ref.games.map((g) => Math.abs(g.p - g.old)));
   ok(`${tag} the old Home method is at least 3 points away somewhere (falsifiable)`, moved >= 0.03, moved);
 
+  // THE FLOOR IS IN PLAY (AUDIT §1.3). The fixture used to answer the wire with
+  // nobody, so both pages had an empty floor map and agreed by having nothing
+  // to disagree about. Now the map is real, read for the first unplayed week,
+  // and leaving it off moves a chance by at least 3 points.
+  ok(`${tag} the reference read the wire for week ${L.quoted}, the first unplayed`, ref.floorWeek === L.quoted, ref.floorWeek);
+  ok(`${tag} the floor map is NOT empty: K and D/ST both floored`,
+    ref.floors.K > 0 && ref.floors.DST > 0, JSON.stringify(ref.floors));
+  const unfloorMoved = Math.max(...ref.games.map((g) => Math.abs(g.p - g.unfloored)));
+  ok(`${tag} an unfloored Home is at least 3 points away somewhere (falsifiable)`, unfloorMoved >= 0.03, unfloorMoved);
+
   // Both pages are on the quoted week.
   ok(`${tag} Home shows week ${L.quoted}`, new RegExp(`^Week ${L.quoted} `).test(home.title), home.title);
   ok(`${tag} Schedule shows week ${L.quoted}`, new RegExp(`^Week ${L.quoted} `).test(sched.title), sched.title);
@@ -512,6 +573,17 @@ for (const league of Object.keys(LEAGUES)) {
       /27 points — assumed/.test(home.explain) && /only 4 completed team-weeks carries/.test(home.explain), home.explain);
   }
   ok(`${tag} How this works says best legal lineup`, /best legal lineup/.test(home.explain), home.explain);
+  // Rule 7: the floor moves the chance, so Home says so — with the numbers.
+  ok(`${tag} How this works states the floor, with the K and D/ST values and the week`,
+    /No slot is assessed below what the waiver wire would give you/.test(home.explain) &&
+    home.explain.includes(`K ${ref.floors.K.toFixed(1)}`) && home.explain.includes(`DST ${ref.floors.DST.toFixed(1)}`) &&
+    home.explain.includes(`in week ${L.quoted}`), home.explain);
+  // And so does Schedule, under the cards it moves (AUDIT §1.5) — without the
+  // old claim that a bye "sits down on its own", false once a floor lifts it.
+  ok(`${tag} Schedule's matchup note states the same floor, for the same week`,
+    /No slot is assessed below what the waiver wire would give you/.test(sched.note) &&
+    sched.note.includes(`K ${ref.floors.K.toFixed(1)}`) && sched.note.includes(`in week ${L.quoted}`), sched.note);
+  ok(`${tag} and no longer says a bye sits down on its own`, !/sit down on their own/.test(sched.note), sched.note);
 }
 
 // A slow ESPN never holds the matchups back.

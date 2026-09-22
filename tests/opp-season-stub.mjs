@@ -11,7 +11,12 @@
 //           T4 = (121+112+103)/3 = 112.0
 //   league  = 468/4 = 117.0
 //
-// FF_SCEN picks the scenario: zero | mid | reject.
+// FF_SCEN picks the scenario: zero | mid | reject | slow | gap | floor.
+//
+// floor — mid-season (weeks 1–2 played) with a positional floor on offer: the
+// QB floor is 100 + 5 × week, so it depends on WHICH week's wire a page reads
+// (AUDIT §1.4). Read for week 3, the first unplayed, it is 115.0; week 1's
+// wire would say 105.0.
 
 const SCEN = process.env.FF_SCEN || 'zero';
 
@@ -46,7 +51,23 @@ function teamsForWeek(week) {
 /** Actual scores for the weeks the mid-season scenario has finished. */
 const actual = (id, week) => BASE[id] + week * 2;
 
-const playedWeeks = SCEN === 'mid' ? [1, 2] : [];
+const playedWeeks = SCEN === 'mid' || SCEN === 'floor' ? [1, 2] : [];
+
+/** The QB floor the 'floor' scenario's wire gives for `week`. */
+export const qbFloor = (week) => 100 + 5 * week;
+
+// Only the 'floor' scenario has a floor read at all; everywhere else the export
+// is absent, as it was, so those scenarios' hand-computed numbers stand.
+export const fetchFloors = SCEN === 'floor'
+  ? async (week) => {
+    calls.push(`fetchFloors:${week}`);
+    const w = Number(week);
+    return new Map([['QB', {
+      value: qbFloor(w), position: 'QB', name: 'Wire QB', playerId: 9001,
+      pool: 12, rank: 3, want: 3, week: w,
+    }]]);
+  }
+  : undefined;
 
 export async function fetchSchedule() {
   calls.push('fetchSchedule');

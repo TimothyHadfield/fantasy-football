@@ -602,6 +602,25 @@ if (process.argv[2]) {
         if (!/unavailable/.test(facts.noRosterStrength)) problems.push('no-rosters: strength panel does not say why it is empty');
         if (!/unavailable/.test(facts.noRosterInjuries)) problems.push('no-rosters: injury panel does not say why it is empty');
 
+        // THE RANK IS ON THE RAW SEASON TOTAL, not the rounded week (AUDIT
+        // §1.9). Two squads 1.4 season points apart both print 104.7 a week;
+        // sorted on the rounded figure they tie and fall back to ESPN's team
+        // order, putting the smaller total (Aardvarks, team 1) first while the
+        // rows' own titles show it is smaller.
+        {
+          const near = preKickoff();
+          const bump = { 1: 1779.2, 2: 1780.6 };   // 104.66 and 104.74 a week
+          near.rosters.teams = near.rosters.teams.map((t) =>
+            bump[t.id] ? { ...t, seasonProjectedTotal: bump[t.id] } : t);
+          const s = home.buildModel(near).strength;
+          const [a, b] = s;
+          if (!(a && b && a.value === 104.7 && b.value === 104.7)) {
+            problems.push(`rank: the fixture no longer ties on the rounded figure ${JSON.stringify(s.slice(0, 2))}`);
+          } else if (a.id !== 2 || a.rank !== 1 || b.id !== 1 || b.rank !== 2) {
+            problems.push(`rank: sorted on the rounded week, not the season total — ${a.name} ${a.seasonTotal} ranked above ${b.name} ${b.seasonTotal}`);
+          }
+        }
+
         // ------------------------------------------------- player references
         //
         // Every place the dashboard names a specific NFL player — or shows a

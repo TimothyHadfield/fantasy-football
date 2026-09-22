@@ -207,4 +207,31 @@ export async function cloudSource() {
 }
 
 export async function fetchWireWeek() { return []; }
+
+// THE FLOOR READ, only under CAP_WIRE (cross-sim-check.mjs; AUDIT §1.4). The
+// real `season.fetchFloors` over a NON-EMPTY wire whose third-best at each
+// position moves with the week, so a page that floors on the wrong week hands
+// the simulation different projections. `calls.floors` records the week each
+// page asked for. Without CAP_WIRE the export is absent, exactly as before, so
+// test-capture.mjs's pages see no floor.
+calls.floors = [];
+const WIRE_BASE = { QB: 14, RB: 8, WR: 8, TE: 6, K: 7, DST: 6 };
+export const fetchFloors = process.env.CAP_WIRE
+  ? async (week) => {
+    calls.floors.push(Number(week));
+    const { positionFloors } = await import('../js/floor.js');
+    const wire = [];
+    for (const [position, base] of Object.entries(WIRE_BASE)) {
+      for (let i = 0; i < 6; i++) {
+        wire.push({
+          playerId: 5000 + wire.length, name: `Wire ${position}${i}`, position,
+          injuryStatus: 'ACTIVE',
+          // i = 2 is the third-best: base + 0.3 × week.
+          projected: r1(base + 0.3 * week + (2 - i) * 0.8),
+        });
+      }
+    }
+    return positionFloors(wire, { week });
+  }
+  : undefined;
 export async function buildCloudPayload() { throw new Error('not in this stub'); }
