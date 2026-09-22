@@ -227,10 +227,23 @@ export function slotFloor(slotId, floors) {
  * of these numbers has to be able to say it is not ESPN's — Tim asked for the
  * lifted ones to be coloured, and rule 7 (state the basis of every derived
  * number) would require it even if he had not.
+ *
+ * `slotId`, when given, is the slot he is STANDING IN, and for a slot that takes
+ * more than one position (FLEX, RB/WR, WR/TE, OP) the floor is that SLOT's, not
+ * his position's (AUDIT §1.8). A bye-week tight end in the FLEX is not replaced
+ * by the wire's tight end — he is replaced by the best of RB/WR/TE, which is
+ * exactly what an EMPTY flex is assessed at. Flooring him at the TE floor made a
+ * flex with a useless man in it score below the same flex left empty. For a
+ * single-position slot the slot's floor and the position's are the same number,
+ * so nothing there moves; without `slotId` this is the position floor, as ever.
  */
-export function flooredValue(player, floors) {
+export function flooredValue(player, floors, slotId = null) {
   const raw = player && Number.isFinite(player.projected) ? player.projected : null;
-  const f = player ? floorAt(player.position, floors) : null;
+  const eligible = slotId === null || slotId === undefined ? null : SLOT_ELIGIBILITY[slotId];
+  const combo = Boolean(player && eligible && eligible.length > 1 && eligible.includes(player.position));
+  const f = !player ? null : combo
+    ? (slotFloor(slotId, floors) || floorAt(player.position, floors))
+    : floorAt(player.position, floors);
   if (!f) return { value: raw, raw, assumed: false, floor: null };
   if (raw === null) return { value: f.value, raw: null, assumed: true, floor: f };
   return raw >= f.value
@@ -275,7 +288,9 @@ export function assessLineup(starters, slots, floors) {
     const player = q && q.length ? q.shift() : null;
 
     if (player) {
-      const a = flooredValue(player, floors);
+      // Floored at the SLOT's floor, the same one an empty slot gets below, so
+      // a filled FLEX can never be worth less than an empty one (AUDIT §1.8).
+      const a = flooredValue(player, floors, slotId);
       const value = a.value === null ? 0 : a.value;
       cells.push({ slotId, player, raw: a.raw, value, assumed: a.assumed, floor: a.floor });
       total += value;
