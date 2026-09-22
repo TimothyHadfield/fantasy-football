@@ -284,6 +284,11 @@ export async function fetchSchedule() {
   }
   return {
     leagueName: 'Stub League',
+    // The trade rules, as espn.parseTrades hands them over. TR_DEADLINE (epoch
+    // ms) sets a deadline; unset, ESPN "did not say" and the page says nothing.
+    trades: process.env.TR_DEADLINE
+      ? { deadline: Number(process.env.TR_DEADLINE), reviewHours: 24 }
+      : null,
     teams: TEAMS.map((t) => ({ id: t.id, name: t.name })),
     weeks,
     byWeek: new Map(),

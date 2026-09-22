@@ -509,9 +509,31 @@ function afterTrade(scoredPlayers, outgoing, incoming) {
  * bare ratio makes the reader work out which one they are looking at.
  */
 function packageKind(send, receive) {
+  // Two for two is its own shape (2026-09-21) — a different conversation from
+  // a straight swap, and a filter button of its own on the page.
+  if (send.length === 2 && receive.length === 2) return 'two';
   if (send.length === receive.length) return 'even';
   return send.length > receive.length ? 'consolidate' : 'depth';
 }
+
+/**
+ * TWO FOR TWO, BOUNDED (Tim, 2026-09-21: it was "left out: it is rarely what
+ * anyone proposes, and it multiplies the search by another two orders of
+ * magnitude"). It is proposed often enough — two starters for two starters,
+ * shoring up two positions at once — so it is searched now, but only among each
+ * squad's top TWO_CAP pieces: 45 pairs a side instead of 153, which keeps the
+ * search inside the same few seconds. A 2-for-2 built from a man outside that
+ * group is almost always a 1-for-1 with a spare body bolted on, and
+ * `dropRedundant` would delete it anyway.
+ */
+const TWO_CAP = 10;
+
+/** Is this pair of packages a 2-for-2 the bounded search allows? */
+function twoForTwoAllowed(send, receive, myTop, theirTop) {
+  return send.every((p) => myTop.has(p.playerId)) && receive.every((p) => theirTop.has(p.playerId));
+}
+
+const topIds = (list) => new Set(list.slice(0, TWO_CAP).map((p) => p.playerId));
 
 /**
  * Every trade with this partner that makes BOTH lineups better.
@@ -534,22 +556,25 @@ function packageKind(send, receive) {
  * straight swaps rather than the leftovers of a search that preferred
  * something else.
  */
-export const PACKAGE_KINDS = ['even', 'consolidate', 'depth'];
+export const PACKAGE_KINDS = ['even', 'consolidate', 'depth', 'two'];
 
 function tradesWith(myScored, theirScored, theirs, slots, kinds) {
   const myBase = optimalLineup(myScored, slots);
   const theirBase = optimalLineup(theirScored, slots);
 
-  const myPackages = packages(candidates(myScored));
-  const theirPackages = packages(candidates(theirScored));
+  const myCands = candidates(myScored);
+  const theirCands = candidates(theirScored);
+  const myPackages = packages(myCands);
+  const theirPackages = packages(theirCands);
+  const myTop = topIds(myCands);
+  const theirTop = topIds(theirCands);
 
   const found = [];
   for (const send of myPackages) {
     for (const receive of theirPackages) {
-      // 2-for-2 is left out: it is rarely what anyone proposes, and it
-      // multiplies the search by another two orders of magnitude for offers
-      // that are almost always a 1-for-1 with two spare men bolted on.
-      if (send.length === 2 && receive.length === 2) continue;
+      // 2-for-2 only among the top TWO_CAP pieces a side — see TWO_CAP.
+      if (send.length === 2 && receive.length === 2 &&
+          !twoForTwoAllowed(send, receive, myTop, theirTop)) continue;
 
       const kind = packageKind(send, receive);
       if (!kinds.includes(kind)) continue;
@@ -596,6 +621,14 @@ function tradesWith(myScored, theirScored, theirs, slots, kinds) {
  * then gives the partner most. The last term is not politeness: of two offers
  * identical to you, the one worth more to him is the one he accepts.
  */
+/**
+ * What an offer is kept and ordered by: its GOAL-WEIGHTED gain when the finder
+ * was given the goal's per-week weights (`goalPoints`, 2026-09-21), and its
+ * points otherwise — so every caller that passes no weights is untouched.
+ */
+const rankGain = (o) => (Number.isFinite(o.rank) ? o.rank
+  : Number.isFinite(o.goalPoints) ? o.goalPoints : o.myGain);
+
 function bestPerTarget(offers) {
   const best = new Map();
   for (const o of offers) {
@@ -605,9 +638,9 @@ function bestPerTarget(offers) {
     const held = best.get(key);
     if (
       !held ||
-      o.myGain > held.myGain ||
-      (o.myGain === held.myGain && o.send.length < held.send.length) ||
-      (o.myGain === held.myGain && o.send.length === held.send.length &&
+      rankGain(o) > rankGain(held) ||
+      (rankGain(o) === rankGain(held) && o.send.length < held.send.length) ||
+      (rankGain(o) === rankGain(held) && o.send.length === held.send.length &&
         o.theirGain > held.theirGain)
     ) {
       best.set(key, o);
@@ -648,7 +681,7 @@ function dropRedundant(offers) {
       return (
         subset(ids(other.send), oSend) &&
         subset(ids(other.receive), oReceive) &&
-        other.myGain >= o.myGain &&
+        rankGain(other) >= rankGain(o) &&
         other.theirGain >= o.theirGain
       );
     });
@@ -668,11 +701,27 @@ function dropRedundant(offers) {
  * @param {number[]} [opts.weeks] remaining weeks — switches to the WEEKLY measure
  * @param {function} [opts.projFor] `(player, week) -> number|null`, with `weeks`
  * @param {boolean|function} [opts.zeroIsBye] is a 0.00 a bye? See `isBye`.
+ * @param {number[]} [opts.weights] GOAL WEIGHTS, one per week in `weeks`, all
+ *   ≥ 0: how much a point in that week moves your chance at the goal
+ *   (js/trade-odds.js `weekWeights`). With them, an offer is KEPT and ordered
+ *   by its weighted gain (`goalPoints`) instead of its points — so a deal that
+ *   loses points in October and wins them in the final is a candidate at all.
+ *   Weekly measure only; omitted, nothing changes.
+ * @param {number} [opts.theirMinPerWeek] the least the PARTNER's lineup may
+ *   gain, per week — negative lets in deals he might still accept, which the
+ *   page then discounts by the yes-chance. Default: must gain, as always.
+ * @param {function} [opts.rankBy] `(offer) -> number`: what an offer is KEPT
+ *   and ordered by, when given. The goal-ranked page passes the weighted gain
+ *   × the chance he says yes. WITHOUT IT, on 2026-09-21, the weighted finder
+ *   kept its forty by YOUR gain alone and every one of them was a fleece at
+ *   the edge of the partner tolerance — the fair deals that expected value
+ *   prefers had been cut before the simulation ever saw them.
  * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
 export function findTrades({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
   weeks = null, projFor = null, zeroIsBye = true, floors = null,
+  weights = null, theirMinPerWeek = null, rankBy = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -694,16 +743,24 @@ export function findTrades({
       weekly
         ? tradesAcrossWeeks(
             myScored, scoreAcrossWeeks(theirs.players, weeks, projFor, zeroIsBye).season,
-            theirs, slots, kinds, weeks, floors
+            theirs, slots, kinds, weeks, floors,
+            { weights: Array.isArray(weights) && weights.length === weeks.length ? weights : null,
+              theirMinPerWeek }
           )
         : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
   }
 
   const considered = offers.length;
+  if (typeof rankBy === 'function') {
+    for (const o of offers) {
+      const r = rankBy(o);
+      o.rank = Number.isFinite(r) ? r : null;
+    }
+  }
   const ranked = dropRedundant(bestPerTarget(offers)).sort(
     (a, b) =>
-      b.myGain - a.myGain ||
+      rankGain(b) - rankGain(a) ||
       b.theirGain - a.theirGain ||
       a.send.length + a.receive.length - (b.send.length + b.receive.length) ||
       a.partner.id - b.partner.id
@@ -1177,7 +1234,7 @@ function weeklyChurn(was, now) {
  * change the answer — it only ever rules out packages that could not have made
  * the floor anyway.
  */
-function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, floors = null) {
+function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, floors = null, options = {}) {
   const n = weeks.length;
   // `minGain`, not `floor`. Since 2026-09-18 "the floor" means the POSITIONAL
   // floor everywhere on this site — the wire's best man at a position, which
@@ -1195,8 +1252,30 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   const mineWas = contributions(myBaseFill);
   const theirsWas = contributions(theirBaseFill);
 
-  const myPackages = packages(candidates(myScored));
-  const theirPackages = packages(candidates(theirScored));
+  const myCands = candidates(myScored);
+  const theirCands = candidates(theirScored);
+  const myPackages = packages(myCands);
+  const theirPackages = packages(theirCands);
+  const myTop = topIds(myCands);
+  const theirTop = topIds(theirCands);
+
+  // THE GOAL WEIGHTS (2026-09-21). With them, MY side is judged on the
+  // weighted gain — Σ weight × (after − before), a week at a time — and the
+  // points are kept alongside for printing. Weights are ≥ 0, so the gifted
+  // roster's weighted gain is still a ceiling on any real trade's, and the
+  // pruning below stays exact.
+  const w = options.weights;
+  const weigh = (after, before) => {
+    let s = 0;
+    for (let i = 0; i < n; i++) s += w[i] * (after[i] - before[i]);
+    return round1(s);
+  };
+  // HIS side: the least his lineup may gain. By default he must gain, as
+  // always; the goal-ranked page lets in deals he might still accept at a
+  // small loss, and discounts them by the yes-chance instead of hiding them.
+  const theirMin = Number.isFinite(options.theirMinPerWeek)
+    ? Math.min(minGain, options.theirMinPerWeek * n)
+    : minGain;
 
   // What each of my packages is worth to HIM at the very most.
   const ceilingForThem = myPackages.map((send) =>
@@ -1211,13 +1290,17 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
     // lineups are the ceiling AND, below, the shortcut.
     const giftedPool = myScored.concat(receive);
     const gifted = fillAcrossWeeks(giftedPool, slots, weeks, floors);
-    if (round1(gifted.total - myBase.total) < minGain) continue;
+    const giftedCeiling = w
+      ? weigh(gifted.byWeek.map((x) => x.total), myBase.weekTotals)
+      : round1(gifted.total - myBase.total);
+    if (giftedCeiling < minGain) continue;
     const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
 
     for (let k = 0; k < myPackages.length; k++) {
       const send = myPackages[k];
-      if (ceilingForThem[k] < minGain) continue;
-      if (send.length === 2 && receive.length === 2) continue;
+      if (ceilingForThem[k] < theirMin) continue;
+      if (send.length === 2 && receive.length === 2 &&
+          !twoForTwoAllowed(send, receive, myTop, theirTop)) continue;
 
       const kind = packageKind(send, receive);
       if (!kinds.includes(kind)) continue;
@@ -1249,12 +1332,13 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
       }
       const myAfter = { total: round1(total), weekTotals };
       const myGain = round1(myAfter.total - myBase.total);
-      if (myGain < minGain) continue;
+      const goalPoints = w ? weigh(weekTotals, myBase.weekTotals) : null;
+      if ((w ? goalPoints : myGain) < minGain) continue;
 
       const theirRoster = afterTrade(theirScored, receive, send);
       const theirAfter = totalAcrossWeeks(theirRoster, slots, n, floors);
       const theirGain = round1(theirAfter.total - theirBase.total);
-      if (theirGain < minGain) continue;
+      if (theirGain < theirMin) continue;
 
       // Only now is it worth keeping the lineups, for the two lists the row
       // actually prints.
@@ -1270,6 +1354,10 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
         basis: 'weeks',
         weeks: weeks.slice(),
         myGain,
+        // The goal-weighted gain the offer was kept and ranked by, or null
+        // when no weights were given. Points-equivalent: a week of average
+        // weight counts its points once.
+        goalPoints,
         theirGain,
         myBefore: myBase.total,
         myAfter: myAfter.total,
@@ -1465,10 +1553,25 @@ export function bestCombo(offers, {
   // byte-for-byte what they were. That is the same guarantee js/floor.js makes
   // everywhere else.
   floors = null,
+  // THE GOAL WEIGHTS, the same ones `findTrades` was given (2026-09-21). With
+  // them a packing is CHOSEN by its goal-weighted gain — Σ weight × that week's
+  // change — so the combo answers the same question as the rows above it. The
+  // points are still what `delta` reports.
+  weights = null,
+  // HOW MUCH A PARTNER MAY LOSE (a total over the weeks) before a packing is
+  // refused. 0 by default: he must not lose, as always. The goal-ranked page
+  // passes the SAME tolerance its finder uses (THEIR_MIN_PER_WEEK × weeks) —
+  // left at 0, every offer the finder had let in at a small loss to him was a
+  // packing this function refused, and on 2026-09-21 that emptied the combo
+  // entirely: "making none of them is the best answer", under a list of forty.
+  partnerMin = 0,
   maxOffers = COMBO_OFFER_CAP,
   maxPackings = COMBO_PACKING_CAP,
 } = {}) {
   const ws = Array.isArray(weeks) ? weeks.slice() : [];
+  const w = Array.isArray(weights) && weights.length === ws.length ? weights : null;
+  const weighed = (byWeek) =>
+    round1(byWeek.reduce((a, x, i) => a + w[i] * x.delta, 0));
 
   // Every offer, reduced to the only two things a packing cares about: which
   // players it moves, and how good it looked on its own.
@@ -1478,8 +1581,13 @@ export function bestCombo(offers, {
       offer,
       ids: new Set([...offer.send, ...offer.receive].map(idOf).filter((id) => id != null)),
       gain: Number.isFinite(offer.myGain) ? offer.myGain : 0,
+      // Which twelve get considered: the finder's own keep-order when it had
+      // one (expected value on the goal page), else the weighted gain, else points.
+      rank: w && Number.isFinite(offer.rank) ? offer.rank
+        : w && Number.isFinite(offer.goalPoints) ? offer.goalPoints
+          : Number.isFinite(offer.myGain) ? offer.myGain : 0,
     }))
-    .sort((a, b) => b.gain - a.gain)
+    .sort((a, b) => b.rank - a.rank)
     .slice(0, Math.max(0, maxOffers));
 
   const byId = new Map();
@@ -1518,6 +1626,9 @@ export function bestCombo(offers, {
         partners.push({
           partner: team, delta: p.delta,
           before: p.before.total, after: p.after.total,
+          // Week by week, so the page can play the packing out in the season
+          // simulation with each partner's side changed as well as yours.
+          byWeek: p.byWeek,
         });
       }
     }
@@ -1533,12 +1644,15 @@ export function bestCombo(offers, {
   const consider = (chosen) => {
     considered++;
     const { pricing, partners } = price(chosen);
-    if (requirePartnersGain && partners.some((p) => p.delta < 0)) return;
+    if (requirePartnersGain && partners.some((p) => p.delta < Math.min(0, partnerMin))) return;
 
     const entry = {
       combo: chosen.map((c) => c.offer),
       count: chosen.length,
       delta: pricing.delta,
+      // What the packing is chosen by: the goal-weighted gain with weights,
+      // the points without.
+      score: w ? weighed(pricing.byWeek) : pricing.delta,
       pricing,
       partners,
       // The trap, reported rather than buried: what you would have believed if
@@ -1551,12 +1665,12 @@ export function bestCombo(offers, {
     // Ties on gain go to the SMALLER packing. Two trades that buy exactly what
     // one trade buys is one more manager to talk round for nothing, and the
     // second deal is the one the page should not be recommending.
-    if (!best || entry.delta > best.delta ||
-        (entry.delta === best.delta && entry.count < best.count)) {
+    if (!best || entry.score > best.score ||
+        (entry.score === best.score && entry.count < best.count)) {
       best = entry;
     }
     if (!most || entry.count > most.count ||
-        (entry.count === most.count && entry.delta > most.delta)) {
+        (entry.count === most.count && entry.score > most.score)) {
       most = entry;
     }
   };

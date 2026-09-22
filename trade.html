@@ -139,8 +139,12 @@
      is never the only channel. A cell still waiting on the simulation is dim —
      `goal-wait`, NOT `pending`: app.css's `.pending` is a whole notice banner
      (background, dashed border, margin) and a cell wearing it drew one. */
-  #tradeTable td.goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
-  #tradeTable td.goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  td.goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  td.goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  /* The same figure under a combo headline and in the pop-up's summary. */
+  .combo-goal, .deal-goal { margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
+  .combo-goal .lbl, .deal-goal .lbl { color: var(--dim); margin-right: 4px; }
+  .combo-goal strong, .deal-goal strong { font-size: 15px; }
   #tradeTable td.before-after { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12.5px; }
 
   .searching { color: var(--dim); font-style: italic; }
@@ -1158,6 +1162,9 @@
   <!-- Replaced by render() on the first paint; it leads with the swaps because
        the panels do. -->
   <p class="sub" id="pageSub">Every swap that would make both squads better &mdash; and who is deep where you are thin.</p>
+  <!-- THE TRADE DEADLINE (AUDIT §6.7, 2026-09-21), read from the league's own
+       settings. Hidden in demo and whenever ESPN did not say — never guessed. -->
+  <p class="panel-note" id="deadlineLine" hidden></p>
 
   <section class="panel">
     <h2>Data source</h2>
@@ -1256,6 +1263,7 @@
         <button type="button" data-kind="even">1 for 1</button>
         <button type="button" data-kind="consolidate">2 for 1</button>
         <button type="button" data-kind="depth">1 for 2</button>
+        <button type="button" data-kind="two">2 for 2</button>
       </div>
       <div class="select-md">
         <label for="partnerSelect">Manager</label>
@@ -1478,6 +1486,7 @@
     <div class="table-scroll" id="cuWrap" hidden><table id="cuTable" class="offers">
       <thead><tr>
         <th class="name">With</th>
+        <th id="cuThGoal">Title chance</th>
         <th class="left">Deal</th>
         <th class="left">You send</th>
         <th class="left">You get</th>

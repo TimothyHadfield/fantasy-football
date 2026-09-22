@@ -129,6 +129,15 @@ export function goalGain(before, after, goal) {
 // named here and printed in the page's note, so the curve is checkable and
 // easy to change.
 
+/**
+ * The least HIS lineup may gain, a week, for a deal to be a candidate at all.
+ * Below zero on purpose: a deal that costs him a little can still look good to
+ * him on ESPN's screen and be accepted, and the yes-chance marks it down rather
+ * than the finder hiding it. At −2 lineup and −2 on ESPN's numbers the chance
+ * is 66%; the finder's list is ranked with that already applied.
+ */
+export const THEIR_MIN_PER_WEEK = -2;
+
 /** Points a week a deal can go against him and still be a coin flip. */
 export const ACCEPT_LEEWAY = 3;
 /** How quickly the chance falls away past that, in points a week. */
@@ -246,6 +255,62 @@ export function simulateWith(inputs, deltas = null, { runs = GOAL_RUNS, seed = G
     seed,
     playoff: season.playoff,
   });
+}
+
+// ---------------------------------------------- what a point is worth, by week
+//
+// THE CANDIDATES FOLLOW THE GOAL, NOT ONLY THE ORDER (2026-09-21, item 1 of
+// the road to "the perfect trade"). The finder used to keep only deals that
+// gained POINTS over the span, so a deal that loses a little in October and
+// wins big in the final was never a candidate at all — the simulation could
+// only re-order what points had already chosen.
+//
+// So before the search, each priced week is given a WEIGHT: how far your chance
+// at the goal moves when your squad scores more that week, measured in the same
+// simulation on the same seed — ten extra points in that one week, played out,
+// divided by ten. A week you are already sure to win or lose is worth little; a
+// coin flip against a rival for the last playoff place is worth a lot; a final
+// you reach one season in four is worth a quarter of what it would be if you
+// were sure to be there. The finder then keeps any deal whose WEIGHTED gain is
+// positive, and the exact simulation of each finalist does the rest.
+//
+// Normalised to a mean of 1, so the weighted gain reads in points: a deal whose
+// points land in average weeks has the same weighted gain as points. Floored at
+// a twentieth of the largest week, so a week the noise put at zero still counts
+// for something and no candidate is thrown out on a rounding of luck. Null when
+// the goal does not move at all (a 0.0% chance of last) — the finder then works
+// on points exactly as before, and the page says so.
+
+/** Extra points given to one week to measure its weight. */
+export const WEIGHT_BUMP = 10;
+/** No week counts for less than this share of the heaviest. */
+export const WEIGHT_FLOOR = 0.05;
+
+/**
+ * @param {Object} inputs   `capture.simulationInputs()` result
+ * @param {number} myTeamId
+ * @param {number[]} weeks  the priced span, in order
+ * @param {string} goal
+ * @returns {{weights:number[], raw:number[], base:Object}|null} `raw` is the
+ *   measured change in the chance per point, for the note; null when nothing moves.
+ */
+export function weekWeights(inputs, myTeamId, weeks, goal, { runs = GOAL_RUNS, seed = GOAL_SEED } = {}) {
+  if (!inputs || !Array.isArray(weeks) || !weeks.length) return null;
+  const base = simulateWith(inputs, null, { runs, seed });
+  if (!base) return null;
+  const before = goalChance(base, myTeamId, goal);
+  const raw = weeks.map((week) => {
+    const after = simulateWith(inputs, new Map([[myTeamId, new Map([[week, WEIGHT_BUMP]])]]), { runs, seed });
+    const g = goalGain(before, goalChance(after, myTeamId, goal), goal);
+    return Number.isFinite(g) ? g / WEIGHT_BUMP : 0;
+  });
+  const top = Math.max(...raw);
+  // Ten points in the most important week moving the chance by less than a
+  // twentieth of a point: the goal is settled, and weights would be noise.
+  if (!(top * WEIGHT_BUMP > 0.0005)) return null;
+  const floored = raw.map((s) => Math.max(s, WEIGHT_FLOOR * top));
+  const mean = floored.reduce((a, s) => a + s, 0) / floored.length;
+  return { weights: floored.map((s) => s / mean), raw, base };
 }
 
 /**
