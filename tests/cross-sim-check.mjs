@@ -44,15 +44,28 @@ const CHILDREN = {
       document.querySelectorAll('#simTable tbody tr:not(.empty-row)').length === 10, 20000);
     await new Promise((r) => setTimeout(r, 50));
     const title = {};
+    const projWins = {};
     for (const tr of document.querySelectorAll('#simTable tbody tr')) {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[7].getAttribute('data-v'));
+      projWins[text(td[0])] = Number(td[1].getAttribute('data-v'));
     }
+    // "My season" for Manager 1, who TIED his week-2 game (AUDIT §1.6).
+    const stat = (k) => [...document.querySelectorAll('#forecastStats .stat')]
+      .map((el) => [text(el.querySelector('.k')), text(el.querySelector('.v'))])
+      .find(([key]) => key === k)?.[1] ?? null;
+    const winPs = [...document.querySelectorAll('#forecastTable tbody tr')]
+      .map((tr) => tr.children[5]?.getAttribute('data-v')).filter((v) => v != null).map(Number);
+    const forecastFor = {
+      banked: stat('Banked'), expected: stat('Expected wins'), winPs, projWins,
+      note: text(document.getElementById('forecastNote')),
+    };
     const stub = await import('./cap-stub-season.mjs');
     return {
       calls: globalThis.__simCalls || [], title,
       note: text(document.getElementById('simNote')),
       matchupsNote: text(document.getElementById('matchupsNote')),
+      forecastFor,
       floorWeeks: stub.calls.floors || [],
     };
   },
@@ -159,6 +172,22 @@ if (!sched.boot && !summ.boot) {
     sched.floorWeeks.length >= 1 && sched.floorWeeks.every((w) => w === firstOpen), JSON.stringify(sched.floorWeeks));
   ok(`the Summary page read it for the same week`,
     summ.floorWeeks.length >= 1 && summ.floorWeeks.every((w) => w === firstOpen), JSON.stringify(summ.floorWeeks));
+  // TIES BANK AS HALF A WIN IN "EXPECTED WINS" TOO (AUDIT §1.6). Manager 1
+  // tied in week 2, so his banked record is w-l-1; the simulation (and so
+  // Proj. wins) counts that tie as half a win, and so must the forecast panel.
+  const f = sched.forecastFor || {};
+  const rec = /^(\d+)[–-](\d+)(?:[–-](\d+))?$/.exec(f.banked || '');
+  const bw = rec ? Number(rec[1]) : NaN;
+  const bt = rec && rec[3] ? Number(rec[3]) : 0;
+  ok('Manager 1’s banked record carries the tie', bt === 1, f.banked);
+  const wantExp = Math.round((bw + bt / 2 + (f.winPs || []).reduce((x, p) => x + p, 0)) * 10) / 10;
+  ok(`Expected wins is banked wins + half the tie + the chances left (${wantExp})`,
+    Number(f.expected) === wantExp, `${f.expected} from ${f.banked} and ${(f.winPs || []).length} games`);
+  ok('and the forecast note says how the tie counts (rule 7)', /a tie counts as half a win/.test(f.note || ''), (f.note || '').slice(0, 300));
+  const pw = f.projWins && f.projWins['Manager 1'];
+  ok('and agrees with the simulation’s Proj. wins within its noise (0.15), not half a win off',
+    Number.isFinite(pw) && Math.abs(Number(f.expected) - pw) < 0.15, `${f.expected} vs ${pw}`);
+
   const bare = child('schedule', { wire: false });
   const c = bare.calls ? bare.calls[bare.calls.length - 1] : null;
   ok('the floor really reaches the simulation: without the wire the remaining games project differently',

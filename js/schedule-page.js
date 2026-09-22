@@ -2132,7 +2132,13 @@ function forecastGames(teamId, asOf) {
   }
 
   remaining.sort((a, b) => a.g.week - b.g.week);
-  return { remaining, banked };
+  // WINS BANKED WITH A TIE AS HALF A WIN — the simulation's rule
+  // (`h.wins += 0.5`) and standingsKey's. Expected wins, the 80% range and the
+  // histogram used `banked.w` alone, so a 2-0-1 team read half a win short of
+  // "Proj. wins" in the panel below (AUDIT §1.6). His league's matchup tie
+  // breaker is None, so ties stand.
+  const bankedWins = banked.w + banked.t / 2;
+  return { remaining, banked, bankedWins };
 }
 
 function renderForecast() {
@@ -2176,7 +2182,7 @@ function renderForecast() {
   }
 
   const asOf = forecastAsOf();
-  const { remaining, banked } = forecastGames(team.id, asOf);
+  const { remaining, banked, bankedWins } = forecastGames(team.id, asOf);
 
   if (!remaining.length) {
     blank(
@@ -2308,9 +2314,9 @@ function renderForecast() {
       'not the league: green a better chance, red a worse. Ends carry ▲▼ and bold.'
     : '<strong>Nothing is shaded</strong>: every game left is about the same chance.');
 
-  const dist = forecast.winTotalDistribution(probs, banked.w);
+  const dist = forecast.winTotalDistribution(probs, bankedWins);
   const range = forecast.credibleRange(dist, 0.8);
-  const expected = forecast.expectedWins(probs, banked.w);
+  const expected = forecast.expectedWins(probs, bankedWins);
 
   // THE TWO SURVIVORS OF THE STANDINGS TABLE, and the only two worth keeping:
   // where this team sits right now, which is the one row of the table that is
@@ -2389,7 +2395,9 @@ function renderForecast() {
     : '';
 
   $('forecastNote').innerHTML = [
-    `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}, ` +
+    `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}` +
+      // Rule 7: the tie is in Expected wins now, so say how it counts.
+      `${banked.t ? ' (a tie counts as half a win)' : ''}, ` +
       `${plural(rows.length, 'game')} from week ${nextWeek} to week ${lastWeek} still to play. ${timing}` +
       // Only explain whose season this is when nobody has said who YOU are.
       // Once you have, picking another team is a deliberate act and needs no
