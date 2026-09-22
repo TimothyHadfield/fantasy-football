@@ -352,13 +352,17 @@ function rosterStrength(rosters) {
   const rows = (rosters?.teams || []).map((t) => ({
     id: t.id,
     name: t.name,
+    raw: isNum(t.seasonProjectedTotal) ? t.seasonProjectedTotal : null,
     seasonTotal: isNum(t.seasonProjectedTotal) ? round1(t.seasonProjectedTotal) : null,
     value: isNum(t.seasonProjectedTotal)
       ? round1(t.seasonProjectedTotal / SEASON_GAMES)
       : null,
   }));
-  rows.sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
-  return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+  // RANKED ON THE RAW TOTAL, rounded for display only (AUDIT §1.9): sorted on
+  // the rounded week, two squads 1.8 season points apart tied at 104.7 and fell
+  // back to ESPN's team order, while their own titles showed them differing.
+  rows.sort((a, b) => (b.raw ?? -Infinity) - (a.raw ?? -Infinity));
+  return rows.map(({ raw, ...r }, i) => ({ ...r, rank: i + 1 }));
 }
 
 /** Records and points, counting only games finished on or before `week`. */
