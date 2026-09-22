@@ -23,6 +23,10 @@ import {
   leagueAverageOpponent,
 } from './projection.js';
 import * as espn from './espn.js';
+// `floorWeek` — the one definition of which week's wire the floor is read for,
+// shared with Schedule, Home and Summary.
+import * as capture from './capture.js';
+import { describeFloors } from './floor.js';
 import { lineChart, histogram, boxPlot, SERIES_COLORS } from './charts.js';
 // THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
 // `heatScale()` that lived here — see `heatCell` below for what was wrong with
@@ -902,18 +906,23 @@ async function refreshOppProj(key) {
     });
     if (stale()) return;
 
-    // One wire read, for the first week on screen, used for every week — the
-    // shape Tim chose. A failure is no floors at all, never an error.
+    // One wire read, for the current week (the first still being projected —
+    // `capture.floorWeek`, the week Schedule, Home and Summary read), used for
+    // every week: the shape Tim chose. It was `schedule.weeks[0]`, week 1's
+    // wire for the whole season (AUDIT §1.4). A failure is no floors at all,
+    // never an error.
     let floors = null;
+    let floorWeek = null;
     try {
-      if (typeof season.fetchFloors === 'function' && schedule.weeks.length) {
-        const got = await season.fetchFloors(schedule.weeks[0]);
+      floorWeek = capture.floorWeek(capture.normalizeSchedule(schedule, { isDemo: false }));
+      if (typeof season.fetchFloors === 'function' && floorWeek) {
+        const got = await season.fetchFloors(floorWeek);
         floors = got && got.size ? got : null;
       }
     } catch { floors = null; }
     if (stale()) return;
 
-    state.oppProj = buildOppProj(key, schedule, weekTeams, floors);
+    state.oppProj = buildOppProj(key, schedule, weekTeams, floors, floorWeek);
   } catch (err) {
     if (stale()) return;
     state.oppProj = { key, error: esc(err.message || String(err)) };
@@ -929,7 +938,7 @@ async function refreshOppProj(key) {
 }
 
 /** Turn a schedule plus a week→rosters map into the per-team averages. */
-function buildOppProj(key, schedule, weekTeams, floors = null) {
+function buildOppProj(key, schedule, weekTeams, floors = null, floorWeek = null) {
   const built = projectionsFromWeekTeams(weekTeams, floors);
   if (!built) {
     return {
@@ -963,6 +972,9 @@ function buildOppProj(key, schedule, weekTeams, floors = null) {
     projectedWeeks: built.weeks,
     countsKnown: built.countsKnown,
     starters: built.slots.length,
+    // What the note has to say about the floor (rule 7, AUDIT §1.5): '' when
+    // none was applied.
+    floorSaid: describeFloors(floors, { week: floorWeek }),
   };
 }
 
@@ -1093,7 +1105,8 @@ function oppNote(rows, data) {
         ? ', using the starting slots read off the league&rsquo;s own lineups'
         : ' — the league&rsquo;s slot counts could not be read off its lineups, so a ' +
           'standard lineup is assumed and a league with unusual slots will be a little out') +
-      `. Those team totals are then averaged over ${span}: ${perTeam}.`,
+      `. Those team totals are then averaged over ${span}: ${perTeam}.` +
+      (data.floorSaid ? ` ${data.floorSaid}` : ''),
   ];
 
   if (typeof data.leagueAvg === 'number') {

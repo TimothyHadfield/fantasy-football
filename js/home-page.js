@@ -42,6 +42,9 @@ import { enableSort } from './sortable.js';
 // one column of the same kind of number, across the same ten squads, in the
 // same week.
 import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
+// The positional floor's one sentence, so Home states it in the same words as
+// Analysis and Trade. See js/floor.js.
+import { describeFloors } from './floor.js';
 
 const $ = (id) => document.getElementById(id);
 const store = prefs.scope('home');
@@ -290,6 +293,9 @@ export function buildModel({
     teamId,
     games,
     spread: odds ? { sigma: odds.sigma, calibrated: odds.calibrated, sample: odds.sample } : null,
+    // The positional floor behind the chance, in the words Analysis and Trade
+    // use for it (rule 7) — empty when there is no floor to state.
+    floorSaid: odds ? describeFloors(odds.floors, { week: odds.floorWeek ?? null }) : '',
     hasRosters: Boolean(rosters?.teams?.length),
     playedThisWeek: games.filter((g) => g.played).length,
     totalGames: schedule.games.length,
@@ -679,13 +685,34 @@ async function loadOdds(week) {
   const r = state.rosters;
   if (r && Number(r.week) === week && r.teams?.length) have.set(week, r.teams);
 
+  // THE FLOOR, read exactly as Schedule reads it: one wire read for the first
+  // week still being projected (`capture.floorWeek`), whatever week is on
+  // screen here. Started alongside the rosters so it adds no round trip; a
+  // failure is no floor, never an error. Without it Home quoted the unfloored
+  // chance beside Schedule's floored one (AUDIT §1.3).
+  const floorWeek = capture.floorWeek(data);
+  const floorRead = readFloors(floorWeek);
+
   const missing = capture.oddsWeeks(data, week).filter((w) => !have.has(w));
   if (missing.length) {
     for (const [w, teams] of await readWeeks(missing)) {
       if (teams?.length) have.set(Number(w), teams);
     }
   }
-  return capture.matchupOdds(data, have);
+  const floors = await floorRead;
+  const odds = capture.matchupOdds(data, have, { floors });
+  return { ...odds, floorWeek };
+}
+
+/** The positional floor for `week`, or null — never throws. */
+async function readFloors(week) {
+  try {
+    if (typeof season.fetchFloors !== 'function' || !week) return null;
+    const f = await season.fetchFloors(week);
+    return f && f.size ? f : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -883,7 +910,7 @@ function renderMatchups(m) {
     $('matchupsNote').innerHTML +=
       ' The win chance compares each side&rsquo;s <strong>best</strong> lineup, as the ' +
       'Schedule page does &mdash; our model, not ESPN&rsquo;s.';
-    $('matchupsExplain').innerHTML = oddsExplain(m.spread);
+    $('matchupsExplain').innerHTML = oddsExplain(m.spread, m.floorSaid);
   } else {
     $('matchupsExplain').textContent = '';
   }
@@ -891,7 +918,7 @@ function renderMatchups(m) {
 }
 
 /** The method behind the percentages, including where the spread came from. */
-function oddsExplain(spread) {
+function oddsExplain(spread, floorSaid = '') {
   const sigma = spread?.sigma ?? DEFAULT_SIGMA;
   const sample = spread?.sample ?? 0;
   const spreadText = spread?.calibrated
@@ -911,7 +938,8 @@ function oddsExplain(spread) {
     `two <strong>Proj</strong> figures, which are the lineups as set. The gap is read against ${spreadText}. ` +
     'The Schedule page works its percentages out the same way from the same numbers, so ' +
     'the two pages agree. A game already under way gets none. ESPN publishes ' +
-    'projections, never odds.'
+    'projections, never odds.' +
+    (floorSaid ? ` ${floorSaid}` : '')
   );
 }
 

@@ -48,7 +48,13 @@ const CHILDREN = {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[7].getAttribute('data-v'));
     }
-    return { calls: globalThis.__simCalls || [], title, note: text(document.getElementById('simNote')) };
+    const stub = await import('./cap-stub-season.mjs');
+    return {
+      calls: globalThis.__simCalls || [], title,
+      note: text(document.getElementById('simNote')),
+      matchupsNote: text(document.getElementById('matchupsNote')),
+      floorWeeks: stub.calls.floors || [],
+    };
   },
 
   async summary() {
@@ -68,11 +74,13 @@ const CHILDREN = {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[2].getAttribute('data-v'));
     }
+    const stub = await import('./cap-stub-season.mjs');
     return {
       calls: globalThis.__simCalls || [],
       title,
       status: text(document.getElementById('simStatus')),
       note: text(document.getElementById('summaryNote')),
+      floorWeeks: stub.calls.floors || [],
     };
   },
 };
@@ -87,9 +95,14 @@ if (process.argv[2]) {
   }
 }
 
-function child(name) {
+// CAP_WIRE: the stub answers the floor read with a real, non-empty wire whose
+// floor moves with the week (AUDIT §1.4). `wire: false` runs a page without it,
+// the witness that the floor really reaches the simulation.
+function child(name, { wire = true } = {}) {
+  const env = { ...process.env };
+  if (wire) env.CAP_WIRE = '1'; else delete env.CAP_WIRE;
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, name], {
-    encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 32 * 1024 * 1024, timeout: 180000,
+    encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 32 * 1024 * 1024, timeout: 180000, env,
   });
   const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
   if (!line) return { boot: `no result\n${res.stdout}\n${(res.stderr || '').slice(0, 2000)}` };
@@ -136,6 +149,29 @@ if (!sched.boot && !summ.boot) {
     ok('a banked tie really is in there',
       a.banked.some(([, t]) => t.wins % 1 === 0.5), JSON.stringify(a.banked));
   }
+
+  // THE FLOOR (AUDIT §1.4). Both pages read the wire ONCE, for week 4 — the
+  // first week still to play — never week 1's wire. The stub's floor moves
+  // with the week, so a page reading any other week hands the simulation
+  // different projections and the identity checks above fail too.
+  const firstOpen = 4;
+  ok(`the Schedule page read the wire for week ${firstOpen}, the first unplayed`,
+    sched.floorWeeks.length >= 1 && sched.floorWeeks.every((w) => w === firstOpen), JSON.stringify(sched.floorWeeks));
+  ok(`the Summary page read it for the same week`,
+    summ.floorWeeks.length >= 1 && summ.floorWeeks.every((w) => w === firstOpen), JSON.stringify(summ.floorWeeks));
+  const bare = child('schedule', { wire: false });
+  const c = bare.calls ? bare.calls[bare.calls.length - 1] : null;
+  ok('the floor really reaches the simulation: without the wire the remaining games project differently',
+    Boolean(a && c) && !same(a.games, c.games), bare.boot || '');
+  ok('the Schedule simulation note states the floor, for that week (rule 7)',
+    /No slot is assessed below what the waiver wire would give you/.test(sched.note) &&
+    sched.note.includes(`in week ${firstOpen}`) && !/sit down on their own/.test(sched.note), sched.note.slice(-900));
+  ok('so does the Schedule matchup note',
+    /No slot is assessed below what the waiver wire/.test(sched.matchupsNote) &&
+    !/sit down on their own/.test(sched.matchupsNote), sched.matchupsNote.slice(-900));
+  ok('and the Summary note, in the same words and the same week',
+    /No slot is assessed below what the waiver wire would give you/.test(summ.note) &&
+    summ.note.includes(`in week ${firstOpen}`), summ.note.slice(-900));
 
   // The second witness: the numbers on the two screens.
   const names = Object.keys(sched.title);

@@ -25,6 +25,9 @@ import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
 import { histogram } from './charts.js';
+// The positional floor's one sentence, so this page states it in the words
+// Analysis and Trade use (rule 7). See js/floor.js.
+import { describeFloors } from './floor.js';
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14). Two panels on this page take it —
 // the simulation's per-team table and the forecast's Win % column — and four
 // more were looked at and refused. Every one of those decisions is argued where
@@ -1005,10 +1008,13 @@ async function refreshStrength() {
     const plan = capture.rosterPlan(state.data);
 
     // THE FLOOR READ, alongside the rosters rather than before them: one wire
-    // request for the first week being projected, used for all of them. It is
-    // awaited below with the rosters, and a failure is simply no floors — this
-    // panel must never fail to render because the wire was busy.
-    state.floorWeek = plan.asking.length ? plan.asking[0] : null;
+    // request for the first week being projected (the current week), used for
+    // all of them — `capture.floorWeek`, the same week Home, Stats and Summary
+    // read. It was `plan.asking[0]`, the first DECIDED week, which is week 1 for
+    // the whole season (AUDIT §1.4). It is awaited below with the rosters, and
+    // a failure is simply no floors — this panel must never fail to render
+    // because the wire was busy.
+    state.floorWeek = capture.floorWeek(state.data);
     const floorRead = (typeof season.fetchFloors === 'function' && state.floorWeek
       ? season.fetchFloors(state.floorWeek)
       : Promise.resolve(null)
@@ -1514,8 +1520,11 @@ function renderMatchups() {
   // print a projection or a strength ranking against an unplayed game. Rule 7:
   // every derived number states its basis in a panel note.
   const strength = state.strengthNote ? ` ${state.strengthNote}` : '';
+  // THE FLOOR, SAID (rule 7, AUDIT §1.5): it moves every projected number on
+  // these cards, so the numbers it used go with them.
+  const floorSaid = state.projection ? floorSentence() : '';
   $('matchupsNote').textContent =
-    `Records are season-to-date. ${basis}${chance}${strength}`.trim();
+    `Records are season-to-date. ${basis}${chance}${strength}${floorSaid ? ` ${floorSaid}` : ''}`.trim();
 }
 
 function gameCard(g, ctx) {
@@ -2036,14 +2045,29 @@ function projectionCaveat(lastWeek) {
       ? 'Team totals are the projections ESPN carried for those games at the time.'
       : '';
   }
+  // A bye "sits down on its own" only without a floor; with one, a slot left
+  // below the wire's figure is lifted to it (AUDIT §1.5).
+  const floorSaid = floorSentence();
   return (
     'Team totals are ESPN’s own projection for that week — the same number the ESPN ' +
     'site shows under a lineup paged forward to it — with the best legal lineup filled ' +
     'rather than the one currently set, so a bench player projected above a starter is ' +
-    'counted as starting. Players on bye are projected zero by ESPN, so they sit down on ' +
-    'their own. It is still a snapshot of the rosters as they stand today: the week ' +
+    'counted as starting. ' +
+    (floorSaid
+      ? `Players on bye are projected zero by ESPN, so the best lineup starts someone else ` +
+        `where it can. ${floorSaid} `
+      : 'Players on bye are projected zero by ESPN, so they sit down on their own. ') +
+    'It is still a snapshot of the rosters as they stand today: the week ' +
     `${lastWeek} line is the squad owned now, not the one that will be owned then.`
   );
+}
+
+/** The positional floor behind the projection, in `floor.describeFloors`' words, or ''. */
+function floorSentence() {
+  // Only on the live projection it was applied to: a replayed reading and the
+  // demo carry no floor, and must not be described as though they did.
+  if (state.replay || !state.data || state.data.isDemo) return '';
+  return describeFloors(state.floors, { week: state.floorWeek });
 }
 
 /**
