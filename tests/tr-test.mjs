@@ -109,6 +109,10 @@ async function boot(page = 'trade.html', search = '', seed = null, { wide = true
     let prefs = {};
     try { prefs = JSON.parse(store.get('ff.prefs') || '{}'); } catch { prefs = {}; }
     if (!('trade.goal' in prefs)) prefs['trade.goal'] = goal;
+    // `TR_KIND` narrows the finder (and so the combo) to one package kind —
+    // how the merged-combo checks reach two 1-for-1 deals with one manager now
+    // that the 2-for-2 search offers the same four men as a single deal.
+    if (process.env.TR_KIND && !('trade.kind' in prefs)) prefs['trade.kind'] = process.env.TR_KIND;
     store.set('ff.prefs', JSON.stringify(prefs));
   }
   const localStorage = {
@@ -1263,8 +1267,31 @@ const SCENARIOS = {
     const card = openCard(document, '#tradeTable .man[data-tip]');
     const spareCard = openCard(document, '#spareStrip .spare-chip[data-tip]');
 
+    // A deal that moves one of HIS OWN men, found by opening the offers in
+    // order. The top row is no longer that deal by construction: since the goal
+    // chooses the candidates, the best one often moves only the men traded. So
+    // the own-man claims are checked on the first offer that has any, and the
+    // scenario says how many it opened to find it.
+    let ownDeal = null;
+    let ownOpened = 0;
+    const nRows = document.querySelectorAll('#tradeTable tbody tr').length;
+    for (let i = 0; i < nRows; i++) {
+      if (!document.getElementById('dealModal').hidden) {
+        document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+        await settle(300);
+      }
+      // Looked up fresh each time: the table can repaint behind the pop-up.
+      const r = document.querySelectorAll('#tradeTable tbody tr')[i];
+      if (!r) break;
+      r.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+      await settle(600);
+      ownOpened++;
+      const d = readDeal(document);
+      if (!d.hidden && d.churnEntries.some((e) => e.own)) { ownDeal = d; break; }
+    }
+
     return {
-      errors, fetchCalls, before, after, deal, card, spareCard,
+      errors, fetchCalls, before, after, deal, card, spareCard, ownDeal, ownOpened,
       // What the parent needs to rebuild the same league and price the same
       // packing independently.
       myTeamId: document.getElementById('teamSelect').value,
@@ -2792,13 +2819,22 @@ if (!wk.boot) {
   ok('and every man left untagged IS in one of the two packages',
     churn.filter((e) => !e.own).every((e) => inDeal(e.name)),
     churn.filter((e) => !e.own && !inDeal(e.name)).map((e) => e.name).join(', '));
-  ok('it names at least one man of his own that the deal moves',
-    churn.some((e) => e.own), JSON.stringify(churn));
+  // Checked on the first offer that moves one of his own men (see `weekly`):
+  // the top row need not be one since the goal chooses the candidates.
+  const ownChurn = (wk.ownDeal && wk.ownDeal.churnEntries) || [];
+  ok('some offer names at least one man of his own that the deal moves',
+    ownChurn.some((e) => e.own), `opened ${wk.ownOpened} offers; top: ${JSON.stringify(churn)}`);
+  if (wk.ownDeal) {
+    const ownDealt = (wk.ownDeal.men || []).map((m) => m.text);
+    ok('and on that deal too, every man tagged "yours" is NOT in the trade',
+      ownChurn.filter((e) => e.own).every((e) => !ownDealt.some((t) => t.startsWith(e.name))),
+      ownChurn.filter((e) => e.own).map((e) => e.name).join(', '));
+  }
   // Colour is never the only cue (HANDOFF). The tag is a WORD — "benched",
   // "promoted", "more weeks", "fewer weeks" — and the shade is beside it.
   ok('and says in words what happened to him, not only in colour',
-    churn.filter((e) => e.own).every((e) => /benched|promoted|weeks/.test(e.own)),
-    churn.filter((e) => e.own).map((e) => e.own).join(' | '));
+    ownChurn.filter((e) => e.own).every((e) => /benched|promoted|weeks/.test(e.own)),
+    ownChurn.filter((e) => e.own).map((e) => e.own).join(' | '));
   if (wk.deal && wk.deal.weeks) {
     eq(wk.deal.weeks.weeks.length, spanLen, 'one row per remaining week');
     ok('the columns are current, changed and the difference',
@@ -3719,10 +3755,22 @@ if (!live.boot) {
     JSON.stringify(quarterbacks.slice(0, 3)));
 
   // ---- ask 6: the merged combo row ---------------------------------------
+  //
+  // On the whole finder the combo now takes the 2-for-2 (Cy's 104+110 for
+  // 301+303) as ONE deal, so nothing needs merging there. Narrowed to 1-for-2
+  // deals the same stub still packs two Cy deals, which is what these checks
+  // are about — the merge itself, not which kind of deal wins.
+  const lm = run('live', { stub: true, env: { TR_KIND: 'depth' } });
+  ok('the narrowed live scenario boots', !lm.boot, lm.boot);
+  ok('and it really is narrowed to 1-for-2 deals',
+    (lm.after.combo.rows || []).every((r) => r.receive.length > r.send.length),
+    JSON.stringify((lm.after.combo.rows || []).map((r) => [r.send.length, r.receive.length])));
+  ok('the whole-finder combo is not empty either',
+    live.after.combo.rows.length > 0, JSON.stringify(live.after.combo.rows));
 
-  const merged = live.after.combo.rows.find((r) => r.merged);
+  const merged = lm.after.combo.rows.find((r) => r.merged);
   ok('two deals with one manager are shown as ONE offer',
-    !!merged, JSON.stringify(live.after.combo.rows.map((r) => [r.partner, r.merged])));
+    !!merged, JSON.stringify(lm.after.combo.rows.map((r) => [r.partner, r.merged])));
   if (merged) {
     ok('and the row says so, because a four-player trade is a different conversation',
       /deals? as one/.test(merged.mergedText), merged.mergedText);
@@ -3738,7 +3786,7 @@ if (!live.boot) {
       incoming.every((id) => linkIds.includes(id)),
       `link ${linkIds.join(',')} for incoming ${incoming.join(',')}`);
     ok('and every one of them is on that manager’s roster',
-      linkIds.every((id) => live.rosters[3].includes(id)), linkIds.join(','));
+      linkIds.every((id) => lm.rosters[3].includes(id)), linkIds.join(','));
 
     // -- (A) THE COMBO PRINTS ONE "YOU GAIN", AND IT IS THE HEADLINE ------
     //
@@ -3753,11 +3801,11 @@ if (!live.boot) {
     // the CELL being absent rather than as a blank, because a blank cell under
     // a heading that says "You gain" is the same invitation to add them up.
     ok('a combo row carries no per-deal “you gain” at all',
-      live.after.combo.rows.every((r) => r.hasMyGain === false),
-      JSON.stringify(live.after.combo.rows.map((r) => r.gainText)));
+      lm.after.combo.rows.every((r) => r.hasMyGain === false),
+      JSON.stringify(lm.after.combo.rows.map((r) => r.gainText)));
     ok('and no per-deal lineup before and after either — there is one, on the headline',
-      live.after.combo.rows.every((r) => r.hasLineup === false),
-      JSON.stringify(live.after.combo.rows.map((r) => r.beforeAfter)));
+      lm.after.combo.rows.every((r) => r.hasLineup === false),
+      JSON.stringify(lm.after.combo.rows.map((r) => r.beforeAfter)));
 
     // HIS OWN GAIN STAYS, AND IT IS HIS COMBINED SIDE. A partner in two of
     // these deals must show what BOTH of them together do to him — the
