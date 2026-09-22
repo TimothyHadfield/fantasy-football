@@ -131,6 +131,40 @@
 // about half the fills above are recomputed. Caching them would mean going round
 // the shared entry point — which is precisely the seam where a second pricing
 // basis gets in — and 12ms does not buy that risk.
+//
+// ===========================================================================
+// THE GOAL (2026-09-21): EVEN IN THE CURRENCY THE FINDER USES
+// ===========================================================================
+//
+// Tim: "the user should essentially open with a goal and all the data aligns
+// with that goal." The finder keeps and orders deals by the GOAL-WEIGHTED gain
+// — Σ weight × that week's change, one weight per priced week, from
+// js/trade-odds.js `weekWeights` (mean 1, so it still reads in points). Until
+// this change these suggestions evened the raw POINTS gap, so under "Win it all"
+// a man worth nothing until the playoffs was priced like a man worth the same
+// points in October — the one thing the goal exists to stop.
+//
+// So: hand in `weightsA` and/or `weightsB` (one per week in `weeks`; the Trade
+// page passes the finder's own set for both sides — a second squad's own set
+// is a fresh multi-second simulation on a checkbox tick) and each side's gain
+// becomes its goal-weighted gain, and the
+// gap, the "about even" band, `label`, `favours` and the ranking all work on
+// that. A side with no weights (its goal is settled — `weekWeights` returned
+// null) counts its weeks at 1 each, which is its points. With no weights at
+// all this file is exactly what it was, and the result says which basis it
+// used (`basis: 'goal' | 'points'`), so the page can say so (rule 7).
+//
+// THE PRINTED NUMBERS STAY POINTS: `deltaA` / `deltaB` / `opponentDelta` /
+// `fleece` are still the lineups' points, because they are what the row prints
+// ("then you +x · him −y /wk"). The weighted versions ride alongside as
+// `goalA` / `goalB`.
+//
+// THE TIE-BREAK FOLLOWS THE FINDER TOO. With an `accept` function (the page's
+// P(he says yes), js/trade-odds.js `acceptChance`), two additions that land the
+// deal equally even are ordered by `expected` = A's goal-weighted gain × that
+// chance — the same product the finder's `rankBy` keeps deals by. Without one,
+// the old tie-break (total points the deal creates) stands. Nothing is ever
+// filtered on it: rule 2 below — a fleece is still allowed — is untouched.
 
 import { priceTradeAcrossWeeks } from './trade.js';
 
@@ -202,20 +236,42 @@ function resolveSide(list, roster) {
  * counterparty in exactly this way, and so does the Trade page's pop-up, so
  * three readers of one deal cannot disagree about it.
  */
-function priceBothSides(rosterA, rosterB, sendA, sendB, pricing) {
+function priceBothSides(rosterA, rosterB, sendA, sendB, pricing, weigh = null) {
   const forA = priceTradeAcrossWeeks({
     players: rosterA, send: sendA, receive: sendB, ...pricing,
   });
   const forB = priceTradeAcrossWeeks({
     players: rosterB, send: sendB, receive: sendA, ...pricing,
   });
+  // THE BASIS the gap is measured on: goal-weighted gains when `weigh` is
+  // given (see THE GOAL above), the points otherwise.
+  const goalA = weigh ? weigh.a(forA) : null;
+  const goalB = weigh ? weigh.b(forB) : null;
   return {
     forA,
     forB,
     deltaA: forA.delta,
     deltaB: forB.delta,
-    gap: round1(forA.delta - forB.delta),
+    goalA,
+    goalB,
+    gap: weigh ? round1(goalA - goalB) : round1(forA.delta - forB.delta),
   };
+}
+
+/**
+ * One side's weights, if they are usable: finite, non-negative, one per week.
+ * Anything else is no weights, which is that side's points.
+ */
+function usableWeights(w, n) {
+  return Array.isArray(w) && w.length === n && w.every((x) => Number.isFinite(x) && x >= 0) ? w : null;
+}
+
+/** Σ weight × that week's change — `findTrades`'s `goalPoints`, from a pricing. */
+function weighedGain(pricing, w) {
+  if (!w) return pricing.delta;
+  let s = 0;
+  (pricing.byWeek || []).forEach((x, i) => { s += w[i] * (Number.isFinite(x.delta) ? x.delta : 0); });
+  return round1(s);
 }
 
 /**
@@ -225,12 +281,12 @@ function priceBothSides(rosterA, rosterB, sendA, sendB, pricing) {
  * whether he helps, which is always the real price. A null week is a week ESPN
  * was quiet about and contributes nothing, exactly as it does in the engine.
  */
-function seasonTotalOf(player, weeks, projFor) {
+function seasonTotalOf(player, weeks, projFor, weights = null) {
   let sum = 0;
   let known = 0;
-  for (const w of weeks) {
-    const v = projFor(player, w);
-    if (Number.isFinite(v)) { sum += v; known++; }
+  for (let i = 0; i < weeks.length; i++) {
+    const v = projFor(player, weeks[i]);
+    if (Number.isFinite(v)) { sum += (weights ? weights[i] : 1) * v; known++; }
   }
   return known ? round1(sum) : null;
 }
@@ -280,6 +336,16 @@ function preFilterRank(value, gapAbs) {
  *   other number in this file is a total and mixing the two scales is how a
  *   page ends up wrong by a factor of nine and looks fine doing it.
  * @param {number} [opts.minImprovement] likewise, as a total.
+ * @param {number[]} [opts.weightsA] squad A's goal weights, one per week in
+ *   `weeks` (js/trade-odds.js `weekWeights`). See THE GOAL note above.
+ * @param {number[]} [opts.weightsB] squad B's, likewise.
+ * @param {function} [opts.accept] `({sendA, sendB, forA, forB}) -> number|null`
+ *   — the chance B says yes to the deal with the man added; orders ties by
+ *   A's goal-weighted gain × it, as the finder's `rankBy` does.
+ *
+ * `basis` in the result is 'goal' when either side's weights were used, else
+ * 'points'. Each candidate also carries `goalA`, `goalB` (null on points),
+ * `accept` and `expected` (null without an `accept`).
  *
  * @returns {{
  *   ok: boolean, reason: string|null, side: string, weeks: number[],
@@ -342,16 +408,30 @@ export function suggestAdditions({
   limit = SUGGEST_LIMIT,
   tolerance = null,
   minImprovement = null,
+  weightsA = null,
+  weightsB = null,
+  accept = null,
 } = {}) {
   const ws = Array.isArray(weeks) ? weeks.slice() : [];
   const span = Math.max(1, ws.length);
+  const wA = usableWeights(weightsA, ws.length);
+  const wB = usableWeights(weightsB, ws.length);
+  const basis = wA || wB ? 'goal' : 'points';
+  const weigh = basis === 'goal'
+    ? { a: (p) => weighedGain(p, wA), b: (p) => weighedGain(p, wB) }
+    : null;
+  // For the cheap pre-filter only: a man's value in the weeks that matter to
+  // the two squads together.
+  const wBoth = basis === 'goal'
+    ? ws.map((_, i) => ((wA ? wA[i] : 1) + (wB ? wB[i] : 1)) / 2)
+    : null;
   const band = Number.isFinite(tolerance) ? Math.abs(tolerance) : EVEN_TOLERANCE_PER_WEEK * span;
   const minShrink = Number.isFinite(minImprovement)
     ? Math.abs(minImprovement)
     : MIN_IMPROVEMENT_PER_WEEK * span;
 
   const empty = (reason) => ({
-    ok: false, reason, side: 'none', weeks: ws,
+    ok: false, reason, side: 'none', weeks: ws, basis,
     tolerance: round1(band), minImprovement: round1(minShrink),
     base: null, candidates: [], rejected: [],
     pool: 0, considered: 0, limited: false, unresolved: 0,
@@ -377,7 +457,7 @@ export function suggestAdditions({
   if (!a.list.length && !b.list.length) return empty('nothing is ticked yet');
 
   const pricing = { slots, weeks: ws, projFor, zeroIsBye, floors };
-  const base = priceBothSides(rosterA, rosterB, a.list, b.list, pricing);
+  const base = priceBothSides(rosterA, rosterB, a.list, b.list, pricing, weigh);
   const gapBefore = base.gap;
   const gapAbsBefore = Math.abs(gapBefore);
 
@@ -394,7 +474,7 @@ export function suggestAdditions({
   const gather = (roster, which) => {
     for (const p of roster) {
       if (!p || p.playerId == null || tickedIds.has(p.playerId)) continue;
-      const value = seasonTotalOf(p, ws, projFor);
+      const value = seasonTotalOf(p, ws, projFor, wBoth);
       // A man ESPN carries no number for in any remaining week cannot change
       // either lineup, so pricing him is a guaranteed rejection at full cost.
       if (value === null) continue;
@@ -420,7 +500,15 @@ export function suggestAdditions({
   for (const spare of priced) {
     const nextA = spare.side === 'a' ? a.list.concat(spare.player) : a.list;
     const nextB = spare.side === 'b' ? b.list.concat(spare.player) : b.list;
-    const after = priceBothSides(rosterA, rosterB, nextA, nextB, pricing);
+    const after = priceBothSides(rosterA, rosterB, nextA, nextB, pricing, weigh);
+    let yes = null;
+    if (typeof accept === 'function') {
+      try {
+        const v = accept({ sendA: nextA, sendB: nextB, forA: after.forA, forB: after.forB });
+        yes = Number.isFinite(v) ? v : null;
+      } catch { yes = null; }
+    }
+    const mineGain = weigh ? after.goalA : after.deltaA;
 
     const gapAbs = Math.abs(after.gap);
     const shrink = round1(gapAbsBefore - gapAbs);
@@ -441,6 +529,10 @@ export function suggestAdditions({
       value: spare.value,
       deltaA: after.deltaA,
       deltaB: after.deltaB,
+      goalA: after.goalA,
+      goalB: after.goalB,
+      accept: yes,
+      expected: yes === null ? null : round1(mineGain * yes),
       gap: after.gap,
       gapAbs: round1(gapAbs),
       gapBefore,
@@ -464,10 +556,14 @@ export function suggestAdditions({
   // additions that land the deal equally even, the one that makes more points
   // out of the same men is the better trade and the one the other manager is
   // likelier to take. Id last, so the order does not shuffle between renders of
-  // the same deal.
+  // the same deal. With an `accept` the first tie-break is instead the finder's
+  // own product — A's gain (goal-weighted when there are weights) × the chance
+  // B says yes — and the total points only after it.
+  const ev = (c) => (Number.isFinite(c.expected) ? c.expected : -Infinity);
   candidates.sort(
     (x, y) =>
       x.gapAbs - y.gapAbs ||
+      (ev(y) - ev(x) || 0) ||
       (y.deltaA + y.deltaB) - (x.deltaA + x.deltaB) ||
       (Number(x.playerId) || 0) - (Number(y.playerId) || 0)
   );
@@ -478,11 +574,15 @@ export function suggestAdditions({
     reason: null,
     side: wanted,
     weeks: ws,
+    basis,
+    weighted: { a: !!wA, b: !!wB },
     tolerance: round1(band),
     minImprovement: round1(minShrink),
     base: {
       deltaA: base.deltaA,
       deltaB: base.deltaB,
+      goalA: base.goalA,
+      goalB: base.goalB,
       gap: gapBefore,
       gapAbs: round1(gapAbsBefore),
       favours: gapAbsBefore <= band ? null : gapBefore > 0 ? 'a' : 'b',
