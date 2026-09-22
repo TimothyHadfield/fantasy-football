@@ -17,6 +17,14 @@
 // Env switches: CAP_ROSTERS_FAIL (every roster week throws), CAP_CLOUD (the
 // data is the synced cloud copy), CAP_PLAYOFF_TEAMS.
 //
+// DECEMBER (AUDIT §2.1): CAP_DECIDED (how many regular weeks are decided,
+// default 3; 14 = the regular season is over), CAP_PLAYOFF_DECIDED (how many
+// playoff weeks are decided, default 0). Once the regular season is decided the
+// schedule carries `playoffGames` in js/season.js's shape — the winners'
+// bracket with its top-seed BYE entries (never `played`, as ESPN sends them)
+// and the consolation games. CAP_ROSTERS_REFUSE="16,17" makes just those roster
+// weeks throw.
+//
 // A test fixture: it lives in tests/ and is never served by the site.
 
 export const calls = { schedule: 0, rosters: [], seasonData: 0, cloud: 0 };
@@ -24,6 +32,7 @@ export const calls = { schedule: 0, rosters: [], seasonData: 0, cloud: 0 };
 const TEAMS = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Manager ${i + 1}`, teamName: `Squad ${i + 1}` }));
 export const WEEKS = Array.from({ length: 14 }, (_, i) => i + 1);
 export const DECIDED = 3;
+const decided = () => Number(process.env.CAP_DECIDED || DECIDED);
 const r1 = (n) => Math.round(n * 10) / 10;
 
 function rnd(a, b) {
@@ -56,7 +65,7 @@ export async function fetchSchedule() {
   const byWeek = new Map();
   for (const w of WEEKS) {
     byWeek.set(w, fixturesFor(w).map(([homeId, awayId], i) => {
-      const played = w <= DECIDED;
+      const played = w <= decided();
       let hs = played ? scoreOf(homeId, w) : null;
       let as = played ? scoreOf(awayId, w) : null;
       // THE TIE: week 2's first game finishes level.
@@ -73,6 +82,7 @@ export async function fetchSchedule() {
   }
   const field = Number(process.env.CAP_PLAYOFF_TEAMS || 4);
   return {
+    playoffGames: playoffGamesFor(field, nameById),
     leagueName: 'Capture Stub League',
     teams: TEAMS.map((t) => ({ id: t.id, name: t.name, teamName: t.teamName })),
     playoffs: {
@@ -89,6 +99,46 @@ export async function fetchSchedule() {
   };
 }
 
+/**
+ * The bracket and consolation games, once the regular season is decided.
+ * Seeds are team ids 1..10 in order (the ids are arbitrary here; nothing reads
+ * the seeding off these games). Rounds follow the field: 4 -> 2, 6 -> 3.
+ */
+function playoffGamesFor(field, nameById) {
+  if (decided() < WEEKS.length) return [];
+  const rounds = field > 4 ? 3 : 2;
+  const done = Number(process.env.CAP_PLAYOFF_DECIDED || 0);
+  const out = [];
+  const game = (week, homeId, awayId, tier) => {
+    const played = awayId != null && week - WEEKS.length <= done;
+    const hs = played ? scoreOf(homeId, week) : null;
+    const as = played ? scoreOf(awayId, week) : null;
+    out.push({
+      week, homeId, homeName: nameById.get(homeId), homeScore: hs,
+      awayId: awayId ?? null, awayName: awayId != null ? nameById.get(awayId) : 'BYE', awayScore: as,
+      played,
+      margin: played ? r1(hs - as) : null,
+      winner: played ? (hs > as ? 'home' : as > hs ? 'away' : 'tie') : null,
+      tier,
+    });
+  };
+  for (let r = 0; r < rounds; r++) {
+    const week = WEEKS.length + 1 + r;
+    if (rounds === 3 && r === 0) {
+      game(week, 1, null, 'WINNERS_BRACKET');        // the top two seeds' byes
+      game(week, 2, null, 'WINNERS_BRACKET');
+      game(week, 3, 6, 'WINNERS_BRACKET');
+      game(week, 4, 5, 'WINNERS_BRACKET');
+    } else {
+      game(week, 1, 4, 'WINNERS_BRACKET');
+      game(week, 2, 3, 'WINNERS_BRACKET');
+    }
+    game(week, 7, 10, 'LOSERS_CONSOLATION_LADDER');
+    game(week, 8, 9, 'LOSERS_CONSOLATION_LADDER');
+  }
+  return out;
+}
+
 // 1 QB, 2 RB, 3 WR, 1 TE, FLEX, D/ST, K and four on the bench.
 const SHAPE = [
   ['QB', 0], ['RB', 2], ['RB', 2], ['WR', 4], ['WR', 4], ['WR', 4],
@@ -99,6 +149,9 @@ const SHAPE = [
 export async function fetchWeekRosters(week) {
   calls.rosters.push(week);
   if (process.env.CAP_ROSTERS_FAIL) throw new Error('ESPN would not return rosters.');
+  if ((process.env.CAP_ROSTERS_REFUSE || '').split(',').map(Number).includes(Number(week))) {
+    throw new Error(`ESPN would not return week ${week}.`);
+  }
   const teams = TEAMS.map((t) => {
     const players = SHAPE.map(([position, lineupSlotId], i) => {
       const base = { QB: 19, RB: 12, WR: 12, TE: 9, K: 8, DST: 7 }[position];
