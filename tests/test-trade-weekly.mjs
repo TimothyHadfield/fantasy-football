@@ -29,6 +29,9 @@ import {
 // packer has to be priced on the SAME basis as the rows above it, and for a day
 // it was not. See "THE FLOOR HAS TO REACH THE COMBO".
 import { positionFloors } from '../js/floor.js';
+// How busy the machine is, for the one assertion here that is about TIME. See
+// "A TIME BUDGET ON A MACHINE THAT IS NEVER IDLE" further down.
+import { machineSpeed, scaledBudget, REFERENCE_MS } from './settle.mjs';
 
 let pass = 0;
 const fails = [];
@@ -617,6 +620,30 @@ for (const t of demoTeams) {
 
 // ---- the finder on the weekly measure -------------------------------------
 
+// A TIME BUDGET ON A MACHINE THAT IS NEVER IDLE.
+//
+// The assertion under the loop below — the slowest squad's search finishes in a
+// time a page can hand to a timeout — is about the real product: the Trade page
+// runs this finder and a page that freezes is a defect Tim would feel. So the
+// 20-second budget stays, and so does the assertion.
+//
+// What was unfair was the UNITS. Measured 2026-09-23: the slowest squad took
+// 6.7 s with the machine as Tim leaves it and 39.4 s with every core taken, on
+// identical code — so a bare millisecond figure asserts something about his OCR
+// jobs rather than about `findTrades()`. It had already been seen at 29 s and
+// 35 s on other afternoons.
+//
+// SCALED, NOT SKIPPED. Skipping while the machine is busy would mean the
+// assertion never runs at all, because the only machine it runs on is busy
+// permanently — which is a deleted assertion with extra steps. Instead a fixed
+// arithmetic benchmark measures how much of a core this process is actually
+// being given, and the 20-second promise is multiplied by it. Measured either
+// side of the ten searches and the worse reading used, so a machine that got
+// busy halfway through is credited for it; and the raw milliseconds are still
+// printed, so a genuine slowdown is told from a busy afternoon by reading the
+// two numbers rather than by guessing.
+const speedBefore = machineSpeed();
+
 const timings = [];
 const searched = new Map();
 for (const me of demoTeams) {
@@ -693,11 +720,23 @@ function handRosterAfter(players, outgoing, incoming) {
   const found = [...searched.values()].reduce((a, r) => a + r.offers.length, 0);
   ok('the weekly finder finds real offers in the demo league', found > 0, `${found} offers`);
   const slowest = Math.max(...timings);
-  ok('and does it in a time a page can hand off to a timeout', slowest < 20000,
-    `${slowest}ms for the slowest squad`);
+
+  const speedAfter = machineSpeed();
+  const machine = speedBefore.factor >= speedAfter.factor ? speedBefore : speedAfter;
+  const budget = scaledBudget(20000, machine.factor);
+  ok('and does it in a time a page can hand off to a timeout', slowest < budget,
+    `${slowest}ms for the slowest squad, against a ${budget}ms budget ` +
+    `(20,000ms on an idle machine × ${machine.factor.toFixed(2)}; the benchmark took ` +
+    `${machine.ms}ms against ${REFERENCE_MS}ms idle)`);
   console.log(
     `weekly finder: ${Math.round(timings.reduce((a, b) => a + b, 0))}ms for ten squads ` +
-    `over ${SEASON_WEEKS.length} weeks (slowest squad ${slowest}ms), ${found} offers`
+    `over ${SEASON_WEEKS.length} weeks (slowest squad ${slowest}ms of a ${budget}ms budget), ` +
+    `${found} offers`
+  );
+  console.log(
+    `machine: benchmark ${machine.ms}ms vs ${REFERENCE_MS}ms idle — ` +
+    `${machine.factor.toFixed(2)}× slower than idle` +
+    (machine.loaded ? ' (LOADED: something else is holding the cores)' : '')
   );
 }
 
