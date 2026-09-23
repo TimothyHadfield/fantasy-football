@@ -8,20 +8,57 @@ so a rename or a broken selector fails a test rather than sailing past it.
 (about 8 minutes depending on what else the machine is doing — `tr-test` alone
 is 3½ of them since the Trade page started reading itself on load). Four of the
 38 report pages or scenarios rather than a count, so they are not in that
-total: `test-pages-render` (6 pages), `test-home` (2 pages), `stats-weeks` and
-`opp-check` (6 scenarios each). GitHub Actions runs `npm test` on every push
-(`.github/workflows/test.yml`).
+total: `test-pages-render` (9 pages since 2026-09-22), `test-home` (2 pages),
+`stats-weeks` and `opp-check` (6 scenarios each). GitHub Actions runs `npm test`
+on every push, and since 2026-09-22 (AUDIT §3.1) the **Pages deploy waits for it**
+— it is a second job in `.github/workflows/test.yml` with `needs: test`, and it
+only runs for a push to `main` or a manual run. Before that, Pages deployed
+straight off `main` in about 39 seconds while these suites took seven minutes,
+with no branch protection, so a broken site published first and the red run
+arrived six minutes later with nothing acting on it.
 
 Those figures are a run, not an estimate — and the per-suite sizes in the table
-below drift as suites grow. If one disagrees with a run, the run is right.
+below drift as suites grow. If one disagrees with a run, the run is right, and
+since 2026-09-22 the run also **disagrees out loud**:
+[`counts.json`](counts.json) holds the per-suite counts and `run-all.mjs`
+**fails when one of them falls** (AUDIT §3.5). A count that grows is fine and is
+printed; record it with `node run-all.mjs --bless` on a green run. A number in
+that file going DOWN is a decision to explain, never a drift to absorb — the
+whole reason it exists is that a deliberate break which moved fc-test from 1004
+assertions to 992 used to look exactly like a green run.
+
+**Four suites are not in `counts.json` yet**, and the run says so on every line:
+`test-trade-weekly`, `fc-test`, `wv-test` and `tr-test`. Only a PASSING suite is
+recorded, and on 2026-09-22/23 these four could not be made to pass on this
+machine — three of Tim's OCR jobs (`ocrvid.py`) were holding about four cores all
+night, and every one of these four fails on a loaded machine rather than on the
+code (PROGRESS.md Traps; `tr-test` was SIGTERMed at the 10-minute mark,
+`test-trade-weekly` fails a "can a page hand this to a timeout?" assertion at
+29-40 s a squad, and `fc-test`/`wv-test` boot the real page behind a FIXED wait
+and crash on a half-rendered table — a different scenario each run). Nothing here
+was changed to accommodate that. **Run `node run-all.mjs --bless` on an idle
+machine and they will record themselves.** Until then those four are ungated,
+which is worth knowing because fc-test is the suite §3.5 was written about.
 
 Not suites, and deliberately left out of `npm test`: `fc-dump.mjs` and
-`sim-dump.mjs` (print panels, for diffing a refactor) and
-[`text-audit.mjs`](text-audit.mjs), which boots every page on demo data and
-counts the prose a reader is shown per panel — visible versus tucked inside a
-closed "How this works" toggle. `node text-audit.mjs` or
-`node text-audit.mjs trade.html`. It measured ~5,700 visible words before the
-2026-09-16 declutter and ~1,050 after.
+`sim-dump.mjs`, which print panels for diffing a refactor.
+
+[`text-audit.mjs`](text-audit.mjs) **is** in `npm test` since 2026-09-22
+(AUDIT §3.2). It boots every page on demo data and counts the prose a reader is
+shown per panel — visible versus tucked inside a closed "How this works" toggle
+— and it now counts what is actually **on screen** rather than only the words
+that happen to sit in a `<p>`, `.panel-note`, `.note`, `.ctl-hint` or `<li>`.
+That old tag-shaped count missed about two thirds of this site's words, because
+prose written at runtime lands in whatever element the renderer built: trade
+measured 196 against 547. Both numbers are printed, and the rendered one is
+gated by the per-page ceilings in [`text-ceilings.json`](text-ceilings.json),
+set at the real measured count on 2026-09-22. A page may lose words freely;
+growing past its ceiling fails the suite, and raising a ceiling is Tim's call.
+It waits for each page to FINISH rather than for a fixed 1.5 s, so the Trade
+page (which prices itself on load) is measured settled and a loaded machine does
+not fake a number. `node text-audit.mjs` runs and gates everything;
+`node text-audit.mjs trade.html` reports one page and gates nothing. It measured
+~5,700 visible words before the 2026-09-16 declutter and ~1,050 after.
 
 ## Running them
 
@@ -38,7 +75,11 @@ subset, pass a substring:
 ```
 node run-all.mjs fc wv      # only fc-test.mjs and wv-test.mjs
 node fc-test.mjs            # or just run one directly
+node run-all.mjs --bless    # record today's counts in counts.json (green runs only)
 ```
+
+`--bless` merges, so blessing a filtered run cannot wipe the suites it did not
+run, and it refuses outright if any suite failed.
 
 The only dependency is [`linkedom`](https://github.com/WebReflection/linkedom),
 a DOM good enough to run the pages without a browser. Everything else is Node's
@@ -53,7 +94,7 @@ process would see each other's DOM.
 
 | Suite | What it covers | Size |
 | --- | --- | --- |
-| [`test-pages-render.mjs`](test-pages-render.mjs) | Boots each page's real HTML with the real module scripts the page itself declares. Catches a missing element id, a typo'd `querySelector`, an import that doesn't resolve — the things unit tests miss and only a browser would show. Its default list is `index`, `stats`, `analysis`, `schedule`, `trade` and `summary`. | 6 pages |
+| [`test-pages-render.mjs`](test-pages-render.mjs) | Boots each page's real HTML with the real module scripts the page itself declares. Catches a missing element id, a typo'd `querySelector`, an import that doesn't resolve — the things unit tests miss and only a browser would show. Its list is `index`, `stats`, `analysis`, `schedule`, `trade`, `summary`, `waivers`, `draft` and `debug`. The last three joined it on 2026-09-22 (AUDIT §3.3): they were booted by **no suite at all**, so an undefined import in `js/draft-page.js` — 920 lines, plus `draft-model.js`'s 18 untested exports, `draft-sim.js` and `draft-demo.js` — sailed past `test-pages-render`, `nav-check`, `link-check` and `test-home` alike. Demonstrated again on the day they were added: the same undefined import now fails this suite. | 9 pages |
 | [`test-forecast.mjs`](test-forecast.mjs) | [`js/forecast.js`](../js/forecast.js): win probability, sigma calibration, optimal lineup, the win-total distribution, credible ranges. Known-good values plus brute force. | 68 |
 | [`test-sim.mjs`](test-sim.mjs) | The Monte Carlo season simulation in [`js/forecast.js`](../js/forecast.js), **including the playoff bracket and the hybrid final placing** — that a team topping the table still averages a 2.25 finish once three one-week rounds are played out, that the bracket draws from its own RNG stream so asking for playoffs leaves the regular-season numbers byte-identical, and that a playoff tie goes to the higher seed. | 415 |
 | [`test-projection.mjs`](test-projection.mjs) | [`js/projection.js`](../js/projection.js), the shared projection module. | 38 |
@@ -91,6 +132,8 @@ process would see each other's DOM.
 | [`site-status-check.mjs`](site-status-check.mjs) | [`js/site-status.js`](../js/site-status.js): the "Site updated" stamp, the newer-version bar, the failed-to-load strip, and extension errors ignored. | 89 |
 | [`nav-check.mjs`](nav-check.mjs) | The hand-copied nav: same links, labels and order on every page, each page marking only itself. | 127 |
 | [`test-home.mjs`](test-home.mjs) | The home page (demo and pre-kickoff) and the debug page. | 2 pages |
+| [`sortable-check.mjs`](sortable-check.mjs) | [`js/sortable.js`](../js/sortable.js) on its own (AUDIT §3.6, 2026-09-22). 197 lines, load-bearing on every scaled column site-wide, and imported by **no test** until now — it was only ever exercised as a side effect of a page suite, so a scale added to a new page was unguarded by construction. Covers the formatting a number can hide behind (`1,467`, `+12.3`, `68%`, `$5`, the unicode minus), nulls sorting to the bottom in BOTH directions, `data-v` beating the cell text, stable sorting, which direction a fresh column opens in, the LAST header row being the one with the labels, each `<tbody>` sorting on its own (so the roster detail's starters/totals/bench grouping survives a click and the one-row totals band stays put), `resort` restoring the reader's column *and* direction after a re-render, `sortBy` re-aiming a grid that changed shape, and `enableSortAll`. And the trap that caused a live defect: the text fallback strips `, + $ %` and spaces but **not** `▲`, so a scaled cell without `data-v` sorts as the string `"22.1 ▲"` and 9.4 outranks 100.2. The glyph list is read out of `js/heat.js` rather than typed here, so a third glyph is covered on the day it is added. Falsified six ways (ignore `data-v`, nulls to the top, teach the fallback to strip the glyphs, read the first header row, merge the tbodies). | 53 |
+| [`charts-check.mjs`](charts-check.mjs) | [`js/charts.js`](../js/charts.js) on its own (AUDIT §3.6, 2026-09-22). 967 lines, four exports, imported by no test until now. Asserts what a refactor can silently lose: the palette's ten slots are distinct and **assigned in fixed order** (a team keeps its colour across the page), every line, dot, bar and row carries a `<title>` naming itself so identity is never hue alone, a highlight matches on the caller's **id** and not on a name two managers can share (rule 9) — with two same-named series proving it — an unknown highlight emphasises nothing rather than dimming everything, a legend click highlights and un-highlights, a NaN hole is a gap rather than a straight line through missing data and a run of one becomes a dot, `zeroLine` pulls 0 into the domain, a caller-pinned `yDomain` is used exactly as given (several charts share one axis), an untrusted series name cannot open an element or add an event handler, a re-render replaces rather than stacks and disconnects the old width observer, the viewBox tracks the container's width and floors at 280, the histogram's bar heights are proportional and an empty bin draws no bar but keeps its hit target, "no observations in range" is SAID rather than drawn as a flat axis, and the box plot repairs an out-of-order five-number summary, keeps a zero-IQR row visible, widens its x domain to take outliers in, and truncates a long row name while keeping the full one in a `<title>`. Falsified six ways. | 97 |
 
 `test-pages-render.mjs` also takes a page name, which is how the pages outside
 its default list get checked:
@@ -100,6 +143,56 @@ node test-pages-render.mjs waivers.html
 node test-pages-render.mjs draft.html
 node test-pages-render.mjs debug.html
 ```
+
+## Assertions that passed whether the feature worked or not
+
+Two shapes of vacuous assertion were found on 2026-09-20 and closed on
+2026-09-22 (AUDIT §3.4). Both are worth recognising, because both look like
+thorough tests.
+
+**A colour key asserted by its TEXT.** `fc-test`'s `forecastKey`, `test-home`'s
+`strengthKey` and `benchScaleKey` are all `<p hidden>` that `setKey()` unhides,
+and all three were checked by reading their words. Text is still text when the
+whole key has been moved inside its own closed `<details>` — a colour with its
+key behind a toggle, which rule 7 forbids — and moving all three left both
+suites green. Each now goes through an `onScreen()` helper that walks the
+ancestors for a `hidden` attribute **and** for a closed toggle, and reports where
+the element actually sits when it fails. `fc-test`'s `simKey` check was
+strengthened the same way: "not hidden" was not enough on its own.
+
+**A block behind `if (x.length)`.** `fc-test`'s whole Win %-scale block sat
+behind `if (shadedWin.length)`, so setting the forecast's `minSpread` to `1e9` —
+nothing shaded anywhere — kept the suite green while its count slid from 1004 to
+992. Two assertions close it: the demo fixture is known to spread, so it **must**
+shade; and in any scenario, a column whose win chances differ by 5 percentage
+points of standard deviation (which clears `HEAT_MIN_SPREAD` whichever unit the
+page passes) may not be left plain. The count gate in `counts.json` would now
+catch the same break from the other direction.
+
+## What is measured, in numbers rather than in shapes
+
+`fc-test` also carries two budgets, added 2026-09-22 (AUDIT §3.7). Both are set
+at the real measured figure, and both assert a floor as well as a ceiling so that
+a budget nothing spends cannot pass as a measurement.
+
+- **The ESPN bill per live load.** Every individual request was already
+  accounted for; nobody watched the sum. 17 per load — one schedule plus
+  sixteen weeks — and one archive lookup through `fetch`. This page costs one
+  request per week, so a page that starts asking for one more thing per week
+  grows the bill seventeen at a time on a real league, against a third party
+  with no published rate limit.
+- **The bytes a load leaves in localStorage.** `test-store.mjs` covers the
+  eviction ORDER when the quota runs out; nothing covered how fast the quota is
+  reached, and the failure mode is not a crash but eviction, which looks like
+  the site simply re-buying weeks it already had. A live load is held to the
+  archive's own 400 KB cap and a 900 KB write budget; a demo load must leave
+  almost nothing, because demo is a fixture and `store.js` refuses to bank it.
+
+Two of §3.7's four were skipped on purpose: **contrast ratios**, because the
+scale is composed over whatever the cascade puts beneath it and AUDIT §4.1 says
+the result is below AA *today*, so the measurement belongs with the §4.1 fix
+rather than as a gate that starts red; and **page height**, because
+`tools/measure-layout.mjs` needs Edge and there is no browser in CI.
 
 ## Two ways to waste an hour on a suite that is working fine
 

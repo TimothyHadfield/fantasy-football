@@ -1,14 +1,26 @@
-# Runs every suite in tests/ (tests/run-all.mjs) on each push and pull request.
+# Runs every suite in tests/ (tests/run-all.mjs) on each push and pull request,
+# and — only when they all pass — publishes the site to GitHub Pages.
 #
 # The suites need no network: every ESPN read is stubbed, and fetch in the
 # page harnesses throws on any real request. Node 22 because linkedom's
 # dependencies require Node >= 20.19.
+#
+# Why the deploy lives in this file (AUDIT §3.1): Pages used to deploy straight
+# off main (`build_type: legacy`), finishing in ~39s while these tests take
+# ~7 minutes, and main has no branch protection — so a broken site published
+# first and went red six minutes later with nothing acting on it. A job can
+# only `needs:` a job in its own workflow, so the deploy is a second job here.
+#
+# TO UNDO: delete the `deploy` job below and set Settings -> Pages -> Build and
+# deployment -> Source back to "Deploy from a branch" (main / root). The site
+# then publishes on push again, ungated, exactly as before.
 
 name: tests
 
 on:
   push:
   pull_request:
+  workflow_dispatch:      # a manual "publish again" button for the owner
 
 permissions:
   contents: read
@@ -37,3 +49,40 @@ jobs:
       - name: Test
         working-directory: tests
         run: npm test
+
+  # Publishes the repo as-is (it is a static site; no build step). Runs only
+  # after `test` is green, and only for main or a manual run — never for a pull
+  # request and never for another branch's push.
+  deploy:
+    needs: test
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read        # checkout
+      pages: write          # publish a deployment
+      id-token: write       # deploy-pages verifies the run with OIDC
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Two deploys must not overlap, and a deploy is never worth cancelling.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # Uploads the whole repo. The action itself excludes .git and .github;
+      # tests/node_modules is never created in this job.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

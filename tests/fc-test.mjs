@@ -393,11 +393,15 @@ async function boot(scenario) {
   // missing here. `js/snapshots.js` enumerates keys to list the archive, so
   // without them the time machine would quietly find nothing and every
   // assertion about it would pass by being vacuous.
+  // Every write is recorded as well as kept, because the bytes a load LEAVES
+  // behind and the bytes it CHURNS are different numbers and both matter on a
+  // 5 MB quota (AUDIT §3.7 — test-store.mjs covers eviction order, not size).
+  const writes = [];
   const localStorage = {
     get length() { return store.size; },
     key: (i) => [...store.keys()][i] ?? null,
     getItem: (k) => (store.has(k) ? store.get(k) : null),
-    setItem: (k, v) => store.set(k, String(v)),
+    setItem: (k, v) => { writes.push([k, String(v).length]); store.set(k, String(v)); },
     removeItem: (k) => store.delete(k),
     clear: () => store.clear(),
   };
@@ -433,7 +437,7 @@ async function boot(scenario) {
   if (cfg.after) await cfg.after({ document, window, CustomEvent: window.CustomEvent });
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg };
+  return { document, errors, fetchCalls, rejections, cfg, store, writes };
 }
 
 // ------------------------------------------------------------- assertions
@@ -503,6 +507,47 @@ function heatDirection(cells, goodHigh) {
   if (!ups) return 'nothing green';
   if (!downs) return 'nothing red';
   return '';
+}
+
+/**
+ * ON SCREEN, not merely present — AUDIT §3.4.
+ *
+ * A colour key asserted by its TEXT alone passes just as happily when the key
+ * is moved inside its own closed <details>, which is a colour with its key
+ * behind a toggle and is what rule 7 forbids. That was demonstrated on
+ * 2026-09-20 by moving `forecastKey` (and test-home's two) into their closed
+ * toggles and watching both suites stay green. So every key assertion here goes
+ * through this, which walks the ancestors for a `hidden` attribute and for a
+ * closed toggle.
+ */
+function onScreen(el) {
+  if (!el) return false;
+  for (let n = el; n; n = n.parentElement) {
+    if (n.hasAttribute && n.hasAttribute('hidden')) return false;
+    if (n.tagName === 'DETAILS' && n !== el && !n.hasAttribute('open')) return false;
+  }
+  return true;
+}
+
+/** Where an element sits, for a failure message that says why it is not on screen. */
+function placeOf(el) {
+  if (!el) return 'no such element';
+  const trail = [];
+  for (let n = el; n && n.tagName !== 'BODY'; n = n.parentElement) {
+    trail.push(n.tagName.toLowerCase() +
+      (n.id ? '#' + n.id : '') +
+      (n.hasAttribute('hidden') ? '[hidden]' : '') +
+      (n.tagName === 'DETAILS' ? (n.hasAttribute('open') ? '[open]' : '[CLOSED]') : ''));
+  }
+  return trail.join(' < ');
+}
+
+/** Population standard deviation, for "was there anything to colour?". */
+function sdOf(xs) {
+  const v = xs.filter((n) => typeof n === 'number' && Number.isFinite(n));
+  if (v.length < 2) return 0;
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  return Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / v.length);
 }
 
 function rowsOf(table) {
@@ -685,6 +730,70 @@ async function check(scenario, boot) {
     // Byes arrive inside the weekly projections (a bye player is projected 0),
     // so the separate bye-week request is gone.
     c.ok('bye weeks never fetched separately', espn.calls.byes === 0, `saw ${espn.calls.byes}`);
+
+    // ---- THE TOTAL BILL, which nothing measured until 2026-09-22 (§3.7).
+    //
+    // Every request above is accounted for one at a time; nobody watched the
+    // SUM. That is the number that matters, because this page costs one request
+    // per week and a page that starts asking for one more thing per week grows
+    // the bill seventeen at a time on a real league — and ESPN is a third party
+    // with no published rate limit, so the cost is measured here rather than
+    // discovered by being throttled mid-season.
+    //
+    // 17 per load = 1 schedule + 16 weeks (1 played, 2-13 remaining, 14-16 the
+    // bracket), plus the archive lookup that goes through fetch. A cheaper page
+    // is welcome; a dearer one is a decision.
+    const ESPN_BUDGET_PER_LOAD = 17;
+    const ARCHIVE_BUDGET_PER_LOAD = 1;
+    const espnCalls = season.calls.schedule + season.calls.rosters.length + espn.calls.byes;
+    c.ok('a live load costs no more ESPN requests than its budget',
+      espnCalls <= ESPN_BUDGET_PER_LOAD * loads,
+      `${espnCalls} ESPN requests over ${loads} load(s), budget ${ESPN_BUDGET_PER_LOAD} each ` +
+      `(schedule ${season.calls.schedule}, weeks ${season.calls.rosters.length}, byes ${espn.calls.byes})`);
+    c.ok('and no more requests through fetch than its budget',
+      boot.fetchCalls.length <= ARCHIVE_BUDGET_PER_LOAD * loads,
+      `${boot.fetchCalls.length} over ${loads} load(s): ${boot.fetchCalls.join(' | ')}`);
+    // Falsifiable in the other direction too: a budget nothing spends is not a
+    // measurement, so the page must really be buying the weeks.
+    c.ok('and the budget is one the page actually spends',
+      espnCalls >= 10 * loads, `${espnCalls} requests`);
+  }
+
+  // ---- what this load LEFT IN THE BROWSER, measured by nothing until
+  // 2026-09-22 (AUDIT §3.7). test-store.mjs covers the eviction ORDER when the
+  // quota runs out; nothing covered how fast the quota is reached. A page that
+  // banks one week per request is the page most able to fill 5 MB quietly, and
+  // the failure mode is not a crash — it is eviction, which looks like the site
+  // simply re-buying weeks it already had.
+  const residentBytes = [...boot.store.entries()]
+    .reduce((a, [k, v]) => a + Buffer.byteLength(k) + Buffer.byteLength(v), 0);
+  const writtenBytes = boot.writes.reduce((a, [k, n]) => a + Buffer.byteLength(k) + n, 0);
+  const storageDetail =
+    `${residentBytes} B resident in ${boot.store.size} keys, ${writtenBytes} B written over ` +
+    `${boot.writes.length} writes; biggest key ` +
+    ([...boot.store.entries()].sort((a, b) => b[1].length - a[1].length)[0] || ['none', ''])[0];
+
+  if (boot.cfg.stub) {
+    // A live load banks the weeks it bought. The budget is per load and set at
+    // the real measured figure; growing past it is a decision, not a drift.
+    const RESIDENT_BUDGET = 400 * 1024;   // the archive's own cap (rule 12 / §2.3)
+    const WRITTEN_BUDGET = 900 * 1024;
+    c.ok('a live load leaves no more in localStorage than its budget',
+      residentBytes <= RESIDENT_BUDGET * loads, storageDetail);
+    c.ok('and churns no more than its write budget',
+      writtenBytes <= WRITTEN_BUDGET * loads, storageDetail);
+    // And the budget is one the page really spends, or neither line means much.
+    // Not in `live-rosterfail`, where every roster request rejects: a load that
+    // bought nothing has nothing to bank, and that is the correct behaviour.
+    if (scenario !== 'live-rosterfail') {
+      c.ok('and it really does bank what it bought',
+        residentBytes > 1024, storageDetail);
+    }
+  } else {
+    // Demo is a fixture, not a season: nothing about it is worth keeping, and
+    // the store module refuses to write it (rule 15, test-store.mjs).
+    c.ok('a demo load leaves almost nothing in localStorage',
+      residentBytes <= 4 * 1024, storageDetail);
   }
 
   const fcRows = rowsOf($('forecastTable'));
@@ -876,6 +985,38 @@ async function check(scenario, boot) {
     c.ok('the two projected-points columns stay plain',
       !fcRows.some((r) => heatSide(r.td[3]) || heatSide(r.td[4])),
       fcRows.map((r) => `${r.td[3].getAttribute('class')}/${r.td[4].getAttribute('class')}`).join(','));
+
+    // THE KEY IS ON SCREEN — asserted whether anything is shaded or not, since
+    // both branches below depend on the reader being able to READ the key.
+    // Checking its text only is what let all three of this site's colour keys be
+    // moved inside their closed toggles with both suites still green (§3.4).
+    c.ok('the forecast key is on screen: not hidden, and not behind a toggle',
+      onScreen($('forecastKey')), placeOf($('forecastKey')));
+
+    // NO LONGER A SILENT SKIP (AUDIT §3.4). This block sat behind
+    // `if (shadedWin.length)`, so setting the forecast's `minSpread` to 1e9 —
+    // nothing shaded anywhere — left fc-test green while its count slid from
+    // 1004 to 992. Two assertions close it.
+    //
+    // First: ONE NAMED SCENARIO MUST SHADE. `demo-mid` forecasts from week 5,
+    // so it carries nine remaining games at genuinely different chances — and
+    // `demo` deliberately is not the one, because the default week leaves a
+    // single game, one value, and no scale is possible on it. (That is exactly
+    // why the guard existed; the answer is to pin the scenario that can, not to
+    // let every scenario off.)
+    const winSd = sdOf(pcts);
+    if (scenario === 'demo-mid') {
+      c.ok('the demo forecast really does shade its Win % column',
+        shadedWin.length > 0,
+        `${shadedWin.length} of ${winCells.length} shaded; sd ${winSd.toFixed(2)} pts`);
+    }
+    // Second, and in EVERY forecasting scenario: 5 percentage points of standard
+    // deviation clears heat.js's flat-column guard whichever unit the page hands
+    // it (HEAT_MIN_SPREAD is 0.05, so 5 points clears it as a percentage and as
+    // a fraction), which leaves no honest reason to be plain.
+    c.ok('a Win % column with spread the reader can see is never left plain',
+      !(winSd >= 5) || shadedWin.length > 0,
+      `sd ${winSd.toFixed(2)} pts over ${pcts.length} games; ${shadedWin.length} shaded`);
 
     if (shadedWin.length) {
       const whyWin = heatDirection(winCells, true);
@@ -1069,8 +1210,10 @@ async function check(scenario, boot) {
     c.ok('and the tucked note says why Most likely is left plain',
       /Most likely<\/strong> is left plain|Most likely is left plain/.test(simNote),
       simNote.slice(0, 200));
-    c.ok('the key is not hidden while the table is showing',
-      $('simKey') && !$('simKey').hasAttribute('hidden'));
+    // Strengthened 2026-09-22 (AUDIT §3.4): "not hidden" was not enough — the
+    // key can also be put out of reach by moving it inside a closed toggle.
+    c.ok('the key is on screen while the table is showing: not hidden, not behind a toggle',
+      onScreen($('simKey')), placeOf($('simKey')));
 
     const colSum = (i) => simRows.reduce((a, r) => a + Number(r.v[i]), 0);
     c.ok('title chances sum to 100%', Math.abs(colSum(COL.title) - 1) < 0.005, String(colSum(COL.title)));

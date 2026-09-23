@@ -2,6 +2,7 @@
 //
 //   npm test                 -> all of them
 //   node run-all.mjs fc wv   -> only suites whose name contains fc or wv
+//   node run-all.mjs --bless -> record today's counts in counts.json
 //
 // Each suite gets its OWN child process, and that is not tidiness: an ES
 // module initialises once per process and the page modules self-boot on
@@ -12,12 +13,28 @@
 // A suite passes if it exits 0. The count in the line is scraped from whatever
 // summary the suite prints -- they do not all phrase it the same way, and it
 // is not worth rewriting eleven working suites to agree.
+//
+// AND THE COUNT IS NOW COMPARED (AUDIT §3.5). It used to be printed and
+// nothing else, which is how a deliberate break that silently moved fc-test
+// from 1004 assertions to 992 -- because one whole block sits behind an
+// `if (x.length)` -- looked exactly like a green run. So:
+//
+//   * a count that DROPS fails the run, naming the suite and both numbers;
+//   * a count that RISES is fine, printed, and left for `--bless` to record;
+//   * a suite listed in counts.json that no longer runs at all fails too,
+//     because renaming a suite is the other way a count disappears.
+//
+// `counts.json` is a committed record, not a cache. Raising or lowering a
+// number in it is a decision: run `node run-all.mjs --bless` on a green run,
+// and say in the commit message what changed and why.
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const COUNTS_FILE = path.join(HERE, 'counts.json');
 
 // Cheapest first, so a broken engine shows up before the slow page boots.
 const SUITES = [
@@ -27,6 +44,8 @@ const SUITES = [
   ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],
   ['heat-draw-check.mjs', 'the red/green tint draws on even rows, your own row and under hover (the CSS cascade, run)'],
+  ['sortable-check.mjs', 'click-to-sort on its own: data-v, the text fallback, and every glyph heat.js can emit'],
+  ['charts-check.mjs', 'the inline-SVG charts on their own: marks placed from the data, identity never by hue alone'],
   ['test-bye-rule.mjs', 'a known bye week projects 0 (ESPN projects D/STs through theirs), playoff weeks in the phone copy, points for to the tenth'],
   ['test-season-rules.mjs', 'played means ESPN decided it, ties count half, playoff games kept apart, waiver status, byes'],
   ['test-store.mjs', 'the weeks kept in this browser between pages: two freshness clocks, eviction, and the seam in season.js'],
@@ -61,38 +80,63 @@ const SUITES = [
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],
   ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],
+  // Last, because it boots all seven pages and is the slowest thing here that
+  // is not tr-test. It measures the prose a reader is SHOWN and fails a page
+  // that grew past its ceiling (AUDIT §3.2) — the instrument rule 16 depends on.
+  ['text-audit.mjs', 'the words on screen per page, against the ceilings in text-ceilings.json'],
 ];
 
 // The dumps are not suites -- they print rendered panels so a refactor can be
 // proved a no-op by diffing before against after. See the README.
-const NOT_SUITES = ['fc-dump.mjs', 'sim-dump.mjs', 'text-audit.mjs'];
+const NOT_SUITES = ['fc-dump.mjs', 'sim-dump.mjs'];
 
-/** Pull a headline count out of a suite's own summary line. */
-function summarise(out) {
+/**
+ * Pull the numbers out of a suite's own summary line.
+ *
+ * Returns whatever it could find, keyed by what the number IS -- assertions,
+ * scenarios, pages -- because the suites count different things and comparing
+ * assertions against pages would be nonsense.
+ */
+function countsOf(out) {
+  const got = {};
   const scenarios = (out.match(/^PASS /gm) || []).length;
-  let assertions = null;
 
   let m = out.match(/All ([\d,]+) assertions passed/);
-  if (m) assertions = m[1];
-  if (assertions === null) {
-    m = out.match(/([\d,]+) passed, [\d,]+ failed/);
-    if (m) assertions = m[1];
-  }
+  if (!m) m = out.match(/([\d,]+) passed, [\d,]+ failed/);
+  if (m) got.assertions = Number(m[1].replace(/,/g, ''));
 
-  if (assertions !== null) {
-    return scenarios
-      ? `${assertions} assertions across ${scenarios} scenarios`
-      : `${assertions} assertions`;
+  m = out.match(/All (\d+) pages rendered/) || out.match(/All (\d+) pages OK/);
+  if (m) got.pages = Number(m[1]);
+
+  if (scenarios) got.scenarios = scenarios;
+  return got;
+}
+
+/** The same numbers, phrased the way the run has always phrased them. */
+function summarise(got) {
+  const n = (v) => v.toLocaleString('en-US');
+  if (got.assertions != null) {
+    return got.scenarios
+      ? `${n(got.assertions)} assertions across ${got.scenarios} scenarios`
+      : `${n(got.assertions)} assertions`;
   }
-  m = out.match(/All (\d+) pages rendered/);
-  if (m) return `${m[1]} pages rendered`;
-  m = out.match(/All (\d+) pages OK/);
-  if (m) return `${m[1]} pages`;
-  if (scenarios) return `${scenarios} scenarios`;
+  if (got.pages != null) return `${got.pages} pages`;
+  if (got.scenarios != null) return `${got.scenarios} scenarios`;
   return 'ok';
 }
 
-const filters = process.argv.slice(2);
+function readCounts() {
+  try {
+    const j = JSON.parse(readFileSync(COUNTS_FILE, 'utf8'));
+    return j && typeof j.suites === 'object' ? j : { suites: {} };
+  } catch {
+    return { suites: {} };
+  }
+}
+
+const args = process.argv.slice(2);
+const bless = args.includes('--bless');
+const filters = args.filter((a) => !a.startsWith('--'));
 const chosen = filters.length
   ? SUITES.filter(([f]) => filters.some((q) => f.includes(q)))
   : SUITES;
@@ -105,6 +149,10 @@ if (!chosen.length) {
 
 const failures = [];
 const started = Date.now();
+const recorded = readCounts();
+const measured = {};
+const drops = [];   // counts that fell — a failure
+const rises = [];   // counts that grew — fine, and worth blessing
 
 for (const [file] of chosen) {
   const t0 = Date.now();
@@ -118,12 +166,42 @@ for (const [file] of chosen) {
   const ok = res.status === 0;
 
   if (ok) {
-    console.log(`PASS  ${file.padEnd(22)} ${summarise(out).padEnd(38)} ${secs}s`);
+    const got = countsOf(out);
+    measured[file] = got;
+    // A failed suite's count means nothing (it stopped early), so only a
+    // passing suite is compared.
+    const was = recorded.suites[file];
+    const notes = [];
+    if (!was) {
+      notes.push('not yet in counts.json — run --bless');
+    } else {
+      for (const kind of ['assertions', 'scenarios', 'pages']) {
+        if (was[kind] == null) continue;
+        if (got[kind] == null) {
+          drops.push([file, kind, was[kind], 'nothing']);
+          notes.push(`${kind} no longer reported (was ${was[kind]})`);
+        } else if (got[kind] < was[kind]) {
+          drops.push([file, kind, was[kind], got[kind]]);
+          notes.push(`${kind} FELL ${was[kind]} -> ${got[kind]}`);
+        } else if (got[kind] > was[kind]) {
+          rises.push([file, kind, was[kind], got[kind]]);
+          notes.push(`${kind} up ${was[kind]} -> ${got[kind]}`);
+        }
+      }
+    }
+    const tag = notes.length ? `  (${notes.join('; ')})` : '';
+    console.log(`PASS  ${file.padEnd(22)} ${summarise(got).padEnd(38)} ${secs}s${tag}`);
   } else {
     console.log(`FAIL  ${file.padEnd(22)} exit ${res.status ?? res.signal ?? '?'}${' '.repeat(28)}${secs}s`);
     failures.push([file, out]);
   }
 }
+
+// A suite that used to exist and did not run at all is the other way a count
+// vanishes, so a full run checks the record for names it never saw.
+const missing = filters.length
+  ? []
+  : Object.keys(recorded.suites).filter((f) => !chosen.some(([g]) => g === f));
 
 if (failures.length) {
   for (const [file, out] of failures) {
@@ -138,5 +216,45 @@ console.log(
     ? `\n${failures.length} of ${chosen.length} suites failed  (${total}s)`
     : `\nAll ${chosen.length} suites passed  (${total}s)`
 );
+
+// ------------------------------------------------------------ the count gate
+if (rises.length && !bless) {
+  console.log('\nCounts grew (fine — record them with `node run-all.mjs --bless`):');
+  for (const [file, kind, was, now] of rises) console.log(`  ${file}  ${kind} ${was} -> ${now}`);
+}
+if (drops.length) {
+  console.log('\nCOUNTS FELL. An assertion that stopped running is a test that stopped testing:');
+  for (const [file, kind, was, now] of drops) console.log(`  ${file}  ${kind} ${was} -> ${now}`);
+  console.log('  Put the missing assertions back, or — if they went on purpose — say so to Tim');
+  console.log('  and run `node run-all.mjs --bless` to record the new numbers.');
+}
+if (missing.length) {
+  console.log('\nRECORDED BUT NEVER RAN (renamed or deleted?):');
+  for (const f of missing) console.log(`  ${f}`);
+}
+
+if (bless) {
+  if (!Object.keys(measured).length) {
+    console.log('\nNothing to --bless: no suite passed.');
+  } else {
+    // Only PASSING suites are recorded — a suite that stopped early has no
+    // count — and the record is merged, so blessing a filtered run cannot wipe
+    // the suites it did not run.
+    const next = {
+      _: 'Per-suite counts off a green run. run-all.mjs FAILS when one of these '
+        + 'falls (AUDIT §3.5); a rise is fine and is recorded by `node run-all.mjs --bless`. '
+        + 'Do not hand-edit: re-bless on a green run and say what changed.',
+      measured: new Date().toISOString().slice(0, 10),
+      suites: { ...recorded.suites, ...measured },
+    };
+    writeFileSync(COUNTS_FILE, JSON.stringify(next, null, 2) + '\n');
+    console.log(`\nRecorded ${Object.keys(measured).length} suite counts in counts.json.`);
+    if (failures.length) {
+      console.log('NOT recorded (they failed in this run, so they have no count):');
+      for (const [file] of failures) console.log(`  ${file}`);
+    }
+  }
+}
+
 console.log(`(not run here, they print panels rather than assert: ${NOT_SUITES.join(', ')})`);
-process.exit(failures.length ? 1 : 0);
+process.exit(failures.length || (drops.length && !bless) || missing.length ? 1 : 0);
