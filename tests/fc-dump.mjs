@@ -71,7 +71,7 @@ writeFileSync(path.join(HERE, 'fc-dump-child.mjs'), child);
 const cases = [
   ['DEMO (default week)', false, { 'schedule.source': 'demo' }, null],
   ['DEMO (from week 5)', false, { 'schedule.source': 'demo', 'schedule.week': 5 }, null],
-  ['LIVE (week 2 of 13)', true, { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' }, { leagueId: '99', season: 2026, teamId: 4 }],
+  ['LIVE (week 2 of 13)', true, { 'schedule.source': 'live', 'schedule.week': 'all' }, { leagueId: '99', season: 2026, teamId: 4 }],
 ];
 
 for (const [label, stub, prefs, conn] of cases) {

@@ -123,8 +123,6 @@ const state = {
   floorWeek: null,
   week: 'all',              // 'all' or a week number — drives the three week panels
   weekPickedLive: false,    // picked on live data THIS visit; see restoreWeek()
-  filterTeam: '',           // '' or a team id, for the results table only
-  resultsView: prefs.get('results', 'played'),  // played | upcoming | all
   h2hView: prefs.get('h2h', null),              // null = decide from what's played
   myTeamId: null,           // highlights one row, when we know who you are
   // Whose season the forecast panel is about. null means "follow whoever I am",
@@ -837,7 +835,6 @@ function adopt(data) {
   state.live = null;
   state.data = data;
   state.week = restoreWeek(data);
-  state.filterTeam = '';
   state.strength = null;
   state.strengthNote = '';
   state.projection = null;
@@ -1138,7 +1135,6 @@ async function refreshStrength() {
     state.strength = map;
     state.strengthNote = note;
     renderMatchups();   // an unplayed card falls back to the strength ranking
-    renderResults();    // the win-% column arrives with the projection
     renderForecast();   // and so does the whole season forecast
     renderSimulation(); // which the simulation is built on top of, so it waits too
     // Last, and only now: this is the first moment the page holds a complete
@@ -1217,10 +1213,8 @@ function render() {
 
   renderArchive();
   renderWeekPicker();
-  renderTeamPicker();
   renderSummary();
   renderMatchups();
-  renderResults();
   renderH2H();
   renderForecast();
   renderSimulation();
@@ -1283,19 +1277,11 @@ function renderWeekPicker() {
   // whose season is already complete — so the contract has to be stated for the
   // data actually on screen rather than asserted once and hoped for.
   const reach = state.data.isDemo
-    ? 'sets this panel and the results below, and the week the forecast is made from. ' +
+    ? 'sets this panel, and the week the forecast is made from. ' +
       'The head-to-head grid stays season-to-date.'
-    : 'sets this panel and the results below. ' +
+    : 'sets this panel. ' +
       'The head-to-head grid and the season forecast stay season-to-date.';
   $('weekNote').textContent = `${where} · ${reach}`;
-}
-
-function renderTeamPicker() {
-  const sel = $('filterTeam');
-  sel.innerHTML =
-    '<option value="">Every team</option>' +
-    state.data.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
-  sel.value = state.filterTeam === '' ? '' : String(state.filterTeam);
 }
 
 // ----------------------------------------------------------------- the table
@@ -1446,8 +1432,8 @@ function ordinal(n) {
 }
 
 /**
- * Projected points for one side of one game — the single number the cards, the
- * results table and the season forecast all read, so they cannot disagree.
+ * Projected points for one side of one game — the single number the cards and
+ * the season forecast both read, so they cannot disagree.
  *
  * A projection carried on the game itself wins (the demo season has real ones);
  * otherwise it is the optimal lineup that team could field that week.
@@ -1497,8 +1483,9 @@ function homeWinChance(g, sigma) {
  *
  * On top of that the panel is usually showing "All weeks", so the array would
  * pool the whole season; and the gmeta percentage is one number per FIXTURE,
- * not per team, which is the same refusal the results table's "Home win"
- * column makes above.
+ * not per team — there is no good end to a win chance, since 20% for one side
+ * is 80% for the other, so js/heat.js's rule is that the number gets nothing
+ * rather than a misleading verdict.
  *
  * Home's cards are uncoloured too, for a related reason written out there.
  */
@@ -1647,141 +1634,6 @@ function gameCard(g, ctx) {
             : side('away', g.awayName, g.awayId)}
       <div class="${metaClass}"${metaTitle ? ` title="${esc(metaTitle)}"` : ''}>${meta}</div>
     </div>`;
-}
-
-// -------------------------------------------------------------------- results
-
-const VIEW_LABEL = { played: 'Played games', upcoming: 'Upcoming games', all: 'All games' };
-
-/**
- * THE RESULTS TABLE TAKES NO RED/GREEN SCALE, on purpose (2026-09-19).
- *
- * Three separate reasons, any one of which would be enough:
- *
- * 1. NO COLUMN HERE BELONGS TO A TEAM. Every row is a fixture with two sides in
- *    it, so "Home pts" is not a measure of one squad down the table — it is
- *    whichever squad happened to be at home. A green in that column and the
- *    identical number one column right would be the same claim about two
- *    different teams, and a reader scanning down would be comparing ten
- *    different managers in no particular order.
- * 2. THE SCOPE IS USUALLY MORE THAN ONE WEEK. "All weeks" is the default the
- *    page opens on, and pooling every score of the season into one scale is the
- *    mistake the Stats page's week grid exists to avoid: a low-scoring week for
- *    the whole league would come out as ten bad managers.
- * 3. THE STATS PAGE ALREADY DOES IT, PROPERLY. "Week by week" is exactly these
- *    numbers, scaled down each week column, and the site's standing rule is to
- *    add to what exists rather than draw it twice in two shapes.
- *
- * "Home win" keeps the `.pos`/`.neg` it has always had, and deliberately does
- * NOT get the scale on top: that pair says which way ONE fixture leans, which
- * is a fact about the matchup. There is no good end to a home win chance — 20%
- * for the home side is 80% for the away side — so js/heat.js's rule is that the
- * column gets nothing rather than a misleading verdict.
- */
-function renderResults() {
-  const table = $('resultsTable');
-  const tbody = table.querySelector('tbody');
-  syncSegmented('resultsView', state.resultsView);
-
-  const id = state.filterTeam === '' ? null : Number(state.filterTeam);
-  const scoped = weekGames().filter((g) => id === null || g.homeId === id || g.awayId === id);
-
-  // Without this the table is mostly blank rows: at week 2 of a 13-week season
-  // it listed ten results followed by fifty-five rows of em dashes.
-  const rows = scoped.filter((g) => {
-    const st = gameState(g);
-    if (state.resultsView === 'played') return st !== 'upcoming';
-    if (state.resultsView === 'upcoming') return st === 'upcoming';
-    return true;
-  });
-
-  const counts = {
-    final: scoped.filter((g) => gameState(g) === 'final').length,
-    live: scoped.filter((g) => gameState(g) === 'live').length,
-    upcoming: scoped.filter((g) => gameState(g) === 'upcoming').length,
-  };
-
-  const sigma = scoringSpread().sigma;
-
-  if (!rows.length) {
-    const where = state.week === 'all' ? 'this league' : `week ${state.week}`;
-    const hint =
-      state.resultsView === 'played'
-        ? `Nothing has been played in ${where} yet — try Upcoming.`
-        : state.resultsView === 'upcoming'
-          ? `Every game in ${where} has been played.`
-          : `No games match that filter.`;
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${hint}</td></tr>`;
-  } else {
-    tbody.innerHTML = rows.map((g) => resultRow(g, sigma)).join('');
-  }
-
-  // Keep whatever sort the user picked when the row set changes.
-  resort(table);
-
-  const parts = [];
-  if (counts.final) parts.push(`${counts.final} final`);
-  if (counts.live) parts.push(`${counts.live} in progress`);
-  if (counts.upcoming) parts.push(`${counts.upcoming} upcoming`);
-
-  const anyChance = rows.some(
-    (g) => gameState(g) === 'upcoming' && homeWinChance(g, sigma) !== null
-  );
-
-  $('resultsNote').textContent =
-    `${VIEW_LABEL[state.resultsView]} — ${rows.length} of ${scoped.length} in scope: ` +
-    `${parts.join(', ') || 'nothing scheduled'}. Click any header to sort.` +
-    (anyChance
-      ? ` “Home win” is only filled in for games still to be played. ${derivedCaveat()}`
-      : '');
-}
-
-const STATE_CELL = {
-  final: '<td class="left muted" data-v="2">Final</td>',
-  live: '<td class="left state-live" data-v="1">In progress</td>',
-  upcoming: '<td class="left muted" data-v="0">Upcoming</td>',
-};
-
-function resultRow(g, sigma) {
-  const st = gameState(g);
-  const winner = winnerOf(g);
-
-  // The win/lose classes are what makes the winner visible at all: they used to
-  // be emitted here and only ever styled as `.side.win` on the cards, so every
-  // row in this table rendered in the same colour.
-  const nameCell = (which, name, extra) => {
-    const cls = st !== 'final' || winner === 'tie' ? '' : winner === which ? 'win' : 'lose';
-    return `<td class="${`${extra} ${cls}`.trim()}">${esc(name)}</td>`;
-  };
-
-  const score = (v) =>
-    (st === 'final' || st === 'live') && typeof v === 'number' && v > 0 ? fmt(v) : dash;
-
-  // Signed from the home team's point of view. The old absolute margin left the
-  // Home, Away and Margin columns with no direction in them at all.
-  const m = st === 'final' ? marginOf(g) : null;
-  const marginCell = m === null ? `<td>${dash}</td>` : `<td data-v="${m}">${signed(m)}</td>`;
-
-  // Only an undecided game has a chance attached to it; a played one has a
-  // result, and printing a forecast beside it would invite reading the forecast
-  // as a verdict on the result. `data-v` is omitted (never blanked) so the
-  // unknowns sink whichever way the column is sorted.
-  const p = st === 'upcoming' ? homeWinChance(g, sigma) : null;
-  const chanceCell =
-    p === null
-      ? `<td>${dash}</td>`
-      : `<td data-v="${p}" class="${p >= 0.6 ? 'pos' : p <= 0.4 ? 'neg' : 'muted'}">${pctText(p)}</td>`;
-
-  return `<tr>
-      <td data-v="${g.week}">${g.week}</td>
-      ${nameCell('home', g.homeName, 'name')}
-      <td>${score(g.homeScore)}</td>
-      ${nameCell('away', g.awayName, 'left')}
-      <td>${score(g.awayScore)}</td>
-      ${marginCell}
-      ${chanceCell}
-      ${STATE_CELL[st]}
-    </tr>`;
 }
 
 // ---------------------------------------------------------------- head to head
@@ -2494,9 +2346,9 @@ function simInputs() {
 
   const asOf = forecastAsOf();
   // THE SAME BUILDER THE SUMMARY PAGE CALLS. Remaining games are scored with
-  // the same projectedPoints() the cards, the results table and the forecast
-  // table read, so a game cannot be worth one thing here and another four
-  // panels up — and the banked table, the spread and the bracket (field size,
+  // the same projectedPoints() the cards and the forecast table read, so a
+  // game cannot be worth one thing here and another four panels up — and the
+  // banked table, the spread and the bracket (field size,
   // round weeks, their projections) are built exactly as the Summary page
   // builds them, so the two pages' title chances cannot drift apart.
   //
@@ -3212,14 +3064,6 @@ function stepWeek(delta) {
 $('weekPrev').addEventListener('click', () => stepWeek(-1));
 $('weekNext').addEventListener('click', () => stepWeek(1));
 
-$('resultsView').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-view]');
-  if (!btn) return;
-  state.resultsView = btn.dataset.view;
-  prefs.set('results', state.resultsView);
-  renderResults();
-});
-
 $('h2hView').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-view]');
   if (!btn) return;
@@ -3228,13 +3072,6 @@ $('h2hView').addEventListener('click', (e) => {
   renderH2H();
 });
 
-$('filterTeam').addEventListener('change', (e) => {
-  state.filterTeam = e.target.value;
-  renderResults();
-});
-
-// Sorted by week, ascending, until the user says otherwise.
-enableSort($('resultsTable'), { defaultIndex: 0, defaultAsc: true });
 // The forecast reads forwards in time, so it opens in week order.
 enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
 // The projected table opens on the most likely finishing order: average place,

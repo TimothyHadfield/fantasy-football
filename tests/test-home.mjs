@@ -271,7 +271,7 @@ function directionOk(values, cells, goodHigh) {
 }
 
 /** Every panel whose subject is a fantasy team, not an NFL player. */
-const TEAM_PANELS = ['#matchups', '#strength', '#standings'];
+const TEAM_PANELS = ['#matchups', '#strength'];
 
 // ------------------------------------------------------------------ child mode
 
@@ -293,14 +293,12 @@ if (process.argv[2]) {
       facts.demoBadge = text('modeBadge');
       facts.demoGames = document.querySelectorAll('#matchups .game').length;
       facts.demoRankRows = document.querySelectorAll('#strength .rank li').length;
-      facts.demoStandingsRows = document.querySelectorAll('#standings tbody tr').length;
       facts.demoBenchRows = document.querySelectorAll('#bench tbody tr').length;
       facts.demoWeekOptions = document.querySelectorAll('#weekSelect option').length;
 
       if (facts.demoBadge !== 'Demo') problems.push(`badge is "${facts.demoBadge}", expected Demo`);
       if (facts.demoGames !== 5) problems.push(`demo: ${facts.demoGames} matchup cards, expected 5`);
       if (facts.demoRankRows !== 10) problems.push(`demo: ${facts.demoRankRows} strength rows, expected 10`);
-      if (facts.demoStandingsRows !== 10) problems.push(`demo: ${facts.demoStandingsRows} standings rows, expected 10`);
       if (!facts.demoBenchRows) problems.push('demo: bench panel is empty on a completed week');
       if (facts.demoWeekOptions !== 13) problems.push(`demo: ${facts.demoWeekOptions} week options, expected 13`);
       if (process.env.DUMP_DEMO) console.error($(process.env.DUMP_DEMO)?.innerHTML || '(none)');
@@ -341,13 +339,19 @@ if (process.argv[2]) {
 
       // --- THE SHARED RED/GREEN SCALE, on the demo season ------------------
       //
-      // The demo boots on a complete thirteen-week season, so every threshold
-      // this page holds back on (four weeks of standings, a bench week that is
-      // final for everybody) is cleared here. The early-season half — that the
-      // standings draw NO colour at one week — is asserted further down on the
-      // `finishedWeek` fixture, so both halves of each rule have a witness and
-      // a page that coloured everything and a page that coloured nothing each
-      // fail exactly one.
+      // The demo boots on a complete thirteen-week season, so the one
+      // threshold this page still holds back on — a bench week that is final
+      // for everybody — is cleared here.
+      //
+      // The standings panel used to carry the other half of this block (PF up,
+      // PA INVERTED, Diff up, W–L plain, and no colour at all before week 4).
+      // It was deleted on 2026-09-23 as an ESPN screen. Those rules are not
+      // unguarded: the Stats page draws the same record-and-points table with
+      // the same scale, and `tests/stats-order.mjs` holds it to them — Opp Avg
+      // and Opp proj inverted, Total/Spread/PTW/Skill/W–L refused, the key
+      // split between what a colour MEANS and the thresholds behind the
+      // toggle. That is the panel Tim kept, because luck, skill and S+L are
+      // not on ESPN.
 
       // (1) Roster strength: one column, ten squads, high is good.
       const sRows = Array.from(document.querySelectorAll('#strength .rank li'));
@@ -401,66 +405,6 @@ if (process.argv[2]) {
       }
       if (!/\d+\.\d pts or better/.test(strengthMethod)) {
         problems.push('heat: the strength note does not print its thresholds in points');
-      }
-
-      // (2) Standings: PF up, DIFF up, and PA INVERTED. The PA assertion is the
-      //     point of this block — conceding fewer points is the GOOD end, and a
-      //     scale that missed that would paint the leakiest defence green.
-      const stRows = Array.from(document.querySelectorAll('#standings tbody tr'))
-        .map((tr) => Array.from(tr.children));
-      const col = (i) => stRows.map((c) => c[i]);
-      const valOf = (cells) => cells.map((c) => Number(c.getAttribute('data-v')));
-      const checks = [
-        ['PF', 2, true], ['PA', 3, false], ['Diff', 4, true],
-      ];
-      for (const [label, i, goodHigh] of checks) {
-        const cells = col(i);
-        const bad = directionOk(valOf(cells), cells, goodHigh);
-        if (bad) problems.push(`heat: standings ${label} points the wrong way — ${bad}`);
-      }
-      // Named explicitly as well, because "PA is inverted" is the single claim
-      // most likely to be quietly undone: the team that has conceded the FEWEST
-      // points must be green, not red.
-      {
-        const paCells = col(3);
-        const paVals = valOf(paCells);
-        const best = paCells[paVals.indexOf(Math.min(...paVals))];
-        const worst = paCells[paVals.indexOf(Math.max(...paVals))];
-        facts.paBest = clsOf(best);
-        if (heatSide(best) !== 'up') {
-          problems.push(`heat: PA is not inverted — fewest points conceded is "${clsOf(best)}"`);
-        }
-        if (heatSide(worst) !== 'dn') {
-          problems.push(`heat: PA is not inverted — most points conceded is "${clsOf(worst)}"`);
-        }
-      }
-      // W–L is a compound sort key, not a quantity, and must stay plain.
-      if (col(1).some((c) => heatSide(c))) problems.push('heat: the W–L column was coloured');
-      facts.standingsKey = text('standingsNote');
-      if (!/Green good, red bad/.test(facts.standingsKey)) {
-        problems.push(`heat: standings have no visible key line — "${facts.standingsKey.slice(0, 100)}"`);
-      }
-      // THE INVERTED COLUMN IS THE ONE FACT THAT MAY NEVER MOVE INTO THE
-      // TOGGLE. Thresholds are method; "green on PA means conceding FEWER"
-      // changes what the colour means, and a reader who opens no toggle reads
-      // the leakiest defence as the best one without it.
-      if (!/PA<\/strong> turned over|PA turned over/.test($('standingsNote').innerHTML) ||
-          !/green concedes <em>fewer<\/em>|green concedes .?fewer/.test($('standingsNote').innerHTML)) {
-        problems.push('heat: the visible standings key does not say PA is inverted');
-      }
-      if (!/▲▼/.test(facts.standingsKey)) {
-        problems.push('heat: the standings key does not say the ends carry a glyph');
-      }
-      if (/pts or better|standard deviation/.test(facts.standingsKey)) {
-        problems.push(`heat: the thresholds are back in the VISIBLE standings key — "${facts.standingsKey.slice(0, 120)}"`);
-      }
-      const standingsMethod = text('standingsScale');
-      if (!/Colour compares each number/.test(standingsMethod) ||
-          !/\d+\.\d pts or better/.test(standingsMethod)) {
-        problems.push(`heat: the standings method note does not print thresholds — "${standingsMethod.slice(0, 100)}"`);
-      }
-      if (!/PA<\/strong> is the same scale inverted/.test($('standingsScale').innerHTML)) {
-        problems.push('heat: the standings method note does not repeat that PA is inverted');
       }
 
       // (3) Bench: Started is scaled, Bench and Cost are deliberately not.
@@ -526,7 +470,6 @@ if (process.argv[2]) {
         facts.preUpcoming = document.querySelectorAll('#matchups .game.upcoming').length;
         facts.preMine = document.querySelectorAll('#matchups .game.mine').length;
         facts.preNote = text('matchupsNote');
-        facts.preStandings = text('standings');
         facts.preBench = text('bench');
         facts.preInjuryRows = document.querySelectorAll('#injuries tbody tr').length;
         facts.preRankRows = document.querySelectorAll('#strength .rank li').length;
@@ -543,10 +486,8 @@ if (process.argv[2]) {
         if (!scores.every((s) => s === '—')) problems.push(`pre: fabricated scores ${JSON.stringify(scores)}`);
         if (!/Projected:/.test(cards)) problems.push('pre: no projected favourite shown');
         if (!/Nothing has kicked off/.test(facts.preNote)) problems.push(`pre: matchup note reads "${facts.preNote}"`);
-        if (!/Nothing has been played/.test(facts.preStandings)) problems.push(`pre: standings not empty-stated: "${facts.preStandings.slice(0, 90)}"`);
-        if (/\d+-\d+/.test(facts.preStandings)) problems.push('pre: standings invented a record');
         if (!/has not finished/.test(facts.preBench)) problems.push(`pre: bench not empty-stated: "${facts.preBench.slice(0, 90)}"`);
-        if (/0\.0/.test(facts.preBench + facts.preStandings)) problems.push('pre: a fabricated 0.0 reached the page');
+        if (/0\.0/.test(facts.preBench)) problems.push('pre: a fabricated 0.0 reached the page');
         if (facts.preRankRows !== 10) problems.push(`pre: ${facts.preRankRows} strength rows, expected 10`);
 
         // ---- ROSTER STRENGTH IS PER WEEK, NOT PER SEASON -------------------
@@ -708,25 +649,12 @@ if (process.argv[2]) {
         const fin = finishedWeek();
         home.render(home.buildModel(fin));
 
-        // RULE 5, THE OTHER HALF. This fixture has exactly ONE week played, and
-        // the panel's own note has always said two weeks is far too thin to
-        // rank anyone by. So the numbers are on screen and NOTHING is shaded —
-        // a page that coloured everything it could would fail here, and the
-        // demo block above fails for a page that colours nothing. Neither
-        // passes both.
-        const earlyHeat = document.querySelectorAll('#standings td[class*="heat-"]').length;
-        facts.earlyStandingsHeat = earlyHeat;
-        if (earlyHeat) {
-          problems.push(`heat: ${earlyHeat} standings cell(s) coloured off a single week`);
-        }
-        if (!document.querySelectorAll('#standings tbody tr').length) {
-          problems.push('heat: the one-week fixture drew no standings at all, so it proves nothing');
-        }
-        facts.earlyStandingsNote = text('standingsNote');
-        if (!/nothing here is shaded/i.test(facts.earlyStandingsNote)) {
-          problems.push(`heat: the standings do not say why they are uncoloured — "${facts.earlyStandingsNote.slice(0, 120)}"`);
-        }
-        // The bench panel is not held back the same way and must not be: one
+        // RULE 5's "too thin to rank" half used to be asserted here, on the
+        // standings panel, which held its colours back until week 4. That
+        // panel was deleted on 2026-09-23 (an ESPN screen), and the threshold
+        // went with it — nothing on Home now withholds a scale by week count.
+        //
+        // The bench panel is not held back that way and must not be: one
         // week's ten scores ARE a comparison group, and that week is final.
         const benchHeat = document.querySelectorAll('#bench td[class*="heat-"]').length;
         facts.earlyBenchHeat = benchHeat;

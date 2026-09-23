@@ -102,8 +102,8 @@ const dash = '<span class="muted">—</span>';
  *
  * Note what does NOT get one of these: team and manager names. Tim's vocabulary
  * calls managers "players", but they have no ESPN playerId and no row on the
- * Players page, so the matchup cards, the strength bars, the standings and the
- * bench table's Team column stay plain text.
+ * Players page, so the matchup cards, the strength bars and the bench table's
+ * Team column stay plain text.
  *
  * @param {number|string|null|undefined} id  ESPN's playerId
  * @param {string} name   the player, for the title; escaped here
@@ -301,8 +301,6 @@ export function buildModel({
     totalGames: schedule.games.length,
     playedOverall: schedule.games.filter((g) => g.played).length,
     strength: rosterStrength(rosters),
-    standings: standingsThrough(schedule, week),
-    weeksCounted: countedWeeks(schedule, week),
     injuries: injuredStarters(rosters),
     bench: benchReport(benchFrom, benchGames),
     benchWeek,
@@ -363,53 +361,6 @@ function rosterStrength(rosters) {
   // back to ESPN's team order, while their own titles showed them differing.
   rows.sort((a, b) => (b.raw ?? -Infinity) - (a.raw ?? -Infinity));
   return rows.map(({ raw, ...r }, i) => ({ ...r, rank: i + 1 }));
-}
-
-/** Records and points, counting only games finished on or before `week`. */
-function standingsThrough(schedule, week) {
-  const rows = new Map(
-    schedule.teams.map((t) => [t.id, { id: t.id, name: t.name, w: 0, l: 0, t: 0, pf: 0, pa: 0 }])
-  );
-
-  for (const g of schedule.games) {
-    if (!g.played || g.week > week) continue;
-    if (g.awayId == null) continue;                       // bye
-    const home = rows.get(g.homeId);
-    const away = rows.get(g.awayId);
-    if (!home || !away) continue;
-
-    home.pf += g.homeScore; home.pa += g.awayScore;
-    away.pf += g.awayScore; away.pa += g.homeScore;
-
-    if (g.winner === 'tie') { home.t++; away.t++; }
-    else if (g.winner === 'home') { home.w++; away.l++; }
-    else { away.w++; home.l++; }
-  }
-
-  // ESPN's order: win percentage with a tie as half a win, then points for.
-  // This league has no matchup tie-breaker, so a tie stands and has to count —
-  // wins minus losses ranked a 1-0-1 team level with a 1-0, and a 0-0-2 team
-  // level with a 1-1.
-  return [...rows.values()]
-    .map((r) => ({
-      ...r,
-      pf: round1(r.pf), pa: round1(r.pa), diff: round1(r.pf - r.pa),
-      pct: winPct(r),
-    }))
-    .sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0) || b.pf - a.pf);
-}
-
-/** Wins plus half the ties, over games played; null before any. */
-export function winPct(r) {
-  const games = r.w + r.l + r.t;
-  return games ? (r.w + r.t / 2) / games : null;
-}
-
-/** How many weeks the standings actually rest on — the sample size, stated. */
-function countedWeeks(schedule, week) {
-  const seen = new Set();
-  for (const g of schedule.games) if (g.played && g.week <= week) seen.add(g.week);
-  return seen.size;
 }
 
 /**
@@ -783,7 +734,6 @@ export function render(m) {
   renderWeekPicker(m);
   renderMatchups(m);
   renderStrength(m);
-  renderStandings(m);
   renderInjuries(m);
   renderBench(m);
 }
@@ -808,18 +758,6 @@ function renderWeekPicker(m) {
     .join('');
   sel.value = String(m.week);
 }
-
-/**
- * How many finished weeks the standings need before the scale will paint them.
- *
- * THIS IS NOT A NEW JUDGEMENT — it is the threshold the panel has always
- * published in its own note ("far too thin to rank anyone by ... until about
- * week 4"), now used rather than merely said. HANDOFF rule 5: a page that has
- * decided it cannot yet rank anyone must not then rank them in colour. Two
- * weeks of points-for is one good game and one bad one, and a full-colour ▲ on
- * it is a confident verdict on a coin toss.
- */
-const MIN_WEEKS_TO_RANK = 4;
 
 /**
  * The key line under a coloured table — channel four, and the one that makes a
@@ -1117,105 +1055,6 @@ function renderStrength(m) {
     'or a squad whose depth never starts, so it will not match the ' +
     '<a href="analysis.html">Analysis</a> page&rsquo;s <strong>Proj avg</strong>, which is built ' +
     'from the best legal lineup in every individual week.';
-}
-
-function renderStandings(m) {
-  if (!m.weeksCounted) {
-    $('standings').innerHTML =
-      '<div class="empty">Nothing has been played yet. Standings appear once the first week is final.</div>';
-    $('standingsNote').textContent = '';
-    $('standingsScale').textContent = '';
-    tuck('standingsScale', false);
-    return;
-  }
-
-  // THREE SCALES, ONE PER COLUMN, and one of them is turned over.
-  //
-  //   PF   — points for. High is good.
-  //   PA   — points against. INVERTED: the league scoring 900 points AT you is
-  //          the schedule-luck mistake in its plainest form, and it is exactly
-  //          the column the Stats page's old local ramp used to paint its
-  //          greenest for being worst. Low is good.
-  //   Diff — PF minus PA. High is good. It is not a rescaling of either of the
-  //          other two, so it says something neither of them does.
-  //
-  // W–L IS NOT COLOURED. Its data-v is a compound sort key (win percentage
-  // times a million, plus points for), which is a number built to order rows
-  // and not a quantity anybody should be measured in standard deviations of —
-  // and the record is already the thing the table is sorted by.
-  //
-  // AND NONE OF IT PAINTS BEFORE WEEK 4. See MIN_WEEKS_TO_RANK: this panel has
-  // always said in words that two weeks is too thin to rank anyone by, and a
-  // scale that ignored its own note would be the page contradicting itself in
-  // colour. Until then the numbers are shown, uncoloured, and the key says why.
-  const ranked = m.weeksCounted >= MIN_WEEKS_TO_RANK;
-  const heatPf = ranked ? heatScale(m.standings.map((r) => r.pf)) : null;
-  const heatPa = ranked ? heatScale(m.standings.map((r) => r.pa), { invert: true }) : null;
-  const heatDiff = ranked ? heatScale(m.standings.map((r) => r.diff)) : null;
-
-  const rows = m.standings
-    .map((r) => {
-      const record = r.t ? `${r.w}-${r.l}-${r.t}` : `${r.w}-${r.l}`;
-      const diffCls = r.diff > 0 ? 'pos' : r.diff < 0 ? 'neg' : 'muted';
-      return `<tr${r.id === m.teamId ? ' class="me"' : ''}>
-          <td class="name">${esc(r.name)}</td>
-          <td data-v="${(r.pct ?? 0) * 1e6 + r.pf}">${record}</td>
-          ${numCell(r.pf, { scale: heatPf, what: 'what the rest of the league has scored' })}
-          ${numCell(r.pa, { scale: heatPa, what: 'what the rest of the league has conceded' })}
-          ${numCell(r.diff, {
-    sign: true, cls: diffCls, scale: heatDiff,
-    what: 'the rest of the league’s points difference',
-  })}
-        </tr>`;
-    })
-    .join('');
-
-  $('standings').innerHTML = `<div class="table-scroll"><table id="standingsTable">
-      <thead><tr>
-        <th class="name" data-sort>Team</th>
-        <th data-sort>W-L</th>
-        <th data-sort>PF</th>
-        <th data-sort>PA</th>
-        <th data-sort>Diff</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>`;
-  enableSort($('standingsTable'));
-
-  // The key line, and it has to carry two different messages: before week 4 it
-  // explains an ABSENCE of colour, which a reader would otherwise read as the
-  // feature being broken.
-  $('standingsNote').innerHTML =
-    `Through week ${m.week}: ${plural(m.weeksCounted, 'week')} played, ` +
-    `so ${plural(m.weeksCounted, 'game')} per team. ` +
-    (!ranked
-      ? '<strong>Far too thin to rank anyone by</strong> — roster strength is the better guide ' +
-        `until about week ${MIN_WEEKS_TO_RANK}, and nothing here is shaded red or green until ` +
-        'then for the same reason.'
-      : 'Ordered as ESPN orders them: win percentage, a tie counting half a win, then points for. ' +
-        // THE INVERTED COLUMN STAYS ON SCREEN. Everything else about the scale
-        // moved into the toggle below, but "PA turned over" is not method — it
-        // changes what a colour MEANS, and a reader who misses it reads the
-        // team conceding fewest as the team conceding most. "W–L is left plain"
-        // went with the method: an absent colour misleads nobody.
-        (heatPf
-          ? '<strong>Green good, red bad</strong>, down each column — <strong>PA</strong> ' +
-            'turned over, so green concedes <em>fewer</em>. Ends carry ▲▼ and bold.'
-          : 'Nothing is shaded: the ten totals are inside a tenth of a point of each other.'));
-
-  // The thresholds in points, tucked with the method: visible above is what
-  // changes what a number MEANS, and this is what lets a cell be checked.
-  $('standingsScale').innerHTML = heatPf
-    ? `<strong>PF:</strong> ${describeHeat(heatPf, {
-      what: 'what the other nine teams have scored',
-      high: 'scoring more', low: 'scoring less',
-    })} <strong>PA</strong> is the same scale inverted, so its green end is the LOW one, and ` +
-      '<strong>Diff</strong> is measured on its own spread rather than on either of theirs. ' +
-      '<strong>W&ndash;L</strong> is left plain: what it sorts on is a compound key (win ' +
-      'percentage, then points for), which is a number built to order rows rather than a ' +
-      'quantity anybody should be measured in standard deviations of.'
-    : '';
-  tuck('standingsScale', Boolean(heatPf));
 }
 
 /**

@@ -19,8 +19,9 @@
 
 /* The week rail. It lives INSIDE the Week matchups panel, at the top of it,
    because the panel it scopes is the panel it sits in — a control floating
-   between two panels belonged to neither and read as page furniture. It still
-   reaches the Results table below, which #weekNote says in words. */
+   between two panels belonged to neither and read as page furniture. Since the
+   Results table was deleted it scopes this panel alone, plus the week the
+   forecast is made from, which #weekNote says in words. */
 .weekbar {
   display: flex;
   align-items: center;
@@ -122,8 +123,6 @@
 .h2h td .now { color: var(--accent); font-weight: 650; }
 
 .empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
-/* A game with one side still to play is not a result; it reads as a warning. */
-td.state-live { color: var(--warn); }
 
 .seg-sm button { padding: 6px 12px; font-size: 13px; }
 .select-wide { width: 210px; }
@@ -483,8 +482,8 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
           headline numbers and the week's cards used to be three separate
           things stacked up the page, and the control that drove all of them
           sat outside every one of them. The picker is first inside the panel
-          because it names what the rest of the panel is about. It still
-          reaches the Results table lower down, which #weekNote says. -->
+          because it names what the rest of the panel is about. It also sets
+          the week the forecast is made from, which #weekNote says. -->
   <section class="panel" id="matchupsPanel">
     <h2 id="matchupsTitle">Week matchups</h2>
     <p class="lede">Each game with both teams&rsquo; records. Win chances on unplayed games are our estimate, not ESPN&rsquo;s.</p>
@@ -559,38 +558,13 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
   </section>
   </div>
 
-  <section class="panel" id="resultsPanel">
-    <h2>Results</h2>
-    <p class="lede">Every score in the chosen week. Tap a header to sort.</p>
-    <div class="toolbar">
-      <div class="segmented seg-sm" id="resultsView">
-        <button type="button" data-view="played" class="on">Played</button>
-        <button type="button" data-view="upcoming">Upcoming</button>
-        <button type="button" data-view="all">All</button>
-      </div>
-      <div class="form-select select-wide">
-        <label for="filterTeam">Only games involving</label>
-        <select id="filterTeam"></select>
-      </div>
-    </div>
-    <div class="table-scroll"><table id="resultsTable">
-      <thead><tr>
-        <th data-sort>Wk</th>
-        <th class="name" data-sort>Home</th>
-        <th data-sort>Home pts</th>
-        <th class="left" data-sort>Away</th>
-        <th data-sort>Away pts</th>
-        <th data-sort title="Home points minus away points.">Margin</th>
-        <th data-sort title="Our estimate of the home team's chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds. Blank once a game is decided.">Home win</th>
-        <th class="left" data-sort>State</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <details class="explain">
-      <summary>About this table</summary>
-      <p class="panel-note" id="resultsNote"></p>
-    </details>
-  </section>
+  <!-- The Results panel was deleted on 2026-09-23. It was ESPN's scoreboard with
+       a sort on it — Wk / Home / pts / Away / pts / Margin / Home win / State —
+       and this site complements ESPN rather than rebuilding it, which is the
+       same reason the standings table went from this page on 2026-09-17. Week
+       matchups above already carries every fixture of the chosen week, the
+       winner, the margin and the win %, so nothing derived was lost with it.
+       Head to head stays: a full pairing grid is not one ESPN screen. -->
 
   <section class="panel" id="h2hPanel">
     <h2 id="h2hTitle">Head to head</h2>
