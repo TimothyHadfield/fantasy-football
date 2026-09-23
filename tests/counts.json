@@ -31,7 +31,7 @@
       "scenarios": 10
     },
     "test-season-rules.mjs": {
-      "assertions": 92,
+      "assertions": 88,
       "scenarios": 7
     },
     "test-store.mjs": {
@@ -108,7 +108,7 @@
       "scenarios": 7
     },
     "taken-check.mjs": {
-      "assertions": 224,
+      "assertions": 229,
       "scenarios": 5
     },
     "link-check.mjs": {
@@ -127,6 +127,20 @@
     },
     "text-audit.mjs": {
       "assertions": 8
+    },
+    "test-trade-weekly.mjs": {
+      "assertions": 4739
+    },
+    "fc-test.mjs": {
+      "assertions": 1083,
+      "scenarios": 14
+    },
+    "wv-test.mjs": {
+      "assertions": 467,
+      "scenarios": 10
+    },
+    "tr-test.mjs": {
+      "assertions": 625
     }
   }
 }

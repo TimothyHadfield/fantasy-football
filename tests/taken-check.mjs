@@ -26,6 +26,14 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
+// This suite boots the same `js/waivers-page.js` wv-test does, so it waits the
+// same way: on the page's own "nothing left in flight" signal rather than on a
+// clock. `waiverPagePending()` says what that signal is. It was a fixed 600 ms,
+// and the `jump` scenario failed 2 runs in 3 on correct code because of it —
+// landing on a `?player=` link widens the span to the whole season, which buys
+// thirteen weeks of wire and thirteen of rosters, and the man's positional rank
+// was read back before they landed, giving his THREE-week rank instead.
+import { settleWaiverPage } from './settle.mjs';
 
 // The per-position startable bars, copied rather than imported: if the page
 // changes one, the "some of these numbers clear the bar" check below should
@@ -57,7 +65,7 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'waivers.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 1 },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const season = await import('./taken-stub-season.mjs');
       const espn = await import('./wv-stub-espn.mjs');
       const click = (sel) =>
@@ -72,12 +80,15 @@ const SCENARIOS = {
       // weeks 4-9 he is the QB1. The note claims the span moves the rank, so
       // something had better prove it does.
       click('#spanFilter button[data-span="6"]');
-      await new Promise((r) => setTimeout(r, 900));
+      // The three new weeks have to actually arrive before the re-rank can be
+      // read, and this is the same claim the `jump` scenario makes — the one that
+      // failed 2 runs in 3 behind a fixed 600 ms.
+      await waitFor();
       out.wide = takenSnapshot(document);
       out.rosterAfterWiden = season.calls.rosterWeeks.slice();
 
       click('#spanFilter button[data-span="3"]');
-      await new Promise((r) => setTimeout(r, 300));
+      await waitFor();
 
       // EACH TABLE HAS ITS OWN position filter now. Pressing the wire's must
       // leave this one alone — that independence is the whole point of the
@@ -394,11 +405,20 @@ async function boot(scenario) {
   process.on('unhandledRejection', (r) => rejections.push(String(r)));
 
   await import(pathToFileURL(path.join(REPO, 'js/waivers-page.js')).href);
-  await new Promise((r) => setTimeout(r, cfg.wait ?? 600));
-  if (cfg.after) await cfg.after({ document, window });
+
+  // Collected, so a poll that hit its ceiling is asserted below by name rather
+  // than turning into a positional rank that is quietly one span out of date.
+  const settles = [];
+  const waitFor = async (max) => {
+    const r = await settleWaiverPage(document, max);
+    settles.push(r);
+    return r;
+  };
+  await waitFor();
+  if (cfg.after) await cfg.after({ document, window, waitFor });
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg };
+  return { document, errors, fetchCalls, rejections, cfg, settles };
 }
 
 // ------------------------------------------------------------- assertions
@@ -428,6 +448,16 @@ async function check(scenario, boot) {
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
+
+  // EVERY POLL REACHED THE PAGE'S FINISHED STATE, not its ceiling — so "the
+  // weeks never arrived" is reported as that rather than as a positional rank
+  // that is one span out of date and says nothing about why.
+  {
+    const stuck = (boot.settles || []).filter((s) => !s.ok);
+    c.ok('the page reached its own finished state within the poll’s ceiling',
+      stuck.length === 0,
+      stuck.map((s) => `after ${s.ms}ms: ${s.why}`).join(' | '));
+  }
 
   // ---- (e) two squads, one label -------------------------------------------
   //

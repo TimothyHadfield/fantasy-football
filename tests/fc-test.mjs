@@ -15,6 +15,85 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
+import { settle, settleUntil, machineSpeed, scaledBudget, REFERENCE_MS } from './settle.mjs';
+
+// --------------------------------------------- when has this page finished?
+//
+// EVERY WAIT HERE IS A POLL ON THE PAGE'S OWN SIGNAL, never a fixed sleep.
+//
+// This suite used to sleep — 400 ms after the import, 4 s after a re-run, 250 ms
+// after a replay — and the sleeps were long enough on an idle laptop. Tim's
+// laptop is not idle: `ocrvid.py` holds several cores for hours (PROGRESS.md
+// Traps). Measured on 2026-09-23 with every core taken, six of these fourteen
+// scenarios failed on code that was correct, and they failed as
+// `TypeError: Cannot read properties of undefined (reading 'getAttribute')`
+// inside an assertion about heat colours — a suite reading a table that the page
+// had not filled yet, reported as a crash about something else entirely.
+//
+// The page says three things about work in flight, and says them on screen where
+// a reader can see them, which is what makes them fair to poll:
+//
+//   * `#sourceStatus` — "Loading your schedule from ESPN…" while the schedule
+//     itself is in the air, and a settled sentence (how many matchups, or the
+//     demo warning, or an error) once it has landed.
+//   * the forecast panel's empty row — "Working out what every roster is
+//     projected to score…" while `state.strengthNote` is still unset, which is
+//     exactly the length of the per-week roster read.
+//   * the simulation panel's empty row — the same sentence, and "Simulating
+//     10,000 seasons…" while `runSimulation()`'s hand-off is out at rAF.
+//
+// Breaking any of those three sentences in js/schedule-page.js makes this poll
+// time out and its assertion fail by name, which is the point: the signal is the
+// page's, not the suite's.
+//
+// TWO THINGS THAT LOOK LIKE SIGNALS AND ARE NOT:
+//
+// `#simNote` being longer than forty characters — the trap the two playoff
+// scenarios fell into. The WAITING state sets a note too ("Playing the 60
+// remaining games out 10,000 times…"), so that poll returned while the panel was
+// still empty and `playoff-divisions` failed nine checks against the transient
+// note.
+//
+// `#sourceStatus` having stopped saying "Reading ESPN's projections… week 15 of
+// 16." — measured here on 2026-09-23, it never stops. `refreshStrength()`'s
+// progress callback returns early on the last week (`if (stale() || done >=
+// total) return`) and nothing sets the status again afterwards, so on a live
+// league the line a reader sees is stuck one week short of done for the rest of
+// the visit. That is a product wart worth Tim knowing about; it is not this
+// suite's to fix, and it is not a finished signal. The roster read's finished
+// signal is the panels' pending row clearing.
+
+/** '' when the schedule page has nothing in flight, else what it is still doing. */
+function schedulePending(document) {
+  const read = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+
+  const status = read(document.getElementById('sourceStatus'));
+  if (!status) return 'the source status line is still empty — the load has not reported yet';
+  if (/^Loading your schedule from ESPN/.test(status)) return `the status line still says "${status}"`;
+
+  const panel = (id) => {
+    const tbody = document.querySelector(`#${id} tbody`);
+    if (!tbody) return `#${id} has no tbody`;
+    if (!tbody.querySelectorAll('tr').length) return `#${id} has not been painted yet`;
+    const msg = read(tbody.querySelector('tr.empty-row'));
+    if (/^Simulating /.test(msg)) return `#${id} still says "${msg}"`;
+    if (/^Working out what every roster/.test(msg)) return `#${id} still says "${msg}"`;
+    return '';
+  };
+  return panel('forecastTable') || panel('simTable');
+}
+
+/**
+ * Wait for the schedule page to finish.
+ *
+ * The ceiling is a minute — far longer than the page has ever needed, and the
+ * point of a poll is that a generous ceiling costs nothing on a fast run,
+ * because a page that is already done stops the poll. Measured 2026-09-23: the
+ * whole suite runs in 21 s on the machine as Tim leaves it and 3m 09s with every
+ * core taken, where the old 400 ms sleep took longer AND failed.
+ */
+const settleSchedule = (document, max = 60000) =>
+  settleUntil(() => schedulePending(document), { max });
 
 const SCENARIOS = {
   // THE FIELD SIZE COMES FROM THE LEAGUE, NOT FROM OUR CONSTANT.
@@ -31,18 +110,10 @@ const SCENARIOS = {
     env: { FC_PLAYOFF_TEAMS: '4' },
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 3 },
-    // The simulation hands off through rAF and a timeout so it cannot block the
-    // paint, so the panel is empty for a moment after boot. Wait for the note to
-    // actually arrive rather than for a fixed delay — a fixed one is either
-    // flaky or slow, and on a failure this reports "never rendered" instead of
-    // an empty-string mismatch that says nothing about why.
-    after: async ({ document }) => {
-      for (let i = 0; i < 100; i++) {
-        const el = document.getElementById('simNote');
-        if (el && el.textContent.trim().length > 40) return;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    },
+    // No `after`: the simulation hands off through rAF and a timeout so it cannot
+    // block the paint, and `boot()` now polls `schedulePending()` until that
+    // hand-off has landed. This scenario used to wait here for `#simNote` to grow
+    // past forty characters, which the WAITING note also does.
   },
   // DIVISIONS ARE READ, AND SAID OUT LOUD WHEN THEY ARE NOT MODELLED.
   //
@@ -61,13 +132,10 @@ const SCENARIOS = {
     env: { FC_PLAYOFF_TEAMS: '6', FC_DIVISIONS: '2' },
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 3 },
-    after: async ({ document }) => {
-      for (let i = 0; i < 100; i++) {
-        const el = document.getElementById('simNote');
-        if (el && el.textContent.trim().length > 40) return;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    },
+    // No `after`, for the reason given on `playoff-four` above. This is the
+    // scenario the old `#simNote` poll failed loudest: on a loaded machine it
+    // returned while the panel still held "Playing the 60 remaining games out
+    // 10,000 times…" and nine of its twelve checks failed on correct code.
   },
   demo: {
     label: '(a) demo data, default week',
@@ -96,11 +164,15 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026 },
-    after: async ({ document, CustomEvent }) => {
+    after: async ({ document, CustomEvent, waitFor }) => {
       document.dispatchEvent(
         new CustomEvent('ff:connection', { detail: { leagueId: '99', season: 2026, teamId: 4 } })
       );
-      await new Promise((r) => setTimeout(r, 50));
+      // 50 ms to let the handler's own microtasks start — that is all this one
+      // is for — and then the page's signal decides when it is done, because
+      // naming a team can send the simulation round again.
+      await settle(50);
+      await waitFor();
     },
   },
   'live-switch': {
@@ -108,13 +180,16 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const sel = document.getElementById('forecastTeam');
       const views = {};
       for (const o of [...sel.querySelectorAll('option')]) {
         sel.value = o.getAttribute('value');
         sel.dispatchEvent(new window.Event('change'));
-        await new Promise((r) => setTimeout(r, 20));
+        // Switching team is meant to be a repaint off the cached run, so this
+        // usually clears on the first poll. It is still polled, because "meant
+        // to be" is what the suite is here to check rather than to assume.
+        await waitFor();
         views[o.getAttribute('value')] = {
           name: o.textContent.replace(' (you)', ''),
           title: document.getElementById('forecastTitle').textContent.trim(),
@@ -133,7 +208,7 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const $ = (id) => document.getElementById(id);
       const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
       const ls = globalThis.localStorage;
@@ -206,14 +281,19 @@ const SCENARIOS = {
       sel.appendChild(opt);
       sel.value = '1';
       sel.dispatchEvent(new window.Event('change', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 250));
+      // Replaying feeds the panels different numbers, so the simulation's cache
+      // key changes and it runs again. `snapPage()` reads every row of that
+      // table, so it must not be read while the panel is on its "Simulating
+      // 10,000 seasons…" row — which is exactly what 250 ms bought on a good day
+      // and not on a bad one.
+      await waitFor();
       out.replayed = snapPage();
 
       // ---- and back to now ------------------------------------------------
       const sel2 = $('asOfSelect');
       sel2.value = 'live';
       sel2.dispatchEvent(new window.Event('change', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 400));
+      await waitFor();
       out.back = snapPage();
 
       globalThis.__arch = out;
@@ -223,7 +303,7 @@ const SCENARIOS = {
     label: '(f) simulation: switching team repaints, changing the run count re-runs',
     stub: false,
     prefs: { 'schedule.source': 'demo', 'schedule.week': 5 },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const $ = (id) => document.getElementById(id);
       const snap = () => ({
         rows: [...$('simTable').querySelectorAll('tbody tr')].map((tr) =>
@@ -248,7 +328,7 @@ const SCENARIOS = {
       // Read SYNCHRONOUSLY: no timer has had a chance to fire, so anything on
       // screen now came from the cache rather than from a fresh run.
       const duringTeam = snap();
-      await new Promise((r) => setTimeout(r, 300));
+      await waitFor();
       const afterTeam = snap();
 
       // --- change the run count: this one must re-run ----------------------
@@ -256,7 +336,9 @@ const SCENARIOS = {
         .find((b) => b.getAttribute('data-runs') === '50000');
       btn.dispatchEvent(new window.Event('click', { bubbles: true }));
       const duringRuns = snap();
-      await new Promise((r) => setTimeout(r, 4000));
+      // 50,000 seasons took 4 s of sleep here. It takes as long as it takes, and
+      // the panel's own "Simulating 50,000 seasons…" row is how it says so.
+      await waitFor();
       const afterRuns = snap();
 
       // --- and the 100,000 Tim asked for -----------------------------------
@@ -264,24 +346,30 @@ const SCENARIOS = {
       // second of arithmetic, plus a three-round bracket on top of each season.
       // Read synchronously straight after the click, so the "Simulating…" frame
       // being on screen proves the work was handed off rather than blocking.
+      //
+      // HOW FAST THE MACHINE IS, measured either side of the run. `bigMs` below
+      // is asserted against a budget, and a budget in bare milliseconds is a
+      // claim about Tim's OCR jobs rather than about this page. The worse of the
+      // two readings is used, so a machine that got busy halfway through the run
+      // is credited for it.
+      const speedBefore = machineSpeed();
       const big = [...$('simRuns').querySelectorAll('button')]
         .find((b) => b.getAttribute('data-runs') === '100000');
       const t0 = Date.now();
       big.dispatchEvent(new window.Event('click', { bubbles: true }));
       const duringBig = snap();
       // Polled rather than slept through, so `bigMs` is how long the run
-      // actually took rather than how long the test was willing to wait.
-      let afterBig = null;
-      for (let i = 0; i < 120 && !afterBig; i++) {
-        await new Promise((r) => setTimeout(r, 100));
-        const now = snap();
-        if (now.rows.length === 10) afterBig = now;
-      }
+      // actually took rather than how long the test was willing to wait. It
+      // includes settleUntil's one 250 ms confirming beat.
+      const bigWait = await waitFor();
       const bigMs = Date.now() - t0;
-      if (!afterBig) afterBig = snap();
+      const afterBig = snap();
+      const speedAfter = machineSpeed();
 
       globalThis.__sim = {
         before, duringTeam, afterTeam, duringRuns, afterRuns, duringBig, afterBig, bigMs,
+        bigWait,
+        machine: speedBefore.factor >= speedAfter.factor ? speedBefore : speedAfter,
         pickedName,
         prefs: globalThis.localStorage.getItem('ff.prefs'),
       };
@@ -300,15 +388,21 @@ const SCENARIOS = {
     prefs: { 'schedule.source': 'live', 'schedule.week': 1 },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     reloads: true,   // the "Live" button is pressed once, so every request is paid twice
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const sel = document.getElementById('weekSelect');
       const opened = sel.value;
       sel.value = '1';
       sel.dispatchEvent(new window.Event('change', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 50));
+      // A gap between two of the reader's own actions, not a wait on the page:
+      // he picks week 1 and then presses "Live". The pref is written inside the
+      // change handler, so there is nothing in flight to poll for here.
+      await settle(50);
       document.querySelector('#sourceToggle button[data-src="live"]')
         .dispatchEvent(new window.Event('click', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 600));
+      // Pressing "Live" runs the whole load again — every request paid twice —
+      // so the week this reports is only the reloaded one once the status line
+      // has stopped saying it is loading.
+      await waitFor();
       globalThis.__weeks = { opened, reloaded: document.getElementById('weekSelect').value };
     },
   },
@@ -433,11 +527,29 @@ async function boot(scenario) {
   process.on('unhandledRejection', (r) => rejections.push(String(r)));
 
   await import(pathToFileURL(path.join(REPO, 'js/schedule-page.js')).href);
-  await new Promise((r) => setTimeout(r, 400));
-  if (cfg.after) await cfg.after({ document, window, CustomEvent: window.CustomEvent });
+
+  // THE ONE WAIT EVERY SCENARIO SHARES, and the one that broke six of them on a
+  // loaded machine. It was `setTimeout(400)`: the page loads a league, reads
+  // every week's rosters and then hands a ten-thousand-season simulation out to
+  // rAF, and 400 ms was enough for all of that only while nothing else wanted
+  // the CPU. Now the page says when it is done and this waits for it to.
+  //
+  // Collected rather than discarded: a poll that hit its ceiling is asserted
+  // below by name, so "the page never finished" is reported as that rather than
+  // as a crash inside an assertion about something else.
+  const settles = [];
+  const waitFor = async (max) => {
+    const r = await settleSchedule(document, max);
+    settles.push(r);
+    return r;
+  };
+  await waitFor();
+  if (cfg.after) {
+    await cfg.after({ document, window, CustomEvent: window.CustomEvent, waitFor });
+  }
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg, store, writes };
+  return { document, errors, fetchCalls, rejections, cfg, store, writes, settles };
 }
 
 // ------------------------------------------------------------- assertions
@@ -567,6 +679,17 @@ async function check(scenario, boot) {
 
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
+
+  // EVERY POLL REACHED THE PAGE'S FINISHED STATE, not its ceiling. Without this
+  // a poll that gave up would leave the panels mid-flight and the first
+  // assertion to touch a table cell would fail as a TypeError about
+  // `getAttribute`, which is how this suite used to report a busy machine.
+  {
+    const stuck = (boot.settles || []).filter((s) => !s.ok);
+    c.ok('the page reached its own finished state within the poll’s ceiling',
+      stuck.length === 0,
+      stuck.map((s) => `after ${s.ms}ms: ${s.why}`).join(' | '));
+  }
 
   // ---- (h) the league's own bracket, not ours -----------------------------
   //
@@ -1771,10 +1894,22 @@ async function check(scenario, boot) {
     // Measured, not assumed: the panel's own note promises the run count is a
     // wait rather than a hang, and 100,000 seasons with a three-round bracket
     // is the slowest thing this page can be asked to do. Generous here because
-    // linkedom and a loaded CI box are both slower than a browser, but a
-    // regression that made it minutes would be caught.
+    // linkedom is slower than a browser, but a regression that made it minutes
+    // would be caught.
+    //
+    // SCALED BY HOW BUSY THE MACHINE IS (`machineSpeed()` in settle.mjs). The
+    // budget was a bare 10,000 ms, which is a claim about how many cores
+    // `ocrvid.py` is holding as much as about this page: measured 2026-09-23,
+    // the same arithmetic takes ten times as long with every core taken. The
+    // idle budget is unchanged at 10 s — that is the promise — and the factor is
+    // printed in the failure detail so a real regression is told apart from a
+    // busy afternoon by looking at the two numbers.
+    const budget = scaledBudget(10000, (s.machine || {}).factor || 1);
     c.ok('100,000 runs with a bracket lands in seconds, not minutes',
-      s.bigMs > 0 && s.bigMs < 10000, `${s.bigMs}ms`);
+      s.bigMs > 0 && s.bigMs < budget,
+      `${s.bigMs}ms against a ${budget}ms budget ` +
+      `(10,000ms idle × ${((s.machine || {}).factor || 1).toFixed(2)}, ` +
+      `benchmark ${(s.machine || {}).ms}ms vs ${REFERENCE_MS}ms idle)`);
     c.ok('the run count is remembered', /"schedule.runs":100000/.test(s.prefs || ''), s.prefs);
   }
 

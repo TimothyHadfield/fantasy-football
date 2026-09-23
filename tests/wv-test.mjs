@@ -15,6 +15,25 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
+import { settle, settleWaiverPage } from './settle.mjs';
+
+// --------------------------------------------- when has this page finished?
+//
+// EVERY WAIT ON THE PAGE HERE IS A POLL ON THE PAGE'S OWN SIGNAL. This page buys
+// one wire list AND one week of rosters per week on screen and paints as the
+// answers arrive, so "has it finished" is a real question with a real answer, and
+// the page publishes it three ways. `waiverPagePending()` in
+// [settle.mjs](settle.mjs) is that answer, written down once because taken-check
+// and cmp-check boot the same page.
+//
+// WHAT IS STILL A FIXED WAIT, ON PURPOSE. `cfg.wait` is the lead before
+// `after()` runs, and for `live-midload` (60 ms) and `source-switch` (40 ms) a
+// SHORT one is the whole scenario: they catch the page with the first weeks
+// still in the air and then change the span or the source underneath it. Polling
+// to "finished" there would delete what they test. Every wait AFTER that first
+// interaction is a poll.
+
+const settleWaivers = settleWaiverPage;
 
 const SCENARIOS = {
   demo: {
@@ -33,7 +52,7 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'waivers.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const espn = await import('./wv-stub-espn.mjs');
       const table = document.getElementById('waiverTable');
       const snap = () => ({
@@ -81,13 +100,16 @@ const SCENARIOS = {
 
       // --- widening the span: only the new weeks are fetched ---------------
       click(document.querySelector('#spanFilter button[data-span="6"]'));
-      await new Promise((r) => setTimeout(r, 400));
+      // The three new weeks have to actually arrive before the widened table is
+      // snapped, and they arrive when they arrive. 400 ms was long enough only
+      // while nothing else wanted the CPU.
+      await waitFor();
       out.wide = snap();
       out.fetchesAfterWiden = espn.calls.weeks.slice();
 
       // --- narrowing again: everything is already cached -------------------
       click(document.querySelector('#spanFilter button[data-span="3"]'));
-      await new Promise((r) => setTimeout(r, 200));
+      await waitFor();
       out.narrow = snap();
       out.fetchesAfterNarrow = espn.calls.weeks.slice();
       out.prefs = globalThis.localStorage.getItem('ff.prefs');
@@ -196,15 +218,22 @@ const SCENARIOS = {
     env: { WV_DELAY: '80' },
     prefs: { 'waivers.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
+    // 60 ms ON PURPOSE: this scenario exists to catch the page with the first
+    // weeks still in the air, and a poll to "finished" here would delete it.
     wait: 60,
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const espn = await import('./wv-stub-espn.mjs');
       const table = document.getElementById('waiverTable');
       const inFlight = espn.calls.weeks.slice();
       document
         .querySelector('#spanFilter button[data-span="all"]')
         .dispatchEvent(new window.Event('click', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 2500));
+      // THE ASSERTION BELOW IS "every column filled in" (`w.wait === 0`), so the
+      // wait has to be the page's own account of that and not 2.5 s of hoping:
+      // thirteen weeks are now bought, each of them a wire list and a roster,
+      // with the first three already in flight. Polled on the same `td.wait`
+      // cells the assertion counts.
+      await waitFor();
       globalThis.__wv = {
         inFlight,
         fetches: espn.calls.weeks.slice(),
@@ -220,12 +249,17 @@ const SCENARIOS = {
     env: { WV_DELAY: '250' },
     prefs: { 'waivers.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
+    // 40 ms ON PURPOSE, as above: the live league must still be loading when
+    // the source is switched out from under it.
     wait: 40,
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       document
         .querySelector('#sourceToggle button[data-src="demo"]')
         .dispatchEvent(new window.Event('click', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 900));
+      // Demo builds its own pool and its own rosters, and the abandoned live
+      // league's weeks are still landing behind it; the assertions are about
+      // what is on screen once all of that has settled.
+      await waitFor();
       const table = document.getElementById('waiverTable');
       const trs = [...table.querySelectorAll('tbody tr')];
       globalThis.__wv = {
@@ -345,11 +379,27 @@ async function boot(scenario) {
   process.on('unhandledRejection', (r) => rejections.push(String(r)));
 
   await import(pathToFileURL(path.join(REPO, 'js/waivers-page.js')).href);
-  await new Promise((r) => setTimeout(r, cfg.wait ?? 500));
-  if (cfg.after) await cfg.after({ document, window });
+
+  // Collected rather than discarded, so a poll that hit its ceiling is asserted
+  // below by name instead of turning into a mismatch about a table cell.
+  const settles = [];
+  const waitFor = async (max) => {
+    const r = await settleWaivers(document, max);
+    settles.push(r);
+    return r;
+  };
+
+  // `cfg.wait` is a DELIBERATE mid-load lead (see the note at the top); every
+  // other scenario waits for the page to say it has finished. That 500 ms was
+  // what `live`, `live-partial`, `live-december`, `live-empty`, `flex-saved` and
+  // `heat-filter` all used to get, and on a busy machine it is not enough for a
+  // page that buys two requests per week.
+  if (cfg.wait != null) await settle(cfg.wait);
+  else await waitFor();
+  if (cfg.after) await cfg.after({ document, window, waitFor });
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg };
+  return { document, errors, fetchCalls, rejections, cfg, settles };
 }
 
 // ------------------------------------------------------------- assertions
@@ -687,6 +737,16 @@ async function check(scenario, boot) {
   c.ok('no console errors', boot.errors.length === 0, boot.errors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
+
+  // EVERY POLL REACHED THE PAGE'S FINISHED STATE, not its ceiling — so "the
+  // weeks never arrived" is reported as that, by name, rather than as a row
+  // count that came up short for no stated reason.
+  {
+    const stuck = (boot.settles || []).filter((s) => !s.ok);
+    c.ok('the page reached its own finished state within the poll’s ceiling',
+      stuck.length === 0,
+      stuck.map((s) => `after ${s.ms}ms: ${s.why}`).join(' | '));
+  }
 
   const head = headers(table);
   const rows = bodyRows(table);
