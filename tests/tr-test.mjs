@@ -1266,8 +1266,13 @@ const SCENARIOS = {
     await settleGoal(document);
     const before = scalar;
 
-    // Click the first offer: the drill-down is the whole of ask 3.
+    // Click the first offer: the drill-down is the whole of ask 3. Its own
+    // advertised gain is read off THAT row as it is clicked — the list can
+    // re-rank behind the pop-up, and `after.trades` was read before that.
     const row = document.querySelector('#tradeTable tbody tr');
+    const dealRowGain = row
+      ? Number((row.querySelector('td.gain') || {}).getAttribute?.('data-v'))
+      : NaN;
     if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     await settle(1200);
     const deal = readDeal(document);
@@ -1300,7 +1305,7 @@ const SCENARIOS = {
     }
 
     return {
-      errors, fetchCalls, before, after, deal, card, spareCard, ownDeal, ownOpened,
+      errors, fetchCalls, before, after, deal, card, spareCard, ownDeal, ownOpened, dealRowGain,
       // What the parent needs to rebuild the same league and price the same
       // packing independently.
       myTeamId: document.getElementById('teamSelect').value,
@@ -1921,7 +1926,9 @@ SCENARIOS.livePickup = async function livePickup() {
  */
 SCENARIOS.goalTitle = async function goalTitle() {
   const { document, errors, fetchCalls } = await boot();
-  await settle(20000);
+  // The page finishing, not a fixed 20s (PROGRESS trap): it searches twice and
+  // plays every offer through the simulation, which takes as long as it takes.
+  await settleGoal(document);
   const read = () => ({
     trades: readTrades(document),
     heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
@@ -1962,7 +1969,7 @@ SCENARIOS.goalTitle = async function goalTitle() {
 
   document.querySelector('#goalToggle button[data-goal="last"]')
     .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-  await settle(20000);
+  await settleGoal(document);
   const last = read();
   const stored = (() => {
     try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.goal']; } catch { return null; }
@@ -2010,7 +2017,10 @@ SCENARIOS.goalLive = async function goalLive() {
     'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
   };
   const { document, errors } = await boot('trade.html', '', seed);
-  await settle(15000);
+  // WAIT FOR THE PAGE TO FINISH, not for a fixed 15s (PROGRESS trap): the page
+  // searches twice and then plays every offer through the simulation, which on
+  // a loaded machine takes longer than any number written here.
+  await settleGoal(document);
   const dl = document.getElementById('deadlineLine');
   return {
     errors,
@@ -2926,8 +2936,8 @@ if (!wk.boot) {
       rows.every((r) => Math.abs((r.after - r.before) - r.delta) <= 0.051),
       JSON.stringify(rows.slice(0, 3)));
     ok('and the total matches the gain the finder advertised',
-      Math.abs(totalRow.delta - wk.after.trades[0].myGain) <= 0.2,
-      `deal ${totalRow.delta} vs row ${wk.after.trades[0].myGain}`);
+      Math.abs(totalRow.delta - wk.dealRowGain) <= 0.2,
+      `deal ${totalRow.delta} vs the row it was opened on ${wk.dealRowGain}`);
     ok('the per-week average is shown as well as the total',
       wk.deal.weeks.totals.length === 2 && wk.deal.weeks.perRow &&
       Math.abs(wk.deal.weeks.perRow.delta - totalRow.delta / rows.length) <= 0.06,
