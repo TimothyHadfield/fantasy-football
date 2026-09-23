@@ -19,8 +19,12 @@ import { REPO } from './repo.mjs';
 
 // index.html's module is discovered from the page itself, so a renamed module
 // is caught rather than hard-coded around.
+// draft/waivers/debug joined the list on 2026-09-22 (AUDIT §3.3): they were
+// booted by no suite at all, so an undefined import in js/draft-page.js — 920
+// lines, plus draft-model/draft-sim/draft-demo — sailed past every suite here.
 const PAGES = [
   'index.html', 'stats.html', 'analysis.html', 'schedule.html', 'trade.html', 'summary.html',
+  'waivers.html', 'draft.html', 'debug.html',
 ];
 
 /** Parse the <script type="module" src="..."> tags a page actually declares. */
