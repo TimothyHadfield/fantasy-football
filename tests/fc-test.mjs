@@ -1924,6 +1924,17 @@ async function check(scenario, boot) {
   // each side of a game, the forecast through the row's own mine/theirs — so
   // the two agreeing IS "the two sides of a matchup sum to 100".
   if (scenario === 'live') {
+    // THE STATUS LINE SAYS THE PAGE HAS FINISHED (fixed 2026-09-23). It used to
+    // be left reading "Reading ESPN's projections… week 15 of 16." for the rest
+    // of the visit: `refreshStrength`'s progress callback returns early on the
+    // last week, and nothing put the load's own summary back. A page that has
+    // finished must not say it is still reading.
+    const finalStatus = txt(d.getElementById('sourceStatus'));
+    c.ok('the status line is not still reading a week once the page has finished',
+      !/Reading ESPN/i.test(finalStatus), finalStatus);
+    c.ok('and it says what the load found instead',
+      /^Loaded \d+ matchup/.test(finalStatus), finalStatus);
+
     // The page is on "All weeks", so every fixture of the season is a card
     // inside a .week-block headed by its week number.
     const cardGames = [];

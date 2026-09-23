@@ -114,6 +114,7 @@ const playoffTeamsKnown = () => capture.playoffTeamsKnown(state.data);
 const state = {
   source: prefs.get('source', 'demo'),
   data: null,               // normalised schedule (see normalizeSchedule)
+  sourceSummary: '',        // what the load said, restored after the week read (restoreStatus)
   // THE POSITIONAL FLOOR: position -> the wire's best man there, one read,
   // used for every week. Null in demo and until the read lands, which forecasts
   // exactly as this page always did. Kept on state rather than passed around
@@ -400,10 +401,10 @@ async function loadLive() {
     }
 
     const done = finalGames(data.games).length;
-    setStatus(
+    state.sourceSummary =
       `Loaded ${plural(data.games.length, 'matchup')} from ${esc(data.leagueName)} — ` +
-      `${done} played, ${data.games.length - done} still to come.`
-    );
+      `${done} played, ${data.games.length - done} still to come.`;
+    setStatus(state.sourceSummary);
     adopt(data);
   } catch (err) {
     state.loadError = `ESPN refused the schedule (${err.message}).`;
@@ -893,6 +894,21 @@ function setStatus(msg, isError = false) {
   el.style.color = isError ? 'var(--err)' : 'var(--dim)';
 }
 
+/**
+ * THE LINE GOES BACK TO WHAT THE LOAD SAID once the week-by-week read behind it
+ * is finished.
+ *
+ * `refreshStrength` writes its progress over the load's own summary, and its
+ * `onProgress` returns early on the last week (`done >= total`), so on a live
+ * league the bar was left reading "Reading ESPN's projections… week 15 of 16."
+ * for the rest of the session — a page that has finished, saying it has not.
+ * Found by tests/settle.mjs, which polls that line to know when the page is
+ * done. Demo sets its own line and has no read behind it, so it never had this.
+ */
+function restoreStatus() {
+  if (state.sourceSummary) setStatus(state.sourceSummary);
+}
+
 // ------------------------------------------------------------------ projection
 //
 // A projected score for every team in every week, built from ONE roster fetch
@@ -1064,6 +1080,8 @@ async function refreshStrength() {
     // adding a round trip to the page load.
     state.floors = await floorRead;
     if (stale()) return;
+    // The read is over: put the load's own summary back (see `restoreStatus`).
+    restoreStatus();
 
     // In the order asked for, never the order the answers arrived in: the
     // starting slots are counted off the first week, and two routes to the same

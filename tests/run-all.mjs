@@ -159,7 +159,12 @@ for (const [file] of chosen) {
   const res = spawnSync(process.execPath, [path.join(HERE, file)], {
     cwd: HERE,
     encoding: 'utf8',
-    timeout: 10 * 60 * 1000,
+    // 25 MINUTES, NOT TEN. `tr-test` needs ~6 min on an idle machine and hit
+    // the old cap whenever Tim's OCR jobs held the cores — a SIGTERM that looks
+    // exactly like a broken suite. The cap is here to stop a hang, not to
+    // police speed (`test-trade-weekly` owns the speed claim, scaled by a
+    // measured machine factor), so it is set well clear of the slowest suite.
+    timeout: 25 * 60 * 1000,
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   const out = (res.stdout || '') + (res.stderr || '');
