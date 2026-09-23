@@ -43,9 +43,18 @@ On what "best" means: "the user should essentially open with a goal and all the 
 - 1.8 `flooredValue(player, floors, slotId)`: a zero man in a combo slot (FLEX 23, 3, 5, 7) floors at the SLOT's floor; Analysis cells pass the slot too.
 New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX legend "best for that slot", floor sentences behind Schedule/Stats/Summary/Home toggles.
 
+**AUDIT §2 fixed and merged 2026-09-22** (builder wave; each fix seen failing first):
+- 2.1 a reading is filed under the week it describes: the playoff weeks are read through the bracket (15, 16, 17), and a reading whose first projected week isn't its own week is refused and recorded as a failure.
+- 2.2 the connection bar's reading is floored on the same floor week as the Schedule page's (needed two lines in `js/connection.js`); every reading records the floor and the wire's week. `test-capture.mjs` now runs on a non-empty wire.
+- 2.3 SCHEMA 2: your roster's per-week projections plus the other squads' starters, stored as rows. v1 readings still hydrate, export and restore byte-for-byte (`tests/snap-v1-fixture.json`, written by the old code). Measured: 363 KB for a 17-week 10-team season (cap 400 KB); export file 852 KB.
+- 2.4 a stored week records whether byes were known; a byes-unknown week is re-read once the bye read works (old entries count as unknown). 2.5 a `final:false` entry is refused once the week has a result.
+- 2.6 STILL OPEN — only Tim can press Export archive; no file in Downloads as of 2026-09-22.
+
+**Also 2026-09-22:** the custom box's "also send" suggestions follow the goal (goal-weighted gap, tie-broken by gain × P(yes); points until the weights are in, and the key line says which). A trade's player cards mark **the weeks you play that manager** with an arrow under the week number (`vsWeeks`/`vsName` in `weekRun`; `meetingWeeks()` reads the league schedule) — Tim, 2026-09-21: "add a little arrow pointing to the week that the user is playing you in the preview".
+
 ## Authorized next steps
 - ~~2026-09-21 · Finish and ship items 1–5~~ done, merged 75247c7.
-- 2026-09-21 · Tim: "alright start working on the projects you reccommend" — taken to cover AUDIT.md §1 → §2 → §3 in the recommended order. §1 done; **§2 (data being lost) is next**, then §3.
+- 2026-09-21 · Tim: "alright start working on the projects you reccommend"; 2026-09-22 · "alright do what you think needs to be done next" — taken to cover AUDIT.md §1 → §2 → §3 in the recommended order. §1 and §2 done (bar 2.6, which is Tim's to press); **§3 (the safety net) is next**.
 - 2026-09-20 · AUDIT.md order §1 → §2 → §3 recommended; Tim "has not yet chosen an order" (paraphrase from AUDIT). Not explicitly authorized.
 
 ## Standing instructions
@@ -86,7 +95,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - A `background` shorthand on a td/tr erases the heat tint (`background-image`) — fixed 2026-09-21; `heat-draw-check.mjs` fails on any new one in app.css.
 - `textContent` in tests reads sr-only text too — read visible and sr-only separately.
 - An assertion guarded by `if (x.length)` with no else passes when the feature produces nothing — three agents found this.
-- `tr-test` scenarios must wait for the page to FINISH (`settleGoal`), not a fixed time — the page now searches twice (points, then goal weights) and ranks.
+- `tr-test` scenarios must wait for the page to FINISH (`settleGoal`), not a fixed time — the page now searches twice (points, then goal weights) and ranks. Three scenarios still slept 15–20 s on 2026-09-22 and failed four checks on correct code; fixed. Other suites still sleep: `fc-test` (playoff-four, playoff-divisions, live, live-noteam) and `wv-test` (live-midload) fail the same way on a loaded machine, on the live commit too. AUDIT §3 work.
+- Anything read off the finder AFTER the sim finishes must be read off the row it was taken from, not an earlier `readTrades()` — the list re-ranks behind a pop-up.
+- The machine is shared: Tim's OCR jobs (`ocrvid.py`) can hold three cores for hours, which is what makes every fixed wait fail. Check `Get-Process` before believing a timing failure.
 - Worktrees: never junction `node_modules` into one you will remove (emptied `boolbase` once). On Windows `git worktree remove` fails on long paths — `rm -rf` then `git worktree prune`. Stale `.git/worktrees/*` folders (base, baseline, br, head-tr, wt) are permission-locked and harmless.
 - Shell: multi-line `node -e` with backticks/`${}` gets mangled by bash — use the Edit tool.
 - linkedom gotchas: `tests/README.md`.
