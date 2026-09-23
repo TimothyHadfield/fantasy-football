@@ -44,7 +44,13 @@ const PAGES = [
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CEILINGS = JSON.parse(readFileSync(path.join(HERE, 'text-ceilings.json'), 'utf8'));
 
-const words = (s) => (String(s || '').trim().match(/\S+/g) || []).length;
+// Digit groups are joined before counting, so a runner whose locale renders
+// `toLocaleString` as "10 000" rather than "10,000" counts the same number of
+// words as this machine does. Without it the ceilings below would be a fact
+// about one computer, and CI would go red — which now stops the deploy (§3.1).
+const words = (s) => (String(s || '')
+  .replace(/(\d)[\s  ](?=\d)/g, '$1')
+  .trim().match(/\S+/g) || []).length;
 
 // Not prose: data, controls, control labels, the panel's own heading, and
 // anything that is not drawn at all.
