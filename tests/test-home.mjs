@@ -250,6 +250,38 @@ const heatSide = (el) => {
  * It refuses to pass vacuously: a column with no green cell or no red cell
  * reports as a failure rather than as "every cell was fine".
  */
+/**
+ * ON SCREEN, not merely present — AUDIT §3.4.
+ *
+ * Both colour keys on this page were asserted by their TEXT alone, and text is
+ * still text when the key is moved inside its own closed <details>: a colour
+ * with its key behind a toggle, which rule 7 forbids. It was demonstrated on
+ * 2026-09-20 by moving `strengthKey` and `benchScaleKey` into their closed
+ * toggles — this suite and fc-test both stayed green. So the keys now go
+ * through this, which walks the ancestors for `hidden` and for a closed toggle.
+ */
+function onScreen(el) {
+  if (!el) return false;
+  for (let n = el; n; n = n.parentElement) {
+    if (n.hasAttribute && n.hasAttribute('hidden')) return false;
+    if (n.tagName === 'DETAILS' && n !== el && !n.hasAttribute('open')) return false;
+  }
+  return true;
+}
+
+/** Where an element sits, so a failure says WHY it is not on screen. */
+function placeOf(el) {
+  if (!el) return 'no such element';
+  const trail = [];
+  for (let n = el; n && n.tagName !== 'BODY'; n = n.parentElement) {
+    trail.push(n.tagName.toLowerCase() +
+      (n.id ? '#' + n.id : '') +
+      (n.hasAttribute('hidden') ? '[hidden]' : '') +
+      (n.tagName === 'DETAILS' ? (n.hasAttribute('open') ? '[open]' : '[CLOSED]') : ''));
+  }
+  return trail.join(' < ');
+}
+
 function directionOk(values, cells, goodHigh) {
   const usable = values.map((v, i) => [v, cells[i]]).filter(([v]) => Number.isFinite(v));
   if (usable.length < 2) return 'fewer than two values';
@@ -384,6 +416,11 @@ if (process.argv[2]) {
       // colour sweep put ~90 words of thresholds on screen per panel; `node
       // tests/text-audit.mjs index.html` measures it).
       facts.strengthKey = text('strengthKey');
+      // ON SCREEN, not merely present (§3.4): the text below is the same text
+      // when the whole key has been moved inside a closed toggle.
+      if (!onScreen($('strengthKey'))) {
+        problems.push(`heat: the strength key is not on screen — ${placeOf($('strengthKey'))}`);
+      }
       if (!/Green beats the other nine lineups/.test(facts.strengthKey)) {
         problems.push(`heat: roster strength has no visible key line — "${facts.strengthKey.slice(0, 80)}"`);
       }
@@ -477,6 +514,10 @@ if (process.argv[2]) {
           problems.push('heat: the Cost column was coloured — its best value is a dash, not a number');
         }
         facts.benchScaleKey = text('benchScaleKey');
+        // ON SCREEN, not merely present (§3.4) — same trap as the strength key.
+        if (!onScreen($('benchScaleKey'))) {
+          problems.push(`heat: the bench key is not on screen — ${placeOf($('benchScaleKey'))}`);
+        }
         // WHICH column carries the scale stays visible — three of the five are
         // plain, and a reader comparing two numbers has to know which of them
         // was measured. WHY the other two are plain is method, and the assertion
