@@ -536,13 +536,21 @@ async function homeScenario({ demoPref }) {
   ok('and the key is visible', !document.getElementById('benchKey').hasAttribute('hidden'));
   ok('the note is about week 2', /in week 2\./.test(text('benchNote')), text('benchNote'));
 
-  // Standings: C, A, B, D. With equal games W−L and win % agree, so the
-  // ordering claim is made on unequal games through the model below too.
-  const st = Array.from(document.querySelectorAll('#standings tbody tr')).map((tr) => tr.children[0].textContent.trim());
-  eq(st, ['Charlie', 'Alpha', 'Bravo', 'Delta'], 'standings: win %, then points for, regular season only');
-
-  // Unequal games: X 2-1 with big points, Y 1-0-1. Win % puts Y first
-  // (.750 > .667); wins-minus-losses calls them level and points pick X.
+  // THE STANDINGS PANEL IS GONE. Home's Team / W-L / PF / PA / Diff table was
+  // deleted on 2026-09-23 - an ESPN screen, the same call Tim made about the
+  // Schedule one on 2026-09-17 - so the assertions that read its order off this
+  // page, and the two on the `winPct` export that only that table called, went
+  // with it. tests/test-capture.mjs already follows this pattern for the
+  // Schedule deletion.
+  //
+  // THE RULE ITSELF IS NOT UNGUARDED. "Win percentage with a tie as half a win,
+  // then points for" lives in `capture.standingsKey`, which seeds the simulated
+  // bracket and is exercised directly in tests/test-capture.mjs - including the
+  // exact case this block used to make, that 1-0-1 ranks above 2-1. The Stats
+  // page's Standings & season totals table sorts on the same rule, and
+  // tests/stats-order.mjs reads that order back off the rendered page.
+  //
+  // The season below is kept: the bench-week rule still needs one.
   const sched = {
     leagueName: 'x', teams: [{ id: 1, name: 'X' }, { id: 2, name: 'Y' }, { id: 3, name: 'Z' }, { id: 4, name: 'W' }],
     weeks: [1, 2, 3],
@@ -558,11 +566,6 @@ async function homeScenario({ demoPref }) {
     if (!sched.byWeek.has(x.week)) sched.byWeek.set(x.week, []);
     sched.byWeek.get(x.week).push(x);
   }
-  const m = mod.buildModel({ schedule: sched, rosters: null, week: 3 });
-  eq(m.standings.map((r) => `${r.name} ${r.w}-${r.l}-${r.t}`), ['Y 1-0-1', 'X 2-1-0', 'Z 1-2-0', 'W 0-1-1'],
-    'a tie is half a win: 1-0-1 ranks above 2-1');
-  eq(mod.winPct({ w: 0, l: 0, t: 2 }), 0.5, 'two ties are .500');
-  eq(mod.winPct({ w: 0, l: 0, t: 0 }), null, 'no games, no percentage');
   eq(mod.benchWeekFor(sched, 3), 3, 'a final week is its own bench week');
 }
 

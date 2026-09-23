@@ -216,41 +216,30 @@ a.pref:focus-visible {
     </details>
   </section>
 
-  <div class="panel-row">
-    <section class="panel">
-      <h2>Roster strength</h2>
-      <p class="lede">Each team&rsquo;s current starting lineup, as points in a typical week. Bars show the gap from last to first, not totals.</p>
-      <div id="strength"></div>
-      <!-- The red/green scale's key. VISIBLE, never tucked inside "How this
-           works": a colour whose key is behind a closed toggle is a colour with
-           no key (HANDOFF rule 7, and js/heat.js channel 4). ONE SHORT LINE —
-           which way green points, and that the ends carry ▲▼ and heavier type.
-           The thresholds in points live in the toggle below, where the rest of
-           the method is; they are what lets a row be checked by hand, but
-           printing them here cost this panel 45 words of permanently visible
-           prose (node tests/text-audit.mjs index.html). -->
-      <p class="panel-note" id="strengthKey" hidden></p>
-      <details class="explain">
-        <summary>How this works</summary>
-        <p class="panel-note" id="strengthNote"></p>
-      </details>
-    </section>
-
-    <section class="panel">
-      <h2>Standings</h2>
-      <div id="standings"></div>
-      <p class="panel-note" id="standingsNote"></p>
-      <!-- The red/green scale's thresholds, in points. Tucked, exactly as the
-           Stats page tucks the same sentence: what is VISIBLE is what changes
-           what a number means (which end is good, and that PA is inverted);
-           what is in here is the method — the figures the colours turn at, so
-           a shaded cell can be checked by hand rather than believed. -->
-      <details class="explain" hidden>
-        <summary>How the colours work</summary>
-        <p class="panel-note" id="standingsScale"></p>
-      </details>
-    </section>
-  </div>
+  <!-- Roster strength stands alone. The standings table that used to share this
+       line was deleted on 2026-09-23 for the reason the Schedule one went on
+       2026-09-17: Team / W-L / PF / PA / Diff is an ESPN screen, and this site
+       complements ESPN rather than rebuilding it. Record and points survive on
+       the Stats page, where they sit beside luck, skill and S+L — which ESPN
+       does not publish and which is why that panel is a different panel. -->
+  <section class="panel">
+    <h2>Roster strength</h2>
+    <p class="lede">Each team&rsquo;s current starting lineup, as points in a typical week. Bars show the gap from last to first, not totals.</p>
+    <div id="strength"></div>
+    <!-- The red/green scale's key. VISIBLE, never tucked inside "How this
+         works": a colour whose key is behind a closed toggle is a colour with
+         no key (HANDOFF rule 7, and js/heat.js channel 4). ONE SHORT LINE —
+         which way green points, and that the ends carry ▲▼ and heavier type.
+         The thresholds in points live in the toggle below, where the rest of
+         the method is; they are what lets a row be checked by hand, but
+         printing them here cost this panel 45 words of permanently visible
+         prose (node tests/text-audit.mjs index.html). -->
+    <p class="panel-note" id="strengthKey" hidden></p>
+    <details class="explain">
+      <summary>How this works</summary>
+      <p class="panel-note" id="strengthNote"></p>
+    </details>
+  </section>
 
   <div class="panel-row">
     <section class="panel">

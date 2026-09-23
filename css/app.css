@@ -440,13 +440,11 @@ tbody tr.me td.name { background-color: #14261a; color: #7fd99b; }
   tbody tr:hover td.name { background-color: var(--panel-3); }
 }
 
-/* Result emphasis in the schedule table. These were only ever defined as
- * `.side.win` / `.side.lose` inside schedule.html, so the results table -
- * which emits bare `win`/`lose` on its <td>s - rendered winners and losers
- * identically. Colour and weight only: the background rules above still own
- * zebra, hover and .me. */
-td.win { color: var(--text); font-weight: 650; }
-td.lose { color: var(--dim); }
+/* `td.win` / `td.lose` lived here for the Schedule page's Results table, the
+ * only thing on the site that put a bare `win`/`lose` class on a <td>. That
+ * panel was deleted on 2026-09-23 (it was ESPN's scoreboard with a sort), and
+ * the rules went with it. The matchup cards style their own winners through
+ * `.side.win` / `.side.lose` inside schedule.html and index.html. */
 
 .pos { color: var(--accent); }
 .neg { color: var(--err); }

@@ -29,7 +29,7 @@ const SCENARIOS = {
     label: '(h) the league declares a 4-team bracket, and the page uses it',
     stub: true,
     env: { FC_PLAYOFF_TEAMS: '4' },
-    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 3 },
     // The simulation hands off through rAF and a timeout so it cannot block the
     // paint, so the panel is empty for a moment after boot. Wait for the note to
@@ -59,7 +59,7 @@ const SCENARIOS = {
     label: '(h+) the league declares TWO divisions, and the page says seeding ignores them',
     stub: true,
     env: { FC_PLAYOFF_TEAMS: '6', FC_DIVISIONS: '2' },
-    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 3 },
     after: async ({ document }) => {
       for (let i = 0; i < 100; i++) {
@@ -82,7 +82,7 @@ const SCENARIOS = {
   live: {
     label: '(b) stubbed live league, week 2 of 13, no projections on games',
     stub: true,
-    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
   },
   'live-noteam': {
@@ -131,7 +131,7 @@ const SCENARIOS = {
   archive: {
     label: '(g) the time machine: a reading is taken, and replaying gives it back',
     stub: true,
-    prefs: { 'schedule.source': 'live', 'schedule.week': 'all', 'schedule.results': 'all' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document, window }) => {
       const $ = (id) => document.getElementById(id);
@@ -787,7 +787,7 @@ async function check(scenario, boot) {
   c.ok('the panels are in Tim’s order, top to bottom',
     JSON.stringify(panelIds) === JSON.stringify([
       'forecastPanel', 'simPanel', 'matchupsPanel',
-      'sourcePanel', 'timePanel', 'resultsPanel', 'h2hPanel',
+      'sourcePanel', 'timePanel', 'h2hPanel',
     ]),
     JSON.stringify(panelIds));
   // The week picker is INSIDE the matchups panel, at the top of it — the whole
@@ -1385,9 +1385,9 @@ async function check(scenario, boot) {
     // control arrived (the time machine's week picker), which told nobody
     // anything about team pickers.
     const selectIds = [...d.querySelectorAll('select')].map((s) => s.id).sort();
-    c.ok('the page has exactly the four selects it should, and no second team picker',
+    c.ok('the page has exactly the three selects it should, and no second team picker',
       JSON.stringify(selectIds) ===
-        JSON.stringify(['asOfSelect', 'filterTeam', 'forecastTeam', 'weekSelect']),
+        JSON.stringify(['asOfSelect', 'forecastTeam', 'weekSelect']),
       selectIds.join(','));
   }
 
@@ -1636,22 +1636,53 @@ async function check(scenario, boot) {
   }
 
   // ---- every game carries a chance, and the pair sums to 100 --------------
+  //
+  // THIS USED TO READ THE RESULTS TABLE, which printed one "Home win" cell per
+  // fixture. That panel was deleted on 2026-09-23 as an ESPN screen, so the
+  // check is re-aimed at the Week matchups cards, which print the same fixture
+  // from the same `homeWinChance()`. The property is unchanged and so is what
+  // makes it worth asserting: the cards and the forecast table reach a win
+  // chance by two different routes — the cards through projectedPoints() for
+  // each side of a game, the forecast through the row's own mine/theirs — so
+  // the two agreeing IS "the two sides of a matchup sum to 100".
   if (scenario === 'live') {
-    const rr = rowsOf($('resultsTable'));
-    const upcoming = rr.filter((r) => r.cells[7] === 'Upcoming');
-    c.ok('results table lists upcoming games', upcoming.length >= 55, `${upcoming.length}`);
-    const homePcts = upcoming.map((r) => pctOf(r.cells[6]));
-    c.ok('every upcoming row has a home win %', homePcts.every((p) => p !== null), JSON.stringify(upcoming.slice(0, 2).map((r) => r.cells)));
-    c.ok('home win % in 0-100', homePcts.every((p) => p >= 0 && p <= 100));
-    const played = rr.filter((r) => r.cells[7] !== 'Upcoming');
-    c.ok('decided games carry no forecast', played.every((r) => r.cells[6] === '—'), JSON.stringify(played.slice(0, 2).map((r) => r.cells)));
+    // The page is on "All weeks", so every fixture of the season is a card
+    // inside a .week-block headed by its week number.
+    const cardGames = [];
+    for (const block of d.querySelectorAll('.week-block')) {
+      const wk = Number((txt(block.querySelector('.week-head')).match(/\d+/) || [])[0]);
+      if (!Number.isFinite(wk)) continue;
+      for (const game of block.querySelectorAll('.game.upcoming')) {
+        const home = txt(game.querySelector('.side.home .tname'));
+        const away = txt(game.querySelector('.side.away .tname'));
+        const meta = txt(game.querySelector('.gmeta'));
+        const pct = pctOf((meta.split('·').pop() || '').trim());
+        if (pct === null) { cardGames.push({ wk, home, away, p: null, meta }); continue; }
+        // The card prints the FAVOURITE's chance, so it has to be turned back
+        // into the home side's before it can be paired with anything.
+        const p = /^Level /.test(meta) ? 50
+          : meta.startsWith(`${home} by `) ? pct
+            : meta.startsWith(`${away} by `) ? 100 - pct
+              : null;
+        cardGames.push({ wk, home, away, p, meta });
+      }
+    }
+    c.ok('matchup cards cover the upcoming season', cardGames.length >= 55, `${cardGames.length}`);
+    c.ok('every upcoming card has a home win %',
+      cardGames.every((g) => g.p !== null),
+      JSON.stringify(cardGames.filter((g) => g.p === null).slice(0, 3)));
+    c.ok('home win % in 0-100', cardGames.every((g) => g.p >= 0 && g.p <= 100));
+    // A decided card shows the winner and the margin, never a forecast.
+    const decided = [...d.querySelectorAll('.game.final .gmeta')].map((e) => txt(e));
+    c.ok('decided cards carry no forecast',
+      decided.length > 0 && decided.every((m) => !/%/.test(m)),
+      `${decided.length}: ${decided.slice(0, 2).join(' | ')}`);
 
     // Pair up: my rows in the forecast table against the same game's home %.
     const homeByWeek = new Map();
-    for (const r of upcoming) {
-      const wk = Number(r.cells[0]);
-      if (!homeByWeek.has(wk)) homeByWeek.set(wk, []);
-      homeByWeek.get(wk).push({ home: r.cells[1], away: r.cells[3], p: pctOf(r.cells[6]) });
+    for (const g of cardGames) {
+      if (!homeByWeek.has(g.wk)) homeByWeek.set(g.wk, []);
+      homeByWeek.get(g.wk).push(g);
     }
     let pairs = 0;
     let bad = [];
@@ -1661,25 +1692,27 @@ async function check(scenario, boot) {
       const iAmHome = r.cells[2] === 'Home';
       const g = (homeByWeek.get(wk) || []).find((x) => (iAmHome ? x.away === opp : x.home === opp));
       if (!g) continue;
-      // The two tables render the two sides of the same matchup independently,
-      // so agreeing here IS the "they sum to 100" property.
       const mine = pctOf(r.cells[5]);
-      const fromResults = iAmHome ? g.p : 100 - g.p;
+      const fromCard = iAmHome ? g.p : 100 - g.p;
       pairs++;
-      if (Math.abs(mine + (100 - fromResults) - 100) > 1.01) {
-        bad.push(`wk${wk} mine=${mine} home=${g.p} (${iAmHome ? 'home' : 'away'})`);
+      // 2 points, not 1: both numbers are rounded to a whole per cent, and the
+      // card's is rounded on the FAVOURITE's side before being turned over, so
+      // a single fixture can legitimately carry two half-point roundings.
+      if (Math.abs(mine - fromCard) > 2.01) {
+        bad.push(`wk${wk} mine=${mine} card=${g.p} (${iAmHome ? 'home' : 'away'}) "${g.meta}"`);
       }
     }
     c.ok('matchup percentages pair to 100', pairs >= 10 && bad.length === 0, `${pairs} pairs, bad: ${bad.join(', ')}`);
 
-    // Cards carry a chance too.
-    const metas = Array.from(d.querySelectorAll('#matchups .game.upcoming .gmeta')).map((e) => txt(e));
+    // The card prints the margin and the percentage as one statement, so they
+    // can never point opposite ways.
+    const metas = cardGames.map((g) => g.meta);
     c.ok('upcoming cards show a win %', metas.length > 0 && metas.every((m) => /\d+%$|<1%$|>99%$/.test(m)), metas.slice(0, 3).join(' | '));
     c.ok('card and margin agree in direction',
       metas.every((m) => /by \d+(\.\d)? · (\d+%|<1%|>99%)$/.test(m) || /^Level · 50%$/.test(m)),
       metas.slice(0, 3).join(' | '));
+
     c.ok('matchups note carries the caveat', /not published by ESPN/.test(txt($('matchupsNote'))), txt($('matchupsNote')));
-    c.ok('results note carries the caveat', /not published by ESPN/.test(txt($('resultsNote'))), txt($('resultsNote')));
 
     // ---- byes reduce a team's projection ---------------------------------
     const mine = new Map(fcRows.map((r) => [Number(r.cells[0]), Number(r.cells[3])]));
