@@ -34,6 +34,7 @@ import { REPO } from './repo.mjs';
 // thirteen weeks of wire and thirteen of rosters, and the man's positional rank
 // was read back before they landed, giving his THREE-week rank instead.
 import { settleWaiverPage } from './settle.mjs';
+import { emit } from './emit.mjs';
 
 // The per-position startable bars, copied rather than imported: if the page
 // changes one, the "some of these numbers clear the bar" check below should
@@ -1100,14 +1101,12 @@ if (process.argv[2]) {
   try {
     const booted = await boot(scenario);
     const results = await check(scenario, booted);
-    console.log('@@' + JSON.stringify({ scenario, results }));
-    process.exit(results.every((r) => r.pass) ? 0 : 1);
+    emit({ scenario, results }, results.every((r) => r.pass) ? 0 : 1);
   } catch (err) {
-    console.log('@@' + JSON.stringify({
+    emit({
       scenario,
       results: [{ name: 'boot', pass: false, detail: String((err && err.stack) || err) }],
-    }));
-    process.exit(1);
+    }, 1);
   }
 }
 

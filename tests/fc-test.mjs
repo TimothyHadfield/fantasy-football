@@ -16,6 +16,7 @@ import path from 'node:path';
 
 import { REPO } from './repo.mjs';
 import { settle, settleUntil, machineSpeed, scaledBudget, REFERENCE_MS } from './settle.mjs';
+import { emit } from './emit.mjs';
 
 // --------------------------------------------- when has this page finished?
 //
@@ -2106,11 +2107,9 @@ if (process.argv[2]) {
   try {
     const booted = await boot(scenario);
     const results = await check(scenario, booted);
-    console.log('@@' + JSON.stringify({ scenario, results }));
-    process.exit(results.every((r) => r.pass) ? 0 : 1);
+    emit({ scenario, results }, results.every((r) => r.pass) ? 0 : 1);
   } catch (err) {
-    console.log('@@' + JSON.stringify({ scenario, results: [{ name: 'boot', pass: false, detail: String(err && err.stack || err) }] }));
-    process.exit(1);
+    emit({ scenario, results: [{ name: 'boot', pass: false, detail: String(err && err.stack || err) }] }, 1);
   }
 }
 

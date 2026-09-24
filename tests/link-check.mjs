@@ -34,6 +34,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
+import { emit } from './emit.mjs';
 
 /** The pages that MAKE links, and the id of a panel each must have linked. */
 const SOURCES = ['index.html', 'analysis.html', 'trade.html', 'waivers.html'];
@@ -177,11 +178,9 @@ if (process.argv[2]) {
   const [mode, arg] = [process.argv[2], process.argv[3]];
   try {
     const out = mode === 'collect' ? await collect(arg) : await land(arg);
-    console.log('@@' + JSON.stringify(out));
-    process.exit(0);
+    emit(out, 0);
   } catch (err) {
-    console.log('@@' + JSON.stringify({ boot: String((err && err.stack) || err) }));
-    process.exit(1);
+    emit({ boot: String((err && err.stack) || err) }, 1);
   }
 }
 

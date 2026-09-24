@@ -35,6 +35,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { REPO } from './repo.mjs';
+import { emit } from './emit.mjs';
 
 const PAGES = [
   'index.html', 'stats.html', 'analysis.html', 'schedule.html',
@@ -221,8 +222,7 @@ async function settle(document) {
 
 if (process.argv[2] && process.argv[3] === '--child') {
   const out = await audit(process.argv[2]);
-  console.log('@@' + JSON.stringify(out));
-  process.exit(0);
+  emit(out, 0);
 }
 
 const self = fileURLToPath(import.meta.url);

@@ -29,6 +29,7 @@ import path from 'node:path';
 
 import { REPO, moduleUrl } from './repo.mjs';
 import { bootDom, waitFor, comparable, LEAGUE, SEASON } from './cap-harness.mjs';
+import { emit } from './emit.mjs';
 
 const self = fileURLToPath(import.meta.url);
 // Weeks 1–3 decided: week 4 is due. A December child names its own week.
@@ -124,11 +125,9 @@ if (process.argv[2]) {
   const name = process.argv[2];
   try {
     const out = await CHILDREN[name]();
-    console.log('@@' + JSON.stringify(out));
-    process.exit(0);
+    emit(out, 0);
   } catch (err) {
-    console.log('@@' + JSON.stringify({ boot: String((err && err.stack) || err) }));
-    process.exit(1);
+    emit({ boot: String((err && err.stack) || err) }, 1);
   }
 }
 

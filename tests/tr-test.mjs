@@ -11,7 +11,7 @@
 // `js/trade-page.js` self-boots on import, so two boots cannot share one.
 
 import { parseHTML } from 'linkedom';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -2087,15 +2087,36 @@ SCENARIOS.goalLive = async function goalLive() {
 
 const self = fileURLToPath(import.meta.url);
 
+/**
+ * WRITTEN SYNCHRONOUSLY, because `process.exit` throws away what is still in
+ * the pipe.
+ *
+ * On POSIX a pipe is an ASYNC stream, so `console.log` of a 200 KB line queues
+ * a write and `process.exit()` on the next statement kills the process with
+ * most of it unwritten. The parent then reads half a line, `JSON.parse` throws,
+ * and node prints the truncated JSON as the offending source — three lines, no
+ * assertion, no clue. On Windows stdout to a pipe is synchronous, which is why
+ * every local run passed and only GitHub's Linux runner failed (2026-09-23,
+ * every scenario payload is 148-227 KB).
+ *
+ * `writeSync` against fd 1 returns only when the bytes are gone, so the exit
+ * below cannot lose them. Kept as an explicit exit rather than a natural one:
+ * a scenario may leave a timer pending, and hanging is worse than exiting.
+ */
+function emit(payload, code) {
+  const line = `@@${JSON.stringify(payload)}\n`;
+  const buf = Buffer.from(line, 'utf8');
+  let off = 0;
+  while (off < buf.length) off += writeSync(1, buf, off, buf.length - off);
+  process.exit(code);
+}
+
 if (process.argv[2]) {
   const name = process.argv[2];
   try {
-    const out = await SCENARIOS[name]();
-    console.log('@@' + JSON.stringify(out));
-    process.exit(0);
+    emit(await SCENARIOS[name](), 0);
   } catch (err) {
-    console.log('@@' + JSON.stringify({ boot: String((err && err.stack) || err) }));
-    process.exit(1);
+    emit({ boot: String((err && err.stack) || err) }, 1);
   }
 }
 

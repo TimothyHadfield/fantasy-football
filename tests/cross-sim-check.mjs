@@ -27,6 +27,7 @@ import path from 'node:path';
 
 import { REPO, moduleUrl } from './repo.mjs';
 import { bootDom, waitFor, LEAGUE, SEASON } from './cap-harness.mjs';
+import { emit } from './emit.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
@@ -100,11 +101,9 @@ const CHILDREN = {
 
 if (process.argv[2]) {
   try {
-    console.log('@@' + JSON.stringify(await CHILDREN[process.argv[2]]()));
-    process.exit(0);
+    emit(await CHILDREN[process.argv[2]](), 0);
   } catch (err) {
-    console.log('@@' + JSON.stringify({ boot: String((err && err.stack) || err) }));
-    process.exit(1);
+    emit({ boot: String((err && err.stack) || err) }, 1);
   }
 }
 
