@@ -218,7 +218,11 @@ if (failures.length) {
     // Long lines are CUT. One scenario's page state is a single 300 KB line,
     // and printing it whole buries every assertion above it — which is exactly
     // how a real CI failure arrived on 2026-09-23 with nothing readable in it.
-    console.log(out.trimEnd().split('\n').slice(-40)
+    // ON CI, EVERY LINE. A failure there cannot be re-run by hand, and the
+    // last 40 lines were not enough to name one on 2026-09-23: the suite
+    // crashed with a three-line stack and no assertion in it.
+    const keep = process.env.CI ? -100000 : -40;
+    console.log(out.trimEnd().split('\n').slice(keep)
       .map((l) => (l.length > 400 ? `${l.slice(0, 400)}... [${l.length} chars]` : l))
       .join('\n'));
   }
