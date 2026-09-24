@@ -100,7 +100,7 @@ import { generateDemoLeague } from './demo.js';
 import {
   goalOf, DEFAULT_GOAL, acceptChance, offerDeltas, simulateWith,
   scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
-  weekWeights, THEIR_MIN_PER_WEEK,
+  weekWeights, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
 } from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
@@ -213,6 +213,10 @@ const state = {
   weekPickedLive: false, // the reader chose a live week during THIS visit; see openingWeek()
   weeks: [],
   playedWeeks: [],
+  // Weeks whose games have kicked off but have no result yet. Out of the priced
+  // span (`playedWeeks()`), still "not played yet" to the picker and the opening
+  // week, because that is what those two mean by the word.
+  startedWeeks: [],
   poWeeks: [],         // the playoff weeks: shown for reference, never priced
   poPlayed: [],        // of those, the ones with a result (December)
   scheduleError: null, // why the live schedule could not be read, if it could not
@@ -412,10 +416,21 @@ function sourceKey() {
  * stand-in for "now": the sample season is replayed as it stood after the
  * selected week, and everything later is the rest of it. It is written here in
  * one place, and the panel notes say which of the two rules they are on.
+ *
+ * AND A WEEK THAT HAS KICKED OFF COUNTS AS PLAYED HERE. `state.playedWeeks` is
+ * the weeks with a RESULT — which is what the picker's "already played" label
+ * and `openingWeek()` mean by it, so it keeps that meaning — and
+ * `state.startedWeeks` is the weeks whose games are under way but not yet final
+ * (`lockedWeeks`, js/trade-odds.js). A trade agreed on a Sunday afternoon cannot
+ * change a lineup that locked at kick-off, so from the first game of a week that
+ * week is no more reachable than last week's, and pricing it would put points
+ * nobody can act on inside every gain on the page. This is the ONE place that
+ * decides the priced span, so it is the one place the two sets are joined.
  */
 function playedWeeks() {
   if (state.isDemo) return state.weeks.filter((w) => w <= state.week);
-  return state.playedWeeks;
+  if (!(state.startedWeeks || []).length) return state.playedWeeks;
+  return [...new Set(state.playedWeeks.concat(state.startedWeeks))].sort((a, b) => a - b);
 }
 
 /**
@@ -2523,6 +2538,19 @@ function offerRow(offer, i, key, opts = {}) {
   const mine = heatCell(offer.myGain, myScale, 'what these offers gain you');
   const theirs = heatCell(offer.theirGain, theirScale, 'what these offers gain the other manager');
 
+  // THE SIGN, ON THE TWO GAIN CELLS. Both cells used to be written `pos`
+  // unconditionally, which painted every one of them green — and since the
+  // goal-weighted search landed, the partner is allowed to LOSE up to
+  // THEIR_MIN_PER_WEEK a week, so on the sample league all forty "He gains"
+  // cells were negative numbers in the colour that means good. The rule is
+  // `goalCellHtml`'s, to the same tolerance: a figure that rounds to nothing on
+  // screen gets no colour at all rather than a sign it does not show.
+  const signOf = (v) => {
+    if (!Number.isFinite(v)) return '';
+    const shown = weeks ? perWeekOf(v) : v;
+    return shown > 0.05 ? ' pos' : shown < -0.05 ? ' neg' : '';
+  };
+
   const merged = offer.merged
     ? `<span class="merged-tag">${plural(offer.mergedFrom, 'deal')} as one</span>`
     : '';
@@ -2573,10 +2601,10 @@ function offerRow(offer, i, key, opts = {}) {
         `</td>`
       : '') +
     (showMyGain
-      ? `<td class="gain pos${mine.cls}" data-v="${offer.myGain}"${mine.title}>` +
+      ? `<td class="gain${signOf(offer.myGain)}${mine.cls}" data-v="${offer.myGain}"${mine.title}>` +
         `${gain(offer.myGain)}${mine.mark}</td>`
       : '') +
-    `<td class="their-gain pos${theirs.cls}" data-v="${offer.theirGain}"${theirs.title}>` +
+    `<td class="their-gain${signOf(offer.theirGain)}${theirs.cls}" data-v="${offer.theirGain}"${theirs.title}>` +
       `${gain(offer.theirGain)}${theirs.mark}</td>` +
     `<td class="left espn">${espnCell(offer)}</td>` +
     tail +
@@ -2614,9 +2642,16 @@ function renderFinder() {
   const teams = state.data ? state.data.teams : [];
   const me = teams.find((t) => t.id === state.myTeamId);
 
-  $('finderTitle').textContent = me
-    ? `Trades that help both squads · ${me.name}`
-    : 'Trades that help both squads';
+  // THE TITLE SAYS WHAT THE PANEL FINDS, which since the goal-weighted search
+  // landed is not what it used to say. "Trades that help both squads" was true
+  // of the old points finder, which kept a deal only when BOTH totals went up;
+  // this one lets the other manager lose up to THEIR_MIN_PER_WEEK a week and
+  // marks the deal down by how likely he is to accept, so on the sample league
+  // every offer in the list makes him worse. WORDING IS TIM'S — this is the
+  // placeholder from the plan (question f), and it follows the goal he picked
+  // rather than naming the title under both.
+  const finderTitle = `Trades ranked by your ${goalOf(state.goal).chance}`;
+  $('finderTitle').textContent = me ? `${finderTitle} · ${me.name}` : finderTitle;
 
   // The two gain columns are the page's most dangerous numbers, because the
   // two bases differ by a factor of nine or more and both look plausible. The
@@ -2682,8 +2717,12 @@ function emptyMessage() {
   if (!state.search) return 'Pick a team to search from.';
 
   const narrowed = state.kind !== 'all' || state.partner !== 'all';
+  // NOT "makes both squads better" any more — see `renderFinder`. The search
+  // has not required that since the goal weights landed, so a refusal that
+  // quoted the old rule was explaining a test the page no longer applies.
+  // Wording is Tim's; this is the plainest thing that is true of both goals.
   return (
-    `<strong>No trade here makes both squads better.</strong> ` +
+    `<strong>No trade here helps your goal.</strong> ` +
     (narrowed
       ? 'Try <em>Any shape</em> and every manager before reading much into that. '
       : 'That is a real answer rather than a gap: it needs two managers who are weak ' +
@@ -2730,8 +2769,26 @@ function goalMethodHtml(span) {
     `yes. Each offer is played out in the <strong>same season simulation as the Schedule ` +
     `page</strong>, ${GOAL_RUNS.toLocaleString('en-US')} seasons, once as the league stands and ` +
     `once with the deal made, on the same seed, so the difference is the deal and not two ` +
-    `different runs of luck (it still moves by about 0.1–0.4 percentage points between seeds; ` +
-    `treat offers closer than that as level). The deal reaches the simulation as the per-week ` +
+    `different runs of luck. ` +
+    // THE NOISE, MEASURED RATHER THAN ESTIMATED. This sentence used to say "about
+    // 0.1–0.4 percentage points", which understated the top of the range: the
+    // 2026-09-23 measurement (the sample league's top eight offers, twelve seeds,
+    // 10,000 seasons each) puts the standard deviation of one offer's expected
+    // change at 0.27 points with a maximum of 0.49, and of the GAP between two
+    // offers — the number that decides the order — at 0.32 with a maximum of
+    // 0.47. Every pair inside 0.4 points changed places in 2 to 9 of the 12
+    // seeds. Hence the band, and hence "=" rather than a rank.
+    `<strong>It still moves by about ±${bandText()} of a percentage point between seeds</strong> — ` +
+    `measured on the sample league over twelve seeds: the seed-to-seed spread of one offer’s ` +
+    `expected change has a standard deviation of 0.27 points and a worst case of 0.49, and the ` +
+    `spread of the GAP between two offers, which is what decides the order, 0.32 and 0.47. ` +
+    `So <strong>two offers closer than ${bandText()} of a point are shown as level</strong>, ` +
+    `sharing one rank number with an “=” after it, instead of being ranked one above the other: ` +
+    `every pair that close changed places in between 2 and 9 of the twelve seeds, and the one ` +
+    `pair further apart than that never changed places at all. The rows inside a level group are ` +
+    `still printed in the order the simulation gave them — <strong>the grouping never moves a ` +
+    `row</strong>, it only stops the page claiming an order it cannot support. ` +
+    `The deal reaches the simulation as the per-week ` +
     `points it adds or takes away from BOTH lineups, exactly as priced in this row — so a deal ` +
     `that makes a rival stronger costs you, and points in a game you would win anyway are worth ` +
     `less than points in a coin flip.` +
@@ -2764,6 +2821,44 @@ function goalMethodHtml(span) {
     `dead even, 50% if he gives up ${ACCEPT_LEEWAY} a week, 12% at 6. Generous on purpose — a ` +
     `deal only drops hard when it is a clear fleece.` +
     `<br><br>`
+  );
+}
+
+/**
+ * WHAT THE POINTS COLUMNS ARE ON, AND WHAT THE GOAL COLUMN IS ON — rule 7, and
+ * they are not the same thing under "Win it all".
+ *
+ * `weeklySpan()` appends the bracket weeks under that goal, and "You gain" / "He
+ * gains" / "/wk" add every week in the span up at face value. The goal % does
+ * not: the week weights it is built from already scale a bracket week by how
+ * often the simulation has you there to play it (wk 16 weighs about ×2.9 of an
+ * average week precisely because it is worth more AND reached less often). The
+ * consequence is a real one and was measured on the sample league — the
+ * top-ranked deal printed +0.9 over the span while costing 24.9 points across the
+ * seven weeks it is certain to play — so it is stated rather than left for a
+ * reader to discover. Nothing here changes a number; re-modelling the columns is
+ * its own job.
+ *
+ * Empty under "Don't finish last" and once the bracket is behind us: with no
+ * playoff weeks in the span the two bases agree, and a note about a difference
+ * that does not exist is worse than none.
+ */
+function bracketBasisHtml(span) {
+  const bracket = bracketWeeksAhead();
+  if (!bracket.length || state.goal !== 'title') return '';
+  const certain = span.filter((w) => !bracket.includes(w));
+  if (!certain.length) return '';
+  return (
+    `<strong>The two gain columns and the ${esc(goalOf(state.goal).chance)} are not on the same ` +
+    `footing.</strong> The gain columns add every week in the span up at face value, ` +
+    `${weekRange(bracket)} included — as if you were certain to play them. The ` +
+    `${esc(goalOf(state.goal).chance)} is not: it counts a playoff week by how often the ` +
+    `simulation actually has you in it, which is why the weights above put ${weekRange(bracket)} ` +
+    `so far over a regular week. So a deal can read a small gain <em>over the span</em> and still ` +
+    `be losing points in ${weekRange(certain)} — the weeks you are certain to play — because it ` +
+    `pays in ${plural(bracket.length, 'week')} you may never reach. Read the gain columns as ` +
+    `“if every week happens”, and the ${esc(goalOf(state.goal).chance)} as the one that knows it ` +
+    `might not. `
   );
 }
 
@@ -2824,6 +2919,14 @@ function renderFinderNote(scales = finderScales) {
   const g = goalOf(state.goal);
   const r = state.goalRank;
   const ranked = !!(state.search && state.search.goalRanked);
+  // THE TIE IS DECLARED IN THE LEDE, NOT HERE, and that is a measured decision
+  // rather than a preference. This one visible line is capped at sixty words by
+  // tr-test — the cap exists because `describeHeatPerColumn`'s full text once
+  // took it from 37px to 206px tall at 390px — and the line already stood at 59.
+  // A tie is notation, exactly like the colour key, and it is true whether or not
+  // a tie is on screen today, so it reads as well above the table as below it.
+  // See trade.html's `.lede`; the measured band and the argument are behind "How
+  // this works" with the rest of the method.
   const order = r.running
     ? ` · <span class="searching">playing each offer out in ${GOAL_RUNS.toLocaleString('en-US')} ` +
       `simulated seasons (${r.done} of ${r.total})…</span>`
@@ -2857,11 +2960,29 @@ function renderFinderNote(scales = finderScales) {
     (weeks
       ? `<strong>Every figure is per week</strong>, averaged over ${weekRange(span)}, with the ` +
         `rest-of-season total in small type underneath — the per-week number is exactly that total ` +
-        `divided by ${plural(span.length, 'week')}. Each lineup is filled separately ` +
+        `divided by ${plural(span.length, 'week')}. ` +
+        // THE TWO BASES, SAID OUT LOUD (rule 7). The points columns and the goal
+        // column are NOT computed on the same footing, and both look plausible:
+        // the gain columns add every week in the span up flat, bracket weeks
+        // included, while the goal % weighs a bracket week by how often the
+        // simulation has you there to play it. So a deal can print "+0.9 over the
+        // span" and be losing points in every week you are certain to play. The
+        // fix for that is to re-model the columns; disclosing it is not that fix
+        // and does not pretend to be.
+        bracketBasisHtml(span) +
+        `Each lineup is filled separately ` +
         `in each week, on that week’s own projections, so a man on bye is simply replaced that week ` +
         `rather than dragging an average down. ` +
         `<strong>Only weeks still to be played are priced</strong> — ${weekRange(span)} — because a ` +
         `trade changes the rest of the season and cannot move points already banked. ` +
+        // AND A WEEK ALREADY UNDER WAY IS ONE OF THOSE. Said here because it is a
+        // week the reader can see on the picker and would otherwise expect to
+        // find inside the span — see `playedWeeks()`.
+        ((state.startedWeeks || []).length
+          ? `<strong>${weekRange(state.startedWeeks)} ${state.startedWeeks.length > 1 ? 'are' : 'is'} ` +
+            `out too</strong>: those games have kicked off, so the lineups are locked and no deal ` +
+            `can reach them either. `
+          : '') +
         `<strong>The number beside each player is what he is worth in a week he SCORES</strong> — ` +
         `averaged over the weeks he is projected to score in, with his byes, the weeks ESPN is ` +
         `quiet about and any week he is ruled out and projected 0.00 all left out of the divisor. ` +
@@ -3237,12 +3358,41 @@ function runGoalRank() {
     // one, and its own order is its own business.
     search.offers = offers.slice().sort(compareByGoal);
     search.goalRanked = true;
+    markTies(search.offers);
     // The combo, custom trades and pop-up read the same context, so this one
     // repaint brings their goal lines in too.
     paint();
   };
   setTimeout(step, 0);
 }
+
+/**
+ * THE RANK NUMBERS, AND WHICH ROWS ARE LEVEL — written onto the offers AFTER the
+ * strict sort and reading nothing but it.
+ *
+ * `tieGroups` (js/trade-odds.js) does the deciding and the measured band lives
+ * there. This only files the answer on each offer so every panel that draws a
+ * row prints the same number: `goalPlace` is the rank, shared by a whole tie
+ * group, and `goalLevel` says there is somebody to share it with.
+ *
+ * THE GROUPING NEVER MOVES A ROW. It is computed from the list in the order the
+ * comparator produced, and it writes no key anything sorts on — so a row's
+ * position is `compareByGoal`'s answer and nothing else, which is the whole
+ * reason the band is not in the comparator (see `compareByGoal`).
+ */
+function markTies(offers) {
+  const marks = tieGroups(offers);
+  offers.forEach((o, i) => {
+    const m = marks[i];
+    o.goalPlace = Number.isFinite(o.goalScore?.value) ? m.place : null;
+    o.goalLevel = Number.isFinite(o.goalScore?.value) ? m.level : false;
+    o.goalTieSize = m.size;
+  });
+  return offers;
+}
+
+/** The tie band as the page prints it: "0.4" of a percentage point. */
+const bandText = () => (TIE_BAND * 100).toFixed(1);
 
 // ----------------------------------------------- the goal, shared by every panel
 //
@@ -3350,15 +3500,32 @@ function goalCellHtml(offer) {
   const change = s.mine.after - s.mine.before;
   const good = s.mine.gain > 0.0005 ? ' pos' : s.mine.gain < -0.0005 ? ' neg' : '';
   const yes = Number.isFinite(s.accept) ? Math.round(s.accept * 100) : null;
+  // THE RANK, AND THE EQUALS SIGN. A tie group's rows all print the group's
+  // number with an "=" after it, which is how a results table has said "level"
+  // for a century, and they keep the strict order the comparator gave them.
+  // Nothing here is a sort key: `data-v` is still the expected change.
+  const place = Number.isFinite(offer.goalPlace)
+    ? `<span class="place">${offer.goalPlace}${offer.goalLevel ? '=' : ''}</span>`
+    : '';
+  const levelWords = offer.goalLevel
+    ? ` Level with ${plural(offer.goalTieSize - 1, 'other offer')} — they are within ` +
+      `${bandText()} of a point of each other, which ${GOAL_RUNS.toLocaleString('en-US')} ` +
+      `seasons cannot separate, so they share rank ${offer.goalPlace}.`
+    : '';
   const words =
     `Your ${g.chance}: ${pct(s.mine.before)} now, ${pct(s.mine.after)} with this deal, over ` +
     `${GOAL_RUNS.toLocaleString('en-US')} simulated seasons. His: ${pct(s.theirs.before)} → ` +
     `${pct(s.theirs.after)}.` +
+    // ONE DECIMAL, NOT TWO. This tooltip used to quote the expected change to a
+    // hundredth of a percentage point on a quantity whose seed-to-seed spread is
+    // a third of a point, so the last two digits were a measurement of the seed.
     (yes === null ? '' : ` Estimated ${yes}% that he says yes, so this deal is worth ` +
-      `${signedPct(s.value, 2)} to you on average — which is what the list is ranked by.`);
+      `${signedPct(s.value)} ± ${bandText()} to you on average — which is what the list is ` +
+      `ranked by.`) +
+    levelWords;
   return (
     `<td class="goal-cell${good}" data-v="${s.value}" title="${esc(words)}">` +
-    `${signedPct(change)}` +
+    `${place}${signedPct(change)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (yes === null ? '' : ` · ${yes}% yes`) +
     `</span></td>`
@@ -3696,7 +3863,11 @@ function dealGoalHtml(offer) {
   const cls = s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : '';
   return (
     `<p class="deal-goal"><span class="lbl">Your ${esc(g.chance)}</span>` +
-    `<strong class="${cls}">${signedPct(change)}</strong> ` +
+    `<strong class="${cls}">${signedPct(change)}</strong>` +
+    // THE BAND, WHEREVER A CHANGE IS STATED. One seed of 10,000 seasons puts a
+    // third of a point of noise on this figure, so a change quoted without it
+    // reads as exact. Measured; see TIE_BAND in js/trade-odds.js.
+    `<span class="band"> ±${bandText()}</span> ` +
     `<span class="sub-inline">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (Number.isFinite(s.theirs.before) ? ` · his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
     (Number.isFinite(s.accept) ? ` · ${Math.round(s.accept * 100)}% he says yes` : '') +
@@ -4553,7 +4724,8 @@ function comboGoalLine(entry) {
       : ` · ${Math.round(s.accept * 100)}% yes`;
   return (
     `<div class="combo-goal"><span class="lbl">Your ${esc(g.chance)}</span> ` +
-    `<strong class="${cls}">${signedPct(change)}</strong> ` +
+    `<strong class="${cls}">${signedPct(change)}</strong>` +
+    `<span class="band"> ±${bandText()}</span> ` +
     `<span class="sub-inline">(${pct(s.mine.before)} → ${pct(s.mine.after)}${yes})</span></div>`
   );
 }
@@ -5104,6 +5276,7 @@ async function useDemo() {
   // deliberately in `playedWeeks()` — which is the ONE place that decides the
   // sample season should be replayed from the week picker instead.
   state.playedWeeks = state.weeks.slice();
+  state.startedWeeks = [];   // a sample season has no game in progress
   // WEEK 1, not the last week. This page prices the REST of the season, and the
   // rest of a sample season seen from week 13 is one week — which would make
   // the weekly measure, the drill-down and the combo section look broken in the
@@ -5160,6 +5333,13 @@ async function useLive() {
       scheduleWeeks = schedule.weeks || [];
       state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
         .sort((a, b) => a - b);
+      // A WEEK ALREADY UNDER WAY IS OUT OF THE PRICED SPAN. `g.played` is only
+      // true once a week is final, so without this the locked current week sits
+      // inside every gain from the first kick-off until Tuesday. `lockedWeeks`
+      // adds the weeks `capture.gameState` calls 'live'; the two lists stay
+      // apart because "played" is also what the week picker's label means.
+      state.startedWeeks = lockedWeeks(schedule.games, capture.gameState)
+        .filter((w) => !state.playedWeeks.includes(w));
       state.poWeeks = leaguePlayoffWeeks(schedule);
       state.poPlayed = [...new Set((schedule.playoffGames || [])
         .filter((g) => g.played).map((g) => g.week))];
@@ -5172,6 +5352,7 @@ async function useLive() {
       break;
     } catch (err) {
       state.playedWeeks = [];
+      state.startedWeeks = [];
       state.poWeeks = [];
       state.poPlayed = [];
       state.league = null;
@@ -6117,7 +6298,8 @@ function renderCustomPreview(priced) {
     : null;
   const goalBit = s && Number.isFinite(s.mine.gain)
     ? ` · <span class="${s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : ''}">` +
-      `${esc(goalOf(state.goal).chance)} <strong>${signedPct(s.mine.after - s.mine.before)}</strong></span> ` +
+      `${esc(goalOf(state.goal).chance)} <strong>${signedPct(s.mine.after - s.mine.before)}</strong>` +
+      `<span class="band"> ±${bandText()}</span></span> ` +
       `(${pct(s.mine.before)} → ${pct(s.mine.after)}` +
       (Number.isFinite(s.accept) ? `, ${Math.round(s.accept * 100)}% he says yes` : '') + `)`
     : '';

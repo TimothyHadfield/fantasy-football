@@ -141,6 +141,23 @@
      (background, dashed border, margin) and a cell wearing it drew one. */
   td.goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
   td.goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  /* THE RANK, and the "=" that says a row is level with the one above it. Dim
+     and light, in front of the number: it is a label on the row, not a number to
+     read alongside the chance. Two offers the simulation cannot separate share
+     one of these — the band is measured, and js/trade-odds.js `TIE_BAND` holds
+     both the number and the measurement. */
+  td.goal-cell .place {
+    display: inline-block;
+    min-width: 22px;
+    margin-right: 4px;
+    color: var(--dim);
+    font-weight: 400;
+    font-size: 12.5px;
+  }
+  /* The ± band on a stated change, wherever one is stated. Dim, small, and on
+     the same line as the figure it qualifies, so it reads as the precision of
+     that figure rather than as a second number. */
+  .band { color: var(--dim); font-weight: 400; font-size: 11.5px; white-space: nowrap; }
   /* The same figure under a combo headline and in the pop-up's summary. */
   .combo-goal, .deal-goal { margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
   .combo-goal .lbl, .deal-goal .lbl { color: var(--dim); margin-right: 4px; }
@@ -1250,8 +1267,31 @@
        sequence, but only so a reading of the code matches a reading of the
        page — the panels share no state that one of them paints for another. -->
   <section class="panel">
-    <h2 id="finderTitle">Trades that help both squads</h2>
-    <p class="lede">Every swap that raises both starting lineups, best for your goal first. Tap a row for its weeks.</p>
+    <!-- WORDING IS TIM'S (docs/trade-rework-plan.md question f). The old title
+         "Trades that help both squads" and the old lede "Every swap that raises
+         both starting lineups" were true of the points finder, which kept a deal
+         only when both totals went up. This search lets the other manager lose a
+         little — every offer the sample league finds makes him worse — so both
+         sentences were claiming something the panel had stopped doing.
+         `renderFinder` rewrites the heading with the chosen goal and the reader's
+         own squad; this is what shows before the first paint.
+         The lede also stopped repeating the status line's "ranked by your title
+         chance", which said one thing twice ~20px apart — and the heading now
+         says what the list is, so the lede is left with the one thing nothing
+         else says: how to open a row — plus the one piece of NOTATION the table
+         uses, below.
+
+         THE "=" IS DECLARED HERE, not under the table beside the colour key,
+         and that is measured rather than preferred: the visible status line is
+         capped at sixty words by tr-test (the cap exists because the full colour
+         text once took that line from 37px to 206px tall at 390px) and it
+         already stood at 59. A shared rank is notation, like the colour key, and
+         it is true whether or not two offers are level in today's list — so it
+         reads as well above the table as below it. The measured band (0.4 of a
+         percentage point, twelve seeds) and the whole argument are behind "How
+         the trades are found". -->
+    <h2 id="finderTitle">Trades ranked by your title chance</h2>
+    <p class="lede">Rows sharing a rank (=) are too close to separate. Tap a row for its weeks.</p>
     <div class="row mb-12">
       <!-- The COUNT each way is the shape, and it needs no teaching. These read
            "Straight swap / You consolidate / You add depth" until Tim said he
