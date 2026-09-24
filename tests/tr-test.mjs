@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 import { REPO, moduleUrl } from './repo.mjs';
+import { machineSpeed, scaledBudget } from './settle.mjs';
 
 // ------------------------------------------------------------------ harness
 
@@ -175,8 +176,25 @@ const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
  * caught the new one between the two searches, reading a row that was about
  * to be replaced. So: poll until the finder's line says how it was ranked and
  * the combo is not still working, then a moment more for the last repaint.
+ *
+ * AND THE CEILING IS SCALED BY HOW BUSY THE MACHINE IS (2026-09-23). Polling
+ * for the page's own signal was only half the fix AUDIT §3 made: the ceiling
+ * that ends the poll was still a flat 45 seconds, which is the same guess one
+ * layer up. Measured on the day: with eleven unrelated `node` jobs holding every
+ * core, the goal rank ran past 45s and three scenarios read a table that still
+ * said "playing each offer out … (5 of 40)" — three assertions failing on code
+ * that had not changed, twice in a row on different scenarios, which is the
+ * signature of a wait and not of a defect (PROGRESS Traps, "the machine is
+ * shared"). `machineSpeed()`/`scaledBudget()` in settle.mjs are the project's
+ * own answer to exactly this and fc-test already uses them for its budgets.
+ * Measured ONCE per child and cached: the benchmark costs about a third of a
+ * second, and `settleGoal` is called a dozen times in some scenarios.
  */
-async function settleGoal(document, max = 45000) {
+let machine = null;
+const machineFactor = () => (machine || (machine = machineSpeed())).factor;
+
+async function settleGoal(document, idleMax = 45000) {
+  const max = scaledBudget(idleMax, machineFactor());
   const t0 = Date.now();
   await settle(1500);
   const txt = (id) => {
@@ -334,14 +352,27 @@ function readOfferRows(table) {
       theirGain: their ? Number(their.getAttribute('data-v')) : NaN,
       // THE GOAL CELL (2026-09-21): the headline change, the "before → after ·
       // N% yes" line under it, and `data-v` — the expected change, the rank key.
+      //
+      // THE RANK IS READ AS ITSELF (2026-09-23). `.place` carries "3" or "3=" in
+      // front of the change, and a tie group's rows share it. It is pulled out of
+      // `head` rather than left in it so every assertion below still means what it
+      // said before: `head` is the CHANGE, the way it always was, and `place` is
+      // the new claim. `head` does now carry the ± band after the figure, which is
+      // deliberate — a change is not printed anywhere on this page without it.
       goal: (() => {
         const td = cell('goal-cell');
         if (!td) return null;
         const sub = td.querySelector('.sub');
         const all = text(td);
         const subText = text(sub);
+        const placeText = text(td.querySelector('.place'));
+        let head = subText ? all.slice(0, all.length - subText.length).trim() : all;
+        if (placeText && head.startsWith(placeText)) head = head.slice(placeText.length).trim();
         return {
-          head: subText ? all.slice(0, all.length - subText.length).trim() : all,
+          place: placeText,
+          level: /=$/.test(placeText),
+          band: text(td.querySelector('.band')),
+          head,
           sub: subText,
           v: Number(td.getAttribute('data-v')),
           cls: td.getAttribute('class') || '',
@@ -351,6 +382,13 @@ function readOfferRows(table) {
       })(),
       myHeat: heat(gain),
       theirHeat: heat(their),
+      // THE SIGN ON THE TWO GAIN CELLS (2026-09-23). `offerRow` wrote `pos` on
+      // both of them unconditionally, so every negative figure on the page — all
+      // forty "He gains" cells on the sample league — was painted the colour that
+      // means good. Read as the class actually on the cell, '' for neither, so a
+      // cell that rounds to nothing can be asserted to carry no colour at all.
+      mySign: !gain ? null : (((gain.getAttribute('class') || '').match(/\b(pos|neg)\b/) || ['', ''])[1]),
+      theirSign: !their ? null : (((their.getAttribute('class') || '').match(/\b(pos|neg)\b/) || ['', ''])[1]),
       espn: (() => {
         const a = espn ? espn.querySelector('a') : null;
         return a ? a.getAttribute('href') : text(espn || null);
@@ -1483,6 +1521,12 @@ const SCENARIOS = {
       'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.team': 2 }),
     };
     const { document, errors } = await boot('trade.html', '', seed);
+    // WAIT FOR THE PAGE, don't read it 400ms after boot (2026-09-23). `ownLinks`
+    // counts rows in the finder, and on a machine with every core taken the
+    // finder had not painted yet — the assertion read 0 links off an empty table
+    // and reported a missing feature. The page's own "I have finished" signal is
+    // the only honest moment to count its rows.
+    await settleGoal(document);
     // Read off the depth map's highlighted row, not the <select>: the harness's
     // select shim falls back to the FIRST option, which is team 1 either way.
     const nameOf = (id) =>
@@ -1934,6 +1978,11 @@ SCENARIOS.goalTitle = async function goalTitle() {
     heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
     count: text(document.getElementById('tradeCount')),
     note: text(document.getElementById('tradeNote')),
+    // THE PANEL'S OWN WORDS. Both were claims about what the search does, and
+    // both had stopped being true (2026-09-23) — read here so the assertion is
+    // about what a reader is told rather than about a class name.
+    finderTitle: text(document.getElementById('finderTitle')),
+    lede: text(document.querySelector('#finderTitle ~ .lede')),
     goalOn: text(document.querySelector('#goalToggle button.on')),
     week: document.getElementById('weekSelect').value,
     team: document.getElementById('teamSelect').value,
@@ -2099,11 +2148,21 @@ if (!fresh.boot) {
   // panel inserted among them would have quietly re-ordered a thing he chose.
   // The sequence below still pins all of that — it is the same assertion with
   // one more entry, not a weaker one.
+  // RE-AIMED 2026-09-23, not weakened: the finder's heading changed, because
+  // "Trades that help both squads" was a claim about a search rule the page gave
+  // up when the goal weights landed (the other manager may lose up to 2 a week,
+  // and on the sample league every offer makes him worse). The sequence is still
+  // pinned as a sequence, with the same number of entries; only the one word that
+  // moved has moved. These scenarios open on "Don't finish last" (`boot`), so the
+  // heading names that goal's chance.
   eq(
     fresh.panels.map((p) => p.heading).join(' > '),
-    'Data source > Trades that help both squads > Best combo > Depth map > Custom trades',
+    'Data source > Trades ranked by your chance of finishing last > Best combo > Depth map > Custom trades',
     'the panels read finder, combo, depth map, custom — under the toolbar'
   );
+  ok('and the finder no longer claims a trade helps both squads — it cannot, and does not',
+    !/help(s)? both squads/i.test(fresh.panels.map((p) => p.heading).join(' ')),
+    fresh.panels.map((p) => p.heading).join(' > '));
   eq(
     fresh.panels.map((p) => p.id).join(','),
     ',finderTitle,,depthTitle,',
@@ -2305,7 +2364,7 @@ if (!shapes.boot) {
   for (const kind of Object.keys(want)) {
     const got = shapes.byKind[kind];
     ok(`${kind}: an empty result is explained, not left blank`,
-      got.rows.length > 0 || /No trade here makes both squads better/.test(got.empty),
+      got.rows.length > 0 || /No trade here helps your goal/.test(got.empty),
       got.empty.slice(0, 140));
   }
 }
@@ -2360,7 +2419,7 @@ if (!ctl.boot) {
     ok('and the table is hidden rather than showing an empty frame',
       ctl.afterQuietPartner.wrapHidden);
     ok('and the page says why in words',
-      /No trade here makes both squads better/.test(ctl.afterQuietPartner.empty),
+      /No trade here helps your goal/.test(ctl.afterQuietPartner.empty),
       ctl.afterQuietPartner.empty.slice(0, 140));
     // And it sends the reader the right way. The message pointed at "the depth
     // map above" while the map was first; the map is last now.
@@ -4948,6 +5007,124 @@ if (!gt.boot) {
   }
   ok('the method says he may lose a little, and how much',
     /loses no more than 2 a week/.test(T.note), T.note.slice(0, 500));
+
+  // -- THE HONESTY PASS (2026-09-23, docs/trade-rework-plan.md phase 1) --------
+  //
+  // Five claims the page was making that were not true, each with an assertion
+  // that fails on the code as it was. They are together because they are one
+  // change of mind: the page stops overselling what it knows.
+
+  // (1) THE PANEL SAYS WHAT IT FINDS. "Trades that help both squads" / "Every
+  // swap that raises both starting lineups" described the old points finder.
+  eq(T.finderTitle.split(' · ')[0], 'Trades ranked by your title chance',
+    'the finder is titled by the goal it ranks on, not by a rule it dropped');
+  ok('and neither the heading nor the lede claims both squads gain',
+    !/both squads/i.test(T.finderTitle) && !/both starting lineups/i.test(T.lede),
+    `${T.finderTitle} | ${T.lede}`);
+
+  // (2) LEVEL, NOT RANKED. Tim, 2026-09-23: show near-ties as tied. The band is
+  // 0.4 of a percentage point, measured over twelve seeds (js/trade-odds.js
+  // TIE_BAND). Every row carries its rank; rows the simulation cannot separate
+  // share one with an "=" after it.
+  ok('every played-out row carries a rank number',
+    scored.length > 0 && scored.every((t) => /^\d+=?$/.test(t.goal.place)),
+    scored.map((t) => t.goal.place).slice(0, 8).join(' '));
+  eq(T.trades[0].goal.place.replace('=', ''), '1', 'and the top row is rank 1');
+  ok('the ranks never go backwards down the table',
+    T.trades.every((t, i, a) => i === 0 ||
+      Number(a[i - 1].goal.place.replace('=', '')) <= Number(t.goal.place.replace('=', ''))),
+    T.trades.map((t) => t.goal.place).join(','));
+  // THE DEMO LIST HAS A TIE — measured: the top offer stands alone at +1.5 pp
+  // clear, and the rows under it sit inside 0.4 pp of each other. Without one
+  // there is nothing to assert, so its absence is a failure rather than a skip.
+  const levelled = T.trades.filter((t) => t.goal && t.goal.level);
+  ok('the sample league really does produce a group of level offers',
+    levelled.length > 1, `${levelled.length} rows marked level`);
+  ok('a level group shares ONE rank number, and every row in it is marked "="',
+    levelled.length > 1 && new Set(levelled.map((t) => t.goal.place)).size >= 1 &&
+      levelled.every((t) => /=$/.test(t.goal.place)),
+    levelled.map((t) => t.goal.place).join(','));
+  {
+    // Rows sharing a rank must sit next to each other AND keep the strict order.
+    const groups = new Map();
+    T.trades.forEach((t, i) => {
+      const k = t.goal.place;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(i);
+    });
+    ok('a rank number is never split across the table — a group is contiguous',
+      [...groups.values()].every((idx) => idx[idx.length - 1] - idx[0] === idx.length - 1),
+      JSON.stringify([...groups].map(([k, v]) => [k, v])));
+    ok('AND THE GROUPING NEVER MOVES A ROW: inside a level group the order is still strict',
+      [...groups.values()].every((idx) =>
+        idx.every((n, j) => j === 0 || T.trades[idx[j - 1]].goal.v >= T.trades[n].goal.v - 0.0001)),
+      T.trades.map((t) => `${t.goal.place}:${t.goal.v.toFixed(4)}`).join(' '));
+    ok('and the rank number really is the row\'s position — the first row of its group',
+      [...groups].every(([k, idx]) => Number(String(k).replace('=', '')) === idx[0] + 1),
+      JSON.stringify([...groups].map(([k, v]) => [k, v[0] + 1])));
+  }
+  // IN VIEW, AND IN THE LEDE. The status line is capped at sixty words by the
+  // heat-key assertion above and already stood at 59, so the notation goes where
+  // the panel's other always-true sentence is. Both halves are pinned: the glyph
+  // and the reason, so a lede that lost either would fail.
+  ok('the panel says in view what a shared rank means, and why',
+    /\(=\)/.test(T.lede) && /too close to separate/.test(T.lede), T.lede);
+  ok('and the status line is still a short key, not the method',
+    T.count.split(/\s+/).length < 60, `${T.count.split(/\s+/).length} words`);
+  ok('and the method behind the toggle carries the measured band and the argument',
+    /±0\.4 of a percentage point between seeds/.test(T.note) &&
+      /standard deviation of 0\.27/.test(T.note) &&
+      /closer than 0\.4 of a point are shown as level/.test(T.note) &&
+      /the grouping never moves a row/.test(T.note),
+    T.note.slice(T.note.indexOf('It still moves'), T.note.indexOf('It still moves') + 700));
+
+  // (3) THE SIGN ON THE TWO GAIN CELLS. `offerRow` wrote `pos` on both of them
+  // whatever the number was, so on the sample league all forty "He gains" cells
+  // were negative and all forty were green.
+  ok('the sample league still offers deals the other manager loses on — or the next check is vacuous',
+    T.trades.some((t) => t.theirGain < -0.05), T.trades.map((t) => t.theirGain).slice(0, 6).join(','));
+  const signWanted = (v, n) => {
+    const per = v / n;
+    return per > 0.05 ? 'pos' : per < -0.05 ? 'neg' : '';
+  };
+  {
+    const n = Number((T.heads.find((h) => /^You gain a week \(weeks (\d+)–16\)$/.test(h)) || '')
+      .replace(/^You gain a week \(weeks (\d+)–16\)$/, '$1'));
+    const span = 16 - n + 1;
+    ok('a negative gain cell is red and a positive one green — both columns, by the number in them',
+      T.trades.every((t) => t.mySign === signWanted(t.myGain, span) &&
+        t.theirSign === signWanted(t.theirGain, span)),
+      T.trades.map((t) => `${t.theirGain.toFixed(1)}/${span}→${t.theirSign}`).slice(0, 6).join(' '));
+    ok('and no negative figure anywhere in those two columns is painted as a gain',
+      T.trades.every((t) => !(t.theirGain < -0.05 && t.theirSign === 'pos')) &&
+        T.trades.every((t) => !(t.myGain < -0.05 && t.mySign === 'pos')),
+      T.trades.filter((t) => t.theirGain < 0 && t.theirSign === 'pos').length + ' green minus signs');
+  }
+
+  // (4) NO FALSE PRECISION. No chance is printed to two decimals anywhere, and a
+  // stated change carries the measured band.
+  ok('every goal cell prints the ± band beside the change it states',
+    scored.every((t) => t.goal.band === '±0.4' && /^[+−]?\d+\.\d% ±0\.4$/.test(t.goal.head)),
+    scored.slice(0, 4).map((t) => `"${t.goal.head}" band="${t.goal.band}"`).join(' | '));
+  ok('and no chance is quoted to two decimal places — not in a cell, not in a tooltip',
+    T.trades.every((t) => !/\d\.\d\d\s*%/.test(`${t.goal.head} ${t.goal.sub} ${t.goal.title}`)) &&
+      !/\d\.\d\d\s*%/.test(T.count),
+    (T.trades.find((t) => /\d\.\d\d\s*%/.test(t.goal.title)) || { goal: {} }).goal.title || '');
+  ok('the pop-up and the combo state the band too, wherever they state a change',
+    /±0\.4/.test(gt.dealGoal) && /±0\.4/.test(gt.cuPreview),
+    `${gt.dealGoal} | ${gt.cuPreview}`);
+
+  // (5) THE BRACKET-WEEK BASIS, said in the note (rule 7). The gain columns add
+  // the playoff weeks up at face value; the goal % weighs them by how often you
+  // are there. Measured on the sample league: the top deal read +0.9 over the
+  // span while costing 24.9 points across the seven weeks it is certain to play.
+  ok('the note says the gain columns and the goal chance are not on the same footing',
+    /not on the same footing/.test(T.note) &&
+      /as if you were certain to play them/.test(T.note) &&
+      /how often the simulation actually has you in it/.test(T.note),
+    T.note.slice(T.note.indexOf('not on the same'), T.note.indexOf('not on the same') + 500));
+  ok('and under "Don’t finish last", where no playoff week is priced, it does not say it',
+    !/not on the same footing/.test(gt.last.note), gt.last.note.slice(0, 200));
 
   // -- THE POP-UP AND THE CUSTOM BOX SAY IT TOO ---------------------------------
   ok('the pop-up leads with the same title chance as its row',
