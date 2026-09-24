@@ -355,10 +355,131 @@ export function compareByGoal(a, b) {
   const g = (o) => (Number.isFinite(o?.goalScore?.mine?.gain) ? o.goalScore.mine.gain : -Infinity);
   // Half a hundredth of a percentage point: below what 10,000 shared-seed runs
   // can separate, so it is treated as a tie and the points decide.
+  //
+  // IT IS DELIBERATELY NOT THE TIE BAND BELOW, and widening it to that band
+  // would be a bug rather than a fix. `Math.abs(dv) > EPS` with a band of 0.4
+  // points makes this comparator INTRANSITIVE — a can tie b, b can tie c, and a
+  // can still beat c — so `sort` would produce an order that depends on which
+  // pairs it happened to compare, and every near-tie would fall through to the
+  // POINTS key, quietly handing the top row back to the points search. That is
+  // exactly what PROGRESS rule 18 and D1 say the page must not do. The sort
+  // stays strict at 0.005 of a point; `tieGroups` below groups what it returns.
   const EPS = 0.00005;
   const dv = v(b) - v(a);
   if (Math.abs(dv) > EPS) return dv;
   const dg = g(b) - g(a);
   if (Math.abs(dg) > EPS) return dg;
   return (b.myGain || 0) - (a.myGain || 0);
+}
+
+// -------------------------------------------------------------- level, not ranked
+//
+// WHAT THE SIMULATION CANNOT SEE, SAID OUT LOUD. Ten thousand seasons on a
+// shared seed rank two deals a whole point apart perfectly well and cannot
+// separate two a tenth of a point apart at all — so a page that prints 1, 2, 3
+// down a column of near-identical numbers is asserting an order it does not
+// have. Tim, 2026-09-23: show near-ties as tied.
+//
+// MEASURED, on the sample league, before the number below was chosen: the top
+// eight offers scored on twelve seeds, 10,000 seasons each, exactly as the page
+// scores them (span 7–16 under "Win it all", sigma 23.35).
+//
+//   the spread of ONE offer's expected change, seed to seed:
+//       standard deviation median 0.270 points, max 0.488
+//   the spread of the GAP between two offers — the quantity that decides the
+//   order, and the one that matters here:
+//       standard deviation median 0.318 points, max 0.474
+//
+// Every measured pair whose gap was inside 0.4 points changed places in 2 to 9
+// of the 12 seeds. The one pair outside it — 1.51 points — never changed places
+// in any of them. So the band is 0.4 of a percentage point: wide enough that no
+// printed order rests on luck, narrow enough that a real difference still ranks.
+// (The earlier maths audit measured the same thing over all 40 offers and got a
+// median of 0.254 and a max of 0.499, which is the same answer.)
+
+/** Two offers closer than this in expected change are LEVEL, not ranked. */
+export const TIE_BAND = 0.004;
+
+/**
+ * The sorted list, grouped into ties — a DISPLAY pass over `compareByGoal`'s
+ * output, never a re-order.
+ *
+ * `offers` must already be in the strict order. Each answer carries the rank
+ * number to print (`place`, shared by everyone level with it), whether anything
+ * is level with it (`level`), and how many rows are in its group (`size`). The
+ * returned array is the same length and in the same order as the input, so the
+ * caller cannot accidentally let the grouping move a row.
+ *
+ * MEASURED AGAINST THE ROW THE GROUP IS NAMED AFTER, not against the row above.
+ * An offer joins the group when it is within `band` of that group's LEADER, and
+ * otherwise starts a group of its own. The difference is not academic — it was
+ * measured on the demo page, and comparing each row with its neighbour instead
+ * put 39 of the 40 offers in one group marked "1=", spanning 2.17 points:
+ *
+ *     3.745  3.736  3.619  3.458  …  1.631  1.573   every adjacent gap < 0.4
+ *
+ * Nothing in that run is further than 0.22 from the row above it, and the two
+ * ends are five times the band apart — a difference the seed study never once
+ * got wrong. Chaining would therefore have printed "these are all level" about a
+ * list whose top is reliably better than its bottom, which is a worse lie than
+ * the ranking it replaces and the opposite of the point. Anchoring to the leader
+ * keeps the promise the "=" makes: every row sharing a number is a row the
+ * simulation genuinely cannot separate from the one the number belongs to.
+ *
+ * (The plan's wording was "within the band of the one above it"; this is that
+ * rule with the chain closed, and the number above is why.)
+ *
+ * An offer with no score is level with nothing.
+ */
+export function tieGroups(offers, band = TIE_BAND) {
+  const val = (o) => (Number.isFinite(o?.goalScore?.value) ? o.goalScore.value : null);
+  const marks = [];
+  let place = 0;
+  let group = 0;
+  let leader = null;
+  for (let i = 0; i < (offers?.length || 0); i++) {
+    const v = val(offers[i]);
+    const level = i > 0 && v !== null && leader !== null && Math.abs(leader - v) <= band;
+    if (!level) { place = i + 1; group = i; leader = v; }
+    marks.push({ place, group, level: false, size: 1 });
+  }
+  const counts = new Map();
+  for (const m of marks) counts.set(m.group, (counts.get(m.group) || 0) + 1);
+  for (const m of marks) {
+    m.size = counts.get(m.group);
+    m.level = m.size > 1;
+  }
+  return marks;
+}
+
+// ------------------------------------------------- weeks a trade cannot reach
+//
+// A WEEK WHOSE GAMES HAVE KICKED OFF IS AS BANKED AS A WEEK WITH A RESULT.
+// Tim: "don't let any data on weeks that have already been played be able to
+// affect the trade." Sunday morning is the case that rule was written for and
+// the one the page got wrong: `g.played` only turns true once a week is FINAL,
+// so from the first kick-off until Tuesday the current week sat inside every
+// gain on the page — priced as though a trade accepted that afternoon could
+// still change the lineup it had already locked.
+//
+// `stateOf` is `capture.gameState` handed in rather than imported: this file is
+// pure and js/capture.js is the schedule reader, and the two must not be
+// welded together to answer one question about week numbers.
+
+/**
+ * Every week a trade can no longer reach: one with a result, and one already
+ * under way.
+ *
+ * @param {Array} games   schedule games, each carrying its `week`
+ * @param {function} [stateOf]  `capture.gameState` — 'final' / 'live' / 'upcoming'
+ * @returns {number[]} ascending, no repeats
+ */
+export function lockedWeeks(games, stateOf = null) {
+  const out = new Set();
+  for (const g of games || []) {
+    if (!Number.isFinite(g?.week)) continue;
+    const s = stateOf ? stateOf(g) : (g.played ? 'final' : 'upcoming');
+    if (g.played || s === 'final' || s === 'live') out.add(g.week);
+  }
+  return [...out].sort((a, b) => a - b);
 }
