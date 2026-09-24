@@ -11,13 +11,14 @@
 // `js/trade-page.js` self-boots on import, so two boots cannot share one.
 
 import { parseHTML } from 'linkedom';
-import { readFileSync, writeSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 import { REPO, moduleUrl } from './repo.mjs';
 import { machineSpeed, scaledBudget } from './settle.mjs';
+import { emit } from './emit.mjs';
 
 // ------------------------------------------------------------------ harness
 
@@ -2087,30 +2088,10 @@ SCENARIOS.goalLive = async function goalLive() {
 
 const self = fileURLToPath(import.meta.url);
 
-/**
- * WRITTEN SYNCHRONOUSLY, because `process.exit` throws away what is still in
- * the pipe.
- *
- * On POSIX a pipe is an ASYNC stream, so `console.log` of a 200 KB line queues
- * a write and `process.exit()` on the next statement kills the process with
- * most of it unwritten. The parent then reads half a line, `JSON.parse` throws,
- * and node prints the truncated JSON as the offending source — three lines, no
- * assertion, no clue. On Windows stdout to a pipe is synchronous, which is why
- * every local run passed and only GitHub's Linux runner failed (2026-09-23,
- * every scenario payload is 148-227 KB).
- *
- * `writeSync` against fd 1 returns only when the bytes are gone, so the exit
- * below cannot lose them. Kept as an explicit exit rather than a natural one:
- * a scenario may leave a timer pending, and hanging is worse than exiting.
- */
-function emit(payload, code) {
-  const line = `@@${JSON.stringify(payload)}\n`;
-  const buf = Buffer.from(line, 'utf8');
-  let off = 0;
-  while (off < buf.length) off += writeSync(1, buf, off, buf.length - off);
-  process.exit(code);
-}
-
+// How a scenario answers — `emit` from ./emit.mjs, which writes the whole line
+// before it exits. That file carries the whole story; in short, this suite's
+// payloads are 148-227 KB and a `console.log` + `process.exit` pair loses most
+// of that on Linux, where stdout to a pipe is asynchronous and non-blocking.
 if (process.argv[2]) {
   const name = process.argv[2];
   try {
@@ -2148,7 +2129,18 @@ function run(name, { stub = false, env = {} } = {}) {
       'stdout:', tail(res.stdout),
     ].join(NL));
   }
-  return JSON.parse(line.slice(2));
+  try {
+    return JSON.parse(line.slice(2));
+  } catch (err) {
+    // A PAYLOAD THAT DOES NOT PARSE IS A TRUNCATED PIPE, not a broken suite,
+    // and it must say so in one line. Raw, this arrives as node printing the
+    // whole cut-off JSON as the offending source with the error somewhere past
+    // the end of the log — which is how the 2026-09-23 CI failure hid for a day.
+    const body = line.slice(2);
+    throw new Error(`the ${name} scenario's answer did not parse — ${err.message}. `
+      + `${body.length} bytes, ending "${body.slice(-60)}". `
+      + 'That means the child was cut off mid-write: see tests/emit.mjs.');
+  }
 }
 
 // ------------------------------------------------------------------ assertions

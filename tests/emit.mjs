@@ -25,9 +25,26 @@
  */
 import { writeSync } from 'node:fs';
 
+/** Block this thread for `ms` without a timer — nothing async may run here. */
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 export function emit(payload, code = 0) {
   const buf = Buffer.from(`@@${JSON.stringify(payload)}\n`, 'utf8');
   let off = 0;
-  while (off < buf.length) off += writeSync(1, buf, off, buf.length - off);
+  while (off < buf.length) {
+    try {
+      off += writeSync(1, buf, off, buf.length - off);
+    } catch (err) {
+      // EAGAIN IS NOT AN ERROR, IT IS BACK-PRESSURE. Node puts stdout into
+      // non-blocking mode when it is a pipe, so a write bigger than the pipe's
+      // buffer (64 KB on Linux) is refused the moment the reader falls behind —
+      // and a partial line is exactly the truncation this whole file exists to
+      // prevent. Wait for the reader to drain and carry on from where we got to.
+      if (err && (err.code === 'EAGAIN' || err.code === 'EWOULDBLOCK')) { pause(5); continue; }
+      throw err;
+    }
+  }
   process.exit(code);
 }
