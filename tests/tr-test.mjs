@@ -2084,6 +2084,40 @@ SCENARIOS.goalLive = async function goalLive() {
   };
 };
 
+/**
+ * THE TABLE IS TRUE BEFORE IT IS FINISHED (trade plan Phase 2, 2026-09-24).
+ *
+ * Demo, title goal. Polls the page while it plays the offers out and keeps
+ * the first snapshot in which some rows carry a rank and the line still says
+ * it is working — the moment the old page never had, since it sat in points
+ * order until the very last offer was scored. Then waits for the finish.
+ */
+SCENARIOS.goalStaged = async function goalStaged() {
+  const { document, errors } = await boot();
+  const max = scaledBudget(45000, machineFactor());
+  const t0 = Date.now();
+  const snap = () => ({
+    count: text(document.getElementById('tradeCount')),
+    rows: [...document.querySelectorAll('#tradeTable tbody tr')].map((tr) => ({
+      unranked: /\bunranked\b/.test(tr.getAttribute('class') || ''),
+    })),
+    trades: readTrades(document),
+  });
+  let staged = null;
+  let sawRunning = false;
+  while (Date.now() - t0 < max) {
+    const s = snap();
+    const running = /playing each offer out/.test(s.count);
+    if (running) sawRunning = true;
+    if (running && s.trades.some((t) => t.goal && t.goal.place)) { staged = s; break; }
+    if (sawRunning && !running && /ranked by your/.test(s.count)) break;
+    await settle(20);
+  }
+  await settleGoal(document);
+  const final = snap();
+  return { errors, sawRunning, staged, final };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);
@@ -5204,6 +5238,50 @@ if (!cg.boot) {
   const ms = (cg.title.line.match(/priced in (\d+)ms/) || [])[1];
   console.log(`customGoal: suggestions with the goal weights priced in ${ms}ms; ` +
     `title ${cg.title.marks.length} marked, last ${cg.last.marks.length}; last line: ${cg.last.line.slice(0, 160)}`);
+}
+
+// ---- STAGED RANKING (trade plan Phase 2, 2026-09-24) -----------------------
+//
+// Before: the table sat in points order until the last offer was played out.
+// After: the first ten are ranked and repainted at the top while the rest are
+// still being scored, and those rest are marked rather than presented as ranked.
+const gs = run('goalStaged', { env: { TR_GOAL: 'title' } });
+ok('the staged-ranking scenario boots', !gs.boot, gs.boot);
+if (!gs.boot) {
+  ok('no console errors while ranking in stages', gs.errors.length === 0, gs.errors.slice(0, 2).join(' | '));
+  ok('the page was caught while it was still playing offers out', gs.sawRunning);
+  const S = gs.staged;
+  ok('goal-ranked rows reach the table BEFORE the whole list is scored', !!S,
+    'the table showed no rank number until the ranking had finished');
+  if (S) {
+    const m = S.count.match(/\((\d+) of (\d+)\)/);
+    ok('and it was genuinely part-way: fewer offers played out than there are',
+      m && Number(m[1]) < Number(m[2]), S.count);
+    const ranked = S.trades.filter((t) => t.goal && t.goal.place);
+    const firstUnranked = S.rows.findIndex((r) => r.unranked);
+    ok('the ranked rows are the top of the table, in one block',
+      ranked.length >= 10 && S.trades.slice(0, ranked.length).every((t) => t.goal && t.goal.place),
+      S.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
+    ok('in the order of their expected change, best first',
+      ranked.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
+      ranked.map((t) => t.goal.v.toFixed(4)).join(','));
+    ok('every row under them is marked unranked', firstUnranked === ranked.length &&
+      S.rows.slice(ranked.length).every((r) => r.unranked),
+      `first unranked ${firstUnranked}, ranked ${ranked.length}, rows ${S.rows.length}`);
+    ok('and an unranked row prints no rank and no chance, even once it has been scored',
+      S.trades.slice(ranked.length).every((t) => t.goal && !t.goal.place && !/%/.test(t.goal.head)),
+      S.trades.slice(ranked.length, ranked.length + 3).map((t) => t.goal && t.goal.head).join(' | '));
+    ok('the status line says which part is ranked and which is still in points order',
+      new RegExp(`top ${ranked.length} ranked by your title chance`).test(S.count) &&
+        /faded rows in points order/.test(S.count), S.count);
+  }
+  const F = gs.final;
+  ok('once finished, nothing is left marked unranked', F.rows.length > 0 && F.rows.every((r) => !r.unranked),
+    `${F.rows.filter((r) => r.unranked).length} of ${F.rows.length}`);
+  ok('and every row has its rank', F.trades.every((t) => t.goal && t.goal.place),
+    F.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
+  ok('with the line back to plain "ranked by your title chance"',
+    /ranked by your title chance/.test(F.count) && !/points order/.test(F.count), F.count);
 }
 
 // 11.5 days out: "12 days left", and not yet red.

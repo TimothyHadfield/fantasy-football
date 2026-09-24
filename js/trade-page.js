@@ -2577,7 +2577,7 @@ function offerRow(offer, i, key, opts = {}) {
     // `offer`, NOT `row`: app.css's `.row` is the flex control bar, and a <tr>
     // wearing it became a wrapping flex box — every offer's cells stacked
     // down the page instead of across it.
-    `<tr class="offer${picked}" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
+    `<tr class="offer${picked}${offer.goalUnranked ? ' unranked' : ''}" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
     `<td class="name"><span class="mgr">${esc(offer.partner.name)}</span>${merged}${from}</td>` +
@@ -2927,9 +2927,13 @@ function renderFinderNote(scales = finderScales) {
   // a tie is on screen today, so it reads as well above the table as below it.
   // See trade.html's `.lede`; the measured band and the argument are behind "How
   // this works" with the rest of the method.
+  // WHICH ORDER IS ON SCREEN, while it is still being worked out (Phase 2):
+  // before the first ten are in, the finder's points order; after, those ten by
+  // the goal and the faded rows under them still in points order.
   const order = r.running
-    ? ` · <span class="searching">playing each offer out in ${GOAL_RUNS.toLocaleString('en-US')} ` +
-      `simulated seasons (${r.done} of ${r.total})…</span>`
+    ? ` · <span class="searching">${r.staged
+      ? `top ${r.staged} ranked by your ${esc(g.chance)}; faded rows in points order; `
+      : 'in points order; '}playing each offer out (${r.done} of ${r.total})…</span>`
     : ranked
       ? ` · <strong>ranked by your ${esc(g.chance)}</strong>, allowing for how likely he is to say yes.`
       : r.why && r.why !== 'waiting'
@@ -3310,6 +3314,17 @@ function runGoalRank() {
 
   const search = state.search;
   if (!search || !search.offers.length) return;
+  // A half-finished earlier pass on this same search (the page re-ranks once the
+  // played weeks arrive) left scores on some rows and `unranked` marks on
+  // others. Neither is this pass's answer, and a row that has not been played
+  // out must not print one (see `stageGoalRank`) — so they go before anything,
+  // including the early returns below, which would otherwise leave them showing.
+  if (!search.goalRanked) {
+    for (const o of search.offers) {
+      o.goalScore = null; o.goalPlace = null; o.goalLevel = false; o.goalUnranked = false;
+    }
+  }
+  r.staged = 0;
   if (basis() !== 'weeks') {
     r.why = 'the goal needs every remaining week read, and they are not all in yet';
     renderFinder();
@@ -3349,11 +3364,14 @@ function runGoalRank() {
       r.done = i;
     }
     if (i < offers.length) {
-      renderFinderNote();
+      if (!r.staged && i >= GOAL_STAGE) stageGoalRank(search, offers, i);
+      else renderFinderNote();
       setTimeout(step, 0);
       return;
     }
     r.running = false;
+    r.staged = 0;
+    for (const o of offers) o.goalUnranked = false;
     // A NEW ARRAY, not a sort in place: the combo panel may be holding the old
     // one, and its own order is its own business.
     search.offers = offers.slice().sort(compareByGoal);
@@ -3364,6 +3382,36 @@ function runGoalRank() {
     paint();
   };
   setTimeout(step, 0);
+}
+
+/**
+ * THE TOP OF THE TABLE, TRUE BEFORE THE BOTTOM IS DONE (trade plan, Phase 2).
+ *
+ * Until every offer has been played out the table used to sit in the finder's
+ * POINTS order while the page said it ranked by the goal. So once the first
+ * `GOAL_STAGE` offers are scored they are sorted by the goal and repainted at
+ * the top; the rest follow in the order the finder found them, each marked
+ * `unranked` and carrying no rank number, until the whole list is sorted at the
+ * end. Nothing unscored is ever presented as ranked.
+ *
+ * Once, not every slice: a table that re-shuffles under the reader's thumb
+ * every forty milliseconds is worse than one that waits.
+ */
+const GOAL_STAGE = 10;
+
+function stageGoalRank(search, offers, scored) {
+  const r = state.goalRank;
+  const top = offers.slice(0, scored).sort(compareByGoal);
+  markTies(top);
+  const rest = offers.slice(scored);
+  // Marked as a group, not by "has no score yet": a row scored after this
+  // repaint still sits in points order until the end, so it must not print a
+  // figure that looks like its place in the ranking.
+  for (const o of rest) { o.goalPlace = null; o.goalLevel = false; o.goalUnranked = true; }
+  // A NEW ARRAY, as at the end: `offers` is still the scoring order.
+  search.offers = top.concat(rest);
+  r.staged = scored;
+  renderFinder();
 }
 
 /**
@@ -3488,9 +3536,14 @@ const signedPct = (v, d = 1) => {
 function goalCellHtml(offer) {
   const g = goalOf(state.goal);
   const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
-  if (!s || !Number.isFinite(s.mine.gain)) {
+  // A row below the staged top ten (`stageGoalRank`) shows no figure even once
+  // it has one: it is still sitting in points order, and a % there would read
+  // as its place in a ranking it has not joined yet.
+  if (!s || !Number.isFinite(s.mine.gain) || offer.goalUnranked) {
     const r = state.goalRank;
-    const why = r.running
+    const why = offer.goalUnranked
+      ? 'Not ranked yet: still in the order the search found it, until every offer has been played out.'
+      : r.running
       ? `Being played out in ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons…`
       : r.why
         ? `No ${g.chance} yet: ${r.why}.`

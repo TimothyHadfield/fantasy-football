@@ -1,14 +1,14 @@
 {
   "_": "Per-page prose ceilings, in words a reader is SHOWN — text-audit.mjs's rendered count: everything in the panel except tables (data), controls and their labels, headings, and anything hidden or sr-only. Text inside a closed 'How this works' toggle is counted separately and is NOT capped here; putting an explanation behind the toggle is the house shape (rule 16), so the ceiling is on what a reader is made to read.",
   "how": "Enforced by `node text-audit.mjs`, which runs in npm test. A page may lose words freely. Growing past its ceiling fails the suite on purpose: raising a number here is Tim's call, not a drift. Re-measure with `node text-audit.mjs` and put the new figure in.",
-  "measured": "2026-09-22, demo data, linkedom, each page measured settled (3 runs, identical). The old tag-shaped count for the same pages, for comparison: index 191, stats 269, analysis 263, schedule 210, waivers 141, trade 309, summary 143, total 1526.",
+  "measured": "2026-09-22, demo data, linkedom, each page measured settled (3 runs, identical). The old tag-shaped count for the same pages, for comparison: index 191, stats 269, analysis 263, schedule 210, waivers 141, trade 309, summary 143, total 1526. trade 392 -> 395 on 2026-09-24 is a re-measure, not new words: the audit used to call the page settled while the goal ranking was still running (its word count holds still while only 'n of m' moves), so 392 was the interim line. It now waits for no '.searching' span; the unchanged page (HEAD eb8ffce) measures 395 finished.",
   "pages": {
     "index.html": 256,
     "stats.html": 310,
     "analysis.html": 375,
     "schedule.html": 371,
     "waivers.html": 294,
-    "trade.html": 392,
+    "trade.html": 395,
     "summary.html": 269
   },
   "total": 2267

@@ -141,6 +141,9 @@
      (background, dashed border, margin) and a cell wearing it drew one. */
   td.goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
   td.goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  /* Not played out yet, and still in points order under the ranked top ten
+     (trade plan Phase 2). Faded, not hidden: the reader can still open it. */
+  #tradeTable tr.unranked { opacity: 0.55; }
   /* THE RANK, and the "=" that says a row is level with the one above it. Dim
      and light, in front of the number: it is a label on the row, not a number to
      read alongside the chance. Two offers the simulation cannot separate share

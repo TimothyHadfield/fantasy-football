@@ -207,13 +207,19 @@ async function audit(page) {
  */
 async function settle(document) {
   const count = () => prose(document.body).shown;
+  // STILL WORKING IS NOT SETTLED. The Trade page's line "… playing each offer
+  // out (12 of 40)…" keeps the same word count while only the number moves, so
+  // a stable count alone measured that interim line (2026-09-24, Phase 2's
+  // longer staged wording read as +7 over the ceiling). `.searching` is the
+  // class every "working on it" span carries.
+  const working = () => !!document.querySelector('.searching');
   const STEP = 200, MIN = 1500, MAX = 25000, STABLE = 4;
   let waited = 0, last = -1, stable = 0;
   while (waited < MAX) {
     await new Promise((r) => setTimeout(r, STEP));
     waited += STEP;
-    const n = count();
-    if (n === last) stable += 1;
+    const n = working() ? -2 : count();
+    if (n === last && n !== -2) stable += 1;
     else { stable = 0; last = n; }
     if (stable >= STABLE && waited >= MIN) return { ms: waited, settled: true };
   }
