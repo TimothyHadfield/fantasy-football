@@ -11,6 +11,8 @@ Last updated: 2026-09-24.
 
 Read-before-touching (sections of `docs/archive/progress-2026-09-21.md` unless noted):
 - Trade engine / finder / combo → "The Trade page", "Per-week trade valuation", "2026-09-21 — the Trade page opens on a goal"; `js/trade.js`, `js/trade-odds.js` headers.
+- Trade ranks, ties, wording, precision → `docs/trade-rework-plan.md` "BUILT 2026-09-23" + rule 19 below. Do not touch `EPS` or `TIE_BAND` without reading both.
+- Anything that spawns a child process in `tests/` → the header of `tests/emit.mjs`, then the last two Traps.
 - Colour scale → "The one red/green scale" (2026-09-19 later) + AUDIT §1.1 (fixed 2026-09-21).
 - Floor → "The positional floor" (2026-09-18), "The floor is the THIRD-best free agent" (2026-09-19).
 - Simulation / playoffs → "The playoffs, and the hybrid final placing".
@@ -101,6 +103,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 16. A key under a coloured table is one sentence; thresholds behind the toggle.
 17. Player card: bold = "he starts" (future weeks only; received men solved against YOUR roster with the trade).
 18. Trade page opens on a goal and ranks by it (see Status; `js/trade-odds.js`).
+19. **A tie is a display grouping on top of a strict sort, never a sort key.** `TIE_BAND` (0.4 pp, measured) marks rows against their GROUP'S LEADER, not the row above — chaining put 39 of 40 offers in one "1=" group spanning 2.17 points. Widening `compareByGoal`'s `EPS` to the band is forbidden: the comparator turns intransitive and the points search silently gets the top row back (breaks rule 18 and D1). Two assertions pin this.
 
 ## Traps
 - `css/app.css` `.pending` is a whole notice banner; a cell with class `pending` draws one. Goal cell uses `goal-wait`.
@@ -129,6 +132,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - D8 · 2026-09-19 · Floor rank 3; Proj avg is the lineup week by week; Trade page prices itself on load; store.js.
 - D9 · 2026-09-18 · Floor applied at assessment, never selection; one wire read flat for every week.
 - D10 · pre-2026-09-18 · Private league via `extension/` bridge; phone reads a Firestore sync (`fantasy-football-th`); Pages deploys off `main`.
+- D11 · 2026-09-23 · `TIE_BAND = 0.4` pp, from 12 seeds × 10,000 seasons on the demo league (one offer's SD 0.270, the GAP's 0.318; every pair inside 0.4 swapped places in 2–9 of 12 seeds, the 1.51-point pair never did). Grouped against the leader — see rule 19. Not yet measured on Tim's real league.
+- D12 · 2026-09-23 · A week that has KICKED OFF is out of a trade's span (`state.startedWeeks`), not just a week that has gone final (`g.played`) — otherwise the locked current week sat inside every gain from Sunday to Tuesday.
+- D13 · 2026-09-24 · Child scenarios return their answer through `tests/emit.mjs` (`writeSync` loop + `EAGAIN` retry), because `console.log` + `process.exit` truncates on POSIX. See Traps.
 
 ## NOT verified
 - The yes-chance curve against any real accepted/refused trade.
@@ -153,8 +159,8 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 
 ## Map
 - Pages: index, stats, analysis, schedule, waivers (Players), trade, summary, draft (parked), debug.
-- Trade: `js/trade.js` (engine, pure), `js/trade-odds.js` (goal, pure), `js/trade-suggest.js`, `js/trade-page.js` (~6.5k lines, wiring).
+- Trade: `js/trade.js` (engine, pure), `js/trade-odds.js` (goal + `TIE_BAND`, pure), `js/trade-suggest.js`, `js/trade-page.js` (7,315 lines on 2026-09-24, wiring).
 - Shared: `js/espn.js`, `js/season.js` (fetch; bridge → cloud → ESPN; store in front), `js/forecast.js` (optimalLineup, winProbability, simulateSeason — most shared file), `js/capture.js` (schedule shape, projection, spread, simulationInputs), `js/projection.js`, `js/floor.js`, `js/heat.js`, `js/store.js`, `js/cloud.js`, `js/player-card.js`, `js/sortable.js`.
-- Tests: `cd tests && npm test` (**43 suites, 14,898 recorded assertions**, ~10 min; `tr-test` ~6.5 min). Counts live in `tests/counts.json` (blessed 2026-09-24); a FALL fails the run, a rise is recorded with `node run-all.mjs --bless`. `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
+- Tests: `cd tests && npm test`. **Last full run 2026-09-24 on `d224728`: all 43 suites passed, 1,104 s (18.4 min) on an idle machine.** The slow ones are `tr-test` 407 s, `test-trade-weekly` 184 s, `an-test` 67 s. ~14,900 assertions. Counts live in `tests/counts.json`; a FALL fails the run, a rise is recorded with `node run-all.mjs --bless` — **which re-runs the whole suite, so allow 20 min**. `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
 - Hosting: `.github/workflows/test.yml` runs the suites and, only when they pass, deploys Pages (`deploy` job, `needs: test`). **This gate is inert until Tim sets Pages → Source → GitHub Actions**; until then the legacy branch deploy still publishes off `main` in ~40 s, ungated. To undo: delete the `deploy` job and set Source back to a branch.
 - Project path: `C:\Users\timha\OneDrive\Desktop\my-website\Code Projects\Fantasy Football`. Tim's league 476225250 (private, 10 teams, 14 regular weeks, 6-team playoffs weeks 15–17).

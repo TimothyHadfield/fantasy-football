@@ -1,15 +1,16 @@
 # Trade page rework — plan
 
 > **Tim asked (2026-09-22):** "Once you're done, I want you to really analyze our trade section and make a plan on how we might want to change it to make it better both in calculation and in display and view."
-> **Instruction:** plan only. **NOTHING IS BUILT.**
+> **Instruction (2026-09-22):** plan only. ~~NOTHING IS BUILT.~~ Superseded: Phase 1 was built and merged on 2026-09-23 (32ce66e) under the same go-ahead.
 
-**Status:** NOTHING IS BUILT · Read first: "The answer", "Recommendation", "Questions for Tim". Full evidence: `docs/trade-review-calc.md` (maths) and `docs/trade-review-view.md` (display), both read-only audits on main `1c086b0`, 2026-09-23.
+**Status (2026-09-24):** **Phase 1 BUILT and live · Phases 2–6 NOT built and NOT authorized** — see "BUILT 2026-09-23" near the end for what shipped, where this plan's own wording was wrong, and the one measurement still owed. Phase 4 cannot start until Tim answers question **d**; question **f** (the finder's wording) is answered by placeholders Phase 1 shipped, which are his to change. Read first: "The answer", "Recommendation", "Questions for Tim". Full evidence: `docs/trade-review-calc.md` (maths) and `docs/trade-review-view.md` (display), both read-only audits on main `1c086b0`, 2026-09-23.
 
 ## Decided by Tim
 - 2026-09-21 · The Trade page opens on a goal ("Win it all" / "Don't finish last") and ranks by the change in that chance. "rank by expected value, but add a good amount of leeway."
 - 2026-09-21 · "I want the cite to offer virtually the perfect trade to the user."
 - 2026-09-22 · Chose the ESPN-duplicate cut and the test safety net next; this rework is a plan he asked for, not a go-ahead. Nothing here is authorized until he says so.
 - 2026-09-23 · **No answer block at the top** — "leave the table as the answer". · **Show near-ties as tied.** · **Collapse the empty custom builder on a phone.** · **Keep Best combo** as a headline answer, with a sentence about every leg needing to be accepted.
+- 2026-09-23 · Those four answers were taken as the go-ahead for Phase 1, which is now built. **Phases 2–6 are not authorized** — ask before starting one.
 
 ## The answer (one sentence)
 The engine is sound but **oversells its own precision** — the top three offers are a statistical tie the page prints as a ranking, and for the first minutes the table is in points order while claiming to rank by chance — so the rework is: declare ties, rank the top ten first so the table is true sooner, fix four places where a number is stated on a basis it was not computed on, and give the phone back about 2,400 px.
@@ -72,7 +73,7 @@ The engine is sound but **oversells its own precision** — the top three offers
 
 ## Phases (each ships on its own)
 
-1. **Honesty pass (A).**
+1. **Honesty pass (A).** — **BUILT 2026-09-23, merged 32ce66e. See "BUILT" below for what shipped and where this phase's own wording was wrong.**
    - **Ties as a display grouping, never a sort change.** Keep `compareByGoal` strict (`EPS` unchanged). Add, after sorting, a pass that walks the ranked list and marks each offer whose value is within the measured band (~0.4 pp, confirmed on Tim's league first — see "How this could be wrong") of the one above it as level with it. Rows in a tie group share a rank number ("1="), keep their strict order, and the group says why in one short line.
    - Sign the two gain cells in `offerRow` (`pos`/`neg`/none, the way `goalCellHtml` already does) — fixes 40 green minus signs in the finder, the combo and saved rows at once.
    - Retitle the finder and `emptyMessage()` so they stop claiming both squads gain (Tim picks the wording, question a).
@@ -97,6 +98,27 @@ c. ~~Collapse the empty custom builder on a phone?~~ → **Yes, 2026-09-23.** A 
 d. Should the finder's columns be cut down on a phone (merge "You send"/"You get" into one Deal cell, drop "Your lineup, a week", hide ESPN)? · recommended: **yes** — 70.6% of the table is off-screen today. **Not yet asked** — ask before Phase 4 starts, with a screenshot of both versions.
 e. ~~Keep Best combo, or demote it?~~ → **Keep, 2026-09-23**, with one sentence that every leg has to be accepted.
 f. The finder's title claims trades "help both squads" and every one of the 40 makes the other manager worse. New wording is his — placeholder "Trades ranked by your title chance". · recommended: **retitle**; ask with the Phase 1 screenshot.
+
+## BUILT 2026-09-23 — Phase 1 only (merged 32ce66e, live)
+
+Phase 1 shipped as three commits: 88eac95 (the maths), cdb3141 (the display), f45f88f (nineteen assertions, each seen failing against the page as it was). tr-test 647/647, up from 625. **Phases 2–6 are still unbuilt.**
+
+**What shipped**
+- **`TIE_BAND = 0.4 pp`, measured, not guessed.** The demo's top eight offers were scored on twelve seeds, 10,000 seasons each, exactly as the page scores them (span 7–16 under "Win it all", σ 23.35, 369 candidates): one offer's expected change has a seed-to-seed SD of 0.270 (max 0.488), and the GAP between two offers — the thing that decides the order — 0.318 (max 0.474). Every pair inside 0.4 changed places in 2–9 of the 12 seeds; the one pair outside it (1.51) never did.
+- **`tieGroups` marks the sorted list and is not a sort key**, so it cannot move a row. Rows level with each other share a rank with an "=" and keep the comparator's strict order.
+- **`EPS` was left alone deliberately.** Two assertions pin that widening it to the band fails: at 0.4 the comparator turns intransitive, every near-tie falls through to the points key, and the points search gets the top row back — against rule 18 and D1.
+- **Both gain cells carry their sign.** `offerRow` wrote `pos` on both whatever the number was; since the goal-weighted search landed, the partner may lose up to 2/wk, so all forty "He gains" cells were negative numbers painted green — in the finder, the combo and the saved rows at once.
+- **The panel says what it finds.** "Trades that help both squads" described the old points finder. The heading now follows the chosen goal and the refusal reads "No trade here helps your goal." These are the plan's **placeholders** — question f is still Tim's.
+- **No false precision.** Chances are 1 dp, and every stated change carries the measured band (goal cells, pop-up, combo headline, custom preview). The note's old "about 0.1–0.4 percentage points" is replaced by the measurement and by why a level group is level.
+- **The bracket-week basis is disclosed** (rule 7): under "Win it all" the gain columns add playoff weeks at face value while the goal % counts them by how often you get there, so a deal can read a small gain over the span and lose points in every week you are certain to play (measured: the demo's rank-1 deal, +0.9 over the span, −24.9 across the seven certain weeks). Stated, not re-modelled — that is Phase 3.
+- **A week that has kicked off is out of the span.** `playedWeeks()` read `g.played`, which only turns true when a week goes FINAL, so from the first kick-off until Tuesday the locked current week sat inside every gain on the page. `state.startedWeeks` / `lockedWeeks` fix it and the note names the dropped week.
+
+**Where the plan was wrong**
+- ~~"mark each offer whose value is within the band of the one above it"~~ — taken literally that **chains**: on the demo it put 39 of 40 offers in one group marked "1=" spanning 2.17 points, with the two ends five times the band apart, a difference the seed study never once got wrong. Worse than the ranking it replaced. **Anchored to the group's leader instead**, the same list reads as six real tiers, none spanning more than 0.40: 1= (5 rows), 6= (6), 12= (9), 21= (14), 35= (5), 40. An assertion pins that a run of small steps does not collapse into one group.
+- ~~"confirmed on Tim's league first"~~ — **not done.** The band is measured on the demo league only. The "How this could be wrong" test (12 seeds against his real league, 10 squads and real spread) is still outstanding; if his seed-to-seed SD is much smaller, 0.4 pp is too wide and the page is calling real differences ties.
+- The audit's own figure over all 40 offers (0.254 / 0.499) agreed with the 8-offer study, so the band is not an artefact of which offers were measured.
+
+**Verified how:** with `TIE_BAND` back at the old `EPS`, six new assertions fail (ranks read 1,2,3,4,5, nothing level — today's page); with `EPS` widened to the band, two fail (the list returns in points order); with the grouping back on the row above, seven fail; with `lockedWeeks` on `g.played` alone, one fails (week 2, under way, priced). Restored: test-trade-odds 111 passed (up from 91), tr-test 647/647. Visible prose 392 → 391 words where `text-audit` measures it; the status line stays under its sixty-word cap, which is why the tie notation lives in the lede.
 
 ## Sources
 - `docs/trade-review-calc.md` — 2026-09-23 maths audit, every figure measured in node against the demo league.
