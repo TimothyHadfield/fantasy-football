@@ -50,6 +50,16 @@ jobs:
         working-directory: tests
         run: npm test
 
+      # WHEN A SUITE FAILS HERE AND PASSES EVERYWHERE ELSE, run it on its own
+      # with nothing between it and this log. `run-all.mjs` captures a suite's
+      # output and re-prints it, and on 2026-09-23 tr-test's crash arrived as
+      # three lines with no error in it — the same suite passing on Windows on
+      # node 22 and 24. This step costs nothing on a green run.
+      - name: The failing suite, unfiltered
+        if: failure()
+        working-directory: tests
+        run: node tr-test.mjs
+
   # Publishes the repo as-is (it is a static site; no build step). Runs only
   # after `test` is green, and only for main or a manual run — never for a pull
   # request and never for another branch's push.
