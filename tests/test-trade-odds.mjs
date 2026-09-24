@@ -24,12 +24,14 @@
 //  12. the goal chooses candidates — deals that lose points and win the goal; 2-for-2; the combo
 //  13. the emptied roster spot     — already credited at the floor when the wire is read
 //  14. the trade deadline          — espn.parseTrades
+//  15. level, not ranked           — the measured tie band, and that it never moves a row
+//  16. a started week is banked    — lockedWeeks
 
 import * as capture from '../js/capture.js';
 import {
   GOALS, goalOf, goalChance, goalGain, acceptChance, espnLookPerWeek, offerDeltas,
   shiftSeason, simulateWith, scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE,
-  weekWeights, WEIGHT_FLOOR,
+  weekWeights, WEIGHT_FLOOR, TIE_BAND, tieGroups, lockedWeeks,
 } from '../js/trade-odds.js';
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
@@ -42,6 +44,7 @@ const ok = (msg, cond, extra = '') => {
   else fails.push(`${msg}${extra !== '' ? ` — ${String(extra).slice(0, 220)}` : ''}`);
 };
 const near = (a, b, tol, msg) => ok(msg, Math.abs(a - b) <= tol, `${a} vs ${b}`);
+const eq = (a, b, msg) => ok(msg, Object.is(a, b), `got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
 
 // ------------------------------------------------------------------ fixture
 //
@@ -454,6 +457,123 @@ ok('it never goes up as the deal gets worse for him',
   const league = parseLeague({ settings: { tradeSettings: { deadlineDate: 1763496000000 } }, teams: [] });
   ok('and parseLeague carries it through as `trades`', league.trades && league.trades.deadline === 1763496000000,
     JSON.stringify(league.trades));
+}
+
+// ------------------------------------------- 15. level, not ranked
+//
+// The tie band and the grouping built on it. Two claims, and the second is the
+// one that matters: the grouping is a DISPLAY pass over a strict sort, so it may
+// never change an order. A band inside `compareByGoal` would — the comparator
+// becomes intransitive and every near-tie falls through to the points key, which
+// is the sort bug PROGRESS rule 18 and D1 forbid.
+
+{
+  // A hand list, values in probability: 5.9%, 5.7%, 5.4%, 4.0%, 3.9%.
+  const mk = (value, myGain) => ({ goalScore: { value, mine: { gain: value } }, myGain });
+  const offers = [
+    mk(0.059, 1), mk(0.057, 2), mk(0.054, 3), mk(0.040, 4), mk(0.039, 5),
+  ];
+
+  eq(TIE_BAND, 0.004, 'the tie band is 0.4 of a percentage point — the measured resolution');
+
+  const marks = tieGroups(offers);
+  eq(marks.length, offers.length, 'every offer gets a mark');
+  eq(marks.map((m) => m.place).join(','), '1,1,3,4,4',
+    'rows within the band of their group’s leader share its rank number');
+  eq(marks.map((m) => (m.level ? '=' : '')).join(','), '=,=,,=,=',
+    'and every row in a group of more than one is marked level');
+  eq(marks.map((m) => m.size).join(','), '2,2,1,2,2', 'each row knows how big its group is');
+  ok('a gap wider than the band starts a new rank — 5.9% to 5.4% is a real difference',
+    marks[2].place === 3 && marks[1].place === 1, JSON.stringify(marks.map((m) => m.place)));
+
+  // THE CHAIN IS CLOSED, and this is the assertion that says so. Four offers
+  // each 0.3 of a point below the one above: every ADJACENT gap is inside the
+  // band and the two ends are 0.9 apart, more than twice it. Measured on the
+  // demo page, comparing with the row above instead of with the group's leader
+  // marked 39 of 40 offers "1=" across 2.17 points — "everything is level" about
+  // a list whose top is reliably better than its bottom.
+  const chain = [mk(0.059, 1), mk(0.056, 2), mk(0.053, 3), mk(0.050, 4)];
+  eq(tieGroups(chain).map((m) => m.place).join(','), '1,1,3,3',
+    'a run of small steps does NOT collapse into one group — the ends are far apart');
+  ok('and no group ever spans more than the band',
+    (() => {
+      const m = tieGroups(chain);
+      const by = new Map();
+      m.forEach((x, i) => { if (!by.has(x.group)) by.set(x.group, []); by.get(x.group).push(chain[i].goalScore.value); });
+      return [...by.values()].every((vs) => Math.max(...vs) - Math.min(...vs) <= TIE_BAND + 1e-12);
+    })(),
+    JSON.stringify(tieGroups(chain).map((m) => m.place)));
+
+  // A LONE OFFER IS NOT "LEVEL". The one thing a reader must be able to trust.
+  const alone = tieGroups([mk(0.059, 1), mk(0.010, 2)]);
+  ok('an offer nothing is close to is ranked, not levelled',
+    alone.every((m) => m.level === false) && alone.map((m) => m.place).join(',') === '1,2',
+    JSON.stringify(alone));
+
+  // AN OFFER WITH NO SCORE is level with nothing: a row still waiting on the
+  // simulation must never be presented as tied with one that has been played out.
+  const half = tieGroups([mk(0.059, 1), { myGain: 9 }, mk(0.0585, 2)]);
+  ok('an unscored offer is level with nothing, and does not join the group above it',
+    half[1].level === false && half[2].level === false,
+    JSON.stringify(half));
+
+  // THE GROUPING NEVER MOVES A ROW. `tieGroups` is handed the list and hands
+  // back marks in the same order — it has no way to reorder anything, and this
+  // is the assertion that says so.
+  const sorted = offers.slice().sort(compareByGoal);
+  const regrouped = tieGroups(sorted);
+  eq(sorted.map((o) => o.goalScore.value).join(','), offers.map((o) => o.goalScore.value).join(','),
+    'the strict sort leaves this list exactly as it is');
+  eq(regrouped.map((m) => m.place).join(','), '1,1,3,4,4',
+    'and grouping the sorted list gives the same ranks — the grouping is a display pass');
+
+  // AND THE COMPARATOR IS STILL STRICT. Two offers a tenth of a point apart:
+  // the bigger expected change wins, whatever the points say. FALSIFIABLE — widen
+  // `compareByGoal`'s EPS to TIE_BAND and the points order wins instead, which is
+  // exactly the bug the band must not become.
+  // The better chance carries FEWER points on purpose: that is the only shape in
+  // which "strict" and "falls through to points" give different answers.
+  const inside = [
+    { goalScore: { value: 0.0580, mine: { gain: 0.0580 } }, myGain: 1, tag: 'better chance' },
+    { goalScore: { value: 0.0570, mine: { gain: 0.0570 } }, myGain: 99, tag: 'more points' },
+  ];
+  eq(inside.slice().sort(compareByGoal)[0].tag, 'better chance',
+    'the sort is strict: 0.1 of a point of chance still decides, it does not fall through to points');
+  const tiny = [
+    { goalScore: { value: 0.05000, mine: { gain: 0.05 } }, myGain: 1, tag: 'fewer points' },
+    { goalScore: { value: 0.050001, mine: { gain: 0.05 } }, myGain: 99, tag: 'more points' },
+  ];
+  eq(tiny.slice().sort(compareByGoal)[0].tag, 'more points',
+    'and only a truly unmeasurable difference — under 0.005 of a point — falls through to points');
+}
+
+// ------------------------------- 16. a week whose games have started is banked
+//
+// `lockedWeeks`. Tim: "don't let any data on weeks that have already been played
+// be able to affect the trade." A week is unreachable from its first kick-off,
+// not from the moment it goes final — `g.played` is only true at the end, so
+// without this the current week sat inside every gain all Sunday.
+
+{
+  const games = [
+    // week 1: both sides scored and marked played — final
+    { week: 1, homeId: 1, awayId: 2, homeScore: 101, awayScore: 99, played: true },
+    // week 2: one side on the board, nothing marked played — UNDER WAY
+    { week: 2, homeId: 1, awayId: 2, homeScore: 42, awayScore: 0, played: false },
+    { week: 2, homeId: 3, awayId: 4, homeScore: 0, awayScore: 0, played: false },
+    // week 3: nothing has happened
+    { week: 3, homeId: 1, awayId: 3, homeScore: 0, awayScore: 0, played: false },
+  ];
+  const locked = lockedWeeks(games, capture.gameState);
+  eq(locked.join(','), '1,2', 'a week with a result and a week already under way are both locked');
+  ok('and a week nothing has happened in is not',
+    !locked.includes(3), locked.join(','));
+  eq(lockedWeeks(games).join(','), '1',
+    'without the schedule reader it falls back to `played` alone — never a guess');
+  eq(lockedWeeks([]).join(','), '', 'no games, no locked weeks');
+  eq(lockedWeeks(null).join(','), '', 'and no schedule at all is not an error');
+  eq(lockedWeeks([{ homeId: 1, awayId: 2, played: true }]).join(','), '',
+    'a game with no week number is ignored rather than filed under NaN');
 }
 
 // ---------------------------------------------------------------------------
