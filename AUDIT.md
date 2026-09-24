@@ -9,11 +9,19 @@ edge cases/failure modes, product gaps, and tests/tooling. Every item is
 measured or traced to a line of code. **Line numbers are as of `febca96` and
 will drift — grep for the quoted code rather than trusting the number.**
 
-**§1 (1.1–1.9) was fixed on 2026-09-21 and §2.1–2.5 on 2026-09-22** — see
-PROGRESS.md Status. §2.6 (press Export archive) is Tim's; §3 onward is open. Before that nothing here had been fixed. Tim had not chosen
-an order; the recommended one is §1 → §2 → §3, on the reasoning that §1 is
-wrong on screen today, §2 is losing data that cannot be recovered, and §3 is
-what lets the rest regress unnoticed.
+**Done: §1 (1.1–1.9) on 2026-09-21, §2.1–2.5 on 2026-09-22, and §3 entire
+plus §6.5/§6.6 on 2026-09-23** — see PROGRESS.md Status for what each fix was
+and how it was seen failing first. §2.6 (press Export archive) is Tim's.
+**Still open: §4 (readability), §5 (December), and the rest of §6.** Note that
+§3's own premise has moved: the suite is now 43 suites / 14,898 assertions with
+a count floor, rendered-prose ceilings, and a Pages deploy gated on green —
+though that gate stays inert until Tim sets Pages → Source → GitHub Actions.
+
+The Trade page's own backlog has since moved to `docs/trade-rework-plan.md`,
+which supersedes any Trade item below. Tim had not chosen an order here; the
+one followed was §1 → §2 → §3, on the reasoning that §1 was wrong on screen
+that day, §2 was losing data that could not be recovered, and §3 is what lets
+the rest regress unnoticed.
 
 ---
 

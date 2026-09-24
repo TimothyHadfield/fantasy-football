@@ -4,10 +4,10 @@ Live: https://timothyhadfield.github.io/fantasy-football/ · Repo: https://githu
 
 ## START HERE
 1. Read this file (short, current). Then `chat.md` (what each session asked and did).
-2. Nothing is half-built: branch `goal-candidates` was merged to main on 2026-09-21 (75247c7).
-3. `AUDIT.md` is the other work queue (five audits, 2026-09-20; mostly unfixed). Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
+2. Nothing is half-built. Everything through 2026-09-24 is on `main`, green on CI (a0d0dc4) and live.
+3. `AUDIT.md` is the other work queue — §1, §2 (bar 2.6), §3, §6.5, §6.6 are done; the rest is open. The live build queue is `docs/trade-rework-plan.md`: **Phase 1 is built, Phases 2–6 are not.** Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
 
-Last updated: 2026-09-21.
+Last updated: 2026-09-24.
 
 Read-before-touching (sections of `docs/archive/progress-2026-09-21.md` unless noted):
 - Trade engine / finder / combo → "The Trade page", "Per-week trade valuation", "2026-09-21 — the Trade page opens on a goal"; `js/trade.js`, `js/trade-odds.js` headers.
@@ -52,12 +52,22 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 
 **Also 2026-09-22:** the custom box's "also send" suggestions follow the goal (goal-weighted gap, tie-broken by gain × P(yes); points until the weights are in, and the key line says which). A trade's player cards mark **the weeks you play that manager** with an arrow under the week number (`vsWeeks`/`vsName` in `weekRun`; `meetingWeeks()` reads the league schedule) — Tim, 2026-09-21: "add a little arrow pointing to the week that the user is playing you in the preview".
 
-**Planned, NOT built (2026-09-23):** `docs/trade-rework-plan.md` — the Trade page's calculation and display, from two read-only audits (`docs/trade-review-calc.md`, `docs/trade-review-view.md`). Headlines: the top 3 offers are a statistical tie printed as a ranking (order flips in 4–9 of 12 seeds; `EPS` is 80× too tight, and widening it would be a sort bug — ties belong in the display); the table sits in POINTS order for minutes while claiming to rank by chance (fix: rank the top ten first); the page searches twice; his side is priced over playoff weeks he may not reach; 40 of 40 negative "He gains" cells are painted green under a panel titled "Trades that help both squads"; the phone page is 6,091 px with an empty custom builder taking 37%. Tim decided 2026-09-23: **no** answer block ("leave the table as the answer"), **yes** ties, **yes** collapse the builder on a phone, **keep** Best combo. Not authorized to build.
+**AUDIT §3 done and merged 2026-09-23** (the test safety net): the Pages deploy is a second job in `.github/workflows/test.yml` gated by `needs: test` (3f9c82a); draft/waivers/debug are booted by a suite; `sortable.js` and `charts.js` have a suite each; `text-audit` counts RENDERED prose and has a ceiling; `counts.json` fails the run when a suite's assertion count FALLS (§3.5); the colour keys are checked on screen. Plus §6.5/§6.6 — Home's standings and Schedule's Results deleted as ESPN duplicates (index −535 px, schedule −450 px). Then 498a86d: the page suites poll the page's own signals instead of sleeping, and time budgets scale with a measured machine factor — the old fc-test/wv-test/test-trade-weekly load failures are gone.
+
+**Live bug found and fixed 2026-09-23** (482283a): the Schedule page's source line sat on "Reading ESPN's projections… week 15 of 16" forever, because `refreshStrength`'s progress callback returns early on the last week. Fixed with `restoreStatus()` after the roster read; seen failing first (2 of 1085 fc-test assertions).
+
+**Trade rework Phase 1 done and merged 2026-09-23** (32ce66e — the honesty pass from `docs/trade-rework-plan.md`): near-ties are declared as ties instead of ranked (the band is MEASURED, and the grouping happens in the DISPLAY — widening the sort's `EPS` would have been a sort bug); negative "He gains" cells are no longer painted green under a panel called "Trades that help both squads"; false precision dropped. Tim's four answers, 2026-09-23: **no** answer block ("leave the table as the answer"), **yes** show near-ties as tied, **yes** collapse the empty custom builder on a phone, **keep** Best combo.
+
+**Phases 2–6 of `docs/trade-rework-plan.md` are NOT built** — 2 staged ranking (the table sits in POINTS order for minutes while claiming to rank by chance; rank the top ten first), 3 engine part 1 (the page searches twice; his side is priced over playoff weeks he may not reach), 4 density (the phone page is 6,091 px, an empty custom builder taking 37%), 5 small defects (V3/V4/V5/V7/V12/V17/V18/V20), 6 closed-form week weights. Phase 4 needs Tim's answers to plan questions **d** (which columns survive on a phone) and **f** (the finder panel's wording). Behind the plan: `docs/trade-review-calc.md`, `docs/trade-review-view.md`. The yes-curve rebuild is parked.
+
+**CI is green for the first time (2026-09-24, a0d0dc4).** Every suite passed on Windows on node 22 and 24 and `tr-test` failed on every GitHub Linux run — the cause was the harness, not the site. A child scenario printed its answer with `console.log` and then `process.exit`, and on POSIX stdout-to-a-pipe is ASYNC, so most of a 148–227 KB line was thrown away; the parent read half a line and node printed the truncated JSON as the offending source (three lines, no assertion, no clue). All twelve scenario-spawning suites now hand their answer back through `tests/emit.mjs`, which `writeSync`s in a loop and treats `EAGAIN` as back-pressure — node makes a pipe non-blocking, so a write bigger than the 64 KB buffer is refused the moment the reader falls behind, which was the second half of the bug. `run()` in tr-test now names the reason and prints the payload's size and tail when a line will not parse, and the workflow re-runs a failing suite unfiltered.
 
 ## Authorized next steps
 - ~~2026-09-21 · Finish and ship items 1–5~~ done, merged 75247c7.
-- 2026-09-21 · Tim: "alright start working on the projects you reccommend"; 2026-09-22 · "alright do what you think needs to be done next" — taken to cover AUDIT.md §1 → §2 → §3 in the recommended order. §1 and §2 done (bar 2.6, which is Tim's to press); **§3 (the safety net) is next**.
-- 2026-09-20 · AUDIT.md order §1 → §2 → §3 recommended; Tim "has not yet chosen an order" (paraphrase from AUDIT). Not explicitly authorized.
+- ~~2026-09-21/22 · "alright start working on the projects you reccommend" / "alright do what you think needs to be done next"~~ — taken as AUDIT §1 → §2 → §3, all done bar 2.6 (Tim's to press).
+- ~~2026-09-23 · "do the cut and test safety net. Once you're done, I want you to really analyze our trade section and make a plan"~~ — the cut (§6.5/§6.6), §3 and `docs/trade-rework-plan.md` are all done. Phase 1 was built under the same go-ahead.
+- **NOTHING is authorized right now.** Phase 2 of the trade plan (staged ranking) is the obvious next build, but ask before starting it — his last go-ahead covered the cut, the safety net and the plan itself, not the plan's phases.
+- **Tim's own two jobs:** set [Pages → Source → GitHub Actions](https://github.com/TimothyHadfield/fantasy-football/settings/pages) so the test gate actually bites, and press **Export archive** (weeks 1–2 exist only in his browser).
 
 ## Standing instructions
 - **Push every change when it is done** — Tim judges by the deployed site. Never push failing tests. Split into sensible commits.
@@ -97,7 +107,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - A `background` shorthand on a td/tr erases the heat tint (`background-image`) — fixed 2026-09-21; `heat-draw-check.mjs` fails on any new one in app.css.
 - `textContent` in tests reads sr-only text too — read visible and sr-only separately.
 - An assertion guarded by `if (x.length)` with no else passes when the feature produces nothing — three agents found this.
-- `tr-test` scenarios must wait for the page to FINISH (`settleGoal`), not a fixed time — the page now searches twice (points, then goal weights) and ranks. Three scenarios still slept 15–20 s on 2026-09-22 and failed four checks on correct code; fixed. Other suites still sleep: `fc-test` (playoff-four, playoff-divisions, live, live-noteam) and `wv-test` (live-midload) fail the same way on a loaded machine, on the live commit too. AUDIT §3 work.
+- A scenario must wait for the page to FINISH (`settleGoal`, `settleUntil`), never a fixed time — the Trade page searches twice (points, then goal weights) and then ranks. Fixed-wait scenarios in tr-test, fc-test, wv-test and test-trade-weekly all failed on CORRECT code on a loaded machine; all converted by 2026-09-23 (498a86d).
+- **A child scenario hands its answer back with `emit()` from `tests/emit.mjs` — never `console.log` + `process.exit`.** On POSIX a pipe is async, so the exit discards the line and the failure looks like a syntax error in a JSON blob. `writeSync` alone is not enough either: the pipe is non-blocking, so it throws `EAGAIN` when the reader is behind and must be retried. See the header of `tests/emit.mjs`.
+- **Green on Windows is not green on CI.** Two whole days of the CI failure above were invisible locally because Windows writes stdout synchronously. When a suite fails only on GitHub, suspect the harness and read the workflow's unfiltered re-run step first.
 - Anything read off the finder AFTER the sim finishes must be read off the row it was taken from, not an earlier `readTrades()` — the list re-ranks behind a pop-up.
 - The machine is shared: Tim's OCR jobs (`ocrvid.py`) can hold three cores for hours, which is what makes every fixed wait fail. Check `Get-Process` before believing a timing failure.
 - Worktrees: never junction `node_modules` into one you will remove (emptied `boolbase` once). On Windows `git worktree remove` fails on long paths — `rm -rf` then `git worktree prune`. Stale `.git/worktrees/*` folders (base, baseline, br, head-tr, wt) are permission-locked and harmless.
@@ -121,7 +133,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 ## NOT verified
 - The yes-chance curve against any real accepted/refused trade.
 - The first successful "Send to phone" and phone read of the cloud sync (archive HANDOFF).
-- Weeks 1–2 archived only in Tim's browser; export never done (no file in Downloads as of 2026-09-21).
+- Weeks 1–2 archived only in Tim's browser; export never done (no file in Downloads as of 2026-09-22).
+- The Pages gate has never actually blocked anything: the `deploy` job has only ever run green, and Source is still "Deploy from a branch" as of 2026-09-24.
+- Trade Phase 1's tie band was measured over 12 seeds on the demo league, not on Tim's real one.
 - AUDIT §1 floor wording on live data in a real browser (demo has no floors; only linkedom tests saw it). `tr.me` tint with real heat cells (demo has none in `tr.me`).
 - Stats still floors weeks already played (floor.js says never) — found by the §1.4 builder, not fixed.
 - Analysis `A week` picks from the manager's set starters, Proj avg from the best lineup — a benched better man still makes them differ.
@@ -141,6 +155,6 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - Pages: index, stats, analysis, schedule, waivers (Players), trade, summary, draft (parked), debug.
 - Trade: `js/trade.js` (engine, pure), `js/trade-odds.js` (goal, pure), `js/trade-suggest.js`, `js/trade-page.js` (~6.5k lines, wiring).
 - Shared: `js/espn.js`, `js/season.js` (fetch; bridge → cloud → ESPN; store in front), `js/forecast.js` (optimalLineup, winProbability, simulateSeason — most shared file), `js/capture.js` (schedule shape, projection, spread, simulationInputs), `js/projection.js`, `js/floor.js`, `js/heat.js`, `js/store.js`, `js/cloud.js`, `js/player-card.js`, `js/sortable.js`.
-- Tests: `cd tests && npm test` (39 suites, ~10 min; `tr-test` ~6.5 min). Last full run 2026-09-21 (merge 75247c7): 39/39 green; `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
-- Hosting: GitHub Pages `build_type: legacy` off `main` — every push to main redeploys in ~40 s; CI runs tests but gates nothing (AUDIT §3.1).
+- Tests: `cd tests && npm test` (**43 suites, 14,898 recorded assertions**, ~10 min; `tr-test` ~6.5 min). Counts live in `tests/counts.json` (blessed 2026-09-24); a FALL fails the run, a rise is recorded with `node run-all.mjs --bless`. `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
+- Hosting: `.github/workflows/test.yml` runs the suites and, only when they pass, deploys Pages (`deploy` job, `needs: test`). **This gate is inert until Tim sets Pages → Source → GitHub Actions**; until then the legacy branch deploy still publishes off `main` in ~40 s, ungated. To undo: delete the `deploy` job and set Source back to a branch.
 - Project path: `C:\Users\timha\OneDrive\Desktop\my-website\Code Projects\Fantasy Football`. Tim's league 476225250 (private, 10 teams, 14 regular weeks, 6-team playoffs weeks 15–17).
