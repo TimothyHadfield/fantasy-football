@@ -2104,9 +2104,29 @@ function run(name, { stub = false, env = {} } = {}) {
   const args = stub ? ['--import', './tr-register.mjs', self, name] : [self, name];
   const res = spawnSync(process.execPath, args, {
     encoding: 'utf8', cwd: path.dirname(self), env: { ...process.env, ...env },
+    // 64 MB, NOT node's 1 MB default. A scenario answers with its whole page
+    // state as one JSON line - the weekly one is several hundred KB - and at
+    // the default the pipe is TRUNCATED rather than failed: the `@@` line
+    // arrives cut in half and the log fills with JSON instead of an
+    // assertion. CI reported exactly that on 2026-09-23 while every local
+    // run passed.
+    maxBuffer: 64 * 1024 * 1024,
   });
   const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
-  if (!line) throw new Error(`no result for ${name}\n${res.stdout}\n${res.stderr}`);
+  if (!line) {
+    // The reason FIRST, and a short dump: a megabyte of page state pushes the
+    // real error off the end of a CI log.
+    const why = res.error ? `${res.error.code || res.error.name}: ${res.error.message}`
+      : `exit ${res.status}${res.signal ? ` (${res.signal})` : ''}`;
+    const NL = String.fromCharCode(10);
+    const tail = (t) => String(t || '').trimEnd().split(NL).slice(-6)
+      .map((l) => (l.length > 300 ? `${l.slice(0, 300)}... [${l.length} chars]` : l)).join(NL);
+    throw new Error([
+      `no result for ${name} - ${why}`,
+      'stderr:', tail(res.stderr),
+      'stdout:', tail(res.stdout),
+    ].join(NL));
+  }
   return JSON.parse(line.slice(2));
 }
 

@@ -165,6 +165,10 @@ for (const [file] of chosen) {
     // police speed (`test-trade-weekly` owns the speed claim, scaled by a
     // measured machine factor), so it is set well clear of the slowest suite.
     timeout: 25 * 60 * 1000,
+    // See tr-test's own runner: a suite that prints a scenario's whole page
+    // state is past node's 1 MB default, and a truncated pipe reads as a
+    // broken suite rather than as a complete one.
+    maxBuffer: 64 * 1024 * 1024,
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   const out = (res.stdout || '') + (res.stderr || '');
@@ -211,7 +215,12 @@ const missing = filters.length
 if (failures.length) {
   for (const [file, out] of failures) {
     console.log(`\n---------- ${file} ----------`);
-    console.log(out.trimEnd().split('\n').slice(-40).join('\n'));
+    // Long lines are CUT. One scenario's page state is a single 300 KB line,
+    // and printing it whole buries every assertion above it — which is exactly
+    // how a real CI failure arrived on 2026-09-23 with nothing readable in it.
+    console.log(out.trimEnd().split('\n').slice(-40)
+      .map((l) => (l.length > 400 ? `${l.slice(0, 400)}... [${l.length} chars]` : l))
+      .join('\n'));
   }
 }
 
