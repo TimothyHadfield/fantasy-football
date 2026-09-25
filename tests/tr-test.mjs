@@ -2138,13 +2138,26 @@ SCENARIOS.searchOnce = async function searchOnce() {
     }
     : null;
   const { document, errors } = await boot('trade.html', '', seed);
-  await settleGoal(document);
+  // NOT settleGoal: with every week read slowed, the first line is the typical
+  // week's "…NOT ranked by your title chance: the goal needs every remaining
+  // week read…", which settleGoal accepts as finished (rightly, for a settled
+  // goal) — it returned with the title ranking at 2 of 40 (2026-09-25), so the
+  // count was read before a second search could have happened. Wait for the
+  // goal ranking itself: "ranked by your", not "not ranked", not still playing.
+  const max = scaledBudget(150000, machineFactor());
+  const t0 = Date.now();
+  const line = () => (document.getElementById('tradeCount')?.textContent || '').replace(/\s+/g, ' ');
+  const ranked = () => /ranked by your/.test(line()) && !/not ranked/.test(line()) &&
+    !/playing each offer out/.test(line());
+  while (Date.now() - t0 < max && !ranked()) await settle(250);
+  await settle(400);
   // And a moment more, in case a second search was about to start.
   await settle(3000);
   const n = document.getElementById('tradeTable').getAttribute('data-weekly-searches');
   return {
     errors,
     searches: n === null ? null : Number(n),
+    waitedMs: Date.now() - t0,
     count: text(document.getElementById('tradeCount')),
     trades: readTrades(document).length,
   };
