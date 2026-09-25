@@ -43,3 +43,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** one weekly search per load (every readable week bought before the search, span first); `weekWeights` takes the page's base run; one `espnLookPerWeek`; `playoffReach` + `findTrades({ theirReach })` so He gains, his loss limit, the yes-curve and the combo count each playoff week by the chance he plays it; `hisSideOf()` in the page; the note says so. `TR_WEEK_DELAY` in the stub.
 - **Verified how:** with 150 ms reads the old page ran 2 weekly searches (both goals), the new 1; test-trade-odds §17, 8 of whose checks fail on the old engine; full suite 42/43 then the read-order fix → tr-test 670/670; counts re-blessed. Phone view 393px.
 - **Open:** Phases 4–6 unauthorized (4 needs questions d and f); Tim's two jobs unchanged.
+
+## 2026-09-25 (checkpoint)
+- **Asked:** "could you summarize me the big changes that have been made throughout all 3 phases?" (answered in chat), then "prepare md files for chat reset" (= /checkpoint).
+- **Found:** the checkpoint's full run failed one new assertion — `searchOnce` read the page at "2 of 40" because `settleGoal` accepts the typical week's "not ranked by your…" line. Test bug, not page bug. Given its own wait; re-verified old page 2 searches / new 1 with the wait finishing (~10 s); tr-test 670/670.
+- **Verified how:** full suite 42/43 (1,114 s) then tr-test alone green; CI green on c6c7fdd; live at c6c7fdd.
+- **Open:** unchanged — nothing authorized; Phase 4 needs questions d and f.

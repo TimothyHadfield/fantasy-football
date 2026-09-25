@@ -4,10 +4,10 @@ Live: https://timothyhadfield.github.io/fantasy-football/ · Repo: https://githu
 
 ## START HERE
 1. Read this file (short, current). Then `chat.md` (what each session asked and did).
-2. Nothing is half-built. Everything through 2026-09-24 is on `main`, green on CI (a0d0dc4) and live.
+2. Nothing is half-built. Everything through 2026-09-24 is on `main`, green on CI (c6c7fdd, Trade Phase 3) and live.
 3. `AUDIT.md` is the other work queue — §1, §2 (bar 2.6), §3, §6.5, §6.6 are done; the rest is open. The live build queue is `docs/trade-rework-plan.md`: **Phases 1–3 are built, Phases 4–6 are not.** Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-25 (checkpoint after Trade Phase 3).
 
 Read-before-touching (sections of `docs/archive/progress-2026-09-21.md` unless noted):
 - Trade engine / finder / combo → "The Trade page", "Per-week trade valuation", "2026-09-21 — the Trade page opens on a goal"; `js/trade.js`, `js/trade-odds.js` headers.
@@ -116,6 +116,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - A `background` shorthand on a td/tr erases the heat tint (`background-image`) — fixed 2026-09-21; `heat-draw-check.mjs` fails on any new one in app.css.
 - `textContent` in tests reads sr-only text too — read visible and sr-only separately.
 - An assertion guarded by `if (x.length)` with no else passes when the feature produces nothing — three agents found this.
+- **`settleGoal` returns on "not ranked by your…"** (it contains "ranked by your"), which the page shows on the typical week before the weekly search. That is right for a settled goal, wrong for a test that must see the goal ranking finish: `searchOnce` has its own wait (`ranked by your` and not `not ranked` and not still playing). Found 2026-09-25 when it read the count at 2 of 40.
 - **The stub answers week reads instantly, which hides load-order races** (the double search was invisible until `TR_WEEK_DELAY=150` was added to `tests/tr-stub-season.mjs`). Test anything about load order with a delay.
 - He gains is reach-weighted under "Win it all": `offer.theirGain` ≠ Σ `theirByWeek` there; the flat figure is `offer.theirPoints`, and per-week figures divide by `offer.theirWeeks`. Page code goes through `hisSideOf()`.
 - A scenario must wait for the page to FINISH (`settleGoal`, `settleUntil`), never a fixed time — the Trade page searches and then ranks (it searched twice until Phase 3). Fixed-wait scenarios in tr-test, fc-test, wv-test and test-trade-weekly all failed on CORRECT code on a loaded machine; all converted by 2026-09-23 (498a86d).
@@ -145,6 +146,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - D11 · 2026-09-23 · `TIE_BAND = 0.4` pp, from 12 seeds × 10,000 seasons on the demo league (one offer's SD 0.270, the GAP's 0.318; every pair inside 0.4 swapped places in 2–9 of 12 seeds, the 1.51-point pair never did). Grouped against the leader — see rule 19. Not yet measured on Tim's real league.
 - D12 · 2026-09-23 · A week that has KICKED OFF is out of a trade's span (`state.startedWeeks`), not just a week that has gone final (`g.played`) — otherwise the locked current week sat inside every gain from Sunday to Tuesday.
 - D13 · 2026-09-24 · Child scenarios return their answer through `tests/emit.mjs` (`writeSync` loop + `EAGAIN` retry), because `console.log` + `process.exit` truncates on POSIX. See Traps.
+- D14 · 2026-09-24 · Trade Phase 2: rank the first `GOAL_STAGE = 10` scored offers once, fade the rest (`tr.unranked`) until the full sort — staged once, not every slice, so the table doesn't reshuffle while read.
+- D15 · 2026-09-24 · Trade Phase 3: every readable week is bought (span first, then played weeks + bracket) BEFORE the one weekly search; no points search followed by a goal search.
+- D16 · 2026-09-24 · His side weighted by `playoffReach` (regular 1; round one P(playoffs) − P(bye); later rounds P(top size÷2^r)), a refinement of the plan's plain `pPlayoffs` — a bye is a week off and the final is reached less often. Applies to He gains, his loss limit (−2 × Σreach), the yes-curve, the combo and the custom box.
 
 ## NOT verified
 - The yes-chance curve against any real accepted/refused trade.
@@ -152,6 +156,8 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - Weeks 1–2 archived only in Tim's browser; export never done (no file in Downloads as of 2026-09-22).
 - The Pages gate has never actually blocked anything: the `deploy` job has only ever run green, and Source is still "Deploy from a branch" as of 2026-09-24.
 - Trade Phase 1's tie band was measured over 12 seeds on the demo league, not on Tim's real one.
+- Trade Phase 2's staged moment (faded rows) lasts ~1 s in a real browser; only the tests caught it, never a screenshot.
+- Trade Phase 3 on Tim's real league: the one-search saving was measured with a 150 ms/week stub, not timed live; how many offers change under the reach weighting there is unmeasured. The note's new sentence is placeholder wording (Tim's to change).
 - AUDIT §1 floor wording on live data in a real browser (demo has no floors; only linkedom tests saw it). `tr.me` tint with real heat cells (demo has none in `tr.me`).
 - Stats still floors weeks already played (floor.js says never) — found by the §1.4 builder, not fixed.
 - Analysis `A week` picks from the manager's set starters, Proj avg from the best lineup — a benched better man still makes them differ.
@@ -169,8 +175,8 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 
 ## Map
 - Pages: index, stats, analysis, schedule, waivers (Players), trade, summary, draft (parked), debug.
-- Trade: `js/trade.js` (engine, pure), `js/trade-odds.js` (goal + `TIE_BAND`, pure), `js/trade-suggest.js`, `js/trade-page.js` (7,315 lines on 2026-09-24, wiring).
+- Trade: `js/trade.js` (engine, pure), `js/trade-odds.js` (goal + `TIE_BAND`, pure), `js/trade-suggest.js`, `js/trade-page.js` (7,022 lines on 2026-09-25, wiring).
 - Shared: `js/espn.js`, `js/season.js` (fetch; bridge → cloud → ESPN; store in front), `js/forecast.js` (optimalLineup, winProbability, simulateSeason — most shared file), `js/capture.js` (schedule shape, projection, spread, simulationInputs), `js/projection.js`, `js/floor.js`, `js/heat.js`, `js/store.js`, `js/cloud.js`, `js/player-card.js`, `js/sortable.js`.
-- Tests: `cd tests && npm test`. **Last full run 2026-09-24 on `d224728`: all 43 suites passed, 1,104 s (18.4 min) on an idle machine.** The slow ones are `tr-test` 407 s, `test-trade-weekly` 184 s, `an-test` 67 s. ~14,900 assertions. Counts live in `tests/counts.json`; a FALL fails the run, a rise is recorded with `node run-all.mjs --bless` — **which re-runs the whole suite, so allow 20 min**. `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
+- Tests: `cd tests && npm test`. **Last full run 2026-09-25 on `c6c7fdd`: 42/43 in 1,114 s; the one failure was tr-test's new `searchOnce` wait (test bug, fixed), after which tr-test alone passed 670/670 in 471 s.** The slow ones are `tr-test` ~310–470 s, `test-trade-weekly` ~80–184 s, `an-test` ~50–67 s. ~14,900 assertions. Counts live in `tests/counts.json`; a FALL fails the run, a rise is recorded with `node run-all.mjs --bless` — **which re-runs the whole suite, so allow 20 min**. `TR_KIND` env narrows the finder in tr-test. Not suites: `node tests/text-audit.mjs`, `node tools/measure-layout.mjs` (needs Edge).
 - Hosting: `.github/workflows/test.yml` runs the suites and, only when they pass, deploys Pages (`deploy` job, `needs: test`). **This gate is inert until Tim sets Pages → Source → GitHub Actions**; until then the legacy branch deploy still publishes off `main` in ~40 s, ungated. To undo: delete the `deploy` job and set Source back to a branch.
 - Project path: `C:\Users\timha\OneDrive\Desktop\my-website\Code Projects\Fantasy Football`. Tim's league 476225250 (private, 10 teams, 14 regular weeks, 6-team playoffs weeks 15–17).
