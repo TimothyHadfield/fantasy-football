@@ -101,6 +101,7 @@ import {
   goalOf, DEFAULT_GOAL, acceptChance, offerDeltas, simulateWith,
   scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
   weekWeights, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
+  espnLookPerWeek, playoffReach,
 } from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
@@ -825,15 +826,27 @@ async function loadWeekly({ auto = false, fresh = false } = {}) {
   // Already in hand — switching to them is free, but the finder still has to be
   // re-run: its offers were priced on the OTHER measure, and repainting alone
   // would relabel them rather than recompute them.
-  if (!missingWeeks().length && !fresh) { repaint(); loadHistory(); return; }
+  //
+  // ONE WEEKLY SEARCH PER LOAD, NOT TWO (trade plan Phase 3). The played weeks
+  // and the bracket used to be a second phase, bought after the span — and the
+  // season simulation needs them (its spread is measured from the played
+  // weeks), so the first weekly search ran on points, and once they landed
+  // `goalFollowUp` threw it away and searched everything again on the goal's
+  // weights. Measured on 2026-09-23: 70.6 s, then 122.3 s. So every week the
+  // page reads is bought FIRST, in one go, and the one search that follows has
+  // the simulation from the start. The depth map and the finder are already on
+  // screen on the typical week while these read, so nothing is blank meanwhile.
+  // The span it prices still comes first, the history behind it: the same
+  // requests either way, and a read cut short leaves the answer's weeks in hand.
+  const all = [...new Set([...span, ...readableWeeks()])];
+  const unread =weekly.key !== sourceKey() ? all : all.filter((w) => !haveWeek(w));
+  if (!unread.length && !fresh) { repaint(); loadHistory(); return; }
 
-  if (!(await buyMissingWeeks(null, { fresh }))) return;
+  if (!(await buyMissingWeeks(fresh ? all : unread, { fresh }))) return;
   // A deal opened while these were reading is now priceable and stays open.
   runSearch({ keepDeal: true });
-  // Then the weeks that are SHOWN but never priced — the played ones and the
-  // bracket. They are a second phase on purpose: the priced span is what the
-  // page is for, and making the reader wait for week 1's history before the
-  // finder re-ranks would be paying for the smaller answer first.
+  // Anything a goal switch added to the span mid-load; normally nothing is left
+  // and this only lets the goal follow up.
   loadHistory();
 }
 
@@ -2460,11 +2473,16 @@ function espnCell(offer) {
  * would not change a single comparison, and the re-derivations in tr-test check
  * the engine's own totals against them.
  */
-const perWeekOf = (total) => total / (weeklySpan().length || 1);
+const perWeekOf = (total, weeks = weeklySpan().length) => total / (weeks || 1);
 
-function weeklyGainHtml(total) {
+/**
+ * `weeks` is what the total is spread over: the span, or — for HIS side, priced
+ * over the weeks he will actually play (`hisSideOf`) — the number of weeks he is
+ * expected to play, which under "Win it all" is fewer than the span.
+ */
+function weeklyGainHtml(total, weeks = weeklySpan().length) {
   return (
-    `${signedText(perWeekOf(total))}<span class="unit">/wk</span>` +
+    `${signedText(perWeekOf(total, weeks))}<span class="unit">/wk</span>` +
     `<span class="sub">${signedText(total)} total</span>`
   );
 }
@@ -2535,8 +2553,10 @@ function offerRow(offer, i, key, opts = {}) {
     if (!h) return { cls: '', mark: '', title: '' };
     return { cls: ` ${h.cls}`, mark: heatMarkHtml(h), title: ` title="${esc(h.words)}"` };
   };
+  // HIS side over the weeks he will play (trade plan Phase 3) — see `hisSideOf`.
+  const his = hisSideOf(offer);
   const mine = heatCell(offer.myGain, myScale, 'what these offers gain you');
-  const theirs = heatCell(offer.theirGain, theirScale, 'what these offers gain the other manager');
+  const theirs = heatCell(his.gain, theirScale, 'what these offers gain the other manager');
 
   // THE SIGN, ON THE TWO GAIN CELLS. Both cells used to be written `pos`
   // unconditionally, which painted every one of them green — and since the
@@ -2545,9 +2565,9 @@ function offerRow(offer, i, key, opts = {}) {
   // cells were negative numbers in the colour that means good. The rule is
   // `goalCellHtml`'s, to the same tolerance: a figure that rounds to nothing on
   // screen gets no colour at all rather than a sign it does not show.
-  const signOf = (v) => {
+  const signOf = (v, n = weeklySpan().length) => {
     if (!Number.isFinite(v)) return '';
-    const shown = weeks ? perWeekOf(v) : v;
+    const shown = weeks ? perWeekOf(v, n) : v;
     return shown > 0.05 ? ' pos' : shown < -0.05 ? ' neg' : '';
   };
 
@@ -2604,8 +2624,9 @@ function offerRow(offer, i, key, opts = {}) {
       ? `<td class="gain${signOf(offer.myGain)}${mine.cls}" data-v="${offer.myGain}"${mine.title}>` +
         `${gain(offer.myGain)}${mine.mark}</td>`
       : '') +
-    `<td class="their-gain${signOf(offer.theirGain)}${theirs.cls}" data-v="${offer.theirGain}"${theirs.title}>` +
-      `${gain(offer.theirGain)}${theirs.mark}</td>` +
+    `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-v="${his.gain}"${theirs.title}>` +
+      `${weeks && Number.isFinite(his.gain) ? weeklyGainHtml(his.gain, his.weeks) : signedText(his.gain)}` +
+      `${theirs.mark}</td>` +
     `<td class="left espn">${espnCell(offer)}</td>` +
     tail +
     `</tr>`
@@ -2624,7 +2645,7 @@ function offerRow(offer, i, key, opts = {}) {
 function gainScales(rows) {
   return {
     myScale: heatScale(rows.map((o) => o.myGain)),
-    theirScale: heatScale(rows.map((o) => o.theirGain)),
+    theirScale: heatScale(rows.map((o) => hisSideOf(o).gain)),
   };
 }
 
@@ -2836,8 +2857,10 @@ function goalMethodHtml(span) {
  * consequence is a real one and was measured on the sample league — the
  * top-ranked deal printed +0.9 over the span while costing 24.9 points across the
  * seven weeks it is certain to play — so it is stated rather than left for a
- * reader to discover. Nothing here changes a number; re-modelling the columns is
- * its own job.
+ * reader to discover. Since Phase 3 (2026-09-24) HIS column is re-modelled —
+ * priced over the weeks he will play (`hisSideOf`) — and this says so first;
+ * YOUR column is still flat, because your side of the goal already reaches the
+ * page through the simulation.
  *
  * Empty under "Don't finish last" and once the bracket is behind us: with no
  * playoff weeks in the span the two bases agree, and a note about a difference
@@ -2849,14 +2872,23 @@ function bracketBasisHtml(span) {
   const certain = span.filter((w) => !bracket.includes(w));
   if (!certain.length) return '';
   return (
-    `<strong>The two gain columns and the ${esc(goalOf(state.goal).chance)} are not on the same ` +
-    `footing.</strong> The gain columns add every week in the span up at face value, ` +
+    // HIS COLUMN IS PRICED OVER THE WEEKS HE WILL PLAY (trade plan Phase 3), and
+    // that changes which deals are found at all — his loss limit is judged on
+    // it — so it is said first.
+    `<strong>He gains counts each playoff week by the chance he plays in it</strong> — ` +
+    `${weekRange(bracket)} weighed by how often the same simulation has him still in the ` +
+    `bracket that week (a first-round bye counts as a week off), and the regular season in ` +
+    `full — so it is his gain over the weeks he will actually play, and "a week" means a ` +
+    `week he is expected to play. His loss limit and the chance he says yes are judged on ` +
+    `that figure too, so it decides which deals are found, not just what the column says. ` +
+    `<strong>You gain and the ${esc(goalOf(state.goal).chance)} are not on the same ` +
+    `footing.</strong> You gain adds every week in the span up at face value, ` +
     `${weekRange(bracket)} included — as if you were certain to play them. The ` +
     `${esc(goalOf(state.goal).chance)} is not: it counts a playoff week by how often the ` +
     `simulation actually has you in it, which is why the weights above put ${weekRange(bracket)} ` +
     `so far over a regular week. So a deal can read a small gain <em>over the span</em> and still ` +
     `be losing points in ${weekRange(certain)} — the weeks you are certain to play — because it ` +
-    `pays in ${plural(bracket.length, 'week')} you may never reach. Read the gain columns as ` +
+    `pays in ${plural(bracket.length, 'week')} you may never reach. Read You gain as ` +
     `“if every week happens”, and the ${esc(goalOf(state.goal).chance)} as the one that knows it ` +
     `might not. `
   );
@@ -3124,6 +3156,13 @@ function runSearch({ keepDeal = false } = {}) {
 
   const go = () => {
     if (token !== runSearch.token) return; // a newer search has started
+    // How many WEEKLY searches this page has run, on the table itself, so a test
+    // can hold the page to one per load (trade plan Phase 3) without timing a
+    // message that is on screen for a blocked moment. Invisible; nothing reads it.
+    if (weeks) {
+      runSearch.weekly++;
+      $('tradeTable').setAttribute('data-weekly-searches', String(runSearch.weekly));
+    }
     // THE CANDIDATES FOLLOW THE GOAL (2026-09-21). With the simulation's
     // inputs in hand, each priced week gets a weight — how far a point in it
     // moves your chance — and the finder keeps and orders deals by the
@@ -3155,8 +3194,11 @@ function runSearch({ keepDeal = false } = {}) {
       // chance he says yes — the same product the final ranking uses. Without
       // it every finalist was a fleece at the edge of the tolerance.
       rankBy: W
-        ? (o) => o.goalPoints * (acceptFor(o.theirGain, o.send, o.receive, weeks) ?? 1)
+        ? (o) => o.goalPoints * (acceptFor(o.theirGain, o.send, o.receive, weeks, o.theirWeeks ?? weeks.length) ?? 1)
         : null,
+      // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
+      // the yes-chance all read this — the base run, so it costs nothing.
+      theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
     });
     if (token !== runSearch.token) return;
     // Whether this search had the goal to work with — even when the weights
@@ -3190,6 +3232,7 @@ function runSearch({ keepDeal = false } = {}) {
   else setTimeout(go, 0);
 }
 runSearch.token = 0;
+runSearch.weekly = 0;
 
 // ======================================================================
 // THE GOAL: every offer, played out in the season simulation
@@ -3465,7 +3508,9 @@ function goalContext() {
 function goalWeightsFor(ctx, teamId, span) {
   if (!ctx || !ctx.inputs) return null;
   const key = `${teamId}:${span.join(',')}`;
-  if (!ctx.weights.has(key)) ctx.weights.set(key, weekWeights(ctx.inputs, teamId, span, state.goal));
+  // `base`: the run this context already made (Phase 3) — the same inputs, runs
+  // and seed — so the weights do not simulate the league as it stands twice.
+  if (!ctx.weights.has(key)) ctx.weights.set(key, weekWeights(ctx.inputs, teamId, span, state.goal, { base: ctx.base }));
   return ctx.weights.get(key);
 }
 
@@ -3485,11 +3530,54 @@ function rosOf(p, span) {
  * from the page's own week data, so a custom deal and a combo get exactly the
  * arithmetic a finder row gets.
  */
-function acceptFor(theirGain, toHim, fromHim, span) {
-  const n = span.length || 1;
-  const look = (toHim.reduce((a, p) => a + rosOf(p, span), 0) -
-    fromHim.reduce((a, p) => a + rosOf(p, span), 0)) / n;
+function acceptFor(theirGain, toHim, fromHim, span, theirWeeks = span.length) {
+  // How it looks on ESPN: js/trade-odds.js's one definition, fed this page's
+  // span totals. Over the whole span, because ESPN's screen weights nothing.
+  const look = espnLookPerWeek({ send: toHim, receive: fromHim }, span.length, (p) => rosOf(p, span));
+  // His lineup, per week HE IS EXPECTED TO PLAY: `theirGain` is priced over
+  // those weeks (`hisSideOf`), so it divides by them and not by the span.
+  const n = theirWeeks || 1;
   return acceptChance({ lineupPerWeek: Number.isFinite(theirGain) ? theirGain / n : null, lookPerWeek: look });
+}
+
+/**
+ * The chance `partnerId` plays in each week of `span` — 1 in the regular
+ * season, his chance of still being in it in the bracket (js/trade-odds.js
+ * `playoffReach`, read off the base simulation, so free). Null until the
+ * simulation can run.
+ */
+function reachFor(partnerId, span = weeklySpan()) {
+  if (partnerId === null || partnerId === undefined) return null;
+  const ctx = goalContext();
+  if (!ctx.base) return null;
+  if (!ctx.reach) ctx.reach = new Map();
+  const key = `${partnerId}:${span.join(',')}`;
+  if (!ctx.reach.has(key)) ctx.reach.set(key, playoffReach(ctx.base, ctx.inputs, partnerId, span));
+  return ctx.reach.get(key);
+}
+
+/**
+ * HIS SIDE, PRICED OVER THE WEEKS HE WILL PLAY (trade plan Phase 3).
+ *
+ * `{gain, weeks}`: his gain with each week weighted by the chance he plays in
+ * it, and how many weeks that is expected to be — what a per-week figure of it
+ * divides by. The finder's offers arrive already priced this way by
+ * js/trade.js (`theirWeeks` set); a combo, a merged combo or a saved custom
+ * deal carries his week-by-week change and is weighted here the same way, so
+ * every "He gains" on the page is on one footing. Before the simulation can
+ * run there is nothing to weight by and it is his flat gain over the span.
+ */
+function hisSideOf(offer, span = weeklySpan()) {
+  if (!offer) return { gain: null, weeks: span.length || 1 };
+  if (Number.isFinite(offer.theirWeeks)) return { gain: offer.theirGain, weeks: offer.theirWeeks };
+  const reach = Array.isArray(offer.theirByWeek) ? reachFor(offer.partner && offer.partner.id, span) : null;
+  if (!reach) return { gain: offer.theirGain, weeks: span.length || 1 };
+  const at = new Map(span.map((w, i) => [w, reach[i]]));
+  let gain = 0;
+  for (const w of offer.theirByWeek) {
+    if (Number.isFinite(w.delta)) gain += (at.has(w.week) ? at.get(w.week) : 1) * w.delta;
+  }
+  return { gain: Math.round(gain * 10) / 10, weeks: reach.reduce((a, r) => a + r, 0) };
 }
 
 /**
@@ -3501,7 +3589,8 @@ function scoreGoal(offer, mineId, span) {
   const ctx = goalContext();
   if (!ctx.base) return null;
   const after = simulateWith(ctx.inputs, offerDeltas(offer, mineId));
-  const accept = acceptFor(offer.theirGain, offer.send || [], offer.receive || [], span);
+  const his = hisSideOf(offer, span);
+  const accept = acceptFor(his.gain, offer.send || [], offer.receive || [], span, his.weeks);
   return {
     ...scoreOffer({ base: ctx.base, after, myTeamId: mineId, partnerId: offer.partner && offer.partner.id,
       goal: state.goal, accept }),
@@ -4631,7 +4720,7 @@ function comboTableHtml(rows, from, id) {
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
   // Per column, and this table has only one coloured column left.
-  const theirScale = heatScale(rows.map((o) => o.theirGain));
+  const theirScale = heatScale(rows.map((o) => hisSideOf(o).gain));
   // THE THRESHOLDS GO TO `#comboNote`, and this panel is why the split exists
   // at all. It draws the key ONCE PER PACKING — twice whenever "the most trades
   // possible" differs from the best — so `describeHeat`'s full sentence was
@@ -4755,7 +4844,8 @@ function comboGoal(entry) {
     if (!p.partner) continue;
     put(p.partner.id, p.byWeek);
     const deals = entry.combo.filter((o) => o.partner && o.partner.id === p.partner.id);
-    const a = acceptFor(p.delta, deals.flatMap((o) => o.send), deals.flatMap((o) => o.receive), span);
+    const his = hisSideOf({ partner: p.partner, theirGain: p.delta, theirByWeek: p.byWeek }, span);
+    const a = acceptFor(his.gain, deals.flatMap((o) => o.send), deals.flatMap((o) => o.receive), span, his.weeks);
     if (Number.isFinite(a)) accept *= a;
   }
   const after = simulateWith(ctx.inputs, deltas);
@@ -5795,7 +5885,10 @@ function suggestGoal() {
     why: W ? null : 'settled',
     weightsA: W ? W.weights : null,
     weightsB: W ? W.weights : null,
-    accept: ({ sendA, sendB, forB }) => acceptFor(forB.delta, sendA, sendB, span),
+    accept: ({ sendA, sendB, forB }) => {
+      const his = hisSideOf({ partner: { id: state.custom.b }, theirGain: forB.delta, theirByWeek: forB.byWeek }, span);
+      return acceptFor(his.gain, sendA, sendB, span, his.weeks);
+    },
   };
 }
 

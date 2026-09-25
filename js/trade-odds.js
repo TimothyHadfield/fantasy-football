@@ -143,20 +143,86 @@ export const ACCEPT_LEEWAY = 3;
 /** How quickly the chance falls away past that, in points a week. */
 export const ACCEPT_SCALE = 1.5;
 
-const sum = (list) => (list || []).reduce((a, p) => a + (Number.isFinite(p?.projected) ? p.projected : 0), 0);
+const projectedTotal = (p) => p?.projected;
 
 /**
  * How the deal looks to HIM on ESPN's numbers, in points a week: what he
  * receives (your `send`) minus what he gives up (your `receive`).
  *
- * `projected` on an offer's entries is each man's total over the priced weeks
- * (js/trade.js `scoreAcrossWeeks`), so dividing by the week count puts it on
- * the same per-week scale as his lineup gain.
+ * THE ONE DEFINITION (trade plan Phase 3). The Trade page used to work this out
+ * a second way in its own `acceptFor`, and this copy was dead. Now the page
+ * calls this and hands in `totalOf` — each man's ESPN projection added up over
+ * the priced weeks — because a custom deal's men carry no span total of their
+ * own. By default it reads `projected`, which on a finder offer's entries is
+ * exactly that total (js/trade.js `scoreAcrossWeeks`). Dividing by the week
+ * count puts it on the same per-week scale as his lineup gain.
+ *
+ * NOT weighted by whether he reaches the playoffs, and deliberately: this is
+ * what ESPN's trade screen shows him, and ESPN's screen weights nothing.
  */
-export function espnLookPerWeek(offer, weekCount) {
+export function espnLookPerWeek(offer, weekCount, totalOf = projectedTotal) {
   const n = Math.max(1, Number(weekCount) || 0);
   if (!offer) return null;
+  const sum = (list) => (list || []).reduce((a, p) => {
+    const v = totalOf(p);
+    return a + (Number.isFinite(v) ? v : 0);
+  }, 0);
   return (sum(offer.send) - sum(offer.receive)) / n;
+}
+
+// ------------------------------------------- the weeks he will actually play
+//
+// HIS SIDE, PRICED OVER THE WEEKS HE PLAYS (trade plan Phase 3). Under "Win it
+// all" the span runs through the bracket, and the finder used to add his
+// playoff weeks up at face value — as though every partner were certain to
+// play in the final. Measured on the sample league: one partner's gain read
+// −10.5 over the span while being +15.3 over the regular season and −25.8 in a
+// bracket he reaches 75% of the time. So each of HIS weeks is weighted by the
+// chance he plays in it, read off the season simulation the page has already
+// run (the base run, so it costs nothing):
+//
+//   a regular-season week     1
+//   the first playoff round   P(makes the playoffs) − P(first-round bye)
+//   a later round r           P(he is still alive in round r)
+//                             = P(finishing in the top size ÷ 2^r places)
+//
+// The top places of the final placing are exactly the teams still alive in
+// each round: the champion and the runner-up played the final, the top four
+// played the semi-finals, and so on (js/forecast.js places the bracket's
+// losers by the round they went out in). `size` is the field rounded up to a
+// power of two, as the bracket is drawn.
+//
+// This is a finer version of the plan's "weighted by his pPlayoffs": that
+// counts a first-round bye as a week played and the final as reached as often
+// as the playoffs, and the simulation says otherwise for free.
+
+/**
+ * One weight per week in `weeks`: the chance `teamId` plays in it.
+ *
+ * @param {Object} base    `simulateWith(inputs)` — the league as it stands
+ * @param {Object} inputs  `capture.simulationInputs()`: `playoff.weeks` is one
+ *                         week per round, earliest first; `playoff.teams` the field
+ * @param {number} teamId
+ * @param {number[]} weeks the priced span
+ * @returns {number[]|null} null when the simulation has no bracket to read
+ */
+export function playoffReach(base, inputs, teamId, weeks) {
+  if (!Array.isArray(weeks)) return null;
+  const po = inputs?.playoff;
+  const row = base?.teams?.find((t) => t.teamId === teamId);
+  if (!po || !Array.isArray(po.weeks) || !row || !Number.isFinite(row.pPlayoffs)) return null;
+  const field = Number(po.teams) || 0;
+  let size = 1;
+  while (size < field) size *= 2;
+  return weeks.map((week) => {
+    const round = po.weeks.indexOf(week);
+    if (round < 0) return 1;
+    if (round === 0) return Math.max(0, row.pPlayoffs - (row.pBye || 0));
+    const alive = size >> round;
+    let p = 0;
+    for (let i = 0; i < alive && i < row.places.length; i++) p += row.places[i];
+    return p;
+  });
 }
 
 /**
@@ -294,9 +360,13 @@ export const WEIGHT_FLOOR = 0.05;
  * @returns {{weights:number[], raw:number[], base:Object}|null} `raw` is the
  *   measured change in the chance per point, for the note; null when nothing moves.
  */
-export function weekWeights(inputs, myTeamId, weeks, goal, { runs = GOAL_RUNS, seed = GOAL_SEED } = {}) {
+export function weekWeights(inputs, myTeamId, weeks, goal, { runs = GOAL_RUNS, seed = GOAL_SEED, base: given = null } = {}) {
   if (!inputs || !Array.isArray(weeks) || !weeks.length) return null;
-  const base = simulateWith(inputs, null, { runs, seed });
+  // `base` handed in (trade plan Phase 3): the page has already simulated the
+  // league as it stands on this same seed and run count, and simulating it a
+  // second time here only reproduced it. It must be that run — same inputs,
+  // same runs, same seed — or every weight is measured against the wrong base.
+  const base = given || simulateWith(inputs, null, { runs, seed });
   if (!base) return null;
   const before = goalChance(base, myTeamId, goal);
   const raw = weeks.map((week) => {

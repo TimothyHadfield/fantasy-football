@@ -710,6 +710,12 @@ function dropRedundant(offers) {
  * @param {number} [opts.theirMinPerWeek] the least the PARTNER's lineup may
  *   gain, per week — negative lets in deals he might still accept, which the
  *   page then discounts by the yes-chance. Default: must gain, as always.
+ * @param {function} [opts.theirReach] `(partnerId) -> number[]|null`: one
+ *   weight per week in `weeks`, the chance THAT PARTNER plays in it
+ *   (js/trade-odds.js `playoffReach`). With it his side — `theirGain`, the
+ *   `theirMinPerWeek` gate and the ceiling that prunes it — is priced over the
+ *   weeks he will actually play; `theirPoints` keeps the flat figure and
+ *   `theirWeeks` the expected number of weeks. Weekly measure only.
  * @param {function} [opts.rankBy] `(offer) -> number`: what an offer is KEPT
  *   and ordered by, when given. The goal-ranked page passes the weighted gain
  *   × the chance he says yes. WITHOUT IT, on 2026-09-21, the weighted finder
@@ -721,7 +727,7 @@ function dropRedundant(offers) {
 export function findTrades({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
   weeks = null, projFor = null, zeroIsBye = true, floors = null,
-  weights = null, theirMinPerWeek = null, rankBy = null,
+  weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -745,7 +751,11 @@ export function findTrades({
             myScored, scoreAcrossWeeks(theirs.players, weeks, projFor, zeroIsBye).season,
             theirs, slots, kinds, weeks, floors,
             { weights: Array.isArray(weights) && weights.length === weeks.length ? weights : null,
-              theirMinPerWeek }
+              theirMinPerWeek,
+              theirReach: (() => {
+                const r = typeof theirReach === 'function' ? theirReach(theirs.id) : null;
+                return Array.isArray(r) && r.length === weeks.length ? r : null;
+              })() }
           )
         : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
@@ -1273,13 +1283,29 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   // HIS side: the least his lineup may gain. By default he must gain, as
   // always; the goal-ranked page lets in deals he might still accept at a
   // small loss, and discounts them by the yes-chance instead of hiding them.
+  //
+  // AND OVER THE WEEKS HE WILL PLAY (trade plan Phase 3). `reach` is the chance
+  // he plays each week — 1 in the regular season, less in the bracket — so his
+  // gain is Σ reach × (after − before), and the tolerance is per week he is
+  // EXPECTED to play rather than per week of the span. Without it a partner's
+  // gain added up a final he reaches one season in four as if it were certain.
+  const reach = options.theirReach;
+  const theirWeeks = reach ? reach.reduce((a, r) => a + r, 0) : n;
+  const theirOf = (after) => {
+    if (!reach) return round1(after.total - theirBase.total);
+    let s = 0;
+    for (let i = 0; i < n; i++) s += reach[i] * (after.weekTotals[i] - theirBase.weekTotals[i]);
+    return round1(s);
+  };
   const theirMin = Number.isFinite(options.theirMinPerWeek)
-    ? Math.min(minGain, options.theirMinPerWeek * n)
+    ? Math.min(minGain, options.theirMinPerWeek * theirWeeks)
     : minGain;
 
-  // What each of my packages is worth to HIM at the very most.
+  // What each of my packages is worth to HIM at the very most. Still a ceiling
+  // with `reach`: the gifted roster fields at least as much in every week, and
+  // every reach is ≥ 0.
   const ceilingForThem = myPackages.map((send) =>
-    round1(totalAcrossWeeks(theirScored.concat(send), slots, n, floors).total - theirBase.total)
+    theirOf(totalAcrossWeeks(theirScored.concat(send), slots, n, floors))
   );
 
   const found = [];
@@ -1337,7 +1363,7 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
 
       const theirRoster = afterTrade(theirScored, receive, send);
       const theirAfter = totalAcrossWeeks(theirRoster, slots, n, floors);
-      const theirGain = round1(theirAfter.total - theirBase.total);
+      const theirGain = theirOf(theirAfter);
       if (theirGain < theirMin) continue;
 
       // Only now is it worth keeping the lineups, for the two lists the row
@@ -1358,7 +1384,12 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
         // when no weights were given. Points-equivalent: a week of average
         // weight counts its points once.
         goalPoints,
+        // His gain over the weeks he will play when `reach` was given, and his
+        // flat points over the span either way. `theirWeeks` is what a per-week
+        // figure of `theirGain` divides by: the weeks he is expected to play.
         theirGain,
+        theirPoints: round1(theirAfter.total - theirBase.total),
+        theirWeeks: reach ? theirWeeks : null,
         myBefore: myBase.total,
         myAfter: myAfter.total,
         theirBefore: theirBase.total,
@@ -1865,6 +1896,9 @@ export function mergeComboByPartner(entry, {
         theirGain: his ? his.delta : null,
         theirBefore: his ? his.before : null,
         theirAfter: his ? his.after : null,
+        // His week by week, so a page can price his side over the weeks he
+        // will actually play (js/trade-odds.js `playoffReach`).
+        theirByWeek: his && Array.isArray(his.byWeek) ? his.byWeek : null,
         yourChurn: pricing.churn,
         byWeek: pricing.byWeek,
         cut: pricing.cut,

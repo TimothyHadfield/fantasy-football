@@ -2118,6 +2118,38 @@ SCENARIOS.goalStaged = async function goalStaged() {
   return { errors, sawRunning, staged, final };
 };
 
+/**
+ * ONE WEEKLY SEARCH PER LOAD (trade plan Phase 3, 2026-09-24).
+ *
+ * Reads the page's own count of weekly searches (`data-weekly-searches` on the
+ * finder's table) once it has finished. The page used to search on points once
+ * the span was in, then again on the goal's weights once the played weeks
+ * landed. `TR_ONCE_SEED=live` runs it on the stubbed real league (played weeks
+ * to buy); otherwise demo.
+ *
+ * A PAGE WITHOUT THE COUNTER CANNOT PASS: a missing attribute reads as null,
+ * not as one.
+ */
+SCENARIOS.searchOnce = async function searchOnce() {
+  const seed = process.env.TR_ONCE_SEED === 'live'
+    ? {
+      'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+      'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+    }
+    : null;
+  const { document, errors } = await boot('trade.html', '', seed);
+  await settleGoal(document);
+  // And a moment more, in case a second search was about to start.
+  await settle(3000);
+  const n = document.getElementById('tradeTable').getAttribute('data-weekly-searches');
+  return {
+    errors,
+    searches: n === null ? null : Number(n),
+    count: text(document.getElementById('tradeCount')),
+    trades: readTrades(document).length,
+  };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);
@@ -5192,6 +5224,15 @@ if (!gt.boot) {
     T.note.slice(T.note.indexOf('not on the same'), T.note.indexOf('not on the same') + 500));
   ok('and under "Don’t finish last", where no playoff week is priced, it does not say it',
     !/not on the same footing/.test(gt.last.note), gt.last.note.slice(0, 200));
+  // HIS SIDE'S BASIS (trade plan Phase 3): He gains weighs each of his playoff
+  // weeks by the chance he plays it, and that figure decides which deals exist.
+  ok('the note states He gains is counted over the weeks he will actually play',
+    /He gains counts each playoff week by the chance he plays in it/.test(T.note) &&
+      /a first-round bye counts as a week off/.test(T.note) &&
+      /decides which deals are found/.test(T.note),
+    T.note.slice(T.note.indexOf('He gains counts'), T.note.indexOf('He gains counts') + 400));
+  ok('and under "Don’t finish last" it does not, since no playoff week is priced',
+    !/He gains counts each playoff week/.test(gt.last.note), gt.last.note.slice(0, 200));
 
   // -- THE POP-UP AND THE CUSTOM BOX SAY IT TOO ---------------------------------
   ok('the pop-up leads with the same title chance as its row',
@@ -5282,6 +5323,21 @@ if (!gs.boot) {
     F.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
   ok('with the line back to plain "ranked by your title chance"',
     /ranked by your title chance/.test(F.count) && !/points order/.test(F.count), F.count);
+}
+
+// ---- ONE WEEKLY SEARCH PER LOAD (trade plan Phase 3, 2026-09-24) -----------
+//
+// On the stubbed real league with every week read taking 150 ms, as a network
+// does. The old page searched on points as soon as the span was in and again
+// once the played weeks landed: measured 2 on both goals before the fix, 1 after.
+for (const goal of ['title', 'last']) {
+  const so = run('searchOnce', { stub: true, env: { TR_GOAL: goal, TR_ONCE_SEED: 'live', TR_WEEK_DELAY: '150' } });
+  ok(`search-once (${goal}) boots`, !so.boot, so.boot);
+  if (so.boot) continue;
+  ok(`search-once (${goal}): no console errors`, so.errors.length === 0, so.errors.slice(0, 2).join(' | '));
+  eq(so.searches, 1, `a live load under "${goal}" runs ONE weekly search, not a points search and then another`);
+  ok(`search-once (${goal}): and it still ends ranked by the goal, with offers`,
+    so.trades > 0 && /ranked by your/.test(so.count) && !/not ranked/.test(so.count), so.count.slice(0, 200));
 }
 
 // 11.5 days out: "12 days left", and not yet red.

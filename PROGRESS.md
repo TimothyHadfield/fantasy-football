@@ -5,7 +5,7 @@ Live: https://timothyhadfield.github.io/fantasy-football/ · Repo: https://githu
 ## START HERE
 1. Read this file (short, current). Then `chat.md` (what each session asked and did).
 2. Nothing is half-built. Everything through 2026-09-24 is on `main`, green on CI (a0d0dc4) and live.
-3. `AUDIT.md` is the other work queue — §1, §2 (bar 2.6), §3, §6.5, §6.6 are done; the rest is open. The live build queue is `docs/trade-rework-plan.md`: **Phases 1–2 are built, Phases 3–6 are not.** Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
+3. `AUDIT.md` is the other work queue — §1, §2 (bar 2.6), §3, §6.5, §6.6 are done; the rest is open. The live build queue is `docs/trade-rework-plan.md`: **Phases 1–3 are built, Phases 4–6 are not.** Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
 
 Last updated: 2026-09-24.
 
@@ -62,7 +62,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 
 **Trade rework Phase 2 built 2026-09-24** (Tim: "begin phase 2"): once ten offers are played out they are ranked and repainted at the top. The rest are faded (`tr.unranked`) with no rank and no %, and the line says "faded rows in points order", until the full sort at the end. See the plan's "BUILT 2026-09-24".
 
-**Phases 3–6 of `docs/trade-rework-plan.md` are NOT built** — 3 engine part 1 (the page searches twice; his side is priced over playoff weeks he may not reach), 4 density (the phone page is 6,091 px, an empty custom builder taking 37%), 5 small defects (V3/V4/V5/V7/V12/V17/V18/V20), 6 closed-form week weights. Phase 4 needs Tim's answers to plan questions **d** (which columns survive on a phone) and **f** (the finder panel's wording). Behind the plan: `docs/trade-review-calc.md`, `docs/trade-review-view.md`. The yes-curve rebuild is parked.
+**Trade rework Phase 3 built 2026-09-24** (Tim: "start phase 3"): the page runs ONE weekly search per load (it bought the played weeks after a points search, then searched again); `weekWeights` reuses the page's base sim; one `espnLookPerWeek`; and **He gains is priced over the weeks he will play** — each playoff week weighted by his chance of playing it (`playoffReach`, read off the base sim), in the finder's gate, the yes-curve, the column and the note. This changes which offers exist under "Win it all". See the plan's "BUILT 2026-09-24 — Phase 3".
+
+**Phases 4–6 of `docs/trade-rework-plan.md` are NOT built** — 4 density (the phone page is 6,091 px, an empty custom builder taking 37%), 5 small defects (V3/V4/V5/V7/V12/V17/V18/V20), 6 closed-form week weights. Phase 4 needs Tim's answers to plan questions **d** (which columns survive on a phone) and **f** (the finder panel's wording). Behind the plan: `docs/trade-review-calc.md`, `docs/trade-review-view.md`. The yes-curve rebuild is parked.
 
 **CI is green for the first time (2026-09-24, a0d0dc4).** Every suite passed on Windows on node 22 and 24 and `tr-test` failed on every GitHub Linux run — the cause was the harness, not the site. A child scenario printed its answer with `console.log` and then `process.exit`, and on POSIX stdout-to-a-pipe is ASYNC, so most of a 148–227 KB line was thrown away; the parent read half a line and node printed the truncated JSON as the offending source (three lines, no assertion, no clue). All twelve scenario-spawning suites now hand their answer back through `tests/emit.mjs`, which `writeSync`s in a loop and treats `EAGAIN` as back-pressure — node makes a pipe non-blocking, so a write bigger than the 64 KB buffer is refused the moment the reader falls behind, which was the second half of the bug. `run()` in tr-test now names the reason and prints the payload's size and tail when a line will not parse, and the workflow re-runs a failing suite unfiltered.
 
@@ -71,7 +73,8 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - ~~2026-09-21/22 · "alright start working on the projects you reccommend" / "alright do what you think needs to be done next"~~ — taken as AUDIT §1 → §2 → §3, all done bar 2.6 (Tim's to press).
 - ~~2026-09-23 · "do the cut and test safety net. Once you're done, I want you to really analyze our trade section and make a plan"~~ — the cut (§6.5/§6.6), §3 and `docs/trade-rework-plan.md` are all done. Phase 1 was built under the same go-ahead.
 - ~~2026-09-24 · "begin phase 2"~~ — staged ranking built. That go-ahead covered Phase 2 only.
-- **NOTHING is authorized right now.** Phase 3 (search once; price his side over the weeks he plays) is the obvious next build. Ask before starting it.
+- ~~2026-09-24 · "start phase 3"~~ — search once + his side over the weeks he plays, built. That go-ahead covered Phase 3 only.
+- **NOTHING is authorized right now.** Phase 5 (small defects) needs no answers from Tim; Phase 4 needs his answers to plan questions d and f. Ask before starting either.
 - **Tim's own two jobs:** set [Pages → Source → GitHub Actions](https://github.com/TimothyHadfield/fantasy-football/settings/pages) so the test gate actually bites, and press **Export archive** (weeks 1–2 exist only in his browser).
 
 ## Standing instructions
@@ -113,7 +116,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - A `background` shorthand on a td/tr erases the heat tint (`background-image`) — fixed 2026-09-21; `heat-draw-check.mjs` fails on any new one in app.css.
 - `textContent` in tests reads sr-only text too — read visible and sr-only separately.
 - An assertion guarded by `if (x.length)` with no else passes when the feature produces nothing — three agents found this.
-- A scenario must wait for the page to FINISH (`settleGoal`, `settleUntil`), never a fixed time — the Trade page searches twice (points, then goal weights) and then ranks. Fixed-wait scenarios in tr-test, fc-test, wv-test and test-trade-weekly all failed on CORRECT code on a loaded machine; all converted by 2026-09-23 (498a86d).
+- **The stub answers week reads instantly, which hides load-order races** (the double search was invisible until `TR_WEEK_DELAY=150` was added to `tests/tr-stub-season.mjs`). Test anything about load order with a delay.
+- He gains is reach-weighted under "Win it all": `offer.theirGain` ≠ Σ `theirByWeek` there; the flat figure is `offer.theirPoints`, and per-week figures divide by `offer.theirWeeks`. Page code goes through `hisSideOf()`.
+- A scenario must wait for the page to FINISH (`settleGoal`, `settleUntil`), never a fixed time — the Trade page searches and then ranks (it searched twice until Phase 3). Fixed-wait scenarios in tr-test, fc-test, wv-test and test-trade-weekly all failed on CORRECT code on a loaded machine; all converted by 2026-09-23 (498a86d).
 - **A child scenario hands its answer back with `emit()` from `tests/emit.mjs` — never `console.log` + `process.exit`.** On POSIX a pipe is async, so the exit discards the line and the failure looks like a syntax error in a JSON blob. `writeSync` alone is not enough either: the pipe is non-blocking, so it throws `EAGAIN` when the reader is behind and must be retried. See the header of `tests/emit.mjs`.
 - **Green on Windows is not green on CI.** Two whole days of the CI failure above were invisible locally because Windows writes stdout synchronously. When a suite fails only on GitHub, suspect the harness and read the workflow's unfiltered re-run step first.
 - `text-audit` counts a page as settled only when no `.searching` span is on it (2026-09-24). Before that it measured the Trade page mid-ranking, so the old 392 ceiling was an interim figure; the true one is 395.

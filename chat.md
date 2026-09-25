@@ -37,3 +37,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** trade plan Phase 2, staged ranking (`stageGoalRank`, `GOAL_STAGE = 10`, `tr.unranked`, new status-line wording), plus the tr-test scenario `goalStaged`.
 - **Verified how:** `goalStaged` against HEAD's page caught no staged table (the key assertion fails there) and passes on the new code; full suite via `run-all.mjs --bless`: 42/43, tr-test 660 (up from 647), 1,383 s. text-audit failed because it had been measuring the Trade page MID-ranking (the count holds still while "n of m" ticks). It now waits for no `.searching` span, and HEAD's unchanged page measures 395 finished, so the ceiling moved 392 → 395 as a re-measure with no new words. Then text-audit 8/8. Phone view at 393px of the finished table. No archive file in Downloads yet.
 - **Open:** Phases 3–6 unauthorized; Tim's two jobs unchanged.
+
+## 2026-09-24 (Phase 3)
+- **Asked:** "start phase 3".
+- **Built:** one weekly search per load (every readable week bought before the search, span first); `weekWeights` takes the page's base run; one `espnLookPerWeek`; `playoffReach` + `findTrades({ theirReach })` so He gains, his loss limit, the yes-curve and the combo count each playoff week by the chance he plays it; `hisSideOf()` in the page; the note says so. `TR_WEEK_DELAY` in the stub.
+- **Verified how:** with 150 ms reads the old page ran 2 weekly searches (both goals), the new 1; test-trade-odds §17, 8 of whose checks fail on the old engine; full suite 42/43 then the read-order fix → tr-test 670/670; counts re-blessed. Phone view 393px.
+- **Open:** Phases 4–6 unauthorized (4 needs questions d and f); Tim's two jobs unchanged.

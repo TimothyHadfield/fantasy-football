@@ -230,6 +230,12 @@ function playersFor(team, week) {
 
 export async function fetchWeekRosters(week) {
   calls.week.push(week);
+  // `TR_WEEK_DELAY` ms per week, like a network. With every read instant, the
+  // page's reads finish before its first search starts and a search that runs
+  // too early is invisible — which is exactly how the double weekly search
+  // (trade plan Phase 3) hid from this suite while it cost a real load a minute.
+  const delay = Number(process.env.TR_WEEK_DELAY) || 0;
+  if (delay) await new Promise((r) => setTimeout(r, delay));
   const teams = TEAMS.map((team) => {
     const players = playersFor(team, week);
     const starters = players.filter((p) => p.started);

@@ -26,12 +26,13 @@
 //  14. the trade deadline          — espn.parseTrades
 //  15. level, not ranked           — the measured tie band, and that it never moves a row
 //  16. a started week is banked    — lockedWeeks
+//  17. his side, the weeks he plays — playoffReach, the base run reused, theirReach
 
 import * as capture from '../js/capture.js';
 import {
   GOALS, goalOf, goalChance, goalGain, acceptChance, espnLookPerWeek, offerDeltas,
   shiftSeason, simulateWith, scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE,
-  weekWeights, WEIGHT_FLOOR, TIE_BAND, tieGroups, lockedWeeks,
+  weekWeights, WEIGHT_FLOOR, TIE_BAND, tieGroups, lockedWeeks, playoffReach,
 } from '../js/trade-odds.js';
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
@@ -574,6 +575,85 @@ ok('it never goes up as the deal gets worse for him',
   eq(lockedWeeks(null).join(','), '', 'and no schedule at all is not an error');
   eq(lockedWeeks([{ homeId: 1, awayId: 2, played: true }]).join(','), '',
     'a game with no week number is ignored rather than filed under NaN');
+}
+
+// ---------------------------------- 17. his side, over the weeks he plays
+//
+// Trade plan Phase 3. His playoff weeks count by the chance he plays in them,
+// read off the base run the page already has. Hand fixture first: a six-team
+// field is drawn as an eight-team bracket, three rounds in weeks 15–17.
+
+{
+  const hand = {
+    teams: [{ teamId: 5, pPlayoffs: 0.6, pBye: 0.2,
+      places: [0.05, 0.07, 0.08, 0.10, 0.15, 0.15, 0.20, 0.20] }],
+  };
+  const po = { playoff: { teams: 6, weeks: [15, 16, 17] } };
+  const r = playoffReach(hand, po, 5, [13, 14, 15, 16, 17]);
+  ok('playoffReach: one weight per week', Array.isArray(r) && r.length === 5, JSON.stringify(r));
+  eq(r[0] + r[1], 2, 'a regular-season week counts once');
+  near(r[2], 0.4, 1e-12, 'round one: in the playoffs and NOT on a bye — 0.6 − 0.2');
+  near(r[3], 0.30, 1e-12, 'the semi-finals: alive among the top 4 — 0.05+0.07+0.08+0.10');
+  near(r[4], 0.12, 1e-12, 'the final: the top 2 — 0.05+0.07');
+  ok('no bracket, no row or no pPlayoffs: null, never a guess',
+    playoffReach(hand, {}, 5, [15]) === null && playoffReach(hand, po, 99, [15]) === null &&
+      playoffReach({ teams: [{ teamId: 5, places: [] }] }, po, 5, [15]) === null);
+
+  // On the four-team fixture, straight off the simulation: the final (week 3)
+  // is reached exactly as often as he finishes first or second.
+  const fr = playoffReach(base, inputs, 2, [1, 2, 3]);
+  const row2 = base.teams.find((t) => t.teamId === 2);
+  ok('on a real run: regular weeks 1, the final = P(top 2)',
+    fr[0] === 1 && fr[1] === 1 && Math.abs(fr[2] - (row2.places[0] + row2.places[1])) < 1e-12 && fr[2] > 0 && fr[2] < 1,
+    JSON.stringify(fr));
+
+  // THE BASE RUN IS REUSED, NOT RE-RUN: handed the page's own base, the
+  // weights are the ones it would have measured itself.
+  const own = weekWeights(inputs, 1, [1, 2, 3], 'title', { runs: RUNS, seed: 7 });
+  const given = weekWeights(inputs, 1, [1, 2, 3], 'title', { runs: RUNS, seed: 7, base });
+  ok('weekWeights given the base run gives the same weights as simulating it itself',
+    !!own && !!given && own.weights.every((x, i) => Math.abs(x - given.weights[i]) < 1e-12),
+    JSON.stringify({ own: own && own.weights, given: given && given.weights }));
+  ok('and it is that very run, not a copy', given && given.base === base);
+
+  // ONE ESPN-LOOK: the page prices it over the span with its own totals.
+  const offer = { send: [{ id: 'a' }], receive: [{ id: 'b' }] };
+  const totals = { a: 150, b: 90 };
+  near(espnLookPerWeek(offer, 6, (p) => totals[p.id]), 10, 1e-12,
+    'espnLookPerWeek takes the page’s own total: (150 − 90) ÷ 6');
+
+  // THE FINDER, on the demo league: his gain is Σ reach × his weekly change,
+  // his flat figure is kept beside it, and the tolerance is per week he plays.
+  const weeks = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+  const idx = new Map(weeks.map((w) => {
+    const m = new Map();
+    for (const t of generateDemoWeekRosters(w).teams) for (const p of t.players) m.set(p.playerId, p.projected);
+    return [w, m];
+  }));
+  const projFor = (p, w) => { const v = idx.get(w)?.get(p.playerId); return typeof v === 'number' ? v : null; };
+  const now = generateDemoWeekRosters(6);
+  const slots = slotsForLeague(slotCountsFromLineups(now.teams));
+  const REACH = weeks.map((w) => (w === 14 ? 0.5 : w === 15 ? 0.3 : w === 16 ? 0.15 : 1));
+  const SUM = REACH.reduce((a, x) => a + x, 0);
+  const res = findTrades({ teams: now.teams, myTeamId: 9, slots, weeks, projFor,
+    theirMinPerWeek: -2, theirReach: () => REACH, limit: 400 });
+  const hand2 = (o) => o.theirByWeek.reduce((a, x, i) => a + REACH[i] * x.delta, 0);
+  ok('with reach, the finder still finds offers', res.offers.length > 0);
+  ok('He gains = Σ reach × his change that week, by hand',
+    res.offers.every((o) => Math.abs(o.theirGain - hand2(o)) < 0.3),
+    res.offers.slice(0, 4).map((o) => `${o.theirGain} vs ${hand2(o).toFixed(2)}`).join(' | '));
+  ok('and the flat span figure is kept beside it',
+    res.offers.every((o) => Math.abs(o.theirPoints - o.theirByWeek.reduce((a, x) => a + x.delta, 0)) < 0.3));
+  ok('theirWeeks is the weeks he is expected to play', res.offers.every((o) => Math.abs(o.theirWeeks - SUM) < 1e-9),
+    `${res.offers[0] && res.offers[0].theirWeeks} vs ${SUM}`);
+  ok('some offer reads differently once his bracket weeks are discounted',
+    res.offers.some((o) => Math.abs(o.theirGain - o.theirPoints) >= 1));
+  ok('the tolerance is −2 a week he plays, never more',
+    res.offers.every((o) => o.theirGain >= -2 * SUM - 0.05),
+    res.offers.map((o) => o.theirGain).sort((a, b) => a - b).slice(0, 3).join(','));
+  const flat = findTrades({ teams: now.teams, myTeamId: 9, slots, weeks, projFor, theirMinPerWeek: -2, limit: 400 });
+  ok('without reach nothing changes: He gains is the flat figure and theirWeeks is null',
+    flat.offers.every((o) => o.theirWeeks === null && o.theirGain === o.theirPoints));
 }
 
 // ---------------------------------------------------------------------------
