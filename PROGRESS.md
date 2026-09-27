@@ -180,7 +180,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - ~~Three-team trades~~ · ESPN blocks them.
 - ~~Projection-drift chart~~ · until December; archive holds team totals only (AUDIT §2.3).
 - ~~Pure client-side private-league read~~ · impossible (third-party cookies).
-- Draft page · parked; don't touch unless asked.
+- Draft page · parked; don't touch unless asked. 2026-09-27: light cards/chips/Mine-Taken got dark ink (`#1b2430`) in css/draft.css — they inherited the dark theme's light text. Results-screen `tr.me-row` (light green row) still has light text; left alone (its sticky `td.name` is dark, needs a per-cell fix).
 - ~~V20 disable the week picker under "Every remaining week"~~ · 2026-09-27 · measured live, not inert (it sets the starting week).
 
 ## Map

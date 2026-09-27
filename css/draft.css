@@ -61,6 +61,11 @@
 
 /* ------------------------------------------------ the recommendation card */
 
+/* The site is dark (css/app.css sets body text to a light --text), but the
+ * cards on this page are light surfaces. Each one sets its own dark ink, the
+ * way .alert above does, or its text inherits the light colour and all but
+ * vanishes on white. */
+
 .pick-card {
   display: grid;
   grid-template-columns: auto 1fr auto auto;
@@ -70,6 +75,7 @@
   margin-bottom: 12px;
   border-radius: 12px;
   background: #fff;
+  color: #1b2430;
   border: 2px solid #16a34a;
   box-shadow: 0 3px 14px rgba(0, 0, 0, .08);
 }
@@ -124,6 +130,7 @@
 
 .alt {
   background: #fff;
+  color: #1b2430;
   border: 1px solid #dde3ea;
   border-left: 4px solid #94a3b8;
   border-radius: 9px;
@@ -157,6 +164,7 @@
   padding: 7px 10px;
   border-radius: 7px;
   background: #f5f7f9;
+  color: #1b2430;
   font-size: 13px;
 }
 .slot.empty { background: #fff7ed; border: 1px dashed #fdba74; }
@@ -178,6 +186,7 @@
   padding: 3px 8px;
   border-radius: 6px;
   background: #f1f4f7;
+  color: #1b2430;
 }
 .log-pick.mine { background: #dcfce7; font-weight: 700; }
 .log-pick b { color: #556; font-weight: 600; margin-right: 4px; }
@@ -212,6 +221,7 @@ td .mark {
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: #fff;
+  color: #1b2430;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -280,6 +290,7 @@ td.neg-edge { color: #b91c1c; font-weight: 600; }
   margin-top: 10px;
   border-radius: 8px;
   background: #f1f5f9;
+  color: #1b2430;
 }
 
 @media (max-width: 780px) {
