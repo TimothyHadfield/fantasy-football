@@ -1907,6 +1907,7 @@ function renderDepth() {
     $('depthBars').innerHTML = '';
     $('spareStrip').innerHTML = '';
     $('depthNote').innerHTML = '';
+    $('depthKey').innerHTML = '';
     $('depthWarn').innerHTML = '';
     $('depthWarn').hidden = true;
     return;
@@ -1929,6 +1930,16 @@ function renderDepth() {
       );
     })
     .join('');
+
+  // THE TINT'S RULE, IN VIEW (trade plan Phase 5, V18). The deep/thin shades
+  // are the heat scale's two hues under a different rule — a RANK within each
+  // column, not ±1 SD — so the visible key says which, in one sentence (rule
+  // 16). Only when something is actually tinted: a league too small to rank
+  // draws no shade, and a key for one would describe nothing on screen.
+  const tinted = [...tints.values()].some((t) => t.deep !== null || t.thin !== null);
+  $('depthKey').innerHTML = tinted
+    ? 'Tint marks the three deepest and three thinnest per position — not the ±1 SD scale above.'
+    : '';
 
   renderBars(map);
   renderSpares(map);
@@ -2026,8 +2037,9 @@ function renderDepthNote(map) {
     `manager worth talking to is the one whose number is low where yours is high. ` +
     `<strong>spare</strong> beside a number is what that manager could send ` +
     `<em>without weakening his own lineup</em> — the part of his squad a trade can actually ` +
-    `reach; your own spare men are named under the table. The three deepest and three thinnest ` +
-    `squads at each position are tinted; every cell prints its sign either way.` +
+    // Which cells are tinted is said under the table (`#depthKey`), not twice.
+    `reach; your own spare men are named under the table. Every cell prints its sign whether or ` +
+    `not it is tinted.` +
     (anyExhausted
       ? ` A <strong>*</strong> means every player at that position is already in somebody’s ` +
         `lineup, so there is no spare man in the league to set a bar with and the worst ` +
@@ -2480,9 +2492,15 @@ const perWeekOf = (total, weeks = weeklySpan().length) => total / (weeks || 1);
  * over the weeks he will actually play (`hisSideOf`) — the number of weeks he is
  * expected to play, which under "Win it all" is fewer than the span.
  */
-function weeklyGainHtml(total, weeks = weeklySpan().length) {
+/*
+ * `mark` is the heat glyph (▲/▼), drawn BESIDE the per-week number it
+ * qualifies and before the `.sub` line. It used to be appended after the sub,
+ * which left it orphaned at the foot of a tall top-aligned cell, two lines
+ * below the figure it was about (trade plan Phase 5, V4).
+ */
+function weeklyGainHtml(total, weeks = weeklySpan().length, mark = '') {
   return (
-    `${signedText(perWeekOf(total, weeks))}<span class="unit">/wk</span>` +
+    `${signedText(perWeekOf(total, weeks))}<span class="unit">/wk</span>${mark}` +
     `<span class="sub">${signedText(total)} total</span>`
   );
 }
@@ -2539,7 +2557,9 @@ function offerRow(offer, i, key, opts = {}) {
   const send = offer.send.map((p) => manLine(p, ctx)).join('');
   const receive = offer.receive.map((p) => manLine(p, ctx)).join('');
   const weeks = basis() === 'weeks' && weeklySpan().length > 0;
-  const gain = (v) => (weeks && Number.isFinite(v) ? weeklyGainHtml(v) : signedText(v));
+  // The heat mark goes beside the number, never after the sub-line (V4).
+  const gain = (v, mark) =>
+    (weeks && Number.isFinite(v) ? weeklyGainHtml(v, undefined, mark) : `${signedText(v)}${mark}`);
   const picked = state.deal && state.deal === offer ? ' picked' : '';
 
   // THE RED/GREEN SCALE ON THE TWO GAIN COLUMNS (HANDOFF rule 14). The group is
@@ -2622,11 +2642,12 @@ function offerRow(offer, i, key, opts = {}) {
       : '') +
     (showMyGain
       ? `<td class="gain${signOf(offer.myGain)}${mine.cls}" data-v="${offer.myGain}"${mine.title}>` +
-        `${gain(offer.myGain)}${mine.mark}</td>`
+        `${gain(offer.myGain, mine.mark)}</td>`
       : '') +
     `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-v="${his.gain}"${theirs.title}>` +
-      `${weeks && Number.isFinite(his.gain) ? weeklyGainHtml(his.gain, his.weeks) : signedText(his.gain)}` +
-      `${theirs.mark}</td>` +
+      `${weeks && Number.isFinite(his.gain)
+        ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
+        : `${signedText(his.gain)}${theirs.mark}`}</td>` +
     `<td class="left espn">${espnCell(offer)}</td>` +
     tail +
     `</tr>`
@@ -4343,6 +4364,55 @@ const BREAKDOWNS = {
 const breakdownHost = (which) => `<div id="${BREAKDOWNS[which].host}" class="wkx"></div>`;
 const BREAKDOWN_HOST = breakdownHost('deal');
 
+/**
+ * The priced week whose difference is largest either way — what the breakdown
+ * shows before anybody picks one (V17). The earliest wins a tie. Null until
+ * the remaining weeks are in hand, which keeps the prompt for that state.
+ */
+function biggestSwingWeek(offer) {
+  if (!offer || !weeklyReady()) return null;
+  const set = dealSets(offer, 'mine').span;
+  if (!set || !set.byWeek.length) return null;
+  let best = set.byWeek[0];
+  for (const w of set.byWeek) if (Math.abs(w.delta) > Math.abs(best.delta)) best = w;
+  return best.week;
+}
+
+/**
+ * WHERE THE POP-UP'S WEEK DETAIL SITS (trade plan Phase 5, V12).
+ *
+ * Beside the week table where there is a side (the same 900px `roomBesideBuilder`
+ * uses). Below that it used to fall under the WHOLE week table — about 1,500px
+ * under the row a thumb had just tapped on a phone, so a tap visibly did
+ * nothing but tint the row. There it goes into a full-width row directly after
+ * the open week's row instead, and moves with the week.
+ */
+function placeDealHost(host, week) {
+  const body = $('dealBody');
+  if (!body) return;
+  const old = body.querySelector('tr.wkx-row');
+  const row = !roomBesideBuilder() && week !== null && week !== undefined
+    ? body.querySelector(`table.weeks tr[data-wk="${cssKey(week)}"]`)
+    : null;
+  if (!row) {
+    const col = body.querySelector('.deal-detail');
+    if (col && host.parentNode !== col) col.appendChild(host);
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    return;
+  }
+  let tr = old;
+  if (!tr) {
+    tr = document.createElement('tr');
+    tr.setAttribute('class', 'wkx-row');
+    const td = document.createElement('td');
+    td.setAttribute('colspan', '4');
+    tr.appendChild(td);
+  }
+  if (row.nextSibling !== tr) row.parentNode.insertBefore(tr, row.nextSibling);
+  const td = tr.firstChild;
+  if (host.parentNode !== td) td.appendChild(host);
+}
+
 /** An offer's entries are player objects; be tolerant of a bare id anyway. */
 const idKey = (p) => String(p && typeof p === 'object' ? p.playerId : p);
 
@@ -4428,9 +4498,16 @@ function renderDealWeek(which = 'deal') {
   const offer = cx.offer();
   if (!offer) { host.innerHTML = ''; return; }
 
+  // NOTHING PICKED OPENS ON THE WEEK THIS DEAL MOVES MOST (trade plan Phase 5,
+  // V17), rather than on a prompt: half of a 1,100px laptop card sat blank
+  // until a week was hovered. `picked` stays null, so Escape and a fresh deal
+  // still mean "no week chosen" — only what is DRAWN for that state changed.
+  const picked = cx.week();
+  const week = picked ?? biggestSwingWeek(offer);
+  if (which === 'deal') placeDealHost(host, week);
+
   // The row the reader is on, marked on the table itself as well as here, so
   // the two halves of the panel are visibly one thing.
-  const week = cx.week();
   for (const btn of document.querySelectorAll(`${cx.scope} .wk-peek`)) {
     const on = String(btn.getAttribute('data-wk')) === String(week);
     btn.setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -4513,7 +4590,10 @@ function renderDealWeek(which = 'deal') {
       : slice.kind === 'po'
         ? `<p class="wkx-scope">Week ${esc(week)} is a playoff week — shown for reference, and in ` +
           `no total on this page.</p>`
-        : '';
+        : picked === null || picked === undefined
+          ? `<p class="wkx-lead">The week this deal moves most. Hover, tap or Tab to another week to ` +
+            `see it.</p>`
+          : '';
 
   host.innerHTML =
     `<div class="wkx-head">` +
@@ -4553,6 +4633,36 @@ function setDealWeek(week, which = 'deal') {
   if (!Number.isFinite(w) || cx.week() === w) return;
   cx.setWeek(w);
   renderDealWeek(which);
+}
+
+/**
+ * BELOW 900px THE DETAIL IS UNDER THE ROW (V12), and a row tapped near the foot
+ * of the sheet would still leave it off the bottom edge. So a TAP scrolls the
+ * sheet to put that row at its top, with the week's lineup directly beneath.
+ *
+ * On a click only — never on hover: a scroll moves rows under a resting
+ * pointer, which would fire the next `mouseover` and chase itself down the
+ * table. Focus scrolls itself. And not on opening: the week drawn then (V17)
+ * leaves the sheet where the reader starts, on the deal.
+ */
+function scrollDealRowToTop() {
+  if (roomBesideBuilder()) return;
+  const tr = document.querySelector('#dealBody tr.wkx-row');
+  const row = tr && tr.previousElementSibling;
+  if (!row || typeof row.scrollIntoView !== 'function') return;
+  try {
+    row.scrollIntoView({ block: 'start' });
+    // The week table's header is sticky, so "the top" is under it: measured
+    // after the scroll, and the sheet nudged back by whatever it covers.
+    const card = row.closest('.modal-card');
+    // The CELL, not the <thead>: the stickiness is on the `th`s, and the
+    // thead element itself scrolls away with the table.
+    const head = row.closest('table') && row.closest('table').querySelector('thead th');
+    if (card && head) {
+      const covered = head.getBoundingClientRect().bottom - row.getBoundingClientRect().top;
+      if (covered > 0) card.scrollTop -= covered;
+    }
+  } catch { /* no layout under a test harness */ }
 }
 
 /** Which manager's lineup the breakdown shows. His own until asked otherwise. */
@@ -7118,6 +7228,7 @@ dealPanel.addEventListener('click', (e) => {
   if (wk === null) return;
   e.stopPropagation();
   setDealWeek(wk);
+  scrollDealRowToTop();
 });
 
 $('espnOutcomeClose').addEventListener('click', (e) => {

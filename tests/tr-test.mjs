@@ -328,6 +328,14 @@ function readOfferRows(table) {
         cls: (cls.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
         mark: text(td.querySelector('.heatmark')),
         title: td.getAttribute('title') || '',
+        // Phase 5, V4: the mark sits BESIDE the number, i.e. before the cell's
+        // `.sub` line. null when there is no mark or no sub to compare with.
+        markBeforeSub: (() => {
+          const html = td.innerHTML || '';
+          const m = html.indexOf('class="heatmark"');
+          const s = html.indexOf('class="sub"');
+          return m < 0 || s < 0 ? null : m < s;
+        })(),
       };
     };
     return {
@@ -418,7 +426,10 @@ const names = (men) => men.map((m) => m.text).join(' ');
  * started handing it "5.2 ▲" and getting NaN — which read as every row's
  * arithmetic being wrong rather than as a glyph nobody had stripped.
  */
-const noMark = (s) => String(s).replace(/[▲▼]/g, '').replace(/\s+/g, ' ').trim();
+// The glyph goes with the space `heatMarkHtml` puts before it: since V4 the
+// mark sits mid-cell (after the number, before the `.sub` total), where a
+// left-behind space would read as a change to the cell's own format.
+const noMark = (s) => String(s).replace(/\s*[▲▼]/g, '').replace(/\s+/g, ' ').trim();
 const num = (s) => Number(noMark(s).replace(/−/g, '-').replace(/\+/g, ''));
 /** A cell's text with the scale's glyph taken off, for the format assertions. */
 const textNoMark = (el) => noMark(text(el));
@@ -427,7 +438,11 @@ const textNoMark = (el) => noMark(text(el));
 function readWeekTable(el) {
   const table = el ? el.querySelector('table.weeks') : null;
   if (!table) return null;
-  const all = [...table.querySelectorAll('tbody tr')];
+  // THIS TABLE'S OWN ROWS. Below 900px the week's slot-by-slot detail is put
+  // in a row of its own after the open week (`tr.wkx-row`, trade plan Phase 5
+  // V12), with a table of its own inside — neither is a week.
+  const all = [...table.querySelectorAll('tbody tr')]
+    .filter((tr) => tr.closest('table') === table && !(tr.getAttribute('class') || '').includes('wkx-row'));
   const cls = (tr) => tr.getAttribute('class') || '';
   const has = (tr, c) => cls(tr).split(/\s+/).includes(c);
   // Two lines now: the played weeks' (above the priced rows) and the playoff
@@ -630,6 +645,20 @@ function readBreakdown(document) {
     totals: all.find((r) => r.isTotal) || null,
     key: text(host.querySelector('.wkx-key')),
     scope: text(host.querySelector('.wkx-scope')),
+    // What is drawn before anybody picks a week (trade plan Phase 5, V17).
+    lead: text(host.querySelector('.wkx-lead')),
+    // WHERE the panel sits (V12): in the side column, or in a row of its own
+    // straight after one week's row — and which week that row is.
+    inSideColumn: !!(host.closest && host.closest('.deal-detail')),
+    afterRow: (() => {
+      const tr = host.closest ? host.closest('tr.wkx-row') : null;
+      const prev = tr ? tr.previousElementSibling : null;
+      return prev ? prev.getAttribute('data-wk') : null;
+    })(),
+    sideColumnKids: (() => {
+      const col = document.querySelector('#dealBody .deal-detail');
+      return col ? col.children.length : -1;
+    })(),
     sides: [...host.querySelectorAll('[data-side]')].map((b) => ({
       side: b.getAttribute('data-side'),
       label: text(b),
@@ -873,6 +902,10 @@ const SCENARIOS = {
     out.youLine = text($('cuYou'));
     out.teamOptions = [...$('cuTeamB').querySelectorAll('option')].map(text);
     out.startsEmpty = text($('cuEmpty'));
+    // THE INSTRUCTION, PRINTED ONCE (Phase 5, V5): counted over the whole
+    // panel's text before anything is ticked. It was in `#cuPreview` AND in
+    // `#cuEmpty`, ~120px apart.
+    out.tickInstructions = (text($('customPanel')).match(/Tick who moves on each side/g) || []).length;
     out.wrapHiddenAtFirst = $('cuWrap').hidden;
     out.saveDisabledAtFirst = $('cuSave').disabled;
 
@@ -992,6 +1025,18 @@ const SCENARIOS = {
       host: !!($('cuInline') && $('cuInline').querySelector('#cuWeek')),
       title: text($('cuInline') && $('cuInline').querySelector('.cu-inline-title')),
     };
+    // BEFORE any week is hovered it is already filled, on the week the deal
+    // moves most (Phase 5, V17 — "same for #cuInline").
+    out.inlineOpening = (() => {
+      const host = document.getElementById('cuWeek');
+      return host
+        ? {
+          table: !!host.querySelector('table.wkx-table'),
+          title: text(host.querySelector('.wkx-title')),
+          lead: text(host.querySelector('.wkx-lead')),
+        }
+        : null;
+    })();
     // Hover a week inside it: the slot-by-slot panel is the pop-up's own, and
     // it must open HERE without touching the modal.
     const inlineWeekRow = $('cuInline') &&
@@ -1147,6 +1192,14 @@ const SCENARIOS = {
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
       count: text(document.getElementById('tradeCount')),
       note: text(document.getElementById('depthNote')),
+      // Phase 5, V18: the depth map's tint rule, in its VISIBLE key.
+      depthKey: text(document.getElementById('depthKey')),
+      depthKeyHidden: (() => {
+        const el = document.getElementById('depthKey');
+        if (!el) return true;
+        return !!el.hidden || !!el.closest('details');
+      })(),
+      tintedDepthCells: document.querySelectorAll('#depthTable td.deep, #depthTable td.thin').length,
       tradeNote: text(document.getElementById('tradeNote')),
       empty: text(document.getElementById('tradeEmpty')),
       emptyHidden: (document.getElementById('tradeEmpty').getAttribute('class') || '').includes('hidden'),
@@ -1854,6 +1907,7 @@ SCENARIOS.weekPeek = async function weekPeek() {
     title: text(document.getElementById('dealTitle')),
     partner: other >= 0 ? trades[other].partner : '',
     breakdown: readBreakdown(document),
+    weeks: readWeekTable(document.getElementById('dealBody')),
   };
 
   return {
@@ -1871,6 +1925,39 @@ SCENARIOS.weekPeek = async function weekPeek() {
     weeks: stub.WEEKS,
     playedThrough: stub.PLAYED_THROUGH,
   };
+};
+
+/**
+ * THE WEEK PEEK ON A PHONE (trade plan Phase 5, V12). Below 900px there is no
+ * side to put the week's detail on, and under the whole week table it landed
+ * ~1,500px below the row a thumb had just tapped. It must sit in a row of its
+ * own straight after the open week's row, and follow the week when another is
+ * tapped. Same stub league and offer as `weekPeek`; only the window differs.
+ */
+SCENARIOS.weekPeekNarrow = async function weekPeekNarrow() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed, { wide: false });
+  await settleGoal(document);
+  const trades = readTrades(document);
+  const idx = trades.findIndex((t) => t.partner === 'Cy');
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
+  if (rows[idx]) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(1500);
+  const fireOn = (el, type) => { if (el) el.dispatchEvent(new globalThis.Event(type, { bubbles: true })); };
+  const weekBtn = (w) => document.querySelector(`#dealBody .wk-peek[data-wk="${w}"]`);
+
+  const deal = readDeal(document);
+  const opened = readBreakdown(document);
+  fireOn(weekBtn(9), 'click');                   // a thumb on week 9
+  const tapped = readBreakdown(document);
+  fireOn(weekBtn(12), 'click');                  // and then on week 12
+  const retapped = readBreakdown(document);
+  // The week table must still read as the same weeks with the detail inside it.
+  const weeksAfter = readWeekTable(document.getElementById('dealBody'));
+  return { errors, found: idx >= 0, deal, opened, tapped, retapped, weeksAfter };
 };
 
 /**
@@ -2234,6 +2321,85 @@ const eq = (a, b, msg) => ok(msg, Object.is(a, b), `got ${JSON.stringify(a)}, wa
 
 // ---- it opens, on demo data, with both panels full ------------------------
 
+// ---- Phase 5: three CSS defects, read off trade.html's own <style> ----------
+//
+// linkedom computes no styles, so these read the rules themselves. Each was
+// seen failing against the stylesheet as it was.
+{
+  const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');
+  const css = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  // Every rule as { selectors, body, media } — media is the enclosing @media, if any.
+  const rules = [];
+  const walk = (src, media) => {
+    let i = 0;
+    while (i < src.length) {
+      const open = src.indexOf('{', i);
+      if (open < 0) break;
+      const head = src.slice(i, open).trim();
+      let depth = 1; let j = open + 1;
+      while (j < src.length && depth) { if (src[j] === '{') depth++; else if (src[j] === '}') depth--; j++; }
+      const body = src.slice(open + 1, j - 1);
+      if (head.startsWith('@media')) walk(body, head);
+      else rules.push({ selectors: head.split(',').map((s) => s.trim()), body, media });
+      i = j;
+    }
+  };
+  walk(css, null);
+  const decl = (sel, prop, media = null) => {
+    let v = null;
+    for (const r of rules) {
+      if (!r.selectors.includes(sel)) continue;
+      if (media && !(r.media || '').includes(media)) continue;
+      const m = r.body.match(new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`));
+      if (m) v = m[1].trim();
+    }
+    return v;
+  };
+
+  // V3: the pop-up's package lines are `.deal-side`, not `.pkg`.
+  eq(decl('.deal-side .man', 'display'), 'block',
+    'the pop-up’s You send / You get put each man on his own line (V3)');
+  eq(decl('.deal-side .pp', 'margin'), '0 4px',
+    'and space the position tag off the name and number (V3)');
+
+  // V5: the builder's one instruction is readable, not a rule colour.
+  eq(decl('.cu-preview .muted', 'color'), 'var(--dim)',
+    '"Tick who moves on each side" is drawn in --dim, not --line-2 (V5)');
+
+  // V7: on a phone the shape filter's five buttons fill their grid with no
+  // empty cell. Auto-placement, row by row, with each button's span.
+  {
+    const cols = Number(((decl('#kindToggle', 'grid-template-columns', 'max-width: 760px') || '')
+      .match(/repeat\(\s*(\d+)/) || [])[1]);
+    const spanOf = (n) => {
+      let s = 1;
+      for (const r of rules) {
+        if (!(r.media || '').includes('max-width: 760px')) continue;
+        const hit = r.selectors.some((sel) => {
+          if (sel === '#kindToggle button') return true;
+          const m = sel.match(/^#kindToggle button:nth-child\(n\+(\d+)\)$/);
+          return m ? n >= Number(m[1]) : false;
+        });
+        const m = hit && r.body.match(/grid-column\s*:\s*span\s+(\d+)/);
+        if (m) s = Number(m[1]);
+      }
+      return s;
+    };
+    const buttons = (html.match(/<div class="segmented" id="kindToggle">([\s\S]*?)<\/div>/) || ['', ''])[1]
+      .match(/<button/g) || [];
+    let x = 0;
+    for (let n = 1; n <= buttons.length; n++) {
+      const s = Math.min(spanOf(n), cols);
+      if (x + s > cols) x = 0;
+      x = (x + s) % cols;
+    }
+    ok('the phone shape filter leaves no empty cell in its grid (V7)',
+      Number.isFinite(cols) && buttons.length === 5 && x === 0,
+      `cols=${cols}, buttons=${buttons.length}, last row filled to ${x || cols} of ${cols}`);
+  }
+}
+
 const fresh = run('fresh');
 ok('the page boots', !fresh.boot, fresh.boot);
 if (!fresh.boot) {
@@ -2241,6 +2407,20 @@ if (!fresh.boot) {
   ok('and no network call at all — the page is one week of rosters, read twice',
     fresh.fetchCalls.length === 0, fresh.fetchCalls.slice(0, 2).join(' | '));
   eq(fresh.badge, 'Demo', 'it opens on demo data and says so');
+
+  // ---- Phase 5, V18: the depth map says what its tint is, in view ---------
+  //
+  // Its deep/thin shades borrow the ±1 SD scale's red and green under a
+  // different rule (a rank within each column), and the visible part of the
+  // panel did not say so. One sentence (rule 16), not behind the toggle.
+  ok('the depth map tints some cells, so the key has something to describe',
+    fresh.tintedDepthCells > 0, String(fresh.tintedDepthCells));
+  ok('its visible key says the three deepest and thinnest are tinted',
+    /three deepest and three thinnest/.test(fresh.depthKey) && !fresh.depthKeyHidden, fresh.depthKey);
+  ok('and that this is not the ±1 SD scale used above',
+    /not the ±1 SD scale/.test(fresh.depthKey), fresh.depthKey);
+  ok('in one sentence',
+    (fresh.depthKey.match(/[.!?](\s|$)/g) || []).length === 1, fresh.depthKey);
 
   // ---- the panels are in order of usefulness -----------------------------
   //
@@ -2921,6 +3101,13 @@ if (!wk.boot) {
     ok('a cell at the end of the scale carries ▲ or ▼ as well as its colour',
       ends.length === 0 || ends.every((r) => /[▲▼]/.test(r.myHeat.mark)),
       JSON.stringify(ends.map((r) => [r.myHeat.cls, r.myHeat.mark])));
+    // Phase 5, V4: THE GLYPH SITS BESIDE THE NUMBER, before the "total" sub
+    // line — not orphaned at the foot of a tall cell. Both columns; and not
+    // vacuous: at least one marked cell with a sub line must exist to check.
+    const marked = rows.flatMap((r) => [r.myHeat, r.theirHeat]).filter((h) => h.markBeforeSub !== null);
+    ok('the ▲/▼ is drawn beside the per-week number, before its "total" line',
+      marked.length > 0 && marked.every((h) => h.markBeforeSub === true),
+      `${marked.filter((h) => h.markBeforeSub).length} of ${marked.length} marks before the sub line`);
     // CHANNEL 4, AND IT IS SPLIT IN TWO (2026-09-19). The VISIBLE key is one
     // short sentence — what the colour compares, which way round it runs, and
     // that the far end carries a mark and heavier type, so none of it depends
@@ -4280,6 +4467,13 @@ if (!live.boot) {
     };
   }
 
+  // The priced week(s) with the largest printed difference either way.
+  const swingOf = (wt) => {
+    const ws = (wt && wt.weeks) || [];
+    const top = Math.max(...ws.map((w) => Math.abs(w.delta)));
+    return ws.filter((w) => Math.abs(w.delta) === top).map((w) => w.label.replace(/^Week /, ''));
+  };
+
   const peek = run('weekPeek', { stub: true });
   ok('the hover-a-week scenario boots', !peek.boot, peek.boot);
 
@@ -4298,10 +4492,22 @@ if (!live.boot) {
       sendIds, receiveIds,
     };
 
-    // ---- nothing is open until something asks for it ----------------------
-    ok('with no week hovered the panel is a prompt, not a table',
-      peek.shut && peek.shut.empty && !peek.shut.present, JSON.stringify(peek.shut));
-    eq(peek.shut.expanded.length, 0, 'and no week claims to be expanded');
+    // ---- it OPENS on the week the deal moves most (Phase 5, V17) ----------
+    //
+    // REPLACED, not relaxed: this used to assert a prompt and no table, which
+    // is the blank half-card the plan asked to be rid of. The week is
+    // re-derived from the week table's own printed differences — the largest
+    // either way; a printed tie (one decimal) accepts either week.
+    const swing = swingOf(peek.deal.weeks);
+    ok('with no week picked the panel opens on the biggest-swing week, as a table',
+      peek.shut && peek.shut.present && !peek.shut.empty &&
+      swing.some((w) => peek.shut.title === `Week ${w}, slot by slot — Your lineup`),
+      JSON.stringify({ title: peek.shut && peek.shut.title, swing }));
+    ok('and says why it is that week', /moves most/.test(peek.shut.lead), peek.shut.lead);
+    ok('and the week table marks that week as the open one',
+      peek.shut.expanded.length === 1 && swing.includes(peek.shut.expanded[0]),
+      JSON.stringify(peek.shut.expanded));
+    eq(peek.hovered.lead, '', 'a week picked by hand drops the "moves most" line');
 
     // ---- three ways in, and they are three different claims ---------------
     //
@@ -4315,8 +4521,12 @@ if (!live.boot) {
     eq(peek.hovered.peeking.join(','), '7', 'and lights that row');
 
     // ---- Escape closes the breakdown, then the pop-up ---------------------
-    ok('Escape closes the breakdown first', peek.afterEscape.breakdown.empty &&
-      peek.afterEscape.breakdown.expanded.length === 0,
+    // Since V17 "closed" draws the opening week rather than a prompt, so the
+    // first Escape puts the panel back where the pop-up opened it.
+    ok('Escape drops the picked week first, back to the week it opened on',
+      /moves most/.test(peek.afterEscape.breakdown.lead) &&
+      peek.afterEscape.breakdown.expanded.length === 1 &&
+      swing.includes(peek.afterEscape.breakdown.expanded[0]),
       JSON.stringify(peek.afterEscape.breakdown.expanded));
     ok('and leaves the pop-up open — the frame is not shut out from under it',
       peek.afterEscape.dealStillOpen);
@@ -4473,9 +4683,39 @@ if (!live.boot) {
     ok('a mouse click on another offer still opens that offer',
       peek.afterOtherClick.title.includes(peek.afterOtherClick.partner),
       `${peek.afterOtherClick.title} for ${peek.afterOtherClick.partner}`);
-    ok('and the new pop-up opens with no week picked, not the last one',
-      peek.afterOtherClick.breakdown && peek.afterOtherClick.breakdown.empty,
-      JSON.stringify(peek.afterOtherClick.breakdown && peek.afterOtherClick.breakdown.title));
+    // Re-aimed with V17: not "no week", but ITS OWN opening week — never the
+    // week last picked on the other deal.
+    const otherSwing = swingOf(peek.afterOtherClick.weeks);
+    ok('and the new pop-up opens on its own biggest-swing week, not the last one picked',
+      !!peek.afterOtherClick.breakdown && /moves most/.test(peek.afterOtherClick.breakdown.lead) &&
+      otherSwing.some((w) => peek.afterOtherClick.breakdown.title.startsWith(`Week ${w},`)),
+      JSON.stringify({ title: peek.afterOtherClick.breakdown && peek.afterOtherClick.breakdown.title, otherSwing }));
+    // On a laptop the panel stays in its side column (V12 is below 900px only).
+    ok('on a laptop the week detail stays in the side column',
+      peek.hovered.inSideColumn && peek.hovered.afterRow === null,
+      JSON.stringify({ side: peek.hovered.inSideColumn, after: peek.hovered.afterRow }));
+  }
+
+  // ---- the week peek on a phone: under the row that was tapped (V12) --------
+  const narrow = run('weekPeekNarrow', { stub: true });
+  ok('the narrow week-peek scenario boots', !narrow.boot, narrow.boot);
+  if (!narrow.boot) {
+    ok('no console errors on the narrow pop-up', narrow.errors.length === 0,
+      narrow.errors.slice(0, 2).join(' | '));
+    ok('the Cy offer was opened on the narrow window', narrow.found && narrow.deal.present);
+    const nSwing = swingOf(narrow.deal.weeks);
+    ok('below 900px the opening week’s detail sits in a row straight after that week',
+      nSwing.includes(narrow.opened.afterRow) && !narrow.opened.inSideColumn,
+      JSON.stringify({ after: narrow.opened.afterRow, side: narrow.opened.inSideColumn, nSwing }));
+    ok('a tap on week 9 puts the detail straight after week 9',
+      narrow.tapped.afterRow === '9' && narrow.tapped.title.startsWith('Week 9,'),
+      JSON.stringify({ after: narrow.tapped.afterRow, title: narrow.tapped.title }));
+    ok('and a tap on week 12 moves it after week 12',
+      narrow.retapped.afterRow === '12' && narrow.retapped.title.startsWith('Week 12,'),
+      JSON.stringify({ after: narrow.retapped.afterRow, title: narrow.retapped.title }));
+    eq(narrow.retapped.sideColumnKids, 0, 'and the empty side column is left with nothing in it');
+    eq(narrow.weeksAfter && narrow.weeksAfter.weeks.length, narrow.deal.weeks && narrow.deal.weeks.weeks.length,
+      'the week table still reads as the same weeks with the detail inside it');
   }
 }
 
@@ -4579,6 +4819,7 @@ if (!live.boot) {
 
   ok('the box starts empty and says so',
     /No custom trades saved yet/.test(cu.startsEmpty), cu.startsEmpty);
+  eq(cu.tickInstructions, 1, '"Tick who moves on each side" is printed once in the panel, not twice');
   eq(cu.wrapHiddenAtFirst, true, 'with no table until there is something in it');
   eq(cu.saveDisabledAtFirst, true, 'and nothing to save');
 
@@ -4879,6 +5120,17 @@ if (!live.boot) {
     JSON.stringify((cu.inline.weeks && cu.inline.weeks.weeks.slice(0, 3)) || []));
   ok('and per week comes first with the total under it, the same as everywhere else',
     !!(cu.inline.weeks && cu.inline.weeks.perFirst), 'per-week row must lead the totals');
+  // V17, "same for #cuInline": before any week is hovered the slot-by-slot
+  // panel already shows the week this deal moves most, not a prompt.
+  {
+    const ws = (cu.inline.weeks && cu.inline.weeks.weeks) || [];
+    const top = Math.max(...ws.map((w) => Math.abs(w.delta)));
+    const want = ws.filter((w) => Math.abs(w.delta) === top).map((w) => w.label.replace(/^Week /, ''));
+    ok('the builder’s breakdown opens on the biggest-swing week before anything is hovered',
+      !!cu.inlineOpening && cu.inlineOpening.table && /moves most/.test(cu.inlineOpening.lead) &&
+      want.some((w) => cu.inlineOpening.title.startsWith(`Week ${w},`)),
+      JSON.stringify({ opening: cu.inlineOpening, want }));
+  }
   // THE SLOT-BY-SLOT PANEL IS THE POP-UP'S OWN, reached from inside the
   // builder — one renderer, not a second copy.
   ok('hovering a week in it opens that week slot by slot, in place',
