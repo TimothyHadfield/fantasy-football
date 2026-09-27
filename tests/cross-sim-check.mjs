@@ -84,9 +84,12 @@ const CHILDREN = {
     await waitFor(() => /simulated seasons/.test(text(document.getElementById('simStatus'))), 30000);
     await new Promise((r) => setTimeout(r, 50));
     const title = {};
+    // By header, not position: the Record column (2026-09-27) sits before it.
+    const iTitle = [...document.querySelectorAll('#summaryTable thead th')]
+      .map((th) => text(th)).indexOf('Title %');
     for (const tr of document.querySelectorAll('#summaryTable tbody tr')) {
       const td = [...tr.children];
-      title[text(td[0])] = Number(td[2].getAttribute('data-v'));
+      title[text(td[0])] = Number(td[iTitle].getAttribute('data-v'));
     }
     const stub = await import('./cap-stub-season.mjs');
     return {
