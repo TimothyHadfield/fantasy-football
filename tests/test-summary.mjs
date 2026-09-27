@@ -646,7 +646,7 @@ const sim8 = expectedSim(THROUGH);
 /**
  * Each manager's win–loss record over weeks 1..N, counted straight off a demo
  * season's scores — the games the simulation banks — and printed the way the
- * page prints it: "4W/2L", with "/1T" only for a manager who has a tie.
+ * page prints it: "4-2", with a third number ("4-2-1") only for a manager who has a tie.
  */
 function expectedRecords(through, league = demo) {
   const rec = new Map(league.teams.map((t) => [t.id, { w: 0, l: 0, t: 0 }]));
@@ -659,7 +659,7 @@ function expectedRecords(through, league = demo) {
   }
   return new Map(league.teams.map((t) => {
     const r = rec.get(t.id);
-    return [t.name, { ...r, text: `${r.w}W/${r.l}L${r.t ? `/${r.t}T` : ''}`, v: r.w + r.t / 2 }];
+    return [t.name, { ...r, text: `${r.w}-${r.l}${r.t ? `-${r.t}` : ''}`, v: r.w + r.t / 2 }];
   }));
 }
 const rec8 = expectedRecords(THROUGH);
@@ -1152,17 +1152,17 @@ if (!drawn.boot) {
   }
   // FITS THE CARD: no column's text may run into its neighbour. The recording
   // context measures at 0.55 em per character, a generous stand-in for a real
-  // face, so the widest record ("13W/0L/1T" is nine characters) is checked
+  // face, so the widest record ("13-0-1" is six characters) is checked
   // against the gap before the LUCK column at the rows' own 22px.
   {
     // The card is repainted on every render, so only the LAST painting is read.
-    const rec = drawn.draws.filter((t) => /^\d+W\/\d+L/.test(t.s)).slice(-demo.teams.length);
+    const rec = drawn.draws.filter((t) => /^\d+-\d+(-\d+)?$/.test(t.s)).slice(-demo.teams.length);
     const luck = drawn.draws.filter((t) => t.s === 'LUCK')[0];
     const nameMaxRight = Math.max(...drawn.draws
       .filter((t) => demo.teams.some((m) => m.name === t.s)).map((t) => t.x + t.s.length * 22 * 0.55));
     ok('records are right-aligned on their own edge', rec.length === demo.teams.length &&
       rec.every((t) => t.align === 'right' && t.x === rec[0].x), JSON.stringify(rec.slice(0, 2)));
-    const widest = 9 * 22 * 0.55;
+    const widest = 6 * 22 * 0.55;
     ok('the widest possible record clears the names and the LUCK column',
       rec.length && luck && rec[0].x - widest > nameMaxRight &&
       rec[0].x + 8 < luck.x - '+99.9'.length * 22 * 0.55,
@@ -1242,14 +1242,14 @@ if (!tie.boot) {
   ok('the fixture really has exactly one tied game', tl.games.filter((g) => g.homeActual === g.awayActual).length === 1);
   for (const n of tied) {
     const r = tie.rows.find((x) => x.name === n);
-    ok(`${n}: a tie prints as T on the table`, r && /\/1T$/.test(r.recordText) && r.recordText === want.get(n).text,
+    ok(`${n}: a tie prints as a third number on the table`, r && /^\d+-\d+-1$/.test(r.recordText) && r.recordText === want.get(n).text,
       `${r && r.recordText} want ${want.get(n).text}`);
     ok(`${n}: and counts half a win in the sort value`, r && r.record === want.get(n).v, `${r && r.record}`);
-    ok(`${n}: the text copy prints the T`, textRow(tie.cardText, n).includes(want.get(n).text), textRow(tie.cardText, n));
-    ok(`${n}: the image paints the T`, tie.painted.includes(want.get(n).text), want.get(n).text);
+    ok(`${n}: the text copy prints the tie`, textRow(tie.cardText, n).includes(want.get(n).text), textRow(tie.cardText, n));
+    ok(`${n}: the image paints the tie`, tie.painted.includes(want.get(n).text), want.get(n).text);
   }
-  ok('nobody without a tie gets a T',
-    tie.rows.filter((r) => !tied.includes(r.name)).every((r) => r.recordText && !/T/.test(r.recordText)),
+  ok('nobody without a tie gets a third number',
+    tie.rows.filter((r) => !tied.includes(r.name)).every((r) => /^\d+-\d+$/.test(r.recordText || '')),
     JSON.stringify(tie.rows.map((r) => r.recordText)));
 }
 

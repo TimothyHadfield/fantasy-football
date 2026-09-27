@@ -614,8 +614,9 @@ function recordsOf(data) {
   return rec;
 }
 
-/** "4W/2L", and "/1T" only for a manager who has a tie. */
-const recordText = (r) => (r ? `${r.w}W/${r.l}L${r.t ? `/${r.t}T` : ''}` : '—');
+/** "4-2", and a third number ("4-2-1") only for a manager who has a tie.
+ *  Tim, 2026-09-27, on 4W/2L: "a little messy" — picked 7-1, ESPN's own form. */
+const recordText = (r) => (r ? `${r.w}-${r.l}${r.t ? `-${r.t}` : ''}` : '—');
 
 /**
  * Everything simulateSeason needs, plus a key that changes exactly when the
@@ -966,7 +967,7 @@ function renderNote(view, sim, inputs) {
     }
     parts.push(
       `<strong>Record</strong> is wins and losses in weeks ${L.weeks[0]}–${view.through} ` +
-      `(T for a tie).`
+      `(a third number counts ties).`
     );
     parts.push(
       `<strong>LUCK</strong> is your spreadsheet’s own column — league average score ` +
@@ -1306,10 +1307,10 @@ function renderCard(view, rows, sim, inputs) {
   const colLuck = colTitle - 112;
   // The record sits right after the name, right-aligned on its own edge like
   // every other figure. 106px clears LUCK's widest value ("−26.0") with room;
-  // the name is clipped 130px short of the edge, which the widest record
-  // ("13W/0L/1T" at 22px) needs.
+  // the name is clipped 90px short of the edge, which the widest record
+  // ("13-0-1" at 22px) needs.
   const colRecord = colLuck - 106;
-  const nameW = colRecord - pad - 130;
+  const nameW = colRecord - pad - 90;
 
   let y = top;
   ctx.font = font(17, '700');

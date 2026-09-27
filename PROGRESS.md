@@ -66,7 +66,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 
 **Trade rework Phase 5 built 2026-09-27** (Tim: "go with phase 5."): pop-up packages one man per line (V3); ▲/▼ beside the per-week number (V4); "Tick who moves" once, in `--dim` (V5); shape filter 3+2 on a phone (V7); below 900 px the week peek opens in a row under the tapped week and scrolls to it (V12); the deal pop-up and custom breakdown open on the biggest-swing week (V17); depth map's visible key says it is not the ±1 SD scale (V18). **V20 rejected on measurement** — the week picker still changes results under "Every remaining week" (week 1→4 moved every finder row, 5.9% → 1.6%).
 
-**Summary Record column 2026-09-27** (Tim: "shows each players win/loss ratio aswell (4W/2L)"): `7W/1L` (`/1T` only with a tie) after Member in the table, the image card and the text copy; counts the games the sim banks, so it follows the through-week picker. Tie fixture: `tests/sum-tie-demo.mjs`.
+**Summary Record column 2026-09-27** (Tim: "shows each players win/loss ratio aswell (4W/2L)"): `7-1` (a third number, `7-1-1`, only with a tie — Tim picked this over 7W/1L, "a little messy", same day) after Member in the table, the image card and the text copy; counts the games the sim banks, so it follows the through-week picker. Tie fixture: `tests/sum-tie-demo.mjs`.
 
 **Phases 4 and 6 of `docs/trade-rework-plan.md` are NOT built** — 4 density (the phone page is 6,091 px, an empty custom builder taking 37%), 6 closed-form week weights. Phase 4 needs Tim's answers to plan questions **d** (which columns survive on a phone) and **f** (the finder panel's wording). Behind the plan: `docs/trade-review-calc.md`, `docs/trade-review-view.md`. The yes-curve rebuild is parked.
 
@@ -168,7 +168,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - Stats still floors weeks already played (floor.js says never) — found by the §1.4 builder, not fixed.
 - Analysis `A week` picks from the manager's set starters, Proj avg from the best lineup — a benched better man still makes them differ.
 - Phase 5 on a real iPhone: sticky header vs first-row tap checked only in headless WebKit; V12's scroll-to-row not seen on a device. The "Difference column clipped at 390 px" item was not separately worked — measure-layout reports no clip and the 393px screenshot shows it whole.
-- Summary Record on live ESPN data (demo only). A double-digit record with a tie (10W/3L/1T) overflows the phone table by 9 px (measured).
+- Summary Record on live ESPN data (demo only). (The 9 px phone overflow measured for "10W/3L/1T" should be gone with the shorter 7-1 form — not re-measured with a tie.)
 - Placeholder wording, Tim's to change: Record tooltip + note line; V17 lead line; V18 depth key sentence.
 - Older archive sections were indexed by heading for this file, not re-extracted line by line (2026-09-21 checkpoint).
 
