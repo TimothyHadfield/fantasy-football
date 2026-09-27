@@ -582,9 +582,40 @@ function buildView() {
     enough: weeksPlayed >= MIN_WEEKS,
     luckById,
     luckMarginById,
+    recordById: recordsOf(L.data),
     teams: L.teams,
   };
 }
+
+/**
+ * Each manager's win–loss record over the games this page treats as decided —
+ * Tim, 2026-09-27: "shows each players win/loss ratio aswell (4W/2L)".
+ *
+ * THE SAME GAMES THE SIMULATION BANKS, by the same rule as
+ * `capture.simulationInputs`: not still to play out (`isRemaining`, so it
+ * follows the week picker), a real result (`winnerOf`, so a game in progress
+ * counts for nobody), byes skipped. So wins + ties/2 here is exactly the
+ * banked win total the title odds start from.
+ *
+ * @returns {Map<*, {w:number, l:number, t:number}>}
+ */
+function recordsOf(data) {
+  const rec = new Map(data.teams.map((t) => [t.id, { w: 0, l: 0, t: 0 }]));
+  for (const g of data.games) {
+    if (g.homeId == null || g.awayId == null) continue;
+    const h = rec.get(g.homeId);
+    const a = rec.get(g.awayId);
+    if (!h || !a || isRemaining(g)) continue;
+    const winner = capture.winnerOf(g);
+    if (winner === 'home') { h.w++; a.l++; }
+    else if (winner === 'away') { a.w++; h.l++; }
+    else if (winner === 'tie') { h.t++; a.t++; }
+  }
+  return rec;
+}
+
+/** "4W/2L", and "/1T" only for a manager who has a tie. */
+const recordText = (r) => (r ? `${r.w}W/${r.l}L${r.t ? `/${r.t}T` : ''}` : '—');
 
 /**
  * Everything simulateSeason needs, plus a key that changes exactly when the
@@ -722,6 +753,7 @@ function buildRows(view, sim) {
       id: t.id,
       name: t.name,
       teamName: t.teamName || null,
+      record: view.recordById.get(t.id) || null,
       // Every number is null-or-real. `enough` is the early-season refusal:
       // below it there is no number to show, which is a different thing from a
       // number that happens to be zero.
@@ -800,6 +832,7 @@ function renderTable(view, rows, sim, inputs) {
   tbody.innerHTML = rows.map((r) => `
     <tr>
       <td class="name"${r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : ''}>${esc(r.name)}</td>
+      <td class="num" data-v="${r.record ? r.record.w + r.record.t / 2 : ''}">${recordText(r.record)}</td>
       ${shaded(r.luck, heatLuck, 'the rest of the league’s luck',
     `${view.enough ? signed(r.luck) : dash}${
       view.enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`)}
@@ -931,6 +964,10 @@ function renderNote(view, sim, inputs) {
         `still to play.`
       );
     }
+    parts.push(
+      `<strong>Record</strong> is wins and losses in weeks ${L.weeks[0]}–${view.through} ` +
+      `(T for a tie).`
+    );
     parts.push(
       `<strong>LUCK</strong> is your spreadsheet’s own column — league average score ` +
       `minus (points to win minus close-game luck) — computed over weeks ` +
@@ -1106,14 +1143,16 @@ function buildCardText(view, rows, sim, inputs) {
     : '';
 
   const w = Math.max(6, ...rows.map((r) => String(r.name).length));
+  const rw = Math.max(6, ...rows.map((r) => recordText(r.record).length));
   const cell = (r) => [
     String(r.name).padEnd(w),
+    recordText(r.record).padStart(rw),
     (r.luck === null ? '—' : `${r.luck > 0 ? '+' : ''}${r.luck.toFixed(1)}`).padStart(6),
     (pct(r.title) ?? '—').padStart(8),
     (pct(r.last) ?? '—').padStart(8),
   ].join('  ');
 
-  const header = ['Member'.padEnd(w), 'LUCK'.padStart(6), 'Title %'.padStart(8), 'Loser %'.padStart(8)].join('  ');
+  const header = ['Member'.padEnd(w), 'Record'.padStart(rw), 'LUCK'.padStart(6), 'Title %'.padStart(8), 'Loser %'.padStart(8)].join('  ');
 
   return [
     head + `${L.name} — week ${view.through}`,
@@ -1265,7 +1304,12 @@ function renderCard(view, rows, sim, inputs) {
   const colLast = CARD_W - pad;
   const colTitle = colLast - 112;
   const colLuck = colTitle - 112;
-  const nameW = colLuck - pad - 90;
+  // The record sits right after the name, right-aligned on its own edge like
+  // every other figure. 106px clears LUCK's widest value ("−26.0") with room;
+  // the name is clipped 130px short of the edge, which the widest record
+  // ("13W/0L/1T" at 22px) needs.
+  const colRecord = colLuck - 106;
+  const nameW = colRecord - pad - 130;
 
   let y = top;
   ctx.font = font(17, '700');
@@ -1273,6 +1317,7 @@ function renderCard(view, rows, sim, inputs) {
   ctx.textAlign = 'left';
   ctx.fillText('MEMBER', pad, y);
   ctx.textAlign = 'right';
+  ctx.fillText('RECORD', colRecord, y);
   ctx.fillText('LUCK', colLuck, y);
   ctx.fillText('TITLE %', colTitle, y);
   ctx.fillText('LOSER %', colLast, y);
@@ -1303,6 +1348,8 @@ function renderCard(view, rows, sim, inputs) {
 
     ctx.textAlign = 'right';
     ctx.font = font(22);
+    ctx.fillStyle = r.record ? INK.text : INK.dim;
+    ctx.fillText(recordText(r.record), colRecord, baseline);
     if (r.luck === null) { ctx.fillStyle = INK.dim; ctx.fillText('—', colLuck, baseline); }
     else {
       ctx.fillStyle = r.luck > 0 ? INK.accent : r.luck < 0 ? INK.err : INK.dim;

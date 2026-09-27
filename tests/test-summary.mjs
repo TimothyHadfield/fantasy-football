@@ -267,23 +267,47 @@ const heatSide = (el) => {
 /** Read the chart off the page. `data-v` carries the raw value behind a cell. */
 function readTable(document) {
   const table = document.getElementById('summaryTable');
+  // Columns found BY HEADER, so a column added or moved cannot silently shift
+  // every other read by one. A missing column reads as -1 and its cells as null.
+  const heads = [...table.querySelectorAll('thead th')].map((th) => text(th));
+  const [iName, iRec, iLuck, iTitle, iLast] =
+    ['Member', 'Record', 'LUCK', 'Title %', 'Loser %'].map((h) => heads.indexOf(h));
   return [...table.querySelectorAll('tbody tr')].map((tr) => {
     const td = [...tr.children];
     const v = (i) => {
+      if (i < 0 || !td[i]) return null;
       const raw = td[i].getAttribute('data-v');
       return raw === '' || raw === null ? null : Number(raw);
     };
+    const t = (i) => (i >= 0 && td[i] ? text(td[i]) : null);
     return {
-      name: text(td[0]),
-      luckText: stripMark(text(td[1])), luck: v(1),
-      titleText: stripMark(text(td[2])), title: v(2),
-      lastText: stripMark(text(td[3])), last: v(3),
+      name: t(iName),
+      // The record cell read TWICE (Traps: textContent reads sr-only too): the
+      // visible text alone, and whatever sr-only text it carries, separately.
+      recordText: iRec >= 0 && td[iRec] ? visibleText(td[iRec]) : null,
+      recordSr: iRec >= 0 && td[iRec] ? srText(td[iRec]) : null,
+      record: v(iRec),
+      recordHeat: iRec >= 0 && td[iRec] ? heatSide(td[iRec]) : null,
+      luckText: stripMark(t(iLuck)), luck: v(iLuck),
+      titleText: stripMark(t(iTitle)), title: v(iTitle),
+      lastText: stripMark(t(iLast)), last: v(iLast),
       // Which side of the scale each of the three numeric cells was painted,
       // and the words the cell carries for a phone tap.
-      heat: { luck: heatSide(td[1]), title: heatSide(td[2]), last: heatSide(td[3]) },
-      titles: [1, 2, 3].map((i) => td[i].getAttribute('title') || ''),
+      heat: { luck: heatSide(td[iLuck]), title: heatSide(td[iTitle]), last: heatSide(td[iLast]) },
+      titles: [iLuck, iTitle, iLast].map((i) => (td[i] && td[i].getAttribute('title')) || ''),
     };
   });
+}
+
+/** An element's text with every `.sr-only` part taken out — what is DRAWN. */
+function visibleText(el) {
+  const c = el.cloneNode(true);
+  for (const s of c.querySelectorAll('.sr-only')) s.remove();
+  return text(c);
+}
+/** Only the `.sr-only` parts of an element — what a screen reader adds. */
+function srText(el) {
+  return [...el.querySelectorAll('.sr-only')].map((s) => text(s)).join(' ');
 }
 
 /**
@@ -481,6 +505,7 @@ const SCENARIOS = {
     return {
       errors, page, shareStatus, downloadStatus,
       painted: drawn.text.map((t) => t.s),
+      draws: drawn.text.map((t) => ({ s: t.s, x: t.x, align: t.align })),
       fontSizes: [...new Set(drawn.fonts.map((f) => Number((/(\d+(?:\.\d+)?)px/.exec(f) || [0, 0])[1])))],
       transforms: drawn.transforms,
       bands: drawn.rects.slice(0, 2),
@@ -515,6 +540,19 @@ const SCENARIOS = {
     }
     out.page = readPage(document);
     return out;
+  },
+
+  /**
+   * A TIED GAME, which the demo season never has (its 65 scores are all
+   * decided). `sum-tie-loader.mjs` swaps the page's demo.js for one whose
+   * week-3 opener ends level, so the record must print a T for both sides —
+   * on the table, the text copy and the image alike.
+   */
+  async tie() {
+    const { register } = await import('node:module');
+    register('./sum-tie-loader.mjs', import.meta.url);
+    const { document, errors, drawn } = await boot({ canvas: true });
+    return { errors, painted: drawn.text.map((t) => t.s), ...readPage(document) };
   },
 };
 
@@ -605,6 +643,31 @@ function expectedSim(through) {
 const luck8 = expectedLuck(THROUGH);
 const sim8 = expectedSim(THROUGH);
 
+/**
+ * Each manager's win–loss record over weeks 1..N, counted straight off a demo
+ * season's scores — the games the simulation banks — and printed the way the
+ * page prints it: "4W/2L", with "/1T" only for a manager who has a tie.
+ */
+function expectedRecords(through, league = demo) {
+  const rec = new Map(league.teams.map((t) => [t.id, { w: 0, l: 0, t: 0 }]));
+  for (const g of league.games.filter((x) => x.week <= through)) {
+    const h = rec.get(g.homeId);
+    const a = rec.get(g.awayId);
+    if (g.homeActual > g.awayActual) { h.w++; a.l++; }
+    else if (g.awayActual > g.homeActual) { a.w++; h.l++; }
+    else { h.t++; a.t++; }
+  }
+  return new Map(league.teams.map((t) => {
+    const r = rec.get(t.id);
+    return [t.name, { ...r, text: `${r.w}W/${r.l}L${r.t ? `/${r.t}T` : ''}`, v: r.w + r.t / 2 }];
+  }));
+}
+const rec8 = expectedRecords(THROUGH);
+
+/** The plain-text copy's row for one manager: the line that starts with the name. */
+const textRow = (card, name) =>
+  card.split('\n').find((l) => new RegExp(`^${name}\\s`).test(l)) || '';
+
 // ------------------------------------------------------------------ assertions
 
 let pass = 0;
@@ -656,8 +719,26 @@ if (!fresh.boot) {
   ok('the members are the PEOPLE, not the ESPN team names',
     fresh.rows.every((r) => demo.teams.some((t) => t.name === r.name)),
     fresh.rows.map((r) => r.name).join(','));
-  eq(fresh.headers.join(' | '), 'Member | LUCK | Title % | Loser %',
-    'four columns, exactly the four Tim asked for');
+  eq(fresh.headers.join(' | '), 'Member | Record | LUCK | Title % | Loser %',
+    'the four columns Tim asked for, plus his win–loss Record right after Member');
+
+  // ---- THE RECORD (Tim, 2026-09-27: "each players win/loss ratio aswell
+  // (4W/2L)"), re-derived from the demo's own scores over weeks 1..8 --------
+  for (const r of fresh.rows) {
+    const want = rec8.get(r.name);
+    eq(r.recordText, want.text, `${r.name}: the Record column shows ${want.text} through week ${THROUGH}`);
+    eq(r.record, want.v, `${r.name}: and sorts on wins (a tie half), via data-v`);
+    eq(r.recordSr, '', `${r.name}: the record cell hides no sr-only words`);
+    eq(r.recordHeat, null, `${r.name}: the record is a fact, so it is not heat-tinted`);
+    ok(`${r.name}: the text copy carries the record on the manager's own line`,
+      textRow(fresh.cardText, r.name).includes(want.text), textRow(fresh.cardText, r.name));
+  }
+  ok('every record covers the eight weeks decided (no bye in the demo)',
+    fresh.rows.every((r) => { const x = rec8.get(r.name); return x.w + x.l + x.t === THROUGH; }));
+  ok('the text copy has a Record heading', /Member\s+Record\s+LUCK/.test(fresh.cardText),
+    fresh.cardText.split('\n').slice(0, 6).join(' / '));
+  ok('the note says what Record is', /Record is wins and losses/.test(fresh.note),
+    fresh.note.slice(0, 300));
 
   // ---- LUCK, re-derived ---------------------------------------------------
   ok('every row carries a LUCK value', fresh.rows.every((r) => r.luck !== null),
@@ -910,6 +991,21 @@ if (!early.boot) {
   const sum4 = early.four.rows.reduce((a, r) => a + r.title, 0);
   near(sum4 * 100, 100, 1e-6, 'and they still sum to 100 at a different cut-off');
 
+  // THE RECORD FOLLOWS THE PICKER: week 1, 2 and 4 each count only their own
+  // decided weeks, and at week 4 at least one record differs from week 8's.
+  for (const [wk, got] of [[1, early.one], [2, early.two], [4, early.four]]) {
+    const want = expectedRecords(wk);
+    ok(`week ${wk}: every record counts weeks 1–${wk} only`,
+      got.rows.every((r) => r.recordText === want.get(r.name).text),
+      JSON.stringify(got.rows.map((r) => [r.name, r.recordText, want.get(r.name).text])));
+    ok(`week ${wk}: and the text copy agrees`,
+      got.rows.every((r) => textRow(got.cardText, r.name).includes(want.get(r.name).text)),
+      got.cardText.split('\n').slice(0, 8).join(' / '));
+  }
+  ok('the record really moved with the picker (week 4 is not week 8)',
+    early.four.rows.every((r) => r.recordText && r.recordText !== rec8.get(r.name).text),
+    JSON.stringify(early.four.rows.map((r) => r.recordText)));
+
   // Moving the cut-off must actually move the answers. If the page cached the
   // week-8 run against a key that ignores the week, this is what would notice.
   const luck4 = expectedLuck(4);
@@ -1047,9 +1143,31 @@ if (!drawn.boot) {
   ok('the league name is painted', drawn.painted.includes(demo.name), painted.slice(0, 200));
   ok('the week is painted', drawn.painted.some((s) => new RegExp(`Week ${THROUGH}\\b`).test(s)),
     painted.slice(0, 300));
-  ok('all four column headings are painted',
-    ['MEMBER', 'LUCK', 'TITLE %', 'LOSER %'].every((h) => drawn.painted.includes(h)),
+  ok('all five column headings are painted',
+    ['MEMBER', 'RECORD', 'LUCK', 'TITLE %', 'LOSER %'].every((h) => drawn.painted.includes(h)),
     painted.slice(0, 300));
+  for (const r of drawn.page.rows) {
+    ok(`${r.name}: the record reached the canvas`,
+      r.recordText !== null && drawn.painted.includes(r.recordText), r.recordText);
+  }
+  // FITS THE CARD: no column's text may run into its neighbour. The recording
+  // context measures at 0.55 em per character, a generous stand-in for a real
+  // face, so the widest record ("13W/0L/1T" is nine characters) is checked
+  // against the gap before the LUCK column at the rows' own 22px.
+  {
+    // The card is repainted on every render, so only the LAST painting is read.
+    const rec = drawn.draws.filter((t) => /^\d+W\/\d+L/.test(t.s)).slice(-demo.teams.length);
+    const luck = drawn.draws.filter((t) => t.s === 'LUCK')[0];
+    const nameMaxRight = Math.max(...drawn.draws
+      .filter((t) => demo.teams.some((m) => m.name === t.s)).map((t) => t.x + t.s.length * 22 * 0.55));
+    ok('records are right-aligned on their own edge', rec.length === demo.teams.length &&
+      rec.every((t) => t.align === 'right' && t.x === rec[0].x), JSON.stringify(rec.slice(0, 2)));
+    const widest = 9 * 22 * 0.55;
+    ok('the widest possible record clears the names and the LUCK column',
+      rec.length && luck && rec[0].x - widest > nameMaxRight &&
+      rec[0].x + 8 < luck.x - '+99.9'.length * 22 * 0.55,
+      JSON.stringify({ rec: rec[0]?.x, widest, nameMaxRight, luck: luck?.x }));
+  }
 
   for (const t of demo.teams) {
     ok(`${t.name} is painted onto the image`, drawn.painted.includes(t.name), painted.slice(0, 400));
@@ -1107,6 +1225,32 @@ if (!drawn.boot) {
     JSON.stringify(drawn.clicked));
   ok('and says where it went', /Saved demo-league-week-8\.png/.test(drawn.downloadStatus),
     drawn.downloadStatus);
+}
+
+// ---- a tied game prints a T ------------------------------------------------
+
+const tie = run('tie');
+ok('the tie scenario boots', !tie.boot, tie.boot);
+if (!tie.boot) {
+  const { generateDemoLeague: tieLeague, TIE_WEEK } = await import(moduleUrl('tests/sum-tie-demo.mjs'));
+  const tl = tieLeague();
+  const tg = tl.games.find((g) => g.week === TIE_WEEK);
+  const nameOf = (id) => tl.teams.find((t) => t.id === id).name;
+  const tied = [nameOf(tg.homeId), nameOf(tg.awayId)];
+  const want = expectedRecords(THROUGH, tl);
+  ok('no console errors with a tie in the season', tie.errors.length === 0, tie.errors.slice(0, 2).join(' | '));
+  ok('the fixture really has exactly one tied game', tl.games.filter((g) => g.homeActual === g.awayActual).length === 1);
+  for (const n of tied) {
+    const r = tie.rows.find((x) => x.name === n);
+    ok(`${n}: a tie prints as T on the table`, r && /\/1T$/.test(r.recordText) && r.recordText === want.get(n).text,
+      `${r && r.recordText} want ${want.get(n).text}`);
+    ok(`${n}: and counts half a win in the sort value`, r && r.record === want.get(n).v, `${r && r.record}`);
+    ok(`${n}: the text copy prints the T`, textRow(tie.cardText, n).includes(want.get(n).text), textRow(tie.cardText, n));
+    ok(`${n}: the image paints the T`, tie.painted.includes(want.get(n).text), want.get(n).text);
+  }
+  ok('nobody without a tie gets a T',
+    tie.rows.filter((r) => !tied.includes(r.name)).every((r) => r.recordText && !/T/.test(r.recordText)),
+    JSON.stringify(tie.rows.map((r) => r.recordText)));
 }
 
 // ---- the desktop fallbacks actually fire -----------------------------------
