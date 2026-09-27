@@ -47,16 +47,19 @@
   /* The two package columns carry names, so they get the room and everything
      else is squeezed. A player and his number belong on one line. */
   #tradeTable td.pkg { white-space: normal; min-width: 190px; }
-  .pkg .man { display: block; line-height: 1.55; }
-  .pkg .man + .man { margin-top: 2px; }
-  .pkg .pp {
+  /* `.deal-side` too: the pop-up's You send / You get draw the same `manLine`
+     markup, and scoped to `.pkg` alone they ran together as one line with no
+     spaces ("Rhett HathawayRB14.2/wkRoscoe MarchettiRB7.6/wk"). */
+  .pkg .man, .deal-side .man { display: block; line-height: 1.55; }
+  .pkg .man + .man, .deal-side .man + .man { margin-top: 2px; }
+  .pkg .pp, .deal-side .pp {
     color: var(--dim);
     font-size: 10.5px;
     font-weight: 600;
     letter-spacing: 0.04em;
     margin: 0 4px;
   }
-  .pkg .val { font-variant-numeric: tabular-nums; }
+  .pkg .val, .deal-side .val { font-variant-numeric: tabular-nums; }
 
   /* What the deal actually does to your starting eleven. IN THE POP-UP ONLY —
      it used to sit on every finder row as well and Tim had it removed, because
@@ -252,13 +255,27 @@
   table.weeks tbody tr.peeking td { background: var(--panel-3); }
 
   .wkx { margin-top: 14px; }
-  .wkx-empty, .wkx-noside, .wkx-scope {
+  .wkx-empty, .wkx-noside, .wkx-scope, .wkx-lead {
     color: var(--dim);
     font-size: 11.5px;
     line-height: 1.55;
     margin: 0;
   }
-  .wkx-scope { margin: 6px 0 0; }
+  .wkx-scope, .wkx-lead { margin: 6px 0 0; }
+
+  /* THE WEEK'S DETAIL UNDER THE ROW THAT WAS TAPPED, below 900px (trade plan
+     Phase 5, V12). There is no side to put it on there, and below the whole
+     week table it landed ~1,500px under the thumb that asked for it. So it is
+     moved into a full-width row straight after the open week's row
+     (`placeDealHost` in js/trade-page.js). `width: 0; min-width: 100%` keeps
+     the slot table inside from widening the week table: it contributes no
+     width of its own and then fills the row. */
+  table.weeks tr.wkx-row > td { padding: 0 0 10px; border-bottom: 1px solid var(--line); }
+  table.weeks tr.wkx-row .wkx { width: 0; min-width: 100%; margin-top: 4px; text-align: left; white-space: normal; }
+  /* app.css bleeds a phone `.table-scroll` past the panel's padding; inside a
+     table row that bleed pokes out past the sheet instead. */
+  table.weeks tr.wkx-row .table-scroll { margin-left: 0; margin-right: 0; }
+  .deal-detail:empty { display: none; }
   .wkx-head {
     display: flex;
     flex-wrap: wrap;
@@ -764,7 +781,9 @@
 
   /* Reserved, so ticking a man never moves the table under the pointer. */
   .cu-preview { min-height: 34px; margin: 12px 0 4px; font-size: 13px; line-height: 1.45; }
-  .cu-preview .muted { color: var(--line-2); }
+  /* `--dim`, not `--line-2`: this is the control's only instruction, and
+     `--line-2` is a rule colour (1.69:1 on the panel — AUDIT §4.3). */
+  .cu-preview .muted { color: var(--dim); }
   /* REMOVED 2026-09-19 with the hand-built saved row it styled. It forced
      `display: block` on `.unit` as well as `.sub`, which would now break the
      "/wk" suffix onto its own line in every gain cell of this table — the
@@ -1090,11 +1109,15 @@
     .src-ctl { flex: 1 1 100%; }
     .src-ctl .segmented { width: 100%; }
 
-    /* The shape filter goes two-by-two rather than taking the four-track
-       default. The labels are short enough for four now ("1 for 1", not "You
-       consolidate"), but "Any shape" is not, and a track narrow enough to wrap
-       it puts the three counts on lines of different heights. */
-    #kindToggle { grid-template-columns: repeat(2, 1fr); }
+    /* The shape filter is THREE OVER TWO, with no hole. It went two-by-two
+       when it had four buttons; the fifth ("2 for 2") left a 2 x 3 grid with
+       an empty sixth cell, which the grid's --line background painted as a
+       grey block. Six tracks: the first row's three buttons take two each,
+       the second row's two take three each. "Any shape" still gets a third of
+       the row, which is wide enough not to wrap. */
+    #kindToggle { grid-template-columns: repeat(6, 1fr); }
+    #kindToggle button { grid-column: span 2; }
+    #kindToggle button:nth-child(n+4) { grid-column: span 3; }
 
     /* The package columns still need enough room for a name and its number on
        one line, but 190px twice over is most of the screen spent before the
@@ -1363,6 +1386,10 @@
     <div class="empty hidden" id="depthEmpty">No roster data for this week.</div>
     <div class="bars" id="depthBars"></div>
     <div class="spares" id="spareStrip"></div>
+    <!-- The tint's rule, in view (rule 16: one sentence). It borrows the red
+         and green of the ±1 SD scale on the panels above but is NOT that scale,
+         so without this a reader would take it for one. -->
+    <p class="panel-note heat-key" id="depthKey"></p>
     <p class="panel-note warn-line" id="depthWarn" hidden></p>
     <details class="explain">
       <summary>How the depth numbers are worked out</summary>
@@ -1541,7 +1568,9 @@
       </tr></thead>
       <tbody id="cuRows"></tbody>
     </table></div>
-    <div class="empty" id="cuEmpty">No custom trades saved yet. Tick who moves on each side.</div>
+    <!-- The instruction is printed ONCE, in `#cuPreview` above. It used to be
+         repeated here too, ~120px below its first copy. -->
+    <div class="empty" id="cuEmpty">No custom trades saved yet.</div>
     <p class="panel-note heat-key" id="cuTableKey"></p>
 
     <p class="panel-note warn-line" id="cuWarn" hidden></p>
