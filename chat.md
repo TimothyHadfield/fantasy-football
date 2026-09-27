@@ -49,3 +49,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Found:** the checkpoint's full run failed one new assertion — `searchOnce` read the page at "2 of 40" because `settleGoal` accepts the typical week's "not ranked by your…" line. Test bug, not page bug. Given its own wait; re-verified old page 2 searches / new 1 with the wait finishing (~10 s); tr-test 670/670.
 - **Verified how:** full suite 42/43 (1,114 s) then tr-test alone green; CI green on c6c7fdd; live at c6c7fdd.
 - **Open:** unchanged — nothing authorized; Phase 4 needs questions d and f.
+
+## 2026-09-27
+- **Asked:** "go with phase 5." and "change the summary so that it shows each players win/loss ratio aswell (4W/2L) or something like that." Read "players" as managers.
+- **Built (two builders, worktrees):** Summary Record column (table after Member, image card, text copy; follows the through-week picker; /1T only with a tie) — merged 62563a0, live. Trade Phase 5: V3 pop-up packages, V4 mark beside number, V5 hint once in --dim, V7 shape filter 3+2, V12 week peek inline under the tapped week below 900 px, V17 detail opens on the biggest-swing week, V18 depth-map key sentence. **V20 not built** — the week picker is NOT inert under "Every remaining week" (week 1→4 changed every finder row), so the review doc was wrong.
+- **Verified how:** summary 319/319 (70 new checks failed on old code), cross-sim 31/31; tr-test 692/0 (19 new checks failed on old code), other trade suites green; text-audit 8/0; measure-layout clean; phone-view 393px screenshots; sticky header does not eat a first-row tap (WebKit headless click). Full suite + bless: see progress Map.
+- **Open:** Phase 4 needs questions d and f; Phase 6 unbuilt; placeholder wording (Record tooltip/note, V17 lead line, V18 key) is Tim's.

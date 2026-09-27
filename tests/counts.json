@@ -1,6 +1,6 @@
 {
   "_": "Per-suite counts off a green run. run-all.mjs FAILS when one of these falls (AUDIT §3.5); a rise is fine and is recorded by `node run-all.mjs --bless`. Do not hand-edit: re-bless on a green run and say what changed.",
-  "measured": "2026-09-25",
+  "measured": "2026-09-27",
   "suites": {
     "test-forecast.mjs": {
       "assertions": 68
@@ -119,7 +119,7 @@
       "scenarios": 23
     },
     "test-summary.mjs": {
-      "assertions": 235
+      "assertions": 319
     },
     "touch-check.mjs": {
       "assertions": 353,
@@ -140,7 +140,7 @@
       "scenarios": 10
     },
     "tr-test.mjs": {
-      "assertions": 670
+      "assertions": 692
     }
   }
 }
