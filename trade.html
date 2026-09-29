@@ -172,6 +172,25 @@
 
   .searching { color: var(--dim); font-style: italic; }
 
+  /* THE OTHER GOAL, AS A PREVIEW (2026-09-29): the ranked column's figure in the
+     ranked column's type, one step lighter — it ranks nothing. */
+  td.alt-goal-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+  td.alt-goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  /* His lineup in the week(s) he plays you. His plus is your red. */
+  td.opp-proj { font-variant-numeric: tabular-nums; }
+  .alt-inline { color: var(--dim); white-space: nowrap; }
+  .alt-inline b { font-weight: 600; }
+  /* The meeting-week mark in a week table: under the week's button, small. */
+  .vs-note { display: block; font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  /* A COPY OF THE GOAL CONTROL AT THE TOP OF EVERY TRADE PANEL (Tim, 2026-09-29).
+     Beside the heading on a laptop, smaller than the one in Data source; a full-
+     width row above the heading on a phone. */
+  .goal-copy { float: right; margin: 0 0 6px 12px; }
+  .goal-copy button { padding: 4px 10px; font-size: 13px; }
+  @media (max-width: 760px) {
+    .goal-copy { float: none; margin: 0 0 8px; }
+  }
+
   /* ------------------------------------------------ the weekly measure's cost
 
      The page buys ONE week of rosters. Pricing every remaining week needs one
@@ -1221,9 +1240,9 @@
            priced. The `data-goal` values are the stored preference. -->
       <div class="src-ctl">
         <span class="src-label" id="goalLabel">Your goal</span>
-        <div class="segmented" id="goalToggle" role="group" aria-labelledby="goalLabel">
-          <button type="button" data-goal="title" class="on">Win it all</button>
-          <button type="button" data-goal="last">Don&rsquo;t finish last</button>
+        <div class="segmented" id="goalToggle" data-goal-toggle role="group" aria-labelledby="goalLabel">
+          <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
+          <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
         </div>
       </div>
       <div class="src-ctl">
@@ -1316,6 +1335,10 @@
          reads as well above the table as below it. The measured band (0.4 of a
          percentage point, twelve seeds) and the whole argument are behind "How
          the trades are found". -->
+    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
+      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
+      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
+    </div>
     <h2 id="finderTitle">Trades ranked by your title chance</h2>
     <p class="lede">Rows sharing a rank (=) are too close to separate. Tap a row for its weeks.</p>
     <div class="row mb-12">
@@ -1345,12 +1368,14 @@
       <thead><tr>
         <th class="name" data-sort>Manager</th>
         <th data-sort id="thGoal">Title chance</th>
+        <th data-sort id="thAltGoal">Δ last chance</th>
         <th class="left" data-sort>Deal</th>
         <th class="left" data-sort>You send</th>
         <th class="left" data-sort>You get</th>
         <th data-sort id="thLineup">Your lineup</th>
         <th data-sort id="thMyGain">You gain</th>
         <th data-sort id="thTheirGain">He gains</th>
+        <th data-sort id="thOpp">His proj vs you</th>
         <th class="left">ESPN</th>
       </tr></thead>
       <tbody></tbody>
@@ -1364,6 +1389,10 @@
   </section>
 
   <section class="panel" id="comboPanel">
+    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
+      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
+      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
+    </div>
     <h2>Best combo</h2>
     <p class="lede">The trades worth the most made all at once.</p>
     <div id="comboBody"></div>
@@ -1377,6 +1406,10 @@
        It is the panel to read when you want to check an offer, or go hunting
        for a manager the finder has not paired you with yet. -->
   <section class="panel">
+    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
+      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
+      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
+    </div>
     <h2 id="depthTitle">Depth map</h2>
     <p class="lede">How far each squad's starters sit above a free replacement. Read down a column: high is depth, low is a need.</p>
     <div class="table-scroll" id="depthWrap"><table id="depthTable" class="depth">
@@ -1415,6 +1448,10 @@
        same positional floor — a custom deal that priced differently from an
        identical one the finder found would be two answers to one question. -->
   <section class="panel" id="customPanel">
+    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
+      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
+      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
+    </div>
     <h2>Custom trades</h2>
     <!-- The lede is one line; "priced exactly as the finder prices its own" is
          the first sentence of "How a custom trade is priced" below, and saying
@@ -1557,12 +1594,14 @@
       <thead><tr>
         <th class="name">With</th>
         <th id="cuThGoal">Title chance</th>
+        <th id="cuThAltGoal">Δ last chance</th>
         <th class="left">Deal</th>
         <th class="left">You send</th>
         <th class="left">You get</th>
         <th>Your lineup, a week</th>
         <th>You gain</th>
         <th>He gains</th>
+        <th>His proj vs you</th>
         <th class="left">ESPN</th>
         <th></th>
       </tr></thead>

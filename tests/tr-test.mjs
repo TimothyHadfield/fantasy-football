@@ -389,6 +389,43 @@ function readOfferRows(table) {
           index: [...tr.children].indexOf(td),
         };
       })(),
+      // THE OTHER GOAL, AS A PREVIEW (2026-09-29, Tim: "show 2 columns on the
+      // trade, one for change of win % and one for change of losing %"). The
+      // ranked goal stays `goal`; this is the goal NOT selected, read the same way.
+      alt: (() => {
+        const td = cell('alt-goal-cell');
+        if (!td) return null;
+        const sub = td.querySelector('.sub');
+        const all = text(td);
+        const subText = text(sub);
+        return {
+          head: subText ? all.slice(0, all.length - subText.length).trim() : all,
+          sub: subText,
+          v: td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : NaN,
+          cls: td.getAttribute('class') || '',
+          wait: /\bgoal-wait\b/.test(td.getAttribute('class') || ''),
+          title: td.getAttribute('title') || '',
+          index: [...tr.children].indexOf(td),
+        };
+      })(),
+      // HIS PROJECTION IN THE WEEK(S) HE PLAYS YOU (2026-09-29, Tim: "make a opp
+      // proj diff that calculates how much my opponent's projection changes
+      // after the trade, only for the week that I play them").
+      opp: (() => {
+        const td = cell('opp-proj');
+        if (!td) return null;
+        const sub = td.querySelector('.sub');
+        const all = text(td);
+        const subText = text(sub);
+        return {
+          head: subText ? all.slice(0, all.length - subText.length).trim() : all,
+          sub: subText,
+          v: td.hasAttribute('data-v') && td.getAttribute('data-v') !== ''
+            ? Number(td.getAttribute('data-v')) : null,
+          sign: (((td.getAttribute('class') || '').match(/\b(pos|neg)\b/) || ['', ''])[1]),
+          index: [...tr.children].indexOf(td),
+        };
+      })(),
       myHeat: heat(gain),
       theirHeat: heat(their),
       // THE SIGN ON THE TWO GAIN CELLS (2026-09-23). `offerRow` wrote `pos` on
@@ -478,7 +515,11 @@ function readWeekTable(el) {
   const rows = all.filter((tr) => !has(tr, 'past') && !has(tr, 'divider') && !has(tr, 'po')).map((tr) => {
     const tds = [...tr.children];
     return {
-      label: text(tds[0]),
+      // THE WEEK BUTTON'S OWN TEXT. Since 2026-09-29 a week you play the other
+      // manager carries a note under the button in the same cell (`.vs-note`),
+      // and the label is still just "Week 9".
+      label: text(tds[0].querySelector('button') || tds[0]),
+      vs: text(tds[0].querySelector('.vs-note')),
       total: (tr.getAttribute('class') || '').includes('total'),
       before: num(text(tds[1])),
       after: num(text(tds[2])),
@@ -2103,6 +2144,10 @@ SCENARIOS.goalTitle = async function goalTitle() {
   document.getElementById('cuSave').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
   await settle(1500);
   const cuRow = readOfferRows(document.getElementById('cuTable'))[0] || null;
+  const cuHeads = [...document.querySelectorAll('#cuTable thead th')].map(text);
+  const comboHeads = [...document.querySelectorAll('#comboTable thead th')].map(text);
+  const comboRows = readOfferRows(document.getElementById('comboTable'));
+  const comboGoal = text(document.querySelector('#comboBody .combo-goal'));
 
   document.querySelector('#goalToggle button[data-goal="last"]')
     .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
@@ -2111,7 +2156,10 @@ SCENARIOS.goalTitle = async function goalTitle() {
   const stored = (() => {
     try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.goal']; } catch { return null; }
   })();
-  return { errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, last, stored };
+  return {
+    errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, cuHeads,
+    comboHeads, comboRows, comboGoal, last, stored,
+  };
 };
 
 /**
@@ -2247,6 +2295,127 @@ SCENARIOS.searchOnce = async function searchOnce() {
     waitedMs: Date.now() - t0,
     count: text(document.getElementById('tradeCount')),
     trades: readTrades(document).length,
+  };
+};
+
+/**
+ * BOTH GOALS ON EVERY ROW, THE GOAL SWITCH ON EVERY PANEL, AND HIS PROJECTION
+ * IN THE WEEK HE PLAYS YOU (2026-09-29). Tim:
+ *
+ *   "Still have the user choose win or loose but in addition, show 2 columns on
+ *   the trade, one for change of win % and one for change of losing %, as a
+ *   preview for the setting that the user isn't currently on. Also above every
+ *   box in the trade section have the to win or to not lose choice and it
+ *   changes for all of the other identical buttons aswell … just make a opp
+ *   proj diff that calculates how much my opponent's projection changes after
+ *   the trade, only for the week that I play them."
+ *
+ * Demo (or the stubbed live league with `TR_TWO_SEED=live`, for timing). Waits
+ * on the page's own signals: the ranked line, then no preview cell still
+ * waiting. Then opens a row that meets you, then switches the goal from the
+ * COMBO panel's copy of the control — not the top one — and waits again.
+ */
+SCENARIOS.twoGoals = async function twoGoals() {
+  const seed = process.env.TR_TWO_SEED === 'live'
+    ? {
+      'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+      'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+    }
+    : null;
+  const t0 = Date.now();
+  const { document, errors, fetchCalls } = await boot('trade.html', '', seed);
+  const max = scaledBudget(150000, machineFactor());
+  const line = () => text(document.getElementById('tradeCount'));
+  const rankedOn = (chance) => new RegExp(`ranked by your ${chance}`).test(line()) &&
+    !/not ranked/.test(line()) && !/playing each offer out/.test(line());
+  const altPending = () => document.querySelectorAll('#tradeTable td.alt-goal-cell.goal-wait').length;
+  const hasAlt = () => !!document.querySelector('#tradeTable td.alt-goal-cell');
+  const startGoal = process.env.TR_GOAL || 'last';
+  const chanceOf = (g) => (g === 'title' ? 'title chance' : 'chance of finishing last');
+
+  while (Date.now() - t0 < max && !rankedOn(chanceOf(startGoal))) await settle(100);
+  const tRanked = Date.now() - t0;
+  // A page with no preview column at all has nothing to wait for — give up on
+  // it in seconds rather than at the ceiling, so the failure is quick to see.
+  const waitAlt = async (from) => {
+    const since = Date.now();
+    while (Date.now() - from < max && (hasAlt() ? altPending() > 0 : Date.now() - since < 5000)) await settle(100);
+  };
+  await waitAlt(t0);
+  const tAlt = Date.now() - t0;
+  await settle(400);
+
+  const toggles = () => [...document.querySelectorAll('[data-goal-toggle]')].map((g) => {
+    const sec = g.closest('section.panel');
+    const h = sec ? sec.querySelector('h2') : null;
+    return {
+      panel: h ? text(h).split(' · ')[0] : '',
+      role: g.getAttribute('role'),
+      label: g.getAttribute('aria-label') || g.getAttribute('aria-labelledby') || '',
+      on: text(g.querySelector('button.on')),
+      buttons: [...g.querySelectorAll('button')].map((b) => ({
+        goal: b.getAttribute('data-goal'),
+        on: /\bon\b/.test(b.getAttribute('class') || ''),
+        pressed: b.getAttribute('aria-pressed'),
+        type: b.getAttribute('type'),
+      })),
+    };
+  });
+  const panels = () => [...document.querySelectorAll('section.panel')].map((s) => ({
+    heading: text(s.querySelector('h2')).split(' · ')[0],
+    copies: s.querySelectorAll('[data-goal-toggle]').length,
+  }));
+  const read = () => ({
+    trades: readTrades(document),
+    heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+    count: line(),
+    note: text(document.getElementById('tradeNote')),
+    comboHeads: [...document.querySelectorAll('#comboTable thead th')].map(text),
+    comboRows: readOfferRows(document.getElementById('comboTable')),
+    comboGoal: text(document.querySelector('#comboBody .combo-goal')),
+    comboNote: text(document.getElementById('comboNote')),
+    week: document.getElementById('weekSelect').value,
+    team: document.getElementById('teamSelect').value,
+    teams: [...document.querySelectorAll('#teamSelect option')]
+      .map((o) => ({ id: o.getAttribute('value'), name: text(o) })),
+    toggles: toggles(),
+    panels: panels(),
+  });
+  const first = read();
+
+  // The pop-up of the first row that meets you in the weeks left.
+  let deal = null;
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
+  const meetAt = first.trades.findIndex((t) => t.opp && t.opp.v !== null);
+  if (meetAt >= 0 && rows[meetAt]) {
+    rows[meetAt].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(2500);
+    const weeks = readWeekTable(document.getElementById('dealBody'));
+    deal = { row: meetAt, weeks, goal: text(document.querySelector('#dealBody .deal-goal')) };
+    document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(300);
+  }
+
+  // SWITCH FROM A COPY, not from the top control: the combo panel's.
+  const other = startGoal === 'title' ? 'last' : 'title';
+  const copy = document.querySelector(`#comboPanel [data-goal-toggle] button[data-goal="${other}"]`);
+  const t1 = Date.now();
+  if (copy) {
+    copy.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(300);
+    while (Date.now() - t1 < max && !rankedOn(chanceOf(other))) await settle(100);
+  }
+  const tRanked2 = Date.now() - t1;
+  if (copy) await waitAlt(t1);
+  const tAlt2 = Date.now() - t1;
+  await settle(400);
+  const second = read();
+  const stored = (() => {
+    try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.goal']; } catch { return null; }
+  })();
+  return {
+    errors, fetchCalls, startGoal, first, deal, switched: !!copy, second, stored,
+    timing: { tRanked, tAlt, tRanked2, tAlt2 },
   };
 };
 
@@ -2826,6 +2995,50 @@ async function rederiveGoal(page, row, goal) {
     lookPerWeek: (ros(send) - ros(receive)) / span.length,
   });
   return { before, after, accept };
+}
+
+/**
+ * HIS PROJECTION IN THE WEEKS HE PLAYS YOU, for every row, from nothing of the
+ * page's: the demo rosters, the engine's own pricing of HIS side over the
+ * goal's span, and the demo schedule's own games for which weeks the two of
+ * you meet. Only regular-season weeks still to play — a playoff meeting is not
+ * known in advance. `null` for a row whose partner you never meet again.
+ */
+async function rederiveHis(page, rowList, goal) {
+  const { generateDemoWeekRosters } = await import(moduleUrl('js/demo-rosters.js'));
+  const { generateDemoLeague } = await import(moduleUrl('js/demo.js'));
+  const { priceTradeAcrossWeeks, slotsForLeague } = await import(moduleUrl('js/trade.js'));
+  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
+  const week = Number(page.week);
+  const regular = demoSpan(week);
+  const span = regular.concat(goal === 'title' ? [14, 15, 16] : []);
+  const base = generateDemoWeekRosters(week);
+  const slots = slotsForLeague(slotCountsFromLineups(base.teams));
+  const idx = new Map();
+  for (const w of span) {
+    const m = new Map();
+    for (const t of generateDemoWeekRosters(w).teams) for (const p of t.players) m.set(p.playerId, p.projected);
+    idx.set(w, m);
+  }
+  const projFor = (p, w) => { const v = idx.get(w)?.get(p.playerId); return typeof v === 'number' ? v : null; };
+  const byId = new Map();
+  for (const t of base.teams) for (const p of t.players) byId.set(p.playerId, p);
+  const myId = Number(page.team);
+  const games = generateDemoLeague().games;
+  return rowList.map((row) => {
+    const partner = base.teams.find((t) => t.name === row.partner);
+    if (!partner) return { error: `no partner ${row.partner}` };
+    const meet = [...new Set(games
+      .filter((g) => (g.homeId === myId && g.awayId === partner.id) || (g.homeId === partner.id && g.awayId === myId))
+      .map((g) => g.week))].filter((w) => regular.includes(w)).sort((a, b) => a - b);
+    const send = row.send.map((m) => byId.get(m.id)).filter(Boolean);
+    const receive = row.receive.map((m) => byId.get(m.id)).filter(Boolean);
+    const his = priceTradeAcrossWeeks({ players: partner.players, send: receive, receive: send, slots, weeks: span, projFor });
+    const sum = meet.length
+      ? Math.round(his.byWeek.filter((w) => meet.includes(w.week)).reduce((a, w) => a + w.delta, 0) * 10) / 10
+      : null;
+    return { meet, sum, byWeek: his.byWeek };
+  });
 }
 
 /** Price one packing of trades across the rest of the season, from scratch. */
@@ -5289,7 +5502,7 @@ if (!gt.boot) {
   eq(T.goalOn, 'Win it all', 'the page opens with the goal "Win it all" lit');
 
   // -- the column, second, beside the manager --------------------------------
-  eq(T.heads[1], 'Title chance', 'the column right after Manager is the title chance');
+  eq(T.heads[1], 'Δ title chance', 'the column right after Manager is the title chance');
   ok('every row carries a goal cell in that position',
     T.trades.length > 2 && T.trades.every((t) => t.goal && t.goal.index === 1),
     JSON.stringify(T.trades.slice(0, 2).map((t) => t.goal)));
@@ -5510,12 +5723,19 @@ if (!gt.boot) {
   ok('and the saved row carries the goal column like a finder row',
     !!gt.cuRow && gt.cuRow.goal && /%/.test(gt.cuRow.goal.head) && gt.cuRow.goal.index === 1,
     JSON.stringify(gt.cuRow && gt.cuRow.goal));
+  // 2026-09-29: the saved table matches the finder's new columns, header and cell.
+  ok('the saved table’s head matches the finder’s: both chances, and his projection vs you',
+    gt.cuHeads[1] === 'Δ title chance' && gt.cuHeads[2] === 'Δ last chance' && gt.cuHeads.includes('His proj vs you'),
+    gt.cuHeads.join(' | '));
+  ok('and the saved row fills the preview and his-projection cells',
+    !!gt.cuRow && gt.cuRow.alt && gt.cuRow.alt.index === 2 && /%/.test(gt.cuRow.alt.head) && !!gt.cuRow.opp,
+    JSON.stringify(gt.cuRow && [gt.cuRow.alt, gt.cuRow.opp]));
 
   // -- AND THE OTHER GOAL ----------------------------------------------------
   const L = gt.last;
   eq(L.goalOn, 'Don’t finish last', 'pressing "Don’t finish last" lights it');
   eq(gt.stored, 'last', 'and the choice is remembered');
-  eq(L.heads[1], 'Chance of last', 'the column becomes the chance of finishing last');
+  eq(L.heads[1], 'Δ last chance', 'the column becomes the chance of finishing last');
   ok('and the span drops back to the regular season — the playoffs cannot move last place',
     L.heads.some((h) => h === `You gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
   ok('the status line names the new goal',
@@ -5622,7 +5842,7 @@ if (!gl.boot) {
     gl.combo.slice(0, 240));
   ok('the shape filter offers 2 for 2', gl.kinds.includes('2 for 2'), gl.kinds.join(' | '));
   ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
-  eq(gl.heads[1], 'Title chance', 'the live page carries the title-chance column');
+  eq(gl.heads[1], 'Δ title chance', 'the live page carries the title-chance column');
   ok('and every live offer was played out and ranked',
     gl.trades.length > 0 && gl.trades.every((t) => t.goal && /%/.test(t.goal.head)) &&
       /ranked by your title chance/.test(gl.count),
@@ -5632,6 +5852,185 @@ if (!gl.boot) {
     gl.trades.map((t) => t.goal.v).join(','));
   ok('and the live bracket weeks (15–16) are in the priced span',
     gl.heads.some((h) => /You gain a week \(weeks \d+–16\)/.test(h)), gl.heads.join(' | '));
+}
+
+// ---- BOTH GOALS, THE SWITCH ON EVERY PANEL, HIS PROJECTION VS YOU ----------
+//
+// Tim, 2026-09-29: "show 2 columns on the trade, one for change of win % and
+// one for change of losing %, as a preview for the setting that the user isn't
+// currently on. Also above every box in the trade section have the to win or to
+// not lose choice and it changes for all of the other identical buttons aswell
+// … make a opp proj diff that calculates how much my opponent's projection
+// changes after the trade, only for the week that I play them."
+//
+// Demo, opening on "Win it all", then switched from the COMBO panel's copy.
+// Every figure below is re-derived in this process from the engine alone.
+{
+  const tw = run('twoGoals', { env: { TR_GOAL: 'title' } });
+  ok('the two-goals scenario boots', !tw.boot, tw.boot);
+  // A page without these columns must FAIL here, not throw half-way and hide
+  // every assertion after the one that tripped.
+  if (!tw.boot) try {
+    const A = tw.first;
+    const B = tw.second;
+    ok('no console errors with both goal columns', tw.errors.length === 0, tw.errors.slice(0, 2).join(' | '));
+    ok('and demo still costs no request', tw.fetchCalls.length === 0, tw.fetchCalls.join(' | '));
+    const chanceRe = /^[+−]?\d+\.\d% ±0\.4$/;
+    const subRe = /^(\d+\.\d)% → (\d+\.\d)%$/;
+    // A missing cell reads as blank, so an absent column fails its checks rather than throwing.
+    const NA = { head: '', sub: '', cls: '', v: NaN, sign: '?' };
+
+    // -- (1) TWO CHANCE COLUMNS: the ranked one, then the other as a preview --
+    eq(A.heads[1], 'Δ title chance', 'under "Win it all" the ranked column, second, is the title chance');
+    eq(A.heads[2], 'Δ last chance', 'and beside it, a preview column for the chance of finishing last');
+    ok('every row carries the preview cell, third, filled in (not still waiting)',
+      A.trades.length > 2 && A.trades.every((t) => t.alt && t.alt.index === 2 && !t.alt.wait),
+      JSON.stringify(A.trades.slice(0, 2).map((t) => t.alt)));
+    ok('each preview states the change with its ± band, and before → after under it',
+      A.trades.every((t) => t.alt && chanceRe.test(t.alt.head) && subRe.test(t.alt.sub)),
+      A.trades.slice(0, 3).map((t) => `${t.alt && t.alt.head} / ${t.alt && t.alt.sub}`).join(' | '));
+    ok('a last-place chance that DROPS is green and one that rises is red — sign and hue agree',
+      A.trades.every((t) => {
+        const m = (t.alt || NA).sub.match(subRe);
+        if (!m) return false;
+        const d = Number(m[2]) - Number(m[1]);
+        return (/\bpos\b/.test((t.alt || NA).cls) ? /^−/.test((t.alt || NA).head) && d <= 0 : true) &&
+          (/\bneg\b/.test((t.alt || NA).cls) ? /^\+/.test((t.alt || NA).head) && d >= 0 : true);
+      }),
+      A.trades.map((t) => `${(t.alt || NA).cls.replace('alt-goal-cell', '').trim()}:${(t.alt || NA).head}`).slice(0, 8).join(' '));
+    ok('and the sample league offers both colours there, or the check above is vacuous',
+      A.trades.some((t) => /\bpos\b/.test((t.alt || NA).cls)) || A.trades.some((t) => /\bneg\b/.test((t.alt || NA).cls)),
+      A.trades.map((t) => (t.alt || NA).cls).slice(0, 8).join(' '));
+    ok('the ranking is unchanged: still in the order of the TITLE figure, best first',
+      A.trades.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
+      A.trades.map((t) => t.goal.v.toFixed(4)).join(','));
+    ok('the method names what the preview column is and what it is priced over',
+      /Δ last chance/.test(A.note) && /regular season/.test(A.note.slice(A.note.indexOf('Δ last chance'))),
+      A.note.slice(A.note.indexOf('Δ last chance'), A.note.indexOf('Δ last chance') + 300));
+
+    // THE PREVIEW IS AN INDEPENDENT RUN OF THE OTHER GOAL, on its own weeks.
+    // FALSIFIABLE: read pTitle off a "last" run, or price the "last" preview
+    // over the title span, and these move.
+    for (const row of A.trades.slice(0, 3)) {
+      const re = await rederiveGoal(A, row, 'last');
+      const m = (row.alt || NA).sub.match(subRe);
+      ok(`the last-chance preview of ${row.partner}'s deal re-derives from the engine alone`,
+        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.051 &&
+          Math.abs(Number(m[2]) - re.after * 100) <= 0.151,
+        `page ${row.alt.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
+    }
+
+    // -- (3) HIS PROJECTION IN THE WEEK HE PLAYS YOU ---------------------------
+    ok('the finder has a "His proj vs you" column', A.heads.includes('His proj vs you'), A.heads.join(' | '));
+    const his = await rederiveHis(A, A.trades, 'title');
+    ok('every row re-derives (partner found)', his.every((h) => !h.error), JSON.stringify(his.find((h) => h.error)));
+    ok('each row prints the sum of HIS lineup change over the regular-season weeks you still play him',
+      A.trades.every((t, i) => t.opp && (his[i].sum === null
+        ? (t.opp || NA).v === null && (t.opp || NA).head === '—'
+        : (t.opp || NA).v !== null && Math.abs((t.opp || NA).v - his[i].sum) <= 0.051)),
+      A.trades.map((t, i) => `${t.partner}: page ${t.opp && (t.opp || NA).head} (${t.opp && (t.opp || NA).v}) vs ${his[i].sum} @${his[i].meet}`)
+        .slice(0, 6).join(' | '));
+    ok('and names the week(s) under it',
+      A.trades.every((t, i) => his[i].sum === null ||
+        his[i].meet.every((w) => new RegExp(`\\b${w}\\b`).test((t.opp || NA).sub))),
+      A.trades.map((t, i) => `${t.opp && (t.opp || NA).sub} vs ${his[i].meet}`).slice(0, 6).join(' | '));
+    ok('the sample league has rows that meet you again — or the check is vacuous',
+      his.some((h) => h.sum !== null), his.map((h) => h.meet.join('+')).join(' '));
+    console.log(`twoGoals: ${his.filter((h) => h.sum === null).length} of ${his.length} rows never meet you again (—)`);
+    ok('his gain is YOUR red and his loss your green',
+      A.trades.every((t) => (t.opp || NA).v === null ? (t.opp || NA).sign === ''
+        : (t.opp || NA).v > 0.05 ? (t.opp || NA).sign === 'neg' : (t.opp || NA).v < -0.05 ? (t.opp || NA).sign === 'pos' : (t.opp || NA).sign === ''),
+      A.trades.map((t) => `${(t.opp || NA).v}:${(t.opp || NA).sign}`).slice(0, 8).join(' '));
+    ok('the method says what the column is, over which weeks, and that playoff meetings are not known',
+      /His proj vs you/.test(A.note) && /playoff/i.test(A.note.slice(A.note.indexOf('His proj vs you'),
+        A.note.indexOf('His proj vs you') + 400)),
+      A.note.slice(A.note.indexOf('His proj vs you'), A.note.indexOf('His proj vs you') + 400));
+    // The pop-up of a row that meets you: the meeting week's row says so, with his change.
+    ok('a row that meets you opens its pop-up', !!tw.deal && !!tw.deal.weeks, JSON.stringify(tw.deal).slice(0, 200));
+    if (tw.deal && tw.deal.weeks) {
+      const row = A.trades[tw.deal.row];
+      const h = his[tw.deal.row];
+      const marked = tw.deal.weeks.weeks.filter((w) => w.vs);
+      ok('the pop-up marks exactly the weeks you play him',
+        marked.map((w) => Number(w.label.replace(/\D/g, ''))).join(',') === h.meet.join(','),
+        `${marked.map((w) => w.label).join(',')} vs ${h.meet.join(',')}`);
+      ok('and each marked week gives his lineup change that week, adding up to the row’s figure',
+        marked.length > 0 && Math.abs(marked.reduce((a, w) => a + num((w.vs.match(/[+−]?\d+\.\d/) || ['NaN'])[0]), 0) -
+          (row.opp || NA).v) <= 0.051,
+        `${marked.map((w) => w.vs).join(' | ')} vs ${(row.opp || NA).v}`);
+    }
+
+    // -- (1b) THE COMBO: his proj per manager, and the preview on the headline --
+    ok('the combo table carries "His proj vs you" per manager',
+      A.comboRows.length === 0 || (A.comboHeads.includes('His proj vs you') && A.comboRows.every((r) => r.opp)),
+      A.comboHeads.join(' | '));
+    ok('and its headline previews the other goal beside the ranked one',
+      A.comboRows.length === 0 || (/Your title chance/.test(A.comboGoal) && /last chance [+−]?\d+\.\d%/.test(A.comboGoal)),
+      A.comboGoal);
+
+    // -- (2) THE GOAL SWITCH ABOVE EVERY PANEL, acting as one -------------------
+    ok('every panel of the Trade page carries the goal switch, once',
+      A.panels.length >= 5 && A.panels.every((p) => p.copies === 1),
+      JSON.stringify(A.panels));
+    ok('each copy is a labelled group of two real buttons',
+      A.toggles.length === A.panels.length && A.toggles.every((g) => g.role === 'group' && g.label &&
+        g.buttons.length === 2 && g.buttons.every((b) => b.type === 'button')),
+      JSON.stringify(A.toggles.map((g) => [g.panel, g.role, g.label, g.buttons.length])));
+    ok('every copy shows "Win it all" selected, and aria-pressed says the same',
+      A.toggles.every((g) => g.on === 'Win it all' &&
+        g.buttons.every((b) => b.pressed === String(b.on) && b.on === (b.goal === 'title'))),
+      JSON.stringify(A.toggles.map((g) => [g.panel, g.on, g.buttons.map((b) => b.pressed)])));
+    ok('the combo panel’s copy was there to press', tw.switched);
+    ok('pressing it switches EVERY copy', B.toggles.every((g) => g.on === 'Don’t finish last' &&
+      g.buttons.every((b) => b.pressed === String(b.on) && b.on === (b.goal === 'last'))),
+    JSON.stringify(B.toggles.map((g) => [g.panel, g.on, g.buttons.map((b) => b.pressed)])));
+    eq(tw.stored, 'last', 'and the choice is remembered, one preference');
+    eq(B.heads[1], 'Δ last chance', 'the ranked column becomes the chance of finishing last');
+    eq(B.heads[2], 'Δ title chance', 'and the preview becomes the title chance');
+    ok('and the list is re-ranked on it', /ranked by your chance of finishing last/.test(B.count), B.count.slice(0, 200));
+    {
+      const key = (t) => `${t.partner}|${names(t.send)}|${names(t.receive)}`;
+      ok('in exactly the order the top control produces',
+        !gt.boot && B.trades.map(key).join(' ; ') === gt.last.trades.map(key).join(' ; '),
+        `${B.trades.slice(0, 4).map(key).join(' ; ')} vs ${gt.last && gt.last.trades.slice(0, 4).map(key).join(' ; ')}`);
+    }
+    // The title preview under "Don't finish last" is priced over the title's
+    // own span — the bracket bought and priced — not read off the "last" run.
+    for (const row of B.trades.slice(0, 3)) {
+      const re = await rederiveGoal(B, row, 'title');
+      const m = row.alt && (row.alt || NA).sub.match(subRe);
+      ok(`the title-chance preview of ${row.partner}'s deal re-derives on the title's own weeks`,
+        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.051 &&
+          Math.abs(Number(m[2]) - re.after * 100) <= 0.151,
+        `page ${row.alt && row.alt.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
+    }
+    {
+      const hisB = await rederiveHis(B, B.trades, 'last');
+      ok('his projection vs you follows the new span and still re-derives',
+        B.trades.every((t, i) => t.opp && (hisB[i].sum === null ? (t.opp || NA).v === null
+          : Math.abs((t.opp || NA).v - hisB[i].sum) <= 0.051)),
+        B.trades.map((t, i) => `${t.opp && (t.opp || NA).v} vs ${hisB[i].sum}`).slice(0, 6).join(' | '));
+    }
+    console.log(`twoGoals timing (demo): title ranked ${tw.timing.tRanked} ms, preview filled ${tw.timing.tAlt} ms; ` +
+      `after switch: ranked ${tw.timing.tRanked2} ms, preview ${tw.timing.tAlt2} ms`);
+  } catch (e) {
+    ok('the two-goals checks ran to the end without throwing', false, String(e && e.stack).slice(0, 300));
+  }
+
+  // THE SAME ON THE STUBBED LIVE LEAGUE, with every week read slowed as a
+  // network does — timing, and that a slow load still fills the preview.
+  const tl = run('twoGoals', { stub: true, env: { TR_GOAL: 'title', TR_TWO_SEED: 'live', TR_WEEK_DELAY: '150' } });
+  ok('the two-goals scenario boots on the slowed live league', !tl.boot, tl.boot);
+  if (!tl.boot) try {
+    ok('no console errors there', tl.errors.length === 0, tl.errors.slice(0, 2).join(' | '));
+    ok('and every row’s preview is filled once the ranking is done',
+      tl.first.trades.length > 0 && tl.first.trades.every((t) => t.alt && !t.alt.wait && /%/.test(t.alt.head)),
+      JSON.stringify(tl.first.trades.slice(0, 2).map((t) => t.alt)));
+    console.log(`twoGoals timing (live stub, 150 ms/week): title ranked ${tl.timing.tRanked} ms, ` +
+      `preview filled ${tl.timing.tAlt} ms; after switch: ranked ${tl.timing.tRanked2} ms, preview ${tl.timing.tAlt2} ms`);
+  } catch (e) {
+    ok('the slowed-live two-goals checks ran without throwing', false, String(e && e.stack).slice(0, 300));
+  }
 }
 
 // ---------------------------------------------------------------------------
