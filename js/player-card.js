@@ -716,12 +716,14 @@ export const TIP_ATTR = 'data-tip';
  * `prefix` is only a debugging courtesy — it lets you see which container a key
  * came from — and nothing reads it back. Uniqueness comes from the counter.
  */
-export function registerRun({ ident = '', run = null, href = null, id = null } = {}, prefix = 'p') {
+export function registerRun({ ident = '', run = null, href = null, id = null, openLabel = null } = {}, prefix = 'p') {
   const key = `${prefix}:${seq++}`;
   // `id` is optional and is NOT the key: it is a stable name for "this man in
   // this place" (the analysis grids use grid + team + player), and it is only
   // read by `reopenTip`, to find the same card again after a repaint.
-  RUNS.set(key, { ident, run, href, id });
+  // `openLabel` names the sheet's button when the link goes somewhere other
+  // than his 13-week run (the Players page links to his row in its table).
+  RUNS.set(key, { ident, run, href, id, openLabel });
   return key;
 }
 
@@ -805,10 +807,10 @@ function cardNode() {
  * from a long-press. The Close button is beside it because a sheet that can
  * only be dismissed by guessing where "outside" is is a trap.
  */
-function actionsHtml(href) {
+function actionsHtml(href, openLabel = null) {
   if (!asSheet) return '';
   const open = href
-    ? `<a class="tc-open" href="${esc(href)}">His next 13 weeks &rarr;</a>`
+    ? `<a class="tc-open" href="${esc(href)}">${openLabel ? esc(openLabel) : 'His next 13 weeks'} &rarr;</a>`
     : '<span class="tc-open tc-open-off">ESPN gives this man no id to look up</span>';
   return `<div class="tc-actions">${open}<button type="button" class="tc-close">Close</button></div>`;
 }
@@ -985,13 +987,13 @@ function lineHtml(cols, vsName = '') {
  *     the heavy dividers and the ▲/▼ at the ends of the scale. Those are the
  *     chart, and several of them are the hue-free channels rule 14 is about.
  */
-function cardHtml({ ident, run, href }, sheet) {
+function cardHtml({ ident, run, href, openLabel }, sheet) {
   const head = `<div class="tc-ident">${esc(ident)}</div>`;
-  if (!run) return `${head}${actionsHtml(href)}`;
+  if (!run) return `${head}${actionsHtml(href, openLabel)}`;
 
   const sub = `<div class="tc-head">${esc(run.heading)}</div>`;
   if (run.pending) {
-    return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>${actionsHtml(href)}`;
+    return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>${actionsHtml(href, openLabel)}`;
   }
 
   const lines = chartLines(run.cols, perLine(sheet))
@@ -1052,7 +1054,7 @@ function cardHtml({ ident, run, href }, sheet) {
   const key = `${note}${poNote}${extras}${legend}`;
   const keyHtml = key ? `<div class="tc-key sr-only">${key}</div>` : '';
 
-  return `${head}${sub}<div class="tc-chart">${lines}</div>${keyHtml}${actionsHtml(href)}`;
+  return `${head}${sub}<div class="tc-chart">${lines}</div>${keyHtml}${actionsHtml(href, openLabel)}`;
 }
 
 /**

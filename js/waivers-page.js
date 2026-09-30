@@ -85,6 +85,15 @@ import * as espn from './espn.js';
 // Only the zero rule — whether a 0.00 is a bye or a man ruled out — so this page
 // and the analysis and Trade pages cannot answer it differently.
 import { zeroKind, byeWeekOf, outMark } from './player-card.js';
+// THE PLAYED-WEEKS PREVIEW ON A NAME. Tim, 2026-09-29: "In the players section,
+// show previous week's scores/proj by showing a preivew when the user over's
+// over the player's name, but only show the weeks that have already passed,
+// not the weeks to come." It is the site's own player card (the Analysis and
+// Trade pages' preview), so hover, keyboard focus, and the tap-to-sheet on a
+// phone all behave exactly as they do there. See "the played weeks" below.
+import {
+  weekRun, registerRun, tipAttr, clearRuns, wireTips, reopenTip, hideTip, TIP_ATTR,
+} from './player-card.js';
 import { enableSort, resort } from './sortable.js';
 // THE ONE RED/GREEN SCALE (js/heat.js, rule 14). Imported for the two Avg
 // columns and the Taken table's week columns — see the block at the top of this
@@ -258,6 +267,18 @@ const state = {
   failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
   demoTeamId: null,              // the demo league has no owner; a team stands in
 
+  // THE PLAYED WEEKS, for the preview on a name — and nothing else reads them.
+  // Kept apart from the maps above on purpose: those are the table's columns
+  // (the current week onwards), and a played week must never turn into one.
+  // Bought LAZILY, on the first hover, because most visits never hover.
+  playedWeeks: [],               // weeks with a result, from the schedule
+  past: {
+    wire: new Map(),             // week -> Map(playerId -> { projected, actual, injuryStatus })
+    rosters: new Map(),          // week -> the same shape, from that week's rosters
+    failed: new Set(),           // 'wire:2' / 'roster:2' — refused; drawn "—", never retried
+    inFlight: new Set(),         // same keys, asked for and not yet back
+  },
+
   // Everything already asked for, so nothing is asked twice. Keyed "wire:4" /
   // "roster:4" rather than by the bare week, because a week now costs two
   // different requests and one of them can be in the air without the other.
@@ -423,6 +444,19 @@ function demoProjection(p, week) {
   return Math.round(p.base * p.noise[(week - 1) % p.noise.length] * 10) / 10;
 }
 
+/**
+ * What an invented free agent "scored" in a played week of the sample season:
+ * his projection, pushed up or down by a seeded draw. Invented like everything
+ * else in the demo (the page says so); none for a bye or a week with no line.
+ */
+function demoActual(p, week) {
+  const proj = demoProjection(p, week);
+  if (proj === null || proj === 0) return null;
+  const rand = lcg(DEMO_SEED + p.playerId * 31 + week * 7919);
+  rand();
+  return Math.round(proj * (0.4 + rand() * 1.2) * 10) / 10;
+}
+
 // -------------------------------------------------------------------- loading
 
 function setStatus(msg, isError = false) {
@@ -442,6 +476,11 @@ function resetData() {
   state.failedRosterWeeks.clear();
   state.demoTeamId = null;
   state.byes = {};
+  state.playedWeeks = [];
+  state.past.wire.clear();
+  state.past.rosters.clear();
+  state.past.failed.clear();
+  state.past.inFlight.clear();
   // Anything still in the air belongs to the league we just left; the token
   // bump drops it when it lands, and clearing this lets the new league ask for
   // the same week numbers straight away.
@@ -459,6 +498,8 @@ async function loadDemo() {
   // The sample season's own bracket weeks (14–16), by the same rule as live.
   state.playoffWeeks = leaguePlayoffWeeks({ weeks: state.seasonWeeks });
   state.currentWeek = DEMO_CURRENT_WEEK;
+  // The sample pretends weeks 1-3 are played, so those are what its preview shows.
+  state.playedWeeks = state.seasonWeeks.filter((w) => w < DEMO_CURRENT_WEEK);
 
   // No network, so there is nothing to stagger: fill every week at once and let
   // the same renderers draw it.
@@ -467,6 +508,12 @@ async function loadDemo() {
     for (const w of allWeeks()) {
       if (!state.weekData.has(w)) state.weekData.set(w, new Map());
       state.weekData.get(w).set(p.playerId, demoProjection(p, w));
+    }
+    for (const w of state.playedWeeks) {
+      if (!state.past.wire.has(w)) state.past.wire.set(w, new Map());
+      state.past.wire.get(w).set(p.playerId, {
+        projected: demoProjection(p, w), actual: demoActual(p, w), injuryStatus: p.injuryStatus,
+      });
     }
   }
 
@@ -513,8 +560,10 @@ async function loadDemoRosters(token) {
       // week that comes back as another week is a gap, never borrowed numbers.
       if (!built || Number(built.week) !== Number(w)) throw new Error(`no demo week ${w}`);
       absorbRosterWeek(built.teams, w);
+      if (state.playedWeeks.includes(w)) absorbPastRosters(built.teams, w);
     } catch {
       state.failedRosterWeeks.add(w);
+      if (state.playedWeeks.includes(w)) state.past.failed.add(`roster:${w}`);
     }
   }
   const first = state.rosterWeeks.get(state.seasonWeeks[0]);
@@ -563,6 +612,7 @@ async function loadLive() {
     state.seasonWeeks = schedule.weeks.slice();
     state.playoffWeeks = leaguePlayoffWeeks(schedule);
     state.currentWeek = currentWeekOf(schedule);
+    state.playedWeeks = playedWeeksOf(schedule);
   } catch (err) {
     if (token !== state.token) return;
     setStatus(
@@ -607,6 +657,21 @@ function currentWeekOf(schedule) {
   const next = leaguePlayoffWeeks(schedule).find((w) => !decided.has(w));
   if (next !== undefined) return next;
   return schedule.weeks[schedule.weeks.length - 1] ?? 1;
+}
+
+/**
+ * The weeks already played: a regular week with a result against it, and a
+ * playoff week whose games are decided. The schedule's `played` is ESPN's own
+ * "decided", so a week in progress (Thursday to Monday) is NOT in here — the
+ * preview shows only weeks that are over.
+ */
+function playedWeeksOf(schedule) {
+  const out = new Set();
+  for (const w of schedule.weeks || []) {
+    if ((schedule.byWeek.get(w) || []).some((g) => g.played)) out.add(w);
+  }
+  for (const g of schedule.playoffGames || []) if (g.played) out.add(g.week);
+  return [...out].sort((a, b) => a - b);
 }
 
 // ---------------------------------------------------------------- week fetching
@@ -895,6 +960,181 @@ function rosterStatusFor(p, week) {
   const byWeek = state.rosterStatus.get(week);
   const s = byWeek ? byWeek.get(p.playerId) : null;
   return s || p.injuryStatus || null;
+}
+
+// ------------------------------------------------------------ the played weeks
+//
+// THE PREVIEW ON A NAME: every week already played, ESPN's projection for it
+// and what he actually scored. Only played weeks — Tim: "only show the weeks
+// that have already passed, not the weeks to come."
+//
+// WHERE A PLAYED WEEK'S PROJECTION COMES FROM, measured rather than assumed.
+// Rule 8 says ESPN keeps no HISTORY of its projections — ask it in week 9 what
+// it thought of week 13 back in week 2 and the number is gone. That is about
+// revisions of a future week. A week that has been PLAYED is different: read
+// for that week (scoringPeriodId), both the roster read and the free-agent read
+// still carry the week's projection (statSourceId 1) beside the actual
+// (statSourceId 0). Checked on public league 1241838 on 2026-09-29, in week 4:
+// every man on a week-1 roster and all 100 week-1 free agents had both. So the
+// preview reads ESPN, and a week ESPN carried nothing for prints "—".
+//
+// WHICH READ, AND WHAT IT COSTS. A man in the Taken table (or your own "Your …"
+// row) is read off that week's ROSTERS; a free agent off that week's WIRE — the
+// free-agent list for a past week is today's free agents (same 100 men, same
+// order, measured the same day), so every man on this wire is on it. One read
+// per played week per kind (rule 3 — there is no bulk form), bought the first
+// time a name of that kind is hovered and never again this page load. Rosters
+// go through `fetchWeeksRosters`, whose store keeps a played week for the
+// season (rule 15), so on a visit after the Stats or Analysis page they are
+// usually free. A rostered man who was a free agent in an early week (or the
+// other way round) is not in that week's read, and prints "—" for it.
+
+/** One played week of the wire, kept for the preview. */
+function absorbPastWire(players, week) {
+  const byPlayer = new Map();
+  for (const p of players || []) {
+    if (p.playerId === null || p.playerId === undefined) continue;
+    byPlayer.set(p.playerId, {
+      projected: p.projected ?? null,
+      // A wire synced before the parse kept actuals has none: unknown, not 0.
+      actual: typeof p.actual === 'number' ? p.actual : null,
+      injuryStatus: p.injuryStatus || null,
+    });
+  }
+  state.past.wire.set(week, byPlayer);
+}
+
+/** One played week of every roster, kept for the preview. */
+function absorbPastRosters(teams, week) {
+  const byPlayer = new Map();
+  for (const team of teams || []) {
+    for (const p of team.players || []) {
+      if (p.playerId === null || p.playerId === undefined) continue;
+      byPlayer.set(p.playerId, {
+        projected: p.projected ?? null,
+        actual: typeof p.actual === 'number' ? p.actual : null,
+        injuryStatus: p.injuryStatus || null,
+      });
+    }
+  }
+  state.past.rosters.set(week, byPlayer);
+}
+
+/**
+ * Buy the played weeks one kind of name needs, once. `wire` = a free agent
+ * (the wire read), otherwise a rostered man (the roster read). Repaints as
+ * weeks land, and the open card follows (`reopenTip` in render).
+ */
+async function ensurePast(wire) {
+  if (state.isDemo || !state.playedWeeks.length) return;
+  const token = state.token;
+  const kind = wire ? 'wire' : 'roster';
+  const held = wire ? state.past.wire : state.past.rosters;
+  const need = state.playedWeeks.filter((w) =>
+    !held.has(w) && !state.past.failed.has(`${kind}:${w}`) && !state.past.inFlight.has(`${kind}:${w}`));
+  if (!need.length) return;
+  need.forEach((w) => state.past.inFlight.add(`${kind}:${w}`));
+
+  if (!wire) {
+    let got = new Map();
+    try {
+      got = await fetchWeeksRosters(need);
+    } catch {
+      got = new Map();
+    }
+    need.forEach((w) => state.past.inFlight.delete(`roster:${w}`));
+    if (token !== state.token) return;
+    for (const w of need) {
+      if (got.has(w)) absorbPastRosters(got.get(w), w);
+      else state.past.failed.add(`roster:${w}`);
+    }
+    render();
+    return;
+  }
+
+  // Two weeks at a time, like the columns: polite to ESPN, and the card fills
+  // in as they land.
+  for (let i = 0; i < need.length; i += 2) {
+    await Promise.all(need.slice(i, i + 2).map(async (w) => {
+      let players = null;
+      try {
+        players = await fetchWireWeek(w, POOL_LIMIT);
+      } catch {
+        players = null;
+      }
+      state.past.inFlight.delete(`wire:${w}`);
+      if (token !== state.token) return;
+      if (players) absorbPastWire(players, w);
+      else state.past.failed.add(`wire:${w}`);
+    }));
+    if (token !== state.token) return;
+    render();
+  }
+}
+
+/**
+ * One man's played weeks as the player card's run: Week / Proj / Act.
+ * Null when nothing has been played yet — then his name carries no preview.
+ */
+function pastRun(p, wire) {
+  const weeks = state.playedWeeks;
+  if (!weeks.length) return null;
+  const kind = wire ? 'wire' : 'roster';
+  const own = wire ? state.past.wire : state.past.rosters;
+  const projections = [];
+  const actuals = [];
+  const status = [];
+  for (const w of weeks) {
+    // Either read will do when it has him — a week's projection and score are
+    // facts about the man, not about whose roster he was on.
+    const hit = (own.get(w) && own.get(w).get(p.playerId)) ||
+      (state.past.rosters.get(w) && state.past.rosters.get(w).get(p.playerId)) ||
+      (state.past.wire.get(w) && state.past.wire.get(w).get(p.playerId));
+    if (hit) {
+      projections.push(hit.projected);
+      actuals.push(hit.actual);
+      status.push(hit.injuryStatus || p.injuryStatus || null);
+      continue;
+    }
+    if (state.past.failed.has(`${kind}:${w}`)) projections.push('failed');
+    else if (own.has(w)) projections.push(null);
+    else projections.push('wait');
+    actuals.push(projections[projections.length - 1] === 'wait' ? 'wait' : null);
+    status.push(p.injuryStatus || null);
+  }
+  return weekRun({
+    heading: state.isDemo
+      ? `Played so far (${weekRange(weeks)}): sample projection and score`
+      : `Played so far (${weekRange(weeks)}): ESPN’s projection and his actual score`,
+    weeks,
+    projections,
+    actuals,
+    // The sample ROSTERS mean "ruled out" by a zero, never a bye; the sample
+    // wire carries each man's bye week. Same rule as the table's own cells.
+    demo: state.isDemo && !wire,
+    byeWeek: byeWeekOf(p, state.byes),
+    injuryStatus: status,
+    playoffWeeks: state.playoffWeeks,
+  });
+}
+
+/** Every card on this page is registered under this prefix, and cleared by it. */
+const TIP_PREFIX = 'wv';
+
+/** ` data-tip="…"` for a name, or '' when there is nothing played to show. */
+function pastTip(p, { wire = false, where = 'w' } = {}) {
+  if (p.playerId === null || p.playerId === undefined) return '';
+  const run = pastRun(p, wire);
+  if (!run) return '';
+  const key = registerRun({
+    ident: `${p.name} · ${p.position} · ${p.proTeam}`,
+    run,
+    href: `waivers.html?player=${p.playerId}`,
+    id: `${where}:${p.playerId}`,
+    // The link lands on his row in these tables, not on a 13-week run.
+    openLabel: 'Show him in the table',
+  }, TIP_PREFIX);
+  return tipAttr(key);
 }
 
 // ---------------------------------------------------------------------- rows
@@ -1334,6 +1574,9 @@ function render() {
   // Before anything is painted: a `?player=` link may need to move the filters
   // it is about to be drawn under. Idempotent once it has found its man.
   settleSpotlight(shownWeeks());
+  // Every name's card is registered afresh as the rows are drawn below; the
+  // open one, if any, finds its man again at the end (`reopenTip`).
+  clearRuns(TIP_PREFIX);
 
   syncSource();
   syncSegmented('posFilter', 'pos', state.position);
@@ -1367,6 +1610,7 @@ function render() {
   // Last, because both are about rows that have to exist first.
   renderJump(weeks);
   scrollToSpotlight();
+  reopenTip();
 }
 
 /**
@@ -1762,14 +2006,16 @@ function rowIdentity(playerId, { addressable = true, cls = '' } = {}) {
  * click it here. On this page the click is intercepted and answered without a
  * reload, because everything needed to answer it is already in the cache.
  */
-function playerLink(p, inner, why) {
+function playerLink(p, inner, why, tip = '') {
   if (p.playerId === null || p.playerId === undefined) return inner;
   // `aria-label`, not `title`: a title on a link is the one thing HANDOFF's
   // touch rule forbids — js/touch-titles.js leaves links alone, so the words
   // could never be read on a phone, and the W and injury tags beside the name
-  // carry their own titles as spans.
+  // carry their own titles as spans. (A title would also draw a second tooltip
+  // over the played-weeks card, which is keyed by `tip` on this same link — on
+  // the NAME, not the cell, so the tags beside it keep their own tap.)
   return `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" ` +
-    `aria-label="${why}">${inner}</a>`;
+    `aria-label="${why}"${tip}>${inner}</a>`;
 }
 
 /** The injury tag beside a name. Same markup wherever the player came from. */
@@ -1868,7 +2114,7 @@ function wireRow(row, weeks, mine, avgScales) {
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${
         playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row and show every ` +
-          `remaining week`)}${injuryTag(status)}${waiverTag(p)}</td>
+          `remaining week`, pastTip(p, { wire: true, where: 'w' }))}${injuryTag(status)}${waiverTag(p)}</td>
       ${identityCells(row, heat, says)}
       ${values
         .map((v, i) =>
@@ -1909,7 +2155,7 @@ function mineRow(row, weeks, avgScales) {
   return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
         `<span class="mine-tag">${esc(label)}</span> ` +
-        `${playerLink(p, esc(p.name), why)}` +
+        `${playerLink(p, esc(p.name), why, pastTip(p, { where: 'm' }))}` +
         `${injuryTag(availability(p.injuryStatus))}</td>
       ${identityCells(row, heat, says)}
       ${values.map((v, i) => withPo(cell(v, weeks[i], p, true), weeks[i], weeks)).join('')}
@@ -2075,7 +2321,7 @@ function takenRow(row, weeks, avgScales, weekScales) {
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${
         playerLink(p, esc(p.name), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
-          `his row and show every remaining week`)}${injuryTag(status)}</td>
+          `his row and show every remaining week`, pastTip(p, { where: 't' }))}${injuryTag(status)}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" title="${posTitle}">${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
       <td class="left">${esc(p.proTeam)}</td>
@@ -2608,6 +2854,14 @@ function renderNote(weeks) {
     'player and shows the rest of his season.'
   );
 
+  if (state.playedWeeks.length) {
+    parts.push(
+      lead('Played weeks') +
+      'Hover a name (tap it on a phone) to preview his played weeks: the projection ESPN still ' +
+      'keeps for each and what he actually scored. “—” means ESPN had no projection for him that week.'
+    );
+  }
+
   parts.push(
     lead('Availability') +
     (state.isDemo
@@ -2715,13 +2969,36 @@ function jumpTo(playerId) {
 
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-  const link = e.target.closest && e.target.closest('a.pref[href*="player="]');
+  // `a.tc-open` is the jump inside the played-weeks sheet on a phone, where the
+  // tap on the name opened the card instead. Answered here too, so it jumps
+  // without a reload; the sheet closes FIRST, or the repaint would reopen it.
+  const link = e.target.closest &&
+    e.target.closest('a.pref[href*="player="], a.tc-open[href*="player="]');
   if (!link) return;
   const m = /[?&]player=(\d+)/.exec(link.getAttribute('href') || '');
   if (!m) return;
   e.preventDefault();
+  if (/\btc-open\b/.test(link.getAttribute('class') || '')) hideTip();
   jumpTo(Number(m[1]));
 });
+
+// THE PLAYED-WEEKS CARD on every name in both tables: hover or keyboard focus
+// shows it, a tap on a phone opens it as a sheet (js/player-card.js). The
+// first time a name of each kind is pointed at, the played weeks it needs are
+// bought — see `ensurePast`. Listeners on the same tables as the card's own,
+// so the sheet's stopPropagation cannot keep this one from hearing the tap.
+for (const id of ['waiverTable', 'takenTable']) {
+  const table = $(id);
+  wireTips(table);
+  const want = (e) => {
+    const a = e.target && e.target.closest ? e.target.closest(`[${TIP_ATTR}]`) : null;
+    if (!a) return;
+    const tr = a.closest('tr');
+    const mine = !!tr && /\bmine\b/.test(tr.getAttribute('class') || '');
+    ensurePast(id === 'waiverTable' && !mine);
+  };
+  for (const type of ['mouseover', 'focusin', 'click']) table.addEventListener(type, want);
+}
 
 $('jumpNote').addEventListener('click', (e) => {
   if (!e.target.closest || !e.target.closest('button[data-clear]')) return;

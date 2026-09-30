@@ -217,7 +217,170 @@ const SCENARIOS = {
       };
     },
   },
+
+  // ---- the played-weeks preview on a name ----------------------------------
+  //
+  // Tim, 2026-09-29: "In the players section, show previous week's scores/proj
+  // by showing a preivew when the user over's over the player's name, but only
+  // show the weeks that have already passed, not the weeks to come."
+  //
+  // The stub league has played weeks 1-3 (week 4 is current). Hovering a name
+  // must open the site's player card with EXACTLY weeks 1-3, ESPN's projection
+  // and the actual for each, a bye as Bye and a missing projection as "—". The
+  // played weeks are bought lazily on the first hover and never again.
+  past: {
+    label: '(f) hovering a name previews his played weeks: projection and score',
+    stub: true,
+    env: { WV_PAST: '1' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    after: async ({ document, window }) => {
+      const season = await import('./taken-stub-season.mjs');
+      const espn = await import('./wv-stub-espn.mjs');
+      const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+      const link = (table, pid) =>
+        document.querySelector(`#${table} tbody tr[data-player="${pid}"] a.pref`);
+      const played = (arr) => arr.filter((w) => w <= 3).sort((a, b) => a - b);
+      const out = {
+        rosterBefore: played(season.calls.rosterWeeks),
+        wireBefore: played(espn.calls.weeks),
+        tipped: ['waiverTable', 'takenTable'].map((id) => ({
+          id,
+          links: document.querySelectorAll(`#${id} tbody a.pref`).length,
+          tips: document.querySelectorAll(`#${id} tbody a.pref[data-tip]`).length,
+        })),
+      };
+
+      const hover = async (table, pid) => {
+        fire(link(table, pid), 'mouseover');
+        return waitCard();
+      };
+
+      out.ross = await hover('takenTable', 7101);
+      out.rosterAfterTaken = played(season.calls.rosterWeeks);
+      out.wireAfterTaken = played(espn.calls.weeks);
+      fire(link('takenTable', 7101), 'mouseout');
+      out.afterLeave = readCard(document);
+
+      out.hale = await hover('takenTable', 7106);
+      out.kip = await hover('takenTable', 7108);
+
+      out.p00 = await hover('waiverTable', 5000);
+      out.rosterAfterWire = played(season.calls.rosterWeeks);
+      out.wireAfterWire = played(espn.calls.weeks);
+      out.p07 = await hover('waiverTable', 5007);
+      out.p02 = await hover('waiverTable', 5002);
+      out.rosterAfterAll = played(season.calls.rosterWeeks);
+      out.wireAfterAll = played(espn.calls.weeks);
+      fire(link('waiverTable', 5002), 'mouseout');
+
+      // The keyboard gets the same card: tabbing onto the name is a focusin.
+      fire(link('takenTable', 7102), 'focusin');
+      out.focus = await waitCard();
+      fire(link('takenTable', 7102), 'focusout');
+      out.afterBlur = readCard(document);
+
+      out.note = (document.getElementById('waiverNote') || {}).textContent || '';
+      globalThis.__past = out;
+    },
+  },
+
+  // The same card on a phone: no hover, so a TAP on the name opens it as a
+  // sheet instead of jumping, and the jump comes back as a button inside it.
+  'past-touch': {
+    label: '(g) a tap on a name opens the same preview as a sheet on a phone',
+    stub: true,
+    coarse: true,
+    env: { WV_PAST: '1' },
+    prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    after: async ({ document, window }) => {
+      // A real tap is a primary-button click; the page's jump handler asks.
+      const click = (el) => {
+        if (!el) return;
+        const ev = new window.Event('click', { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'button', { value: 0 });
+        el.dispatchEvent(ev);
+      };
+      const link = () => document.querySelector('#takenTable tbody tr[data-player="7101"] a.pref');
+      const out = {};
+      click(link());
+      out.card = await waitCard();
+      out.spanOn = [...document.querySelectorAll('#spanFilter button.on')].map((b) => b.getAttribute('data-span'));
+      out.spot = document.querySelectorAll('tr.spotlight').length;
+      out.open = (document.querySelector('#tipCard a.tc-open') || { getAttribute: () => '' }).getAttribute('href');
+      out.openText = ((document.querySelector('#tipCard a.tc-open') || {}).textContent || '').trim();
+      // A tap anywhere else closes it.
+      click(document.querySelector('h1'));
+      out.afterOutside = readCard(document);
+      // Reopen, then the button inside does the jump the tap replaced.
+      click(link());
+      await waitCard();
+      click(document.querySelector('#tipCard a.tc-open'));
+      out.afterOpen = readCard(document);
+      out.spotAfterOpen = [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player'));
+      globalThis.__past = out;
+    },
+  },
+
+  // The demo, which is what Tim lands on first: a demo squad man and a demo
+  // free agent both preview weeks 1-3 (the sample pretends it is week 4).
+  'past-demo': {
+    label: '(h) the demo previews weeks 1-3 for a squad man and a free agent',
+    stub: false,
+    prefs: { 'waivers.source': 'demo' },
+    after: async ({ document, window }) => {
+      const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+      const takenTr = document.querySelector('#takenTable tbody tr[data-player]');
+      const wireTr = document.querySelector('#waiverTable tbody tr[data-player]:not(.mine)');
+      fire(takenTr.querySelector('a.pref'), 'mouseover');
+      const taken = await waitCard();
+      fire(wireTr.querySelector('a.pref'), 'mouseover');
+      const wire = await waitCard();
+      globalThis.__past = {
+        taken, wire,
+        takenId: takenTr.getAttribute('data-player'),
+        wireId: wireTr.getAttribute('data-player'),
+      };
+    },
+  },
 };
+
+/**
+ * The player card as a reader sees it: null when it is not open. Week numbers
+ * are read WITHOUT their sr-only words, so "3" is "3" and not "3 (playoffs)".
+ */
+function readCard(document) {
+  const card = document.getElementById('tipCard');
+  if (!card || card.hidden || card.hasAttribute('hidden')) return null;
+  const vis = (el) => [...el.childNodes]
+    .filter((n) => !(n.getAttribute && /\bsr-only\b/.test(n.getAttribute('class') || '')))
+    .map((n) => n.textContent).join('').trim();
+  const runs = [...card.querySelectorAll('table.tc-run')];
+  const cellsOf = (sel) => runs.flatMap((t) => [...t.querySelectorAll(sel)]);
+  return {
+    sheet: /\bsheet\b/.test(card.getAttribute('class') || ''),
+    ident: (card.querySelector('.tc-ident') || {}).textContent || '',
+    head: (card.querySelector('.tc-head') || {}).textContent || '',
+    pending: (card.querySelector('.tc-pending') || {}).textContent || '',
+    weeks: cellsOf('thead th').filter((th) => !/\btc-lbl\b/.test(th.getAttribute('class') || '')).map(vis),
+    proj: cellsOf('tbody td').map(vis),
+    act: cellsOf('tfoot td').map(vis),
+    waits: cellsOf('td.k-wait').length + cellsOf('td.a-wait').length,
+  };
+}
+
+/** Poll until the card is open and every played week has landed in it. */
+async function waitCard(max = 15000) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < max) {
+    last = readCard(globalThis.document);
+    if (last && !last.pending && last.weeks.length && !last.waits) return last;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return last;
+}
 
 // --------------------------------------------------------------- reading it
 
@@ -395,6 +558,13 @@ async function boot(scenario) {
     ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   });
+  // `coarse`: a finger, not a mouse — `(hover: none)` matches, which is the one
+  // question js/connection.js's coarsePointer() asks.
+  if (cfg.coarse) {
+    const mm = (q) => ({ matches: /hover:\s*none/.test(q), addEventListener() {}, removeEventListener() {} });
+    globalThis.matchMedia = mm;
+    window.matchMedia = mm;
+  }
   window.localStorage = localStorage;
   window.ResizeObserver = globalThis.ResizeObserver;
   window.requestAnimationFrame = globalThis.requestAnimationFrame;
@@ -458,6 +628,115 @@ async function check(scenario, boot) {
     c.ok('the page reached its own finished state within the poll’s ceiling',
       stuck.length === 0,
       stuck.map((s) => `after ${s.ms}ms: ${s.why}`).join(' | '));
+  }
+
+  // ---- (f)/(g)/(h) the played-weeks preview --------------------------------
+  if (scenario === 'past' || scenario === 'past-touch' || scenario === 'past-demo') {
+    const w = globalThis.__past || {};
+    const J = (x) => JSON.stringify(x);
+    const WEEKS = ['1', '2', '3'];
+    const card = (name, got, want) => {
+      c.ok(`${name}: the card opened and every played week landed`,
+        got && !got.pending && got.waits === 0, J(got));
+      c.ok(`${name}: exactly the played weeks 1-3 — no current or future week`,
+        got && J(got.weeks) === J(WEEKS), J(got && got.weeks));
+      if (want.proj) {
+        c.ok(`${name}: Proj row is ESPN’s projection for each played week`,
+          got && J(got.proj) === J(want.proj), `${J(got && got.proj)} want ${J(want.proj)}`);
+      }
+      if (want.act) {
+        c.ok(`${name}: Act row is what he scored`,
+          got && J(got.act) === J(want.act), `${J(got && got.act)} want ${J(want.act)}`);
+      }
+    };
+
+    if (scenario === 'past') {
+      for (const t of w.tipped || []) {
+        c.ok(`every name in #${t.id} carries the preview`, t.links > 0 && t.tips === t.links,
+          `${t.tips} of ${t.links}`);
+      }
+      c.ok('NOTHING about a played week is bought before anybody hovers',
+        J(w.rosterBefore) === '[]' && J(w.wireBefore) === '[]',
+        `rosters ${J(w.rosterBefore)} wire ${J(w.wireBefore)}`);
+
+      // Hand-checked against the stub: Alden Ross projects 22 flat and scored
+      // 25.4, 18.2, 30.0.
+      card('Alden Ross (taken)', w.ross,
+        { proj: ['22.0', '22.0', '22.0'], act: ['25.4', '18.2', '30.0'] });
+      c.ok('the card names him', /Alden Ross/.test((w.ross || {}).ident || ''), J(w.ross));
+      c.ok('the heading says these are the played weeks', /played/i.test((w.ross || {}).head || ''),
+        (w.ross || {}).head);
+      c.ok('first hover on a rostered man: ONE roster read per played week, and no wire read',
+        J(w.rosterAfterTaken) === '[1,2,3]' && J(w.wireAfterTaken) === '[]',
+        `rosters ${J(w.rosterAfterTaken)} wire ${J(w.wireAfterTaken)}`);
+      c.ok('mouse-out closes it', w.afterLeave === null, J(w.afterLeave));
+
+      card('Hale Innis (bye in week 2)', w.hale,
+        { proj: ['14.0', 'Bye', '14.0'], act: ['11.3', '', '16.9'] });
+      card('Kip Lund (no projection)', w.kip,
+        { proj: ['—', '—', '—'], act: ['4.0', '', ''] });
+
+      // Hand-checked: Player 00 projects 20.00, 15.20, 24.00 and scored 1.2x - 1.
+      card('Player 00 (free agent)', w.p00,
+        { proj: ['20.0', '15.2', '24.0'], act: ['23.0', '17.2', '27.8'] });
+      c.ok('first hover on a free agent: one wire read per played week, and no roster re-read',
+        J(w.wireAfterWire) === '[1,2,3]' && J(w.rosterAfterWire) === '[1,2,3]',
+        `rosters ${J(w.rosterAfterWire)} wire ${J(w.wireAfterWire)}`);
+      card('Player 07 (free agent, bye in week 2)', w.p07, { act: null });
+      c.ok('Player 07: his bye reads Bye, with no score under it',
+        w.p07 && w.p07.proj[1] === 'Bye' && w.p07.act[1] === '', J(w.p07));
+      card('Player 02 (free agent, no projection in week 1)', w.p02, {});
+      c.ok('Player 02: no projection is "—", and his score still shows',
+        w.p02 && w.p02.proj[0] === '—' && w.p02.act[0] === '3.1', J(w.p02));
+      c.ok('every later hover is free: nothing bought twice',
+        J(w.wireAfterAll) === '[1,2,3]' && J(w.rosterAfterAll) === '[1,2,3]',
+        `rosters ${J(w.rosterAfterAll)} wire ${J(w.wireAfterAll)}`);
+
+      c.ok('keyboard focus on a name opens the same card',
+        w.focus && /Brix Calder/.test(w.focus.ident) && J(w.focus.weeks) === J(WEEKS), J(w.focus));
+      c.ok('and leaving it closes the card', w.afterBlur === null, J(w.afterBlur));
+      c.ok('"How to read this table" says what the preview shows',
+        /played weeks/i.test(w.note || ''), (w.note || '').slice(0, 200));
+    }
+
+    if (scenario === 'past-touch') {
+      card('tap on Alden Ross', w.card,
+        { proj: ['22.0', '22.0', '22.0'], act: ['25.4', '18.2', '30.0'] });
+      c.ok('on a phone it opens as a sheet', w.card && w.card.sheet, J(w.card));
+      c.ok('the tap did NOT jump: the span and the spotlight are untouched',
+        J(w.spanOn) === '["3"]' && w.spot === 0, `span ${J(w.spanOn)} spot ${w.spot}`);
+      c.ok('the jump is a button inside the sheet', /player=7101/.test(w.open || ''), w.open);
+      c.ok('the button says where it goes (his row), not "next 13 weeks"', /in the table/.test(w.openText || ''), w.openText);
+      c.ok('a tap outside closes it', w.afterOutside === null, J(w.afterOutside));
+      c.ok('the button inside does the jump, on this page, and closes the sheet',
+        w.afterOpen === null && J(w.spotAfterOpen) === '["7101"]',
+        `${J(w.afterOpen)} spot ${J(w.spotAfterOpen)}`);
+    }
+
+    if (scenario === 'past-demo') {
+      const { generateDemoWeekRosters } = await import(
+        pathToFileURL(path.join(REPO, 'js/demo-rosters.js')).href
+      );
+      // The squad man, re-derived from the demo generator itself.
+      const fmtP = (v) => (v === null || v === undefined ? '—' : Number(v).toFixed(1));
+      const fmtA = (v) => (typeof v === 'number' ? v.toFixed(1) : '');
+      const want = { proj: [], act: [] };
+      for (const wk of [1, 2, 3]) {
+        const man = generateDemoWeekRosters(wk).teams.flatMap((t) => t.players)
+          .find((p) => String(p.playerId) === w.takenId);
+        want.proj.push(man ? fmtP(man.projected) : '—');
+        want.act.push(man ? fmtA(man.actual) : '');
+      }
+      card('a demo squad man', w.taken, want);
+      c.ok('the demo squad man really has three scores (not vacuous)',
+        want.act.every((a) => /^\d+\.\d$/.test(a)), J(want));
+      card('a demo free agent', w.wire, {});
+      c.ok('a demo free agent shows a projection and a score for each played week',
+        w.wire && w.wire.proj.every((v) => /^\d+\.\d$|^Bye$/.test(v)) &&
+        w.wire.act.every((v, i) => (w.wire.proj[i] === 'Bye' ? v === '' : /^\d+\.\d$/.test(v))),
+        J(w.wire));
+    }
+    return c.out;
   }
 
   // ---- (e) two squads, one label -------------------------------------------
