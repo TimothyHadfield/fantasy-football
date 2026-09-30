@@ -133,11 +133,14 @@
       "scenarios": 14
     },
     "wv-test.mjs": {
-      "assertions": 467,
-      "scenarios": 10
+      "assertions": 546,
+      "scenarios": 11
     },
     "tr-test.mjs": {
-      "assertions": 813
+      "assertions": 835
+    },
+    "test-proj-trend.mjs": {
+      "assertions": 52
     }
   }
 }
