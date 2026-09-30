@@ -18,6 +18,7 @@
 import * as espn from './espn.js';
 import * as bridge from './bridge.js';
 import * as cloud from './cloud.js';
+import { compactScoring } from './proj-trend.js';
 import * as capture from './capture.js';
 // The positional floor's RULES are pure and live here; `fetchFloors` below is
 // the one read that feeds them. See js/floor.js.
@@ -863,6 +864,11 @@ export async function fetchSchedule() {
     // The trade deadline and review window (`espn.parseTrades`), for the
     // Trade page's deadline line. Null on anything that did not carry them.
     trades: parsed.trades || null,
+    // The league's scoring rules, cut to {statId, points, pointsOverrides}, for
+    // the preseason arrows (js/proj-trend.js re-scores ESPN's preseason stats
+    // with them). Riding the schedule means the phone's synced copy carries them
+    // too, with no request of its own. Null on a payload without mSettings.
+    scoringItems: compactScoring(raw.settings?.scoringSettings?.scoringItems),
     weeks,
     byWeek,
     games: weeks.flatMap((w) => byWeek.get(w)),

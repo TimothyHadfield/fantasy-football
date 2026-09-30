@@ -110,6 +110,8 @@ import { enableSort, resort } from './sortable.js';
 // hand, and a threshold he cannot read is a colour he cannot check.
 import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn } from './heat.js';
 import { savedConfig, onConnection } from './connection.js';
+// The preseason arrows by a name (Tim, 2026-09-30) — see js/proj-trend.js.
+import * as trend from './proj-trend.js';
 import { scope } from './prefs.js';
 // The ONE definition of which weeks are the playoffs — the league's last
 // regular week plus one per round — shared with the Schedule page's bracket.
@@ -225,6 +227,8 @@ const state = {
   // proTeamId -> bye week. Empty = unknown, and then a live 0.00 reads as a bye
   // the way it always did. The sample wire carries its own `byeWeek` instead.
   byes: {},
+  // The league's scoringItems, for the preseason arrows; null = unknown.
+  scoring: null,
   span: SPAN_CHOICE(prefs.get('span', '3')),
 
   // A position filter PER TABLE. They were one filter driving both, which meant
@@ -476,6 +480,7 @@ function resetData() {
   state.failedRosterWeeks.clear();
   state.demoTeamId = null;
   state.byes = {};
+  state.scoring = null;
   state.playedWeeks = [];
   state.past.wire.clear();
   state.past.rosters.clear();
@@ -493,6 +498,9 @@ async function loadDemo() {
   const token = state.token;
 
   state.isDemo = true;
+  // ESPN's default rules for the preseason arrows. The demo's men are
+  // invented, so none is in the preseason copy and no arrow is drawn here.
+  state.scoring = trend.DEFAULT_PPR;
   state.leagueName = 'Demo League';
   state.seasonWeeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The sample season's own bracket weeks (14–16), by the same rule as live.
@@ -609,6 +617,8 @@ async function loadLive() {
     const schedule = await fetchSchedule();
     if (token !== state.token) return;
     state.leagueName = schedule.leagueName || 'Your league';
+    // The league's scoring rules, for the preseason arrows (js/proj-trend.js).
+    state.scoring = Array.isArray(schedule.scoringItems) ? schedule.scoringItems : null;
     state.seasonWeeks = schedule.weeks.slice();
     state.playoffWeeks = leaguePlayoffWeeks(schedule);
     state.currentWeek = currentWeekOf(schedule);
@@ -2079,6 +2089,31 @@ function identityCells({ p, avg }, heat = null, says = '') {
  * about what a green Avg means — the same reason `cell()` is shared between
  * them rather than copied.
  */
+/**
+ * THE PRESEASON ARROW (Tim, 2026-09-30): "put a up or down arrow by that
+ * player's name if their rest-of-season proj/week has increased or decreased by
+ * more than 2 than it was at the begginning of the season". NOW is the row's
+ * own Avg (D7, the regular-season weeks shown), so the arrow can never disagree
+ * with the number in the same row. Preseason and the threshold are
+ * js/proj-trend.js's. Empty string for no arrow.
+ */
+const trendMark = (p, avg) => trend.trendHtml(trend.trendOf(p.playerId, avg, state.scoring));
+
+/** The weeks an Avg is taken over, for the arrow's line behind the toggle. */
+const avgWeeksLabel = (weeks) => {
+  const use = avgMask(weeks);
+  return weekRange(weeks.filter((_, i) => use[i]));
+};
+
+/** Fill (or empty and hide) a table's arrow key from the rows it describes (rule 16). */
+function setTrendKey(id, html) {
+  const el = $(id);
+  if (!el) return;
+  const on = trend.hasTrend(html);
+  el.textContent = on ? trend.TREND_KEY : '';
+  el.hidden = !on;
+}
+
 function avgCellHtml(avg, heat, says) {
   const title = `${says}${says && heat ? ' ' : ''}${heat ? heat.words : ''}`;
   return `<td class="avg grouped${heat ? ` ${heat.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`}` +
@@ -2114,7 +2149,7 @@ function wireRow(row, weeks, mine, avgScales) {
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${
         playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row and show every ` +
-          `remaining week`, pastTip(p, { wire: true, where: 'w' }))}${injuryTag(status)}${waiverTag(p)}</td>
+          `remaining week`, pastTip(p, { wire: true, where: 'w' }))}${trendMark(p, row.avg)}${injuryTag(status)}${waiverTag(p)}</td>
       ${identityCells(row, heat, says)}
       ${values
         .map((v, i) =>
@@ -2155,7 +2190,7 @@ function mineRow(row, weeks, avgScales) {
   return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
         `<span class="mine-tag">${esc(label)}</span> ` +
-        `${playerLink(p, esc(p.name), why, pastTip(p, { where: 'm' }))}` +
+        `${playerLink(p, esc(p.name), why, pastTip(p, { where: 'm' }))}${trendMark(p, row.avg)}` +
         `${injuryTag(availability(p.injuryStatus))}</td>
       ${identityCells(row, heat, says)}
       ${values.map((v, i) => withPo(cell(v, weeks[i], p, true), weeks[i], weeks)).join('')}
@@ -2185,6 +2220,7 @@ function renderTable(weeks) {
 
   if (!available.length && !mine.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(emptyReason(all.length))}</td></tr>`;
+    setTrendKey('waiverTrendKey', '');
     resort(table);
     return;
   }
@@ -2195,6 +2231,7 @@ function renderTable(weeks) {
   tbody.innerHTML =
     available.map((r) => wireRow(r, weeks, byPosition, avgScales)).join('') +
     mine.map((r) => mineRow(r, weeks, avgScales)).join('');
+  setTrendKey('waiverTrendKey', tbody.innerHTML);
 
   // Keep whatever sort the user picked when the row set changes.
   resort(table);
@@ -2321,7 +2358,7 @@ function takenRow(row, weeks, avgScales, weekScales) {
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${
         playerLink(p, esc(p.name), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
-          `his row and show every remaining week`, pastTip(p, { where: 't' }))}${injuryTag(status)}</td>
+          `his row and show every remaining week`, pastTip(p, { where: 't' }))}${trendMark(p, row.avg)}${injuryTag(status)}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" title="${posTitle}">${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
       <td class="left">${esc(p.proTeam)}</td>
@@ -2357,11 +2394,13 @@ function renderTaken(weeks) {
   if (!shown.length) {
     tbody.innerHTML =
       `<tr class="empty-row"><td colspan="${cols}">${esc(takenEmptyReason(all.length))}</td></tr>`;
+    setTrendKey('takenTrendKey', '');
     resort(table);
     return;
   }
 
   tbody.innerHTML = shown.map((r) => takenRow(r, weeks, avgScales, weekScales)).join('');
+  setTrendKey('takenTrendKey', tbody.innerHTML);
   resort(table);
 }
 
@@ -2580,6 +2619,11 @@ function renderTakenNote(weeks) {
     'the rest of the season and marks his row — the same thing that happens when you click a ' +
     'player anywhere else on the site, which is what brings you here.'
   );
+
+  // The preseason arrows' basis (rule 7), only when the table draws one.
+  if (trend.hasTrend($('takenTable').querySelector('tbody').innerHTML)) {
+    parts.push(trend.trendExplain(avgWeeksLabel(weeks)));
+  }
 
   const missing = weeks.filter((w) => state.failedRosterWeeks.has(w));
   if (missing.length) {
@@ -2871,6 +2915,11 @@ function renderNote(weeks) {
         'by another team before you get to him, and this page never refreshes itself.')
   );
 
+  // The preseason arrows' basis (rule 7), only when the table draws one.
+  if (trend.hasTrend($('waiverTable').querySelector('tbody').innerHTML)) {
+    parts.push(trend.trendExplain(avgWeeksLabel(weeks)));
+  }
+
   if (state.failedWeeks.size) {
     const failed = [...state.failedWeeks].sort((a, b) => a - b).filter((w) => weeks.includes(w));
     if (failed.length) {
@@ -3060,6 +3109,10 @@ if (landing !== null) {
   state.spotlight = landing;
   state.span = 'all';
 }
+
+// The preseason copy for the arrows by a name: read once, and the tables are
+// repainted when it lands (a failed read simply draws no arrows).
+trend.loadBaseline().then((b) => { if (b) render(); });
 
 if (state.source === 'live' && savedConfig()) loadLive();
 else { state.source = 'demo'; loadDemo(); }

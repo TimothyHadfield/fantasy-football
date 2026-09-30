@@ -1,6 +1,15 @@
 // Stands in for js/season.js. Only fetchSchedule matters to the waivers page.
 export const calls = { schedule: 0 };
 
+import { pathToFileURL as toUrl } from 'node:url';
+import nodePath from 'node:path';
+import { REPO as ROOT } from './repo.mjs';
+// The same module the page imports, so the same instance (and cached copy).
+const { DEFAULT_PPR } = await import(toUrl(nodePath.join(ROOT, 'js/proj-trend.js')).href);
+const HALF_PPR = DEFAULT_PPR.map((i) => (i.statId === 53
+  ? { statId: 53, points: 0, pointsOverrides: { 1: 0.5, 2: 0.5, 3: 0.5, 4: 0.5 } }
+  : i));
+
 const WEEKS = 13;
 // 3, so the "current week" is 4 — or, with WV_PLAYED_THROUGH=13, December:
 // the regular season is over and only the playoff weeks are left.
@@ -26,6 +35,10 @@ export async function fetchSchedule() {
   }
 
   return {
+    // WV_TREND: the league's own rules, the way js/season.js keeps them —
+    // ESPN's default PPR with a catch cut to half a point (the real league's
+    // shape: points 0 and a per-position override).
+    ...(process.env.WV_TREND === '1' ? { scoringItems: HALF_PPR } : {}),
     leagueName: 'Stub League',
     teams: Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Team ${i + 1}` })),
     weeks: [...byWeek.keys()],
@@ -34,8 +47,51 @@ export async function fetchSchedule() {
   };
 }
 
-export async function fetchWeekRosters() { return { week: 1, teams: [] }; }
-export async function fetchWeeksRosters() { return new Map(); }
+// WV_TREND: two squads, so the Taken table and your own "Your …" rows carry
+// real men from the preseason copy too (half PPR, per week, by hand):
+//   team 2  Texans D/ST  (-16034)  7.6 → flat 10.0 = +2.4  green ▲
+//           Tyler Warren (4431459) 9.9 → flat 7.8  = −2.1  red ▼
+//           Stub Man     (7399)    not in the copy       no arrow
+//   team 4 (yours)  Wil Lutz (2985659) K 8.0 → flat 11.0 = +3.0  green ▲
+export const TREND_SQUADS = [
+  { id: 2, name: 'Team 2', players: [
+    { playerId: -16034, name: 'Texans D/ST', position: 'DST', proTeam: 'HOU', flat: 10.0, want: 'up' },
+    { playerId: 4431459, name: 'Tyler Warren', position: 'TE', proTeam: 'IND', flat: 7.8, want: 'down' },
+    { playerId: 7399, name: 'Stub Man', position: 'WR', proTeam: 'TB', flat: 9.0, want: null },
+  ] },
+  { id: 4, name: 'Team 4', players: [
+    { playerId: 2985659, name: 'Wil Lutz', position: 'K', proTeam: 'DEN', flat: 11.0, want: 'up' },
+  ] },
+];
+function trendTeams() {
+  return TREND_SQUADS.map((t) => {
+    const players = t.players.map((p) => ({
+      playerId: p.playerId, name: p.name, position: p.position, proTeam: p.proTeam,
+      lineupSlotId: 20, slot: 'BE', started: false, projected: p.flat, actual: null,
+      seasonProjected: 120, injuryStatus: 'ACTIVE', percentOwned: 50,
+    }));
+    return {
+      id: t.id, name: t.name, abbrev: `T${t.id}`, players, starters: [], bench: players,
+      projectedTotal: null, actualTotal: null, benchActualTotal: null, seasonProjectedTotal: null,
+    };
+  });
+}
+const TREND_ON = () => process.env.WV_TREND === '1';
+
+export async function fetchWeekRosters(week = 1) {
+  return { week, teams: TREND_ON() ? trendTeams(week) : [] };
+}
+export async function fetchWeeksRosters(weeks = [], { onProgress } = {}) {
+  const out = new Map();
+  if (!TREND_ON()) return out;
+  let done = 0;
+  for (const week of weeks) {
+    out.set(Number(week), trendTeams(Number(week)));
+    done++;
+    if (onProgress) onProgress(done, weeks.length, week);
+  }
+  return out;
+}
 export async function fetchSeasonData() { throw new Error('not used by the waivers page'); }
 
 // ------------------------------------------------------------ the wire

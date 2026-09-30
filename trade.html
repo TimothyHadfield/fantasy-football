@@ -76,6 +76,20 @@
   /* Inside a pill the underline has to stay ON the pill, in the pill's ink. */
   .bye-hl { padding-top: 1px; padding-bottom: 3px; }
   .bye-hl .inj { text-underline-offset: 2px; text-decoration-thickness: 1.5px; }
+  /* HIS PROJECTION HAS MOVED SINCE THE PRESEASON (Tim, 2026-09-30: "make the
+     down arrow red and up arrow green. make sure it's small"). Smaller, lighter
+     and COLOURED, where the heat scale's ▲/▼ is 9px, bold, in the number's own
+     ink and beside a NUMBER in a tinted cell — so the two are not one signal. */
+  .trend {
+    position: relative; /* holds its sr-only words inside the scroll box */
+    font-size: 7.5px;
+    font-weight: 400;
+    margin-left: 3px;
+    vertical-align: 1px;
+    flex: 0 0 auto;
+  }
+  .trend-up { color: var(--accent); }
+  .trend-down { color: var(--err); }
   .pkg .pp, .deal-side .pp {
     color: var(--dim);
     font-size: 10.5px;

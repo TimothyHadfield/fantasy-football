@@ -43,6 +43,7 @@ const SUITES = [
   ['test-projection.mjs', 'the shared projection module'],
   ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],
+  ['test-proj-trend.mjs', 'the preseason arrows: ESPN’s preseason stats re-scored, the >2 a week threshold'],
   ['heat-draw-check.mjs', 'the red/green tint draws on even rows, your own row and under hover (the CSS cascade, run)'],
   ['sortable-check.mjs', 'click-to-sort on its own: data-v, the text fallback, and every glyph heat.js can emit'],
   ['charts-check.mjs', 'the inline-SVG charts on their own: marks placed from the data, identity never by hue alone'],

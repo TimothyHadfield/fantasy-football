@@ -308,6 +308,22 @@ td.zero-out, td.zero { color: var(--dim); }
 #waiverHeatKey:empty, #takenHeatKey:empty,
 #waiverHeatBands:empty, #takenHeatBands:empty { display: none; }
 
+/* HIS PROJECTION HAS MOVED SINCE THE PRESEASON (Tim, 2026-09-30: "make the
+   down arrow red and up arrow green. make sure it's small"). Smaller, lighter
+   and COLOURED, where the heat scale's ▲/▼ is 9px, bold, in the number's own ink
+   and beside a NUMBER in a tinted cell — so the two are not one signal. The
+   sr-only words sit inside it, so it is positioned: an absolute span with no
+   positioned ancestor escapes .table-scroll and widens the phone page. */
+.trend {
+  position: relative;
+  font-size: 7.5px;
+  font-weight: 400;
+  margin-left: 3px;
+  vertical-align: 1px;
+}
+.trend-up { color: var(--accent); }
+.trend-down { color: var(--err); }
+
 /* The thresholds read as a strip of pairs rather than a paragraph: tabular
    figures so the two columns of numbers line up down the strip. */
 .bands-line { font-variant-numeric: tabular-nums; }
@@ -641,6 +657,7 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
          compares and the two hue-free cues. The thresholds in points are in the
          toggle below — see the note beside the CSS rule for these two ids. -->
     <p class="panel-note" id="waiverHeatKey"></p>
+    <p class="panel-note trend-key" id="waiverTrendKey" hidden></p>
     <details class="explain">
       <summary>How to read this table</summary>
       <div class="panel-note" id="waiverNote"></div>
@@ -722,6 +739,7 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <tbody></tbody>
     </table></div>
     <p class="panel-note" id="takenHeatKey"></p>
+    <p class="panel-note trend-key" id="takenTrendKey" hidden></p>
     <details class="explain">
       <summary>How to read this table</summary>
       <div class="panel-note" id="takenNote"></div>

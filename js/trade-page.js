@@ -124,6 +124,11 @@ import {
 } from './player-card.js';
 // Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
 import { healthy, injuryLabel, injuryClass } from './injury.js';
+// The preseason arrows by a name (Tim, 2026-09-30): ESPN's preseason projection
+// kept in data/baselines/, re-scored with the league's rules.
+import * as trend from './proj-trend.js';
+// Read once, from the moment the page loads; useLive awaits it with the byes.
+const baselineRead = trend.loadBaseline();
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14). Pure, and it compares a number
 // only with the same COLUMN or the same POSITION — never a quarterback against
 // a kicker. Every table this page tints carries channel 4, "never colour
@@ -227,6 +232,7 @@ const state = {
   espnTeamId: null,    // the reader's own team, when a live league says so
   isDemo: true,
   byes: {},            // proTeamId -> bye week; empty = unknown (a live 0.00 is then a bye)
+  scoring: null,       // the league's scoringItems, for the preseason arrows; null = unknown
   // EVERY REMAINING WEEK IS THE DEFAULT since 2026-09-19 (Tim: "it should not
   // load if it doesn't price it"). It is the measure the page is FOR — rule 10
   // in HANDOFF.md — and the only reason it was not the default was that it had
@@ -1554,7 +1560,29 @@ function marksKeyText(html) {
   return [
     /\bbye-hl\b/.test(html) ? BYE_KEY : '',
     /\binj\b/.test(html) ? INJ_KEY : '',
+    trend.hasTrend(html) ? trend.TREND_KEY : '',
   ].filter(Boolean).join(' ');
+}
+
+/**
+ * THE PRESEASON ARROW (Tim, 2026-09-30): "put a up or down arrow by that
+ * player's name if their rest-of-season proj/week has increased or decreased by
+ * more than 2 than it was at the begginning of the season … make sure it's
+ * small". NOW is this page's own per-week figure — the weekly mean over the
+ * span (D7), the "/wk" beside his name — so it is drawn only on the weekly
+ * basis; the two scalar bases are not a rest-of-season average. PRESEASON and
+ * the threshold are js/proj-trend.js's. Empty string for no arrow.
+ */
+function trendMarkOf(p) {
+  if (!p || basis() !== 'weeks') return '';
+  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), state.scoring));
+}
+
+/** The arrow's line behind "How this works", naming the weeks "now" averages. */
+function trendExplainHtml() {
+  if (state.isDemo || basis() !== 'weeks') return '';
+  const span = weeklySpan();
+  return ' ' + trend.trendExplain(span.length ? weekRange(span) : '');
 }
 const byeKeyHtml = (html) => {
   const t = marksKeyText(html);
@@ -1986,7 +2014,7 @@ function manLine(p, ctx = null) {
   const mark = ctx && ctx.offer
     ? byeMarkOf(p, dirIn(p, ctx.offer), meetingWeeksAhead({ offer: ctx.offer }))
     : null;
-  const inner = `${nameMarksHtml(p.name, mark, injuryMarkOf(p))}${posTag(p.position)}${val}`;
+  const inner = `${nameMarksHtml(p.name, mark, injuryMarkOf(p))}${trendMarkOf(p)}${posTag(p.position)}${val}`;
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
@@ -3112,6 +3140,7 @@ function extraColumnsHtml() {
     `not known in advance, so it is not counted. Both chance columns already include it; You gain, ` +
     `He gains and which deals are found do not.` +
     BYE_EXPLAIN +
+    trendExplainHtml() +
     `<br><br>`
   );
 }
@@ -6149,6 +6178,9 @@ async function useDemo() {
   state.source = 'demo';
   state.isDemo = true;
   state.byes = {};
+  // The preseason arrows score with ESPN's default rules on demo (whose men are
+  // invented, so none is in the preseason copy and no arrow is drawn).
+  state.scoring = trend.DEFAULT_PPR;
   // No floors in demo: the demo wire lives on the Players page, not in a
   // shared module, and js/floor.js refuses to invent one. Demo therefore
   // prices exactly as it always has.
@@ -6200,6 +6232,7 @@ async function useLive() {
   espn.configure({ leagueId: saved.leagueId, season: saved.season });
   state.source = 'live';
   state.isDemo = false;
+  state.scoring = null;   // this league's rules, off the schedule read below
   setToggle('sourceToggle', 'src', 'live');
   cache.clear();
   resetWeekly(); // another league's weeks are another league's weeks
@@ -6238,6 +6271,8 @@ async function useLive() {
       state.league = capture.normalizeSchedule(schedule, { isDemo: false });
       // The deadline and review window, off the same read (espn.parseTrades).
       state.tradeRules = schedule.trades || null;
+      // The league's scoring rules, for the preseason arrows (js/proj-trend.js).
+      state.scoring = Array.isArray(schedule.scoringItems) ? schedule.scoringItems : null;
       state.scheduleError = null;
       break;
     } catch (err) {
@@ -6251,6 +6286,9 @@ async function useLive() {
     }
   }
   const byes = await byesRead;
+  // The preseason copy, started at load and read in parallel with the schedule;
+  // awaited here so the first names drawn can carry their arrows. Never throws.
+  await baselineRead;
   if (state.source !== 'live') return;   // the reader went back to demo meanwhile
   state.byes = byes && typeof byes === 'object' ? byes : {};
   weekly.means = new Map();
@@ -6677,7 +6715,10 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
       `<span class="gap"></span>`,
       (() => {
         // The bye pill and the injury underline, as on every other deal name.
-        return `<span class="nm">${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>`;
+        // The preseason arrow sits OUTSIDE `.nm`, whose ellipsis would clip it
+        // off a long name — its own flex cell, straight after the name.
+        return `<span class="nm">${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>` +
+          trendMarkOf(p);
       })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
