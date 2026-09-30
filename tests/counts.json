@@ -105,8 +105,8 @@
       "scenarios": 7
     },
     "taken-check.mjs": {
-      "assertions": 229,
-      "scenarios": 5
+      "assertions": 293,
+      "scenarios": 8
     },
     "link-check.mjs": {
       "assertions": 135
@@ -137,7 +137,7 @@
       "scenarios": 10
     },
     "tr-test.mjs": {
-      "assertions": 743
+      "assertions": 813
     }
   }
 }
