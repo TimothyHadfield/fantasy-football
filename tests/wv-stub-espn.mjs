@@ -66,6 +66,22 @@ const WAIVERS = process.env.WV_WAIVERS === '1';
 // which is NOT his team's bye — the case "0.00 means bye" got wrong.
 const OUT_ZERO = process.env.WV_OUT_ZERO === '1';
 
+// WV_PAST: the weeks already played (1-3) carry what ESPN really sends for a
+// played week (measured on public league 1241838, 2026-09-29, week 1 read in
+// week 4): the week's projection (statSourceId 1, split 1) AND the actual
+// (statSourceId 0, split 1). Two special shapes, both in week 1-2:
+//   Player 07 is on bye in week 2 -- projected 0.00, no actual line.
+//   Player 02 has no projection line in week 1, but did score 3.1.
+const PAST = process.env.WV_PAST === '1';
+const PLAYED_THROUGH = 3;
+/** What he scored in a played week, to the tenth like ESPN keeps it. */
+export function actualFor(p, week) {
+  if (!PAST || week > PLAYED_THROUGH) return null;
+  if (p.idx === 7 && week === 2) return null;
+  if (p.idx === 2 && week === 1) return 3.1;
+  return Math.round((projectionFor(p, week) * 1.2 - 1) * 10) / 10;
+}
+
 export async function fetchFreeAgents(scoringPeriodId, limit = 150) {
   const week = Number(scoringPeriodId);
   calls.weeks.push(week);
@@ -88,16 +104,21 @@ export async function fetchFreeAgents(scoringPeriodId, limit = 150) {
 
     // Player 00 is on bye in week 5: ESPN's own answer is 0.00.
     // Player 02 has no weekly line at all in week 4.
-    const skipWeekly = p.idx === 2 && week === 4;
+    const skipWeekly = (p.idx === 2 && week === 4) || (PAST && p.idx === 2 && week === 1);
     if (!skipWeekly) {
       stats.push({
         statSourceId: 1,
         statSplitTypeId: 1,
         scoringPeriodId: week,
-        appliedTotal: (p.idx === 0 && week === 5) || (OUT_ZERO && p.idx === 3 && week === 4)
+        appliedTotal: (p.idx === 0 && week === 5) || (OUT_ZERO && p.idx === 3 && week === 4) ||
+          (PAST && p.idx === 7 && week === 2)
           ? 0
           : projectionFor(p, week),
       });
+    }
+    const act = actualFor(p, week);
+    if (act !== null) {
+      stats.push({ statSourceId: 0, statSplitTypeId: 1, scoringPeriodId: week, appliedTotal: act });
     }
 
     // WV_WAIVERS: Players 05 and 06 are still on waivers (clearing Friday 18
@@ -129,6 +150,8 @@ export function expected(playerId, week) {
   if (!p) return null;
   if (p.idx === 1 && week === 6) return null;
   if (p.idx === 2 && week === 4) return null;
+  if (PAST && p.idx === 2 && week === 1) return null;
+  if (PAST && p.idx === 7 && week === 2) return 0;
   if (p.idx === 0 && week === 5) return 0;
   if (OUT_ZERO && p.idx === 3 && week === 4) return 0;
   return projectionFor(p, week);

@@ -34,14 +34,18 @@ export const TEAMS = [
     id: 1,
     name: 'Ridgeway Rovers',
     players: [
-      { playerId: 7101, name: 'Alden Ross', position: 'QB', proTeam: 'BUF', proj: flat(22) },
+      // The played weeks (1-3) carry an actual, as ESPN's roster read does for a
+      // decided week (`act`). Alden Ross is the hand-checked one.
+      { playerId: 7101, name: 'Alden Ross', position: 'QB', proTeam: 'BUF', proj: flat(22), act: (w) => [null, 25.4, 18.2, 30][w] ?? null },
       { playerId: 7102, name: 'Brix Calder', position: 'QB', proTeam: 'CIN', proj: flat(16) },
       { playerId: 7103, name: 'Cade Dunlow', position: 'QB', proTeam: 'DAL', proj: (w) => (w <= 6 ? 10 : 40) },
       { playerId: 7104, name: 'Dax Ellery', position: 'RB', proTeam: 'DEN', proj: flat(15) },
       { playerId: 7105, name: 'Finn Gable', position: 'RB', proTeam: 'GB', proj: flat(9) },
-      { playerId: 7106, name: 'Hale Innis', position: 'WR', proTeam: 'KC', proj: flat(14) },
+      // On bye in week 2, a week already played: 0.00 and no actual at all.
+      { playerId: 7106, name: 'Hale Innis', position: 'WR', proTeam: 'KC', proj: (w) => (w === 2 ? 0 : 14), act: (w) => [null, 11.3, null, 16.9][w] ?? null },
       { playerId: 7107, name: 'Ivor Jessop', position: 'WR', proTeam: 'MIA', proj: (w) => (w === 5 ? 0 : 6) },
-      { playerId: 7108, name: 'Kip Lund', position: 'TE', proTeam: 'NYJ', proj: () => null },
+      // No projection in any week — but he did score in week 1.
+      { playerId: 7108, name: 'Kip Lund', position: 'TE', proTeam: 'NYJ', proj: () => null, act: (w) => (w === 1 ? 4 : null) },
       { playerId: 7109, name: 'Merrick Nolan', position: 'TE', proTeam: 'PHI', proj: flat(8) },
       { playerId: 7110, name: 'Otto Pace', position: 'K', proTeam: 'SEA', proj: flat(9) },
       { playerId: 7111, name: 'Quarry Defense', position: 'DST', proTeam: 'TB', proj: flat(7) },
@@ -150,7 +154,7 @@ export async function fetchWeekRosters(week) {
         slot: 'BE',
         started: false,
         projected: p.proj(week),
-        actual: null,
+        actual: week <= PLAYED_THROUGH && p.act ? p.act(week) : null,
         seasonProjected: 120,
         injuryStatus: 'ACTIVE',
         percentOwned: 50,

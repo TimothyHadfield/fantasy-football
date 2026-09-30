@@ -334,6 +334,122 @@ td.zero-out, td.zero { color: var(--dim); }
 .to-taken:hover { text-decoration: underline; }
 #takenPanel { scroll-margin-top: 12px; }
 
+/* ------------------------------------------------------- played-weeks card
+   Hovering (or tapping) a player's name shows his played weeks in the card
+   js/player-card.js draws. This block is the page's half of that contract,
+   copied from analysis.html so the card looks the same on every page: fixed to
+   the window (a card inside .table-scroll would be clipped), a sheet at the
+   foot of the screen on a touch phone, and nothing inside it scrolls. */
+.tipcard {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  max-width: min(92vw, 720px);
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-3);
+  box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.75);
+  font-size: 12.5px;
+  color: var(--text);
+  pointer-events: none;
+}
+.tipcard.sheet {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: none;
+  padding: 14px var(--pad-panel) 16px;
+  border-width: 1px 0 0;
+  border-radius: var(--r-4) var(--r-4) 0 0;
+  box-shadow: 0 -14px 34px -10px rgba(0, 0, 0, 0.8);
+  pointer-events: auto;
+  font-size: 13px;
+}
+.tipcard.sheet .tc-ident { font-size: 15px; }
+.tc-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+}
+.tc-open {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: var(--r-2);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: 13.5px;
+  text-decoration: none;
+}
+.tc-open-off {
+  background: transparent;
+  color: var(--dim);
+  font-weight: 500;
+  text-align: center;
+}
+.tc-close { flex: 0 0 auto; min-height: 44px; }
+.tc-ident { font-weight: 650; margin-bottom: 2px; }
+.tc-head, .tc-pending, .tc-legend, .tc-note { color: var(--dim); font-size: 11.5px; }
+.tc-head { margin-bottom: 7px; }
+.tc-legend { margin-top: 7px; line-height: 1.5; }
+.tc-note { margin-top: 7px; line-height: 1.5; }
+.tc-chart { display: grid; gap: 9px; }
+.tc-run {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tc-run th, .tc-run td {
+  border: none;
+  padding: 2px 7px;
+  text-align: center;
+  min-width: 34px;
+}
+.tc-run .tc-lbl {
+  text-align: right;
+  padding-right: 10px;
+  color: var(--dim);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  position: static;
+  background: none;
+}
+.tc-run thead th {
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  position: static;
+  background: none;
+  border-bottom: 1px solid var(--line);
+}
+.tc-run tbody td { font-size: 12.5px; padding-top: 4px; }
+.tc-run tfoot td, .tc-run tfoot th {
+  font-size: 11.5px;
+  padding-top: 3px;
+  border-top: 1px solid var(--line);
+}
+.tc-run tfoot td { color: var(--dim); }
+.tc-run .a-num { color: var(--text); }
+.tc-run .a-wait { color: var(--line); }
+.tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+.tc-run .k-out { color: var(--dim); line-height: 1.1; }
+.tc-run .tc-mk { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--err); }
+.tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
+.tc-run .k-wait { color: var(--line); }
+.tc-run .now { border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); }
+.tc-run thead th.now { color: var(--text); }
+
 /* The long explanation, opened: one idea per paragraph, each led by a short
    bold label so it can be scanned. */
 details.explain > .panel-note p { margin: 0 0 10px; }
@@ -379,6 +495,10 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
      needs its own line rather than a 30px column at the end of the sentence. */
   .jump { flex-wrap: wrap; gap: 8px; }
   .jump button { margin-left: 0; }
+
+  /* The played-weeks card: the same phone floor analysis.html gives it. */
+  .tc-run th, .tc-run td { min-width: 32px; padding: 2px 6px; }
+  .tc-run .tc-lbl { padding-right: 7px; }
 
   /* THE FIRST ROW WAS TWO SCREENS DOWN. The data-source panel folds to one
      line — its title and the toggle side by side, the lede dropped (the two

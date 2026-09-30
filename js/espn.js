@@ -332,6 +332,13 @@ export function parseFreeAgent(entry, week, byes = null) {
   const seasonProj = (p.stats || []).find(
     (s) => s.statSourceId === 1 && s.statSplitTypeId === 0 && s.seasonId === config.season
   );
+  // What he actually scored that week. Only a PLAYED week has one: read for a
+  // past week, the wire carries the actual beside the projection (statSourceId
+  // 0, split 1 — measured on public league 1241838 on 2026-09-29, week 1 read in
+  // week 4). The Players page's played-weeks preview is its one reader.
+  const weeklyActual = (p.stats || []).find(
+    (s) => s.statSourceId === 0 && s.statSplitTypeId === 1 && s.scoringPeriodId === week
+  );
 
   return {
     playerId: p.id,
@@ -351,6 +358,9 @@ export function parseFreeAgent(entry, week, byes = null) {
       week,
       byes
     ),
+    // A fact, so never bye-adjusted (see byeAdjustedProjection). Null before
+    // kickoff and for a man with no line that week.
+    actual: typeof weeklyActual?.appliedTotal === 'number' ? weeklyActual.appliedTotal : null,
     // Whether he can be added straight away or has to clear waivers first.
     // Both ride on the ENTRY, not on `player` (verified against league 1241838,
     // 2026-09-16): `status` is 'FREEAGENT' or 'WAIVERS', and a WAIVERS entry
