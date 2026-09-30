@@ -220,6 +220,8 @@
   .alt-inline b { font-weight: 600; }
   /* The meeting-week mark in a week table: under the week's button, small. */
   .vs-note { display: block; font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  /* The meeting week's Difference is yours minus his; your own change sits under it. */
+  .net-sub { display: block; font-size: 10.5px; font-weight: 400; color: var(--dim); }
   /* A COPY OF THE GOAL CONTROL AT THE TOP OF EVERY TRADE PANEL (Tim, 2026-09-29).
      Beside the heading on a laptop, smaller than the one in Data source; a full-
      width row above the heading on a phone. */
@@ -439,6 +441,9 @@
     white-space: nowrap;
   }
   .espn-open:hover { border-color: var(--accent); color: var(--accent-hi); }
+  /* "Open in custom trades" wears the ESPN link's look and sits under it. */
+  button.cu-load { font-family: inherit; cursor: pointer; line-height: inherit; }
+  td.espn .cu-load { display: block; width: max-content; margin-top: 4px; }
   .espn-off { color: var(--dim); font-size: 11.5px; }
 
   /* ------------------------------------------------------------- best combo */

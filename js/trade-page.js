@@ -2627,6 +2627,52 @@ function espnTradeUrl(offer) {
  * its own face instead.
  */
 function espnCell(offer) {
+  return espnLinkOrReason(offer) + customLoadButton(offer);
+}
+
+/**
+ * "OPEN IN CUSTOM TRADES" (Tim, 2026-09-30: "add a button … which just
+ * automatically selects the players it refers to for the two users"). It ticks
+ * this deal's men in the builder — the partner picked on the right, your men on
+ * the left, his on the right — and scrolls there. Nothing is saved.
+ *
+ * Only a deal between the squad the builder's left side follows (`Your team`)
+ * and ONE partner: a whole combination has several partners and no one box to
+ * load into, and a saved deal from a squad since switched away from would tick
+ * men the left list no longer shows.
+ */
+function customLoadable(offer) {
+  if (!offer || offer.combined || !offer.partner) return false;
+  const mine = offer.mineTeamId != null ? offer.mineTeamId : state.myTeamId;
+  if (mine == null || mine !== state.myTeamId || offer.partner.id === mine) return false;
+  const ids = (list) => (list || []).every((p) => p.playerId !== null && p.playerId !== undefined);
+  return ids(offer.send) && ids(offer.receive) && (offer.send.length + offer.receive.length) > 0;
+}
+
+function customLoadButton(offer) {
+  if (!customLoadable(offer)) return '';
+  return ` <button type="button" class="espn-open cu-load" data-cu-load="${esc(offerKey(offer))}">` +
+    `Open in custom trades</button>`;
+}
+
+/** Put this deal in the builder and bring the builder into view. */
+function loadIntoCustom(offer) {
+  if (!customLoadable(offer)) return;
+  if (state.deal) closeDeal();
+  state.custom.a = state.myTeamId;
+  state.custom.b = offer.partner.id;
+  state.custom.sendA = offer.send.map((p) => String(p.playerId));
+  state.custom.sendB = offer.receive.map((p) => String(p.playerId));
+  state.customWeek = null;
+  state.customPeek = null;
+  renderCustom();
+  const panel = $('customPanel');
+  if (panel && typeof panel.scrollIntoView === 'function') {
+    try { panel.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch { /* no layout */ }
+  }
+}
+
+function espnLinkOrReason(offer) {
   const href = espnTradeUrl(offer);
   if (href) {
     // The label changes with what the browser can actually do. ESPN's URL can
@@ -4307,7 +4353,20 @@ function weekTableHtml(
   // one is a foreground and says better-or-worse, this is a background and says
   // how far from this deal's own normal. Rule 14's split, and the two survive
   // each other.
-  const deltaScale = heatScale(byWeek.map((w) => w.delta));
+  //
+  // THE WEEK YOU PLAY HIM NETS HIS CHANGE (Tim, 2026-09-30: "for the week that
+  // the two user's play, subtract the opponent's projection change to your
+  // difference … i get +5.6 … my opponent gets -5.4 … so overall my difference
+  // is +11.0"). Only in YOUR table (`vsText` null: `vs` holds HIS change); his
+  // own table already is his change. The two lineup columns stay each squad's
+  // own, so that row's cell says "you +x" under it. The totals are left as your
+  // lineup alone — the same figure the finder's "You gain" prints.
+  const net = !!vs && vsText === null;
+  const shownOf = (w) => (net && vs.has(w.week) && Number.isFinite(vs.get(w.week)) &&
+      Math.abs(vs.get(w.week)) >= 0.05
+    ? Math.round((w.delta - vs.get(w.week)) * 10) / 10
+    : w.delta);
+  const deltaScale = heatScale(byWeek.map(shownOf));
   const heatBits = (v) => {
     const h = heatOf(v, deltaScale, { what: 'the other weeks of this deal' });
     return h
@@ -4317,14 +4376,18 @@ function weekTableHtml(
 
   const rows = byWeek
     .map((w) => {
-      const h = heatBits(w.delta);
+      const shown = shownOf(w);
+      const netted = shown !== w.delta;
+      const h = heatBits(shown);
       return (
         `<tr data-wk="${w.week}">` +
         weekCell(w.week, '', vsOf(w.week) + reachNote(w.week)) +
         `<td>${fmt(w.before)}</td>` +
         `<td>${fmt(w.after)}</td>` +
-        `<td class="delta ${w.delta > 0 ? 'up' : w.delta < 0 ? 'down' : ''}${h.cls}"${h.title}>` +
-        `${signedText(w.delta)}${h.mark}</td>` +
+        `<td class="delta ${shown > 0 ? 'up' : shown < 0 ? 'down' : ''}${netted ? ' netted' : ''}${h.cls}"${h.title}>` +
+        `${signedText(shown)}${h.mark}` +
+        (netted ? `<span class="net-sub">you ${signedText(w.delta)}</span>` : '') +
+        `</td>` +
         `</tr>`
       );
     })
@@ -4369,9 +4432,16 @@ function weekTableHtml(
           high: 'a week the trade is really buying',
           low: 'a week it does little or costs you',
         })} Played and playoff weeks are in no total, so they are in no scale either.`}</p>`
+      : '') +
+    (net && byWeek.some((w) => shownOf(w) !== w.delta)
+      ? `<p class="heat-key">${NET_KEY}</p>`
       : '')
   );
 }
+
+/** Rule 16's one sentence for the netted meeting week. */
+const NET_KEY = 'In a week marked ↑ you play him, so Difference is your change minus his; ' +
+  'the totals are your lineup alone.';
 
 /** The playoff rows and the line above them, or nothing. */
 function playoffTableRows(playoff) {
@@ -4741,7 +4811,12 @@ function renderDeal() {
       `<div class="deal-detail">${BREAKDOWN_HOST}</div>` +
     `</div>` +
     cut +
-    espnBlock;
+    espnBlock +
+    // Beside the ESPN link, and not on the pop-up the builder itself opened —
+    // that deal is already in the builder.
+    (state.dealKey !== 'cu-build' && customLoadable(offer)
+      ? `<p>${customLoadButton(offer).trim()}</p>`
+      : '');
 
   const sumOfRows = priced.byWeek.reduce((a, w) => a + w.delta, 0);
   // NOTHING BUT A WARNING IS DRAWN UNDER THIS TABLE (Tim, 2026-09-20: "the
@@ -6717,7 +6792,12 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
         // The bye pill and the injury underline, as on every other deal name.
         // The preseason arrow sits OUTSIDE `.nm`, whose ellipsis would clip it
         // off a long name — its own flex cell, straight after the name.
-        return `<span class="nm">${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>` +
+        // THE NAME CARRIES THE CARD TOO, for a mouse (Tim, 2026-09-30: "put the
+        // 14 week preview … if the user hovers over the player's name"). Hover
+        // only: a tap on the name still ticks him, and the number below is
+        // still where a thumb opens the card (see the next comment).
+        return `<span class="nm"${tipAttr(key, { hoverOnly: true })}>` +
+          `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>` +
           trendMarkOf(p);
       })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
@@ -7615,7 +7695,7 @@ function wireOfferClicks(el, rowsFor) {
   if (!el) return;
   el.addEventListener('click', (e) => {
     if (clickIsPlayer(e)) return;
-    if (e.target.closest && e.target.closest('a')) return;
+    if (e.target.closest && e.target.closest('a, button[data-cu-load]')) return;
     // A row carries both attributes, and so does the combo's headline button —
     // which is not in a row at all, because the whole packing is not one of the
     // offers. One selector covers both rather than two handlers that could come
@@ -7771,6 +7851,19 @@ document.addEventListener('click', (e) => {
 
   e.preventDefault();
   openInEspn(offer, href);
+}, true);
+
+// "Open in custom trades", on a row or in the pop-up. Capture phase, like the
+// ESPN link above, so the row under it never reads the press as "open this
+// deal" and the pop-up's outside-click never sees it.
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('button[data-cu-load]') : null;
+  if (!btn) return;
+  const offer = ESPN_OFFERS.get(btn.getAttribute('data-cu-load') || '');
+  if (!offer) return;
+  e.preventDefault();
+  e.stopPropagation();
+  loadIntoCustom(offer);
 }, true);
 
 enableSort($('depthTable'));
@@ -7941,7 +8034,7 @@ $('cuRows').addEventListener('click', (e) => {
   // player links and an ESPN link like any other — and those have to be left
   // alone, exactly as the finder's own click handler leaves them alone.
   if (clickIsPlayer(e)) return;
-  if (e.target.closest && e.target.closest('a')) return;
+  if (e.target.closest && e.target.closest('a, button[data-cu-load]')) return;
 
   // A saved row opens the SAME pop-up the finder's rows open — the per-week
   // breakdown, the slot-by-slot before and after, the side toggle. All of it

@@ -530,7 +530,19 @@ function readWeekTable(el) {
       total: (tr.getAttribute('class') || '').includes('total'),
       before: num(text(tds[1])),
       after: num(text(tds[2])),
-      delta: num(text(tds[3])),
+      // YOUR OWN change. In the week you play him (2026-09-30) the cell prints
+      // yours minus his as `shown`, with yours in `.net-sub` under it.
+      ...(() => {
+        const sub = tds[3].querySelector('.net-sub');
+        const c = tds[3].cloneNode(true);
+        for (const s of [...c.querySelectorAll('.net-sub')]) s.remove();
+        const shown = num(text(c));
+        return {
+          shown,
+          netted: !!sub,
+          delta: sub ? num(text(sub).replace(/^you\s*/, '')) : shown,
+        };
+      })(),
       // (G) THE SCALE ON THE DIFFERENCE COLUMN, each week against the other
       // weeks of this deal. The played and playoff rows are in no total and so
       // in no scale, which is read separately below.
@@ -912,7 +924,10 @@ function readCustomList(document, id) {
       // and the card's own tap handler preventDefaults, so a card on the name
       // would stop the biggest target on the row from ticking the man.
       card: !!row.querySelector('.pv[data-tip]'),
-      nameIsNotTheCard: !row.querySelector('.nm[data-tip]'),
+      // Since 2026-09-30 the NAME carries it too, but HOVER ONLY: a tap there
+      // is still the tick (`data-tip-hover`, see js/player-card.js).
+      nameIsNotTheCard: !row.querySelector('.nm[data-tip]:not([data-tip-hover])'),
+      nameHover: !!row.querySelector('.nm[data-tip][data-tip-hover]'),
       // THE ATTRIBUTE, not the property. The list is rebuilt on every tick now
       // (the suggestion marks and the cards' trade context both change with
       // it), so the element whose `.checked` property a test set is gone by the
@@ -1649,6 +1664,65 @@ const SCENARIOS = {
   },
 
   unpricedWeeksChosen() { return SCENARIOS.unpriced(true); },
+
+  /**
+   * "OPEN IN CUSTOM TRADES" (Tim, 2026-09-30): a button by "Open in ESPN" that
+   * ticks the deal's men in the custom builder, for both squads. Pressed on a
+   * finder row, and again from inside the pop-up.
+   */
+  async cuLoad() {
+    const { document, errors } = await boot();
+    const $ = (id) => document.getElementById(id);
+    const click = (el) => { if (el) el.dispatchEvent(new globalThis.Event('click', { bubbles: true })); };
+    await settleGoal(document);
+
+    const checkedNames = (id) => readCustomList(document, id).filter((r) => r.checked).map((r) => r.name);
+    const rowOf = (i) => {
+      const row = document.querySelectorAll('#tradeTable tbody tr')[i];
+      if (!row) return null;
+      return {
+        partner: text(row.querySelector('.mgr')),
+        send: text(row.querySelector('.pkg.send')),
+        recv: text(row.querySelector('.pkg.recv')),
+        button: row.querySelector('button[data-cu-load]'),
+      };
+    };
+
+    const r0 = rowOf(0);
+    click(r0 && r0.button);
+    await settle(1500);
+    const fromRow = {
+      partner: r0 ? r0.partner : '',
+      send: r0 ? r0.send : '',
+      recv: r0 ? r0.recv : '',
+      hadButton: !!(r0 && r0.button),
+      buttonText: r0 && r0.button ? text(r0.button) : '',
+      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null),
+      ticksA: checkedNames('cuListA'),
+      ticksB: checkedNames('cuListB'),
+      dealOpen: !readDeal(document).hidden,
+    };
+
+    // From the pop-up: open the second row's deal, press the button inside it.
+    const r1 = rowOf(1);
+    click(document.querySelectorAll('#tradeTable tbody tr')[1]);
+    await settle(1500);
+    const popButton = document.querySelector('#dealBody button[data-cu-load]');
+    const popHadButton = !!popButton;
+    click(popButton);
+    await settle(1500);
+    const fromPop = {
+      partner: r1 ? r1.partner : '',
+      send: r1 ? r1.send : '',
+      recv: r1 ? r1.recv : '',
+      hadButton: popHadButton,
+      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null),
+      ticksA: checkedNames('cuListA'),
+      ticksB: checkedNames('cuListB'),
+      dealOpen: !readDeal(document).hidden,
+    };
+    return { errors, fromRow, fromPop };
+  },
 
   /**
    * A remembered team that is not yours, on a live league that knows yours.
@@ -4005,6 +4079,29 @@ if (!wk.boot) {
 
 // ---- ask 5: the drill-down is a POP-UP, and only on demand -----------------
 
+// ---- "Open in custom trades" (Tim, 2026-09-30) ------------------------------
+{
+  const cl = run('cuLoad');
+  ok('the cuLoad scenario boots', !cl.boot, cl.boot);
+  if (!cl.boot) {
+    ok('OPEN IN CUSTOM: no console errors', cl.errors.length === 0, JSON.stringify(cl.errors).slice(0, 300));
+    const good = (x, label) => {
+      ok(`OPEN IN CUSTOM (${label}): the button is there`, x.hadButton, JSON.stringify(x).slice(0, 300));
+      ok(`OPEN IN CUSTOM (${label}): the partner is picked on the right`,
+        !!x.partner && x.pickedB === x.partner, `${x.pickedB} v ${x.partner}`);
+      ok(`OPEN IN CUSTOM (${label}): your men are ticked on the left, his on the right, and nobody else`,
+        (x.ticksA.length + x.ticksB.length) > 0 &&
+          x.ticksA.every((n) => x.send.includes(n)) && x.ticksB.every((n) => x.recv.includes(n)),
+        `A ${JSON.stringify(x.ticksA)} in "${x.send}"; B ${JSON.stringify(x.ticksB)} in "${x.recv}"`);
+      ok(`OPEN IN CUSTOM (${label}): no pop-up left open`, !x.dealOpen);
+    };
+    good(cl.fromRow, 'row');
+    ok('OPEN IN CUSTOM (row): says what it does', cl.fromRow.buttonText === 'Open in custom trades',
+      cl.fromRow.buttonText);
+    good(cl.fromPop, 'pop-up');
+  }
+}
+
 const md = run('modal');
 ok('the modal scenario boots', !md.boot, md.boot);
 if (!md.boot) {
@@ -5704,9 +5801,16 @@ if (!live.boot) {
     `${rightRows.filter((r) => !r.card).length} right without one`);
   // A card on the NAME would preventDefault the tap that ticks the man, on the
   // one device Tim reads this site on. The number is the affordance instead.
-  ok('and never on his name, which is the tap that ticks him',
+  ok('and never a TAP card on his name, which is the tap that ticks him',
     [...leftRows, ...rightRows].every((r) => r.nameIsNotTheCard),
     'a card on the name would swallow the tick on a phone');
+  // Tim, 2026-09-30: "put the 14 week preview … if the user hovers over the
+  // player's name". Hover only, so the tick above still holds.
+  ok('CUSTOM LISTS: every name opens his card on a hover',
+    leftRows.filter((r) => r.name && r.name !== 'nobody').every((r) => r.nameHover) &&
+      rightRows.filter((r) => r.name && r.name !== 'nobody').every((r) => r.nameHover) &&
+      leftRows.some((r) => r.nameHover),
+    `${[...leftRows, ...rightRows].filter((r) => r.name && r.name !== 'nobody' && !r.nameHover).length} names without one`);
 
   // -- (F) THE BREAKDOWN SITS BESIDE THE BUILDER --------------------------
   //
@@ -6320,6 +6424,30 @@ if (!ch.boot) {
     bw.some((r) => r.reachNote && r.reach < 1), JSON.stringify(bw.map((r) => [r.label, r.reach])));
   ok('and your half carries no such note (your side is already in the goal %)',
     ((ch.weeksA && ch.weeksA.weeks) || []).every((r) => !r.reachNote), '');
+  // Tim, 2026-09-30: "for the week that the two user's play, subtract the
+  // opponent's projection change to your difference" (+5.6 and his −5.4 is +11.0).
+  {
+    const aw = (ch.weeksA && ch.weeksA.weeks) || [];
+    const meet = aw.filter((r) => /his/.test(r.vs));
+    const hisOf = (r) => num((r.vs.match(/his\s*([+−-]?[\d.]+)/) || [])[1] || 'NaN');
+    ok('NET WEEK: in YOUR table, a week you play him prints your change minus his',
+      meet.length > 0 && meet.every((r) => {
+        const his = hisOf(r);
+        const want = Math.round((r.delta - his) * 10) / 10;
+        // ±0.1: each printed figure is rounded to a tenth on its own.
+        return Number.isFinite(his) && Math.abs(r.shown - want) < 0.11 &&
+          (Math.abs(his) < 0.05 || r.netted);
+      }),
+      JSON.stringify(meet.map((r) => [r.label, r.vs, r.delta, r.shown])));
+    ok('NET WEEK: and every other week is your change alone',
+      aw.filter((r) => !/his/.test(r.vs)).every((r) => !r.netted && r.shown === r.delta), '');
+    ok('NET WEEK: his own table is not netted',
+      bw.every((r) => !r.netted), '');
+    ok('NET WEEK: the totals stay your lineup alone (the sum of your own changes)',
+      ch.weeksA && ch.weeksA.totalRow &&
+        Math.abs(ch.weeksA.totalRow.delta - aw.reduce((a, r) => a + r.delta, 0)) <= 0.1 + 0.006 * aw.length,
+      JSON.stringify(ch.weeksA && ch.weeksA.totalRow));
+  }
   const want = bw.reduce((a, r) => a + r.reach * r.delta, 0);
   const tol = 0.1 + 0.006 * bw.reduce((a, r) => a + Math.abs(r.delta), 0);
   const got = ch.weeksB && ch.weeksB.totalRow ? ch.weeksB.totalRow.delta : NaN;

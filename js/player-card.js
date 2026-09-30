@@ -727,10 +727,18 @@ export function registerRun({ ident = '', run = null, href = null, id = null, op
   return key;
 }
 
-/** ` data-tip="…"`, ready to drop into a tag. Leading space included. */
-export function tipAttr(key) {
-  return ` ${TIP_ATTR}="${esc(key)}"`;
+/**
+ * ` data-tip="…"`, ready to drop into a tag. Leading space included.
+ *
+ * `hoverOnly`: the card opens for a mouse and the keyboard, but a TAP is left
+ * alone — for a name inside a `<label>`, where the tap has to tick the box (the
+ * Trade page's custom lists). Its touch route is another cell with the same key.
+ */
+export const TIP_HOVER_ATTR = 'data-tip-hover';
+export function tipAttr(key, { hoverOnly = false } = {}) {
+  return ` ${TIP_ATTR}="${esc(key)}"${hoverOnly ? ` ${TIP_HOVER_ATTR}` : ''}`;
 }
+const touchSkips = (cell) => coarsePointer() && cell.hasAttribute(TIP_HOVER_ATTR);
 
 /**
  * Every registered run on the page is dead — call this when the markup
@@ -782,7 +790,7 @@ let openId = null;        // the stable `id` of the run the open card shows, if 
 export function clickIsPlayer(e) {
   if (!e.target || !e.target.closest) return false;
   if (e.target.closest('a.pref')) return true;
-  return coarsePointer() && !!e.target.closest(`[${TIP_ATTR}]`);
+  return coarsePointer() && !!e.target.closest(`[${TIP_ATTR}]:not([${TIP_HOVER_ATTR}])`);
 }
 
 function cardNode() {
@@ -1188,7 +1196,8 @@ export function wireTips(el) {
 
   el.addEventListener('mouseover', (e) => {
     const cell = cellOf(e);
-    if (cell && !asSheet) showTip(cell);
+    // A phone fires a mouseover on every tap; a hover-only cell ignores it.
+    if (cell && !asSheet && !touchSkips(cell)) showTip(cell);
   });
   el.addEventListener('mouseout', (e) => {
     if (asSheet) return;   // a sheet is dismissed deliberately, never by drift
@@ -1200,7 +1209,7 @@ export function wireTips(el) {
   });
   el.addEventListener('focusin', (e) => {
     const cell = cellOf(e);
-    if (cell && !asSheet) showTip(cell);
+    if (cell && !asSheet && !touchSkips(cell)) showTip(cell);
   });
   el.addEventListener('focusout', (e) => {
     if (cellOf(e) && !asSheet) hideTip();
@@ -1210,7 +1219,7 @@ export function wireTips(el) {
     if (!coarsePointer()) return;
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
     const cell = cellOf(e);
-    if (!cell) return;
+    if (!cell || cell.hasAttribute(TIP_HOVER_ATTR)) return;
     e.preventDefault();
     e.stopPropagation();
     showTip(cell, true);

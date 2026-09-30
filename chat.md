@@ -75,3 +75,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Asked:** Analysis roster detail: the name's hover should BE the 14-week preview, like the grids, not a click away.
 - **Built:** `renderRoster` registers each name's season run (prefix 'r', `clearRuns('r')` per paint, `reopenTip()` after), `wireTips($('rosterTable'))`; link keeps click-through, title → aria-label. Season sheet still has no card (Tim 2026-09-18).
 - **Verified how:** 2 new an-test checks failed on old code in every scenario, pass now (an-test 2124/0); touch-check 353/0, text-audit 8/0; phone-view 393px WebKit tap opens the sheet (screenshot).
+
+## 2026-09-30 (later) — Trade
+- **Asked:** (1) "Open in custom trades" button by "Open in ESPN" that ticks the deal's men for both users; (2) the 14-week card on hover over names in the custom lists; (3) pop-up: in the week you play him, Difference = your change − his (+5.6 and −5.4 → +11.0).
+- **Built:** (1) `customLoadButton`/`loadIntoCustom` in trade-page.js, on every finder/combo/saved row's ESPN cell and in the pop-up under the ESPN block (not on the builder's own pop-up); row click handlers skip `button[data-cu-load]`. (2) `tipAttr(key, {hoverOnly})` → `data-tip-hover` in player-card.js: mouse/keyboard only, a tap still ticks; the number keeps the tap card. (3) `weekTableHtml` nets the meeting week in YOUR table only (`vsText` null), "you +x" under it, one-line key; totals stay your lineup alone.
+- **Verified how:** cuLoad scenario (row + pop-up) and NET WEEK checks (wk 2: +1.6 and his −1.6 → +3.2); screenshots 393px (builder ticked after press) and 1440px (pop-up button, netted wk 9 +4.6).
+- **Open (Tim decides):** whether the Per week / All weeks totals should net the meeting week too (left as your lineup alone, which matches the finder's "You gain").
