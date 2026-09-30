@@ -1088,7 +1088,7 @@ const SCENARIOS = {
       present: !!$('cuInline'),
       table: !!($('cuInline') && $('cuInline').querySelector('table.weeks')),
       weeks: $('cuInline') ? readWeekTable($('cuInline')) : null,
-      host: !!($('cuInline') && $('cuInline').querySelector('#cuWeek')),
+      host: !!document.getElementById('cuWeek'),
       title: text($('cuInline') && $('cuInline').querySelector('.cu-inline-title')),
     };
     // -- HIS HALF (2026-09-29): the same table from his lineup ----------------
@@ -1133,7 +1133,7 @@ const SCENARIOS = {
     // it must open HERE without touching the modal.
     const inlineWeekRow = $('cuInline') &&
       $('cuInline').querySelector('table.weeks tbody tr[data-wk]');
-    if (inlineWeekRow) fire(inlineWeekRow, 'mouseover');
+    if (inlineWeekRow) fire(inlineWeekRow.querySelector('td.name'), 'mouseover');
     out.inlineBreak = (() => {
       const host = document.getElementById('cuWeek');
       if (!host) return null;
@@ -1152,10 +1152,69 @@ const SCENARIOS = {
       const rowsB = $('cuInlineB') ? [...$('cuInlineB').querySelectorAll('table.weeks tbody tr[data-wk]')] : [];
       const target = rowsB[rowsB.length - 1];
       out.hoverB = { week: target ? target.getAttribute('data-wk') : null, mineBefore: text(document.querySelector('#cuWeek .wkx-title')) };
-      if (target) fire(target, 'mouseover');
+      if (target) fire(target.querySelector('td.name'), 'mouseover');
       out.hoverB.theirs = text(document.querySelector('#cuWeekB .wkx-title'));
       out.hoverB.mineAfter = text(document.querySelector('#cuWeek .wkx-title'));
     }
+
+    // THE SLOT-BY-SLOT IS A CARD ON THE WEEK LABEL (Tim, 2026-09-30: "instead of
+    // showing the 'week __, slot by slot' as a box below the week by week
+    // details in the custome trade, could you just show them as a big preview
+    // if the user hovers over the 'week __ ' label").
+    out.float = (() => {
+      const f = document.getElementById('cuWeek');
+      const fb = document.getElementById('cuWeekB');
+      const label = $('cuInline') && $('cuInline').querySelector('table.weeks tbody tr[data-wk] td.name');
+      const ev = (type, extra) => {
+        const e = new window.Event(type, { bubbles: true });
+        for (const [k, v] of Object.entries(extra || {})) Object.defineProperty(e, k, { value: v });
+        return e;
+      };
+      const r = {
+        boxInHalf: !!($('cuInline') && $('cuInline').querySelector('.wkx')) ||
+          !!($('cuInlineB') && $('cuInlineB').querySelector('.wkx')),
+        bodyChild: !!f && f.parentElement === document.body && f.classList.contains('wkx-float'),
+        bodyChildB: !!fb && fb.parentElement === document.body,
+        hiddenAtFirst: !!f && f.hidden,
+      };
+      if (!f || !label) return r;
+      label.dispatchEvent(ev('mouseover'));
+      r.hoverShows = !f.hidden;
+      r.hoverWeek = label.closest('tr').getAttribute('data-wk');
+      r.hoverTitle = text(f.querySelector('.wkx-title'));
+      label.dispatchEvent(ev('mouseout', { relatedTarget: $('cuTeamB') }));
+      r.leaveHides = null; // read after the grace, below
+      label.dispatchEvent(ev('click'));
+      r.clickPins = !f.hidden;
+      label.dispatchEvent(ev('mouseout', { relatedTarget: $('cuTeamB') }));
+      r.pinnedStays = !f.hidden;
+      const close = f.querySelector('.wkx-close');
+      if (close) close.dispatchEvent(ev('click'));
+      r.closeHides = f.hidden;
+      label.dispatchEvent(ev('click'));
+      document.dispatchEvent(ev('keydown', { key: 'Escape' }));
+      r.escapeHides = f.hidden;
+      label.dispatchEvent(ev('click'));
+      $('cuTeamB').dispatchEvent(ev('click'));
+      r.outsideHides = f.hidden;
+      return r;
+    })();
+    {
+      const f = document.getElementById('cuWeek');
+      const label = $('cuInline') && $('cuInline').querySelector('table.weeks tbody tr[data-wk] td.name');
+      if (f && label) {
+        const e1 = new window.Event('mouseover', { bubbles: true });
+        label.dispatchEvent(e1);
+        const e2 = new window.Event('mouseout', { bubbles: true });
+        Object.defineProperty(e2, 'relatedTarget', { value: $('cuTeamB') });
+        label.dispatchEvent(e2);
+        out.float.leaveStillShownAtOnce = !f.hidden;
+        await new Promise((res) => setTimeout(res, 300));
+        out.float.leaveHides = f.hidden;
+      }
+    }
+    // The weeks the two squads meet, at the top of the box (Tim, 2026-09-30).
+    out.meetTop = { text: text($('cuMeet')), inPick: !!document.querySelector('.cu-pick #cuMeet') };
 
     // THE BUILDER'S OWN POP-UP — the deal being built, not one already saved.
     // That is the half of his 2026-09-19 ask that did not exist: a saved row
@@ -6018,6 +6077,29 @@ if (!live.boot) {
     JSON.stringify(cu.inlineBreak && cu.inlineBreak.sides));
   ok('and none of it opens the modal',
     cu.inlineBreak && cu.inlineBreak.modalStillShut === true);
+
+  // THE SLOT-BY-SLOT IS A CARD ON THE WEEK LABEL, not a box under the table
+  // (Tim, 2026-09-30).
+  {
+    const f = cu.float || {};
+    ok('SLOT CARD: no slot-by-slot box sits inside either week-by-week half',
+      f.boxInHalf === false, JSON.stringify(f));
+    ok('SLOT CARD: each half has its own floating card on the page, hidden until asked',
+      f.bodyChild === true && f.bodyChildB === true && f.hiddenAtFirst === true, JSON.stringify(f));
+    ok('SLOT CARD: hovering a "Week N" label shows that week in the card',
+      f.hoverShows === true && new RegExp(`^Week ${f.hoverWeek}( \\(played\\))?,`).test(String(f.hoverTitle || '')),
+      JSON.stringify(f));
+    ok('SLOT CARD: leaving the label hides it after a short grace, not at once',
+      f.leaveStillShownAtOnce === true && f.leaveHides === true, JSON.stringify(f));
+    ok('SLOT CARD: a click pins it, and it stays when the pointer leaves',
+      f.clickPins === true && f.pinnedStays === true, JSON.stringify(f));
+    ok('SLOT CARD: Close, Escape and a click elsewhere each put it away',
+      f.closeHides === true && f.escapeHides === true && f.outsideHides === true, JSON.stringify(f));
+  }
+  ok('MEET TOP: the weeks you play him are named at the top of the custom box',
+    !!cu.meetTop && cu.meetTop.inPick && /^Weeks? \d/.test(cu.meetTop.text) &&
+      cu.vsA.every((w) => new RegExp(`\\b${w}\\b`).test(cu.meetTop.text)),
+    JSON.stringify({ top: cu.meetTop, vs: cu.vsA }));
 
   // -- (F2) AND ONLY WHERE THERE IS ROOM FOR IT --------------------------
   //

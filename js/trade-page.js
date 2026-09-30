@@ -86,7 +86,7 @@ import * as season from './season.js';
 import { describeFloors } from './floor.js';
 import { slotCountsFromLineups } from './projection.js';
 import { enableSort, resort } from './sortable.js';
-import { savedConfig, onConnection } from './connection.js';
+import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
@@ -5236,6 +5236,9 @@ function renderDealWeek(which = 'deal') {
     `<h3 class="wkx-title">Week ${esc(week)}${slice.kind === 'past' ? ' (played)' : ''}, slot by slot — ` +
     `${esc(sideLabel(offer, side))}</h3>` +
     sideToggleHtml(offer, side) +
+    // The custom box's floating card (2026-09-30) can be pinned open, so it
+    // carries its own way out; the pop-up's panel has the pop-up's.
+    (which === 'deal' ? '' : `<button type="button" class="wkx-close">Close</button>`) +
     `</div>` +
     scopeNote +
     `<div class="table-scroll"><table class="wkx-table">` +
@@ -5261,6 +5264,8 @@ function renderDealWeek(which = 'deal') {
     `IN is the man you receive; OUT is the man you send; promoted, benched and moved mark one ` +
     `of your own whose place the deal changes. The rest are untouched that week.` +
     `</span></p>`;
+  // A new week can be a different height: keep the floating card on screen.
+  if (which !== 'deal' && cuFloat && cuFloat.which === which) placeCuFloat();
 }
 
 /**
@@ -6937,6 +6942,20 @@ function customOffer(entry, priced) {
 const customNames = (men) =>
   men.length ? men.map((p) => esc(p.name)).join(' + ') : '<span class="muted">nobody</span>';
 
+/** The "You play him" line at the top of the custom box: his weeks, played ones dimmed. */
+function cuMeetHtml(a, b) {
+  if (!a || !b) return '—';
+  const { weeks } = meetingWeeks({ pair: { a: a.id, b: b.id, name: b.name } });
+  const left = spanFor('last');
+  const ahead = weeks.filter((w) => left.includes(w));
+  const played = weeks.filter((w) => left.length && w < left[0]);
+  const list = (ws) => `${ws.length > 1 ? 'Weeks' : 'Week'} ${ws.join(', ')}`;
+  const parts = [];
+  if (ahead.length) parts.push(`<strong>${list(ahead)}</strong>`);
+  if (played.length) parts.push(`<span class="played">${list(played)} played</span>`);
+  return parts.length ? parts.join(' · ') : 'Not in the regular season';
+}
+
 function renderCustomPickers() {
   const teams = customTeams();
   const a = teamById(state.custom.a);
@@ -6959,6 +6978,8 @@ function renderCustomPickers() {
     .filter((t) => t.id !== state.custom.a)
     .map((t) => `<option value="${t.id}"${t.id === state.custom.b ? ' selected' : ''}>${esc(t.name)}</option>`)
     .join('');
+
+  $('cuMeet').innerHTML = cuMeetHtml(a, b);
 
   $('cuHeadA').textContent = a ? `${a.name} sends` : 'Sends';
   $('cuHeadB').textContent = b ? `${b.name} sends` : 'Sends';
@@ -7365,7 +7386,130 @@ function cuInlineHostB() {
 function renderCustomInline(priced) {
   renderInlineHalf(cuInlineHost(), 'mine', priced);
   renderInlineHalf(cuInlineHostB(), 'theirs', priced);
+  // A float whose week table has gone (no deal, no room) closes with it.
+  if (cuFloat && !document.querySelector(`${BREAKDOWNS[cuFloat.which].scope} table.weeks`)) closeCuFloat();
+  else placeCuFloat();
 }
+
+// ---- THE SLOT-BY-SLOT, AS A BIG PREVIEW ON THE WEEK LABEL -----------------
+//
+// Tim, 2026-09-30: "instead of showing the 'week __, slot by slot' as a box
+// below the week by week details in the custom trade, could you just show them
+// as a big preview if the user hovers over the 'week __' label".
+//
+// The SAME renderer (`renderDealWeek`) fills it, so its numbers are the pop-up's
+// to the tenth; only where it sits changed. One floating card per half, a
+// <body> child (a fixed box inside the scrolling half would be clipped), shown
+// only while a week label is hovered or focused — or pinned by a click or tap,
+// which keeps it open until Close, Escape or a click elsewhere.
+let cuFloat = null;           // { which, anchor, pinned } while one is open
+let cuFloatTimer = null;
+
+function cuFloatNode(which) {
+  const id = BREAKDOWNS[which].host;
+  let el = document.getElementById(id);
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = id;
+  el.className = 'wkx wkx-float';
+  el.hidden = true;
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'This week, slot by slot');
+  document.body.appendChild(el);
+  el.addEventListener('mouseenter', () => clearTimeout(cuFloatTimer));
+  el.addEventListener('mouseleave', (e) => {
+    if (cuFloat && !cuFloat.pinned && !(e.relatedTarget && cuFloat.anchor.contains(e.relatedTarget))) {
+      hideCuFloatSoon();
+    }
+  });
+  el.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    // Not an outside click, as far as the close-on-outside handler is concerned.
+    e.stopPropagation();
+    if (t.closest('.wkx-close')) { closeCuFloat(); return; }
+    const sideBtn = t.closest('[data-side]');
+    if (sideBtn) setDealSide(sideBtn.getAttribute('data-side'), which);
+  });
+  wireTips(el);
+  return el;
+}
+
+/** Open `which`'s card at the label `anchor` (the week's first cell). */
+function openCuFloat(which, anchor, { pinned = false } = {}) {
+  clearTimeout(cuFloatTimer);
+  for (const k of ['custom', 'customB']) {
+    if (k !== which) { const other = document.getElementById(BREAKDOWNS[k].host); if (other) other.hidden = true; }
+  }
+  const el = cuFloatNode(which);
+  cuFloat = { which, anchor, pinned: pinned || !!(cuFloat && cuFloat.pinned && cuFloat.which === which) };
+  el.hidden = false;
+  el.classList.toggle('sheet', coarsePointer());
+  placeCuFloat();
+}
+
+function closeCuFloat() {
+  clearTimeout(cuFloatTimer);
+  if (!cuFloat) return;
+  const { which } = cuFloat;
+  cuFloat = null;
+  const el = document.getElementById(BREAKDOWNS[which].host);
+  if (el) el.hidden = true;
+  unpeekDealWeek(which);
+}
+
+/** A short grace, so the pointer can travel from the label onto the card. */
+function hideCuFloatSoon() {
+  clearTimeout(cuFloatTimer);
+  cuFloatTimer = setTimeout(() => { if (cuFloat && !cuFloat.pinned) closeCuFloat(); }, 180);
+}
+
+/**
+ * Beside the label, on whichever side has room for the whole card; above or
+ * below it is clamped inside the window. On a touch screen it is a sheet along
+ * the bottom instead (CSS), so there is nothing to place.
+ */
+function placeCuFloat() {
+  if (!cuFloat) return;
+  const el = document.getElementById(BREAKDOWNS[cuFloat.which].host);
+  const a = cuFloat.anchor;
+  if (!el || el.hidden || el.classList.contains('sheet')) return;
+  if (!a || !a.isConnected) {
+    // The table was repainted under it: the same week's new label, if any.
+    const wk = BREAKDOWNS[cuFloat.which].week();
+    const fresh = document.querySelector(
+      `${BREAKDOWNS[cuFloat.which].scope} table.weeks tr[data-wk="${cssKey(wk)}"] td.name`);
+    if (!fresh) { closeCuFloat(); return; }
+    cuFloat.anchor = fresh;
+  }
+  if (typeof el.getBoundingClientRect !== 'function') return;
+  try {
+    const r = cuFloat.anchor.getBoundingClientRect();
+    const t = el.getBoundingClientRect();
+    const vw = window.innerWidth || 1200;
+    const vh = window.innerHeight || 800;
+    const gap = 12;
+    let left;
+    if (r.right + gap + t.width <= vw - 8) left = r.right + gap;
+    else if (r.left - gap - t.width >= 8) left = r.left - gap - t.width;
+    else left = Math.max(8, (vw - t.width) / 2);
+    let top = r.top + r.height / 2 - t.height / 2;
+    top = Math.min(Math.max(8, top), Math.max(8, vh - t.height - 8));
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${Math.round(top)}px`;
+  } catch { /* no layout: still correct markup, just unplaced */ }
+}
+
+document.addEventListener('click', (e) => {
+  if (!cuFloat) return;
+  const t = e.target;
+  if (t && typeof t.closest === 'function' && (t.closest('.wkx-float') || t.closest('#tipCard'))) return;
+  closeCuFloat();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && cuFloat) closeCuFloat();
+});
+window.addEventListener('scroll', () => { if (cuFloat) placeCuFloat(); }, { passive: true, capture: true });
 
 /**
  * ONE HALF OF THE CUSTOM BOX'S WEEK-BY-WEEK (Tim, 2026-09-29: "split down the
@@ -7451,8 +7595,10 @@ function renderInlineHalf(host, side, priced) {
       // full sentence, because a drill-down costs the page no height.
       shortKey: true,
       ...opts,
-    }) +
-    breakdownHost(which);
+    });
+  // The slot-by-slot is no longer in here: it is the floating card on the week
+  // label (see `openCuFloat`), filled by the same renderer.
+  cuFloatNode(which);
   renderDealWeek(which);
 }
 
@@ -8066,33 +8212,60 @@ $('cuRows').addEventListener('click', (e) => {
 // find nothing on a narrow first paint and the listeners would never be hung.
 function wireInlineHalf(node, which) {
   if (!node) return;
-  const weekOf = (e) => {
+  // THE WEEK LABEL OPENS THE SLOT-BY-SLOT CARD (Tim, 2026-09-30). A hover on
+  // the label previews that week — in both halves' state, so they still agree
+  // (2026-09-29) — and opens this half's card beside it; leaving the label for
+  // anywhere but the card closes it. A click, a tap or Enter PINS it open.
+  const labelOf = (e) => {
     const t = e.target;
     if (!t || typeof t.closest !== 'function') return null;
-    const host = t.closest('[data-wk]');
-    return host ? host.getAttribute('data-wk') : null;
+    const cell = t.closest('table.weeks tr[data-wk] td.name');
+    return cell ? { cell, wk: cell.closest('tr').getAttribute('data-wk') } : null;
   };
-  // A hover previews in BOTH halves, and only while over a week table; a
-  // click, a tap or focus pins (2026-09-29).
   node.addEventListener('mouseover', (e) => {
-    const wk = weekOf(e);
-    if (wk !== null) setDealWeek(wk, which, { peek: true });
+    const l = labelOf(e);
+    if (!l || coarsePointer()) return;
+    if (cuFloat && cuFloat.pinned) {
+      // Pinned: a hover on another label previews it in the open card (the
+      // halves share one week), and the pinned card stays the one on screen.
+      setDealWeek(l.wk, which, { peek: true });
+      if (cuFloat.which === which) { cuFloat.anchor = l.cell; placeCuFloat(); }
+      return;
+    }
+    setDealWeek(l.wk, which, { peek: true });
+    openCuFloat(which, l.cell);
   });
   node.addEventListener('mouseout', (e) => {
-    if (leftWeekTable(e)) unpeekDealWeek(which);
+    const l = labelOf(e);
+    const to = e.relatedTarget;
+    const intoCard = to && typeof to.closest === 'function' && to.closest('.wkx-float');
+    if (l && !(to && l.cell.contains(to)) && !intoCard && cuFloat && !cuFloat.pinned) hideCuFloatSoon();
+    if (leftWeekTable(e) && !intoCard) unpeekDealWeek(which);
   });
   node.addEventListener('focusin', (e) => {
-    const wk = weekOf(e);
-    if (wk !== null) setDealWeek(wk, which);
+    const l = labelOf(e);
+    if (!l) return;
+    setDealWeek(l.wk, which);
+    openCuFloat(which, l.cell);
+  });
+  node.addEventListener('focusout', (e) => {
+    const to = e.relatedTarget;
+    if (labelOf(e) && cuFloat && !cuFloat.pinned &&
+      !(to && typeof to.closest === 'function' && (to.closest('.wkx-float') || to.closest('table.weeks td.name')))) {
+      closeCuFloat();
+    }
   });
   node.addEventListener('click', (e) => {
     const t = e.target;
     if (!t || typeof t.closest !== 'function') return;
-    const sideBtn = t.closest('[data-side]');
-    if (sideBtn) { setDealSide(sideBtn.getAttribute('data-side'), which); return; }
     if (t.closest('a')) return;
-    const wk = weekOf(e);
-    if (wk !== null) setDealWeek(wk, which);
+    const l = labelOf(e);
+    if (!l) return;
+    // Kept from the document's close-on-outside handler, which would shut the
+    // card this very click opened.
+    e.stopPropagation();
+    setDealWeek(l.wk, which);
+    openCuFloat(which, l.cell, { pinned: true });
   });
   // The men named inside the breakdown get the same card as everywhere else.
   wireTips(node);

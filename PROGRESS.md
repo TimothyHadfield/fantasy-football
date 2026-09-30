@@ -7,7 +7,7 @@ Live: https://timothyhadfield.github.io/fantasy-football/ · Repo: https://githu
 2. Nothing is half-built. Everything through 2026-09-24 is on `main`, green on CI (c6c7fdd, Trade Phase 3) and live.
 3. `AUDIT.md` is the other work queue — §1, §2 (bar 2.6), §3, §6.5, §6.6 are done; the rest is open. The live build queue is `docs/trade-rework-plan.md`: **Phases 1–3 are built, Phases 4–6 are not.** Deep history: `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS) and `docs/archive/handoff-2026-09-21.md` (the old HANDOFF, incl. rules 1–18 in full).
 
-Last updated: 2026-09-30 (Analysis roster card; Trade: "Open in custom trades", custom-list name hover card, netted meeting week in the pop-up; see chat.md).
+Last updated: 2026-09-30 (Analysis roster card; Trade: "Open in custom trades", custom-list name hover card, netted meeting week in the pop-up; custom box: slot-by-slot is a floating card on the "Week N" label, "You play him" weeks beside the picker; see chat.md).
 
 Read-before-touching (sections of `docs/archive/progress-2026-09-21.md` unless noted):
 - Trade engine / finder / combo → "The Trade page", "Per-week trade valuation", "2026-09-21 — the Trade page opens on a goal"; `js/trade.js`, `js/trade-odds.js` headers.
@@ -167,6 +167,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 
 ## NOT verified
 - Trade pop-up netted meeting week (2026-09-30): totals left as your lineup alone — Tim may want them netted too. Real-league check of the netted cell and of "Open in custom trades" on his own team.
+- Custom box floating slot card (2026-09-30): real mouse hover path (grace onto the card) checked only in linkedom + a synthetic-event screenshot; touch bottom sheet not seen on a real iPhone (on a phone the halves are removed anyway, so it only matters on a touch laptop/iPad ≥900px).
 - The yes-chance curve against any real accepted/refused trade.
 - The first successful "Send to phone" and phone read of the cloud sync (archive HANDOFF).
 - Weeks 1–2 archived only in Tim's browser; export never done (no file in Downloads as of 2026-09-22).
