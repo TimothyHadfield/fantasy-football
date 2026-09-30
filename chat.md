@@ -62,4 +62,4 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Found:** the partner's head-to-head shift was already in the goal % (sim shifts both squads every week) but in no visible number, nor the candidate gate.
 - **Built (one builder, network drop + one stall, resumed twice):** 904ec08 (columns, synced goal switch, His proj vs you) and 69e6aa6 (split box, Also send deleted). Cherry-picked onto main — the builder's worktree had started on an unrelated unmerged draft commit (070f8fe), left out.
 - **Verified how:** tr-test 743/0; job 1's new checks 14 fails on old code, job 2's 22 fails; trade suites green; text-audit 8/0 (trade ceiling 395→399); screenshots 1440 px split and 393 px finder. Full suite + bless: see progress Map.
-- **Open:** placeholder wording; his-side footing (flat vs reach-weighted); 070f8fe to ask about; Phase 4 answers d/f.
+- **Open:** placeholder wording; his-side footing (flat vs reach-weighted); Phase 4 answers d/f. (070f8fe turned out to be already pushed by another session; rebased onto it.)

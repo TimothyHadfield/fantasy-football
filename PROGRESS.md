@@ -176,7 +176,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - Placeholder wording, Tim's to change: Record tooltip + note line; V17 lead line; V18 depth key sentence; "Δ last chance", "His proj vs you", "↑ his −2.3", "Jonas’s side, week by week", "plays 42%", "Per week he plays", "All weeks, by his chance of playing".
 - Custom box, his side: the big per-week number is flat while his table total is reach-weighted (demo −0.9 vs −1.1/wk) — which footing to show is Tim's call, not asked yet.
 - Split custom box between 900 and ~1100 px (halves stack); slot-by-slot panel scrolls sideways inside each half at 1440 px. Nothing of 2026-09-29 seen on a real iPhone.
-- **Unmerged commit 070f8fe "Draft room: dark text on the light cards"** (2026-09-27, from another session; branch `worktree-agent-a6db241d888f1114f`, worktree locked). Deliberately NOT merged — Draft is parked and Tim hasn't asked here. Ask him.
+- 070f8fe "Draft room: dark text on the light cards" came from ANOTHER session, which pushed it to origin/main itself (found 2026-09-29 when this session's push was refused); rebased on top of it. Its worktree `agent-a6db241d888f1114f` is locked — leave it. Another chat may be working on this repo in parallel: always `git fetch` before pushing.
 - Older archive sections were indexed by heading for this file, not re-extracted line by line (2026-09-21 checkpoint).
 
 ## Rejected / parked
