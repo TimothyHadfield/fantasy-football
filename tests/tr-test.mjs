@@ -520,6 +520,13 @@ function readWeekTable(el) {
       // and the label is still just "Week 9".
       label: text(tds[0].querySelector('button') || tds[0]),
       vs: text(tds[0].querySelector('.vs-note')),
+      // The partner's half of the custom box (2026-09-29): "plays 62%" under a
+      // week he may not be playing in. No note is a week he plays for sure.
+      reach: (() => {
+        const m = text(tds[0].querySelector('.reach-note')).match(/plays (\d+)%/);
+        return m ? Number(m[1]) / 100 : 1;
+      })(),
+      reachNote: !!tds[0].querySelector('.reach-note'),
       total: (tr.getAttribute('class') || '').includes('total'),
       before: num(text(tds[1])),
       after: num(text(tds[2])),
@@ -543,8 +550,8 @@ function readWeekTable(el) {
     // By LABEL, not position: Tim asked for per week first and the total under
     // it, and a reader keyed on order silently swaps the two.
     totalRow: rows.find((r) => r.total && /^All /.test(r.label)) || null,
-    perRow: rows.find((r) => r.total && r.label === 'Per week') || null,
-    perFirst: rows.filter((r) => r.total).map((r) => r.label)[0] === 'Per week',
+    perRow: rows.find((r) => r.total && /^Per week/.test(r.label)) || null,
+    perFirst: /^Per week/.test(rows.filter((r) => r.total).map((r) => r.label)[0] || ''),
     heads: [...table.querySelectorAll('thead th')].map(text),
   };
 }
@@ -882,7 +889,6 @@ function readCustomList(document, id) {
         return '?';
       });
     const pv = row.querySelector('.pv');
-    const sug = row.querySelector('.cu-sug');
     return {
       order,
       mirror: (row.getAttribute('class') || '').split(/\s+/).includes('mirror'),
@@ -905,10 +911,6 @@ function readCustomList(document, id) {
       // time the next one is drawn — the markup is the only durable answer.
       checked: !!(row.querySelector('input') || { hasAttribute: () => false })
         .hasAttribute('checked'),
-      sug: !!sug,
-      sugWord: text(row.querySelector('.cu-sug-word')),
-      sugNum: text(row.querySelector('.cu-sug-num')),
-      fleece: !!row.querySelector('.cu-sug-word.fleece'),
     };
   });
 }
@@ -989,13 +991,16 @@ const SCENARIOS = {
       table: !!($('cuInline') && $('cuInline').querySelector('table.weeks')),
       text: text($('cuInline')),
     };
-    // Both halves of the builder are inside ONE row, which is what puts the
-    // breakdown beside the lists rather than under them.
+    // SPLIT DOWN THE MIDDLE (Tim, 2026-09-29): two halves in ONE row, yours
+    // [week box, roster] and his [roster, week box]. Read as each half's
+    // children in document order, which is also the Tab order.
     out.buildRow = (() => {
       const row = document.querySelector('.cu-build');
       if (!row) return null;
       return [...row.children].map((el) => el.getAttribute('class') || el.id || '');
     })();
+    out.halves = [...document.querySelectorAll('.cu-build > .cu-half')]
+      .map((h) => [...h.children].map((el) => (el.getAttribute('class') || '').split(/\s+/)[0]));
     // THE OTHER HALF OF THE WIDTH RULE: with room beside the builder the host
     // IS in the document. Asserted here as well as in `customNarrow`, so the
     // pair reads as one claim with two answers.
@@ -1048,15 +1053,12 @@ const SCENARIOS = {
     out.stillChecked = boxes('cuListA')[0].hasAttribute('checked');
     out.litRow = ($('cuListA').querySelector('.cu-man').getAttribute('class') || '').includes('on');
 
-    // -- (D) SUGGESTED PLAYERS ---------------------------------------------
-    out.suggest = {
-      line: text($('cuSuggest')),
-      rowsA: readCustomList(document, 'cuListA').filter((r) => r.sug),
-      rowsB: readCustomList(document, 'cuListB').filter((r) => r.sug),
-      // A man already in the deal is not a suggestion to add him to it.
-      tickedMarked: readCustomList(document, 'cuListA')
-        .concat(readCustomList(document, 'cuListB'))
-        .filter((r) => r.checked && r.sug).length,
+    // -- "ALSO SEND" IS GONE (Tim, 2026-09-29: "could we remove the 'also
+    // send' suggestions? I haven't found them usefull at all yet.") ----------
+    out.suggestGone = {
+      line: !!$('cuSuggest'),
+      marks: document.querySelectorAll('.cu-sug, .cu-man.sug').length,
+      words: /also send/i.test(text($('customPanel'))),
     };
     // -- (F) THE BREAKDOWN, once there is a deal ---------------------------
     out.inline = {
@@ -1066,6 +1068,32 @@ const SCENARIOS = {
       host: !!($('cuInline') && $('cuInline').querySelector('#cuWeek')),
       title: text($('cuInline') && $('cuInline').querySelector('.cu-inline-title')),
     };
+    // -- HIS HALF (2026-09-29): the same table from his lineup ----------------
+    const readB = () => {
+      const node = $('cuInlineB');
+      const brk = document.getElementById('cuWeekB');
+      return {
+        present: !!node,
+        table: !!(node && node.querySelector('table.weeks')),
+        weeks: node ? readWeekTable(node) : null,
+        host: !!brk,
+        title: text(node && node.querySelector('.cu-inline-title')),
+        opening: brk ? {
+          title: text(brk.querySelector('.wkx-title')),
+          lead: text(brk.querySelector('.wkx-lead')),
+          pressed: [...brk.querySelectorAll('[data-side][aria-pressed="true"]')]
+            .map((x) => x.getAttribute('data-side')),
+        } : null,
+      };
+    };
+    out.inlineB = readB();
+    out.vsA = $('cuInline')
+      ? [...$('cuInline').querySelectorAll('tr[data-wk] .vs-note')].map((n) => n.closest('tr').getAttribute('data-wk'))
+      : [];
+    out.vsB = $('cuInlineB')
+      ? [...$('cuInlineB').querySelectorAll('tr[data-wk] .vs-note')].map((n) => n.closest('tr').getAttribute('data-wk'))
+      : [];
+    out.cuWeekTitleBefore = text(document.querySelector('#cuWeek .wkx-title'));
     // BEFORE any week is hovered it is already filled, on the week the deal
     // moves most (Phase 5, V17 — "same for #cuInline").
     out.inlineOpening = (() => {
@@ -1095,6 +1123,16 @@ const SCENARIOS = {
         modalStillShut: !!$('dealModal').hidden,
       };
     })();
+
+    // Hover a week in HIS half: his breakdown moves, and yours stays put.
+    {
+      const rowsB = $('cuInlineB') ? [...$('cuInlineB').querySelectorAll('table.weeks tbody tr[data-wk]')] : [];
+      const target = rowsB[rowsB.length - 1];
+      out.hoverB = { week: target ? target.getAttribute('data-wk') : null, mineBefore: text(document.querySelector('#cuWeek .wkx-title')) };
+      if (target) fire(target, 'mouseover');
+      out.hoverB.theirs = text(document.querySelector('#cuWeekB .wkx-title'));
+      out.hoverB.mineAfter = text(document.querySelector('#cuWeek .wkx-title'));
+    }
 
     // THE BUILDER'S OWN POP-UP — the deal being built, not one already saved.
     // That is the half of his 2026-09-19 ask that did not exist: a saved row
@@ -1185,6 +1223,8 @@ const SCENARIOS = {
     out.hostBeforeTick = !!$('cuInline');
     out.buildRow = [...document.querySelector('.cu-build').children]
       .map((el) => el.getAttribute('class') || el.id || '');
+    out.halves = [...document.querySelectorAll('.cu-build > .cu-half')]
+      .map((h) => [...h.children].map((el) => (el.getAttribute('class') || '').split(/\s+/)[0]));
 
     // Build a real deal, exactly as the wide scenario does.
     const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
@@ -2163,13 +2203,13 @@ SCENARIOS.goalTitle = async function goalTitle() {
 };
 
 /**
- * THE SUGGESTIONS FOLLOW THE GOAL (2026-09-21). A custom deal under "Win it
- * all": once the simulation is ready the "also send" marks are ranked on each
- * side's goal-weighted gain, and the key under the lists says which basis it
- * used. The ranking arithmetic is test-trade-suggest.mjs §11's; this is the
- * page's half — the weights reach the module, and the basis is printed.
+ * HIS HALF OF THE CUSTOM BOX, UNDER "WIN IT ALL" (2026-09-29). His week table
+ * counts a bracket week by the chance he is still playing in it (the same
+ * weights `hisSideOf` gives "He gains"), and a week he plays you is marked in
+ * BOTH halves. The partner is chosen as the first one you still meet, so the
+ * meeting-week check is never vacuous.
  */
-SCENARIOS.customGoal = async function customGoal() {
+SCENARIOS.customHalves = async function customHalves() {
   const { document, window, errors } = await boot();
   const $ = (id) => document.getElementById(id);
   const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
@@ -2177,22 +2217,30 @@ SCENARIOS.customGoal = async function customGoal() {
   const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
   // Not the quarterbacks (row 0): a QB-for-QB deal prices at nearly nothing.
   const pick = (id) => { const b = boxes(id); return b.length > 1 ? b[1] : b[0]; };
-  const a = pick('cuListA');
-  a.checked = true;
-  fire(a, 'change');
-  const b = pick('cuListB');
-  b.checked = true;
-  fire(b, 'change');
-  await settle(1500);
-  const marks = () => readCustomList(document, 'cuListA').concat(readCustomList(document, 'cuListB'))
-    .filter((r) => r.sug).map((r) => r.sugWord);
-  const title = { line: text($('cuSuggest')), marks: marks(), note: text($('cuNote')) };
-  document.querySelector('#goalToggle button[data-goal="last"]')
-    .dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settleGoal(document);
-  await settle(1500);
-  const last = { line: text($('cuSuggest')), marks: marks() };
-  return { errors, title, last };
+  const vsWeeks = (id) => ($(id)
+    ? [...$(id).querySelectorAll('tr[data-wk] .vs-note')].map((n) => n.closest('tr').getAttribute('data-wk'))
+    : []);
+  const options = [...$('cuTeamB').querySelectorAll('option')].map((o) => o.value);
+  let tried = 0;
+  for (const v of options) {
+    tried += 1;
+    $('cuTeamB').value = v;
+    fire($('cuTeamB'), 'change');
+    const a = pick('cuListA'); a.checked = true; fire(a, 'change');
+    const b = pick('cuListB'); b.checked = true; fire(b, 'change');
+    if (vsWeeks('cuInline').length) break;
+  }
+  await settle(500);
+  const B = $('cuInlineB');
+  return {
+    errors, tried,
+    vsA: vsWeeks('cuInline'),
+    vsB: vsWeeks('cuInlineB'),
+    vsTextB: B ? [...B.querySelectorAll('tr[data-wk] .vs-note')].map(text) : [],
+    weeksA: $('cuInline') ? readWeekTable($('cuInline')) : null,
+    weeksB: B ? readWeekTable(B) : null,
+    titleB: text(B && B.querySelector('.cu-inline-title')),
+  };
 };
 
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
@@ -5134,10 +5182,13 @@ if (!live.boot) {
   // while the trade is being chosen by the user."
   ok('with room beside the builder, the breakdown IS in the document',
     cu.inlinePresent === true, JSON.stringify(cu.buildRow));
-  ok('the builder and its breakdown are two halves of ONE row',
+  ok('the builder is split into two halves of ONE row, yours then his',
     Array.isArray(cu.buildRow) && cu.buildRow.length === 2 &&
-      /cu-lists/.test(cu.buildRow[0]) && /cu-inline/.test(cu.buildRow[1]),
+      /cu-half-a/.test(cu.buildRow[0]) && /cu-half-b/.test(cu.buildRow[1]),
     JSON.stringify(cu.buildRow));
+  ok('your half is [week box, roster] and his is [roster, week box], so the rosters meet in the middle',
+    JSON.stringify(cu.halves) === JSON.stringify([['cu-inline', 'cu-side'], ['cu-side', 'cu-inline']]),
+    JSON.stringify(cu.halves));
   ok('with nothing in it until a deal is being built, and it says so',
     cu.inlineBeforeTick.table === false &&
       /week-by-week breakdown appears here/i.test(cu.inlineBeforeTick.text),
@@ -5243,82 +5294,55 @@ if (!live.boot) {
   eq(cu.stillChecked, true, 'ticking a man leaves him ticked');
   eq(cu.litRow, true, 'and lights his row');
 
-  // -- (D) SUGGESTED PLAYERS ----------------------------------------------
+  // -- "ALSO SEND" IS GONE (Tim, 2026-09-29) --------------------------------
+  ok('the "also send" line is gone from the custom box',
+    cu.suggestGone.line === false, JSON.stringify(cu.suggestGone));
+  ok('and no roster row is marked as one to add',
+    cu.suggestGone.marks === 0, JSON.stringify(cu.suggestGone));
+  ok('and the words "also send" are nowhere in the panel',
+    cu.suggestGone.words === false, JSON.stringify(cu.suggestGone));
+  ok('nor in the method behind the toggle',
+    !/also send|closer together/i.test(cu.note), cu.note.slice(0, 300));
+
+  // -- HIS HALF: THE SAME TABLE, FROM HIS LINEUP (2026-09-29) --------------
   //
-  // Tim, 2026-09-19: "I also want to add a 'suggested player' in the custom
-  // trade box which adds suggested players to send to make the trade more even.
-  // This only appears in the player's box after you select a player. Make sure
-  // that you do as many players that would be eligible ... and not just 1 to
-  // make it perfect. Allow for some leeway so that the user can do a 'fleece'
-  // trade and have the opponent have a -/week or something like that."
-  //
-  // THE ARITHMETIC IS `js/trade-suggest.js`'s and is tested there. What is
-  // asserted here is the PAGE's half: that nothing is marked before a man is
-  // ticked, that the marks appear after, that there can be more than one, that
-  // every marked row carries a WORD and the resulting pair of numbers (so a
-  // deliberately lopsided deal is visible rather than prevented), and that a
-  // man already in the deal is never suggested as an addition to it.
+  // "the current 'this trade, week by week' box ... will also have an identical
+  // varient on the opposite side that is for the opponent rather than for the
+  // user."
   {
-    const marked = cu.suggest.rowsA.concat(cu.suggest.rowsB);
-    ok('nothing is suggested before a man is ticked',
-      cu.rowsA.every((r) => !r.sug) && cu.rowsB.every((r) => !r.sug),
-      `${cu.rowsA.filter((r) => r.sug).length} marked with an empty deal`);
-    ok('the line under the lists explains what a marked row means',
-      cu.suggest.line.length > 40, cu.suggest.line.slice(0, 160));
-    // NOT CONDITIONAL. The demo league reliably produces several candidates for
-    // this deal, so an `if (marked.length)` around what follows would let the
-    // whole feature be deleted and the suite stay green — which is exactly what
-    // happened when this was first written: blanking the candidate list failed
-    // nothing at all.
-    ok('a deal with a man on each side produces suggestions',
-      marked.length > 0, cu.suggest.line.slice(0, 200));
-    // "as many players that would be eligible ... and not just 1 to make it
-    // perfect" — his words, and the reason this is not a recommendation.
-    ok('and MORE THAN ONE of them, because he is choosing rather than being told',
-      marked.length > 1, `${marked.length} marked`);
-    {
-      ok('every suggested row carries a WORD, not only a tint',
-        marked.every((r) => /also send/i.test(r.sugWord)),
-        JSON.stringify(marked.slice(0, 3).map((r) => r.sugWord)));
-      ok('and it is ranked, so he can tell the evenest from the rest',
-        marked.every((r) => /^#\d/.test(r.sugWord)),
-        JSON.stringify(marked.map((r) => r.sugWord)));
-      // THE FLEECE LEEWAY: both resulting figures, per week, on the row. That
-      // is what makes a deal that leaves the other manager negative something
-      // he can choose rather than something the page refuses to draw.
-      ok('every suggested row shows what the deal would then be worth to BOTH sides',
-        marked.every((r) => /then you [+−]/.test(r.sugNum) && /him [+−]/.test(r.sugNum)),
-        JSON.stringify(marked.slice(0, 3).map((r) => r.sugNum)));
-      ok('and those figures are per week, the page’s display rule',
-        marked.every((r) => /\/wk$/.test(r.sugNum)),
-        JSON.stringify(marked.slice(0, 2).map((r) => r.sugNum)));
-      ok('a man already in the deal is never marked as one to add to it',
-        cu.suggest.tickedMarked === 0, String(cu.suggest.tickedMarked));
-      // MOVED TO THE METHOD 2026-09-19 with the density pass. The fact is not
-      // gone and is not hidden: every fleece row says "he goes negative" on its
-      // own face, which is asserted above, and the method says the page labels
-      // such a deal rather than refusing to draw it.
-      ok('the method says a lopsided deal is shown rather than prevented',
-        /labelled and left in/i.test(cu.note), cu.note.slice(0, 2400));
-      // The METHOD is behind the toggle, which is the panel shape HANDOFF
-      // describes and what `text-audit.mjs` measures.
-      ok('and the method says they were priced on the same basis as the deal itself',
-        /same engine, the same weeks and the same waiver floor/i.test(cu.note),
-        cu.note.slice(0, 2000));
-      ok('and that EVERY man who helps is marked, not only the best one',
-        /All of them are marked, not just the one that would make it perfect/i.test(cu.note),
-        cu.note.slice(0, 2200));
-      // THE FLEECE LEEWAY, as a labelled row rather than a refusal. Tim asked
-      // for it by name: "allow for some leeway so that the user can do a
-      // 'fleece' trade and have the opponent have a -/week or something like
-      // that." A candidate that leaves the other manager negative is marked as
-      // doing exactly that and is left in the list.
-      const fleeced = marked.filter((r) => r.fleece);
-      ok('a candidate that leaves the other manager negative says so on its own row',
-        fleeced.length === 0 ||
-          fleeced.every((r) => /he goes negative/i.test(r.sugWord) && /him −/.test(r.sugNum)),
-        JSON.stringify(fleeced.slice(0, 2).map((r) => [r.sugWord, r.sugNum])));
-    }
+    const B = cu.inlineB;
+    const bw = (B.weeks && B.weeks.weeks) || [];
+    const aw = (cu.inline.weeks && cu.inline.weeks.weeks) || [];
+    ok('his half has its own week-by-week table',
+      B.present && B.table && bw.length > 1, JSON.stringify({ present: B.present, n: bw.length }));
+    ok('titled with HIS name, not as this deal',
+      /’s side, week by week$/.test(B.title) && !/^This deal/.test(B.title), B.title);
+    ok('its rows are each after minus before too',
+      bw.every((r) => Math.abs((r.after - r.before) - r.delta) <= 0.051),
+      JSON.stringify(bw.slice(0, 3)));
+    ok('the same weeks as yours, one row each',
+      JSON.stringify(bw.map((r) => r.label)) === JSON.stringify(aw.map((r) => r.label)),
+      `${bw.map((r) => r.label).join(',')} / ${aw.map((r) => r.label).join(',')}`);
+    ok('and HIS numbers, not a copy of yours',
+      bw.some((r, i) => aw[i] && r.before !== aw[i].before),
+      JSON.stringify([bw[0], aw[0]]));
+    ok('its "before" column is headed as his',
+      B.weeks && B.weeks.heads[1] === 'As he is now', JSON.stringify(B.weeks && B.weeks.heads));
+    ok('its slot-by-slot panel opens by itself, on HIS lineup',
+      B.host && B.opening && /moves most/.test(B.opening.lead) &&
+        JSON.stringify(B.opening.pressed) === '["theirs"]' && /’s lineup$/.test(B.opening.title),
+      JSON.stringify(B.opening));
+    ok('and names the same man as the box title',
+      B.opening && B.title.split('’s side')[0].length > 0 &&
+        B.opening.title.endsWith(`${B.title.split('’s side')[0]}’s lineup`),
+      `${B.title} / ${B.opening && B.opening.title}`);
+    ok('hovering a week in his half opens that week in HIS panel',
+      cu.hoverB.week !== null && cu.hoverB.theirs.startsWith(`Week ${cu.hoverB.week},`),
+      JSON.stringify(cu.hoverB));
+    ok('and leaves yours where it was',
+      cu.hoverB.mineAfter === cu.hoverB.mineBefore, JSON.stringify(cu.hoverB));
+    ok('a week you play him is marked in both halves, the same weeks',
+      JSON.stringify(cu.vsA) === JSON.stringify(cu.vsB), `${cu.vsA} / ${cu.vsB}`);
   }
 
   // -- (F) THE BREAKDOWN, once a deal is being built -----------------------
@@ -5379,10 +5403,9 @@ if (!live.boot) {
     const narrow = run('customNarrow');
     ok('on a narrow window the breakdown is not in the document before a deal',
       narrow.hostBeforeTick === false, JSON.stringify(narrow.buildRow));
-    ok('and the builder row is the two rosters alone',
-      Array.isArray(narrow.buildRow) && narrow.buildRow.length === 1 &&
-        /cu-lists/.test(narrow.buildRow[0]),
-      JSON.stringify(narrow.buildRow));
+    ok('and each half is its roster alone',
+      JSON.stringify(narrow.halves) === JSON.stringify([['cu-side'], ['cu-side']]),
+      JSON.stringify(narrow.halves));
     ok('a deal still prices, with its per-week figure under its own side',
       /[+−-]\d/.test(narrow.priced || ''), narrow.priced);
     ok('and the breakdown is still absent — gone, not hidden',
@@ -5745,25 +5768,34 @@ if (!gt.boot) {
     L.note.slice(0, 500));
 }
 
-// ---- THE CUSTOM BUILDER'S SUGGESTIONS FOLLOW THE GOAL (2026-09-21) ---------
-const cg = run('customGoal', { env: { TR_GOAL: 'title' } });
-ok('the custom-goal scenario boots', !cg.boot, cg.boot);
-if (!cg.boot) {
-  ok('no console errors in it', cg.errors.length === 0, cg.errors.slice(0, 2).join(' | '));
-  // NOT CONDITIONAL: the demo deal reliably has suggestions (the `custom`
-  // scenario asserts the same), so an empty list here is a failure.
-  ok('under the title goal the deal has suggestions', cg.title.marks.length > 0, cg.title.line.slice(0, 200));
-  ok('and they are ranked from #1', cg.title.marks.some((w) => /^#1 /.test(w)), JSON.stringify(cg.title.marks));
-  ok('once the goal is ready the key says they are measured on the goal-weighted gains',
-    /goal-weighted/.test(cg.title.line) && !/on points/.test(cg.title.line), cg.title.line.slice(0, 300));
-  ok('and the method behind the toggle says the suggestions follow the goal',
-    /Closer together” follows the goal/.test(cg.title.note), cg.title.note.slice(0, 200));
-  ok('after switching the goal the key still names its basis (rule 7)',
-    /goal-weighted/.test(cg.last.line) || /on points, because your chance of finishing last barely moves/.test(cg.last.line),
-    cg.last.line.slice(0, 300));
-  const ms = (cg.title.line.match(/priced in (\d+)ms/) || [])[1];
-  console.log(`customGoal: suggestions with the goal weights priced in ${ms}ms; ` +
-    `title ${cg.title.marks.length} marked, last ${cg.last.marks.length}; last line: ${cg.last.line.slice(0, 160)}`);
+// ---- HIS HALF UNDER "WIN IT ALL" (2026-09-29) ------------------------------
+const ch = run('customHalves', { env: { TR_GOAL: 'title' } });
+ok('the custom-halves scenario boots', !ch.boot, ch.boot);
+if (!ch.boot) {
+  ok('no console errors in it', ch.errors.length === 0, ch.errors.slice(0, 2).join(' | '));
+  const bw = (ch.weeksB && ch.weeksB.weeks) || [];
+  ok('a partner you still play was found (so the meeting check is not vacuous)',
+    ch.vsA.length > 0, `tried ${ch.tried}`);
+  ok('the week you play him carries the mark in YOUR half and in HIS, the same weeks',
+    ch.vsA.length > 0 && JSON.stringify(ch.vsA) === JSON.stringify(ch.vsB), `${ch.vsA} / ${ch.vsB}`);
+  ok('in his half the mark says it is the week he plays you',
+    ch.vsTextB.length > 0 && ch.vsTextB.every((t) => /vs you/.test(t)), JSON.stringify(ch.vsTextB));
+  ok('under "Win it all" his bracket weeks say how likely he is to be playing',
+    bw.some((r) => r.reachNote && r.reach < 1), JSON.stringify(bw.map((r) => [r.label, r.reach])));
+  ok('and your half carries no such note (your side is already in the goal %)',
+    ((ch.weeksA && ch.weeksA.weeks) || []).every((r) => !r.reachNote), '');
+  const want = bw.reduce((a, r) => a + r.reach * r.delta, 0);
+  const tol = 0.1 + 0.006 * bw.reduce((a, r) => a + Math.abs(r.delta), 0);
+  const got = ch.weeksB && ch.weeksB.totalRow ? ch.weeksB.totalRow.delta : NaN;
+  ok('his total counts each week by his chance of playing it (Σ chance × difference)',
+    Math.abs(got - want) <= tol, `page ${got}, from its own rows ${want.toFixed(2)} ±${tol.toFixed(2)}`);
+  const flat = bw.reduce((a, r) => a + r.delta, 0);
+  ok('which is not the flat sum, or the weighting is doing nothing',
+    Math.abs(flat - want) > 0.05, `flat ${flat.toFixed(2)} vs weighted ${want.toFixed(2)}`);
+  ok('and the rows say so',
+    ch.weeksB && ch.weeksB.perRow && /he plays/.test(ch.weeksB.perRow.label) &&
+      /chance of playing/.test(ch.weeksB.totalRow.label),
+    JSON.stringify(ch.weeksB && [ch.weeksB.perRow, ch.weeksB.totalRow].map((r) => r && r.label)));
 }
 
 // ---- STAGED RANKING (trade plan Phase 2, 2026-09-24) -----------------------

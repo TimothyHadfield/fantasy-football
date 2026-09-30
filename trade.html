@@ -636,51 +636,17 @@
   .cu-man.empty-slot.mirror { padding-left: 9px; padding-right: 33px; }
   .cu-man .muted { color: var(--dim); font-style: italic; }
 
-  /* A SUGGESTED MAN — one who, added to the deal, brings the two squads' gains
-     closer together.
-
-     NEVER COLOUR ALONE, and here it is four cues deep: the row is tinted, it
-     carries a RANK, it carries the WORD "also send — evens it", and it prints
-     the two resulting per-week figures. Any one of those reads in greyscale.
-     The badge takes a line of its own inside the row (`flex-basis: 100%` on a
-     wrapping row) rather than squeezing the name, because the numbers are the
-     point of it — that is how a deliberately lopsided "fleece" becomes visible
-     instead of being prevented. */
-  .cu-man.sug { background: #1b2330; }
-  .cu-man.on.sug { background: #16311f; }
-  .cu-sug {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    font-size: 10.5px;
-    line-height: 1.4;
-    margin-top: 2px;
-  }
-  .cu-man.mirror .cu-sug { justify-content: flex-end; }
-  .cu-sug-word {
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--accent-hi, #7fd99b);
-  }
-  /* A candidate that leaves the OTHER manager negative. A different colour
-     because it is a different fact, and the words say it either way — this is
-     the "fleece" leeway Tim asked for and it is labelled, never filtered. */
-  .cu-sug-word.fleece { color: var(--warn); }
-  .cu-sug-num { color: var(--cu-sub); font-variant-numeric: tabular-nums; }
-
   /* THE BUILDER AND ITS BREAKDOWN, SIDE BY SIDE — AND ONLY SIDE BY SIDE.
      Narrower than 900px of window the breakdown is not in the document at all
      (`roomBesideBuilder` in js/trade-page.js); the "Week by week" button opens
      the same thing in a pop-up, which is how every other trade on this page has
      always shown its weeks.
 
-     SO THE BASIS IS 480px, NOT 440, and the number is arithmetic rather than
-     taste: `.cu-lists` is a `.panel-row` at `--col-min: 232px`, so it needs
-     232 + 16 + 232 = 480 to keep the two rosters MIRRORED across the middle,
-     which is the whole point of them. At 440 the flex row handed it 476px at a
-     900px window — four pixels short — and the two rosters stacked instead,
-     which is where +767px of panel height came from (measured against HEAD with
+     The rosters used to be one `.panel-row` at `--col-min: 232px`, needing
+     232 + 16 + 232 = 480 to stay MIRRORED; each `.cu-half` keeps that 232px
+     floor below 900px (2026-09-29, see `.cu-half`). The 2026-09-19 lesson
+     still holds: an extra box that takes width off the rosters stacks them
+     (+767px of panel height at a 900px window, measured with
      `tools/measure-layout.mjs --selector '#customPanel'`).
 
      `min-width: 0` on both halves is what stops a wide table inside the
@@ -689,8 +655,40 @@
      900px and whatever this row actually needs drops the breakdown onto its own
      line rather than squeezing the rosters. */
   .cu-build { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
-  .cu-build > .cu-lists { flex: 1 1 480px; min-width: 0; margin-bottom: 0; }
-  .cu-build > .cu-inline { flex: 1 1 320px; min-width: 0; }
+
+  /* SPLIT DOWN THE MIDDLE (Tim, 2026-09-29: "all details about one user is on
+     one side, and all details about the other user is on the opposite side").
+     Each half is [week box, roster] on the left and [roster, week box] on the
+     right, so the two rosters still face each other down the middle and each
+     week box sits on the outer edge. The DOM runs left to right, so Tab does
+     too (the same reason the right roster's cells are emitted reversed).
+
+     Below 900px the week boxes are not in the document at all, and a half is
+     only its roster: 232px each, side by side while two fit (the old
+     `--col-min: 232px` rule), one above the other on a phone. At 900px and up
+     a half is a roster AND a table, so its basis grows to fit both. */
+  .cu-half {
+    flex: 1 1 232px;
+    min-width: 0;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .cu-half > .cu-side { flex: 0 1 300px; min-width: 0; }
+  .cu-half > .cu-inline { flex: 1 1 260px; min-width: 0; }
+  @media (min-width: 900px) {
+    .cu-half { flex-basis: 440px; }
+  }
+  /* The week table, condensed to share a half with a roster. */
+  .cu-inline table.weeks { font-size: 12px; }
+  .cu-inline table.weeks th,
+  .cu-inline table.weeks td { padding-left: 4px; padding-right: 4px; }
+  /* The column heads and the two dividers wrap here: left on one line, they
+     set the table's width and push Difference out of the box. */
+  .cu-inline table.weeks thead th,
+  .cu-inline table.weeks tr.divider td,
+  .cu-inline table.weeks tr.total td.name { white-space: normal; }
+  .reach-note { display: block; font-size: 10.5px; color: var(--dim); font-weight: 400; }
   .cu-inline .wkx-empty { margin: 6px 0 0; }
   .cu-inline-title {
     font-size: 11px;
@@ -748,9 +746,6 @@
     margin: 8px 0 0;
   }
   .heat-key:empty { display: none; }
-  /* The suggestion line says nothing at all until somebody is ticked, and an
-     empty `.panel-note` is still a line of margin. */
-  #cuSuggest:empty { display: none; }
 
   /* THE COMBO'S ONE NUMBER. Your lineup before and after, for the whole
      packing, once — the per-row column that used to carry it is gone, because
@@ -1174,10 +1169,9 @@
     /* THE BUILDER IS ONE COLUMN. The two rosters keep their side-by-side
        pairing for as long as `.panel-row` can give each one its 232px — that
        comparison is the whole point of mirroring them. The week-by-week
-       breakdown is not here at all below 900px (see `.cu-build` above), so
+       breakdowns are not here at all below 900px (see `.cu-half` above), so
        there is nothing left to stack; this rule is the row's own spacing. */
     .cu-build { gap: 12px; }
-    .cu-build > .cu-lists { flex: 1 1 100%; }
     .cu-man .nm { max-width: 120px; }
 
     /* THE MODAL BECOMES A SHEET. Pinned to the foot of the window, full width,
@@ -1545,34 +1539,33 @@
            `.cu-gain`'s reserved height still matters and matters MORE here: an
            empty block that fills on the first tick would push both rosters down
            under the finger doing the ticking. -->
-      <div class="panel-row cu-lists" style="--col-min: 232px">
+      <!-- YOUR HALF, then HIS (2026-09-29). Each week box is the SAME table and
+           slot-by-slot panel the pop-up draws, from the same pricing, and costs
+           no ESPN requests. They are in the markup and not always in the
+           document: the page takes them out below 900px of window and puts them
+           back when it widens (`renderCustomInline`), so each element, its
+           listeners and its player cards are wired exactly once. -->
+      <div class="cu-half cu-half-a">
+        <div class="cu-inline" id="cuInline"></div>
         <div class="cu-side">
           <p class="cu-head" id="cuHeadA">Sends</p>
           <p class="cu-gain" id="cuGainA" aria-live="polite"></p>
           <div class="cu-roster" id="cuListA"></div>
         </div>
+      </div>
+      <div class="cu-half cu-half-b">
         <div class="cu-side">
           <p class="cu-head" id="cuHeadB">Sends</p>
           <p class="cu-gain" id="cuGainB" aria-live="polite"></p>
           <div class="cu-roster" id="cuListB"></div>
         </div>
+        <div class="cu-inline" id="cuInlineB"></div>
       </div>
-      <!-- The live deal, week by week. The SAME table and the same slot-by-slot
-           panel the pop-up draws, from the same pricing — not a second copy.
-           It costs no ESPN requests: every projection in it was bought when the
-           page loaded.
-
-           IT IS IN THE MARKUP AND IT IS NOT ALWAYS IN THE DOCUMENT: the page
-           takes it out below 900px of window and puts it back when the window
-           widens (`renderCustomInline`). It is written here so the element,
-           its listeners and its player cards are wired exactly once. -->
-      <div class="cu-inline" id="cuInline"></div>
     </div>
 
-    <!-- What a marked row means, and what the colour on the value column is
-         measured against. Both in view rather than behind the toggle: they
-         change what a reader takes a number to mean. -->
-    <p class="panel-note" id="cuSuggest" aria-live="polite"></p>
+    <!-- What the colour on the value column is measured against. In view
+         rather than behind the toggle: it changes what a reader takes a number
+         to mean. -->
     <p class="panel-note heat-key" id="cuHeatKey"></p>
 
     <!-- What the deal in the pickers IS — who moves which way, and over which
