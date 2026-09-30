@@ -2170,6 +2170,132 @@ SCENARIOS.byeMark = async function byeMark() {
 };
 
 /**
+ * ONE WEEK FOR BOTH SLOT-BY-SLOT PANELS (Tim, 2026-09-29: "it shows different
+ * numbers in different places for the same player ... need to be consistient
+ * and accurate in every place"). The halves of the custom box used to keep a
+ * week each and a hover moved only its own; the pointer drifting down to read
+ * a panel re-picked the week on the way. Reads the two titles and every man's
+ * figure in both panels, both tabs, and the pop-up, against the stub's own
+ * week projections (checked in the parent).
+ */
+SCENARIOS.slotWeek = async function slotWeek() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const on = (el, type, rel) => {
+    if (!el) return false;
+    const ev = new globalThis.Event(type, { bubbles: true });
+    if (rel !== undefined) { try { Object.defineProperty(ev, 'relatedTarget', { value: rel }); } catch { /* */ } }
+    el.dispatchEvent(ev);
+    return true;
+  };
+  await settleGoal(document);
+  const title = (id) => text(document.querySelector(`#${id} .wkx-title`));
+  const weekOf = (t) => { const m = /^Week (\d+)/.exec(t || ''); return m ? Number(m[1]) : null; };
+  const figures = (id) => {
+    const host = $(id);
+    if (!host) return [];
+    const w = weekOf(title(id));
+    return [...host.querySelectorAll('td.wkx-cell')].map((td) => {
+      const a = td.querySelector('a.pref');
+      const v = td.querySelector('.wkx-v');
+      return a && v ? { panel: id, week: w, id: idOfHref(a.getAttribute('href')), v: text(v) } : null;
+    }).filter(Boolean);
+  };
+  // Both tabs of one panel: its own side first, then the other, then back.
+  const bothTabs = (id) => {
+    const out = [];
+    const host = $(id);
+    if (!host) return out;
+    const start = host.querySelector('[data-side][aria-pressed="true"]');
+    const startSide = start ? start.getAttribute('data-side') : 'mine';
+    for (const s of ['mine', 'theirs']) {
+      on($(id).querySelector(`[data-side="${s}"]`), 'click');
+      out.push(...figures(id).map((f) => ({ ...f, side: s })));
+    }
+    on($(id).querySelector(`[data-side="${startSide}"]`), 'click');
+    return out;
+  };
+
+  $('cuTeamB').value = '3';
+  on($('cuTeamB'), 'change');
+  await settle(500);
+  const pick = (id) => {
+    const b = [...$(id).querySelectorAll('input[type="checkbox"]')];
+    const box = b.length > 1 ? b[1] : b[0];
+    if (box) { box.checked = true; on(box, 'change'); }
+  };
+  pick('cuListA');
+  pick('cuListB');
+  await settle(1500);
+
+  const atOpen = { mine: title('cuWeek'), his: title('cuWeekB') };
+  const peekBtn = (host, w) => document.querySelector(`#${host} .wk-peek[data-wk="${w}"]`);
+  const weeksIn = (host) => [...document.querySelectorAll(`#${host} .wk-peek`)]
+    .map((b) => Number(b.getAttribute('data-wk')));
+  const avail = weeksIn('cuInline').filter((w) => w > 4 && w <= 14);
+  const openW = weekOf(atOpen.mine);
+  const other = avail.find((w) => w !== openW && w !== weekOf(atOpen.his)) ?? null;
+
+  // A hover in YOUR table moves HIS panel too.
+  on(peekBtn('cuInline', other), 'mouseover');
+  const crossHover = { week: other, mine: title('cuWeek'), his: title('cuWeekB') };
+
+  // Click W (pin), drift over a later row, leave the table: back to W.
+  const W = avail.find((w) => w !== other) ?? null;
+  const later = avail.filter((w) => w > W).slice(-1)[0] ?? null;
+  on(peekBtn('cuInline', W), 'click');
+  const pinned = { mine: title('cuWeek'), his: title('cuWeekB') };
+  on(peekBtn('cuInline', later), 'mouseover');
+  const drifting = { mine: title('cuWeek'), his: title('cuWeekB') };
+  on(document.querySelector('#cuInline table.weeks'), 'mouseout', $('cuTeamB'));
+  const leftTable = { W, later, mine: title('cuWeek'), his: title('cuWeekB') };
+  // A hover in HIS table moves yours, and leaving his returns both.
+  on(peekBtn('cuInlineB', later), 'mouseover');
+  const crossBack = { mine: title('cuWeek'), his: title('cuWeekB') };
+  on(document.querySelector('#cuInlineB table.weeks'), 'mouseout', $('cuTeamB'));
+  const leftB = { mine: title('cuWeek'), his: title('cuWeekB') };
+
+  // Every figure in both panels, both tabs, at the pinned week and at another.
+  const guard = [...bothTabs('cuWeek'), ...bothTabs('cuWeekB')];
+  on(peekBtn('cuInline', later), 'click');
+  guard.push(...bothTabs('cuWeek'), ...bothTabs('cuWeekB'));
+
+  // A played week says so, in the custom box if it shows one, and in the pop-up.
+  const playedBtn = document.querySelector('#cuInline .wk-peek[data-wk="2"]');
+  let playedCu = null;
+  if (playedBtn) { on(playedBtn, 'click'); playedCu = title('cuWeek'); }
+
+  on($('cuOpen'), 'click');
+  await settle(1500);
+  const popup = { open: !$('dealModal').hidden };
+  for (const w of [W, later]) {
+    on(document.querySelector(`#dealBody .wk-peek[data-wk="${w}"]`), 'click');
+    guard.push(...bothTabs('dealWeek'));
+  }
+  // The pop-up's own week: pinned by a click, a drift, then leaving its table.
+  on(document.querySelector(`#dealBody .wk-peek[data-wk="${W}"]`), 'click');
+  on(document.querySelector(`#dealBody .wk-peek[data-wk="${later}"]`), 'mouseover');
+  popup.drift = title('dealWeek');
+  on(document.querySelector('#dealBody table.weeks'), 'mouseout', $('dealClose'));
+  popup.left = title('dealWeek');
+  on(document.querySelector('#dealBody .wk-peek[data-wk="2"]'), 'click');
+  popup.played = title('dealWeek');
+  on(document.querySelector('#dealBody .wk-peek[data-wk="7"]'), 'click');
+  popup.unplayed = title('dealWeek');
+  popup.avgKey = text(document.querySelector('#dealBody .avg-key'));
+  const avgKeys = { finder: text($('tradeAvgKey')), custom: text($('cuAvgKey')) };
+
+  return {
+    errors, atOpen, crossHover, pinned, drifting, leftTable, crossBack, leftB,
+    playedCu, popup, guard, avgKeys, span: avail,
+  };
+};
+
+/**
  * WHICH WEEK A LIVE LEAGUE OPENS ON, and so whose rosters the finder reads.
  *
  * Tim's complaint (2026-09-17): the page opened on the last PLAYED week all
@@ -4867,6 +4993,69 @@ if (!live.boot) {
   ok('How this works mentions the injury report', /injury report/i.test(r.note), r.note.slice(-300));
 }
 
+// ---- one week for both slot-by-slot panels (Tim, 2026-09-29) ---------------
+//
+// "in the week 6, slot by slot, it shows different numbers in different places
+// for the same player ... these are massive discrepancies and need to be
+// consistient and accurate in every place it's located."
+{
+  const r = run('slotWeek', { stub: true });
+  ok('slot week boots', !r.boot, r.boot);
+  ok('slot week has no errors', !r.errors || r.errors.length === 0, JSON.stringify(r.errors));
+  const wk = (t) => { const m = /^Week (\d+)/.exec(t || ''); return m ? Number(m[1]) : null; };
+  const same = (x) => x && wk(x.mine) !== null && wk(x.mine) === wk(x.his);
+  ok('both halves open on the same week', same(r.atOpen), JSON.stringify(r.atOpen));
+  ok('a hover in your table moves HIS panel to that week too',
+    r.crossHover && r.crossHover.week !== null && wk(r.crossHover.his) === r.crossHover.week &&
+      wk(r.crossHover.mine) === r.crossHover.week, JSON.stringify(r.crossHover));
+  ok('a click pins that week in both panels',
+    wk(r.pinned.mine) === r.leftTable.W && wk(r.pinned.his) === r.leftTable.W, JSON.stringify(r.pinned));
+  ok('drifting over a later row previews it while still over the table',
+    wk(r.drifting.mine) === r.leftTable.later && wk(r.drifting.his) === r.leftTable.later,
+    JSON.stringify({ drifting: r.drifting, later: r.leftTable.later }));
+  ok('leaving the table returns both panels to the clicked week',
+    wk(r.leftTable.mine) === r.leftTable.W && wk(r.leftTable.his) === r.leftTable.W,
+    JSON.stringify(r.leftTable));
+  ok('a hover in HIS table moves yours too', same(r.crossBack) && wk(r.crossBack.mine) === r.leftTable.later,
+    JSON.stringify(r.crossBack));
+  ok('and leaving his table returns both to the clicked week',
+    wk(r.leftB.mine) === r.leftTable.W && wk(r.leftB.his) === r.leftTable.W, JSON.stringify(r.leftB));
+  ok('the pop-up: a drift previews, leaving its table returns to the clicked week',
+    wk(r.popup.drift) === r.leftTable.later && wk(r.popup.left) === r.leftTable.W,
+    JSON.stringify(r.popup));
+  ok('a played week’s panel title says it was played', /played/i.test(r.popup.played || ''),
+    r.popup.played);
+  ok('an unplayed week’s title does not', r.popup.unplayed && !/played/i.test(r.popup.unplayed),
+    r.popup.unplayed);
+  if (r.playedCu !== null) ok('and so does the custom box’s', /played/i.test(r.playedCu), r.playedCu);
+  ok('the per-week figures say what they average (finder, custom box, pop-up)',
+    /weeks? \d+/.test(r.avgKeys.finder) && /weeks? \d+/.test(r.avgKeys.custom) && /weeks? \d+/.test(r.popup.avgKey),
+    JSON.stringify([r.avgKeys, r.popup.avgKey]));
+
+  // THE CONSISTENCY GUARD: every man's figure in both panels, both tabs and the
+  // pop-up is the stub's own projection for him THAT week, to the tenth.
+  const stub = await import('./tr-stub-season.mjs');
+  const proj = new Map();
+  for (const g of r.guard || []) {
+    if (!proj.has(g.week)) {
+      const { teams } = await stub.fetchWeekRosters(g.week);
+      const m = new Map();
+      for (const t of teams) for (const p of t.players) m.set(String(p.playerId), p.projected);
+      proj.set(g.week, m);
+    }
+  }
+  const bad = (r.guard || []).filter((g) => {
+    const want = proj.get(g.week) && proj.get(g.week).get(String(g.id));
+    return !(typeof want === 'number' && Number(g.v) === Math.round(want * 10) / 10);
+  });
+  const panels = new Set((r.guard || []).map((g) => `${g.panel}:${g.side}`));
+  ok('the guard read both panels, both tabs, and the pop-up',
+    ['cuWeek:mine', 'cuWeek:theirs', 'cuWeekB:mine', 'cuWeekB:theirs', 'dealWeek:mine', 'dealWeek:theirs']
+      .every((k) => panels.has(k)) && r.guard.length > 40, `${[...panels]} n=${(r.guard || []).length}`);
+  ok('every man’s figure is his own projection for that week, everywhere',
+    bad.length === 0, JSON.stringify(bad.slice(0, 4)));
+}
+
 // ---- hover a week, see that week's lineup slot by slot ---------------------
 //
 // Tim, 2026-09-17: "if you hover over a specific week, it shows the positions of
@@ -5584,8 +5773,11 @@ if (!live.boot) {
     ok('hovering a week in his half opens that week in HIS panel',
       cu.hoverB.week !== null && cu.hoverB.theirs.startsWith(`Week ${cu.hoverB.week},`),
       JSON.stringify(cu.hoverB));
-    ok('and leaves yours where it was',
-      cu.hoverB.mineAfter === cu.hoverB.mineBefore, JSON.stringify(cu.hoverB));
+    // REPLACED 2026-09-29 (Tim: the same player showed different numbers in
+    // the two panels): the halves share ONE week now, so a hover in his table
+    // moves yours to the same week.
+    ok('and moves yours to the same week',
+      cu.hoverB.mineAfter.startsWith(`Week ${cu.hoverB.week},`), JSON.stringify(cu.hoverB));
     ok('a week you play him is marked in both halves, the same weeks',
       JSON.stringify(cu.vsA) === JSON.stringify(cu.vsB), `${cu.vsA} / ${cu.vsB}`);
   }
