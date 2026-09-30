@@ -280,6 +280,50 @@ const SCENARIOS = {
     prefs: { 'waivers.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
   },
+  // Tim, 2026-09-29: "put a up or down arrow by that player's name if their
+  // rest-of-season proj/week has increased or decreased by more than 2 than it
+  // was at the begginning of the season. make the down arrow red and up arrow
+  // green. make sure it's small so it's not too distracting."
+  // Real men from the committed preseason copy, projected flat, in a half-PPR
+  // league (wv-stub-espn TREND_MEN, wv-stub-season TREND_SQUADS).
+  trend: {
+    label: '(g) the preseason arrows: green ▲ / red ▼ by a name that moved more than 2 a week',
+    stub: true,
+    env: { WV_TREND: '1' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    // THE ARROW IS REST OF SEASON, WHATEVER THE SPAN: every row's arrow (class
+    // and words) under Next 3, Next 6, Rest of season and back — and what each
+    // step bought.
+    after: async ({ document, window, waitFor }) => {
+      const espn = await import('./wv-stub-espn.mjs');
+      const season = await import('./wv-stub-season.mjs');
+      const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      const snap = () => [...document.querySelectorAll('#waiverTable tbody tr[data-player], #takenTable tbody tr[data-player]')]
+        .map((tr) => {
+          const t = tr.querySelector('.trend');
+          const table = tr.closest('table').getAttribute('id');
+          return `${table}:${tr.getAttribute('data-player')}:${t ? `${t.getAttribute('class')}|${t.getAttribute('title')}` : '-'}`;
+        }).sort();
+      const out = {
+        next3: snap(),
+        wire3: espn.calls.weeks.slice(),
+        rosters3: season.calls.rosterWeeks.slice(),
+      };
+      click(document.querySelector('#spanFilter button[data-span="6"]'));
+      await waitFor();
+      out.next6 = snap();
+      click(document.querySelector('#spanFilter button[data-span="all"]'));
+      await waitFor();
+      out.all = snap();
+      out.wireAll = espn.calls.weeks.slice();
+      out.rostersAll = season.calls.rosterWeeks.slice();
+      click(document.querySelector('#spanFilter button[data-span="3"]'));
+      await waitFor();
+      out.back = snap();
+      globalThis.__wvTrend = out;
+    },
+  },
   'live-empty': {
     label: '(d) stubbed live league with an empty free-agent pool',
     stub: true,
@@ -773,7 +817,9 @@ async function check(scenario, boot) {
   c.ok('the note owns the average as ours',
     /Avg is the mean of the weeks shown and is ours, not ESPN’s/.test(note), note);
 
-  checkHeat(c, d, scenario, note);
+  // `trend` rosters one man per position, and a group of one has nothing to be
+  // coloured against — the scale is not what that scenario is about.
+  if (scenario !== 'trend') checkHeat(c, d, scenario, note);
 
   // ---- (a) demo ------------------------------------------------------------
   if (scenario === 'demo') {
@@ -1244,6 +1290,134 @@ async function check(scenario, boot) {
       same(w.all, w.wireFlex, 'taken').length === 0 && same(w.all, w.takenFlex, 'wire').length === 0,
       `${same(w.all, w.wireFlex, 'taken').slice(0, 2).join(' | ')} / ` +
       `${same(w.all, w.takenFlex, 'wire').slice(0, 2).join(' | ')}`);
+  }
+
+  // ---- (g) the preseason arrows --------------------------------------------
+  //
+  // VISIBLE TEXT AND SCREEN-READER TEXT ARE READ SEPARATELY (Traps): the glyph
+  // is what an eye sees, the words are what a screen reader says, and a
+  // textContent read would blur the two into one string that "contains" both.
+  const trendOf = (tr) => {
+    const el = tr && tr.querySelector('.trend');
+    if (!el) return null;
+    const sr = el.querySelector('.sr-only');
+    const clone = el.cloneNode(true);
+    for (const s of clone.querySelectorAll('.sr-only')) s.remove();
+    return {
+      dir: /\btrend-up\b/.test(el.getAttribute('class')) ? 'up'
+        : /\btrend-down\b/.test(el.getAttribute('class')) ? 'down' : '?',
+      visible: txt(clone),
+      sr: txt(sr),
+      title: el.getAttribute('title') || '',
+      // Right after the name: the name link (`a.pref`) or the Trade page's `.nm`.
+      afterName: !!(el.previousElementSibling && (el.previousElementSibling.tagName === 'A' ||
+        /\bnm\b/.test(el.previousElementSibling.getAttribute('class') || ''))),
+    };
+  };
+  const trendCount = (id) => d.querySelectorAll(`#${id} tbody .trend`).length;
+  if (scenario === 'trend') {
+    const espn = await import('./wv-stub-espn.mjs');
+    const season = await import('./wv-stub-season.mjs');
+    const rowOf = (tableId, pid, mine) => [...d.querySelectorAll(`#${tableId} tbody tr[data-player="${pid}"]`)]
+      .find((tr) => mine === undefined || /\bmine\b/.test(tr.getAttribute('class') || '') === mine);
+    const cases = [
+      ...Object.values(espn.TREND_MEN).map((m) => ({ ...m, table: 'waiverTable', mine: false })),
+      // The Taken table lists every rostered man, yours included.
+      ...season.TREND_SQUADS.flatMap((t) => t.players)
+        .map((p) => ({ id: p.playerId, name: p.name, want: p.want, table: 'takenTable' })),
+      ...season.TREND_SQUADS.find((t) => t.id === 4).players
+        .map((p) => ({ id: p.playerId, name: p.name, want: p.want, table: 'waiverTable', mine: true })),
+    ];
+    // "Now" is the site's average of ESPN's weekly projections over the REST OF
+    // THE SEASON (regular weeks 4–13), and the words say so — not that ESPN
+    // published a rest-of-season number.
+    const SAYS = (dir, d, from, to) => new RegExp(`^${dir} ${d} a week since preseason: ${from} ` +
+      `\\(ESPN’s 9 Sep projection per game\\) → ${to} \\(the site’s average of ESPN’s weekly ` +
+      'projections over weeks 4–13\\)$');
+    const WORDS = {
+      'Jahmyr Gibbs': SAYS('Up', '4\\.8', '19\\.7', '24\\.5'),
+      'Puka Nacua': SAYS('Down', '5\\.2', '17\\.2', '12\\.0'),
+      'Texans D/ST': SAYS('Up', '2\\.4', '7\\.6', '10\\.0'),
+      'Tyler Warren': SAYS('Down', '2\\.1', '9\\.9', '7\\.8'),
+      'Wil Lutz': SAYS('Up', '3\\.0', '8\\.0', '11\\.0'),
+    };
+    for (const m of cases) {
+      const tr = rowOf(m.table, m.id, m.mine);
+      c.ok(`${m.name} is on the ${m.table === 'takenTable' ? 'Taken' : 'wire'} table${m.mine ? ' as your own row' : ''}`,
+        !!tr, `no tr[data-player="${m.id}"]`);
+      if (!tr) continue;
+      const t = trendOf(tr);
+      if (m.want === null) {
+        c.ok(`${m.name}: NO arrow (${m.name === 'Josh Allen' ? 'exactly +2.0 — "more than 2" is strict' : 'no preseason line'})`,
+          t === null, JSON.stringify(t));
+        continue;
+      }
+      c.ok(`${m.name}: a ${m.want === 'up' ? 'green ▲' : 'red ▼'} by his name`,
+        t && t.dir === m.want, JSON.stringify(t));
+      if (!t) continue;
+      c.ok(`${m.name}: what the eye sees is the glyph alone`,
+        t.visible === (m.want === 'up' ? '▲' : '▼'), JSON.stringify(t.visible));
+      c.ok(`${m.name}: a screen reader hears how far and from what (sr-only, inside the arrow)`,
+        WORDS[m.name].test(t.sr.replace(/^\(|\)$/g, '')), t.sr);
+      c.ok(`${m.name}: the tooltip carries the same words`, WORDS[m.name].test(t.title), t.title);
+      c.ok(`${m.name}: the arrow sits right after the name`, t.afterName,
+        tr.children[0].innerHTML.slice(0, 300));
+    }
+    // ---- rest of season, whatever the span ----
+    const tw = globalThis.__wvTrend || {};
+    const arrowed = (list) => (list || []).filter((s) => !s.endsWith(':-'));
+    c.ok('GIBBS HAS HIS ▲ UNDER “NEXT 3”, where the three weeks shown alone (21.0, +1.3) would give ' +
+      'none — the arrow is his rest of season (24.5, +4.8)',
+      (tw.next3 || []).some((s) => s.startsWith('waiverTable:4429795:') && /trend-up/.test(s)),
+      JSON.stringify(arrowed(tw.next3)));
+    c.ok('SWITCHING THE SPAN CHANGES NO ARROW: Next 3, Next 6, Rest of season and back are identical, ' +
+      'class and words, row by row',
+      tw.next3 && tw.next3.length > 20 && arrowed(tw.next3).length === 6 &&
+      JSON.stringify(tw.next3) === JSON.stringify(tw.next6) &&
+      JSON.stringify(tw.next3) === JSON.stringify(tw.all) &&
+      JSON.stringify(tw.next3) === JSON.stringify(tw.back),
+      JSON.stringify({ n3: arrowed(tw.next3), n6: arrowed(tw.next6), all: arrowed(tw.all) }).slice(0, 400));
+    const sorted = (a) => [...(a || [])].sort((x, y) => x - y);
+    const REST = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    c.ok('THE COST under Next 3: the regular weeks still to come, each bought once — wire and rosters, ' +
+      'weeks 4–13 (the three columns, then seven more for the arrows)',
+      JSON.stringify(sorted(tw.wire3)) === JSON.stringify(REST) &&
+      JSON.stringify(sorted(tw.rosters3)) === JSON.stringify(REST),
+      `wire ${JSON.stringify(tw.wire3)} rosters ${JSON.stringify(tw.rosters3)}`);
+    c.ok('the columns came first: weeks 4–6 were asked for before any week the arrows wanted',
+      JSON.stringify(sorted((tw.wire3 || []).slice(0, 3))) === JSON.stringify([4, 5, 6]),
+      JSON.stringify(tw.wire3));
+    c.ok('and widening to Rest of season then buys only the playoff columns — never a week twice',
+      JSON.stringify(sorted(tw.wireAll)) === JSON.stringify([...REST, 14, 15, 16]) &&
+      new Set(tw.rostersAll || []).size === (tw.rostersAll || []).length,
+      `wire ${JSON.stringify(tw.wireAll)} rosters ${JSON.stringify(tw.rostersAll)}`);
+    c.ok('ONLY those men carry an arrow: every stub man is unknown to the preseason copy',
+      trendCount('waiverTable') === 3 && trendCount('takenTable') === 3,
+      `${trendCount('waiverTable')} on the wire, ${trendCount('takenTable')} taken`);
+    const wk = $('waiverTrendKey');
+    const tk = $('takenTrendKey');
+    c.ok('the wire’s one-line key is shown, and outside the toggle',
+      wk && !wk.hasAttribute('hidden') && /Green ▲ \/ red ▼ by a name/.test(txt(wk)) && !wk.closest('details'),
+      wk ? `${wk.hasAttribute('hidden')} ${txt(wk)}` : 'no #waiverTrendKey');
+    c.ok('and so is the Taken table’s', tk && !tk.hasAttribute('hidden') && /preseason/.test(txt(tk)),
+      tk ? `${tk.hasAttribute('hidden')} ${txt(tk)}` : 'no #takenTrendKey');
+    c.ok('“How to read this table” states the basis: ESPN’s 9 Sep preseason, re-scored, over the rest ' +
+      'of the season whatever the span, and what those weeks cost',
+      /9 Sep projection per game, re-scored with your league’s rules/.test(note) &&
+      /average of ESPN’s weekly projections, over weeks 4–13/.test(note) &&
+      /whatever span is shown/.test(note),
+      note.slice(-900));
+    c.ok('and the Taken table’s explanation says it too',
+      /re-scored with your league’s rules/.test(txt($('takenNote'))), txt($('takenNote')).slice(-600));
+  } else if (scenario !== 'live-empty') {
+    // Every other scenario is stub ids or the invented demo: nobody is in the
+    // preseason copy, so there must be no arrow and no key for one.
+    c.ok('no preseason arrow for a man the copy has never heard of',
+      trendCount('waiverTable') === 0 && trendCount('takenTable') === 0,
+      `${trendCount('waiverTable')} / ${trendCount('takenTable')}`);
+    c.ok('and no key for an arrow that is not there',
+      ['waiverTrendKey', 'takenTrendKey'].every((id) => !$(id) || $(id).hasAttribute('hidden')),
+      ['waiverTrendKey', 'takenTrendKey'].map((id) => $(id) && txt($(id))).join(' | '));
   }
 
   // ---- the summary strip ---------------------------------------------------

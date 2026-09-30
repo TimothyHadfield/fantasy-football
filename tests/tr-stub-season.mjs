@@ -228,9 +228,42 @@ function injuredAs(id) {
   return null;
 }
 
+/**
+ * THE PRESEASON ARROWS (Tim, 2026-09-29), off unless `TR_TREND` is set.
+ *
+ * Five stub men take a real ESPN id from the committed preseason copy
+ * (data/baselines/2026-preseason.json) and keep their stub names and flat
+ * projections. The league is half PPR (`fetchSchedule` below), so by hand
+ * (tests/test-proj-trend.mjs) the preseason per week and the arrow are:
+ *   105 Ana TE1      → Tyler Warren  9.9, flat 12 = +2.1  green ▲ (the edge)
+ *   107 Ravens D/ST  → Ravens D/ST   7.0, flat 12 = +5.0  green ▲
+ *   108 Ana K        → Wil Lutz      8.0, flat 7  = −1.0  none
+ *   309 Cy RB3       → Jahmyr Gibbs 19.7, flat 15 = −4.7  red ▼
+ *   303 Cy WR1       → Puka Nacua   17.2, flat 16 = −1.2  none
+ * Every other man keeps a stub id the copy has never heard of: no arrow.
+ */
+export const TREND_IDS = {
+  105: { id: 4431459, want: 'up' },
+  107: { id: -16033, want: 'up' },
+  108: { id: 2985659, want: null },
+  309: { id: 4429795, want: 'down' },
+  303: { id: 4426515, want: null },
+};
+const trendId = (id) => (process.env.TR_TREND && TREND_IDS[id] ? TREND_IDS[id].id : id);
+
+import { pathToFileURL as toUrl } from 'node:url';
+import nodePath from 'node:path';
+import { REPO as ROOT } from './repo.mjs';
+// The same module the page imports, so the page and the stub agree on ESPN's
+// default rules; the league's own are those with a catch cut to half a point.
+const { DEFAULT_PPR } = await import(toUrl(nodePath.join(ROOT, 'js/proj-trend.js')).href);
+export const HALF_PPR = DEFAULT_PPR.map((it) => (it.statId === 53
+  ? { statId: 53, points: 0, pointsOverrides: { 1: 0.5, 2: 0.5, 3: 0.5, 4: 0.5 } }
+  : it));
+
 function playersFor(team, week) {
   return team.players.map((spec, i) => ({
-    playerId: pickupApplies(team, i, week) ? PICKUP.added : playerId(team.id, i),
+    playerId: pickupApplies(team, i, week) ? PICKUP.added : trendId(playerId(team.id, i)),
     name: pickupApplies(team, i, week) ? PICKUP.name : spec.name,
     position: spec.position,
     proTeam: proSplit() ? PRO_ABBREV[team.id] : 'BUF',
@@ -313,6 +346,8 @@ export async function fetchSchedule() {
       : [{ week, homeId: 1, awayId: 2, played }, { week, homeId: 3, awayId: 4, played }]));
   }
   return {
+    // TR_TREND: the league's scoring rules, as js/season.js keeps them.
+    ...(process.env.TR_TREND ? { scoringItems: HALF_PPR } : {}),
     leagueName: 'Stub League',
     // The trade rules, as espn.parseTrades hands them over. TR_DEADLINE (epoch
     // ms) sets a deadline; unset, ESPN "did not say" and the page says nothing.

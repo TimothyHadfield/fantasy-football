@@ -2111,6 +2111,15 @@ function readByeMarks(root) {
       // The injury underline (2026-09-29): its class and its own tooltip.
       injCls: m.querySelector('.inj') ? (m.querySelector('.inj').getAttribute('class') || '') : '',
       injTitle: m.querySelector('.inj') ? (m.querySelector('.inj').getAttribute('title') || '') : '',
+      // The preseason arrow (2026-09-29): its direction, tooltip, glyph as seen,
+      // and whether it sits inside the positioned `.trend` (sr-only escapes
+      // otherwise — Traps).
+      trend: m.querySelector('.trend')
+        ? ((m.querySelector('.trend').getAttribute('class') || '').match(/\btrend-(up|down)\b/) || ['', '?'])[1]
+        : '',
+      trendTitle: m.querySelector('.trend') ? (m.querySelector('.trend').getAttribute('title') || '') : '',
+      trendSeen: m.querySelector('.trend') ? visible(m.querySelector('.trend')) : '',
+      trendSr: m.querySelector('.trend .sr-only') ? text(m.querySelector('.trend .sr-only')) : '',
       sr: [...m.querySelectorAll('.sr-only')].map(text).join(' '),
       visible: visible(m),
     };
@@ -2131,8 +2140,12 @@ SCENARIOS.byeMark = async function byeMark() {
   const combo = readByeMarks($('comboBody'));
   const finderKey = text($('tradeByeKey'));
   const note = text($('tradeNote'));
-  // The pop-up, on the first Cy deal.
-  const idx = finder.findIndex((r) => /^Cy\b/.test(r.partner));
+  // The pop-up, on the first Cy deal — or, with TR_DEAL_WITH, the first deal
+  // naming that man (the preseason-arrow run opens one that carries an arrow).
+  const dealWith = Number(process.env.TR_DEAL_WITH) || null;
+  const idx = dealWith
+    ? finder.findIndex((r) => r.men.some((m) => m.id === dealWith))
+    : finder.findIndex((r) => /^Cy\b/.test(r.partner));
   let deal = [];
   let dealKey = '';
   if (idx >= 0) {
@@ -4991,6 +5004,92 @@ if (!live.boot) {
     dump(rest.filter((m) => m.injCls)));
   ok('the finder key mentions the underline', /underlined/i.test(r.finderKey), r.finderKey);
   ok('How this works mentions the injury report', /injury report/i.test(r.note), r.note.slice(-300));
+}
+
+// ---- the preseason arrows (Tim, 2026-09-29) ------------------------------------
+//
+// "put a up or down arrow by that player's name if their rest-of-season
+// proj/week has increased or decreased by more than 2 than it was at the
+// begginning of the season. make the down arrow red and up arrow green. make
+// sure it's small so it's not too distracting."
+// TR_TREND gives five stub men real ids from the preseason copy (tr-stub-season
+// TREND_IDS) in a half-PPR league; the bye pill and the underline run alongside,
+// so all three marks are checked sitting on one man.
+{
+  const { TREND_IDS } = await import('./tr-stub-season.mjs');
+  const r = run('byeMark', { stub: true, env: {
+    TR_TREND: '1', TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}', TR_INJURED: '107:QUESTIONABLE',
+    TR_DEAL_WITH: '4429795',
+  } });
+  ok('trend run boots', !r.boot, r.boot);
+  ok('trend run has no errors', !r.errors || r.errors.length === 0, JSON.stringify(r.errors));
+  const dump = (x) => JSON.stringify(x).slice(0, 300);
+  const places = {
+    finder: (r.finder || []).flatMap((x) => x.men),
+    combo: r.combo || [],
+    'pop-up': (r.deal || []).flatMap((s) => s.men),
+    'your custom list': r.listA || [],
+    'his custom list': r.listB || [],
+    'saved custom row': r.saved || [],
+  };
+  const everyone = Object.values(places).flat();
+  const want = new Map(Object.values(TREND_IDS).map((t) => [t.id, t.want]));
+  // "Now" is the site's average of ESPN's weekly projections over the weeks
+  // the page prices — never "ESPN's rest-of-season projection", which ESPN
+  // does not publish.
+  const SAYS = (dir, d, from, to) => new RegExp(`${dir} ${d} a week since preseason: ${from} ` +
+    `\\(ESPN’s 9 Sep projection per game\\) → ${to} \\(the site’s average of ESPN’s weekly ` +
+    'projections over weeks? \\d+(–\\d+)?\\)');
+  const WORDS = {
+    4431459: SAYS('Up', '2\\.1', '9\\.9', '12\\.0'),
+    [-16033]: SAYS('Up', '5\\.0', '7\\.0', '12\\.0'),
+    4429795: SAYS('Down', '4\\.7', '19\\.7', '15\\.0'),
+  };
+  // Not vacuous: each arrowed man is drawn where he must be.
+  ok('the custom lists draw Ana’s TE1 (Warren), her Ravens D/ST and Cy’s RB3 (Gibbs)',
+    [4431459, -16033].every((id) => places['your custom list'].some((m) => m.id === id)) &&
+    places['his custom list'].some((m) => m.id === 4429795),
+    dump([places['your custom list'].map((m) => m.id), places['his custom list'].map((m) => m.id)]));
+  for (const [where, list] of Object.entries(places)) {
+    const wrong = list.filter((m) => (want.get(m.id) ?? null) !== (m.trend || null));
+    ok(`${where}: an arrow on exactly the men who moved more than 2 a week, the right way`,
+      list.length > 0 && wrong.length === 0, dump(wrong.length ? wrong : list.map((m) => [m.id, m.trend])));
+  }
+  const arrowed = everyone.filter((m) => m.trend);
+  ok('some finder deal carries an arrow (or the finder check above is vacuous)',
+    places.finder.some((m) => m.trend), dump(places.finder.map((m) => [m.id, m.trend])));
+  ok('what the eye sees is the glyph alone, ▲ for up and ▼ for down',
+    arrowed.length > 5 && arrowed.every((m) => m.trendSeen === (m.trend === 'up' ? '▲' : '▼')), dump(arrowed));
+  ok('the words are sr-only, INSIDE the arrow, and say how far and from what',
+    arrowed.every((m) => WORDS[m.id] && WORDS[m.id].test(m.trendSr) && !/rest-of-season projection/.test(m.trendSr)),
+    dump(arrowed.map((m) => [m.id, m.trendSr])));
+  ok('and never in the visible text', everyone.every((m) => !/preseason/.test(m.visible)),
+    dump(everyone.filter((m) => /preseason/.test(m.visible))));
+  ok('the tooltip carries the same words', arrowed.every((m) => WORDS[m.id].test(m.trendTitle)),
+    dump(arrowed.map((m) => m.trendTitle)));
+  // Coexisting marks: the Ravens D/ST is sent to Cy in the bye week AND questionable.
+  const ravens = everyone.filter((m) => m.id === -16033 && m.cell === 'send');
+  ok('the arrow sits with the green bye pill and the injury underline on one man',
+    ravens.length > 0 && ravens.every((m) => m.trend === 'up' && /bye-send/.test(m.cls) && /\binj\b/.test(m.injCls)),
+    dump(everyone.filter((m) => m.id === -16033)));
+  ok('the finder key names the arrow', /Green ▲ \/ red ▼ by a name/.test(r.finderKey || ''), r.finderKey);
+  ok('the custom box key names it too', /preseason/.test(r.cuKey || ''), r.cuKey);
+  ok('the pop-up (a deal with Gibbs in it) draws his red ▼',
+    places['pop-up'].some((m) => m.id === 4429795 && m.trend === 'down'), JSON.stringify(places['pop-up']).slice(0, 300));
+  ok('and its key names the arrow too', /preseason/.test(r.dealKey || ''), r.dealKey);
+  ok('How this works states the basis: ESPN’s 9 Sep preseason, re-scored with your rules',
+    /9 Sep projection per game, re-scored with your league’s rules/.test(r.note || ''), (r.note || '').slice(-600));
+}
+{
+  // The plain stub league: every id is one the preseason copy has never heard
+  // of, so "not known" must draw nothing — no arrow, and no key for one.
+  const r = run('byeMark', { stub: true, env: { TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}' } });
+  const everyone = [...(r.finder || []).flatMap((x) => x.men), ...(r.combo || []),
+    ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
+  ok('a league of men the preseason copy has never heard of: no arrow anywhere',
+    everyone.length > 20 && everyone.every((m) => !m.trend), JSON.stringify(everyone.filter((m) => m.trend)).slice(0, 240));
+  ok('and no arrow sentence in the keys', !/preseason/.test(`${r.finderKey} ${r.cuKey} ${r.dealKey}`),
+    `${r.finderKey} | ${r.cuKey} | ${r.dealKey}`);
 }
 
 // ---- one week for both slot-by-slot panels (Tim, 2026-09-29) ---------------
