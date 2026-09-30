@@ -207,13 +207,34 @@ function pickupApplies(team, i, week) {
     week > PLAYED_THROUGH;
 }
 
+/**
+ * THE BYE-IN-A-MEETING-WEEK FIXTURE (2026-09-29), both halves off unless set.
+ *
+ * `TR_PRO_SPLIT` gives each squad its own NFL team (team id = pro team id), so
+ * one squad's men can be on bye while the other's are not. `TR_MEET` is a comma
+ * list of weeks in which Ana plays CY (and Bo plays Di) instead of the usual
+ * Ana-Bo / Cy-Di pairing, so the finder's Ana-Cy deals have meeting weeks.
+ */
+const PRO_ABBREV = { 1: 'BUF', 2: 'CHI', 3: 'IND', 4: 'MIA' };
+const proSplit = () => !!process.env.TR_PRO_SPLIT;
+const meetWeeks = () => new Set(String(process.env.TR_MEET || '').split(',')
+  .map((w) => Number(w)).filter((w) => Number.isFinite(w) && w > 0));
+
+function injuredAs(id) {
+  for (const pair of String(process.env.TR_INJURED || '').split(',')) {
+    const [pid, status] = pair.split(':');
+    if (status && Number(pid) === id) return status;
+  }
+  return null;
+}
+
 function playersFor(team, week) {
   return team.players.map((spec, i) => ({
     playerId: pickupApplies(team, i, week) ? PICKUP.added : playerId(team.id, i),
     name: pickupApplies(team, i, week) ? PICKUP.name : spec.name,
     position: spec.position,
-    proTeam: 'BUF',
-    proTeamId: 1,
+    proTeam: proSplit() ? PRO_ABBREV[team.id] : 'BUF',
+    proTeamId: proSplit() ? team.id : 1,
     lineupSlotId: spec.slot,
     slot: LABEL[spec.slot],
     started: spec.slot !== SLOT.BE,
@@ -223,7 +244,9 @@ function playersFor(team, week) {
     // than about the calendar.
     actual: week <= PLAYED_THROUGH ? Math.round(spec.week(week) * 0.9 * 10) / 10 : null,
     seasonProjected: spec.mean * 17,
-    injuryStatus: 'ACTIVE',
+    // `TR_INJURED` ("112:QUESTIONABLE,304:INJURY_RESERVE") puts named men on
+    // the injury report; unset, everybody is ACTIVE as before.
+    injuryStatus: injuredAs(playerId(team.id, i)) || 'ACTIVE',
     percentOwned: null,
   }));
 }
@@ -282,11 +305,12 @@ export async function fetchSchedule() {
   calls.schedule++;
   const weeks = Array.from({ length: WEEKS }, (_, i) => i + 1);
   const games = [];
+  const swap = meetWeeks();
   for (const week of weeks) {
-    games.push(
-      { week, homeId: 1, awayId: 2, played: week <= PLAYED_THROUGH },
-      { week, homeId: 3, awayId: 4, played: week <= PLAYED_THROUGH }
-    );
+    const played = week <= PLAYED_THROUGH;
+    games.push(...(swap.has(week)
+      ? [{ week, homeId: 1, awayId: 3, played }, { week, homeId: 2, awayId: 4, played }]
+      : [{ week, homeId: 1, awayId: 2, played }, { week, homeId: 3, awayId: 4, played }]));
   }
   return {
     leagueName: 'Stub League',

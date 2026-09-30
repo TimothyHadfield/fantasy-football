@@ -1,15 +1,15 @@
 {
   "_": "Per-page prose ceilings, in words a reader is SHOWN — text-audit.mjs's rendered count: everything in the panel except tables (data), controls and their labels, headings, and anything hidden or sr-only. Text inside a closed 'How this works' toggle is counted separately and is NOT capped here; putting an explanation behind the toggle is the house shape (rule 16), so the ceiling is on what a reader is made to read.",
   "how": "Enforced by `node text-audit.mjs`, which runs in npm test. A page may lose words freely. Growing past its ceiling fails the suite on purpose: raising a number here is Tim's call, not a drift. Re-measure with `node text-audit.mjs` and put the new figure in.",
-  "measured": "2026-09-22, demo data, linkedom, each page measured settled (3 runs, identical). The old tag-shaped count for the same pages, for comparison: index 191, stats 269, analysis 263, schedule 210, waivers 141, trade 309, summary 143, total 1526. trade 392 -> 395 on 2026-09-24 is a re-measure, not new words: the audit used to call the page settled while the goal ranking was still running (its word count holds still while only 'n of m' moves), so 392 was the interim line. It now waits for no '.searching' span; the unchanged page (HEAD eb8ffce) measures 395 finished. summary 269 -> 280 on 2026-09-27 is Tim's Record column (4W/2L): the 11 words are the ten records and the 'Record' heading inside the plain-text copy of the chart in 'Send it', which the audit counts as prose; no sentence was added on screen. trade 395 -> 399 on 2026-09-29 is Tim's both-goals preview: the combo headline gains the other goal inline ('· last chance +0.1% ±0.4'); no sentence was added.",
+  "measured": "2026-09-22, demo data, linkedom, each page measured settled (3 runs, identical). The old tag-shaped count for the same pages, for comparison: index 191, stats 269, analysis 263, schedule 210, waivers 141, trade 309, summary 143, total 1526. trade 392 -> 395 on 2026-09-24 is a re-measure, not new words: the audit used to call the page settled while the goal ranking was still running (its word count holds still while only 'n of m' moves), so 392 was the interim line. It now waits for no '.searching' span; the unchanged page (HEAD eb8ffce) measures 395 finished. summary 269 -> 280 on 2026-09-27 is Tim's Record column (4W/2L): the 11 words are the ten records and the 'Record' heading inside the plain-text copy of the chart in 'Send it', which the audit counts as prose; no sentence was added on screen. trade 395 -> 399 on 2026-09-29 is Tim's both-goals preview: the combo headline gains the other goal inline ('· last chance +0.1% ±0.4'); no sentence was added. trade 399 -> 409 on 2026-09-29 is Tim's injury underline: the one-sentence key 'Underlined: on ESPN’s injury report.' (5 words) under the finder and the custom box, which the demo shows because its sample rosters carry injuries; the bye-pill key adds nothing in demo (no known byes). trade 409 -> 423 on 2026-09-29 is Tim's slot-by-slot consistency fix: the one line 'Per-week numbers are averages over weeks N–M.' (7 words) under the finder and the custom box, saying what a /wk figure averages, since a slot-by-slot panel shows one week's number for the same man.",
   "pages": {
     "index.html": 256,
     "stats.html": 310,
     "analysis.html": 375,
     "schedule.html": 371,
     "waivers.html": 294,
-    "trade.html": 399,
+    "trade.html": 423,
     "summary.html": 280
   },
-  "total": 2282
+  "total": 2296
 }

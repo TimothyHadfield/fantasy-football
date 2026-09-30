@@ -122,6 +122,8 @@ import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
   zeroKind, byeWeekOf,
 } from './player-card.js';
+// Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
+import { healthy, injuryLabel, injuryClass } from './injury.js';
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14). Pure, and it compares a number
 // only with the same COLUMN or the same POSITION — never a quarterback against
 // a kicker. Every table this page tints carries channel 4, "never colour
@@ -240,6 +242,7 @@ const state = {
   deal: null,          // the offer the modal is showing; null = the modal is shut
   dealKey: null,       // which row opened it, so focus can go back there
   dealWeek: null,      // which week's slot-by-slot breakdown is open inside it
+  dealPeek: null,      // a week under the pointer, shown only while it is over the table
   dealSide: 'mine',    // whose lineup that breakdown shows: 'mine' | 'theirs'
   // CUSTOM TRADES (Tim, 2026-09-18). `custom` is the deal being BUILT in the
   // pickers; `customSaved` is the box it gets kept in, persisted so a reload
@@ -271,8 +274,13 @@ const state = {
   customWeek: null,
   customSide: 'mine',
   // THE PARTNER'S HALF of the custom box (2026-09-29) has its own week table
-  // and its own slot-by-slot panel, opening on HIS lineup.
-  customWeekB: null,
+  // and its own slot-by-slot panel, opening on HIS lineup — but NOT its own
+  // week. Tim, 2026-09-29: "it shows different numbers in different places for
+  // the same player": the halves kept a week each, so one man read 17.6 in one
+  // panel and 11.8 in the other. Both read `customWeek` (pinned by a click, a
+  // tap or the keyboard) and `customPeek` (the row under the pointer, only
+  // while it is over a week table).
+  customPeek: null,
   customSideB: 'theirs',
   // The deal in the pickers, in the pop-up's own shape — built once per render
   // and reused by the inline breakdown, the roster cards and the modal, so all
@@ -1451,6 +1459,152 @@ function meetingWeeks(ctx) {
   return { weeks, name: name || '' };
 }
 
+// ----------------------------------------------- a bye in the week you meet him
+//
+// Tim, 2026-09-29: "highlight a player's name if they have a BYE the week that
+// the users play against each other? If it is me giving the player away that
+// has a BYE week, then highlight it in green. If it is me recieving the player
+// that has a BYE week, then highlight it in yellow."
+//
+// The weeks are the REMAINING REGULAR-SEASON weeks the deal's two squads meet
+// (`meetingWeeks`, cut to `spanFor('last')` exactly as "His proj vs you" is): a
+// played week cannot be helped, and a playoff meeting is not known in advance.
+// The bye is his NFL team's known bye (`byeWeekOf`, rule 2) — an unknown bye
+// marks nobody. A man sent off in that week cannot help the partner against
+// you (green); one received cannot help you against him (yellow).
+//
+// THE MARK IS ON THE NAME, NEVER THE CELL: a solid pill behind the name text,
+// so it cannot be read as the heat scale, which is a tint on whole cells.
+
+/** The remaining regular-season weeks a deal's (or a pair's) squads meet. */
+function meetingWeeksAhead(ctx) {
+  const m = meetingWeeks(ctx);
+  if (!m.weeks.length) return m;
+  const regular = new Set(spanFor('last'));
+  return { weeks: m.weeks.filter((w) => regular.has(w)), name: m.name };
+}
+
+/** `{cls, words, sr}` when this man is off in a week you meet the partner; else null. */
+function byeMarkOf(p, dir, meet) {
+  if (!p || !meet || !meet.weeks || !meet.weeks.length) return null;
+  const bye = byeWeekOf(p, state.byes);
+  if (!Number.isFinite(bye) || !meet.weeks.includes(bye)) return null;
+  const who = meet.name || 'him';
+  const words = meet.weeks.length > 1
+    ? `Bye in week ${bye}, one of the weeks you play ${who} (${meet.weeks.join(', ')})`
+    : `Bye in week ${bye}, the week you play ${who}`;
+  const send = dir === 'send';
+  return {
+    cls: send ? 'bye-send' : 'bye-get',
+    words,
+    sr: ` (${words.charAt(0).toLowerCase()}${words.slice(1)}, and you ${send ? 'send' : 'get'} him)`,
+  };
+}
+
+/** Which way a man moves in a deal, from its "you" side: 'send', 'get' or null. */
+function dirIn(p, offer) {
+  if (!p || !offer) return null;
+  const id = String(p.playerId);
+  if ((offer.send || []).some((q) => String(q.playerId) === id)) return 'send';
+  if ((offer.receive || []).some((q) => String(q.playerId) === id)) return 'get';
+  return null;
+}
+
+/**
+ * ON THE INJURY REPORT (Tim, 2026-09-29): "underline a player's name if they
+ * are on the injury report in the home section." Home's own rule, from
+ * js/injury.js: any ESPN status but ACTIVE/NORMAL, labelled as Home labels it
+ * ("Questionable", "IR", "Out"). Bench men too — Home lists starters only
+ * because it is about this week's lineup, and a trade is not. `{words, sr, cls}`
+ * or null.
+ */
+function injuryMarkOf(p) {
+  if (!p || healthy(p.injuryStatus)) return null;
+  const label = injuryLabel(String(p.injuryStatus));
+  return {
+    cls: `inj inj-${injuryClass(p.injuryStatus)}`,
+    words: `On the injury report: ${label}`,
+    sr: ` (on the injury report: ${label})`,
+  };
+}
+
+/**
+ * The name with its marks: the bye pill outside, the injury underline inside,
+ * and the words for a screen reader in the outermost one.
+ *
+ * The sr-only words sit INSIDE a mark, which is `position: relative`: an
+ * absolute span with no positioned ancestor escapes `.table-scroll`'s clip and
+ * widened the phone page to 656 px (measured, phone-view 2026-09-29).
+ */
+function nameMarksHtml(name, bye, inj) {
+  if (!bye && !inj) return esc(name);
+  const sr = `<span class="sr-only">${esc((bye ? bye.sr : '') + (inj ? inj.sr : ''))}</span>`;
+  const under = inj
+    ? `<span class="${inj.cls}" title="${esc(inj.words)}">${esc(name)}${bye ? '' : sr}</span>`
+    : esc(name);
+  return bye
+    ? `<span class="bye-hl ${bye.cls}" title="${esc(bye.words)}">${under}${sr}</span>`
+    : under;
+}
+
+/** The one-sentence keys, only for a mark that is on screen (rule 16). */
+const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
+const INJ_KEY = 'Underlined: on ESPN’s injury report.';
+function marksKeyText(html) {
+  return [
+    /\bbye-hl\b/.test(html) ? BYE_KEY : '',
+    /\binj\b/.test(html) ? INJ_KEY : '',
+  ].filter(Boolean).join(' ');
+}
+const byeKeyHtml = (html) => {
+  const t = marksKeyText(html);
+  return t ? `<p class="panel-note bye-key">${esc(t)}</p>` : '';
+};
+/** Fill (or empty and hide) a fixed key line from the markup it describes. */
+function setByeKey(id, html) {
+  const el = $(id);
+  if (!el) return;
+  const t = marksKeyText(html);
+  el.textContent = t;
+  el.hidden = !t;
+}
+/**
+ * WHAT A PER-WEEK FIGURE AVERAGES (Tim, 2026-09-29: "in the main section it
+ * says he is proj 12.4/week. In my slot by slot, it shows 11.8"). Both were
+ * right — 12.4 is his mean over the span, 11.8 is week 6 alone — and nothing
+ * said so. One line under each panel that prints a "/wk" figure. Not a
+ * `title` on the figure: those sit inside a link and a tip card, where a
+ * phone never shows a title and a laptop would draw it over the card.
+ */
+function avgKeyText() {
+  const b = basis();
+  if (b === 'weeks') {
+    const span = weeklySpan();
+    return span.length ? `Per-week numbers are averages over ${weekRange(span)}.` : '';
+  }
+  if (b === 'week') return `Per-week numbers are week ${state.week} projections.`;
+  return 'Per-week numbers are season projections over 17 games.';
+}
+const avgKeyHtml = () => {
+  const t = avgKeyText();
+  return t ? `<p class="panel-note avg-key">${esc(t)}</p>` : '';
+};
+function setAvgKey(id, show) {
+  const el = $(id);
+  if (!el) return;
+  const t = show ? avgKeyText() : '';
+  el.textContent = t;
+  el.hidden = !t;
+}
+
+/** The line behind "How this works". */
+const BYE_EXPLAIN =
+  ' <strong>A name on green or yellow</strong> is on his NFL team&rsquo;s bye in a regular-season ' +
+  'week still to play in which you meet that manager: green when you send him (he cannot help ' +
+  'that manager against you), yellow when you get him (he cannot help you against him). Only a ' +
+  'known bye week counts. <strong>An underlined name</strong> is on ESPN&rsquo;s injury report ' +
+  '(any status but active, the Home page&rsquo;s rule), bench men included.';
+
 /**
  * THE WHOLE SEASON, weeks 1 to the last playoff week — not the weeks in hand.
  *
@@ -1828,7 +1982,11 @@ function manLine(p, ctx = null) {
   const val = Number.isFinite(v)
     ? `<span class="val">${fmt(v)}/wk</span>`
     : `<span class="val">—</span>`;
-  const inner = `${esc(p.name)}${posTag(p.position)}${val}`;
+  // The bye-in-a-meeting-week mark (Tim, 2026-09-29), only inside a deal.
+  const mark = ctx && ctx.offer
+    ? byeMarkOf(p, dirIn(p, ctx.offer), meetingWeeksAhead({ offer: ctx.offer }))
+    : null;
+  const inner = `${nameMarksHtml(p.name, mark, injuryMarkOf(p))}${posTag(p.position)}${val}`;
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
@@ -2739,6 +2897,8 @@ function renderFinder() {
       weeks ? `, in each of ${plural(span.length, 'week')} — this one takes a few seconds` : ''
     }…</span>`;
     renderFinderNote({ myScale: null, theirScale: null });
+    setByeKey('tradeByeKey', '');
+    setAvgKey('tradeAvgKey', false);
     return;
   }
 
@@ -2752,7 +2912,10 @@ function renderFinder() {
   // with the rows beside it" and there is no honest way to colour against rows
   // that have been filtered away.
   const scales = gainScales(offers);
-  body.innerHTML = offers.map((o, i) => tradeRow(o, i, scales)).join('');
+  const rowsHtml = offers.map((o, i) => tradeRow(o, i, scales)).join('');
+  body.innerHTML = rowsHtml;
+  setByeKey('tradeByeKey', rowsHtml);
+  setAvgKey('tradeAvgKey', offers.length > 0);
   empty.innerHTML = offers.length ? '' : emptyMessage();
 
   renderFinderNote(scales);
@@ -2948,6 +3111,7 @@ function extraColumnsHtml() {
     `regular-season week(s) left in which he plays you — his plus is your red. A playoff meeting is ` +
     `not known in advance, so it is not counted. Both chance columns already include it; You gain, ` +
     `He gains and which deals are found do not.` +
+    BYE_EXPLAIN +
     `<br><br>`
   );
 }
@@ -4412,11 +4576,13 @@ function renderDeal() {
   // manager today. Always 'mine': the head of the pop-up is written from the
   // reader's side whichever lineup the breakdown below is showing.
   const cardCtx = { offer, side: 'mine' };
-  const head =
-    `<div class="deal-head">` +
+  const sides =
     sideHtml('You send', offer.send, cardCtx) +
-    sideHtml('You get', offer.receive, cardCtx) +
-    `</div>` +
+    sideHtml('You get', offer.receive, cardCtx);
+  const head =
+    `<div class="deal-head">` + sides + `</div>` +
+    byeKeyHtml(sides) +
+    avgKeyHtml() +
     dealGoalHtml(offer) +
     // The offer goes with it so the line can say which of these men are HIS —
     // the displaced starter is the one fact neither column above carries.
@@ -4684,31 +4850,43 @@ const BREAKDOWNS = {
     host: 'dealWeek',
     scope: '#dealBody',
     offer: () => state.deal,
-    week: () => state.dealWeek,
+    // The week DRAWN: the one under the pointer while it is over the table,
+    // else the one pinned. `pinned` is what a click, a tap or Tab chose.
+    week: () => state.dealPeek ?? state.dealWeek,
+    pinned: () => state.dealWeek,
     side: () => state.dealSide,
-    setWeek: (w) => { state.dealWeek = w; },
+    setWeek: (w) => { state.dealWeek = w; state.dealPeek = null; },
+    setPeek: (w) => { state.dealPeek = w; },
     setSide: (s) => { state.dealSide = s; },
+    group: ['deal'],
   },
   custom: {
     host: 'cuWeek',
     scope: '#cuInline',
     offer: () => state.customOffer,
-    week: () => state.customWeek,
+    week: () => state.customPeek ?? state.customWeek,
+    pinned: () => state.customWeek,
     side: () => state.customSide,
-    setWeek: (w) => { state.customWeek = w; },
+    setWeek: (w) => { state.customWeek = w; state.customPeek = null; },
+    setPeek: (w) => { state.customPeek = w; },
     setSide: (s) => { state.customSide = s; },
+    group: ['custom', 'customB'],
   },
   // The partner's half (2026-09-29): the same renderer on the same deal, in its
-  // own host, opening on HIS lineup and on the week his side moves most.
+  // own host, opening on HIS lineup — and on the SAME week as yours (Tim,
+  // 2026-09-29), so one man reads one number in both panels. `group` is what
+  // makes a hover or a click in either table move both.
   customB: {
     host: 'cuWeekB',
     scope: '#cuInlineB',
     offer: () => state.customOffer,
-    week: () => state.customWeekB,
+    week: () => state.customPeek ?? state.customWeek,
+    pinned: () => state.customWeek,
     side: () => state.customSideB,
-    setWeek: (w) => { state.customWeekB = w; },
+    setWeek: (w) => { state.customWeek = w; state.customPeek = null; },
+    setPeek: (w) => { state.customPeek = w; },
     setSide: (s) => { state.customSideB = s; },
-    swingSide: 'theirs',
+    group: ['custom', 'customB'],
   },
 };
 
@@ -4854,7 +5032,7 @@ function renderDealWeek(which = 'deal') {
   // until a week was hovered. `picked` stays null, so Escape and a fresh deal
   // still mean "no week chosen" — only what is DRAWN for that state changed.
   const picked = cx.week();
-  const week = picked ?? biggestSwingWeek(offer, cx.swingSide || 'mine');
+  const week = picked ?? biggestSwingWeek(offer, 'mine');
   if (which === 'deal') placeDealHost(host, week);
 
   // The row the reader is on, marked on the table itself as well as here, so
@@ -4948,7 +5126,11 @@ function renderDealWeek(which = 'deal') {
 
   host.innerHTML =
     `<div class="wkx-head">` +
-    `<h3 class="wkx-title">Week ${esc(week)}, slot by slot — ${esc(sideLabel(offer, side))}</h3>` +
+    // "(played)" in the title itself (2026-09-29): a played week's figures are
+    // a different kind of number from the weeks still to come, and the title is
+    // the one line a reader always sees.
+    `<h3 class="wkx-title">Week ${esc(week)}${slice.kind === 'past' ? ' (played)' : ''}, slot by slot — ` +
+    `${esc(sideLabel(offer, side))}</h3>` +
     sideToggleHtml(offer, side) +
     `</div>` +
     scopeNote +
@@ -4977,13 +5159,46 @@ function renderDealWeek(which = 'deal') {
     `</span></p>`;
 }
 
-/** Open one week's breakdown. Hover, tap, focus and Enter all land here. */
-function setDealWeek(week, which = 'deal') {
+/**
+ * Open one week's breakdown. A tap, a click, focus and Enter PIN it; a hover
+ * (`peek`) only previews it while the pointer is over the week table, and
+ * `unpeekDealWeek` puts the pinned week back when it leaves (2026-09-29: the
+ * pointer crossing later rows on its way down to read the panel re-picked the
+ * week under the reader). Every panel in the group follows.
+ */
+function setDealWeek(week, which = 'deal', { peek = false } = {}) {
   const cx = BREAKDOWNS[which];
   const w = Number(week);
-  if (!Number.isFinite(w) || cx.week() === w) return;
-  cx.setWeek(w);
-  renderDealWeek(which);
+  if (!Number.isFinite(w)) return;
+  if (peek) {
+    if (cx.week() === w) return;
+    cx.setPeek(w);
+  } else {
+    if (cx.pinned() === w && cx.week() === w) return;
+    cx.setWeek(w);
+  }
+  for (const k of cx.group) renderDealWeek(k);
+}
+
+/** The pointer left a week table: back to the pinned week (or the opening one). */
+function unpeekDealWeek(which = 'deal') {
+  const cx = BREAKDOWNS[which];
+  if (cx.week() === cx.pinned()) { cx.setPeek(null); return; }
+  cx.setPeek(null);
+  for (const k of cx.group) renderDealWeek(k);
+}
+
+/**
+ * Did this `mouseout` take the pointer OUT of a week table (not just from one
+ * cell of it to another)? `relatedTarget` is where it went; null is off the
+ * window altogether.
+ */
+function leftWeekTable(e) {
+  const t = e.target;
+  const table = t && typeof t.closest === 'function' ? t.closest('table.weeks') : null;
+  if (!table) return false;
+  const to = e.relatedTarget;
+  return !(to && typeof table.contains === 'function' && table.contains(to));
 }
 
 /**
@@ -5043,6 +5258,7 @@ function openDeal(offer, key) {
   // somebody came with. Carrying the last deal's week over would answer a
   // question about a different trade with a number that looks like this one's.
   state.dealWeek = null;
+  state.dealPeek = null;
   state.dealSide = 'mine';
   paint();
   // The close button, because it is the one control a reader has to be able to
@@ -5091,6 +5307,7 @@ function closeDeal() {
   state.deal = null;
   state.dealKey = null;
   state.dealWeek = null;
+  state.dealPeek = null;
   state.dealSide = 'mine';
   paint();
   if (key) focusEl(document.querySelector(`[data-open="${cssKey(key)}"]`));
@@ -5189,6 +5406,11 @@ function comboTableHtml(rows, from, id) {
   // (`tools/measure-layout.mjs --pages trade.html --selector '#comboPanel'`).
   // `renderCombo` reads the list back after the body is built.
   if (theirScale) comboHeatScales.push({ id, scale: theirScale });
+  const rowsHtml = rows
+    .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
+      myGain: false, lineup: false, theirScale,
+    }))
+    .join('');
   return (
     `<div class="table-scroll"><table id="${esc(id)}" class="offers">` +
     `<thead><tr>` +
@@ -5201,17 +5423,14 @@ function comboTableHtml(rows, from, id) {
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
     `</tr></thead><tbody>` +
-    rows
-      .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
-        myGain: false, lineup: false, theirScale,
-      }))
-      .join('') +
+    rowsHtml +
     `</tbody></table></div>` +
     (theirScale
       ? `<p class="heat-key">${heatKeyShort({
         thing: 'manager', what: 'the others in this packing',
       })}</p>`
-      : '')
+      : '') +
+    byeKeyHtml(rowsHtml)
   );
 }
 
@@ -6418,6 +6637,15 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
   if (!rows.length) return '<div class="empty">No roster for this squad in this week.</div>';
   const on = new Set(picked.map(String));
   const mirror = which === 'b';
+  // THE BYE MARK, TICKED OR NOT (2026-09-29): the partner is known here, so
+  // every man on your list is one you might send (green) and every man on his
+  // one you might get (yellow), in the weeks the two squads still meet.
+  const pairA = teamById(state.custom.a);
+  const pairB = teamById(state.custom.b);
+  const meet = pairA && pairB
+    ? meetingWeeksAhead({ pair: { a: pairA.id, b: pairB.id, name: pairB.name } })
+    : null;
+  const dir = which === 'a' ? 'send' : 'get';
 
   return rows.map(({ slot, p }) => {
     if (!p) {
@@ -6447,7 +6675,10 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
     const cells = [
       `<span class="sl">${esc(slot)}</span>`,
       `<span class="gap"></span>`,
-      `<span class="nm">${esc(p.name)}</span>`,
+      (() => {
+        // The bye pill and the injury underline, as on every other deal name.
+        return `<span class="nm">${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>`;
+      })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
       // questions. Suppressed on a defence for the same reason as everywhere
@@ -6619,6 +6850,7 @@ function renderCustomPickers() {
     : (a && b ? { pair: { a: a.id, b: b.id, name: b.name } } : null);
   $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a', { scales, ctx });
   $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b', { scales, ctx });
+  refreshCuByeKey();
 
   // Channel 4 of "never colour alone", in view under the lists it describes.
   // SHORT, for the same reason the finder's is: a key says what the colour
@@ -6794,6 +7026,7 @@ function renderCustomSaved() {
   // A SHORT POINTER, not a second copy of the finder's key. These are the same
   // two columns on the same scale rule, one panel down; repeating eighty words
   // of it would be the thing `text-audit.mjs` exists to catch.
+  refreshCuByeKey();
   const key = $('cuTableKey');
   if (key) {
     key.innerHTML = scales.myScale || scales.theirScale
@@ -6817,6 +7050,13 @@ function inlineWeekScale() {
   const sets = dealSets(state.customOffer, 'mine');
   if (!sets || !sets.span) return null;
   return heatScale(sets.span.byWeek.map((w) => w.delta));
+}
+
+/** The custom panel's bye key: its two lists and its saved rows, as drawn. */
+function refreshCuByeKey() {
+  const html = ['cuListA', 'cuListB', 'cuRows'].map((id) => ($(id) ? $(id).innerHTML : '')).join('');
+  setByeKey('cuByeKey', html);
+  setAvgKey('cuAvgKey', /\bcu-man\b/.test(html));
 }
 
 function renderCustomNote() {
@@ -7120,7 +7360,7 @@ function renderCustom() {
     state.customOffer = made;
     state.customOfferKey = made ? key : null;
     state.customWeek = made ? state.customWeek : null;
-    state.customWeekB = made ? state.customWeekB : null;
+    state.customPeek = null;
   }
   renderCustomPickers();
   renderCustomPreview(priced);
@@ -7390,9 +7630,15 @@ function weekTargetOf(e) {
   return host ? host.getAttribute('data-wk') : null;
 }
 
+// A HOVER PREVIEWS; a click, a tap or focus PINS (2026-09-29). Leaving the
+// week table puts the pinned week back.
 dealPanel.addEventListener('mouseover', (e) => {
   const wk = weekTargetOf(e);
-  if (wk !== null) setDealWeek(wk);
+  if (wk !== null) setDealWeek(wk, 'deal', { peek: true });
+});
+
+dealPanel.addEventListener('mouseout', (e) => {
+  if (leftWeekTable(e)) unpeekDealWeek('deal');
 });
 
 dealPanel.addEventListener('focusin', (e) => {
@@ -7441,8 +7687,9 @@ document.addEventListener('keydown', (e) => {
   // the pop-up, so the first press shuts that and the second shuts the pop-up.
   // Closing the frame out from under the thing being read is exactly what the
   // player-card check above exists to prevent, one layer up.
-  if (state.dealWeek !== null) {
+  if (state.dealWeek !== null || state.dealPeek !== null) {
     state.dealWeek = null;
+    state.dealPeek = null;
     renderDealWeek();
     return;
   }
@@ -7539,7 +7786,7 @@ $('cuTeamB').addEventListener('change', (e) => {
   // replaced, so it goes with it rather than pointing at a week of a deal
   // nobody is building any more.
   state.customWeek = null;
-  state.customWeekB = null;
+  state.customPeek = null;
   renderCustom();
 });
 
@@ -7691,9 +7938,14 @@ function wireInlineHalf(node, which) {
     const host = t.closest('[data-wk]');
     return host ? host.getAttribute('data-wk') : null;
   };
+  // A hover previews in BOTH halves, and only while over a week table; a
+  // click, a tap or focus pins (2026-09-29).
   node.addEventListener('mouseover', (e) => {
     const wk = weekOf(e);
-    if (wk !== null) setDealWeek(wk, which);
+    if (wk !== null) setDealWeek(wk, which, { peek: true });
+  });
+  node.addEventListener('mouseout', (e) => {
+    if (leftWeekTable(e)) unpeekDealWeek(which);
   });
   node.addEventListener('focusin', (e) => {
     const wk = weekOf(e);

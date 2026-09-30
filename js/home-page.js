@@ -34,6 +34,7 @@ import * as prefs from './prefs.js';
 import * as capture from './capture.js';
 import { DEFAULT_SIGMA, MIN_GAMES_TO_CALIBRATE } from './forecast.js';
 import { enableSort } from './sortable.js';
+import { INJURY_RANK, healthy, injuryLabel, injuryClass } from './injury.js';
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14, Tim 2026-09-19: "it needs to be
 // added to all the other places a number is referred to across the whole
 // site"). What it is put on here, and what it is deliberately NOT put on, is
@@ -178,29 +179,8 @@ function pctText(p) {
 
 // ------------------------------------------------------------------- injuries
 
-// ESPN's status strings, worst first. Anything unrecognised is kept rather than
-// hidden — a status we don't know the name of is still news.
-const INJURY_RANK = {
-  OUT: 3, INJURY_RESERVE: 3, SUSPENSION: 3, NOT_ACTIVE: 3,
-  DOUBTFUL: 2,
-  QUESTIONABLE: 1, DAY_TO_DAY: 1, PROBABLE: 1,
-};
-
-const INJURY_LABEL = {
-  INJURY_RESERVE: 'IR', DAY_TO_DAY: 'Day to day', NOT_ACTIVE: 'Not active',
-};
-
-const healthy = (s) => !s || s === 'ACTIVE' || s === 'NORMAL';
-
-function injuryLabel(status) {
-  if (INJURY_LABEL[status]) return INJURY_LABEL[status];
-  return status.charAt(0) + status.slice(1).toLowerCase().replace(/_/g, ' ');
-}
-
-function injuryClass(status) {
-  const rank = INJURY_RANK[status] ?? 1;
-  return rank === 3 ? 'out' : rank === 2 ? 'doubt' : 'quest';
-}
+// The rank, label, class and "healthy" rule live in js/injury.js (2026-09-29),
+// shared with the Trade page's underline so the two cannot disagree.
 
 // ----------------------------------------------------------------- the model
 //
