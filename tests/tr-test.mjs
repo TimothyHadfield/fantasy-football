@@ -893,7 +893,15 @@ function readCustomList(document, id) {
       order,
       mirror: (row.getAttribute('class') || '').split(/\s+/).includes('mirror'),
       slot: text(row.querySelector('.sl')),
-      name: text(row.querySelector('.nm')),
+      // VISIBLE text only: a marked name (bye pill, injury underline) carries
+      // sr-only words inside `.nm` since 2026-09-29 (Traps: read them apart).
+      name: (() => {
+        const nm = row.querySelector('.nm');
+        if (!nm) return '';
+        const c = nm.cloneNode(true);
+        for (const s of [...c.querySelectorAll('.sr-only')]) s.remove();
+        return text(c);
+      })(),
       pos: text(row.querySelector('.pos')),
       v: text(pv),
       // The scale on the value column, per POSITION across the two squads.
@@ -2100,6 +2108,9 @@ function readByeMarks(root) {
       cls: hl ? (hl.getAttribute('class') || '') : '',
       title: hl ? (hl.getAttribute('title') || '') : '',
       hlText: hl ? visible(hl) : '',
+      // The injury underline (2026-09-29): its class and its own tooltip.
+      injCls: m.querySelector('.inj') ? (m.querySelector('.inj').getAttribute('class') || '') : '',
+      injTitle: m.querySelector('.inj') ? (m.querySelector('.inj').getAttribute('title') || '') : '',
       sr: [...m.querySelectorAll('.sr-only')].map(text).join(' '),
       visible: visible(m),
     };
@@ -4813,6 +4824,47 @@ if (!live.boot) {
     dump(boSent));
   ok('and the finder key is there for them', /green/i.test(offWeek.finderKey), offWeek.finderKey);
   ok('already played: no finder key at all', !past.finderKey, past.finderKey);
+}
+
+// ---- a man on the injury report is underlined (Tim, 2026-09-29) --------------
+//
+// "underline a player's name if they are on the injury report in the home
+// section." Home's rule (js/injury.js): any status but ACTIVE/NORMAL. Bench men
+// too — Home lists starters only because it is about this week's lineup.
+// Bills D/ST (112, Ana's, sent to Cy and on bye in the meeting week) is
+// QUESTIONABLE, so the underline must sit WITH the green pill; Cy WR2 (304) is
+// on IR. Everybody else is healthy and must not be underlined.
+{
+  const r = run('byeMark', { stub: true, env: {
+    TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}', TR_INJURED: '112:QUESTIONABLE,304:INJURY_RESERVE',
+  } });
+  ok('injury run boots', !r.boot, r.boot);
+  ok('injury run has no errors', !r.errors || r.errors.length === 0, JSON.stringify(r.errors));
+  const everyone = [...(r.finder || []).flatMap((x) => x.men), ...(r.combo || []),
+    ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
+  const dump = (x) => JSON.stringify(x).slice(0, 240);
+  const q = everyone.filter((m) => m.id === 112);
+  const ir = everyone.filter((m) => m.id === 304);
+  const rest = everyone.filter((m) => m.id !== 112 && m.id !== 304);
+  ok('the questionable man is drawn in the finder, the pop-up and the custom box',
+    (r.finder || []).some((x) => x.men.some((m) => m.id === 112)) &&
+    (r.deal || []).some((s) => s.men.some((m) => m.id === 112)) &&
+    (r.listA || []).some((m) => m.id === 112), dump(q));
+  ok('the questionable man is underlined everywhere he is drawn',
+    q.length > 0 && q.every((m) => /\binj\b/.test(m.injCls)), dump(q));
+  ok('with "Questionable" in his tooltip, as Home words it',
+    q.length > 0 && q.every((m) => /Questionable/.test(m.injTitle)), dump(q));
+  ok('and in his sr-only words, not his visible text',
+    q.length > 0 && q.every((m) => /Questionable/.test(m.sr) && !/Questionable/.test(m.visible)), dump(q));
+  ok('and the green bye pill is still on him',
+    q.length > 0 && q.every((m) => /bye-send/.test(m.cls)), dump(q));
+  ok('the IR man is underlined, labelled "IR"',
+    ir.length > 0 && ir.every((m) => /\binj\b/.test(m.injCls) && /\bIR\b/.test(m.injTitle) && /\bIR\b/.test(m.sr)),
+    dump(ir));
+  ok('nobody healthy is underlined', rest.length > 20 && rest.every((m) => !m.injCls && !/injury/i.test(m.sr)),
+    dump(rest.filter((m) => m.injCls)));
+  ok('the finder key mentions the underline', /underlined/i.test(r.finderKey), r.finderKey);
+  ok('How this works mentions the injury report', /injury report/i.test(r.note), r.note.slice(-300));
 }
 
 // ---- hover a week, see that week's lineup slot by slot ---------------------

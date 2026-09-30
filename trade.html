@@ -65,7 +65,17 @@
   }
   .bye-hl.bye-send { background-color: var(--accent); color: var(--on-accent); }
   .bye-hl.bye-get { background-color: var(--bye-get); color: var(--on-bye-get); }
-  .cu-man .nm.bye-hl { padding: 0 6px; }
+  /* ON THE INJURY REPORT (2026-09-29): an underline in the name's own colour,
+     so it reads on plain text and inside either pill. */
+  .inj {
+    position: relative; /* holds its sr-only words inside the scroll box */
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+  }
+  /* Inside a pill the underline has to stay ON the pill, in the pill's ink. */
+  .bye-hl { padding-top: 1px; padding-bottom: 3px; }
+  .bye-hl .inj { text-underline-offset: 2px; text-decoration-thickness: 1.5px; }
   .pkg .pp, .deal-side .pp {
     color: var(--dim);
     font-size: 10.5px;

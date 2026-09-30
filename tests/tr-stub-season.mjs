@@ -220,6 +220,14 @@ const proSplit = () => !!process.env.TR_PRO_SPLIT;
 const meetWeeks = () => new Set(String(process.env.TR_MEET || '').split(',')
   .map((w) => Number(w)).filter((w) => Number.isFinite(w) && w > 0));
 
+function injuredAs(id) {
+  for (const pair of String(process.env.TR_INJURED || '').split(',')) {
+    const [pid, status] = pair.split(':');
+    if (status && Number(pid) === id) return status;
+  }
+  return null;
+}
+
 function playersFor(team, week) {
   return team.players.map((spec, i) => ({
     playerId: pickupApplies(team, i, week) ? PICKUP.added : playerId(team.id, i),
@@ -236,7 +244,9 @@ function playersFor(team, week) {
     // than about the calendar.
     actual: week <= PLAYED_THROUGH ? Math.round(spec.week(week) * 0.9 * 10) / 10 : null,
     seasonProjected: spec.mean * 17,
-    injuryStatus: 'ACTIVE',
+    // `TR_INJURED` ("112:QUESTIONABLE,304:INJURY_RESERVE") puts named men on
+    // the injury report; unset, everybody is ACTIVE as before.
+    injuryStatus: injuredAs(playerId(team.id, i)) || 'ACTIVE',
     percentOwned: null,
   }));
 }

@@ -122,6 +122,8 @@ import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
   zeroKind, byeWeekOf,
 } from './player-card.js';
+// Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
+import { healthy, injuryLabel, injuryClass } from './injury.js';
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14). Pure, and it compares a number
 // only with the same COLUMN or the same POSITION — never a quarterback against
 // a kicker. Every table this page tints carries channel 4, "never colour
@@ -1502,34 +1504,71 @@ function dirIn(p, offer) {
   return null;
 }
 
-/** The name, on its pill when marked, with the words for a screen reader. */
-function byeNameHtml(name, mark) {
-  if (!mark) return esc(name);
-  // The sr-only words INSIDE the pill, which is `position: relative`: an
-  // absolute span with no positioned ancestor escapes `.table-scroll`'s clip and
-  // widened the phone page to 656 px (measured, phone-view 2026-09-29).
-  return `<span class="bye-hl ${mark.cls}" title="${esc(mark.words)}">${esc(name)}` +
-    `<span class="sr-only">${esc(mark.sr)}</span></span>`;
+/**
+ * ON THE INJURY REPORT (Tim, 2026-09-29): "underline a player's name if they
+ * are on the injury report in the home section." Home's own rule, from
+ * js/injury.js: any ESPN status but ACTIVE/NORMAL, labelled as Home labels it
+ * ("Questionable", "IR", "Out"). Bench men too — Home lists starters only
+ * because it is about this week's lineup, and a trade is not. `{words, sr, cls}`
+ * or null.
+ */
+function injuryMarkOf(p) {
+  if (!p || healthy(p.injuryStatus)) return null;
+  const label = injuryLabel(String(p.injuryStatus));
+  return {
+    cls: `inj inj-${injuryClass(p.injuryStatus)}`,
+    words: `On the injury report: ${label}`,
+    sr: ` (on the injury report: ${label})`,
+  };
 }
 
-/** The one-sentence key, only where a name is marked (rule 16). */
+/**
+ * The name with its marks: the bye pill outside, the injury underline inside,
+ * and the words for a screen reader in the outermost one.
+ *
+ * The sr-only words sit INSIDE a mark, which is `position: relative`: an
+ * absolute span with no positioned ancestor escapes `.table-scroll`'s clip and
+ * widened the phone page to 656 px (measured, phone-view 2026-09-29).
+ */
+function nameMarksHtml(name, bye, inj) {
+  if (!bye && !inj) return esc(name);
+  const sr = `<span class="sr-only">${esc((bye ? bye.sr : '') + (inj ? inj.sr : ''))}</span>`;
+  const under = inj
+    ? `<span class="${inj.cls}" title="${esc(inj.words)}">${esc(name)}${bye ? '' : sr}</span>`
+    : esc(name);
+  return bye
+    ? `<span class="bye-hl ${bye.cls}" title="${esc(bye.words)}">${under}${sr}</span>`
+    : under;
+}
+
+/** The one-sentence keys, only for a mark that is on screen (rule 16). */
 const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
-const byeKeyHtml = (html) =>
-  (/\bbye-hl\b/.test(html) ? `<p class="panel-note bye-key">${BYE_KEY}</p>` : '');
+const INJ_KEY = 'Underlined: on ESPN’s injury report.';
+function marksKeyText(html) {
+  return [
+    /\bbye-hl\b/.test(html) ? BYE_KEY : '',
+    /\binj\b/.test(html) ? INJ_KEY : '',
+  ].filter(Boolean).join(' ');
+}
+const byeKeyHtml = (html) => {
+  const t = marksKeyText(html);
+  return t ? `<p class="panel-note bye-key">${esc(t)}</p>` : '';
+};
 /** Fill (or empty and hide) a fixed key line from the markup it describes. */
 function setByeKey(id, html) {
   const el = $(id);
   if (!el) return;
-  const on = /\bbye-hl\b/.test(html);
-  el.textContent = on ? BYE_KEY : '';
-  el.hidden = !on;
+  const t = marksKeyText(html);
+  el.textContent = t;
+  el.hidden = !t;
 }
 /** The line behind "How this works". */
 const BYE_EXPLAIN =
   ' <strong>A name on green or yellow</strong> is on his NFL team&rsquo;s bye in a regular-season ' +
   'week still to play in which you meet that manager: green when you send him (he cannot help ' +
   'that manager against you), yellow when you get him (he cannot help you against him). Only a ' +
-  'known bye week counts.';
+  'known bye week counts. <strong>An underlined name</strong> is on ESPN&rsquo;s injury report ' +
+  '(any status but active, the Home page&rsquo;s rule), bench men included.';
 
 /**
  * THE WHOLE SEASON, weeks 1 to the last playoff week — not the weeks in hand.
@@ -1912,7 +1951,7 @@ function manLine(p, ctx = null) {
   const mark = ctx && ctx.offer
     ? byeMarkOf(p, dirIn(p, ctx.offer), meetingWeeksAhead({ offer: ctx.offer }))
     : null;
-  const inner = `${byeNameHtml(p.name, mark)}${posTag(p.position)}${val}`;
+  const inner = `${nameMarksHtml(p.name, mark, injuryMarkOf(p))}${posTag(p.position)}${val}`;
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
@@ -6548,11 +6587,8 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
       `<span class="sl">${esc(slot)}</span>`,
       `<span class="gap"></span>`,
       (() => {
-        const mark = byeMarkOf(p, dir, meet);
-        return mark
-          ? `<span class="nm bye-hl ${mark.cls}" title="${esc(mark.words)}">${esc(p.name)}` +
-            `<span class="sr-only">${esc(mark.sr)}</span></span>`
-          : `<span class="nm">${esc(p.name)}</span>`;
+        // The bye pill and the injury underline, as on every other deal name.
+        return `<span class="nm">${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>`;
       })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
