@@ -70,3 +70,8 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** d38e1d1 Players preview; 7a04e3d bye pills, 528471f injury underline (`js/injury.js`), d9647ad one shared week; c309af3 + 37ff9dc arrows (`js/proj-trend.js`, `data/baselines/2026-preseason.json`). All live at 96faf05.
 - **Verified how:** every new check seen failing first; full suites green (an-test re-run alone after the laptop slept mid-run); phone-view 393px + desktop screenshots; live-check.
 - **Open:** real-league checks (byes, arrows, Hampton panels) on Tim's side; placeholder wording; Players arrow cost 11+11 reads on first visit.
+
+## 2026-09-30
+- **Asked:** Analysis roster detail: the name's hover should BE the 14-week preview, like the grids, not a click away.
+- **Built:** `renderRoster` registers each name's season run (prefix 'r', `clearRuns('r')` per paint, `reopenTip()` after), `wireTips($('rosterTable'))`; link keeps click-through, title → aria-label. Season sheet still has no card (Tim 2026-09-18).
+- **Verified how:** 2 new an-test checks failed on old code in every scenario, pass now (an-test 2124/0); touch-check 353/0, text-audit 8/0; phone-view 393px WebKit tap opens the sheet (screenshot).

@@ -2176,6 +2176,9 @@ function renderRoster() {
     .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
     .join('');
 
+  // Only this table's cards: the grids above register their own under 'g'.
+  clearRuns('r');
+  const index = seasonIndexFor(team.id);
   const row = (entry) => {
     const { p } = entry;
     const d = diff(p.actual, p.projected);
@@ -2188,11 +2191,24 @@ function renderRoster() {
       tier === 'out' || tier === 'ir' ? `st-${tier}` : '',
     ].filter(Boolean).join(' ');
     const isFlex = flexId !== null && p.playerId === flexId;
+    // THE SAME CARD THE GRIDS SHOW (Tim, 2026-09-30): his season, week by week,
+    // on a hover or a tap, rather than only behind the link. The card is the
+    // name's words now, so the link carries an aria-label instead of a title —
+    // a title would draw the browser's own tooltip on top of the card.
+    const href = p.playerId === null || p.playerId === undefined
+      ? null
+      : `waivers.html?player=${encodeURIComponent(p.playerId)}`;
+    const key = registerRun({
+      ident: `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}`,
+      run: seasonRunData(index, p),
+      href,
+      id: `r:${team.id}:${p.playerId ?? `x:${p.name}`}`,
+    }, 'r');
     return `
       <tr class="${cls}">
         ${slotControl(entry, held)}
-        <td class="name${isFlex ? ' is-flex' : ''}">${
-          playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}</td>
+        <td class="name${isFlex ? ' is-flex' : ''}"${tipAttr(key)}>${
+          playerRef(p, esc(p.name), `${p.name}. Click to ${OPENS}.`, 'aria-label')}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td>${fmt(p.projected)}</td>
@@ -2221,6 +2237,7 @@ function renderRoster() {
 
   renderRosterNote(view, team);
   resort(table);
+  reopenTip();
 }
 
 /**
@@ -4465,6 +4482,7 @@ $('measureToggle').addEventListener('click', (e) => {
 });
 
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
+wireTips($('rosterTable'));
 
 // The season grid opens in LINEUP ORDER — QB, RB1, RB2, … — so it reads as a
 // lineup sheet rather than as a leaderboard. Avg is one click away for anyone

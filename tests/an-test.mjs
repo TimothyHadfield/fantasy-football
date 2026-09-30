@@ -2278,6 +2278,31 @@ async function check(scenario, boot) {
       return linked.length > 0 &&
         linked.every((td) => td.querySelector('a.pref').textContent === td.textContent);
     })(), 'a name cell whose link does not cover it');
+  // Tim, 2026-09-30: the roster detail's names show the same week-by-week card
+  // the grids do, on a hover, instead of only behind a click.
+  {
+    const cells = [...d.querySelectorAll('#rosterTable tbody td.name')];
+    c.ok('ROSTER DETAIL: every name carries the week-by-week card, and no title under it',
+      cells.length > 0 && cells.every((td) => td.hasAttribute('data-tip') &&
+        !td.querySelector('[title]') && !td.hasAttribute('title')),
+      `${cells.filter((td) => td.hasAttribute('data-tip')).length} of ${cells.length} carry a card`);
+    const cell = cells[0];
+    let shown = '';
+    let runRows = 0;
+    if (cell) {
+      cell.dispatchEvent(new d.defaultView.Event('mouseover', { bubbles: true }));
+      const card = d.getElementById('tipCard');
+      if (card && !card.hidden) {
+        shown = (card.querySelector('.tc-ident') || {}).textContent || '';
+        runRows = card.querySelectorAll('.tc-run tr').length;
+      }
+      cell.dispatchEvent(new d.defaultView.Event('mouseout', { bubbles: true }));
+    }
+    const name = cell ? cell.textContent.trim() : '';
+    c.ok('ROSTER DETAIL: hovering a name opens his card, with his weeks in it',
+      !!name && shown.startsWith(name) && runRows === 3,
+      `name "${name}", card "${shown}", ${runRows} run rows`);
+  }
   // The season panel's numbers stand for a man, so each is a link \u2014 and, since
   // Tim's 2026-09-18 change, NOTHING ELSE: no `data-tip`, because this panel
   // draws no card ("we don't need to be providing the 14 week preview"), and
