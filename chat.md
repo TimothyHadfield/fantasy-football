@@ -63,3 +63,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built (one builder, network drop + one stall, resumed twice):** 904ec08 (columns, synced goal switch, His proj vs you) and 69e6aa6 (split box, Also send deleted). Cherry-picked onto main — the builder's worktree had started on an unrelated unmerged draft commit (070f8fe), left out.
 - **Verified how:** tr-test 743/0; job 1's new checks 14 fails on old code, job 2's 22 fails; trade suites green; text-audit 8/0 (trade ceiling 395→399); screenshots 1440 px split and 393 px finder. Full suite + bless: see progress Map.
 - **Open:** placeholder wording; his-side footing (flat vs reach-weighted); Phase 4 answers d/f. (070f8fe turned out to be already pushed by another session; rebased onto it.)
+
+## 2026-09-29/30 (later)
+- **Asked:** bye pill on traded names (green send / yellow get) in meeting weeks; Players hover preview of played weeks; injury underline in Trade; "massive discrepancies" in slot by slot (Hampton 12.4 / 11.8 / 17.6); ▲/▼ by names when ROS proj/wk moved > 2 since preseason.
+- **Found:** slot-by-slot numbers were right per week — the two halves sat on different weeks (17.6 = week 1). ESPN keeps played weeks' projections (preview is real). ESPN's live season split is overwritten; a Wayback copy of ESPN's own feed (9 Sep) is the preseason baseline.
+- **Built:** d38e1d1 Players preview; 7a04e3d bye pills, 528471f injury underline (`js/injury.js`), d9647ad one shared week; c309af3 + 37ff9dc arrows (`js/proj-trend.js`, `data/baselines/2026-preseason.json`). All live at 96faf05.
+- **Verified how:** every new check seen failing first; full suites green (an-test re-run alone after the laptop slept mid-run); phone-view 393px + desktop screenshots; live-check.
+- **Open:** real-league checks (byes, arrows, Hampton panels) on Tim's side; placeholder wording; Players arrow cost 11+11 reads on first visit.
