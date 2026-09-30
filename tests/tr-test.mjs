@@ -2071,6 +2071,94 @@ SCENARIOS.liveByes = async function liveByes() {
 };
 
 /**
+ * A MAN ON BYE IN A WEEK YOU PLAY THE PARTNER (Tim, 2026-09-29): "highlight a
+ * player's name if they have a BYE the week that the users play against each
+ * other … me giving the player away … green … me recieving … yellow."
+ *
+ * The stub league with `TR_PRO_SPLIT` (each squad its own NFL team), `TR_MEET`
+ * (weeks Ana plays Cy) and `TR_BYES`. Reads every place a deal names a man —
+ * the finder, the combo, the pop-up, the custom box's two lists and a saved
+ * custom row — with the VISIBLE text and the sr-only text read apart (Traps).
+ */
+function readByeMarks(root) {
+  if (!root) return [];
+  const visible = (el) => {
+    const c = el.cloneNode(true);
+    for (const s of [...c.querySelectorAll('.sr-only')]) s.remove();
+    return text(c);
+  };
+  return [...root.querySelectorAll('.man, .cu-man[data-man]')].map((m) => {
+    const a = m.querySelector('a.pref');
+    const hl = m.querySelector('.bye-hl');
+    const td = m.closest ? m.closest('td') : null;
+    const tr = m.closest ? m.closest('tr') : null;
+    return {
+      partner: tr ? text(tr.querySelector('td.name')) : '',
+      id: a ? idOfHref(a.getAttribute('href')) : Number(m.getAttribute('data-man')),
+      cell: td ? ((td.getAttribute('class') || '').match(/\b(send|recv)\b/) || [''])[0] : '',
+      side: m.getAttribute('data-side') || '',
+      cls: hl ? (hl.getAttribute('class') || '') : '',
+      title: hl ? (hl.getAttribute('title') || '') : '',
+      hlText: hl ? visible(hl) : '',
+      sr: [...m.querySelectorAll('.sr-only')].map(text).join(' '),
+      visible: visible(m),
+    };
+  });
+}
+
+SCENARIOS.byeMark = async function byeMark() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const click = (el) => el.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settleGoal(document);
+  const trs = [...document.querySelectorAll('#tradeTable tbody tr')];
+  const finder = trs.map((tr) => ({ partner: text(tr.querySelector('td.name')), men: readByeMarks(tr) }));
+  const combo = readByeMarks($('comboBody'));
+  const finderKey = text($('tradeByeKey'));
+  const note = text($('tradeNote'));
+  // The pop-up, on the first Cy deal.
+  const idx = finder.findIndex((r) => /^Cy\b/.test(r.partner));
+  let deal = [];
+  let dealKey = '';
+  if (idx >= 0) {
+    click(trs[idx]);
+    await settle(1500);
+    deal = [...document.querySelectorAll('#dealBody .deal-side')].map((s) => ({
+      head: text(s.querySelector('h3')), men: readByeMarks(s),
+    }));
+    dealKey = text(document.querySelector('#dealBody .bye-key'));
+    const shut = document.querySelector('#dealClose, [data-close]');
+    if (shut) click(shut);
+  }
+  // The custom box, with Cy as the partner and nothing ticked yet.
+  $('cuTeamB').value = '3';
+  fire($('cuTeamB'), 'change');
+  await settle(500);
+  const listA = readByeMarks($('cuListA'));
+  const listB = readByeMarks($('cuListB'));
+  const cuKey = text($('cuByeKey'));
+  // Tick one a side and save it: the saved row names them too.
+  const tick = (sel) => {
+    const box = document.querySelector(sel);
+    if (!box) return false;
+    box.checked = true;
+    fire(box, 'change');
+    return true;
+  };
+  tick('#cuListA input[type="checkbox"]');
+  tick('#cuListB input[type="checkbox"]');
+  await settle(1000);
+  click($('cuSave'));
+  await settle(1500);
+  const saved = readByeMarks($('cuTable'));
+  return { errors, finder, combo, finderKey, note, deal, dealKey, listA, listB, cuKey, saved };
+};
+
+/**
  * WHICH WEEK A LIVE LEAGUE OPENS ON, and so whose rosters the finder reads.
  *
  * Tim's complaint (2026-09-17): the page opened on the last PLAYED week all
@@ -4620,6 +4708,111 @@ if (!live.boot) {
     JSON.stringify(byeRight.card));
   ok('and 0.0 when it is not — never Bye', at8(byeElsewhere.card) === '0.0' &&
     !byeElsewhere.card.projs.includes('Bye'), JSON.stringify(byeElsewhere.card));
+}
+
+// ---- a man on bye in the week you play the partner (Tim, 2026-09-29) ---------
+//
+// "highlight a player's name if they have a BYE the week that the users play
+// against each other … me giving the player away … green … me recieving …
+// yellow." Stub: each squad its own NFL team (TR_PRO_SPLIT), Ana plays Cy in
+// week 8 only (TR_MEET), and TR_BYES says whose bye is where. Four runs:
+// Ana's men off in 8 (green on what she sends), Cy's men off in 8 (yellow on
+// what she gets), both off in 9 (not a meeting week), and a meeting week that
+// is already played (week 3).
+{
+  const base = { TR_PRO_SPLIT: '1', TR_MEET: '8' };
+  const sends = run('byeMark', { stub: true, env: { ...base, TR_BYES: '{"1":8}' } });
+  const gets = run('byeMark', { stub: true, env: { ...base, TR_BYES: '{"3":8}' } });
+  const offWeek = run('byeMark', { stub: true, env: { ...base, TR_BYES: '{"1":9,"3":9}' } });
+  const past = run('byeMark', { stub: true, env: { TR_PRO_SPLIT: '1', TR_MEET: '3', TR_BYES: '{"1":3,"3":3}' } });
+  const all = { sends, gets, offWeek, past };
+  for (const [k, r] of Object.entries(all)) {
+    ok(`bye mark (${k}) boots`, !r.boot, r.boot);
+    ok(`bye mark (${k}) has no errors`, !r.errors || r.errors.length === 0, JSON.stringify(r.errors));
+  }
+  const WORDS = 'Bye in week 8, the week you play Cy';
+  const cyRows = (r) => (r.finder || []).filter((x) => /^Cy\b/.test(x.partner));
+  const otherRows = (r) => (r.finder || []).filter((x) => !/^Cy\b/.test(x.partner));
+  const men = (rows, cell) => rows.flatMap((x) => x.men.filter((m) => m.cell === cell));
+  const green = (m) => /\bbye-hl\b/.test(m.cls) && /\bbye-send\b/.test(m.cls) && !/bye-get/.test(m.cls);
+  const yellow = (m) => /\bbye-hl\b/.test(m.cls) && /\bbye-get\b/.test(m.cls) && !/bye-send/.test(m.cls);
+  const plain = (m) => !m.cls && !m.title && !/bye/i.test(m.sr);
+  const every = (list, f) => list.length > 0 && list.every(f);
+  const dump = (x) => JSON.stringify(x).slice(0, 240);
+
+  // Not vacuous: the finder has Ana/Cy deals to mark in both runs.
+  ok('the finder offers Ana/Cy deals (sends run)', cyRows(sends).length > 0, dump(sends.finder));
+  ok('the finder offers Ana/Cy deals (gets run)', cyRows(gets).length > 0, dump(gets.finder));
+
+  // GREEN: a man she SENDS who is off in the meeting week.
+  const sent = men(cyRows(sends), 'send');
+  ok('finder: every man you send to Cy, off in week 8, is on green', every(sent, green), dump(sent));
+  ok('with the week and the partner in its tooltip', every(sent, (m) => m.title === WORDS), dump(sent));
+  ok('and in sr-only words that say you send him', every(sent, (m) => /bye in week 8/i.test(m.sr) &&
+    /play Cy/.test(m.sr) && /you send him/.test(m.sr)), dump(sent));
+  ok('the sr-only words are not in the visible text', every(sent, (m) => !/bye in week/i.test(m.visible) &&
+    m.hlText.length > 0 && m.visible.startsWith(m.hlText)), dump(sent));
+  ok('finder: the men you get (no bye) are not marked', every(men(cyRows(sends), 'recv'), plain),
+    dump(men(cyRows(sends), 'recv')));
+  ok('finder: deals with managers you do not meet in week 8 are not marked',
+    otherRows(sends).every((x) => x.men.every(plain)), dump(otherRows(sends)));
+  ok('finder: the key names the colours', /green/i.test(sends.finderKey) && /yellow/i.test(sends.finderKey),
+    sends.finderKey);
+  ok('the finder\'s How-this-works says what a green or yellow name is',
+    /bye/i.test(sends.note) && /green/i.test(sends.note) && /yellow/i.test(sends.note), sends.note.slice(-400));
+  const dSend = (sends.deal.find((s) => s.head === 'You send') || { men: [] }).men;
+  const dGet = (sends.deal.find((s) => s.head === 'You get') || { men: [] }).men;
+  ok('pop-up: the men you send are on green', every(dSend, green), dump(sends.deal));
+  ok('pop-up: the men you get are not', every(dGet, plain), dump(sends.deal));
+  ok('pop-up: the key is there', /green/i.test(sends.dealKey), sends.dealKey);
+  ok('custom box: your list, ticked or not, is on green', every(sends.listA, green), dump(sends.listA));
+  ok('custom box: his list is not marked', every(sends.listB, plain), dump(sends.listB));
+  ok('custom box: the key is there', /green/i.test(sends.cuKey), sends.cuKey);
+  ok('saved custom row: your man is on green, his is not',
+    every(men([{ men: sends.saved }], 'send'), green) && every(men([{ men: sends.saved }], 'recv'), plain),
+    dump(sends.saved));
+  ok('combo: only men you send are marked, and only on green',
+    (sends.combo || []).every((m) => plain(m) || (m.cell === 'send' && green(m))), dump(sends.combo));
+
+  // YELLOW: a man she GETS who is off in the meeting week.
+  const got = men(cyRows(gets), 'recv');
+  ok('finder: every man you get from Cy, off in week 8, is on yellow', every(got, yellow), dump(got));
+  ok('with the same tooltip', every(got, (m) => m.title === WORDS), dump(got));
+  ok('and sr-only words that say you get him', every(got, (m) => /you get him/.test(m.sr)), dump(got));
+  ok('finder: the men you send (no bye) are not marked', every(men(cyRows(gets), 'send'), plain),
+    dump(men(cyRows(gets), 'send')));
+  const gGet = (gets.deal.find((s) => s.head === 'You get') || { men: [] }).men;
+  const gSend = (gets.deal.find((s) => s.head === 'You send') || { men: [] }).men;
+  ok('pop-up: the men you get are on yellow, the ones you send are not',
+    every(gGet, yellow) && every(gSend, plain), dump(gets.deal));
+  ok('custom box: his list is on yellow, yours is not',
+    every(gets.listB, yellow) && every(gets.listA, plain), dump([gets.listA, gets.listB]));
+  ok('saved custom row: his man is on yellow',
+    every(men([{ men: gets.saved }], 'recv'), yellow), dump(gets.saved));
+  ok('combo: only men you get are marked, and only on yellow',
+    (gets.combo || []).every((m) => plain(m) || (m.cell === 'recv' && yellow(m))), dump(gets.combo));
+
+  // NOTHING: a bye outside the meeting week, or in a meeting week already played.
+  // Everything drawn about a deal WITH CY (the pop-up, the custom box and the
+  // saved row are all Cy's here). Week 9 IS a meeting week with Bo, though —
+  // Ana plays Bo every week but 8 — so Bo's deals are marked, and that is
+  // checked too: the multi-week tooltip names every week.
+  for (const [k, r] of [['bye in week 9, not a meeting week with Cy', offWeek], ['meeting week already played', past]]) {
+    const withCy = (list) => (list || []).filter((m) => /^Cy\b/.test(m.partner));
+    const everyone = [...cyRows(r).flatMap((x) => x.men), ...withCy(r.combo),
+      ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
+    ok(`${k}: the page still draws men`, everyone.length > 20, everyone.length);
+    ok(`${k}: nobody is marked`, everyone.every(plain), dump(everyone.filter((m) => !plain(m))));
+    ok(`${k}: and no key on the pop-up or the custom box`, !r.cuKey && !r.dealKey,
+      JSON.stringify([r.cuKey, r.dealKey]));
+  }
+  const bo = (offWeek.finder || []).filter((x) => /^Bo\b/.test(x.partner));
+  const boSent = men(bo, 'send');
+  ok('Bo: every man you send him, off in week 9 (a week you play Bo), is on green', every(boSent, green) &&
+    boSent.every((m) => m.title === 'Bye in week 9, one of the weeks you play Bo (5, 6, 7, 9, 10, 11, 12, 13, 14)'),
+    dump(boSent));
+  ok('and the finder key is there for them', /green/i.test(offWeek.finderKey), offWeek.finderKey);
+  ok('already played: no finder key at all', !past.finderKey, past.finderKey);
 }
 
 // ---- hover a week, see that week's lineup slot by slot ---------------------

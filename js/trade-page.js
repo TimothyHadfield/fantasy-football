@@ -1451,6 +1451,86 @@ function meetingWeeks(ctx) {
   return { weeks, name: name || '' };
 }
 
+// ----------------------------------------------- a bye in the week you meet him
+//
+// Tim, 2026-09-29: "highlight a player's name if they have a BYE the week that
+// the users play against each other? If it is me giving the player away that
+// has a BYE week, then highlight it in green. If it is me recieving the player
+// that has a BYE week, then highlight it in yellow."
+//
+// The weeks are the REMAINING REGULAR-SEASON weeks the deal's two squads meet
+// (`meetingWeeks`, cut to `spanFor('last')` exactly as "His proj vs you" is): a
+// played week cannot be helped, and a playoff meeting is not known in advance.
+// The bye is his NFL team's known bye (`byeWeekOf`, rule 2) — an unknown bye
+// marks nobody. A man sent off in that week cannot help the partner against
+// you (green); one received cannot help you against him (yellow).
+//
+// THE MARK IS ON THE NAME, NEVER THE CELL: a solid pill behind the name text,
+// so it cannot be read as the heat scale, which is a tint on whole cells.
+
+/** The remaining regular-season weeks a deal's (or a pair's) squads meet. */
+function meetingWeeksAhead(ctx) {
+  const m = meetingWeeks(ctx);
+  if (!m.weeks.length) return m;
+  const regular = new Set(spanFor('last'));
+  return { weeks: m.weeks.filter((w) => regular.has(w)), name: m.name };
+}
+
+/** `{cls, words, sr}` when this man is off in a week you meet the partner; else null. */
+function byeMarkOf(p, dir, meet) {
+  if (!p || !meet || !meet.weeks || !meet.weeks.length) return null;
+  const bye = byeWeekOf(p, state.byes);
+  if (!Number.isFinite(bye) || !meet.weeks.includes(bye)) return null;
+  const who = meet.name || 'him';
+  const words = meet.weeks.length > 1
+    ? `Bye in week ${bye}, one of the weeks you play ${who} (${meet.weeks.join(', ')})`
+    : `Bye in week ${bye}, the week you play ${who}`;
+  const send = dir === 'send';
+  return {
+    cls: send ? 'bye-send' : 'bye-get',
+    words,
+    sr: ` (${words.charAt(0).toLowerCase()}${words.slice(1)}, and you ${send ? 'send' : 'get'} him)`,
+  };
+}
+
+/** Which way a man moves in a deal, from its "you" side: 'send', 'get' or null. */
+function dirIn(p, offer) {
+  if (!p || !offer) return null;
+  const id = String(p.playerId);
+  if ((offer.send || []).some((q) => String(q.playerId) === id)) return 'send';
+  if ((offer.receive || []).some((q) => String(q.playerId) === id)) return 'get';
+  return null;
+}
+
+/** The name, on its pill when marked, with the words for a screen reader. */
+function byeNameHtml(name, mark) {
+  if (!mark) return esc(name);
+  // The sr-only words INSIDE the pill, which is `position: relative`: an
+  // absolute span with no positioned ancestor escapes `.table-scroll`'s clip and
+  // widened the phone page to 656 px (measured, phone-view 2026-09-29).
+  return `<span class="bye-hl ${mark.cls}" title="${esc(mark.words)}">${esc(name)}` +
+    `<span class="sr-only">${esc(mark.sr)}</span></span>`;
+}
+
+/** The one-sentence key, only where a name is marked (rule 16). */
+const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
+const byeKeyHtml = (html) =>
+  (/\bbye-hl\b/.test(html) ? `<p class="panel-note bye-key">${BYE_KEY}</p>` : '');
+/** Fill (or empty and hide) a fixed key line from the markup it describes. */
+function setByeKey(id, html) {
+  const el = $(id);
+  if (!el) return;
+  const on = /\bbye-hl\b/.test(html);
+  el.textContent = on ? BYE_KEY : '';
+  el.hidden = !on;
+}
+/** The line behind "How this works". */
+const BYE_EXPLAIN =
+  ' <strong>A name on green or yellow</strong> is on his NFL team&rsquo;s bye in a regular-season ' +
+  'week still to play in which you meet that manager: green when you send him (he cannot help ' +
+  'that manager against you), yellow when you get him (he cannot help you against him). Only a ' +
+  'known bye week counts.';
+
 /**
  * THE WHOLE SEASON, weeks 1 to the last playoff week — not the weeks in hand.
  *
@@ -1828,7 +1908,11 @@ function manLine(p, ctx = null) {
   const val = Number.isFinite(v)
     ? `<span class="val">${fmt(v)}/wk</span>`
     : `<span class="val">—</span>`;
-  const inner = `${esc(p.name)}${posTag(p.position)}${val}`;
+  // The bye-in-a-meeting-week mark (Tim, 2026-09-29), only inside a deal.
+  const mark = ctx && ctx.offer
+    ? byeMarkOf(p, dirIn(p, ctx.offer), meetingWeeksAhead({ offer: ctx.offer }))
+    : null;
+  const inner = `${byeNameHtml(p.name, mark)}${posTag(p.position)}${val}`;
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
@@ -2739,6 +2823,7 @@ function renderFinder() {
       weeks ? `, in each of ${plural(span.length, 'week')} — this one takes a few seconds` : ''
     }…</span>`;
     renderFinderNote({ myScale: null, theirScale: null });
+    setByeKey('tradeByeKey', '');
     return;
   }
 
@@ -2752,7 +2837,9 @@ function renderFinder() {
   // with the rows beside it" and there is no honest way to colour against rows
   // that have been filtered away.
   const scales = gainScales(offers);
-  body.innerHTML = offers.map((o, i) => tradeRow(o, i, scales)).join('');
+  const rowsHtml = offers.map((o, i) => tradeRow(o, i, scales)).join('');
+  body.innerHTML = rowsHtml;
+  setByeKey('tradeByeKey', rowsHtml);
   empty.innerHTML = offers.length ? '' : emptyMessage();
 
   renderFinderNote(scales);
@@ -2948,6 +3035,7 @@ function extraColumnsHtml() {
     `regular-season week(s) left in which he plays you — his plus is your red. A playoff meeting is ` +
     `not known in advance, so it is not counted. Both chance columns already include it; You gain, ` +
     `He gains and which deals are found do not.` +
+    BYE_EXPLAIN +
     `<br><br>`
   );
 }
@@ -4412,11 +4500,12 @@ function renderDeal() {
   // manager today. Always 'mine': the head of the pop-up is written from the
   // reader's side whichever lineup the breakdown below is showing.
   const cardCtx = { offer, side: 'mine' };
-  const head =
-    `<div class="deal-head">` +
+  const sides =
     sideHtml('You send', offer.send, cardCtx) +
-    sideHtml('You get', offer.receive, cardCtx) +
-    `</div>` +
+    sideHtml('You get', offer.receive, cardCtx);
+  const head =
+    `<div class="deal-head">` + sides + `</div>` +
+    byeKeyHtml(sides) +
     dealGoalHtml(offer) +
     // The offer goes with it so the line can say which of these men are HIS —
     // the displaced starter is the one fact neither column above carries.
@@ -5189,6 +5278,11 @@ function comboTableHtml(rows, from, id) {
   // (`tools/measure-layout.mjs --pages trade.html --selector '#comboPanel'`).
   // `renderCombo` reads the list back after the body is built.
   if (theirScale) comboHeatScales.push({ id, scale: theirScale });
+  const rowsHtml = rows
+    .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
+      myGain: false, lineup: false, theirScale,
+    }))
+    .join('');
   return (
     `<div class="table-scroll"><table id="${esc(id)}" class="offers">` +
     `<thead><tr>` +
@@ -5201,17 +5295,14 @@ function comboTableHtml(rows, from, id) {
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
     `</tr></thead><tbody>` +
-    rows
-      .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
-        myGain: false, lineup: false, theirScale,
-      }))
-      .join('') +
+    rowsHtml +
     `</tbody></table></div>` +
     (theirScale
       ? `<p class="heat-key">${heatKeyShort({
         thing: 'manager', what: 'the others in this packing',
       })}</p>`
-      : '')
+      : '') +
+    byeKeyHtml(rowsHtml)
   );
 }
 
@@ -6418,6 +6509,15 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
   if (!rows.length) return '<div class="empty">No roster for this squad in this week.</div>';
   const on = new Set(picked.map(String));
   const mirror = which === 'b';
+  // THE BYE MARK, TICKED OR NOT (2026-09-29): the partner is known here, so
+  // every man on your list is one you might send (green) and every man on his
+  // one you might get (yellow), in the weeks the two squads still meet.
+  const pairA = teamById(state.custom.a);
+  const pairB = teamById(state.custom.b);
+  const meet = pairA && pairB
+    ? meetingWeeksAhead({ pair: { a: pairA.id, b: pairB.id, name: pairB.name } })
+    : null;
+  const dir = which === 'a' ? 'send' : 'get';
 
   return rows.map(({ slot, p }) => {
     if (!p) {
@@ -6447,7 +6547,13 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
     const cells = [
       `<span class="sl">${esc(slot)}</span>`,
       `<span class="gap"></span>`,
-      `<span class="nm">${esc(p.name)}</span>`,
+      (() => {
+        const mark = byeMarkOf(p, dir, meet);
+        return mark
+          ? `<span class="nm bye-hl ${mark.cls}" title="${esc(mark.words)}">${esc(p.name)}` +
+            `<span class="sr-only">${esc(mark.sr)}</span></span>`
+          : `<span class="nm">${esc(p.name)}</span>`;
+      })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
       // questions. Suppressed on a defence for the same reason as everywhere
@@ -6619,6 +6725,7 @@ function renderCustomPickers() {
     : (a && b ? { pair: { a: a.id, b: b.id, name: b.name } } : null);
   $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a', { scales, ctx });
   $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b', { scales, ctx });
+  refreshCuByeKey();
 
   // Channel 4 of "never colour alone", in view under the lists it describes.
   // SHORT, for the same reason the finder's is: a key says what the colour
@@ -6794,6 +6901,7 @@ function renderCustomSaved() {
   // A SHORT POINTER, not a second copy of the finder's key. These are the same
   // two columns on the same scale rule, one panel down; repeating eighty words
   // of it would be the thing `text-audit.mjs` exists to catch.
+  refreshCuByeKey();
   const key = $('cuTableKey');
   if (key) {
     key.innerHTML = scales.myScale || scales.theirScale
@@ -6817,6 +6925,12 @@ function inlineWeekScale() {
   const sets = dealSets(state.customOffer, 'mine');
   if (!sets || !sets.span) return null;
   return heatScale(sets.span.byWeek.map((w) => w.delta));
+}
+
+/** The custom panel's bye key: its two lists and its saved rows, as drawn. */
+function refreshCuByeKey() {
+  const html = ['cuListA', 'cuListB', 'cuRows'].map((id) => ($(id) ? $(id).innerHTML : '')).join('');
+  setByeKey('cuByeKey', html);
 }
 
 function renderCustomNote() {

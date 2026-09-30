@@ -37,6 +37,12 @@
    * It was briefly deleted as unused, which left the home page's strength bars
    * with no fill at all, so: index.html and analysis.html both use it. */
   --good: #4fb0e0;
+  /* The Trade page's "you GET a man on bye the week you play his manager"
+   * pill (2026-09-29). A clear YELLOW, apart from the amber --warn and the
+   * orange --assumed, which mean other things on nearby cells. Its partner,
+   * "you SEND him", is --accent. */
+  --bye-get: #e8d44d;
+  --on-bye-get: #262003;
 
   /* Focus deliberately is NOT --accent: green already means "positive" in the
    * tables, and a focus ring that reads as a value would be ambiguous. */

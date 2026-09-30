@@ -52,6 +52,20 @@
      spaces ("Rhett HathawayRB14.2/wkRoscoe MarchettiRB7.6/wk"). */
   .pkg .man, .deal-side .man { display: block; line-height: 1.55; }
   .pkg .man + .man, .deal-side .man + .man { margin-top: 2px; }
+  /* A MAN ON BYE IN A WEEK YOU PLAY THE PARTNER (Tim, 2026-09-29): green when
+     you send him, yellow when you get him. A solid pill on the NAME only, so it
+     cannot be taken for the heat scale, which tints whole cells. */
+  .bye-hl {
+    position: relative; /* holds its sr-only words inside the scroll box */
+    border-radius: var(--r-pill);
+    padding: 0 6px;
+    font-weight: 650;
+    /* One pill per name: split over two lines it read as two men. */
+    white-space: nowrap;
+  }
+  .bye-hl.bye-send { background-color: var(--accent); color: var(--on-accent); }
+  .bye-hl.bye-get { background-color: var(--bye-get); color: var(--on-bye-get); }
+  .cu-man .nm.bye-hl { padding: 0 6px; }
   .pkg .pp, .deal-side .pp {
     color: var(--dim);
     font-size: 10.5px;
@@ -1376,6 +1390,7 @@
     </table></div>
     <div class="empty hidden" id="tradeEmpty"></div>
     <p class="panel-note" id="tradeCount"></p>
+    <p class="panel-note bye-key" id="tradeByeKey" hidden></p>
     <details class="explain">
       <summary>How the trades are found</summary>
       <p class="panel-note" id="tradeNote"></p>
@@ -1567,6 +1582,7 @@
          rather than behind the toggle: it changes what a reader takes a number
          to mean. -->
     <p class="panel-note heat-key" id="cuHeatKey"></p>
+    <p class="panel-note bye-key" id="cuByeKey" hidden></p>
 
     <!-- What the deal in the pickers IS — who moves which way, and over which
          weeks. The numbers are under their own squads above; this is the half
