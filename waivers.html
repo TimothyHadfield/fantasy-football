@@ -323,6 +323,13 @@ td.zero-out, td.zero { color: var(--dim); }
 }
 .trend-up { color: var(--accent); }
 .trend-down { color: var(--err); }
+/* A name WITH an arrow: the name shrinks (with an ellipsis) before the arrow or
+   a tag does, so on a phone's 44vw frozen column the arrow is never the part
+   cut off. Flex drops the space after "Your QB2", so its margin carries it. */
+.nm-line { display: inline-flex; align-items: baseline; max-width: 100%; vertical-align: bottom; }
+.nm-line > * { flex: none; }
+.nm-line > a.pref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nm-line > .mine-tag { margin-right: 6px; }
 
 /* The thresholds read as a strip of pairs rather than a paragraph: tabular
    figures so the two columns of numbers line up down the strip. */

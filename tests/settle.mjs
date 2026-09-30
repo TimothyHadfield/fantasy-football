@@ -104,6 +104,11 @@ export function waiverPagePending(document) {
     if (m) return `#${id} still says "${m[0]}"`;
   }
 
+  // The preseason arrows' rest-of-season weeks, bought after the table paints.
+  if (document.querySelector('[data-trend-loading]')) {
+    return 'the preseason arrows are still reading the rest of the season';
+  }
+
   for (const id of ['waiverTable', 'takenTable']) {
     const tbody = document.querySelector(`#${id} tbody`);
     if (!tbody) return `#${id} has no tbody`;

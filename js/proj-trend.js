@@ -18,9 +18,12 @@
 //   ESPN's default PPR, and a half-PPR league's numbers differ by a point or
 //   more a week for a receiver. Per week = that total ÷ his projected games.
 //
-//   NOW = the per-week figure the page already prints for him (D7: the mean over
-//   the weeks projecting above zero). Passed in by the page, never re-derived
-//   here, so the arrow can never disagree with the number beside it.
+//   NOW = the site's per-week average of ESPN's weekly projections over the
+//   REST OF THE SEASON (D7: the mean over the weeks projecting above zero). ESPN
+//   publishes no rest-of-season per-week number, and the words say so. Passed in
+//   by the page: the Trade page's own per-week figure; on the Players page the
+//   remaining weeks whatever span is shown, so switching Next 3 / Next 6 /
+//   Rest of season never changes an arrow.
 //
 // AN ARROW ONLY WHEN THE MOVE IS MORE THAN 2 POINTS A WEEK, strictly: +2.0 is
 // no arrow, +2.1 is. Both sides are rounded to the tenth first, as printed.
@@ -166,26 +169,34 @@ const round1 = (v) => Math.round(v * 10) / 10;
  * @param {number|string} playerId ESPN's id
  * @param {number|null} now the per-week figure the page prints for him
  * @param {Array|null} scoring the league's rules (DEFAULT_PPR on demo)
- * @returns {{dir:'up'|'down', delta:number, from:number, to:number}|null}
+ * @param {string} [over] the weeks `now` averages, e.g. "weeks 5–14", for the words
+ * @returns {{dir:'up'|'down', delta:number, from:number, to:number, over:string}|null}
  */
-export function trendOf(playerId, now, scoring) {
+export function trendOf(playerId, now, scoring, over = '') {
   if (!Number.isFinite(now) || now <= 0) return null;
   const base = baselineOf(playerId, scoring);
   if (!base) return null;
   const to = round1(now);
   const delta = round1(to - base.perWeek);
   if (Math.abs(delta) <= THRESHOLD) return null;
-  return { dir: delta > 0 ? 'up' : 'down', delta, from: base.perWeek, to };
+  return { dir: delta > 0 ? 'up' : 'down', delta, from: base.perWeek, to, over: over || '' };
 }
 
 const escHtml = (s) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** The tooltip words, e.g. "ESPN's rest-of-season projection is up 4.4 a week since preseason (21.7 → 26.1)". */
+/**
+ * The tooltip words. ESPN publishes no rest-of-season per-week figure, so the
+ * "now" side is said to be the site's own average of ESPN's weekly projections:
+ * "Up 4.4 a week since preseason: 21.7 (ESPN’s 9 Sep projection per game) →
+ * 26.1 (the site’s average of ESPN’s weekly projections over weeks 5–14)".
+ */
 export function trendWords(t) {
   if (!t) return '';
-  return `ESPN’s rest-of-season projection is ${t.dir} ${Math.abs(t.delta).toFixed(1)} a week ` +
-    `since preseason (${t.from.toFixed(1)} → ${t.to.toFixed(1)})`;
+  const over = t.over ? ` over ${t.over}` : '';
+  return `${t.dir === 'up' ? 'Up' : 'Down'} ${Math.abs(t.delta).toFixed(1)} a week since preseason: ` +
+    `${t.from.toFixed(1)} (ESPN’s ${BASELINE_DATE} projection per game) → ${t.to.toFixed(1)} ` +
+    `(the site’s average of ESPN’s weekly projections${over})`;
 }
 
 /**
@@ -207,10 +218,10 @@ export const TREND_KEY = 'Green ▲ / red ▼ by a name: projection up / down ov
 export const hasTrend = (html) => /\btrend-(up|down)\b/.test(html || '');
 
 /** The line behind "How this works" (rule 7), naming the weeks "now" covers. */
-export function trendExplain(weeksLabel) {
+export function trendExplain(weeksLabel, extra = '') {
   return `<strong>A green ▲ or red ▼ by a name</strong>: his per-week projection is more than ` +
     `${THRESHOLD} points above or below ESPN’s preseason one. Preseason is ESPN’s ` +
-    `${BASELINE_DATE} projection per game, re-scored with your league’s rules; now is the per-week ` +
-    `average shown here${weeksLabel ? `, over ${weeksLabel}` : ''}. A man ESPN had no preseason line ` +
-    `for gets no arrow.`;
+    `${BASELINE_DATE} projection per game, re-scored with your league’s rules; now is the site’s ` +
+    `average of ESPN’s weekly projections${weeksLabel ? `, over ${weeksLabel}` : ''}. A man ESPN had ` +
+    `no preseason line for gets no arrow.${extra ? ` ${extra}` : ''}`;
 }

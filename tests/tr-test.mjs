@@ -5034,10 +5034,16 @@ if (!live.boot) {
   };
   const everyone = Object.values(places).flat();
   const want = new Map(Object.values(TREND_IDS).map((t) => [t.id, t.want]));
+  // "Now" is the site's average of ESPN's weekly projections over the weeks
+  // the page prices — never "ESPN's rest-of-season projection", which ESPN
+  // does not publish.
+  const SAYS = (dir, d, from, to) => new RegExp(`${dir} ${d} a week since preseason: ${from} ` +
+    `\\(ESPN’s 9 Sep projection per game\\) → ${to} \\(the site’s average of ESPN’s weekly ` +
+    'projections over weeks? \\d+(–\\d+)?\\)');
   const WORDS = {
-    4431459: /up 2\.1 a week since preseason \(9\.9 → 12(\.0)?\)/,
-    [-16033]: /up 5(\.0)? a week since preseason \(7(\.0)? → 12(\.0)?\)/,
-    4429795: /down 4\.7 a week since preseason \(19\.7 → 15(\.0)?\)/,
+    4431459: SAYS('Up', '2\\.1', '9\\.9', '12\\.0'),
+    [-16033]: SAYS('Up', '5\\.0', '7\\.0', '12\\.0'),
+    4429795: SAYS('Down', '4\\.7', '19\\.7', '15\\.0'),
   };
   // Not vacuous: each arrowed man is drawn where he must be.
   ok('the custom lists draw Ana’s TE1 (Warren), her Ravens D/ST and Cy’s RB3 (Gibbs)',
@@ -5055,7 +5061,7 @@ if (!live.boot) {
   ok('what the eye sees is the glyph alone, ▲ for up and ▼ for down',
     arrowed.length > 5 && arrowed.every((m) => m.trendSeen === (m.trend === 'up' ? '▲' : '▼')), dump(arrowed));
   ok('the words are sr-only, INSIDE the arrow, and say how far and from what',
-    arrowed.every((m) => WORDS[m.id] && WORDS[m.id].test(m.trendSr) && /ESPN’s rest-of-season projection/.test(m.trendSr)),
+    arrowed.every((m) => WORDS[m.id] && WORDS[m.id].test(m.trendSr) && !/rest-of-season projection/.test(m.trendSr)),
     dump(arrowed.map((m) => [m.id, m.trendSr])));
   ok('and never in the visible text', everyone.every((m) => !/preseason/.test(m.visible)),
     dump(everyone.filter((m) => /preseason/.test(m.visible))));

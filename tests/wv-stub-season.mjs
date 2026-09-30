@@ -1,5 +1,5 @@
 // Stands in for js/season.js. Only fetchSchedule matters to the waivers page.
-export const calls = { schedule: 0 };
+export const calls = { schedule: 0, rosterWeeks: [] };
 
 import { pathToFileURL as toUrl } from 'node:url';
 import nodePath from 'node:path';
@@ -86,6 +86,7 @@ export async function fetchWeeksRosters(weeks = [], { onProgress } = {}) {
   if (!TREND_ON()) return out;
   let done = 0;
   for (const week of weeks) {
+    calls.rosterWeeks.push(Number(week));
     out.set(Number(week), trendTeams(Number(week)));
     done++;
     if (onProgress) onProgress(done, weeks.length, week);

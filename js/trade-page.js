@@ -1575,7 +1575,7 @@ function marksKeyText(html) {
  */
 function trendMarkOf(p) {
   if (!p || basis() !== 'weeks') return '';
-  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), state.scoring));
+  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), state.scoring, weekRange(weeklySpan())));
 }
 
 /** The arrow's line behind "How this works", naming the weeks "now" averages. */

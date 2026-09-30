@@ -138,16 +138,21 @@ trend.setBaseline(null);
 ok(!trend.ready() && trend.trendOf(1, 30, ONE) === null, 'before the copy is read: no arrow');
 
 // ---- the mark itself ---------------------------------------------------------
-const html = trend.trendHtml({ dir: 'up', delta: 4.4, from: 21.7, to: 26.1 });
+const html = trend.trendHtml({ dir: 'up', delta: 4.4, from: 21.7, to: 26.1, over: 'weeks 5–14' });
 ok(/class="trend trend-up"/.test(html) && /▲/.test(html) && !/▼/.test(html), 'up is a ▲ with trend-up (green in CSS)', html);
-ok(html.includes('title="ESPN’s rest-of-season projection is up 4.4 a week since preseason (21.7 → 26.1)"'),
-  'its tooltip says how far and from what to what', html);
-ok(/<span class="sr-only"> \(ESPN’s rest-of-season projection is up 4\.4/.test(html) &&
+// "Now" is the SITE'S average of ESPN's weekly projections — ESPN publishes no
+// rest-of-season per-week number, and the words must not say it does.
+ok(html.includes('title="Up 4.4 a week since preseason: 21.7 (ESPN’s 9 Sep projection per game) → ' +
+  '26.1 (the site’s average of ESPN’s weekly projections over weeks 5–14)"'),
+  'its tooltip says how far, from ESPN’s preseason, to the site’s own average over which weeks', html);
+ok(!/rest-of-season projection/.test(html), 'and never implies ESPN published a rest-of-season number', html);
+ok(/<span class="sr-only"> \(Up 4\.4 a week since preseason: 21\.7/.test(html) &&
   html.indexOf('sr-only') > html.indexOf('class="trend'),
   'the same words for a screen reader, INSIDE the positioned arrow', html);
 ok(/aria-hidden="true">▲</.test(html), 'the glyph itself is hidden from a screen reader');
 const dn = trend.trendHtml({ dir: 'down', delta: -3.2, from: 10, to: 6.8 });
-ok(/trend-down/.test(dn) && /▼/.test(dn) && /down 3\.2 a week/.test(dn), 'down is a ▼ with trend-down (red), "down 3.2"', dn);
+ok(/trend-down/.test(dn) && /▼/.test(dn) && /Down 3\.2 a week/.test(dn) &&
+  /weekly projections\)"/.test(dn), 'down is a ▼ with trend-down (red), "Down 3.2"; no weeks, no "over"', dn);
 ok(trend.trendHtml(null) === '', 'no trend, no markup');
 ok(trend.hasTrend(html) && trend.hasTrend(dn) && !trend.hasTrend('<span class="heatmark">▲</span>'),
   'the key test finds an arrow and ignores the heat scale\'s ▲');

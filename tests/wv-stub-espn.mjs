@@ -57,15 +57,18 @@ const ROSTER = [];
 // (data/baselines/2026-preseason.json), each projected flat so his Avg is
 // exact. The league is half PPR (wv-stub-season), so their preseason per week
 // is Gibbs 19.7, Nacua 17.2, Allen 21.8 (tests/test-proj-trend.mjs, by hand).
-//   Gibbs  24.0 → +4.3   green ▲
+// "Now" is REST OF SEASON — the regular weeks 4–13 — whatever span is shown:
+//   Gibbs  21.0 in weeks 4–6, 26.0 from week 7: rest of season 24.5 → +4.8
+//          green ▲ — while over the Next 3 alone (21.0, +1.3) he would get none.
+//          The case that tells a rest-of-season arrow from a span-based one.
 //   Nacua  12.0 → −5.2   red ▼
 //   Allen  23.8 → +2.0   NO arrow: "more than 2" is strict
 // Everyone else keeps a stub id the copy has never heard of: no arrow.
 const TREND = process.env.WV_TREND === '1';
 export const TREND_MEN = {
-  6: { id: 3918298, name: 'Josh Allen', flat: 23.8, want: null },
-  10: { id: 4429795, name: 'Jahmyr Gibbs', flat: 24.0, want: 'up' },
-  23: { id: 4426515, name: 'Puka Nacua', flat: 12.0, want: 'down' },
+  6: { id: 3918298, name: 'Josh Allen', proj: () => 23.8, want: null },
+  10: { id: 4429795, name: 'Jahmyr Gibbs', proj: (w) => (w <= 6 ? 21.0 : 26.0), want: 'up' },
+  23: { id: 4426515, name: 'Puka Nacua', proj: () => 12.0, want: 'down' },
 };
 if (TREND) {
   for (const [idx, m] of Object.entries(TREND_MEN)) {
@@ -75,7 +78,7 @@ if (TREND) {
 
 /** Deterministic, and different enough week to week that sorting can be seen. */
 function projectionFor(p, week) {
-  if (TREND && TREND_MEN[p.idx]) return TREND_MEN[p.idx].flat;
+  if (TREND && TREND_MEN[p.idx]) return TREND_MEN[p.idx].proj(week);
   const wobble = ((p.idx * 37 + week * 11) % 17) / 20;   // 0 .. 0.8
   return Math.round(BASE[p.pos] * (0.7 + wobble) * 100) / 100;
 }
