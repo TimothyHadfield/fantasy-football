@@ -471,32 +471,123 @@ function packages(list, max = MAX_PACKAGE) {
  * A 2-for-1 does not just move players: the side receiving two and sending one
  * ends a man over the limit and HAS to drop somebody. Every guide flags this as
  * the thing that makes lopsided-looking packages bad deals, so the cut is
- * modelled rather than waved away — the worst man on the new roster goes, which
- * is what a manager would do. Players ESPN has no number for sort to the bottom
- * and are cut first, which is also what a manager would do.
+ * modelled rather than waved away.
+ *
+ * WHO GOES (2026-09-30, Tim: "if you recieve a player, some weeks your
+ * projection actually decreases … you can just not start the player you're
+ * recieving"). Until then the man with the lowest rest-of-season total went —
+ * and that is very often the backup D/ST or kicker whose one job is the
+ * starter's bye week, so the deal quietly lost that week (Tim's "DEF avg is
+ * −0.6/week" on a WR/RB trade). Now the man whose removal costs the after-trade
+ * lineups the FEWEST points over the priced weeks goes, each week assessed
+ * exactly as the pricing assesses it (`optimalLineup`, then `assessLineup` with
+ * the floors). A tie goes to the lower rest-of-season total, which was the
+ * whole rule before; a further tie to roster order. Everyone on the after-trade
+ * roster is eligible, the men just received included — as before.
+ *
+ * CHEAP IN THE USUAL CASE. A man who starts in NO priced week costs exactly 0
+ * (taking a bench man off cannot change the lineup `optimalLineup` picks, so
+ * nothing needs re-filling). So the lowest-ROS idle man is the answer unless a
+ * STARTER with a lower season total also costs 0 — possible under the floor,
+ * when the slot he leaves is assessed at the floor either way — and only those
+ * starters are costed, and only in the weeks they start. With nobody idle,
+ * every man is costed. More than one man over (a combo): one at a time,
+ * cheapest first. Assumes no removal RAISES a week (cost ≥ 0); the brute force
+ * in tests/test-trade-cut.mjs costs every man, floors on and off, to check it.
  *
  * The side that ends a man SHORT is simply left short. It could claim someone
  * off the wire, but that player is not in this page's data and inventing him
  * would flatter the trade. Being conservative understates a package's value,
  * which is the safe direction to be wrong in.
+ *
+ * `ctx` is how a week is solved: `{ slots, n, floors, view }` — `view(roster,
+ * i)` is the roster as week i sees it (`atWeek` for the weekly measure, the
+ * roster itself for the one-lineup scalar measure, n = 1).
+ *
+ * `preSolved`, when a caller already has it, is the same `{ total, ids }` per
+ * week for the roster BEFORE the cut (outgoing gone, incoming in).
+ *
+ * Returns `{ roster, cut, solved }`: `solved[i]` is week i of the returned
+ * roster, `{ total, ids }` (assessed total, starting ids), so a caller can use
+ * the after-trade totals without filling again. When nobody is cut it is
+ * `preSolved` as given (null if none was).
  */
-function afterTrade(scoredPlayers, outgoing, incoming) {
+function afterTrade(scoredPlayers, outgoing, incoming, ctx, preSolved = null) {
   const gone = new Set((outgoing || []).map(idOf));
   const kept = scoredPlayers.filter((p) => !gone.has(p.playerId)).concat(incoming);
 
   const over = kept.length - scoredPlayers.length;
-  if (over <= 0) return kept;
+  if (over <= 0) return { roster: kept, cut: [], solved: preSolved };
+  return forcedCut(kept, over, ctx, preSolved || solveWeeks(kept, ctx));
+}
 
-  const ranked = kept
-    .map((p, i) => ({ p, i }))
-    .sort(
-      (a, b) =>
-        (Number.isFinite(a.p.projected) ? a.p.projected : -Infinity) -
-          (Number.isFinite(b.p.projected) ? b.p.projected : -Infinity) ||
-        a.i - b.i
-    );
-  const cut = new Set(ranked.slice(0, over).map((e) => e.p));
-  return kept.filter((p) => !cut.has(p));
+/** One week of a roster: its assessed best-lineup total and who starts. */
+function solveWeek(roster, i, ctx) {
+  const lineup = optimalLineup(ctx.view(roster, i), ctx.slots);
+  return {
+    total: assessLineup(lineup.starters, ctx.slots, ctx.floors).total,
+    ids: new Set(lineup.starters.map((s) => s.playerId)),
+  };
+}
+
+function solveWeeks(roster, ctx) {
+  const out = new Array(ctx.n);
+  for (let i = 0; i < ctx.n; i++) out[i] = solveWeek(roster, i, ctx);
+  return out;
+}
+
+/** The two ways a cut is judged — see `afterTrade`. */
+const CUT_EPS = 1e-6;
+const seasonOf = (p) => (Number.isFinite(p.projected) ? p.projected : -Infinity);
+
+function forcedCut(kept, over, ctx, solved) {
+  let roster = kept;
+  let weeks = solved;
+  const cut = [];
+  for (let k = 0; k < over && roster.length; k++) {
+    const starting = new Set();
+    for (const w of weeks) for (const id of w.ids) starting.add(id);
+
+    let best = null;
+    let bestCost = Infinity;
+    let bestWeeks = null;
+    // Idle men first: cost 0, nothing to re-fill.
+    for (const p of roster) {
+      if (starting.has(p.playerId)) continue;
+      if (best === null || seasonOf(p) < seasonOf(best)) best = p;
+    }
+    if (best) {
+      bestCost = 0;
+      bestWeeks = weeks;
+    }
+    // Then the starters. With an idle man in hand only a starter with a LOWER
+    // season total can still win, and only by also costing 0 — which happens
+    // under the floor, when the slot he leaves is assessed at the floor either
+    // way (a bye-week backup projected below the wire's third man). So only
+    // those are costed; with nobody idle, everyone is.
+    for (const p of roster) {
+      if (!starting.has(p.playerId)) continue;
+      if (best !== null && bestCost <= CUT_EPS && !(seasonOf(p) < seasonOf(best))) continue;
+      const rest = roster.filter((q) => q !== p);
+      let cost = 0;
+      const after = weeks.map((w, i) => {
+        if (!w.ids.has(p.playerId)) return w;
+        const x = solveWeek(rest, i, ctx);
+        cost += w.total - x.total;
+        return x;
+      });
+      if (cost < bestCost - CUT_EPS ||
+          (Math.abs(cost - bestCost) <= CUT_EPS && seasonOf(p) < seasonOf(best))) {
+        best = p;
+        bestCost = cost;
+        bestWeeks = after;
+      }
+    }
+    cut.push(best);
+    roster = roster.filter((q) => q !== best);
+    weeks = bestWeeks;
+  }
+  return { roster, cut, solved: weeks };
 }
 
 /**
@@ -568,6 +659,8 @@ function tradesWith(myScored, theirScored, theirs, slots, kinds) {
   const theirPackages = packages(theirCands);
   const myTop = topIds(myCands);
   const theirTop = topIds(theirCands);
+  // One lineup, so the cut is judged on that one lineup (see `afterTrade`).
+  const cutCtx = { slots, n: 1, floors: null, view: (roster) => roster };
 
   const found = [];
   for (const send of myPackages) {
@@ -581,11 +674,11 @@ function tradesWith(myScored, theirScored, theirs, slots, kinds) {
 
       // Mine first, and bail before touching theirs. Most pairs fail here, and
       // the second lineup fill is the expensive half of the loop.
-      const myAfter = optimalLineup(afterTrade(myScored, send, receive), slots);
+      const myAfter = optimalLineup(afterTrade(myScored, send, receive, cutCtx).roster, slots);
       const myGain = round1(myAfter.total - myBase.total);
       if (myGain < MIN_GAIN) continue;
 
-      const theirAfter = optimalLineup(afterTrade(theirScored, receive, send), slots);
+      const theirAfter = optimalLineup(afterTrade(theirScored, receive, send, cutCtx).roster, slots);
       const theirGain = round1(theirAfter.total - theirBase.total);
       if (theirGain < MIN_GAIN) continue;
 
@@ -843,7 +936,8 @@ export function findTrades({
  *
  *   `projected`  his REST-OF-SEASON total — every week added up. That is what
  *                the existing `candidates()` ranks by and what `afterTrade()`
- *                cuts by, so both of them work here unchanged.
+ *                breaks a tie between equally cheap cuts by (since 2026-09-30
+ *                the cut itself is the man whose loss costs the weeks least).
  *   `weekly[i]`  a ready-made player object for `weeks[i]`, whose `projected`
  *                is that week's number. `optimalLineup` reads these directly.
  *   `perWeek`    what he is worth IN A WEEK HE SCORES — see below. DISPLAY
@@ -1064,12 +1158,13 @@ export function seasonLineupValue(players, slots, weeks, projFor, floors = null)
  *   - Cut once, on rest-of-season value, and the same man is gone for all of
  *     them. That is what actually happens, and it is what this does.
  *
- * `afterTrade` needs no change to do it: the entries it ranks carry `projected`
- * = the rest-of-season total, so "his worst man" already means worst over the
- * weeks that are left rather than worst this Sunday.
+ * Since 2026-09-30 WHICH man goes is the one whose removal costs the lineups
+ * the fewest points over exactly these weeks (see `afterTrade`), with the
+ * rest-of-season total (`projected` on these entries) as the tie-break — so the
+ * weeks, slots and floors being priced are handed to it here.
  */
-function rosterAcrossWeeksAfter(season, send, joining) {
-  return afterTrade(season, send || [], joining);
+function rosterAcrossWeeksAfter(season, send, joining, slots, n, floors) {
+  return afterTrade(season, send || [], joining, { slots, n, floors, view: atWeek }).roster;
 }
 
 /**
@@ -1098,7 +1193,7 @@ export function priceTradeAcrossWeeks({
   const joining = scoreAcrossWeeks(receive, ws, projFor, zeroIsBye).season;
 
   const before = fillAcrossWeeks(season, slots, ws, floors);
-  const kept = rosterAcrossWeeksAfter(season, send, joining);
+  const kept = rosterAcrossWeeksAfter(season, send, joining, slots, ws.length, floors);
   const after = fillAcrossWeeks(kept, slots, ws, floors);
 
   // Who the roster limit forced out, as distinct from who was traded away — a
@@ -1301,6 +1396,10 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
     ? Math.min(minGain, options.theirMinPerWeek * theirWeeks)
     : minGain;
 
+  // How a week is solved for the forced cut — the same fill and assessment as
+  // every total in this search (see `afterTrade`).
+  const cutCtx = { slots, n, floors, view: atWeek };
+
   // What each of my packages is worth to HIM at the very most. Still a ceiling
   // with `reach`: the gifted roster fields at least as much in every week, and
   // every reach is ≥ 0.
@@ -1333,36 +1432,48 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
 
       // Mine first, and bail before touching theirs — the same reason as the
       // scalar search, and nine times as good a reason.
-      const myRoster = afterTrade(myScored, send, receive);
-
-      // Which men the gifted roster has that the real one does not: the ones
-      // sent away, plus anyone the roster limit forced out.
-      const kept = new Set(myRoster.map((p) => p.playerId));
-      const missing = [];
-      for (const p of giftedPool) if (!kept.has(p.playerId)) missing.push(p.playerId);
-
-      // A week where none of those men was going to START is a week the trade
-      // does not touch: taking a bench player off a roster cannot change the
-      // best lineup that roster could field, because the lineup it already
-      // fields is still available. So that week's fill is skipped outright and
-      // the gifted total stands. Exact, not an approximation — and it is most
-      // of the loop, because most packages move men who were not starting.
+      //
+      // The roster BEFORE the forced cut is the gifted one minus what is sent.
+      // A week where no sent man was going to START is a week the send does
+      // not touch: taking a bench player off a roster cannot change the best
+      // lineup that roster could field, because the lineup it already fields
+      // is still available. So that week's fill is skipped outright and the
+      // gifted week stands. Exact, not an approximation — and it is most of
+      // the loop, because most packages move men who were not starting.
+      const sentIds = send.map((p) => p.playerId);
+      const preRoster = myScored.filter((p) => !sentIds.includes(p.playerId)).concat(receive);
+      const preSolved = new Array(n);
+      for (let i = 0; i < n; i++) {
+        preSolved[i] = sentIds.some((id) => giftedStarters[i].has(id))
+          ? solveWeek(preRoster, i, cutCtx)
+          : { total: gifted.byWeek[i].total, ids: giftedStarters[i] };
+      }
+      // Then the cut, chosen on those same weeks (see `afterTrade`). It hands
+      // back the after-trade weeks, re-filled only where the man cut started.
+      const myCut = afterTrade(myScored, send, receive, cutCtx, preSolved);
+      const myRoster = myCut.roster;
       let total = 0;
       const weekTotals = new Array(n);
       for (let i = 0; i < n; i++) {
-        const t = missing.some((id) => giftedStarters[i].has(id))
-          ? assessLineup(optimalLineup(atWeek(myRoster, i), slots).starters, slots, floors).total
-          : gifted.byWeek[i].total;
-        weekTotals[i] = t;
-        total += t;
+        weekTotals[i] = myCut.solved[i].total;
+        total += weekTotals[i];
       }
       const myAfter = { total: round1(total), weekTotals };
       const myGain = round1(myAfter.total - myBase.total);
       const goalPoints = w ? weigh(weekTotals, myBase.weekTotals) : null;
       if ((w ? goalPoints : myGain) < minGain) continue;
 
-      const theirRoster = afterTrade(theirScored, receive, send);
-      const theirAfter = totalAcrossWeeks(theirRoster, slots, n, floors);
+      const takenIds = receive.map((p) => p.playerId);
+      const hisCut = afterTrade(theirScored, receive, send, cutCtx,
+        solveWeeks(theirScored.filter((p) => !takenIds.includes(p.playerId)).concat(send), cutCtx));
+      const theirRoster = hisCut.roster;
+      let theirTotal = 0;
+      const theirWeekTotals = new Array(n);
+      for (let i = 0; i < n; i++) {
+        theirWeekTotals[i] = hisCut.solved[i].total;
+        theirTotal += theirWeekTotals[i];
+      }
+      const theirAfter = { total: round1(theirTotal), weekTotals: theirWeekTotals };
       const theirGain = theirOf(theirAfter);
       if (theirGain < theirMin) continue;
 

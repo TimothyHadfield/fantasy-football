@@ -288,16 +288,27 @@ function refill(team, outgoing, incoming) {
   const joined = incoming.map((p) => team.players.find((q) => q.playerId === p.playerId) || p);
   const all = kept.concat(joined);
 
-  // The same forced cut the engine models: over the limit, the worst man goes.
+  // The same forced cut the engine models (2026-09-30): over the limit, the
+  // man whose loss costs the lineup least goes — brute force, every man
+  // costed — and a tie goes to the lower typical week, which was the whole
+  // rule before.
   const over = all.length - team.players.length;
-  if (over > 0) {
-    const ranked = [...all].sort(
-      (a, b) => (typicalWeek(a) ?? -Infinity) - (typicalWeek(b) ?? -Infinity)
-    );
-    const cut = new Set(ranked.slice(0, over));
-    return all.filter((p) => !cut.has(p));
+  let left = all;
+  for (let k = 0; k < over; k++) {
+    const base = lineupValue(left, slots, typicalWeek).total;
+    const tw = (p) => typicalWeek(p) ?? -Infinity;
+    let best = null;
+    let bestCost = Infinity;
+    for (const p of left) {
+      const cost = base - lineupValue(left.filter((q) => q !== p), slots, typicalWeek).total;
+      if (cost < bestCost - 1e-6 || (Math.abs(cost - bestCost) <= 1e-6 && tw(p) < tw(best))) {
+        best = p;
+        bestCost = cost;
+      }
+    }
+    left = left.filter((q) => q !== best);
   }
-  return all;
+  return left;
 }
 
 let checked = 0;

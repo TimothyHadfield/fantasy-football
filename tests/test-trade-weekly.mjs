@@ -698,22 +698,40 @@ for (const me of demoTeams) {
   }
 }
 
-/** The same forced cut the engine models, written out independently. */
+/**
+ * The same forced cut the engine models, written out independently and by
+ * brute force: every man on the roster is costed (the season lost by taking
+ * him off, nine fills), the cheapest goes, a tie to the lower season total.
+ * One at a time when more than one man is over. Since 2026-09-30 — before
+ * that the lowest season total went, cost or no cost (see test-trade-cut.mjs).
+ */
 function handRosterAfter(players, outgoing, incoming) {
   const gone = new Set(outgoing.map((p) => p.playerId));
   const kept = players.filter((p) => !gone.has(p.playerId));
   const joined = incoming.map((p) => ({ ...p }));
-  const all = kept.concat(joined);
+  let all = kept.concat(joined);
   const over = all.length - players.length;
   if (over <= 0) return all;
   const seasonOf = (p) =>
-    SEASON_WEEKS.reduce((a, w) => {
+    Math.round(SEASON_WEEKS.reduce((a, w) => {
       const v = demoProjFor(p, w);
       return a + (Number.isFinite(v) ? v : 0);
-    }, 0);
-  const ranked = [...all].sort((a, b) => seasonOf(a) - seasonOf(b));
-  const cut = new Set(ranked.slice(0, over));
-  return all.filter((p) => !cut.has(p));
+    }, 0) * 10) / 10;
+  for (let k = 0; k < over; k++) {
+    const base = handSeasonTotal(all, demoSlots, SEASON_WEEKS);
+    let best = null;
+    let bestCost = Infinity;
+    for (const p of all) {
+      const cost = base - handSeasonTotal(all.filter((q) => q !== p), demoSlots, SEASON_WEEKS);
+      if (cost < bestCost - 1e-6 ||
+          (Math.abs(cost - bestCost) <= 1e-6 && seasonOf(p) < seasonOf(best))) {
+        best = p;
+        bestCost = cost;
+      }
+    }
+    all = all.filter((q) => q !== best);
+  }
+  return all;
 }
 
 {
