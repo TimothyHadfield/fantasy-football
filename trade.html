@@ -954,6 +954,31 @@
     cursor: pointer;
   }
   .cu-drop:hover { color: var(--err); border-color: var(--err); }
+  /* ASSUME (2026-09-30): beside Remove on a saved row. */
+  .cu-drop.cu-assume { margin-right: 4px; }
+  .cu-drop.cu-assume:hover { color: var(--accent); border-color: var(--accent); }
+  #assumedTable td.cu-remove { white-space: nowrap; }
+  /* The assumed block is a div (it is not one of the page's panels), drawn
+     exactly as app.css draws `section.panel`. */
+  #assumedPanel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-4);
+    padding: var(--pad-panel);
+    margin-bottom: 16px;
+  }
+  #assumedPanel > h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    margin: 0 0 14px;
+    font-weight: 600;
+  }
+  @media (max-width: 760px) {
+    #assumedPanel { margin-bottom: 12px; }
+    #assumedPanel > h2 { margin-bottom: 11px; }
+  }
   .spare-chip {
     font-size: 11.5px;
     font-variant-numeric: tabular-nums;
@@ -1364,6 +1389,21 @@
        settings. Hidden in demo and whenever ESPN did not say — never guessed. -->
   <p class="panel-note" id="deadlineLine" hidden></p>
 
+  <!-- THE ASSUMED TRADE (Tim, 2026-09-30): a saved custom trade taken as done.
+       Its row and its after-the-trade season sit at the top, priced on the
+       rosters as they really are; every panel below starts from it. A div, not
+       a section: it is not one of the page's panels in the panel order. -->
+  <p class="panel-note warn-line" id="assumedDropped" hidden></p>
+  <div class="panel" id="assumedPanel" hidden>
+    <h2>Assumed trade</h2>
+    <p class="lede" id="assumedLine"></p>
+    <div class="table-scroll"><table id="assumedTable" class="offers">
+      <thead></thead>
+      <tbody id="assumedRows"></tbody>
+    </table></div>
+    <div class="sbw" id="assumedSeason"></div>
+  </div>
+
   <section class="panel">
     <h2>Data source</h2>
     <p class="lede">Pick the league, your team, and how players are valued.</p>
@@ -1477,6 +1517,7 @@
     </div>
     <h2 id="finderTitle">Trades ranked by your title chance</h2>
     <p class="lede">Rows sharing a rank (=) are too close to separate. Tap a row for its weeks.</p>
+    <p class="panel-note" id="assumeNote" hidden></p>
     <div class="row mb-12">
       <!-- The COUNT each way is the shape, and it needs no teaching. These read
            "Straight swap / You consolidate / You add depth" until Tim said he

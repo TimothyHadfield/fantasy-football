@@ -104,7 +104,7 @@ import {
   goalOf, DEFAULT_GOAL, acceptChance, offerDeltas, simulateWith,
   scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
   weekWeights, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
-  espnLookPerWeek, playoffReach, goalChance, goalGain,
+  espnLookPerWeek, playoffReach, goalChance, goalGain, shiftSeason,
 } from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
@@ -224,7 +224,14 @@ const state = {
   poWeeks: [],         // the playoff weeks: shown for reference, never priced
   poPlayed: [],        // of those, the ones with a result (December)
   scheduleError: null, // why the live schedule could not be read, if it could not
-  data: null,          // {week, teams:[...]} for the selected week
+  data: null,          // {week, teams:[...]} for the selected week, any assumed trade made
+  rawData: null,       // the same week as ESPN sent it (=== data when nothing is assumed)
+  // THE ASSUMED TRADE (Tim, 2026-09-30): a saved custom trade taken as done, so
+  // every number on the page starts from it. `{entry, src, at}` — the saved
+  // entry, the league it belongs to (`sourceKey()`), and where it sat in the
+  // saved list, so Remove puts it back there. Null = nothing assumed.
+  assumed: null,
+  asmSide: 'mine',     // whose after-the-trade season the assumed block shows
   slots: null,         // the league's starting slots, read off the lineups
   // THE POSITIONAL FLOOR (Tim, 2026-09-18): position -> the wire's best man
   // there, read ONCE and used for every week. Null in demo and until the read
@@ -376,6 +383,15 @@ const weekly = {
   // The same 170-solve budget `startersIn` respects, one cache per offer rather
   // than per card — every man on a row asks the same question of the same week.
   tradeLineups: new Map(),
+  // THE REAL ROSTERS, kept beside the ones above (2026-09-30, "assume trade").
+  // `rosters` and `teams` are the league AS THE PAGE PRICES IT — with an assumed
+  // trade made, when there is one (see ASSUMED TRADE below); these are ESPN's
+  // as read, which the assumed trade's own block is priced on. Identical
+  // objects when nothing is assumed.
+  raw: new Map(),          // week -> teams as read
+  realRosters: new Map(),  // week -> indexRosters(raw)
+  realLineups: new Map(),
+  realTradeLineups: new Map(),
 };
 
 // ------------------------------------------------------------------ formatting
@@ -646,12 +662,21 @@ function indexRosters(teams) {
 }
 
 function rememberWeek(week, teams) {
+  // The projections are indexed off the REAL payload: a man's number does not
+  // depend on whose bench he is on, and a man an assumed trade forces out of a
+  // roster still has one (the assumed block prices the cut that drops him).
   weekly.byWeek.set(week, indexTeams(teams));
-  weekly.rosters.set(week, indexRosters(teams));
+  weekly.raw.set(week, teams || []);
+  weekly.realRosters.set(week, indexRosters(teams));
+  // THE ONE SEAM for an assumed trade: every roster this page reads per week is
+  // this week's payload with that trade made (`assumedTeams`), or the payload
+  // itself when nothing is assumed.
+  const eff = assumedTeams(teams || [], week);
+  weekly.rosters.set(week, eff === teams ? weekly.realRosters.get(week) : indexRosters(eff));
   // The payload as it came, for the season simulation: js/capture.js builds
   // its projection and its scoring spread from week -> teams, exactly as the
   // Schedule page hands them over.
-  weekly.teams.set(week, teams || []);
+  weekly.teams.set(week, eff || []);
   weekly.failed.delete(week);
 }
 
@@ -660,6 +685,10 @@ function resetWeekly() {
   weekly.byWeek = new Map();
   weekly.rosters = new Map();
   weekly.teams = new Map();
+  weekly.raw = new Map();
+  weekly.realRosters = new Map();
+  weekly.realLineups = new Map();
+  weekly.realTradeLineups = new Map();
   weekly.failed = new Set();
   weekly.error = null;
   weekly.requests = 0;
@@ -688,10 +717,258 @@ function resetWeekly() {
  * than quietly counting it.
  */
 function rememberSelectedWeek() {
-  if (!state.data) return;
+  if (!state.rawData) return;
   if (weekly.key !== sourceKey()) resetWeekly();
-  rememberWeek(state.data.week, state.data.teams);
+  rememberWeek(state.rawData.week, state.rawData.teams);
   weekly.means = new Map();
+}
+
+// ===========================================================================
+// THE ASSUMED TRADE (Tim, 2026-09-30)
+//
+// "make a 'assume trade' feature on a saved trade that basically recalculates
+// all other trades assuming the trade that you've made has happened … make
+// sure to adjust the other user's starting lineup that was in the assumed
+// trade aswell". One saved trade at a time is taken as done: both squads'
+// rosters are rewritten — what each sends gone, what each receives in, and the
+// forced cut the trade's own pricing chose (`priceTradeAcrossWeeks().cut`) —
+// for the SELECTED week (`state.data`) and every week still to play
+// (`weekly.rosters`, `weekly.teams`). Every panel reads those, so the finder,
+// the combo, the custom box, the pop-up and the chances all start from it.
+// Played weeks are banked and keep their real rosters.
+//
+// The assumed trade's own block is priced against the REAL rosters
+// (`withRealWorld`), so it reads exactly as its saved row did.
+//
+// Demo only: the sample schedule carries its own regular-season projections
+// rather than building them from rosters, so the simulation is shifted by the
+// trade's per-week change there (`goalInputs`), as a finder row's run is.
+// ===========================================================================
+
+const assume = {
+  key: null,       // the inputs the moves were worked out on (`syncAssumed`)
+  moves: null,     // {src, a, b, sendA:Set, sendB:Set, cutA:Set, cutB:Set}
+  movesSig: null,
+  deltas: null,    // demo: teamId -> week -> points, for the simulation
+  version: 0,      // bumped whenever the rosters change, for the caches keyed on it
+  dropped: null,   // why an assumed trade was put back, said once at the top
+  offer: null,     // the block's offer object, kept while `key` holds (dealSets caches on it)
+  offerKey: null,
+};
+let realWorld = false;
+let realGoalCtx = null;
+let realSeasonLeague = { key: null, floors: null, slots: null, val: null };
+
+/** The assumed entry, when it belongs to the league on screen. */
+function activeAssumed() {
+  const a = state.assumed;
+  return a && a.src === sourceKey() ? a.entry : null;
+}
+
+/** One week's teams with the assumed trade made; the same array when nothing changes. */
+function assumedTeams(teams, week, selected = false) {
+  const m = assume.moves;
+  if (!m || m.src !== sourceKey() || !teams || !teams.length) return teams;
+  if (!selected && playedWeeks().includes(week)) return teams;
+  const ta = teams.find((t) => t.id === m.a);
+  const tb = teams.find((t) => t.id === m.b);
+  if (!ta || !tb) return teams;
+  const bench = (p) => ({ ...p, started: false, lineupSlotId: 20, slot: espn.SLOT_LABELS[20] ?? 'Bench' });
+  const remake = (team, send, cut, from, gets) => {
+    const kept = (team.players || []).filter((p) =>
+      !send.has(String(p.playerId)) && !cut.has(String(p.playerId)));
+    const arriving = (from.players || [])
+      .filter((p) => gets.has(String(p.playerId)) && !cut.has(String(p.playerId)))
+      .map(bench);
+    const players = kept.concat(arriving);
+    return {
+      ...team,
+      players,
+      starters: players.filter((p) => p.started),
+      bench: players.filter((p) => !p.started),
+    };
+  };
+  const na = remake(ta, m.sendA, m.cutA, tb, m.sendB);
+  const nb = remake(tb, m.sendB, m.cutB, ta, m.sendA);
+  return teams.map((t) => (t === ta ? na : t === tb ? nb : t));
+}
+
+/** The selected week, as ESPN sent it and as the page prices it. */
+function setData(raw) {
+  state.rawData = raw || null;
+  if (!raw) { state.data = null; return; }
+  const teams = assumedTeams(raw.teams, raw.week, true);
+  state.data = teams === raw.teams ? raw : { ...raw, teams };
+}
+
+/** Every roster the page holds, rebuilt for the current moves. */
+function reapplyAssumed() {
+  for (const [week, teams] of weekly.raw) {
+    const eff = assumedTeams(teams, week);
+    weekly.teams.set(week, eff);
+    weekly.rosters.set(week, eff === teams ? weekly.realRosters.get(week) : indexRosters(eff));
+  }
+  if (state.rawData) setData(state.rawData);
+  weekly.lineups = new Map();
+  weekly.tradeLineups = new Map();
+  weekly.means = new Map();
+  assume.version++;
+  assume.offer = null;
+  assume.offerKey = null;
+  dealCache.clear();
+  goalCtx = null;
+  // The deal in the builder was priced on the old rosters.
+  state.customOffer = null;
+  state.customOfferKey = null;
+}
+
+function setMoves(moves, deltas) {
+  const sig = moves
+    ? JSON.stringify([moves.src, moves.a, moves.b, ...['sendA', 'sendB', 'cutA', 'cutB'].map((k) => [...moves[k]].sort()),
+      deltas ? [...deltas].map(([t, m]) => [t, [...m]]) : null])
+    : null;
+  if (sig === assume.movesSig) return false;
+  assume.movesSig = sig;
+  assume.moves = moves;
+  assume.deltas = deltas;
+  reapplyAssumed();
+  return true;
+}
+
+/**
+ * Work the moves out again when anything they depend on has changed — the
+ * league, the weeks in hand, the span, the floors. True when the rosters moved.
+ */
+function syncAssumed() {
+  const entry = activeAssumed();
+  if (!entry || !state.rawData) {
+    assume.key = null;
+    return setMoves(null, null);
+  }
+  const key = JSON.stringify([entry, sourceKey(), weeklySpan(), weekly.byWeek.size, weekly.failed.size,
+    playedWeeks(), state.rawData.week, state.slots, offerId(state.floors)]);
+  if (key === assume.key) return false;
+  assume.key = key;
+  const priced = withRealWorld(() => priceCustom(entry));
+  const cutOf = (side) => new Set(((side && side.cut) || []).map((p) => String(p.playerId)));
+  if (priced.error && !priced.forA && !/every week has been played/i.test(priced.error)) {
+    const b = withRealWorld(() => teamById(entry.b));
+    dropAssumed(`Stopped assuming your trade with ${b ? b.name : 'the other squad'}. ${priced.error}`);
+    return true;
+  }
+  const moves = {
+    src: sourceKey(),
+    a: entry.a,
+    b: entry.b,
+    sendA: new Set(entry.sendA.map(String)),
+    sendB: new Set(entry.sendB.map(String)),
+    cutA: cutOf(priced.forA),
+    cutB: cutOf(priced.forB),
+  };
+  let deltas = null;
+  if (state.isDemo && priced.forA) {
+    const played = new Set(playedWeeks());
+    const all = offerDeltas(customOffer(entry, priced), entry.a);
+    deltas = new Map();
+    for (const [teamId, m] of all) {
+      const keep = new Map([...m].filter(([w]) => state.weeks.includes(w) && !played.has(w)));
+      if (keep.size) deltas.set(teamId, keep);
+    }
+  }
+  return setMoves(moves, deltas);
+}
+
+/** Price something on the rosters as they really are, with nothing assumed. */
+function withRealWorld(fn) {
+  if (realWorld || !assume.moves) return fn();
+  const held = {
+    data: state.data, rosters: weekly.rosters, teams: weekly.teams, lineups: weekly.lineups,
+    tradeLineups: weekly.tradeLineups, means: weekly.means, goal: goalCtx, season: cuSeasonLeague,
+  };
+  state.data = state.rawData;
+  weekly.rosters = weekly.realRosters;
+  weekly.teams = weekly.raw;
+  weekly.lineups = weekly.realLineups;
+  weekly.tradeLineups = weekly.realTradeLineups;
+  goalCtx = realGoalCtx;
+  cuSeasonLeague = realSeasonLeague;
+  realWorld = true;
+  try {
+    return fn();
+  } finally {
+    weekly.realLineups = weekly.lineups;
+    weekly.realTradeLineups = weekly.tradeLineups;
+    realGoalCtx = goalCtx;
+    realSeasonLeague = cuSeasonLeague;
+    state.data = held.data;
+    weekly.rosters = held.rosters;
+    weekly.teams = held.teams;
+    weekly.lineups = held.lineups;
+    weekly.tradeLineups = held.tradeLineups;
+    weekly.means = held.means;
+    goalCtx = held.goal;
+    cuSeasonLeague = held.season;
+    realWorld = false;
+  }
+}
+
+function saveAssumed() {
+  prefs.set('assumed', state.assumed);
+}
+
+function loadAssumed() {
+  const a = prefs.get('assumed', null);
+  if (!a || typeof a !== 'object' || !a.entry || typeof a.entry !== 'object') return null;
+  const e = a.entry;
+  const entry = {
+    a: Number(e.a),
+    b: Number(e.b),
+    sendA: Array.isArray(e.sendA) ? e.sendA.map(String) : [],
+    sendB: Array.isArray(e.sendB) ? e.sendB.map(String) : [],
+  };
+  if (!Number.isFinite(entry.a) || !Number.isFinite(entry.b) || entry.a === entry.b) return null;
+  if (!entry.sendA.length && !entry.sendB.length) return null;
+  return { entry, src: String(a.src || ''), at: Number.isFinite(Number(a.at)) ? Number(a.at) : 0 };
+}
+
+/** Put the assumed trade back in the saved list, where it was. */
+function returnAssumed() {
+  const a = state.assumed;
+  if (!a) return;
+  const at = Math.max(0, Math.min(a.at, state.customSaved.length));
+  state.customSaved = state.customSaved.slice(0, at).concat([a.entry], state.customSaved.slice(at));
+  state.assumed = null;
+  saveCustomTrades();
+  saveAssumed();
+}
+
+function dropAssumed(why) {
+  returnAssumed();
+  assume.dropped = why;
+  assume.key = null;
+  setMoves(null, null);
+}
+
+function assumeSaved(i) {
+  const entry = state.customSaved[i];
+  if (!entry) return;
+  // ONE AT A TIME: assuming another puts the one before back in the list.
+  returnAssumed();
+  const at = state.customSaved.indexOf(entry);
+  state.customSaved = state.customSaved.filter((e) => e !== entry);
+  state.assumed = { entry, src: sourceKey(), at: at < 0 ? i : at };
+  assume.dropped = null;
+  saveCustomTrades();
+  saveAssumed();
+  syncAssumed();
+  runSearch();
+}
+
+function unassume() {
+  returnAssumed();
+  assume.dropped = null;
+  syncAssumed();
+  runSearch();
 }
 
 /**
@@ -3681,6 +3958,8 @@ function renderFinderNote(scales = finderScales) {
  * simulation on the schedule page.
  */
 function runSearch({ keepDeal = false } = {}) {
+  // An assumed trade's rosters first, so the search starts from them.
+  syncAssumed();
   const teams = state.data ? state.data.teams : [];
   // A new search invalidates the drill-down: it is holding an offer object out
   // of the PREVIOUS search, and leaving a pop-up open over a fresh table would
@@ -3907,11 +4186,18 @@ function goalInputs() {
 
   const started = state.isDemo ? null : capture.startedProjections(weekly.teams, decided);
   const spread = capture.leagueSpread(data, (g) => !goalIsRemaining(g), started);
-  const inputs = capture.simulationInputs({
+  let inputs = capture.simulationInputs({
     data, isRemaining: goalIsRemaining, proj, sigma: spread.sigma,
   });
   if (!inputs || !inputs.playable) {
     return { inputs: null, spread, why: 'there is no game left to play out' };
+  }
+  // AN ASSUMED TRADE IN DEMO: the sample games carry their own projections, so
+  // the trade's per-week change is added to them here (see THE ASSUMED TRADE).
+  // A live league builds every remaining game from the rosters, which already
+  // have the trade made.
+  if (state.isDemo && !realWorld && assume.moves && assume.deltas && assume.deltas.size) {
+    inputs = { ...shiftSeason(inputs, assume.deltas), keyParts: inputs.keyParts.concat([assume.movesSig]) };
   }
   return { inputs, spread, why: null };
 }
@@ -4889,7 +5175,7 @@ function priceSide(offer, side, weeks) {
  */
 function dealSets(offer, side) {
   const key = `${sourceKey()}|${weekly.byWeek.size}|${weekly.failed.size}|` +
-    `${state.week}|${state.myTeamId}|${side}|${offerId(offer)}`;
+    `${state.week}|${state.myTeamId}|${side}|${offerId(offer)}|${realWorld ? 'R' : 'A'}${assume.version}`;
   const held = dealCache.get(key);
   if (held) return held;
 
@@ -6527,14 +6813,14 @@ function describeSource() {
 async function loadWeek() {
   const key = `${state.source}:${state.week}`;
   if (cache.has(key)) {
-    state.data = cache.get(key);
+    setData(cache.get(key));
     rememberSelectedWeek();
     render();
     setStatus(describeSource());
     return;
   }
 
-  state.data = null;
+  setData(null);
   render(); // show the empty state while the fetch is in flight
 
   // The connection bar can flip the page to live mid-fetch. A reply that no
@@ -6555,7 +6841,7 @@ async function loadWeek() {
       );
       return;
     }
-    state.data = generate(state.week);
+    setData(generate(state.week));
   } else {
     setStatus(`Loading week ${state.week} rosters from ESPN…`);
     let loaded;
@@ -6567,14 +6853,14 @@ async function loadWeek() {
       return;
     }
     if (stale()) return;
-    state.data = loaded;
+    setData(loaded);
     // A season module that does not say where the week came from (an older
     // stub) is taken to have spent one — over-counting rather than hiding a
     // real request, which is the safe direction of the two.
     fromEspn = loaded.from !== 'store';
   }
 
-  cache.set(key, state.data);
+  cache.set(key, state.rawData);
   rememberSelectedWeek();
   // THE OPENING WEEK IS COUNTED TOO, now that the page prices itself. It used
   // not to be — "the opening week is the page's, not the button's" — and that
@@ -6841,6 +7127,9 @@ function openingWeek() {
  * repaint after a clear would lose its cards silently.
  */
 function paint() {
+  // The rosters an assumed trade makes moved (a week landed, the goal changed
+  // the span): everything on screen was found on the old ones, so search again.
+  if (syncAssumed()) { runSearch(); return; }
   clearRuns();
   // Same reason as clearRuns(): the offers behind the ESPN links are registered
   // by counter and the Map has no other way of shrinking, so a repaint that did
@@ -6862,6 +7151,7 @@ function paint() {
   renderCombo();
   renderDepth();
   renderCustom();
+  renderAssumed();
   renderDeal();
 }
 
@@ -7531,6 +7821,7 @@ function renderCustomSaved() {
     const drop = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
     if (priced[i].error) {
+      // A deal that will not price cannot be assumed either: it has no Assume.
       const a = teamById(entry.a);
       const b = teamById(entry.b);
       return (
@@ -7544,11 +7835,16 @@ function renderCustomSaved() {
         `</tr>`
       );
     }
+    // ASSUME (2026-09-30), beside Remove: take this trade as done. See
+    // THE ASSUMED TRADE.
+    const tail = `<td class="cu-remove">` +
+      `<button type="button" class="cu-drop cu-assume" data-assume="${i}">Assume</button>` +
+      `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
     return offerRow(offers[i], i, `cu:${i}`, {
       ...scales,
       goal: true,
       attrs: ` data-cu="${i}"`,
-      tail: drop,
+      tail,
     });
   }).join('');
 
@@ -7561,6 +7857,76 @@ function renderCustomSaved() {
     key.innerHTML = scales.myScale || scales.theirScale
       ? heatKeyShort({ what: 'the other saved trades in the same column' })
       : '';
+  }
+}
+
+/**
+ * THE ASSUMED TRADE'S BLOCK, at the top of the page: its saved row and its
+ * "After the trade" season, both priced on the REAL rosters, so they read
+ * exactly as the saved row and the custom box did before it was assumed.
+ * The row opens no pop-up — the pop-up prices on the page's (assumed) rosters.
+ */
+function renderAssumed() {
+  const panel = $('assumedPanel');
+  if (!panel) return;
+  const dropped = $('assumedDropped');
+  if (dropped) {
+    dropped.hidden = !assume.dropped;
+    dropped.textContent = assume.dropped || '';
+  }
+  const note = $('assumeNote');
+  const entry = activeAssumed();
+  const hide = () => {
+    panel.hidden = true;
+    $('assumedRows').innerHTML = '';
+    $('assumedSeason').innerHTML = '';
+    $('assumedLine').innerHTML = '';
+    if (note) { note.hidden = true; note.textContent = ''; }
+  };
+  if (!entry || !assume.moves) { hide(); return; }
+  clearRuns('asm');
+
+  const out = withRealWorld(() => {
+    const priced = priceCustom(entry);
+    if (priced.error) return null;
+    // One object while the inputs hold: `dealSets` caches on its identity.
+    if (!assume.offer || assume.offerKey !== assume.key) {
+      assume.offer = customOffer(entry, priced);
+      assume.offerKey = assume.key;
+    }
+    const offer = assume.offer;
+    const span = weeklySpan();
+    offer.goalScore = basis() === 'weeks' ? scoreGoalCached(offer, entry.a, span) : null;
+    offer.altGoal = altScore(offer, entry.a);
+    const row = offerRow(offer, 0, 'asm:0', {
+      goal: true,
+      attrs: ' data-asm="0"',
+      tail: `<td class="cu-remove"><button type="button" class="cu-drop" data-unassume="1">Remove</button></td>`,
+    })
+      .replace(/<button type="button" class="wk-open"[^>]*>[^<]*<\/button>/g, '')
+      .replace(/ ?<button type="button" class="espn-open cu-load"[^>]*>[^<]*<\/button>/g, '');
+    return {
+      row,
+      season: cuSeasonHtml(offer, state.asmSide, 'total', { nowBox: false, prefix: 'asm' }),
+      line: `Assuming <strong>${esc(priced.teamA.name)}</strong> sends ${customNames(priced.sendA)} to ` +
+        `<strong>${esc(priced.teamB.name)}</strong> for ${customNames(priced.sendB)}. ` +
+        `Every trade below starts from here.`,
+      partner: priced.teamB.name,
+    };
+  });
+  if (!out) { hide(); return; }
+
+  const head = $('cuTable') && $('cuTable').querySelector('thead');
+  $('assumedTable').querySelector('thead').innerHTML = head ? head.innerHTML.replace(/ id="[^"]*"/g, '') : '';
+  $('assumedRows').innerHTML = out.row;
+  $('assumedLine').innerHTML = out.line;
+  const host = $('assumedSeason');
+  host.hidden = !out.season;
+  host.innerHTML = out.season || '';
+  panel.hidden = false;
+  if (note) {
+    note.hidden = false;
+    note.textContent = `Assuming your trade with ${out.partner}, shown at the top of the page.`;
   }
 }
 
@@ -8018,7 +8384,8 @@ let cuSeasonLeague = { key: null, floors: null, slots: null, val: null };
 
 /** Every squad's best lineup over the unplayed weeks, measured as Analysis measures it. */
 function cuSeasonScales(rows, weeks, regular) {
-  const key = `${sourceKey()}|${weekly.byWeek.size}|${weeks.join(',')}|${rows.map((r) => r.key).join(',')}`;
+  const key = `${sourceKey()}|${weekly.byWeek.size}|${weeks.join(',')}|${rows.map((r) => r.key).join(',')}|` +
+    `${realWorld ? 'R' : 'A'}${assume.version}`;
   const L = cuSeasonLeague;
   if (L.key === key && L.floors === state.floors && L.slots === state.slots) return L.val;
   const teams = state.data ? state.data.teams : [];
@@ -8225,14 +8592,20 @@ function renderCustomSeason() {
   const host = cuSeasonHost();
   if (!host) return;
   clearRuns('sbw');
-  const offer = state.customOffer;
+  const html = cuSeasonHtml(state.customOffer, state.cuSeasonSide, state.cuSeasonView);
+  host.hidden = !html;
+  host.innerHTML = html || '';
+}
+
+/**
+ * The two season boxes for one deal and one side, as HTML — or null when there
+ * is nothing to draw. The custom box draws both; the ASSUMED block (2026-09-30)
+ * draws only the after box (`nowBox: false`), with its cards under `prefix`.
+ */
+function cuSeasonHtml(offer, sideAsked, viewAsked, { nowBox = true, prefix = 'sbw' } = {}) {
   const rows = slotRows(state.slots);
-  if (!offer || !offer.partner || !weeklyReady() || !rows.length) {
-    host.hidden = true;
-    host.innerHTML = '';
-    return;
-  }
-  const side = state.cuSeasonSide === 'theirs' ? 'theirs' : 'mine';
+  if (!offer || !offer.partner || !weeklyReady() || !rows.length) return null;
+  const side = sideAsked === 'theirs' ? 'theirs' : 'mine';
   const sets = dealSets(offer, side);
   const played = new Set(playedWeeks());
   const isPo = (w) => state.poWeeks.includes(w) && !state.weeks.includes(w);
@@ -8246,7 +8619,7 @@ function renderCustomSeason() {
     }));
   }
   cols.sort((a, b) => a.week - b.week);
-  if (!cols.length) { host.hidden = true; host.innerHTML = ''; return; }
+  if (!cols.length) return null;
 
   const live = cols.filter((c) => !c.played).map((c) => c.week);
   const regular = new Set(live.filter((w) => !isPo(w)));
@@ -8256,7 +8629,7 @@ function renderCustomSeason() {
   const keys = new Map();
   const cardKey = (p) => {
     const k = String(p.playerId ?? p.name);
-    if (!keys.has(k)) keys.set(k, registerRun(cardFor(p, ctx), 'sbw'));
+    if (!keys.has(k)) keys.set(k, registerRun(cardFor(p, ctx), prefix));
     return keys.get(k);
   };
 
@@ -8280,13 +8653,19 @@ function renderCustomSeason() {
     `aria-pressed="${side === s}">${esc(name)}</button>`;
   const opts = { rows, scales, cardKey, vsWeeks };
   // TOTAL OR DIFFERENCE, for the after box only (Tim, 2026-09-30).
-  const view = state.cuSeasonView === 'diff' ? 'diff' : 'total';
+  const view = viewAsked === 'diff' ? 'diff' : 'total';
   const viewBtn = (v, label) =>
     `<button type="button" data-sbw-view="${v}"${view === v ? ' class="on"' : ''} ` +
     `aria-pressed="${view === v}">${label}</button>`;
 
-  host.hidden = false;
-  host.innerHTML =
+  if (!nowBox) {
+    return `<div class="segmented sbw-who" role="group" aria-label="Whose season">` +
+      `${btn('mine', nameA)}${btn('theirs', nameB)}</div>` +
+      `<h3 class="sbw-title">After the trade · ${esc(shownName)}</h3>` +
+      `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'after', { ...opts, opp })}</div>` +
+      `<p class="panel-note heat-key">${heatKeyShort({ thing: 'week', what: 'the same slot across the league' })}</p>`;
+  }
+  return (
     `<div class="segmented sbw-who" role="group" aria-label="Whose season">` +
     `${btn('mine', nameA)}${btn('theirs', nameB)}</div>` +
     `<h3 class="sbw-title">Season by week · ${esc(shownName)}</h3>` +
@@ -8295,7 +8674,8 @@ function renderCustomSeason() {
     `<div class="segmented sbw-view" role="group" aria-label="After-the-trade numbers">` +
     `${viewBtn('total', 'Total')}${viewBtn('diff', 'Difference')}</div></div>` +
     `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'after', { ...opts, opp, diff: view === 'diff' })}</div>` +
-    `<p class="panel-note heat-key">${heatKeyShort({ thing: 'week', what: 'the same slot across the league' })}</p>`;
+    `<p class="panel-note heat-key">${heatKeyShort({ thing: 'week', what: 'the same slot across the league' })}</p>`
+  );
 }
 
 function renderCustom() {
@@ -8366,7 +8746,9 @@ function render() {
   // ESPN will not accept an illegal lineup, so the non-bench slots in use ARE
   // the league's configuration — no extra request, and no hand-written default
   // that would understate every squad by a starter if it guessed wrong.
-  const teams = state.data ? state.data.teams : [];
+  // Off the lineups ESPN SET, never an assumed roster's (whose moved men sit on
+  // the bench and would hide a slot).
+  const teams = state.rawData ? state.rawData.teams : [];
   state.slots = slotsForLeague(teams.length ? slotCountsFromLineups(teams) : null);
 
   resolveTeam();
@@ -8961,6 +9343,12 @@ $('cuOpen').addEventListener('click', (e) => {
 });
 
 $('cuRows').addEventListener('click', (e) => {
+  const take = e.target.closest ? e.target.closest('button[data-assume]') : null;
+  if (take) {
+    const i = Number(take.getAttribute('data-assume'));
+    if (Number.isFinite(i)) assumeSaved(i);
+    return;
+  }
   const drop = e.target.closest ? e.target.closest('button[data-drop]') : null;
   if (drop) {
     const i = Number(drop.getAttribute('data-drop'));
@@ -9109,6 +9497,22 @@ if (cuSeasonHost()) {
   });
   wireTips(cuSeasonHost());
 }
+// The assumed trade's block: Remove puts it back in the saved list, and the
+// name buttons switch whose after-the-trade season it shows.
+if ($('assumedPanel')) {
+  $('assumedPanel').addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    if (t.closest('button[data-unassume]')) { unassume(); return; }
+    const btn = t.closest('button[data-sbw-side]');
+    if (!btn) return;
+    const s = btn.getAttribute('data-sbw-side') === 'theirs' ? 'theirs' : 'mine';
+    if (s === state.asmSide) return;
+    state.asmSide = s;
+    renderAssumed();
+  });
+  wireTips($('assumedPanel'));
+}
 // And the two roster lists, whose names now carry a card of their own.
 wireTips($('cuListA'));
 wireTips($('cuListB'));
@@ -9127,6 +9531,8 @@ setGoalToggles(state.goal);
 // briefly empty on a reload. Only identities are stored, so this is cheap and
 // nothing in it can be stale — every row is re-priced when it is drawn.
 state.customSaved = loadCustomTrades();
+// And the assumed one, if any — applied once its league's rosters are in.
+state.assumed = loadAssumed();
 
 if (prefs.get('source') === 'live' && boot) useLive();
 else useDemo();

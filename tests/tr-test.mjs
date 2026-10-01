@@ -2945,6 +2945,129 @@ SCENARIOS.customSeason = async function customSeason() {
   };
 };
 
+// ---- THE ASSUMED TRADE (Tim, 2026-09-30) ------------------------------------
+
+/** One season box's Starting lineup band, `{week, v, played}` per column. */
+function sbwBand(host, which) {
+  const t = host && host.querySelector(`table.sbw-table[data-box="${which}"]`);
+  if (!t) return null;
+  return [...t.querySelectorAll('tbody.split td.wk')].map((td) => ({
+    week: Number(td.getAttribute('data-wk')),
+    v: Number(td.getAttribute('data-v')),
+    played: /\bplayed\b/.test(td.getAttribute('class') || ''),
+  }));
+}
+
+/** What an assumed-trade scenario reads off the page, at any moment. */
+function readAssumed(document) {
+  const $ = (id) => document.getElementById(id);
+  const ids = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')].map((b) => String(b.value));
+  const panel = $('assumedPanel');
+  return {
+    present: !!panel,
+    hidden: panel ? !!panel.hidden : null,
+    rows: panel ? readOfferRows($('assumedTable')) : [],
+    heads: panel ? [...$('assumedTable').querySelectorAll('thead th')].map(text) : [],
+    cuHeads: [...$('cuTable').querySelectorAll('thead th')].map(text),
+    line: panel ? text($('assumedLine')) : '',
+    note: $('assumeNote') ? { hidden: !!$('assumeNote').hidden, text: text($('assumeNote')) } : null,
+    dropped: $('assumedDropped') ? { hidden: !!$('assumedDropped').hidden, text: text($('assumedDropped')) } : null,
+    after: panel ? sbwBand($('assumedSeason'), 'after') : null,
+    saved: document.querySelectorAll('#cuRows tr[data-cu]').length,
+    assumeButtons: document.querySelectorAll('#cuRows button[data-assume]').length,
+    listA: ids('cuListA'),
+    listB: ids('cuListB'),
+    teamB: $('cuTeamB').value,
+    finder: readOfferRows($('tradeTable')).map((r) => ({
+      partner: r.partner, send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)),
+    })),
+  };
+}
+
+SCENARIOS.assumeTrade = async function assumeTrade() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  // A 1-for-1 with the first manager the builder offers: each side's second man.
+  const partner = $('cuTeamB').value;
+  const a = boxes('cuListA')[1]; a.checked = true; fire(a, 'change');
+  const b = boxes('cuListB')[1]; b.checked = true; fire(b, 'change');
+  const sent = String(a.value);
+  const got = String(b.value);
+  await settle(500);
+  const sec = $('cuSeason');
+  const pre = { mine: sbwBand(sec, 'after'), now: sbwBand(sec, 'before') };
+  fire(sec.querySelector('button[data-sbw-side="theirs"]'), 'click');
+  pre.his = sbwBand(sec, 'after');
+  fire(sec.querySelector('button[data-sbw-side="mine"]'), 'click');
+  fire($('cuSave'), 'click');
+  fire($('cuClear'), 'click');
+  await settle(300);
+  const saved = readAssumed(document);
+  const savedRow = readOfferRows($('cuTable'))[0] || null;
+
+  // ASSUME it.
+  const btn = document.querySelector('#cuRows button[data-assume]');
+  if (btn) fire(btn, 'click');
+  await settleGoal(document);
+  // The builder back on the same partner, so its two lists are his and mine.
+  $('cuTeamB').value = partner; fire($('cuTeamB'), 'change');
+  await settle(300);
+  const assumed = readAssumed(document);
+  const asm = $('assumedSeason');
+  const hisBtn = asm && asm.querySelector('button[data-sbw-side="theirs"]');
+  if (hisBtn) fire(hisBtn, 'click');
+  assumed.hisAfter = sbwBand(asm, 'after');
+  const myBtn = asm && asm.querySelector('button[data-sbw-side="mine"]');
+  if (myBtn) fire(myBtn, 'click');
+
+  // A FRESH custom trade on the assumed rosters: tick one of his men (not the
+  // one you sent him). Its "before" box is your assumed squad's season.
+  const his = boxes('cuListB').find((x) => String(x.value) !== sent);
+  if (his) { his.checked = true; fire(his, 'change'); }
+  await settle(500);
+  const fresh = { now: sbwBand($('cuSeason'), 'before'), preview: text($('cuPreview')) };
+  fire($('cuClear'), 'click');
+  await settle(200);
+
+  let prefs = null;
+  try { prefs = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'); } catch { prefs = null; }
+
+  // REMOVE it.
+  const rm = document.querySelector('#assumedPanel button[data-unassume]');
+  if (rm) fire(rm, 'click');
+  await settleGoal(document);
+  $('cuTeamB').value = partner; fire($('cuTeamB'), 'change');
+  await settle(300);
+  const removed = readAssumed(document);
+  let prefsAfter = null;
+  try { prefsAfter = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'); } catch { prefsAfter = null; }
+  return {
+    errors, partner, sent, got, pre, saved, savedRow, assumed, fresh, removed,
+    prefs: prefs ? { assumed: prefs['trade.assumed'] || null, custom: prefs['trade.custom'] || null } : null,
+    prefsAfter: prefsAfter ? { assumed: prefsAfter['trade.assumed'] ?? null, custom: prefsAfter['trade.custom'] || null } : null,
+  };
+};
+
+/** A reload with an assumed trade stored (`TR_ASSUMED` = the prefs to seed). */
+SCENARIOS.assumeReload = async function assumeReload() {
+  const seed = { 'ff.prefs': process.env.TR_ASSUMED || '{}' };
+  const { document, window, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  await settleGoal(document);
+  const partner = process.env.TR_PARTNER;
+  if (partner) {
+    $('cuTeamB').value = partner;
+    $('cuTeamB').dispatchEvent(new window.Event('change', { bubbles: true }));
+    await settle(300);
+  }
+  let prefs = null;
+  try { prefs = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'); } catch { prefs = null; }
+  return { errors, page: readAssumed(document), prefs: prefs ? { assumed: prefs['trade.assumed'] ?? null, custom: prefs['trade.custom'] || null } : null };
+};
+
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
 SCENARIOS.goalLive = async function goalLive() {
   const seed = {
@@ -7215,6 +7338,127 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
       bx.playedHeat.length === 0, bx.playedHeat.slice(0, 3).join(' | '));
     ok(`SEASON BOXES (${label}): the weeks still to play do (so the check above is not vacuous)`,
       bx.liveHeat > 0, '');
+  }
+}
+
+// ---- THE ASSUMED TRADE (Tim, 2026-09-30) ------------------------------------
+// "make a 'assume trade' feature on a saved trade that basically recalculates
+// all other trades assuming the trade that you've made has happened … allow
+// the user to remove the assumed trade which just makes the trade go back to
+// the saved trades list like normal."
+{
+  const at = run('assumeTrade');
+  ok('ASSUME: the scenario boots', !at.boot, at.boot);
+  if (!at.boot) {
+    const S = at.saved;
+    const A = at.assumed;
+    const R = at.removed;
+    const r1 = (n) => Math.round(n * 10) / 10;
+    const same = (x, y, live = false) => !!x && !!y && x.length > 0 && x.length === y.length &&
+      x.every((c, i) => c.week === y[i].week && (live && c.played ? true : r1(c.v) === r1(y[i].v)));
+    ok('ASSUME: no console errors', at.errors.length === 0, at.errors.slice(0, 2).join(' | '));
+    ok('ASSUME: a saved row carries an Assume button', S.saved === 1 && S.assumeButtons === 1,
+      `${S.saved} rows, ${S.assumeButtons} buttons`);
+    ok('ASSUME: nothing is assumed before the button is pressed', S.present && S.hidden === true, JSON.stringify(S.hidden));
+    // It leaves the saved list and appears at the top with its row.
+    eq(A.saved, 0, 'ASSUME: the assumed trade leaves the saved list');
+    ok('ASSUME: and is shown at the top, with its summary row', A.hidden === false && A.rows.length === 1 &&
+      A.rows[0].partner === (at.savedRow && at.savedRow.partner), JSON.stringify([A.hidden, A.rows.length]));
+    ok('ASSUME: the top row says what the saved row said (both gains, the goal)', !!at.savedRow && A.rows.length === 1 &&
+      A.rows[0].myGain === at.savedRow.myGain && A.rows[0].theirGain === at.savedRow.theirGain &&
+      A.rows[0].goal && at.savedRow.goal && A.rows[0].goal.head === at.savedRow.goal.head,
+      JSON.stringify([A.rows[0] && [A.rows[0].myGain, A.rows[0].goal && A.rows[0].goal.head],
+        at.savedRow && [at.savedRow.myGain, at.savedRow.goal && at.savedRow.goal.head]]));
+    ok('ASSUME: the top table has the saved table\'s columns', A.heads.length > 0 &&
+      JSON.stringify(A.heads) === JSON.stringify(A.cuHeads), JSON.stringify([A.heads, A.cuHeads]));
+    ok('ASSUME: the line says who sends whom', /^Assuming .+ sends .+ to .+ for .+\./.test(A.line), A.line);
+    ok('ASSUME: the finder says it starts from the assumed trade', A.note && A.note.hidden === false &&
+      /Assuming/.test(A.note.text), JSON.stringify(A.note));
+    // Its "After the trade" chart is the one the custom box showed for it, to the tenth.
+    ok('ASSUME: the top after-chart equals the custom box\'s after-chart (yours), every week',
+      same(A.after, at.pre.mine), JSON.stringify([A.after && A.after.map((c) => c.v), at.pre.mine && at.pre.mine.map((c) => c.v)]));
+    ok('ASSUME: and his, every week', same(A.hisAfter, at.pre.his),
+      JSON.stringify([A.hisAfter && A.hisAfter.map((c) => c.v), at.pre.his && at.pre.his.map((c) => c.v)]));
+    // The rosters every panel reads: yours and his, with the trade made.
+    ok('ASSUME: your roster now has the man you received, not the man you sent',
+      A.listA.includes(at.got) && !A.listA.includes(at.sent), JSON.stringify([at.got, at.sent, A.listA]));
+    ok('ASSUME: his roster has the man you sent him, not the man he sent you',
+      A.listB.includes(at.sent) && !A.listB.includes(at.got) && A.teamB === at.partner,
+      JSON.stringify([at.sent, at.got, A.listB]));
+    ok('ASSUME: and before assuming they were the other way round (so the two checks above are not vacuous)',
+      S.listA.includes(at.sent) && !S.listA.includes(at.got) && S.listB.includes(at.got),
+      JSON.stringify([S.listA, S.listB]));
+    // The finder searches the assumed rosters.
+    ok('ASSUME: no finder offer sends the man you traded away',
+      A.finder.length > 0 && A.finder.every((f) => !f.send.includes(at.sent)),
+      `${A.finder.filter((f) => f.send.includes(at.sent)).length} of ${A.finder.length}`);
+    ok('ASSUME: every finder offer sends only men on your assumed roster',
+      A.finder.every((f) => f.send.every((id) => A.listA.includes(id))),
+      JSON.stringify(A.finder.filter((f) => !f.send.every((id) => A.listA.includes(id))).slice(0, 2)));
+    ok('ASSUME: no finder offer asks his squad for the man he gave you',
+      A.finder.every((f) => !f.receive.includes(at.got)), '');
+    ok('ASSUME: and offers with him ask only for men on his assumed roster',
+      A.finder.filter((f) => f.partner === (at.savedRow && at.savedRow.partner))
+        .every((f) => f.receive.every((id) => A.listB.includes(id))), '');
+    ok('ASSUME: before assuming, the finder did offer the man you then sent (so the check above is not vacuous)',
+      S.finder.some((f) => f.send.includes(at.sent)), `${S.finder.filter((f) => f.send.includes(at.sent)).length}`);
+    // A fresh custom trade starts from the assumed squad: its "now" box is the after chart.
+    ok('ASSUME: a fresh custom trade\'s season-as-it-stands equals the assumed after-chart (unplayed weeks)',
+      same(at.fresh.now, at.pre.mine, true),
+      JSON.stringify([at.fresh.now && at.fresh.now.map((c) => c.v), at.pre.mine && at.pre.mine.map((c) => c.v)]));
+    // And the chances start from it too: the fresh deal's "before" is the assumed trade's "after".
+    {
+      const sub = (A.rows[0] && A.rows[0].goal && A.rows[0].goal.sub) || '';
+      const afterPct = (sub.match(/→\s*([\d.]+)%/) || [])[1];
+      const freshBefore = (at.fresh.preview.match(/\(([\d.]+)%\s*→/) || [])[1];
+      ok('ASSUME: a fresh deal\'s chance "now" is the assumed trade\'s chance "after"',
+        !!afterPct && afterPct === freshBefore, JSON.stringify([sub, at.fresh.preview.slice(-80)]));
+    }
+    ok('ASSUME: it is stored, and the saved list without it',
+      at.prefs && at.prefs.assumed && at.prefs.assumed.entry && at.prefs.assumed.entry.b === Number(at.partner) &&
+        Array.isArray(at.prefs.custom) && at.prefs.custom.length === 0, JSON.stringify(at.prefs));
+    // REMOVE: back in the saved list, rosters real again.
+    ok('ASSUME REMOVE: the block goes and the trade is back in the saved list',
+      R.hidden === true && R.saved === 1 && R.assumeButtons === 1 && R.note && R.note.hidden === true,
+      JSON.stringify([R.hidden, R.saved, R.note]));
+    ok('ASSUME REMOVE: the rosters are real again',
+      R.listA.includes(at.sent) && !R.listA.includes(at.got) && R.listB.includes(at.got) && !R.listB.includes(at.sent),
+      JSON.stringify([R.listA, R.listB]));
+    ok('ASSUME REMOVE: and the finder offers the man you had sent again',
+      R.finder.some((f) => f.send.includes(at.sent)), '');
+    ok('ASSUME REMOVE: nothing is stored as assumed any more',
+      at.prefsAfter && at.prefsAfter.assumed === null && at.prefsAfter.custom.length === 1, JSON.stringify(at.prefsAfter));
+
+    // A RELOAD keeps it assumed.
+    if (at.prefs && at.prefs.assumed) {
+      const seed = JSON.stringify({ 'trade.goal': 'last', 'trade.assumed': at.prefs.assumed, 'trade.custom': [] });
+      const rl = run('assumeReload', { env: { TR_ASSUMED: seed, TR_PARTNER: at.partner } });
+      ok('ASSUME RELOAD: the scenario boots', !rl.boot, rl.boot);
+      if (!rl.boot) {
+        const P = rl.page;
+        ok('ASSUME RELOAD: no console errors', rl.errors.length === 0, rl.errors.slice(0, 2).join(' | '));
+        ok('ASSUME RELOAD: still assumed after a reload, at the top, out of the saved list',
+          P.hidden === false && P.rows.length === 1 && P.saved === 0, JSON.stringify([P.hidden, P.rows.length, P.saved]));
+        ok('ASSUME RELOAD: with the same after-chart', same(P.after, at.pre.mine),
+          JSON.stringify(P.after && P.after.map((c) => c.v)));
+        ok('ASSUME RELOAD: and the rosters assumed', P.listA.includes(at.got) && !P.listA.includes(at.sent) &&
+          P.listB.includes(at.sent), JSON.stringify([P.listA, P.listB]));
+      }
+      // A stored trade whose man has left the squad is put back, with one line why.
+      const gone = { ...at.prefs.assumed, entry: { ...at.prefs.assumed.entry, sendB: ['987654321'] } };
+      const dseed = JSON.stringify({ 'trade.goal': 'last', 'trade.assumed': gone, 'trade.custom': [] });
+      const dr = run('assumeReload', { env: { TR_ASSUMED: dseed, TR_PARTNER: at.partner } });
+      ok('ASSUME DROPPED: the scenario boots', !dr.boot, dr.boot);
+      if (!dr.boot) {
+        const P = dr.page;
+        ok('ASSUME DROPPED: a stored trade that no longer holds is not assumed',
+          P.hidden === true && P.listA.includes(at.sent) && !P.listA.includes(at.got), JSON.stringify([P.hidden, P.listA]));
+        ok('ASSUME DROPPED: it goes back to the saved list', P.saved === 1 && dr.prefs && dr.prefs.assumed === null &&
+          dr.prefs.custom.length === 1, JSON.stringify([P.saved, dr.prefs]));
+        ok('ASSUME DROPPED: and one line says why', P.dropped && P.dropped.hidden === false &&
+          /^Stopped assuming your trade with .+\. .+/.test(P.dropped.text), JSON.stringify(P.dropped));
+      }
+    }
   }
 }
 
