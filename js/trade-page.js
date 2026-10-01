@@ -83,7 +83,7 @@ import { fetchWeekRosters, fetchWeeksRosters, fetchSchedule } from './season.js'
 import * as season from './season.js';
 // The positional floor's wording, so this page says the same thing the
 // Analysis page does about an assumed number. See js/floor.js.
-import { describeFloors } from './floor.js';
+import { describeFloors, flooredValue, slotFloor } from './floor.js';
 import { slotCountsFromLineups } from './projection.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
@@ -106,7 +106,7 @@ import {
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
   depthTable, findTrades, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
-  priceTradeAcrossWeeks, bestCombo, mergeComboByPartner,
+  priceTradeAcrossWeeks, bestCombo, mergeComboByPartner, seasonLineupValue,
 } from './trade.js';
 // THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
 // forecast, the trade finder, "Who to start" and the per-week valuation all
@@ -279,6 +279,9 @@ const state = {
   // a reader peeking week 7 inline must not move the pop-up's week under him.
   customWeek: null,
   customSide: 'mine',
+  // Whose squad the two season boxes under the builder show (2026-09-30):
+  // 'mine' (the builder's left squad) or 'theirs' (the partner).
+  cuSeasonSide: 'mine',
   // THE PARTNER'S HALF of the custom box (2026-09-29) has its own week table
   // and its own slot-by-slot panel, opening on HIS lineup — but NOT its own
   // week. Tim, 2026-09-29: "it shows different numbers in different places for
@@ -7602,6 +7605,249 @@ function renderInlineHalf(host, side, priced) {
   renderDealWeek(which);
 }
 
+// ---- THE SEASON, BY WEEK, NOW AND AFTER THE TRADE -------------------------
+//
+// Tim, 2026-09-30: "because we moved the slot by slot boxes into the preview, I
+// want to replace that space with something similar, which is to have 2
+// different boxes of the season by week box that is currently in the analysis
+// section. One is an exact copy of the current season by week box, and the
+// other is a 'after the trade' season by week box. Also make two buttons above
+// these boxes: one of each user's name … Additionally, in the 'after the
+// trade' season by week box, for the week(s) that the user's play each other,
+// show the opponent proj diff right below the starting lineup sum … remember to
+// make all of the boxes before the current week in grey (not red or green)".
+//
+// THE SAME LINEUPS THE WEEK TABLE IS PRICED FROM: every column is one week out
+// of `dealSets` (played, priced and playoff spans), laid out on the league's
+// slot rows by `fillSlots` exactly as the slot-by-slot card lays them out, and
+// the Starting lineup band is the engine's own assessed total — so it is the
+// week table's "As you are now" / "With the trade" figure to the tenth. No
+// requests: all of it is `weekly.byWeek`.
+//
+// THE COLOUR IS THE ANALYSIS PAGE'S: a cell against the same slot in every
+// squad's best lineup over the weeks still to play, the Avg against the other
+// squads' Avg at that slot, a band cell against the other squads' lineups that
+// week. Both boxes use the league as it is now, so a cell means the same thing
+// in each. Played weeks are grey and in no scale and no Avg.
+
+let cuSeasonLeague = { key: null, floors: null, slots: null, val: null };
+
+/** Every squad's best lineup over the unplayed weeks, measured as Analysis measures it. */
+function cuSeasonScales(rows, weeks, regular) {
+  const key = `${sourceKey()}|${weekly.byWeek.size}|${weeks.join(',')}|${rows.map((r) => r.key).join(',')}`;
+  const L = cuSeasonLeague;
+  if (L.key === key && L.floors === state.floors && L.slots === state.slots) return L.val;
+  const teams = state.data ? state.data.teams : [];
+  const cellVals = new Map(rows.map((r) => [r.key, []]));
+  const teamAvgs = new Map(rows.map((r) => [r.key, []]));
+  const bandVals = new Map(weeks.map((w) => [w, []]));
+  const bandAvgs = [];
+  const mean = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
+  for (const team of teams) {
+    if (!weeks.length) break;
+    const fill = seasonLineupValue(team.players, state.slots, weeks, projFor, state.floors);
+    const perSlot = new Map(rows.map((r) => [r.key, []]));
+    const totals = [];
+    fill.byWeek.forEach((wk) => {
+      const slots = fillSlots(wk.starters, rows);
+      for (const row of rows) {
+        const e = slots.get(row.key) || null;
+        if (e && Number.isFinite(e.v)) cellVals.get(row.key).push(e.v);
+        if (regular.has(wk.week)) {
+          const a = cuSeasonValue(e, row);
+          if (a.value !== null) perSlot.get(row.key).push(a.value);
+        }
+      }
+      bandVals.get(wk.week).push(wk.total);
+      if (regular.has(wk.week)) totals.push(wk.total);
+    });
+    for (const row of rows) {
+      const m = mean(perSlot.get(row.key));
+      if (m !== null) teamAvgs.get(row.key).push(m);
+    }
+    const t = mean(totals);
+    if (t !== null) bandAvgs.push(t);
+  }
+  const val = {
+    cells: new Map(rows.map((r) => [r.key, heatScale(cellVals.get(r.key))])),
+    avg: new Map(rows.map((r) => [r.key, heatScale(teamAvgs.get(r.key))])),
+    band: new Map(weeks.map((w) => [w, heatScale(bandVals.get(w))])),
+    bandAvg: heatScale(bandAvgs),
+  };
+  cuSeasonLeague = { key, floors: state.floors, slots: state.slots, val };
+  return val;
+}
+
+/** A slot's assessed number: the man's, lifted to the slot's floor; an empty slot is the floor. */
+function cuSeasonValue(entry, row) {
+  if (!entry) {
+    const sf = slotFloor(row.slotId, state.floors);
+    return { value: sf ? sf.value : null, assumed: !!sf };
+  }
+  const a = flooredValue({ position: entry.p.position, projected: entry.p.projected }, state.floors, row.slotId);
+  return { value: a.value === null ? entry.v : a.value, assumed: a.assumed };
+}
+
+/** One season box: slot rows, Avg, a column a week, the Starting lineup band (and the opponent row). */
+function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsWeeks }) {
+  const firstPo = cols.find((c) => c.po);
+  const colCls = (c, base) => [
+    base, c.week === state.week ? 'now' : '', c.played ? 'played' : '', c === firstPo ? 'po-start' : '',
+  ].filter(Boolean).join(' ');
+  const head =
+    `<tr><th class="name">Slot</th><th class="grouped">Avg</th>` +
+    cols.map((c) =>
+      `<th class="${colCls(c, 'wk')}">${c.week}` +
+      (c === firstPo ? '<span class="po-tag" aria-hidden="true">PO</span>' : '') +
+      (vsWeeks.has(c.week) ? '<span class="sbw-vs" aria-hidden="true">↑</span>' : '') +
+      (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
+      (vsWeeks.has(c.week) ? '<span class="sr-only"> (you play each other)</span>' : '') +
+      `</th>`).join('') +
+    `</tr>`;
+
+  const fills = cols.map((c) => fillSlots(c[which].starters, rows));
+  const avgOf = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
+  const counted = (c) => !c.played && !c.po;
+
+  const body = rows.map((row) => {
+    const vals = [];
+    const cells = cols.map((c, i) => {
+      const e = fills[i].get(row.key) || null;
+      const a = cuSeasonValue(e, row);
+      if (counted(c) && a.value !== null) vals.push(a.value);
+      const h = c.played ? null : heatOf(a.value, scales.cells.get(row.key), { what: `a ${row.key} across the league` });
+      const zero = e && e.p.projected === 0 && !a.assumed
+        ? zeroKind(0, { week: c.week, byeWeek: byeWeekOf(e.p, state.byes), injuryStatus: e.p.injuryStatus, demo: state.isDemo })
+        : null;
+      const extra = [zero === 'bye' ? 'bye' : '', h ? h.cls : '', a.assumed ? 'assumed' : ''].filter(Boolean).join(' ');
+      const cls = colCls(c, `wk${extra ? ` ${extra}` : ''}`);
+      if (a.value === null) return `<td class="${cls} muted">—</td>`;
+      const shown = zero === 'bye' ? 'Bye' : fmt(a.value);
+      if (!e) {
+        return `<td class="${cls}" data-v="${a.value}" title="Nobody to fill ${esc(row.key)}: ` +
+          `assessed at the waiver floor.">${shown}${heatMarkHtml(h)}</td>`;
+      }
+      const inner = `${shown}${heatMarkHtml(h)}`;
+      return `<td class="${cls}" data-v="${a.value}" data-pid="${esc(e.p.playerId ?? '')}">` +
+        `<span class="sbw-man"${tipAttr(cardKey(e.p))}>${playerRef(e.p, inner)}</span></td>`;
+    });
+    const avg = avgOf(vals);
+    const ah = heatOf(avg, scales.avg.get(row.key), { what: `the other squads’ ${row.key}` });
+    return `<tr data-slot="${esc(row.key)}"><td class="name"><span class="slot-tag">${esc(row.key)}</span></td>` +
+      `<td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`}>` +
+      `${fmt(avg)}${heatMarkHtml(ah)}</td>${cells.join('')}</tr>`;
+  }).join('');
+
+  const totals = cols.map((c) => c[which].total);
+  const totalAvg = avgOf(cols.filter(counted).map((c) => c[which].total));
+  const bah = heatOf(totalAvg, scales.bandAvg, { what: 'the other squads’ lineups' });
+  const band =
+    `<tr class="split-row"><td class="name split-label">Starting lineup</td>` +
+    `<td class="avg grouped split-total${bah ? ` ${bah.cls}` : ''}"${totalAvg === null ? '' : ` data-v="${totalAvg}"`}>` +
+    `${fmt(totalAvg)}${heatMarkHtml(bah)}</td>` +
+    cols.map((c, i) => {
+      const h = c.played ? null : heatOf(totals[i], scales.band.get(c.week), {
+        what: `the other squads’ lineups in week ${c.week}`,
+      });
+      return `<td class="${colCls(c, `wk split-total${h ? ` ${h.cls}` : ''}`)}" data-wk="${c.week}" ` +
+        `data-v="${totals[i]}">${fmt(totals[i])}${heatMarkHtml(h)}</td>`;
+    }).join('') +
+    `</tr>`;
+
+  // HIS CHANGE IN THE WEEKS YOU PLAY HIM, under the band of the after box. His
+  // gain is the viewed squad's loss, so it takes the viewed squad's colours.
+  const oppRow = opp
+    ? `<tbody class="sbw-opp"><tr><td class="name">Opp. change</td><td class="avg grouped"></td>` +
+      cols.map((c) => {
+        if (!opp.has(c.week)) return `<td class="${colCls(c, 'wk')}"></td>`;
+        const d = opp.get(c.week);
+        const cls = d > 0.05 ? 'neg' : d < -0.05 ? 'pos' : '';
+        return `<td class="${colCls(c, `wk opp${cls ? ` ${cls}` : ''}`)}" data-wk="${c.week}" data-v="${d}">` +
+          `${signedText(d)}</td>`;
+      }).join('') +
+      `</tr></tbody>`
+    : '';
+
+  return `<table class="sbw-table" data-box="${which}"><thead>${head}</thead>` +
+    `<tbody>${body}</tbody><tbody class="split">${band}</tbody>${oppRow}</table>`;
+}
+
+let cuSeasonNode = null;
+function cuSeasonHost() {
+  if (!cuSeasonNode) cuSeasonNode = $('cuSeason');
+  return cuSeasonNode;
+}
+
+function renderCustomSeason() {
+  const host = cuSeasonHost();
+  if (!host) return;
+  clearRuns('sbw');
+  const offer = state.customOffer;
+  const rows = slotRows(state.slots);
+  if (!offer || !offer.partner || !weeklyReady() || !rows.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  const side = state.cuSeasonSide === 'theirs' ? 'theirs' : 'mine';
+  const sets = dealSets(offer, side);
+  const played = new Set(playedWeeks());
+  const isPo = (w) => state.poWeeks.includes(w) && !state.weeks.includes(w);
+  const cols = [];
+  for (const kind of ['past', 'span', 'po']) {
+    const set = sets[kind];
+    if (!set) continue;
+    set.byWeek.forEach((w, i) => cols.push({
+      week: w.week, played: played.has(w.week), po: isPo(w.week),
+      before: set.before.byWeek[i], after: set.after.byWeek[i],
+    }));
+  }
+  cols.sort((a, b) => a.week - b.week);
+  if (!cols.length) { host.hidden = true; host.innerHTML = ''; return; }
+
+  const live = cols.filter((c) => !c.played).map((c) => c.week);
+  const regular = new Set(live.filter((w) => !isPo(w)));
+  const scales = cuSeasonScales(rows, live, regular);
+
+  const ctx = { offer, side: 'mine' };
+  const keys = new Map();
+  const cardKey = (p) => {
+    const k = String(p.playerId ?? p.name);
+    if (!keys.has(k)) keys.set(k, registerRun(cardFor(p, ctx), 'sbw'));
+    return keys.get(k);
+  };
+
+  // The other squad's lineup change in each remaining regular-season week the
+  // two meet: his (`theirByWeek`, via `oppProjOf`) when you are shown, yours
+  // (`byWeek`) when he is.
+  const o = oppProjOf(offer);
+  const meetWeeks = o ? o.weeks : [];
+  const mineAt = new Map((offer.byWeek || []).map((w) => [w.week, w.delta]));
+  const opp = new Map(meetWeeks.map((w) => [w, side === 'mine'
+    ? (o.per.find((p) => p.week === w) || {}).delta
+    : mineAt.get(w)]).filter(([, d]) => Number.isFinite(d)));
+  const vsWeeks = new Set(meetWeeks);
+
+  const me = sideOf(offer, 'mine');
+  const nameA = me && me.team ? me.team.name : 'You';
+  const nameB = offer.partner.name;
+  const shownName = side === 'mine' ? nameA : nameB;
+  const btn = (s, name) =>
+    `<button type="button" data-sbw-side="${s}"${side === s ? ' class="on"' : ''} ` +
+    `aria-pressed="${side === s}">${esc(name)}</button>`;
+  const opts = { rows, scales, cardKey, vsWeeks };
+
+  host.hidden = false;
+  host.innerHTML =
+    `<div class="segmented sbw-who" role="group" aria-label="Whose season">` +
+    `${btn('mine', nameA)}${btn('theirs', nameB)}</div>` +
+    `<h3 class="sbw-title">Season by week · ${esc(shownName)}</h3>` +
+    `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'before', opts)}</div>` +
+    `<h3 class="sbw-title">After the trade · ${esc(shownName)}</h3>` +
+    `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'after', { ...opts, opp })}</div>` +
+    `<p class="panel-note heat-key">${heatKeyShort({ thing: 'week', what: 'the same slot across the league' })}</p>`;
+}
+
 function renderCustom() {
   syncCustomPickers();
   // PRICED ONCE PER RENDER, and the offer object is built once from it. Three
@@ -7632,6 +7878,7 @@ function renderCustom() {
   renderCustomPickers();
   renderCustomPreview(priced);
   renderCustomInline(priced);
+  renderCustomSeason();
   renderCustomSaved();
   renderCustomNote();
 }
@@ -8293,6 +8540,20 @@ try {
 } catch {
   // No matchMedia at all: `roomBesideBuilder()` already answers "no room", so
   // the pop-up route is what this browser gets, and it works everywhere.
+}
+// The season boxes under the builder: the name buttons switch whose squad both
+// boxes show, and every man in them carries his card.
+if (cuSeasonHost()) {
+  cuSeasonHost().addEventListener('click', (e) => {
+    const t = e.target;
+    const btn = t && typeof t.closest === 'function' ? t.closest('button[data-sbw-side]') : null;
+    if (!btn) return;
+    const s = btn.getAttribute('data-sbw-side');
+    if (s === state.cuSeasonSide) return;
+    state.cuSeasonSide = s;
+    renderCustomSeason();
+  });
+  wireTips(cuSeasonHost());
 }
 // And the two roster lists, whose names now carry a card of their own.
 wireTips($('cuListA'));

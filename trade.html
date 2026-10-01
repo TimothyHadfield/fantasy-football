@@ -768,6 +768,72 @@
   .cu-inline { overflow-x: auto; overscroll-behavior-x: contain; }
   .cu-inline table.weeks { width: 100%; }
 
+  /* THE TWO SEASON BOXES under the builder (2026-09-30): the Analysis page's
+     "Season by week" rules (analysis.html), scoped to `.sbw`, plus grey played
+     weeks and the ↑ on a week the two squads meet. */
+  .sbw { margin-top: 14px; }
+  .sbw .sbw-who { margin-bottom: 10px; }
+  /* The same look as `.cu-inline-title`, under its own name. */
+  .sbw-title {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 12px 0 6px;
+    font-weight: 650;
+  }
+  .sbw .sbw-scroll { margin-bottom: 4px; }
+  .sbw .slot-tag {
+    display: inline-block;
+    min-width: 42px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+  }
+  .sbw table tbody.split td,
+  .sbw table tbody tr:hover td.split-label,
+  .sbw table tbody tr:hover td.split-total {
+    background-color: var(--panel-2);
+    border-top: 2px solid var(--line-2);
+    border-bottom: 2px solid var(--line-2);
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+  .sbw table tbody.split td.name { background-color: var(--panel-2); }
+  .sbw tbody.split .split-label { font-weight: 650; letter-spacing: 0.02em; text-align: left; }
+  .sbw tbody.split .split-total { font-weight: 700; font-size: 15px; }
+  .sbw tbody.split td.wk { font-weight: 700; font-size: 13.5px; }
+  .sbw tbody.sbw-opp td.name { font-weight: 650; text-align: left; }
+  .sbw tbody.sbw-opp td.opp { font-weight: 650; }
+  .sbw-table th, .sbw-table td { white-space: nowrap; }
+  .sbw-table td.wk, .sbw-table th.wk { padding-left: 7px; padding-right: 7px; }
+  .sbw-table td.avg { font-weight: 650; color: var(--text); }
+  .sbw-table td.assumed {
+    color: var(--assumed);
+    text-decoration: underline dotted var(--assumed);
+    text-underline-offset: 3px;
+  }
+  .sbw-table td.bye { color: var(--dim); font-size: 11px; letter-spacing: 0.05em; }
+  .sbw-table td.muted { color: var(--line); }
+  .sbw-table th.now, .sbw-table td.now {
+    border-left: 1px solid var(--line-2);
+    border-right: 1px solid var(--line-2);
+  }
+  .sbw-table th.now { color: var(--text); }
+  /* Played: grey, and in no scale (Tim: "in grey (not red or green)"). */
+  .sbw-table th.played, .sbw-table td.played,
+  .sbw-table td.played a.pref { color: var(--dim); font-weight: 400; }
+  .sbw-vs { margin-left: 2px; color: var(--text); }
+  @media (max-width: 760px) {
+    .sbw-table td.wk, .sbw-table th.wk { padding-left: 5px; padding-right: 5px; }
+  }
+
   /* "You" is a label now, not a picker. It looks like the other controls' value
      without pretending to be one you can operate. */
   .cu-you-box { min-width: 240px; max-width: 100%; }
@@ -1648,6 +1714,14 @@
     <p class="panel-note heat-key" id="cuHeatKey"></p>
     <p class="panel-note bye-key" id="cuByeKey" hidden></p>
     <p class="panel-note avg-key" id="cuAvgKey" hidden></p>
+
+    <!-- THE SEASON, BY WEEK, NOW AND AFTER THE TRADE (Tim, 2026-09-30: "have 2
+         different boxes of the season by week box that is currently in the
+         analysis section … and the other is a 'after the trade' season by week
+         box. Also make two buttons above these boxes: one of each user's
+         name"). Filled by `renderCustomSeason` once a deal is ticked, from the
+         same pricing as the week tables; empty and hidden otherwise. -->
+    <div class="sbw" id="cuSeason" hidden></div>
 
     <!-- What the deal in the pickers IS — who moves which way, and over which
          weeks. The numbers are under their own squads above; this is the half

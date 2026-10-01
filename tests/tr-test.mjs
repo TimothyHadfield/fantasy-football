@@ -2614,6 +2614,112 @@ SCENARIOS.customHalves = async function customHalves() {
   };
 };
 
+/**
+ * THE TWO SEASON BOXES UNDER THE BUILDER (Tim, 2026-09-30: "have 2 different
+ * boxes of the season by week box … One is an exact copy of the current season
+ * by week box, and the other is a 'after the trade' season by week box. Also
+ * make two buttons above these boxes: one of each user's name").
+ */
+SCENARIOS.customSeason = async function customSeason() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const sec = () => $('cuSeason');
+  const before = { present: !!sec(), hidden: sec() ? !!sec().hidden : null, html: sec() ? sec().innerHTML : '' };
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  const pick = (id) => { const b = boxes(id); return b.length > 1 ? b[1] : b[0]; };
+  const vsWeeks = () => [...$('cuInline').querySelectorAll('tr[data-wk] .vs-note')]
+    .map((n) => Number(n.closest('tr').getAttribute('data-wk')));
+  const options = [...$('cuTeamB').querySelectorAll('option')].map((o) => o.value);
+  let tried = 0;
+  for (const v of options) {
+    tried += 1;
+    $('cuTeamB').value = v;
+    fire($('cuTeamB'), 'change');
+    const a = pick('cuListA'); a.checked = true; fire(a, 'change');
+    const b = pick('cuListB'); b.checked = true; fire(b, 'change');
+    if (vsWeeks().length) break;
+  }
+  await settle(500);
+  // Every week row of a week table (played, priced, playoff): its two lineups
+  // and the Difference column (his own change in HIS table).
+  const weekRows = (id) => {
+    const t = $(id) && $(id).querySelector('table.weeks');
+    if (!t) return [];
+    return [...t.querySelectorAll('tbody tr[data-wk]')]
+      .filter((tr) => tr.closest('table') === t)
+      .map((tr) => {
+        const tds = [...tr.children];
+        // A meeting week in YOUR table prints yours minus his, with your own
+        // change in `.net-sub` ("you +1.6"): that one is the squad's change.
+        const sub = tds[3].querySelector('.net-sub');
+        return {
+          week: Number(tr.getAttribute('data-wk')),
+          past: /\bpast\b/.test(tr.getAttribute('class') || ''),
+          before: num(text(tds[1])), after: num(text(tds[2])),
+          delta: sub ? num(text(sub).replace(/^you\s*/, '')) : num(text(tds[3])),
+        };
+      });
+  };
+  const box = (which) => {
+    const t = sec() && sec().querySelector(`table.sbw-table[data-box="${which}"]`);
+    if (!t) return null;
+    const heads = [...t.querySelectorAll('thead th.wk')].map((th) => ({
+      week: parseInt(text(th), 10),
+      played: /\bplayed\b/.test(th.getAttribute('class') || ''),
+      vs: /↑/.test(th.textContent),
+    }));
+    const band = [...t.querySelectorAll('tbody.split td.wk')].map((td) => ({
+      week: Number(td.getAttribute('data-wk')), v: num(text(td)),
+    }));
+    const opp = [...t.querySelectorAll('tbody.sbw-opp td.wk')].map((td, i) => ({
+      week: heads[i] ? heads[i].week : null, text: text(td),
+      v: td.getAttribute('data-v') === null ? null : Number(td.getAttribute('data-v')),
+      cls: td.getAttribute('class') || '',
+    }));
+    const oppLabel = text(t.querySelector('tbody.sbw-opp td.name'));
+    // Every week cell in a played column, slot rows and band alike.
+    const playedIdx = new Set(heads.map((h, i) => (h.played ? i : -1)).filter((i) => i >= 0));
+    const playedHeat = [];
+    const liveHeat = [];
+    for (const tr of t.querySelectorAll('tbody tr')) {
+      [...tr.querySelectorAll('td.wk')].forEach((td, i) => {
+        const c = td.getAttribute('class') || '';
+        if (playedIdx.has(i)) { if (/\bheat\b/.test(c)) playedHeat.push(c); }
+        else if (/\bheat\b/.test(c)) liveHeat.push(c);
+      });
+    }
+    return {
+      heads, band, opp, oppLabel, playedHeat, liveHeat: liveHeat.length,
+      slots: t.querySelectorAll('tbody:not(.split):not(.sbw-opp) tr').length,
+      cards: t.querySelectorAll('[data-tip]').length,
+    };
+  };
+  const view = () => ({
+    buttons: sec() ? [...sec().querySelectorAll('button[data-sbw-side]')].map((b) => ({
+      side: b.getAttribute('data-sbw-side'), text: text(b), on: b.getAttribute('aria-pressed') === 'true',
+    })) : [],
+    titles: sec() ? [...sec().querySelectorAll('h3')].map(text) : [],
+    now: box('before'), after: box('after'),
+  });
+  const A = view();
+  const nameB = text($('cuTeamB').querySelector('option[selected]') || $('cuTeamB').querySelector('option'));
+  const btnB = sec() && sec().querySelector('button[data-sbw-side="theirs"]');
+  if (btnB) fire(btnB, 'click');
+  const B = view();
+  const btnA = sec() && sec().querySelector('button[data-sbw-side="mine"]');
+  if (btnA) fire(btnA, 'click');
+  const back = view();
+  return {
+    errors, tried, before, A, B, back, nameB,
+    shown: { present: !!sec(), hidden: sec() ? !!sec().hidden : null },
+    vs: vsWeeks(),
+    weeksA: weekRows('cuInline'),
+    weeksB: weekRows('cuInlineB'),
+  };
+};
+
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
 SCENARIOS.goalLive = async function goalLive() {
   const seed = {
@@ -6542,6 +6648,94 @@ if (!ch.boot) {
     ch.weeksB && ch.weeksB.perRow && /he plays/.test(ch.weeksB.perRow.label) &&
       /chance of playing/.test(ch.weeksB.totalRow.label),
     JSON.stringify(ch.weeksB && [ch.weeksB.perRow, ch.weeksB.totalRow].map((r) => r && r.label)));
+}
+
+// ---- THE TWO SEASON BOXES UNDER THE BUILDER (2026-09-30) -------------------
+const cs = run('customSeason');
+ok('the custom-season scenario boots', !cs.boot, cs.boot);
+if (!cs.boot) {
+  ok('no console errors with the season boxes', cs.errors.length === 0, cs.errors.slice(0, 2).join(' | '));
+  ok('SEASON BOXES: nothing is shown before a deal is ticked',
+    cs.before.present && cs.before.hidden === true && cs.before.html === '', JSON.stringify(cs.before).slice(0, 200));
+  ok('SEASON BOXES: a deal is ticked and shows them', cs.shown.present && cs.shown.hidden === false,
+    JSON.stringify(cs.shown));
+  ok('SEASON BOXES: a partner you still play was found (so the opponent row is not vacuous)',
+    cs.vs.length > 0, `tried ${cs.tried}`);
+  const A = cs.A;
+  const B = cs.B;
+  ok('SEASON BOXES: two buttons, one per squad, yours pressed first',
+    A.buttons.length === 2 && A.buttons[0].on && !A.buttons[1].on && A.buttons[1].text === cs.nameB,
+    JSON.stringify(A.buttons));
+  ok('SEASON BOXES: the partner button switches both boxes to him',
+    B.buttons[1] && B.buttons[1].on && B.titles.length === 2 && B.titles.every((t) => t.endsWith(`· ${cs.nameB}`)) &&
+      !A.titles.some((t) => t.endsWith(`· ${cs.nameB}`)),
+    JSON.stringify([A.titles, B.titles]));
+  ok('SEASON BOXES: and yours switches them back',
+    JSON.stringify(cs.back.titles) === JSON.stringify(A.titles), JSON.stringify(cs.back.titles));
+  ok('SEASON BOXES: titles are "Season by week" and "After the trade"',
+    /^Season by week · /.test(A.titles[0] || '') && /^After the trade · /.test(A.titles[1] || ''),
+    JSON.stringify(A.titles));
+  ok('SEASON BOXES: both boxes have a row per starting slot and a card on the men',
+    A.now && A.after && A.now.slots >= 9 && A.now.slots === A.after.slots && A.now.cards > 0,
+    JSON.stringify(A.now && [A.now.slots, A.after.slots, A.now.cards]));
+  const drawn = !!(A.now && A.after && B.now && B.after);
+  ok('SEASON BOXES: both boxes are drawn for both squads', drawn, '');
+}
+if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
+  const A = cs.A;
+  const B = cs.B;
+
+  // The band is the week table's own figure, week for week, both squads.
+  const bandMatches = (bx, rows, key) => {
+    const at = new Map(rows.map((r) => [r.week, r[key]]));
+    const bad = bx.band.filter((c) => !at.has(c.week) || Math.abs(c.v - at.get(c.week)) > 0.1);
+    return { good: bx.band.length > 0 && bx.band.length === rows.length && bad.length === 0, bad };
+  };
+  for (const [label, v, rows] of [['yours', A, cs.weeksA], ['his', B, cs.weeksB]]) {
+    const n = bandMatches(v.now, rows, 'before');
+    ok(`SEASON BOXES: ${label} "Season by week" band = the week table's "As … now", every week`,
+      n.good, JSON.stringify({ bad: n.bad.slice(0, 3), boxWeeks: v.now.band.length, tableWeeks: rows.length }));
+    const w = bandMatches(v.after, rows, 'after');
+    ok(`SEASON BOXES: ${label} "After the trade" band = the week table's "With the trade", every week`,
+      w.good, JSON.stringify({ bad: w.bad.slice(0, 3) }));
+    ok(`SEASON BOXES: ${label} boxes differ somewhere (the after box is not a copy)`,
+      v.now.band.some((c, i) => v.after.band[i] && Math.abs(c.v - v.after.band[i].v) > 0.05), '');
+  }
+
+  // The opponent row: only in the after box, only in meeting weeks, his change.
+  const hisAt = new Map(cs.weeksB.map((r) => [r.week, r.delta]));
+  const mineAt = new Map(cs.weeksA.map((r) => [r.week, r.delta]));
+  const filled = (bx) => bx.opp.filter((c) => c.text !== '');
+  ok('SEASON BOXES: the "Season by week" box has no opponent row', A.now.opp.length === 0, '');
+  ok('SEASON BOXES: the after box has one, labelled "Opp. change"', A.after.oppLabel === 'Opp. change', A.after.oppLabel);
+  ok('SEASON BOXES: filled in exactly the remaining weeks you play him',
+    JSON.stringify(filled(A.after).map((c) => c.week)) === JSON.stringify(cs.vs),
+    JSON.stringify([filled(A.after).map((c) => c.week), cs.vs]));
+  ok('SEASON BOXES: your view shows HIS change that week (his week table’s Difference)',
+    filled(A.after).length > 0 && filled(A.after).every((c) => Math.abs(num(c.text) - hisAt.get(c.week)) < 0.051),
+    JSON.stringify(filled(A.after).map((c) => [c.week, c.text, hisAt.get(c.week)])));
+  ok('SEASON BOXES: his view shows YOUR change that week',
+    filled(B.after).length === filled(A.after).length &&
+      filled(B.after).every((c) => Math.abs(num(c.text) - mineAt.get(c.week)) < 0.051),
+    JSON.stringify(filled(B.after).map((c) => [c.week, c.text, mineAt.get(c.week)])));
+  ok('SEASON BOXES: his gain is red in your view, and the other way round',
+    filled(A.after).every((c) => (c.v > 0.05 ? /\bneg\b/.test(c.cls) : c.v < -0.05 ? /\bpos\b/.test(c.cls) : true)),
+    JSON.stringify(filled(A.after).map((c) => [c.v, c.cls])));
+  ok('SEASON BOXES: the meeting weeks carry the ↑ in the column head',
+    JSON.stringify(A.after.heads.filter((h) => h.vs).map((h) => h.week)) === JSON.stringify(cs.vs), '');
+
+  // Played weeks: grey, no heat, in both boxes and both squads.
+  const pastWeeks = cs.weeksA.filter((r) => r.past).map((r) => r.week);
+  for (const [label, bx] of [['now', A.now], ['after', A.after], ['his now', B.now], ['his after', B.after]]) {
+    ok(`SEASON BOXES (${label}): the played columns are the week table's played weeks`,
+      pastWeeks.length > 0 &&
+        JSON.stringify(bx.heads.filter((h) => h.played).map((h) => h.week)) === JSON.stringify(pastWeeks),
+      JSON.stringify([bx.heads.filter((h) => h.played).map((h) => h.week), pastWeeks]));
+    ok(`SEASON BOXES (${label}): no played cell carries the red/green scale`,
+      bx.playedHeat.length === 0, bx.playedHeat.slice(0, 3).join(' | '));
+    ok(`SEASON BOXES (${label}): the weeks still to play do (so the check above is not vacuous)`,
+      bx.liveHeat > 0, '');
+  }
 }
 
 // ---- STAGED RANKING (trade plan Phase 2, 2026-09-24) -----------------------
