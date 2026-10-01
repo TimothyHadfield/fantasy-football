@@ -144,6 +144,9 @@
     },
     "test-accept-by.mjs": {
       "assertions": 24
+    },
+    "test-trade-cut.mjs": {
+      "assertions": 1625
     }
   }
 }
