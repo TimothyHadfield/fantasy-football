@@ -282,6 +282,7 @@ const state = {
   // Whose squad the two season boxes under the builder show (2026-09-30):
   // 'mine' (the builder's left squad) or 'theirs' (the partner).
   cuSeasonSide: 'mine',
+  cuSeasonView: 'total',      // the after box: 'total' or 'diff' (after − before)
   // THE PARTNER'S HALF of the custom box (2026-09-29) has its own week table
   // and its own slot-by-slot panel, opening on HIS lineup — but NOT its own
   // week. Tim, 2026-09-29: "it shows different numbers in different places for
@@ -7689,7 +7690,7 @@ function cuSeasonValue(entry, row) {
 }
 
 /** One season box: slot rows, Avg, a column a week, the Starting lineup band (and the opponent row). */
-function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsWeeks }) {
+function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsWeeks, diff = false }) {
   const firstPo = cols.find((c) => c.po);
   const colCls = (c, base) => [
     base, c.week === state.week ? 'now' : '', c.played ? 'played' : '', c === firstPo ? 'po-start' : '',
@@ -7709,7 +7710,13 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
   const avgOf = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
   const counted = (c) => !c.played && !c.po;
 
-  const body = rows.map((row) => {
+  // DIFFERENCE VIEW (Tim, 2026-09-30: "the difference shows the difference of
+  // each cell from it's corresponding cell in the current season by week box …
+  // including the starting lineup sum cells"). Every cell is after − before,
+  // the same assessed numbers the two boxes print, so it is their subtraction
+  // to the tenth. Green up, red down, as the slot-by-slot card colours its own
+  // Difference; played weeks stay grey.
+  const body = diff ? cuSeasonDiffBody(cols, rows, fills, cardKey, colCls, avgOf, counted) : rows.map((row) => {
     const vals = [];
     const cells = cols.map((c, i) => {
       const e = fills[i].get(row.key) || null;
@@ -7741,7 +7748,7 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
   const totals = cols.map((c) => c[which].total);
   const totalAvg = avgOf(cols.filter(counted).map((c) => c[which].total));
   const bah = heatOf(totalAvg, scales.bandAvg, { what: 'the other squads’ lineups' });
-  const band =
+  const band = diff ? cuSeasonDiffBand(cols, colCls, avgOf, counted) :
     `<tr class="split-row"><td class="name split-label">Starting lineup</td>` +
     `<td class="avg grouped split-total${bah ? ` ${bah.cls}` : ''}"${totalAvg === null ? '' : ` data-v="${totalAvg}"`}>` +
     `${fmt(totalAvg)}${heatMarkHtml(bah)}</td>` +
@@ -7768,8 +7775,61 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
       `</tr></tbody>`
     : '';
 
-  return `<table class="sbw-table" data-box="${which}"><thead>${head}</thead>` +
+  return `<table class="sbw-table" data-box="${which}"${diff ? ' data-view="diff"' : ''}><thead>${head}</thead>` +
     `<tbody>${body}</tbody><tbody class="split">${band}</tbody>${oppRow}</table>`;
+}
+
+/** A difference cell's colour: green up, red down, nothing for no change; grey when played. */
+function cuDiffCls(c, d, colCls, base) {
+  const dir = c.played || d === null ? '' : d > 0.05 ? ' d-up' : d < -0.05 ? ' d-down' : ' d-zero';
+  return colCls(c, `${base}${dir}`);
+}
+
+const cuRound1 = (n) => Math.round(n * 10) / 10;
+
+/** The after box's slot rows as after − before, cell for cell. */
+function cuSeasonDiffBody(cols, rows, afterFills, cardKey, colCls, avgOf, counted) {
+  const beforeFills = cols.map((c) => fillSlots(c.before.starters, rows));
+  return rows.map((row) => {
+    const aVals = [];
+    const bVals = [];
+    const cells = cols.map((c, i) => {
+      const e = afterFills[i].get(row.key) || null;
+      const a = cuSeasonValue(e, row).value;
+      const b = cuSeasonValue(beforeFills[i].get(row.key) || null, row).value;
+      if (counted(c) && a !== null && b !== null) { aVals.push(a); bVals.push(b); }
+      const d = a === null || b === null ? null : cuRound1(cuRound1(a) - cuRound1(b));
+      const cls = cuDiffCls(c, d, colCls, 'wk');
+      if (d === null) return `<td class="${cls} muted">—</td>`;
+      const inner = signedText(d);
+      if (!e) return `<td class="${cls}" data-v="${d}">${inner}</td>`;
+      return `<td class="${cls}" data-v="${d}" data-pid="${esc(e.p.playerId ?? '')}">` +
+        `<span class="sbw-man"${tipAttr(cardKey(e.p))}>${playerRef(e.p, inner)}</span></td>`;
+    });
+    const aAvg = avgOf(aVals);
+    const bAvg = avgOf(bVals);
+    const dAvg = aAvg === null || bAvg === null ? null : cuRound1(aAvg - bAvg);
+    const avgCls = dAvg === null ? '' : dAvg > 0.05 ? ' d-up' : dAvg < -0.05 ? ' d-down' : ' d-zero';
+    return `<tr data-slot="${esc(row.key)}"><td class="name"><span class="slot-tag">${esc(row.key)}</span></td>` +
+      `<td class="avg grouped${avgCls}"${dAvg === null ? '' : ` data-v="${dAvg}"`}>${signedText(dAvg)}</td>` +
+      `${cells.join('')}</tr>`;
+  }).join('');
+}
+
+/** The Starting lineup band as after − before. */
+function cuSeasonDiffBand(cols, colCls, avgOf, counted) {
+  const aAvg = avgOf(cols.filter(counted).map((c) => c.after.total));
+  const bAvg = avgOf(cols.filter(counted).map((c) => c.before.total));
+  const dAvg = aAvg === null || bAvg === null ? null : cuRound1(aAvg - bAvg);
+  const avgCls = dAvg === null ? '' : dAvg > 0.05 ? ' d-up' : dAvg < -0.05 ? ' d-down' : ' d-zero';
+  return `<tr class="split-row"><td class="name split-label">Starting lineup</td>` +
+    `<td class="avg grouped split-total${avgCls}"${dAvg === null ? '' : ` data-v="${dAvg}"`}>${signedText(dAvg)}</td>` +
+    cols.map((c) => {
+      const d = cuRound1(cuRound1(c.after.total) - cuRound1(c.before.total));
+      return `<td class="${cuDiffCls(c, d, colCls, 'wk split-total')}" data-wk="${c.week}" data-v="${d}">` +
+        `${signedText(d)}</td>`;
+    }).join('') +
+    `</tr>`;
 }
 
 let cuSeasonNode = null;
@@ -7836,6 +7896,11 @@ function renderCustomSeason() {
     `<button type="button" data-sbw-side="${s}"${side === s ? ' class="on"' : ''} ` +
     `aria-pressed="${side === s}">${esc(name)}</button>`;
   const opts = { rows, scales, cardKey, vsWeeks };
+  // TOTAL OR DIFFERENCE, for the after box only (Tim, 2026-09-30).
+  const view = state.cuSeasonView === 'diff' ? 'diff' : 'total';
+  const viewBtn = (v, label) =>
+    `<button type="button" data-sbw-view="${v}"${view === v ? ' class="on"' : ''} ` +
+    `aria-pressed="${view === v}">${label}</button>`;
 
   host.hidden = false;
   host.innerHTML =
@@ -7843,8 +7908,10 @@ function renderCustomSeason() {
     `${btn('mine', nameA)}${btn('theirs', nameB)}</div>` +
     `<h3 class="sbw-title">Season by week · ${esc(shownName)}</h3>` +
     `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'before', opts)}</div>` +
-    `<h3 class="sbw-title">After the trade · ${esc(shownName)}</h3>` +
-    `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'after', { ...opts, opp })}</div>` +
+    `<div class="sbw-after-head"><h3 class="sbw-title">After the trade · ${esc(shownName)}</h3>` +
+    `<div class="segmented sbw-view" role="group" aria-label="After-the-trade numbers">` +
+    `${viewBtn('total', 'Total')}${viewBtn('diff', 'Difference')}</div></div>` +
+    `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'after', { ...opts, opp, diff: view === 'diff' })}</div>` +
     `<p class="panel-note heat-key">${heatKeyShort({ thing: 'week', what: 'the same slot across the league' })}</p>`;
 }
 
@@ -8546,6 +8613,12 @@ try {
 if (cuSeasonHost()) {
   cuSeasonHost().addEventListener('click', (e) => {
     const t = e.target;
+    const viewBtn = t && typeof t.closest === 'function' ? t.closest('button[data-sbw-view]') : null;
+    if (viewBtn) {
+      const v = viewBtn.getAttribute('data-sbw-view');
+      if (v !== state.cuSeasonView) { state.cuSeasonView = v; renderCustomSeason(); }
+      return;
+    }
     const btn = t && typeof t.closest === 'function' ? t.closest('button[data-sbw-side]') : null;
     if (!btn) return;
     const s = btn.getAttribute('data-sbw-side');

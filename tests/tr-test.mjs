@@ -2711,8 +2711,39 @@ SCENARIOS.customSeason = async function customSeason() {
   const btnA = sec() && sec().querySelector('button[data-sbw-side="mine"]');
   if (btnA) fire(btnA, 'click');
   const back = view();
+  // TOTAL / DIFFERENCE on the after box (Tim, 2026-09-30): every cell, the
+  // band and the Avg column included, read as {v (data-v), text, cls}.
+  const grid = (which) => {
+    const t = sec() && sec().querySelector(`table.sbw-table[data-box="${which}"]`);
+    if (!t) return null;
+    return [...t.querySelectorAll('tbody:not(.sbw-opp) tr')].map((tr) =>
+      [...tr.querySelectorAll('td.avg, td.wk')].map((td) => ({
+        v: td.getAttribute('data-v') === null ? null : Number(td.getAttribute('data-v')),
+        text: text(td), cls: td.getAttribute('class') || '',
+      })));
+  };
+  const viewBtns = () => (sec() ? [...sec().querySelectorAll('button[data-sbw-view]')].map((b) => ({
+    view: b.getAttribute('data-sbw-view'), text: text(b), on: b.getAttribute('aria-pressed') === 'true',
+  })) : []);
+  const diffView = { buttonsAtFirst: viewBtns(), nowGrid: grid('before'), totalGrid: grid('after') };
+  const dBtn = sec() && sec().querySelector('button[data-sbw-view="diff"]');
+  if (dBtn) fire(dBtn, 'click');
+  diffView.buttonsDiff = viewBtns();
+  diffView.diffGrid = grid('after');
+  diffView.nowAfterDiff = grid('before');
+  diffView.diffAttr = !!(sec() && sec().querySelector('table.sbw-table[data-box="after"][data-view="diff"]'));
+  // His side keeps the view.
+  const bB = sec() && sec().querySelector('button[data-sbw-side="theirs"]');
+  if (bB) fire(bB, 'click');
+  diffView.hisNow = grid('before');
+  diffView.hisDiff = grid('after');
+  const bA = sec() && sec().querySelector('button[data-sbw-side="mine"]');
+  if (bA) fire(bA, 'click');
+  const tBtn = sec() && sec().querySelector('button[data-sbw-view="total"]');
+  if (tBtn) fire(tBtn, 'click');
+  diffView.totalAgain = grid('after');
   return {
-    errors, tried, before, A, B, back, nameB,
+    errors, tried, before, A, B, back, nameB, diffView,
     shown: { present: !!sec(), hidden: sec() ? !!sec().hidden : null },
     vs: vsWeeks(),
     weeksA: weekRows('cuInline'),
@@ -6663,6 +6694,52 @@ if (!cs.boot) {
     cs.vs.length > 0, `tried ${cs.tried}`);
   const A = cs.A;
   const B = cs.B;
+  {
+    const D = cs.diffView || {};
+    ok('SEASON DIFF: the after box has Total and Difference buttons, Total pressed first',
+      JSON.stringify((D.buttonsAtFirst || []).map((b) => [b.text, b.on])) === '[["Total",true],["Difference",false]]',
+      JSON.stringify(D.buttonsAtFirst));
+    ok('SEASON DIFF: Difference presses its own button and marks the table',
+      JSON.stringify((D.buttonsDiff || []).map((b) => b.on)) === '[false,true]' && D.diffAttr === true,
+      JSON.stringify(D.buttonsDiff));
+    // Every cell, band and Avg included: after − before, to the tenth, as printed.
+    const r1 = (n) => Math.round(n * 10) / 10;
+    const check = (now, total, diff) => {
+      const bad = [];
+      let n = 0;
+      if (!now || !total || !diff || now.length !== diff.length) return { n, bad: ['shape'] };
+      diff.forEach((row, i) => row.forEach((c, j) => {
+        const b = now[i][j];
+        const a = total ? total[i][j] : null;
+        if (!b || b.v === null || !a || a.v === null) return;
+        n += 1;
+        const want = r1(r1(a.v) - r1(b.v));
+        const shown = c.text.replace(/[▲▼]/g, '').trim();
+        const wantText = (want > 0 ? '+' : want < 0 ? '−' : '') + Math.abs(want).toFixed(1);
+        if (c.v === null || Math.abs(c.v - want) > 0.001 || shown !== wantText) bad.push({ i, j, a: a.v, b: b.v, got: c.text });
+      }));
+      return { n, bad };
+    };
+    const mine = check(D.nowGrid, D.totalGrid, D.diffGrid);
+    ok('SEASON DIFF: every cell is after minus before, the band and Avg included (yours)',
+      mine.n > 50 && mine.bad.length === 0, `${mine.n} cells; ${JSON.stringify(mine.bad.slice(0, 3))}`);
+    ok('SEASON DIFF: the band row is in it',
+      D.diffGrid && D.diffGrid.length === (D.nowGrid || []).length, JSON.stringify((D.diffGrid || []).length));
+    ok('SEASON DIFF: the now box is untouched by the switch',
+      JSON.stringify(D.nowGrid) === JSON.stringify(D.nowAfterDiff), 'now box changed');
+    ok('SEASON DIFF: played weeks stay grey, live ones are green up / red down',
+      (D.diffGrid || []).every((row) => row.every((c) =>
+        /\bplayed\b/.test(c.cls) ? !/\bd-(up|down)\b|\bheat\b/.test(c.cls)
+          : c.v === null || (c.v > 0.05 ? /\bd-up\b/.test(c.cls) : c.v < -0.05 ? /\bd-down\b/.test(c.cls) : !/\bd-(up|down)\b/.test(c.cls)))) &&
+        (D.diffGrid || []).some((row) => row.some((c) => /\bd-(up|down)\b/.test(c.cls))),
+      JSON.stringify((D.diffGrid || [])[0]).slice(0, 300));
+    ok('SEASON DIFF: Total brings the totals back',
+      JSON.stringify(D.totalAgain) === JSON.stringify(D.totalGrid), 'total grid differs after switching back');
+    ok('SEASON DIFF: on his side too, the view is kept and is his after minus his now',
+      D.hisDiff && D.hisNow && JSON.stringify(D.hisNow) !== JSON.stringify(D.nowGrid) &&
+        D.hisDiff.every((row) => row.every((c) => c.v === null || /^[+−]?\d+\.\d$/.test(c.text.replace(/[▲▼]/g, '').trim()))),
+      JSON.stringify((D.hisDiff || [])[0]).slice(0, 200));
+  }
   ok('SEASON BOXES: two buttons, one per squad, yours pressed first',
     A.buttons.length === 2 && A.buttons[0].on && !A.buttons[1].on && A.buttons[1].text === cs.nameB,
     JSON.stringify(A.buttons));
