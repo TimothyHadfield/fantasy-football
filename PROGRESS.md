@@ -154,6 +154,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - D3 · 2026-09-21 · P(yes) = logistic(((his lineup Δ/wk + ESPN-look Δ/wk)/2 + 3)/1.5): 98% at +3, 88% even, 50% at −3, 12% at −6. The one judgement; unvalidated.
 - D4 · 2026-09-21 · Title goal prices playoff weeks in `weeklySpan()`; "last" goal = regular season only (pLast is regular-season table).
 - D5 · 2026-09-21 (branch) · Candidates by week weights (+10 pts per week, ÷10, mean 1, floor 5%); settled goal → null weights → points.
+- 2026-09-30 · Forced cut (man over the roster limit) = whoever costs the after-trade lineups fewest points over the priced weeks, tie → lower ROS (was: lowest ROS, which cut bye-week backup D/STs). aa9a2b3, tests/test-trade-cut.mjs.
 - D6 · 2026-09-21 · Older tr-test scenarios pinned to goal "last" rather than rewritten.
 - D7 · 2026-09-20 · Per-player per-week average = mean over weeks projecting > 0 (Tim reversed the null-in-divisor rule).
 - D8 · 2026-09-19 · Floor rank 3; Proj avg is the lineup week by week; Trade page prices itself on load; store.js.
