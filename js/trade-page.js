@@ -3198,10 +3198,16 @@ function offerRow(offer, i, key, opts = {}) {
         ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
         : `${signedText(his.gain)}${theirs.mark}`}</td>` +
     (showOpp ? oppCellHtml(offer) : '') +
-    `<td class="left espn">${espnCell(offer)}${open}</td>` +
-    tail +
-    // "Ask AI", always the LAST cell (Tim, 2026-09-30). See `askAiCellHtml`.
-    askAiCellHtml(offer, { myGainShown: showMyGain }) +
+    // "Ask AI" (Tim, 2026-09-30), STACKED with the row's other buttons (Tim,
+    // 2026-10-01: "stack the "assume" "remove" and "ask" buttons on the right so
+    // that they are vertical and you don't need to horizontally scroll on a
+    // laptop"): at the foot of the last cell's stack — under Assume / Remove on
+    // a saved row, under ESPN / Week by week everywhere else. No column of its own.
+    (tail
+      ? `<td class="left espn">${espnCell(offer)}${open}</td>` +
+        tail.replace(/<\/td>\s*$/, `${askAiButtonHtml(offer, { myGainShown: showMyGain })}</td>`)
+      : `<td class="left espn">${espnCell(offer)}${open}` +
+        `${askAiButtonHtml(offer, { myGainShown: showMyGain })}</td>`) +
     `</tr>`
   );
 }
@@ -3244,13 +3250,13 @@ const ASK_FAIL = 'Failed';
 const ASK_OFFERS = new Map();
 let askSeq = 0;
 
-/** The last cell of every offer row. `myGainShown` is whether the row prints You gain. */
-function askAiCellHtml(offer, { myGainShown = true } = {}) {
+/** The button at the foot of every offer row's last cell. `myGainShown` is whether the row prints You gain. */
+function askAiButtonHtml(offer, { myGainShown = true } = {}) {
   const key = `a${askSeq++}`;
   // `real`: drawn on the real rosters (the assumed trade's own row), so its
   // text is built there too.
   ASK_OFFERS.set(key, { offer, myGainShown, real: realWorld });
-  return `<td class="ask"><button type="button" class="ask-ai" data-ask-ai="${key}">${ASK_LABEL}</button></td>`;
+  return `<button type="button" class="ask-ai" data-ask-ai="${key}">${ASK_LABEL}</button>`;
 }
 
 /** "QB, 2 RB, 2 WR, TE, FLEX, D/ST, K" off the league's own slots. */
@@ -6170,7 +6176,6 @@ function comboTableHtml(rows, from, id) {
     // His own side, like He gains: each manager's figure is his squad's alone.
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
-    `<th></th>` +
     `</tr></thead><tbody>` +
     rowsHtml +
     `</tbody></table></div>` +
@@ -7836,8 +7841,8 @@ function renderCustomSaved() {
   // opened, which is right: there is nothing to open.
   state.customRows = offers;
 
-  // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, remove, ask AI
-  const cols = 12;
+  // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, assume/remove/ask AI
+  const cols = 11;
   $('cuThGoal').textContent = `Δ ${CHANCE_SHORT[state.goal]}`;
   $('cuThAltGoal').textContent = `Δ ${CHANCE_SHORT[otherGoal()]}`;
   $('cuRows').innerHTML = rows.map((entry, i) => {
@@ -7849,12 +7854,11 @@ function renderCustomSaved() {
       const b = teamById(entry.b);
       return (
         `<tr data-cu="${i}" class="cu-broken">` +
-        `<td class="name" colspan="${cols - 2}">` +
+        `<td class="name" colspan="${cols - 1}">` +
         `${esc(a ? a.name : 'A squad')} ⇄ ${esc(b ? b.name : 'a squad')}` +
         `<span class="sub">${esc(priced[i].error)}</span></td>` +
-        drop +
         // No Ask AI: there is no priced deal to describe.
-        `<td class="ask"></td>` +
+        drop +
         `</tr>`
       );
     }

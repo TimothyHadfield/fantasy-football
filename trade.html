@@ -955,9 +955,21 @@
   }
   .cu-drop:hover { color: var(--err); border-color: var(--err); }
   /* ASSUME (2026-09-30): beside Remove on a saved row. */
-  .cu-drop.cu-assume { margin-right: 4px; }
   .cu-drop.cu-assume:hover { color: var(--accent); border-color: var(--accent); }
   #assumedTable td.cu-remove { white-space: nowrap; }
+  /* STACKED (Tim, 2026-10-01): Assume, Remove and Ask AI one above the other,
+     one width, so the saved table fits a laptop without scrolling sideways. */
+  td.cu-remove .cu-drop, td.cu-remove .ask-ai {
+    display: block;
+    width: 6.4em;
+    margin: 0 0 4px auto;
+    text-align: center;
+  }
+  /* Under ESPN / Week by week, it reads as the next pill in that stack. */
+  td.espn .ask-ai { margin-top: 6px; }
+  /* The column heads may wrap ("You gain a week (weeks 2–16)" was the widest
+     thing in its column), so the rows decide the widths, not the labels. */
+  #tradeTable thead th, table.offers thead th { white-space: normal; }
   /* The assumed block is a div (it is not one of the page's panels), drawn
      exactly as app.css draws `section.panel`. */
   #assumedPanel {
@@ -1553,7 +1565,6 @@
         <th data-sort id="thTheirGain">He gains</th>
         <th data-sort id="thOpp">His proj vs you</th>
         <th class="left">ESPN</th>
-        <th></th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -1810,7 +1821,6 @@
         <th>He gains</th>
         <th>His proj vs you</th>
         <th class="left">ESPN</th>
-        <th></th>
         <th></th>
       </tr></thead>
       <tbody id="cuRows"></tbody>

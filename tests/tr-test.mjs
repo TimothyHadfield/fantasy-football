@@ -1266,10 +1266,14 @@ const SCENARIOS = {
     out.savedRows = readOfferRows($('cuTable'));
     out.savedHeads = [...$('cuTable').querySelectorAll('thead th')].map(text);
     out.savedRemove = $('cuRows').querySelectorAll('button[data-drop]').length;
+    // The saved row's LAST cell and the buttons stacked in it, top to bottom
+    // (Tim, 2026-10-01: Assume, Remove and Ask AI stacked in one column).
     out.savedLastTwo = (() => {
       const tr = $('cuRows').querySelector('tr');
-      const tds = tr ? [...tr.children] : [];
-      return tds.slice(-2).map((td) => td.getAttribute('class') || '').join('|');
+      const last = tr ? tr.children[tr.children.length - 1] : null;
+      if (!last) return '';
+      return (last.getAttribute('class') || '') + ':' +
+        [...last.querySelectorAll('button')].map(text).join('/');
     })();
     out.savedKey = text($('cuTableKey'));
     out.wrapShown = !$('cuWrap').hidden;
@@ -3687,7 +3691,7 @@ for (const noApi of [false, true]) {
     ok('the combo tables have no Deal column', ai.comboHeads.length > 0 && ai.comboHeads.every((h) => !h.includes('Deal')),
       JSON.stringify(ai.comboHeads));
     ok('nor the saved custom trades', !ai.cuHeads.includes('Deal'), ai.cuHeads.join(' | '));
-    ok('the finder head has one cell per row cell (the Ask AI column is headed)', ai.headCellsMatchRow === true,
+    ok('the finder head has one cell per row cell (Ask AI has no column of its own)', ai.headCellsMatchRow === true,
       `${ai.finderHeads.length} heads`);
     ok('every finder row: no Deal cell, one "Ask AI", and it is the LAST cell',
       ai.finder.length > 0 && ai.finder.every((r) => !r.hasDeal && r.n === 1 && r.lastAsk === 'Ask AI'),
@@ -6831,8 +6835,8 @@ if (!live.boot) {
       r.partner.length > 0, r.partner);
     // No Deal column since 2026-09-30 (Tim: "just remove the "deal" column"),
     // and "Ask AI" on the end, after Remove.
-    ok('it has no Deal cell and ends in "Ask AI", after Remove',
-      !r.hasDeal && r.lastAsk === 'Ask AI' && r.askButtons === 1 && cu.savedLastTwo === 'cu-remove|ask',
+    ok('it has no Deal cell; Assume, Remove and "Ask AI" stacked in its last cell',
+      !r.hasDeal && r.lastAsk === 'Ask AI' && r.askButtons === 1 && cu.savedLastTwo === 'cu-remove:Assume/Remove/Ask AI',
       `${r.hasDeal} ${r.lastAsk} ${r.askButtons} ${cu.savedLastTwo}`);
     ok('it lists the men each way, with a card and a link on every one',
       r.send.length + r.receive.length >= 2 &&
