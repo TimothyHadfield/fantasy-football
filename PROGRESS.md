@@ -127,6 +127,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 19. **A tie is a display grouping on top of a strict sort, never a sort key.** `TIE_BAND` (0.4 pp, measured) marks rows against their GROUP'S LEADER, not the row above — chaining put 39 of 40 offers in one "1=" group spanning 2.17 points. Widening `compareByGoal`'s `EPS` to the band is forbidden: the comparator turns intransitive and the points search silently gets the top row back (breaks rule 18 and D1). Two assertions pin this.
 
 ## Traps
+- Tim's league (476225250, private) has a **1-day trade review period** (Tim, 2026-09-30, from the league rules). Accept by kickoff of the earliest received player − 24 h.
 - `css/app.css` `.pending` is a whole notice banner; a cell with class `pending` draws one. Goal cell uses `goal-wait`.
 - A `background` shorthand on a td/tr erases the heat tint (`background-image`) — fixed 2026-09-21; `heat-draw-check.mjs` fails on any new one in app.css.
 - `textContent` in tests reads sr-only text too — read visible and sr-only separately.
