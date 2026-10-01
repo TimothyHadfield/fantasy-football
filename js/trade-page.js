@@ -2828,7 +2828,10 @@ function offerRow(offer, i, key, opts = {}) {
   };
   // HIS side over the weeks he will play (trade plan Phase 3) — see `hisSideOf`.
   const his = hisSideOf(offer);
-  const mine = heatCell(offer.myGain, myScale, 'what these offers gain you');
+  // YOUR GAIN IS NETTED (2026-09-30): his change in the weeks he plays you
+  // comes off it — see `netGainOf`. "Your lineup, a week" stays your own.
+  const myNet = netGainOf(offer);
+  const mine = heatCell(myNet, myScale, 'what these offers gain you');
   const theirs = heatCell(his.gain, theirScale, 'what these offers gain the other manager');
 
   // THE SIGN, ON THE TWO GAIN CELLS. Both cells used to be written `pos`
@@ -2893,8 +2896,8 @@ function offerRow(offer, i, key, opts = {}) {
         `</td>`
       : '') +
     (showMyGain
-      ? `<td class="gain${signOf(offer.myGain)}${mine.cls}" data-v="${offer.myGain}"${mine.title}>` +
-        `${gain(offer.myGain, mine.mark)}</td>`
+      ? `<td class="gain${signOf(myNet)}${mine.cls}" data-v="${myNet}"${mine.title}>` +
+        `${gain(myNet, mine.mark)}</td>`
       : '') +
     `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-v="${his.gain}"${theirs.title}>` +
       `${weeks && Number.isFinite(his.gain)
@@ -2920,7 +2923,7 @@ function offerRow(offer, i, key, opts = {}) {
  */
 function gainScales(rows) {
   return {
-    myScale: heatScale(rows.map((o) => o.myGain)),
+    myScale: heatScale(rows.map(netGainOf)),
     theirScale: heatScale(rows.map((o) => hisSideOf(o).gain)),
   };
 }
@@ -3445,8 +3448,8 @@ function extraColumnsHtml() {
     `rank by it. ` +
     `<strong>His proj vs you</strong> is how much his starting lineup changes, with the deal, in the ` +
     `regular-season week(s) left in which he plays you — his plus is your red. A playoff meeting is ` +
-    `not known in advance, so it is not counted. Both chance columns already include it; You gain, ` +
-    `He gains and which deals are found do not.` +
+    `not known in advance, so it is not counted. Both chance columns, You gain and which deals are ` +
+    `found include it; He gains does not.` +
     BYE_EXPLAIN +
     trendExplainHtml() +
     `<br><br>`
@@ -3760,6 +3763,10 @@ function runSearch({ keepDeal = false } = {}) {
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
       // the yes-chance all read this — the base run, so it costs nothing.
       theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
+      // NETTED (Tim, 2026-09-30): a deal is kept and ranked by your change
+      // minus his in the regular-season weeks left in which he plays you —
+      // the same weeks "His proj vs you" adds up.
+      meetWeeks: weeks ? meetWeeksOf(state.myTeamId) : null,
     });
     if (token !== runSearch.token) return;
     // Whether this search had the goal to work with — even when the weights
@@ -3982,7 +3989,7 @@ function runGoalRank() {
     for (const o of offers) o.goalUnranked = false;
     // A NEW ARRAY, not a sort in place: the combo panel may be holding the old
     // one, and its own order is its own business.
-    search.offers = offers.slice().sort(compareByGoal);
+    search.offers = offers.slice().sort(compareByGoalNet);
     search.goalRanked = true;
     markTies(search.offers);
     // The preview of the other goal follows, after the ranked column is done —
@@ -4011,9 +4018,19 @@ function runGoalRank() {
  */
 const GOAL_STAGE = 10;
 
+/**
+ * `compareByGoal` with its last key — the points that order deals the
+ * simulation cannot tell apart — read as the NETTED gain the row prints
+ * (2026-09-30), so a settled goal leaves the list in the finder's own order.
+ */
+function compareByGoalNet(a, b) {
+  const view = (o) => ({ goalScore: o.goalScore, myGain: netGainOf(o) });
+  return compareByGoal(view(a), view(b));
+}
+
 function stageGoalRank(search, offers, scored) {
   const r = state.goalRank;
-  const top = offers.slice(0, scored).sort(compareByGoal);
+  const top = offers.slice(0, scored).sort(compareByGoalNet);
   markTies(top);
   const rest = offers.slice(scored);
   // Marked as a group, not by "has no score yet": a row scored after this
@@ -4448,12 +4465,15 @@ function refreshAltCells() {
 //
 // THE CHANCE COLUMNS ALREADY COUNT IT. A deal reaches the season simulation as
 // BOTH squads' per-week changes (`offerDeltas`, D2), so in the week the partner
-// plays you his changed lineup is what you are simulated against. What did not
-// see it: the points columns (You gain / He gains are each squad's own lineup)
-// and the candidate search, whose goal weights price only YOUR weeks. This
-// column makes the figure visible: his lineup change, from the row's own
+// plays you his changed lineup is what you are simulated against. This column
+// makes the figure visible: his lineup change, from the row's own
 // `theirByWeek`, over the regular-season week(s) left in which you meet him.
 // A playoff meeting is not known in advance, so it is not counted.
+//
+// SINCE 2026-09-30 YOU GAIN IS NETTED BY IT (Tim: "add the change in opponent
+// proj to the total +/- gain"): `netGainOf` below, and the finder keeps and
+// ranks on the same figure (js/trade.js `meetWeeks`). He gains is still his
+// own lineup, and the simulation still gets the raw changes (no double count).
 
 /** `{weeks, sum, per}` for one deal; `sum` null when you do not meet again; null when unpriced. */
 function oppProjOf(offer) {
@@ -4468,8 +4488,35 @@ function oppProjOf(offer) {
   return { weeks, sum, per };
 }
 
+/**
+ * YOUR GAIN, NETTED (Tim, 2026-09-30: "add the change in opponent proj to the
+ * total +/- gain used to calculate the +/week for each player"). Your lineup's
+ * change over the span minus his in the weeks he plays you — his +2 in a week
+ * he faces you is your −2. Read off the deal's own `myGain` and `oppProjOf`, so
+ * the row, the pop-up and the custom box print one figure; the finder ranks by
+ * the same (js/trade.js `meetWeeks`). A whole packing carries its own
+ * (`netGain`, every manager in it against the weeks you play him).
+ */
+function netGainOf(offer) {
+  if (!offer) return null;
+  if (offer.combined) return Number.isFinite(offer.netGain) ? offer.netGain : offer.myGain;
+  if (!Number.isFinite(offer.myGain)) return offer.myGain;
+  const o = oppProjOf(offer);
+  return o && o.sum !== null ? Math.round((offer.myGain - o.sum) * 10) / 10 : offer.myGain;
+}
+
+/** The weeks you still play a squad in the regular season — the finder's `meetWeeks`. */
+function meetWeeksOf(myId) {
+  return (partnerId) => meetingWeeksAhead({ pair: { a: myId, b: partnerId } }).weeks;
+}
+
 /** The week table's meeting-week marks for one deal: `{vs, vsName}`, or nothing. */
 function vsOptsOf(offer) {
+  // A whole packing: each week you play one of its managers carries HIS change
+  // (`wholeComboOffer`), named per week.
+  if (offer && offer.combined) {
+    return offer.vs && offer.vs.size ? { vs: offer.vs, vsName: offer.vsNames } : {};
+  }
   const o = oppProjOf(offer);
   if (!o || !o.per.length) return {};
   return { vs: new Map(o.per.map((p) => [p.week, p.delta])), vsName: offer.partner.name };
@@ -4577,7 +4624,9 @@ function weekTableHtml(
     const r = reachOf(week);
     return r < 0.9995 ? `<span class="reach-note">plays ${Math.round(r * 100)}%</span>` : '';
   };
-  const vsOf = (week) => (vs && vs.has(week) ? vsNoteHtml(vs.get(week), vsName, vsText) : '');
+  // `vsName` is one name, or (a whole packing) week -> the manager you play.
+  const vsNameAt = (week) => (vsName instanceof Map ? vsName.get(week) || '' : vsName);
+  const vsOf = (week) => (vs && vs.has(week) ? vsNoteHtml(vs.get(week), vsNameAt(week), vsText) : '');
   // PLAYED WEEKS: above a line, in plain text, and in no total. Tim, 2026-09-16:
   // "draw a line below the previous weeks ... and turn all the numbers above it
   // white (not red or green) to show it's not in the calculation." No up/down
@@ -4621,8 +4670,8 @@ function weekTableHtml(
   // difference … i get +5.6 … my opponent gets -5.4 … so overall my difference
   // is +11.0"). Only in YOUR table (`vsText` null: `vs` holds HIS change); his
   // own table already is his change. The two lineup columns stay each squad's
-  // own, so that row's cell says "you +x" under it. The totals are left as your
-  // lineup alone — the same figure the finder's "You gain" prints.
+  // own, so that row's cell says "you +x" under it. Since 2026-09-30 the totals
+  // are netted too (below) — the same figure the finder's "You gain" prints.
   const net = !!vs && vsText === null;
   const shownOf = (w) => (net && vs.has(w.week) && Number.isFinite(vs.get(w.week)) &&
       Math.abs(vs.get(w.week)) >= 0.05
@@ -4660,6 +4709,15 @@ function weekTableHtml(
   const afterTotal = byWeek.reduce((a, w) => a + reachOf(w.week) * w.after, 0);
   if (weighted) total = byWeek.reduce((a, w) => a + reachOf(w.week) * w.delta, 0);
   const n = (weighted ? byWeek.reduce((a, w) => a + reachOf(w.week), 0) : byWeek.length) || 1;
+  // AND SO ARE THE TOTALS (Tim, 2026-09-30: "add the change in opponent proj
+  // to the total +/- gain"): your change minus his in the weeks marked ↑ —
+  // the finder's "You gain" (`netGainOf`). The lineup columns stay your own
+  // lineup, so the netted total says "you +x" under it, as a netted week does.
+  const own = total;
+  const oppIn = net ? byWeek.reduce((a, w) => a + (shownOf(w) !== w.delta ? vs.get(w.week) : 0), 0) : 0;
+  const nettedTotal = net && Math.abs(oppIn) >= 0.05;
+  if (nettedTotal) total = Math.round((total - oppIn) * 10) / 10;
+  const ownSub = (v) => (nettedTotal ? `<span class="net-sub">you ${signedText(v)}</span>` : '');
 
   // THE PLAYOFF WEEKS: after the totals, below a line, uncoloured — each side's
   // best lineup that week, for reference. Tim has not decided whether a trade
@@ -4674,14 +4732,16 @@ function weekTableHtml(
     // Per week FIRST, the total under it — Tim's order for every figure here.
     `<tr class="total"><td class="name">${weighted ? 'Per week he plays' : 'Per week'}</td>` +
     `<td>${fmt(beforeTotal / n)}</td><td>${fmt(afterTotal / n)}</td>` +
-    `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total / n)}</td></tr>` +
+    `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}${nettedTotal ? ' netted' : ''}">` +
+    `${signedText(total / n)}${ownSub(own / n)}</td></tr>` +
     `<tr class="total sub-row"><td class="name">` +
     (weighted
       ? `All weeks, by his chance of playing`
       : `All ${plural(byWeek.length, 'week')}${past.length ? ' left' : ''}`) +
     `</td>` +
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
-    `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}">${signedText(total)}</td></tr>` +
+    `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}${nettedTotal ? ' netted' : ''}">` +
+    `${signedText(total)}${ownSub(own)}</td></tr>` +
     poBlock +
     `</tbody></table>` +
     // Channel 4, in view under the table it describes. In POINTS, so a reader
@@ -4703,7 +4763,7 @@ function weekTableHtml(
 
 /** Rule 16's one sentence for the netted meeting week. */
 const NET_KEY = 'In a week marked ↑ you play him, so Difference is your change minus his; ' +
-  'the totals are your lineup alone.';
+  'the totals count it too.';
 
 /** The playoff rows and the line above them, or nothing. */
 function playoffTableRows(playoff) {
@@ -5833,8 +5893,10 @@ function comboBlockHtml(entry, rows, from, id, allIndex, { heading = '', lead = 
   return (
     (heading ? `<h3>${esc(heading)}</h3>` : '') +
     (lead ? `<p>${lead}</p>` : '') +
-    `<div class="combo-head"><span class="big">${signedText(perWeekOf(entry.delta))}</span> a week ` +
-    `<span class="sub-inline">(${signedText(entry.delta)} total over ${weekRange(span)})</span> from ` +
+    // NETTED (2026-09-30): each manager's change in the weeks you play him is
+    // off it (`netDelta`); "Your lineup, a week" below is your own lineup.
+    `<div class="combo-head"><span class="big">${signedText(perWeekOf(netOfEntry(entry)))}</span> a week ` +
+    `<span class="sub-inline">(${signedText(netOfEntry(entry))} total over ${weekRange(span)})</span> from ` +
     `<strong>${plural(entry.count, 'trade')}</strong>` +
     (rows.length && rows.length < entry.count
       ? ` — sent as ${plural(rows.length, 'offer')}, because two of them are with one manager`
@@ -5985,7 +6047,24 @@ function altInlineHtml(s) {
  * is the one number the rows deliberately do NOT add up to — the whole slate,
  * priced once, week by week.
  */
+/** A packing's gain, netted (`bestCombo`'s `netDelta`), or its own lineup's when unnetted. */
+function netOfEntry(entry) {
+  return Number.isFinite(entry.netDelta) ? entry.netDelta : entry.delta;
+}
+
 function wholeComboOffer(entry, label) {
+  // Each week you play one of its managers: HIS change that week, and his name,
+  // so the pop-up nets those weeks the way a single deal's does.
+  const vs = new Map();
+  const vsNames = new Map();
+  for (const p of entry.partners || []) {
+    for (const wk of p.meetWeeks || []) {
+      const row = (p.byWeek || []).find((r) => r.week === wk);
+      if (!row || !Number.isFinite(row.delta)) continue;
+      vs.set(wk, row.delta);
+      vsNames.set(wk, p.partner ? p.partner.name : '');
+    }
+  }
   return {
     combined: true,
     label,
@@ -5996,6 +6075,9 @@ function wholeComboOffer(entry, label) {
     shape: `${entry.count}-trade combination`,
     basis: 'weeks',
     myGain: entry.delta,
+    netGain: netOfEntry(entry),
+    vs,
+    vsNames,
     myBefore: entry.pricing ? entry.pricing.before.total : null,
     myAfter: entry.pricing ? entry.pricing.after.total : null,
     yourChurn: entry.pricing ? entry.pricing.churn : null,
@@ -6089,11 +6171,11 @@ function renderCombo() {
 
   const naive =
     `Adding the offers’ own gains would have given ${weeklyPhrase(best.naiveDelta)}. ` +
-    `Together they are actually worth ${weeklyPhrase(best.delta)}` +
-    (best.delta < best.naiveDelta
+    `Together they are actually worth ${weeklyPhrase(netOfEntry(best))}` +
+    (netOfEntry(best) < best.naiveDelta
       ? ` — <em>less</em>, because two upgrades compete for the same lineup places and only the ` +
         `better of them can start.`
-      : best.delta > best.naiveDelta
+      : netOfEntry(best) > best.naiveDelta
         ? ` — <em>more</em>, because the men one deal sends away are the ones another deal makes ` +
           `surplus, so the roster carries fewer passengers.`
         : `, which is a coincidence rather than a rule.`);
@@ -6114,8 +6196,8 @@ function renderCombo() {
           lead:
             `<strong>${plural(most.count, 'trade')}</strong> instead of ` +
             `<strong>${plural(best.count, 'trade')}</strong>, worth ` +
-            `${weeklyPhrase(most.delta)} rather than ${weeklyPhrase(best.delta)} — ` +
-            (most.delta < best.delta ? 'more deals, fewer points' : 'more deals, no fewer points') +
+            `${weeklyPhrase(netOfEntry(most))} rather than ${weeklyPhrase(netOfEntry(best))} — ` +
+            (netOfEntry(most) < netOfEntry(best) ? 'more deals, fewer points' : 'more deals, no fewer points') +
             `, so the packing above is the one to make.`,
         }) +
         `</div>`);
@@ -6286,6 +6368,9 @@ function runCombo() {
       // And the same tolerance for a partner's loss that let those offers into
       // the finder — the headline's yes-chance is what marks them down.
       partnerMin: state.search && state.search.weighted ? THEIR_MIN_PER_WEEK * weeklySpan().length : 0,
+      // Netted the same way as the finder: each manager's change in the weeks
+      // you play HIM comes off your side (`netDelta`, and what is chosen by).
+      meetWeeks: meetWeeksOf(state.myTeamId),
     });
 
     // Merged here, once per search, and not in the renderer: each merged offer
@@ -7351,7 +7436,9 @@ function renderCustomPreview(priced) {
   }
   $('cuSave').disabled = false;
   $('cuOpen').disabled = false;
-  $('cuGainA').innerHTML = customGainHtml(priced.forA.delta);
+  // Your side NETTED by his change in the weeks you play him (`netGainOf`), as
+  // every finder row is; his side is his own lineup, as He gains is.
+  $('cuGainA').innerHTML = customGainHtml(netGainOf(customOffer(state.custom, priced)));
   $('cuGainB').innerHTML = customGainHtml(priced.forB.delta);
   // The sentence above them is now about the DEAL rather than about the
   // numbers: who moves which way, which the two columns cannot say between

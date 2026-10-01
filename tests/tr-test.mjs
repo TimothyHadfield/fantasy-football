@@ -358,6 +358,17 @@ function readOfferRows(table) {
       // first, the total underneath", and the ▲ is a separate claim read below.
       gainText: textNoMark(gain),
       myGain: gain ? Number(gain.getAttribute('data-v')) : NaN,
+      // YOU GAIN IS NET (2026-09-30, Tim: "add the change in opponent proj to
+      // the total +/- gain"). `myGain` is the cell as shown: your change minus
+      // his change in the week(s) you play him. `ownGain` puts his change back,
+      // i.e. your lineup alone, which is the engine's raw `myGain`.
+      ownGain: (() => {
+        if (!gain) return NaN;
+        const v = Number(gain.getAttribute('data-v'));
+        const o = cell('opp-proj');
+        const s = o && o.hasAttribute('data-v') && o.getAttribute('data-v') !== '' ? Number(o.getAttribute('data-v')) : 0;
+        return Math.round((v + s) * 10) / 10;
+      })(),
       theirGain: their ? Number(their.getAttribute('data-v')) : NaN,
       // THE GOAL CELL (2026-09-21): the headline change, the "before → after ·
       // N% yes" line under it, and `data-v` — the expected change, the rank key.
@@ -796,6 +807,7 @@ function readCombo(document) {
     // Each row's two sides, as ESPN ids, so the whole packing can be re-priced
     // from the engine rather than read back off the page that printed it.
     perTrade: rows.map((r) => ({
+      partner: r.partner,
       send: r.send.map((m) => m.id).filter((v) => v !== null),
       receive: r.receive.map((m) => m.id).filter((v) => v !== null),
     })),
@@ -2234,7 +2246,11 @@ SCENARIOS.weekPeek = async function weekPeek() {
 
   // A PLAIN MOUSE CLICK ON ANOTHER OFFER still opens that offer — the whole of
   // "a mouse click behaves as before".
-  const other = trades.findIndex((t) => t.partner !== 'Cy');
+  // Another manager's deal if the finder keeps one, else another Cy deal: since
+  // the net gain (2026-09-30) the stub's Bo deals can all fall away, since Ana
+  // plays Bo nearly every week and whatever helps him costs her then.
+  let other = trades.findIndex((t) => t.partner !== 'Cy');
+  if (other < 0) other = trades.findIndex((t, i) => i !== idx);
   await openOffer(other);
   const afterOtherClick = {
     title: text(document.getElementById('dealTitle')),
@@ -2402,6 +2418,20 @@ SCENARIOS.byeMark = async function byeMark() {
     const shut = document.querySelector('#dealClose, [data-close]');
     if (shut) click(shut);
   }
+  // The custom box with Bo first (whom Ana plays nearly every week), then Cy.
+  // Since the net gain (2026-09-30) the finder may offer no Bo deal at all —
+  // every deal that helps Bo costs Ana in the nine weeks she plays him — so the
+  // multi-week tooltip is read here, where it does not depend on the finder.
+  const boOpt = [...$('cuTeamB').options].find((o) => /^Bo\b/.test(o.textContent.trim()));
+  let listABo = [];
+  let cuKeyBo = '';
+  if (boOpt) {
+    $('cuTeamB').value = boOpt.value;
+    fire($('cuTeamB'), 'change');
+    await settle(500);
+    listABo = readByeMarks($('cuListA'));
+    cuKeyBo = text($('cuByeKey'));
+  }
   // The custom box, with Cy as the partner and nothing ticked yet.
   $('cuTeamB').value = '3';
   fire($('cuTeamB'), 'change');
@@ -2423,7 +2453,7 @@ SCENARIOS.byeMark = async function byeMark() {
   click($('cuSave'));
   await settle(1500);
   const saved = readByeMarks($('cuTable'));
-  return { errors, finder, combo, finderKey, note, deal, dealKey, listA, listB, cuKey, saved };
+  return { errors, finder, combo, finderKey, note, deal, dealKey, listA, listB, cuKey, saved, listABo, cuKeyBo };
 };
 
 /**
@@ -2773,6 +2803,8 @@ SCENARIOS.customHalves = async function customHalves() {
     weeksA: $('cuInline') ? readWeekTable($('cuInline')) : null,
     weeksB: B ? readWeekTable(B) : null,
     titleB: text(B && B.querySelector('.cu-inline-title')),
+    // The builder's own "You gain" total, the "+11.0 over weeks …" line.
+    cuGainA: text($('cuGainA') && $('cuGainA').querySelector('.cu-sub')),
   };
 };
 
@@ -3828,7 +3860,10 @@ async function rederiveHis(page, rowList, goal) {
     const sum = meet.length
       ? Math.round(his.byWeek.filter((w) => meet.includes(w.week)).reduce((a, w) => a + w.delta, 0) * 10) / 10
       : null;
-    return { meet, sum, byWeek: his.byWeek };
+    // YOUR side over the same span, so the row's net You gain can be rebuilt.
+    const me = base.teams.find((t) => t.id === myId);
+    const mine = me ? priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor }).delta : NaN;
+    return { meet, sum, byWeek: his.byWeek, mine };
   });
 }
 
@@ -3871,7 +3906,27 @@ async function repriceCombo(week, teamId, perTrade) {
     for (const id of t.send) send.push(byId.get(id) || id);
     for (const id of t.receive) if (byId.get(id)) receive.push(byId.get(id));
   }
-  return priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor });
+  const mine = priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor });
+  // NET (2026-09-30): minus each partner's own change in the regular-season
+  // week(s) of the span in which you play him, priced from his side alone.
+  const { generateDemoLeague } = await import(moduleUrl('js/demo.js'));
+  const games = generateDemoLeague().games;
+  let opp = 0;
+  for (const t of perTrade) {
+    const partner = base.teams.find((x) => x.name === t.partner);
+    if (!partner) return { ...mine, net: NaN };
+    const meet = new Set(games
+      .filter((g) => (g.homeId === me.id && g.awayId === partner.id) || (g.homeId === partner.id && g.awayId === me.id))
+      .map((g) => g.week));
+    const his = priceTradeAcrossWeeks({
+      players: partner.players,
+      send: t.receive.map((id) => byId.get(id)).filter(Boolean),
+      receive: t.send.map((id) => byId.get(id)).filter(Boolean),
+      slots, weeks: span, projFor,
+    });
+    opp += his.byWeek.filter((w) => meet.has(w.week)).reduce((a, w) => a + w.delta, 0);
+  }
+  return { ...mine, net: Math.round((mine.delta - opp) * 10) / 10 };
 }
 
 /**
@@ -4297,9 +4352,11 @@ if (!wk.boot) {
     ok('and each row IS after minus before',
       rows.every((r) => Math.abs((r.after - r.before) - r.delta) <= 0.051),
       JSON.stringify(rows.slice(0, 3)));
-    ok('and the total matches the gain the finder advertised',
-      Math.abs(totalRow.delta - wk.dealRowGain) <= 0.2,
-      `deal ${totalRow.delta} vs the row it was opened on ${wk.dealRowGain}`);
+    // NET SINCE 2026-09-30: the row's You gain and the total as SHOWN are both
+    // your change minus his in the week(s) you play him; `delta` stays yours.
+    ok('and the total matches the gain the finder advertised (both net)',
+      Math.abs(totalRow.shown - wk.dealRowGain) <= 0.2,
+      `deal ${totalRow.shown} (yours ${totalRow.delta}) vs the row it was opened on ${wk.dealRowGain}`);
     ok('the per-week average is shown as well as the total',
       wk.deal.weeks.totals.length === 2 && wk.deal.weeks.perRow &&
       Math.abs(wk.deal.weeks.perRow.delta - totalRow.delta / rows.length) <= 0.06,
@@ -4395,11 +4452,15 @@ if (!wk.boot) {
   const headPer = num(combo.head.split(' ')[0]);
   ok('the combo headline leads with the PER-WEEK figure',
     !!priced && /^[+−]?\d[\d.]* a week/.test(combo.head) &&
-      Math.abs(headPer - priced.delta / demoSpan(wk.week).length) <= 0.06,
-    `${combo.head.slice(0, 80)} vs ${priced && (priced.delta / demoSpan(wk.week).length).toFixed(2)}`);
-  ok('the combo headline survives an independent re-pricing of the same move',
-    priced && Math.abs(priced.delta - claimed) <= 0.15,
-    `page says ${claimed}, a fresh priceTradeAcrossWeeks says ${priced && priced.delta}`);
+      Math.abs(headPer - priced.net / demoSpan(wk.week).length) <= 0.06,
+    `${combo.head.slice(0, 80)} vs ${priced && (priced.net / demoSpan(wk.week).length).toFixed(2)}`);
+  // NET since 2026-09-30: your change minus each partner's in the weeks you play him.
+  ok('the combo headline survives an independent re-pricing of the same move (net)',
+    priced && Math.abs(priced.net - claimed) <= 0.15,
+    `page says ${claimed}, a fresh priceTradeAcrossWeeks says ${priced && priced.net} net (${priced && priced.delta} yours)`);
+  ok('and the net really differs from your own change here, so the check bites',
+    priced && Math.abs(priced.net - priced.delta) > 0.15,
+    `${priced && priced.net} vs ${priced && priced.delta}`);
   // The naive figure the page prints must BE the sum of the offers' own gains
   // — otherwise the warning beside it is decoration — and the real answer must
   // differ from it, which is the whole reason the warning exists.
@@ -5484,12 +5545,17 @@ if (!live.boot) {
     ok(`${k}: and no key on the pop-up or the custom box`, !r.cuKey && !r.dealKey,
       JSON.stringify([r.cuKey, r.dealKey]));
   }
+  const BO_WORDS = 'Bye in week 9, one of the weeks you play Bo (5, 6, 7, 9, 10, 11, 12, 13, 14)';
   const bo = (offWeek.finder || []).filter((x) => /^Bo\b/.test(x.partner));
   const boSent = men(bo, 'send');
-  ok('Bo: every man you send him, off in week 9 (a week you play Bo), is on green', every(boSent, green) &&
-    boSent.every((m) => m.title === 'Bye in week 9, one of the weeks you play Bo (5, 6, 7, 9, 10, 11, 12, 13, 14)'),
-    dump(boSent));
-  ok('and the finder key is there for them', /green/i.test(offWeek.finderKey), offWeek.finderKey);
+  ok('Bo: every Bo deal the finder keeps marks the men you send, off in week 9, on green',
+    boSent.every((m) => green(m) && m.title === BO_WORDS), dump(boSent));
+  ok('and the finder key is there exactly when such a man is shown',
+    /green/i.test(offWeek.finderKey) === boSent.length > 0, `${boSent.length} · ${offWeek.finderKey}`);
+  ok('Bo, custom box: your men off in week 9 (a week you play Bo) are on green, the tooltip naming every week',
+    every(offWeek.listABo, (m) => plain(m) || (green(m) && m.title === BO_WORDS)) &&
+      offWeek.listABo.some(green), dump(offWeek.listABo));
+  ok('and the custom box key is there for them', /green/i.test(offWeek.cuKeyBo), offWeek.cuKeyBo);
   ok('already played: no finder key at all', !past.finderKey, past.finderKey);
 }
 
@@ -6078,7 +6144,7 @@ if (!live.boot) {
 
     // ---- and a plain mouse click still opens an offer ----------------------
     ok('a mouse click on another offer still opens that offer',
-      peek.afterOtherClick.title.includes(peek.afterOtherClick.partner),
+      !!peek.afterOtherClick.partner && peek.afterOtherClick.title.includes(peek.afterOtherClick.partner),
       `${peek.afterOtherClick.title} for ${peek.afterOtherClick.partner}`);
     // Re-aimed with V17: not "no week", but ITS OWN opening week — never the
     // week last picked on the other deal.
@@ -6979,10 +7045,19 @@ if (!ch.boot) {
       aw.filter((r) => !/his/.test(r.vs)).every((r) => !r.netted && r.shown === r.delta), '');
     ok('NET WEEK: his own table is not netted',
       bw.every((r) => !r.netted), '');
-    ok('NET WEEK: the totals stay your lineup alone (the sum of your own changes)',
-      ch.weeksA && ch.weeksA.totalRow &&
-        Math.abs(ch.weeksA.totalRow.delta - aw.reduce((a, r) => a + r.delta, 0)) <= 0.1 + 0.006 * aw.length,
-      JSON.stringify(ch.weeksA && ch.weeksA.totalRow));
+    // NET TOTALS (2026-09-30, Tim: "add the change in opponent proj to the
+    // total +/- gain"): the total as shown is the sum of the netted weeks, and
+    // your own lineup's sum stays under it ("you ±x").
+    const tot = ch.weeksA && ch.weeksA.totalRow;
+    ok('NET WEEK: the total is the sum of the weeks as shown (net), your own change under it',
+      !!tot && tot.netted &&
+        Math.abs(tot.shown - aw.reduce((a, r) => a + r.shown, 0)) <= 0.1 + 0.006 * aw.length &&
+        Math.abs(tot.delta - aw.reduce((a, r) => a + r.delta, 0)) <= 0.1 + 0.006 * aw.length,
+      JSON.stringify(tot));
+    const cuTotal = num((ch.cuGainA.match(/^([+−-]?[\d.]+)/) || [])[1] || 'NaN');
+    ok('NET WEEK: and the builder’s You gain is that same net total, to the tenth',
+      !!tot && Math.abs(cuTotal - tot.shown) <= 0.051 && Math.abs(cuTotal - tot.delta) > 0.05,
+      `builder ${ch.cuGainA} · table ${tot && tot.shown} (yours ${tot && tot.delta})`);
   }
   const want = bw.reduce((a, r) => a + r.reach * r.delta, 0);
   const tol = 0.1 + 0.006 * bw.reduce((a, r) => a + Math.abs(r.delta), 0);
@@ -7303,6 +7378,14 @@ if (!gl.boot) {
     ok('the sample league has rows that meet you again — or the check is vacuous',
       his.some((h) => h.sum !== null), his.map((h) => h.meet.join('+')).join(' '));
     console.log(`twoGoals: ${his.filter((h) => h.sum === null).length} of ${his.length} rows never meet you again (—)`);
+    // NET (2026-09-30, Tim: "add the change in opponent proj to the total +/-
+    // gain"): You gain = your own change minus his in the weeks you play him,
+    // rebuilt from the engine; a partner you never meet again nets to nothing.
+    ok('NET: every row’s You gain is your own change minus his column, from the engine',
+      A.trades.every((t, i) => Math.abs(t.myGain - (his[i].mine - (his[i].sum ?? 0))) <= 0.15),
+      A.trades.map((t, i) => `${t.partner}: page ${t.myGain} vs ${his[i].mine.toFixed(1)} − ${his[i].sum}`).slice(0, 6).join(' | '));
+    ok('NET: and some row really moves by it (the check bites)',
+      his.some((h) => h.sum !== null && Math.abs(h.sum) > 0.15), his.map((h) => h.sum).join(' '));
     ok('his gain is YOUR red and his loss your green',
       A.trades.every((t) => (t.opp || NA).v === null ? (t.opp || NA).sign === ''
         : (t.opp || NA).v > 0.05 ? (t.opp || NA).sign === 'neg' : (t.opp || NA).v < -0.05 ? (t.opp || NA).sign === 'pos' : (t.opp || NA).sign === ''),

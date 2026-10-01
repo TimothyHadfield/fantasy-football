@@ -720,7 +720,20 @@ function tradesWith(myScored, theirScored, theirs, slots, kinds) {
  * points otherwise — so every caller that passes no weights is untouched.
  */
 const rankGain = (o) => (Number.isFinite(o.rank) ? o.rank
-  : Number.isFinite(o.goalPoints) ? o.goalPoints : o.myGain);
+  : Number.isFinite(o.goalPoints) ? o.goalPoints
+    : Number.isFinite(o.netGain) ? o.netGain : o.myGain);
+
+/**
+ * The indices into `weeks` of the week numbers in `list`, ascending, each once —
+ * or null when there are none. How `meetWeeks` reaches the per-partner search.
+ */
+function meetIndices(weeks, list) {
+  if (!Array.isArray(weeks) || !Array.isArray(list) || !list.length) return null;
+  const want = new Set(list.map(Number));
+  const out = [];
+  weeks.forEach((w, i) => { if (want.has(Number(w))) out.push(i); });
+  return out.length ? out : null;
+}
 
 function bestPerTarget(offers) {
   const best = new Map();
@@ -815,12 +828,22 @@ function dropRedundant(offers) {
  *   kept its forty by YOUR gain alone and every one of them was a fleece at
  *   the edge of the partner tolerance — the fair deals that expected value
  *   prefers had been cut before the simulation ever saw them.
+ * @param {function} [opts.meetWeeks] `(partnerId) -> number[]|null`: the WEEK
+ *   NUMBERS (not indices) in which you play that partner and that count — the
+ *   page passes the remaining regular-season meetings. With it every offer is
+ *   NETTED (Tim, 2026-09-30): his lineup change in a week he plays you is your
+ *   loss, so `netGain` = `myGain` − his change in those weeks, and the offer is
+ *   kept and ranked on the net (`goalPoints` is the weighted net). Weeks not in
+ *   `weeks` are ignored. Weekly measure only; omitted, nothing changes.
+ * @param {boolean} [opts.exhaustive] TESTS ONLY: switch every ceiling off, so
+ *   a suite can prove the pruned search keeps exactly what a full one keeps.
  * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
 export function findTrades({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
   weeks = null, projFor = null, zeroIsBye = true, floors = null,
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
+  meetWeeks = null, exhaustive = false,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -848,7 +871,9 @@ export function findTrades({
               theirReach: (() => {
                 const r = typeof theirReach === 'function' ? theirReach(theirs.id) : null;
                 return Array.isArray(r) && r.length === weeks.length ? r : null;
-              })() }
+              })(),
+              meet: meetIndices(weeks, typeof meetWeeks === 'function' ? meetWeeks(theirs.id) : null),
+              exhaustive: !!exhaustive }
           )
         : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
@@ -1403,9 +1428,74 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   // What each of my packages is worth to HIM at the very most. Still a ceiling
   // with `reach`: the gifted roster fields at least as much in every week, and
   // every reach is ≥ 0.
+  const prune = !options.exhaustive;
   const ceilingForThem = myPackages.map((send) =>
     theirOf(totalAcrossWeeks(theirScored.concat(send), slots, n, floors))
   );
+
+  // THE WEEKS YOU PLAY HIM, NETTED (Tim, 2026-09-30: "add the change in
+  // opponent proj to the total +/- gain"). `meet` holds the indices of the
+  // priced weeks in which this partner is your opponent; his lineup change in
+  // each of them is your loss, so the figure an offer is KEPT and RANKED by is
+  //   net = Σ w·(your change) − Σ_meet w·(his change)
+  // (w = 1 without goal weights; his change rounded to the tenth, exactly as
+  // `theirByWeek` prints it, so the page's "His proj vs you" adds up to it).
+  // `myGain`, `byWeek` and `theirByWeek` stay RAW — the season simulation plays
+  // both squads' own changes (D2) and would count his twice otherwise.
+  const meet = Array.isArray(options.meet) && options.meet.length ? options.meet : null;
+  const wAt = (i) => (w ? w[i] : 1);
+  const oppOf = (theirWeekTotals) => {
+    let s = 0;
+    let weighted = 0;
+    for (const i of meet) {
+      const d = round1(theirWeekTotals[i] - theirBase.weekTotals[i]);
+      s += d;
+      weighted += wAt(i) * d;
+    }
+    return { sum: round1(s), weighted };
+  };
+  // THE CEILING ON WHAT NETTING CAN ADD. Netting can make a deal worth MORE
+  // to you than your own lineup gain — he gets weaker in the week he plays
+  // you — so the gifted ceiling below is no longer a ceiling on the net, and
+  // pruning on it alone would silently drop deals. What it adds is at most
+  // Σ_meet w·(his week before − the least his week can be after the deal).
+  //
+  // The least it can be: he keeps his roster minus what he sends you, plus
+  // what you send him, minus at most ONE forced cut — and only when you send
+  // more men than you take (two for one; MAX_PACKAGE caps the overshoot at
+  // one). With no cut his after roster CONTAINS (his − sent), so a week is at
+  // least that roster's best. With the cut it contains (his − sent − one
+  // man), so a week is at least the worst of those removals — whichever man
+  // the season-long cut picks, which is chosen on ALL the priced weeks and so
+  // can be the one this week needs most. Both bounds lean on the gifted
+  // ceiling's own premise: a best lineup over a subset never beats the
+  // superset's. tests/test-trade-net.mjs proves the pruned search keeps the
+  // exact set an unpruned one keeps, floors on and off.
+  //
+  // `NET_SLACK` covers the rounding of the netted figure (each meeting week
+  // rounded to a tenth on its own), so a bound is never beaten by a hair.
+  const NET_SLACK = meet ? 0.05 * (meet.length + 2) : 0;
+  const meetCeilings = (receive) => {
+    if (!meet) return { noCut: 0, cut: 0 };
+    const taken = new Set(receive.map((p) => p.playerId));
+    const left = theirScored.filter((p) => !taken.has(p.playerId));
+    let noCut = 0;
+    let cut = 0;
+    for (const i of meet) {
+      const base = solveWeek(left, i, cutCtx);
+      let least = base.total;
+      // A cut is only possible if I can send more than I take.
+      if (receive.length < MAX_PACKAGE) {
+        for (const id of base.ids) {
+          const t = solveWeek(left.filter((p) => p.playerId !== id), i, cutCtx).total;
+          if (t < least) least = t;
+        }
+      }
+      noCut += wAt(i) * (theirBase.weekTotals[i] - base.total);
+      cut += wAt(i) * (theirBase.weekTotals[i] - least);
+    }
+    return { noCut, cut };
+  };
 
   const found = [];
   // Receive is the outer loop now, so a package that cannot help me at all
@@ -1418,12 +1508,14 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
     const giftedCeiling = w
       ? weigh(gifted.byWeek.map((x) => x.total), myBase.weekTotals)
       : round1(gifted.total - myBase.total);
-    if (giftedCeiling < minGain) continue;
+    const extra = meetCeilings(receive);
+    const extraMax = Math.max(extra.noCut, extra.cut);
+    if (prune && giftedCeiling + extraMax + NET_SLACK < minGain) continue;
     const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
 
     for (let k = 0; k < myPackages.length; k++) {
       const send = myPackages[k];
-      if (ceilingForThem[k] < theirMin) continue;
+      if (prune && ceilingForThem[k] < theirMin) continue;
       if (send.length === 2 && receive.length === 2 &&
           !twoForTwoAllowed(send, receive, myTop, theirTop)) continue;
 
@@ -1460,8 +1552,12 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
       }
       const myAfter = { total: round1(total), weekTotals };
       const myGain = round1(myAfter.total - myBase.total);
-      const goalPoints = w ? weigh(weekTotals, myBase.weekTotals) : null;
-      if ((w ? goalPoints : myGain) < minGain) continue;
+      const myGoal = w ? weigh(weekTotals, myBase.weekTotals) : null;
+      // Your own side, plus the most netting could still add for this shape
+      // (a cut on his side only when you send more than you take).
+      const mineOnly = w ? myGoal : myGain;
+      const canAdd = send.length > receive.length ? extra.cut : extra.noCut;
+      if (prune && mineOnly + canAdd + NET_SLACK < minGain) continue;
 
       const takenIds = receive.map((p) => p.playerId);
       const hisCut = afterTrade(theirScored, receive, send, cutCtx,
@@ -1474,6 +1570,11 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
         theirTotal += theirWeekTotals[i];
       }
       const theirAfter = { total: round1(theirTotal), weekTotals: theirWeekTotals };
+      // Netted: his change in the weeks he plays you comes off your side.
+      const opp = meet ? oppOf(theirWeekTotals) : null;
+      const netGain = opp ? round1(myGain - opp.sum) : myGain;
+      const goalPoints = w ? (opp ? round1(myGoal - opp.weighted) : myGoal) : null;
+      if ((w ? goalPoints : netGain) < minGain) continue;
       const theirGain = theirOf(theirAfter);
       if (theirGain < theirMin) continue;
 
@@ -1490,11 +1591,22 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
         shape: `${send.length}-for-${receive.length}`,
         basis: 'weeks',
         weeks: weeks.slice(),
+        // YOUR LINEUP's change over the span — raw, his side not in it.
         myGain,
+        // NETTED (2026-09-30): `myGain` minus his lineup change in the weeks
+        // he plays you (`meetWeeks`, the week numbers; `oppChange`, their
+        // sum). The figure the page prints as the gain and the finder keeps
+        // and ranks by. Equal to `myGain` with no meeting weeks.
+        netGain,
+        meetWeeks: meet ? meet.map((i) => weeks[i]) : [],
+        oppChange: opp ? opp.sum : null,
         // The goal-weighted gain the offer was kept and ranked by, or null
         // when no weights were given. Points-equivalent: a week of average
-        // weight counts its points once.
+        // weight counts its points once. NETTED like `netGain` when meeting
+        // weeks were given (his change in a meeting week at that week's
+        // weight); `myGoalPoints` is your side alone.
         goalPoints,
+        myGoalPoints: myGoal,
         // His gain over the weeks he will play when `reach` was given, and his
         // flat points over the span either way. `theirWeeks` is what a per-week
         // figure of `theirGain` divides by: the weeks he is expected to play.
@@ -1707,6 +1819,12 @@ export function bestCombo(offers, {
   // packing this function refused, and on 2026-09-21 that emptied the combo
   // entirely: "making none of them is the best answer", under a list of forty.
   partnerMin = 0,
+  // THE WEEKS YOU PLAY EACH PARTNER (2026-09-30), the same `(partnerId) ->
+  // week numbers` `findTrades` takes. With it (and `teams`, which prices each
+  // partner's side) a packing is NETTED: each partner's lineup change in the
+  // weeks you play THAT partner comes off your side — `netDelta`, and the
+  // score a packing is chosen by. `delta` stays your lineup alone.
+  meetWeeks = null,
   maxOffers = COMBO_OFFER_CAP,
   maxPackings = COMBO_PACKING_CAP,
 } = {}) {
@@ -1714,6 +1832,8 @@ export function bestCombo(offers, {
   const w = Array.isArray(weights) && weights.length === ws.length ? weights : null;
   const weighed = (byWeek) =>
     round1(byWeek.reduce((a, x, i) => a + w[i] * x.delta, 0));
+  const meetOf = (partnerId) =>
+    (typeof meetWeeks === 'function' ? meetIndices(ws, meetWeeks(partnerId)) : null) || [];
 
   // Every offer, reduced to the only two things a packing cares about: which
   // players it moves, and how good it looked on its own.
@@ -1722,7 +1842,9 @@ export function bestCombo(offers, {
     .map((offer) => ({
       offer,
       ids: new Set([...offer.send, ...offer.receive].map(idOf).filter((id) => id != null)),
-      gain: Number.isFinite(offer.myGain) ? offer.myGain : 0,
+      // The offer's own figure as its row prints it: netted when it was.
+      gain: Number.isFinite(offer.netGain) ? offer.netGain
+        : Number.isFinite(offer.myGain) ? offer.myGain : 0,
       // Which twelve get considered: the finder's own keep-order when it had
       // one (expected value on the goal page), else the weighted gain, else points.
       rank: w && Number.isFinite(offer.rank) ? offer.rank
@@ -1765,12 +1887,20 @@ export function bestCombo(offers, {
           players: team.players, send: side.out, receive: side.in,
           slots, weeks: ws, projFor, zeroIsBye, floors,
         });
+        // His change in the weeks he plays you, which nets off your side.
+        const meet = meetOf(id);
+        const opp = meet.length
+          ? round1(meet.reduce((a, i) => a + p.byWeek[i].delta, 0))
+          : null;
         partners.push({
           partner: team, delta: p.delta,
           before: p.before.total, after: p.after.total,
           // Week by week, so the page can play the packing out in the season
           // simulation with each partner's side changed as well as yours.
           byWeek: p.byWeek,
+          meetWeeks: meet.map((i) => ws[i]),
+          oppChange: opp,
+          oppWeighted: meet.reduce((a, i) => a + (w ? w[i] : 1) * p.byWeek[i].delta, 0),
         });
       }
     }
@@ -1788,13 +1918,20 @@ export function bestCombo(offers, {
     const { pricing, partners } = price(chosen);
     if (requirePartnersGain && partners.some((p) => p.delta < Math.min(0, partnerMin))) return;
 
+    const opp = partners.reduce((a, p) => a + (p.oppChange || 0), 0);
+    const netDelta = round1(pricing.delta - opp);
     const entry = {
       combo: chosen.map((c) => c.offer),
       count: chosen.length,
+      // Your lineup alone, and netted (see `meetWeeks`).
       delta: pricing.delta,
-      // What the packing is chosen by: the goal-weighted gain with weights,
-      // the points without.
-      score: w ? weighed(pricing.byWeek) : pricing.delta,
+      netDelta,
+      oppChange: partners.some((p) => p.oppChange !== null) ? round1(opp) : null,
+      // What the packing is chosen by: the goal-weighted NET gain with
+      // weights, the net points without.
+      score: w
+        ? round1(weighed(pricing.byWeek) - partners.reduce((a, p) => a + p.oppWeighted, 0))
+        : netDelta,
       pricing,
       partners,
       // The trap, reported rather than buried: what you would have believed if
@@ -1869,6 +2006,7 @@ export function bestCombo(offers, {
     combo: best ? best.combo : [],
     count: best ? best.count : 0,
     delta: best ? best.delta : 0,
+    netDelta: best ? best.netDelta : 0,
     pricing: best ? best.pricing : null,
     naiveDelta: best ? best.naiveDelta : 0,
     best,
@@ -2002,6 +2140,12 @@ export function mergeComboByPartner(entry, {
         merged: group.offers.length > 1,
         mergedFrom: group.offers.length,
         myGain: pricing.delta,
+        // Netted by this manager's change in the weeks he plays you, when
+        // `bestCombo` was given `meetWeeks` (see there).
+        netGain: his && Number.isFinite(his.oppChange)
+          ? round1(pricing.delta - his.oppChange) : pricing.delta,
+        meetWeeks: his && Array.isArray(his.meetWeeks) ? his.meetWeeks : [],
+        oppChange: his && Number.isFinite(his.oppChange) ? his.oppChange : null,
         myBefore: pricing.before.total,
         myAfter: pricing.after.total,
         theirGain: his ? his.delta : null,
@@ -2018,5 +2162,5 @@ export function mergeComboByPartner(entry, {
     })
     // Best first, the same order and the same tie-breaks the finder uses, so
     // the two tables read the same way down the page.
-    .sort((a, b) => b.myGain - a.myGain || a.send.length + a.receive.length - (b.send.length + b.receive.length));
+    .sort((a, b) => b.netGain - a.netGain || a.send.length + a.receive.length - (b.send.length + b.receive.length));
 }
