@@ -3067,6 +3067,155 @@ SCENARIOS.assumeTrade = async function assumeTrade() {
   };
 };
 
+/**
+ * SUGGESTED (Tim, 2026-10-01): "when I select player(s) in custom trades with
+ * another user … show all the potential additions as suggested trades (with
+ * the players that are already selected) directly underneath the player
+ * selection menu, and above the saved trades list … Always show at least 3".
+ *
+ * Demo. Ticks one of HIS men, then one of MINE, reading the list each time
+ * (waiting on the list's own `data-rows`, never a fixed time); a fast double
+ * tick (the stale case); a row click (the pop-up); "Open in custom trades";
+ * Clear. Then saves and ASSUMES a deal and ticks one of his men again, so the
+ * suggestions can be checked against the assumed rosters.
+ */
+SCENARIOS.customSuggest = async function customSuggest() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  const ids = (id) => boxes(id).map((b) => String(b.value));
+  const tick = (box, on = true) => { box.checked = on; fire(box, 'change'); };
+  const host = () => $('cuSug');
+  const read = () => {
+    const h = host();
+    if (!h) return { present: false };
+    return {
+      present: true,
+      hidden: !!h.hidden,
+      rowsAttr: h.getAttribute('data-rows'),
+      ms: h.hasAttribute('data-ms') ? Number(h.getAttribute('data-ms')) : null,
+      wait: $('cuSugWait') ? !$('cuSugWait').hidden : null,
+      heads: [...h.querySelectorAll('thead th')].map(text),
+      rows: readOfferRows($('cuSugTable')).map((r) => ({
+        partner: r.partner, send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)),
+        myGain: r.myGain, theirGain: r.theirGain, gainText: r.gainText, goal: r.goal && r.goal.head,
+        alt: r.alt && r.alt.head,
+      })),
+      buttons: [...h.querySelectorAll('tbody tr')].map((tr) => ({
+        load: !!tr.querySelector('button[data-cu-load]'),
+        ask: !!tr.querySelector('button[data-ask-ai]'),
+        open: !!tr.querySelector('button.wk-open'),
+      })),
+    };
+  };
+  const max = scaledBudget(30000, machineFactor());
+  const waitList = async () => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < max) {
+      const h = host();
+      if (!h || h.hidden || h.getAttribute('data-rows')) break;
+      await settle(50);
+    }
+    await settle(50);
+    return read();
+  };
+  // In document order: the builder, then this list, then the saved table.
+  const order = (() => {
+    const all = [...document.querySelectorAll('#customPanel *')];
+    const at = (el) => (el ? all.indexOf(el) : -1);
+    return { build: at(document.querySelector('#customPanel .cu-build')), sug: at(host()), saved: at($('cuWrap')) };
+  })();
+
+  const partner = $('cuTeamB').value;
+  const partnerName = text($('cuTeamB').querySelector('option[selected]') || $('cuTeamB').querySelector('option')).split(' · ')[0];
+  const before = read();
+  const his = boxes('cuListB')[1];
+  const hisId = String(his.value);
+  tick(his);
+  const rightAfter = read();
+  const one = await waitList();
+  const mineBox = boxes('cuListA')[1];
+  const mineId = String(mineBox.value);
+  tick(mineBox);
+  const rightAfter2 = read();
+  const two = await waitList();
+
+  // The pop-up from a suggested row.
+  let pop = null;
+  const firstRow = host().querySelector('tbody tr');
+  if (firstRow) {
+    fire(firstRow.querySelector('td.name'), 'click');
+    await settle(300);
+    pop = { open: !$('dealModal').hidden, title: text($('dealTitle')) };
+    fire($('dealClose'), 'click');
+    await settle(100);
+  }
+
+  // A FAST DOUBLE TICK: a second of his men before the first answer is in.
+  tick(mineBox, false);
+  const his2 = boxes('cuListB')[2];
+  const his2Id = String(his2.value);
+  tick(his2);
+  const between = read();
+  const dbl = await waitList();
+
+  // OPEN IN CUSTOM TRADES from a suggestion: its men become the ticks, and the
+  // builder's own figures equal the row's.
+  let load = null;
+  const lb = host().querySelector('tbody tr button[data-cu-load]');
+  const lrow = dbl.rows[0] || null;
+  if (lb) {
+    fire(lb, 'click');
+    await settle(200);
+    // The ATTRIBUTE: a re-rendered box carries `checked` in its markup, which
+    // linkedom does not mirror into the property (readCustomList reads it so).
+    const ticked = (id) => boxes(id).filter((b) => b.hasAttribute('checked')).map((b) => String(b.value)).sort();
+    load = {
+      row: lrow, a: ticked('cuListA'), b: ticked('cuListB'),
+      gainA: text($('cuGainA')), gainB: text($('cuGainB')),
+    };
+    await waitList();
+  }
+
+  // Clear: nothing ticked, no list.
+  fire($('cuClear'), 'click');
+  await settle(300);
+  const cleared = read();
+
+  // THE ASSUMED TRADE: save a 1-for-1, assume it, then tick one of his men.
+  const a1 = boxes('cuListA')[1]; tick(a1);
+  const b1 = boxes('cuListB')[1]; tick(b1);
+  const sent = String(a1.value);
+  const got = String(b1.value);
+  await settle(300);
+  fire($('cuSave'), 'click');
+  fire($('cuClear'), 'click');
+  await settle(200);
+  fire(document.querySelector('#cuRows button[data-assume]'), 'click');
+  await settleGoal(document);
+  $('cuTeamB').value = partner; fire($('cuTeamB'), 'change');
+  await settle(300);
+  const listA = ids('cuListA');
+  const listB = ids('cuListB');
+  const hisA = boxes('cuListB').find((x) => String(x.value) !== sent && String(x.value) !== got);
+  const hisAId = hisA ? String(hisA.value) : null;
+  if (hisA) tick(hisA);
+  const assumed = await waitList();
+  // And with the man you RECEIVED in the assumed trade ticked on your side.
+  if (hisA) tick(hisA, false);
+  const gotBox = boxes('cuListA').find((x) => String(x.value) === got);
+  if (gotBox) tick(gotBox);
+  const assumedGot = await waitList();
+
+  return {
+    errors, order, partner, partnerName, before, rightAfter, one, rightAfter2, two, pop, between, dbl,
+    hisId, mineId, his2Id, load, cleared,
+    asm: { sent, got, listA, listB, hisAId, rows: assumed, gotRows: assumedGot, block: !$('assumedPanel').hidden },
+  };
+};
+
 /** A reload with an assumed trade stored (`TR_ASSUMED` = the prefs to seed). */
 SCENARIOS.assumeReload = async function assumeReload() {
   const seed = { 'ff.prefs': process.env.TR_ASSUMED || '{}' };
@@ -7362,6 +7511,61 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
 // all other trades assuming the trade that you've made has happened … allow
 // the user to remove the assumed trade which just makes the trade go back to
 // the saved trades list like normal."
+// SUGGESTED, under the custom builder (Tim, 2026-10-01: "show all the potential
+// additions as suggested trades … directly underneath the player selection
+// menu, and above the saved trades list … Always show at least 3").
+{
+  const sg = run('customSuggest');
+  ok('SUGGESTED: the scenario boots', !sg.boot, sg.boot);
+  if (!sg.boot) {
+    const has = (list, id) => list.includes(String(id));
+    const rowsOk = (L, need) => L.rows.length >= 3 && L.rows.length <= 5 && L.rows.every(need);
+    const sum = (L) => L.rows.map((r) => `${r.send.join('+')} for ${r.receive.join('+')}`).join(' | ');
+    ok('SUGGESTED: no console errors', sg.errors.length === 0, sg.errors.slice(0, 2).join(' | '));
+    ok('SUGGESTED: the list sits under the player pickers and above the saved trades',
+      sg.order.build >= 0 && sg.order.build < sg.order.sug && sg.order.sug < sg.order.saved, JSON.stringify(sg.order));
+    ok('SUGGESTED: hidden while nothing is ticked', sg.before.present && sg.before.hidden, JSON.stringify(sg.before));
+    ok('SUGGESTED: a tick shows the wait line, never an old list', !sg.rightAfter.hidden && sg.rightAfter.wait
+      && sg.rightAfter.rows.length === 0, JSON.stringify(sg.rightAfter));
+    ok('SUGGESTED: his man ticked - 3 to 5 rows, every one GETS him',
+      rowsOk(sg.one, (r) => has(r.receive, sg.hisId) && r.send.length >= 1), sum(sg.one));
+    ok('SUGGESTED: every row ADDS a man to the ticked deal',
+      sg.one.rows.every((r) => r.send.length + r.receive.length > 1), sum(sg.one));
+    ok('SUGGESTED: rows carry the saved table\'s columns', JSON.stringify(sg.one.heads) === JSON.stringify(
+      ['With', 'Δ last chance', 'Δ title chance', 'You send', 'You get', 'Your lineup, a week', 'You gain', 'He gains',
+        'His proj vs you', 'ESPN']) || (sg.one.heads.length === 10 && sg.one.heads[3] === 'You send'), sg.one.heads.join(' | '));
+    ok('SUGGESTED: every row is with the custom partner', sg.one.rows.every((r) => r.partner === sg.partnerName),
+      sg.one.rows.map((r) => r.partner).join(','));
+    ok('SUGGESTED: every row has Open in custom trades, Ask AI and the week-by-week button',
+      sg.one.buttons.length === sg.one.rows.length && sg.one.buttons.every((b) => b.load && b.ask && b.open),
+      JSON.stringify(sg.one.buttons));
+    ok('SUGGESTED: rows are goal-scored', sg.one.rows.every((r) => r.goal && /%/.test(r.goal)),
+      sg.one.rows.map((r) => r.goal).join(','));
+    ok('SUGGESTED: the list says how long it took', Number.isFinite(sg.one.ms) && sg.one.ms > 0, String(sg.one.ms));
+    ok('SUGGESTED: one of mine ticked too - every row has BOTH',
+      rowsOk(sg.two, (r) => has(r.receive, sg.hisId) && has(r.send, sg.mineId)), sum(sg.two));
+    ok('SUGGESTED: a row click opens the week-by-week pop-up', !!sg.pop && sg.pop.open, JSON.stringify(sg.pop));
+    ok('SUGGESTED: a fast second tick never shows the first tick\'s rows',
+      sg.between.rows.length === 0 && rowsOk(sg.dbl, (r) => has(r.receive, sg.hisId) && has(r.receive, sg.his2Id)),
+      `${sg.between.rows.length} stale; ${sum(sg.dbl)}`);
+    ok('SUGGESTED: Open in custom trades ticks the row\'s men, and the builder agrees with the row', !!sg.load
+      && JSON.stringify(sg.load.a) === JSON.stringify([...sg.load.row.send].sort())
+      && JSON.stringify(sg.load.b) === JSON.stringify([...sg.load.row.receive].sort())
+      && sg.load.gainA.startsWith(sg.load.row.gainText.split('/wk')[0] + '/wk'), JSON.stringify(sg.load));
+    ok('SUGGESTED: Clear hides the list', sg.cleared.hidden, JSON.stringify(sg.cleared));
+    const A = sg.asm;
+    ok('SUGGESTED: assumed - the builder holds the assumed rosters', A.block && has(A.listA, A.got)
+      && !has(A.listA, A.sent) && has(A.listB, A.sent), JSON.stringify({ got: A.got, sent: A.sent }));
+    ok('SUGGESTED: assumed - every row is on the assumed rosters',
+      !!A.hisAId && rowsOk(A.rows, (r) => has(r.receive, A.hisAId) && r.send.every((id) => has(A.listA, id))
+        && r.receive.every((id) => has(A.listB, id))), sum(A.rows));
+    ok('SUGGESTED: assumed - the man you got in it can be sent on',
+      rowsOk(A.gotRows, (r) => has(r.send, A.got) && r.send.every((id) => has(A.listA, id))
+        && r.receive.every((id) => has(A.listB, id))), sum(A.gotRows));
+    console.log(`  (SUGGESTED, linkedom: ${sg.one.ms} ms his man, ${sg.two.ms} ms one each)`);
+  }
+}
+
 {
   const at = run('assumeTrade');
   ok('ASSUME: the scenario boots', !at.boot, at.boot);

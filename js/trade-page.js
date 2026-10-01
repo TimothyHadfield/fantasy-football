@@ -309,6 +309,7 @@ const state = {
   customOfferKey: null, // which deal that object is, so a repaint keeps it
   customSaved: [],
   customRows: [],      // the saved deals as offers, by row index; see renderCustomSaved
+  cuSugRows: [],       // the "Suggested" list's offers, by row index; see renderCustomSuggest
   combo: null,         // the last bestCombo result
   comboRows: [],       // the combo's offers, MERGED per manager, in row order
   comboRunning: false,
@@ -7887,6 +7888,148 @@ function renderCustomSaved() {
   }
 }
 
+// ---- SUGGESTED: the ticked men, completed --------------------------------
+//
+// Tim, 2026-10-01: "when I select player(s) in custom trades with another user,
+// if it's an incomplete trade, or a trade that is able to have additions, show
+// all the potential additions as suggested trades (with the players that are
+// already selected) directly underneath the player selection menu, and above
+// the saved trades list … Always show at least 3 different suggested trades in
+// this list, even if there are no trades that are beneficial for either user."
+//
+// THE FINDER'S OWN SEARCH, narrowed: `findTrades` with this partner only, the
+// ticked men as `mustSend`/`mustReceive` and `complete` (no gain gate), on the
+// same rosters (an assumed trade included), weeks, floor, goal weights,
+// yes-chance ranking and netting the finder runs with — so a suggestion and the
+// same deal in the finder carry the same figures. Its order is the finder's
+// (`pickCompletions` in js/trade.js: at least three, up to five when the extra
+// ones are deals the finder itself would keep); then, as in the finder, the
+// shown rows are played out in the season simulation and re-ordered by the
+// goal. Rows are `offerRow`'s, so they look and click like every other trade.
+//
+// DEBOUNCED, AND NEVER STALE: a tick change clears the rows at once (the
+// "Finding trades…" line holds their place) and the search runs 180 ms after
+// the last tick; an answer for an older tick set is thrown away. The block
+// keeps the tallest height it has had since the first tick, so a list that
+// shrinks from five rows to three never pulls the page up under the finger.
+const cuSug = { key: null, rows: null, token: 0, timer: null, minH: 0, tickAt: 0, ms: null };
+const CU_SUG_DELAY = 180;
+
+/** Everything the suggestions depend on; a change in any of it is a new list. */
+function cuSugKey() {
+  const sig = customSignature();
+  if (!sig) return null;
+  const ctx = basis() === 'weeks' ? goalContext() : null;
+  return [sig, state.goal, state.floors ? state.floors.size : 0, assume.movesSig || '',
+    ctx && ctx.key ? ctx.key : '', ctx && ctx.base ? 1 : 0].join('#');
+}
+
+/** The finder's search, narrowed to completions of the ticked deal. */
+function findSuggestions() {
+  const c = state.custom;
+  const weeks = weeklySpan();
+  const ctx = goalContext();
+  const W = ctx && ctx.inputs ? goalWeightsFor(ctx, c.a, weeks) : null;
+  const result = findTrades({
+    teams: customTeams(),
+    myTeamId: c.a,
+    slots: state.slots,
+    weeks,
+    projFor,
+    zeroIsBye: zeroIsBye(),
+    floors: state.floors,
+    weights: W ? W.weights : null,
+    theirMinPerWeek: W ? THEIR_MIN_PER_WEEK : null,
+    rankBy: W
+      ? (o) => o.goalPoints * (acceptFor(o.theirGain, o.send, o.receive, weeks, o.theirWeeks ?? weeks.length) ?? 1)
+      : null,
+    theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
+    meetWeeks: meetWeeksOf(c.a),
+    partnerId: c.b,
+    mustSend: c.sendA,
+    mustReceive: c.sendB,
+    complete: true,
+  });
+  const ticked = c.sendA.length + c.sendB.length;
+  // Nothing can be added (the ticks are at the package limits): no list.
+  if (!result.offers.some((o) => o.send.length + o.receive.length > ticked)) return [];
+  const offers = result.offers;
+  // Played out in the season simulation, as the finder's rows are, and put in
+  // the finder's final order — only these few, so it costs a few runs.
+  for (const o of offers) {
+    o.goalScore = scoreGoalCached(o, c.a, weeks);
+    o.altGoal = altScore(o, c.a);
+  }
+  if (offers.every((o) => o.goalScore)) offers.sort(compareByGoalNet);
+  return offers;
+}
+
+function renderCustomSuggest() {
+  const host = $('cuSug');
+  if (!host) return;
+  const c = state.custom;
+  const key = c.a !== null && c.b !== null && basis() === 'weeks' && weeklySpan().length ? cuSugKey() : null;
+  const hide = () => {
+    cuSug.token++;
+    clearTimeout(cuSug.timer);
+    cuSug.key = null;
+    cuSug.rows = null;
+    state.cuSugRows = [];
+    host.hidden = true;
+    host.style.minHeight = '';
+    $('cuSugRows').innerHTML = '';
+  };
+  if (!key) { hide(); return; }
+
+  if (key !== cuSug.key) {
+    // A different tick set: the old rows go now, the search follows.
+    cuSug.key = key;
+    cuSug.rows = null;
+    cuSug.tickAt = Date.now();
+    const token = ++cuSug.token;
+    clearTimeout(cuSug.timer);
+    cuSug.timer = setTimeout(() => {
+      if (token !== cuSug.token) return;
+      let rows = [];
+      try { rows = findSuggestions(); } catch (err) { console.error(err); rows = []; }
+      if (token !== cuSug.token) return;
+      cuSug.rows = rows;
+      cuSug.ms = Date.now() - cuSug.tickAt;
+      drawCustomSuggest();
+      refreshCuByeKey();
+    }, CU_SUG_DELAY);
+  }
+  drawCustomSuggest();
+}
+
+function drawCustomSuggest() {
+  const host = $('cuSug');
+  const rows = cuSug.rows;
+  // Searched and nothing can be added: no list (and no held height).
+  if (rows && !rows.length) {
+    host.hidden = true;
+    host.style.minHeight = '';
+    state.cuSugRows = [];
+    $('cuSugRows').innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+  $('cuSugThGoal').textContent = `Δ ${CHANCE_SHORT[state.goal]}`;
+  $('cuSugThAltGoal').textContent = `Δ ${CHANCE_SHORT[otherGoal()]}`;
+  $('cuSugWait').hidden = !!rows;
+  state.cuSugRows = rows || [];
+  const scales = rows ? gainScales(rows) : {};
+  $('cuSugRows').innerHTML = (rows || []).map((o, i) =>
+    offerRow(o, i, `sg:${i}`, { ...scales, goal: true, attrs: ' data-sg="1"' })).join('');
+  host.setAttribute('data-rows', rows ? String(rows.length) : '');
+  if (rows && Number.isFinite(cuSug.ms)) host.setAttribute('data-ms', String(cuSug.ms));
+  else host.removeAttribute('data-ms');
+  // HOLD THE HEIGHT: never shorter than the tallest it has been since the first tick.
+  const h = host.offsetHeight || 0;
+  if (h > cuSug.minH) cuSug.minH = h;
+  host.style.minHeight = cuSug.minH ? `${cuSug.minH}px` : '';
+}
+
 /**
  * THE ASSUMED TRADE'S BLOCK, at the top of the page: its saved row and its
  * "After the trade" season, both priced on the REAL rosters, so they read
@@ -7976,7 +8119,7 @@ function inlineWeekScale() {
 
 /** The custom panel's bye key: its two lists and its saved rows, as drawn. */
 function refreshCuByeKey() {
-  const html = ['cuListA', 'cuListB', 'cuRows'].map((id) => ($(id) ? $(id).innerHTML : '')).join('');
+  const html = ['cuListA', 'cuListB', 'cuSugRows', 'cuRows'].map((id) => ($(id) ? $(id).innerHTML : '')).join('');
   setByeKey('cuByeKey', html);
   setAvgKey('cuAvgKey', /\bcu-man\b/.test(html));
 }
@@ -8733,6 +8876,7 @@ function renderCustom() {
     state.customPeek = null;
   }
   renderCustomPickers();
+  renderCustomSuggest();
   renderCustomPreview(priced);
   renderCustomInline(priced);
   renderCustomSeason();
@@ -9063,6 +9207,8 @@ wireOfferClicks($('tradeTable'), () => state.rows);
 // Delegated on the PANEL, not the table: the combo's tables are rebuilt from
 // scratch on every repaint and there are two of them.
 wireOfferClicks($('comboPanel'), () => state.comboRows);
+// The custom box's "Suggested" rows open the same pop-up (2026-10-01).
+wireOfferClicks($('cuSug'), () => state.cuSugRows);
 
 // -------------------------------------------------- dismissing the modal
 //
@@ -9544,6 +9690,7 @@ if ($('assumedPanel')) {
 wireTips($('cuListA'));
 wireTips($('cuListB'));
 wireTips($('cuRows'));
+wireTips($('cuSug'));
 
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {

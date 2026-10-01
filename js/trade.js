@@ -794,6 +794,80 @@ function dropRedundant(offers) {
   });
 }
 
+/** The finder's order: kept-by figure, then his gain, then fewer men, then partner. */
+function compareOffers(a, b) {
+  return rankGain(b) - rankGain(a) ||
+    b.theirGain - a.theirGain ||
+    a.send.length + a.receive.length - (b.send.length + b.receive.length) ||
+    a.partner.id - b.partner.id;
+}
+
+/** Fill an offer's two churn lists (deferred until it is handed back). */
+function finishOffer(o) {
+  if (o && typeof o.finish === 'function') o.finish();
+  if (o) delete o.finish;
+}
+
+/**
+ * THE SUGGESTION LIST for a partly built deal (Tim, 2026-10-01: "show all the
+ * potential additions as suggested trades … Always show at least 3 different
+ * suggested trades in this list, even if there are no trades that are
+ * beneficial for either user").
+ *
+ * `sorted` is every completion, in the finder's own order (`compareOffers`).
+ *   - A completion that `dropRedundant`'s rule would drop — another completion
+ *     with fewer men, contained in it, at least as good for both sides — is
+ *     skipped, as the finder skips it.
+ *   - The first SUGGEST_MIN that survive are shown whatever they are worth.
+ *   - Up to SUGGEST_MAX in all: the rows past the minimum must pass the
+ *     finder's own two gates (`gates`, filled by `tradesAcrossWeeks`), i.e. be
+ *     deals the finder itself would keep.
+ *   - Fewer than SUGGEST_MIN survivors: topped up from the skipped ones, in
+ *     order, so the minimum holds whenever that many completions exist.
+ */
+export const SUGGEST_MIN = 3;
+export const SUGGEST_MAX = 5;
+
+const dealKey = (send, receive) =>
+  `${send.map((p) => String(p.playerId)).sort().join(',')}>${receive.map((p) => String(p.playerId)).sort().join(',')}`;
+
+/** Every non-empty subset of a list of at most two. */
+const subsetsOf = (list) => (list.length === 2 ? [[list[0]], [list[1]], list] : [list]);
+
+function pickCompletions(sorted, gates) {
+  const byKey = new Map(sorted.map((o) => [dealKey(o.send, o.receive), o]));
+  const size = (o) => o.send.length + o.receive.length;
+  const redundant = (o) => {
+    for (const s of subsetsOf(o.send)) {
+      for (const r of subsetsOf(o.receive)) {
+        if (s.length + r.length >= size(o)) continue;
+        const p = byKey.get(dealKey(s, r));
+        if (p && rankGain(p) >= rankGain(o) && p.theirGain >= o.theirGain) return true;
+      }
+    }
+    return false;
+  };
+  const good = (o) => (Number.isFinite(o.goalPoints) ? o.goalPoints : o.netGain) >= gates.minGain &&
+    o.theirGain >= gates.theirMin;
+
+  const kept = [];
+  for (const o of sorted) {
+    if (kept.length >= SUGGEST_MAX) break;
+    if (redundant(o)) continue;
+    if (kept.length >= SUGGEST_MIN && !good(o)) continue;
+    kept.push(o);
+  }
+  if (kept.length < SUGGEST_MIN) {
+    const held = new Set(kept);
+    for (const o of sorted) {
+      if (kept.length >= SUGGEST_MIN) break;
+      if (!held.has(o)) kept.push(o);
+    }
+    kept.sort(compareOffers);
+  }
+  return kept;
+}
+
 /**
  * Search the whole league for trades that make both squads better.
  *
@@ -837,6 +911,15 @@ function dropRedundant(offers) {
  *   `weeks` are ignored. Weekly measure only; omitted, nothing changes.
  * @param {boolean} [opts.exhaustive] TESTS ONLY: switch every ceiling off, so
  *   a suite can prove the pruned search keeps exactly what a full one keeps.
+ * @param {number} [opts.partnerId] search with this one squad only.
+ * @param {Array} [opts.mustSend] ids (or players) of YOUR men every package
+ *   must send; [opts.mustReceive] the same for HIS men. Packages that do not
+ *   contain them all are never tried. Weekly measure only.
+ * @param {boolean} [opts.complete] THE COMPLETIONS OF A PARTLY BUILT DEAL
+ *   (Tim, 2026-10-01 — the custom box's "Suggested" list). With `partnerId` and
+ *   the ticked men in `mustSend`/`mustReceive`: no gain gate on either side
+ *   (every completion is a candidate, a bad one too), and `offers` is the
+ *   SUGGESTION LIST — see `pickCompletions`. Weekly measure only.
  * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
 export function findTrades({
@@ -844,9 +927,13 @@ export function findTrades({
   weeks = null, projFor = null, zeroIsBye = true, floors = null,
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
   meetWeeks = null, exhaustive = false,
+  partnerId = null, mustSend = null, mustReceive = null, complete = false,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
+  const idSet = (list) => new Set((list || []).map((p) => String(idOf(p))));
+  const must = { send: idSet(mustSend), receive: idSet(mustReceive) };
+  const gates = {};
 
   // The weekly measure is opt-in and needs BOTH halves — a week list and a way
   // to read a projection for it. Anything less falls back to the scalar
@@ -861,6 +948,7 @@ export function findTrades({
   let offers = [];
   for (const theirs of teams) {
     if (theirs.id === mine.id) continue;
+    if (partnerId !== null && partnerId !== undefined && theirs.id !== partnerId) continue;
     offers = offers.concat(
       weekly
         ? tradesAcrossWeeks(
@@ -873,7 +961,8 @@ export function findTrades({
                 return Array.isArray(r) && r.length === weeks.length ? r : null;
               })(),
               meet: meetIndices(weeks, typeof meetWeeks === 'function' ? meetWeeks(theirs.id) : null),
-              exhaustive: !!exhaustive }
+              exhaustive: !!exhaustive,
+              must, complete: !!complete, gates }
           )
         : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
@@ -886,16 +975,19 @@ export function findTrades({
       o.rank = Number.isFinite(r) ? r : null;
     }
   }
-  const ranked = dropRedundant(bestPerTarget(offers)).sort(
-    (a, b) =>
-      rankGain(b) - rankGain(a) ||
-      b.theirGain - a.theirGain ||
-      a.send.length + a.receive.length - (b.send.length + b.receive.length) ||
-      a.partner.id - b.partner.id
-  );
+  if (complete && weekly) {
+    const picked = pickCompletions(offers.slice().sort(compareOffers), gates);
+    for (const o of picked) finishOffer(o);
+    for (const o of offers) delete o.finish;
+    return { offers: picked, mine, considered, basis: 'weeks' };
+  }
+  const ranked = dropRedundant(bestPerTarget(offers)).sort(compareOffers).slice(0, limit);
+  // The two churn lists are filled only for the offers handed back.
+  for (const o of ranked) finishOffer(o);
+  for (const o of offers) delete o.finish;
 
   return {
-    offers: ranked.slice(0, limit),
+    offers: ranked,
     mine,
     considered,
     basis: weekly ? 'weeks' : 'measure',
@@ -1382,12 +1474,36 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   const mineWas = contributions(myBaseFill);
   const theirsWas = contributions(theirBaseFill);
 
-  const myCands = candidates(myScored);
-  const theirCands = candidates(theirScored);
-  const myPackages = packages(myCands);
-  const theirPackages = packages(theirCands);
+  // THE MEN A PACKAGE MUST CARRY (`mustSend`/`mustReceive`, the custom box's
+  // ticks). They are pieces whatever the caps say — a man ticked from the
+  // bottom of a roster is still in the deal — and they count as top pieces
+  // for the 2-for-2 rule. Every other piece and every limit is the finder's.
+  const must = options.must || { send: new Set(), receive: new Set() };
+  const withMust = (scoredList, need) => {
+    const list = candidates(scoredList);
+    if (!need.size) return list;
+    const have = new Set(list.map((p) => String(p.playerId)));
+    for (const p of scoredList) {
+      if (need.has(String(p.playerId)) && !have.has(String(p.playerId))) list.push(p);
+    }
+    return list;
+  };
+  const myCands = withMust(myScored, must.send);
+  const theirCands = withMust(theirScored, must.receive);
+  const holds = (need) => (pkg) => {
+    if (!need.size) return true;
+    let n = 0;
+    for (const p of pkg) if (need.has(String(p.playerId))) n++;
+    return n === need.size;
+  };
+  const myPackages = packages(myCands).filter(holds(must.send));
+  const theirPackages = packages(theirCands).filter(holds(must.receive));
   const myTop = topIds(myCands);
   const theirTop = topIds(theirCands);
+  for (const id of must.send) myTop.add(myCands.find((p) => String(p.playerId) === id)?.playerId);
+  for (const id of must.receive) theirTop.add(theirCands.find((p) => String(p.playerId) === id)?.playerId);
+  // COMPLETIONS (`complete`): no gate on either side, so nothing to prune by.
+  const complete = !!options.complete;
 
   // THE GOAL WEIGHTS (2026-09-21). With them, MY side is judged on the
   // weighted gain — Σ weight × (after − before), a week at a time — and the
@@ -1420,6 +1536,11 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   const theirMin = Number.isFinite(options.theirMinPerWeek)
     ? Math.min(minGain, options.theirMinPerWeek * theirWeeks)
     : minGain;
+  // The two gates as the finder applies them — handed back for the
+  // suggestion list's "good enough for a fourth row" test (`pickCompletions`).
+  if (options.gates) { options.gates.minGain = minGain; options.gates.theirMin = theirMin; }
+  const keepMin = complete ? -Infinity : minGain;
+  const keepTheirMin = complete ? -Infinity : theirMin;
 
   // How a week is solved for the forced cut — the same fill and assessment as
   // every total in this search (see `afterTrade`).
@@ -1428,10 +1549,10 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   // What each of my packages is worth to HIM at the very most. Still a ceiling
   // with `reach`: the gifted roster fields at least as much in every week, and
   // every reach is ≥ 0.
-  const prune = !options.exhaustive;
-  const ceilingForThem = myPackages.map((send) =>
-    theirOf(totalAcrossWeeks(theirScored.concat(send), slots, n, floors))
-  );
+  const prune = !options.exhaustive && !complete;
+  const ceilingForThem = prune
+    ? myPackages.map((send) => theirOf(totalAcrossWeeks(theirScored.concat(send), slots, n, floors)))
+    : null;
 
   // THE WEEKS YOU PLAY HIM, NETTED (Tim, 2026-09-30: "add the change in
   // opponent proj to the total +/- gain"). `meet` holds the indices of the
@@ -1508,7 +1629,8 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
     const giftedCeiling = w
       ? weigh(gifted.byWeek.map((x) => x.total), myBase.weekTotals)
       : round1(gifted.total - myBase.total);
-    const extra = meetCeilings(receive);
+    // Only a bound for pruning — not needed when nothing is pruned.
+    const extra = prune ? meetCeilings(receive) : { noCut: 0, cut: 0 };
     const extraMax = Math.max(extra.noCut, extra.cut);
     if (prune && giftedCeiling + extraMax + NET_SLACK < minGain) continue;
     const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
@@ -1574,16 +1696,11 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
       const opp = meet ? oppOf(theirWeekTotals) : null;
       const netGain = opp ? round1(myGain - opp.sum) : myGain;
       const goalPoints = w ? (opp ? round1(myGoal - opp.weighted) : myGoal) : null;
-      if ((w ? goalPoints : netGain) < minGain) continue;
+      if ((w ? goalPoints : netGain) < keepMin) continue;
       const theirGain = theirOf(theirAfter);
-      if (theirGain < theirMin) continue;
+      if (theirGain < keepTheirMin) continue;
 
-      // Only now is it worth keeping the lineups, for the two lists the row
-      // actually prints.
-      const mineNow = contributions(fillAcrossWeeks(myRoster, slots, weeks, floors));
-      const theirsNow = contributions(fillAcrossWeeks(theirRoster, slots, weeks, floors));
-
-      found.push({
+      const offer = {
         partner: theirs,
         send,
         receive,
@@ -1634,11 +1751,18 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
           after: theirAfter.weekTotals[i],
           delta: round1(theirAfter.weekTotals[i] - theirBase.weekTotals[i]),
         })),
-        yourMoves: weeklyPositionDeltas(mineWas, mineNow),
-        theirMoves: weeklyPositionDeltas(theirsWas, theirsNow),
-        yourChurn: weeklyChurn(mineWas, mineNow),
-        theirChurn: weeklyChurn(theirsWas, theirsNow),
-      });
+      };
+      // The two lists the row prints need both lineups kept, a fill a side —
+      // so they are filled only for the offers `findTrades` hands back.
+      offer.finish = () => {
+        const mineNow = contributions(fillAcrossWeeks(myRoster, slots, weeks, floors));
+        const theirsNow = contributions(fillAcrossWeeks(theirRoster, slots, weeks, floors));
+        offer.yourMoves = weeklyPositionDeltas(mineWas, mineNow);
+        offer.theirMoves = weeklyPositionDeltas(theirsWas, theirsNow);
+        offer.yourChurn = weeklyChurn(mineWas, mineNow);
+        offer.theirChurn = weeklyChurn(theirsWas, theirsNow);
+      };
+      found.push(offer);
     }
   }
   return found;

@@ -859,6 +859,11 @@
   #cuTable td.cu-remove { white-space: nowrap; }
   #cuTable tbody tr.cu-broken td.name { white-space: normal; }
   #cuTable tbody tr.cu-broken { cursor: default; }
+  /* SUGGESTED (2026-10-01): the saved table's look, under the two rosters. */
+  /* Not `.cu-sug`: that was the removed "also send" mark, and tr-test checks it stays gone. */
+  .cu-suggested { margin-top: 6px; }
+  .cu-suggested .sbw-title { margin-top: 4px; }
+  .cu-suggested-wait { margin: 6px 0 0; font-size: 12.5px; color: var(--dim); }
 
   /* A saved deal built from a squad that is not the one selected today. Quiet,
      because it is the unusual case and it is a caveat rather than a headline —
@@ -1777,6 +1782,34 @@
         </div>
         <div class="cu-inline" id="cuInlineB"></div>
       </div>
+    </div>
+
+    <!-- SUGGESTED (Tim, 2026-10-01: "when I select player(s) in custom trades
+         with another user … show all the potential additions as suggested
+         trades (with the players that are already selected) directly
+         underneath the player selection menu, and above the saved trades list
+         … Always show at least 3"). Every completion of the ticked men with
+         this partner, found by the finder's own search (`findTrades` with
+         `complete`) and drawn by its own row builder. Hidden while nothing is
+         ticked; its height is held while ticks change (`renderCustomSuggest`). -->
+    <div class="cu-suggested" id="cuSug" hidden>
+      <h3 class="sbw-title">Suggested</h3>
+      <div class="table-scroll"><table id="cuSugTable" class="offers">
+        <thead><tr>
+          <th class="name">With</th>
+          <th id="cuSugThGoal">Title chance</th>
+          <th id="cuSugThAltGoal">Δ last chance</th>
+          <th class="left">You send</th>
+          <th class="left">You get</th>
+          <th>Your lineup, a week</th>
+          <th>You gain</th>
+          <th>He gains</th>
+          <th>His proj vs you</th>
+          <th class="left">ESPN</th>
+        </tr></thead>
+        <tbody id="cuSugRows"></tbody>
+      </table></div>
+      <p class="cu-suggested-wait" id="cuSugWait" hidden>Finding trades…</p>
     </div>
 
     <!-- What the colour on the value column is measured against. In view
