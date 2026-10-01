@@ -912,6 +912,23 @@ function withRealWorld(fn) {
   }
 }
 
+/** "Assuming this trade already happened: A sends X to B for Y." — or null. */
+function assumedText() {
+  const entry = activeAssumed();
+  if (!entry || !assume.moves) return null;
+  return withRealWorld(() => {
+    const a = teamById(entry.a);
+    const b = teamById(entry.b);
+    if (!a || !b) return null;
+    const names = (team, ids) => {
+      const men = playersFor(team.id, ids);
+      return men.length ? men.map((p) => p.name).join(' + ') : 'nobody';
+    };
+    return `Assuming this trade already happened: ${a.name} sends ${names(a, entry.sendA)} to ` +
+      `${b.name} for ${names(b, entry.sendB)}.`;
+  });
+}
+
 function saveAssumed() {
   prefs.set('assumed', state.assumed);
 }
@@ -3230,7 +3247,9 @@ let askSeq = 0;
 /** The last cell of every offer row. `myGainShown` is whether the row prints You gain. */
 function askAiCellHtml(offer, { myGainShown = true } = {}) {
   const key = `a${askSeq++}`;
-  ASK_OFFERS.set(key, { offer, myGainShown });
+  // `real`: drawn on the real rosters (the assumed trade's own row), so its
+  // text is built there too.
+  ASK_OFFERS.set(key, { offer, myGainShown, real: realWorld });
   return `<td class="ask"><button type="button" class="ask-ai" data-ask-ai="${key}">${ASK_LABEL}</button></td>`;
 }
 
@@ -3381,6 +3400,8 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
       deadline: fin(rules.deadline) && rules.deadline > 0 ? whenText(rules.deadline) : null,
     },
     me: me && me.team ? me.team.name : null,
+    // An assumed trade (2026-09-30): every figure here starts from it.
+    assumed: realWorld ? null : assumedText(),
     partner: offer.partner ? offer.partner.name : 'several managers',
     send: (offer.send || []).map(man),
     receive: (offer.receive || []).map(man),
@@ -3457,7 +3478,9 @@ document.addEventListener('click', (e) => {
   const held = ASK_OFFERS.get(btn.getAttribute('data-ask-ai') || '');
   if (!held) return;
   let text = '';
-  try { text = askAiTextFor(held.offer, held); } catch (err) { console.warn('Ask AI', err); }
+  try {
+    text = held.real ? withRealWorld(() => askAiTextFor(held.offer, held)) : askAiTextFor(held.offer, held);
+  } catch (err) { console.warn('Ask AI', err); }
   if (!text) return;
   copyText(text, (ok) => {
     btn.textContent = ok ? ASK_DONE : ASK_FAIL;

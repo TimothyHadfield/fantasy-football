@@ -3016,6 +3016,18 @@ SCENARIOS.assumeTrade = async function assumeTrade() {
   $('cuTeamB').value = partner; fire($('cuTeamB'), 'change');
   await settle(300);
   const assumed = readAssumed(document);
+  // ASK AI with a trade assumed: a finder row's text says so; the block's own does not.
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { userAgent: 'test', clipboard: { writeText: (t) => { copied.push(String(t)); return Promise.resolve(); } } },
+  });
+  const askF = document.querySelector('#tradeTable button[data-ask-ai]');
+  if (askF) fire(askF, 'click');
+  const askB = document.querySelector('#assumedRows button[data-ask-ai]');
+  if (askB) fire(askB, 'click');
+  await settle(100);
+  assumed.ask = { finder: copied[0] || null, block: copied[1] || null };
   const asm = $('assumedSeason');
   const hisBtn = asm && asm.querySelector('button[data-sbw-side="theirs"]');
   if (hisBtn) fire(hisBtn, 'click');
@@ -7372,6 +7384,11 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('ASSUME: the top table has the saved table\'s columns', A.heads.length > 0 &&
       JSON.stringify(A.heads) === JSON.stringify(A.cuHeads), JSON.stringify([A.heads, A.cuHeads]));
     ok('ASSUME: the line says who sends whom', /^Assuming .+ sends .+ to .+ for .+\./.test(A.line), A.line);
+    ok('ASSUME ASK AI: a finder row\'s copied text says the trade is assumed',
+      A.ask && /\nAssuming this trade already happened: .+ sends .+ to .+ for .+\./.test(A.ask.finder || ''),
+      String(A.ask && A.ask.finder).slice(0, 300));
+    ok('ASSUME ASK AI: the assumed trade\'s own row does not (it is priced on the real rosters)',
+      A.ask && !!A.ask.block && !/Assuming this trade/.test(A.ask.block), String(A.ask && A.ask.block).slice(0, 200));
     ok('ASSUME: the finder says it starts from the assumed trade', A.note && A.note.hidden === false &&
       /Assuming/.test(A.note.text), JSON.stringify(A.note));
     // Its "After the trade" chart is the one the custom box showed for it, to the tenth.

@@ -85,6 +85,7 @@ export function askAiText(f) {
   if (league.length) out.push(`League: ${league.join(' · ')}`);
 
   out.push(`${has(f.me) ? `Me: ${f.me} · ` : ''}Trading with: ${f.partner}`);
+  if (has(f.assumed)) out.push(f.assumed);   // an assumed trade the rosters include
   out.push('');
 
   const side = (title, men) => {
