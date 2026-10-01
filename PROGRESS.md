@@ -155,6 +155,9 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - D4 · 2026-09-21 · Title goal prices playoff weeks in `weeklySpan()`; "last" goal = regular season only (pLast is regular-season table).
 - D5 · 2026-09-21 (branch) · Candidates by week weights (+10 pts per week, ÷10, mean 1, floor 5%); settled goal → null weights → points.
 - 2026-09-30 · Forced cut (man over the roster limit) = whoever costs the after-trade lineups fewest points over the priced weeks, tie → lower ROS (was: lowest ROS, which cut bye-week backup D/STs). aa9a2b3, tests/test-trade-cut.mjs.
+- 2026-10-01 · "You gain"/+wk and the finder are NET of the partner's lineup change in remaining regular-season meeting weeks (`netGain`, `goalPoints`); raw `myGain`/`byWeek`/`theirByWeek` stay raw for the sim (no double count). 6a60779.
+- 2026-10-01 · "Ask AI" last cell on every trade row copies a prompt (js/ask-ai.js); Deal column removed (Tim). 331b898.
+- 2026-10-01 · Assume trade: one saved custom trade at a time rewrites both squads' rosters for everything on the page; block at top; Remove returns it. Persisted in ff.prefs. 61c367f.
 - D6 · 2026-09-21 · Older tr-test scenarios pinned to goal "last" rather than rewritten.
 - D7 · 2026-09-20 · Per-player per-week average = mean over weeks projecting > 0 (Tim reversed the null-in-divisor rule).
 - D8 · 2026-09-19 · Floor rank 3; Proj avg is the lineup week by week; Trade page prices itself on load; store.js.
