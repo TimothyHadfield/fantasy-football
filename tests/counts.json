@@ -137,7 +137,7 @@
       "scenarios": 11
     },
     "tr-test.mjs": {
-      "assertions": 921
+      "assertions": 1019
     },
     "test-proj-trend.mjs": {
       "assertions": 52
@@ -147,6 +147,12 @@
     },
     "test-trade-cut.mjs": {
       "assertions": 1625
+    },
+    "test-trade-net.mjs": {
+      "assertions": 45
+    },
+    "test-ask-ai.mjs": {
+      "assertions": 39
     }
   }
 }
