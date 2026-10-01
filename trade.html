@@ -146,7 +146,7 @@
      and Space with nothing here reimplementing either, and the element focus
      returns to when the pop-up closes. It is also a 30px-tall target on a
      phone, where "click the row" competes with the player links inside it. */
-  .wk-open {
+  .wk-open, .ask-ai {
     display: block;
     margin-top: 6px;
     font-size: 10.5px;
@@ -161,7 +161,10 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  .wk-open:hover { border-color: var(--accent); color: var(--accent-hi); }
+  .wk-open:hover, .ask-ai:hover { border-color: var(--accent); color: var(--accent-hi); }
+  /* "Ask AI" (2026-09-30), the last cell of every offer row: the Week by week
+     pill's look, a fixed width so "Copied" never moves the row. */
+  .ask-ai { margin-top: 0; width: 6.4em; text-align: center; }
   /* On the combo's headline it sits beside the number rather than under it:
      that line is a sentence, not a table cell. */
   .combo-head .wk-open {
@@ -1502,7 +1505,6 @@
         <th class="name" data-sort>Manager</th>
         <th data-sort id="thGoal">Title chance</th>
         <th data-sort id="thAltGoal">Δ last chance</th>
-        <th class="left" data-sort>Deal</th>
         <th class="left" data-sort>You send</th>
         <th class="left" data-sort>You get</th>
         <th data-sort id="thLineup">Your lineup</th>
@@ -1510,6 +1512,7 @@
         <th data-sort id="thTheirGain">He gains</th>
         <th data-sort id="thOpp">His proj vs you</th>
         <th class="left">ESPN</th>
+        <th></th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -1759,7 +1762,6 @@
         <th class="name">With</th>
         <th id="cuThGoal">Title chance</th>
         <th id="cuThAltGoal">Δ last chance</th>
-        <th class="left">Deal</th>
         <th class="left">You send</th>
         <th class="left">You get</th>
         <th>Your lineup, a week</th>
@@ -1767,6 +1769,7 @@
         <th>He gains</th>
         <th>His proj vs you</th>
         <th class="left">ESPN</th>
+        <th></th>
         <th></th>
       </tr></thead>
       <tbody id="cuRows"></tbody>

@@ -64,6 +64,7 @@ const SUITES = [
   ['test-trade-cut.mjs', 'the forced cut: the man whose loss costs the priced weeks least goes, so receiving never lowers a week'],
   ['test-trade-odds.mjs', 'the goal: a trade ranked by the title (or last-place) chance it moves, and will he say yes'],
   ['test-accept-by.mjs', 'when a trade must be accepted: first kickoff among the men you get, minus the league’s review'],
+  ['test-ask-ai.mjs', 'the "Ask AI" text: both sides’ +/-, the men, the date and league, nothing undefined'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],
   ['test-pages-render.mjs', 'every page boots its real modules against its real HTML'],
   ['test-home.mjs', 'the home page and the debug page, pre-kickoff included'],

@@ -446,6 +446,16 @@ function readOfferRows(table) {
       // The keyboard route into the pop-up, and the key focus returns to.
       openKey: tr.getAttribute('data-key'),
       opener: !!tr.querySelector('button.wk-open'),
+      // "Ask AI" (Tim, 2026-09-30: "just remove the "deal" column … and then
+      // add the ask ai button on the end"). Read off the row's LAST cell, so a
+      // button anywhere else does not count.
+      hasDeal: !!cell('deal'),
+      lastAsk: (() => {
+        const last = tr.children[tr.children.length - 1];
+        const b = last ? last.querySelector('button.ask-ai') : null;
+        return b ? text(b) : null;
+      })(),
+      askButtons: tr.querySelectorAll('button.ask-ai').length,
     };
   });
 }
@@ -1244,6 +1254,11 @@ const SCENARIOS = {
     out.savedRows = readOfferRows($('cuTable'));
     out.savedHeads = [...$('cuTable').querySelectorAll('thead th')].map(text);
     out.savedRemove = $('cuRows').querySelectorAll('button[data-drop]').length;
+    out.savedLastTwo = (() => {
+      const tr = $('cuRows').querySelector('tr');
+      const tds = tr ? [...tr.children] : [];
+      return tds.slice(-2).map((td) => td.getAttribute('class') || '').join('|');
+    })();
     out.savedKey = text($('cuTableKey'));
     out.wrapShown = !$('cuWrap').hidden;
     out.emptyHiddenAfterSave = ($('cuEmpty').getAttribute('class') || '').includes('hidden');
@@ -1398,9 +1413,99 @@ const SCENARIOS = {
       await settle();
       out.byKind[kind] = {
         on: btn.getAttribute('class') || '',
-        rows: readTrades(document).map((r) => ({ shape: r.shape, send: r.send.length, get: r.receive.length })),
+        rows: readTrades(document).map((r) => ({
+          shape: r.shape, send: r.send.length, get: r.receive.length, hasDeal: r.hasDeal, lastAsk: r.lastAsk,
+        })),
         empty: text(document.getElementById('tradeEmpty')),
       };
+    }
+    return out;
+  },
+
+  /**
+   * "ASK AI" (Tim, 2026-09-30): the button on the end of every offer row copies
+   * a prompt for an AI chat. The clipboard is stubbed and RECORDS what it was
+   * given, so the text is read back exactly as the page wrote it. With
+   * `TR_NO_CLIPBOARD` there is no Clipboard API at all and the page must fall
+   * back to `execCommand('copy')` on a hidden textarea (an http page, an old
+   * Safari) — the stub records the textarea's value at the moment of the copy.
+   */
+  async askAi() {
+    const { document, window, errors, fetchCalls } = await boot();
+    await settleGoal(document);
+    const copied = [];
+    const noApi = !!process.env.TR_NO_CLIPBOARD;
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: noApi ? { userAgent: 'test' } : {
+        userAgent: 'test',
+        clipboard: { writeText: (t) => { copied.push({ via: 'api', text: String(t) }); return Promise.resolve(); } },
+      },
+    });
+    document.execCommand = (cmd) => {
+      const ta = document.querySelector('textarea');
+      copied.push({ via: `exec:${cmd}`, text: ta ? ta.value : '' });
+      return true;
+    };
+    const out = { errors, fetchCalls, noApi };
+    const heads = (table) => [...table.querySelectorAll('thead th')].map(text);
+    out.finderHeads = heads(document.getElementById('tradeTable'));
+    out.comboHeads = [...document.querySelectorAll('#comboBody table')].map(heads);
+    out.cuHeads = heads(document.getElementById('cuTable'));
+    out.finder = readTrades(document).map((r) => ({ hasDeal: r.hasDeal, lastAsk: r.lastAsk, n: r.askButtons }));
+    out.combo = [...document.querySelectorAll('#comboBody table')].flatMap((t) => readOfferRows(t))
+      .map((r) => ({ hasDeal: r.hasDeal, lastAsk: r.lastAsk, n: r.askButtons }));
+    out.headCellsMatchRow = (() => {
+      const tr = document.querySelector('#tradeTable tbody tr');
+      return tr ? tr.children.length === out.finderHeads.length : null;
+    })();
+
+    // The first finder row, as the page drew it.
+    const tr = document.querySelector('#tradeTable tbody tr');
+    const split = (td) => {
+      if (!td) return null;
+      const sub = text(td.querySelector('.sub'));
+      const all = text(td).replace(/\s*[▲▼]/g, '');
+      return { head: all.slice(0, all.length - sub.length).replace(/\s+/g, '').trim(), sub };
+    };
+    const nameOf = (m) => {
+      const a = m.querySelector('a.pref');
+      return a ? (a.getAttribute('aria-label') || '').split(' — ')[0] : '';
+    };
+    out.row = {
+      partner: text(tr.querySelector('.mgr')),
+      gain: split(tr.querySelector('td.gain')),
+      their: split(tr.querySelector('td.their-gain')),
+      send: [...tr.querySelectorAll('td.send .man')].map((m) => ({ name: nameOf(m), val: text(m.querySelector('.val')) })),
+      receive: [...tr.querySelectorAll('td.recv .man')].map((m) => ({ name: nameOf(m), val: text(m.querySelector('.val')) })),
+      goal: (() => {
+        const td = tr.querySelector('td.goal-cell');
+        const sub = text(td && td.querySelector('.sub'));
+        return { sub, yes: (sub.match(/(\d+)% yes/) || [])[1] || null };
+      })(),
+      opp: text(tr.querySelector('td.opp-proj')),
+    };
+    out.dealHiddenBefore = document.getElementById('dealModal').hidden;
+
+    const btn = tr.querySelector('button.ask-ai');
+    out.labelBefore = text(btn);
+    btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await settle(50);
+    out.labelAfter = text(btn);
+    out.dealHiddenAfter = document.getElementById('dealModal').hidden;
+    out.textareasLeft = document.querySelectorAll('textarea').length;
+    out.copied = copied.slice();
+    await settle(2200);
+    out.labelLater = text(btn);
+
+    // A COMBO row's button copies its own deal too.
+    const comboBtn = document.querySelector('#comboBody table tbody tr button.ask-ai');
+    if (comboBtn) {
+      comboBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+      await settle(50);
+      const ctr = comboBtn.closest('tr');
+      out.comboPartner = text(ctr.querySelector('.mgr'));
+      out.comboCopied = copied.length > out.copied.length ? copied[copied.length - 1].text : '';
     }
     return out;
   },
@@ -1821,7 +1926,8 @@ const SCENARIOS = {
     fire(sel);
     await settle(1500);
     const cells = [...document.querySelectorAll('#tradeTable tbody tr')]
-      .map((tr) => text(tr.lastElementChild));
+      // The ESPN cell by name: "Ask AI" is the last cell now.
+      .map((tr) => text(tr.querySelector('td.espn') || tr.lastElementChild));
 
     // A hand-picked squad survives a change of week. The empty render while a
     // week loads used to null it, and the page then fell back to your own.
@@ -3396,6 +3502,78 @@ if (!fresh.boot) {
   }
 }
 
+// ---- "Ask AI" on the end of every row; the Deal column gone (2026-09-30) ----
+//
+// Tim: "I also want a "ask AI" button on each trade which just allows the user
+// to copy a script or text … The trade display is a little crowded now so just
+// remove the "deal" column (2 for 2, etc) and then add the ask ai button on the
+// end." Run twice: with the Clipboard API, and without it (the textarea path).
+for (const noApi of [false, true]) {
+  const tag = noApi ? ' (no Clipboard API: textarea + execCommand)' : '';
+  const ai = run('askAi', { env: noApi ? { TR_NO_CLIPBOARD: '1' } : {} });
+  ok(`the Ask AI scenario boots${tag}`, !ai.boot, ai.boot);
+  if (ai.boot) continue;
+  ok(`no console errors${tag}`, ai.errors.length === 0, ai.errors.slice(0, 2).join(' | '));
+  ok(`and no request${tag}`, ai.fetchCalls.length === 0, ai.fetchCalls.slice(0, 2).join(' | '));
+  if (!noApi) {
+    ok('the finder has no Deal column', !ai.finderHeads.includes('Deal'), ai.finderHeads.join(' | '));
+    ok('the combo tables have no Deal column', ai.comboHeads.length > 0 && ai.comboHeads.every((h) => !h.includes('Deal')),
+      JSON.stringify(ai.comboHeads));
+    ok('nor the saved custom trades', !ai.cuHeads.includes('Deal'), ai.cuHeads.join(' | '));
+    ok('the finder head has one cell per row cell (the Ask AI column is headed)', ai.headCellsMatchRow === true,
+      `${ai.finderHeads.length} heads`);
+    ok('every finder row: no Deal cell, one "Ask AI", and it is the LAST cell',
+      ai.finder.length > 0 && ai.finder.every((r) => !r.hasDeal && r.n === 1 && r.lastAsk === 'Ask AI'),
+      JSON.stringify(ai.finder.slice(0, 3)));
+    ok('every combo row the same', ai.combo.length > 0 && ai.combo.every((r) => !r.hasDeal && r.n === 1 && r.lastAsk === 'Ask AI'),
+      JSON.stringify(ai.combo.slice(0, 3)));
+  }
+  eq(ai.copied.length, 1, `one press copies once${tag}`);
+  const c = ai.copied[0] || { via: '', text: '' };
+  eq(c.via, noApi ? 'exec:copy' : 'api', `through ${noApi ? 'the textarea fallback' : 'the Clipboard API'}${tag}`);
+  const t = c.text;
+  ok(`it asks the AI for what the page cannot see${tag}`,
+    /^Evaluate this fantasy football trade/.test(t) && /injury reports/.test(t) && /accept, counter, or wait/.test(t),
+    t.slice(0, 200));
+  ok(`it names the partner as the row does${tag}`, ai.row.partner && t.includes(`Trading with: ${ai.row.partner}`),
+    `${ai.row.partner} / ${t.slice(0, 600)}`);
+  ok(`MY +/- is the row's own You gain, per week and total${tag}`,
+    !!ai.row.gain && t.includes(`My lineup gain: ${ai.row.gain.head} (${ai.row.gain.sub})`),
+    `${JSON.stringify(ai.row.gain)} / ${(t.match(/My lineup gain:.*/) || [''])[0]}`);
+  ok(`HIS +/- is the row's own He gains, per week and total${tag}`,
+    !!ai.row.their && t.includes(`His lineup gain: ${ai.row.their.head} (${ai.row.their.sub}`),
+    `${JSON.stringify(ai.row.their)} / ${(t.match(/His lineup gain:.*/) || [''])[0]}`);
+  const sendAt = t.indexOf('I send:');
+  const getAt = t.indexOf('I get:');
+  ok(`every man sent is listed under "I send" with the row's per-week figure${tag}`,
+    ai.row.send.length > 0 && ai.row.send.every((m) => {
+      const at = t.indexOf(`- ${m.name} (`);
+      return at > sendAt && at < getAt && t.includes(`${m.val.replace('/wk', '')} pts/wk projected`);
+    }), JSON.stringify(ai.row.send));
+  ok(`every man received is listed under "I get"${tag}`,
+    ai.row.receive.length > 0 && ai.row.receive.every((m) => t.indexOf(`- ${m.name} (`) > getAt),
+    JSON.stringify(ai.row.receive));
+  ok(`it carries today's date and the week${tag}`, /^Date: \w{3}, \w{3} \d+, \d{4} · fantasy week \d+/m.test(t),
+    (t.match(/^Date:.*/m) || [''])[0]);
+  ok(`and the league's own shape${tag}`, /^League: 10 teams · PPR · starters: QB/m.test(t), (t.match(/^League:.*/m) || [''])[0]);
+  ok(`the goal and the yes chance as the goal cell gives them${tag}`,
+    !!ai.row.goal.yes && t.includes(`${ai.row.goal.yes}% he accepts`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
+    `${JSON.stringify(ai.row.goal)} / ${(t.match(/chance \(my goal.*/) || [''])[0]}`);
+  ok(`my remaining roster, by position${tag}`, /Rest of my roster \(pts\/wk\):\nQB: /.test(t), t.slice(-400));
+  ok(`no "undefined", "NaN" or "null" anywhere${tag}`, !/undefined|NaN|\bnull\b|\[object/.test(t), t);
+  ok(`and it stays short (${t.split(/\s+/).length} words)${tag}`, t.split(/\s+/).length <= 400, t.split(/\s+/).length);
+  eq(ai.labelBefore, 'Ask AI', `the button reads "Ask AI"${tag}`);
+  eq(ai.labelAfter, 'Copied', `then "Copied"${tag}`);
+  eq(ai.labelLater, 'Ask AI', `and goes back${tag}`);
+  ok(`the press does not open the week-by-week pop-up${tag}`, ai.dealHiddenBefore && ai.dealHiddenAfter,
+    `${ai.dealHiddenBefore} ${ai.dealHiddenAfter}`);
+  eq(ai.textareasLeft, 0, `no textarea is left in the page${tag}`);
+  ok(`a combo row's button copies ITS deal${tag}`,
+    !!ai.comboCopied && ai.comboCopied.includes(`Trading with: ${ai.comboPartner}`) && !/undefined|NaN/.test(ai.comboCopied),
+    `${ai.comboPartner} / ${String(ai.comboCopied).slice(0, 300)}`);
+  if (!noApi && process.env.TR_SHOW_ASK) console.log(`--- Ask AI, first finder row, as copied ---\n${t}\n---`);
+}
+
 // ---- the shape filter is a search, and it is honest about what it returns --
 
 const shapes = run('shapes');
@@ -3410,18 +3588,19 @@ if (!shapes.boot) {
     consolidate: (r) => r.send === 2 && r.get === 1,
     depth: (r) => r.send === 1 && r.get === 2,
   };
-  // The Deal column's own label, tied to the counts in the row beside it. This
-  // is what makes the relabelling falsifiable rather than cosmetic: a row that
-  // says "2 for 1" must be a row sending two men and receiving one.
-  const label = { even: '1 for 1', consolidate: '2 for 1', depth: '1 for 2' };
+  // THE DEAL COLUMN IS GONE (Tim, 2026-09-30: "The trade display is a little
+  // crowded now so just remove the "deal" column (2 for 2, etc) and then add the
+  // ask ai button on the end"). The shape is still checked above, by the counts
+  // of men in the two package columns; what each row must now carry is no Deal
+  // cell and "Ask AI" as its last one — under every shape, not just one.
   for (const [kind, test] of Object.entries(want)) {
     const got = shapes.byKind[kind];
     ok(`the ${kind} button lights up when pressed`, /\bon\b/.test(got.on), got.on);
     ok(`searching ${kind} returns only that shape`, got.rows.every(test),
       JSON.stringify(got.rows.slice(0, 4)));
-    ok(`and every ${kind} row is headed "${label[kind]}", which is what it does`,
-      got.rows.every((r) => r.shape.startsWith(label[kind])),
-      got.rows.map((r) => r.shape).slice(0, 3).join(' | '));
+    ok(`and every ${kind} row has no Deal cell and ends in "Ask AI"`,
+      got.rows.length > 0 && got.rows.every((r) => !r.hasDeal && r.lastAsk === 'Ask AI'),
+      JSON.stringify(got.rows.slice(0, 3)));
   }
 
   // "Any shape" must be a superset — if it returned fewer than a narrowed
@@ -6438,12 +6617,11 @@ if (!live.boot) {
     const r = cu.savedRows[0];
     ok('the saved row names the other squad in its own element',
       r.partner.length > 0, r.partner);
-    // SHAPE_LABEL has no 'custom' entry — this is the bug that has been hit
-    // before on this page, and printing `undefined` here is the failure.
-    ok('it names its own shape rather than printing undefined',
-      /^\d+ for \d+$/.test(r.shape.replace(/Week by week/, '').trim()) &&
-        !/undefined/.test(r.shape),
-      r.shape);
+    // No Deal column since 2026-09-30 (Tim: "just remove the "deal" column"),
+    // and "Ask AI" on the end, after Remove.
+    ok('it has no Deal cell and ends in "Ask AI", after Remove',
+      !r.hasDeal && r.lastAsk === 'Ask AI' && r.askButtons === 1 && cu.savedLastTwo === 'cu-remove|ask',
+      `${r.hasDeal} ${r.lastAsk} ${r.askButtons} ${cu.savedLastTwo}`);
     ok('it lists the men each way, with a card and a link on every one',
       r.send.length + r.receive.length >= 2 &&
       [...r.send, ...r.receive].every((m) => m.id !== null),

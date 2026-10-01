@@ -90,6 +90,8 @@ import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
 import { acceptBy } from './accept-by.js';
+// "Ask AI" (2026-09-30): the text a row copies for an AI chat. Pure.
+import { askAiText } from './ask-ai.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // And the rest of the Schedule page's season plumbing, for THE GOAL (Tim,
@@ -2875,10 +2877,9 @@ function offerRow(offer, i, key, opts = {}) {
     // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
     // on the first screen rather than past four columns of names.
     (showGoal ? goalCellHtml(offer) + altGoalCellHtml(offer) : '') +
-    `<td class="left deal" data-v="${esc(offer.kind)}">` +
-      `<span class="shape" title="${esc(offer.shape)} — you send ${plural(offer.send.length, 'player')}, ` +
-      `you receive ${plural(offer.receive.length, 'player')}.">` +
-      `${esc(shapeLabel(offer))}</span>${open}</td>` +
+    // NO DEAL COLUMN (Tim, 2026-09-30: "The trade display is a little crowded
+    // now so just remove the "deal" column"). Its "Week by week" button moved
+    // into the ESPN cell below, with the row's other buttons.
     `<td class="left pkg send">${send}</td>` +
     // NO CHURN LINE HERE. It printed two coloured lists under this column and
     // they mostly repeated the two columns either side of them; the week-by-week
@@ -2900,8 +2901,10 @@ function offerRow(offer, i, key, opts = {}) {
         ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
         : `${signedText(his.gain)}${theirs.mark}`}</td>` +
     (showOpp ? oppCellHtml(offer) : '') +
-    `<td class="left espn">${espnCell(offer)}</td>` +
+    `<td class="left espn">${espnCell(offer)}${open}</td>` +
     tail +
+    // "Ask AI", always the LAST cell (Tim, 2026-09-30). See `askAiCellHtml`.
+    askAiCellHtml(offer, { myGainShown: showMyGain }) +
     `</tr>`
   );
 }
@@ -2923,6 +2926,257 @@ function gainScales(rows) {
 }
 
 const tradeRow = (offer, i, scales) => offerRow(offer, i, `f:${i}`, { ...scales, goal: true });
+
+// ======================================================================
+// "ASK AI" (Tim, 2026-09-30)
+// ======================================================================
+//
+// "an "ask AI" button on each trade which just allows the user to copy a script
+// or text essentially and then paste it into a AI chat so that … the AI will
+// also give it's evaluation on some of the things the cite might not know, like
+// Injury reports, usage, professional comments, stats, etc."
+//
+// The button copies `askAiText` (js/ask-ai.js) built from what THIS page holds
+// about the deal, every figure printed by the helpers the row itself prints
+// with (`signedText`, `perWeekOf`, `hisSideOf`, `oppProjOf`, `goalFor`), so the
+// text quotes the row. No request, no AI service: the clipboard and nothing else.
+
+const ASK_LABEL = 'Ask AI';
+const ASK_DONE = 'Copied';
+const ASK_FAIL = 'Failed';
+const ASK_OFFERS = new Map();
+let askSeq = 0;
+
+/** The last cell of every offer row. `myGainShown` is whether the row prints You gain. */
+function askAiCellHtml(offer, { myGainShown = true } = {}) {
+  const key = `a${askSeq++}`;
+  ASK_OFFERS.set(key, { offer, myGainShown });
+  return `<td class="ask"><button type="button" class="ask-ai" data-ask-ai="${key}">${ASK_LABEL}</button></td>`;
+}
+
+/** "QB, 2 RB, 2 WR, TE, FLEX, D/ST, K" off the league's own slots. */
+function startersText(slots) {
+  const order = [];
+  const n = new Map();
+  for (const id of slots || []) {
+    const l = espn.SLOT_LABELS[id];
+    if (!l || l === 'BE' || l === 'IR') continue;
+    if (!n.has(l)) order.push(l);
+    n.set(l, (n.get(l) || 0) + 1);
+  }
+  return order.map((l) => (n.get(l) > 1 ? `${n.get(l)} ${l}` : l)).join(', ');
+}
+
+/** "PPR" / "half-PPR" / "standard scoring (no PPR)", off ESPN's scoring items. */
+function scoringText(items) {
+  if (!Array.isArray(items) || !items.length) return '';
+  const pts = (id) => {
+    const it = items.find((i) => Number(i && i.statId) === id);
+    return it ? Number(it.points) || 0 : 0;
+  };
+  const rec = pts(53);   // receptions
+  const kind = rec === 1 ? 'PPR' : rec === 0.5 ? 'half-PPR' : rec === 0
+    ? 'standard scoring (no PPR)' : `${rec} pts per reception`;
+  const passTd = pts(4); // passing touchdowns
+  return passTd && passTd !== 4 ? `${kind}, ${passTd}-pt passing TDs` : kind;
+}
+
+const capFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Everything the copied text says about one deal, every figure as the page prints it. */
+function askAiFacts(offer, { myGainShown = true } = {}) {
+  const span = weeklySpan();
+  const weeks = basis() === 'weeks' && span.length > 0;
+  const teams = state.data ? state.data.teams : [];
+  const me = sideOf(offer, 'mine');
+  const fin = Number.isFinite;
+
+  const man = (p) => {
+    const v = perWeekValue(p);
+    const bye = byeWeekOf(p, state.byes);
+    const pro = p.proTeam || espn.PRO_TEAMS[proTeamOf(p)];
+    return {
+      name: p.name,
+      pos: p.position === 'DST' ? 'D/ST' : p.position,
+      team: pro && pro !== 'FA' ? pro : null,
+      perWeek: fin(v) ? fmt(v) : null,
+      ros: weeks ? fmt(rosOf(p, span)) : null,
+      bye: !state.isDemo && fin(bye) ? bye : null,
+      status: healthy(p.injuryStatus) ? null : injuryLabel(String(p.injuryStatus)),
+    };
+  };
+
+  // The two gains, exactly as `offerRow` prints them.
+  const gainText = (v, n) => {
+    if (!fin(v)) return null;
+    return weeks
+      ? `${signedText(perWeekOf(v, n))}/wk (${signedText(v)} total)`
+      : `${signedText(v)} in ${meta().label}`;
+  };
+  const his = hisSideOf(offer);
+  const lineup = fin(offer.myBefore) && fin(offer.myAfter)
+    ? (weeks
+      ? `starting lineup ${fmt(perWeekOf(offer.myBefore))} → ${fmt(perWeekOf(offer.myAfter))}/wk`
+      : `starting lineup ${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}`)
+    : null;
+
+  const opp = oppProjOf(offer);
+  const meet = opp && opp.sum !== null
+    ? `week${opp.weeks.length > 1 ? 's' : ''} ${opp.weeks.join(', ')}; this trade changes his lineup ` +
+      `${signedText(opp.sum)} ${opp.weeks.length > 1 ? 'in all over those weeks' : 'that week'}`
+    : null;
+
+  // The ranked goal, as the goal cell gives it (and nothing while it is unranked).
+  let goal = null;
+  const s = goalFor(offer);
+  if (s && fin(s.mine.gain) && !offer.goalUnranked) {
+    const g = goalOf(state.goal);
+    goal = `${capFirst(g.chance)} (my goal, ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons): ` +
+      `${pct(s.mine.before)} → ${pct(s.mine.after)} (${signedPct(s.mine.after - s.mine.before)} ±${bandText()})` +
+      (fin(s.theirs.before) && fin(s.theirs.after) ? `; his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
+      (fin(s.accept) ? `; app estimates ${Math.round(s.accept * 100)}% he accepts` : '');
+  }
+  let altGoal = null;
+  const a = offer.altGoal;
+  if (a && fin(a.before) && fin(a.after)) {
+    altGoal = `${capFirst(goalOf(otherGoal()).chance)}: ${pct(a.before)} → ${pct(a.after)}`;
+  }
+
+  // The forced cut, as the pop-up states it — priced over the same weeks.
+  const cuts = [];
+  if (weeks && !offer.combined) {
+    try {
+      const names = (list) => list.map((p) => `${p.name} (${p.position === 'DST' ? 'D/ST' : p.position})`).join(', ');
+      const mine = dealSets(offer, 'mine').span;
+      if (mine && mine.cut && mine.cut.length) cuts.push(`Roster limit: I'd have to drop ${names(mine.cut)}`);
+      const theirs = offer.partner ? dealSets(offer, 'theirs').span : null;
+      if (theirs && theirs.cut && theirs.cut.length) cuts.push(`Roster limit: he'd have to drop ${names(theirs.cut)}`);
+    } catch { /* a deal that will not price has no cut to state */ }
+  }
+
+  let acceptLine = null;
+  const ab = !offer.combined ? acceptDeadlineFor(offer.receive) : null;
+  if (ab && ab.kind === 'by') {
+    acceptLine = `Accept by ${whenText(ab.at)}${ab.capped ? ' (trade deadline)' : ''} to have ` +
+      `${ab.who} for week ${ab.week}`;
+  } else if (ab && ab.kind === 'rule') {
+    acceptLine = `To have ${ab.who} for week ${ab.week}, accept before ${whenText(ab.kickoff)} ` +
+      `kickoff, less the review period`;
+  }
+
+  // What I keep, by position, best first: so the AI can judge depth.
+  const roster = [];
+  if (me && me.team) {
+    const out = new Set((offer.send || []).map((p) => String(p.playerId)));
+    const kept = (me.team.players || []).filter((p) => !out.has(String(p.playerId)));
+    const byPos = new Map();
+    for (const p of kept) {
+      const pos = p.position === 'DST' ? 'D/ST' : p.position;
+      if (!byPos.has(pos)) byPos.set(pos, []);
+      byPos.get(pos).push(p);
+    }
+    for (const pos of ['QB', 'RB', 'WR', 'TE', 'K', 'D/ST', ...byPos.keys()]) {
+      const list = byPos.get(pos);
+      if (!list) continue;
+      byPos.delete(pos);
+      const val = (p) => perWeekValue(p);
+      list.sort((x, y) => (fin(val(y)) ? val(y) : -1) - (fin(val(x)) ? val(x) : -1));
+      roster.push([pos, list.map((p) => `${p.name}${fin(val(p)) ? ` ${fmt(val(p))}` : ''}`).join(', ')]);
+    }
+  }
+
+  const rules = state.tradeRules || {};
+  return {
+    date: new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }),
+    // The first week still to play — what the priced span starts on. (Demo's
+    // picker week is "now", so the span starts after it.)
+    week: span.length ? span[0] : null,
+    season: espn.getConfig().season,
+    league: {
+      teams: teams.length || null,
+      scoring: scoringText(state.scoring),
+      starters: startersText(state.slots),
+      rosterSize: me && me.team ? (me.team.players || []).length : null,
+      review: fin(rules.reviewHours) ? plural(rules.reviewHours, 'hour') : null,
+      deadline: fin(rules.deadline) && rules.deadline > 0 ? whenText(rules.deadline) : null,
+    },
+    me: me && me.team ? me.team.name : null,
+    partner: offer.partner ? offer.partner.name : 'several managers',
+    send: (offer.send || []).map(man),
+    receive: (offer.receive || []).map(man),
+    span: weeks ? weekRange(span) : null,
+    myGain: gainText(offer.myGain, span.length),
+    myLineup: myGainShown ? lineup : `this deal alone; the app suggests it as part of a combo`,
+    hisGain: gainText(his.gain, his.weeks),
+    hisNote: weeks && his.weeks !== span.length ? 'playoff weeks weighted by his chance of playing them' : null,
+    meet,
+    goal,
+    altGoal,
+    cuts,
+    acceptBy: acceptLine,
+    roster,
+  };
+}
+
+/** The text one row's button copies. */
+function askAiTextFor(offer, opts) {
+  return askAiText(askAiFacts(offer, opts));
+}
+
+/**
+ * Put `text` on the clipboard, SYNCHRONOUSLY inside the tap — iPhone Safari
+ * refuses a copy that is not. The async Clipboard API is asked first; where it
+ * is missing (an http page, an old browser) a hidden textarea is selected and
+ * `execCommand('copy')` copies it. Calls `done(ok)` once.
+ */
+function copyText(text, done) {
+  const fallback = () => {
+    let ok = false;
+    const ta = document.createElement('textarea');
+    try {
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      // Off to the side and invisible; 16px so iOS does not zoom on focus.
+      ta.setAttribute('style', 'position:fixed;top:0;left:-9999px;opacity:0;font-size:16px');
+      document.body.appendChild(ta);
+      if (typeof ta.focus === 'function') ta.focus();
+      if (typeof ta.select === 'function') ta.select();
+      if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(0, text.length);
+      ok = typeof document.execCommand === 'function' && document.execCommand('copy') !== false;
+    } catch { ok = false; }
+    if (ta.parentNode) ta.parentNode.removeChild(ta);
+    return ok;
+  };
+  const nav = globalThis.navigator;
+  if (nav && nav.clipboard && typeof nav.clipboard.writeText === 'function') {
+    let p;
+    try { p = nav.clipboard.writeText(text); } catch { p = null; }
+    if (p && typeof p.then === 'function') {
+      p.then(() => done(true), () => done(fallback()));
+      return;
+    }
+  }
+  done(fallback());
+}
+
+// A press on "Ask AI" anywhere on the page. Capture phase, like "Open in custom
+// trades", so the row under it never reads the press as "open this deal".
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('button[data-ask-ai]') : null;
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const held = ASK_OFFERS.get(btn.getAttribute('data-ask-ai') || '');
+  if (!held) return;
+  let text = '';
+  try { text = askAiTextFor(held.offer, held); } catch (err) { console.warn('Ask AI', err); }
+  if (!text) return;
+  copyText(text, (ok) => {
+    btn.textContent = ok ? ASK_DONE : ASK_FAIL;
+    clearTimeout(btn._askTimer);
+    btn._askTimer = setTimeout(() => { btn.textContent = ASK_LABEL; }, 1600);
+  });
+}, true);
 
 /** The offers currently on screen: the search, narrowed to the chosen manager. */
 function visibleOffers() {
@@ -5533,13 +5787,13 @@ function comboTableHtml(rows, from, id) {
     `<div class="table-scroll"><table id="${esc(id)}" class="offers">` +
     `<thead><tr>` +
     `<th class="name">Manager</th>` +
-    `<th class="left">Deal</th>` +
     `<th class="left">You send</th>` +
     `<th class="left">You get</th>` +
     `<th>${esc(GAIN_HEAD('He gains', weeks, span))}</th>` +
     // His own side, like He gains: each manager's figure is his squad's alone.
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
+    `<th></th>` +
     `</tr></thead><tbody>` +
     rowsHtml +
     `</tbody></table></div>` +
@@ -7174,7 +7428,7 @@ function renderCustomSaved() {
   // opened, which is right: there is nothing to open.
   state.customRows = offers;
 
-  // manager, goal, other goal, deal, send, get, lineup, gain, his gain, his proj vs you, espn, remove
+  // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, remove, ask AI
   const cols = 12;
   $('cuThGoal').textContent = `Δ ${CHANCE_SHORT[state.goal]}`;
   $('cuThAltGoal').textContent = `Δ ${CHANCE_SHORT[otherGoal()]}`;
@@ -7186,10 +7440,12 @@ function renderCustomSaved() {
       const b = teamById(entry.b);
       return (
         `<tr data-cu="${i}" class="cu-broken">` +
-        `<td class="name" colspan="${cols - 1}">` +
+        `<td class="name" colspan="${cols - 2}">` +
         `${esc(a ? a.name : 'A squad')} ⇄ ${esc(b ? b.name : 'a squad')}` +
         `<span class="sub">${esc(priced[i].error)}</span></td>` +
         drop +
+        // No Ask AI: there is no priced deal to describe.
+        `<td class="ask"></td>` +
         `</tr>`
       );
     }
@@ -8285,7 +8541,7 @@ function wireOfferClicks(el, rowsFor) {
   if (!el) return;
   el.addEventListener('click', (e) => {
     if (clickIsPlayer(e)) return;
-    if (e.target.closest && e.target.closest('a, button[data-cu-load]')) return;
+    if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai]')) return;
     // A row carries both attributes, and so does the combo's headline button —
     // which is not in a row at all, because the whole packing is not one of the
     // offers. One selector covers both rather than two handlers that could come
@@ -8624,7 +8880,7 @@ $('cuRows').addEventListener('click', (e) => {
   // player links and an ESPN link like any other — and those have to be left
   // alone, exactly as the finder's own click handler leaves them alone.
   if (clickIsPlayer(e)) return;
-  if (e.target.closest && e.target.closest('a, button[data-cu-load]')) return;
+  if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai]')) return;
 
   // A saved row opens the SAME pop-up the finder's rows open — the per-week
   // breakdown, the slot-by-slot before and after, the side toggle. All of it
