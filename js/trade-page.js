@@ -3108,7 +3108,15 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
     send: (offer.send || []).map(man),
     receive: (offer.receive || []).map(man),
     span: weeks ? weekRange(span) : null,
-    myGain: gainText(offer.myGain, span.length),
+    // NET, as the row's You gain prints it (`netGainOf`, 2026-09-30): my own
+    // lineup's change less his in the week(s) I play him, which `meet` lists.
+    myGain: (() => {
+      const net = netGainOf(offer);
+      const t = gainText(net, span.length);
+      if (!t || !fin(offer.myGain) || !fin(net) || Math.abs(net - offer.myGain) < 0.05) return t;
+      return `${t}, net: my own lineup ${signedText(offer.myGain)} minus his ` +
+        `${signedText(Math.round((offer.myGain - net) * 10) / 10)} in the week(s) I play him`;
+    })(),
     myLineup: myGainShown ? lineup : `this deal alone; the app suggests it as part of a combo`,
     hisGain: gainText(his.gain, his.weeks),
     hisNote: weeks && his.weeks !== span.length ? 'playoff weeks weighted by his chance of playing them' : null,

@@ -3572,6 +3572,17 @@ for (const noApi of [false, true]) {
   ok(`MY +/- is the row's own You gain, per week and total${tag}`,
     !!ai.row.gain && t.includes(`My lineup gain: ${ai.row.gain.head} (${ai.row.gain.sub})`),
     `${JSON.stringify(ai.row.gain)} / ${(t.match(/My lineup gain:.*/) || [''])[0]}`);
+  // NET (2026-09-30): You gain is your own lineup less his in the week(s) you
+  // play him, so the copied line says so with both parts, and they add up.
+  {
+    const line = (t.match(/My lineup gain:.*/) || [''])[0];
+    const hisMeet = num((t.match(/this trade changes his lineup ([+−-]?[\d.]+)/) || [])[1] || '0');
+    const m = line.match(/\(([+−-]?[\d.]+) total\), net: my own lineup ([+−-]?[\d.]+) minus his ([+−-]?[\d.]+) in the week/);
+    ok(`MY +/- is net of his change in the week(s) I play him, both parts stated${tag}`,
+      Math.abs(hisMeet) < 0.05 ? !/net:/.test(line)
+        : !!m && Math.abs(num(m[3]) - hisMeet) <= 0.051 && Math.abs(num(m[2]) - num(m[3]) - num(m[1])) <= 0.051,
+      `${line} · his ${hisMeet}`);
+  }
   ok(`HIS +/- is the row's own He gains, per week and total${tag}`,
     !!ai.row.their && t.includes(`His lineup gain: ${ai.row.their.head} (${ai.row.their.sub}`),
     `${JSON.stringify(ai.row.their)} / ${(t.match(/His lineup gain:.*/) || [''])[0]}`);
