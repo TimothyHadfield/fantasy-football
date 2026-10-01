@@ -374,6 +374,30 @@ export async function fetchByeWeeks() {
   return raw ? JSON.parse(raw) : {};
 }
 
+/**
+ * NFL kickoffs for the "accept by" line, only when `TR_KICKOFFS` is set (epoch
+ * ms of pro team 1's week-5 kickoff, the coming week). Pro team t kicks off
+ * (t − 1) days after team 1 each week, a week apart, so with TR_PRO_SPLIT Ana's
+ * men (team 1) are first and Cy's (team 3) two days later. `TR_KICK_BYE`
+ * ("3:5") leaves team 3 without a game in week 5. Unset: `{}`, unknown, and
+ * every other scenario draws no line.
+ */
+export const KICK_DAY = 86400000;
+export async function fetchProKickoffs() {
+  const anchor = Number(process.env.TR_KICKOFFS);
+  if (!anchor) return {};
+  const [byeTeam, byeWeek] = String(process.env.TR_KICK_BYE || '').split(':').map(Number);
+  const out = {};
+  for (const t of [1, 2, 3, 4]) {
+    out[t] = {};
+    for (let w = 1; w <= WEEKS + 3; w++) {
+      if (t === byeTeam && w === byeWeek) continue;
+      out[t][w] = anchor + (w - (PLAYED_THROUGH + 1)) * 7 * KICK_DAY + (t - 1) * KICK_DAY;
+    }
+  }
+  return out;
+}
+
 export async function fetchSeasonData() {
   throw new Error('fetchSeasonData is not used by the Trade page');
 }

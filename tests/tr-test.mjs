@@ -2321,6 +2321,57 @@ SCENARIOS.byeMark = async function byeMark() {
 };
 
 /**
+ * WHEN TO ACCEPT (Tim, 2026-09-30: "calculate when that official date and time
+ * is for when the trade needs to be ACCEPTED (not just sent)"). Stubbed real
+ * league (or demo with TR_ACCEPT_DEMO): opens the first Cy deal's pop-up (demo:
+ * the first row) and reads its accept line, then the custom box's "Accept by"
+ * with Cy picked, before and after ticking one of his men.
+ */
+SCENARIOS.acceptBy = async function acceptByScenario() {
+  const demo = !!process.env.TR_ACCEPT_DEMO;
+  const seed = demo ? null : {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const click = (el) => el.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settleGoal(document);
+  const trs = [...document.querySelectorAll('#tradeTable tbody tr')];
+  const idx = demo ? 0 : trs.findIndex((tr) => /^Cy\b/.test(text(tr.querySelector('td.name'))));
+  let deal = null;
+  if (idx >= 0 && trs[idx]) {
+    click(trs[idx]);
+    await settle(1500);
+    const line = document.querySelector('#dealBody .deal-accept');
+    const espnAt = [...document.querySelectorAll('#dealBody > *')].findIndex((el) => el.querySelector && el.querySelector('a.espn-open, .espn-off'));
+    const lineAt = [...document.querySelectorAll('#dealBody > *')].indexOf(line);
+    deal = {
+      open: !$('dealModal').hidden,
+      get: text(document.querySelector('#dealBody .deal-side:nth-child(2)')) ||
+        [...document.querySelectorAll('#dealBody .deal-side')].map(text).join(' | '),
+      line: line ? text(line) : null,
+      title: line ? line.getAttribute('title') : null,
+      beforeEspn: line ? lineAt >= 0 && espnAt === lineAt + 1 : null,
+    };
+    const shut = document.querySelector('#dealClose, [data-close]');
+    if (shut) click(shut);
+  }
+  const box = () => ({ hidden: !!$('cuAcceptBox').hidden, text: text($('cuAccept')), title: $('cuAccept').getAttribute('title') });
+  if (!demo) {
+    $('cuTeamB').value = '3';
+    fire($('cuTeamB'), 'change');
+    await settle(500);
+  }
+  const before = box();
+  const tickB = document.querySelector('#cuListB input[type="checkbox"]');
+  if (tickB) { tickB.checked = true; fire(tickB, 'change'); }
+  await settle(1000);
+  const after = box();
+  return { errors, deal, before, after, ticked: !!tickB, deadlineLine: text($('deadlineLine')) };
+};
+
+/**
  * ONE WEEK FOR BOTH SLOT-BY-SLOT PANELS (Tim, 2026-09-29: "it shows different
  * numbers in different places for the same player ... need to be consistient
  * and accurate in every place"). The halves of the custom box used to keep a
@@ -5261,6 +5312,81 @@ if (!live.boot) {
     dump(boSent));
   ok('and the finder key is there for them', /green/i.test(offWeek.finderKey), offWeek.finderKey);
   ok('already played: no finder key at all', !past.finderKey, past.finderKey);
+}
+
+// ---- when to accept (Tim, 2026-09-30) ----------------------------------------
+//
+// "calculate when that official date and time is for when the trade needs to be
+// ACCEPTED (not just sent) in order for you to actually recieve those players by
+// that time" / "our trade review period is 1 day in our league rules."
+// Stub: each squad its own NFL team; pro team 1 (Ana) kicks off at K in the
+// coming week 5, team 3 (Cy) two days later; the stub's review is 24 h. Every
+// expected time is K-based arithmetic formatted the way the page formats it.
+{
+  const DAY = 86400000;
+  const when = (ms) => new Date(ms).toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+  const now = Date.now();
+  const far = String(now + 60 * DAY);
+  const base = { TR_PRO_SPLIT: '1', TR_DEADLINE: far };
+  const dump = (x) => JSON.stringify(x).slice(0, 400);
+  const runAcc = (env) => run('acceptBy', { stub: true, env: { ...base, ...env } });
+
+  // A run that dies must FAIL here, not throw past every check after it.
+  try {
+  // 1. In time for the coming week: Cy's kickoff (K + 2 days) − 24 h.
+  const K = now + 3 * DAY;
+  const a = runAcc({ TR_KICKOFFS: String(K) });
+  ok('accept-by (in time) boots, no errors', !a.boot && a.errors.length === 0, a.boot || dump(a.errors));
+  const at1 = when(K + 2 * DAY - DAY);
+  ok('pop-up: "Accept by <Cy\'s kickoff − 24 h> to have them for week 5"',
+    a.deal && new RegExp(`^Accept by ${at1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} to have (him|them) for week 5\\.$`).test(a.deal.line),
+    `${a.deal && a.deal.line} | want ${at1}`);
+  ok('pop-up: the tooltip says why (his kickoff, the 24-hour review)',
+    a.deal && a.deal.title && a.deal.title.includes(when(K + 2 * DAY)) && /24 hours/.test(a.deal.title), a.deal && a.deal.title);
+  ok('pop-up: the line sits right before the ESPN link block', a.deal && a.deal.beforeEspn === true, dump(a.deal));
+  ok('custom box: "Accept by" is shown, "—" before anything he sends is ticked',
+    !a.before.hidden && a.before.text === '—', dump(a.before));
+  ok('custom box: after ticking one of Cy\'s men, his time for week 5',
+    a.ticked && a.after.text === `${at1} for wk 5`, `${a.after.text} | want ${at1} for wk 5`);
+
+  // 2. Too late for week 5: Cy kicks off in 12 h — the answer is week 6.
+  const KL = now - 1.5 * DAY;
+  const l = runAcc({ TR_KICKOFFS: String(KL) });
+  ok('accept-by (too late) boots, no errors', !l.boot && l.errors.length === 0, l.boot || dump(l.errors));
+  const at2 = when(KL + 7 * DAY + 2 * DAY - DAY);
+  ok('pop-up: too late for week 5, so the week-6 time',
+    l.deal && l.deal.line === `Too late for week 5. Accept by ${at2} to have ${/them/.test(l.deal.line) ? 'them' : 'him'} for week 6.`,
+    `${l.deal && l.deal.line} | want ${at2}`);
+  ok('custom box: the week-6 time, with "too late for 5"',
+    l.after.text === `${at2} for wk 6 too late for 5`, l.after.text);
+
+  // 3. The trade deadline comes before the review cut-off.
+  const DL = now + 0.5 * DAY;
+  const c = runAcc({ TR_KICKOFFS: String(K), TR_DEADLINE: String(DL) });
+  ok('accept-by (deadline first) boots, no errors', !c.boot && c.errors.length === 0, c.boot || dump(c.errors));
+  ok('pop-up: accept by the trade deadline instead',
+    c.deal && new RegExp(`^Accept by ${when(DL).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(trade deadline\\) to have (him|them) for week 5\\.$`).test(c.deal.line),
+    `${c.deal && c.deal.line} | want ${when(DL)}`);
+  ok('custom box: the deadline time, marked', c.after.text === `${when(DL)} for wk 5 (deadline)`, c.after.text);
+
+  // 4. Cy's team is on bye in week 5: it is week 6, and NOT "too late".
+  const b = runAcc({ TR_KICKOFFS: String(K), TR_KICK_BYE: '3:5' });
+  ok('accept-by (bye) boots, no errors', !b.boot && b.errors.length === 0, b.boot || dump(b.errors));
+  const at4 = when(K + 7 * DAY + 2 * DAY - DAY);
+  ok('pop-up: his bye week is skipped, not called too late',
+    b.deal && new RegExp(`^Accept by ${at4.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} to have (him|them) for week 6\\.$`).test(b.deal.line),
+    `${b.deal && b.deal.line} | want ${at4}`);
+
+  // 5. Demo: no real kickoffs, so no line anywhere.
+  const d = run('acceptBy', { env: { TR_ACCEPT_DEMO: '1', TR_KICKOFFS: String(K), TR_DEADLINE: far } });
+  ok('accept-by (demo) boots, no errors', !d.boot && d.errors.length === 0, d.boot || dump(d.errors));
+  ok('demo: the pop-up opened and has no accept line', d.deal && d.deal.open && d.deal.line === null, dump(d.deal));
+  ok('demo: the custom box\'s "Accept by" is hidden', d.before.hidden && d.after.hidden, dump([d.before, d.after]));
+  } catch (e) {
+    ok('the accept-by checks ran to the end without throwing', false, String(e && e.stack).slice(0, 300));
+  }
 }
 
 // ---- a man on the injury report is underlined (Tim, 2026-09-29) --------------

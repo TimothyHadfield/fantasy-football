@@ -1619,6 +1619,15 @@
           <span class="src-label">You play him</span>
           <p class="cu-you" id="cuMeet"></p>
         </div>
+        <!-- WHEN TO ACCEPT (Tim, 2026-09-30: "when the trade needs to be
+             ACCEPTED (not just sent) in order for you to actually recieve those
+             players by that time"). First kickoff among the men he sends you,
+             minus the league's review period (`renderCustomAccept`). Live only,
+             and always one line while shown, so a tick never moves the panel. -->
+        <div class="cu-meet-box" id="cuAcceptBox" hidden>
+          <span class="src-label">Accept by</span>
+          <p class="cu-you" id="cuAccept"></p>
+        </div>
       </div>
       <div class="tool-group">
         <!-- THE SAME POP-UP EVERY OTHER TRADE ON THIS PAGE OPENS (Tim,

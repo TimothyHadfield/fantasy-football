@@ -374,8 +374,35 @@ export function parseFreeAgent(entry, week, byes = null) {
   };
 }
 
-/** Bye weeks by pro team id. */
-export async function fetchByeWeeks() {
+/**
+ * Every NFL team's kickoff in each week, `{ [proTeamId]: { [week]: epochMs } }`,
+ * off the same `proTeamSchedules_wl` payload the bye weeks come from
+ * (`proGamesByScoringPeriod[week][].date`, docs/espn-draft-api.md §5.1). The
+ * earliest game when a week has two; no entry for a bye or a game with no date.
+ * `{}` means unknown. For the Trade page's "accept by" line (js/accept-by.js).
+ */
+export function parseProKickoffs(data) {
+  const out = {};
+  for (const t of data?.settings?.proTeams || []) {
+    if (!t || !t.id) continue;
+    const byWeek = {};
+    for (const [week, games] of Object.entries(t.proGamesByScoringPeriod || {})) {
+      const times = (Array.isArray(games) ? games : [])
+        .map((g) => Number(g && g.date))
+        .filter((ms) => Number.isFinite(ms) && ms > 0);
+      if (times.length) byWeek[week] = Math.min(...times);
+    }
+    if (Object.keys(byWeek).length) out[t.id] = byWeek;
+  }
+  return out;
+}
+
+// The kickoffs from the last pro-schedule read, so the bye read and the kickoff
+// read share ONE request on a page that wants both. Only a read that succeeded
+// is kept.
+let kickoffStash = null; // { season, kickoffs }
+
+async function readProSchedule() {
   const view = 'proTeamSchedules_wl';
   let data;
   await bridge.settled();
@@ -386,6 +413,20 @@ export async function fetchByeWeeks() {
   } else {
     data = await request(`/apis/v3/games/ffl/seasons/${config.season}?view=${view}`);
   }
+  const kickoffs = parseProKickoffs(data);
+  if (Object.keys(kickoffs).length) kickoffStash = { season: config.season, kickoffs };
+  return data;
+}
+
+/** Kickoffs by pro team id and week; reuses the bye read's payload when there was one. */
+export async function fetchProKickoffs() {
+  if (kickoffStash && kickoffStash.season === config.season) return kickoffStash.kickoffs;
+  return parseProKickoffs(await readProSchedule());
+}
+
+/** Bye weeks by pro team id. */
+export async function fetchByeWeeks() {
+  const data = await readProSchedule();
   const byes = {};
   for (const t of data.settings?.proTeams || []) {
     if (t.byeWeek) byes[t.id] = t.byeWeek;

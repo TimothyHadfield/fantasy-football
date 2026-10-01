@@ -89,6 +89,7 @@ import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
+import { acceptBy } from './accept-by.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // And the rest of the Schedule page's season plumbing, for THE GOAL (Tim,
@@ -314,6 +315,9 @@ const state = {
   league: null,
   // `espn.parseTrades` off the schedule read: {deadline, reviewHours}, or null.
   tradeRules: null,
+  // NFL kickoffs, `{ proTeamId: { week: epochMs } }` (season.fetchProKickoffs),
+  // for the "accept by" line. Empty = unknown (demo, a failed read): no line.
+  kickoffs: {},
   // The goal's per-week weights for the last search ({weights, raw}), or null.
   goalWeights: null,
   // The simulation that ranks the finder's offers. `token` cancels a run that
@@ -4815,6 +4819,7 @@ function renderDeal() {
       `<div class="deal-detail">${BREAKDOWN_HOST}</div>` +
     `</div>` +
     cut +
+    dealAcceptHtml(offer) +
     espnBlock +
     // Beside the ESPN link, and not on the pop-up the builder itself opened —
     // that deal is already in the builder.
@@ -6277,6 +6282,7 @@ async function useDemo() {
   state.poPlayed = [];
   state.league = demoSeason();
   state.tradeRules = null;   // a sample league has no deadline to warn about
+  state.kickoffs = {};       // nor real kickoffs, so no "accept by" line
   // The demo season really is over: `js/demo-rosters.js` hardcodes a result
   // against every one of its thirteen games. Kept honest here, and handled
   // deliberately in `playedWeeks()` — which is the ONE place that decides the
@@ -6375,6 +6381,18 @@ async function useLive() {
   await baselineRead;
   if (state.source !== 'live') return;   // the reader went back to demo meanwhile
   state.byes = byes && typeof byes === 'object' ? byes : {};
+  // The kickoffs for the "accept by" line: after the byes, so on the desktop
+  // they come off the same payload (no request). Not awaited — nothing is
+  // priced from them; the pop-up and the custom box redraw when they land.
+  state.kickoffs = {};
+  if (typeof season.fetchProKickoffs === 'function') {
+    Promise.resolve().then(() => season.fetchProKickoffs()).catch(() => ({})).then((k) => {
+      if (state.source !== 'live') return;
+      state.kickoffs = k && typeof k === 'object' ? k : {};
+      if (state.deal) renderDeal();
+      renderCustomAccept();
+    });
+  }
   weekly.means = new Map();
   state.weeks = scheduleWeeks.length
     ? scheduleWeeks
@@ -6997,6 +7015,7 @@ function renderCustomPickers() {
     .join('');
 
   $('cuMeet').innerHTML = cuMeetHtml(a, b);
+  renderCustomAccept();
 
   $('cuHeadA').textContent = a ? `${a.name} sends` : 'Sends';
   $('cuHeadB').textContent = b ? `${b.name} sends` : 'Sends';
@@ -8036,6 +8055,104 @@ function renderDeadline(now = Date.now()) {
       (Number.isFinite(r.reviewHours) && r.reviewHours > 0
         ? `. An accepted trade then waits ${plural(r.reviewHours, 'hour')} for league review.`
         : '.');
+}
+
+// ------------------------------------------------------------- accept by
+//
+// Tim, 2026-09-30: "I want to know when I need to accept it if I want the
+// players actively on my team for week 4 … calculate when that official date
+// and time is for when the trade needs to be ACCEPTED (not just sent)" — and
+// "it says our trade review period is 1 day in our league rules."
+//
+// The rule is js/accept-by.js: the first kickoff that week among the men you
+// GET, minus the league's review period (ESPN's `revisionHours`, never a
+// hard-coded day), capped by the trade deadline. One line in the pop-up beside
+// the ESPN link, and one under "Accept by" in the custom box. Live only: demo
+// has no real kickoffs, so it says nothing (as the deadline line does).
+
+const whenText = (ms) => new Date(ms).toLocaleString('en-US', {
+  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+});
+
+/** A man's NFL team id — off the entry, or off his roster row when the entry lacks it. */
+function proTeamOf(p) {
+  if (p && p.proTeamId !== undefined && p.proTeamId !== null) return p.proTeamId;
+  for (const t of (state.data && state.data.teams) || []) {
+    const hit = (t.players || []).find((x) => String(x.playerId) === String(p && p.playerId));
+    if (hit) return hit.proTeamId ?? null;
+  }
+  return null;
+}
+
+/** The accept-by answer for the men received, or null when there is nothing to say. */
+function acceptDeadlineFor(received) {
+  if (state.isDemo || !received || !received.length) return null;
+  const r = state.tradeRules || {};
+  const final = new Set(state.playedWeeks || []);
+  const weeks = [...new Set([...(state.weeks || []), ...(state.poWeeks || [])])]
+    .filter((w) => !final.has(w)).sort((a, b) => a - b);
+  const a = acceptBy({
+    teams: received.map(proTeamOf),
+    kickoffs: state.kickoffs,
+    weeks,
+    reviewHours: Number.isFinite(r.reviewHours) ? r.reviewHours : null,
+    deadline: Number.isFinite(r.deadline) ? r.deadline : null,
+    now: Date.now(),
+  });
+  if (!a) return null;
+  a.who = received.length > 1 ? 'them' : 'him';
+  return a;
+}
+
+/** Why the time is what it is, for the tooltip (the WHY behind the line). */
+function acceptWhy(a) {
+  const review = (state.tradeRules || {}).reviewHours;
+  return `First kickoff among the men you get in week ${a.week}: ${whenText(a.kickoff)}` +
+    (a.kind === 'rule'
+      ? '. ESPN did not send this league’s review period; accept that long before it.'
+      : `, minus the league’s trade review (${plural(review, 'hour')})` +
+        (a.capped ? '. The trade deadline comes first.' : '.'));
+}
+
+/** The pop-up's one sentence. */
+function dealAcceptHtml(offer) {
+  const a = offer && !offer.combined ? acceptDeadlineFor(offer.receive) : null;
+  if (!a || a.kind === 'closed') return '';
+  const late = a.late.length ? `Too late for week ${a.late[0]}. ` : '';
+  const body = a.kind === 'rule'
+    ? `To have ${a.who} for week ${a.week}, accept before <strong>${esc(whenText(a.kickoff))}</strong> ` +
+      `kickoff, less your league’s review period.`
+    : `Accept by <strong>${esc(whenText(a.at))}</strong>${a.capped ? ' (trade deadline)' : ''} ` +
+      `to have ${a.who} for week ${a.week}.`;
+  return `<p class="deal-accept" title="${esc(acceptWhy(a))}">${late}${body}</p>`;
+}
+
+/** The custom box's "Accept by" value: the time and week, short. */
+function renderCustomAccept() {
+  const box = $('cuAcceptBox');
+  if (!box) return;
+  const live = !state.isDemo && Object.keys(state.kickoffs || {}).length > 0;
+  box.hidden = !live;
+  const el = $('cuAccept');
+  if (!live) { el.innerHTML = ''; el.removeAttribute('title'); return; }
+  const r = state.tradeRules || {};
+  if (Number.isFinite(r.deadline) && Date.now() >= r.deadline) {
+    el.textContent = 'Deadline passed';
+    el.removeAttribute('title');
+    return;
+  }
+  const a = acceptDeadlineFor(playersFor(state.custom.b, state.custom.sendB));
+  if (!a || a.kind === 'closed') {
+    el.textContent = '—';
+    el.setAttribute('title', 'Tick a man he sends to see when to accept.');
+    return;
+  }
+  el.innerHTML = a.kind === 'rule'
+    ? `<strong>${esc(whenText(a.kickoff))}</strong> kickoff, less review · wk ${a.week}`
+    : `<strong>${esc(whenText(a.at))}</strong> for wk ${a.week}` +
+      (a.capped ? ' (deadline)' : '') +
+      (a.late.length ? ` <span class="played">too late for ${a.late[0]}</span>` : '');
+  el.setAttribute('title', acceptWhy(a));
 }
 
 /** Both panels are the same payload read two ways, so a control is a repaint. */

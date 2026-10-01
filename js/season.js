@@ -1113,6 +1113,26 @@ export async function fetchByeWeeks() {
   return entry.promise.then((b) => ({ ...b }));
 }
 
+/**
+ * Every NFL team's kickoff per week, `{ [proTeamId]: { [week]: epochMs } }`
+ * (`espn.parseProKickoffs`), for the Trade page's "accept by" line.
+ *
+ * NEVER THROWS: `{}` is "unknown" and the line is then not drawn. Demo is `{}`.
+ * The pro schedule is season-level and public (no league, no login), so this
+ * reads ESPN even when the byes came from the cloud copy; on the desktop it
+ * reuses the bye read's payload (espn.js keeps it), so it costs no request.
+ */
+export async function fetchProKickoffs() {
+  const { leagueId } = espn.getConfig();
+  if (!realLeague(leagueId)) return {};
+  try {
+    const k = await espn.fetchProKickoffs();
+    return k && typeof k === 'object' ? k : {};
+  } catch {
+    return {};
+  }
+}
+
 // ===========================================================================
 // GATHERING WHAT GETS PUBLISHED
 // ===========================================================================

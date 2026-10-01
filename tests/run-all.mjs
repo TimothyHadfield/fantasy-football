@@ -62,6 +62,7 @@ const SUITES = [
   ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],
   ['test-trade-weekly.mjs', 'the weekly measure: depth across the season, and the combo packer'],
   ['test-trade-odds.mjs', 'the goal: a trade ranked by the title (or last-place) chance it moves, and will he say yes'],
+  ['test-accept-by.mjs', 'when a trade must be accepted: first kickoff among the men you get, minus the league’s review'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],
   ['test-pages-render.mjs', 'every page boots its real modules against its real HTML'],
   ['test-home.mjs', 'the home page and the debug page, pre-kickoff included'],
