@@ -967,6 +967,11 @@ const SCENARIOS = {
     out.noTeamAPicker = !$('cuTeamA');
     out.youLine = text($('cuYou'));
     out.teamOptions = [...$('cuTeamB').querySelectorAll('option')].map(text);
+    // Soonest opponent first, with the weeks after the name (Tim, 2026-09-30).
+    out.optWeeks = out.teamOptions.map((t) => {
+      const m = / · wks? ([\d, ]+)$/.exec(t);
+      return m ? m[1].split(',').map((x) => Number(x.trim())) : [];
+    });
     out.startsEmpty = text($('cuEmpty'));
     // THE INSTRUCTION, PRINTED ONCE (Phase 5, V5): counted over the whole
     // panel's text before anything is ticked. It was in `#cuPreview` AND in
@@ -1756,7 +1761,7 @@ const SCENARIOS = {
       recv: r0 ? r0.recv : '',
       hadButton: !!(r0 && r0.button),
       buttonText: r0 && r0.button ? text(r0.button) : '',
-      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null),
+      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null).replace(/ · wks? [\d, ]+$/, ''),
       ticksA: checkedNames('cuListA'),
       ticksB: checkedNames('cuListB'),
       dealOpen: !readDeal(document).hidden,
@@ -1775,7 +1780,7 @@ const SCENARIOS = {
       send: r1 ? r1.send : '',
       recv: r1 ? r1.recv : '',
       hadButton: popHadButton,
-      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null),
+      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null).replace(/ · wks? [\d, ]+$/, ''),
       ticksA: checkedNames('cuListA'),
       ticksB: checkedNames('cuListB'),
       dealOpen: !readDeal(document).hidden,
@@ -2704,7 +2709,7 @@ SCENARIOS.customSeason = async function customSeason() {
     now: box('before'), after: box('after'),
   });
   const A = view();
-  const nameB = text($('cuTeamB').querySelector('option[selected]') || $('cuTeamB').querySelector('option'));
+  const nameB = text($('cuTeamB').querySelector('option[selected]') || $('cuTeamB').querySelector('option')).replace(/ · wks? [\d, ]+$/, '');
   const btnB = sec() && sec().querySelector('button[data-sbw-side="theirs"]');
   if (btnB) fire(btnB, 'click');
   const B = view();
@@ -5903,6 +5908,14 @@ if (!live.boot) {
     !cu.followedTop.bOptions.includes(cu.picked.a),
     `${cu.picked.a} in ${cu.followedTop.bOptions.join(',')}`);
   eq(cu.teamOptions.length, 9, 'so it offers the other nine managers');
+  {
+    const firsts = cu.optWeeks.map((w) => (w.length ? w[0] : Infinity));
+    ok('OPP ORDER: the partner list names the weeks you play each manager',
+      cu.optWeeks.filter((w) => w.length).length >= 5 && cu.optWeeks.every((w) => w.every((x, i) => i === 0 || x > w[i - 1])),
+      JSON.stringify(cu.teamOptions));
+    ok('OPP ORDER: and is ordered soonest meeting first, never-again last',
+      firsts.every((f, i) => i === 0 || f >= firsts[i - 1]), JSON.stringify(cu.teamOptions));
+  }
 
   ok('the box starts empty and says so',
     /No custom trades saved yet/.test(cu.startsEmpty), cu.startsEmpty);

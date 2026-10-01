@@ -6978,9 +6978,22 @@ function renderCustomPickers() {
   // The B picker never offers the squad that is already "you": a trade with
   // yourself is not a thing, and an option that silently swapped the sides was
   // the old answer to a problem that no longer exists.
+  // SOONEST OPPONENT FIRST, with the weeks you play him after his name (Tim,
+  // 2026-09-30: "order the users in the custome trade user selection by when you
+  // play them next (soonest to latest), aswell as put the week #'s that you play
+  // them on the right side of their name"). Only weeks still to play count; a
+  // manager you never meet again goes last, in the order he was in.
+  const left = spanFor('last');
+  const ahead = (t) => (a
+    ? meetingWeeks({ pair: { a: a.id, b: t.id, name: t.name } }).weeks.filter((w) => left.includes(w))
+    : []);
   $('cuTeamB').innerHTML = teams
     .filter((t) => t.id !== state.custom.a)
-    .map((t) => `<option value="${t.id}"${t.id === state.custom.b ? ' selected' : ''}>${esc(t.name)}</option>`)
+    .map((t, i) => ({ t, i, weeks: ahead(t) }))
+    .sort((x, y) => (x.weeks[0] ?? Infinity) - (y.weeks[0] ?? Infinity) || x.i - y.i)
+    .map(({ t, weeks }) =>
+      `<option value="${t.id}"${t.id === state.custom.b ? ' selected' : ''}>${esc(t.name)}` +
+      `${weeks.length ? ` · ${weeks.length > 1 ? 'wks' : 'wk'} ${weeks.join(', ')}` : ''}</option>`)
     .join('');
 
   $('cuMeet').innerHTML = cuMeetHtml(a, b);
