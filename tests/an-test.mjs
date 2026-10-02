@@ -2459,6 +2459,53 @@ async function check(scenario, boot) {
       cards.every((k) => !k.pending), cards.find((k) => k.pending)?.pending);
     c.ok('the card still opens with the identity line it always had',
       cards.every((k) => /^.+ · (QB|RB|WR|TE|DST|K) · [A-Z]{2,4}/.test(k.ident)), cards[0].ident);
+
+    // ---- THE GLANCE LINE under the name (Tim, 2026-10-02) -----------------
+    // "show the player's avg points, this week proj, and position rank … at
+    // the top of the preview by the player's name". The sample season's "now"
+    // is week 4 (DEMO_CURRENT_WEEK), whatever week the picker shows: Proj must
+    // be the card's own week-4 projection, and Avg the mean of his weeks 1–3
+    // scores where he played all three for this squad (read off the Act row).
+    {
+      const { demoGlance, DEMO_CURRENT_WEEK } = await import('../js/demo-rosters.js');
+      const RX = /^Avg (\d+\.\d|—) · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #(\d+)$/;
+      const lines = tipCells.map((td) => {
+        td.dispatchEvent(new boot.window.Event('mouseover', { bubbles: true }));
+        const card = d.getElementById('tipCard');
+        const g = card.querySelector('.tc-glance');
+        const pid = Number(((td.querySelector('a.pref') || {}).getAttribute?.('href') || '').split('player=')[1]);
+        const projs = [...card.querySelectorAll('.tc-run tbody td')];
+        const acts = [...card.querySelectorAll('.tc-run tfoot td')].map((t) => t.textContent.trim());
+        // The line sits right under the name, ahead of the chart.
+        const order = g ? [...card.children].indexOf(g) : -1;
+        return { pid, text: g ? g.textContent.trim() : '', order,
+          identAt: [...card.children].indexOf(card.querySelector('.tc-ident')),
+          p4: projs[3] ? (projs[3].firstChild?.textContent || '').trim() : '', clean: projs.slice(0, 3).every((t) => /\bk-num\b/.test(t.className)),
+          acts: acts.slice(0, 3) };
+      });
+      c.ok('EVERY demo card carries the glance line, right under the name',
+        lines.length > 0 && lines.every((l) => RX.test(l.text) && l.order === l.identAt + 1),
+        JSON.stringify(lines.find((l) => !RX.test(l.text) || l.order !== l.identAt + 1)));
+      c.ok('the sample’s now is week 4', DEMO_CURRENT_WEEK === 4, DEMO_CURRENT_WEEK);
+      // (A man who was on another squad in week 4 shows "off" on this squad's
+      // run, while the glance still carries ESPN's league-wide number for him.)
+      const onSquad = lines.filter((l) => /^\d+\.\d$/.test(l.p4));
+      c.ok('Proj is his week-4 projection, not the picked week’s',
+        onSquad.length >= 20 && onSquad.every((l) => l.text.match(RX)?.[2] === l.p4),
+        `${onSquad.length} checked; ${JSON.stringify(onSquad.find((l) => l.text.match(RX)?.[2] !== l.p4))}`);
+      const full = lines.filter((l) => l.clean && l.acts.every((a) => /^\d+\.\d$/.test(a)));
+      c.ok('Avg is the mean of the weeks he played (weeks 1–3, off his Act row)',
+        full.length >= 5 && full.every((l) => l.text.match(RX)?.[1] ===
+          (l.acts.reduce((a, v) => a + Number(v), 0) / 3).toFixed(1)),
+        `${full.length} checked; ${JSON.stringify(full.find((l) => l.text.match(RX)?.[1] !==
+          (l.acts.reduce((a, v) => a + Number(v), 0) / 3).toFixed(1)))}`);
+      const g = demoGlance();
+      c.ok('the rank is his place at his position by season total across the sample',
+        lines.every((l) => Number(l.text.match(RX)?.[4]) === g.byId.get(l.pid)?.rank),
+        JSON.stringify(lines.find((l) => Number(l.text.match(RX)?.[4]) !== g.byId.get(l.pid)?.rank)));
+      // Pinned, so a change to the sample or the format is seen.
+      c.ok('the first card reads exactly as pinned', lines[0].text === 'Avg 29.0 · Proj 21.0 · QB #1', lines[0].text);
+    }
   }
 
   // ---- (b) live, every week resolves --------------------------------------

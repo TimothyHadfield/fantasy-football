@@ -448,6 +448,11 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
         seasonProjected: seasonProj?.appliedTotal ?? null,
         injuryStatus: p.injuryStatus || 'ACTIVE',
         percentOwned: p.ownership?.percentOwned ?? null,
+        // ESPN's season average and position rank (the player card's glance
+        // line). A week cached before these existed simply lacks them, and every
+        // reader treats a missing one as null.
+        seasonAvg: espn.seasonAverageOf(stats, season),
+        posRank: espn.positionRankOf(e.playerPoolEntry),
       };
     });
 

@@ -97,8 +97,19 @@ function leaguePayload(opts) {
   };
 }
 
+/**
+ * ESPN's glance fields as measured on public league 1241838, 2026-10-02
+ * (Omarion Hampton, week 4): `ratings` on the pool entry, and the season line
+ * (statSourceId 0, split 0) beside LAST season's, which must not be the one read.
+ */
+const GLANCE_RATINGS = { 0: { positionalRanking: 23, totalRanking: 104, totalRating: 30.4 } };
+const GLANCE_STATS = [
+  { statSourceId: 0, statSplitTypeId: 0, scoringPeriodId: 0, seasonId: 2025, appliedTotal: 119.7, appliedAverage: 13.3 },
+  { statSourceId: 0, statSplitTypeId: 0, scoringPeriodId: 0, seasonId: SEASON, appliedTotal: 30.4, appliedAverage: 10.133333333333333 },
+];
+
 /** One QB starting, one on the bench, projections for every week. */
-function rosterPayload(week) {
+function rosterPayload(week, mode = {}) {
   return {
     settings: { name: 'Rules League' },
     members: [],
@@ -111,6 +122,7 @@ function rosterPayload(week) {
           playerId: t.id * 100 + i,
           lineupSlotId: slot,
           playerPoolEntry: {
+            ...(mode.glance && t.id === 1 && i === 0 ? { ratings: GLANCE_RATINGS } : {}),
             player: {
               id: t.id * 100 + i,
               fullName: `${t.abbrev} QB${i}`,
@@ -123,6 +135,7 @@ function rosterPayload(week) {
                   ? [{ scoringPeriodId: week, statSourceId: 0, statSplitTypeId: 1, appliedTotal: i ? 30 + t.id : 10 + t.id }]
                   : []),
                 { seasonId: SEASON, statSourceId: 1, statSplitTypeId: 0, appliedTotal: 300 + t.id },
+                ...(mode.glance && t.id === 1 && i === 0 ? GLANCE_STATS : []),
               ],
             },
           },
@@ -177,7 +190,7 @@ function installFetch(mode = {}) {
     let body;
     if (/proTeamSchedules_wl/.test(u)) body = BYES;
     else if (/kona_player_info/.test(u)) body = wirePayload(Number((u.match(/scoringPeriodId=(\d+)/) || [])[1] || 1));
-    else if (/scoringPeriodId=(\d+)/.test(u)) body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]));
+    else if (/scoringPeriodId=(\d+)/.test(u)) body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), mode);
     else {
       body = leaguePayload(mode);
       // As ESPN does (checked on league 1241838): no `settings` unless asked.
@@ -335,6 +348,49 @@ const SCENARIOS = {
     const demo = await season.fetchByeWeeks();
     eq(demo, {}, 'demo never claims a bye');
     eq(calls.filter((u) => /proTeamSchedules_wl/.test(u)).length, 1, 'and asks nobody (the wire reused the cached byes)');
+  },
+
+  // The player card's glance line (Tim, 2026-10-02): ESPN's season average and
+  // position rank, off both payload shapes, and null — never a throw — when a
+  // payload (or an older cached week) has neither.
+  async glance() {
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '' });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+
+    // Free-agent shape (kona_player_info `players[]`): ratings on the ENTRY.
+    const fa = {
+      id: 3054211,
+      status: 'FREEAGENT',
+      ratings: { 0: { positionalRanking: 32, totalRanking: 300, totalRating: 13 } },
+      player: {
+        id: 3054211, fullName: 'Cameron Dicker', defaultPositionId: 5, proTeamId: 24,
+        stats: [
+          { scoringPeriodId: 4, statSourceId: 1, statSplitTypeId: 1, appliedTotal: 8.2 },
+          { statSourceId: 0, statSplitTypeId: 0, scoringPeriodId: 0, seasonId: 2025, appliedTotal: 150, appliedAverage: 8.8 },
+          { statSourceId: 0, statSplitTypeId: 0, scoringPeriodId: 0, seasonId: SEASON, appliedTotal: 13, appliedAverage: 4.333333333333333 },
+        ],
+      },
+    };
+    const got = espn.parseFreeAgent(fa, 4);
+    eq([got.seasonAvg, got.posRank], [4.333333333333333, 32], 'free agent: THIS season’s appliedAverage and ratings[0].positionalRanking');
+    const bare = espn.parseFreeAgent(wirePayload(4).players[0], 4);
+    eq([bare.seasonAvg, bare.posRank], [null, null], 'free agent with no season line and no ratings: both null');
+    const lastYear = espn.parseFreeAgent({ ...fa, ratings: {}, player: { ...fa.player, stats: fa.player.stats.slice(0, 2) } }, 4);
+    eq([lastYear.seasonAvg, lastYear.posRank], [null, null], 'only LAST season’s line, empty ratings: null, never last year’s 8.8');
+
+    // Roster shape (mRoster `teams[].roster.entries[]`): ratings on playerPoolEntry.
+    installFetch({ glance: true });
+    const week = await season.fetchWeekRosters(4);
+    const players = week.teams.flatMap((t) => t.players);
+    const hampton = players.find((p) => p.playerId === 100);
+    eq([hampton.seasonAvg, hampton.posRank], [10.133333333333333, 23], 'rostered: 10.1333 (not 2025’s 13.3) and RB #23 as measured');
+    const others = players.filter((p) => p.playerId !== 100);
+    ok('every other rostered man: both null, not 0 or undefined',
+      others.length > 0 && others.every((p) => p.seasonAvg === null && p.posRank === null),
+      JSON.stringify(others.map((p) => [p.seasonAvg, p.posRank])));
   },
 
   // 2, 4, 5, 10 through the cloud: sync on a "desktop", read on a "phone".

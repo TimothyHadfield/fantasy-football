@@ -324,6 +324,33 @@ export function byeAdjustedProjection(projected, proTeamId, week, byes) {
  * @param {number} week the scoringPeriodId that entry was fetched for
  * @param {Object} [byes] `{proTeamId: byeWeek}`; see `byeAdjustedProjection`
  */
+/**
+ * ESPN's own season average for a man — the "AVG" its app prints — or null.
+ *
+ * The season line is statSourceId 0, statSplitTypeId 0 for THIS season
+ * (`appliedAverage`); the same payload also carries last season's line, which is
+ * why the season id is checked. Measured on public league 1241838, 2026-10-02:
+ * Omarion Hampton 30.4 total, 10.1333 average after three games.
+ */
+export function seasonAverageOf(stats, seasonId) {
+  const line = (stats || []).find(
+    (s) => s && s.statSourceId === 0 && s.statSplitTypeId === 0 && s.seasonId === seasonId
+  );
+  return typeof line?.appliedAverage === 'number' && Number.isFinite(line.appliedAverage)
+    ? line.appliedAverage
+    : null;
+}
+
+/**
+ * ESPN's position rank — `ratings['0'].positionalRanking` — or null. It rides on
+ * the pool entry (a roster's `playerPoolEntry`, or a free-agent `players[]`
+ * element), not on `player`. Hampton: RB #23 on 2026-10-02.
+ */
+export function positionRankOf(entry) {
+  const r = entry?.ratings?.['0']?.positionalRanking;
+  return typeof r === 'number' && Number.isFinite(r) && r > 0 ? r : null;
+}
+
 export function parseFreeAgent(entry, week, byes = null) {
   const p = entry?.player || {};
   const weekly = (p.stats || []).find(
@@ -361,6 +388,10 @@ export function parseFreeAgent(entry, week, byes = null) {
     // A fact, so never bye-adjusted (see byeAdjustedProjection). Null before
     // kickoff and for a man with no line that week.
     actual: typeof weeklyActual?.appliedTotal === 'number' ? weeklyActual.appliedTotal : null,
+    // ESPN's season average and position rank, for the player card's glance
+    // line. Null when ESPN sent none (and on any wire synced before these).
+    seasonAvg: seasonAverageOf(p.stats, config.season),
+    posRank: positionRankOf(entry),
     // Whether he can be added straight away or has to clear waivers first.
     // Both ride on the ENTRY, not on `player` (verified against league 1241838,
     // 2026-09-16): `status` is 'FREEAGENT' or 'WAIVERS', and a WAIVERS entry

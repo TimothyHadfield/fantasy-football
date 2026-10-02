@@ -770,6 +770,18 @@ th.po-start, td.po-start,
   border: 0;
 }
 
+/* THE LINE UNDER THE NAME on the player card: ESPN's Avg, this week's Proj and
+ * position rank (Tim, 2026-10-02), as one small line. Styled here rather than
+ * in each page's <style> because all three card pages draw it the same way;
+ * it reuses the card's own dim and text tokens, no new colour. */
+.tipcard .tc-glance {
+  font-size: 11.5px;
+  color: var(--dim);
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.tipcard .tc-glance b { color: var(--text); font-weight: 600; }
+
 /* ------------------------------------------------------------------- charts */
 
 .chart { width: 100%; margin-top: 4px; }

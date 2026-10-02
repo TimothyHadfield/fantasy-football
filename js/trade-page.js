@@ -624,6 +624,10 @@ function indexTeams(teams) {
         projected: typeof p.projected === 'number' ? p.projected : null,
         actual: typeof p.actual === 'number' ? p.actual : null,
         injuryStatus: p.injuryStatus || null,
+        // ESPN's season average and position rank, for the card's glance line.
+        // Absent on a week cached before they were parsed: null, never a crash.
+        seasonAvg: typeof p.seasonAvg === 'number' ? p.seasonAvg : null,
+        posRank: typeof p.posRank === 'number' ? p.posRank : null,
       });
     }
   }
@@ -1697,6 +1701,7 @@ function cardFor(p, ctx = null) {
   return {
     ident,
     href,
+    glance: glanceFor(p),
     run: weekRun({
       heading: heading + tail,
       weeks,
@@ -1728,6 +1733,44 @@ function cardFor(p, ctx = null) {
       vsName: meet.name,
     }),
   };
+}
+
+/**
+ * THE GLANCE LINE under the name (Tim, 2026-10-02): ESPN's season average, his
+ * projection for the CURRENT week, and his position rank — what every other
+ * manager sees in ESPN's app today. See `glanceHtml` in js/player-card.js.
+ *
+ * The current week is ESPN's current scoring period — the first week not yet
+ * final, so a week in progress counts — and NOT the week picker, which is a
+ * pricing choice. The demo uses the sample's own "now" (DEMO_CURRENT_WEEK).
+ * Avg and rank come off that week's payload (re-read every six hours, so the
+ * freshest), else the latest other week that carries them.
+ */
+function glanceWeek() {
+  if (state.isDemo) return demoNow;
+  const played = new Set(state.playedWeeks);
+  const now = state.weeks.find((w) => !played.has(w));
+  return now !== undefined ? now : state.weeks[state.weeks.length - 1] ?? null;
+}
+
+function glanceFor(p) {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const now = glanceWeek();
+  const here = now === null ? null : weekly.byWeek.get(now)?.get(p.playerId) || null;
+  let avg = num(here?.seasonAvg);
+  let rank = num(here?.posRank);
+  if (avg === null || rank === null) {
+    for (const w of [...weekly.byWeek.keys()].sort((a, b) => b - a)) {
+      const e = weekly.byWeek.get(w).get(p.playerId);
+      if (!e) continue;
+      if (avg === null) avg = num(e.seasonAvg);
+      if (rank === null) rank = num(e.posRank);
+      if (avg !== null && rank !== null) break;
+    }
+  }
+  if (avg === null) avg = num(p.seasonAvg);
+  if (rank === null) rank = num(p.posRank);
+  return { avg, proj: num(here?.projected), rank, pos: p.position };
 }
 
 /**
@@ -6794,12 +6837,15 @@ function resolveTeam() {
 // demo-rosters.js is written by a separate pass. Load it lazily so a missing or
 // broken file degrades into a clear message instead of a blank page.
 let demoGenerator;
+// The sample season's "now", for the card's glance line (see glanceWeek).
+let demoNow = 4;
 async function getDemoGenerator() {
   if (demoGenerator !== undefined) return demoGenerator;
   try {
     const mod = await import('./demo-rosters.js');
     demoGenerator =
       typeof mod.generateDemoWeekRosters === 'function' ? mod.generateDemoWeekRosters : null;
+    if (Number.isFinite(mod.DEMO_CURRENT_WEEK)) demoNow = mod.DEMO_CURRENT_WEEK;
   } catch {
     demoGenerator = null;
   }

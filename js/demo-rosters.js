@@ -550,9 +550,98 @@ const weekRosterCache = new Map();
  * Weeks 14–16 are the sample playoffs: projections only, actuals null, and no
  * fit (there is no game to fit to). See DEMO_PLAYOFF_WEEKS.
  *
+ * Every player also carries ESPN's two "how the league sees him" numbers —
+ * `seasonAvg` and `posRank` — as of DEMO_CURRENT_WEEK, the same in every week's
+ * payload, exactly as a live read made today carries today's. See demoGlance.
+ *
  * @param {number} week 1-16
  */
 export function generateDemoWeekRosters(week) {
+  const built = buildWeek(week);
+  if (!decorated.has(built.week)) {
+    const g = demoGlance();
+    for (const team of built.teams) {
+      // `starters` and `bench` hold the same objects as `players`.
+      for (const p of team.players) {
+        const mine = g.byId.get(p.playerId);
+        p.seasonAvg = mine ? mine.avg : null;
+        p.posRank = mine ? mine.rank : null;
+      }
+    }
+    decorated.add(built.week);
+  }
+  return built;
+}
+
+// ------------------------------------------------- the glance (Avg / rank)
+//
+// The sample season "is" at week 4 — the Players page has always said so
+// ("The season is pretended to be at week 4"), and the Trade and Analysis
+// pages use the same week for the player card's glance line, so one invented
+// man reads the same Avg / Proj / rank on every page.
+export const DEMO_CURRENT_WEEK = 4;
+
+const decorated = new Set();
+let glanceCache = null;
+
+/**
+ * Every demo man's season to date, ESPN-style: his average over the weeks he
+ * actually played before DEMO_CURRENT_WEEK (a week he was ruled out has no
+ * line, and is skipped), and his rank at his position by season total among
+ * the whole sample universe — rostered men and the free-agent pool alike, as
+ * ESPN ranks every player. Ties go to the lower playerId, so it is fixed.
+ *
+ * A rostered week uses the score the pages show for him (the fitted one); a
+ * week he sat on the wire uses his raw score for that week, rounded the same.
+ * Nothing here changes any number this file already produced.
+ *
+ * `ladder` is each position's season totals, best first, for a page with
+ * invented men of its own (the Players page's wire) to slot them into.
+ */
+export function demoGlance() {
+  if (glanceCache) return glanceCache;
+  const uni = buildUniverse();
+  const scores = new Map();   // playerId -> [actuals]
+  for (let w = 1; w < DEMO_CURRENT_WEEK; w++) {
+    const seen = new Map();
+    for (const team of buildWeek(w).teams) {
+      for (const p of team.players) seen.set(p.playerId, p);
+    }
+    for (const player of uni.byId.values()) {
+      const held = seen.get(player.playerId);
+      const status = held ? held.injuryStatus : injuryStatusFor(player, w);
+      if (isOut(status)) continue;
+      const actual = held ? held.actual : round1(rawWeek(player, w, status).actual);
+      if (typeof actual !== 'number') continue;
+      if (!scores.has(player.playerId)) scores.set(player.playerId, []);
+      scores.get(player.playerId).push(actual);
+    }
+  }
+
+  const byId = new Map();
+  const byPos = new Map();
+  for (const player of uni.byId.values()) {
+    const got = scores.get(player.playerId) || [];
+    const total = round1(got.reduce((a, b) => a + b, 0));
+    byId.set(player.playerId, {
+      avg: got.length ? total / got.length : null,
+      total,
+      rank: null,
+    });
+    if (!byPos.has(player.position)) byPos.set(player.position, []);
+    byPos.get(player.position).push(player.playerId);
+  }
+  const ladder = {};
+  for (const [position, ids] of byPos) {
+    ids.sort((a, b) => byId.get(b).total - byId.get(a).total || a - b);
+    ids.forEach((id, i) => { byId.get(id).rank = i + 1; });
+    ladder[position] = ids.map((id) => byId.get(id).total);
+  }
+  glanceCache = { byId, ladder };
+  return glanceCache;
+}
+
+function buildWeek(week) {
   const target = clamp(Math.round(week) || 1, 1, LAST_WEEK);
   const playoff = target > WEEKS;
   if (weekRosterCache.has(target)) return weekRosterCache.get(target);

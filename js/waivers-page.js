@@ -270,6 +270,7 @@ const state = {
   rosterStatus: new Map(),       // week -> Map(playerId -> injury status that week)
   failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
   demoTeamId: null,              // the demo league has no owner; a team stands in
+  demoLadder: null,              // demo only: each position's season totals (demoGlance)
   // THE "YOUR TEAM" PICKER (Tim, 2026-10-02: "add a user selection for the
   // players menu, just like the other manus"). Null = nobody picked here, so
   // the connection's team (or the demo's stand-in) is you, as before.
@@ -483,6 +484,7 @@ function resetData() {
   state.rosterStatus.clear();
   state.failedRosterWeeks.clear();
   state.demoTeamId = null;
+  state.demoLadder = null;
   state.byes = {};
   state.scoring = null;
   state.playedWeeks = [];
@@ -516,6 +518,12 @@ async function loadDemo() {
   // No network, so there is nothing to stagger: fill every week at once and let
   // the same renderers draw it.
   for (const p of generateDemoPool()) {
+    // The card's glance line: his sample season so far, ESPN-style — the mean
+    // of the played weeks he has a score in. Rank waits for the sample squads
+    // (demoWireRank), whose ladder he is slotted into.
+    const scored = state.playedWeeks.map((w) => demoActual(p, w)).filter((v) => typeof v === 'number');
+    p.demoTotal = Math.round(scored.reduce((a, b) => a + b, 0) * 10) / 10;
+    p.seasonAvg = scored.length ? p.demoTotal / scored.length : null;
     state.pool.set(p.playerId, p);
     for (const w of allWeeks()) {
       if (!state.weekData.has(w)) state.weekData.set(w, new Map());
@@ -555,6 +563,7 @@ async function loadDemoRosters(token) {
   try {
     const mod = await import('./demo-rosters.js');
     if (typeof mod.generateDemoWeekRosters === 'function') generate = mod.generateDemoWeekRosters;
+    if (token === state.token && typeof mod.demoGlance === 'function') state.demoLadder = mod.demoGlance().ladder;
   } catch { /* handled below, as a missing comparison rather than a broken page */ }
 
   if (token !== state.token) return;
@@ -1002,8 +1011,13 @@ function absorbWeek(players, week) {
         // week's payload. null is "ESPN did not say", never "free agent".
         status: p.status ?? null,
         waiverClears: p.waiverClears ?? null,
+        // ESPN's season average and position rank (the card's glance line).
+        seasonAvg: typeof p.seasonAvg === 'number' ? p.seasonAvg : null,
+        posRank: typeof p.posRank === 'number' ? p.posRank : null,
       });
     } else {
+      if (typeof p.seasonAvg === 'number') known.seasonAvg = p.seasonAvg;
+      if (typeof p.posRank === 'number') known.posRank = p.posRank;
       // The same player comes back in every week's payload. Later weeks carry
       // the fresher injury status and ownership, so let them win; the ordering
       // of the list itself is not assumed to be identical week to week, which
@@ -1218,6 +1232,71 @@ function pastRun(p, wire) {
 /** Every card on this page is registered under this prefix, and cleared by it. */
 const TIP_PREFIX = 'wv';
 
+/**
+ * THE GLANCE LINE at the top of the card (Tim, 2026-10-02): ESPN's season
+ * average, his projection for THIS week (`state.currentWeek`, the first week
+ * not yet final) and his position rank — what other managers see in ESPN's
+ * app. A free agent's come off the wire (`state.pool`), a rostered man's off
+ * this week's rosters, else the latest other roster week carrying them.
+ *
+ * On the demo, the wire's men are this page's own invention: Avg is the mean
+ * of their sample scores so far, and the rank slots them into the sample
+ * squads' own ladder (`demoGlance` in js/demo-rosters.js), so a rostered man's
+ * rank here is the one the Trade and Analysis pages show.
+ */
+function glanceFor(p, wire) {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const now = state.currentWeek;
+  if (wire) {
+    const known = state.pool.get(p.playerId) || p;
+    const v = now === null || now === undefined ? undefined : valueFor(p.playerId, now);
+    return {
+      avg: num(known.seasonAvg),
+      proj: num(v),
+      rank: num(known.posRank) ?? demoWireRank(known),
+      pos: p.position,
+    };
+  }
+  const find = (teams) => {
+    for (const t of teams || []) {
+      for (const x of t.players || []) if (x.playerId === p.playerId) return x;
+    }
+    return null;
+  };
+  const here = find(state.rosterWeeks.get(now));
+  let avg = num(here?.seasonAvg);
+  let rank = num(here?.posRank);
+  if (avg === null || rank === null) {
+    for (const w of [...state.rosterWeeks.keys()].sort((a, b) => b - a)) {
+      const x = find(state.rosterWeeks.get(w));
+      if (!x) continue;
+      if (avg === null) avg = num(x.seasonAvg);
+      if (rank === null) rank = num(x.posRank);
+      if (avg !== null && rank !== null) break;
+    }
+  }
+  const v = rosterValueFor(p.playerId, now);
+  return {
+    avg: avg ?? num(p.seasonAvg),
+    proj: num(v),
+    rank: rank ?? num(p.posRank),
+    pos: p.position,
+  };
+}
+
+/** A sample free agent's place in the sample squads' ladder at his position. */
+function demoWireRank(p) {
+  if (!state.isDemo || !state.demoLadder || typeof p.demoTotal !== 'number') return null;
+  const ladder = state.demoLadder[p.position];
+  if (!ladder) return null;
+  let above = ladder.filter((t) => t > p.demoTotal).length;
+  for (const q of state.pool.values()) {
+    if (q !== p && q.position === p.position && typeof q.demoTotal === 'number' &&
+        (q.demoTotal > p.demoTotal || (q.demoTotal === p.demoTotal && q.playerId < p.playerId))) above++;
+  }
+  return above + 1;
+}
+
 /** ` data-tip="…"` for a name, or '' when there is nothing played to show. */
 function pastTip(p, { wire = false, where = 'w' } = {}) {
   if (p.playerId === null || p.playerId === undefined) return '';
@@ -1225,6 +1304,7 @@ function pastTip(p, { wire = false, where = 'w' } = {}) {
   if (!run) return '';
   const key = registerRun({
     ident: `${p.name} · ${p.position} · ${p.proTeam}`,
+    glance: glanceFor(p, wire),
     run,
     href: `waivers.html?player=${p.playerId}`,
     id: `${where}:${p.playerId}`,

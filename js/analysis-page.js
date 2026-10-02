@@ -694,6 +694,63 @@ async function loadByes() {
   }
 }
 
+// ------------------------------------------------- the glance line on the card
+//
+// Tim, 2026-10-02: ESPN's Avg, this week's Proj and position rank at the top of
+// the card, "exactly what we see on the player's info on the espn fantasy app".
+// Drawn by `glanceHtml` in js/player-card.js; this page only finds the numbers.
+//
+// "This week" is ESPN's current scoring period — the first week not yet final
+// — never the week picker. The demo uses the sample's "now" (DEMO_CURRENT_WEEK).
+// Avg and rank come off that week's payload (the freshest read), else the
+// latest other week carrying them, else the row's own player object.
+
+function glanceWeek() {
+  if (state.isDemo) return demoNow;
+  const played = new Set(state.playedWeeks);
+  const now = state.weeks.find((w) => !played.has(w));
+  return now !== undefined ? now : state.weeks[state.weeks.length - 1] ?? null;
+}
+
+let glanceMemo = { weeks: null, size: -1, now: null, here: null, any: null };
+
+/** playerId -> his entry in the current week, and in the latest week that has the fields. */
+function glanceIndex() {
+  const now = glanceWeek();
+  const m = glanceMemo;
+  if (m.weeks === state.seasonWeeks && m.size === state.seasonWeeks.size && m.now === now) return m;
+  const here = new Map();
+  const any = new Map();
+  const cur = now === null ? null : state.seasonWeeks.get(now);
+  for (const t of cur || []) for (const p of t.players || []) here.set(p.playerId, p);
+  for (const w of [...state.seasonWeeks.keys()].sort((a, b) => b - a)) {
+    for (const t of state.seasonWeeks.get(w) || []) {
+      for (const p of t.players || []) {
+        const got = any.get(p.playerId) || { avg: null, rank: null };
+        if (got.avg === null && typeof p.seasonAvg === 'number') got.avg = p.seasonAvg;
+        if (got.rank === null && typeof p.posRank === 'number') got.rank = p.posRank;
+        any.set(p.playerId, got);
+      }
+    }
+  }
+  glanceMemo = { weeks: state.seasonWeeks, size: state.seasonWeeks.size, now, here, any };
+  return glanceMemo;
+}
+
+function glanceFor(p) {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  // Another league's weeks still in hand for one paint: see seasonIndexFor.
+  const ix = state.seasonKey === sourceKey() ? glanceIndex() : null;
+  const here = ix ? ix.here.get(p.playerId) : null;
+  const any = ix ? ix.any.get(p.playerId) : null;
+  return {
+    avg: num(here?.seasonAvg) ?? num(any?.avg) ?? num(p.seasonAvg),
+    proj: num(here?.projected),
+    rank: num(here?.posRank) ?? num(any?.rank) ?? num(p.posRank),
+    pos: p.position,
+  };
+}
+
 // ----------------------------------------------------------- the tip card
 //
 // The card itself — how it draws, where it floats, how it opens as a sheet
@@ -836,7 +893,7 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
   const run = seasonRunData(index, p);
   if (heat && run) run.legend = [...(run.legend || []), `Colour: ${heat.words}`];
   const cardIdent = heat && !run ? `${ident} · ${heat.words}` : ident;
-  const key = registerRun({ ident: cardIdent, run, href, id }, tipKey || 'g');
+  const key = registerRun({ ident: cardIdent, run, href, id, glance: glanceFor(p) }, tipKey || 'g');
 
   const shown = v === null
     ? '—'
@@ -884,12 +941,15 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
 // demo-rosters.js is written by a separate pass. Load it lazily so a missing or
 // broken file degrades into a clear message instead of a blank page.
 let demoGenerator;
+// The sample season's "now", for the card's glance line (see glanceWeek).
+let demoNow = 4;
 async function getDemoGenerator() {
   if (demoGenerator !== undefined) return demoGenerator;
   try {
     const mod = await import('./demo-rosters.js');
     demoGenerator =
       typeof mod.generateDemoWeekRosters === 'function' ? mod.generateDemoWeekRosters : null;
+    if (Number.isFinite(mod.DEMO_CURRENT_WEEK)) demoNow = mod.DEMO_CURRENT_WEEK;
   } catch {
     demoGenerator = null;
   }
@@ -2203,6 +2263,7 @@ function renderRoster() {
       run: seasonRunData(index, p),
       href,
       id: `r:${team.id}:${p.playerId ?? `x:${p.name}`}`,
+      glance: glanceFor(p),
     }, 'r');
     return `
       <tr class="${cls}">

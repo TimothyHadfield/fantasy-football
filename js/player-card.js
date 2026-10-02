@@ -716,15 +716,56 @@ export const TIP_ATTR = 'data-tip';
  * `prefix` is only a debugging courtesy — it lets you see which container a key
  * came from — and nothing reads it back. Uniqueness comes from the counter.
  */
-export function registerRun({ ident = '', run = null, href = null, id = null, openLabel = null } = {}, prefix = 'p') {
+export function registerRun({ ident = '', run = null, href = null, id = null, openLabel = null, glance = null } = {}, prefix = 'p') {
   const key = `${prefix}:${seq++}`;
   // `id` is optional and is NOT the key: it is a stable name for "this man in
   // this place" (the analysis grids use grid + team + player), and it is only
   // read by `reopenTip`, to find the same card again after a repaint.
   // `openLabel` names the sheet's button when the link goes somewhere other
   // than his 13-week run (the Players page links to his row in its table).
-  RUNS.set(key, { ident, run, href, id, openLabel });
+  // `glance` is the "how ESPN sees him" line under the name — see glanceHtml.
+  RUNS.set(key, { ident, run, href, id, openLabel, glance });
   return key;
+}
+
+// ------------------------------------------------- the line under the name
+//
+// Tim, 2026-10-02: "could you also show the player's avg points, this week
+// proj, and position rank. This information should be exactly what we see on
+// the player's info on the espn fantasy app, and It's purpose is to let the user
+// know how other user's are seeing that player without going in depth. Put these
+// numbers at the top of the preview by the player's name."
+//
+// So it is ESPN's three numbers and nothing of ours: `seasonAvg` (ESPN's own
+// `appliedAverage` on the season line), the projection for the CURRENT scoring
+// period (not the week a page has picked — that is what other managers see
+// today), and `posRank` (ESPN's `positionalRanking`). The pages read them off
+// the payloads (js/season.js, js/espn.js) and hand them in as
+// `glance: { avg, proj, rank, pos }`.
+//
+// A missing number is "—"; a man with none of the three gets no line at all,
+// so an older cached week that predates these fields draws the card it always
+// did. It is ONE short line, not words beneath the chart, so it stays visible.
+
+/** ESPN's name for a position, as its app prints it beside a rank. */
+const POS_LABEL = { DST: 'D/ST' };
+
+/** The glance line's markup, or '' when there is nothing to say. */
+export function glanceHtml(glance) {
+  if (!glance) return '';
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const avg = num(glance.avg);
+  const proj = num(glance.proj);
+  const rank = num(glance.rank);
+  if (avg === null && proj === null && rank === null) return '';
+  const pos = glance.pos ? (POS_LABEL[glance.pos] || glance.pos) : '';
+  const part = (label, value) => `${label} <b>${esc(value)}</b>`;
+  const parts = [
+    part('Avg', fmt(avg)),
+    part('Proj', fmt(proj)),
+    pos ? part(esc(pos), rank === null ? '—' : `#${rank}`) : part('Rank', rank === null ? '—' : `#${rank}`),
+  ];
+  return `<div class="tc-glance">${parts.join(' · ')}</div>`;
 }
 
 /**
@@ -995,8 +1036,9 @@ function lineHtml(cols, vsName = '') {
  *     the heavy dividers and the ▲/▼ at the ends of the scale. Those are the
  *     chart, and several of them are the hue-free channels rule 14 is about.
  */
-function cardHtml({ ident, run, href, openLabel }, sheet) {
-  const head = `<div class="tc-ident">${esc(ident)}</div>`;
+function cardHtml({ ident, run, href, openLabel, glance }, sheet) {
+  // The name, and ESPN's Avg / Proj / rank right under it (glanceHtml).
+  const head = `<div class="tc-ident">${esc(ident)}</div>${glanceHtml(glance)}`;
   if (!run) return `${head}${actionsHtml(href, openLabel)}`;
 
   const sub = `<div class="tc-head">${esc(run.heading)}</div>`;

@@ -899,6 +899,58 @@ async function check(scenario, boot) {
       'no blank cell');
     c.ok('the cost line says demo widening is free',
       /costs nothing to widen/.test(txt($('spanCost'))), txt($('spanCost')));
+
+    // ---- THE GLANCE LINE on the name's card (Tim, 2026-10-02) -------------
+    // ESPN's Avg, this week's Proj and position rank, right under the name.
+    // The demo is "at week 4": Proj is the row's own week-4 cell, Avg the mean
+    // of the scores on his card's Act row (weeks 1–3); a sample squad man's
+    // line is re-derived from the week-4 sample rosters.
+    {
+      const RX = /^Avg (\d+\.\d|—) · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #(\d+)$/;
+      const open = (a) => {
+        a.dispatchEvent(new d.defaultView.Event('mouseover', { bubbles: true }));
+        const card = $('tipCard');
+        const g = card && !card.hidden ? card.querySelector('.tc-glance') : null;
+        const ident = card ? card.querySelector('.tc-ident') : null;
+        return {
+          text: g ? txt(g) : '',
+          under: !!(ident && ident.nextElementSibling === g && g),
+          acts: card ? [...card.querySelectorAll('.tc-run tfoot td')].map((t) => txt(t)) : [],
+          pid: Number((a.getAttribute('href') || '').split('player=')[1]),
+        };
+      };
+      const wire = [...d.querySelectorAll('#waiverTable tbody tr:not(.mine)')]
+        .map((tr) => ({ tr, a: tr.querySelector('a.pref[data-tip]') })).filter((x) => x.a);
+      const seen = wire.map(({ tr, a }) => ({ ...open(a), wk4: txt(tr.children[4]) }));
+      c.ok('GLANCE: every free agent’s card shows Avg · Proj · rank under his name',
+        seen.length >= 30 && seen.every((s) => s.under && RX.test(s.text)),
+        `${seen.length}; ${JSON.stringify(seen.find((s) => !s.under || !RX.test(s.text)))}`);
+      const projOk = (s) => {
+        const m = s.text.match(RX);
+        return m && (/^\d+\.\d$/.test(s.wk4) ? m[2] === s.wk4 : m[2] === '—' || (s.wk4 === 'Bye' && m[2] === '0.0'));
+      };
+      c.ok('GLANCE: a free agent’s Proj is his week-4 number, as in the table',
+        seen.every(projOk), JSON.stringify(seen.find((s) => !projOk(s))));
+      const avgOk = (s) => {
+        const nums = s.acts.filter((v) => /^\d+\.\d$/.test(v)).map(Number);
+        const want = nums.length ? (nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(1) : '—';
+        return s.text.match(RX)?.[1] === want;
+      };
+      c.ok('GLANCE: a free agent’s Avg is the mean of his Act row',
+        seen.every(avgOk), JSON.stringify(seen.find((s) => !avgOk(s))));
+      const { generateDemoWeekRosters } = await import(pathToFileURL(path.join(REPO, 'js/demo-rosters.js')).href);
+      const now = generateDemoWeekRosters(4).teams.flatMap((t) => t.players);
+      const f = (v) => (typeof v === 'number' ? v.toFixed(1) : '—');
+      const taken = [...d.querySelectorAll('#takenTable a.pref[data-tip]')].slice(0, 12).map(open);
+      const want = (pid) => {
+        const p = now.find((x) => x.playerId === pid);
+        return p ? `Avg ${f(p.seasonAvg)} · Proj ${f(p.projected)} · ${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}` : null;
+      };
+      c.ok('GLANCE: a rostered man’s card carries his week-4 sample numbers',
+        taken.length >= 5 && taken.every((s) => s.under && s.text === want(s.pid)),
+        `${taken.length}; ${JSON.stringify(taken.find((s) => !s.under || s.text !== want(s.pid)))} want ${
+          JSON.stringify(taken.map((s) => want(s.pid)).slice(0, 1))}`);
+    }
   }
 
   // ---- (a+) the Your team picker ------------------------------------------

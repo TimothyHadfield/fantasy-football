@@ -897,6 +897,13 @@ function openCard(document, selector) {
     // half that tells a man you own from a man you are trading for.
     notes: [...el.querySelectorAll('.tc-note')].map(text),
     hovered: text(man),
+    // THE GLANCE LINE (Tim, 2026-10-02): ESPN's Avg, this week's Proj and his
+    // position rank, at the top of the card right under the name.
+    glance: text(el.querySelector('.tc-glance')),
+    glanceUnderName: !!(el.querySelector('.tc-ident') &&
+      el.querySelector('.tc-ident').nextElementSibling &&
+      el.querySelector('.tc-ident').nextElementSibling.classList.contains('tc-glance')),
+    pid: idOfHref((man.querySelector('a.pref') || { getAttribute: () => '' }).getAttribute('href')),
   };
 }
 
@@ -1684,9 +1691,14 @@ const SCENARIOS = {
       const d = readDeal(document);
       if (!d.hidden && d.churnEntries.some((e) => e.own)) { ownDeal = d; break; }
     }
+    // A card inside the deal pop-up — the trade preview Tim named as the one
+    // where the glance line matters most.
+    const dealCard = document.getElementById('dealModal').hidden
+      ? null
+      : openCard(document, '#dealModal [data-tip]');
 
     return {
-      errors, fetchCalls, before, after, deal, card, spareCard, ownDeal, ownOpened, dealRowGain,
+      errors, fetchCalls, before, after, deal, card, spareCard, dealCard, ownDeal, ownOpened, dealRowGain,
       // What the parent needs to rebuild the same league and price the same
       // packing independently.
       myTeamId: document.getElementById('teamSelect').value,
@@ -4592,6 +4604,37 @@ if (!wk.boot) {
     wk.spareCard && wk.spareCard.vs.length === 0, JSON.stringify(wk.spareCard && wk.spareCard.vs));
   ok('a spare chip opens the same card', wk.spareCard && wk.spareCard.hidden === false,
     JSON.stringify(wk.spareCard));
+
+  // THE GLANCE LINE (Tim, 2026-10-02): "show the player's avg points, this
+  // week proj, and position rank … at the top of the preview by the player's
+  // name … it's most important on the trade section previews". On the demo the
+  // season's "now" is week 4 (DEMO_CURRENT_WEEK) whatever the week picker says,
+  // so the expected line is re-derived from the week-4 sample rosters — not
+  // read off the page.
+  {
+    const { generateDemoWeekRosters, DEMO_CURRENT_WEEK } = await import(moduleUrl('js/demo-rosters.js'));
+    const now = generateDemoWeekRosters(DEMO_CURRENT_WEEK).teams.flatMap((t) => t.players);
+    // A man on nobody's roster in week 4 has no week-4 line in anything this
+    // page reads, so his Proj is "—"; his Avg and rank still come through.
+    const every = Array.from({ length: 16 }, (_, i) => generateDemoWeekRosters(i + 1).teams)
+      .flat().flatMap((t) => t.players);
+    const want = (pid) => {
+      const here = now.find((x) => x.playerId === pid);
+      const p = here || every.find((x) => x.playerId === pid);
+      if (!p) return null;
+      const f = (v) => (typeof v === 'number' ? v.toFixed(1) : '—');
+      return `Avg ${f(p.seasonAvg)} · Proj ${f(here ? here.projected : null)} · ` +
+        `${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}`;
+    };
+    for (const [where, k] of [['a finder name', wk.card], ['a spare chip', wk.spareCard], ['a man in the deal pop-up', wk.dealCard]]) {
+      ok(`GLANCE: ${where} shows Avg · Proj · rank right under the name`,
+        !!k && k.glanceUnderName && /^Avg \d+\.\d · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #\d+$/.test(k.glance),
+        JSON.stringify(k && { g: k.glance, under: k.glanceUnderName, id: k.ident }));
+      ok(`GLANCE: ${where} carries HIS week-${DEMO_CURRENT_WEEK} numbers`,
+        !!k && k.pid !== null && want(k.pid) !== null && k.glance === want(k.pid),
+        `${k && k.glance} vs ${k && want(k.pid)}`);
+    }
+  }
 
   // -- ask 3: the drill-down -----------------------------------------------
   ok('clicking an offer opens the deal', wk.deal && !wk.deal.hidden, JSON.stringify(wk.deal).slice(0, 200));
