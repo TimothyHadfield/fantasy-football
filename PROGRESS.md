@@ -160,6 +160,7 @@ New wording (Tim's call, not asked): Players Avg tooltips/notes, Analysis FLEX l
 - 2026-10-01 · Assume trade: one saved custom trade at a time rewrites both squads' rosters for everything on the page; block at top; Remove returns it. Persisted in ff.prefs. 61c367f.
 - 2026-10-01 · Assume/Remove/Ask AI stacked in the last cell; column heads wrap → no sideways scroll at 1440 (Tim). 9eaa77f.
 - 2026-10-01 · Custom box "Suggested" list under the pickers: every completion containing the ticked men (finder `mustSend`/`mustReceive`), finder order, always ≥3 rows (bad ones allowed, Tim), up to 5. 623a66a. Phone: list is below the 16-man roster (off screen after a tick) — Tim's call.
+- 2026-10-02 · Players page gets a "Your team" select like the other pages (beside Demo/ESPN, pref `waivers.team`, falls back to the connected team if the pick isn't in the league). 39f6c6f.
 - D6 · 2026-09-21 · Older tr-test scenarios pinned to goal "last" rather than rewritten.
 - D7 · 2026-09-20 · Per-player per-week average = mean over weeks projecting > 0 (Tim reversed the null-in-divisor rule).
 - D8 · 2026-09-19 · Floor rank 3; Proj avg is the lineup week by week; Trade page prices itself on load; store.js.
