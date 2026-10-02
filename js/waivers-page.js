@@ -270,6 +270,10 @@ const state = {
   rosterStatus: new Map(),       // week -> Map(playerId -> injury status that week)
   failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
   demoTeamId: null,              // the demo league has no owner; a team stands in
+  // THE "YOUR TEAM" PICKER (Tim, 2026-10-02: "add a user selection for the
+  // players menu, just like the other manus"). Null = nobody picked here, so
+  // the connection's team (or the demo's stand-in) is you, as before.
+  pickedTeamId: prefs.get('team', null),
 
   // THE PLAYED WEEKS, for the preview on a name — and nothing else reads them.
   // Kept apart from the maps above on purpose: those are the table's columns
@@ -1293,10 +1297,40 @@ const matchesTaken = (row) => matches(row, state.takenPosition);
  * and going round it was a real bug once.
  */
 function myTeamId() {
+  // A team picked on this page wins, while it is a squad in the league loaded.
+  const picked = state.pickedTeamId;
+  if (picked !== null && leagueTeams().some((t) => String(t.id) === String(picked))) {
+    return leagueTeams().find((t) => String(t.id) === String(picked)).id;
+  }
   if (state.isDemo) return state.demoTeamId;
   const saved = savedConfig();
   const id = saved ? saved.teamId : null;
   return id === null || id === undefined ? null : Number(id);
+}
+
+/** The league's squads as `{id, name}`, off the first roster week held; [] until one lands. */
+function leagueTeams() {
+  for (const w of state.seasonWeeks || []) {
+    const teams = state.rosterWeeks.get(w);
+    if (teams && teams.length) return teams.map((t) => ({ id: t.id, name: t.name }));
+  }
+  const any = state.rosterWeeks.values().next().value;
+  return any ? any.map((t) => ({ id: t.id, name: t.name })) : [];
+}
+
+/** The picker, filled from the league's squads; hidden until there are any. */
+function renderTeamPicker() {
+  const teams = leagueTeams();
+  const box = $('teamPick');
+  const sel = $('teamSelect');
+  box.hidden = !teams.length;
+  if (!teams.length) { sel.innerHTML = ''; return; }
+  const want = String(myTeamId() ?? '');
+  const html = teams
+    .map((t) => `<option value="${esc(t.id)}"${String(t.id) === want ? ' selected' : ''}>${esc(t.name || `Team ${t.id}`)}</option>`)
+    .join('');
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+  if (sel.value !== want) sel.value = want;
 }
 
 /** Whether the comparison rows can exist at all. Drives the extra request too. */
@@ -1672,6 +1706,7 @@ function render() {
   clearRuns(TIP_PREFIX);
 
   syncSource();
+  renderTeamPicker();
   syncSegmented('posFilter', 'pos', state.position);
   syncSegmented('takenPosFilter', 'pos', state.takenPosition);
   // One span, two controls showing it. Both are painted from the same state, so
@@ -3053,6 +3088,15 @@ $('sourceToggle').addEventListener('click', (e) => {
   prefs.set('source', state.source);   // so the page comes back the way you left it
   syncSource();
   state.source === 'demo' ? loadDemo() : loadLive();
+});
+
+// Who "you" are is a repaint too: every roster week carries every squad, so the
+// "Your …" rows and the "beats your worst man" shading just re-pick a team.
+$('teamSelect').addEventListener('change', (e) => {
+  const v = e.target.value;
+  state.pickedTeamId = /^\d+$/.test(v) ? Number(v) : v;
+  prefs.set('team', state.pickedTeamId);
+  render();
 });
 
 // Filtering by position is a repaint and nothing more: every week already

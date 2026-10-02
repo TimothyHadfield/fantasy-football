@@ -19,6 +19,11 @@
 
 .seg-sm button { padding: 6px 12px; font-size: 13px; }
 
+/* "Your team", as the Trade page draws it. */
+.select-md { width: 240px; max-width: 100%; }
+.src-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 20px; }
+.team-pick[hidden] { display: none; }
+
 /* The count of players behind each position button. It is the second thing you
    read on the button, never the first, so it is quieter than the label. */
 .seg-count {
@@ -539,6 +544,8 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
   .source-panel .lede { display: none; }
   .source-panel .segmented { flex: 1 1 auto; }
   .source-panel #sourceStatus { flex: 1 1 100%; margin-top: 0; font-size: 12px; }
+  .source-panel .src-row { flex: 1 1 100%; }
+  .source-panel .team-pick { flex: 1 1 100%; width: 100%; }
   .source-panel #sourceStatus:empty { display: none; }
   .panel-head { margin-bottom: 11px; }
   .toolbar .ctl .cost { font-size: 12px; }
@@ -581,9 +588,17 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
   <section class="panel source-panel">
     <h2>Data source</h2>
     <p class="lede">Sample data, or your real ESPN league.</p>
-    <div class="segmented" id="sourceToggle">
-      <button type="button" data-src="demo" class="on">Demo data</button>
-      <button type="button" data-src="live">My ESPN league</button>
+    <div class="src-row">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
+      </div>
+      <!-- Whose squad the "Your …" rows are (Tim, 2026-10-02), as on the other
+           pages. Hidden until the league's rosters are in. -->
+      <div class="select-md team-pick" id="teamPick" hidden>
+        <label for="teamSelect">Your team</label>
+        <select id="teamSelect"></select>
+      </div>
     </div>
     <div id="sourceStatus" class="panel-note"></div>
   </section>

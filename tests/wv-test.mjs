@@ -42,6 +42,31 @@ const SCENARIOS = {
     stub: false,
     prefs: { 'waivers.source': 'demo' },
   },
+  // THE "YOUR TEAM" PICKER: every team in the league is offered, and choosing
+  // one swaps the "Your …" rows to that team's men and remembers the choice.
+  'team-pick': {
+    label: '(a+) the Your team picker swaps whose men are "Your …"',
+    stub: false,
+    prefs: { 'waivers.source': 'demo' },
+    after: async ({ document, window }) => {
+      const sel = document.getElementById('teamSelect');
+      const mine = () => [...document.querySelectorAll('#waiverTable tbody tr.mine')]
+        .map((tr) => tr.children[0].textContent.trim());
+      const out = {
+        shown: !document.getElementById('teamPick').hidden,
+        options: [...sel.options].map((o) => o.value),
+        first: sel.value,
+        before: mine(),
+      };
+      const other = out.options.find((v) => v !== sel.value);
+      sel.value = other;
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      out.picked = other;
+      out.after = mine();
+      out.prefs = globalThis.localStorage.getItem('ff.prefs');
+      globalThis.__wvTeam = out;
+    },
+  },
   live: {
     label: '(b) stubbed live league, every week resolves',
     stub: true,
@@ -874,6 +899,23 @@ async function check(scenario, boot) {
       'no blank cell');
     c.ok('the cost line says demo widening is free',
       /costs nothing to widen/.test(txt($('spanCost'))), txt($('spanCost')));
+  }
+
+  // ---- (a+) the Your team picker ------------------------------------------
+  if (scenario === 'team-pick') {
+    const w = globalThis.__wvTeam || {};
+    c.ok('the Your team picker is shown', w.shown === true, String(w.shown));
+    c.ok('it offers every team in the league',
+      (w.options || []).length === 10, JSON.stringify(w.options));
+    c.ok('it opens on a team that is one of them',
+      (w.options || []).includes(w.first), `${w.first} of ${JSON.stringify(w.options)}`);
+    c.ok('there are "Your …" rows before the change', (w.before || []).length > 0,
+      JSON.stringify(w.before));
+    c.ok('choosing another team swaps the "Your …" rows',
+      (w.after || []).length > 0 && JSON.stringify(w.after) !== JSON.stringify(w.before),
+      `${JSON.stringify(w.before)} -> ${JSON.stringify(w.after)}`);
+    c.ok('and the choice is remembered',
+      String(JSON.parse(w.prefs || '{}')['waivers.team']) === String(w.picked), w.prefs);
   }
 
   // ---- (b) live, every week resolves ---------------------------------------
