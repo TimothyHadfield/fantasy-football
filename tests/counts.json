@@ -31,8 +31,8 @@
       "scenarios": 10
     },
     "test-season-rules.mjs": {
-      "assertions": 88,
-      "scenarios": 7
+      "assertions": 93,
+      "scenarios": 8
     },
     "test-store.mjs": {
       "assertions": 113
@@ -112,7 +112,7 @@
       "assertions": 135
     },
     "an-test.mjs": {
-      "assertions": 2124,
+      "assertions": 2133,
       "scenarios": 23
     },
     "test-summary.mjs": {
@@ -133,11 +133,11 @@
       "scenarios": 14
     },
     "wv-test.mjs": {
-      "assertions": 546,
-      "scenarios": 11
+      "assertions": 606,
+      "scenarios": 12
     },
     "tr-test.mjs": {
-      "assertions": 1039
+      "assertions": 1045
     },
     "test-proj-trend.mjs": {
       "assertions": 52
