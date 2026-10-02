@@ -1038,6 +1038,14 @@ const SCENARIOS = {
       }));
       out.totals = [...document.querySelector('#seasonTotals tr').children]
         .slice(2).map((td) => td.getAttribute('data-v'));
+      // Weekly totals: this squad's row, and how many rows there are.
+      const totRows = [...document.querySelectorAll('#totalsTable tbody tr')];
+      const totMine = totRows.find((tr) => tr.children[0].textContent.trim() === out.team);
+      out.weeklyTotals = {
+        rows: totRows.length,
+        head: [...document.querySelectorAll('#totalsTable thead th')].map((th) => th.textContent.trim()),
+        mine: totMine ? [...totMine.children].slice(2).map((td) => td.getAttribute('data-v')) : null,
+      };
       out.bars = t($('seasonBars'));
       out.idle = t($('seasonPick'));
 
@@ -1862,7 +1870,8 @@ async function check(scenario, boot) {
   });
   c.ok('THE PANELS ARE IN TIM’S ORDER, MERGED ALL-TEAMS BOX FIRST',
     JSON.stringify(panelOrder) === JSON.stringify(
-      ['Data source', 'All teams', 'Season by week', 'Who to start, week by week', 'Roster detail']),
+      // Weekly totals added under All teams 2026-10-02 (Tim's new chart).
+      ['Data source', 'All teams', 'Weekly totals', 'Season by week', 'Who to start, week by week', 'Roster detail']),
     JSON.stringify(panelOrder));
   c.ok('and there is exactly ONE all-teams panel, not the two it used to be',
     panelOrder.filter((h) => h.startsWith('All teams')).length === 1,
@@ -4154,6 +4163,17 @@ async function check(scenario, boot) {
     });
     c.ok('THE STARTING LINEUP BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL',
       bandWrong.length === 0, bandWrong.slice(0, 4).join(' | '));
+
+    // Weekly totals (Tim, 2026-10-02): one row per squad, Team then Avg then
+    // the weeks, and this squad's row is the band above, cell for cell.
+    const wt = w.weeklyTotals || {};
+    c.ok('WEEKLY TOTALS HAS ONE ROW PER SQUAD', wt.rows === 10, String(wt.rows));
+    c.ok('and its columns are Team, Avg, then the same weeks as the season panel',
+      (wt.head || [])[0] === 'Team' && (wt.head || [])[1] === 'Avg' &&
+      (wt.head || []).length === 2 + w.totals.length, JSON.stringify(wt.head));
+    c.ok('AND THIS SQUAD’S ROW IS THE STARTING LINEUP BAND, cell for cell',
+      JSON.stringify(wt.mine) === JSON.stringify(w.totals),
+      `${JSON.stringify(wt.mine)} vs ${JSON.stringify(w.totals)}`);
 
     // ---- the red/green scale, recomputed across ALL TEN SQUADS -------------
     //

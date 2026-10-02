@@ -3300,6 +3300,7 @@ function renderSeasonHead(weeks) {
  * repainted for nothing.
  */
 function renderSeason() {
+  paintTotals();
   paintSeason();
   if (currentGrid().slotGrid) renderOverview();
   // And the roster detail, for ONE figure in it: its Proj avg is this squad's
@@ -3308,6 +3309,66 @@ function renderSeason() {
   // then filled in, which reads as a bug in the number rather than as a week
   // arriving. A repaint of it is cheap and is built entirely from state.
   renderRoster();
+}
+
+/**
+ * Weekly totals: one row per squad, one column per week, each cell that squad's
+ * best legal lineup for the week added up. Tim, 2026-10-02: "user's as first
+ * column, week as top row, each cell is that user's total proj for their
+ * starters for that week".
+ *
+ * NOT A SUM OF ITS OWN. It reads `teamWeekTotals`, the very numbers the Season
+ * by week panel's "Starting lineup" band shows and colours, so a squad's row
+ * here and its band below cannot disagree. Coloured the same way too: each week
+ * column against the other squads in that week.
+ */
+function paintTotals() {
+  const table = $('totalsTable');
+  const teams = state.data ? state.data.teams : [];
+  const weeks = spanWeeks();
+  const rows = slotRows(leagueSlots());
+  const show = teams.length > 0 && weeks.length > 0 && rows.length > 0;
+  $('totalsWrap').classList.toggle('hidden', !show);
+  $('totalsEmpty').classList.toggle('hidden', show);
+  if (!show) {
+    $('totalsEmpty').textContent = '';
+    table.querySelector('thead tr').innerHTML = '';
+    bodyOf(table).innerHTML = '';
+    return;
+  }
+
+  const totals = teamWeekTotals(rows, leagueSlots(), weeks);
+  const scales = new Map(weeks.map((w) => [w, heatScale(
+    [...(totals.get(w) || new Map()).values()]
+  )]));
+  const avgScale = slotAvgScales(rows, weeks).total;
+
+  table.querySelector('thead tr').innerHTML =
+    `<th class="name" data-sort>Team</th>` +
+    `<th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are shown but not counted.">Avg</th>` +
+    weeks.map((w) => weekHead(w, weeks, `wk${w === state.week ? ' now' : ''}`,
+      `Each team's best legal lineup for week ${w}, projected.`)).join('');
+
+  bodyOf(table).innerHTML = teams.map((t) => {
+    const vals = weeks.map((w) => (totals.get(w) || new Map()).get(t.id) ?? null);
+    const avg = regularAvg(vals, weeks);
+    const ah = heatOf(avg, avgScale, { what: 'the other squads’ lineups' });
+    return `<tr>` +
+      `<td class="name" data-v="${esc(t.name)}">${esc(t.name)}</td>` +
+      `<td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`} ` +
+      `title="${esc(bandAvgLabel(avg, t, ah))}">${fmt(avg)}${heatMarkHtml(ah)}</td>` +
+      vals.map((v, i) => {
+        const w = weeks[i];
+        const h = heatOf(v, scales.get(w), { what: `the other squads’ lineups in week ${w}` });
+        return withPo(
+          `<td class="wk${w === state.week ? ' now' : ''}${h ? ` ${h.cls}` : ''}"` +
+          `${v === null ? '' : ` data-v="${v}"`} ` +
+          `title="${esc(`${t.name}: ` + totalLabel(v, w, rows.length) + (h ? ` ${h.words}` : ''))}">` +
+          `${fmt(v)}${heatMarkHtml(h)}</td>`, w, weeks);
+      }).join('') +
+      `</tr>`;
+  }).join('');
+  resort(table);
 }
 
 function paintSeason() {
@@ -4489,6 +4550,8 @@ wireTips($('rosterTable'));
 // who wants the other question answered, and the totals band is a tbody of one
 // row, which sortable.js leaves alone, so it stays pinned under the last slot.
 enableSort($('seasonTable'), { defaultIndex: 0, defaultAsc: true });
+// Weekly totals opens on Avg, best first.
+enableSort($('totalsTable'), { defaultIndex: 1 });
 
 // NO `wireTips` HERE. This panel deliberately has no player card — Tim,
 // 2026-09-18 — so the line above the table and the highlight are the whole of
