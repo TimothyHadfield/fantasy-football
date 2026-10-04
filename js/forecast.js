@@ -63,6 +63,21 @@ export function winProbability(projA, projB, sigma) {
 }
 
 /**
+ * The same chance when the two sides do NOT carry the same spread — a week in
+ * progress, where one squad has finished and the other has nine men to come.
+ * Each side's spread is `sigma` times the share of it still to play (`left`,
+ * 0..1), so with both at 1 this is `winProbability` exactly. With nothing left
+ * on either side the game is decided and the answer is 1, 0 or a half.
+ */
+export function winProbabilityLive(projA, projB, sigma, leftA = 1, leftB = 1) {
+  if (!Number.isFinite(projA) || !Number.isFinite(projB)) return null;
+  if (!Number.isFinite(sigma) || sigma <= 0) return null;
+  const sd = sigma * Math.sqrt(leftA * leftA + leftB * leftB);
+  if (!(sd > 0)) return projA > projB ? 1 : projA < projB ? 0 : 0.5;
+  return normalCdf((projA - projB) / sd);
+}
+
+/**
  * The spread to use when the league has no history to learn from.
  *
  * Fantasy weekly team scores sit roughly 25-30 points away from their
@@ -418,7 +433,11 @@ export function playoffRoundCount(fieldSize) {
  * @param {Object}   o
  * @param {number[]} o.teamIds
  * @param {Map}      o.banked      teamId -> {wins, pointsFor} already decided
- * @param {Array}    o.games       [{homeId, awayId, homeProj, awayProj}] still to play
+ * @param {Array}    o.games       [{homeId, awayId, homeProj, awayProj}] still to play.
+ *   A game in a week already under way also carries `homeLeft` / `awayLeft`
+ *   (0..1): the share of the spread that side still has to play. Its projection
+ *   is then the points banked plus the points to come, and the noise is scaled
+ *   by that share — nothing left is no noise, absent is the whole of it.
  * @param {number}   o.sigma
  * @param {number}   [o.runs=10000]
  * @param {number}   [o.seed=1]
@@ -453,6 +472,12 @@ export function simulateSeason({
   const away = [];
   const homeProj = [];
   const awayProj = [];
+  // Each side's own spread: `sigma`, less whatever of the week is already
+  // played. The draw is still taken for a side with nothing left, so a week in
+  // progress never shifts the random stream under the weeks after it.
+  const homeSd = [];
+  const awaySd = [];
+  const sdOf = (left) => sigma * (Number.isFinite(left) ? Math.max(0, Math.min(1, left)) : 1);
   let skipped = 0;
   for (const g of games || []) {
     const h = index.get(g.homeId);
@@ -464,6 +489,7 @@ export function simulateSeason({
     }
     home.push(h); away.push(a);
     homeProj.push(g.homeProj); awayProj.push(g.awayProj);
+    homeSd.push(sdOf(g.homeLeft)); awaySd.push(sdOf(g.awayLeft));
   }
 
   const gameCount = home.length;
@@ -534,8 +560,8 @@ export function simulateSeason({
     pf.set(basePf);
 
     for (let g = 0; g < gameCount; g++) {
-      const hs = homeProj[g] + sigma * normal();
-      const as = awayProj[g] + sigma * normal();
+      const hs = homeProj[g] + homeSd[g] * normal();
+      const as = awayProj[g] + awaySd[g] * normal();
       const h = home[g];
       const a = away[g];
       pf[h] += hs;

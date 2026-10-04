@@ -230,6 +230,7 @@ const state = {
   throughWeek: 0,      // weeks 1..throughWeek are decided, the rest are played out
   proj: null,          // Map(week -> Map(teamId -> projected)) for weeks still ahead
   projNote: '',        // where those projections came from, in words
+  liveWeek: null,      // capture.liveWeek(): where the week in progress stands, or null
   projToken: 0,        // a roster read that lands after the week moved is dropped
   projPending: false,  // a roster read is in flight, so the sim would be doomed
   sim: null,           // { key, result, ms }
@@ -349,6 +350,7 @@ async function loadDemo() {
     started: null,
   });
   state.proj = null;
+  state.liveWeek = null;
   state.projNote =
     'The demo season carries its own per-game projections, so no roster read is needed.';
   setThroughWeek(clampWeek(DEMO_THROUGH));
@@ -505,6 +507,23 @@ async function refreshProjections() {
   if (stale()) return;
 
   const built = capture.buildProjection(L.data, capture.pickWeeks(weekTeams, asking), floors);
+  // THE WEEK IN PROGRESS, exactly as the Schedule page reads it (Tim,
+  // 2026-10-04): played out from the score so far, not from kickoff. Null when
+  // nobody has kicked off, the read fails or a stub has no such read.
+  let live = null;
+  if (built && typeof season.fetchProGames === 'function') {
+    let proGames = null;
+    try { proGames = await season.fetchProGames(); } catch { proGames = null; }
+    if (stale()) return;
+    if (proGames && Object.keys(proGames).length) {
+      live = capture.liveWeek({
+        data: L.data, weekTeams, slots: built.slots, floors, proGames,
+        asOf: typeof season.weekReadAt === 'function'
+          ? season.weekReadAt(capture.openWeeks(L.data)[0]) : null,
+      });
+    }
+  }
+  state.liveWeek = live;
   state.proj = built ? built.proj : null;
   state.projNote = built
     ? `Weeks still to play are scored from ESPN’s own per-player projection for ` +
@@ -516,6 +535,12 @@ async function refreshProjections() {
   // simulation plays, so the numbers it used are printed with the rest.
   const floorSaid = built ? describeFloors(floors, { week: floorWeek }) : '';
   if (floorSaid) state.projNote += ` ${floorSaid}`;
+  if (live) {
+    state.projNote +=
+      ` Week ${live.week} is under way, so it is played out from where it stands: the points ` +
+      `each lineup has scored so far plus the projection of the players still to play, with ` +
+      `the spread cut down to the share of the week that is left.`;
+  }
 
   if (built && !built.countsKnown) {
     state.projNote +=
@@ -646,6 +671,7 @@ function simInputs(view) {
     isRemaining,
     proj: state.proj,
     sigma: spread.sigma,
+    live: L.isDemo ? null : state.liveWeek || null,
   });
   if (!built) return null;
 

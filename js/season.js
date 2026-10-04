@@ -138,6 +138,58 @@ function weekIsFinal(week) {
 }
 
 /**
+ * WHEN EACH WEEK'S ROSTERS WERE READ FROM ESPN, for the week in progress.
+ *
+ * Tim, 2026-10-04: "if it's halfway through week 4, the simulation would
+ * simulate the rest of week 4". Half a week's points mean nothing without the
+ * moment they were read at: `capture.liveWeek` sets them against the NFL
+ * kickoffs AS OF THAT MOMENT, so a copy read at 2 pm is never treated as a 5 pm
+ * score. A stored week keeps the store's own `at`; a synced week the sync's.
+ */
+const readAt = new Map(); // `${leagueId}::${season}::${week}` -> epoch ms
+
+function noteRead(week, at) {
+  const { leagueId, season } = espn.getConfig();
+  if (Number.isFinite(at)) readAt.set(`${leagueId}::${season}::${Number(week)}`, at);
+}
+
+/** When `week`'s rosters were read from ESPN (epoch ms), or null when unknown. */
+export function weekReadAt(week) {
+  const { leagueId, season } = espn.getConfig();
+  return readAt.get(`${leagueId}::${season}::${Number(week)}`) ?? null;
+}
+
+/** When the synced copy was taken, as epoch ms, or null. */
+function cloudAt(down) {
+  const s = down && down.syncedAt;
+  const ms = Date.parse(typeof s === 'string' ? s : (s && s.rosters) || '');
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * How long a stored week is good for WHILE ITS GAMES ARE BEING PLAYED.
+ *
+ * The six-hour clock is for a forecast; a week under way carries live points,
+ * and a copy from the early games is two-thirds of a different Sunday.
+ */
+const LIVE_FRESH_MS = 5 * 60 * 1000;
+
+/**
+ * Has any NFL game of `week` kicked off? Answered only from a pro-schedule read
+ * this page has ALREADY made (the bye read) — it never costs a request, and
+ * "not known" is false, which leaves the six-hour rule exactly as it was.
+ */
+function weekInPlay(week) {
+  const games = typeof espn.heldProGames === 'function' ? espn.heldProGames() : null;
+  if (!games) return false;
+  const now = Date.now();
+  return Object.values(games).some((byWeek) => {
+    const g = byWeek && byWeek[week];
+    return g && Number.isFinite(g.at) && g.at <= now;
+  });
+}
+
+/**
  * Is this league allowed on disk at all?
  *
  * Demo is not, and never will be: the sample season is generated inside the
@@ -362,6 +414,7 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
   const cfg = storable();
   let byeMap = byes && typeof byes === 'object' ? byes : null;
   let fallback = null;
+  let fallbackAt = null;
   if (cfg && !fresh) {
     const held = store.readWeek(cfg.leagueId, cfg.season, week);
     if (held && held.teams.length) {
@@ -371,9 +424,16 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
         if (!byeMap) byeMap = await fetchByeWeeks();
         byesArrived = byesAreKnown(byeMap);
       }
+      // A WEEK UNDER WAY, held for more than a few minutes: its points have
+      // moved since. Re-read, and on a failed re-read the held copy still serves.
+      const stalePlay = !held.final && !decidedSince &&
+        held.ageMs > LIVE_FRESH_MS && weekInPlay(week);
       const served = { week: Number(week), teams: held.teams, from: 'store' };
-      if (!decidedSince && !byesArrived) return served;
-      if (byesArrived) fallback = served;
+      if (!decidedSince && !byesArrived && !stalePlay) {
+        noteRead(week, held.at);
+        return served;
+      }
+      if (byesArrived || stalePlay) { fallback = served; fallbackAt = held.at; }
     }
   }
 
@@ -394,6 +454,7 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
       store.writeWeek(cfg.leagueId, cfg.season, week, synced,
         { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes) });
     }
+    noteRead(week, cloudAt(down));
     return { week: Number(week), teams: synced, from: 'cloud' };
   }
 
@@ -404,9 +465,10 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
       byeMap || fetchByeWeeks(),
     ]);
   } catch (err) {
-    if (fallback) return fallback;
+    if (fallback) { noteRead(week, fallbackAt); return fallback; }
     throw err;
   }
+  noteRead(week, Date.now());
   const season = espn.getConfig().season;
   // Who each squad actually belongs to. `fetchRosters` asks for mRoster+mTeam,
   // and mTeam is what makes ESPN populate the member name fields — see
@@ -542,6 +604,7 @@ export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {
       const teams = down.rosters.get(Number(week));
       if (teams && teams.length) {
         out.set(Number(week), teams);
+        noteRead(week, cloudAt(down));
         if (cfg) {
           store.writeWeek(cfg.leagueId, cfg.season, week, teams,
             { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes) });
@@ -1133,6 +1196,24 @@ export async function fetchProKickoffs() {
   try {
     const k = await espn.fetchProKickoffs();
     return k && typeof k === 'object' ? k : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Every NFL team's game per week, `{ [proTeamId]: { [week]: { at, done } } }`
+ * (`espn.parseProGames`), for the week in progress (`capture.liveWeek`).
+ *
+ * The same read and the same rules as `fetchProKickoffs` above: never throws,
+ * `{}` is "unknown" (and then no week is treated as in progress), demo is `{}`.
+ */
+export async function fetchProGames() {
+  const { leagueId } = espn.getConfig();
+  if (!realLeague(leagueId) || typeof espn.fetchProGames !== 'function') return {};
+  try {
+    const g = await espn.fetchProGames();
+    return g && typeof g === 'object' ? g : {};
   } catch {
     return {};
   }

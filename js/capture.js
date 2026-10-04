@@ -39,6 +39,7 @@
 import * as forecast from './forecast.js';
 import * as snapshots from './snapshots.js';
 import { projectionsFromWeekTeams } from './projection.js';
+import { assessLineup } from './floor.js';
 
 export const round1 = (n) => Math.round(n * 10) / 10;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -579,6 +580,124 @@ export function matchupOdds(data, weekTeams, { banked = () => true, floors = nul
   };
 }
 
+// ------------------------------------------------------- the week in progress
+//
+// Tim, 2026-10-04: "if it's halfway through week 4, the simulation would
+// simulate the rest of week 4 (based on the current odds (80-20, etc)), and
+// then continue with the rest of the season. Right now I think it simulates
+// week 4 as if nothing has happened". He was right: a week not yet final was
+// played out from its whole projection at the whole spread, kickoff or no.
+//
+// ESPN publishes no odds (rule 1), so the "current odds" are ours, built from
+// three things it does publish (all measured on league 1241838, 2026-10-04,
+// with the late games in play): every player's points SO FAR, his pre-game
+// projection (it does not move once he kicks off), and each NFL game's kickoff
+// and `statsOfficial`.
+//
+//   a man whose game is over     his points; nothing to come, no spread
+//   a man whose game is on       his points, plus his projection for the share
+//                                of the game still to play
+//   a man yet to kick off        his projection, exactly as before
+//
+// ESPN sends no game clock, so "the share still to play" is read off the wall
+// clock: `LIVE_GAME_MS` from kickoff, the length of a televised NFL game.
+//
+// THE LINEUP. A starter who has kicked off is locked into his slot — that is
+// the lineup the week is being scored on. The slots still open are filled with
+// the best legal lineup of the men who have NOT kicked off, floored as every
+// other week is: the same rule as a future week, applied to what is left of it.
+// A bench man whose game has started can no longer be played and is left out.
+//
+// THE SPREAD shrinks with what is left. A squad's weekly variance is taken as
+// proportional to the projected points behind it, so the share of `sigma` still
+// in play is sqrt(projection still to come / the whole lineup's projection).
+
+/** Kickoff to final whistle, on the wall clock — the length of an NFL broadcast. */
+export const LIVE_GAME_MS = 190 * 60 * 1000;
+
+/** A roster read older than this is not trusted to know a game is over. */
+const LIVE_READ_FRESH_MS = 15 * 60 * 1000;
+
+/**
+ * The share of one NFL game already played when the rosters were read, 0..1.
+ *
+ * `statsOfficial` settles it only for a read taken just now: an older copy of
+ * the rosters holds the points as they stood THEN, so it is aged by the clock
+ * alone and a game that has since finished is not credited as finished.
+ */
+function gamePlayed(game, asOf, now) {
+  if (!game || !Number.isFinite(game.at)) return 0;
+  const t = (asOf - game.at) / LIVE_GAME_MS;
+  if (t <= 0) return 0;
+  if (game.done && now - asOf <= LIVE_READ_FRESH_MS) return 1;
+  return Math.min(1, t);
+}
+
+/**
+ * WHERE THE WEEK IN PROGRESS STANDS, squad by squad.
+ *
+ * Null whenever there is nothing in progress to describe — demo, no kickoffs
+ * read, no rosters for the week, or nobody in the league has kicked off yet —
+ * and every caller then does exactly what it did before this existed.
+ *
+ * @param {Object} o
+ * @param {Object} o.data          a normalised schedule
+ * @param {Map<number, Array>} o.weekTeams week -> teams (js/season.js shape)
+ * @param {number[]} o.slots       the league's starting slots (`buildProjection().slots`)
+ * @param {Map|null} [o.floors]    the positional floor the projection was built with
+ * @param {Object} o.proGames      `season.fetchProGames()`
+ * @param {number|null} [o.asOf]   when those rosters were read (`season.weekReadAt`)
+ * @param {number} [o.now]
+ * @returns {{week:number, asOf:number, teams:Map<*, {mean:number, left:number, banked:number}>}|null}
+ */
+export function liveWeek({ data, weekTeams, slots, floors = null, proGames, asOf = null, now = Date.now() }) {
+  if (!data || data.isDemo || !proGames || !Array.isArray(slots) || !slots.length) return null;
+  const week = openWeeks(data)[0];
+  const teams = week === undefined ? null : weekTeams?.get(week);
+  if (!teams || !teams.length) return null;
+  const at = Number.isFinite(asOf) ? asOf : now;
+
+  let kicked = 0;
+  const out = new Map();
+  for (const t of teams) {
+    const open = slots.slice();
+    const pool = [];
+    let banked = 0;      // points already on the board
+    let toCome = 0;      // projected points still to be scored
+    let whole = 0;       // the lineup's whole projection, played or not
+    for (const p of t.players || []) {
+      const played = gamePlayed(proGames[p.proTeamId]?.[week], at, now);
+      const proj = typeof p.projected === 'number' ? p.projected : 0;
+      if (played <= 0) {
+        if (typeof p.projected === 'number') pool.push({ position: p.position, projected: p.projected });
+        continue;
+      }
+      if (!p.started) continue;                 // kicked off on the bench: out of this week
+      kicked++;
+      const i = open.indexOf(p.lineupSlotId);
+      if (i >= 0) open.splice(i, 1);
+      banked += typeof p.actual === 'number' ? p.actual : 0;
+      toCome += (1 - played) * proj;
+      whole += proj;
+    }
+    const rest = assessLineup(forecast.optimalLineup(pool, open).starters, open, floors).total;
+    toCome += rest;
+    whole += rest;
+    out.set(t.id, {
+      mean: banked + toCome,
+      left: whole > 0 ? Math.sqrt(Math.min(1, Math.max(0, toCome / whole))) : 0,
+      banked,
+    });
+  }
+  return kicked ? { week, asOf: at, teams: out } : null;
+}
+
+/** One side of a game in the week in progress, `{mean, left, banked}`, or null. */
+export function liveSide(g, side, live) {
+  if (!live || !g || g.week !== live.week) return null;
+  return live.teams.get(side === 'home' ? g.homeId : g.awayId) || null;
+}
+
 // ------------------------------------------------------------ the simulation
 
 /**
@@ -594,20 +713,39 @@ export function matchupOdds(data, weekTeams, { banked = () => true, floors = nul
  * @param {(g) => boolean} o.isRemaining  is this game still to be played out?
  * @param {Map|null} o.proj      week -> teamId -> projected points
  * @param {number} o.sigma
+ * @param {Object|null} [o.live] `liveWeek()`: the week in progress, whose games
+ *        are then played out from the score so far and what is left of the
+ *        spread. Null or absent is the season exactly as it was built before.
  */
-export function simulationInputs({ data, isRemaining, proj, sigma }) {
+export function simulationInputs({ data, isRemaining, proj, sigma, live = null }) {
   if (!data || !data.teams.length) return null;
 
   const teamIds = data.teams.map((t) => t.id);
   const banked = new Map(teamIds.map((id) => [id, { wins: 0, pointsFor: 0 }]));
   const games = [];
   let playable = 0;
+  let liveGames = 0;
 
   for (const g of data.games) {
     if (g.homeId == null || g.awayId == null) continue;        // bye: nothing to play out
     if (!banked.has(g.homeId) || !banked.has(g.awayId)) continue;
 
     if (isRemaining(g)) {
+      // THE WEEK IN PROGRESS: the score so far plus what is still to come, and
+      // only the share of the spread still to play (see `liveWeek`). Both sides
+      // or neither — half a live game would set one squad's Sunday so far
+      // against the other's whole projection.
+      const lh = liveSide(g, 'home', live);
+      const la = liveSide(g, 'away', live);
+      if (lh && la) {
+        playable++;
+        liveGames++;
+        games.push({
+          week: g.week, homeId: g.homeId, awayId: g.awayId,
+          homeProj: lh.mean, awayProj: la.mean, homeLeft: lh.left, awayLeft: la.left,
+        });
+        continue;
+      }
       const homeProj = projectedPoints(g, 'home', proj);
       const awayProj = projectedPoints(g, 'away', proj);
       if (homeProj !== null && awayProj !== null) playable++;
@@ -651,8 +789,13 @@ export function simulationInputs({ data, isRemaining, proj, sigma }) {
     weeks,
     playoffProjKey,
   ];
+  // Only when a week is in progress, so every other key is the key it was.
+  if (liveGames) keyParts.push(games.map((g) => [g.homeLeft ?? null, g.awayLeft ?? null]));
 
-  return { teamIds, banked, games, playable, sigma, playoff, keyParts };
+  const out = { teamIds, banked, games, playable, sigma, playoff, keyParts };
+  // Which week was played out from its score so far, for the page's note.
+  if (liveGames) out.liveWeek = live.week;
+  return out;
 }
 
 /**

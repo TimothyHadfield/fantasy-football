@@ -328,6 +328,9 @@ const state = {
   // NFL kickoffs, `{ proTeamId: { week: epochMs } }` (season.fetchProKickoffs),
   // for the "accept by" line. Empty = unknown (demo, a failed read): no line.
   kickoffs: {},
+  // The NFL's games, `{ proTeamId: { week: {at, done} } }` (season.fetchProGames),
+  // for the week in progress in the season simulation. Empty = unknown.
+  proGames: {},
   // The goal's per-week weights for the last search ({weights, raw}), or null.
   goalWeights: null,
   // The simulation that ranks the finder's offers. `token` cancels a run that
@@ -4239,6 +4242,7 @@ function goalInputs() {
   if (!need.every(haveWeek)) return { inputs: null, spread: null, why: 'waiting' };
 
   let proj = null;
+  let live = null;
   if (state.isDemo) {
     // The sample games carry their own projections; only the bracket weeks
     // have to come from the rosters, as they do on a live league.
@@ -4255,12 +4259,23 @@ function goalInputs() {
       return { inputs: null, spread: null, why: 'ESPN returned no usable projection for the weeks still to play' };
     }
     proj = built.proj;
+    // The week in progress, as the Schedule page plays it: from the score so
+    // far. A trade never prices that week (`state.startedWeeks`), so this
+    // moves the chances every offer starts from and no offer's own change.
+    if (Object.keys(state.proGames || {}).length) {
+      live = capture.liveWeek({
+        data, weekTeams: weekly.teams, slots: built.slots, floors: state.floors,
+        proGames: state.proGames,
+        asOf: typeof season.weekReadAt === 'function'
+          ? season.weekReadAt(capture.openWeeks(data)[0]) : null,
+      });
+    }
   }
 
   const started = state.isDemo ? null : capture.startedProjections(weekly.teams, decided);
   const spread = capture.leagueSpread(data, (g) => !goalIsRemaining(g), started);
   let inputs = capture.simulationInputs({
-    data, isRemaining: goalIsRemaining, proj, sigma: spread.sigma,
+    data, isRemaining: goalIsRemaining, proj, sigma: spread.sigma, live,
   });
   if (!inputs || !inputs.playable) {
     return { inputs: null, spread, why: 'there is no game left to play out' };
@@ -6991,6 +7006,7 @@ async function useDemo() {
   state.league = demoSeason();
   state.tradeRules = null;   // a sample league has no deadline to warn about
   state.kickoffs = {};       // nor real kickoffs, so no "accept by" line
+  state.proGames = {};       // and no game in progress
   // The demo season really is over: `js/demo-rosters.js` hardcodes a result
   // against every one of its thirteen games. Kept honest here, and handled
   // deliberately in `playedWeeks()` — which is the ONE place that decides the
@@ -7121,8 +7137,24 @@ async function useLive() {
     })
     .catch(() => { state.floors = null; });
 
+  // THE NFL'S GAMES, for the week in progress (Tim, 2026-10-04): the season
+  // simulation plays a week under way out from its score so far. Awaited, so
+  // the goal's first simulation already has it — and after the byes, so on the
+  // desktop it comes off the same payload (no request). A stub without the
+  // read, or a failure, is `{}`: no week is then treated as in progress.
+  state.proGames = {};
+  const gamesRead = (typeof season.fetchProGames === 'function'
+    ? Promise.resolve().then(() => season.fetchProGames())
+    : Promise.resolve({}))
+    .then((g) => {
+      if (state.source !== 'live') return;
+      state.proGames = g && typeof g === 'object' ? g : {};
+    })
+    .catch(() => { state.proGames = {}; });
+
   renderWeekPicker();
   await floorRead;
+  await gamesRead;
   await loadWeek();
   autoLoad();
 }

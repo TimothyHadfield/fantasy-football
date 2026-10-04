@@ -839,6 +839,7 @@ function adopt(data) {
   state.strength = null;
   state.strengthNote = '';
   state.projection = null;
+  state.liveWeek = null;
   state.started = null;
   state.rosterWeeks = null;
   state.rosterGap = '';
@@ -1097,8 +1098,12 @@ async function refreshStrength() {
 
     if (toProject.size) {
       const built = buildProjection(toProject);
+      // The week in progress, off the same rosters (no request on the desktop:
+      // the bye read already holds the NFL's games).
+      const live = built ? await readLiveWeek(toProject, built.slots) : null;
       if (stale()) return;
       if (built) {
+        state.liveWeek = live;
         state.projection = built;
         state.rosterWeeks = toProject;
         apply(built.strength, built.note);
@@ -1457,7 +1462,51 @@ function ordinal(n) {
  * otherwise it is the optimal lineup that team could field that week.
  */
 function projectedPoints(g, side) {
+  // THE WEEK IN PROGRESS (Tim, 2026-10-04): the score so far plus what is still
+  // to come, not the whole week's projection as if nobody had kicked off.
+  const live = liveSideOf(g, side);
+  if (live) return live.mean;
   return capture.projectedPoints(g, side, state.projection?.proj);
+}
+
+/**
+ * Where the week in progress stands (`capture.liveWeek`), or null. Never while
+ * replaying an archived week or on demo: neither has a game being played.
+ */
+function liveNow() {
+  return state.replay || !state.data || state.data.isDemo ? null : state.liveWeek || null;
+}
+
+/** One side of a game being played this week, `{mean, left, banked}`, or null. */
+function liveSideOf(g, side) {
+  const live = liveNow();
+  if (!live || gameState(g) === 'final') return null;
+  // Both sides or neither, as the simulation takes them.
+  if (!capture.liveSide(g, 'home', live) || !capture.liveSide(g, 'away', live)) return null;
+  return capture.liveSide(g, side, live);
+}
+
+/** The share of the scoring spread one side still has to play: 1 unless its week is under way. */
+function spreadLeft(g, side) {
+  const live = liveSideOf(g, side);
+  return live ? live.left : 1;
+}
+
+/**
+ * Read the NFL's games and work out where the week in progress stands.
+ * Null — and nothing on the page changes — when the read fails, on a stub
+ * without it, or when nobody has kicked off.
+ */
+async function readLiveWeek(weekTeams, slots) {
+  if (typeof season.fetchProGames !== 'function') return null;
+  let proGames = null;
+  try { proGames = await season.fetchProGames(); } catch { proGames = null; }
+  if (!proGames || !Object.keys(proGames).length) return null;
+  const week = capture.openWeeks(state.data)[0];
+  return capture.liveWeek({
+    data: state.data, weekTeams, slots, floors: state.floors, proGames,
+    asOf: typeof season.weekReadAt === 'function' ? season.weekReadAt(week) : null,
+  });
 }
 
 /** A per-week points number for one side, and where it came from. */
@@ -1483,7 +1532,7 @@ function homeWinChance(g, sigma) {
   const h = projectedPoints(g, 'home');
   const a = projectedPoints(g, 'away');
   if (h === null || a === null) return null;
-  return forecast.winProbability(h, a, sigma);
+  return forecast.winProbabilityLive(h, a, sigma, spreadLeft(g, 'home'), spreadLeft(g, 'away'));
 }
 
 /**
@@ -2104,7 +2153,10 @@ function renderForecast() {
     ...r,
     p:
       r.mine !== null && r.theirs !== null
-        ? forecast.winProbability(r.mine, r.theirs, sigma)
+        ? forecast.winProbabilityLive(
+            r.mine, r.theirs, sigma,
+            spreadLeft(r.g, r.mineHome ? 'home' : 'away'),
+            spreadLeft(r.g, r.mineHome ? 'away' : 'home'))
         : null,
   }));
 
@@ -2378,6 +2430,7 @@ function simInputs() {
     isRemaining: (g) => isRemaining(g, asOf),
     proj: state.projection?.proj || null,
     sigma: scoringSpread().sigma,
+    live: liveNow(),
   });
   if (!built) return null;
 
@@ -2731,7 +2784,14 @@ function paintSimulation(sim, inputs) {
       `${inputs.asOf} — the same as-of point the forecast panel above uses, so the two ` +
       `always agree. Step the week picker to move it.`
     : 'Weeks already decided are banked exactly as they stand; everything still open is ' +
-      'simulated. Same as-of point as the forecast panel above.';
+      'simulated. Same as-of point as the forecast panel above.' +
+      (inputs.liveWeek
+        ? ` <strong>Week ${inputs.liveWeek} is under way, so it is played out from where it ` +
+          `stands</strong>: the points each lineup has scored so far, plus ESPN’s projection for ` +
+          `the players still to play, with the scoring spread cut down to the share of the ` +
+          `week that is left. ESPN gives no game clock, so a game in progress is aged by ` +
+          `the time since its kickoff.`
+        : '');
 
   const gaps = sim.skipped
     ? `${plural(sim.skipped, 'remaining game')} ${sim.skipped === 1 ? 'has' : 'have'} no ` +

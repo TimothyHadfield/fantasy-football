@@ -428,10 +428,37 @@ export function parseProKickoffs(data) {
   return out;
 }
 
+/**
+ * Every NFL team's game in each week, `{ [proTeamId]: { [week]: { at, done } } }`,
+ * off the same payload as `parseProKickoffs`: `at` is the kickoff (epoch ms, the
+ * earliest game when a week has two) and `done` is ESPN's own `statsOfficial`
+ * for that game — false while it is being played, true once it is over
+ * (measured 2026-10-04 mid-afternoon: games 143 and 163 minutes old false,
+ * games 348 minutes old true). For the week in progress (`capture.liveWeek`).
+ */
+export function parseProGames(data) {
+  const out = {};
+  for (const t of data?.settings?.proTeams || []) {
+    if (!t || !t.id) continue;
+    const byWeek = {};
+    for (const [week, games] of Object.entries(t.proGamesByScoringPeriod || {})) {
+      let first = null;
+      for (const g of Array.isArray(games) ? games : []) {
+        const at = Number(g && g.date);
+        if (!Number.isFinite(at) || at <= 0) continue;
+        if (!first || at < first.at) first = { at, done: g.statsOfficial === true };
+      }
+      if (first) byWeek[week] = first;
+    }
+    if (Object.keys(byWeek).length) out[t.id] = byWeek;
+  }
+  return out;
+}
+
 // The kickoffs from the last pro-schedule read, so the bye read and the kickoff
 // read share ONE request on a page that wants both. Only a read that succeeded
 // is kept.
-let kickoffStash = null; // { season, kickoffs }
+let kickoffStash = null; // { season, kickoffs, games }
 
 async function readProSchedule() {
   const view = 'proTeamSchedules_wl';
@@ -445,8 +472,21 @@ async function readProSchedule() {
     data = await request(`/apis/v3/games/ffl/seasons/${config.season}?view=${view}`);
   }
   const kickoffs = parseProKickoffs(data);
-  if (Object.keys(kickoffs).length) kickoffStash = { season: config.season, kickoffs };
+  if (Object.keys(kickoffs).length) {
+    kickoffStash = { season: config.season, kickoffs, games: parseProGames(data) };
+  }
   return data;
+}
+
+/** The NFL games by pro team id and week; reuses the bye read's payload when there was one. */
+export async function fetchProGames() {
+  if (kickoffStash && kickoffStash.season === config.season) return kickoffStash.games;
+  return parseProGames(await readProSchedule());
+}
+
+/** The same, only if a pro-schedule read has already landed on this page — never a request. */
+export function heldProGames() {
+  return kickoffStash && kickoffStash.season === config.season ? kickoffStash.games : null;
 }
 
 /** Kickoffs by pro team id and week; reuses the bye read's payload when there was one. */
