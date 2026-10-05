@@ -754,8 +754,21 @@ SCENARIOS['desktop-sync'] = async () => {
   // 5 roster weeks + 5 wire weeks (3 regular, 2 playoff) + the schedule +
   // the league index. The account's saved league (users/<uid>) is a
   // separate, one-off write.
-  const seasonWrites = fake.log.paths.filter((p) => !p.startsWith('users/')).length;
+  // The Decisions review's weeks ride along in documents of their own, not
+  // counted in "12 files": one per week ESPN has decided.
+  const isDecision = (p) => /\/decisions\//.test(p);
+  const seasonWrites = fake.log.paths.filter((p) => !p.startsWith('users/') && !isDecision(p)).length;
   eq(seasonWrites, 12, 'it published the whole season without being asked');
+  eq(fake.log.paths.filter(isDecision).map((p) => p.split('/').pop()).join(','),
+    Array.from({ length: PLAYED_THROUGH }, (_, i) => i + 1).join(','),
+    'and each decided week’s moves with it, for the Decisions review on the phone');
+  // Remembered in a key of its own, so the next automatic sync sends a decided
+  // week again only if it changed (js/cloud.js compares these marks).
+  const sent = JSON.parse(store.saved.get('ff.cloud.decisions') || '{}')[`${LEAGUE_ID}::${SEASON}`] || {};
+  eq(Object.keys(sent).join(','), Array.from({ length: PLAYED_THROUGH }, (_, i) => i + 1).join(','),
+    'and the bar noted which weeks it sent');
+  eq(Object.keys(JSON.parse(store.saved.get('ff.cloud') || '{}')[`${LEAGUE_ID}::${SEASON}`] || {}).sort().join(','),
+    'at,ok,reason,wrote', 'without changing the shape of its own sync record');
   ok('the whole span went up, not just this week',
     [...fake.docs.keys()].filter((k) => /\/rosters\//.test(k)).length === SYNCED_WEEKS.length,
     [...fake.docs.keys()].join(' '));

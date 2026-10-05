@@ -1654,7 +1654,18 @@ export async function buildCloudPayload({ onProgress } = {}) {
     report(++done, total, `Week ${week} wire`);
   });
 
-  return {
+  // THE DECISIONS REVIEW'S WEEKS, so the page works on the phone (see "THE
+  // WORLD, IN THE SYNCED COPY" below). Built here rather than only when the
+  // Decisions page happens to have been opened on this machine. Last, when the
+  // decided weeks' rosters are already held: a week costs two requests the
+  // first time it is decided and none after. Any failure sends none, and the
+  // sync is still a sync.
+  let decisions = null;
+  try {
+    decisions = (await gatherDecisions()).copy;
+  } catch { /* ESPN refused a week: nothing of it goes up this time */ }
+
+  const payload = {
     leagueName: schedule.leagueName || '',
     // `name` is the person and `teamName` is the joke name inside ESPN. Both
     // go up: re-joining the members list on a phone would mean another ESPN
@@ -1671,6 +1682,10 @@ export async function buildCloudPayload({ onProgress } = {}) {
     wire,
     weeks,
   };
+  // Absent, not empty, for a league with none: the payload is then exactly
+  // what it was before this existed.
+  if (decisions && decisions.size) payload.decisions = decisions;
+  return payload;
 }
 
 // ===========================================================================
@@ -1859,22 +1874,79 @@ function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, move
  * DEMO returns the sample league's world, with no request at all.
  *
  * THROWS when ESPN will not hand over a decided week's rosters, transactions or
- * player-weeks. On a phone reading a PRIVATE league's synced copy that is every
- * time, until the world rides in that copy too (the plan's Phase 4).
+ * player-weeks.
+ *
+ * ON THE SYNCED COPY (a phone, a private league) nothing is asked of ESPN at
+ * all: the rosters and schedule are the copy's, and the rest is the copy's
+ * `decisions/<week>` documents — see "THE WORLD, IN THE SYNCED COPY" below. A
+ * copy that does not hold every decided week of it yet THROWS an Error with
+ * `code: 'decisions-not-synced'` and a one-sentence message.
  *
  * @param {Object} [opts]
  * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
  * @param {boolean} [opts.demo] the sample league's world even though a league
  *   is connected — for a page parked on Demo
  */
-export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
+export async function fetchDecisionWorld(opts = {}) {
+  return (await gatherDecisions(opts)).world;
+}
+
+// ---------------------------------------------- the world, in the synced copy
+//
+// THE WORLD, IN THE SYNCED COPY. The phone cannot ask ESPN for a private
+// league's transactions, so the desktop's sync carries what it read: one
+// document per decided week, `{ moves, players, draft, kick, league }` —
+//
+//   moves, players, draft   the week's record exactly as js/store.js freezes it
+//   kick                    `{ [proTeamId]: kickoff ms }` for that week, because
+//                           the copy holds the byes but not the NFL schedule
+//   league                  `{ starterSlots, rosterSize }` as ESPN's settings
+//                           say, or null when they could not be read
+//
+// `buildCloudPayload` builds the world itself (it is the one reader of `copy`),
+// so the phone does not depend on the Decisions page having been opened on the
+// desktop. That costs the sync two requests for a week the first time it is
+// decided and nothing after, since the week is frozen here.
+
+/** The one error a page shows as a sentence: the copy has no decisions yet. */
+function decisionsNotSynced() {
+  const err = new Error('Decisions need a fresh sync from your laptop.');
+  err.code = 'decisions-not-synced';
+  return err;
+}
+
+/** One read of the copy's decision weeks per page, like `cloudDown`; a miss is not kept. */
+let decisionsDownCache = null; // { key, promise }
+
+function decisionsDown(leagueId, season, weeks) {
+  const key = `${leagueId}::${season}::${weeks.join(',')}`;
+  if (!decisionsDownCache || decisionsDownCache.key !== key) {
+    const entry = { key, promise: null };
+    entry.promise = Promise.resolve()
+      .then(() => cloud.readDecisions(leagueId, season, weeks))
+      .then((res) => {
+        const got = res && res.decisions instanceof Map ? res.decisions : new Map();
+        if (!weeks.every((w) => got.has(w)) && decisionsDownCache === entry) decisionsDownCache = null;
+        return got;
+      })
+      .catch(() => {
+        if (decisionsDownCache === entry) decisionsDownCache = null;
+        return new Map();
+      });
+    decisionsDownCache = entry;
+  }
+  return decisionsDownCache.promise;
+}
+
+/** `{ world, copy }` — `copy` is what the sync uploads; null on demo and on the synced copy. */
+async function gatherDecisions({ onProgress, demo = false } = {}) {
   const report = (done, total, label) => {
     if (!onProgress) return;
     try { onProgress(done, total, label); } catch { /* a bad listener must not stop the read */ }
   };
 
   const cfg = storable();
-  if (demo || !cfg) return demoDecisionWorld();
+  if (demo || !cfg) return { world: demoDecisionWorld(), copy: null };
 
   report(0, 1, 'Loading league…');
   // ESPN's OWN verdict on each game: a matchup that merely looks over is not a
@@ -1888,7 +1960,8 @@ export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
   // except on the synced copy, where there is no ESPN to ask and the lineups in
   // use say it instead.
   let settings = null;
-  if (!(await cloudDown())) {
+  const down = await cloudDown();
+  if (!down) {
     try { settings = espn.parseLeague(await espn.fetchMatchups()); } catch { settings = null; }
   }
 
@@ -1905,11 +1978,32 @@ export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
     })
     : new Map();
   const gap = weeks.find((w) => !rosters.has(w));
-  if (gap !== undefined) throw new Error(`ESPN would not return week ${gap}’s rosters.`);
+  if (gap !== undefined) {
+    if (down) throw decisionsNotSynced();
+    throw new Error(`ESPN would not return week ${gap}’s rosters.`);
+  }
 
   // ---- the moves: this browser's frozen copy, else ESPN ----
   const records = new Map(); // week -> { moves, players, draft, closed, dirty }
-  await inBatches(weeks, 3, async (week) => {
+  // ---- or, on the synced copy, the copy's: every decided week or nothing ----
+  let syncedKick = null; // { [proTeamId]: { [week]: { at } } }, as `fetchProGames` has it
+  if (down && weeks.length) {
+    const got = await decisionsDown(cfg.leagueId, cfg.season, weeks);
+    if (!weeks.every((w) => got.has(w))) throw decisionsNotSynced();
+    syncedKick = {};
+    for (const week of weeks) {
+      const doc = got.get(week);
+      records.set(week, { moves: doc.moves, players: doc.players, draft: doc.draft || null, closed: true, dirty: false });
+      for (const [proTeamId, at] of Object.entries(doc.kick || {})) {
+        if (!syncedKick[proTeamId]) syncedKick[proTeamId] = {};
+        syncedKick[proTeamId][week] = { at };
+      }
+      report(++done, total, `Week ${week} moves`);
+    }
+    const league = got.get(weeks[weeks.length - 1]).league;
+    if (league && typeof league === 'object') settings = league;
+  }
+  await inBatches(down ? [] : weeks, 3, async (week) => {
     const held = store.readDecisionWeek(cfg.leagueId, cfg.season, week);
     if (held) {
       records.set(week, { ...held, closed: true, dirty: false });
@@ -1935,7 +2029,10 @@ export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
 
   // The NFL's games, for the kickoffs, and the byes for the bye rule. One
   // payload for both, and `fetchWeeksRosters` has usually bought it already.
-  const [pro, byes] = await Promise.all([fetchProGames(), fetchByeWeeks()]);
+  // The synced copy carries both, so a phone asks ESPN for neither.
+  const [pro, byes] = down
+    ? [syncedKick || {}, down.byes || {}]
+    : await Promise.all([fetchProGames(), fetchByeWeeks()]);
   const firstKickoff = {};
   for (const byWeek of Object.values(pro || {})) {
     for (const w of weeks) {
@@ -1970,6 +2067,12 @@ export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
   await inBatches(weeks, 3, async (week) => {
     const rec = records.get(week);
     const need = [...ids].filter((id) => !onRoster.get(week).has(id) && !rec.players[id]);
+    // A copy half-written by a sync that died names a man an older week's
+    // document has no line for; scoring him 0 there would be an invention.
+    if (need.length && down) {
+      decisionsDownCache = null; // not remembered: the next sync mends it
+      throw decisionsNotSynced();
+    }
     if (need.length) {
       const got = await espn.fetchPlayersWeek(need, week);
       requests += Math.ceil(need.length / 100);
@@ -2051,7 +2154,7 @@ export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
   const biggest = Math.max(0, ...everyTeam.map(
     (t) => (t.players || []).filter((p) => p.lineupSlotId !== IR_SLOT).length));
 
-  return assembleWorld({
+  const world = assembleWorld({
     isDemo: false,
     name: schedule.leagueName || '',
     slots: slotsFromCounts(counts),
@@ -2059,6 +2162,24 @@ export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
     roster: settings && settings.rosterSize ? settings.rosterSize : biggest,
     requests,
   });
+  if (down) return { world, copy: null };
+
+  // What the sync sends so a phone can build this same world: see "THE WORLD,
+  // IN THE SYNCED COPY" above.
+  const copy = new Map();
+  const league = settings
+    ? { starterSlots: settings.starterSlots || {}, rosterSize: settings.rosterSize || null }
+    : null;
+  for (const week of weeks) {
+    const rec = records.get(week);
+    const kick = {};
+    for (const [proTeamId, byWeek] of Object.entries(pro || {})) {
+      const at = byWeek && byWeek[week] && byWeek[week].at;
+      if (Number.isFinite(at)) kick[proTeamId] = at;
+    }
+    copy.set(week, { week, moves: rec.moves, players: rec.players, draft: rec.draft || null, kick, league });
+  }
+  return { world, copy };
 }
 
 // ------------------------------------------------- the sample league's world

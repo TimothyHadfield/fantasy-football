@@ -63,6 +63,7 @@ const SUITES = [
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['test-cloud.mjs', 'the phone bridge: what is synced up, what comes back down, and how old it is'],
   ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],
+  ['test-decision-cloud.mjs', 'the decisions review on the phone: the world rides in the synced copy and reads back the same'],
   ['test-trade-weekly.mjs', 'the weekly measure: depth across the season, and the combo packer'],
   ['test-trade-cut.mjs', 'the forced cut: the man whose loss costs the priced weeks least goes, so receiving never lowers a week'],
   ['test-trade-net.mjs', 'net gain: your change minus his in the weeks you play him, and the pruned finder keeps what an exhaustive one does'],
