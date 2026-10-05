@@ -188,19 +188,19 @@
       "assertions": 82
     },
     "shared-tables-check.mjs": {
-      "assertions": 208
+      "assertions": 221
     },
     "test-decision-data.mjs": {
-      "assertions": 195
+      "assertions": 201
     },
     "test-decision-cloud.mjs": {
-      "assertions": 96
+      "assertions": 105
     },
     "test-decisions.mjs": {
-      "assertions": 129
+      "assertions": 148
     },
     "decisions-check.mjs": {
-      "assertions": 111
+      "assertions": 136
     }
   }
 }
