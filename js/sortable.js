@@ -14,6 +14,12 @@
 // Tables that re-render should call resort(table) afterwards so the user's
 // chosen sort survives the rebuild.
 //
+// A detail row that belongs to the row above it is marked `data-sort-child`:
+//
+//   <tr data-sort-child>…</tr>
+//
+// It is never sorted on, and it stays directly under its parent row.
+//
 // Clicks are handled by ONE delegated listener on the table, not per-header,
 // so a table that rewrites its own <thead> keeps working.
 
@@ -101,7 +107,19 @@ export function resort(table) {
   if (st.index < 0) { paintHeaders(table); return; }
 
   for (const tbody of kids(table, 'TBODY')) {
-    const rows = kids(tbody, 'TR');
+    // A row marked `data-sort-child` is not data: it is a detail row belonging
+    // to the row above it (the Players page's "Actual" drop-down). It is never
+    // compared, and it travels with its parent wherever the sort puts him.
+    const rows = [];
+    const trailing = new Map();
+    for (const tr of kids(tbody, 'TR')) {
+      if (rows.length && tr.hasAttribute('data-sort-child')) {
+        trailing.get(rows[rows.length - 1]).push(tr);
+      } else {
+        rows.push(tr);
+        trailing.set(tr, []);
+      }
+    }
     if (rows.length < 2) continue;
 
     // Decorate-sort-undecorate: parse each cell once rather than once per
@@ -114,7 +132,10 @@ export function resort(table) {
     keyed.sort((a, b) => compare(a.key, b.key, st.asc) || a.i - b.i);
 
     const frag = document.createDocumentFragment();
-    for (const k of keyed) frag.appendChild(k.row);
+    for (const k of keyed) {
+      frag.appendChild(k.row);
+      for (const child of trailing.get(k.row)) frag.appendChild(child);
+    }
     tbody.appendChild(frag);
   }
 

@@ -22,6 +22,14 @@ const CONN = { leagueId: '99', season: 2026, teamId: 4 };
 const NO_TEAM = { leagueId: '99', season: 2026 };
 const LIVE = { 'waivers.source': 'live' };
 
+// THE PREVIOUS WEEKS (2026-10-04). The stub's schedule has weeks 1-3 played, so
+// both tables now draw three columns before week 4 — ESPN's projection for each
+// played week — and the page buys each played week's wire and rosters once,
+// after the priced weeks. Every index into the week cells below is offset by
+// this, and every list of requests carries [1, 2, 3] as well.
+const PAST = 3;
+const WEEK0 = 4 + PAST;   // the wire table's first PRICED week cell (week 4)
+
 const SCENARIOS = {
   mine: {
     label: '(a) your worst man at each position, in the same table',
@@ -156,8 +164,8 @@ function mineSnapshot(document) {
       name: cells[0].textContent.replace(/\s+/g, ' ').trim(),
       pos: cells[1].textContent.trim(),
       avg: cells[3].getAttribute('data-v'),
-      hot: cells.slice(4).filter((td) => /\bhot\b/.test(td.getAttribute('class') || '')).length,
-      week: cells.slice(4).map((td) => td.getAttribute('data-v')),
+      hot: cells.slice(WEEK0).filter((td) => /\bhot\b/.test(td.getAttribute('class') || '')).length,
+      week: cells.slice(WEEK0).map((td) => td.getAttribute('data-v')),
     };
   });
 }
@@ -401,10 +409,16 @@ async function check(scenario, boot) {
       txt(d.querySelector('#posFilter button[data-pos="QB"] .seg-count')));
 
     // The doubled cost, said out loud.
-    c.ok('each shown week cost a wire request and a roster request',
-      JSON.stringify(espn.calls.weeks.slice().sort()) === JSON.stringify([4, 5, 6]) &&
-      JSON.stringify(season.calls.rosterWeeks.slice().sort()) === JSON.stringify([4, 5, 6]),
+    c.ok('each shown week cost a wire request and a roster request, and each played week one more of each',
+      JSON.stringify(espn.calls.weeks.slice().sort()) === JSON.stringify([1, 2, 3, 4, 5, 6]) &&
+      JSON.stringify(season.calls.rosterWeeks.slice().sort()) === JSON.stringify([1, 2, 3, 4, 5, 6]),
       `${JSON.stringify(espn.calls.weeks)} / ${JSON.stringify(season.calls.rosterWeeks)}`);
+    c.ok('the priced weeks are bought first, the played weeks after them',
+      JSON.stringify(espn.calls.weeks.slice(0, 3).sort()) === JSON.stringify([4, 5, 6]) &&
+      JSON.stringify(season.calls.rosterWeeks.slice(0, 3).sort()) === JSON.stringify([4, 5, 6]),
+      `${JSON.stringify(espn.calls.weeks)} / ${JSON.stringify(season.calls.rosterWeeks)}`);
+    c.ok('the cost line names the played weeks too',
+      /Played weeks: up to 6 more\./.test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('the cost line says six requests, not three',
       /3 weeks = 6 requests to ESPN/.test(txt($('spanCost'))), txt($('spanCost')));
     // The sentence was shortened for the phone on 2026-09-16.
@@ -455,12 +469,12 @@ async function check(scenario, boot) {
 
     c.ok('widening buys only the roster weeks it does not hold',
       JSON.stringify(w.rosterFetches.slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6, 7, 8, 9]), JSON.stringify(w.rosterFetches));
+        JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9]), JSON.stringify(w.rosterFetches));
     c.ok('and no week is fetched twice',
       new Set(w.rosterFetches).size === w.rosterFetches.length, JSON.stringify(w.rosterFetches));
     c.ok('the wire is bought the same way',
       JSON.stringify(w.wireFetches.slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6, 7, 8, 9]), JSON.stringify(w.wireFetches));
+        JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9]), JSON.stringify(w.wireFetches));
     c.ok('the cost line keeps up', /6 weeks = 12 requests to ESPN/.test(w.cost || ''), w.cost);
   }
 
@@ -552,7 +566,7 @@ async function check(scenario, boot) {
     // and a week costs two requests for everybody.
     c.ok('the rosters are still bought, for the taken table',
       JSON.stringify(season.calls.rosterWeeks.slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6]), JSON.stringify(season.calls.rosterWeeks));
+        JSON.stringify([1, 2, 3, 4, 5, 6]), JSON.stringify(season.calls.rosterWeeks));
     c.ok('so the cost line still says two requests a week, not one',
       /3 weeks = 6 requests to ESPN \(wire \+ rosters per week/
         .test(txt($('spanCost'))), txt($('spanCost')));
@@ -594,7 +608,7 @@ async function check(scenario, boot) {
       /ESPN refused your rosters for week 5/.test(note), note);
     c.ok('the wire kept its week 5 numbers',
       [...d.querySelectorAll('#waiverTable tbody tr:not(.mine)')]
-        .filter((r) => r.children[5].getAttribute('data-v') !== null).length > 50,
+        .filter((r) => r.children[WEEK0 + 1].getAttribute('data-v') !== null).length > 50,
       'week 5 empty on the wire too');
   }
 
@@ -613,7 +627,7 @@ async function check(scenario, boot) {
   if (scenario === 'byes-waivers') {
     const rowOf = (id) => d.querySelector(`#waiverTable tbody tr[data-player="${id}"]:not(.mine)`);
     const at = (tr, week) => {
-      const td = tr && tr.children[4 + week - 4];
+      const td = tr && tr.children[WEEK0 + week - 4];
       return td && {
         text: td.textContent.replace(/\s+/g, ' ').trim(),
         cls: td.getAttribute('class') || '',

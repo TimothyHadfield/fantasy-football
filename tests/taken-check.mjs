@@ -3,7 +3,7 @@
 //
 //   node taken-check.mjs
 //
-// Two scenarios, each in its own child process, because an ES module
+// A dozen scenarios, each in its own child process, because an ES module
 // initialises once per process and waivers-page.js self-boots on import:
 //
 //   live  a three-squad stub league (taken-stub-season.mjs) where every answer
@@ -182,6 +182,7 @@ const SCENARIOS = {
         takenSpanOn: [...document.querySelectorAll('#takenSpanFilter button.on')]
           .map((b) => b.getAttribute('data-span')),
         weekCols: [...document.querySelectorAll('#takenTable thead th')].length,
+        link: linkView(document, 7103),
         savedSpan: JSON.parse(localStorage.getItem('ff.prefs') || '{}')['waivers.span'],
         rosterWeeks: season.calls.rosterWeeks.slice().sort((a, b) => a - b),
       };
@@ -218,168 +219,308 @@ const SCENARIOS = {
     },
   },
 
-  // ---- the played-weeks preview on a name ----------------------------------
+  // ---- the previous weeks, and a man's Actual row ---------------------------
   //
-  // Tim, 2026-09-29: "In the players section, show previous week's scores/proj
-  // by showing a preivew when the user over's over the player's name, but only
-  // show the weeks that have already passed, not the weeks to come."
+  // Tim, 2026-10-04: "Instead of showing the preview for that player selected
+  // when you hover over their name to show their previous actual and proj
+  // scores, just make a drop-down row soley for that player that just shows that
+  // player's act score rather than their proj. Additionally make the player's
+  // section show all weeks, not just future weeks. However, make a thick line
+  // seperateing the future and previous weeks. Only count a week as previous if
+  // the week is fully over."
   //
-  // The stub league has played weeks 1-3 (week 4 is current). Hovering a name
-  // must open the site's player card with EXACTLY weeks 1-3, ESPN's projection
-  // and the actual for each, a bye as Bye and a missing projection as "—". The
-  // played weeks are bought lazily on the first hover and never again.
+  // The stub league has played weeks 1-3 (week 4 is current). Both tables must
+  // draw weeks 1-3 BEFORE week 4, holding ESPN's projection for each; the heavy
+  // line is the left edge of week 4; a click on a name opens ONE row under him
+  // holding what he scored; and nothing opens on hover any more.
   past: {
-    label: '(f) hovering a name previews his played weeks: projection and score',
+    label: '(f) previous weeks are columns, and a click on a name opens his Actual row',
     stub: true,
     env: { WV_PAST: '1' },
     prefs: { 'waivers.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 1 },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const season = await import('./taken-stub-season.mjs');
       const espn = await import('./wv-stub-espn.mjs');
       const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
-      const link = (table, pid) =>
-        document.querySelector(`#${table} tbody tr[data-player="${pid}"] a.pref`);
+      const link = (table, pid) => document.querySelector(`#${table} tbody tr#p${pid} a.pref`);
+      // Selecting a man narrows HIS table to his position, so the next man may
+      // not be on screen: put that table's own filter back to All first.
+      const tap = async (table, pid) => {
+        fire(document.querySelector(
+          `#${table === 'takenTable' ? 'takenPosFilter' : 'posFilter'} button[data-pos="ALL"]`), 'click');
+        clickLeft(window, link(table, pid));
+        await waitFor();
+      };
       const played = (arr) => arr.filter((w) => w <= 3).sort((a, b) => a - b);
+      const actRows = () => [...document.querySelectorAll('tr.act-row')]
+        .map((tr) => tr.getAttribute('data-actual-for'));
       const out = {
         rosterBefore: played(season.calls.rosterWeeks),
         wireBefore: played(espn.calls.weeks),
-        tipped: ['waiverTable', 'takenTable'].map((id) => ({
+        heads: { taken: headView(document, 'takenTable'), wire: headView(document, 'waiverTable') },
+        tips: document.querySelectorAll('[data-tip]').length,
+        links: document.querySelectorAll('#waiverTable tbody a.pref, #takenTable tbody a.pref').length,
+        openAtStart: actRows(),
+        // Every row of both tables, before anything is clicked.
+        lines: ['takenTable', 'waiverTable'].map((id) => ({
           id,
-          links: document.querySelectorAll(`#${id} tbody a.pref`).length,
-          tips: document.querySelectorAll(`#${id} tbody a.pref[data-tip]`).length,
+          rows: [...document.querySelectorAll(`#${id} tbody tr[id]`)]
+            .map((tr) => rowView(document, id, tr.getAttribute('data-player'))),
         })),
       };
 
-      const hover = async (table, pid) => {
-        fire(link(table, pid), 'mouseover');
-        return waitCard();
-      };
+      // Hovering and tabbing onto a name used to open the played-weeks card.
+      fire(link('takenTable', 7101), 'mouseover');
+      fire(link('takenTable', 7101), 'focusin');
+      await new Promise((r) => setTimeout(r, 400));
+      const card = document.getElementById('tipCard');
+      out.cardAfterHover = Boolean(card && !card.hidden && !card.hasAttribute('hidden'));
+      out.openAfterHover = actRows();
 
-      out.ross = await hover('takenTable', 7101);
-      out.rosterAfterTaken = played(season.calls.rosterWeeks);
-      out.wireAfterTaken = played(espn.calls.weeks);
-      fire(link('takenTable', 7101), 'mouseout');
-      out.afterLeave = readCard(document);
+      await tap('takenTable', 7101);
+      out.ross = rowView(document, 'takenTable', 7101);
+      out.openAfterRoss = actRows();
+      out.spotAfterRoss = [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player'));
+      out.spanAfterRoss = [...document.querySelectorAll('#spanFilter button.on')].map((b) => b.getAttribute('data-span'));
+      out.tableWidthCols = [...document.querySelectorAll('#takenTable thead th')].length;
 
-      out.hale = await hover('takenTable', 7106);
-      out.kip = await hover('takenTable', 7108);
+      // RE-SORT with the row open: it must stay under him and never be sorted
+      // as a man of its own. Player (text) and then Avg, both directions.
+      out.sorted = [];
+      for (const i of [0, 0, 4, 4]) {
+        fire(document.querySelectorAll('#takenTable thead th')[i], 'click');
+        const trs = [...document.querySelectorAll('#takenTable tbody tr')];
+        const at = trs.findIndex((tr) => /\bact-row\b/.test(tr.getAttribute('class') || ''));
+        out.sorted.push({
+          i,
+          count: trs.filter((tr) => /\bact-row\b/.test(tr.getAttribute('class') || '')).length,
+          above: at > 0 ? trs[at - 1].getAttribute('id') : null,
+          first: trs[0].getAttribute('id'),
+          order: trs.filter((tr) => tr.hasAttribute('id')).map((tr) => tr.getAttribute('data-player')).join(','),
+        });
+      }
 
-      out.p00 = await hover('waiverTable', 5000);
-      out.rosterAfterWire = played(season.calls.rosterWeeks);
-      out.wireAfterWire = played(espn.calls.weeks);
-      out.p07 = await hover('waiverTable', 5007);
-      out.p02 = await hover('waiverTable', 5002);
+      // The same name again closes it; the man stays selected.
+      await tap('takenTable', 7101);
+      out.openAfterSecond = actRows();
+      out.rossClosed = rowView(document, 'takenTable', 7101);
+      out.spotAfterSecond = [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player'));
+      // And a third opens it again.
+      await tap('takenTable', 7101);
+      out.openAfterThird = actRows();
+
+      await tap('takenTable', 7106);
+      out.hale = rowView(document, 'takenTable', 7106);
+      out.openAfterHale = actRows();
+      await tap('takenTable', 7108);
+      out.kip = rowView(document, 'takenTable', 7108);
+
+      await tap('waiverTable', 5000);
+      out.p00 = rowView(document, 'waiverTable', 5000);
+      out.openAfterWire = actRows();
+      await tap('waiverTable', 5007);
+      out.p07 = rowView(document, 'waiverTable', 5007);
+      await tap('waiverTable', 5002);
+      out.p02 = rowView(document, 'waiverTable', 5002);
+
       out.rosterAfterAll = played(season.calls.rosterWeeks);
       out.wireAfterAll = played(espn.calls.weeks);
-      fire(link('waiverTable', 5002), 'mouseout');
-
-      // The keyboard gets the same card: tabbing onto the name is a focusin.
-      fire(link('takenTable', 7102), 'focusin');
-      out.focus = await waitCard();
-      fire(link('takenTable', 7102), 'focusout');
-      out.afterBlur = readCard(document);
-
       out.note = (document.getElementById('waiverNote') || {}).textContent || '';
       globalThis.__past = out;
     },
   },
 
-  // The same card on a phone: no hover, so a TAP on the name opens it as a
-  // sheet instead of jumping, and the jump comes back as a button inside it.
+  // A WEEK IN PROGRESS IS NOT A PREVIOUS WEEK. One of week 4's five games is
+  // final; "Only count a week as previous if the week is fully over."
+  'past-partial': {
+    label: '(g) a week in progress stays on the future side of the line',
+    stub: true,
+    env: { WV_PAST: '1', TAKEN_PARTIAL_WEEK: '4' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    after: async ({ document }) => {
+      globalThis.__past = {
+        heads: { taken: headView(document, 'takenTable'), wire: headView(document, 'waiverTable') },
+        ross: rowView(document, 'takenTable', 7101),
+      };
+    },
+  },
+
+  // The same row on a phone: no hover there, so the tap is all there ever was.
   'past-touch': {
-    label: '(g) a tap on a name opens the same preview as a sheet on a phone',
+    label: '(h) a tap on a name opens the same row on a phone, and no sheet',
     stub: true,
     coarse: true,
     env: { WV_PAST: '1' },
     prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
     conn: { leagueId: '99', season: 2026, teamId: 1 },
-    after: async ({ document, window }) => {
-      // A real tap is a primary-button click; the page's jump handler asks.
-      const click = (el) => {
-        if (!el) return;
-        const ev = new window.Event('click', { bubbles: true, cancelable: true });
-        Object.defineProperty(ev, 'button', { value: 0 });
-        el.dispatchEvent(ev);
+    after: async ({ document, window, waitFor }) => {
+      clickLeft(window, document.querySelector('#takenTable tbody tr#p7101 a.pref'));
+      await waitFor();
+      const card = document.getElementById('tipCard');
+      globalThis.__past = {
+        ross: rowView(document, 'takenTable', 7101),
+        open: [...document.querySelectorAll('tr.act-row')].map((tr) => tr.getAttribute('data-actual-for')),
+        card: Boolean(card && !card.hidden && !card.hasAttribute('hidden')),
+        spot: [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player')),
       };
-      const link = () => document.querySelector('#takenTable tbody tr[data-player="7101"] a.pref');
-      const out = {};
-      click(link());
-      out.card = await waitCard();
-      out.spanOn = [...document.querySelectorAll('#spanFilter button.on')].map((b) => b.getAttribute('data-span'));
-      out.spot = document.querySelectorAll('tr.spotlight').length;
-      out.open = (document.querySelector('#tipCard a.tc-open') || { getAttribute: () => '' }).getAttribute('href');
-      out.openText = ((document.querySelector('#tipCard a.tc-open') || {}).textContent || '').trim();
-      // A tap anywhere else closes it.
-      click(document.querySelector('h1'));
-      out.afterOutside = readCard(document);
-      // Reopen, then the button inside does the jump the tap replaced.
-      click(link());
-      await waitCard();
-      click(document.querySelector('#tipCard a.tc-open'));
-      out.afterOpen = readCard(document);
-      out.spotAfterOpen = [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player'));
-      globalThis.__past = out;
     },
   },
 
-  // The demo, which is what Tim lands on first: a demo squad man and a demo
-  // free agent both preview weeks 1-3 (the sample pretends it is week 4).
+  // ---- `?player=…&week=…`: one man, one week, boxed -------------------------
+  //
+  // Tim, 2026-10-04: "If it's a player, bring them straight to the player
+  // section with that player selected, and cells that they recieved that
+  // specific score boxed in orange."
+  'link-week': {
+    label: '(i) ?player=&week= opens his row and boxes exactly that week’s two cells',
+    stub: true,
+    env: { WV_PAST: '1' },
+    prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    search: '?player=7101&week=2',
+    after: async ({ document }) => { globalThis.__past = linkView(document, 7101); },
+  },
+  'link-week-wire': {
+    label: '(j) the same link for a free agent',
+    stub: true,
+    env: { WV_PAST: '1' },
+    prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    search: '?player=5000&week=3',
+    after: async ({ document }) => { globalThis.__past = linkView(document, 5000, 'waiverTable'); },
+  },
+  // A week that is not a previous week has no score to box: the plain jump.
+  'link-week-future': {
+    label: '(k) ?player=&week= for a week not yet over boxes nothing',
+    stub: true,
+    env: { WV_PAST: '1' },
+    prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
+    conn: { leagueId: '99', season: 2026, teamId: 1 },
+    search: '?player=7101&week=5',
+    after: async ({ document }) => { globalThis.__past = linkView(document, 7101); },
+  },
+
+  // The demo, which is what Tim lands on first (the sample pretends it is week
+  // 4): a squad man and a free agent, each with weeks 1-3 and an Actual row.
   'past-demo': {
-    label: '(h) the demo previews weeks 1-3 for a squad man and a free agent',
+    label: '(l) the demo draws weeks 1-3 and opens an Actual row for a squad man and a free agent',
     stub: false,
     prefs: { 'waivers.source': 'demo' },
-    after: async ({ document, window }) => {
-      const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+    after: async ({ document, window, waitFor }) => {
       const takenTr = document.querySelector('#takenTable tbody tr[data-player]');
       const wireTr = document.querySelector('#waiverTable tbody tr[data-player]:not(.mine)');
-      fire(takenTr.querySelector('a.pref'), 'mouseover');
-      const taken = await waitCard();
-      fire(wireTr.querySelector('a.pref'), 'mouseover');
-      const wire = await waitCard();
+      const takenId = takenTr.getAttribute('data-player');
+      const wireId = wireTr.getAttribute('data-player');
+      const heads = { taken: headView(document, 'takenTable'), wire: headView(document, 'waiverTable') };
+      clickLeft(window, takenTr.querySelector('a.pref'));
+      await waitFor();
+      const taken = rowView(document, 'takenTable', takenId);
+      clickLeft(window, document.querySelector(`#waiverTable tbody tr#p${wireId} a.pref`));
+      await waitFor();
+      const wire = rowView(document, 'waiverTable', wireId);
       globalThis.__past = {
-        taken, wire,
-        takenId: takenTr.getAttribute('data-player'),
-        wireId: wireTr.getAttribute('data-player'),
+        heads, taken, wire, takenId, wireId,
+        open: [...document.querySelectorAll('tr.act-row')].map((tr) => tr.getAttribute('data-actual-for')),
       };
     },
   },
 };
 
-/**
- * The player card as a reader sees it: null when it is not open. Week numbers
- * are read WITHOUT their sr-only words, so "3" is "3" and not "3 (playoffs)".
- */
-function readCard(document) {
-  const card = document.getElementById('tipCard');
-  if (!card || card.hidden || card.hasAttribute('hidden')) return null;
-  const vis = (el) => [...el.childNodes]
-    .filter((n) => !(n.getAttribute && /\bsr-only\b/.test(n.getAttribute('class') || '')))
-    .map((n) => n.textContent).join('').trim();
-  const runs = [...card.querySelectorAll('table.tc-run')];
-  const cellsOf = (sel) => runs.flatMap((t) => [...t.querySelectorAll(sel)]);
+// ------------------------------------------------- reading the previous weeks
+
+/** A real tap is a primary-button click; the page's jump handler asks. */
+function clickLeft(window, el) {
+  if (!el) return;
+  const ev = new window.Event('click', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'button', { value: 0 });
+  el.dispatchEvent(ev);
+}
+
+const clsOf = (el) => el.getAttribute('class') || '';
+const hasCls = (el, c) => new RegExp(`(^|\\s)${c}(\\s|$)`).test(clsOf(el));
+const cellText = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+
+/** A table's header: which columns are previous weeks, and where the line is. */
+function headView(document, table) {
+  const ths = [...document.querySelectorAll(`#${table} thead th`)];
+  const weeks = ths.map((th, i) => ({ i, text: cellText(th) })).filter((h) => /^\d+$/.test(h.text));
   return {
-    sheet: /\bsheet\b/.test(card.getAttribute('class') || ''),
-    ident: (card.querySelector('.tc-ident') || {}).textContent || '',
-    head: (card.querySelector('.tc-head') || {}).textContent || '',
-    pending: (card.querySelector('.tc-pending') || {}).textContent || '',
-    weeks: cellsOf('thead th').filter((th) => !/\btc-lbl\b/.test(th.getAttribute('class') || '')).map(vis),
-    proj: cellsOf('tbody td').map(vis),
-    act: cellsOf('tfoot td').map(vis),
-    waits: cellsOf('td.k-wait').length + cellsOf('td.a-wait').length,
+    cols: ths.length,
+    weeks: weeks.map((h) => h.text),
+    past: ths.filter((th) => hasCls(th, 'wk-past')).map(cellText),
+    pastAt: ths.map((th, i) => (hasCls(th, 'wk-past') ? i : -1)).filter((i) => i >= 0),
+    line: ths.map((th, i) => (hasCls(th, 'fut-start') ? i : -1)).filter((i) => i >= 0),
+    lineText: ths.filter((th) => hasCls(th, 'fut-start')).map(cellText),
   };
 }
 
-/** Poll until the card is open and every played week has landed in it. */
-async function waitCard(max = 15000) {
-  const t0 = Date.now();
-  let last = null;
-  while (Date.now() - t0 < max) {
-    last = readCard(globalThis.document);
-    if (last && !last.pending && last.weeks.length && !last.waits) return last;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  return last;
+/**
+ * One man's row and, when it is open, the Actual row under it. Column indexes
+ * are positions in the TABLE (a colspan counts for what it spans), so the two
+ * rows and the header can be compared like for like.
+ */
+function rowView(document, table, pid) {
+  const tr = document.querySelector(`#${table} tbody tr#p${pid}`);
+  if (!tr) return null;
+  const read = (row) => {
+    const cells = [];
+    let at = 0;
+    for (const td of row.children) {
+      const span = Number(td.getAttribute('colspan') || 1);
+      cells.push({ at, span, td });
+      at += span;
+    }
+    const pick = (c) => cells.filter((x) => hasCls(x.td, c));
+    const pastEnd = Math.max(-1, ...pick('wk-past').map((x) => x.at));
+    return {
+      cols: at,
+      label: cellText(row.children[0]),
+      past: pick('wk-past').map((x) => cellText(x.td)),
+      pastV: pick('wk-past').map((x) => x.td.getAttribute('data-v')),
+      pastAt: pick('wk-past').map((x) => x.at),
+      line: pick('fut-start').map((x) => x.at),
+      box: pick('wk-box').map((x) => ({ at: x.at, text: cellText(x.td) })),
+      // Everything right of the previous weeks: the weeks still to play.
+      future: cells.filter((x) => x.at > pastEnd && pick('wk-past').length).map((x) => cellText(x.td)),
+      futureV: cells.filter((x) => x.at > pastEnd && pick('wk-past').length).map((x) => x.td.getAttribute('data-v')),
+      coloured: pick('wk-past').filter((x) => /\b(hot|beats)\b/.test(clsOf(x.td)) ||
+        /background/.test(x.td.getAttribute('style') || '')).length,
+    };
+  };
+  const next = tr.nextElementSibling;
+  const act = next && hasCls(next, 'act-row') ? next : null;
+  const avgAt = table === 'takenTable' ? 4 : 3;
+  return {
+    ...read(tr),
+    avg: tr.children[avgAt].getAttribute('data-v'),
+    expanded: (tr.querySelector('a.pref') || { getAttribute: () => null }).getAttribute('aria-expanded'),
+    act: act && {
+      ...read(act),
+      for: act.getAttribute('data-actual-for'),
+      child: act.hasAttribute('data-sort-child'),
+      glance: cellText(act.children[1]),
+      id: act.getAttribute('id'),
+    },
+  };
+}
+
+/** What a `?player=&week=` link left on the page. */
+function linkView(document, pid, table = 'takenTable') {
+  const boxes = [...document.querySelectorAll('td.wk-box')];
+  return {
+    head: headView(document, table),
+    row: rowView(document, table, pid),
+    boxes: boxes.length,
+    boxRows: boxes.map((td) => {
+      const tr = td.closest('tr');
+      return tr.getAttribute('id') || `act:${tr.getAttribute('data-actual-for')}`;
+    }),
+    open: [...document.querySelectorAll('tr.act-row')].map((tr) => tr.getAttribute('data-actual-for')),
+    spot: [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player')),
+    jump: document.getElementById('jumpNote').textContent.replace(/\s+/g, ' ').trim(),
+  };
 }
 
 // --------------------------------------------------------------- reading it
@@ -393,7 +534,8 @@ function wireSnapshot(document) {
   return [...document.querySelectorAll('#waiverTable tbody tr')]
     .filter((tr) => {
       const cls = tr.getAttribute('class') || '';
-      return !/\bempty-row\b/.test(cls) && !/\bmine\b/.test(cls);
+      // The Actual row under a selected man is his second line, not a man.
+      return !/\bempty-row\b/.test(cls) && !/\bmine\b/.test(cls) && !/\bact-row\b/.test(cls);
     })
     .map((tr) => {
       const c = [...tr.children];
@@ -405,10 +547,15 @@ function wireSnapshot(document) {
     });
 }
 
-/** Every row of the taken table, as plain data. */
+/**
+ * Every row of the taken table, as plain data. `week` is the PRICED weeks only
+ * — the ones Avg is over. The previous weeks drawn before them (2026-10-04)
+ * are `past`; the Actual row under a selected man is not a man and is skipped.
+ */
 function takenSnapshot(document) {
+  const lead = 5 + document.querySelectorAll('#takenTable thead th.wk-past').length;
   return [...document.querySelectorAll('#takenTable tbody tr')]
-    .filter((tr) => !/\bempty-row\b/.test(tr.getAttribute('class') || ''))
+    .filter((tr) => !/\b(empty-row|act-row)\b/.test(tr.getAttribute('class') || ''))
     .map((tr) => {
       const c = [...tr.children];
       return {
@@ -423,7 +570,8 @@ function takenSnapshot(document) {
         ownerKey: c[3].getAttribute('data-v'),
         avg: c[4].getAttribute('data-v'),
         avgText: c[4].textContent.trim(),
-        week: c.slice(5).map((td) => ({
+        past: c.slice(5, lead).map((td) => td.textContent.trim()),
+        week: c.slice(lead).map((td) => ({
           v: td.getAttribute('data-v'),
           text: td.textContent.trim(),
           cls: td.getAttribute('class') || '',
@@ -630,111 +778,251 @@ async function check(scenario, boot) {
       stuck.map((s) => `after ${s.ms}ms: ${s.why}`).join(' | '));
   }
 
-  // ---- (f)/(g)/(h) the played-weeks preview --------------------------------
-  if (scenario === 'past' || scenario === 'past-touch' || scenario === 'past-demo') {
+  // ---- (f)-(l) the previous weeks and the Actual row -------------------------
+  if (/^(past|link-week)/.test(scenario)) {
     const w = globalThis.__past || {};
     const J = (x) => JSON.stringify(x);
     const WEEKS = ['1', '2', '3'];
-    const card = (name, got, want) => {
-      c.ok(`${name}: the card opened and every played week landed`,
-        got && !got.pending && got.waits === 0, J(got));
-      c.ok(`${name}: exactly the played weeks 1-3 — no current or future week`,
-        got && J(got.weeks) === J(WEEKS), J(got && got.weeks));
-      if (want.proj) {
-        c.ok(`${name}: Proj row is ESPN’s projection for each played week`,
-          got && J(got.proj) === J(want.proj), `${J(got && got.proj)} want ${J(want.proj)}`);
-      }
-      if (want.act) {
-        c.ok(`${name}: Act row is what he scored`,
-          got && J(got.act) === J(want.act), `${J(got && got.act)} want ${J(want.act)}`);
+    // Where the weeks start in each table: after Player, Pos, Tm, (Owner,) Avg.
+    const LEAD = { taken: 5, wire: 4 };
+
+    /** The header claims, for both tables. */
+    const heads = (h) => {
+      for (const [name, lead] of Object.entries(LEAD)) {
+        const t = (h || {})[name] || {};
+        c.ok(`${name}: the previous weeks are exactly the weeks fully over, 1-3`,
+          J(t.past) === J(WEEKS), J(t.past));
+        c.ok(`${name}: they sit BEFORE the weeks to come, straight after Avg`,
+          J(t.pastAt) === J([lead, lead + 1, lead + 2]), J(t.pastAt));
+        c.ok(`${name}: every week is a column, in order, 1 first`,
+          (t.weeks || []).length > 3 && (t.weeks || []).every((x, i) => Number(x) === i + 1), J(t.weeks));
+        c.ok(`${name}: the heavy line is on week 4’s header and nowhere else`,
+          J(t.line) === J([lead + 3]) && J(t.lineText) === J(['4']), `${J(t.line)} ${J(t.lineText)}`);
       }
     };
 
-    if (scenario === 'past') {
-      for (const t of w.tipped || []) {
-        c.ok(`every name in #${t.id} carries the preview`, t.links > 0 && t.tips === t.links,
-          `${t.tips} of ${t.links}`);
+    /** A man's own row: projections in the previous weeks, the line after them. */
+    const mainRow = (name, got, lead, proj) => {
+      c.ok(`${name}: his row has a cell for each previous week, under its header`,
+        got && J(got.pastAt) === J([lead, lead + 1, lead + 2]), J(got && got.pastAt));
+      if (proj) {
+        c.ok(`${name}: each holds ESPN’s PROJECTION for that week`,
+          got && J(got.past) === J(proj), `${J(got && got.past)} want ${J(proj)}`);
       }
-      c.ok('NOTHING about a played week is bought before anybody hovers',
-        J(w.rosterBefore) === '[]' && J(w.wireBefore) === '[]',
+      c.ok(`${name}: the heavy line is the left edge of his week 4 cell, and only that`,
+        got && J(got.line) === J([lead + 3]), J(got && got.line));
+      c.ok(`${name}: a previous week is plain — no green, no shading`,
+        got && got.coloured === 0, String(got && got.coloured));
+    };
+
+    /** His Actual row: scores, not projections, and no column moved. */
+    const actRow = (name, got, lead, act) => {
+      const a = got && got.act;
+      c.ok(`${name}: ONE row opened directly under him, labelled Actual`,
+        a && a.label === 'Actual' && String(a.for) === String(name.id), J(a));
+      c.ok(`${name}: it is his second line — no id of its own, and marked so the sort leaves it alone`,
+        a && a.id === null && a.child === true, J(a && { id: a.id, child: a.child }));
+      c.ok(`${name}: it spans exactly the columns of the row above, so nothing shifts`,
+        a && a.cols === got.cols && J(a.pastAt) === J(got.pastAt) && J(a.line) === J(got.line),
+        J(a && { cols: [a.cols, got.cols], pastAt: a.pastAt, line: a.line }));
+      if (act) {
+        c.ok(`${name}: under each previous week is what he SCORED`,
+          a && J(a.past) === J(act), `${J(a && a.past)} want ${J(act)}`);
+      }
+      c.ok(`${name}: and nothing under a week still to come`,
+        a && a.future.length > 0 && a.future.every((v) => v === ''), J(a && a.future));
+      c.ok(`${name}: his name says the row is open`, got && got.expanded === 'true', String(got && got.expanded));
+    };
+    const named = (label, id) => ({ id, toString: () => label });
+
+    if (scenario === 'past') {
+      heads(w.heads);
+
+      // ---- the hover preview is gone -----------------------------------------
+      c.ok('there are names to click (so the next checks are not vacuous)', w.links > 50, String(w.links));
+      c.ok('NO NAME CARRIES A HOVER PREVIEW ANY MORE', w.tips === 0, `${w.tips} [data-tip]`);
+      c.ok('hovering or tabbing onto a name opens no card', w.cardAfterHover === false, String(w.cardAfterHover));
+      c.ok('and no row: nothing is open until a name is clicked',
+        J(w.openAtStart) === '[]' && J(w.openAfterHover) === '[]', `${J(w.openAtStart)} ${J(w.openAfterHover)}`);
+
+      // ---- every row, before any click ---------------------------------------
+      for (const t of w.lines || []) {
+        const lead = t.id === 'takenTable' ? LEAD.taken : LEAD.wire;
+        const bad = t.rows.filter((r) =>
+          J(r.pastAt) !== J([lead, lead + 1, lead + 2]) || J(r.line) !== J([lead + 3]) || r.coloured);
+        c.ok(`#${t.id}: EVERY row has the three previous weeks and the line at week 4`,
+          t.rows.length > 5 && bad.length === 0, `${bad.length} of ${t.rows.length} wrong: ${J(bad[0])}`);
+        // Avg is over the PRICED weeks only: re-derived from the cells right of
+        // the line, the way the note describes it (weeks above zero count).
+        const off = t.rows.filter((r) => {
+          const real = r.futureV.map(Number).filter((v) => v > 0);
+          const mean = real.length ? real.reduce((x, y) => x + y, 0) / real.length : null;
+          // The wire prints its Avg key to the tenth; half a tenth is the slack.
+          return mean === null ? r.avg !== null : Math.abs(Number(r.avg) - mean) > 0.051;
+        });
+        c.ok(`#${t.id}: Avg is still the mean of the weeks to come — no previous week in it`,
+          off.length === 0, `${off.length} off: ${J(off[0] && { avg: off[0].avg, f: off[0].futureV, p: off[0].pastV })}`);
+        // …which only means something if the previous weeks would have moved it.
+        const moved = t.rows.filter((r) => {
+          const all = [...r.pastV, ...r.futureV].map(Number).filter((v) => v > 0);
+          const mean = all.length ? all.reduce((x, y) => x + y, 0) / all.length : null;
+          return mean !== null && Math.abs(Number(r.avg) - mean) > 0.2;
+        });
+        if (t.id === 'waiverTable') {
+          c.ok('and counting them WOULD have changed it for some men, so that is not vacuous',
+            moved.length > 0, `${moved.length} rows`);
+        }
+      }
+
+      c.ok('the played weeks are bought with the page, once: wire and rosters for 1-3',
+        J(w.rosterBefore) === '[1,2,3]' && J(w.wireBefore) === '[1,2,3]',
         `rosters ${J(w.rosterBefore)} wire ${J(w.wireBefore)}`);
 
-      // Hand-checked against the stub: Alden Ross projects 22 flat and scored
-      // 25.4, 18.2, 30.0.
-      card('Alden Ross (taken)', w.ross,
-        { proj: ['22.0', '22.0', '22.0'], act: ['25.4', '18.2', '30.0'] });
-      c.ok('the card names him', /Alden Ross/.test((w.ross || {}).ident || ''), J(w.ross));
-      c.ok('the heading says these are the played weeks', /played/i.test((w.ross || {}).head || ''),
-        (w.ross || {}).head);
-      c.ok('first hover on a rostered man: ONE roster read per played week, and no wire read',
-        J(w.rosterAfterTaken) === '[1,2,3]' && J(w.wireAfterTaken) === '[]',
-        `rosters ${J(w.rosterAfterTaken)} wire ${J(w.wireAfterTaken)}`);
-      c.ok('mouse-out closes it', w.afterLeave === null, J(w.afterLeave));
+      // ---- Alden Ross: projects 22 flat, scored 25.4, 18.2, 30.0 -------------
+      const ross = named('Alden Ross', 7101);
+      mainRow(ross, w.ross, LEAD.taken, ['22.0', '22.0', '22.0']);
+      actRow(ross, w.ross, LEAD.taken, ['25.4', '18.2', '30.0']);
+      c.ok('THE ROW SHOWS HIS SCORES AND NOT HIS PROJECTIONS — the two differ in every week',
+        w.ross && w.ross.act && w.ross.act.past.every((v, i) => v !== w.ross.past[i]),
+        J(w.ross && w.ross.act && [w.ross.past, w.ross.act.past]));
+      c.ok('one row is open in the whole page', J(w.openAfterRoss) === '["7101"]', J(w.openAfterRoss));
+      c.ok('the click is still the jump: he is the one marked, over the whole season',
+        J(w.spotAfterRoss) === '["7101"]' && J(w.spanAfterRoss) === '["all"]',
+        `${J(w.spotAfterRoss)} ${J(w.spanAfterRoss)}`);
+      c.ok('the row keeps ESPN’s glance line (Avg · Proj · rank)',
+        w.ross && w.ross.act && /Avg .*Proj .*QB/.test(w.ross.act.glance), w.ross && w.ross.act && w.ross.act.glance);
 
-      card('Hale Innis (bye in week 2)', w.hale,
-        { proj: ['14.0', 'Bye', '14.0'], act: ['11.3', '', '16.9'] });
-      card('Kip Lund (no projection)', w.kip,
-        { proj: ['—', '—', '—'], act: ['4.0', '', ''] });
+      // ---- it survives a re-sort ---------------------------------------------
+      for (const [n, st] of (w.sorted || []).entries()) {
+        c.ok(`re-sort ${n + 1} (column ${st.i}): the Actual row is still one row, directly under him`,
+          st.count === 1 && st.above === 'p7101', J({ count: st.count, above: st.above }));
+      }
+      c.ok('the sorts really moved the men (so staying attached is not vacuous)',
+        new Set((w.sorted || []).map((st) => st.order)).size >= 3,
+        String(new Set((w.sorted || []).map((st) => st.order)).size));
+      c.ok('and the Actual row was never sorted to the top as a man of its own',
+        (w.sorted || []).length === 4 && (w.sorted || []).every((st) => st.first !== null),
+        J((w.sorted || []).map((st) => st.first)));
+
+      // ---- click again: closed; again: open ----------------------------------
+      c.ok('clicking his name again closes it',
+        J(w.openAfterSecond) === '[]' && w.rossClosed && w.rossClosed.act === null &&
+        w.rossClosed.expanded === 'false', `${J(w.openAfterSecond)} ${w.rossClosed && w.rossClosed.expanded}`);
+      c.ok('and leaves him selected', J(w.spotAfterSecond) === '["7101"]', J(w.spotAfterSecond));
+      c.ok('a third click opens it again', J(w.openAfterThird) === '["7101"]', J(w.openAfterThird));
+
+      // ---- the awkward men ---------------------------------------------------
+      const hale = named('Hale Innis (bye in week 2)', 7106);
+      mainRow(hale, w.hale, LEAD.taken, ['14.0', 'Bye', '14.0']);
+      actRow(hale, w.hale, LEAD.taken, ['11.3', '—', '16.9']);
+      c.ok('opening another man closes the first: still one row in the page',
+        J(w.openAfterHale) === '["7106"]', J(w.openAfterHale));
+      const kip = named('Kip Lund (no projection)', 7108);
+      mainRow(kip, w.kip, LEAD.taken, ['—', '—', '—']);
+      actRow(kip, w.kip, LEAD.taken, ['4.0', '—', '—']);
 
       // Hand-checked: Player 00 projects 20.00, 15.20, 24.00 and scored 1.2x - 1.
-      card('Player 00 (free agent)', w.p00,
-        { proj: ['20.0', '15.2', '24.0'], act: ['23.0', '17.2', '27.8'] });
-      c.ok('first hover on a free agent: one wire read per played week, and no roster re-read',
-        J(w.wireAfterWire) === '[1,2,3]' && J(w.rosterAfterWire) === '[1,2,3]',
-        `rosters ${J(w.rosterAfterWire)} wire ${J(w.wireAfterWire)}`);
-      card('Player 07 (free agent, bye in week 2)', w.p07, { act: null });
+      const p00 = named('Player 00 (free agent)', 5000);
+      mainRow(p00, w.p00, LEAD.wire, ['20.0', '15.2', '24.0']);
+      actRow(p00, w.p00, LEAD.wire, ['23.0', '17.2', '27.8']);
+      c.ok('a free agent’s row is the only one open, taken table included',
+        J(w.openAfterWire) === '["5000"]', J(w.openAfterWire));
+      const p07 = named('Player 07 (free agent, bye in week 2)', 5007);
+      mainRow(p07, w.p07, LEAD.wire, null);
+      actRow(p07, w.p07, LEAD.wire, null);
       c.ok('Player 07: his bye reads Bye, with no score under it',
-        w.p07 && w.p07.proj[1] === 'Bye' && w.p07.act[1] === '', J(w.p07));
-      card('Player 02 (free agent, no projection in week 1)', w.p02, {});
+        w.p07 && w.p07.past[1] === 'Bye' && w.p07.act && w.p07.act.past[1] === '—', J(w.p07 && [w.p07.past, w.p07.act && w.p07.act.past]));
+      const p02 = named('Player 02 (free agent, no projection in week 1)', 5002);
+      mainRow(p02, w.p02, LEAD.wire, null);
+      actRow(p02, w.p02, LEAD.wire, null);
       c.ok('Player 02: no projection is "—", and his score still shows',
-        w.p02 && w.p02.proj[0] === '—' && w.p02.act[0] === '3.1', J(w.p02));
-      c.ok('every later hover is free: nothing bought twice',
+        w.p02 && w.p02.past[0] === '—' && w.p02.act && w.p02.act.past[0] === '3.1', J(w.p02 && [w.p02.past, w.p02.act && w.p02.act.past]));
+
+      c.ok('every click was free: no played week was bought twice',
         J(w.wireAfterAll) === '[1,2,3]' && J(w.rosterAfterAll) === '[1,2,3]',
         `rosters ${J(w.rosterAfterAll)} wire ${J(w.wireAfterAll)}`);
+      c.ok('"How to read this table" says what the Actual row is',
+        /Actual/.test(w.note || '') && /played/i.test(w.note || ''), (w.note || '').slice(0, 200));
+    }
 
-      c.ok('keyboard focus on a name opens the same card',
-        w.focus && /Brix Calder/.test(w.focus.ident) && J(w.focus.weeks) === J(WEEKS), J(w.focus));
-      c.ok('and leaving it closes the card', w.afterBlur === null, J(w.afterBlur));
-      c.ok('"How to read this table" says what the preview shows',
-        /played weeks/i.test(w.note || ''), (w.note || '').slice(0, 200));
+    if (scenario === 'past-partial') {
+      // Week 4 has one final game of five. It is NOT a previous week.
+      heads(w.heads);
+      mainRow(named('Alden Ross', 7101), w.ross, LEAD.taken, ['22.0', '22.0', '22.0']);
     }
 
     if (scenario === 'past-touch') {
-      card('tap on Alden Ross', w.card,
-        { proj: ['22.0', '22.0', '22.0'], act: ['25.4', '18.2', '30.0'] });
-      c.ok('on a phone it opens as a sheet', w.card && w.card.sheet, J(w.card));
-      c.ok('the tap did NOT jump: the span and the spotlight are untouched',
-        J(w.spanOn) === '["3"]' && w.spot === 0, `span ${J(w.spanOn)} spot ${w.spot}`);
-      c.ok('the jump is a button inside the sheet', /player=7101/.test(w.open || ''), w.open);
-      c.ok('the button says where it goes (his row), not "next 13 weeks"', /in the table/.test(w.openText || ''), w.openText);
-      c.ok('a tap outside closes it', w.afterOutside === null, J(w.afterOutside));
-      c.ok('the button inside does the jump, on this page, and closes the sheet',
-        w.afterOpen === null && J(w.spotAfterOpen) === '["7101"]',
-        `${J(w.afterOpen)} spot ${J(w.spotAfterOpen)}`);
+      const ross = named('tap on Alden Ross', 7101);
+      mainRow(ross, w.ross, LEAD.taken, ['22.0', '22.0', '22.0']);
+      actRow(ross, w.ross, LEAD.taken, ['25.4', '18.2', '30.0']);
+      c.ok('one row, his', J(w.open) === '["7101"]', J(w.open));
+      c.ok('and no sheet or card opened over the page', w.card === false, String(w.card));
+      c.ok('the tap selected him', J(w.spot) === '["7101"]', J(w.spot));
+    }
+
+    if (scenario === 'link-week' || scenario === 'link-week-wire') {
+      const wire = scenario === 'link-week-wire';
+      const lead = wire ? LEAD.wire : LEAD.taken;
+      const id = wire ? 5000 : 7101;
+      const week = wire ? 3 : 2;
+      const at = lead + week - 1;
+      const who = named(wire ? 'Player 00' : 'Alden Ross', id);
+      c.ok('the link still lands on the man', J(w.spot) === J([String(id)]) && /Jumped to/.test(w.jump || ''),
+        `${J(w.spot)} ${w.jump}`);
+      mainRow(who, w.row, lead, wire ? ['20.0', '15.2', '24.0'] : ['22.0', '22.0', '22.0']);
+      actRow(who, w.row, lead, wire ? ['23.0', '17.2', '27.8'] : ['25.4', '18.2', '30.0']);
+      c.ok('his Actual row is the one open', J(w.open) === J([String(id)]), J(w.open));
+      c.ok('EXACTLY TWO CELLS ARE BOXED in the whole page', w.boxes === 2, String(w.boxes));
+      c.ok('one on his own row and one on his Actual row',
+        J((w.boxRows || []).slice().sort()) === J([`act:${id}`, `p${id}`].sort()), J(w.boxRows));
+      c.ok(`on his row it is the week ${week} PROJECTION`,
+        w.row && J(w.row.box) === J([{ at, text: wire ? '24.0' : '22.0' }]), J(w.row && w.row.box));
+      c.ok(`on his Actual row it is the week ${week} SCORE, in the same column`,
+        w.row && w.row.act && J(w.row.act.box) === J([{ at, text: wire ? '27.8' : '18.2' }]),
+        J(w.row && w.row.act && w.row.act.box));
+      c.ok('and that column’s header is that week',
+        w.head && w.head.weeks[week - 1] === String(week) && w.head.pastAt[week - 1] === at, J(w.head));
+    }
+
+    if (scenario === 'link-week-future') {
+      c.ok('the link still lands on the man', J(w.spot) === '["7101"]' && /Jumped to Alden Ross/.test(w.jump || ''),
+        `${J(w.spot)} ${w.jump}`);
+      c.ok('a week that is not over has no score: NOTHING is boxed', w.boxes === 0, String(w.boxes));
+      c.ok('the previous weeks are still drawn', w.row && J(w.row.past) === J(['22.0', '22.0', '22.0']), J(w.row && w.row.past));
     }
 
     if (scenario === 'past-demo') {
+      heads(w.heads);
       const { generateDemoWeekRosters } = await import(
         pathToFileURL(path.join(REPO, 'js/demo-rosters.js')).href
       );
       // The squad man, re-derived from the demo generator itself.
       const fmtP = (v) => (v === null || v === undefined ? '—' : Number(v).toFixed(1));
-      const fmtA = (v) => (typeof v === 'number' ? v.toFixed(1) : '');
+      const fmtA = (v) => (typeof v === 'number' ? v.toFixed(1) : '—');
       const want = { proj: [], act: [] };
       for (const wk of [1, 2, 3]) {
         const man = generateDemoWeekRosters(wk).teams.flatMap((t) => t.players)
           .find((p) => String(p.playerId) === w.takenId);
         want.proj.push(man ? fmtP(man.projected) : '—');
-        want.act.push(man ? fmtA(man.actual) : '');
+        want.act.push(man ? fmtA(man.actual) : '—');
       }
-      card('a demo squad man', w.taken, want);
+      const man = named('a demo squad man', w.takenId);
+      c.ok('a demo squad man: his previous weeks are the generator’s projections',
+        w.taken && J(w.taken.past.map((v) => v.replace(/ (OUT|IR|SUSP)$/, ''))) === J(want.proj),
+        `${J(w.taken && w.taken.past)} want ${J(want.proj)}`);
+      mainRow(man, w.taken, LEAD.taken, null);
+      actRow(man, w.taken, LEAD.taken, want.act);
       c.ok('the demo squad man really has three scores (not vacuous)',
         want.act.every((a) => /^\d+\.\d$/.test(a)), J(want));
-      card('a demo free agent', w.wire, {});
+      const fa = named('a demo free agent', w.wireId);
+      mainRow(fa, w.wire, LEAD.wire, null);
+      actRow(fa, w.wire, LEAD.wire, null);
       c.ok('a demo free agent shows a projection and a score for each played week',
-        w.wire && w.wire.proj.every((v) => /^\d+\.\d$|^Bye$/.test(v)) &&
-        w.wire.act.every((v, i) => (w.wire.proj[i] === 'Bye' ? v === '' : /^\d+\.\d$/.test(v))),
-        J(w.wire));
+        w.wire && w.wire.act && w.wire.past.every((v) => /^\d+\.\d|^Bye$/.test(v)) &&
+        w.wire.act.past.every((v, i) => (w.wire.past[i] === 'Bye' ? v === '—' : /^\d+\.\d$/.test(v))),
+        J(w.wire && [w.wire.past, w.wire.act && w.wire.act.past]));
+      c.ok('and opening his closed the squad man’s: one row in the page',
+        J(w.open) === J([String(w.wireId)]), J(w.open));
     }
     return c.out;
   }
@@ -819,6 +1107,14 @@ async function check(scenario, boot) {
       const him = (w.rows || []).find((r) => r.player === '7103');
       c.ok('AND HIS RANK IS THE ONE FOR THE WIDENED SPAN, NOT THE OLD ONE',
         him && him.pos === 'QB1', him && him.pos);
+
+      // No `&week=`: everything above is what it always was, and his Actual
+      // row is open under him with nothing boxed.
+      const lk = w.link || {};
+      c.ok('his Actual row is open under him, and it is the only one',
+        JSON.stringify(lk.open) === JSON.stringify(['7103']) && lk.row && lk.row.act &&
+        lk.row.act.label === 'Actual', JSON.stringify(lk.open));
+      c.ok('and with no &week= nothing is boxed', lk.boxes === 0, String(lk.boxes));
 
       c.ok('clearing takes the mark and the strip away',
         w.afterClear && w.afterClear.spot === 0 && /\bhidden\b/.test(w.afterClear.jumpCls),
@@ -1160,9 +1456,15 @@ async function check(scenario, boot) {
       jessop && jessop.pos);
 
     // The cost of all this, said out loud.
-    c.ok('every shown week cost a wire request and a roster request',
-      JSON.stringify(w.rosterBefore.slice().sort((a, b) => a - b)) === JSON.stringify([4, 5, 6]),
-      JSON.stringify(w.rosterBefore));
+    // …and, since 2026-10-04, each week already played costs one more of each:
+    // they are columns now (the previous weeks), bought once with the page.
+    c.ok('every shown week cost a wire request and a roster request, the played weeks included',
+      JSON.stringify(w.rosterBefore.slice().sort((a, b) => a - b)) === JSON.stringify([1, 2, 3, 4, 5, 6]) &&
+      JSON.stringify(w.wireFetchesBefore.slice().sort((a, b) => a - b)) === JSON.stringify([1, 2, 3, 4, 5, 6]),
+      `${JSON.stringify(w.rosterBefore)} / ${JSON.stringify(w.wireFetchesBefore)}`);
+    c.ok('the previous weeks are drawn before the priced ones, and are not in `week`',
+      rows.every((r) => r.past.length === 3 && r.week.length === 3),
+      JSON.stringify(rows[0] && [rows[0].past, rows[0].week.length]));
     c.ok('the cost line says six requests for three weeks',
       /3 weeks = 6 requests to ESPN/.test(txt($('spanCost'))), txt($('spanCost')));
     // The sentence was shortened for the phone on 2026-09-16.
@@ -1187,7 +1489,7 @@ async function check(scenario, boot) {
       wideByName.get('Cade Dunlow') && wideByName.get('Cade Dunlow').avg);
     c.ok('widening bought only the roster weeks it did not hold',
       JSON.stringify((w.rosterAfterWiden || []).slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6, 7, 8, 9]), JSON.stringify(w.rosterAfterWiden));
+        JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9]), JSON.stringify(w.rosterAfterWiden));
     c.ok('and no roster week was ever bought twice',
       new Set(w.rosterAfterWiden || []).size === (w.rosterAfterWiden || []).length,
       JSON.stringify(w.rosterAfterWiden));

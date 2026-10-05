@@ -351,6 +351,53 @@ for (const g of GLYPHS) {
   deep(column(t, 0), ['2', '1', '3'], 'a row with no cell in that column sorts to the bottom');
 }
 
+// ------------------------------------------------- a detail row (data-sort-child)
+// The Players page drops an "Actual" row under a selected man (2026-10-04). It
+// is his second line: it must travel with him and never be sorted as a row.
+// Its own sort value here ("99" / "0") is the bait — sorted as data it would
+// lead the table one way and trail it the other.
+{
+  const build = () => {
+    const host = document.createElement('div');
+    host.innerHTML =
+      '<table><thead><tr><th data-sort>N</th><th data-sort>V</th></tr></thead><tbody>' +
+      '<tr><td>a</td><td>1</td></tr>' +
+      '<tr><td>b</td><td>3</td></tr>' +
+      '<tr data-sort-child><td>b-detail</td><td>99</td></tr>' +
+      '<tr><td>c</td><td>2</td></tr>' +
+      '</tbody></table>';
+    return host.querySelector('table');
+  };
+  const t = build();
+  enableSort(t);
+  click(t, 1);
+  deep(column(t), ['b', 'b-detail', 'c', 'a'], 'descending: the detail row stays directly under its parent');
+  click(t, 1);
+  deep(column(t), ['a', 'c', 'b', 'b-detail'], 'ascending: it follows him to the bottom, not its own 99 to the end alone');
+  click(t, 0);
+  deep(column(t), ['c', 'b', 'b-detail', 'a'], 'a text column carries it too');
+  eq(t.querySelectorAll('tbody tr').length, 4, 'no row is lost or doubled');
+
+  const d = build();
+  enableSort(d, { defaultIndex: 1 });
+  deep(column(d), ['b', 'b-detail', 'c', 'a'], 'the opening sort carries it as well');
+
+  // One man and his detail row: nothing to order, and nothing must move.
+  const host = document.createElement('div');
+  host.innerHTML = '<table><thead><tr><th data-sort>V</th></tr></thead><tbody>' +
+    '<tr><td>5</td></tr><tr data-sort-child><td>9</td></tr></tbody></table>';
+  const one = host.querySelector('table');
+  enableSort(one);
+  click(one, 0);
+  deep(column(one), ['5', '9'], 'a lone row keeps its detail row under it');
+
+  // A table with no such row sorts exactly as it always did.
+  const plain = table(['V'], [['1'], ['3'], ['2']]);
+  enableSort(plain);
+  click(plain, 0);
+  deep(column(plain), ['3', '2', '1'], 'and a table without one is unchanged');
+}
+
 // ---------------------------------------------------------------- enableSortAll
 {
   const host = document.createElement('div');
