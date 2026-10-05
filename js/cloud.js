@@ -1006,6 +1006,12 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
 // document carries a `mark` (its length and a hash of its text) and a caller
 // that hands back the marks of its last sync has only the new weeks sent.
 //
+// THE WEEK IN PLAY RIDES TOO (Tim, 2026-10-05), as the same document with
+// `open: true` in its body, at the path the week will keep. Nothing here treats
+// it differently: its mark moves as the week is played, so it is rewritten, and
+// the decided week's document replaces it. The READER is what tells them apart
+// (js/season.js): an open document is never taken for a decided week's.
+//
 // A REFUSED WRITE IS SILENT. If the project's rules ever stopped covering this
 // path, the sync carries on to its index and reports exactly what it always
 // did; the refusal is a `reason` on `result.decisions` and nothing else.

@@ -21,6 +21,11 @@
 //   squad 2, its add undone: the man never started, so nothing changes.
 //   squad 3, its drop undone: squad 4's week-3 pickup of that man could not
 //     have happened.
+//
+// THE WEEK IN PLAY (Tim, 2026-10-05: "Could you just display everything you're
+// able to, like we do across the rest of the cite?") is the `early` child, on
+// the stub's CAP_EARLY=1: week 4, squad 1 v squad 4 over (squad 1 lost it 118.3, a
+// fourth result for each) and the other four matchups still being played.
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -99,6 +104,7 @@ async function bootPage(prefs = {}) {
     weeks: [...document.querySelectorAll('#weekTable tbody tr[data-wk]')].map((tr) => ({
       c: cells(tr), flip: tr.getAttribute('data-flip') === '1',
     })),
+    sub: text($('pageSub')),
     views: Object.fromEntries(['season', 'standings', 'summary'].map((box) => [box, {
       on: text(document.querySelector(`#${box}Switch button.on`)),
       diff: document.querySelector(`#${box}Hyp table`)?.getAttribute('data-view') === 'diff',
@@ -107,6 +113,7 @@ async function bootPage(prefs = {}) {
       cur: cells(document.querySelector('#seasonCur tbody.split tr') || { children: [] }),
       hyp: cells(document.querySelector('#seasonHyp tbody.split tr') || { children: [] }),
       body: tableRows('seasonHyp'),
+      curBody: tableRows('seasonCur'),
       vals: [...document.querySelectorAll('#seasonHyp td[data-v]')].map((td) => Number(td.getAttribute('data-v'))),
       teamRowHidden: $('seasonTeamRow').hasAttribute('hidden'),
       teams: [...$('seasonTeam').querySelectorAll('option')].map(text),
@@ -192,6 +199,43 @@ const CHILDREN = {
     await p.settle();
     out.whatIf = p.snap();
     out.prefs = JSON.parse(p.map.get('ff.prefs'));
+    out.errors = p.errors;
+    return out;
+  },
+
+  /**
+   * THE WEEK IN PLAY (CAP_EARLY=1): week 4, squad 1 v squad 4 over and the other
+   * four matchups still being played. One reader again.
+   */
+  async early() {
+    const p = await bootPage();
+    const out = { settled: await p.settle() };
+    out.status = text(p.$('sourceStatus'));
+    out.start = p.snap();
+    await p.pick('move:mv-adddrop');
+    out.addDrop = p.snap();
+    // A trade as if accepted in week 4: squad 1 would start squad 9's QB, who is
+    // still playing — so its finished matchup is not a result in that world.
+    p.choose(p.$('wiWeek'), 4);
+    p.choose(p.$('wiTeam'), 9);
+    p.choose(p.$('wiGive'), 100);
+    p.choose(p.$('wiGet'), 900);
+    p.fire(p.$('whatIfForm'), 'submit');
+    await p.settle();
+    out.whatIf = p.snap();
+
+    // Squad 5's own matchup is still being played.
+    p.choose(p.$('teamSelect'), 5);
+    await p.settle();
+    await p.pick('move:mv-trade');
+    out.team5 = p.snap();
+
+    // Squad 2's add of a man who never started: nothing changes, anywhere.
+    p.choose(p.$('teamSelect'), 2);
+    await p.settle();
+    await p.pick('move:mv-add');
+    for (const box of ['season', 'standings', 'summary']) await p.view(box, 'diff');
+    out.empty = p.snap();
     out.errors = p.errors;
     return out;
   },
@@ -282,6 +326,8 @@ const RUNS = {
   failed: { child: 'failed', env: { CAP_WORLD_FAIL: '1' } },
   'failed-cloud': { child: 'failed', env: { CAP_WORLD_FAIL: '1', CAP_CLOUD: '1' } },
   unplayed: { child: 'unplayed', env: { CAP_DECIDED: '0' } },
+  early: { child: 'early', env: { CAP_EARLY: '1' } },
+  'summary-early': { child: 'summary', env: { CAP_EARLY: '1' } },
 };
 
 function child(name, extra = {}) {
@@ -491,6 +537,98 @@ if (booted(page, 'page')) {
     ok('noise, left on, is on and dimming from the first paint', other.start.noiseOn === true && other.start.dim.weeks.length > 0 &&
       other.start.dim.current.length === 0, other.start.dim.weeks);
   }
+}
+
+// ---- the week in play: everything that can be counted is, in both worlds
+const early = child('early');
+if (booted(early, 'week in play')) {
+  ok('the status line says what is counted', /: 3 finished weeks \+ week 4 so far, 5 moves\.$/.test(early.status), early.status);
+  ok('and so does the line under the title', early.start.sub === 'Capture Stub League · 3 finished weeks + week 4 so far', early.start.sub);
+  const ids = early.start.list.map((r) => r.id);
+  ok('squad 1’s matchup is over: its week-4 lineup is offered — but not hindsight, its bench has not played',
+    ids.includes('lineup-reasonable:1:4') && !ids.includes('lineup-perfect:1:4'), ids);
+
+  // The add+drop undone, as before, with a fourth week under it.
+  const a = early.addDrop;
+  ok('the weekly table has the week in play, with its result',
+    same(a.weeks.map((w) => w.c), [
+      ['1', 'Manager 10', '114.9', '114.9', '0.0', 'W'],
+      ['2', 'Manager 2', '111.1', '111.5', '+0.4', 'T → W'],
+      ['3', 'Manager 3', '117.3', '115.5', '−1.8', 'L'],
+      ['4', 'Manager 4', '118.3', '118.3', '0.0', 'L'],
+    ]), a.weeks.map((w) => w.c));
+  ok('and it is in the Total row', same(a.total, ['Total', '461.6', '460.2', '−1.4', '+1 W']), a.total);
+  ok('the tiles count it too', same(a.stats, { real: '1-2-1', mirror: '2-2', points: '−1.4' }), a.stats);
+  // The record a table's Result column adds up to, as a tile prints one.
+  const tally = (weeks, side) => {
+    const n = { W: 0, L: 0, T: 0 };
+    for (const w of weeks) {
+      const letters = w.c[5].split(' → ');
+      const l = side === 'real' ? letters[0] : letters[letters.length - 1];
+      if (l in n) n[l]++;
+    }
+    return `${n.W}-${n.L}${n.T ? `-${n.T}` : ''}`;
+  };
+  const agree = (s) => tally(s.weeks, 'real') === s.stats.real && tally(s.weeks, 'mirror') === s.stats.mirror;
+  ok('THE TILES ARE THE TABLE: each record is the Result column added up', agree(a), [tally(a.weeks, 'real'), tally(a.weeks, 'mirror'), a.stats]);
+  ok('season by week has the fourth column', same(a.season.cur, ['Total', '114.9', '111.1', '117.3', '118.3']) &&
+    same(a.season.hyp, ['Total', '114.9', '111.5', '115.5', '118.3']), [a.season.cur, a.season.hyp]);
+  ok('standings count the finished matchup: squad 4 is 4–0, squad 1 1–2–1 beside 2–2',
+    rowOf(a.standings.cur, 'Manager 4')[1] === '4–0' && rowOf(a.standings.cur, 'Manager 1')[1] === '1–2–1' &&
+    rowOf(a.standings.hyp, 'Manager 1')[1] === '2–2', [rowOf(a.standings.cur, 'Manager 4'), rowOf(a.standings.hyp, 'Manager 1')]);
+  ok('and a squad still playing has three results in both', rowOf(a.standings.cur, 'Manager 5')[1] === '1–2' && rowOf(a.standings.hyp, 'Manager 5')[1] === '1–2',
+    rowOf(a.standings.cur, 'Manager 5'));
+
+  // The chart: Summary's own, and the same treatment of the week on both sides.
+  const bare = (rows) => rows.map((r) => r.slice(0, 5).map((c) => c.replace(/\s*[▲▼]$/, '')));
+  const sumEarly = child('summary-early');
+  if (booted(sumEarly, 'summary, week in play')) {
+    ok('"Current" is still the Summary page’s chart, row for row', same(bare(early.start.summary.cur), bare(sumEarly.rows)),
+      [bare(early.start.summary.cur)[0], bare(sumEarly.rows)[0]]);
+  }
+  where = 'week in play';
+  ok('the chart’s record is the tile’s for a squad whose matchup is over, in each world',
+    rowOf(a.summary.cur, 'Manager 1')[1] === a.stats.real && rowOf(a.summary.hyp, 'Manager 1')[1] === a.stats.mirror,
+    [rowOf(a.summary.cur, 'Manager 1'), rowOf(a.summary.hyp, 'Manager 1')]);
+  ok('and a matchup in play is the same decimal on both sides', rowOf(a.summary.cur, 'Manager 5')[1] === '1.6-2.4' &&
+    rowOf(a.summary.hyp, 'Manager 5')[1] === '1.6-2.4', [rowOf(a.summary.cur, 'Manager 5'), rowOf(a.summary.hyp, 'Manager 5')]);
+
+  // A trade as if accepted in week 4 puts a man still playing in squad 1's lineup.
+  const w4 = early.whatIf;
+  ok('a what-if whose only week is not known yet reads "In play" in the list',
+    /^Wk 4Trade Manager 1 QB0 for Manager 9 QB0 \(Manager 9\)In play$/.test(w4.list[0].t) && w4.list[0].selected, w4.list[0]);
+  ok('its week-4 row says In play, with no totals', same(w4.weeks[3].c, ['4', 'Manager 4', '—', '—', '—', 'In play']), w4.weeks[3]);
+  ok('that matchup is left out of BOTH records and both totals', same(w4.stats, { real: '1-1-1', mirror: '1-1-1', points: '0.0' }) &&
+    same(w4.total, ['Total', '343.3', '343.3', '0.0', '0']) && agree(w4), [w4.stats, w4.total]);
+  ok('and out of both standings: squad 4 is back to 3–0 in each', rowOf(w4.standings.cur, 'Manager 4')[1] === '3–0' &&
+    rowOf(w4.standings.hyp, 'Manager 4')[1] === '3–0' && same(w4.standings.cur, w4.standings.hyp), [rowOf(w4.standings.cur, 'Manager 4'), rowOf(w4.standings.hyp, 'Manager 4')]);
+  ok('the hypothetical chart does not bank it either', rowOf(w4.summary.hyp, 'Manager 1')[1] === '1-1-1' && rowOf(w4.summary.hyp, 'Manager 4')[1] === '3-0',
+    [rowOf(w4.summary.hyp, 'Manager 1'), rowOf(w4.summary.hyp, 'Manager 4')]);
+  ok('while "Current" is unmoved', same(w4.summary.cur, early.start.summary.cur));
+  const col4 = (rows) => rows.map((r) => r[4]);
+  ok('Season by week shows the lineup so far: the QB still playing is a dash, and the total is the other nine’s',
+    col4(w4.season.body)[0] === 'M. 9 QB0—' && same(col4(w4.season.body).slice(1, 10), col4(w4.season.curBody).slice(1, 10)) &&
+    w4.season.cur[4] === '118.3' && w4.season.hyp[4] === '108.2', [col4(w4.season.body), w4.season.hyp]);
+
+  // A squad whose own matchup is still being played.
+  const t5 = early.team5;
+  ok('a squad still playing is offered no week-4 lineup', t5.list.length === 9 && !t5.list.some((r) => /:5:4$/.test(r.id)), t5.list.map((r) => r.id));
+  ok('its week-4 row says In play, with no totals', same(t5.weeks[3].c, ['4', 'Manager 3', '—', '—', '—', 'In play']), t5.weeks[3]);
+  ok('the Total row and the tiles are its three finished weeks', same(t5.total, ['Total', '388.9', '388.6', '−0.3', '0']) &&
+    same(t5.stats, { real: '1-2', mirror: '1-2', points: '−0.3' }) && agree(t5), [t5.total, t5.stats]);
+  ok('Season by week: the one finished man’s points, a dash for the rest, the total so far',
+    col4(t5.season.curBody)[0] === 'M. 5 QB015.5' && col4(t5.season.curBody).slice(1, 10).every((c) => /—$/.test(c)) &&
+    t5.season.cur[4] === '15.5', col4(t5.season.curBody));
+
+  // Nothing changed is still nothing, the week in play included.
+  const e = early.empty;
+  ok('an empty decision: its weekly differences are zero, and the week in play is a dash',
+    e.weeks.slice(0, 3).every((x) => x.c[2] === x.c[3] && x.c[4] === '0.0' && !x.flip) && same(e.weeks[3].c, ['4', 'Manager 6', '—', '—', '—', 'In play']),
+    e.weeks.map((x) => x.c));
+  ok('season by week, difference: every cell zero, the week in play dashes', e.season.vals.length === 33 && e.season.vals.every((v) => v === 0) &&
+    same(e.season.hyp, ['Total', '0.0', '0.0', '0.0', '—']) && col4(e.season.body).every((c) => c === '—'), [e.season.hyp, e.season.vals.length]);
+  ok('standings, difference: every cell zero', allZero(e.standings.hyp), e.standings.hyp.find((r) => !allZero([r])));
+  ok('the chart, difference: every cell zero', allZero(e.summary.hyp) && e.summary.hyp.every((r) => r[3] === '0.0%' && r[4] === '0.0%'), e.summary.hyp);
 }
 
 // ---- the world cannot be read

@@ -23,7 +23,9 @@
 //                   of their own.
 //   the assembly    `season.fetchDecisionWorld` over a four-squad league small
 //                   enough to check by eye: what it costs cold, that it costs
-//                   NOTHING warm, and that the open week is never read.
+//                   NOTHING warm, and that the open week is never read —
+//                   until one of its matchups is over (`seamPartial`), when it
+//                   is counted as far as it has been played and never frozen.
 //
 // A TRADE IS THE ONE THING NOT MEASURED: the public league has never made one.
 // The `trades` scenario pins the ASSUMED record shape, and `infer` the net under
@@ -79,6 +81,10 @@ const LEAGUE_ID = '424242';
 const SEASON = 2026;
 const KICK = (w) => Date.UTC(2026, 8, 13, 17) + (w - 1) * 7 * 24 * 60 * 60 * 1000;
 const DRAFTED = { 1: [11, 12, 13], 2: [21, 22, 23], 3: [31, 32, 33], 4: [41, 42, 43] };
+// `seamPartial` only: the men on NFL team 3, whose game in the week in play is
+// still going. Empty everywhere else, so every other scenario is what it was.
+const LATE = new Set();
+const proOf = (id) => (LATE.has(id) ? 3 : id === 43 ? 2 : 1);
 const projOf = (id, w) => 10 + (Math.abs(id) % 5) + w / 10;
 const actOf = (id, w) => 4 + (Math.abs(id) % 7) + w * 2;
 
@@ -93,10 +99,10 @@ function playerEntry(id, week) {
   return {
     id,
     player: {
-      id, fullName: `Man ${id}`, defaultPositionId: id % 10 === 1 ? 1 : 2, proTeamId: id === 43 ? 2 : 1,
+      id, fullName: `Man ${id}`, defaultPositionId: id % 10 === 1 ? 1 : 2, proTeamId: proOf(id),
       stats: [
         { seasonId: SEASON, scoringPeriodId: week, statSourceId: 1, statSplitTypeId: 1, appliedTotal: projOf(id, week) },
-        { seasonId: SEASON, scoringPeriodId: week, statSourceId: 0, statSplitTypeId: 1, appliedTotal: actOf(id, week), proTeamId: id === 43 ? 2 : 1 },
+        { seasonId: SEASON, scoringPeriodId: week, statSourceId: 0, statSplitTypeId: 1, appliedTotal: actOf(id, week), proTeamId: proOf(id) },
       ],
     },
   };
@@ -114,15 +120,17 @@ function rosterPayload(week) {
 
 const startedTotal = (teamId, week) => squadsAt(week)[teamId].slice(0, 2).reduce((a, id) => a + actOf(id, week), 0);
 
-function schedulePayload(decidedThrough) {
+/** `inPlay`: a week being played, as ESPN sends one — `totalPoints` 0, the running score beside it. */
+function schedulePayload(decidedThrough, inPlay = null) {
   const schedule = [];
   for (let w = 1; w <= 4; w++) {
     for (const [h, a] of [[1, 2], [3, 4]]) {
       const done = w <= decidedThrough;
       const [hs, as] = [startedTotal(h, w), startedTotal(a, w)];
+      const live = (pts) => (w === inPlay ? { totalPointsLive: pts } : {});
       schedule.push({
         matchupPeriodId: w, playoffTierType: 'NONE',
-        home: { teamId: h, totalPoints: done ? hs : 0 }, away: { teamId: a, totalPoints: done ? as : 0 },
+        home: { teamId: h, totalPoints: done ? hs : 0, ...live(hs) }, away: { teamId: a, totalPoints: done ? as : 0, ...live(as) },
         winner: !done ? 'UNDECIDED' : hs > as ? 'HOME' : as > hs ? 'AWAY' : 'TIE',
       });
     }
@@ -164,17 +172,19 @@ function transactionsPayload(week, { period, tradeListed }) {
   return { scoringPeriodId: week, status: { latestScoringPeriod: period, currentMatchupPeriod: period }, transactions: list };
 }
 
-const proPayload = () => ({
+const proPayload = (inPlay = null) => ({
   settings: {
     proTeams: [
       { id: 1, byeWeek: 9, proGamesByScoringPeriod: Object.fromEntries([1, 2, 3, 4].map((w) => [w, [{ date: KICK(w), statsOfficial: w < 4 }]])) },
       { id: 2, byeWeek: 2, proGamesByScoringPeriod: Object.fromEntries([1, 3, 4].map((w) => [w, [{ date: KICK(w) + 3600e3, statsOfficial: w < 4 }]])) },
+      // The late game: not over in the week in play.
+      { id: 3, byeWeek: 9, proGamesByScoringPeriod: Object.fromEntries([1, 2, 3, 4].map((w) => [w, [{ date: KICK(w) + 7200e3, statsOfficial: w < (inPlay || 4) }]])) },
     ],
   },
 });
 
-/** ESPN, counted. `refuse` is a view to answer with HTTP 500. */
-function installFetch({ decidedThrough = 2, period = decidedThrough + 1, tradeListed = false, refuse = null } = {}) {
+/** ESPN, counted. `refuse` is a view to answer with HTTP 500; `inPlay` a week being played. */
+function installFetch({ decidedThrough = 2, period = decidedThrough + 1, tradeListed = false, refuse = null, inPlay = null } = {}) {
   const calls = [];
   globalThis.fetch = async (url, opts = {}) => {
     const u = new URL(String(url));
@@ -184,11 +194,11 @@ function installFetch({ decidedThrough = 2, period = decidedThrough + 1, tradeLi
     calls.push({ views, week, filter });
     if (refuse && views.includes(refuse)) return { ok: false, status: 500, async json() { return {}; } };
     let body;
-    if (views.includes('proTeamSchedules_wl')) body = proPayload();
+    if (views.includes('proTeamSchedules_wl')) body = proPayload(inPlay);
     else if (views.includes('mTransactions2')) body = transactionsPayload(week, { period, tradeListed });
     else if (views.includes('kona_player_info')) body = { players: filter.players.filterIds.value.map((id) => playerEntry(id, week)) };
     else if (views.includes('mRoster')) body = rosterPayload(week);
-    else body = schedulePayload(decidedThrough);
+    else body = schedulePayload(decidedThrough, inPlay);
     return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify(body)); } };
   };
   return calls;
@@ -488,8 +498,9 @@ const SCENARIOS = {
       JSON.stringify(cold.calls.filter((c) => c.week > 2)));
 
     // The contract, field by field.
-    eq(Object.keys(w).sort(), ['games', 'isDemo', 'limits', 'moves', 'name', 'players', 'requests', 'rosters', 'slots', 'teams', 'weeks'],
-      'the world has the contract’s fields (plus isDemo, name, requests)');
+    eq(Object.keys(w).sort(), ['games', 'isDemo', 'limits', 'moves', 'name', 'partialWeek', 'players', 'requests', 'rosters', 'slots', 'teams', 'weeks'],
+      'the world has the contract’s fields (plus isDemo, name, requests, partialWeek)');
+    eq(w.partialWeek, null, 'no week is in play: nobody has a point in week 3');
     eq(w.slots, [0, 2], 'slots come from the league’s own settings');
     eq(w.limits, { roster: 3 }, 'and so does the roster size');
     eq(w.teams, [1, 2, 3, 4].map((id) => ({ id, name: `Squad ${id}`, teamName: `Squad ${id}` })), 'teams: id, name, teamName');
@@ -519,12 +530,12 @@ const SCENARIOS = {
     ok('every one of them has both weeks, as numbers', [...w.players.values()].every((p) => [1, 2].every((wk) =>
       p.byWeek[wk] && typeof p.byWeek[wk].actual === 'number' && typeof p.byWeek[wk].projected === 'number')));
     eq(w.players.get(13), { name: 'Man 13', position: 'RB', byWeek: {
-      1: { actual: actOf(13, 1), projected: projOf(13, 1), kickoff: KICK(1) },
-      2: { actual: actOf(13, 2), projected: projOf(13, 2), kickoff: KICK(2) },
+      1: { actual: actOf(13, 1), projected: projOf(13, 1), kickoff: KICK(1), done: true },
+      2: { actual: actOf(13, 2), projected: projOf(13, 2), kickoff: KICK(2), done: true },
     } }, 'the man dropped in week 2 still has his week-2 score — what "if I had kept him" needs');
-    eq(w.players.get(91).byWeek[1], { actual: actOf(91, 1), projected: projOf(91, 1), kickoff: KICK(1) },
+    eq(w.players.get(91).byWeek[1], { actual: actOf(91, 1), projected: projOf(91, 1), kickoff: KICK(1), done: true },
       'and the man added in week 2 has the week before he came');
-    eq(w.players.get(43).byWeek[2], { actual: actOf(43, 2), projected: 0, kickoff: null },
+    eq(w.players.get(43).byWeek[2], { actual: actOf(43, 2), projected: 0, kickoff: null, done: true },
       'THE BYE RULE: off in week 2, he projects 0 and has no kickoff, whatever ESPN sent');
     eq(w.players.get(43).byWeek[1].kickoff, KICK(1) + 3600e3, 'a kickoff is his own NFL team’s');
     eq(of(cold.calls, 'kona_player_info').map((c) => [c.week, c.filter.players.filterIds.value]).sort((a, b) => a[0] - b[0]),
@@ -563,6 +574,83 @@ const SCENARIOS = {
     const calls = installFetch();
     const demo = await season.fetchDecisionWorld({ demo: true });
     eq([demo.isDemo, calls.length, storage._map.size], [true, 0, before], '{ demo: true } is the sample league: no request, nothing stored');
+  },
+
+  // ---- the week in play: counted as far as it has been played, never frozen --
+  //
+  // Tim, 2026-10-05: "Could you just display everything you're able to, like we
+  // do across the rest of the cite?" Weeks 1 and 2 are decided; week 3 is being
+  // played. 41 (squad 4's QB) and 13 (on nobody's roster) play in the late game,
+  // which is not over — so 1 v 2 is a final and 3 v 4 is not.
+  async seamPartial() {
+    LATE.add(41);
+    LATE.add(13);
+    const storage = await bootSeam();
+    const cold = await loadSeam({ inPlay: 3 });
+    const w = cold.world;
+    const frozen = () => [...storage._map.keys()].filter((k) => k.startsWith('ff.decisions.')).sort();
+
+    eq(w.weeks, [1, 2, 3], 'the week in play is the last of the weeks');
+    eq(w.partialWeek, 3, 'and the world says which it is');
+    eq(w.games.filter((g) => g.week === 3), [
+      { week: 3, homeId: 1, awayId: 2, homeActual: startedTotal(1, 3), awayActual: startedTotal(2, 3),
+        homeProjected: Math.round((projOf(11, 3) + projOf(12, 3)) * 10) / 10, awayProjected: Math.round((projOf(21, 3) + projOf(32, 3)) * 10) / 10 },
+      { week: 3, homeId: 3, awayId: 4, homeActual: null, awayActual: null,
+        homeProjected: Math.round((projOf(31, 3) + projOf(22, 3)) * 10) / 10, awayProjected: Math.round((projOf(41, 3) + projOf(42, 3)) * 10) / 10 },
+    ], 'the finished matchup has its score, the other none; both have the PRE-GAME projected totals');
+    eq(w.games.length, 6, 'on top of the two decided weeks’ four');
+
+    const man = (teamId, id) => w.rosters.get(3).find((t) => t.id === teamId).players.find((p) => p.playerId === id);
+    eq([man(1, 11).done, man(1, 11).projected, man(1, 11).actual, 'pregame' in man(1, 11)], [true, projOf(11, 3), actOf(11, 3), false],
+      'a finished man: done, his score, and the projection he had BEFORE the game — not the score over it');
+    eq([man(4, 41).done, man(4, 41).projected], [false, projOf(41, 3)], 'a man still playing: not done');
+    ok('every man on a week-3 roster says one or the other',
+      w.rosters.get(3).every((t) => t.players.every((p) => typeof p.done === 'boolean')));
+    ok('and nobody in a decided week carries the flag', w.rosters.get(2).every((t) => t.players.every((p) => !('done' in p))));
+    const squad4 = w.rosters.get(3).find((t) => t.id === 4);
+    ok('starters are the same objects as players', squad4.starters.every((p) => squad4.players.includes(p)));
+
+    eq(w.players.get(11).byWeek[3], { actual: actOf(11, 3), projected: projOf(11, 3), kickoff: KICK(3), done: true }, 'players: a finished man’s week');
+    eq(w.players.get(41).byWeek[3].done, false, 'players: the man still playing');
+    eq([w.players.get(13).byWeek[3].done, w.players.get(43).byWeek[3].done], [false, true],
+      'a man on NOBODY’s roster is finished by the same rule: 13’s game is on, 43’s is over');
+    ok('everybody is done in every decided week', [...w.players.values()].every((p) => p.byWeek[1].done === true && p.byWeek[2].done === true));
+    eq(w.moves.map((m) => m.id), ['w1-drop', 'w2-adddrop', 'inferred:2:2:3', 'w3-add'], 'the moves made in the week in play are listed with the rest');
+
+    // What it cost, and what was kept.
+    const cost = (c) => [of(c, 'mRoster').length, of(c, 'mTransactions2').length, of(c, 'kona_player_info').length];
+    eq(cost(cold.calls), [3, 3, 3], 'COLD: the week in play costs what a decided week costs');
+    eq(w.requests, 9, 'and the world says so');
+    eq(frozen().filter((k) => !k.includes('-open')), [`ff.decisions.1.${LEAGUE_ID}.${SEASON}.1`, `ff.decisions.1.${LEAGUE_ID}.${SEASON}.2`],
+      'THE WEEK IN PLAY IS NOT FROZEN: only the decided weeks have a record');
+    const store = await import(moduleUrl('js/store.js'));
+    eq(store.readDecisionWeek(LEAGUE_ID, SEASON, 3), null, 'asked for as a decided week, it is absent');
+    ok('the stored week-3 rosters are not final either', store.readWeek(LEAGUE_ID, SEASON, 3).final !== true);
+
+    // A RELOAD does not hammer ESPN...
+    const warm = await loadSeam({ inPlay: 3 });
+    eq(cost(warm.calls), [0, 0, 0], 'WARM, inside five minutes: nothing is asked again');
+    eq([warm.world.requests, warm.world.partialWeek, warm.world.players.get(13).byWeek[3].done], [0, 3, false], 'and it is the same week in play');
+
+    // ...and six minutes on, the week in play is read again — it alone.
+    for (const [k, v] of storage._map) {
+      if (!k.endsWith(`.${LEAGUE_ID}.${SEASON}.3`) && !k.includes('-open')) continue;
+      const e = JSON.parse(v);
+      e.at -= 6 * 60 * 1000;
+      storage._map.set(k, JSON.stringify(e));
+    }
+    const aged = await loadSeam({ inPlay: 3 });
+    eq([of(aged.calls, 'mRoster').map((c) => c.week), of(aged.calls, 'mTransactions2').map((c) => c.week), of(aged.calls, 'kona_player_info').map((c) => c.week)],
+      [[3], [3], [3]], 'AGED: three requests, all for the week in play');
+    eq(aged.world.requests, 3, 'and the world says so');
+
+    // ESPN CLOSES THE WEEK: it is read as history, and frozen like any other.
+    LATE.clear();
+    const closed = await loadSeam({ decidedThrough: 3 });
+    eq([closed.world.weeks, closed.world.partialWeek], [[1, 2, 3], null], 'decided, it is no longer the week in play');
+    eq(of(closed.calls, 'mTransactions2').map((c) => c.week), [3], 'its moves are read once more, as a decided week’s');
+    ok('and now it is frozen', !!store.readDecisionWeek(LEAGUE_ID, SEASON, 3));
+    ok('with every man done', [...closed.world.players.values()].every((p) => p.byWeek[3].done === true));
   },
 
   // ---- ESPN lists the trade AND the rosters show it: still once -------------

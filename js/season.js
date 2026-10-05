@@ -1716,7 +1716,23 @@ export async function buildCloudPayload({ onProgress } = {}) {
 // it — three requests. The last two are frozen in js/store.js beside the
 // rosters, so the next load costs that week nothing. A man first named by a
 // LATER week's move is bought for the earlier weeks then — one more request for
-// each earlier week, once. The week being played is never read for this.
+// each earlier week, once.
+//
+// THE WEEK IN PLAY (Tim, 2026-10-05: "Could you just display everything you're
+// able to, like we do across the rest of the cite?"). Once the first undecided
+// week has a matchup that is over (`fetchSchedule` settles it early), that week
+// is the LAST of `weeks` and `partialWeek` names it:
+//
+//   games     its finished matchups with their scores; the others with
+//             `homeActual` / `awayActual` null
+//   rosters   every man carries `done`, and `projected` is his PRE-GAME
+//             projection (not the score `fetchWeeksRosters` overwrites it with)
+//   players   `byWeek[week].done` — true for everybody in a decided week
+//
+// Nothing of it is frozen. Its transactions and loose player-weeks are kept for
+// `LIVE_FRESH_MS` only (js/store.js, `writeOpenDecisionWeek`), so a reload
+// inside five minutes asks ESPN for nothing and one after it for two requests
+// (three with the rosters, which follow the same clock).
 //
 // A FAILURE IS AN ERROR HERE, not a gap. Every other fetcher in this file lets
 // a week ESPN refuses simply be absent; a season replayed with one week's moves
@@ -1840,10 +1856,12 @@ export function inferTrades({ weeks, rosters, moves, draft = null, firstKickoff 
 }
 
 /** What `fetchDecisionWorld` hands back, both for a league and for the sample. */
-function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, moves, players, roster, requests }) {
+function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, moves, players, roster, requests, partialWeek = null }) {
   return {
     slots, teams, weeks, games, rosters, moves, players,
     limits: { roster },
+    // The week in play when it is the last of `weeks`, else null.
+    partialWeek,
     // Beyond the contract, for the page's badge and its cost line.
     isDemo, name, requests,
   };
@@ -1859,8 +1877,11 @@ function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, move
  * plus `isDemo`, `name` (the league's) and `requests` — how many ESPN reads
  * this call made beyond the schedule and the NFL schedule: rosters it had to
  * buy, transactions, player-weeks. Zero once every decided week is held.
+ * And `partialWeek`: the week in play when it is included (always the last of
+ * `weeks`), else null — see "THE WEEK IN PLAY" above.
  *
- * `byWeek[week]` is `{ actual, projected, kickoff }` for EVERY week in `weeks`.
+ * `byWeek[week]` is `{ actual, projected, kickoff, done }` for EVERY week in
+ * `weeks`; `done` is true throughout a decided week.
  * `actual` and `projected` are always numbers: a man with no line in a decided
  * week scored 0, and one ESPN had no projection for is 0 too (the roster
  * objects in `rosters` keep their nulls, as everywhere else on the site). The
@@ -1880,7 +1901,8 @@ function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, move
  * all: the rosters and schedule are the copy's, and the rest is the copy's
  * `decisions/<week>` documents — see "THE WORLD, IN THE SYNCED COPY" below. A
  * copy that does not hold every decided week of it yet THROWS an Error with
- * `code: 'decisions-not-synced'` and a one-sentence message.
+ * `code: 'decisions-not-synced'` and a one-sentence message. The week in play
+ * is included when the copy carries its document and left out when it does not.
  *
  * @param {Object} [opts]
  * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
@@ -1903,6 +1925,11 @@ export async function fetchDecisionWorld(opts = {}) {
 //   league                  `{ starterSlots, rosterSize }` as ESPN's settings
 //                           say, or null when they could not be read
 //
+// THE WEEK IN PLAY rides the same way, in a document marked `open: true`: what
+// was read of it at sync time, rewritten by each sync whose reading differs and
+// replaced by the decided week's document once ESPN closes it. A reader never
+// takes an `open` document for a decided week's.
+//
 // `buildCloudPayload` builds the world itself (it is the one reader of `copy`),
 // so the phone does not depend on the Decisions page having been opened on the
 // desktop. That costs the sync two requests for a week the first time it is
@@ -1918,7 +1945,9 @@ function decisionsNotSynced() {
 /** One read of the copy's decision weeks per page, like `cloudDown`; a miss is not kept. */
 let decisionsDownCache = null; // { key, promise }
 
-function decisionsDown(leagueId, season, weeks) {
+/** `must` are the decided weeks; `open` is the week in play, which may be absent. */
+function decisionsDown(leagueId, season, must, open = null) {
+  const weeks = open === null ? must : [...must, open];
   const key = `${leagueId}::${season}::${weeks.join(',')}`;
   if (!decisionsDownCache || decisionsDownCache.key !== key) {
     const entry = { key, promise: null };
@@ -1926,7 +1955,7 @@ function decisionsDown(leagueId, season, weeks) {
       .then(() => cloud.readDecisions(leagueId, season, weeks))
       .then((res) => {
         const got = res && res.decisions instanceof Map ? res.decisions : new Map();
-        if (!weeks.every((w) => got.has(w)) && decisionsDownCache === entry) decisionsDownCache = null;
+        if (!must.every((w) => got.has(w)) && decisionsDownCache === entry) decisionsDownCache = null;
         return got;
       })
       .catch(() => {
@@ -1949,11 +1978,25 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
   if (demo || !cfg) return { world: demoDecisionWorld(), copy: null };
 
   report(0, 1, 'Loading league…');
-  // ESPN's OWN verdict on each game: a matchup that merely looks over is not a
-  // week anybody may replay as history.
-  const schedule = await fetchSchedule({ settle: false });
-  const weeks = decidedWeeks(schedule);
+  // ESPN's OWN verdict decides which weeks are history (`decidedWeeks` leaves
+  // out a game settled early). The settled schedule is read all the same: its
+  // early finals are what make the next week THE WEEK IN PLAY.
+  const began = Date.now();
+  const schedule = await fetchSchedule();
+  const decided = decidedWeeks(schedule);
   const teams = (schedule.teams || []).map((t) => ({ id: t.id, name: t.name, teamName: t.teamName || '' }));
+  const nextWeek = (schedule.weeks || []).map(Number)[decided.length];
+  let partial = nextWeek !== undefined && (schedule.byWeek.get(nextWeek) || schedule.byWeek.get(String(nextWeek)) || [])
+    .some((g) => g.awayId !== null && g.awayId !== undefined && g.played)
+    ? nextWeek
+    : null;
+  let weeks = partial === null ? decided : [...decided, partial];
+  const dropPartial = () => {
+    rosters.delete(partial);
+    records.delete(partial);
+    weeks = decided;
+    partial = null;
+  };
 
   // The league's lineup and roster size. The schedule's own read carries them
   // (mSettings) and js/espn.js shares that read for a minute, so this is free —
@@ -1966,34 +2009,70 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
   }
 
   let requests = 0;
+  const bought = new Set(); // the weeks whose rosters the read below paid for
   const total = weeks.length * 3;
   let done = 0;
 
   const rosters = weeks.length
     ? await fetchWeeksRosters(weeks, {
       onProgress: (d, t, week, from) => {
-        if (from === 'espn') requests++;
+        if (from === 'espn') { requests++; bought.add(Number(week)); }
         report(++done, total, `Week ${week} squads`);
       },
     })
     : new Map();
-  const gap = weeks.find((w) => !rosters.has(w));
+  const gap = decided.find((w) => !rosters.has(w));
   if (gap !== undefined) {
     if (down) throw decisionsNotSynced();
     throw new Error(`ESPN would not return week ${gap}’s rosters.`);
   }
 
+  const records = new Map(); // week -> { moves, players, draft, closed, dirty, at }
+
+  // THE WEEK IN PLAY, as the engine wants it: every man says whether he has
+  // finished, and `projected` is what was projected BEFORE he played. Without
+  // its rosters, or with nobody in them finished, there is nothing to add.
+  if (partial !== null) {
+    const read = rosters.get(partial) || [];
+    if (!read.some((t) => (t.players || []).some((p) => p.done === true))) {
+      dropPartial();
+    } else {
+      // Settling the schedule is what bought these rosters, when they were
+      // bought during this call: one request, counted here because the squads'
+      // own count saw only the store answer.
+      if (!down && !bought.has(partial) && weekReadAt(partial) >= began) requests++;
+      rosters.set(partial, read.map((t) => {
+        const seen = new Map(); // by id: a stored week's `starters` are copies
+        const conv = (p) => {
+          if (!seen.has(p.playerId)) {
+            const { pregame, ...rest } = p;
+            seen.set(p.playerId, { ...rest, projected: p.done === true ? (pregame ?? null) : p.projected, done: p.done === true });
+          }
+          return seen.get(p.playerId);
+        };
+        const out = { ...t, players: (t.players || []).map(conv) };
+        if (Array.isArray(t.starters)) out.starters = t.starters.map(conv);
+        if (Array.isArray(t.bench)) out.bench = t.bench.map(conv);
+        return out;
+      }));
+    }
+  }
+
   // ---- the moves: this browser's frozen copy, else ESPN ----
-  const records = new Map(); // week -> { moves, players, draft, closed, dirty }
   // ---- or, on the synced copy, the copy's: every decided week or nothing ----
   let syncedKick = null; // { [proTeamId]: { [week]: { at } } }, as `fetchProGames` has it
   if (down && weeks.length) {
-    const got = await decisionsDown(cfg.leagueId, cfg.season, weeks);
-    if (!weeks.every((w) => got.has(w))) throw decisionsNotSynced();
+    const got = await decisionsDown(cfg.leagueId, cfg.season, decided, partial);
+    // An `open` document is a week in play as some sync saw it — never history.
+    if (!decided.every((w) => got.has(w) && got.get(w).open !== true)) throw decisionsNotSynced();
+    if (partial !== null && !got.has(partial)) dropPartial();
     syncedKick = {};
     for (const week of weeks) {
       const doc = got.get(week);
-      records.set(week, { moves: doc.moves, players: doc.players, draft: doc.draft || null, closed: true, dirty: false });
+      records.set(week, {
+        moves: doc.moves, players: doc.players, draft: doc.draft || null,
+        closed: week !== partial, dirty: false, at: cloudAt(down),
+      });
       for (const [proTeamId, at] of Object.entries(doc.kick || {})) {
         if (!syncedKick[proTeamId]) syncedKick[proTeamId] = {};
         syncedKick[proTeamId][week] = { at };
@@ -2003,7 +2082,29 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
     const league = got.get(weeks[weeks.length - 1]).league;
     if (league && typeof league === 'object') settings = league;
   }
-  await inBatches(down ? [] : weeks, 3, async (week) => {
+  // The week in play first, and on its own terms: held for a few minutes, never
+  // frozen, and a refusal costs only that week — the decided ones are history
+  // and still load.
+  if (!down && partial !== null) {
+    const held = store.readOpenDecisionWeek(cfg.leagueId, cfg.season, partial);
+    if (held && held.ageMs <= LIVE_FRESH_MS) {
+      records.set(partial, { moves: held.moves, players: held.players, draft: held.draft, closed: false, dirty: false, at: held.at });
+    } else {
+      try {
+        const raw = await espn.fetchTransactions(partial);
+        requests++;
+        records.set(partial, {
+          moves: espn.parseTransactions(raw), players: {}, draft: espn.parseDraftRosters(raw),
+          closed: false, dirty: true, at: Date.now(),
+        });
+      } catch {
+        if (held) records.set(partial, { moves: held.moves, players: held.players, draft: held.draft, closed: false, dirty: false, at: held.at });
+        else dropPartial();
+      }
+    }
+    if (partial !== null) report(++done, total, `Week ${partial} moves`);
+  }
+  await inBatches(down ? [] : decided, 3, async (week) => {
     const held = store.readDecisionWeek(cfg.leagueId, cfg.season, week);
     if (held) {
       records.set(week, { ...held, closed: true, dirty: false });
@@ -2069,12 +2170,21 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
     const need = [...ids].filter((id) => !onRoster.get(week).has(id) && !rec.players[id]);
     // A copy half-written by a sync that died names a man an older week's
     // document has no line for; scoring him 0 there would be an invention.
-    if (need.length && down) {
+    // (In the week in play he is simply not finished yet: see `done` below.)
+    if (need.length && down && week !== partial) {
       decisionsDownCache = null; // not remembered: the next sync mends it
       throw decisionsNotSynced();
     }
-    if (need.length) {
-      const got = await espn.fetchPlayersWeek(need, week);
+    if (need.length && !down) {
+      let got;
+      try {
+        got = await espn.fetchPlayersWeek(need, week);
+      } catch (err) {
+        if (week !== partial) throw err;
+        // The week in play: these men stay unknown, which reads as not finished.
+        report(++done, total, `Week ${week} players`);
+        return;
+      }
       requests += Math.ceil(need.length / 100);
       for (const entry of got) {
         const p = espn.parsePlayerWeek(entry, week);
@@ -2091,7 +2201,12 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
       }
       rec.dirty = true;
     }
-    if (rec.dirty && rec.closed && weekIsFinal(week)) {
+    if (week === partial) {
+      if (rec.dirty) {
+        store.writeOpenDecisionWeek(cfg.leagueId, cfg.season, week,
+          { moves: rec.moves, players: rec.players, draft: rec.draft, at: rec.at });
+      }
+    } else if (rec.dirty && rec.closed && weekIsFinal(week)) {
       store.writeDecisionWeek(cfg.leagueId, cfg.season, week,
         { moves: rec.moves, players: rec.players, draft: rec.draft }, { final: true });
     }
@@ -2103,6 +2218,16 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
     const g = proTeamId === null || proTeamId === undefined ? null : pro?.[proTeamId]?.[week];
     return g && Number.isFinite(g.at) ? g.at : null;
   };
+  // Has a man on nobody's roster finished, in the week in play? The same rule
+  // as a rostered one (`doneRule`), from the NFL's games as of when HIS line was
+  // read. The synced copy carries kickoffs but not finals, so a phone asks.
+  const proLive = partial === null ? null : (down ? await seekProGames() : pro);
+  const now = Date.now();
+  const looseDone = (loose, week, asOf) => {
+    if (!proKnown(proLive) || !loose || loose.name === undefined) return false;
+    const g = loose.proTeamId === null || loose.proTeamId === undefined ? null : proLive[loose.proTeamId]?.[week];
+    return capture.playerDone(g, asOf, now);
+  };
   const players = new Map();
   for (const id of ids) {
     const byWeek = {};
@@ -2111,15 +2236,20 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
       const held = onRoster.get(week).get(id);
       if (held) {
         // On a roster: the numbers that week was scored with.
-        byWeek[week] = { actual: num(held.actual), projected: num(held.projected), kickoff: kickoff(held.proTeamId, week) };
+        byWeek[week] = {
+          actual: num(held.actual), projected: num(held.projected), kickoff: kickoff(held.proTeamId, week),
+          done: week === partial ? held.done === true : true,
+        };
         continue;
       }
-      const loose = records.get(week).players[id] || {};
+      const rec = records.get(week);
+      const loose = rec.players[id] || {};
       if (!named && loose.name) named = { name: loose.name, position: loose.position };
       byWeek[week] = {
         actual: num(loose.actual),
         projected: num(espn.byeAdjustedProjection(loose.projected, loose.proTeamId, week, byes)),
         kickoff: kickoff(loose.proTeamId, week),
+        done: week === partial ? looseDone(rec.players[id], week, rec.at) : true,
       };
     }
     players.set(id, { name: named ? named.name : '', position: named ? named.position : 'UNK', byWeek });
@@ -2130,7 +2260,10 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
   const wanted = new Set(weeks);
   const games = [];
   for (const g of schedule.games) {
-    if (!wanted.has(Number(g.week)) || !g.played || !teamIds.has(g.homeId) || !teamIds.has(g.awayId)) continue;
+    if (!wanted.has(Number(g.week)) || !teamIds.has(g.homeId) || !teamIds.has(g.awayId)) continue;
+    // A matchup of the week in play that is not over has no score yet.
+    const inPlay = Number(g.week) === partial && !g.played;
+    if (!g.played && !inPlay) continue;
     // The started lineup's projection, as `fetchWeekRosters` totalled it — the
     // same figure the synced copy's season is built from (`seasonFromCloud`).
     const proj = new Map(rosters.get(Number(g.week)).map((t) => [t.id, t.projectedTotal]));
@@ -2138,8 +2271,8 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
       week: g.week,
       homeId: g.homeId,
       awayId: g.awayId,
-      homeActual: exactPoints(g.homeScore),
-      awayActual: exactPoints(g.awayScore),
+      homeActual: inPlay ? null : exactPoints(g.homeScore),
+      awayActual: inPlay ? null : exactPoints(g.awayScore),
       homeProjected: Math.round(num(proj.get(g.homeId)) * 10) / 10,
       awayProjected: Math.round(num(proj.get(g.awayId)) * 10) / 10,
     });
@@ -2161,6 +2294,7 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
     teams, weeks, games, rosters, moves, players,
     roster: settings && settings.rosterSize ? settings.rosterSize : biggest,
     requests,
+    partialWeek: partial,
   });
   if (down) return { world, copy: null };
 
@@ -2177,7 +2311,10 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
       const at = byWeek && byWeek[week] && byWeek[week].at;
       if (Number.isFinite(at)) kick[proTeamId] = at;
     }
-    copy.set(week, { week, moves: rec.moves, players: rec.players, draft: rec.draft || null, kick, league });
+    copy.set(week, {
+      week, moves: rec.moves, players: rec.players, draft: rec.draft || null, kick, league,
+      ...(week === partial ? { open: true } : {}),
+    });
   }
   return { world, copy };
 }

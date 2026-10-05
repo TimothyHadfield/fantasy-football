@@ -71,6 +71,10 @@ const LEAGUE_ID = '424242';
 const SEASON = 2026;
 const KICK = (w) => Date.UTC(2026, 8, 13, 17) + (w - 1) * 7 * 24 * 60 * 60 * 1000;
 const DRAFTED = { 1: [11, 12, 13], 2: [21, 22, 23], 3: [31, 32, 33], 4: [41, 42, 43] };
+// `inPlay` only: the men on NFL team 3, whose game in the week in play is still
+// going. Empty everywhere else, so every other scenario is what it was.
+const LATE = new Set();
+const proOf = (id) => (LATE.has(id) ? 3 : id === 43 ? 2 : 1);
 const projOf = (id, w) => 10 + (Math.abs(id) % 5) + w / 10;
 const actOf = (id, w) => 4 + (Math.abs(id) % 7) + w * 2;
 
@@ -85,10 +89,10 @@ function playerEntry(id, week) {
   return {
     id,
     player: {
-      id, fullName: `Man ${id}`, defaultPositionId: id % 10 === 1 ? 1 : 2, proTeamId: id === 43 ? 2 : 1,
+      id, fullName: `Man ${id}`, defaultPositionId: id % 10 === 1 ? 1 : 2, proTeamId: proOf(id),
       stats: [
         { seasonId: SEASON, scoringPeriodId: week, statSourceId: 1, statSplitTypeId: 1, appliedTotal: projOf(id, week) },
-        { seasonId: SEASON, scoringPeriodId: week, statSourceId: 0, statSplitTypeId: 1, appliedTotal: actOf(id, week), proTeamId: id === 43 ? 2 : 1 },
+        { seasonId: SEASON, scoringPeriodId: week, statSourceId: 0, statSplitTypeId: 1, appliedTotal: actOf(id, week), proTeamId: proOf(id) },
       ],
     },
   };
@@ -106,15 +110,17 @@ function rosterPayload(week) {
 
 const startedTotal = (teamId, week) => squadsAt(week)[teamId].slice(0, 2).reduce((a, id) => a + actOf(id, week), 0);
 
-function schedulePayload(decidedThrough) {
+/** `inPlay`: a week being played, as ESPN sends one — `totalPoints` 0, the running score beside it. */
+function schedulePayload(decidedThrough, inPlay = null) {
   const schedule = [];
   for (let w = 1; w <= 4; w++) {
     for (const [h, a] of [[1, 2], [3, 4]]) {
       const done = w <= decidedThrough;
       const [hs, as] = [startedTotal(h, w), startedTotal(a, w)];
+      const live = (pts) => (w === inPlay ? { totalPointsLive: pts } : {});
       schedule.push({
         matchupPeriodId: w, playoffTierType: 'NONE',
-        home: { teamId: h, totalPoints: done ? hs : 0 }, away: { teamId: a, totalPoints: done ? as : 0 },
+        home: { teamId: h, totalPoints: done ? hs : 0, ...live(hs) }, away: { teamId: a, totalPoints: done ? as : 0, ...live(as) },
         winner: !done ? 'UNDECIDED' : hs > as ? 'HOME' : as > hs ? 'AWAY' : 'TIE',
       });
     }
@@ -150,17 +156,19 @@ function transactionsPayload(week, { period }) {
   return { scoringPeriodId: week, status: { latestScoringPeriod: period, currentMatchupPeriod: period }, transactions: list };
 }
 
-const proPayload = () => ({
+const proPayload = (inPlay = null) => ({
   settings: {
     proTeams: [
       { id: 1, byeWeek: 9, proGamesByScoringPeriod: Object.fromEntries([1, 2, 3, 4].map((w) => [w, [{ date: KICK(w), statsOfficial: w < 4 }]])) },
       { id: 2, byeWeek: 2, proGamesByScoringPeriod: Object.fromEntries([1, 3, 4].map((w) => [w, [{ date: KICK(w) + 3600e3, statsOfficial: w < 4 }]])) },
+      // The late game: not over in the week in play.
+      { id: 3, byeWeek: 9, proGamesByScoringPeriod: Object.fromEntries([1, 2, 3, 4].map((w) => [w, [{ date: KICK(w) + 7200e3, statsOfficial: w < (inPlay || 4) }]])) },
     ],
   },
 });
 
-/** ESPN, counted. */
-function installFetch({ decidedThrough = 3, period = decidedThrough + 1 } = {}) {
+/** ESPN, counted. `inPlay` is a week being played. */
+function installFetch({ decidedThrough = 3, period = decidedThrough + 1, inPlay = null } = {}) {
   const calls = [];
   globalThis.fetch = async (url, opts = {}) => {
     const u = new URL(String(url));
@@ -170,11 +178,11 @@ function installFetch({ decidedThrough = 3, period = decidedThrough + 1 } = {}) 
     const ids = filter && filter.players && filter.players.filterIds ? filter.players.filterIds.value : null;
     calls.push({ views, week, ids });
     let body;
-    if (views.includes('proTeamSchedules_wl')) body = proPayload();
+    if (views.includes('proTeamSchedules_wl')) body = proPayload(inPlay);
     else if (views.includes('mTransactions2')) body = transactionsPayload(week, { period });
     else if (views.includes('kona_player_info')) body = { players: (ids || []).map((id) => playerEntry(id, week)) }; // no ids: the wire, empty
     else if (views.includes('mRoster')) body = rosterPayload(week);
-    else body = schedulePayload(decidedThrough);
+    else body = schedulePayload(decidedThrough, inPlay);
     return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify(body)); } };
   };
   return calls;
@@ -353,9 +361,9 @@ const SCENARIOS = {
     eq(theirs.moves.map((m) => [m.id, m.kind, m.week]),
       [['w1-drop', 'drop', 1], ['w2-adddrop', 'adddrop', 2], ['inferred:2:2:3', 'trade', 2], ['w3-add', 'add', 3]],
       'the moves, the unlisted trade among them');
-    eq(theirs.players.get(92).byWeek[1], { actual: actOf(92, 1), projected: projOf(92, 1), kickoff: KICK(1) },
+    eq(theirs.players.get(92).byWeek[1], { actual: actOf(92, 1), projected: projOf(92, 1), kickoff: KICK(1), done: true },
       'a man on nobody’s roster in week 1 has that week’s score, projection and kickoff');
-    eq(theirs.players.get(43).byWeek[2], { actual: actOf(43, 2), projected: 0, kickoff: null },
+    eq(theirs.players.get(43).byWeek[2], { actual: actOf(43, 2), projected: 0, kickoff: null, done: true },
       'the bye rule and the missing kickoff of a team that was off');
     eq(theirs.players.get(43).byWeek[3].kickoff, KICK(3) + 3600e3, 'and the other NFL team’s own kickoff');
     eq([theirs.slots.filter((s) => s === 0).length, theirs.limits], [2, { roster: 5 }],
@@ -365,6 +373,87 @@ const SCENARIOS = {
     fake.log.reads.length = 0;
     await P.season.fetchDecisionWorld();
     eq(fake.log.reads.length, 0, 'asked again on the same page, the copy is not read again');
+  },
+
+  // ---- the week in play rides too, and is never taken for a decided week ----
+  //
+  // Tim, 2026-10-05: "Could you just display everything you're able to, like we
+  // do across the rest of the cite?" Weeks 1 and 2 decided, week 3 being played:
+  // 41 (squad 4's QB) and 13 (on nobody's roster) are in the late game.
+  async inPlay() {
+    LATE.add(41);
+    LATE.add(13);
+    const L = await laptop({ decidedThrough: 2, inPlay: 3 });
+    const payload = await L.season.buildCloudPayload();
+    eq([...payload.decisions.keys()], [1, 2, 3], 'the sync carries the week in play after the decided ones');
+    eq([1, 2, 3].map((w) => payload.decisions.get(w).open === true), [false, false, true], 'marked open, and only it');
+    eq(Object.keys(payload.decisions.get(3)).sort(), ['draft', 'kick', 'league', 'moves', 'open', 'players', 'week'],
+      'otherwise the document a decided week has');
+    eq(Object.keys(payload.decisions.get(1)).sort(), ['draft', 'kick', 'league', 'moves', 'players', 'week'],
+      'and a decided week’s document has exactly the fields it always had');
+    const mine = await L.season.fetchDecisionWorld();
+    eq([mine.weeks, mine.partialWeek], [[1, 2, 3], 3], '(the laptop’s own world has the week in play)');
+
+    const fake = makeFake();
+    L.cloud.configure({ transport: fake, ownerUid: '' });
+    const res = await L.cloud.syncUp(LEAGUE_ID, SEASON, payload, {});
+    ok('the sync went', res.ok, res.reason);
+    eq(fake.log.writes.filter(isDecision), [1, 2, 3].map((w) => `${BASE}/decisions/${w}`), 'one document a week, the open one among them');
+    fake.log.writes.length = 0;
+    const same = await L.cloud.syncUp(LEAGUE_ID, SEASON, payload, { decisionsSent: res.decisions.marks });
+    eq([same.decisions.wrote, fake.log.writes.filter(isDecision)], [0, []], 'an open week that has not moved is not written again');
+    const moved = new Map(payload.decisions).set(3, {
+      ...payload.decisions.get(3), players: { ...payload.decisions.get(3).players, 13: { ...payload.decisions.get(3).players[13], actual: 99 } },
+    });
+    const next = await L.cloud.syncUp(LEAGUE_ID, SEASON, { ...payload, decisions: moved }, { decisionsSent: res.decisions.marks });
+    eq([next.decisions.wrote, fake.log.writes.filter(isDecision)], [1, [`${BASE}/decisions/3`]], 'one that has is rewritten, alone');
+    await L.cloud.syncUp(LEAGUE_ID, SEASON, payload, {});
+
+    // ---- the phone: the week in play as the laptop last synced it ----
+    const P = await phone(fake);
+    const theirs = await P.season.fetchDecisionWorld();
+    eq([theirs.weeks, theirs.partialWeek, theirs.requests], [[1, 2, 3], 3, 0], 'the phone has the week in play, at no request');
+    eq(P.calls, [], 'and asked ESPN for nothing: the NFL games that are over came with the sync');
+    let differ = null;
+    try {
+      assert.deepStrictEqual({ ...theirs, requests: 0 }, { ...mine, requests: 0 });
+    } catch (err) { differ = err; }
+    ok('THE PHONE’S WORLD IS THE LAPTOP’S, the week in play included', differ === null, differ && differ.message);
+    eq(theirs.games.filter((g) => g.week === 3).map((g) => [g.homeId, g.homeActual, g.awayActual]),
+      [[1, startedTotal(1, 3), startedTotal(2, 3)], [3, null, null]], 'the finished matchup has its score, the other none');
+    eq([theirs.players.get(13).byWeek[3].done, theirs.players.get(43).byWeek[3].done, theirs.players.get(41).byWeek[3].done],
+      [false, true, false], 'and each man says whether he has finished, on a roster or off one');
+    eq([...P.storage._map.keys()].filter((k) => k.startsWith('ff.decisions')), [], 'the phone keeps none of it as a record');
+
+    // ---- a copy whose open document never arrived: the decided weeks, as before ----
+    const short = makeFake();
+    for (const [k, v] of fake.docs) if (k !== `${BASE}/decisions/3`) short.docs.set(k, v);
+    const P0 = await phone(short);
+    const bare = await P0.season.fetchDecisionWorld();
+    eq([bare.weeks, bare.partialWeek], [[1, 2], null], 'without the open week’s document it is the decided weeks, and no error');
+
+    // ---- ESPN closes week 3, but the copy still holds the OPEN document ----
+    LATE.clear();
+    const L2 = await laptop({ decidedThrough: 3 });
+    const closed = await L2.season.buildCloudPayload();
+    eq([[...closed.decisions.keys()], 'open' in closed.decisions.get(3)], [[1, 2, 3], false], 'decided, its document is a decided week’s');
+    const stuck = makeFake({ refuse: (p) => p.endsWith('/decisions/3') });
+    for (const [k, v] of fake.docs) stuck.docs.set(k, v);
+    L2.cloud.configure({ transport: stuck, ownerUid: '' });
+    ok('(a sync whose week-3 decisions write is refused still goes)', (await L2.cloud.syncUp(LEAGUE_ID, SEASON, closed, {})).ok);
+    ok('(so the copy says week 3 is decided and still holds the open document)', JSON.parse(stuck.docs.get(`${BASE}/decisions/3`)).json.join('').includes('"open":true'));
+    const P2 = await phone(stuck);
+    eq((await typed(P2.season.fetchDecisionWorld()) || {}).code, 'decisions-not-synced',
+      'AN OPEN DOCUMENT IS NEVER TAKEN FOR A DECIDED WEEK’S: the phone asks for a sync');
+
+    // ---- and the next real sync replaces it ----
+    const mended = makeFake();
+    for (const [k, v] of fake.docs) mended.docs.set(k, v);
+    L2.cloud.configure({ transport: mended, ownerUid: '' });
+    await L2.cloud.syncUp(LEAGUE_ID, SEASON, closed, {});
+    const P3 = await phone(mended);
+    const after = await P3.season.fetchDecisionWorld();
+    eq([after.weeks, after.partialWeek], [[1, 2, 3], null], 'the decided week’s document replaced it, and the phone reads three finished weeks');
   },
 
   async oldCopy() {

@@ -20,6 +20,14 @@
 // seed. The steps from `loadOdds` down are js/summary-page.js's, in its order,
 // through the same js/capture.js builders — so "Current" here is the Summary
 // page's chart to the digit. Change one, change the other.
+//
+// THE WEEK IN PLAY (`world.partialWeek`; Tim, 2026-10-05: "Could you just
+// display everything you're able to, like we do across the rest of the cite?").
+// It is on every panel. A matchup of it that is over counts like any other; one
+// that is not is `mirror.pending`, and is left out of BOTH worlds wherever a
+// record or a total is added up here — the tiles, the weekly table, Standings —
+// so they always count the same games. The chart's "Current" side is not
+// touched: it stays the Summary page's.
 
 import { computeLeagueStats } from './stats.js';
 import * as season from './season.js';
@@ -107,6 +115,15 @@ const playerName = (id) => {
 };
 const names = (ids) => (ids || []).map(playerName).join(' and ');
 
+/** "3 finished weeks", and the week in play after it when the world has one. */
+function weeksSaid(world) {
+  const partial = Number.isFinite(world.partialWeek) ? world.partialWeek : null;
+  const n = world.weeks.length - (partial === null ? 0 : 1);
+  const finished = `${n} finished week${n === 1 ? '' : 's'}`;
+  if (partial === null) return finished;
+  return n ? `${finished} + week ${partial} so far` : `Week ${partial} so far`;
+}
+
 // ------------------------------------------------------------------ the world
 
 function setStatus(msg, isError = false) {
@@ -179,8 +196,7 @@ async function loadWorld(src) {
 
   if (!demo) {
     setStatus(world.weeks.length
-      ? `Loaded ${esc(world.name)}: ${world.weeks.length} finished ` +
-        `week${world.weeks.length === 1 ? '' : 's'}, ${world.moves.length} moves.`
+      ? `Loaded ${esc(world.name)}: ${weeksSaid(world)}, ${world.moves.length} moves.`
       : 'No finished week yet.');
   }
   setTeam(state.teamId);
@@ -264,7 +280,7 @@ function render() {
   const n = world.weeks.length;
   $('pageSub').textContent = world.isDemo
     ? `Demo League · ${n} finished weeks · generated data, so you can see the layout`
-    : `${world.name} · ${n} finished week${n === 1 ? '' : 's'}`;
+    : `${world.name} · ${weeksSaid(world)}`;
 
   $('teamSelect').innerHTML = world.teams
     .map((t) => `<option value="${esc(t.id)}"${same(t.id, state.teamId) ? ' selected' : ''}>${esc(teamName(t.id))}</option>`)
@@ -297,6 +313,13 @@ function renderDecision() {
   renderNotes();
 }
 
+/** Does everything this decision changes sit in matchups still being played? */
+function allInPlay(decision) {
+  const cells = [...mirrorOf(decision).teams.values()]
+    .flatMap((t) => Object.values(t.byWeek)).filter((c) => c.changed);
+  return cells.length > 0 && cells.every((c) => c.pending);
+}
+
 /** The numbers a row of the list leads with, for the picked team. */
 function headline(decision) {
   const m = mirrorOf(decision);
@@ -304,7 +327,11 @@ function headline(decision) {
   const mine = m.teams.get(state.teamId);
   let hyp = 0;
   let real = 0;
-  for (const c of Object.values((mine && mine.byWeek) || {})) { hyp += c.total; real += c.realTotal; }
+  for (const c of Object.values((mine && mine.byWeek) || {})) {
+    if (c.pending) continue;
+    hyp += c.total;
+    real += c.realTotal;
+  }
   return {
     record: rec ? recordDiff(rec.mirror, rec.real) : null,
     points: diffOf(hyp, real),
@@ -317,6 +344,8 @@ function rowHtml(d) {
   let nums;
   if (d.empty) {
     nums = '<span class="dz-none">No change</span>';
+  } else if (allInPlay(d)) {
+    nums = '<span class="dz-none">In play</span>';
   } else {
     const h = headline(d);
     nums =
@@ -394,6 +423,15 @@ function renderResult() {
   body.innerHTML = world.weeks.map((week) => {
     const c = mine.byWeek[week];
     const g = gameOf(world.games, id, week);
+    // THE WEEK IN PLAY, its matchup not known in both worlds yet: no totals,
+    // and nothing of it in the Total row.
+    if (c.pending) {
+      const vs = g ? teamName(g.homeId === id ? g.awayId : g.homeId) : '—';
+      return `<tr data-wk="${week}" data-pending="1"><td>${week}</td>` +
+        `<td class="dz-vs" title="${esc(vs)}">${esc(vs)}</td>` +
+        `<td class="dz-act">—</td><td class="dz-hyp">—</td><td class="dz-diff">—</td>` +
+        `<td class="dz-res muted">In play</td></tr>`;
+    }
     const mg = gameOf(m.games, id, week);
     const was = resultLetter(g, id);
     const is = resultLetter(mg, id);
@@ -461,12 +499,19 @@ function renderSeason() {
     .join('');
 
   const cells = m.teams.get(state.seasonTeamId);
-  const real = weeksFromMirror(cells, 'real');
-  const hyp = weeksFromMirror(cells, 'mirror');
+  // A week still in play: the men who have finished show their points, the
+  // rest a dash, and the total is what the finished ones add up to so far.
+  const soFar = (weeks) => weeks.map((w) => (cells.byWeek[w.week].pending
+    ? { ...w, total: round2(w.starters.reduce((a, p) => a + (Number.isFinite(p.actual) ? p.actual : 0), 0)) }
+    : w));
+  const real = soFar(weeksFromMirror(cells, 'real'));
+  const hyp = soFar(weeksFromMirror(cells, 'mirror'));
   const dim = state.noise ? m.noise.get(state.seasonTeamId) || null : null;
   $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, { box: 'current' });
+  // ...and it has no difference yet: left out of what is subtracted, it is dashes.
   $('seasonHyp').innerHTML = actualSeasonTableHtml({ weeks: hyp, slots: world.slots }, {
-    box: 'hypothetical', dim, diffFrom: state.view.season === 'diff' ? real : null,
+    box: 'hypothetical', dim,
+    diffFrom: state.view.season === 'diff' ? real.filter((w) => !cells.byWeek[w.week].pending) : null,
   });
 }
 
@@ -478,13 +523,22 @@ function teamDim(m) {
   return out;
 }
 
+const gameKey = (g) => `${g.week}|${g.homeId}|${g.awayId}`;
+
+/** The real games a mirror counts: all of them but the ones it holds as pending. */
+function countedGames(m) {
+  const held = new Set((m.pending || []).map(gameKey));
+  return state.world.games.filter((g) => !held.has(gameKey(g)));
+}
+
 function standingsOf(games) {
   const world = state.world;
   const final = new Set(world.weeks);
+  const counted = games.filter((g) => final.has(g.week));
   return computeLeagueStats({
     season: state.season, name: world.name, isDemo: world.isDemo,
-    weeks: world.weeks.length, teams: world.teams,
-    games: games.filter((g) => final.has(g.week)), injuries: [],
+    weeks: new Set(counted.map((g) => g.week)).size, teams: world.teams,
+    games: counted, injuries: [],
   });
 }
 
@@ -493,7 +547,8 @@ function renderStandings() {
   $('standingsSwitch').innerHTML = viewSwitchHtml(state.view.standings, { box: 'standings' });
   if (!d) { $('standingsCur').innerHTML = ''; $('standingsHyp').innerHTML = ''; return; }
   const m = mirrorOf(d);
-  const real = standingsOf(state.world.games);
+  // The same games on both sides: a matchup pending in the mirror is in neither.
+  const real = standingsOf(countedGames(m));
   const hyp = standingsOf(m.games);
   // BOTH IN THE REAL STANDINGS' ORDER, so a row reads straight across the pair.
   real.teams.sort((a, b) => a.actualStanding - b.actualStanding);
@@ -597,7 +652,8 @@ async function loadOdds() {
     // Record and LUCK from the world this page already holds; the two
     // percentages are left blank rather than guessed.
     state.odds = {
-      data: null, played: world.games.slice(), teams: world.teams, started: null,
+      data: null, played: world.games.filter((g) => Number.isFinite(g.homeActual) && Number.isFinite(g.awayActual)),
+      teams: world.teams, started: null,
       through: world.weeks[world.weeks.length - 1], proj: null, live: null, ready: false, failed: true,
     };
     renderSummary();
@@ -650,7 +706,7 @@ async function loadOdds() {
 function deltaOf(m, teamId, week) {
   const t = m.teams.get(teamId);
   const c = t && t.byWeek[week];
-  if (!c) return null;
+  if (!c || c.pending) return null;
   const points = round2(c.total - c.realTotal);
   const projected = round2(c.projected - c.realProjected);
   return points || projected ? { points, projected } : null;
@@ -662,10 +718,19 @@ function deltaOf(m, teamId, week) {
  * ONLY WHERE THE MIRROR DIFFERS, and as the real number plus the difference —
  * so a decision that changes nothing hands the simulation the very same
  * season, and gets the very same answer.
+ *
+ * A matchup the mirror holds as PENDING is not a result in the hypothetical,
+ * even when it really is over (the mirror starts a man still to play): it goes
+ * back to being a game in progress, so it is not banked.
  */
 function mirrorSchedule(data, m) {
+  const held = new Set((m.pending || []).map(gameKey));
   const games = data.games.map((g) => {
     if (capture.gameState(g) !== 'final') return g;
+    if (held.has(gameKey(g))) {
+      const { early, winner, margin, ...open } = g;
+      return { ...open, played: false };
+    }
     const h = deltaOf(m, g.homeId, g.week);
     const a = deltaOf(m, g.awayId, g.week);
     if (!h && !a) return g;
@@ -687,7 +752,8 @@ function mirrorSchedule(data, m) {
 
 /** The played games (LUCK's input) with the mirror's scores and projections. */
 function mirrorPlayed(played, m) {
-  return played.map((g) => {
+  const held = new Set((m.pending || []).map(gameKey));
+  return played.filter((g) => !held.has(gameKey(g))).map((g) => {
     const h = deltaOf(m, g.homeId, g.week);
     const a = deltaOf(m, g.awayId, g.week);
     if (!h && !a) return g;
@@ -849,8 +915,9 @@ function renderSummary() {
   const o = state.odds;
   const d = selected();
   $('summarySwitch').innerHTML = viewSwitchHtml(state.view.summary, { box: 'summary' });
+  const inPlay = state.world && Number.isFinite(state.world.partialWeek);
   $('summaryNote').innerHTML =
-    '<p>Record and LUCK count finished weeks only.</p>' +
+    `<p>Record and LUCK count finished ${inPlay ? 'games' : 'weeks'} only.</p>` +
     `<p>Title % and Loser % play the rest of the season out ${commas(SIM_RUNS)} times, as Summary does. ` +
     'The hypothetical keeps its changed results; the weeks to come use today’s real rosters.</p>' +
     '<p>Both use the same random draws, so a difference is the decision and not the dice.</p>';

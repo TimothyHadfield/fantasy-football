@@ -393,6 +393,13 @@ export async function buildCloudPayload() { throw new Error('not in this stub');
 //
 // Every week's starters add up to that squad's score in `games` to the tenth.
 // Everybody kicks off on the Sunday; every move is made the Wednesday before.
+//
+// UNDER CAP_EARLY the week in progress is the world's last week and its
+// `partialWeek`, as js/season.js hands it out: that week's squads are the ones
+// `fetchWeekRosters` serves (with the moves above still in force), every man
+// carries `done` and his PRE-GAME projection, a matchup that is final early has
+// its score and the others have none. A man moved into an early-final squad's
+// lineup (squad 4's QB 312) has finished, like the rest of it.
 export const DECISION_CASES = {
   adddrop: { id: 'mv-adddrop', teamId: 1, week: 2, add: 9001, drop: 111 },
   add: { id: 'mv-add', teamId: 2, week: 2, add: 9002 },
@@ -415,7 +422,9 @@ export async function fetchDecisionWorld({ demo = false } = {}) {
   // (decisions-check.mjs).
   if (process.env.CAP_WORLD_FAIL && !demo) throw new Error('ESPN would not return the league.');
   const C = DECISION_CASES;
-  const weeks = WEEKS.slice(0, decided());
+  const partial = EARLY && !demo ? EARLY_WEEK : null;
+  const over = new Set(partial === null ? [] : earlySquads());
+  const weeks = WEEKS.slice(0, decided()).concat(partial === null ? [] : [partial]);
   const sched = await buildScheduleQuietly();
   const kickoff = (week) => DECISION_EPOCH + (week - 1) * WEEK_MS;
   const wednesday = (week) => kickoff(week) - 4 * 24 * 60 * 60 * 1000;
@@ -426,21 +435,28 @@ export async function fetchDecisionWorld({ demo = false } = {}) {
   const base = new Map();  // week -> Map<teamId, players[]> before any move
   for (const w of weeks) {
     const byTeam = new Map();
-    for (const t of plainTeams(w)) {
+    const inPlay = w === partial;
+    // Before the game: a finished man's `projected` has been overwritten.
+    const before = (p) => (inPlay && p.done ? p.pregame : p.projected);
+    for (const t of inPlay ? teamsFor(w) : plainTeams(w)) {
       byTeam.set(t.id, t.players.map((p, i) => {
-        let projected = p.projected;
+        let projected = before(p);
         if (p.playerId === C.benched.bench) {
-          projected = r1(t.players.find((s) => s.playerId === C.benched.starter).projected + 5);
+          projected = r1(before(t.players.find((s) => s.playerId === C.benched.starter)) + 5);
         }
-        const actual = r1(projected * (0.6 + rnd(t.id * 31 + i, w + 70) * 0.8));
-        lines.set(`${p.playerId}|${w}`, { projected, actual });
+        const actual = inPlay ? p.actual : r1(projected * (0.6 + rnd(t.id * 31 + i, w + 70) * 0.8));
+        const line = { projected, actual, ...(inPlay ? { done: p.done === true } : {}) };
+        lines.set(`${p.playerId}|${w}`, line);
         info.set(p.playerId, { name: p.name, position: p.position, proTeamId: p.proTeamId });
-        return { ...p, projected, actual };
+        const { pregame, ...rest } = p;
+        return { ...rest, ...line };
       }));
     }
     for (const fa of FREE_AGENTS) {
       const projected = r1(9 + rnd(fa.playerId, w) * 4);
-      lines.set(`${fa.playerId}|${w}`, { projected, actual: r1(projected * (0.6 + rnd(fa.playerId, w + 70) * 0.8)) });
+      lines.set(`${fa.playerId}|${w}`, inPlay
+        ? { projected, actual: null, done: false }
+        : { projected, actual: r1(projected * (0.6 + rnd(fa.playerId, w + 70) * 0.8)) });
       info.set(fa.playerId, { name: fa.name, position: fa.position, proTeamId: fa.proTeamId });
     }
     base.set(w, byTeam);
@@ -494,13 +510,30 @@ export async function fetchDecisionWorld({ demo = false } = {}) {
     rosters.set(w, TEAMS.map((t) => {
       const players = of(t.id);
       const starters = players.filter((p) => p.started);
+      const inPlay = w === partial;
+      // The week in play: a squad whose matchup is over has no starter left to
+      // finish, whoever a move put in its lineup.
+      if (inPlay && over.has(t.id)) {
+        for (const p of starters) {
+          if (p.done === true) continue;
+          p.done = true;
+          p.actual = r1(p.projected * (0.6 + rnd(p.playerId, w + 50) * 0.8));
+        }
+      }
       // Stretched so the lineup adds up to the squad's score; the first starter
       // carries the rounding. A man's line is his line wherever he is read.
-      const want = scoreByKey.get(`${w}|${t.id}`);
-      const factor = want / starters.reduce((a, p) => a + p.actual, 0);
-      for (const p of starters) p.actual = r1(p.actual * factor);
-      starters[0].actual = r1(want - starters.slice(1).reduce((a, p) => a + p.actual, 0));
-      for (const p of starters) lines.get(`${p.playerId}|${w}`).actual = p.actual;
+      // (Not a squad still playing: it has no score to add up to.)
+      if (!inPlay || over.has(t.id)) {
+        const want = scoreByKey.get(`${w}|${t.id}`);
+        const factor = want / starters.reduce((a, p) => a + p.actual, 0);
+        for (const p of starters) p.actual = r1(p.actual * factor);
+        starters[0].actual = r1(want - starters.slice(1).reduce((a, p) => a + p.actual, 0));
+      }
+      for (const p of starters) {
+        const line = lines.get(`${p.playerId}|${w}`);
+        line.actual = p.actual;
+        if (inPlay) line.done = p.done === true;
+      }
       const sum = (arr, k) => r1(arr.reduce((a, p) => a + (p[k] || 0), 0));
       return {
         id: t.id, name: t.name, teamName: t.teamName, abbrev: '',
@@ -514,7 +547,10 @@ export async function fetchDecisionWorld({ demo = false } = {}) {
   const players = new Map();
   for (const [playerId, who] of info) {
     const byWeek = {};
-    for (const w of weeks) byWeek[w] = { ...lines.get(`${playerId}|${w}`), kickoff: kickoff(w) };
+    for (const w of weeks) {
+      const line = lines.get(`${playerId}|${w}`);
+      byWeek[w] = { ...line, actual: line.actual ?? 0, kickoff: kickoff(w), done: w === partial ? line.done === true : true };
+    }
     players.set(playerId, { name: who.name, position: who.position, byWeek });
   }
 
@@ -525,13 +561,15 @@ export async function fetchDecisionWorld({ demo = false } = {}) {
     weeks,
     games: sched.games.filter((g) => weeks.includes(g.week)).map((g) => ({
       week: g.week, homeId: g.homeId, awayId: g.awayId,
-      homeActual: g.homeScore, awayActual: g.awayScore,
+      // A matchup of the week in play that is not over has no score yet.
+      homeActual: g.played ? g.homeScore : null, awayActual: g.played ? g.awayScore : null,
       homeProjected: proj(g.week, g.homeId), awayProjected: proj(g.week, g.awayId),
     })),
     rosters,
     moves,
     players,
     limits: { roster: SHAPE.length },
+    partialWeek: partial,
     isDemo: demo,
     name: sched.leagueName,
     requests: 0,

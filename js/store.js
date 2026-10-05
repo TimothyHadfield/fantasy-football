@@ -411,6 +411,12 @@ export function forget(leagueId, season) {
     if (!k.startsWith(moves)) continue;
     try { s.removeItem(k); } catch { /* leave it and carry on */ }
   }
+  // And the week in play's, which is one record a season (see the end of this file).
+  const open = OPEN_DECISIONS_PREFIX + want.slice(PREFIX.length);
+  for (const k of keys(OPEN_DECISIONS_PREFIX)) {
+    if (!`${k}.`.startsWith(open)) continue;
+    try { s.removeItem(k); } catch { /* leave it and carry on */ }
+  }
   return gone;
 }
 
@@ -501,6 +507,54 @@ export function writeDecisionWeek(leagueId, season, week, { moves, players, draf
     } catch {
       return false;
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE WEEK IN PLAY'S MOVES — A FEW MINUTES' MEMORY, NOT A RECORD
+//
+// The Decisions review counts the week in play as far as it has been played
+// (Tim, 2026-10-05). That week's moves and loose player-weeks change by the
+// minute, so they are never written with the decided weeks above: they have
+// ONE key a league-season of their own (`ff.decisions-open.…`), overwritten
+// whole, and the caller decides how old is too old (`ageMs`). All it is for is
+// that a reload does not buy the same two requests again.
+
+const OPEN_DECISIONS_PREFIX = `ff.decisions-open.${DECISIONS_SCHEMA}`;
+
+const openDecisionKeyOf = (leagueId, season) => `${OPEN_DECISIONS_PREFIX}.${leagueId}.${season}`;
+
+/**
+ * What was last read of the week in play, or null — also when the record held
+ * is for another week.
+ *
+ * @returns {{moves:Array, players:Object, draft:Object|null, at:number, ageMs:number}|null}
+ */
+export function readOpenDecisionWeek(leagueId, season, week) {
+  const s = store();
+  if (!s) return null;
+  const e = decisionAt(s, openDecisionKeyOf(leagueId, season));
+  if (!e || e.week !== Number(week) || !Number.isFinite(e.at)) return null;
+  return { moves: e.moves, players: e.players, draft: e.draft || null, at: e.at, ageMs: Math.max(0, Date.now() - e.at) };
+}
+
+/**
+ * Remember the week in play's moves and player-weeks. `at` is when they were
+ * read from ESPN. A full store is not made room in for this: it returns false.
+ *
+ * @returns {boolean} whether it landed
+ */
+export function writeOpenDecisionWeek(leagueId, season, week, { moves, players, draft = null, at = null } = {}) {
+  const s = store();
+  if (!s || !Array.isArray(moves) || !players || typeof players !== 'object') return false;
+  try {
+    s.setItem(openDecisionKeyOf(leagueId, season), JSON.stringify({
+      v: DECISIONS_SCHEMA, week: Number(week), at: Number.isFinite(at) ? at : Date.now(),
+      moves, players, draft: draft || null,
+    }));
+    return true;
+  } catch {
+    return false;
   }
 }
 
