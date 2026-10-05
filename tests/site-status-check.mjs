@@ -321,8 +321,49 @@ for (const href of ['file:///C:/site/index.html', 'about:blank']) {
   // It must stay a classic script: no import/export, no top-level await.
   ok(!/^\s*(import|export)\b/m.test(SOURCE), 'no import or export statements');
   ok(!/\bconsole\./.test(SOURCE.replace(/\/\/.*$/gm, '')), 'no console calls');
+  // Two: the HEAD check for a newer page, and Reload's refresh of kept files.
   const fetchCalls = SOURCE.replace(/\/\/.*$/gm, '').match(/\bfetch\s*\(/g) || [];
-  eq(fetchCalls.length, 1, 'exactly one fetch in the source');
+  eq(fetchCalls.length, 2, 'exactly two fetches in the source');
+}
+{
+  // Reload replaces the browser's kept scripts and styles BEFORE reloading: a
+  // new page file meeting a ten-minute-old module is what "reload does
+  // nothing" looked like (capture.recordNow is not a function, 2026-10-05).
+  const base = 'https://timothyhadfield.github.io/fantasy-football/';
+  const b = boot({ fetchImpl: () => Promise.resolve({ ok: true }) });
+  b.win.Promise = Promise;
+  b.win.performance = {
+    getEntriesByType: () => [
+      { name: base + 'js/capture.js' },
+      { name: base + 'js/capture.js' },
+      { name: base + 'css/app.css?v=2' },
+      { name: base + 'img/logo.png' },
+      { name: 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/x.js' },
+    ],
+  };
+  b.fire('unhandledrejection', { reason: new Error('capture.recordNow is not a function') });
+  const button = b.bars('is-broken')[0].querySelector('button');
+  button.click();
+  eq(b.reloads(), 0, 'Reload waits for the kept files to be replaced');
+  eq(b.fetches.map((f) => f.u).join(' '), [base + 'js/capture.js', base + 'css/app.css?v=2'].join(' '),
+    'it re-fetches this site’s scripts and styles, once each, and nothing else');
+  ok(b.fetches.every((f) => f.init && f.init.cache === 'reload'), 'past the cache, replacing the kept copy');
+  await b.settle();
+  await b.settle();
+  eq(b.reloads(), 1, 'then reloads');
+  button.click();
+  b.runTimers();
+  eq(b.reloads(), 1, 'once, however often it is pressed');
+
+  // A file that will not come still ends in a reload.
+  const c = boot({ fetchImpl: () => Promise.reject(new TypeError('Failed to fetch')) });
+  c.win.Promise = Promise;
+  c.win.performance = { getEntriesByType: () => [{ name: base + 'js/stats-page.js' }] };
+  c.fire('unhandledrejection', { reason: new Error('x') });
+  c.bars('is-broken')[0].querySelector('button').click();
+  await c.settle();
+  await c.settle();
+  eq(c.reloads(), 1, 'a refresh that fails still reloads');
 }
 
 console.log(fail ? `${pass} passed, ${fail} failed` : `All ${pass} assertions passed`);

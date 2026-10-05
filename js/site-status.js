@@ -105,8 +105,40 @@
 
   var published = toDate(d.lastModified);
 
+  var REFRESH_WAIT_MS = 4000;
+  var reloading = false;
+
+  /**
+   * Reload, but first re-fetch every script and stylesheet this page loaded.
+   * The host lets a browser keep a file for ten minutes, and a plain reload
+   * re-reads the page while reusing the kept modules, so right after a deploy
+   * a new page file can meet an old module ("x is not a function") and
+   * reloading changes nothing. `cache: 'reload'` replaces the kept copy.
+   */
   function reload() {
-    try { w.location.reload(); } catch (e) { /* nothing better to do */ }
+    if (reloading) return;
+    reloading = true;
+    var go = function () {
+      try { w.location.reload(); } catch (e) { /* nothing better to do */ }
+    };
+    try {
+      var urls = [];
+      var entries = w.performance && w.performance.getEntriesByType
+        ? w.performance.getEntriesByType('resource') : [];
+      for (var i = 0; i < entries.length; i++) {
+        var name = String(entries[i].name || '');
+        if (name.indexOf(w.location.origin + '/') !== 0) continue;
+        if (!/\.(?:js|mjs|css)(?:\?|$)/.test(name)) continue;
+        if (urls.indexOf(name) < 0) urls.push(name);
+      }
+      if (!urls.length || typeof w.fetch !== 'function' || !w.Promise) { go(); return; }
+      var done = false;
+      var once = function () { if (!done) { done = true; go(); } };
+      w.setTimeout(once, REFRESH_WAIT_MS);
+      w.Promise.all(urls.map(function (u) {
+        return w.fetch(u, { cache: 'reload' }).catch(function () { /* still reload */ });
+      })).then(once, once);
+    } catch (e) { go(); }
   }
 
   function makeBar(kind, message) {
