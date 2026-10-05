@@ -2500,10 +2500,10 @@ function renderSimulation() {
     // divisions warning to be about.
     $('simWarn').hidden = true;
     $('simChart').innerHTML = '';
-    // Nine columns now the bracket has its own four. A colspan that has drifted
+    // Ten columns: the bracket has its own four, and the record sits by the name. A colspan that has drifted
     // short leaves the message boxed into the left of the table rather than
     // spanning it, which reads as a broken row rather than a sentence.
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${reason}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${reason}</td></tr>`;
     $('simNote').innerHTML = note;
     resort(table);
   };
@@ -2577,6 +2577,19 @@ function renderSimulation() {
   }
 
   paintSimulation(sim, inputs);
+}
+
+/**
+ * A team's record for the simulation table. While its week is being played the
+ * game counts as its chance of winning it: 3-2 with a 20% chance reads 3.2-2.8
+ * (Tim, 2026-10-04).
+ */
+function simRecord(teamId, inputs) {
+  const { remaining, banked } = forecastGames(teamId, inputs.asOf);
+  const now = remaining.find((r) => liveSideOf(r.g, 'home'));
+  const home = now ? homeWinChance(now.g, inputs.sigma) : null;
+  const r = forecast.recordInPlay(banked, home === null ? null : now.mineHome ? home : 1 - home);
+  return { text: r.t ? `${r.w}${EN}${r.l}${EN}${r.t}` : `${r.w}${EN}${r.l}`, wins: r.wins };
 }
 
 function paintSimulation(sim, inputs) {
@@ -2699,6 +2712,7 @@ function paintSimulation(sim, inputs) {
     .map((t) => {
       const isMe = t.teamId === state.myTeamId;
       const isPicked = Boolean(team) && t.teamId === team.id;
+      const rec = simRecord(t.teamId, inputs);
       const cls = [isMe ? 'me' : '', isPicked ? 'picked' : ''].filter(Boolean).join(' ');
 
       // A team with no bracket (the run could not be bracketed at all) gets a
@@ -2719,6 +2733,7 @@ function paintSimulation(sim, inputs) {
 
       return `<tr${cls ? ` class="${cls}"` : ''}>
           <td class="name">${esc(nameById.get(t.teamId) || `Team ${t.teamId}`)}</td>
+          <td class="num" data-v="${rec.wins}">${rec.text}</td>
           ${cell(t.meanWins, fmt(t.meanWins), heatCols.wins, W_SIM.wins)}
           ${cell(t.meanPlace, fmt(t.meanPlace), heatCols.place, W_SIM.place)}
           <td data-v="${t.modePlace}">${ordinal(t.modePlace)}</td>
@@ -2790,7 +2805,8 @@ function paintSimulation(sim, inputs) {
           `stands</strong>: the points each lineup has scored so far, plus ESPN’s projection for ` +
           `the players still to play, with the scoring spread cut down to the share of the ` +
           `week that is left. ESPN gives no game clock, so a game in progress is aged by ` +
-          `the time since its kickoff.`
+          `the time since its kickoff. Each Record counts that game as the chance of winning ` +
+          `it (our model, not ESPN’s): 3–2 with a 20% chance reads 3.2–2.8.`
         : '');
 
   const gaps = sim.skipped
@@ -3154,7 +3170,7 @@ $('h2hView').addEventListener('click', (e) => {
 enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
 // The projected table opens on the most likely finishing order: average place,
 // lowest first. That IS the ranking the panel exists to give.
-enableSort($('simTable'), { defaultIndex: 2, defaultAsc: true });
+enableSort($('simTable'), { defaultIndex: 3, defaultAsc: true });
 
 /**
  * Go live on our own when the connection bar finds a league, so the page shows

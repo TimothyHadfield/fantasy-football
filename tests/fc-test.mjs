@@ -730,7 +730,7 @@ async function check(scenario, boot) {
     // column's classes were being changed anyway, which is how it surfaced.
     const rows = [...d.querySelectorAll('#simTable tbody tr')];
     const titles = rows.map((tr) => {
-      const cell = [...tr.children][7];
+      const cell = [...tr.children][8];
       const v = cell ? Number(cell.getAttribute('data-v')) : NaN;
       return Number.isFinite(v) ? v : 0;
     });
@@ -752,12 +752,12 @@ async function check(scenario, boot) {
     // qualify in every season (the column sums to 4, not to 6), and no team can
     // win a title in more seasons than it reached the playoffs in.
     const numAt = (tr, i) => Number([...tr.children][i].getAttribute('data-v'));
-    const qualifySum = rows.reduce((a, tr) => a + numAt(tr, 4), 0);
+    const qualifySum = rows.reduce((a, tr) => a + numAt(tr, 5), 0);
     c.ok('exactly FOUR teams qualify in every simulated season, not six',
       rows.length === 0 || Math.abs(qualifySum - 4) < 0.005, String(qualifySum));
     c.ok('and nobody wins a title in more seasons than they reached the bracket',
-      rows.every((tr) => numAt(tr, 7) <= numAt(tr, 4) + 1e-9),
-      rows.map((tr) => `${numAt(tr, 7)}>${numAt(tr, 4)}`).join(','));
+      rows.every((tr) => numAt(tr, 8) <= numAt(tr, 5) + 1e-9),
+      rows.map((tr) => `${numAt(tr, 8)}>${numAt(tr, 5)}`).join(','));
 
     // ONE DIVISION, so there is nothing to warn about. This is the half of the
     // pair that fails if the page ever warns unconditionally — without it,
@@ -1225,7 +1225,12 @@ async function check(scenario, boot) {
       simRows.every((r) => teamNames.includes(r.cells[0])),
       simRows.map((r) => r.cells[0]).join(','));
 
-    const meanPlaces = simRows.map((r) => Number(r.v[2]));
+    // The record sits by the name. No week is in play in these fixtures, so it is
+    // whole numbers: wins, losses, and a third number only for a tie.
+    c.ok('every simulated row carries a whole-number record by the name',
+      simRows.every((r) => /^\d+–\d+(–\d+)?$/.test(r.cells[1]) && r.v[1] !== null),
+      simRows.map((r) => r.cells[1]).join(','));
+    const meanPlaces = simRows.map((r) => Number(r.v[3]));
     c.ok('projected table is ordered by average place',
       meanPlaces.length > 1 && meanPlaces.every((v, i) => i === 0 || v >= meanPlaces[i - 1] - 1e-9),
       JSON.stringify(meanPlaces));
@@ -1243,9 +1248,9 @@ async function check(scenario, boot) {
     // The columns, by index, now the bracket has arrived:
     //   0 Team  1 Proj. wins  2 Avg place  3 Most likely
     //   4 Playoffs %  5 Bye %  6 1st in table %  7 Title %  8 Last %
-    const COL = { playoffs: 4, bye: 5, first: 6, title: 7, last: 8 };
-    c.ok('the simulated table has all nine columns',
-      simRows.every((r) => r.cells.length === 9),
+    const COL = { playoffs: 5, bye: 6, first: 7, title: 8, last: 9 };
+    c.ok('the simulated table has all ten columns',
+      simRows.every((r) => r.cells.length === 10),
       JSON.stringify(simRows[0] && simRows[0].cells));
 
     // Exactly one team wins the title in every simulated season, exactly one
@@ -1263,8 +1268,8 @@ async function check(scenario, boot) {
     // which is what makes a flipped `invert` fail loudly instead of subtly.
     const simCol = (i) => simRows.map((r) => r.td[i]);
     for (const [label, i, goodHigh] of [
-      ['Proj. wins', 1, true],
-      ['Avg place', 2, false],       // INVERTED: 1st is the good end
+      ['Proj. wins', 2, true],
+      ['Avg place', 3, false],       // INVERTED: 1st is the good end
       ['Playoffs %', COL.playoffs, true],
       ['1st in table %', COL.first, true],
       ['Title %', COL.title, true],
@@ -1278,11 +1283,11 @@ async function check(scenario, boot) {
     // lowest — which makes both ends of the inverted Avg place column known
     // without reading any number off the page.
     c.ok('the team with the best average place is GREEN on Avg place',
-      heatSide(simRows[0].td[2]) === 'up',
-      `${simRows[0].cells[0]} @ ${simRows[0].v[2]} -> "${simRows[0].td[2].getAttribute('class')}"`);
+      heatSide(simRows[0].td[3]) === 'up',
+      `${simRows[0].cells[0]} @ ${simRows[0].v[3]} -> "${simRows[0].td[3].getAttribute('class')}"`);
     c.ok('and the team with the worst average place is RED',
-      heatSide(simRows[simRows.length - 1].td[2]) === 'dn',
-      `${simRows[simRows.length - 1].cells[0]} -> "${simRows[simRows.length - 1].td[2].getAttribute('class')}"`);
+      heatSide(simRows[simRows.length - 1].td[3]) === 'dn',
+      `${simRows[simRows.length - 1].cells[0]} -> "${simRows[simRows.length - 1].td[3].getAttribute('class')}"`);
     {
       const lasts = simRows.map((r) => Number(r.v[COL.last]));
       const spoon = simRows[lasts.indexOf(Math.max(...lasts))];
@@ -1297,8 +1302,8 @@ async function check(scenario, boot) {
     // "Most likely" is a modal PLACE — already an ordering — so js/heat.js's own
     // rule says it gets nothing. A later pass that shaded the whole table fails.
     c.ok('"Most likely" is left unshaded: it is a place, not a quantity',
-      !simCol(3).some((td) => heatSide(td)),
-      simCol(3).map((td) => td.getAttribute('class')).join(','));
+      !simCol(4).some((td) => heatSide(td)),
+      simCol(4).map((td) => td.getAttribute('class')).join(','));
     // Every shaded cell must still sort as a number. sortable.js falls back to
     // the cell's text without a data-v and strips only ", + $ %" and spaces, so
     // a cell ending in ▲ would sort as a string.
@@ -1544,8 +1549,8 @@ async function check(scenario, boot) {
       .find((s) => /^Expected wins/.test(txt(s)));
     const expected = expStat ? Number(txt(expStat).replace('Expected wins', '')) : null;
     c.ok('simulated projected wins agree with the forecast panel’s expected wins',
-      myRow && expected !== null && Math.abs(Number(myRow.v[1]) - expected) < 0.15,
-      `sim ${myRow && myRow.v[1]} vs forecast ${expected}`);
+      myRow && expected !== null && Math.abs(Number(myRow.v[2]) - expected) < 0.15,
+      `sim ${myRow && myRow.v[2]} vs forecast ${expected}`);
 
     // ---- the honesty the panel is required to carry ------------------------
     c.ok('note says it is counted, not solved',

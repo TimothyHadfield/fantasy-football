@@ -48,8 +48,8 @@ const CHILDREN = {
     const projWins = {};
     for (const tr of document.querySelectorAll('#simTable tbody tr')) {
       const td = [...tr.children];
-      title[text(td[0])] = Number(td[7].getAttribute('data-v'));
-      projWins[text(td[0])] = Number(td[1].getAttribute('data-v'));
+      title[text(td[0])] = Number(td[8].getAttribute('data-v'));
+      projWins[text(td[0])] = Number(td[2].getAttribute('data-v'));
     }
     // "My season" for Manager 1, who TIED his week-2 game (AUDIT §1.6).
     const stat = (k) => [...document.querySelectorAll('#forecastStats .stat')]

@@ -903,3 +903,23 @@ export function credibleRange(dist, mass = 0.8) {
   }
   return best;
 }
+
+/**
+ * A record with the game being played counted as its chance of being won:
+ * 3-2 with a 20% chance is 3.2-2.8. `p` null means no game is in play and the
+ * record stays whole. The chance is rounded to a tenth first, so the two halves
+ * always add up to the games played. `wins` (a tie as half) is for sorting.
+ */
+export function recordInPlay(banked, p = null) {
+  const t = banked.t || 0;
+  if (typeof p !== 'number' || Number.isNaN(p)) {
+    return { w: String(banked.w), l: String(banked.l), t, wins: banked.w + t / 2 };
+  }
+  const share = Math.round(Math.min(1, Math.max(0, p)) * 10) / 10;
+  return {
+    w: (banked.w + share).toFixed(1),
+    l: (banked.l + 1 - share).toFixed(1),
+    t,
+    wins: banked.w + t / 2 + share,
+  };
+}

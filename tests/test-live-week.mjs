@@ -208,5 +208,17 @@ near(winsOf(fromKickoff, 1), 1 + forecast.winProbability(46, 35, 20) + p5, 0.01,
 ok(winsOf(fromLive, 1) - winsOf(fromKickoff, 1) > 0.25, 'the reading moves One’s expected wins by the lead it has built',
   `${winsOf(fromLive, 1)} vs ${winsOf(fromKickoff, 1)}`);
 
+// The record by each name in the simulation table (Tim, 2026-10-04): "if
+// someone's record is 3-2 and they have a 20% chance of winning the current
+// week, their record should be displayed as 3.2-2.8".
+eq(forecast.recordInPlay({ w: 3, l: 2, t: 0 }, 0.2), { w: '3.2', l: '2.8', t: 0, wins: 3.2 }, 'Tim’s example: 3-2 at 20% reads 3.2-2.8');
+eq(forecast.recordInPlay({ w: 3, l: 2, t: 0 }, null), { w: '3', l: '2', t: 0, wins: 3 }, 'no game in play: whole numbers');
+eq(forecast.recordInPlay({ w: 1, l: 1, t: 1 }, 0.849), { w: '1.8', l: '1.2', t: 1, wins: 2.3 }, 'a tie stays a third number and half a win for sorting');
+for (const p of [0.05, 0.25, 0.35, 0.65, 0.95]) {
+  const r = forecast.recordInPlay({ w: 3, l: 2, t: 0 }, p);
+  near(Number(r.w) + Number(r.l), 6, 1e-9, `at ${p} the two halves still add up to the games played`);
+}
+eq(forecast.recordInPlay({ w: 0, l: 3, t: 0 }, 1), { w: '1.0', l: '3.0', t: 0, wins: 1 }, 'a game all but won keeps its decimal, so it still reads as in play');
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
