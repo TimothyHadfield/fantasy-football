@@ -191,16 +191,16 @@
       "assertions": 208
     },
     "test-decision-data.mjs": {
-      "assertions": 167
+      "assertions": 195
     },
     "test-decision-cloud.mjs": {
-      "assertions": 75
+      "assertions": 96
     },
     "test-decisions.mjs": {
-      "assertions": 94
+      "assertions": 129
     },
     "decisions-check.mjs": {
-      "assertions": 79
+      "assertions": 111
     }
   }
 }
