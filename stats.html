@@ -324,6 +324,31 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     </section>
   </div>
 
+  <!-- Projected against actual, twice: every team-week and every player-week
+       (Tim, 2026-10-04). Directly under Projection accuracy, paired like the
+       row above. NO LEDE AND NO KEY LINE, on purpose: this page sits exactly at
+       its prose ceiling (tests/text-ceilings.json), the axes are labelled and
+       the two lines are named inside the chart, and everything else - what a
+       dot is, the slope, r, how many dots - is behind the toggle. -->
+  <div class="panel-row">
+    <section class="panel" id="panelFitTeams">
+      <h2>Projected vs actual &mdash; teams</h2>
+      <div class="chart" id="chartFitTeams"></div>
+      <details class="explain">
+        <summary>How this works</summary>
+        <div class="panel-note" id="fitTeamsNote"></div>
+      </details>
+    </section>
+    <section class="panel" id="panelFitPlayers">
+      <h2>Projected vs actual &mdash; players</h2>
+      <div class="chart" id="chartFitPlayers"></div>
+      <details class="explain">
+        <summary>How this works</summary>
+        <div class="panel-note" id="fitPlayersNote"></div>
+      </details>
+    </section>
+  </div>
+
   <section class="panel" id="panelBox">
     <h2>Score spread by team</h2>
     <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>

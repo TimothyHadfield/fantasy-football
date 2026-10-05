@@ -8,7 +8,7 @@
 
 import { generateDemoLeague } from './demo.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
-import { computeLeagueStats } from './stats.js';
+import { computeLeagueStats, teamFitPoints, playerFitPoints } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
 // THE POSITIONAL FLOOR (Tim, 2026-09-18). Schedule luck is the average
 // PROJECTED opponent, so it is a per-position assessment like any other: an
@@ -27,7 +27,7 @@ import * as espn from './espn.js';
 // shared with Schedule, Home and Summary.
 import * as capture from './capture.js';
 import { describeFloors } from './floor.js';
-import { lineChart, histogram, boxPlot, SERIES_COLORS } from './charts.js';
+import { lineChart, histogram, boxPlot, scatterChart, leastSquares, SERIES_COLORS } from './charts.js';
 // THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
 // `heatScale()` that lived here — see `heatCell` below for what was wrong with
 // it and why the two could not coexist.
@@ -61,6 +61,10 @@ const state = {
   oppPending: null,     // key of a run currently in flight
   oppProgress: null,    // { done, total } while rosters are being read
   oppToken: 0,
+
+  // The weekly rosters that same read brought back, kept for the players
+  // scatter (renderFit). It is the SAME read — nothing extra is asked of ESPN.
+  weekTeams: null,      // { key, map: Map<week, teams[]> }
 };
 
 // "Which team am I" is the same answer every visit, so it is remembered; the
@@ -270,6 +274,7 @@ function render() {
   const key = scheduleKey();
   if (state.oppProj && state.oppProj.key !== key) state.oppProj = null;
   if (state.oppPending && state.oppPending !== key) state.oppPending = null;
+  if (state.weekTeams && state.weekTeams.key !== key) state.weekTeams = null;
 
   const weeks = weekCount();
 
@@ -286,6 +291,7 @@ function render() {
   renderOppPanel();
   renderCharts();
   renderAccuracy();
+  renderFit();
   renderWeeklyTable();
 
   // Last, and deliberately not awaited: the schedule-luck panel costs a request
@@ -863,7 +869,9 @@ function ensureOppProj() {
   // Demo mode makes no request at all: demo-rosters.js answers synchronously,
   // so the panel is simply there on first paint.
   if (key === 'demo') {
-    state.oppProj = buildOppProj(key, generateDemoSchedule(), demoWeekTeams());
+    const weekTeams = demoWeekTeams();
+    state.weekTeams = { key, map: weekTeams };
+    state.oppProj = buildOppProj(key, generateDemoSchedule(), weekTeams);
     afterOppProj();
     return;
   }
@@ -888,6 +896,7 @@ async function refreshOppProj(key) {
   state.oppPending = key;
   state.oppProgress = null;
   renderOppPanel();
+  renderFit();
 
   try {
     const schedule = await fetchSchedule();
@@ -906,6 +915,8 @@ async function refreshOppProj(key) {
       },
     });
     if (stale()) return;
+    // Kept for the players scatter, whatever happens to the averages below.
+    state.weekTeams = { key, map: weekTeams };
 
     // One wire read, for the current week (the first still being projected —
     // `capture.floorWeek`, the week Schedule, Home and Summary read), used for
@@ -984,6 +995,7 @@ function afterOppProj() {
   renderGlance();
   renderMainTable();
   renderOppPanel();
+  renderFit();
 }
 
 function renderOppPanel() {
@@ -1197,6 +1209,160 @@ function renderAccuracy() {
   $('accuracyNote').textContent = notes.join(' ');
 }
 
+// ------------------------------------------- projected against actual (dots)
+
+//
+// Two scatters (Tim, 2026-10-04): across is what was projected, up is what was
+// scored. One dot per team per finished week, and one per rostered player per
+// finished week. On each, a dotted line where a perfect projection would put
+// every dot, and the solid least-squares line the dots actually make.
+//
+// WHERE THE NUMBERS COME FROM, and why neither graph costs a request:
+//   teams    `state.stats` — the weekly rows behind the Proj and Avg columns,
+//            Weekly luck and the Projection accuracy table beside this.
+//   players  the weekly rosters the Schedule-luck read already brought back
+//            (`state.weekTeams`). On a real league those weeks are held in the
+//            store, so walking here from another page re-buys nothing.
+//
+// A hovered or tapped dot opens a preview that is a link: a team to its roster
+// on Analysis in that week, a player to the Players page in that week.
+
+/** What the line says, in words, for the note behind the toggle. */
+function fitWords(fit, n) {
+  if (!fit) {
+    return 'There is no solid line yet: a line needs at least two dots that differ in ' +
+      'their projection.';
+  }
+  const b = fit.slope;
+  const a = fit.intercept;
+  const lean = Math.abs(b - 1) < 0.05
+    ? 'About 1: a point more projected has meant about a point more scored.'
+    : b < 1
+      ? 'Under 1: big projections have come in low and small ones high.'
+      : 'Over 1: big projections have been beaten and small ones missed.';
+  return `<strong>Solid line</strong> = the least-squares line through these ${n.toLocaleString('en-US')} ` +
+    `dots, the straight line with the smallest total squared miss: actual = ` +
+    `${a < 0 ? '−' : ''}${Math.abs(a).toFixed(1)} + ${b.toFixed(2)} × projected. ` +
+    `<strong>Slope ${b.toFixed(2)}.</strong> ${lean}` +
+    (fit.r === null
+      ? ''
+      : ` <strong>r = ${fit.r.toFixed(2)}</strong>, so the projection accounts for ` +
+        `${Math.round(fit.r * fit.r * 100)}% of the differences in score (r²); 1 would be ` +
+        'every dot on one line, 0 no relation at all.');
+}
+
+const FIT_PERFECT =
+  '<strong>Dotted line</strong> = actual equals projected, where a perfect projection would ' +
+  'put every dot. Above it beat the projection, below it fell short. Both axes share one ' +
+  'scale, so the dotted line is a true diagonal.';
+
+function renderFit() {
+  const s = state.stats;
+  const teamsBox = $('chartFitTeams');
+  const playersBox = $('chartFitPlayers');
+  if (!s || !teamsBox || !playersBox) return;
+
+  // Nothing played: no dot exists on either graph, so neither panel is offered.
+  const none = noGames();
+  show('panelFitTeams', !none);
+  show('panelFitPlayers', !none);
+  if (none) return;
+
+  const weeks = s.weekNumbers;
+  const span = weeks.length === 1
+    ? `week ${weeks[0]}`
+    : `weeks ${weeks[0]}–${weeks[weeks.length - 1]}`;
+
+  // ---- teams ----
+  const teamPts = teamFitPoints(s).map((p) => ({
+    x: p.x,
+    y: p.y,
+    name: p.name,
+    week: p.week,
+    key: p.teamId,
+    // Rule 9: the link carries the team id, never its label.
+    href: `analysis.html?team=${encodeURIComponent(p.teamId)}&week=${encodeURIComponent(p.week)}#rosterDetail`,
+  }));
+  scatterChart(teamsBox, {
+    points: teamPts,
+    xLabel: 'Projected',
+    yLabel: 'Actual',
+    height: 320,
+    highlight: state.highlight ?? undefined,
+    empty: 'No finished week has a projection yet',
+  });
+  const teamCount = new Set(teamPts.map((p) => p.key)).size;
+  $('fitTeamsNote').innerHTML = teamPts.length
+    ? paras([
+      '<strong>Each dot is one team in one finished week.</strong> Across is ESPN&rsquo;s ' +
+        'projection for the lineup it started; up is what that lineup scored. These are the ' +
+        'numbers behind Proj, Avg and Weekly luck, so the graphs cannot disagree. ' +
+        `${teamPts.length.toLocaleString('en-US')} dots: ${plural(teamCount, 'team')}, ${span}. ` +
+        'Your team&rsquo;s dots are ringed when My team is set.',
+      FIT_PERFECT,
+      fitWords(leastSquares(teamPts), teamPts.length),
+      'Hover or tap a dot for the team and week; the preview opens that roster on Analysis.',
+    ])
+    : '';
+  tuckIfEmpty('fitTeamsNote');
+
+  // ---- players ----
+  const held = state.weekTeams && state.weekTeams.key === scheduleKey() ? state.weekTeams.map : null;
+  if (!held) {
+    // Either the weekly rosters are still being read (the same read Schedule
+    // luck is waiting on), or that read failed and there is nothing to plot.
+    scatterChart(playersBox, {
+      points: [],
+      height: 320,
+      empty: state.oppPending || !state.oppProj
+        ? 'Reading each week’s rosters…'
+        : 'No weekly rosters could be read',
+    });
+    $('fitPlayersNote').textContent = '';
+    tuckIfEmpty('fitPlayersNote');
+    return;
+  }
+
+  const playerPts = playerFitPoints(held, weeks).map((p) => ({
+    x: p.x,
+    y: p.y,
+    name: p.name,
+    detail: [p.position, p.proTeam].filter(Boolean).join(' · '),
+    week: p.week,
+    key: `p${p.playerId}`,
+    href: `waivers.html?player=${encodeURIComponent(p.playerId)}&week=${encodeURIComponent(p.week)}`,
+  }));
+  scatterChart(playersBox, {
+    points: playerPts,
+    xLabel: 'Projected',
+    yLabel: 'Actual',
+    height: 320,
+    empty: 'No player has both a projection and a score yet',
+  });
+  const readWeeks = weeks.filter((w) => held.has(w));
+  const missing = weeks.filter((w) => !held.has(w));
+  $('fitPlayersNote').innerHTML = playerPts.length
+    ? paras([
+      '<strong>Each dot is one player in one finished week</strong> — everyone on a league ' +
+        'roster that week, starters and bench. Across is ESPN&rsquo;s projection for him that ' +
+        'week; up is what he scored. ' +
+        `${playerPts.length.toLocaleString('en-US')} dots over ${plural(readWeeks.length, 'week')} ` +
+        `(${span}).`,
+      'Left out: a player with no projection or no score, and one projected 0 who scored 0 ' +
+        '(a bye, or ruled out) — he was not expected to play and did not, which tests nothing. ' +
+        'Free agents are not plotted.' +
+        (missing.length
+          ? ` ${plural(missing.length, 'week')} could not be read (${missing.join(', ')}) and ` +
+            `${missing.length === 1 ? 'is' : 'are'} missing from the graph.`
+          : ''),
+      FIT_PERFECT,
+      fitWords(leastSquares(playerPts), playerPts.length),
+      'Hover or tap a dot for the player and week; the preview opens him on Players.',
+    ])
+    : '';
+  tuckIfEmpty('fitPlayersNote');
+}
+
 // The league's own week, as a baseline under the grid. It was already computed
 // on every render and shown nowhere; with it, every cell above is readable as
 // "above or below what everyone else did that week" instead of a bare number.
@@ -1347,6 +1513,7 @@ $('highlightTeam').addEventListener('change', (e) => {
   renderMainTable();
   renderOppPanel();
   renderCharts();
+  renderFit();
   renderWeeklyTable();
 });
 
