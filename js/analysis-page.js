@@ -165,6 +165,10 @@ const state = {
   // position's depth chart and nothing else. FLEX is a filter over RB/WR/TE
   // here exactly as it is on the Players page; it is never a position.
   startersPos: 'RB',
+
+  // A link into the roster detail (`?team=&week=`), or null. See "Landing on a
+  // roster" below: it is this visit's answer, never a saved choice.
+  landing: null,
 };
 
 // Cache per week so flipping back to a week already loaded is instant.
@@ -1057,6 +1061,7 @@ async function useDemo() {
   state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
   state.playedWeeks = state.weeks.slice(); // the demo season is over by definition
   if (!state.weeks.includes(state.week)) state.week = DEMO_WEEKS;
+  state.week = aimAtLanding(state.week);
   setToggle('demo');
   renderWeekPicker();
   await loadWeek();
@@ -1064,6 +1069,9 @@ async function useDemo() {
 
 /** Every failed route into live mode ends here, so none of them can lie. */
 async function fallBackToDemo(message) {
+  // A link was about the league that could not be read, not about the sample
+  // one standing in for it.
+  state.landing = null;
   await useDemo();
   setStatus(message, true);
 }
@@ -1111,7 +1119,10 @@ async function useLive() {
   // No schedule, no bracket: the 18-week guess already covers every week.
   state.poWeeks = scheduleWeeks.length ? poWeeks : [];
 
-  state.week = openingWeek();
+  // The floor below is read for the week the page would open on, link or no
+  // link, so a number here is the same number whichever way the reader came.
+  const opening = openingWeek();
+  state.week = aimAtLanding(opening);
 
   // THE FLOOR READ. One request, for the week the page opens on, and its
   // result is used for every week — Tim's choice between that and a read per
@@ -1123,9 +1134,9 @@ async function useLive() {
   // without it, must leave this page rendering rather than fail at boot. A
   // missing floor is the same thing as a refused wire read — no floors — and
   // every reader already treats that as "leave the numbers alone".
-  state.floorWeek = state.week;
+  state.floorWeek = opening;
   const floorRead = (typeof season.fetchFloors === 'function'
-    ? season.fetchFloors(state.week)
+    ? season.fetchFloors(opening)
     : Promise.resolve(null))
     .then((f) => {
       if (state.source !== 'live') return;
@@ -1181,6 +1192,11 @@ function render() {
     ? 'Generated sample rosters so you can see the layout with a full league in it.'
     : `Your ESPN league · ${espn.getConfig().season} season`;
 
+  // A link into the roster detail picks its team here, before anything paints.
+  // True means it named nothing this league has and the week it had moved is
+  // being put back — that load paints the page, so this pass must not.
+  if (settleLanding()) return;
+
   // Settled before anything paints: the grids highlight the drilled-into row,
   // so they have to know which one that is before they draw it.
   resolveTeam();
@@ -1192,6 +1208,128 @@ function render() {
   // Last, and deliberately not awaited: the season grid costs one request per
   // week, so everything above is on screen before it starts spending them.
   ensureSeasonWeeks();
+
+  // After everything, the season run included: whether the panel is still
+  // being pushed down the page is read off that run.
+  followLanding();
+}
+
+// ------------------------------------------------------- landing on a roster
+//
+// `analysis.html?team=<teamId>&week=<week>#rosterDetail` — the Stats page's
+// graph sends a reader here from one dot (Tim, 2026-10-04: "bring them to the
+// roster detail box in the analysis section with it automatically selected as
+// the week it's referring to"). `team` is the ESPN team id, the same id every
+// squad on this page is keyed by (rule 9).
+//
+//   - It is THIS VISIT'S ANSWER. Nothing here writes a pref: following a link
+//     to a rival's week 2 is not a change of mind about which week or squad
+//     the page should open on next time. Same rule as `?player=` on Players.
+//   - Both or neither. A week this league does not have, or a team it does
+//     not have, and the page is exactly what it would have been with no link.
+//   - It belongs to whichever league is on screen, so it is aimed again when
+//     the source changes on its own — the sample league is usually up first
+//     and the real one replaces it a moment later.
+//   - It ends the moment the reader puts a hand on the week, a team or the
+//     source. After that the controls are theirs and nothing pulls them back.
+
+/** `?team=&week=` from the URL. Defensive: a harness may provide no location. */
+function requestedRoster() {
+  try {
+    const q = new URLSearchParams((window.location && window.location.search) || '');
+    const team = q.get('team') || '';
+    const week = q.get('week') || '';
+    if (!/^\d+$/.test(team) || !/^\d+$/.test(week)) return null;
+    return {
+      team: Number(team),
+      week: Number(week),
+      on: null,        // the source it has been settled against, hit or miss
+      hit: false,      // whether that source had both the week and the team
+      back: null,      // the week the page would have opened on without it
+      follow: false,   // still keeping the panel in view while the page grows
+      touched: false,  // the reader has scrolled; the page is theirs to place
+    };
+  } catch {
+    return null;   // no location at all is simply "no link"
+  }
+}
+
+/**
+ * The week to open on: the link's when this league has it, else `fallback`.
+ * Called once the week list is known, on every arrival at a source.
+ */
+function aimAtLanding(fallback) {
+  const l = state.landing;
+  if (!l) return fallback;
+  l.on = null;
+  l.hit = false;
+  l.follow = false;
+  l.back = fallback;
+  return state.weeks.includes(l.week) ? l.week : fallback;
+}
+
+/**
+ * Pick the link's team, once per source, as soon as that week's squads are in.
+ *
+ * The rosters arrive after the first paint in both modes — live reads them a
+ * week at a time, demo imports its generator — so "no teams yet" is a reason
+ * to wait for the next repaint, never an answer.
+ *
+ * @returns {boolean} true when the link missed and its week is being put back
+ */
+function settleLanding() {
+  const l = state.landing;
+  if (!l || l.on === state.source) return false;
+  const teams = state.data ? state.data.teams : [];
+  if (!teams.length) return false;
+
+  l.on = state.source;
+  l.hit = state.week === l.week && teams.some((t) => t.id === l.team);
+  if (l.hit) {
+    chooseTeam(l.team, false);
+    l.follow = !l.touched;
+    return false;
+  }
+  // The week was moved for a team that turned out not to be here.
+  if (state.week === l.week && l.back !== null && l.back !== l.week) {
+    state.week = l.back;
+    renderWeekPicker();
+    loadWeek();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Keep the roster detail in view until the page above it has stopped growing.
+ *
+ * One scroll is not enough: the season grid above this panel arrives a few
+ * weeks at a time and pushes it down the page each time. So this runs after
+ * every repaint that can move it, and stops for good once that run is over —
+ * or the moment the reader scrolls, because then where the page sits is theirs.
+ */
+function followLanding() {
+  const l = state.landing;
+  if (!l || !l.follow || !l.hit || l.on !== state.source) return;
+  if (!currentTeam()) return;
+  const panel = $('rosterDetail');
+  if (!panel) return;
+  if (state.seasonPending === null) l.follow = false;
+  // Guarded: jsdom/linkedom have no scrollIntoView, and a harness must not die
+  // of a missing browser API.
+  try {
+    panel.scrollIntoView({ block: 'start' });
+  } catch { /* the team and week are selected either way */ }
+}
+
+/** The reader has taken a control in hand: the link has done its work. */
+function endLanding() {
+  const l = state.landing;
+  if (!l) return;
+  // The week it opened on is the week they are now working in — picked this
+  // visit, by following the link — so a later change of source keeps it.
+  if (l.hit && l.on === state.source) state.weekPicked = true;
+  state.landing = null;
 }
 
 /**
@@ -2530,6 +2668,7 @@ async function loadDemoSeason(key, missing) {
   }
   renderSeason();
   renderOverview(); // the grids' hovers are made of these weeks too
+  followLanding();
 }
 
 /**
@@ -2573,6 +2712,7 @@ async function refreshSeason(key, missing) {
       // resort() keeps whatever sort the reader picked and the drilled-into row
       // is recomputed from state, so neither can be knocked out by this.
       renderOverview();
+      followLanding();
     }
   } catch (err) {
     if (stale()) return;
@@ -2586,6 +2726,7 @@ async function refreshSeason(key, missing) {
 
   if (stale()) return;
   renderSeason();
+  followLanding();
 }
 
 /**
@@ -4451,17 +4592,27 @@ function seasonMarks(table) {
   ];
 }
 
+/**
+ * Which squad the page is about, and whose choice that was.
+ *
+ * For THIS visit. It used to be saved, and every later visit reopened on
+ * whichever squad was tapped last — usually a rival glanced at once. A visit
+ * opens on your own team; the pick is remembered only when the connection bar
+ * has never been told which team is yours, since then there is nothing better
+ * to open on — and never when it came from a link (`remember` false), which is
+ * somebody else's pointer rather than the reader's pick.
+ */
+function chooseTeam(id, remember) {
+  state.teamId = id;
+  state.teamPickedOn = state.source;
+  if (remember && (state.myTeamId === null || state.myTeamId === undefined)) prefs.set('team', id);
+}
+
 /** Selecting a team touches four places, so nobody calls them separately. */
 function selectTeam(id) {
+  endLanding();   // a hand on a team: a link into the page has done its work
   if (id === null || Number.isNaN(id) || id === state.teamId) return;
-  state.teamId = id;
-  // For THIS visit. It used to be saved, and every later visit reopened on
-  // whichever squad was tapped last — usually a rival glanced at once. A visit
-  // opens on your own team; the pick is remembered only when the connection
-  // bar has never been told which team is yours, since then there is nothing
-  // better to open on.
-  state.teamPickedOn = state.source;
-  if (state.myTeamId === null || state.myTeamId === undefined) prefs.set('team', id);
+  chooseTeam(id, true);
   // Nudged rather than re-rendered: this also runs from a select's own change
   // handler, and rewriting a control's options underneath it loses focus. BOTH
   // pickers are nudged — the one at the top of Season by week and the one in
@@ -4511,11 +4662,13 @@ $('sourceToggle').addEventListener('click', (e) => {
   // failed live switch, or the connection bar coming online — the reader has
   // expressed no preference and shouldn't be pinned to the result of it.
   prefs.set('source', btn.dataset.src);
+  endLanding();
   setToggle(btn.dataset.src);
   btn.dataset.src === 'demo' ? useDemo() : useLive();
 });
 
 $('weekSelect').addEventListener('change', (e) => {
+  endLanding();
   state.week = Number(e.target.value);
   state.weekPicked = true;   // honoured for the rest of this visit, past or not
   prefs.set('week', state.week);
@@ -4709,6 +4862,22 @@ if (rememberedWeek !== null) state.week = rememberedWeek;
 // a measure with no renderer behind it.
 const rememberedMeasure = prefs.get('measure', null);
 if (rememberedMeasure && MEASURES[rememberedMeasure]) state.measure = rememberedMeasure;
+
+// A link into the roster detail. Read before the first load so the week it
+// names is the one that load asks for.
+state.landing = requestedRoster();
+if (state.landing) {
+  // Scrolling by hand ends the page's own scrolling for good; a tap or a key
+  // on a control does not, so connecting a league from the bar still lands.
+  const hands = () => {
+    if (!state.landing) return;
+    state.landing.touched = true;
+    state.landing.follow = false;
+  };
+  for (const type of ['wheel', 'touchmove']) {
+    document.addEventListener(type, hands, { passive: true });
+  }
+}
 
 if (prefs.get('source') === 'live' && boot) useLive();
 else useDemo();
