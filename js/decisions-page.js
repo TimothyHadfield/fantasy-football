@@ -33,13 +33,20 @@
 // the same games. A team-week with anything still to come carries the small
 // LIVE tag (`cell.live`). The chart's "Current" side is not touched: it stays
 // the Summary page's.
+//
+// ALL USERS (`state.all`; Tim, 2026-10-05: "add a button by the user selection
+// that says 'all users'. This allows you to have all users to have done a
+// reasonable lineup or perfect lineup and see the results."). The list is then
+// the two lineup choices alone, each for every team at once, and the result is
+// one row a TEAM instead of one row a week. A move or a trade belongs to one
+// team, so those wait in that team's own list; nothing kept is thrown away.
 
 import { computeLeagueStats } from './stats.js';
 import * as season from './season.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
-import { listDecisions, mirror, rosterAt } from './decisions.js';
+import { listDecisions, mirror, rosterAt, ALL_TEAMS } from './decisions.js';
 import { actualSeasonTableHtml, weeksFromMirror } from './actual-season-table.js';
 import { standingsTableHtml } from './standings-table.js';
 import { summaryTableHtml } from './summary-table.js';
@@ -75,9 +82,10 @@ const SIM_DELAY_MS = 400;
  */
 const LIVE_TAG = '<span class="badge live wk-live" title="Still being played: some of this is not final.">live</span>';
 
+/** Tim's two words (2026-10-05). Each covers every week; there is no week's own. */
 const LINEUP_SAID = {
-  'lineup-reasonable': 'Lineup: highest projections',
-  'lineup-perfect': 'Lineup: perfect hindsight',
+  'lineup-reasonable': 'Reasonable',
+  'lineup-perfect': 'Perfect hindsight',
 };
 
 const state = {
@@ -86,6 +94,7 @@ const state = {
   leagueKey: 'demo',    // what this league's what-ifs and team are remembered under
   season: null,
   teamId: null,         // whose decisions are listed
+  all: false,           // "All users": every team's lineup at once, instead
   decisions: [],        // that team's, what-ifs first
   selectedId: null,
   seasonTeamId: null,   // whose lineup "Season by week" shows
@@ -206,6 +215,8 @@ async function loadWorld(src) {
   const mine = demo ? null : cfg.teamId;
   const pick = [remembered, mine].map(teamOf).find(Boolean) || world.teams[0] || null;
   state.teamId = pick ? pick.id : null;
+  // Remembered per league, like the team.
+  state.all = prefs.get(`all.${state.leagueKey}`) === true;
 
   if (!demo) {
     setStatus(world.weeks.length
@@ -250,6 +261,12 @@ function mirrorOf(decision) {
 const anyChanged = (m) =>
   [...m.teams.values()].some((t) => Object.values(t.byWeek).some((c) => c.changed));
 
+/** The list's first decision that changes something, else its first. */
+function firstId() {
+  const first = state.decisions.find((d) => !d.empty) || state.decisions[0] || null;
+  return first ? first.id : null;
+}
+
 /** Whose decisions are listed. Rebuilds the list and picks its first real one. */
 function setTeam(teamId) {
   const world = state.world;
@@ -263,13 +280,21 @@ function setTeam(teamId) {
     return;
   }
   buildDecisions();
-  const first = state.decisions.find((d) => !d.empty) || state.decisions[0] || null;
-  state.selectedId = first ? first.id : null;
+  state.selectedId = firstId();
   render();
+}
+
+/** "All users" on or off. The team picked stays picked underneath. */
+function setAll(on) {
+  state.all = on;
+  prefs.set(`all.${state.leagueKey}`, on ? true : null);
+  simDelay = SIM_DELAY_MS;
+  setTeam(state.teamId);
 }
 
 function buildDecisions() {
   const world = state.world;
+  if (state.all) { state.decisions = listDecisions(world, ALL_TEAMS); return; }
   const known = (w) => teamOf(w.teamId) && teamOf(w.withTeamId) && world.weeks.includes(w.week);
   const mineToo = (w) => same(w.teamId, state.teamId) || same(w.withTeamId, state.teamId);
   const extra = whatIfs().filter((w) => known(w) && mineToo(w)).map((w) => {
@@ -277,7 +302,10 @@ function buildDecisions() {
     d.empty = !anyChanged(mirrorOf(d));
     return d;
   });
-  state.decisions = [...extra, ...listDecisions(world, state.teamId)];
+  // The lineup is one choice of two, each over every week: the engine's
+  // one-week entries are not offered here.
+  const offered = (d) => !d.kind.startsWith('lineup-') || d.week === null;
+  state.decisions = [...extra, ...listDecisions(world, state.teamId).filter(offered)];
 }
 
 const selected = () => state.decisions.find((d) => d.id === state.selectedId) || null;
@@ -295,9 +323,12 @@ function render() {
     ? `Demo League · ${n} finished weeks · generated data, so you can see the layout`
     : `${world.name} · ${weeksSaid(world)}`;
 
-  $('teamSelect').innerHTML = world.teams
-    .map((t) => `<option value="${esc(t.id)}"${same(t.id, state.teamId) ? ' selected' : ''}>${esc(teamName(t.id))}</option>`)
+  // With all users on the picker says so, and picking a team in it — the one
+  // it showed before included — goes back to that team.
+  $('teamSelect').innerHTML = (state.all ? '<option value="" selected>All users</option>' : '') + world.teams
+    .map((t) => `<option value="${esc(t.id)}"${!state.all && same(t.id, state.teamId) ? ' selected' : ''}>${esc(teamName(t.id))}</option>`)
     .join('');
+  $('allSwitch').checked = state.all;
   $('noiseSwitch').checked = state.noise;
 
   // FEWER THAN ONE FINISHED WEEK: nothing has happened to replay.
@@ -309,6 +340,10 @@ function render() {
     return;
   }
 
+  // A choice that is no longer in the list (one week's lineup used to be a
+  // row of its own) falls back to the list's first.
+  if (!selected()) state.selectedId = firstId();
+  $('whatIfBox').hidden = state.all;
   renderList();
   renderWhatIfForm();
   renderDecision();
@@ -336,26 +371,47 @@ function liveCell(m, teamId, week) {
 /**
  * Does a row of the list wear the LIVE tag? A week's entry when that week is
  * live for the picked team; a whole-season entry when the week in play is.
+ * With all users on: when it is live for any team.
  */
 function liveRow(d) {
   const partial = state.world.partialWeek;
   if (!Number.isFinite(partial)) return false;
   const whole = d.week === null || d.week === undefined;
-  return (whole || d.week === partial) && liveCell(mirrorOf(d), state.teamId, partial);
+  if (!(whole || d.week === partial)) return false;
+  const m = mirrorOf(d);
+  return state.all
+    ? state.world.teams.some((t) => liveCell(m, t.id, partial))
+    : liveCell(m, state.teamId, partial);
 }
 
-/** The numbers a row of the list leads with, for the picked team. */
-function headline(decision) {
-  const m = mirrorOf(decision);
-  const rec = m.records.get(state.teamId);
-  const mine = m.teams.get(state.teamId);
+/** One team's season in a mirror: its points in each world, every week held, the one in play included. */
+function seasonPoints(m, teamId) {
+  const mine = m.teams.get(teamId);
   let hyp = 0;
   let real = 0;
-  // Every week's points, the one in play included — the table's Total row.
   for (const c of Object.values((mine && mine.byWeek) || {})) {
     hyp += c.total;
     real += c.realTotal;
   }
+  return { hyp, real };
+}
+
+/**
+ * The numbers a row of the list leads with, for the picked team. With all
+ * users on there is no one record to change (a win gained is a win lost
+ * across the table), so the row leads with the league's points alone.
+ */
+function headline(decision) {
+  const m = mirrorOf(decision);
+  if (state.all) {
+    let hyp = 0;
+    let real = 0;
+    for (const t of state.world.teams) { const p = seasonPoints(m, t.id); hyp += p.hyp; real += p.real; }
+    return { record: null, points: diffOf(hyp, real) };
+  }
+  const rec = m.records.get(state.teamId);
+  // The table's Total row.
+  const { hyp, real } = seasonPoints(m, state.teamId);
   return {
     record: rec ? recordDiff(rec.mirror, rec.real) : null,
     points: diffOf(hyp, real),
@@ -371,7 +427,7 @@ function rowHtml(d) {
   } else {
     const h = headline(d);
     nums =
-      `<span class="dz-rec ${h.record ? diffClass(h.record.value) : ''}">${h.record ? esc(h.record.text) : '—'}</span>` +
+      `<span class="dz-rec ${h.record ? diffClass(h.record.value) : ''}">${h.record ? esc(h.record.text) : state.all ? '' : '—'}</span>` +
       `<span class="dz-pts ${diffClass(h.points)}">${signedText(h.points)}</span>`;
   }
   return `<div class="dz-item">` +
@@ -421,11 +477,43 @@ function ledeOf(d) {
   return `Undone: ${d.label} (week ${d.week}).`;
 }
 
+/**
+ * ALL USERS: one row a team — its record in each world, the change, and its
+ * points — in the Standings order, so the two panels read alike.
+ */
+function renderTeams(d) {
+  const world = state.world;
+  const m = mirrorOf(d);
+  const partial = Number.isFinite(world.partialWeek) ? world.partialWeek : null;
+  const order = standingsOf(countedGames(m)).teams
+    .slice().sort((a, b) => a.actualStanding - b.actualStanding).map((t) => t.id);
+  $('teamTable').querySelector('tbody').innerHTML = order.map((id) => {
+    const rec = m.records.get(id);
+    const change = rec ? recordDiff(rec.mirror, rec.real) : null;
+    const { hyp, real } = seasonPoints(m, id);
+    const points = diffOf(hyp, real, 2);
+    const live = partial !== null && liveCell(m, id, partial);
+    return `<tr data-team="${esc(id)}">` +
+      `<td class="dz-team" title="${esc(teamName(id))}">${esc(teamName(id))}${live ? LIVE_TAG : ''}</td>` +
+      `<td class="dz-act">${recText(rec && rec.real)}</td>` +
+      `<td class="dz-hyp">${recText(rec && rec.mirror)}</td>` +
+      `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td>` +
+      `<td class="dz-diff ${diffClass(points)}" data-v="${points}">${signedPts(points)}</td>` +
+      `</tr>`;
+  }).join('');
+  $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
+}
+
 function renderResult() {
   const world = state.world;
   const d = selected();
   const table = $('weekTable');
   const [body, foot] = table.querySelectorAll('tbody');
+  const teams = Boolean(d && state.all);
+  table.hidden = teams;
+  $('resultStats').hidden = teams;
+  $('teamTable').hidden = !teams;
+  if (teams) { renderTeams(d); return; }
   if (!d) {
     $('resultLede').textContent = 'No decisions yet.';
     $('resultStats').innerHTML = '';
@@ -508,9 +596,11 @@ function renderSeason() {
   const m = mirrorOf(d);
 
   // A trade changes two lineups, and a freed player can change a third: the
-  // small select offers every squad whose lineup is not the real one.
-  const others = changedTeams(m).filter((id) => !same(id, state.teamId));
-  const offered = [state.teamId, ...others];
+  // small select offers every squad whose lineup is not the real one. With all
+  // users on that is anybody's, so it offers them all.
+  const others = (state.all ? state.world.teams.map((t) => t.id) : changedTeams(m))
+    .filter((id) => !same(id, state.teamId));
+  const offered = state.all ? state.world.teams.map((t) => t.id) : [state.teamId, ...others];
   if (!offered.some((id) => same(id, state.seasonTeamId))) state.seasonTeamId = state.teamId;
   $('seasonTeamRow').hidden = !others.length;
   $('seasonTeam').innerHTML = offered
@@ -572,9 +662,11 @@ function renderStandings() {
   const byId = new Map(hyp.teams.map((t) => [t.id, t]));
   hyp.teams = real.teams.map((t) => byId.get(t.id)).filter(Boolean);
 
-  $('standingsCur').innerHTML = standingsTableHtml(real, { highlightId: state.teamId });
+  // No one team is "the picked one" with all users on.
+  const highlightId = state.all ? null : state.teamId;
+  $('standingsCur').innerHTML = standingsTableHtml(real, { highlightId });
   $('standingsHyp').innerHTML = standingsTableHtml(hyp, {
-    highlightId: state.teamId, dim: teamDim(m),
+    highlightId, dim: teamDim(m),
     diffFrom: state.view.standings === 'diff' ? real : null,
   });
 }
@@ -1133,10 +1225,7 @@ function removeWhatIf(id) {
   saveWhatIfs(whatIfs().filter((w) => w.id !== id));
   mirrors.delete(id);
   buildDecisions();
-  if (state.selectedId === id) {
-    const first = state.decisions.find((d) => !d.empty) || state.decisions[0] || null;
-    state.selectedId = first ? first.id : null;
-  }
+  if (state.selectedId === id) state.selectedId = firstId();
   render();
 }
 
@@ -1182,7 +1271,16 @@ $('teamSelect').addEventListener('change', (e) => {
   if (!t) return;
   prefs.set(`team.${state.leagueKey}`, t.id);
   simDelay = SIM_DELAY_MS;
+  // Picking a team is asking for that team: all users goes off.
+  if (state.all) {
+    state.all = false;
+    prefs.set(`all.${state.leagueKey}`, null);
+  }
   setTeam(t.id);
+});
+
+$('allSwitch').addEventListener('change', (e) => {
+  if (state.world) setAll(e.target.checked);
 });
 
 $('noiseSwitch').addEventListener('change', (e) => {

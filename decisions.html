@@ -15,8 +15,8 @@
 <script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <style>
-/* The team picker and the noise switch share the right-hand end of the source
- * row; the switch lines up with the select, not with its label. */
+/* The team picker and its two switches share the right-hand end of the source
+ * row; a switch lines up with the select, not with its label. */
 .dz-top { align-items: flex-end; gap: 16px; }
 .dz-top .form-select { width: 170px; }
 
@@ -97,6 +97,11 @@
 .dz-weeks td.d-zero { color: var(--dim); }
 .dz-weeks tbody.dz-total td { font-weight: 700; border-top: 2px solid var(--line-2); background-color: var(--panel-2); }
 #resultStats { margin-bottom: 12px; }
+/* ALL USERS: one row a team. The name takes what the four numbers leave, and
+   wraps on a phone sooner than lose its end or its live tag. */
+.dz-weeks.dz-teams th:nth-child(2) { text-align: right; }
+.dz-teams td.dz-team { width: 100%; white-space: normal; }
+.dz-teams td.dz-team .wk-live { white-space: nowrap; }
 
 /* CURRENT BESIDE HYPOTHETICAL. Each half scrolls inside itself. */
 .dz-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
@@ -117,8 +122,11 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   .dz-main { gap: 12px; margin-bottom: 12px; }
 }
 @media (max-width: 760px) {
-  .dz-top { width: 100%; flex-wrap: nowrap; }
-  .dz-top .form-select { width: auto; flex: 1 1 auto; }
+  /* The picker on the left, the two switches one above the other beside it:
+     the same height as the picker alone, and neither switch's words wrap. */
+  .dz-top { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; align-items: center; }
+  .dz-top .form-select { width: auto; grid-row: 1 / span 2; }
+  .dz-top .switch-text { white-space: nowrap; }
   .dz-list { max-height: 238px; }
   .dz-row { grid-template-columns: 30px minmax(0, 1fr) 38px 46px; gap: 6px; padding: 8px 7px; font-size: 13px; }
   .dz-whatif .form-select { width: 100%; }
@@ -169,6 +177,13 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           <label for="teamSelect">Team</label>
           <select id="teamSelect"></select>
         </div>
+        <!-- Tim, 2026-10-05: "add a button by the user selection that says 'all
+             users'". On or off, so a switch like the one beside it. -->
+        <label class="switch" for="allSwitch">
+          <input type="checkbox" role="switch" id="allSwitch">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span class="switch-text">All users</span>
+        </label>
         <!-- A SWITCH, not a button (Tim: "have a 'display noise' switch at the
              top of this section that is by defualt turned off"). -->
         <label class="switch" for="noiseSwitch">
@@ -237,12 +252,23 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         <tbody></tbody>
         <tbody class="dz-total"></tbody>
       </table>
+      <!-- ALL USERS: one row a team instead of one row a week. -->
+      <table class="dz-weeks dz-teams" id="teamTable" hidden>
+        <thead><tr>
+          <th title="In the Standings order.">Team</th>
+          <th title="The team&rsquo;s real record.">Actual</th>
+          <th title="Its record with every lineup set this way.">Hypothetical</th>
+          <th title="Hypothetical minus actual.">Record</th>
+          <th title="Season points, hypothetical minus actual.">Points</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
       <details class="explain">
         <summary>How this works</summary>
         <div class="panel-note" id="resultNote">
           <p>A move is undone and the season replayed: every later add, drop and trade happens again in order, if it still can.</p>
           <p>Other teams keep their real lineups. A slot a missing player leaves takes their best-projected bench player.</p>
-          <p>Lineup rows change only this team: <strong>highest projections</strong> starts whoever ESPN projected highest, <strong>perfect hindsight</strong> whoever scored most.</p>
+          <p><strong>Reasonable</strong> starts whoever ESPN projected highest, every week; <strong>Perfect hindsight</strong> whoever scored most. <strong>All users</strong> does it for every team at once.</p>
           <p><strong>Noise</strong> is how unsure a number is: other managers would have reacted. It grows each week after the decision, and where a freed player could have been picked up. Dimmer is less sure.</p>
         </div>
       </details>

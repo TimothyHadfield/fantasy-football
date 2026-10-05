@@ -8,7 +8,8 @@
 // whether that would have changed the outcome of a matchup, and how much it
 // would have changed the overall record." (docs/decisions-review-plan.md)
 //
-// Checks js/decisions.js: listDecisions, mirror, rosterAt, recordOf, NOISE.
+// Checks js/decisions.js: listDecisions, lineupDecision, mirror, rosterAt,
+// recordOf, NOISE, ALL_TEAMS.
 // Four teams, four final weeks, one QB / RB / WR / FLEX. Every expected number
 // is worked by hand in the comment beside it, never asked of the engine.
 
@@ -178,6 +179,8 @@ const lineup = (m, teamId, week) => cell(m, teamId, week).starters.map((s) => `$
 const rec = (m, teamId) => m.records.get(teamId);
 const flipList = (m) => m.flips.map((f) => `wk${f.week} ${f.teamId}v${f.oppId} ${f.real}>${f.mirror}`).sort();
 const pick = (list, id) => list.find((d) => d.id === id);
+/** One WEEK's lineup decision. The page no longer offers these; the engine still takes them. */
+const wkLineup = (w, kind, teamId, week) => D.lineupDecision(w, `lineup-${kind}`, teamId, week);
 const REAL_TOTALS = { [TIM]: [62, 58, 58, 55], [MITCH]: [57, 63, 68, 61], [CAL]: [61, 57.5, 66, 57], [DEE]: [55.3, 56, 50, 56] };
 
 // ---- listDecisions ----------------------------------------------------------
@@ -194,9 +197,17 @@ eq([dM1.kind, dM1.week, dM1.label, dM1.empty], ['adddrop', 2, 'Added Bryce Young
 eq([pick(tims, 'move:m5').kind, pick(tims, 'move:m5').label], ['trade', "Traded Ja'Marr Chase for James Cook III"], 'a trade, said from Tim’s side');
 eq([pick(tims, 'move:m7').kind, pick(tims, 'move:m7').label, pick(tims, 'move:m7').empty], ['add', 'Added Ed Extra', true],
   'picking up a man who never started is listed, and empty: nothing would have changed');
-eq(pick(tims, 'lineup-reasonable:1:3').label, 'Week 3 lineup, highest projections', 'the reasonable label');
-eq(pick(tims, 'lineup-perfect:1:3').label, 'Week 3 lineup, perfect hindsight', 'the perfect label');
-eq(pick(tims, 'lineup-reasonable:1:all').week, null, 'the whole-season entry has week null');
+eq([pick(tims, 'lineup-reasonable:1:all').label, pick(tims, 'lineup-perfect:1:all').label],
+  ["Every week's lineup, highest projections", "Every week's lineup, perfect hindsight"], 'the two lineup labels');
+eq(pick(tims, 'lineup-reasonable:1:all').week, null, 'a listed lineup entry has week null: every week');
+for (const t of TEAMS) {
+  const lineups = D.listDecisions(world, t).filter((d) => d.kind.startsWith('lineup') && d.week === null);
+  eq(lineups.map((d) => [d.kind, d.id]), [['lineup-reasonable', `lineup-reasonable:${t}:all`], ['lineup-perfect', `lineup-perfect:${t}:all`]],
+    `team ${t}: exactly two entries cover every week, which are the two the page shows`);
+}
+eq(pick(tims, 'lineup-perfect:1:3'), wkLineup(world, 'perfect', TIM, 3), 'a listed week’s entry is lineupDecision’s, to the letter');
+eq([wkLineup(world, 'reasonable', TIM, 3).id, wkLineup(world, 'reasonable', TIM, 3).label, wkLineup(world, 'perfect', TIM, 3).label],
+  ['lineup-reasonable:1:3', 'Week 3 lineup, highest projections', 'Week 3 lineup, perfect hindsight'], 'one week’s lineup is still a decision the engine takes');
 
 const dees = D.listDecisions(world, DEE);
 eq(pick(dees, 'move:m5').label, "Traded James Cook III for Ja'Marr Chase", 'the same trade on the partner’s list, said from her side');
@@ -327,31 +338,32 @@ eq([rec(wi, TIM).mirror, rec(wi, MITCH).mirror, rec(wi, CAL).mirror, rec(wi, DEE
   [{ w: 1, l: 2, t: 1 }, { w: 2, l: 1, t: 1 }, { w: 3, l: 1, t: 0 }, { w: 1, l: 3, t: 0 }], 'what-if records, with the tie as its own number');
 
 // ---- lineup decisions --------------------------------------------------------
-ok(tims.filter((d) => d.kind.startsWith('lineup')).every((d) => d.empty && d.detail.length === 0),
+ok(tims.filter((d) => d.kind.startsWith('lineup')).every((d) => d.empty && d.detail.length === 0) &&
+  WEEKS.every((w) => wkLineup(world, 'reasonable', TIM, w).empty && wkLineup(world, 'perfect', TIM, w).empty),
   'Tim already started his best projections every week (and nothing better in hindsight): every lineup entry is empty');
 const mitchs = D.listDecisions(world, MITCH);
 // Week 2: Mayfield was projected 17 to Lock's 15, so "reasonable" benches the
 // man who scored 26: 63 - 26 + 12 = 49, and the win over Dee (56) is lost.
-const r2 = pick(mitchs, 'lineup-reasonable:2:2');
+const r2 = wkLineup(world, 'reasonable', MITCH, 2);
 eq([r2.empty, r2.detail], [false, [{ week: 2, out: 'Drew Lock', in: 'Baker Mayfield', outId: 10, inId: 12 }]], 'reasonable, week 2: the one swap that differs');
 const mr2 = D.mirror(world, r2);
 eq([totals(mr2, MITCH), flipList(mr2), rec(mr2, MITCH).mirror], [[57, 49, 68, 61], ['wk2 2v4 W>L', 'wk2 4v2 L>W'], { w: 2, l: 2, t: 0 }], 'reasonable, week 2: 49, and the game flips');
 ok([TIM, CAL, DEE].every((t) => JSON.stringify(totals(mr2, t)) === JSON.stringify(REAL_TOTALS[t])), 'a lineup decision changes only the picked team');
 // Cal's own week 4 was not its best projections (see below), so this one bites.
 eq(totals(D.mirror(world, pick(mitchs, 'lineup-reasonable:2:all')), CAL), REAL_TOTALS[CAL], 'even a team that did not start its best projections is left as it was');
-ok(pick(mitchs, 'lineup-reasonable:2:3').empty, 'week 3: Lock and Mayfield were both projected 17, a tie counts as matching');
-ok(pick(mitchs, 'lineup-perfect:2:2').empty, 'perfect, week 2: Stroud scored the same 26 as Lock, a tie counts as matching');
+ok(wkLineup(world, 'reasonable', MITCH, 3).empty, 'week 3: Lock and Mayfield were both projected 17, a tie counts as matching');
+ok(wkLineup(world, 'perfect', MITCH, 2).empty, 'perfect, week 2: Stroud scored the same 26 as Lock, a tie counts as matching');
 // Perfect, week 1: Stroud (20) for Mayfield (17): 57 + 3 = 60. Still loses to 62.
-const p1 = pick(mitchs, 'lineup-perfect:2:1');
+const p1 = wkLineup(world, 'perfect', MITCH, 1);
 eq([p1.detail, totals(D.mirror(world, p1), MITCH)], [[{ week: 1, out: 'Baker Mayfield', in: 'CJ Stroud', outId: 12, inId: 13 }], [60, 63, 68, 61]], 'perfect, week 1: 60');
 eq(pick(mitchs, 'lineup-reasonable:2:all').detail.map((s) => s.week), [2], 'the whole-season reasonable entry lists every differing week');
 eq(totals(D.mirror(world, pick(mitchs, 'lineup-perfect:2:all')), MITCH), [60, 63, 68, 61], 'the whole-season perfect entry changes every week it can');
-eq(totals(D.mirror(world, pick(mitchs, 'lineup-reasonable:2:1')), MITCH), REAL_TOTALS[MITCH], 'a one-week entry leaves the other weeks alone, even one it could improve');
+eq(totals(D.mirror(world, wkLineup(world, 'reasonable', MITCH, 1)), MITCH), REAL_TOTALS[MITCH], 'a one-week entry leaves the other weeks alone, even one it could improve');
 // Cal, week 4: Hall was projected 10 to Late's 9 and scored 10 to his 6: 61 both ways.
-eq([totals(D.mirror(world, pick(cals, 'lineup-reasonable:3:4')), CAL)[3], totals(D.mirror(world, pick(cals, 'lineup-perfect:3:4')), CAL)[3]], [61, 61], 'Cal week 4: 57 - 6 + 10 = 61 both ways');
+eq([totals(D.mirror(world, wkLineup(world, 'reasonable', CAL, 4)), CAL)[3], totals(D.mirror(world, wkLineup(world, 'perfect', CAL, 4)), CAL)[3]], [61, 61], 'Cal week 4: 57 - 6 + 10 = 61 both ways');
 // Dee's week 1 best lineup puts Taylor at RB and Cook in the FLEX: the same
 // four men in other slots is not a change.
-ok(pick(dees, 'lineup-reasonable:4:1').empty && D.mirror(world, pick(dees, 'lineup-reasonable:4:1')).teams.get(DEE).byWeek[1].total === 55.3,
+ok(wkLineup(world, 'reasonable', DEE, 1).empty && D.mirror(world, wkLineup(world, 'reasonable', DEE, 1)).teams.get(DEE).byWeek[1].total === 55.3,
   'the same starters in different slots is empty, and the total is the real one exactly');
 let worse = 0;
 for (const t of TEAMS) {
@@ -506,7 +518,8 @@ eq(recs(D.mirror(P2, none)), ['3-1 / 3-1', '3-1 / 3-1', '1-2 / 1-2', '0-3 / 0-3'
 
 // Lineup decisions in the week in play: both kinds, for every team.
 for (const [t, name] of [[TIM, 'Tim'], [MITCH, 'Mitch'], [CAL, 'Cal'], [DEE, 'Dee']]) {
-  eq(ids(D.listDecisions(P, t), 'lineup-').slice(-2), [`lineup-reasonable:${t}:4`, `lineup-perfect:${t}:4`], `${name}: both week-4 lineups are offered, whoever is still playing`);
+  eq(ids(D.listDecisions(P, t), 'lineup-').slice(0, 2), [`lineup-reasonable:${t}:all`, `lineup-perfect:${t}:all`], `${name}: the two lineups the page shows come first`);
+  eq(ids(D.listDecisions(P, t), 'lineup-').slice(-2), [`lineup-reasonable:${t}:4`, `lineup-perfect:${t}:4`], `${name}: both week-4 lineups are still listed, whoever is still playing`);
 }
 ok(pick(D.listDecisions(P, CAL), 'lineup-reasonable:3:all').detail.some((s) => s.week === 4), 'and the whole-season entries take the week in play in');
 eq(ids(D.listDecisions(P, TIM), 'move:'), ['move:m1', 'move:m5', 'move:m7'], 'a move made in the week in play is listed like any other');
@@ -519,7 +532,7 @@ eq([lineup(pm8, CAL, 4)[3], cell(pm8, CAL, 4).changed, cell(pm8, CAL, 4).pending
 // Hall (bench, done, 10) for Late (FLEX, done, 6) is known: +4. Goff, still
 // playing, is left where he is. 42 so far -> 46; no result yet.
 const calsP = D.listDecisions(P, CAL);
-const hP = pick(calsP, 'lineup-perfect:3:4');
+const hP = wkLineup(P, 'perfect', CAL, 4);
 const mhP = D.mirror(P, hP);
 eq([hP.empty, hP.detail], [false, [{ week: 4, out: 'Lee Late', in: 'Breece Hall', outId: 37, inId: 28 }]], 'hindsight for a team still playing: the swap already known');
 eq([row(mhP, CAL), cell(mhP, CAL, 4).pending, cell(mhP, CAL, 4).live, lineup(mhP, CAL, 4)[0]], [[42, 46, 4], true, true, 'QB Jared Goff'],
@@ -543,8 +556,7 @@ function spareWorld(notDone) {
 }
 const T = spareWorld([14, 38, 41]);
 const timsT = D.listDecisions(T, TIM);
-const hT = pick(timsT, 'lineup-perfect:1:4');
-ok(hT, 'hindsight is offered although a bench man has still to play');
+const hT = wkLineup(T, 'perfect', TIM, 4);
 const mhT = D.mirror(T, hT || none);
 eq([hT && hT.empty, hT && hT.detail], [false, [{ week: 4, out: 'Bryce Young', in: 'Sam Spare', outId: 11, inId: 16 }]], 'Tim’s case: the bench QB who scored 8 more is the swap');
 eq(row(mhT, TIM), [55, 63, 8], 'Tim’s case: week 4 shows +8');
@@ -552,11 +564,11 @@ eq(totalDiff(mhT, TIM), 8, 'and the +8 is in the total');
 eq([cell(mhT, TIM, 4).live, cell(mhT, TIM, 4).pending], [true, undefined], 'the week is live (a bench man has not played) but its matchup is final in both worlds');
 eq([recs(mhT).slice(0, 2), flipList(mhT)], [['3-1 / 4-0', '3-1 / 2-2'], ['wk4 1v2 L>W', 'wk4 2v1 W>L']], 'so it counts in both records, and flips');
 eq(totalDiff(D.mirror(T, pick(timsT, 'lineup-perfect:1:all')), TIM), 8, 'the whole-season hindsight entry carries it too');
-ok(pick(timsT, 'lineup-reasonable:1:4').empty, 'highest projections would not have started him: empty, as before');
+ok(wkLineup(T, 'reasonable', TIM, 4).empty, 'highest projections would not have started him: empty, as before');
 // A BENCH MAN WHO HAS NOT PLAYED IS NEVER STARTED BY HINDSIGHT, whatever he has
 // so far: T2 is T with Spare himself still playing (28 and counting).
 const T2 = spareWorld([14, 38, 41, 16]);
-const hT2 = pick(D.listDecisions(T2, TIM), 'lineup-perfect:1:4');
+const hT2 = wkLineup(T2, 'perfect', TIM, 4);
 eq([hT2.empty, row(D.mirror(T2, hT2), TIM), cell(D.mirror(T2, hT2), TIM, 4).live], [true, [55, 55, 0], true], 'hindsight never starts a bench man who has not finished');
 
 // Q: the other way round. Cal v Dee is over (57–56), Tim v Mitch is being
@@ -571,8 +583,7 @@ eq(recs(D.mirror(Q, none)), ['3-0 / 3-0', '2-1 / 2-1', '2-2 / 2-2', '0-4 / 0-4']
 // Tim so far: Achane 13 + Diggs 8 + Cook 14 = 35 without Young.
 eq([row(D.mirror(Q, none), TIM), lives(D.mirror(Q, none))], [[35, 35, 0], [true, true, true, false]], 'Q: Tim so far, and who is live (Cal for the bench back alone)');
 const calsQ = D.listDecisions(Q, CAL);
-eq(ids(calsQ, 'lineup-').slice(-2), ['lineup-reasonable:3:4', 'lineup-perfect:3:4'], 'Cal: both are offered');
-const q4 = D.mirror(Q, pick(calsQ, 'lineup-reasonable:3:4'));
+const q4 = D.mirror(Q, wkLineup(Q, 'reasonable', CAL, 4));
 eq(lineup(q4, CAL, 4)[3], 'FLEX Breece Hall', 'the lineup it would have set starts the unfinished man');
 eq([row(q4, CAL), cell(q4, CAL, 4).starters[3].known, cell(q4, CAL, 4).starters[3].value], [[57, 61, 4], false, 10],
   'highest projections: the unfinished man in is valued at his projection, the finished man out at his score');
@@ -582,8 +593,101 @@ eq(recs(q4), ['3-0 / 3-0', '2-1 / 2-1', '1-2 / 1-2', '0-3 / 0-3'], 'so it is in 
 // Hall has not finished, so hindsight cannot start him: 57, as played.
 eq([cell(D.mirror(world, pick(cals, 'lineup-perfect:3:all')), CAL, 4).total, cell(D.mirror(Q, pick(calsQ, 'lineup-perfect:3:all')), CAL, 4).total],
   [61, 57], 'whole-season hindsight does not start the unfinished bench man either');
-ok(pick(calsQ, 'lineup-perfect:3:4').empty && D.mirror(Q, pick(calsQ, 'lineup-perfect:3:4')).pending.length === 1, 'and week-4 hindsight is empty: the finished game stays counted');
+ok(wkLineup(Q, 'perfect', CAL, 4).empty && D.mirror(Q, wkLineup(Q, 'perfect', CAL, 4)).pending.length === 1, 'and week-4 hindsight is empty: the finished game stays counted');
 eq(JSON.stringify([world.games, world.moves, [...world.rosters], [...world.players]]), frozen, 'none of this alters the closed world');
+
+// ---- ALL USERS ------------------------------------------------------------------
+// Tim, 2026-10-05: "add a button by the user selection that says 'all users'.
+// This allows you to have all users to have done a reasonable lineup or perfect
+// lineup and see the results." One rule, every team at once, every week.
+const everyone = D.listDecisions(world, D.ALL_TEAMS);
+eq(everyone.map((d) => [d.id, d.kind, d.week, d.teamId, d.label]), [
+  ['lineup-reasonable:all:all', 'lineup-reasonable', null, 'all', 'Every team, every week, highest projections'],
+  ['lineup-perfect:all:all', 'lineup-perfect', null, 'all', 'Every team, every week, perfect hindsight'],
+], 'the list for all users: the two lineup entries and nothing else — a move belongs to one team');
+const allTotals = (m) => TEAMS.map((t) => totals(m, t));
+const allRecs = (m) => TEAMS.map((t) => { const r = rec(m, t); return `${r.real.w}-${r.real.l} / ${r.mirror.w}-${r.mirror.l}`; });
+
+// REASONABLE, every team (projections, from the rosters above):
+//   wk1 nobody had a better-projected man on the bench.
+//   wk2 Mitch: Mayfield (17) over Lock (15): 63 - 26 + 12 = 49. Nobody else.
+//   wk3 nobody (Mitch's Lock and Mayfield tie at 17; Dee's four are her best four).
+//   wk4 Cal: Hall (10) over Late (9): 57 - 6 + 10 = 61. Nobody else.
+// Results: wk2 Mitch 49 v Dee 56 is now Dee's; wk4 Cal 61 v Dee 56 still Cal's.
+//   Tim 3-1 -> 3-1 · Mitch 3-1 -> 2-2 · Cal 2-2 -> 2-2 · Dee 0-4 -> 1-3.
+const allR = D.mirror(world, everyone[0]);
+eq(allTotals(allR), [[62, 58, 58, 55], [57, 49, 68, 61], [61, 57.5, 66, 61], [55.3, 56, 50, 56]], 'all users, reasonable: every team-week by hand');
+eq(flipList(allR), ['wk2 2v4 W>L', 'wk2 4v2 L>W'], 'all users, reasonable: the one matchup that flips');
+eq(allRecs(allR), ['3-1 / 3-1', '3-1 / 2-2', '2-2 / 2-2', '0-4 / 1-3'], 'all users, reasonable: every record in both worlds');
+ok(WEEKS.every((w) => !cell(allR, TIM, w).changed && cell(allR, TIM, w).total === cell(allR, TIM, w).realTotal) &&
+  WEEKS.every((w) => !cell(allR, DEE, w).changed && cell(allR, DEE, w).total === cell(allR, DEE, w).realTotal),
+  'a team already playing its best projections is unchanged, to the decimal (Tim, and Dee with her 55.3)');
+eq([everyone[0].empty, everyone[0].detail], [false, [
+  { week: 2, out: 'Drew Lock', in: 'Baker Mayfield', outId: 10, inId: 12, teamId: MITCH },
+  { week: 4, out: 'Lee Late', in: 'Breece Hall', outId: 37, inId: 28, teamId: CAL },
+]], 'its detail is every team’s swaps, each naming its team');
+eq([lineup(allR, MITCH, 2)[0], lineup(allR, CAL, 4)[3]], ['QB Baker Mayfield', 'FLEX Breece Hall'], 'and both lineups are in the one mirror');
+ok(TEAMS.every((t) => WEEKS.every((w) => allR.noise.get(t)[w] === 0)) && allR.skipped.length === 0 && allR.over.length === 0,
+  'all users is lineups only: no noise, nothing skipped, nobody over');
+// Each team's own points are what its single-team entry gives; only results can differ.
+for (const t of TEAMS) {
+  const alone = D.mirror(world, pick(D.listDecisions(world, t), `lineup-reasonable:${t}:all`));
+  eq(totals(allR, t), totals(alone, t), `team ${t}: its own totals under all users are its single-team entry’s`);
+}
+
+// PERFECT HINDSIGHT, every team (scores):
+//   wk1 Mitch: Stroud (20) for Mayfield (17): 57 + 3 = 60. Still loses to Tim's 62.
+//   wk2 nobody (Stroud's 26 only ties Lock's). wk3 nobody (Dee's Pine 8 only ties Chase's 8).
+//   wk4 Cal: Hall (10) for Late (6): 61.
+// No result changes: every record is the real one.
+const allP = D.mirror(world, everyone[1]);
+eq(allTotals(allP), [[62, 58, 58, 55], [60, 63, 68, 61], [61, 57.5, 66, 61], [55.3, 56, 50, 56]], 'all users, perfect: every team-week by hand');
+eq(flipList(allP), [], 'all users, perfect: no matchup flips');
+eq(allRecs(allP), ['3-1 / 3-1', '3-1 / 3-1', '2-2 / 2-2', '0-4 / 0-4'], 'all users, perfect: every record in both worlds');
+eq(everyone[1].detail.map((s) => [s.teamId, s.week, s.out, s.in]), [[MITCH, 1, 'Baker Mayfield', 'CJ Stroud'], [CAL, 4, 'Lee Late', 'Breece Hall']], 'its swaps');
+ok(TEAMS.every((t) => WEEKS.every((w) => cell(allP, t, w).total >= cell(allP, t, w).realTotal)), 'all users, perfect: never below real in any of the 16 team-weeks');
+ok(TEAMS.every((t) => WEEKS.every((w) => allP.noise.get(t)[w] === 0)), 'and no noise');
+
+// WHY A RECORD CAN DIFFER FROM THE SINGLE-TEAM ENTRY: the opponent changed too.
+// The same league, but Dee's bench back Pine was projected 20 in week 2 and
+// scored 3. Reasonable starts him at RB for Cook (11): 56 - 11 + 3 = 48.
+//   Mitch alone:  49 v Dee's real 56 — his win becomes a loss (2-2).
+//   All users:    49 v 48 — he still wins. Nothing flips; Mitch stays 3-1.
+const duel = buildWorld();
+Object.assign(duel.rosters.get(2).find((t) => t.id === DEE).players.find((p) => p.playerId === 29), { projected: 20, actual: 3 });
+Object.assign(duel.players.get(29).byWeek[2], { projected: 20, actual: 3 });
+const duelAll = D.mirror(duel, D.lineupDecision(duel, 'lineup-reasonable', D.ALL_TEAMS));
+const duelMitch = D.mirror(duel, D.lineupDecision(duel, 'lineup-reasonable', MITCH));
+eq([totals(duelAll, MITCH), totals(duelAll, DEE), lineup(duelAll, DEE, 2)], [[57, 49, 68, 61], [55.3, 48, 50, 56], ['QB Bo Nix', 'RB Pat Pine', 'WR Mike Evans', 'FLEX Jon Taylor']],
+  'two teams of one matchup both change');
+eq([flipList(duelAll), allRecs(duelAll)], [[], ['3-1 / 3-1', '3-1 / 3-1', '2-2 / 2-2', '0-4 / 0-4']], 'all users: 49 beats 48, so nothing flips');
+eq([totals(duelMitch, MITCH), rec(duelMitch, MITCH).mirror], [[57, 49, 68, 61], { w: 2, l: 2, t: 0 }], 'the same points for Mitch alone, and a different record: 49 loses to her real 56');
+
+// THE WEEK IN PLAY, for every team at once. T (above): Tim v Mitch over, Cal v
+// Dee in play; Goff, Wire and Tim's bench man Extra still to finish.
+//   Tim   hindsight starts Spare (28) for Young (20): 55 -> 63, beats Mitch's 61.
+//   Mitch nothing better among his finished men: 61.
+//   Cal   Hall (10) for Late (6); Goff, still playing, stays: 42 so far -> 46.
+//   Dee   Wire, still playing, stays; nothing better: 41 so far.
+// Weeks 1-3 as above (Mitch's week 1 is 60). Records: the finished game counts
+// (Tim 3-1 -> 4-0, Mitch 3-1 -> 2-2), the one in play in neither (Cal 1-2, Dee 0-3).
+const tAll = D.mirror(T, D.lineupDecision(T, 'lineup-perfect', D.ALL_TEAMS));
+eq(TEAMS.map((t) => row(tAll, t)), [[55, 63, 8], [61, 61, 0], [42, 46, 4], [41, 41, 0]], 'all users in the week in play: every team’s points so far and its difference');
+eq([lineup(tAll, CAL, 4)[0], lineup(tAll, DEE, 4)[3]], ['QB Jared Goff', 'FLEX Will Wire'], 'a starter still playing stays where he is, on every team');
+eq(tAll.pending, [{ week: 4, homeId: CAL, awayId: DEE }], 'the game in play is pending, the finished one is not');
+eq(recs(tAll), ['3-1 / 4-0', '3-1 / 2-2', '1-2 / 1-2', '0-3 / 0-3'], 'records count only the games final in both worlds');
+eq([lives(tAll), TEAMS.map((t) => totalDiff(tAll, t))], [[true, false, true, true], [8, 3, 4, 0]], 'who is live, and each team’s season difference with the week in play in it');
+// T2: Spare himself still playing. No team's hindsight starts an unfinished bench man.
+const t2All = D.mirror(T2, D.lineupDecision(T2, 'lineup-perfect', D.ALL_TEAMS));
+eq([row(t2All, TIM), recs(t2All)[0]], [[55, 55, 0], '3-1 / 3-1'], 'hindsight for all users never starts a bench man who has not finished');
+// Q (above): Cal v Dee over, Tim v Mitch in play, Young and Cal's bench back Hall
+// unfinished. Reasonable for everyone starts Hall (projected 10) for Late (6):
+// 57 -> 61, and that finished game turns pending. Mitch's week 2 is 49 again.
+//   Through week 3: Tim 3-0 · Mitch 2-1 -> 1-2 · Cal 1-2 · Dee 0-3 -> 1-2.
+const qAll = D.mirror(Q, D.lineupDecision(Q, 'lineup-reasonable', D.ALL_TEAMS));
+eq(TEAMS.map((t) => row(qAll, t)), [[35, 35, 0], [61, 61, 0], [57, 61, 4], [56, 56, 0]], 'reasonable for all users in the week in play: the unfinished man in at his projection');
+eq([qAll.pending.length, recs(qAll)], [2, ['3-0 / 3-0', '2-1 / 1-2', '1-2 / 1-2', '0-3 / 1-2']], 'both week-4 games are pending, in neither record');
+eq(JSON.stringify([world.games, world.moves, [...world.rosters], [...world.players]]), frozen, 'nor does any of this alter the closed world');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

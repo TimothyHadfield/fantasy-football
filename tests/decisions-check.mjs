@@ -33,6 +33,26 @@
 // (CAP_BENCH_QB=1: squad 1's bench QB finished 8.0 ahead of its starter, one
 // bench man still to play), and `bench-all` is the same with nobody left to
 // play — the same +8.0 and no live tag.
+//
+// Tim, 2026-10-05, later: "simplify the lineup button to just be a choice
+// between 'perfect hindsight' or 'reasonable' and they select for all weeks,
+// nothing else. Also add a button by the user selection that says 'all users'.
+// This allows you to have all users to have done a reasonable lineup or perfect
+// lineup and see the results." The two rows are checked wherever the list is;
+// ALL USERS is the `all` child (and `all-early` on the week in play). Its hand
+// numbers are squad 7's under "Reasonable", worked from the stub's rosters
+// (projection, then score, of each man in and out):
+//   wk 1  RB 710 (15.6) for RB 701 (10.6), WR 711 (14.6) for WR 705 (10.0):
+//          92.0 − 8.0 − 5.6 + 10.1 + 14.8 = 103.3   v squad 4, a loss either way
+//   wk 2  RB 710 for RB 701, WR 711 (10.3) for WR 703 (9.4), TE 713 (12.5) for
+//         TE 706 (6.4): 98.4 − 6.8 − 7.2 − 7.1 + 9.5 + 6.6 + 13.9 = 107.3   v squad 6, a loss
+//   wk 3  QB 712 (25.1) for QB 700 (17.9), RB 710 (19.6) for the FLEX RB 707 (11.7):
+//          94.8 − 15.3 − 8.3 + 21.1 + 18.2 = 110.5   v squad 8
+// so +35.9 in all. ALONE, squad 7 still beats squad 8's real 89.1 in week 3 and
+// stays 1-2. With ALL USERS on, squad 8 has set its best projections too —
+// QB 812 for 800 (+7.9), WR 811 for 804 (+7.6), TE 813 for 806 (+4.5), RB 810
+// for the FLEX 807 (+2.2): 89.1 + 22.2 = 111.3 — and 110.5 loses to it: 0-3.
+// The same points, a different record, because the opponent changed as well.
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -104,6 +124,18 @@ async function bootPage(prefs = {}) {
       id: b.dataset.id, t: text(b), selected: b.getAttribute('aria-selected') === 'true',
       empty: b.dataset.empty === '1',
     })),
+    // The LINEUPS group as a reader sees it: what each of its rows is called.
+    lineups: [...document.querySelectorAll('.dz-row')].filter((b) => /^lineup-/.test(b.dataset.kind || ''))
+      .map((b) => text(b.querySelector('.dz-what')).replace(/^live/, '')),
+    // ALL USERS: the switch, what the picker says, and the one-row-a-team table.
+    all: {
+      on: Boolean($('allSwitch') && $('allSwitch').checked),
+      picker: text($('teamSelect').querySelector('option[selected]')),
+      options: $('teamSelect').querySelectorAll('option').length,
+      rows: tableRows('teamTable'),
+      live: [...document.querySelectorAll('#teamTable tbody tr')].filter((tr) => tr.querySelector('.wk-live')).map((tr) => tr.getAttribute('data-team')),
+      shown: ['teamTable', 'weekTable', 'resultStats', 'whatIfBox'].map((id) => Boolean($(id)) && !$(id).hasAttribute('hidden')),
+    },
     groups: [...document.querySelectorAll('.dz-group')].map(text),
     lede: text($('resultLede')),
     total: cells(document.querySelector('#weekTable tbody.dz-total tr') || { children: [] }),
@@ -259,23 +291,108 @@ const CHILDREN = {
 
   /**
    * TIM'S OWN CASE (CAP_EARLY=1 + CAP_BENCH_QB): squad 1's matchup is over and
-   * its bench QB scored 8 more than its starter. Perfect hindsight for week 4,
-   * its Season by week as a difference, then the whole-season entry.
+   * its bench QB scored 8 more than its starter. Perfect hindsight (every week,
+   * the one in play with them), then its Season by week as a difference.
    */
   async bench() {
     const p = await bootPage();
     const out = { settled: await p.settle() };
     out.start = p.snap();
-    out.offered = Boolean(p.row('lineup-perfect:1:4'));
+    out.offered = Boolean(p.row('lineup-perfect:1:all'));
     if (out.offered) {
-      await p.pick('lineup-perfect:1:4');
+      await p.pick('lineup-perfect:1:all');
       out.hindsight = p.snap();
       await p.view('season', 'diff');
       out.diff = p.snap();
-      await p.view('season', 'total');
-      await p.pick('lineup-perfect:1:all');
-      out.all = p.snap();
     }
+    out.errors = p.errors;
+    return out;
+  },
+
+  /**
+   * ALL USERS, one reader: squad 7 alone first (for the hand check), then the
+   * switch on, each of the two choices, the three charts as differences, a
+   * team picked again, and the switch off. On CAP_EARLY the same on the week
+   * in play.
+   */
+  async all() {
+    const p = await bootPage(JSON.parse(process.env.DZ_PREFS || '{}'));
+    const out = { settled: await p.settle() };
+    const sw = p.$('allSwitch');
+    const toggle = async (on) => { sw.checked = on; p.fire(sw, 'change'); return p.settle(); };
+    out.control = sw ? {
+      type: sw.getAttribute('type'), role: sw.getAttribute('role'), label: text(sw.closest('label')),
+      // "By the user selection": the same small group as the team picker.
+      byPicker: Boolean(sw.closest('.dz-top')) && sw.closest('.dz-top') === p.$('teamSelect').closest('.dz-top'),
+    } : null;
+    out.start = p.snap();
+    if (!sw) { out.errors = p.errors; return out; }
+
+    p.choose(p.$('teamSelect'), 7);
+    await p.settle();
+    await p.pick('lineup-reasonable:7:all');
+    out.seven = p.snap();
+    await p.pick('lineup-perfect:7:all');
+    out.sevenPerfect = p.snap();
+    p.choose(p.$('teamSelect'), 1);
+    await p.settle();
+    out.before = p.snap();
+
+    await toggle(true);
+    out.on = p.snap();
+    out.prefsOn = JSON.parse(p.map.get('ff.prefs'));
+    for (const box of ['season', 'standings', 'summary']) await p.view(box, 'diff');
+    out.onDiff = p.snap();
+    p.choose(p.$('seasonTeam'), 7);
+    await p.settle();
+    out.season7 = p.snap();
+    await p.pick('lineup-perfect:all:all');
+    out.perfect = p.snap();
+    p.$('noiseSwitch').checked = true;
+    p.fire(p.$('noiseSwitch'), 'change');
+    await p.settle();
+    out.noise = p.snap();
+    p.$('noiseSwitch').checked = false;
+    p.fire(p.$('noiseSwitch'), 'change');
+    for (const box of ['season', 'standings', 'summary']) await p.view(box, 'total');
+
+    // Picking a team in the picker goes back to that team's own list.
+    p.choose(p.$('teamSelect'), 1);
+    await p.settle();
+    out.back = p.snap();
+    out.prefsBack = JSON.parse(p.map.get('ff.prefs'));
+    // On again, then off by the switch.
+    await toggle(true);
+    await toggle(false);
+    out.off = p.snap();
+
+    // What the engine says, asked directly: the page must only be drawing it.
+    const E = await import(moduleUrl('js/decisions.js'));
+    const stub = await import('./cap-stub-season.mjs');
+    const world = await stub.fetchDecisionWorld({});
+    out.engine = {};
+    for (const kind of ['lineup-reasonable', 'lineup-perfect']) {
+      const m = E.mirror(world, E.lineupDecision(world, kind, E.ALL_TEAMS));
+      out.engine[kind] = world.teams.map((t) => {
+        const r = m.records.get(t.id);
+        const cells = Object.values(m.teams.get(t.id).byWeek);
+        return {
+          name: t.name, real: r.real, mirror: r.mirror,
+          points: Math.round(cells.reduce((a, c) => a + Math.round(c.total * 10) - Math.round(c.realTotal * 10), 0)) / 10,
+          live: cells.some((c) => c.live === true),
+        };
+      });
+    }
+    out.errors = p.errors;
+    return out;
+  },
+
+  /** A fresh page on some prefs, looked at and no more (DZ_PREFS). */
+  async plain() {
+    const p = await bootPage(JSON.parse(process.env.DZ_PREFS || '{}'));
+    const out = { settled: await p.settle() };
+    out.start = p.snap();
+    out.prefs = JSON.parse(p.map.get('ff.prefs'));
     out.errors = p.errors;
     return out;
   },
@@ -370,6 +487,9 @@ const RUNS = {
   'summary-early': { child: 'summary', env: { CAP_EARLY: '1' } },
   bench: { child: 'bench', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
   'bench-all': { child: 'bench', env: { CAP_EARLY: '1', CAP_BENCH_QB: 'all' } },
+  all: { child: 'all', env: {} },
+  'all-early': { child: 'all', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
+  plain: { child: 'plain', env: {} },
 };
 
 function child(name, extra = {}) {
@@ -435,16 +555,19 @@ if (booted(page, 'page')) {
 
   // ---- the list
   const ids = page.start.list.map((r) => r.id);
-  ok('the list is squad 1’s decisions: its add+drop, then the lineups, season first',
-    same(ids, ['move:mv-adddrop', 'lineup-reasonable:1:all', 'lineup-perfect:1:all',
-      'lineup-reasonable:1:1', 'lineup-perfect:1:1', 'lineup-reasonable:1:2', 'lineup-perfect:1:2',
-      'lineup-reasonable:1:3', 'lineup-perfect:1:3']), ids);
+  ok('the list is squad 1’s decisions: its add+drop, then the two lineups — and no week’s own',
+    same(ids, ['move:mv-adddrop', 'lineup-reasonable:1:all', 'lineup-perfect:1:all']), ids);
   ok('grouped as Moves and Lineups', same(page.start.groups, ['Moves', 'Lineups']), page.start.groups);
+  ok('LINEUPS is exactly two rows, called "Reasonable" and "Perfect hindsight"',
+    same(page.start.lineups, ['Reasonable', 'Perfect hindsight']), page.start.lineups);
+  ok('All users is off, and the result is the one-row-a-week table with its tiles',
+    page.start.all.on === false && same(page.start.all.shown, [false, true, true, true]) && page.start.all.picker === 'Manager 1', page.start.all);
   const first = page.start.list[0];
   ok('the add+drop row reads week, what, record change, points change',
     first.t === 'Wk 2Added Free Agent WR, dropped Manager 1 WR11+1 W−1.4', first.t);
-  ok('a lineup row says which lineup, with its numbers',
-    rowOf(page.start.list.map((r) => [r.id, r.t]), 'lineup-perfect:1:all')[1] === 'AllLineup: perfect hindsight+1 W+33.9',
+  ok('a lineup row says which lineup, with its record and points change',
+    rowOf(page.start.list.map((r) => [r.id, r.t]), 'lineup-perfect:1:all')[1] === 'AllPerfect hindsight+1 W+33.9' &&
+    rowOf(page.start.list.map((r) => [r.id, r.t]), 'lineup-reasonable:1:all')[1] === 'AllReasonable+1 W+23.0',
     page.start.list.map((r) => r.t));
   ok('the first decision that changes something is picked', first.selected && page.start.list.filter((r) => r.selected).length === 1);
 
@@ -567,7 +690,7 @@ if (booted(page, 'page')) {
     ok('noise, switched off before the reload, is still off', again.start.noiseOn === false &&
       Object.values(again.start.dim).every((list) => list.length === 0), again.start.noiseOn);
     ok('it has a remove button', again.hadRemove === true);
-    ok('removed, it is gone from the list', !again.after.list.some((r) => r.id.startsWith('whatif:')) && again.after.list.length === 9, again.after.list.map((r) => r.id));
+    ok('removed, it is gone from the list', !again.after.list.some((r) => r.id.startsWith('whatif:')) && again.after.list.length === 3, again.after.list.map((r) => r.id));
     ok('and from the prefs', again.prefs['decisions.whatif.99-2026'] === undefined, again.prefs);
     ok('and a real decision is picked instead', again.after.list.filter((r) => r.selected).length === 1 && again.after.groups[0] === 'Moves', again.after.groups);
   }
@@ -595,18 +718,19 @@ const tally = (weeks, side) => {
 const agree = (s) => tally(s.weeks, 'real') === s.stats.real && tally(s.weeks, 'mirror') === s.stats.mirror;
 const col4 = (rows) => rows.map((r) => r[4]);
 const bare = (rows) => rows.map((r) => r.slice(0, 5).map((c) => c.replace(/\s*[▲▼]$/, '')));
-const WEEK4 = ['lineup-reasonable:1:all', 'lineup-perfect:1:all', 'lineup-reasonable:1:4', 'lineup-perfect:1:4'];
+const LIVE_ROWS = ['lineup-reasonable:1:all', 'lineup-perfect:1:all'];
 
 const early = child('early');
 if (booted(early, 'week in play')) {
   ok('the status line says what is counted', /: 3 finished weeks \+ week 4 so far, 5 moves\.$/.test(early.status), early.status);
   ok('and so does the line under the title', early.start.sub === 'Capture Stub League · 3 finished weeks + week 4 so far', early.start.sub);
   const ids = early.start.list.map((r) => r.id);
-  ok('BOTH week-4 lineups are offered, hindsight too, though squad 1’s bench has not played',
-    ids.includes('lineup-reasonable:1:4') && ids.includes('lineup-perfect:1:4') && ids.length === 11, ids);
-  ok('with nobody on the bench finished, hindsight has nothing to change', rowOf(early.start.list.map((r) => [r.id, r.t]), 'lineup-perfect:1:4')[1] ===
-    'Wk 4liveLineup: perfect hindsightNo change', early.start.list.map((r) => r.t));
-  ok('LIVE sits by the week of each week-4 entry and by "All", and by no other row', same(early.start.tags.list, WEEK4), early.start.tags.list);
+  ok('the week in play adds no row: the add+drop and the same two lineups, which take it in',
+    same(ids, ['move:mv-adddrop', 'lineup-reasonable:1:all', 'lineup-perfect:1:all']) &&
+    same(early.start.lineups, ['Reasonable', 'Perfect hindsight']), ids);
+  ok('with nobody on the bench finished, hindsight adds nothing for week 4: the finished weeks’ +33.9', rowOf(early.start.list.map((r) => [r.id, r.t]), 'lineup-perfect:1:all')[1] ===
+    'AlllivePerfect hindsight+1 W+33.9', early.start.list.map((r) => r.t));
+  ok('LIVE sits by "All" on both lineup rows, and by no other row', same(early.start.tags.list, LIVE_ROWS), early.start.tags.list);
 
   // The add+drop undone, as before, with a fourth week under it.
   const a = early.addDrop;
@@ -667,8 +791,8 @@ if (booted(early, 'week in play')) {
   // A squad whose own matchup is still being played: one starter finished (15.5).
   // Undoing its trade starts an RB projected 16.7 where one projected 16.8 was.
   const t5 = early.team5;
-  ok('a squad still playing is offered both week-4 lineups too', t5.list.length === 11 &&
-    t5.list.some((r) => r.id === 'lineup-reasonable:5:4') && t5.list.some((r) => r.id === 'lineup-perfect:5:4'), t5.list.map((r) => r.id));
+  ok('a squad still playing has the same short list: its trade and the two lineups',
+    same(t5.list.map((r) => r.id), ['move:mv-trade', 'lineup-reasonable:5:all', 'lineup-perfect:5:all']), t5.list.map((r) => r.id));
   ok('its week-4 row has what is known so far, and "In play" for the result',
     same(t5.weeks[3].c, ['4live', 'Manager 3', '15.5', '15.4', '−0.1', 'In play']), t5.weeks[3]);
   ok('the Total row and the tiles: four weeks of points (388.9 + 15.5), three results', same(t5.total, ['Total', '404.4', '404.0', '−0.4', '0']) &&
@@ -698,40 +822,42 @@ if (booted(early, 'week in play')) {
 // Squad 1's week-4 matchup is over (118.3, a loss to squad 4). Its
 // starting QB scored 10.1 and its bench QB 18.1; the free agent on its bench has
 // not played. Perfect hindsight starts the bench QB: 118.3 − 10.1 + 18.1 = 126.3,
-// +8.0, and the loss is a win.
+// +8.0, and the loss is a win. There is no week-4 row to pick any more: it is
+// "Perfect hindsight", which takes the week in play with the finished ones
+// (+11.5, +11.4, +11.0 and this +8.0 = +41.9).
 const bench = child('bench');
 if (booted(bench, 'bench QB, week in play')) {
   ok('perfect hindsight for the week in play is offered', bench.offered === true);
   const texts = Object.fromEntries(bench.start.list.map((r) => [r.id, r.t]));
-  ok('THE LIST ROW shows +8.0 and the win, marked live', texts['lineup-perfect:1:4'] === 'Wk 4liveLineup: perfect hindsight+1 W+8.0', texts['lineup-perfect:1:4']);
-  ok('the whole-season entry counts it (33.9 + 8.0) and is marked live by "All"', texts['lineup-perfect:1:all'] === 'AllliveLineup: perfect hindsight+2 W+41.9',
+  ok('there is no week-4 row: the list is the add+drop and the two lineups', same(bench.start.list.map((r) => r.id),
+    ['move:mv-adddrop', 'lineup-reasonable:1:all', 'lineup-perfect:1:all']), bench.start.list.map((r) => r.id));
+  ok('THE LIST ROW counts it (33.9 + 8.0) and the win, marked live by "All"', texts['lineup-perfect:1:all'] === 'AlllivePerfect hindsight+2 W+41.9',
     texts['lineup-perfect:1:all']);
-  ok('LIVE is on the week-4 and "All" rows only', same(bench.start.tags.list, WEEK4), bench.start.tags.list);
+  ok('LIVE is on the two lineup rows only', same(bench.start.tags.list, LIVE_ROWS), bench.start.tags.list);
   const h = bench.hindsight;
-  ok('THE WEEK ROW shows +8.0 and the flipped result', same(h.weeks.map((w) => w.c), [
-    ['1', 'Manager 10', '114.9', '114.9', '0.0', 'W'],
-    ['2', 'Manager 2', '111.1', '111.1', '0.0', 'T'],
-    ['3', 'Manager 3', '117.3', '117.3', '0.0', 'L'],
+  ok('THE WEEK ROW shows +8.0 and the flipped result, beside the finished weeks', same(h.weeks.map((w) => w.c), [
+    ['1', 'Manager 10', '114.9', '126.4', '+11.5', 'W'],
+    ['2', 'Manager 2', '111.1', '122.5', '+11.4', 'T → W'],
+    ['3', 'Manager 3', '117.3', '128.3', '+11.0', 'L'],
     ['4live', 'Manager 4', '118.3', '126.3', '+8.0', 'L → W'],
-  ]) && same(h.weeks.map((w) => w.flip), [false, false, false, true]), h.weeks.map((w) => w.c));
-  ok('THE TOTAL ROW shows +8.0', same(h.total, ['Total', '461.6', '469.6', '+8.0', '+1 W']), h.total);
-  ok('THE TILES show +8.0, and the game counts though a bench man is still to play', same(h.stats, { real: '1-2-1', mirror: '2-1-1', points: '+8.0' }) && agree(h),
+  ]) && same(h.weeks.map((w) => w.flip), [false, true, false, true]), h.weeks.map((w) => w.c));
+  ok('THE TOTAL ROW counts it', same(h.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']), h.total);
+  ok('THE TILES count it, and the game counts though a bench man is still to play', same(h.stats, { real: '1-2-1', mirror: '3-1', points: '+41.9' }) && agree(h),
     h.stats);
   ok('LIVE by the week number: weekly table, and both Season by week heads', same(h.tags.weeks, ['4']) && same(h.tags.season, [['4live'], ['4live']]), h.tags);
   ok('Season by week: the bench QB is in the QB row with his 18.1, and the total is 126.3',
     col4(h.season.curBody)[0] === 'M. 1 QB010.1' && col4(h.season.body)[0] === 'M. 1 QB1218.1' && h.season.hyp[4] === '126.3', col4(h.season.body));
   ok('no cell is a projection: every man shown has finished', same(h.tags.proj, [[], []]), h.tags.proj);
-  ok('as a difference: +8.0 at QB, +8.0 in the total row, and the finished weeks zero',
-    col4(bench.diff.season.body)[0] === 'M. 1 QB12+8.0' && same(bench.diff.season.hyp, ['Total', '0.0', '0.0', '0.0', '+8.0']) &&
-    Math.round(bench.diff.season.vals.slice(0, 40).reduce((s, v) => s + v, 0) * 10) / 10 === 8, [col4(bench.diff.season.body), bench.diff.season.hyp]);
-  ok('the game is final in both worlds, so the standings and the chart count it: 2–1–1, squad 4 3–1',
-    rowOf(h.standings.hyp, 'Manager 1')[1] === '2–1–1' && rowOf(h.standings.hyp, 'Manager 4')[1] === '3–1' &&
-    rowOf(h.summary.hyp, 'Manager 1')[1] === '2-1-1' && rowOf(h.summary.cur, 'Manager 1')[1] === '1-2-1',
+  // Week 4's column: the QB up 8.0; RB 7 moves from FLEX to RB2 (17.4 for the
+  // 11.4 there, +6.0) and RB 2 takes FLEX (11.4 for 17.4, −6.0). 8.0 in all.
+  const w4 = bench.diff.season.vals.filter((_, i) => i % 4 === 3).slice(0, 10);
+  ok('as a difference: +8.0 at QB, +8.0 in the total row, and week 4’s column adds up to it',
+    col4(bench.diff.season.body)[0] === 'M. 1 QB12+8.0' && same(bench.diff.season.hyp, ['Total', '+11.5', '+11.4', '+11.0', '+8.0']) &&
+    same(w4, [8, 0, 6, 0, 0, 0, 0, -6, 0, 0]), [col4(bench.diff.season.body), bench.diff.season.hyp, w4]);
+  ok('the game is final in both worlds, so the standings and the chart count it: 3–1, squad 4 3–1',
+    rowOf(h.standings.hyp, 'Manager 1')[1] === '3–1' && rowOf(h.standings.hyp, 'Manager 4')[1] === '3–1' &&
+    rowOf(h.summary.hyp, 'Manager 1')[1] === '3-1' && rowOf(h.summary.cur, 'Manager 1')[1] === '1-2-1',
     [rowOf(h.standings.hyp, 'Manager 1'), rowOf(h.summary.hyp, 'Manager 1')]);
-  const all = bench.all;
-  ok('the whole season: week 4’s +8.0 beside the finished weeks’, and in the total',
-    same(all.weeks.map((w) => w.c[4]), ['+11.5', '+11.4', '+11.0', '+8.0']) && same(all.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']) &&
-    same(all.stats, { real: '1-2-1', mirror: '3-1', points: '+41.9' }) && agree(all), [all.weeks.map((w) => w.c), all.total, all.stats]);
 }
 
 // The same league with that last bench man finished: nothing is partial.
@@ -739,11 +865,150 @@ const done = child('bench-all');
 if (booted(done, 'bench QB, everybody finished')) {
   const h = done.hindsight;
   ok('the same +8.0 everywhere', same(h.weeks[3].c, ['4', 'Manager 4', '118.3', '126.3', '+8.0', 'L → W']) &&
-    same(h.total, ['Total', '461.6', '469.6', '+8.0', '+1 W']) && same(h.stats, { real: '1-2-1', mirror: '2-1-1', points: '+8.0' }), [h.weeks[3], h.total, h.stats]);
-  ok('and NO live tag anywhere on the page', h.tags.all === 0 && done.all.tags.all === 0 && same(h.tags.weeks, []) && same(h.tags.list, []) &&
+    same(h.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']) && same(h.stats, { real: '1-2-1', mirror: '3-1', points: '+41.9' }), [h.weeks[3], h.total, h.stats]);
+  ok('and NO live tag anywhere on the page', h.tags.all === 0 && done.diff.tags.all === 0 && same(h.tags.weeks, []) && same(h.tags.list, []) &&
     same(h.tags.season, [[], []]), h.tags);
-  ok('the list rows read without it', h.list.find((r) => r.id === 'lineup-perfect:1:4').t === 'Wk 4Lineup: perfect hindsight+1 W+8.0' &&
-    h.list.find((r) => r.id === 'lineup-perfect:1:all').t === 'AllLineup: perfect hindsight+2 W+41.9', h.list.map((r) => r.t));
+  ok('the list row reads without it', h.list.find((r) => r.id === 'lineup-perfect:1:all').t === 'AllPerfect hindsight+2 W+41.9' &&
+    h.list.length === 3, h.list.map((r) => r.t));
+}
+
+// ---- ALL USERS: every team sets the same lineup, every week
+// The hand numbers are in the header: squad 7 under "Reasonable" is 103.3,
+// 107.3 and 110.5 (+35.9). Alone it stays 1-2; with every team doing it, squad
+// 8's 111.3 beats that 110.5 and squad 7 is 0-3.
+const recOf = (r) => `${r.w}-${r.l}${r.t ? `-${r.t}` : ''}`;
+const signed = (n) => `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(1)}`;
+const ALL_IDS = ['lineup-reasonable:all:all', 'lineup-perfect:all:all'];
+const MINE = ['move:mv-adddrop', 'lineup-reasonable:1:all', 'lineup-perfect:1:all'];
+/** The page's one-row-a-team table against the engine asked directly. */
+const drawsEngine = (snapshot, facts) => facts.length === 10 && facts.every((t) => {
+  const row = snapshot.all.rows.find((r) => r[0].replace(/live$/, '') === t.name) || [];
+  return row[1] === recOf(t.real) && row[2] === recOf(t.mirror) && row[4] === signed(t.points) &&
+    snapshot.all.live.length === facts.filter((x) => x.live).length;
+});
+const everyone = child('all');
+if (booted(everyone, 'all users')) {
+  ok('"All users" is a switch in the same small group as the team picker',
+    same(everyone.control, { type: 'checkbox', role: 'switch', label: 'All users', byPicker: true }), everyone.control);
+  ok('off, the page is one team’s: its list, its week table and tiles, the what-if form',
+    same(everyone.start.list.map((r) => r.id), MINE) && same(everyone.start.all.shown, [false, true, true, true]) &&
+    everyone.start.all.on === false && everyone.start.all.options === 10, [everyone.start.list.map((r) => r.id), everyone.start.all]);
+
+  // Squad 7 alone, for the hand check.
+  const seven = everyone.seven;
+  ok('squad 7 alone, Reasonable: the hand numbers, and still 1-2', same(seven.weeks.map((w) => w.c), [
+    ['1', 'Manager 4', '92.0', '103.3', '+11.3', 'L'],
+    ['2', 'Manager 6', '98.4', '107.3', '+8.9', 'L'],
+    ['3', 'Manager 8', '94.8', '110.5', '+15.7', 'W'],
+  ]) && same(seven.total, ['Total', '285.2', '321.1', '+35.9', '0']) && same(seven.stats, { real: '1-2', mirror: '1-2', points: '+35.9' }),
+  [seven.weeks.map((w) => w.c), seven.total, seven.stats]);
+
+  const on = everyone.on;
+  ok('ON: the switch is set and the picker says "All users"', on.all.on === true && on.all.picker === 'All users', on.all);
+  ok('the list is the two lineup choices and nothing else: no moves, no trades, no what-ifs',
+    same(on.list.map((r) => r.id), ALL_IDS) && same(on.groups, ['Lineups']) && same(on.lineups, ['Reasonable', 'Perfect hindsight']) &&
+    on.list.filter((r) => r.selected).length === 1 && on.list[0].selected, [on.list, on.groups]);
+  ok('the what-if form, the week table and the tiles give way to one row a team', same(on.all.shown, [true, false, false, false]), on.all.shown);
+  const REASONABLE = [
+    ['Manager 4', '3-0', '3-0', '0', '+36.1'],
+    ['Manager 6', '3-0', '3-0', '0', '+40.9'],
+    ['Manager 10', '2-1', '1-2', '−1 W', '+17.1'],
+    ['Manager 1', '1-1-1', '2-1', '+1 W', '+23.0'],
+    ['Manager 5', '1-2', '2-1', '+1 W', '+51.6'],
+    ['Manager 3', '1-2', '1-2', '0', '+29.2'],
+    ['Manager 8', '1-2', '2-1', '+1 W', '+31.1'],
+    ['Manager 9', '1-2', '1-2', '0', '+22.7'],
+    ['Manager 7', '1-2', '0-3', '−1 W', '+35.9'],
+    ['Manager 2', '0-2-1', '0-3', '+1 L', '+23.0'],
+  ];
+  ok('REASONABLE, every team: actual record, hypothetical record, the change, the points', same(on.all.rows, REASONABLE), on.all.rows);
+  ok('squad 7: the same +35.9 as alone, but 0-3 — squad 8’s 111.3 now beats its 110.5',
+    rowOf(on.all.rows, 'Manager 7')[4] === seven.stats.points && rowOf(on.all.rows, 'Manager 7')[2] === '0-3' && seven.stats.mirror === '1-2',
+    [rowOf(on.all.rows, 'Manager 7'), seven.stats]);
+  ok('in the order of the Standings table', same(on.all.rows.map((r) => r[0]), on.standings.cur.map((r) => r[0])), on.standings.cur.map((r) => r[0]));
+  ok('the list rows carry the league’s points, and no record', same(on.list.map((r) => r.t), ['AllReasonable+310.6', 'AllPerfect hindsight+427.3']) &&
+    Math.round(REASONABLE.reduce((a, r) => a + num(r[4]), 0) * 10) / 10 === 310.6, on.list.map((r) => r.t));
+  ok('no week is in play: no live tag', on.tags.all === 0 && on.all.live.length === 0, on.tags);
+  ok('the table is the engine’s all-teams result, drawn', drawsEngine(on, everyone.engine['lineup-reasonable']), everyone.engine['lineup-reasonable']);
+
+  const d = everyone.onDiff;
+  ok('standings, as a difference: each team’s record and points change are the table’s',
+    same(d.standings.hyp.map((r) => [r[0], r[1], r[4]]), REASONABLE.map((r) => [r[0], r[3], r[4]])), d.standings.hyp.map((r) => [r[0], r[1], r[4]]));
+  ok('the chart, as a difference: each team’s record change is the table’s', d.summary.hyp.length === 10 &&
+    d.summary.hyp.every((r) => r[1] === rowOf(REASONABLE, r[0])[3]), d.summary.hyp.map((r) => r.slice(0, 2)));
+  ok('"Current" does not move with the mode: the same chart as before the switch',
+    same(bare(on.summary.cur), bare(everyone.before.summary.cur)) && same(on.standings.cur, everyone.before.standings.cur), on.summary.cur[0]);
+  ok('Season by week offers every team, starting on mine', same(on.season.teams, REASONABLE.map((r) => r[0]).sort((a, b) => num(a) - num(b))) &&
+    on.season.teamRowHidden === false && same(on.season.cur, ['Total', '114.9', '111.1', '117.3']), [on.season.teams, on.season.cur]);
+  ok('squad 7 picked there: the hand numbers week by week', same(everyone.season7.season.hyp, ['Total', '+11.3', '+8.9', '+15.7']), everyone.season7.season.hyp);
+
+  const pf = everyone.perfect;
+  const PERFECT = [
+    ['Manager 4', '3-0', '3-0', '0', '+48.3'],
+    ['Manager 6', '3-0', '3-0', '0', '+53.5'],
+    ['Manager 10', '2-1', '1-2', '−1 W', '+32.4'],
+    ['Manager 1', '1-1-1', '1-2', '+1 L', '+33.9'],
+    ['Manager 5', '1-2', '2-1', '+1 W', '+58.4'],
+    ['Manager 3', '1-2', '1-2', '0', '+41.8'],
+    ['Manager 8', '1-2', '1-1-1', '−1 L', '+36.6'],
+    ['Manager 9', '1-2', '1-2', '0', '+33.2'],
+    ['Manager 7', '1-2', '0-2-1', '−1 W', '+48.1'],
+    ['Manager 2', '0-2-1', '1-2', '+1 W', '+41.1'],
+  ];
+  ok('PERFECT HINDSIGHT, every team', same(pf.all.rows, PERFECT) && pf.list[1].selected && pf.lede === 'Every team, every week, perfect hindsight.',
+    [pf.all.rows, pf.lede]);
+  ok('nobody scores less with hindsight, and no less than with projections', PERFECT.every((r, i) => num(r[4]) >= num(REASONABLE[i][4]) && num(r[4]) >= 0));
+  ok('squad 1 and squad 7: the same points as each one’s own "Perfect hindsight" row',
+    rowOf(PERFECT, 'Manager 1')[4] === '+33.9' && /\+33\.9$/.test(everyone.start.list[2].t) &&
+    rowOf(PERFECT, 'Manager 7')[4] === everyone.sevenPerfect.stats.points && everyone.sevenPerfect.stats.mirror === '2-1',
+    [everyone.start.list[2].t, everyone.sevenPerfect.stats]);
+  ok('it too is the engine’s result, drawn', drawsEngine(pf, everyone.engine['lineup-perfect']), everyone.engine['lineup-perfect']);
+  ok('standings and the chart follow the choice', same(pf.standings.hyp.map((r) => [r[0], r[1], r[4]]), PERFECT.map((r) => [r[0], r[3], r[4]])) &&
+    pf.summary.hyp.every((r) => r[1] === rowOf(PERFECT, r[0])[3]), pf.standings.hyp.map((r) => [r[0], r[1], r[4]]));
+  ok('"Display noise" still switches, and the table stays', everyone.noise.noiseOn === true && everyone.noise.all.on === true &&
+    same(everyone.noise.all.rows, PERFECT), everyone.noise.noiseOn);
+
+  // Remembered, and undone both ways.
+  ok('the mode is remembered for this league', everyone.prefsOn['decisions.all.99-2026'] === true, everyone.prefsOn);
+  const kept = child('plain', { DZ_PREFS: JSON.stringify(everyone.prefsOn) });
+  if (booted(kept, 'all users, reloaded')) {
+    ok('after a reload All users is still on, with the same table', kept.start.all.on === true && same(kept.start.all.rows, REASONABLE) &&
+      same(kept.start.list.map((r) => r.id), ALL_IDS) && same(kept.start.all.shown, [true, false, false, false]), kept.start.all);
+  }
+  where = 'all users';
+  for (const [name, s] of [['a team picked in the picker', everyone.back], ['the switch turned off', everyone.off]]) {
+    ok(`${name}: that team’s own list and tables are back`, s.all.on === false && s.all.picker === 'Manager 1' && s.all.options === 10 &&
+      same(s.list.map((r) => r.id), MINE) && same(s.all.shown, [false, true, true, true]) && same(s.weeks, everyone.start.weeks) &&
+      same(s.stats, everyone.start.stats), [s.all.on, s.list.map((r) => r.id), s.all.shown]);
+  }
+  ok('and it is no longer remembered', everyone.prefsBack['decisions.all.99-2026'] === undefined, everyone.prefsBack);
+
+  // The page saves no selection, so an old week's lineup can only come back as
+  // a stale key: it must not stop the page, and the first row is picked.
+  const stale = child('plain', { DZ_PREFS: JSON.stringify({ ...everyone.prefsBack, 'decisions.selected.99-2026': 'lineup-perfect:1:2' }) });
+  if (booted(stale, 'an old week’s lineup in the prefs')) {
+    ok('the page shows squad 1’s list with its first row picked', same(stale.start.list.map((r) => r.id), MINE) &&
+      stale.start.list[0].selected && stale.start.weeks.length === 3, stale.start.list);
+  }
+}
+
+// The same on the week in play (squad 1's bench QB case): every team's row
+// counts what is known, and says so.
+const liveAll = child('all-early');
+if (booted(liveAll, 'all users, week in play')) {
+  const on = liveAll.on;
+  const pf = liveAll.perfect;
+  ok('every row is marked live, and both list rows', on.all.live.length === 10 && same(on.tags.list, ALL_IDS) &&
+    on.all.rows.every((r) => /live$/.test(r[0])), [on.all.live, on.tags.list]);
+  ok('Reasonable is the engine’s result, drawn', drawsEngine(on, liveAll.engine['lineup-reasonable']), on.all.rows);
+  ok('Perfect hindsight is the engine’s result, drawn', drawsEngine(pf, liveAll.engine['lineup-perfect']), pf.all.rows);
+  ok('squad 1, hindsight: the finished weeks’ +33.9 and the bench QB’s +8.0; squad 4 improved too, so the loss stands',
+    same(rowOf(pf.all.rows, 'Manager 1live'), ['Manager 1live', '1-2-1', '1-3', '+1 L', '+41.9']), rowOf(pf.all.rows, 'Manager 1live'));
+  ok('squad 7: the same points as alone, in both choices',
+    rowOf(on.all.rows, 'Manager 7live')[4] === liveAll.seven.stats.points && rowOf(pf.all.rows, 'Manager 7live')[4] === liveAll.sevenPerfect.stats.points,
+    [rowOf(on.all.rows, 'Manager 7live'), liveAll.seven.stats, liveAll.sevenPerfect.stats]);
+  ok('Season by week still marks week 4 live', same(on.tags.season, [['4live'], ['4live']]) && on.season.cur.length === 5, on.tags.season);
+  ok('off again: squad 1’s list, the two lineups live', same(liveAll.off.list.map((r) => r.id), MINE) && same(liveAll.off.tags.list, LIVE_ROWS), liveAll.off.tags.list);
 }
 
 // ---- the world cannot be read

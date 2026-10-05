@@ -52,6 +52,12 @@
 //
 // Every other week is exactly what it was.
 //
+// ALL USERS. Tim, 2026-10-05: "add a button by the user selection that says
+// 'all users'. This allows you to have all users to have done a reasonable
+// lineup or perfect lineup and see the results." A lineup decision whose
+// `teamId` is ALL_TEAMS sets EVERY team's lineup by the one rule, each from the
+// roster it really had — the same per-team rules, the week in play included.
+//
 // Slot eligibility comes from js/espn.js rather than being restated here, for
 // the reason js/forecast.js gives: a second copy of the table is how the flex
 // quietly starts accepting a quarterback.
@@ -72,6 +78,9 @@ export const NOISE = {
   freedMax: 0.6,          // ...capped here
   dim: 0.65,              // the page's dimming: opacity = 1 - dim * noise (display only, not used in here)
 };
+
+/** A lineup decision's `teamId` when it is every team's at once ("All users"). */
+export const ALL_TEAMS = 'all';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -471,7 +480,7 @@ function resolve(world, decision) {
  * One mirror universe: the season with one decision changed.
  *
  * @param {object} world see docs/decisions-review-plan.md, "The contract"
- * @param {object} decision an entry from `listDecisions`, or
+ * @param {object} decision an entry from `listDecisions` or `lineupDecision`, or
  *        `{ kind:'whatif-trade', week, teamId, withTeamId, gives, gets }`
  * @returns {{teams:Map, games:Array, flips:Array, records:Map, skipped:Array,
  *            noise:Map, over:Array, pending:Array}} `over` (not in the plan's
@@ -512,8 +521,9 @@ export function mirror(world, decision) {
       let lineup = realLineup;
 
       if (plan.mode === 'lineup') {
-        // Rule 4: only the picked team changes, in the picked week (or every week).
-        if (teamId === plan.teamId && (plan.week === null || plan.week === week)) {
+        // Rule 4: only the picked team changes (or, for ALL_TEAMS, every team
+        // alike), in the picked week (or every week).
+        if ((plan.teamId === ALL_TEAMS || teamId === plan.teamId) && (plan.week === null || plan.week === week)) {
           lineup = lineupFor(real, slots, plan.kind, week === partial);
         }
       } else if (div.size) {
@@ -726,14 +736,59 @@ function swapsOf(week, cell) {
 }
 
 /**
+ * One lineup decision, ready to hand to `mirror`: `kind` is 'lineup-reasonable'
+ * (highest projections) or 'lineup-perfect' (hindsight).
+ *
+ * `teamId` may be ALL_TEAMS: every team's lineup set by that rule at once. Each
+ * swap in `detail` then names its `teamId` too.
+ *
+ * `week` null is every week held, THE WEEK IN PLAY included — hindsight there
+ * judges only the men who have finished (`hindsightSoFar`). A number is that
+ * one week alone.
+ *
+ * @returns {{id:string, kind:string, week:number|null, label:string,
+ *           detail:Array, empty:boolean, teamId:*}}
+ */
+export function lineupDecision(world, kind, teamId, week = null) {
+  const all = teamId === ALL_TEAMS;
+  const said = { 'lineup-reasonable': 'highest projections', 'lineup-perfect': 'perfect hindsight' };
+  const what = week === null
+    ? (all ? 'Every team, every week' : "Every week's lineup")
+    : (all ? `Every team, week ${week}` : `Week ${week} lineup`);
+  const decision = {
+    id: `${kind}:${teamId}:${week === null ? 'all' : week}`, kind, week,
+    label: `${what}, ${said[kind]}`,
+    detail: [], empty: true, teamId,
+  };
+  const m = mirror(world, decision);
+  for (const t of all ? world.teams || [] : [{ id: teamId }]) {
+    const cells = m.teams.get(t.id);
+    for (const w of world.weeks || []) {
+      const cell = cells && cells.byWeek[w];
+      if (!cell || !cell.changed) continue;
+      decision.detail.push(...swapsOf(w, cell).map((s) => (all ? { ...s, teamId: t.id } : s)));
+    }
+  }
+  decision.empty = decision.detail.length === 0;
+  return decision;
+}
+
+/**
  * Every decision one team made, each ready to hand to `mirror`.
  *
- * Order: the team's moves in time order, then the two whole-season lineup
- * entries, then each week's two. The week's lineup is the decision (not each
- * of the ~28 lineup moves ESPN logs); the swaps that differ are its `detail`.
+ * Order: the team's moves in time order, then its two lineup entries, highest
+ * projections and perfect hindsight, each over EVERY week (`week` null), then
+ * the same two for each week alone. The lineup is the decision (not each of
+ * the ~28 lineup moves ESPN logs a week); the swaps that differ are its
+ * `detail`.
  *
- * THE WEEK IN PLAY has both lineup entries like any other week, for every team:
- * hindsight there judges only the men who have finished (`hindsightSoFar`).
+ * The Decisions page shows only the two whole-season entries (Tim, 2026-10-05:
+ * "simplify the lineup button to just be a choice between 'perfect hindsight'
+ * or 'reasonable' and they select for all weeks, nothing else"). The one-week
+ * entries stay here for the callers that judge a single week.
+ *
+ * `teamId` ALL_TEAMS lists the two whole-season entries alone, for every team
+ * at once: a move belongs to one team.
  *
  * Besides the plan's fields each entry carries `teamId`, and a move carries
  * `moveId` and `at`, which is what `mirror` reads.
@@ -745,7 +800,7 @@ export function listDecisions(world, teamId) {
   const out = [];
   const anyChanged = (m) => [...m.teams.values()].some((t) => Object.values(t.byWeek).some((c) => c.changed));
 
-  for (const move of world.moves || []) {
+  for (const move of teamId === ALL_TEAMS ? [] : world.moves || []) {
     const mine = move.teamId === teamId || (move.trade && move.trade.withTeamId === teamId);
     if (!mine) continue;
     const decision = {
@@ -759,25 +814,9 @@ export function listDecisions(world, teamId) {
     out.push(decision);
   }
 
-  const weeks = world.weeks || [];
-  const said = { 'lineup-reasonable': 'highest projections', 'lineup-perfect': 'perfect hindsight' };
-  const lineup = (kind, week) => {
-    const decision = {
-      id: `${kind}:${teamId}:${week === null ? 'all' : week}`, kind, week,
-      label: week === null ? `Every week's lineup, ${said[kind]}` : `Week ${week} lineup, ${said[kind]}`,
-      detail: [], empty: true, teamId,
-    };
-    const cells = mirror(world, decision).teams.get(teamId);
-    for (const w of weeks) {
-      const cell = cells && cells.byWeek[w];
-      if (cell && cell.changed) decision.detail.push(...swapsOf(w, cell));
-    }
-    decision.empty = decision.detail.length === 0;
-    return decision;
-  };
-  for (const kind of ['lineup-reasonable', 'lineup-perfect']) out.push(lineup(kind, null));
-  for (const week of weeks) {
-    for (const kind of ['lineup-reasonable', 'lineup-perfect']) out.push(lineup(kind, week));
+  for (const kind of ['lineup-reasonable', 'lineup-perfect']) out.push(lineupDecision(world, kind, teamId));
+  for (const week of teamId === ALL_TEAMS ? [] : world.weeks || []) {
+    for (const kind of ['lineup-reasonable', 'lineup-perfect']) out.push(lineupDecision(world, kind, teamId, week));
   }
 
   return out;
