@@ -65,6 +65,11 @@ const state = {
   // The weekly rosters that same read brought back, kept for the players
   // scatter (renderFit). It is the SAME read — nothing extra is asked of ESPN.
   weekTeams: null,      // { key, map: Map<week, teams[]> }
+
+  // Each team's chance of winning the game it is playing right now, off that
+  // same read (`capture.liveWinChancesFrom`). Empty unless a matchup is under
+  // way; null on demo and until the read lands. See `recordOf`.
+  live: null,           // { key, chances: Map<teamId, 0..1> }
 };
 
 // "Which team am I" is the same answer every visit, so it is remembered; the
@@ -101,18 +106,31 @@ const esc = (s) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
   );
 
-/** W–L, plus the tie a two-game season can already contain. Ties were computed
- *  and never shown, so a team that tied then won read as "1–0". */
-const record = (t) => `${t.wins}–${t.losses}${t.ties ? `–${t.ties}` : ''}`;
+/**
+ * A team's record as it stands now (`capture.recordNow`, the one Schedule and
+ * Summary print too): W–L, plus the tie a two-game season can already contain
+ * — ties were computed and never shown, so a team that tied then won read as
+ * "1–0" — and, while its game is being played, that game counted as its chance
+ * of winning it: 3–2 at 20% reads 3.2–2.8 (Tim, 2026-10-05). `.text` to print,
+ * `.title` for the basis, `.wins` / `.games` to sort on.
+ */
+const recordOf = (t) => capture.recordNow(
+  { w: t.wins, l: t.losses, t: t.ties },
+  state.live && state.live.key === scheduleKey() ? state.live.chances.get(t.id) ?? null : null,
+);
+const record = (t) => recordOf(t).text;
 
 /**
  * Win percentage the way ESPN ranks a standings table: a tie is half a win.
  * This league has no matchup tie-breaker, so a tie stands and has to count.
- * Null before a game is played.
+ * Null before a game is played. A game being played counts as a game, won by
+ * its chance — the number the Record cell shows — so the column sorts on what
+ * it prints and a team mid-game is not ranked on one game fewer than a team
+ * whose matchup finished early.
  */
 const winPct = (t) => {
-  const games = t.wins + t.losses + t.ties;
-  return games ? (t.wins + t.ties / 2) / games : null;
+  const r = recordOf(t);
+  return r.games ? r.wins / r.games : null;
 };
 
 /** ESPN's order: win percentage, then points for. */
@@ -299,6 +317,7 @@ function render() {
   if (state.oppProj && state.oppProj.key !== key) state.oppProj = null;
   if (state.oppPending && state.oppPending !== key) state.oppPending = null;
   if (state.weekTeams && state.weekTeams.key !== key) state.weekTeams = null;
+  if (state.live && state.live.key !== key) state.live = null;
 
   const weeks = weekCount();
 
@@ -351,6 +370,13 @@ function accuracyTile(bucket) {
     : `${Math.round(bucket.accuracy * 100)}% ${n}`;
 }
 
+/** "3–1 Name"; a record with a game in play carries its basis as a title (rule 7). */
+function bestRecordTile(top) {
+  const r = recordOf(top);
+  const rec = r.live ? `<span title="${esc(r.title)}">${r.text}</span>` : r.text;
+  return `${rec} ${esc(top.name)}`;
+}
+
 function renderGlance() {
   const s = state.stats;
   const weeks = weekCount();
@@ -371,7 +397,7 @@ function renderGlance() {
       none ? dash : fmt(s.leagueAvgProjected)],
     ['Highest week', box ? fmt(box.max) : dash],
     ['Lowest week', box ? fmt(box.min) : dash],
-    ['Best record', top && !none ? `${record(top)} ${esc(top.name)}` : dash],
+    ['Best record', top && !none ? bestRecordTile(top) : dash],
     // The one tile that can say something before kickoff. It arrives late — the
     // schedule read is asynchronous — so renderOppProjPanel() repaints this row.
     ['Hardest schedule', hardestScheduleTile()],
@@ -529,10 +555,11 @@ function renderMainTable() {
       // LS, PS and AS wait for everybody: stats.js ranks all ten at once, and a
       // team with no game would be ranked on an average of nothing.
       const rk = (v) => (off || ghosts ? dash : rank(v));
+      const rec = recordOf(t);
       return `
       <tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>
-        <td data-v="${recordKey(t)}">${record(t)}</td>
+        <td data-v="${recordKey(t)}"${rec.live ? ` title="${esc(rec.title)}"` : ''}>${rec.text}</td>
         ${heatCell(off ? null : t.avgActual, heatAvg, { what: W_AVG, text: n(t.avgActual) })}
         ${heatCell(off ? null : t.avgProjected, heatProj, { what: W_PROJ, text: n(t.avgProjected) })}
         <td${off ? '' : ` data-v="${t.pointsFor}"`}>${off ? dash : pf(t.totalActual)}</td>
@@ -596,6 +623,11 @@ function renderMainTable() {
     '<strong>LS</strong>, <strong>PS</strong> ' +
     'and <strong>AS</strong> rank the league by luck score, by skill + luck, and by ' +
     'actual record.',
+    // Rule 7, only while it applies: the basis of a decimal W–L.
+    s.teams.some((t) => recordOf(t).live)
+      ? `<strong>W–L:</strong> ${esc(capture.LIVE_RECORD_TEXT)} Every other column, AS ` +
+        'included, counts finished games only.'
+      : '',
     none
       ? 'Nothing has been played yet, so every column drawn from a result is blank ' +
         'rather than zero. Opp proj is the exception, and the Schedule luck panel ' +
@@ -987,6 +1019,14 @@ async function refreshOppProj(key) {
     } catch { floors = null; }
     if (stale()) return;
 
+    // THE WEEK IN PROGRESS, off the rosters and floors just read — Schedule's
+    // own route to a team's chance in the game it is playing (`capture.
+    // liveWinChancesFrom`), for the W–L column. The NFL's games are the payload
+    // the roster read already fetched for byes, so this asks ESPN for nothing
+    // more; a stub without the read, or a failure, is simply no live record.
+    state.live = { key, chances: await liveChances(schedule, weekTeams, floors) };
+    if (stale()) return;
+
     state.oppProj = buildOppProj(key, schedule, weekTeams, floors, floorWeek);
   } catch (err) {
     if (stale()) return;
@@ -1000,6 +1040,23 @@ async function refreshOppProj(key) {
 
   if (stale()) return;
   afterOppProj();
+}
+
+/** teamId -> chance of winning the game being played now; empty when none is. */
+async function liveChances(schedule, weekTeams, floors) {
+  try {
+    if (typeof season.fetchProGames !== 'function') return new Map();
+    const data = capture.normalizeSchedule(schedule, { isDemo: false });
+    const proGames = await season.fetchProGames();
+    const week = capture.openWeeks(data)[0];
+    return capture.liveWinChancesFrom({
+      data, weekTeams, floors, proGames,
+      asOf: typeof season.weekReadAt === 'function' && week !== undefined
+        ? season.weekReadAt(week) : null,
+    });
+  } catch {
+    return new Map();
+  }
 }
 
 /** Turn a schedule plus a week→rosters map into the per-team averages. */

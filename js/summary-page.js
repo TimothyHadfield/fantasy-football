@@ -612,8 +612,27 @@ function buildView() {
     luckById,
     luckMarginById,
     recordById: recordsOf(L.data),
+    chanceById: liveChances(),
     teams: L.teams,
   };
+}
+
+/**
+ * Each manager's chance of winning the game he is playing right now, to a
+ * tenth — `capture.liveWinChances`, the one place it is worked out (Schedule
+ * and Stats print the same record from it). Tim, 2026-10-05: "for an
+ * uncompleted matchup put the decimal place record there instead of whole
+ * number record like we have in the simulation section".
+ *
+ * Empty — every Record a whole number — on demo, with no matchup under way,
+ * and when the week picker has been stepped back: the record is then "as of
+ * week N", and the game being played now is no part of that.
+ */
+function liveChances() {
+  const L = state.league;
+  if (!L || L.isDemo || !state.liveWeek || state.throughWeek < L.lastDecided) return new Map();
+  const { sigma } = capture.leagueSpread(L.data, (g) => !isRemaining(g), L.started);
+  return capture.liveWinChances({ data: L.data, live: state.liveWeek, sigma });
 }
 
 /**
@@ -644,8 +663,10 @@ function recordsOf(data) {
 }
 
 /** "4-2", and a third number ("4-2-1") only for a manager who has a tie.
- *  Tim, 2026-09-27, on 4W/2L: "a little messy" — picked 7-1, ESPN's own form. */
-const recordText = (r) => (r ? `${r.w}-${r.l}${r.t ? `-${r.t}` : ''}` : '—');
+ *  Tim, 2026-09-27, on 4W/2L: "a little messy" — picked 7-1, ESPN's own form.
+ *  While his game is being played it counts as his chance of winning it
+ *  ("3.2-2.8"); `row.rec` is `capture.recordNow`, built in `buildRows`. */
+const recordText = (row) => (row.rec ? row.rec.text : '—');
 
 /**
  * Everything simulateSeason needs, plus a key that changes exactly when the
@@ -780,11 +801,17 @@ function buildRows(view, sim) {
 
   const rows = view.teams.map((t) => {
     const s = byId.get(t.id) || null;
+    const record = view.recordById.get(t.id) || null;
     return {
       id: t.id,
       name: t.name,
       teamName: t.teamName || null,
-      record: view.recordById.get(t.id) || null,
+      record,
+      // What is printed: the banked record, plus the game being played as its
+      // win chance. The table, the copied text and the image all read this.
+      rec: record
+        ? capture.recordNow(record, view.chanceById.get(t.id) ?? null, { sep: '-' })
+        : null,
       // Every number is null-or-real. `enough` is the early-season refusal:
       // below it there is no number to show, which is a different thing from a
       // number that happens to be zero.
@@ -863,7 +890,8 @@ function renderTable(view, rows, sim, inputs) {
   tbody.innerHTML = rows.map((r) => `
     <tr>
       <td class="name"${r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : ''}>${esc(r.name)}</td>
-      <td class="num" data-v="${r.record ? r.record.w + r.record.t / 2 : ''}">${recordText(r.record)}</td>
+      <td class="num" data-v="${r.rec ? r.rec.wins : ''}"${
+    r.rec && r.rec.live ? ` title="${esc(r.rec.title)}"` : ''}>${recordText(r)}</td>
       ${shaded(r.luck, heatLuck, 'the rest of the league’s luck',
     `${view.enough ? signed(r.luck) : dash}${
       view.enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`)}
@@ -997,7 +1025,8 @@ function renderNote(view, sim, inputs) {
     }
     parts.push(
       `<strong>Record</strong> is wins and losses in weeks ${L.weeks[0]}–${view.through} ` +
-      `(a third number counts ties).`
+      `(a third number counts ties).` +
+      (view.chanceById.size ? ` ${capture.liveRecordText('-')}` : '')
     );
     parts.push(
       `<strong>LUCK</strong> is your spreadsheet’s own column — league average score ` +
@@ -1174,10 +1203,10 @@ function buildCardText(view, rows, sim, inputs) {
     : '';
 
   const w = Math.max(6, ...rows.map((r) => String(r.name).length));
-  const rw = Math.max(6, ...rows.map((r) => recordText(r.record).length));
+  const rw = Math.max(6, ...rows.map((r) => recordText(r).length));
   const cell = (r) => [
     String(r.name).padEnd(w),
-    recordText(r.record).padStart(rw),
+    recordText(r).padStart(rw),
     (r.luck === null ? '—' : `${r.luck > 0 ? '+' : ''}${r.luck.toFixed(1)}`).padStart(6),
     (pct(r.title) ?? '—').padStart(8),
     (pct(r.last) ?? '—').padStart(8),
@@ -1380,7 +1409,7 @@ function renderCard(view, rows, sim, inputs) {
     ctx.textAlign = 'right';
     ctx.font = font(22);
     ctx.fillStyle = r.record ? INK.text : INK.dim;
-    ctx.fillText(recordText(r.record), colRecord, baseline);
+    ctx.fillText(recordText(r), colRecord, baseline);
     if (r.luck === null) { ctx.fillStyle = INK.dim; ctx.fillText('—', colLuck, baseline); }
     else {
       ctx.fillStyle = r.luck > 0 ? INK.accent : r.luck < 0 ? INK.err : INK.dim;

@@ -91,6 +91,7 @@ const SUITES = [
   ['an-test.mjs', 'the analysis page'],
   ['roster-link-check.mjs', 'a link into the roster detail (?team=&week=): lands, saves nothing, applied once'],
   ['pages-done-check.mjs', 'the week in progress on Analysis, Home, Stats, Schedule and Summary: finished players and early-final matchups count'],
+  ['record-live-check.mjs', 'a record while its game is being played: 3–2 at 20% reads 3.2–2.8, the same on Stats, Summary and Schedule'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],
   ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],

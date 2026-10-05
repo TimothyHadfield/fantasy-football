@@ -31,6 +31,11 @@
 // started lineups' scores — one more squad has just its QB done, and the NFL's
 // games (`fetchProGames`) all kicked off 100 minutes ago, so the other four
 // games are in progress. CAP_EARLY=all: every game of that week is final early.
+// CAP_EARLY=mix: the three kinds of matchup at once, as on a Sunday night — the
+// first game final early, the LAST one not kicked off at all (both squads' men
+// all play for NFL team 10, whose game is tomorrow), the three between them
+// being played, and — as js/season.js sends a game in play — carrying the
+// points so far as their scores, `played: false`.
 //
 // A test fixture: it lives in tests/ and is never served by the site.
 
@@ -86,6 +91,12 @@ export async function fetchSchedule() {
           homeId, homeName: nameById.get(homeId),
           awayId, awayName: nameById.get(awayId),
         }, startedScore(now.get(homeId)), startedScore(now.get(awayId)));
+      }
+      // mix: a game being played shows the points so far and is not `played`.
+      if (EARLY === 'mix' && w === EARLY_WEEK && !lateSquads().includes(homeId)) {
+        const now = new Map(teamsFor(w).map((t) => [t.id, t]));
+        hs = startedScore(now.get(homeId));
+        as = startedScore(now.get(awayId));
       }
       return {
         week: w,
@@ -174,22 +185,31 @@ export function earlySquads() {
   return fixturesFor(EARLY_WEEK).filter((_, i) => earlyGame(EARLY_WEEK, i)).flat();
 }
 /** The one squad still playing that has a single finished man (its QB). */
-export const ONE_DONE_SQUAD = EARLY === '1' ? fixturesFor(decided() + 1)[1][0] : null;
+export const ONE_DONE_SQUAD = EARLY === '1' || EARLY === 'mix' ? fixturesFor(decided() + 1)[1][0] : null;
+/** mix: the two squads of the last game, neither of which has kicked off. */
+export function lateSquads() {
+  return EARLY === 'mix' ? fixturesFor(EARLY_WEEK).slice(-1).flat() : [];
+}
+/** The NFL team whose game is tomorrow (mix). */
+const LATE_PRO_TEAM = 10;
 
 function inProgress(week, teams) {
   const over = new Set(earlySquads());
+  const late = new Set(lateSquads());
   // What a finished man scored: his projection, moved by up to 40% either way.
   const scored = teams.map((t) => ({
     ...t,
     players: t.players.map((p, i) => ({
       ...p, actual: r1(p.projected * (0.6 + rnd(t.id * 31 + i, week + 50) * 0.8)),
+      ...(late.has(t.id) ? { proTeamId: LATE_PRO_TEAM } : {}),
     })),
   }));
   return markDone(
     scored,
     (p, t) => (over.has(t.id) && p.started) || (t.id === ONE_DONE_SQUAD && p.position === 'QB' && p.started),
-    // Not done: a running score for the first RB, nothing yet for anybody else.
-    (p) => (p.started && p.lineupSlotId === 2 ? 3.3 : null),
+    // Not done: a running score for the first RB, nothing yet for anybody else
+    // — and nothing at all for a squad that has not kicked off.
+    (p, t) => (!late.has(t.id) && p.started && p.lineupSlotId === 2 ? 3.3 : null),
   );
 }
 
@@ -199,6 +219,7 @@ export const fetchProGames = EARLY
   ? async () => {
     const out = {};
     for (let id = 2; id <= 9; id++) out[id] = { [EARLY_WEEK]: { at: Date.now() - 100 * 60 * 1000, done: false } };
+    if (EARLY === 'mix') out[LATE_PRO_TEAM] = { [EARLY_WEEK]: { at: Date.now() + 24 * 60 * 60 * 1000, done: false } };
     return out;
   }
   : undefined;

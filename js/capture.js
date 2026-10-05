@@ -709,9 +709,11 @@ export function liveWeek({ data, weekTeams, slots, floors = null, proGames, asOf
     let toCome = 0;      // projected points still to be scored
     let whole = 0;       // the lineup's whole projection, played or not
     const players = t.players || [];
+    let mine = 0;        // this squad's starters who have kicked off
     for (const p of players) {
-      if (p.started && gamePlayed(proGames[p.proTeamId]?.[week], at, now) > 0) kicked++;
+      if (p.started && gamePlayed(proGames[p.proTeamId]?.[week], at, now) > 0) mine++;
     }
+    kicked += mine;
 
     // EVERY STARTER FINISHED (js/season.js marks them `done`, a man on bye
     // included): the squad is its score. Nothing is to come and nobody is
@@ -719,7 +721,7 @@ export function liveWeek({ data, weekTeams, slots, floors = null, proGames, asOf
     const starters = players.filter((p) => p.started);
     if (starters.length && starters.every((p) => p.done === true)) {
       for (const p of starters) banked += typeof p.actual === 'number' ? p.actual : 0;
-      out.set(t.id, { mean: banked, left: 0, banked });
+      out.set(t.id, { mean: banked, left: 0, banked, kicked: true });
       continue;
     }
 
@@ -748,6 +750,9 @@ export function liveWeek({ data, weekTeams, slots, floors = null, proGames, asOf
       mean: banked + toCome,
       left: whole > 0 ? Math.sqrt(Math.min(1, Math.max(0, toCome / whole))) : 0,
       banked,
+      // Has a starter of THIS squad kicked off? (`liveWinChances`: a matchup
+      // neither side of which has started is not being played yet.)
+      kicked: mine > 0,
     });
   }
   return kicked ? { week, asOf: at, teams: out } : null;
@@ -758,6 +763,138 @@ export function liveSide(g, side, live) {
   if (!live || !g || g.week !== live.week) return null;
   return live.teams.get(side === 'home' ? g.homeId : g.awayId) || null;
 }
+
+// ------------------------------------------------ the record, while in play
+//
+// Tim, 2026-10-04, on the simulation table: "If it's in the middle of the week,
+// put the record as a decimal place to show that their chances of winning or
+// losing that week. For example, if someone's record is 3-2 and they have a 20%
+// chance of winning the current week, their record should be displayed as
+// 3.2-2.8". And 2026-10-05: "for an uncompleted matchup put the decimal place
+// record there instead of whole number record like we have in the simulation
+// section (for example in the standings and season totals box in stats
+// section". So the arithmetic lives here, once, and Schedule, Summary and Stats
+// all print a team's record through it — the same team reads the same on each.
+
+/** Has this side of a live game had a starter kick off? */
+function sideKicked(s) {
+  if (!s) return false;
+  // A reading built before `kicked` existed: points on the board, or part of
+  // the spread already played, can only come from a man who has kicked off.
+  return typeof s.kicked === 'boolean' ? s.kicked : s.left < 1 || s.banked !== 0;
+}
+
+/**
+ * EACH TEAM'S CHANCE OF WINNING THE GAME IT IS PLAYING RIGHT NOW.
+ *
+ * One entry per side of every matchup of the week in progress that is UNDER
+ * WAY: at least one starter on either side has kicked off, and it is not final.
+ * No entry — and so a whole-number record — for a matchup already final (ESPN's
+ * or early), one neither side of which has kicked off, a bye, demo, or when
+ * there is no reading (`live` null).
+ *
+ * The chance is `forecast.winProbabilityLive` on the two squads' expected
+ * finals and the share of the spread each has left — the very numbers
+ * `simulationInputs` plays the game out from. It is handed back ALREADY
+ * ROUNDED TO A TENTH, the away side as the complement of the home side, so the
+ * two halves of one game always add up to one game (rounding each side on its
+ * own made 0.25 and 0.75 into 0.3 and 0.8).
+ *
+ * @param {Object} o
+ * @param {Object} o.data        a normalised schedule
+ * @param {Object|null} o.live   `liveWeek()`
+ * @param {number} o.sigma       the league's scoring spread (`leagueSpread`)
+ * @returns {Map<*, number>} teamId -> chance, 0..1 in tenths
+ */
+export function liveWinChances({ data, live, sigma }) {
+  const out = new Map();
+  if (!data || data.isDemo || !live || !live.teams) return out;
+  const games = data.byWeek?.get(live.week) || (data.games || []).filter((g) => g.week === live.week);
+  for (const g of games) {
+    if (g.homeId == null || g.awayId == null) continue;        // bye
+    if (gameState(g) === 'final') continue;                    // banked already
+    const h = liveSide(g, 'home', live);
+    const a = liveSide(g, 'away', live);
+    if (!h || !a) continue;                                    // both sides or neither
+    if (!sideKicked(h) && !sideKicked(a)) continue;            // not being played yet
+    const p = forecast.winProbabilityLive(h.mean, a.mean, sigma, h.left, a.left);
+    if (p === null) continue;
+    const tenths = Math.round(Math.min(1, Math.max(0, p)) * 10);
+    out.set(g.homeId, tenths / 10);
+    out.set(g.awayId, (10 - tenths) / 10);
+  }
+  return out;
+}
+
+/**
+ * The same, for a page that holds the season's rosters but builds neither a
+ * projection nor a simulation of its own (Stats). Every step is the one the
+ * Schedule page takes — `rosterPlan`, `pickWeeks`, `buildProjection` for the
+ * starting slots, `liveWeek`, `startedProjections` and `leagueSpread` over the
+ * final games — so it cannot quote a different chance for the same game.
+ *
+ * @param {Object} o
+ * @param {Object} o.data          a normalised schedule
+ * @param {Map<number, Array>} o.weekTeams week -> teams, the decided weeks and the open ones
+ * @param {Map|null} [o.floors]    the positional floor, read for `floorWeek(data)`
+ * @param {Object} o.proGames      `season.fetchProGames()`
+ * @param {number|null} [o.asOf]   when the live week's rosters were read
+ * @param {number} [o.now]
+ * @returns {Map<*, number>} as `liveWinChances`; empty when nothing is in play
+ */
+export function liveWinChancesFrom({ data, weekTeams, floors = null, proGames, asOf = null, now = Date.now() }) {
+  if (!data || data.isDemo || !weekTeams || !proGames || !Object.keys(proGames).length) return new Map();
+  const plan = rosterPlan(data);
+  const toProject = pickWeeks(weekTeams, plan.project);
+  const built = toProject.size ? buildProjection(data, toProject, floors) : null;
+  if (!built) return new Map();
+  const live = liveWeek({ data, weekTeams: toProject, slots: built.slots, floors, proGames, asOf, now });
+  if (!live) return new Map();
+  const { sigma } = leagueSpread(
+    data, (g) => gameState(g) === 'final', startedProjections(weekTeams, plan.decided));
+  return liveWinChances({ data, live, sigma });
+}
+
+/**
+ * A TEAM'S RECORD AS IT STANDS NOW, in words a page can print.
+ *
+ * `chance` null (or absent) is the banked record in whole numbers. A number is
+ * that team's `liveWinChances` entry: the game being played is added as that
+ * share of a win and the rest of a loss (`forecast.recordInPlay`), and `title`
+ * states the basis (rule 7) — every page that prints the decimal hangs it on
+ * the cell.
+ *
+ * @param {{w:number, l:number, t?:number}} banked
+ * @param {number|null} [chance]
+ * @param {Object} [o]
+ * @param {string} [o.sep] between the numbers: "–" (Schedule, Stats) or "-" (Summary)
+ * @returns {{text:string, wins:number, games:number, live:boolean, title:string}}
+ *          `wins` counts a tie as half and the live game as its chance; `games`
+ *          counts the live game too — together, a sort key.
+ */
+export function recordNow(banked, chance = null, { sep = '–' } = {}) {
+  const b = { w: banked.w || 0, l: banked.l || 0, t: banked.t || 0 };
+  const join = (r) => `${r.w}${sep}${r.l}${r.t ? `${sep}${r.t}` : ''}`;
+  const live = typeof chance === 'number' && !Number.isNaN(chance);
+  const r = forecast.recordInPlay(b, live ? chance : null);
+  return {
+    text: join(r),
+    wins: r.wins,
+    games: b.w + b.l + b.t + (live ? 1 : 0),
+    live,
+    title: live
+      ? `${join(b)} so far; ${Math.round(Math.min(1, Math.max(0, chance)) * 100)}% to win the ` +
+        `game being played (our model, not ESPN’s)`
+      : '',
+  };
+}
+
+/** The basis of a decimal record, for a panel's "How this works" (rule 7). */
+export const liveRecordText = (sep = '–') =>
+  'A team whose game is being played counts it as its chance of winning (our model, ' +
+  `not ESPN’s): 3${sep}2 with a 20% chance reads 3.2${sep}2.8.`;
+/** The same sentence in the Schedule and Stats pages' own form (an en dash). */
+export const LIVE_RECORD_TEXT = liveRecordText();
 
 // ------------------------------------------------------------ the simulation
 
