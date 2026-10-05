@@ -303,6 +303,19 @@ const typed = async (promise) => {
   try { await promise; return null; } catch (err) { return err; }
 };
 
+/**
+ * Week 3 in play, each squad's perfect hindsight as js/decisions.js works it out
+ * from a world: [squad, actual, hypothetical, in play?, live?, who starts].
+ */
+function hindsightSoFar(D, world) {
+  return [1, 2, 3, 4].map((t) => {
+    const d = D.listDecisions(world, t).find((x) => x.id === `lineup-perfect:${t}:3`);
+    if (!d) return [t, 'not offered'];
+    const c = D.mirror(world, d).teams.get(t).byWeek[3];
+    return [t, c.realTotal, c.total, c.pending === true, c.live === true, c.starters.map((s) => s.playerId).sort((a, b) => a - b)];
+  });
+}
+
 // ===========================================================================
 // SCENARIOS
 // ===========================================================================
@@ -454,6 +467,57 @@ const SCENARIOS = {
     const P3 = await phone(mended);
     const after = await P3.season.fetchDecisionWorld();
     eq([after.weeks, after.partialWeek], [[1, 2, 3], null], 'the decided week’s document replaced it, and the phone reads three finished weeks');
+  },
+
+  // ---- "show what you have right now" works on the phone's copy too --------
+  //
+  // Tim, 2026-10-05: "if my bench QB scored 8 more than my starter, then my dif
+  // should show +8 ... If the information is partial (not all the bench players
+  // have played yet), then just put a little "live" sign by the week number".
+  // What that needs of the week in play — each man's finished flag, his score
+  // and his PRE-GAME projection, bench included — already rides the sync, so
+  // nothing was added to it. Here 91 (squad 1's bench RB) and 41 (squad 4's QB)
+  // are in the late game; the numbers are tests/test-decision-data.mjs's
+  // `seamBench`:
+  //     squad 1  29 -> 29   91 on its bench has not finished: live
+  //     squad 2  24 -> 24   everybody done
+  //     squad 3  24 -> 28   bench 33 (15) for 22 (11): +4, its game still on
+  //     squad 4  10 -> 11   bench 92 (11) for 42 (10): +1; 41 stays, unfinished
+  async inPlayBench() {
+    LATE.add(41);
+    LATE.add(91);
+    const L = await laptop({ decidedThrough: 2, inPlay: 3 });
+    const payload = await L.season.buildCloudPayload();
+    const mine = await L.season.fetchDecisionWorld();
+    const fake = makeFake();
+    L.cloud.configure({ transport: fake, ownerUid: '' });
+    ok('the sync went', (await L.cloud.syncUp(LEAGUE_ID, SEASON, payload, {})).ok);
+    eq(Object.keys(payload.decisions.get(3)).sort(), ['draft', 'kick', 'league', 'moves', 'open', 'players', 'week'],
+      'the open week’s document has the fields it had: nothing new rides the sync');
+
+    const P = await phone(fake);
+    const theirs = await P.season.fetchDecisionWorld();
+    eq([theirs.partialWeek, theirs.requests, P.calls], [3, 0, []], 'the phone has the week in play, at no request');
+    const man = (w, teamId, id) => w.rosters.get(3).find((t) => t.id === teamId).players.find((p) => p.playerId === id);
+    eq([man(theirs, 1, 91).done, man(theirs, 1, 91).projected, man(theirs, 1, 91).lineupSlotId], [false, projOf(91, 3), 20],
+      'ON THE PHONE the bench man still to play is not done, with his pre-game projection');
+    eq([man(theirs, 3, 33).done, man(theirs, 3, 33).actual, man(theirs, 3, 33).projected], [true, 15, projOf(33, 3)],
+      'a finished bench man: done, his score, and his projection from BEFORE the game');
+    eq([man(theirs, 4, 41).done, man(theirs, 4, 41).projected], [false, projOf(41, 3)], 'the starter still playing: his pre-game projection');
+    let differ = null;
+    try {
+      assert.deepStrictEqual({ ...theirs, requests: 0 }, { ...mine, requests: 0 });
+    } catch (err) { differ = err; }
+    ok('the phone’s world is the laptop’s, man for man', differ === null, differ && differ.message);
+    const D = await import(moduleUrl('js/decisions.js'));
+    const want = [
+      [1, 29, 29, false, true, [11, 12]],
+      [2, 24, 24, false, false, [21, 32]],
+      [3, 24, 28, true, true, [31, 33]],
+      [4, 10, 11, true, true, [41, 92]],
+    ];
+    eq(hindsightSoFar(D, mine), want, 'the laptop: actual so far, perfect hindsight so far, in play?, live?, who starts');
+    eq(hindsightSoFar(D, theirs), want, 'THE PHONE SAYS THE SAME, from the synced copy alone');
   },
 
   async oldCopy() {

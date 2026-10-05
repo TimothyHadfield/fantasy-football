@@ -554,6 +554,41 @@ function seasonOf(html) {
   eq(r[1].starters[0].playerId, 3, 'weeksFromMirror: …its starters');
 }
 
+// THE WEEK IN PLAY (Tim, 2026-10-05: "just show what you have right now ... put
+// a little 'live' sign by the week number"). Week 4 with Allen still playing:
+// he has no score, is `known: false`, and counts for his projection, 22. The
+// total handed in is the other eight's, 115.7 − 21.0 = 94.7.
+{
+  const allen = { ...starter(MEN[0], 3), actual: null, done: false, known: false, value: 22 };
+  const rest = MEN.slice(1).map((m) => ({ ...starter(m, 3), done: true, known: true, value: m[5][3] }));
+  const liveNow = [...seasonNow.slice(0, 3), { week: 4, total: 94.7, starters: [allen, ...rest] }];
+  const html = actualSeasonTableHtml({ weeks: liveNow, rows: rows9 }, { box: 'current', live: [4] });
+  const s = seasonOf(html);
+  const qb = s.bySlot.get('QB')[3];
+  eq(qb.text, 'J. Allen22.0', 'season live: a man still playing shows the projection he counts for');
+  ok(qb.cls.includes('sbw-proj') && qb.v === '22', 'season live: marked as not a real score, and sorting on it', JSON.stringify([qb.cls, qb.v]));
+  ok(/title="Josh Allen \(projected, still to play\)"/.test(qb.attrs), 'season live: the title says so', qb.attrs);
+  const rb1 = s.bySlot.get('RB1')[3];
+  ok(rb1.text === 'B. Robinson16.5' && !rb1.cls.includes('sbw-proj'), 'season live: a finished man in the same week is a plain score', JSON.stringify(rb1));
+  eq(count(html, /sbw-proj/g), 1, 'season live: only the one cell is marked');
+  eq(s.head.join('|'), 'Slot|1|2|3|4live', 'season live: the week’s column head carries the live tag');
+  ok(/<th class="wk">4<span class="badge live wk-live"[^>]*>live<\/span><\/th>/.test(html), 'season live: as the site’s LIVE badge, small', html.slice(0, 400));
+  eq(s.bySlot.get('Total')[3].text, '94.7', 'season live: the total is the one handed in');
+  eq(actualSeasonTableHtml({ weeks: seasonNow, rows: rows9 }, { box: 'current', live: [] }),
+    actualSeasonTableHtml({ weeks: seasonNow, rows: rows9 }, { box: 'current' }), 'season live: nothing live, nothing added');
+  ok(!/wk-live|sbw-proj/.test(actualSeasonTableHtml({ weeks: liveNow.slice(0, 3), rows: rows9 }, { live: new Set([4]) })), 'season live: a Set works, and a week not shown tags nothing');
+
+  // Difference: a finished QB who scored 29.0 instead of Allen, 29 − 22 = +7.0.
+  const spare = { playerId: 99, name: 'Sam Spare', position: 'QB', slot: 'QB', slotId: 0, actual: 29.0, projected: 12, isNew: true, done: true, known: true, value: 29.0 };
+  const liveHyp = [...seasonNow.slice(0, 3), { week: 4, total: 101.7, starters: [spare, ...rest] }];
+  const d = seasonOf(actualSeasonTableHtml({ weeks: liveHyp, rows: rows9 }, { diffFrom: liveNow, live: [4] }));
+  eq([d.bySlot.get('QB')[3].text, d.bySlot.get('Total')[3].text].join('|'), 'S. Spare+7.0|+7.0', 'season live diff: the swap is his score less the other’s projection');
+  // ...and the other way round the cell is still marked: the number is not a score.
+  const back = seasonOf(actualSeasonTableHtml({ weeks: liveNow, rows: rows9 }, { diffFrom: liveHyp, live: [4] }));
+  ok(back.bySlot.get('QB')[3].text === 'J. Allen−7.0' && back.bySlot.get('QB')[3].cls.includes('sbw-proj'), 'season live diff: a projected man in is marked there too', JSON.stringify(back.bySlot.get('QB')[3]));
+  eq(d.bySlot.get('RB1')[3].text, 'B. Robinson0.0', 'season live diff: an unchanged finished man is zero');
+}
+
 if (fail) console.log(`${pass} passed, ${fail} failed`);
 else console.log(`All ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

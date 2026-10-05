@@ -1547,3 +1547,12 @@ table.summary-table td.num, table.summary-table th.num { text-align: right; font
 @media (hover: none) {
   .switch { min-height: 44px; }
 }
+
+/* ------------------------------------------------------- the small LIVE tag
+ * The `.badge.live` look, sized to sit beside a week number: that week is
+ * still being played, so some of what is shown for it is not final (the
+ * Decisions page: js/decisions-page.js, js/actual-season-table.js). */
+.badge.live.wk-live { margin-left: 4px; padding: 0 4px; font-size: 9px; line-height: 1.5; letter-spacing: 0.03em; }
+/* A man still playing: the number is his projection, not a score. */
+.sbw-actual td.wk.sbw-proj .sbw-pts { font-style: italic; font-weight: 400; }
+.sbw-actual:not([data-view="diff"]) td.wk.sbw-proj .sbw-pts { color: var(--dim); }

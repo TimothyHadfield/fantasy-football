@@ -23,11 +23,16 @@
 //
 // THE WEEK IN PLAY (`world.partialWeek`; Tim, 2026-10-05: "Could you just
 // display everything you're able to, like we do across the rest of the cite?").
-// It is on every panel. A matchup of it that is over counts like any other; one
-// that is not is `mirror.pending`, and is left out of BOTH worlds wherever a
-// record or a total is added up here — the tiles, the weekly table, Standings —
-// so they always count the same games. The chart's "Current" side is not
-// touched: it stays the Summary page's.
+// It is on every panel, and (Tim, later that day: "just show what you have right
+// now ... put a little 'live' sign by the week number") its POINTS always count:
+// the weekly table, its Total row, the Points tile and the list all add up the
+// same team-weeks, the one in play included. A RESULT is another matter. A
+// matchup that is over counts like any other; one that is not final in both
+// worlds is `mirror.pending`, reads "In play", and is left out of BOTH worlds
+// wherever a record is added up — the tiles, Standings — so they always count
+// the same games. A team-week with anything still to come carries the small
+// LIVE tag (`cell.live`). The chart's "Current" side is not touched: it stays
+// the Summary page's.
 
 import { computeLeagueStats } from './stats.js';
 import * as season from './season.js';
@@ -61,6 +66,14 @@ const MIN_WEEKS_TO_SHADE_LUCK = 3;
  * the list must not pay for every row he passes.
  */
 const SIM_DELAY_MS = 400;
+
+/**
+ * The small LIVE badge beside a week number: some of that week is still to
+ * come. The same markup as js/actual-season-table.js's column heads — written
+ * out here, not imported, so a browser still holding last deploy's copy of that
+ * file (PROGRESS.md, "Stale-module trap") cannot stop this page loading.
+ */
+const LIVE_TAG = '<span class="badge live wk-live" title="Still being played: some of this is not final.">live</span>';
 
 const LINEUP_SAID = {
   'lineup-reasonable': 'Lineup: highest projections',
@@ -313,11 +326,22 @@ function renderDecision() {
   renderNotes();
 }
 
-/** Does everything this decision changes sit in matchups still being played? */
-function allInPlay(decision) {
-  const cells = [...mirrorOf(decision).teams.values()]
-    .flatMap((t) => Object.values(t.byWeek)).filter((c) => c.changed);
-  return cells.length > 0 && cells.every((c) => c.pending);
+/** Is this team's week still live in this mirror — the week in play, with anything of it to come? */
+function liveCell(m, teamId, week) {
+  const t = m.teams.get(teamId);
+  const c = t && t.byWeek[week];
+  return Boolean(c && c.live);
+}
+
+/**
+ * Does a row of the list wear the LIVE tag? A week's entry when that week is
+ * live for the picked team; a whole-season entry when the week in play is.
+ */
+function liveRow(d) {
+  const partial = state.world.partialWeek;
+  if (!Number.isFinite(partial)) return false;
+  const whole = d.week === null || d.week === undefined;
+  return (whole || d.week === partial) && liveCell(mirrorOf(d), state.teamId, partial);
 }
 
 /** The numbers a row of the list leads with, for the picked team. */
@@ -327,8 +351,8 @@ function headline(decision) {
   const mine = m.teams.get(state.teamId);
   let hyp = 0;
   let real = 0;
+  // Every week's points, the one in play included — the table's Total row.
   for (const c of Object.values((mine && mine.byWeek) || {})) {
-    if (c.pending) continue;
     hyp += c.total;
     real += c.realTotal;
   }
@@ -344,8 +368,6 @@ function rowHtml(d) {
   let nums;
   if (d.empty) {
     nums = '<span class="dz-none">No change</span>';
-  } else if (allInPlay(d)) {
-    nums = '<span class="dz-none">In play</span>';
   } else {
     const h = headline(d);
     nums =
@@ -355,7 +377,7 @@ function rowHtml(d) {
   return `<div class="dz-item">` +
     `<button type="button" class="dz-row" role="option" data-id="${esc(d.id)}" data-kind="${esc(d.kind)}"` +
     `${d.empty ? ' data-empty="1"' : ''} aria-selected="${d.id === state.selectedId}" title="${esc(d.label)}">` +
-    `<span class="dz-wk">${wk}</span><span class="dz-what">${esc(what)}</span>${nums}</button>` +
+    `<span class="dz-wk">${wk}</span><span class="dz-what">${liveRow(d) ? LIVE_TAG : ''}${esc(what)}</span>${nums}</button>` +
     (d.whatIf
       ? `<button type="button" class="dz-x" data-remove="${esc(d.id)}" aria-label="Remove this trade" title="Remove this trade">×</button>`
       : '') +
@@ -423,15 +445,9 @@ function renderResult() {
   body.innerHTML = world.weeks.map((week) => {
     const c = mine.byWeek[week];
     const g = gameOf(world.games, id, week);
-    // THE WEEK IN PLAY, its matchup not known in both worlds yet: no totals,
-    // and nothing of it in the Total row.
-    if (c.pending) {
-      const vs = g ? teamName(g.homeId === id ? g.awayId : g.homeId) : '—';
-      return `<tr data-wk="${week}" data-pending="1"><td>${week}</td>` +
-        `<td class="dz-vs" title="${esc(vs)}">${esc(vs)}</td>` +
-        `<td class="dz-act">—</td><td class="dz-hyp">—</td><td class="dz-diff">—</td>` +
-        `<td class="dz-res muted">In play</td></tr>`;
-    }
+    // THE WEEK IN PLAY: its points always show and always count. Only the
+    // RESULT waits, for a matchup not final in both worlds yet.
+    const wk = `${week}${c.live ? LIVE_TAG : ''}`;
     const mg = gameOf(m.games, id, week);
     const was = resultLetter(g, id);
     const is = resultLetter(mg, id);
@@ -448,13 +464,16 @@ function renderResult() {
       ? `Actual ${pts(rs[0])} to ${pts(rs[1])}. Hypothetical ${pts(ms[0])} to ${pts(ms[1])}.`
       : '';
     const resCls = flip ? ` dz-flip ${RANK[is] > RANK[was] ? 'd-up' : 'd-down'}` : '';
-    return `<tr data-wk="${week}"${flip ? ' data-flip="1"' : ''}>` +
-      `<td>${week}</td>` +
+    const result = c.pending
+      ? `<td class="dz-res muted">In play</td>`
+      : `<td class="dz-res${resCls}"${dim} title="${esc(said)}">${flip ? `${was} → ${is}` : was || '—'}</td>`;
+    return `<tr data-wk="${week}"${flip ? ' data-flip="1"' : ''}${c.pending ? ' data-pending="1"' : ''}>` +
+      `<td>${wk}</td>` +
       `<td class="dz-vs" title="${esc(opp)}">${esc(opp)}</td>` +
       `<td class="dz-act" data-v="${c.realTotal}">${pts(c.realTotal)}</td>` +
       `<td class="dz-hyp" data-v="${c.total}"${dim}>${pts(c.total)}</td>` +
       `<td class="dz-diff ${diffClass(diff)}" data-v="${diff}"${dim}>${signedPts(diff)}</td>` +
-      `<td class="dz-res${resCls}"${dim} title="${esc(said)}">${flip ? `${was} → ${is}` : was || '—'}</td>` +
+      result +
       `</tr>`;
   }).join('');
 
@@ -499,19 +518,17 @@ function renderSeason() {
     .join('');
 
   const cells = m.teams.get(state.seasonTeamId);
-  // A week still in play: the men who have finished show their points, the
-  // rest a dash, and the total is what the finished ones add up to so far.
-  const soFar = (weeks) => weeks.map((w) => (cells.byWeek[w.week].pending
-    ? { ...w, total: round2(w.starters.reduce((a, p) => a + (Number.isFinite(p.actual) ? p.actual : 0), 0)) }
-    : w));
-  const real = soFar(weeksFromMirror(cells, 'real'));
-  const hyp = soFar(weeksFromMirror(cells, 'mirror'));
+  // A week still in play: a man who has finished shows his points, one who has
+  // not the projection he counts for meanwhile (drawn apart by the renderer),
+  // and the column head carries the LIVE tag.
+  const real = weeksFromMirror(cells, 'real');
+  const hyp = weeksFromMirror(cells, 'mirror');
+  const live = world.weeks.filter((w) => cells.byWeek[w].live);
   const dim = state.noise ? m.noise.get(state.seasonTeamId) || null : null;
-  $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, { box: 'current' });
-  // ...and it has no difference yet: left out of what is subtracted, it is dashes.
+  $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, { box: 'current', live });
   $('seasonHyp').innerHTML = actualSeasonTableHtml({ weeks: hyp, slots: world.slots }, {
-    box: 'hypothetical', dim,
-    diffFrom: state.view.season === 'diff' ? real.filter((w) => !cells.byWeek[w.week].pending) : null,
+    box: 'hypothetical', dim, live,
+    diffFrom: state.view.season === 'diff' ? real : null,
   });
 }
 

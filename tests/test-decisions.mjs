@@ -409,13 +409,22 @@ eq(JSON.stringify([world.games, world.moves, [...world.rosters], [...world.playe
 eq(m1.pending, [], 'a world with no week in play has no pending game');
 
 // ---- the week in play ----------------------------------------------------------
-// Tim, 2026-10-05: "It looks like the hypothetical doesn't take into account the
-// current week if it's not fully finished ... Could you just display everything
-// you're able to, like we do across the rest of the cite?"
+// Tim, 2026-10-05: "right now the partial weeks are shown, but not updated
+// fully with the hypothetical ... Instead of just showing 0 for week for and not
+// contributing it to the total, just show what you have right now, so if my
+// bench QB scored 8 more than my starter, then my dif should show +8, along
+// with any of the other differences. If the information is partial (not all the
+// bench players have played yet), then just put a little 'live' sign by the
+// week number".
 //
 // The same league with week 4 NOT closed (`partialWeek: 4`): one of its two
 // games is over early and the other is being played. `inPlay` is the pair still
 // playing (their game has no scores); `notDone` the men yet to finish.
+//
+// A MAN'S VALUE in that week is his score once he has finished and his pre-game
+// projection until then. A team's ACTUAL is its finished starters' points (its
+// real score once its matchup is over); the HYPOTHETICAL is that plus, for each
+// lineup change, the value of the man in less the value of the man out.
 function partialWorld({ inPlay, notDone }) {
   const w = buildWorld();
   const open = new Set(notDone);
@@ -428,25 +437,41 @@ function partialWorld({ inPlay, notDone }) {
 const none = { kind: 'adddrop', moveId: 'nope' };
 const recs = (m) => TEAMS.map((t) => [rec(m, t).real, rec(m, t).mirror].map((r) => `${r.w}-${r.l}`).join(' / '));
 const ids = (list, prefix) => list.filter((d) => d.id.startsWith(prefix)).map((d) => d.id);
+const lives = (m) => TEAMS.map((t) => cell(m, t, 4).live === true);
+/** A team-week as the page's weekly table prints it: actual, hypothetical, difference. */
+const row = (m, t, w = 4) => [cell(m, t, w).realTotal, cell(m, t, w).total, Math.round((cell(m, t, w).total - cell(m, t, w).realTotal) * 100) / 100];
+/** The Total row's difference for one team: every week held, the one in play included. */
+const totalDiff = (m, t) => Math.round(WEEKS.reduce((a, w) => a + row(m, t, w)[2], 0) * 100) / 100;
 
 // P: Tim v Mitch is over (55–61), Cal v Dee is being played — Goff (Cal's QB)
 // and Wire (Dee's FLEX) are still to finish, as are the free agent Hot and
 // Mitch's bench receiver Wilson.
 //   Real, through week 3: Tim 3-0, Mitch 2-1, Cal 1-2, Dee 0-3. Week 4 adds only
 //   the finished game: Tim 3-1, Mitch 3-1; Cal and Dee stay where they were.
+//   So far: Cal 20 + 16 + 6 = 42 without Goff, Dee 18 + 12 + 11 = 41 without Wire.
 const P = partialWorld({ inPlay: [CAL, DEE], notDone: [14, 38, 26, 33] });
 const pNone = D.mirror(P, none);
 eq(pNone.pending, [{ week: 4, homeId: CAL, awayId: DEE }], 'the game being played is listed as pending');
 eq(recs(pNone), ['3-1 / 3-1', '3-1 / 3-1', '1-2 / 1-2', '0-3 / 0-3'], 'the finished game counts in both records, the one in play in neither');
 ok(pNone.games.some((g) => g.week === 4 && g.homeId === TIM) && !pNone.games.some((g) => g.week === 4 && g.homeId === CAL),
   'and only the finished one is in the mirror’s games');
-eq([cell(pNone, CAL, 4).pending, cell(pNone, CAL, 4).total, cell(pNone, CAL, 4).realTotal, cell(pNone, DEE, 4).pending],
-  [true, null, null, true], 'both teams of the pending game carry pending: true and no totals');
+eq([cell(pNone, CAL, 4).pending, row(pNone, CAL), cell(pNone, DEE, 4).pending, row(pNone, DEE)],
+  [true, [42, 42, 0], true, [41, 41, 0]], 'both teams of the game in play are pending, and show the points their finished starters have so far');
 eq([cell(pNone, TIM, 4).pending, cell(pNone, TIM, 4).total, cell(pNone, TIM, 4).realTotal], [undefined, 55, 55], 'a finished team-week is what it always was');
-eq(cell(pNone, CAL, 4).realStarters.map((s) => [s.name, s.actual, s.done]),
-  [['Jared Goff', null, false], ['Jahmyr Gibbs', 20, true], ['Puka Nacua', 16, true], ['Lee Late', 6, true]],
-  'a pending lineup shows the finished men’s points and nothing for the man still playing');
+eq(cell(pNone, CAL, 4).realStarters.map((s) => [s.name, s.actual, s.done, s.known, s.value]),
+  [['Jared Goff', null, false, false, 18], ['Jahmyr Gibbs', 20, true, true, 20], ['Puka Nacua', 16, true, true, 16], ['Lee Late', 6, true, true, 6]],
+  'each starter says whether his number is known: a score for a finished man, his pre-game projection for one still playing');
+ok(cell(pNone, TIM, 3).starters.every((s) => !('known' in s) && !('value' in s)) && cell(pNone, TIM, 3).live === undefined,
+  'a finished week carries none of this');
 eq(pNone.games.find((g) => g.week === 5), GAMES[8], 'a later week still passes through untouched');
+// LIVE: a team-week with anything still to come. Tim's whole roster is done and
+// his game is over: not live. Mitch's game is over too, but Wilson on his bench
+// has not finished: live. Cal and Dee are still playing: live.
+eq(lives(pNone), [false, true, true, true], 'live marks the team-weeks with a man or a matchup unfinished, bench included');
+ok(!('live' in cell(pNone, TIM, 4)) && WEEKS.slice(0, 3).every((w) => TEAMS.every((t) => !('live' in cell(pNone, t, w)))), 'and is absent everywhere else');
+const allDone = partialWorld({ inPlay: [], notDone: [] });
+eq([lives(D.mirror(allDone, none)), D.mirror(allDone, none).pending, recs(D.mirror(allDone, none))],
+  [[false, false, false, false], [], ['3-1 / 3-1', '3-1 / 3-1', '2-2 / 2-2', '0-4 / 0-4']], 'every man done: nothing is live and nothing pending');
 
 // m1 undone in P. Lock has finished, so Tim's mirror week 4 is known: 63 to
 // Mitch's 61, and the finished game flips exactly as it did with the week closed.
@@ -456,56 +481,109 @@ eq([cell(pm1, TIM, 4).total, cell(pm1, MITCH, 4).total], [63, 61], 'm1 undone in
 eq(recs(pm1), ['3-1 / 4-0', '3-1 / 0-4', '1-2 / 2-1', '0-3 / 1-2'], 'its result counts in the mirror’s record, and the game in play still in neither');
 eq(flipList(pm1), ['wk2 2v4 W>L', 'wk2 4v2 L>W', 'wk3 2v3 W>L', 'wk3 3v2 L>W', 'wk4 1v2 L>W', 'wk4 2v1 W>L'], 'and it flips');
 eq(pm1.pending, [{ week: 4, homeId: CAL, awayId: DEE }], 'the pending list is the game in play, nothing more');
-eq([nz(pm1, TIM), nz(pm1, CAL)], [[0, 0, 0.1, 0.2], [0, 0, 0, 0]], 'noise: unchanged for a known team-week, none for a pending one');
+// Noise is worked out for a pending team-week like any other, on the numbers
+// shown: Cal's QB Goff is valued at his projection, 18, so the freed Young (20)
+// is 2 over him: 0.1, and 1 - 0.97 x 0.9 = 0.127.
+eq([nz(pm1, TIM), nz(pm1, CAL)], [[0, 0, 0.1, 0.2], [0, 0, 0, 0.127]], 'noise: the same rules in the week in play, on the values shown');
 
 // The same, but Lock is STILL PLAYING. The mirror would start him at QB, so
-// Tim's week 4 is not known there, and the game — over in real life — is
-// pending: in NEITHER record.
+// the game — over in real life — is not final in the mirror: pending, in
+// NEITHER record. Its points are still shown: Lock at his projection, 18, for
+// Young's 20: 55 - 20 + 18 = 53.
 //   Tim 3-0 both ways · Mitch real 2-1, mirror L, L, L = 0-3.
 const P2 = partialWorld({ inPlay: [CAL, DEE], notDone: [14, 38, 26, 33, 10] });
 const pm2 = D.mirror(P2, pick(D.listDecisions(P2, TIM), 'move:m1'));
 eq(lineup(pm2, TIM, 4)[0], 'QB Drew Lock', 'the mirror starts a man who has not finished');
 eq(pm2.pending, [{ week: 4, homeId: TIM, awayId: MITCH }, { week: 4, homeId: CAL, awayId: DEE }], 'so that game is pending too');
 eq(recs(pm2), ['3-0 / 3-0', '2-1 / 0-3', '1-2 / 2-1', '0-3 / 1-2'], 'and is in neither the real record nor the mirror’s');
-eq([cell(pm2, TIM, 4).pending, cell(pm2, TIM, 4).total, cell(pm2, MITCH, 4).pending], [true, null, true], 'both its team-weeks are pending');
+eq([cell(pm2, TIM, 4).pending, row(pm2, TIM), cell(pm2, TIM, 4).live, cell(pm2, MITCH, 4).pending, row(pm2, MITCH)],
+  [true, [55, 53, -2], true, true, [61, 61, 0]], 'both its team-weeks are pending, with the unfinished man valued at his projection');
+eq(cell(pm2, TIM, 4).starters[0], { playerId: 10, name: 'Drew Lock', position: 'QB', slot: 'QB', slotId: 0, actual: null, projected: 18, isNew: true, done: false, known: false, value: 18 },
+  'the starter not yet finished: no score, and the projection he is valued at');
 ok(!flipList(pm2).some((f) => f.startsWith('wk4')) && !pm2.games.some((g) => g.week === 4), 'nothing of week 4 flips or is banked');
-eq(nz(pm2, TIM), [0, 0, 0.1, 0], 'and a pending team-week has no noise');
+eq(nz(pm2, TIM), [0, 0, 0.1, 0.2], 'and its noise is the usual clock');
 eq(recs(D.mirror(P2, none)), ['3-1 / 3-1', '3-1 / 3-1', '1-2 / 1-2', '0-3 / 0-3'], 'while a decision that never starts him still counts the finished game');
 
-// Lineup decisions in the week in play: only for a team whose own matchup is
-// over, and hindsight only once every man it could have started has finished.
-eq(ids(D.listDecisions(P, TIM), 'lineup-').slice(-2), ['lineup-reasonable:1:4', 'lineup-perfect:1:4'], 'Tim’s matchup is over and all his men are done: both week-4 lineups are offered');
-eq(ids(D.listDecisions(P, MITCH), 'lineup-').slice(-2), ['lineup-perfect:2:3', 'lineup-reasonable:2:4'], 'Mitch has a bench man still playing: highest projections only');
-eq(ids(D.listDecisions(P, CAL), 'lineup-').slice(-2), ['lineup-reasonable:3:3', 'lineup-perfect:3:3'], 'Cal’s matchup is in play: no week-4 lineup at all');
-ok(pick(cals, 'lineup-reasonable:3:all').detail.some((s) => s.week === 4) &&
-  !pick(D.listDecisions(P, CAL), 'lineup-reasonable:3:all').detail.some((s) => s.week === 4),
-  'and the whole-season entry leaves the week in play alone for it');
+// Lineup decisions in the week in play: both kinds, for every team.
+for (const [t, name] of [[TIM, 'Tim'], [MITCH, 'Mitch'], [CAL, 'Cal'], [DEE, 'Dee']]) {
+  eq(ids(D.listDecisions(P, t), 'lineup-').slice(-2), [`lineup-reasonable:${t}:4`, `lineup-perfect:${t}:4`], `${name}: both week-4 lineups are offered, whoever is still playing`);
+}
+ok(pick(D.listDecisions(P, CAL), 'lineup-reasonable:3:all').detail.some((s) => s.week === 4), 'and the whole-season entries take the week in play in');
 eq(ids(D.listDecisions(P, TIM), 'move:'), ['move:m1', 'move:m5', 'move:m7'], 'a move made in the week in play is listed like any other');
 const pm8 = D.mirror(P, pick(D.listDecisions(P, CAL), 'move:m8'));
-eq([lineup(pm8, CAL, 4)[3], cell(pm8, CAL, 4).changed, cell(pm8, CAL, 4).pending, recs(pm8)[2]], ['FLEX Sam Sub', true, true, '1-2 / 1-2'],
-  'its effect on a team still playing is worked out, and pending');
+// m8 undone: Sub (done, 9) for Late (done, 6) in Cal's FLEX: 42 so far + 3 = 45.
+eq([lineup(pm8, CAL, 4)[3], cell(pm8, CAL, 4).changed, cell(pm8, CAL, 4).pending, row(pm8, CAL), recs(pm8)[2]], ['FLEX Sam Sub', true, true, [42, 45, 3], '1-2 / 1-2'],
+  'its effect on a team still playing is worked out and shown, with the result pending');
+
+// A TEAM WHOSE MATCHUP IS IN PLAY: perfect hindsight for Cal's week 4 in P.
+// Hall (bench, done, 10) for Late (FLEX, done, 6) is known: +4. Goff, still
+// playing, is left where he is. 42 so far -> 46; no result yet.
+const calsP = D.listDecisions(P, CAL);
+const hP = pick(calsP, 'lineup-perfect:3:4');
+const mhP = D.mirror(P, hP);
+eq([hP.empty, hP.detail], [false, [{ week: 4, out: 'Lee Late', in: 'Breece Hall', outId: 37, inId: 28 }]], 'hindsight for a team still playing: the swap already known');
+eq([row(mhP, CAL), cell(mhP, CAL, 4).pending, cell(mhP, CAL, 4).live, lineup(mhP, CAL, 4)[0]], [[42, 46, 4], true, true, 'QB Jared Goff'],
+  'its difference shows, the starter still playing stays put, the result is pending and the week is live');
+eq([totalDiff(mhP, CAL), recs(mhP)[2], flipList(mhP)], [4, '1-2 / 1-2', []], 'the +4 is in the total, and no record moves');
+
+// TIM'S OWN CASE. T: Tim v Mitch is over (55–61) and every starter has
+// finished. Tim has a spare QB on his bench, Sam Spare, who scored 28 — 8 more
+// than Young's 20 — and was projected 12 (so "highest projections" would not
+// have started him). One bench man, Extra, has still to play.
+//   Perfect hindsight, week 4: +8, so 55 -> 63, which beats Mitch's 61.
+//   Tim 3-1 -> 4-0, Mitch 3-1 -> 2-2. The week is live (Extra).
+function spareWorld(notDone) {
+  const w = partialWorld({ inPlay: [CAL, DEE], notDone });
+  const done = !notDone.includes(16);
+  w.players.set(16, { name: 'Sam Spare', position: 'QB', byWeek: Object.fromEntries(WEEKS.map((wk) => [wk,
+    { actual: wk === 4 ? 28 : 0, projected: wk === 4 ? 12 : 0, kickoff: SUN(wk), done: wk < 4 || done }])) });
+  w.rosters.get(4).find((t) => t.id === TIM).players.push(
+    { playerId: 16, name: 'Sam Spare', position: 'QB', slot: 'BE', lineupSlotId: BE, started: false, projected: 12, actual: 28, done });
+  return w;
+}
+const T = spareWorld([14, 38, 41]);
+const timsT = D.listDecisions(T, TIM);
+const hT = pick(timsT, 'lineup-perfect:1:4');
+ok(hT, 'hindsight is offered although a bench man has still to play');
+const mhT = D.mirror(T, hT || none);
+eq([hT && hT.empty, hT && hT.detail], [false, [{ week: 4, out: 'Bryce Young', in: 'Sam Spare', outId: 11, inId: 16 }]], 'Tim’s case: the bench QB who scored 8 more is the swap');
+eq(row(mhT, TIM), [55, 63, 8], 'Tim’s case: week 4 shows +8');
+eq(totalDiff(mhT, TIM), 8, 'and the +8 is in the total');
+eq([cell(mhT, TIM, 4).live, cell(mhT, TIM, 4).pending], [true, undefined], 'the week is live (a bench man has not played) but its matchup is final in both worlds');
+eq([recs(mhT).slice(0, 2), flipList(mhT)], [['3-1 / 4-0', '3-1 / 2-2'], ['wk4 1v2 L>W', 'wk4 2v1 W>L']], 'so it counts in both records, and flips');
+eq(totalDiff(D.mirror(T, pick(timsT, 'lineup-perfect:1:all')), TIM), 8, 'the whole-season hindsight entry carries it too');
+ok(pick(timsT, 'lineup-reasonable:1:4').empty, 'highest projections would not have started him: empty, as before');
+// A BENCH MAN WHO HAS NOT PLAYED IS NEVER STARTED BY HINDSIGHT, whatever he has
+// so far: T2 is T with Spare himself still playing (28 and counting).
+const T2 = spareWorld([14, 38, 41, 16]);
+const hT2 = pick(D.listDecisions(T2, TIM), 'lineup-perfect:1:4');
+eq([hT2.empty, row(D.mirror(T2, hT2), TIM), cell(D.mirror(T2, hT2), TIM, 4).live], [true, [55, 55, 0], true], 'hindsight never starts a bench man who has not finished');
 
 // Q: the other way round. Cal v Dee is over (57–56), Tim v Mitch is being
 // played, and Cal's bench back Hall has not finished.
 //   Real: Tim 3-0, Mitch 2-1, Cal 2-2, Dee 0-4.
 // "Highest projections" for Cal's week 4 would start Hall (10 over Late's 9) —
 // a man still playing — so the finished game becomes pending for that decision:
-// Cal 1-2 and Dee 0-3, in both worlds.
+// Cal 1-2 and Dee 0-3, in both worlds. Hall is valued at his projection, 10,
+// against Late's score of 6: 57 -> 61.
 const Q = partialWorld({ inPlay: [TIM, MITCH], notDone: [11, 28] });
 eq(recs(D.mirror(Q, none)), ['3-0 / 3-0', '2-1 / 2-1', '2-2 / 2-2', '0-4 / 0-4'], 'Q: the finished game counts, the one in play does not');
+// Tim so far: Achane 13 + Diggs 8 + Cook 14 = 35 without Young.
+eq([row(D.mirror(Q, none), TIM), lives(D.mirror(Q, none))], [[35, 35, 0], [true, true, true, false]], 'Q: Tim so far, and who is live (Cal for the bench back alone)');
 const calsQ = D.listDecisions(Q, CAL);
-eq(ids(calsQ, 'lineup-').slice(-2), ['lineup-perfect:3:3', 'lineup-reasonable:3:4'], 'Cal: highest projections is offered, hindsight is not (Hall is still playing)');
-eq(ids(D.listDecisions(Q, DEE), 'lineup-').slice(-2), ['lineup-reasonable:4:4', 'lineup-perfect:4:4'], 'Dee, every man done: both');
-eq(ids(D.listDecisions(Q, TIM), 'lineup-').slice(-2), ['lineup-reasonable:1:3', 'lineup-perfect:1:3'], 'Tim, still playing: neither');
+eq(ids(calsQ, 'lineup-').slice(-2), ['lineup-reasonable:3:4', 'lineup-perfect:3:4'], 'Cal: both are offered');
 const q4 = D.mirror(Q, pick(calsQ, 'lineup-reasonable:3:4'));
 eq(lineup(q4, CAL, 4)[3], 'FLEX Breece Hall', 'the lineup it would have set starts the unfinished man');
+eq([row(q4, CAL), cell(q4, CAL, 4).starters[3].known, cell(q4, CAL, 4).starters[3].value], [[57, 61, 4], false, 10],
+  'highest projections: the unfinished man in is valued at his projection, the finished man out at his score');
 eq(q4.pending, [{ week: 4, homeId: TIM, awayId: MITCH }, { week: 4, homeId: CAL, awayId: DEE }], 'which turns that finished game pending');
 eq(recs(q4), ['3-0 / 3-0', '2-1 / 2-1', '1-2 / 1-2', '0-3 / 0-3'], 'so it is in neither record, for Cal or for Dee');
-// Hindsight for the whole season: in the closed league Cal's week 4 becomes 61
-// (Hall for Late). Here that week is not hindsight's to judge yet: 57, as played.
+// Hindsight: in the closed league Cal's week 4 becomes 61 (Hall for Late). Here
+// Hall has not finished, so hindsight cannot start him: 57, as played.
 eq([cell(D.mirror(world, pick(cals, 'lineup-perfect:3:all')), CAL, 4).total, cell(D.mirror(Q, pick(calsQ, 'lineup-perfect:3:all')), CAL, 4).total],
-  [61, 57], 'whole-season hindsight leaves the week in play alone until every man is done');
-eq(D.mirror(Q, { kind: 'lineup-perfect', teamId: CAL, week: 4 }).pending.length, 1, 'and asked for outright, it changes nothing');
+  [61, 57], 'whole-season hindsight does not start the unfinished bench man either');
+ok(pick(calsQ, 'lineup-perfect:3:4').empty && D.mirror(Q, pick(calsQ, 'lineup-perfect:3:4')).pending.length === 1, 'and week-4 hindsight is empty: the finished game stays counted');
+eq(JSON.stringify([world.games, world.moves, [...world.rosters], [...world.players]]), frozen, 'none of this alters the closed world');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

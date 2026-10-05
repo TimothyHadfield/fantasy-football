@@ -64,6 +64,8 @@
 }
 .dz-row .dz-wk { color: var(--dim); font-size: 12px; }
 .dz-row .dz-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The LIVE tag sits right after the week, at the head of the wording. */
+.dz-row .dz-what .wk-live { margin: 0 5px 0 0; }
 .dz-row .dz-rec, .dz-row .dz-pts { text-align: right; white-space: nowrap; }
 .dz-row .dz-none { grid-column: 3 / 5; text-align: right; color: var(--dim); white-space: nowrap; }
 .dz-row .d-up { color: var(--accent); }
@@ -122,6 +124,9 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   .dz-whatif .form-select { width: 100%; }
   .dz-weeks th, .dz-weeks td { padding-left: 5px; padding-right: 5px; }
   .dz-weeks td.dz-vs { max-width: 72px; }
+  /* A week still being played has the LIVE tag beside its number. The
+   * opponent's name gives up the room for it, so the table still fits. */
+  .dz-weeks:has(.wk-live) td.dz-vs { max-width: 0; width: 100%; }
   #resultStats { gap: 18px; }
 }
 </style>

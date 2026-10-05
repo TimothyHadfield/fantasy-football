@@ -72,8 +72,22 @@ export function weeksFromMirror(teamMirror, which = 'mirror') {
     .sort((a, b) => a.week - b.week);
 }
 
+/**
+ * THE WEEK IN PLAY: a starter the engine marks `known: false` has not finished.
+ * He has no score, and counts for his `value` (his pre-game projection); his
+ * cell is drawn `sbw-proj` so it does not read as one.
+ */
+const unknown = (entry) => Boolean(entry && entry.p.known === false);
+const scoreOf = (p) => (p.known === false ? p.value : p.actual);
+
 /** The points a slot scored: its man's actual, 0 for a man with none, null when empty. */
-const pointsOf = (entry) => (entry ? (Number.isFinite(entry.p.actual) ? entry.p.actual : 0) : null);
+const pointsOf = (entry) => (entry ? (Number.isFinite(scoreOf(entry.p)) ? scoreOf(entry.p) : 0) : null);
+
+/** The small LIVE badge beside a week number: some of that week is still to come. */
+const LIVE_TAG = '<span class="badge live wk-live" title="Still being played: some of this is not final.">live</span>';
+
+/** A cell's title: the man's full name, and a word when his number is not a score. */
+const saidOf = (entry) => (unknown(entry) ? `${entry.p.name} (projected, still to play)` : entry.p.name);
 
 /** The two lines of a cell: who, then the number. */
 const lines = (entry, shown) =>
@@ -98,13 +112,16 @@ const lines = (entry, shown) =>
  *        cell of that week's column is drawn at opacity 1 − 0.65 × noise
  * @param {string} [o.box] written as `data-box` ("current", "hypothetical")
  * @param {string} [o.totalLabel] the total row's label. Default "Total".
+ * @param {Iterable<number>|null} [o.live] the weeks still being played for this
+ *        squad: each one's column head carries `LIVE_TAG` beside the number
  * @returns {string} `<table class="sbw-table">…`, to sit inside `.sbw`
  */
 export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } = {}, {
-  diffFrom = null, dim = null, box = '', totalLabel = 'Total',
+  diffFrom = null, dim = null, box = '', totalLabel = 'Total', live = null,
 } = {}) {
   const slotList = rows || slotRows(slots);
   const cols = [...weeks].sort((a, b) => a.week - b.week);
+  const liveWeeks = new Set(live || []);
   const beforeOf = diffFrom ? new Map(diffFrom.map((w) => [w.week, w])) : null;
   const fills = cols.map((c) => fillSlots(c.starters, slotList));
   const beforeFills = cols.map((c) => {
@@ -114,7 +131,7 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
   const styles = cols.map((c) => dimStyle(dimOf(dim, c.week)));
 
   const head = `<tr><th class="name">Slot</th>` +
-    cols.map((c) => `<th class="wk">${esc(c.week)}</th>`).join('') + `</tr>`;
+    cols.map((c) => `<th class="wk">${esc(c.week)}${liveWeeks.has(c.week) ? LIVE_TAG : ''}</th>`).join('') + `</tr>`;
 
   const body = slotList.map((row) => {
     const cells = cols.map((c, i) => {
@@ -123,8 +140,8 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       if (!diffFrom) {
         if (!e) return `<td class="wk muted"${at}>—</td>`;
         const v = pointsOf(e);
-        return `<td class="wk" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
-          `title="${esc(e.p.name)}">${lines(e, fmt(e.p.actual))}</td>`;
+        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
+          `title="${esc(saidOf(e))}">${lines(e, fmt(scoreOf(e.p)))}</td>`;
       }
       // DIFFERENCE: this lineup minus the other, in the same slot row. An
       // empty slot scored nothing, so a slot filled in one and empty in the
@@ -134,10 +151,10 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       if (!beforeFills[i] || (!e && !b)) return `<td class="wk muted"${at}>—</td>`;
       const d = diffOf(pointsOf(e) ?? 0, pointsOf(b) ?? 0);
       const swapped = (e ? e.p.playerId : null) !== (b ? b.p.playerId : null);
-      const cls = ['wk', diffClass(d), swapped ? 'sbw-new' : ''].filter(Boolean).join(' ');
+      const cls = ['wk', diffClass(d), swapped ? 'sbw-new' : '', unknown(e) ? 'sbw-proj' : ''].filter(Boolean).join(' ');
       const title = swapped
-        ? `${e ? e.p.name : 'Nobody'} instead of ${b ? b.p.name : 'nobody'}`
-        : e.p.name;
+        ? `${e ? saidOf(e) : 'Nobody'} instead of ${b ? b.p.name : 'nobody'}`
+        : saidOf(e);
       return `<td class="${cls}" data-v="${d}"${e ? ` data-pid="${esc(e.p.playerId ?? '')}"` : ''}${at} ` +
         `title="${esc(title)}">${lines(e, signedText(d))}</td>`;
     });

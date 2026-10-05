@@ -26,6 +26,13 @@
 // able to, like we do across the rest of the cite?") is the `early` child, on
 // the stub's CAP_EARLY=1: week 4, squad 1 v squad 4 over (squad 1 lost it 118.3, a
 // fourth result for each) and the other four matchups still being played.
+//
+// Tim again, 2026-10-05: "just show what you have right now, so if my bench QB
+// scored 8 more than my starter, then my dif should show +8 ... just put a
+// little "live" sign by the week number". That is the `bench` child
+// (CAP_BENCH_QB=1: squad 1's bench QB finished 8.0 ahead of its starter, one
+// bench man still to play), and `bench-all` is the same with nobody left to
+// play — the same +8.0 and no live tag.
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -125,6 +132,16 @@ async function bootPage(prefs = {}) {
       weeks: dimmed('weekTable'), season: dimmed('seasonHyp'),
       standings: dimmed('standingsHyp'), summary: dimmed('summaryHyp'),
       current: [...dimmed('seasonCur'), ...dimmed('standingsCur'), ...dimmed('summaryCur')],
+    },
+    // Where the small LIVE tag is, and which lineup cells are a projection.
+    tags: {
+      weeks: [...document.querySelectorAll('#weekTable tbody tr[data-wk]')]
+        .filter((tr) => tr.children[0].querySelector('.wk-live')).map((tr) => tr.getAttribute('data-wk')),
+      list: [...document.querySelectorAll('.dz-row')].filter((b) => b.querySelector('.wk-live')).map((b) => b.dataset.id),
+      season: ['seasonCur', 'seasonHyp'].map((id) => [...document.querySelectorAll(`#${id} thead th`)]
+        .filter((th) => th.querySelector('.wk-live')).map(text)),
+      proj: ['seasonCur', 'seasonHyp'].map((id) => [...document.querySelectorAll(`#${id} td.sbw-proj`)].map(text)),
+      all: document.querySelectorAll('.wk-live').length,
     },
     noiseOn: Boolean($('noiseSwitch').checked),
     sims: (globalThis.__simCalls || []).length,
@@ -240,6 +257,29 @@ const CHILDREN = {
     return out;
   },
 
+  /**
+   * TIM'S OWN CASE (CAP_EARLY=1 + CAP_BENCH_QB): squad 1's matchup is over and
+   * its bench QB scored 8 more than its starter. Perfect hindsight for week 4,
+   * its Season by week as a difference, then the whole-season entry.
+   */
+  async bench() {
+    const p = await bootPage();
+    const out = { settled: await p.settle() };
+    out.start = p.snap();
+    out.offered = Boolean(p.row('lineup-perfect:1:4'));
+    if (out.offered) {
+      await p.pick('lineup-perfect:1:4');
+      out.hindsight = p.snap();
+      await p.view('season', 'diff');
+      out.diff = p.snap();
+      await p.view('season', 'total');
+      await p.pick('lineup-perfect:1:all');
+      out.all = p.snap();
+    }
+    out.errors = p.errors;
+    return out;
+  },
+
   /** A fresh page on the prefs the first one left: the what-if is still there. */
   async reload() {
     const p = await bootPage(JSON.parse(process.env.DZ_PREFS || '{}'));
@@ -328,12 +368,14 @@ const RUNS = {
   unplayed: { child: 'unplayed', env: { CAP_DECIDED: '0' } },
   early: { child: 'early', env: { CAP_EARLY: '1' } },
   'summary-early': { child: 'summary', env: { CAP_EARLY: '1' } },
+  bench: { child: 'bench', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
+  'bench-all': { child: 'bench', env: { CAP_EARLY: '1', CAP_BENCH_QB: 'all' } },
 };
 
 function child(name, extra = {}) {
   const cfg = RUNS[name];
   const env = { ...process.env };
-  for (const k of ['CAP_EARLY', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'FF_SCEN']) delete env[k];
+  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'FF_SCEN']) delete env[k];
   Object.assign(env, cfg.env, extra);
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, cfg.child], {
     encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 64 * 1024 * 1024, timeout: 240000, env,
@@ -539,40 +581,48 @@ if (booted(page, 'page')) {
   }
 }
 
-// ---- the week in play: everything that can be counted is, in both worlds
+// ---- the week in play: everything known so far is shown, in both worlds
+// The record a table's Result column adds up to, as a tile prints one.
+const tally = (weeks, side) => {
+  const n = { W: 0, L: 0, T: 0 };
+  for (const w of weeks) {
+    const letters = w.c[5].split(' → ');
+    const l = side === 'real' ? letters[0] : letters[letters.length - 1];
+    if (l in n) n[l]++;
+  }
+  return `${n.W}-${n.L}${n.T ? `-${n.T}` : ''}`;
+};
+const agree = (s) => tally(s.weeks, 'real') === s.stats.real && tally(s.weeks, 'mirror') === s.stats.mirror;
+const col4 = (rows) => rows.map((r) => r[4]);
+const bare = (rows) => rows.map((r) => r.slice(0, 5).map((c) => c.replace(/\s*[▲▼]$/, '')));
+const WEEK4 = ['lineup-reasonable:1:all', 'lineup-perfect:1:all', 'lineup-reasonable:1:4', 'lineup-perfect:1:4'];
+
 const early = child('early');
 if (booted(early, 'week in play')) {
   ok('the status line says what is counted', /: 3 finished weeks \+ week 4 so far, 5 moves\.$/.test(early.status), early.status);
   ok('and so does the line under the title', early.start.sub === 'Capture Stub League · 3 finished weeks + week 4 so far', early.start.sub);
   const ids = early.start.list.map((r) => r.id);
-  ok('squad 1’s matchup is over: its week-4 lineup is offered — but not hindsight, its bench has not played',
-    ids.includes('lineup-reasonable:1:4') && !ids.includes('lineup-perfect:1:4'), ids);
+  ok('BOTH week-4 lineups are offered, hindsight too, though squad 1’s bench has not played',
+    ids.includes('lineup-reasonable:1:4') && ids.includes('lineup-perfect:1:4') && ids.length === 11, ids);
+  ok('with nobody on the bench finished, hindsight has nothing to change', rowOf(early.start.list.map((r) => [r.id, r.t]), 'lineup-perfect:1:4')[1] ===
+    'Wk 4liveLineup: perfect hindsightNo change', early.start.list.map((r) => r.t));
+  ok('LIVE sits by the week of each week-4 entry and by "All", and by no other row', same(early.start.tags.list, WEEK4), early.start.tags.list);
 
   // The add+drop undone, as before, with a fourth week under it.
   const a = early.addDrop;
-  ok('the weekly table has the week in play, with its result',
+  ok('the weekly table has the week in play, with its result, marked live',
     same(a.weeks.map((w) => w.c), [
       ['1', 'Manager 10', '114.9', '114.9', '0.0', 'W'],
       ['2', 'Manager 2', '111.1', '111.5', '+0.4', 'T → W'],
       ['3', 'Manager 3', '117.3', '115.5', '−1.8', 'L'],
-      ['4', 'Manager 4', '118.3', '118.3', '0.0', 'L'],
-    ]), a.weeks.map((w) => w.c));
+      ['4live', 'Manager 4', '118.3', '118.3', '0.0', 'L'],
+    ]) && same(a.tags.weeks, ['4']), a.weeks.map((w) => w.c));
   ok('and it is in the Total row', same(a.total, ['Total', '461.6', '460.2', '−1.4', '+1 W']), a.total);
   ok('the tiles count it too', same(a.stats, { real: '1-2-1', mirror: '2-2', points: '−1.4' }), a.stats);
-  // The record a table's Result column adds up to, as a tile prints one.
-  const tally = (weeks, side) => {
-    const n = { W: 0, L: 0, T: 0 };
-    for (const w of weeks) {
-      const letters = w.c[5].split(' → ');
-      const l = side === 'real' ? letters[0] : letters[letters.length - 1];
-      if (l in n) n[l]++;
-    }
-    return `${n.W}-${n.L}${n.T ? `-${n.T}` : ''}`;
-  };
-  const agree = (s) => tally(s.weeks, 'real') === s.stats.real && tally(s.weeks, 'mirror') === s.stats.mirror;
   ok('THE TILES ARE THE TABLE: each record is the Result column added up', agree(a), [tally(a.weeks, 'real'), tally(a.weeks, 'mirror'), a.stats]);
-  ok('season by week has the fourth column', same(a.season.cur, ['Total', '114.9', '111.1', '117.3', '118.3']) &&
-    same(a.season.hyp, ['Total', '114.9', '111.5', '115.5', '118.3']), [a.season.cur, a.season.hyp]);
+  ok('season by week has the fourth column, its head marked live in both boxes', same(a.season.cur, ['Total', '114.9', '111.1', '117.3', '118.3']) &&
+    same(a.season.hyp, ['Total', '114.9', '111.5', '115.5', '118.3']) && same(a.tags.season, [['4live'], ['4live']]), [a.season.cur, a.season.hyp, a.tags.season]);
+  ok('every starter of squad 1 has finished: no cell is a projection', same(a.tags.proj, [[], []]), a.tags.proj);
   ok('standings count the finished matchup: squad 4 is 4–0, squad 1 1–2–1 beside 2–2',
     rowOf(a.standings.cur, 'Manager 4')[1] === '4–0' && rowOf(a.standings.cur, 'Manager 1')[1] === '1–2–1' &&
     rowOf(a.standings.hyp, 'Manager 1')[1] === '2–2', [rowOf(a.standings.cur, 'Manager 4'), rowOf(a.standings.hyp, 'Manager 1')]);
@@ -580,7 +630,6 @@ if (booted(early, 'week in play')) {
     rowOf(a.standings.cur, 'Manager 5'));
 
   // The chart: Summary's own, and the same treatment of the week on both sides.
-  const bare = (rows) => rows.map((r) => r.slice(0, 5).map((c) => c.replace(/\s*[▲▼]$/, '')));
   const sumEarly = child('summary-early');
   if (booted(sumEarly, 'summary, week in play')) {
     ok('"Current" is still the Summary page’s chart, row for row', same(bare(early.start.summary.cur), bare(sumEarly.rows)),
@@ -593,42 +642,108 @@ if (booted(early, 'week in play')) {
   ok('and a matchup in play is the same decimal on both sides', rowOf(a.summary.cur, 'Manager 5')[1] === '1.6-2.4' &&
     rowOf(a.summary.hyp, 'Manager 5')[1] === '1.6-2.4', [rowOf(a.summary.cur, 'Manager 5'), rowOf(a.summary.hyp, 'Manager 5')]);
 
-  // A trade as if accepted in week 4 puts a man still playing in squad 1's lineup.
+  // A trade as if accepted in week 4 puts a man still playing in squad 1's
+  // lineup: squad 9's QB, projected 25.5, for its own, who scored 10.1. He
+  // counts for his projection: 118.3 − 10.1 + 25.5 = 133.7, +15.4.
   const w4 = early.whatIf;
-  ok('a what-if whose only week is not known yet reads "In play" in the list',
-    /^Wk 4Trade Manager 1 QB0 for Manager 9 QB0 \(Manager 9\)In play$/.test(w4.list[0].t) && w4.list[0].selected, w4.list[0]);
-  ok('its week-4 row says In play, with no totals', same(w4.weeks[3].c, ['4', 'Manager 4', '—', '—', '—', 'In play']), w4.weeks[3]);
-  ok('that matchup is left out of BOTH records and both totals', same(w4.stats, { real: '1-1-1', mirror: '1-1-1', points: '0.0' }) &&
-    same(w4.total, ['Total', '343.3', '343.3', '0.0', '0']) && agree(w4), [w4.stats, w4.total]);
+  ok('a what-if on a man still playing shows his points so far in the list, marked live',
+    w4.list[0].t === 'Wk 4liveTrade Manager 1 QB0 for Manager 9 QB0 (Manager 9)0+15.4' && w4.list[0].selected &&
+    w4.tags.list.includes(w4.list[0].id), w4.list[0]);
+  ok('its week-4 row has the totals, and "In play" for the result — the game is not final in that world',
+    same(w4.weeks[3].c, ['4live', 'Manager 4', '118.3', '133.7', '+15.4', 'In play']) && !w4.weeks[3].flip, w4.weeks[3]);
+  ok('the points are in the Total row and the tile; the matchup is in NEITHER record',
+    same(w4.total, ['Total', '461.6', '477.0', '+15.4', '0']) && same(w4.stats, { real: '1-1-1', mirror: '1-1-1', points: '+15.4' }) && agree(w4),
+    [w4.total, w4.stats]);
   ok('and out of both standings: squad 4 is back to 3–0 in each', rowOf(w4.standings.cur, 'Manager 4')[1] === '3–0' &&
     rowOf(w4.standings.hyp, 'Manager 4')[1] === '3–0' && same(w4.standings.cur, w4.standings.hyp), [rowOf(w4.standings.cur, 'Manager 4'), rowOf(w4.standings.hyp, 'Manager 4')]);
   ok('the hypothetical chart does not bank it either', rowOf(w4.summary.hyp, 'Manager 1')[1] === '1-1-1' && rowOf(w4.summary.hyp, 'Manager 4')[1] === '3-0',
     [rowOf(w4.summary.hyp, 'Manager 1'), rowOf(w4.summary.hyp, 'Manager 4')]);
   ok('while "Current" is unmoved', same(w4.summary.cur, early.start.summary.cur));
-  const col4 = (rows) => rows.map((r) => r[4]);
-  ok('Season by week shows the lineup so far: the QB still playing is a dash, and the total is the other nine’s',
-    col4(w4.season.body)[0] === 'M. 9 QB0—' && same(col4(w4.season.body).slice(1, 10), col4(w4.season.curBody).slice(1, 10)) &&
-    w4.season.cur[4] === '118.3' && w4.season.hyp[4] === '108.2', [col4(w4.season.body), w4.season.hyp]);
+  ok('Season by week: the QB still playing shows his projection, marked as one, and the total counts it',
+    col4(w4.season.body)[0] === 'M. 9 QB025.5' && same(w4.tags.proj, [[], ['M. 9 QB025.5']]) &&
+    same(col4(w4.season.body).slice(1, 10), col4(w4.season.curBody).slice(1, 10)) &&
+    w4.season.cur[4] === '118.3' && w4.season.hyp[4] === '133.7', [col4(w4.season.body), w4.season.hyp, w4.tags.proj]);
 
-  // A squad whose own matchup is still being played.
+  // A squad whose own matchup is still being played: one starter finished (15.5).
+  // Undoing its trade starts an RB projected 16.7 where one projected 16.8 was.
   const t5 = early.team5;
-  ok('a squad still playing is offered no week-4 lineup', t5.list.length === 9 && !t5.list.some((r) => /:5:4$/.test(r.id)), t5.list.map((r) => r.id));
-  ok('its week-4 row says In play, with no totals', same(t5.weeks[3].c, ['4', 'Manager 3', '—', '—', '—', 'In play']), t5.weeks[3]);
-  ok('the Total row and the tiles are its three finished weeks', same(t5.total, ['Total', '388.9', '388.6', '−0.3', '0']) &&
-    same(t5.stats, { real: '1-2', mirror: '1-2', points: '−0.3' }) && agree(t5), [t5.total, t5.stats]);
-  ok('Season by week: the one finished man’s points, a dash for the rest, the total so far',
-    col4(t5.season.curBody)[0] === 'M. 5 QB015.5' && col4(t5.season.curBody).slice(1, 10).every((c) => /—$/.test(c)) &&
-    t5.season.cur[4] === '15.5', col4(t5.season.curBody));
+  ok('a squad still playing is offered both week-4 lineups too', t5.list.length === 11 &&
+    t5.list.some((r) => r.id === 'lineup-reasonable:5:4') && t5.list.some((r) => r.id === 'lineup-perfect:5:4'), t5.list.map((r) => r.id));
+  ok('its week-4 row has what is known so far, and "In play" for the result',
+    same(t5.weeks[3].c, ['4live', 'Manager 3', '15.5', '15.4', '−0.1', 'In play']), t5.weeks[3]);
+  ok('the Total row and the tiles: four weeks of points (388.9 + 15.5), three results', same(t5.total, ['Total', '404.4', '404.0', '−0.4', '0']) &&
+    same(t5.stats, { real: '1-2', mirror: '1-2', points: '−0.4' }) && agree(t5), [t5.total, t5.stats]);
+  ok('and the list row is the same −0.4', t5.list[0].t === 'Wk 3Traded Manager 5 RB1 for Manager 6 RB10−0.4', t5.list[0]);
+  ok('Season by week: the finished man’s points plain, the other nine as projections, the total so far',
+    col4(t5.season.curBody)[0] === 'M. 5 QB015.5' && t5.tags.proj[0].length === 9 && !t5.tags.proj[0].includes('M. 5 QB015.5') &&
+    same(t5.tags.proj[0], col4(t5.season.curBody).slice(1, 10)) && t5.season.cur[4] === '15.5' && t5.season.hyp[4] === '15.4',
+    [col4(t5.season.curBody), t5.tags.proj[0]]);
+  ok('the standings leave the game in play out, as before', rowOf(t5.standings.cur, 'Manager 5')[1] === '1–2' && rowOf(t5.standings.cur, 'Manager 5')[4] === '388.9' &&
+    rowOf(t5.standings.hyp, 'Manager 5')[1] === '1–2' && rowOf(t5.standings.hyp, 'Manager 5')[4] === '388.6', [rowOf(t5.standings.cur, 'Manager 5'), rowOf(t5.standings.hyp, 'Manager 5')]);
 
   // Nothing changed is still nothing, the week in play included.
   const e = early.empty;
-  ok('an empty decision: its weekly differences are zero, and the week in play is a dash',
-    e.weeks.slice(0, 3).every((x) => x.c[2] === x.c[3] && x.c[4] === '0.0' && !x.flip) && same(e.weeks[3].c, ['4', 'Manager 6', '—', '—', '—', 'In play']),
+  ok('an empty decision: every weekly difference is zero, the week in play too',
+    e.weeks.length === 4 && e.weeks.every((x) => x.c[2] === x.c[3] && x.c[4] === '0.0' && !x.flip) &&
+    same(e.weeks[3].c, ['4live', 'Manager 6', '0.0', '0.0', '0.0', 'In play']) && same(e.total, ['Total', '328.1', '328.1', '0.0', '0']),
     e.weeks.map((x) => x.c));
-  ok('season by week, difference: every cell zero, the week in play dashes', e.season.vals.length === 33 && e.season.vals.every((v) => v === 0) &&
-    same(e.season.hyp, ['Total', '0.0', '0.0', '0.0', '—']) && col4(e.season.body).every((c) => c === '—'), [e.season.hyp, e.season.vals.length]);
+  ok('season by week, difference: every cell zero, the week in play too', e.season.vals.length === 44 && e.season.vals.every((v) => v === 0) &&
+    same(e.season.hyp, ['Total', '0.0', '0.0', '0.0', '0.0']) && col4(e.season.body).every((c) => /0\.0$/.test(c)),
+    [e.season.hyp, e.season.vals.length, col4(e.season.body)]);
   ok('standings, difference: every cell zero', allZero(e.standings.hyp), e.standings.hyp.find((r) => !allZero([r])));
   ok('the chart, difference: every cell zero', allZero(e.summary.hyp) && e.summary.hyp.every((r) => r[3] === '0.0%' && r[4] === '0.0%'), e.summary.hyp);
+}
+
+// ---- Tim's own case: the bench QB outscored the starter, one bench man to play
+// Squad 1's week-4 matchup is over (118.3, a loss to squad 4). Its
+// starting QB scored 10.1 and its bench QB 18.1; the free agent on its bench has
+// not played. Perfect hindsight starts the bench QB: 118.3 − 10.1 + 18.1 = 126.3,
+// +8.0, and the loss is a win.
+const bench = child('bench');
+if (booted(bench, 'bench QB, week in play')) {
+  ok('perfect hindsight for the week in play is offered', bench.offered === true);
+  const texts = Object.fromEntries(bench.start.list.map((r) => [r.id, r.t]));
+  ok('THE LIST ROW shows +8.0 and the win, marked live', texts['lineup-perfect:1:4'] === 'Wk 4liveLineup: perfect hindsight+1 W+8.0', texts['lineup-perfect:1:4']);
+  ok('the whole-season entry counts it (33.9 + 8.0) and is marked live by "All"', texts['lineup-perfect:1:all'] === 'AllliveLineup: perfect hindsight+2 W+41.9',
+    texts['lineup-perfect:1:all']);
+  ok('LIVE is on the week-4 and "All" rows only', same(bench.start.tags.list, WEEK4), bench.start.tags.list);
+  const h = bench.hindsight;
+  ok('THE WEEK ROW shows +8.0 and the flipped result', same(h.weeks.map((w) => w.c), [
+    ['1', 'Manager 10', '114.9', '114.9', '0.0', 'W'],
+    ['2', 'Manager 2', '111.1', '111.1', '0.0', 'T'],
+    ['3', 'Manager 3', '117.3', '117.3', '0.0', 'L'],
+    ['4live', 'Manager 4', '118.3', '126.3', '+8.0', 'L → W'],
+  ]) && same(h.weeks.map((w) => w.flip), [false, false, false, true]), h.weeks.map((w) => w.c));
+  ok('THE TOTAL ROW shows +8.0', same(h.total, ['Total', '461.6', '469.6', '+8.0', '+1 W']), h.total);
+  ok('THE TILES show +8.0, and the game counts though a bench man is still to play', same(h.stats, { real: '1-2-1', mirror: '2-1-1', points: '+8.0' }) && agree(h),
+    h.stats);
+  ok('LIVE by the week number: weekly table, and both Season by week heads', same(h.tags.weeks, ['4']) && same(h.tags.season, [['4live'], ['4live']]), h.tags);
+  ok('Season by week: the bench QB is in the QB row with his 18.1, and the total is 126.3',
+    col4(h.season.curBody)[0] === 'M. 1 QB010.1' && col4(h.season.body)[0] === 'M. 1 QB1218.1' && h.season.hyp[4] === '126.3', col4(h.season.body));
+  ok('no cell is a projection: every man shown has finished', same(h.tags.proj, [[], []]), h.tags.proj);
+  ok('as a difference: +8.0 at QB, +8.0 in the total row, and the finished weeks zero',
+    col4(bench.diff.season.body)[0] === 'M. 1 QB12+8.0' && same(bench.diff.season.hyp, ['Total', '0.0', '0.0', '0.0', '+8.0']) &&
+    Math.round(bench.diff.season.vals.slice(0, 40).reduce((s, v) => s + v, 0) * 10) / 10 === 8, [col4(bench.diff.season.body), bench.diff.season.hyp]);
+  ok('the game is final in both worlds, so the standings and the chart count it: 2–1–1, squad 4 3–1',
+    rowOf(h.standings.hyp, 'Manager 1')[1] === '2–1–1' && rowOf(h.standings.hyp, 'Manager 4')[1] === '3–1' &&
+    rowOf(h.summary.hyp, 'Manager 1')[1] === '2-1-1' && rowOf(h.summary.cur, 'Manager 1')[1] === '1-2-1',
+    [rowOf(h.standings.hyp, 'Manager 1'), rowOf(h.summary.hyp, 'Manager 1')]);
+  const all = bench.all;
+  ok('the whole season: week 4’s +8.0 beside the finished weeks’, and in the total',
+    same(all.weeks.map((w) => w.c[4]), ['+11.5', '+11.4', '+11.0', '+8.0']) && same(all.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']) &&
+    same(all.stats, { real: '1-2-1', mirror: '3-1', points: '+41.9' }) && agree(all), [all.weeks.map((w) => w.c), all.total, all.stats]);
+}
+
+// The same league with that last bench man finished: nothing is partial.
+const done = child('bench-all');
+if (booted(done, 'bench QB, everybody finished')) {
+  const h = done.hindsight;
+  ok('the same +8.0 everywhere', same(h.weeks[3].c, ['4', 'Manager 4', '118.3', '126.3', '+8.0', 'L → W']) &&
+    same(h.total, ['Total', '461.6', '469.6', '+8.0', '+1 W']) && same(h.stats, { real: '1-2-1', mirror: '2-1-1', points: '+8.0' }), [h.weeks[3], h.total, h.stats]);
+  ok('and NO live tag anywhere on the page', h.tags.all === 0 && done.all.tags.all === 0 && same(h.tags.weeks, []) && same(h.tags.list, []) &&
+    same(h.tags.season, [[], []]), h.tags);
+  ok('the list rows read without it', h.list.find((r) => r.id === 'lineup-perfect:1:4').t === 'Wk 4Lineup: perfect hindsight+1 W+8.0' &&
+    h.list.find((r) => r.id === 'lineup-perfect:1:all').t === 'AllLineup: perfect hindsight+2 W+41.9', h.list.map((r) => r.t));
 }
 
 // ---- the world cannot be read

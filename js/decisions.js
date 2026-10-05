@@ -25,14 +25,32 @@
 //
 // THE WEEK IN PLAY (`world.partialWeek`). Tim, 2026-10-05: "Could you just
 // display everything you're able to, like we do across the rest of the cite?"
-// The last week of `world.weeks` may be one ESPN has not closed: its rosters
-// then carry `done` on every man (and his PRE-GAME projection), and so does
-// `players.get(id).byWeek[week]`. A game of that week COUNTS only when it is
-// known in both worlds — a score on each side, and every starter of both teams
-// finished in the real lineups and in the mirror's. Any other game is left out
-// of `games`, `flips` and both `records`, is listed in `pending`, and its two
-// team-weeks carry `pending: true` with no totals. Every other week is exactly
-// what it was.
+// and, later that day: "just show what you have right now, so if my bench QB
+// scored 8 more than my starter, then my dif should show +8, along with any of
+// the other differences. If the information is partial (not all the bench
+// players have played yet), then just put a little 'live' sign by the week
+// number". The last week of `world.weeks` may be one ESPN has not closed: its
+// rosters then carry `done` on every man (and his PRE-GAME projection), and so
+// does `players.get(id).byWeek[week]`.
+//
+//   POINTS are always worked out. A man's VALUE that week is his score once he
+//   has finished and his pre-game projection until then (the world carries no
+//   game clock, so points so far are not blended in). `realTotal` is the points
+//   the team's finished starters have (its real score once its matchup is
+//   over); `total` is that plus, for each lineup change, the value of the man
+//   in less the value of the man out. A starter carries `known` and `value`.
+//
+//   A RESULT COUNTS only when the game is final in both worlds — a score on
+//   each side, and every starter of both teams finished in the real lineups
+//   and in the mirror's. Any other game is left out of `games`, `flips` and
+//   both `records`, is listed in `pending`, and its two team-weeks carry
+//   `pending: true`.
+//
+//   `live: true` marks a team-week with anything still to come: a man on its
+//   roster (real or mirror, bench included, IR left out) who has not finished,
+//   or a pending matchup.
+//
+// Every other week is exactly what it was.
 //
 // Slot eligibility comes from js/espn.js rather than being restated here, for
 // the reason js/forecast.js gives: a second copy of the table is how the flex
@@ -377,10 +395,32 @@ function bestLineup(real, slots, key) {
   return score(best) > score(realLineup) + 1e-9 ? best : realLineup;
 }
 
-function lineupFor(real, slots, kind) {
+/**
+ * Hindsight in THE WEEK IN PLAY: the best lineup among what is known. Finished
+ * men are ranked on their scores; a starter still playing is left where he is,
+ * and a bench man still playing is never started — his score is not known.
+ */
+function hindsightSoFar(real, slots) {
+  const realStarters = real.filter((p) => p.started);
+  const realLineup = realStarters.map((p) => asStarter(p, p.lineupSlotId));
+  const fixed = realStarters.filter((p) => !isDone(p));
+  const open = slots.slice();
+  for (const p of fixed) { const i = open.indexOf(p.lineupSlotId); if (i !== -1) open.splice(i, 1); }
+  const cands = [...realStarters.filter(isDone), ...real.filter((p) => !p.started && p.lineupSlotId !== IR_SLOT && isDone(p))]
+    .map((p) => ({ ref: p, position: p.position, projected: num(p.actual) }));
+  const best = [
+    ...fixed.map((p) => asStarter(p, p.lineupSlotId)),
+    ...optimalLineup(cands, open).starters.map((s) => asStarter(s.ref, s.slotId)),
+  ];
+  const act = (lineup) => lineup.reduce((a, s) => a + (isDone(s.p) ? num(s.p.actual) : 0), 0);
+  return act(best) > act(realLineup) + 1e-9 ? best : realLineup;
+}
+
+function lineupFor(real, slots, kind, inPlay = false) {
   const realLineup = real.filter((p) => p.started).map((p) => asStarter(p, p.lineupSlotId));
   const reasonable = bestLineup(real, slots, 'projected');
   if (kind === 'lineup-reasonable') return reasonable;
+  if (inPlay) return hindsightSoFar(real, slots);
   // Hindsight can never do worse than what happened or than the projections'
   // pick; said outright rather than left to the solver, whose greedy fill is
   // only proven optimal for slot sets that nest.
@@ -390,7 +430,10 @@ function lineupFor(real, slots, kind) {
   return act(best) > act(realLineup) + 1e-9 ? best : realLineup;
 }
 
-/** `inPlay`: the week in play, where a man still playing has no score to print. */
+/**
+ * `inPlay`: the week in play, where a man still playing has no score to print.
+ * He is then `known: false`, and `value` is what he counts for meanwhile.
+ */
 function shapeStarters(lineup, slots, realIds, inPlay = false) {
   const order = (slotId) => { const i = slots.indexOf(slotId); return i === -1 ? 99 : i; };
   return lineup
@@ -399,7 +442,7 @@ function shapeStarters(lineup, slots, realIds, inPlay = false) {
       slot: SLOT_LABELS[slotId] ?? String(slotId), slotId,
       actual: inPlay && !isDone(p) ? null : num(p.actual), projected: num(p.projected),
       isNew: !realIds.has(p.playerId),
-      ...(inPlay ? { done: isDone(p) } : {}),
+      ...(inPlay ? { done: isDone(p), known: isDone(p), value: valueNow(p) } : {}),
     }))
     .sort((a, b) => order(a.slotId) - order(b.slotId) || b.projected - a.projected || (a.playerId > b.playerId ? 1 : -1));
 }
@@ -408,28 +451,9 @@ function shapeStarters(lineup, slots, realIds, inPlay = false) {
 
 const partialWeekOf = (world) => (Number.isFinite(world.partialWeek) ? world.partialWeek : null);
 
-/** In the week in play: is this team's own matchup over, as it really happened? */
-function matchupOver(world, teamId) {
-  const week = partialWeekOf(world);
-  const g = (world.games || []).find((x) => x.week === week && (x.homeId === teamId || x.awayId === teamId));
-  if (!g || !Number.isFinite(g.homeActual) || !Number.isFinite(g.awayActual)) return false;
-  return [g.homeId, g.awayId].every((id) => {
-    const starters = realRoster(world, id, week).filter((p) => p.started);
-    return starters.length > 0 && starters.every(isDone);
-  });
-}
-
-/**
- * May this team's lineup be second-guessed in this week? Always, in a finished
- * week. In the week in play only once its own matchup is over; and hindsight
- * only once EVERY man it could have started has finished, since "who scored
- * most" is not known before then.
- */
-function lineupAllowed(world, teamId, week, kind) {
-  if (week !== partialWeekOf(world)) return true;
-  if (!matchupOver(world, teamId)) return false;
-  if (kind !== 'lineup-perfect') return true;
-  return realRoster(world, teamId, week).filter((p) => p.lineupSlotId !== IR_SLOT).every(isDone);
+/** A man's worth in the week in play: his score once finished, his pre-game projection until then. */
+function valueNow(p) {
+  return isDone(p) ? num(p.actual) : num(p.projected);
 }
 
 // ------------------------------------------------------------------- mirror
@@ -453,7 +477,7 @@ function resolve(world, decision) {
  *            noise:Map, over:Array, pending:Array}} `over` (not in the plan's
  *            contract) lists the team-weeks left above `world.limits.roster`,
  *            for the note. `pending` is `[{ week, homeId, awayId }]`: the games
- *            of the week in play that are not known in both worlds yet (see
+ *            of the week in play that are not final in both worlds yet (see
  *            "THE WEEK IN PLAY" at the top); [] in a world with no such week.
  */
 export function mirror(world, decision) {
@@ -472,6 +496,7 @@ export function mirror(world, decision) {
   const teams = new Map(teamIds.map((id) => [id, { byWeek: {} }]));
   const over = [];
   const unfinished = new Set();   // in the week in play: teams starting a man still to finish, in either world
+  const waiting = new Set();      // ...and teams with ANY man still to finish, bench included
   const divergence = new Map();
   const limit = world.limits && world.limits.roster;
 
@@ -488,8 +513,9 @@ export function mirror(world, decision) {
 
       if (plan.mode === 'lineup') {
         // Rule 4: only the picked team changes, in the picked week (or every week).
-        if (teamId === plan.teamId && (plan.week === null || plan.week === week) &&
-          lineupAllowed(world, teamId, week, plan.kind)) lineup = lineupFor(real, slots, plan.kind);
+        if (teamId === plan.teamId && (plan.week === null || plan.week === week)) {
+          lineup = lineupFor(real, slots, plan.kind, week === partial);
+        }
       } else if (div.size) {
         const kept = real.filter((p) => !div.has(p.playerId) || div.get(p.playerId) === teamId);
         const arrivals = [];
@@ -505,6 +531,7 @@ export function mirror(world, decision) {
             ...(week === partial ? { done: wk.done === true } : {}),
           });
         }
+        if (week === partial && arrivals.some((p) => !isDone(p))) waiting.add(teamId);
         // Rule 3: a roster the decision did not reach keeps its real lineup.
         if (kept.length !== real.length || arrivals.length) {
           lineup = minimalLineup(real, kept, arrivals, slots);
@@ -518,19 +545,24 @@ export function mirror(world, decision) {
       const mine = lineup.map((s) => s.p);
       const inPlay = week === partial;
       if (inPlay && !(realStarters.every(isDone) && mine.every(isDone))) unfinished.add(teamId);
+      if (inPlay && !real.filter((p) => p.lineupSlotId !== IR_SLOT).every(isDone)) waiting.add(teamId);
 
       const g = gameOf(teamId, week);
       const home = g && g.homeId === teamId;
       const gameActual = g ? (home ? g.homeActual : g.awayActual) : null;
       const gameProjected = g ? (home ? g.homeProjected : g.awayProjected) : null;
-      const realTotal = Number.isFinite(gameActual) ? gameActual : round2(sum(realStarters, 'actual'));
+      // The week in play, matchup not over: the points its finished starters have.
+      const realTotal = inPlay && !(Number.isFinite(gameActual) && realStarters.every(isDone))
+        ? round2(sum(realStarters.filter(isDone), 'actual'))
+        : Number.isFinite(gameActual) ? gameActual : round2(sum(realStarters, 'actual'));
+      const worth = (list) => (inPlay ? list.reduce((a, p) => a + valueNow(p), 0) : sum(list, 'actual'));
       const realProjected = Number.isFinite(gameProjected) ? gameProjected : round2(sum(realStarters, 'projected'));
 
       teams.get(teamId).byWeek[week] = {
         // The real total plus the difference the lineup makes, never a fresh
         // sum: ESPN's total is the one Tim checks against, and an untouched
         // team-week has to equal it exactly.
-        total: changed ? round2(realTotal + (sum(mine, 'actual') - sum(realStarters, 'actual'))) : realTotal,
+        total: changed ? round2(realTotal + (worth(mine) - worth(realStarters))) : realTotal,
         realTotal,
         projected: changed ? round2(realProjected + (sum(mine, 'projected') - sum(realStarters, 'projected'))) : realProjected,
         realProjected,
@@ -541,13 +573,13 @@ export function mirror(world, decision) {
     }
   }
 
-  // THE WEEK IN PLAY: a game counts only when it is known in both worlds.
+  // THE WEEK IN PLAY: a result counts only when the game is final in both worlds.
   const pending = [];
   const pendingKeys = new Set();
   if (partial !== null && finalWeeks.has(partial)) {
     const hold = (teamId) => {
       const cell = teams.get(teamId) && teams.get(teamId).byWeek[partial];
-      if (cell) Object.assign(cell, { pending: true, total: null, realTotal: null });
+      if (cell) cell.pending = true;
     };
     const playing = new Set();
     for (const g of world.games || []) {
@@ -563,6 +595,11 @@ export function mirror(world, decision) {
     }
     // A team with no game that week has only its own men to wait for.
     for (const teamId of unfinished) if (!playing.has(teamId)) hold(teamId);
+    // Live: anything of this team-week still to come.
+    for (const teamId of teamIds) {
+      const cell = teams.get(teamId).byWeek[partial];
+      if (cell && (cell.pending || waiting.has(teamId))) cell.live = true;
+    }
   }
 
   // Rule 5: only the weeks held are replayed; other games pass through. A
@@ -601,10 +638,7 @@ export function mirror(world, decision) {
   const noise = new Map(teamIds.map((id) => [id, {}]));
   for (const week of weeks) {
     for (const teamId of teamIds) {
-      // A pending team-week shows no number, so there is nothing to be unsure of.
-      noise.get(teamId)[week] = teams.get(teamId).byWeek[week].pending
-        ? 0
-        : noiseFor(world, { teamId, week, firstWeek, touched, div: divergence.get(week), teams });
+      noise.get(teamId)[week] = noiseFor(world, { teamId, week, firstWeek, touched, div: divergence.get(week), teams });
     }
   }
 
@@ -641,7 +675,9 @@ function noiseFor(world, { teamId, week, firstWeek, touched, div, teams }) {
     for (const s of starters) {
       const i = open.indexOf(s.slotId);
       if (i !== -1) open.splice(i, 1);
-      if (eligible(s.slotId, info.position) && (lowest === null || s.actual < lowest)) lowest = s.actual;
+      // The week in play: a starter still playing is measured at his value.
+      const scored = s.known === false ? s.value : s.actual;
+      if (eligible(s.slotId, info.position) && (lowest === null || scored < lowest)) lowest = scored;
     }
     // A slot he could fill that the team left empty is a starter scoring 0.
     if (open.some((slotId) => eligible(slotId, info.position)) && (lowest === null || lowest > 0)) lowest = 0;
@@ -696,9 +732,8 @@ function swapsOf(week, cell) {
  * entries, then each week's two. The week's lineup is the decision (not each
  * of the ~28 lineup moves ESPN logs); the swaps that differ are its `detail`.
  *
- * THE WEEK IN PLAY has its lineup entries only once the team's own matchup is
- * over, and its hindsight entry only once every man on the team has finished
- * (`lineupAllowed`); the whole-season entries leave that week alone otherwise.
+ * THE WEEK IN PLAY has both lineup entries like any other week, for every team:
+ * hindsight there judges only the men who have finished (`hindsightSoFar`).
  *
  * Besides the plan's fields each entry carries `teamId`, and a move carries
  * `moveId` and `at`, which is what `mirror` reads.
@@ -742,9 +777,7 @@ export function listDecisions(world, teamId) {
   };
   for (const kind of ['lineup-reasonable', 'lineup-perfect']) out.push(lineup(kind, null));
   for (const week of weeks) {
-    for (const kind of ['lineup-reasonable', 'lineup-perfect']) {
-      if (lineupAllowed(world, teamId, week, kind)) out.push(lineup(kind, week));
-    }
+    for (const kind of ['lineup-reasonable', 'lineup-perfect']) out.push(lineup(kind, week));
   }
 
   return out;

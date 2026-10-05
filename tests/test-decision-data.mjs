@@ -225,6 +225,19 @@ async function bootSeam() {
   return storage;
 }
 
+/**
+ * Week 3 in play, each squad's perfect hindsight as js/decisions.js works it out
+ * from a world: [squad, actual, hypothetical, in play?, live?, who starts].
+ */
+function hindsightSoFar(D, world) {
+  return [1, 2, 3, 4].map((t) => {
+    const d = D.listDecisions(world, t).find((x) => x.id === `lineup-perfect:${t}:3`);
+    if (!d) return [t, 'not offered'];
+    const c = D.mirror(world, d).teams.get(t).byWeek[3];
+    return [t, c.realTotal, c.total, c.pending === true, c.live === true, c.starters.map((s) => s.playerId).sort((a, b) => a - b)];
+  });
+}
+
 // ===========================================================================
 // SCENARIOS
 // ===========================================================================
@@ -651,6 +664,45 @@ const SCENARIOS = {
     eq(of(closed.calls, 'mTransactions2').map((c) => c.week), [3], 'its moves are read once more, as a decided week’s');
     ok('and now it is frozen', !!store.readDecisionWeek(LEAGUE_ID, SEASON, 3));
     ok('with every man done', [...closed.world.players.values()].every((p) => p.byWeek[3].done === true));
+  },
+
+  // ---- the week in play has what "show what you have right now" needs --------
+  //
+  // Tim, 2026-10-05: "just show what you have right now, so if my bench QB scored
+  // 8 more than my starter, then my dif should show +8 ... If the information is
+  // partial (not all the bench players have played yet), then just put a little
+  // "live" sign by the week number". The engine needs, for EVERY man on a week-3
+  // roster, bench included: whether he has finished, his score, and the
+  // projection he had before the game. Here 91 (squad 1's bench RB) and 41
+  // (squad 4's QB) are in the late game: 1 v 2 is over with a bench man still to
+  // play, 3 v 4 is being played.
+  //   week-3 scores: 11 14 · 12 15 · 21 10 · 32 14 · 23 12 · 31 13 · 22 11 ·
+  //   33 15 · 42 10 · 92 11. Perfect hindsight so far:
+  //     squad 1  29 -> 29   nothing to change; 91 has not finished, so it is live
+  //     squad 2  24 -> 24   bench 23's 12 is under 32's 14; everybody done
+  //     squad 3  24 -> 28   bench 33 (15) for 22 (11): +4, its game still on
+  //     squad 4  10 -> 11   bench 92 (11) for 42 (10): +1; 41 stays, unfinished
+  async seamBench() {
+    LATE.add(41);
+    LATE.add(91);
+    await bootSeam();
+    const w = (await loadSeam({ inPlay: 3 })).world;
+    const man = (teamId, id) => w.rosters.get(3).find((t) => t.id === teamId).players.find((p) => p.playerId === id);
+    eq(w.partialWeek, 3, 'week 3 is the week in play');
+    eq(w.games.filter((g) => g.week === 3).map((g) => [g.homeId, g.homeActual, g.awayActual]), [[1, 29, 24], [3, null, null]],
+      'a matchup whose STARTERS are all done is over, a bench man still to play or not');
+    eq([man(1, 91).done, man(1, 91).projected, man(1, 91).lineupSlotId], [false, projOf(91, 3), 20],
+      'the bench man still to play: not done, with his pre-game projection');
+    eq([man(3, 33).done, man(3, 33).actual, man(3, 33).projected, man(3, 33).lineupSlotId], [true, 15, projOf(33, 3), 20],
+      'a finished bench man: done, his score, and his projection from BEFORE the game');
+    eq([man(4, 41).done, man(4, 41).projected], [false, projOf(41, 3)], 'the starter still playing: his pre-game projection');
+    const D = await import(moduleUrl('js/decisions.js'));
+    eq(hindsightSoFar(D, w), [
+      [1, 29, 29, false, true, [11, 12]],
+      [2, 24, 24, false, false, [21, 32]],
+      [3, 24, 28, true, true, [31, 33]],
+      [4, 10, 11, true, true, [41, 92]],
+    ], 'so the engine can say, for each squad: actual so far, perfect hindsight so far, in play?, live?, who starts');
   },
 
   // ---- ESPN lists the trade AND the rosters show it: still once -------------

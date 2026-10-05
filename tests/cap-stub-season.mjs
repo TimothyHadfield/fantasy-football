@@ -31,6 +31,8 @@
 // started lineups' scores — one more squad has just its QB done, and the NFL's
 // games (`fetchProGames`) all kicked off 100 minutes ago, so the other four
 // games are in progress. CAP_EARLY=all: every game of that week is final early.
+// CAP_BENCH_QB=1|all (with CAP_EARLY, `fetchDecisionWorld` only): squad 1's
+// bench has played, its spare QB 8 points better than its starter.
 // CAP_EARLY=mix: the three kinds of matchup at once, as on a Sunday night — the
 // first game final early, the LAST one not kicked off at all (both squads' men
 // all play for NFL team 10, whose game is tomorrow), the three between them
@@ -409,6 +411,8 @@ export const DECISION_CASES = {
   benched: { teamId: 7, starter: 701, bench: 710 },
 };
 
+/** "1" | "all" | "": squad 1's bench in the week in play — see the roster loop below. */
+const BENCH_QB = process.env.CAP_BENCH_QB || '';
 const DECISION_EPOCH = Date.UTC(2026, 8, 6, 17); // week 1's Sunday, 17:00 UTC
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const FREE_AGENTS = [
@@ -533,6 +537,19 @@ export async function fetchDecisionWorld({ demo = false } = {}) {
         const line = lines.get(`${p.playerId}|${w}`);
         line.actual = p.actual;
         if (inPlay) line.done = p.done === true;
+      }
+      // CAP_BENCH_QB (Tim's own case, 2026-10-05): squad 1's matchup is over
+      // and its bench has played too — the spare QB scored 8 MORE than the QB
+      // who started, the other bench men half a point each. "1" leaves the one
+      // bench man picked up off the wire (9001) still to play; "all" has him
+      // finished as well, so nobody on the squad is left.
+      if (inPlay && BENCH_QB && t.id === 1) {
+        for (const p of players.filter((x) => !x.started)) {
+          if (p.playerId === C.adddrop.add && BENCH_QB !== 'all') continue;
+          p.done = true;
+          p.actual = p.position === 'QB' ? r1(starters[0].actual + 8) : 0.5;
+          Object.assign(lines.get(`${p.playerId}|${w}`), { actual: p.actual, done: true });
+        }
       }
       const sum = (arr, k) => r1(arr.reduce((a, p) => a + (p[k] || 0), 0));
       return {
