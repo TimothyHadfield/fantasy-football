@@ -553,3 +553,57 @@ export function lockedWeeks(games, stateOf = null) {
   }
   return [...out].sort((a, b) => a - b);
 }
+
+/**
+ * The weeks that are OVER: every real game of the week has a result.
+ *
+ * Tim, 2026-10-04: "any games that are completely finished are counted". Since
+ * then one matchup can be final (`early`, js/season.js: every starter on both
+ * sides has played) days before ESPN closes the week — so "a week with a result
+ * in it" and "a week that is over" stopped being the same set. A week with one
+ * game of five decided is still the week in progress: it is the week the page
+ * opens on, the one "now" means, and the one an accept-by time is counted from.
+ *
+ * A bye (no away side) is never "played" by ESPN, so it is left out rather than
+ * holding its week open for ever — the rule of `capture.playoffWeekDecided`.
+ *
+ * @param {Array} games schedule games — the regular season's, or the bracket's
+ * @returns {number[]} ascending, no repeats
+ */
+export function finishedWeeks(games) {
+  const open = new Map();   // week -> is any real game still undecided?
+  for (const g of games || []) {
+    if (!Number.isFinite(g?.week)) continue;
+    if (g.homeId == null || g.awayId == null) continue;
+    open.set(g.week, (open.get(g.week) || false) || !g.played);
+  }
+  return [...open].filter(([, o]) => !o).map(([w]) => w).sort((a, b) => a - b);
+}
+
+/**
+ * Has anybody on these rosters FINISHED a game this week?
+ *
+ * The other way a week is known to be under way (`lockedWeeks` reads it off the
+ * matchup scores): a player marked `done` (js/season.js) with points recorded
+ * against him has played, so the week has kicked off even when no matchup shows
+ * a point yet — only bench men have played, or a starter scored exactly zero.
+ * His week is then a fact, and a trade can no more reach it than last week's.
+ *
+ * `done` alone is not enough: a man with NO game that week is `done` too (his
+ * week cannot change either), and that is true of a bye in November as much as
+ * of this Sunday. So it takes a recorded score, and `noGame(player)` — the
+ * page's bye map — can rule a man out by name.
+ *
+ * @param {Array} teams one week's teams, each with `players`
+ * @param {function} [noGame] `(player) -> boolean`: he has no game this week
+ */
+export function someoneFinished(teams, noGame = null) {
+  for (const t of teams || []) {
+    for (const p of t.players || []) {
+      if (!p || p.done !== true || typeof p.actual !== 'number') continue;
+      if (noGame && noGame(p)) continue;
+      return true;
+    }
+  }
+  return false;
+}

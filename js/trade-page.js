@@ -104,7 +104,7 @@ import {
   goalOf, DEFAULT_GOAL, acceptChance, offerDeltas, simulateWith,
   scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
   weekWeights, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
-  espnLookPerWeek, playoffReach, goalChance, goalGain, shiftSeason,
+  finishedWeeks, someoneFinished, espnLookPerWeek, playoffReach, goalChance, goalGain, shiftSeason,
 } from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
@@ -216,8 +216,11 @@ const state = {
   week: 1,
   weekPickedLive: false, // the reader chose a live week during THIS visit; see openingWeek()
   weeks: [],
+  // The weeks that are OVER — every game of the week has a result
+  // (`finishedWeeks`), not "a week with a result in it": one matchup can be
+  // final early, days before the week is.
   playedWeeks: [],
-  // Weeks whose games have kicked off but have no result yet. Out of the priced
+  // Weeks whose games have kicked off but are not all final yet. Out of the priced
   // span (`playedWeeks()`), still "not played yet" to the picker and the opening
   // week, because that is what those two mean by the word.
   startedWeeks: [],
@@ -447,8 +450,10 @@ function sourceKey() {
  * a RESULT against it — the same rule the player card's Act row follows, and
  * for the same reason: a date test looks perfectly correct in demo, where every
  * game is hardcoded as played, and is wrong everywhere else. `state.playedWeeks`
- * is filled in `useLive` from `schedule.games.filter((g) => g.played)` and from
- * nothing else.
+ * is filled in `useLive` from the schedule's `played` games and from nothing
+ * else — a week is in it once EVERY game of that week is played
+ * (`finishedWeeks`, js/trade-odds.js), because one matchup can be final early
+ * (Tim, 2026-10-04) while the week it belongs to is still in progress.
  *
  * DEMO IS HANDLED DELIBERATELY RATHER THAN LEFT TO FALL OUT, because the honest
  * reading of the demo schedule is that the sample season is OVER — all thirteen
@@ -618,7 +623,16 @@ function basis() {
 
 const meta = () => MEASURES[basis()];
 
-/** week -> Map(playerId -> {projected, actual}) for one week's payload. */
+/**
+ * week -> Map(playerId -> {projected, actual, …}) for one week's payload.
+ *
+ * IN A WEEK NOT YET FINAL (Tim, 2026-10-04) js/season.js marks every man:
+ * `done` true once his NFL game that week is over (or he has none), and then
+ * `projected` IS his score and `pregame` the projection as it was; `done` false
+ * while it is not, when `actual` may be a RUNNING score and is not a result.
+ * Carried here as sent — `done` stays undefined on a final week and on demo,
+ * which is how every reader below tells "nothing to say" from "not finished".
+ */
 function indexTeams(teams) {
   const byPlayer = new Map();
   for (const t of teams || []) {
@@ -626,6 +640,9 @@ function indexTeams(teams) {
       byPlayer.set(p.playerId, {
         projected: typeof p.projected === 'number' ? p.projected : null,
         actual: typeof p.actual === 'number' ? p.actual : null,
+        done: typeof p.done === 'boolean' ? p.done : undefined,
+        pregame: typeof p.pregame === 'number' ? p.pregame : null,
+        proTeamId: p.proTeamId ?? null,
         injuryStatus: p.injuryStatus || null,
         // ESPN's season average and position rank, for the card's glance line.
         // Absent on a week cached before they were parsed: null, never a crash.
@@ -669,7 +686,31 @@ function indexRosters(teams) {
   return { byTeam, teamOf, byPlayer };
 }
 
+/**
+ * A WEEK IN WHICH SOMEBODY HAS FINISHED A GAME IS UNDER WAY, whatever the
+ * matchup scores say (Tim, 2026-10-04). `state.startedWeeks` is read off the
+ * schedule, which shows nothing while only bench men have played; the rosters
+ * know sooner. Without this such a week stayed in the priced span with a
+ * finished man's score standing in it as a projection — where a deal could move
+ * it to another squad, a better lineup could "start" him off the bench, and the
+ * waiver floor could lift it. From here the week is locked like any other that
+ * has kicked off: out of the span, and left alone by an assumed trade.
+ *
+ * A bye is not a game: `someoneFinished` wants a recorded score, and the bye
+ * map rules the man out by name. And only the FIRST week that is not over can
+ * be under way — a later week's "done" men are all men without a game, however
+ * they are scored.
+ */
+function noteWeekUnderWay(week, teams) {
+  if (state.isDemo || !state.weeks.includes(week)) return;
+  if (week !== state.weeks.find((w) => !state.playedWeeks.includes(w))) return;
+  if (state.playedWeeks.includes(week) || (state.startedWeeks || []).includes(week)) return;
+  if (!someoneFinished(teams, (p) => byeWeekOf(p, state.byes) === week)) return;
+  state.startedWeeks = (state.startedWeeks || []).concat(week).sort((a, b) => a - b);
+}
+
 function rememberWeek(week, teams) {
+  noteWeekUnderWay(week, teams);
   // The projections are indexed off the REAL payload: a man's number does not
   // depend on whose bench he is on, and a man an assumed trade forces out of a
   // roster still has one (the assumed block prices the cut that drops him).
@@ -2295,6 +2336,12 @@ function tokenAt(p, week, field) {
   if (!idx) return 'wait';
   const e = idx.get(p.playerId);
   if (!e) return 'off';
+  // A WEEK NOT YET FINAL (see `indexTeams`). The card sets what was projected
+  // against what happened, so once he has finished its Proj cell is the
+  // projection AS IT WAS (`projected` is his score by then) and its Act cell
+  // his score; until he has, Act is blank — a running score is not a result.
+  if (e.done === true && field === 'projected') return e.pregame;
+  if (e.done === false && field === 'actual') return null;
   return e[field];
 }
 
@@ -7068,18 +7115,23 @@ async function useLive() {
     try {
       const schedule = await fetchSchedule();
       scheduleWeeks = schedule.weeks || [];
-      state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
-        .sort((a, b) => a - b);
-      // A WEEK ALREADY UNDER WAY IS OUT OF THE PRICED SPAN. `g.played` is only
-      // true once a week is final, so without this the locked current week sits
+      // THE WEEKS THAT ARE OVER: every game played, not any. One matchup can be
+      // final early (`g.early`, every starter on both sides done) while the rest
+      // of its week is still to play, and that week is still the one in
+      // progress — the week this page opens on and counts "accept by" from.
+      state.playedWeeks = finishedWeeks(schedule.games);
+      // A WEEK ALREADY UNDER WAY IS OUT OF THE PRICED SPAN. A week is only
+      // "played" once it is final, so without this the locked current week sits
       // inside every gain from the first kick-off until Tuesday. `lockedWeeks`
-      // adds the weeks `capture.gameState` calls 'live'; the two lists stay
-      // apart because "played" is also what the week picker's label means.
+      // adds the weeks `capture.gameState` calls 'live', and the ones with a
+      // game final early; the two lists stay apart because "played" is also
+      // what the week picker's label means. (`rememberWeek` adds a week the
+      // rosters show under way before any matchup does.)
       state.startedWeeks = lockedWeeks(schedule.games, capture.gameState)
         .filter((w) => !state.playedWeeks.includes(w));
       state.poWeeks = leaguePlayoffWeeks(schedule);
-      state.poPlayed = [...new Set((schedule.playoffGames || [])
-        .filter((g) => g.played).map((g) => g.week))];
+      // The same rule in the bracket: a round is banked when all of it is.
+      state.poPlayed = finishedWeeks(schedule.playoffGames);
       // Kept whole now, not just its week numbers: the season simulation that
       // ranks trades by the goal is built from the fixtures and the results.
       state.league = capture.normalizeSchedule(schedule, { isDemo: false });

@@ -27,12 +27,14 @@
 //  15. level, not ranked           — the measured tie band, and that it never moves a row
 //  16. a started week is banked    — lockedWeeks
 //  17. his side, the weeks he plays — playoffReach, the base run reused, theirReach
+//  18. a week in progress          — finishedWeeks, someoneFinished
 
 import * as capture from '../js/capture.js';
 import {
   GOALS, goalOf, goalChance, goalGain, acceptChance, espnLookPerWeek, offerDeltas,
   shiftSeason, simulateWith, scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE,
   weekWeights, WEIGHT_FLOOR, TIE_BAND, tieGroups, lockedWeeks, playoffReach,
+  finishedWeeks, someoneFinished,
 } from '../js/trade-odds.js';
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
@@ -654,6 +656,41 @@ ok('it never goes up as the deal gets worse for him',
   const flat = findTrades({ teams: now.teams, myTeamId: 9, slots, weeks, projFor, theirMinPerWeek: -2, limit: 400 });
   ok('without reach nothing changes: He gains is the flat figure and theirWeeks is null',
     flat.offers.every((o) => o.theirWeeks === null && o.theirGain === o.theirPoints));
+}
+
+// ---- 18. a week is over when ALL of it is; under way once anyone has finished
+//
+// Tim, 2026-10-04: "any games that are completely finished are counted". One
+// matchup can now be `played` (and `early`) days before its week is, so "a week
+// with a played game" stopped meaning "a played week".
+{
+  const wk = (week, n, played, extra = {}) => Array.from({ length: n }, (_, i) => (
+    { week, homeId: 2 * i + 1, awayId: 2 * i + 2, played, ...extra }));
+  const early = { week: 5, homeId: 1, awayId: 2, played: true, early: true, winner: 1, margin: 12 };
+  const games = [...wk(3, 5, true), ...wk(4, 5, true), early, ...wk(5, 4, false).map((g) => (
+    { ...g, homeId: g.homeId + 2, awayId: g.awayId + 2 })), ...wk(6, 5, false)];
+  eq(finishedWeeks(games).join(','), '3,4', 'one of five games final early does NOT make the week played');
+  eq(lockedWeeks(games, capture.gameState).join(','), '3,4,5', 'but that week is locked: a trade cannot reach it');
+  eq(finishedWeeks(games.map((g) => (g.week === 5 ? { ...g, played: true } : g))).join(','), '3,4,5',
+    'all five final and it is');
+  eq(finishedWeeks(games.filter((g) => !g.early)).join(','), '3,4', 'with no early game: the weeks ESPN closed, as before');
+  eq(finishedWeeks([...wk(7, 2, true), { week: 7, homeId: 9, awayId: null, played: false }]).join(','), '7',
+    'a bye entry is never played and does not hold its week open');
+  eq(finishedWeeks([{ homeId: 1, awayId: 2, played: true }]).join(','), '', 'a game with no week is not a week');
+  eq(finishedWeeks(null).join(','), '', 'no schedule is not an error');
+  eq(finishedWeeks(undefined).join(','), '', 'nor is a bracket that is not drawn yet');
+
+  const squad = (...players) => [{ teamId: 1, players }];
+  eq(someoneFinished(squad({ playerId: 1, projected: 12 })), false, 'nobody marked: a final week, or the demo');
+  eq(someoneFinished(squad({ playerId: 1, done: false, actual: 4.8, projected: 12 })), false,
+    'a running score is not a finished game');
+  eq(someoneFinished(squad({ playerId: 1, done: true, pregame: 0, projected: 0, actual: null })), false,
+    'done with no score is a man with no game');
+  eq(someoneFinished(squad({ playerId: 1, done: false }, { playerId: 2, done: true, pregame: 9, projected: 14, actual: 14 })),
+    true, 'one finished man — on the bench or not — and the week is under way');
+  eq(someoneFinished(squad({ playerId: 2, done: true, pregame: 0, projected: 0, actual: 0 }), (p) => p.playerId === 2),
+    false, 'the caller can rule a man out (his bye)');
+  eq(someoneFinished(null), false, 'no rosters is not an error');
 }
 
 // ---------------------------------------------------------------------------
