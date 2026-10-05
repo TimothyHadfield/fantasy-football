@@ -39,7 +39,7 @@ import { emit } from './emit.mjs';
 
 const PAGES = [
   'index.html', 'stats.html', 'analysis.html', 'schedule.html',
-  'waivers.html', 'trade.html', 'summary.html',
+  'waivers.html', 'trade.html', 'summary.html', 'decisions.html',
 ];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

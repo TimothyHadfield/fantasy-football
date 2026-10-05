@@ -24,7 +24,7 @@ import { REPO } from './repo.mjs';
 // lines, plus draft-model/draft-sim/draft-demo — sailed past every suite here.
 const PAGES = [
   'index.html', 'stats.html', 'analysis.html', 'schedule.html', 'trade.html', 'summary.html',
-  'waivers.html', 'draft.html', 'debug.html',
+  'waivers.html', 'draft.html', 'debug.html', 'decisions.html',
 ];
 
 /** Parse the <script type="module" src="..."> tags a page actually declares. */
