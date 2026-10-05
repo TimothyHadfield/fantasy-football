@@ -30,6 +30,46 @@ const PLAYED_THROUGH = 3;   // so the "current week" is 4
 // and its other four are not. Weeks 1-3 are still the only ones fully over.
 const PARTIAL_WEEK = Number(process.env.TAKEN_PARTIAL_WEEK || 0);
 
+// A WEEK IN PROGRESS WITH SOME NFL GAMES OVER (Tim, 2026-10-04: "for singular
+// player's that have finished their game, their numbers are individually
+// updated"). With TAKEN_DONE_WEEK=4 every player object of a week ESPN has not
+// marked final carries js/season.js's contract, exactly:
+//   done: true   his NFL game that week is finished (or he has no game) —
+//                `pregame` = the projection as it was (may be null) and
+//                `projected` OVERWRITTEN with his score (`actual`, or 0)
+//   done: false  untouched
+// Final weeks (1-3) carry neither field. TAKEN_DONE_NONE=1 keeps the fields
+// and finishes nobody — the page must then draw exactly what it draws without
+// them. The men who are done in week 4, and what each scored:
+const DONE_WEEK = Number(process.env.TAKEN_DONE_WEEK || 0);
+const DONE_NONE = process.env.TAKEN_DONE_NONE === '1';
+export const DONE = new Map(DONE_NONE ? [] : [
+  [7101, 30.5],   // Alden Ross QB, projected 22: far over
+  [7301, 3.0],    // Ansel Crowe QB, projected 19: far under
+  [7104, 0],      // Dax Ellery RB, projected 15: played and scored NOTHING
+  [7105, 2.0],    // Finn Gable RB, projected 9: your worst RB once it counts
+  [7108, 6.5],    // Kip Lund TE: ESPN had no projection for him at all
+  [7110, null],   // Otto Pace K: NO GAME that week — a real bye (projected 0)
+  // The wire (wv-stub-espn.mjs's free agents), through fetchWireWeek below.
+  [5006, 25.0],   // a QB over the 17 that makes a quarterback "startable"
+  [5010, 1.5],    // an RB
+  [5011, 0],      // an RB who scored nothing
+  [5023, 14.0],   // a WR over his 12
+]);
+/** A not-yet-final week's player, dressed the way js/season.js hands him over. */
+function withDone(p, week) {
+  if (!DONE_WEEK || week <= PLAYED_THROUGH) return p;
+  if (week !== DONE_WEEK || !DONE.has(p.playerId)) return { ...p, done: false };
+  const score = DONE.get(p.playerId);
+  return {
+    ...p,
+    done: true,
+    pregame: p.projected ?? null,
+    actual: score,
+    projected: typeof score === 'number' ? score : 0,
+  };
+}
+
 const flat = (n) => () => n;
 
 export const TEAMS = [
@@ -156,12 +196,13 @@ export async function fetchWeekRosters(week) {
         lineupSlotId: 20,
         slot: 'BE',
         started: false,
-        projected: p.proj(week),
+        // Otto Pace's bye is week 4 in the done-week fixture: ESPN's own 0.00.
+        projected: week === DONE_WEEK && p.playerId === 7110 && DONE.has(7110) ? 0 : p.proj(week),
         actual: week <= PLAYED_THROUGH && p.act ? p.act(week) : null,
         seasonProjected: 120,
         injuryStatus: 'ACTIVE',
         percentOwned: 50,
-      }));
+      })).map((p) => withDone(p, week));
       return {
         id: t.id,
         name: labelFor(t),
@@ -213,5 +254,6 @@ export async function fetchWireWeek(week, limit = 150) {
   const raw = await espn.fetchFreeAgents(week, limit);
   return (raw?.players || [])
     .map((entry) => espn.parseFreeAgent(entry, week))
-    .filter((p) => p.playerId !== null && p.playerId !== undefined);
+    .filter((p) => p.playerId !== null && p.playerId !== undefined)
+    .map((p) => withDone(p, Number(week)));
 }

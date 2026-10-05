@@ -268,6 +268,11 @@ const state = {
   rosterProj: new Map(),         // week -> Map(playerId -> projection | null)
   rosterStatus: new Map(),       // week -> Map(playerId -> injury status that week)
   failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
+  // GAMES ALREADY OVER in a week ESPN has not closed (Tim, 2026-10-04). For a
+  // man js/season.js marks `done`, the number in the maps above IS his score;
+  // these keep what goes with it. week -> Map(playerId -> { actual, pregame }).
+  weekDone: new Map(),           // the wire's
+  rosterDone: new Map(),         // the rosters'
   demoTeamId: null,              // the demo league has no owner; a team stands in
   demoLadder: null,              // demo only: each position's season totals (demoGlance)
   // THE "YOUR TEAM" PICKER (Tim, 2026-10-02: "add a user selection for the
@@ -481,6 +486,8 @@ function resetData() {
   state.rosterWeeks.clear();
   state.rosterProj.clear();
   state.rosterStatus.clear();
+  state.weekDone.clear();
+  state.rosterDone.clear();
   state.failedRosterWeeks.clear();
   state.demoTeamId = null;
   state.demoLadder = null;
@@ -1028,6 +1035,7 @@ function progressText() {
  */
 function absorbWeek(players, week) {
   const byPlayer = new Map();
+  const done = new Map();
 
   for (const p of players || []) {
     if (p.playerId === null || p.playerId === undefined) continue;
@@ -1068,9 +1076,71 @@ function absorbWeek(players, week) {
     }
 
     byPlayer.set(p.playerId, p.projected);
+    const over = doneEntry(p);
+    if (over) done.set(p.playerId, over);
   }
 
   state.weekData.set(week, byPlayer);
+  state.weekDone.set(week, done);
+}
+
+// ------------------------------------------------- a game that is already over
+//
+// A WEEK IN PROGRESS IS STILL A PRICED WEEK — the first column right of the
+// heavy line — but some of its NFL games are finished (Tim, 2026-10-04: "for
+// singular player's that have finished their game, their numbers are
+// individually updated"). js/season.js says which: on a week ESPN has not
+// marked final a man carries `done: true` once his game is over, with
+// `pregame` = the projection as it was and `projected` OVERWRITTEN with what he
+// scored. So every number this page derives from the week — Avg, the ranks,
+// "your worst", the arrows, the glance line — is built on the score without
+// being told. What is kept here is only what DRAWING it needs: that the number
+// is a fact, and the forecast it replaced.
+//
+// Final weeks and the sample data carry no `done` at all, and then both maps
+// stay empty and nothing below changes a cell.
+
+/** What a finished man's week keeps beside its number, or null. */
+function doneEntry(p) {
+  if (p.done !== true) return null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return { actual: num(p.actual), pregame: num(p.pregame) };
+}
+
+/** His finished game in that week — `{ actual, pregame }` — or null. */
+function doneFor(playerId, week, roster) {
+  const forWeek = (roster ? state.rosterDone : state.weekDone).get(week);
+  return (forWeek && forWeek.get(playerId)) || null;
+}
+
+/** Whether anybody on the page has a finished game in a week still open. */
+const anyDone = () =>
+  [...state.weekDone.values(), ...state.rosterDone.values()].some((m) => m.size > 0);
+
+/**
+ * `done` is also what season.js says of a man with NO game that week, and his
+ * 0 is a bye, not a score. The site's one zero rule decides (js/player-card.js)
+ * — except that a man ESPN was projecting above zero had a game, whatever the
+ * bye table says (or when there is none to ask).
+ */
+function doneIsBye(v, week, p, roster, done) {
+  if (v !== 0 || (done.pregame !== null && done.pregame > 0)) return false;
+  return zeroKind(v, {
+    week, byeWeek: byeWeekOf(p, state.byes), injuryStatus: null, demo: roster && state.isDemo,
+  }) === 'bye';
+}
+
+/**
+ * A FINISHED GAME'S CELL: what he scored, drawn plain like the weeks left of
+ * the line. No scale, no green, no shade, no OUT — each of those is a claim
+ * about a game still to come. `data-done` is the hook (no class: nothing is
+ * styled, and a `td.zero` would light the "projected at zero" key).
+ */
+function doneCell(v, done) {
+  const was = done.pregame === null ? '' : ` (projected ${fmt(done.pregame)})`;
+  // A zero is out of Avg whether projected or scored (D7) — said, not silent.
+  const zero = v === 0 ? ' — like any zero, left out of Avg' : '';
+  return `<td data-v="${v}" data-done title="Final: scored ${fmt(v)}${was}${zero}">${fmt(v)}</td>`;
 }
 
 /**
@@ -1087,14 +1157,18 @@ function absorbRosterWeek(teams, week) {
 
   const byPlayer = new Map();
   const status = new Map();
+  const done = new Map();
   for (const team of teams || []) {
     for (const p of team.players || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
       byPlayer.set(p.playerId, p.projected);
       status.set(p.playerId, p.injuryStatus || null);
+      const over = doneEntry(p);
+      if (over) done.set(p.playerId, over);
     }
   }
   state.rosterProj.set(week, byPlayer);
+  state.rosterDone.set(week, done);
   state.rosterStatus.set(week, status);
 }
 
@@ -1337,8 +1411,21 @@ function actualRow(p, weeks, wire, lead) {
       ${past.map((w) =>
         withPo(addClass(actualCell(p, w, wire), `wk-past${w === box ? ' wk-box' : ''}`), w, every)).join('')}
       ${weeks.map((w, i) =>
-        withPo(addClass('<td></td>', i === 0 && past.length ? 'fut-start' : ''), w, every)).join('')}
+        withPo(addClass(actualDoneCell(p, w, wire), i === 0 && past.length ? 'fut-start' : ''), w, every)).join('')}
     </tr>`;
+}
+
+/**
+ * A priced week in his Actual row: empty — it has not been played — unless his
+ * own game that week is already over, and then what he scored.
+ */
+function actualDoneCell(p, week, wire) {
+  const done = doneFor(p.playerId, week, !wire);
+  if (!done) return '<td></td>';
+  const v = wire ? valueFor(p.playerId, week) : rosterValueFor(p.playerId, week);
+  const a = done.actual !== null ? done.actual : v;
+  if (typeof a !== 'number' || doneIsBye(v, week, p, !wire, done)) return '<td></td>';
+  return `<td data-done title="What ${esc(p.name)} scored in week ${week}.">${fmt(a)}</td>`;
 }
 
 /** His Actual row, when he is the one open; '' otherwise. */
@@ -1433,12 +1520,15 @@ function valueFor(playerId, week) {
  * It is the mean of the weeks that project above zero — see meanOf() for why a
  * bye, a ruled-out zero and a blank week are all left out.
  */
+/** A row's finished games, parallel to its `values`: an entry or null per week. */
+const doneRun = (p, weeks, roster) => weeks.map((w) => doneFor(p.playerId, w, roster));
+
 function buildRows(weeks) {
   const rows = [];
   for (const p of state.pool.values()) {
     const values = weeks.map((w) => valueFor(p.playerId, w));
     const real = values.filter((v) => typeof v === 'number');
-    rows.push({ p, values, avg: avgOf(values, weeks), counted: real.length });
+    rows.push({ p, values, done: doneRun(p, weeks, false), avg: avgOf(values, weeks), counted: real.length });
   }
   return rows;
 }
@@ -1593,7 +1683,7 @@ function buildMineRows(weeks) {
     if (!POS_ORDER.has(p.position)) continue;   // an unknown slot is not a position
     const values = weeks.map((w) => rosterValueFor(p.playerId, w));
     if (!held.has(p.position)) held.set(p.position, []);
-    held.get(p.position).push({ p, values, avg: avgOf(values, weeks), mine: true });
+    held.get(p.position).push({ p, values, done: doneRun(p, weeks, true), avg: avgOf(values, weeks), mine: true });
   }
 
   const rows = [];
@@ -1696,7 +1786,7 @@ function buildTakenRows(weeks) {
     const byPosition = new Map();
     for (const p of players) {
       const values = weeks.map((w) => rosterValueFor(p.playerId, w));
-      const row = { p, values, avg: avgOf(values, weeks), owner, rank: null };
+      const row = { p, values, done: doneRun(p, weeks, true), avg: avgOf(values, weeks), owner, rank: null };
       rows.push(row);
       if (!byPosition.has(p.position)) byPosition.set(p.position, []);
       byPosition.get(p.position).push(row);
@@ -2157,7 +2247,11 @@ function weekScalesByPosition(rows, weeks) {
   for (const r of rows) {
     if (!byPos.has(r.p.position)) byPos.set(r.p.position, weeks.map(() => []));
     const cols = byPos.get(r.p.position);
-    r.values.forEach((v, i) => { if (measurable(v) && i < cols.length) cols[i].push(v); });
+    // A game already over is a score, not a projection: it is left out, so
+    // the scale compares the men still to play with each other.
+    r.values.forEach((v, i) => {
+      if (measurable(v) && i < cols.length && !(r.done && r.done[i])) cols[i].push(v);
+    });
   }
   return new Map([...byPos].map(([pos, cols]) => [pos, cols.map((vals) => heatScale(vals))]));
 }
@@ -2224,8 +2318,11 @@ function heatBandsHtml(scales) {
  * rather than composed, and the two greens already answer the claim question
  * these cells exist for.
  */
-function cell(v, week, p, roster = false, yours = null, scale = null, what = '') {
+function cell(v, week, p, roster = false, yours = null, scale = null, what = '', done = null) {
   const { name, position } = p;
+  // `done`: his game that week is over and `v` is what he scored — see
+  // doneCell(). A man with no game falls through to the Bye he always was.
+  if (done && typeof v === 'number' && !doneIsBye(v, week, p, roster, done)) return doneCell(v, done);
   if (v === undefined) {
     // Three ways to have no number, and a reader has to be able to tell them
     // apart: still coming, refused outright, or ESPN simply had nothing.
@@ -2494,8 +2591,11 @@ function wireRow(row, weeks, mine, avgScales) {
         `${injuryTag(status)}${waiverTag(p)}`)}</td>
       ${identityCells(row, heat, says)}
       ${weekCells(p, weeks, true, p.playerId === state.spotlight, (i) =>
+        // Your own man's finished game is not a number a claim can still
+        // beat: no shade against a score.
         cell(values[i], weeks[i], p, false,
-          yours ? { name: yours.p.name, value: yours.values[i] } : null))}
+          yours && !yours.done[i] ? { name: yours.p.name, value: yours.values[i] } : null,
+          null, '', row.done[i]))}
     </tr>${actualRowIf(p, weeks, true, 3)}`;
 }
 
@@ -2533,7 +2633,8 @@ function mineRow(row, weeks, avgScales) {
           injuryTag(availability(p.injuryStatus)), `<span class="mine-tag">${esc(label)}</span> `) +
         `</td>
       ${identityCells(row, heat, says)}
-      ${weekCells(p, weeks, false, false, (i) => cell(values[i], weeks[i], p, true))}
+      ${weekCells(p, weeks, false, false, (i) =>
+        cell(values[i], weeks[i], p, true, null, null, '', row.done[i]))}
     </tr>`;
 }
 
@@ -2714,7 +2815,7 @@ function takenRow(row, weeks, avgScales, weekScales) {
       )}
       ${weekCells(p, weeks, false, p.playerId === state.spotlight, (i) =>
         cell(values[i], weeks[i], p, true, null, cols[i] || null,
-          `a ${p.position} in week ${weeks[i]}, across the league`))}
+          `a ${p.position} in week ${weeks[i]}, across the league`, row.done[i]))}
     </tr>${actualRowIf(p, weeks, false, 4)}`;
 }
 
@@ -2964,6 +3065,7 @@ function renderTakenNote(weeks) {
   );
 
   if (state.playedWeeks.length) parts.push(PLAYED_NOTE());
+  if (anyDone()) parts.push(DONE_NOTE);
 
   // The preseason arrows' basis (rule 7), only when the table draws one.
   if (trend.hasTrend($('takenTable').querySelector('tbody').innerHTML)) {
@@ -3006,6 +3108,9 @@ const PLAYED_NOTE = () =>
   'Actual row, what he really scored in each. They are not in Avg, the ranks or the colour scale, ' +
   'and the weeks-to-price control does not touch them. “—” means ESPN had nothing for him that week.' +
   (state.isDemo ? '' : ' They are read once, after the table: wire + rosters per played week.');
+
+/** A week in progress, said in both tables' notes — only once somebody has finished. */
+const DONE_NOTE = 'A player whose game is over shows his score for that week, uncoloured, and Avg counts it.';
 
 /** What a 0.0 is, said in both tables' notes. */
 const ZERO_NOTE =
@@ -3253,6 +3358,7 @@ function renderNote(weeks) {
   );
 
   if (state.playedWeeks.length) parts.push(PLAYED_NOTE());
+  if (anyDone()) parts.push(DONE_NOTE);
 
   parts.push(
     lead('Availability') +
