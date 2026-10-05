@@ -3469,6 +3469,79 @@ SCENARIOS.twoGoals = async function twoGoals() {
   };
 };
 
+/**
+ * THE WEEK IN PROGRESS (Tim, 2026-10-04: "any games that are completely
+ * finished are counted … for singular players that have finished their game,
+ * their numbers are individually updated"). The stubbed real league with
+ * `TR_PROGRESS` (tr-stub-season.mjs): week 5 under way, some men finished, one
+ * mid-game, and — under `1` — one matchup of the two already final.
+ *
+ * Reads what the page says about the WEEK (which it opens on, what it calls
+ * played, the span it prices, the accept-by line) and about four MEN, off their
+ * cards in the custom box: one who has finished, one mid-game, one yet to kick
+ * off, and one with no game (a bye in week 8).
+ */
+SCENARIOS.progress = async function progressScenario() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  await settleGoal(document);
+  const stub = await import('./tr-stub-season.mjs');
+
+  const page = {
+    week: $('weekSelect').value,
+    status: text($('sourceStatus')),
+    heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+    count: text($('tradeCount')),
+    note: text($('tradeNote')),
+    trades: readTrades(document).length,
+    asked: stub.calls.week.slice(),
+  };
+
+  // Cy on the other side of the custom box, so every man of both squads has a
+  // card to open; then one of his men ticked, for the "Accept by" value.
+  $('cuTeamB').value = '3';
+  fire($('cuTeamB'), 'change');
+  await settle(800);
+  const card = (list, id) => openCard(document, `#${list} [data-man="${id}"] .pv[data-tip]`);
+  const cards = {
+    done: card('cuListA', 100),      // Ana QB1: finished
+    mid: card('cuListB', 303),       // Cy WR1: mid-game, a running score
+    wait: card('cuListB', 304),      // Cy WR2: not kicked off
+    bye: card('cuListA', 112),       // Bills D/ST: no game in week 8
+  };
+  const tick = document.querySelector('#cuListB [data-man="301"] input[type="checkbox"]');
+  if (tick) { tick.checked = true; fire(tick, 'change'); }
+  await settle(1000);
+  const accept = { hidden: !!$('cuAcceptBox').hidden, text: text($('cuAccept')) };
+  if (tick) { tick.checked = false; fire(tick, 'change'); }
+  await settle(500);
+
+  // "The selected week": every man's number is that week's own.
+  $('measureSelect').value = 'week';
+  fire($('measureSelect'));
+  await settle(1500);
+  const weekMeasure = {
+    mine: readCustomList(document, 'cuListA').map((r) => ({ name: r.name, v: r.v })),
+    his: readCustomList(document, 'cuListB').map((r) => ({ name: r.name, v: r.v })),
+    warn: { hidden: !!$('depthWarn').hidden, text: text($('depthWarn')) },
+  };
+
+  return {
+    errors, page, cards, accept, weekMeasure,
+    liveWeek: stub.LIVE_WEEK, byeWeek: stub.BYE_WEEK, weeks: stub.WEEKS,
+    want: {
+      done: { proj: stub.projectionFor(1, 0, stub.LIVE_WEEK), act: stub.doneScore(stub.projectionFor(1, 0, stub.LIVE_WEEK)) },
+      mid: { proj: stub.projectionFor(3, 3, stub.LIVE_WEEK), running: stub.runningScore(stub.projectionFor(3, 3, stub.LIVE_WEEK)) },
+      wait: { proj: stub.projectionFor(3, 4, stub.LIVE_WEEK) },
+      last: { proj: stub.projectionFor(1, 0, stub.PLAYED_THROUGH) },
+    },
+  };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);

@@ -261,13 +261,89 @@ export const HALF_PPR = DEFAULT_PPR.map((it) => (it.statId === 53
   ? { statId: 53, points: 0, pointsOverrides: { 1: 0.5, 2: 0.5, 3: 0.5, 4: 0.5 } }
   : it));
 
+/**
+ * THE WEEK IN PROGRESS (Tim, 2026-10-04: "any games that are completely
+ * finished are counted … for singular players that have finished their game,
+ * their numbers are individually updated"), only when `TR_PROGRESS` is set.
+ *
+ * Week PLAYED_THROUGH + 1 is then under way, in js/season.js's own contract for
+ * a week ESPN has not yet marked final — every player carries `done`, and a
+ * finished man also `pregame` (the projection as it was) with `projected`
+ * OVERWRITTEN by his score:
+ *
+ *   TR_PROGRESS=1      Ana and Bo: every starter has finished, so their matchup
+ *                      is `early: true, played: true` with a winner — ONE GAME
+ *                      OF TWO decided. Cy: his QB and first RB have finished,
+ *                      `Cy WR1` is mid-game (`done:false` with a RUNNING
+ *                      `actual` — not a result), the rest have not kicked off.
+ *                      Di: his QB has finished. `Ana QB2`, on her bench, is
+ *                      mid-game too. Cy–Di carries running scores, not played.
+ *   TR_PROGRESS=quiet  nobody's starter has played: only `Ana TE2`, on her
+ *                      bench, has finished. No matchup shows a point and the
+ *                      schedule is exactly the ordinary one — the week is under
+ *                      way and only the rosters say so.
+ *
+ * A man with no game is `done` as well, in any week not yet final: `Bills D/ST`
+ * in his bye (week 8), with a `pregame` of 0 and no `actual`. Weeks 1–4 are
+ * final and carry neither field, as before; unset, nothing here changes.
+ *
+ * A finished man scores projection × 1.5 + 1 — far from his projection and from
+ * the 0.9 the played weeks use, so a test can tell the three numbers apart.
+ */
+export const LIVE_WEEK = PLAYED_THROUGH + 1;
+const progress = () => process.env.TR_PROGRESS || '';
+const r1 = (v) => Math.round(v * 10) / 10;
+export const doneScore = (proj) => r1(proj * 1.5 + 1);
+export const runningScore = (proj) => r1(proj * 0.3);
+
+/** 'done' | 'mid' | 'wait' for one man in the week in progress. */
+export function liveStatus(teamId, i) {
+  const team = TEAMS.find((t) => t.id === teamId);
+  const spec = team && team.players[i];
+  if (!spec || !progress()) return 'wait';
+  const bench = spec.slot === SLOT.BE;
+  if (progress() === 'quiet') return spec.name === 'Ana TE2' ? 'done' : 'wait';
+  if (spec.name === 'Ana QB2' || spec.name === 'Cy WR1') return 'mid';
+  if (teamId === 1 || teamId === 2) return bench ? 'wait' : 'done';
+  if (spec.name === 'Cy QB1' || spec.name === 'Cy RB1' || spec.name === 'Di QB1') return 'done';
+  return 'wait';
+}
+
+// One NFL "team" per state, so the kickoffs and games below agree with the
+// rosters: 11 has finished, 12 is playing, 13 kicks off tomorrow, and 14 is
+// `Bills D/ST`'s own (it kicks off tomorrow too, and is off in BYE_WEEK).
+const PROGRESS_PRO = { done: 11, mid: 12, wait: 13 };
+const HOUR = 3600000;
+const progressPro = (team, i) =>
+  (team.players[i].name === 'Bills D/ST' ? 14 : PROGRESS_PRO[liveStatus(team.id, i)]);
+
+/** When pro team `t` kicks off in `week`, or null for no game. Relative to now. */
+function progressKickoff(t, week, now) {
+  if (t === 14 && week === BYE_WEEK) return null;
+  const first = { 11: -5 * HOUR, 12: -1 * HOUR, 13: 24 * HOUR, 14: 24 * HOUR }[t];
+  return now + first + (week - LIVE_WEEK) * 7 * 24 * HOUR;
+}
+
+/** The contract's fields for one man in one week not yet final. */
+function progressFields(team, i, week, proj) {
+  if (!progress() || week <= PLAYED_THROUGH) return {};
+  if (team.players[i].name === 'Bills D/ST' && week === BYE_WEEK) {
+    return { done: true, pregame: proj, projected: 0, actual: null };
+  }
+  if (week !== LIVE_WEEK) return { done: false };
+  const s = liveStatus(team.id, i);
+  if (s === 'done') return { done: true, pregame: proj, projected: doneScore(proj), actual: doneScore(proj) };
+  if (s === 'mid') return { done: false, actual: runningScore(proj) };
+  return { done: false };
+}
+
 function playersFor(team, week) {
   return team.players.map((spec, i) => ({
     playerId: pickupApplies(team, i, week) ? PICKUP.added : trendId(playerId(team.id, i)),
     name: pickupApplies(team, i, week) ? PICKUP.name : spec.name,
     position: spec.position,
     proTeam: proSplit() ? PRO_ABBREV[team.id] : 'BUF',
-    proTeamId: proSplit() ? team.id : 1,
+    proTeamId: progress() ? progressPro(team, i) : proSplit() ? team.id : 1,
     lineupSlotId: spec.slot,
     slot: LABEL[spec.slot],
     started: spec.slot !== SLOT.BE,
@@ -281,7 +357,16 @@ function playersFor(team, week) {
     // the injury report; unset, everybody is ACTIVE as before.
     injuryStatus: injuredAs(playerId(team.id, i)) || 'ACTIVE',
     percentOwned: null,
+    ...progressFields(team, i, week, spec.week(week)),
   }));
+}
+
+/** A squad's starters' points on the board in `week` (TR_PROGRESS's schedule). */
+function boardScore(teamId, week) {
+  const team = TEAMS.find((t) => t.id === teamId);
+  return r1(playersFor(team, week)
+    .filter((p) => p.started && typeof p.actual === 'number')
+    .reduce((a, p) => a + p.actual, 0));
 }
 
 export async function fetchWeekRosters(week) {
@@ -345,6 +430,22 @@ export async function fetchSchedule() {
       ? [{ week, homeId: 1, awayId: 3, played }, { week, homeId: 2, awayId: 4, played }]
       : [{ week, homeId: 1, awayId: 2, played }, { week, homeId: 3, awayId: 4, played }]));
   }
+  // TR_PROGRESS=1: the scores a real schedule carries — final ones on the
+  // played weeks, and in the week in progress Ana–Bo final EARLY (every starter
+  // on both sides has finished) while Cy–Di shows running scores and no result.
+  if (progress() === '1') {
+    for (const g of games) {
+      if (g.week > LIVE_WEEK) continue;
+      g.homeScore = boardScore(g.homeId, g.week);
+      g.awayScore = boardScore(g.awayId, g.week);
+      const early = g.week === LIVE_WEEK && g.homeId === 1;
+      if (early) { g.early = true; g.played = true; }
+      if (g.played) {
+        g.margin = r1(g.homeScore - g.awayScore);
+        g.winner = g.homeScore > g.awayScore ? 'home' : g.awayScore > g.homeScore ? 'away' : 'tie';
+      }
+    }
+  }
   return {
     // TR_TREND: the league's scoring rules, as js/season.js keeps them.
     ...(process.env.TR_TREND ? { scoringItems: HALF_PPR } : {}),
@@ -384,6 +485,18 @@ export async function fetchByeWeeks() {
  */
 export const KICK_DAY = 86400000;
 export async function fetchProKickoffs() {
+  if (progress()) {
+    const now = Date.now();
+    const out = {};
+    for (const t of [11, 12, 13, 14]) {
+      out[t] = {};
+      for (let w = 1; w <= WEEKS + 3; w++) {
+        const at = progressKickoff(t, w, now);
+        if (at !== null) out[t][w] = at;
+      }
+    }
+    return out;
+  }
   const anchor = Number(process.env.TR_KICKOFFS);
   if (!anchor) return {};
   const [byeTeam, byeWeek] = String(process.env.TR_KICK_BYE || '').split(':').map(Number);
@@ -393,6 +506,26 @@ export async function fetchProKickoffs() {
     for (let w = 1; w <= WEEKS + 3; w++) {
       if (t === byeTeam && w === byeWeek) continue;
       out[t][w] = anchor + (w - (PLAYED_THROUGH + 1)) * 7 * KICK_DAY + (t - 1) * KICK_DAY;
+    }
+  }
+  return out;
+}
+
+/**
+ * The NFL's games, `{ [proTeamId]: { [week]: { at, done } } }` as
+ * `season.fetchProGames` hands them over — only under TR_PROGRESS=1, where the
+ * page plays the week in progress out from its score so far. `{}` otherwise
+ * (and under `quiet`): unknown, and no week is treated as in progress.
+ */
+export async function fetchProGames() {
+  if (progress() !== '1') return {};
+  const now = Date.now();
+  const out = {};
+  for (const t of [11, 12, 13, 14]) {
+    out[t] = {};
+    for (let w = 1; w <= WEEKS + 3; w++) {
+      const at = progressKickoff(t, w, now);
+      if (at !== null) out[t][w] = { at, done: w < LIVE_WEEK || (w === LIVE_WEEK && t === 11) };
     }
   }
   return out;
