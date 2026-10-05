@@ -178,7 +178,7 @@ const keyOf = (leagueId, season, week) => `${PREFIX}.${leagueId}.${season}.${wee
  * means eviction and `forget()` find nothing to work on, which is correct in a
  * harness that has nothing to evict, while reading and writing still work.
  */
-function keys() {
+function keys(prefix = PREFIX) {
   const s = store();
   if (!s) return [];
   if (typeof s.length !== 'number' || typeof s.key !== 'function') return [];
@@ -186,7 +186,7 @@ function keys() {
   try {
     for (let i = 0; i < s.length; i++) {
       const k = s.key(i);
-      if (k && k.startsWith(`${PREFIX}.`)) out.push(k);
+      if (k && k.startsWith(`${prefix}.`)) out.push(k);
     }
   } catch {
     return [];
@@ -310,11 +310,20 @@ export function writeWeek(leagueId, season, week, teams, { final = false, byesKn
 function evictFor(needBytes, mineKeyPrefix) {
   const s = store();
   if (!s) return false;
-  const all = keys();
+  // A week's moves (see "A FINAL WEEK'S MOVES" below) cost two requests to buy
+  // back, so they go as a forecast does: another league's first, then this one's.
+  const mineMoves = DECISIONS_PREFIX + mineKeyPrefix.slice(PREFIX.length);
+  const all = [...keys(), ...keys(DECISIONS_PREFIX)];
   if (!all.length) return false;
 
   const rows = [];
   for (const k of all) {
+    if (k.startsWith(`${DECISIONS_PREFIX}.`)) {
+      const d = decisionAt(s, k);
+      const raw = (() => { try { return s.getItem(k) || ''; } catch { return ''; } })();
+      rows.push({ k, bytes: raw.length, at: d ? d.at : 0, rank: !d ? 0 : (k.startsWith(mineMoves) ? 2 : 1) });
+      continue;
+    }
     const e = entryAt(s, k);
     const raw = (() => { try { return s.getItem(k) || ''; } catch { return ''; } })();
     rows.push({
@@ -396,7 +405,103 @@ export function forget(leagueId, season) {
     if (!k.startsWith(want)) continue;
     try { s.removeItem(k); gone++; } catch { /* leave it and carry on */ }
   }
+  // The weeks' moves with them — not counted, the answer is still "weeks".
+  const moves = DECISIONS_PREFIX + want.slice(PREFIX.length);
+  for (const k of keys(DECISIONS_PREFIX)) {
+    if (!k.startsWith(moves)) continue;
+    try { s.removeItem(k); } catch { /* leave it and carry on */ }
+  }
   return gone;
+}
+
+// ---------------------------------------------------------------------------
+// A FINAL WEEK'S MOVES, AND THE PLAYER-WEEKS THEY NAME
+//
+// For the Decisions review (docs/decisions-review-plan.md). Who added, dropped
+// and traded whom in a week, and what a man who was on NOBODY's roster scored
+// in it, cost two ESPN requests a week and — once ESPN has decided the week —
+// can never change. So they are kept exactly as a played week's rosters are:
+// for the season, at any age.
+//
+// THEIR OWN KEYS (`ff.decisions.…`), never a field on a stored week: a roster
+// week written before this existed is read back untouched and stays the shape
+// it was. ONLY A DECIDED WEEK IS EVER WRITTEN — the caller (js/season.js) says
+// so with `final: true`, off the schedule, and anything else is refused here;
+// the open week is not read for this at all.
+//
+// A man's projection is kept AS ESPN SENT IT, with his NFL team beside it, and
+// the bye rule is applied on the way out — so there is no "decoded without the
+// byes" copy to hunt down later, which is what `byesKnown` is for above.
+
+/** Bumped when this shape changes; a record of another schema is absent. */
+const DECISIONS_SCHEMA = 1;
+
+const DECISIONS_PREFIX = `ff.decisions.${DECISIONS_SCHEMA}`;
+
+const decisionKeyOf = (leagueId, season, week) => `${DECISIONS_PREFIX}.${leagueId}.${season}.${week}`;
+
+/** One record, parsed, or null. Anything unreadable is treated as absent. */
+function decisionAt(s, key) {
+  try {
+    const raw = s.getItem(key);
+    if (!raw) return null;
+    const e = JSON.parse(raw);
+    if (!e || e.v !== DECISIONS_SCHEMA || !Array.isArray(e.moves)) return null;
+    if (!e.players || typeof e.players !== 'object') return null;
+    return e;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A decided week's moves and player-weeks, or null when this browser has none.
+ *
+ * @returns {{moves:Array, players:Object, draft:Object|null, at:number}|null}
+ *   `players` is `{ [playerId]: { name, position, proTeamId, projected, actual } }`;
+ *   `draft` is `espn.parseDraftRosters`' answer, on the week that carried it
+ */
+export function readDecisionWeek(leagueId, season, week) {
+  const s = store();
+  if (!s) return null;
+  const e = decisionAt(s, decisionKeyOf(leagueId, season, week));
+  if (!e) return null;
+  return { moves: e.moves, players: e.players, draft: e.draft || null, at: e.at };
+}
+
+/**
+ * Keep a DECIDED week's moves and player-weeks. Refused unless `final` is true.
+ *
+ * Called again for the same week only to ADD player-weeks to it (a man first
+ * named by a later week's move): the caller hands back everything it read plus
+ * the new men, and the record is replaced whole.
+ *
+ * @returns {boolean} whether it landed; nothing depends on it but the tests
+ */
+export function writeDecisionWeek(leagueId, season, week, { moves, players, draft = null } = {}, { final = false } = {}) {
+  const s = store();
+  if (!s || final !== true || !Array.isArray(moves) || !players || typeof players !== 'object') return false;
+
+  const key = decisionKeyOf(leagueId, season, week);
+  let json;
+  try {
+    json = JSON.stringify({ v: DECISIONS_SCHEMA, at: Date.now(), moves, players, draft: draft || null });
+  } catch {
+    return false;
+  }
+  try {
+    s.setItem(key, json);
+    return true;
+  } catch {
+    // FULL: the same rule as a week of rosters — evict, try once, never throw.
+    if (!evictFor(json.length, `${PREFIX}.${leagueId}.${season}.`)) return false;
+    try {
+      s.setItem(key, json);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 /**

@@ -230,9 +230,278 @@ export function fetchMatchups() {
   return leagueRead(['mMatchupScore', 'mTeam', 'mSettings']);
 }
 
-/** Adds, drops, trades, waiver claims. */
-export function fetchTransactions() {
-  return leagueRead(['mTransactions2']);
+/**
+ * Adds, drops, trades, waiver claims — raw. Decode with `parseTransactions`.
+ *
+ * ONE WEEK PER READ: `week` is the scoringPeriodId and ESPN answers with that
+ * week's transactions only (measured on public league 1241838, 2026-10-05:
+ * week 1 = 207 of which 170 are the draft, week 2 = 41, week 3 = 52). Without a
+ * week ESPN sends the current one, which is what the debug page's probe asks.
+ */
+export function fetchTransactions(week) {
+  const wk = Number(week);
+  return leagueRead(['mTransactions2'], Number.isInteger(wk) && wk > 0 ? { scoringPeriodId: wk } : {});
+}
+
+// ------------------------------------------------- what the managers DID
+//
+// For the Decisions review (docs/decisions-review-plan.md). Every shape below
+// was read off public league 1241838 on 2026-10-05 EXCEPT the trade, which that
+// league has never made — see `parseTransactions`.
+
+/** How many player ids one `fetchPlayersWeek` request carries. */
+const PLAYER_IDS_PER_READ = 100;
+
+/**
+ * ANY players' week, rostered or not, by id — raw `players[]` entries. Decode
+ * each with `parsePlayerWeek`.
+ *
+ * `kona_player_info` with `scoringPeriodId` and a `filterIds` filter returns
+ * that week's actual AND projection for exactly the ids asked (measured
+ * 2026-10-05: Drew Lock, unowned, week 2 — actual 21.4, projected 15.71; 63 ids
+ * in one request came back as 63 entries, about 12 KB each). Two things it does
+ * NOT take, both measured: a `limit` ("Limit request must be accompanied by a
+ * sort", HTTP 400), and other weeks — one request prices one week, like
+ * everything else here. So the ids go a hundred to a request.
+ *
+ * @param {Array<number>} ids ESPN player ids (a D/ST's is negative)
+ * @param {number} week the scoringPeriodId
+ * @returns {Promise<Array>} entries in no promised order; an id ESPN does not
+ *   know is simply absent
+ */
+export async function fetchPlayersWeek(ids, week) {
+  const want = [...new Set((ids || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < want.length; i += PLAYER_IDS_PER_READ) {
+    const filter = { players: { filterIds: { value: want.slice(i, i + PLAYER_IDS_PER_READ) } } };
+    const data = await leagueRead(['kona_player_info'], { filter, scoringPeriodId: Number(week) });
+    out.push(...(data?.players || []));
+  }
+  return out;
+}
+
+/**
+ * One `fetchPlayersWeek` entry, cut to what a week of his is: who he is, what
+ * he was projected and what he scored.
+ *
+ * `projected` is ESPN's number AS SENT — the caller applies the bye rule
+ * (`byeAdjustedProjection`) with `proTeamId`, so a stored copy never freezes a
+ * projection decoded while the byes could not be read. `proTeamId` is the team
+ * he PLAYED FOR that week when his score line names one (it does: Lock's week-2
+ * line says 26), else his team now — a man traded between NFL teams since kicked
+ * off with his old one.
+ */
+export function parsePlayerWeek(entry, week) {
+  const p = entry?.player || {};
+  const line = (source) => (p.stats || []).find(
+    (s) => s.statSourceId === source && s.statSplitTypeId === 1 && s.scoringPeriodId === Number(week)
+  );
+  const proj = line(1);
+  const act = line(0);
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    playerId: p.id ?? entry?.id ?? null,
+    name: p.fullName || '',
+    position: POSITIONS[p.defaultPositionId] || 'UNK',
+    proTeamId: act && act.proTeamId > 0 ? act.proTeamId : (p.proTeamId ?? null),
+    projected: num(proj?.appliedTotal),
+    actual: num(act?.appliedTotal),
+  };
+}
+
+/** When a transaction took effect: the waiver run that processed it, else when it was made. */
+function transactionAt(t) {
+  for (const v of [t.processDate, t.proposedDate]) {
+    const ms = Number(v);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return 0;
+}
+
+/**
+ * One trade as a key: the two teams and who went which way. The same key from
+ * two records is the same trade — see `dropRepeatTrades`.
+ */
+export function tradeKey(move) {
+  const t = move && move.trade;
+  if (!t) return '';
+  const a = { id: move.teamId, gives: [...(t.gives || [])].sort((x, y) => x - y) };
+  const b = { id: t.withTeamId, gives: [...(t.gets || [])].sort((x, y) => x - y) };
+  const [lo, hi] = a.id <= b.id ? [a, b] : [b, a];
+  return `${lo.id}>${hi.id}:${lo.gives.join(',')}|${hi.gives.join(',')}`;
+}
+
+/**
+ * The same trade listed twice is listed once.
+ *
+ * It can arrive twice by three roads: ESPN records the ACCEPT and, after the
+ * league's review, the UPHOLD; the two can sit in two different weeks' reads;
+ * and js/season.js also finds trades from the rosters themselves. Two records
+ * with the same key no more than a week apart are one trade, and the LATER one
+ * is kept — that is when the players actually moved. (A week apart, not "ever":
+ * a swap made, undone and made again is three trades.)
+ *
+ * @param {Array} moves in time order
+ * @returns {Array} the same moves, repeats removed, order kept
+ */
+export function dropRepeatTrades(moves) {
+  const out = [];
+  const last = new Map(); // key -> index in `out`
+  for (const m of moves || []) {
+    if (!m || m.kind !== 'trade') { out.push(m); continue; }
+    const key = tradeKey(m);
+    const at = last.get(key);
+    if (at !== undefined && Math.abs(Number(m.week) - Number(out[at].week)) <= 1) {
+      // ESPN's own record beats one worked out from the rosters.
+      if (m.inferred && !out[at].inferred) continue;
+      out[at] = null;
+    }
+    last.set(key, out.length);
+    out.push(m);
+  }
+  return out.filter(Boolean);
+}
+
+/**
+ * ESPN's transactions for one week -> the moves the managers made, in time
+ * order: `{ id, kind, week, at, teamId, adds, drops, trade }`.
+ *
+ * WHAT COUNTS (all measured on league 1241838, weeks 1–4, 2026-10-05):
+ *
+ *   only `status: 'EXECUTED'`. A waiver claim that lost is the same record with
+ *   a `FAILED_*` status, and one withdrawn is `CANCELED`.
+ *
+ *   an ADD or a DROP item, on a `FREEAGENT`, `WAIVER` or `ROSTER` transaction.
+ *   A manager who drops a man WITHOUT adding one does it from his roster page,
+ *   and ESPN files that as `ROSTER` with one `DROP` item — the same type as the
+ *   two dozen lineup changes a week, whose items are `LINEUP` and are not moves.
+ *
+ *   ONE TRANSACTION IS ONE MOVE, with every ADD and every DROP on it together
+ *   (Tim: "if a user added and dropped a player in a single action, then the
+ *   hypothetical counts both"): `adddrop` when it has both, else `add` / `drop`.
+ *
+ *   never the draft (`DRAFT`, see `parseDraftRosters`), nor `FUTURE_ROSTER`.
+ *
+ * `at` is `processDate` — the waiver run — else `proposedDate`, in epoch ms; a
+ * free-agent add has only the second. `week` is the transaction's own
+ * `scoringPeriodId`.
+ *
+ * A TRADE IS ASSUMED, NOT MEASURED: the test league has never made one. The
+ * shape coded here is the commonly documented one — a `TRADE_ACCEPT` and, once
+ * the league's review has passed, a `TRADE_UPHOLD`, each carrying `TRADE` items
+ * with `fromTeamId` / `toTeamId` — read defensively: any item of an executed
+ * `TRADE_*` record that moves a man between two real teams is a trade item,
+ * whatever its own type says; a `TRADE_VETO` cancels the trade it names (by
+ * `relatedTransactionId` or by the same men); ACCEPT and UPHOLD of one trade are
+ * one move (`dropRepeatTrades`). js/season.js also finds trades from the rosters
+ * (`inferTrades`), so a trade ESPN records some other way is still listed.
+ *
+ * @param {Object} raw a `fetchTransactions(week)` payload
+ * @returns {Array} moves, oldest first
+ */
+export function parseTransactions(raw) {
+  const list = Array.isArray(raw?.transactions) ? raw.transactions : [];
+  const asked = Number(raw?.scoringPeriodId);
+  const weekOf = (t) => {
+    const w = Number(t.scoringPeriodId);
+    return Number.isInteger(w) && w > 0 ? w : (Number.isInteger(asked) && asked > 0 ? asked : null);
+  };
+  const real = (id) => Number.isFinite(Number(id)) && Number(id) > 0;
+
+  // What a veto names, three ways, because nobody has seen one.
+  const vetoed = new Set();
+  const menOf = (t) => (t.items || [])
+    .filter((i) => real(i.fromTeamId) && real(i.toTeamId))
+    .map((i) => `${i.playerId}:${i.fromTeamId}>${i.toTeamId}`).sort().join(',');
+  for (const t of list) {
+    if (!t || t.status !== 'EXECUTED' || !/^TRADE_(VETO|DECLINE|CANCEL)/.test(String(t.type))) continue;
+    for (const k of [t.relatedTransactionId, menOf(t)]) if (k) vetoed.add(k);
+  }
+
+  const moves = [];
+  list.forEach((t, order) => {
+    if (!t || t.status !== 'EXECUTED') return;
+    const type = String(t.type);
+    const items = Array.isArray(t.items) ? t.items : [];
+    const base = { week: weekOf(t), at: transactionAt(t), order };
+
+    if (type === 'TRADE_ACCEPT' || type === 'TRADE_UPHOLD') {
+      if ([t.id, t.relatedTransactionId, menOf(t)].some((k) => k && vetoed.has(k))) return;
+      // One move per pair of teams; ESPN allows only two, but nothing here
+      // depends on that.
+      const pairs = new Map();
+      for (const i of items) {
+        if (!real(i.fromTeamId) || !real(i.toTeamId) || i.fromTeamId === i.toTeamId) continue;
+        const key = [i.fromTeamId, i.toTeamId].sort((a, b) => a - b).join('-');
+        if (!pairs.has(key)) pairs.set(key, []);
+        pairs.get(key).push(i);
+      }
+      let n = 0;
+      for (const sent of pairs.values()) {
+        const teams = [...new Set(sent.flatMap((i) => [i.fromTeamId, i.toTeamId]))].sort((a, b) => a - b);
+        const teamId = teams.includes(t.teamId) ? t.teamId : teams[0];
+        const withTeamId = teams.find((id) => id !== teamId);
+        moves.push({
+          ...base,
+          id: n++ ? `${t.id}#${n}` : String(t.id),
+          kind: 'trade',
+          teamId,
+          // A man cut to make room rides on the same record.
+          adds: [],
+          drops: items.filter((i) => i.type === 'DROP' && i.fromTeamId === teamId).map((i) => i.playerId),
+          trade: {
+            withTeamId,
+            gives: sent.filter((i) => i.fromTeamId === teamId).map((i) => i.playerId),
+            gets: sent.filter((i) => i.toTeamId === teamId).map((i) => i.playerId),
+          },
+        });
+        // The partner's own cut, as the plain drop it is.
+        const his = items.filter((i) => i.type === 'DROP' && i.fromTeamId === withTeamId).map((i) => i.playerId);
+        if (his.length) {
+          moves.push({
+            ...base, id: `${t.id}#drop${withTeamId}`, kind: 'drop', teamId: withTeamId,
+            adds: [], drops: his, trade: null,
+          });
+        }
+      }
+      return;
+    }
+
+    if (type !== 'FREEAGENT' && type !== 'WAIVER' && type !== 'ROSTER') return;
+    const adds = items.filter((i) => i.type === 'ADD').map((i) => i.playerId);
+    const drops = items.filter((i) => i.type === 'DROP').map((i) => i.playerId);
+    if (!adds.length && !drops.length) return;
+    moves.push({
+      ...base,
+      id: String(t.id),
+      kind: adds.length && drops.length ? 'adddrop' : adds.length ? 'add' : 'drop',
+      teamId: t.teamId,
+      adds,
+      drops,
+      trade: null,
+    });
+  });
+
+  moves.sort((a, b) => a.at - b.at || a.order - b.order);
+  return dropRepeatTrades(moves.map(({ order, ...m }) => m));
+}
+
+/**
+ * Who drafted whom, `{ [teamId]: [playerId] }`, off the same payload — the
+ * week-1 read is the one that carries the `DRAFT` records. It is the rosters as
+ * they stood before anybody made a move, which is what `inferTrades` in
+ * js/season.js sets week 1's rosters against. `{}` on any other week.
+ */
+export function parseDraftRosters(raw) {
+  const out = {};
+  for (const t of raw?.transactions || []) {
+    if (!t || t.type !== 'DRAFT' || t.status !== 'EXECUTED') continue;
+    for (const i of t.items || []) {
+      if (i.type !== 'DRAFT' || !(Number(i.toTeamId) > 0)) continue;
+      (out[i.toTeamId] = out[i.toTeamId] || []).push(i.playerId);
+    }
+  }
+  return out;
 }
 
 /**

@@ -375,3 +375,161 @@ export const fetchFloors = process.env.CAP_WIRE
   }
   : undefined;
 export async function buildCloudPayload() { throw new Error('not in this stub'); }
+
+// THE DECISIONS REVIEW'S `world` (docs/decisions-review-plan.md, "The
+// contract"), small and fixed, over this stub's own decided weeks and squads.
+// Hand-made so a page test can name what it expects:
+//
+//   DECISION_CASES.adddrop   wk 2: squad 1 adds free agent 9001 (WR) and drops
+//                            its bench WR 111, in ONE action.
+//   DECISION_CASES.add       wk 2: squad 2 adds free agent 9002 (RB), drops nobody.
+//   DECISION_CASES.drop      wk 2: squad 3 drops its bench QB 312 ...
+//   DECISION_CASES.readd     wk 3: ... and squad 4 picks him up and STARTS him
+//                            over its own QB 400, who is benched.
+//   DECISION_CASES.trade     wk 3: squad 5 gives its RB 501, gets squad 6's RB
+//                            601; each starts in the other's slot.
+//   DECISION_CASES.benched   squad 7 sits RB 710 every week although he
+//                            out-projects its starting RB 701 by 5.
+//
+// Every week's starters add up to that squad's score in `games` to the tenth.
+// Everybody kicks off on the Sunday; every move is made the Wednesday before.
+export const DECISION_CASES = {
+  adddrop: { id: 'mv-adddrop', teamId: 1, week: 2, add: 9001, drop: 111 },
+  add: { id: 'mv-add', teamId: 2, week: 2, add: 9002 },
+  drop: { id: 'mv-drop', teamId: 3, week: 2, drop: 312 },
+  readd: { id: 'mv-readd', teamId: 4, week: 3, add: 312, benched: 400 },
+  trade: { id: 'mv-trade', teamId: 5, withTeamId: 6, week: 3, gives: 501, gets: 601 },
+  benched: { teamId: 7, starter: 701, bench: 710 },
+};
+
+const DECISION_EPOCH = Date.UTC(2026, 8, 6, 17); // week 1's Sunday, 17:00 UTC
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const FREE_AGENTS = [
+  { playerId: 9001, name: 'Free Agent WR', position: 'WR', proTeamId: 3 },
+  { playerId: 9002, name: 'Free Agent RB', position: 'RB', proTeamId: 4 },
+];
+
+export async function fetchDecisionWorld() {
+  const C = DECISION_CASES;
+  const weeks = WEEKS.slice(0, decided());
+  const sched = await buildScheduleQuietly();
+  const kickoff = (week) => DECISION_EPOCH + (week - 1) * WEEK_MS;
+  const wednesday = (week) => kickoff(week) - 4 * 24 * 60 * 60 * 1000;
+
+  // What anybody scored and was projected, on a roster or off one.
+  const lines = new Map(); // `${playerId}|${week}` -> { projected, actual }
+  const info = new Map();  // playerId -> { name, position, proTeamId }
+  const base = new Map();  // week -> Map<teamId, players[]> before any move
+  for (const w of weeks) {
+    const byTeam = new Map();
+    for (const t of plainTeams(w)) {
+      byTeam.set(t.id, t.players.map((p, i) => {
+        let projected = p.projected;
+        if (p.playerId === C.benched.bench) {
+          projected = r1(t.players.find((s) => s.playerId === C.benched.starter).projected + 5);
+        }
+        const actual = r1(projected * (0.6 + rnd(t.id * 31 + i, w + 70) * 0.8));
+        lines.set(`${p.playerId}|${w}`, { projected, actual });
+        info.set(p.playerId, { name: p.name, position: p.position, proTeamId: p.proTeamId });
+        return { ...p, projected, actual };
+      }));
+    }
+    for (const fa of FREE_AGENTS) {
+      const projected = r1(9 + rnd(fa.playerId, w) * 4);
+      lines.set(`${fa.playerId}|${w}`, { projected, actual: r1(projected * (0.6 + rnd(fa.playerId, w + 70) * 0.8)) });
+      info.set(fa.playerId, { name: fa.name, position: fa.position, proTeamId: fa.proTeamId });
+    }
+    base.set(w, byTeam);
+  }
+
+  const move = (id, kind, week, n, teamId, adds, drops, trade = null) =>
+    ({ id, kind, week, at: wednesday(week) + n * 60 * 1000, teamId, adds, drops, trade });
+  const moves = [
+    move(C.adddrop.id, 'adddrop', 2, 1, 1, [C.adddrop.add], [C.adddrop.drop]),
+    move(C.add.id, 'add', 2, 2, 2, [C.add.add], []),
+    move(C.drop.id, 'drop', 2, 3, 3, [], [C.drop.drop]),
+    move(C.readd.id, 'add', 3, 1, 4, [C.readd.add], []),
+    move(C.trade.id, 'trade', 3, 2, 5, [], [],
+      { withTeamId: C.trade.withTeamId, gives: [C.trade.gives], gets: [C.trade.gets] }),
+  ].filter((m) => weeks.includes(m.week));
+
+  // The squads as they ended each week: the base squad with every move so far.
+  const seat = (playerId, week, lineupSlotId) => ({
+    playerId, ...info.get(playerId), proTeam: 'XX',
+    lineupSlotId, slot: String(lineupSlotId), started: lineupSlotId !== 20 && lineupSlotId !== 21,
+    ...lines.get(`${playerId}|${week}`),
+    seasonProjected: 0, injuryStatus: 'ACTIVE', percentOwned: null,
+  });
+  const rosters = new Map();
+  const scoreByKey = new Map();
+  for (const g of sched.games) {
+    scoreByKey.set(`${g.week}|${g.homeId}`, g.homeScore);
+    scoreByKey.set(`${g.week}|${g.awayId}`, g.awayScore);
+  }
+  for (const w of weeks) {
+    const squads = base.get(w);
+    const has = (m) => moves.includes(m) && m.week <= w;
+    const of = (id) => squads.get(id);
+    const out = (teamId, playerId) => squads.set(teamId, of(teamId).filter((p) => p.playerId !== playerId));
+    const slotOf = (teamId, playerId) => of(teamId).find((p) => p.playerId === playerId).lineupSlotId;
+    const [mAddDrop, mAdd, mDrop, mReadd, mTrade] = ['adddrop', 'add', 'drop', 'readd', 'trade']
+      .map((k) => moves.find((m) => m.id === C[k].id));
+    if (mAddDrop && has(mAddDrop)) { out(1, C.adddrop.drop); of(1).push(seat(C.adddrop.add, w, 20)); }
+    if (mAdd && has(mAdd)) of(2).push(seat(C.add.add, w, 20));
+    if (mDrop && has(mDrop)) out(3, C.drop.drop);
+    if (mReadd && has(mReadd)) {
+      squads.set(4, of(4).map((p) => (p.playerId === C.readd.benched ? seat(p.playerId, w, 20) : p)));
+      of(4).push(seat(C.readd.add, w, 0));
+    }
+    if (mTrade && has(mTrade)) {
+      const [a, b] = [slotOf(5, C.trade.gives), slotOf(6, C.trade.gets)];
+      out(5, C.trade.gives); out(6, C.trade.gets);
+      of(5).push(seat(C.trade.gets, w, a));
+      of(6).push(seat(C.trade.gives, w, b));
+    }
+    rosters.set(w, TEAMS.map((t) => {
+      const players = of(t.id);
+      const starters = players.filter((p) => p.started);
+      // Stretched so the lineup adds up to the squad's score; the first starter
+      // carries the rounding. A man's line is his line wherever he is read.
+      const want = scoreByKey.get(`${w}|${t.id}`);
+      const factor = want / starters.reduce((a, p) => a + p.actual, 0);
+      for (const p of starters) p.actual = r1(p.actual * factor);
+      starters[0].actual = r1(want - starters.slice(1).reduce((a, p) => a + p.actual, 0));
+      for (const p of starters) lines.get(`${p.playerId}|${w}`).actual = p.actual;
+      const sum = (arr, k) => r1(arr.reduce((a, p) => a + (p[k] || 0), 0));
+      return {
+        id: t.id, name: t.name, teamName: t.teamName, abbrev: '',
+        players, starters, bench: players.filter((p) => !p.started),
+        projectedTotal: sum(starters, 'projected'), actualTotal: sum(starters, 'actual'),
+        benchActualTotal: null, seasonProjectedTotal: null,
+      };
+    }));
+  }
+
+  const players = new Map();
+  for (const [playerId, who] of info) {
+    const byWeek = {};
+    for (const w of weeks) byWeek[w] = { ...lines.get(`${playerId}|${w}`), kickoff: kickoff(w) };
+    players.set(playerId, { name: who.name, position: who.position, byWeek });
+  }
+
+  const proj = (w, id) => rosters.get(w).find((t) => t.id === id).projectedTotal;
+  return {
+    slots: SHAPE.map(([, slot]) => slot).filter((slot) => slot !== 20),
+    teams: TEAMS.map((t) => ({ id: t.id, name: t.name, teamName: t.teamName })),
+    weeks,
+    games: sched.games.filter((g) => weeks.includes(g.week)).map((g) => ({
+      week: g.week, homeId: g.homeId, awayId: g.awayId,
+      homeActual: g.homeScore, awayActual: g.awayScore,
+      homeProjected: proj(g.week, g.homeId), awayProjected: proj(g.week, g.awayId),
+    })),
+    rosters,
+    moves,
+    players,
+    limits: { roster: SHAPE.length },
+    isDemo: false,
+    name: sched.leagueName,
+    requests: 0,
+  };
+}

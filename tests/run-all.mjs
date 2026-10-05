@@ -51,6 +51,7 @@ const SUITES = [
   ['test-bye-rule.mjs', 'a known bye week projects 0 (ESPN projects D/STs through theirs), playoff weeks in the phone copy, points for to the tenth'],
   ['test-season-rules.mjs', 'played means ESPN decided it, ties count half, playoff games kept apart, waiver status, byes'],
   ['test-store.mjs', 'the weeks kept in this browser between pages: two freshness clocks, eviction, and the seam in season.js'],
+  ['test-decision-data.mjs', 'what the managers did, from ESPN: real transaction payloads decoded, a decided week’s moves frozen, the world’s cold and warm cost'],
   ['nav-check.mjs','the hand-copied nav: the same links in the same order on every page'],
   ['site-status-check.mjs', 'the Site updated stamp, the newer-version bar, the failed-to-load strip'],
   ['test-extension.mjs', 'the bridge worker: URL injection, who may drive it, and the staged trade'],

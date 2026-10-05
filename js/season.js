@@ -26,6 +26,10 @@ import * as floor from './floor.js';
 // The weeks this browser has already read, kept across a navigation. See
 // js/store.js for the freshness rule and THE LOCAL STORE below for the seam.
 import * as store from './store.js';
+// The league's starting slots, for the Decisions review's `world` (the last
+// section of this file). Both are pure.
+import { slotsFromCounts } from './forecast.js';
+import { slotCountsFromLineups } from './projection.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -1667,4 +1671,583 @@ export async function buildCloudPayload({ onProgress } = {}) {
     wire,
     weeks,
   };
+}
+
+// ===========================================================================
+// THE DECISIONS REVIEW: WHAT HAPPENED, AS ONE OBJECT
+// ===========================================================================
+//
+// Tim, 2026-10-05: "select any user and have a list of all the decisions
+// they've made, and what would have happened if they hadn't made that that
+// decision ... Because we know what every single player scored every single
+// week, we can accurately create these 'mirror universes' as if they were real."
+//
+// js/decisions.js replays the season with one decision undone; it is pure, and
+// THIS is what it replays — the `world` of docs/decisions-review-plan.md ("The
+// contract"), gathered once:
+//
+//   weeks     every week ESPN has decided EVERY game of, from week 1, no gaps
+//   games     those weeks' results, with the started lineups' projections
+//   rosters   `fetchWeeksRosters` for them, untouched
+//   moves     every add, drop and trade made in them, oldest first
+//   players   every man who was on a roster or is named in a move, with his
+//             score, projection and kickoff in EVERY one of those weeks —
+//             including the weeks he was on nobody's team, which is what makes
+//             "what if I had kept him" answerable
+//
+// WHAT IT COSTS. The schedule and the NFL schedule, one read each, every load.
+// Then, per decided week, ONCE: its rosters (js/store.js already keeps those),
+// its transactions, and the week of every named man who was not on a roster in
+// it — three requests. The last two are frozen in js/store.js beside the
+// rosters, so the next load costs that week nothing. A man first named by a
+// LATER week's move is bought for the earlier weeks then — one more request for
+// each earlier week, once. The week being played is never read for this.
+//
+// A FAILURE IS AN ERROR HERE, not a gap. Every other fetcher in this file lets
+// a week ESPN refuses simply be absent; a season replayed with one week's moves
+// missing would be a different season printed as fact.
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The weeks ESPN has decided every game of, in order, stopping at the first that is not. */
+function decidedWeeks(schedule) {
+  const out = [];
+  for (const w of schedule.weeks || []) {
+    const games = (schedule.byWeek.get(w) || []).filter((g) => g.awayId !== null && g.awayId !== undefined);
+    if (!games.length || !games.every((g) => g.played && g.early !== true)) break;
+    out.push(Number(w));
+  }
+  return out;
+}
+
+/** Every player id a move names. */
+function moveIds(m) {
+  return [...(m.adds || []), ...(m.drops || []), ...(m.trade ? [...m.trade.gives, ...m.trade.gets] : [])];
+}
+
+/** Moves in time order; the order they were handed in settles a tie. */
+function byTime(moves) {
+  return moves
+    .map((m, i) => [m, i])
+    .sort((a, b) => a[0].at - b[0].at || a[1] - b[1])
+    .map(([m]) => m);
+}
+
+/**
+ * TRADES THE TRANSACTION FEED DID NOT LIST, found from the rosters themselves.
+ *
+ * ESPN's trade record is the one shape here nobody has measured (the public
+ * test league has never made a trade — see `espn.parseTransactions`), so this
+ * is the net under it: two teams that EXCHANGED players between one week's
+ * rosters and the next, where no add and no listed trade explains it, traded.
+ *
+ * A man counts as having gone from A to B when he ended last week on A and this
+ * week on B — or B dropped him this week without ever adding him — and B did
+ * not add him off the wire and no listed trade already moved him. It takes
+ * movement BOTH ways to be a trade; a man who simply turns up on another team
+ * (a commissioner's edit) is not one.
+ *
+ * NEVER THE SAME TRADE TWICE: a man a listed trade moved is taken out before
+ * anything is paired, so what is left over is only what ESPN did not record.
+ *
+ * `at` is unknown, so it is put a moment before the week's first NFL kickoff:
+ * the players were on their new teams when the week was scored, which is all
+ * the rosters can say.
+ *
+ * @param {Object} o
+ * @param {number[]} o.weeks ascending
+ * @param {Map<number, Array>} o.rosters week -> teams
+ * @param {Array} o.moves what the feed listed, any order
+ * @param {Object|null} [o.draft] `espn.parseDraftRosters` — the rosters before
+ *   week 1's moves; without it week 1 has nothing to be compared with
+ * @param {Object} [o.firstKickoff] `{ [week]: epochMs }`
+ * @returns {Array} trade moves in the contract's shape, each `inferred: true`
+ */
+export function inferTrades({ weeks, rosters, moves, draft = null, firstKickoff = {} }) {
+  const out = [];
+  let prev = null;
+  let prevWeek = 0;
+  if (draft && Object.keys(draft).length) {
+    prev = new Map();
+    for (const [teamId, ids] of Object.entries(draft)) for (const id of ids) prev.set(id, Number(teamId));
+  }
+
+  for (const week of weeks || []) {
+    const cur = new Map();
+    for (const t of rosters.get(week) || []) for (const p of t.players || []) cur.set(p.playerId, t.id);
+    if (prev && cur.size) {
+      const inWindow = (m) => Number(m.week) > prevWeek && Number(m.week) <= week;
+      const added = (teamId, id) => (moves || []).some(
+        (m) => m.kind !== 'trade' && m.teamId === teamId && inWindow(m) && (m.adds || []).includes(id));
+      // A listed trade may sit in the week before the rosters show it (accepted
+      // then, upheld after the review).
+      const listed = (from, to, id) => (moves || []).some((m) => m.kind === 'trade' &&
+        Number(m.week) >= prevWeek && Number(m.week) <= week && (
+        (m.teamId === from && m.trade.withTeamId === to && m.trade.gives.includes(id)) ||
+        (m.teamId === to && m.trade.withTeamId === from && m.trade.gets.includes(id))));
+
+      const sent = new Map(); // `${from}>${to}` -> [playerId]
+      const note = (from, to, id) => {
+        if (from === undefined || from === to || added(to, id) || listed(from, to, id)) return;
+        const key = `${from}>${to}`;
+        if (!sent.has(key)) sent.set(key, []);
+        if (!sent.get(key).includes(id)) sent.get(key).push(id);
+      };
+      for (const [id, to] of cur) note(prev.get(id), to, id);
+      // Received and cut inside the same week: he is on no roster to be seen.
+      for (const m of moves || []) {
+        if (m.kind === 'trade' || !inWindow(m)) continue;
+        for (const id of m.drops || []) note(prev.get(id), m.teamId, id);
+      }
+
+      for (const [key, gives] of sent) {
+        const [a, b] = key.split('>').map(Number);
+        const gets = sent.get(`${b}>${a}`);
+        if (a > b || !gets || !gets.length) continue;
+        const kick = Number(firstKickoff && firstKickoff[week]);
+        const inWeek = (moves || []).filter((m) => Number(m.week) === week).map((m) => m.at);
+        out.push({
+          id: `inferred:${week}:${a}:${b}`,
+          kind: 'trade',
+          week,
+          at: Number.isFinite(kick) && kick > 0 ? kick - 1 : (inWeek.length ? Math.min(...inWeek) - 1 : 0),
+          teamId: a,
+          adds: [],
+          drops: [],
+          trade: { withTeamId: b, gives: gives.slice().sort((x, y) => x - y), gets: gets.slice().sort((x, y) => x - y) },
+          inferred: true,
+        });
+      }
+    }
+    if (cur.size) { prev = cur; prevWeek = week; }
+  }
+  return out;
+}
+
+/** What `fetchDecisionWorld` hands back, both for a league and for the sample. */
+function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, moves, players, roster, requests }) {
+  return {
+    slots, teams, weeks, games, rosters, moves, players,
+    limits: { roster },
+    // Beyond the contract, for the page's badge and its cost line.
+    isDemo, name, requests,
+  };
+}
+
+/**
+ * THE `world` js/decisions.js REPLAYS — see the note above and "The contract"
+ * in docs/decisions-review-plan.md, which this returns to the letter:
+ *
+ *   { slots, teams: [{ id, name, teamName }], weeks, games, rosters: Map,
+ *     moves, players: Map<playerId, { name, position, byWeek }>, limits: { roster } }
+ *
+ * plus `isDemo`, `name` (the league's) and `requests` — how many ESPN reads
+ * this call made beyond the schedule and the NFL schedule: rosters it had to
+ * buy, transactions, player-weeks. Zero once every decided week is held.
+ *
+ * `byWeek[week]` is `{ actual, projected, kickoff }` for EVERY week in `weeks`.
+ * `actual` and `projected` are always numbers: a man with no line in a decided
+ * week scored 0, and one ESPN had no projection for is 0 too (the roster
+ * objects in `rosters` keep their nulls, as everywhere else on the site). The
+ * projection has the bye rule applied. `kickoff` is his NFL team's kickoff that
+ * week in epoch ms — null on his bye, and null for everybody when the NFL
+ * schedule could not be read.
+ *
+ * A move may carry `inferred: true`: a trade found from the rosters rather than
+ * listed by ESPN (`inferTrades`).
+ *
+ * DEMO returns the sample league's world, with no request at all.
+ *
+ * THROWS when ESPN will not hand over a decided week's rosters, transactions or
+ * player-weeks. On a phone reading a PRIVATE league's synced copy that is every
+ * time, until the world rides in that copy too (the plan's Phase 4).
+ *
+ * @param {Object} [opts]
+ * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
+ * @param {boolean} [opts.demo] the sample league's world even though a league
+ *   is connected — for a page parked on Demo
+ */
+export async function fetchDecisionWorld({ onProgress, demo = false } = {}) {
+  const report = (done, total, label) => {
+    if (!onProgress) return;
+    try { onProgress(done, total, label); } catch { /* a bad listener must not stop the read */ }
+  };
+
+  const cfg = storable();
+  if (demo || !cfg) return demoDecisionWorld();
+
+  report(0, 1, 'Loading league…');
+  // ESPN's OWN verdict on each game: a matchup that merely looks over is not a
+  // week anybody may replay as history.
+  const schedule = await fetchSchedule({ settle: false });
+  const weeks = decidedWeeks(schedule);
+  const teams = (schedule.teams || []).map((t) => ({ id: t.id, name: t.name, teamName: t.teamName || '' }));
+
+  // The league's lineup and roster size. The schedule's own read carries them
+  // (mSettings) and js/espn.js shares that read for a minute, so this is free —
+  // except on the synced copy, where there is no ESPN to ask and the lineups in
+  // use say it instead.
+  let settings = null;
+  if (!(await cloudDown())) {
+    try { settings = espn.parseLeague(await espn.fetchMatchups()); } catch { settings = null; }
+  }
+
+  let requests = 0;
+  const total = weeks.length * 3;
+  let done = 0;
+
+  const rosters = weeks.length
+    ? await fetchWeeksRosters(weeks, {
+      onProgress: (d, t, week, from) => {
+        if (from === 'espn') requests++;
+        report(++done, total, `Week ${week} squads`);
+      },
+    })
+    : new Map();
+  const gap = weeks.find((w) => !rosters.has(w));
+  if (gap !== undefined) throw new Error(`ESPN would not return week ${gap}’s rosters.`);
+
+  // ---- the moves: this browser's frozen copy, else ESPN ----
+  const records = new Map(); // week -> { moves, players, draft, closed, dirty }
+  await inBatches(weeks, 3, async (week) => {
+    const held = store.readDecisionWeek(cfg.leagueId, cfg.season, week);
+    if (held) {
+      records.set(week, { ...held, closed: true, dirty: false });
+    } else {
+      const raw = await espn.fetchTransactions(week);
+      requests++;
+      // FROZEN ONLY ONCE ESPN HAS MOVED ON FROM THE WEEK. A transaction is
+      // filed under the scoring period it was made in, so a week's list is
+      // complete when the league's period has passed it; "every game decided"
+      // and "the period has rolled" were the same moment whenever measured, but
+      // nothing promises it. Unknown is not frozen.
+      const now = Math.max(Number(raw?.status?.latestScoringPeriod) || 0, Number(raw?.status?.currentMatchupPeriod) || 0);
+      records.set(week, {
+        moves: espn.parseTransactions(raw),
+        players: {},
+        draft: espn.parseDraftRosters(raw),
+        closed: now > week,
+        dirty: true,
+      });
+    }
+    report(++done, total, `Week ${week} moves`);
+  });
+
+  // The NFL's games, for the kickoffs, and the byes for the bye rule. One
+  // payload for both, and `fetchWeeksRosters` has usually bought it already.
+  const [pro, byes] = await Promise.all([fetchProGames(), fetchByeWeeks()]);
+  const firstKickoff = {};
+  for (const byWeek of Object.values(pro || {})) {
+    for (const w of weeks) {
+      const at = byWeek && byWeek[w] && byWeek[w].at;
+      if (Number.isFinite(at) && (!firstKickoff[w] || at < firstKickoff[w])) firstKickoff[w] = at;
+    }
+  }
+
+  const seen = new Set();
+  const listed = espn.dropRepeatTrades(byTime(
+    weeks.flatMap((w) => records.get(w).moves).filter((m) => !seen.has(m.id) && seen.add(m.id))
+  ));
+  const draft = weeks.map((w) => records.get(w).draft).find((d) => d && Object.keys(d).length) || null;
+  const moves = byTime([...listed, ...inferTrades({ weeks, rosters, moves: listed, draft, firstKickoff })]);
+
+  // ---- every man's every week ----
+  const onRoster = new Map(); // week -> Map<playerId, roster player>
+  const who = new Map();      // playerId -> { name, position }
+  for (const week of weeks) {
+    const map = new Map();
+    for (const t of rosters.get(week)) {
+      for (const p of t.players || []) {
+        map.set(p.playerId, p);
+        if (!who.has(p.playerId)) who.set(p.playerId, { name: p.name, position: p.position });
+      }
+    }
+    onRoster.set(week, map);
+  }
+  const ids = new Set(who.keys());
+  for (const m of moves) for (const id of moveIds(m)) ids.add(id);
+
+  await inBatches(weeks, 3, async (week) => {
+    const rec = records.get(week);
+    const need = [...ids].filter((id) => !onRoster.get(week).has(id) && !rec.players[id]);
+    if (need.length) {
+      const got = await espn.fetchPlayersWeek(need, week);
+      requests += Math.ceil(need.length / 100);
+      for (const entry of got) {
+        const p = espn.parsePlayerWeek(entry, week);
+        if (p.playerId === null || p.playerId === undefined) continue;
+        rec.players[p.playerId] = {
+          name: p.name, position: p.position, proTeamId: p.proTeamId,
+          projected: p.projected, actual: p.actual,
+        };
+      }
+      // An id ESPN knows nobody by is written down as nobody, so it is asked
+      // for once rather than on every load.
+      for (const id of need) {
+        if (!rec.players[id]) rec.players[id] = { name: '', position: 'UNK', proTeamId: null, projected: null, actual: null };
+      }
+      rec.dirty = true;
+    }
+    if (rec.dirty && rec.closed && weekIsFinal(week)) {
+      store.writeDecisionWeek(cfg.leagueId, cfg.season, week,
+        { moves: rec.moves, players: rec.players, draft: rec.draft }, { final: true });
+    }
+    report(++done, total, `Week ${week} players`);
+  });
+
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const kickoff = (proTeamId, week) => {
+    const g = proTeamId === null || proTeamId === undefined ? null : pro?.[proTeamId]?.[week];
+    return g && Number.isFinite(g.at) ? g.at : null;
+  };
+  const players = new Map();
+  for (const id of ids) {
+    const byWeek = {};
+    let named = who.get(id) || null;
+    for (const week of weeks) {
+      const held = onRoster.get(week).get(id);
+      if (held) {
+        // On a roster: the numbers that week was scored with.
+        byWeek[week] = { actual: num(held.actual), projected: num(held.projected), kickoff: kickoff(held.proTeamId, week) };
+        continue;
+      }
+      const loose = records.get(week).players[id] || {};
+      if (!named && loose.name) named = { name: loose.name, position: loose.position };
+      byWeek[week] = {
+        actual: num(loose.actual),
+        projected: num(espn.byeAdjustedProjection(loose.projected, loose.proTeamId, week, byes)),
+        kickoff: kickoff(loose.proTeamId, week),
+      };
+    }
+    players.set(id, { name: named ? named.name : '', position: named ? named.position : 'UNK', byWeek });
+  }
+
+  // ---- the results, in `computeLeagueStats`' shape ----
+  const teamIds = new Set(teams.map((t) => t.id));
+  const wanted = new Set(weeks);
+  const games = [];
+  for (const g of schedule.games) {
+    if (!wanted.has(Number(g.week)) || !g.played || !teamIds.has(g.homeId) || !teamIds.has(g.awayId)) continue;
+    // The started lineup's projection, as `fetchWeekRosters` totalled it — the
+    // same figure the synced copy's season is built from (`seasonFromCloud`).
+    const proj = new Map(rosters.get(Number(g.week)).map((t) => [t.id, t.projectedTotal]));
+    games.push({
+      week: g.week,
+      homeId: g.homeId,
+      awayId: g.awayId,
+      homeActual: exactPoints(g.homeScore),
+      awayActual: exactPoints(g.awayScore),
+      homeProjected: Math.round(num(proj.get(g.homeId)) * 10) / 10,
+      awayProjected: Math.round(num(proj.get(g.awayId)) * 10) / 10,
+    });
+  }
+
+  // Leagues differ, so the league is asked; the lineups in use are the
+  // fallback, and say the same thing unless every manager left a slot empty.
+  const everyTeam = weeks.flatMap((w) => rosters.get(w));
+  const counts = settings && Object.keys(settings.starterSlots || {}).length
+    ? settings.starterSlots
+    : slotCountsFromLineups(everyTeam);
+  const biggest = Math.max(0, ...everyTeam.map(
+    (t) => (t.players || []).filter((p) => p.lineupSlotId !== IR_SLOT).length));
+
+  return assembleWorld({
+    isDemo: false,
+    name: schedule.leagueName || '',
+    slots: slotsFromCounts(counts),
+    teams, weeks, games, rosters, moves, players,
+    roster: settings && settings.rosterSize ? settings.rosterSize : biggest,
+    requests,
+  });
+}
+
+// ------------------------------------------------- the sample league's world
+//
+// EVERYTHING HERE IS FAKE, and all of it follows from js/demo-rosters.js, so
+// the Decisions page tells the same story as every other page on Demo:
+//
+//   THE ADDS AND DROPS ARE THE ONES THE SAMPLE LEAGUE ALREADY MAKES. Its
+//   rosters turn over a man or three per team per week; a move here is that
+//   week-to-week difference, read off the rosters — so the moves explain the
+//   rosters exactly, which a hand-written list could not promise.
+//
+//   ONE TRADE IS INVENTED (the sample league makes none): in week
+//   `DEMO_TRADE_WEEK` two teams swap a running back each has held all season,
+//   each taking the other's place in the lineup. THIS IS THE ONE PLACE THE
+//   WORLD DEPARTS FROM THE OTHER DEMO PAGES: from that week on those two teams'
+//   scores here are their demo scores moved by the difference between the two
+//   men, because a trade that changed nobody's score would have nothing to show.
+//
+//   A man on nobody's roster in a week is given a score from his own rostered
+//   weeks' average, seeded by his id and the week — deterministic, and not the
+//   number js/demo-rosters.js would have drawn (its generator is private).
+
+const DEMO_TRADE_WEEK = 5;
+/** Tuesday of the sample season's week 1, 15:00 UTC. */
+const DEMO_EPOCH = Date.UTC(2025, 8, 2, 15);
+
+/** A number in [0, 1) that depends only on the two integers. */
+function demoDraw(a, b) {
+  let h = (Math.imul(a | 0, 0x9e3779b1) ^ Math.imul(b | 0, 0x85ebca6b)) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), h | 1);
+  h ^= h + Math.imul(h ^ (h >>> 7), h | 61);
+  return ((h ^ (h >>> 14)) >>> 0) / 4294967296;
+}
+
+async function demoDecisionWorld() {
+  const [{ generateDemoLeague }, demo] = await Promise.all([
+    import('./demo.js'),
+    import('./demo-rosters.js'),
+  ]);
+  const league = generateDemoLeague();
+  const weeks = [...new Set(league.games.map((g) => g.week))].sort((a, b) => a - b);
+  const r1 = (v) => Math.round(v * 10) / 10;
+
+  // Copies: the generator caches what it returns, and other pages read it.
+  const squads = new Map(); // week -> Map<teamId, players[]>
+  for (const w of weeks) {
+    squads.set(w, new Map(demo.generateDemoWeekRosters(w).teams.map(
+      (t) => [t.id, t.players.map((p) => ({ ...p }))])));
+  }
+  const teamIds = league.teams.map((t) => t.id);
+
+  // ---- the one trade ----
+  const always = (teamId, id) => weeks.every((w) => squads.get(w).get(teamId).some((p) => p.playerId === id));
+  let trade = null;
+  for (let i = 0; i < teamIds.length && !trade; i++) {
+    for (let j = i + 1; j < teamIds.length && !trade; j++) {
+      const pick = (teamId) => squads.get(DEMO_TRADE_WEEK).get(teamId)
+        .filter((p) => p.position === 'RB' && p.started && always(teamId, p.playerId))
+        .sort((a, b) => a.playerId - b.playerId)[0];
+      const mine = weeks.includes(DEMO_TRADE_WEEK) ? pick(teamIds[i]) : null;
+      const his = mine ? pick(teamIds[j]) : null;
+      if (mine && his) trade = { a: teamIds[i], b: teamIds[j], gives: mine.playerId, gets: his.playerId };
+    }
+  }
+  const shift = new Map(); // `${week}|${teamId}` -> { actual, projected } moved by the trade
+  if (trade) {
+    for (const w of weeks.filter((x) => x >= DEMO_TRADE_WEEK)) {
+      const A = squads.get(w).get(trade.a);
+      const B = squads.get(w).get(trade.b);
+      const ia = A.findIndex((p) => p.playerId === trade.gives);
+      const ib = B.findIndex((p) => p.playerId === trade.gets);
+      const [x, y] = [A[ia], B[ib]];
+      // Each takes the other's place in the lineup, and keeps his own numbers.
+      const seat = (p, was) => ({ ...p, lineupSlotId: was.lineupSlotId, slot: was.slot, started: was.started });
+      A[ia] = seat(y, x);
+      B[ib] = seat(x, y);
+      const moved = (was, now, key) => (was.started ? (now[key] || 0) - (was[key] || 0) : 0);
+      shift.set(`${w}|${trade.a}`, { actual: moved(x, y, 'actual'), projected: moved(x, y, 'projected') });
+      shift.set(`${w}|${trade.b}`, { actual: moved(y, x, 'actual'), projected: moved(y, x, 'projected') });
+    }
+  }
+
+  // ---- the rosters, in `fetchWeekRosters`' shape ----
+  const nameOf = new Map(league.teams.map((t) => [t.id, t.name]));
+  const sum = (arr, key) => r1(arr.reduce((a, p) => a + (p[key] || 0), 0));
+  const rosters = new Map();
+  for (const w of weeks) {
+    rosters.set(w, teamIds.map((id) => {
+      const players = squads.get(w).get(id);
+      const starters = players.filter((p) => p.started);
+      const bench = players.filter((p) => !p.started);
+      return {
+        id, name: nameOf.get(id), teamName: nameOf.get(id), abbrev: '',
+        players, starters, bench,
+        projectedTotal: sum(starters, 'projected'),
+        actualTotal: sum(starters, 'actual'),
+        benchActualTotal: sum(bench, 'actual'),
+        seasonProjectedTotal: sum(starters, 'seasonProjected'),
+      };
+    }));
+  }
+
+  // ---- the moves: each week's rosters against the week before ----
+  const position = new Map();
+  for (const w of weeks) for (const list of squads.get(w).values()) for (const p of list) position.set(p.playerId, p.position);
+  const moves = [];
+  for (let k = 1; k < weeks.length; k++) {
+    const w = weeks[k];
+    const tuesday = DEMO_EPOCH + (w - 1) * WEEK_MS;
+    if (trade && w === DEMO_TRADE_WEEK) {
+      moves.push({
+        id: `demo-trade-${w}`, kind: 'trade', week: w, at: tuesday, teamId: trade.a,
+        adds: [], drops: [],
+        trade: { withTeamId: trade.b, gives: [trade.gives], gets: [trade.gets] },
+      });
+    }
+    const traded = trade && w === DEMO_TRADE_WEEK ? new Set([trade.gives, trade.gets]) : new Set();
+    for (const id of teamIds) {
+      const was = new Set(squads.get(weeks[k - 1]).get(id).map((p) => p.playerId));
+      const now = new Set(squads.get(w).get(id).map((p) => p.playerId));
+      const added = [...now].filter((p) => !was.has(p) && !traded.has(p)).sort((a, b) => a - b);
+      const dropped = [...was].filter((p) => !now.has(p) && !traded.has(p)).sort((a, b) => a - b);
+      // The sample league only ever swaps like for like, so a pair is one action.
+      let n = 0;
+      const push = (adds, drops) => moves.push({
+        id: `demo-${w}-${id}-${++n}`,
+        kind: adds.length && drops.length ? 'adddrop' : adds.length ? 'add' : 'drop',
+        week: w,
+        at: tuesday + id * 60 * 60 * 1000 + n * 60 * 1000,
+        teamId: id, adds, drops, trade: null,
+      });
+      for (const add of added) {
+        const at = dropped.findIndex((d) => position.get(d) === position.get(add));
+        push([add], at === -1 ? [] : dropped.splice(at, 1));
+      }
+      for (const drop of dropped) push([], [drop]);
+    }
+  }
+
+  // ---- every man's every week ----
+  const onRoster = new Map();
+  const who = new Map();
+  for (const w of weeks) {
+    const map = new Map();
+    for (const list of squads.get(w).values()) {
+      for (const p of list) {
+        map.set(p.playerId, p);
+        if (!who.has(p.playerId)) who.set(p.playerId, { name: p.name, position: p.position });
+      }
+    }
+    onRoster.set(w, map);
+  }
+  const players = new Map();
+  for (const [id, me] of who) {
+    const held = weeks.map((w) => onRoster.get(w).get(id)).filter(Boolean);
+    const scored = held.map((p) => p.projected).filter((v) => typeof v === 'number' && v > 0);
+    const usual = scored.length ? scored.reduce((a, b) => a + b, 0) / scored.length : 0;
+    const byWeek = {};
+    for (const w of weeks) {
+      const p = onRoster.get(w).get(id);
+      byWeek[w] = {
+        actual: p ? (p.actual || 0) : r1(usual * (0.3 + 1.4 * demoDraw(id, w * 2 + 1))),
+        projected: p ? (p.projected || 0) : r1(usual * (0.85 + 0.3 * demoDraw(id, w * 2))),
+        // Sunday of that week. The sample league has no byes.
+        kickoff: DEMO_EPOCH + (w - 1) * WEEK_MS + 5 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000,
+      };
+    }
+    players.set(id, { name: me.name, position: me.position, byWeek });
+  }
+
+  const games = league.games.map((g) => {
+    const h = shift.get(`${g.week}|${g.homeId}`) || { actual: 0, projected: 0 };
+    const a = shift.get(`${g.week}|${g.awayId}`) || { actual: 0, projected: 0 };
+    return {
+      week: g.week, homeId: g.homeId, awayId: g.awayId,
+      homeActual: r1(g.homeActual + h.actual), awayActual: r1(g.awayActual + a.actual),
+      homeProjected: r1(g.homeProjected + h.projected), awayProjected: r1(g.awayProjected + a.projected),
+    };
+  });
+
+  const everyTeam = weeks.flatMap((w) => rosters.get(w));
+  return assembleWorld({
+    isDemo: true,
+    name: league.name,
+    slots: slotsFromCounts(slotCountsFromLineups(everyTeam)),
+    teams: league.teams.map((t) => ({ id: t.id, name: t.name, teamName: t.name })),
+    weeks, games, rosters, moves: byTime(moves), players,
+    roster: Math.max(0, ...everyTeam.map((t) => t.players.length)),
+    requests: 0,
+  });
 }
