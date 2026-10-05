@@ -1,0 +1,251 @@
+{
+ "_captured": "public league 1241838, season 2026, view=kona_player_info&scoringPeriodId=2, X-Fantasy-Filter {\"players\":{\"filterIds\":{\"value\":[4678008,4685720,3924327]}}}, 2026-10-05; trimmed",
+ "players": [
+  {
+   "id": 3924327,
+   "onTeamId": 0,
+   "status": "WAIVERS",
+   "player": {
+    "id": 3924327,
+    "fullName": "Drew Lock",
+    "defaultPositionId": 1,
+    "proTeamId": 26,
+    "injuryStatus": "ACTIVE",
+    "stats": [
+     {
+      "id": "01401872943",
+      "seasonId": 2026,
+      "scoringPeriodId": 2,
+      "statSourceId": 0,
+      "statSplitTypeId": 1,
+      "appliedTotal": 21.4,
+      "proTeamId": 26
+     },
+     {
+      "id": "1120262",
+      "seasonId": 2026,
+      "scoringPeriodId": 2,
+      "statSourceId": 1,
+      "statSplitTypeId": 1,
+      "appliedTotal": 15.70639184,
+      "proTeamId": 0
+     },
+     {
+      "id": "002025",
+      "seasonId": 2025,
+      "scoringPeriodId": 0,
+      "statSourceId": 0,
+      "statSplitTypeId": 0,
+      "appliedTotal": 0.1,
+      "appliedAverage": 0.019999999999999997,
+      "proTeamId": 0
+     },
+     {
+      "id": "002026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 0,
+      "statSplitTypeId": 0,
+      "appliedTotal": 34.18,
+      "appliedAverage": 11.393333333333333,
+      "proTeamId": 0
+     },
+     {
+      "id": "102025",
+      "seasonId": 2025,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 0,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     },
+     {
+      "id": "122026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 2,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     },
+     {
+      "id": "102026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 0,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": 4678008,
+   "onTeamId": 0,
+   "status": "WAIVERS",
+   "player": {
+    "id": 4678008,
+    "fullName": "Jonathon Brooks",
+    "defaultPositionId": 2,
+    "proTeamId": 29,
+    "injuryStatus": "INJURY_RESERVE",
+    "stats": [
+     {
+      "id": "1120262",
+      "seasonId": 2026,
+      "scoringPeriodId": 2,
+      "statSourceId": 1,
+      "statSplitTypeId": 1,
+      "appliedTotal": 7.84475601,
+      "proTeamId": 0
+     },
+     {
+      "id": "01401872933",
+      "seasonId": 2026,
+      "scoringPeriodId": 2,
+      "statSourceId": 0,
+      "statSplitTypeId": 1,
+      "appliedTotal": 1.6,
+      "proTeamId": 29
+     },
+     {
+      "id": "002025",
+      "seasonId": 2025,
+      "scoringPeriodId": 0,
+      "statSourceId": 0,
+      "statSplitTypeId": 0,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     },
+     {
+      "id": "002026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 0,
+      "statSplitTypeId": 0,
+      "appliedTotal": 8.3,
+      "appliedAverage": 4.15,
+      "proTeamId": 0
+     },
+     {
+      "id": "102025",
+      "seasonId": 2025,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 0,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     },
+     {
+      "id": "122026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 2,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     },
+     {
+      "id": "102026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 0,
+      "appliedTotal": 0,
+      "appliedAverage": 0,
+      "proTeamId": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": 4685720,
+   "onTeamId": 2,
+   "status": "ONTEAM",
+   "player": {
+    "id": 4685720,
+    "fullName": "Bryce Young",
+    "defaultPositionId": 1,
+    "proTeamId": 29,
+    "injuryStatus": "ACTIVE",
+    "stats": [
+     {
+      "id": "1120262",
+      "seasonId": 2026,
+      "scoringPeriodId": 2,
+      "statSourceId": 1,
+      "statSplitTypeId": 1,
+      "appliedTotal": 16.59967041,
+      "proTeamId": 0
+     },
+     {
+      "id": "01401872933",
+      "seasonId": 2026,
+      "scoringPeriodId": 2,
+      "statSourceId": 0,
+      "statSplitTypeId": 1,
+      "appliedTotal": 24.08,
+      "proTeamId": 29
+     },
+     {
+      "id": "002025",
+      "seasonId": 2025,
+      "scoringPeriodId": 0,
+      "statSourceId": 0,
+      "statSplitTypeId": 0,
+      "appliedTotal": 218.04,
+      "appliedAverage": 13.6275,
+      "proTeamId": 0
+     },
+     {
+      "id": "002026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 0,
+      "statSplitTypeId": 0,
+      "appliedTotal": 90.62,
+      "appliedAverage": 22.655,
+      "proTeamId": 0
+     },
+     {
+      "id": "102025",
+      "seasonId": 2025,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 0,
+      "appliedTotal": 267.8960311,
+      "appliedAverage": 15.758590064705883,
+      "proTeamId": 0
+     },
+     {
+      "id": "122026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 2,
+      "appliedTotal": 246.91771215,
+      "appliedAverage": 15.432357009500002,
+      "proTeamId": 0
+     },
+     {
+      "id": "102026",
+      "seasonId": 2026,
+      "scoringPeriodId": 0,
+      "statSourceId": 1,
+      "statSplitTypeId": 0,
+      "appliedTotal": 217.90699059,
+      "appliedAverage": 16.76207619953846,
+      "proTeamId": 0
+     }
+    ]
+   }
+  }
+ ]
+}
