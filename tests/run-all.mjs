@@ -83,6 +83,7 @@ const SUITES = [
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
+  ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
   ['roster-link-check.mjs', 'a link into the roster detail (?team=&week=): lands, saves nothing, applied once'],
