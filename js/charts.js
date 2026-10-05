@@ -14,6 +14,9 @@
  *   lineChart(container, opts)
  *   histogram(container, opts)
  *   boxPlot(container, opts)
+ *   scatterChart(container, opts)   projected against actual, with y = x and
+ *                                   the least-squares line; dots open a link
+ *   leastSquares(points)            the line's maths, pure
  */
 
 /* ------------------------------------------------------------------ *
@@ -979,5 +982,438 @@ export function boxPlot(container, opts) {
   }
 
   observeWidth(container, () => boxPlot(container, o));
+  return svg;
+}
+
+/* ================================================================== *
+ * 4. Scatter: projected against actual
+ * ================================================================== */
+
+/**
+ * The least-squares regression line (LSRL) through a set of points.
+ *
+ *   slope     = Sxy / Sxx
+ *   intercept = mean(y) - slope * mean(x)
+ *   r         = Sxy / sqrt(Sxx * Syy)
+ *
+ * where Sxx, Syy and Sxy are the sums of squared (and cross) deviations from
+ * the two means. A pair with either half missing or non-finite is not a point
+ * and is skipped, never counted as zero.
+ *
+ * @param {Array} points  [{ x, y }]
+ * @returns {{slope:number, intercept:number, r:number|null, n:number}|null}
+ *   null with fewer than two points, or when every x is the same (a vertical
+ *   cloud has no slope). `r` is null when every y is the same: the line is
+ *   flat and real, but there is no y-variance to correlate with.
+ */
+export function leastSquares(points) {
+  if (!Array.isArray(points)) return null;
+  let n = 0, sx = 0, sy = 0;
+  const kept = [];
+  for (const p of points) {
+    if (!p || !isNum(p.x) || !isNum(p.y)) continue;
+    kept.push(p);
+    n++; sx += p.x; sy += p.y;
+  }
+  if (n < 2) return null;
+  const mx = sx / n, my = sy / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of kept) {
+    const dx = p.x - mx, dy = p.y - my;
+    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+  }
+  if (!(sxx > 1e-12)) return null;
+  const slope = sxy / sxx;
+  return {
+    slope,
+    intercept: my - slope * mx,
+    r: syy > 1e-12 ? sxy / Math.sqrt(sxx * syy) : null,
+    n,
+  };
+}
+
+/** The part of y = slope*x + intercept that lies inside the square [lo, hi]². */
+function clipToSquare(slope, intercept, lo, hi) {
+  let x1 = lo, x2 = hi;
+  if (Math.abs(slope) < 1e-12) {
+    if (intercept < lo || intercept > hi) return null;
+  } else {
+    const xa = (lo - intercept) / slope, xb = (hi - intercept) / slope;
+    x1 = Math.max(lo, Math.min(xa, xb));
+    x2 = Math.min(hi, Math.max(xa, xb));
+    if (!(x2 > x1)) return null;
+  }
+  return { x1, y1: slope * x1 + intercept, x2, y2: slope * x2 + intercept };
+}
+
+/** Points to a tenth, always with the decimal: 110.0, not 110. */
+const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
+
+/**
+ * Scatter of actual (up) against projected (across), with two lines on it:
+ * the DOTTED y = x a perfect projection would sit on, and the SOLID
+ * least-squares line the dots actually make.
+ *
+ * ONE SCALE SERVES BOTH AXES. The domain is fitted to every x and every y
+ * together, so y = x runs corner to corner of the plot and a dot above the
+ * dotted line really did beat its projection. Two separately "nice" axes would
+ * tilt that line and make the picture a lie.
+ *
+ * THE PREVIEW IS A LINK. Hovering a dot (or tapping it - a finger has no
+ * hover) opens a small overlay naming it; the overlay is an <a href> to that
+ * performance and stays open while the pointer travels from the dot onto it.
+ * It is absolutely positioned inside the container, so nothing on the page
+ * moves or resizes. There is ONE set of listeners on the svg, not one per dot:
+ * a season of players is ~2,700 dots, found by a nearest-dot scan.
+ *
+ * @param {Element} container
+ * @param {Object}  opts
+ * @param {Array}   opts.points   [{ x, y, name, detail?, week?, href?, key?, color? }]
+ *                                x = projected, y = actual. `name` and `detail`
+ *                                are untrusted text. `key` is what `highlight`
+ *                                matches (rule 9: a team id, never a label).
+ * @param {string}  [opts.xLabel]
+ * @param {string}  [opts.yLabel]
+ * @param {number}  [opts.height=320]  height of the plot block; the key adds a
+ *                                     row below it
+ * @param {string|number} [opts.highlight] key to emphasise
+ * @param {string}  [opts.empty]   what to say when there is nothing to plot
+ * @param {string}  [opts.perfectLabel='Perfect projection']
+ * @param {string}  [opts.fitLabel='Best-fit line']
+ * @returns {SVGElement|null}  the fit, when there is one, is on `svg.__ffFit`
+ */
+export function scatterChart(container, opts) {
+  if (!container || typeof container !== 'object') return null;
+  const o = opts || {};
+  const height = isNum(o.height) && o.height > 120 ? o.height : 320;
+
+  // Whatever the last render in this container left running.
+  if (typeof container.__ffScatterOff === 'function') container.__ffScatterOff();
+  container.__ffScatterOff = null;
+
+  const pts = (Array.isArray(o.points) ? o.points : [])
+    .filter((p) => p && isNum(p.x) && isNum(p.y));
+  if (!pts.length) return emptyState(container, o.empty || 'No data to chart', height);
+
+  resetContainer(container);
+  const W = measureWidth(container);
+  const M = { top: 14, right: 16, bottom: 46, left: 54 };
+  const plotW = Math.max(10, W - M.left - M.right);
+  const plotH = Math.max(40, height - M.top - M.bottom);
+
+  // --- one domain for both axes ------------------------------------------
+  let lo = Infinity, hi = -Infinity;
+  for (const p of pts) {
+    if (p.x < lo) lo = p.x; if (p.y < lo) lo = p.y;
+    if (p.x > hi) hi = p.x; if (p.y > hi) hi = p.y;
+  }
+  const S = niceScale(lo, hi, 5);
+  const span = S.hi - S.lo || 1;
+  const x = (v) => M.left + ((v - S.lo) / span) * plotW;
+  const y = (v) => M.top + plotH - ((v - S.lo) / span) * plotH;
+
+  const parts = [];
+  const xEvery = Math.max(1, Math.ceil(S.ticks.length / Math.max(2, Math.floor(plotW / 40))));
+  S.ticks.forEach((t, i) => {
+    const ty = y(t), tx = x(t);
+    parts.push(
+      `<line x1="${M.left}" y1="${ty.toFixed(1)}" x2="${M.left + plotW}" y2="${ty.toFixed(1)}" ` +
+      `stroke="${C.grid}" stroke-width="1"/>`,
+      `<text x="${M.left - 8}" y="${(ty + 4).toFixed(1)}" text-anchor="end" fill="${C.dim}" ` +
+      `font-size="${TICK_SIZE}" style="font-variant-numeric:tabular-nums">${esc(fmt(t))}</text>`
+    );
+    if (i % xEvery === 0 || i === S.ticks.length - 1) {
+      parts.push(
+        `<text x="${tx.toFixed(1)}" y="${M.top + plotH + 18}" text-anchor="middle" fill="${C.dim}" ` +
+        `font-size="${TICK_SIZE}" style="font-variant-numeric:tabular-nums">${esc(fmt(t))}</text>`
+      );
+    }
+  });
+  if (o.yLabel) {
+    parts.push(
+      `<text transform="translate(13,${M.top + plotH / 2}) rotate(-90)" text-anchor="middle" ` +
+      `fill="${C.dim}" font-size="${TICK_SIZE}">${esc(o.yLabel)}</text>`
+    );
+  }
+  if (o.xLabel) {
+    parts.push(
+      `<text x="${(M.left + plotW / 2).toFixed(1)}" y="${M.top + plotH + 38}" text-anchor="middle" ` +
+      `fill="${C.dim}" font-size="${TICK_SIZE}">${esc(o.xLabel)}</text>`
+    );
+  }
+  parts.push(
+    `<line x1="${M.left}" y1="${M.top + plotH}" x2="${M.left + plotW}" y2="${M.top + plotH}" ` +
+    `stroke="${C.axis}" stroke-width="1"/>`
+  );
+
+  // --- dots ---------------------------------------------------------------
+  // Smaller and more see-through as they multiply, so a pile-up reads as
+  // density instead of a solid blot. No <title> per dot: the preview carries
+  // identity, and thousands of titles are markup nobody reads.
+  const n = pts.length;
+  const r = n > 600 ? 2.5 : n > 150 ? 3 : 4;
+  const alpha = n > 600 ? 0.25 : n > 150 ? 0.5 : 0.7;
+  const base = SERIES_COLORS[0];
+  const want = o.highlight == null || o.highlight === '' ? null : String(o.highlight);
+  const isHi = (p) => want !== null && p.key != null && String(p.key) === want;
+  const px = new Array(n), py = new Array(n);
+  const back = [], front = [];
+  pts.forEach((p, i) => {
+    px[i] = x(p.x); py[i] = y(p.y);
+    const at = `data-i="${i}" cx="${px[i].toFixed(1)}" cy="${py[i].toFixed(1)}"`;
+    const fill = p.color ? ` fill="${esc(p.color)}"` : '';
+    if (isHi(p)) {
+      front.push(
+        `<circle class="ff-dot ff-dot-hi" ${at} r="${r + 1.5}"${fill} fill-opacity="1" ` +
+        `stroke="${C.text}" stroke-width="1.5"/>`
+      );
+    } else {
+      back.push(`<circle class="ff-dot" ${at} r="${r}"${fill}/>`);
+    }
+  });
+  parts.push(`<g class="ff-dots" fill="${base}" fill-opacity="${alpha}">${back.join('')}${front.join('')}</g>`);
+
+  // --- the two lines, over the dots so neither is buried ------------------
+  parts.push(
+    `<line class="ff-perfect" x1="${x(S.lo).toFixed(1)}" y1="${y(S.lo).toFixed(1)}" ` +
+    `x2="${x(S.hi).toFixed(1)}" y2="${y(S.hi).toFixed(1)}" stroke="${C.dim}" stroke-width="2" ` +
+    `stroke-dasharray="1 6" stroke-linecap="round" pointer-events="none"/>`
+  );
+  const fit = leastSquares(pts);
+  const seg = fit ? clipToSquare(fit.slope, fit.intercept, S.lo, S.hi) : null;
+  if (seg) {
+    parts.push(
+      `<line class="ff-fit" x1="${x(seg.x1).toFixed(1)}" y1="${y(seg.y1).toFixed(1)}" ` +
+      `x2="${x(seg.x2).toFixed(1)}" y2="${y(seg.y2).toFixed(1)}" stroke="${C.text}" stroke-width="2" ` +
+      `stroke-linecap="round" pointer-events="none"/>`
+    );
+  }
+
+  // the ring that marks the dot a preview belongs to
+  parts.push(
+    `<circle class="ff-scatter-focus" cx="0" cy="0" r="${r + 3.5}" fill="none" stroke="${C.text}" ` +
+    `stroke-width="2" opacity="0" pointer-events="none"/>`
+  );
+
+  // --- key: which line is which ------------------------------------------
+  const ky = height + 8;
+  let kx = 4;
+  const keyItem = (label, dashed) => {
+    const out =
+      `<line x1="${kx}" y1="${ky}" x2="${kx + 20}" y2="${ky}" stroke="${dashed ? C.dim : C.text}" ` +
+      `stroke-width="2" stroke-linecap="round"${dashed ? ' stroke-dasharray="1 6"' : ''}/>` +
+      `<text x="${kx + 26}" y="${ky + 4}" fill="${C.text}" font-size="${LABEL_SIZE}">${esc(label)}</text>`;
+    kx += 26 + textWidth(label, LABEL_SIZE) + 18;
+    return out;
+  };
+  parts.push(keyItem(o.perfectLabel || 'Perfect projection', true));
+  if (seg) parts.push(keyItem(o.fitLabel || 'Best-fit line', false));
+
+  const totalH = height + 22;
+  const label = `${o.yLabel || 'Actual'} against ${o.xLabel || 'projected'}, ${n} dots`;
+  const markup =
+    `<svg viewBox="0 0 ${W} ${totalH}" width="100%" role="img" aria-label="${esc(label)}" ` +
+    `style="width:100%;height:auto;display:block;font-family:${FONT}">${parts.join('')}</svg>`;
+
+  const svg = mount(container, markup);
+  if (!svg) return null;
+  svg.__ffFit = fit;
+
+  // --- the preview --------------------------------------------------------
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return svg;
+  try {
+    const computed = typeof getComputedStyle === 'function' ? getComputedStyle(container).position : '';
+    if (!computed || computed === 'static') container.style.position = 'relative';
+  } catch (_) { /* non-DOM environment: skip */ }
+
+  const tip = document.createElement('a');
+  tip.setAttribute('class', 'ff-scatter-tip');
+  tip.setAttribute('hidden', '');
+  tip.style.cssText =
+    'position:absolute;left:0;top:0;z-index:5;display:none;text-decoration:none;' +
+    'background:var(--bg,#0f1115);border:1px solid var(--line,#272c36);border-radius:6px;' +
+    'padding:7px 10px;font:' + LABEL_SIZE + 'px/1.5 ' + FONT + ';color:var(--text,#e6e8ec);' +
+    'white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.45);max-width:240px;' +
+    'overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums';
+  container.appendChild(tip);
+  const focus = svg.querySelector('.ff-scatter-focus');
+
+  let active = -1;        // index of the dot the preview is showing
+  let pending = -1;       // a different dot the pointer has moved onto
+  let hideTimer = null, switchTimer = null;
+  let overTip = false;
+
+  const geometry = () => {
+    const has = typeof svg.getBoundingClientRect === 'function' &&
+      typeof container.getBoundingClientRect === 'function';
+    const sr = has ? svg.getBoundingClientRect() : { left: 0, top: 0, width: W };
+    const cr = has ? container.getBoundingClientRect() : { left: 0, top: 0 };
+    return { sr, cr, scale: sr.width ? W / sr.width : 1 };
+  };
+
+  /** Nearest dot to a client position, within `reach` CSS px; -1 for none. */
+  const nearest = (evt, reach) => {
+    const g = geometry();
+    const ux = (evt.clientX - g.sr.left) * g.scale;
+    const uy = (evt.clientY - g.sr.top) * g.scale;
+    const lim = reach * g.scale;
+    let best = -1, bestD = lim * lim;
+    for (let i = 0; i < n; i++) {
+      const dx = px[i] - ux, dy = py[i] - uy;
+      const d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = i; }
+    }
+    return best;
+  };
+
+  const line = (text, dim) => {
+    const el = document.createElement('div');
+    if (dim) el.style.cssText = 'color:var(--dim,#8b93a1)';
+    el.textContent = text;
+    return el;
+  };
+
+  function show(i) {
+    clearTimeout(hideTimer); hideTimer = null;
+    clearTimeout(switchTimer); switchTimer = null;
+    pending = -1;
+    active = i;
+    const p = pts[i];
+
+    // Built from text nodes only: names are untrusted.
+    tip.textContent = '';
+    const head = document.createElement('div');
+    const nm = document.createElement('strong');
+    nm.style.cssText = 'font-weight:600';
+    nm.textContent = p.name == null ? '' : String(p.name);
+    head.appendChild(nm);
+    if (p.detail) {
+      const d = document.createElement('span');
+      d.style.cssText = 'color:var(--dim,#8b93a1);margin-left:6px';
+      d.textContent = String(p.detail);
+      head.appendChild(d);
+    }
+    tip.appendChild(head);
+    if (p.week != null) tip.appendChild(line(`Week ${p.week}`, true));
+    tip.appendChild(line(`Proj ${tenth(p.x)} · Actual ${tenth(p.y)}`, false));
+    if (p.href) tip.setAttribute('href', String(p.href));
+    else tip.removeAttribute('href');
+    tip.removeAttribute('hidden');
+    tip.style.display = 'block';
+
+    if (focus) {
+      focus.setAttribute('cx', px[i].toFixed(1));
+      focus.setAttribute('cy', py[i].toFixed(1));
+      focus.setAttribute('opacity', '1');
+    }
+
+    // Beside the DOT, not the pointer, so it holds still and can be reached:
+    // above-right by default, flipped where it would leave the container.
+    const g = geometry();
+    const dotX = g.sr.left - g.cr.left + px[i] / g.scale;
+    const dotY = g.sr.top - g.cr.top + py[i] / g.scale;
+    const cw = container.clientWidth || W;
+    const tw = tip.offsetWidth || 170;
+    const th = tip.offsetHeight || 64;
+    let left = dotX + 10;
+    if (left + tw > cw - 2) left = dotX - 10 - tw;
+    left = Math.max(2, Math.min(left, cw - tw - 2));
+    let top = dotY - th - 8;
+    if (top < 2) top = dotY + 10;
+    tip.style.left = left.toFixed(0) + 'px';
+    tip.style.top = top.toFixed(0) + 'px';
+  }
+
+  function hide() {
+    clearTimeout(hideTimer); hideTimer = null;
+    clearTimeout(switchTimer); switchTimer = null;
+    pending = -1;
+    active = -1;
+    // Both: the inline `display` is what actually hides it (an inline display
+    // outranks the browser's own [hidden] rule); the attribute says so.
+    tip.setAttribute('hidden', '');
+    tip.style.display = 'none';
+    if (focus) focus.setAttribute('opacity', '0');
+  }
+
+  const hideSoon = (ms) => {
+    if (hideTimer) return;
+    hideTimer = setTimeout(() => { hideTimer = null; if (!overTip) hide(); }, ms);
+  };
+
+  // A MOUSE. The first dot opens at once. Once a preview is open, a different
+  // dot under the pointer waits a moment before taking over: on the way from a
+  // dot to its preview the pointer crosses other dots, and a preview that
+  // jumped to each of them could never be clicked.
+  const onMove = (evt) => {
+    if (evt.pointerType === 'touch') return;
+    const i = nearest(evt, 12);
+    if (svg.style) svg.style.cursor = i >= 0 ? 'pointer' : '';
+    if (i < 0) {
+      clearTimeout(switchTimer); switchTimer = null; pending = -1;
+      if (active >= 0) hideSoon(350);
+      return;
+    }
+    if (i === active) {
+      clearTimeout(hideTimer); hideTimer = null;
+      clearTimeout(switchTimer); switchTimer = null; pending = -1;
+      return;
+    }
+    if (active < 0) { show(i); return; }
+    clearTimeout(hideTimer); hideTimer = null;
+    pending = i;
+    if (!switchTimer) {
+      switchTimer = setTimeout(() => {
+        switchTimer = null;
+        if (pending >= 0 && !overTip) show(pending);
+      }, 140);
+    }
+  };
+
+  // A TAP (or a click). A finger produces no move before it lands, so the
+  // press itself is the hover; a press on empty plot puts the preview away.
+  const onDown = (evt) => {
+    const i = nearest(evt, evt.pointerType === 'touch' ? 24 : 12);
+    if (i >= 0) show(i);
+    else hide();
+  };
+
+  // A lifted finger also "leaves" - which must not take away the preview the
+  // tap just opened, or there would be nothing left to tap.
+  const onLeave = (evt) => {
+    if (evt.pointerType === 'touch') return;
+    clearTimeout(switchTimer); switchTimer = null; pending = -1;
+    if (active >= 0) hideSoon(350);
+  };
+
+  svg.addEventListener('pointermove', onMove);
+  svg.addEventListener('pointerdown', onDown);
+  svg.addEventListener('pointerleave', onLeave);
+  tip.addEventListener('pointerenter', () => {
+    overTip = true;
+    clearTimeout(hideTimer); hideTimer = null;
+    clearTimeout(switchTimer); switchTimer = null; pending = -1;
+  });
+  tip.addEventListener('pointerleave', (evt) => {
+    overTip = false;
+    if (evt.pointerType === 'touch') return;
+    hideSoon(250);
+  });
+
+  // A press anywhere else on the page dismisses it (the phone's "tap away").
+  const onDoc = (evt) => {
+    if (active < 0) return;
+    const t = evt.target;
+    if (t && typeof container.contains === 'function' && container.contains(t)) return;
+    hide();
+  };
+  const canDoc = typeof document.addEventListener === 'function';
+  if (canDoc) document.addEventListener('pointerdown', onDoc);
+  container.__ffScatterOff = () => {
+    clearTimeout(hideTimer); clearTimeout(switchTimer);
+    if (canDoc) document.removeEventListener('pointerdown', onDoc);
+  };
+
+  observeWidth(container, () => scatterChart(container, o));
   return svg;
 }

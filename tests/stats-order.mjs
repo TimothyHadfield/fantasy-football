@@ -34,6 +34,9 @@ const EXPECTED = [
   'Cumulative luck',
   'Score distribution',
   'Projection accuracy',
+  // Tim, 2026-10-04: the two scatter graphs, directly under Projection accuracy.
+  'Projected vs actual — teams',
+  'Projected vs actual — players',
   'Score spread by team',
 ];
 

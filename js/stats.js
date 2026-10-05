@@ -332,6 +332,79 @@ export function predictionAccuracy(games, thresholds = [0, 5, 10, 15, 20, 25, 30
   return buckets;
 }
 
+// ------------------------------------------- projected against actual (dots)
+//
+// The two scatter graphs on the Stats page (Tim, 2026-10-04): one dot per team
+// per finished week, and one per player per finished week. Both are pure, so
+// the page only has to turn an id into a link.
+
+const finite = (v) => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * One point per team per finished week: x = what the lineup it STARTED was
+ * projected to score, y = what it scored.
+ *
+ * Read off the weekly rows `computeLeagueStats` already built — the same
+ * numbers as the Proj and Avg columns, Weekly luck and Projection accuracy, so
+ * the graph cannot disagree with them. A week with no projection (ESPN returned
+ * none, stored as 0) is skipped rather than plotted on the axis.
+ *
+ * @param {Object} stats  from `computeLeagueStats`
+ * @returns {Array<{teamId, name, week, x, y}>}
+ */
+export function teamFitPoints(stats) {
+  const out = [];
+  for (const t of (stats && stats.teams) || []) {
+    for (const row of t.weekly || []) {
+      if (!finite(row.projected) || !finite(row.actual) || !(row.projected > 0)) continue;
+      out.push({ teamId: t.id, name: t.name, week: row.week, x: row.projected, y: row.actual });
+    }
+  }
+  return out;
+}
+
+/**
+ * One point per rostered player per finished week, starters and bench alike:
+ * x = ESPN's projection for him that week, y = what he scored.
+ *
+ * SKIPPED: a man with no projection or no score (null — not zero), and a man
+ * projected 0 who scored 0. That last one is a bye, or a player ruled out: he
+ * was not projected to play and did not, which is no test of a projection, and
+ * a few hundred of them stacked on the origin would drag the fitted line onto
+ * the perfect one for free.
+ *
+ * @param {Map<number, Array>} weekTeams  week -> that week's teams, each with
+ *                                        `players` (season.fetchWeeksRosters)
+ * @param {number[]} weeks                the finished weeks to plot
+ * @returns {Array<{playerId, name, position, proTeam, teamId, week, x, y}>}
+ */
+export function playerFitPoints(weekTeams, weeks) {
+  const out = [];
+  if (!weekTeams || typeof weekTeams.get !== 'function') return out;
+  for (const week of weeks || []) {
+    for (const team of weekTeams.get(week) || []) {
+      const players = Array.isArray(team.players)
+        ? team.players
+        : [...(team.starters || []), ...(team.bench || [])];
+      for (const p of players) {
+        if (!p || !finite(p.projected) || !finite(p.actual)) continue;
+        if (p.projected === 0 && p.actual === 0) continue;
+        out.push({
+          playerId: p.playerId,
+          name: p.name || '',
+          position: p.position || '',
+          proTeam: p.proTeam || '',
+          teamId: team.id,
+          week,
+          x: p.projected,
+          y: p.actual,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Histogram of every score in the league.
  * CONFIRMED: the sheet bins by tens (70s, 80s, ...) and again by twenties.

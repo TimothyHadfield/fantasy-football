@@ -789,6 +789,11 @@ th.po-start, td.po-start,
 /* charts.js gives its in-SVG legend entries tabindex=0; SVG gets no useful
  * default ring, so state one. */
 .ff-legend-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* The scatter's dot preview is a link (charts.js styles the box itself, inline).
+ * An outline, not a border or a size change, so pointing at it moves nothing. */
+.ff-scatter-tip[href] { cursor: pointer; }
+.ff-scatter-tip[href]:hover { outline: 1px solid var(--dim); }
+.ff-scatter-tip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Inline sparkline slot: sized by the container so charts.js can measure it. */
 .spark {
