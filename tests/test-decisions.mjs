@@ -251,7 +251,7 @@ eq([g4.homeActual, g4.awayActual, g4.homeProjected, g4.awayProjected, g4.matchup
   'the game carries mirror points and mirror projections (Mitch 56 - Lock 15 + Mayfield 17 = 58), other fields copied');
 eq([cell(m1, TIM, 2).projected, cell(m1, TIM, 2).realProjected], [58, 59], 'Tim’s week 2 projection: 59 - Young 16 + Lock 15 = 58');
 eq(m1.games.find((g) => g.week === 5), GAMES[8], 'a week that is not final passes through untouched');
-eq(m1.over, [{ teamId: MITCH, week: 4, size: 7, limit: 6 }], 'keeping Benchy and still adding Yates leaves him one over, and that is reported');
+eq(m1.over, [{ teamId: MITCH, week: 4, size: 7, limit: 6, extra: 1 }], 'keeping Benchy and still adding Yates leaves him one over, and that is reported');
 
 // ---- a move after the player's game counts from the next week ----------------
 // m3 undone. Late (Monday game) was added in time for week 3, so he is gone
@@ -278,7 +278,7 @@ ok(TEAMS.every((t) => JSON.stringify(totals(m7, t)) === JSON.stringify(REAL_TOTA
 // Week 2 he has 6 men, week 4 he has his real 6 plus Benchy: one over.
 const m2 = D.mirror(world, pick(D.listDecisions(world, MITCH), 'move:m2'));
 eq(totals(m2, MITCH), [57, 49, 47, 61], 'm2 undone: no Lock in weeks 2 and 3, Benchy starts only where he out-projects');
-eq(m2.over, [{ teamId: MITCH, week: 4, size: 7, limit: 6 }], 'roster limits are not enforced, the team-week left one over is reported');
+eq(m2.over, [{ teamId: MITCH, week: 4, size: 7, limit: 6, extra: 1 }], 'roster limits are not enforced, the team-week left one over is reported');
 eq(m2.skipped, [], 'and Mitch dropping a Lock nobody holds in the mirror is not a skipped move');
 // m4 undone: Yates out of the FLEX, Wilson (10) in; Lock back and out-projects
 // Mayfield 18 to 17: 61 - 13 + 12 - 16 + 28 = 72.

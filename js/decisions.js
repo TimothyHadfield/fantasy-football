@@ -459,7 +459,7 @@ export function mirror(world, decision) {
         if (kept.length !== real.length || arrivals.length) {
           lineup = minimalLineup(real, kept, arrivals, slots);
           const size = kept.length + arrivals.length;
-          if (Number.isFinite(limit) && size > limit && size > real.length) over.push({ teamId, week, size, limit });
+          if (Number.isFinite(limit) && size > limit && size > real.length) over.push({ teamId, week, size, limit, extra: size - real.length });
         }
       }
 

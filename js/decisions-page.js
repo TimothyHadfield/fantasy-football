@@ -951,14 +951,14 @@ function renderNotes() {
     }
     const over = new Map();
     for (const x of m.over) {
-      if (!over.has(x.teamId)) over.set(x.teamId, { weeks: [], size: 0, limit: x.limit });
+      if (!over.has(x.teamId)) over.set(x.teamId, { weeks: [], extra: 0 });
       const e = over.get(x.teamId);
       e.weeks.push(x.week);
-      e.size = Math.max(e.size, x.size);
+      e.extra = Math.max(e.extra, x.extra || 1);
     }
     for (const [id, e] of over) {
       lines.push(`<p data-note="over"><strong>Over the roster limit:</strong> ${esc(teamName(id))} ` +
-        `would hold ${e.size} players (limit ${e.limit}) in ${weeksText(e.weeks)}.</p>`);
+        `would hold ${e.extra} extra ${e.extra === 1 ? 'player' : 'players'} in ${weeksText(e.weeks)}.</p>`);
     }
   }
   $('panelNotes').hidden = !lines.length;
