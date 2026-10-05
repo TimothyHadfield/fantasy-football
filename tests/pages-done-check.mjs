@@ -801,10 +801,13 @@ if (booted(sEarly, 'schedule, one game final early') && okOff) {
       live(a).length === 4 && live(a).every((g, i) => g.homeId === live(b)[i].homeId &&
         Math.abs(g.homeProj - live(b)[i].homeProj) < 0.5 && Math.abs(g.awayProj - live(b)[i].awayProj) < 0.5),
       `${JSON.stringify(live(a)[0])} vs ${JSON.stringify(live(b)[0])}`);
-    ok('Record counts the early game for its two squads only: 4-0 and 1-2-1, everyone else on three games',
+    // The game being played counts as the chance of winning it (record-live-check.mjs), so a squad
+    // still playing reads in tenths over four games; the two that are final stay whole.
+    ok('Record counts the early game whole for its two squads only: 4-0 and 1-2-1, everyone else three games plus the share of the one being played',
       mEarly.rows['Manager 4'].Record === '4-0' && mEarly.rows['Manager 1'].Record === '1-2-1' &&
       Object.entries(mEarly.rows).filter(([n]) => !names.includes(n))
-        .every(([, r]) => r.Record.split('-').map(Number).reduce((x, y) => x + y, 0) === 3),
+        .every(([, r]) => /\.\d/.test(r.Record) &&
+          Math.abs(r.Record.split('-').map(Number).reduce((x, y) => x + y, 0) - 4) < 1e-9),
       Object.entries(mEarly.rows).map(([n, r]) => `${n} ${r.Record}`).join(' | '));
     ok('every manager has a LUCK and a Title %', Object.values(mEarly.rows).every((r) => /\d/.test(r.LUCK) && /\d/.test(r['Title %'])),
       Object.values(mEarly.rows).map((r) => `${r.LUCK}|${r['Title %']}`).join(' '));
@@ -819,7 +822,8 @@ if (booted(mW1, 'summary, week 1 in progress')) {
     played.every((n) => /^(1-0|0-1)$/.test(mW1.rows[n].Record) && /\d/.test(mW1.rows[n].LUCK)),
     played.map((n) => `${n} ${mW1.rows[n].Record} ${mW1.rows[n].LUCK}`));
   ok('A MANAGER STILL PLAYING HIS FIRST GAME HAS NO LUCK — a dash, not a number built on an empty season',
-    Object.entries(mW1.rows).filter(([n]) => !played.includes(n)).every(([, r]) => r.LUCK === '—' && r.Record === '0-0'),
+    Object.entries(mW1.rows).filter(([n]) => !played.includes(n)).every(([, r]) => r.LUCK === '—' &&
+      /^\d\.\d-\d\.\d$/.test(r.Record) && Math.abs(r.Record.split('-').map(Number).reduce((x, y) => x + y, 0) - 1) < 1e-9),
     Object.entries(mW1.rows).map(([n, r]) => `${n} ${r.Record} ${r.LUCK}`).join(' | '));
   ok('and still has title odds, his game played out with the rest',
     Object.values(mW1.rows).every((r) => /%/.test(r['Title %'])) && /69 games played out/.test(mW1.status), mW1.status);

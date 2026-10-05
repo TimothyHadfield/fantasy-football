@@ -1160,6 +1160,9 @@ async function refreshStrength() {
     renderMatchups();   // an unplayed card falls back to the strength ranking
     renderForecast();   // and so does the whole season forecast
     renderSimulation(); // which the simulation is built on top of, so it waits too
+    // The head-to-head records count a game being played as its win chance,
+    // and that reading has only just landed. Nothing else in the grid moves.
+    if (liveNow()) renderH2H();
     // Last, and only now: this is the first moment the page holds a complete
     // reading, and a reading is the thing worth keeping. See autoCapture().
     autoCapture();
@@ -1444,7 +1447,8 @@ function cardContext() {
     ranks = new Map(order.map(([id], i) => [id, i + 1]));
   }
 
-  return { records, ppg, ranks, sigma: scoringSpread().sigma };
+  const sigma = scoringSpread().sigma;
+  return { records, ppg, ranks, sigma, chances: liveChances(sigma) };
 }
 
 /** 1st, 2nd, 3rd… */
@@ -1485,6 +1489,20 @@ function liveSideOf(g, side) {
   if (!capture.liveSide(g, 'home', live) || !capture.liveSide(g, 'away', live)) return null;
   return capture.liveSide(g, side, live);
 }
+
+/**
+ * Each team's chance of winning the game it is playing right now, to a tenth
+ * (`capture.liveWinChances` — the one place it is worked out, shared with the
+ * Summary and Stats pages). Empty when no matchup is under way, on demo and
+ * while replaying, so every record printed from it is then a whole number.
+ */
+function liveChances(sigma = scoringSpread().sigma) {
+  const live = liveNow();
+  return live ? capture.liveWinChances({ data: state.data, live, sigma }) : new Map();
+}
+
+/** The basis of a decimal record, as a `title` attribute (rule 7); '' for a whole one. */
+const recTitle = (rec) => (rec.live ? ` title="${esc(rec.title)}"` : '');
 
 /** The share of the scoring spread one side still has to play: 1 unless its week is under way. */
 function spreadLeft(g, side) {
@@ -1610,7 +1628,8 @@ function renderMatchups() {
   // these cards, so the numbers it used go with them.
   const floorSaid = state.projection ? floorSentence() : '';
   $('matchupsNote').textContent =
-    `Records are season-to-date. ${basis}${chance}${strength}${floorSaid ? ` ${floorSaid}` : ''}`.trim();
+    (`Records are season-to-date. ${ctx.chances.size ? `${capture.LIVE_RECORD_TEXT} ` : ''}` +
+    `${basis}${chance}${strength}${floorSaid ? ` ${floorSaid}` : ''}`).trim();
 }
 
 function gameCard(g, ctx) {
@@ -1623,9 +1642,14 @@ function gameCard(g, ctx) {
   const sideClass = (side) =>
     st !== 'final' || winner === 'tie' ? '' : ` ${winner === side ? 'win' : 'lose'}`;
 
+  // The record as it stands now: a team whose own game is being played counts
+  // it as its chance of winning (on every card it appears on, not only this
+  // week's — it is the team's record, not the card's).
   const recordOf = (id) => {
     const r = ctx.records.get(id);
-    return r ? `<span class="trec">${recordText(r)}</span>` : '';
+    if (!r) return '';
+    const rec = capture.recordNow(r, ctx.chances.get(id) ?? null, { sep: EN });
+    return `<span class="trec"${recTitle(rec)}>${rec.text}</span>`;
   };
 
   const side = (which, name, id) =>
@@ -1815,27 +1839,48 @@ function renderH2H() {
 function recordsGrid(teams, cols) {
   const record = headToHead();
 
+  // THE GAME BEING PLAYED counts as the row team's chance of winning it, in its
+  // Overall record and in the cell against the opponent it is playing — so the
+  // row still adds up to its Overall, and Overall reads as it does everywhere
+  // else on the site (`capture.recordNow`). Empty off a live week.
+  const chances = liveChances();
+  const playing = new Map();          // teamId -> the opponent it is playing now
+  if (chances.size) {
+    for (const g of state.data.byWeek.get(liveNow().week) || []) {
+      if (!chances.has(g.homeId) || !chances.has(g.awayId) || gameState(g) === 'final') continue;
+      playing.set(g.homeId, g.awayId);
+      playing.set(g.awayId, g.homeId);
+    }
+  }
+  // Colour and sort by how far ahead the row team is, the live share included.
+  const cell = (r, p) => {
+    const rec = capture.recordNow(r, p, { sep: EN });
+    const ahead = 2 * rec.wins - rec.games;          // wins − losses, a tie as half each
+    const cls = ahead > 0 ? 'pos' : ahead < 0 ? 'neg' : 'muted';
+    return `<td data-v="${ahead}" class="${cls}"${recTitle(rec)}>${rec.text}</td>`;
+  };
+
   const body = teams
     .map((row) => {
       let w = 0, l = 0, t = 0;
+      const p = chances.get(row.id) ?? null;
       const cells = teams
         .map((col) => {
           if (col.id === row.id) return '<td class="self">·</td>';
           const r = record.get(row.id).get(col.id);
           w += r.w; l += r.l; t += r.t;
-          if (!r.w && !r.l && !r.t) return `<td>${dash}</td>`;
-          const cls = r.w > r.l ? 'pos' : r.w < r.l ? 'neg' : 'muted';
+          const now = p !== null && playing.get(row.id) === col.id ? p : null;
+          if (!r.w && !r.l && !r.t && now === null) return `<td>${dash}</td>`;
           // Sort a column by how far ahead the row team is against that opponent.
-          return `<td data-v="${r.w - r.l}" class="${cls}">${recordText(r)}</td>`;
+          return cell(r, now);
         })
         .join('');
 
       // The overall record is the most important number in the row, so it gets
       // at least the colour the individual cells already had.
-      const cls = w > l ? 'pos' : w < l ? 'neg' : 'muted';
       return `<tr>
           <td class="name">${esc(row.name)}</td>
-          <td data-v="${w - l}" class="${cls}">${recordText({ w, l, t })}</td>
+          ${cell({ w, l, t }, p)}
           ${cells}
         </tr>`;
     })
@@ -1849,7 +1894,8 @@ function recordsGrid(teams, cols) {
       'Each row is a team, each column an opponent: the cell is that row team&rsquo;s ' +
       'record <em>against</em> that opponent. Green means a winning record, red a ' +
       'losing one. Blank means they haven&rsquo;t met yet. Click a header to sort ' +
-      'by win differential in that column.',
+      'by win differential in that column.' +
+      (chances.size ? ` ${esc(capture.LIVE_RECORD_TEXT)}` : ''),
   };
 }
 
@@ -2585,11 +2631,8 @@ function renderSimulation() {
  * (Tim, 2026-10-04).
  */
 function simRecord(teamId, inputs) {
-  const { remaining, banked } = forecastGames(teamId, inputs.asOf);
-  const now = remaining.find((r) => liveSideOf(r.g, 'home'));
-  const home = now ? homeWinChance(now.g, inputs.sigma) : null;
-  const r = forecast.recordInPlay(banked, home === null ? null : now.mineHome ? home : 1 - home);
-  return { text: r.t ? `${r.w}${EN}${r.l}${EN}${r.t}` : `${r.w}${EN}${r.l}`, wins: r.wins };
+  const { banked } = forecastGames(teamId, inputs.asOf);
+  return capture.recordNow(banked, liveChances(inputs.sigma).get(teamId) ?? null, { sep: EN });
 }
 
 function paintSimulation(sim, inputs) {
@@ -2733,7 +2776,7 @@ function paintSimulation(sim, inputs) {
 
       return `<tr${cls ? ` class="${cls}"` : ''}>
           <td class="name">${esc(nameById.get(t.teamId) || `Team ${t.teamId}`)}</td>
-          <td class="num" data-v="${rec.wins}">${rec.text}</td>
+          <td class="num" data-v="${rec.wins}"${recTitle(rec)}>${rec.text}</td>
           ${cell(t.meanWins, fmt(t.meanWins), heatCols.wins, W_SIM.wins)}
           ${cell(t.meanPlace, fmt(t.meanPlace), heatCols.place, W_SIM.place)}
           <td data-v="${t.modePlace}">${ordinal(t.modePlace)}</td>
