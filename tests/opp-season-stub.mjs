@@ -17,6 +17,15 @@
 // QB floor is 100 + 5 × week, so it depends on WHICH week's wire a page reads
 // (AUDIT §1.4). Read for week 3, the first unplayed, it is 115.0; week 1's
 // wire would say 105.0.
+//
+// part / part1 — A WEEK IN PROGRESS (Tim, 2026-10-04; done-fixture.mjs has the
+// contract). `part`: weeks 1–2 played, and in week 3 Team 1 v Team 4 is final
+// early (both QBs done) while Team 2 v Team 3 is still going — Team 2's QB is
+// mid-game on 5.5 and its bench man has finished on 7. `part1`: the same shape
+// in week 1 with nothing played before it (1 v 2 final, 3 v 4 still going), so
+// two squads have no game at all yet.
+
+import { markDone, earlyFinal } from './done-fixture.mjs';
 
 const SCEN = process.env.FF_SCEN || 'zero';
 
@@ -31,6 +40,25 @@ export const proj = (id, week) => BASE[id] + week;
 
 /** One started QB per team, so the best legal lineup is exactly that QB. */
 function teamsForWeek(week) {
+  const plain = plainTeams(week);
+  if (week !== PART_WEEK) return plain;
+  const over = new Set(PAIRS[week][0]);
+  const still = PAIRS[week][1][0];          // the squad with a man mid-game
+  const scored = plain.map((t) => ({
+    ...t,
+    players: t.players.map((p) => ({
+      ...p,
+      actual: p.started ? (over.has(t.id) ? actual(t.id, week) : null) : (t.id === still ? 7 : null),
+    })),
+  }));
+  return markDone(
+    scored,
+    (p, t) => (over.has(t.id) && p.started) || (t.id === still && !p.started),
+    (p, t) => (t.id === still && p.started ? 5.5 : null),
+  );
+}
+
+function plainTeams(week) {
   return TEAMS.map((t) => {
     const players = [
       { playerId: t.id * 10, name: `QB ${t.id}`, position: 'QB', lineupSlotId: 0,
@@ -51,7 +79,11 @@ function teamsForWeek(week) {
 /** Actual scores for the weeks the mid-season scenario has finished. */
 const actual = (id, week) => BASE[id] + week * 2;
 
-const playedWeeks = SCEN === 'mid' || SCEN === 'floor' ? [1, 2] : [];
+const playedWeeks = SCEN === 'mid' || SCEN === 'floor' || SCEN === 'part' ? [1, 2] : [];
+
+/** The week in progress, with its first game final early; null outside part/part1. */
+export const PART_WEEK = SCEN === 'part' ? 3 : SCEN === 'part1' ? 1 : null;
+const isEarly = (w, i) => w === PART_WEEK && i === 0;
 
 /** The QB floor the 'floor' scenario's wire gives for `week`. */
 export const qbFloor = (week) => 100 + 5 * week;
@@ -73,8 +105,13 @@ export async function fetchSchedule() {
   calls.push('fetchSchedule');
   const byWeek = new Map();
   for (const w of WEEKS) {
-    byWeek.set(w, PAIRS[w].map(([h, a]) => {
+    byWeek.set(w, PAIRS[w].map(([h, a], i) => {
       const played = playedWeeks.includes(w);
+      if (isEarly(w, i)) {
+        return earlyFinal({
+          week: w, homeId: h, awayId: a, homeName: `Team ${h}`, awayName: `Team ${a}`,
+        }, actual(h, w), actual(a, w));
+      }
       return {
         week: w, homeId: h, awayId: a,
         homeName: `Team ${h}`, awayName: `Team ${a}`,
@@ -118,8 +155,11 @@ export async function fetchWeekRosters(week) {
 export async function fetchSeasonData() {
   calls.push('fetchSeasonData');
   const games = [];
-  for (const w of playedWeeks) {
-    for (const [h, a] of PAIRS[w]) {
+  const weeks = PART_WEEK ? [...playedWeeks, PART_WEEK] : playedWeeks;
+  for (const w of weeks) {
+    for (const [i, [h, a]] of PAIRS[w].entries()) {
+      // A week in progress hands over only the games that are final.
+      if (w === PART_WEEK && !isEarly(w, i)) continue;
       games.push({
         week: w, homeId: h, awayId: a,
         homeActual: actual(h, w), awayActual: actual(a, w),
@@ -128,7 +168,7 @@ export async function fetchSeasonData() {
     }
   }
   return {
-    season: 2026, isDemo: false, name: 'Stub League', weeks: playedWeeks.length,
+    season: 2026, isDemo: false, name: 'Stub League', weeks: weeks.length,
     teams: TEAMS.map((t) => ({ ...t })), games, injuries: [],
     projectionsAvailable: games.length > 0,
     gamesFound: games.length, gamesWithProjections: games.length,

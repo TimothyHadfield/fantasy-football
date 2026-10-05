@@ -663,7 +663,9 @@ function seasonRunData(index, p) {
       ? `Sample projections for ${weekRange(weeks)}`
       : `ESPN’s projection for ${weekRange(weeks)}`,
     weeks,
-    projections: weeks.map((w) => seasonValue(index, w, p.playerId)),
+    // The Proj row is the projection as it stood before kickoff: for a man who
+    // has finished in a week still open, `pregame`, never his score twice.
+    projections: weeks.map((w) => seasonField(index, w, p.playerId, 'pregame')),
     actuals: weeks.map((w) => seasonActual(index, w, p.playerId)),
     currentWeek: state.week,
     demo: state.isDemo,
@@ -1106,7 +1108,12 @@ async function useLive() {
     const schedule = await fetchSchedule();
     scheduleWeeks = schedule.weeks || [];
     poWeeks = leaguePlayoffWeeks(schedule);
+    // A week is played once EVERY game in it is. A matchup can be final before
+    // ESPN closes the week (all its starters have finished), and one such game
+    // must not make the page treat the whole week as over.
+    const open = new Set(schedule.games.filter((g) => !g.played).map((g) => g.week));
     state.playedWeeks = [...new Set(schedule.games.filter((g) => g.played).map((g) => g.week))]
+      .filter((w) => !open.has(w))
       .sort((a, b) => a - b);
   } catch {
     state.playedWeeks = [];
@@ -2194,8 +2201,31 @@ function rosterView(team) {
  * an unswapped lineup total exactly what ESPN said it would.
  */
 function sumOf(entries, key) {
-  const vals = entries.map((e) => e.p[key]).filter((v) => typeof v === 'number');
+  const pick = typeof key === 'function' ? key : (p) => p[key];
+  const vals = entries.map((e) => pick(e.p)).filter((v) => typeof v === 'number');
   return vals.length ? round1(vals.reduce((a, v) => a + v, 0)) : null;
+}
+
+/**
+ * A man's week as the roster detail and the card print it: what he was
+ * projected, and what he scored.
+ *
+ * In a week ESPN has not closed, js/season.js marks each man `done` or not. A
+ * finished man's `projected` has been overwritten with his score, so his
+ * projection is `pregame`; a man still to finish may carry a running score,
+ * which is not a result and is left out. A week with no `done` on it (final,
+ * demo, a stub) reads exactly as it always did.
+ */
+function weekLine(p) {
+  if (p.done === true) {
+    return {
+      proj: typeof p.pregame === 'number' ? p.pregame : null,
+      actual: typeof p.actual === 'number' ? p.actual
+        : typeof p.projected === 'number' ? p.projected : null,
+    };
+  }
+  if (p.done === false) return { proj: p.projected, actual: null };
+  return { proj: p.projected, actual: p.actual };
 }
 
 /** Whether a slot may legally hold a player of this position. */
@@ -2356,16 +2386,24 @@ function renderRoster() {
   // Totalled from the lineup ON SCREEN rather than taken from ESPN's own team
   // totals, so a swap moves them. With nothing swapped the rule is the one
   // season.js uses, so these are the numbers ESPN gave, to the decimal.
-  const projTotal = sumOf(starters, 'projected');
-  const actualTotal = sumOf(starters, 'actual');
-  const benchActual = sumOf(benched, 'actual');
+  // In a week still being played the totals follow the rows: the projection is
+  // the pre-game one, and only finished men's scores count (see `weekLine`).
+  const midWeek = view.some((e) => typeof e.p.done === 'boolean');
+  const projTotal = sumOf(starters, (p) => weekLine(p).proj);
+  const actualTotal = sumOf(starters, (p) => weekLine(p).actual);
+  const benchActual = sumOf(benched, (p) => weekLine(p).actual);
+  // The Diff of a part-played lineup is the finished men's only — the sum of
+  // the Diff column — never their scores against the whole lineup's projection.
+  const diffTotal = midWeek
+    ? sumOf(starters, (p) => { const l = weekLine(p); return diff(l.actual, l.proj); })
+    : diff(actualTotal, projTotal);
 
   const glance = [
     ['Week', state.week],
     ['Proj avg', fmt(avgTotal)],
     ['Projected', fmt(projTotal)],
     ['Actual', fmt(actualTotal)],
-    ['Diff', signed(diff(actualTotal, projTotal))],
+    ['Diff', signed(diffTotal)],
     ['Bench points', fmt(benchActual)],
     ['Starters', starters.length],
     ['Bench', benched.length],
@@ -2379,7 +2417,11 @@ function renderRoster() {
   const index = seasonIndexFor(team.id);
   const row = (entry) => {
     const { p } = entry;
-    const d = diff(p.actual, p.projected);
+    const line = weekLine(p);
+    const d = diff(line.actual, line.proj);
+    // Still to finish: Actual and Diff are blank, not a dash — there is no
+    // result yet, which is a different fact from ESPN having no number.
+    const open = p.done === false;
     const avg = avgWeek(p);
     const own = typeof p.percentOwned === 'number' ? `${p.percentOwned.toFixed(0)}%` : '—';
     const tier = injuryTier(p.injuryStatus);
@@ -2410,9 +2452,9 @@ function renderRoster() {
           playerRef(p, esc(p.name), `${p.name}. Click to ${OPENS}.`, 'aria-label')}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
-        <td>${fmt(p.projected)}</td>
-        <td>${fmt(p.actual)}</td>
-        <td data-v="${d === null ? '' : d}">${signed(d)}</td>
+        <td>${fmt(line.proj)}</td>
+        <td>${open ? '' : fmt(line.actual)}</td>
+        <td data-v="${d === null ? '' : d}">${open ? '' : signed(d)}</td>
         <td>${fmt(avg)}</td>
         <td>${fmt(p.seasonProjected, 0)}</td>
         <td class="own" data-v="${typeof p.percentOwned === 'number' ? p.percentOwned : ''}">${own}</td>
@@ -2432,7 +2474,10 @@ function renderRoster() {
   const hasOwn = players.some((p) => typeof p.percentOwned === 'number');
   table.classList.toggle('no-own', !hasOwn);
 
-  $('rosterBest').innerHTML = bestLineupLine(team, view, projTotal);
+  // The best-lineup line compares like with like: the solver prices a finished
+  // man at his score, so the lineup on screen is totalled the same way.
+  $('rosterBest').innerHTML = bestLineupLine(team, view,
+    midWeek ? sumOf(starters, 'projected') : projTotal);
 
   renderRosterNote(view, team);
   resort(table);
@@ -2502,6 +2547,16 @@ function renderRosterNote(view, team) {
     `Bench rows are dimmed and the flex player is in bold. Red is out this week, dark red is ` +
     `on IR. ${plural(hurt, 'player')} carrying an injury designation this week.`
   );
+
+  // The basis of Actual and Diff in a week still being played (rule 7). Only
+  // then: a final week, the demo and a week nobody has kicked off in say nothing.
+  if (view.some((e) => e.p.done === true)) {
+    parts.push(
+      `Week ${state.week} is still being played. A player whose NFL game is over shows the ` +
+      `projection he started with and his score; anyone still to finish shows no Actual, and ` +
+      `the totals count finished players only.`
+    );
+  }
 
   // WHY THIS TABLE IS NOT ON THE RED/GREEN SCALE. It is the one table on the
   // page where the rule the scale rests on rules it out outright, so it is
@@ -2750,9 +2805,15 @@ function seasonIndex(teamId) {
     if (!team) { byWeek.set(week, null); continue; }
     const byPlayer = new Map();
     for (const p of team.players) {
+      const line = weekLine(p);
       byPlayer.set(p.playerId, {
+        // What the grids price him at — for a man who has finished, his score.
         projected: typeof p.projected === 'number' ? p.projected : null,
-        actual: typeof p.actual === 'number' ? p.actual : null,
+        // The card's two rows: his pre-game projection, and a RESULT — never
+        // the running score of a man still playing.
+        pregame: typeof line.proj === 'number' ? line.proj : null,
+        actual: typeof line.actual === 'number' ? line.actual : null,
+        done: p.done === true,
         // That week's own status, so a zero is judged by who he was THEN.
         injuryStatus: p.injuryStatus || null,
       });
@@ -2801,6 +2862,13 @@ function seasonActual(index, week, playerId) {
  * roster being shown. ESPN's is today's status in every week; the sample data
  * varies it week by week, and a ruled-out zero has to be read against its own.
  */
+/** Has he finished that week's game while the week is still open? Then his number is a score. */
+function seasonDone(index, week, p) {
+  const byPlayer = index ? index.get(week) : null;
+  const e = byPlayer ? byPlayer.get(p.playerId) : null;
+  return Boolean(e && e.done);
+}
+
 function seasonStatus(index, week, p) {
   const byPlayer = index ? index.get(week) : null;
   const e = byPlayer ? byPlayer.get(p.playerId) : null;
@@ -2820,7 +2888,7 @@ function seasonStatus(index, week, p) {
  * real effort to tell apart and must not be reimplemented next door where the
  * two copies can drift.
  */
-function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus) {
+function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus, scored = false) {
   const name = p.name;
   const mark = start ? ` st${start.flex ? ' fx' : ''}` : '';
   const cls = (extra) => `wk${isNow ? ' now' : ''}${extra ? ` ${extra}` : ''}${mark}`;
@@ -2855,7 +2923,9 @@ function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus) {
       return `<td class="${cls('bye')}" data-v="0" title="${esc(name)} is on bye in week ${week}. ` +
         `ESPN returns 0.00 for a bye, which is not the same as having no number at all.${says}">Bye</td>`;
     }
-    const why = state.isDemo
+    const why = scored
+      ? `${esc(name)} scored nothing in week ${week}.`
+      : state.isDemo
       ? `The sample data has ${esc(name)} ruled out in week ${week}, so it projects nothing for him.`
       : `ESPN projects nothing for ${esc(name)} in week ${week}` +
         (byeWeekOf(p, state.byes) ? `, and it is not his bye (week ${byeWeekOf(p, state.byes)})` : '') +
@@ -2867,7 +2937,9 @@ function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus) {
     return `<td class="${cls('zero')}" data-v="0" title="${why}${says}">0.0</td>`;
   }
   return `<td class="${cls()}" data-v="${v}" ` +
-    `title="ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.${says}">${fmt(v)}</td>`;
+    `title="${scored
+      ? `${esc(name)} scored ${fmt(v)} in week ${week}.`
+      : `ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.`}${says}">${fmt(v)}</td>`;
 }
 
 // ------------------------------------------- the season panel's slot rows
@@ -3011,6 +3083,9 @@ function assessed(entry, row) {
     const sf = slotFloor(row.slotId, state.floors);
     return { value: sf ? sf.value : null, assumed: Boolean(sf) };
   }
+  // A FINISHED MAN'S SCORE IS A FACT (js/floor.js: a banked score is never
+  // floored) — no streaming decision can reach back into it.
+  if (entry.p && entry.p.done === true) return { value: entry.v, assumed: false };
   // The SLOT's floor, not the man's position's (AUDIT §1.8): a zero TE in the
   // FLEX is worth what an empty FLEX is, the best of RB/WR/TE on the wire.
   const a = flooredValue({ position: entry.p.position, projected: entry.v }, state.floors, row.slotId);
@@ -3381,7 +3456,11 @@ function slotCell(entry, row, week, bar, index) {
   // lifted cell as though the man himself were having a bad week.
   // At the SLOT's floor, as `assessed` does, so this cell and the Avg and band
   // beside it cannot disagree about a FLEX (AUDIT §1.8).
-  const lifted = flooredValue({ position: p.position, projected: raw }, state.floors, row.slotId);
+  // A man who has finished is never floored: his number is a score (`assessed`).
+  const scored = p.done === true;
+  const lifted = scored
+    ? { value: raw, raw, assumed: false, floor: null }
+    : flooredValue({ position: p.position, projected: raw }, state.floors, row.slotId);
   const v = lifted.value === null ? raw : lifted.value;
   const assumed = lifted.assumed;
 
@@ -3395,7 +3474,8 @@ function slotCell(entry, row, week, bar, index) {
       : zero === 'out'
         ? `${p.name} fills ${row.key} in week ${week} at 0.0: ESPN has ruled him out, and ` +
           `nobody on this roster projected higher.`
-        : `${p.name} is this squad’s ${row.key} in week ${week}, projected ${fmt(raw)}.`;
+        : `${p.name} is this squad’s ${row.key} in week ${week}, ` +
+          `${scored ? 'and scored' : 'projected'} ${fmt(raw)}.`;
   // The assumption, said in full on the cell that carries it. It is a number
   // ESPN never published, so a reader who cannot see where it came from has no
   // way to check it — and this is a panel Tim checks by hand.
@@ -4041,7 +4121,8 @@ function renderStarters() {
           const slotId = starters.has(week) ? starters.get(week).get(p.playerId) : undefined;
           const start =
             slotId === undefined ? null : { slotId, flex: FLEX_SLOTS.has(slotId) };
-          return withPo(seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p)),
+          return withPo(seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p),
+            seasonDone(index, week, p)),
             week, weeks);
         })
         .join('');

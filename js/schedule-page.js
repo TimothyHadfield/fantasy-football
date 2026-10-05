@@ -2807,6 +2807,12 @@ function paintSimulation(sim, inputs) {
           `week that is left. ESPN gives no game clock, so a game in progress is aged by ` +
           `the time since its kickoff. Each Record counts that game as the chance of winning ` +
           `it (our model, not ESPN’s): 3–2 with a 20% chance reads 3.2–2.8.`
+        : '') +
+      // A matchup js/season.js closed before ESPN did (`early`): it is banked
+      // like any other result, and its two Records are whole numbers again.
+      (d.games.some((g) => g.early && gameState(g) === 'final')
+        ? ' A matchup is banked as soon as every starter on both sides has finished, ' +
+          'before ESPN closes the week.'
         : '');
 
   const gaps = sim.skipped

@@ -369,7 +369,12 @@ function injuredStarters(rosters) {
         slot: p.slot,
         status: p.injuryStatus,
         rank: INJURY_RANK[p.injuryStatus] ?? 1,
-        projected: isNum(p.projected) ? p.projected : null,
+        // A man whose NFL game is over carries his SCORE in `projected` (the
+        // week in progress, js/season.js). This column is a projection, so he
+        // shows the one he started with.
+        projected: p.done === true
+          ? (isNum(p.pregame) ? p.pregame : null)
+          : isNum(p.projected) ? p.projected : null,
       });
     }
   }
@@ -415,8 +420,14 @@ function benchReport(rosters, games) {
     if (g.awayId != null) finished.add(g.awayId);
   }
 
+  // A matchup can be final while the week is still open: every STARTER has
+  // finished, but a bench man may be mid-game (`done === false`), and his score
+  // so far is not a bench point yet. That squad waits for him.
+  const settled = (t) => !(t.players || [...(t.starters || []), ...(t.bench || [])])
+    .some((p) => p.done === false);
+
   const rows = (rosters?.teams || [])
-    .filter((t) => finished.has(t.id) && isNum(t.benchActualTotal))
+    .filter((t) => finished.has(t.id) && isNum(t.benchActualTotal) && settled(t))
     .map((t) => ({
       id: t.id,
       name: t.name,
@@ -446,9 +457,14 @@ function currentWeek(schedule) {
  * useful answer is last week's, not "has not finished" for five days. Falls
  * back to `week` when nothing at all is final, which is week 1's honest state.
  */
-export function benchWeekFor(schedule, week) {
+export function benchWeekFor(schedule, week, rosters = null) {
   const final = (w) => (schedule.byWeek.get(w) || []).some((g) => g.played);
-  if (final(week)) return week;
+  // `rosters` are `week`'s, when the caller holds them: a week whose only final
+  // squads still have a bench man playing has no row to show yet, so it does
+  // not take the panel away from the last week that does.
+  const hasRow = !rosters?.teams?.length ||
+    benchReport(rosters, schedule.byWeek.get(week) || []).length > 0;
+  if (final(week) && hasRow) return week;
   const earlier = schedule.weeks.filter((w) => w < week && final(w));
   return earlier.length ? earlier[earlier.length - 1] : week;
 }
@@ -570,7 +586,7 @@ function reportLive() {
  * rosters — one more request, made only on the days it is needed.
  */
 async function loadBench() {
-  const bw = benchWeekFor(state.schedule, state.week);
+  const bw = benchWeekFor(state.schedule, state.week, state.rosters);
   state.benchWeek = bw;
   if (bw === state.week) state.benchRosters = null;
   else if (state.isDemo) state.benchRosters = generateDemoWeekRosters(bw);

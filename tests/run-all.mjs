@@ -88,6 +88,7 @@ const SUITES = [
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
   ['roster-link-check.mjs', 'a link into the roster detail (?team=&week=): lands, saves nothing, applied once'],
+  ['pages-done-check.mjs', 'the week in progress on Analysis, Home, Stats, Schedule and Summary: finished players and early-final matchups count'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],
   ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],

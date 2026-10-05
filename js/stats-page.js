@@ -155,6 +155,30 @@ const weekCount = () => (state.stats ? state.stats.weekNumbers.length : 0);
  */
 const noGames = () => weekCount() === 0;
 
+/**
+ * THE WEEK STILL BEING PLAYED, when some of its matchups are already final
+ * (Tim, 2026-10-04) — or null.
+ *
+ * js/season.js hands a matchup over as soon as every starter in it has
+ * finished, so the latest week can hold results for only some teams. It is
+ * recognised by the count alone: fewer teams with a game in it than in the
+ * fullest week before it (or, in week 1, than the league can pair up). A
+ * league with an odd team on bye has the same count every week, so a bye is
+ * never mistaken for a game still going.
+ */
+function partWeek() {
+  const s = state.stats;
+  if (!s || !s.weekNumbers.length) return null;
+  const count = (w) => s.teams.filter((t) => t.weekly.some((r) => r.week === w)).length;
+  const last = s.weekNumbers[s.weekNumbers.length - 1];
+  const before = s.weekNumbers.slice(0, -1).map(count);
+  const full = before.length ? Math.max(...before) : s.teams.length - (s.teams.length % 2);
+  return count(last) < full ? last : null;
+}
+
+/** A team with no finished game yet has no average of anything (stats.js says 0). */
+const unplayed = (t) => !t.weekly.length;
+
 const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };
 
 // --------------------------------------------------------------------- loading
@@ -446,12 +470,17 @@ function renderMainTable() {
   // number; the row is not (it holds an average, a total and two ranks), and a
   // scale across the row would be the "quarterback against a kicker" mistake in
   // another costume. See the header of js/heat.js.
-  const heatAvg = heatScale(none ? [] : s.teams.map((t) => t.avgActual));
-  const heatProj = heatScale(none ? [] : s.teams.map((t) => t.avgProjected));
+  // A team whose first game is still being played has no result yet while
+  // others do (the week in progress): it is left out of every scale here and
+  // its result columns are dashed below, exactly as the whole table is at `none`.
+  const withGames = none ? [] : s.teams.filter((t) => !unplayed(t));
+  const ghosts = !none && withGames.length < s.teams.length;
+  const heatAvg = heatScale(withGames.map((t) => t.avgActual));
+  const heatProj = heatScale(withGames.map((t) => t.avgProjected));
   // INVERTED, both of them. A high opponent average is a hard schedule — the
   // old local ramp painted exactly this column its greenest for being hardest,
   // which is the defect that made the two systems irreconcilable.
-  const heatOpp = heatScale(none ? [] : s.teams.map((t) => t.oppAvgActual), { invert: true });
+  const heatOpp = heatScale(withGames.map((t) => t.oppAvgActual), { invert: true });
   const heatOppProj = heatScale(oppRows().map((r) => r.avgOpp), { invert: true });
 
   // TWO MORE COLUMNS, 2026-09-19 (Tim: the colouring "needs to be added to all
@@ -481,8 +510,8 @@ function renderMainTable() {
   //            DIRECTION IS GOOD: a consistent bad team and a volatile good one
   //            are both real, and js/heat.js's rule is that such a column gets
   //            no scale rather than a misleading one.
-  const heatFA = heatScale(none ? [] : s.teams.map((t) => t.forMinusAgainst));
-  const heatLuckWk = heatScale(none ? [] : s.teams.map((t) => t.avgLuck));
+  const heatFA = heatScale(withGames.map((t) => t.forMinusAgainst));
+  const heatLuckWk = heatScale(withGames.map((t) => t.avgLuck));
 
   const W_AVG = 'what the league averages a week';
   const W_PROJ = 'what the league is projected a week';
@@ -491,27 +520,37 @@ function renderMainTable() {
   const W_LUCK = 'how far the rest of the league is beating its projection';
 
   tbody.innerHTML = s.teams
-    .map((t) => `
+    .map((t) => {
+      // No finished game of his own yet: every result column is a dash.
+      const off = none || unplayed(t);
+      const n = (v) => (off ? dash : num(v));
+      const g = (v) => (off ? dash : sgn(v));
+      const lk = (v, m) => (off ? `<td>${dash}</td>` : luck(v, m));
+      // LS, PS and AS wait for everybody: stats.js ranks all ten at once, and a
+      // team with no game would be ranked on an average of nothing.
+      const rk = (v) => (off || ghosts ? dash : rank(v));
+      return `
       <tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>
         <td data-v="${recordKey(t)}">${record(t)}</td>
-        ${heatCell(none ? null : t.avgActual, heatAvg, { what: W_AVG, text: num(t.avgActual) })}
-        ${heatCell(none ? null : t.avgProjected, heatProj, { what: W_PROJ, text: num(t.avgProjected) })}
-        <td${none ? '' : ` data-v="${t.pointsFor}"`}>${none ? dash : pf(t.totalActual)}</td>
-        ${heatCell(none ? null : t.oppAvgActual, heatOpp, { what: W_OPP, text: num(t.oppAvgActual) })}
-        ${heatCell(none ? null : t.forMinusAgainst, heatFA, { what: W_FA, text: sgn(t.forMinusAgainst) })}
-        <td>${num(t.actualStdev)}</td>
+        ${heatCell(off ? null : t.avgActual, heatAvg, { what: W_AVG, text: n(t.avgActual) })}
+        ${heatCell(off ? null : t.avgProjected, heatProj, { what: W_PROJ, text: n(t.avgProjected) })}
+        <td${off ? '' : ` data-v="${t.pointsFor}"`}>${off ? dash : pf(t.totalActual)}</td>
+        ${heatCell(off ? null : t.oppAvgActual, heatOpp, { what: W_OPP, text: n(t.oppAvgActual) })}
+        ${heatCell(off ? null : t.forMinusAgainst, heatFA, { what: W_FA, text: g(t.forMinusAgainst) })}
+        <td>${n(t.actualStdev)}</td>
         ${oppProjCell(t.id, heatOppProj)}
-        ${heatCell(none ? null : t.avgLuck, heatLuckWk, { what: W_LUCK, text: sgn(t.avgLuck) })}
-        <td>${num(t.pointsToWin)}</td>
-        ${luck(t.scoreDiffLuck, t.margins && t.margins.scoreDiffLuck)}
-        ${luck(t.luckScore, t.margins && t.margins.luckScore)}
-        <td>${sgn(t.skill)}</td>
-        ${luck(t.skillPlusLuck, t.margins && t.margins.skillPlusLuck)}
-        <td>${rank(t.luckStanding)}</td>
-        <td>${rank(t.projectedStanding)}</td>
-        <td>${rank(t.actualStanding)}</td>
-      </tr>`)
+        ${heatCell(off ? null : t.avgLuck, heatLuckWk, { what: W_LUCK, text: g(t.avgLuck) })}
+        <td>${n(t.pointsToWin)}</td>
+        ${lk(t.scoreDiffLuck, t.margins && t.margins.scoreDiffLuck)}
+        ${lk(t.luckScore, t.margins && t.margins.luckScore)}
+        <td>${g(t.skill)}</td>
+        ${lk(t.skillPlusLuck, t.margins && t.margins.skillPlusLuck)}
+        <td>${rk(t.luckStanding)}</td>
+        <td>${rk(t.projectedStanding)}</td>
+        <td>${rk(t.actualStanding)}</td>
+      </tr>`;
+    })
     .join('');
 
   // Single-week columns are that week's score, not an average of anything.
@@ -653,7 +692,7 @@ function renderCharts() {
     ? 'Every team’s weekly score, in ten-point buckets.'
     : weeks === 0
       ? 'Nothing has been played, so there are no scores to bucket yet.'
-      : `Every team’s score so far, in ten-point buckets — ${plural(weeks * s.teams.length, 'score')}.`;
+      : `Every team’s score so far, in ten-point buckets — ${plural(s.teams.reduce((n, t) => n + t.weekly.length, 0), 'score')}.`;
 
   if (!trends) {
     renderEarly();
@@ -1473,7 +1512,25 @@ function renderFit() {
     return;
   }
 
-  const playerPts = playerFitPoints(held, weeks).map((p) => ({
+  // THE WEEK IN PROGRESS. A man whose NFL game is over (`done`) is a finished
+  // player-week whether or not his manager's matchup is, so he gets his dot —
+  // across his projection as it stood (`pregame`; `projected` now holds his
+  // score), up what he scored. A man still to finish has no result and no dot,
+  // even with a score so far.
+  const inPlay = [...held.keys()]
+    .filter((w) => (held.get(w) || []).some((t) => (t.players || []).some((p) => p.done === true)))
+    .sort((a, b) => a - b);
+  const playerWeeks = [...new Set([...weeks, ...inPlay])].sort((a, b) => a - b);
+  const settled = inPlay.length
+    ? new Map(playerWeeks.filter((w) => held.has(w)).map((w) => [w, held.get(w).map((t) => ({
+      ...t,
+      players: (t.players || [...(t.starters || []), ...(t.bench || [])])
+        .filter((p) => p.done !== false)
+        .map((p) => (p.done === true ? { ...p, projected: p.pregame ?? null } : p)),
+    }))]))
+    : held;
+
+  const playerPts = playerFitPoints(settled, playerWeeks).map((p) => ({
     x: p.x,
     y: p.y,
     name: p.name,
@@ -1484,8 +1541,13 @@ function renderFit() {
     position: p.position,
     href: `waivers.html?player=${encodeURIComponent(p.playerId)}&week=${encodeURIComponent(p.week)}`,
   }));
-  const readWeeks = weeks.filter((w) => held.has(w));
-  const missing = weeks.filter((w) => !held.has(w));
+  const readWeeks = playerWeeks.filter((w) => held.has(w));
+  const missing = playerWeeks.filter((w) => !held.has(w));
+  const pSpan = playerWeeks.length === 1
+    ? `week ${playerWeeks[0]}`
+    : `weeks ${playerWeeks[0]}–${playerWeeks[playerWeeks.length - 1]}`;
+  const going = inPlay.filter((w) => (held.get(w) || [])
+    .some((t) => (t.players || []).some((p) => p.done === false)));
   drawFit('players', playersBox, playerPts, {
     xLabel: 'Projected',
     yLabel: 'Actual',
@@ -1499,7 +1561,11 @@ function renderFit() {
           'roster that week, starters and bench. Across is ESPN&rsquo;s projection for him that ' +
           'week; up is what he scored. ' +
           `${playerPts.length.toLocaleString('en-US')} dots over ${plural(readWeeks.length, 'week')} ` +
-          `(${span}).`,
+          `(${pSpan}).` +
+          (going.length
+            ? ` Week ${going[going.length - 1]} is still being played: a player is plotted once ` +
+              'his own NFL game is over, against the projection he started with.'
+            : ''),
         'Left out: a player with no projection or no score, and one projected 0 who scored 0 ' +
           '(a bye, or ruled out) — he was not expected to play and did not, which tests nothing. ' +
           'Free agents are not plotted.' +
@@ -1557,7 +1623,14 @@ function renderWeeklyTable() {
   // luck and a bigger margin are all good for the team — so none of them
   // inverts. If a metric is ever added where that is not true, it needs its own
   // `invert` here; js/heat.js will not guess it.
-  const weekScales = new Map(s.weekNumbers.map((w) => [w, heatScale(
+  //
+  // THE WEEK STILL BEING PLAYED (`partWeek`) shows the scores of the matchups
+  // that are final and leaves the rest of its column EMPTY — not a dash, which
+  // on this grid means a bye. It is not coloured and has no League figure: an
+  // average of the squads that happen to have finished is not the league's
+  // week (the Home page's bench panel refuses the same comparison).
+  const part = partWeek();
+  const weekScales = new Map(s.weekNumbers.map((w) => [w, w === part ? null : heatScale(
     s.teams.map((t) => {
       const row = t.weekly.find((x) => x.week === w);
       return row ? row[metric] : null;
@@ -1576,7 +1649,7 @@ function renderWeeklyTable() {
     .map((t) => {
       const cells = s.weekNumbers.map((w) => {
         const row = t.weekly.find((x) => x.week === w);
-        if (!row) return `<td>${dash}</td>`;
+        if (!row) return w === part ? '<td></td>' : `<td>${dash}</td>`;
         return heatCell(row[metric], weekScales.get(w), {
           what: `what the league did in week ${w}`,
           text: cell(row[metric]),
@@ -1599,11 +1672,12 @@ function renderWeeklyTable() {
       const weekly = s.weekNumbers.map((w) =>
         s.weeklyLeagueAverages.find((a) => a.week === w)
       );
-      const vals = weekly.map((a) => (a ? a[key] : null)).filter((v) => typeof v === 'number');
+      const vals = weekly.filter((a) => !a || a.week !== part)
+        .map((a) => (a ? a[key] : null)).filter((v) => typeof v === 'number');
       const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
       tfoot.innerHTML =
         `<tr><td class="name">League</td>` +
-        weekly.map((a) => `<td>${a ? cell(a[key]) : dash}</td>`).join('') +
+        weekly.map((a) => (a && a.week === part ? '<td></td>' : `<td>${a ? cell(a[key]) : dash}</td>`)).join('') +
         (showAvg ? `<td>${cell(avg)}</td>` : '') +
         '</tr>';
     } else {
@@ -1635,6 +1709,11 @@ function renderWeeklyTable() {
         'every week by construction and is left out. The colours are unaffected — they are ' +
         'measured from each week’s own ten values, not from the league row.',
     describeHeatPerColumn({ group: 'week', what: 'what the other nine teams did' }),
+    part === null
+      ? ''
+      : `Week ${part} is still being played. A matchup is counted as soon as every starter ` +
+        'in it has finished; the others are left empty, and the week has no colour or League ' +
+        'figure until it is complete.',
     'All four measures point the same way here — more points, a better projection, more ' +
     'luck and a bigger margin are all good for the team — so green always means good on ' +
     'this grid whichever button is pressed.',
