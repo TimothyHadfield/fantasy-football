@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decisions &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0f1115">
+<script src="js/site-status.js" defer></script>
+<link rel="stylesheet" href="css/app.css">
+<style>
+/* The team picker and the noise switch share the right-hand end of the source
+ * row; the switch lines up with the select, not with its label. */
+.dz-top { align-items: flex-end; gap: 16px; }
+.dz-top .form-select { width: 170px; }
+
+/* THE TWO HALVES OF THE PAGE'S FIRST SCREEN: the list picks, the result shows.
+ * Side by side on a laptop, stacked on a phone. `min-width: 0` for the reason
+ * `.panel-row` gives: a grid item's automatic minimum is its content. */
+.dz-main {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 16px;
+  margin-bottom: 16px;
+  align-items: start;
+}
+.dz-main > * { min-width: 0; }
+.dz-main > .panel { margin-bottom: 0; }
+
+/* The decision list scrolls INSIDE its panel, so the result beside (or under)
+ * it never moves when a row is picked. */
+.dz-list {
+  max-height: 372px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+}
+.dz-group {
+  position: sticky; top: 0; z-index: 1;
+  padding: 4px 9px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--dim);
+}
+.dz-item { display: flex; border-bottom: 1px solid var(--line); }
+.dz-item:last-child { border-bottom: none; }
+.dz-row {
+  flex: 1 1 auto; min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 42px 52px;
+  gap: 8px; align-items: center;
+  padding: 7px 9px;
+  border: none; border-radius: 0; background: transparent;
+  text-align: left; font-size: 13.5px; line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.dz-row .dz-wk { color: var(--dim); font-size: 12px; }
+.dz-row .dz-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dz-row .dz-rec, .dz-row .dz-pts { text-align: right; white-space: nowrap; }
+.dz-row .dz-none { grid-column: 3 / 5; text-align: right; color: var(--dim); white-space: nowrap; }
+.dz-row .d-up { color: var(--accent); }
+.dz-row .d-down { color: var(--err); }
+.dz-row .d-zero { color: var(--dim); }
+/* "The row you picked" is the neutral blue edge, never green: green is a value. */
+.dz-row[aria-selected="true"] { background: var(--panel-3); box-shadow: inset 3px 0 0 var(--good); }
+.dz-x {
+  flex: 0 0 auto; width: 36px;
+  border: none; border-left: 1px solid var(--line); border-radius: 0;
+  background: transparent; color: var(--dim); padding: 0;
+}
+
+/* "Add a trade as if accepted": two sides, each a picker that adds a name. */
+.dz-whatif .row { margin-top: 10px; }
+.dz-whatif .form-select { width: 150px; }
+.dz-sides { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+.dz-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; min-height: 30px; }
+.dz-chip { padding: 4px 9px; font-size: 12.5px; border-radius: var(--r-pill); }
+.dz-chip::after { content: ' \00D7'; color: var(--dim); }
+
+/* THE BIGGEST THING: one row a finished week, and it must fit a phone with no
+ * sideways scroll - so it is not in a .table-scroll and its cells are tight. */
+.dz-weeks th:nth-child(-n+2), .dz-weeks td:first-child, .dz-weeks td.dz-vs { text-align: left; }
+.dz-weeks td.dz-vs { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.dz-weeks td.dz-flip { font-weight: 700; }
+.dz-weeks td.d-up, .stat .v.d-up { color: var(--accent); }
+.dz-weeks td.d-down, .stat .v.d-down { color: var(--err); }
+.dz-weeks td.d-zero { color: var(--dim); }
+.dz-weeks tbody.dz-total td { font-weight: 700; border-top: 2px solid var(--line-2); background-color: var(--panel-2); }
+#resultStats { margin-bottom: 12px; }
+
+/* CURRENT BESIDE HYPOTHETICAL. Each half scrolls inside itself. */
+.dz-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.dz-pair > * { min-width: 0; }
+.dz-head { display: flex; align-items: center; min-height: 34px; }
+.dz-head .sbw-title { margin: 0; }
+.dz-head .sbw-view button { padding: 5px 12px; font-size: 12.5px; }
+.dz-pair .sbw { margin-top: 6px; }
+.dz-pair .table-scroll { margin: 0; padding: 0; }
+#panelNotes p { margin: 0 0 6px; }
+#panelNotes p:last-child { margin-bottom: 0; }
+div.panel-note > p { margin: 0 0 8px; }
+div.panel-note > p:last-child { margin-bottom: 0; }
+
+/* ------------------------------------------------------------------- phone */
+@media (max-width: 900px) {
+  .dz-main, .dz-pair { grid-template-columns: minmax(0, 1fr); }
+  .dz-main { gap: 12px; margin-bottom: 12px; }
+}
+@media (max-width: 760px) {
+  .dz-top { width: 100%; flex-wrap: nowrap; }
+  .dz-top .form-select { width: auto; flex: 1 1 auto; }
+  .dz-list { max-height: 238px; }
+  .dz-row { grid-template-columns: 30px minmax(0, 1fr) 38px 46px; gap: 6px; padding: 8px 7px; font-size: 13px; }
+  .dz-whatif .form-select { width: 100%; }
+  .dz-weeks th, .dz-weeks td { padding-left: 5px; padding-right: 5px; }
+  .dz-weeks td.dz-vs { max-width: 72px; }
+  #resultStats { gap: 18px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap wide">
+    <span class="brand">Fantasy Football</span>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="waivers.html">Players</a>
+      <a href="trade.html">Trade</a>
+      <a href="decisions.html" class="active" aria-current="page">Decisions</a>
+      <a href="draft.html">Draft</a>
+      <a href="summary.html">Summary</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wide">
+
+  <div id="connBar"></div>
+
+  <h1>Decisions <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">Every decision a team made, and the season without it.</p>
+
+  <section class="panel">
+    <h2>Data source</h2>
+    <div class="row spread">
+      <div class="segmented" id="sourceToggle">
+        <button type="button" data-src="demo" class="on">Demo data</button>
+        <button type="button" data-src="live">My ESPN league</button>
+      </div>
+      <div class="row dz-top">
+        <div class="form-select">
+          <label for="teamSelect">Team</label>
+          <select id="teamSelect"></select>
+        </div>
+        <!-- A SWITCH, not a button (Tim: "have a 'display noise' switch at the
+             top of this section that is by defualt turned off"). -->
+        <label class="switch" for="noiseSwitch">
+          <input type="checkbox" role="switch" id="noiseSwitch">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span class="switch-text">Display noise</span>
+        </label>
+      </div>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <div class="dz-main" id="main">
+
+    <section class="panel" id="panelList">
+      <h2>Decisions</h2>
+      <div class="dz-list" id="decisionList" role="listbox" aria-label="Decisions"></div>
+      <details class="explain" id="whatIfBox">
+        <summary>Add a trade as if accepted</summary>
+        <form class="dz-whatif" id="whatIfForm">
+          <div class="row">
+            <div class="form-select">
+              <label for="wiWeek">From week</label>
+              <select id="wiWeek"></select>
+            </div>
+            <div class="form-select">
+              <label for="wiTeam">Trade with</label>
+              <select id="wiTeam"></select>
+            </div>
+          </div>
+          <div class="dz-sides">
+            <div>
+              <label for="wiGive" id="wiGiveLabel">Gives</label>
+              <select id="wiGive"></select>
+              <div class="dz-chips" id="wiGives"></div>
+            </div>
+            <div>
+              <label for="wiGet" id="wiGetLabel">Gets</label>
+              <select id="wiGet"></select>
+              <div class="dz-chips" id="wiGets"></div>
+            </div>
+          </div>
+          <div class="row">
+            <button type="submit" class="primary" id="wiAdd" disabled>Add trade</button>
+          </div>
+        </form>
+      </details>
+    </section>
+
+    <!-- THE BIGGEST THING (Tim: "the act weekly total for that team each
+         previous week, whether that would have changed the outcome of a
+         matchup, and how much it would have changed the overall record"). -->
+    <section class="panel" id="panelResult">
+      <h2>What would have happened</h2>
+      <p class="lede" id="resultLede"></p>
+      <div class="stat-row" id="resultStats"></div>
+      <table class="dz-weeks" id="weekTable">
+        <thead><tr>
+          <th title="The finished week.">Wk</th>
+          <th title="Who the team played that week.">Vs</th>
+          <th title="What the team really scored.">Actual</th>
+          <th title="What it would have scored.">Hypothetical</th>
+          <th title="Hypothetical minus actual.">Diff</th>
+          <th title="The matchup&rsquo;s result. An arrow marks one that would have flipped.">Result</th>
+        </tr></thead>
+        <tbody></tbody>
+        <tbody class="dz-total"></tbody>
+      </table>
+      <details class="explain">
+        <summary>How this works</summary>
+        <div class="panel-note" id="resultNote">
+          <p>A move is undone and the season replayed: every later add, drop and trade happens again in order, if it still can.</p>
+          <p>Other teams keep their real lineups. A slot a missing player leaves takes their best-projected bench player.</p>
+          <p>Lineup rows change only this team: <strong>highest projections</strong> starts whoever ESPN projected highest, <strong>perfect hindsight</strong> whoever scored most.</p>
+          <p><strong>Noise</strong> is how unsure a number is: other managers would have reacted. It grows each week after the decision, and where a freed player could have been picked up. Dimmer is less sure.</p>
+        </div>
+      </details>
+    </section>
+
+  </div>
+
+  <section class="panel" id="panelSeason">
+    <h2>Season by week</h2>
+    <div class="row mb-12" id="seasonTeamRow" hidden>
+      <div class="form-select">
+        <label for="seasonTeam">Lineup of</label>
+        <select id="seasonTeam"></select>
+      </div>
+    </div>
+    <div class="dz-pair">
+      <div>
+        <div class="dz-head"><div class="sbw-title">Current</div></div>
+        <div class="sbw"><div class="table-scroll sbw-scroll" id="seasonCur"></div></div>
+      </div>
+      <div>
+        <div class="dz-head" id="seasonSwitch"></div>
+        <div class="sbw"><div class="table-scroll sbw-scroll" id="seasonHyp"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panelStandings">
+    <h2>Standings &amp; season totals</h2>
+    <div class="dz-pair">
+      <div>
+        <div class="dz-head"><div class="sbw-title">Current</div></div>
+        <div class="sbw"><div class="table-scroll sbw-scroll" id="standingsCur"></div></div>
+      </div>
+      <div>
+        <div class="dz-head" id="standingsSwitch"></div>
+        <div class="sbw"><div class="table-scroll sbw-scroll" id="standingsHyp"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panelSummary">
+    <h2>The chart</h2>
+    <div class="dz-pair">
+      <div>
+        <div class="dz-head"><div class="sbw-title">Current</div></div>
+        <div class="sbw"><div class="table-scroll sbw-scroll" id="summaryCur"></div></div>
+      </div>
+      <div>
+        <div class="dz-head" id="summarySwitch"></div>
+        <div class="sbw"><div class="table-scroll sbw-scroll" id="summaryHyp"></div></div>
+      </div>
+    </div>
+    <p class="panel-note" id="oddsStatus"></p>
+    <details class="explain">
+      <summary>How this works</summary>
+      <div class="panel-note" id="summaryNote"></div>
+    </details>
+  </section>
+
+  <!-- Under the charts, only when the mirror has something to own up to. -->
+  <section class="panel" id="panelNotes" hidden>
+    <h2>Knock-on effects</h2>
+    <div class="panel-note" id="mirrorNotes"></div>
+  </section>
+
+</div>
+
+<script type="module" src="js/decisions-page.js"></script>
+<script type="module" src="js/connection.js"></script>
+<!-- A title attribute draws nothing on iOS, and the tables here put their
+     column definitions in them. One tag: js/touch-titles.js. -->
+<script type="module" src="js/touch-titles.js"></script>
+</body>
+</html>

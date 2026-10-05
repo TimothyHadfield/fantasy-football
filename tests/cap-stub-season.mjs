@@ -409,7 +409,11 @@ const FREE_AGENTS = [
   { playerId: 9002, name: 'Free Agent RB', position: 'RB', proTeamId: 4 },
 ];
 
-export async function fetchDecisionWorld() {
+export async function fetchDecisionWorld({ demo = false } = {}) {
+  // CAP_WORLD_FAIL: the league's read fails, as ESPN's does for a private
+  // league read from somewhere without its cookies; the sample still reads
+  // (decisions-check.mjs).
+  if (process.env.CAP_WORLD_FAIL && !demo) throw new Error('ESPN would not return the league.');
   const C = DECISION_CASES;
   const weeks = WEEKS.slice(0, decided());
   const sched = await buildScheduleQuietly();
@@ -528,7 +532,7 @@ export async function fetchDecisionWorld() {
     moves,
     players,
     limits: { roster: SHAPE.length },
-    isDemo: false,
+    isDemo: demo,
     name: sched.leagueName,
     requests: 0,
   };
