@@ -160,5 +160,11 @@ c. Summary chart in the mirror: title % and last % are re-simulated from the mir
 d. A move that could not have happened in the mirror is listed under the charts ("Could not have happened: …"), keeping whichever half was still possible. OK? · recommended: yes (assumed; Tim to confirm)
 e. A word ceiling for the new page in the text audit (set to whatever the plain build measures)? · recommended: yes (assumed; Tim to confirm)
 
+## BUILT 2026-10-05
+- Shipped: phases 1–4, live at d4d58b2. `js/decisions.js`, `season.fetchDecisionWorld` (+ espn/store/cloud parts), `js/standings-table.js`, `js/summary-table.js`, `js/actual-season-table.js`, `js/view-switch.js`, `decisions.html`, `js/decisions-page.js`, "Decisions" tab on every page.
+- Plan was wrong about: one player read returning every week's projection (it is one week per request); plain drops (they are ROSTER transactions with a DROP item, not FREEAGENT/WAIVER); the roster limit (week-end rosters include IR, so size is compared with the real roster, as `extra`). Added after building: a skipped add also cancels the drop beside it. The laptop builds the cloud copy's decision weeks at every sync, not only when the page is opened.
+- Verified: suites test-decisions 94, test-decision-data 167, shared-tables-check 208, test-decision-cloud 75, decisions-check 79; Stats/Summary tables byte-identical before/after on demo and league 1241838 at 393 and 1440; live league 1241838 weeks 1–3 (41 moves): every decision of every team mirrors without error, team 7 perfect-hindsight numbers on the page match the engine; screenshots looked at, phone and laptop width.
+- Still open: a real accepted trade (record shape assumed, roster-change fallback untested on real data); the Firestore round trip to Tim's iPhone; his private league through the extension; noise constants (judgement); Questions a–e are assumed, not answered; phase 5 (combining) needs a go.
+
 ## Sources
 - Measured reads, 2026-10-05: `lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/1241838?view=mTransactions2&scoringPeriodId=1..4` and `?view=kona_playercard` with `X-Fantasy-Filter: {"players":{"filterIds":{"value":[…]}}}`.
