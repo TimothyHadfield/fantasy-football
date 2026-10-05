@@ -46,7 +46,13 @@ import { enableSort, resort } from './sortable.js';
 // deliberately kept OFF THE IMAGE — the long argument for that split is above
 // renderCard(), and it is the most consequential decision in this file, because
 // the image is the thing that leaves the site.
-import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
+import { describeHeat } from './heat.js';
+// THE CHART'S ROWS, and the formatters they are made of, live in their own
+// module since 2026-10-05 so a second page (the Decisions review) draws the
+// identical chart. The formatters are imported back rather than kept twice.
+import {
+  summaryRowsHtml, summaryScales, pct, esc, recordText,
+} from './summary-table.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
 
@@ -247,35 +253,7 @@ const state = {
 
 // ------------------------------------------------------------------ formatting
 
-const esc = (s) =>
-  String(s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
-  );
-
-const dash = '<span class="muted">—</span>';
-
-/** A signed one-decimal number, coloured. Same renderer as the stats page's
- *  LUCK column, so the two pages print the identical string for one team. */
-function signed(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return dash;
-  const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'muted';
-  return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(1)}</span>`;
-}
-
-/**
- * A probability as a percentage.
- *
- * "<1%" rather than "0%" for anything that happened at all, and "0" only for
- * something that happened in none of a hundred thousand seasons. At this run
- * count that really does mean "never once", which is worth distinguishing from
- * "rounds down".
- */
-function pct(p) {
-  if (!Number.isFinite(p)) return null;
-  if (p <= 0) return '0%';
-  if (p < 0.005) return '<1%';
-  return `${Math.round(p * 100)}%`;
-}
+// `esc` and `pct` come from js/summary-table.js.
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const commas = (n) => Number(n).toLocaleString('en-US');
@@ -662,11 +640,10 @@ function recordsOf(data) {
   return rec;
 }
 
-/** "4-2", and a third number ("4-2-1") only for a manager who has a tie.
- *  Tim, 2026-09-27, on 4W/2L: "a little messy" — picked 7-1, ESPN's own form.
- *  While his game is being played it counts as his chance of winning it
- *  ("3.2-2.8"); `row.rec` is `capture.recordNow`, built in `buildRows`. */
-const recordText = (row) => (row.rec ? row.rec.text : '—');
+// `recordText(row)` — "4-2", "4-2-1" with a tie, "3.2-2.8" while his game is
+// being played (Tim, 2026-09-27, on 4W/2L: "a little messy" — picked 7-1,
+// ESPN's own form) — comes from js/summary-table.js; `row.rec` is
+// `capture.recordNow`, built in `buildRows`.
 
 /**
  * Everything simulateSeason needs, plus a key that changes exactly when the
@@ -848,17 +825,12 @@ function renderTable(view, rows, sim, inputs) {
   const table = $('summaryTable');
   const tbody = table.querySelector('tbody');
 
-  // Three different reasons a percentage cell can be empty, and they are not the
-  // same fact. Saying which is the whole of the early-season honesty rule.
+  // THE ROWS ARE BUILT IN js/summary-table.js (one implementation, shared with
+  // the Decisions review). An empty percentage is one of three different facts
+  // and the rows say which: `waiting` prints "…" for a run still going.
   const waiting = view.enough && !sim;
-  const pctCell = (p) => {
-    if (p === null || p === undefined) {
-      return waiting ? '<span class="muted">…</span>' : dash;
-    }
-    return `${pct(p)}`;
-  };
 
-  // THREE SCALES, ONE PER COLUMN, AND ONE OF THEM IS INVERTED.
+  // THREE SCALES, ONE PER COLUMN, AND ONE OF THEM IS INVERTED (`summaryScales`).
   //
   //   LUCK    — high is good: the page's own definition is "above zero means
   //             the season has broken your way". Held back until week
@@ -874,30 +846,10 @@ function renderTable(view, rows, sim, inputs) {
   // probability columns, the points default on LUCK, which is printed to a
   // tenth like every other point figure on the site.
   const shadeLuck = view.enough && view.weeksPlayed >= MIN_WEEKS_TO_SHADE_LUCK;
-  const heatLuck = shadeLuck ? heatScale(rows.map((r) => r.luck)) : null;
-  const heatTitle = heatScale(rows.map((r) => r.title), { minSpread: PCT_MIN_SPREAD });
-  const heatLast = heatScale(rows.map((r) => r.last), {
-    invert: true, minSpread: PCT_MIN_SPREAD,
-  });
+  const scales = summaryScales(rows, { shadeLuck, minSpread: PCT_MIN_SPREAD });
+  const { luck: heatLuck, title: heatTitle, last: heatLast } = scales;
 
-  /** One shaded cell. The `title` is channel 3; the key line below is channel 4. */
-  const shaded = (v, scale, what, inner) => {
-    const h = heatOf(v, scale, { what });
-    return `<td class="num${h ? ` ${h.cls}` : ''}" data-v="${v ?? ''}"` +
-      `${h ? ` title="${esc(h.words)}"` : ''}>${inner}${heatMarkHtml(h)}</td>`;
-  };
-
-  tbody.innerHTML = rows.map((r) => `
-    <tr>
-      <td class="name"${r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : ''}>${esc(r.name)}</td>
-      <td class="num" data-v="${r.rec ? r.rec.wins : ''}"${
-    r.rec && r.rec.live ? ` title="${esc(r.rec.title)}"` : ''}>${recordText(r)}</td>
-      ${shaded(r.luck, heatLuck, 'the rest of the league’s luck',
-    `${view.enough ? signed(r.luck) : dash}${
-      view.enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`)}
-      ${shaded(r.title, heatTitle, 'the rest of the league’s title chance', pctCell(r.title))}
-      ${shaded(r.last, heatLast, 'the rest of the league’s chance of finishing last', pctCell(r.last))}
-    </tr>`).join('');
+  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales });
 
   resort(table);
   // The scales are kept for renderNote, which prints their thresholds under

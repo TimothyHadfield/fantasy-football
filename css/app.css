@@ -1387,3 +1387,102 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
 @media (max-width: 940px) and (max-height: 560px) and (orientation: landscape) {
   .table-scroll { max-height: 78vh; max-height: 78dvh; }
 }
+
+/* ------------------------------------------------------------------------
+ * CURRENT / HYPOTHETICAL / DIFFERENCE (2026-10-05, the Decisions review).
+ *
+ * Three tables are drawn by shared modules so a second page can show each one
+ * as it happened, as it would have been, and as the difference between them:
+ * js/actual-season-table.js, js/standings-table.js, js/summary-table.js (the
+ * switch is js/view-switch.js).
+ *
+ * THE `.sbw` RULES ARE THE TRADE PAGE'S, COPIED, NOT MOVED. trade.html still
+ * carries its own copy in its <style> (parsed after this file, identical
+ * declarations), so the Trade page draws exactly as it did; no other page uses
+ * these class names. Change one copy, change the other.
+ * ------------------------------------------------------------------------ */
+.sbw { margin-top: 14px; }
+.sbw .sbw-who { margin-bottom: 10px; }
+.sbw-title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 12px 0 6px;
+  font-weight: 650;
+}
+.sbw .sbw-scroll { margin-bottom: 4px; }
+/* The hypothetical box's Hypothetical / Difference switch, on its title line. */
+.sbw-after-head { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 4px 14px; }
+.sbw-after-head .sbw-view { margin: 0 0 4px; }
+.sbw-after-head .sbw-view button { padding: 3px 10px; font-size: 12px; }
+table.sbw-table td.d-up, table.sbw-table td.d-up a.pref { color: var(--accent); }
+table.sbw-table td.d-down, table.sbw-table td.d-down a.pref { color: var(--err); }
+table.sbw-table td.d-zero, table.sbw-table td.d-zero a.pref { color: var(--dim); }
+.sbw .slot-tag {
+  display: inline-block;
+  min-width: 42px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.sbw table tbody.split td,
+.sbw table tbody tr:hover td.split-label,
+.sbw table tbody tr:hover td.split-total {
+  background-color: var(--panel-2);
+  border-top: 2px solid var(--line-2);
+  border-bottom: 2px solid var(--line-2);
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+.sbw table tbody.split td.name { background-color: var(--panel-2); }
+.sbw tbody.split .split-label { font-weight: 650; letter-spacing: 0.02em; text-align: left; }
+.sbw tbody.split .split-total { font-weight: 700; font-size: 15px; }
+.sbw tbody.split td.wk { font-weight: 700; font-size: 13.5px; }
+.sbw tbody.sbw-opp td.name { font-weight: 650; text-align: left; }
+.sbw tbody.sbw-opp td.opp { font-weight: 650; }
+.sbw-table th, .sbw-table td { white-space: nowrap; }
+.sbw-table td.wk, .sbw-table th.wk { padding-left: 7px; padding-right: 7px; }
+.sbw-table td.avg { font-weight: 650; color: var(--text); }
+.sbw-table td.assumed {
+  color: var(--assumed);
+  text-decoration: underline dotted var(--assumed);
+  text-underline-offset: 3px;
+}
+.sbw-table td.bye { color: var(--dim); font-size: 11px; letter-spacing: 0.05em; }
+.sbw-table td.muted { color: var(--line); }
+.sbw-table th.now, .sbw-table td.now {
+  border-left: 1px solid var(--line-2);
+  border-right: 1px solid var(--line-2);
+}
+.sbw-table th.now { color: var(--text); }
+.sbw-table th.played, .sbw-table td.played,
+.sbw-table td.played a.pref { color: var(--dim); font-weight: 400; }
+.sbw-vs { margin-left: 2px; color: var(--text); }
+@media (max-width: 760px) {
+  .sbw-table td.wk, .sbw-table th.wk { padding-left: 5px; padding-right: 5px; }
+}
+
+/* THE ACTUAL-POINTS BOX (js/actual-season-table.js): a cell is two lines, who
+ * started there and what he scored. The name is the quiet line; in a difference
+ * it is lit where the man is not the one the season that happened had there. */
+.sbw-actual td.wk .sbw-name,
+.sbw-actual td.wk .sbw-pts { display: block; }
+.sbw-actual td.wk .sbw-name { font-size: 11px; font-weight: 400; color: var(--dim); }
+.sbw-actual td.wk.sbw-new .sbw-name { color: var(--text); font-weight: 600; }
+
+/* THE DIFFERENCE VIEW of the standings and of the Summary chart, in the same
+ * three colours. Scoped to the classes the shared modules put on a WHOLE table
+ * they draw, so #mainTable and #summaryTable are untouched. */
+table.standings-table td.d-up, table.summary-table td.d-up { color: var(--accent); }
+table.standings-table td.d-down, table.summary-table td.d-down { color: var(--err); }
+table.standings-table td.d-zero, table.summary-table td.d-zero { color: var(--dim); }
+/* The two rules those tables take from their home pages' own <style>. */
+table.standings-table .pm { color: var(--dim); font-size: 10.5px; font-weight: 600; margin-left: 4px; }
+table.summary-table td.num, table.summary-table th.num { text-align: right; font-variant-numeric: tabular-nums; }

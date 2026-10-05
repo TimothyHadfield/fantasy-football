@@ -31,7 +31,15 @@ import { lineChart, histogram, boxPlot, scatterChart, leastSquares, SERIES_COLOR
 // THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
 // `heatScale()` that lived here — see `heatCell` below for what was wrong with
 // it and why the two could not coexist.
-import { heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn } from './heat.js';
+import { heatScale, describeHeat, describeHeatPerColumn } from './heat.js';
+// THE STANDINGS TABLE'S ROWS, and the cell helpers they are made of, live in
+// their own module since 2026-10-05 so a second page (the Decisions review)
+// draws the identical table. `heatCell` and the formatters are imported back
+// rather than kept twice.
+import {
+  standingsRowsHtml, standingsScales, standingsHeadings, heatCell, winPctOf,
+  fmt, dash, signed, esc,
+} from './standings-table.js';
 import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -82,29 +90,7 @@ if (state.highlight === null) {
 
 // ------------------------------------------------------------------ formatting
 
-const fmt = (n, digits = 1) =>
-  n === null || n === undefined || Number.isNaN(n) ? '—' : n.toFixed(digits);
-
-/** Points for, as ESPN shows it: one decimal, thousands-separated (1,845.6).
- *  Whole points used to be shown, which read 1845.60 as 1,846. */
-const pf = (n) =>
-  n === null || n === undefined || Number.isNaN(n)
-    ? '—'
-    : n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-
-const dash = '<span class="muted">—</span>';
-
-function signed(n, digits = 1) {
-  if (n === null || n === undefined || Number.isNaN(n)) return dash;
-  const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'muted';
-  const sign = n > 0 ? '+' : '';
-  return `<span class="${cls}">${sign}${n.toFixed(digits)}</span>`;
-}
-
-const esc = (s) =>
-  String(s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
-  );
+// `fmt`, `dash`, `signed` and `esc` come from js/standings-table.js.
 
 /**
  * A team's record as it stands now (`capture.recordNow`, the one Schedule and
@@ -128,17 +114,11 @@ const record = (t) => recordOf(t).text;
  * it prints and a team mid-game is not ranked on one game fewer than a team
  * whose matchup finished early.
  */
-const winPct = (t) => {
-  const r = recordOf(t);
-  return r.games ? r.wins / r.games : null;
-};
+const winPct = (t) => winPctOf(recordOf(t));
 
-/** ESPN's order: win percentage, then points for. */
+/** ESPN's order: win percentage, then points for. (The Record cell's own sort
+ *  key is the same order as one number: `recordSortKey` in standings-table.js.) */
 const byRecord = (a, b) => (winPct(b) ?? 0) - (winPct(a) ?? 0) || b.pointsFor - a.pointsFor;
-
-/** One sortable number for the same order. A step in win percentage is at
- *  least 1/30 of a game, which times 1e6 dwarfs any season's points for. */
-const recordKey = (t) => (winPct(t) ?? 0) * 1e6 + t.pointsFor;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -193,9 +173,6 @@ function partWeek() {
   const full = before.length ? Math.max(...before) : s.teams.length - (s.teams.length % 2);
   return count(last) < full ? last : null;
 }
-
-/** A team with no finished game yet has no average of anything (stats.js says 0). */
-const unplayed = (t) => !t.weekly.length;
 
 const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };
 
@@ -432,41 +409,8 @@ function renderGlance() {
 // to guess it. A high score is good; a high projected opponent is a hard
 // schedule, which is why those two columns pass `invert`.
 
-/**
- * One heat-scaled cell, attributes and content together.
- *
- * @param {number|null} v
- * @param {Object|null} scale from `heatScale`, or null to draw no colour at all
- * @param {Object} [opts]
- * @param {string} [opts.what] the comparison group, in words, for the title
- * @param {string} [opts.text] what to print, when it is not just the number
- * @param {string} [opts.extra] extra attributes (a `data-v` for the sort)
- *
- * The `title` is the "never colour alone" channel that carries the actual
- * standing — js/touch-titles.js turns it into a tap on a phone, so it is not
- * hover-only — and the ▲/▼ at the end of the scale is the one that needs no
- * interaction at all.
- *
- * A COLOURED CELL ALWAYS CARRIES A `data-v`, and that is a bug fix rather than
- * tidiness (2026-09-19). sortable.js's `parseCell` falls back to the cell's
- * TEXT when there is no `data-v`, and it strips `, + $ %` and whitespace — not
- * ▲ or ▼. So every cell at the end of this scale was sorting as the STRING
- * "22.1 ▲" while its uncoloured neighbours sorted as numbers, which quietly put
- * the best and worst rows of a column in the wrong places the moment anybody
- * clicked the heading. The value is written unrounded, exactly as every other
- * `data-v` on the page is; a caller that already supplies its own `data-v` in
- * `extra` (oppProjCell) keeps it.
- */
-function heatCell(v, scale, { what = 'the rest of the league', text = null, extra = '' } = {}) {
-  const shown = text === null ? fmt(v) : text;
-  const h = heatOf(v, scale, { what });
-  const dv = typeof v === 'number' && Number.isFinite(v) && !/\bdata-v=/.test(extra)
-    ? ` data-v="${v}"`
-    : '';
-  if (!h) return `<td${extra ? ` ${extra}` : ''}${dv}>${shown}</td>`;
-  return `<td class="${h.cls}"${extra ? ` ${extra}` : ''}${dv} title="${esc(h.words)}">` +
-    `${shown}${heatMarkHtml(h)}</td>`;
-}
+// `heatCell` — one cell on that scale, attributes and content together — is
+// imported from js/standings-table.js, which builds the standings rows with it.
 
 function renderMainTable() {
   const s = state.stats;
@@ -476,115 +420,29 @@ function renderMainTable() {
   // stats.js correctly computes as 0 and this must not print as a score.
   const none = noGames();
 
-  // SHOWN FROM WEEK 1, WITH A MARGIN. These were held back until week 3,
-  // because the close-game curve clamps to ±50 under a ~5.5-point margin and a
-  // single game swings them further than a whole season does. Tim asked for
-  // them from the start with "a wide margin for the first few games" instead,
-  // so each carries a ± (one standard error — see attachLuckMargins in
-  // stats.js) that is huge after one game and narrows every week.
-  const luck = (v, m) => {
-    if (none || v === null || v === undefined) return `<td>${dash}</td>`;
-    const pm = m === null || m === undefined ? '' : `<span class="pm">±${Math.round(m)}</span>`;
-    return `<td data-v="${v}">${signed(v)}${pm}</td>`;
-  };
-  const rank = (v) => (none || v === null ? dash : `<span class="rank">${v}</span>`);
-  const num = (v) => (none ? dash : fmt(v));
-  const sgn = (v) => (none ? dash : signed(v));
-
-  // FOUR SCALES, ONE PER COLUMN, and never one across the table. A column is a
-  // comparison group precisely because every value in it is the same kind of
-  // number; the row is not (it holds an average, a total and two ranks), and a
-  // scale across the row would be the "quarterback against a kicker" mistake in
-  // another costume. See the header of js/heat.js.
-  // A team whose first game is still being played has no result yet while
-  // others do (the week in progress): it is left out of every scale here and
-  // its result columns are dashed below, exactly as the whole table is at `none`.
-  const withGames = none ? [] : s.teams.filter((t) => !unplayed(t));
-  const ghosts = !none && withGames.length < s.teams.length;
-  const heatAvg = heatScale(withGames.map((t) => t.avgActual));
-  const heatProj = heatScale(withGames.map((t) => t.avgProjected));
-  // INVERTED, both of them. A high opponent average is a hard schedule — the
-  // old local ramp painted exactly this column its greenest for being hardest,
-  // which is the defect that made the two systems irreconcilable.
-  const heatOpp = heatScale(withGames.map((t) => t.oppAvgActual), { invert: true });
-  const heatOppProj = heatScale(oppRows().map((r) => r.avgOpp), { invert: true });
-
-  // TWO MORE COLUMNS, 2026-09-19 (Tim: the colouring "needs to be added to all
-  // the other places a number is referred to across the whole site"). These two
-  // were not left out on principle, they were simply missed — the sentence in
-  // the note below already listed the only two principles this table uses to
-  // refuse a column, and neither of them covers either of these:
+  // THE ROWS ARE BUILT IN js/standings-table.js (one implementation, shared
+  // with the Decisions review). What this page adds is what only it knows:
+  // whose row to mark, the record with a game in play counted as its chance
+  // (`recordOf`), and the opponent projections its own lazy read brought back.
   //
-  //   F−A      = average points for minus average points against, i.e. the
-  //              average weekly margin. One unambiguous good end. It is NOT a
-  //              rescaling of a column already coloured: it is the DIFFERENCE
-  //              of the two that are (Avg and Opp Avg), so it carries an
-  //              ordering neither of them does.
-  //   Luck/wk  = average actual minus average projected. High is good for the
-  //              team, and that is not a fresh judgement invented here: the
-  //              week grid below already scales its `luck` metric with `invert`
-  //              off and says so in its own key, so the two would contradict
-  //              each other if this one inverted.
-  //
-  // THREE COLUMNS THAT LOOK LIKE CANDIDATES AND ARE DELIBERATELY NOT:
-  //   Total  — every team has played the same number of games, so points-for is
-  //            the Avg column times a constant and its z-scores are identical.
-  //            Colouring it paints a second copy of a colour already in the row.
-  //   Skill  — `avgProjected − leagueAvgProjected`, which is the Proj column
-  //            shifted by a constant. Same argument, exactly.
-  //   Spread — the standard deviation of a team's weekly scores. NEITHER
-  //            DIRECTION IS GOOD: a consistent bad team and a volatile good one
-  //            are both real, and js/heat.js's rule is that such a column gets
-  //            no scale rather than a misleading one.
-  const heatFA = heatScale(withGames.map((t) => t.forMinusAgainst));
-  const heatLuckWk = heatScale(withGames.map((t) => t.avgLuck));
+  // SIX SCALES, ONE PER COLUMN, and never one across the table — Avg, Proj,
+  // Opp Avg, Opp proj, F−A and Luck/wk; the two opponent columns INVERTED,
+  // because a high opponent average is a hard schedule. Which columns are left
+  // uncoloured, and why, is the last paragraph of the note below. The scales
+  // are asked for here because that note prints their thresholds.
+  const oppProj = state.oppProj && state.oppProj.byTeam ? state.oppProj.byTeam : null;
+  const scales = standingsScales(s, { oppProj });
+  const { avg: heatAvg, opp: heatOpp, fa: heatFA, luckWk: heatLuckWk } = scales;
 
-  const W_AVG = 'what the league averages a week';
-  const W_PROJ = 'what the league is projected a week';
-  const W_OPP = 'the opponents the rest of the league has faced';
-  const W_FA = 'the margins the rest of the league is winning by';
-  const W_LUCK = 'how far the rest of the league is beating its projection';
-
-  tbody.innerHTML = s.teams
-    .map((t) => {
-      // No finished game of his own yet: every result column is a dash.
-      const off = none || unplayed(t);
-      const n = (v) => (off ? dash : num(v));
-      const g = (v) => (off ? dash : sgn(v));
-      const lk = (v, m) => (off ? `<td>${dash}</td>` : luck(v, m));
-      // LS, PS and AS wait for everybody: stats.js ranks all ten at once, and a
-      // team with no game would be ranked on an average of nothing.
-      const rk = (v) => (off || ghosts ? dash : rank(v));
-      const rec = recordOf(t);
-      return `
-      <tr class="${state.highlight === t.id ? 'me' : ''}">
-        <td class="name">${esc(t.name)}</td>
-        <td data-v="${recordKey(t)}"${rec.live ? ` title="${esc(rec.title)}"` : ''}>${rec.text}</td>
-        ${heatCell(off ? null : t.avgActual, heatAvg, { what: W_AVG, text: n(t.avgActual) })}
-        ${heatCell(off ? null : t.avgProjected, heatProj, { what: W_PROJ, text: n(t.avgProjected) })}
-        <td${off ? '' : ` data-v="${t.pointsFor}"`}>${off ? dash : pf(t.totalActual)}</td>
-        ${heatCell(off ? null : t.oppAvgActual, heatOpp, { what: W_OPP, text: n(t.oppAvgActual) })}
-        ${heatCell(off ? null : t.forMinusAgainst, heatFA, { what: W_FA, text: g(t.forMinusAgainst) })}
-        <td>${n(t.actualStdev)}</td>
-        ${oppProjCell(t.id, heatOppProj)}
-        ${heatCell(off ? null : t.avgLuck, heatLuckWk, { what: W_LUCK, text: g(t.avgLuck) })}
-        <td>${n(t.pointsToWin)}</td>
-        ${lk(t.scoreDiffLuck, t.margins && t.margins.scoreDiffLuck)}
-        ${lk(t.luckScore, t.margins && t.margins.luckScore)}
-        <td>${g(t.skill)}</td>
-        ${lk(t.skillPlusLuck, t.margins && t.margins.skillPlusLuck)}
-        <td>${rk(t.luckStanding)}</td>
-        <td>${rk(t.projectedStanding)}</td>
-        <td>${rk(t.actualStanding)}</td>
-      </tr>`;
-    })
-    .join('');
+  tbody.innerHTML = standingsRowsHtml(s, {
+    highlightId: state.highlight, recordOf, oppProj, scales,
+  });
 
   // Single-week columns are that week's score, not an average of anything.
-  const oneWeek = weekCount() === 1;
-  $('thScoringGroup').textContent = oneWeek ? `Scoring — week ${s.weekNumbers[0]} only` : 'Scoring';
-  $('thAvg').textContent = oneWeek ? 'Score' : 'Avg';
-  $('thOppAvg').textContent = oneWeek ? 'Opp score' : 'Opp Avg';
+  const heads = standingsHeadings(s);
+  $('thScoringGroup').textContent = heads.group;
+  $('thAvg').textContent = heads.avg;
+  $('thOppAvg').textContent = heads.oppAvg;
 
   // The one line under the table that stays on screen: what the ± means, or —
   // before a game is played — why the result columns are dashes. Since
@@ -902,11 +760,6 @@ function scheduleKey() {
   return `live:${cfg ? cfg.leagueId : '?'}:${s.season}`;
 }
 
-const oppFor = (id) => {
-  const p = state.oppProj;
-  return p && p.byTeam ? p.byTeam.get(id) || null : null;
-};
-
 /** Teams that have a number, hardest schedule first. */
 function oppRows() {
   const p = state.oppProj;
@@ -918,20 +771,6 @@ function oppRows() {
     })
     .filter(Boolean)
     .sort((a, b) => b.avgOpp - a.avgOpp);
-}
-
-/**
- * The Opp proj cell. data-v is omitted entirely when the number is unknown —
- * an empty data-v parses as 0 and would rank a team we know nothing about as
- * having the easiest schedule in the league.
- */
-function oppProjCell(teamId, scale) {
-  const o = oppFor(teamId);
-  if (!o) return `<td>${dash}</td>`;
-  return heatCell(o.avgOpp, scale, {
-    what: 'the schedules the rest of the league drew',
-    extra: `data-v="${o.avgOpp}"`,
-  });
 }
 
 function hardestScheduleTile() {
