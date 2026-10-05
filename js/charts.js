@@ -17,6 +17,7 @@
  *   scatterChart(container, opts)   projected against actual, with y = x and
  *                                   the least-squares line; dots open a link
  *   leastSquares(points)            the line's maths, pure
+ *   offPerfect(points, fit)         mean gap between that line and y = x, pure
  */
 
 /* ------------------------------------------------------------------ *
@@ -1001,10 +1002,12 @@ export function boxPlot(container, opts) {
  * and is skipped, never counted as zero.
  *
  * @param {Array} points  [{ x, y }]
- * @returns {{slope:number, intercept:number, r:number|null, n:number}|null}
+ * @returns {{slope:number, intercept:number, r:number|null, r2:number|null, n:number}|null}
  *   null with fewer than two points, or when every x is the same (a vertical
  *   cloud has no slope). `r` is null when every y is the same: the line is
- *   flat and real, but there is no y-variance to correlate with.
+ *   flat and real, but there is no y-variance to correlate with. `r2` is r
+ *   squared - the share of the differences in y the line accounts for, 1 when
+ *   every point is on it - and null whenever r is.
  */
 export function leastSquares(points) {
   if (!Array.isArray(points)) return null;
@@ -1024,12 +1027,38 @@ export function leastSquares(points) {
   }
   if (!(sxx > 1e-12)) return null;
   const slope = sxy / sxx;
+  const r = syy > 1e-12 ? sxy / Math.sqrt(sxx * syy) : null;
   return {
     slope,
     intercept: my - slope * mx,
-    r: syy > 1e-12 ? sxy / Math.sqrt(sxx * syy) : null,
+    r,
+    r2: r === null ? null : r * r,
     n,
   };
+}
+
+/**
+ * How far the fitted line sits from the perfect one, y = x, in the units of
+ * the axes (points): the mean of |(slope * x + intercept) - x| taken at every
+ * point's x. It is averaged over the POINTS, not along the axis, so it answers
+ * "for the projections that were actually made, how far off perfect was the
+ * line on average". 0 means the two lines coincide wherever there is a dot.
+ *
+ * @param {Array} points  [{ x, y }] - the same points the line was fitted to
+ * @param {Object|null} [fit]  a leastSquares() result; fitted here if omitted
+ * @returns {number|null}  null when there is no line (see leastSquares)
+ */
+export function offPerfect(points, fit) {
+  if (!Array.isArray(points)) return null;
+  const f = fit === undefined ? leastSquares(points) : fit;
+  if (!f || !isNum(f.slope) || !isNum(f.intercept)) return null;
+  let n = 0, sum = 0;
+  for (const p of points) {
+    if (!p || !isNum(p.x) || !isNum(p.y)) continue;
+    sum += Math.abs(f.slope * p.x + f.intercept - p.x);
+    n++;
+  }
+  return n ? sum / n : null;
 }
 
 /** The part of y = slope*x + intercept that lies inside the square [lo, hi]². */
@@ -1066,6 +1095,22 @@ const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
  * moves or resizes. There is ONE set of listeners on the svg, not one per dot:
  * a season of players is ~2,700 dots, found by a nearest-dot scan.
  *
+ * ANY CLICK ON THE CHART FOLLOWS THE PREVIEWED DOT (Tim, 2026-10-04: "if you
+ * click at all while a specific point is selected (or being previewed)
+ * whatsoever, bring it to the specific reference, not just if you click on the
+ * preview box"). A mouse: hover previews, a click anywhere on the chart goes.
+ * A finger: the first tap on a dot selects it, the next tap anywhere on the
+ * chart goes - except a tap on a DIFFERENT dot, which moves the selection so
+ * dots can be browsed. The preview stays a real link (keyboard, new tab).
+ *
+ * GROUPS (optional). With `groups`, each dot takes its group's colour and a
+ * row of chips under the chart names the groups that have a dot. Pressing a
+ * chip FOCUSES that group: the rest turn into a dim grey background that the
+ * pointer cannot find, and the solid line is refitted to the focused dots
+ * alone (the dotted perfect line and the axes never change). Pressing it again
+ * clears the focus. The chips are HTML under the svg, so they are not "the
+ * chart" for the click rule above.
+ *
  * @param {Element} container
  * @param {Object}  opts
  * @param {Array}   opts.points   [{ x, y, name, detail?, week?, href?, key?, color? }]
@@ -1080,7 +1125,18 @@ const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
  * @param {string}  [opts.empty]   what to say when there is nothing to plot
  * @param {string}  [opts.perfectLabel='Perfect projection']
  * @param {string}  [opts.fitLabel='Best-fit line']
- * @returns {SVGElement|null}  the fit, when there is one, is on `svg.__ffFit`
+ * @param {Array}   [opts.groups]  [{ key, label, color }] in legend order; a
+ *                                 point joins one through its `group`. Labels
+ *                                 are untrusted text.
+ * @param {string|number} [opts.focus]  group key to focus (see above)
+ * @param {Function} [opts.onFocus]  (key|null, svg) after a chip changed the
+ *                                 focus and the chart redrew itself
+ * @param {string}  [opts.groupLabel]  accessible name of the chip row
+ * @param {Function} [opts.navigate]  (href, event) - replaces the page
+ *                                 navigation a click on the chart performs
+ * @returns {SVGElement|null}  on the svg: `__ffFit` (the line, or null),
+ *   `__ffFitPoints` (the points it was fitted to: all of them, or the focused
+ *   group) and `__ffGap` (offPerfect of those)
  */
 export function scatterChart(container, opts) {
   if (!container || typeof container !== 'object') return null;
@@ -1152,16 +1208,42 @@ export function scatterChart(container, opts) {
   // identity, and thousands of titles are markup nobody reads.
   const n = pts.length;
   const r = n > 600 ? 2.5 : n > 150 ? 3 : 4;
-  const alpha = n > 600 ? 0.25 : n > 150 ? 0.5 : 0.7;
+  let alpha = n > 600 ? 0.25 : n > 150 ? 0.5 : 0.7;
   const base = SERIES_COLORS[0];
   const want = o.highlight == null || o.highlight === '' ? null : String(o.highlight);
   const isHi = (p) => want !== null && p.key != null && String(p.key) === want;
+
+  // Groups: only the ones that own a dot are offered, in the caller's order.
+  const gkey = (p) => (p.group == null ? null : String(p.group));
+  const seen = new Set();
+  for (const p of pts) { const k = gkey(p); if (k !== null) seen.add(k); }
+  const groups = (Array.isArray(o.groups) ? o.groups : [])
+    .filter((g) => g && g.key != null && seen.has(String(g.key)));
+  const colorOf = new Map(groups.map((g) => [String(g.key), g.color]));
+  const grouped = groups.length > 0;
+  const focusKey = grouped && o.focus != null && colorOf.has(String(o.focus)) ? String(o.focus) : null;
+  // The dots a pointer can find and the line is fitted to.
+  const live = [];
+  pts.forEach((p, i) => { if (focusKey === null || gkey(p) === focusKey) live.push(i); });
+  const isLive = focusKey === null ? null : new Set(live);
+  if (grouped) {
+    // Colour has to be told apart, which a quarter-opaque dot cannot do.
+    const m = live.length;
+    alpha = m > 600 ? 0.5 : m > 150 ? 0.7 : 0.85;
+  }
+
   const px = new Array(n), py = new Array(n);
-  const back = [], front = [];
+  const dim = [], back = [], front = [];
   pts.forEach((p, i) => {
     px[i] = x(p.x); py[i] = y(p.y);
     const at = `data-i="${i}" cx="${px[i].toFixed(1)}" cy="${py[i].toFixed(1)}"`;
-    const fill = p.color ? ` fill="${esc(p.color)}"` : '';
+    if (isLive && !isLive.has(i)) {
+      dim.push(`<circle class="ff-dot ff-dot-dim" ${at} r="${r}" fill="${C.dim}" ` +
+        `fill-opacity="${n > 600 ? 0.07 : 0.18}"/>`);
+      return;
+    }
+    const own = p.color || (grouped ? colorOf.get(gkey(p)) : null);
+    const fill = own ? ` fill="${esc(own)}"` : '';
     if (isHi(p)) {
       front.push(
         `<circle class="ff-dot ff-dot-hi" ${at} r="${r + 1.5}"${fill} fill-opacity="1" ` +
@@ -1171,7 +1253,7 @@ export function scatterChart(container, opts) {
       back.push(`<circle class="ff-dot" ${at} r="${r}"${fill}/>`);
     }
   });
-  parts.push(`<g class="ff-dots" fill="${base}" fill-opacity="${alpha}">${back.join('')}${front.join('')}</g>`);
+  parts.push(`<g class="ff-dots" fill="${base}" fill-opacity="${alpha}">${dim.join('')}${back.join('')}${front.join('')}</g>`);
 
   // --- the two lines, over the dots so neither is buried ------------------
   parts.push(
@@ -1179,7 +1261,9 @@ export function scatterChart(container, opts) {
     `x2="${x(S.hi).toFixed(1)}" y2="${y(S.hi).toFixed(1)}" stroke="${C.dim}" stroke-width="2" ` +
     `stroke-dasharray="1 6" stroke-linecap="round" pointer-events="none"/>`
   );
-  const fit = leastSquares(pts);
+  // Fitted to what is highlighted: every dot, or the focused group alone.
+  const fitPts = isLive ? live.map((i) => pts[i]) : pts;
+  const fit = leastSquares(fitPts);
   const seg = fit ? clipToSquare(fit.slope, fit.intercept, S.lo, S.hi) : null;
   if (seg) {
     parts.push(
@@ -1218,6 +1302,8 @@ export function scatterChart(container, opts) {
   const svg = mount(container, markup);
   if (!svg) return null;
   svg.__ffFit = fit;
+  svg.__ffFitPoints = fitPts;
+  svg.__ffGap = offPerfect(fitPts, fit);
 
   // --- the preview --------------------------------------------------------
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') return svg;
@@ -1237,6 +1323,50 @@ export function scatterChart(container, opts) {
     'overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums';
   container.appendChild(tip);
   const focus = svg.querySelector('.ff-scatter-focus');
+
+  // --- the group chips ------------------------------------------------------
+  // HTML under the svg (css/app.css `.ff-scatter-legend`), built from text
+  // nodes. One listener on the row. A press redraws this chart with the new
+  // focus and then tells the caller, whose numbers follow the solid line.
+  if (grouped) {
+    const legend = document.createElement('div');
+    legend.setAttribute('class', 'ff-scatter-legend');
+    legend.setAttribute('role', 'group');
+    legend.setAttribute('aria-label', o.groupLabel || 'Groups');
+    for (const g of groups) {
+      const b = document.createElement('button');
+      b.setAttribute('type', 'button');
+      b.setAttribute('class', 'ff-chip');
+      b.setAttribute('data-group', String(g.key));
+      b.setAttribute('aria-pressed', focusKey === String(g.key) ? 'true' : 'false');
+      const sw = document.createElement('span');
+      sw.setAttribute('class', 'ff-chip-sw');
+      sw.setAttribute('style', 'background:' + String(g.color || base));
+      b.appendChild(sw);
+      const lb = document.createElement('span');
+      lb.setAttribute('class', 'ff-chip-label');
+      lb.textContent = g.label == null ? String(g.key) : String(g.label);
+      b.appendChild(lb);
+      legend.appendChild(b);
+    }
+    legend.addEventListener('click', (evt) => {
+      const t = evt.target;
+      const b = t && typeof t.closest === 'function' ? t.closest('button[data-group]') : null;
+      if (!b) return;
+      const k = b.getAttribute('data-group');
+      const g = groups.find((it) => String(it.key) === k);
+      o.focus = !g || focusKey === k ? null : g.key;
+      const next = scatterChart(container, o);
+      // The chip pressed was replaced by the redraw: hand the keyboard back.
+      for (const nb of container.querySelectorAll('button[data-group]')) {
+        if (nb.getAttribute('data-group') === k && typeof nb.focus === 'function') {
+          try { nb.focus({ preventScroll: true }); } catch (_) { /* not focusable here */ }
+        }
+      }
+      if (typeof o.onFocus === 'function') o.onFocus(o.focus, next);
+    });
+    container.appendChild(legend);
+  }
 
   let active = -1;        // index of the dot the preview is showing
   let pending = -1;       // a different dot the pointer has moved onto
@@ -1258,7 +1388,9 @@ export function scatterChart(container, opts) {
     const uy = (evt.clientY - g.sr.top) * g.scale;
     const lim = reach * g.scale;
     let best = -1, bestD = lim * lim;
-    for (let i = 0; i < n; i++) {
+    // Only the previewable dots: a dimmed one is background, not a target.
+    for (let k = 0; k < live.length; k++) {
+      const i = live[k];
       const dx = px[i] - ux, dy = py[i] - uy;
       const d = dx * dx + dy * dy;
       if (d <= bestD) { bestD = d; best = i; }
@@ -1306,6 +1438,8 @@ export function scatterChart(container, opts) {
       focus.setAttribute('cy', py[i].toFixed(1));
       focus.setAttribute('opacity', '1');
     }
+    // While a preview is up the whole chart is its link.
+    if (svg.style) svg.style.cursor = p.href ? 'pointer' : '';
 
     // Beside the DOT, not the pointer, so it holds still and can be reached:
     // above-right by default, flipped where it would leave the container.
@@ -1334,6 +1468,7 @@ export function scatterChart(container, opts) {
     tip.setAttribute('hidden', '');
     tip.style.display = 'none';
     if (focus) focus.setAttribute('opacity', '0');
+    if (svg.style) svg.style.cursor = '';
   }
 
   const hideSoon = (ms) => {
@@ -1348,7 +1483,7 @@ export function scatterChart(container, opts) {
   const onMove = (evt) => {
     if (evt.pointerType === 'touch') return;
     const i = nearest(evt, 12);
-    if (svg.style) svg.style.cursor = i >= 0 ? 'pointer' : '';
+    if (svg.style) svg.style.cursor = i >= 0 || active >= 0 ? 'pointer' : '';
     if (i < 0) {
       clearTimeout(switchTimer); switchTimer = null; pending = -1;
       if (active >= 0) hideSoon(350);
@@ -1370,12 +1505,43 @@ export function scatterChart(container, opts) {
     }
   };
 
-  // A TAP (or a click). A finger produces no move before it lands, so the
-  // press itself is the hover; a press on empty plot puts the preview away.
+  // A PRESS. `armed` says whether the click this press ends in should follow
+  // the previewed dot's link.
+  //   finger  no hover exists, so the first tap on a dot only SELECTS it. With
+  //           a dot selected, a tap on a different dot moves the selection
+  //           (browsing), and a tap anywhere else on the chart goes.
+  //   mouse   the dot is already previewed by the hover, so any press goes to
+  //           it - including one that lands on another dot on the way.
+  let armed = false;
   const onDown = (evt) => {
-    const i = nearest(evt, evt.pointerType === 'touch' ? 24 : 12);
-    if (i >= 0) show(i);
-    else hide();
+    const touch = evt.pointerType === 'touch';
+    const i = nearest(evt, touch ? 24 : 12);
+    if (touch) {
+      if (i >= 0 && i !== active) { armed = false; show(i); return; }
+      armed = active >= 0;
+    } else {
+      if (active < 0 && i >= 0) show(i);
+      armed = active >= 0;
+    }
+    // The press has claimed the preview: it must still be there at the click.
+    if (armed) { clearTimeout(hideTimer); hideTimer = null; }
+  };
+
+  const go = typeof o.navigate === 'function'
+    ? o.navigate
+    : (href, evt) => {
+      if (typeof window === 'undefined' || !window) return;
+      const aside = evt && (evt.ctrlKey || evt.metaKey || evt.shiftKey);
+      if (aside && typeof window.open === 'function') window.open(href, '_blank', 'noopener');
+      else if (window.location) window.location.href = href;
+    };
+  const onClick = (evt) => {
+    const was = armed;
+    armed = false;
+    if (!was || active < 0) return;
+    const href = pts[active].href;
+    if (!href) return;
+    go(String(href), evt);
   };
 
   // A lifted finger also "leaves" - which must not take away the preview the
@@ -1389,6 +1555,7 @@ export function scatterChart(container, opts) {
   svg.addEventListener('pointermove', onMove);
   svg.addEventListener('pointerdown', onDown);
   svg.addEventListener('pointerleave', onLeave);
+  svg.addEventListener('click', onClick);
   tip.addEventListener('pointerenter', () => {
     overTip = true;
     clearTimeout(hideTimer); hideTimer = null;
@@ -1403,8 +1570,10 @@ export function scatterChart(container, opts) {
   // A press anywhere else on the page dismisses it (the phone's "tap away").
   const onDoc = (evt) => {
     if (active < 0) return;
+    // The chart is the svg and its preview; the chips under it are not.
     const t = evt.target;
-    if (t && typeof container.contains === 'function' && container.contains(t)) return;
+    const inside = (el) => !!t && !!el && typeof el.contains === 'function' && el.contains(t);
+    if (inside(svg) || inside(tip)) return;
     hide();
   };
   const canDoc = typeof document.addEventListener === 'function';

@@ -14,10 +14,24 @@
 //   3. the preview — a real <a href>, opened by a hover or a tap, that stays
 //      open while the pointer travels from the dot onto it.
 //
+// Tim, 2026-10-04 (later): "allow the new proj vs act boxes ... to be sorted by
+// a variety of metricts ... highlight these specific moments (pick a specific
+// one and have the others just be dimmed background and can't be previewed) or
+// just colorized ... if you click at all while a specific point is selected (or
+// being previewed) whatsoever, bring it to the specific reference" and "show
+// ... how closely the true line is to the dotted line, as well as how closely
+// the true line is to the dots (R^2 value I think?)". So also:
+//   4. `r2` and `offPerfect`, by hand;
+//   5. groups — a colour per group, chips for exactly the groups present, a
+//      pressed chip that dims the rest out of the pointer's reach and refits
+//      the solid line to its own dots;
+//   6. any click on the chart follows the previewed dot — a mouse at once, a
+//      finger on its second tap, and never when the tap lands on another dot.
+//
 // Run:  node scatter-check.mjs
 
 import { parseHTML } from 'linkedom';
-import { leastSquares, scatterChart } from '../js/charts.js';
+import { leastSquares, offPerfect, scatterChart, SERIES_COLORS } from '../js/charts.js';
 
 let pass = 0, fail = 0;
 const ok = (c, msg, extra = '') => {
@@ -83,18 +97,21 @@ const open = (c) => { const t = tipOf(c); return !!t && !t.hasAttribute('hidden'
   close(f.slope, 0.8, 1e-12, 'slope, by hand');
   close(f.intercept, 1.5, 1e-12, 'intercept, by hand');
   close(f.r, 0.8, 1e-12, 'r, by hand');
+  close(f.r2, 0.64, 1e-12, 'r squared, by hand: 0.8 × 0.8');
   eq(f.n, 4, 'n counts the points used');
 
   const perfect = leastSquares([{ x: 0, y: 0 }, { x: 10, y: 10 }]);
   close(perfect.slope, 1, 1e-12, 'two points on y = x: slope 1');
   close(perfect.intercept, 0, 1e-12, 'and intercept 0');
   close(perfect.r, 1, 1e-12, 'and r = 1');
+  close(perfect.r2, 1, 1e-12, 'and R² = 1: every point is on the line');
   eq(perfect.n, 2, 'two points is enough');
 
   const down = leastSquares([{ x: 0, y: 10 }, { x: 10, y: 0 }]);
   close(down.slope, -1, 1e-12, 'a falling line has a negative slope');
   close(down.intercept, 10, 1e-12, 'and its own intercept');
   close(down.r, -1, 1e-12, 'and r = -1');
+  close(down.r2, 1, 1e-12, 'whose square is still 1 — R² has no sign');
 
   // The refusals.
   eq(leastSquares([]), null, 'no points: null');
@@ -107,12 +124,39 @@ const open = (c) => { const t = tipOf(c); return !!t && !t.hasAttribute('hidden'
   close(flat.slope, 0, 1e-12, 'every y equal: slope 0');
   close(flat.intercept, 5, 1e-12, 'intercept is that y');
   eq(flat.r, null, 'and r is null, not NaN or 0 — there is no y-variance to correlate');
+  eq(flat.r2, null, 'and so is R², never NaN');
 
   // Pairs with a missing half are skipped, not counted as zero.
   const holes = leastSquares([{ x: 1, y: 2 }, { x: NaN, y: 3 }, { x: 2, y: null }, { x: 3, y: 4 }]);
   eq(holes.n, 2, 'a pair missing either number is not a point');
   close(holes.slope, 1, 1e-12, 'and does not bend the line');
   close(holes.intercept, 1, 1e-12, 'nor move it');
+}
+
+// ============================================================ offPerfect
+{
+  // BY HAND. The four points above fit actual = 1.5 + 0.8 × projected. The gap
+  // to y = x at each point's x is |1.5 + 0.8x − x| = |1.5 − 0.2x|:
+  //   x = 1: 1.3   x = 2: 1.1   x = 3: 0.9   x = 4: 0.7      mean 4.0 / 4 = 1.0
+  const four = [{ x: 1, y: 2 }, { x: 2, y: 3 }, { x: 3, y: 5 }, { x: 4, y: 4 }];
+  eq(typeof offPerfect, 'function', 'offPerfect is exported');
+  close(offPerfect(four), 1.0, 1e-12, 'the mean gap to the perfect line, by hand');
+  close(offPerfect(four, leastSquares(four)), 1.0, 1e-12, 'the same when handed the fit');
+  close(offPerfect([{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 4, y: 4 }]), 0, 1e-12,
+    'a fit that IS y = x is 0 off perfect');
+  // A line that CROSSES y = x: on y = 10 + 0.5x the gap is |10 − 0.5x|, which
+  // is +10 at x = 0, −10 at x = 40 and −40 at x = 100. As distances that is
+  // (10 + 10 + 40) / 3 = 20; signed they would cancel to −13.3, and a line
+  // through the middle of the perfect one would read as "close".
+  close(offPerfect([{ x: 0, y: 10 }, { x: 40, y: 30 }, { x: 100, y: 60 }]), 20, 1e-9,
+    'gaps either side of the perfect line add up, they do not cancel');
+  // Averaged over the DOTS: two more dots at x = 0 pull it to (10×3 + 10 + 40) / 5.
+  close(offPerfect([{ x: 0, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 10 }, { x: 40, y: 30 }, { x: 100, y: 60 }]),
+    16, 1e-9, 'and it is averaged over the dots, not along the axis');
+  eq(offPerfect([]), null, 'no points: null, never NaN');
+  eq(offPerfect([{ x: 3, y: 4 }]), null, 'one point: no line, so null');
+  eq(offPerfect([{ x: 3, y: 1 }, { x: 3, y: 9 }]), null, 'no slope: null');
+  eq(offPerfect(null), null, 'rubbish in: null');
 }
 
 // ============================================================ scatterChart
@@ -327,8 +371,8 @@ const POINTS = [
   fire(svg, 'pointerleave', { pointerType: 'touch' });
   await sleep(700);
   ok(open(c), 'and it is still there to be tapped after the finger lifts');
-  fire(svg, 'pointerdown', { pointerType: 'touch', clientX: d0.x + 150, clientY: d0.y - 100 });
-  ok(!open(c), 'a tap on empty plot puts it away');
+  fire(document.body, 'pointerdown', { pointerType: 'touch', clientX: 5, clientY: 900 });
+  ok(!open(c), 'a tap somewhere else on the page puts it away');
 }
 {
   // A team dot: no detail line, an Analysis link.
@@ -338,11 +382,11 @@ const POINTS = [
       { x: 90, y: 80, name: 'Other', week: 2 }],
   });
   const [d0, d1] = dots(svg).map((el) => ({ x: num(el, 'cx'), y: num(el, 'cy') }));
-  fire(svg, 'pointerdown', { clientX: d0.x, clientY: d0.y });
+  fire(svg, 'pointerdown', { pointerType: 'touch', clientX: d0.x, clientY: d0.y });
   eq(tipOf(c).getAttribute('href'), 'analysis.html?team=4&week=2#rosterDetail', 'a team dot links to its roster and week');
   ok(/Proj 110\.0 · Actual 131\.5/.test(tipOf(c).textContent), 'with its own numbers', tipOf(c).textContent);
   // A point with no href must not carry the last dot's link.
-  fire(svg, 'pointerdown', { clientX: d1.x, clientY: d1.y });
+  fire(svg, 'pointerdown', { pointerType: 'touch', clientX: d1.x, clientY: d1.y });
   ok(open(c) && /Other/.test(tipOf(c).textContent), 'a point with no link still previews');
   ok(!tipOf(c).hasAttribute('href'), 'and does not borrow the previous dot\'s link');
 }
@@ -367,6 +411,331 @@ const POINTS = [
   eq(all(c, 'svg').length, 1, 'a second render replaces the first');
   eq(all(c, '.ff-scatter-tip').length, 1, 'and there is still one preview element');
   ok(svg && !open(c), 'which starts closed');
+}
+
+// ============================================================ groups
+const chips = (c) => all(c, '.ff-scatter-legend button[data-group]');
+const press = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+const GROUPS = [
+  { key: 'QB', label: 'QB', color: SERIES_COLORS[6] },
+  { key: 'RB', label: 'RB', color: SERIES_COLORS[9] },
+  { key: 'WR', label: 'WR', color: SERIES_COLORS[0] },
+  { key: 'TE', label: 'TE', color: SERIES_COLORS[1] },   // nobody below is a TE
+];
+// RB on y = x; QB on y = 2x; one WR. Far enough apart to aim at one dot.
+const GPOINTS = [
+  { x: 10, y: 10, group: 'RB', name: 'rb1', href: 'r1.html' },
+  { x: 20, y: 40, group: 'QB', name: 'qb1', href: 'q1.html' },
+  { x: 30, y: 30, group: 'RB', name: 'rb2', href: 'r2.html' },
+  { x: 40, y: 80, group: 'QB', name: 'qb2', href: 'q2.html' },
+  { x: 50, y: 50, group: 'RB', name: 'rb3', href: 'r3.html' },
+  { x: 70, y: 20, group: 'WR', name: 'wr1', href: 'w1.html' },
+];
+const lineOf = (svg, sel) => {
+  const l = all(svg, sel)[0];
+  return l ? ['x1', 'y1', 'x2', 'y2'].map((a) => l.getAttribute(a)).join(',') : null;
+};
+const byI = (svg) => {
+  const m = [];
+  for (const el of dots(svg)) m[Number(el.getAttribute('data-i'))] = el;
+  return m;
+};
+const xy = (el) => ({ x: num(el, 'cx'), y: num(el, 'cy') });
+
+// --- default: no grouping draws exactly what it drew before ------------------
+{
+  const plain = draw(host(), { points: GPOINTS.map(({ group, ...p }) => p) });
+  eq(all(plain.parentNode, '.ff-scatter-legend').length, 0, 'no groups: no legend');
+  eq(all(plain, 'circle.ff-dot-dim').length, 0, 'and no dimmed dots');
+  ok(dots(plain).every((el) => !el.hasAttribute('fill')), 'and every dot takes the one base colour');
+  eq(plain.querySelector('g.ff-dots').getAttribute('fill-opacity'), '0.7', 'at the opacity it always had');
+  // Points that carry a group but a chart given no groups: still the plain chart.
+  const same = draw(host(), { points: GPOINTS, groups: [], focus: 'RB' });
+  eq(same.outerHTML, plain.outerHTML, 'an empty group list (and a focus with nothing to focus) changes nothing');
+}
+
+// --- colourised --------------------------------------------------------------
+{
+  const c = host();
+  const svg = draw(c, { points: GPOINTS, groups: GROUPS, groupLabel: 'Position' });
+  const d = byI(svg);
+  GPOINTS.forEach((p, i) => {
+    const want = GROUPS.find((g) => g.key === p.group).color;
+    eq(d[i].getAttribute('fill'), want, `dot ${p.name} takes its group's colour`);
+  });
+  eq(d[0].getAttribute('fill'), SERIES_COLORS[9], 'RB is the same slot whoever else is plotted');
+  eq(all(svg, 'circle.ff-dot-dim').length, 0, 'colouring alone dims nothing');
+  const ch = chips(c);
+  eq(ch.map((b) => b.getAttribute('data-group')).join(','), 'QB,RB,WR',
+    'the legend lists exactly the groups that own a dot, in the caller\'s order (no TE)');
+  eq(ch.map((b) => b.textContent.trim()).join(','), 'QB,RB,WR', 'each chip carries its label');
+  ok(ch.every((b) => b.tagName === 'BUTTON' && b.getAttribute('aria-pressed') === 'false'),
+    'chips are buttons, none pressed');
+  ok(ch.every((b, i) => (b.querySelector('.ff-chip-sw').getAttribute('style') || '')
+    .includes(GROUPS[i].color)), 'and each shows its colour');
+  eq(c.querySelector('.ff-scatter-legend').getAttribute('aria-label'), 'Position', 'the row is named');
+  ok(!svg.contains(c.querySelector('.ff-scatter-legend')), 'the legend sits outside the svg: it is not the chart');
+  // The fit is every dot's until something is focused.
+  const fit = leastSquares(GPOINTS);
+  close(svg.__ffFit.slope, fit.slope, 1e-12, 'unfocused, the line is fitted to every dot');
+  eq(svg.__ffFitPoints.length, 6, 'all six of them');
+  close(svg.__ffGap, offPerfect(GPOINTS), 1e-12, 'and the gap to perfect is theirs');
+
+  // A label is untrusted text.
+  const c2 = host();
+  const nasty = '<img src=x onerror=alert(1)>';
+  draw(c2, { points: [{ x: 1, y: 2, group: 'a' }, { x: 3, y: 5, group: 'a' }], groups: [{ key: 'a', label: nasty, color: 'red' }] });
+  eq(all(c2, 'img').length, 0, 'a group label cannot open an element');
+  ok(chips(c2)[0].textContent.includes(nasty), 'and reads back as written');
+}
+
+// --- highlight one -----------------------------------------------------------
+{
+  const c = host();
+  const seen = [];
+  const first = draw(c, {
+    points: GPOINTS, groups: GROUPS,
+    onFocus: (key, svg) => seen.push([key, svg]),
+    navigate: () => {},
+  });
+  const perfect0 = lineOf(first, 'line.ff-perfect');
+  const fit0 = lineOf(first, 'line.ff-fit');
+  const place0 = dots(first).map((el) => `${el.getAttribute('data-i')}:${el.getAttribute('cx')},${el.getAttribute('cy')}`).sort().join(' ');
+
+  press(chips(c).find((b) => b.getAttribute('data-group') === 'RB'));
+  const svg = c.querySelector('svg');
+  eq(seen.length, 1, 'pressing a chip tells the caller once');
+  eq(seen[0] && seen[0][0], 'RB', 'which group is focused');
+  eq(seen[0] && seen[0][1], svg, 'and hands over the redrawn chart');
+  eq(all(c, 'svg').length, 1, 'still one chart');
+  eq(chips(c).map((b) => `${b.getAttribute('data-group')}=${b.getAttribute('aria-pressed')}`).join(' '),
+    'QB=false RB=true WR=false', 'the pressed chip says so (aria-pressed)');
+
+  const d = byI(svg);
+  const dimmed = (el) => /\bff-dot-dim\b/.test(el.getAttribute('class'));
+  eq(GPOINTS.map((p, i) => (dimmed(d[i]) ? 'dim' : 'on')).join(','), 'on,dim,on,dim,on,dim',
+    'the focused group keeps its dots; every other dot is dimmed');
+  ok([0, 2, 4].every((i) => d[i].getAttribute('fill') === SERIES_COLORS[9]), 'the focused dots keep their colour');
+  ok([1, 3, 5].every((i) => d[i].getAttribute('fill') !== GROUPS[0].color && d[i].getAttribute('fill') !== GROUPS[2].color),
+    'the dimmed ones lose theirs');
+  ok([1, 3, 5].every((i) => Number(d[i].getAttribute('fill-opacity')) <= 0.2), 'and fade into the background');
+  const order = dots(svg).map(dimmed);
+  eq(order.lastIndexOf(true) < order.indexOf(false), true, 'dimmed dots are painted first, under the focused ones');
+  const place1 = dots(svg).map((el) => `${el.getAttribute('data-i')}:${el.getAttribute('cx')},${el.getAttribute('cy')}`).sort().join(' ');
+  eq(place1, place0, 'no dot moves: the axes are still fitted to every dot');
+  eq(lineOf(svg, 'line.ff-perfect'), perfect0, 'the dotted perfect line never changes');
+
+  // The solid line is the focused group's own: RB sit exactly on y = x.
+  close(svg.__ffFit.slope, 1, 1e-12, 'the solid line is refitted to the focused dots: slope 1');
+  close(svg.__ffFit.intercept, 0, 1e-9, 'intercept 0');
+  eq(svg.__ffFit.n, 3, 'from three dots');
+  eq(svg.__ffFitPoints.length, 3, 'which the chart hands back');
+  close(svg.__ffGap, 0, 1e-9, 'and on y = x it is 0 off perfect');
+  ok(lineOf(svg, 'line.ff-fit') !== fit0, 'so the drawn line moved');
+  eq(lineOf(svg, 'line.ff-fit'), perfect0.split(',').join(','), 'onto the diagonal');
+
+  // A dimmed dot cannot be previewed, by hover or by tap.
+  const q = xy(d[3]);             // qb2 at (40, 80): nothing focused within reach
+  fire(svg, 'pointermove', { clientX: q.x, clientY: q.y });
+  ok(!open(c), 'hovering a dimmed dot opens nothing');
+  fire(svg, 'pointerdown', { pointerType: 'touch', clientX: q.x, clientY: q.y });
+  ok(!open(c), 'nor does tapping it');
+  const r = xy(d[2]);
+  fire(svg, 'pointermove', { clientX: r.x, clientY: r.y });
+  ok(open(c) && /rb2/.test(tipOf(c).textContent), 'a focused dot still previews');
+
+  // Pressing the same chip again clears the focus.
+  press(chips(c).find((b) => b.getAttribute('data-group') === 'RB'));
+  const back = c.querySelector('svg');
+  eq(seen.length, 2, 'pressing it again tells the caller again');
+  eq(seen[1] && seen[1][0], null, 'that nothing is focused');
+  eq(all(back, 'circle.ff-dot-dim').length, 0, 'and every dot is back');
+  ok(chips(c).every((b) => b.getAttribute('aria-pressed') === 'false'), 'no chip pressed');
+  eq(lineOf(back, 'line.ff-fit'), fit0, 'the line is every dot\'s again');
+  const q2 = xy(byI(back)[3]);
+  fire(back, 'pointermove', { clientX: q2.x, clientY: q2.y });
+  ok(open(c) && /qb2/.test(tipOf(c).textContent), 'and the dot that was dimmed previews again');
+
+  // Another chip moves the focus rather than adding to it.
+  press(chips(c).find((b) => b.getAttribute('data-group') === 'RB'));
+  press(chips(c).find((b) => b.getAttribute('data-group') === 'QB'));
+  eq(chips(c).filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.getAttribute('data-group')).join(','),
+    'QB', 'one group is focused at a time');
+  close(c.querySelector('svg').__ffFit.slope, 2, 1e-12, 'and the line follows it (QB sit on y = 2x)');
+  // (20,40) and (40,80) on y = 2x: gap to y = x is x itself, mean 30.
+  close(c.querySelector('svg').__ffGap, 30, 1e-9, 'as does the gap to perfect, by hand');
+
+  // A focus the caller passes in is honoured; one that names no group is not.
+  const pre = draw(host(), { points: GPOINTS, groups: GROUPS, focus: 'WR' });
+  eq(all(pre, 'circle.ff-dot-dim').length, 5, 'opts.focus focuses on the first draw');
+  eq(pre.__ffFit, null, 'one focused dot has no line');
+  eq(pre.__ffGap, null, 'and no gap — null, not NaN');
+  eq(all(pre, 'line.ff-fit').length, 0, 'so none is drawn');
+  const bad = draw(host(), { points: GPOINTS, groups: GROUPS, focus: 'TE' });
+  eq(all(bad, 'circle.ff-dot-dim').length, 0, 'a focus on a group with no dots dims nothing');
+}
+
+// --- 2,700 dots, one group focused: only that group is searched --------------
+{
+  const pts = [];
+  for (let i = 0; i < 2700; i++) pts.push({ x: (i * 37) % 45, y: (i * 91) % 52, name: 'P' + i, group: i % 17, href: `p${i}.html` });
+  const groups = [];
+  for (let w = 0; w < 17; w++) groups.push({ key: w, label: `Wk ${w + 1}`, color: SERIES_COLORS[w % 10] });
+  const c = host();
+  const svg = draw(c, { points: pts, groups, focus: 4 });
+  eq(chips(c).length, 17, 'a chip per week');
+  eq(dots(svg).length - all(svg, 'circle.ff-dot-dim').length, pts.filter((p) => p.group === 4).length,
+    'only the focused week stays lit');
+  // Sweep the whole plot: whatever opens is in the focused group.
+  let opened = 0, wrong = 0;
+  for (const el of dots(svg)) {
+    const at = xy(el);
+    fire(svg, 'pointerdown', { pointerType: 'touch', clientX: at.x, clientY: at.y });
+    if (!open(c)) continue;
+    opened++;
+    const m = /^P(\d+)/.exec(tipOf(c).textContent);
+    if (!m || Number(m[1]) % 17 !== 4) wrong++;
+  }
+  ok(opened > 0, 'taps across the plot do open previews', String(opened));
+  eq(wrong, 0, 'and never one for a dimmed dot');
+}
+
+// ============================================================ any click goes
+{
+  // A MOUSE: the hover previews; a click anywhere on the chart follows it.
+  const c = host();
+  const went = [];
+  const svg = draw(c, { points: POINTS, navigate: (href) => went.push(href) });
+  const [d0, d1] = dots(svg).map(xy);
+  const empty = { clientX: (d0.x + d1.x) / 2, clientY: (d0.y + d1.y) / 2 };
+
+  fire(svg, 'pointerdown', empty);
+  fire(svg, 'click', empty);
+  eq(went.length, 0, 'with nothing previewed a click on the chart goes nowhere');
+
+  fire(svg, 'pointermove', { clientX: d0.x, clientY: d0.y });
+  ok(open(c), 'hovering previews');
+  eq(went.length, 0, 'and a hover alone goes nowhere');
+  fire(svg, 'pointermove', empty);                 // off the dot, preview still up
+  fire(svg, 'pointerdown', empty);
+  fire(svg, 'click', empty);
+  eq(went.join('|'), 'waivers.html?player=4242&week=3',
+    'a click on EMPTY chart, away from the dot and the preview box, follows the previewed dot');
+
+  // …and on the dot itself.
+  went.length = 0;
+  fire(svg, 'pointermove', { clientX: d1.x, clientY: d1.y });
+  await sleep(200);
+  fire(svg, 'pointerdown', { clientX: d1.x, clientY: d1.y });
+  fire(svg, 'click', { clientX: d1.x, clientY: d1.y });
+  eq(went.join('|'), 'waivers.html?player=7&week=9', 'a click on the dot follows that dot');
+
+  // The press holds the preview: it cannot time out between press and click.
+  went.length = 0;
+  fire(svg, 'pointermove', { clientX: d0.x, clientY: d0.y });
+  await sleep(200);
+  fire(svg, 'pointermove', empty);                 // starts the 350 ms put-away
+  fire(svg, 'pointerdown', empty);
+  await sleep(600);
+  fire(svg, 'click', empty);
+  eq(went.join('|'), 'waivers.html?player=4242&week=3', 'a slow click still lands on what was previewed');
+
+  // Once the preview has gone, the chart is not a link any more.
+  went.length = 0;
+  fire(svg, 'pointerleave', {});
+  await sleep(700);
+  ok(!open(c), 'the preview has timed out');
+  fire(svg, 'pointerdown', empty);
+  fire(svg, 'click', empty);
+  eq(went.length, 0, 'so a click goes nowhere');
+
+  // The preview is still a real link for keyboards and "open in new tab".
+  fire(svg, 'pointermove', { clientX: d0.x, clientY: d0.y });
+  eq(tipOf(c).tagName, 'A', 'the preview is still an <a>');
+  eq(tipOf(c).getAttribute('href'), 'waivers.html?player=4242&week=3', 'with its own href');
+}
+{
+  // A FINGER: tap selects; the next tap anywhere goes; another dot switches.
+  const c = host();
+  const went = [];
+  const svg = draw(c, { points: POINTS, navigate: (href) => went.push(href) });
+  const [d0, d1] = dots(svg).map(xy);
+  const empty = { pointerType: 'touch', clientX: (d0.x + d1.x) / 2, clientY: (d0.y + d1.y) / 2 };
+  const tapAt = (at) => {
+    fire(svg, 'pointerdown', { pointerType: 'touch', ...at });
+    fire(svg, 'pointerup', { pointerType: 'touch', ...at });
+    fire(svg, 'click', { pointerType: 'touch', ...at });
+  };
+
+  tapAt(empty);
+  eq(went.length, 0, 'a tap on empty chart with nothing selected goes nowhere');
+  ok(!open(c), 'and opens nothing');
+
+  tapAt({ clientX: d0.x + 6, clientY: d0.y + 6 });
+  ok(open(c) && /Sam Example/.test(tipOf(c).textContent), 'the first tap on a dot selects it');
+  eq(went.length, 0, 'and does NOT navigate — the click that ends that same tap is not a second tap');
+
+  tapAt({ clientX: d1.x, clientY: d1.y });
+  ok(open(c) && /Far Away/.test(tipOf(c).textContent), 'a tap on a DIFFERENT dot switches the selection');
+  eq(went.length, 0, 'and does not navigate');
+
+  tapAt({ clientX: d0.x, clientY: d0.y });
+  ok(/Sam Example/.test(tipOf(c).textContent), 'and back again');
+  eq(went.length, 0, 'still without navigating');
+
+  tapAt(empty);
+  eq(went.join('|'), 'waivers.html?player=4242&week=3', 'the next tap ANYWHERE on the chart follows the selected dot');
+
+  went.length = 0;
+  tapAt({ clientX: d0.x, clientY: d0.y });
+  eq(went.join('|'), 'waivers.html?player=4242&week=3', 'and so does a second tap on the selected dot itself');
+
+  // A tap outside the chart dismisses, and then the chart is inert again.
+  went.length = 0;
+  fire(document.body, 'pointerdown', { pointerType: 'touch', clientX: 5, clientY: 900 });
+  ok(!open(c), 'a tap outside the chart dismisses the selection');
+  tapAt(empty);
+  eq(went.length, 0, 'after which a tap on the chart goes nowhere');
+
+  // A selected dot with no link has nowhere to go.
+  const c2 = host();
+  const went2 = [];
+  const svg2 = draw(c2, { points: [{ x: 1, y: 1, name: 'No link' }, { x: 9, y: 9, name: 'b' }], navigate: (h) => went2.push(h) });
+  const e0 = xy(dots(svg2)[0]);
+  fire(svg2, 'pointerdown', { pointerType: 'touch', clientX: e0.x, clientY: e0.y });
+  fire(svg2, 'click', { pointerType: 'touch', clientX: e0.x, clientY: e0.y });
+  fire(svg2, 'pointerdown', { pointerType: 'touch', clientX: e0.x, clientY: e0.y });
+  fire(svg2, 'click', { pointerType: 'touch', clientX: e0.x, clientY: e0.y });
+  eq(went2.length, 0, 'a dot without an href never navigates');
+}
+{
+  // The chips are not the chart: pressing one never follows a selected dot.
+  const c = host();
+  const went = [];
+  const svg = draw(c, { points: GPOINTS, groups: GROUPS, navigate: (href) => went.push(href) });
+  const at = xy(byI(svg)[0]);
+  fire(svg, 'pointerdown', { pointerType: 'touch', clientX: at.x, clientY: at.y });
+  fire(svg, 'click', { pointerType: 'touch', clientX: at.x, clientY: at.y });
+  ok(open(c), 'a dot is selected');
+  const chip = chips(c)[0];
+  fire(chip, 'pointerdown', { pointerType: 'touch' });
+  ok(!open(c), 'a press on a chip is a press outside the chart: the selection goes');
+  press(chip);
+  eq(went.length, 0, 'and the chip press does not navigate');
+  eq(chips(c)[0].getAttribute('aria-pressed'), 'true', 'it focuses its group instead');
+}
+{
+  // Without a `navigate` hook the page itself is sent there.
+  const c = host();
+  const svg = draw(c, { points: POINTS });
+  const d0 = xy(dots(svg)[0]);
+  const had = window.location;
+  window.location = { href: 'about:blank' };
+  fire(svg, 'pointermove', { clientX: d0.x, clientY: d0.y });
+  fire(svg, 'pointerdown', { clientX: d0.x + 80, clientY: d0.y - 50 });
+  fire(svg, 'click', { clientX: d0.x + 80, clientY: d0.y - 50 });
+  eq(window.location.href, 'waivers.html?player=4242&week=3', 'the default navigation sets the page\'s location');
+  window.location = had;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

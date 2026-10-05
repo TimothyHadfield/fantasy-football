@@ -1228,7 +1228,7 @@ function renderAccuracy() {
 // on Analysis in that week, a player to the Players page in that week.
 
 /** What the line says, in words, for the note behind the toggle. */
-function fitWords(fit, n) {
+function fitWords(fit, n, only = '') {
   if (!fit) {
     return 'There is no solid line yet: a line needs at least two dots that differ in ' +
       'their projection.';
@@ -1240,9 +1240,13 @@ function fitWords(fit, n) {
     : b < 1
       ? 'Under 1: big projections have come in low and small ones high.'
       : 'Over 1: big projections have been beaten and small ones missed.';
-  return `<strong>Solid line</strong> = the least-squares line through these ${n.toLocaleString('en-US')} ` +
-    `dots, the straight line with the smallest total squared miss: actual = ` +
+  const count = n.toLocaleString('en-US');
+  return `<strong>Solid line</strong> = the least-squares line through ` +
+    (only ? `the ${count} highlighted dots (${esc(only)})` : `these ${count} dots`) +
+    `, the straight line with the smallest total squared miss: actual = ` +
     `${a < 0 ? '−' : ''}${Math.abs(a).toFixed(1)} + ${b.toFixed(2)} × projected. ` +
+    'The first number is what a projection of 0 would score on this line; the slope is the ' +
+    'points scored per extra point projected. ' +
     `<strong>Slope ${b.toFixed(2)}.</strong> ${lean}` +
     (fit.r === null
       ? ''
@@ -1256,6 +1260,144 @@ const FIT_PERFECT =
   'put every dot. Above it beat the projection, below it fell short. Both axes share one ' +
   'scale, so the dotted line is a true diagonal.';
 
+// The two numbers above each graph, and their basis (rule 7).
+const FIT_NUMBERS =
+  '<strong>R²</strong> = how closely the dots follow the solid line: r squared, the share of ' +
+  'the differences in score that line accounts for. 1 = every dot on it, 0 = no relation. ' +
+  '<strong>Off perfect</strong> = how far the solid line sits from the dotted one: the ' +
+  'up-and-down gap between the two, in points, averaged over every dot&rsquo;s projection. ' +
+  '0 = the lines coincide. Both use the dots the solid line is fitted to.';
+
+const FIT_GROUPS =
+  '<strong>Colour by</strong> colours the dots by group. Press a group under the graph to ' +
+  'highlight it: the others dim and cannot be opened, and the solid line, R² and Off perfect ' +
+  'are refitted to that group alone. Press it again to clear.';
+
+// ---- "Colour by" (Tim, 2026-10-04: "sorted by a variety of metricts. For
+// example Position, User (team), week ... highlight these specific moments ...
+// or just colorized (ex: RB-red, QB-green etc. ex: week 1-red, week 2-yellow)").
+// The grouping is remembered per graph; the highlighted group is not.
+const FIT_BY = { teams: ['none', 'team', 'week'], players: ['none', 'position', 'team', 'week'] };
+const FIT_PREF = { teams: 'fitTeamsBy', players: 'fitPlayersBy' };
+const fitBy = { teams: 'none', players: 'none' };
+const fitFocus = { teams: null, players: null };
+for (const which of Object.keys(fitBy)) {
+  const saved = prefs.get(FIT_PREF[which], 'none');
+  if (FIT_BY[which].includes(saved)) fitBy[which] = saved;
+}
+
+// A position keeps its colour whoever is on the graph (slots of SERIES_COLORS,
+// from 0): RB red and QB green are Tim's own example.
+const POSITION_SLOT = { QB: 6, RB: 9, WR: 0, TE: 1, K: 3, DST: 4 };
+const POSITION_SPARE = [5, 7, 2, 8];
+// A defence is 'DST' in the data and "D/ST" to a reader (as on the player card).
+const POSITION_LABEL = { DST: 'D/ST' };
+
+/** Weeks run in order along one hue ramp, red first, the latest week violet. */
+const weekColor = (i, count) =>
+  `hsl(${count > 1 ? Math.round((300 * i) / (count - 1)) : 0}, 70%, 60%)`;
+
+/** The groups one "Colour by" choice makes: their order, labels, colours, and
+ *  which one a dot belongs to. */
+function fitGroups(by, pts) {
+  const s = state.stats;
+  if (by === 'team') {
+    return {
+      label: 'Team',
+      // The same slot per team as the line charts above (seriesFor).
+      groups: s.teams.map((t, i) => ({
+        key: t.id, label: t.name, color: SERIES_COLORS[i % SERIES_COLORS.length],
+      })),
+      of: (p) => p.teamId,
+    };
+  }
+  if (by === 'week') {
+    const w = s.weekNumbers;
+    return {
+      label: 'Week',
+      groups: w.map((wk, i) => ({ key: wk, label: `Wk ${wk}`, color: weekColor(i, w.length) })),
+      of: (p) => p.week,
+    };
+  }
+  const of = (p) => (p.position === 'D/ST' ? 'DST' : p.position || 'Other');
+  const extra = [...new Set(pts.map(of))].filter((k) => !(k in POSITION_SLOT)).sort();
+  return {
+    label: 'Position',
+    groups: [
+      ...Object.keys(POSITION_SLOT).map((k) => ({
+        key: k, label: POSITION_LABEL[k] || k, color: SERIES_COLORS[POSITION_SLOT[k]],
+      })),
+      ...extra.map((k, i) => ({
+        key: k, label: k, color: SERIES_COLORS[POSITION_SPARE[i % POSITION_SPARE.length]],
+      })),
+    ],
+    of,
+  };
+}
+
+/** Draw one of the two graphs with its grouping; `after(svg, only)` repaints
+ *  whatever follows the solid line (the two numbers, the note). */
+function drawFit(which, box, pts, opts, after) {
+  const by = fitBy[which];
+  const g = by === 'none' ? null : fitGroups(by, pts);
+  // A focus left over from other data (another league) names no dot here.
+  if (!g || (fitFocus[which] != null &&
+      !pts.some((p) => String(g.of(p)) === String(fitFocus[which])))) {
+    fitFocus[which] = null;
+  }
+  const only = () => {
+    const hit = g && fitFocus[which] != null
+      ? g.groups.find((it) => String(it.key) === String(fitFocus[which]))
+      : null;
+    return hit ? hit.label : '';
+  };
+  const svg = scatterChart(box, {
+    ...opts,
+    points: g ? pts.map((p) => ({ ...p, group: g.of(p) })) : pts,
+    groups: g ? g.groups : undefined,
+    groupLabel: g ? g.label : undefined,
+    focus: g ? fitFocus[which] ?? undefined : undefined,
+    onFocus: (key, next) => { fitFocus[which] = key; after(next, only()); },
+  });
+  after(svg, only());
+}
+
+/** The two figures above a graph. A dash when there is no line, never NaN. */
+function paintFitStats(prefix, svg) {
+  const fit = (svg && svg.__ffFit) || null;
+  const gap = svg ? svg.__ffGap : null;
+  const r2 = $(`${prefix}R2`);
+  const off = $(`${prefix}Gap`);
+  if (r2) r2.textContent = fit && Number.isFinite(fit.r2) ? fit.r2.toFixed(2) : '—';
+  if (off) off.textContent = Number.isFinite(gap) ? `${gap.toFixed(1)} pts` : '—';
+}
+
+function paintFitBy() {
+  for (const which of Object.keys(fitBy)) {
+    const seg = $(FIT_PREF[which]);
+    if (!seg) continue;
+    seg.querySelectorAll('button[data-by]').forEach((b) => {
+      const on = b.dataset.by === fitBy[which];
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+}
+
+for (const which of Object.keys(fitBy)) {
+  const seg = $(FIT_PREF[which]);
+  if (seg) {
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-by]');
+      if (!btn || !FIT_BY[which].includes(btn.dataset.by)) return;
+      fitBy[which] = btn.dataset.by;
+      fitFocus[which] = null;           // another grouping clears the highlight
+      prefs.set(FIT_PREF[which], fitBy[which] === 'none' ? null : fitBy[which]);
+      renderFit();
+    });
+  }
+}
+
 function renderFit() {
   const s = state.stats;
   const teamsBox = $('chartFitTeams');
@@ -1267,11 +1409,13 @@ function renderFit() {
   show('panelFitTeams', !none);
   show('panelFitPlayers', !none);
   if (none) return;
+  paintFitBy();
 
   const weeks = s.weekNumbers;
   const span = weeks.length === 1
     ? `week ${weeks[0]}`
     : `weeks ${weeks[0]}–${weeks[weeks.length - 1]}`;
+  const fitN = (svg) => ((svg && svg.__ffFitPoints) || []).length;
 
   // ---- teams ----
   const teamPts = teamFitPoints(s).map((p) => ({
@@ -1280,31 +1424,36 @@ function renderFit() {
     name: p.name,
     week: p.week,
     key: p.teamId,
+    teamId: p.teamId,
     // Rule 9: the link carries the team id, never its label.
     href: `analysis.html?team=${encodeURIComponent(p.teamId)}&week=${encodeURIComponent(p.week)}#rosterDetail`,
   }));
-  scatterChart(teamsBox, {
-    points: teamPts,
+  const teamCount = new Set(teamPts.map((p) => p.key)).size;
+  drawFit('teams', teamsBox, teamPts, {
     xLabel: 'Projected',
     yLabel: 'Actual',
     height: 320,
     highlight: state.highlight ?? undefined,
     empty: 'No finished week has a projection yet',
+  }, (svg, only) => {
+    paintFitStats('fitTeams', svg);
+    $('fitTeamsNote').innerHTML = teamPts.length
+      ? paras([
+        '<strong>Each dot is one team in one finished week.</strong> Across is ESPN&rsquo;s ' +
+          'projection for the lineup it started; up is what that lineup scored. These are the ' +
+          'numbers behind Proj, Avg and Weekly luck, so the graphs cannot disagree. ' +
+          `${teamPts.length.toLocaleString('en-US')} dots: ${plural(teamCount, 'team')}, ${span}. ` +
+          'Your team&rsquo;s dots are ringed when My team is set.',
+        FIT_PERFECT,
+        fitWords(svg && svg.__ffFit, fitN(svg), only),
+        FIT_NUMBERS,
+        FIT_GROUPS,
+        'Hover or tap a dot for the team and week; a click or tap anywhere on the graph then ' +
+          'opens that roster on Analysis.',
+      ])
+      : '';
+    tuckIfEmpty('fitTeamsNote');
   });
-  const teamCount = new Set(teamPts.map((p) => p.key)).size;
-  $('fitTeamsNote').innerHTML = teamPts.length
-    ? paras([
-      '<strong>Each dot is one team in one finished week.</strong> Across is ESPN&rsquo;s ' +
-        'projection for the lineup it started; up is what that lineup scored. These are the ' +
-        'numbers behind Proj, Avg and Weekly luck, so the graphs cannot disagree. ' +
-        `${teamPts.length.toLocaleString('en-US')} dots: ${plural(teamCount, 'team')}, ${span}. ` +
-        'Your team&rsquo;s dots are ringed when My team is set.',
-      FIT_PERFECT,
-      fitWords(leastSquares(teamPts), teamPts.length),
-      'Hover or tap a dot for the team and week; the preview opens that roster on Analysis.',
-    ])
-    : '';
-  tuckIfEmpty('fitTeamsNote');
 
   // ---- players ----
   const held = state.weekTeams && state.weekTeams.key === scheduleKey() ? state.weekTeams.map : null;
@@ -1318,6 +1467,7 @@ function renderFit() {
         ? 'Reading each week’s rosters…'
         : 'No weekly rosters could be read',
     });
+    paintFitStats('fitPlayers', null);
     $('fitPlayersNote').textContent = '';
     tuckIfEmpty('fitPlayersNote');
     return;
@@ -1330,37 +1480,43 @@ function renderFit() {
     detail: [p.position, p.proTeam].filter(Boolean).join(' · '),
     week: p.week,
     key: `p${p.playerId}`,
+    teamId: p.teamId,
+    position: p.position,
     href: `waivers.html?player=${encodeURIComponent(p.playerId)}&week=${encodeURIComponent(p.week)}`,
   }));
-  scatterChart(playersBox, {
-    points: playerPts,
+  const readWeeks = weeks.filter((w) => held.has(w));
+  const missing = weeks.filter((w) => !held.has(w));
+  drawFit('players', playersBox, playerPts, {
     xLabel: 'Projected',
     yLabel: 'Actual',
     height: 320,
     empty: 'No player has both a projection and a score yet',
+  }, (svg, only) => {
+    paintFitStats('fitPlayers', svg);
+    $('fitPlayersNote').innerHTML = playerPts.length
+      ? paras([
+        '<strong>Each dot is one player in one finished week</strong> — everyone on a league ' +
+          'roster that week, starters and bench. Across is ESPN&rsquo;s projection for him that ' +
+          'week; up is what he scored. ' +
+          `${playerPts.length.toLocaleString('en-US')} dots over ${plural(readWeeks.length, 'week')} ` +
+          `(${span}).`,
+        'Left out: a player with no projection or no score, and one projected 0 who scored 0 ' +
+          '(a bye, or ruled out) — he was not expected to play and did not, which tests nothing. ' +
+          'Free agents are not plotted.' +
+          (missing.length
+            ? ` ${plural(missing.length, 'week')} could not be read (${missing.join(', ')}) and ` +
+              `${missing.length === 1 ? 'is' : 'are'} missing from the graph.`
+            : ''),
+        FIT_PERFECT,
+        fitWords(svg && svg.__ffFit, fitN(svg), only),
+        FIT_NUMBERS,
+        FIT_GROUPS,
+        'Hover or tap a dot for the player and week; a click or tap anywhere on the graph then ' +
+          'opens him on Players.',
+      ])
+      : '';
+    tuckIfEmpty('fitPlayersNote');
   });
-  const readWeeks = weeks.filter((w) => held.has(w));
-  const missing = weeks.filter((w) => !held.has(w));
-  $('fitPlayersNote').innerHTML = playerPts.length
-    ? paras([
-      '<strong>Each dot is one player in one finished week</strong> — everyone on a league ' +
-        'roster that week, starters and bench. Across is ESPN&rsquo;s projection for him that ' +
-        'week; up is what he scored. ' +
-        `${playerPts.length.toLocaleString('en-US')} dots over ${plural(readWeeks.length, 'week')} ` +
-        `(${span}).`,
-      'Left out: a player with no projection or no score, and one projected 0 who scored 0 ' +
-        '(a bye, or ruled out) — he was not expected to play and did not, which tests nothing. ' +
-        'Free agents are not plotted.' +
-        (missing.length
-          ? ` ${plural(missing.length, 'week')} could not be read (${missing.join(', ')}) and ` +
-            `${missing.length === 1 ? 'is' : 'are'} missing from the graph.`
-          : ''),
-      FIT_PERFECT,
-      fitWords(leastSquares(playerPts), playerPts.length),
-      'Hover or tap a dot for the player and week; the preview opens him on Players.',
-    ])
-    : '';
-  tuckIfEmpty('fitPlayersNote');
 }
 
 // The league's own week, as a baseline under the grid. It was already computed
