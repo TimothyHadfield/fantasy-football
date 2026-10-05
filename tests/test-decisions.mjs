@@ -64,7 +64,7 @@ const STATS = {
   36: ['Mike Evans', 'WR', [12, 12], [14, 12], [10, 12], [11, 12]],
   37: ['Lee Late', 'WR', [3, 5], [4, 5], [17, 11], [6, 9]],
   38: ['Will Wire', 'WR', [1, 5], [2, 5], [3, 5], [15, 14]],
-  39: ['Ben Benchy', 'WR', [3, 4], [2, 4], [1, 4], [4, 4]],
+  39: ['Ben Benchy', 'WR', [3, 4], [2, 4], [1, 11], [4, 4]],
   41: ['Ed Extra', 'WR', [0, 3], [0, 3], [0, 3], [2, 3]],
 };
 const SLOT_NAME = { 0: 'QB', 2: 'RB', 4: 'WR', 23: 'FLEX', 20: 'BE' };
@@ -212,17 +212,25 @@ ok(!cals.some((d) => d.id === 'move:m1'), 'another team’s move is not on Cal�
 //   Tim   wk2 58 - Young 12 + Lock 26 = 72 · wk3 58 - 9 + 25 = 74 · wk4 55 - 20 + 28 = 63
 // Mitch cannot add Lock. His QB slot goes to his best PROJECTED quarterback:
 // Mayfield (17) over Stroud (12), though Stroud scored 26 that week.
-//   Mitch wk2 63 - Lock 26 + Mayfield 12 = 49 · wk3 68 - 25 + 14 = 57
-// In week 4 he still adds Yates (the Lock he "drops" is not his): his roster is
-// the real one again, so 61 exactly.
+//   Mitch wk2 63 - Lock 26 + Mayfield 12 = 49
+// And because the pickup could not happen, he does not cut Benchy for nothing:
+// Benchy stays on his roster. Week 2 Benchy (projected 4) starts over nobody.
+// Week 3 Benchy is projected 11 to the FLEX Wilson's 10, so he starts, and
+// scores 1 to Wilson's 11:
+//   Mitch wk3 68 - Lock 25 + Mayfield 14 - Wilson 11 + Benchy 1 = 47
+// In week 4 he still adds Yates (the Lock he "drops" is not his). His lineup is
+// the real one again (Benchy, projected 4, beats nobody), so 61 exactly, with
+// seven men on a roster of six.
 const m1 = D.mirror(world, dM1);
 eq(totals(m1, TIM), [62, 72, 74, 63], 'm1 undone: Tim scores with Lock instead of Young, both halves of the action undone');
 eq(lineup(m1, TIM, 2), ['QB Drew Lock', 'RB Devon Achane', "WR Ja'Marr Chase", 'FLEX Stefon Diggs'], 'Tim’s week 2: Lock back in the QB slot, Young gone');
 ok(cell(m1, TIM, 2).starters[0].isNew === true && cell(m1, TIM, 2).starters[1].isNew === false, 'only the man who was not really starting is marked new');
 eq(cell(m1, TIM, 2).realStarters.map((s) => s.name), ['Bryce Young', 'Devon Achane', "Ja'Marr Chase", 'Stefon Diggs'], 'the real starters ride along for the page');
-eq(totals(m1, MITCH), [57, 49, 57, 61], 'm1 undone: the opponent can no longer add the QB');
+eq(totals(m1, MITCH), [57, 49, 47, 61], 'm1 undone: the opponent can no longer add the QB, and keeps the man he really dropped for him');
+eq(lineup(m1, MITCH, 3), ['QB Baker Mayfield', 'RB Saquon Barkley', 'WR Justin Jefferson', 'FLEX Ben Benchy'], 'the kept man is on his mirror roster and starts where his projection beats a starter');
+eq(lineup(m1, MITCH, 2)[3], 'FLEX Garrett Wilson', 'and sits where it does not');
 eq(lineup(m1, MITCH, 2)[0], 'QB Baker Mayfield', 'he starts his best-PROJECTED quarterback (17 over 12), not the one who scored more');
-eq(m1.skipped.map((s) => [s.moveId, s.teamId, s.week, s.playerId]), [['m2', MITCH, 2, 10]], 'his pickup of Lock is the one move that could not happen');
+eq(m1.skipped.map((s) => [s.moveId, s.teamId, s.week, s.playerId, s.kept]), [['m2', MITCH, 2, 10, [39]]], 'his pickup of Lock is the one move that could not happen, listed once, naming the man he keeps');
 ok(/Drew Lock/.test(m1.skipped[0].reason) && /Tim/.test(m1.skipped[0].reason), 'and the reason names the player and who still had him', m1.skipped[0].reason);
 eq(lineup(m1, MITCH, 4), ['QB Baker Mayfield', 'RB Saquon Barkley', 'WR Justin Jefferson', 'FLEX Yan Yates'],
   'his later "add Yates, drop Lock" still adds Yates');
@@ -230,7 +238,7 @@ ok(cell(m1, MITCH, 4).changed === false && cell(m1, MITCH, 4).total === 61, 'and
 eq(totals(m1, CAL), REAL_TOTALS[CAL], 'Cal is untouched: every week its real total, the half-point correction included');
 eq(totals(m1, DEE), REAL_TOTALS[DEE], 'Dee is untouched (55.3 stays 55.3, not a re-added 55.300000000000004)');
 ok(WEEKS.every((w) => cell(m1, CAL, w).total === cell(m1, CAL, w).realTotal && !cell(m1, CAL, w).changed), 'untouched means exactly equal and not "changed"');
-// Results, mirror: wk2 Mitch 49 v Dee 56 (was 63 v 56), wk3 Mitch 57 v Cal 66
+// Results, mirror: wk2 Mitch 49 v Dee 56 (was 63 v 56), wk3 Mitch 47 v Cal 66
 // (was 68 v 66), wk4 Tim 63 v Mitch 61 (was 55 v 61). Three games flip.
 eq(flipList(m1), ['wk2 2v4 W>L', 'wk2 4v2 L>W', 'wk3 2v3 W>L', 'wk3 3v2 L>W', 'wk4 1v2 L>W', 'wk4 2v1 W>L'], 'three matchups flip, each listed for both teams');
 eq(rec(m1, TIM), { real: { w: 3, l: 1, t: 0 }, mirror: { w: 4, l: 0, t: 0 } }, 'Tim 3-1 becomes 4-0');
@@ -243,7 +251,7 @@ eq([g4.homeActual, g4.awayActual, g4.homeProjected, g4.awayProjected, g4.matchup
   'the game carries mirror points and mirror projections (Mitch 56 - Lock 15 + Mayfield 17 = 58), other fields copied');
 eq([cell(m1, TIM, 2).projected, cell(m1, TIM, 2).realProjected], [58, 59], 'Tim’s week 2 projection: 59 - Young 16 + Lock 15 = 58');
 eq(m1.games.find((g) => g.week === 5), GAMES[8], 'a week that is not final passes through untouched');
-eq(m1.over, [], 'nobody ends over the roster limit here');
+eq(m1.over, [{ teamId: MITCH, week: 4, size: 7, limit: 6 }], 'keeping Benchy and still adding Yates leaves him one over, and that is reported');
 
 // ---- a move after the player's game counts from the next week ----------------
 // m3 undone. Late (Monday game) was added in time for week 3, so he is gone
@@ -265,10 +273,11 @@ const m8 = D.mirror(world, pick(cals, 'move:m8'));
 eq([totals(m8, CAL), lineup(m8, CAL, 4)[3]], [[61, 57.5, 66, 60], 'FLEX Sam Sub'], 'm8 undone: the kept man out-projects the weakest slot he fits, and starts');
 const m7 = D.mirror(world, pick(tims, 'move:m7'));
 ok(TEAMS.every((t) => JSON.stringify(totals(m7, t)) === JSON.stringify(REAL_TOTALS[t])), 'm7 undone: every team-week is the real one');
-// m2 undone: Benchy (projected 4) is back on Mitch's bench and beats nobody.
+// m2 undone: Benchy is back on Mitch's bench and starts only in week 3 (11 over
+// Wilson's 10): 68 - Lock 25 + Mayfield 14 - Wilson 11 + Benchy 1 = 47.
 // Week 2 he has 6 men, week 4 he has his real 6 plus Benchy: one over.
 const m2 = D.mirror(world, pick(D.listDecisions(world, MITCH), 'move:m2'));
-eq(totals(m2, MITCH), [57, 49, 57, 61], 'm2 undone: no Lock in weeks 2 and 3, Benchy never starts');
+eq(totals(m2, MITCH), [57, 49, 47, 61], 'm2 undone: no Lock in weeks 2 and 3, Benchy starts only where he out-projects');
 eq(m2.over, [{ teamId: MITCH, week: 4, size: 7, limit: 6 }], 'roster limits are not enforced, the team-week left one over is reported');
 eq(m2.skipped, [], 'and Mitch dropping a Lock nobody holds in the mirror is not a skipped move');
 // m4 undone: Yates out of the FLEX, Wilson (10) in; Lock back and out-projects
@@ -311,7 +320,7 @@ eq(lineup(wi, TIM, 2), ['QB Bryce Young', 'RB Devon Achane', 'WR Stefon Diggs', 
 eq(totals(wi, CAL), [61, 65.5, 49, 60], 'what-if: Cal from the chosen week on, on top of its booked 57.5');
 eq(totals(wi, DEE), [55.3, 56, 63, 56], 'what-if: a third team changes because the later real trade cannot happen');
 eq(totals(wi, MITCH), REAL_TOTALS[MITCH], 'what-if: Mitch untouched');
-eq(wi.skipped.map((s) => [s.moveId, s.teamId, s.week]), [['m5', TIM, 3]], 'the later real trade needing the traded player is skipped whole');
+eq(wi.skipped.map((s) => [s.moveId, s.teamId, s.week, s.kept]), [['m5', TIM, 3, []]], 'the later real trade needing the traded player is skipped whole');
 // wk2 Tim 48 v Cal 65.5, wk3 Tim 52 v Dee 63, wk4 Tim 61 v Mitch 61: a tie.
 eq(flipList(wi), ['wk2 1v3 W>L', 'wk2 3v1 L>W', 'wk3 1v4 W>L', 'wk3 4v1 L>W', 'wk4 1v2 L>T', 'wk4 2v1 W>T'], 'what-if flips, a tie among them');
 eq([rec(wi, TIM).mirror, rec(wi, MITCH).mirror, rec(wi, CAL).mirror, rec(wi, DEE).mirror],

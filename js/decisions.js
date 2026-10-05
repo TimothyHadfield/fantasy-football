@@ -189,7 +189,7 @@ function replay(world, { undoMove = null, whatIf = null }) {
       const missing = sides.find(({ pid, from }) => now.has(pid) && now.get(pid) !== from);
       if (missing) {
         skipped.push({
-          moveId: m.id, teamId: m.teamId, week: m.week, playerId: missing.pid,
+          moveId: m.id, teamId: m.teamId, week: m.week, playerId: missing.pid, kept: [],
           reason: `${playerName(world, missing.pid)} was not on ${teamLabel(world, missing.from)}`,
         });
         touched.add(m.teamId);
@@ -199,18 +199,32 @@ function replay(world, { undoMove = null, whatIf = null }) {
         for (const { pid } of sides) if (now.has(pid)) agree(pid, effectiveWeek(world, pid, m));
       }
     }
+    let blocked = null;   // the first skipped add of this move, if any
     for (const pid of m.adds || []) {
       if (!now.has(pid)) continue;                       // free in both worlds: the add happens
       const holder = now.get(pid);
       // Free in the mirror, or already his: either way the two worlds agree again.
       if (holder === null || holder === m.teamId) { agree(pid, effectiveWeek(world, pid, m)); continue; }
-      skipped.push({
-        moveId: m.id, teamId: m.teamId, week: m.week, playerId: pid,
+      const entry = {
+        moveId: m.id, teamId: m.teamId, week: m.week, playerId: pid, kept: [],
         reason: `${playerName(world, pid)} was not free (${teamLabel(world, holder)} still had him)`,
-      });
+      };
+      skipped.push(entry);
+      if (!blocked) blocked = entry;
       touched.add(m.teamId);
     }
     for (const pid of m.drops || []) {
+      if (blocked) {
+        // Coordinator's rule, 2026-10-05: a manager whose pickup could not
+        // happen would not have cut a man for nothing, so the drop beside a
+        // skipped add does not happen either. He keeps whoever he holds in
+        // the mirror; the move is listed once, naming the men kept.
+        if (!now.has(pid) || now.get(pid) === m.teamId) {
+          stay(pid, effectiveWeek(world, pid, m), m.teamId);
+          blocked.kept.push(pid);
+        }
+        continue;
+      }
       if (!now.has(pid)) continue;                       // held in both worlds: the drop happens
       const holder = now.get(pid);
       if (holder === null || holder === m.teamId) agree(pid, effectiveWeek(world, pid, m));
