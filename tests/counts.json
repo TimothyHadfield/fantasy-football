@@ -38,10 +38,10 @@
       "assertions": 113
     },
     "nav-check.mjs": {
-      "assertions": 127
+      "assertions": 141
     },
     "site-status-check.mjs": {
-      "assertions": 89
+      "assertions": 95
     },
     "test-extension.mjs": {
       "assertions": 324
@@ -65,7 +65,7 @@
       "assertions": 190
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 147,
+      "assertions": 150,
       "scenarios": 12
     },
     "test-trade-odds.mjs": {
@@ -75,8 +75,8 @@
       "assertions": 120
     },
     "test-pages-render.mjs": {
-      "pages": 9,
-      "scenarios": 9
+      "pages": 10,
+      "scenarios": 10
     },
     "test-home.mjs": {
       "pages": 2,
@@ -123,7 +123,7 @@
       "scenarios": 4
     },
     "text-audit.mjs": {
-      "assertions": 8
+      "assertions": 9
     },
     "test-trade-weekly.mjs": {
       "assertions": 4739
@@ -186,6 +186,21 @@
     },
     "record-live-check.mjs": {
       "assertions": 82
+    },
+    "shared-tables-check.mjs": {
+      "assertions": 208
+    },
+    "test-decision-data.mjs": {
+      "assertions": 167
+    },
+    "test-decision-cloud.mjs": {
+      "assertions": 75
+    },
+    "test-decisions.mjs": {
+      "assertions": 94
+    },
+    "decisions-check.mjs": {
+      "assertions": 79
     }
   }
 }
