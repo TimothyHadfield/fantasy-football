@@ -83,6 +83,8 @@
 //   leagues/{leagueId}/seasons/{season}/parts/schedule      schedule   13 KB
 //   leagues/{leagueId}/seasons/{season}/rosters/{week}      x13        53 KB each
 //   leagues/{leagueId}/seasons/{season}/wire/{week}         x13        36 KB each
+//   leagues/{leagueId}/seasons/{season}/decisions/{week}    per decided week
+//       (added 2026-10-05, optional, not in the index — see `readDecisions`)
 //
 // A Firestore document is capped at 1 MiB, and PROGRESS.md warns that a week
 // of rosters is "about a megabyte". THAT FIGURE IS ABOUT ESPN'S RAW PAYLOAD,
@@ -811,10 +813,16 @@ function weekEntries(source) {
  * @param {Object} [payload.schedule] what `season.fetchSchedule` returned
  * @param {Map|Object} [payload.rosters] week -> the teams array for that week
  * @param {Map|Object} [payload.wire]    week -> parseFreeAgent results
+ * @param {Map|Object} [payload.decisions] week -> `{ moves, players, draft,
+ *   kick, league }` — see "the Decisions review's weeks" below. Sent just
+ *   before the index, never failing the sync; the result then carries
+ *   `decisions: { wrote, skipped, bytes, largestDoc, marks, reason }`.
  * @param {Object} [opts]
  * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
+ * @param {Object} [opts.decisionsSent] `{ [week]: mark }` from the last sync's
+ *   `decisions.marks`; a week whose mark is unchanged is not written again
  */
-export async function syncUp(leagueId, season, payload = {}, { onProgress } = {}) {
+export async function syncUp(leagueId, season, payload = {}, { onProgress, decisionsSent = null } = {}) {
   if (!isConfigured()) return notConfigured();
 
   const refusal = refuseDemo(leagueId, payload);
@@ -916,6 +924,14 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress } = {}
     }
   }
 
+  // The Decisions review's weeks, on their own account: written before the
+  // index so the index is still the last thing a sync writes, but nothing they
+  // do can fail the sync and they are not counted in `wrote` or `bytes`.
+  const decisionWeeks = decisionEntries(payload.decisions);
+  const decisions = decisionWeeks.length
+    ? await writeDecisions(t, base, decisionWeeks, syncedAt, decisionsSent)
+    : null;
+
   const meta = {
     v: SCHEMA,
     kind: 'meta',
@@ -954,7 +970,7 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress } = {}
     try { onProgress(wrote, total, 'League index'); } catch { /* ignore */ }
   }
 
-  return {
+  const result = {
     ok: true,
     wrote,
     bytes,
@@ -963,6 +979,127 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress } = {}
     largestDoc: jobs.reduce((m, j) => Math.max(m, j.bytes), 0),
     reason: '',
   };
+
+  // A payload without them leaves this result without the key.
+  if (decisions) result.decisions = decisions;
+  return result;
+}
+
+// ------------------------------------------------- the Decisions review's weeks
+//
+//   leagues/{leagueId}/seasons/{season}/decisions/{week}     ~1–40 KB each
+//
+// What `season.fetchDecisionWorld` needs beyond the rosters and the schedule,
+// one document per DECIDED week: who added, dropped and traded whom, what a man
+// on nobody's roster scored, the NFL kickoffs and the league's lineup. Packed
+// exactly as a week of rosters is. MEASURED on the public league (1241838),
+// read live on 2026-10-05, three decided weeks: 7.4, 6.1 and 6.5 KB — 20.0 KB
+// in all, the largest 138 times under the cap, on top of a 1.8 MB sync.
+// tests/test-decision-cloud.mjs (`size`) holds an upper bound on it.
+//
+// ADDITIVE, AND APART. They are addressed by week and are NOT listed in the
+// index document, so the index, and every document a copy made before this
+// existed holds, is byte for byte what it was. A phone asks for the weeks its
+// schedule says are decided; one that is not there is simply absent.
+//
+// ONLY WHAT CHANGED IS WRITTEN. A decided week's moves never change, so each
+// document carries a `mark` (its length and a hash of its text) and a caller
+// that hands back the marks of its last sync has only the new weeks sent.
+//
+// A REFUSED WRITE IS SILENT. If the project's rules ever stopped covering this
+// path, the sync carries on to its index and reports exactly what it always
+// did; the refusal is a `reason` on `result.decisions` and nothing else.
+// (firebase/firestore.rules covers it today: everything under /leagues.)
+
+/** A short fingerprint of a document's text: its length and an FNV-1a hash. */
+function markOf(json) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < json.length; i++) {
+    h ^= json.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${json.length}:${(h >>> 0).toString(16)}`;
+}
+
+function decisionEntries(source) {
+  return weekEntries(source)
+    .filter(([w, body]) => Number.isFinite(w) && body && Array.isArray(body.moves) &&
+      body.players && typeof body.players === 'object')
+    .sort((a, b) => a[0] - b[0]);
+}
+
+async function writeDecisions(t, base, entries, syncedAt, sent) {
+  const out = { wrote: 0, skipped: 0, bytes: 0, largestDoc: 0, marks: {}, reason: '' };
+  const before = sent && typeof sent === 'object' ? sent : {};
+  for (const [week, body] of entries) {
+    let job;
+    try {
+      job = pack('decisions', week, { ...body, week }, syncedAt);
+    } catch {
+      out.reason = out.reason || `Week ${week} decisions could not be encoded.`;
+      continue;
+    }
+    const mark = markOf(job.doc.json.join(''));
+    if (before[week] === mark) {
+      out.marks[week] = mark;
+      out.skipped++;
+      continue;
+    }
+    if (job.bytes > MAX_DOC_BYTES) {
+      out.reason = out.reason || `Week ${week} decisions is ${Math.round(job.bytes / 1024)}KB, too big to send.`;
+      continue;
+    }
+    try {
+      await t.setDoc(`${base}/decisions/${enc(week)}`, { ...job.doc, mark });
+    } catch (err) {
+      // Stop at the first refusal: the rest would be refused the same way.
+      out.reason = readable(err, `Could not write week ${week} decisions.`);
+      break;
+    }
+    out.marks[week] = mark;
+    out.wrote++;
+    out.bytes += job.bytes;
+    out.largestDoc = Math.max(out.largestDoc, job.bytes);
+  }
+  return out;
+}
+
+/**
+ * The Decisions review's weeks, down. One read per week asked for.
+ *
+ * Never throws. A week that is not up there — every week, on a copy made before
+ * this existed — is absent from the Map, and that is the whole report.
+ *
+ * @param {number[]} weeks the decided weeks
+ * @returns {Promise<{ok:boolean, decisions:Map<number,Object>, reads:number, reason:string}>}
+ *   each value is `{ week, moves, players, draft, kick, league }`
+ */
+export async function readDecisions(leagueId, season, weeks = []) {
+  const none = (reason) => ({ ok: false, decisions: new Map(), reads: 0, reason });
+  if (!isConfigured()) return none(notConfigured().reason);
+  if (refuseDemo(leagueId, null)) return none('Demo data is never synced.');
+  const t = await getTransport();
+  if (!t) return none('Could not reach Firebase.');
+
+  const base = seasonPath(leagueId, season);
+  const decisions = new Map();
+  let reads = 0;
+  const list = [...new Set((weeks || []).map(Number))].filter((w) => Number.isFinite(w));
+  for (let i = 0; i < list.length; i += 3) {
+    await Promise.all(list.slice(i, i + 3).map(async (week) => {
+      let got = null;
+      try {
+        got = unpack(await t.getDoc(`${base}/decisions/${enc(week)}`));
+      } catch {
+        got = null; // unreadable is a gap, never an exception
+      }
+      reads++;
+      if (got && Array.isArray(got.moves) && got.players && typeof got.players === 'object') {
+        decisions.set(week, got);
+      }
+    }));
+  }
+  return { ok: true, decisions, reads, reason: '' };
 }
 
 // ----------------------------------------------------------------- staleness

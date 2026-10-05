@@ -187,6 +187,29 @@ function saveSyncRecord(rec) {
   } catch { /* storage refused; the sync still happened */ }
 }
 
+// The Decisions review's weeks this browser has already sent, as cloud.js's
+// own marks — a decided week never changes, so it is sent once. A key of its
+// own: the sync record above keeps the shape it has always had.
+const DECISIONS_SENT_KEY = 'ff.cloud.decisions';
+
+function decisionsSent() {
+  try {
+    const all = JSON.parse(localStorage.getItem(DECISIONS_SENT_KEY) || '{}');
+    const mine = all && all[syncKey(state.leagueId, state.season)];
+    return mine && typeof mine === 'object' ? mine : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveDecisionsSent(marks) {
+  try {
+    const all = JSON.parse(localStorage.getItem(DECISIONS_SENT_KEY) || '{}') || {};
+    all[syncKey(state.leagueId, state.season)] = marks;
+    localStorage.setItem(DECISIONS_SENT_KEY, JSON.stringify(all));
+  } catch { /* storage refused; the weeks are simply sent again next time */ }
+}
+
 /** What other modules need: the connected league, or null. */
 export function currentConnection() {
   if (!state.league) return null;
@@ -512,7 +535,13 @@ function setSyncLabel(text) {
   else render();
 }
 
-async function syncNow() {
+/**
+ * @param {Object} [opts]
+ * @param {boolean} [opts.force] the Sync button: send every Decisions week
+ *   again, not only the ones this browser has not sent — pressing it is how a
+ *   copy somebody emptied gets them back.
+ */
+async function syncNow({ force = false } = {}) {
   if (state.syncing || !canSync()) return;
   state.syncing = true;
   state.syncLabel = 'Reading the season…';
@@ -539,7 +568,9 @@ async function syncNow() {
 
     const res = await cloud.syncUp(state.leagueId, state.season, payload, {
       onProgress: (done, total) => setSyncLabel(`Sending ${done} of ${total}…`),
+      decisionsSent: force ? null : decisionsSent(),
     });
+    if (res && res.ok && res.decisions && res.decisions.marks) saveDecisionsSent(res.decisions.marks);
 
     saveSyncRecord({
       at: Date.now(),
@@ -893,7 +924,7 @@ function render() {
   // The button ignores the six-hour throttle: a person pressing it has a
   // reason, and the reason is usually that he is about to pick up his phone.
   const push = $('connCloudSync');
-  if (push) push.addEventListener('click', () => syncNow());
+  if (push) push.addEventListener('click', () => syncNow({ force: true }));
 
   const input = $('connLeague');
   if (input) {
