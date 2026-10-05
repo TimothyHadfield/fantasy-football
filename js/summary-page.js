@@ -597,8 +597,12 @@ function buildView() {
     season: L.season, name: L.name, isDemo: L.isDemo,
     weeks: weeksPlayed, teams: L.teams, games: banked, injuries: [],
   });
-  const luckById = new Map(stats.teams.map((t) => [t.id, t.luckScore]));
-  const luckMarginById = new Map(stats.teams.map((t) => [t.id, t.margins?.luckScore ?? null]));
+  // A manager with no banked game has no LUCK — stats.js averages his empty
+  // season to 0, which is not a score. It happens in week 1 once one matchup
+  // is final and his own is still being played.
+  const has = (t) => t.weekly.length > 0;
+  const luckById = new Map(stats.teams.map((t) => [t.id, has(t) ? t.luckScore : null]));
+  const luckMarginById = new Map(stats.teams.map((t) => [t.id, has(t) ? t.margins?.luckScore ?? null : null]));
 
   return {
     through,

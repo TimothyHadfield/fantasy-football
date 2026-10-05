@@ -4,6 +4,8 @@
 // grid has to tell apart: a bye (0.00), a week ESPN has no number for (null),
 // and a player who simply was not on the roster that week.
 
+import { markDone, earlyFinal, startedScore } from './done-fixture.mjs';
+
 export const calls = { schedule: 0, week: [], weeks: [] };
 
 export const WEEKS = 13;
@@ -86,7 +88,35 @@ function playersFor(teamId, week) {
   return out;
 }
 
+// AN_DONE=1: THE OPEN WEEK IS IN PROGRESS, in the shape js/season.js now gives
+// it (tests/done-fixture.mjs has the contract). In week DONE_WEEK:
+//   Team 1  everyone done; Player 06 (the FLEX) scored 0
+//   Team 2  every starter done; Player 09 on the bench still to play
+//   Team 3  Players 00, 01 and 03 done; Player 05 mid-game on 4.2; the rest not kicked off
+//   Team 4+ nobody done; Player 00 mid-game on 6.6
+// and Team 1 v Team 2 is final early on the schedule, the other four are not.
+const DONE = process.env.AN_DONE === '1';
+export const DONE_WEEK = SCHEDULE_PLAYED_THROUGH + 1;
+const nth = (p) => p.playerId % 100;
+
+function inProgress(teams) {
+  const pre = teams.map((t) => (t.id !== 1 ? t : {
+    ...t,
+    players: t.players.map((p) => (nth(p) === 6 ? { ...p, actual: 0 } : p)),
+  }));
+  return markDone(
+    pre,
+    (p, t) => t.id === 1 || (t.id === 2 && nth(p) !== 9) || (t.id === 3 && [0, 1, 3].includes(nth(p))),
+    (p, t) => (t.id === 3 && nth(p) === 5 ? 4.2 : t.id >= 4 && nth(p) === 0 ? 6.6 : null),
+  );
+}
+
 function buildTeams(week) {
+  if (DONE && week === DONE_WEEK) return inProgress(buildPlain(week));
+  return buildPlain(week);
+}
+
+function buildPlain(week) {
   const teams = [];
   for (let id = 1; id <= NTEAMS; id++) {
     const players = playersFor(id, week);
@@ -140,12 +170,18 @@ export async function fetchSchedule() {
     const games = [];
     for (let t = 1; t <= NTEAMS; t += 2) {
       const played = w <= SCHEDULE_PLAYED_THROUGH;
-      games.push({
+      const g = {
         week: w,
         homeId: t, homeName: `Team ${t}`, homeScore: played ? 100 + t : null,
         awayId: t + 1, awayName: `Team ${t + 1}`, awayScore: played ? 95 + t : null,
         played,
-      });
+      };
+      if (DONE && w === DONE_WEEK && t === 1) {
+        const now = buildTeams(w);
+        games.push(earlyFinal(g, startedScore(now[0]), startedScore(now[1])));
+        continue;
+      }
+      games.push(g);
     }
     byWeek.set(w, games);
   }

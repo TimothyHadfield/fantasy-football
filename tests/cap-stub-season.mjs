@@ -25,7 +25,16 @@
 // and the consolation games. CAP_ROSTERS_REFUSE="16,17" makes just those roster
 // weeks throw.
 //
+// THE WEEK IN PROGRESS (Tim, 2026-10-04; the contract is in done-fixture.mjs).
+// CAP_EARLY=1: in the first undecided week the FIRST game is final early —
+// every starter on both sides is `done`, the game is `played, early` with the
+// started lineups' scores — one more squad has just its QB done, and the NFL's
+// games (`fetchProGames`) all kicked off 100 minutes ago, so the other four
+// games are in progress. CAP_EARLY=all: every game of that week is final early.
+//
 // A test fixture: it lives in tests/ and is never served by the site.
+
+import { markDone, earlyFinal, startedScore } from './done-fixture.mjs';
 
 export const calls = { schedule: 0, rosters: [], seasonData: 0, cloud: 0 };
 
@@ -70,6 +79,14 @@ export async function fetchSchedule() {
       let as = played ? scoreOf(awayId, w) : null;
       // THE TIE: week 2's first game finishes level.
       if (played && w === 2 && i === 0) { hs = 111.1; as = 111.1; }
+      if (earlyGame(w, i)) {
+        const now = new Map(teamsFor(w).map((t) => [t.id, t]));
+        return earlyFinal({
+          week: w,
+          homeId, homeName: nameById.get(homeId),
+          awayId, awayName: nameById.get(awayId),
+        }, startedScore(now.get(homeId)), startedScore(now.get(awayId)));
+      }
       return {
         week: w,
         homeId, homeName: nameById.get(homeId), homeScore: hs,
@@ -146,12 +163,61 @@ const SHAPE = [
   ['RB', 20], ['WR', 20], ['QB', 20], ['TE', 20],
 ];
 
+// ---- the week in progress (CAP_EARLY) ----
+const EARLY = process.env.CAP_EARLY || '';
+export const EARLY_WEEK = EARLY ? decided() + 1 : null;
+/** Is game `i` of week `w` final before ESPN closed the week? */
+const earlyGame = (w, i) => Boolean(EARLY) && w === EARLY_WEEK && (EARLY === 'all' || i === 0);
+/** The squads whose own matchup is final early. */
+export function earlySquads() {
+  if (!EARLY) return [];
+  return fixturesFor(EARLY_WEEK).filter((_, i) => earlyGame(EARLY_WEEK, i)).flat();
+}
+/** The one squad still playing that has a single finished man (its QB). */
+export const ONE_DONE_SQUAD = EARLY === '1' ? fixturesFor(decided() + 1)[1][0] : null;
+
+function inProgress(week, teams) {
+  const over = new Set(earlySquads());
+  // What a finished man scored: his projection, moved by up to 40% either way.
+  const scored = teams.map((t) => ({
+    ...t,
+    players: t.players.map((p, i) => ({
+      ...p, actual: r1(p.projected * (0.6 + rnd(t.id * 31 + i, week + 50) * 0.8)),
+    })),
+  }));
+  return markDone(
+    scored,
+    (p, t) => (over.has(t.id) && p.started) || (t.id === ONE_DONE_SQUAD && p.position === 'QB' && p.started),
+    // Not done: a running score for the first RB, nothing yet for anybody else.
+    (p) => (p.started && p.lineupSlotId === 2 ? 3.3 : null),
+  );
+}
+
+// The NFL's games, `{ proTeamId: { week: {at, done} } }`: every one kicked off
+// 100 minutes ago and none is official, so each squad still playing is live.
+export const fetchProGames = EARLY
+  ? async () => {
+    const out = {};
+    for (let id = 2; id <= 9; id++) out[id] = { [EARLY_WEEK]: { at: Date.now() - 100 * 60 * 1000, done: false } };
+    return out;
+  }
+  : undefined;
+
 export async function fetchWeekRosters(week) {
   calls.rosters.push(week);
   if (process.env.CAP_ROSTERS_FAIL) throw new Error('ESPN would not return rosters.');
   if ((process.env.CAP_ROSTERS_REFUSE || '').split(',').map(Number).includes(Number(week))) {
     throw new Error(`ESPN would not return week ${week}.`);
   }
+  return { week, teams: teamsFor(week) };
+}
+
+function teamsFor(week) {
+  const plain = plainTeams(week);
+  return EARLY && Number(week) === EARLY_WEEK ? inProgress(Number(week), plain) : plain;
+}
+
+function plainTeams(week) {
   const teams = TEAMS.map((t) => {
     const players = SHAPE.map(([position, lineupSlotId], i) => {
       const base = { QB: 19, RB: 12, WR: 12, TE: 9, K: 8, DST: 7 }[position];
@@ -191,7 +257,7 @@ export async function fetchWeekRosters(week) {
       seasonProjectedTotal: sum(starters, 'seasonProjected'),
     };
   });
-  return { week, teams };
+  return teams;
 }
 
 export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
