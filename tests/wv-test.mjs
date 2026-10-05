@@ -36,6 +36,15 @@ import { emit } from './emit.mjs';
 
 const settleWaivers = settleWaiverPage;
 
+// THE PREVIOUS WEEKS (Tim, 2026-10-04: "make the player's section show all
+// weeks, not just future weeks"). Every week fully over is a column now, drawn
+// BEFORE the priced weeks, so the first priced week is no longer the cell after
+// Avg. This counts them off the header the page drew; `check()` then pins the
+// count itself (three in the stub's October, thirteen in its December), and
+// every index into a row's weeks below is offset by it. Each played week also
+// costs one wire request and one roster request, once, after the priced weeks.
+const pastCount = (table) => table.querySelectorAll('thead th.wk-past').length;
+
 const SCENARIOS = {
   demo: {
     label: '(a) demo mode, nothing connected',
@@ -114,14 +123,16 @@ const SCENARIOS = {
 
       // --- sorting a week column -------------------------------------------
       const ths = [...table.querySelectorAll('thead th')];
-      click(ths[5]);                       // week 5
+      const w0 = 4 + pastCount(table);     // week 4's column
+      click(ths[w0 + 1]);                  // week 5
       out.wk5desc = snap();
-      click(ths[5]);
+      click(ths[w0 + 1]);
       out.wk5asc = snap();
-      click(ths[4]);                       // week 4 -- one player has no number
+      click(ths[w0]);                      // week 4 -- one player has no number
       out.wk4desc = snap();
-      click(ths[4]);
+      click(ths[w0]);
       out.wk4asc = snap();
+      out.sortedHeads = [ths[w0].textContent.trim(), ths[w0 + 1].textContent.trim()];
       out.fetchesAfterSort = espn.calls.weeks.slice();
 
       // --- widening the span: only the new weeks are fetched ---------------
@@ -821,6 +832,31 @@ async function check(scenario, boot) {
   const head = headers(table);
   const rows = bodyRows(table);
 
+  // ---- the previous weeks ---------------------------------------------------
+  // The stub (and the demo) have played weeks 1-3; `live-december` has played
+  // all thirteen. W0 is the column of the first PRICED week.
+  const PAST = pastCount(table);
+  const W0 = 4 + PAST;
+  const wantPast = scenario === 'live-december' ? 13 : 3;
+  c.ok(`the weeks fully over (1-${wantPast}) are columns, straight after Avg`,
+    PAST === wantPast &&
+    JSON.stringify(head.slice(4, W0)) === JSON.stringify(Array.from({ length: wantPast }, (_, i) => String(i + 1))),
+    JSON.stringify(head));
+  {
+    const ths = [...table.querySelectorAll('thead th')];
+    const line = ths.map((th, i) => (/\bfut-start\b/.test(th.getAttribute('class') || '') ? i : -1))
+      .filter((i) => i >= 0);
+    c.ok('the heavy line is on the first week still to play, and only there',
+      JSON.stringify(line) === JSON.stringify([W0]) && txt(ths[W0]).startsWith(String(wantPast + 1)),
+      `${JSON.stringify(line)} ${ths[W0] && txt(ths[W0])}`);
+    const full = [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === head.length);
+    const off = full.filter((tr) => [...tr.children]
+      .map((td, i) => (/\bfut-start\b/.test(td.getAttribute('class') || '') ? i : -1))
+      .filter((i) => i >= 0).join(',') !== String(W0));
+    c.ok('and every row carries it on that column',
+      (full.length > 0 || scenario === 'live-empty') && off.length === 0, `${off.length} of ${full.length} rows`);
+  }
+
   // ---- the shape the owner asked for --------------------------------------
   c.ok('identity columns are Player, Pos, Tm and Avg',
     JSON.stringify(head.slice(0, 4)) === JSON.stringify(['Player', 'Pos', 'Tm', 'Avg']),
@@ -830,8 +866,8 @@ async function check(scenario, boot) {
     head.slice(4).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)) && head.length > 4, JSON.stringify(head));
   const defaultSpan = scenario !== 'live-midload';
   if (defaultSpan) {
-    c.ok('one column per week, three of them by default',
-      head.length === 7, JSON.stringify(head));
+    c.ok('one column per week still to price, three of them by default',
+      head.length === W0 + 3, JSON.stringify(head));
     c.ok('the note says how many weeks of how many',
       /3 weeks of the 13 this season runs to/.test(note), note);
   }
@@ -851,7 +887,7 @@ async function check(scenario, boot) {
     c.ok('badge says Demo', txt($('modeBadge')) === 'Demo', txt($('modeBadge')));
     c.ok('badge is styled demo', /\bdemo\b/.test($('modeBadge').getAttribute('class')));
     c.ok('weeks start at the demo current week',
-      JSON.stringify(head.slice(4)) === JSON.stringify(['4', '5', '6']), JSON.stringify(head));
+      JSON.stringify(head.slice(W0)) === JSON.stringify(['4', '5', '6']), JSON.stringify(head));
     // Updated when the "Your …" comparison rows landed: the table is no longer
     // free agents alone, so the forty is now a count of the AVAILABLE rows.
     c.ok('about forty demo players',
@@ -895,34 +931,53 @@ async function check(scenario, boot) {
     c.ok('demo shows byes', rows.some((r) => r.cells.some((td) => /\bbye\b/.test(td.cls))),
       'no bye cell');
     c.ok('demo shows a blank week too',
-      rows.some((r) => r.cells.slice(4).some((td) => td.text === '—' && td.v === null)),
+      rows.some((r) => r.cells.slice(W0).some((td) => td.text === '—' && td.v === null)),
       'no blank cell');
     c.ok('the cost line says demo widening is free',
       /costs nothing to widen/.test(txt($('spanCost'))), txt($('spanCost')));
 
-    // ---- THE GLANCE LINE on the name's card (Tim, 2026-10-02) -------------
-    // ESPN's Avg, this week's Proj and position rank, right under the name.
+    // ---- THE GLANCE LINE (Tim, 2026-10-02) --------------------------------
+    // ESPN's Avg, this week's Proj and position rank. It headed the hover card
+    // on a name until 2026-10-04; the card is gone and the line now sits in the
+    // man's Actual row, which a click on his name opens.
     // The demo is "at week 4": Proj is the row's own week-4 cell, Avg the mean
-    // of the scores on his card's Act row (weeks 1–3); a sample squad man's
-    // line is re-derived from the week-4 sample rosters.
+    // of the scores in his Actual row (weeks 1–3); a sample squad man's line is
+    // re-derived from the week-4 sample rosters.
     {
       const RX = /^Avg (\d+\.\d|—) · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #(\d+)$/;
-      const open = (a) => {
-        a.dispatchEvent(new d.defaultView.Event('mouseover', { bubbles: true }));
-        const card = $('tipCard');
-        const g = card && !card.hidden ? card.querySelector('.tc-glance') : null;
-        const ident = card ? card.querySelector('.tc-ident') : null;
+      const W = d.defaultView;
+      const press = (el) => el.dispatchEvent(new W.Event('click', { bubbles: true }));
+      const tap = (el) => {
+        const ev = new W.Event('click', { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'button', { value: 0 });
+        el.dispatchEvent(ev);
+      };
+      // Selecting a man narrows his table to his position, so each one is
+      // found again with that table's filter back on All.
+      const open = (tableId, filterId, pid) => {
+        press(d.querySelector(`#${filterId} button[data-pos="ALL"]`));
+        const link = d.querySelector(`#${tableId} tbody tr#p${pid} a.pref`);
+        if (!link) return { text: '', under: false, acts: [], wk4: '', pid: Number(pid) };
+        tap(link);
+        const row = d.querySelector(`#${tableId} tbody tr#p${pid}`);
+        const act = row && row.nextElementSibling;
+        const isAct = Boolean(act && /\bact-row\b/.test(act.getAttribute('class') || ''));
+        const g = isAct ? act.querySelector('.act-glance') : null;
         return {
           text: g ? txt(g) : '',
-          under: !!(ident && ident.nextElementSibling === g && g),
-          acts: card ? [...card.querySelectorAll('.tc-run tfoot td')].map((t) => txt(t)) : [],
-          pid: Number((a.getAttribute('href') || '').split('player=')[1]),
+          under: Boolean(g),
+          acts: isAct ? [...act.querySelectorAll('td.wk-past')].map((t) => txt(t)) : [],
+          wk4: row ? txt(row.querySelector('td.fut-start')) : '',
+          pid: Number(pid),
         };
       };
-      const wire = [...d.querySelectorAll('#waiverTable tbody tr:not(.mine)')]
-        .map((tr) => ({ tr, a: tr.querySelector('a.pref[data-tip]') })).filter((x) => x.a);
-      const seen = wire.map(({ tr, a }) => ({ ...open(a), wk4: txt(tr.children[4]) }));
-      c.ok('GLANCE: every free agent’s card shows Avg · Proj · rank under his name',
+      const ids = (tableId) => [...d.querySelectorAll(`#${tableId} tbody tr[id]`)]
+        .map((tr) => tr.getAttribute('data-player'));
+      c.ok('GLANCE: no name carries the old hover card', d.querySelectorAll('[data-tip]').length === 0,
+        `${d.querySelectorAll('[data-tip]').length} [data-tip]`);
+      const takenIds = ids('takenTable').slice(0, 12);
+      const seen = ids('waiverTable').map((pid) => open('waiverTable', 'posFilter', pid));
+      c.ok('GLANCE: every free agent’s Actual row shows Avg · Proj · rank',
         seen.length >= 30 && seen.every((s) => s.under && RX.test(s.text)),
         `${seen.length}; ${JSON.stringify(seen.find((s) => !s.under || !RX.test(s.text)))}`);
       const projOk = (s) => {
@@ -936,17 +991,18 @@ async function check(scenario, boot) {
         const want = nums.length ? (nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(1) : '—';
         return s.text.match(RX)?.[1] === want;
       };
-      c.ok('GLANCE: a free agent’s Avg is the mean of his Act row',
-        seen.every(avgOk), JSON.stringify(seen.find((s) => !avgOk(s))));
+      c.ok('GLANCE: a free agent’s Avg is the mean of the scores in his Actual row',
+        seen.every(avgOk) && seen.some((s) => s.acts.filter((v) => /^\d+\.\d$/.test(v)).length === 3),
+        JSON.stringify(seen.find((s) => !avgOk(s))));
       const { generateDemoWeekRosters } = await import(pathToFileURL(path.join(REPO, 'js/demo-rosters.js')).href);
       const now = generateDemoWeekRosters(4).teams.flatMap((t) => t.players);
       const f = (v) => (typeof v === 'number' ? v.toFixed(1) : '—');
-      const taken = [...d.querySelectorAll('#takenTable a.pref[data-tip]')].slice(0, 12).map(open);
+      const taken = takenIds.map((pid) => open('takenTable', 'takenPosFilter', pid));
       const want = (pid) => {
         const p = now.find((x) => x.playerId === pid);
         return p ? `Avg ${f(p.seasonAvg)} · Proj ${f(p.projected)} · ${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}` : null;
       };
-      c.ok('GLANCE: a rostered man’s card carries his week-4 sample numbers',
+      c.ok('GLANCE: a rostered man’s Actual row carries his week-4 sample numbers',
         taken.length >= 5 && taken.every((s) => s.under && s.text === want(s.pid)),
         `${taken.length}; ${JSON.stringify(taken.find((s) => !s.under || s.text !== want(s.pid)))} want ${
           JSON.stringify(taken.map((s) => want(s.pid)).slice(0, 1))}`);
@@ -982,15 +1038,18 @@ async function check(scenario, boot) {
     const espn = await import('./wv-stub-espn.mjs');
     const asked = espn.calls.weeks.slice().sort((a, b) => a - b);
     if (scenario === 'live') {
-      c.ok('one request per shown week, and no more',
-        JSON.stringify(asked) === JSON.stringify([4, 5, 6]), JSON.stringify(espn.calls.weeks));
+      c.ok('one request per shown week — the three priced and the three played — and no more',
+        JSON.stringify(asked) === JSON.stringify([1, 2, 3, 4, 5, 6]), JSON.stringify(espn.calls.weeks));
+      c.ok('the priced weeks are asked for first',
+        JSON.stringify(espn.calls.weeks.slice(0, 3).sort((a, b) => a - b)) === JSON.stringify([4, 5, 6]),
+        JSON.stringify(espn.calls.weeks));
       c.ok('the whole pool is asked for once per week',
         espn.calls.limits.every((l) => l === 100), JSON.stringify(espn.calls.limits));
     }
 
     c.ok('every stubbed free agent is listed', rows.length === 60, `${rows.length}`);
     c.ok('weeks 4, 5 and 6 are the columns',
-      JSON.stringify(head.slice(4)) === JSON.stringify(['4', '5', '6']), JSON.stringify(head));
+      JSON.stringify(head.slice(W0)) === JSON.stringify(['4', '5', '6']), JSON.stringify(head));
 
     // Values match what parseFreeAgent should have produced.
     const byName = new Map(rows.map((r) => [r.cells[0].text.replace(/\s+(OUT|IR|Q|D|SUSP|DTD)$/, ''), r]));
@@ -999,7 +1058,7 @@ async function check(scenario, boot) {
       const row = byName.get(p.name);
       if (!row) { wrong.push(`${p.name} missing`); continue; }
       [4, 5, 6].forEach((w, i) => {
-        const td = row.cells[4 + i];
+        const td = row.cells[W0 + i];
         const want = espn.expected(p.id, w);
         if (want === null) {
           if (td.v !== null || td.text !== '—') wrong.push(`${p.name} wk${w} want blank got ${td.text}/${td.v}`);
@@ -1013,8 +1072,8 @@ async function check(scenario, boot) {
     c.ok('every cell carries the projection ESPN gave', wrong.length === 0, wrong.slice(0, 4).join(' | '));
 
     // A bye and a missing number look different, and only one of them sorts.
-    const byeCells = rows.flatMap((r) => r.cells.slice(4)).filter((td) => /\bbye\b/.test(td.cls));
-    const blankCells = rows.flatMap((r) => r.cells.slice(4)).filter((td) => td.text === '—');
+    const byeCells = rows.flatMap((r) => r.cells.slice(W0)).filter((td) => /\bbye\b/.test(td.cls));
+    const blankCells = rows.flatMap((r) => r.cells.slice(W0)).filter((td) => td.text === '—');
     c.ok('the bye renders as Bye, not 0.0',
       byeCells.length === 1 && byeCells[0].text === 'Bye' && byeCells[0].v === '0',
       JSON.stringify(byeCells));
@@ -1139,19 +1198,21 @@ async function check(scenario, boot) {
       /"waivers.position":"FLEX"/.test(w.flexPrefs || ''), w.flexPrefs);
 
     const col = (snap, i) => snap.rows.map((r) => (r[i] === null || r[i] === '—' ? null : Number(r[i])));
-    const d5 = ordered(col(w.wk5desc, 5), false);
-    const a5 = ordered(col(w.wk5asc, 5), true);
+    c.ok('the headers clicked were weeks 4 and 5',
+      JSON.stringify(w.sortedHeads) === JSON.stringify(['4', '5']), JSON.stringify(w.sortedHeads));
+    const d5 = ordered(col(w.wk5desc, W0 + 1), false);
+    const a5 = ordered(col(w.wk5asc, W0 + 1), true);
     c.ok('sorting a week column orders it descending', d5.monotonic && d5.n === 60,
-      JSON.stringify(col(w.wk5desc, 5).slice(0, 6)));
+      JSON.stringify(col(w.wk5desc, W0 + 1).slice(0, 6)));
     c.ok('clicking again reverses it', a5.monotonic && a5.n === 60,
-      JSON.stringify(col(w.wk5asc, 5).slice(0, 6)));
+      JSON.stringify(col(w.wk5asc, W0 + 1).slice(0, 6)));
     c.ok('the bye sorts as the zero it is',
-      col(w.wk5asc, 5)[0] === 0, JSON.stringify(col(w.wk5asc, 5).slice(0, 3)));
+      col(w.wk5asc, W0 + 1)[0] === 0, JSON.stringify(col(w.wk5asc, W0 + 1).slice(0, 3)));
 
-    const d4 = ordered(col(w.wk4desc, 4), false);
-    const a4 = ordered(col(w.wk4asc, 4), true);
+    const d4 = ordered(col(w.wk4desc, W0), false);
+    const a4 = ordered(col(w.wk4asc, W0), true);
     c.ok('a week with a missing value still sorts', d4.monotonic && a4.monotonic,
-      JSON.stringify(col(w.wk4desc, 4).slice(0, 4)));
+      JSON.stringify(col(w.wk4desc, W0).slice(0, 4)));
     c.ok('the missing value sinks in BOTH directions', d4.nullsLast && a4.nullsLast && d4.n === 59,
       `desc nullsLast=${d4.nullsLast} asc nullsLast=${a4.nullsLast} n=${d4.n}`);
     c.ok('sorting fetches nothing',
@@ -1159,21 +1220,24 @@ async function check(scenario, boot) {
       JSON.stringify(w.fetchesAfterSort));
 
     c.ok('widening the span adds three week columns',
-      w.wide && w.wide.cols.length === 10 &&
-      JSON.stringify(w.wide.cols.slice(4)) === JSON.stringify(['4', '5', '6', '7', '8', '9']),
+      w.wide && w.wide.cols.length === W0 + 6 &&
+      JSON.stringify(w.wide.cols.slice(W0)) === JSON.stringify(['4', '5', '6', '7', '8', '9']),
       JSON.stringify(w.wide && w.wide.cols));
     c.ok('widening fetches only the weeks it does not have',
       JSON.stringify(w.fetchesAfterWiden.slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6, 7, 8, 9]), JSON.stringify(w.fetchesAfterWiden));
+        JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9]), JSON.stringify(w.fetchesAfterWiden));
+    c.ok('and the three played weeks were already held before it widened',
+      JSON.stringify((w.fetchesBefore || []).slice().sort((a, b) => a - b)) === JSON.stringify([1, 2, 3, 4, 5, 6]),
+      JSON.stringify(w.fetchesBefore));
     c.ok('narrowing again fetches nothing',
       JSON.stringify(w.fetchesAfterNarrow) === JSON.stringify(w.fetchesAfterWiden),
       JSON.stringify(w.fetchesAfterNarrow));
     c.ok('narrowing goes back to three week columns',
-      w.narrow && w.narrow.cols.length === 7, JSON.stringify(w.narrow && w.narrow.cols));
+      w.narrow && w.narrow.cols.length === W0 + 3, JSON.stringify(w.narrow && w.narrow.cols));
     c.ok('the choices are remembered',
       /"waivers.position":"ALL"/.test(w.prefs || '') && /"waivers.span":"3"/.test(w.prefs || ''), w.prefs);
-    c.ok('the whole interaction cost nine requests',
-      espn.calls.weeks.length === 6, JSON.stringify(espn.calls.weeks));
+    c.ok('the whole interaction cost nine wire requests: six priced weeks and the three played',
+      espn.calls.weeks.length === 9, JSON.stringify(espn.calls.weeks));
   }
 
   // ---- (b*) the remembered filters ----------------------------------------
@@ -1204,9 +1268,9 @@ async function check(scenario, boot) {
     // bracket in weeks 14–16 — and those are bought like any other week.
     c.ok('every remaining week is fetched exactly once — the playoff weeks included',
       JSON.stringify(w.fetches.slice().sort((a, b) => a - b)) ===
-        JSON.stringify([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]), JSON.stringify(w.fetches));
+        JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]), JSON.stringify(w.fetches));
     c.ok('the table ends up with a column for every week, the playoffs labelled',
-      JSON.stringify(w.cols.slice(4)) ===
+      JSON.stringify(w.cols.slice(W0)) ===
         JSON.stringify(['4', '5', '6', '7', '8', '9', '10', '11', '12', '13',
           '14PO (playoffs)', '15 (playoffs)', '16 (playoffs)']),
       JSON.stringify(w.cols));
@@ -1238,10 +1302,14 @@ async function check(scenario, boot) {
     const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number).filter((v) => v > 0);
     let wrong = 0;
     let moved = 0;
+    let movedByPast = 0;
     for (const r of wire) {
       const shown = r.cells[3].v === null ? null : Number(r.cells[3].v);
-      const regular = mean(nums(r.cells.slice(4, col)));
-      const everything = mean(nums(r.cells.slice(4)));
+      const regular = mean(nums(r.cells.slice(W0, col)));
+      const everything = mean(nums(r.cells.slice(W0)));
+      // …and the previous weeks, were they counted, would move it too.
+      const withPast = mean(nums(r.cells.slice(4, col)));
+      if (regular !== null && withPast !== null && Math.abs(regular - withPast) > 0.05) movedByPast++;
       if (regular === null ? shown !== null : Math.abs(shown - regular) > 1e-9) wrong++;
       if (regular !== null && everything !== null && Math.abs(regular - everything) > 0.05) moved++;
     }
@@ -1249,6 +1317,8 @@ async function check(scenario, boot) {
       wrong === 0, `${wrong} rows disagree`);
     c.ok('and the playoff weeks would have moved it, so that check has teeth',
       moved > 0, `${moved}`);
+    c.ok('AVG IGNORES THE PREVIOUS WEEKS TOO — and counting them would have moved it',
+      wrong === 0 && movedByPast > 0, `${movedByPast} rows would move`);
     c.ok('the cost line counts the playoff weeks it is paying for',
       /13 weeks \(3 of them playoff\) = 26 requests/.test(txt($('spanCost'))), txt($('spanCost')));
     c.ok('the key names the line while it is drawn',
@@ -1276,18 +1346,18 @@ async function check(scenario, boot) {
   // ---- (c) some weeks reject ----------------------------------------------
   if (scenario === 'live-partial') {
     c.ok('the table still renders the week that did load', rows.length === 60, `${rows.length}`);
-    c.ok('the failed weeks are blank', rows.every((r) => r.cells[5].text === '—' && r.cells[6].text === '—'),
+    c.ok('the failed weeks are blank', rows.every((r) => r.cells[W0 + 1].text === '—' && r.cells[W0 + 2].text === '—'),
       JSON.stringify(rows[0] && rows[0].cells.map((x) => x.text)));
     c.ok('week 4 still carries numbers',
-      rows.filter((r) => /^\d+\.\d$/.test(r.cells[4].text)).length === 59,
-      rows.slice(0, 2).map((r) => r.cells[4].text).join(','));
+      rows.filter((r) => /^\d+\.\d$/.test(r.cells[W0].text)).length === 59,
+      rows.slice(0, 2).map((r) => r.cells[W0].text).join(','));
     c.ok('the note names the weeks that failed',
       /ESPN did not return weeks 5 and 6/.test(note), note);
     c.ok('a refused week does not masquerade as one still loading',
-      rows.every((r) => !/\bwait\b/.test(r.cells[5].cls) && !/\bwait\b/.test(r.cells[6].cls)),
+      rows.every((r) => !/\bwait\b/.test(r.cells[W0 + 1].cls) && !/\bwait\b/.test(r.cells[W0 + 2].cls)),
       JSON.stringify(rows[0] && rows[0].cells.map((x) => x.cls)));
     c.ok('a refused week has no sort key',
-      rows.every((r) => r.cells[5].v === null && r.cells[6].v === null), 'sort key present');
+      rows.every((r) => r.cells[W0 + 1].v === null && r.cells[W0 + 2].v === null), 'sort key present');
     c.ok('the note says what to do about it', /Reload the page to try again/.test(note), note);
     c.ok('the refusal is shown, not tucked behind the toggle',
       /ESPN did not return weeks 5 and 6/.test(txt($('waiverStatus'))) &&
@@ -1299,7 +1369,7 @@ async function check(scenario, boot) {
   // ---- (e) December --------------------------------------------------------
   if (scenario === 'live-december') {
     c.ok('DECEMBER: the columns are the playoff weeks, the first one labelled',
-      JSON.stringify(head.slice(4)) === JSON.stringify(['14PO (playoffs)', '15 (playoffs)', '16 (playoffs)']),
+      JSON.stringify(head.slice(W0)) === JSON.stringify(['14PO (playoffs)', '15 (playoffs)', '16 (playoffs)']),
       JSON.stringify(head));
     c.ok('DECEMBER: and they are filled in, not left waiting',
       rows.length > 0 && rows.every((r) => r.cells.slice(4).every((x) => !x.cls.split(' ').includes('wait'))),
@@ -1308,7 +1378,7 @@ async function check(scenario, boot) {
     // Rounded to the tenth the way the page and the Trade engine both round it.
     const mean = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
     const wrong = rows.filter((r) => {
-      const xs = r.cells.slice(4).map((x) => x.v).filter((v) => v !== null && v !== '').map(Number)
+      const xs = r.cells.slice(W0).map((x) => x.v).filter((v) => v !== null && v !== '').map(Number)
         .filter((v) => v > 0);
       const want = mean(xs);
       const got = r.cells[3].v === null ? null : Number(r.cells[3].v);
@@ -1325,7 +1395,7 @@ async function check(scenario, boot) {
     c.ok('the empty state gives the reason',
       empty && /nobody is unrostered in this league right now/.test(txt(empty)), txt(empty));
     c.ok('the empty state spans every column',
-      empty && empty.querySelector('td').getAttribute('colspan') === '7',
+      empty && empty.querySelector('td').getAttribute('colspan') === String(W0 + 3),
       empty && empty.querySelector('td').getAttribute('colspan'));
     c.ok('no headline numbers are invented', txt($('waiverStats')) === '', txt($('waiverStats')));
     c.ok('the position counts stay blank',
@@ -1472,9 +1542,10 @@ async function check(scenario, boot) {
       JSON.stringify(tw.next3) === JSON.stringify(tw.back),
       JSON.stringify({ n3: arrowed(tw.next3), n6: arrowed(tw.next6), all: arrowed(tw.all) }).slice(0, 400));
     const sorted = (a) => [...(a || [])].sort((x, y) => x - y);
-    const REST = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
-    c.ok('THE COST under Next 3: the regular weeks still to come, each bought once — wire and rosters, ' +
-      'weeks 4–13 (the three columns, then seven more for the arrows)',
+    // Weeks 1-3 are the previous-week columns (2026-10-04): bought once too.
+    const REST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    c.ok('THE COST under Next 3: every regular week, each bought once — wire and rosters, ' +
+      'weeks 4–13 (the three columns, then seven more for the arrows) and the three played',
       JSON.stringify(sorted(tw.wire3)) === JSON.stringify(REST) &&
       JSON.stringify(sorted(tw.rosters3)) === JSON.stringify(REST),
       `wire ${JSON.stringify(tw.wire3)} rosters ${JSON.stringify(tw.rosters3)}`);

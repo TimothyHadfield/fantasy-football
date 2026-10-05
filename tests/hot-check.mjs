@@ -68,8 +68,21 @@ const table = document.getElementById('waiverTable');
 const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
 const posCol = heads.findIndex((h) => /^Pos$/i.test(h));
 const avgCol = heads.findIndex((h) => /^Avg$/i.test(h));
-const firstWeekCol = avgCol + 1;
+// The weeks already played are columns too (2026-10-04), drawn between Avg and
+// the weeks still to price. They are PLAIN on purpose — the green and the shade
+// are claims about weeks you could still start a man in — so the rule below
+// starts at the first priced week, and the previous weeks are checked to carry
+// neither cue.
+const pastCols = table.querySelectorAll('thead th.wk-past').length;
+const firstWeekCol = avgCol + 1 + pastCols;
 ok(posCol > 0 && avgCol > posCol, 'found the Pos and Avg columns', heads.join('|'));
+ok(pastCols === 3, 'the three played weeks are columns before the priced ones', heads.join('|'));
+{
+  const past = [...table.querySelectorAll('tbody td.wk-past')];
+  ok(past.length > 100 && past.every((td) => !td.classList.contains('hot') && !td.classList.contains('beats')),
+    'a played week is never green or shaded',
+    `${past.filter((td) => td.classList.contains('hot') || td.classList.contains('beats')).length} of ${past.length}`);
+}
 
 const allRows = [...table.querySelectorAll('tbody tr')].filter((r) => !r.classList.contains('empty-row'));
 // The "Your …" comparison rows share this tbody but are NOT wire players, and

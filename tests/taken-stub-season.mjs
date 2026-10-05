@@ -26,6 +26,9 @@ export const calls = { schedule: 0, rosterWeeks: [] };
 
 const WEEKS = 13;
 const PLAYED_THROUGH = 3;   // so the "current week" is 4
+// A WEEK IN PROGRESS: with TAKEN_PARTIAL_WEEK=4, week 4's first game is final
+// and its other four are not. Weeks 1-3 are still the only ones fully over.
+const PARTIAL_WEEK = Number(process.env.TAKEN_PARTIAL_WEEK || 0);
 
 const flat = (n) => () => n;
 
@@ -121,7 +124,7 @@ export async function fetchSchedule() {
   for (let w = 1; w <= WEEKS; w++) {
     const games = [];
     for (let t = 1; t <= 10; t += 2) {
-      const played = w <= PLAYED_THROUGH;
+      const played = w <= PLAYED_THROUGH || (w === PARTIAL_WEEK && t === 1);
       games.push({
         week: w,
         homeId: t, homeName: `Team ${t}`, homeScore: played ? 100 + t : null,
