@@ -455,10 +455,20 @@ export function parseProGames(data) {
   return out;
 }
 
-// The kickoffs from the last pro-schedule read, so the bye read and the kickoff
-// read share ONE request on a page that wants both. Only a read that succeeded
-// is kept.
-let kickoffStash = null; // { season, kickoffs, games }
+// The last pro-schedule read, so the bye read, the kickoff read and the games
+// read share ONE request on a page that wants more than one of them — in
+// whichever order they are asked. Only a read that ANSWERED is kept; one that
+// answered with no games at all is kept too, as "ESPN was asked and said
+// nothing", so `heldProGames()` can tell that from "nobody has asked".
+let kickoffStash = null; // { season, kickoffs, games, byes }
+
+function byesOf(data) {
+  const byes = {};
+  for (const t of data?.settings?.proTeams || []) {
+    if (t.byeWeek) byes[t.id] = t.byeWeek;
+  }
+  return byes;
+}
 
 async function readProSchedule() {
   const view = 'proTeamSchedules_wl';
@@ -472,37 +482,46 @@ async function readProSchedule() {
     data = await request(`/apis/v3/games/ffl/seasons/${config.season}?view=${view}`);
   }
   const kickoffs = parseProKickoffs(data);
-  if (Object.keys(kickoffs).length) {
-    kickoffStash = { season: config.season, kickoffs, games: parseProGames(data) };
-  }
+  kickoffStash = { season: config.season, kickoffs, games: parseProGames(data), byes: byesOf(data) };
   return data;
 }
 
+/** The held read, when it has games in it. An empty one is asked for again. */
+const stashWithGames = () =>
+  (kickoffStash && kickoffStash.season === config.season && Object.keys(kickoffStash.kickoffs).length
+    ? kickoffStash
+    : null);
+
 /** The NFL games by pro team id and week; reuses the bye read's payload when there was one. */
 export async function fetchProGames() {
-  if (kickoffStash && kickoffStash.season === config.season) return kickoffStash.games;
+  const held = stashWithGames();
+  if (held) return held.games;
   return parseProGames(await readProSchedule());
 }
 
-/** The same, only if a pro-schedule read has already landed on this page — never a request. */
+/**
+ * The same, only if a pro-schedule read has already landed on this page — never
+ * a request. Null is "nobody has asked"; `{}` is "asked, and ESPN listed no games".
+ */
 export function heldProGames() {
   return kickoffStash && kickoffStash.season === config.season ? kickoffStash.games : null;
 }
 
 /** Kickoffs by pro team id and week; reuses the bye read's payload when there was one. */
 export async function fetchProKickoffs() {
-  if (kickoffStash && kickoffStash.season === config.season) return kickoffStash.kickoffs;
+  const held = stashWithGames();
+  if (held) return held.kickoffs;
   return parseProKickoffs(await readProSchedule());
 }
 
-/** Bye weeks by pro team id. */
+/**
+ * Bye weeks by pro team id. Reuses a games read that has already landed (same
+ * payload) when it carried both games and byes; otherwise it asks, as ever.
+ */
 export async function fetchByeWeeks() {
-  const data = await readProSchedule();
-  const byes = {};
-  for (const t of data.settings?.proTeams || []) {
-    if (t.byeWeek) byes[t.id] = t.byeWeek;
-  }
-  return byes;
+  const held = stashWithGames();
+  if (held && Object.keys(held.byes).length) return { ...held.byes };
+  return byesOf(await readProSchedule());
 }
 
 // ------------------------------------------------- people, not team names

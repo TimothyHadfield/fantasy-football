@@ -239,6 +239,10 @@ export function slotFloor(slotId, floors) {
  */
 export function flooredValue(player, floors, slotId = null) {
   const raw = player && Number.isFinite(player.projected) ? player.projected : null;
+  // A MAN WHO HAS FINISHED HIS WEEK (`done`, set by js/season.js) is never
+  // lifted: his `projected` is the score he ended on, a fact no waiver claim
+  // can reach back into — the same reason a played week is never floored.
+  if (player && player.done === true) return { value: raw, raw, assumed: false, floor: null };
   const eligible = slotId === null || slotId === undefined ? null : SLOT_ELIGIBILITY[slotId];
   const combo = Boolean(player && eligible && eligible.length > 1 && eligible.includes(player.position));
   const f = !player ? null : combo

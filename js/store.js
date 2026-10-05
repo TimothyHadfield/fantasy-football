@@ -250,17 +250,24 @@ export function readWeek(leagueId, season, week) {
  * `byesKnown` is whether the bye read had succeeded when these teams were
  * decoded — whether the bye rule could be applied at all. Unknown is false.
  *
+ * `at` is when the teams were READ FROM ESPN, when that is not now — a copy of
+ * the desktop's sync is as old as the sync, and stamping it "now" would let a
+ * week in progress pass for a reading taken this minute (js/season.js ages a
+ * player's points by it). Absent, or in the future, is now.
+ *
  * @returns {boolean} whether it actually landed. Nothing depends on the answer;
  *   it exists so a test can tell "stored" from "silently dropped".
  */
-export function writeWeek(leagueId, season, week, teams, { final = false, byesKnown = false } = {}) {
+export function writeWeek(leagueId, season, week, teams, { final = false, byesKnown = false, at = null } = {}) {
   const s = store();
   if (!s || !Array.isArray(teams) || !teams.length) return false;
 
   const key = keyOf(leagueId, season, week);
   let json;
   try {
-    json = JSON.stringify({ v: SCHEMA, at: Date.now(), final: !!final, byesKnown: !!byesKnown, teams });
+    const now = Date.now();
+    const readAt = Number.isFinite(at) && at > 0 && at <= now ? at : now;
+    json = JSON.stringify({ v: SCHEMA, at: readAt, final: !!final, byesKnown: !!byesKnown, teams });
   } catch {
     return false; // a shape that will not serialise is not a shape to keep
   }

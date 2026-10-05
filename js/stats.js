@@ -387,8 +387,13 @@ export function playerFitPoints(weekTeams, weeks) {
         ? team.players
         : [...(team.starters || []), ...(team.bench || [])];
       for (const p of players) {
-        if (!p || !finite(p.projected) || !finite(p.actual)) continue;
-        if (p.projected === 0 && p.actual === 0) continue;
+        if (!p) continue;
+        // A man finished in a week still open (`done`, js/season.js) carries his
+        // SCORE as `projected`; what ESPN projected is `pregame`. Without one
+        // there is no dot — never a score set against itself.
+        const x = p.done === true ? p.pregame : p.projected;
+        if (!finite(x) || !finite(p.actual)) continue;
+        if (x === 0 && p.actual === 0) continue;
         out.push({
           playerId: p.playerId,
           name: p.name || '',
@@ -396,7 +401,7 @@ export function playerFitPoints(weekTeams, weeks) {
           proTeam: p.proTeam || '',
           teamId: team.id,
           week,
-          x: p.projected,
+          x,
           y: p.actual,
         });
       }

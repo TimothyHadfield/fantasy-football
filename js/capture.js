@@ -61,6 +61,10 @@ export function gameState(g) {
   // A bye has no away side to compare against; trust the source there.
   if (g.awayId === null || g.awayId === undefined) return g.played ? 'final' : 'upcoming';
 
+  // SETTLED EARLY by js/season.js: every starter on both sides has finished, so
+  // it is final whatever the scores are — a side that finished on zero included.
+  if (g.early === true && g.played) return 'final';
+
   if (scored(g.homeScore) !== scored(g.awayScore)) return 'live';
   if (!scored(g.homeScore) && !scored(g.awayScore)) return 'upcoming';
   return g.played ? 'final' : 'live';
@@ -634,6 +638,45 @@ function gamePlayed(game, asOf, now) {
 }
 
 /**
+ * A roster read taken this long after a kickoff holds that game's final points,
+ * however old the read itself is: 190 minutes of broadcast, plus overtime, a
+ * weather delay and ESPN's own lag in posting the last play.
+ */
+export const DONE_SETTLED_MS = 270 * 60 * 1000;
+
+/**
+ * IS THIS MAN FINISHED FOR THE WEEK — is the score beside him his final score?
+ *
+ * Tim, 2026-10-04: "for singular player's that have finished their game, their
+ * numbers are individually updated ... nothing is waiting on something else
+ * that it doesn't depend on." The one rule for it, used by js/season.js to mark
+ * every roster and wire player of a week ESPN has not closed (`done`).
+ *
+ *   no game that week        true — a bye, or no NFL team: nothing to wait for.
+ *                            (The CALLER must know the NFL schedule was read at
+ *                            all; an empty reading has no games for anybody.)
+ *   ESPN says the game is over (`statsOfficial`) AND the reading it is set
+ *   against can be trusted to hold the final number — it was taken in the last
+ *   15 minutes (`LIVE_READ_FRESH_MS`, the rule `gamePlayed` uses), or it was
+ *   taken at least 270 minutes after kickoff — true.
+ *   anything else            false. NEVER from the clock alone: six hours since
+ *                            kickoff is not "over" until ESPN says so, and a
+ *                            game that is over now says nothing about points
+ *                            read at half-time.
+ *
+ * @param {{at:number, done:boolean}|null|undefined} game `proGames[proTeamId]?.[week]`
+ * @param {number|null} asOf when the roster / wire reading was taken (epoch ms)
+ * @param {number} [now]
+ * @returns {boolean}
+ */
+export function playerDone(game, asOf, now = Date.now()) {
+  if (!game) return true;
+  if (game.done !== true || !Number.isFinite(asOf)) return false;
+  if (now - asOf <= LIVE_READ_FRESH_MS) return true;
+  return Number.isFinite(game.at) && asOf - game.at >= DONE_SETTLED_MS;
+}
+
+/**
  * WHERE THE WEEK IN PROGRESS STANDS, squad by squad.
  *
  * Null whenever there is nothing in progress to describe — demo, no kickoffs
@@ -665,15 +708,33 @@ export function liveWeek({ data, weekTeams, slots, floors = null, proGames, asOf
     let banked = 0;      // points already on the board
     let toCome = 0;      // projected points still to be scored
     let whole = 0;       // the lineup's whole projection, played or not
-    for (const p of t.players || []) {
+    const players = t.players || [];
+    for (const p of players) {
+      if (p.started && gamePlayed(proGames[p.proTeamId]?.[week], at, now) > 0) kicked++;
+    }
+
+    // EVERY STARTER FINISHED (js/season.js marks them `done`, a man on bye
+    // included): the squad is its score. Nothing is to come and nobody is
+    // played in from the bench — the same call that settles its matchup early.
+    const starters = players.filter((p) => p.started);
+    if (starters.length && starters.every((p) => p.done === true)) {
+      for (const p of starters) banked += typeof p.actual === 'number' ? p.actual : 0;
+      out.set(t.id, { mean: banked, left: 0, banked });
+      continue;
+    }
+
+    for (const p of players) {
       const played = gamePlayed(proGames[p.proTeamId]?.[week], at, now);
-      const proj = typeof p.projected === 'number' ? p.projected : 0;
+      // A finished man's `projected` has been overwritten with his score; what
+      // he WAS projected is `pregame`, and that is the number this arithmetic
+      // is in — so an annotated week gives the answer the raw week gave.
+      const pre = p.done === true ? p.pregame : p.projected;
+      const proj = typeof pre === 'number' ? pre : 0;
       if (played <= 0) {
-        if (typeof p.projected === 'number') pool.push({ position: p.position, projected: p.projected });
+        if (typeof pre === 'number') pool.push({ position: p.position, projected: pre });
         continue;
       }
       if (!p.started) continue;                 // kicked off on the bench: out of this week
-      kicked++;
       const i = open.indexOf(p.lineupSlotId);
       if (i >= 0) open.splice(i, 1);
       banked += typeof p.actual === 'number' ? p.actual : 0;
