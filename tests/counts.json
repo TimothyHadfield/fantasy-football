@@ -21,7 +21,7 @@
       "assertions": 162
     },
     "sortable-check.mjs": {
-      "assertions": 53
+      "assertions": 60
     },
     "charts-check.mjs": {
       "assertions": 97
@@ -72,7 +72,7 @@
       "assertions": 128
     },
     "hot-check.mjs": {
-      "assertions": 118
+      "assertions": 120
     },
     "test-pages-render.mjs": {
       "pages": 9,
@@ -86,7 +86,7 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 43
+      "assertions": 45
     },
     "opp-check.mjs": {
       "scenarios": 7
@@ -101,12 +101,12 @@
       "assertions": 81
     },
     "cmp-check.mjs": {
-      "assertions": 113,
+      "assertions": 115,
       "scenarios": 7
     },
     "taken-check.mjs": {
-      "assertions": 293,
-      "scenarios": 8
+      "assertions": 444,
+      "scenarios": 12
     },
     "link-check.mjs": {
       "assertions": 135
@@ -133,7 +133,7 @@
       "scenarios": 14
     },
     "wv-test.mjs": {
-      "assertions": 606,
+      "assertions": 647,
       "scenarios": 12
     },
     "tr-test.mjs": {
@@ -159,6 +159,16 @@
     },
     "test-live-week.mjs": {
       "assertions": 44
+    },
+    "scatter-check.mjs": {
+      "assertions": 104
+    },
+    "stats-fit.mjs": {
+      "assertions": 56
+    },
+    "roster-link-check.mjs": {
+      "assertions": 107,
+      "scenarios": 11
     }
   }
 }
