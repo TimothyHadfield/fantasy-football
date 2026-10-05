@@ -67,6 +67,7 @@ const SUITES = [
   ['test-trade-suggest.mjs', 'the Suggested list under the custom builder: every completion of the ticked men, against a brute force'],
   ['test-trade-odds.mjs', 'the goal: a trade ranked by the title (or last-place) chance it moves, and will he say yes'],
   ['test-live-week.mjs', 'the week in progress: played out from its score so far and the share of the spread left, not from kickoff'],
+  ['test-done.mjs', 'what has finished counts now: a finished player’s score is his number, a finished matchup is final before ESPN closes the week'],
   ['test-accept-by.mjs','when a trade must be accepted: first kickoff among the men you get, minus the league’s review'],
   ['test-ask-ai.mjs', 'the "Ask AI" text: both sides’ +/-, the men, the date and league, nothing undefined'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],

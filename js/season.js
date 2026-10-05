@@ -189,6 +189,216 @@ function weekInPlay(week) {
   });
 }
 
+// ===========================================================================
+// WHAT HAS FINISHED COUNTS NOW
+// ===========================================================================
+//
+// Tim, 2026-10-04: "any games that are comepletely finished are counted in
+// whatever data across the cite ... for singular player's that have finished
+// their game, their numbers are individually updated ... nothing is waiting on
+// something else that it doesn't depend on."
+//
+// ESPN closes a fantasy week on Tuesday. By Sunday night most of it is already
+// fact, and until now every page treated all of it as a forecast. So, in a week
+// ESPN has NOT yet decided:
+//
+//   A FINISHED PLAYER (`capture.playerDone`) leaves `fetchWeekRosters`,
+//   `fetchWeeksRosters` and `fetchWireWeek` with `done: true`, his projection
+//   moved to `pregame`, and `projected` OVERWRITTEN with what he scored — so
+//   every page that prices a week by `p.projected` uses the fact without
+//   knowing. Everybody else in that week carries `done: false`.
+//
+//   A FINISHED MATCHUP — both sides have a starter and every starter on both is
+//   done — leaves `fetchSchedule` as `played`, with its winner and margin and
+//   `early: true` (`settleEarly`).
+//
+// ON THE WAY OUT, ON COPIES. Done-ness changes by the minute, so nothing here
+// is ever written to js/store.js or uploaded: the stored and the synced reading
+// stay exactly what ESPN sent, and each device settles from its own evidence.
+// `markPlayed` / `weekIsFinal` and the store's `final` flag keep following
+// ESPN's OWN decision — an early game must never freeze a week's rosters while
+// another matchup in it is still scoring.
+//
+// UNTOUCHED: a week ESPN has decided, and demo — no `done`, no `pregame`.
+// Team totals (`projectedTotal` …) stay the PRE-GAME lineup's: they are the
+// "what was projected" side of every accuracy and luck figure.
+
+/** A pro-games reading that says something. `{}` is "unknown". */
+const proKnown = (g) => !!g && typeof g === 'object' && Object.keys(g).length > 0;
+
+/** "Leave these objects exactly as they are" — a decided week, or demo. */
+const AS_IS = Symbol('as is');
+
+/** After the NFL schedule could not be read, do not ask again for this long. */
+const PRO_RETRY_MS = 60 * 1000;
+let proMissAt = 0;
+
+/**
+ * The NFL's games, sought — for a caller that already has reason to think a
+ * week is in play. Free when a pro-schedule read has landed on this page (the
+ * bye read is one, and js/espn.js keeps the payload whichever of the two asks
+ * first, so a desktop pays for it once either way). A device whose byes came
+ * from the synced copy pays for one read of its own: the NFL schedule is
+ * public, so a phone can make it. Null when it cannot be had; a failed read —
+ * this one or the bye read, the same endpoint — is not retried for a minute.
+ */
+async function seekProGames() {
+  const held = typeof espn.heldProGames === 'function' ? espn.heldProGames() : null;
+  // Held — or asked for on this page and ESPN listed no games: either way the
+  // answer is already here and asking again would buy the same one.
+  if (held) return proKnown(held) ? held : null;
+  if (Date.now() - proMissAt < PRO_RETRY_MS) return null;
+  // ONE read however many weeks ask at once (a span is read three at a time).
+  if (!proSeek) {
+    proSeek = fetchProGames()
+      .then((games) => {
+        if (proKnown(games)) return games;
+        proMissAt = Date.now();
+        return null;
+      })
+      .finally(() => { proSeek = null; });
+  }
+  return proSeek;
+}
+let proSeek = null;
+
+/** Has the schedule been read for this league, so `weekIsFinal` means something? */
+async function decidedKnown() {
+  const key = () => { const c = espn.getConfig(); return `${c.leagueId}::${c.season}`; };
+  if (playedSeen.has(key())) return true;
+  try { await fetchSchedule({ settle: false }); } catch { return false; }
+  return playedSeen.has(key());
+}
+
+/**
+ * The rule for one week's players: `AS_IS` (do not touch them), null (the week
+ * is open but nobody can be called finished), or `(player) => boolean`.
+ *
+ * WHAT IT COSTS. Nothing, when the NFL schedule is already held and the league
+ * schedule already read — every page's normal state. It ASKS for the NFL
+ * schedule only when somebody in the reading already has points that week (so
+ * the week is plausibly in play), and for the league schedule only when a week
+ * that has kicked off is read before any page asked for the schedule — because
+ * marking a man done in a week ESPN has in fact decided would overwrite
+ * history's projections, and only the schedule can say.
+ *
+ * `done` IS ONLY EVER TRUE IN A WEEK THAT HAS KICKED OFF. A man on bye in week
+ * 9 is not "finished" in October, and a late-season week whose kickoffs ESPN
+ * has not dated yet must not read as a league-wide bye.
+ */
+async function doneRule(week, players, asOf, { final = false } = {}) {
+  if (!storable() || final || weekIsFinal(week)) return AS_IS;
+  let pro = typeof espn.heldProGames === 'function' ? espn.heldProGames() : null;
+  if (!proKnown(pro)) {
+    if (!(players || []).some((p) => p && typeof p.actual === 'number')) return null;
+    pro = await seekProGames();
+    if (!proKnown(pro)) return null;
+  }
+  const w = Number(week);
+  const now = Date.now();
+  const begun = Object.values(pro).some((byWeek) => {
+    const g = byWeek && byWeek[w];
+    return g && Number.isFinite(g.at) && g.at <= now;
+  });
+  if (!begun) return null;
+  if (!(await decidedKnown())) return null;
+  if (weekIsFinal(week)) return AS_IS;
+  return (p) => capture.playerDone(
+    p.proTeamId === null || p.proTeamId === undefined ? null : pro[p.proTeamId]?.[w], asOf, now);
+}
+
+/** One player on the way out: a copy, marked. */
+function markDone(p, rule) {
+  if (!p || typeof p !== 'object') return p;
+  if (!rule || !rule(p)) return { ...p, done: false };
+  return {
+    ...p,
+    done: true,
+    pregame: p.projected ?? null,
+    projected: typeof p.actual === 'number' ? p.actual : 0,
+  };
+}
+
+/** One team on the way out; `starters` / `bench` stay the same objects as `players`. */
+function teamWithDone(team, rule) {
+  const seen = new Map();
+  const conv = (p) => {
+    if (!seen.has(p)) seen.set(p, markDone(p, rule));
+    return seen.get(p);
+  };
+  const out = { ...team, players: (team.players || []).map(conv) };
+  if (Array.isArray(team.starters)) out.starters = team.starters.map(conv);
+  if (Array.isArray(team.bench)) out.bench = team.bench.map(conv);
+  return out;
+}
+
+/** A week's teams, annotated. Never throws; any failure is the teams as read. */
+async function annotateTeams(week, teams, opts) {
+  if (!Array.isArray(teams) || !teams.length) return teams;
+  try {
+    const rule = await doneRule(week, teams.flatMap((t) => (t && t.players) || []), weekReadAt(week), opts);
+    return rule === AS_IS ? teams : teams.map((t) => teamWithDone(t, rule));
+  } catch {
+    return teams;
+  }
+}
+
+/** A week's wire, annotated the same way. `asOf` is when it was read from ESPN. */
+async function annotateWire(week, players, asOf) {
+  if (!Array.isArray(players) || !players.length) return players;
+  try {
+    const rule = await doneRule(week, players, asOf);
+    return rule === AS_IS ? players : players.map((p) => markDone(p, rule));
+  } catch {
+    return players;
+  }
+}
+
+/**
+ * SETTLE THE MATCHUPS THAT ARE ALREADY OVER, in place, on normalised games.
+ *
+ * Only the first week with an undecided game, and only once somebody in it has
+ * a point (free to see: the scores ride on the schedule) — otherwise nothing is
+ * asked and nothing changes. Then it needs the NFL's games and that week's
+ * rosters (the store or the synced copy first; at worst the one roster read the
+ * page was about to make). If either cannot be had, nothing is settled.
+ *
+ * The scores stay ESPN's own running totals. A side with nobody starting is
+ * never "finished": "every starter is done" would be true of an empty lineup.
+ */
+async function settleEarly(regular, playoff = []) {
+  try {
+    if (!storable()) return;
+    const open = (list) => (list || []).filter(
+      (g) => g && !g.played && g.homeId != null && g.awayId != null);
+    let pending = open(regular);
+    if (!pending.length) pending = open(playoff);
+    if (!pending.length) return;
+    const week = Math.min(...pending.map((g) => Number(g.week)));
+    const inWeek = [...open(regular), ...open(playoff)].filter((g) => Number(g.week) === week);
+    const scored = (v) => typeof v === 'number' && v > 0;
+    if (!inWeek.some((g) => scored(g.homeScore) || scored(g.awayScore))) return;
+
+    if (!proKnown(await seekProGames())) return;
+    const { teams } = await fetchWeekRosters(week);
+    const byId = new Map((teams || []).map((t) => [t.id, t]));
+    const finished = (id) => {
+      const starters = ((byId.get(id) || {}).players || []).filter((p) => p.started);
+      return starters.length > 0 && starters.every((p) => p.done === true);
+    };
+    for (const g of inWeek) {
+      if (typeof g.homeScore !== 'number' || typeof g.awayScore !== 'number') continue;
+      if (!finished(g.homeId) || !finished(g.awayId)) continue;
+      g.played = true;
+      g.margin = Math.round((g.homeScore - g.awayScore) * 10) / 10;
+      g.winner = g.homeScore > g.awayScore ? 'home' : g.awayScore > g.homeScore ? 'away' : 'tie';
+      g.early = true;
+    }
+  } catch {
+    /* settle nothing: the schedule is then exactly what ESPN said */
+  }
+}
+
 /**
  * Is this league allowed on disk at all?
  *
@@ -388,8 +598,20 @@ async function inBatches(items, size, fn) {
  *   source answered, so a page can count REQUESTS rather than weeks and state a
  *   cost that is true. Nothing else reads it, and a caller that ignores it gets
  *   exactly what it always got.
+ *
+ * IN A WEEK ESPN HAS NOT DECIDED every player also carries `done`, and a done
+ * player `pregame` and his score as `projected` — see "WHAT HAS FINISHED COUNTS
+ * NOW" above. `opts.raw` skips that and hands back the reading as ESPN sent it;
+ * `buildCloudPayload` is its one caller, because what is uploaded must be raw.
  */
-export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
+export async function fetchWeekRosters(week, { byes, fresh = false, raw = false } = {}) {
+  const { final, ...got } = await readWeekRosters(week, { byes, fresh });
+  if (raw) return got;
+  return { ...got, teams: await annotateTeams(week, got.teams, { final: final === true }) };
+}
+
+/** The read itself: store, cloud, ESPN. `final` only on a stored week that is frozen. */
+async function readWeekRosters(week, { byes, fresh = false } = {}) {
   // THE LOCAL STORE FIRST, ahead of the bridge — see "THE LOCAL STORE" above.
   // A week this browser read on the page you just came from is the same answer,
   // and it is the re-buying of it that Tim asked to be rid of. A week that is
@@ -428,7 +650,7 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
       // moved since. Re-read, and on a failed re-read the held copy still serves.
       const stalePlay = !held.final && !decidedSince &&
         held.ageMs > LIVE_FRESH_MS && weekInPlay(week);
-      const served = { week: Number(week), teams: held.teams, from: 'store' };
+      const served = { week: Number(week), teams: held.teams, from: 'store', final: held.final === true };
       if (!decidedSince && !byesArrived && !stalePlay) {
         noteRead(week, held.at);
         return served;
@@ -450,9 +672,11 @@ export async function fetchWeekRosters(week, { byes, fresh = false } = {}) {
     // a copy, so storing it costs nothing but the bytes.
     // The desktop decoded it with the byes it published alongside, so those say
     // whether the bye rule was applied.
+    // Stamped with the SYNC's time, not this minute: the points on it are as old
+    // as the sync, and the next page must not take them for a reading just made.
     if (cfg) {
       store.writeWeek(cfg.leagueId, cfg.season, week, synced,
-        { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes) });
+        { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes), at: cloudAt(down) });
     }
     noteRead(week, cloudAt(down));
     return { week: Number(week), teams: synced, from: 'cloud' };
@@ -603,12 +827,13 @@ export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {
     for (const week of weeks) {
       const teams = down.rosters.get(Number(week));
       if (teams && teams.length) {
-        out.set(Number(week), teams);
         noteRead(week, cloudAt(down));
         if (cfg) {
           store.writeWeek(cfg.leagueId, cfg.season, week, teams,
-            { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes) });
+            { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes), at: cloudAt(down) });
         }
+        // Stored raw, handed out annotated — the same as `fetchWeekRosters`.
+        out.set(Number(week), await annotateTeams(week, teams));
       }
       done++;
       if (onProgress) onProgress(done, weeks.length, week, teams && teams.length ? 'cloud' : 'gap');
@@ -688,7 +913,12 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
         // The stored list is most-owned first, the order ESPN returned it in,
         // so the first `limit` are the ones ESPN would have sent.
         const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : WIRE_LIMIT;
-        if (players && players.length) return players.slice(0, n);
+        // Annotated against the SYNC's time: its points are as old as the sync.
+        if (players && players.length) {
+          const s = res.syncedAt;
+          const at = Date.parse(typeof s === 'string' ? s : (s && (s.wire || s.rosters)) || '');
+          return annotateWire(w, players.slice(0, n), Number.isFinite(at) ? at : null);
+        }
       } catch {
         /* no cloud: fall through to ESPN, exactly as if it were not configured */
       }
@@ -697,9 +927,12 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
 
   // The synced list above was decoded with the bye rule already applied.
   const [raw, byes] = await Promise.all([espn.fetchFreeAgents(w, limit), fetchByeWeeks()]);
-  return (raw?.players || [])
+  const parsed = (raw?.players || [])
     .map((entry) => espn.parseFreeAgent(entry, w, byes))
     .filter((p) => p.playerId !== null && p.playerId !== undefined);
+  // In a week ESPN has not decided, a free agent whose game is over carries
+  // `done`, `pregame` and his score as `projected` — the same rule as a roster.
+  return annotateWire(w, parsed, Date.now());
 }
 
 // ------------------------------------------------------------ the floor read
@@ -740,7 +973,11 @@ export async function fetchFloors(week) {
   const job = (async () => {
     try {
       const wire = await fetchWireWeek(w);
-      return floor.positionFloors(wire, { week: w });
+      // A FLOOR IS WHAT YOU COULD STILL STREAM, so it is read off what each man
+      // was PROJECTED — never off the points of free agents who have already
+      // played, which would be hindsight nobody could have claimed.
+      const preGame = (p) => (p && p.done === true ? { ...p, projected: p.pregame } : p);
+      return floor.positionFloors(wire.map(preGame), { week: w });
     } catch {
       // Cached as empty on purpose: a league that refuses the wire would
       // otherwise be asked again by every panel on the page.
@@ -819,12 +1056,32 @@ function winnerOf(m) {
   return h > a ? 'home' : a > h ? 'away' : 'tie';
 }
 
+/**
+ * A side's score as it stands.
+ *
+ * MEASURED on ESPN, 2026-10-05, a week in play: `totalPoints` is 0 until ESPN
+ * closes the matchup, and the running score sits beside it in `totalPointsLive`
+ * (a decided side has `totalPoints` and no `totalPointsLive`; a week not begun
+ * has neither). Reading `totalPoints` alone made every game in the week being
+ * played 0–0 from Thursday to Tuesday. So: `totalPoints` when it is anything,
+ * else the running score when ESPN gives one, else what `totalPoints` said.
+ */
+function sidePoints(side) {
+  if (!side) return null;
+  const total = side.totalPoints;
+  if (typeof total === 'number' && total !== 0) return total;
+  const live = side.totalPointsLive;
+  if (typeof live === 'number' && Number.isFinite(live)) return exactPoints(live);
+  return total ?? null;
+}
+
 /** One `schedule[]` entry in the shape every page reads. */
 function normaliseGame(m, nameById) {
   const week = m.matchupPeriodId;
-  const homePts = m.home.totalPoints ?? null;
-  const awayPts = m.away ? m.away.totalPoints ?? null : null;
   const played = isDecidedEntry(m);
+  // A decided game is `totalPoints` and nothing else, as it always was.
+  const homePts = played ? m.home.totalPoints : sidePoints(m.home);
+  const awayPts = played ? m.away.totalPoints : sidePoints(m.away);
   return {
     week,
     homeId: m.home.teamId,
@@ -837,6 +1094,18 @@ function normaliseGame(m, nameById) {
     margin: played ? Math.round((homePts - awayPts) * 10) / 10 : null,
     winner: played ? winnerOf(m) : null,
   };
+}
+
+/** ESPN's `schedule[]`, normalised and split: regular season, and the bracket with its `tier`. */
+function splitSchedule(raw, nameById) {
+  const regular = [];
+  const playoffGames = [];
+  for (const m of raw.schedule || []) {
+    if (!m.home) continue;
+    if (isRegularSeasonEntry(m)) regular.push(normaliseGame(m, nameById));
+    else playoffGames.push({ ...normaliseGame(m, nameById), tier: m.playoffTierType });
+  }
+  return { regular, playoffGames };
 }
 
 /** Group games by week; returns [byWeek, sorted weeks]. */
@@ -857,8 +1126,20 @@ function groupByWeek(games) {
  * `isRegularSeasonEntry`. The playoff and consolation games ESPN sends in the
  * same feed are kept apart on `playoffGames` (same shape, plus `tier`, ESPN's
  * `playoffTierType`) for any caller that wants them; nothing draws them yet.
+ *
+ * A MATCHUP THAT IS ALREADY OVER IS FINAL HERE BEFORE ESPN SAYS SO (Tim,
+ * 2026-10-04; `settleEarly`): in the first undecided week, a game whose every
+ * starter on both sides has finished comes back `played: true` with its
+ * `winner` and `margin`, and `early: true`. A game ESPN decided carries no
+ * `early` key at all. `{ settle: false }` hands back the schedule exactly as
+ * ESPN has it — what `buildCloudPayload` uploads, so the phone settles from its
+ * own evidence rather than from a verdict that was true at sync time.
+ *
+ * @param {Object} [opts]
+ * @param {boolean} [opts.settle=true]
  */
-export async function fetchSchedule() {
+export async function fetchSchedule(opts) {
+  const settle = !(opts && opts.settle === false);
   // Rebuilt rather than handed straight out, even though `readDown` already
   // returns this exact shape. The cached document is shared by every caller on
   // the page, and the live path has always given each caller its own objects —
@@ -877,15 +1158,19 @@ export async function fetchSchedule() {
     // Which weeks are banked, for the local store's freshness rule. A synced
     // schedule carries `played` exactly as the live one does, so the phone
     // freezes the same weeks the desktop does.
+    // Marked BEFORE anything is settled early, so the store only ever freezes a
+    // week ESPN itself has decided.
     markPlayed(games);
     markPlayed(down.schedule.playoffGames || []);
+    const synced = (down.schedule.playoffGames || []).map((g) => ({ ...g }));
+    if (settle) await settleEarly(games, synced);
     return {
       ...down.schedule,
       teams: (down.schedule.teams || []).map((t) => ({ ...t })),
       weeks,
       byWeek,
       games,
-      playoffGames: (down.schedule.playoffGames || []).map((g) => ({ ...g })),
+      playoffGames: synced,
     };
   }
 
@@ -893,21 +1178,20 @@ export async function fetchSchedule() {
   const parsed = espn.parseLeague(raw);
   const nameById = new Map(parsed.teams.map((t) => [t.id, t.name]));
 
-  const regular = [];
-  const playoffGames = [];
-  for (const m of raw.schedule || []) {
-    if (!m.home) continue;
-    if (isRegularSeasonEntry(m)) regular.push(normaliseGame(m, nameById));
-    else playoffGames.push({ ...normaliseGame(m, nameById), tier: m.playoffTierType });
-  }
+  const { regular, playoffGames } = splitSchedule(raw, nameById);
   const [byWeek, weeks] = groupByWeek(regular);
 
   // THE ONE PLACE THE LOCAL STORE LEARNS WHAT IS BANKED. A week with a result
   // against it can never change again, so it is kept for the season; everything
   // else is a forecast on a six-hour clock. See "THE LOCAL STORE" at the top,
   // and note that this is read off the SCHEDULE and never off the date.
+  //
+  // ESPN'S OWN DECISION, and so run before `settleEarly`: a matchup that is
+  // over early must not freeze its week's rosters while another is still
+  // scoring.
   markPlayed(regular);
   markPlayed(playoffGames);
+  if (settle) await settleEarly(regular, playoffGames);
 
   return {
     leagueName: parsed.name,
@@ -998,9 +1282,14 @@ function assembleSeason({ season, name, teams, games }) {
  * the first the day either is touched. It is the same reason `cloud.js` stores
  * the team totals verbatim rather than re-adding them on the way down.
  */
-function seasonFromCloud(down) {
+function seasonFromCloud(down, settled = null) {
   const schedule = down.schedule;
   if (!schedule || !Array.isArray(schedule.games)) return null;
+  // `settled` is `fetchSchedule().games` — the synced games with any matchup
+  // that is already over marked played — so the stats count what the schedule
+  // counts. Its projected side below is the synced `projectedTotal`, which is
+  // the PRE-GAME started lineup's: the upload is always the raw reading.
+  const source = Array.isArray(settled) ? settled : schedule.games;
 
   const teamList = (down.teams && down.teams.length ? down.teams : schedule.teams || [])
     .map((t) => ({ id: t.id, name: t.name, teamName: t.teamName }));
@@ -1015,7 +1304,7 @@ function seasonFromCloud(down) {
   }
 
   const games = [];
-  for (const g of schedule.games) {
+  for (const g of source) {
     // Only completed matchups, and only real head-to-heads — the same two
     // conditions the live path applies, a BYE having no second side to score.
     if (!g.played || g.awayId === null || g.awayId === undefined) continue;
@@ -1059,7 +1348,12 @@ export async function fetchSeasonData({ onProgress } = {}) {
   // refused while every other page rendered fine.
   const down = await cloudDown();
   if (down) {
-    const built = seasonFromCloud(down);
+    // The schedule with its finished matchups settled, so an early final is in
+    // the stats here exactly as it is on the Schedule page. No request beyond
+    // what settling costs; a failure is the synced games as they are.
+    let settled = null;
+    try { settled = (await fetchSchedule()).games; } catch { settled = null; }
+    const built = seasonFromCloud(down, settled);
     if (built && built.games.length) {
       report(1, 1, 'Reading the copy synced from your computer…');
       return built;
@@ -1077,9 +1371,23 @@ export async function fetchSeasonData({ onProgress } = {}) {
   // Only DECIDED regular-season matchups — the same two rules `fetchSchedule`
   // applies, from the same two functions, so the stats page and the standings
   // cannot disagree about what has been played.
+  //
+  // AND THE MATCHUPS THAT ARE ALREADY OVER (Tim, 2026-10-04) — settled by the
+  // same `settleEarly` the schedule uses, on the same payload, so the two agree
+  // here too. Their projected side is rebuilt below exactly as a decided week's
+  // is: the started lineup's projection, which ESPN stops moving at kickoff.
+  const split = splitSchedule(raw, new Map(parsed.teams.map((t) => [t.id, t.name])));
+  markPlayed(split.regular);
+  markPlayed(split.playoffGames);
+  await settleEarly(split.regular, split.playoffGames);
+  const early = new Set(split.regular
+    .filter((g) => g.early === true)
+    .map((g) => `${g.week}|${g.homeId}|${g.awayId}`));
+
   const played = (raw.schedule || []).filter(
     (m) =>
-      isRegularSeasonEntry(m) && isDecidedEntry(m) &&
+      isRegularSeasonEntry(m) && m.home && m.away &&
+      (isDecidedEntry(m) || early.has(`${m.matchupPeriodId}|${m.home.teamId}|${m.away.teamId}`)) &&
       teamIds.has(m.home.teamId) && teamIds.has(m.away.teamId)
   );
 
@@ -1108,12 +1416,14 @@ export async function fetchSeasonData({ onProgress } = {}) {
   for (const m of played) {
     const week = m.matchupPeriodId;
     const proj = projByWeek.get(week) || new Map();
+    // A decided game is `totalPoints`; one settled early is the running score.
+    const decided = isDecidedEntry(m);
     games.push({
       week,
       homeId: m.home.teamId,
       awayId: m.away.teamId,
-      homeActual: exactPoints(m.home.totalPoints),
-      awayActual: exactPoints(m.away.totalPoints),
+      homeActual: exactPoints(decided ? m.home.totalPoints : sidePoints(m.home)),
+      awayActual: exactPoints(decided ? m.away.totalPoints : sidePoints(m.away)),
       homeProjected: Math.round((proj.get(m.home.teamId) || 0) * 10) / 10,
       awayProjected: Math.round((proj.get(m.away.teamId) || 0) * 10) / 10,
     });
@@ -1171,6 +1481,9 @@ export async function fetchByeWeeks() {
       const byes = await espn.fetchByeWeeks();
       return byes && typeof byes === 'object' ? byes : {};
     } catch {
+      // The NFL schedule would not answer; `seekProGames` reads the same
+      // endpoint and need not be refused by it again straight away.
+      proMissAt = Date.now();
       return {};
     }
   })().then((byes) => {
@@ -1259,7 +1572,10 @@ export async function buildCloudPayload({ onProgress } = {}) {
     try { onProgress(done, total, label); } catch { /* a bad listener must not stop a sync */ }
   };
 
-  const schedule = await fetchSchedule();
+  // UNSETTLED, and the rosters below RAW: what goes up is ESPN's own reading.
+  // "This matchup is over" is true of a moment; the phone works it out again
+  // from the synced rosters, aged by the sync's own time, and the NFL schedule.
+  const schedule = await fetchSchedule({ settle: false });
 
   // EVERY WEEK THE SCHEDULE KNOWS ABOUT, and there is no week ceiling.
   //
@@ -1310,7 +1626,7 @@ export async function buildCloudPayload({ onProgress } = {}) {
     try {
       // `fresh` — the store is skipped on the way in and refreshed on the way
       // out. See the note above: this is the press that means "re-read".
-      const { teams } = await fetchWeekRosters(week, { byes, fresh: true });
+      const { teams } = await fetchWeekRosters(week, { byes, fresh: true, raw: true });
       if (teams && teams.length) rosters.set(week, teams);
     } catch { /* that week is unavailable; it is a gap, not a failed sync */ }
     report(++done, total, `Week ${week} squads`);

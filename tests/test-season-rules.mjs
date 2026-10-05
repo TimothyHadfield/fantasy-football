@@ -243,6 +243,10 @@ const SCENARIOS = {
     eq(Object.keys(s.games[0]).sort(),
       ['awayId', 'awayName', 'awayScore', 'homeId', 'homeName', 'homeScore', 'margin', 'played', 'week', 'winner'],
       'the normalised game shape is unchanged');
+    // `early` exists ONLY on a matchup settled before ESPN decided it (every
+    // starter finished — tests/test-done.mjs). A decided game, and an undecided
+    // one nothing could settle, carry no such key: not `early: false`.
+    ok('no game here carries an `early` key', s.games.every((g) => !('early' in g)));
 
     const d = await season.fetchSeasonData();
     eq(d.games.length, 4, 'the stats path keeps only decided regular-season games');
