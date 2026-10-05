@@ -31,7 +31,7 @@
       "scenarios": 10
     },
     "test-season-rules.mjs": {
-      "assertions": 93,
+      "assertions": 94,
       "scenarios": 8
     },
     "test-store.mjs": {
@@ -69,7 +69,7 @@
       "scenarios": 12
     },
     "test-trade-odds.mjs": {
-      "assertions": 128
+      "assertions": 142
     },
     "hot-check.mjs": {
       "assertions": 120
@@ -161,14 +161,28 @@
       "assertions": 44
     },
     "scatter-check.mjs": {
-      "assertions": 104
+      "assertions": 210
     },
     "stats-fit.mjs": {
-      "assertions": 56
+      "assertions": 136
     },
     "roster-link-check.mjs": {
       "assertions": 107,
       "scenarios": 11
+    },
+    "test-done.mjs": {
+      "assertions": 103,
+      "scenarios": 11
+    },
+    "test-trade-progress.mjs": {
+      "assertions": 42
+    },
+    "done-check.mjs": {
+      "assertions": 58,
+      "scenarios": 4
+    },
+    "pages-done-check.mjs": {
+      "assertions": 151
     }
   }
 }
