@@ -164,7 +164,7 @@ const tap = (svg, dot) => {
 // --- an independent count of what should be there ---------------------------
 const { generateDemoLeague } = await mod('js/demo.js');
 const { generateDemoSchedule, generateDemoWeekRosters } = await mod('js/demo-rosters.js');
-const { leastSquares } = await mod('js/charts.js');
+const { leastSquares, offPerfect, SERIES_COLORS } = await mod('js/charts.js');
 const league = generateDemoLeague();
 const stats = computeLeagueStats(league);
 const weeks = stats.weekNumbers;
@@ -268,6 +268,198 @@ for (const w of weeks) {
         'and his own projection and score that week', text);
     }
   }
+}
+
+// --- "Colour by", the chips, and the two numbers on the graph ---------------
+// Tim, 2026-10-04: "sorted by a variety of metricts. For example Position, User
+// (team), week ... highlight these specific moments ... or just colorized" and
+// "show on each of those graphs how closely the true line is to the dotted
+// line, as well as how closely the true line is to the dots (R^2 ...)".
+const press = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+const chips = (id) => all($(id), '.ff-scatter-legend button[data-group]');
+const by = (id, v) => $(id).querySelector(`button[data-by="${v}"]`);
+const onScreen = (el) => {
+  for (let n = el; n; n = n.parentElement) {
+    if (n.hasAttribute('hidden')) return false;
+    if (n.tagName === 'DETAILS') return false;
+  }
+  return true;
+};
+const prefsNow = () => JSON.parse(localStorage.getItem('ff.prefs') || '{}');
+const stat = (id) => (($(id) || {}).textContent || '').trim();
+const r2Of = (pairs) => leastSquares(pairs).r2.toFixed(2);
+const gapOf = (pairs) => `${offPerfect(pairs).toFixed(1)} pts`;
+const positionOf = new Map();
+const ownerOf = new Map();
+for (const w of weeks) {
+  for (const t of generateDemoWeekRosters(w).teams) {
+    for (const p of t.players) { positionOf.set(p.playerId, p.position); ownerOf.set(`${w}:${p.playerId}`, t.id); }
+  }
+}
+
+{
+  // The numbers, before anything is grouped: every dot's.
+  for (const id of ['fitTeamsR2', 'fitTeamsGap', 'fitPlayersR2', 'fitPlayersGap']) {
+    ok($(id) && onScreen($(id)), `${id} is on the face of the panel, not behind the toggle`);
+  }
+  eq(stat('fitTeamsR2'), r2Of(teamPairs), 'teams: R² is the square of an independent fit\'s r');
+  eq(stat('fitTeamsGap'), gapOf(teamPairs), 'teams: Off perfect is the independent mean gap to y = x');
+  eq(stat('fitPlayersR2'), r2Of(playerPairs), 'players: R², independently');
+  eq(stat('fitPlayersGap'), gapOf(playerPairs), 'players: Off perfect, independently');
+  ok(!/NaN|undefined|null/.test(['fitTeamsR2', 'fitTeamsGap', 'fitPlayersR2', 'fitPlayersGap'].map(stat).join(' ')),
+    'and none of them reads NaN');
+  for (const id of ['fitTeamsNote', 'fitPlayersNote']) {
+    const note = $(id).textContent;
+    ok(/R²/.test(note) && /Off perfect/.test(note), `${id} says what the two numbers are (rule 7)`);
+    ok(/0 = the lines coincide/.test(note), `${id} says what 0 off perfect means`);
+  }
+
+  // The control: None by default, and None is the graph as it was.
+  eq(all($('fitPlayersBy'), 'button').map((b) => b.textContent.trim()).join('|'), 'None|Position|Team|Week',
+    'players can be coloured by position, team or week');
+  eq(all($('fitTeamsBy'), 'button').map((b) => b.textContent.trim()).join('|'), 'None|Team|Week',
+    'teams by team or week');
+  eq(all($('fitPlayersBy'), 'button.on').map((b) => b.dataset.by).join(), 'none', 'None is the default');
+  eq(chips('chartFitPlayers').length, 0, 'and None shows no legend');
+  ok(dots('chartFitPlayers').every((d) => !d.hasAttribute('fill')), 'and colours no dot');
+  eq(chips('chartFitTeams').length, 0, 'the same on the teams graph');
+}
+{
+  // ---- players by position ----
+  press(by('fitPlayersBy', 'position'));
+  eq(all($('fitPlayersBy'), 'button.on').map((b) => b.dataset.by).join(), 'position', 'the pressed option is marked');
+  eq(by('fitPlayersBy', 'position').getAttribute('aria-pressed'), 'true', 'for a screen reader too');
+  eq(prefsNow()['stats.fitPlayersBy'], 'position', 'the grouping is remembered');
+  const ch = chips('chartFitPlayers');
+  eq(ch.map((b) => b.textContent.trim()).join('|'), 'QB|RB|WR|TE|K|D/ST', 'a chip per position, in lineup order');
+  const colour = Object.fromEntries(ch.map((b) => [b.getAttribute('data-group'),
+    /background:\s*([^;]+)/.exec(b.querySelector('.ff-chip-sw').getAttribute('style'))[1].trim()]));
+  eq(colour.QB, SERIES_COLORS[6], 'QB is green (Tim\'s example)');
+  eq(colour.RB, SERIES_COLORS[9], 'RB is red (Tim\'s example)');
+  eq(new Set(Object.values(colour)).size, 6, 'six positions, six colours');
+  // Every dot carries its own position's colour.
+  const svg = $('chartFitPlayers').querySelector('svg');
+  const host = $('chartFitPlayers');
+  let wrong = 0, checked = 0;
+  for (const d of dots('chartFitPlayers').filter((_, i) => i % 37 === 0)) {
+    tap(svg, d);
+    const m = /player=(\d+)/.exec(host.querySelector('.ff-scatter-tip').getAttribute('href') || '');
+    if (!m) continue;
+    checked++;
+    if (d.getAttribute('fill') !== colour[positionOf.get(Number(m[1]))]) wrong++;
+  }
+  ok(checked > 30, 'sampled dots open previews', String(checked));
+  eq(wrong, 0, 'and each is coloured by the position of the player it opens');
+  eq(dots('chartFitPlayers').length, playerPairs.length, 'colouring adds or drops no dot');
+  eq(stat('fitPlayersR2'), r2Of(playerPairs), 'and changes neither number: R²');
+  eq(stat('fitPlayersGap'), gapOf(playerPairs), 'nor Off perfect');
+
+  // ---- highlight RB ----
+  const rb = playerPairs.filter((p) => positionOf.get(p.id) === 'RB');
+  ok(rb.length > 200 && rb.length < playerPairs.length, 'the season has a real number of RB weeks', String(rb.length));
+  const r2All = stat('fitPlayersR2'), gapAll = stat('fitPlayersGap');
+  press(chips('chartFitPlayers').find((b) => b.getAttribute('data-group') === 'RB'));
+  eq(chips('chartFitPlayers').filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent.trim()).join(),
+    'RB', 'pressing RB focuses it');
+  const lit = dots('chartFitPlayers').filter((d) => !/\bff-dot-dim\b/.test(d.getAttribute('class')));
+  eq(lit.length, rb.length, 'exactly the RB dots stay lit');
+  eq(dots('chartFitPlayers').length, playerPairs.length, 'the rest are still drawn, dimmed');
+  eq(stat('fitPlayersR2'), r2Of(rb), 'R² is now the RB dots\' own');
+  eq(stat('fitPlayersGap'), gapOf(rb), 'and so is Off perfect');
+  ok(stat('fitPlayersR2') !== r2All || stat('fitPlayersGap') !== gapAll, 'so the numbers on the graph changed',
+    `${r2All} ${gapAll} -> ${stat('fitPlayersR2')} ${stat('fitPlayersGap')}`);
+  const note = $('fitPlayersNote').textContent;
+  ok(note.includes(`${rb.length.toLocaleString('en-US')} highlighted dots (RB)`), 'the note says which dots the line is fitted to', note.slice(0, 900));
+  ok(note.includes(leastSquares(rb).slope.toFixed(2)), 'and gives their slope');
+  eq(prefsNow()['stats.fitPlayersBy'], 'position', 'the grouping is still remembered');
+  ok(!JSON.stringify(prefsNow()).includes('RB'), 'the highlight is not');
+  // Only RB can be opened now.
+  const svg2 = host.querySelector('svg');
+  let notRb = 0, opened = 0;
+  for (const d of dots('chartFitPlayers').filter((_, i) => i % 23 === 0)) {
+    tap(svg2, d);
+    const tip = host.querySelector('.ff-scatter-tip');
+    if (tip.hasAttribute('hidden')) continue;
+    opened++;
+    const m = /player=(\d+)/.exec(tip.getAttribute('href') || '');
+    if (!m || positionOf.get(Number(m[1])) !== 'RB') notRb++;
+  }
+  ok(opened > 0, 'taps still open previews', String(opened));
+  eq(notRb, 0, 'and only ever an RB\'s');
+
+  // ---- any click on the graph goes there ----
+  window.location = { href: 'about:blank' };
+  press(document.body);                      // not on the graph
+  eq(window.location.href, 'about:blank', 'a click elsewhere on the page goes nowhere');
+  const sel = host.querySelector('.ff-scatter-tip').getAttribute('href');
+  ok(/^waivers\.html\?player=\d+&week=\d+$/.test(sel || ''), 'a dot is selected', String(sel));
+  const far = new window.Event('pointerdown', { bubbles: true });
+  Object.assign(far, { pointerType: 'touch', clientX: 700, clientY: 20 });   // top-right corner: no dot
+  svg2.dispatchEvent(far);
+  eq(host.querySelector('.ff-scatter-tip').getAttribute('href'), sel, 'a tap on empty graph keeps the selection');
+  const click = new window.Event('click', { bubbles: true });
+  Object.assign(click, { clientX: 700, clientY: 20 });
+  svg2.dispatchEvent(click);
+  eq(window.location.href, sel, 'and sends the page to the selected dot\'s link');
+  window.location = { href: 'about:blank' };
+
+  // ---- clear, then another grouping ----
+  press(chips('chartFitPlayers').find((b) => b.getAttribute('data-group') === 'RB'));
+  eq(all($('chartFitPlayers'), 'circle.ff-dot-dim').length, 0, 'pressing RB again clears the highlight');
+  eq(stat('fitPlayersR2'), r2All, 'and the numbers are every dot\'s again');
+  press(chips('chartFitPlayers').find((b) => b.getAttribute('data-group') === 'QB'));
+  press(by('fitPlayersBy', 'team'));
+  eq(all($('chartFitPlayers'), 'circle.ff-dot-dim').length, 0, 'choosing another grouping clears a highlight too');
+  eq(chips('chartFitPlayers').map((b) => b.textContent.trim()).join('|'), stats.teams.map((t) => t.name).join('|'),
+    'by team: a chip per fantasy team, named as everywhere else on the page');
+  const teamColour = Object.fromEntries(chips('chartFitPlayers').map((b) => [b.getAttribute('data-group'),
+    /background:\s*([^;]+)/.exec(b.querySelector('.ff-chip-sw').getAttribute('style'))[1].trim()]));
+  stats.teams.forEach((t, i) => {
+    eq(teamColour[String(t.id)], SERIES_COLORS[i % SERIES_COLORS.length], `${t.name} keeps the colour the line charts give it`);
+  });
+  const t0 = stats.teams[2];
+  const owned = playerPairs.filter((p) => ownerOf.get(`${p.week}:${p.id}`) === t0.id);
+  press(chips('chartFitPlayers').find((b) => b.getAttribute('data-group') === String(t0.id)));
+  eq(dots('chartFitPlayers').length - all($('chartFitPlayers'), 'circle.ff-dot-dim').length, owned.length,
+    'highlighting a team lights the players on ITS roster each week');
+  eq(stat('fitPlayersR2'), r2Of(owned), 'with their own R²');
+
+  press(by('fitPlayersBy', 'week'));
+  eq(chips('chartFitPlayers').map((b) => b.textContent.trim()).join('|'), weeks.map((w) => `Wk ${w}`).join('|'),
+    'by week: a chip per finished week, in week order');
+  eq(new Set(chips('chartFitPlayers').map((b) => b.querySelector('.ff-chip-sw').getAttribute('style'))).size, weeks.length,
+    'each week its own colour');
+  const wk = weeks[4];
+  const inWeek = playerPairs.filter((p) => p.week === wk);
+  press(chips('chartFitPlayers').find((b) => b.getAttribute('data-group') === String(wk)));
+  eq(dots('chartFitPlayers').length - all($('chartFitPlayers'), 'circle.ff-dot-dim').length, inWeek.length,
+    'highlighting a week lights that week\'s players');
+  eq(stat('fitPlayersGap'), gapOf(inWeek), 'with their own Off perfect');
+
+  press(by('fitPlayersBy', 'none'));
+  eq(chips('chartFitPlayers').length, 0, 'None takes the legend away');
+  ok(dots('chartFitPlayers').every((d) => !d.hasAttribute('fill') && !/ff-dot-dim/.test(d.getAttribute('class'))),
+    'and the graph is as it was');
+  eq(prefsNow()['stats.fitPlayersBy'], undefined, 'and nothing is left remembered');
+}
+{
+  // ---- teams by week, one week highlighted ----
+  press(by('fitTeamsBy', 'week'));
+  eq(chips('chartFitTeams').length, 13, 'thirteen week chips on the teams graph');
+  eq(chips('chartFitPlayers').length, 0, 'the players graph keeps its own choice');
+  const wk = weeks[6];
+  const inWeek = teamPairs.filter((p) => p.week === wk);
+  const before = stat('fitTeamsR2') + ' ' + stat('fitTeamsGap');
+  press(chips('chartFitTeams').find((b) => b.getAttribute('data-group') === String(wk)));
+  eq(dots('chartFitTeams').length - all($('chartFitTeams'), 'circle.ff-dot-dim').length, 10, 'ten teams in the highlighted week');
+  eq(stat('fitTeamsR2'), r2Of(inWeek), 'R² of that week\'s ten dots');
+  eq(stat('fitTeamsGap'), gapOf(inWeek), 'and their Off perfect');
+  ok(before !== stat('fitTeamsR2') + ' ' + stat('fitTeamsGap'), 'both moved off the all-dots figures');
+  ok($('fitTeamsNote').textContent.includes(`10 highlighted dots (Wk ${wk})`), 'and the note names the week');
+  press(by('fitTeamsBy', 'team'));
+  eq(chips('chartFitTeams').length, 10, 'by team: ten chips');
+  press(by('fitTeamsBy', 'none'));
+  eq(stat('fitTeamsR2'), r2Of(teamPairs), 'back on None the numbers are every dot\'s');
 }
 
 // --- nothing new to read on the face of the page ---------------------------
