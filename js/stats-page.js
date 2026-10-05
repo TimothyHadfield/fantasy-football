@@ -8,7 +8,7 @@
 
 import { generateDemoLeague } from './demo.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
-import { computeLeagueStats, teamFitPoints, playerFitPoints } from './stats.js';
+import { computeLeagueStats, teamFitPoints, playerFitPoints, boxStats } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
 // THE POSITIONAL FLOOR (Tim, 2026-09-18). Schedule luck is the average
 // PROJECTED opponent, so it is a per-position assessment like any other: an
@@ -741,29 +741,43 @@ function renderCharts() {
 
   renderDistribution();
 
-  // A team's five-number summary needs about five weeks, so between weeks 3 and
-  // 4 the trend charts are back but this one is not. Say which, rather than
-  // letting the chart's generic "no data" carry it.
-  const withBox = [...s.teams].filter((t) => t.actualBox);
+  // A team's five-number summary wants about five weeks. Below that the boxes
+  // are drawn anyway from the weeks there are (Tim, 2026-10-05: "just show the
+  // partial information now and have a note that says it should have about 5
+  // weeks"), and the note above the chart says how thin they are. stats.js
+  // still withholds `actualBox` under five scores, so the early box is built
+  // here from the same weekly scores.
+  const BOX_WEEKS = 5;
+  const withBox = s.teams
+    .map((t) => ({ t, box: t.actualBox || boxStats((t.weekly || []).map((w) => w.actual), 2) }))
+    .filter((r) => r.box);
+  const thinBox = withBox.some((r) => !r.t.actualBox);
+  const early = $('boxEarly');
+  if (early) {
+    early.hidden = !thinBox;
+    early.textContent = thinBox
+      ? `Early look: ${plural(weeks, 'week')} so far. A spread wants about ${BOX_WEEKS}.`
+      : '';
+  }
   if (!withBox.length) {
     $('chartBox').innerHTML =
-      `<p class="empty">A team&rsquo;s spread needs about five weeks of scores — ` +
+      `<p class="empty">A team&rsquo;s spread needs at least two weeks of scores — ` +
       `there ${weeks === 1 ? 'is' : 'are'} ${plural(weeks, 'week')} so far.</p>`;
     return;
   }
 
   boxPlot($('chartBox'), {
     rows: withBox
-      .sort((a, b) => b.actualBox.median - a.actualBox.median)
-      .map((t) => ({
+      .sort((a, b) => b.box.median - a.box.median)
+      .map(({ t, box }) => ({
         id: t.id,
         name: t.name,
-        min: t.actualBox.min,
-        q1: t.actualBox.q1,
-        median: t.actualBox.median,
-        q3: t.actualBox.q3,
-        max: t.actualBox.max,
-        outliers: t.actualBox.outliers,
+        min: box.min,
+        q1: box.q1,
+        median: box.median,
+        q3: box.q3,
+        max: box.max,
+        outliers: box.outliers,
       })),
     xLabel: 'Points',
     highlight: highlightId,

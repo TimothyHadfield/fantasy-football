@@ -165,11 +165,14 @@ if (process.argv[2]) {
     } else {
       if (cells[12] === '—') problems.push('luck score dashed at 13 weeks');
       if (cells[7] === '—') problems.push('spread dashed at 13 weeks');
-      // Per-team boxes need five weeks; at 3-4 the panel explains itself instead.
+      // Per-team boxes want five weeks; at 3-4 they are drawn from what there is,
+      // under a note saying so, and from 5 on the note is gone.
       const drew = Boolean($('chartBox').querySelector('svg'));
-      const explained = $('chartBox').textContent.includes('five weeks');
-      if (weeks >= 5 && !drew) problems.push('box plot did not draw at 13 weeks');
-      if (weeks < 5 && !explained) problems.push('box panel neither drew nor explained itself');
+      const early = $('boxEarly');
+      const warned = Boolean(early) && !early.hidden && /about 5/.test(early.textContent);
+      if (!drew) problems.push(`box plot did not draw at ${weeks} weeks`);
+      if (weeks < 5 && !warned) problems.push('thin box plot carries no "about 5 weeks" note');
+      if (weeks >= 5 && early && !early.hidden) problems.push('the early note is still up at 5+ weeks');
     }
 
     // Total must be thousands-separated once it gets there, at one decimal as ESPN shows it.
