@@ -183,6 +183,9 @@
     },
     "pages-done-check.mjs": {
       "assertions": 151
+    },
+    "record-live-check.mjs": {
+      "assertions": 82
     }
   }
 }
