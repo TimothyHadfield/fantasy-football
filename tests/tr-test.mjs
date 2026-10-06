@@ -1504,7 +1504,8 @@ const SCENARIOS = {
       goal: (() => {
         const td = tr.querySelector('td.goal-cell');
         const sub = text(td && td.querySelector('.sub'));
-        return { sub, yes: (sub.match(/(\d+)% yes/) || [])[1] || null };
+        // `all`: the whole cell, rank and band included — the printed change is in it.
+        return { sub, yes: (sub.match(/(\d+)% yes/) || [])[1] || null, all: text(td) };
       })(),
       opp: text(tr.querySelector('td.opp-proj')),
     };
@@ -2415,6 +2416,11 @@ SCENARIOS.byeMark = async function byeMark() {
   const finder = trs.map((tr) => ({ partner: text(tr.querySelector('td.name')), men: readByeMarks(tr) }));
   const combo = readByeMarks($('comboBody'));
   const finderKey = text($('tradeByeKey'));
+  // EVERY KEY ON THE PAGE (2026-10-06): a sentence is printed once, under the
+  // first table that needs it. The pop-up's own key is not one of these.
+  const pageKeys = () => [...document.querySelectorAll('.bye-key')]
+    .filter((k) => !k.closest('#dealBody') && !k.hasAttribute('hidden')).map(text).filter(Boolean);
+  const keys0 = pageKeys();
   const note = text($('tradeNote'));
   // The pop-up, on the first Cy deal — or, with TR_DEAL_WITH, the first deal
   // naming that man (the preseason-arrow run opens one that carries an arrow).
@@ -2441,12 +2447,14 @@ SCENARIOS.byeMark = async function byeMark() {
   const boOpt = [...$('cuTeamB').options].find((o) => /^Bo\b/.test(o.textContent.trim()));
   let listABo = [];
   let cuKeyBo = '';
+  let keysBo = [];
   if (boOpt) {
     $('cuTeamB').value = boOpt.value;
     fire($('cuTeamB'), 'change');
     await settle(500);
     listABo = readByeMarks($('cuListA'));
     cuKeyBo = text($('cuByeKey'));
+    keysBo = pageKeys();
   }
   // The custom box, with Cy as the partner and nothing ticked yet.
   $('cuTeamB').value = '3';
@@ -2469,7 +2477,10 @@ SCENARIOS.byeMark = async function byeMark() {
   click($('cuSave'));
   await settle(1500);
   const saved = readByeMarks($('cuTable'));
-  return { errors, finder, combo, finderKey, note, deal, dealKey, listA, listB, cuKey, saved, listABo, cuKeyBo };
+  return {
+    errors, finder, combo, finderKey, note, deal, dealKey, listA, listB, cuKey, saved, listABo, cuKeyBo,
+    keys0, keysBo, keys: pageKeys(),
+  };
 };
 
 /**
@@ -3975,6 +3986,15 @@ for (const noApi of [false, true]) {
   ok(`the goal and the yes chance as the goal cell gives them${tag}`,
     !!ai.row.goal.yes && t.includes(`${ai.row.goal.yes}% he accepts`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
     `${JSON.stringify(ai.row.goal)} / ${(t.match(/chance \(my goal.*/) || [''])[0]}`);
+  {
+    // "5.9% → 10.3% (+4.4% ±0.4)": the change it quotes is those two subtracted
+    // (2026-10-06), the same figure the row's goal cell prints.
+    const m = t.match(/(\d+\.\d)% → (\d+\.\d)% \(([+−]?\d+\.\d)% ±/);
+    const tenth = (s) => Math.round(num(s) * 10);
+    ok(`the change it quotes is its own before → after subtracted, and the row's${tag}`,
+      !!m && tenth(m[2]) - tenth(m[1]) === tenth(m[3]) && ai.row.goal.all.includes(`${m[3]}% ±`),
+      `${(t.match(/chance \(my goal.*/) || [''])[0]} / ${ai.row.goal.all}`);
+  }
   ok(`my remaining roster, by position${tag}`, /Rest of my roster \(pts\/wk\):\nQB: /.test(t), t.slice(-400));
   ok(`no "undefined", "NaN" or "null" anywhere${tag}`, !/undefined|NaN|\bnull\b|\[object/.test(t), t);
   ok(`and it stays short (${t.split(/\s+/).length} words)${tag}`, t.split(/\s+/).length <= 400, t.split(/\s+/).length);
@@ -4487,11 +4507,13 @@ if (!wk.boot) {
     /You gain a week \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
   // PER WEEK LEADS, the total follows — Tim, 2026-09-16. The leading number is
   // re-derived from the row's own total (its sort key) over the demo span.
+  // Since 2026-10-06 it is the row's two printed lineup figures subtracted, so
+  // it may sit a tenth off total ÷ weeks; the total itself is still exact.
   {
     const n = demoSpan(wk.week).length;
     const bad = wk.after.trades.filter((t) => {
       const m = t.gainText.match(/^([+−]?\d+(?:\.\d+)?)\/wk([+−]?\d+(?:\.\d+)?) total$/);
-      return !m || Math.abs(num(m[1]) - t.myGain / n) > 0.051 || Math.abs(num(m[2]) - t.myGain) > 0.051;
+      return !m || Math.abs(num(m[1]) - t.myGain / n) > 0.101|| Math.abs(num(m[2]) - t.myGain) > 0.051;
     });
     ok('every gain leads with per week and carries the total underneath',
       wk.after.trades.length > 0 && bad.length === 0,
@@ -5921,7 +5943,14 @@ if (!live.boot) {
   ok('pop-up: the key is there', /green/i.test(sends.dealKey), sends.dealKey);
   ok('custom box: your list, ticked or not, is on green', every(sends.listA, green), dump(sends.listA));
   ok('custom box: his list is not marked', every(sends.listB, plain), dump(sends.listB));
-  ok('custom box: the key is there', /green/i.test(sends.cuKey), sends.cuKey);
+  // ONE KEY ON THE PAGE (2026-10-06): the finder, the combo and the custom box
+  // all show the mark here, and the sentence used to be printed under each.
+  const said = (keys, re) => (keys || []).join(' ¦ ').split(re).length - 1;
+  for (const [when, keys] of [['on opening', sends.keys0], ['with Bo in the custom box', sends.keysBo],
+    ['with a custom trade saved', sends.keys]]) {
+    eq(said(keys, /Green name:/), 1, `the bye key is on the page exactly once, ${when}`);
+  }
+  ok('custom box: it does not repeat the finder’s key', !/green/i.test(sends.cuKey), sends.cuKey);
   ok('saved custom row: your man is on green, his is not',
     every(men([{ men: sends.saved }], 'send'), green) && every(men([{ men: sends.saved }], 'recv'), plain),
     dump(sends.saved));
@@ -5970,7 +5999,12 @@ if (!live.boot) {
   ok('Bo, custom box: your men off in week 9 (a week you play Bo) are on green, the tooltip naming every week',
     every(offWeek.listABo, (m) => plain(m) || (green(m) && m.title === BO_WORDS)) &&
       offWeek.listABo.some(green), dump(offWeek.listABo));
-  ok('and the custom box key is there for them', /green/i.test(offWeek.cuKeyBo), offWeek.cuKeyBo);
+  // The custom box prints the key itself only when no table above it has: once
+  // on the page either way.
+  eq((offWeek.keysBo || []).join(' ¦ ').split(/Green name:/).length - 1, 1,
+    'and the key is on the page once for them — under the custom box when the finder shows no such man');
+  ok('which is the custom box’s own line exactly when the finder has none',
+    /green/i.test(offWeek.cuKeyBo) === !/green/i.test(offWeek.finderKey), `${offWeek.finderKey} | ${offWeek.cuKeyBo}`);
   ok('already played: no finder key at all', !past.finderKey, past.finderKey);
 }
 
@@ -6157,7 +6191,10 @@ if (!live.boot) {
     ravens.length > 0 && ravens.every((m) => m.trend === 'up' && /bye-send/.test(m.cls) && /\binj\b/.test(m.injCls)),
     dump(everyone.filter((m) => m.id === -16033)));
   ok('the finder key names the arrow', /Green ▲ \/ red ▼ by a name/.test(r.finderKey || ''), r.finderKey);
-  ok('the custom box key names it too', /preseason/.test(r.cuKey || ''), r.cuKey);
+  // Once on the page (2026-10-06): the custom box no longer repeats the finder's.
+  for (const re of [/Green name:/, /Underlined:/, /preseason/]) {
+    eq((r.keys || []).join(' ¦ ').split(re).length - 1, 1, `the page's keys say ${re} exactly once`);
+  }
   ok('the pop-up (a deal with Gibbs in it) draws his red ▼',
     places['pop-up'].some((m) => m.id === 4429795 && m.trend === 'down'), JSON.stringify(places['pop-up']).slice(0, 300));
   ok('and its key names the arrow too', /preseason/.test(r.dealKey || ''), r.dealKey);
@@ -7228,6 +7265,60 @@ if (!gt.boot) {
     scored.every((t) => (/\bpos\b/.test(t.goal.cls) ? /^\+/.test(t.goal.head) : true) &&
       (/\bneg\b/.test(t.goal.cls) ? /^−/.test(t.goal.head) : true)),
     scored.map((t) => `${t.goal.cls}:${t.goal.head}`).slice(0, 6).join(' '));
+
+  // -- A PRINTED CHANGE IS ITS PRINTED ENDS SUBTRACTED (audit, 2026-10-06) -----
+  // The live page printed "+2.7% · 2.1% → 4.7%": the change and each end were
+  // rounded on their own. Every place a change sits beside its before → after
+  // is read here, under both goals.
+  const tenths = (s) => Math.round(Number(String(s).replace('−', '-').replace('+', '')) * 10);
+  /** '' when "Δ … a% → b%" adds up, the text when it does not, null when there is no trio. */
+  const trioOff = (words) => {
+    const m = String(words || '').match(/([+−-]?\d+\.\d)% ±\d\.\d\D{0,4}?(\d+\.\d)% → (\d+\.\d)%/);
+    if (!m) return null;
+    return tenths(m[3]) - tenths(m[2]) === tenths(m[1]) ? '' : m[0];
+  };
+  const cellTrios = (trades) => trades.flatMap((t) => [t.goal, t.alt])
+    .filter((c) => c && /→/.test(c.sub || '')).map((c) => trioOff(`${c.head} ${c.sub}`));
+  for (const [goalName, page] of [['title', T], ['last', gt.last]]) {
+    const trios = cellTrios(page.trades);
+    ok(`${goalName} goal: the chance cells are read, the ranked column on every row`, trios.length >= page.trades.length &&
+      trios.every((x) => x !== null), `${trios.length} of ${2 * page.trades.length}`);
+    ok(`${goalName} goal: in every cell the printed change is the printed after minus the printed before`,
+      trios.every((x) => x === ''), trios.filter(Boolean).slice(0, 4).join(' | '));
+    ok(`${goalName} goal: and no change is printed as a signed zero`,
+      page.trades.every((t) => !/^[+−-]0\.0%/.test(`${t.goal.head}`) && !/^[+−-]0\.0%/.test(`${(t.alt || {}).head}`)),
+      page.trades.map((t) => t.goal.head).join(' '));
+  }
+  // The sort key is NOT that display figure: it stays the exact expected change.
+  ok('while the sort key keeps its full precision — it is not the rounded figure on screen',
+    scored.length > 2 && scored.every((t) => Math.abs(t.goal.v * 1000 - Math.round(t.goal.v * 1000)) > 1e-9),
+    scored.slice(0, 4).map((t) => t.goal.v).join(','));
+  for (const [where, words] of [['the pop-up', gt.dealGoal], ['the combo headline', gt.comboGoal],
+    ['the custom box', gt.cuPreview], ['a saved custom row', gt.cuRow && gt.cuRow.goal && `${gt.cuRow.goal.head} ${gt.cuRow.goal.sub}`]]) {
+    eq(trioOff(words), '', `${where}: the change is its printed ends subtracted too`);
+  }
+  // The same rule for points: a row's Difference is its own two lineup cells.
+  if (gt.deal && gt.deal.weeks) {
+    const rows = [...gt.deal.weeks.weeks, ...gt.deal.weeks.totals]
+      .filter((r) => Number.isFinite(r.before) && Number.isFinite(r.after));
+    const off = rows.filter((r) => tenths(r.after) - tenths(r.before) !== tenths(r.delta));
+    ok('pop-up: every row of the week table, the two totals included, prints after − before to the tenth',
+      rows.some((r) => r.total) && rows.length > 5 && off.length === 0,
+      off.map((r) => `${r.label}: ${r.before} → ${r.after}, ${r.delta}`).join(' | '));
+  }
+  {
+    // The finder: "You gain" a week beside "Your lineup, a week", where the gain
+    // is your own lineup's (a netted one has his meeting week off it).
+    const own = T.trades.filter((t) => t.myGain === t.ownGain)
+      .map((t) => ({ ba: t.beforeAfter.match(/^(\d+\.\d) → (\d+\.\d)\/wk/), g: t.gainText.match(/^([+−]?\d+\.\d)\/wk/), t }))
+      .filter((x) => x.ba && x.g);
+    const off = own.filter((x) => tenths(x.ba[2]) - tenths(x.ba[1]) !== tenths(x.g[1]));
+    ok('finder: a row’s gain a week is its lineup a week, after minus before, as printed',
+      own.length > 5 && off.length === 0, `${own.length} rows · ` + off.slice(0, 4).map((x) => `${x.t.beforeAfter} ${x.t.gainText}`).join(' | '));
+    ok('finder: no figure on a row is a signed zero',
+      T.trades.every((t) => !/[+−-]0\.0(?!\d)/.test(`${t.gainText} ${(t.opp || {}).head}`)),
+      T.trades.map((t) => `${t.gainText} ${(t.opp || {}).head}`).filter((s) => /[+−-]0\.0(?!\d)/.test(s)).slice(0, 4).join(' | '));
+  }
   ok('the method prints the yes-curve with its two constants, so a row can be checked',
     /Will he say yes\?/.test(T.note) && /3\) ÷ 1\.5/.test(T.note) && /88% at dead even/.test(T.note),
     T.note.slice(T.note.indexOf('Will he'), T.note.indexOf('Will he') + 400));
