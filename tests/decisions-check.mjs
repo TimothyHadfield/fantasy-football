@@ -858,6 +858,12 @@ const CHILDREN = {
     await p.pick('lineup-reasonable:all:all');
     const seven = doc.querySelector('#teamTable tr[data-team="7"] .dz-why');
     out.allBefore = where();
+    // The page keeps hover quiet for 900 ms after it has gone on to Season by
+    // week (so the card does not pop back up under a still mouse). On a fast
+    // machine the steps above take less than that, the hover is ignored and the
+    // click opens the card instead of going on — which is how this failed on CI
+    // and passed on the laptop.
+    await new Promise((r) => setTimeout(r, 1000));
     p.fire(seven, 'mouseover');
     p.click(seven);
     await p.settle();
