@@ -43,6 +43,15 @@ a. Phone: until phase 4 the box only has history on the laptop that saved it. OK
 b. Weeks played since the reference week are blank in Difference (scored − projected is luck, not a projection change). (assumed)
 c. Words: box title "Proj changes", select "As of", switch "Total | Difference". (assumed; his to rename)
 
+## BUILT 2026-10-05/06
+
+- Phase 1 (capture store), 2 (Position | Player), 3 (Proj changes box): live, see PROGRESS.
+- **Phase 4a, cloud carry, 2026-10-06** (Tim: "can we make sure that we save it so that we don't lose it after every week and it changes?" — taken as the go). Each week's copy rides the cloud sync to `leagues/<id>/seasons/<season>/projhist/<week>`; a week known only from a schema-2 reading goes to `projhist/<week>-part` (`partial: true`, one team); `projhist/index` lists what is up (the transport cannot list). Nothing is ever replaced or deleted. Down: a browser lacking a week takes it at its sync (laptop) or at its first cloud read after a new sync (phone, awaited, so the box has it at first paint); one-team copies are kept locally under `ff.projhist-part.1.*`, which `has()` does not see, so they never block a whole capture. Marks in `ff.cloud.projhist`. Rules already allow it (`match /{rest=**}` under the league). tests/test-projhist-cloud.mjs 131.
+- Where the plan was wrong: "same path, `partial` flag" became a separate `-part` doc, so nothing is ever rewritten.
+- Still open: Export archive, Preseason reference; on the laptop, weeks pulled down by a sync show after a reload.
+
 ## NOT verified
+
+- The real round trip laptop sync → Firestore → iPhone; reads through the real Firebase SDK; the box drawing a `source: 'cloud'` one-team week.
 
 - Which weeks Tim's own browser actually holds (cannot be read from here).
