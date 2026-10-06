@@ -1,12 +1,12 @@
 # The archive
 
-> **Status, 2026-09-19: this directory is still empty, and that is the one
-> outstanding job on the project.** The capture itself IS working — Tim's
-> browser holds readings for weeks 1 and 2, about 31KB — but they live only in
-> that browser, where clearing site data would delete them. He needs to press
-> **Export archive** on the schedule page's Time machine panel; the file lands
-> in his Downloads and gets committed here. See HANDOFF.md, which a fresh
-> session reads first.
+> **Status, 2026-10-06: `476225250-2026.json` holds weeks 1–5.** Tim exported
+> it and chose what is published: **the weekly readings only**. Since
+> 2026-10-06 the Export button writes a full backup (settings, per-player
+> projection history, Decisions data as well); this repo is public, so those
+> parts are stripped before the file is committed here — keep only `v`,
+> `exportedAt`, `leagueId`, `season` and `snapshots`. The sentence below about
+> committing the download unedited is from before that.
 
 This is where the schedule page's **time machine** keeps its history.
 

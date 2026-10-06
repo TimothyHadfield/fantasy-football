@@ -50,13 +50,13 @@ One line each; detail in the archive snapshot named above unless a commit is giv
 - Stats: tied week prints "0" under Close game (was a dash); tile names the hardest REST-of-season team; "Incomplete:" wording.
 - Home phone copy: no "waivers clear"; at 1280 "your win chance 41%" wraps on your card.
 - "You are" unset: Schedule/Analysis/Trade/Decisions silently show the first team (Players and Stats handle it differently); the picker lists ESPN team names while pages use manager names.
-- A committed export in `data/snapshots/` would now publish his prefs and every team's projections in the public repo (the backup file is bigger than the old archive).
+- ~~Committed export privacy~~ answered 2026-10-06 (question box): "Weekly readings only" — `data/snapshots/476225250-2026.json` (weeks 1–5) carries only `v, exportedAt, leagueId, season, snapshots`; strip a new export the same way before committing (see that folder's README). His full file is `Downloads\fantasy-archive-476225250-2026 (2).json`.
 - Held ideas needing his call (additions audit, ranked): D/ST streaming by sportsbook line (ESPN public scoreboard `site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?week=N&seasontype=2` carries DraftKings spread/over-under and the game clock, no key, CORS `*`, undocumented — also reverses the 2026-09-20 "no odds feed" rejection); laptop-free weekly save via a GitHub Action (cookies/privacy); Trade finder on the phone; real game clock for the week in progress; playoff weeks 15–17 support (date-bound, mid-December); league-wide best/worst moves; group-chat award lines; combining hypotheticals; projection trust by horizon (early November); draft report card.
 
 ## Authorized next steps
 - None open. Every go-ahead through 2026-10-06 is built.
 - Phase 4 needs his answers to plan questions d and f; Phase 6 needs a go.
-- **Tim's own two jobs:** set [Pages → Source → GitHub Actions](https://github.com/TimothyHadfield/fantasy-football/settings/pages) so the test gate bites, and press **Export archive** on Schedule (now a full backup; weeks 1–2 exist only in his browser).
+- Tim did both of his jobs 2026-10-06: exported the archive (weeks 1–5, committed readings-only) and set Pages Source → GitHub Actions (`build_type: workflow`). **The site now publishes ONLY when the `tests` workflow is green** — a push is live after the CI run (five shards, `run-all.mjs --shard=I/5`, slice 1 = tr-test), not after a minute; a red or cancelled run means the old site stays up. The live-check hook's "not live after 6 min" is expected now: check `gh run list -R TimothyHadfield/fantasy-football -w tests`.
 
 ## Standing instructions
 - **Push every change when it is done** — Tim judges by the deployed site. Never push failing tests. Split into sensible commits.
