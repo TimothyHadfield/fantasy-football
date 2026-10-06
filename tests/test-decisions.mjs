@@ -766,5 +766,21 @@ for (const [name, w] of [['closed', world], ['P', P], ['P2', P2], ['Q', Q], ['T'
 }
 ok(weeksRead > 500 && wrong.length === 0, `the swaps add up to the difference in every team-week of every decision (${weeksRead} read)`, JSON.stringify(wrong.slice(0, 5)));
 
+// ---- a man the feed sent no projection for -----------------------------------
+// Tim, 2026-10-06: "the season by week chart doesn't show the player's proj ...
+// Can you show their proj score". The engine ranks a missing projection as 0;
+// a page must print none rather than "0.0", so the starter says which he is.
+{
+  const blank = buildWorld();
+  const lock = blank.rosters.get(2).find((t) => t.id === MITCH).players.find((p) => p.playerId === 10);
+  lock.projected = null;
+  const m = D.mirror(blank, D.lineupDecision(blank, 'lineup-perfect', MITCH));
+  const flagged = (c) => [...c.realStarters, ...c.starters].filter((p) => p.noProj).map((p) => p.playerId);
+  eq([...new Set(flagged(cell(m, MITCH, 2)))], [10], 'a starter with no projection says so (noProj), in both worlds, and only he');
+  eq(cell(m, MITCH, 2).realStarters.find((p) => p.playerId === 10).projected, 0, 'and still ranks as 0');
+  const all = D.mirror(world, D.lineupDecision(world, 'lineup-perfect', D.ALL_TEAMS));
+  eq(TEAMS.flatMap((t) => WEEKS.flatMap((w) => flagged(cell(all, t, w)))), [], 'where every man has a projection, nobody carries the mark');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

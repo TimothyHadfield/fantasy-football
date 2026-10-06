@@ -166,6 +166,20 @@ async function bootPage(prefs = {}) {
 
   const cells = (tr) => [...tr.children].map(text);
   const tableRows = (id) => [...document.querySelectorAll(`#${id} tbody tr`)].map(cells);
+  // SEASON BY WEEK as these facts have always read it: the slot and the week
+  // cells, each a name and what he counts for. The dim projection before a
+  // score and the Avg column at the end (2026-10-06) are the `lineups` child's.
+  const weekCell = (td) => {
+    const c = td.cloneNode(true);
+    for (const pj of [...c.querySelectorAll('.sbw-pj')]) {
+      const after = pj.nextSibling;
+      if (after && after.nodeType === 3) after.textContent = after.textContent.replace(/^\s+/, '');
+      pj.remove();
+    }
+    return text(c);
+  };
+  const seasonCells = (tr) => [...tr.children].filter((td) => !td.classList.contains('avg')).map(weekCell);
+  const seasonRows = (id) => [...document.querySelectorAll(`#${id} tbody tr`)].map(seasonCells);
   const dimmed = (id) => [...document.querySelectorAll(`#${id} td`)]
     .map((td) => (td.getAttribute('style') || '').match(/opacity:\s*([\d.]+)/))
     .filter(Boolean).map((m) => Number(m[1]));
@@ -212,10 +226,10 @@ async function bootPage(prefs = {}) {
       diff: document.querySelector(`#${box}Hyp table`)?.getAttribute('data-view') === 'diff',
     }])),
     season: {
-      cur: cells(document.querySelector('#seasonCur tbody.split tr') || { children: [] }),
-      hyp: cells(document.querySelector('#seasonHyp tbody.split tr') || { children: [] }),
-      body: tableRows('seasonHyp'),
-      curBody: tableRows('seasonCur'),
+      cur: seasonCells(document.querySelector('#seasonCur tbody.split tr') || { children: [] }),
+      hyp: seasonCells(document.querySelector('#seasonHyp tbody.split tr') || { children: [] }),
+      body: seasonRows('seasonHyp'),
+      curBody: seasonRows('seasonCur'),
       // (the points cells: a slot's own cell carries its lineup place to sort on)
       vals: [...document.querySelectorAll('#seasonHyp td.wk[data-v]')].map((td) => Number(td.getAttribute('data-v'))),
       teamRowHidden: $('seasonTeamRow').hasAttribute('hidden'),
@@ -236,7 +250,7 @@ async function bootPage(prefs = {}) {
       list: [...document.querySelectorAll('.dz-row')].filter((b) => b.querySelector('.wk-live')).map((b) => b.dataset.id),
       season: ['seasonCur', 'seasonHyp'].map((id) => [...document.querySelectorAll(`#${id} thead th`)]
         .filter((th) => th.querySelector('.wk-live')).map(text)),
-      proj: ['seasonCur', 'seasonHyp'].map((id) => [...document.querySelectorAll(`#${id} td.sbw-proj`)].map(text)),
+      proj: ['seasonCur', 'seasonHyp'].map((id) => [...document.querySelectorAll(`#${id} td.sbw-proj`)].map(weekCell)),
       all: document.querySelectorAll('.wk-live').length,
     },
     noiseOn: Boolean($('noiseSwitch').checked),
@@ -622,6 +636,7 @@ const CHILDREN = {
           v: td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : null,
           cls: (td.className.match(/\bheat(-[a-z0-9]+)*/g) || []).join(' '),
           mark: (text(td).match(/[▲▼]/) || [''])[0], title: td.getAttribute('title') || '', live: live[i + 1],
+          avg: td.classList.contains('avg'),
         })),
       }));
     };
@@ -644,9 +659,13 @@ const CHILDREN = {
           const scale = H.heatScale(same.map((c) => c.v));
           for (const c of same) {
             if (c.v === null) continue;
-            const want = H.heatOf(c.v, scale, { what: `the other squads’ ${row.slot === 'Total' ? 'totals' : row.slot} in week ${i + 1}` })
-              || { cls: '', mark: '', words: '' };
+            // (The Avg column, the last: a slot's Avg against the other squads' Avg there.)
+            const what = c.avg
+              ? `the other squads’ ${row.slot === 'Total' ? 'average totals' : `${row.slot} average`}`
+              : `the other squads’ ${row.slot === 'Total' ? 'totals' : row.slot} in week ${i + 1}`;
+            const want = H.heatOf(c.v, scale, { what }) || { cls: '', mark: '', words: '' };
             heat.cells++;
+            if (c.avg) heat.avgCells = (heat.avgCells || 0) + 1;
             if (/heat-(up|dn)/.test(c.cls)) heat.tinted++;
             if (c.mark) heat.marked++;
             if (want.words && c.title.includes(want.words)) heat.said++;
@@ -657,6 +676,203 @@ const CHILDREN = {
     }
     heat.wrong = heat.wrong.slice(0, 6);
     out.heat = heat;
+    out.errors = p.errors;
+    return out;
+  },
+
+  /**
+   * SEASON BY WEEK, FOUR ADDITIONS (Tim, 2026-10-06: "if the user clicks on the
+   * number while the preview is open, then automatically pull up that player's
+   * season by week right below ... highlight any positions/player's that changed
+   * ... show their proj score to the left ... in a dimmer grey ... add a column
+   * ... that shows the avg for each row" — "on right not left", he said after).
+   * One reader: six decisions read cell by cell beside their week previews, the
+   * Avg heading sorted on, then from a preview to the lineups with a mouse, the
+   * keyboard and a finger, and with all users on.
+   */
+  async lineups() {
+    if (process.env.DZ_CENTS) scoreInCents();
+    const p = await bootPage();
+    const out = { settled: await p.settle() };
+    const doc = p.document;
+    // (A control the page does not have is a fact for the parent to fail on, not a crash here.)
+    const tap = (el) => { if (el) p.click(el); };
+    // What each man was projected for, straight from the stub's own world (the
+    // page reads the same one): week|player -> projection.
+    const stub = await import('./cap-stub-season.mjs');
+    const world = await stub.fetchDecisionWorld({});
+    const projected = new Map();
+    for (const [week, teams] of world.rosters) {
+      for (const t of teams) for (const man of t.players) projected.set(`${week}|${man.playerId}`, man.projected);
+    }
+    // (A man a decision keeps who was on nobody's roster that week: his own line.)
+    for (const [id, who] of world.players) {
+      for (const [week, line] of Object.entries(who.byWeek || {})) {
+        if (!projected.has(`${week}|${id}`)) projected.set(`${week}|${id}`, line.projected);
+      }
+    }
+    const bare = (el, drop) => {
+      const c = el.cloneNode(true);
+      for (const x of [...c.querySelectorAll(drop)]) x.remove();
+      return text(c);
+    };
+    const half = (id) => {
+      const t = doc.querySelector(`#${id} table`);
+      return {
+        diff: t.getAttribute('data-view') === 'diff',
+        head: [...t.querySelectorAll('thead th')].map((th) => ({
+          t: bare(th, '.wk-live'), sort: th.hasAttribute('data-sort'), at: th.classList.contains('dz-at'),
+        })),
+        rows: [...t.querySelectorAll('tbody tr')].map((tr) => {
+          const avg = tr.querySelector('td.avg');
+          return {
+            slot: tr.getAttribute('data-slot') || 'Total',
+            cells: [...tr.children].slice(1).filter((td) => !td.classList.contains('avg')).map((td) => {
+              const pj = td.querySelector('.sbw-pj');
+              const pts = td.querySelector('.sbw-pts');
+              const wk = Number(td.getAttribute('data-wk'));
+              const pid = td.getAttribute('data-pid');
+              return {
+                wk, pid, name: text(td.querySelector('.sbw-name')),
+                pj: pj ? text(pj) : null, whole: pj ? pj.getAttribute('data-r') : null,
+                // The projection is the FIRST thing on the numbers' line.
+                pjFirst: pj ? pts.firstChild === pj : null,
+                shown: bare(pts || td, '.sbw-pj, .heatmark'), v: td.getAttribute('data-v'),
+                want: pid && projected.has(`${wk}|${pid}`) ? projected.get(`${wk}|${pid}`) : null,
+                title: td.getAttribute('title') || '', lines: pts ? pts.querySelectorAll('br').length : 0,
+                chg: td.classList.contains('sbw-chg'), at: td.classList.contains('dz-at'), inPlay: td.classList.contains('sbw-proj'),
+              };
+            }),
+            avg: avg ? { t: bare(avg, '.heatmark'), v: avg.getAttribute('data-v'), last: tr.lastElementChild === avg } : null,
+          };
+        }),
+      };
+    };
+    const pop = () => {
+      const el = p.$('whyPop');
+      return {
+        open: Boolean(el) && !el.hasAttribute('hidden'), cls: el ? el.className : '',
+        buttons: el ? [...el.querySelectorAll('button')].map(text) : [],
+      };
+    };
+    const weekWhy = (wk) => doc.querySelector(`#weekTable tr[data-wk="${wk}"] .dz-why`);
+    const manName = (td) => { const m = td.querySelector('.dz-man'); return m ? bare(m, '.pv') : null; };
+    /** Every week's preview, as a mouse over its Diff gets it: who Started, who starts Instead. */
+    const previews = () => [...doc.querySelectorAll('#weekTable tbody tr[data-wk]')].map((tr) => {
+      const el = tr.querySelector('.dz-why');
+      p.fire(el, 'mouseover');
+      const rows = [...p.$('whyPop').querySelectorAll('tbody tr')].filter((r) => r.children.length === 4);
+      const got = {
+        wk: Number(tr.getAttribute('data-wk')),
+        started: rows.map((r) => manName(r.children[1])).filter(Boolean),
+        instead: rows.map((r) => manName(r.children[2])).filter(Boolean),
+      };
+      p.fire(el, 'mouseout');
+      return got;
+    });
+
+    // ---- six decisions, each read whole: Hypothetical, then as a Difference
+    out.cases = [];
+    for (const [team, id] of [[1, 'lineup-reasonable:1:all'], [1, 'lineup-perfect:1:all'], [1, 'move:mv-adddrop'],
+      [7, 'lineup-reasonable:7:all'], [7, 'lineup-perfect:7:all'], [3, 'move:mv-drop']]) {
+      if (String(p.$('teamSelect').value) !== String(team)) { p.choose(p.$('teamSelect'), team); await p.settle(); }
+      await p.pick(id);
+      const one = { id, previews: previews(), cur: half('seasonCur'), hyp: half('seasonHyp') };
+      await p.view('season', 'diff');
+      one.diff = half('seasonHyp');
+      await p.view('season', 'total');
+      out.cases.push(one);
+    }
+
+    // ---- the Avg heading sorts, and the other half follows
+    p.choose(p.$('teamSelect'), 1);
+    await p.settle();
+    await p.pick('lineup-reasonable:1:all');
+    const avgHead = () => [...doc.querySelectorAll('#seasonCur thead th')].find((th) => th.classList.contains('avg'));
+    const order = (id) => half(id).rows.filter((r) => r.slot !== 'Total').map((r) => [r.slot, r.avg && Number(r.avg.v)]);
+    tap(avgHead());
+    out.avgSort = { cur: order('seasonCur'), hyp: order('seasonHyp'), total: half('seasonCur').rows.slice(-1)[0].slot, head: Boolean(avgHead()) };
+    p.click(doc.querySelector('#seasonCur thead th'));
+    p.click(doc.querySelector('#seasonCur thead th'));
+
+    // ---- from a preview to the lineups
+    const scrolls = [];
+    p.$('panelSeason').scrollIntoView = (o) => scrolls.push(o || null);
+    const key = (el, k) => {
+      const e = new p.window.Event('keydown', { bubbles: true, cancelable: true });
+      e.key = k;
+      el.dispatchEvent(e);
+    };
+    const outlined = () => ['seasonCur', 'seasonHyp'].map((id) => {
+      const h = half(id);
+      return {
+        head: h.head.filter((th) => th.at).map((th) => th.t),
+        weeks: [...new Set(h.rows.flatMap((r) => r.cells.filter((c) => c.at).map((c) => c.wk)))],
+        cells: h.rows.flatMap((r) => r.cells).filter((c) => c.at).length,
+        rows: h.rows.length,
+      };
+    });
+    const where = () => ({
+      pop: pop().open, scrolls: scrolls.length, how: scrolls[scrolls.length - 1] || null, outlined: outlined(),
+      seasonTeam: p.$('seasonTeam').value, team: p.$('teamSelect').value, all: Boolean(p.$('allSwitch').checked),
+      picked: (p.snap().list.find((r) => r.selected) || {}).id,
+    });
+    // A mouse: over the number its card is open, and the click goes on.
+    const two = weekWhy(2);
+    p.fire(two, 'mouseover');
+    out.cardOpen = pop();
+    p.click(two);
+    out.mouse = where();
+    p.click(p.$('resultLede'));
+    out.afterNextClick = where();
+    // The keyboard: focus opens the card, Enter goes on.
+    const three = weekWhy(3);
+    p.fire(three, 'focusin');
+    out.focusOpen = pop().open;
+    key(three, 'Enter');
+    out.keyboard = where();
+    p.click(p.$('resultLede'));
+    // The Biggest swap line, a button: a click opens its week, and the next goes on.
+    p.click(p.$('resultBig'));
+    out.bigOpen = pop().open;
+    p.click(p.$('resultBig'));
+    out.big = { ...where(), wk: p.$('resultBig').getAttribute('data-wk') };
+    p.click(p.$('resultLede'));
+    // A finger: the first tap is the sheet, as before; its own button goes on.
+    const touch = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    const mouse = p.window.matchMedia;
+    p.window.matchMedia = touch;
+    globalThis.matchMedia = touch;
+    p.click(two);
+    out.sheet = pop();
+    tap(p.$('whyPop').querySelector('.op-go'));
+    out.finger = where();
+    p.click(p.$('resultLede'));
+    p.window.matchMedia = mouse;
+    globalThis.matchMedia = mouse;
+
+    // ---- all users: a team's Points/wk goes to THAT team's lineups, and stays in all users
+    p.$('allSwitch').checked = true;
+    p.fire(p.$('allSwitch'), 'change');
+    await p.settle();
+    await p.pick('lineup-reasonable:all:all');
+    const seven = doc.querySelector('#teamTable tr[data-team="7"] .dz-why');
+    out.allBefore = where();
+    p.fire(seven, 'mouseover');
+    p.click(seven);
+    await p.settle();
+    out.allGo = where();
+    out.allSeason = half('seasonHyp').rows.slice(-1)[0];
+    p.window.matchMedia = touch;
+    globalThis.matchMedia = touch;
+    const four = doc.querySelector('#teamTable tr[data-team="4"] .dz-why');
+    p.click(four);
+    out.allSheet = pop();
+    tap(p.$('whyPop').querySelector('.op-go'));
+    await p.settle();
+    out.allFinger = where();
+    p.window.matchMedia = mouse;
+    globalThis.matchMedia = mouse;
     out.errors = p.errors;
     return out;
   },
@@ -906,6 +1122,9 @@ const RUNS = {
   why: { child: 'why', env: {} },
   'why-early': { child: 'why', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
   'why-cents': { child: 'why', env: { DZ_CENTS: '1' } },
+  lineups: { child: 'lineups', env: {} },
+  'lineups-early': { child: 'lineups', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
+  'lineups-cents': { child: 'lineups', env: { DZ_CENTS: '1' } },
   sort: { child: 'sort', env: {} },
   'sort-early': { child: 'sort', env: { CAP_EARLY: '1' } },
 };
@@ -1599,6 +1818,104 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
     !/\.dz-fit \.sbw-actual/.test(rest) && !/has\(th\.sorted\)/.test(rest), '');
 }
 
+// ---- Season by week: what changed, the projection, the Avg, and the way there
+//
+// Tim, 2026-10-06 (the `lineups` child). Each fact is read off the page and
+// worked again here: who is marked against the week previews' own names, a
+// projection against the stub's world, an Avg from the row's printed numbers.
+for (const run of ['lineups', 'lineups-early', 'lineups-cents']) {
+  const L = child(run);
+  if (!booted(L, run)) continue;
+  const names = (list) => [...list].sort();
+  const marked = (h, wk) => names(h.rows.flatMap((r) => r.cells).filter((c) => c.chg && c.wk === wk).map((c) => c.name));
+  const tenth = (n) => Math.round(n * 10) / 10;
+  const meanShown = (row) => {
+    const got = row.cells.map((c) => num(c.shown)).filter((v) => v !== null);
+    return got.length ? tenth(got.reduce((a, b) => a + b, 0) / got.length).toFixed(1) : '—';
+  };
+  const bad = { marks: [], proj: [], said: [], twice: [], sorts: [], avg: [], avgDiff: [], place: [] };
+  let marks = 0;
+  let projs = 0;
+  let avgs = 0;
+  let inPlay = 0;
+  for (const c of L.cases) {
+    for (const pv of c.previews) {
+      // The men the preview names ARE the men marked: Started in Current,
+      // Instead in the hypothetical — and as a Difference too.
+      const short = (n) => n;
+      if (!same(marked(c.cur, pv.wk), names(pv.started.map(short))) || !same(marked(c.hyp, pv.wk), names(pv.instead.map(short))) ||
+        !same(marked(c.diff, pv.wk), names(pv.instead.map(short)))) {
+        bad.marks.push([c.id, pv.wk, marked(c.cur, pv.wk), pv.started, marked(c.hyp, pv.wk), pv.instead, marked(c.diff, pv.wk)]);
+      }
+      marks += pv.started.length + pv.instead.length;
+    }
+    for (const h of [c.cur, c.hyp]) {
+      for (const r of h.rows) {
+        for (const x of r.cells.filter((k) => k.pid)) {
+          if (x.inPlay) { inPlay++; if (x.pj !== null) bad.twice.push([c.id, r.slot, x.wk, x.pj, x.shown]); continue; }
+          projs++;
+          if (x.want === null || x.pj !== Number(x.want).toFixed(1) || x.whole !== String(Math.round(x.want)) || !x.pjFirst || x.lines) {
+            bad.proj.push([c.id, r.slot, x.wk, x.pj, x.want, x.whole, x.pjFirst]);
+          }
+          if (!x.title.includes(`proj ${x.pj}, scored ${x.shown}`)) bad.said.push([c.id, r.slot, x.wk, x.title]);
+          // Sorting and the scale stay on the score.
+          if (Number(Number(x.v).toFixed(1)) !== num(x.shown)) bad.sorts.push([c.id, r.slot, x.wk, x.v, x.shown]);
+        }
+        avgs++;
+        if (!r.avg || r.avg.t !== meanShown(r)) bad.avg.push([c.id, r.slot, r.avg, meanShown(r)]);
+        if (!r.avg || !r.avg.last) bad.place.push([c.id, r.slot]);
+      }
+      const last = h.head[h.head.length - 1];
+      if (!last || last.t !== 'Avg' || !last.sort || h.head[0].t !== 'Slot' || h.head[1].t !== '1') bad.place.push([c.id, h.head.map((x) => x.t)]);
+    }
+    // As a Difference: no projection, and the Avg is the two Avgs' difference as printed.
+    c.diff.rows.forEach((r, i) => {
+      if (r.cells.some((x) => x.pj !== null)) bad.twice.push([c.id, 'diff', r.slot]);
+      const [a, b] = [c.hyp.rows[i].avg, c.cur.rows[i].avg];
+      const want = a && b ? tenth(num(a.t) - num(b.t)) : null;
+      if (!r.avg || want === null || num(r.avg.t) !== want || !/^([+−]\d|0\.0)/.test(r.avg.t)) bad.avgDiff.push([c.id, r.slot, r.avg, want]);
+    });
+  }
+  ok('six decisions are read, each with its Difference', L.cases.length === 6 && L.cases.every((c) => c.diff.diff && !c.hyp.diff), L.cases.map((c) => c.id));
+  ok(`WHAT CHANGED: in every week of every one, the cells marked are exactly the preview’s Started (Current) and Instead (Hypothetical, Difference) — ${marks} men`,
+    marks >= 20 && bad.marks.length === 0, bad.marks.slice(0, 3));
+  ok(`THE PROJECTION: before every score, on the same line, and it is that man’s projection for that week (${projs} cells), with it to the whole point for a phone`,
+    projs > 300 && bad.proj.length === 0, bad.proj.slice(0, 4));
+  ok('and the cell says both numbers in words', bad.said.length === 0, bad.said.slice(0, 3));
+  ok('a man still playing shows his projection once, and a Difference shows none',
+    bad.twice.length === 0 && (run === 'lineups-early' ? inPlay > 0 : inPlay === 0), [inPlay, bad.twice.slice(0, 3)]);
+  ok('sorting and the colour scale stay on the score, not the projection', bad.sorts.length === 0, bad.sorts.slice(0, 3));
+  ok(`AVG: the mean of the numbers the row shows, in every row and the Total (${avgs} rows)`, avgs >= 132 && bad.avg.length === 0, bad.avg.slice(0, 4));
+  ok('it is the last column, after the last week, and its heading sorts', bad.place.length === 0, bad.place.slice(0, 3));
+  ok('as a Difference it is the two Avgs’ difference as printed, signed', bad.avgDiff.length === 0, bad.avgDiff.slice(0, 4));
+  const sortedAvg = L.avgSort.cur.map((r) => r[1]);
+  ok('a click on Avg sorts the lineup by it, best first, the other half in the same order, Total at the foot',
+    L.avgSort.head && sortedAvg.length === 10 && sortedAvg.every((v, i) => i === 0 || sortedAvg[i - 1] >= v) && sortedAvg[0] > sortedAvg[9] &&
+    same(L.avgSort.cur.map((r) => r[0]), L.avgSort.hyp.map((r) => r[0])) && L.avgSort.total === 'Total', L.avgSort);
+
+  // ---- from a preview to the lineups
+  const weeks = L.cases[0].previews.length;
+  const column = (o, wk) => o.outlined.every((h) => same(h.head, [String(wk)]) && same(h.weeks, [wk]) && h.cells === h.rows);
+  const none = (o) => o.outlined.every((h) => h.head.length === 0 && h.cells === 0);
+  ok('a mouse over a week’s Diff has its card open, with no button in reach of nothing', L.cardOpen.open && !/sheet/.test(L.cardOpen.cls), L.cardOpen);
+  ok('A CLICK ON THE NUMBER WITH ITS PREVIEW OPEN goes to Season by week: the preview shuts, the panel is scrolled to, smoothly',
+    L.mouse.pop === false && L.mouse.scrolls === 1 && same(L.mouse.how, { behavior: 'smooth', block: 'start' }), L.mouse);
+  ok('and that week’s column is outlined in both halves, heading to Total — the same team, the same decision',
+    column(L.mouse, 2) && L.mouse.seasonTeam === '1' && L.mouse.team === '1' && L.mouse.picked === 'lineup-reasonable:1:all', L.mouse);
+  ok('the outline stays until the next click, and then goes', none(L.afterNextClick) && L.afterNextClick.scrolls === 1, L.afterNextClick.outlined);
+  ok('the keyboard: focus opens the card, Enter goes on, to that week', L.focusOpen === true && L.keyboard.pop === false && L.keyboard.scrolls === 2 && column(L.keyboard, 3), L.keyboard);
+  ok('the Biggest swap line: a click opens its week, the next goes on to it',
+    L.bigOpen === true && L.big.pop === false && L.big.scrolls === 3 && column(L.big, Number(L.big.wk)), L.big);
+  ok('a finger: the first tap is the sheet, with one button beside Close', /sheet/.test(L.sheet.cls) && same(L.sheet.buttons, ['Season by week', 'Close']), L.sheet);
+  ok('and that button goes on: sheet shut, scrolled, the column outlined', L.finger.pop === false && L.finger.scrolls === 4 && column(L.finger, 2), L.finger);
+  ok('ALL USERS: a team’s Points/wk goes to THAT team’s lineups — picked in Lineup of, all users still on, the decision unchanged, no week outlined',
+    L.allBefore.seasonTeam === '1' && L.allGo.seasonTeam === '7' && L.allGo.all === true && L.allGo.picked === 'lineup-reasonable:all:all' &&
+    L.allGo.pop === false && L.allGo.scrolls === 5 && none(L.allGo), [L.allBefore, L.allGo]);
+  ok('with a finger there too: the sheet’s button, and the fourth team’s lineups',
+    same(L.allSheet.buttons, ['Season by week', 'Close']) && L.allFinger.seasonTeam === '4' && L.allFinger.all === true && L.allFinger.scrolls === 6, [L.allSheet, L.allFinger]);
+  ok(`the page still has its ${weeks} weeks and no errors`, weeks >= 3 && (L.errors || []).length === 0, L.errors);
+}
+
 // ---- sorting and layout: every table sorts, a pair sorts together
 //
 // Tim, 2026-10-06: "fix the decisions section so the formating and function of
@@ -1653,6 +1970,7 @@ for (const run of ['sort', 'sort-early']) {
   const h = s.heat;
   ok('Season by week wears the site’s red/green scale: every cell of every squad’s sheet is the shared scale’s for its slot that week',
     h.squads === 10 && h.cells > 300 && h.tinted > 50 && h.marked > 0 && h.wrong.length === 0, h);
+  ok('and so does its Avg column: each row’s Avg against the other squads’ Avg in that row', h.avgCells === 220, h.avgCells);
   ok('a coloured cell says so in words too, never by colour alone', h.said === h.cells, [h.said, h.cells]);
   ok('both halves are coloured as the page opens; as a Difference the right half is the difference’s colours, not the scale’s',
     s.tintBefore[0] > 0 && s.tintBefore[1] > 0 && s.tintDiff[0] > 0 && s.tintDiff[1] === 0, [s.tintBefore, s.tintDiff]);
