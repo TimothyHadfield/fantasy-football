@@ -396,8 +396,8 @@ async function loadLive() {
     if (!data.projectionsAvailable && data.games.length) {
       setStatus(
         `Loaded ${data.gamesFound} games from ${esc(data.name)}, but ESPN only returned ` +
-        `weekly projections for ${data.gamesWithProjections} of them, so LUCK will be ` +
-        `wrong or blank for the missing weeks.`, true
+        `weekly projections for ${data.gamesWithProjections} of them, so LUCK leaves ` +
+        `the missing weeks out.`, true
       );
     } else if (!data.games.length) {
       setStatus(
