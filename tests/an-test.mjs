@@ -2326,8 +2326,9 @@ async function check(scenario, boot) {
   });
   c.ok('THE PANELS ARE IN TIM’S ORDER, MERGED ALL-TEAMS BOX FIRST',
     JSON.stringify(panelOrder) === JSON.stringify(
-      // Weekly totals added under All teams 2026-10-02 (Tim's new chart).
-      ['Data source', 'All teams', 'Weekly totals', 'Season by week', 'Who to start, week by week', 'Roster detail']),
+      // Weekly totals added under All teams 2026-10-02 (Tim's new chart);
+      // Proj changes "right below the season by week chart" 2026-10-05.
+      ['Data source', 'All teams', 'Weekly totals', 'Season by week', 'Proj changes', 'Who to start, week by week', 'Roster detail']),
     JSON.stringify(panelOrder));
   c.ok('and there is exactly ONE all-teams panel, not the two it used to be',
     panelOrder.filter((h) => h.startsWith('All teams')).length === 1,

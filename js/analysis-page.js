@@ -76,6 +76,12 @@ import { LIVE_TAG } from './actual-season-table.js';
 // there (Tim, 2026-09-18). Pure, and every one of these is a no-op when
 // `state.floors` is null, which is what keeps demo and a failed read honest.
 import { flooredValue, slotFloor, describeFloors, floorSource } from './floor.js';
+// PROJ CHANGES (Tim, 2026-10-05): the sheet as it stood in an earlier week. The
+// copies are kept by js/capture.js; this page only ever READS them — storage,
+// never a request — and draws the switch and the signed cells the Trade and
+// Decisions pages draw.
+import * as projHistory from './proj-history.js';
+import { viewSwitchHtml, viewFromClick, signedText, diffOf, diffClass } from './view-switch.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('analysis');
@@ -150,6 +156,10 @@ const state = {
   // he holds, and naming him on the line above the table, is what puts the
   // person back into a grid made entirely of bare numbers.
   seasonLit: null,
+
+  // The week the "Proj changes" box was pointed at THIS visit, or null for its
+  // own default (the newest saved week before the current one).
+  changesWeek: null,
 
   // The what-if lineup in the roster detail. `lineup` holds only the slots that
   // DIFFER from ESPN's, so "has anything been changed" is just its size, and
@@ -3485,14 +3495,14 @@ function historyTotalLabel(v, week, live) {
  * (Actual | Proj). Null when nothing has happened yet. `tr.colgroup` is the
  * site's group band, and sortable.js reads only the LAST header row.
  */
-function historyGroupRow(weeks, hist) {
+function historyGroupRow(weeks, hist, says = null) {
   const n = weeks.filter((w) => hist.has(w)).length;
   if (!n) return '';
   const mode = historyMode();
   const opt = (v, text) => `<option value="${v}"${mode === v ? ' selected' : ''}>${text}</option>`;
-  const why = mode === 'proj'
+  const why = says || (mode === 'proj'
     ? 'Weeks played or in play: what each team’s real starters were projected before kickoff.'
-    : 'Weeks played or in play: what each team’s real starters scored.';
+    : 'Weeks played or in play: what each team’s real starters scored.');
   return `<tr class="colgroup hist-row"><th colspan="2"></th>` +
     `<th colspan="${n}" class="hist-group" title="${why}">` +
     `<select class="hist-pick" data-history aria-label="History shows">` +
@@ -3790,6 +3800,10 @@ function renderSeasonHead(weeks) {
   const hist = historyWeeks(weeks);
   const fut = firstFuture(weeks, hist);
   const proj = historyMode() === 'proj';
+  if (rowsMode() === 'player') {
+    $('seasonTable').querySelector('thead').innerHTML = playerHead(weeks, hist, fut, proj);
+    return;
+  }
   const cols = weeks
     .map((w) => {
       const failed = state.seasonFailed.has(w);
@@ -3960,6 +3974,7 @@ function paintSeason() {
     ? `Season by week · ${team.name}`
     : 'Season by week';
 
+  setRowsToggle();
   renderSeasonHead(weeks);
   renderSeasonProgress(weeks);
 
@@ -3978,6 +3993,7 @@ function paintSeason() {
     $('seasonAlert').classList.add('hidden');
     $('seasonSlots').innerHTML = '';
     $('seasonTotals').innerHTML = '';
+    paintChanges();   // and so has the box that follows this one
     renderStarters(); // it has an empty state of its own and must reach it
     return;
   }
@@ -4030,7 +4046,12 @@ function paintSeason() {
   // seconds. Rebuilt with the rows, so it can never describe a stale squad.
   seasonWho.clear();
 
-  $('seasonSlots').innerHTML = rows
+  // PLAYER ROWS (see `rowsMode`): the men instead of the slots. Everything
+  // around the rows — the head's label and line, the band, the note — is the
+  // same code either way, so the band under them shows the same numbers.
+  $('seasonSlots').innerHTML = rowsMode() === 'player'
+    ? playerRows(team, weeks, index, hist).map((row) => playerRowHtml(row, team, weeks, index, hist, fut)).join('')
+    : rows
     .map((row) => {
       const values = weeks.map((w) => {
         const fill = byWeek.get(w);
@@ -4153,6 +4174,564 @@ function paintSeason() {
   // to repaint one is a reason to repaint the other, and a new call site added
   // later cannot forget this one.
   renderStarters();
+  // And "Proj changes", for the same reason: same team, same weeks, same rows.
+  paintChanges();
+}
+
+// ------------------------------------------------ rows: the slots, or the men
+//
+// TIM, 2026-10-05: "at the top of the current season by week chart, allow the
+// user to select "player" or "position". Right now we have it on position ...
+// For the player selection, show the player's name and position on the left,
+// and then show what they're proj for all future weeks, and what the scored
+// for all previous weeks. This means you will need to add many more rows so
+// that the bench players are also shown in this (don't show past players, just
+// current)."
+//
+// So Position is the sheet exactly as it was, and Player is one row per man on
+// the roster the page is showing — the Roster detail's roster: starters, bench,
+// and IR where ESPN lists it. The columns, the "Actual history" label and its
+// select, the line before the weeks to come and the band are the same either
+// way. NOT COLOURED: the page's scale compares a lineup slot around the
+// league, and a man is not a slot ("Who to start" argues the same below).
+
+/** `prefs` key for the Position / Player choice — one per league. */
+const rowsPrefKey = () => `rows.${sourceKey()}`;
+
+/** 'position' (the default) or 'player': what a row of the sheet is. */
+function rowsMode() {
+  return prefs.get(rowsPrefKey(), 'position') === 'player' ? 'player' : 'position';
+}
+
+/** Which button is lit, decided by the code rather than by the last click. */
+function setRowsToggle() {
+  const box = $('seasonRowsToggle');
+  if (!box) return;
+  const mode = rowsMode();
+  box.querySelectorAll('button').forEach((b) => {
+    const on = b.dataset.rows === mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+/** Memoised against the league and how much of the season has landed. */
+let leagueWeeks = { key: null, byWeek: new Map() };
+
+/**
+ * week -> playerId -> his week, WHICHEVER squad held him: `{ proj, actual,
+ * done, teamId }`, the two numbers as `weekLine` reads them. A man's score is
+ * his own, so a Player row finds it under any team in the league — and a week
+ * nobody here held him has no entry, because the season read is rosters only.
+ */
+function leagueIndex() {
+  const key = `${sourceKey()}|${[...state.seasonWeeks.keys()].sort((a, b) => a - b).join(',')}`;
+  if (leagueWeeks.key === key) return leagueWeeks.byWeek;
+  const byWeek = new Map();
+  for (const [week, teams] of state.seasonWeeks) {
+    const byPlayer = new Map();
+    for (const team of teams) {
+      for (const p of team.players || []) {
+        if (p.playerId === null || p.playerId === undefined) continue;
+        const line = weekLine(p);
+        byPlayer.set(p.playerId, {
+          proj: typeof line.proj === 'number' ? line.proj : null,
+          actual: typeof line.actual === 'number' ? line.actual : null,
+          done: p.done,
+          teamId: team.id,
+        });
+      }
+    }
+    byWeek.set(week, byPlayer);
+  }
+  leagueWeeks = { key, byWeek };
+  return byWeek;
+}
+
+/** DEF, as "Who to start" prints a D/ST's position. */
+const posLabel = (p) => (p.position === 'DST' ? 'DEF' : p.position);
+
+/**
+ * Starters first, in lineup order, then everyone else by Avg, best first.
+ * `slotId` is where ESPN has the man parked; a null one is the bench.
+ */
+function orderPlayers(list) {
+  const lineup = (id) => id !== null && id !== undefined && id !== BENCH_SLOT && id !== IR_SLOT;
+  const byAvg = (a, b) =>
+    (b.avg ?? -Infinity) - (a.avg ?? -Infinity) || Number(a.p.playerId) - Number(b.p.playerId);
+  const starters = list.filter((r) => lineup(r.slotId))
+    .sort((a, b) => (SLOT_ORDER[a.slotId] ?? 40) - (SLOT_ORDER[b.slotId] ?? 40) || byAvg(a, b));
+  const bench = list.filter((r) => !lineup(r.slotId)).sort(byAvg);
+  return [...starters, ...bench].map((r, i) => ({ ...r, order: i }));
+}
+
+/**
+ * The Player rows: every man on the roster on screen who can be followed from
+ * week to week (`identified`), with his projection in each week still to come
+ * and their regular-season mean. "Proj changes" lists the same men in the same
+ * order, so the two boxes read across.
+ */
+function playerRows(team, weeks, index, hist) {
+  return orderPlayers(identified(team.players).map((p) => {
+    const ahead = weeks.map((w) => (hist.has(w) ? null : seasonValue(index, w, p.playerId)));
+    return { p, slotId: p.lineupSlotId, ahead, avg: regularAvg(ahead, weeks) };
+  }));
+}
+
+/** His name, a link like every other name on the page, then his position. */
+function playerNameCell(row) {
+  const p = row.p;
+  return `<td class="name" data-v="${row.order}">` +
+    `${playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}` +
+    `<span class="row-pos">${esc(posLabel(p))}</span></td>`;
+}
+
+const PLAYER_AVG_HEAD = 'The mean of his projections in the regular-season weeks still to come. ' +
+  'A bye counts as zero; playoff weeks are shown but not counted.';
+
+/** The Player view's two header rows: the same label, select and line. */
+function playerHead(weeks, hist, fut, proj) {
+  const cols = weeks
+    .map((w) => {
+      const failed = state.seasonFailed.has(w);
+      const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '',
+        w === fut ? 'fut-start' : '']
+        .filter(Boolean).join(' ');
+      const title = failed
+        ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
+        : hist.has(w)
+          ? `Week ${w}: ` + (proj ? 'what each player was projected before kickoff.' : 'what each player scored.')
+          : `Each player’s projection for week ${w}.`;
+      return weekHead(w, weeks, cls, title, hist.has(w) && weekLive(w) ? LIVE_TAG : '');
+    })
+    .join('');
+  const says = proj
+    ? 'Weeks played or in play: what each player was projected before kickoff.'
+    : 'Weeks played or in play: what each player scored.';
+  return `${historyGroupRow(weeks, hist, says)}<tr>
+       <th class="name" data-sort title="A player on this roster: starters in lineup order, then the bench by Avg.">Player</th>
+       <th class="grouped" data-sort title="${PLAYER_AVG_HEAD}">Avg</th>
+       ${cols}
+     </tr>`;
+}
+
+/**
+ * One man's week IN HISTORY: what he scored — started or not, on whichever
+ * squad held him — or on Proj what he was projected before kickoff. A man
+ * still playing has no score yet, as in `historyCell`.
+ */
+function playerHistoryCell(p, week, mode, teamId) {
+  if (!state.seasonWeeks.has(week)) {
+    return seasonCell(state.seasonFailed.has(week) ? 'failed' : 'wait', week, p, week === state.week);
+  }
+  const cls = (extra) => `wk hist${week === state.week ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
+  const e = leagueIndex().get(week).get(p.playerId);
+  if (!e) {
+    return `<td class="${cls('off')}" title="${esc(p.name)} was on no roster in this league in ` +
+      `week ${week}, so the season read has no number for him.">—</td>`;
+  }
+  const v = mode === 'proj' ? e.proj : e.actual;
+  const bye = byeWeekOf(p, state.byes);
+  const onBye = bye !== null && Number(bye) === Number(week);
+  if (typeof v !== 'number' || (v === 0 && onBye)) {
+    if (onBye) {
+      return `<td class="${cls('bye')}"${v === 0 ? ' data-v="0"' : ''} ` +
+        `title="${esc(p.name)} was on bye in week ${week}.">Bye</td>`;
+    }
+    const why = mode === 'proj'
+      ? `No projection was recorded for ${p.name} in week ${week}.`
+      : e.done === false
+        ? `${p.name} has not finished week ${week} yet.`
+        : `No score was recorded for ${p.name} in week ${week}.`;
+    return `<td class="${cls('muted')}" title="${esc(why)}">—</td>`;
+  }
+  const shown = round1(v);
+  const why = (mode === 'proj'
+    ? `${p.name} was projected ${fmt(shown)} before kickoff in week ${week}.`
+    : `${p.name} scored ${fmt(shown)} in week ${week}.`) +
+    (e.teamId === teamId ? '' : ' He was on another team then.');
+  return `<td class="${cls()}" data-v="${shown}" title="${esc(why)}">${fmt(shown)}</td>`;
+}
+
+/** One Player row: name and position, Avg, then history and the weeks to come. */
+function playerRowHtml(row, team, weeks, index, hist, fut) {
+  const p = row.p;
+  const mode = historyMode();
+  const cells = weeks.map((w, i) => withFut(withPo(hist.has(w)
+    ? playerHistoryCell(p, w, mode, team.id)
+    : seasonCell(row.ahead[i], w, p, w === state.week, null, seasonStatus(index, w, p)),
+  w, weeks), w, fut)).join('');
+  return `
+      <tr data-player="${esc(p.playerId)}">
+        ${playerNameCell(row)}
+        <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
+        `title="${esc(`${p.name}: the mean of his projections in the regular-season weeks still to come.`)}">${fmt(row.avg)}</td>
+        ${cells}
+      </tr>`;
+}
+
+// ------------------------------------------------------------ proj changes
+//
+// TIM, 2026-10-05: "I want to make a proj changes chart in the analysis section
+// that basically shows how a player's proj has changed between a certain time
+// period/range. ... This proj change box will be identical to the current
+// season by week chart, but will show you what your season by week chart
+// looked like around week 3 or 2 or something so you can see how it changed.
+// ... At the top of this proj difference chart, allow the user to select which
+// week they want the chart to refer to, and then if it shows total or
+// difference. The difference selection just shows the current proj-past proj
+// for each cell in the chart".
+//
+// ESPN KEEPS NO HISTORY OF ITS PROJECTIONS (rule 8), so "as of week N" exists
+// only where js/capture.js kept a copy that week (js/proj-history.js). This
+// box READS those copies and what the sheet above already holds: no request is
+// made from here, and a team with no copy gets one line saying so.
+//
+//   Total       the copy itself, in the shape of the sheet above: the men as
+//               the roster stood then, or the best legal lineup re-solved from
+//               them with the page's own solver and slots. A week the copy
+//               does not cover is blank.
+//   Difference  now − then, cell by cell, in the weeks still to come. A week
+//               played since is blank: scored − projected is luck, not a
+//               projection that moved.
+//
+// THE FLOOR IS THE SHEET'S: a slot is assessed through `assessed`, at today's
+// wire, on both sides — the only wire there is — so a Position difference is a
+// projection that moved and never a floor that appeared on one side only.
+
+/** `prefs` key for Total / Difference — one per league. */
+const changesPrefKey = () => `changes.${sourceKey()}`;
+
+/** 'total' (the default) or 'diff'. */
+function changesView() {
+  return prefs.get(changesPrefKey(), 'total') === 'diff' ? 'diff' : 'total';
+}
+
+/** The week being played or next up: the first the schedule has not finished. */
+function currentWeek(weeks) {
+  const played = new Set(state.playedWeeks);
+  const w = weeks.find((x) => !played.has(x));
+  return w === undefined ? null : w;
+}
+
+/**
+ * Every saved copy that has THIS team in it, earliest first. Storage only.
+ * The sample league is never copied, so it has none.
+ *
+ * @returns {Array<{week:number, copy:object}>}
+ */
+function changesCopies(team) {
+  if (state.isDemo || !team) return [];
+  const out = [];
+  try {
+    const cfg = espn.getConfig();
+    for (const e of projHistory.list(cfg.leagueId, cfg.season)) {
+      const copy = projHistory.teamAsOf(cfg.leagueId, cfg.season, e.week, team.id);
+      if (copy && copy.players.length && copy.weeks.length) out.push({ week: copy.week, copy });
+    }
+  } catch { /* unreadable storage is no history */ }
+  return out;
+}
+
+/** The reader's week when it has a copy; else the newest one before this week. */
+function changesAsOf(copies, weeks) {
+  if (copies.some((c) => c.week === state.changesWeek)) return state.changesWeek;
+  const now = currentWeek(weeks);
+  const before = copies.filter((c) => now === null || c.week < now);
+  return (before.length ? before[before.length - 1] : copies[0]).week;
+}
+
+/** The copy's best legal lineup in every week it covers: week -> slot key -> who. */
+function thenLineups(men, copyWeeks, slots, rows) {
+  const out = new Map();
+  for (const w of copyWeeks) {
+    const pool = men.map((p) => ({ ...p, projected: p.proj.get(w) }));
+    out.set(w, fillSlots(optimalLineup(pool, slots).starters, rows));
+  }
+  return out;
+}
+
+function paintChanges() {
+  const table = $('changesTable');
+  if (!table) return;
+  const team = currentTeam();
+  const weeks = spanWeeks();
+  const slots = leagueSlots();
+  const rows = slotRows(slots);
+
+  $('changesTitle').textContent = team ? `Proj changes · ${team.name}` : 'Proj changes';
+
+  const ready = Boolean(team) && team.players.length > 0 && weeks.length > 0 && rows.length > 0;
+  const copies = ready ? changesCopies(team) : [];
+  const show = copies.length > 0;
+  $('changesControls').classList.toggle('hidden', !show);
+  $('changesWrap').classList.toggle('hidden', !show);
+  const empty = $('changesEmpty');
+  if (!show) {
+    const now = currentWeek(weeks);
+    empty.textContent = state.isDemo
+      ? 'Sample data has no saved projections.'
+      : !ready
+        ? ''
+        : `No saved projections for this team${now === null ? '' : ` before week ${now}`}. ` +
+          `Saved weekly from now on.`;
+    empty.classList.toggle('hidden', !empty.textContent);
+    table.querySelector('thead').innerHTML = '<tr></tr>';
+    $('changesRows').innerHTML = '';
+    $('changesTotals').innerHTML = '';
+    renderChangesNote(null);
+    return;
+  }
+  empty.textContent = '';
+  empty.classList.add('hidden');
+
+  // ---- the two controls. Rewritten only when what they offer has changed:
+  // replacing a control under the hand that is on it loses the focus.
+  const asOf = changesAsOf(copies, weeks);
+  const copy = copies.find((c) => c.week === asOf).copy;
+  const sel = $('changesAsOf');
+  const offered = copies.map((c) => c.week).join(',');
+  if (sel.getAttribute('data-weeks') !== offered) {
+    sel.innerHTML = copies.map((c) => `<option value="${c.week}">Week ${c.week}</option>`).join('');
+    sel.setAttribute('data-weeks', offered);
+  }
+  if (sel.value !== String(asOf)) sel.value = String(asOf);
+
+  const view = changesView();
+  const box = $('changesView');
+  if (!box.querySelector('button')) {
+    box.innerHTML = viewSwitchHtml(view, {
+      labels: ['Total', 'Difference'], label: 'Proj changes shows', box: 'changes',
+    });
+  }
+  box.querySelectorAll('button[data-sbw-view]').forEach((b) => {
+    const on = b.getAttribute('data-sbw-view') === view;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+
+  // ---- what a column can hold
+  const diff = view === 'diff';
+  const byPlayer = rowsMode() === 'player';
+  const hist = historyWeeks(weeks);
+  const fut = firstFuture(weeks, hist);
+  const inCopy = new Set(copy.weeks);
+  /** 'cell' when a number belongs in this column, else why it is blank. */
+  const colOf = (w) => (!inCopy.has(w) ? 'out' : diff && hist.has(w) ? 'played' : 'cell');
+  const blankWhy = (w) => (colOf(w) === 'out'
+    ? `Week ${w} is not in the copy saved in week ${asOf}.`
+    : `Week ${w} has been played since week ${asOf}, so no projection is left to compare.`);
+  const nowCls = (w) => (w === state.week ? ' now' : '');
+  const wrap = (td, w) => withFut(withPo(td, w, weeks), w, fut);
+  const blank = (w, band = '') =>
+    wrap(`<td class="wk${band}${nowCls(w)}" title="${esc(blankWhy(w))}"></td>`, w);
+  const dash = (w, why, band = '') =>
+    wrap(`<td class="wk${band}${nowCls(w)} muted" title="${esc(why)}">—</td>`, w);
+  const diffTd = (d, w, says, band = '') => (d === null
+    ? dash(w, says, band)
+    : wrap(`<td class="wk${band}${nowCls(w)} ${diffClass(d)}" data-v="${d}" title="${esc(says)}">` +
+      `${signedText(d)}</td>`, w));
+  /** The Avg cell: a mean of what the row shows — signed on Difference. */
+  const avgTd = (vals, says, band = '') => {
+    const avg = regularAvg(vals, weeks);
+    if (avg === null) return `<td class="avg grouped${band}" title="${esc(says)}">—</td>`;
+    return diff
+      ? `<td class="avg grouped${band} ${diffClass(avg)}" data-v="${avg}" title="${esc(says)}">${signedText(avg)}</td>`
+      : `<td class="avg grouped${band}" data-v="${avg}" title="${esc(says)}">${fmt(avg)}</td>`;
+  };
+
+  // ---- the two sheets: then (the copy) and now (what the panel above holds)
+  // A copy keeps an NFL team's letters, not its id, so a man's bye week is
+  // looked up through whoever holds him today.
+  const known = new Map();
+  for (const t of state.data.teams) {
+    for (const p of t.players || []) known.set(String(p.playerId), p);
+  }
+  const then = identified(copy.players).map((p) => ({
+    ...p, proTeamId: (known.get(String(p.playerId)) || {}).proTeamId ?? null,
+  }));
+  const thenById = new Map(then.map((p) => [String(p.playerId), p]));
+  const thenFill = thenLineups(then, copy.weeks, slots, rows);
+  const nowFill = weeklyFills(rows, slots, weeks);
+  const index = seasonIndex(team.id);
+  const slotThen = (row, w) => {
+    const e = thenFill.get(w).get(row.key) || null;
+    return { e, ...assessed(e, row) };
+  };
+  const slotNow = (row, w) => {
+    const fill = (nowFill.get(w) || new Map()).get(team.id);
+    const e = fill ? fill.get(row.key) || null : undefined;
+    return { e, ...assessed(e, row) };
+  };
+
+  // ---- the head
+  const avgHead = diff
+    ? 'The mean of the differences shown; playoff weeks are not counted.'
+    : `The mean of the regular-season weeks shown, as projected in week ${asOf}.`;
+  table.querySelector('thead').innerHTML = `<tr>` +
+    `<th class="name" data-sort>${byPlayer ? 'Player' : 'Slot'}</th>` +
+    `<th class="grouped" data-sort title="${avgHead}">Avg</th>` +
+    weeks.map((w) => weekHead(w, weeks, `wk${nowCls(w)}${w === fut ? ' fut-start' : ''}`,
+      colOf(w) !== 'cell'
+        ? blankWhy(w)
+        : diff
+          ? `Week ${w}: the projection now minus the projection in week ${asOf}.`
+          : `Week ${w} as it was projected in week ${asOf}.`)).join('') +
+    `</tr>`;
+
+  // ---- the rows
+  let body;
+  if (byPlayer && !diff) {
+    // TOTAL, PLAYER: the roster as it stood then, each man's projection then.
+    body = orderPlayers(then.map((p) => {
+      const vals = weeks.map((w) => (inCopy.has(w) ? p.proj.get(w) : undefined));
+      return { p, slotId: p.slotId, vals, avg: regularAvg(vals, weeks) };
+    })).map((row) => {
+      const p = row.p;
+      const cells = row.vals.map((v, i) => {
+        const w = weeks[i];
+        if (colOf(w) !== 'cell') return blank(w);
+        if (typeof v !== 'number') return dash(w, `No projection was saved for ${p.name} in week ${w}.`);
+        const says = `As of week ${asOf}, ${p.name} was projected ${fmt(v)} for week ${w}.`;
+        const bye = v === 0 && zeroOf(0, w, p, p.injuryStatus) === 'bye';
+        return wrap(`<td class="wk${nowCls(w)}${bye ? ' bye' : ''}" data-v="${round1(v)}" ` +
+          `title="${esc(says)}">${bye ? 'Bye' : fmt(v)}</td>`, w);
+      }).join('');
+      return `<tr data-player="${esc(p.playerId)}">${playerNameCell(row)}` +
+        avgTd(row.vals, `${p.name}: the mean of the regular-season weeks shown, as projected in week ${asOf}.`) +
+        `${cells}</tr>`;
+    }).join('');
+  } else if (byPlayer) {
+    // DIFFERENCE, PLAYER: the men on the roster NOW, as the sheet above lists
+    // them. One who was not on it then has nothing to subtract.
+    body = playerRows(team, weeks, index, hist).map((row) => {
+      const p = row.p;
+      const was = thenById.get(String(p.playerId));
+      const off = `${p.name} was not on the roster in week ${asOf}.`;
+      const ds = weeks.map((w, i) => {
+        if (colOf(w) !== 'cell' || !was) return null;
+        return diffOf(row.ahead[i], was.proj.get(w));
+      });
+      const cells = weeks.map((w, i) => {
+        if (colOf(w) !== 'cell') return blank(w);
+        if (!was) return dash(w, off);
+        if (row.ahead[i] === 'wait') return wrap(seasonCell('wait', w, p, w === state.week), w);
+        return diffTd(ds[i], w, ds[i] === null
+          ? `${p.name} has no projection for week ${w} on one side, so there is nothing to compare.`
+          : `${p.name}, week ${w}: ${fmt(row.ahead[i])} now, ${fmt(was.proj.get(w))} in week ${asOf}.`);
+      }).join('');
+      return `<tr data-player="${esc(p.playerId)}">${playerNameCell(row)}` +
+        avgTd(ds, was ? `${p.name}: the mean of the differences shown.` : off) +
+        `${cells}</tr>`;
+    }).join('');
+  } else {
+    // POSITION, both views: the copy's best legal lineup, slot by slot — and on
+    // Difference, the sheet above's own slot minus it.
+    body = rows.map((row) => {
+      const vals = weeks.map((w) => {
+        if (colOf(w) !== 'cell') return null;
+        return diff ? diffOf(slotNow(row, w).value, slotThen(row, w).value) : slotThen(row, w).value;
+      });
+      const cells = weeks.map((w, i) => {
+        if (colOf(w) !== 'cell') return blank(w);
+        const was = slotThen(row, w);
+        const who = (x) => (x.e ? ` (${x.e.p.name})` : '');
+        if (diff) {
+          const is = slotNow(row, w);
+          if (is.e === undefined) return wrap(slotCell(null, row, w, null, null), w);
+          return diffTd(vals[i], w, vals[i] === null
+            ? `${row.key} in week ${w} has no number on one side, so there is nothing to compare.`
+            : `${row.key}, week ${w}: ${fmt(is.value)} now${who(is)}, ` +
+              `${fmt(was.value)} in week ${asOf}${who(was)}.`);
+        }
+        if (was.value === null) {
+          return dash(w, `Nobody on the roster of week ${asOf} could fill ${row.key} in week ${w}.`);
+        }
+        const bye = Boolean(was.e) && was.e.v === 0 && !was.assumed &&
+          zeroOf(0, w, was.e.p, was.e.p.injuryStatus) === 'bye';
+        const says = (was.e
+          ? `As of week ${asOf}, ${was.e.p.name} was this squad’s ${row.key} for week ${w}, ` +
+            `projected ${fmt(was.e.v)}.`
+          : `As of week ${asOf}, nobody could fill ${row.key} in week ${w}.`) +
+          (was.assumed ? ` Assessed at ${fmt(was.value)}: today’s waiver floor, as in the sheet above.` : '');
+        return wrap(`<td class="wk${nowCls(w)}${bye ? ' bye' : was.assumed ? ' assumed' : ''}" ` +
+          `data-v="${was.value}" title="${esc(says)}">${bye ? 'Bye' : fmt(was.value)}</td>`, w);
+      }).join('');
+      return `<tr data-slot="${esc(row.key)}">` +
+        `<td class="name" data-v="${row.order}"><span class="slot-tag">${esc(row.key)}</span></td>` +
+        avgTd(vals, diff
+          ? `${row.key}: the mean of the differences shown.`
+          : `${row.key}: the mean of the regular-season weeks shown, as projected in week ${asOf}.`) +
+        `${cells}</tr>`;
+    }).join('');
+  }
+  $('changesRows').innerHTML = body;
+
+  // ---- the band: the same "Starting lineup" the sheet above carries. Then =
+  // the copy's slots added up; now = that sheet's own band (`teamWeekTotals`).
+  const bandNow = teamWeekTotals(rows, slots, weeks);
+  const thenTotal = (w) => {
+    const got = rows.map((r) => slotThen(r, w).value).filter((v) => v !== null);
+    return got.length ? round1(got.reduce((a, b) => a + b, 0)) : null;
+  };
+  const band = weeks.map((w) => {
+    if (colOf(w) !== 'cell') return null;
+    const was = thenTotal(w);
+    return diff ? diffOf((bandNow.get(w) || new Map()).get(team.id), was) : was;
+  });
+  $('changesTotals').innerHTML = `<tr class="split-row">` +
+    `<td class="name split-label">Starting lineup</td>` +
+    avgTd(band, diff
+      ? 'The mean of the differences shown.'
+      : `The best legal lineup as projected in week ${asOf}, averaged over the regular-season weeks shown.`,
+    ' split-total') +
+    weeks.map((w, i) => {
+      if (colOf(w) !== 'cell') return blank(w, ' split-total');
+      if (diff) {
+        return diffTd(band[i], w, band[i] === null
+          ? `Week ${w} has no lineup total on one side, so there is nothing to compare.`
+          : `Week ${w}: the best legal lineup projects ${fmt((bandNow.get(w) || new Map()).get(team.id))} ` +
+            `now and projected ${fmt(thenTotal(w))} in week ${asOf}.`, ' split-total');
+      }
+      return band[i] === null
+        ? dash(w, `No lineup could be made for week ${w} from the copy of week ${asOf}.`, ' split-total')
+        : wrap(`<td class="wk split-total${nowCls(w)}" data-v="${band[i]}" ` +
+          `title="${esc(`As of week ${asOf}, the best legal lineup for week ${w} projected ${fmt(band[i])}.`)}">` +
+          `${fmt(band[i])}</td>`, w);
+    }).join('') +
+    `</tr>`;
+
+  renderChangesNote({ asOf, copy, team });
+  resort(table);
+}
+
+/** The method, behind the toggle. Nothing when there is no copy to explain. */
+function renderChangesNote(got) {
+  const el = $('changesNote');
+  if (!el) return;
+  const parts = [
+    'ESPN keeps no history of its projections: a future week’s number is overwritten in place. ' +
+    'So this site saves a copy of every roster’s projections <strong>once a week</strong>, the ' +
+    'first time a page is opened that week, <strong>in this browser</strong>. “As of” lists only ' +
+    'the weeks that have one for this team; a week nobody opened the site in cannot be recovered.',
+
+    '<strong>Total</strong> is that copy laid out like Season by week. On Player it is the roster ' +
+    'as it stood then, each man at his projection then. On Position it is the best legal lineup ' +
+    're-solved from that roster, with the same solver, slots and waiver floor as the sheet above ' +
+    '(today’s floor: no older one was kept). Weeks before the copy are blank.',
+
+    '<strong>Difference</strong> is the projection now minus the projection then, cell by cell, ' +
+    'for the weeks still to come; green is up and red is down. Weeks played since are blank, ' +
+    'because scored minus projected is luck rather than a projection that moved. On Player the ' +
+    'rows are today’s roster: a man who was not on it then shows a dash, and a man who has left ' +
+    'is not listed. <strong>Avg</strong> is the mean of the regular-season cells shown.',
+  ];
+  if (got && got.copy.source === 'reading') {
+    parts.push(
+      `The week ${got.asOf} copy comes from that week’s reading, which kept your own team only.`
+    );
+  }
+  el.innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 }
 
 // ------------------------------------------- who to start, week by week
@@ -4654,8 +5233,21 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
         'forward. What is ours is which man lands in which slot, the total, and the low marks.'
   );
 
+  const byPlayer = rowsMode() === 'player';
+  if (byPlayer) {
+    parts.push(
+      `<strong>Each row is a player on this roster in week ${state.week}</strong>, starters first in ` +
+      `lineup order, then the bench by Avg. A week under “Actual history” shows what he scored, ` +
+      `started or not, on whichever squad in this league held him; a week nobody here held him is a ` +
+      `dash. Switch Actual to <strong>Proj</strong> for what he was projected before kickoff. The ` +
+      `weeks to come are his projection. <strong>Avg</strong> is the mean of his projections in the ` +
+      `regular-season weeks still to come, a bye counted as zero. These rows are not coloured: the ` +
+      `scale below compares a lineup slot around the league, and a man is not a slot. The ` +
+      `<strong>Starting lineup</strong> band and everything below are as on Position.`
+    );
+  }
   parts.push(
-    `<strong>Each row is a lineup slot, not a player.</strong> Every week is filled with the ` +
+    `<strong>${byPlayer ? 'On Position, each' : 'Each'} row is a lineup slot, not a player.</strong> Every week is filled with the ` +
     `<strong>best legal lineup</strong> ${team ? `${esc(team.name)} ` : 'that squad '} could field ` +
     `that week — the same solver “Who to start” below and the schedule forecast use — and the men ` +
     `it picks are then ranked inside their own slot on that week’s projection, so ` +
@@ -4820,7 +5412,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     rows.map((r) => [r.key, (bars.get(r.key) || {}).sd !== null ? bars.get(r.key) : null]),
     !!table.querySelector('td.heat'));
   renderKey('seasonLegend', [
-    ['<span class="lg-mark lit">12.3</span>', 'the same man, every week'],
+    // Player rows name the man themselves, so nothing lights.
+    !byPlayer && ['<span class="lg-mark lit">12.3</span>', 'the same man, every week'],
     // The two ENDS of the scale and nothing in between — a key with eight
     // swatches on it is a legend nobody reads, and the strip inside "How this
     // table works" prints the points each slot reaches them at.
@@ -4936,6 +5529,12 @@ function paintLit() {
 
   const pid = state.seasonLit;
   const line = $('seasonPick');
+  // Player rows carry the name already. The line keeps its reserved height, so
+  // switching rows moves nothing; it just has nothing to say.
+  if (rowsMode() === 'player') {
+    if (line) line.innerHTML = '';
+    return;
+  }
   if (pid === null || !seasonWho.has(pid)) {
     if (line) {
       line.innerHTML = '<span class="pick-idle">Hover or tap a number to name the player.</span>';
@@ -5201,6 +5800,30 @@ for (const id of ['totalsTable', 'seasonTable']) {
     paintSeason();
   });
 }
+
+// POSITION | PLAYER (Tim, 2026-10-05): what a row of the sheet is. Kept per
+// league, and "Proj changes" below follows it — `paintSeason` repaints both.
+$('seasonRowsToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest ? e.target.closest('button[data-rows]') : null;
+  if (!btn) return;
+  const mode = btn.dataset.rows === 'player' ? 'player' : 'position';
+  if (mode === rowsMode()) return;
+  prefs.set(rowsPrefKey(), mode === 'player' ? 'player' : null);
+  paintSeason();
+});
+
+// PROJ CHANGES: which saved week, and Total | Difference. Neither reads ESPN.
+enableSort($('changesTable'), { defaultIndex: 0, defaultAsc: true });
+$('changesAsOf').addEventListener('change', (e) => {
+  state.changesWeek = Number(e.target.value);
+  paintChanges();
+});
+$('changesView').addEventListener('click', (e) => {
+  const hit = viewFromClick(e);
+  if (!hit || hit.box !== 'changes' || hit.view === changesView()) return;
+  prefs.set(changesPrefKey(), hit.view === 'diff' ? 'diff' : null);
+  paintChanges();
+});
 
 // NO `wireTips` HERE. This panel deliberately has no player card — Tim,
 // 2026-09-18 — so the line above the table and the highlight are the whole of

@@ -68,8 +68,25 @@ const ZERO_SEASON = new Set(
   (process.env.AN_ZERO_SEASON || '').split(',').filter(Boolean).map(Number)
 );
 
+// AN_GONE_BEFORE=N puts one more man on every bench in the weeks BEFORE N and
+// drops him from week N on (proj-changes-check.mjs, 2026-10-05). The stub had a
+// man who joins and nobody who leaves, and "don't show past players, just
+// current" cannot be asked of a league nobody has ever left. Off by default.
+export const GONE_BEFORE = Number(process.env.AN_GONE_BEFORE || 0);
+export const GONE_INDEX = SIZE;  // his playerId is teamId * 100 + 15
+
 function playersFor(teamId, week) {
   const out = [];
+  if (GONE_BEFORE && week < GONE_BEFORE) {
+    out.push({
+      playerId: teamId * 100 + GONE_INDEX,
+      name: playerName(teamId, GONE_INDEX),
+      position: 'RB', proTeam: 'BUF', proTeamId: 1,
+      lineupSlotId: 20, slot: LABEL[20], started: false,
+      projected: 5, actual: week <= PLAYED_THROUGH ? 3 : null,
+      seasonProjected: 85, injuryStatus: 'ACTIVE', percentOwned: null,
+    });
+  }
   for (let i = 0; i < SIZE; i++) {
     if (!onRoster(i, week)) continue;
     if (!hasPlayer(teamId, i)) continue;

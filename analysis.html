@@ -515,6 +515,36 @@
   }
   #seasonTable th.now { color: var(--text); }
 
+  /* PLAYER ROWS (Tim, 2026-10-05): the name, then his position, on one line. */
+  .row-pos { margin-left: 5px; font-size: 10.5px; font-weight: 500; color: var(--dim); }
+
+  /* PROJ CHANGES is the sibling of the sheet above, so it takes that sheet's
+     own rules, one for one. Its Difference colours are in css/app.css. */
+  #changesTable th, #changesTable td { white-space: nowrap; }
+  #changesTable td.wk, #changesTable th.wk { padding-left: 7px; padding-right: 7px; }
+  #changesTable td.avg { font-weight: 650; color: var(--text); }
+  #changesTable td.assumed {
+    color: var(--assumed);
+    text-decoration: underline dotted var(--assumed);
+    text-underline-offset: 3px;
+  }
+  #changesTable td.bye { color: var(--dim); font-size: 11px; letter-spacing: 0.05em; }
+  #changesTable td.wait, #changesTable td.off { color: var(--line); }
+  #changesTable th.now, #changesTable td.now {
+    border-left: 1px solid var(--line-2);
+    border-right: 1px solid var(--line-2);
+  }
+  #changesTable th.now { color: var(--text); }
+  #changesTable tbody.split td.wk { font-weight: 700; font-size: 13.5px; }
+  /* `.toolbar` is declared after app.css's `.hidden`, and would win. */
+  #changesControls.hidden { display: none; }
+  /* The switch is drawn into this box; the toolbar should lay out the switch
+     itself, so on a phone it runs the full width like Position | Player. */
+  #changesView { display: contents; }
+  /* A blank week (not in the copy, or played since) keeps a number's width, so
+     Total and Difference lay out alike and the columns hold still between them. */
+  #changesTable th.wk { min-width: 46px; }
+
   /* ------------------------------------------------- who to start, by week */
 
   /* The same week run as the season grid, narrowed to one position and with
@@ -779,6 +809,7 @@
        get to the point of the table. The week cells were already the narrowest
        thing in it; the padding is the only slack left. */
     #seasonTable td.wk, #seasonTable th.wk,
+    #changesTable td.wk, #changesTable th.wk,
     #startersTable td.wk, #startersTable th.wk { padding-left: 5px; padding-right: 5px; }
 
     /* A tap-opened card is read at arm's length rather than leant into, so the
@@ -906,6 +937,14 @@
         <label for="seasonTeamSelect">Team</label>
         <select id="seasonTeamSelect"></select>
       </div>
+      <!-- WHAT A ROW IS (Tim, 2026-10-05): "at the top of the current season by
+           week chart, allow the user to select "player" or "position"".
+           Position is the sheet as it always was; Player is one row per man on
+           the roster. The Proj changes box below follows the same choice. -->
+      <div class="segmented" id="seasonRowsToggle" role="group" aria-label="Rows are">
+        <button type="button" data-rows="position" class="on" aria-pressed="true">Position</button>
+        <button type="button" data-rows="player" aria-pressed="false">Player</button>
+      </div>
       <span class="ctl-hint">Drives &ldquo;Who to start&rdquo; and the roster detail below too.</span>
     </div>
     <div class="panel-note progress-note" id="seasonProgress"></div>
@@ -939,6 +978,35 @@
            pair. -->
       <p class="key-line bars-line" id="seasonBars"></p>
       <p class="key-line bars-line" id="seasonAvgBars"></p>
+    </details>
+  </section>
+
+  <!-- THE SAME SHEET AS IT STOOD IN AN EARLIER WEEK (Tim, 2026-10-05): "a proj
+       changes chart ... right below the season by week chart ... identical to
+       the current season by week chart, but will show you what your season by
+       week chart looked like around week 3 or 2 ... allow the user to select
+       which week they want the chart to refer to, and then if it shows total
+       or difference." Same team and same Player | Position choice as the panel
+       above; it reads the copies js/proj-history.js keeps and fetches nothing. -->
+  <section class="panel" id="projChanges">
+    <h2 id="changesTitle">Proj changes</h2>
+    <div class="toolbar" id="changesControls">
+      <div class="form-select">
+        <label for="changesAsOf">As of</label>
+        <select id="changesAsOf"></select>
+      </div>
+      <div id="changesView"></div>
+    </div>
+    <div class="table-scroll" id="changesWrap"><table id="changesTable">
+      <thead><tr></tr></thead>
+      <!-- Two bodies, as in Season by week: the rows, then the band under them. -->
+      <tbody id="changesRows"></tbody>
+      <tbody id="changesTotals" class="split"></tbody>
+    </table></div>
+    <div class="empty hidden" id="changesEmpty"></div>
+    <details class="explain">
+      <summary>How this works</summary>
+      <div class="panel-note" id="changesNote"></div>
     </details>
   </section>
 

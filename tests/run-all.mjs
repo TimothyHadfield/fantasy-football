@@ -94,6 +94,7 @@ const SUITES = [
   ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
+  ['proj-changes-check.mjs', 'Analysis: the Position | Player rows, and Proj changes — a saved week as Total or as now minus then'],
   ['roster-link-check.mjs', 'a link into the roster detail (?team=&week=): lands, saves nothing, applied once'],
   ['pages-done-check.mjs', 'the week in progress on Analysis, Home, Stats, Schedule and Summary: finished players and early-final matchups count'],
   ['record-live-check.mjs', 'a record while its game is being played: 3–2 at 20% reads 3.2–2.8, the same on Stats, Summary and Schedule'],

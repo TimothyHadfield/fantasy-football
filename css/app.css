@@ -1600,3 +1600,15 @@ tr.colgroup th.fut-start,
  * "Weekly totals"): the average of the teams above it, set off by a heavier
  * rule. It lives in a tfoot, so it is never sorted in among them. */
 tfoot tr.league-row td { border-top: 2px solid var(--dim); }
+
+/* ------------------------------------------------- Proj changes (Analysis)
+ * Tim, 2026-10-05: "The difference selection just shows the current proj-past
+ * proj for each cell in the chart so that you can tell if certain players are
+ * increasing or decreasing their proj". The Trade page's three difference
+ * colours, on the one table that is not an `.sbw-table`; and the history line
+ * spelled to outrank that table's own `.now` bracket, as it is for the sheet
+ * above it. */
+#changesTable td.d-up { color: var(--accent); }
+#changesTable td.d-down { color: var(--err); }
+#changesTable td.d-zero { color: var(--dim); }
+#changesTable tr th.fut-start, #changesTable tr td.fut-start { border-left: 3px solid var(--accent); }
