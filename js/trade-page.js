@@ -7641,8 +7641,11 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
       // the reader an explanation, and a tap on a figure asking "where does
       // this come from" is answered by his whole season. The name keeps the
       // tap that ticks him.
-      `<span class="pv${h ? ` ${h.cls}` : ''}"${tipAttr(key)}` +
-        `${h ? ` title="${esc(h.words)}"` : ''}>` +
+      //
+      // NO `title` HERE (Tim, 2026-10-06: "2 different previews that show up:
+      // the SD one and then the actual 14 week preview one. Remove the SD
+      // one"). The colour's words are in the key under the lists.
+      `<span class="pv${h ? ` ${h.cls}` : ''}"${tipAttr(key)}>` +
         `${v === null ? '—' : fmt(v)}${h ? heatMarkHtml(h) : ''}</span>`,
     ];
     const box =

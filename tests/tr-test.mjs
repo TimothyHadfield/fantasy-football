@@ -6771,12 +6771,15 @@ if (!live.boot) {
   ok('some men are tinted and not all of them',
     tinted.length > 0 && tinted.length < leftRows.length + rightRows.length,
     `${tinted.length} of ${leftRows.length + rightRows.length}`);
-  ok('every tinted cell says in words where it stands',
-    tinted.every((r) => /SD (above|below)/.test(r.heatTitle)),
+  // ONE PREVIEW ON THE NUMBER, the player card (Tim, 2026-10-06: "there are 2
+  // different previews that show up: the SD one and then the actual 14 week
+  // preview one. Remove the SD one"). The words live in the key under the lists.
+  ok('no value cell carries the SD words as a second preview',
+    [...leftRows, ...rightRows].every((r) => r.heatTitle === ''),
     JSON.stringify(tinted.slice(0, 2).map((r) => r.heatTitle)));
-  ok('and the cell says which GROUP it was measured against — his own position',
-    tinted.every((r) => /on these two squads/.test(r.heatTitle)),
-    tinted[0] && tinted[0].heatTitle);
+  ok('and every tinted cell still opens the player card',
+    tinted.every((r) => r.card),
+    `${tinted.filter((r) => r.card).length} of ${tinted.length}`);
   ok('the key under the lists says the scale is per position, not across the table',
     /his own position/i.test(cu.heatKey) && /these two squads/i.test(cu.heatKey) &&
       /[▲▼]/.test(cu.heatKey) && /heavier type/i.test(cu.heatKey),
