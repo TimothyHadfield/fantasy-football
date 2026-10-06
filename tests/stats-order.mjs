@@ -286,6 +286,69 @@ assert(/Colour compares each number/.test(noteText) && /Spread/.test(noteText),
 assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   'the tucked note does not print the F−A and Luck/wk thresholds');
 
+// ------------------------------------------- week by week: the whole luck
+//
+// Tim, 2026-10-05: the Luck button "shows luck as just act-proj, when this is
+// only a part … Opponent scoring, close game, and act-proj all go into this
+// weekly number". So Luck is the week's share of the Luck score, a hover names
+// the three parts, and each part has a button of its own. Worked out here from
+// the demo league itself, not read back off the page.
+{
+  const { generateDemoLeague } = await import(pathToFileURL(path.join(REPO, 'js/demo.js')).href);
+  const { computeLeagueStats } = await import(pathToFileURL(path.join(REPO, 'js/stats.js')).href);
+  const st = computeLeagueStats(generateDemoLeague());
+  const all = st.teams.flatMap((t) => t.weekly.map((r) => r.actual));
+  const lg = all.reduce((a, b) => a + b, 0) / all.length;
+  const num = (s) => Number(String(s).replace(/[▲▼\s]/g, '').replace('−', '-').replace('+', ''));
+  const whole = (v) => Number(v.toFixed(0)) + 0;
+  const press = (metric) => {
+    const btn = document.querySelector(`#weeklyMetric button[data-metric="${metric}"]`);
+    if (!btn) return null;
+    btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+    return new Map([...$('weeklyTable').querySelectorAll('tbody tr')].map((tr) =>
+      [tr.children[0].textContent.trim(), [...tr.children].slice(1)]));
+  };
+  const PART = {
+    luck: (r) => (lg - r.oppActual) + (r.actual - r.projected) + (r.gameLuck ?? 0),
+    luckProj: (r) => r.actual - r.projected,
+    luckOpp: (r) => lg - r.oppActual,
+    luckClose: (r) => r.gameLuck,
+  };
+  const labels = [...document.querySelectorAll('#weeklyMetric button')].map((b) => b.textContent.trim());
+  assert(labels.join('|') === 'Actual|Projected|Luck|Act−Proj|Opp scoring|Close game|Margin',
+    `week by week offers: ${labels.join('|')}`);
+  for (const [metric, f] of Object.entries(PART)) {
+    const grid = press(metric);
+    assert(grid, `no "${metric}" button on the week-by-week grid`);
+    if (!grid) continue;
+    let wrong = '';
+    for (const t of st.teams) {
+      const cells = grid.get(t.name) || [];
+      t.weekly.forEach((r, i) => {
+        const want = f(r);
+        if (want === null) return;
+        if (num(cells[i]?.textContent) !== whole(want) && !wrong) {
+          wrong = `${t.name} wk ${r.week}: "${cells[i]?.textContent}" for ${want.toFixed(2)}`;
+        }
+      });
+    }
+    assert(!wrong, `${metric} grid is not the worked figure — ${wrong}`);
+  }
+  // The Luck average is the Luck score, and the hover names the three parts.
+  const luck = press('luck');
+  const t0 = st.teams[0];
+  const row0 = luck.get(t0.name);
+  assert(num(row0[row0.length - 1].textContent) === whole(t0.exact.luckScore),
+    `Luck Avg "${row0[row0.length - 1].textContent}" is not the Luck score ${t0.exact.luckScore.toFixed(2)}`);
+  const tip = row0[0].getAttribute('title') || '';
+  assert(/Opp scoring .+ · Act−Proj .+ · Close game /.test(tip), `Luck cell hover: "${tip}"`);
+  const [o, p, c] = (tip.match(/[+−]?\d+/g) || []).slice(0, 3).map(num);
+  const r0 = t0.weekly[0];
+  assert(o === whole(PART.luckOpp(r0)) && p === whole(PART.luckProj(r0)) && c === whole(r0.gameLuck ?? 0),
+    `Luck cell hover numbers ${o}/${p}/${c} are not the three parts: "${tip}"`);
+  press('actual');
+}
+
 if (problems.length) {
   console.log('FAIL stats panel order');
   for (const p of problems) console.log(`  - ${p}`);

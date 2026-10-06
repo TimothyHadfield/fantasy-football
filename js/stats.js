@@ -149,6 +149,34 @@ function buildWeeklyRows(data) {
 // --------------------------------------------------------------- team metrics
 
 /**
+ * One week's share of the luck score, and the three parts it is made of
+ * (Tim, 2026-10-05: "Opponent scoring, close game, and act-proj all go into
+ * this weekly number").
+ *
+ *   Luck score = leagueAvg − mean(oppActual − luck) + mean(gameLuck)
+ *
+ * so week by week it is (leagueAvg − oppActual) + (actual − projected) +
+ * gameLuck, and a team's weeks average back to its Luck score. The league
+ * average is the season's, the one the Luck score itself uses — not that
+ * week's — or the weeks would not add up to it. A tied game has no close-game
+ * figure (`close: null`) and counts 0 towards the total, as it does in
+ * `attachLuckMargins`.
+ */
+export function weekLuckParts(row, leagueAvgActual) {
+  const proj = row.actual - row.projected;
+  const opp = leagueAvgActual - row.oppActual;
+  const close = row.gameLuck;
+  return { proj, opp, close, total: proj + opp + (close ?? 0) };
+}
+
+/** The unrounded league average score over every team-week played. */
+export function leagueAvgActualOf(teams) {
+  const all = [];
+  for (const t of teams) for (const r of t.weekly) all.push(r.actual);
+  return mean(all);
+}
+
+/**
  * The sheet's "Cumulative Luck (adjusted formula)" series, one value per week,
  * each computed from weeks 1..w rather than from that week alone.
  *

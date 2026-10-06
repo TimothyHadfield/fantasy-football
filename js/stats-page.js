@@ -8,7 +8,9 @@
 
 import { generateDemoLeague } from './demo.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
-import { computeLeagueStats, teamFitPoints, playerFitPoints, boxStats } from './stats.js';
+import {
+  computeLeagueStats, teamFitPoints, playerFitPoints, boxStats, weekLuckParts, leagueAvgActualOf,
+} from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
 // THE POSITIONAL FLOOR (Tim, 2026-09-18). Schedule luck is the average
 // PROJECTED opponent, so it is a per-position assessment like any other: an
@@ -1498,12 +1500,20 @@ function renderFit() {
 // The league's own week, as a baseline under the grid. It was already computed
 // on every render and shown nowhere; with it, every cell above is readable as
 // "above or below what everyone else did that week" instead of a bare number.
-const LEAGUE_KEY = { actual: 'avgActual', projected: 'avgProjected', luck: 'avgLuck' };
+const LEAGUE_KEY = { actual: 'avgActual', projected: 'avgProjected', luckProj: 'avgLuck' };
+
+// The Luck button is the week's share of the Luck score; the three after it
+// are its parts (`weekLuckParts` in js/stats.js).
+const LUCK_PART = { luck: 'total', luckProj: 'proj', luckOpp: 'opp', luckClose: 'close' };
 
 function renderWeeklyTable() {
   const s = state.stats;
   const metric = state.weeklyMetric;
-  const useSign = metric === 'luck' || metric === 'actualDiff';
+  const useSign = metric in LUCK_PART || metric === 'actualDiff';
+  const leagueAvg = leagueAvgActualOf(s.teams);
+  const partsOf = (row) => weekLuckParts(row, leagueAvg);
+  const valueOf = (row) => (metric in LUCK_PART ? partsOf(row)[LUCK_PART[metric]] : row[metric]);
+  const meanOf = (vals) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
   const weeks = weekCount();
   // With one week the trailing average is a copy of the only column there is.
   const showAvg = weeks > 1;
@@ -1543,14 +1553,29 @@ function renderWeeklyTable() {
   const weekScales = new Map(s.weekNumbers.map((w) => [w, w === part ? null : heatScale(
     s.teams.map((t) => {
       const row = t.weekly.find((x) => x.week === w);
-      return row ? row[metric] : null;
+      return row ? valueOf(row) : null;
     })
   )]));
 
-  const teamAvg = (t) => {
-    const vals = t.weekly.map((r) => r[metric]).filter((v) => typeof v === 'number');
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  // The Luck average is the Luck score itself, unrounded, so this column and
+  // the standings above can never disagree (they would by a hair after a tie).
+  const teamAvg = (t) => (metric === 'luck' && t.weekly.length
+    ? t.exact.luckScore
+    : meanOf(t.weekly.map(valueOf).filter((v) => typeof v === 'number')));
+
+  // Hovering (or, on a phone, tapping) a Luck cell names its three parts.
+  const partsTitle = (row) => {
+    const p = partsOf(row);
+    // Plain text: `signed` wraps its number in a span, which a title cannot hold.
+    const pm = (v) => { const n = Number(v.toFixed(0)) + 0; return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}`; };
+    return `Opp scoring ${pm(p.opp)} · Act−Proj ${pm(p.proj)} · Close game ` +
+      `${p.close === null ? 'tie' : pm(p.close)}`;
   };
+  const withParts = (td, row) => (metric !== 'luck'
+    ? td
+    : / title="/.test(td)
+      ? td.replace(' title="', ` title="${esc(partsTitle(row))}. `)
+      : td.replace('<td', `<td title="${esc(partsTitle(row))}"`));
   // The Avg column is its own group: ten season averages, which are the same
   // kind of number as each other and NOT the same kind as a single week.
   const avgScale = showAvg ? heatScale(s.teams.map(teamAvg)) : null;
@@ -1560,10 +1585,12 @@ function renderWeeklyTable() {
       const cells = s.weekNumbers.map((w) => {
         const row = t.weekly.find((x) => x.week === w);
         if (!row) return w === part ? '<td></td>' : `<td>${dash}</td>`;
-        return heatCell(row[metric], weekScales.get(w), {
+        const v = valueOf(row);
+        if (v === null) return `<td>${dash}</td>`;
+        return withParts(heatCell(v, weekScales.get(w), {
           what: `what the league did in week ${w}`,
-          text: cell(row[metric]),
-        });
+          text: cell(v),
+        }), row);
       });
       const avg = teamAvg(t);
       return `<tr class="${state.highlight === t.id ? 'me' : ''}">
@@ -1575,19 +1602,21 @@ function renderWeeklyTable() {
     })
     .join('');
 
-  const key = LEAGUE_KEY[metric];
+  // The parts with no ready-made league figure average their own column.
+  const key = LEAGUE_KEY[metric] || (metric in LUCK_PART ? 'own' : null);
   const tfoot = table.querySelector('tfoot');
   if (tfoot) {
     if (key) {
-      const weekly = s.weekNumbers.map((w) =>
-        s.weeklyLeagueAverages.find((a) => a.week === w)
-      );
+      const weekly = s.weekNumbers.map((w) => (key === 'own'
+        ? { week: w, own: meanOf(s.teams.map((t) => t.weekly.find((x) => x.week === w))
+          .map((row) => (row ? valueOf(row) : null)).filter((v) => typeof v === 'number')) }
+        : s.weeklyLeagueAverages.find((a) => a.week === w)));
       const vals = weekly.filter((a) => !a || a.week !== part)
         .map((a) => (a ? a[key] : null)).filter((v) => typeof v === 'number');
       const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
       tfoot.innerHTML =
         `<tr><td class="name">League</td>` +
-        weekly.map((a) => (a && a.week === part ? '<td></td>' : `<td>${a ? cell(a[key]) : dash}</td>`)).join('') +
+        weekly.map((a) => (a && a.week === part ? '<td></td>' : `<td>${a && typeof a[key] === 'number' ? cell(a[key]) : dash}</td>`)).join('') +
         (showAvg ? `<td>${cell(avg)}</td>` : '') +
         '</tr>';
     } else {
@@ -1624,9 +1653,14 @@ function renderWeeklyTable() {
       : `Week ${part} is still being played. A matchup is counted as soon as every starter ` +
         'in it has finished; the others are left empty, and the week has no colour or League ' +
         'figure until it is complete.',
-    'All four measures point the same way here — more points, a better projection, more ' +
+    'Every measure points the same way here — more points, a better projection, more ' +
     'luck and a bigger margin are all good for the team — so green always means good on ' +
     'this grid whichever button is pressed.',
+    '<strong>Luck</strong> is the week’s share of the Luck score: <strong>Opp scoring</strong> ' +
+    '(the league’s season average minus what your opponent scored), <strong>Act−Proj</strong> ' +
+    '(your score minus your projection) and <strong>Close game</strong> (near ±50 for a ' +
+    'one-point result, near zero for a blowout), added up. Its Avg is the Luck score. ' +
+    'Hover or tap a Luck cell for the three.',
   ]);
 
   // Headers are rebuilt above, but sortable.js delegates from the table
