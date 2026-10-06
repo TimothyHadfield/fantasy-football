@@ -4,6 +4,8 @@
 //
 //   node test-home.mjs            (parent: one child process per page)
 //   node test-home.mjs index.html (child)
+//   node --import <the season stand-in> test-home.mjs toggle <order> (child;
+//                                 see "the source buttons" below)
 
 import { parseHTML } from 'linkedom';
 import { readFileSync } from 'node:fs';
@@ -12,6 +14,8 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
+import { bootDom, waitFor } from './cap-harness.mjs';
+import { emit } from './emit.mjs';
 const PAGES = ['index.html', 'debug.html'];
 
 function moduleSrcs(html) {
@@ -305,6 +309,108 @@ function directionOk(values, cells, goodHigh) {
 /** Every panel whose subject is a fantasy team, not an NFL player. */
 const TEAM_PANELS = ['#matchups', '#strength'];
 
+// --------------------------------------------------------- the source buttons
+//
+// "Demo data | My ESPN league" must say what is ON SCREEN. It did not: with a
+// saved league every reload ended on the live league under a lit "Demo data"
+// (the connection bar answers at once from its saved copy, so the live load
+// started BEFORE the boot's own demo paint, which then lit Demo for good).
+//
+// The page boots itself on import, so each order of events is a child of its
+// own. js/season.js is stood in for by tests/cap-stub-season.mjs — ten squads,
+// three weeks decided — behind a wrapper that can hold the schedule back or
+// refuse it, registered from a data: URL so this suite needs no file beside it.
+
+const STUB_SEASON = pathToFileURL(path.join(REPO, 'tests', 'cap-stub-season.mjs')).href;
+const dataUrl = (src) => `data:text/javascript,${encodeURIComponent(src)}`;
+const SEASON_SRC = `
+export * from ${JSON.stringify(STUB_SEASON)};
+import { fetchSchedule as real } from ${JSON.stringify(STUB_SEASON)};
+export async function fetchSchedule() {
+  const ms = Number(process.env.HOME_SCHED_DELAY || 0);
+  if (ms) await new Promise((r) => setTimeout(r, ms));
+  if (process.env.HOME_SCHED_FAIL) throw new Error('ESPN would not return the schedule.');
+  return real();
+}`;
+const LOADER_SRC = `
+const SEASON = ${JSON.stringify(dataUrl(SEASON_SRC))};
+export async function resolve(spec, ctx, next) {
+  const fromTests = /\\/tests\\/[^/]*$/.test(ctx.parentURL || '');
+  if (spec.startsWith('.') && /\\/season\\.js$/.test(spec) && !fromTests) {
+    return { url: SEASON, shortCircuit: true };
+  }
+  return next(spec, ctx);
+}`;
+const REGISTER = dataUrl(
+  `import { register } from 'node:module'; register(${JSON.stringify(dataUrl(LOADER_SRC))});`);
+
+// What the connection bar keeps once a league has been read: the next page
+// load answers `onConnection` from it before anything has been asked of ESPN.
+const SAVED = {
+  leagueId: '99', season: 2026, teamId: 1, checkedAt: 1, source: 'espn',
+  league: {
+    leagueId: '99', season: 2026, name: 'Capture Stub League', teamCount: 10,
+    teams: Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Manager ${i + 1}` })),
+  },
+};
+const { league: _bar, ...UNREAD } = SAVED;
+
+/** order -> what is in the browser, the stand-in's switches, and what must be on screen. */
+const TOGGLE_RUNS = {
+  // A reload with a saved league: the bar answers first. THE BUG.
+  reload: { store: { 'ff.connection': SAVED }, want: 'Live' },
+  // The same from the synced copy, as a phone reads it.
+  cloud: { store: { 'ff.connection': { ...SAVED, source: 'cloud' } }, env: { CAP_CLOUD: '1' }, want: 'Live' },
+  // A league id saved but never read: the boot's own load goes first.
+  unread: { store: { 'ff.connection': UNREAD }, want: 'Live' },
+  // Nobody connected.
+  none: { store: {}, want: 'Demo' },
+  // ESPN refuses: the page stays on the sample league.
+  fail: { store: { 'ff.connection': SAVED }, env: { HOME_SCHED_FAIL: '1' }, want: 'Demo' },
+  // "Demo data" was clicked on an earlier visit.
+  chosen: { store: { 'ff.connection': SAVED, 'ff.prefs': { 'home.source': 'demo' } }, want: 'Demo' },
+  // "Demo data" clicked while the league is still being read, then back.
+  midload: { store: { 'ff.connection': SAVED }, env: { HOME_SCHED_DELAY: '250' }, want: 'Demo', click: true },
+};
+
+if (process.argv[2] === 'toggle') {
+  const run = TOGGLE_RUNS[process.argv[3]];
+  const errors = [];
+  process.on('unhandledRejection', (r) => errors.push(`unhandled: ${String((r && r.stack) || r)}`));
+  const { document, window } = bootDom({
+    html: readFileSync(path.join(REPO, 'index.html'), 'utf8'), store: run.store,
+  });
+  await import(pathToFileURL(path.join(REPO, 'js/home-page.js')).href);
+  await import(pathToFileURL(path.join(REPO, 'js/connection.js')).href);
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const badge = () => document.getElementById('modeBadge').textContent.trim();
+  const lit = () => [...document.querySelectorAll('#sourceToggle button')]
+    .filter((b) => b.classList.contains('on')).map((b) => b.getAttribute('data-src'));
+  const click = (src) => document.querySelector(`#sourceToggle button[data-src="${src}"]`)
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  // Past the bar's own round trip (the extension is allowed 400ms to answer),
+  // so a connection event that lands late is inside the reading.
+  const settled = async (want) => {
+    await waitFor(() => badge() === want, 4000);
+    await sleep(900);
+    return { badge: badge(), lit: lit() };
+  };
+
+  const out = {};
+  if (run.click) {
+    await sleep(60);                 // the schedule is still on its way
+    click('demo');
+    out.first = await settled('Demo');
+    click('live');
+    out.then = await settled('Live');
+  } else {
+    out.first = await settled(run.want);
+  }
+  out.errors = errors;
+  emit(out);
+}
+
 // ------------------------------------------------------------------ child mode
 
 if (process.argv[2]) {
@@ -342,6 +448,28 @@ if (process.argv[2]) {
       if (!$('deadlines')) problems.push('demo: the deadlines line has no element');
       else if (onScreen($('deadlines')) || text('deadlines')) {
         problems.push(`demo: the deadlines line shows "${text('deadlines')}" on the sample league`);
+      }
+
+      // Every team on a card has its record beside its name (Tim: "where the
+      // user's names are listed, put their record by it"). The sample season
+      // is over, so all ten are whole numbers and each side's adds up to 13.
+      const demoRecs = Array.from(document.querySelectorAll('#matchups .side'))
+        .map((s) => (s.querySelector('.trec')?.textContent || '').trim());
+      facts.demoRecords = demoRecs.slice(0, 2);
+      const adds13 = (r) => /^\d+–\d+(–\d+)?$/.test(r) && r.split('–').reduce((a, n) => a + Number(n), 0) === 13;
+      if (demoRecs.length !== 10 || !demoRecs.every(adds13)) {
+        problems.push(`record: the demo cards read ${JSON.stringify(demoRecs)}, expected ten W–L records over 13 games`);
+      }
+
+      // Roster strength: the ▲/▼ sits in a slot EVERY row has, so a row with a
+      // mark and a row without keep the bar and the number in the same place.
+      const slots = Array.from(document.querySelectorAll('#strength .rank li'))
+        .map((li) => Array.from(li.querySelectorAll('.vv .heatmark')).map((el) => el.textContent.trim()));
+      facts.strengthSlots = slots.map((s) => s.join('') || '·').join('');
+      if (!slots.every((s) => s.length === 1)) {
+        problems.push(`strength: not every row has one mark slot — ${facts.strengthSlots}`);
+      } else if (!slots.some((s) => s[0]) || !slots.some((s) => !s[0])) {
+        problems.push(`strength: the demo rows are all marked or all plain (${facts.strengthSlots}), so this proves nothing`);
       }
 
       // --- player references, against the real demo data -------------------
@@ -624,6 +752,9 @@ if (process.argv[2]) {
         const cellText = (td) => (td.textContent || '').replace(/\s+/g, ' ').trim();
         const rowsOf = (sel) => Array.from(document.querySelectorAll(`${sel} tbody tr`));
         const hrefOf = (p) => `waivers.html?player=${p.playerId}`;
+        // "Bench Aardvarks" -> "B. Aardvarks", worked out here and not by
+        // calling the page's own helper.
+        const short = (name) => name.replace(/^(\S)\S*\s+/, '$1. ');
 
         // (1) The injury table: the name and the projection, both his.
         const injured = [];
@@ -674,6 +805,10 @@ if (process.argv[2]) {
 
           // The "Fantasy team" column is a manager, not a player.
           if (c[2].querySelector('a')) problems.push('pref: the injury table linked a fantasy team name');
+          // The two name columns are the ones that give way on a phone.
+          if (!/\bwrap\b/.test(clsOf(c[0])) || !/\bwrap\b/.test(clsOf(c[2]))) {
+            problems.push(`fit: ${p.name}'s player and team cells are not the wrapping ones ("${clsOf(c[0])}", "${clsOf(c[2])}")`);
+          }
         }
 
         // THE INJURY TABLE'S Proj COLUMN MUST STAY PLAIN. It is a quarterback's
@@ -733,13 +868,19 @@ if (process.argv[2]) {
           // Cost is the gap between two players, so it is neither man's number.
           if (c[4].querySelector('a')) problems.push(`pref: ${t.name}'s Cost cell was linked`);
 
+          // The two men by the site's short form ("B. Aardvarks"), so the table
+          // fits its half-width panel; the full name is the link's title,
+          // checked below. The cell is the one that may wrap.
           const benched = t.bench[0];
           const started = t.starters[1];
           const want =
-            `${benched.name} (${benched.actual.toFixed(1)}) over ` +
-            `${started.name} (${started.actual.toFixed(1)})`;
+            `${short(benched.name)} (${benched.actual.toFixed(1)}) over ` +
+            `${short(started.name)} (${started.actual.toFixed(1)})`;
           if (cellText(c[3]) !== want) {
-            problems.push(`pref: linking changed ${t.name}'s miss cell to "${cellText(c[3])}", expected "${want}"`);
+            problems.push(`pref: ${t.name}'s miss cell reads "${cellText(c[3])}", expected "${want}"`);
+          }
+          if (!/\bwrap\b/.test(clsOf(c[3])) || !/\bwrap\b/.test(clsOf(c[0]))) {
+            problems.push(`fit: ${t.name}'s team and miss cells are not the wrapping ones ("${clsOf(c[0])}", "${clsOf(c[3])}")`);
           }
 
           const links = c[3].querySelectorAll('a.pref');
@@ -782,8 +923,8 @@ if (process.argv[2]) {
           problems.push(`pref: ${facts.noIdMissLinks} link(s) emitted for players carrying no id`);
         }
         const wantMiss =
-          `${n0.bench[0].name} (${n0.bench[0].actual.toFixed(1)}) over ` +
-          `${n0.starters[1].name} (${n0.starters[1].actual.toFixed(1)})`;
+          `${short(n0.bench[0].name)} (${n0.bench[0].actual.toFixed(1)}) over ` +
+          `${short(n0.starters[1].name)} (${n0.starters[1].actual.toFixed(1)})`;
         if (missRow && cellText(missRow.children[3]) !== wantMiss) {
           problems.push(`pref: an unlinked miss cell reads "${cellText(missRow.children[3])}", expected "${wantMiss}"`);
         }
@@ -957,6 +1098,67 @@ if (process.argv[2]) {
         if (facts.deadNone !== null) problems.push(`deadlines: a league with neither date shows ${JSON.stringify(facts.deadNone)}`);
         home.render(home.buildModel({ ...dated({ deadline: NOW + 5 * DAY }, WED), isDemo: true }));
         if (onScreen($('deadlines'))) problems.push(`deadlines: shown on demo data: "${text('deadlines')}"`);
+
+        // --- the record beside each name on a card ---------------------------
+        //
+        // Tim: "where the user's names are listed, put their record by it", and
+        // for a matchup being played the decimal record the rest of the site
+        // prints (3–2 at a 20% chance reads 3.2–2.8), whole numbers otherwise.
+        // Every record expected here is worked out from the fixture's scores.
+        const sides = () => Array.from(document.querySelectorAll('#matchups .side')).map((s) => ({
+          name: (s.querySelector('.tname')?.textContent || '').replace(/\s+/g, ' ').trim(),
+          rec: (s.querySelector('.trec')?.textContent || '').trim(),
+          title: s.querySelector('.trec')?.getAttribute('title') || '',
+          // The record is its own element after the name, in the name's column:
+          // a card row stays three columns wide, and the name is what shortens.
+          apart: !s.querySelector('.tname .trec') && s.children.length === 3 &&
+            s.querySelector('.tname')?.nextElementSibling === s.querySelector('.trec'),
+        }));
+        const recOf = (name) => sides().find((s) => s.name.startsWith(name));
+
+        // (1) Nothing played: 0–0 for all ten, and the name cell reads as before.
+        home.render(home.buildModel(preKickoff()));
+        facts.recPre = sides().map((s) => s.rec).join(' ');
+        if (!sides().every((s) => s.rec === '0–0' && !s.title)) {
+          problems.push(`record: before week 1 the cards read "${facts.recPre}", expected ten of 0–0`);
+        }
+        if (!sides().every((s) => s.apart)) problems.push('record: the record is not its own element beside the name');
+        if (recOf('Cobras')?.name !== 'Cobras (you)') {
+          problems.push(`record: your own name cell reads "${recOf('Cobras')?.name}", expected "Cobras (you)"`);
+        }
+
+        // (2) Week 1 final: in each pair the later squad out-scored the earlier
+        // (every fixture squad scores 0.6 more than the one before it).
+        const won = new Set(['Badgers', 'Dingoes', 'Falcons', 'Herons', 'Jackals']);
+        home.render(home.buildModel(finishedWeek()));
+        facts.recFinal = sides().map((s) => `${s.name.split(' ')[0]} ${s.rec}`).join(', ');
+        const wrongFinal = sides().filter((s) => s.rec !== (won.has(s.name.split(' ')[0]) ? '1–0' : '0–1') || s.title);
+        if (sides().length !== 10 || wrongFinal.length) {
+          problems.push(`record: after week 1 the cards read "${facts.recFinal}"`);
+        }
+
+        // (3) Week 2 being played, the Cobras at a 20% chance against the
+        // Dingoes: 0–1 reads 0.2–1.8 and 1–0 reads 1.8–0.2, with the basis on
+        // the record; the eight squads not in play stay whole.
+        const live = finishedWeek();
+        const wk2 = preKickoff().schedule.byWeek.get(1).map((g) => ({ ...g, week: 2 }));
+        live.schedule.byWeek.set(2, wk2);
+        live.schedule.games = [...live.schedule.byWeek.values()].flat();
+        home.render(home.buildModel({
+          ...live, week: 2, rosters: { week: 2, teams: preKickoff().rosters.teams },
+          chances: new Map([[3, 0.2], [4, 0.8]]),
+        }));
+        facts.recLive = sides().map((s) => `${s.name.split(' ')[0]} ${s.rec}`).join(', ');
+        if (recOf('Cobras')?.rec !== '0.2–1.8' || recOf('Dingoes')?.rec !== '1.8–0.2') {
+          problems.push(`record: in play the pair reads ${recOf('Cobras')?.rec} and ${recOf('Dingoes')?.rec}, expected 0.2–1.8 and 1.8–0.2`);
+        }
+        if (!/0–1 so far; 20% to win/.test(recOf('Cobras')?.title || '')) {
+          problems.push(`record: the decimal does not state its basis: "${recOf('Cobras')?.title}"`);
+        }
+        const others = sides().filter((s) => !/^(Cobras|Dingoes)/.test(s.name));
+        if (others.length !== 8 || others.some((s) => !/^[01]–[01]$/.test(s.rec) || s.title)) {
+          problems.push(`record: squads not in play are not whole numbers: "${facts.recLive}"`);
+        }
       }
     }
 
@@ -999,5 +1201,38 @@ for (const page of PAGES) {
   for (const p of parsed.problems || []) { console.log(`  - ${p.slice(0, 900)}`); }
   if (!parsed.ok) failed++;
 }
-console.log(failed ? `\n${failed} page(s) failed` : `\nAll ${PAGES.length} pages OK`);
+
+// The source buttons, one child per order of events: whatever the badge says is
+// on screen, exactly that button is lit.
+for (const [name, run] of Object.entries(TOGGLE_RUNS)) {
+  const env = { ...process.env };
+  for (const k of ['CAP_EARLY', 'CAP_DECIDED', 'CAP_CLOUD', 'HOME_SCHED_DELAY', 'HOME_SCHED_FAIL']) delete env[k];
+  const res = spawnSync(process.execPath, ['--import', REGISTER, self, 'toggle', name], {
+    encoding: 'utf8', timeout: 60000, env: { ...env, ...(run.env || {}) },
+  });
+  const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
+  const problems = [];
+  let got = null;
+  if (!line) problems.push(`no result: ${(res.stderr || res.stdout || '').slice(0, 900)}`);
+  else {
+    got = JSON.parse(line.slice(2));
+    const check = (at, want) => {
+      const lit = want === 'Live' ? 'live' : 'demo';
+      if (!at || at.badge !== want) problems.push(`the page shows "${at && at.badge}", expected ${want}`);
+      else if (JSON.stringify(at.lit) !== JSON.stringify([lit])) {
+        problems.push(`the page shows ${want} with ${JSON.stringify(at.lit)} lit, expected ["${lit}"]`);
+      }
+    };
+    check(got.first, run.want);
+    if (run.click) check(got.then, 'Live');
+    if (got.errors.length) problems.push(`error: ${got.errors[0]}`);
+  }
+  console.log(`${problems.length ? 'FAIL' : 'PASS'} source buttons: ${name}`);
+  if (got) console.log(`  ${JSON.stringify({ first: got.first, then: got.then })}`);
+  for (const p of problems) console.log(`  - ${p.slice(0, 900)}`);
+  if (problems.length) failed++;
+}
+console.log(failed
+  ? `\n${failed} page(s) failed`
+  : `\nAll ${PAGES.length} pages OK, the source buttons in ${Object.keys(TOGGLE_RUNS).length} orders`);
 process.exit(failed ? 1 : 0);
