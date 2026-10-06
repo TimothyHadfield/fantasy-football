@@ -28,7 +28,7 @@
 // number in it is a decision: run `node run-all.mjs --bless` on a green run,
 // and say in the commit message what changed and why.
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -177,22 +177,41 @@ const measured = {};
 const drops = [];   // counts that fell — a failure
 const rises = [];   // counts that grew — fine, and worth blessing
 
-for (const [file] of chosen) {
-  const t0 = Date.now();
-  const res = spawnSync(process.execPath, [path.join(HERE, file)], {
-    cwd: HERE,
-    encoding: 'utf8',
+// SEVERAL AT ONCE (Tim, 2026-10-06: "is the 40 minute test really necessary? Is
+// there any way we can speed it up"). Each suite is its own node process that
+// shares nothing with the others, so a pool of them is the same run in a
+// fraction of the time. OPT IN with `--jobs=N`: measured 2026-10-06 at six,
+// the run only fell from 32 to 27 minutes (tr-test's own scenarios run one at a
+// time and set the floor) and cmp-check failed under the load while passing
+// alone, so one at a time stays the default. The suites in
+// SOLO make a claim about SPEED and are run alone, first, on an idle machine.
+const SOLO = ['test-trade-weekly.mjs'];
+const jobsArg = args.find((a) => a.startsWith('--jobs='));
+const JOBS = Math.max(1, jobsArg ? Number(jobsArg.slice(7)) || 1 : 1);
+
+function runSuite(file) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const chunks = [];
+    const child = spawn(process.execPath, [path.join(HERE, file)], { cwd: HERE });
+    child.stdout.on('data', (d) => chunks.push(d));
+    child.stderr.on('data', (d) => chunks.push(d));
     // 25 MINUTES, NOT TEN. `tr-test` needs ~6 min on an idle machine and hit
     // the old cap whenever Tim's OCR jobs held the cores — a SIGTERM that looks
     // exactly like a broken suite. The cap is here to stop a hang, not to
     // police speed (`test-trade-weekly` owns the speed claim, scaled by a
     // measured machine factor), so it is set well clear of the slowest suite.
-    timeout: 25 * 60 * 1000,
-    // See tr-test's own runner: a suite that prints a scenario's whole page
-    // state is past node's 1 MB default, and a truncated pipe reads as a
-    // broken suite rather than as a complete one.
-    maxBuffer: 64 * 1024 * 1024,
+    const timer = setTimeout(() => child.kill(), 25 * 60 * 1000);
+    const done = (status, signal) => {
+      clearTimeout(timer);
+      resolve({ file, t0, res: { status, signal, stdout: Buffer.concat(chunks).toString('utf8'), stderr: '' } });
+    };
+    child.on('error', () => done(null, 'spawn'));
+    child.on('close', done);
   });
+}
+
+function report({ file, t0, res }) {
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   const out = (res.stdout || '') + (res.stderr || '');
   const ok = res.status === 0;
@@ -228,6 +247,14 @@ for (const [file] of chosen) {
     failures.push([file, out]);
   }
 }
+
+// A name listed twice is run once.
+const queue = [...new Set(chosen.map(([f]) => f))];
+for (const file of queue.filter((f) => SOLO.includes(f))) report(await runSuite(file));
+const rest = queue.filter((f) => !SOLO.includes(f));
+await Promise.all(Array.from({ length: Math.min(JOBS, rest.length) }, async () => {
+  while (rest.length) report(await runSuite(rest.shift()));
+}));
 
 // A suite that used to exist and did not run at all is the other way a count
 // vanishes, so a full run checks the record for names it never saw.
