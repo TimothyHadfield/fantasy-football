@@ -106,6 +106,7 @@ const state = {
   decisions: [],        // that team's, what-ifs first
   selectedId: null,
   seasonTeamId: null,   // whose lineup "Season by week" shows
+  markWeek: null,       // the week whose column "Season by week" outlines (see goSeason)
   noise: prefs.get('noise', false) === true,
   view: { season: 'total', standings: 'total', summary: 'total' },
   odds: null,           // see loadOdds()
@@ -825,8 +826,7 @@ function weekWhyHtml(week) {
     foot('Actual', pts1(c.realTotal)) +
     foot('Hypothetical', pts1(c.total)) +
     foot('Diff', signedText(diff), 'op-gap') +
-    '</tfoot></table>' +
-    '<button type="button" class="op-close">Close</button>'
+    '</tfoot></table>' + WHY_ACTS
   );
 }
 
@@ -853,15 +853,25 @@ function teamWhyHtml(teamId) {
     `<tr><td class="num">Total</td><td class="num">${pts1(real)}</td><td class="num">${pts1(hyp)}</td>` +
     `<td class="num">${signedText(diffOf(hyp, real))}</td></tr>` +
     `<tr class="op-gap"><td class="num" colspan="3">Points/wk</td><td class="num">${signedText(perWeek(total, weeks.length))}</td></tr>` +
-    '</tfoot></table>' +
-    '<button type="button" class="op-close">Close</button>'
+    '</tfoot></table>' + WHY_ACTS
   );
 }
 
 let whyPop = null;
+/** What the open preview is of: { why, key } — a week's number, or a team's. */
+let whyAt = null;
+/** No card opens by hover or focus before this time: the page is moving under the mouse. */
+let quietUntil = 0;
+
+const whyKey = (el) => ({ why: el.dataset.why === 'team' ? 'team' : 'week', key: el.dataset.why === 'team' ? el.dataset.team : el.dataset.wk });
+const whyOpenFor = (el) => {
+  const k = whyKey(el);
+  return Boolean(whyPop && !whyPop.hidden && whyAt && whyAt.why === k.why && same(whyAt.key, k.key));
+};
 
 function closeWhy() {
   if (whyPop) whyPop.hidden = true;
+  whyAt = null;
 }
 
 function openWhy(el, sheet) {
@@ -872,9 +882,12 @@ function openWhy(el, sheet) {
     whyPop.id = 'whyPop';
     document.body.appendChild(whyPop);
     whyPop.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('.op-close')) closeWhy();
+      if (!e.target.closest) return;
+      if (e.target.closest('.op-go') && whyAt) goSeason(whyAt, e);
+      else if (e.target.closest('.op-close')) closeWhy();
     });
   }
+  whyAt = whyKey(el);
   whyPop.className = sheet ? 'dz-pop sheet' : 'dz-pop';
   whyPop.innerHTML = html;
   whyPop.hidden = false;
@@ -893,15 +906,65 @@ function openWhy(el, sheet) {
   whyPop.style.top = `${top}px`;
 }
 
+// FROM A PREVIEW TO THE LINEUPS BEHIND IT (Tim, 2026-10-06: "if the user clicks
+// on the number while the preview is open, then automatically pull up that
+// player's season by week right below"). The number with its preview open — a
+// second click, a tap, Enter — or the sheet's own button goes to Season by week:
+// that team's lineups, scrolled to, and for a week's preview that week's column
+// outlined in both halves until the next click anywhere.
+//
+// WITH ALL USERS ON the team is picked in the panel's own "Lineup of", not in
+// the Team picker: that one leaves All users and swaps the decision, so the box
+// just clicked in would be redrawn as something else.
+
+/** The sheet's two buttons. A mouse's card has neither: it shuts as the mouse leaves the number. */
+const WHY_ACTS = '<div class="op-acts"><button type="button" class="op-go">Season by week</button>' +
+  '<button type="button" class="op-close">Close</button></div>';
+
+/** The click that set `state.markWeek`, so that same click does not clear it. */
+let markedBy = null;
+
+/** Outline `state.markWeek`'s column in both halves of Season by week; none when it is null. */
+function paintMark() {
+  for (const id of ['seasonCur', 'seasonHyp']) {
+    const table = $(id).querySelector('table');
+    if (!table) continue;
+    for (const c of table.querySelectorAll('.dz-at')) c.classList.remove('dz-at');
+    if (state.markWeek === null) continue;
+    const cells = [...table.querySelectorAll(`td[data-wk="${state.markWeek}"]`)];
+    if (!cells.length) continue;
+    const head = table.querySelector('thead tr').children[[...cells[0].parentElement.children].indexOf(cells[0])];
+    for (const c of [head, ...cells]) if (c) c.classList.add('dz-at');
+  }
+}
+
+/** @param {{why:string, key:*}} at what the preview was of  @param {Event} [e] the click, if one */
+function goSeason(at, e = null) {
+  const team = at.why === 'team' ? teamOf(at.key) : teamOf(state.teamId);
+  if (!team) return;
+  closeWhy();
+  quietUntil = Date.now() + 900;
+  state.markWeek = at.why === 'team' ? null : Number(at.key);
+  markedBy = e;
+  if (same(state.seasonTeamId, team.id)) paintMark();
+  else { state.seasonTeamId = team.id; renderSeason(); }
+  const panel = $('panelSeason');
+  // Seen to move, never a jump (and nothing else on the page changes size).
+  if (typeof panel.scrollIntoView === 'function') panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 /** One set of listeners on the panel, which outlives every redraw of its tables. */
 function wireWhy(panel) {
   const target = (e) => (e.target && e.target.closest ? e.target.closest('[data-why]') : null);
   const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
   // Moving between the words of one number is not leaving it.
   const within = (e, el) => Boolean(e.relatedTarget && el.contains(e.relatedTarget));
+  const quiet = () => Date.now() < quietUntil;
+  // A number whose preview is open goes on to Season by week; any other opens its preview.
+  const hit = (el, e) => (whyOpenFor(el) ? goSeason(whyKey(el), e) : openWhy(el, noHover()));
   panel.addEventListener('mouseover', (e) => {
     const el = target(e);
-    if (el && !noHover() && !within(e, el)) openWhy(el, false);
+    if (el && !noHover() && !quiet() && !within(e, el)) openWhy(el, false);
   });
   panel.addEventListener('mouseout', (e) => {
     const el = target(e);
@@ -909,17 +972,19 @@ function wireWhy(panel) {
   });
   panel.addEventListener('click', (e) => {
     const el = target(e);
-    if (el) openWhy(el, noHover());
+    if (el) hit(el, e);
   });
   panel.addEventListener('keydown', (e) => {
     const el = target(e);
     if (!el || el.tagName === 'BUTTON' || (e.key !== 'Enter' && e.key !== ' ')) return;
     e.preventDefault();
-    openWhy(el, noHover());
+    hit(el, e);
   });
   panel.addEventListener('focusin', (e) => {
     const el = target(e);
-    if (el && !noHover()) openWhy(el, false);
+    // (A click focuses the number first: its preview is then open already, and
+    // drawing it again would only move it.)
+    if (el && !noHover() && !whyOpenFor(el)) openWhy(el, false);
   });
   panel.addEventListener('focusout', () => { if (!noHover()) closeWhy(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWhy(); });
@@ -927,6 +992,12 @@ function wireWhy(panel) {
     if (!whyPop || whyPop.hidden) return;
     if (whyPop.contains(e.target) || target(e)) return;
     closeWhy();
+  });
+  // The outlined week stays until the next click, wherever that is.
+  document.addEventListener('click', (e) => {
+    if (state.markWeek === null || e === markedBy) return;
+    state.markWeek = null;
+    paintMark();
   });
 }
 
@@ -972,15 +1043,41 @@ function renderSeason() {
     ? seasonTable.seasonHeat(world.teams.map((t) => weeksFromMirror(m.teams.get(t.id), which)),
       { slots: world.slots, skip: playing })
     : null);
+  // Tim, 2026-10-06: "also highlight any positions/player's that changed in the
+  // current graph so that you can look over and see what player they started in
+  // real life and who they should have started instead ... show their proj score
+  // to the left ... in a dimmer grey ... add a column ... that shows the avg for
+  // each row" (on the right, he said after).
+  //
+  // WHO IS MARKED is `weekSwaps`' answer, the one the week's preview prints: its
+  // Started men in Current, its Instead men in the hypothetical. So a man who
+  // only moved to another slot is not marked, and the two never disagree.
+  const outs = new Map();
+  const ins = new Map();
+  if (swapsOf) {
+    for (const w of world.weeks) {
+      const rows = cells.byWeek[w] ? swapsOf(cells.byWeek[w]).rows : [];
+      outs.set(w, new Set(rows.filter((r) => r.out).map((r) => r.out.playerId)));
+      ins.set(w, new Set(rows.filter((r) => r.in).map((r) => r.in.playerId)));
+    }
+  }
+  const markOf = (sets) => (swapsOf ? (week, id) => Boolean(sets.get(week) && sets.get(week).has(id)) : null);
+  // The Avg column on the same scale: a slot's Avg against the other squads'.
+  const avgHeat = (which) => (typeof seasonTable.seasonAvgHeat === 'function'
+    ? seasonTable.seasonAvgHeat(world.teams.map((t) => weeksFromMirror(m.teams.get(t.id), which)), { slots: world.slots })
+    : null);
   $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, {
     box: 'current', live, sortable: true, heat: heat('real'),
+    proj: true, avg: true, avgHeat: avgHeat('real'), mark: markOf(outs),
   });
   $('seasonHyp').innerHTML = actualSeasonTableHtml({ weeks: hyp, slots: world.slots }, {
     box: 'hypothetical', dim, live, sortable: true, heat: heat('mirror'),
+    proj: true, avg: true, avgHeat: avgHeat('mirror'), mark: markOf(ins),
     diffFrom: state.view.season === 'diff' ? real : null,
   });
   sortPair('season');
   fitSeason();
+  paintMark();
 }
 
 /**

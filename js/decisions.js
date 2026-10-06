@@ -451,6 +451,8 @@ function shapeStarters(lineup, slots, realIds, inPlay = false) {
       slot: SLOT_LABELS[slotId] ?? String(slotId), slotId,
       actual: inPlay && !isDone(p) ? null : num(p.actual), projected: num(p.projected),
       isNew: !realIds.has(p.playerId),
+      // The feed sent no projection: he ranks as 0, and a page prints none.
+      ...(Number.isFinite(p.projected) ? {} : { noProj: true }),
       ...(inPlay ? { done: isDone(p), known: isDone(p), value: valueNow(p) } : {}),
     }))
     .sort((a, b) => order(a.slotId) - order(b.slotId) || b.projected - a.projected || (a.playerId > b.playerId ? 1 : -1));

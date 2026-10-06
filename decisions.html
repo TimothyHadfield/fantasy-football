@@ -154,6 +154,13 @@
   padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
 }
 .dz-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+/* The sheet's two buttons, side by side at its foot: on to Season by week, or
+ * shut. A mouse's card has neither - it goes as the mouse leaves the number,
+ * and there a click on the number itself is what goes on. */
+.dz-pop .op-acts { display: none; }
+.dz-pop.sheet .op-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.dz-pop.sheet .op-acts .op-close { margin: 0; }
+.dz-why { cursor: pointer; }
 
 /* CURRENT BESIDE HYPOTHETICAL - where both halves fit (Tim, 2026-10-06: "no
  * horezontal scrolling"). Three pairs, three widths:
@@ -173,6 +180,28 @@
 @media (min-width: 901px) {
   .dz-pair.dz-fit { grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--dz-need, 320px)), 1fr)); }
 }
+/* SEASON BY WEEK, three additions (Tim, 2026-10-06).
+ *   .sbw-pj    what the man was projected for, before what he scored: dimmer
+ *              and smaller, so the score stays the number that is read.
+ *   .sbw-chg   a man who starts in one world and not the other, in both halves:
+ *              a line round the cell and his name lit. A box-shadow, never a
+ *              background - the cell's fill is the red/green scale's.
+ *   .dz-at     the week a preview was opened from: a line down both sides of
+ *              its column, until the next click.
+ *   td.avg     the row's average, the last column. */
+#panelSeason .sbw-pj { margin-right: 2px; font-size: 11px; font-weight: 400; font-style: normal; color: var(--dim); }
+#panelSeason td.sbw-chg { box-shadow: inset 0 0 0 1.5px var(--text); }
+#panelSeason td.sbw-chg .sbw-name { color: var(--text); font-weight: 650; }
+#panelSeason .dz-at { box-shadow: inset 2px 0 0 var(--focus), inset -2px 0 0 var(--focus); }
+#panelSeason th.dz-at { box-shadow: inset 2px 0 0 var(--focus), inset -2px 0 0 var(--focus), inset 0 2px 0 var(--focus); }
+#panelSeason td.split-total.dz-at { box-shadow: inset 2px 0 0 var(--focus), inset -2px 0 0 var(--focus), inset 0 -2px 0 var(--focus); }
+#panelSeason td.sbw-chg.dz-at { box-shadow: inset 2px 0 0 var(--focus), inset -2px 0 0 var(--focus), inset 0 0 0 1.5px var(--text); }
+#panelSeason th.avg, #panelSeason td.avg { padding-left: 7px; padding-right: 7px; border-left: 1px solid var(--line-2); }
+#panelSeason tbody.split td.avg { font-size: 13.5px; }
+#panelSeason td.avg.muted { color: var(--line); font-weight: 400; }
+#panelSeason td.avg.d-zero { color: var(--dim); }
+/* Scrolled to from a preview: a little air above the panel. */
+#panelSeason { scroll-margin-top: 8px; }
 .dz-head { display: flex; align-items: center; min-height: 34px; }
 .dz-head .sbw-title { margin: 0; }
 .dz-head .sbw-view button { padding: 5px 12px; font-size: 12.5px; }
@@ -226,9 +255,17 @@ div.panel-note > p:last-child { margin-bottom: 0; }
    * its box, as the same sheet does on Analysis. */
   .dz-fit .sbw-actual { table-layout: fixed; width: 100%; }
   .dz-fit .sbw-actual th.name { width: 46px; }
-  .dz-fit .sbw-actual th.wk { width: 52px; }
+  .dz-fit .sbw-actual th.wk { width: 60px; }
+  .dz-fit .sbw-actual th.avg { width: 50px; }
   .dz-fit .sbw-actual th, .dz-fit .sbw-actual td { padding-left: 4px; padding-right: 4px; }
   .dz-fit .sbw-actual td.wk .sbw-name { overflow: hidden; text-overflow: ellipsis; }
+  /* The projection beside the score is to the whole point here, and smaller:
+   * with its tenth, a week's two numbers and the scale's arrow were 10px wider
+   * than a quarter of a phone. (`data-r` is it rounded; the tenth is a tap away
+   * in the cell's title.) */
+  #panelSeason .sbw-pj { font-size: 0; margin-right: 0; }
+  #panelSeason .sbw-pj::before { content: attr(data-r); font-size: 10px; }
+  #panelSeason th.avg, #panelSeason td.avg { padding-left: 4px; padding-right: 4px; }
   #resultStats { gap: 18px; }
 }
 </style>

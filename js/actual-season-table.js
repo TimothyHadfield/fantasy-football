@@ -96,6 +96,26 @@ const lines = (entry, shown) =>
   `<span class="sbw-pts">${shown}</span>`;
 
 /**
+ * `o.proj` BELOW: what a man was projected for, the number his week is judged
+ * against. Null for one still playing (his cell's own number IS his projection,
+ * and it is not printed twice) and for one the feed sent no projection for
+ * (`noProj`, js/decisions.js) — nothing is drawn then, never a 0.
+ */
+const projOf = (entry) => (!entry || unknown(entry) || entry.p.noProj || !Number.isFinite(entry.p.projected)
+  ? null : entry.p.projected);
+
+/**
+ * The mean of the numbers a row shows — each to the tenth it is printed at, so
+ * it is the Avg a reader gets adding the row up — its blanks left out; null for
+ * a row of blanks.
+ */
+const meanOf = (list) => {
+  const got = list.filter((v) => typeof v === 'number' && Number.isFinite(v)).map((v) => Number(fmt(v)));
+  return got.length ? got.reduce((a, b) => a + b, 0) / got.length : null;
+};
+const tenth = (v) => Math.round(v * 10) / 10;
+
+/**
  * THE SCALES FOR `o.heat` BELOW: the site's one red/green scale (js/heat.js),
  * measured the way Analysis measures the same sheet's history weeks — each slot
  * row against the other squads' same slot IN THAT WEEK, and the total against
@@ -138,6 +158,32 @@ export function seasonHeat(squads = [], { rows = null, slots = null, skip = null
 }
 
 /**
+ * THE SCALES FOR `o.avgHeat` BELOW: the Avg column on the same scale, the same
+ * way — a slot row's Avg against the other squads' Avg in that slot, the total's
+ * against their totals'. Each Avg is the one the table prints (`meanOf`).
+ *
+ * @param {Array<Array<{week:number, total:number, starters:Array}>>} squads
+ * @param {Object} [o] `rows` or `slots`, as `seasonHeat`
+ * @returns {(slotKey:string|null) => Object|null} a `heatScale`
+ */
+export function seasonAvgHeat(squads = [], { rows = null, slots = null } = {}) {
+  const slotList = rows || slotRows(slots);
+  const fills = squads.map((weeks) => (weeks || []).map((w) => fillSlots(w.starters, slotList)));
+  const made = new Map();
+  return (slotKey = null) => {
+    if (!made.has(slotKey)) {
+      made.set(slotKey, heatScale(squads.map((weeks, i) => {
+        const m = meanOf(slotKey === null
+          ? (weeks || []).map((w) => w.total)
+          : fills[i].map((fill) => pointsOf(fill.get(slotKey) || null)));
+        return m === null ? null : tenth(m);
+      })));
+    }
+    return made.get(slotKey);
+  };
+}
+
+/**
  * The season box.
  *
  * @param {Object} season
@@ -164,11 +210,21 @@ export function seasonHeat(squads = [], { rows = null, slots = null, skip = null
  *        `seasonHeat(...)`: each points cell, and the total, is drawn on that
  *        scale — class, ▲/▼ at the end of it, and the words in its title. Not
  *        in the difference view, whose colour already says up or down.
+ * @param {boolean} [o.proj] each man's projection is printed before his score,
+ *        dim (`.sbw-pj`, with `data-r` the same to the whole point for a page
+ *        short of room), and said in the cell's title. Not in the difference view.
+ * @param {((week:number, playerId:*) => boolean)|null} [o.mark] true for a man
+ *        who starts in one world and not the other: his cell is `sbw-chg`.
+ * @param {boolean} [o.avg] a last column, Avg: the mean of the numbers the row
+ *        shows, blanks left out; the total row's is the mean of the totals. In
+ *        the difference view it is this lineup's Avg minus `diffFrom`'s, as printed.
+ * @param {((slotKey:string|null) => Object|null)|null} [o.avgHeat]
+ *        `seasonAvgHeat(...)`: the Avg column on the scale. Not in the difference view.
  * @returns {string} `<table class="sbw-table">…`, to sit inside `.sbw`
  */
 export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } = {}, {
   diffFrom = null, dim = null, box = '', totalLabel = 'Total', live = null,
-  sortable = false, heat = null,
+  sortable = false, heat = null, proj = false, mark = null, avg = false, avgHeat = null,
 } = {}) {
   const slotList = rows || slotRows(slots);
   const cols = [...weeks].sort((a, b) => a.week - b.week);
@@ -184,7 +240,26 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
   const sort = sortable ? ' data-sort' : '';
   const scaleOf = heat && !diffFrom ? heat : () => null;
   const head = `<tr><th class="name"${sort}>Slot</th>` +
-    cols.map((c) => `<th class="wk"${sort}>${esc(c.week)}${liveWeeks.has(c.week) ? LIVE_TAG : ''}</th>`).join('') + `</tr>`;
+    cols.map((c) => `<th class="wk"${sort}>${esc(c.week)}${liveWeeks.has(c.week) ? LIVE_TAG : ''}</th>`).join('') +
+    `${avg ? `<th class="avg"${sort}>Avg</th>` : ''}</tr>`;
+
+  // `o.mark` and `o.avg`. Without them `chg` and `avgCell` add nothing at all.
+  const chg = (e, week) => (mark && e && mark(week, e.p.playerId) ? ' sbw-chg' : '');
+  const avgCell = (mine, theirs, key, what) => {
+    if (!avg) return '';
+    const split = key === null ? ' split-total' : '';
+    if (!diffFrom) {
+      if (mine === null) return `<td class="avg${split} muted">—</td>`;
+      const v = tenth(mine);
+      const h = heatOf(v, avgHeat ? avgHeat(key) : null, { what });
+      return `<td class="avg${split}${h ? ` ${h.cls}` : ''}" data-v="${v}"` +
+        `${h ? ` title="${esc(h.words)}"` : ''}>${fmt(v)}${heatMarkHtml(h)}</td>`;
+    }
+    const d = mine === null || theirs === null ? null : diffOf(mine, theirs);
+    if (d === null) return `<td class="avg${split} muted">—</td>`;
+    return `<td class="avg${split} ${diffClass(d)}" data-v="${d}">${signedText(d)}</td>`;
+  };
+  const rowAvg = (list, key) => meanOf(list.map((fill) => (fill ? pointsOf(fill.get(key) || null) : null)));
 
   const body = slotList.map((row, place) => {
     const cells = cols.map((c, i) => {
@@ -194,8 +269,11 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
         if (!e) return `<td class="wk muted"${at}>—</td>`;
         const v = pointsOf(e);
         const h = heatOf(v, scaleOf(c.week, row.key), { what: `the other squads’ ${row.key} in week ${c.week}` });
-        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}${h ? ` ${h.cls}` : ''}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
-          `title="${esc(saidOf(e) + (h ? `. ${h.words}` : ''))}">${lines(e, fmt(scoreOf(e.p)) + heatMarkHtml(h))}</td>`;
+        const pj = proj ? projOf(e) : null;
+        const both = pj === null ? '' : `: proj ${fmt(pj)}, scored ${fmt(scoreOf(e.p))}`;
+        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}${h ? ` ${h.cls}` : ''}${chg(e, c.week)}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
+          `title="${esc(saidOf(e) + both + (h ? `. ${h.words}` : ''))}">` +
+          `${lines(e, (pj === null ? '' : `<span class="sbw-pj" data-r="${Math.round(pj)}">${fmt(pj)}</span> `) + fmt(scoreOf(e.p)) + heatMarkHtml(h))}</td>`;
       }
       // DIFFERENCE: this lineup minus the other, in the same slot row. An
       // empty slot scored nothing, so a slot filled in one and empty in the
@@ -205,7 +283,7 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       if (!beforeFills[i] || (!e && !b)) return `<td class="wk muted"${at}>—</td>`;
       const d = diffOf(pointsOf(e) ?? 0, pointsOf(b) ?? 0);
       const swapped = (e ? e.p.playerId : null) !== (b ? b.p.playerId : null);
-      const cls = ['wk', diffClass(d), swapped ? 'sbw-new' : '', unknown(e) ? 'sbw-proj' : ''].filter(Boolean).join(' ');
+      const cls = ['wk', diffClass(d), swapped ? 'sbw-new' : '', unknown(e) ? 'sbw-proj' : ''].filter(Boolean).join(' ') + chg(e, c.week);
       const title = swapped
         ? `${e ? saidOf(e) : 'Nobody'} instead of ${b ? b.p.name : 'nobody'}`
         : saidOf(e);
@@ -213,7 +291,8 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
         `title="${esc(title)}">${lines(e, signedText(d))}</td>`;
     });
     return `<tr data-slot="${esc(row.key)}"><td class="name"${sortable ? ` data-v="${place}"` : ''}><span class="slot-tag">${esc(row.key)}</span></td>` +
-      `${cells.join('')}</tr>`;
+      `${cells.join('')}` +
+      `${avgCell(rowAvg(fills, row.key), rowAvg(beforeFills, row.key), row.key, `the other squads’ ${row.key} average`)}</tr>`;
   }).join('');
 
   const band = `<tr class="split-row"><td class="name split-label">${esc(totalLabel)}</td>` +
@@ -228,7 +307,10 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       const d = b ? diffOf(c.total, b.total) : null;
       if (d === null) return `<td class="wk split-total muted"${at}>—</td>`;
       return `<td class="wk split-total ${diffClass(d)}" data-v="${d}"${at}>${signedText(d)}</td>`;
-    }).join('') + `</tr>`;
+    }).join('') +
+    avgCell(meanOf(cols.map((c) => c.total)),
+      meanOf(cols.map((c) => { const b = beforeOf && beforeOf.get(c.week); return b ? b.total : null; })),
+      null, 'the other squads’ average totals') + `</tr>`;
 
   return `<table class="sbw-table sbw-actual"${box ? ` data-box="${esc(box)}"` : ''}` +
     `${diffFrom ? ' data-view="diff"' : ''}><thead>${head}</thead>` +
