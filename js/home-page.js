@@ -206,10 +206,16 @@ function pctText(p) {
 export function buildModel({
   schedule, rosters, week, teamId = null, isDemo = false,
   benchWeek = week, benchRosters = null,
-  odds = null, oddsPending = false,
+  odds = null, oddsPending = false, chances = null,
   waiverClears = null, kickoffs = null, now = Date.now(),
 }) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
+  // The record beside each name: banked W–L, and for a team whose game is
+  // being played that game as its chance of winning it (`chances`).
+  const banked = bankedRecords(schedule);
+  const recordOf = (id) => (banked.has(id)
+    ? capture.recordNow(banked.get(id), chances?.get(id) ?? null)
+    : null);
   // "The lineup as set" means something only for the week being played next:
   // ESPN carries today's lineup forward into every later week unchanged.
   const thisWeek = currentWeek(schedule) === week;
@@ -281,6 +287,8 @@ export function buildModel({
 
     return {
       ...g,
+      homeRecord: recordOf(g.homeId),
+      awayRecord: bye ? null : recordOf(g.awayId),
       homeProjected: hp,
       awayProjected: ap,
       homeBest,
@@ -333,6 +341,32 @@ export function buildModel({
     benchRostersMissing: !benchFrom?.teams?.length,
     deadlines: isDemo ? '' : deadlineText({ deadline: schedule.trades?.deadline, waiverClears, now }),
   };
+}
+
+/**
+ * teamId -> `{ w, l, t }` over every game that is final, counted the way the
+ * Schedule page counts the record on its own cards: `capture.gameState` says
+ * what is final (a matchup settled early included) and `capture.winnerOf` who
+ * won it, from the scores.
+ */
+function bankedRecords(schedule) {
+  const out = new Map();
+  const of = (id) => {
+    if (!out.has(id)) out.set(id, { w: 0, l: 0, t: 0 });
+    return out.get(id);
+  };
+  for (const t of schedule.teams || []) of(t.id);
+  for (const g of schedule.games || []) {
+    if (g.homeId == null || g.awayId == null) continue;        // bye
+    if (capture.gameState(g) !== 'final') continue;
+    const home = of(g.homeId);
+    const away = of(g.awayId);
+    const winner = capture.winnerOf(g);
+    if (winner === 'tie') { home.t++; away.t++; }
+    else if (winner === 'home') { home.w++; away.l++; }
+    else { away.w++; home.l++; }
+  }
+  return out;
 }
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -541,15 +575,37 @@ function setStatus(html, isError = false) {
   el.style.color = isError ? 'var(--err)' : 'var(--dim)';
 }
 
-function setToggle(showing) {
+/** One live load at a time: boot and the connection bar can both ask. */
+let liveLoading = false;
+/** Which live load is the current one; "Demo data" moves it on (dropLive). */
+let liveRun = 0;
+
+/**
+ * THE SOURCE BUTTONS SAY WHAT IS ON SCREEN — the league being read, while a
+ * live load is on its way, and otherwise whatever `state.isDemo` says.
+ *
+ * Worked out from state on every paint, never set by whoever ran last. Each
+ * loader used to light its own button, and with a saved league the order was
+ * wrong on every reload: the connection bar answers at once from its saved
+ * copy, so the live load started (lighting "My ESPN league") BEFORE the boot's
+ * demo paint (lighting "Demo data"), and nothing lit the first again when the
+ * league arrived. The page showed the live league under a lit "Demo data".
+ */
+function syncToggle() {
+  const showing = liveLoading || !state.isDemo ? 'live' : 'demo';
   $('sourceToggle')
     .querySelectorAll('button')
     .forEach((b) => b.classList.toggle('on', b.dataset.src === showing));
 }
 
+/** "Demo data" was clicked: whatever a live load brings back now is not wanted. */
+function dropLive() {
+  liveRun++;
+  liveLoading = false;
+}
+
 function loadDemo(note = '') {
   state.isDemo = true;
-  setToggle('demo');
 
   const schedule = generateDemoSchedule();
   const week = currentWeek(schedule);
@@ -568,9 +624,6 @@ function loadDemo(note = '') {
   draw();
 }
 
-/** One live load at a time: boot and the connection bar can both ask. */
-let liveLoading = false;
-
 async function loadLive() {
   const cfg = savedConfig();
   if (!cfg) {
@@ -579,32 +632,46 @@ async function loadLive() {
   }
   if (liveLoading) return;
   liveLoading = true;
+  const run = ++liveRun;
+  syncToggle();
   try {
-    await loadLiveNow(cfg);
+    await loadLiveNow(cfg, () => run === liveRun);
   } finally {
-    liveLoading = false;
+    // A load that failed, or found no matchups, leaves the demo league on
+    // screen, and the buttons then say so.
+    if (run === liveRun) {
+      liveLoading = false;
+      syncToggle();
+    }
   }
 }
 
-async function loadLiveNow(cfg) {
-  setToggle('live');
+/**
+ * `wanted()` turns false when "Demo data" is clicked while this is still
+ * reading: nothing that arrives after that reaches the page or the status
+ * line. Until the league and its rosters are both in hand the demo league
+ * stays whole in `state`, so a repaint in between never mixes the two.
+ */
+async function loadLiveNow(cfg, wanted) {
   espn.configure({ leagueId: cfg.leagueId, season: cfg.season });
   if (cfg.teamId != null) state.teamId = cfg.teamId;
 
   setStatus('Loading your league from ESPN…');
   try {
     const schedule = await season.fetchSchedule();
+    if (!wanted()) return;
     if (!schedule.games.length) {
       setStatus(
         `Connected to ${esc(schedule.leagueName)}, but ESPN has no matchups for ` +
         `${cfg.season} yet. The demo league is still shown below.`,
         true
       );
-      setToggle('demo');
       return;
     }
 
     const week = currentWeek(schedule);
+    const rosters = await loadRosters(week);
+    if (!wanted()) return;
     state.schedule = schedule;
     state.week = week;
     state.isDemo = false;
@@ -613,15 +680,16 @@ async function loadLiveNow(cfg) {
     state.oddsTeams = new Map();
     state.waiverClears = null;
     state.waiverRead = null;
-    state.rosters = await loadRosters(week);
+    state.rosters = rosters;
     const odds = startOdds();
     await loadBench();
+    if (!wanted()) return;
     await paintWhenOdds(odds);
   } catch (err) {
+    if (!wanted()) return;
     // Demo data is already on screen from boot, so a failed live load costs the
     // user a sentence, not the page.
     setStatus(`${esc(err.message)} Still showing the demo league below.`, true);
-    setToggle('demo');
   }
 }
 
@@ -654,11 +722,15 @@ function reportLive() {
  * rosters — one more request, made only on the days it is needed.
  */
 async function loadBench() {
-  const bw = benchWeekFor(state.schedule, state.week, state.rosters);
+  const { schedule, week } = state;
+  const bw = benchWeekFor(schedule, week, state.rosters);
+  let rosters = null;
+  if (bw !== week) rosters = state.isDemo ? generateDemoWeekRosters(bw) : await loadRosters(bw);
+  // The page moved on while that was being read (another league, another
+  // week): these are not its bench rosters.
+  if (state.schedule !== schedule || state.week !== week) return;
   state.benchWeek = bw;
-  if (bw === state.week) state.benchRosters = null;
-  else if (state.isDemo) state.benchRosters = generateDemoWeekRosters(bw);
-  else state.benchRosters = await loadRosters(bw);
+  state.benchRosters = rosters;
 }
 
 async function changeWeek(week) {
@@ -720,7 +792,51 @@ async function loadOdds(week) {
   }
   const floors = await floorRead;
   const odds = capture.matchupOdds(data, have, { floors });
-  return { ...odds, floorWeek };
+  return { ...odds, floorWeek, chances: await liveChances(data, have, floors) };
+}
+
+/**
+ * teamId -> its chance of winning the game it is playing right now, for the
+ * record beside each name on the cards; empty when no matchup is under way.
+ *
+ * `capture.liveWinChancesFrom` off the rosters and floor just read — the call
+ * the Stats page makes, so the same team reads the same record on both. The
+ * NFL's games are the payload the roster read already fetched for byes, so it
+ * asks ESPN for nothing more. A stub without the read, a failure, or the
+ * synced copy (which has no NFL games) is simply a whole-number record.
+ */
+async function liveChances(data, weekTeams, floors) {
+  try {
+    if (typeof season.fetchProGames !== 'function') return new Map();
+    if (await syncedCopy()) return new Map();
+    const proGames = await season.fetchProGames();
+    const week = capture.openWeeks(data)[0];
+    return capture.liveWinChancesFrom({
+      data, weekTeams, floors, proGames,
+      asOf: typeof season.weekReadAt === 'function' && week !== undefined
+        ? season.weekReadAt(week) : null,
+    });
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Is this page drawing the phone's synced copy? Asked of js/season.js, which
+ * is the one place that knows; a stub without `cloudSource` is taken as "no".
+ *
+ * A PAGE ON THE SYNCED COPY ASKS ESPN FOR NOTHING. The copy carries the
+ * rosters, the schedule and the wire's projections, but not the NFL's kickoffs
+ * or when a free agent clears waivers, so the three reads here that want those
+ * stand down rather than going to ESPN for them.
+ */
+async function syncedCopy() {
+  if (typeof season.cloudSource !== 'function') return false;
+  try {
+    return Boolean(await season.cloudSource());
+  } catch {
+    return false;
+  }
 }
 
 /** The positional floor for `week`, or null — never throws. */
@@ -775,12 +891,13 @@ function startOdds() {
  *
  * `season.fetchWireWeek` for the week the floor is read for — the same request
  * `loadOdds` has just made, which js/espn.js shares, so on a laptop this costs
- * nothing; a phone reads that week's wire from the synced copy once more.
- * Never throws.
+ * nothing. The synced copy's wire does not carry the dates, so a phone is not
+ * asked and the line simply leaves waivers out. Never throws.
  */
 async function readWaiverClears() {
   try {
     if (typeof season.fetchWireWeek !== 'function') return null;
+    if (await syncedCopy()) return null;
     const week = capture.floorWeek(capture.normalizeSchedule(state.schedule, { isDemo: false }));
     if (!week) return null;
     const wire = (await season.fetchWireWeek(week)) || [];
@@ -802,8 +919,9 @@ async function readWaiverClears() {
  * ASKED FOR ONLY WHEN A SWAP IS ON OFFER. Locking a man can only take swaps
  * away, so a lineup with none to suggest needs no kickoffs at all. When it is
  * asked, `season.fetchProKickoffs` reuses the bye read's payload where this
- * page made one; otherwise it is one public read. Kept for the visit: the NFL
- * schedule is the season's, not the league's. Never throws.
+ * page made one; otherwise it is one public read — except on the synced copy,
+ * which is not asked: the roster's own evidence locks who has played. Kept for
+ * the visit: the NFL schedule is the season's, not the league's. Never throws.
  */
 async function readKickoffs() {
   try {
@@ -812,6 +930,7 @@ async function readKickoffs() {
     const squad = (state.rosters?.teams || []).find((t) => t.id === state.teamId);
     const s = squad && startSit({ players: squad.players || [] });
     if (!s || s.best) return;
+    if (await syncedCopy()) return;
     const k = await season.fetchProKickoffs();
     if (k && Object.keys(k).length) state.kickoffs = k;
   } catch {
@@ -834,6 +953,7 @@ async function paintWhenOdds(odds) {
 
 /** Build the model from current state and paint it. */
 function draw() {
+  syncToggle();
   if (!state.schedule) return;
   render(buildModel({
     schedule: state.schedule,
@@ -844,6 +964,7 @@ function draw() {
     benchWeek: state.benchWeek ?? state.week,
     benchRosters: state.benchRosters,
     odds: state.isDemo ? null : state.odds,
+    chances: state.isDemo ? null : state.odds?.chances ?? null,
     oddsPending: !state.isDemo && state.oddsPending,
     waiverClears: state.isDemo ? null : state.waiverClears,
     kickoffs: state.isDemo ? null : state.kickoffs,
@@ -1062,8 +1183,15 @@ function gameCard(g, teamId) {
     if (g.played && g.winner !== 'tie') classes.push(g.winner === which ? 'win' : 'lose');
     else if (!g.played && g.favourite === which) classes.push('fav');
     const you = teamId != null && id === teamId ? ' <span class="muted">(you)</span>' : '';
+    // The record, small and dim beside the name as on the Schedule page's
+    // cards, with the basis of a decimal one on it (rule 7). Its own element:
+    // on a narrow card the NAME shortens to "…", never the record.
+    const rec = which === 'home' ? g.homeRecord : g.awayRecord;
+    const record = rec
+      ? `<span class="trec"${rec.live ? ` title="${esc(rec.title)}"` : ''}>${rec.text}</span>`
+      : '';
     return `<div class="${classes.join(' ')}">
-        <span class="tname">${esc(name)}${you}</span>
+        <span class="twho"><span class="tname">${esc(name)}${you}</span>${record}</span>
         <span class="tproj">${inline(proj)}</span>
         <span class="tscore">${g.played ? inline(score) : dash}</span>
       </div>`;
@@ -1104,6 +1232,9 @@ function gameCard(g, teamId) {
       ${swapLines(g.swaps)}
     </div>`;
 }
+
+/** The mark slot of a row that carries no ▲/▼: js/heat.js's span, empty. */
+const NO_MARK = ' <span class="heatmark" aria-hidden="true"></span>';
 
 function renderStrength(m) {
   const rows = m.strength.filter((r) => r.value !== null);
@@ -1178,9 +1309,15 @@ function renderStrength(m) {
         // anything looking broken. Nothing in this page's CSS selects an
         // element inside `.vv`, so the step lands there intact — and the fix
         // needs no change to css/app.css, which another agent owns.
+        //
+        // THE ▲/▼ HAS A SLOT IN EVERY ROW, empty where there is no mark (the
+        // page's stylesheet gives it a fixed width). Without it a marked row's
+        // number, and the bar beside it, sat a mark's width to the left of the
+        // rows above and below.
+        const mark = (h && heatMarkHtml(h)) || NO_MARK;
         const num = h
-          ? `<span class="${h.cls}">${r.value.toFixed(1)}</span>${heatMarkHtml(h)}`
-          : r.value.toFixed(1);
+          ? `<span class="${h.cls}">${r.value.toFixed(1)}</span>${mark}`
+          : `${r.value.toFixed(1)}${mark}`;
         return `<li${r.id === m.teamId ? ' class="me"' : ''}${says}>
             <span class="rk">${r.rank}</span>
             <span class="nm">${esc(r.name)}</span>
@@ -1262,9 +1399,9 @@ function renderInjuries(m) {
   const rows = m.injuries
     .map(
       (p) => `<tr${p.teamId === m.teamId ? ' class="me"' : ''}>
-          <td class="name">${pref(p.playerId, p.name, `${esc(p.name)} <span class="muted">${esc(p.position)}</span>`)}</td>
+          <td class="name wrap">${pref(p.playerId, p.name, `${esc(p.name)} <span class="muted">${esc(p.position)}</span>`)}</td>
           <td class="left" data-v="${p.rank}"><span class="badge ${injuryClass(p.status)}">${esc(injuryLabel(p.status))}</span></td>
-          <td class="left">${esc(p.teamName)}</td>
+          <td class="left wrap">${esc(p.teamName)}</td>
           <td>${esc(p.slot)}</td>
           ${numCell(p.projected, { wrap: (t) => pref(p.playerId, p.name, t) })}
         </tr>`
@@ -1275,7 +1412,7 @@ function renderInjuries(m) {
       <thead><tr>
         <th class="name" data-sort>Player</th>
         <th class="left" data-sort>Status</th>
-        <th class="left" data-sort>Fantasy team</th>
+        <th class="left wrap" data-sort>Fantasy team</th>
         <th data-sort>Slot</th>
         <th data-sort>Proj</th>
       </tr></thead>
@@ -1357,8 +1494,12 @@ function renderBench(m) {
   // quantities, so none of those is a reference to anybody. Name and score go
   // inside one link each, because the score is that player's just as much as
   // his name is.
+  //
+  // BY THE SHORT NAME ("B. Robinson Jr."), as on the swap line of the cards:
+  // two full names and two scores made this table wider than its half of the
+  // page at 1280 and far wider than a phone. The full name is the link's title.
   const who = (p) =>
-    pref(p.playerId, p.name, `${esc(p.name)} <span class="muted">(${fmt(p.actual)})</span>`);
+    pref(p.playerId, p.name, `${esc(shortName(p))} <span class="muted">(${fmt(p.actual)})</span>`);
 
   const rows = m.bench
     .map((r) => {
@@ -1366,12 +1507,12 @@ function renderBench(m) {
         ? `${who(r.miss.benched)} over ${who(r.miss.started)}`
         : '<span class="muted">started the right nine</span>';
       return `<tr${r.id === m.teamId ? ' class="me"' : ''}>
-          <td class="name">${esc(r.name)}</td>
+          <td class="name wrap">${esc(r.name)}</td>
           ${numCell(r.started, {
     scale: heatStarted, what: `what the league scored in week ${m.benchWeek}`,
   })}
           ${numCell(r.bench)}
-          <td class="left">${miss}</td>
+          <td class="left wrap">${miss}</td>
           ${r.miss
             ? `<td class="neg" data-v="${r.miss.gain}">−${fmt(r.miss.gain)}</td>`
             : `<td>${dash}</td>`}
@@ -1384,7 +1525,7 @@ function renderBench(m) {
         <th class="name" data-sort>Team</th>
         <th data-sort>Started</th>
         <th data-sort>Bench</th>
-        <th class="left" data-sort>Biggest miss</th>
+        <th class="left wrap" data-sort>Biggest miss</th>
         <th data-sort>Cost</th>
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -1432,7 +1573,12 @@ $('sourceToggle').addEventListener('click', (e) => {
   if (!btn) return;
   state.source = btn.dataset.src;
   store.set('source', state.source);
-  state.source === 'demo' ? loadDemo() : loadLive();
+  if (state.source === 'demo') {
+    dropLive();
+    loadDemo();
+  } else {
+    loadLive();
+  }
 });
 
 // The week is deliberately NOT persisted. This is the page you open to see what
