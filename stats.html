@@ -79,6 +79,10 @@
   padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
 }
 .opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+/* The same card, for the standings cells that are formed from other figures
+ * (js/stats-page.js, "where a season luck cell comes from"). */
+#mainTable td[data-explain] { cursor: help; }
+#mainTable td[data-explain]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
 /* ------------------------------------------------------------------- phone
    Five things on one line — rank, team, bar, value, gap — and the bar is the
@@ -98,6 +102,18 @@
   .oppbars .vv  { grid-row: 1; grid-column: 3; min-width: 0; }
   .oppbars .dd  { grid-row: 1; grid-column: 4; min-width: 0; }
   .oppbars .bar { grid-row: 2; grid-column: 1 / -1; }
+
+  /* WEEK BY WEEK, ON A PHONE. A name and one column per week, plus Avg: at
+     the site's phone padding four weeks were already wider than the box and
+     Avg was cut off. The numbers sit closer and the name takes what is left,
+     shortened with an ellipsis, down to a floor — past about six weeks the
+     table scrolls inside its own box, as every wide table here does. */
+  #weeklyTable th, #weeklyTable td { padding-left: 2px; padding-right: 2px; }
+  #weeklyTable .name { width: 100%; max-width: 64px; padding-left: 0; }
+  /* Seven measures on a four-wide grid left an empty grey eighth cell. Wrapped
+     as a flex row instead, whatever lands on the last line shares all of it. */
+  #weeklyMetric { display: flex; flex-wrap: wrap; }
+  #weeklyMetric button { flex: 1 1 72px; }
 }
 
 /* ------------------------------------------------------- reading aids

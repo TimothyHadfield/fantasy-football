@@ -39,7 +39,7 @@ import { heatScale, describeHeat, describeHeatPerColumn } from './heat.js';
 // draws the identical table. `heatCell` and the formatters are imported back
 // rather than kept twice.
 import {
-  standingsRowsHtml, standingsScales, standingsHeadings, heatCell, winPctOf,
+  standingsRowsHtml, standingsScales, standingsHeadings, standingsExplain, heatCell, winPctOf,
   fmt, dash, signed, esc,
 } from './standings-table.js';
 import { enableSort, resort } from './sortable.js';
@@ -229,12 +229,17 @@ async function loadLive() {
 
     state.stats = computeLeagueStats(data);
 
-    if (!data.projectionsAvailable) {
+    // A PLAYED WEEK WHOSE LINEUPS COULD NOT BE READ. Its games are in the
+    // record and the points; js/stats.js leaves them out of everything formed
+    // from a projection, so those cells are dashes and the averages skip the
+    // week. Which weeks is said here, in the gap wording the page already uses
+    // ("Incomplete:"), rather than a warning that the numbers "will be wrong".
+    const gaps = data.projectionsAvailable ? [] : weeksWithoutProjections(data);
+    if (gaps.length) {
       setStatus(
-        `Loaded ${data.gamesFound} games from ${esc(data.name)}, but ESPN only returned ` +
-        `weekly projections for ${data.gamesWithProjections} of them. Anything ` +
-        `built on projections (luck, skill, projection accuracy) will be wrong or ` +
-        `blank for the missing weeks.`,
+        `Loaded ${data.gamesFound} games from ${esc(data.name)}. <strong>Incomplete:</strong> ` +
+        `${gaps.length === 1 ? 'week' : 'weeks'} ${gaps.join(', ')} projections missing — luck ` +
+        `leaves ${gaps.length === 1 ? 'it' : 'them'} out.`,
         true
       );
     } else {
@@ -246,6 +251,14 @@ async function loadLive() {
     setStatus(esc(err.message), true);
     return false;
   }
+}
+
+/** The played weeks with a game that has no projection: js/season.js names
+ *  them; a source that does not (a stub, an older copy) is read off its games. */
+function weeksWithoutProjections(data) {
+  if (Array.isArray(data.weeksWithoutProjections)) return data.weeksWithoutProjections;
+  const bare = (data.games || []).filter((g) => !(g.homeProjected > 0 && g.awayProjected > 0));
+  return [...new Set(bare.map((g) => g.week))].sort((a, b) => a - b);
 }
 
 function setStatus(msg, isError = false) {
@@ -436,8 +449,12 @@ function renderMainTable() {
   const scales = standingsScales(s, { oppProj });
   const { avg: heatAvg, opp: heatOpp, fa: heatFA, luckWk: heatLuckWk } = scales;
 
+  // `explain`: PTW, Close luck, Luck score, Skill and S+L open their parts
+  // (`explainHtml`, further down). The cell a card hangs off is about to go.
+  closePop();
+  wirePop(table, 'td[data-explain]', (el) => explainHtml(el.dataset.team, el.dataset.explain));
   tbody.innerHTML = standingsRowsHtml(s, {
-    highlightId: state.highlight, recordOf, oppProj, scales,
+    highlightId: state.highlight, recordOf, oppProj, scales, explain: true,
   });
 
   // Single-week columns are that week's score, not an average of anything.
@@ -708,7 +725,8 @@ function renderEarly() {
       : ''),
   ];
 
-  if (latest) {
+  // (Not for a week whose projections could not be read: `avgLuck` is null.)
+  if (latest && latest.avgLuck !== null) {
     const err = latest.avgLuck;
     lines.push(
       `In week ${latest.week} the league scored ${fmt(Math.abs(err))} points ` +
@@ -1041,13 +1059,13 @@ function restSpan(weeks) {
 }
 
 function paintOppPanel(chart, note) {
-  closeOppPop();
+  closePop();
   // The weeks the chart is formed over, said in the heading itself.
   const said = $('oppProjSpan');
   const d = state.oppProj;
   const span = !state.oppPending && d && !d.error && d.rest ? restSpan(d.rest.weeks) : '';
   if (said) said.textContent = span ? ` (${span})` : '';
-  wireOppPop(chart);
+  wirePop(chart, '.dd[data-opp]', (el) => oppPopHtml(el.dataset.opp));
 
   if (state.oppPending) {
     const p = state.oppProgress;
@@ -1170,19 +1188,25 @@ function oppPopHtml(teamId) {
   );
 }
 
-function closeOppPop() {
+// ONE CARD FOR EVERY PREVIEW ON THE PAGE. The opponents behind a schedule
+// gap (above) and the parts of a season luck cell (`explainHtml`, below) are
+// the same element, opened, placed and shut by the same three functions, so
+// two previews can never be open at once and neither can drift from the other.
+
+function closePop() {
   if (oppPop) oppPop.hidden = true;
 }
 
-function openOppPop(el, sheet) {
-  const html = oppPopHtml(el.dataset.opp);
+/** Show `html` for the figure `el`: a card beside it, or (`sheet`) a sheet at
+ *  the foot of the screen. Empty `html` opens nothing. */
+function openPop(el, html, sheet) {
   if (!html) return;
   if (!oppPop) {
     oppPop = document.createElement('div');
     oppPop.id = 'oppPop';
     document.body.appendChild(oppPop);
     oppPop.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('.op-close')) closeOppPop();
+      if (e.target.closest && e.target.closest('.op-close')) closePop();
     });
   }
   oppPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
@@ -1203,34 +1227,75 @@ function openOppPop(el, sheet) {
   oppPop.style.top = `${top}px`;
 }
 
-/** One set of listeners on the chart's host, which outlives every repaint. */
-function wireOppPop(chart) {
-  if (chart.dataset.oppWired) return;
-  chart.dataset.oppWired = '1';
-  const target = (e) => (e.target && e.target.closest ? e.target.closest('.dd[data-opp]') : null);
+const popTriggers = [];
+
+/**
+ * One set of listeners on a host that outlives every repaint of what is in it.
+ *
+ * @param {Element} host
+ * @param {string} selector the figures inside it that open the card
+ * @param {(el: Element) => string} htmlFor the card for one of them
+ */
+function wirePop(host, selector, htmlFor) {
+  if (host.dataset.popWired) return;
+  host.dataset.popWired = '1';
+  const target = (e) => (e.target && e.target.closest ? e.target.closest(selector) : null);
   const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
-  chart.addEventListener('mouseover', (e) => {
+  host.addEventListener('mouseover', (e) => {
     const el = target(e);
-    if (el && !noHover()) openOppPop(el, false);
+    if (el && !noHover()) openPop(el, htmlFor(el), false);
   });
-  chart.addEventListener('mouseout', (e) => {
-    if (target(e) && !noHover()) closeOppPop();
-  });
-  chart.addEventListener('click', (e) => {
+  host.addEventListener('mouseout', (e) => {
     const el = target(e);
-    if (el) openOppPop(el, noHover());
+    // Moving between the parts of one figure (a value and its ±) is not leaving it.
+    if (el && !noHover() && !(e.relatedTarget && el.contains(e.relatedTarget))) closePop();
   });
-  chart.addEventListener('focusin', (e) => {
+  host.addEventListener('click', (e) => {
     const el = target(e);
-    if (el && !noHover()) openOppPop(el, false);
+    if (el) openPop(el, htmlFor(el), noHover());
   });
-  chart.addEventListener('focusout', () => { if (!noHover()) closeOppPop(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOppPop(); });
-  document.addEventListener('click', (e) => {
-    if (!oppPop || oppPop.hidden) return;
-    if (oppPop.contains(e.target) || target(e)) return;
-    closeOppPop();
+  host.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openPop(el, htmlFor(el), false);
   });
+  host.addEventListener('focusout', () => { if (!noHover()) closePop(); });
+  // Escape and a click outside belong to the card, not to a host: once.
+  if (!popTriggers.length) {
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
+    document.addEventListener('click', (e) => {
+      if (!oppPop || oppPop.hidden) return;
+      if (oppPop.contains(e.target)) return;
+      if (e.target && e.target.closest && popTriggers.some((sel) => e.target.closest(sel))) return;
+      closePop();
+    });
+  }
+  popTriggers.push(selector);
+}
+
+// ------------------------------------------ where a season luck cell comes from
+//
+// Tim, 2026-10-05: "If the user hovers over this number however, you can show
+// them a preview of each of the three numbers". PTW, Close luck, Luck score,
+// Skill and S+L: a label and a number per row, adding up to the cell
+// (`standingsExplain` in js/standings-table.js, where the rows are formed and
+// where the adding up is kept exact). No sentences: the definitions are behind
+// "What the columns mean".
+
+function explainHtml(teamId, key) {
+  const team = state.stats && state.stats.teams.find((t) => String(t.id) === String(teamId));
+  const ex = team ? standingsExplain(state.stats, team, key) : null;
+  if (!ex) return '';
+  const num = (r) => (r.signed ? signed(r.value) : fmt(r.value));
+  const rows = ex.rows.map((r) =>
+    `<tr><td class="name">${esc(r.label)}</td><td class="num">${num(r)}</td></tr>`).join('');
+  return (
+    `<div class="op-h">${esc(team.name)} <span class="muted">· ${esc(ex.label)}</span></div>` +
+    `<table><tbody>${rows}</tbody><tfoot>` +
+    `<tr class="op-gap"><td class="name">${esc(ex.mean ? 'Average' : ex.foot.label)}</td>` +
+    `<td class="num">${num(ex.foot)}</td></tr>` +
+    '</tfoot></table>' +
+    '<button type="button" class="op-close">Close</button>'
+  );
 }
 
 /** What the number is, that it needs no games, how it was derived, and over what. */

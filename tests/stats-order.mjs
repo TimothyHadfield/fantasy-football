@@ -446,6 +446,64 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     'a tied game still has no close-game figure of its own (the hover says "tie")');
 }
 
+// ---- the five season cells that open their parts ---------------------------
+//
+// Tim, 2026-10-05: "If the user hovers over this number however, you can show
+// them a preview of each of the three numbers". PTW, Close luck, Luck score,
+// Skill and S+L, on the real page with a mouse: the card's rows are read back
+// as printed and must add up to the printed cell to the tenth — the average of
+// them for Close luck, whose rows are games — with any miss said in a row of
+// its own, never hidden. And one preview a cell: no `title` beside it.
+{
+  const tenths = (s) => {
+    const m = String(s).replace(/−/g, '-').match(/[-+]?\d+(\.\d+)?/);
+    return m ? Math.round(parseFloat(m[0]) * 10) : NaN;
+  };
+  const fire = (el, type) => el.dispatchEvent(new document.defaultView.Event(type, { bubbles: true }));
+  const cells = [...document.querySelectorAll('#mainTable td[data-explain]')];
+  const keys = ['pointsToWin', 'scoreDiffLuck', 'luckScore', 'skill', 'skillPlusLuck'];
+  assert(cells.length === 50 && keys.every((k) => cells.filter((c) => c.dataset.explain === k).length === 10),
+    `expected the five explained cells on each of ten rows, found ${cells.length}`);
+  assert(cells.every((c) => !c.hasAttribute('title') && !c.querySelector('[title]')),
+    'a cell that opens its parts also carries a title: two previews on one number');
+  assert(cells.every((c) => c.getAttribute('tabindex') === '0'), 'an explained cell cannot be reached by keyboard');
+  let rounded = 0;
+  for (const c of cells) {
+    fire(c, 'mouseover');
+    const pop = $('oppPop');
+    const what = `${c.parentElement.children[0].textContent.trim()} ${c.dataset.explain}`;
+    if (!pop || pop.hasAttribute('hidden')) { assert(false, `${what}: no card opened`); continue; }
+    const rows = [...pop.querySelectorAll('tbody tr')].map((r) => [r.children[0].textContent, r.children[1].textContent]);
+    const foot = pop.querySelector('tfoot tr');
+    const parts = rows.filter((r) => r[0] !== 'Rounding');
+    const fix = rows.filter((r) => r[0] === 'Rounding');
+    rounded += fix.length;
+    const sum = parts.reduce((a, r) => a + tenths(r[1]), 0);
+    const mean = c.dataset.explain === 'scoreDiffLuck';
+    const total = (mean ? Math.round(sum / parts.length) : sum) + fix.reduce((a, r) => a + tenths(r[1]), 0);
+    assert(parts.length >= 2 && total === tenths(c.textContent) && tenths(foot.children[1].textContent) === tenths(c.textContent),
+      `${what}: the cell prints ${c.textContent.trim()}, its rows ${JSON.stringify(rows)} come to ${total / 10} ` +
+      `and the last line reads ${foot.textContent}`);
+    assert(fix.length <= 1 && fix.every((r) => Math.abs(tenths(r[1])) === 1),
+      `${what}: a Rounding row is one tenth, once: ${JSON.stringify(fix)}`);
+    assert(!/[.!?]\s|NaN|undefined/.test(pop.textContent), `${what}: the card is labels and numbers: ${pop.textContent}`);
+    assert(pop.querySelector('.op-close'), `${what}: the card has no Close for a finger`);
+    fire(c, 'mouseout');
+    assert(pop.hasAttribute('hidden'), `${what}: moving off the cell left the card open`);
+  }
+  // The same element as the schedule card, so only one can ever be open.
+  assert(document.querySelectorAll('.opp-pop').length === 1, 'the two previews are separate elements');
+  // Luck score's rows are figures the page already prints: the glance row's
+  // league average, and that team's own Opp Avg, Luck/wk and Close luck cells.
+  const first = mainRows[0];
+  fire(first[12], 'mouseover');
+  const got = [...$('oppPop').querySelectorAll('tbody tr')].map((r) => tenths(r.children[1].textContent));
+  assert(got[1] === -tenths(first[5].textContent) && got[2] === tenths(first[9].textContent) &&
+    got[3] === tenths(first[11].textContent),
+    `Luck score rows ${JSON.stringify(got)} are not the row's own Opp Avg, Luck/wk and Close luck cells`);
+  fire(first[12], 'mouseout');
+}
+
 if (problems.length) {
   console.log('FAIL stats panel order');
   for (const p of problems) console.log(`  - ${p}`);

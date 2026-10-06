@@ -470,5 +470,32 @@ for (const id of ['panelFitTeams', 'panelFitPlayers']) {
 }
 eq(generateDemoSchedule().weeks.length >= 13, true, 'sanity: the demo schedule covers the season');
 
+// --- Week by week on a phone ------------------------------------------------
+// linkedom lays nothing out, so this cannot measure a width. What it can hold
+// is that the rules which make the table fit are in the page's phone block and
+// nowhere wider: measured in Safari's engine at 393px on 2026-10-06, four to
+// six week columns plus Avg sit inside the 337px box with them (385px in a
+// 363px box without), and the seven measure buttons fill their two rows.
+{
+  const css = (html.match(/<style>([\s\S]*?)<\/style>/) || ['', ''])[1];
+  const at = css.indexOf('@media (max-width: 760px)');
+  const phone = at < 0 ? '' : css.slice(at, css.indexOf('\n}', at));
+  const wide = at < 0 ? css : css.slice(0, at) + css.slice(css.indexOf('\n}', at));
+  const rule = (sel) => (phone.match(new RegExp(`${sel.replace(/[.#,]/g, '\\$&')}\\s*\\{([^}]*)\\}`)) || ['', ''])[1];
+  const px = (decl, prop) => Number((decl.match(new RegExp(`${prop}:\\s*(\\d+)px`)) || [])[1]);
+  const cellRule = rule('#weeklyTable th, #weeklyTable td');
+  ok(px(cellRule, 'padding-left') <= 3 && px(cellRule, 'padding-right') <= 3,
+    'phone: the weekly table\'s cells sit closer than the site\'s 7px', cellRule);
+  const name = rule('#weeklyTable .name');
+  ok(/width:\s*100%/.test(name) && px(name, 'max-width') >= 56 && px(name, 'max-width') <= 72,
+    'phone: its name column takes what is left, down to a floor that six weeks leave room for', name);
+  ok(/display:\s*flex/.test(rule('#weeklyMetric')) && /flex-wrap:\s*wrap/.test(rule('#weeklyMetric')) &&
+    /flex:\s*1 1/.test(rule('#weeklyMetric button')),
+    'phone: the measure buttons share their last row, no empty cell', rule('#weeklyMetric'));
+  ok(!/#weeklyTable|#weeklyMetric/.test(wide), 'and none of it applies at laptop width');
+  eq(all($('weeklyMetric'), 'button').length, 7, 'seven measures to lay out');
+  ok($('weeklyTable').closest('.table-scroll'), 'past six weeks the table scrolls inside its own box');
+}
+
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);
