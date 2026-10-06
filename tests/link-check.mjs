@@ -129,6 +129,13 @@ async function boot(page, search = '') {
     await import(pathToFileURL(path.join(REPO, m)).href);
   }
   await new Promise((r) => setTimeout(r, 700));
+  // The Trade search runs in slices and marks its table `data-ranked` when the
+  // offers are in — 700 ms is before that, and the page then has one link.
+  if (page === 'trade.html') {
+    for (let i = 0; i < 1200 && !document.querySelector('#tradeTable[data-ranked]'); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
   console.error = origError;
 
   return { document, errors, fetchCalls };

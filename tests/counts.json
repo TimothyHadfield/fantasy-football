@@ -27,12 +27,12 @@
       "assertions": 97
     },
     "test-bye-rule.mjs": {
-      "assertions": 75,
-      "scenarios": 10
+      "assertions": 85,
+      "scenarios": 11
     },
     "test-season-rules.mjs": {
-      "assertions": 94,
-      "scenarios": 8
+      "assertions": 141,
+      "scenarios": 12
     },
     "test-store.mjs": {
       "assertions": 113
@@ -80,22 +80,22 @@
     },
     "test-home.mjs": {
       "pages": 2,
-      "scenarios": 2
+      "scenarios": 9
     },
     "stats-weeks.mjs": {
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 57
+      "assertions": 387
     },
     "opp-check.mjs": {
       "scenarios": 7
     },
     "test-capture.mjs": {
-      "assertions": 170
+      "assertions": 175
     },
     "cross-sim-check.mjs": {
-      "assertions": 31
+      "assertions": 36
     },
     "home-winpct-check.mjs": {
       "assertions": 81
@@ -112,11 +112,11 @@
       "assertions": 135
     },
     "an-test.mjs": {
-      "assertions": 2482,
-      "scenarios": 27
+      "assertions": 2569,
+      "scenarios": 28
     },
     "test-summary.mjs": {
-      "assertions": 319
+      "assertions": 327
     },
     "touch-check.mjs": {
       "assertions": 353,
@@ -133,11 +133,11 @@
       "scenarios": 14
     },
     "wv-test.mjs": {
-      "assertions": 647,
-      "scenarios": 12
+      "assertions": 802,
+      "scenarios": 14
     },
     "tr-test.mjs": {
-      "assertions": 1045
+      "assertions": 1089
     },
     "test-proj-trend.mjs": {
       "assertions": 52
@@ -164,7 +164,7 @@
       "assertions": 210
     },
     "stats-fit.mjs": {
-      "assertions": 136
+      "assertions": 142
     },
     "roster-link-check.mjs": {
       "assertions": 107,
@@ -188,7 +188,7 @@
       "assertions": 82
     },
     "shared-tables-check.mjs": {
-      "assertions": 221
+      "assertions": 271
     },
     "test-decision-data.mjs": {
       "assertions": 201
@@ -197,20 +197,30 @@
       "assertions": 105
     },
     "test-decisions.mjs": {
-      "assertions": 185
+      "assertions": 200
     },
     "decisions-check.mjs": {
-      "assertions": 181
+      "assertions": 381
     },
     "test-proj-history.mjs": {
-      "assertions": 107
+      "assertions": 136
     },
     "test-projhist-cloud.mjs": {
       "assertions": 17,
       "scenarios": 10
     },
     "proj-changes-check.mjs": {
-      "assertions": 95
+      "assertions": 96
+    },
+    "test-must-win.mjs": {
+      "assertions": 67
+    },
+    "test-backup.mjs": {
+      "assertions": 67
+    },
+    "test-start-sit.mjs": {},
+    "test-waiver-gain.mjs": {
+      "assertions": 164
     }
   }
 }

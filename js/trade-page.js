@@ -6754,6 +6754,14 @@ function renderComboBody() {
   }
 
   const combo = state.combo;
+  // The finder is still searching: "no offers" is not known yet, and since the
+  // search runs in slices this line is readable for the whole of it.
+  if ((!combo || !combo.best) && state.searching) {
+    body.innerHTML = '<p class="empty"><span class="searching">Waiting for the finder…</span></p>';
+    note.innerHTML = '';
+    $('comboExplain').hidden = true;
+    return;
+  }
   if (!combo || !combo.best) {
     body.innerHTML =
       `<p class="empty">Nothing to combine: the finder has no offers for this squad.</p>`;

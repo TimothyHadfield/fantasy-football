@@ -334,6 +334,17 @@ const SCENARIOS = {
           .map((tr) => [...tr.children].map((td) => td.getAttribute('data-v') ?? txt(td))),
       });
 
+      // Title ± / Last ± are filled a slice at a time AFTER the table is painted
+      // (js/must-win.js) and print "…" until theirs has landed. `snapPage()`
+      // reads every cell, so "the live numbers come back" would compare a table
+      // still filling with one that had finished.
+      const filled = async () => {
+        const waiting = () => [...$('forecastTable').querySelectorAll('tbody td')]
+          .some((td) => txt(td) === '…');
+        for (let i = 0; i < 1200 && waiting(); i++) await new Promise((r) => setTimeout(r, 50));
+      };
+      await filled();
+
       // ---- what booting live recorded on its own --------------------------
       const keys = [];
       for (let i = 0; i < ls.length; i++) {
@@ -384,6 +395,7 @@ const SCENARIOS = {
       // 10,000 seasons…" row — which is exactly what 250 ms bought on a good day
       // and not on a bad one.
       await waitFor();
+      await filled();
       out.replayed = snapPage();
 
       // ---- and back to now ------------------------------------------------
@@ -391,6 +403,7 @@ const SCENARIOS = {
       sel2.value = 'live';
       sel2.dispatchEvent(new window.Event('change', { bubbles: true }));
       await waitFor();
+      await filled();
       out.back = snapPage();
 
       globalThis.__arch = out;
@@ -2010,7 +2023,11 @@ async function check(scenario, boot) {
     c.ok('the banner goes with it', a.back && a.back.bannerHidden, a.back && a.back.banner);
     c.ok('and the live numbers come back',
       flat(a.back && a.back.forecast) === flat(a.live && a.live.forecast),
-      'the page did not return to what it was showing before');
+      'the page did not return to what it was showing before: [row, col, before, after] ' +
+      JSON.stringify(((a.back && a.back.forecast) || []).flatMap((r, i) => r.map((cell, j) => {
+        const was = (((a.live && a.live.forecast) || [])[i] || [])[j];
+        return cell === was ? null : [i, j, was, cell];
+      }).filter(Boolean)).slice(0, 6)));
     c.ok('the archived week is still in the picker afterwards',
       a.back && a.back.options.includes('1'), a.back && a.back.options.join(','));
     c.ok('leaving archive mode did not delete anything',
