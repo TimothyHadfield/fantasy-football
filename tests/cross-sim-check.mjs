@@ -63,7 +63,10 @@ const CHILDREN = {
     };
     const stub = await import('./cap-stub-season.mjs');
     return {
-      calls: globalThis.__simCalls || [], title,
+      // The page's own simulation only. "My season"'s Title ± / Last ± columns
+      // play the season out again with one game forced (js/must-win.js); those
+      // runs are not the one the Summary page has to match.
+      calls: (globalThis.__simCalls || []).filter((c) => !c.games.some((g) => g.forced)), title,
       note: text(document.getElementById('simNote')),
       matchupsNote: text(document.getElementById('matchupsNote')),
       forecastFor,

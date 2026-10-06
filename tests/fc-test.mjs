@@ -198,10 +198,105 @@ const SCENARIOS = {
           stats: document.getElementById('forecastStats').textContent.replace(/\s+/g, ' ').trim(),
           rows: [...document.getElementById('forecastTable').querySelectorAll('tbody tr')]
             .map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent.trim()))
-            .filter((c) => c.length === 6),
+            .filter((c) => c.length === 8),
         };
       }
       globalThis.__views = views;
+    },
+  },
+  'live-swing': {
+    label: '(e+) Title ± and Last ±: what each game left is worth, and the figure opens why',
+    stub: true,
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window, waitFor }) => {
+      const $ = (id) => document.getElementById(id);
+      const table = $('forecastTable');
+      const rows = () => [...table.querySelectorAll('tbody tr')].map((tr) => {
+        const td = [...tr.children];
+        const num = (c) => (c && c.hasAttribute('data-v') ? Number(c.getAttribute('data-v')) : null);
+        return {
+          week: Number(td[0].textContent), p: num(td[5]),
+          title: num(td[6]), last: num(td[7]),
+          titleText: td[6] ? td[6].textContent.trim() : '', lastText: td[7] ? td[7].textContent.trim() : '',
+          opens: (td[6] ? td[6].querySelectorAll('.sw-v[data-swing][tabindex="0"]').length : 0) +
+            (td[7] ? td[7].querySelectorAll('.sw-v[data-swing][tabindex="0"]').length : 0),
+        };
+      });
+      const waiting = () => rows().filter((r) => r.titleText === '…' || r.lastText === '…').length;
+      // The page's own signal that the columns are still filling is the "…".
+      const filled = () => settleUntil(() => (waiting() ? `${waiting()} rows still say …` : ''), { max: 60000 });
+      const fire = (el, type, init = {}) =>
+        el.dispatchEvent(Object.assign(new window.Event(type, { bubbles: true }), init));
+      const out = { settles: [] };
+
+      // The simulation table is up, so its result was never waiting on these.
+      out.simRowsAtStart = document.querySelectorAll('#simTable tbody tr:not(.empty-row)').length;
+      out.waitingAtStart = waiting();
+      out.settles.push(await filled());
+      out.rows = rows();
+      const picked = [...document.querySelectorAll('#simTable tbody tr')]
+        .find((tr) => /\bpicked\b/.test(tr.getAttribute('class') || ''));
+      out.base = picked ? {
+        title: Number(picked.children[8].getAttribute('data-v')),
+        last: Number(picked.children[9].getAttribute('data-v')),
+      } : null;
+      out.heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+      out.note = $('forecastNote').textContent.replace(/\s+/g, ' ');
+
+      // ---- the preview: a finger, then a mouse ------------------------------
+      const fig = table.querySelector('.sw-v[data-swing]');
+      const pop = () => $('swingPop');
+      const shut = () => !pop() || pop().hasAttribute('hidden');
+      if (fig) {
+        const mm = globalThis.matchMedia;
+        globalThis.matchMedia = window.matchMedia = (q) =>
+          ({ matches: /hover:\s*none/.test(q), addEventListener() {}, removeEventListener() {} });
+        fire(fig, 'mouseover');
+        out.touchHover = !shut();                 // a finger has no hover
+        fire(fig, 'click');
+        out.sheet = {
+          open: !shut(), cls: pop() ? pop().getAttribute('class') : '',
+          text: pop() ? pop().textContent.replace(/\s+/g, ' ').trim() : '',
+          cells: pop() ? [...pop().querySelectorAll('tbody td.num, tfoot td.num')].map((c) => c.textContent.trim()) : [],
+          close: pop() ? pop().querySelectorAll('button.op-close').length : 0,
+        };
+        if (pop()) fire(pop().querySelector('.op-close'), 'click');
+        out.sheet.shutByClose = shut();
+        fire(fig, 'click');
+        fire(document.body, 'click');
+        out.sheet.shutByOutside = shut();
+        globalThis.matchMedia = window.matchMedia = mm;
+
+        fire(fig, 'mouseover');
+        out.card = { open: !shut(), cls: pop() ? pop().getAttribute('class') : '' };
+        fire(fig, 'mouseout');
+        out.card.shutByLeave = shut();
+        fire(fig, 'focusin');
+        out.card.openByFocus = !shut();
+        fire(document, 'keydown', { key: 'Escape' });
+        out.card.shutByEscape = shut();
+      }
+
+      // ---- sort on the new column, and re-render under it -------------------
+      const th = [...table.querySelectorAll('thead th')].find((h) => /^Last/.test(h.textContent.trim()));
+      if (th) fire(th, 'click');
+      out.sorted = rows().map((r) => r.last);
+      const sel = $('forecastTeam');
+      const mine = sel.value;
+      sel.dispatchEvent(new window.Event('change'));      // same team: a plain repaint
+      out.waitingAfterRepaint = waiting();
+      out.sortedAfterRepaint = rows().map((r) => r.last);
+
+      // ---- another team: "…" at once, then its own numbers ------------------
+      const other = [...sel.querySelectorAll('option')].map((o) => o.getAttribute('value')).find((v) => v !== mine);
+      sel.value = other;
+      sel.dispatchEvent(new window.Event('change'));
+      out.waitingAfterSwitch = waiting();
+      await waitFor();
+      out.settles.push(await filled());
+      out.otherRows = rows();
+      globalThis.__swing = out;
     },
   },
   archive: {
@@ -936,6 +1031,80 @@ async function check(scenario, boot) {
     c.ok('picker lists every team', $('forecastTeam').querySelectorAll('option').length === 10,
       String($('forecastTeam').querySelectorAll('option').length));
     c.ok('nobody is marked as you', !/\(you\)/.test($('forecastTeam').innerHTML));
+  }
+
+  // ---- (e+): which games swing the season -------------------------------
+  if (scenario === 'live-swing') {
+    const s = globalThis.__swing || {};
+    const rows = s.rows || [];
+    const pp = (v) => `${(v * 100).toFixed(1)}`;
+    c.ok('the columns are headed Title ± and Last ±',
+      (s.heads || []).slice(6).join('|') === 'Title ±|Last ±', JSON.stringify(s.heads));
+    c.ok('the simulation table was painted while these still said "…"',
+      s.simRowsAtStart === 10 && s.waitingAtStart > 5, `${s.simRowsAtStart} rows, ${s.waitingAtStart} waiting`);
+    c.ok('every "…" was replaced within the poll’s ceiling',
+      (s.settles || []).length === 2 && s.settles.every((x) => x.ok), JSON.stringify(s.settles));
+    c.ok('every game left has both figures', rows.length > 5 &&
+      rows.every((r) => Number.isFinite(r.title) && Number.isFinite(r.last)), JSON.stringify(rows));
+    c.ok('each is printed as signed points to a tenth',
+      rows.length > 0 && rows.every((r) => /^[+−]?\d+\.\d%$/.test(r.titleText) && /^[+−]?\d+\.\d%$/.test(r.lastText)),
+      JSON.stringify(rows.map((r) => [r.titleText, r.lastText])));
+    c.ok('and each figure can be opened, by key as well as by pointer',
+      rows.length > 0 && rows.every((r) => r.opens === 2), JSON.stringify(rows.map((r) => r.opens)));
+    // A point and a half of counting noise either way (js/must-win.js, SWING_RUNS).
+    c.ok('winning never lowers the title chance', rows.length > 0 && rows.every((r) => r.title > -0.015),
+      rows.map((r) => pp(r.title)).join(' '));
+    c.ok('and never raises the chance of finishing last', rows.length > 0 && rows.every((r) => r.last < 0.015),
+      rows.map((r) => pp(r.last)).join(' '));
+    c.ok('at least one game moves something', rows.some((r) => r.title > 0.01 || r.last < -0.01),
+      rows.map((r) => `${pp(r.title)}/${pp(r.last)}`).join(' '));
+
+    // THE IDENTITY: the chance today is the two "if" chances weighed by the
+    // page's own win % for that game. The sheet prints the two; the simulation
+    // table holds today's. Checked on the game the sheet was opened for.
+    const sheet = s.sheet || {};
+    const num = (t) => Number(String(t).replace('%', '').replace('−', '-')) / 100;
+    const [wT, wL, lT, lL, gT, gL] = (sheet.cells || []).map(num);
+    const first = rows[0] || {};
+    c.ok('a tap opens the sheet, with a Close button', Boolean(sheet.open) && /\bsheet\b/.test(sheet.cls) && sheet.close === 1,
+      JSON.stringify(sheet));
+    c.ok('a finger gets nothing from hover', s.touchHover === false, String(s.touchHover));
+    c.ok('the sheet says win, lose, the swing and the count',
+      /If you win/.test(sheet.text) && /If you lose/.test(sheet.text) && /Swing/.test(sheet.text) &&
+      /10,000 simulated seasons each way/.test(sheet.text), sheet.text);
+    c.ok('its swing row is win minus lose',
+      Math.abs((wT - lT) - gT) < 0.0015 && Math.abs((wL - lL) - gL) < 0.0015, JSON.stringify(sheet.cells));
+    c.ok('and is the figure in the cell', Math.abs(gT - first.title) < 0.001 && Math.abs(gL - first.last) < 0.001,
+      `${JSON.stringify(sheet.cells)} vs ${first.title} ${first.last}`);
+    if (s.base && Number.isFinite(first.p)) {
+      const mixT = first.p * wT + (1 - first.p) * lT;
+      const mixL = first.p * wL + (1 - first.p) * lL;
+      c.ok('win and lose, weighed by the Win %, give back today’s title chance',
+        Math.abs(mixT - s.base.title) < 0.02, `${pp(mixT)} vs ${pp(s.base.title)}`);
+      c.ok('and today’s chance of finishing last',
+        Math.abs(mixL - s.base.last) < 0.02, `${pp(mixL)} vs ${pp(s.base.last)}`);
+    } else {
+      c.ok('the simulation table has the team’s own row to check against', false, JSON.stringify(s.base));
+    }
+    c.ok('Close shuts the sheet, and so does a tap outside', Boolean(sheet.shutByClose && sheet.shutByOutside), JSON.stringify(sheet));
+    const card = s.card || {};
+    c.ok('a mouse gets a card on hover, gone on leaving', Boolean(card.open && !/\bsheet\b/.test(card.cls) && card.shutByLeave),
+      JSON.stringify(card));
+    c.ok('focus opens it and Escape shuts it', Boolean(card.openByFocus && card.shutByEscape), JSON.stringify(card));
+
+    const desc = (xs) => xs.every((v, i) => i === 0 || xs[i - 1] >= v);
+    const asc = (xs) => xs.every((v, i) => i === 0 || xs[i - 1] <= v);
+    c.ok('the table sorts on Last ±', (s.sorted || []).length > 5 && new Set(s.sorted).size > 1 &&
+      (desc(s.sorted) || asc(s.sorted)), JSON.stringify(s.sorted));
+    c.ok('the sort survives a repaint', JSON.stringify(s.sortedAfterRepaint) === JSON.stringify(s.sorted),
+      JSON.stringify(s.sortedAfterRepaint));
+    c.ok('and a repaint of the same team works nothing out again', s.waitingAfterRepaint === 0, String(s.waitingAfterRepaint));
+    c.ok('another team starts on "…"', s.waitingAfterSwitch > 5, String(s.waitingAfterSwitch));
+    c.ok('and ends on its own figures', (s.otherRows || []).length > 5 &&
+      s.otherRows.every((r) => Number.isFinite(r.title) && Number.isFinite(r.last)) &&
+      JSON.stringify(s.otherRows.map((r) => [r.week, r.title, r.last])) !== JSON.stringify(rows.map((r) => [r.week, r.title, r.last])),
+      JSON.stringify(s.otherRows));
+    c.ok('the method is behind the toggle', /Title ± and Last ±/.test(s.note || '') && /10,000 times each way/.test(s.note || ''), s.note);
   }
 
   // ---- (e): switching between teams --------------------------------------

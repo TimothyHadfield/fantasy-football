@@ -145,6 +145,45 @@ section.panel h2.h2-inline {
    which is the row you look for first and the one the chart is anchored on. */
 #forecastTable tbody tr.now td { background: #14261a; }
 #forecastTable tbody tr.now td.name { background: #14261a; color: #7fd99b; }
+/* Title ± and Last ±: what one game is worth. A phone has room for one of the
+   two, so it shows the one the Trade page's goal is set to (`.goal-last` on
+   the table); the figure opens both either way. */
+#forecastTable .sw-v { cursor: help; border-radius: 3px; }
+#forecastTable .sw-v:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 760px) {
+  #forecastTable .sw-last, #forecastTable.goal-last .sw-title { display: none; }
+  #forecastTable.goal-last .sw-last { display: table-cell; }
+  /* Seven columns in 337px: measured at 393 wide, 7px cells and a full-length
+     opponent made 410. 4px cells and a name cut at 86px (the ellipsis rule is
+     app.css's) make it fit with no sideways scroll at all. */
+  #forecastTable th, #forecastTable td { padding-left: 4px; padding-right: 4px; }
+  #forecastTable td.name, #forecastTable th.name { max-width: 86px; }
+}
+/* The same card as the Stats page's Schedule-luck preview (stats.html,
+   `.opp-pop`): beside the figure for a mouse, a sheet at the foot of the
+   screen for a finger. */
+.opp-pop {
+  position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.opp-pop[hidden] { display: none; }
+.opp-pop .op-h { font-weight: 650; margin-bottom: 6px; }
+.opp-pop table { width: 100%; border-collapse: collapse; }
+.opp-pop th { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.opp-pop th, .opp-pop td { padding: 3px 6px; }
+.opp-pop .num { text-align: right; }
+.opp-pop .name { text-align: left; }
+.opp-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
+.opp-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
+.opp-pop .op-foot { color: var(--dim); margin-top: 6px; }
+.opp-pop .op-close { display: none; }
+.opp-pop.sheet {
+  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
+  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
+}
+.opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
 #forecastChart { margin-top: 16px; }
 /* Nothing to chart is a sentence, not a blank rectangle. */
 #forecastChart:empty { display: none; }
@@ -391,6 +430,8 @@ details.explain .panel-note p:last-child { margin-bottom: 0; }
         <th data-sort id="thForecastMine" title="This team's projected points that week.">Them</th>
         <th data-sort id="thForecastTheirs" title="The opponent's projected points that week.">Opp</th>
         <th data-sort title="Our estimate of this team's chance of winning, worked out from the two projected totals. ESPN publishes projections, not odds.">Win %</th>
+        <th data-sort class="sw-title" title="How far this team's title chance moves if it wins this game rather than loses it. Regular-season games only.">Title &plusmn;</th>
+        <th data-sort class="sw-last" title="How far this team's chance of finishing last moves if it wins this game rather than loses it. Regular-season games only.">Last &plusmn;</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
