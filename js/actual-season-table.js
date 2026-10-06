@@ -39,6 +39,7 @@
 
 import { slotRows, fillSlots } from './lineup-slots.js';
 import { esc, signedText, diffOf, diffClass, dimOf, dimStyle } from './view-switch.js';
+import { heatScale, heatOf, heatMarkHtml } from './heat.js';
 
 const fmt = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
 
@@ -95,6 +96,48 @@ const lines = (entry, shown) =>
   `<span class="sbw-pts">${shown}</span>`;
 
 /**
+ * THE SCALES FOR `o.heat` BELOW: the site's one red/green scale (js/heat.js),
+ * measured the way Analysis measures the same sheet's history weeks — each slot
+ * row against the other squads' same slot IN THAT WEEK, and the total against
+ * the other squads' totals that week. Never one position against another.
+ *
+ * @param {Array<Array<{week:number, total:number, starters:Array}>>} squads
+ *        every squad's weeks, one array a squad (`weeksFromMirror` of each)
+ * @param {Object} [o]
+ * @param {Array} [o.rows] `slotRows(slots)`; or pass
+ * @param {number[]} [o.slots] the league's lineup slot ids instead
+ * @param {Iterable<number>|null} [o.skip] weeks left uncoloured: one still
+ *        being played is part totals, which Analysis and Stats do not colour
+ * @returns {(week:number, slotKey:string|null) => Object|null} a `heatScale`
+ *          for that week's slot row, or with `null` for that week's totals
+ */
+export function seasonHeat(squads = [], { rows = null, slots = null, skip = null } = {}) {
+  const slotList = rows || slotRows(slots);
+  const left = new Set(skip || []);
+  const byWeek = new Map(); // week -> { fills: Map[], totals: number[] }
+  for (const weeks of squads) {
+    for (const w of weeks || []) {
+      if (!byWeek.has(w.week)) byWeek.set(w.week, { fills: [], totals: [] });
+      const got = byWeek.get(w.week);
+      got.fills.push(fillSlots(w.starters, slotList));
+      got.totals.push(w.total);
+    }
+  }
+  const made = new Map();
+  return (week, slotKey = null) => {
+    const got = byWeek.get(week);
+    if (!got || left.has(week)) return null;
+    const key = `${week}|${slotKey === null ? '' : slotKey}`;
+    if (!made.has(key)) {
+      made.set(key, heatScale(slotKey === null
+        ? got.totals
+        : got.fills.map((fill) => pointsOf(fill.get(slotKey) || null))));
+    }
+    return made.get(key);
+  };
+}
+
+/**
  * The season box.
  *
  * @param {Object} season
@@ -114,10 +157,18 @@ const lines = (entry, shown) =>
  * @param {string} [o.totalLabel] the total row's label. Default "Total".
  * @param {Iterable<number>|null} [o.live] the weeks still being played for this
  *        squad: each one's column head carries `LIVE_TAG` beside the number
+ * @param {boolean} [o.sortable] every heading carries `data-sort` and a slot's
+ *        name sorts in lineup order, for `enableSort` (js/sortable.js). The
+ *        total row is a body of its own, which sortable.js never moves.
+ * @param {((week:number, slotKey:string|null) => Object|null)|null} [o.heat]
+ *        `seasonHeat(...)`: each points cell, and the total, is drawn on that
+ *        scale — class, ▲/▼ at the end of it, and the words in its title. Not
+ *        in the difference view, whose colour already says up or down.
  * @returns {string} `<table class="sbw-table">…`, to sit inside `.sbw`
  */
 export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } = {}, {
   diffFrom = null, dim = null, box = '', totalLabel = 'Total', live = null,
+  sortable = false, heat = null,
 } = {}) {
   const slotList = rows || slotRows(slots);
   const cols = [...weeks].sort((a, b) => a.week - b.week);
@@ -130,18 +181,21 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
   });
   const styles = cols.map((c) => dimStyle(dimOf(dim, c.week)));
 
-  const head = `<tr><th class="name">Slot</th>` +
-    cols.map((c) => `<th class="wk">${esc(c.week)}${liveWeeks.has(c.week) ? LIVE_TAG : ''}</th>`).join('') + `</tr>`;
+  const sort = sortable ? ' data-sort' : '';
+  const scaleOf = heat && !diffFrom ? heat : () => null;
+  const head = `<tr><th class="name"${sort}>Slot</th>` +
+    cols.map((c) => `<th class="wk"${sort}>${esc(c.week)}${liveWeeks.has(c.week) ? LIVE_TAG : ''}</th>`).join('') + `</tr>`;
 
-  const body = slotList.map((row) => {
+  const body = slotList.map((row, place) => {
     const cells = cols.map((c, i) => {
       const e = fills[i].get(row.key) || null;
       const at = ` data-wk="${esc(c.week)}"${styles[i]}`;
       if (!diffFrom) {
         if (!e) return `<td class="wk muted"${at}>—</td>`;
         const v = pointsOf(e);
-        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
-          `title="${esc(saidOf(e))}">${lines(e, fmt(scoreOf(e.p)))}</td>`;
+        const h = heatOf(v, scaleOf(c.week, row.key), { what: `the other squads’ ${row.key} in week ${c.week}` });
+        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}${h ? ` ${h.cls}` : ''}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
+          `title="${esc(saidOf(e) + (h ? `. ${h.words}` : ''))}">${lines(e, fmt(scoreOf(e.p)) + heatMarkHtml(h))}</td>`;
       }
       // DIFFERENCE: this lineup minus the other, in the same slot row. An
       // empty slot scored nothing, so a slot filled in one and empty in the
@@ -158,7 +212,7 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       return `<td class="${cls}" data-v="${d}"${e ? ` data-pid="${esc(e.p.playerId ?? '')}"` : ''}${at} ` +
         `title="${esc(title)}">${lines(e, signedText(d))}</td>`;
     });
-    return `<tr data-slot="${esc(row.key)}"><td class="name"><span class="slot-tag">${esc(row.key)}</span></td>` +
+    return `<tr data-slot="${esc(row.key)}"><td class="name"${sortable ? ` data-v="${place}"` : ''}><span class="slot-tag">${esc(row.key)}</span></td>` +
       `${cells.join('')}</tr>`;
   }).join('');
 
@@ -166,7 +220,9 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
     cols.map((c, i) => {
       const at = ` data-wk="${esc(c.week)}"${styles[i]}`;
       if (!diffFrom) {
-        return `<td class="wk split-total" data-v="${c.total}"${at}>${fmt(c.total)}</td>`;
+        const h = heatOf(c.total, scaleOf(c.week, null), { what: `the other squads’ totals in week ${c.week}` });
+        return `<td class="wk split-total${h ? ` ${h.cls}` : ''}" data-v="${c.total}"${at}` +
+          `${h ? ` title="${esc(h.words)}"` : ''}>${fmt(c.total)}${heatMarkHtml(h)}</td>`;
       }
       const b = beforeOf.get(c.week);
       const d = b ? diffOf(c.total, b.total) : null;

@@ -52,6 +52,9 @@ import { listDecisions, mirror, rosterAt, ALL_TEAMS } from './decisions.js';
 // "Stale-module trap") loads this page without the previews instead of not at all.
 import * as engine from './decisions.js';
 import { actualSeasonTableHtml, weeksFromMirror, shortName } from './actual-season-table.js';
+// `seasonHeat` is newer than those three: off the namespace, for the same reason.
+import * as seasonTable from './actual-season-table.js';
+import { projectionsFromWeekTeams, opponentProjections } from './projection.js';
 import { standingsTableHtml } from './standings-table.js';
 import { summaryTableHtml } from './summary-table.js';
 import {
@@ -121,7 +124,7 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const commas = (n) => Number(n).toLocaleString('en-US');
 const same = (a, b) => String(a) === String(b);
 
-/** A week's points as ESPN prints them: two decimals when it has two. */
+/** One MAN'S points as ESPN prints them: two decimals when he has two. */
 function pts(n) {
   if (!Number.isFinite(n)) return '—';
   const s = n.toFixed(2);
@@ -130,6 +133,14 @@ function pts(n) {
 
 /** A difference of two of those, signed, with a real minus. */
 const signedPts = (d) => (d === null ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${pts(Math.abs(d))}`);
+
+/**
+ * A TEAM'S week, or its season, to the tenth — as Analysis and Stats print the
+ * same team-week (121.9, never 121.94 beside 106.1). Rounded the way `diffOf`
+ * rounds its two sides, so the Diff beside two of these is their subtraction as
+ * printed: `diffOf(hyp, real)`, drawn with `signedText`.
+ */
+const pts1 = (n) => (Number.isFinite(n) ? round1(n).toFixed(1) : '—');
 
 /** "3-0", and a third number only with a tie — the Summary chart's form. */
 const recText = (r) => (r ? `${r.w}-${r.l}${r.t ? `-${r.t}` : ''}` : '—');
@@ -147,12 +158,13 @@ const names = (ids) => (ids || []).map(playerName).join(' and ');
 // Tim, 2026-10-06: "fix the decisions section so the formating and function of
 // the graphs matches with the rest of the cite (especially column sorting ...)".
 // Every table here sorts on a click of its heading through js/sortable.js, like
-// every other table on the site. Season by week does not: its rows are lineup
-// slots, and it does not sort on Analysis either.
+// every other table on the site — Season by week too, as the same sheet does on
+// Analysis: by slot or by any week, its Total row a body of its own that stays
+// at the foot.
 //
-// A PAIR SORTS TOGETHER. Standings and the chart are each drawn twice, Current
-// beside (or above) Hypothetical | Difference, and the point of the pair is to
-// read one team across both. So a click on either table's heading sorts THAT
+// A PAIR SORTS TOGETHER. Season by week, Standings and the chart are each drawn
+// twice, Current beside (or above) Hypothetical | Difference, and the point of
+// the pair is to read one row across both. So a click on either table's heading sorts THAT
 // table by its own numbers, and the other one takes the same row order and the
 // same arrow — never its own order, which would put two different teams on one
 // line.
@@ -161,9 +173,10 @@ const names = (ids) => (ids || []).map(playerName).join(' and ');
 // is kept here and not in sortable.js (which keys it on the table element):
 // box -> { index, asc, lead } — the column, the direction, and which of the two
 // was clicked ('Cur' or 'Hyp').
-const pairSort = { standings: null, summary: null };
+const pairSort = { season: null, standings: null, summary: null };
 
-const bodyRows = (table) => [...table.querySelectorAll('tbody > tr')];
+/** The rows that sort: the first body's. Season by week's Total is a second body and stays put. */
+const bodyRows = (table) => [...table.querySelector('tbody').children];
 
 /** A pair's two tables, Current first; null for one that is not drawn. */
 const pairTables = (box) => ['Cur', 'Hyp'].map((side) => $(`${box}${side}`).querySelector('table'));
@@ -667,7 +680,7 @@ function renderResult() {
     const was = resultLetter(g, id);
     const is = resultLetter(mg, id);
     const flip = Boolean(was && is && was !== is);
-    const diff = diffOf(c.total, c.realTotal, 2);
+    const diff = diffOf(c.total, c.realTotal);
     const dim = dimStyle(noise[week]);
     hyp += c.total;
     real += c.realTotal;
@@ -676,7 +689,7 @@ function renderResult() {
     const rs = scores(g, id);
     const ms = scores(mg, id);
     const said = rs && ms
-      ? `Actual ${pts(rs[0])} to ${pts(rs[1])}. Hypothetical ${pts(ms[0])} to ${pts(ms[1])}.`
+      ? `Actual ${pts1(rs[0])} to ${pts1(rs[1])}. Hypothetical ${pts1(ms[0])} to ${pts1(ms[1])}.`
       : '';
     const resCls = flip ? ` dz-flip ${RANK[is] > RANK[was] ? 'd-up' : 'd-down'}` : '';
     const result = c.pending
@@ -685,20 +698,23 @@ function renderResult() {
     return `<tr data-wk="${week}"${flip ? ' data-flip="1"' : ''}${c.pending ? ' data-pending="1"' : ''}>` +
       `<td data-v="${week}">${wk}</td>` +
       `<td class="dz-vs" title="${esc(opp)}">${esc(opp)}</td>` +
-      `<td class="dz-act"${sortV(c.realTotal)}>${pts(c.realTotal)}</td>` +
-      `<td class="dz-hyp"${sortV(c.total)}${dim}>${pts(c.total)}</td>` +
+      `<td class="dz-act"${sortV(c.realTotal)}>${pts1(c.realTotal)}</td>` +
+      `<td class="dz-hyp"${sortV(c.total)}${dim}>${pts1(c.total)}</td>` +
       `<td class="dz-diff ${diffClass(diff)}"${sortV(diff)}${dim}>` +
-      whyHtml(`data-why="week" data-wk="${week}"`, `Week ${week}: the players behind this difference`, signedPts(diff)) +
+      whyHtml(`data-why="week" data-wk="${week}"`, `Week ${week}: the players behind this difference`, signedText(diff)) +
       `</td>` +
       result +
       `</tr>`;
   }).join('');
 
+  // The tile's season (to the cent, as before) and the Total row's: the two
+  // totals as printed, and the Diff their subtraction.
   const total = diffOf(hyp, real, 2);
+  const shown = diffOf(hyp, real);
   const change = rec ? recordDiff(rec.mirror, rec.real) : null;
   foot.innerHTML = `<tr><td colspan="2">Total</td>` +
-    `<td class="dz-act">${pts(round2(real))}</td><td class="dz-hyp">${pts(round2(hyp))}</td>` +
-    `<td class="dz-diff ${diffClass(total)}" data-v="${total}">${signedPts(total)}</td>` +
+    `<td class="dz-act">${pts1(real)}</td><td class="dz-hyp">${pts1(hyp)}</td>` +
+    `<td class="dz-diff ${diffClass(shown)}" data-v="${shown}">${signedText(shown)}</td>` +
     `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td></tr>`;
   // The reader's column survives a new team, a new decision and the noise switch.
   resort(table);
@@ -793,16 +809,22 @@ function weekWhyHtml(week) {
     `<td class="name">${manHtml(r.in)}</td><td class="num ${diffClass(r.diff)}">${signedPts(r.diff)}</td></tr>`).join('');
   const foot = (label, value, cls = '') =>
     `<tr${cls ? ` class="${cls}"` : ''}><td class="name" colspan="3">${label}</td><td class="num">${value}</td></tr>`;
+  // The foot is the table's row: Actual and Hypothetical to the tenth, and the
+  // Diff of those two as printed. The men above keep ESPN's cents, so what
+  // their swaps do not add up to — the engine's own gap, and now the cents the
+  // row rounds away — is the Rounding line.
+  const diff = diffOf(c.total, c.realTotal);
+  const rest = round2(diff - w.sum);
   return (
     `<div class="op-h">Week ${week}${c.live ? LIVE_TAG : ''}` +
     (g ? ` <span class="muted">· vs ${esc(teamName(g.homeId === id ? g.awayId : g.homeId))}</span>` : '') + `</div>` +
     '<table><thead><tr><th class="name">Slot</th><th class="name">Started</th><th class="name">Instead</th><th class="num">+/−</th></tr></thead>' +
     `<tbody>${rows || '<tr><td class="name muted" colspan="4">Same lineup</td></tr>'}</tbody><tfoot>` +
     // The rows are the whole of the Diff. Were they ever not, the gap is said.
-    (w.rest ? foot('Rounding', signedPts(w.rest)) : '') +
-    foot('Actual', pts(c.realTotal)) +
-    foot('Hypothetical', pts(c.total)) +
-    foot('Diff', signedPts(diffOf(c.total, c.realTotal, 2)), 'op-gap') +
+    (rest ? foot('Rounding', signedPts(rest)) : '') +
+    foot('Actual', pts1(c.realTotal)) +
+    foot('Hypothetical', pts1(c.total)) +
+    foot('Diff', signedText(diff), 'op-gap') +
     '</tfoot></table>' +
     '<button type="button" class="op-close">Close</button>'
   );
@@ -817,18 +839,19 @@ function teamWhyHtml(teamId) {
   const weeks = state.world.weeks.filter((w) => mine.byWeek[w]);
   const rows = weeks.map((week) => {
     const c = mine.byWeek[week];
-    const diff = diffOf(c.total, c.realTotal, 2);
-    return `<tr><td class="num">${week}${c.live ? LIVE_TAG : ''}</td><td class="num">${pts(c.realTotal)}</td>` +
-      `<td class="num">${pts(c.total)}</td><td class="num ${diffClass(diff)}">${signedPts(diff)}</td></tr>`;
+    const diff = diffOf(c.total, c.realTotal);
+    return `<tr><td class="num">${week}${c.live ? LIVE_TAG : ''}</td><td class="num">${pts1(c.realTotal)}</td>` +
+      `<td class="num">${pts1(c.total)}</td><td class="num ${diffClass(diff)}">${signedText(diff)}</td></tr>`;
   }).join('');
   const { hyp, real } = seasonPoints(mirrorOf(d), t.id);
+  // Points/wk is the season to the cent over its weeks, as in the table.
   const total = diffOf(hyp, real, 2);
   return (
     `<div class="op-h">${esc(teamName(t.id))} <span class="muted">· ${weeks.length} week${weeks.length === 1 ? '' : 's'}</span></div>` +
     '<table><thead><tr><th class="num">Wk</th><th class="num">Actual</th><th class="num">Hypothetical</th><th class="num">Diff</th></tr></thead>' +
     `<tbody>${rows}</tbody><tfoot>` +
-    `<tr><td class="num">Total</td><td class="num">${pts(round2(real))}</td><td class="num">${pts(round2(hyp))}</td>` +
-    `<td class="num">${signedPts(total)}</td></tr>` +
+    `<tr><td class="num">Total</td><td class="num">${pts1(real)}</td><td class="num">${pts1(hyp)}</td>` +
+    `<td class="num">${signedText(diffOf(hyp, real))}</td></tr>` +
     `<tr class="op-gap"><td class="num" colspan="3">Points/wk</td><td class="num">${signedText(perWeek(total, weeks.length))}</td></tr>` +
     '</tfoot></table>' +
     '<button type="button" class="op-close">Close</button>'
@@ -940,11 +963,23 @@ function renderSeason() {
   const hyp = weeksFromMirror(cells, 'mirror');
   const live = world.weeks.filter((w) => cells.byWeek[w].live);
   const dim = state.noise ? m.noise.get(state.seasonTeamId) || null : null;
-  $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, { box: 'current', live });
+  // THE SITE'S RED/GREEN SCALE, as on Analysis's own Season by week: each slot
+  // against the other squads' same slot in that week. Each half is measured on
+  // its own world's league (as each half of Standings is), and a week anybody
+  // is still playing is left uncoloured, as it is there.
+  const playing = world.weeks.filter((w) => world.teams.some((t) => liveCell(m, t.id, w)));
+  const heat = (which) => (typeof seasonTable.seasonHeat === 'function'
+    ? seasonTable.seasonHeat(world.teams.map((t) => weeksFromMirror(m.teams.get(t.id), which)),
+      { slots: world.slots, skip: playing })
+    : null);
+  $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, {
+    box: 'current', live, sortable: true, heat: heat('real'),
+  });
   $('seasonHyp').innerHTML = actualSeasonTableHtml({ weeks: hyp, slots: world.slots }, {
-    box: 'hypothetical', dim, live,
+    box: 'hypothetical', dim, live, sortable: true, heat: heat('mirror'),
     diffFrom: state.view.season === 'diff' ? real : null,
   });
+  sortPair('season');
   fitSeason();
 }
 
@@ -1012,12 +1047,45 @@ function renderStandings() {
 
   // No one team is "the picked one" with all users on.
   const highlightId = state.all ? null : state.teamId;
-  $('standingsCur').innerHTML = standingsTableHtml(real, { highlightId });
+  // OPP PROJ is the fixture list against everybody's projections (`oppProjOf`),
+  // which no decision here moves: the one figure on both halves, so 0.0 as a
+  // difference. Dashes until the chart's read has landed.
+  const oppProj = (state.odds && state.odds.oppProj) || null;
+  $('standingsCur').innerHTML = standingsTableHtml(real, { highlightId, oppProj });
   $('standingsHyp').innerHTML = standingsTableHtml(hyp, {
-    highlightId, dim: teamDim(m),
-    diffFrom: state.view.standings === 'diff' ? real : null,
+    highlightId, dim: teamDim(m), oppProj,
+    diffFrom: state.view.standings === 'diff' ? real : null, diffOppProj: oppProj,
   });
   sortPair('standings');
+}
+
+/**
+ * OPP PROJ, the Stats page's column, from what this page has ALREADY read: each
+ * team's average projected opponent over the whole fixture list, through the two
+ * functions Stats forms it with (js/projection.js). No request of its own — the
+ * squads of the weeks played are the world's, and the weeks still to come are
+ * the ones `loadOdds` read for the chart.
+ *
+ * @param {Array} games the fixture list: [{ week, homeId, awayId }]
+ * @param {Map<number, Array>|null} ahead week -> squads, the weeks `loadOdds` read
+ * @param {Map|null} floors the positional floor read with them
+ * @returns {Map<*, {avgOpp:number}>|null} null when it cannot be formed
+ */
+function oppProjOf(games, ahead, floors) {
+  const world = state.world;
+  const held = world.rosters instanceof Map ? world.rosters : new Map();
+  const weeks = [...new Set((games || []).map((g) => Number(g.week)))].sort((a, b) => a - b);
+  const weekTeams = new Map();
+  for (const w of weeks) {
+    // A week in play is in both: the chart's reading counts a finished man at
+    // his score, as Stats does; the world's holds his pre-game projection.
+    const teams = (ahead && ahead.get(w)) || held.get(w);
+    if (teams && teams.length) weekTeams.set(w, teams);
+  }
+  const built = projectionsFromWeekTeams(weekTeams, floors);
+  if (!built) return null;
+  const byTeam = opponentProjections(games, built.proj, world.teams.map((t) => t.id));
+  return byTeam.size ? byTeam : null;
 }
 
 // -------------------------------------------------- the chart: the two worlds
@@ -1035,6 +1103,9 @@ function renderStandings() {
 //   sigma    the league's scoring spread, measured on the REAL results
 //   ready    the projections have landed, so a simulation can be asked for
 //   failed   the season could not be read: record and LUCK only
+//   fixtures the whole fixture list, played or not, and
+//   oppProj  team id -> its average projected opponent (`oppProjOf`): the
+//            Standings pair's Opp proj column, null until `ready`
 
 function isRemainingAt(through) {
   return (g) => g.week > through || capture.gameState(g) !== 'final';
@@ -1080,7 +1151,9 @@ async function loadOdds() {
     state.odds = finish({
       data, played: world.games.slice(), teams: world.teams, started: null,
       proj: null, live: null, ready: true, failed: false,
+      fixtures: world.games, oppProj: oppProjOf(world.games, null, null),
     });
+    if (selected()) renderStandings();
     renderSummary();
     return;
   }
@@ -1104,6 +1177,7 @@ async function loadOdds() {
       data: capture.normalizeSchedule(schedule, { isDemo: false }),
       played: data.games, teams: data.teams, started,
       proj: null, live: null, ready: false, failed: false,
+      fixtures: schedule.games, oppProj: null,
     });
   } catch {
     if (stale()) return;
@@ -1123,6 +1197,8 @@ async function loadOdds() {
   // Every week with a game still to play out, then the bracket weeks.
   const ahead = o.data.weeks.filter((w) => (o.data.byWeek.get(w) || []).some(o.isRemaining));
   const asking = ahead.concat(ahead.length ? capture.playoffWeeks(o.data) : []);
+  let aheadTeams = null;
+  let aheadFloors = null;
   if (asking.length) {
     let weekTeams = new Map();
     try { weekTeams = await season.fetchWeeksRosters(asking); } catch { weekTeams = new Map(); }
@@ -1155,8 +1231,12 @@ async function loadOdds() {
     }
     o.live = live;
     o.proj = built ? built.proj : null;
+    aheadTeams = weekTeams;
+    aheadFloors = floors;
   }
   o.ready = true;
+  o.oppProj = oppProjOf(o.fixtures, aheadTeams, aheadFloors);
+  if (o.oppProj && selected()) renderStandings();
   renderSummary();
 }
 
@@ -1678,7 +1758,7 @@ document.addEventListener('click', (e) => {
 enableSort($('weekTable'));
 enableSort($('teamTable'));
 wireWhy($('panelResult'));
-for (const [box, panel] of [['standings', 'panelStandings'], ['summary', 'panelSummary']]) {
+for (const [box, panel] of [['season', 'panelSeason'], ['standings', 'panelStandings'], ['summary', 'panelSummary']]) {
   $(panel).addEventListener('click', (e) => onPairSort(box, e));
   $(panel).addEventListener('keydown', (e) => onPairSort(box, e));
 }

@@ -200,19 +200,35 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   .dz-list { max-height: 238px; }
   .dz-row { grid-template-columns: 30px minmax(0, 1fr) 38px 46px; gap: 6px; padding: 8px 7px; font-size: 13px; }
   .dz-whatif .form-select { width: 100%; }
-  .dz-weeks th, .dz-weeks td { padding-left: 5px; padding-right: 5px; }
+  /* 4px a side, as the chart below: at 5px a three-figure Total and a flipped
+   * result ("+113.4", "L → W") left the week table 1px wider than the panel,
+   * and "Points/wk" did the same to the one-row-a-team table. */
+  .dz-weeks th, .dz-weeks td { padding-left: 4px; padding-right: 4px; }
   .dz-weeks td.dz-vs { max-width: 72px; }
-  /* "Points/wk" is a longer heading than "Points" was: a pixel off each side
-   * of the one-row-a-team table's cells keeps it inside the panel. */
-  .dz-weeks.dz-teams th, .dz-weeks.dz-teams td { padding-left: 4px; padding-right: 4px; }
   /* A week still being played has the LIVE tag beside its number. The
    * opponent's name gives up the room for it, so the table still fits. */
   .dz-weeks:has(.wk-live) td.dz-vs { max-width: 0; width: 100%; }
+  /* And for the arrow of the heading the table is sorted by. */
+  .dz-weeks:has(th.sorted) td.dz-vs { max-width: 0; width: 100%; }
+  /* In the one-row-a-team table every column is as wide as its heading, and
+   * the arrow of the sorted one was 4px more than the panel had: a pixel a
+   * side off the headings pays for it. */
+  .dz-weeks.dz-teams th { padding-left: 3px; padding-right: 3px; }
   /* THE CHART is five columns and 42px too wide for a phone at the site's
    * cell padding. Tighter cells, and the name takes what the four numbers
    * leave (app.css already ends a long name in an ellipsis at this width). */
   #panelSummary .summary-table th, #panelSummary .summary-table td { padding-left: 4px; padding-right: 4px; }
   #panelSummary .summary-table td.name, #panelSummary .summary-table th.name { max-width: 0; width: 100%; }
+  /* SEASON BY WEEK was 34px too wide for a phone after four weeks. The same
+   * treatment: tighter cells, and the columns share the panel - a week's width
+   * is its number's, and a name gives up its end for it (the whole name is the
+   * cell's title, a tap away). Past the weeks a phone holds it scrolls inside
+   * its box, as the same sheet does on Analysis. */
+  .dz-fit .sbw-actual { table-layout: fixed; width: 100%; }
+  .dz-fit .sbw-actual th.name { width: 46px; }
+  .dz-fit .sbw-actual th.wk { width: 52px; }
+  .dz-fit .sbw-actual th, .dz-fit .sbw-actual td { padding-left: 4px; padding-right: 4px; }
+  .dz-fit .sbw-actual td.wk .sbw-name { overflow: hidden; text-overflow: ellipsis; }
   #resultStats { gap: 18px; }
 }
 </style>
