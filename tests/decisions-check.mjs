@@ -56,6 +56,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { register } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -74,6 +75,57 @@ function trapErrors() {
   console.error = (...a) => { errors.push(a.join(' ')); };
   process.on('unhandledRejection', (r) => errors.push(`unhandled: ${String((r && r.stack) || r)}`));
   return errors;
+}
+
+/**
+ * A LEAGUE THAT SCORES IN HUNDREDTHS (DZ_CENTS), as Tim's own does: the stub's
+ * world prints one decimal everywhere, so a table mixing "121.94" with "106.1"
+ * could never show on it. One more loader hook, in front of cap-loader.mjs,
+ * hands the page the stub with every man's score moved by 0.01–0.99 — the same
+ * amount wherever that man's week is read (a squad, the players' own lines) —
+ * and each squad's total and each matchup's score re-added from its starters.
+ * The stub file itself is untouched.
+ */
+function scoreInCents() {
+  const stub = new URL('./cap-stub-season.mjs', import.meta.url).href;
+  const wrapper = `
+    export * from ${JSON.stringify(stub)};
+    import { fetchDecisionWorld as base } from ${JSON.stringify(stub)};
+    const c2 = (n) => Math.round(n * 100) / 100;
+    const odd = (id, w) => {
+      let h = 7;
+      for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) % 9973;
+      return ((h + Number(w) * 11) % 99 + 1) / 100;
+    };
+    const bump = (id, w, v) => (Number.isFinite(v) ? c2(v + odd(id, w)) : v);
+    export async function fetchDecisionWorld(o) {
+      const world = await base(o);
+      for (const [w, teams] of world.rosters) {
+        for (const t of teams) {
+          for (const p of t.players) p.actual = bump(p.playerId, w, p.actual);
+          t.actualTotal = c2(t.starters.reduce((a, p) => a + (p.actual || 0), 0));
+        }
+      }
+      for (const [id, who] of world.players) {
+        for (const w of Object.keys(who.byWeek)) who.byWeek[w].actual = bump(id, w, who.byWeek[w].actual);
+      }
+      const total = (w, id) => world.rosters.get(w).find((t) => t.id === id).actualTotal;
+      for (const g of world.games) {
+        if (g.homeActual === null || g.awayActual === null) continue;
+        g.homeActual = total(g.week, g.homeId);
+        g.awayActual = total(g.week, g.awayId);
+      }
+      return world;
+    }`;
+  const hook = `
+    const WRAPPER = ${JSON.stringify(`data:text/javascript,${encodeURIComponent(wrapper)}`)};
+    const TESTS = ${JSON.stringify(new URL('./', import.meta.url).href)};
+    export async function resolve(spec, ctx, next) {
+      const fromTests = ctx.parentURL && ctx.parentURL.startsWith(TESTS);
+      if (spec.startsWith('.') && !fromTests && /\\/season\\.js$/.test(spec)) return { url: WRAPPER, shortCircuit: true };
+      return next(spec, ctx);
+    }`;
+  register(`data:text/javascript,${encodeURIComponent(hook)}`);
 }
 
 // ------------------------------------------------------------------ children
@@ -164,7 +216,8 @@ async function bootPage(prefs = {}) {
       hyp: cells(document.querySelector('#seasonHyp tbody.split tr') || { children: [] }),
       body: tableRows('seasonHyp'),
       curBody: tableRows('seasonCur'),
-      vals: [...document.querySelectorAll('#seasonHyp td[data-v]')].map((td) => Number(td.getAttribute('data-v'))),
+      // (the points cells: a slot's own cell carries its lineup place to sort on)
+      vals: [...document.querySelectorAll('#seasonHyp td.wk[data-v]')].map((td) => Number(td.getAttribute('data-v'))),
       teamRowHidden: $('seasonTeamRow').hasAttribute('hidden'),
       teams: [...$('seasonTeam').querySelectorAll('option')].map(text),
     },
@@ -439,14 +492,61 @@ const CHILDREN = {
     out.pairs = { season: pairOf('seasonCur'), standings: pairOf('standingsCur'), summary: pairOf('summaryCur') };
     out.before = { standings: pair('standings', 4), summary: pair('summary', 2), week: own('weekTable', 4) };
 
+    // ---- OPP PROJ: the Stats column, on both halves, and what the shared
+    // functions say it is — asked directly, of the stub's own squads: the weeks
+    // played from the world, the weeks to come from the read the chart made.
+    const oppAt = headRow('standingsCur').findIndex((th) => /^opp proj$/i.test(text(th)));
+    {
+      const P = await import(moduleUrl('js/projection.js'));
+      const stub = await import('./cap-stub-season.mjs');
+      const world = await stub.fetchDecisionWorld({});
+      const sched = await stub.fetchSchedule();
+      const fixtureWeeks = [...new Set(sched.games.map((g) => g.week))];
+      const toCome = await stub.fetchWeeksRosters([...new Set(sched.games.filter((g) => !g.played).map((g) => g.week))]);
+      const weekTeams = new Map();
+      for (const w of fixtureWeeks) {
+        const teams = toCome.get(w) || world.rosters.get(w);
+        if (teams && teams.length) weekTeams.set(w, teams);
+      }
+      const want = P.opponentProjections(sched.games, P.projectionsFromWeekTeams(weekTeams, null).proj, world.teams.map((t) => t.id));
+      out.opp = {
+        at: oppAt, cur: col('standingsCur', oppAt), hyp: col('standingsHyp', oppAt),
+        want: world.teams.map((t) => ({ name: t.name, v: Math.round(want.get(t.id).avgOpp * 10) / 10 })),
+        fixtureWeeks: fixtureWeeks.length, asked: stub.calls.rosters.length,
+      };
+    }
+
+    // ---- Season by week: week 1 (column 1) on Current, twice; the switch;
+    // then the difference's own week 2 leads, and the Slot heading puts the
+    // lineup order back.
+    const tinted = (id) => [...tableOf(id).querySelectorAll('td')].filter((td) => /\bheat-(up|dn)-\d/.test(td.className)).length;
+    out.seasonBefore = pair('season', 1);
+    out.tintBefore = [tinted('seasonCur'), tinted('seasonHyp')];
+    sortOn('seasonCur', 1);
+    out.seasonWk = pair('season', 1);
+    sortOn('seasonCur', 1);
+    out.seasonWkAsc = pair('season', 1);
+    await p.view('season', 'diff');
+    out.seasonDiff = pair('season', 1);
+    out.tintDiff = [tinted('seasonCur'), tinted('seasonHyp')];
+
     // ---- Standings: Current's Total (column 4), twice; then the switch
     await p.pick('lineup-perfect:1:all');
+    sortOn('seasonHyp', 2);
+    out.seasonHypLeads = pair('season', 2);
+    sortOn('seasonCur', 0);
+    out.seasonSlot = pair('season', 0);
+    sortOn('seasonCur', 0);
+    out.seasonSlotAsc = pair('season', 0);
+    await p.view('season', 'total');
+    out.seasonBack = pair('season', 0);
     sortOn('standingsCur', 4);
     out.curTotal = pair('standings', 4);
     sortOn('standingsCur', 4);
     out.curTotalAsc = pair('standings', 4);
     await p.view('standings', 'diff');
     out.curTotalDiff = pair('standings', 4);
+    out.oppDiff = col('standingsHyp', oppAt);
     // ---- now the OTHER table leads: the difference's own Total
     sortOn('standingsHyp', 4);
     out.hypTotal = pair('standings', 4);
@@ -488,6 +588,7 @@ const CHILDREN = {
     await p.settle();
     out.weekTeam7 = own('weekTable', 0);
     out.standingsTeam7 = pair('standings', 4);
+    out.seasonTeam7 = pair('season', 0);
     sortOn('weekTable', 5);
     out.weekTeam7Result = own('weekTable', 5);
 
@@ -505,6 +606,57 @@ const CHILDREN = {
     sortOn('teamTable', 0);
     out.teamsName = own('teamTable', 0);
     out.allStandings = pair('standings', 4);
+
+    // ---- THE RED/GREEN SCALE on Season by week. With all users on the panel
+    // has its own team picker, so every squad's sheet can be read off the page:
+    // each cell's colour must be the shared scale's (js/heat.js) for that slot
+    // in that week across the ten squads — worked here from the cells, not
+    // from the page's own helper. A week still being played has none.
+    const H = await import(moduleUrl('js/heat.js'));
+    const sheet = (id) => {
+      const t = tableOf(id);
+      const live = [...t.querySelectorAll('thead th')].map((th) => Boolean(th.querySelector('.wk-live')));
+      return [...t.querySelectorAll('tbody tr')].map((tr) => ({
+        slot: tr.getAttribute('data-slot') || 'Total',
+        cells: [...tr.children].slice(1).map((td, i) => ({
+          v: td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : null,
+          cls: (td.className.match(/\bheat(-[a-z0-9]+)*/g) || []).join(' '),
+          mark: (text(td).match(/[▲▼]/) || [''])[0], title: td.getAttribute('title') || '', live: live[i + 1],
+        })),
+      }));
+    };
+    const sheets = [];
+    for (const opt of [...p.$('seasonTeam').querySelectorAll('option')]) {
+      p.choose(p.$('seasonTeam'), opt.getAttribute('value'));
+      await p.settle();
+      sheets.push({ cur: sheet('seasonCur'), hyp: sheet('seasonHyp') });
+    }
+    const heat = { squads: sheets.length, cells: 0, tinted: 0, marked: 0, said: 0, wrong: [], liveTinted: 0, liveCells: 0 };
+    for (const half of ['cur', 'hyp']) {
+      for (const row of sheets[0][half]) {
+        row.cells.forEach((first, i) => {
+          const same = sheets.map((s) => (s[half].find((r) => r.slot === row.slot) || { cells: [] }).cells[i] || { v: null, cls: '', mark: '', title: '' });
+          if (first.live) {
+            heat.liveCells += same.length;
+            heat.liveTinted += same.filter((c) => c.cls !== '' || c.mark !== '').length;
+            return;
+          }
+          const scale = H.heatScale(same.map((c) => c.v));
+          for (const c of same) {
+            if (c.v === null) continue;
+            const want = H.heatOf(c.v, scale, { what: `the other squads’ ${row.slot === 'Total' ? 'totals' : row.slot} in week ${i + 1}` })
+              || { cls: '', mark: '', words: '' };
+            heat.cells++;
+            if (/heat-(up|dn)/.test(c.cls)) heat.tinted++;
+            if (c.mark) heat.marked++;
+            if (want.words && c.title.includes(want.words)) heat.said++;
+            if (c.cls !== want.cls || c.mark !== (want.mark || '')) heat.wrong.push([half, row.slot, i, c.v, c.cls, c.mark, want.cls, want.mark]);
+          }
+        });
+      }
+    }
+    heat.wrong = heat.wrong.slice(0, 6);
+    out.heat = heat;
     out.errors = p.errors;
     return out;
   },
@@ -518,6 +670,7 @@ const CHILDREN = {
    * with a mouse (a card), then with a finger (a sheet with Close).
    */
   async why() {
+    if (process.env.DZ_CENTS) scoreInCents();
     const p = await bootPage();
     const out = { settled: await p.settle() };
     const doc = p.document;
@@ -752,6 +905,7 @@ const RUNS = {
   plain: { child: 'plain', env: {} },
   why: { child: 'why', env: {} },
   'why-early': { child: 'why', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
+  'why-cents': { child: 'why', env: { DZ_CENTS: '1' } },
   sort: { child: 'sort', env: {} },
   'sort-early': { child: 'sort', env: { CAP_EARLY: '1' } },
 };
@@ -759,7 +913,7 @@ const RUNS = {
 function child(name, extra = {}) {
   const cfg = RUNS[name];
   const env = { ...process.env };
-  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'FF_SCEN']) delete env[k];
+  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'FF_SCEN']) delete env[k];
   Object.assign(env, cfg.env, extra);
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, cfg.child], {
     encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 64 * 1024 * 1024, timeout: 240000, env,
@@ -1378,6 +1532,73 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
   }
 }
 
+// ---- a league that scores in hundredths: one decimal, and it adds up as printed
+//
+// Audit, 2026-10-06, on Tim's league: the week table read "121.94 | 121.94"
+// on one line and "106.1 | 111.1" on the next. Every Actual, Hypothetical and
+// Total is one decimal now, like every other table on the site, and a row's
+// Diff is the difference of the two numbers PRINTED beside it. The men behind
+// it keep their hundredths, with a "Rounding" line where they need one to add
+// up. The stub prints one decimal whatever the page does, so this is the stub
+// with cents put on every score (`scoreInCents`).
+{
+  const c = child('why-cents');
+  if (booted(c, 'a league that scores in hundredths')) {
+    const states = ['start', 'addDrop', 'seven', 'sevenPerfect', 'onePerfect', 'empty'];
+    const one = (s) => /^\d+\.\d$/.test(String(s).replace(/live$/, ''));
+    const diff = (s) => /^([+−]\d+\.\d|0\.0)$/.test(s);
+    const asPrinted = (a, h, d) => one(a) && one(h) && diff(d) && Math.round((num(h) - num(a)) * 10) / 10 === num(d);
+    const rows = states.flatMap((k) => c[k].weeks.map((w) => w.row));
+    const men = states.flatMap((k) => c[k].weeks.flatMap((w) => w.card.rows.filter((r) => r.length === 4)));
+    ok('the fixture is what it says: men score in hundredths here', men.some((r) => /\.\d\d$/.test(r[1]) || /\.\d\d$/.test(r[2])), men.slice(0, 3));
+    ok('every week’s Actual and Hypothetical is one decimal, and its Diff is the difference of those two',
+      rows.length === 18 && rows.every((r) => asPrinted(r[2], r[3], r[4])), rows.filter((r) => !asPrinted(r[2], r[3], r[4])));
+    ok('the Total row too', states.every((k) => asPrinted(c[k].total[1], c[k].total[2], c[k].total[3])), states.map((k) => c[k].total));
+    ok('a week’s card: its foot is the row’s three numbers, and the swaps with their Rounding line add up to the Diff',
+      states.every((k) => c[k].weeks.every(cardAddsUp)), states.flatMap((k) => c[k].weeks.filter((w) => !cardAddsUp(w))).slice(0, 2));
+    const feet = states.flatMap((k) => c[k].weeks.map((w) => Object.fromEntries(w.card.foot)));
+    ok('Rounding is said where the hundredths leave something over, and only there',
+      feet.some((f) => 'Rounding' in f) && feet.some((f) => !('Rounding' in f)) && feet.every((f) => !('Rounding' in f) || num(f.Rounding) !== 0),
+      feet.map((f) => f.Rounding));
+    ok('ALL USERS: a team’s card is one decimal a week and in its Total, each Diff the difference as printed',
+      c.all.teams.length === 10 && c.all.teams.every((t) => t.card.rows.length === 3 && t.card.rows.every((r) => asPrinted(r[1], r[2], r[3])) &&
+        asPrinted(t.card.foot[0][1], t.card.foot[0][2], t.card.foot[0][3])),
+      c.all.teams.filter((t) => !t.card.rows.every((r) => asPrinted(r[1], r[2], r[3]))).slice(0, 2).map((t) => [t.card.rows, t.card.foot]));
+  }
+}
+
+// ---- the phone: the tables this page owns fit a 393px screen
+//
+// linkedom lays nothing out, so the widths themselves are measured in Safari's
+// engine (phone-view, 2026-10-06, Tim's league: Season by week 34px and 16px
+// too wide before, 0 after; the week table 1px, 4px sorted, 0 after). What is
+// held here is that the rules are in the page, inside its phone block only —
+// so nothing at laptop width moved.
+{
+  where = 'phone';
+  const css = html('decisions.html');
+  const blocks = [];
+  for (let at = css.indexOf('@media (max-width: 760px)'); at >= 0; at = css.indexOf('@media (max-width: 760px)', at + 1)) {
+    let depth = 0;
+    let end = css.indexOf('{', at);
+    do { depth += css[end] === '{' ? 1 : css[end] === '}' ? -1 : 0; end++; } while (depth > 0 && end < css.length);
+    blocks.push(css.slice(at, end));
+  }
+  const phone = blocks.join('\n');
+  const rest = blocks.reduce((s, b) => s.replace(b, ''), css);
+  const has = (re) => re.test(phone);
+  ok('Season by week on a phone: the columns share the panel, 4px a side, and a long name ends in an ellipsis',
+    has(/\.dz-fit \.sbw-actual \{[^}]*table-layout: fixed;[^}]*width: 100%;/) &&
+    has(/\.dz-fit \.sbw-actual th, \.dz-fit \.sbw-actual td \{ padding-left: 4px; padding-right: 4px; \}/) &&
+    has(/\.dz-fit \.sbw-actual td\.wk \.sbw-name \{[^}]*text-overflow: ellipsis;/), phone.length);
+  ok('the week table and the one-row-a-team table: 4px a side, and the name gives way to a sorted heading’s arrow',
+    has(/\.dz-weeks th, \.dz-weeks td \{ padding-left: 4px; padding-right: 4px; \}/) &&
+    has(/\.dz-weeks:has\(th\.sorted\) td\.dz-vs \{ max-width: 0; width: 100%; \}/) &&
+    has(/\.dz-weeks\.dz-teams th \{ padding-left: 3px; padding-right: 3px; \}/), phone.length);
+  ok('none of it outside the phone block: laptop width is as it was',
+    !/\.dz-fit \.sbw-actual/.test(rest) && !/has\(th\.sorted\)/.test(rest), '');
+}
+
 // ---- sorting and layout: every table sorts, a pair sorts together
 //
 // Tim, 2026-10-06: "fix the decisions section so the formating and function of
@@ -1399,11 +1620,53 @@ const weeksInOrder = (t, i, dir) => inOrder(t.rows.slice(0, -1), dir) && t.rows[
 for (const run of ['sort', 'sort-early']) {
   const s = child(run);
   if (!booted(s, run)) continue;
-  const SORTING = ['weekTable', 'teamTable', 'standingsCur', 'standingsHyp', 'summaryCur', 'summaryHyp'];
-  ok('every heading of every table sorts — the two the page owns, and both halves of Standings and the chart',
+  const SORTING = ['weekTable', 'teamTable', 'standingsCur', 'standingsHyp', 'summaryCur', 'summaryHyp', 'seasonCur', 'seasonHyp'];
+  ok('every heading of every table sorts — the two the page owns, and both halves of Season by week, Standings and the chart',
     SORTING.every((id) => s.wired[id].length > 0 && s.wired[id].every(Boolean)), s.wired);
-  ok('Season by week does not: its rows are lineup slots, as on Analysis',
-    s.wired.seasonCur.every((x) => x === false) && s.wired.seasonHyp.every((x) => x === false), s.wired);
+
+  // Season by week (audit, 2026-10-06: the one pair on the page a click did nothing to)
+  const slotsOf = (p) => namesOf(p.cur).slice(0, -1);
+  const totalLast = (p) => [p.cur, p.hyp].every((rows) => rows[rows.length - 1].name === 'Total' &&
+    rows.filter((r) => r.name === 'Total').length === 1);
+  const seasonStep = (p, i, dir) => inStep(p, i, dir) && totalLast(p);
+  ok('Season by week opens in lineup order, unsorted, its Total at the foot',
+    same(s.seasonBefore.arrows, [null, null]) && totalLast(s.seasonBefore) && slotsOf(s.seasonBefore).length === 10, s.seasonBefore.arrows);
+  ok('a click on Current’s week 1 sorts its slots, high first, and Total stays at the foot',
+    inOrder(s.seasonWk.cur.slice(0, -1), 'desc') && seasonStep(s.seasonWk, 1, 'desc') &&
+    !same(slotsOf(s.seasonWk), slotsOf(s.seasonBefore)), [slotsOf(s.seasonWk), s.seasonWk.arrows]);
+  ok('a second click turns both halves over', inOrder(s.seasonWkAsc.cur.slice(0, -1), 'asc') && seasonStep(s.seasonWkAsc, 1, 'asc'),
+    [slotsOf(s.seasonWkAsc), s.seasonWkAsc.arrows]);
+  ok('the switch to Difference keeps Current’s order and both arrows', s.seasonDiff.diff && seasonStep(s.seasonDiff, 1, 'asc') &&
+    same(slotsOf(s.seasonDiff), slotsOf(s.seasonWkAsc)), [slotsOf(s.seasonDiff), s.seasonDiff.arrows]);
+  ok('a click on Difference’s week 2 sorts THAT half by its own numbers, another decision or not, and Current follows it',
+    s.seasonHypLeads.diff && inOrder(s.seasonHypLeads.hyp.slice(0, -1), 'desc') && seasonStep(s.seasonHypLeads, 2, 'desc'),
+    [s.seasonHypLeads.hyp.map((r) => r.v), s.seasonHypLeads.arrows]);
+  const lineup = slotsOf(s.seasonBefore);
+  ok('the Slot heading sorts by place in the lineup, not by the letters: one click the lineup upside down, the next the lineup',
+    seasonStep(s.seasonSlot, 0, 'desc') && same(slotsOf(s.seasonSlot), [...lineup].reverse()) &&
+    seasonStep(s.seasonSlotAsc, 0, 'asc') && same(slotsOf(s.seasonSlotAsc), lineup), [slotsOf(s.seasonSlot), slotsOf(s.seasonSlotAsc)]);
+  ok('back on Hypothetical, and on another team: the same order and arrows',
+    !s.seasonBack.diff && seasonStep(s.seasonBack, 0, 'asc') && seasonStep(s.seasonTeam7, 0, 'asc') && same(slotsOf(s.seasonTeam7), lineup),
+    [s.seasonBack.arrows, s.seasonTeam7.arrows]);
+
+  // Its colour (Tim: "colorizing eveything red/green … used in virtually all charts across the site")
+  const h = s.heat;
+  ok('Season by week wears the site’s red/green scale: every cell of every squad’s sheet is the shared scale’s for its slot that week',
+    h.squads === 10 && h.cells > 300 && h.tinted > 50 && h.marked > 0 && h.wrong.length === 0, h);
+  ok('a coloured cell says so in words too, never by colour alone', h.said === h.cells, [h.said, h.cells]);
+  ok('both halves are coloured as the page opens; as a Difference the right half is the difference’s colours, not the scale’s',
+    s.tintBefore[0] > 0 && s.tintBefore[1] > 0 && s.tintDiff[0] > 0 && s.tintDiff[1] === 0, [s.tintBefore, s.tintDiff]);
+  ok(run === 'sort' ? 'no week is in play here' : 'the week in play is left uncoloured on every sheet',
+    run === 'sort' ? h.liveCells === 0 : h.liveCells > 0 && h.liveTinted === 0, [h.liveCells, h.liveTinted]);
+
+  // Opp proj (audit, 2026-10-06: a dash for every team in both halves)
+  const o = s.opp;
+  const shown = (rows) => o.want.map((t) => num((rows.find((r) => r.name === t.name) || { t: '—' }).t));
+  ok('Standings has Opp proj on both halves: each team’s average projected opponent, as the shared functions give it',
+    o.at > 0 && o.want.length === 10 && new Set(o.want.map((t) => t.v)).size > 3 &&
+    same(shown(o.cur), o.want.map((t) => t.v)) && same(shown(o.hyp), o.want.map((t) => t.v)), [o.want, o.cur.map((r) => r.t), o.hyp.map((r) => r.t)]);
+  ok('no decision moves the fixture list: as a Difference it is 0.0 for everybody', s.oppDiff.length === 10 && s.oppDiff.every((r) => r.t === '0.0'),
+    s.oppDiff.map((r) => r.t));
   ok('every table sits in the site’s .table-scroll', Object.values(s.wraps).every(Boolean), s.wraps);
   ok('Standings is one above the other, Season by week side by side while it fits, the chart side by side',
     /\bdz-stack\b/.test(s.pairs.standings) && /\bdz-fit\b/.test(s.pairs.season) && s.pairs.summary === 'dz-pair', s.pairs);
