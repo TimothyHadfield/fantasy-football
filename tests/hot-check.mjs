@@ -74,7 +74,9 @@ const avgCol = heads.findIndex((h) => /^Avg$/i.test(h));
 // starts at the first priced week, and the previous weeks are checked to carry
 // neither cue.
 const pastCols = table.querySelectorAll('thead th.wk-past').length;
-const firstWeekCol = avgCol + 1 + pastCols;
+// Gain (2026-10-06) sits between Avg and the weeks; it is not a week either.
+const gainCol = heads.findIndex((h) => /^Gain$/i.test(h));
+const firstWeekCol = Math.max(avgCol, gainCol) + 1 + pastCols;
 ok(posCol > 0 && avgCol > posCol, 'found the Pos and Avg columns', heads.join('|'));
 ok(pastCols === 3, 'the three played weeks are columns before the priced ones', heads.join('|'));
 {

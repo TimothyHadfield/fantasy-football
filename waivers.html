@@ -56,6 +56,36 @@ td.bye {
    readable as a value. */
 td.wait { color: var(--line); }
 
+/* GAIN: what adding him is worth to your own lineup, a week. The figure opens
+   the weeks it is formed from (js/waivers-page.js, "where a gain comes from"):
+   a card beside it for a mouse, a sheet at the foot of the screen for a finger.
+   The card is the Stats page's Schedule luck preview, rule for rule. */
+td.gain .gn { color: var(--accent); font-weight: 650; cursor: help; border-radius: 3px; }
+td.gain .gn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.opp-pop {
+  position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.opp-pop[hidden] { display: none; }
+.opp-pop .op-h { font-weight: 650; margin-bottom: 2px; }
+.opp-pop .op-drop { color: var(--dim); margin-bottom: 6px; }
+.opp-pop table { width: 100%; border-collapse: collapse; }
+.opp-pop th { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.opp-pop th, .opp-pop td { padding: 3px 6px; }
+.opp-pop .num { text-align: right; }
+.opp-pop .lbl { text-align: left; }
+.opp-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
+.opp-pop tfoot td { color: var(--dim); }
+.opp-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
+.opp-pop .op-close { display: none; }
+.opp-pop.sheet {
+  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
+  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
+}
+.opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+
 /* A week worth actually starting the player for, by the per-position bar in
    STARTABLE. Colour AND weight, never colour alone: this is the one cue on the
    page that says "look here", and roughly one man in twelve cannot separate
@@ -219,6 +249,9 @@ tbody tr.spotlight td.name {
   font-size: 13.5px;
 }
 .jump button { padding: 4px 12px; font-size: 12.5px; margin-left: auto; }
+/* `display: flex` above outranks the site's `.hidden`, which left an empty
+   bordered strip on screen whenever there was nobody to jump to. */
+.jump.hidden { display: none; }
 
 /* ------------------------------------------------------------ reading layout
    The controls sit in one quiet toolbar box so they read as "settings for the

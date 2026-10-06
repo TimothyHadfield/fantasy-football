@@ -45,6 +45,76 @@ const settleWaivers = settleWaiverPage;
 // costs one wire request and one roster request, once, after the priced weeks.
 const pastCount = (table) => table.querySelectorAll('thead th.wk-past').length;
 
+// ------------------------------------------------------------ the Gain column
+//
+// Read off the page by HEADER TEXT, so these would report "no Gain column" on a
+// build without one rather than read whatever cell happens to sit at an index.
+
+const flat = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+
+/** The Gain column as drawn: its title, and every free-agent row's cell. */
+function gainSnap(document) {
+  const table = document.getElementById('waiverTable');
+  const ths = [...table.querySelectorAll('thead th')];
+  const col = ths.findIndex((th) => flat(th) === 'Gain');
+  const rows = [...table.querySelectorAll('tbody tr[data-player]')];
+  const cellOf = (tr) => {
+    const td = col < 0 ? null : tr.children[col];
+    return {
+      id: tr.getAttribute('data-player'),
+      mine: /\bmine\b/.test(tr.getAttribute('class') || ''),
+      text: flat(td),
+      v: td ? td.getAttribute('data-v') : null,
+      opens: Boolean(td && td.querySelector('.gn[data-gain][tabindex="0"][role="button"]')),
+      wait: Boolean(td && /\bwait\b/.test(td.getAttribute('class') || '')),
+    };
+  };
+  return {
+    col,
+    title: col < 0 ? '' : ths[col].getAttribute('title') || '',
+    sortable: col >= 0 && ths[col].hasAttribute('data-sort'),
+    cells: rows.map(cellOf),
+    note: flat(document.getElementById('waiverNote')),
+  };
+}
+
+/** Snap it, sort by it both ways, then open the best man's preview and shut it. */
+async function gainProbe({ document, window }) {
+  const table = document.getElementById('waiverTable');
+  const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const out = { first: gainSnap(document) };
+  if (out.first.col < 0) return out;
+
+  const th = () => table.querySelectorAll('thead th')[out.first.col];
+  click(th());
+  out.desc = gainSnap(document);
+  click(th());
+  out.asc = gainSnap(document);
+  click(th());
+
+  const gn = table.querySelector('tbody td.gain .gn');
+  if (!gn) return out;
+  out.cell = flat(gn);
+  out.label = gn.getAttribute('aria-label') || '';
+  click(gn);
+  const pop = document.getElementById('gainPop');
+  const cells = (tr) => [...tr.children].map(flat);
+  out.pop = pop && {
+    open: !pop.hasAttribute('hidden'),
+    head: flat(pop.querySelector('.op-h')),
+    drop: flat(pop.querySelector('.op-drop')),
+    cols: cells(pop.querySelector('thead tr')),
+    rows: [...pop.querySelectorAll('tbody tr')].map(cells),
+    foot: [...pop.querySelectorAll('tfoot tr')].map(cells),
+    close: flat(pop.querySelector('.op-close')),
+  };
+  const esc = new window.Event('keydown', { bubbles: true });
+  Object.defineProperty(esc, 'key', { value: 'Escape' });
+  document.dispatchEvent(esc);
+  out.shut = Boolean(pop && pop.hasAttribute('hidden'));
+  return out;
+}
+
 const SCENARIOS = {
   demo: {
     label: '(a) demo mode, nothing connected',
@@ -57,7 +127,7 @@ const SCENARIOS = {
     label: '(a+) the Your team picker swaps whose men are "Your …"',
     stub: false,
     prefs: { 'waivers.source': 'demo' },
-    after: async ({ document, window }) => {
+    after: async ({ document, window, waitFor }) => {
       const sel = document.getElementById('teamSelect');
       const mine = () => [...document.querySelectorAll('#waiverTable tbody tr.mine')]
         .map((tr) => tr.children[0].textContent.trim());
@@ -74,6 +144,8 @@ const SCENARIOS = {
       out.after = mine();
       out.prefs = globalThis.localStorage.getItem('ff.prefs');
       globalThis.__wvTeam = out;
+      // Another team is another Gain column, priced after the repaint.
+      await waitFor();
     },
   },
   live: {
@@ -123,7 +195,7 @@ const SCENARIOS = {
 
       // --- sorting a week column -------------------------------------------
       const ths = [...table.querySelectorAll('thead th')];
-      const w0 = 4 + pastCount(table);     // week 4's column
+      const w0 = 5 + pastCount(table);     // week 4's column
       click(ths[w0 + 1]);                  // week 5
       out.wk5desc = snap();
       click(ths[w0 + 1]);
@@ -360,6 +432,44 @@ const SCENARIOS = {
       globalThis.__wvTrend = out;
     },
   },
+  // GAIN (2026-10-06): what adding a free agent is worth to YOUR lineup — one
+  // sortable column after Avg, filled in after the table paints, whose figure
+  // opens the weeks it is formed from. The arithmetic is proved against a brute
+  // force in test-waiver-gain.mjs; what is asserted here is the PAGE: the
+  // column is there, it sorts, and the preview's rows sum to the cell.
+  gain: {
+    label: '(h) Gain: sortable, and its preview sums to the cell',
+    stub: false,
+    prefs: { 'waivers.source': 'demo' },
+    after: async ({ document, window, waitFor }) => {
+      globalThis.__wvGain = await gainProbe({ document, window, waitFor });
+    },
+  },
+  // Nobody is "you": the column is dashes and its title says how to fix that.
+  // Then a team is chosen on the page, and the column fills — for no request.
+  // WV_TREND is the stub league that HAS squads (the plain one rosters nobody),
+  // and its men are in the preseason copy, so this is also the real-league
+  // path: Gain waits for the rest of the season the arrows read, and prices it.
+  'gain-noteam': {
+    label: '(h+) Gain with no team: dashes, a title saying to pick one, then a team is picked',
+    stub: true,
+    env: { WV_TREND: '1' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026 },
+    after: async ({ document, window, waitFor }) => {
+      const espn = await import('./wv-stub-espn.mjs');
+      const season = await import('./wv-stub-season.mjs');
+      const spent = () => espn.calls.weeks.length + season.calls.rosterWeeks.length;
+      const out = { none: gainSnap(document), spentBefore: spent() };
+      const sel = document.getElementById('teamSelect');
+      sel.value = '4';
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await waitFor();
+      out.picked = await gainProbe({ document, window, waitFor });
+      out.spentAfter = spent();
+      globalThis.__wvGain = out;
+    },
+  },
   'live-empty': {
     label: '(d) stubbed live league with an empty free-agent pool',
     stub: true,
@@ -569,11 +679,11 @@ function checkHeat(c, d, scenario, note) {
     .filter((r) => !/\bempty-row\b/.test(r.cls));
   const taken = bodyRows(d.getElementById('takenTable'))
     .filter((r) => !/\bempty-row\b/.test(r.cls));
-  const AVG = 3;            // Player, Pos, Tm, Avg
+  const AVG = 3;            // Player, Pos, Tm, Avg (then Gain, then the weeks)
   const T_AVG = 4;          // Player, Pos, Tm, Owner, Avg
   const wireAvg = wire.map((r) => r.cells[AVG]).filter(Boolean);
   const takenAvg = taken.map((r) => r.cells[T_AVG]).filter(Boolean);
-  const wireWeeks = wire.flatMap((r) => r.cells.slice(AVG + 1));
+  const wireWeeks = wire.flatMap((r) => r.cells.slice(AVG + 2));
   const takenWeeks = taken.flatMap((r) => r.cells.slice(T_AVG + 1));
 
   // ---- the wire: Avg yes, weeks no ---------------------------------------
@@ -836,11 +946,11 @@ async function check(scenario, boot) {
   // The stub (and the demo) have played weeks 1-3; `live-december` has played
   // all thirteen. W0 is the column of the first PRICED week.
   const PAST = pastCount(table);
-  const W0 = 4 + PAST;
+  const W0 = 5 + PAST;
   const wantPast = scenario === 'live-december' ? 13 : 3;
-  c.ok(`the weeks fully over (1-${wantPast}) are columns, straight after Avg`,
+  c.ok(`the weeks fully over (1-${wantPast}) are columns, straight after Avg and Gain`,
     PAST === wantPast &&
-    JSON.stringify(head.slice(4, W0)) === JSON.stringify(Array.from({ length: wantPast }, (_, i) => String(i + 1))),
+    JSON.stringify(head.slice(5, W0)) === JSON.stringify(Array.from({ length: wantPast }, (_, i) => String(i + 1))),
     JSON.stringify(head));
   {
     const ths = [...table.querySelectorAll('thead th')];
@@ -858,12 +968,95 @@ async function check(scenario, boot) {
   }
 
   // ---- the shape the owner asked for --------------------------------------
-  c.ok('identity columns are Player, Pos, Tm and Avg',
-    JSON.stringify(head.slice(0, 4)) === JSON.stringify(['Player', 'Pos', 'Tm', 'Avg']),
+  c.ok('identity columns are Player, Pos, Tm, Avg and Gain',
+    JSON.stringify(head.slice(0, 5)) === JSON.stringify(['Player', 'Pos', 'Tm', 'Avg', 'Gain']),
     JSON.stringify(head));
   // A playoff week's header carries its label: "14PO (playoffs)", "15 (playoffs)".
   c.ok('nothing but weeks after them',
-    head.slice(4).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)) && head.length > 4, JSON.stringify(head));
+    head.slice(5).every((h) => /^\d+(PO)?( \(playoffs\))?$/.test(h)) && head.length > 5, JSON.stringify(head));
+
+  // ---- Gain -----------------------------------------------------------------
+  // EVERY scenario: no Gain cell is left on its dot (the fill finished), no
+  // "Your …" row carries one, and a figure is always a positive number that
+  // opens its preview — a dash never sorts as a value.
+  {
+    const g = gainSnap(d);
+    const fa = g.cells.filter((x) => !x.mine);
+    c.ok('GAIN: the column is there, sortable, with a one-sentence title',
+      g.col === 4 && g.sortable && /\.$/.test(g.title) && !/\. /.test(g.title), `${g.col} ${g.title}`);
+    c.ok('GAIN: no cell is left waiting', g.cells.every((x) => !x.wait),
+      `${g.cells.filter((x) => x.wait).length} waiting`);
+    c.ok('GAIN: a "Your …" row has no gain — he is not a man you can add',
+      g.cells.filter((x) => x.mine).every((x) => x.text === '' && x.v === null),
+      JSON.stringify(g.cells.filter((x) => x.mine).slice(0, 2)));
+    const bad = fa.filter((x) => (x.v === null
+      ? x.text !== '—' || x.opens
+      : !(Number(x.v) > 0) || !x.opens || !/^\+\d+\.\d$/.test(x.text) ||
+        Math.abs(Number(x.text) - Number(x.v)) > 0.051));
+    c.ok('GAIN: a figure is a signed per-week number that opens its preview; no gain is a dash with no sort key',
+      bad.length === 0, JSON.stringify(bad.slice(0, 3)));
+  }
+
+  if (scenario === 'gain' || scenario === 'gain-noteam') {
+    const all = globalThis.__wvGain || {};
+    const w = scenario === 'gain' ? all : (all.picked || {});
+    if (scenario === 'gain-noteam') {
+      const none = all.none || { cells: [] };
+      c.ok('NO TEAM: every Gain cell is a dash',
+        none.cells.length > 20 && none.cells.every((x) => x.text === '—' && x.v === null && !x.opens),
+        JSON.stringify(none.cells.slice(0, 3)));
+      c.ok('NO TEAM: the title says to pick a team', /^Pick your team above/.test(none.title), none.title);
+      c.ok('NO TEAM: the explanation does not describe a column that is empty',
+        !/Gain is what adding him/.test(none.note), none.note.slice(0, 200));
+      c.ok('PICKING A TEAM fills the column and costs no request',
+        all.spentBefore > 0 && all.spentAfter === all.spentBefore, `${all.spentBefore} -> ${all.spentAfter}`);
+    }
+    const first = w.first || { cells: [] };
+    const nums = (snap) => (snap ? snap.cells.filter((x) => !x.mine).map((x) => (x.v === null ? null : Number(x.v))) : []);
+    const some = nums(first).filter((v) => v !== null).length;
+    c.ok('somebody on the wire would raise the lineup, and somebody would not',
+      some > 0 && some < nums(first).length, `${some} of ${nums(first).length}`);
+    c.ok('the title names the weeks it is priced over',
+      /^Points a week your best lineup gains over weeks? \d+/.test(first.title), first.title);
+    c.ok('the explanation behind the toggle says what Gain is, and over which weeks',
+      /Gain is what adding him is worth to your own lineup/.test(first.note) &&
+      /over weeks? \d+/.test(first.note), first.note.slice(0, 300));
+    const dsc = ordered(nums(w.desc), false);
+    const asc = ordered(nums(w.asc), true);
+    c.ok('SORT: Gain descending is in order, the dashes last',
+      some > 0 && dsc.monotonic && dsc.nullsLast && dsc.n === some && nums(w.desc)[0] !== null,
+      JSON.stringify(nums(w.desc).slice(0, 8)));
+    c.ok('SORT: ascending is in order, the dashes STILL last',
+      some > 0 && asc.monotonic && asc.nullsLast && asc.n === some && nums(w.asc)[0] !== null,
+      JSON.stringify(nums(w.asc).slice(0, 8)));
+    c.ok('SORT: the two orders differ unless every figure is the same',
+      some > 0 && (new Set(nums(w.desc).filter((v) => v !== null)).size < 2 ||
+        JSON.stringify(nums(w.desc)) !== JSON.stringify(nums(w.asc))), '');
+
+    // THE PREVIEW: "Drop <player>", one row a week, and the arithmetic closes —
+    // each row's + is With him − Now, the rows sum to Total, and Total over the
+    // weeks is the figure in the cell.
+    const pop = w.pop || { rows: [], foot: [] };
+    const n = (s) => Number(String(s).replace('+', '').replace('−', '-'));
+    c.ok('PREVIEW: a click on the figure opens it', pop.open === true, JSON.stringify(pop).slice(0, 200));
+    c.ok('PREVIEW: it names the man the move drops', /^Drop \S+/.test(pop.drop || ''), pop.drop);
+    c.ok('PREVIEW: columns are Wk, Now, With him, +',
+      JSON.stringify(pop.cols) === JSON.stringify(['Wk', 'Now', 'With him', '+']), JSON.stringify(pop.cols));
+    c.ok('PREVIEW: one row per priced week, and each + is With him − Now',
+      pop.rows.length > 0 && pop.rows.every((r) => Math.abs(n(r[2]) - n(r[1]) - n(r[3])) < 0.051),
+      JSON.stringify(pop.rows));
+    const total = pop.foot[0] ? n(pop.foot[0][3]) : NaN;
+    const sum = pop.rows.reduce((a, r) => a + n(r[3]), 0);
+    c.ok('PREVIEW: the rows sum to Total', Math.abs(sum - total) < 0.001, `${sum} vs ${total}`);
+    c.ok('PREVIEW: Total over the weeks is the figure in the cell',
+      pop.rows.length > 0 && `+${(total / pop.rows.length).toFixed(1)}` === w.cell &&
+      pop.foot[1] && pop.foot[1][1] === w.cell,
+      `${total} / ${pop.rows.length} vs ${w.cell} ${JSON.stringify(pop.foot)}`);
+    c.ok('PREVIEW: it has a Close button for a finger, and Escape shuts it',
+      pop.close === 'Close' && w.shut === true, `${pop.close} ${w.shut}`);
+    c.ok('the figure is a labelled button, not a hover-only title',
+      /where this gain comes from/.test(w.label || ''), w.label);
+  }
   const defaultSpan = scenario !== 'live-midload';
   if (defaultSpan) {
     c.ok('one column per week still to price, three of them by default',
@@ -880,7 +1073,8 @@ async function check(scenario, boot) {
 
   // `trend` rosters one man per position, and a group of one has nothing to be
   // coloured against — the scale is not what that scenario is about.
-  if (scenario !== 'trend') checkHeat(c, d, scenario, note);
+  // (`gain-noteam` is the same stub league.)
+  if (scenario !== 'trend' && scenario !== 'gain-noteam') checkHeat(c, d, scenario, note);
 
   // ---- (a) demo ------------------------------------------------------------
   if (scenario === 'demo') {
@@ -1574,7 +1768,7 @@ async function check(scenario, boot) {
       note.slice(-900));
     c.ok('and the Taken table’s explanation says it too',
       /re-scored with your league’s rules/.test(txt($('takenNote'))), txt($('takenNote')).slice(-600));
-  } else if (scenario !== 'live-empty') {
+  } else if (scenario !== 'live-empty' && scenario !== 'gain-noteam') {
     // Every other scenario is stub ids or the invented demo: nobody is in the
     // preseason copy, so there must be no arrow and no key for one.
     c.ok('no preseason arrow for a man the copy has never heard of',
