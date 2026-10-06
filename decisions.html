@@ -104,6 +104,57 @@
 .dz-teams td.dz-team { width: 100%; white-space: normal; }
 .dz-teams td.dz-team .wk-live { white-space: nowrap; }
 
+/* WHERE A DIFFERENCE COMES FROM (js/decisions-page.js, "where a difference
+ * comes from"). A week's Diff, a team's Points/wk and the biggest-swap line
+ * each open what they are made of: a card beside the number for a mouse, a
+ * sheet at the foot of the screen for a finger - the Stats page's .opp-pop,
+ * copied. The dotted line under a number is what says it opens. */
+.dz-why { cursor: help; border-radius: 3px; text-decoration: underline dotted var(--line-2); text-underline-offset: 3px; }
+.dz-why:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dz-big {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  margin: 0 0 12px; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: var(--r-2); background: transparent;
+  text-align: left; font-size: 13.5px; font-weight: 400; line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.dz-big .k { flex: 0 0 auto; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); }
+.dz-big .dz-big-what { flex: 1 1 auto; min-width: 0; }
+.dz-big .dz-big-d { flex: 0 0 auto; font-weight: 600; }
+/* Where the line must wrap on a phone it breaks at the arrow, never inside a man. */
+.dz-big .dz-man { white-space: nowrap; }
+.dz-big .pv, .dz-pop .pv { color: var(--dim); }
+/* No swap to name: the line keeps its room, so the table does not move. */
+.dz-big.is-empty { visibility: hidden; }
+.dz-big .d-up, .dz-pop .d-up { color: var(--accent); }
+.dz-big .d-down, .dz-pop .d-down { color: var(--err); }
+.dz-big .d-zero, .dz-pop .d-zero { color: var(--dim); }
+/* A man still playing counts for his projection: drawn apart, as in Season by week. */
+.dz-big .dz-proj, .dz-pop .dz-proj { font-style: italic; opacity: 0.7; }
+.dz-pop {
+  position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.dz-pop[hidden] { display: none; }
+.dz-pop .op-h { font-weight: 650; margin-bottom: 6px; }
+.dz-pop .op-h .wk-live { margin-left: 5px; }
+.dz-pop table { width: 100%; border-collapse: collapse; }
+.dz-pop th { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.dz-pop th, .dz-pop td { padding: 3px 6px; }
+.dz-pop .num { text-align: right; white-space: nowrap; }
+.dz-pop .name { text-align: left; }
+.dz-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
+.dz-pop tfoot td { color: var(--dim); }
+.dz-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
+.dz-pop .op-close { display: none; }
+.dz-pop.sheet {
+  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
+  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
+}
+.dz-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+
 /* CURRENT BESIDE HYPOTHETICAL - where both halves fit (Tim, 2026-10-06: "no
  * horezontal scrolling"). Three pairs, three widths:
  *
@@ -151,6 +202,9 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   .dz-whatif .form-select { width: 100%; }
   .dz-weeks th, .dz-weeks td { padding-left: 5px; padding-right: 5px; }
   .dz-weeks td.dz-vs { max-width: 72px; }
+  /* "Points/wk" is a longer heading than "Points" was: a pixel off each side
+   * of the one-row-a-team table's cells keeps it inside the panel. */
+  .dz-weeks.dz-teams th, .dz-weeks.dz-teams td { padding-left: 4px; padding-right: 4px; }
   /* A week still being played has the LIVE tag beside its number. The
    * opponent's name gives up the room for it, so the table still fits. */
   .dz-weeks:has(.wk-live) td.dz-vs { max-width: 0; width: 100%; }
@@ -264,6 +318,9 @@ div.panel-note > p:last-child { margin-bottom: 0; }
       <h2>What would have happened</h2>
       <p class="lede" id="resultLede"></p>
       <div class="stat-row" id="resultStats"></div>
+      <!-- The biggest swap of the picked decision, said without hovering. A
+           button: it opens that week's preview, as the week's own Diff does. -->
+      <button type="button" class="dz-big is-empty" id="resultBig" data-why="week" disabled></button>
       <!-- Every heading sorts, as on every other table of the site
            (js/sortable.js). The Total row is a body of its own: a body of one
            row is never sorted, which is what keeps it at the bottom. -->
@@ -274,7 +331,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           <th data-sort title="Who the team played that week.">Vs</th>
           <th data-sort title="What the team really scored.">Actual</th>
           <th data-sort title="What it would have scored.">Hypothetical</th>
-          <th data-sort title="Hypothetical minus actual.">Diff</th>
+          <th data-sort title="Hypothetical minus actual. Each one opens the players behind it.">Diff</th>
           <th data-sort title="The matchup&rsquo;s result. An arrow marks one that would have flipped.">Result</th>
         </tr></thead>
         <tbody></tbody>
@@ -287,7 +344,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           <th data-sort title="The team&rsquo;s real record.">Actual</th>
           <th data-sort title="Its record with every lineup set this way.">Hypothetical</th>
           <th data-sort title="Hypothetical minus actual.">Record</th>
-          <th data-sort title="Season points, hypothetical minus actual.">Points</th>
+          <th data-sort title="Points a week, hypothetical minus actual. Each one opens its weeks.">Points/wk</th>
         </tr></thead>
         <tbody></tbody>
       </table>

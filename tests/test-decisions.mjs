@@ -689,5 +689,82 @@ eq(TEAMS.map((t) => row(qAll, t)), [[35, 35, 0], [61, 61, 0], [57, 61, 4], [56, 
 eq([qAll.pending.length, recs(qAll)], [2, ['3-0 / 3-0', '2-1 / 1-2', '1-2 / 1-2', '0-3 / 1-2']], 'both week-4 games are pending, in neither record');
 eq(JSON.stringify([world.games, world.moves, [...world.rosters], [...world.players]]), frozen, 'nor does any of this alter the closed world');
 
+// ---- where a week's difference comes from ------------------------------------
+// Tim, 2026-10-06: "it's really hard to know where that data is coming from or
+// the specifics on when the user started someone with less points". weekSwaps
+// reads one team-week of a mirror and names the men behind its difference:
+// who really started and does not now, who starts instead, and the points
+// between them — the hand numbers of the sections above, man by man.
+const noSwaps = () => ({ rows: [{}], sum: NaN, diff: NaN, rest: NaN });
+const swaps = (c) => (D.weekSwaps || noSwaps)(c);
+const told = (c) => swaps(c).rows.map((r) => [r.slot, r.out ? `${r.out.name} ${r.out.points}` : null, r.in ? `${r.in.name} ${r.in.points}` : null, r.diff]);
+const adds = (c) => { const w = swaps(c); return [w.sum, w.diff, w.rest]; };
+// Reasonable, Mitch's week 2 (63 -> 49): Lock's 26 out, Mayfield's 12 in.
+eq([told(cell(mr2, MITCH, 2)), adds(cell(mr2, MITCH, 2))], [[['QB', 'Drew Lock 26', 'Baker Mayfield 12', -14]], [-14, -14, 0]],
+  'weekSwaps, reasonable week 2: the one swap, with each man’s points, is the whole −14');
+// Perfect, Mitch's week 1 (57 -> 60): Stroud's 20 for Mayfield's 17.
+eq(told(cell(D.mirror(world, p1), MITCH, 1)), [['QB', 'Baker Mayfield 17', 'CJ Stroud 20', 3]], 'perfect week 1: +3');
+// m5 undone, week 3: Tim plays Chase (8) for Cook (21), Dee the reverse.
+eq([told(cell(m5, TIM, 3)), told(cell(m5, DEE, 3))],
+  [[['FLEX', 'James Cook III 21', 'Ja\'Marr Chase 8', -13]], [['FLEX', 'Ja\'Marr Chase 8', 'James Cook III 21', 13]]],
+  'a trade undone: each side’s swap is the other’s, turned round');
+// The what-if, Tim's week 2: Chase (22) leaves, Diggs shifts to WR and Gibbs
+// (12) takes the FLEX. One man out and one in: they pair though no slot or
+// position matches, and the row is called by the slot the real starter held.
+eq([told(cell(wi, TIM, 2)), adds(cell(wi, TIM, 2))], [[['WR', 'Ja\'Marr Chase 22', 'Jahmyr Gibbs 12', -10]], [-10, -10, 0]],
+  'a starter shifted to fill a slot is not a swap: only the man out and the man in are named');
+// Cal's week 2 in that what-if, on its booked 57.5 (its starters add to 57):
+// Hot (6) for Gibbs (12) at RB, Chase (22) for Hall (8) in the FLEX: +8 -> 65.5.
+eq([told(cell(wi, CAL, 2)), adds(cell(wi, CAL, 2))],
+  [[['RB', 'Jahmyr Gibbs 12', 'Hal Hot 6', -6], ['FLEX', 'Breece Hall 8', 'Ja\'Marr Chase 22', 14]], [8, 8, 0]],
+  'two swaps pair slot by slot, and add up to the difference of a booked score that is not its starters’ sum');
+eq([swaps(cell(m5, MITCH, 3)), swaps(null)], [{ rows: [], sum: 0, diff: 0, rest: 0 }, { rows: [], sum: 0, diff: 0, rest: 0 }],
+  'an unchanged team-week, or none at all, has no swaps');
+// THE WEEK IN PLAY (P2): Lock, still playing, starts for Young (20) at his
+// projection, 18 — and the row says his number is not yet known.
+const lockRow = swaps(cell(pm2, TIM, 4)).rows[0] || {};
+eq([told(cell(pm2, TIM, 4)), lockRow.in && lockRow.in.known, lockRow.out && lockRow.out.known], [[['QB', 'Bryce Young 20', 'Drew Lock 18', -2]], false, true],
+  'in the week in play a man still playing counts his projection, and is marked not known');
+// Pairing, on made-up cells. A real FLEX back and a real RB go out; a back comes
+// in at RB and a receiver in the FLEX: the SLOT decides, before the position.
+const man = (playerId, position, slot, slotId, actual) => ({ playerId, name: `P${playerId}`, position, slot, slotId, actual });
+const kept = man(1, 'QB', 'QB', 0, 20);
+const paired = swaps({
+  realTotal: 40, total: 50.5,
+  realStarters: [kept, man(2, 'RB', 'FLEX', 23, 5), man(3, 'RB', 'RB', 2, 15)],
+  starters: [kept, man(4, 'RB', 'RB', 2, 18), man(5, 'WR', 'FLEX', 23, 12)],
+});
+eq(paired.rows.map((r) => [r.slot, r.out.name, r.in.name, r.diff]), [['FLEX', 'P2', 'P5', 7], ['RB', 'P3', 'P4', 3]], 'pairs are made by slot first');
+// That cell's totals differ by 10.5, its swaps by 10: the half point is owned up to.
+eq([paired.sum, paired.diff, paired.rest], [10, 10.5, 0.5], 'swaps that do not add up to the difference say by how much');
+// No slot in common: position next. And a lineup one man longer leaves him unpaired.
+const loose = swaps({
+  realTotal: 20, total: 37,
+  realStarters: [man(2, 'RB', 'RB', 2, 5), man(3, 'WR', 'WR', 4, 15)],
+  starters: [man(6, 'WR', 'FLEX', 23, 9), man(7, 'RB', 'FLEX', 23, 11), man(8, 'TE', 'TE', 6, 17)],
+});
+eq(loose.rows.map((r) => [r.slot, r.out && r.out.name, r.in && r.in.name, r.diff]),
+  [['RB', 'P2', 'P7', 6], ['WR', 'P3', 'P6', -6], ['TE', null, 'P8', 17]], 'then by position, and a man with no partner has a row of his own');
+eq([loose.sum, loose.rest], [17, 0], 'which still adds up');
+// EVERY decision of every team, in the closed world and the three in play: the
+// swaps of every team-week are exactly its difference, and name only real changes.
+let weeksRead = 0;
+const wrong = [];
+for (const [name, w] of [['closed', world], ['P', P], ['P2', P2], ['Q', Q], ['T', T]]) {
+  const every = [whatIf, ...TEAMS.flatMap((t) => D.listDecisions(w, t)),
+    ...['lineup-reasonable', 'lineup-perfect'].map((k) => D.lineupDecision(w, k, D.ALL_TEAMS))];
+  for (const d of every) {
+    const m = D.mirror(w, d);
+    for (const t of TEAMS) for (const wk of WEEKS) {
+      const c = cell(m, t, wk);
+      const s = swaps(c);
+      weeksRead++;
+      const want = Math.round((c.total - c.realTotal) * 100) / 100;
+      if (s.rest !== 0 || s.sum !== want || s.diff !== want || (s.rows.length > 0) !== Boolean(c.changed) && want !== 0) wrong.push([name, d.id || d.kind, t, wk, s.sum, want]);
+    }
+  }
+}
+ok(weeksRead > 500 && wrong.length === 0, `the swaps add up to the difference in every team-week of every decision (${weeksRead} read)`, JSON.stringify(wrong.slice(0, 5)));
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
