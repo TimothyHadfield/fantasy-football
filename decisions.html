@@ -88,7 +88,8 @@
 .dz-chip::after { content: ' \00D7'; color: var(--dim); }
 
 /* THE BIGGEST THING: one row a finished week, and it must fit a phone with no
- * sideways scroll - so it is not in a .table-scroll and its cells are tight. */
+ * sideways scroll - so its cells are tight. It sits in a .table-scroll like
+ * every other table on the site; here that only ever scrolls down. */
 .dz-weeks th:nth-child(-n+2), .dz-weeks td:first-child, .dz-weeks td.dz-vs { text-align: left; }
 .dz-weeks td.dz-vs { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 .dz-weeks td.dz-flip { font-weight: 700; }
@@ -103,9 +104,24 @@
 .dz-teams td.dz-team { width: 100%; white-space: normal; }
 .dz-teams td.dz-team .wk-live { white-space: nowrap; }
 
-/* CURRENT BESIDE HYPOTHETICAL. Each half scrolls inside itself. */
+/* CURRENT BESIDE HYPOTHETICAL - where both halves fit (Tim, 2026-10-06: "no
+ * horezontal scrolling"). Three pairs, three widths:
+ *
+ *   the chart          five columns: always side by side on a laptop.
+ *   .dz-stack          Standings is the Stats page's table, eighteen columns,
+ *                      and needs the whole panel: Current above, the other
+ *                      below, each in the site's own bleeding .table-scroll.
+ *   .dz-fit            Season by week grows a column a week. Two equal halves
+ *                      while the wider table fits a half, one above the other
+ *                      from the week it does not. `--dz-need` is that table's
+ *                      width, measured by the page each time it draws one. */
 .dz-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .dz-pair > * { min-width: 0; }
+.dz-pair.dz-stack { grid-template-columns: minmax(0, 1fr); }
+.dz-pair.dz-stack .table-scroll { margin: 0 calc(-1 * var(--pad-panel)); padding: 0 var(--pad-panel); }
+@media (min-width: 901px) {
+  .dz-pair.dz-fit { grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--dz-need, 320px)), 1fr)); }
+}
 .dz-head { display: flex; align-items: center; min-height: 34px; }
 .dz-head .sbw-title { margin: 0; }
 .dz-head .sbw-view button { padding: 5px 12px; font-size: 12.5px; }
@@ -120,6 +136,9 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 @media (max-width: 900px) {
   .dz-main, .dz-pair { grid-template-columns: minmax(0, 1fr); }
   .dz-main { gap: 12px; margin-bottom: 12px; }
+  /* One above the other, so each table has the panel to itself and bleeds to
+     its edge as the same table does on Stats, Summary and Analysis. */
+  .dz-pair .table-scroll { margin: 0 calc(-1 * var(--pad-panel)); padding: 0 var(--pad-panel); }
 }
 @media (max-width: 760px) {
   /* The picker on the left, the two switches one above the other beside it:
@@ -135,6 +154,11 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   /* A week still being played has the LIVE tag beside its number. The
    * opponent's name gives up the room for it, so the table still fits. */
   .dz-weeks:has(.wk-live) td.dz-vs { max-width: 0; width: 100%; }
+  /* THE CHART is five columns and 42px too wide for a phone at the site's
+   * cell padding. Tighter cells, and the name takes what the four numbers
+   * leave (app.css already ends a long name in an ellipsis at this width). */
+  #panelSummary .summary-table th, #panelSummary .summary-table td { padding-left: 4px; padding-right: 4px; }
+  #panelSummary .summary-table td.name, #panelSummary .summary-table th.name { max-width: 0; width: 100%; }
   #resultStats { gap: 18px; }
 }
 </style>
@@ -240,14 +264,18 @@ div.panel-note > p:last-child { margin-bottom: 0; }
       <h2>What would have happened</h2>
       <p class="lede" id="resultLede"></p>
       <div class="stat-row" id="resultStats"></div>
+      <!-- Every heading sorts, as on every other table of the site
+           (js/sortable.js). The Total row is a body of its own: a body of one
+           row is never sorted, which is what keeps it at the bottom. -->
+      <div class="table-scroll">
       <table class="dz-weeks" id="weekTable">
         <thead><tr>
-          <th title="The finished week.">Wk</th>
-          <th title="Who the team played that week.">Vs</th>
-          <th title="What the team really scored.">Actual</th>
-          <th title="What it would have scored.">Hypothetical</th>
-          <th title="Hypothetical minus actual.">Diff</th>
-          <th title="The matchup&rsquo;s result. An arrow marks one that would have flipped.">Result</th>
+          <th data-sort title="The finished week.">Wk</th>
+          <th data-sort title="Who the team played that week.">Vs</th>
+          <th data-sort title="What the team really scored.">Actual</th>
+          <th data-sort title="What it would have scored.">Hypothetical</th>
+          <th data-sort title="Hypothetical minus actual.">Diff</th>
+          <th data-sort title="The matchup&rsquo;s result. An arrow marks one that would have flipped.">Result</th>
         </tr></thead>
         <tbody></tbody>
         <tbody class="dz-total"></tbody>
@@ -255,14 +283,15 @@ div.panel-note > p:last-child { margin-bottom: 0; }
       <!-- ALL USERS: one row a team instead of one row a week. -->
       <table class="dz-weeks dz-teams" id="teamTable" hidden>
         <thead><tr>
-          <th title="In the Standings order.">Team</th>
-          <th title="The team&rsquo;s real record.">Actual</th>
-          <th title="Its record with every lineup set this way.">Hypothetical</th>
-          <th title="Hypothetical minus actual.">Record</th>
-          <th title="Season points, hypothetical minus actual.">Points</th>
+          <th data-sort title="In the Standings order.">Team</th>
+          <th data-sort title="The team&rsquo;s real record.">Actual</th>
+          <th data-sort title="Its record with every lineup set this way.">Hypothetical</th>
+          <th data-sort title="Hypothetical minus actual.">Record</th>
+          <th data-sort title="Season points, hypothetical minus actual.">Points</th>
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
       <details class="explain">
         <summary>How this works</summary>
         <div class="panel-note" id="resultNote">
@@ -284,7 +313,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         <select id="seasonTeam"></select>
       </div>
     </div>
-    <div class="dz-pair">
+    <div class="dz-pair dz-fit">
       <div>
         <div class="dz-head"><div class="sbw-title">Current</div></div>
         <div class="sbw"><div class="table-scroll sbw-scroll" id="seasonCur"></div></div>
@@ -298,7 +327,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 
   <section class="panel" id="panelStandings">
     <h2>Standings &amp; season totals</h2>
-    <div class="dz-pair">
+    <div class="dz-pair dz-stack">
       <div>
         <div class="dz-head"><div class="sbw-title">Current</div></div>
         <div class="sbw"><div class="table-scroll sbw-scroll" id="standingsCur"></div></div>

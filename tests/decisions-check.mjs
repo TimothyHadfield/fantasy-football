@@ -387,6 +387,117 @@ const CHILDREN = {
     return out;
   },
 
+  /**
+   * SORTING AND LAYOUT (Tim, 2026-10-06: "fix the decisions section so the
+   * formating and function of the graphs matches with the rest of the cite
+   * (especially column sorting and no horezontal scrolling)"). One reader
+   * clicking headings: each fact is what a table shows right after a step.
+   */
+  async sort() {
+    const p = await bootPage();
+    const out = { settled: await p.settle() };
+    const tableOf = (id) => { const el = p.$(id); return el.tagName === 'TABLE' ? el : el.querySelector('table'); };
+    // The LAST heading row carries the labels (Standings has a group band above).
+    const headRow = (id) => { const rows = tableOf(id).querySelectorAll('thead tr'); return [...rows[rows.length - 1].children]; };
+    const sortOn = (id, i) => p.click(headRow(id)[i]);
+    /** A table's rows, top to bottom: the name, and column `i`'s sort value and words. */
+    const col = (id, i) => [...tableOf(id).querySelectorAll('tbody tr')].map((tr) => ({
+      name: text(tr.children[0]),
+      v: tr.children[i] && tr.children[i].hasAttribute('data-v') ? Number(tr.children[i].getAttribute('data-v')) : null,
+      t: text(tr.children[i]),
+    }));
+    const arrow = (id) => {
+      const h = headRow(id);
+      const i = h.findIndex((th) => th.classList.contains('sorted'));
+      return i < 0 ? null : [i, h[i].classList.contains('asc') ? 'asc' : 'desc'];
+    };
+    const pair = (box, i) => ({
+      cur: col(`${box}Cur`, i), hyp: col(`${box}Hyp`, i),
+      arrows: [arrow(`${box}Cur`), arrow(`${box}Hyp`)],
+      diff: tableOf(`${box}Hyp`).getAttribute('data-view') === 'diff',
+    });
+    const own = (id, i) => ({ rows: col(id, i), arrow: arrow(id) });
+
+    // ---- what is wired, and what each table sits in
+    const sortable = (id) => headRow(id).map((th) => th.classList.contains('sortable') && th.hasAttribute('data-sort'));
+    out.wired = Object.fromEntries(['weekTable', 'teamTable', 'standingsCur', 'standingsHyp', 'summaryCur', 'summaryHyp', 'seasonCur', 'seasonHyp']
+      .map((id) => [id, sortable(id)]));
+    out.wraps = Object.fromEntries(['weekTable', 'teamTable', 'standingsCur', 'standingsHyp', 'summaryCur', 'summaryHyp', 'seasonCur', 'seasonHyp']
+      .map((id) => [id, Boolean(tableOf(id).closest('.table-scroll'))]));
+    const pairOf = (id) => p.$(id).closest('.dz-pair').className;
+    out.pairs = { season: pairOf('seasonCur'), standings: pairOf('standingsCur'), summary: pairOf('summaryCur') };
+    out.before = { standings: pair('standings', 4), summary: pair('summary', 2), week: own('weekTable', 4) };
+
+    // ---- Standings: Current's Total (column 4), twice; then the switch
+    await p.pick('lineup-perfect:1:all');
+    sortOn('standingsCur', 4);
+    out.curTotal = pair('standings', 4);
+    sortOn('standingsCur', 4);
+    out.curTotalAsc = pair('standings', 4);
+    await p.view('standings', 'diff');
+    out.curTotalDiff = pair('standings', 4);
+    // ---- now the OTHER table leads: the difference's own Total
+    sortOn('standingsHyp', 4);
+    out.hypTotal = pair('standings', 4);
+    // ---- and it survives another decision, another team and the noise switch
+    await p.pick('move:mv-adddrop');
+    out.hypTotalMoved = pair('standings', 4);
+
+    // ---- the chart: LUCK (column 2) on Current, kept while the simulation runs
+    sortOn('summaryCur', 2);
+    out.luck = pair('summary', 2);
+    p.click(p.row('lineup-reasonable:1:all'));
+    out.luckWaiting = { ...pair('summary', 2), dots: /…/.test(text(p.$('summaryCur')) + text(p.$('summaryHyp'))) };
+    await p.settle();
+    out.luckDone = pair('summary', 2);
+    await p.view('summary', 'diff');
+    sortOn('summaryHyp', 3);
+    out.titleDiff = pair('summary', 3);
+    p.$('noiseSwitch').checked = true;
+    p.fire(p.$('noiseSwitch'), 'change');
+    await p.settle();
+    out.titleNoise = pair('summary', 3);
+    p.$('noiseSwitch').checked = false;
+    p.fire(p.$('noiseSwitch'), 'change');
+    await p.settle();
+
+    // ---- one row a week: Diff (4), then Result (5), then another decision
+    await p.pick('lineup-perfect:1:all');
+    sortOn('weekTable', 4);
+    out.weekDiff = own('weekTable', 4);
+    sortOn('weekTable', 4);
+    out.weekDiffAsc = own('weekTable', 4);
+    await p.pick('move:mv-adddrop');
+    out.weekDiffMoved = own('weekTable', 4);
+    sortOn('weekTable', 5);
+    out.weekResult = own('weekTable', 5);
+    sortOn('weekTable', 0);
+    out.weekWk = own('weekTable', 0);
+    p.choose(p.$('teamSelect'), 7);
+    await p.settle();
+    out.weekTeam7 = own('weekTable', 0);
+    out.standingsTeam7 = pair('standings', 4);
+    sortOn('weekTable', 5);
+    out.weekTeam7Result = own('weekTable', 5);
+
+    // ---- All users: one row a team
+    p.$('allSwitch').checked = true;
+    p.fire(p.$('allSwitch'), 'change');
+    await p.settle();
+    out.teamsBefore = own('teamTable', 4);
+    sortOn('teamTable', 4);
+    out.teamsPoints = own('teamTable', 4);
+    await p.pick('lineup-perfect:all:all');
+    out.teamsPointsMoved = own('teamTable', 4);
+    sortOn('teamTable', 1);
+    out.teamsActual = own('teamTable', 1);
+    sortOn('teamTable', 0);
+    out.teamsName = own('teamTable', 0);
+    out.allStandings = pair('standings', 4);
+    out.errors = p.errors;
+    return out;
+  },
+
   /** A fresh page on some prefs, looked at and no more (DZ_PREFS). */
   async plain() {
     const p = await bootPage(JSON.parse(process.env.DZ_PREFS || '{}'));
@@ -490,6 +601,8 @@ const RUNS = {
   all: { child: 'all', env: {} },
   'all-early': { child: 'all', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
   plain: { child: 'plain', env: {} },
+  sort: { child: 'sort', env: {} },
+  'sort-early': { child: 'sort', env: { CAP_EARLY: '1' } },
 };
 
 function child(name, extra = {}) {
@@ -1009,6 +1122,104 @@ if (booted(liveAll, 'all users, week in play')) {
     [rowOf(on.all.rows, 'Manager 7live'), liveAll.seven.stats, liveAll.sevenPerfect.stats]);
   ok('Season by week still marks week 4 live', same(on.tags.season, [['4live'], ['4live']]) && on.season.cur.length === 5, on.tags.season);
   ok('off again: squad 1’s list, the two lineups live', same(liveAll.off.list.map((r) => r.id), MINE) && same(liveAll.off.tags.list, LIVE_ROWS), liveAll.off.tags.list);
+}
+
+// ---- sorting and layout: every table sorts, a pair sorts together
+//
+// Tim, 2026-10-06: "fix the decisions section so the formating and function of
+// the graphs matches with the rest of the cite (especially column sorting and
+// no horezontal scrolling)". Run twice: three finished weeks, and with a week
+// in play (a result still "In play", a dash, a live tag beside a name).
+const namesOf = (rows) => rows.map((r) => r.name);
+/** Top to bottom in `dir` on the sort value, with the unknowns (no value) last. */
+const inOrder = (rows, dir) => {
+  const known = rows.filter((r) => r.v !== null);
+  return known.length > 1 && rows.slice(0, known.length).every((r) => r.v !== null) &&
+    known.every((r, i) => i === 0 || (dir === 'desc' ? known[i - 1].v >= r.v : known[i - 1].v <= r.v));
+};
+/** A pair in step: the same teams on the same lines, the same arrow on both. */
+const inStep = (p, i, dir) => same(namesOf(p.cur), namesOf(p.hyp)) && same(p.arrows, [[i, dir], [i, dir]]);
+/** One row a week: the weeks in `dir`, and the Total row still the last one. */
+const weeksInOrder = (t, i, dir) => inOrder(t.rows.slice(0, -1), dir) && t.rows[t.rows.length - 1].name === 'Total' && same(t.arrow, [i, dir]);
+
+for (const run of ['sort', 'sort-early']) {
+  const s = child(run);
+  if (!booted(s, run)) continue;
+  const SORTING = ['weekTable', 'teamTable', 'standingsCur', 'standingsHyp', 'summaryCur', 'summaryHyp'];
+  ok('every heading of every table sorts — the two the page owns, and both halves of Standings and the chart',
+    SORTING.every((id) => s.wired[id].length > 0 && s.wired[id].every(Boolean)), s.wired);
+  ok('Season by week does not: its rows are lineup slots, as on Analysis',
+    s.wired.seasonCur.every((x) => x === false) && s.wired.seasonHyp.every((x) => x === false), s.wired);
+  ok('every table sits in the site’s .table-scroll', Object.values(s.wraps).every(Boolean), s.wraps);
+  ok('Standings is one above the other, Season by week side by side while it fits, the chart side by side',
+    /\bdz-stack\b/.test(s.pairs.standings) && /\bdz-fit\b/.test(s.pairs.season) && s.pairs.summary === 'dz-pair', s.pairs);
+  ok('nothing is sorted until a heading is clicked: the page’s own order, as before',
+    same(s.before.standings.arrows, [null, null]) && same(s.before.summary.arrows, [null, null]) && s.before.week.arrow === null &&
+    same(namesOf(s.before.standings.cur), namesOf(s.before.standings.hyp)), s.before.standings.arrows);
+
+  // Standings: Current leads
+  ok('a click on Current’s Total sorts it, high first', inOrder(s.curTotal.cur, 'desc') &&
+    !same(namesOf(s.curTotal.cur), namesOf(s.before.standings.cur)), namesOf(s.curTotal.cur));
+  ok('and Hypothetical is in the same order with the same arrow', inStep(s.curTotal, 4, 'desc'), [namesOf(s.curTotal.hyp), s.curTotal.arrows]);
+  ok('a second click turns both over', inOrder(s.curTotalAsc.cur, 'asc') && inStep(s.curTotalAsc, 4, 'asc'), s.curTotalAsc.arrows);
+  ok('the switch to Difference keeps Current’s order and both arrows', s.curTotalDiff.diff && inStep(s.curTotalDiff, 4, 'asc') &&
+    same(namesOf(s.curTotalDiff.cur), namesOf(s.curTotalAsc.cur)), [namesOf(s.curTotalDiff.hyp), s.curTotalDiff.arrows]);
+  // …and then the other one does
+  ok('a click on Difference’s Total sorts THAT table by its own numbers', inOrder(s.hypTotal.hyp, 'desc'), s.hypTotal.hyp.map((r) => r.v));
+  ok('and Current follows it, arrow and all', inStep(s.hypTotal, 4, 'desc'), [namesOf(s.hypTotal.cur), s.hypTotal.arrows]);
+  ok('another decision: still the difference’s order, on both', inOrder(s.hypTotalMoved.hyp, 'desc') && inStep(s.hypTotalMoved, 4, 'desc') &&
+    s.hypTotalMoved.diff, [s.hypTotalMoved.hyp.map((r) => r.v), s.hypTotalMoved.arrows]);
+  ok('another team: the same', inOrder(s.standingsTeam7.hyp, 'desc') && inStep(s.standingsTeam7, 4, 'desc'), s.standingsTeam7.arrows);
+  ok('All users: the same', inOrder(s.allStandings.hyp, 'desc') && inStep(s.allStandings, 4, 'desc'), s.allStandings.arrows);
+
+  // The chart
+  ok('the chart: Current’s LUCK sorts both halves', inOrder(s.luck.cur, 'desc') && inStep(s.luck, 2, 'desc') &&
+    !same(namesOf(s.luck.cur), namesOf(s.before.summary.cur)), [namesOf(s.luck.cur), s.luck.arrows]);
+  ok('it holds while the seasons are being simulated', s.luckWaiting.dots && inOrder(s.luckWaiting.cur, 'desc') && inStep(s.luckWaiting, 2, 'desc'),
+    [s.luckWaiting.dots, s.luckWaiting.arrows]);
+  ok('and when they land', inOrder(s.luckDone.cur, 'desc') && inStep(s.luckDone, 2, 'desc'), s.luckDone.arrows);
+  ok('Difference’s Title % leads when it is the one clicked', s.titleDiff.diff && inOrder(s.titleDiff.hyp, 'desc') && inStep(s.titleDiff, 3, 'desc'),
+    [s.titleDiff.hyp.map((r) => r.v), s.titleDiff.arrows]);
+  ok('Display noise redraws both and moves nobody, level teams included',
+    same(namesOf(s.titleNoise.cur), namesOf(s.titleDiff.cur)) && inStep(s.titleNoise, 3, 'desc'), [namesOf(s.titleDiff.cur), namesOf(s.titleNoise.cur)]);
+
+  // One row a week
+  ok('the weekly table sorts on Diff, and Total stays at the bottom', weeksInOrder(s.weekDiff, 4, 'desc'), s.weekDiff);
+  ok('a second click turns the weeks over, not the Total', weeksInOrder(s.weekDiffAsc, 4, 'asc'), s.weekDiffAsc);
+  ok('another decision keeps the column and the direction', weeksInOrder(s.weekDiffMoved, 4, 'asc'), s.weekDiffMoved);
+  ok('Result sorts as a result, not as its letters', weeksInOrder(s.weekResult, 5, 'desc'), s.weekResult);
+  ok('Wk sorts as a number, live tag or not', weeksInOrder(s.weekWk, 0, 'desc') &&
+    same(s.weekWk.rows.slice(0, -1).map((r) => r.v), s.weekWk.rows.slice(0, -1).map((r) => r.v).sort((a, b) => b - a)), s.weekWk);
+  ok('another team keeps it', weeksInOrder(s.weekTeam7, 0, 'desc'), s.weekTeam7);
+
+  // One row a team
+  ok('All users opens in the Standings order, unsorted', s.teamsBefore.arrow === null && s.teamsBefore.rows.length === 10, s.teamsBefore.arrow);
+  ok('its Points column sorts', inOrder(s.teamsPoints.rows, 'desc') && same(s.teamsPoints.arrow, [4, 'desc']), s.teamsPoints);
+  ok('the other lineup choice keeps the column', inOrder(s.teamsPointsMoved.rows, 'desc') && same(s.teamsPointsMoved.arrow, [4, 'desc']) &&
+    !same(s.teamsPointsMoved.rows.map((r) => r.v), s.teamsPoints.rows.map((r) => r.v)), s.teamsPointsMoved);
+  ok('a record sorts as a record', inOrder(s.teamsActual.rows, 'desc') && same(s.teamsActual.arrow, [1, 'desc']), s.teamsActual);
+  const bare = s.teamsName.rows.map((r) => r.name.replace(/live$/, '').toLowerCase());
+  ok('a name sorts as the name, without its live tag', same(bare, [...bare].sort((a, b) => b.localeCompare(a))) && same(s.teamsName.arrow, [0, 'desc']), bare);
+
+  if (run === 'sort') {
+    // The stub's own numbers, so "in order" above cannot be a table of blanks.
+    ok('squad 1’s hindsight: the difference leads with its +33.9, and Current did NOT sort itself',
+      s.hypTotal.hyp[0].name === 'Manager 1' && s.hypTotal.hyp[0].v === 33.9 && s.hypTotal.cur[0].name === 'Manager 1' &&
+      !inOrder(s.hypTotal.cur, 'desc'), s.hypTotal.cur);
+    ok('Current led before that: the difference’s +33.9 sat mid-table', s.curTotalDiff.hyp.findIndex((r) => r.v === 33.9) === 2 &&
+      !inOrder(s.curTotalDiff.hyp, 'asc'), s.curTotalDiff.hyp.map((r) => r.v));
+    ok('the add+drop’s weeks by Result: the tie that became a win, the win, the loss',
+      same(s.weekResult.rows.map((r) => [r.name, r.t]).slice(0, 3), [['2', 'T → W'], ['1', 'W'], ['3', 'L']]) &&
+      s.weekResult.rows[3].name === 'Total', s.weekResult.rows);
+    ok('records, best first: 3-0, 3-0, 2-1, 1-1-1 …',
+      same(s.teamsActual.rows.slice(0, 4).map((r) => [r.name, r.t]), [['Manager 4', '3-0'], ['Manager 6', '3-0'], ['Manager 10', '2-1'], ['Manager 1', '1-1-1']]),
+      s.teamsActual.rows.slice(0, 4));
+  } else {
+    // Squad 7's week 4 is still being played: no result in both worlds yet.
+    const r7 = s.weekTeam7Result.rows;
+    ok('a matchup still in play sorts under every result, over the Total', r7.length === 5 && r7[3].t === 'In play' &&
+      r7[4].name === 'Total' && weeksInOrder(s.weekTeam7Result, 5, 'desc'), r7);
+  }
 }
 
 // ---- the world cannot be read
