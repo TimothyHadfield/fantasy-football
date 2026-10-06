@@ -34,6 +34,7 @@
 import * as capture from './capture.js';
 import { heatScale, heatOf, heatMarkHtml } from './heat.js';
 import { esc, signedText, diffOf, diffClass, recordDiff, dimOf, dimStyle } from './view-switch.js';
+import { closeLuckOf } from './stats.js';
 
 export { esc };
 
@@ -183,25 +184,32 @@ const W_LUCK = 'how far the rest of the league is beating its projection';
 // -------------------------------------------------------------------- the rows
 
 /** The current (or hypothetical) cells of one team, name first. */
-function teamCells(t, { scales, recordOf, oppProj }) {
+function teamCells(t, { scales, recordOf, oppProj, explain }) {
   const { none, ghosts } = scales;
+  // No finished game of his own yet: every result column is a dash.
+  const off = none || unplayed(t);
+  // THE HOOK FOR A PREVIEW OF A CELL'S PARTS (`explain`, off unless a page asks
+  // for it): the five cells `standingsExplain` can account for name their
+  // figure and their team, and take focus. Only a cell that prints a number
+  // gets it, and such a cell never also carries a `title` — one preview a cell.
+  const ex = (key) => (explain && !off && t[key] !== null && t[key] !== undefined
+    ? ` data-explain="${key}" data-team="${esc(t.id)}" tabindex="0"`
+    : '');
   // SHOWN FROM WEEK 1, WITH A MARGIN: each luck figure carries a ± (one
   // standard error — see attachLuckMargins in stats.js) that is huge after one
   // game and narrows every week.
-  const luck = (v, m) => {
+  const luck = (v, m, key) => {
     if (none || v === null || v === undefined) return `<td>${dash}</td>`;
     const pm = m === null || m === undefined ? '' : `<span class="pm">±${Math.round(m)}</span>`;
-    return `<td data-v="${v}">${signed(v)}${pm}</td>`;
+    return `<td data-v="${v}"${ex(key)}>${signed(v)}${pm}</td>`;
   };
   const rank = (v) => (none || v === null ? dash : `<span class="rank">${v}</span>`);
   const num = (v) => (none ? dash : fmt(v));
   const sgn = (v) => (none ? dash : signed(v));
 
-  // No finished game of his own yet: every result column is a dash.
-  const off = none || unplayed(t);
   const n = (v) => (off ? dash : num(v));
   const g = (v) => (off ? dash : sgn(v));
-  const lk = (v, m) => (off ? `<td>${dash}</td>` : luck(v, m));
+  const lk = (key) => (off ? `<td>${dash}</td>` : luck(t[key], t.margins && t.margins[key], key));
   // LS, PS and AS wait for everybody: stats.js ranks all ten at once, and a
   // team with no game would be ranked on an average of nothing.
   const rk = (v) => (off || ghosts ? dash : rank(v));
@@ -221,11 +229,11 @@ function teamCells(t, { scales, recordOf, oppProj }) {
     `<td>${n(t.actualStdev)}</td>`,
     o ? heatCell(o.avgOpp, scales.oppProj, { what: W_OPP_PROJ, extra: `data-v="${o.avgOpp}"` }) : `<td>${dash}</td>`,
     heatCell(off ? null : t.avgLuck, scales.luckWk, { what: W_LUCK, text: g(t.avgLuck) }),
-    `<td>${n(t.pointsToWin)}</td>`,
-    lk(t.scoreDiffLuck, t.margins && t.margins.scoreDiffLuck),
-    lk(t.luckScore, t.margins && t.margins.luckScore),
-    `<td>${g(t.skill)}</td>`,
-    lk(t.skillPlusLuck, t.margins && t.margins.skillPlusLuck),
+    `<td${ex('pointsToWin')}>${n(t.pointsToWin)}</td>`,
+    lk('scoreDiffLuck'),
+    lk('luckScore'),
+    `<td${ex('skill')}>${g(t.skill)}</td>`,
+    lk('skillPlusLuck'),
     `<td>${rk(t.luckStanding)}</td>`,
     `<td>${rk(t.projectedStanding)}</td>`,
     `<td>${rk(t.actualStanding)}</td>`,
@@ -301,11 +309,15 @@ function teamDiffCells(t, c, { scales, base, oppProj, diffOppProj }) {
  * @param {Map<*, {avgOpp:number}>|null} [o.diffOppProj] `diffFrom`'s `oppProj`
  * @param {Map<*, number>|Object|null} [o.dim] team id -> noise 0..1; that
  *        team's cells (not its name) are drawn at opacity 1 − 0.65 × noise
+ * @param {boolean} [o.explain] mark the PTW, Close luck, Luck score, Skill and
+ *        S+L cells of the current view with `data-explain` (the figure),
+ *        `data-team` and a tab stop, for a page that opens `standingsExplain`
+ *        on them. Off by default: without it not a byte of the rows differs.
  * @returns {string} `<tr>`s, for a `<tbody>`
  */
 export function standingsRowsHtml(stats, {
   highlightId = null, recordOf = bankedRecord, oppProj = null, scales = null,
-  diffFrom = null, diffOppProj = null, dim = null,
+  diffFrom = null, diffOppProj = null, dim = null, explain = false,
 } = {}) {
   const sc = scales || standingsScales(stats, { oppProj });
   const base = diffFrom ? standingsScales(diffFrom, { oppProj: diffOppProj }) : null;
@@ -315,7 +327,7 @@ export function standingsRowsHtml(stats, {
     .map((t) => {
       const cells = diffFrom
         ? teamDiffCells(t, before.get(t.id) || null, { scales: sc, base, oppProj, diffOppProj })
-        : teamCells(t, { scales: sc, recordOf, oppProj });
+        : teamCells(t, { scales: sc, recordOf, oppProj, explain });
       const style = dimStyle(dimOf(dim, t.id));
       const drawn = style ? cells.map((c, i) => (i ? c.replace(/^<td/, `<td${style}`) : c)) : cells;
       return `
@@ -324,6 +336,81 @@ export function standingsRowsHtml(stats, {
       </tr>`;
     })
     .join('');
+}
+
+// ------------------------------------------------- what a season cell is made of
+//
+// Tim, 2026-10-05, of the weekly Luck cell: "If the user hovers over this number
+// however, you can show them a preview of each of the three numbers". The five
+// season cells that are FORMED from other figures get the same: short rows, a
+// label and a number each, that add up to the cell.
+//
+// THE ROWS ADD UP TO THE PRINTED CELL, TO THE LAST DIGIT. Each row prints a
+// number the table (or the glance row above it) already shows, rounded as it is
+// shown there, and three or four rounded numbers do not always sum to the
+// rounded total — so when they miss, by a tenth, the miss is its own "Rounding"
+// row rather than a figure quietly nudged to fit. Close luck is an average, not
+// a sum: its rows are the games, and it is their average that meets the cell.
+
+/** The figures `standingsExplain` accounts for, by their key on a team. */
+export const EXPLAINED = ['pointsToWin', 'scoreDiffLuck', 'luckScore', 'skill', 'skillPlusLuck'];
+
+const tenth = (v) => Math.round(v * 10) / 10;
+const inTenths = (v) => Math.round(v * 10);
+
+/**
+ * The parts of one season cell.
+ *
+ * @param {Object} stats a `computeLeagueStats` result
+ * @param {Object} team one of `stats.teams`
+ * @param {string} key one of `EXPLAINED`
+ * @returns {{label:string, mean:boolean,
+ *            rows:Array<{label:string, value:number, signed:boolean}>,
+ *            foot:{label:string, value:number, signed:boolean}}|null}
+ *          `value` is the number each row PRINTS (a tenth). With `mean` the
+ *          rows average to `foot.value`; otherwise they sum to it. Null when
+ *          the cell is a dash.
+ */
+export function standingsExplain(stats, team, key) {
+  // `parts` is null only when no projection was read for the team, and then
+  // every figure below but Close luck is null too and has returned already.
+  const p = team && team.parts;
+  if (!team ||!team.weekly.length || team[key] === null || team[key] === undefined) return null;
+  const h = standingsHeadings(stats);
+  const oneWeek = stats.weekNumbers.length === 1;
+  const row = (label, value, isSigned = true) => ({ label, value: tenth(value) + 0, signed: isSigned });
+  const made = (label, rows, footSigned = true, mean = false) => {
+    const foot = row(label, team[key], footSigned);
+    const total = rows.reduce((a, r) => a + inTenths(r.value), 0);
+    const miss = inTenths(foot.value) - (mean ? Math.round(total / rows.length) : total);
+    return { label, mean, rows: miss ? [...rows, row('Rounding', miss / 10)] : rows, foot };
+  };
+
+  if (key === 'luckScore') {
+    return made('Luck score', [
+      row(oneWeek ? `Week ${stats.weekNumbers[0]} avg` : 'League avg', p.league, false),
+      row(h.oppAvg, -tenth(p.opp)),
+      row('Luck/wk', p.luck),
+      row('Close luck', p.close),
+    ]);
+  }
+  if (key === 'pointsToWin') {
+    return made('PTW', [row(h.oppAvg, p.opp, false), row('Luck/wk', -tenth(p.luck))], false);
+  }
+  if (key === 'skill') {
+    return made('Skill', [
+      row('Proj', p.proj, false),
+      row(oneWeek ? 'Projected' : 'Avg projected', -tenth(p.leagueProj)),
+    ]);
+  }
+  if (key === 'skillPlusLuck') {
+    return made('S+L', [row('Skill', team.skill), row('Luck score', team.luckScore)]);
+  }
+  if (key === 'scoreDiffLuck') {
+    // A tie is 0 and a game, as in the average (`closeLuckOf`).
+    return made('Close luck', team.weekly.map((w) => row(`Wk ${w.week}`, closeLuckOf(w))), true, true);
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- the headings

@@ -129,7 +129,21 @@ export const closeLuckOf = (row) => row.gameLuck ?? 0;
  * and every season figure built on them — Luck/wk, PTW, the Luck score, S+L —
  * was then an average of rounded numbers: a tenth off what the scores on the
  * page give by hand. Rounding is for the cell that prints the number.
+ *
+ * A GAME WHOSE PROJECTIONS COULD NOT BE READ (2026-10-06). js/season.js hands
+ * on every decided game, and one from a week whose lineups ESPN would not
+ * return carries projection 0 on both sides. That is "none", not a forecast of
+ * nothing: set against it, a 120-point week was 120 points of luck. So for
+ * such a game `projected`, `oppProjected`, `luck`, `oppLuck` and
+ * `projectedDiff` are null, and everything built on them — `readRows` below —
+ * leaves the game out. Its score, margin, result and close-game figure need no
+ * projection and are whole.
  */
+const projectionRead = (side) => side.projected > 0 && side.oppProjected > 0;
+
+/** The rows of a team's season whose projections were read: what luck is formed from. */
+const readRows = (weekly) => weekly.filter((w) => w.luck !== null);
+
 function buildWeeklyRows(data) {
   const rows = new Map(); // teamId -> array of weekly rows
   for (const t of data.teams) rows.set(t.id, []);
@@ -143,17 +157,18 @@ function buildWeeklyRows(data) {
     ];
 
     for (const side of pair) {
+      const read = projectionRead(side);
       rows.get(side.id).push({
         week: g.week,
         actual: side.actual,
-        projected: side.projected,
-        luck: side.actual - side.projected,
+        projected: read ? side.projected : null,
+        luck: read ? side.actual - side.projected : null,
         oppId: side.oppId,
         oppActual: side.oppActual,
-        oppProjected: side.oppProjected,
-        oppLuck: side.oppActual - side.oppProjected,
+        oppProjected: read ? side.oppProjected : null,
+        oppLuck: read ? side.oppActual - side.oppProjected : null,
         actualDiff: side.actual - side.oppActual,
-        projectedDiff: side.projected - side.oppProjected,
+        projectedDiff: read ? side.projected - side.oppProjected : null,
         // CONFIRMED: the sheet's third Score Differential column.
         gameLuck: gameLuck(side.actual - side.oppActual),
         won: side.actual > side.oppActual,
@@ -181,12 +196,16 @@ function buildWeeklyRows(data) {
  * week's — or the weeks would not add up to it. A tied game has no close-game
  * figure of its own (`close: null`, so a hover can say "tie") and counts 0
  * towards the total — `closeLuckOf`, the one rule the Luck score uses too.
+ *
+ * A week whose projections could not be read has no Act−Proj part and so no
+ * total (both null); the Luck score leaves the same week out, so the weeks
+ * that do have a total still average to it.
  */
 export function weekLuckParts(row, leagueAvgActual) {
-  const proj = row.actual - row.projected;
+  const proj = row.luck === null ? null : row.actual - row.projected;
   const opp = leagueAvgActual - row.oppActual;
   const close = row.gameLuck;
-  return { proj, opp, close, total: proj + opp + closeLuckOf(row) };
+  return { proj, opp, close, total: proj === null ? null : proj + opp + closeLuckOf(row) };
 }
 
 /** The unrounded league average score over every team-week played. */
@@ -225,7 +244,9 @@ function cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual) {
   let luckTotal = 0;
   let closeTotal = 0;
 
-  weekly.forEach((w, i) => {
+  // Only the weeks luck can be formed for: a week with no projection adds no
+  // point to the line rather than a false one.
+  readRows(weekly).forEach((w, i) => {
     oppTotal += w.oppActual;
     luckTotal += w.luck;
     closeTotal += closeLuckOf(w);
@@ -243,9 +264,21 @@ function cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual) {
 
 function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulativeLeagueAvgActual) {
   const actuals = weekly.map((w) => w.actual);
-  const projecteds = weekly.map((w) => w.projected);
   const oppActuals = weekly.map((w) => w.oppActual);
-  const oppProjecteds = weekly.map((w) => w.oppProjected);
+
+  // WHAT NEEDS A PROJECTION IS FORMED FROM THE GAMES THAT HAVE ONE (`readRows`):
+  // Proj, Luck/wk, PTW, the Luck score, Skill and S+L. With every week read
+  // that is the whole season and nothing differs. `blind` is a team that has
+  // played and has no such game at all: those figures are then null — a dash —
+  // never an average of nothing. (A team with no game yet keeps the zeros it
+  // always had; the page dashes it by its empty `weekly`.)
+  const read = readRows(weekly);
+  const blind = weekly.length > 0 && !read.length;
+  const orNull = (v) => (blind ? null : v);
+  const projecteds = read.map((w) => w.projected);
+  const oppProjecteds = read.map((w) => w.oppProjected);
+  const avgLuck = mean(read.map((w) => w.luck));
+  const readOppAvg = mean(read.map((w) => w.oppActual));
 
   const pointsFor = sum(actuals);
   const pointsAgainst = sum(oppActuals);
@@ -254,20 +287,24 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
   // CONFIRMED: PTW = opponent avg actual - own avg luck. Recovered verbatim
   // from the sheet as `=AU3-AR3`. It reads as "the score you would have needed
   // to beat your average opponent, once your own luck is taken back out".
-  const pointsToWin = mean(oppActuals) - mean(weekly.map((w) => w.luck));
+  const pointsToWin = orNull(readOppAvg - avgLuck);
 
   // CONFIRMED: SD averages the per-game luck figure over the season. A tied
   // game is 0 and still a game (`closeLuckOf`) rather than poisoning the
   // average — the sheet shows #DIV/0! for Miles, who had one. Null only when
-  // no game has been decided at all.
+  // no game has been decided at all. It needs no projection, so it counts
+  // every game; the Luck score below takes its close-game part from the games
+  // it is itself formed from, which is the same number whenever all were read.
   const decided = weekly.some((w) => w.gameLuck !== null);
   const scoreDiffLuck = decided ? mean(weekly.map(closeLuckOf)) : null;
+  const readClose = read.some((w) => w.gameLuck !== null) ? mean(read.map(closeLuckOf)) : null;
 
   // CONFIRMED: `=121.8-(AX3-AY3)`, i.e. leagueAvgActual - (PTW - SD). This is
   // the standings LUCK column, and it equals the final cumulative-luck value.
-  const luckScore = leagueAvgActual - (pointsToWin - (scoreDiffLuck ?? 0));
-  const skill = mean(projecteds) - leagueAvgProjected;
+  const luckScore = orNull(leagueAvgActual - (pointsToWin - (readClose ?? 0)));
+  const skill = orNull(mean(projecteds) - leagueAvgProjected);
   const actualStdev = stdev(actuals);
+  const r1 = (v) => (v === null ? null : round1(v));
 
   return {
     id: team.id,
@@ -276,17 +313,17 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
 
     // Averages and totals — CONFIRMED against the sheet's Avg/Total columns.
     avgActual: round1(mean(actuals)),
-    avgProjected: round1(mean(projecteds)),
-    avgLuck: round1(mean(weekly.map((w) => w.luck))),
+    avgProjected: r1(orNull(mean(projecteds))),
+    avgLuck: r1(orNull(avgLuck)),
     // One decimal, like ESPN's own "PF" (1845.6, not 1846). The whole-number
     // version tied 128.66 with 129.02 and put them in the wrong order.
     totalActual: round1(pointsFor),
-    totalProjected: Math.round(sum(projecteds)),
+    totalProjected: blind ? null : Math.round(sum(projecteds)),
 
     // Opponent block — CONFIRMED.
     oppAvgActual: round1(mean(oppActuals)),
-    oppAvgProjected: round1(mean(oppProjecteds)),
-    oppAvgLuck: round1(mean(weekly.map((w) => w.oppLuck))),
+    oppAvgProjected: r1(orNull(mean(oppProjecteds))),
+    oppAvgLuck: r1(orNull(mean(read.map((w) => w.oppLuck)))),
 
     // CONFIRMED: the sheet's "F-A" is per-week average, not the season total.
     // (Autumn: (1467 - 1530) / 13 = -4.8, shown as -5.)
@@ -299,7 +336,7 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
 
     // CONFIRMED: skill = own avg projected - league avg projected.
     // Verified on all ten teams in the 2025 sheet.
-    skill: round1(skill),
+    skill: r1(skill),
 
     wins: weekly.filter((w) => w.won).length,
     losses: weekly.filter((w) => !w.won && !w.tied).length,
@@ -312,16 +349,30 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
     actualStdev: actualStdev === null ? null : round1(actualStdev),
 
     // --- Recovered from the sheet's xlsx on 2026-09-08. See PROGRESS.md. ---
-    pointsToWin: round1(pointsToWin),                       // "PTW"
+    pointsToWin: r1(pointsToWin),                           // "PTW"
     scoreDiffLuck: scoreDiffLuck === null ? null : round1(scoreDiffLuck), // "SD"
-    luckScore: round1(luckScore),                           // "LUCK"
+    luckScore: r1(luckScore),                               // "LUCK"
     cumulativeLuck: cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual),
-    skillPlusLuck: round1(skill + luckScore),               // "S+L"
+    skillPlusLuck: r1(orNull(skill + luckScore)),           // "S+L"
 
     // Unrounded copies. Everything above is rounded for display, but two teams
     // can sit thousandths apart in S+L — Stevenson and Mitch did in 2025 — and
     // ranking the rounded values would swap them. Standings sort on these.
-    exact: { skill, luckScore, skillPlusLuck: skill + luckScore, pointsToWin, pointsFor },
+    exact: { skill, luckScore, skillPlusLuck: orNull(skill + luckScore), pointsToWin, pointsFor },
+
+    // WHAT THE LUCK FIGURES ARE FORMED FROM, unrounded, for the page's preview
+    // of a season cell: Luck score = league − opp + luck + close, PTW = opp −
+    // luck, Skill = proj − leagueProj. `opp` and `close` are over the games the
+    // Luck score counts, so they are the Opp Avg and Close luck columns
+    // whenever every week's projections were read. Null for a `blind` team.
+    parts: blind ? null : {
+      league: leagueAvgActual,
+      opp: readOppAvg,
+      luck: avgLuck,
+      close: readClose ?? 0,
+      proj: mean(projecteds),
+      leagueProj: leagueAvgProjected,
+    },
   };
 }
 
@@ -354,8 +405,13 @@ export function predictionAccuracy(games, thresholds = [0, 5, 10, 15, 20, 25, 30
   // A game where both teams carry the same projection makes no prediction at
   // all, so it can be neither right nor wrong. Those are excluded from every
   // bucket and counted separately rather than being quietly dropped.
-  const predictive = games.filter((g) => g.homeProjected !== g.awayProjected);
-  const ties = games.length - predictive.length;
+  //
+  // A game whose projections could not be read (0 on a side — see
+  // `buildWeeklyRows`) made no prediction either, and is not a "tie" between
+  // two projections: it is in no bucket and not in that count.
+  const read = games.filter((g) => g.homeProjected > 0 && g.awayProjected > 0);
+  const predictive = read.filter((g) => g.homeProjected !== g.awayProjected);
+  const ties = read.length - predictive.length;
 
   const buckets = thresholds.map((t) => {
     const relevant = predictive.filter(
@@ -488,16 +544,18 @@ export function scoreDistribution(allScores, binSize = 10) {
  * in whatever order ESPN happened to list the teams: a full ordinal standings
  * table derived from nothing. When nothing separates the teams the rank is
  * null, and the page shows a dash.
+ *
+ * A team with no value (null — no game of its own had a projection) has no
+ * rank, and the others are ranked among themselves.
  */
 function rankBy(teams, valueFn, descending = true) {
   const ranks = new Map();
-  const values = teams.map(valueFn);
-  if (values.every((v) => v === values[0])) {
-    for (const t of teams) ranks.set(t.id, null);
-    return ranks;
-  }
+  for (const t of teams) ranks.set(t.id, null);
+  const known = teams.filter((t) => valueFn(t) !== null);
+  const values = known.map(valueFn);
+  if (values.every((v) => v === values[0])) return ranks;
 
-  const ordered = [...teams].sort((a, b) => {
+  const ordered = [...known].sort((a, b) => {
     const d = valueFn(b) - valueFn(a);
     return descending ? d : -d;
   });
@@ -529,6 +587,9 @@ function rankBy(teams, valueFn, descending = true) {
  * games settles on is inside it. A tie counts 0 towards gameLuck and is a game
  * in the count, exactly as in the values (`closeLuckOf`). Null when the league
  * has too few games to have a spread (`stdev` needs two).
+ *
+ * A game whose projections could not be read is in Close luck's terms and
+ * count and in neither of the other two, as in the values.
  */
 function attachLuckMargins(teams) {
   const closeTerms = [];
@@ -538,6 +599,7 @@ function attachLuckMargins(teams) {
     for (const w of t.weekly) {
       const gl = closeLuckOf(w);
       closeTerms.push(gl);
+      if (w.luck === null) continue;
       const luckTerm = gl - (w.oppActual - w.luck);
       luckTerms.push(luckTerm);
       plusTerms.push(luckTerm + w.projected);
@@ -550,10 +612,11 @@ function attachLuckMargins(teams) {
 
   for (const t of teams) {
     const games = t.weekly.length;
+    const read = readRows(t.weekly).length;
     t.margins = {
       scoreDiffLuck: se(sdClose, games),
-      luckScore: se(sdLuck, games),
-      skillPlusLuck: se(sdPlus, games),
+      luckScore: se(sdLuck, read),
+      skillPlusLuck: se(sdPlus, read),
       games,
     };
   }
@@ -568,9 +631,10 @@ export function computeLeagueStats(data) {
   const weeklyRows = buildWeeklyRows(data);
 
   // League average projected score — needed before per-team skill can be found.
+  // Over the team-weeks that have a projection (`readRows`), as Skill is.
   const allProjected = [];
   for (const rows of weeklyRows.values()) {
-    for (const r of rows) allProjected.push(r.projected);
+    for (const r of readRows(rows)) allProjected.push(r.projected);
   }
   const leagueAvgProjected = mean(allProjected);
 
@@ -621,17 +685,25 @@ export function computeLeagueStats(data) {
   const weeklyLeagueAverages = weekNumbers.map((week) => {
     const scores = [];
     const projs = [];
+    const projScores = [];   // the scores of the teams that have a projection
     for (const rows of weeklyRows.values()) {
       const r = rows.find((x) => x.week === week);
-      if (r) { scores.push(r.actual); projs.push(r.projected); }
+      if (!r) continue;
+      scores.push(r.actual);
+      if (r.luck !== null) { projs.push(r.projected); projScores.push(r.actual); }
     }
+    // A week whose projections could not be read has a score and no more.
     return {
       week,
       avgActual: round1(mean(scores)),
-      avgProjected: round1(mean(projs)),
-      avgLuck: round1(mean(scores) - mean(projs)),
+      avgProjected: projs.length ? round1(mean(projs)) : null,
+      avgLuck: projs.length ? round1(mean(projScores) - mean(projs)) : null,
     };
   });
+
+  // Games were played and not one projection was read: there is no league
+  // projection to print (a dash), where before a game it stays the 0 it was.
+  const noProjection = allActuals.length > 0 && !allProjected.length;
 
   return {
     season: data.season,
@@ -641,7 +713,7 @@ export function computeLeagueStats(data) {
     teams,
     weekNumbers,
     weeklyLeagueAverages,
-    leagueAvgProjected: round1(leagueAvgProjected),
+    leagueAvgProjected: noProjection ? null : round1(leagueAvgProjected),
     leagueAvgActual: round1(leagueAvgActual),
     predictionAccuracy: predictionAccuracy(data.games),
     distribution10: scoreDistribution(allActuals, 10),

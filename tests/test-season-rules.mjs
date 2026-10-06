@@ -553,8 +553,67 @@ const SCENARIOS = {
     }, { three: true, failWeek: 3 });
     await until(() => /Loaded/.test(document.getElementById('sourceStatus')?.textContent || ''));
     const status = (document.getElementById('sourceStatus')?.textContent || '').replace(/\s+/g, ' ');
-    ok('the status says projections are missing for two of the six games',
-      /Loaded 6 games/.test(status) && /projections for 4 of them/.test(status), status);
+    // WHICH week, in the page's own gap wording, and that luck leaves it out
+    // (2026-10-06; it used to say the luck figures "will be wrong").
+    eq(status, 'Loaded 6 games from Rules League. Incomplete: week 3 projections missing — luck leaves it out.',
+      'the status names the week whose projections are missing');
+    ok('"Incomplete:" is marked up as on the rest of the page',
+      /<strong>Incomplete:<\/strong>/.test(document.getElementById('sourceStatus').innerHTML));
+
+    // WEEK 3 IS NOT IN ANY LUCK NUMBER. Its games have no projection, so
+    // "actual minus projected" there would be the whole score. Expected values
+    // are worked out here from the games, over weeks 1–2 only.
+    const season = await import(moduleUrl('js/season.js'));
+    const d = await season.fetchSeasonData();
+    const sides = d.games.flatMap((g) => [
+      { id: g.homeId, week: g.week, act: g.homeActual, proj: g.homeProjected },
+      { id: g.awayId, week: g.week, act: g.awayActual, proj: g.awayProjected },
+    ]);
+    const one = (v) => (v > 0 ? '+' : '') + (Math.round(v * 10) / 10).toFixed(1);
+    const heads = Array.from(document.querySelectorAll('#mainTable thead tr')).pop();
+    const col = (label) => Array.from(heads.children).findIndex((th) => th.textContent.trim() === label);
+    const main = Array.from(document.querySelectorAll('#mainTable tbody tr'));
+    const cell = (tr, label) => tr.children[col(label)].textContent.replace(/[▲▼]/g, '').trim();
+    const luckWk = {};
+    const wantLuckWk = {};
+    for (const t of d.teams) {
+      const read = sides.filter((s) => s.id === t.id && s.week < 3);
+      wantLuckWk[t.name] = one(read.reduce((a, s) => a + s.act - s.proj, 0) / read.length);
+      const tr = main.find((r) => r.children[0].textContent.trim() === t.name);
+      luckWk[t.name] = cell(tr, 'Luck/wk');
+    }
+    eq(luckWk, wantLuckWk, 'Luck/wk is the average over the two weeks that have a projection');
+    ok('every team still has a Luck score and a Skill', main.every((tr) =>
+      /^[+-]?\d/.test(cell(tr, 'Luck score')) && /^[+-]?\d/.test(cell(tr, 'Skill'))),
+      main.map((tr) => `${cell(tr, 'Luck score')}/${cell(tr, 'Skill')}`).join(' '));
+
+    // Week by week: a dash in week 3 for the measures formed from a projection,
+    // the score itself still there, and the Avg column over weeks 1–2.
+    const weekly = (metric) => {
+      document.querySelector(`#weeklyMetric button[data-metric="${metric}"]`)
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      return Array.from(document.querySelectorAll('#weeklyTable tbody tr'))
+        .map((tr) => Array.from(tr.children).map((c) => c.textContent.replace(/[▲▼]/g, '').trim()))
+        .filter((r) => d.teams.some((t) => t.name === r[0]));
+    };
+    for (const metric of ['luck', 'luckProj', 'projected']) {
+      const rows = weekly(metric);
+      ok(`week 3 is a dash for every team (${metric})`, rows.length === 4 && rows.every((r) => r[3] === '—'),
+        rows.map((r) => r.join(' ')).join(' | '));
+      ok(`weeks 1–2 are numbers (${metric})`, rows.every((r) => /\d/.test(r[1]) && /\d/.test(r[2])),
+        rows.map((r) => r.join(' ')).join(' | '));
+    }
+    const proj = weekly('luckProj');
+    const whole = (v) => (v > 0 ? '+' : '') + String(Math.round(v));
+    for (const t of d.teams) {
+      const read = sides.filter((s) => s.id === t.id && s.week < 3);
+      const want = read.reduce((a, s) => a + s.act - s.proj, 0) / read.length;
+      const row = proj.find((r) => r[0] === t.name);
+      eq(row[row.length - 1].replace('−', '-'), whole(want).replace('+0', '0').replace(/^-0$/, '0'),
+        `${t.name}: the Avg of Act − Proj skips week 3`);
+    }
+    ok('the scores of week 3 are still shown', weekly('actual').every((r) => /^\d+$/.test(r[3])),
+      weekly('actual').map((r) => r[3]).join(' '));
     const rows = Array.from(document.querySelectorAll('#mainTable tbody tr')).map((tr) => ({
       name: tr.children[0].textContent.trim(),
       rec: tr.children[1].textContent.trim(),
@@ -569,6 +628,27 @@ const SCENARIOS = {
     ok('the page text was read', text.length > 500, text.length);
     ok('nothing on the page reads NaN or undefined', !/NaN|undefined/.test(text),
       (text.match(/.{0,40}(NaN|undefined).{0,40}/s) || [''])[0]);
+    // Nor in what a hover would read out, nor as a "-0".
+    const markup = document.body.innerHTML.replace(/<script[\s\S]*?<\/script>/g, '');
+    ok('nor does its markup', !/NaN|undefined/.test(markup), (markup.match(/.{0,60}(NaN|undefined).{0,60}/s) || [''])[0]);
+    ok('and no figure is a minus zero', !/(^|[\s>(])[-−]0(\.0+)?(?![\d.])/.test(text),
+      (text.match(/.{0,40}[\s>(][-−]0(\.0+)?(?![\d.]).{0,40}/s) || [''])[0]);
+  },
+
+  // The same gap on Summary, which reads the luck figures off js/stats.js.
+  async 'summary-gap'() {
+    const { document } = await bootPage('summary.html', 'js/summary-page.js', {
+      'ff.prefs': JSON.stringify({ 'summary.source': 'live' }),
+    }, { three: true, failWeek: 3 });
+    await until(() => /Live/.test(document.getElementById('modeBadge')?.textContent || ''));
+    await new Promise((r) => setTimeout(r, 2500));
+    const text = (document.body.textContent || '').replace(/\s+/g, ' ');
+    ok('the page went live and has its text', /Live/.test(document.getElementById('modeBadge')?.textContent || '') && text.length > 500,
+      `${document.getElementById('modeBadge')?.textContent} / ${document.getElementById('sourceStatus')?.textContent}`);
+    ok('nothing on Summary reads NaN or undefined', !/NaN|undefined/.test(text),
+      (text.match(/.{0,40}(NaN|undefined).{0,40}/) || [''])[0]);
+    ok('and no figure is a minus zero', !/(^|[\s(])[-−]0(\.0+)?(?![\d.])/.test(text),
+      (text.match(/.{0,40}[\s(][-−]0(\.0+)?(?![\d.]).{0,40}/) || [''])[0]);
   },
 };
 

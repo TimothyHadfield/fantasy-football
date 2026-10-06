@@ -32,7 +32,8 @@ import { computeLeagueStats } from '../js/stats.js';
 import * as capture from '../js/capture.js';
 import { slotRows } from '../js/lineup-slots.js';
 import {
-  standingsRowsHtml, standingsTableHtml, standingsScales, signed as standingsSigned,
+  standingsRowsHtml, standingsTableHtml, standingsScales, standingsExplain, EXPLAINED,
+  signed as standingsSigned,
 } from '../js/standings-table.js';
 import { summaryRowsHtml, summaryTableHtml, signed as summarySigned } from '../js/summary-table.js';
 import { actualSeasonTableHtml, weeksFromMirror, shortName } from '../js/actual-season-table.js';
@@ -316,6 +317,72 @@ const oppProj = new Map(real.teams.map((t) => [t.id, { avgOpp: 100 }]));
 }
 ok(standingsScales(real).avg && standingsScales(real).opp.invert !== standingsScales(real).avg.invert,
   'standings: the opponent scale is turned over');
+
+// (e) explain: the Stats page asks for the hook that opens a cell's parts; a
+// caller that does not ask (Decisions) gets the rows it always got.
+{
+  const plain = standingsRowsHtml(real, { highlightId: 10, oppProj });
+  eq(count(plain, /data-explain|data-team|tabindex/g), 0, 'standings explain: off unless asked for, so Decisions is unchanged');
+  eq(count(standingsTableHtml(real, { highlightId: 10, oppProj }), /data-explain/g), 0,
+    'standings explain: and the whole-table form never carries it');
+  eq(count(standingsRowsHtml(real, { diffFrom: real, oppProj, diffOppProj: oppProj, explain: true }), /data-explain/g), 0,
+    'standings explain: a difference is not a figure with parts');
+  const html = standingsRowsHtml(real, { highlightId: 10, oppProj, explain: true });
+  eq(html.replace(/ data-explain="[a-zA-Z]+" data-team="\d+" tabindex="0"/g, ''), plain,
+    'standings explain: asking for it adds three attributes and changes nothing else');
+  const rows = rowsOf(html);
+  const marked = (r) => r.cells.map((c, i) => (/data-explain="/.test(c.attrs) ? i : -1)).filter((i) => i >= 0);
+  ok(rows.every((r) => marked(r).join() === [COL.ptw, COL.close, COL.luck, COL.skill, COL.sl].join()),
+    'standings explain: PTW, Close luck, Luck score, Skill and S+L, on every row', JSON.stringify(marked(rows[0])));
+  ok(rows.every((r) => r.cells.every((c) => !(/data-explain="/.test(c.attrs) && /title="/.test(c.attrs)))),
+    'standings explain: a cell with parts carries no title, one preview a cell');
+  eq(EXPLAINED.length, 5, 'standings explain: five figures are accounted for');
+
+  // The rows add up to what the cell prints, in whole tenths.
+  const tenths = (v) => Math.round(v * 10);
+  let cellsChecked = 0;
+  for (const t of real.teams) {
+    for (const key of EXPLAINED) {
+      const ex = standingsExplain(real, t, key);
+      const parts = ex.rows.filter((r) => r.label !== 'Rounding');
+      const fix = ex.rows.filter((r) => r.label === 'Rounding');
+      const sum = parts.reduce((a, r) => a + tenths(r.value), 0);
+      const total = (ex.mean ? Math.round(sum / parts.length) : sum) + fix.reduce((a, r) => a + tenths(r.value), 0);
+      if (total === tenths(t[key]) && tenths(ex.foot.value) === tenths(t[key]) && fix.length <= 1) cellsChecked++;
+      else ok(false, `standings explain: T${t.id} ${key} adds up`, JSON.stringify(ex));
+    }
+  }
+  eq(cellsChecked, 50, 'standings explain: all fifty cells add up to the tenth');
+  // By hand, T10: four wins, scoring 150 against opponents averaging 117.5,
+  // everyone projected 100, so Luck/wk is +50.0 and PTW is 117.5 − 50.0.
+  const t10 = real.teams.find((t) => t.id === 10);
+  const parts = (key) => JSON.stringify(standingsExplain(real, t10, key).rows.map((r) => [r.label, r.value]));
+  eq(parts('pointsToWin'), JSON.stringify([['Opp Avg', t10.oppAvgActual], ['Luck/wk', -t10.avgLuck]]),
+    'standings explain: PTW is Opp Avg less Luck/wk');
+  eq(parts('skillPlusLuck'), JSON.stringify([['Skill', t10.skill], ['Luck score', t10.luckScore]]),
+    'standings explain: S+L is the two cells beside it');
+  eq(standingsExplain(real, t10, 'scoreDiffLuck').rows.map((r) => r.label).slice(0, 4).join(), 'Wk 1,Wk 2,Wk 3,Wk 4',
+    'standings explain: Close luck is one row a game');
+  // No projection read for any game: the record and the points are printed,
+  // every figure formed from a projection is a dash, and nothing opens.
+  const base = league();
+  const bare = computeLeagueStats({ ...base, games: base.games.map((g) => ({ ...g, homeProjected: 0, awayProjected: 0 })) });
+  const bareHtml = standingsRowsHtml(bare, { oppProj, explain: true });
+  const bareT10 = rowNamed(rowsOf(bareHtml), 'T10');
+  eq([COL.record, COL.total, COL.close].map((c) => bareT10.cells[c].text.replace(/±.*/, '')).join('|'),
+    `4–0|600.0|${t10.scoreDiffLuck > 0 ? '+' : ''}${t10.scoreDiffLuck.toFixed(1)}`,
+    'standings, no projections: record, points and Close luck still count every game');
+  eq([COL.proj, COL.luckWk, COL.ptw, COL.luck, COL.skill, COL.sl, COL.ls, COL.ps].map((c) => bareT10.cells[c].text).join(''),
+    '————————', 'standings, no projections: every figure formed from one is a dash');
+  eq(count(bareHtml, /NaN|undefined|null/g), 0, 'standings, no projections: no NaN');
+  eq(count(bareHtml, /data-explain="scoreDiffLuck"/g) + '/' + count(bareHtml, /data-explain=/g), '10/10',
+    'standings, no projections: only Close luck, which needs none, still opens');
+  ok(bare.teams.every((t) => standingsExplain(bare, t, 'scoreDiffLuck') && !standingsExplain(bare, t, 'luckScore')),
+    'standings, no projections: and it has its games to show');
+  const unplayed = computeLeagueStats({ ...league(), games: [] });
+  eq(standingsExplain(unplayed, unplayed.teams[0], 'luckScore'), null,
+    'standings explain: nothing played, nothing to open');
+}
 
 // ============================================================ 2. the summary chart
 //
