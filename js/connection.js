@@ -11,6 +11,7 @@ import * as bridge from './bridge.js';
 import * as cloud from './cloud.js';
 import * as capture from './capture.js';
 import * as snapshots from './snapshots.js';
+import * as projHistory from './proj-history.js';
 import { configure, fetchLeague, AuthError } from './espn.js';
 
 const KEY = 'ff.connection';
@@ -569,8 +570,18 @@ async function syncNow({ force = false } = {}) {
     const res = await cloud.syncUp(state.leagueId, state.season, payload, {
       onProgress: (done, total) => setSyncLabel(`Sending ${done} of ${total}…`),
       decisionsSent: force ? null : decisionsSent(),
+      projhistSent: force ? null : projHistory.cloudNote(state.leagueId, state.season).sent,
     });
     if (res && res.ok && res.decisions && res.decisions.marks) saveDecisionsSent(res.decisions.marks);
+    // The saved projections: note which weeks are up, and keep any week the
+    // cloud had that this browser did not (js/proj-history.js). Never the
+    // sync's problem.
+    if (res && res.ok && res.projhist) {
+      try {
+        if (res.projhist.marks) projHistory.noteCloud(state.leagueId, state.season, { sent: res.projhist.marks });
+        projHistory.keepCloud(state.leagueId, state.season, res.projhist.down);
+      } catch { /* the weeks are simply looked at again next time */ }
+    }
 
     saveSyncRecord({
       at: Date.now(),
