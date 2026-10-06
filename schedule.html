@@ -185,8 +185,13 @@ section.panel h2.h2-inline {
 }
 .opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
 #forecastChart { margin-top: 16px; }
-/* Nothing to chart is a sentence, not a blank rectangle. */
-#forecastChart:empty { display: none; }
+/* Nothing to chart is a sentence, not a blank rectangle. An empty box has no
+   height of its own, so losing the margin is the whole of hiding it — and it
+   must NOT be `display: none`: js/charts.js empties the box and then measures
+   it, and a box that is not displayed measures 0, so the chart was drawn at
+   the 720px fallback and stretched to fit (7px axis text on a phone, 22px on
+   a laptop). */
+#forecastChart:empty { margin-top: 0; }
 
 /* Season simulation. Unlike the forecast panel this table is the whole league
    at once, so the two highlights have to mean two different things: tr.me is
@@ -196,7 +201,10 @@ section.panel h2.h2-inline {
    another background. */
 #simTable tbody tr.picked td.name { box-shadow: inset 3px 0 0 var(--accent); }
 #simChart { margin-top: 4px; }
-#simChart:empty { display: none; }
+#simChart:empty { margin-top: 0; }   /* never display: none — see #forecastChart */
+/* The divisions warning sits directly above the tiles; the same 12px a note
+   leaves above itself. */
+#simWarn { margin-bottom: 12px; }
 /* The chart is about one team; saying which one belongs next to it, not
    several paragraphs down in the note. */
 #simCap { font-size: 12.5px; color: var(--dim); margin: 14px 0 0; }

@@ -153,6 +153,7 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
+    chartWidth: 1362,          // the chart box on a 1440px laptop; every other scenario is a phone's 337
   },
   'live-noteam': {
     label: '(c) same, with no team set as the owner',
@@ -622,7 +623,22 @@ async function boot(scenario) {
   const rejections = [];
   process.on('unhandledRejection', (r) => rejections.push(String(r)));
 
-  await import(pathToFileURL(path.join(REPO, 'js/schedule-page.js')).href);
+  // THE TWO CHART BOXES HAVE A WIDTH, as they do in a browser. linkedom lays
+  // nothing out, so without this js/charts.js always fell back to 720 and no
+  // scenario could tell a chart drawn for its box from one drawn as a picture
+  // and stretched. The one piece of CSS that matters is emulated from the
+  // page's own stylesheet: a box that `:empty { display: none }` hides measures
+  // 0 while it is empty — which is exactly when charts.js measures it.
+  const chartWidth = cfg.chartWidth || 337;        // 337 = the box on a 393px phone
+  for (const id of ['forecastChart', 'simChart']) {
+    const hiddenWhenEmpty = new RegExp(`#${id}:empty\\s*\\{[^}]*display\\s*:\\s*none`).test(html);
+    Object.defineProperty(document.getElementById(id), 'clientWidth', {
+      configurable: true,
+      get() { return hiddenWhenEmpty && !this.firstChild ? 0 : chartWidth; },
+    });
+  }
+
+  const page = await import(pathToFileURL(path.join(REPO, 'js/schedule-page.js')).href);
 
   // THE ONE WAIT EVERY SCENARIO SHARES, and the one that broke six of them on a
   // loaded machine. It was `setTimeout(400)`: the page loads a league, reads
@@ -645,7 +661,7 @@ async function boot(scenario) {
   }
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg, store, writes, settles };
+  return { document, errors, fetchCalls, rejections, cfg, store, writes, settles, page, chartWidth };
 }
 
 // ------------------------------------------------------------- assertions
@@ -2244,6 +2260,65 @@ async function check(scenario, boot) {
 
   if (scenario === 'demo') {
     c.ok('default demo view is not blank', fcRows.length > 0 && !empty, `${fcRows.length} rows`);
+  }
+
+  // ---- the 2026-10-06 glitch audit ------------------------------------------
+  //
+  // THE CHARTS ARE DRAWN FOR THEIR BOX, NOT STRETCHED TO IT. Both were coming
+  // out `viewBox 0 0 720 240` whatever the screen, so the 11px axis text drew
+  // at 5px on a phone and 21px on a laptop. One user unit has to be one CSS
+  // pixel: the viewBox is as wide as the box (337 here on demo-mid, 1362 on
+  // live), and then the stated text sizes are the drawn ones at both.
+  if (scenario === 'demo-mid' || scenario === 'live') {
+    for (const id of ['forecastChart', 'simChart']) {
+      const svg = $(id).querySelector('svg');
+      const vb = svg ? (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number) : [];
+      c.ok(`#${id} is drawn at its box's own width (${boot.chartWidth}px), not as a 720px picture`,
+        vb[2] === boot.chartWidth, svg ? svg.getAttribute('viewBox') : 'no svg');
+      const sizes = svg ? [...svg.querySelectorAll('text')].map((t) => Number(t.getAttribute('font-size')) * boot.chartWidth / vb[2]) : [];
+      c.ok(`#${id} axis text draws at 11–12px at this width`,
+        sizes.length > 0 && sizes.every((px) => px >= 11 && px <= 12),
+        [...new Set(sizes.map((px) => px.toFixed(1)))].join(', '));
+    }
+  }
+
+  // TWO COLUMNS MUST NOT SHARE A HEADING. The real league has "Andrew L" and
+  // "Andrew Worachek", and the grid headed both "Andrew".
+  {
+    const heads = [...d.querySelectorAll('table.h2h thead th[title]')];
+    const shown = heads.map((th) => txt(th));
+    c.ok('every head-to-head column has its own heading',
+      heads.length > 0 && new Set(shown).size === shown.length, shown.join(' | '));
+    if (scenario === 'demo') {
+      // Ten different first words: nothing collides, so nothing may change.
+      const firsts = heads.map((th) => th.getAttribute('title').trim().split(/\s+/)[0]);
+      c.ok('the demo league has no two teams with one first word (or this proves nothing)',
+        new Set(firsts).size === firsts.length, firsts.join(' | '));
+      c.ok('a heading that collides with nothing is left exactly as it was',
+        shown.every((s, i) => s === firsts[i] || (s.endsWith('…') && firsts[i].startsWith(s.slice(0, -1)))),
+        shown.join(' | '));
+    }
+    if (scenario === 'live') {
+      const real = ['Austin Binish', 'Luke Gaeth', 'Lisa Breitzman', 'Tyler Grovogel', 'Andrew L',
+        'Brittany Rose', 'Andrew Worachek', 'Charlie Christensen', 'Kyle Perea', 'Kenny Albrecht'];
+      const got = typeof boot.page.shortNames === 'function' ? boot.page.shortNames(real) : [];
+      c.ok('the real league: the two Andrews take a last initial, the other eight are untouched',
+        got.join('|') === 'Austin|Luke|Lisa|Tyler|Andrew L|Brittany|Andrew W|Charlie|Kyle|Kenny', got.join('|'));
+    }
+  }
+
+  // A VALUE THAT ROUNDS TO ZERO IS ZERO: no "-0.0", no "+0.0". Same rule as
+  // js/standings-table.js; the page's own helper read the sign before rounding.
+  if (scenario === 'live') {
+    const s = boot.page.signed;
+    const got = typeof s === 'function' ? [-0.04, 0.04, 0, -0, -0.06, 0.06, 6.24, -6.24].map(s) : [];
+    c.ok('a margin that rounds to zero prints a plain 0.0, and real ones keep their sign',
+      got.join(' ') === '0.0 0.0 0.0 0.0 -0.1 +0.1 +6.2 -6.2', got.join(' '));
+  }
+  if (scenario === 'live-swing') {
+    const cells = [...d.querySelectorAll('#forecastTable .sw-v')].map((el) => txt(el));
+    c.ok('no Title ± or Last ± figure is a signed zero',
+      cells.length > 0 && !cells.some((t) => /^[+−-]0\.0%$/.test(t)), cells.join(' '));
   }
 
   // ---- (i) which week a live reload opens on --------------------------------
