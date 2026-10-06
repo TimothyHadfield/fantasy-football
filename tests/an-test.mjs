@@ -265,6 +265,7 @@ function historySnap(document) {
   }));
   const totals = document.getElementById('totalsTable');
   const season = document.getElementById('seasonTable');
+  const starters = document.getElementById('startersTable');
   const foot = totals.querySelector('tfoot tr');
   const band = document.querySelector('#seasonTotals tr');
   return {
@@ -293,6 +294,17 @@ function historySnap(document) {
         cells: [...tr.children].slice(1).map(cell),
       })),
       band: band ? [...band.children].slice(1).map(cell) : [],
+    },
+    // "Who to start" (2026-10-06), on the position it opens on. Six identity
+    // columns, so `cells` is Avg, Starts, then the weeks: week N is cells[N + 1].
+    starters: {
+      group: group(starters),
+      lead: Number((starters.querySelector('thead tr.hist-row th') || { getAttribute: () => 0 }).getAttribute('colspan')),
+      head: head(starters),
+      rows: [...starters.querySelectorAll('tbody tr')].map((tr) => ({
+        name: t(tr.children[1]),
+        cells: [...tr.children].slice(4).map(cell),
+      })),
     },
   };
 }
@@ -499,6 +511,12 @@ const SCENARIOS = {
       await sleep(80);
       out.back = snap();
       out.savedBack = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}');
+      // "Who to start" carries the same select (2026-10-06): there and back.
+      pick('startersTable', 'proj');
+      await sleep(80);
+      out.viaStarters = snap();
+      pick('startersTable', 'actual');
+      await sleep(80);
       globalThis.__an = out;
     },
   },
@@ -1104,7 +1122,9 @@ const SCENARIOS = {
 
       const snap = () => ({
         title: document.getElementById('startersTitle').textContent.trim(),
-        head: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
+        // The LAST header row, the one sortable.js reads: since 2026-10-06 an
+        // "Actual history" band can sit above it, as on the two tables above.
+        head: [...table.querySelectorAll('thead tr:last-child th')].map((th) => th.textContent.trim()),
         lit: [...document.querySelectorAll('#starterPosToggle button.on')]
           .map((b) => b.dataset.pos),
         note: document.getElementById('startersNote').textContent.replace(/\s+/g, ' ').trim(),
@@ -2018,6 +2038,122 @@ async function checkHistory(c, scenario) {
       `${foot.cells[0].text} vs ${mean(snap.totals.rows.map((r) => num(r.cells[0].v)))}`);
     c.ok(`LEAGUE ROW (${mode}): it is never coloured`,
       foot.cells.every((x) => !/\bheat/.test(x.cls)), JSON.stringify(foot.cells.map((x) => x.cls)));
+  }
+
+  // ---- WHO TO START (2026-10-06) ------------------------------------------
+  //
+  // It still drew ESPN's projection in every played week ("ESPN projects 11.3
+  // for Jaylen Warren in week 1", league 1241838), with no label and a 1px
+  // line. Now it is the sheet's Player row for the same man: what he scored,
+  // under the same label and select, before the same heavy line. The panel
+  // opens on RB — players 01 and 02 start, 09 and 14 are on the bench, and 14
+  // signs in week 5 (`onRoster`), so he has no number before it. Every one of
+  // these but "the weeks still to come" failed on the old code; that was
+  // watched.
+  {
+    const SA = A.starters;
+    const SP = P.starters;
+    const g = SA.group;
+    c.ok('WHO TO START: the same group label sits above its played weeks, with the same select',
+      Boolean(g) && g.label === 'Actual history' && /\bcolgroup\b/.test(g.rowCls) && g.span === HIST &&
+      JSON.stringify(g.options) === JSON.stringify(['Actual', 'Proj']) && g.value === 'actual',
+      JSON.stringify(g));
+    c.ok('WHO TO START: the label starts over week 1 — six identity columns come before it',
+      SA.lead === 6 && JSON.stringify(SA.head.slice(0, 6).map((h) => h.text)) ===
+        JSON.stringify(['Depth', 'Player', 'Pos', 'NFL', 'Avg', 'Starts']),
+      `${SA.lead} ${JSON.stringify(SA.head.slice(0, 6).map((h) => h.text))}`);
+    const RBS = [1, 2, 9, 14];
+    const rowOfMan = (snap, i) => snap.rows.find((r) => r.name === season.playerName(TEAM, i));
+    const twin = (snap, r) => rowOfMan(snap, Number(r.name.slice(-2)));
+    c.ok('WHO TO START: the rows are this squad’s four backs',
+      SA.rows.length === RBS.length && RBS.every((i) => rowOfMan(SA, i) && rowOfMan(SP, i)),
+      JSON.stringify(SA.rows.map((r) => r.name)));
+    const wkCell = (row, wk) => row.cells[wk + 1];
+    const scoredBad = [];
+    const projBadS = [];
+    for (const i of RBS) {
+      const a = rowOfMan(SA, i);
+      const p = rowOfMan(SP, i);
+      if (!a || !p) continue;
+      for (const wk of histWeeks) {
+        const on = season.onRoster(i, wk);
+        const wantA = on ? scoreIn(TEAM, i, wk) : null;
+        const wantP = on ? r1(season.projFor(i, wk)) : null;
+        if (!same(num(wkCell(a, wk).v), wantA) || (wantA === null && wkCell(a, wk).text !== '—')) {
+          scoredBad.push(`#${i} wk${wk} want ${wantA} got ${wkCell(a, wk).v} "${wkCell(a, wk).text}"`);
+        }
+        if (!same(num(wkCell(p, wk).v), wantP)) projBadS.push(`#${i} wk${wk} want ${wantP} got ${wkCell(p, wk).v}`);
+      }
+    }
+    c.ok('WHO TO START: EVERY PLAYED WEEK SHOWS WHAT THE MAN SCORED, not what ESPN projected (14.3, not 19.3)',
+      scoredBad.length === 0, scoredBad.slice(0, 6).join(' | '));
+    c.ok('WHO TO START: and on Proj, what he was projected before kickoff',
+      SP.group !== null && projBadS.length === 0, projBadS.slice(0, 6).join(' | '));
+    {
+      const a = wkCell(rowOfMan(SA, 1), 1);
+      const p = wkCell(rowOfMan(SP, 1), 1);
+      c.ok('WHO TO START: a played cell says what it is — “… scored 14.3 in week 1.”',
+        new RegExp(`^T${TEAM} Player 01 scored 14\\.3 in week 1\\.`).test(a.title) && !/ESPN projects/.test(a.title),
+        a.title);
+      c.ok('WHO TO START: and on Proj — “… was projected 19.3 before kickoff in week 1.”',
+        new RegExp(`^T${TEAM} Player 01 was projected 19\\.3 before kickoff in week 1\\.`).test(p.title), p.title);
+      c.ok('WHO TO START: the shading still says the best legal lineup, on the cell that now holds a score',
+        /\bhist\b/.test(a.cls) && /\bst\b/.test(a.cls) &&
+        /is in the best legal lineup for week 1, at RB\.$/.test(a.title), `${a.cls} / ${a.title}`);
+    }
+    c.ok('WHO TO START: a played week is marked as history, a week to come never is',
+      [SA, SP].every((snap) => snap.rows.every((r) =>
+        r.cells.slice(2).every((x, n) => /\bhist\b/.test(x.cls) === (n + 1 <= HIST)))),
+      JSON.stringify(SA.rows[0] && SA.rows[0].cells.map((x) => x.cls)));
+    {
+      const isFut = (cls) => cls.split(/\s+/).includes('fut-start');
+      const headAt = SA.head.map((h, n) => (isFut(h.cls) ? n : -1)).filter((n) => n >= 0);
+      c.ok(`WHO TO START: the heavy line is on week ${FUT}’s header and on that cell in every row, and nowhere else`,
+        JSON.stringify(headAt) === JSON.stringify([5 + FUT]) && SA.rows.length > 0 &&
+        SA.rows.every((r) => isFut(wkCell(r, FUT).cls) && r.cells.filter((x) => isFut(x.cls)).length === 1),
+        `${JSON.stringify(headAt)} ${JSON.stringify(SA.rows.map((r) => r.cells.map((x, n) => (isFut(x.cls) ? n : '')).join('')))}`);
+      c.ok('WHO TO START: the playoff line is still its own, on week 14',
+        isPo(SA.head[5 + 14].cls) && !isFut(SA.head[5 + 14].cls), SA.head[5 + 14].cls);
+    }
+    // AVG: worked out from the cells as drawn, regular season only; a cell
+    // with no number ("—", "Bye") counts for nothing.
+    for (const [mode, snap] of [['actual', SA], ['proj', SP]]) {
+      const bad = [];
+      for (const r of snap.rows) {
+        const got = [];
+        for (let wk = 1; wk <= season.WEEKS; wk++) {
+          const x = wkCell(r, wk);
+          if (/^-?\d+(\.\d+)?/.test(x.text)) got.push(parseFloat(x.text));
+        }
+        const want = got.length ? got.reduce((a, b) => a + b, 0) / got.length : null;
+        const avg = num(r.cells[0].v);
+        if (want === null ? avg !== null : avg === null || Math.abs(avg - want) > 0.051) {
+          bad.push(`${r.name} want ${want === null ? null : want.toFixed(2)} got ${avg}`);
+        }
+      }
+      c.ok(`WHO TO START AVG (${mode}): every row’s Avg is the mean of the regular-season numbers shown in it`,
+        snap.rows.length > 0 && bad.length === 0, bad.join(' | '));
+      c.ok(`WHO TO START AVG (${mode}): and the header says so`,
+        /numbers shown/.test(snap.head[4].title), snap.head[4].title);
+    }
+    c.ok('WHO TO START: so Avg moves with the select',
+      SA.rows.some((r) => r.cells[0].v !== twin(SP, r).cells[0].v),
+      JSON.stringify(SA.rows.map((r) => r.cells[0].v)));
+    const ahead = (snap) => JSON.stringify(SA.rows.map((r) => {
+      const o = twin(snap, r);
+      return [o.name, o.cells[1].html, o.cells.slice(2 + HIST).map((x) => x.html)];
+    }));
+    c.ok('WHO TO START: the weeks still to come, and Starts, are identical on Actual and Proj',
+      ahead(SA) === ahead(SP), 'a future cell or a Starts count changed with the select');
+    c.ok('WHO TO START: one choice for all three tables — it reads Proj when another table’s select says Proj',
+      Boolean(SP.group) && SP.group.label === 'Proj history' && SP.group.value === 'proj', JSON.stringify(SP.group));
+    if (!live) {
+      const V = w.viaStarters;
+      c.ok('WHO TO START: ITS OWN SELECT DRIVES ALL THREE TABLES',
+        Boolean(V) && [V.totals, V.season, V.starters].every((x) => x.group && x.group.value === 'proj') &&
+        JSON.stringify(V) === JSON.stringify(P),
+        JSON.stringify(V && [V.totals.group, V.season.group, V.starters.group]));
+    }
   }
 
   if (live) {
@@ -2963,6 +3099,49 @@ async function check(scenario, boot) {
 
   // ---- (a) demo -----------------------------------------------------------
   if (scenario === 'demo') {
+    // ---- 2026-10-06: the signed helper, and five rules of the page's own CSS --
+    //
+    // `signed` is lifted out of the page's source and run: nothing on the page
+    // hands it an unrounded number today, so no cell could show the fault, and
+    // a check that could never fail would prove nothing. On the old helper
+    // −0.04 came back as a red "-0.0" and 0.04 as a green "+0.0"; that was
+    // watched. The CSS checks read the stylesheet's text — linkedom lays
+    // nothing out, so the widths themselves are measured in a browser.
+    {
+      const src = readFileSync(path.join(REPO, 'js/analysis-page.js'), 'utf8');
+      const m = /function signed\(n, digits = 1\) \{[\s\S]*?\r?\n\}/.exec(src);
+      const signedFn = m ? new Function(`${m[0]}; return signed;`)() : null;
+      const say = (n, digits) => (signedFn ? signedFn(n, digits) : 'no signed() found');
+      c.ok('SIGNED: a number that rounds to zero prints a plain, neutral 0.0 — never "-0.0" or "+0.0"',
+        say(-0.04) === '<span class="muted">0.0</span>' && say(0.04) === '<span class="muted">0.0</span>' &&
+        say(-0.4, 0) === '<span class="muted">0</span>' && say(0) === '<span class="muted">0.0</span>',
+        `${say(-0.04)} ${say(0.04)} ${say(-0.4, 0)}`);
+      c.ok('SIGNED: and a real difference still carries its sign and its colour',
+        say(1.26) === '<span class="pos">+1.3</span>' && say(-0.06) === '<span class="neg">-0.1</span>' &&
+        /muted/.test(say(null)), `${say(1.26)} ${say(-0.06)} ${say(null)}`);
+
+      const css = readFileSync(path.join(REPO, 'analysis.html'), 'utf8').replace(/\s+/g, ' ');
+      const laptop = /@media \(min-width: 761px\) and \(max-width: 1400px\) \{(.*?)\} \}/.exec(css);
+      c.ok('ALL TEAMS GRID: below 1400px its cells give up padding, so nine bench columns fit a laptop',
+        Boolean(laptop) && /#overviewTable th, #overviewTable td \{ padding-left: 3px; padding-right: 3px; \}/.test(laptop[1]) &&
+        /@media \(min-width: 761px\) and \(max-width: 1500px\) \{ #overviewTable th, #overviewTable td \{ padding-left: 5px/.test(css),
+        laptop ? laptop[1] : 'no laptop rule');
+      c.ok('WEEKLY TOTALS: and its week columns narrow in the same rule',
+        Boolean(laptop) && /#totalsTable th\.wk, #totalsTable td\.wk \{ padding-left: 5px; padding-right: 5px;/.test(laptop[1]),
+        laptop ? laptop[1] : 'no laptop rule');
+      c.ok('ROSTER DETAIL: on a phone a fade is pinned to the foot of its box',
+        /#rosterWrap::after \{[^}]*position: sticky;[^}]*bottom: 0;[^}]*linear-gradient\(to bottom, transparent, var\(--panel\)\)/.test(css),
+        'no #rosterWrap::after rule');
+      c.ok('THE IDLE HINT above Season by week is drawn in the dim text colour, not the border colour',
+        /\.pick-line \.pick-idle \{ color: var\(--dim\); \}/.test(css), 'pick-idle is not var(--dim)');
+      c.ok('WHO TO START: seven position buttons, and on a phone the last three fill the second row',
+        d.querySelectorAll('#starterPosToggle button').length === 7 &&
+        /#starterPosToggle \{ grid-template-columns: repeat\(12, 1fr\); \} #starterPosToggle button \{ grid-column: span 3; \} #starterPosToggle button:nth-child\(n \+ 5\) \{ grid-column: span 4; \}/.test(css),
+        `${d.querySelectorAll('#starterPosToggle button').length} buttons`);
+      c.ok('WHO TO START: the heavy line outranks this table’s own “now” bracket',
+        /#startersTable tr th\.fut-start, #startersTable tr td\.fut-start \{ border-left: 3px solid var\(--accent\); \}/.test(css),
+        'no #startersTable fut-start rule');
+    }
     c.ok('badge says Demo', txt($('modeBadge')) === 'Demo', txt($('modeBadge')));
     c.ok('the demo grid is fully filled in — no week left pending',
       rows.every((r) => r.cells.slice(2).every((td) => !/\bwait\b/.test(td.cls))),
@@ -3255,8 +3434,10 @@ async function check(scenario, boot) {
         `${d.querySelectorAll('.hist, .hist-group, select[data-history], .fut-start').length} found`);
       c.ok('NO HISTORY: each table has ONE header row, the one it always had',
         d.querySelectorAll('#seasonTable thead tr').length === 1 &&
-        d.querySelectorAll('#totalsTable thead tr').length === 1,
-        `${d.querySelectorAll('#seasonTable thead tr').length} / ${d.querySelectorAll('#totalsTable thead tr').length}`);
+        d.querySelectorAll('#totalsTable thead tr').length === 1 &&
+        d.querySelectorAll('#startersTable thead tr').length === 1,
+        `${d.querySelectorAll('#seasonTable thead tr').length} / ${d.querySelectorAll('#totalsTable thead tr').length}` +
+        ` / ${d.querySelectorAll('#startersTable thead tr').length}`);
     }
 
     // The claim Tim actually made, stated on its own so it cannot pass by
@@ -3617,7 +3798,7 @@ async function check(scenario, boot) {
       JSON.stringify(rb.head.slice(6)) === JSON.stringify(SEASON_COLS),
       JSON.stringify(rb.head.slice(6)));
     {
-      const ths = [...d.querySelectorAll('#startersTable thead th')];
+      const ths = [...d.querySelectorAll('#startersTable thead tr:last-child th')];
       const lined = ths.map((th, i) => (isPo(th.getAttribute('class')) ? i : -1)).filter((i) => i >= 0);
       const col = 6 + REGULAR_WEEKS.length;
       const trs = [...d.querySelectorAll('#startersTable tbody tr')];
@@ -3631,7 +3812,7 @@ async function check(scenario, boot) {
           r.weeks.slice(REGULAR_WEEKS.length).some((x) => x.st))));
     }
     c.ok('every header is sortable',
-      [...d.querySelectorAll('#startersTable thead th')].every((th) => th.hasAttribute('data-sort')));
+      [...d.querySelectorAll('#startersTable thead tr:last-child th')].every((th) => th.hasAttribute('data-sort')));
     c.ok('the table lives inside a .table-scroll',
       $('startersWrap').getAttribute('class').includes('table-scroll'));
 

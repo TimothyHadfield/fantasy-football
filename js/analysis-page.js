@@ -191,11 +191,14 @@ const cache = new Map(); // `${source}:${week}` -> {week, teams}
 const fmt = (n, digits = 1) =>
   n === null || n === undefined || Number.isNaN(n) ? '—' : Number(n).toFixed(digits);
 
+// ROUNDED FIRST, THEN SIGNED — the rule js/standings-table.js adopted on
+// 2026-10-06: a value that rounds to zero is zero, no sign, the neutral class.
 function signed(n, digits = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return '<span class="muted">—</span>';
-  const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'muted';
-  const sign = n > 0 ? '+' : '';
-  return `<span class="${cls}">${sign}${n.toFixed(digits)}</span>`;
+  const r = Number(n.toFixed(digits)) + 0;   // + 0: a rounded −0 is 0
+  const cls = r > 0 ? 'pos' : r < 0 ? 'neg' : 'muted';
+  const sign = r > 0 ? '+' : '';
+  return `<span class="${cls}">${sign}${r.toFixed(digits)}</span>`;
 }
 
 const esc = (s) =>
@@ -2918,16 +2921,20 @@ function seasonStatus(index, week, p) {
  * real effort to tell apart and must not be reimplemented next door where the
  * two copies can drift.
  */
+/** The "Who to start" mark's class and its sentence, for whichever cell carries it. */
+const startMark = (start) => (start ? ` st${start.flex ? ' fx' : ''}` : '');
+const startSays = (name, week, start) => (start
+  ? ` ${name} is in the best legal lineup for week ${week}` +
+    (start.flex ? ', in the FLEX.' : `, at ${espn.SLOT_LABELS[start.slotId] || ''}.`)
+  : '');
+
 function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus, scored = false) {
   const name = p.name;
-  const mark = start ? ` st${start.flex ? ' fx' : ''}` : '';
+  const mark = startMark(start);
   const cls = (extra) => `wk${isNow ? ' now' : ''}${extra ? ` ${extra}` : ''}${mark}`;
   // A start is a fact about the lineup, so it is said on every cell that has
   // one — including a bye, which is exactly when a start is worth noticing.
-  const says = start
-    ? ` ${esc(name)} is in the best legal lineup for week ${week}` +
-      (start.flex ? ', in the FLEX.' : `, at ${esc(espn.SLOT_LABELS[start.slotId] || '')}.`)
-    : '';
+  const says = esc(startSays(name, week, start));
 
   if (v === 'wait') {
     return `<td class="${cls('wait')}" title="Week ${week} has not been read from ESPN yet.">·</td>`;
@@ -3581,9 +3588,10 @@ function historyTotalLabel(v, week, live) {
 /**
  * The band above the history columns: "Actual history", with the word a select
  * (Actual | Proj). Null when nothing has happened yet. `tr.colgroup` is the
- * site's group band, and sortable.js reads only the LAST header row.
+ * site's group band, and sortable.js reads only the LAST header row. `lead` is
+ * how many columns come before the weeks (six in "Who to start").
  */
-function historyGroupRow(weeks, hist, says = null) {
+function historyGroupRow(weeks, hist, says = null, lead = 2) {
   const n = weeks.filter((w) => hist.has(w)).length;
   if (!n) return '';
   const mode = historyMode();
@@ -3591,7 +3599,7 @@ function historyGroupRow(weeks, hist, says = null) {
   const why = says || (mode === 'proj'
     ? 'Weeks played or in play: what each team’s real starters were projected before kickoff.'
     : 'Weeks played or in play: what each team’s real starters scored.');
-  return `<tr class="colgroup hist-row"><th colspan="2"></th>` +
+  return `<tr class="colgroup hist-row"><th colspan="${lead}"></th>` +
     `<th colspan="${n}" class="hist-group" title="${why}">` +
     `<select class="hist-pick" data-history aria-label="History shows">` +
     `${opt('actual', 'Actual')}${opt('proj', 'Proj')}</select> history</th>` +
@@ -4392,9 +4400,13 @@ function playerNameCell(row) {
 
 const PLAYER_AVG_HEAD = 'The mean of the regular-season numbers shown; a bye is left out.';
 
-/** The Player view's two header rows: the same label, select and line. */
-function playerHead(weeks, hist, fut, proj) {
-  const cols = weeks
+/**
+ * The week headers of a table whose rows are MEN — the Player view here and
+ * "Who to start" below: the heavy line, LIVE, and what a history week holds.
+ * `ahead` words a week still to come.
+ */
+function playerWeekHeads(weeks, hist, fut, proj, ahead = (w) => `Each player’s projection for week ${w}.`) {
+  return weeks
     .map((w) => {
       const failed = state.seasonFailed.has(w);
       const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '',
@@ -4404,13 +4416,21 @@ function playerHead(weeks, hist, fut, proj) {
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : hist.has(w)
           ? `Week ${w}: ` + (proj ? 'what each player was projected before kickoff.' : 'what each player scored.')
-          : `Each player’s projection for week ${w}.`;
+          : ahead(w);
       return weekHead(w, weeks, cls, title, hist.has(w) && weekLive(w) ? LIVE_TAG : '');
     })
     .join('');
-  const says = proj
-    ? 'Weeks played or in play: what each player was projected before kickoff.'
-    : 'Weeks played or in play: what each player scored.';
+}
+
+/** What the "Actual history" label says on a hover when the rows are men. */
+const playerHistorySays = (proj) => (proj
+  ? 'Weeks played or in play: what each player was projected before kickoff.'
+  : 'Weeks played or in play: what each player scored.');
+
+/** The Player view's two header rows: the same label, select and line. */
+function playerHead(weeks, hist, fut, proj) {
+  const cols = playerWeekHeads(weeks, hist, fut, proj);
+  const says = playerHistorySays(proj);
   return `${historyGroupRow(weeks, hist, says)}<tr>
        <th class="name" data-sort title="A player on this roster: starters in lineup order, then the bench by Avg.">Player</th>
        <th class="grouped" data-sort title="${PLAYER_AVG_HEAD}">Avg</th>
@@ -4421,13 +4441,15 @@ function playerHead(weeks, hist, fut, proj) {
 /**
  * One man's week IN HISTORY: what he scored — started or not, on whichever
  * squad held him — or on Proj what he was projected before kickoff. A man
- * still playing has no score yet, as in `historyCell`.
+ * still playing has no score yet, as in `historyCell`. `start` is "Who to
+ * start"'s mark, as in `seasonCell`; the Player rows pass none.
  */
-function playerHistoryCell(p, week, mode, teamId) {
+function playerHistoryCell(p, week, mode, teamId, start = null) {
   if (!state.seasonWeeks.has(week)) {
-    return seasonCell(state.seasonFailed.has(week) ? 'failed' : 'wait', week, p, week === state.week);
+    return seasonCell(state.seasonFailed.has(week) ? 'failed' : 'wait', week, p, week === state.week, start);
   }
-  const cls = (extra) => `wk hist${week === state.week ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
+  const cls = (extra) => `wk hist${week === state.week ? ' now' : ''}${extra ? ` ${extra}` : ''}${startMark(start)}`;
+  const says = startSays(p.name, week, start);
   const e = leagueIndex().get(week).get(p.playerId);
   if (!e) {
     return `<td class="${cls('off')}" title="${esc(p.name)} was on no roster in this league in ` +
@@ -4439,21 +4461,21 @@ function playerHistoryCell(p, week, mode, teamId) {
   if (typeof v !== 'number' || (v === 0 && onBye)) {
     if (onBye) {
       return `<td class="${cls('bye')}"${v === 0 ? ' data-v="0"' : ''} ` +
-        `title="${esc(p.name)} was on bye in week ${week}.">Bye</td>`;
+        `title="${esc(`${p.name} was on bye in week ${week}.${says}`)}">Bye</td>`;
     }
     const why = mode === 'proj'
       ? `No projection was recorded for ${p.name} in week ${week}.`
       : e.done === false
         ? `${p.name} has not finished week ${week} yet.`
         : `No score was recorded for ${p.name} in week ${week}.`;
-    return `<td class="${cls('muted')}" title="${esc(why)}">—</td>`;
+    return `<td class="${cls('muted')}" title="${esc(why + says)}">—</td>`;
   }
   const shown = round1(v);
   const why = (mode === 'proj'
     ? `${p.name} was projected ${fmt(shown)} before kickoff in week ${week}.`
     : `${p.name} scored ${fmt(shown)} in week ${week}.`) +
     (e.teamId === teamId ? '' : ' He was on another team then.');
-  return `<td class="${cls()}" data-v="${shown}" title="${esc(why)}">${fmt(shown)}</td>`;
+  return `<td class="${cls()}" data-v="${shown}" title="${esc(why + says)}">${fmt(shown)}</td>`;
 }
 
 /** One Player row: name and position, Avg, then history and the weeks to come. */
@@ -5010,15 +5032,27 @@ function positionPool(team, weeks) {
  * Only men on the roster in the SELECTED week are ranked. A depth chart is a
  * statement about the squad you have; someone dropped in week 3 is in the table
  * to explain week 3's lineup and is not this manager's RB2 today.
+ *
+ * AVG IS THE MEAN OF THE NUMBERS HIS ROW SHOWS (2026-10-06), as a Player row's
+ * is on the sheet above (`playerRows`): what he scored — or on Proj was
+ * projected — in a history week, his projection ahead, each to the tenth. A
+ * cell with no number — "Bye", a dash — counts for nothing.
  */
-function starterRows(team, weeks, index, starters) {
+function starterRows(team, weeks, index, starters, hist = new Set()) {
   const onRosterNow = new Set(
     ((team && team.players) || []).map((p) => p.playerId)
   );
+  const mode = historyMode();
 
   const rows = positionPool(team, weeks)
     .map((p) => {
       const values = weeks.map((w) => seasonValue(index, w, p.playerId));
+      const shown = weeks.map((w, i) => {
+        const v = values[i];
+        if (hist.has(w)) return playerHistoryValue(p, w, mode);
+        if (typeof v !== 'number') return null;
+        return v === 0 && zeroOf(v, w, p, seasonStatus(index, w, p)) === 'bye' ? null : round1(v);
+      });
       const startsIn = weeks.filter((w) => {
         const wk = starters.get(w);
         return wk && wk.has(p.playerId);
@@ -5027,7 +5061,7 @@ function starterRows(team, weeks, index, starters) {
         p,
         values,
         held: onRosterNow.has(p.playerId),
-        avg: regularAvg(values, weeks),
+        avg: regularAvg(shown, weeks),
         // Out of the weeks actually READ, never out of all of them: a squad
         // half-loaded would otherwise look like a squad half-benched. The
         // playoff weeks count here: Starts is the number of marked cells on
@@ -5068,26 +5102,24 @@ function starterRows(team, weeks, index, starters) {
   return rows;
 }
 
-function renderStartersHead(weeks) {
-  const cols = weeks
-    .map((w) => {
-      const failed = state.seasonFailed.has(w);
-      const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '']
-        .filter(Boolean).join(' ');
-      const title = failed
-        ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
-        : `ESPN’s projected points for week ${w}, and whether he starts.`;
-      return weekHead(w, weeks, cls, title);
-    })
-    .join('');
+/**
+ * HISTORY HERE TOO (2026-10-06): the played weeks sit under the sheet's own
+ * "Actual history" label and select, before the same heavy line — one choice
+ * for the three tables — and show what each man scored (`playerHistoryCell`).
+ * The shading still answers the panel's question: the best legal lineup.
+ */
+function renderStartersHead(weeks, hist, fut) {
+  const proj = historyMode() === 'proj';
+  const cols = playerWeekHeads(weeks, hist, fut, proj,
+    (w) => `ESPN’s projected points for week ${w}, and whether he starts.`);
 
   $('startersTable').querySelector('thead').innerHTML =
-    `<tr>
+    `${historyGroupRow(weeks, hist, playerHistorySays(proj), 6)}<tr>
        <th class="left" data-sort title="How deep he is at his own position on this squad, by the Avg beside it.">Depth</th>
        <th class="name" data-sort>Player</th>
        <th class="left" data-sort>Pos</th>
        <th class="left" data-sort>NFL</th>
-       <th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are not counted. A bye counts as the zero ESPN returns; a week he is not on the roster for is left out.">Avg</th>
+       <th class="grouped" data-sort title="${PLAYER_AVG_HEAD}">Avg</th>
        <th data-sort title="How many of the weeks read he is in the best legal lineup for, playoff weeks included.">Starts</th>
        ${cols}
      </tr>`;
@@ -5104,13 +5136,17 @@ function renderStarters() {
     ? `Who to start, week by week · ${team.name} · ${label}`
     : 'Who to start, week by week';
 
+  const hist = historyWeeks(weeks);
+  const fut = firstFuture(weeks, hist);
+  const mode = historyMode();
+
   setStarterToggle();
-  renderStartersHead(weeks);
+  renderStartersHead(weeks, hist, fut);
 
   const slots = leagueSlots();
   const index = team ? seasonIndex(team.id) : new Map();
   const starters = team ? weeklyStarters(team.id, slots) : new Map();
-  const rows = starterRows(team, weeks, index, starters);
+  const rows = starterRows(team, weeks, index, starters, hist);
 
   const show = rows.length > 0 && weeks.length > 0;
   $('startersWrap').classList.toggle('hidden', !show);
@@ -5134,9 +5170,13 @@ function renderStarters() {
           const slotId = starters.has(week) ? starters.get(week).get(p.playerId) : undefined;
           const start =
             slotId === undefined ? null : { slotId, flex: FLEX_SLOTS.has(slotId) };
-          return withPo(seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p),
-            seasonDone(index, week, p)),
-            week, weeks);
+          // A history week is what he scored, on whichever squad held him —
+          // the very cell his Player row has on the sheet above.
+          return withFut(withPo(hist.has(week)
+            ? playerHistoryCell(p, week, mode, team.id, start)
+            : seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p),
+              seasonDone(index, week, p)),
+          week, weeks), week, fut);
         })
         .join('');
 
@@ -5901,7 +5941,9 @@ enableSort($('totalsTable'), { defaultIndex: 1 });
 
 // ACTUAL | PROJ, the word in "Actual history" (Tim, 2026-10-05). One choice for
 // both tables, kept per league; a repaint of those two panels and nothing else.
-for (const id of ['totalsTable', 'seasonTable']) {
+// "Who to start" carries the same select since 2026-10-06; `paintSeason`
+// repaints it.
+for (const id of ['totalsTable', 'seasonTable', 'startersTable']) {
   $(id).addEventListener('change', (e) => {
     const pick = e.target.closest ? e.target.closest('select[data-history]') : null;
     if (!pick) return;

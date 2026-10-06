@@ -491,7 +491,7 @@
     text-overflow: ellipsis;
   }
   .pick-line strong { color: var(--text); font-weight: 650; }
-  .pick-line .pick-idle { color: var(--line-2); }
+  .pick-line .pick-idle { color: var(--dim); }
   /* A number this man genuinely does not have, said rather than shown as 0.0. */
   .pick-line .pick-none { color: var(--line-2); font-style: italic; }
   /* The action the card's sheet used to carry. On a phone the tap is answered
@@ -612,6 +612,9 @@
     border-right: 1px solid var(--line-2);
   }
   #startersTable th.now { color: var(--text); }
+  /* The heavy line before the first week still to come, as on the two tables
+     above (css/app.css), spelled to outrank the bracket just above. */
+  #startersTable tr th.fut-start, #startersTable tr td.fut-start { border-left: 3px solid var(--accent); }
 
   /* Inline colour key in the panel note. */
   .key {
@@ -769,6 +772,22 @@
     .key-line .lg-hint { margin-left: 0; }
   }
 
+  /* ----------------------------------------------------------------- laptop
+     NO SIDEWAYS SCROLL AT 1440 OR 1280 (Tim, 2026-10-06). Measured on league
+     1241838: the all-teams grid with nine bench columns ran 100px past its box
+     at 1440 and 260px at 1280, and Weekly totals 100px at 1280. Every column
+     and number stays; the padding and the bench tag's gap are what give. A
+     phone keeps its own rules below and scrolls inside the box. */
+  @media (min-width: 761px) and (max-width: 1500px) {
+    #overviewTable th, #overviewTable td { padding-left: 5px; padding-right: 5px; }
+    #overviewTable .slot-cell .pp { margin-left: 3px; }
+  }
+  @media (min-width: 761px) and (max-width: 1400px) {
+    #overviewTable th, #overviewTable td { padding-left: 3px; padding-right: 3px; }
+    #overviewTable .slot-cell .pp { margin-left: 2px; font-size: 10px; letter-spacing: 0; }
+    #totalsTable th.wk, #totalsTable td.wk { padding-left: 5px; padding-right: 5px; }
+  }
+
   /* ------------------------------------------------------------------ touch */
   @media (hover: none) {
     /* The swap control is a tag inside a dense roster row, so it is the one
@@ -783,6 +802,33 @@
   /* ------------------------------------------------------------------ phone */
   @media (max-width: 760px) {
     .select-md { width: 100%; }
+
+    /* Seven position buttons fall 4 + 3 on the shared four-track grid, which
+       left an empty grey eighth cell. Twelve tracks: four across, then three
+       across the same width. */
+    #starterPosToggle { grid-template-columns: repeat(12, 1fr); }
+    #starterPosToggle button { grid-column: span 3; }
+    #starterPosToggle button:nth-child(n + 5) { grid-column: span 4; }
+
+    /* THE ROSTER RUNS ON BELOW ITS BOX. The 62dvh cap (css/app.css) cut it
+       exactly on a row edge, so the kicker, the lineup total and the bench
+       looked missing. A fade pinned to the foot of the box says there is more;
+       at the end of the scroll it sits in its own place under the last row,
+       panel on panel, and is gone. It is drawn over the cells, which is why it
+       is an element and not a background (see `td.name` in css/app.css). */
+    #rosterWrap::after {
+      content: "";
+      display: block;
+      position: sticky;
+      left: 0;
+      bottom: 0;
+      z-index: 2;
+      height: 30px;
+      /* To the panel's edge, as the box itself bleeds. */
+      margin: 0 calc(-1 * var(--pad-panel));
+      background: linear-gradient(to bottom, transparent, var(--panel));
+      pointer-events: none;
+    }
 
     /* THE PICK LINE GETS TWO LINES HERE, AND BOTH ARE RESERVED.
        It carries a name, a season projection and a scoring average now, which
