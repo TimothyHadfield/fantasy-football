@@ -409,13 +409,44 @@ const esc = (s) =>
   );
 
 const fmt = (n, digits = 1) =>
-  n === null || n === undefined || Number.isNaN(n) ? '—' : Number(n).toFixed(digits);
+  n === null || n === undefined || Number.isNaN(n) ? '—' : Number(n).toFixed(digits).replace(/^-(0(\.0+)?)$/, '$1');
 
-/** "+3.6" / "−0.4" — a real minus sign, and the sign is always printed. */
+/**
+ * "+3.6" / "−0.4" — a real minus sign, and the sign is always printed. A figure
+ * that rounds to nothing prints "0.0" with no sign: −0.04 is not "−0.0".
+ */
 function signedText(n, digits = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   const v = Number(n);
-  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(digits);
+  const s = Math.abs(v).toFixed(digits);
+  return (Number(s) === 0 ? '' : v > 0 ? '+' : '−') + s;
+}
+
+/** The number `fmt` prints — `toFixed`, not `Math.round`: the two part company on a half (121.55). */
+const round1 = (n) => Number(Number(n).toFixed(1));
+
+/**
+ * A DIFFERENCE PRINTED BESIDE ITS TWO ENDS is the printed ends subtracted
+ * (audit, 2026-10-06): "121.5 → 125.4" reads +3.9, never the exact change
+ * rounded on its own (+3.8). `less` is what comes off it afterwards — his
+ * change in a week he plays you. Display only: sort keys, colour and the
+ * ranking keep the exact figure.
+ */
+const shownDiff = (before, after, less = 0) => round1(round1(after) - round1(before) - less);
+
+/**
+ * The per-week "You gain" as printed: the per-week lineup figures beside it,
+ * subtracted. A NETTED gain (`net` ≠ `own`: his change in the weeks he plays
+ * you is off it) is not the difference of those two cells whatever is done to
+ * it, so it stays the plain mean of its own total — as it does with no before
+ * and after to agree with.
+ */
+function weekGainShown(net, own, before, after, n) {
+  const k = n || 1;
+  if (![net, own, before, after].every(Number.isFinite) || Math.abs(own - net) >= 0.05) {
+    return Number.isFinite(net) ? net / k : net;
+  }
+  return shownDiff(before / k, after / k);
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -1948,12 +1979,34 @@ function nameMarksHtml(name, bye, inj) {
 /** The one-sentence keys, only for a mark that is on screen (rule 16). */
 const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
 const INJ_KEY = 'Underlined: on ESPN’s injury report.';
-function marksKeyText(html) {
+const MARK_KEYS = { bye: () => BYE_KEY, inj: () => INJ_KEY, trend: () => trend.TREND_KEY };
+/** Which marks a block of markup carries: some of `bye`, `inj`, `trend`. */
+function marksIn(html) {
   return [
-    /\bbye-hl\b/.test(html) ? BYE_KEY : '',
-    /\binj\b/.test(html) ? INJ_KEY : '',
-    trend.hasTrend(html) ? trend.TREND_KEY : '',
-  ].filter(Boolean).join(' ');
+    /\bbye-hl\b/.test(html) ? 'bye' : '',
+    /\binj\b/.test(html) ? 'inj' : '',
+    trend.hasTrend(html) ? 'trend' : '',
+  ].filter(Boolean);
+}
+const marksKeyText = (html) => marksIn(html).map((m) => MARK_KEYS[m]()).join(' ');
+
+/**
+ * ONE KEY ON THE PAGE, NOT ONE A TABLE (audit, 2026-10-06: the same 41 words
+ * sat under the finder, the combo and the custom box). Every on-page key says
+ * which marks its own table carries (`data-marks`), and each sentence is
+ * printed under the FIRST table in view that needs it — so when the finder is
+ * empty or its panel is shut, the next table down prints it instead. The
+ * pop-up keeps its own: it covers the page.
+ */
+function syncMarkKeys() {
+  const said = new Set();
+  for (const el of document.querySelectorAll('.bye-key[data-marks]')) {
+    const shut = !!(el.parentElement && el.parentElement.closest('[hidden], .hidden'));
+    const fresh = shut ? [] : el.getAttribute('data-marks').split(' ').filter((m) => m && !said.has(m));
+    for (const m of fresh) said.add(m);
+    el.textContent = fresh.map((m) => MARK_KEYS[m]()).join(' ');
+    el.hidden = !fresh.length;
+  }
 }
 
 /**
@@ -1980,13 +2033,17 @@ const byeKeyHtml = (html) => {
   const t = marksKeyText(html);
   return t ? `<p class="panel-note bye-key">${esc(t)}</p>` : '';
 };
-/** Fill (or empty and hide) a fixed key line from the markup it describes. */
+/** The same line for a table ON the page: empty until `syncMarkKeys` gives it its sentences. */
+const pageKeyHtml = (html) => {
+  const marks = marksIn(html);
+  return marks.length ? `<p class="panel-note bye-key" data-marks="${marks.join(' ')}" hidden></p>` : '';
+};
+/** Say which marks a fixed key line's table carries, and reprint the page's keys. */
 function setByeKey(id, html) {
   const el = $(id);
   if (!el) return;
-  const t = marksKeyText(html);
-  el.textContent = t;
-  el.hidden = !t;
+  el.setAttribute('data-marks', marksIn(html).join(' '));
+  syncMarkKeys();
 }
 /**
  * WHAT A PER-WEEK FIGURE AVERAGES (Tim, 2026-09-29: "in the main section it
@@ -3136,9 +3193,9 @@ const perWeekOf = (total, weeks = weeklySpan().length) => total / (weeks || 1);
  * which left it orphaned at the foot of a tall top-aligned cell, two lines
  * below the figure it was about (trade plan Phase 5, V4).
  */
-function weeklyGainHtml(total, weeks = weeklySpan().length, mark = '') {
+function weeklyGainHtml(total, weeks = weeklySpan().length, mark = '', perWeek = perWeekOf(total, weeks)) {
   return (
-    `${signedText(perWeekOf(total, weeks))}<span class="unit">/wk</span>${mark}` +
+    `${signedText(perWeek)}<span class="unit">/wk</span>${mark}` +
     `<span class="sub">${signedText(total)} total</span>`
   );
 }
@@ -3199,8 +3256,12 @@ function offerRow(offer, i, key, opts = {}) {
   const receive = offer.receive.map((p) => manLine(p, ctx)).join('');
   const weeks = basis() === 'weeks' && weeklySpan().length > 0;
   // The heat mark goes beside the number, never after the sub-line (V4).
+  // The per-week figure agrees with "Your lineup, a week" beside it (`weekGainShown`).
   const gain = (v, mark) =>
-    (weeks && Number.isFinite(v) ? weeklyGainHtml(v, undefined, mark) : `${signedText(v)}${mark}`);
+    (weeks && Number.isFinite(v)
+      ? weeklyGainHtml(v, undefined, mark,
+        weekGainShown(v, offer.myGain, offer.myBefore, offer.myAfter, weeklySpan().length))
+      : `${signedText(v)}${mark}`);
   const picked = state.deal && state.deal === offer ? ' picked' : '';
 
   // THE RED/GREEN SCALE ON THE TWO GAIN COLUMNS (HANDOFF rule 14). The group is
@@ -3406,10 +3467,10 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
   };
 
   // The two gains, exactly as `offerRow` prints them.
-  const gainText = (v, n) => {
+  const gainText = (v, n, perWeek = perWeekOf(v, n)) => {
     if (!fin(v)) return null;
     return weeks
-      ? `${signedText(perWeekOf(v, n))}/wk (${signedText(v)} total)`
+      ? `${signedText(perWeek)}/wk (${signedText(v)} total)`
       : `${signedText(v)} in ${meta().label}`;
   };
   const his = hisSideOf(offer);
@@ -3431,7 +3492,7 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
   if (s && fin(s.mine.gain) && !offer.goalUnranked) {
     const g = goalOf(state.goal);
     goal = `${capFirst(g.chance)} (my goal, ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons): ` +
-      `${pct(s.mine.before)} → ${pct(s.mine.after)} (${signedPct(s.mine.after - s.mine.before)} ±${bandText()})` +
+      `${pct(s.mine.before)} → ${pct(s.mine.after)} (${pctChange(s.mine.before, s.mine.after)} ±${bandText()})` +
       (fin(s.theirs.before) && fin(s.theirs.after) ? `; his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
       (fin(s.accept) ? `; app estimates ${Math.round(s.accept * 100)}% he accepts` : '');
   }
@@ -3510,7 +3571,8 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
     // lineup's change less his in the week(s) I play him, which `meet` lists.
     myGain: (() => {
       const net = netGainOf(offer);
-      const t = gainText(net, span.length);
+      const t = gainText(net, span.length,
+        weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, span.length));
       if (!t || !fin(offer.myGain) || !fin(net) || Math.abs(net - offer.myGain) < 0.05) return t;
       return `${t}, net: my own lineup ${signedText(offer.myGain)} minus his ` +
         `${signedText(Math.round((offer.myGain - net) * 10) / 10)} in the week(s) I play him`;
@@ -4646,6 +4708,16 @@ const signedPct = (v, d = 1) => {
   if (Number(s) === 0) return `${s}%`;
   return `${v > 0 ? '+' : '−'}${s}%`;
 };
+/**
+ * A change printed BESIDE its two ends is the difference of the two printed
+ * numbers, not the exact change rounded on its own: "2.1% → 4.7%" has to read
+ * +2.6%, never +2.7% (audit, 2026-10-06). Display only — every sort key
+ * (`data-v`), colour and rank still reads the unrounded figure.
+ */
+const pctChange = (before, after, d = 1) => {
+  if (!Number.isFinite(before) || !Number.isFinite(after)) return '—';
+  return signedPct((Number((after * 100).toFixed(d)) - Number((before * 100).toFixed(d))) / 100, d);
+};
 
 /**
  * The goal's cell on a finder row: how the chance moves, from what to what,
@@ -4669,7 +4741,6 @@ function goalCellHtml(offer) {
         : `No ${g.chance} yet.`;
     return `<td class="goal-cell goal-wait" data-v="-1" title="${esc(why)}">${r.running ? '…' : '—'}</td>`;
   }
-  const change = s.mine.after - s.mine.before;
   const good = s.mine.gain > 0.0005 ? ' pos' : s.mine.gain < -0.0005 ? ' neg' : '';
   const yes = Number.isFinite(s.accept) ? Math.round(s.accept * 100) : null;
   // THE RANK, AND THE EQUALS SIGN. A tie group's rows all print the group's
@@ -4697,7 +4768,7 @@ function goalCellHtml(offer) {
     levelWords;
   return (
     `<td class="goal-cell${good}" data-v="${s.value}" title="${esc(words)}">` +
-    `${place}${signedPct(change)}<span class="band"> ±${bandText()}</span>` +
+    `${place}${pctChange(s.mine.before, s.mine.after)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (yes === null ? '' : ` · ${yes}% yes`) +
     `</span></td>`
@@ -4837,7 +4908,7 @@ function altGoalCellHtml(offer) {
     `${GOAL_RUNS.toLocaleString('en-US')} seasons. It does not rank the list; switch the goal to rank by it.`;
   return (
     `<td class="alt-goal-cell${good}" data-v="${s.gain}" title="${esc(words)}">` +
-    `${signedPct(s.after - s.before)}<span class="band"> ±${bandText()}</span>` +
+    `${pctChange(s.before, s.after)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.before)} → ${pct(s.after)}</span></td>`
   );
 }
@@ -5068,7 +5139,8 @@ function weekTableHtml(
         weekCell(w.week) +
         `<td>${fmt(w.before)}</td>` +
         `<td>${fmt(w.after)}</td>` +
-        `<td class="delta">${signedText(w.delta)}</td>` +
+        `<td class="delta">${signedText(Number.isFinite(w.before) && Number.isFinite(w.after)
+          ? shownDiff(w.before, w.after) : w.delta)}</td>` +
         `</tr>`
     )
     .join('');
@@ -5102,10 +5174,15 @@ function weekTableHtml(
   // own, so that row's cell says "you +x" under it. Since 2026-09-30 the totals
   // are netted too (below) — the same figure the finder's "You gain" prints.
   const net = !!vs && vsText === null;
-  const shownOf = (w) => (net && vs.has(w.week) && Number.isFinite(vs.get(w.week)) &&
-      Math.abs(vs.get(w.week)) >= 0.05
-    ? Math.round((w.delta - vs.get(w.week)) * 10) / 10
-    : w.delta);
+  //
+  // EVERY DIFFERENCE HERE IS ITS OWN ROW'S PRINTED NUMBERS SUBTRACTED
+  // (`shownDiff`, audit 2026-10-06) — the two lineup cells, and in a netted week
+  // the "his +x" beside its name — so a row can be checked by eye.
+  const nettedAt = (w) => net && vs.has(w.week) && Number.isFinite(vs.get(w.week)) &&
+      Math.abs(vs.get(w.week)) >= 0.05;
+  const ownOf = (w) => (Number.isFinite(w.before) && Number.isFinite(w.after)
+    ? shownDiff(w.before, w.after) : w.delta);
+  const shownOf = (w) => (nettedAt(w) ? round1(ownOf(w) - round1(vs.get(w.week))) : ownOf(w));
   const deltaScale = heatScale(byWeek.map(shownOf));
   const heatBits = (v) => {
     const h = heatOf(v, deltaScale, { what: 'the other weeks of this deal' });
@@ -5117,7 +5194,7 @@ function weekTableHtml(
   const rows = byWeek
     .map((w) => {
       const shown = shownOf(w);
-      const netted = shown !== w.delta;
+      const netted = nettedAt(w);
       const h = heatBits(shown);
       return (
         `<tr data-wk="${w.week}">` +
@@ -5126,7 +5203,7 @@ function weekTableHtml(
         `<td>${fmt(w.after)}</td>` +
         `<td class="delta ${shown > 0 ? 'up' : shown < 0 ? 'down' : ''}${netted ? ' netted' : ''}${h.cls}"${h.title}>` +
         `${signedText(shown)}${h.mark}` +
-        (netted ? `<span class="net-sub">you ${signedText(w.delta)}</span>` : '') +
+        (netted ? `<span class="net-sub">you ${signedText(ownOf(w))}</span>` : '') +
         `</td>` +
         `</tr>`
       );
@@ -5143,10 +5220,16 @@ function weekTableHtml(
   // the finder's "You gain" (`netGainOf`). The lineup columns stay your own
   // lineup, so the netted total says "you +x" under it, as a netted week does.
   const own = total;
-  const oppIn = net ? byWeek.reduce((a, w) => a + (shownOf(w) !== w.delta ? vs.get(w.week) : 0), 0) : 0;
+  const oppIn = net ? byWeek.reduce((a, w) => a + (nettedAt(w) ? vs.get(w.week) : 0), 0) : 0;
   const nettedTotal = net && Math.abs(oppIn) >= 0.05;
   if (nettedTotal) total = Math.round((total - oppIn) * 10) / 10;
   const ownSub = (v) => (nettedTotal ? `<span class="net-sub">you ${signedText(v)}</span>` : '');
+  // The two total rows, each as its own printed cells subtracted — and the
+  // per-week one is the finder's "You gain" figure (`weekGainShown`).
+  const ownWk = shownDiff(beforeTotal / n, afterTotal / n);
+  const ownAll = shownDiff(beforeTotal, afterTotal);
+  const netWk = nettedTotal ? total / n : ownWk;
+  const netAll = nettedTotal ? round1(ownAll - round1(own - total)) : ownAll;
 
   // THE PLAYOFF WEEKS: after the totals, below a line, uncoloured — each side's
   // best lineup that week, for reference. Tim has not decided whether a trade
@@ -5162,7 +5245,7 @@ function weekTableHtml(
     `<tr class="total"><td class="name">${weighted ? 'Per week he plays' : 'Per week'}</td>` +
     `<td>${fmt(beforeTotal / n)}</td><td>${fmt(afterTotal / n)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}${nettedTotal ? ' netted' : ''}">` +
-    `${signedText(total / n)}${ownSub(own / n)}</td></tr>` +
+    `${signedText(netWk)}${ownSub(ownWk)}</td></tr>` +
     `<tr class="total sub-row"><td class="name">` +
     (weighted
       ? `All weeks, by his chance of playing`
@@ -5170,7 +5253,7 @@ function weekTableHtml(
     `</td>` +
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}${nettedTotal ? ' netted' : ''}">` +
-    `${signedText(total)}${ownSub(own)}</td></tr>` +
+    `${signedText(netAll)}${ownSub(ownAll)}</td></tr>` +
     poBlock +
     `</tbody></table>` +
     // Channel 4, in view under the table it describes. In POINTS, so a reader
@@ -5184,7 +5267,7 @@ function weekTableHtml(
           low: 'a week it does little or costs you',
         })} Played and playoff weeks are in no total, so they are in no scale either.`}</p>`
       : '') +
-    (net && byWeek.some((w) => shownOf(w) !== w.delta)
+    (net && byWeek.some(nettedAt)
       ? `<p class="heat-key">${NET_KEY}</p>`
       : '')
   );
@@ -5208,7 +5291,8 @@ function playoffTableRows(playoff) {
           weekCell(w.week, ' <span class="po-tag-inline">PO</span>') +
           `<td>${fmt(w.before)}</td>` +
           `<td>${fmt(w.after)}</td>` +
-          `<td class="delta">${signedText(w.delta)}</td>` +
+          `<td class="delta">${signedText(Number.isFinite(w.before) && Number.isFinite(w.after)
+            ? shownDiff(w.before, w.after) : w.delta)}</td>` +
           `</tr>`
       )
       .join('')
@@ -5369,11 +5453,10 @@ function dealGoalHtml(offer) {
   const s = goalFor(offer);
   if (!s || !Number.isFinite(s.mine.gain)) return '';
   const g = goalOf(state.goal);
-  const change = s.mine.after - s.mine.before;
   const cls = s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : '';
   return (
     `<p class="deal-goal"><span class="lbl">Your ${esc(g.chance)}</span>` +
-    `<strong class="${cls}">${signedPct(change)}</strong>` +
+    `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong>` +
     // THE BAND, WHEREVER A CHANGE IS STATED. One seed of 10,000 seasons puts a
     // third of a point of noise on this figure, so a change quoted without it
     // reads as exact. Measured; see TIE_BAND in js/trade-odds.js.
@@ -6290,7 +6373,7 @@ function comboTableHtml(rows, from, id) {
         thing: 'manager', what: 'the others in this packing',
       })}</p>`
       : '') +
-    byeKeyHtml(rowsHtml)
+    pageKeyHtml(rowsHtml)
   );
 }
 
@@ -6323,7 +6406,8 @@ function comboBlockHtml(entry, rows, from, id, allIndex, { heading = '', lead = 
     (lead ? `<p>${lead}</p>` : '') +
     // NETTED (2026-09-30): each manager's change in the weeks you play him is
     // off it (`netDelta`); "Your lineup, a week" below is your own lineup.
-    `<div class="combo-head"><span class="big">${signedText(perWeekOf(netOfEntry(entry)))}</span> a week ` +
+    `<div class="combo-head"><span class="big">${signedText(
+      weekGainShown(netOfEntry(entry), after - before, before, after, span.length))}</span> a week ` +
     `<span class="sub-inline">(${signedText(netOfEntry(entry))} total over ${weekRange(span)})</span> from ` +
     `<strong>${plural(entry.count, 'trade')}</strong>` +
     (rows.length && rows.length < entry.count
@@ -6435,7 +6519,6 @@ function comboGoalLine(entry) {
   const s = comboGoal(entry);
   if (!s || !Number.isFinite(s.mine.gain)) return '';
   const g = goalOf(state.goal);
-  const change = s.mine.after - s.mine.before;
   const cls = s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : '';
   const managers = new Set(entry.combo.map((o) => o.partner && o.partner.id)).size;
   const yes = !Number.isFinite(s.accept) ? ''
@@ -6443,7 +6526,7 @@ function comboGoalLine(entry) {
       : ` · ${Math.round(s.accept * 100)}% yes`;
   return (
     `<div class="combo-goal"><span class="lbl">Your ${esc(g.chance)}</span> ` +
-    `<strong class="${cls}">${signedPct(change)}</strong>` +
+    `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong>` +
     `<span class="band"> ±${bandText()}</span> ` +
     `<span class="sub-inline">(${pct(s.mine.before)} → ${pct(s.mine.after)}${yes})</span>` +
     altInlineHtml(comboAlt(entry)) +
@@ -6461,7 +6544,7 @@ function altInlineHtml(s) {
   const cls = s.gain > 0.0005 ? 'pos' : s.gain < -0.0005 ? 'neg' : '';
   return (
     ` <span class="alt-inline">· ${esc(CHANCE_SHORT[s.goal])} ` +
-    `<b class="${cls}">${signedPct(s.after - s.before)}</b><span class="band"> ±${bandText()}</span></span>`
+    `<b class="${cls}">${pctChange(s.before, s.after)}</b><span class="band"> ±${bandText()}</span></span>`
   );
 }
 
@@ -6512,7 +6595,13 @@ function wholeComboOffer(entry, label) {
   };
 }
 
+/** The combo panel, then the page's mark keys — its tables carry one (`syncMarkKeys`). */
 function renderCombo() {
+  renderComboBody();
+  syncMarkKeys();
+}
+
+function renderComboBody() {
   const body = $('comboBody');
   const note = $('comboNote');
   const span = weeklySpan();
@@ -7863,10 +7952,10 @@ function renderCustomPickers() {
  * rule the depth map's tints and the Players page's two greens follow, and it
  * is what keeps the number readable to anyone who cannot separate the hues.
  */
-function customGainHtml(delta) {
+function customGainHtml(delta, perWeek = perWeekOf(delta)) {
   const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
   return (
-    `<span class="cu-num ${cls}">${signedText(perWeekOf(delta))}<span class="unit">/wk</span></span>` +
+    `<span class="cu-num ${cls}">${signedText(perWeek)}<span class="unit">/wk</span></span>` +
     `<span class="cu-sub">${signedText(delta)} over ${esc(weekRange(weeklySpan()))}</span>`
   );
 }
@@ -7898,8 +7987,13 @@ function renderCustomPreview(priced) {
   $('cuOpen').disabled = false;
   // Your side NETTED by his change in the weeks you play him (`netGainOf`), as
   // every finder row is; his side is his own lineup, as He gains is.
-  $('cuGainA').innerHTML = customGainHtml(netGainOf(customOffer(state.custom, priced)));
-  $('cuGainB').innerHTML = customGainHtml(priced.forB.delta);
+  // Per week as the week table's "Per week" row and a saved row print it.
+  const cuOffer = customOffer(state.custom, priced);
+  const n = weeklySpan().length;
+  $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer),
+    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n));
+  $('cuGainB').innerHTML = customGainHtml(priced.forB.delta,
+    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n));
   // The sentence above them is now about the DEAL rather than about the
   // numbers: who moves which way, which the two columns cannot say between
   // them. The figures are under their own squads and do not need naming twice.
@@ -7911,7 +8005,7 @@ function renderCustomPreview(priced) {
     : null;
   const goalBit = s && Number.isFinite(s.mine.gain)
     ? ` · <span class="${s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : ''}">` +
-      `${esc(goalOf(state.goal).chance)} <strong>${signedPct(s.mine.after - s.mine.before)}</strong>` +
+      `${esc(goalOf(state.goal).chance)} <strong>${pctChange(s.mine.before, s.mine.after)}</strong>` +
       `<span class="band"> ±${bandText()}</span></span> ` +
       `(${pct(s.mine.before)} → ${pct(s.mine.after)}` +
       (Number.isFinite(s.accept) ? `, ${Math.round(s.accept * 100)}% he says yes` : '') + `)`

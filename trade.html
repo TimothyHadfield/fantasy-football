@@ -975,6 +975,18 @@
   /* The column heads may wrap ("You gain a week (weeks 2–16)" was the widest
      thing in its column), so the rows decide the widths, not the labels. */
   #tradeTable thead th, table.offers thead th { white-space: normal; }
+  /* A 1280-WIDE LAPTOP (audit, 2026-10-06): the finder was 150px wider than its
+     box there and scrolled sideways (it fits from 1440). Between a phone and
+     1440px the cells sit closer and the two "Open in …" buttons take a second
+     line; no column goes. Under 761px nothing changes — on a phone the table
+     scrolls inside its own box, which is the recorded decision. */
+  @media (min-width: 761px) and (max-width: 1439px) {
+    #tradeTable th, #tradeTable td { padding-left: 5px; padding-right: 5px; }
+    #tradeTable td.espn .espn-open {
+      width: 10em; box-sizing: border-box; padding-left: 7px; padding-right: 7px;
+      white-space: normal; text-align: left;
+    }
+  }
   /* The assumed block is a div (it is not one of the page's panels), drawn
      exactly as app.css draws `section.panel`. */
   #assumedPanel {
