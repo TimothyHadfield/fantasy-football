@@ -368,12 +368,20 @@ export function weekWeights(inputs, myTeamId, weeks, goal, { runs = GOAL_RUNS, s
   // same runs, same seed — or every weight is measured against the wrong base.
   const base = given || simulateWith(inputs, null, { runs, seed });
   if (!base) return null;
+  const raw = weeks.map((week) => rawWeight(inputs, base, myTeamId, week, goal, runs, seed));
+  return weightsFrom(raw, base);
+}
+
+/** One week's measured change in the chance per point: the bumped season, played out. */
+function rawWeight(inputs, base, myTeamId, week, goal, runs, seed) {
   const before = goalChance(base, myTeamId, goal);
-  const raw = weeks.map((week) => {
-    const after = simulateWith(inputs, new Map([[myTeamId, new Map([[week, WEIGHT_BUMP]])]]), { runs, seed });
-    const g = goalGain(before, goalChance(after, myTeamId, goal), goal);
-    return Number.isFinite(g) ? g / WEIGHT_BUMP : 0;
-  });
+  const after = simulateWith(inputs, new Map([[myTeamId, new Map([[week, WEIGHT_BUMP]])]]), { runs, seed });
+  const g = goalGain(before, goalChance(after, myTeamId, goal), goal);
+  return Number.isFinite(g) ? g / WEIGHT_BUMP : 0;
+}
+
+/** The measured changes, floored and normalised — or null when the goal is settled. */
+function weightsFrom(raw, base) {
   const top = Math.max(...raw);
   // Ten points in the most important week moving the chance by less than a
   // twentieth of a point: the goal is settled, and weights would be noise.
@@ -381,6 +389,33 @@ export function weekWeights(inputs, myTeamId, weeks, goal, { runs = GOAL_RUNS, s
   const floored = raw.map((s) => Math.max(s, WEIGHT_FLOOR * top));
   const mean = floored.reduce((a, s) => a + s, 0) / floored.length;
   return { weights: floored.map((s) => s / mean), raw, base };
+}
+
+/**
+ * `weekWeights`, one simulated season per task: the same weights, for a page
+ * that must stay usable while they are measured. A span of fifteen weeks is
+ * fifteen runs of ten thousand seasons, which in one go held the page for
+ * seconds (measured 2026-10-06). `pause` hands the event loop back between
+ * runs; `stale`, asked after each pause, abandons the work (null) — the
+ * caller's cancel token. The base run is still one run when it is not given.
+ *
+ * @returns {Promise<{weights:number[], raw:number[], base:Object}|null>}
+ */
+export async function weekWeightsSliced(
+  inputs, myTeamId, weeks, goal,
+  { runs = GOAL_RUNS, seed = GOAL_SEED, base: given = null, pause = null, stale = null } = {}
+) {
+  if (!inputs || !Array.isArray(weeks) || !weeks.length) return null;
+  const rest = pause || (() => new Promise((r) => setTimeout(r, 0)));
+  const base = given || simulateWith(inputs, null, { runs, seed });
+  if (!base) return null;
+  const raw = [];
+  for (const week of weeks) {
+    await rest();
+    if (stale && stale()) return null;
+    raw.push(rawWeight(inputs, base, myTeamId, week, goal, runs, seed));
+  }
+  return weightsFrom(raw, base);
 }
 
 /**

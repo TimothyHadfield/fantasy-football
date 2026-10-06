@@ -649,7 +649,7 @@ const topIds = (list) => new Set(list.slice(0, TWO_CAP).map((p) => p.playerId));
  */
 export const PACKAGE_KINDS = ['even', 'consolidate', 'depth', 'two'];
 
-function tradesWith(myScored, theirScored, theirs, slots, kinds) {
+function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds) {
   const myBase = optimalLineup(myScored, slots);
   const theirBase = optimalLineup(theirScored, slots);
 
@@ -664,6 +664,8 @@ function tradesWith(myScored, theirScored, theirs, slots, kinds) {
 
   const found = [];
   for (const send of myPackages) {
+    // One stop per package sent — the scalar twin of `tradesAcrossWeeksSteps`.
+    yield;
     for (const receive of theirPackages) {
       // 2-for-2 only among the top TWO_CAP pieces a side — see TWO_CAP.
       if (send.length === 2 && receive.length === 2 &&
@@ -922,7 +924,77 @@ function pickCompletions(sorted, gates) {
  *   SUGGESTION LIST — see `pickCompletions`. Weekly measure only.
  * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
  */
-export function findTrades({
+export function findTrades(opts) {
+  return drain(findTradesSteps(opts));
+}
+
+/** Run a step generator straight through and hand back what it returns. */
+function drain(steps) {
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+/**
+ * How long `findTradesSliced` works before it hands the page back, in
+ * milliseconds. Short enough that a scroll or a tap in the middle of a search
+ * is answered within a frame or two.
+ */
+export const SEARCH_SLICE_MS = 30;
+
+/**
+ * A PAUSE IS NOT FREE EVERYWHERE. Chrome hands control back in a tenth of a
+ * millisecond; the Safari engine this is tested in took 17–25 ms per pause
+ * (measured 2026-10-06, 712 pauses = 18 s on an 18 s search). So a slice grows
+ * to ten times what the last pauses cost — a pause is then a tenth of the work
+ * at most — up to this ceiling, which is about one simulated season, the
+ * longest thing the page does in one go anyway.
+ */
+const SEARCH_SLICE_MAX_MS = 200;
+
+const clock = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+
+/**
+ * `findTrades`, a slice at a time: the same search, the same options and the
+ * same answer, for a page that must stay usable while it runs. On the weekly
+ * measure the whole league is several seconds of lineup fills, and in one go
+ * nothing on the page could be scrolled or tapped until it ended (measured
+ * 2026-10-06 in headless Chrome and Safari's engine).
+ *
+ * @param {Object} opts exactly `findTrades`' options
+ * @param {Object} [how]
+ * @param {number} [how.sliceMs] work this long, then pause
+ * @param {function} [how.pause] `() -> Promise`: hand the event loop back
+ * @param {function} [how.stale] `() -> boolean`, asked after every pause: true
+ *   abandons the search — the caller's cancel token
+ * @returns {Promise<Object|null>} `findTrades`' result, or null when abandoned
+ */
+export function findTradesSliced(opts, how) {
+  return runSliced(findTradesSteps(opts || {}), how);
+}
+
+/** Run a step generator a slice at a time; null when `stale` says to stop. */
+async function runSliced(steps, { sliceMs = SEARCH_SLICE_MS, pause = null, stale = null } = {}) {
+  const rest = pause || (() => new Promise((r) => setTimeout(r, 0)));
+  // The cheapest of the last three pauses: one that was slow because the page
+  // was busy answering a tap says nothing about what a pause costs.
+  const costs = [0, 0, 0];
+  let budget = sliceMs;
+  let t0 = clock();
+  for (let n = 0; ; ) {
+    const r = steps.next();
+    if (r.done) return r.value;
+    const t1 = clock();
+    if (t1 - t0 < budget) continue;
+    await rest();
+    if (stale && stale()) return null;
+    t0 = clock();
+    costs[n++ % 3] = t0 - t1;
+    budget = n < 3 ? sliceMs : Math.min(SEARCH_SLICE_MAX_MS, Math.max(sliceMs, 10 * Math.min(...costs)));
+  }
+}
+
+function* findTradesSteps({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
   weeks = null, projFor = null, zeroIsBye = true, floors = null,
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
@@ -951,7 +1023,7 @@ export function findTrades({
     if (partnerId !== null && partnerId !== undefined && theirs.id !== partnerId) continue;
     offers = offers.concat(
       weekly
-        ? tradesAcrossWeeks(
+        ? yield* tradesAcrossWeeksSteps(
             myScored, scoreAcrossWeeks(theirs.players, weeks, projFor, zeroIsBye).season,
             theirs, slots, kinds, weeks, floors,
             { weights: Array.isArray(weights) && weights.length === weeks.length ? weights : null,
@@ -964,7 +1036,7 @@ export function findTrades({
               exhaustive: !!exhaustive,
               must, complete: !!complete, gates }
           )
-        : tradesWith(myScored, scored(theirs.players, measure), theirs, slots, kinds)
+        : yield* tradesWithSteps(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
   }
 
@@ -977,13 +1049,13 @@ export function findTrades({
   }
   if (complete && weekly) {
     const picked = pickCompletions(offers.slice().sort(compareOffers), gates);
-    for (const o of picked) finishOffer(o);
+    for (const o of picked) { finishOffer(o); yield; }
     for (const o of offers) delete o.finish;
     return { offers: picked, mine, considered, basis: 'weeks' };
   }
   const ranked = dropRedundant(bestPerTarget(offers)).sort(compareOffers).slice(0, limit);
   // The two churn lists are filled only for the offers handed back.
-  for (const o of ranked) finishOffer(o);
+  for (const o of ranked) { finishOffer(o); yield; }
   for (const o of offers) delete o.finish;
 
   return {
@@ -1457,6 +1529,17 @@ function weeklyChurn(was, now) {
  * the floor anyway.
  */
 function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, floors = null, options = {}) {
+  return drain(tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, weeks, floors, options));
+}
+
+/**
+ * The search itself, as STEPS: a generator that stops (`yield`, no value) after
+ * each piece of real work — a ceiling, a gifted roster, one send priced — and
+ * returns the offers found. Run straight through (`drain`) it is the search
+ * exactly as it always was; `findTradesSliced` runs the same steps a few
+ * milliseconds at a time, so one body serves both and they cannot disagree.
+ */
+function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, weeks, floors = null, options = {}) {
   const n = weeks.length;
   // `minGain`, not `floor`. Since 2026-09-18 "the floor" means the POSITIONAL
   // floor everywhere on this site — the wire's best man at a position, which
@@ -1550,9 +1633,13 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
   // with `reach`: the gifted roster fields at least as much in every week, and
   // every reach is ≥ 0.
   const prune = !options.exhaustive && !complete;
-  const ceilingForThem = prune
-    ? myPackages.map((send) => theirOf(totalAcrossWeeks(theirScored.concat(send), slots, n, floors)))
-    : null;
+  const ceilingForThem = prune ? new Array(myPackages.length) : null;
+  if (prune) {
+    for (let k = 0; k < myPackages.length; k++) {
+      ceilingForThem[k] = theirOf(totalAcrossWeeks(theirScored.concat(myPackages[k]), slots, n, floors));
+      yield;
+    }
+  }
 
   // THE WEEKS YOU PLAY HIM, NETTED (Tim, 2026-09-30: "add the change in
   // opponent proj to the total +/- gain"). `meet` holds the indices of the
@@ -1632,6 +1719,7 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
     // Only a bound for pruning — not needed when nothing is pruned.
     const extra = prune ? meetCeilings(receive) : { noCut: 0, cut: 0 };
     const extraMax = Math.max(extra.noCut, extra.cut);
+    yield;
     if (prune && giftedCeiling + extraMax + NET_SLACK < minGain) continue;
     const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
 
@@ -1643,6 +1731,8 @@ function tradesAcrossWeeks(myScored, theirScored, theirs, slots, kinds, weeks, f
 
       const kind = packageKind(send, receive);
       if (!kinds.includes(kind)) continue;
+      // One stop per send that is actually priced; the skips above cost nothing.
+      yield;
 
       // Mine first, and bail before touching theirs — the same reason as the
       // scalar search, and nine times as good a reason.
@@ -1903,7 +1993,21 @@ function greedyPacking(pool) {
  *            naiveDelta:number, best:Object, most:Object, mostIsBest:boolean,
  *            considered:number, exhaustive:boolean, offers:Array}}
  */
-export function bestCombo(offers, {
+export function bestCombo(offers, opts) {
+  return drain(bestComboSteps(offers, opts));
+}
+
+/**
+ * `bestCombo`, a slice at a time — the same packings priced in the same order
+ * and the same answer, for a page that must stay usable meanwhile. `how` is
+ * `findTradesSliced`'s: `{ sliceMs, pause, stale }`; null when abandoned.
+ */
+export function bestComboSliced(offers, opts, how) {
+  return runSliced(bestComboSteps(offers, opts), how);
+}
+
+/** The packing search as steps: one stop per packing priced. See `tradesAcrossWeeksSteps`. */
+function* bestComboSteps(offers, {
   players, slots, weeks, projFor,
   teams = null,
   requirePartnersGain = true,
@@ -2088,9 +2192,10 @@ export function bestCombo(offers, {
   const used = new Set();
   const partnersUsed = new Set();
 
-  const walk = (from) => {
+  const walk = function* walk(from) {
     if (considered >= maxPackings) { exhaustive = false; return; }
     consider(chosen);
+    yield;
     for (let i = from; i < pool.length; i++) {
       if (considered >= maxPackings) { exhaustive = false; return; }
       const c = pool[i];
@@ -2103,14 +2208,14 @@ export function bestCombo(offers, {
       const hadPartner = partnersUsed.has(partnerId);
       partnersUsed.add(partnerId);
 
-      walk(i + 1);
+      yield* walk(i + 1);
 
       chosen.pop();
       for (const id of c.ids) used.delete(id);
       if (!hadPartner) partnersUsed.delete(partnerId);
     }
   };
-  walk(0);
+  yield* walk(0);
 
   // The cap tripped, so the search was not exhaustive. Make sure the greedy
   // packing has at least been priced, so the answer is never worse than the

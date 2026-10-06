@@ -103,13 +103,13 @@ import { generateDemoLeague } from './demo.js';
 import {
   goalOf, DEFAULT_GOAL, acceptChance, offerDeltas, simulateWith,
   scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
-  weekWeights, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
+  weekWeights, weekWeightsSliced, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
   finishedWeeks, someoneFinished, espnLookPerWeek, playoffReach, goalChance, goalGain, shiftSeason,
 } from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
 import {
-  depthTable, findTrades, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
-  priceTradeAcrossWeeks, bestCombo, mergeComboByPartner, seasonLineupValue,
+  depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
+  priceTradeAcrossWeeks, bestComboSliced, mergeComboByPartner, seasonLineupValue,
 } from './trade.js';
 // THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
 // forecast, the trade finder, "Who to start" and the per-week valuation all
@@ -3697,6 +3697,18 @@ function renderFinder() {
   const body = bodyOf(table);
   const empty = $('tradeEmpty');
 
+  // THE ONE SIGNAL THAT THE ORDER ON SCREEN IS FINAL, on the table itself and
+  // invisible: `data-ranked` is the goal it is ranked by, or "points" when the
+  // simulation could not rank it and has said why. Absent while a search or a
+  // ranking is still running — both work in slices now, so "the rows are there"
+  // no longer means "the rows are done", and a test has to be able to tell.
+  const rank = state.goalRank;
+  const final = state.searching || !state.search || rank.running
+    ? null
+    : state.search.goalRanked ? state.goal : rank.why && rank.why !== 'waiting' ? 'points' : null;
+  if (final) table.setAttribute('data-ranked', final);
+  else table.removeAttribute('data-ranked');
+
   if (state.searching) {
     state.rows = [];
     body.innerHTML = '';
@@ -4133,6 +4145,36 @@ function renderFinderNote(scales = finderScales) {
 }
 
 /**
+ * Hand the page back for a moment: one turn of the event loop, so a scroll, a
+ * tap or a repaint waiting behind the search is served before it carries on.
+ * A message, not a timer — a nested `setTimeout(0)` is held to 4 ms by every
+ * browser, which over a few hundred slices is a second or more of waiting for
+ * nothing.
+ */
+const breathe = (() => {
+  const timed = () => new Promise((r) => setTimeout(r, 0));
+  const Channel = typeof window !== 'undefined' ? window.MessageChannel : null;
+  if (typeof Channel !== 'function') return timed;
+  const channel = new Channel();
+  // NODE'S PORTS ARE NOT A BROWSER'S (measured 2026-10-06, tests/tr-test.mjs):
+  // node answers up to a thousand messages in one turn, so a search that posts
+  // the next one from inside the last never lets a timer run — 9.5 s without
+  // one. Only node's port has `unref`, so that is how it is told apart; there
+  // the pause is a timer, and the port is closed so it holds nothing open.
+  if (typeof channel.port1.unref === 'function') {
+    channel.port1.close();
+    return timed;
+  }
+  let waiting = [];
+  channel.port1.onmessage = () => {
+    const run = waiting;
+    waiting = [];
+    for (const r of run) r();
+  };
+  return () => new Promise((r) => { waiting.push(r); channel.port2.postMessage(0); });
+})();
+
+/**
  * Run the search, off the paint.
  *
  * On a scalar measure a ten-team league is a few hundred thousand lineup fills
@@ -4141,6 +4183,16 @@ function renderFinderNote(scales = finderScales) {
  * why the "searching" state has to paint before it starts, and why the message
  * says which of the two is running. Same rAF-then-timeout shape as the season
  * simulation on the schedule page.
+ *
+ * AND IN SLICES, NEVER IN ONE GO (2026-10-06). Measured that day on league
+ * 1241838 in headless Chrome and Safari's engine: the goal weights and the
+ * weekly search ran as ONE task of 20 to 27 seconds, and for all of it nothing
+ * on the page could be scrolled, tapped or typed. Now the weights take one
+ * simulated season per task and the search a few milliseconds at a time
+ * (`weekWeightsSliced`, `findTradesSliced` — the same arithmetic in the same
+ * order, so the table is the one the single run gave), with `breathe()` between
+ * them. `runSearch.token` is the cancel token: a newer search, asked after every
+ * pause, ends this one before it can write a thing.
  */
 function runSearch({ keepDeal = false } = {}) {
   // An assumed trade's rosters first, so the search starts from them.
@@ -4190,8 +4242,12 @@ function runSearch({ keepDeal = false } = {}) {
   const kinds = state.kind === 'all' ? PACKAGE_KINDS : [state.kind];
   const weeks = basis() === 'weeks' ? weeklySpan() : null;
 
-  const go = () => {
-    if (token !== runSearch.token) return; // a newer search has started
+  // A newer search has started: asked after every pause, and before anything
+  // is written to `state`.
+  const stale = () => token !== runSearch.token;
+
+  const go = async () => {
+    if (stale()) return;
     // How many WEEKLY searches this page has run, on the table itself, so a test
     // can hold the page to one per load (trade plan Phase 3) without timing a
     // message that is on screen for a blocked moment. Invisible; nothing reads it.
@@ -4206,9 +4262,10 @@ function runSearch({ keepDeal = false } = {}) {
     // final is found at all. Until the played weeks are in (the spread is
     // measured from them) it searches on points and `loadHistory` re-runs it.
     const ctx = weeks ? goalContext() : null;
-    const W = ctx && ctx.inputs ? goalWeightsFor(ctx, state.myTeamId, weeks) : null;
+    const W = ctx && ctx.inputs ? await goalWeightsSliced(ctx, state.myTeamId, weeks, stale) : null;
+    if (stale()) return;
     state.goalWeights = W;
-    const result = findTrades({
+    const result = await findTradesSliced({
       teams,
       myTeamId: state.myTeamId,
       slots: state.slots,
@@ -4239,13 +4296,21 @@ function runSearch({ keepDeal = false } = {}) {
       // minus his in the regular-season weeks left in which he plays you —
       // the same weeks "His proj vs you" adds up.
       meetWeeks: weeks ? meetWeeksOf(state.myTeamId) : null,
-    });
-    if (token !== runSearch.token) return;
+    }, { pause: breathe, stale });
+    if (!result || stale()) return;
     // Whether this search had the goal to work with — even when the weights
     // came back null (the goal is settled), it has been tried and a re-run
     // would find the same thing.
     result.goalTried = !!(ctx && ctx.inputs);
     result.weighted = !!W;
+    // THE SIMULATION BECAME POSSIBLE WHILE THIS WAS SEARCHING ON POINTS — the
+    // played weeks landed mid-search, and `goalFollowUp` found no search to
+    // follow up. So its rule is applied here: the candidates change with the
+    // goal's weights, so this answer is not shown and the search runs again.
+    if (weeks && !result.goalTried && goalContext().inputs) {
+      runSearch({ keepDeal: true });
+      return;
+    }
     state.search = result;
     state.searching = false;
     // A pop-up kept open through the re-rank is holding the OLD search's offer,
@@ -4470,11 +4535,26 @@ function runGoalRank() {
       r.done = i;
     }
     if (i < offers.length) {
-      if (!r.staged && i >= GOAL_STAGE) stageGoalRank(search, offers, i);
-      else renderFinderNote();
+      // The staged repaint draws the whole table, so it gets a turn of its own
+      // rather than riding on the back of a simulated season (2026-10-06).
+      if (!r.staged && i >= GOAL_STAGE) {
+        const scored = i;
+        breathe().then(() => {
+          if (token !== r.token || state.search !== search) return;
+          stageGoalRank(search, offers, scored);
+          setTimeout(step, 0);
+        });
+        return;
+      }
+      renderFinderNote();
       setTimeout(step, 0);
       return;
     }
+    // And so does the last repaint, the biggest on the page.
+    breathe().then(finish);
+  };
+  const finish = () => {
+    if (token !== r.token || state.search !== search) return;
     r.running = false;
     r.staged = 0;
     for (const o of offers) o.goalUnranked = false;
@@ -4588,6 +4668,22 @@ function goalWeightsFor(ctx, teamId, span) {
   // `base`: the run this context already made (Phase 3) — the same inputs, runs
   // and seed — so the weights do not simulate the league as it stands twice.
   if (!ctx.weights.has(key)) ctx.weights.set(key, weekWeights(ctx.inputs, teamId, span, state.goal, { base: ctx.base }));
+  return ctx.weights.get(key);
+}
+
+/**
+ * The same weights into the same cache, one simulated season per task — what
+ * the search waits on, so measuring them never holds the page (see
+ * `runSearch`). Null when `stale` ended it; nothing is cached then.
+ */
+async function goalWeightsSliced(ctx, teamId, span, stale) {
+  if (!ctx || !ctx.inputs) return null;
+  const key = `${teamId}:${span.join(',')}`;
+  if (!ctx.weights.has(key)) {
+    const W = await weekWeightsSliced(ctx.inputs, teamId, span, state.goal, { base: ctx.base, pause: breathe, stale });
+    if (stale()) return null;
+    ctx.weights.set(key, W);
+  }
   return ctx.weights.get(key);
 }
 
@@ -6851,9 +6947,13 @@ function runCombo() {
   // COMPUTED, which is a different failure and needs its own answer.
   const offers = state.search.offers;
   const token = ++runCombo.token;
-  const go = () => {
-    if (token !== runCombo.token) return;
-    state.combo = bestCombo(offers, {
+  const stale = () => token !== runCombo.token;
+  const go = async () => {
+    if (stale()) return;
+    // A slice at a time, like the search above it: a dozen offers are hundreds
+    // of packings, each priced by re-filling every week, and in one go that was
+    // half a second of a page that would not scroll (measured 2026-10-06).
+    const combo = await bestComboSliced(offers, {
       players: me.players,
       slots: state.slots,
       weeks: weeklySpan(),
@@ -6888,7 +6988,9 @@ function runCombo() {
       // Netted the same way as the finder: each manager's change in the weeks
       // you play HIM comes off your side (`netDelta`, and what is chosen by).
       meetWeeks: meetWeeksOf(state.myTeamId),
-    });
+    }, { pause: breathe, stale });
+    if (!combo || stale()) return;
+    state.combo = combo;
 
     // Merged here, once per search, and not in the renderer: each merged offer
     // costs a fresh `priceTradeAcrossWeeks` — two fills of every remaining week
@@ -8215,11 +8317,21 @@ function renderCustomSuggest() {
     cuSug.tickAt = Date.now();
     const token = ++cuSug.token;
     clearTimeout(cuSug.timer);
-    cuSug.timer = setTimeout(() => {
-      if (token !== cuSug.token) return;
+    cuSug.timer = setTimeout(async () => {
+      const stale = () => token !== cuSug.token;
+      if (stale()) return;
       let rows = [];
-      try { rows = findSuggestions(); } catch (err) { console.error(err); rows = []; }
-      if (token !== cuSug.token) return;
+      try {
+        // The goal's weights for this squad first, a simulated season per task
+        // (`goalWeightsSliced`): `findSuggestions` then reads them from the
+        // cache. Measured in its own one go they held the page for seconds —
+        // whenever the box was built from another squad, or the finder was
+        // still measuring its own.
+        await goalWeightsSliced(goalContext(), state.custom.a, weeklySpan(), stale);
+        if (stale()) return;
+        rows = findSuggestions();
+      } catch (err) { console.error(err); rows = []; }
+      if (stale()) return;
       cuSug.rows = rows;
       cuSug.ms = Date.now() - cuSug.tickAt;
       drawCustomSuggest();

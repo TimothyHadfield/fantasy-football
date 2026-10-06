@@ -167,7 +167,34 @@ async function boot(page = 'trade.html', search = '', seed = null, { wide = true
  * nine to thirteen lineups — and needs seconds rather than milliseconds, which
  * is itself a cost the page states.
  */
-const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The finder is showing "Trying every swap…", or the combo "Trying every set…": a search is in flight. */
+function searchRunning() {
+  const document = globalThis.document;
+  const el = document && document.getElementById('tradeEmpty');
+  if (el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching')) return true;
+  const combo = document && document.getElementById('comboBody');
+  return !!combo && /Trying every set/.test(combo.textContent);
+}
+
+/**
+ * AND NEVER BACK IN THE MIDDLE OF A SEARCH (2026-10-06). The search used to be
+ * one task, so a timer set before it could not fire until it was over: every
+ * `settle()` in this file that follows a press was, without saying so, a wait
+ * for the search that press started. Now the search runs in slices and timers
+ * fire between them — eighteen assertions read "Trying every swap…" the first
+ * time this ran against the sliced page. So the wait says what it always
+ * meant: this long, and then until no search is running. The ceiling is for a
+ * page that never finishes, which then fails on what it shows.
+ */
+const settle = async (ms = 400) => {
+  await pause(ms);
+  const t0 = Date.now();
+  while (searchRunning() && Date.now() - t0 < 180000) await pause(25);
+  // The paint that ends a search and what it starts (the combo, the ranking).
+  if (Date.now() - t0 >= 25) await pause(50);
+};
 
 /**
  * Wait until the Trade page has FINISHED, rather than for a guessed number of
@@ -3357,6 +3384,175 @@ SCENARIOS.searchOnce = async function searchOnce() {
     count: text(document.getElementById('tradeCount')),
     trades: readTrades(document).length,
   };
+};
+
+/**
+ * THE PAGE STAYS ALIVE WHILE IT RANKS (2026-10-06).
+ *
+ * The weekly search and the goal's week weights used to run in ONE task: twelve
+ * to twenty-six seconds, measured in two browsers, in which nothing could be
+ * scrolled or tapped. Now they run a slice at a time. A 10 ms tick is started
+ * BEFORE the page's module is imported and reads the page each time it gets a
+ * turn — which is exactly what a blocked page cannot give it, so on the old
+ * page it sees the search for a tick or two and then the finished table.
+ *
+ * `TR_SWITCH=1` also changes the squad from inside the tick, once the search
+ * has been seen running for fifteen ticks, and records every row painted from
+ * then on by who gives what to whom: an abandoned search must paint none of
+ * its own.
+ */
+SCENARIOS.rankSliced = async function rankSliced() {
+  const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ') : '');
+  const seen = {
+    ticks: 0, searchTicks: 0, playTicks: 0, longestGapMs: 0,
+    rankedWhileBusy: 0, switched: null, keysAfter: [], titlesAfter: [],
+  };
+  const keys = new Set();
+  const titles = new Set();
+  // WHO AND WHOM, not `data-key`: that is the row's place in the list ("f:0"),
+  // which every search's first row shares.
+  const dealOf = (tr) => ['name', 'send', 'recv']
+    .map((c) => txt(tr.querySelector(`td.${c}`)).trim()).join(' | ');
+  let last = null;
+  const timer = setInterval(() => {
+    const document = globalThis.document;
+    const table = document && document.getElementById('tradeTable');
+    if (!table) return;
+    const now = Date.now();
+    if (last !== null) seen.longestGapMs = Math.max(seen.longestGapMs, now - last);
+    last = now;
+    seen.ticks++;
+    const searching = searchRunning();
+    const playing = /playing each offer out/.test(txt(document.getElementById('tradeCount')));
+    if (searching) seen.searchTicks++;
+    if (playing) seen.playTicks++;
+    if ((searching || playing) && table.getAttribute('data-ranked') !== null) seen.rankedWhileBusy++;
+    if (process.env.TR_SWITCH === '1' && !seen.switched && seen.searchTicks >= 15 && searching) {
+      const sel = document.getElementById('teamSelect');
+      const was = sel.value;
+      const next = [...sel.querySelectorAll('option')].find((o) => o.getAttribute('value') !== was);
+      seen.switched = { from: was, to: next.getAttribute('value'), name: txt(next).trim(), atTick: seen.ticks };
+      sel.value = next.getAttribute('value');
+      fire(sel);
+      return;
+    }
+    if (seen.switched) {
+      const rows = [...table.querySelectorAll('tbody tr')];
+      for (const tr of rows) keys.add(dealOf(tr));
+      if (rows.length) titles.add(txt(document.getElementById('finderTitle')).trim());
+    }
+  }, 10);
+
+  const { document, errors } = await boot();
+  await settleGoal(document);
+  // The page's own signal, when it has one; the old page never sets it.
+  const table = document.getElementById('tradeTable');
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5000 && table.getAttribute('data-ranked') === null) await settle(100);
+  clearInterval(timer);
+  seen.keysAfter = [...keys];
+  seen.titlesAfter = [...titles];
+  return {
+    errors, ...seen,
+    ranked: table.getAttribute('data-ranked'),
+    team: document.getElementById('teamSelect').value,
+    finalKeys: [...table.querySelectorAll('tbody tr')].map(dealOf),
+    finalTitle: txt(document.getElementById('finderTitle')).trim(),
+    count: text(document.getElementById('tradeCount')),
+    searches: table.getAttribute('data-weekly-searches'),
+  };
+};
+
+/**
+ * THE SLICED SEARCH IS THE SEARCH (2026-10-06). No page: js/trade.js and
+ * js/trade-odds.js asked the same question both ways, on the demo league over
+ * thirteen weeks — the finder weighted as the goal weights it, the plain
+ * typical-week finder, the combo over what the first found, and the week
+ * weights — and the two answers compared whole, as text.
+ *
+ * Also that the sliced one really pauses, and that a `stale` that turns true
+ * ends it with null rather than with half an answer.
+ */
+SCENARIOS.slicedSame = async function slicedSame() {
+  const { generateDemoWeekRosters } = await import(moduleUrl('js/demo-rosters.js'));
+  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
+  const T = await import(moduleUrl('js/trade.js'));
+  const O = await import(moduleUrl('js/trade-odds.js'));
+  if (typeof T.findTradesSliced !== 'function' || typeof T.bestComboSliced !== 'function' ||
+      typeof O.weekWeightsSliced !== 'function') {
+    return { missing: true };
+  }
+  const WEEKS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+  const idx = new Map();
+  for (const w of WEEKS) {
+    const m = new Map();
+    for (const t of generateDemoWeekRosters(w).teams) {
+      for (const p of t.players) m.set(p.playerId, typeof p.projected === 'number' ? p.projected : null);
+    }
+    idx.set(w, m);
+  }
+  const projFor = (p, w) => {
+    const v = idx.get(w) && idx.get(w).has(p.playerId) ? idx.get(w).get(p.playerId) : null;
+    return Number.isFinite(v) ? v : null;
+  };
+  const { teams } = generateDemoWeekRosters(5);
+  const slots = T.slotsForLeague(slotCountsFromLineups(teams));
+  const flat = (r) => JSON.stringify(r && r.offers ? {
+    ...r, mine: r.mine && r.mine.id,
+    offers: r.offers.map((o) => ({ ...o, partner: o.partner.id, send: o.send.map((p) => p.playerId),
+      receive: o.receive.map((p) => p.playerId) })),
+  } : r);
+  let pauses = 0;
+  const pause = () => { pauses++; return new Promise((r) => setImmediate(r)); };
+
+  const weighted = {
+    teams, myTeamId: teams[3].id, slots, weeks: WEEKS, projFor,
+    weights: WEEKS.map((_, i) => 0.4 + ((i * 7) % 5) * 0.3), theirMinPerWeek: -2,
+    theirReach: (id) => WEEKS.map((w, i) => (i < 10 ? 1 : Math.max(0.05, 0.9 - 0.07 * id - 0.1 * (i - 10)))),
+    meetWeeks: (id) => [5 + (id % 9), 14 - (id % 4)],
+    rankBy: (o) => o.goalPoints * (1 / (1 + Math.exp(-(o.theirGain / (o.theirWeeks || 13) + 3) / 1.5))),
+  };
+  const out = { missing: false };
+  const whole = T.findTrades(weighted);
+  const sliced = await T.findTradesSliced(weighted, { pause });
+  out.weekly = { same: flat(whole) === flat(sliced), offers: whole.offers.length, considered: whole.considered, pauses };
+
+  const typical = { teams, myTeamId: teams[2].id, slots };
+  const a = T.findTrades(typical);
+  out.typical = { same: flat(a) === flat(await T.findTradesSliced(typical, { pause })), offers: a.offers.length };
+
+  const comboOpts = { players: teams[3].players, slots, weeks: WEEKS, projFor, teams };
+  const c1 = T.bestCombo(whole.offers, comboOpts);
+  const c2 = await T.bestComboSliced(whole.offers, comboOpts, { pause });
+  const comboFlat = (c) => JSON.stringify(c, (k, v) => (k === 'partner' && v && v.id !== undefined ? v.id : v));
+  out.combo = { same: comboFlat(c1) === comboFlat(c2), found: !!c1, deals: c1 && c1.offers ? c1.offers.length : null };
+
+  const ids = teams.map((t) => t.id);
+  const games = [];
+  for (const w of [5, 6, 7, 8]) {
+    for (let i = 0; i < ids.length; i += 2) {
+      const home = ids[(i + w) % ids.length];
+      let away = ids[(i + 1 + 2 * w) % ids.length];
+      if (away === home) away = ids[(i + 2 + 2 * w) % ids.length];
+      games.push({ week: w, homeId: home, awayId: away, homeProj: 100 + i, awayProj: 104 - i });
+    }
+  }
+  const inputs = {
+    teamIds: ids, banked: new Map(ids.map((id, i) => [id, { wins: i % 4, pointsFor: 400 + 10 * i }])),
+    games, sigma: 22, playoff: null,
+  };
+  out.weights = {};
+  for (const goal of ['title', 'last']) {
+    const w1 = O.weekWeights(inputs, ids[0], [5, 6, 7, 8], goal);
+    const w2 = await O.weekWeightsSliced(inputs, ids[0], [5, 6, 7, 8], goal);
+    out.weights[goal] = { same: JSON.stringify(w1) === JSON.stringify(w2), any: !!w1 };
+  }
+
+  // Abandoned after its third pause: null, not a part-finished list.
+  let n = 0;
+  out.abandoned = await T.findTradesSliced(weighted, { pause: () => { n++; return new Promise((r) => setImmediate(r)); }, stale: () => n >= 3 });
+  out.abandonedAfter = n;
+  return out;
 };
 
 /**
@@ -7954,6 +8150,65 @@ for (const goal of ['title', 'last']) {
   eq(so.searches, 1, `a live load under "${goal}" runs ONE weekly search, not a points search and then another`);
   ok(`search-once (${goal}): and it still ends ranked by the goal, with offers`,
     so.trades > 0 && /ranked by your/.test(so.count) && !/not ranked/.test(so.count), so.count.slice(0, 200));
+}
+
+// ---- THE PAGE STAYS ALIVE WHILE IT RANKS (2026-10-06) ----------------------
+//
+// Demo, title goal. Measured on the page as it was: the tick saw the search
+// running 1-2 times and then nothing for 9.1-9.5 s; sliced, 272-277 times with
+// 0.29-0.35 s the longest wait (one simulated season, which is one task).
+{
+  const rs = run('rankSliced', { env: { TR_GOAL: 'title' } });
+  ok('the sliced-ranking scenario boots', !rs.boot, rs.boot);
+  if (!rs.boot) {
+    ok('sliced ranking: no console errors', rs.errors.length === 0, rs.errors.slice(0, 2).join(' | '));
+    ok('a timer gets a turn again and again WHILE the search runs — the page is not held',
+      rs.searchTicks >= 20, `${rs.searchTicks} ticks saw the search running`);
+    const most = scaledBudget(1500, machineFactor());
+    ok('and nothing on the way to the ranked table holds it for seconds',
+      rs.longestGapMs < most, `longest wait ${rs.longestGapMs} ms, allowed ${most}`);
+    eq(rs.ranked, 'title', 'the table says when it is ranked, and by which goal (data-ranked)');
+    ok('and never says so while it is still searching or playing offers out',
+      rs.rankedWhileBusy === 0 && rs.playTicks > 0, `${rs.rankedWhileBusy} of ${rs.playTicks} busy ticks`);
+    eq(rs.searches, '1', 'still one weekly search for the load');
+  }
+
+  const sw = run('rankSliced', { env: { TR_GOAL: 'title', TR_SWITCH: '1' } });
+  ok('the switch-mid-search scenario boots', !sw.boot, sw.boot);
+  if (!sw.boot) {
+    ok('switch mid-search: no console errors', sw.errors.length === 0, sw.errors.slice(0, 2).join(' | '));
+    ok('the squad can be changed while the search is running', !!sw.switched, `${sw.searchTicks} search ticks`);
+    if (sw.switched) {
+      eq(sw.team, sw.switched.to, 'the page ends on the squad that was picked');
+      ok('ranked for that squad', sw.ranked === 'title' && sw.finalTitle.endsWith(sw.switched.name) &&
+        sw.finalKeys.length > 0, `${sw.ranked} · ${sw.finalTitle} · ${sw.finalKeys.length} rows`);
+      ok('every table painted after the switch is under the new squad’s name',
+        sw.titlesAfter.length > 0 && sw.titlesAfter.every((t) => t.endsWith(sw.switched.name)),
+        sw.titlesAfter.join(' | '));
+      const final = new Set(sw.finalKeys);
+      const strangers = sw.keysAfter.filter((k) => !final.has(k));
+      ok('and no row of the abandoned search is ever painted',
+        sw.keysAfter.length > 0 && strangers.length === 0,
+        `${strangers.length} of ${sw.keysAfter.length} deals seen are not the new squad’s: ${strangers.slice(0, 2).join(' ; ')}`);
+    }
+  }
+
+  const same = run('slicedSame');
+  ok('the sliced-engine scenario boots', !same.boot, same.boot);
+  if (!same.boot) {
+    ok('js/trade.js and js/trade-odds.js have their sliced entry points', !same.missing);
+    if (!same.missing) {
+      ok('the weekly, goal-weighted search finds the same thing sliced as whole',
+        same.weekly.same && same.weekly.offers > 0, JSON.stringify(same.weekly));
+      ok('and it really did pause on the way', same.weekly.pauses >= 20, `${same.weekly.pauses} pauses`);
+      ok('the typical-week search too', same.typical.same && same.typical.offers > 0, JSON.stringify(same.typical));
+      ok('the best combo too', same.combo.same && same.combo.found, JSON.stringify(same.combo));
+      ok('and the week weights', same.weights.last.same && same.weights.last.any && same.weights.title.same,
+        JSON.stringify(same.weights));
+      ok('an abandoned search answers null, at the pause it was abandoned on',
+        same.abandoned === null && same.abandonedAfter === 3, `${JSON.stringify(same.abandoned)} after ${same.abandonedAfter}`);
+    }
+  }
 }
 
 // 11.5 days out: "12 days left", and not yet red.
