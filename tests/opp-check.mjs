@@ -133,9 +133,12 @@ function readPage(document) {
 
   const bars = Array.from(document.querySelectorAll('#oppProjChart .oppbars li')).map((li) => {
     const get = (cls) => clean(li.querySelector(cls)?.textContent);
+    // The record sits by the name (Tim, 2026-10-05); read the two apart.
+    const record = get('.nm .rec');
     return {
       rank: Number(get('.rk')),
-      name: get('.nm'),
+      name: get('.nm').slice(0, get('.nm').length - record.length).trim(),
+      record,
       value: Number(get('.vv')),
       gap: get('.dd'),
       width: Number(/width:([\d.]+)%/.exec(li.querySelector('.bar i')?.getAttribute('style') || '')?.[1]),
@@ -184,7 +187,10 @@ function check(scenario, page, boot) {
   const calls = boot.stub ? boot.stub.calls : [];
 
   if (scenario === 'demo') {
-    ok(page.bars.length === 10, `${page.bars.length} bars, expected 10`);
+    // REST OF SEASON (Tim, 2026-10-05): the demo season is over, so the chart
+    // has no week left to draw and says so. The column is still the whole season.
+    ok(page.bars.length === 0, `${page.bars.length} bars on a finished season, expected 0`);
+    ok(/No weeks left to play/.test(page.chartText), `finished season chart says: "${page.chartText}"`);
     ok(page.badge === 'Demo', `badge is "${page.badge}"`);
     const col = page.rows.map((r) => r.cells[8]);
     ok(col.every((v) => /^\d+\.\d$/.test(v)), `Opp proj column not all numbers: ${col.join(',')}`);
@@ -205,11 +211,19 @@ function check(scenario, page, boot) {
     ok(page.bars[0].name === 'Team 1' && page.bars[3].name === 'Team 4',
       `bar order is ${page.bars.map((b) => b.name).join(' > ')}`);
 
-    // Hand-computed averages, in the bars and in the table cell alike.
+    // Hand-computed averages. The table cell is the whole season; the bars are
+    // only the weeks still to play (Tim, 2026-10-05) — all three with nothing
+    // played, and two weeks in just week 3: 1v4 and 2v3, so each bar is the
+    // other side's week-3 projection.
+    const REST = scenario === 'mid' ? { 1: 133.0, 2: 123.0, 3: 113.0, 4: 103.0 } : EXPECT;
+    const REST_LEAGUE = scenario === 'mid' ? 118.0 : EXPECT_LEAGUE;
     for (const b of page.bars) {
       const id = Number(b.name.replace('Team ', ''));
-      ok(Math.abs(b.value - EXPECT[id]) < 0.05, `${b.name} bar shows ${b.value}, expected ${EXPECT[id]}`);
+      ok(Math.abs(b.value - REST[id]) < 0.05, `${b.name} bar shows ${b.value}, expected ${REST[id]}`);
     }
+    // The record sits by the name.
+    const recs = page.bars.map((b) => b.record).join(' ');
+    ok(recs === (scenario === 'mid' ? '0–2 1–1 1–1 2–0' : '0–0 0–0 0–0 0–0'), `records by the names: ${recs}`);
     for (const r of page.rows) {
       const id = Number(r.cells[0].replace('Team ', ''));
       ok(Math.abs(Number(r.cells[8]) - EXPECT[id]) < 0.05,
@@ -220,12 +234,14 @@ function check(scenario, page, boot) {
 
     // The league average is the mean of the per-team averages, and the note says so.
     const mean = values.reduce((a, v) => a + v, 0) / values.length;
-    ok(Math.abs(mean - EXPECT_LEAGUE) < 0.05, `mean of bars is ${mean}, expected ${EXPECT_LEAGUE}`);
-    ok(page.note.includes('117.0'), `note does not carry the league average: ${page.note}`);
+    ok(Math.abs(mean - REST_LEAGUE) < 0.05, `mean of bars is ${mean}, expected ${REST_LEAGUE}`);
+    ok(page.note.includes(REST_LEAGUE.toFixed(1)), `note does not carry the league average: ${page.note}`);
 
-    // Gaps from that average, and the sign convention.
+    // Gaps from that average, and the sign convention: league minus team, so
+    // the EASIEST run of opponents carries the plus (Tim, 2026-10-05).
     const gaps = page.bars.map((b) => b.gap);
-    ok(gaps[0] === '+5.0' && gaps[3] === '-5.0', `gaps are ${gaps.join(' ')}`);
+    const g = scenario === 'mid' ? '15.0' : '5.0';
+    ok(gaps[0] === `-${g}` && gaps[3] === `+${g}`, `gaps are ${gaps.join(' ')}`);
 
     // Bars are scaled between the min and max, not from zero.
     ok(page.bars[0].width === 100 && page.bars[3].width === 8,
@@ -236,7 +252,7 @@ function check(scenario, page, boot) {
     ok(page.rows.some((r) => r.me && r.cells[0] === 'Team 2'), 'owner’s team not marked in the table');
 
     // The note has to say what it is, that it needs no games, and how many weeks.
-    for (const phrase of ['no games played', 'best legal lineup', 'weeks 1–3', 'fixture']) {
+    for (const phrase of ['rest of season only', 'best legal lineup', scenario === 'mid' ? 'week 3' : 'weeks 1–3', 'fixture']) {
       ok(page.note.toLowerCase().includes(phrase.toLowerCase()), `note is missing "${phrase}"`);
     }
     ok(page.badge === 'Live', `badge is "${page.badge}"`);
@@ -286,14 +302,15 @@ function check(scenario, page, boot) {
     const pr = (id, w) => Math.max(boot.stub.proj(id, w), F);
     const PAIRS = { 1: [[1, 2], [3, 4]], 2: [[1, 3], [2, 4]], 3: [[1, 4], [2, 3]] };
     const want = {};
+    // Weeks 1–2 are played, so the chart is week 3 alone (rest of season).
     for (const id of [1, 2, 3, 4]) {
-      const opp = [1, 2, 3].map((w) => {
+      const opp = [3].map((w) => {
         const [h, a] = PAIRS[w].find(([x, y]) => x === id || y === id);
         return pr(h === id ? a : h, w);
       });
-      want[id] = opp.reduce((a, v) => a + v, 0) / 3;
+      want[id] = opp.reduce((a, v) => a + v, 0) / opp.length;
     }
-    ok(Math.abs(want[2] - EXPECT[2]) > 3, `the floor does not move Team 2 by 3 points — the check would be vacuous`);
+    ok(Math.abs(want[3] - 113.0) > 1, `the floor does not move Team 2 by 3 points — the check would be vacuous`);
     for (const b of page.bars) {
       const id = Number(b.name.replace('Team ', ''));
       ok(Math.abs(b.value - want[id]) < 0.05, `${b.name} bar shows ${b.value}, floored on week 3 it is ${want[id].toFixed(1)}`);

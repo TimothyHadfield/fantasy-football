@@ -763,17 +763,21 @@ function scheduleKey() {
 }
 
 /** Teams that have a number, hardest schedule first. */
-function oppRows() {
-  const p = state.oppProj;
-  if (!p || !p.byTeam || !state.stats) return [];
+function oppRows(byTeam = state.oppProj && state.oppProj.byTeam) {
+  if (!byTeam || !state.stats) return [];
   return state.stats.teams
     .map((t) => {
-      const o = p.byTeam.get(t.id);
-      return o ? { id: t.id, name: t.name, avgOpp: o.avgOpp, own: o.own, games: o.games } : null;
+      const o = byTeam.get(t.id);
+      return o
+        ? { id: t.id, name: t.name, record: record(t), avgOpp: o.avgOpp, own: o.own, games: o.games }
+        : null;
     })
     .filter(Boolean)
     .sort((a, b) => b.avgOpp - a.avgOpp);
 }
+
+/** The chart's rows: the fixtures still to be played, and nothing else. */
+const restRows = () => oppRows(state.oppProj && state.oppProj.rest ? state.oppProj.rest.byTeam : new Map());
 
 function hardestScheduleTile() {
   const rows = oppRows();
@@ -865,7 +869,10 @@ async function refreshOppProj(key) {
     // liveWinChancesFrom`), for the W–L column. The NFL's games are the payload
     // the roster read already fetched for byes, so this asks ESPN for nothing
     // more; a stub without the read, or a failure, is simply no live record.
-    state.live = { key, chances: await liveChances(schedule, weekTeams, floors) };
+    const chances = await liveChances(schedule, weekTeams, floors);
+    // The week being played, for the rest-of-season chart to leave out.
+    const open = capture.openWeeks(capture.normalizeSchedule(schedule, { isDemo: false }))[0];
+    state.live = { key, chances, week: chances.size && open !== undefined ? open : null };
     if (stale()) return;
 
     state.oppProj = buildOppProj(key, schedule, weekTeams, floors, floorWeek);
@@ -927,10 +934,29 @@ function buildOppProj(key, schedule, weekTeams, floors = null, floorWeek = null)
     };
   }
 
+  // REST OF SEASON (Tim, 2026-10-05: "a rest-of-season chart that doesn't
+  // include any information that is currently being shown or calculated for").
+  // A week with a result on the board — finished, or in play with one matchup
+  // final early — is out, and so is the week being played right now. The
+  // Opp proj column above stays the whole season's.
+  const liveWeek = state.live && state.live.key === key ? state.live.week : null;
+  const started = new Set(schedule.games.filter((g) => g.played).map((g) => g.week));
+  const restWeeks = built.weeks.filter((w) => !started.has(w) && w !== liveWeek);
+  const restByTeam = opponentProjections(
+    schedule.games.filter((g) => restWeeks.includes(g.week)),
+    built.proj,
+    state.stats.teams.map((t) => t.id)
+  );
+
   return {
     key,
     byTeam,
     leagueAvg: leagueAverageOpponent(byTeam),
+    rest: {
+      byTeam: restByTeam,
+      leagueAvg: restByTeam.size ? leagueAverageOpponent(restByTeam) : null,
+      weeks: restWeeks,
+    },
     scheduleWeeks: schedule.weeks,
     projectedWeeks: built.weeks,
     countsKnown: built.countsKnown,
@@ -992,14 +1018,16 @@ function paintOppPanel(chart, note) {
     return;
   }
 
-  const rows = oppRows();
+  const rows = restRows();
   if (!rows.length) {
-    chart.innerHTML = '<p class="empty">No fixtures could be matched to a projected week.</p>';
+    chart.innerHTML = data.rest && !data.rest.weeks.length
+      ? '<p class="empty">No weeks left to play.</p>'
+      : '<p class="empty">No fixtures could be matched to a projected week.</p>';
     note.textContent = '';
     return;
   }
 
-  chart.innerHTML = oppBars(rows, data.leagueAvg);
+  chart.innerHTML = oppBars(rows, data.rest.leagueAvg);
   note.innerHTML = oppNote(rows, data);
 }
 
@@ -1020,14 +1048,16 @@ function oppBars(rows, leagueAvg) {
   const items = rows
     .map((r, i) => {
       const width = 8 + 92 * ((r.avgOpp - min) / span);
-      const d = typeof leagueAvg === 'number' ? r.avgOpp - leagueAvg : null;
+      // League average minus yours, so an easier run of opponents reads as a
+      // plus (Tim, 2026-10-05: "it's better to have a low future opponent proj").
+      const d = typeof leagueAvg === 'number' ? leagueAvg - r.avgOpp : null;
       const gap =
         d === null
           ? ''
-          : `<span class="dd ${d > 0.05 ? 'hard' : ''}">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
+          : `<span class="dd ${d < -0.05 ? 'hard' : ''}">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
       return `<li class="${state.highlight === r.id ? 'me' : ''}">
           <span class="rk">${i + 1}</span>
-          <span class="nm">${esc(r.name)}</span>
+          <span class="nm">${esc(r.name)} <small class="muted rec">${r.record}</small></span>
           <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
           <span class="vv">${fmt(r.avgOpp)}</span>
           ${gap}
@@ -1040,7 +1070,7 @@ function oppBars(rows, leagueAvg) {
 
 /** What the number is, that it needs no games, how it was derived, and over what. */
 function oppNote(rows, data) {
-  const weeks = data.projectedWeeks;
+  const weeks = data.rest.weeks;
   const first = weeks[0];
   const last = weeks[weeks.length - 1];
   const span = weeks.length === 1 ? `week ${first}` : `weeks ${first}–${last}`;
@@ -1055,12 +1085,14 @@ function oppNote(rows, data) {
   const spread = Math.max(...values) - Math.min(...values);
 
   const lines = [
-    '<strong>The average projected score of the opponents you have to play.</strong> ' +
-      'For every fixture on your schedule, take what the other side is projected to ' +
-      'score that week, then average those. High means a hard schedule — which is ' +
+    '<strong>The average projected score of the opponents you still have to play.</strong> ' +
+      'For every fixture left on your schedule, take what the other side is projected to ' +
+      'score that week, then average those. High means a hard run-in — which is ' +
       'luck, not skill: nobody picks their own opponents.',
 
-    'It needs <strong>no games played</strong>, which is the whole point of it.',
+    '<strong>Rest of season only.</strong> A week that is finished or being played is left ' +
+      'out, so nothing here repeats a result shown elsewhere. The Opp proj column in the ' +
+      'standings is the whole season.',
 
     'Each ' +
       'weekly number is ESPN&rsquo;s own per-player projection for that week, with the ' +
@@ -1073,12 +1105,12 @@ function oppNote(rows, data) {
       (data.floorSaid ? ` ${data.floorSaid}` : ''),
   ];
 
-  if (typeof data.leagueAvg === 'number') {
+  if (typeof data.rest.leagueAvg === 'number') {
     lines.push(
-      `The league&rsquo;s average opponent is <strong>${fmt(data.leagueAvg)}</strong>, so ` +
+      `The league&rsquo;s average opponent is <strong>${fmt(data.rest.leagueAvg)}</strong>, so ` +
         'the figure beside each bar is the gap from that: a positive number is that many ' +
-        'points a week harder than the league&rsquo;s typical schedule, a negative one that ' +
-        'much easier.',
+        'points a week easier than the league&rsquo;s typical schedule, a negative one that ' +
+        'much harder.',
       `Hardest to easiest spans only ${fmt(spread)} points, which is why the ` +
         'bars run between those two rather than from zero — zero-based bars would all be ' +
         'the same length and show nothing.'

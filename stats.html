@@ -45,9 +45,9 @@
 .oppbars .bar { background: var(--panel-2); border-radius: 3px; height: 9px; }
 .oppbars .bar i { display: block; height: 100%; border-radius: 3px; background: var(--bar); }
 .oppbars .vv { font-weight: 600; min-width: 46px; text-align: right; }
-/* The gap from the league average. Amber for a harder-than-typical schedule,
- * dim for an easier one - NOT the green/red of .pos/.neg, because here a
- * positive number is bad news for the team, and green would say the opposite. */
+/* The gap from the league average, league minus team, so + is an easier run
+ * of opponents. Amber for a harder-than-typical schedule, dim for an easier
+ * one. */
 .oppbars .dd { min-width: 58px; text-align: right; font-size: 12.5px; color: var(--dim); }
 .oppbars .dd.hard { color: var(--warn); }
 .oppbars li.me .nm { color: #7fd99b; font-weight: 650; }
@@ -221,7 +221,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 
   <section class="panel" id="panelOppProj">
     <h2>Schedule luck &mdash; average projected opponent</h2>
-    <p class="lede">Each team&rsquo;s average projected opponent, hardest schedule first. The last figure is the gap from the league average.</p>
+    <p class="lede">Each team&rsquo;s average projected opponent over the weeks still to play, hardest first. The last figure is the gap from the league average: + is easier.</p>
     <div id="oppProjChart"></div>
     <p class="panel-note" id="oppProjWarn" hidden></p>
     <details class="explain">
