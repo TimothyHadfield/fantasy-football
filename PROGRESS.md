@@ -57,6 +57,7 @@ Since 2026-09-29 he sends one concrete feature ask at a time (see Decisions, new
 
 ## Standing instructions
 - **Push every change when it is done** — Tim judges by the deployed site. Never push failing tests. Split into sensible commits.
+- **No long test runs before a push** (Tim, 2026-10-06: "make sure you don't ever do long test runs again, and if you do it can be after the push"). Run only the suites the change touches, push, and put any full `run-all.mjs` in the background AFTER the push; tell builders the same.
 - **Give links, not prose directions.** Deep links; IDE-clickable paths.
 - **After pushing, tell him to hard-refresh** (Ctrl+Shift+R; iPhone: close/reopen tab or `?v=<sha>`). Pages cache is 10 min.
 - **Prose, not mechanics** — lead with the finding; he reads the words, not the tool calls.
