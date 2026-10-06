@@ -349,6 +349,103 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   press('actual');
 }
 
+// ------------------------------------------------ no signed zero in the grid
+//
+// 2026-10-06: under the four luck buttons a value that rounds to zero printed
+// "-0" (red) or "+0" (green) beside a plain "0" — the League row under Close
+// game read "-0 | +0 | 0 | 0 | -0". The sign is read off the ROUNDED number now
+// (`signed` in js/standings-table.js), so every one of them is a plain 0.
+{
+  const SIGNED_ZERO = /^[-+−]0(\.0)?$/;
+  const clean = (el) => el.textContent.replace(/[▲▼\s]/g, '');
+  let zeros = 0;
+  for (const metric of ['luck', 'luckProj', 'luckOpp', 'luckClose', 'actualDiff']) {
+    document.querySelector(`#weeklyMetric button[data-metric="${metric}"]`)
+      .dispatchEvent(new window.Event('click', { bubbles: true }));
+    const cells = [...$('weeklyTable').querySelectorAll('td')];
+    const bad = cells.filter((td) => SIGNED_ZERO.test(clean(td)));
+    assert(bad.length === 0,
+      `week by week under "${metric}" prints a signed zero: ${bad.slice(0, 4).map(clean).join(' ')}`);
+    zeros += cells.filter((td) => clean(td) === '0').length;
+    // A zero is neutral in its type as well as its sign.
+    const tinted = cells.filter((td) => clean(td) === '0' && td.querySelector('span.pos, span.neg'));
+    assert(tinted.length === 0, `a "0" under "${metric}" is still coloured as a gain or a loss`);
+  }
+  // Not vacuous: the demo season has cells that round to zero.
+  assert(zeros > 0, 'the demo grid has no cell that rounds to zero, so the sweep above proves nothing');
+  document.querySelector('#weeklyMetric button[data-metric="actual"]')
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+}
+
+// ------------------------------- unrounded averages, and one rule for a tie
+//
+// Worked on a league of the real shape: ten teams, four weeks, scores to the
+// hundredth as ESPN gives them (the demo's whole-point scores cannot show a
+// rounding fault), and ONE TIED GAME, which the demo season does not have.
+{
+  const { generateDemoLeague } = await import(pathToFileURL(path.join(REPO, 'js/demo.js')).href);
+  const { computeLeagueStats, weekLuckParts, leagueAvgActualOf } =
+    await import(pathToFileURL(path.join(REPO, 'js/stats.js')).href);
+  const league = generateDemoLeague();
+  const cents = (v, k) => Math.round((v + ((k * 37) % 100) / 100) * 100) / 100;
+  league.games = league.games.filter((g) => g.week <= 4).map((g, i) => ({
+    ...g,
+    homeActual: cents(g.homeActual, 4 * i + 1),
+    homeProjected: cents(g.homeProjected, 4 * i + 2),
+    awayActual: cents(g.awayActual, 4 * i + 3),
+    awayProjected: cents(g.awayProjected, 4 * i + 4),
+  }));
+  const tieGame = league.games.find((g) => g.week === 3);
+  tieGame.awayActual = tieGame.homeActual;
+  const st = computeLeagueStats(league);
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const tenth = (v) => Math.round(v * 10) / 10;
+  const lg = leagueAvgActualOf(st.teams);
+  assert(st.teams.length === 10 && st.teams.every((t) => t.weekly.length === 4),
+    'the fixture is not ten teams by four weeks');
+  const tiedTeams = st.teams.filter((t) => t.weekly.some((r) => r.tied));
+  assert(tiedTeams.length === 2 && tiedTeams.every((t) => t.ties === 1),
+    `the fixture has ${tiedTeams.length} tied teams, expected the two of one tied game`);
+
+  // ROUNDING ONLY AT THE END. Luck/wk and PTW are averages of the unrounded
+  // weekly figures; storing those to a tenth first put them a tenth out.
+  let bites = 0;
+  for (const t of st.teams) {
+    const lucks = t.weekly.map((r) => r.actual - r.projected);
+    const want = tenth(avg(lucks));
+    if (tenth(avg(lucks.map(tenth))) !== want) bites++;
+    assert(t.avgLuck === want,
+      `${t.name}: Luck/wk ${t.avgLuck}, by hand ${want} (${avg(lucks).toFixed(4)})`);
+    const ptw = avg(t.weekly.map((r) => r.oppActual)) - avg(lucks);
+    assert(Math.abs(t.exact.pointsToWin - ptw) < 1e-9,
+      `${t.name}: PTW ${t.exact.pointsToWin}, by hand ${ptw}`);
+    const margins = t.weekly.map((r) => r.actual - r.oppActual);
+    assert(t.weekly.every((r, i) => r.actualDiff === margins[i]),
+      `${t.name}: a weekly margin is stored rounded`);
+  }
+  assert(bites > 0, 'no team in the fixture is moved by rounding first, so the check above proves nothing');
+
+  // ONE RULE FOR A TIE: its close-game luck is 0 and it is a game. So the
+  // weekly Luck cells of EVERY team — the two with the tie included — average
+  // to the Luck score the standings print, to the tenth and beyond; Close luck
+  // is that same average of its own cells; and the cumulative series ends on it.
+  for (const t of st.teams) {
+    const totals = t.weekly.map((r) => weekLuckParts(r, lg).total);
+    assert(Math.abs(avg(totals) - t.exact.luckScore) < 1e-9 && tenth(avg(totals)) === t.luckScore,
+      `${t.name}${t.ties ? ' (tied once)' : ''}: weekly luck averages ${avg(totals).toFixed(3)}, ` +
+      `its Luck score is ${t.exact.luckScore.toFixed(3)}`);
+    const close = t.weekly.map((r) => r.gameLuck ?? 0);
+    assert(t.scoreDiffLuck === tenth(avg(close)),
+      `${t.name}: Close luck ${t.scoreDiffLuck}, its four games average ${avg(close).toFixed(3)}`);
+    assert(t.cumulativeLuck[t.cumulativeLuck.length - 1].value === t.luckScore,
+      `${t.name}: cumulative luck ends on ${t.cumulativeLuck[t.cumulativeLuck.length - 1].value}, ` +
+      `not the Luck score ${t.luckScore}`);
+  }
+  const tieRow = tiedTeams[0].weekly.find((r) => r.tied);
+  assert(tieRow.gameLuck === null && weekLuckParts(tieRow, lg).close === null,
+    'a tied game still has no close-game figure of its own (the hover says "tie")');
+}
+
 if (problems.length) {
   console.log('FAIL stats panel order');
   for (const p of problems) console.log(`  - ${p}`);

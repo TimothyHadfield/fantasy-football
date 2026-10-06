@@ -9,7 +9,7 @@
 import { generateDemoLeague } from './demo.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import {
-  computeLeagueStats, teamFitPoints, playerFitPoints, boxStats, weekLuckParts, leagueAvgActualOf,
+  computeLeagueStats, teamFitPoints, playerFitPoints, boxStats, weekLuckParts, leagueAvgActualOf, closeLuckOf,
 } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
 // THE POSITIONAL FLOOR (Tim, 2026-09-18). Schedule luck is the average
@@ -779,10 +779,30 @@ function oppRows(byTeam = state.oppProj && state.oppProj.byTeam) {
 /** The chart's rows: the fixtures still to be played, and nothing else. */
 const restRows = () => oppRows(state.oppProj && state.oppProj.rest ? state.oppProj.rest.byTeam : new Map());
 
+/**
+ * The tile is the top row of the chart beside it: the hardest run of opponents
+ * STILL TO PLAY (Tim, 2026-10-05: schedule luck is rest of season), and it says
+ * so. It used to be the whole season's figure, so it read 127.5 for a team the
+ * chart had at 127.8. Before a game is played the two are the same number.
+ * With no week left there is no rest of season, and it falls back to the whole
+ * season's — the Opp proj column — labelled as that.
+ */
 function hardestScheduleTile() {
-  const rows = oppRows();
+  const rest = restRows();
+  const rows = rest.length ? rest : oppRows();
   if (!rows.length) return dash;
-  return `${fmt(rows[0].avgOpp)} <small class="muted">${esc(rows[0].name)}</small>`;
+  const span = rest.length ? 'rest of season' : 'whole season';
+  return `${fmt(rows[0].avgOpp)} <small class="muted">${esc(rows[0].name)} · ${span}</small>`;
+}
+
+/**
+ * A gap from the league average as it is printed: rounded to the tenth first,
+ * then signed, so a gap of −0.04 is "0.0" and never "-0.0". `value` is that
+ * rounded number, for anything that turns on its sign.
+ */
+function gapOf(d) {
+  const value = Number(d.toFixed(1)) + 0;
+  return { value, text: `${value > 0 ? '+' : ''}${value.toFixed(1)}` };
 }
 
 /**
@@ -1088,12 +1108,12 @@ function oppBars(rows, leagueAvg) {
       const width = 8 + 92 * ((r.avgOpp - min) / span);
       // League average minus yours, so an easier run of opponents reads as a
       // plus (Tim, 2026-10-05: "it's better to have a low future opponent proj").
-      const d = typeof leagueAvg === 'number' ? leagueAvg - r.avgOpp : null;
+      const d = typeof leagueAvg === 'number' ? gapOf(leagueAvg - r.avgOpp) : null;
       const gap =
         d === null
           ? ''
-          : `<span class="dd ${d < -0.05 ? 'hard' : ''}" data-opp="${esc(r.id)}" tabindex="0" role="button" ` +
-            `aria-label="${esc(r.name)}: the opponents behind this number">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
+          : `<span class="dd ${d.value < 0 ? 'hard' : ''}" data-opp="${esc(r.id)}" tabindex="0" role="button" ` +
+            `aria-label="${esc(r.name)}: the opponents behind this number">${d.text}</span>`;
       return `<li class="${state.highlight === r.id ? 'me' : ''}">
           <span class="rk">${i + 1}</span>
           <span class="nm">${esc(r.name)} <small class="muted rec">${r.record}</small></span>
@@ -1144,7 +1164,7 @@ function oppPopHtml(teamId) {
     `<tr><td></td><td class="name">Average</td><td class="num">${fmt(avg)}</td></tr>` +
     (gap === null ? '' :
       `<tr><td></td><td class="name">League average</td><td class="num">${fmt(league)}</td></tr>` +
-      `<tr class="op-gap"><td></td><td class="name">Gap</td><td class="num">${gap > 0 ? '+' : ''}${gap.toFixed(1)}</td></tr>`) +
+      `<tr class="op-gap"><td></td><td class="name">Gap</td><td class="num">${gapOf(gap).text}</td></tr>`) +
     '</tfoot></table>' +
     '<button type="button" class="op-close">Close</button>'
   );
@@ -1687,7 +1707,12 @@ function renderWeeklyTable() {
   const useSign = metric in LUCK_PART || metric === 'actualDiff';
   const leagueAvg = leagueAvgActualOf(s.teams);
   const partsOf = (row) => weekLuckParts(row, leagueAvg);
-  const valueOf = (row) => (metric in LUCK_PART ? partsOf(row)[LUCK_PART[metric]] : row[metric]);
+  // A tied game's close-game luck is 0 and it is a game (`closeLuckOf`), so its
+  // cell is a 0 that the Avg beside it counts — the rule the Close luck column
+  // above is formed by.
+  const valueOf = (row) => (metric === 'luckClose'
+    ? closeLuckOf(row)
+    : metric in LUCK_PART ? partsOf(row)[LUCK_PART[metric]] : row[metric]);
   const meanOf = (vals) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
   const weeks = weekCount();
   // With one week the trailing average is a copy of the only column there is.
@@ -1732,11 +1757,11 @@ function renderWeeklyTable() {
     })
   )]));
 
-  // The Luck average is the Luck score itself, unrounded, so this column and
-  // the standings above can never disagree (they would by a hair after a tie).
-  const teamAvg = (t) => (metric === 'luck' && t.weekly.length
-    ? t.exact.luckScore
-    : meanOf(t.weekly.map(valueOf).filter((v) => typeof v === 'number')));
+  // The plain mean of the cells in the row, whatever the button. Under Luck
+  // that IS the Luck score, tie or no tie: js/stats.js forms it from these same
+  // unrounded weekly terms (`weekLuckParts`, `closeLuckOf`), so this column and
+  // the standings above cannot disagree.
+  const teamAvg = (t) => meanOf(t.weekly.map(valueOf).filter((v) => typeof v === 'number'));
 
   // Hovering (or, on a phone, tapping) a Luck cell names its three parts.
   const partsTitle = (row) => {
