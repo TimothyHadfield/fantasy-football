@@ -521,6 +521,19 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+  // ---- totals are the lineup's, not ten rounded cells added (2026-10-06) ----
+  //
+  // Measured on league 1241838: 57 of 100 week totals sat 0.1–0.2 away from the
+  // Schedule page's, which adds the unrounded lineup and rounds once. The stub's
+  // projections are whole tenths, so AN_FINE gives three starters a .x4.
+  'fine-sum': {
+    label: '(ab) week totals add the unrounded slots and round once',
+    stub: true,
+    env: { AN_FINE: '1' },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => { globalThis.__an = { actual: historySnap(document) }; },
+  },
   'live-partial': {
     label: '(c) stubbed live league, weeks 5 and 11 reject',
     stub: true,
@@ -1901,17 +1914,54 @@ async function checkHistory(c, scenario) {
   c.ok('HISTORY: and its cells say “projected … before kickoff”',
     /Week 1: projected [\d.]+ before kickoff/.test(P.totals.rows[0].cells[1].title), P.totals.rows[0].cells[1].title);
 
-  // ---- NOTHING ELSE MOVES: Avg and every week to come, to the character ----
+  // ---- NOTHING ELSE MOVES: every week to come, to the character ------------
   const beyond = (snap) => JSON.stringify([
-    snap.totals.rows.map((r) => [r.cells[0].html, ...r.cells.slice(FUT).map((x) => x.html)]),
+    snap.totals.rows.map((r) => r.cells.slice(FUT).map((x) => x.html)),
     snap.totals.foot.cells.slice(FUT).map((x) => x.html),
-    snap.totals.foot.cells[0].html,
-    snap.season.rows.map((r) => [r.cells[0].html, ...r.cells.slice(FUT).map((x) => x.html)]),
-    [snap.season.band[0].html, ...snap.season.band.slice(FUT).map((x) => x.html)],
+    snap.season.rows.map((r) => r.cells.slice(FUT).map((x) => x.html)),
+    snap.season.band.slice(FUT).map((x) => x.html),
     snap.totals.head.slice(1 + FUT), snap.season.head.slice(1 + FUT),
   ]);
-  c.ok('HISTORY: THE WEEKS STILL TO COME AND THE AVG COLUMNS ARE IDENTICAL ON ACTUAL AND PROJ, character for character',
-    beyond(A) === beyond(P), 'a future or Avg cell changed with the select');
+  c.ok('HISTORY: THE WEEKS STILL TO COME ARE IDENTICAL ON ACTUAL AND PROJ, character for character',
+    beyond(A) === beyond(P), 'a future cell changed with the select');
+
+  // ---- AVG IS THE MEAN OF THE NUMBERS SHOWN IN ITS ROW (2026-10-06) --------
+  //
+  // It used to be the Proj avg grid's number — every week at its re-solved
+  // projection, played ones too — printed beside a row of real scores it was
+  // not the average of (131.6 next to cells averaging 127.4, league 1241838).
+  // Worked out here from the cells as drawn: regular season only, a cell with
+  // no number left out, and a week still being played left out of a TOTAL
+  // because half a lineup is not a week's score.
+  for (const [mode, snap] of [['actual', A], ['proj', P]]) {
+    const part = live && mode === 'actual' ? season.DONE_WEEK : 0;
+    const shown = (cells, skip) => {
+      const got = [];
+      for (let wk = 1; wk <= season.WEEKS; wk++) {
+        const v = num(cells[wk].v);
+        if (wk !== skip && v !== null && cells[wk].text !== '—') got.push(v);
+      }
+      return got.length ? got.reduce((a, b) => a + b, 0) / got.length : null;
+    };
+    const off = (cells, skip) => {
+      const want = shown(cells, skip);
+      const got = num(cells[0].v);
+      return (want === null ? got === null : got !== null && Math.abs(got - want) < 0.051)
+        ? null : `want ${want === null ? null : want.toFixed(2)} got ${got}`;
+    };
+    const bad = [];
+    for (const r of snap.totals.rows) { const e = off(r.cells, part); if (e) bad.push(`${r.team} ${e}`); }
+    for (const r of snap.season.rows) { const e = off(r.cells, 0); if (e) bad.push(`${r.slot} ${e}`); }
+    { const e = off(snap.season.band, part); if (e) bad.push(`band ${e}`); }
+    c.ok(`AVG (${mode}): EVERY ROW’S AVG IS THE MEAN OF THE NUMBERS SHOWN IN IT — ten squads, nine slots and the band`,
+      bad.length === 0, bad.slice(0, 6).join(' | '));
+    c.ok(`AVG (${mode}): and the header says so`,
+      [snap.totals.head[1], snap.season.head[1]].every((h) => /numbers shown/.test(h.title)),
+      `${snap.totals.head[1].title} / ${snap.season.head[1].title}`);
+  }
+  c.ok('AVG: so it moves with the select — Actual and Proj show different numbers and different averages',
+    A.totals.rows.every((r, n) => r.cells[0].v !== P.totals.rows[n].cells[0].v),
+    `${A.totals.rows[0].cells[0].v} vs ${P.totals.rows[0].cells[0].v}`);
   c.ok('HISTORY: a week to come is never marked as history, and every played one is',
     [A, P].every((snap) => [...snap.totals.rows, ...snap.season.rows].every((r) =>
       r.cells.slice(1).every((x, n) => /\bhist\b/.test(x.cls) === (n + 1 <= HIST)))),
@@ -2011,6 +2061,51 @@ async function checkHistory(c, scenario) {
   return c.out;
 }
 
+/**
+ * (ab) A WEEK TOTAL IS THE LINEUP ADDED UP UNROUNDED, THEN ROUNDED ONCE.
+ *
+ * Every week still to come, on the squad the season panel is on: the men are
+ * read off the cells (`data-pid`), their projections off the stub, and the band
+ * must be THAT sum to the tenth — which, with three .x4 starters, is a tenth
+ * more than the cells' own printed numbers add up to.
+ */
+async function checkFineSum(c) {
+  const A = (globalThis.__an || {}).actual;
+  const season = await import('./an-stub-season.mjs');
+  const TEAM = 4;
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const weeks = [];
+  for (let wk = season.SCHEDULE_PLAYED_THROUGH + 1; wk <= 13; wk++) weeks.push(wk);
+  c.ok('FINE SUM: the season panel and Weekly totals are up, with weeks still to come',
+    Boolean(A && A.season.rows.length && A.season.band.length && A.totals.rows.length) && weeks.length > 0,
+    JSON.stringify(A && { rows: A.season.rows.length, band: A.season.band.length }));
+  if (!(A && A.season.rows.length && A.season.band.length && A.totals.rows.length)) return c.out;
+
+  const bad = [];
+  const flat = [];
+  const totalsBad = [];
+  for (const wk of weeks) {
+    const cells = A.season.rows.map((r) => r.cells[wk]);
+    const exact = r1(cells.reduce((a, x) => a + season.projFor(Number(x.pid) % 100, wk), 0));
+    const printed = r1(cells.reduce((a, x) => a + Number(x.text), 0));
+    const band = A.season.band[wk];
+    if (band.v !== String(exact) || band.text !== exact.toFixed(1)) bad.push(`wk${wk} want ${exact} got ${band.v} "${band.text}"`);
+    if (exact === printed) flat.push(`wk${wk} ${exact}`);
+    const row = A.totals.rows.find((r) => r.team === `Team ${TEAM}`).cells[wk];
+    if (row.v !== band.v) totalsBad.push(`wk${wk} totals ${row.v} band ${band.v}`);
+  }
+  c.ok('FINE SUM: EVERY WEEK TO COME, THE BAND IS THE UNROUNDED LINEUP ADDED UP AND ROUNDED ONCE',
+    bad.length === 0, bad.join(' | '));
+  c.ok('FINE SUM: which is NOT what the printed cells add up to, so that has teeth',
+    flat.length === 0, flat.join(' | '));
+  c.ok('FINE SUM: and Weekly totals shows the same number for that squad',
+    totalsBad.length === 0, totalsBad.join(' | '));
+  c.ok('FINE SUM: a slot cell still prints one decimal (22.4 for a 22.44)',
+    A.season.rows.every((r) => weeks.every((wk) => /^\d+\.\d$/.test(r.cells[wk].text))),
+    JSON.stringify(A.season.rows[0].cells.slice(weeks[0], weeks[0] + 3).map((x) => x.text)));
+  return c.out;
+}
+
 async function checkThreeWr(c, boot) {
   const w = globalThis.__an;
   const stub = await import('./an-stub-season.mjs');
@@ -2057,8 +2152,17 @@ async function checkThreeWr(c, boot) {
     JSON.stringify(w.rows.map((r) => r.k)));
   c.ok('THREE-WR: the Total header counts ten, not nine',
     /\bten\b/i.test(w.totalTitle) && !/\bnine\b/i.test(w.totalTitle), w.totalTitle);
-  c.ok('THREE-WR: each Total says it is the best ten',
-    w.rows.every((r) => /best ten\b/.test(r.totalSays)), w.rows[0] && w.rows[0].totalSays);
+  // THE LINEUP AS SET, NOT THE BEST ONE (2026-10-06): `gridLineup` pools the
+  // men the manager has starting, so the words may not claim "best".
+  c.ok('THREE-WR: each Total says it is the ten starters, and does not claim the best lineup',
+    w.rows.every((r) => /ten starters project\b/.test(r.totalSays) && !/\bbest\b/.test(r.totalSays)),
+    w.rows[0] && w.rows[0].totalSays);
+  {
+    const lede = boot.document.getElementById('overviewLede');
+    c.ok('THREE-WR: and the caption over the week grid says the lineup is the one set',
+      Boolean(lede) && lede.textContent.trim() === 'Every squad’s set lineup and bench.',
+      lede && lede.textContent);
+  }
   c.ok('THREE-WR: the note says the Total takes the waiver floor and a man’s cell does not',
     /Total is those ten/.test(w.note) && /waiver floor/i.test(w.note) && /own cell/i.test(w.note),
     w.note.slice(0, 600));
@@ -2308,6 +2412,7 @@ async function check(scenario, boot) {
   // A week in progress is checked on its own terms too: the shape assertions
   // below were all written about a league between weeks.
   if (scenario === 'history-live') return checkHistory(c, scenario);
+  if (scenario === 'fine-sum') return checkFineSum(c);
 
   // ---- PANEL ORDER, which is Tim's and not a matter of taste --------------
   //
@@ -2388,27 +2493,29 @@ async function check(scenario, boot) {
     const nums = (cells) => cells.map((x) => x.v).filter((v) => v !== null && v !== '').map(Number);
     let wrong = 0;
     let moved = 0;
+    // A week still being played is part scores: a slot's finished man counts
+    // in his own row, and the BAND leaves the week out — half a lineup is not
+    // a week's total.
+    const partCol = ths.findIndex((th) => th.querySelector('.badge.live.wk-live'));
     for (const r of [...rows, ...(totals ? [totals] : [])]) {
       const shown = r.cells[1].v === null ? null : Number(r.cells[1].v);
-      const regular = mean(nums(r.cells.slice(2, col)));
+      const weekCells = r.cells.slice(2, col).filter((x, n) => !(r === totals && n + 2 === partCol));
+      const regular = mean(nums(weekCells));
       const all = mean(nums(r.cells.slice(2)));
       if (shown !== regular) wrong++;
       if (regular !== null && all !== null && regular !== all) moved++;
     }
-    // SINCE 2026-10-05 a week that has happened shows what HAPPENED (the real
-    // lineup, under "Actual history") while Avg is still the projection it
-    // always was, so Avg can only be re-derived from the cells where no week
-    // is history. The `no-history` scenario is that league, and carries this.
+    // SINCE 2026-10-06 Avg is the mean of the numbers SHOWN, history or not: a
+    // played week counts at the score in its cell, not at a projection the row
+    // does not print. (For a day it was the projection, beside real scores.)
     const hasHistory = Boolean(table.querySelector('thead .hist-group'));
+    c.ok('SEASON GRID: AVG IS THE MEAN OF THE REGULAR-SEASON NUMBERS SHOWN, in the band as well as the slots',
+      wrong === 0, `${wrong} rows disagree`);
     if (hasHistory) {
-      c.ok('SEASON GRID: with history on screen, Avg is NOT the mean of the cells shown ' +
-        '(it is the projection), and its heading says so',
-        /History weeks count at that projection, not at the numbers shown/
+      c.ok('SEASON GRID: and with history on screen its heading says exactly that',
+        /mean of the regular-season numbers shown/
           .test(table.querySelector('thead tr:last-child th.grouped').getAttribute('title') || ''),
         table.querySelector('thead tr:last-child th.grouped').getAttribute('title'));
-    } else {
-      c.ok('SEASON GRID: AVG IGNORES THE PLAYOFF WEEKS, in the band as well as the slots',
-        wrong === 0, `${wrong} rows disagree`);
     }
     if (!hasHistory && rows.some((r) => nums(r.cells.slice(col)).length)) {
       c.ok('SEASON GRID: and the playoff weeks would have moved it, so that has teeth',
@@ -3217,17 +3324,17 @@ async function check(scenario, boot) {
     for (const key of SLOT_ROWS) {
       const vals = [];
       for (let w = 1; w <= 13; w++) {
-        const e = wantFill(teamId, w).get(key);
-        if (e) vals.push(e.v);
+        const e = wantShown(teamId, w).get(key);
+        if (e && typeof e.v === 'number') vals.push(e.v);
       }
       const want = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
       const got = Number(bySlotRow.get(key).cells[1].v);
       if (Math.abs(got - want) > 0.06) avgBad.push(`${key} want ${want} got ${got}`);
     }
-    // AVG IS UNTOUCHED BY HISTORY: still the best legal lineup's projection over
-    // all thirteen weeks, played ones included — the figure it was before
-    // 2026-10-05, so the all-teams grid's Proj avg still agrees with it.
-    c.ok('Avg is that slot’s own regular-season mean OF THE PROJECTION, played weeks included',
+    // AVG IS WHAT THE ROW SHOWS (2026-10-06): a played week counts at the real
+    // starter's real points, a week to come at the best lineup's projection —
+    // the same rebuild the cells themselves are checked against.
+    c.ok('Avg is that slot’s own regular-season mean OF THE NUMBERS SHOWN, played weeks at their scores',
       avgBad.length === 0, avgBad.slice(0, 3).join(' | '));
 
     // the totals band, against the same rebuild rather than against the row —
@@ -4070,9 +4177,20 @@ async function check(scenario, boot) {
     c.ok('TOTAL IS THE WHOLE LINEUP IN AN AVERAGE WEEK',
       Math.abs(Number(a4.cells[SLOT_ROWS.length].v) - wantTotal) < 0.06,
       `${a4.cells[SLOT_ROWS.length].v} vs ${wantTotal}`);
-    c.ok('and it is the same figure the Season by week band shows for that squad',
-      w.bandAvg !== null && Math.abs(Number(w.bandAvg) - wantTotal) < 0.06,
-      `band ${w.bandAvg} vs grid ${a4.cells[SLOT_ROWS.length].v}`);
+    // SINCE 2026-10-06 the Season by week band's Avg is the mean of the numbers
+    // ITS row shows — seven real scores of 109.8, then the six weeks to come —
+    // so with weeks played it is no longer this grid's Total, which projects
+    // all thirteen. (`no-history` is where the two are still one number.)
+    {
+      const played = stub.SCHEDULE_PLAYED_THROUGH;
+      const real = stub.SLOTS.reduce((x, s, i) => (s === 20 ? x : x + Math.round((15 - i * 0.7) * 10) / 10), 0);
+      const shown = weekTotals.map((t, n) => Math.round((n < played ? real : t) * 10) / 10);
+      const wantBand = Math.round((shown.reduce((x, y) => x + y, 0) / shown.length) * 10) / 10;
+      c.ok('and the Season by week band’s Avg is the mean of what ITS row shows, real scores included',
+        w.bandAvg !== null && Math.abs(Number(w.bandAvg) - wantBand) < 0.06 &&
+        Math.abs(wantBand - wantTotal) > 1,
+        `band ${w.bandAvg} want ${wantBand}; grid ${a4.cells[SLOT_ROWS.length].v}`);
+    }
     c.ok('the whole regular season is in it, not just the week on screen',
       w.weeksRead >= 13, String(w.weeksRead));
 
@@ -4162,9 +4280,12 @@ async function check(scenario, boot) {
     c.ok('the average note says a cell is a lineup slot averaged, not a player',
       /lineup slot averaged over the season, not a player/.test(w.notes.avg),
       w.notes.avg.slice(0, 200));
-    c.ok('AND THAT IT IS THE SAME NUMBERS AS THE PANEL BELOW, which is the whole ask',
-      /Avg column of Season by week/.test(w.notes.avg) &&
-      /cannot disagree/.test(w.notes.avg), w.notes.avg.slice(0, 500));
+    // With weeks played it may no longer claim to be the panel below's Avg
+    // (2026-10-06): that column averages the scores shown, this projects all 13.
+    c.ok('AND, WITH WEEKS PLAYED, THAT IT IS NOT THE AVG COLUMN OF THE PANEL BELOW, and why',
+      /Every week counts at its projection, played ones too/.test(w.notes.avg) &&
+      /not the Avg column of Season by week/.test(w.notes.avg) &&
+      !/cannot disagree/.test(w.notes.avg), w.notes.avg.slice(0, 500));
     c.ok('it owns up to what it replaced and why',
       /over 17 games/.test(w.notes.avg) && /bye week/.test(w.notes.avg),
       w.notes.avg.slice(0, 900));
@@ -4172,8 +4293,7 @@ async function check(scenario, boot) {
       /13 of 13 regular-season weeks are in these averages/.test(w.notes.avg),
       w.notes.avg.slice(0, 900));
     c.ok('it says the Total is the lineup averaged, not the columns added',
-      /added up, then those totals averaged/.test(w.notes.avg) &&
-      /Starting lineup/.test(w.notes.avg), w.notes.avg.slice(0, 1200));
+      /added up, then those totals averaged/.test(w.notes.avg), w.notes.avg.slice(0, 1200));
     c.ok('it explains the orange, and that a tap says who filled the slot',
       /orange with a dotted underline/.test(w.notes.avg) &&
       /[Tt]ap or hover any number/.test(w.notes.avg), w.notes.avg.slice(0, 1600));

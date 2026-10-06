@@ -102,7 +102,11 @@ export function slotRows(slots) {
  *
  * @param {Array} starters `optimalLineup(...).starters`, each carrying `slotId`
  * @param {Array} rows the output of `slotRows`
- * @returns {Map<string, {p:object, v:number}|null>} slot key -> who is in it
+ * `v` is the projection to the tenth, as a cell prints it. `raw` is the same
+ * number unrounded, for a caller that ADDS slots up: ten cells each rounded
+ * first can land a tenth or two away from the lineup's own total.
+ *
+ * @returns {Map<string, {p:object, v:number, raw:number}|null>} slot key -> who is in it
  */
 export function fillSlots(starters, rows) {
   const bySlot = new Map();
@@ -119,7 +123,7 @@ export function fillSlots(starters, rows) {
   const out = new Map();
   for (const row of rows || []) {
     const pick = (bySlot.get(row.slotId) || [])[row.rank - 1] || null;
-    out.set(row.key, pick ? { p: pick, v: round1(pick.projected) } : null);
+    out.set(row.key, pick ? { p: pick, v: round1(pick.projected), raw: pick.projected } : null);
   }
   return out;
 }

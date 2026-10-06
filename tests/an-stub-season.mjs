@@ -37,11 +37,18 @@ export const SLOTS = [0, 2, 2, 4, 4, 6, 23, 16, 17, 20, 20, 20, 20, 20, 20];
 const LABEL = { 0: 'QB', 2: 'RB', 4: 'WR', 6: 'TE', 23: 'FLEX', 16: 'D/ST', 17: 'K', 20: 'BE' };
 export const POS = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'WR', 'DST', 'K', 'RB', 'WR', 'QB', 'TE', 'WR', 'RB'];
 
+// AN_FINE=1 gives players 00, 01 and 02 (QB, RB, RB) a projection ending in
+// .x4, as ESPN's real ones carry hundredths. Three starters at +0.04 are +0.12
+// on the lineup, so a total made by ADDING ROUNDED CELLS is a tenth short of
+// the lineup's own (`fine-sum`, 2026-10-06). Off by default.
+const FINE = process.env.AN_FINE === '1';
+
 /** What the stub says ESPN projects. null = no number; 0 = bye. */
 export function projFor(i, week) {
   if (i === 3 && week === 6) return 0;      // on bye
   if (i === 4 && week === 7) return null;   // ESPN carried nothing
-  return Math.round(((20 - i) + week * 0.3) * 10) / 10;
+  const v = Math.round(((20 - i) + week * 0.3) * 10) / 10;
+  return FINE && i < 3 ? v + 0.04 : v;
 }
 
 export const playerName = (teamId, i) => `T${teamId} Player ${String(i).padStart(2, '0')}`;
