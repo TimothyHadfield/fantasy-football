@@ -101,6 +101,20 @@ export function available() {
   return store() !== null;
 }
 
+/**
+ * Say that what is held has just changed.
+ *
+ * The connection bar's "Week 5 saved" chip (js/connection.js) listens, so it
+ * is right the moment a reading or a projection copy lands, from whichever
+ * page wrote it. Nothing in Node, and never anybody's problem.
+ */
+export function announce() {
+  try {
+    if (typeof document === 'undefined' || typeof CustomEvent !== 'function') return;
+    document.dispatchEvent(new CustomEvent('ff:saved'));
+  } catch { /* a listener's failure is not the save's */ }
+}
+
 /** `ff.snap.<league>.<season>.<week>` — one key, one snapshot. */
 export function keyOf(leagueId, season, week) {
   return `${PREFIX}.${leagueId}.${season}.${week}`;
@@ -228,6 +242,7 @@ export function save(snap) {
   }
   try {
     s.setItem(keyOf(snap.leagueId, snap.season, snap.week), json);
+    announce();
     return { ok: true, bytes: json.length };
   } catch {
     return {
@@ -242,6 +257,7 @@ export function remove(leagueId, season, week) {
   if (!s) return false;
   try {
     s.removeItem(keyOf(leagueId, season, week));
+    announce();
     return true;
   } catch {
     return false;

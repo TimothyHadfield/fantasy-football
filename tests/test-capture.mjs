@@ -106,7 +106,11 @@ const CHILDREN = {
     await new Promise((r) => setTimeout(r, 100));
     const stub = await import('./cap-stub-season.mjs');
     const chip = document.getElementById('connCapture');
+    const saved = document.getElementById('connSaved');
     return {
+      // The quiet chip: what it says once the attempt is over, and whether a
+      // reload was needed to get it there (it was not — this is one page load).
+      saved: saved ? { text: saved.hasAttribute('hidden') ? '' : text(saved), title: saved.getAttribute('title') } : null,
       snap: map.has(SNAP_KEY) ? JSON.parse(map.get(SNAP_KEY)) : null,
       note: JSON.parse(map.get(NOTE_KEY) || 'null'),
       keys: [...map.keys()].filter((k) => k.startsWith('ff.snap')),
@@ -616,6 +620,14 @@ if (!bar.boot) {
   ok('it went through the extension, never a direct probe',
     bar.bridgeCalls.includes('PROBE') && bar.fetchCalls.every((u) => /^data\/snapshots\//.test(u)),
     `${bar.bridgeCalls.join(',')} | ${bar.fetchCalls.join(' | ')}`);
+  // The quiet chip (Tim, 2026-10-06): the week it has just saved, said in the
+  // same page load, for no request the capture was not already making.
+  eq(bar.saved && bar.saved.text, `Week ${SNAP_WEEK} saved`, 'and its quiet chip now says the week is saved');
+  ok('with a title saying when it was saved and which weeks are held',
+    bar.saved && new RegExp(`^Week ${SNAP_WEEK} projections saved \\S.* Week ${SNAP_WEEK} held\\.$`).test(bar.saved.title || ''),
+    JSON.stringify(bar.saved));
+  eq([bar.schedule, new Set(bar.rosters).size], [1, bar.rosters.length],
+    'the chip cost nothing: the schedule once, and no week’s rosters twice');
 }
 
 const barFail = child('bar', { CAP_ROSTERS_FAIL: '1' });
@@ -629,6 +641,7 @@ if (!barFail.boot) {
   ok('styled as the bar’s stale warning', barFail.chip && /\bis-stale\b/.test(barFail.chip.cls), JSON.stringify(barFail.chip));
   ok('and the reason is kept for the Schedule page',
     barFail.note && barFail.note.code === 'no-projection' && barFail.note.source === 'bar', JSON.stringify(barFail.note));
+  eq(barFail.saved && barFail.saved.text, '', 'and the quiet chip leaves it to the loud one');
 }
 
 const noBridge = child('bar', { CAP_NO_BRIDGE: '1' });
@@ -637,6 +650,7 @@ if (!noBridge.boot) {
   eq(noBridge.keys, [], 'without the extension nothing is written — no reading, no note');
   eq(noBridge.schedule + noBridge.rosters.length, 0, 'and nothing is asked of ESPN for a reading');
   ok('and there is no chip', !noBridge.chip, JSON.stringify(noBridge.chip));
+  ok('nor a "saved" one: nothing is connected', !noBridge.saved || noBridge.saved.text === '', JSON.stringify(noBridge.saved));
 }
 
 // ---------------------------------------------------------------------------

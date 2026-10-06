@@ -86,14 +86,32 @@ const CHILDREN = {
     const noteBefore = map.get(NOTE_KEY);
     stub.calls.rosters.length = 0;
     stub.calls.schedule = 0;
+    // PH_LATE_FAIL: ESPN refuses the rosters, so the late copy cannot be taken.
+    if (process.env.PH_LATE_FAIL) process.env.CAP_ROSTERS_FAIL = '1';
 
     const events = [];
     document.addEventListener('ff:capture', (e) => events.push(e.detail));
+    // What the quiet "saved" chip said: first when the bar had connected and
+    // its attempt had not yet run (the bar announces the connection in between,
+    // synchronously), then once the attempt was over.
+    const said = [];
+    const savedNow = () => {
+      const el = document.getElementById('connSaved');
+      return el && !el.hasAttribute('hidden') ? text(el) : '';
+    };
+    document.addEventListener('ff:connection', () => said.push(savedNow()));
     await import(moduleUrl('js/connection.js'));
     await waitFor(() => events.length, 15000);
     await new Promise((r) => setTimeout(r, 100));
+    said.push(savedNow());
     const chip = document.getElementById('connCapture');
+    const saved = document.getElementById('connSaved');
     return {
+      saved: saved ? {
+        text: savedNow(), title: saved.getAttribute('title'), tag: saved.tagName,
+        after: saved.previousElementSibling && saved.previousElementSibling.id,
+      } : null,
+      said,
       had: Boolean(snapBefore),
       hist: map.has(HIST_KEY) ? JSON.parse(map.get(HIST_KEY)) : null,
       snapSame: map.get(SNAP_KEY) === snapBefore,
@@ -515,6 +533,86 @@ const v1 = JSON.parse(readFileSync(new URL('./snap-v1-fixture.json', import.meta
   ok('a whole season of copies stays under 600KB of a browser’s ~5MB', season > 0 && season < 600 * 1024, `${season} bytes`);
 }
 
+// ---- "is this week saved?": what the connection bar's chip is told ----------
+// SAVED MEANS BOTH the reading and every squad's copy. A chip that said "saved"
+// on the reading alone would be reassuring about exactly the loss this store
+// exists to stop.
+{
+  const savedStatus = history.savedStatus || (() => undefined);
+  const weekSpan = history.weekSpan || (() => undefined);
+  const ask = (o = {}) => savedStatus({ leagueId: LEAGUE, season: SEASON, week: 4, ...o });
+  const SNAP4 = `ff.snap.${LEAGUE}.${SEASON}.4`;
+
+  reset();
+  eq(ask(), {
+    saved: false, text: 'Week 4 not saved yet',
+    title: 'Week 4 projections are not saved yet. No weeks held.',
+  }, 'nothing held: not saved yet, and it says nothing is held');
+  eq(ask({ pending: true }), null, 'while this page’s own attempt is still running it says nothing');
+
+  await capture.captureIfDue(base());
+  const both = ask();
+  eq([both && both.saved, both && both.text], [true, 'Week 4 saved'], 'the reading and the copy both held: "Week 4 saved"');
+  ok('its title says when, and which weeks are held',
+    both && /^Week 4 projections saved \S.*\. Week 4 held\.$/.test(both.title), both && both.title);
+  ok('the time in it is the reading’s own',
+    both && both.title.includes(new Date(JSON.parse(store.get(SNAP4)).takenAt).toLocaleString(undefined, {
+      weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+    })), both && both.title);
+  eq(ask({ pending: true }), both, 'a week already saved says so even while an attempt is running');
+  ok('the chip is four words at most', [ask(), both].every((v) => v && v.text.split(' ').length <= 4));
+
+  // The reading without the copy — every browser the day the copies shipped.
+  const copy = store.get(HIST_KEY);
+  store.delete(HIST_KEY);
+  eq(ask(), {
+    saved: false, text: 'Week 4 not saved yet',
+    title: 'Week 4 is half saved: every team’s projections are still missing. Week 4 held.',
+  }, 'THE READING ALONE IS NOT SAVED, and the title names the missing half');
+  eq(ask({ pending: true }), null, 'and nothing is said while the late copy still has its chance');
+
+  // The copy without the reading.
+  const reading = store.get(SNAP4);
+  store.delete(SNAP4);
+  store.set(HIST_KEY, copy);
+  eq(ask(), {
+    saved: false, text: 'Week 4 not saved yet',
+    title: 'Week 4 is half saved: the weekly reading is still missing. Week 4 held.',
+  }, 'nor is the copy alone');
+  store.set(SNAP4, reading);
+
+  // Which weeks are held in total: any reading, copy or one-team copy.
+  store.set(`ff.snap.${LEAGUE}.${SEASON}.1`, reading.replace('"week":4', '"week":1'));
+  store.set(`ff.snap.${LEAGUE}.${SEASON}.2`, reading.replace('"week":4', '"week":2'));
+  store.set(`ff.projhist-part.1.${LEAGUE}.${SEASON}.3`, copy.replace('"week":4', '"week":3'));
+  store.set(`ff.snapnote.${LEAGUE}.${SEASON}`, '{"at":1,"ok":true,"week":9}');
+  store.set(`ff.snap.${LEAGUE}7.${SEASON}.8`, reading);
+  ok('the title counts every week held, and no other league’s or note’s',
+    /\. Weeks 1–4 held\.$/.test(ask().title), ask().title);
+  eq(history.heldWeeks && history.heldWeeks(LEAGUE, SEASON),
+    { readings: [1, 2, 4], copies: [4], parts: [3], all: [1, 2, 3, 4] }, 'by kind');
+  eq([weekSpan([5]), weekSpan([3, 4, 5]), weekSpan([5, 1, 3, 4]), weekSpan([2, 4]), weekSpan([])],
+    ['Week 5', 'Weeks 3–5', 'Weeks 1, 3–5', 'Weeks 2, 4', ''], 'weeks are named as runs');
+
+  eq(ask({ week: 5 }), {
+    saved: false, text: 'Week 5 not saved yet',
+    title: 'Week 5 projections are not saved yet. Weeks 1–4 held.',
+  }, 'a new week is not saved yet, whatever earlier weeks are held');
+  eq([ask({ week: null }), ask({ week: 0 })], [null, null], 'no week known: nothing is said rather than guessed');
+  eq([savedStatus({ leagueId: 'demo', season: 0, week: 4 }), savedStatus({ leagueId: '', season: SEASON, week: 4 })],
+    [null, null], 'never for sample data, or with no league');
+
+  // The phone: it reads the synced copy, takes nothing, and is not told the week.
+  eq(ask({ week: null, synced: true }), {
+    saved: true, text: 'Week 4 saved',
+    title: 'Saved on your computer and sent here. Weeks 1–4 held.',
+  }, 'ON THE PHONE it names the latest week it was sent a copy of');
+  store.delete(HIST_KEY);
+  eq(ask({ week: null, synced: true }).text, 'Week 3 saved', 'a one-team copy counts there');
+  store.delete(`ff.projhist-part.1.${LEAGUE}.${SEASON}.3`);
+  eq(ask({ week: null, synced: true }), null, 'and with no copy sent it says nothing, readings or not');
+}
+
 // =========================================================================
 // 2. THE SCHEDULE PAGE WRITES THE SAME COPY
 // =========================================================================
@@ -550,6 +648,24 @@ if (!bar.boot) {
   ok('the reading and its note are untouched', bar.snapSame && bar.noteSame);
   ok('the bar says nothing', !bar.chip, bar.chip);
   eq(bar.events.map((e) => e.code), ['recorded'], 'and tells the page what it always told it');
+  // The quiet chip (Tim, 2026-10-06): it waits for the late copy, then says so.
+  eq(bar.saved && bar.saved.text, 'Week 4 saved', 'once the late copy is in, the bar’s quiet chip says "Week 4 saved"');
+  ok('with a title saying when and which weeks are held',
+    bar.saved && /^Week 4 projections saved \S.* Week 4 held\.$/.test(bar.saved.title || ''), JSON.stringify(bar.saved));
+  eq(bar.saved && [bar.saved.tag, bar.saved.after], ['SPAN', 'connSync'],
+    'a plain span (so a tap opens its title), straight after the Sync button');
+  eq(bar.said, ['', 'Week 4 saved'], 'and it said nothing — not "not saved yet" — while the copy still had its chance');
+}
+
+const barHalf = child('barLate', { PH_LATE_FAIL: '1' });
+ok('the same page boots when ESPN refuses the rosters', !barHalf.boot, barHalf.boot);
+if (!barHalf.boot) {
+  ok('the late copy could not be taken', barHalf.had && !barHalf.hist, JSON.stringify(barHalf.events));
+  eq(barHalf.saved && barHalf.saved.text, 'Week 4 not saved yet', 'with the reading held and no copy, the chip says "Week 4 not saved yet"');
+  eq(barHalf.saved && barHalf.saved.title, 'Week 4 is half saved: every team’s projections are still missing. Week 4 held.',
+    'and its title names the missing half');
+  eq(barHalf.said, ['', 'Week 4 not saved yet'], 'said once the attempt had finished, not before');
+  ok('the loud chip stays out of it: the reading itself did not fail', !barHalf.chip, barHalf.chip);
 }
 
 // ---------------------------------------------------------------------------

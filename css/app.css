@@ -1055,6 +1055,10 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   opacity: 1;
 }
 .conn-chip.is-missing { opacity: 0.55; }
+/* "Week 5 saved": its title says what is held, so it reads as something to
+ * point at. Hidden (the attribute) whenever the bar has nothing to say. */
+.conn-chip.conn-saved { cursor: help; }
+.conn-chip.conn-saved[hidden] { display: none; }
 
 /* The cloud's own line: who is signed in, when it last published. Secondary to
  * the league sentence beside it, so it is dimmer and it wraps last. */
