@@ -54,8 +54,10 @@ const stat = (week, source, v) => ({ scoringPeriodId: week, statSourceId: source
  * `pastBye`: ESPN's shape for a bye week already played — the Lions D/ST has
  * no projection at all that week, only (here, deliberately) an actual, which
  * the rule must leave alone.
+ *
+ * `byeWeek` moves the Lions' bye (to a week already played, for the Stats path).
  */
-function rosterPayload(week, { pastBye = false } = {}) {
+function rosterPayload(week, { pastBye = false, byeWeek = BYE_WEEK } = {}) {
   const entry = (id, slot, pos, proTeamId, stats, extra = {}) => ({
     playerId: id,
     lineupSlotId: slot,
@@ -63,7 +65,7 @@ function rosterPayload(week, { pastBye = false } = {}) {
       player: { id, fullName: `Player ${id}`, defaultPositionId: pos, proTeamId, injuryStatus: 'ACTIVE', stats, ...extra },
     },
   });
-  const lionsDst = week === BYE_WEEK && pastBye
+  const lionsDst = week === byeWeek && pastBye
     ? [stat(week, 0, 9)]
     : [stat(week, 1, 4.41), stat(week, 0, 9)];
   return {
@@ -75,7 +77,7 @@ function rosterPayload(week, { pastBye = false } = {}) {
           entry(101, 0, 1, PACKERS, [stat(week, 1, 20)]),                 // QB, starts
           entry(102, 16, 16, LIONS, lionsDst),                            // Lions D/ST, starts
           entry(103, 20, 16, PACKERS, [stat(week, 1, 3)]),                // Packers D/ST, bench
-          entry(104, 20, 3, LIONS, [stat(week, 1, week === BYE_WEEK ? 0 : 12)]), // a Lions WR: ESPN's own 0.00
+          entry(104, 20, 3, LIONS, [stat(week, 1, week === byeWeek ? 0 : 12)]), // a Lions WR: ESPN's own 0.00
           entry(105, 20, 2, PACKERS, [stat(week, 1, 0)], { injuryStatus: 'OUT' }), // OUT, not a bye
         ]
         : [
@@ -138,7 +140,9 @@ function installFetch(mode = {}) {
     const week = Number((u.match(/scoringPeriodId=(\d+)/) || [])[1] || 0);
     if (/proTeamSchedules_wl/.test(u)) {
       if (mode.byesDead) return { ok: false, status: 500, async json() { return {}; } };
-      body = BYES;
+      body = mode.byeWeek
+        ? { settings: { proTeams: [{ id: LIONS, byeWeek: mode.byeWeek }, { id: PACKERS, byeWeek: 10 }] } }
+        : BYES;
     } else if (/kona_player_info/.test(u)) body = wirePayload(week || 1);
     else if (week) body = rosterPayload(week, mode);
     else {
@@ -350,6 +354,59 @@ const SCENARIOS = {
       plan.project.every((w) => playoffs.has(w)), [...playoffs.keys()].join(','));
     const wire = await season.fetchWireWeek(BYE_WEEK);
     eq(wire.find((p) => p.playerId === 901).projected, 0, 'the synced wire carries the zero');
+    eq(calls.length, 0, 'the phone asked ESPN for nothing');
+  },
+
+  // A D/ST STARTED ON ITS BYE IN A WEEK ALREADY PLAYED. The Stats/Summary path
+  // (`fetchSeasonData`) must put the same projected total on the game as the
+  // roster path (`fetchWeekRosters`, which Schedule and the phone's copy read):
+  // 20, not 24.4. Week 2 is decided in this fixture, so the Lions' bye is moved
+  // there; ESPN still sends its 4.41 (the shape of a week it has not closed).
+  async 'played-bye'() {
+    const docs = new Map();
+    const src = readFileSync(path.join(REPO, 'js/cloud.js'), 'utf8');
+    const user = { uid: (src.match(/ownerUid:\s*'([^']*)'/) || [])[1], email: 't@example.com', name: 'T' };
+    const transport = {
+      async signIn() { return user; },
+      async signOut() {},
+      currentUser() { return user; },
+      onAuth(cb) { cb(user); return () => {}; },
+      async getDoc(p) { const r = docs.get(p); return r === undefined ? null : JSON.parse(r); },
+      async setDoc(p, d) { docs.set(p, JSON.stringify(d)); },
+    };
+    const { cloud, espn, season } = await load({ cloudTransport: transport });
+    const side = (d, week) => {
+      const g = d.games.find((x) => x.week === week && (x.homeId === 1 || x.awayId === 1));
+      return g && (g.homeId === 1 ? g.homeProjected : g.awayProjected);
+    };
+
+    let calls = installFetch({ byeWeek: 2 });
+    const live = await season.fetchSeasonData();
+    const roster = team1((await season.fetchWeekRosters(2)).teams).projectedTotal;
+    eq(roster, 20, 'the roster path leaves the bye D/ST out of week 2 (20, not 24.4)');
+    eq(side(live, 2), roster, 'the Stats path puts the same projected total on that game');
+    eq(side(live, 1), 24.4, 'a week that is not his bye keeps the 4.41 ESPN sent (24.4)');
+    eq(live.games.length, 10, 'both decided weeks are there');
+    eq(byeCalls(calls), 1, 'and the byes cost one read between the two paths');
+
+    // ESPN's own shape for a past bye (no projection line at all): the same 20.
+    espn.clearReadCache();
+    season.forgetStored();
+    installFetch({ byeWeek: 2, pastBye: true });
+    eq(side(await season.fetchSeasonData(), 2), 20, 'a past bye with no projection line is 20 as well');
+
+    // The phone's copy: synced from the desktop, read with ESPN refusing.
+    espn.clearReadCache();
+    season.forgetStored();
+    installFetch({ byeWeek: 2 });
+    const up = await cloud.syncUp(LEAGUE_ID, SEASON, await season.buildCloudPayload());
+    ok('the sync is written', up.ok, up.reason);
+    espn.clearReadCache();
+    season.forgetStored();
+    calls = installFetch({ dead: true });
+    const phone = await season.fetchSeasonData();
+    eq(side(phone, 2), 20, 'the copy the phone reads says 20 too');
+    eq(side(phone, 1), 24.4, 'and 24.4 for the week before');
     eq(calls.length, 0, 'the phone asked ESPN for nothing');
   },
 

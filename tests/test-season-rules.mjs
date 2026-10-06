@@ -59,7 +59,7 @@ const game = (week, h, hp, a, ap, winner, tier = 'NONE') => ({
   playoffTierType: tier,
 });
 
-function scheduleRaw({ legacy = false } = {}) {
+function scheduleRaw({ legacy = false, three = false } = {}) {
   const games = [
     game(1, 1, 50, 3, 50, 'TIE'),
     game(1, 2, 150, 4, 10, 'HOME'),
@@ -73,6 +73,14 @@ function scheduleRaw({ legacy = false } = {}) {
     game(4, 3, 90, 4, 80, 'HOME', 'LOSERS_CONSOLATION_LADDER'),
     { matchupPeriodId: 4, home: { teamId: 1, totalPoints: 0 }, winner: 'UNDECIDED', playoffTierType: 'WINNERS_BRACKET' },
   ];
+  if (three) {
+    // Week 3 decided as well (A–B 60–70 AWAY, C–D 30–20 HOME), for the "one
+    // played week's lineups could not be read" scenarios: four of six games
+    // still have a projection, which is MORE than half and covers every team.
+    // Records then: A 1-1-1 (PF 160), B 2-1 (370), C 2-0-1 (231), D 0-3 (70).
+    games[4] = game(3, 1, 60, 2, 70, 'AWAY');
+    games[5] = game(3, 3, 30, 4, 20, 'HOME');
+  }
   if (legacy) {
     // An old synced copy / hand fixture: no `winner`, no tier. Week 3's
     // in-progress game then counts as played under the old points rule — the
@@ -175,7 +183,8 @@ const BYES = { settings: { proTeams: [{ id: 1, byeWeek: 7 }, { id: 2, byeWeek: 9
 
 /**
  * A counting ESPN. `mode.failNext` makes the next N league reads fail; `mode.dead`
- * refuses everything (a phone that cannot reach a private league).
+ * refuses everything (a phone that cannot reach a private league);
+ * `mode.failWeek` refuses that one week's roster read, every time.
  */
 function installFetch(mode = {}) {
   const calls = [];
@@ -190,7 +199,9 @@ function installFetch(mode = {}) {
     let body;
     if (/proTeamSchedules_wl/.test(u)) body = BYES;
     else if (/kona_player_info/.test(u)) body = wirePayload(Number((u.match(/scoringPeriodId=(\d+)/) || [])[1] || 1));
-    else if (/scoringPeriodId=(\d+)/.test(u)) body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), mode);
+    else if (mode.failWeek && Number((u.match(/scoringPeriodId=(\d+)/) || [])[1]) === mode.failWeek) {
+      return { ok: false, status: 500, async json() { return {}; } };
+    } else if (/scoringPeriodId=(\d+)/.test(u)) body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), mode);
     else {
       body = leaguePayload(mode);
       // As ESPN does (checked on league 1241838): no `settings` unless asked.
@@ -475,7 +486,110 @@ const SCENARIOS = {
     const order = [...rows].sort((a, b) => b.key - a.key).map((r) => r.name);
     eq(order, ['Charlie', 'Alpha', 'Bravo', 'Delta'], 'the W–L sort key is ESPN order: win %, then points for');
   },
+
+  // ONE PLAYED WEEK'S LINEUPS COULD NOT BE READ (week 3 of three). Every decided
+  // game still counts — record, points, weeks — and the page's own status says
+  // projections are missing. It used to keep only the four games that had a
+  // projection and say "Loaded 6 games".
+  async 'week-gap'() {
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    cloud.configure({ apiKey: '' });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+
+    // All three weeks readable: nothing about the normal case moves.
+    installFetch({ three: true });
+    const whole = await season.fetchSeasonData();
+    eq([whole.games.length, whole.weeks, whole.gamesFound, whole.gamesWithProjections, whole.projectionsAvailable],
+      [6, 3, 6, 6, true], 'every week readable: six games, all with projections');
+    eq(whole.weeksWithoutProjections, [], 'and no week is named as missing');
+
+    espn.clearReadCache();
+    const calls = installFetch({ three: true, failWeek: 3 });
+    const d = await season.fetchSeasonData();
+    gapChecks(d, 'live');
+    eq(calls.filter((u) => /scoringPeriodId=3\b/.test(u)).length, 1, 'the refused week is asked for once, not retried');
+    // The four games that do have a projection are exactly what they were.
+    eq(d.games.filter((g) => g.week < 3), whole.games.filter((g) => g.week < 3), 'weeks 1–2 are untouched by the gap');
+  },
+
+  // The same gap on the phone: the desktop's sync could not read week 3 either.
+  async 'week-gap-cloud'() {
+    const cloud = await import(moduleUrl('js/cloud.js'));
+    const ownerUid = (readFileSync(path.join(REPO, 'js/cloud.js'), 'utf8').match(/ownerUid:\s*'([^']*)'/) || [])[1];
+    const docs = new Map();
+    const user = { uid: ownerUid, email: 't@example.com', name: 'T' };
+    cloud.configure({
+      transport: {
+        async signIn() { return user; },
+        async signOut() {},
+        currentUser() { return user; },
+        onAuth(cb) { cb(user); return () => {}; },
+        async getDoc(p) { const r = docs.get(p); return r === undefined ? null : JSON.parse(r); },
+        async setDoc(p, d) { docs.set(p, JSON.stringify(d)); },
+      },
+    });
+    const espn = await import(moduleUrl('js/espn.js'));
+    const season = await import(moduleUrl('js/season.js'));
+    espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+
+    installFetch({ three: true, failWeek: 3 });
+    const payload = await season.buildCloudPayload();
+    ok('the sync went up without week 3', !payload.rosters.has(3) && payload.rosters.has(2), [...payload.rosters.keys()].join(','));
+    const up = await cloud.syncUp(LEAGUE_ID, SEASON, payload);
+    ok('the sync is written', up.ok, up.reason);
+
+    espn.clearReadCache();
+    const calls = installFetch({ dead: true });
+    gapChecks(await season.fetchSeasonData(), 'phone');
+    eq(leagueCalls(calls).length, 0, 'the phone asked ESPN for nothing');
+  },
+
+  // And on the Stats page itself.
+  async 'stats-gap'() {
+    const { document } = await bootPage('stats.html', 'js/stats-page.js', {
+      'ff.prefs': JSON.stringify({ 'stats.source': 'live' }),
+    }, { three: true, failWeek: 3 });
+    await until(() => /Loaded/.test(document.getElementById('sourceStatus')?.textContent || ''));
+    const status = (document.getElementById('sourceStatus')?.textContent || '').replace(/\s+/g, ' ');
+    ok('the status says projections are missing for two of the six games',
+      /Loaded 6 games/.test(status) && /projections for 4 of them/.test(status), status);
+    const rows = Array.from(document.querySelectorAll('#mainTable tbody tr')).map((tr) => ({
+      name: tr.children[0].textContent.trim(),
+      rec: tr.children[1].textContent.trim(),
+    }));
+    eq(Object.fromEntries(rows.map((r) => [r.name, r.rec]).sort()),
+      { Alpha: '1–1–1', Bravo: '2–1', Charlie: '2–0–1', Delta: '0–3' },
+      'the records count all three weeks');
+    const table = (document.getElementById('mainTable')?.textContent || '').replace(/\s+/g, ' ');
+    ok('points for is the whole season (Bravo 370.0)', /370\.0/.test(table), table.slice(0, 400));
+    // The page has no <main>; its scripts are external, so the body is its text.
+    const text = document.body.textContent || '';
+    ok('the page text was read', text.length > 500, text.length);
+    ok('nothing on the page reads NaN or undefined', !/NaN|undefined/.test(text),
+      (text.match(/.{0,40}(NaN|undefined).{0,40}/s) || [''])[0]);
+  },
 };
+
+/** What `fetchSeasonData` must hand back when week 3's lineups were unreadable. */
+function gapChecks(d, where) {
+  eq(d.games.length, 6, `${where}: all six decided games are kept`);
+  eq([...new Set(d.games.map((g) => g.week))].sort(), [1, 2, 3], `${where}: week 3 is in the games`);
+  eq([d.weeks, d.gamesFound, d.gamesWithProjections], [3, 6, 4], `${where}: three weeks, six found, four with projections`);
+  eq(d.projectionsAvailable, false, `${where}: projections are reported incomplete, so the page says so`);
+  eq(d.weeksWithoutProjections, [3], `${where}: and the missing week is named`);
+  const w3 = d.games.filter((g) => g.week === 3);
+  eq(w3.map((g) => [g.homeActual, g.awayActual]), [[60, 70], [30, 20]], `${where}: week 3 keeps its scores`);
+  eq(w3.map((g) => [g.homeProjected, g.awayProjected]), [[0, 0], [0, 0]],
+    `${where}: its missing projection is 0, the "none" every reader already skips`);
+  const pf = new Map();
+  for (const g of d.games) {
+    pf.set(g.homeId, (pf.get(g.homeId) || 0) + g.homeActual);
+    pf.set(g.awayId, (pf.get(g.awayId) || 0) + g.awayActual);
+  }
+  eq([1, 2, 3, 4].map((id) => pf.get(id)), [160, 370, 231, 70], `${where}: points for is the whole season`);
+}
 
 // ---------------------------------------------------------- page harness
 
@@ -488,7 +602,7 @@ async function until(cond, ms = 8000) {
   return false;
 }
 
-async function bootPage(page, moduleRel, extraStore = {}) {
+async function bootPage(page, moduleRel, extraStore = {}, mode = {}) {
   const { parseHTML } = await import('linkedom');
   const html = readFileSync(path.join(REPO, page), 'utf8');
   const { window, document } = parseHTML(html);
@@ -550,7 +664,7 @@ async function bootPage(page, moduleRel, extraStore = {}) {
 
   const cloud = await import(moduleUrl('js/cloud.js'));
   cloud.configure({ apiKey: '' });
-  const calls = installFetch();
+  const calls = installFetch(mode);
   const mod = await import(moduleUrl(moduleRel));
   return { window, document, mod, calls };
 }
