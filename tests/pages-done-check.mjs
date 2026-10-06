@@ -107,9 +107,27 @@ const CHILDREN = {
       .map((td) => ({ pid: td.getAttribute('data-pid'), v: td.getAttribute('data-v'),
         cls: td.getAttribute('class') || '', slot: td.parentElement.getAttribute('data-slot'),
         col: [...td.parentElement.children].indexOf(td) }));
-    out.seasonHead = [...document.querySelectorAll('#seasonTable thead th')].map((th) => text(th));
+    // The LAST header row: since 2026-10-05 a group row ("Actual history")
+    // sits above it wherever a week has been played or is being played.
+    out.seasonHead = [...document.querySelectorAll('#seasonTable thead tr:last-child th')].map((th) => text(th));
     const totRows = [...document.querySelectorAll('#totalsTable tbody tr')];
-    out.totalsHead = [...document.querySelectorAll('#totalsTable thead th')].map((th) => text(th));
+    out.totalsHead = [...document.querySelectorAll('#totalsTable thead tr:last-child th')].map((th) => text(th));
+    // "Actual history": the label, which weeks are tagged LIVE, where the heavy
+    // line is, the League row, and Team 3's season column for the open week.
+    const headOf = (id) => [...document.querySelectorAll(`#${id} thead tr:last-child th`)];
+    const weekOf = (th) => Number((text(th).match(/^\d+/) || [])[0]);
+    out.history = Object.fromEntries(['totalsTable', 'seasonTable'].map((id) => {
+      const g = document.querySelector(`#${id} thead th.hist-group`);
+      return [id, {
+        label: g ? text(g) : null,
+        span: g ? Number(g.getAttribute('colspan')) : 0,
+        select: g && g.querySelector('select[data-history]') ? g.querySelector('select[data-history]').value : null,
+        live: headOf(id).filter((th) => th.querySelector('.badge.live.wk-live')).map(weekOf),
+        fut: headOf(id).filter((th) => /\bfut-start\b/.test(th.getAttribute('class') || '')).map(weekOf),
+      }];
+    }));
+    const foot = document.querySelector('#totalsTable tfoot tr');
+    out.league = foot ? [...foot.children].map((td) => text(td)) : null;
     out.totals = Object.fromEntries(totRows.map((tr) => [text(tr.children[0]),
       [...tr.children].map((td) => td.getAttribute('data-v') ?? text(td))]));
     out.overviewHead = [...document.querySelectorAll('#overviewTable thead th')].map((th) => text(th));
@@ -118,6 +136,13 @@ const CHILDREN = {
     // The pick line for a man mid-game: his average must not count the running score.
     const cell305 = document.querySelector('#seasonTable td[data-pid="305"]');
     await pick('seasonTeamSelect', 3);
+    // Team 3's open week in the season panel, slot by slot (column 1 + week).
+    out.season3Week8 = [...document.querySelectorAll('#seasonSlots tr')].map((tr) => {
+      const td = tr.children[1 + 8];
+      return { slot: tr.getAttribute('data-slot'), pid: td.getAttribute('data-pid'),
+        v: td.getAttribute('data-v'), text: text(td), cls: td.getAttribute('class') || '' };
+    });
+    out.band3Week8 = text(document.querySelector('#seasonTotals tr').children[1 + 8]);
     const c305 = document.querySelector('#seasonTable td[data-pid="305"]');
     if (c305) c305.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
     out.pick305 = text($('seasonPick'));
@@ -566,18 +591,62 @@ function analysisChecks(an, name, floors) {
   ok('the Starting lineup grid says a finished man’s week-8 number is a score, never "ESPN projects"',
     an.startersWeek8.length > 0 && an.startersWeek8.every((t) => /^T1 Player \d\d scored (nothing|[\d.]+) in week 8\./.test(t)),
     an.startersWeek8.slice(0, 3));
-  const w8 = an.totalsHead.indexOf('8');
-  ok('Weekly totals price Team 1’s week 8 at what its best lineup scored: 107.7',
-    Number(an.totals['Team 1'][w8]) === 107.7, an.totals['Team 1'][w8]);
+  // -- "ACTUAL HISTORY" (Tim, 2026-10-05): the week being played is history --
+  //
+  // "just show the numbers they actually recieved for that week, not anything
+  // different." This assertion used to read 107.7 — the best lineup picked
+  // AFTER THE FACT on the scores, a lineup Team 1 never started. Team 1 started
+  // players 00–08 and they scored 99.0 (the FLEX's 0 included), which is also
+  // what the A-week grid two assertions down has always said.
+  const colOf = (n) => an.totalsHead.findIndex((h) => new RegExp(`^${n}(\\D|$)`).test(h));
+  const w8 = colOf(8);
+  const w9 = colOf(9);
+  ok('WEEKLY TOTALS SHOWS TEAM 1’S WEEK 8 AT WHAT ITS REAL STARTERS SCORED: 99.0, not a best lineup picked afterwards',
+    Number(an.totals['Team 1'][w8]) === 99, an.totals['Team 1'][w8]);
+  ok('Team 2, every starter finished: 109.8 — the early final’s own score',
+    Number(an.totals['Team 2'][w8]) === 109.8, an.totals['Team 2'][w8]);
+  ok('Team 3 counts its three finished starters only: 42.2 (15.0 + 14.3 + 12.9), the 4.2 mid-game left out',
+    Number(an.totals['Team 3'][w8]) === 42.2, an.totals['Team 3'][w8]);
+  ok('a squad with nobody finished shows a dash for the week — no score yet, and no projection in its place',
+    an.totals['Team 5'][w8] === '—', an.totals['Team 5'][w8]);
+  const hist = an.history || {};
+  for (const id of ['totalsTable', 'seasonTable']) {
+    const h = hist[id] || {};
+    ok(`${id}: weeks 1–8 sit under “Actual history”, its select on Actual`,
+      /history$/.test(h.label || '') && h.span === 8 && h.select === 'actual', JSON.stringify(h));
+    ok(`${id}: THE WEEK BEING PLAYED CARRIES THE LIVE TAG, and only that week`,
+      JSON.stringify(h.live) === '[8]', JSON.stringify(h.live));
+    ok(`${id}: the heavy line is before week 9, the first week still to come`,
+      JSON.stringify(h.fut) === '[9]', JSON.stringify(h.fut));
+  }
+  ok('the League row leaves the week being played blank (part scores are not averaged) and averages week 7',
+    Array.isArray(an.league) && an.league[0] === 'League' && an.league[w8] === '' && an.league[colOf(7)] === '109.8',
+    JSON.stringify(an.league));
+  // Team 3 in the season panel: the three finished men at their scores, the
+  // rest a dash that still names the man, and the band the same 42.2.
+  const s3 = an.season3Week8 || [];
+  const scored3 = { QB: ['300', '15'], RB1: ['301', '14.3'], WR1: ['303', '12.9'] };
+  ok('SEASON BY WEEK, Team 3’s week 8: the finished starters show their scores in the slots they started in',
+    Object.entries(scored3).every(([slot, [pid, v]]) => {
+      const c = s3.find((x) => x.slot === slot);
+      return c && c.pid === pid && c.v === v;
+    }), JSON.stringify(s3));
+  ok('and every starter still to finish is a dash — TE Player 05 on 4.2 mid-game included',
+    s3.filter((x) => !scored3[x.slot]).length === 6 &&
+    s3.filter((x) => !scored3[x.slot]).every((x) => x.text === '—' && x.v === null && x.pid) &&
+    s3.find((x) => x.slot === 'TE').pid === '305', JSON.stringify(s3));
+  ok('the Starting lineup band under it is the same 42.2', an.band3Week8 === '42.2', an.band3Week8);
   const iTot = an.overviewHead.indexOf('Total');
   const iK = an.overviewHead.indexOf('K');
   ok('the A-week grid shows Team 1’s started lineup at its score: Total 99.0, kicker 9.4',
     Number(an.overview1[iTot]) === 99 && Number(an.overview1[iK]) === 9.4, `${an.overview1[iTot]} / ${an.overview1[iK]}`);
   if (floors) {
-    // K floor 15: an unfinished kicker projected 14.4 is lifted to it…
-    ok('the floor is live in this scenario: an unfinished squad’s week 8 is lifted above its raw 165.6',
-      Number(an.totals['Team 5'][w8]) > 165.6, an.totals['Team 5'][w8]);
-    // …and Team 1's kicker, who SCORED 9.4, is not (113.3 and 104.6 if he were).
+    // K floor 15: a kicker projected 14.7 in week 9 is lifted to it, so a week
+    // STILL TO COME is above its raw 168.3. (This read week 8 until 2026-10-05;
+    // the week being played is history now and is never floored.)
+    ok('the floor is live in this scenario: a squad’s week 9 is lifted above its raw 168.3',
+      Number(an.totals['Team 5'][w9]) > 168.3, an.totals['Team 5'][w9]);
+    // …and Team 1's kicker, who SCORED 9.4 in week 8, is not: still 99.0 above.
   }
 }
 

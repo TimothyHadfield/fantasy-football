@@ -84,7 +84,7 @@ const scoreOf = (p) => (p.known === false ? p.value : p.actual);
 const pointsOf = (entry) => (entry ? (Number.isFinite(scoreOf(entry.p)) ? scoreOf(entry.p) : 0) : null);
 
 /** The small LIVE badge beside a week number: some of that week is still to come. */
-const LIVE_TAG = '<span class="badge live wk-live" title="Still being played: some of this is not final.">live</span>';
+export const LIVE_TAG ='<span class="badge live wk-live" title="Still being played: some of this is not final.">live</span>';
 
 /** A cell's title: the man's full name, and a word when his number is not a score. */
 const saidOf = (entry) => (unknown(entry) ? `${entry.p.name} (projected, still to play)` : entry.p.name);

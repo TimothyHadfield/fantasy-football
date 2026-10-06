@@ -1556,3 +1556,47 @@ table.summary-table td.num, table.summary-table th.num { text-align: right; font
 /* A man still playing: the number is his projection, not a score. */
 .sbw-actual td.wk.sbw-proj .sbw-pts { font-style: italic; font-weight: 400; }
 .sbw-actual:not([data-view="diff"]) td.wk.sbw-proj .sbw-pts { color: var(--dim); }
+
+/* ------------------------------------------- history | the weeks to come
+ * Tim, 2026-10-05: "put a label above those weeks that says "Actual History"
+ * ... make the seperating the future weeks and past weeks thicker and more
+ * noticable. Also, make the "Actual" word ... a drop down" (Analysis: Weekly
+ * totals and Season by week, js/analysis-page.js).
+ *
+ * THE LABEL is a `tr.colgroup` band over the history columns; the word is a
+ * select small enough to sit in it. Its type size is set only where there is a
+ * pointer: under a finger the 16px rule above must hold, or iOS zooms. */
+tr.hist-row th.hist-group {
+  color: var(--text);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  white-space: nowrap;
+  /* From the first played week's left edge: centred over a long run it sat
+   * off the right of a phone, which shows two or three week columns. */
+  text-align: left;
+}
+.hist-pick {
+  width: auto;
+  padding: 1px 3px;
+  font-weight: 600;
+  vertical-align: baseline;
+}
+@media (hover: hover) {
+  .hist-pick { font-size: 11.5px; }
+}
+/* THE LINE, on the first week still to come — head, body and foot. Heavier
+ * than `po-start` and in the accent, so the two read apart; when one column is
+ * both, this one is drawn. A LEFT border on the first column AFTER, like
+ * `po-start`. Spelled to outrank `td.grouped`, the group band's own rule and
+ * the pages' `#seasonTable .now` bracket. Borders only: the red/green tint is
+ * a background-image and is untouched. */
+th.fut-start, td.fut-start,
+tr.colgroup th.fut-start,
+#totalsTable tr th.fut-start, #totalsTable tr td.fut-start,
+#seasonTable tr th.fut-start, #seasonTable tr td.fut-start { border-left: 3px solid var(--accent); }
+
+/* THE LEAGUE ROW under a teams-by-week table (Stats "Week by week", Analysis
+ * "Weekly totals"): the average of the teams above it, set off by a heavier
+ * rule. It lives in a tfoot, so it is never sorted in among them. */
+tfoot tr.league-row td { border-top: 2px solid var(--dim); }

@@ -16,7 +16,12 @@ export const PLAYED_THROUGH = 8; // actuals are recorded through week 8
 // not yet played and the page opens on it (it opens on the COMING week since
 // 2026-09-16). Kept one behind the actuals on purpose: the card's Act row reads
 // the data, never the schedule, and this is the fixture that keeps it honest.
-export const SCHEDULE_PLAYED_THROUGH = 7;
+//
+// AN_SCHEDULE_PLAYED overrides it for ONE scenario (`no-history`, 2026-10-05):
+// a season nobody has played a week of, which is the only league whose Weekly
+// totals and Season by week are projections from the first column to the last.
+export const SCHEDULE_PLAYED_THROUGH = process.env.AN_SCHEDULE_PLAYED === undefined
+  ? 7 : Number(process.env.AN_SCHEDULE_PLAYED);
 export const SIGNED_WEEK = 5;    // the last bench player joins here
 
 const FAIL = new Set(
