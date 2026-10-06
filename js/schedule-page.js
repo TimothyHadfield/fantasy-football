@@ -39,6 +39,7 @@ import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
 import * as snapshots from './snapshots.js';
+import * as backup from './backup.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('schedule');
@@ -3095,7 +3096,8 @@ $('snapDelete').addEventListener('click', () => {
 $('snapExport').addEventListener('click', () => {
   const id = archiveId();
   if (!id) return;
-  const file = snapshots.exportAll(id.leagueId, id.season);
+  // Everything kept for this league, not the readings alone (js/backup.js).
+  const file = backup.exportBackup(id.leagueId, id.season);
   if (!file.count) {
     state.snapMsg = 'There is nothing in the archive to export yet.';
     state.snapErr = true;
@@ -3139,19 +3141,23 @@ $('snapFile').addEventListener('change', async (e) => {
     return;
   }
 
-  const { snapshots: found, error } = snapshots.parseImport(text);
-  if (error) {
-    state.snapMsg = error;
+  // Adds what is missing here and overwrites nothing; an older file, which
+  // holds readings only, goes in as it always did (js/backup.js).
+  const found = backup.parseBackup(text);
+  if (found.error) {
+    state.snapMsg = found.error;
     state.snapErr = true;
     renderArchive();
     return;
   }
-  const res = snapshots.importAll(found);
+  const res = backup.importBackup(found);
   state.snapErr = res.failed.length > 0;
   state.snapMsg =
     `Imported ${plural(res.added, 'week')}` +
     (res.kept ? `, kept ${res.kept} already here` : '') +
-    (res.failed.length ? ` — ${res.failed.join('; ')}` : '.');
+    (res.failed.length ? ` — ${res.failed.join('; ')}` : '.') +
+    (res.prefs.mode === 'restored' ? ' Settings restored.' : '') +
+    (res.prefs.trades ? ` Added ${plural(res.prefs.trades, 'saved trade')}.` : '');
   renderArchive();
 });
 

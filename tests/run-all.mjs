@@ -60,6 +60,7 @@ const SUITES = [
   ['test-espn-tick.mjs', 'ticking your own side on ESPN’s trade page — and never submitting'],
   ['owner-names.mjs', 'real names instead of team names: the ESPN members join'],
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
+  ['test-backup.mjs', 'Export archive / Import: every kind of saved week and the preferences in one file, back byte for byte, nothing overwritten'],
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['test-cloud.mjs', 'the phone bridge: what is synced up, what comes back down, and how old it is'],
   ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],

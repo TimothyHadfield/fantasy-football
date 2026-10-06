@@ -66,6 +66,9 @@ const storageOf = (io) => {
 };
 const readingsOf = (io) => (io && io.readings) || snapshots;
 
+/** Tell the connection bar's chip that a copy landed (js/snapshots.js). */
+const announce = () => { if (typeof snapshots.announce === 'function') snapshots.announce(); };
+
 const usable = (rec) =>
   Boolean(rec) && rec.v === SCHEMA && Array.isArray(rec.weeks) && rec.weeks.length > 0 &&
   Boolean(rec.teams) && typeof rec.teams === 'object';
@@ -103,6 +106,7 @@ export function save(rec, io) {
     const json = JSON.stringify(rec);
     if (json.length > MAX_BYTES) return { written: false };
     s.setItem(keyOf(rec.leagueId, rec.season, rec.week), json);
+    announce();
     return { written: true, bytes: json.length };
   } catch {
     return { written: false };
@@ -384,7 +388,7 @@ export function keepCloud(leagueId, season, copies, io) {
         const s = storageOf(io);
         const json = JSON.stringify({ ...rec, week });
         if (!s || json.length > MAX_BYTES) res = { written: false };
-        else { s.setItem(partKeyOf(leagueId, season, week), json); res = { written: true }; }
+        else { s.setItem(partKeyOf(leagueId, season, week), json); announce(); res = { written: true }; }
       }
       if (res.written) out.kept++;
       else if (res.held) out.held++;
@@ -430,4 +434,131 @@ export function noteCloud(leagueId, season, patch, io) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// "IS THIS WEEK SAVED?"
+//
+// Tim, 2026-10-06: "can we make sure that we save it so that we don't lose it
+// after every week and it changes?" A missed week cannot be got back, and until
+// this existed nothing on the site said a week HAD been kept — only, loudly,
+// when one had failed. The connection bar asks here (js/connection.js); the
+// export on the Schedule page reads `stored` (js/backup.js).
+
+/** The week numbers under one key prefix, lowest first. Names only: nothing is parsed. */
+function weeksUnder(prefix, io) {
+  const out = [];
+  const s = storageOf(io);
+  try {
+    const n = s && typeof s.key === 'function' && typeof s.length === 'number' ? s.length : 0;
+    for (let i = 0; i < n; i++) {
+      const k = s.key(i);
+      if (!k || !k.startsWith(prefix)) continue;
+      const tail = k.slice(prefix.length);
+      if (/^\d+$/.test(tail)) out.push(Number(tail));
+    }
+  } catch { /* what was found so far still stands */ }
+  return out.sort((a, b) => a - b);
+}
+
+/**
+ * Which weeks this browser holds anything for, by kind.
+ *
+ * @returns {{readings:number[], copies:number[], parts:number[], all:number[]}}
+ */
+export function heldWeeks(leagueId, season, io) {
+  const readings = weeksUnder(snapshots.keyOf(leagueId, season, ''), io);
+  const copies = weeksUnder(keyOf(leagueId, season, ''), io);
+  const oneTeam = weeksUnder(partKeyOf(leagueId, season, ''), io);
+  const all = [...new Set([...readings, ...copies, ...oneTeam])].sort((a, b) => a - b);
+  return { readings, copies, parts: oneTeam, all };
+}
+
+/** Every copy held for a league and season, as stored: whole ones and one-team ones. */
+export function stored(leagueId, season, io) {
+  const whole = [];
+  for (const week of weeksUnder(keyOf(leagueId, season, ''), io)) {
+    const rec = get(leagueId, season, week, io);
+    if (rec) whole.push(rec);
+  }
+  return { whole, part: parts(leagueId, season, io).sort((a, b) => a.week - b.week) };
+}
+
+/** "Weeks 3–5", "Week 5", "Weeks 1, 3–5" — or '' for none. */
+export function weekSpan(weeks) {
+  const ws = [...new Set((weeks || []).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!ws.length) return '';
+  const runs = [];
+  for (const w of ws) {
+    const last = runs[runs.length - 1];
+    if (last && w === last[1] + 1) last[1] = w;
+    else runs.push([w, w]);
+  }
+  const text = runs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+  return `${ws.length === 1 ? 'Week' : 'Weeks'} ${text}`;
+}
+
+const stampOf = (iso) => {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return 'at an unknown time';
+  return when.toLocaleString(undefined, {
+    weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+  });
+};
+
+/**
+ * The bar's quiet chip: is this week's copy kept? `{saved, text, title}`, or
+ * null to say nothing.
+ *
+ * SAVED MEANS BOTH: the weekly reading (js/snapshots.js) and the all-team
+ * projection copy (above) are held for `week`. One without the other is "not
+ * saved yet", and the title names the half that is missing.
+ *
+ * `synced` is a browser reading the copy the computer sent — the phone. It
+ * takes no readings and is not told which week the league is on, so it names
+ * the latest week it was sent a copy of, and says nothing when it holds none.
+ * `pending` is this page load's own attempt still running:
+ * nothing is said about a week it may be about to save.
+ *
+ * Never for sample data, and never a guess: no week, no chip.
+ *
+ * @param {Object} o
+ * @param {number|null} o.week   the week readings are being filed under
+ * @param {boolean} [o.synced]
+ * @param {boolean} [o.pending]
+ */
+export function savedStatus({ leagueId, season, week = null, synced = false, pending = false }, io) {
+  if (!/^\d+$/.test(String(leagueId ?? ''))) return null;
+  const held = heldWeeks(leagueId, season, io);
+  const span = weekSpan(held.all);
+  const total = span ? `${span} held.` : 'No weeks held.';
+
+  if (synced) {
+    const sent = [...held.copies, ...held.parts];
+    if (!sent.length) return null;
+    return {
+      saved: true,
+      text: `Week ${Math.max(...sent)} saved`,
+      title: `Saved on your computer and sent here. ${total}`,
+    };
+  }
+
+  if (!Number.isFinite(week) || week <= 0) return null;
+  let reading = null;
+  try { reading = readingsOf(io).get(leagueId, season, week); } catch { reading = null; }
+  const copy = get(leagueId, season, week, io);
+  if (reading && copy) {
+    return {
+      saved: true,
+      text: `Week ${week} saved`,
+      title: `Week ${week} projections saved ${stampOf(reading.takenAt)}. ${total}`,
+    };
+  }
+  if (pending) return null;
+  const what = reading
+    ? `Week ${week} is half saved: every team’s projections are still missing.`
+    : copy
+      ? `Week ${week} is half saved: the weekly reading is still missing.`
+      : `Week ${week} projections are not saved yet.`;
+  return { saved: false, text: `Week ${week} not saved yet`, title: `${what} ${total}` };
 }

@@ -487,6 +487,72 @@ function captureChip() {
     `${week ? `Week ${week}` : 'This week'} NOT recorded</a>`;
 }
 
+/**
+ * The quiet chip: "Week 5 saved", or "Week 5 not saved yet".
+ *
+ * Tim, 2026-10-06: "can we make sure that we save it so that we don't lose it
+ * after every week and it changes?" The chip above only ever spoke on a
+ * failure, so a week that WAS kept looked the same as one nobody had tried.
+ * `projHistory.savedStatus` owns the rule and the words; this only decides
+ * which week to ask about, from what the bar already knows — it reads storage
+ * and asks ESPN nothing.
+ *
+ * The week is the one this page load's capture filed under, when it has
+ * finished. Before that (and on a browser without the extension, where the
+ * Schedule page takes the reading) it is the later of the last attempt's week
+ * and the week ESPN's probe named. No week, no chip. While the capture is
+ * still running nothing is said about a week it may be about to save, and a
+ * failed one is the loud chip's to report, not this one's.
+ *
+ * @returns {{text:string, title:string}|null}
+ */
+function savedView() {
+  if (!state.league || typeof projHistory.savedStatus !== 'function') return null;
+  const id = { leagueId: state.leagueId, season: state.season };
+  if (state.source === 'cloud') return projHistory.savedStatus({ ...id, synced: true });
+  if (captureChip()) return null;
+
+  const c = state.capture;
+  if (c && c.code === 'season-over') return null;
+  let week = c && Number.isFinite(c.week) ? c.week : null;
+  if (week == null) {
+    const a = snapshots.lastAttempt(state.leagueId, state.season);
+    const known = [a && a.week, state.league.currentWeek].filter((w) => Number.isFinite(w) && w > 0);
+    week = known.length ? Math.max(...known) : null;
+  }
+  return projHistory.savedStatus({ ...id, week, pending: bridge.isAvailable() && !c });
+}
+
+/**
+ * In the bar whenever a live league is connected (the synced bar carries it in
+ * its chip row, see `ages()`), hidden when it has nothing to say — so `refreshSaved()` can fill it in later without rebuilding the strip
+ * (and the team picker somebody may have open) around it. A <span>, not a
+ * link: js/touch-titles.js opens its `title` as a sheet on a phone.
+ */
+function savedChip(v = savedView()) {
+  return `<span class="conn-chip conn-saved" id="connSaved"` +
+    (v ? ` title="${esc(v.title)}">${esc(v.text)}` : ' hidden>') + '</span>';
+}
+
+/** A reading or a copy has just landed somewhere on this page: say so now. */
+function refreshSaved() {
+  const el = $('connSaved');
+  const v = savedView();
+  // The synced bar has no chip row to hold it until there is something in one.
+  if (!el) {
+    if (v && state.source === 'cloud') render();
+    return;
+  }
+  el.textContent = v ? v.text : '';
+  if (v) {
+    el.removeAttribute('hidden');
+    el.setAttribute('title', v.title);
+  } else {
+    el.setAttribute('hidden', '');
+    el.removeAttribute('title');
+  }
+}
+
 // =========================================================================
 // PUBLISHING TO THE CLOUD
 // =========================================================================
@@ -673,13 +739,16 @@ function ageChip(label, info) {
  */
 function ages() {
   const a = state.cloudAges;
-  if (!a) return '';
-  const chips = [
+  const chips = a ? [
     ageChip('Squads', a.rosters),
     ageChip('Schedule', a.schedule),
     a.wire && a.wire.syncedAt && a.wire.stale ? ageChip('Waiver wire', a.wire) : '',
-  ].filter(Boolean);
-  return chips.length ? `<span class="conn-chips">${chips.join('')}</span>` : '';
+  ].filter(Boolean) : [];
+  // The saved chip rides this row rather than taking a line of its own: on a
+  // phone every other place in the synced bar is already a full line.
+  const saved = savedView();
+  if (!chips.length && !saved) return '';
+  return `<span class="conn-chips">${chips.join('')}${savedChip(saved)}</span>`;
 }
 
 /**
@@ -871,6 +940,7 @@ function render() {
       </label>
       <button type="button" id="connSync" class="conn-btn">${state.busy ? 'Syncing…' : 'Sync now'}</button>
       ${captureChip()}
+      ${savedChip()}
       ${cloudControls()}`;
   } else if (state.extension) {
     body = `
@@ -999,6 +1069,10 @@ async function init() {
     state.extension = available;
     render();
   });
+
+  // Whichever page took the reading or kept the copy (js/snapshots.js
+  // `announce`), the chip follows without a reload.
+  document.addEventListener('ff:saved', refreshSaved);
 
   const { available } = await bridge.ping();
   state.extension = available;
