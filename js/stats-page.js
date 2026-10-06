@@ -948,6 +948,27 @@ function buildOppProj(key, schedule, weekTeams, floors = null, floorWeek = null)
     state.stats.teams.map((t) => t.id)
   );
 
+  // WHERE EACH NUMBER COMES FROM (Tim, 2026-10-06: "a chart that shows the
+  // future proj of the teams that that player is playing each week that they
+  // play them"): the same fixtures the average is formed from, kept one by one.
+  // `weeks` is the weeks that HAVE such a fixture, so the label over the chart
+  // names the weeks counted (5–14) and not the playoff weeks ESPN also projects.
+  const restFixtures = new Map();
+  for (const g of schedule.games) {
+    if (!restWeeks.includes(g.week) || g.homeId == null || g.awayId == null) continue;
+    const forWeek = built.proj.get(g.week);
+    if (!forWeek) continue;
+    for (const [id, oppId] of [[g.homeId, g.awayId], [g.awayId, g.homeId]]) {
+      const opp = forWeek.get(oppId);
+      if (!restByTeam.has(id) || !Number.isFinite(opp)) continue;
+      if (!restFixtures.has(id)) restFixtures.set(id, []);
+      restFixtures.get(id).push({ week: g.week, oppId, opp });
+    }
+  }
+  for (const list of restFixtures.values()) list.sort((a, b) => a.week - b.week);
+  const countedWeeks = [...new Set([...restFixtures.values()].flat().map((f) => f.week))]
+    .sort((a, b) => a - b);
+
   return {
     key,
     byTeam,
@@ -955,7 +976,8 @@ function buildOppProj(key, schedule, weekTeams, floors = null, floorWeek = null)
     rest: {
       byTeam: restByTeam,
       leagueAvg: restByTeam.size ? leagueAverageOpponent(restByTeam) : null,
-      weeks: restWeeks,
+      weeks: countedWeeks,
+      fixtures: restFixtures,
     },
     scheduleWeeks: schedule.weeks,
     projectedWeeks: built.weeks,
@@ -990,7 +1012,23 @@ function renderOppPanel() {
   tuckIfEmpty('oppProjNote');
 }
 
+/** "weeks 5–14", "week 14", or '' when nothing is left. */
+function restSpan(weeks) {
+  if (!weeks || !weeks.length) return '';
+  const first = weeks[0];
+  const last = weeks[weeks.length - 1];
+  return first === last ? `week ${first}` : `weeks ${first}–${last}`;
+}
+
 function paintOppPanel(chart, note) {
+  closeOppPop();
+  // The weeks the chart is formed over, said in the heading itself.
+  const said = $('oppProjSpan');
+  const d = state.oppProj;
+  const span = !state.oppPending && d && !d.error && d.rest ? restSpan(d.rest.weeks) : '';
+  if (said) said.textContent = span ? ` (${span})` : '';
+  wireOppPop(chart);
+
   if (state.oppPending) {
     const p = state.oppProgress;
     chart.innerHTML =
@@ -1054,7 +1092,8 @@ function oppBars(rows, leagueAvg) {
       const gap =
         d === null
           ? ''
-          : `<span class="dd ${d < -0.05 ? 'hard' : ''}">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
+          : `<span class="dd ${d < -0.05 ? 'hard' : ''}" data-opp="${esc(r.id)}" tabindex="0" role="button" ` +
+            `aria-label="${esc(r.name)}: the opponents behind this number">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
       return `<li class="${state.highlight === r.id ? 'me' : ''}">
           <span class="rk">${i + 1}</span>
           <span class="nm">${esc(r.name)} <small class="muted rec">${r.record}</small></span>
@@ -1068,12 +1107,116 @@ function oppBars(rows, leagueAvg) {
   return `<ol class="oppbars">${items}</ol>`;
 }
 
+// ------------------------------------------- where the last figure comes from
+//
+// Tim, 2026-10-06: "if you hover over the number it says on the end, have it
+// show a preview of a chart that shows the future proj of the teams that that
+// player is playing each week". One row per fixture still to play — week,
+// opponent, what he is projected to score that week — then the average of
+// those, the league's, and the gap, which is the figure hovered.
+//
+// A mouse: hover shows it, moving off hides it. A finger has no hover, so a tap
+// opens it as a sheet with a Close button; a tap outside or Escape also shuts
+// it. Nothing here is reachable only by hovering.
+
+let oppPop = null;
+
+function oppPopHtml(teamId) {
+  const data = state.oppProj;
+  const rest = data && data.rest;
+  const team = state.stats && state.stats.teams.find((t) => String(t.id) === String(teamId));
+  const list = team && rest && rest.fixtures ? rest.fixtures.get(team.id) : null;
+  if (!list || !list.length) return '';
+  const nameOf = (id) => {
+    const t = state.stats.teams.find((x) => x.id === id);
+    return t ? t.name : '—';
+  };
+  const avg = list.reduce((a, f) => a + f.opp, 0) / list.length;
+  const league = rest.leagueAvg;
+  const gap = typeof league === 'number' ? league - avg : null;
+  const rows = list.map((f) =>
+    `<tr><td class="num">${f.week}</td><td class="name">${esc(nameOf(f.oppId))}</td>` +
+    `<td class="num">${fmt(f.opp)}</td></tr>`).join('');
+  return (
+    `<div class="op-h">${esc(team.name)} <span class="muted">· ${restSpan(list.map((f) => f.week))}</span></div>` +
+    '<table><thead><tr><th class="num">Wk</th><th class="name">Opponent</th><th class="num">Proj</th></tr></thead>' +
+    `<tbody>${rows}</tbody><tfoot>` +
+    `<tr><td></td><td class="name">Average</td><td class="num">${fmt(avg)}</td></tr>` +
+    (gap === null ? '' :
+      `<tr><td></td><td class="name">League average</td><td class="num">${fmt(league)}</td></tr>` +
+      `<tr class="op-gap"><td></td><td class="name">Gap</td><td class="num">${gap > 0 ? '+' : ''}${gap.toFixed(1)}</td></tr>`) +
+    '</tfoot></table>' +
+    '<button type="button" class="op-close">Close</button>'
+  );
+}
+
+function closeOppPop() {
+  if (oppPop) oppPop.hidden = true;
+}
+
+function openOppPop(el, sheet) {
+  const html = oppPopHtml(el.dataset.opp);
+  if (!html) return;
+  if (!oppPop) {
+    oppPop = document.createElement('div');
+    oppPop.id = 'oppPop';
+    document.body.appendChild(oppPop);
+    oppPop.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('.op-close')) closeOppPop();
+    });
+  }
+  oppPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
+  oppPop.innerHTML = html;
+  oppPop.hidden = false;
+  oppPop.style.left = '';
+  oppPop.style.top = '';
+  if (sheet) return;
+  // Beside the figure: its right edge on the figure's, below it unless only
+  // above has the room.
+  const r = el.getBoundingClientRect();
+  const w = oppPop.offsetWidth;
+  const h = oppPop.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
+  oppPop.style.left = `${left}px`;
+  oppPop.style.top = `${top}px`;
+}
+
+/** One set of listeners on the chart's host, which outlives every repaint. */
+function wireOppPop(chart) {
+  if (chart.dataset.oppWired) return;
+  chart.dataset.oppWired = '1';
+  const target = (e) => (e.target && e.target.closest ? e.target.closest('.dd[data-opp]') : null);
+  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  chart.addEventListener('mouseover', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openOppPop(el, false);
+  });
+  chart.addEventListener('mouseout', (e) => {
+    if (target(e) && !noHover()) closeOppPop();
+  });
+  chart.addEventListener('click', (e) => {
+    const el = target(e);
+    if (el) openOppPop(el, noHover());
+  });
+  chart.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openOppPop(el, false);
+  });
+  chart.addEventListener('focusout', () => { if (!noHover()) closeOppPop(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOppPop(); });
+  document.addEventListener('click', (e) => {
+    if (!oppPop || oppPop.hidden) return;
+    if (oppPop.contains(e.target) || target(e)) return;
+    closeOppPop();
+  });
+}
+
 /** What the number is, that it needs no games, how it was derived, and over what. */
 function oppNote(rows, data) {
   const weeks = data.rest.weeks;
-  const first = weeks[0];
-  const last = weeks[weeks.length - 1];
-  const span = weeks.length === 1 ? `week ${first}` : `weeks ${first}–${last}`;
+  const span = restSpan(weeks);
 
   const fixtures = rows.map((r) => r.games);
   const loF = Math.min(...fixtures);

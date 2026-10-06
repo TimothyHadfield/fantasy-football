@@ -27,7 +27,7 @@ const EXPECTED = [
   'Season at a glance',
   'Standings & season totals',
   'Week by week',
-  'Schedule luck — average projected opponent',
+  'Schedule luck — rest of season',
   'Early season',
   'Weekly scores',
   'Weekly luck — actual minus projected',
@@ -162,7 +162,7 @@ TIMS_TOP.forEach((want, i) => {
 const idFor = Object.fromEntries(found.map((p) => [p.title, p.id]));
 for (const [title, id] of [
   ['Week by week', 'panelWeekGrid'],
-  ['Schedule luck — average projected opponent', 'panelOppProj'],
+  ['Schedule luck — rest of season', 'panelOppProj'],
   ['Early season', 'panelEarly'],
   ['Weekly scores', 'panelWeekly'],
   ['Weekly luck — actual minus projected', 'panelLuck'],

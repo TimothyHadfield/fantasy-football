@@ -146,8 +146,24 @@ function readPage(document) {
     };
   });
 
+  // The last figure opens the fixtures it is formed from (Tim, 2026-10-06).
+  const firstGap = document.querySelector('#oppProjChart .oppbars li .dd[data-opp]');
+  let pop = null;
+  if (firstGap) {
+    firstGap.dispatchEvent(new document.defaultView.Event('mouseover', { bubbles: true }));
+    const el = $('oppPop');
+    if (el && !el.hasAttribute('hidden')) {
+      const cells = (sel) => Array.from(el.querySelectorAll(sel))
+        .map((tr) => Array.from(tr.children).map((td) => clean(td.textContent)));
+      pop = { head: clean(el.querySelector('.op-h')?.textContent), body: cells('tbody tr'), foot: cells('tfoot tr') };
+    }
+    firstGap.dispatchEvent(new document.defaultView.Event('mouseout', { bubbles: true }));
+    pop = pop && { ...pop, shutAfter: $('oppPop').hasAttribute('hidden') };
+  }
+
   return {
-    labels, groupCols, rows, bars,
+    labels, groupCols, rows, bars, pop,
+    heading: clean($('panelOppProj').querySelector('h2').textContent),
     oppIndex: labels.indexOf('Opp proj'),
     chartText: clean($('oppProjChart').textContent),
     note: clean($('oppProjNote').textContent),
@@ -192,6 +208,7 @@ function check(scenario, page, boot) {
     ok(page.bars.length === 0, `${page.bars.length} bars on a finished season, expected 0`);
     ok(/No weeks left to play/.test(page.chartText), `finished season chart says: "${page.chartText}"`);
     ok(page.badge === 'Demo', `badge is "${page.badge}"`);
+    ok(page.heading === 'Schedule luck — rest of season', `heading is "${page.heading}"`);
     const col = page.rows.map((r) => r.cells[8]);
     ok(col.every((v) => /^\d+\.\d$/.test(v)), `Opp proj column not all numbers: ${col.join(',')}`);
   }
@@ -257,6 +274,28 @@ function check(scenario, page, boot) {
     }
     ok(page.badge === 'Live', `badge is "${page.badge}"`);
     ok(page.toggle === 'live', `source toggle is on "${page.toggle}"`);
+
+    // LABELLED AS REST OF SEASON, WITH ITS WEEKS, and the last figure opens the
+    // opponents it is formed from (Tim, 2026-10-06).
+    const said = scenario === 'mid' ? 'week 3' : 'weeks 1–3';
+    ok(page.heading === `Schedule luck — rest of season (${said})`, `heading is "${page.heading}"`);
+    const pop = page.pop;
+    ok(pop, 'hovering the last figure opens nothing');
+    if (pop) {
+      ok(pop.head === `Team 1 · ${said}`, `preview heading is "${pop.head}"`);
+      ok(pop.body.length === (scenario === 'mid' ? 1 : 3), `${pop.body.length} fixtures in the preview`);
+      ok(pop.body.every((r) => /^\d+$/.test(r[0]) && /^Team [234]$/.test(r[1]) && /^\d+\.\d$/.test(r[2])),
+        `preview rows: ${JSON.stringify(pop.body)}`);
+      const mean = pop.body.reduce((a, r) => a + Number(r[2]), 0) / pop.body.length;
+      ok(Math.abs(mean - page.bars[0].value) < 0.06, `fixtures average ${mean}, the bar says ${page.bars[0].value}`);
+      ok(pop.foot[0][1] === 'Average' && Math.abs(Number(pop.foot[0][2]) - page.bars[0].value) < 0.05,
+        `Average row: ${JSON.stringify(pop.foot[0])}`);
+      ok(pop.foot[1][1] === 'League average' && Math.abs(Number(pop.foot[1][2]) - REST_LEAGUE) < 0.05,
+        `League row: ${JSON.stringify(pop.foot[1])}`);
+      ok(pop.foot[2][1] === 'Gap' && pop.foot[2][2].replace('−', '-') === page.bars[0].gap.replace('−', '-'),
+        `Gap row ${JSON.stringify(pop.foot[2])} against the figure ${page.bars[0].gap}`);
+      ok(pop.shutAfter, 'the preview stays open after the pointer leaves');
+    }
   }
 
   if (scenario === 'zero') {

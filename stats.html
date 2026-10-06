@@ -52,6 +52,33 @@
 .oppbars .dd.hard { color: var(--warn); }
 .oppbars li.me .nm { color: #7fd99b; font-weight: 650; }
 .oppbars li.me .bar i { background: var(--accent); }
+/* The last figure opens the fixtures it is formed from (js/stats-page.js,
+ * "where the last figure comes from"): a card beside it for a mouse, a sheet
+ * at the foot of the screen for a finger. */
+.oppbars .dd[data-opp] { cursor: help; border-radius: 3px; }
+.oppbars .dd[data-opp]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.opp-pop {
+  position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.opp-pop[hidden] { display: none; }
+.opp-pop .op-h { font-weight: 650; margin-bottom: 6px; }
+.opp-pop table { width: 100%; border-collapse: collapse; }
+.opp-pop th { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.opp-pop th, .opp-pop td { padding: 3px 6px; }
+.opp-pop .num { text-align: right; }
+.opp-pop .name { text-align: left; }
+.opp-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
+.opp-pop tfoot td { color: var(--dim); }
+.opp-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
+.opp-pop .op-close { display: none; }
+.opp-pop.sheet {
+  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
+  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
+}
+.opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
 
 /* ------------------------------------------------------------------- phone
    Five things on one line — rank, team, bar, value, gap — and the bar is the
@@ -220,7 +247,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   </section>
 
   <section class="panel" id="panelOppProj">
-    <h2>Schedule luck &mdash; average projected opponent</h2>
+    <h2>Schedule luck &mdash; rest of season<span id="oppProjSpan"></span></h2>
     <p class="lede">Each team&rsquo;s average projected opponent over the weeks still to play, hardest first. The last figure is the gap from the league average: + is easier.</p>
     <div id="oppProjChart"></div>
     <p class="panel-note" id="oppProjWarn" hidden></p>
