@@ -110,6 +110,12 @@ import { scope } from './prefs.js';
 // The ONE definition of which weeks are the playoffs — the league's last
 // regular week plus one per round — shared with the Schedule page's bracket.
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
+// THE Gain COLUMN: what adding a free agent is worth to your own lineup, priced
+// by the Trade engine (js/waiver-gain.js). The two below it are how the Trade
+// page reads the league's lineup slots, so both pages fill the same lineup.
+import { gainBase, gainOf } from './waiver-gain.js';
+import { slotsForLeague } from './trade.js';
+import { slotCountsFromLineups } from './projection.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('waivers');
@@ -279,6 +285,19 @@ const state = {
   // players menu, just like the other manus"). Null = nobody picked here, so
   // the connection's team (or the demo's stand-in) is you, as before.
   pickedTeamId: prefs.get('team', null),
+
+  // GAIN (see "the Gain column" below). `key` names what the figures in `by`
+  // were worked out for — league, team, weeks — and is '' while there is
+  // nothing to work out (`why` then says which: 'team', 'weeks' or 'wait').
+  // `queue` is the free agents still to price, taken a slice at a time after
+  // the table has painted.
+  gain: { key: '', why: 'team', weeks: [], base: null, by: new Map(), queue: [], timer: null },
+  // The positional floor the Trade page prices with: one wire read per league.
+  // `value` is undefined while it is in the air, null for none.
+  gainFloors: { token: -1, value: undefined },
+  // Whether the preseason copy has been read (or refused): until then nobody
+  // knows if the arrows are about to buy the rest of the season.
+  baselineSettled: false,
 
   // THE PLAYED WEEKS: the columns left of the heavy line, and the Actual row.
   // Kept apart from the maps above on purpose: those are the priced weeks (the
@@ -1592,7 +1611,9 @@ function renderTeamPicker() {
   box.hidden = !teams.length;
   if (!teams.length) { sel.innerHTML = ''; return; }
   const want = String(myTeamId() ?? '');
-  const html = teams
+  // Nobody is "you" yet: say so, in the connection bar's words, rather than
+  // show the first team as if it had been chosen.
+  const html = (want ? '' : '<option value="" selected>choose your team…</option>') + teams
     .map((t) => `<option value="${esc(t.id)}"${String(t.id) === want ? ' selected' : ''}>${esc(t.name || `Team ${t.id}`)}</option>`)
     .join('');
   if (sel.innerHTML !== html) sel.innerHTML = html;
@@ -1703,6 +1724,346 @@ function buildMineRows(weeks) {
   // Football's own order, so an unsorted set of them reads QB first.
   rows.sort((a, b) => (POS_ORDER.get(a.p.position) ?? 9) - (POS_ORDER.get(b.p.position) ?? 9));
   return rows;
+}
+
+// ------------------------------------------------------------ the Gain column
+//
+// WHAT ADDING THIS FREE AGENT IS WORTH TO YOUR LINEUP. ESPN shows his
+// projection; it never solves your lineup with him in it. Gain does: add him,
+// drop the roster man whose loss costs least, and take the change in your best
+// legal lineup, a week, over the weeks still to play. The arithmetic is the
+// Trade engine's (js/waiver-gain.js) — its lineups, its floor, its cut.
+//
+// WHICH WEEKS. The regular-season weeks still to come (`rosWeeks()`, the weeks
+// the arrows and Avg already mean by "rest of season"), less a week already
+// under way: once a game of it is over its lineups are locked, which is the
+// Trade page's rule too. The column's title names them. THIS COLUMN BUYS NO
+// WEEK OF ITS OWN — requests are the scarce thing on this page. On a real
+// league the arrows read the rest of the season after the table paints, and
+// Gain waits for that; where nothing is going to read them (nobody on the page
+// is in the preseason copy) it prices the unbroken run of weeks already held,
+// so pressing a wider span widens it, and the title says which weeks it used.
+//
+// AFTER THE TABLE, IN SLICES. The roster's own lineups are solved once per
+// team; each free agent is then a few lineup fills, and most are skipped by
+// the prune. Measured: about a millisecond a man unpruned. It is still done
+// off the paint, a few milliseconds at a time, filling the cells in as it
+// goes: the table must never wait on it.
+
+/** How long one slice of the work may hold the page, in milliseconds. */
+const GAIN_SLICE_MS = 8;
+
+const weekHeld = (w) => state.weekData.has(w) && state.rosterWeeks.has(w);
+const weekRefused = (w) => state.failedWeeks.has(w) || state.failedRosterWeeks.has(w);
+
+/** A week with a finished game in it: locked, so no claim made now can move it. */
+const weekUnderWay = (w) =>
+  ((state.weekDone.get(w) || {}).size || 0) + ((state.rosterDone.get(w) || {}).size || 0) > 0;
+
+/** The arrows are going to read the rest of the season (or may yet decide to). */
+const rosComing = () => !state.isDemo && (!state.baselineSettled || trendWorthLoading());
+
+/**
+ * The weeks Gain is priced over; null while one of them is still on its way.
+ * [] when there is none to price.
+ */
+function gainSpan() {
+  const ros = rosWeeks();
+  const shown = shownWeeks();
+  const coming = (w) => !weekHeld(w) && !weekRefused(w) && (shown.includes(w) || rosComing());
+  if (ros.some(coming)) return null;
+  const run = [];
+  for (const w of ros) {
+    if (!weekHeld(w)) break;
+    run.push(w);
+  }
+  return run.filter((w) => !weekUnderWay(w));
+}
+
+/**
+ * The positional floor (js/floor.js), read the way the Trade page reads it:
+ * `season.fetchFloors` for the current week, once per league. Undefined while
+ * that read is in the air; null for none (the sample data, a stub, a refusal).
+ */
+function gainFloors() {
+  if (state.isDemo || typeof season.fetchFloors !== 'function' || !state.currentWeek) return null;
+  if (state.gainFloors.token === state.token) return state.gainFloors.value;
+  const token = state.token;
+  state.gainFloors = { token, value: undefined };
+  Promise.resolve()
+    .then(() => season.fetchFloors(state.currentWeek))
+    .then((got) => (got && got.size ? got : null), () => null)
+    .then((value) => {
+      if (token !== state.token) return;
+      state.gainFloors.value = value;
+      render();
+    });
+  return undefined;
+}
+
+/** A free agent from the id a cell carries (an attribute is always text). */
+const poolMan = (id) => state.pool.get(Number(id)) || state.pool.get(id) || null;
+
+/** A man as the engine needs him — and nothing a week-specific read attached. */
+const gainMan = (p) => ({ playerId: p.playerId, name: p.name, position: p.position });
+
+/**
+ * Decide what Gain is about right now, before the table is drawn. When that
+ * has changed — another team, another league, more weeks in hand — the old
+ * figures are dropped and the wire is queued again.
+ */
+function prepareGain() {
+  const g = state.gain;
+  let why = '';
+  let weeks = [];
+  let team = null;
+  let teams = [];
+  let floors = null;
+
+  const teamId = myTeamId();
+  if (teamId === null) why = 'team';
+  if (!why) {
+    weeks = gainSpan();
+    if (weeks === null) why = 'wait';
+    else if (!weeks.length) why = 'weeks';
+  }
+  if (!why) {
+    // The squad as it stands now: the same week the "Your …" rows are anchored on.
+    const anchor = shownWeeks().find((w) => state.rosterWeeks.has(w));
+    teams = (anchor === undefined ? null : state.rosterWeeks.get(anchor)) || [];
+    team = teams.find((t) => t.id === teamId) || null;
+    if (!team || !(team.players || []).length) why = 'team';
+  }
+  if (!why) {
+    floors = gainFloors();
+    if (floors === undefined) why = 'wait';
+  }
+
+  const key = why ? '' : `${state.token}|${teamId}|${weeks.join(',')}|${state.pool.size}`;
+  g.why = why;
+  if (key === g.key) return;
+
+  if (g.timer !== null) clearTimeout(g.timer);
+  Object.assign(g, {
+    key, weeks: why ? [] : weeks, base: null, by: new Map(), queue: [], timer: null,
+    slices: 0, longest: 0, busy: 0,
+  });
+  if (!key) return;
+
+  const mine = team.players.filter((p) => p.playerId !== null && p.playerId !== undefined).map(gainMan);
+  const held = new Set(mine.map((p) => p.playerId));
+  // Your men off the rosters, a free agent off the wire; anything but a number
+  // is "no projection", which the engine leaves out of that week's lineup.
+  // Remembered, because the engine asks for the same man's same week on every
+  // fill, and it fills each week once per man it might cut.
+  const seen = new Map();
+  const projFor = (p, week) => {
+    const at = `${p.playerId}|${week}`;
+    if (seen.has(at)) return seen.get(at);
+    const v = held.has(p.playerId) ? rosterValueFor(p.playerId, week) : valueFor(p.playerId, week);
+    const n = typeof v === 'number' ? v : null;
+    seen.set(at, n);
+    return n;
+  };
+  g.base = gainBase({
+    players: mine, slots: slotsForLeague(slotCountsFromLineups(teams)), weeks, projFor, floors,
+  });
+  g.queue = [...state.pool.keys()];
+  gainMark('gain-start');
+  // After this paint, never inside it.
+  g.timer = setTimeout(runGain, 0);
+}
+
+/** A timeline mark, so the fill can be timed from outside (`performance.measure`). */
+function gainMark(name, detail) {
+  if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+    performance.mark(name, detail ? { detail } : undefined);
+  }
+}
+
+/** One slice: price free agents until the time is up, then show them. */
+function runGain() {
+  const g = state.gain;
+  g.timer = null;
+  const started = Date.now();
+  while (g.queue.length && Date.now() - started < GAIN_SLICE_MS) {
+    const p = state.pool.get(g.queue.shift());
+    if (p) g.by.set(p.playerId, gainOf(g.base, gainMan(p)));
+  }
+  paintGain();
+  // How long the page was held, worst slice and all of them: one man priced
+  // the long way is a single piece of work and can outlast the budget.
+  const held = Date.now() - started;
+  g.slices = (g.slices || 0) + 1;
+  g.longest = Math.max(g.longest || 0, held);
+  g.busy = (g.busy || 0) + held;
+  if (g.queue.length) {
+    g.timer = setTimeout(runGain, 0);
+    return;
+  }
+  gainMark('gain-end', { slices: g.slices, longest: g.longest, busy: g.busy });
+  // The cells carry their sort keys now: put the rows back in the chosen order.
+  resort($('waiverTable'));
+}
+
+/** Fill in every cell still on its dot whose figure has arrived. */
+function paintGain() {
+  const g = state.gain;
+  $('waiverTable').querySelectorAll('tbody td.gain.wait[data-for]').forEach((td) => {
+    const p = poolMan(td.getAttribute('data-for'));
+    if (!p || !g.by.has(p.playerId)) return;
+    // The whole cell, from the one builder: a cell filled in here is then the
+    // same markup, byte for byte, as one drawn by the next full repaint.
+    td.outerHTML = gainCell(p);
+  });
+}
+
+/** `+1.4` — a gain is always written with its sign. */
+const signed = (n) => `${n > 0 ? '+' : ''}${fmt(n)}`;
+
+/**
+ * A free agent's Gain cell, in parts; `gainCell` below writes them out.
+ *
+ * A gain is PER WEEK, the Trade page's convention for a move priced over
+ * several weeks; the total is in the preview. No gain is the dash the rest of
+ * the table uses for "nothing here", with no sort key, so it sinks to the foot
+ * of the column either way. The figure is a button, not a titled cell: it
+ * opens the preview (`gainPop` below), by hover, focus or tap.
+ */
+function gainCellParts(p) {
+  const g = state.gain;
+  if (!g.key) {
+    return g.why === 'wait'
+      ? { cls: 'gain wait', v: null, title: '', html: '·', wait: false }
+      : { cls: 'gain', v: null, title: '', html: dash, wait: false };
+  }
+  const r = g.by.get(p.playerId);
+  if (!r) return { cls: 'gain wait', v: null, title: '', html: '·', wait: true };
+  if (!(r.total > 0)) {
+    return {
+      cls: 'gain', v: null, html: dash, wait: false,
+      title: `Adding ${p.name} would not raise your lineup in ${weekRange(g.weeks)}.`,
+    };
+  }
+  return {
+    cls: 'gain', v: r.perWeek.toFixed(3), title: '', wait: false,
+    html: `<span class="gn" data-gain="${esc(p.playerId)}" tabindex="0" role="button" ` +
+      `aria-label="${esc(p.name)}: where this gain comes from">${signed(r.perWeek)}</span>`,
+  };
+}
+
+function gainCell(p) {
+  const c = gainCellParts(p);
+  return `<td class="${c.cls}"${c.wait ? ` data-for="${esc(p.playerId)}"` : ''}` +
+    `${c.v === null ? '' : ` data-v="${c.v}"`}${c.title ? ` title="${esc(c.title)}"` : ''}>${c.html}</td>`;
+}
+
+/** The column's title: what the number is and, once known, exactly which weeks. */
+function gainTitle() {
+  const g = state.gain;
+  if (!g.key && g.why === 'team') return 'Pick your team above to see what adding each player would gain your lineup.';
+  return `Points a week your best lineup gains${g.key ? ` over ${weekRange(g.weeks)}` : ''} ` +
+    `if you add him and drop the man it costs least.`;
+}
+
+// WHERE A GAIN COMES FROM: the man the move drops, then one row per week —
+// your best lineup now, with him, and the difference — summing to the total,
+// which over the weeks is the figure in the cell. The Stats page's Schedule
+// luck preview, to the letter: a mouse gets a card beside the figure on hover
+// or focus; a finger has no hover, so a tap opens it as a sheet with a Close
+// button; a tap outside or Escape also shuts it.
+
+let gainPop = null;
+
+function gainPopHtml(playerId) {
+  const g = state.gain;
+  const p = poolMan(playerId);
+  const r = p ? g.by.get(p.playerId) : null;
+  if (!r || !(r.total > 0) || !r.weeks.length) return '';
+  const sum = (pick) => r.weeks.reduce((a, w) => a + pick(w), 0);
+  const rows = r.weeks.map((w) =>
+    `<tr><td class="num">${w.week}</td><td class="num">${fmt(w.before)}</td>` +
+    `<td class="num">${fmt(w.after)}</td><td class="num">${signed(w.delta)}</td></tr>`).join('');
+  return (
+    `<div class="op-h">${esc(p.name)} <span class="muted">· ${weekRange(g.weeks)}</span></div>` +
+    (r.drop ? `<div class="op-drop">Drop ${esc(r.drop.name)}</div>` : '') +
+    '<table><thead><tr><th class="num">Wk</th><th class="num">Now</th>' +
+    '<th class="num">With him</th><th class="num">+</th></tr></thead>' +
+    `<tbody>${rows}</tbody><tfoot>` +
+    `<tr><td class="lbl">Total</td><td class="num">${fmt(sum((w) => w.before))}</td>` +
+    `<td class="num">${fmt(sum((w) => w.after))}</td><td class="num">${signed(r.total)}</td></tr>` +
+    `<tr class="op-gap"><td class="lbl" colspan="3">Per week</td><td class="num">${signed(r.perWeek)}</td></tr>` +
+    '</tfoot></table>' +
+    '<button type="button" class="op-close">Close</button>'
+  );
+}
+
+function closeGainPop() {
+  if (gainPop) gainPop.hidden = true;
+}
+
+function openGainPop(el, sheet) {
+  const html = gainPopHtml(el.dataset.gain);
+  if (!html) return;
+  if (!gainPop) {
+    gainPop = document.createElement('div');
+    gainPop.id = 'gainPop';
+    document.body.appendChild(gainPop);
+    gainPop.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('.op-close')) closeGainPop();
+    });
+  }
+  gainPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
+  gainPop.innerHTML = html;
+  gainPop.hidden = false;
+  gainPop.style.left = '';
+  gainPop.style.top = '';
+  if (sheet || typeof el.getBoundingClientRect !== 'function') return;
+  // Beside the figure: its right edge on the figure's, below it unless only
+  // above has the room.
+  const r = el.getBoundingClientRect();
+  const w = gainPop.offsetWidth;
+  const h = gainPop.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
+  gainPop.style.left = `${left}px`;
+  gainPop.style.top = `${top}px`;
+}
+
+/** One set of listeners on the table, which outlives every repaint. */
+function wireGainPop(table) {
+  const target = (e) => (e.target && e.target.closest ? e.target.closest('.gn[data-gain]') : null);
+  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  table.addEventListener('mouseover', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openGainPop(el, false);
+  });
+  table.addEventListener('mouseout', (e) => {
+    if (target(e) && !noHover()) closeGainPop();
+  });
+  table.addEventListener('click', (e) => {
+    const el = target(e);
+    if (el) openGainPop(el, noHover());
+  });
+  table.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openGainPop(el, false);
+  });
+  table.addEventListener('focusout', () => { if (!noHover()) closeGainPop(); });
+  // Enter or Space on the figure, for a keyboard on a touch screen.
+  table.addEventListener('keydown', (e) => {
+    const el = target(e);
+    if (!el || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    openGainPop(el, noHover());
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeGainPop(); });
+  document.addEventListener('click', (e) => {
+    if (!gainPop || gainPop.hidden) return;
+    if (gainPop.contains(e.target) || target(e)) return;
+    closeGainPop();
+  });
 }
 
 // ------------------------------------------------------- the taken players
@@ -2149,6 +2510,7 @@ function renderHead(weeks) {
        <th class="left" data-sort>Pos</th>
        <th class="left" data-sort>Tm</th>
        <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are left out, as on the Trade page.">Avg</th>
+       <th data-sort title="${esc(gainTitle())}">Gain</th>
        ${cols}
      </tr>`;
 }
@@ -2590,13 +2952,14 @@ function wireRow(row, weeks, mine, avgScales) {
           `remaining week and his actual scores`, true), trendMark(p, false),
         `${injuryTag(status)}${waiverTag(p)}`)}</td>
       ${identityCells(row, heat, says)}
+      ${gainCell(p)}
       ${weekCells(p, weeks, true, p.playerId === state.spotlight, (i) =>
         // Your own man's finished game is not a number a claim can still
         // beat: no shade against a score.
         cell(values[i], weeks[i], p, false,
           yours && !yours.done[i] ? { name: yours.p.name, value: yours.values[i] } : null,
           null, '', row.done[i]))}
-    </tr>${actualRowIf(p, weeks, true, 3)}`;
+    </tr>${actualRowIf(p, weeks, true, 4)}`;
 }
 
 /**
@@ -2633,6 +2996,7 @@ function mineRow(row, weeks, avgScales) {
           injuryTag(availability(p.injuryStatus)), `<span class="mine-tag">${esc(label)}</span> `) +
         `</td>
       ${identityCells(row, heat, says)}
+      <td class="gain"></td>
       ${weekCells(p, weeks, false, false, (i) =>
         cell(values[i], weeks[i], p, true, null, null, '', row.done[i]))}
     </tr>`;
@@ -2641,6 +3005,8 @@ function mineRow(row, weeks, avgScales) {
 function renderTable(weeks) {
   const table = $('waiverTable');
   const tbody = table.querySelector('tbody');
+  // Before the head: the Gain column's title names the weeks this settles.
+  prepareGain();
   renderHead(weeks);
 
   const all = buildRows(weeks);
@@ -2650,7 +3016,7 @@ function renderTable(weeks) {
   // is measured against your worst RB whether or not the RB button is pressed.
   const byPosition = new Map(mineAll.map((r) => [r.p.position, r]));
   const mine = mineAll.filter(matchesFilter);
-  const cols = pastWeeks(weeks).length + weeks.length + 4;
+  const cols = pastWeeks(weeks).length + weeks.length + 5;
 
   // THE Avg COLUMN'S SCALES, from `all` and NOT from `available`: the filter
   // must not be able to move a colour. See the long block above
@@ -3270,6 +3636,18 @@ function renderNote(weeks) {
     'same thing, so they are not drawn the same way. ' + ZERO_NOTE
   );
 
+  // What Gain is, what it is priced over, and the one thing it does not model.
+  if (state.gain.key) {
+    parts.push(
+      lead('Gain') +
+      `Gain is what adding him is worth to your own lineup: your best legal lineup with him ` +
+      `in it and without the player it costs least to drop, minus your best lineup as the roster ` +
+      `stands, a week, over ${weekRange(state.gain.weeks)}. It is priced exactly as the Trade page ` +
+      `prices a trade, and your roster stays the size it is now. A dash means he would not ` +
+      `raise your lineup in any of those weeks. Click or tap a figure for the weeks behind it.`
+    );
+  }
+
   if (state.pool.size && [...state.pool.values()].some((p) => p.status === 'WAIVERS')) {
     parts.push(
       lead('W') +
@@ -3518,6 +3896,7 @@ $('jumpNote').addEventListener('click', (e) => {
 // The average is the only column that orders the whole table into an answer, so
 // that is where it opens: best first.
 enableSort($('waiverTable'), { defaultIndex: 3 });
+wireGainPop($('waiverTable'));
 // Same reasoning one column further right, the Owner column having pushed Avg
 // from index 3 to index 4.
 enableSort($('takenTable'), { defaultIndex: 4 });
@@ -3571,7 +3950,12 @@ if (landing !== null) {
 
 // The preseason copy for the arrows by a name: read once, and the tables are
 // repainted when it lands (a failed read simply draws no arrows).
-trend.loadBaseline().then((b) => { if (b) { render(); ensureTrendWeeks(state.token); } });
+// Gain waits on the same answer (`rosComing`), so a refusal repaints too.
+trend.loadBaseline().then((b) => {
+  state.baselineSettled = true;
+  render();
+  if (b) ensureTrendWeeks(state.token);
+});
 
 if (state.source === 'live' && savedConfig()) loadLive();
 else { state.source = 'demo'; loadDemo(); }

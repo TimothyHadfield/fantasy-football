@@ -783,8 +783,9 @@ async function check(scenario, boot) {
     const w = globalThis.__past || {};
     const J = (x) => JSON.stringify(x);
     const WEEKS = ['1', '2', '3'];
-    // Where the weeks start in each table: after Player, Pos, Tm, (Owner,) Avg.
-    const LEAD = { taken: 5, wire: 4 };
+    // Where the weeks start in each table: after Player, Pos, Tm, Owner, Avg on
+    // the Taken table and after Player, Pos, Tm, Avg, Gain on the wire.
+    const LEAD = { taken: 5, wire: 5 };
 
     /** The header claims, for both tables. */
     const heads = (h) => {
@@ -1151,7 +1152,7 @@ async function check(scenario, boot) {
     head.length > 5 && head.slice(5).every((h) => /^\d+$/.test(h)), JSON.stringify(head));
   c.ok('the same weeks as the available table',
     JSON.stringify(head.slice(5)) ===
-      JSON.stringify([...d.querySelectorAll('#waiverTable thead th')].map((th) => txt(th)).slice(4)),
+      JSON.stringify([...d.querySelectorAll('#waiverTable thead th')].map((th) => txt(th)).slice(5)),
     JSON.stringify(head));
   c.ok('every header is sortable',
     [...d.querySelectorAll('#takenTable thead th')].every((th) => th.hasAttribute('data-sort')),

@@ -174,7 +174,7 @@ async function check(scenario, { document, window, errors, rejections, first }) 
 
   ok('the page finished loading', first.ok, first.why);
   const taken = reader(document, 'takenTable', 4);
-  const wire = reader(document, 'waiverTable', 3);
+  const wire = reader(document, 'waiverTable', 4);
   const marked = () => document.querySelectorAll('tbody td[data-done]').length;
   const extra = {};
 

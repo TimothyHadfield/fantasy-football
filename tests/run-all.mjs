@@ -89,6 +89,7 @@ const SUITES = [
   ['test-projhist-cloud.mjs', 'projection history in the cloud: each saved week goes up once and is never rewritten, and a browser without it reads it back'],
   ['cross-sim-check.mjs', 'Summary and Schedule simulate with identical inputs'],
   ['home-winpct-check.mjs', 'Home and Schedule quote the same win chance for the same game'],
+  ['test-waiver-gain.mjs', 'Gain on the Players page: an add-and-drop priced by the Trade engine, against a brute force, and the prune proved'],
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],

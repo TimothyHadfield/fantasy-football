@@ -28,7 +28,7 @@ const LIVE = { 'waivers.source': 'live' };
 // after the priced weeks. Every index into the week cells below is offset by
 // this, and every list of requests carries [1, 2, 3] as well.
 const PAST = 3;
-const WEEK0 = 4 + PAST;   // the wire table's first PRICED week cell (week 4)
+const WEEK0 = 5 + PAST;   // the wire table's first PRICED week cell (week 4)
 
 const SCENARIOS = {
   mine: {
