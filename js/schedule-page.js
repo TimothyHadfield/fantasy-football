@@ -200,7 +200,13 @@ const EN = '–';
 const recordText = (r) => (r.t ? `${r.w}${EN}${r.l}${EN}${r.t}` : `${r.w}${EN}${r.l}`);
 
 /** Margin with its sign kept: which way it went is the whole point. */
-const signed = (n) => (n > 0 ? `+${fmt(n)}` : fmt(n));
+// Rounded first, then signed — the rule js/standings-table.js `signed` follows:
+// a value that rounds to zero is zero, so no "-0.0" and no "+0.0".
+export const signed = (n) => {  // exported for tests/fc-test.mjs
+  if (n === null || n === undefined || Number.isNaN(n)) return fmt(n);
+  const r = Number(Number(n).toFixed(1)) + 0;   // + 0: a rounded −0 is 0
+  return r > 0 ? `+${fmt(r)}` : fmt(r);
+};
 
 /**
  * A probability as a whole percent.
@@ -223,6 +229,24 @@ function shortName(name) {
   const first = full.split(/\s+/)[0];
   const s = first.length >= 3 ? first : full;
   return s.length > 11 ? s.slice(0, 10) + '…' : s;
+}
+
+/**
+ * The column headers for a list of team names. Two teams whose short names
+ * come out the same ("Andrew L" and "Andrew Worachek" were both "Andrew") get
+ * their last initial: "Andrew L", "Andrew W". Every other name is untouched,
+ * and a pair an initial still cannot tell apart is written out in full.
+ * Exported for tests/fc-test.mjs.
+ */
+export function shortNames(names) {
+  const short = names.map(shortName);
+  const clash = (list, s) => list.filter((x) => x === s).length > 1;
+  const initialled = names.map((name, i) => {
+    if (!clash(short, short[i])) return short[i];
+    const words = String(name).trim().split(/\s+/);
+    return words.length > 1 ? `${short[i]} ${words[words.length - 1][0].toUpperCase()}` : short[i];
+  });
+  return initialled.map((s, i) => (clash(initialled, s) ? String(names[i]).trim() : s));
 }
 
 // ----------------------------------------------------------------- game state
@@ -1827,8 +1851,9 @@ function renderH2H() {
     return;
   }
 
+  const heads = shortNames(teams.map((t) => t.name));
   const cols = teams
-    .map((t) => `<th data-sort title="${esc(t.name)}">${esc(shortName(t.name))}</th>`)
+    .map((t, i) => `<th data-sort title="${esc(t.name)}">${esc(heads[i])}</th>`)
     .join('');
 
   const grid = mode === 'records' ? recordsGrid(teams, cols) : scheduleGrid(teams, cols);
