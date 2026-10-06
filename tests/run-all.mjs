@@ -40,6 +40,7 @@ const COUNTS_FILE = path.join(HERE, 'counts.json');
 const SUITES = [
   ['test-forecast.mjs', 'win probability, sigma calibration, optimal lineup, win-total distribution'],
   ['test-sim.mjs', 'the Monte Carlo season simulation'],
+  ['test-must-win.mjs', 'which games swing a season: one game forced won and lost on the same draws, and what it moves'],
   ['test-projection.mjs', 'the shared projection module'],
   ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],

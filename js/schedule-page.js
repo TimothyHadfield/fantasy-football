@@ -24,6 +24,9 @@ import { generateDemoLeague } from './demo.js';
 import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
+// What one game is worth to the title and to last place: "My season"'s last
+// two columns. See js/must-win.js.
+import * as mustWin from './must-win.js';
 import { histogram } from './charts.js';
 // The positional floor's one sentence, so this page states it in the words
 // Analysis and Trade use (rule 7). See js/floor.js.
@@ -139,6 +142,10 @@ const state = {
   runs: SIM_RUN_CHOICE(prefs.get('runs', 10000)),
   sim: null,                // {key, result} — see simInputs() for what invalidates it
   simToken: 0,              // guards against a slow run landing after the data changed
+  // Title ± / Last ± for the forecast team: {key, cells: Map(week -> swing)}.
+  // See swingKey() for what throws it away.
+  swing: null,
+  swingToken: 0,            // stops a superseded fill; see runSwings()
 
   // The time machine. `replay` is null when the page is showing now, and the
   // snapshot being replayed otherwise. It is deliberately the whole snapshot
@@ -2163,7 +2170,7 @@ function renderForecast() {
 
   const blank = (reason, note) => {
     stats.innerHTML = '';
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${reason}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${reason}</td></tr>`;
     chart.innerHTML = '';
     setKey('forecastKey', '');
     $('forecastNote').innerHTML = note;
@@ -2271,6 +2278,20 @@ function renderForecast() {
   const heatWin = heatScale(rows.map((r) => r.p), { minSpread: PCT_MIN_SPREAD });
   const W_WIN = 'this team’s other remaining games';
 
+  // TITLE ± AND LAST ±. Filled from what is already worked out for this team
+  // and this season; anything else is "…" until runSwings() gets to it, which
+  // starts only once the simulation panel has its own answer.
+  const swingInputs = simInputs();
+  const swingId = swingInputs ? swingKey(swingInputs, team.id) : null;
+  if (!state.swing || state.swing.key !== swingId) {
+    state.swingToken++;
+    state.swing = null;
+  }
+  closeSwingPop();
+  // A phone shows one of the two: the one the Trade page's goal is set to.
+  table.classList.toggle('goal-last', tradePrefs.get('goal', 'title') === 'last');
+  const simFailed = Boolean(swingInputs) && state.sim?.key === swingInputs.key && !state.sim.result;
+
   tbody.innerHTML = rows
     .map((r) => {
       const w = r.g.week;
@@ -2296,6 +2317,7 @@ function renderForecast() {
           ${pts(r.mine)}
           ${pts(r.theirs)}
           ${chance}
+          ${swingCells(w, swingState(swingInputs, team.id, w, simFailed))}
         </tr>`;
     })
     .join('');
@@ -2395,6 +2417,14 @@ function renderForecast() {
       'cancelled out of it.'
     : '';
 
+  const swingPara =
+    '<strong>Title ± and Last ±</strong> are how far this team’s title chance and its chance ' +
+    'of finishing last move if it wins that game rather than loses it. The rest of the season ' +
+    `is played out ${commas(mustWin.SWING_RUNS)} times each way, with every other game falling ` +
+    'the same in both, so the gap is the game and not the luck; it still wobbles by about ' +
+    'half a point. Regular-season games only, and a game being played is left blank. A phone ' +
+    'shows the one your Trade page goal is set to; the figure opens both.';
+
   $('forecastNote').innerHTML = [
     `${esc(team.name)} — ${plural(played, 'game')} banked at ${recordText(banked)}` +
       // Rule 7: the tie is in Expected wins now, so say how it counts.
@@ -2410,6 +2440,7 @@ function renderForecast() {
     standing,
     shape,
     heatPara,
+    swingPara,
     derivedCaveat(),
     projectionCaveat(lastWeek),
     gaps,
@@ -2417,6 +2448,231 @@ function renderForecast() {
     .filter(Boolean)
     .map((s) => `<p>${s}</p>`)
     .join('');
+}
+
+// ------------------------------------------------- which games swing the season
+//
+// Title ± and Last ±, the forecast table's last two columns: this team's title
+// chance and last-place chance if it wins that game, less the same two if it
+// loses it. js/must-win.js plays the season out both ways on the simulation's
+// own inputs and seed; this is the scheduling and the cells.
+//
+// TWENTY RUNS FOR A TEN-GAME RUN-IN, so it is kept off the critical path: it
+// starts only after the simulation panel has painted, and takes one run per
+// task so the page stays live while the cells fill in.
+
+const tradePrefs = scope('trade');
+
+/**
+ * What a worked-out swing depends on: the team, and everything the simulation
+ * depends on except its run count (these runs have their own, SWING_RUNS).
+ */
+function swingKey(inputs, teamId) {
+  return JSON.stringify([teamId, inputs.asOf, ...inputs.keyParts]);
+}
+
+/**
+ * One game's cells: a swing, 'wait' while it is being worked out, or null for
+ * a game with none — in progress, no projection, or no season to play out.
+ */
+function swingState(inputs, teamId, week, simFailed) {
+  if (!inputs || !inputs.playable || simFailed) return null;
+  const game = inputs.games[mustWin.gameIndex(inputs.games, teamId, week)];
+  if (!mustWin.canForce(game, teamId)) return null;
+  const cells = state.swing ? state.swing.cells : null;
+  return cells && cells.has(week) ? cells.get(week) : 'wait';
+}
+
+/** A change in a chance, in percentage points to a tenth: "+9.2%", "−5.0%". */
+function swingText(v) {
+  const n = Math.round(v * 1000) / 10;
+  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(1)}%`;
+}
+
+/** The inside of one swing cell, and the value it sorts on (null = bottom). */
+function swingCell(week, sw, which) {
+  if (sw === 'wait') return { v: null, html: '<span class="muted">…</span>' };
+  const v = sw ? sw[which] : null;
+  if (v === null) return { v: null, html: '' };
+  // A button in all but tag: the figure opens where it comes from.
+  return {
+    v,
+    html: `<span class="sw-v" tabindex="0" role="button" data-swing="${week}">${swingText(v)}</span>`,
+  };
+}
+
+function swingCells(week, sw) {
+  return ['title', 'last']
+    .map((which) => {
+      const c = swingCell(week, sw, which);
+      return `<td class="sw-${which}" data-swing-week="${week}"${c.v === null ? '' : ` data-v="${c.v}"`}>${c.html}</td>`;
+    })
+    .join('');
+}
+
+/** Put one finished game into the table as it stands, without a re-render. */
+function paintSwing(week, sw) {
+  for (const which of ['title', 'last']) {
+    const td = $('forecastTable').querySelector(`td.sw-${which}[data-swing-week="${week}"]`);
+    if (!td) continue;
+    const c = swingCell(week, sw, which);
+    td.innerHTML = c.html;
+    if (c.v === null) td.removeAttribute('data-v');
+    else td.setAttribute('data-v', String(c.v));
+  }
+}
+
+/**
+ * Work out every game's swing for the forecast team, a slice per task.
+ *
+ * Called when the simulation panel paints, so the base run is never behind
+ * this. A fill for another team or another season is dropped by the token,
+ * which renderForecast() also bumps the moment the key stops matching.
+ *
+ * Each forced run is taken SWING_SLICE seasons at a time and pooled, so no one
+ * task holds the page; slice k of the win and slice k of the loss share a
+ * seed, which is what keeps the gap between them the game and not the luck.
+ */
+function runSwings(inputs) {
+  const team = forecastTeam();
+  if (!team) return;
+  const key = swingKey(inputs, team.id);
+  if (state.swing && state.swing.key === key) return;
+
+  const token = ++state.swingToken;
+  const job = { key, cells: new Map() };
+  state.swing = job;
+
+  const todo = inputs.games
+    .map((g, index) => ({ g, index }))
+    .filter(({ g }) => mustWin.canForce(g, team.id))
+    .sort((a, b) => a.g.week - b.g.week);
+  const slices = Math.ceil(mustWin.SWING_RUNS / mustWin.SWING_SLICE);
+
+  let i = 0;          // which game
+  let k = 0;          // which slice of it: win and loss alternate
+  let wins = [];
+  let losses = [];
+  const step = () => {
+    if (token !== state.swingToken || !state.data) return;
+    if (i >= todo.length) {
+      // Only now, so a table sorted on one of these does not reshuffle under
+      // the reader a row at a time.
+      resort($('forecastTable'));
+      return;
+    }
+    const { g, index } = todo[i];
+    const opts = { runs: mustWin.SWING_SLICE, seed: SIM_SEED + (k >> 1) };
+    (k % 2 ? losses : wins).push(mustWin.chancesIf(inputs, team.id, index, k % 2 === 0, opts));
+    if (++k === slices * 2) {
+      const sw = mustWin.swingOf(mustWin.pooled(wins), mustWin.pooled(losses), slices * mustWin.SWING_SLICE);
+      job.cells.set(g.week, sw);
+      paintSwing(g.week, sw);
+      i++;
+      k = 0;
+      wins = [];
+      losses = [];
+    }
+    setTimeout(step, 0);
+  };
+  setTimeout(step, 0);
+}
+
+// The figure opens where it comes from: the team's two chances with the game
+// won, the same two with it lost, and how many seasons each was counted over.
+// The pattern is the Stats page's Schedule-luck preview (js/stats-page.js,
+// `oppPop`): hover or focus shows a card for a mouse; a tap opens a sheet with
+// a Close button; Escape or a tap outside shuts it. Nothing is hover-only.
+
+let swingPop = null;
+
+function swingPopHtml(week) {
+  const sw = state.swing ? state.swing.cells.get(Number(week)) : null;
+  const team = forecastTeam();
+  if (!sw || !team) return '';
+  const g = state.data.games.find((x) =>
+    x.week === Number(week) && (x.homeId === team.id || x.awayId === team.id));
+  const opp = g ? (g.homeId === team.id ? g.awayName : g.homeName) : '';
+  const who = team.id === state.myTeamId ? 'you' : 'they';
+  const pct = (p) => (p === null ? '—' : `${(p * 100).toFixed(1)}%`);
+  const gap = (v) => (v === null ? '—' : swingText(v));
+  const row = (label, c) =>
+    `<tr><td class="name">${label}</td><td class="num">${pct(c.title)}</td>` +
+    `<td class="num">${pct(c.last)}</td></tr>`;
+  return (
+    `<div class="op-h">Week ${esc(week)} <span class="muted">· ${esc(opp)}</span></div>` +
+    '<table><thead><tr><th class="name"></th><th class="num">Title</th><th class="num">Last</th></tr></thead>' +
+    `<tbody>${row(`If ${who} win`, sw.win)}${row(`If ${who} lose`, sw.loss)}</tbody>` +
+    `<tfoot><tr class="op-gap"><td class="name">Swing</td><td class="num">${gap(sw.title)}</td>` +
+    `<td class="num">${gap(sw.last)}</td></tr></tfoot></table>` +
+    `<div class="op-foot">${commas(sw.runs)} simulated seasons each way</div>` +
+    '<button type="button" class="op-close">Close</button>'
+  );
+}
+
+function closeSwingPop() {
+  if (swingPop) swingPop.hidden = true;
+}
+
+function openSwingPop(el, sheet) {
+  const html = swingPopHtml(el.dataset.swing);
+  if (!html) return;
+  if (!swingPop) {
+    swingPop = document.createElement('div');
+    swingPop.id = 'swingPop';
+    document.body.appendChild(swingPop);
+    swingPop.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('.op-close')) closeSwingPop();
+    });
+  }
+  swingPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
+  swingPop.innerHTML = html;
+  swingPop.hidden = false;
+  swingPop.style.left = '';
+  swingPop.style.top = '';
+  if (sheet) return;
+  // Beside the figure: its right edge on the figure's, below it unless only
+  // above has the room.
+  const r = el.getBoundingClientRect();
+  const w = swingPop.offsetWidth;
+  const h = swingPop.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
+  swingPop.style.left = `${left}px`;
+  swingPop.style.top = `${top}px`;
+}
+
+/** One set of listeners on the table, which outlives every repaint of its rows. */
+function wireSwingPop(table) {
+  const target = (e) => (e.target && e.target.closest ? e.target.closest('.sw-v[data-swing]') : null);
+  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  table.addEventListener('mouseover', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openSwingPop(el, false);
+  });
+  table.addEventListener('mouseout', (e) => {
+    if (target(e) && !noHover()) closeSwingPop();
+  });
+  table.addEventListener('click', (e) => {
+    const el = target(e);
+    if (el) openSwingPop(el, noHover());
+  });
+  table.addEventListener('keydown', (e) => {
+    const el = target(e);
+    if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openSwingPop(el, noHover()); }
+  });
+  table.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openSwingPop(el, false);
+  });
+  table.addEventListener('focusout', () => { if (!noHover()) closeSwingPop(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSwingPop(); });
+  document.addEventListener('click', (e) => {
+    if (!swingPop || swingPop.hidden) return;
+    if (swingPop.contains(e.target) || target(e)) return;
+    closeSwingPop();
+  });
 }
 
 // ------------------------------------------------------------ season simulation
@@ -2624,6 +2880,8 @@ function renderSimulation() {
   }
 
   paintSimulation(sim, inputs);
+  // Only now: the simulation's own answer is on screen before these start.
+  runSwings(inputs);
 }
 
 /**
@@ -3223,6 +3481,7 @@ $('h2hView').addEventListener('click', (e) => {
 
 // The forecast reads forwards in time, so it opens in week order.
 enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
+wireSwingPop($('forecastTable'));
 // The projected table opens on the most likely finishing order: average place,
 // lowest first. That IS the ranking the panel exists to give.
 enableSort($('simTable'), { defaultIndex: 3, defaultAsc: true });

@@ -46,6 +46,33 @@ export function normalCdf(x) {
 }
 
 /**
+ * The inverse of `normalCdf`: the x with P(Z <= x) = p. Acklam's rational
+ * approximation, relative error about 1e-9. Used only to force one game's
+ * result in `simulateSeason` (a game marked `forced`).
+ */
+export function normalInv(p) {
+  if (!(p > 0)) return -Infinity;
+  if (!(p < 1)) return Infinity;
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687,
+    138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866,
+    66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838,
+    -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996,
+    3.754408661907416];
+  const tail = (q) =>
+    (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+    ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  if (p < 0.02425) return tail(Math.sqrt(-2 * Math.log(p)));
+  if (p > 1 - 0.02425) return -tail(Math.sqrt(-2 * Math.log(1 - p)));
+  const q = p - 0.5;
+  const r = q * q;
+  return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) /
+    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+
+/**
  * The chance `projA` beats `projB`, given a per-team scoring spread.
  *
  * Both teams carry the same spread, and their scores are treated as
@@ -438,6 +465,11 @@ export function playoffRoundCount(fieldSize) {
  *   (0..1): the share of the spread that side still has to play. Its projection
  *   is then the points banked plus the points to come, and the noise is scaled
  *   by that share — nothing left is no noise, absent is the whole of it.
+ *   A game may also carry `forced: 'home' | 'away'`: that side wins it in every
+ *   run. The same two draws are taken, then the margin is moved to the same
+ *   quantile of its winning (or losing) half, so the scores are a fair sample
+ *   of "given that result" and no other game's draws shift. A game with no
+ *   spread left cannot be forced and is played as it stands.
  * @param {number}   o.sigma
  * @param {number}   [o.runs=10000]
  * @param {number}   [o.seed=1]
@@ -478,6 +510,9 @@ export function simulateSeason({
   const homeSd = [];
   const awaySd = [];
   const sdOf = (left) => sigma * (Number.isFinite(left) ? Math.max(0, Math.min(1, left)) : 1);
+  // +1 the home side must win, -1 the away side, 0 played as drawn. Null when
+  // no game is forced, which is every caller but the must-win column.
+  let forced = null;
   let skipped = 0;
   for (const g of games || []) {
     const h = index.get(g.homeId);
@@ -490,6 +525,10 @@ export function simulateSeason({
     home.push(h); away.push(a);
     homeProj.push(g.homeProj); awayProj.push(g.awayProj);
     homeSd.push(sdOf(g.homeLeft)); awaySd.push(sdOf(g.awayLeft));
+    if (g.forced === 'home' || g.forced === 'away') {
+      if (!forced) forced = new Int8Array((games || []).length);
+      forced[home.length - 1] = g.forced === 'home' ? 1 : -1;
+    }
   }
 
   const gameCount = home.length;
@@ -560,8 +599,29 @@ export function simulateSeason({
     pf.set(basePf);
 
     for (let g = 0; g < gameCount; g++) {
-      const hs = homeProj[g] + homeSd[g] * normal();
-      const as = awayProj[g] + awaySd[g] * normal();
+      let hs = homeProj[g] + homeSd[g] * normal();
+      let as = awayProj[g] + awaySd[g] * normal();
+      if (forced !== null && forced[g] !== 0) {
+        const vh = homeSd[g] * homeSd[g];
+        const va = awaySd[g] * awaySd[g];
+        const sd = Math.sqrt(vh + va);
+        if (sd > 0) {
+          const mu = homeProj[g] - awayProj[g];
+          const pHome = normalCdf(mu / sd);
+          const u = normalCdf((hs - as - mu) / sd);
+          // The drawn margin's quantile, squeezed into the half that has the
+          // forced result. The clamps only guard the last bits of rounding.
+          let d = forced[g] > 0
+            ? mu + sd * normalInv(Math.min(1 - 1e-12, 1 - pHome + u * pHome))
+            : mu + sd * normalInv(Math.max(1e-12, u * (1 - pHome)));
+          if (forced[g] > 0 ? !(d > 0) : !(d < 0)) d = forced[g] * 1e-9;
+          // Moved along the margin only: each side takes its own share of the
+          // shift, so nothing else about the two scores changes.
+          const shift = d - (hs - as);
+          hs += shift * vh / (vh + va);
+          as -= shift * va / (vh + va);
+        }
+      }
       const h = home[g];
       const a = away[g];
       pf[h] += hs;
