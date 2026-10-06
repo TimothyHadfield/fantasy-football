@@ -252,8 +252,28 @@ function report({ file, t0, res }) {
   }
 }
 
+// ONE SLICE OF THE RUN: `--shard=I/N`, for CI, where N machines each take a
+// slice and the site is published only when all are green. Slice 1 is tr-test
+// ON ITS OWN — it is the longest suite by far (~12 of the ~30 minutes) and so
+// sets how long a deploy waits; the others are dealt round the remaining
+// slices. One slice (N = 1) is the whole run.
+const shardArg = args.find((a) => a.startsWith('--shard='));
+const [SHARD, SHARDS] = shardArg ? shardArg.slice(8).split('/').map(Number) : [1, 1];
+if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
+  console.log(`--shard=I/N needs 1 <= I <= N, got ${shardArg}`);
+  process.exit(2);
+}
+const LONGEST = 'tr-test.mjs';
+function inShard(file, all) {
+  if (SHARDS === 1) return true;
+  if (file === LONGEST) return SHARD === 1;
+  const others = all.filter((f) => f !== LONGEST);
+  return others.indexOf(file) % (SHARDS - 1) === SHARD - 2;
+}
+
 // A name listed twice is run once.
-const queue = [...new Set(chosen.map(([f]) => f))];
+const everything = [...new Set(chosen.map(([f]) => f))];
+const queue = everything.filter((f) => inShard(f, everything));
 for (const file of queue.filter((f) => SOLO.includes(f))) report(await runSuite(file));
 const rest = queue.filter((f) => !SOLO.includes(f));
 await Promise.all(Array.from({ length: Math.min(JOBS, rest.length) }, async () => {
@@ -285,8 +305,8 @@ if (failures.length) {
 const total = ((Date.now() - started) / 1000).toFixed(1);
 console.log(
   failures.length
-    ? `\n${failures.length} of ${chosen.length} suites failed  (${total}s)`
-    : `\nAll ${chosen.length} suites passed  (${total}s)`
+    ? `\n${failures.length} of ${queue.length} suites failed  (${total}s)`
+    : `\nAll ${queue.length} suites passed  (${total}s)`
 );
 
 // ------------------------------------------------------------ the count gate

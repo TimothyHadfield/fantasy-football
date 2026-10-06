@@ -30,9 +30,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # FIVE MACHINES, ONE SLICE EACH (`run-all.mjs --shard=I/5`). The whole run on
+  # one machine had grown past this job's 20-minute cap — every run on
+  # 2026-10-06 was cancelled by it — and since Pages now publishes only from
+  # the `deploy` job below, a cancelled test run means nothing is published.
+  # Slice 1 is tr-test alone (the longest suite, and so the wait before a
+  # deploy); the other suites are dealt round slices 2-5.
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +58,7 @@ jobs:
 
       - name: Test
         working-directory: tests
-        run: npm test
+        run: node run-all.mjs --shard=${{ matrix.shard }}/5
 
       # WHEN A SUITE FAILS HERE AND PASSES EVERYWHERE ELSE, run it on its own
       # with nothing between it and this log. `run-all.mjs` captures a suite's
@@ -56,7 +66,7 @@ jobs:
       # three lines with no error in it — the same suite passing on Windows on
       # node 22 and 24. This step costs nothing on a green run.
       - name: The failing suite, unfiltered
-        if: failure()
+        if: failure() && matrix.shard == 1
         working-directory: tests
         run: node tr-test.mjs
 
