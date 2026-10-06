@@ -169,6 +169,10 @@ function readPage(document) {
     note: clean($('oppProjNote').textContent),
     status: clean($('sourceStatus').textContent),
     glance: clean($('glance').textContent),
+    // The "Hardest schedule" tile on its own: its figure and the line under it.
+    tile: clean(Array.from($('glance').children)
+      .find((el) => clean(el.querySelector('.k')?.textContent) === 'Hardest schedule')
+      ?.querySelector('.v')?.textContent),
     tableNote: clean($('mainTableNote').textContent),
     badge: clean($('modeBadge').textContent),
     toggle: Array.from(document.querySelectorAll('#sourceToggle button'))
@@ -211,6 +215,11 @@ function check(scenario, page, boot) {
     ok(page.heading === 'Schedule luck — rest of season', `heading is "${page.heading}"`);
     const col = page.rows.map((r) => r.cells[8]);
     ok(col.every((v) => /^\d+\.\d$/.test(v)), `Opp proj column not all numbers: ${col.join(',')}`);
+    // No week left, so the tile has no rest of season to show: it falls back to
+    // the whole season's hardest — the top of the Opp proj column — and says so.
+    const hardest = Math.max(...col.map(Number)).toFixed(1);
+    ok(page.tile.startsWith(`${hardest} `) && page.tile.endsWith('· whole season'),
+      `finished season: the tile reads "${page.tile}", expected ${hardest} … · whole season`);
   }
 
   if (scenario === 'zero' || scenario === 'mid') {
@@ -238,6 +247,15 @@ function check(scenario, page, boot) {
       const id = Number(b.name.replace('Team ', ''));
       ok(Math.abs(b.value - REST[id]) < 0.05, `${b.name} bar shows ${b.value}, expected ${REST[id]}`);
     }
+    // THE TILE IS THE CHART'S TOP ROW (2026-10-06): the hardest run still to
+    // play, labelled, not the whole season's figure the column beside it keeps.
+    // Two weeks in that is Team 1 at 133.0, where the whole season says 122.0.
+    ok(page.tile === `${REST[1].toFixed(1)} Team 1 · rest of season`,
+      `the Hardest schedule tile reads "${page.tile}", the chart's top row is ${REST[1].toFixed(1)} Team 1`);
+    ok(Number(page.tile.split(' ')[0]) === page.bars[0].value,
+      `tile ${page.tile.split(' ')[0]} against the chart's top bar ${page.bars[0].value}`);
+    // No gap is ever a signed zero.
+    ok(page.bars.every((b) => !/^[-+−]0\.0$/.test(b.gap)), `a gap prints a signed zero: ${page.bars.map((b) => b.gap).join(' ')}`);
     // The record sits by the name.
     const recs = page.bars.map((b) => b.record).join(' ');
     ok(recs === (scenario === 'mid' ? '0–2 1–1 1–1 2–0' : '0–0 0–0 0–0 0–0'), `records by the names: ${recs}`);

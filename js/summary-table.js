@@ -37,8 +37,10 @@ export const dash = '<span class="muted">—</span>';
  *  LUCK column, so the two pages print the identical string for one team. */
 export function signed(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return dash;
-  const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'muted';
-  return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(1)}</span>`;
+  // Rounded first, then signed: −0.04 is "0.0" in the neutral class, not "-0.0".
+  const r = Number(n.toFixed(1)) + 0;
+  const cls = r > 0 ? 'pos' : r < 0 ? 'neg' : 'muted';
+  return `<span class="${cls}">${r > 0 ? '+' : ''}${r.toFixed(1)}</span>`;
 }
 
 /**

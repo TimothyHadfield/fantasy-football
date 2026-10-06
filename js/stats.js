@@ -60,7 +60,8 @@ export function stdev(values) {
  * explained it yet. Do not infer it, retune it, or "simplify" it — reproduce it
  * exactly until he does.
  *
- * Returns null for a tied game, where the sheet itself shows #DIV/0!.
+ * Returns null for a tied game, where the sheet itself shows #DIV/0!. What a
+ * tie then COUNTS as is `closeLuckOf`, below.
  */
 export function gameLuck(margin) {
   if (!margin) return null;
@@ -100,6 +101,20 @@ export function boxStats(values, minCount = 5) {
   };
 }
 
+/**
+ * A game's close-game luck as every average counts it: a tie is 0.
+ *
+ * ONE RULE FOR A TIE (2026-10-06). A tie is half a win and half a loss — that
+ * is how the standings rank it — and the formula above runs to +50 for the
+ * narrowest win and −50 for the narrowest loss, so half of each is nothing. It
+ * is still a game played, so it is in the count the average divides by. Close
+ * luck, the Luck score, the cumulative series, the ± margins and the week-by-
+ * week grid all go through here; before, the Luck score left a tie out of the
+ * count while the weekly cells counted it as 0, and a team with a tie had
+ * weeks that did not average to its own Luck score.
+ */
+export const closeLuckOf = (row) => row.gameLuck ?? 0;
+
 // ------------------------------------------------------- per-team weekly rows
 
 /**
@@ -109,6 +124,11 @@ export function boxStats(values, minCount = 5) {
  * CONFIRMED: luck = actual - projected
  * CONFIRMED: actualDiff = own actual - opponent actual
  * CONFIRMED: projectedDiff = own projected - opponent projected
+ *
+ * UNROUNDED (2026-10-06). The four differences used to be stored to a tenth,
+ * and every season figure built on them — Luck/wk, PTW, the Luck score, S+L —
+ * was then an average of rounded numbers: a tenth off what the scores on the
+ * page give by hand. Rounding is for the cell that prints the number.
  */
 function buildWeeklyRows(data) {
   const rows = new Map(); // teamId -> array of weekly rows
@@ -127,13 +147,13 @@ function buildWeeklyRows(data) {
         week: g.week,
         actual: side.actual,
         projected: side.projected,
-        luck: round1(side.actual - side.projected),
+        luck: side.actual - side.projected,
         oppId: side.oppId,
         oppActual: side.oppActual,
         oppProjected: side.oppProjected,
-        oppLuck: round1(side.oppActual - side.oppProjected),
-        actualDiff: round1(side.actual - side.oppActual),
-        projectedDiff: round1(side.projected - side.oppProjected),
+        oppLuck: side.oppActual - side.oppProjected,
+        actualDiff: side.actual - side.oppActual,
+        projectedDiff: side.projected - side.oppProjected,
         // CONFIRMED: the sheet's third Score Differential column.
         gameLuck: gameLuck(side.actual - side.oppActual),
         won: side.actual > side.oppActual,
@@ -159,14 +179,14 @@ function buildWeeklyRows(data) {
  * gameLuck, and a team's weeks average back to its Luck score. The league
  * average is the season's, the one the Luck score itself uses — not that
  * week's — or the weeks would not add up to it. A tied game has no close-game
- * figure (`close: null`) and counts 0 towards the total, as it does in
- * `attachLuckMargins`.
+ * figure of its own (`close: null`, so a hover can say "tie") and counts 0
+ * towards the total — `closeLuckOf`, the one rule the Luck score uses too.
  */
 export function weekLuckParts(row, leagueAvgActual) {
   const proj = row.actual - row.projected;
   const opp = leagueAvgActual - row.oppActual;
   const close = row.gameLuck;
-  return { proj, opp, close, total: proj + opp + (close ?? 0) };
+  return { proj, opp, close, total: proj + opp + closeLuckOf(row) };
 }
 
 /** The unrounded league average score over every team-week played. */
@@ -203,16 +223,16 @@ function cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual) {
   const out = [];
   let oppTotal = 0;
   let luckTotal = 0;
-  const sds = [];
+  let closeTotal = 0;
 
   weekly.forEach((w, i) => {
     oppTotal += w.oppActual;
     luckTotal += w.luck;
-    if (w.gameLuck !== null) sds.push(w.gameLuck);
+    closeTotal += closeLuckOf(w);
 
     const n = i + 1;
     const ptw = oppTotal / n - luckTotal / n;
-    const sd = sds.length ? mean(sds) : 0;
+    const sd = closeTotal / n;
     const league = cumulativeLeagueAvgActual.get(w.week) ?? 0;
 
     out.push({ week: w.week, value: round1(league - ptw + sd) });
@@ -236,11 +256,12 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
   // to beat your average opponent, once your own luck is taken back out".
   const pointsToWin = mean(oppActuals) - mean(weekly.map((w) => w.luck));
 
-  // CONFIRMED: SD averages the per-game luck figure over the season. Tied
-  // games contribute nothing rather than poisoning the average — the sheet
-  // shows #DIV/0! for Miles, who had one.
-  const gameLucks = weekly.map((w) => w.gameLuck).filter((v) => v !== null);
-  const scoreDiffLuck = gameLucks.length ? mean(gameLucks) : null;
+  // CONFIRMED: SD averages the per-game luck figure over the season. A tied
+  // game is 0 and still a game (`closeLuckOf`) rather than poisoning the
+  // average — the sheet shows #DIV/0! for Miles, who had one. Null only when
+  // no game has been decided at all.
+  const decided = weekly.some((w) => w.gameLuck !== null);
+  const scoreDiffLuck = decided ? mean(weekly.map(closeLuckOf)) : null;
 
   // CONFIRMED: `=121.8-(AX3-AY3)`, i.e. leagueAvgActual - (PTW - SD). This is
   // the standings LUCK column, and it equals the final cumulative-luck value.
@@ -505,8 +526,8 @@ function rankBy(teams, valueFn, descending = true) {
  * is the team's own — which is exactly "wide early, narrower each week".
  *
  * One standard error, not two: about two times in three the figure a season of
- * games settles on is inside it. Ties count 0 towards gameLuck here, a
- * deliberate simplification of a margin, never of a value. Null when the league
+ * games settles on is inside it. A tie counts 0 towards gameLuck and is a game
+ * in the count, exactly as in the values (`closeLuckOf`). Null when the league
  * has too few games to have a spread (`stdev` needs two).
  */
 function attachLuckMargins(teams) {
@@ -515,8 +536,8 @@ function attachLuckMargins(teams) {
   const plusTerms = [];
   for (const t of teams) {
     for (const w of t.weekly) {
-      const gl = w.gameLuck ?? 0;
-      if (w.gameLuck !== null) closeTerms.push(w.gameLuck);
+      const gl = closeLuckOf(w);
+      closeTerms.push(gl);
       const luckTerm = gl - (w.oppActual - w.luck);
       luckTerms.push(luckTerm);
       plusTerms.push(luckTerm + w.projected);
@@ -529,9 +550,8 @@ function attachLuckMargins(teams) {
 
   for (const t of teams) {
     const games = t.weekly.length;
-    const decided = t.weekly.filter((w) => w.gameLuck !== null).length;
     t.margins = {
-      scoreDiffLuck: se(sdClose, decided),
+      scoreDiffLuck: se(sdClose, games),
       luckScore: se(sdLuck, games),
       skillPlusLuck: se(sdPlus, games),
       games,

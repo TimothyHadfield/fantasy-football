@@ -51,11 +51,18 @@ export const pf = (n) =>
 
 export const dash = '<span class="muted">—</span>';
 
+/**
+ * ROUNDED FIRST, THEN SIGNED (2026-10-06). The sign used to be read off the
+ * unrounded number, so −0.07 at whole points printed "-0" in red and 0.37
+ * printed "+0" in green, beside a plain "0". A value that rounds to zero is
+ * zero: no sign, and the neutral class.
+ */
 export function signed(n, digits = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return dash;
-  const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'muted';
-  const sign = n > 0 ? '+' : '';
-  return `<span class="${cls}">${sign}${n.toFixed(digits)}</span>`;
+  const r = Number(n.toFixed(digits)) + 0;   // + 0: a rounded −0 is 0
+  const cls = r > 0 ? 'pos' : r < 0 ? 'neg' : 'muted';
+  const sign = r > 0 ? '+' : '';
+  return `<span class="${cls}">${sign}${r.toFixed(digits)}</span>`;
 }
 
 /**
@@ -331,7 +338,7 @@ const HEAD = [
   ['Opp Avg', 'Average points your opponents scored against you.'],
   ['F−A', 'Points for minus points against, per week — your average weekly margin.'],
   ['Spread', 'Spread: the standard deviation of your weekly scores. Low means week-to-week consistency. Needs at least two weeks.'],
-  ['Opp proj', 'Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play. High means a hard schedule.'],
+  ['Opp proj', 'Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play in the whole season. High means a hard schedule.'],
   ['Luck/wk', 'Luck per week: your average score minus your average projection. Positive means you keep beating your projection.'],
   ['PTW', 'Points to win: your average opponent’s score minus your own average luck — what you needed to score to beat a typical opponent.'],
   ['Close luck', 'Close-game luck (your sheet’s SD): weights each result by how close it was, so a one-point game scores near ±50 and a blowout near zero.'],

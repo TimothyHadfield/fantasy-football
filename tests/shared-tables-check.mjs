@@ -31,8 +31,10 @@
 import { computeLeagueStats } from '../js/stats.js';
 import * as capture from '../js/capture.js';
 import { slotRows } from '../js/lineup-slots.js';
-import { standingsRowsHtml, standingsTableHtml, standingsScales } from '../js/standings-table.js';
-import { summaryRowsHtml, summaryTableHtml } from '../js/summary-table.js';
+import {
+  standingsRowsHtml, standingsTableHtml, standingsScales, signed as standingsSigned,
+} from '../js/standings-table.js';
+import { summaryRowsHtml, summaryTableHtml, signed as summarySigned } from '../js/summary-table.js';
 import { actualSeasonTableHtml, weeksFromMirror, shortName } from '../js/actual-season-table.js';
 import {
   viewSwitchHtml, signedText, diffOf, diffClass, recordDiff, dimOpacity, DIM_DEPTH,
@@ -79,6 +81,29 @@ const count = (html, re) => (html.match(re) || []).length;
 eq(signedText(3.6), '+3.6', 'a rise is printed with its plus');
 eq(signedText(-0.4), '−0.4', 'a fall with a real minus sign, as the Trade page prints it');
 eq(signedText(0), '0.0', 'and no change with no sign');
+// ROUNDED FIRST, THEN SIGNED (2026-10-06). The Stats grid printed "-0" in red
+// for −0.07 and "+0" in green for 0.37: the sign was read off the unrounded
+// number. What rounds to zero is a plain, neutral zero, at either precision,
+// in both tables' `signed`.
+{
+  const span = (cls, text) => `<span class="${cls}">${text}</span>`;
+  for (const [v, whole, tenth] of [
+    [-0.04, span('muted', '0'), span('muted', '0.0')],
+    [0.04, span('muted', '0'), span('muted', '0.0')],
+    [-0.5, span('neg', '-1'), span('neg', '-0.5')],
+    [0.5, span('pos', '+1'), span('pos', '+0.5')],
+    [-0.07, span('muted', '0'), span('neg', '-0.1')],
+    [0.37, span('muted', '0'), span('pos', '+0.4')],
+    [0, span('muted', '0'), span('muted', '0.0')],
+    [-12.34, span('neg', '-12'), span('neg', '-12.3')],
+  ]) {
+    eq(standingsSigned(v, 0), whole, `signed(${v}) at whole points`);
+    eq(standingsSigned(v, 1), tenth, `signed(${v}) at a tenth`);
+    eq(standingsSigned(v), tenth, `signed(${v}) defaults to a tenth`);
+    eq(summarySigned(v), tenth, `the Summary chart's signed(${v}) is the same string`);
+  }
+  ok(standingsSigned(null) === summarySigned(null) && /—/.test(standingsSigned(null)), 'and nothing is still a dash');
+}
 eq(diffOf(122.75, 113.75), 9, 'a difference is the subtraction of the two PRINTED numbers (122.8 − 113.8)');
 eq(diffOf(10.04, 9.96), 0, '…so two numbers that print the same differ by nothing (10.0 − 10.0)');
 eq(diffOf(5, null), null, 'and a missing side is no difference at all');
