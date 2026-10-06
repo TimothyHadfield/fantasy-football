@@ -38,6 +38,7 @@
 
 import * as forecast from './forecast.js';
 import * as snapshots from './snapshots.js';
+import * as projHistory from './proj-history.js';
 import { projectionsFromWeekTeams } from './projection.js';
 import { assessLineup } from './floor.js';
 
@@ -1106,7 +1107,7 @@ export function readingFrom({
   leagueId, season, week, data, projection, strengthNote, spread,
   floors = null, floorWeek = null, weekTeams = null, myTeamId = null,
 }) {
-  return snapshots.snapshotFrom({
+  const snap = snapshots.snapshotFrom({
     leagueId,
     season,
     week,
@@ -1122,6 +1123,124 @@ export function readingFrom({
       ? playersFrom(weekTeams, projection.weeksCovered, myTeamId)
       : null,
   });
+  // Every squad's rosters are in memory at this moment and nowhere afterwards,
+  // so the projection history is kept here, on the one call both routes make.
+  if (snap && projection && weekTeams) {
+    keepHistory({
+      leagueId, season, week, data, weeks: projection.weeksCovered, weekTeams, takenAt: snap.takenAt,
+    });
+  }
+  return snap;
+}
+
+/**
+ * EVERY SQUAD'S ROSTER WITH ITS PROJECTION IN EVERY PROJECTED WEEK — the rows
+ * js/proj-history.js keeps, from rosters already in memory.
+ *
+ * `playersFrom`'s `mine`, for all ten squads: the same row, the same `cols`,
+ * slot and status as of the first week, a null slot for a man who only arrives
+ * later. One difference: a man whose game is over has had `projected`
+ * overwritten with his score (js/season.js), and this is a record of what was
+ * PROJECTED, so his `pregame` figure is the one kept.
+ *
+ * @param {Map<number, Array>} weekTeams week -> teams (js/season.js shape)
+ * @param {number[]} weeks the projected weeks, earliest first
+ * @returns {{weeks:number[], cols:string[], teams:Object}|null}
+ */
+export function historyFrom(weekTeams, weeks) {
+  const list = (weeks || []).filter((w) => (weekTeams?.get(w) || []).length);
+  if (!list.length) return null;
+
+  const teams = {};
+  for (const first of weekTeams.get(list[0])) {
+    const byId = new Map();
+    for (const [i, w] of list.entries()) {
+      const team = weekTeams.get(w).find((t) => t.id === first.id);
+      for (const p of team?.players || []) {
+        const key = p.playerId ?? `${p.name}|${p.position}`;
+        if (!byId.has(key)) {
+          byId.set(key, [
+            p.playerId ?? null, p.name || '', p.position || '', p.proTeam || '',
+            i === 0 ? p.lineupSlotId ?? null : null, p.injuryStatus || 'ACTIVE',
+            list.map(() => null),
+          ]);
+        }
+        byId.get(key)[PROJ][i] = round2(p.done === true ? p.pregame : p.projected);
+      }
+    }
+    teams[first.id] = [...byId.values()];
+  }
+  return { weeks: list, cols: PLAYER_COLS.slice(), teams };
+}
+
+/**
+ * Keep this week's projection history, if it has none yet. FIRST COPY WINS.
+ *
+ * Filed by the rule a reading is (`readingGap`): the first projected week must
+ * BE `week`. Never for demo, and never a copy with a squad missing — under
+ * first-copy-wins a partial one would block the whole one for good.
+ *
+ * It may not cost the reading anything: a full or refusing browser, or a shape
+ * it cannot read, is `false` and silence. Nothing is deleted to make room.
+ *
+ * @param {Object} o
+ * @param {number[]} o.weeks      the projected weeks the rosters cover
+ * @param {Map} o.weekTeams       week -> teams, for those weeks
+ * @param {string} [o.takenAt]    ISO time the rosters were read; now if absent
+ * @returns {boolean} whether a copy was written
+ */
+export function keepHistory({ leagueId, season, week, data = null, weeks, weekTeams, takenAt = null }) {
+  try {
+    const id = String(leagueId ?? '');
+    if (!/^\d+$/.test(id) || (data && data.isDemo) || !weekTeams) return false;
+    if (projHistory.has(id, season, week)) return false;
+    if (readingGap(week, { weeksCovered: weeks || [] }, data)) return false;
+    const rows = historyFrom(weekTeams, weeks);
+    if (!rows || rows.weeks[0] !== week) return false;
+    if (data && data.teams && Object.keys(rows.teams).length < data.teams.length) return false;
+    return projHistory.save({
+      v: projHistory.SCHEMA,
+      leagueId: id,
+      season: Number(season),
+      week: Number(week),
+      takenAt: takenAt || new Date().toISOString(),
+      ...rows,
+    }).written;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE WEEK'S READING IS HELD BUT ITS PROJECTION HISTORY IS NOT: take the copy
+ * now, late, stamped with the time it really was taken.
+ *
+ * This is how the week in progress gets a copy the first time the site is
+ * opened after this shipped — its reading was taken days before. Only the
+ * weeks still projected are asked for (no decided weeks, no wire, no second
+ * schedule read), through js/season.js, which serves the weeks the page has
+ * just read from its own store. A failure is noted so the next page waits
+ * `RETRY_MS`, and is nobody else's problem: not the reading's, not the chip's.
+ */
+async function lateHistory({ id, season, week, data, fetchWeeksRosters, now }) {
+  try {
+    if (projHistory.has(id, season, week)) return;
+    const miss = projHistory.lastMiss(id, season);
+    if (miss && miss.week === week && now() - miss.at < RETRY_MS) return;
+
+    let kept = false;
+    try {
+      const plan = rosterPlan(data);
+      const toProject = pickWeeks((await fetchWeeksRosters(plan.project)) || new Map(), plan.project);
+      kept = keepHistory({
+        leagueId: id, season, week, data, weeks: [...toProject.keys()], weekTeams: toProject,
+        takenAt: new Date(now()).toISOString(),
+      });
+    } catch {
+      kept = false;
+    }
+    if (!kept && !projHistory.has(id, season, week)) projHistory.noteMiss(id, season, { at: now(), week });
+  } catch { /* silent, as everywhere */ }
 }
 
 /**
@@ -1292,7 +1411,11 @@ async function runCapture({
     // Every week decided, bracket included: no week is due, so nothing is
     // attempted and nothing is noted — this is not a failure to record one.
     if (seasonOver(data)) return { code: 'season-over', week: null };
-    if (snapshots.get(id, season, week)) return { code: 'recorded', week, recorded: true };
+    if (snapshots.get(id, season, week)) {
+      // Held already — but perhaps from before the projection history existed.
+      await lateHistory({ id, season, week, data, fetchWeeksRosters, now });
+      return { code: 'recorded', week, recorded: true };
+    }
 
     const last = snapshots.lastAttempt(id, season);
     if (last && !last.ok && last.week === week && now() - last.at < RETRY_MS) {

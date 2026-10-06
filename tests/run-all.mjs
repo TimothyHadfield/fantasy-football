@@ -85,6 +85,7 @@ const SUITES = [
   ['stats-fit.mjs', 'the stats page’s two projected-vs-actual graphs: which team-weeks and player-weeks are dots, and where a tapped dot links'],
   ['fc-test.mjs', 'the schedule page forecast and simulation panels'],
   ['test-capture.mjs', 'the weekly reading: identical from the schedule page and the bar, refusals, status line'],
+  ['test-proj-history.mjs', 'projection history: every squad’s roster and its projection in every week ahead, kept once a week beside the reading, and read back'],
   ['cross-sim-check.mjs', 'Summary and Schedule simulate with identical inputs'],
   ['home-winpct-check.mjs', 'Home and Schedule quote the same win chance for the same game'],
   ['wv-test.mjs', 'the waiver-wire page'],
