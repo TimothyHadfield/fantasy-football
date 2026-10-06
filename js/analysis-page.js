@@ -1500,8 +1500,9 @@ function renderAvgGrid(grid) {
          `average week: that slot's projection in every regular-season week read, averaged. ` +
          `Whoever fills it — it is a slot, not a man.">${esc(r.key)}</th>`).join('')}
        <th class="grid-total grouped" data-sort title="What this squad's whole starting lineup ` +
-         `projects in an average week. It is the week-by-week lineup total averaged, which is the ` +
-         `same number the Season by week panel's ‘Starting lineup’ band shows — so rounding can ` +
+         `projects in an average week. It is the week-by-week lineup total averaged` +
+         (historyWeeks(weeks).size ? '' : `, which is the ` +
+         `same number the Season by week panel's ‘Starting lineup’ band shows`) + ` — so rounding can ` +
          `leave it a tenth off adding the columns.">Total</th>
      </tr>`;
 
@@ -1677,8 +1678,9 @@ function totalAvgLabel(team, got) {
     return `No week has been read yet, so ${team.name}'s lineup has nothing to average.`;
   }
   return `${team.name}'s best legal lineup projects ${fmt(got.total)} in an average week, over ` +
-    `${plural(got.weeks, 'regular-season week')} read. It is the same figure the Season by week ` +
-    `panel's Starting lineup band shows for this squad.`;
+    `${plural(got.weeks, 'regular-season week')} read.` +
+    (historyWeeks().size ? '' : ` It is the same figure the Season by week ` +
+    `panel's Starting lineup band shows for this squad.`);
 }
 
 /**
@@ -1840,7 +1842,7 @@ function renderGrid(grid) {
       // js/touch-titles.js makes it a tap on a phone.
       const totalSays = total === null
         ? `No projection for ${t.name} this week.`
-        : `${t.name}'s best ${countWord(slots.length)} project ${fmt(total)} in week ${state.week}` +
+        : `${t.name}'s ${countWord(slots.length)} starters project ${fmt(total)} in week ${state.week}` +
           (lifted
             ? `, with ${countWord(lifted)} spot${lifted === 1 ? '' : 's'} counted at the waiver floor.`
             : '.');
@@ -1955,11 +1957,21 @@ function renderMeasureToggle(grid) {
       b.classList.toggle('on', b.dataset.measure === grid.key);
     }
   }
+  // The lede says what the rows are, and that differs by measure: `A week` is
+  // the lineup AS SET (`gridLineup` pools `team.starters`), Proj avg the best.
+  const lede = $('overviewLede');
+  if (lede) {
+    lede.textContent = grid.key === 'avg'
+      ? 'Every squad’s best lineup and bench, side by side.'
+      : 'Every squad’s set lineup and bench.';
+  }
   const hint = $('measureHint');
   if (hint) {
+    // Once a week is history the sheet's Avg holds real scores and this does not.
     hint.textContent = grid.key === 'avg'
-      ? `One column per lineup slot, averaged over the season week by week — the Avg column of ` +
-        `Season by week, for every squad. The week still sets the rest of the page.`
+      ? `One column per lineup slot, averaged over the season week by week — ` +
+        (historyWeeks().size ? `every week at its projection.` : `the Avg column of Season by week, for every squad.`) +
+        ` The week still sets the rest of the page.`
       : `Scored on ESPN’s projection for week ${state.week}, which is also the week the panels below show.`;
   }
 }
@@ -1989,9 +2001,13 @@ function renderOverviewNote(grid) {
     parts.push(
       `Every number is a <strong>lineup slot averaged over the season</strong>, not a player: the ` +
       `QB column is what that squad’s quarterback spot is worth in an average week, filled each ` +
-      `week by whoever actually starts there. <strong>This is the Avg column of Season by week ` +
-      `below, computed for all ten squads</strong> — the same weeks, the same slots, the same ` +
-      `waiver floor — so a row here and that panel cannot disagree.`
+      `week by whoever actually starts there. ` +
+      (historyWeeks(weeks).size
+        ? `<strong>Every week counts at its projection, played ones too</strong>, so this is not ` +
+          `the Avg column of Season by week below, which averages the scores shown there.`
+        : `<strong>This is the Avg column of Season by week ` +
+          `below, computed for all ten squads</strong> — the same weeks, the same slots, the same ` +
+          `waiver floor — so a row here and that panel cannot disagree.`)
     );
 
     parts.push(
@@ -2005,8 +2021,9 @@ function renderOverviewNote(grid) {
 
     parts.push(
       `<strong>Total</strong> is the whole starting lineup in an average week — each week’s lineup ` +
-      `added up, then those totals averaged, which is exactly the “Starting lineup” band in the ` +
-      `panel below. Rounding can leave it a tenth away from adding the columns across.`
+      `added up, then those totals averaged` +
+      (historyWeeks(weeks).size ? '' : `, which is exactly the “Starting lineup” band in the panel below`) +
+      `. Rounding can leave it a tenth away from adding the columns across.`
     );
 
     // THE SCALE (Tim, 2026-09-19). This is the table he was looking at when he
@@ -2049,9 +2066,9 @@ function renderOverviewNote(grid) {
   // never a hard-coded "nine", which undercounted Tim's three-receiver league.
   const spots = countWord(gridSlots().length);
   parts.push(
-    `The ${spots} columns are the league’s own starting spots, filled with the best lineup that ` +
-    `squad could field, chosen by the measure above rather than by where the manager has parked ` +
-    `people. <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB.`
+    `The ${spots} columns are the league’s own starting spots, filled from the men that squad ` +
+    `has starting, ranked by the measure above rather than by where the manager has parked ` +
+    `them. <strong>FLEX</strong> is the best remaining RB, WR or TE, never a QB.`
   );
 
   // THE TOTAL'S FLOOR, stated because it is the one number on this measure that
@@ -3088,21 +3105,32 @@ function weeklyFills(rows, slots, weeks) {
  * that ESPN refused), and flooring that would be a claim about a week nobody
  * has looked at — it would also march every average up as the page loaded.
  *
- * @returns {{value:number|null, assumed:boolean}}
+ * `exact` is the same assessment on the UNROUNDED projection (`raw` from
+ * `fillSlots`), and it is what a week total adds up. `value` is a cell, to the
+ * tenth; ten of those added came out 0.1–0.2 away from the Schedule page, which
+ * adds the unrounded lineup and rounds once (measured 2026-10-06, 57 of 100).
+ *
+ * @returns {{value:number|null, assumed:boolean, exact:number|null}}
  */
 function assessed(entry, row) {
-  if (entry === undefined) return { value: null, assumed: false };
+  if (entry === undefined) return { value: null, assumed: false, exact: null };
   if (entry === null) {
     const sf = slotFloor(row.slotId, state.floors);
-    return { value: sf ? sf.value : null, assumed: Boolean(sf) };
+    return { value: sf ? sf.value : null, assumed: Boolean(sf), exact: sf ? sf.value : null };
   }
+  const raw = typeof entry.raw === 'number' ? entry.raw : entry.v;
   // A FINISHED MAN'S SCORE IS A FACT (js/floor.js: a banked score is never
   // floored) — no streaming decision can reach back into it.
-  if (entry.p && entry.p.done === true) return { value: entry.v, assumed: false };
+  if (entry.p && entry.p.done === true) return { value: entry.v, assumed: false, exact: raw };
   // The SLOT's floor, not the man's position's (AUDIT §1.8): a zero TE in the
   // FLEX is worth what an empty FLEX is, the best of RB/WR/TE on the wire.
   const a = flooredValue({ position: entry.p.position, projected: entry.v }, state.floors, row.slotId);
-  return { value: a.value === null ? entry.v : a.value, assumed: a.assumed };
+  const x = flooredValue({ position: entry.p.position, projected: raw }, state.floors, row.slotId);
+  return {
+    value: a.value === null ? entry.v : a.value,
+    assumed: a.assumed,
+    exact: x.value === null ? raw : x.value,
+  };
 }
 
 /** Memoised against the league and how much of it has landed. */
@@ -3265,7 +3293,7 @@ function teamSlotAverages(rows, slots, weeks) {
       let any = false;
       for (const row of rows) {
         const a = assessed(fill.get(row.key) || null, row);
-        if (a.value !== null) { sum += a.value; any = true; }
+        if (a.exact !== null) { sum += a.exact; any = true; }
       }
       return any ? round1(sum) : null;
     });
@@ -3318,8 +3346,10 @@ function teamWeekTotals(rows, slots, weeks) {
           // `|| null` for the same reason `teamSlotAverages` does it: a slot
           // key the fill has no entry for is a slot nobody could fill, which
           // is exactly what the waiver floor is for — not a week nobody read.
+          // UNROUNDED slots, rounded once (`exact`), so the total is the
+          // Schedule page's to the tenth.
           const a = assessed(fill.get(r.key) || null, r);
-          if (a.value !== null) { sum += a.value; any = true; }
+          if (a.exact !== null) { sum += a.exact; any = true; }
         }
         totals.set(id, any ? round1(sum) : null);
       }
@@ -3475,6 +3505,64 @@ function shownTotals(rows, slots, weeks) {
  */
 const partScores = (week, hist) => hist.has(week) && historyMode() === 'actual' && weekLive(week);
 
+/**
+ * THE AVG COLUMNS, AS DRAWN: every squad's mean of the numbers its row SHOWS.
+ *
+ * Until 2026-10-06 Avg stayed the best-lineup projection while the history
+ * columns beside it showed real scores, so no reader could get it from the row
+ * (measured on league 1241838: one squad's Avg 131.6 against 127.4 shown). Now
+ * a history week counts at the number in its cell — the score, or on Proj the
+ * real starter's projection — and a week to come at its assessed cell, exactly
+ * as before. A dash counts for nothing; a part total (`partScores`) is left
+ * out, as the League row leaves it out. With no history at all these are
+ * `teamSlotAverages`' own numbers, so the sheet and the grid's Proj avg agree.
+ *
+ * The scales are built here too, from the same numbers, so what a cell prints,
+ * sorts on and is coloured by is one value.
+ *
+ * @returns {{byTeam:Map<number,{slots:Map<string,number|null>, total:number|null}>,
+ *            cols:Map<string,Object|null>, total:Object|null}}
+ */
+function shownAverages(rows, slots, weeks) {
+  const teams = state.data ? state.data.teams : [];
+  const hist = historyWeeks(weeks);
+  const mode = historyMode();
+  const fills = weeklyFills(rows, slots, weeks);
+  const real = realLineups(rows, weeks);
+  const totals = shownTotals(rows, slots, weeks);
+
+  // To the tenth, as the cell prints it: a 7.96 shown as 8.0 counts as 8.0.
+  const tenth = (v) => (typeof v === 'number' ? round1(v) : null);
+  const byTeam = new Map();
+  for (const t of teams) {
+    const cells = new Map();
+    for (const row of rows) {
+      cells.set(row.key, regularAvg(weeks.map((w) => {
+        if (hist.has(w)) {
+          const got = (real.get(w) || new Map()).get(t.id);
+          const e = got ? got.fill.get(row.key) : null;
+          return e ? tenth(historyValue(e.p, mode)) : null;
+        }
+        const fill = (fills.get(w) || new Map()).get(t.id);
+        return fill ? tenth(assessed(fill.get(row.key) || null, row).value) : null;
+      }), weeks));
+    }
+    byTeam.set(t.id, {
+      slots: cells,
+      total: regularAvg(weeks.map((w) => (partScores(w, hist)
+        ? null
+        : (totals.get(w) || new Map()).get(t.id) ?? null)), weeks),
+    });
+  }
+
+  const scaleOf = (pick) => heatScale(teams.map((t) => pick(byTeam.get(t.id))));
+  return {
+    byTeam,
+    cols: new Map(rows.map((r) => [r.key, scaleOf((got) => got.slots.get(r.key))])),
+    total: scaleOf((got) => got.total),
+  };
+}
+
 /** What a history total says on a hover. */
 function historyTotalLabel(v, week, live) {
   if (v === null) {
@@ -3519,8 +3607,7 @@ function withFut(td, week, fut) {
 
 /** What the Avg column's heading says once some of its weeks are history. */
 const AVG_HEAD = 'The mean of the regular-season week columns that carry a number; playoff weeks are shown but not counted.';
-const AVG_HEAD_HISTORY = 'A projection: the best legal lineup, averaged over every regular-season week. ' +
-  'History weeks count at that projection, not at the numbers shown; playoff weeks are not counted.';
+const AVG_HEAD_HISTORY = 'The mean of the regular-season numbers shown in the row.';
 
 /**
  * Where one number stands against its own slot around the league — the shared
@@ -3582,14 +3669,11 @@ function avgLabel(avg, row, team, heat, history = false) {
     return `No regular-season week read so far gives ${team ? team.name : 'this squad'} an ` +
       `${row.key} at all, so there is nothing to average.`;
   }
-  // With history on screen the cells are no longer what is averaged: say so.
+  // With history on screen the row holds real scores, so it is no longer the
+  // grid's Proj avg: only the first half of the sentence is still true.
   return `${team ? team.name : 'This squad'}'s ${row.key} is worth ${fmt(avg)} in an average ` +
-    (history
-      ? `week — a projection: the best legal lineup’s ${row.key} over every regular-season week, ` +
-        `averaged, assumed numbers included. History weeks count at that projection, not at the ` +
-        `numbers shown. It is the `
-      : `week — the regular-season cells in this row, averaged, assumed numbers included. It is the `) +
-    `same figure the all-teams grid shows for this squad on Proj avg.` +
+    `week — the regular-season cells in this row, averaged, assumed numbers included.` +
+    (history ? '' : ` It is the same figure the all-teams grid shows for this squad on Proj avg.`) +
     (heat ? ` ${heat.words}` : '');
 }
 
@@ -3598,11 +3682,13 @@ function bandAvgLabel(totalAvg, team, heat, history = false) {
   if (totalAvg === null) {
     return 'No week has been read yet, so there is no lineup to average.';
   }
+  if (history) {
+    return `${team ? team.name : 'This squad'} averages ${fmt(totalAvg)} a week — the ` +
+      `regular-season totals shown in this row, averaged; a week still being played is left out.` +
+      (heat ? ` ${heat.words}` : '');
+  }
   return `${team ? team.name : 'This squad'}'s best legal lineup projects ${fmt(totalAvg)} in an ` +
-    (history
-      ? `average week — a projection over every regular-season week; history weeks count at that ` +
-        `projection, not at the numbers shown. It is the Total the all-teams grid `
-      : `average week — every week column in this band, averaged. It is the Total the all-teams grid `) +
+    `average week — every week column in this band, averaged. It is the Total the all-teams grid ` +
     `shows for this squad on Proj avg.` + (heat ? ` ${heat.words}` : '');
 }
 
@@ -3880,17 +3966,17 @@ function paintTotals() {
   }
 
   // HISTORY WEEKS ARE WHAT HAPPENED (see `historyWeeks`): the real score, or on
-  // Proj what the real starters were projected. `best` is still every week's
-  // best legal lineup, and it is what Avg averages — a projection, unchanged.
+  // Proj what the real starters were projected. Avg is the mean of the row as
+  // shown (`shownAverages`), on a scale built from those same ten means.
   const hist = historyWeeks(weeks);
   const fut = firstFuture(weeks, hist);
   const proj = historyMode() === 'proj';
-  const best = teamWeekTotals(rows, leagueSlots(), weeks);
   const totals = shownTotals(rows, leagueSlots(), weeks);
   const scales = new Map(weeks.map((w) => [w, partScores(w, hist) ? null : heatScale(
     [...(totals.get(w) || new Map()).values()]
   )]));
-  const avgScale = slotAvgScales(rows, weeks).total;
+  const shownAvg = shownAverages(rows, leagueSlots(), weeks);
+  const avgScale = shownAvg.total;
 
   table.querySelector('thead').innerHTML = `${historyGroupRow(weeks, hist)}<tr>` +
     `<th class="name" data-sort>Team</th>` +
@@ -3907,7 +3993,7 @@ function paintTotals() {
   const avgs = [];
   bodyOf(table).innerHTML = teams.map((t) => {
     const vals = weeks.map((w) => (totals.get(w) || new Map()).get(t.id) ?? null);
-    const avg = regularAvg(weeks.map((w) => (best.get(w) || new Map()).get(t.id) ?? null), weeks);
+    const avg = (shownAvg.byTeam.get(t.id) || { total: null }).total;
     avgs.push(avg);
     const ah = heatOf(avg, avgScale, { what: 'the other squads’ lineups' });
     return `<tr>` +
@@ -4003,11 +4089,10 @@ function paintSeason() {
   // THE AVG COLUMN'S OWN SCALE, and it is NOT the week cells' scale beside it.
   // See the block above `avgHeatOf` — one number per squad, ten of them, which
   // is a far tighter distribution than the ~160 weekly values the cells are
-  // measured against, and it is the very scale the all-teams grid puts on the
-  // same numbers one panel up.
-  const avgScales = slotAvgScales(rows, weeks);
-  // And the band's: ten whole lineups, measured one WEEK COLUMN at a time.
-  const bandTotals = teamWeekTotals(rows, slots, weeks);
+  // measured against. The ten are each squad's row AS SHOWN (`shownAverages`);
+  // with no history that is the very scale the all-teams grid uses.
+  const avgScales = shownAverages(rows, slots, weeks);
+  const shownAvg = avgScales.byTeam.get(team.id) || { slots: new Map(), total: null };
   // HISTORY (see `historyWeeks`): those columns are the lineup really started,
   // so the band there is the real score — `shownTotals`, the very numbers the
   // Weekly totals panel draws — and each slot is coloured against the other
@@ -4058,7 +4143,6 @@ function paintSeason() {
         return fill ? fill.get(row.key) : undefined;
       });
       // What is DRAWN: the real starter in a history week, the solve elsewhere.
-      // `values` stays the solve throughout, because Avg below is a projection.
       const drawn = weeks.map((w, i) => {
         if (!hist.has(w)) return values[i];
         const got = (real.get(w) || new Map()).get(team.id);
@@ -4085,9 +4169,9 @@ function paintSeason() {
       // so a row whose kicker was floored in three weeks reported an Avg no
       // reader could reproduce from the cells in front of them. An unfilled
       // slot contributes its floor here for the same reason it does in the
-      // band: that is what the cell says it is worth.
-      const nums = values.map((e) => assessed(e, row).value);
-      const avg = regularAvg(nums, weeks);
+      // band: that is what the cell says it is worth. And a history week counts
+      // at the number its cell shows (`shownAverages`), not at a re-solve.
+      const avg = shownAvg.slots.get(row.key) ?? null;
       const bar = bars.get(row.key);
       const ah = avgHeatOf(avg, row, avgScales);
 
@@ -4120,10 +4204,9 @@ function paintSeason() {
   // one spelling of it, because the band is also COLOURED against the other
   // nine squads' totals for the same week and the number being coloured has to
   // be the number in the distribution.
-  // THE AVG IS STILL THE SOLVE'S (a projection, and the grid's Total); the week
-  // cells are what is drawn — the real score under "history".
-  const totalAvg = regularAvg(
-    weeks.map((w) => (bandTotals.get(w) || new Map()).get(team.id) ?? null), weeks);
+  // THE AVG IS THE MEAN OF THE BAND AS DRAWN — the real score under "history",
+  // the solve ahead — and the very figure Weekly totals prints for this squad.
+  const totalAvg = shownAvg.total;
   const totals = weeks.map((w) => (shown.get(w) || new Map()).get(team.id) ?? null);
   const bandAvgHeat = heatOf(totalAvg, bandAvgScale, { what: 'the other squads’ lineups' });
   $('seasonTotals').innerHTML = `
@@ -4267,15 +4350,36 @@ function orderPlayers(list) {
 
 /**
  * The Player rows: every man on the roster on screen who can be followed from
- * week to week (`identified`), with his projection in each week still to come
- * and their regular-season mean. "Proj changes" lists the same men in the same
- * order, so the two boxes read across.
+ * week to week (`identified`), with his projection in each week still to come.
+ * "Proj changes" lists the same men in the same order, so the two boxes read
+ * across.
+ *
+ * AVG IS THE MEAN OF THE NUMBERS HIS ROW SHOWS, to the tenth as shown: what he
+ * scored (or on Proj was projected) in a history week, his projection ahead.
+ * A cell with no number — "Bye", a dash — counts for nothing.
  */
 function playerRows(team, weeks, index, hist) {
+  const mode = historyMode();
   return orderPlayers(identified(team.players).map((p) => {
     const ahead = weeks.map((w) => (hist.has(w) ? null : seasonValue(index, w, p.playerId)));
-    return { p, slotId: p.lineupSlotId, ahead, avg: regularAvg(ahead, weeks) };
+    const shown = weeks.map((w, i) => {
+      if (hist.has(w)) return playerHistoryValue(p, w, mode);
+      const v = ahead[i];
+      if (typeof v !== 'number') return null;
+      return v === 0 && zeroOf(v, w, p, seasonStatus(index, w, p)) === 'bye' ? null : round1(v);
+    });
+    return { p, slotId: p.lineupSlotId, ahead, avg: regularAvg(shown, weeks) };
   }));
+}
+
+/** The number a Player row's history cell shows, or null when it shows none. */
+function playerHistoryValue(p, week, mode) {
+  const byPlayer = state.seasonWeeks.has(week) ? leagueIndex().get(week) : null;
+  const e = byPlayer ? byPlayer.get(p.playerId) : null;
+  const v = e ? (mode === 'proj' ? e.proj : e.actual) : null;
+  if (typeof v !== 'number') return null;
+  const bye = byeWeekOf(p, state.byes);
+  return v === 0 && bye !== null && Number(bye) === Number(week) ? null : round1(v);
 }
 
 /** His name, a link like every other name on the page, then his position. */
@@ -4286,8 +4390,7 @@ function playerNameCell(row) {
     `<span class="row-pos">${esc(posLabel(p))}</span></td>`;
 }
 
-const PLAYER_AVG_HEAD = 'The mean of his projections in the regular-season weeks still to come. ' +
-  'A bye counts as zero; playoff weeks are shown but not counted.';
+const PLAYER_AVG_HEAD = 'The mean of the regular-season numbers shown; a bye is left out.';
 
 /** The Player view's two header rows: the same label, select and line. */
 function playerHead(weeks, hist, fut, proj) {
@@ -4365,7 +4468,7 @@ function playerRowHtml(row, team, weeks, index, hist, fut) {
       <tr data-player="${esc(p.playerId)}">
         ${playerNameCell(row)}
         <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
-        `title="${esc(`${p.name}: the mean of his projections in the regular-season weeks still to come.`)}">${fmt(row.avg)}</td>
+        `title="${esc(`${p.name}: the mean of the regular-season numbers shown in his row.`)}">${fmt(row.avg)}</td>
         ${cells}
       </tr>`;
 }
@@ -4585,7 +4688,10 @@ function paintChanges() {
     // TOTAL, PLAYER: the roster as it stood then, each man's projection then.
     body = orderPlayers(then.map((p) => {
       const vals = weeks.map((w) => (inCopy.has(w) ? p.proj.get(w) : undefined));
-      return { p, slotId: p.slotId, vals, avg: regularAvg(vals, weeks) };
+      // What Avg counts: the numbers shown — a "Bye" cell is not one, as above.
+      const nums = vals.map((v, i) =>
+        (v === 0 && zeroOf(0, weeks[i], p, p.injuryStatus) === 'bye' ? null : v));
+      return { p, slotId: p.slotId, vals, nums, avg: regularAvg(nums, weeks) };
     })).map((row) => {
       const p = row.p;
       const cells = row.vals.map((v, i) => {
@@ -4598,7 +4704,7 @@ function paintChanges() {
           `title="${esc(says)}">${bye ? 'Bye' : fmt(v)}</td>`, w);
       }).join('');
       return `<tr data-player="${esc(p.playerId)}">${playerNameCell(row)}` +
-        avgTd(row.vals, `${p.name}: the mean of the regular-season weeks shown, as projected in week ${asOf}.`) +
+        avgTd(row.nums, `${p.name}: the mean of the regular-season weeks shown, as projected in week ${asOf}.`) +
         `${cells}</tr>`;
     }).join('');
   } else if (byPlayer) {
@@ -4671,7 +4777,7 @@ function paintChanges() {
   // the copy's slots added up; now = that sheet's own band (`teamWeekTotals`).
   const bandNow = teamWeekTotals(rows, slots, weeks);
   const thenTotal = (w) => {
-    const got = rows.map((r) => slotThen(r, w).value).filter((v) => v !== null);
+    const got = rows.map((r) => slotThen(r, w).exact).filter((v) => v !== null);
     return got.length ? round1(got.reduce((a, b) => a + b, 0)) : null;
   };
   const band = weeks.map((w) => {
@@ -5240,8 +5346,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
       `lineup order, then the bench by Avg. A week under “Actual history” shows what he scored, ` +
       `started or not, on whichever squad in this league held him; a week nobody here held him is a ` +
       `dash. Switch Actual to <strong>Proj</strong> for what he was projected before kickoff. The ` +
-      `weeks to come are his projection. <strong>Avg</strong> is the mean of his projections in the ` +
-      `regular-season weeks still to come, a bye counted as zero. These rows are not coloured: the ` +
+      `weeks to come are his projection. <strong>Avg</strong> is the mean of the regular-season ` +
+      `numbers shown in his row, a bye left out. These rows are not coloured: the ` +
       `scale below compares a lineup slot around the league, and a man is not a slot. The ` +
       `<strong>Starting lineup</strong> band and everything below are as on Position.`
     );
@@ -5266,8 +5372,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
       `lineup there is the real score; a week still being played counts finished starters only. ` +
       `Switch Actual to <strong>Proj</strong> for what those same starters were projected before ` +
       `kickoff. Those cells are coloured against the other squads’ same slot in that week. ` +
-      `<strong>Avg does not use them</strong>: it stays a projection — the best legal lineup over ` +
-      `every regular-season week, history weeks included at that projection.`
+      `<strong>Avg counts them as shown</strong>: it is the mean of the regular-season numbers in ` +
+      `its row, so it is no longer the grid’s Proj avg.`
     );
   }
 
@@ -5349,9 +5455,12 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
   parts.push(
     `<strong>The Avg column is on its own scale</strong>, and it is not the one the week cells ` +
     `beside it use. A week cell is measured against every squad’s every week at that slot; an Avg ` +
-    `is measured against <strong>the other nine squads’ Avg at the same slot</strong> — which is ` +
-    `the very number the all-teams grid at the top of the page shows for each of them, on the same ` +
-    `scale, so a cell here and that grid cannot come out different colours. It has to be a ` +
+    `is measured against <strong>the other nine squads’ Avg at the same slot</strong>` +
+    (historyWeeks(weeks).size
+      ? `. It has to be a `
+      : ` — which is the very number the all-teams grid at the top of the page shows for each of ` +
+        `them, on the same scale, so a cell here and that grid cannot come out different colours. ` +
+        `It has to be a `) +
     `separate scale: averaging has already taken the week-to-week swing out, so ten season ` +
     `averages sit well inside one weekly standard deviation and the cells’ scale would have ` +
     `coloured none of them. The two sets of thresholds are printed at the foot of this note on two ` +
@@ -5363,7 +5472,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     `total against the other nine squads’ week-9 totals, and never across the season. A week the ` +
     `whole league is quiet in — a heavy bye week — is not a bad week for everybody, and one scale ` +
     `across the row would draw it as a red stripe down every squad’s sheet. Its <strong>Avg</strong> ` +
-    `is measured against the other nine squads’ lineup averages, which is the Total on the grid above.`
+    `is measured against the other nine squads’ lineup averages` +
+    (historyWeeks(weeks).size ? '.' : ', which is the Total on the grid above.')
   );
 
   parts.push(

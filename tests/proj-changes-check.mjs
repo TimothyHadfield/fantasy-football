@@ -372,8 +372,19 @@ block('main', () => {
     ok('PLAYER: every future regular-season cell is the stub’s projection',
       P.rows.every((r, i) => FUTURE.every((w) => cell(r, w).t === projNow(i, w).toFixed(1))),
       P.rows.map((r) => cell(r, 10).t));
-    ok('PLAYER: Avg is the mean of the weeks to come (QB 23.2 or 23.1 by rounding of 23.15; K 15.2)',
-      P.rows.length === 15 && P.rows.every((r, i) => Number(avgOf(r).t) === avgNow(i)) && /regular-season weeks still to come/.test(avgOf(P.rows[0]).title),
+    // AVG IS THE MEAN OF THE NUMBERS HIS ROW SHOWS (2026-10-06): seven scores,
+    // then six projections — QB (7 × 15.0 + 138.9) / 13 = 18.8. It was the mean
+    // of the weeks to come alone (23.2), beside a row it was not the average of.
+    // Player 14 joined in week 5, so his four dashes count for nothing.
+    const avgShown = (i) => {
+      const xs = [...[1, 2, 3, 4, 5, 6, 7].filter((w) => i !== 14 || w >= 5).map(() => scored(i)),
+        ...FUTURE.map((w) => projNow(i, w))];
+      return xs.reduce((a, b) => a + b, 0) / xs.length;
+    };
+    ok('PLAYER: Avg is the mean of the numbers shown in his row (QB 18.8, not the 23.2 of the weeks to come)',
+      P.rows.length === 15 && P.rows.every((r, i) => Math.abs(Number(avgOf(r).t) - avgShown(i)) < 0.051) &&
+      avgOf(P.rows[0]).t === '18.8' && avgNow(0) !== 18.8 &&
+      /mean of the regular-season numbers shown in his row/.test(avgOf(P.rows[0]).title),
       P.rows.map((r) => avgOf(r).t));
     ok('PLAYER: the heavy line is before week 8 in the body as in the head',
       P.rows.every((r) => /\bfut-start\b/.test(cell(r, 8).cls) && !/\bfut-start\b/.test(cell(r, 7).cls)),
@@ -389,9 +400,14 @@ block('main', () => {
       cell(PP.rows[0], 5).t === '21.5' && cell(PP.rows[0], 7).t === '22.1' && projNow(0, 5) === 21.5,
       [cell(PP.rows[0], 5), cell(PP.rows[0], 7)]);
     ok('PLAYER, Proj: a week ESPN carried nothing for him is a dash (Player 04, week 7)',
-      cell(PP.rows[4], 7).t === '—', cell(PP.rows[4], 7));
-    ok('PLAYER, Proj: the weeks to come do not move', same(
-      PP.rows.map((r) => FUTURE.map((w) => cell(r, w).t)), P.rows.map((r) => FUTURE.map((w) => cell(r, w).t))), '');
+      cell(byName(PP, nameOf(4)), 7).t === '—', cell(byName(PP, nameOf(4)), 7));
+    // By name: two receivers in one slot are ordered by Avg, and on Proj the
+    // 0.0 Player 03 was projected in week 6 puts him below Player 04.
+    ok('PLAYER, Proj: the weeks to come do not move', P.rows.length === PP.rows.length && same(
+      P.rows.map((r) => FUTURE.map((w) => cell(byName(PP, r.name), w).t)),
+      P.rows.map((r) => FUTURE.map((w) => cell(r, w).t))), '');
+    ok('PLAYER, Proj: Avg follows the select — QB (148.4 + 138.9) / 13 = 22.1',
+      avgOf(PP.rows[0]).t === '22.1', avgOf(PP.rows[0]));
 
     // ---- Proj changes: the controls ----------------------------------------
     const T = m.chPlTotal;
