@@ -1,6 +1,6 @@
 {
   "_": "Per-suite counts off a green run. run-all.mjs FAILS when one of these falls (AUDIT §3.5); a rise is fine and is recorded by `node run-all.mjs --bless`. Do not hand-edit: re-bless on a green run and say what changed.",
-  "measured": "2026-10-05",
+  "measured": "2026-10-06",
   "suites": {
     "test-forecast.mjs": {
       "assertions": 68
@@ -86,7 +86,7 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 45
+      "assertions": 57
     },
     "opp-check.mjs": {
       "scenarios": 7
@@ -112,8 +112,8 @@
       "assertions": 135
     },
     "an-test.mjs": {
-      "assertions": 2133,
-      "scenarios": 23
+      "assertions": 2482,
+      "scenarios": 27
     },
     "test-summary.mjs": {
       "assertions": 319
@@ -182,7 +182,7 @@
       "scenarios": 4
     },
     "pages-done-check.mjs": {
-      "assertions": 151
+      "assertions": 177
     },
     "record-live-check.mjs": {
       "assertions": 82
@@ -197,10 +197,20 @@
       "assertions": 105
     },
     "test-decisions.mjs": {
-      "assertions": 148
+      "assertions": 185
     },
     "decisions-check.mjs": {
-      "assertions": 136
+      "assertions": 181
+    },
+    "test-proj-history.mjs": {
+      "assertions": 107
+    },
+    "test-projhist-cloud.mjs": {
+      "assertions": 17,
+      "scenarios": 10
+    },
+    "proj-changes-check.mjs": {
+      "assertions": 95
     }
   }
 }
