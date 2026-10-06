@@ -260,7 +260,7 @@ async function boot(scenario) {
   process.on('unhandledRejection', (r) => rejections.push(String(r)));
 
   await import(pathToFileURL(path.join(REPO, 'js/waivers-page.js')).href);
-  await new Promise((r) => setTimeout(r, cfg.wait ?? 600));
+  await new Promise((r) => setTimeout(r, cfg.wait ?? 2000));
   if (cfg.after) await cfg.after({ document, window });
   console.error = origError;
 
