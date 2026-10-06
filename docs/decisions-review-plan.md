@@ -166,5 +166,10 @@ e. A word ceiling for the new page in the text audit (set to whatever the plain 
 - Verified: suites test-decisions 94, test-decision-data 167, shared-tables-check 208, test-decision-cloud 75, decisions-check 79; Stats/Summary tables byte-identical before/after on demo and league 1241838 at 393 and 1440; live league 1241838 weeks 1–3 (41 moves): every decision of every team mirrors without error, team 7 perfect-hindsight numbers on the page match the engine; screenshots looked at, phone and laptop width.
 - Still open: a real accepted trade (record shape assumed, roster-change fallback untested on real data); the Firestore round trip to Tim's iPhone; his private league through the extension; noise constants (judgement); Questions a–e are assumed, not answered; phase 5 (combining) needs a go.
 
+## BUILT 2026-10-06 (after the plan: clarity work Tim asked for)
+- Shipped (0f09d2b, 31b874d, 877576a, 8ddf1cf): tables sort and fit; Points/wk tile + column; "Biggest swap" line; every Diff opens the swaps behind it (`weekSwaps(cell)`: Slot / Started / Instead / ±); one decimal everywhere with Diff = the printed difference; Opp proj filled; Season by week sorts with heat; a click on a previewed number scrolls to Season by week with that week outlined; changed players outlined + bold in both halves; dim projection left of each actual; Avg column on the right.
+- Verified: decisions-check 381, test-decisions 200 (new checks failed on the code before each change); headless 393 / 1280 / 1440 on league 1241838, screenshots looked at.
+- Still open: his iPhone and private league; the Points/wk tile can be 0.1 off printed Total ÷ weeks; a man who only moved slots is not marked; wording is Tim's.
+
 ## Sources
 - Measured reads, 2026-10-05: `lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/1241838?view=mTransactions2&scoringPeriodId=1..4` and `?view=kona_playercard` with `X-Fantasy-Filter: {"players":{"filterIds":{"value":[…]}}}`.
