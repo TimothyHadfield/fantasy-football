@@ -1284,6 +1284,46 @@ if (!fb.boot) {
     /will not let a page share a file/.test(fb.page.hint), fb.page.hint);
 }
 
+// ---- the chart fits a phone, and your row is marked -------------------------
+//
+// linkedom lays nothing out, so the WIDTH is measured in a real engine
+// (phone-view at 393: the wrapper's scrollWidth − clientWidth was 42, now 0).
+// What can be pinned here is that the two rules which did it are still in the
+// page's phone block, on this table.
+{
+  const css = readFileSync(path.join(REPO, PAGE), 'utf8');
+  const at = css.indexOf('@media (max-width: 760px)');
+  const phoneCss = at < 0 ? '' : css.slice(at, css.indexOf('reading aids', at));
+  ok('on a phone the chart’s cells are 4px apart, the Decisions copy’s treatment',
+    /#summaryTable th,\s*#summaryTable td\s*\{\s*padding-left:\s*4px;\s*padding-right:\s*4px;\s*\}/.test(phoneCss),
+    phoneCss.slice(-400));
+  ok('and the name takes what the four numbers leave, so nothing scrolls sideways',
+    /#summaryTable td\.name,\s*#summaryTable th\.name\s*\{\s*max-width:\s*0;\s*width:\s*100%;\s*\}/.test(phoneCss),
+    phoneCss.slice(-400));
+
+  // YOUR ROW. `me` is an option of the shared builder: given, exactly that row
+  // is `tr.me` (the Stats standings' class); left out — the Decisions review,
+  // and this page on demo data — the rows are what they always were.
+  const { summaryRowsHtml } = await import(moduleUrl('js/summary-table.js'));
+  const three = [
+    { id: 4, name: 'A', record: { w: 2, l: 1, t: 0 }, rec: null, luck: 1.5, luckMargin: 3, title: 0.5, last: 0.1 },
+    { id: 7, name: 'B', record: { w: 1, l: 2, t: 0 }, rec: null, luck: -1.5, luckMargin: 3, title: 0.3, last: 0.3 },
+    { id: 9, name: 'C', record: { w: 0, l: 3, t: 0 }, rec: null, luck: 0, luckMargin: 3, title: 0.2, last: 0.6 },
+  ];
+  const plain = summaryRowsHtml(three);
+  const marked = summaryRowsHtml(three, { me: 7 });
+  const opens = (html) => html.match(/<tr[^>]*>/g) || [];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  ok('with no "You are" team no row carries a class', opens(plain).every((t) => t === '<tr>'), opens(plain).join(' '));
+  ok('with one, exactly that row is tr.me', same(opens(marked), ['<tr>', '<tr class="me">', '<tr>']), opens(marked).join(' '));
+  ok('an id saved as text marks the same row', same(opens(summaryRowsHtml(three, { me: '7' })), opens(marked)));
+  ok('and nothing else about the rows changes',
+    marked.replace('<tr class="me">', '<tr>') === plain);
+  ok('a team that is not in the chart marks nobody',
+    opens(summaryRowsHtml(three, { me: 99 })).every((t) => t === '<tr>'));
+  ok('the difference view marks it too', same(opens(summaryRowsHtml(three, { me: 9, diffFrom: three })), ['<tr>', '<tr>', '<tr class="me">']));
+}
+
 // ---------------------------------------------------------------------------
 
 if (fails.length) {
