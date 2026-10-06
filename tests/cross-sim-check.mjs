@@ -38,17 +38,26 @@ const CHILDREN = {
     const html = readFileSync(path.join(REPO, 'schedule.html'), 'utf8');
     const { document } = bootDom({
       html,
-      store: { 'ff.prefs': { 'schedule.source': 'live', 'schedule.week': 'all' }, 'ff.connection': CONN },
+      store: {
+        // XS_RUNS: the run-count button a reader has pressed (remembered).
+        'ff.prefs': {
+          'schedule.source': 'live', 'schedule.week': 'all',
+          ...(process.env.XS_RUNS ? { 'schedule.runs': Number(process.env.XS_RUNS) } : {}),
+        },
+        'ff.connection': CONN,
+      },
     });
     await import(moduleUrl('js/schedule-page.js'));
     await waitFor(() => (globalThis.__simCalls || []).length &&
       document.querySelectorAll('#simTable tbody tr:not(.empty-row)').length === 10, 20000);
     await new Promise((r) => setTimeout(r, 50));
     const title = {};
+    const last = {};
     const projWins = {};
     for (const tr of document.querySelectorAll('#simTable tbody tr')) {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[8].getAttribute('data-v'));
+      last[text(td[0])] = Number(td[9].getAttribute('data-v'));
       projWins[text(td[0])] = Number(td[2].getAttribute('data-v'));
     }
     // "My season" for Manager 1, who TIED his week-2 game (AUDIT §1.6).
@@ -66,7 +75,7 @@ const CHILDREN = {
       // The page's own simulation only. "My season"'s Title ± / Last ± columns
       // play the season out again with one game forced (js/must-win.js); those
       // runs are not the one the Summary page has to match.
-      calls: (globalThis.__simCalls || []).filter((c) => !c.games.some((g) => g.forced)), title,
+      calls: (globalThis.__simCalls || []).filter((c) => !c.games.some((g) => g.forced)), title, last,
       note: text(document.getElementById('simNote')),
       matchupsNote: text(document.getElementById('matchupsNote')),
       forecastFor,
@@ -87,17 +96,22 @@ const CHILDREN = {
     await waitFor(() => /simulated seasons/.test(text(document.getElementById('simStatus'))), 30000);
     await new Promise((r) => setTimeout(r, 50));
     const title = {};
+    const last = {};
+    const me = [];
     // By header, not position: the Record column (2026-09-27) sits before it.
-    const iTitle = [...document.querySelectorAll('#summaryTable thead th')]
-      .map((th) => text(th)).indexOf('Title %');
+    const heads = [...document.querySelectorAll('#summaryTable thead th')].map((th) => text(th));
+    const iTitle = heads.indexOf('Title %');
+    const iLast = heads.indexOf('Loser %');
     for (const tr of document.querySelectorAll('#summaryTable tbody tr')) {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[iTitle].getAttribute('data-v'));
+      last[text(td[0])] = Number(td[iLast].getAttribute('data-v'));
+      if (tr.classList.contains('me')) me.push(text(td[0]));
     }
     const stub = await import('./cap-stub-season.mjs');
     return {
       calls: globalThis.__simCalls || [],
-      title,
+      title, last, me,
       status: text(document.getElementById('simStatus')),
       note: text(document.getElementById('summaryNote')),
       floorWeeks: stub.calls.floors || [],
@@ -116,9 +130,10 @@ if (process.argv[2]) {
 // CAP_WIRE: the stub answers the floor read with a real, non-empty wire whose
 // floor moves with the week (AUDIT §1.4). `wire: false` runs a page without it,
 // the witness that the floor really reaches the simulation.
-function child(name, { wire = true } = {}) {
+function child(name, { wire = true, runs = null } = {}) {
   const env = { ...process.env };
   if (wire) env.CAP_WIRE = '1'; else delete env.CAP_WIRE;
+  if (runs) env.XS_RUNS = String(runs); else delete env.XS_RUNS;
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, name], {
     encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 32 * 1024 * 1024, timeout: 180000, env,
   });
@@ -219,6 +234,29 @@ if (!sched.boot && !summ.boot) {
   ok('the title chances are a complete distribution on both pages',
     Math.abs(names.reduce((s, n) => s + sched.title[n], 0) - 1) < 1e-6 &&
     Math.abs(names.reduce((s, n) => s + summ.title[n], 0) - 1) < 1e-6);
+
+  // THE RUN COUNT IS THE WHOLE OF THE DIFFERENCE (measured on league 1241838,
+  // 2026-10-06: Kenny Albrecht 25% on the Schedule page's 10,000, 24% here).
+  // Press the Schedule page's own 100,000 button and the two pages print the
+  // SAME number, to the last digit, in both columns — one seed, one model, one
+  // set of inputs.
+  const full = child('schedule', { runs: 100000 });
+  ok('the Schedule page boots at 100,000 runs', !full.boot, full.boot);
+  if (!full.boot) {
+    const c100 = full.calls[full.calls.length - 1];
+    ok('and really ran 100,000', Boolean(c100) && c100.runs === 100000, String(c100 && c100.runs));
+    ok('AT THE SAME RUN COUNT every manager’s title % is IDENTICAL on the two pages',
+      names.length === 10 && names.every((n) => full.title[n] === summ.title[n]),
+      names.map((n) => `${n}: ${full.title[n]} vs ${summ.title[n]}`).join(' | '));
+    ok('and so is every chance of finishing last',
+      names.length === 10 && names.every((n) => full.last[n] === summ.last[n]),
+      names.map((n) => `${n}: ${full.last[n]} vs ${summ.last[n]}`).join(' | '));
+  }
+
+  // YOUR ROW (the connection's "You are" team, id 1 here) is marked on the
+  // Summary chart as the Stats standings mark it.
+  ok('the Summary chart marks the connected team’s row, and only that one',
+    same(summ.me, ['Manager 1']), JSON.stringify(summ.me));
 
   ok('the Summary note says the field size was read from the league',
     /4 of 10 teams make the playoffs \(read from your league’s ESPN settings\)/.test(summ.note), summ.note.slice(0, 600));

@@ -79,6 +79,13 @@
   .send-row button { flex: 1 1 100%; min-height: 44px; }
   .sharetext { font-size: 11.5px; padding: 10px; }
   .card-wrap { padding: 8px; }
+  /* THE CHART is five columns and 42px too wide for a phone at the site's
+   * cell padding, which cut Loser % off. Tighter cells, and the name takes
+   * what the four numbers leave (app.css already ends a long name in an
+   * ellipsis at this width) - the Decisions page's copy of this chart, the
+   * same two rules. */
+  #summaryTable th, #summaryTable td { padding-left: 4px; padding-right: 4px; }
+  #summaryTable td.name, #summaryTable th.name { max-width: 0; width: 100%; }
 }
 
 /* ------------------------------------------------------- reading aids

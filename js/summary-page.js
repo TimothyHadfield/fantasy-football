@@ -849,7 +849,14 @@ function renderTable(view, rows, sim, inputs) {
   const scales = summaryScales(rows, { shadeLuck, minSpread: PCT_MIN_SPREAD });
   const { luck: heatLuck, title: heatTitle, last: heatLast } = scales;
 
-  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales });
+  // YOUR ROW, marked as the Stats standings mark it (`tr.me`): the "You are"
+  // team of the connection bar. The league's own rows only — a demo manager who
+  // happens to share the id is nobody's team. The image and the copied text
+  // are drawn from `rows` and never see this.
+  const cfg = state.league.isDemo ? null : savedConfig();
+  const me = cfg && cfg.teamId != null ? cfg.teamId : null;
+
+  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales, me });
 
   resort(table);
   // The scales are kept for renderNote, which prints their thresholds under
@@ -1702,6 +1709,8 @@ start();
 let triedLive = false;
 onConnection((conn) => {
   if (!conn) return;
+  // "You are" may just have changed: the marked row follows it.
+  if (state.league) render();
   if (triedLive || sourcePicked || state.source === 'live') return;
   triedLive = true;
   selectSource('live');

@@ -160,13 +160,18 @@ function rowDiffCells(r, c, { enough }) {
  *        `d-down` / `d-zero`; no heat colours and no ±.
  * @param {Map<*, number>|Object|null} [o.dim] row id -> noise 0..1; that row's
  *        cells (not the name) are drawn at opacity 1 − 0.65 × noise
+ * @param {*} [o.me] the reader's own team id: that row is `<tr class="me">`,
+ *        the class the Stats standings put on it (css/app.css `tbody tr.me`).
+ *        Left out, no row carries a class.
  * @returns {string} `<tr>`s, for a `<tbody>`
  */
 export function summaryRowsHtml(rows, {
   enough = true, waiting = false, shadeLuck = true, scales = null, diffFrom = null, dim = null,
+  me = null,
 } = {}) {
   const sc = diffFrom ? null : scales || summaryScales(rows, { shadeLuck });
   const before = diffFrom ? new Map(diffFrom.map((r) => [r.id, r])) : null;
+  const mine = (r) => me !== null && me !== undefined && String(r.id) === String(me);
   return rows.map((r) => {
     const cells = diffFrom
       ? rowDiffCells(r, before.get(r.id) || null, { enough })
@@ -174,7 +179,7 @@ export function summaryRowsHtml(rows, {
     const style = dimStyle(dimOf(dim, r.id));
     const drawn = style ? cells.map((c, i) => (i ? c.replace(/^<td/, `<td${style}`) : c)) : cells;
     return `
-    <tr>
+    <tr${mine(r) ? ' class="me"' : ''}>
       ${drawn.join('\n      ')}
     </tr>`;
   }).join('');
