@@ -295,7 +295,9 @@ const CHILDREN = {
     const stored = [...map.keys()].filter((k) => /snap|archive|reading/i.test(k));
     return {
       sigmaPre, sigmaNow, stored, storeKeys: [...map.keys()],
-      calls: globalThis.__simCalls || [],
+      // The page's own simulation only: "My season"'s Title ± / Last ± columns
+      // replay the season with one game forced (js/must-win.js).
+      calls: (globalThis.__simCalls || []).filter((c) => !(c.games || []).some((g) => g.forced)),
       simHead, records,
       note: text($('simNote')),
       matchups: [...document.querySelectorAll('#matchups .game, #matchupList .game, .game')].slice(0, 80).map((g) => text(g)),
