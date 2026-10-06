@@ -47,11 +47,15 @@ import * as espn from './espn.js';
 import * as forecast from './forecast.js';
 import * as capture from './capture.js';
 import { listDecisions, mirror, rosterAt, ALL_TEAMS } from './decisions.js';
-import { actualSeasonTableHtml, weeksFromMirror } from './actual-season-table.js';
+// `weekSwaps` is newer than the names above, and it is read off the namespace
+// so a browser still holding last deploy's copy of that file (PROGRESS.md,
+// "Stale-module trap") loads this page without the previews instead of not at all.
+import * as engine from './decisions.js';
+import { actualSeasonTableHtml, weeksFromMirror, shortName } from './actual-season-table.js';
 import { standingsTableHtml } from './standings-table.js';
 import { summaryTableHtml } from './summary-table.js';
 import {
-  viewSwitchHtml, viewFromClick, signedText, diffOf, diffClass, recordDiff, dimStyle, esc,
+  viewSwitchHtml, viewFromClick, signedText, diffOf, diffClass, recordDiff, dimStyle, esc, round1,
 } from './view-switch.js';
 import { enableSort, resort, sortBy } from './sortable.js';
 import { scope } from './prefs.js';
@@ -464,17 +468,31 @@ function liveRow(d) {
     : liveCell(m, state.teamId, partial);
 }
 
-/** One team's season in a mirror: its points in each world, every week held, the one in play included. */
+/**
+ * One team's season in a mirror: its points in each world, every week held, the
+ * one in play included — and how many weeks that is.
+ */
 function seasonPoints(m, teamId) {
   const mine = m.teams.get(teamId);
   let hyp = 0;
   let real = 0;
+  let weeks = 0;
   for (const c of Object.values((mine && mine.byWeek) || {})) {
     hyp += c.total;
     real += c.realTotal;
+    weeks++;
   }
-  return { hyp, real };
+  return { hyp, real, weeks };
 }
+
+/**
+ * POINTS A WEEK (Tim, 2026-10-06: "show the points in that box on the end as
+ * points/week, not just points in general"): a season's difference over the
+ * weeks it was added up from. Those are the weeks the Total row counts — every
+ * week the world holds for that team, the one in play included — so the tile
+ * times that many weeks is the Total row's Diff, to the rounding of one decimal.
+ */
+const perWeek = (points, weeks) => (points === null || !weeks ? null : round1(points / weeks));
 
 /**
  * The numbers a row of the list leads with, for the picked team. With all
@@ -592,8 +610,8 @@ function renderTeams(d) {
   $('teamTable').querySelector('tbody').innerHTML = order.map((id) => {
     const rec = m.records.get(id);
     const change = rec ? recordDiff(rec.mirror, rec.real) : null;
-    const { hyp, real } = seasonPoints(m, id);
-    const points = diffOf(hyp, real, 2);
+    const { hyp, real, weeks } = seasonPoints(m, id);
+    const each = perWeek(diffOf(hyp, real, 2), weeks);
     const live = partial !== null && liveCell(m, id, partial);
     // What each cell SORTS on, where that is not what it prints: the name
     // without its live tag, a record the way ESPN ranks one, a change in wins.
@@ -602,8 +620,9 @@ function renderTeams(d) {
       `<td class="dz-act"${sortV(recordKey(rec && rec.real, real))}>${recText(rec && rec.real)}</td>` +
       `<td class="dz-hyp"${sortV(recordKey(rec && rec.mirror, hyp))}>${recText(rec && rec.mirror)}</td>` +
       `<td class="dz-res ${change ? diffClass(change.value) : ''}"${sortV(change && change.value)}>${change ? esc(change.text) : '—'}</td>` +
-      `<td class="dz-diff ${diffClass(points)}"${sortV(points)}>${signedPts(points)}</td>` +
-      `</tr>`;
+      `<td class="dz-diff ${diffClass(each)}"${sortV(each)}>` +
+      whyHtml(`data-why="team" data-team="${esc(id)}"`, `${teamName(id)}: the weeks behind this number`, signedText(each)) +
+      `</td></tr>`;
   }).join('');
   resort($('teamTable'));
   $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
@@ -615,10 +634,13 @@ function renderResult() {
   const table = $('weekTable');
   const [body, foot] = table.querySelectorAll('tbody');
   const teams = Boolean(d && state.all);
+  closeWhy();
   table.hidden = teams;
   $('resultStats').hidden = teams;
+  $('resultBig').hidden = teams;
   $('teamTable').hidden = !teams;
   if (teams) { renderTeams(d); return; }
+  renderBiggest(d);
   if (!d) {
     $('resultLede').textContent = 'No decisions yet.';
     $('resultStats').innerHTML = '';
@@ -665,7 +687,9 @@ function renderResult() {
       `<td class="dz-vs" title="${esc(opp)}">${esc(opp)}</td>` +
       `<td class="dz-act"${sortV(c.realTotal)}>${pts(c.realTotal)}</td>` +
       `<td class="dz-hyp"${sortV(c.total)}${dim}>${pts(c.total)}</td>` +
-      `<td class="dz-diff ${diffClass(diff)}"${sortV(diff)}${dim}>${signedPts(diff)}</td>` +
+      `<td class="dz-diff ${diffClass(diff)}"${sortV(diff)}${dim}>` +
+      whyHtml(`data-why="week" data-wk="${week}"`, `Week ${week}: the players behind this difference`, signedPts(diff)) +
+      `</td>` +
       result +
       `</tr>`;
   }).join('');
@@ -683,10 +707,204 @@ function renderResult() {
   const stat = (k, v, cls = '', key = '') =>
     `<div class="stat"><div class="k">${k}</div><div class="v${cls ? ` ${cls}` : ''}"` +
     `${key ? ` data-stat="${key}"` : ''}>${v}</div></div>`;
+  // The third tile is a week's worth; the season's is the Total row's Diff.
+  const each = perWeek(total, world.weeks.length);
   $('resultStats').innerHTML =
     stat('Actual record', recText(rec && rec.real), '', 'real') +
     stat('Hypothetical', recText(rec && rec.mirror), change && change.value ? diffClass(change.value) : '', 'mirror') +
-    stat('Points', signedPts(total), total ? diffClass(total) : '', 'points');
+    stat('Points/wk', signedText(each), each ? diffClass(each) : '', 'points');
+}
+
+// ----------------------------------------- where a difference comes from
+//
+// Tim, 2026-10-06: "it shows valuable information, but it's really hard to know
+// where that data is coming from or the specifics on when the user started
+// someone with less points". A week's Diff is the men who started in one world
+// and not the other, so it opens them: slot, who really started, who starts
+// instead, and what that is worth — adding up to the Diff. With all users on, a
+// team's Points/wk opens its weeks the same way. And the biggest of the picked
+// decision's swaps is said in the box itself, on a button that opens its week.
+//
+// The Stats page's "where the last figure comes from", copied and not shared
+// (a possible follow-up): a mouse hovers or focuses and gets a card beside the
+// number; a finger has no hover, so a tap opens a sheet with a Close button. A
+// tap outside or Escape shuts either. Nothing here is reachable only by hovering.
+
+const swapsOf = typeof engine.weekSwaps === 'function' ? engine.weekSwaps : null;
+
+/** A number that opens what it is made of — or the bare number, on an engine too old to say. */
+function whyHtml(attrs, label, inner) {
+  if (!swapsOf) return inner;
+  return `<span class="dz-why" ${attrs} tabindex="0" role="button" aria-label="${esc(label)}">${inner}</span>`;
+}
+
+/** "J. Warren 8.7": a man and what he counts for. One still playing is his projection, drawn apart. */
+const manHtml = (p) => (p
+  ? `<span class="dz-man">${esc(shortName(p))} <span class="pv${p.known ? '' : ' dz-proj'}">${pts(p.points).replace('-', '−')}</span></span>`
+  : '—');
+
+/** "J. Warren 8.7 → O. Hampton 16.5": who really started, then who starts instead. */
+const swapHtml = (r) => `${manHtml(r.out)} → ${manHtml(r.in)}`;
+
+/** The picked team's cell for a week in the picked decision's mirror, or null. */
+function cellOf(d, week) {
+  const mine = d ? mirrorOf(d).teams.get(state.teamId) : null;
+  return (mine && mine.byWeek[week]) || null;
+}
+
+/**
+ * THE BIGGEST SWAP, in the box without hovering: the week whose Diff is
+ * furthest from zero (the earliest of equals), and in it the swap worth most.
+ * The line keeps its room when there is none, so the table under it does not
+ * move from one decision to the next.
+ */
+function renderBiggest(d) {
+  const el = $('resultBig');
+  let best = null;
+  if (d && swapsOf) {
+    for (const week of state.world.weeks) {
+      const c = cellOf(d, week);
+      const size = c ? Math.abs(diffOf(c.total, c.realTotal, 2)) : 0;
+      if (size > (best ? best.size : 0)) best = { week, size, cell: c };
+    }
+  }
+  const row = best
+    ? swapsOf(best.cell).rows.reduce((a, r) => (a && Math.abs(a.diff) >= Math.abs(r.diff) ? a : r), null)
+    : null;
+  el.classList.toggle('is-empty', !row);
+  el.disabled = !row;
+  if (!row) { el.removeAttribute('data-wk'); el.innerHTML = '<span class="k">Biggest swap</span>'; return; }
+  el.setAttribute('data-wk', best.week);
+  el.innerHTML = `<span class="k">Biggest swap</span>` +
+    `<span class="dz-big-what">Wk ${best.week} · ${swapHtml(row)}</span>` +
+    `<span class="dz-big-d ${diffClass(row.diff)}">${signedPts(row.diff)}</span>`;
+}
+
+/** One week of the picked team: its swaps, then Actual, Hypothetical and the Diff they add up to. */
+function weekWhyHtml(week) {
+  const d = selected();
+  const c = cellOf(d, week);
+  if (!c || !swapsOf) return '';
+  const id = state.teamId;
+  const g = gameOf(state.world.games, id, week);
+  const w = swapsOf(c);
+  const rows = w.rows.map((r) =>
+    `<tr><td class="name">${esc(r.slot)}</td><td class="name">${manHtml(r.out)}</td>` +
+    `<td class="name">${manHtml(r.in)}</td><td class="num ${diffClass(r.diff)}">${signedPts(r.diff)}</td></tr>`).join('');
+  const foot = (label, value, cls = '') =>
+    `<tr${cls ? ` class="${cls}"` : ''}><td class="name" colspan="3">${label}</td><td class="num">${value}</td></tr>`;
+  return (
+    `<div class="op-h">Week ${week}${c.live ? LIVE_TAG : ''}` +
+    (g ? ` <span class="muted">· vs ${esc(teamName(g.homeId === id ? g.awayId : g.homeId))}</span>` : '') + `</div>` +
+    '<table><thead><tr><th class="name">Slot</th><th class="name">Started</th><th class="name">Instead</th><th class="num">+/−</th></tr></thead>' +
+    `<tbody>${rows || '<tr><td class="name muted" colspan="4">Same lineup</td></tr>'}</tbody><tfoot>` +
+    // The rows are the whole of the Diff. Were they ever not, the gap is said.
+    (w.rest ? foot('Rounding', signedPts(w.rest)) : '') +
+    foot('Actual', pts(c.realTotal)) +
+    foot('Hypothetical', pts(c.total)) +
+    foot('Diff', signedPts(diffOf(c.total, c.realTotal, 2)), 'op-gap') +
+    '</tfoot></table>' +
+    '<button type="button" class="op-close">Close</button>'
+  );
+}
+
+/** ALL USERS: one team's weeks, their Total, and the Points/wk that is the Total over those weeks. */
+function teamWhyHtml(teamId) {
+  const d = selected();
+  const t = teamOf(teamId);
+  const mine = d && t ? mirrorOf(d).teams.get(t.id) : null;
+  if (!mine) return '';
+  const weeks = state.world.weeks.filter((w) => mine.byWeek[w]);
+  const rows = weeks.map((week) => {
+    const c = mine.byWeek[week];
+    const diff = diffOf(c.total, c.realTotal, 2);
+    return `<tr><td class="num">${week}${c.live ? LIVE_TAG : ''}</td><td class="num">${pts(c.realTotal)}</td>` +
+      `<td class="num">${pts(c.total)}</td><td class="num ${diffClass(diff)}">${signedPts(diff)}</td></tr>`;
+  }).join('');
+  const { hyp, real } = seasonPoints(mirrorOf(d), t.id);
+  const total = diffOf(hyp, real, 2);
+  return (
+    `<div class="op-h">${esc(teamName(t.id))} <span class="muted">· ${weeks.length} week${weeks.length === 1 ? '' : 's'}</span></div>` +
+    '<table><thead><tr><th class="num">Wk</th><th class="num">Actual</th><th class="num">Hypothetical</th><th class="num">Diff</th></tr></thead>' +
+    `<tbody>${rows}</tbody><tfoot>` +
+    `<tr><td class="num">Total</td><td class="num">${pts(round2(real))}</td><td class="num">${pts(round2(hyp))}</td>` +
+    `<td class="num">${signedPts(total)}</td></tr>` +
+    `<tr class="op-gap"><td class="num" colspan="3">Points/wk</td><td class="num">${signedText(perWeek(total, weeks.length))}</td></tr>` +
+    '</tfoot></table>' +
+    '<button type="button" class="op-close">Close</button>'
+  );
+}
+
+let whyPop = null;
+
+function closeWhy() {
+  if (whyPop) whyPop.hidden = true;
+}
+
+function openWhy(el, sheet) {
+  const html = el.dataset.why === 'team' ? teamWhyHtml(el.dataset.team) : weekWhyHtml(Number(el.dataset.wk));
+  if (!html) return;
+  if (!whyPop) {
+    whyPop = document.createElement('div');
+    whyPop.id = 'whyPop';
+    document.body.appendChild(whyPop);
+    whyPop.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('.op-close')) closeWhy();
+    });
+  }
+  whyPop.className = sheet ? 'dz-pop sheet' : 'dz-pop';
+  whyPop.innerHTML = html;
+  whyPop.hidden = false;
+  whyPop.style.left = '';
+  whyPop.style.top = '';
+  if (sheet || typeof el.getBoundingClientRect !== 'function') return;
+  // Beside the number: its right edge on the number's, below it unless only
+  // above has the room.
+  const r = el.getBoundingClientRect();
+  const w = whyPop.offsetWidth;
+  const h = whyPop.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
+  whyPop.style.left = `${left}px`;
+  whyPop.style.top = `${top}px`;
+}
+
+/** One set of listeners on the panel, which outlives every redraw of its tables. */
+function wireWhy(panel) {
+  const target = (e) => (e.target && e.target.closest ? e.target.closest('[data-why]') : null);
+  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  // Moving between the words of one number is not leaving it.
+  const within = (e, el) => Boolean(e.relatedTarget && el.contains(e.relatedTarget));
+  panel.addEventListener('mouseover', (e) => {
+    const el = target(e);
+    if (el && !noHover() && !within(e, el)) openWhy(el, false);
+  });
+  panel.addEventListener('mouseout', (e) => {
+    const el = target(e);
+    if (el && !noHover() && !within(e, el)) closeWhy();
+  });
+  panel.addEventListener('click', (e) => {
+    const el = target(e);
+    if (el) openWhy(el, noHover());
+  });
+  panel.addEventListener('keydown', (e) => {
+    const el = target(e);
+    if (!el || el.tagName === 'BUTTON' || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    openWhy(el, noHover());
+  });
+  panel.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && !noHover()) openWhy(el, false);
+  });
+  panel.addEventListener('focusout', () => { if (!noHover()) closeWhy(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWhy(); });
+  document.addEventListener('click', (e) => {
+    if (!whyPop || whyPop.hidden) return;
+    if (whyPop.contains(e.target) || target(e)) return;
+    closeWhy();
+  });
 }
 
 // ------------------------------------------------------------- the three charts
@@ -1459,6 +1677,7 @@ document.addEventListener('click', (e) => {
 // those and these listeners keep the two halves in step (see `pairSort`).
 enableSort($('weekTable'));
 enableSort($('teamTable'));
+wireWhy($('panelResult'));
 for (const [box, panel] of [['standings', 'panelStandings'], ['summary', 'panelSummary']]) {
   $(panel).addEventListener('click', (e) => onPairSort(box, e));
   $(panel).addEventListener('keydown', (e) => onPairSort(box, e));

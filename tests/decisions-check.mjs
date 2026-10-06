@@ -140,6 +140,17 @@ async function bootPage(prefs = {}) {
     lede: text($('resultLede')),
     total: cells(document.querySelector('#weekTable tbody.dz-total tr') || { children: [] }),
     stats: Object.fromEntries([...document.querySelectorAll('#resultStats .v')].map((v) => [v.dataset.stat, text(v)])),
+    // What the tiles and the one-row-a-team table call their numbers, and the
+    // "Biggest swap" line under the tiles.
+    labels: {
+      tiles: [...document.querySelectorAll('#resultStats .k')].map(text),
+      teams: [...document.querySelectorAll('#teamTable thead th')].map(text),
+    },
+    big: $('resultBig') ? {
+      t: text($('resultBig')), wk: $('resultBig').getAttribute('data-wk'), tag: $('resultBig').tagName,
+      shown: !$('resultBig').hasAttribute('hidden') && !$('resultBig').classList.contains('is-empty'),
+      hidden: $('resultBig').hasAttribute('hidden'),
+    } : null,
     weeks: [...document.querySelectorAll('#weekTable tbody tr[data-wk]')].map((tr) => ({
       c: cells(tr), flip: tr.getAttribute('data-flip') === '1',
     })),
@@ -379,7 +390,7 @@ const CHILDREN = {
         return {
           name: t.name, real: r.real, mirror: r.mirror,
           points: Math.round(cells.reduce((a, c) => a + Math.round(c.total * 10) - Math.round(c.realTotal * 10), 0)) / 10,
-          live: cells.some((c) => c.live === true),
+          live: cells.some((c) => c.live === true), weeks: cells.length,
         };
       });
     }
@@ -499,6 +510,144 @@ const CHILDREN = {
   },
 
   /** A fresh page on some prefs, looked at and no more (DZ_PREFS). */
+  /**
+   * WHERE A DIFFERENCE COMES FROM (Tim, 2026-10-06: "it's really hard to know
+   * where that data is coming from or the specifics on when the user started
+   * someone with less points"). One reader opening the numbers: every week's
+   * Diff, the "Biggest swap" line, and with all users on a team's Points/wk —
+   * with a mouse (a card), then with a finger (a sheet with Close).
+   */
+  async why() {
+    const p = await bootPage();
+    const out = { settled: await p.settle() };
+    const doc = p.document;
+    const cellsOf = (tr) => [...tr.children].map(text);
+    const read = () => {
+      const el = p.$('whyPop');
+      if (!el) return { open: false };
+      return {
+        open: !el.hasAttribute('hidden'), cls: el.className, head: text(el.querySelector('.op-h')),
+        cols: [...el.querySelectorAll('thead th')].map(text),
+        rows: [...el.querySelectorAll('tbody tr')].map(cellsOf),
+        foot: [...el.querySelectorAll('tfoot tr')].map(cellsOf),
+        close: text(el.querySelector('.op-close')),
+        proj: [...el.querySelectorAll('.dz-proj')].map(text),
+      };
+    };
+    const weekWhy = (wk) => doc.querySelector(`#weekTable tr[data-wk="${wk}"] .dz-why`);
+    const teamWhy = (id) => doc.querySelector(`#teamTable tr[data-team="${id}"] .dz-why`);
+    const key = (el, k) => {
+      const e = new p.window.Event('keydown', { bubbles: true, cancelable: true });
+      e.key = k;
+      el.dispatchEvent(e);
+    };
+    /** Every week of what is picked: its row, and the card a mouse over its Diff gets. */
+    const weeks = () => [...doc.querySelectorAll('#weekTable tbody tr[data-wk]')].map((tr) => {
+      const el = tr.querySelector('.dz-why');
+      if (!el) return { row: cellsOf(tr), card: { open: false }, shut: true };
+      p.fire(el, 'mouseover');
+      const card = read();
+      p.fire(el, 'mouseout');
+      return { row: cellsOf(tr), card, shut: !read().open };
+    });
+    const state = () => ({ big: p.snap().big, stats: p.snap().stats, total: p.snap().total, weeks: weeks() });
+
+    out.start = state();
+    await p.pick('move:mv-adddrop');
+    out.addDrop = state();
+    const el = weekWhy(2);
+    out.handle = el ? { tab: el.getAttribute('tabindex'), role: el.getAttribute('role'), label: el.getAttribute('aria-label') } : null;
+    if (!el) { out.errors = p.errors; return out; }
+
+    // A mouse: a click opens the same card; Escape, a click elsewhere, and
+    // leaving a focused number each shut it. Enter opens it from the keyboard.
+    p.click(el);
+    out.clicked = read();
+    key(doc, 'Escape');
+    out.afterEscape = read().open;
+    p.click(el);
+    p.click(p.$('resultLede'));
+    out.afterOutside = read().open;
+    key(el, 'Enter');
+    out.afterEnter = read();
+    key(doc, 'Escape');
+    p.fire(el, 'focusin');
+    out.focused = read().open;
+    p.fire(el, 'focusout');
+    out.afterBlur = read().open;
+    // The line under the tiles opens its own week.
+    p.click(p.$('resultBig'));
+    out.bigOpened = read();
+    key(doc, 'Escape');
+
+    // A finger: no hover, so over does nothing and a tap opens a sheet.
+    const touch = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    const mouse = p.window.matchMedia;
+    p.window.matchMedia = touch;
+    globalThis.matchMedia = touch;
+    p.fire(el, 'mouseover');
+    out.touchOver = read().open;
+    p.click(el);
+    out.sheet = read();
+    p.click(p.$('whyPop').querySelector('.op-close'));
+    out.afterClose = read().open;
+    p.window.matchMedia = mouse;
+    globalThis.matchMedia = mouse;
+
+    // Squad 7, "Reasonable": the hand numbers at the top of this file, man by man.
+    p.choose(p.$('teamSelect'), 7);
+    await p.settle();
+    await p.pick('lineup-reasonable:7:all');
+    out.seven = state();
+    await p.pick('lineup-perfect:7:all');
+    out.sevenPerfect = state();
+
+    // Squad 1's hindsight (on CAP_BENCH_QB, the week in play with it).
+    p.choose(p.$('teamSelect'), 1);
+    await p.settle();
+    await p.pick('lineup-perfect:1:all');
+    out.onePerfect = state();
+
+    // Squad 2's add of a man who never started: no swap anywhere.
+    p.choose(p.$('teamSelect'), 2);
+    await p.settle();
+    await p.pick('move:mv-add');
+    out.empty = state();
+
+    // ALL USERS: each team's Points/wk opens its weeks.
+    p.$('allSwitch').checked = true;
+    p.fire(p.$('allSwitch'), 'change');
+    await p.settle();
+    out.all = {
+      big: p.snap().big, labels: p.snap().labels,
+      teams: [...doc.querySelectorAll('#teamTable tbody tr')].map((tr) => {
+        const cell = tr.querySelector('.dz-why');
+        const td = tr.children[4];
+        if (!cell) return { row: cellsOf(tr), v: td.getAttribute('data-v'), card: { open: false }, shut: true };
+        p.fire(cell, 'mouseover');
+        const card = read();
+        p.fire(cell, 'mouseout');
+        return { row: cellsOf(tr), v: td.getAttribute('data-v'), card, shut: !read().open };
+      }),
+    };
+    const seven = teamWhy(7);
+    if (seven) {
+      p.window.matchMedia = touch;
+      globalThis.matchMedia = touch;
+      p.click(seven);
+      out.all.sheet = read();
+      p.window.matchMedia = mouse;
+      globalThis.matchMedia = mouse;
+      key(doc, 'Escape');
+    }
+    // Picking the other lineup redraws the box: an open card must not outlive it.
+    if (seven) p.click(seven);
+    await p.pick('lineup-perfect:all:all');
+    out.all.afterPick = read().open;
+    out.errors = p.errors;
+    return out;
+  },
+
   async plain() {
     const p = await bootPage(JSON.parse(process.env.DZ_PREFS || '{}'));
     const out = { settled: await p.settle() };
@@ -601,6 +750,8 @@ const RUNS = {
   all: { child: 'all', env: {} },
   'all-early': { child: 'all', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
   plain: { child: 'plain', env: {} },
+  why: { child: 'why', env: {} },
+  'why-early': { child: 'why', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
   sort: { child: 'sort', env: {} },
   'sort-early': { child: 'sort', env: { CAP_EARLY: '1' } },
 };
@@ -657,6 +808,18 @@ const num = (s) => {
 /** Every cell of a difference table after the name: is each one zero or a dash? */
 const allZero = (rows) => rows.length > 0 && rows.every((r) => r.slice(1).every((c) => c === '—' || num(c) === 0));
 const rowOf = (rows, name) => rows.find((r) => r[0] === name) || [];
+/**
+ * POINTS/WK (Tim, 2026-10-06: "show the points in that box on the end as
+ * points/week, not just points in general"): a season's printed difference over
+ * the weeks it covers, signed, one decimal — worked here from the Total row and
+ * not read back off the page.
+ */
+const perWk = (season, weeks) => {
+  const v = Math.round((num(season) / weeks) * 10) / 10;
+  return v === 0 ? '0.0' : `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(1)}`;
+};
+/** A one-row-a-team table of season points, as the page draws it: points a week. */
+const eachWeek = (rows, weeks) => rows.map((r) => [...r.slice(0, 4), perWk(r[4], weeks)]);
 
 const page = child('page');
 if (booted(page, 'page')) {
@@ -694,7 +857,9 @@ if (booted(page, 'page')) {
     ]), wk.map((w) => w.c));
   ok('and the season under them', same(page.addDrop.total, ['Total', '343.3', '341.9', '−1.4', '+1 W']), page.addDrop.total);
   ok('only the flipped matchup is marked', same(wk.map((w) => w.flip), [false, true, false]), wk.map((w) => w.flip));
-  ok('the record in each world, and the points', same(page.addDrop.stats, { real: '1-1-1', mirror: '2-1', points: '−1.4' }), page.addDrop.stats);
+  ok('the record in each world, and the points a week: −1.4 over 3 weeks', perWk('−1.4', 3) === '−0.5' &&
+    same(page.addDrop.stats, { real: '1-1-1', mirror: '2-1', points: '−0.5' }), page.addDrop.stats);
+  ok('the third tile is called "Points/wk"', same(page.addDrop.labels.tiles, ['Actual record', 'Hypothetical', 'Points/wk']), page.addDrop.labels);
   ok('the lede names the decision', /^Undone: Added Free Agent WR, dropped Manager 1 WR11 \(week 2\)\.$/.test(page.addDrop.lede), page.addDrop.lede);
 
   // ---- the three charts: hypothetical, then difference
@@ -855,7 +1020,7 @@ if (booted(early, 'week in play')) {
       ['4live', 'Manager 4', '118.3', '118.3', '0.0', 'L'],
     ]) && same(a.tags.weeks, ['4']), a.weeks.map((w) => w.c));
   ok('and it is in the Total row', same(a.total, ['Total', '461.6', '460.2', '−1.4', '+1 W']), a.total);
-  ok('the tiles count it too', same(a.stats, { real: '1-2-1', mirror: '2-2', points: '−1.4' }), a.stats);
+  ok('the tiles count it too', same(a.stats, { real: '1-2-1', mirror: '2-2', points: perWk('−1.4', 4) }), a.stats);
   ok('THE TILES ARE THE TABLE: each record is the Result column added up', agree(a), [tally(a.weeks, 'real'), tally(a.weeks, 'mirror'), a.stats]);
   ok('season by week has the fourth column, its head marked live in both boxes', same(a.season.cur, ['Total', '114.9', '111.1', '117.3', '118.3']) &&
     same(a.season.hyp, ['Total', '114.9', '111.5', '115.5', '118.3']) && same(a.tags.season, [['4live'], ['4live']]), [a.season.cur, a.season.hyp, a.tags.season]);
@@ -889,7 +1054,7 @@ if (booted(early, 'week in play')) {
   ok('its week-4 row has the totals, and "In play" for the result — the game is not final in that world',
     same(w4.weeks[3].c, ['4live', 'Manager 4', '118.3', '133.7', '+15.4', 'In play']) && !w4.weeks[3].flip, w4.weeks[3]);
   ok('the points are in the Total row and the tile; the matchup is in NEITHER record',
-    same(w4.total, ['Total', '461.6', '477.0', '+15.4', '0']) && same(w4.stats, { real: '1-1-1', mirror: '1-1-1', points: '+15.4' }) && agree(w4),
+    same(w4.total, ['Total', '461.6', '477.0', '+15.4', '0']) && same(w4.stats, { real: '1-1-1', mirror: '1-1-1', points: '+3.9' }) && perWk(w4.total[3], 4) === '+3.9' && agree(w4),
     [w4.total, w4.stats]);
   ok('and out of both standings: squad 4 is back to 3–0 in each', rowOf(w4.standings.cur, 'Manager 4')[1] === '3–0' &&
     rowOf(w4.standings.hyp, 'Manager 4')[1] === '3–0' && same(w4.standings.cur, w4.standings.hyp), [rowOf(w4.standings.cur, 'Manager 4'), rowOf(w4.standings.hyp, 'Manager 4')]);
@@ -909,7 +1074,7 @@ if (booted(early, 'week in play')) {
   ok('its week-4 row has what is known so far, and "In play" for the result',
     same(t5.weeks[3].c, ['4live', 'Manager 3', '15.5', '15.4', '−0.1', 'In play']), t5.weeks[3]);
   ok('the Total row and the tiles: four weeks of points (388.9 + 15.5), three results', same(t5.total, ['Total', '404.4', '404.0', '−0.4', '0']) &&
-    same(t5.stats, { real: '1-2', mirror: '1-2', points: '−0.4' }) && agree(t5), [t5.total, t5.stats]);
+    same(t5.stats, { real: '1-2', mirror: '1-2', points: perWk('−0.4', 4) }) && agree(t5), [t5.total, t5.stats]);
   ok('and the list row is the same −0.4', t5.list[0].t === 'Wk 3Traded Manager 5 RB1 for Manager 6 RB10−0.4', t5.list[0]);
   ok('Season by week: the finished man’s points plain, the other nine as projections, the total so far',
     col4(t5.season.curBody)[0] === 'M. 5 QB015.5' && t5.tags.proj[0].length === 9 && !t5.tags.proj[0].includes('M. 5 QB015.5') &&
@@ -955,7 +1120,7 @@ if (booted(bench, 'bench QB, week in play')) {
     ['4live', 'Manager 4', '118.3', '126.3', '+8.0', 'L → W'],
   ]) && same(h.weeks.map((w) => w.flip), [false, true, false, true]), h.weeks.map((w) => w.c));
   ok('THE TOTAL ROW counts it', same(h.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']), h.total);
-  ok('THE TILES count it, and the game counts though a bench man is still to play', same(h.stats, { real: '1-2-1', mirror: '3-1', points: '+41.9' }) && agree(h),
+  ok('THE TILES count it, and the game counts though a bench man is still to play', same(h.stats, { real: '1-2-1', mirror: '3-1', points: perWk('+41.9', 4) }) && agree(h),
     h.stats);
   ok('LIVE by the week number: weekly table, and both Season by week heads', same(h.tags.weeks, ['4']) && same(h.tags.season, [['4live'], ['4live']]), h.tags);
   ok('Season by week: the bench QB is in the QB row with his 18.1, and the total is 126.3',
@@ -978,7 +1143,7 @@ const done = child('bench-all');
 if (booted(done, 'bench QB, everybody finished')) {
   const h = done.hindsight;
   ok('the same +8.0 everywhere', same(h.weeks[3].c, ['4', 'Manager 4', '118.3', '126.3', '+8.0', 'L → W']) &&
-    same(h.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']) && same(h.stats, { real: '1-2-1', mirror: '3-1', points: '+41.9' }), [h.weeks[3], h.total, h.stats]);
+    same(h.total, ['Total', '461.6', '503.5', '+41.9', '+2 W']) && same(h.stats, { real: '1-2-1', mirror: '3-1', points: perWk('+41.9', 4) }), [h.weeks[3], h.total, h.stats]);
   ok('and NO live tag anywhere on the page', h.tags.all === 0 && done.diff.tags.all === 0 && same(h.tags.weeks, []) && same(h.tags.list, []) &&
     same(h.tags.season, [[], []]), h.tags);
   ok('the list row reads without it', h.list.find((r) => r.id === 'lineup-perfect:1:all').t === 'AllPerfect hindsight+2 W+41.9' &&
@@ -996,7 +1161,7 @@ const MINE = ['move:mv-adddrop', 'lineup-reasonable:1:all', 'lineup-perfect:1:al
 /** The page's one-row-a-team table against the engine asked directly. */
 const drawsEngine = (snapshot, facts) => facts.length === 10 && facts.every((t) => {
   const row = snapshot.all.rows.find((r) => r[0].replace(/live$/, '') === t.name) || [];
-  return row[1] === recOf(t.real) && row[2] === recOf(t.mirror) && row[4] === signed(t.points) &&
+  return row[1] === recOf(t.real) && row[2] === recOf(t.mirror) && row[4] === perWk(signed(t.points), t.weeks) &&
     snapshot.all.live.length === facts.filter((x) => x.live).length;
 });
 const everyone = child('all');
@@ -1013,7 +1178,7 @@ if (booted(everyone, 'all users')) {
     ['1', 'Manager 4', '92.0', '103.3', '+11.3', 'L'],
     ['2', 'Manager 6', '98.4', '107.3', '+8.9', 'L'],
     ['3', 'Manager 8', '94.8', '110.5', '+15.7', 'W'],
-  ]) && same(seven.total, ['Total', '285.2', '321.1', '+35.9', '0']) && same(seven.stats, { real: '1-2', mirror: '1-2', points: '+35.9' }),
+  ]) && same(seven.total, ['Total', '285.2', '321.1', '+35.9', '0']) && same(seven.stats, { real: '1-2', mirror: '1-2', points: '+12.0' }),
   [seven.weeks.map((w) => w.c), seven.total, seven.stats]);
 
   const on = everyone.on;
@@ -1034,8 +1199,11 @@ if (booted(everyone, 'all users')) {
     ['Manager 7', '1-2', '0-3', '−1 W', '+35.9'],
     ['Manager 2', '0-2-1', '0-3', '+1 L', '+23.0'],
   ];
-  ok('REASONABLE, every team: actual record, hypothetical record, the change, the points', same(on.all.rows, REASONABLE), on.all.rows);
-  ok('squad 7: the same +35.9 as alone, but 0-3 — squad 8’s 111.3 now beats its 110.5',
+  // The table's last column is points a WEEK: each season figure over the 3 weeks.
+  ok('REASONABLE, every team: actual record, hypothetical record, the change, the points a week',
+    same(on.all.rows, eachWeek(REASONABLE, 3)) && rowOf(on.all.rows, 'Manager 9')[4] === '+7.6' && rowOf(on.all.rows, 'Manager 7')[4] === '+12.0', on.all.rows);
+  ok('and its last heading says so', same(on.labels.teams, ['Team', 'Actual', 'Hypothetical', 'Record', 'Points/wk']), on.labels);
+  ok('squad 7: the same +35.9 (+12.0 a week) as alone, but 0-3 — squad 8’s 111.3 now beats its 110.5',
     rowOf(on.all.rows, 'Manager 7')[4] === seven.stats.points && rowOf(on.all.rows, 'Manager 7')[2] === '0-3' && seven.stats.mirror === '1-2',
     [rowOf(on.all.rows, 'Manager 7'), seven.stats]);
   ok('in the order of the Standings table', same(on.all.rows.map((r) => r[0]), on.standings.cur.map((r) => r[0])), on.standings.cur.map((r) => r[0]));
@@ -1068,24 +1236,24 @@ if (booted(everyone, 'all users')) {
     ['Manager 7', '1-2', '0-2-1', '−1 W', '+48.1'],
     ['Manager 2', '0-2-1', '1-2', '+1 W', '+41.1'],
   ];
-  ok('PERFECT HINDSIGHT, every team', same(pf.all.rows, PERFECT) && pf.list[1].selected && pf.lede === 'Every team, every week, perfect hindsight.',
+  ok('PERFECT HINDSIGHT, every team', same(pf.all.rows, eachWeek(PERFECT, 3)) && pf.list[1].selected && pf.lede === 'Every team, every week, perfect hindsight.',
     [pf.all.rows, pf.lede]);
   ok('nobody scores less with hindsight, and no less than with projections', PERFECT.every((r, i) => num(r[4]) >= num(REASONABLE[i][4]) && num(r[4]) >= 0));
   ok('squad 1 and squad 7: the same points as each one’s own "Perfect hindsight" row',
     rowOf(PERFECT, 'Manager 1')[4] === '+33.9' && /\+33\.9$/.test(everyone.start.list[2].t) &&
-    rowOf(PERFECT, 'Manager 7')[4] === everyone.sevenPerfect.stats.points && everyone.sevenPerfect.stats.mirror === '2-1',
+    rowOf(pf.all.rows, 'Manager 7')[4] === everyone.sevenPerfect.stats.points && everyone.sevenPerfect.stats.points === perWk('+48.1', 3) && everyone.sevenPerfect.stats.mirror === '2-1',
     [everyone.start.list[2].t, everyone.sevenPerfect.stats]);
   ok('it too is the engine’s result, drawn', drawsEngine(pf, everyone.engine['lineup-perfect']), everyone.engine['lineup-perfect']);
   ok('standings and the chart follow the choice', same(pf.standings.hyp.map((r) => [r[0], r[1], r[4]]), PERFECT.map((r) => [r[0], r[3], r[4]])) &&
     pf.summary.hyp.every((r) => r[1] === rowOf(PERFECT, r[0])[3]), pf.standings.hyp.map((r) => [r[0], r[1], r[4]]));
   ok('"Display noise" still switches, and the table stays', everyone.noise.noiseOn === true && everyone.noise.all.on === true &&
-    same(everyone.noise.all.rows, PERFECT), everyone.noise.noiseOn);
+    same(everyone.noise.all.rows, eachWeek(PERFECT, 3)), everyone.noise.noiseOn);
 
   // Remembered, and undone both ways.
   ok('the mode is remembered for this league', everyone.prefsOn['decisions.all.99-2026'] === true, everyone.prefsOn);
   const kept = child('plain', { DZ_PREFS: JSON.stringify(everyone.prefsOn) });
   if (booted(kept, 'all users, reloaded')) {
-    ok('after a reload All users is still on, with the same table', kept.start.all.on === true && same(kept.start.all.rows, REASONABLE) &&
+    ok('after a reload All users is still on, with the same table', kept.start.all.on === true && same(kept.start.all.rows, eachWeek(REASONABLE, 3)) &&
       same(kept.start.list.map((r) => r.id), ALL_IDS) && same(kept.start.all.shown, [true, false, false, false]), kept.start.all);
   }
   where = 'all users';
@@ -1116,12 +1284,98 @@ if (booted(liveAll, 'all users, week in play')) {
   ok('Reasonable is the engine’s result, drawn', drawsEngine(on, liveAll.engine['lineup-reasonable']), on.all.rows);
   ok('Perfect hindsight is the engine’s result, drawn', drawsEngine(pf, liveAll.engine['lineup-perfect']), pf.all.rows);
   ok('squad 1, hindsight: the finished weeks’ +33.9 and the bench QB’s +8.0; squad 4 improved too, so the loss stands',
-    same(rowOf(pf.all.rows, 'Manager 1live'), ['Manager 1live', '1-2-1', '1-3', '+1 L', '+41.9']), rowOf(pf.all.rows, 'Manager 1live'));
+    same(rowOf(pf.all.rows, 'Manager 1live'), ['Manager 1live', '1-2-1', '1-3', '+1 L', '+10.5']) && perWk('+41.9', 4) === '+10.5', rowOf(pf.all.rows, 'Manager 1live'));
   ok('squad 7: the same points as alone, in both choices',
     rowOf(on.all.rows, 'Manager 7live')[4] === liveAll.seven.stats.points && rowOf(pf.all.rows, 'Manager 7live')[4] === liveAll.sevenPerfect.stats.points,
     [rowOf(on.all.rows, 'Manager 7live'), liveAll.seven.stats, liveAll.sevenPerfect.stats]);
   ok('Season by week still marks week 4 live', same(on.tags.season, [['4live'], ['4live']]) && on.season.cur.length === 5, on.tags.season);
   ok('off again: squad 1’s list, the two lineups live', same(liveAll.off.list.map((r) => r.id), MINE) && same(liveAll.off.tags.list, LIVE_ROWS), liveAll.off.tags.list);
+}
+
+// ---- where a difference comes from
+//
+// Tim, 2026-10-06: "it shows valuable information, but it's really hard to know
+// where that data is coming from or the specifics on when the user started
+// someone with less points or whatever." Every week's Diff opens the men behind
+// it; the biggest swap is said under the tiles; with all users on a team's
+// Points/wk opens its weeks. The hand numbers are squad 7's "Reasonable", from
+// the top of this file: each man out and in, and what the pair is worth.
+const WEEK_COLS = ['Slot', 'Started', 'Instead', '+/−'];
+const cents = (n) => Math.round(n * 100) / 100;
+/** A week's card against its own row: the swaps add up to the Diff, and the foot is the row's. */
+const cardAddsUp = (w) => {
+  const c = w.card;
+  if (!c.open || !same(c.cols, WEEK_COLS) || c.close !== 'Close' || !w.shut) return false;
+  const swaps = c.rows.filter((r) => r.length === 4);
+  const foot = Object.fromEntries(c.foot);
+  const sum = cents(swaps.reduce((a, r) => a + num(r[3]), 0) + (foot.Rounding ? num(foot.Rounding) : 0));
+  return c.head.replace('live', '').startsWith(`Week ${num(w.row[0])} · vs ${w.row[1]}`) &&
+    sum === num(w.row[4]) && foot.Diff === w.row[4] && foot.Actual === w.row[2] && foot.Hypothetical === w.row[3] &&
+    // Each swap's own figure is its two men's points, apart.
+    swaps.every((r) => cents(num(r[2].match(/−?[\d.]+$/)[0]) - num(r[1].match(/−?[\d.]+$/)[0])) === num(r[3])) &&
+    (swaps.length > 0 || same(c.rows, [['Same lineup']]));
+};
+/** One reader's state: every card adds up, the tile is the Total over its weeks, the line is the costliest week's. */
+const stateAddsUp = (s) => {
+  const far = s.weeks.reduce((a, w) => (Math.abs(num(w.row[4])) > Math.abs(num(a.row[4])) ? w : a), s.weeks[0]);
+  const top = num(far.row[4]) === 0 ? null : far.card.rows.reduce((a, r) => (Math.abs(num(a[3])) >= Math.abs(num(r[3])) ? a : r));
+  return s.weeks.every(cardAddsUp) && s.stats.points === perWk(s.total[3], s.weeks.length) &&
+    (top
+      ? s.big.shown && s.big.wk === String(num(far.row[0])) && s.big.t === `Biggest swapWk ${s.big.wk} · ${top[1]} → ${top[2]}${top[3]}`
+      : !s.big.shown && s.big.wk === null);
+};
+for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
+  const why = child(run);
+  if (!booted(why, run === 'why' ? 'where a difference comes from' : 'where a difference comes from, week in play')) continue;
+  const all = ['start', 'addDrop', 'seven', 'sevenPerfect', 'onePerfect', 'empty'];
+  ok('every week’s Diff opens a card whose swaps add up to it, under that week’s Actual and Hypothetical; leaving shuts it',
+    all.every((k) => why[k].weeks.length === weeksHeld && stateAddsUp(why[k])), all.filter((k) => !stateAddsUp(why[k])).map((k) => [k, why[k]]));
+  ok('a decision that changes no lineup: every card says "Same lineup", and there is no Biggest swap line',
+    why.empty.weeks.every((w) => same(w.card.rows, [['Same lineup']])) && why.empty.big.shown === false && why.empty.big.t === 'Biggest swap', why.empty.big);
+  ok('with a team picked the line is shown; with all users on it is put away', why.addDrop.big.hidden === false && why.all.big.hidden === true, why.all.big);
+  ok('ALL USERS: each Points/wk opens that team’s weeks, their Total, and the Total over those weeks',
+    why.all.teams.length === 10 && why.all.teams.every((t) => {
+      const c = t.card;
+      const name = t.row[0].replace(/live$/, '');
+      return c.open && t.shut && same(c.cols, ['Wk', 'Actual', 'Hypothetical', 'Diff']) && c.head === `${name} · ${weeksHeld} weeks` &&
+        c.rows.length === weeksHeld && c.foot[0][0] === 'Total' && cents(c.rows.reduce((a, r) => a + num(r[3]), 0)) === num(c.foot[0][3]) &&
+        same(c.foot[1], ['Points/wk', t.row[4]]) && t.row[4] === perWk(c.foot[0][3], weeksHeld) && Number(t.v) === num(t.row[4]);
+    }), why.all.teams.map((t) => [t.row, t.v, t.card.foot]));
+  ok('a finger gets that as a sheet too, and picking the other lineup shuts what was open',
+    why.all.sheet && why.all.sheet.cls === 'dz-pop sheet' && why.all.sheet.head === `Manager 7 · ${weeksHeld} weeks` && why.all.afterPick === false,
+    [why.all.sheet, why.all.afterPick]);
+
+  if (run === 'why') {
+    const s7 = why.seven;
+    ok('squad 7, Reasonable, by hand: who sat, who starts instead, and what each pair is worth', same(s7.weeks.map((w) => w.card.rows), [
+      [['RB', 'M. 7 RB1 8.0', 'M. 7 RB10 10.1', '+2.1'], ['WR', 'M. 7 WR5 5.6', 'M. 7 WR11 14.8', '+9.2']],
+      [['RB', 'M. 7 RB1 6.8', 'M. 7 RB10 9.5', '+2.7'], ['WR', 'M. 7 WR3 7.2', 'M. 7 WR11 6.6', '−0.6'], ['TE', 'M. 7 TE6 7.1', 'M. 7 TE13 13.9', '+6.8']],
+      [['QB', 'M. 7 QB0 15.3', 'M. 7 QB12 21.1', '+5.8'], ['FLEX', 'M. 7 RB7 8.3', 'M. 7 RB10 18.2', '+9.9']],
+    ]) && same(s7.weeks.map((w) => w.card.foot[w.card.foot.length - 1]), [['Diff', '+11.3'], ['Diff', '+8.9'], ['Diff', '+15.7']]), s7.weeks.map((w) => w.card.rows));
+    ok('its Biggest swap: week 3 (+15.7) is its costliest, and the FLEX swap the larger one there',
+      same(s7.big, { t: 'Biggest swapWk 3 · M. 7 RB7 8.3 → M. 7 RB10 18.2+9.9', wk: '3', tag: 'BUTTON', shown: true, hidden: false }), s7.big);
+    ok('the add+drop: one swap a week, and the line names week 3’s −1.8', same(why.addDrop.weeks.map((w) => w.card.rows), [
+      [['Same lineup']], [['WR', 'M. 1 WR4 7.8', 'M. 1 WR11 8.2', '+0.4']], [['WR', 'M. 1 WR4 9.7', 'M. 1 WR11 7.9', '−1.8']],
+    ]) && why.addDrop.big.t === 'Biggest swapWk 3 · M. 1 WR4 9.7 → M. 1 WR11 7.9−1.8', [why.addDrop.weeks.map((w) => w.card.rows), why.addDrop.big]);
+    ok('the Diff is a button a keyboard reaches, and says what it opens',
+      same(why.handle, { tab: '0', role: 'button', label: 'Week 2: the players behind this difference' }), why.handle);
+    const card = { open: true, cls: 'dz-pop', head: 'Week 2 · vs Manager 2' };
+    const is = (got, want) => Object.keys(want).every((k) => got[k] === want[k]);
+    ok('a mouse: a click or Enter opens the card; Escape, a click elsewhere and leaving the number each shut it',
+      is(why.clicked, card) && why.afterEscape === false && why.afterOutside === false && is(why.afterEnter, card) &&
+      why.focused === true && why.afterBlur === false, [why.clicked, why.afterEscape, why.afterOutside, why.focused, why.afterBlur]);
+    ok('the Biggest swap line opens its own week', is(why.bigOpened, { open: true, head: 'Week 3 · vs Manager 3' }) &&
+      same(why.bigOpened.rows, [['WR', 'M. 1 WR4 9.7', 'M. 1 WR11 7.9', '−1.8']]), why.bigOpened);
+    ok('a finger: hovering does nothing, a tap opens a sheet with Close, and Close shuts it',
+      why.touchOver === false && is(why.sheet, { open: true, cls: 'dz-pop sheet', head: 'Week 2 · vs Manager 2', close: 'Close' }) && why.afterClose === false,
+      [why.touchOver, why.sheet, why.afterClose]);
+  } else {
+    const w4 = why.onePerfect.weeks[3];
+    ok('Tim’s bench QB, in the week in play: the +8.0 is one swap, QB for QB, and the card is marked live',
+      same(w4.card.rows, [['QB', 'M. 1 QB0 10.1', 'M. 1 QB12 18.1', '+8.0']]) && w4.card.head === 'Week 4live · vs Manager 4' &&
+      why.onePerfect.stats.points === '+10.5', [w4.card, why.onePerfect.stats]);
+    ok('all users: a team’s card marks the week in play', why.all.teams.every((t) => t.card.rows[3][0] === '4live'), why.all.teams[0].card.rows);
+  }
 }
 
 // ---- sorting and layout: every table sorts, a pair sorts together

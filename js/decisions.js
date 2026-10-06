@@ -736,6 +736,69 @@ function swapsOf(week, cell) {
 }
 
 /**
+ * WHERE ONE TEAM-WEEK'S DIFFERENCE COMES FROM (Tim, 2026-10-06: "it's really
+ * hard to know where that data is coming from or the specifics on when the user
+ * started someone with less points"). The men who really started and do not in
+ * the mirror, each beside the man who starts instead, with the points each
+ * counts for that week — a score, or in the week in play the `value` of a man
+ * still playing (then `known: false`).
+ *
+ * A pair is made by lineup slot first, then by position, then with whoever is
+ * left; a man with nobody opposite him stands alone (`out` or `in` null). The
+ * slot named is the one the real starter held.
+ *
+ * `diff` is the cell's own `total - realTotal`, `sum` the rows added up, and
+ * `rest` what the rows do NOT explain. The engine builds a changed total as the
+ * real one plus the men in less the men out, so `rest` is 0; it is handed back
+ * so a page can print the gap rather than parts that do not add up.
+ *
+ * @param {object} cell `mirror.teams.get(teamId).byWeek[week]`
+ * @returns {{rows:Array<{slot:string, slotId:number, out:object|null,
+ *           in:object|null, diff:number}>, sum:number, diff:number, rest:number}}
+ *          each man is `{ playerId, name, position, points, known }`
+ */
+export function weekSwaps(cell) {
+  if (!cell) return { rows: [], sum: 0, diff: 0, rest: 0 };
+  const real = cell.realStarters || [];
+  const mine = cell.starters || [];
+  const realIds = new Set(real.map((p) => p.playerId));
+  const mineIds = new Set(mine.map((p) => p.playerId));
+  const outs = real.filter((p) => !mineIds.has(p.playerId));
+  const ins = mine.filter((p) => !realIds.has(p.playerId));
+  const man = (p) => (p ? {
+    playerId: p.playerId, name: p.name, position: p.position,
+    points: num(p.value !== undefined ? p.value : p.actual), known: p.known !== false,
+  } : null);
+
+  const partner = new Map();
+  const matches = [
+    (out, inn) => inn.slotId === out.slotId,
+    (out, inn) => inn.position === out.position,
+    () => true,
+  ];
+  for (const match of matches) {
+    for (const out of outs) {
+      if (partner.has(out)) continue;
+      const i = ins.findIndex((inn) => match(out, inn));
+      if (i !== -1) partner.set(out, ins.splice(i, 1)[0]);
+    }
+  }
+
+  const row = (out, inn) => {
+    const a = man(out);
+    const b = man(inn);
+    return {
+      slot: (out || inn).slot, slotId: (out || inn).slotId, out: a, in: b,
+      diff: round2((b ? b.points : 0) - (a ? a.points : 0)),
+    };
+  };
+  const rows = [...outs.map((out) => row(out, partner.get(out) || null)), ...ins.map((inn) => row(null, inn))];
+  const sum = round2(rows.reduce((a, r) => a + r.diff, 0));
+  const diff = round2(num(cell.total) - num(cell.realTotal));
+  return { rows, sum, diff, rest: round2(diff - sum) };
+}
+
+/**
  * One lineup decision, ready to hand to `mirror`: `kind` is 'lineup-reasonable'
  * (highest projections) or 'lineup-perfect' (hindsight).
  *
