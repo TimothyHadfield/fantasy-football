@@ -579,18 +579,25 @@ export function cloudSource() {
 
 /**
  * Sum the projected points of every starter on a roster for one week.
+ *
+ * THE BYE RULE applies here as it does in `readWeekRosters`: a starter whose
+ * NFL team is on bye that week counts 0 (`espn.byeAdjustedProjection`), so the
+ * Stats path and the roster path put the same total on the same lineup. It
+ * bites on a D/ST started on its bye in a week ESPN has not closed, which ESPN
+ * is still projecting at a few points. `byes` empty or missing changes nothing.
  */
-function projectedTotalForWeek(teamEntry, week) {
+function projectedTotalForWeek(teamEntry, week, byes) {
   let total = 0;
   for (const e of teamEntry.roster?.entries || []) {
     if (e.lineupSlotId === BENCH_SLOT || e.lineupSlotId === IR_SLOT) continue;
 
-    const stats = e.playerPoolEntry?.player?.stats || [];
+    const player = e.playerPoolEntry?.player;
+    const stats = player?.stats || [];
     const projected = stats.find(
       (s) => s.scoringPeriodId === week && s.statSourceId === 1
     );
     if (projected && typeof projected.appliedTotal === 'number') {
-      total += projected.appliedTotal;
+      total += espn.byeAdjustedProjection(projected.appliedTotal, player.proTeamId ?? null, week, byes);
     }
   }
   return total;
@@ -1274,22 +1281,20 @@ function assembleSeason({ season, name, teams, games }) {
   // If ESPN gave us nothing usable for projections, say so rather than
   // silently rendering a season of zeroes.
   const withProjections = games.filter((g) => g.homeProjected > 0 && g.awayProjected > 0);
+  const without = games.filter((g) => !(g.homeProjected > 0 && g.awayProjected > 0));
 
-  // "More than half the games" was tuned against a 65-game season. In week 1
-  // there are five, so 3-of-5 passes the ratio while dropping two games
-  // entirely — and the four teams in them survive into `teams` with no rows at
-  // all. Those ghosts then compute skill = 0 - leagueAvgProjected (about -122)
-  // and luck = leagueAvgActual (about +117), which puts teams that never
-  // played at the TOP of the luck standings, with no warning shown. So the
-  // filtered set is only safe to use when it still covers every team.
-  const coveredTeams = new Set();
-  for (const g of withProjections) { coveredTeams.add(g.homeId); coveredTeams.add(g.awayId); }
-  const playedTeams = new Set();
-  for (const g of games) { playedTeams.add(g.homeId); playedTeams.add(g.awayId); }
-  const coversEveryone = [...playedTeams].every((id) => coveredTeams.has(id));
-
-  const projectionsAvailable =
-    withProjections.length > games.length * 0.5 && coversEveryone;
+  // EVERY DECIDED GAME IS HANDED ON, projection or not: a result counts for the
+  // record, the points and the week count whatever became of that week's
+  // lineups. This used to hand on only the games WITH a projection whenever
+  // they were more than half and still covered every team — so one played
+  // week whose roster read failed took its games out of the standings, a week
+  // short of ESPN, under a status line that said "Loaded N games".
+  //
+  // `projectionsAvailable` is therefore "every game has one", and anything
+  // less is what the pages already warn about in their status line. A game
+  // without one carries 0, which the readers that skip a missing projection
+  // already test for (`> 0`); `weeksWithoutProjections` names the weeks.
+  const projectionsAvailable = games.length > 0 && !without.length;
 
   return {
     season,
@@ -1297,11 +1302,12 @@ function assembleSeason({ season, name, teams, games }) {
     name,
     weeks: [...new Set(games.map((g) => g.week))].length,
     teams,
-    games: projectionsAvailable ? withProjections : games,
+    games,
     injuries: [], // entered by hand in the sheet; no ESPN equivalent
     projectionsAvailable,
     gamesFound: games.length,
     gamesWithProjections: withProjections.length,
+    weeksWithoutProjections: [...new Set(without.map((g) => g.week))].sort((a, b) => a - b),
   };
 }
 
@@ -1429,13 +1435,17 @@ export async function fetchSeasonData({ onProgress } = {}) {
   // Re-derive each week's projected totals from that week's starting lineups.
   const projByWeek = new Map(); // week -> Map(teamId -> projected)
   let done = 0;
+  // The byes, for the bye rule — the read every roster path makes (cached for
+  // the page, so the pages that call this pay for it once either way). Never
+  // throws; `{}` leaves every projection as ESPN sent it.
+  const byes = weeks.length ? await fetchByeWeeks() : {};
 
   await inBatches(weeks, 3, async (week) => {
     try {
       const weekRaw = await espn.fetchRosters(week);
       const map = new Map();
       for (const t of weekRaw.teams || []) {
-        map.set(t.id, projectedTotalForWeek(t, week));
+        map.set(t.id, projectedTotalForWeek(t, week, byes));
       }
       projByWeek.set(week, map);
     } catch {
