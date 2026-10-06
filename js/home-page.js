@@ -46,6 +46,11 @@ import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
 // The positional floor's one sentence, so Home states it in the same words as
 // Analysis and Trade. See js/floor.js.
 import { describeFloors } from './floor.js';
+// "Start A over B" on your own card: the swaps, their points and their share of
+// the win chance are worked out in js/start-sit.js, which is pure.
+import { startSit, hasPlayed } from './start-sit.js';
+// "O. Hampton": the site's one short form of a player's name.
+import { shortName } from './actual-season-table.js';
 
 const $ = (id) => document.getElementById(id);
 const store = prefs.scope('home');
@@ -77,6 +82,13 @@ const state = {
   // league; a week change only reads the weeks this map does not hold.
   oddsTeams: new Map(),
   oddsToken: 0,
+  // When waivers next clear (epoch ms) — the earliest date on the wire the
+  // floor is read from — or null. `waiverRead` is the one read per league.
+  waiverClears: null,
+  waiverRead: null,
+  // NFL kickoffs, `{ [proTeamId]: { [week]: epochMs } }`, or null until a swap
+  // is on offer and they are needed to say who is locked. See readKickoffs().
+  kickoffs: null,
 };
 
 // ------------------------------------------------------------------ formatting
@@ -195,8 +207,20 @@ export function buildModel({
   schedule, rosters, week, teamId = null, isDemo = false,
   benchWeek = week, benchRosters = null,
   odds = null, oddsPending = false,
+  waiverClears = null, kickoffs = null, now = Date.now(),
 }) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
+  // "The lineup as set" means something only for the week being played next:
+  // ESPN carries today's lineup forward into every later week unchanged.
+  const thisWeek = currentWeek(schedule) === week;
+  // Has his NFL game started? The roster reading's own evidence, plus the
+  // kickoff time when the page holds it (a man minutes into his game may have
+  // no stat line yet).
+  const locked = (p) => {
+    if (hasPlayed(p)) return true;
+    const at = kickoffs?.[p.proTeamId]?.[week];
+    return Number.isFinite(at) && at <= now;
+  };
 
   const games = (schedule.byWeek.get(week) || []).map((g) => {
     // Proj on the card: the lineup AS SET, which is what the manager has
@@ -228,6 +252,21 @@ export function buildModel({
     const hasOdds = isNum(homeWinPct);
     const myWinPct = mine && hasOdds ? (g.homeId === teamId ? homeWinPct : 1 - homeWinPct) : null;
 
+    // START A OVER B, on your own game while it can still be acted on. The
+    // win figure is the SAME model as the chance above — same spread, same
+    // opponent total — so it is only quoted where that chance is.
+    let swaps = null;
+    const squad = mine && !bye && !g.played && thisWeek ? roster.get(teamId) : null;
+    if (squad) {
+      swaps = startSit({
+        players: squad.players || [...(squad.starters || []), ...(squad.bench || [])],
+        slots: odds?.projection?.slots ?? null,
+        isLocked: locked,
+        oppPoints: hasOdds ? odds.points(g, g.homeId === teamId ? 'away' : 'home') : null,
+        sigma: hasOdds ? odds.sigma : null,
+      });
+    }
+
     // The favourite the card names is the one the percentage is about, so the
     // highlight, the margin and the chance can never point different ways.
     let favourite = null;
@@ -253,6 +292,7 @@ export function buildModel({
       oddsPending: Boolean(oddsPending && upcoming && !hasOdds),
       mine,
       myWinPct,
+      swaps,
     };
   });
   // His own game leads the list; the rest keep ESPN's order.
@@ -291,7 +331,33 @@ export function buildModel({
     // one where those ten scores are a comparison group.
     benchWeekComplete: benchGames.length > 0 && benchGames.every((g) => g.played),
     benchRostersMissing: !benchFrom?.teams?.length,
+    deadlines: isDemo ? '' : deadlineText({ deadline: schedule.trades?.deadline, waiverClears, now }),
   };
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * "Trade deadline in 12 days · waivers clear Wed" — only the parts the league
+ * gave us, and '' when it gave neither.
+ *
+ * The deadline is `espn.parseTrades`'s, off the schedule read (the Trade
+ * page's line), counted in days the way that page counts them. Waivers are the
+ * `waiverClears` the Players page prints beside a man on waivers; a date that
+ * has passed (a synced copy from before the run) is left out, never guessed
+ * forward.
+ */
+export function deadlineText({ deadline = null, waiverClears = null, now = Date.now() } = {}) {
+  const parts = [];
+  if (Number.isFinite(deadline) && deadline > 0) {
+    parts.push(now >= deadline
+      ? 'Trade deadline passed'
+      : `Trade deadline in ${plural(Math.ceil((deadline - now) / 86400000), 'day')}`);
+  }
+  if (Number.isFinite(waiverClears) && waiverClears > now) {
+    parts.push(`${parts.length ? 'waivers' : 'Waivers'} clear ${DAYS[new Date(waiverClears).getDay()]}`);
+  }
+  return parts.join(' · ');
 }
 
 /**
@@ -545,6 +611,8 @@ async function loadLiveNow(cfg) {
     // A new schedule is a new league as far as the odds are concerned.
     state.odds = null;
     state.oddsTeams = new Map();
+    state.waiverClears = null;
+    state.waiverRead = null;
     state.rosters = await loadRosters(week);
     const odds = startOdds();
     await loadBench();
@@ -677,14 +745,15 @@ function startOdds() {
     // Every demo game is final, so there is no chance to quote.
     state.odds = null;
     state.oddsPending = false;
+    state.waiverClears = null;
     return Promise.resolve();
   }
   state.oddsPending = true;
   const week = state.week;
-  return loadOdds(week).then(
-    (odds) => {
+  const odds = loadOdds(week).then(
+    (got) => {
       if (token !== state.oddsToken) return;
-      state.odds = odds;
+      state.odds = got;
       state.oddsPending = false;
     },
     () => {
@@ -692,6 +761,62 @@ function startOdds() {
       state.oddsPending = false;
     }
   );
+  // The deadlines line and the lineup locks ride the same wait, so the first
+  // paint carries them and nothing arrives a line late.
+  if (!state.waiverRead) state.waiverRead = readWaiverClears();
+  const waivers = state.waiverRead.then((at) => {
+    if (token === state.oddsToken) state.waiverClears = at;
+  });
+  return Promise.all([odds, waivers, readKickoffs()]).then(() => {});
+}
+
+/**
+ * When waivers next clear: the earliest date still ahead on the wire, or null.
+ *
+ * `season.fetchWireWeek` for the week the floor is read for — the same request
+ * `loadOdds` has just made, which js/espn.js shares, so on a laptop this costs
+ * nothing; a phone reads that week's wire from the synced copy once more.
+ * Never throws.
+ */
+async function readWaiverClears() {
+  try {
+    if (typeof season.fetchWireWeek !== 'function') return null;
+    const week = capture.floorWeek(capture.normalizeSchedule(state.schedule, { isDemo: false }));
+    if (!week) return null;
+    const wire = (await season.fetchWireWeek(week)) || [];
+    const now = Date.now();
+    let next = null;
+    for (const p of wire) {
+      const at = p && p.waiverClears;
+      if (Number.isFinite(at) && at > now && (next === null || at < next)) next = at;
+    }
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * NFL kickoffs, so a man whose game has started is not offered as a swap.
+ *
+ * ASKED FOR ONLY WHEN A SWAP IS ON OFFER. Locking a man can only take swaps
+ * away, so a lineup with none to suggest needs no kickoffs at all. When it is
+ * asked, `season.fetchProKickoffs` reuses the bye read's payload where this
+ * page made one; otherwise it is one public read. Kept for the visit: the NFL
+ * schedule is the season's, not the league's. Never throws.
+ */
+async function readKickoffs() {
+  try {
+    if (state.kickoffs || state.isDemo || state.teamId == null) return;
+    if (typeof season.fetchProKickoffs !== 'function') return;
+    const squad = (state.rosters?.teams || []).find((t) => t.id === state.teamId);
+    const s = squad && startSit({ players: squad.players || [] });
+    if (!s || s.best) return;
+    const k = await season.fetchProKickoffs();
+    if (k && Object.keys(k).length) state.kickoffs = k;
+  } catch {
+    /* no kickoffs: the roster's own evidence still locks who has played */
+  }
 }
 
 /** Paint now if the odds come within the grace period; otherwise paint, then again when they do. */
@@ -720,6 +845,8 @@ function draw() {
     benchRosters: state.benchRosters,
     odds: state.isDemo ? null : state.odds,
     oddsPending: !state.isDemo && state.oddsPending,
+    waiverClears: state.isDemo ? null : state.waiverClears,
+    kickoffs: state.isDemo ? null : state.kickoffs,
   }));
 }
 
@@ -728,6 +855,7 @@ function draw() {
 export function render(m) {
   renderHeader(m);
   renderWeekPicker(m);
+  renderDeadlines(m);
   renderMatchups(m);
   renderStrength(m);
   renderInjuries(m);
@@ -745,6 +873,15 @@ function renderHeader(m) {
 
   const pct = m.weeks.length ? Math.round((m.week / m.weeks.length) * 100) : 0;
   $('progressBar').setAttribute('style', `width:${pct}%`);
+}
+
+/** One line above the cards; hidden when the league gave us neither date. */
+function renderDeadlines(m) {
+  const el = $('deadlines');
+  if (!el) return;
+  el.textContent = m.deadlines || '';
+  if (m.deadlines) el.removeAttribute('hidden');
+  else el.setAttribute('hidden', '');
 }
 
 function renderWeekPicker(m) {
@@ -852,7 +989,43 @@ function renderMatchups(m) {
   } else {
     $('matchupsExplain').textContent = '';
   }
-  tuck('matchupsExplain', withChance);
+  // The basis of the swap line (rule 7), behind the toggle with the rest.
+  const withSwaps = m.games.some((g) => g.swaps && !g.swaps.best);
+  if (withSwaps) $('matchupsExplain').innerHTML += (withChance ? ' ' : '') + SWAP_EXPLAIN;
+  tuck('matchupsExplain', withChance || withSwaps);
+}
+
+const SWAP_EXPLAIN =
+  '<strong>Start &hellip; over &hellip;</strong> is your lineup as set against the best legal ' +
+  'one on ESPN&rsquo;s projections for this week; a player whose game has started stays where ' +
+  'he is. <strong>pts</strong> is one projection minus the other. <strong>win</strong> is what ' +
+  'the swap adds to your win chance, read against the same spread and the same opponent ' +
+  'total, each swap on top of the one above it. The win chance on the card already assumes ' +
+  'you make them.';
+
+/** How many swaps the card prints, biggest first. */
+const MAX_SWAPS = 2;
+
+/** A gain in win chance, in whole points of percent; never "+0%". */
+function winText(p) {
+  const v = p * 100;
+  return v < 0.5 ? '+&lt;1%' : `+${Math.round(v)}%`;
+}
+
+/**
+ * The lines under your own card: one per swap, or three words when the lineup
+ * as set is already the best one. The names link to the Players page like
+ * every other player on this dashboard.
+ */
+function swapLines(s) {
+  if (!s) return '';
+  if (s.best) return '<div class="gswap">Best lineup set</div>';
+  const who = (p) => pref(p.playerId, p.name, esc(shortName(p)));
+  return s.swaps.slice(0, MAX_SWAPS).map((w) =>
+    `<div class="gswap">Start ${who(w.in)}${w.out ? ` over ${who(w.out)}` : ''}: ` +
+    `<span class="pos">+${fmt(w.points)} pts</span>` +
+    `${w.win === null ? '' : `, ${winText(w.win)} win`}</div>`
+  ).join('');
 }
 
 /** The method behind the percentages, including where the spread came from. */
@@ -928,6 +1101,7 @@ function gameCard(g, teamId) {
       ${side('home', g.homeName, g.homeProjected, g.homeScore, g.homeId)}
       ${bye ? '' : side('away', g.awayName, g.awayProjected, g.awayScore, g.awayId)}
       <div class="gmeta">${meta}</div>
+      ${swapLines(g.swaps)}
     </div>`;
 }
 
@@ -1281,7 +1455,12 @@ onConnection((conn) => {
   const stillDemo = state.isDemo;
   if (conn.teamId != null) state.teamId = conn.teamId;
   if (stillDemo && state.source === 'live') loadLive();
-  else draw();
+  else {
+    draw();
+    // A newly chosen team may have a swap on offer, and so need the kickoffs.
+    const had = state.kickoffs;
+    readKickoffs().then(() => { if (state.kickoffs !== had) draw(); });
+  }
 });
 
 // Demo first, always: the page is never blank, and never shows an error before

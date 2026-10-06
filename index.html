@@ -68,6 +68,9 @@
   font-size: 12px;
   color: var(--dim);
 }
+/* "Start A over B" under your own card: the same small type as the line above
+   it, one swap to a line. */
+.gswap { margin-top: 4px; font-size: 12px; color: var(--dim); }
 .ghead {
   display: flex;
   justify-content: space-between;
@@ -209,6 +212,7 @@ a.pref:focus-visible {
 
   <section class="panel">
     <h2 id="matchupsTitle">This week</h2>
+    <p class="lede" id="deadlines" hidden></p>
     <div id="matchups"></div>
     <p class="panel-note" id="matchupsNote"></p>
     <details class="explain" hidden>

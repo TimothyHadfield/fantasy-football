@@ -74,6 +74,7 @@ const SUITES = [
   ['test-trade-progress.mjs', 'the trade page in a week partly played: a finished man’s number is his score, and one early final does not end the week'],
   ['test-live-week.mjs','the week in progress: played out from its score so far and the share of the spread left, not from kickoff'],
   ['test-decisions.mjs', 'the decisions review: one decision undone and the season replayed, flips, records, noise'],
+  ['test-start-sit.mjs', 'start A over B: the swaps to the best legal lineup, their points, their share of the win chance, who is locked'],
   ['test-accept-by.mjs','when a trade must be accepted: first kickoff among the men you get, minus the league’s review'],
   ['test-ask-ai.mjs', 'the "Ask AI" text: both sides’ +/-, the men, the date and league, nothing undefined'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],

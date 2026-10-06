@@ -335,6 +335,15 @@ if (process.argv[2]) {
       if (facts.demoWeekOptions !== 13) problems.push(`demo: ${facts.demoWeekOptions} week options, expected 13`);
       if (process.env.DUMP_DEMO) console.error($(process.env.DUMP_DEMO)?.innerHTML || '(none)');
 
+      // The sample league has no lineup to fix and no dates to count down to:
+      // neither new line may appear on it.
+      facts.demoSwaps = document.querySelectorAll('#matchups .gswap').length;
+      if (facts.demoSwaps) problems.push(`demo: ${facts.demoSwaps} start/sit line(s) on the sample league`);
+      if (!$('deadlines')) problems.push('demo: the deadlines line has no element');
+      else if (onScreen($('deadlines')) || text('deadlines')) {
+        problems.push(`demo: the deadlines line shows "${text('deadlines')}" on the sample league`);
+      }
+
       // --- player references, against the real demo data -------------------
       //
       // The ids are checked against the roster payload the demo generator
@@ -793,6 +802,161 @@ if (process.argv[2]) {
             problems.push(`pref: an unlinked name cell reads "${cellText(lameRow.children[0])}", expected "${lame.name} ${lame.position}"`);
           }
         }
+
+        // --- start A over B, on your own card --------------------------------
+        //
+        // The pre-kickoff league again, with the Cobras (team 3, "you") holding
+        // an RB on the bench projected 20.0 above the 12.4 they start: one swap,
+        // +7.6. `withBench` rebuilds a squad's bench so `players`, `starters`
+        // and `bench` stay the same objects, as js/season.js hands them over.
+        const withBench = (fx0, teamId, change) => ({
+          ...fx0,
+          rosters: {
+            ...fx0.rosters,
+            teams: fx0.rosters.teams.map((t) => {
+              if (t.id !== teamId) return t;
+              const bench = t.bench.map((p) => ({ ...p, ...change }));
+              return { ...t, bench, players: [...t.starters, ...bench] };
+            }),
+          },
+        });
+        const swapText = () => Array.from(document.querySelectorAll('#matchups .gswap'))
+          .map((el) => el.textContent.replace(/\s+/g, ' ').trim());
+        const mineCard = () => document.querySelector('#matchups .game.mine');
+
+        // (1) The lineup as set is the best one: three words, on your card only.
+        home.render(home.buildModel(preKickoff()));
+        facts.swapBest = swapText();
+        if (JSON.stringify(facts.swapBest) !== JSON.stringify(['Best lineup set'])) {
+          problems.push(`swap: a right lineup reads ${JSON.stringify(facts.swapBest)}, expected ["Best lineup set"]`);
+        }
+        if (!mineCard()?.querySelector('.gswap')) problems.push('swap: the line is not inside your own card');
+
+        // (2) One swap, no odds yet: the points, and no win figure.
+        const swapFx = withBench(preKickoff(), 3, { projected: 20 });
+        home.render(home.buildModel(swapFx));
+        facts.swapOne = swapText();
+        const wantOne = 'Start B. Cobras over R. Cobras: +7.6 pts';
+        if (JSON.stringify(facts.swapOne) !== JSON.stringify([wantOne])) {
+          problems.push(`swap: one swap reads ${JSON.stringify(facts.swapOne)}, expected ["${wantOne}"]`);
+        }
+        const swapLinks = Array.from(document.querySelectorAll('#matchups .gswap a.pref'))
+          .map((a) => a.getAttribute('href'));
+        const c3 = swapFx.rosters.teams.find((t) => t.id === 3);
+        const wantLinks = [c3.bench[0], c3.starters[1]].map((p) => `waivers.html?player=${p.playerId}`);
+        if (JSON.stringify(swapLinks) !== JSON.stringify(wantLinks)) {
+          problems.push(`swap: the two names link to ${JSON.stringify(swapLinks)}, expected ${JSON.stringify(wantLinks)}`);
+        }
+        if (!onScreen($('matchupsExplain')?.closest('details')) || !/Start . over ./.test(text('matchupsExplain'))) {
+          problems.push(`swap: "How this works" does not say what the line is: "${text('matchupsExplain').slice(0, 90)}"`);
+        }
+
+        // (3) With the page's odds: the win figure is the same model's. The
+        // Cobras' set lineup is QB 18.6 + RB 12.4 + WR 11.2 = 42.2 and their
+        // best is 49.8; the opponent total is put at 49.8 and the margin's sd
+        // at 10, so the swap is worth Φ(0) − Φ(−0.76) = 0.5 − 0.22363 = 27.6%.
+        const fakeOdds = {
+          sigma: 10 / Math.SQRT2, calibrated: true, sample: 12, floors: null,
+          projection: { slots: [0, 2, 4] },
+          points: () => 49.8,
+          forGame: () => 0.5,
+        };
+        home.render(home.buildModel({ ...swapFx, odds: fakeOdds }));
+        facts.swapWin = swapText();
+        const wantWin = 'Start B. Cobras over R. Cobras: +7.6 pts, +28% win';
+        if (JSON.stringify(facts.swapWin) !== JSON.stringify([wantWin])) {
+          problems.push(`swap: with odds it reads ${JSON.stringify(facts.swapWin)}, expected ["${wantWin}"]`);
+        }
+
+        // (4) Nobody chosen as "you": nothing, on any card.
+        home.render(home.buildModel({ ...swapFx, teamId: null }));
+        if (swapText().length) problems.push(`swap: no team chosen, yet ${JSON.stringify(swapText())}`);
+
+        // (5) The better man has already played (his score is in): not offered.
+        home.render(home.buildModel(withBench(preKickoff(), 3, { projected: 20, actual: 3.2 })));
+        if (JSON.stringify(swapText()) !== JSON.stringify(['Best lineup set'])) {
+          problems.push(`swap: a bench man who has played is offered: ${JSON.stringify(swapText())}`);
+        }
+
+        // (6) ...and so is one whose game kicked off a minute ago, by the clock.
+        const kickedAt = Date.now() - 60000;
+        home.render(home.buildModel({
+          ...withBench(preKickoff(), 3, { projected: 20, proTeamId: 12 }),
+          kickoffs: { 12: { 1: kickedAt } }, now: Date.now(),
+        }));
+        if (JSON.stringify(swapText()) !== JSON.stringify(['Best lineup set'])) {
+          problems.push(`swap: a bench man whose game has kicked off is offered: ${JSON.stringify(swapText())}`);
+        }
+        // A kickoff still ahead locks nobody.
+        home.render(home.buildModel({
+          ...withBench(preKickoff(), 3, { projected: 20, proTeamId: 12 }),
+          kickoffs: { 12: { 1: Date.now() + 3600000 } }, now: Date.now(),
+        }));
+        if (JSON.stringify(swapText()) !== JSON.stringify([wantOne])) {
+          problems.push(`swap: a kickoff an hour away hid the swap: ${JSON.stringify(swapText())}`);
+        }
+
+        // (7) A finished week has no lineup left to fix.
+        home.render(home.buildModel(finishedWeek()));
+        if (swapText().length) problems.push(`swap: a final week still says ${JSON.stringify(swapText())}`);
+
+        // (8) Only the two biggest are printed, biggest first. The Cobras get a
+        // second bench man: a QB projected 30.0 over the 18.6 they start (+11.4).
+        const two = withBench(preKickoff(), 3, { projected: 20 });
+        const t3 = two.rosters.teams.find((t) => t.id === 3);
+        const extra = [
+          { ...t3.bench[0], playerId: 391, name: 'Spare Passer', position: 'QB', projected: 30 },
+          { ...t3.bench[0], playerId: 392, name: 'Spare Catcher', position: 'WR', projected: 12 },
+        ];
+        t3.bench.push(...extra);
+        t3.players.push(...extra);
+        home.render(home.buildModel(two));
+        facts.swapTwo = swapText();
+        const wantTwo = [
+          'Start S. Passer over Q. Cobras: +11.4 pts',
+          'Start B. Cobras over R. Cobras: +7.6 pts',
+        ];
+        if (JSON.stringify(facts.swapTwo) !== JSON.stringify(wantTwo)) {
+          problems.push(`swap: three swaps on offer read ${JSON.stringify(facts.swapTwo)}, expected ${JSON.stringify(wantTwo)}`);
+        }
+
+        // --- the deadlines line ----------------------------------------------
+        //
+        // 2026-10-06 12:00 UTC is "now"; the deadline is eleven and a half days
+        // on (counted up to 12, as the Trade page counts), and waivers clear on
+        // the 7th at 12:00 UTC — a Wednesday from UTC−11 to UTC+11.
+        const NOW = Date.UTC(2026, 9, 6, 12);
+        const DAY = 86400000;
+        const dated = (trades, waiverClears) => {
+          const fx0 = preKickoff();
+          return { ...fx0, schedule: { ...fx0.schedule, trades }, waiverClears, now: NOW };
+        };
+        const WED = Date.UTC(2026, 9, 7, 12);
+        const lineFor = (trades, waiverClears) => {
+          home.render(home.buildModel(dated(trades, waiverClears)));
+          return onScreen($('deadlines')) ? text('deadlines') : null;
+        };
+
+        facts.deadBoth = lineFor({ deadline: NOW + 11.5 * DAY, reviewHours: 24 }, WED);
+        if (facts.deadBoth !== 'Trade deadline in 12 days · waivers clear Wed') {
+          problems.push(`deadlines: both parts read ${JSON.stringify(facts.deadBoth)}`);
+        }
+        const panel = $('deadlines')?.closest('section');
+        if (!panel || panel !== $('matchups')?.closest('section')) {
+          problems.push('deadlines: the line is not in the This week panel');
+        } else if (!(panel.innerHTML.indexOf('id="deadlines"') < panel.innerHTML.indexOf('id="matchups"'))) {
+          problems.push('deadlines: the line is not above the cards');
+        }
+        facts.deadTrade = lineFor({ deadline: NOW + 1, reviewHours: null }, null);
+        if (facts.deadTrade !== 'Trade deadline in 1 day') problems.push(`deadlines: one day reads ${JSON.stringify(facts.deadTrade)}`);
+        facts.deadWaivers = lineFor(null, WED);
+        if (facts.deadWaivers !== 'Waivers clear Wed') problems.push(`deadlines: waivers alone read ${JSON.stringify(facts.deadWaivers)}`);
+        facts.deadPassed = lineFor({ deadline: NOW - DAY, reviewHours: 24 }, NOW - 1);
+        if (facts.deadPassed !== 'Trade deadline passed') problems.push(`deadlines: a passed deadline and a passed waiver run read ${JSON.stringify(facts.deadPassed)}`);
+        facts.deadNone = lineFor({ deadline: null, reviewHours: null }, null);
+        if (facts.deadNone !== null) problems.push(`deadlines: a league with neither date shows ${JSON.stringify(facts.deadNone)}`);
+        home.render(home.buildModel({ ...dated({ deadline: NOW + 5 * DAY }, WED), isDemo: true }));
+        if (onScreen($('deadlines'))) problems.push(`deadlines: shown on demo data: "${text('deadlines')}"`);
       }
     }
 
