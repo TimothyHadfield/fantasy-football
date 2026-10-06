@@ -224,6 +224,80 @@ const gridTd = (document, grid, teamId, player) =>
     }) || null;
 
 /**
+ * Weekly totals and Season by week as they stand, for the "Actual history"
+ * scenarios: the group label and its select, the last header row (the one
+ * sortable.js reads), every body cell, the Starting lineup band and the League
+ * row. `html` is the cell's whole markup, so "nothing else changed" can be
+ * asked of a column character for character.
+ */
+function historySnap(document) {
+  const t = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+  const cell = (td) => ({
+    text: t(td),
+    v: td.getAttribute('data-v'),
+    cls: td.getAttribute('class') || '',
+    pid: td.getAttribute('data-pid'),
+    title: td.getAttribute('title') || '',
+    label: (td.querySelector('a.pref') || { getAttribute: () => '' }).getAttribute('aria-label') || '',
+    html: td.outerHTML,
+  });
+  const group = (table) => {
+    const th = table.querySelector('thead th.hist-group');
+    if (!th) return null;
+    const sel = th.querySelector('select[data-history]');
+    const on = sel && (sel.querySelector('option[selected]') || sel.querySelector('option'));
+    return {
+      // What a reader sees: the chosen word, then the rest of the heading.
+      label: `${on ? on.textContent.trim() : ''} ${t(th).replace(t(sel), '').trim()}`,
+      value: sel ? sel.value : null,
+      options: sel ? [...sel.querySelectorAll('option')].map((o) => o.textContent.trim()) : [],
+      span: Number(th.getAttribute('colspan')),
+      rowCls: th.parentElement.getAttribute('class') || '',
+      title: th.getAttribute('title') || '',
+    };
+  };
+  const head = (table) => [...table.querySelectorAll('thead tr:last-child th')].map((th) => ({
+    text: t(th),
+    cls: th.getAttribute('class') || '',
+    title: th.getAttribute('title') || '',
+    live: Boolean(th.querySelector('.badge.live.wk-live')),
+    sortable: th.hasAttribute('data-sort'),
+  }));
+  const totals = document.getElementById('totalsTable');
+  const season = document.getElementById('seasonTable');
+  const foot = totals.querySelector('tfoot tr');
+  const band = document.querySelector('#seasonTotals tr');
+  return {
+    title: t(document.getElementById('seasonTitle')),
+    note: t(document.getElementById('seasonNote')),
+    totals: {
+      group: group(totals),
+      head: head(totals),
+      rows: [...totals.querySelectorAll('tbody tr')].map((tr) => ({
+        team: t(tr.children[0]),
+        cells: [...tr.children].slice(1).map(cell),      // Avg, then the weeks
+      })),
+      foot: foot && {
+        rows: totals.querySelectorAll('tfoot tr').length,
+        inBody: Boolean(totals.querySelector('tbody tr.league-row')),
+        cls: foot.getAttribute('class') || '',
+        label: t(foot.children[0]),
+        cells: [...foot.children].slice(1).map(cell),
+      },
+    },
+    season: {
+      group: group(season),
+      head: head(season),
+      rows: [...document.querySelectorAll('#seasonSlots tr')].map((tr) => ({
+        slot: t(tr.children[0]),
+        cells: [...tr.children].slice(1).map(cell),
+      })),
+      band: band ? [...band.children].slice(1).map(cell) : [],
+    },
+  };
+}
+
+/**
  * One visit's worth of team choices, for (n) and (o): what it opens on, the
  * connection bar changing "your team", a tap on the grid, what got saved, and
  * a reload of the league in the same visit.
@@ -380,6 +454,73 @@ const SCENARIOS = {
     prefs: { 'analysis.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
   },
+  // ---- "Actual history" (Tim, 2026-10-05) --------------------------------
+  //
+  // A week that has been played now shows what HAPPENED — the lineup really
+  // started and what it scored — and only the weeks still to come are the
+  // best-lineup projection. `live` above has seven played weeks, so it proves
+  // both halves at once. These three are the edges of it:
+  //
+  //   no-history    nobody has played a week: both tables are projections from
+  //                 the first column to the last, there is no label, no select
+  //                 and no heavy line — the page exactly as it was before.
+  //   history-proj  the same league as `live`, switched to Proj on one table:
+  //                 BOTH tables change, the choice is saved per league, and
+  //                 switching back restores every character.
+  //   history-live  week 8 is being played (AN_DONE): it joins the history,
+  //                 carries LIVE, and only finished starters count.
+  'no-history': {
+    label: '(y) nothing played yet: no history label, every week a projection',
+    stub: true,
+    env: { AN_SCHEDULE_PLAYED: '0' },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+  },
+  'history-proj': {
+    label: '(z) Actual history: the select drives both tables, and is remembered',
+    stub: true,
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window }) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const snap = () => historySnap(document);
+      const pick = (table, value) => {
+        const sel = document.querySelector(`#${table} select[data-history]`);
+        if (!sel) return;       // no select: the check says so, rather than a crash here
+        sel.value = value;
+        sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      };
+      const out = { actual: snap() };
+      pick('seasonTable', 'proj');
+      await sleep(80);
+      out.proj = snap();
+      out.saved = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}');
+      pick('totalsTable', 'actual');
+      await sleep(80);
+      out.back = snap();
+      out.savedBack = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}');
+      globalThis.__an = out;
+    },
+  },
+  'history-live': {
+    label: '(aa) Actual history: the week being played is in it, tagged LIVE',
+    stub: true,
+    env: { AN_DONE: '1' },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 3 },
+    after: async ({ document, window }) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const out = { actual: historySnap(document) };
+      const sel = document.querySelector('#totalsTable select[data-history]');
+      if (sel) {
+        sel.value = 'proj';
+        sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      }
+      await sleep(80);
+      out.proj = historySnap(document);
+      globalThis.__an = out;
+    },
+  },
   'live-partial': {
     label: '(c) stubbed live league, weeks 5 and 11 reject',
     stub: true,
@@ -398,7 +539,7 @@ const SCENARIOS = {
       // The SLOT rows only — the totals band is a tbody of its own and would
       // otherwise land in the middle of every "is this column sorted" check.
       const snap = () => ({
-        cols: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
+        cols: [...table.querySelectorAll('thead tr:last-child th')].map((th) => th.textContent.trim()),
         rows: [...table.querySelectorAll('#seasonSlots tr')].map((tr) => ({
           cls: tr.getAttribute('class') || '',
           slot: tr.children[0].textContent.trim(),
@@ -464,7 +605,7 @@ const SCENARIOS = {
 
       // --- sorting week columns ------------------------------------------------
       // Slot, Avg, then one column per week — so week N is header N + 1.
-      const ths = [...table.querySelectorAll('thead th')];
+      const ths = [...table.querySelectorAll('thead tr:last-child th')];
       click(ths[8]);               // week 7 — one man has no number that week
       out.wk7desc = snap();
       click(ths[8]);
@@ -590,7 +731,7 @@ const SCENARIOS = {
       // nothing to do with the grid's measure.
       const elsewhere = () => ({
         weekSelect: $('weekSelect').value,
-        seasonNow: [...$('seasonTable').querySelectorAll('thead th')]
+        seasonNow: [...$('seasonTable').querySelectorAll('thead tr:last-child th')]
           .filter((th) => /\bnow\b/.test(th.getAttribute('class') || ''))
           .map((th) => th.textContent.trim()),
         glanceWeek: ([...document.querySelectorAll('#teamGlance .stat')]
@@ -623,7 +764,7 @@ const SCENARIOS = {
       await setMeasure('avg');
       await settleSeason();
       out.avg = await snap();
-      out.weeksRead = [...document.querySelectorAll('#seasonTable thead th')]
+      out.weeksRead = [...document.querySelectorAll('#seasonTable thead tr:last-child th')]
         .map((th) => th.textContent.trim()).filter((t) => /^\d+/.test(t)).length;
       // The Season by week band's own Avg for the drilled-into squad (team 4).
       // The grid's Total on this measure has to BE this number — that is the
@@ -728,7 +869,7 @@ const SCENARIOS = {
           .textContent?.trim() ?? null,
         // ...while the REST of the page is still on the week the picker says.
         week: $('weekSelect').value,
-        seasonNow: [...$('seasonTable').querySelectorAll('thead th')]
+        seasonNow: [...$('seasonTable').querySelectorAll('thead tr:last-child th')]
           .filter((th) => /\bnow\b/.test(th.getAttribute('class') || ''))
           .map((th) => th.textContent.trim()),
       };
@@ -1043,7 +1184,7 @@ const SCENARIOS = {
       const totMine = totRows.find((tr) => tr.children[0].textContent.trim() === out.team);
       out.weeklyTotals = {
         rows: totRows.length,
-        head: [...document.querySelectorAll('#totalsTable thead th')].map((th) => th.textContent.trim()),
+        head: [...document.querySelectorAll('#totalsTable thead tr:last-child th')].map((th) => th.textContent.trim()),
         mine: totMine ? [...totMine.children].slice(2).map((td) => td.getAttribute('data-v')) : null,
       };
       out.bars = t($('seasonBars'));
@@ -1239,6 +1380,20 @@ const SCENARIOS = {
       globalThis.__an = out;
     },
   },
+  // `byes-known` again with its bye week (6) STILL TO COME. Since 2026-10-05 a
+  // played week shows the lineup really started, so the season panel only says
+  // "Bye" about a week ahead — and `byes-known` itself, where week 6 has been
+  // played, now proves the other half: that week shows the score, not a Bye.
+  // The saved week is 8 so the page still opens where every reading expects.
+  'byes-ahead': {
+    label: '(j2) byes known, the bye week still to come: the season panel says Bye',
+    stub: true,
+    byes: true,
+    env: { AN_SCHEDULE_PLAYED: '5', AN_BYES: '{"1":6}', AN_OUT_ZERO: '8,10', AN_DST_ZERO: '6,9' },
+    prefs: { 'analysis.source': 'live', 'analysis.week': 8 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: (ctx) => SCENARIOS['byes-known'].after(ctx),
+  },
   // THE POSITIONAL FLOOR (Tim, 2026-09-18): no slot assessed below what the
   // waiver wire would give you at that position, and the lifted ones drawn in
   // orange. The floors here are deliberately HIGH — a 14.0 kicker and a 20.0
@@ -1250,7 +1405,10 @@ const SCENARIOS = {
     label: '(t) the waiver floor: a bye is assessed at the wire, in orange',
     stub: true,
     byes: true,
-    env: { AN_BYES: '{"1":6}', AN_DST_ZERO: '6', AN_FLOORS: '{"K":14,"DST":20,"QB":3,"RB":3,"WR":3,"TE":3}' },
+    // AN_SCHEDULE_PLAYED 5 since 2026-10-05: a floor is an assessment of a week
+    // STILL TO COME, and a played week now shows what happened instead. So the
+    // bye week this scenario is about (6) has to be one nobody has played.
+    env: { AN_SCHEDULE_PLAYED: '5', AN_BYES: '{"1":6}', AN_DST_ZERO: '6', AN_FLOORS: '{"K":14,"DST":20,"QB":3,"RB":3,"WR":3,"TE":3}' },
     prefs: { 'analysis.source': 'live', 'analysis.week': 6 },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
@@ -1285,7 +1443,9 @@ const SCENARIOS = {
     label: '(k) byes known and not week 6: that zero is a real 0.0, and a future saved week is kept',
     stub: true,
     byes: true,
-    env: { AN_BYES: '{"1":11}', AN_DST_ZERO: '6' },
+    // (week 6 must be a week still to come for its projected zero to be drawn
+    // at all — see `floors` — hence AN_SCHEDULE_PLAYED.)
+    env: { AN_SCHEDULE_PLAYED: '5', AN_BYES: '{"1":11}', AN_DST_ZERO: '6' },
     prefs: { 'analysis.source': 'live', 'analysis.week': 11 },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
@@ -1452,7 +1612,9 @@ const SCENARIOS = {
     label: '(x) a TE projecting 0 in the FLEX: every panel assesses the spot at the flex floor',
     stub: true,
     flexZero: true,
-    env: { AN_FLOORS: '{"RB":3,"WR":11.1,"TE":6.2}' },
+    // Nothing played (2026-10-05): every one of the thirteen weeks is still an
+    // assessment, which is what "every Season by week FLEX cell" below means.
+    env: { AN_SCHEDULE_PLAYED: '0', AN_FLOORS: '{"RB":3,"WR":11.1,"TE":6.2}' },
     prefs: { 'analysis.source': 'live', 'analysis.week': 8, 'analysis.measure': 'week' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => {
@@ -1465,7 +1627,7 @@ const SCENARIOS = {
           !document.querySelector('#seasonTable td.wait')) break;
         await sleep(20);
       }
-      const sheetHead = [...document.querySelectorAll('#seasonTable thead th')].map((th) => th.textContent.trim());
+      const sheetHead = [...document.querySelectorAll('#seasonTable thead tr:last-child th')].map((th) => th.textContent.trim());
       const avgAt = sheetHead.findIndex((t) => /^Avg\b/.test(t));
       const rowFor = (key) => [...document.querySelectorAll('#seasonSlots tr')]
         .find((tr) => tr.children[0].textContent.trim() === key);
@@ -1558,6 +1720,297 @@ async function checkFlexFloor(c, boot) {
  * league's ten slots (most restrictive first, FLEX last), then each assessed at
  * max(projection, floor). Nothing is read back off the page to build it.
  */
+// ------------------------------------------------- "Actual history" (2026-10-05)
+//
+// TIM: "both the weekly totals and season by week chart show a little
+// missleading or completely wrong info for current/past weeks. Instead of doing
+// whatever we're doing now, just put a label above those weeks that says
+// "Actual History" or something like that and then just show the numbers they
+// actually recieved for that week, not anything different. Additionally, make
+// the seperating the future weeks and past weeks thicker and more noticable.
+// Also, make the "Actual" word on "actual history" a drop down that you can
+// change with proj ... add another row at the bottom seperated from the rest
+// that is just the avg of the user's weeks or whatever to show where the line
+// is."
+//
+// EVERY EXPECTED NUMBER IS WORKED OUT HERE FROM THE STUB'S OWN FORMULAS — a
+// starter scores 15 - i x 0.7 and was projected `projFor(i, week)` — never
+// read back off the page. Before the change a played week drew the best legal
+// lineup's projection (146.7 in week 1 for a squad that scored 109.8), so each
+// "scored" assertion below failed on the old code; that was watched.
+async function checkHistory(c, scenario) {
+  const w = globalThis.__an || {};
+  const season = await import('./an-stub-season.mjs');
+  const live = scenario === 'history-live';
+  const TEAM = live ? 3 : 4;                      // the squad the season panel is on
+  const PLAYED = season.SCHEDULE_PLAYED_THROUGH;  // 7: the schedule's finished weeks
+  const HIST = live ? season.DONE_WEEK : PLAYED;  // the last history column
+  const FUT = HIST + 1;                           // the first week still to come
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const num = (v) => (v === null || v === '' ? null : Number(v));
+  const same = (got, want) => (want === null ? got === null : got !== null && Math.abs(got - want) < 0.051);
+  const STARTERS = season.SLOTS.map((s, i) => (s === 20 ? -1 : i)).filter((i) => i >= 0);
+  const score = (i) => r1(15 - i * 0.7);
+  const A = w.actual;
+  const P = w.proj;
+  const teams = Array.from({ length: season.NTEAMS }, (_, i) => i + 1);
+
+  // AN_DONE, week 8 (an-stub-season.mjs): team 1 all done and its FLEX scored
+  // 0; team 2 every starter done; team 3 players 00, 01 and 03 done and 05
+  // mid-game; everybody else has not finished. A man not finished has NO score
+  // — a running 4.2 is not a result — so he counts for nothing on Actual.
+  const doneIn = (team, i) => team === 1 || team === 2 || (team === 3 && [0, 1, 3].includes(i));
+  const scoreIn = (team, i, week) => {
+    if (!live || week !== season.DONE_WEEK) return score(i);
+    if (!doneIn(team, i)) return null;
+    return team === 1 && i === 6 ? 0 : score(i);
+  };
+  const sum = (xs) => {
+    const got = xs.filter((v) => typeof v === 'number');
+    return got.length ? r1(got.reduce((a, b) => a + b, 0)) : null;
+  };
+  const mean = (xs) => {
+    const got = xs.filter((v) => typeof v === 'number');
+    return got.length ? r1(got.reduce((a, b) => a + b, 0) / got.length) : null;
+  };
+  const wantTotal = (team, week, mode) => sum(STARTERS.map((i) =>
+    (mode === 'proj' ? season.projFor(i, week) : scoreIn(team, i, week))));
+  /** slot key -> starter index: the lineup really started, ranked on projection. */
+  const wantSlots = (week) => {
+    const order = [0, 2, 2, 4, 4, 6, 23, 16, 17];
+    const bySlot = new Map();
+    for (const i of STARTERS) {
+      const id = season.SLOTS[i];
+      if (!bySlot.has(id)) bySlot.set(id, []);
+      bySlot.get(id).push(i);
+    }
+    for (const l of bySlot.values()) {
+      l.sort((a, b) => (season.projFor(b, week) ?? -Infinity) - (season.projFor(a, week) ?? -Infinity) || a - b);
+    }
+    const counts = new Map();
+    return order.map((id) => {
+      const n = (counts.get(id) || 0) + 1;
+      counts.set(id, n);
+      return bySlot.get(id)[n - 1];
+    });
+  };
+  const histWeeks = Array.from({ length: HIST }, (_, i) => i + 1);
+  const allWeeks = Array.from({ length: 16 }, (_, i) => i + 1);
+
+  // Everything below reads these three, so their absence is said once, plainly.
+  c.ok('HISTORY: both tables carry the group label with its select, and Weekly totals a League row',
+    Boolean(A && A.totals.group && A.season.group && A.totals.foot && P),
+    JSON.stringify(A && { totals: A.totals.group, season: A.season.group, foot: Boolean(A.totals.foot) }));
+  if (!(A && A.totals.group && A.season.group && A.totals.foot && P)) return c.out;
+
+  // ---- the label and its select, on both tables ---------------------------
+  for (const [name, snap] of [['WEEKLY TOTALS', A.totals], ['SEASON BY WEEK', A.season]]) {
+    const g = snap.group;
+    c.ok(`HISTORY ${name}: a group label sits above the played weeks and reads “Actual history”`,
+      Boolean(g) && g.label === 'Actual history' && /\bcolgroup\b/.test(g.rowCls), JSON.stringify(g));
+    c.ok(`HISTORY ${name}: it spans exactly the history columns (${HIST})`,
+      Boolean(g) && g.span === HIST, g && String(g.span));
+    c.ok(`HISTORY ${name}: “Actual” is a select offering Actual and Proj, on Actual by default`,
+      Boolean(g) && JSON.stringify(g.options) === JSON.stringify(['Actual', 'Proj']) && g.value === 'actual',
+      JSON.stringify(g));
+    c.ok(`HISTORY ${name}: the row sortable.js reads is unchanged — one header per column, all sortable`,
+      JSON.stringify(snap.head.slice(2).map((h) => h.text.replace(/live$/i, '').trim())) ===
+        JSON.stringify(SEASON_COLS) && snap.head.every((h) => h.sortable) &&
+      snap.head[1].text === 'Avg',
+      JSON.stringify(snap.head.map((h) => h.text)));
+  }
+
+  // ---- Weekly totals: the real score, every squad, every played week ------
+  const totalsBad = [];
+  for (const row of A.totals.rows) {
+    const team = Number(row.team.replace('Team ', ''));
+    for (const wk of histWeeks) {
+      const want = wantTotal(team, wk, 'actual');
+      const got = num(row.cells[wk].v);
+      if (!same(got, want)) totalsBad.push(`${row.team} wk${wk} want ${want} got ${got}`);
+      if (want === null && row.cells[wk].text !== '—') totalsBad.push(`${row.team} wk${wk} drew "${row.cells[wk].text}"`);
+    }
+  }
+  c.ok('HISTORY: WEEKLY TOTALS SHOWS EVERY SQUAD’S REAL SCORE IN EVERY PLAYED WEEK (109.8 on the stub)',
+    A.totals.rows.length === season.NTEAMS && totalsBad.length === 0, totalsBad.slice(0, 5).join(' | '));
+  c.ok('HISTORY: and each of those cells says so in words',
+    A.totals.rows.every((row) => /: Week 1: scored 109\.8\./.test(row.cells[1].title)),
+    A.totals.rows[0].cells[1].title);
+
+  // ---- Season by week: the real starters, slot by slot --------------------
+  const SLOT_KEYS = ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'TE', 'FLEX', 'D/ST', 'K'];
+  const slotBad = [];
+  const projBad = [];
+  for (const wk of histWeeks) {
+    const who = wantSlots(wk);
+    SLOT_KEYS.forEach((key, n) => {
+      const i = who[n];
+      const a = A.season.rows.find((r) => r.slot === key).cells[wk];
+      const p = P.season.rows.find((r) => r.slot === key).cells[wk];
+      const pid = String(TEAM * 100 + i);
+      const wantA = scoreIn(TEAM, i, wk);
+      const wantP = season.projFor(i, wk);
+      if (a.pid !== pid || !same(num(a.v), wantA)) slotBad.push(`${key} wk${wk} want #${pid} ${wantA} got #${a.pid} ${a.v}`);
+      if (p.pid !== pid || !same(num(p.v), wantP === null ? null : r1(wantP))) {
+        projBad.push(`${key} wk${wk} want #${pid} ${wantP} got #${p.pid} ${p.v}`);
+      }
+    });
+  }
+  c.ok('HISTORY: SEASON BY WEEK SHOWS THE MAN WHO REALLY STARTED IN EACH SLOT, AT HIS REAL POINTS',
+    slotBad.length === 0, slotBad.slice(0, 5).join(' | '));
+  c.ok('HISTORY: PROJ SHOWS THOSE SAME STARTERS AT WHAT THEY WERE PROJECTED BEFORE KICKOFF',
+    projBad.length === 0, projBad.slice(0, 5).join(' | '));
+  {
+    const qbA = A.season.rows[0].cells[1];
+    const qbP = P.season.rows[0].cells[1];
+    c.ok('HISTORY: a played cell says who started and what he scored…',
+      new RegExp(`^T${TEAM} Player 00 started at QB in week 1 and scored 15\\.0\\.`).test(qbA.label), qbA.label);
+    c.ok('HISTORY: …and on Proj, what he was projected before kickoff',
+      new RegExp(`^T${TEAM} Player 00 started at QB in week 1, projected 20\\.3 before kickoff\\.`).test(qbP.label),
+      qbP.label);
+  }
+  const bandOf = (snap) => snap.season.band.slice(1, 1 + HIST).map((x) => num(x.v));
+  const rowOf = (snap) => snap.totals.rows.find((r) => r.team === `Team ${TEAM}`).cells.slice(1, 1 + HIST).map((x) => num(x.v));
+  c.ok('HISTORY: THE STARTING LINEUP BAND IS THE REAL SCORE, and is this squad’s Weekly totals row cell for cell',
+    JSON.stringify(bandOf(A)) === JSON.stringify(histWeeks.map((wk) => wantTotal(TEAM, wk, 'actual'))) &&
+    JSON.stringify(bandOf(A)) === JSON.stringify(rowOf(A)),
+    `${JSON.stringify(bandOf(A))} vs ${JSON.stringify(rowOf(A))}`);
+
+  // ---- the select drives BOTH tables --------------------------------------
+  c.ok('HISTORY: CHOOSING PROJ ON ONE TABLE RELABELS BOTH — “Proj history”, both selects on Proj',
+    P.totals.group.label === 'Proj history' && P.season.group.label === 'Proj history' &&
+    P.totals.group.value === 'proj' && P.season.group.value === 'proj',
+    JSON.stringify([P.totals.group, P.season.group]));
+  const projTotalsBad = [];
+  for (const row of P.totals.rows) {
+    const team = Number(row.team.replace('Team ', ''));
+    for (const wk of histWeeks) {
+      const want = wantTotal(team, wk, 'proj');
+      if (!same(num(row.cells[wk].v), want)) projTotalsBad.push(`${row.team} wk${wk} want ${want} got ${row.cells[wk].v}`);
+    }
+  }
+  c.ok('HISTORY: and Weekly totals becomes the real starters’ projections added up',
+    projTotalsBad.length === 0, projTotalsBad.slice(0, 5).join(' | '));
+  c.ok('HISTORY: which is NOT the number Actual showed, so the switch has teeth',
+    P.totals.rows.every((row, n) => row.cells[1].v !== A.totals.rows[n].cells[1].v),
+    `${P.totals.rows[0].cells[1].v} vs ${A.totals.rows[0].cells[1].v}`);
+  c.ok('HISTORY: the Proj band still matches this squad’s Weekly totals row',
+    JSON.stringify(bandOf(P)) === JSON.stringify(rowOf(P)) &&
+    JSON.stringify(bandOf(P)) === JSON.stringify(histWeeks.map((wk) => wantTotal(TEAM, wk, 'proj'))),
+    `${JSON.stringify(bandOf(P))} vs ${JSON.stringify(rowOf(P))}`);
+  c.ok('HISTORY: and its cells say “projected … before kickoff”',
+    /Week 1: projected [\d.]+ before kickoff/.test(P.totals.rows[0].cells[1].title), P.totals.rows[0].cells[1].title);
+
+  // ---- NOTHING ELSE MOVES: Avg and every week to come, to the character ----
+  const beyond = (snap) => JSON.stringify([
+    snap.totals.rows.map((r) => [r.cells[0].html, ...r.cells.slice(FUT).map((x) => x.html)]),
+    snap.totals.foot.cells.slice(FUT).map((x) => x.html),
+    snap.totals.foot.cells[0].html,
+    snap.season.rows.map((r) => [r.cells[0].html, ...r.cells.slice(FUT).map((x) => x.html)]),
+    [snap.season.band[0].html, ...snap.season.band.slice(FUT).map((x) => x.html)],
+    snap.totals.head.slice(1 + FUT), snap.season.head.slice(1 + FUT),
+  ]);
+  c.ok('HISTORY: THE WEEKS STILL TO COME AND THE AVG COLUMNS ARE IDENTICAL ON ACTUAL AND PROJ, character for character',
+    beyond(A) === beyond(P), 'a future or Avg cell changed with the select');
+  c.ok('HISTORY: a week to come is never marked as history, and every played one is',
+    [A, P].every((snap) => [...snap.totals.rows, ...snap.season.rows].every((r) =>
+      r.cells.slice(1).every((x, n) => /\bhist\b/.test(x.cls) === (n + 1 <= HIST)))),
+    JSON.stringify(A.season.rows[0].cells.map((x) => x.cls)));
+
+  // ---- the heavy line before the first week still to come -----------------
+  for (const [name, snap, extra] of [
+    ['WEEKLY TOTALS', A.totals, [A.totals.foot.cells]],
+    ['SEASON BY WEEK', A.season, [A.season.band]],
+  ]) {
+    const isFut = (cls) => cls.split(/\s+/).includes('fut-start');
+    const headAt = snap.head.map((h, n) => (isFut(h.cls) ? n : -1)).filter((n) => n >= 0);
+    c.ok(`HISTORY ${name}: the heavy line is on week ${FUT}’s header, and only there`,
+      JSON.stringify(headAt) === JSON.stringify([1 + FUT]), JSON.stringify(headAt));
+    const lines = [...snap.rows.map((r) => r.cells), ...extra];
+    c.ok(`HISTORY ${name}: and on week ${FUT}’s cell in every row, head to foot, and no other cell`,
+      lines.length > 1 && lines.every((cells) => isFut(cells[FUT].cls) &&
+        cells.filter((x) => isFut(x.cls)).length === 1),
+      JSON.stringify(lines.map((cells) => cells.map((x, n) => (isFut(x.cls) ? n : '')).join(''))));
+    c.ok(`HISTORY ${name}: it is a different line from the playoff one, which is still on week 14`,
+      isPo(snap.head[1 + 14].cls) && !isFut(snap.head[1 + 14].cls) && !isPo(snap.head[1 + FUT].cls),
+      `${snap.head[1 + 14].cls} / ${snap.head[1 + FUT].cls}`);
+  }
+
+  // ---- LIVE: only a week still being played carries it ---------------------
+  for (const [name, snap] of [['WEEKLY TOTALS', A.totals], ['SEASON BY WEEK', A.season]]) {
+    const tagged = snap.head.map((h, n) => (h.live ? n - 1 : -1)).filter((n) => n >= 0);
+    c.ok(live
+      ? `HISTORY ${name}: THE WEEK BEING PLAYED (${season.DONE_WEEK}) CARRIES THE LIVE TAG, and no other week does`
+      : `HISTORY ${name}: with no week in play, nothing is tagged LIVE`,
+      JSON.stringify(tagged) === JSON.stringify(live ? [season.DONE_WEEK] : []), JSON.stringify(tagged));
+  }
+
+  // ---- THE LEAGUE ROW ------------------------------------------------------
+  for (const [mode, snap] of [['actual', A], ['proj', P]]) {
+    const foot = snap.totals.foot;
+    c.ok(`LEAGUE ROW (${mode}): one row labelled League, in a tfoot, never among the teams`,
+      Boolean(foot) && foot.rows === 1 && !foot.inBody && foot.label === 'League' &&
+      /\bleague-row\b/.test(foot.cls), JSON.stringify(foot && { rows: foot.rows, inBody: foot.inBody, label: foot.label, cls: foot.cls }));
+    const bad = [];
+    for (const wk of allWeeks) {
+      // A week still being played, shown as scores, is part totals: no average.
+      const part = live && mode === 'actual' && wk === season.DONE_WEEK;
+      const want = part ? null : wk <= HIST
+        ? mean(teams.map((t) => wantTotal(t, wk, mode)))
+        : mean(snap.totals.rows.map((r) => num(r.cells[wk].v)));
+      const text = foot.cells[wk].text;
+      if (want === null ? text !== '' : text !== want.toFixed(1)) bad.push(`wk${wk} want ${want} drew "${text}"`);
+    }
+    c.ok(`LEAGUE ROW (${mode}): EVERY WEEK IS THE COLUMN’S AVERAGE, worked out by hand; blank where there is none`,
+      bad.length === 0, bad.join(' | '));
+    c.ok(`LEAGUE ROW (${mode}): and its Avg is the teams’ Avg, averaged`,
+      foot.cells[0].text === mean(snap.totals.rows.map((r) => num(r.cells[0].v))).toFixed(1),
+      `${foot.cells[0].text} vs ${mean(snap.totals.rows.map((r) => num(r.cells[0].v)))}`);
+    c.ok(`LEAGUE ROW (${mode}): it is never coloured`,
+      foot.cells.every((x) => !/\bheat/.test(x.cls)), JSON.stringify(foot.cells.map((x) => x.cls)));
+  }
+
+  if (live) {
+    // ---- the week in play, squad by squad ---------------------------------
+    const wk = season.DONE_WEEK;
+    const at = (snap, team) => snap.totals.rows.find((r) => r.team === `Team ${team}`).cells[wk];
+    c.ok('LIVE WEEK: a squad whose starters have all finished shows its score (team 2: 109.8)',
+      at(A, 2).v === '109.8', JSON.stringify(at(A, 2)));
+    c.ok('LIVE WEEK: a finished starter’s 0 counts as a 0 (team 1: 99.0)',
+      at(A, 1).v === '99', JSON.stringify(at(A, 1)));
+    c.ok('LIVE WEEK: ONLY FINISHED STARTERS COUNT — team 3 is 15.0 + 14.3 + 12.9, and the 4.2 a man ' +
+      'has so far mid-game is not in it',
+      at(A, 3).v === '42.2' && /42\.2 scored so far — finished starters only/.test(at(A, 3).title),
+      JSON.stringify(at(A, 3)));
+    c.ok('LIVE WEEK: a squad with nobody finished shows a dash, not a zero and not a projection',
+      at(A, 4).v === null && at(A, 4).text === '—', JSON.stringify(at(A, 4)));
+    c.ok('LIVE WEEK: part scores are not coloured, in either table',
+      A.totals.rows.every((r) => !/\bheat/.test(r.cells[wk].cls)) &&
+      A.season.rows.every((r) => !/\bheat/.test(r.cells[wk].cls)) && !/\bheat/.test(A.season.band[wk].cls),
+      JSON.stringify(A.totals.rows.map((r) => r.cells[wk].cls)));
+    const te = A.season.rows.find((r) => r.slot === 'TE').cells[wk];
+    c.ok('LIVE WEEK: in the season panel a starter still playing is a dash that still names him',
+      te.text === '—' && te.v === null && te.pid === String(TEAM * 100 + 5) &&
+      /started at TE in week 8 and has not finished yet/.test(te.label), JSON.stringify(te));
+    c.ok('LIVE WEEK: on Proj every squad has its whole pre-game projection (165.6), finished or not',
+      P.totals.rows.every((r) => r.cells[wk].v === '165.6'),
+      JSON.stringify(P.totals.rows.map((r) => r.cells[wk].v)));
+  } else {
+    // ---- remembered per league, and switching back restores everything ----
+    c.ok('THE CHOICE IS SAVED PER LEAGUE: analysis.history.live:99:2026 = proj',
+      w.saved['analysis.history.live:99:2026'] === 'proj',
+      JSON.stringify(Object.keys(w.saved).filter((k) => /history/.test(k)).map((k) => `${k}=${w.saved[k]}`)));
+    c.ok('and Actual, being the default, is stored as nothing at all',
+      !Object.keys(w.savedBack).some((k) => /^analysis\.history\./.test(k)),
+      JSON.stringify(Object.keys(w.savedBack)));
+    c.ok('SWITCHING BACK ON THE OTHER TABLE’S SELECT RESTORES BOTH TABLES, to the character',
+      JSON.stringify(w.back) === JSON.stringify(w.actual), 'the tables did not come back as they were');
+    c.ok('the method note says the played weeks are not solved',
+      /are not solved at all/.test(A.note) && /Actual history/.test(A.note), A.note.slice(0, 300));
+  }
+  return c.out;
+}
+
 async function checkThreeWr(c, boot) {
   const w = globalThis.__an;
   const stub = await import('./an-stub-season.mjs');
@@ -1734,7 +2187,7 @@ function makeChecker() {
 const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 
 function headers(table) {
-  return [...table.querySelectorAll('thead th')].map((th) => txt(th));
+  return [...table.querySelectorAll('thead tr:last-child th')].map((th) => txt(th));
 }
 
 function bodyRows(table) {
@@ -1852,6 +2305,9 @@ async function check(scenario, boot) {
   // nine, so this scenario is checked on its own terms.
   if (scenario === 'three-wr') return checkThreeWr(c, boot);
   if (scenario === 'flex-floor') return checkFlexFloor(c, boot);
+  // A week in progress is checked on its own terms too: the shape assertions
+  // below were all written about a league between weeks.
+  if (scenario === 'history-live') return checkHistory(c, scenario);
 
   // ---- PANEL ORDER, which is Tim's and not a matter of taste --------------
   //
@@ -1907,14 +2363,16 @@ async function check(scenario, boot) {
     (() => {
       const links = [...table.querySelectorAll('tbody td[data-pid] a.pref')];
       return links.length > 0 && links.every((a) =>
-        /^.+ (is this squad’s|fills) [A-Z/]+\d? in week \d+/
+        // "started at" is a week that has happened (2026-10-05): the man who
+        // really started there, not the one a solve would put there.
+        /^.+ (is this squad’s|fills|started at) [A-Z/]+\d? in week \d+/
           .test(a.getAttribute('aria-label') || ''));
     })(),
     [...table.querySelectorAll('tbody td[data-pid] a.pref')][0]?.getAttribute('aria-label'));
 
   // ---- the playoff line ----------------------------------------------------
   {
-    const ths = [...table.querySelectorAll('thead th')];
+    const ths = [...table.querySelectorAll('thead tr:last-child th')];
     const lined = ths.map((th, i) => (isPo(th.getAttribute('class')) ? i : -1)).filter((i) => i >= 0);
     const col = weekCol(PLAYOFF_WEEKS[0]);
     c.ok('SEASON GRID: the playoff line is on week 14\u2019s header, and only there',
@@ -1936,17 +2394,30 @@ async function check(scenario, boot) {
       if (shown !== regular) wrong++;
       if (regular !== null && all !== null && regular !== all) moved++;
     }
-    c.ok('SEASON GRID: AVG IGNORES THE PLAYOFF WEEKS, in the band as well as the slots',
-      wrong === 0, `${wrong} rows disagree`);
-    if (rows.some((r) => nums(r.cells.slice(col)).length)) {
+    // SINCE 2026-10-05 a week that has happened shows what HAPPENED (the real
+    // lineup, under "Actual history") while Avg is still the projection it
+    // always was, so Avg can only be re-derived from the cells where no week
+    // is history. The `no-history` scenario is that league, and carries this.
+    const hasHistory = Boolean(table.querySelector('thead .hist-group'));
+    if (hasHistory) {
+      c.ok('SEASON GRID: with history on screen, Avg is NOT the mean of the cells shown ' +
+        '(it is the projection), and its heading says so',
+        /History weeks count at that projection, not at the numbers shown/
+          .test(table.querySelector('thead tr:last-child th.grouped').getAttribute('title') || ''),
+        table.querySelector('thead tr:last-child th.grouped').getAttribute('title'));
+    } else {
+      c.ok('SEASON GRID: AVG IGNORES THE PLAYOFF WEEKS, in the band as well as the slots',
+        wrong === 0, `${wrong} rows disagree`);
+    }
+    if (!hasHistory && rows.some((r) => nums(r.cells.slice(col)).length)) {
       c.ok('SEASON GRID: and the playoff weeks would have moved it, so that has teeth',
         moved > 0, String(moved));
     }
   }
   c.ok('Avg sits immediately before the week run', head[1] === 'Avg', JSON.stringify(head));
   c.ok('every header is sortable',
-    [...table.querySelectorAll('thead th')].every((th) => th.hasAttribute('data-sort')),
-    [...table.querySelectorAll('thead th')].filter((th) => !th.hasAttribute('data-sort')).length);
+    [...table.querySelectorAll('thead tr:last-child th')].every((th) => th.hasAttribute('data-sort')),
+    [...table.querySelectorAll('thead tr:last-child th')].filter((th) => !th.hasAttribute('data-sort')).length);
   c.ok('the table lives inside a .table-scroll',
     $('seasonWrap').getAttribute('class').includes('table-scroll'), $('seasonWrap').getAttribute('class'));
   c.ok('the slot cell uses the sticky name treatment, so it freezes on a phone',
@@ -2006,9 +2477,15 @@ async function check(scenario, boot) {
     c.ok('A GOOD WEEK IS NOW COLOURED TOO, which the old marks never did',
       table.querySelectorAll('td.heat-up-1, td.heat-up-2, td.heat-up-3, td.heat-up-4').length > 0,
       `${table.querySelectorAll('[class*="heat-up"]').length} good cells`);
-    c.ok('and a poor one still is',
-      table.querySelectorAll('td.heat-dn-1, td.heat-dn-2, td.heat-dn-3, td.heat-dn-4').length > 0,
-      `${table.querySelectorAll('[class*="heat-dn"]').length} poor cells`);
+    // On the stub the poor cells were the early weeks (its projections climb
+    // 0.3 a week), and since 2026-10-05 a played week is history: every stub
+    // squad scored the same there, so those columns are flat and uncoloured.
+    // Asked wherever squads differ (demo data) or nothing has been played.
+    if (['demo', 'avg-heat', 'week-heat', 'season-slots', 'no-history'].includes(scenario)) {
+      c.ok('and a poor one still is',
+        table.querySelectorAll('td.heat-dn-1, td.heat-dn-2, td.heat-dn-3, td.heat-dn-4').length > 0,
+        `${table.querySelectorAll('[class*="heat-dn"]').length} poor cells`);
+    }
   }
   c.ok('no week cell borrows another panel\u2019s colour vocabulary',
     rows.every((r) => r.cells.slice(2).every((td) =>
@@ -2515,8 +2992,18 @@ async function check(scenario, boot) {
 
   // The detailed cell checks read the live DOM, so they only make sense in the
   // scenario that has not been clicked about in afterwards.
-  if (scenario === 'live') {
+  //
+  // `no-history` is the same league before a week has been played (the stub's
+  // schedule answers through week 0), so the same block runs for it with HIST
+  // 0: every week is then a projection, exactly as every week was before
+  // 2026-10-05, and the week the page opens on is 1.
+  if (scenario === 'live' || scenario === 'no-history') {
     const season = await import('./an-stub-season.mjs');
+    /** The last week that has been played — "history" — and the one the page opens on. */
+    const HIST = season.SCHEDULE_PLAYED_THROUGH;
+    const OPEN = HIST + 1;
+    c.ok(scenario === 'live' ? 'this league has seven played weeks' : 'this league has no played week',
+      HIST === (scenario === 'live' ? 7 : 0), String(HIST));
     // Since 2026-09-16 a live league opens on the COMING week — the first with
     // no result on the schedule (the stub has results through week 7) — rather
     // than the last one played.
@@ -2530,7 +3017,7 @@ async function check(scenario, boot) {
         JSON.stringify(Array.from({ length: 16 }, (_, i) => i + 1)),
       JSON.stringify(season.calls.weeks));
     c.ok('the selected week is still fetched by the panels above, once',
-      JSON.stringify(season.calls.week) === JSON.stringify([8]), JSON.stringify(season.calls.week));
+      JSON.stringify(season.calls.week) === JSON.stringify([OPEN]), JSON.stringify(season.calls.week));
     c.ok('the progress line clears once every week has landed',
       txt($('seasonProgress')) === '', txt($('seasonProgress')));
 
@@ -2587,28 +3074,88 @@ async function check(scenario, boot) {
       return out;
     };
 
+    // ---- AND A WEEK THAT HAS BEEN PLAYED IS NOT SOLVED AT ALL --------------
+    //
+    // Tim, 2026-10-05: "just show the numbers they actually recieved for that
+    // week, not anything different." So through week HIST each slot holds the
+    // man who REALLY started there (`started` / `lineupSlotId` — in the stub,
+    // players 00–08 in SLOTS order) and his real score, which the stub sets at
+    // 15 - i x 0.7. Men sharing a slot are ranked on their projection before
+    // kickoff, so week 6 (player 03 projected 0.00, his bye) has 04 in WR1.
+    /** slot key -> {id, v} for the lineup one team really started, by hand. */
+    const realScore = (i) => Math.round((15 - i * 0.7) * 10) / 10;
+    const wantReal = (team, week) => {
+      const order = [0, 2, 2, 4, 4, 6, 23, 16, 17];
+      const bySlot = new Map();
+      season.SLOTS.forEach((slotId, i) => {
+        if (slotId === 20 || !season.onRoster(i, week)) return;
+        if (!bySlot.has(slotId)) bySlot.set(slotId, []);
+        bySlot.get(slotId).push({ i, proj: season.projFor(i, week) });
+      });
+      for (const list of bySlot.values()) {
+        list.sort((a, b) => (b.proj ?? -Infinity) - (a.proj ?? -Infinity) || a.i - b.i);
+      }
+      const counts = new Map();
+      const out = new Map();
+      order.forEach((slotId, n) => {
+        const k = (counts.get(slotId) || 0) + 1;
+        counts.set(slotId, k);
+        const pick = (bySlot.get(slotId) || [])[k - 1];
+        out.set(SLOT_ROWS[n], pick ? { id: team * 100 + pick.i, v: realScore(pick.i) } : null);
+      });
+      return out;
+    };
+    /** What a week's column should hold: the real lineup in history, the solve after. */
+    const wantShown = (team, week) => (week <= HIST ? wantReal(team, week) : wantFill(team, week));
+
     const bySlotRow = new Map(rows.map((r) => [r.cells[0].text, r]));
     const wrongSlot = [];
+    const wrongPast = [];
     for (let w = 1; w <= 16; w++) {
-      const want = wantFill(teamId, w);
+      const want = wantShown(teamId, w);
+      const into = w <= HIST ? wrongPast : wrongSlot;
       for (const key of SLOT_ROWS) {
         const td = bySlotRow.get(key).cells[weekCol(w)];
         const e = want.get(key);
         if (!e) {
-          if (td.v !== null) wrongSlot.push(`${key} wk${w} want empty got ${td.v}`);
+          if (td.v !== null) into.push(`${key} wk${w} want empty got ${td.v}`);
           continue;
         }
-        if (Math.abs(Number(td.v) - e.v) > 0.051) wrongSlot.push(`${key} wk${w} want ${e.v} got ${td.v}`);
-        if (td.pid !== String(e.id)) wrongSlot.push(`${key} wk${w} want #${e.id} got #${td.pid}`);
+        if (Math.abs(Number(td.v) - e.v) > 0.051) into.push(`${key} wk${w} want ${e.v} got ${td.v}`);
+        if (td.pid !== String(e.id)) into.push(`${key} wk${w} want #${e.id} got #${td.pid}`);
       }
     }
-    c.ok('EVERY SLOT, EVERY WEEK, HOLDS THE MAN THE BEST LEGAL LINEUP PUTS THERE',
+    c.ok('EVERY SLOT, EVERY WEEK STILL TO COME, HOLDS THE MAN THE BEST LEGAL LINEUP PUTS THERE',
       wrongSlot.length === 0, wrongSlot.slice(0, 6).join(' | '));
+    if (HIST > 0) {
+      c.ok('HISTORY: EVERY SLOT IN A PLAYED WEEK HOLDS THE MAN WHO REALLY STARTED THERE, ' +
+        'AT WHAT HE REALLY SCORED',
+        wrongPast.length === 0, wrongPast.slice(0, 6).join(' | '));
+      const past = rows.flatMap((r) => r.cells.slice(2, 2 + HIST));
+      c.ok('HISTORY: no played cell is floored, assumed or a "Bye" — it is what happened',
+        past.length === SLOT_ROWS.length * HIST &&
+        past.every((x) => /\bhist\b/.test(x.cls) && !/\b(assumed|bye|zero|zero-out)\b/.test(x.cls) &&
+          !/Bye/.test(x.text)),
+        JSON.stringify(past.filter((x) => !/\bhist\b/.test(x.cls)).slice(0, 3)));
+      c.ok('HISTORY: and no week still to come is marked as history',
+        rows.every((r) => r.cells.slice(2 + HIST).every((x) => !/\bhist\b/.test(x.cls))),
+        JSON.stringify(rows[0].cells.slice(2 + HIST).map((x) => x.cls)));
+    } else {
+      c.ok('NO HISTORY: no cell is marked as history and there is no label, select or heavy line',
+        d.querySelectorAll('#seasonTable .hist, #totalsTable .hist, .hist-group, ' +
+          'select[data-history], .fut-start').length === 0,
+        `${d.querySelectorAll('.hist, .hist-group, select[data-history], .fut-start').length} found`);
+      c.ok('NO HISTORY: each table has ONE header row, the one it always had',
+        d.querySelectorAll('#seasonTable thead tr').length === 1 &&
+        d.querySelectorAll('#totalsTable thead tr').length === 1,
+        `${d.querySelectorAll('#seasonTable thead tr').length} / ${d.querySelectorAll('#totalsTable thead tr').length}`);
+    }
 
     // The claim Tim actually made, stated on its own so it cannot pass by
     // accident: WR1 is the best receiver of that week's lineup, WR2 the second.
+    // (Weeks still to come: a played week keeps the lineup really started.)
     const rankWrong = [];
-    for (let w = 1; w <= 16; w++) {
+    for (let w = OPEN; w <= 16; w++) {
       const want = wantFill(teamId, w);
       const a = want.get('WR1');
       const b = want.get('WR2');
@@ -2624,7 +3171,7 @@ async function check(scenario, boot) {
 
     // The FLEX is whoever the solver put in the flex, not "the next best man".
     const flexWrong = [];
-    for (let w = 1; w <= 16; w++) {
+    for (let w = OPEN; w <= 16; w++) {
       const want = wantFill(teamId, w);
       const td = bySlotRow.get('FLEX').cells[weekCol(w)];
       const e = want.get('FLEX');
@@ -2637,15 +3184,32 @@ async function check(scenario, boot) {
     // Week 6 is the bye (stub player 03, a receiver) and week 7 the missing
     // number (player 04). Both must simply move the lineup on rather than
     // leaving a hole, which is the whole reason the rows are slots.
-    c.ok('A BYE DOES NOT REACH A SLOT WHEN SOMEBODY BETTER IS AVAILABLE',
-      bySlotRow.get('WR1').cells[weekCol(6)].pid !== String(teamId * 100 + 3) &&
-      bySlotRow.get('WR2').cells[weekCol(6)].pid !== String(teamId * 100 + 3) &&
-      rows.every((r) => r.cells[weekCol(6)].text !== 'Bye'),
-      JSON.stringify(rows.map((r) => r.cells[weekCol(6)].text)));
-    c.ok('and neither does a week ESPN carried no number for',
-      rows.every((r) => r.cells[weekCol(7)].v !== null) &&
-      bySlotRow.get('WR1').cells[weekCol(7)].pid !== String(teamId * 100 + 4),
-      JSON.stringify(rows.map((r) => r.cells[weekCol(7)].v)));
+    if (HIST < 6) {
+      c.ok('A BYE DOES NOT REACH A SLOT WHEN SOMEBODY BETTER IS AVAILABLE',
+        bySlotRow.get('WR1').cells[weekCol(6)].pid !== String(teamId * 100 + 3) &&
+        bySlotRow.get('WR2').cells[weekCol(6)].pid !== String(teamId * 100 + 3) &&
+        rows.every((r) => r.cells[weekCol(6)].text !== 'Bye'),
+        JSON.stringify(rows.map((r) => r.cells[weekCol(6)].text)));
+      c.ok('and neither does a week ESPN carried no number for',
+        rows.every((r) => r.cells[weekCol(7)].v !== null) &&
+        bySlotRow.get('WR1').cells[weekCol(7)].pid !== String(teamId * 100 + 4),
+        JSON.stringify(rows.map((r) => r.cells[weekCol(7)].v)));
+    } else {
+      // PLAYED, those two weeks are history, and history does not move anybody
+      // on: the man on his bye really started (the stub says so) and really
+      // scored 12.9, so he is in the lineup, and nothing is solved around him.
+      c.ok('HISTORY: a starter whose projection was a bye 0.00 is still shown, at his real score',
+        [bySlotRow.get('WR1'), bySlotRow.get('WR2')]
+          .some((r) => r.cells[weekCol(6)].pid === String(teamId * 100 + 3) &&
+            r.cells[weekCol(6)].v === String(realScore(3))) &&
+        rows.every((r) => r.cells[weekCol(6)].text !== 'Bye'),
+        JSON.stringify(rows.map((r) => `${r.cells[weekCol(6)].pid}:${r.cells[weekCol(6)].text}`)));
+      c.ok('HISTORY: and so is one ESPN carried no projection for',
+        [bySlotRow.get('WR1'), bySlotRow.get('WR2')]
+          .some((r) => r.cells[weekCol(7)].pid === String(teamId * 100 + 4) &&
+            r.cells[weekCol(7)].v === String(realScore(4))),
+        JSON.stringify(rows.map((r) => `${r.cells[weekCol(7)].pid}:${r.cells[weekCol(7)].text}`)));
+    }
 
     // the average, re-derived from the same rebuild
     const avgBad = [];
@@ -2659,20 +3223,24 @@ async function check(scenario, boot) {
       const got = Number(bySlotRow.get(key).cells[1].v);
       if (Math.abs(got - want) > 0.06) avgBad.push(`${key} want ${want} got ${got}`);
     }
-    c.ok('Avg is that slot’s own regular-season mean', avgBad.length === 0,
-      avgBad.slice(0, 3).join(' | '));
+    // AVG IS UNTOUCHED BY HISTORY: still the best legal lineup's projection over
+    // all thirteen weeks, played ones included — the figure it was before
+    // 2026-10-05, so the all-teams grid's Proj avg still agrees with it.
+    c.ok('Avg is that slot’s own regular-season mean OF THE PROJECTION, played weeks included',
+      avgBad.length === 0, avgBad.slice(0, 3).join(' | '));
 
-    // the totals band, against the same rebuild rather than against the row
+    // the totals band, against the same rebuild rather than against the row —
+    // which in a played week is the real lineup, so the band is the real score.
     const totalBad = [];
     for (let w = 1; w <= 16; w++) {
-      const want = [...wantFill(teamId, w).values()].filter(Boolean)
+      const want = [...wantShown(teamId, w).values()].filter(Boolean)
         .reduce((a, e) => a + e.v, 0);
       const got = Number(totals.cells[weekCol(w)].v);
       if (Math.abs(got - Math.round(want * 10) / 10) > 0.051) {
         totalBad.push(`wk${w} want ${Math.round(want * 10) / 10} got ${got}`);
       }
     }
-    c.ok('THE BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL, week by week',
+    c.ok('THE BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL in a week to come, AND THE REAL SCORE in a played one',
       totalBad.length === 0, totalBad.slice(0, 4).join(' | '));
     // ESPN's own lineup for this squad in week 8 IS the best one, so the two
     // panels have to agree about the number. Where they would not, they are
@@ -2687,9 +3255,9 @@ async function check(scenario, boot) {
 
     // the week the page is showing is marked
     c.ok('the shown week’s column is bracketed',
-      rows.every((r) => /\bnow\b/.test(r.cells[weekCol(8)].cls)) &&
+      rows.every((r) => /\bnow\b/.test(r.cells[weekCol(OPEN)].cls)) &&
       rows.every((r) => r.cells.slice(2).filter((td) => /\bnow\b/.test(td.cls)).length === 1) &&
-      /\bnow\b/.test(totals.cells[weekCol(8)].cls),
+      /\bnow\b/.test(totals.cells[weekCol(OPEN)].cls),
       JSON.stringify(rows[0] && rows[0].cells.slice(2).map((x) => x.cls)));
 
     // ---- the links carry ESPN's OWN id, re-derived from the stub ----------
@@ -2697,8 +3265,11 @@ async function check(scenario, boot) {
     // emits are computed here rather than read back off the page.
     const want = [];
     for (let i = 0; i < season.SIZE; i++) {
-      if (season.onRoster(i, 8)) want.push(`waivers.html?player=${teamId * 100 + i}`);
+      if (season.onRoster(i, OPEN)) want.push(`waivers.html?player=${teamId * 100 + i}`);
     }
+    // The season panel also names a man who has since joined (the stub's
+    // player 14 signs in week 5), so its links are checked against the squad.
+    const everOn = Array.from({ length: season.SIZE }, (_, i) => `waivers.html?player=${teamId * 100 + i}`);
     const hrefsIn = (sel) =>
       [...d.querySelectorAll(sel)].map((a) => a.getAttribute('href')).sort();
     const sorted = (a) => a.slice().sort();
@@ -2709,7 +3280,7 @@ async function check(scenario, boot) {
     c.ok('and every season-panel link is one of this squad’s own ESPN ids',
       (() => {
         const hrefs = hrefsIn('#seasonTable tbody a.pref');
-        return hrefs.length > 0 && hrefs.every((h) => want.includes(h));
+        return hrefs.length > 0 && hrefs.every((h) => everOn.includes(h));
       })(), JSON.stringify(hrefsIn('#seasonTable tbody a.pref')).slice(0, 300));
 
     // the grids: one row, all nine spots and the whole bench
@@ -2721,7 +3292,8 @@ async function check(scenario, boot) {
     for (const id of ['overview']) {
       const cells = grid4(id);
       c.ok(`the ${id} grid links every one of its fifteen numbers`,
-        cells.length === 15 && cells.every((td) => td.querySelector('a.pref')),
+        cells.length === want.length && want.length === (OPEN >= season.SIGNED_WEEK ? 15 : 14) &&
+        cells.every((td) => td.querySelector('a.pref')),
         `${cells.length} cells, ${cells.filter((td) => td.querySelector('a.pref')).length} linked`);
       c.ok(`and every ${id} link is one of team ${teamId}’s own ESPN ids`,
         cells.every((td) => want.includes(td.querySelector('a.pref').getAttribute('href'))),
@@ -2782,7 +3354,7 @@ async function check(scenario, boot) {
       (() => {
         const bad = [];
         for (let i = 0; i < season.SIZE; i++) {
-          if (!season.onRoster(i, 8)) continue;
+          if (!season.onRoster(i, OPEN)) continue;
           const cell = grid4('overview').find((td) => {
             const k = hoverCard(d, boot.window, td);
             return k && k.ident.startsWith(season.playerName(teamId, i) + ' ');
@@ -2813,7 +3385,8 @@ async function check(scenario, boot) {
         gap.values[6] === '—' && !gap.values.includes('Bye') &&
         /ESPN carried no number for him/.test(gap.legend),
         `${gap.values[6]} / ${gap.legend}`);
-      c.ok('a week he was not on the roster for is its own third thing',
+      // (He has to be on the roster in the week on screen to have a cell to hover.)
+      if (season.onRoster(season.SIZE - 1, OPEN)) c.ok('a week he was not on the roster for is its own third thing',
         (() => {
           const last = grid4('overview').find((td) => {
             const k = hoverCard(d, boot.window, td);
@@ -2831,7 +3404,7 @@ async function check(scenario, boot) {
     c.ok('the legend only names the states that actually turn up',
       card0.legend === '', card0.legend);
     c.ok('the week the page is showing is marked in the run',
-      card0.kinds[7].includes('now') && card0.kinds.filter((k) => k.includes('now')).length === 1,
+      card0.kinds[OPEN - 1].includes('now') && card0.kinds.filter((k) => k.includes('now')).length === 1,
       JSON.stringify(card0.kinds));
     c.ok('THE CELL CARRIES NO TITLE, so the browser cannot draw a second tooltip',
       !cells[0].hasAttribute('title') && !cells[0].querySelector('a.pref').hasAttribute('title'),
@@ -3919,24 +4492,43 @@ async function check(scenario, boot) {
   }
 
   // ---- (j) byes known --------------------------------------------------------
-  if (scenario === 'byes-known') {
+  if (scenario === 'byes-known' || scenario === 'byes-ahead') {
     const w = globalThis.__an;
-    c.ok('A SAVED WEEK THAT HAS BEEN PLAYED IS IGNORED: the page opens on the coming week',
-      w.title === 'All teams · week 8', w.title);
+    // `ahead`: week 6, the bye, is still to come (see the scenario).
+    const ahead = scenario === 'byes-ahead';
+    if (!ahead) {
+      c.ok('A SAVED WEEK THAT HAS BEEN PLAYED IS IGNORED: the page opens on the coming week',
+        w.title === 'All teams · week 8', w.title);
+    }
     c.ok('no grid row carries a title (touch-titles would sheet over the tap)',
       w.rowTitles === 0, w.rowTitles);
 
-    // Both carry the loud low mark as well, and that is the feature: a slot
-    // with nobody to cover a bye is exactly the number Tim asked to see in red.
-    c.ok('THE BYE WEEK IS STILL A BYE in the slot nobody else can fill',
-      w.dstW6 && w.dstW6.text.startsWith('Bye') && /\bbye\b/.test(w.dstW6.cls) && w.dstW6.v === '0',
-      JSON.stringify(w.dstW6));
-    // The end of the red side of the scale, and the glyph with it. Under the
-    // old two-step mark this was `lo2` and ▼▼; the scale that replaced it on
-    // 2026-09-19 has four steps a side and one glyph, at the end.
-    c.ok('and it is at the far red end of the scale, since nothing covered it',
-      w.dstW6 && /\bheat-dn-4\b/.test(w.dstW6.cls) && w.dstW6.text.includes('▼'),
-      JSON.stringify(w.dstW6));
+    if (ahead) {
+      // Both carry the loud low mark as well, and that is the feature: a slot
+      // with nobody to cover a bye is exactly the number Tim asked to see in red.
+      c.ok('THE BYE WEEK IS STILL A BYE in the slot nobody else can fill',
+        w.dstW6 && w.dstW6.text.startsWith('Bye') && /\bbye\b/.test(w.dstW6.cls) && w.dstW6.v === '0',
+        JSON.stringify(w.dstW6));
+      // The end of the red side of the scale, and the glyph with it. Under the
+      // old two-step mark this was `lo2` and ▼▼; the scale that replaced it on
+      // 2026-09-19 has four steps a side and one glyph, at the end.
+      c.ok('and it is at the far red end of the scale, since nothing covered it',
+        w.dstW6 && /\bheat-dn-4\b/.test(w.dstW6.cls) && w.dstW6.text.includes('▼'),
+        JSON.stringify(w.dstW6));
+      c.ok('the season key names the bye it is showing',
+        /Bye/.test(w.seasonLegend), w.seasonLegend);
+    } else {
+      // WEEK 6 HAS BEEN PLAYED, so it is history (Tim, 2026-10-05): the D/ST
+      // really started and really scored 10.1 (the stub: 15 - 7 x 0.7), and
+      // that is what the cell says — not the 0.00 ESPN projected for his bye.
+      c.ok('A PLAYED BYE WEEK SHOWS WHAT THE STARTER SCORED, not the word Bye',
+        w.dstW6 && w.dstW6.text === '10.1' && w.dstW6.v === '10.1' &&
+        /\bhist\b/.test(w.dstW6.cls) && !/\b(bye|assumed|zero)\b/.test(w.dstW6.cls),
+        JSON.stringify(w.dstW6));
+      c.ok('and says so in words: who started there, and what he scored',
+        w.dstW6 && /^T4 Player 07 started at D\/ST in week 6 and scored 10\.1\./.test(w.dstW6.label),
+        w.dstW6 && w.dstW6.label);
+    }
     c.ok('A ZERO IN ANY OTHER WEEK IS A REAL 0.0, not a bye',
       w.dstW9 && w.dstW9.text.startsWith('0.0') && /\bzero\b/.test(w.dstW9.cls) &&
       !/\bbye\b/.test(w.dstW9.cls) && w.dstW9.v === '0', JSON.stringify(w.dstW9));
@@ -3949,8 +4541,6 @@ async function check(scenario, boot) {
     c.ok('A RULED-OUT STARTER IS SIMPLY REPLACED: RB2 is the bench back, not his 0.00',
       w.rb2w8 && w.rb2w8.v === '13.4' && w.rb2w8.label.startsWith('T4 Player 09'),
       JSON.stringify(w.rb2w8));
-    c.ok('the season key names the bye it is showing',
-      /Bye/.test(w.seasonLegend), w.seasonLegend);
 
     c.ok('the WEEK grid draws his zero the same way',
       w.weekCell02 && w.weekCell02.text === '0.0 OUT' && /\bzero-out\b/.test(w.weekCell02.cls) &&
@@ -4160,32 +4750,72 @@ async function check(scenario, boot) {
       [wk, weekTeams.get(wk).find((t) => t.name === w.team)]));
     const byKey = new Map(w.rows.map((r) => [r.slot, r]));
 
+    // THE DEMO SEASON HAS BEEN PLAYED, all thirteen regular weeks of it, so
+    // since 2026-10-05 those columns are HISTORY — the lineup each squad really
+    // started (`started` / `lineupSlotId` in demo-rosters.js) at what it really
+    // scored — and only the three playoff weeks are still the solve. Rebuilt
+    // here from the generator, never read back off the page.
+    const isPast = (wk) => REGULAR_WEEKS.includes(wk);
+    /** slot key -> {id, v} for the lineup one team REALLY started, from source. */
+    const realOf = (team) => {
+      const bySlot = new Map();
+      for (const p of (team.players || []).filter((x) => x.started === true)) {
+        if (!bySlot.has(p.lineupSlotId)) bySlot.set(p.lineupSlotId, []);
+        bySlot.get(p.lineupSlotId).push(p);
+      }
+      // Men sharing a slot are ranked on their projection, as everywhere else.
+      for (const l of bySlot.values()) {
+        l.sort((a, b) => (b.projected ?? -Infinity) - (a.projected ?? -Infinity) || a.playerId - b.playerId);
+      }
+      const out = new Map();
+      keys.forEach((k, i) => {
+        const [id, rank] = keyOf[i];
+        const p = (bySlot.get(id) || [])[rank - 1] || null;
+        out.set(k, p && typeof p.actual === 'number'
+          ? { id: p.playerId, v: Math.round(p.actual * 10) / 10 } : null);
+      });
+      return out;
+    };
+    const shownOf = (team, wk) => (isPast(wk) ? realOf(team) : fillOf(team));
+
     const wrong = [];
+    const wrongPast = [];
     const flexWrong = [];
     WEEKS.forEach((wk, i) => {
-      const want = fillOf(mine.get(wk));
+      const want = shownOf(mine.get(wk), wk);
+      const into = isPast(wk) ? wrongPast : wrong;
       for (const k of keys) {
         const cell = byKey.get(k).cells[i];
         const e = want.get(k);
-        if (!e) { if (cell.v !== null) wrong.push(`${k} wk${wk} want empty got ${cell.v}`); continue; }
-        if (Math.abs(Number(cell.v) - e.v) > 0.051) wrong.push(`${k} wk${wk} want ${e.v} got ${cell.v}`);
-        if (cell.pid !== String(e.id)) wrong.push(`${k} wk${wk} want #${e.id} got #${cell.pid}`);
+        if (!e) { if (cell.v !== null) into.push(`${k} wk${wk} want empty got ${cell.v}`); continue; }
+        if (Math.abs(Number(cell.v) - e.v) > 0.051) into.push(`${k} wk${wk} want ${e.v} got ${cell.v}`);
+        if (cell.pid !== String(e.id)) into.push(`${k} wk${wk} want #${e.id} got #${cell.pid}`);
       }
       const f = want.get('FLEX');
       const fc = byKey.get('FLEX').cells[i];
       if (f && fc.pid !== String(f.id)) flexWrong.push(`wk${wk} want #${f.id} got #${fc.pid}`);
     });
-    c.ok('EVERY SLOT IN EVERY WEEK HOLDS THE MAN THE BEST LEGAL LINEUP PUTS THERE',
+    c.ok('EVERY SLOT IN EVERY WEEK STILL TO COME HOLDS THE MAN THE BEST LEGAL LINEUP PUTS THERE',
       wrong.length === 0, wrong.slice(0, 6).join(' | '));
-    c.ok('THE FLEX IS THE SOLVER’S OWN FLEX, not "the next best man"',
+    c.ok('HISTORY: EVERY SLOT IN EVERY PLAYED WEEK HOLDS THE MAN WHO REALLY STARTED THERE, ' +
+      'AT WHAT HE REALLY SCORED',
+      wrongPast.length === 0, wrongPast.slice(0, 6).join(' | '));
+    c.ok('HISTORY: and the played columns are exactly the thirteen regular weeks',
+      w.rows.every((r) => r.cells.every((x, i) => /\bhist\b/.test(x.cls) === isPast(WEEKS[i]))),
+      JSON.stringify(w.rows[0].cells.map((x) => x.cls)));
+    c.ok('THE FLEX IS THE SOLVER’S OWN FLEX in a week to come, and the real one in a played week',
       flexWrong.length === 0, flexWrong.slice(0, 4).join(' | '));
 
     // The claim in Tim's own words: "2nd highest WR proj in WR2".
     const wrKeys = keys.filter((k) => /^WR\d$/.test(k));
     c.ok('the league starts more than one receiver, so the ranking has teeth',
       wrKeys.length > 1, JSON.stringify(wrKeys));
+    // A claim about the PROJECTION, so about the weeks still to come: in a
+    // played week WR1 is still the receiver projected higher, but what is drawn
+    // is what each scored, and the second receiver often outscored the first.
     const rankWrong = [];
     WEEKS.forEach((wk, i) => {
+      if (isPast(wk)) return;
       for (const group of [wrKeys, keys.filter((k) => /^RB\d$/.test(k))]) {
         for (let n = 1; n < group.length; n++) {
           const a = byKey.get(group[n - 1]).cells[i].v;
@@ -4202,13 +4832,18 @@ async function check(scenario, boot) {
     // The band, against the rebuild rather than against the row above it.
     const bandWrong = [];
     WEEKS.forEach((wk, i) => {
-      const want = [...fillOf(mine.get(wk)).values()].filter(Boolean).reduce((a, e) => a + e.v, 0);
+      const want = isPast(wk)
+        // The real score: every real starter's points, slot rows or not.
+        ? (mine.get(wk).players || []).filter((p) => p.started === true && typeof p.actual === 'number')
+          .reduce((a, p) => a + p.actual, 0)
+        : [...fillOf(mine.get(wk)).values()].filter(Boolean).reduce((a, e) => a + e.v, 0);
       const got = Number(w.totals[i]);
       if (Math.abs(got - Math.round(want * 10) / 10) > 0.051) {
         bandWrong.push(`wk${wk} want ${Math.round(want * 10) / 10} got ${got}`);
       }
     });
-    c.ok('THE STARTING LINEUP BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL',
+    c.ok('THE STARTING LINEUP BAND IS THE BEST LEGAL LINEUP’S OWN TOTAL in a week to come, ' +
+      'AND THE SQUAD’S REAL SCORE in a played one',
       bandWrong.length === 0, bandWrong.slice(0, 4).join(' | '));
 
     // Weekly totals (Tim, 2026-10-02): one row per squad, Team then Avg then
@@ -4272,7 +4907,11 @@ async function check(scenario, boot) {
     const colourWrong = [];
     const seen = new Map();     // class -> how many cells carry it
     let nearest = null;         // the smallest NEUTRAL number, vs its own band
+    // THE SLOT'S SEASON-LONG SCALE IS FOR THE WEEKS STILL TO COME. A played
+    // week is coloured against the other squads' same slot in THAT week, on
+    // the scores shown — recomputed separately below.
     WEEKS.forEach((wk, i) => {
+      if (isPast(wk)) return;
       for (const k of keys) {
         const cell = byKey.get(k).cells[i];
         if (cell.v === null) continue;
@@ -4291,8 +4930,31 @@ async function check(scenario, boot) {
         }
       }
     });
-    c.ok('EVERY CELL’S STEP MATCHES ONE RECOMPUTED FROM SOURCE',
+    c.ok('EVERY CELL’S STEP IN A WEEK TO COME MATCHES ONE RECOMPUTED FROM SOURCE',
       colourWrong.length === 0, colourWrong.slice(0, 6).join(' | '));
+
+    // HISTORY'S OWN GROUP: this slot, this week, the ten squads' real starters
+    // there, on what each scored. Ten values rather than ~160, by hand again.
+    const pastWrong = [];
+    let oldPast = 0;
+    WEEKS.forEach((wk, i) => {
+      if (!isPast(wk)) return;
+      for (const k of keys) {
+        const vals = weekTeams.get(wk).map((team) => realOf(team).get(k)).filter(Boolean).map((e) => e.v);
+        const sd = stdev(vals);
+        const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const b = sd === null || !(sd > 0) ? { sd: null } : { mean: m, sd };
+        const cell = byKey.get(k).cells[i];
+        if (cell.v === null) continue;
+        const want = wantClass(Number(cell.v), b);
+        const got = (cell.cls.match(/\bheat-(?:up|dn)-\d\b|\bheat-0\b/) || [''])[0];
+        if (want !== got) pastWrong.push(`${k} wk${wk} v=${cell.v} want ${want || 'none'} got ${got || 'none'}`);
+        seen.set(got, (seen.get(got) || 0) + 1);
+        if (b.sd !== null && Number(cell.v) < b.mean - b.sd) oldPast += 1;
+      }
+    });
+    c.ok('HISTORY: A PLAYED CELL IS COLOURED AGAINST THE OTHER SQUADS’ SAME SLOT IN THAT WEEK, on the scores',
+      pastWrong.length === 0, pastWrong.slice(0, 6).join(' | '));
     // THE SPECTRUM IS REALLY A SPECTRUM. Tim asked for "more red or more green"
     // rather than two levels, so a sample that only ever reached the ends would
     // pass the assertion above while showing him nothing he asked for.
@@ -4310,8 +4972,9 @@ async function check(scenario, boot) {
     const coloured = [...seen.entries()]
       .filter(([c]) => /heat-(up|dn)-\d/.test(c)).reduce((a, [, n]) => a + n, 0);
     const oldWouldColour = [...seen.entries()].reduce((a, [, n]) => a + n, 0);
-    let oldCount = 0;
+    let oldCount = oldPast;
     WEEKS.forEach((wk, i) => {
+      if (isPast(wk)) return;
       for (const k of keys) {
         const cell = byKey.get(k).cells[i];
         if (cell.v === null) continue;
@@ -4760,6 +5423,9 @@ async function check(scenario, boot) {
       JSON.stringify({ open: w.sheetOpen, after: w.sheetAfterRepaint, ident: w.sheetIdent }));
     c.ok('and closes once its man is no longer on the page', w.sheetGoneWithMan, 'still open');
   }
+
+  // ---- (z) "Actual history": the select, both tables, the League row -------
+  if (scenario === 'history-proj') await checkHistory(c, scenario);
 
   return c.out;
 }

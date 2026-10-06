@@ -1647,7 +1647,8 @@ function renderWeeklyTable() {
         .map((a) => (a ? a[key] : null)).filter((v) => typeof v === 'number');
       const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
       tfoot.innerHTML =
-        `<tr><td class="name">League</td>` +
+        // `league-row` is the heavier rule that sets it off from the teams (css/app.css).
+        `<tr class="league-row"><td class="name">League</td>` +
         weekly.map((a) => (a && a.week === part ? '<td></td>' : `<td>${a && typeof a[key] === 'number' ? cell(a[key]) : dash}</td>`)).join('') +
         (showAvg ? `<td>${cell(avg)}</td>` : '') +
         '</tr>';

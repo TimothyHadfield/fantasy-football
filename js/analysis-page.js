@@ -70,6 +70,8 @@ import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // The slot vocabulary is shared with the Trade page's per-week breakdown, so
 // the two cannot disagree about what WR2 means. See js/lineup-slots.js.
 import { SLOT_ORDER, slotRows, fillSlots } from './lineup-slots.js';
+// The small LIVE badge beside a week still being played — the Decisions page's.
+import { LIVE_TAG } from './actual-season-table.js';
 // THE POSITIONAL FLOOR — no slot assessed below what the wire would give you
 // there (Tim, 2026-09-18). Pure, and every one of these is a no-op when
 // `state.floors` is null, which is what keeps demo and a failed read honest.
@@ -614,13 +616,14 @@ function withPo(td, week, weeks) {
 }
 
 /** A week's header cell; a playoff week says so in words, not by the line alone. */
-function weekHead(w, weeks, cls, title) {
+function weekHead(w, weeks, cls, title, tag = '') {
   const start = w === firstPlayoffIn(weeks);
   const classes = [cls, start ? 'po-start' : ''].filter(Boolean).join(' ');
+  // `tag` rides beside the number: the LIVE badge on a week still being played.
   const label = isPlayoff(w)
-    ? `${w}${start ? '<span class="po-tag" aria-hidden="true">PO</span>' : ''}` +
+    ? `${w}${tag}${start ? '<span class="po-tag" aria-hidden="true">PO</span>' : ''}` +
       '<span class="sr-only"> (playoffs)</span>'
-    : String(w);
+    : `${w}${tag}`;
   const why = isPlayoff(w) ? `${title} A playoff week: shown, not counted in Avg.` : title;
   return `<th data-sort class="${classes}" title="${why}">${label}</th>`;
 }
@@ -3318,6 +3321,197 @@ function teamWeekTotals(rows, slots, weeks) {
   return byWeek;
 }
 
+// ------------------------------------------------ what has already happened
+//
+// TIM, 2026-10-05: "both the weekly totals and season by week chart show a
+// little missleading or completely wrong info for current/past weeks. Instead
+// of doing whatever we're doing now, just put a label above those weeks that
+// says "Actual History" or something like that and then just show the numbers
+// they actually recieved for that week, not anything different. ... make the
+// "Actual" word on "actual history" a drop down that you can change with proj
+// in case you're wondering what you were proj those weeks."
+//
+// WHAT WAS WRONG, measured on league 1241838 that day: a played week was drawn
+// exactly like one still to come — the best legal lineup RE-SOLVED over that
+// week's roster and floored at today's wire — so a squad that scored 108 read
+// 125.1. And in a week whose players carry `done`, their scores stand in for
+// projections, so the solver picked on the SCORES: the hindsight-perfect
+// lineup (170.3 for a squad that really scored 161).
+//
+// So a week that is finished or being played is HISTORY, and both panels draw
+// it from the lineup the squad REALLY started (`started` / `lineupSlotId` in
+// the same season read — no solve, no floor, no second fetch). Everything
+// above this block is untouched and still answers for the weeks to come, for
+// the Avg columns and for the all-teams grid.
+
+/** `prefs` key for the Actual / Proj choice — one per league. */
+const historyPrefKey = () => `history.${sourceKey()}`;
+
+/** 'actual' (the default) or 'proj': what the history columns show. */
+function historyMode() {
+  return prefs.get(historyPrefKey(), 'actual') === 'proj' ? 'proj' : 'actual';
+}
+
+/**
+ * The weeks that have happened: every week the schedule has finished, and then
+ * the one being played — the first week after them, once somebody in it has
+ * finished (`done`, js/season.js). A run from the left, never a scattering.
+ */
+function historyWeeks(weeks = spanWeeks()) {
+  const played = new Set(state.playedWeeks);
+  const out = new Set();
+  for (const w of weeks) {
+    if (played.has(w)) { out.add(w); continue; }
+    const teams = state.seasonWeeks.get(w);
+    if (teams && teams.some((t) => (t.players || []).some((p) => p.done === true))) out.add(w);
+    break;
+  }
+  return out;
+}
+
+/** The first week still to come — the column the heavy line is drawn before. */
+function firstFuture(weeks, hist) {
+  return hist.size ? weeks.find((w) => !hist.has(w)) : undefined;
+}
+
+/** Still being played: a starter somewhere in the league has not finished. */
+function weekLive(week) {
+  const teams = state.seasonWeeks.get(week);
+  return Boolean(teams && teams.some((t) =>
+    (t.players || []).some((p) => p.started === true && p.done === false)));
+}
+
+/** Memoised like the fills: the league, the rows, what has landed, what is history. */
+let realFills = { key: null, byWeek: new Map() };
+
+/**
+ * Every squad's REAL lineup in every history week, handed out to the slot rows.
+ *
+ * Each starter is a copy carrying the two numbers of `weekLine`: `projected`
+ * his projection before kickoff, `actual` his RESULT (null while he is still
+ * playing — a running score is not one). `fillSlots` ranks men sharing a slot
+ * on that projection, so the row a man sits in is the same on Actual and Proj.
+ *
+ * @returns {Map<number, Map<number, {fill:Map, starters:Array}>>} week -> team
+ */
+function realLineups(rows, weeks) {
+  const hist = [...historyWeeks(weeks)];
+  const key = `${fillsKey(rows, weeks)}|h${hist.join(',')}`;
+  if (realFills.key === key) return realFills.byWeek;
+
+  const byWeek = new Map();
+  for (const w of hist) {
+    const teams = state.seasonWeeks.get(w);
+    if (!teams) continue;
+    const perTeam = new Map();
+    for (const team of teams) {
+      const starters = (team.players || []).filter((p) => p.started === true).map((p) => {
+        const line = weekLine(p);
+        return {
+          ...p,
+          slotId: p.lineupSlotId,
+          projected: typeof line.proj === 'number' ? line.proj : null,
+          actual: typeof line.actual === 'number' ? line.actual : null,
+        };
+      });
+      perTeam.set(team.id, { fill: fillSlots(starters, rows), starters });
+    }
+    byWeek.set(w, perTeam);
+  }
+
+  realFills = { key, byWeek };
+  return byWeek;
+}
+
+/** A real starter's number on the chosen side, to the tenth; null when he has none. */
+function historyValue(p, mode) {
+  const v = mode === 'proj' ? p.projected : p.actual;
+  return typeof v === 'number' ? round1(v) : null;
+}
+
+/** A real lineup added up: the score (finished starters only), or what it was projected. */
+function historyTotal(starters, mode) {
+  const vals = starters.map((p) => (mode === 'proj' ? p.projected : p.actual))
+    .filter((v) => typeof v === 'number');
+  return vals.length ? round1(vals.reduce((a, b) => a + b, 0)) : null;
+}
+
+/**
+ * The week totals AS DRAWN: history weeks from the real lineups, on the chosen
+ * side, and every other week straight out of `teamWeekTotals`. Weekly totals
+ * and the Starting lineup band both read this, so they cannot disagree.
+ *
+ * @returns {Map<number, Map<number, number|null>>} week -> team -> total
+ */
+function shownTotals(rows, slots, weeks) {
+  const best = teamWeekTotals(rows, slots, weeks);
+  const hist = historyWeeks(weeks);
+  if (!hist.size) return best;
+  const real = realLineups(rows, weeks);
+  const mode = historyMode();
+  const out = new Map();
+  for (const w of weeks) {
+    if (!hist.has(w)) { out.set(w, best.get(w) || new Map()); continue; }
+    const totals = new Map();
+    for (const [id, got] of real.get(w) || []) totals.set(id, historyTotal(got.starters, mode));
+    out.set(w, totals);
+  }
+  return out;
+}
+
+/**
+ * A week still being played, shown as scores, is a set of PART totals: not
+ * coloured and not averaged, the same refusal the Stats week grid makes.
+ */
+const partScores = (week, hist) => hist.has(week) && historyMode() === 'actual' && weekLive(week);
+
+/** What a history total says on a hover. */
+function historyTotalLabel(v, week, live) {
+  if (v === null) {
+    return state.seasonWeeks.has(week)
+      ? `Week ${week}: nothing recorded yet.`
+      : totalLabel(null, week, 0);
+  }
+  if (historyMode() === 'proj') {
+    return `Week ${week}: projected ${fmt(v)} before kickoff — the real starters added up.`;
+  }
+  return live
+    ? `Week ${week}: ${fmt(v)} scored so far — finished starters only.`
+    : `Week ${week}: scored ${fmt(v)}.`;
+}
+
+/**
+ * The band above the history columns: "Actual history", with the word a select
+ * (Actual | Proj). Null when nothing has happened yet. `tr.colgroup` is the
+ * site's group band, and sortable.js reads only the LAST header row.
+ */
+function historyGroupRow(weeks, hist) {
+  const n = weeks.filter((w) => hist.has(w)).length;
+  if (!n) return '';
+  const mode = historyMode();
+  const opt = (v, text) => `<option value="${v}"${mode === v ? ' selected' : ''}>${text}</option>`;
+  const why = mode === 'proj'
+    ? 'Weeks played or in play: what each team’s real starters were projected before kickoff.'
+    : 'Weeks played or in play: what each team’s real starters scored.';
+  return `<tr class="colgroup hist-row"><th colspan="2"></th>` +
+    `<th colspan="${n}" class="hist-group" title="${why}">` +
+    `<select class="hist-pick" data-history aria-label="History shows">` +
+    `${opt('actual', 'Actual')}${opt('proj', 'Proj')}</select> history</th>` +
+    (weeks.length > n ? `<th colspan="${weeks.length - n}" class="fut-start"></th>` : '') +
+    `</tr>`;
+}
+
+/** `fut-start` on the first future week's cell — the heavy line, as `withPo` does `po-start`. */
+function withFut(td, week, fut) {
+  if (week !== fut) return td;
+  return td.replace(/^<td(?: class="([^"]*)")?/, (m, c) => `<td class="${c ? `${c} ` : ''}fut-start"`);
+}
+
+/** What the Avg column's heading says once some of its weeks are history. */
+const AVG_HEAD = 'The mean of the regular-season week columns that carry a number; playoff weeks are shown but not counted.';
+const AVG_HEAD_HISTORY = 'A projection: the best legal lineup, averaged over every regular-season week. ' +
+  'History weeks count at that projection, not at the numbers shown; playoff weeks are not counted.';
+
 /**
  * Where one number stands against its own slot around the league — the shared
  * scale, and the ONE place this panel asks for it.
@@ -3373,24 +3567,32 @@ function avgHeatOf(avg, row, scales) {
 }
 
 /** The Avg cell's sentence. A <td> with no link in it, so a `title` is right. */
-function avgLabel(avg, row, team, heat) {
+function avgLabel(avg, row, team, heat, history = false) {
   if (avg === null) {
     return `No regular-season week read so far gives ${team ? team.name : 'this squad'} an ` +
       `${row.key} at all, so there is nothing to average.`;
   }
+  // With history on screen the cells are no longer what is averaged: say so.
   return `${team ? team.name : 'This squad'}'s ${row.key} is worth ${fmt(avg)} in an average ` +
-    `week — the regular-season cells in this row, averaged, assumed numbers included. It is the ` +
+    (history
+      ? `week — a projection: the best legal lineup’s ${row.key} over every regular-season week, ` +
+        `averaged, assumed numbers included. History weeks count at that projection, not at the ` +
+        `numbers shown. It is the `
+      : `week — the regular-season cells in this row, averaged, assumed numbers included. It is the `) +
     `same figure the all-teams grid shows for this squad on Proj avg.` +
     (heat ? ` ${heat.words}` : '');
 }
 
 /** The band's Avg cell — the one number that ties this panel to the grid above. */
-function bandAvgLabel(totalAvg, team, heat) {
+function bandAvgLabel(totalAvg, team, heat, history = false) {
   if (totalAvg === null) {
     return 'No week has been read yet, so there is no lineup to average.';
   }
   return `${team ? team.name : 'This squad'}'s best legal lineup projects ${fmt(totalAvg)} in an ` +
-    `average week — every week column in this band, averaged. It is the Total the all-teams grid ` +
+    (history
+      ? `average week — a projection over every regular-season week; history weeks count at that ` +
+        `projection, not at the numbers shown. It is the Total the all-teams grid `
+      : `average week — every week column in this band, averaged. It is the Total the all-teams grid `) +
     `shows for this squad on Proj avg.` + (heat ? ` ${heat.words}` : '');
 }
 
@@ -3538,6 +3740,41 @@ function slotCell(entry, row, week, bar, index) {
     `${playerRef(p, `${shown}${mark}`, `${why}${assumedWhy}${says} Click to ${OPENS}.`, 'aria-label')}</td>`;
 }
 
+/**
+ * One slot's week IN HISTORY: the man who really started there and his number
+ * on the chosen side — his score, or his projection before kickoff. No floor,
+ * no "Bye" word, no assumption: a zero is the zero he scored.
+ *
+ * The same markup as `slotCell` (link, `aria-label`, `data-pid`), so the name
+ * line and the lighting treat a history cell like any other. `scale` is this
+ * slot around the league IN THIS WEEK, on the numbers shown.
+ */
+function historyCell(entry, row, week, scale) {
+  if (!state.seasonWeeks.has(week)) return slotCell(null, row, week, null, null);
+  const cls = (extra) => `wk hist${week === state.week ? ' now' : ''}${extra ? ` ${extra}` : ''}`;
+  if (!entry) {
+    return `<td class="${cls('muted')}" title="Nobody started at ${esc(row.key)} in week ${week}.">—</td>`;
+  }
+  const p = entry.p;
+  const proj = historyMode() === 'proj';
+  const v = historyValue(p, historyMode());
+  // No id, no link (`playerRef`) — and then no `data-pid` either, so nothing
+  // looks for a link the cell does not have.
+  const pid = p.playerId === null || p.playerId === undefined ? '' : ` data-pid="${esc(p.playerId)}"`;
+  const who = `${p.name} started at ${row.key} in week ${week}`;
+  if (v === null) {
+    const why = proj
+      ? `${who}; no projection was recorded for him.`
+      : p.done === false ? `${who} and has not finished yet.` : `${who}; no score was recorded for him.`;
+    return `<td class="${cls('muted')}"${pid}>${playerRef(p, '—', `${why} Click to ${OPENS}.`, 'aria-label')}</td>`;
+  }
+  const heat = heatOf(v, scale, { what: `the other squads’ ${row.key} in week ${week}` });
+  const why = proj ? `${who}, projected ${fmt(v)} before kickoff.` : `${who} and scored ${fmt(v)}.`;
+  return `<td class="${cls(heat ? heat.cls : '')}" data-v="${v}"${pid}>` +
+    `${playerRef(p, `${fmt(v)}${heatMarkHtml(heat)}`,
+      `${why}${heat ? ` ${heat.words}` : ''} Click to ${OPENS}.`, 'aria-label')}</td>`;
+}
+
 /** What the totals band's cell says on a hover. It is a <td>, so a title is right. */
 function totalLabel(total, week, slotCount) {
   if (total === null) {
@@ -3550,22 +3787,29 @@ function totalLabel(total, week, slotCount) {
 }
 
 function renderSeasonHead(weeks) {
+  const hist = historyWeeks(weeks);
+  const fut = firstFuture(weeks, hist);
+  const proj = historyMode() === 'proj';
   const cols = weeks
     .map((w) => {
       const failed = state.seasonFailed.has(w);
-      const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '']
+      const cls = ['wk', w === state.week ? 'now' : '', failed ? 'muted' : '',
+        w === fut ? 'fut-start' : '']
         .filter(Boolean).join(' ');
       const title = failed
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
-        : `The best legal lineup's projection for week ${w}, slot by slot.`;
-      return weekHead(w, weeks, cls, title);
+        : hist.has(w)
+          ? `Week ${w}: the lineup really started, slot by slot — ` +
+            (proj ? 'what each starter was projected before kickoff.' : 'what each starter scored.')
+          : `The best legal lineup's projection for week ${w}, slot by slot.`;
+      return weekHead(w, weeks, cls, title, hist.has(w) && weekLive(w) ? LIVE_TAG : '');
     })
     .join('');
 
   $('seasonTable').querySelector('thead').innerHTML =
-    `<tr>
-       <th class="name" data-sort title="A starting slot in this league's own lineup, filled by that week's best legal lineup. Where a league starts more than one of a position, 1 is the best of them that week.">Slot</th>
-       <th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are shown but not counted.">Avg</th>
+    `${historyGroupRow(weeks, hist)}<tr>
+       <th class="name" data-sort title="A starting slot in this league's own lineup, filled by that week's best legal lineup. Where a league starts more than one of a position, 1 is the best of them that week.${hist.size ? ' History weeks show the lineup really started instead.' : ''}">Slot</th>
+       <th class="grouped" data-sort title="${hist.size ? AVG_HEAD_HISTORY : AVG_HEAD}">Avg</th>
        ${cols}
      </tr>`;
 }
@@ -3612,44 +3856,95 @@ function paintTotals() {
   const show = teams.length > 0 && weeks.length > 0 && rows.length > 0;
   $('totalsWrap').classList.toggle('hidden', !show);
   $('totalsEmpty').classList.toggle('hidden', show);
+  const foot = table.querySelector('tfoot');
   if (!show) {
     $('totalsEmpty').textContent = '';
-    table.querySelector('thead tr').innerHTML = '';
+    table.querySelector('thead').innerHTML = '<tr></tr>';
     bodyOf(table).innerHTML = '';
+    if (foot) foot.innerHTML = '';
     return;
   }
 
-  const totals = teamWeekTotals(rows, leagueSlots(), weeks);
-  const scales = new Map(weeks.map((w) => [w, heatScale(
+  // HISTORY WEEKS ARE WHAT HAPPENED (see `historyWeeks`): the real score, or on
+  // Proj what the real starters were projected. `best` is still every week's
+  // best legal lineup, and it is what Avg averages — a projection, unchanged.
+  const hist = historyWeeks(weeks);
+  const fut = firstFuture(weeks, hist);
+  const proj = historyMode() === 'proj';
+  const best = teamWeekTotals(rows, leagueSlots(), weeks);
+  const totals = shownTotals(rows, leagueSlots(), weeks);
+  const scales = new Map(weeks.map((w) => [w, partScores(w, hist) ? null : heatScale(
     [...(totals.get(w) || new Map()).values()]
   )]));
   const avgScale = slotAvgScales(rows, weeks).total;
 
-  table.querySelector('thead tr').innerHTML =
+  table.querySelector('thead').innerHTML = `${historyGroupRow(weeks, hist)}<tr>` +
     `<th class="name" data-sort>Team</th>` +
-    `<th class="grouped" data-sort title="The mean of the regular-season week columns that carry a number; playoff weeks are shown but not counted.">Avg</th>` +
-    weeks.map((w) => weekHead(w, weeks, `wk${w === state.week ? ' now' : ''}`,
-      `Each team's best legal lineup for week ${w}, projected.`)).join('');
+    `<th class="grouped" data-sort title="${hist.size ? AVG_HEAD_HISTORY : AVG_HEAD}">Avg</th>` +
+    weeks.map((w) => weekHead(w, weeks,
+      `wk${w === state.week ? ' now' : ''}${w === fut ? ' fut-start' : ''}`,
+      hist.has(w)
+        ? `Week ${w}: ` + (proj
+          ? 'what each team’s real starters were projected before kickoff.'
+          : 'each team’s real score.')
+        : `Each team's best legal lineup for week ${w}, projected.`,
+      hist.has(w) && weekLive(w) ? LIVE_TAG : '')).join('') + `</tr>`;
 
+  const avgs = [];
   bodyOf(table).innerHTML = teams.map((t) => {
     const vals = weeks.map((w) => (totals.get(w) || new Map()).get(t.id) ?? null);
-    const avg = regularAvg(vals, weeks);
+    const avg = regularAvg(weeks.map((w) => (best.get(w) || new Map()).get(t.id) ?? null), weeks);
+    avgs.push(avg);
     const ah = heatOf(avg, avgScale, { what: 'the other squads’ lineups' });
     return `<tr>` +
       `<td class="name" data-v="${esc(t.name)}">${esc(t.name)}</td>` +
       `<td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`} ` +
-      `title="${esc(bandAvgLabel(avg, t, ah))}">${fmt(avg)}${heatMarkHtml(ah)}</td>` +
+      `title="${esc(bandAvgLabel(avg, t, ah, hist.size > 0))}">${fmt(avg)}${heatMarkHtml(ah)}</td>` +
       vals.map((v, i) => {
         const w = weeks[i];
-        const h = heatOf(v, scales.get(w), { what: `the other squads’ lineups in week ${w}` });
-        return withPo(
-          `<td class="wk${w === state.week ? ' now' : ''}${h ? ` ${h.cls}` : ''}"` +
+        const past = hist.has(w);
+        const h = heatOf(v, scales.get(w), {
+          what: past
+            ? `the other teams’ ${proj ? 'projections' : 'scores'} in week ${w}`
+            : `the other squads’ lineups in week ${w}`,
+        });
+        const says = past ? historyTotalLabel(v, w, weekLive(w)) : totalLabel(v, w, rows.length);
+        return withFut(withPo(
+          `<td class="wk${past ? ' hist' : ''}${w === state.week ? ' now' : ''}${h ? ` ${h.cls}` : ''}"` +
           `${v === null ? '' : ` data-v="${v}"`} ` +
-          `title="${esc(`${t.name}: ` + totalLabel(v, w, rows.length) + (h ? ` ${h.words}` : ''))}">` +
-          `${fmt(v)}${heatMarkHtml(h)}</td>`, w, weeks);
+          `title="${esc(`${t.name}: ` + says + (h ? ` ${h.words}` : ''))}">` +
+          `${fmt(v)}${heatMarkHtml(h)}</td>`, w, weeks), w, fut);
       }).join('') +
       `</tr>`;
   }).join('');
+
+  // THE LEAGUE ROW (Tim, 2026-10-05: "add another row at the bottom seperated
+  // from the rest that is just the avg of the user's weeks or whatever to show
+  // where the line is"). A `tfoot`, as on the Stats week grid, so click-to-sort
+  // never files it among the teams; never coloured; blank where a column has
+  // nothing to average — and in a week still being played, as Stats leaves it.
+  if (foot) {
+    const mean = (xs) => {
+      const got = xs.filter((v) => typeof v === 'number');
+      return got.length ? round1(got.reduce((a, b) => a + b, 0) / got.length) : null;
+    };
+    const show1 = (v) => (v === null ? '' : fmt(v));
+    foot.innerHTML = `<tr class="league-row">` +
+      `<td class="name">League</td>` +
+      `<td class="avg grouped" title="The teams’ Avg, averaged.">${show1(mean(avgs))}</td>` +
+      weeks.map((w) => {
+        const v = partScores(w, hist)
+          ? null
+          : mean(teams.map((t) => (totals.get(w) || new Map()).get(t.id) ?? null));
+        const says = partScores(w, hist)
+          ? `Week ${w} is still being played, so there is no league average yet.`
+          : `Week ${w}: the teams’ numbers in this column, averaged.`;
+        return withFut(withPo(
+          `<td class="wk${w === state.week ? ' now' : ''}" title="${says}">${show1(v)}</td>`,
+          w, weeks), w, fut);
+      }).join('') +
+      `</tr>`;
+  }
   resort(table);
 }
 
@@ -3697,9 +3992,25 @@ function paintSeason() {
   const avgScales = slotAvgScales(rows, weeks);
   // And the band's: ten whole lineups, measured one WEEK COLUMN at a time.
   const bandTotals = teamWeekTotals(rows, slots, weeks);
-  const bandScales = new Map(weeks.map((w) => [w, heatScale(
-    [...(bandTotals.get(w) || new Map()).values()]
+  // HISTORY (see `historyWeeks`): those columns are the lineup really started,
+  // so the band there is the real score — `shownTotals`, the very numbers the
+  // Weekly totals panel draws — and each slot is coloured against the other
+  // squads' same slot IN THAT WEEK, on the numbers shown. A week still being
+  // played, shown as scores, is part totals: no colour (`partScores`).
+  const hist = historyWeeks(weeks);
+  const fut = firstFuture(weeks, hist);
+  const mode = historyMode();
+  const real = realLineups(rows, weeks);
+  const shown = shownTotals(rows, slots, weeks);
+  const bandScales = new Map(weeks.map((w) => [w, partScores(w, hist) ? null : heatScale(
+    [...(shown.get(w) || new Map()).values()]
   )]));
+  const histScale = (w, row) => (partScores(w, hist) ? null : heatScale(
+    [...(real.get(w) || new Map()).values()].map((got) => {
+      const e = got.fill.get(row.key);
+      return e ? historyValue(e.p, mode) : null;
+    })
+  ));
   const bandAvgScale = avgScales.total;
 
   // week -> slot key -> who is in it. Built once and read by both the slot rows
@@ -3725,7 +4036,14 @@ function paintSeason() {
         const fill = byWeek.get(w);
         return fill ? fill.get(row.key) : undefined;
       });
-      for (const e of values) {
+      // What is DRAWN: the real starter in a history week, the solve elsewhere.
+      // `values` stays the solve throughout, because Avg below is a projection.
+      const drawn = weeks.map((w, i) => {
+        if (!hist.has(w)) return values[i];
+        const got = (real.get(w) || new Map()).get(team.id);
+        return got ? got.fill.get(row.key) : undefined;
+      });
+      for (const e of drawn) {
         if (e && e.p.playerId !== null && e.p.playerId !== undefined) {
           const p = e.p;
           const injured = injuryTier(p.injuryStatus);
@@ -3756,9 +4074,10 @@ function paintSeason() {
       <tr data-slot="${esc(row.key)}">
         <td class="name" data-v="${row.order}"><span class="slot-tag">${esc(row.key)}</span></td>
         <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`} ` +
-        `title="${esc(avgLabel(avg, row, team, ah))}">${fmt(avg)}${heatMarkHtml(ah)}</td>
-        ${values.map((e, i) =>
-          withPo(slotCell(e || null, row, weeks[i], bar, index), weeks[i], weeks)).join('')}
+        `title="${esc(avgLabel(avg, row, team, ah, hist.size > 0))}">${fmt(avg)}${heatMarkHtml(ah)}</td>
+        ${drawn.map((e, i) => withFut(withPo(hist.has(weeks[i])
+          ? historyCell(e || null, row, weeks[i], histScale(weeks[i], row))
+          : slotCell(e || null, row, weeks[i], bar, index), weeks[i], weeks), weeks[i], fut)).join('')}
       </tr>`;
     })
     .join('');
@@ -3780,15 +4099,18 @@ function paintSeason() {
   // one spelling of it, because the band is also COLOURED against the other
   // nine squads' totals for the same week and the number being coloured has to
   // be the number in the distribution.
-  const totals = weeks.map((w) => (bandTotals.get(w) || new Map()).get(team.id) ?? null);
-  const totalAvg = regularAvg(totals, weeks);
+  // THE AVG IS STILL THE SOLVE'S (a projection, and the grid's Total); the week
+  // cells are what is drawn — the real score under "history".
+  const totalAvg = regularAvg(
+    weeks.map((w) => (bandTotals.get(w) || new Map()).get(team.id) ?? null), weeks);
+  const totals = weeks.map((w) => (shown.get(w) || new Map()).get(team.id) ?? null);
   const bandAvgHeat = heatOf(totalAvg, bandAvgScale, { what: 'the other squads’ lineups' });
   $('seasonTotals').innerHTML = `
     <tr class="split-row">
       <td class="name split-label">Starting lineup</td>
       <td class="avg grouped split-total${bandAvgHeat ? ` ${bandAvgHeat.cls}` : ''}"` +
       `${totalAvg === null ? '' : ` data-v="${totalAvg}"`} ` +
-      `title="${esc(bandAvgLabel(totalAvg, team, bandAvgHeat))}">` +
+      `title="${esc(bandAvgLabel(totalAvg, team, bandAvgHeat, hist.size > 0))}">` +
       `${fmt(totalAvg)}${heatMarkHtml(bandAvgHeat)}</td>
       ${totals.map((t, i) => {
         // ONE WEEK COLUMN IS ONE COMPARISON GROUP: this squad's week-9 lineup
@@ -3797,15 +4119,21 @@ function paintSeason() {
         // is — a week the whole league is quiet in is not a bad week for
         // everybody, it is a bye-heavy week, and one scale across the season
         // would paint it as a red stripe down every squad's sheet.
+        const past = hist.has(weeks[i]);
         const h = heatOf(t, bandScales.get(weeks[i]), {
-          what: `the other squads’ lineups in week ${weeks[i]}`,
+          what: past
+            ? `the other teams’ ${mode === 'proj' ? 'projections' : 'scores'} in week ${weeks[i]}`
+            : `the other squads’ lineups in week ${weeks[i]}`,
         });
-        return withPo(
-          `<td class="wk split-total${weeks[i] === state.week ? ' now' : ''}` +
+        const says = past
+          ? historyTotalLabel(t, weeks[i], weekLive(weeks[i]))
+          : totalLabel(t, weeks[i], rows.length);
+        return withFut(withPo(
+          `<td class="wk split-total${past ? ' hist' : ''}${weeks[i] === state.week ? ' now' : ''}` +
           `${h ? ` ${h.cls}` : ''}"` +
           `${t === null ? '' : ` data-v="${t}"`} ` +
-          `title="${esc(totalLabel(t, weeks[i], rows.length) + (h ? ` ${h.words}` : ''))}">` +
-          `${fmt(t)}${heatMarkHtml(h)}</td>`, weeks[i], weeks);
+          `title="${esc(says + (h ? ` ${h.words}` : ''))}">` +
+          `${fmt(t)}${heatMarkHtml(h)}</td>`, weeks[i], weeks), weeks[i], fut);
       }).join('')}
     </tr>`;
 
@@ -4337,6 +4665,20 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     `a slot.`
   );
 
+  // HISTORY IS NOT SOLVED (Tim, 2026-10-05). Said here because every paragraph
+  // around this one describes the weeks still to come.
+  if (historyWeeks(weeks).size) {
+    parts.push(
+      `<strong>The weeks under “Actual history” are not solved at all.</strong> They show the ` +
+      `lineup really started and what each starter scored, with no waiver floor, and Starting ` +
+      `lineup there is the real score; a week still being played counts finished starters only. ` +
+      `Switch Actual to <strong>Proj</strong> for what those same starters were projected before ` +
+      `kickoff. Those cells are coloured against the other squads’ same slot in that week. ` +
+      `<strong>Avg does not use them</strong>: it stays a projection — the best legal lineup over ` +
+      `every regular-season week, history weeks included at that projection.`
+    );
+  }
+
   parts.push(
     `<strong>Starting lineup</strong>, in the band under the last slot, is those slots added up for ` +
     `that week — the same band, and the same arithmetic, as the Roster detail above. It totals the ` +
@@ -4847,6 +5189,18 @@ wireTips($('rosterTable'));
 enableSort($('seasonTable'), { defaultIndex: 0, defaultAsc: true });
 // Weekly totals opens on Avg, best first.
 enableSort($('totalsTable'), { defaultIndex: 1 });
+
+// ACTUAL | PROJ, the word in "Actual history" (Tim, 2026-10-05). One choice for
+// both tables, kept per league; a repaint of those two panels and nothing else.
+for (const id of ['totalsTable', 'seasonTable']) {
+  $(id).addEventListener('change', (e) => {
+    const pick = e.target.closest ? e.target.closest('select[data-history]') : null;
+    if (!pick) return;
+    prefs.set(historyPrefKey(), pick.value === 'proj' ? 'proj' : null);
+    paintTotals();
+    paintSeason();
+  });
+}
 
 // NO `wireTips` HERE. This panel deliberately has no player card — Tim,
 // 2026-09-18 — so the line above the table and the highlight are the whole of
