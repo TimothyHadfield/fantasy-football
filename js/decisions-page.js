@@ -53,6 +53,7 @@ import { summaryTableHtml } from './summary-table.js';
 import {
   viewSwitchHtml, viewFromClick, signedText, diffOf, diffClass, recordDiff, dimStyle, esc,
 } from './view-switch.js';
+import { enableSort, resort, sortBy } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
 
@@ -136,6 +137,85 @@ const playerName = (id) => {
   return (p && p.name) || `Player ${id}`;
 };
 const names = (ids) => (ids || []).map(playerName).join(' and ');
+
+// --------------------------------------------------------------------- sorting
+//
+// Tim, 2026-10-06: "fix the decisions section so the formating and function of
+// the graphs matches with the rest of the cite (especially column sorting ...)".
+// Every table here sorts on a click of its heading through js/sortable.js, like
+// every other table on the site. Season by week does not: its rows are lineup
+// slots, and it does not sort on Analysis either.
+//
+// A PAIR SORTS TOGETHER. Standings and the chart are each drawn twice, Current
+// beside (or above) Hypothetical | Difference, and the point of the pair is to
+// read one team across both. So a click on either table's heading sorts THAT
+// table by its own numbers, and the other one takes the same row order and the
+// same arrow — never its own order, which would put two different teams on one
+// line.
+//
+// Both tables of a pair are redrawn from scratch on every render, so the choice
+// is kept here and not in sortable.js (which keys it on the table element):
+// box -> { index, asc, lead } — the column, the direction, and which of the two
+// was clicked ('Cur' or 'Hyp').
+const pairSort = { standings: null, summary: null };
+
+const bodyRows = (table) => [...table.querySelectorAll('tbody > tr')];
+
+/** A pair's two tables, Current first; null for one that is not drawn. */
+const pairTables = (box) => ['Cur', 'Hyp'].map((side) => $(`${box}${side}`).querySelector('table'));
+
+/** Put `follower`'s rows in the order `leader`'s are in, by the place each was drawn at. */
+function followRows(leader, follower) {
+  const body = follower.querySelector('tbody');
+  const byPlace = new Map(bodyRows(follower).map((tr) => [tr.getAttribute('data-place'), tr]));
+  for (const tr of bodyRows(leader)) {
+    const twin = byPlace.get(tr.getAttribute('data-place'));
+    if (twin) body.appendChild(twin);
+  }
+}
+
+/**
+ * Wire a freshly drawn pair for sorting and put the kept sort back on it. Call
+ * after BOTH tables are drawn, in the same team order (they always are).
+ */
+function sortPair(box) {
+  const [cur, hyp] = pairTables(box);
+  if (!cur || !hyp) return;
+  for (const table of [cur, hyp]) bodyRows(table).forEach((tr, i) => tr.setAttribute('data-place', i));
+  const st = pairSort[box];
+  const opts = st ? { defaultIndex: st.index, defaultAsc: st.asc } : {};
+  enableSort(cur, opts);
+  enableSort(hyp, opts);
+  if (st) followRows(st.lead === 'Hyp' ? hyp : cur, st.lead === 'Hyp' ? cur : hyp);
+}
+
+/**
+ * A heading of one of a pair's tables was clicked (or keyed). sortable.js has
+ * already sorted that table — its listener is on the table, this one further
+ * out — so its heading says which column and which way.
+ */
+function onPairSort(box, e) {
+  if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+  const th = e.target.closest && e.target.closest('th[data-sort]');
+  const table = th && th.closest('table');
+  const [cur, hyp] = pairTables(box);
+  if (!table || !cur || !hyp || (table !== cur && table !== hyp)) return;
+  const head = [...th.parentElement.children];
+  const index = head.findIndex((h) => h.classList.contains('sorted'));
+  if (index < 0) return;
+  const asc = head[index].classList.contains('asc');
+  pairSort[box] = { index, asc, lead: table === hyp ? 'Hyp' : 'Cur' };
+  // Sorted again from the order it was DRAWN in, so teams level on this column
+  // stand as they will after the next redraw and do not swap places then.
+  const body = table.querySelector('tbody');
+  bodyRows(table)
+    .sort((a, b) => a.getAttribute('data-place') - b.getAttribute('data-place'))
+    .forEach((tr) => body.appendChild(tr));
+  sortBy(table, index, asc);
+  const other = table === hyp ? cur : hyp;
+  sortBy(other, index, asc);
+  followRows(table, other);
+}
 
 /** "3 finished weeks", and the week in play after it when the world has one. */
 function weeksSaid(world) {
@@ -470,6 +550,28 @@ function resultLetter(g, teamId) {
 
 const RANK = { L: 0, T: 1, W: 2 };
 
+/**
+ * ` data-v="…"` for a cell that prints something js/sortable.js cannot rank
+ * ("2-1", "W → L", "+1 W", a number beside a live tag) — or nothing at all for
+ * a value that is not known, so the dash it prints sorts to the bottom.
+ */
+const sortV = (v) => (v === null || v === undefined || Number.isNaN(v) ? '' : ` data-v="${esc(v)}"`);
+
+/** A record as ESPN ranks one — win share, a tie as half — then the points. The Stats page's key. */
+function recordKey(r, points) {
+  if (!r) return null;
+  const games = r.w + r.l + (r.t || 0);
+  return (games ? (r.w + (r.t || 0) / 2) / games : 0) * 1e6 + (Number.isFinite(points) ? points : 0);
+}
+
+/**
+ * A week's result as a number: a flip the team's way on top, one against it at
+ * the bottom, and between them W, T, L as they stand. A matchup still in play
+ * has no result in both worlds yet and goes under them all.
+ */
+const resultKey = (was, is) => (was && is ? (RANK[is] - RANK[was]) * 10 + RANK[is] : null);
+const PENDING_KEY = -99;
+
 /** What the hypothetical IS, in a few words, over the result. */
 function ledeOf(d) {
   if (d.whatIf) return `If accepted from week ${d.week}: ${d.label}.`;
@@ -493,14 +595,17 @@ function renderTeams(d) {
     const { hyp, real } = seasonPoints(m, id);
     const points = diffOf(hyp, real, 2);
     const live = partial !== null && liveCell(m, id, partial);
+    // What each cell SORTS on, where that is not what it prints: the name
+    // without its live tag, a record the way ESPN ranks one, a change in wins.
     return `<tr data-team="${esc(id)}">` +
-      `<td class="dz-team" title="${esc(teamName(id))}">${esc(teamName(id))}${live ? LIVE_TAG : ''}</td>` +
-      `<td class="dz-act">${recText(rec && rec.real)}</td>` +
-      `<td class="dz-hyp">${recText(rec && rec.mirror)}</td>` +
-      `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td>` +
-      `<td class="dz-diff ${diffClass(points)}" data-v="${points}">${signedPts(points)}</td>` +
+      `<td class="dz-team" data-v="${esc(teamName(id))}" title="${esc(teamName(id))}">${esc(teamName(id))}${live ? LIVE_TAG : ''}</td>` +
+      `<td class="dz-act"${sortV(recordKey(rec && rec.real, real))}>${recText(rec && rec.real)}</td>` +
+      `<td class="dz-hyp"${sortV(recordKey(rec && rec.mirror, hyp))}>${recText(rec && rec.mirror)}</td>` +
+      `<td class="dz-res ${change ? diffClass(change.value) : ''}"${sortV(change && change.value)}>${change ? esc(change.text) : '—'}</td>` +
+      `<td class="dz-diff ${diffClass(points)}"${sortV(points)}>${signedPts(points)}</td>` +
       `</tr>`;
   }).join('');
+  resort($('teamTable'));
   $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
 }
 
@@ -553,14 +658,14 @@ function renderResult() {
       : '';
     const resCls = flip ? ` dz-flip ${RANK[is] > RANK[was] ? 'd-up' : 'd-down'}` : '';
     const result = c.pending
-      ? `<td class="dz-res muted">In play</td>`
-      : `<td class="dz-res${resCls}"${dim} title="${esc(said)}">${flip ? `${was} → ${is}` : was || '—'}</td>`;
+      ? `<td class="dz-res muted"${sortV(PENDING_KEY)}>In play</td>`
+      : `<td class="dz-res${resCls}"${sortV(resultKey(was, is))}${dim} title="${esc(said)}">${flip ? `${was} → ${is}` : was || '—'}</td>`;
     return `<tr data-wk="${week}"${flip ? ' data-flip="1"' : ''}${c.pending ? ' data-pending="1"' : ''}>` +
-      `<td>${wk}</td>` +
+      `<td data-v="${week}">${wk}</td>` +
       `<td class="dz-vs" title="${esc(opp)}">${esc(opp)}</td>` +
-      `<td class="dz-act" data-v="${c.realTotal}">${pts(c.realTotal)}</td>` +
-      `<td class="dz-hyp" data-v="${c.total}"${dim}>${pts(c.total)}</td>` +
-      `<td class="dz-diff ${diffClass(diff)}" data-v="${diff}"${dim}>${signedPts(diff)}</td>` +
+      `<td class="dz-act"${sortV(c.realTotal)}>${pts(c.realTotal)}</td>` +
+      `<td class="dz-hyp"${sortV(c.total)}${dim}>${pts(c.total)}</td>` +
+      `<td class="dz-diff ${diffClass(diff)}"${sortV(diff)}${dim}>${signedPts(diff)}</td>` +
       result +
       `</tr>`;
   }).join('');
@@ -571,6 +676,8 @@ function renderResult() {
     `<td class="dz-act">${pts(round2(real))}</td><td class="dz-hyp">${pts(round2(hyp))}</td>` +
     `<td class="dz-diff ${diffClass(total)}" data-v="${total}">${signedPts(total)}</td>` +
     `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td></tr>`;
+  // The reader's column survives a new team, a new decision and the noise switch.
+  resort(table);
 
   $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
   const stat = (k, v, cls = '', key = '') =>
@@ -620,6 +727,29 @@ function renderSeason() {
     box: 'hypothetical', dim, live,
     diffFrom: state.view.season === 'diff' ? real : null,
   });
+  fitSeason();
+}
+
+/**
+ * Season by week gains a column a week, so whether Current and Hypothetical fit
+ * side by side is a fact about the tables and not about the screen. The wider
+ * one's own width goes to the stylesheet as `--dz-need` (decisions.html,
+ * `.dz-fit`), which puts them in two halves while that fits and one above the
+ * other once it does not — so neither ever scrolls sideways on a laptop.
+ */
+function fitSeason() {
+  let need = 0;
+  for (const id of ['seasonCur', 'seasonHyp']) {
+    const table = $(id).querySelector('table');
+    if (!table) continue;
+    // A table is drawn as wide as its box; `auto` is as wide as its columns.
+    table.style.width = 'auto';
+    need = Math.max(need, table.offsetWidth || 0);
+    table.style.width = '';
+  }
+  const pair = $('seasonCur').closest('.dz-pair');
+  if (need) pair.style.setProperty('--dz-need', `${Math.ceil(need)}px`);
+  else pair.style.removeProperty('--dz-need');
 }
 
 /** One number per team for a chart with a row a team: its noisiest week. */
@@ -669,6 +799,7 @@ function renderStandings() {
     highlightId, dim: teamDim(m),
     diffFrom: state.view.standings === 'diff' ? real : null,
   });
+  sortPair('standings');
 }
 
 // -------------------------------------------------- the chart: the two worlds
@@ -1058,6 +1189,8 @@ function renderSummary() {
     enough: hyp.enough, waiting: Boolean(pending && !hyp.sim), shadeLuck: hyp.shadeLuck,
     dim: teamDim(m), diffFrom: state.view.summary === 'diff' ? real.rows : null,
   });
+  // Redrawn when the simulation lands, too: the reader's sort is put back.
+  sortPair('summary');
 
   // The real season first: it is the same run whatever is picked.
   const next = real.want || hyp.want;
@@ -1320,6 +1453,16 @@ document.addEventListener('click', (e) => {
   else if (v.box === 'standings') renderStandings();
   else renderSummary();
 });
+
+// SORTING. The two tables the page owns are wired once and re-sorted after each
+// redraw; a pair's tables are new elements every time, so `sortPair` wires
+// those and these listeners keep the two halves in step (see `pairSort`).
+enableSort($('weekTable'));
+enableSort($('teamTable'));
+for (const [box, panel] of [['standings', 'panelStandings'], ['summary', 'panelSummary']]) {
+  $(panel).addEventListener('click', (e) => onPairSort(box, e));
+  $(panel).addEventListener('keydown', (e) => onPairSort(box, e));
+}
 
 $('wiWeek').addEventListener('change', () => { state.wi = { gives: [], gets: [] }; renderWhatIfSides(); });
 $('wiTeam').addEventListener('change', () => { state.wi.gets = []; renderWhatIfSides(); });
