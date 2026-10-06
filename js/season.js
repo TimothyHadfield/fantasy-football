@@ -26,6 +26,8 @@ import * as floor from './floor.js';
 // The weeks this browser has already read, kept across a navigation. See
 // js/store.js for the freshness rule and THE LOCAL STORE below for the seam.
 import * as store from './store.js';
+// The saved projections, which ride the cloud sync both ways. Storage only.
+import * as projHistory from './proj-history.js';
 // The league's starting slots, for the Decisions review's `world` (the last
 // section of this file). Both are pure.
 import { slotsFromCounts } from './forecast.js';
@@ -521,9 +523,10 @@ function cloudDownNow() {
     // thirteen document reads a page load that nothing renders.
     entry.promise = Promise.resolve()
       .then(() => cloud.readDown(leagueId, season, { shapes: ['rosters', 'schedule'] }))
-      .then((res) => {
+      .then(async (res) => {
         const found = res && res.ok && res.found ? res : null;
         if (!found && downCache === entry) downCache = null;
+        if (found) await pullProjHistory(leagueId, season, found.syncedAt);
         return found;
       })
       .catch(() => {
@@ -533,6 +536,32 @@ function cloudDownNow() {
     downCache = entry;
   }
   return downCache.promise;
+}
+
+/**
+ * THE SAVED PROJECTIONS, DOWN (js/proj-history.js, "THE CLOUD COPY"): any week
+ * the synced copy holds that this browser does not is kept here, so the
+ * Analysis page's "Proj changes" reads it from storage like any other.
+ *
+ * Asked ONCE PER SYNC, not once per page: the copies only change when the
+ * laptop syncs, so the sync's own time is remembered and a page load against
+ * the same sync reads nothing. A new sync costs one read of the list and one
+ * per new week (one a week, in season). A browser with nowhere to keep a copy
+ * is not asked at all. Awaited, so the first page drawn already has them;
+ * silent, and never the page's problem.
+ */
+async function pullProjHistory(leagueId, season, syncedAt) {
+  try {
+    if (!projHistory.canKeep()) return;
+    if (syncedAt && projHistory.cloudNote(leagueId, season).seen === syncedAt) return;
+    const res = await cloud.readProjhist(leagueId, season, {
+      lacks: (week, partial) => projHistory.lacks(leagueId, season, week, partial),
+    });
+    if (!res || !res.ok) return;
+    const kept = projHistory.keepCloud(leagueId, season, res.copies);
+    // Remembered only when everything the list names is now here.
+    if (syncedAt && res.complete && !kept.failed) projHistory.noteCloud(leagueId, season, { seen: syncedAt });
+  } catch { /* the page carries on without them */ }
 }
 
 /**
@@ -1685,6 +1714,16 @@ export async function buildCloudPayload({ onProgress } = {}) {
   // Absent, not empty, for a league with none: the payload is then exactly
   // what it was before this existed.
   if (decisions && decisions.size) payload.decisions = decisions;
+
+  // THE SAVED PROJECTIONS (js/proj-history.js): every week this browser holds a
+  // copy of, out of storage — no request. js/cloud.js sends the ones that are
+  // not up yet, once each. Absent, not empty, in a browser that holds none. A
+  // failure sends none, and the sync is still a sync.
+  try {
+    const cfg = storable();
+    const held = cfg ? projHistory.uploads(cfg.leagueId, cfg.season) : [];
+    if (held.length) payload.projhist = held;
+  } catch { /* nothing of it goes up this time */ }
   return payload;
 }
 

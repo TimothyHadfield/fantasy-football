@@ -85,6 +85,9 @@
 //   leagues/{leagueId}/seasons/{season}/wire/{week}         x13        36 KB each
 //   leagues/{leagueId}/seasons/{season}/decisions/{week}    per decided week
 //       (added 2026-10-05, optional, not in the index — see `readDecisions`)
+//   leagues/{leagueId}/seasons/{season}/projhist/{week}     per saved week  21 KB
+//       (added 2026-10-06, optional, with a list of its own at projhist/index
+//       — see "the projection history's weeks")
 //
 // A Firestore document is capped at 1 MiB, and PROGRESS.md warns that a week
 // of rosters is "about a megabyte". THAT FIGURE IS ABOUT ESPN'S RAW PAYLOAD,
@@ -821,8 +824,10 @@ function weekEntries(source) {
  * @param {(done:number,total:number,label:string)=>void} [opts.onProgress]
  * @param {Object} [opts.decisionsSent] `{ [week]: mark }` from the last sync's
  *   `decisions.marks`; a week whose mark is unchanged is not written again
+ * @param {Object} [opts.projhistSent] the last sync's `projhist.marks`; a
+ *   copy it names is neither read nor written again
  */
-export async function syncUp(leagueId, season, payload = {}, { onProgress, decisionsSent = null } = {}) {
+export async function syncUp(leagueId, season, payload = {}, { onProgress, decisionsSent = null, projhistSent = null } = {}) {
   if (!isConfigured()) return notConfigured();
 
   const refusal = refuseDemo(leagueId, payload);
@@ -932,6 +937,17 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
     ? await writeDecisions(t, base, decisionWeeks, syncedAt, decisionsSent)
     : null;
 
+  // The projection history's weeks, the same way and for the same reason:
+  // before the index, never able to fail the sync, counted nowhere above.
+  let projhist = null;
+  if (Array.isArray(payload.projhist) && payload.projhist.length) {
+    try {
+      projhist = await writeProjhist(t, base, payload.projhist.filter(usableCopy), syncedAt, projhistSent);
+    } catch {
+      projhist = null;
+    }
+  }
+
   const meta = {
     v: SCHEMA,
     kind: 'meta',
@@ -982,6 +998,8 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
 
   // A payload without them leaves this result without the key.
   if (decisions) result.decisions = decisions;
+  // Likewise: a browser holding no copy sends none, and has no key here.
+  if (projhist) result.projhist = projhist;
   return result;
 }
 
@@ -1106,6 +1124,237 @@ export async function readDecisions(leagueId, season, weeks = []) {
     }));
   }
   return { ok: true, decisions, reads, reason: '' };
+}
+
+// --------------------------------------------- the projection history's weeks
+//
+//   leagues/{leagueId}/seasons/{season}/projhist/{week}        a whole copy
+//   leagues/{leagueId}/seasons/{season}/projhist/{week}-part   one team's
+//   leagues/{leagueId}/seasons/{season}/projhist/index         which are up
+//
+// Tim, 2026-10-06: "can we make sure that we save it so that we don't lose it
+// after every week and it changes?" ESPN overwrites a future week's projection
+// in place, so the copy js/proj-history.js keeps each week is the only record
+// there is — and it was in one browser's storage. Each copy goes up once,
+// packed as a week of rosters is; a real one (1241838, week 5, ten squads,
+// weeks 5–17) measures 21 KB.
+//
+// NO COPY IS EVER REWRITTEN. FIRST COPY WINS in the cloud as it does in the
+// browser: a document that is already up is left alone, whoever asks. The
+// copy's body is the stored record itself.
+//
+// A ONE-TEAM COPY (`partial: true` in its body: a week only a schema-2
+// reading remembers, which kept the reader's own roster and nobody else's) has
+// a document id OF ITS OWN, `<week>-part`. So a whole copy of that week,
+// should one turn up later, is written BESIDE it rather than over it, and no
+// number is ever replaced or dropped; the reader takes the whole copy first
+// (js/proj-history.js). A one-team copy is not sent for a week whose whole copy
+// is already up.
+//
+// THE LIST. The transport has no listing, and a phone must not ask for
+// seventeen weeks to learn which three exist. So `projhist/index` names every
+// copy that is up, and is the one document here that IS written again, each
+// time a copy is added, after the copy itself. If that write fails the copies
+// it would have named are left unmarked, and the next sync finds them already
+// up and lists them.
+//
+// WHAT A SYNC COSTS. A copy this browser has marked as up costs nothing. With
+// anything unmarked: one read of the list, then per unlisted copy one read (is
+// it there?) and at most one write, then one write of the list. In the steady
+// state that is one copy a week.
+//
+// A REFUSAL IS SILENT, as for the Decisions weeks: a `reason` on
+// `result.projhist`, and the sync is otherwise what it always was.
+// (firebase/firestore.rules covers this path: everything under /leagues.)
+
+const PROJHIST_SCHEMA = 1;
+
+const projhistId = (rec) => `${Number(rec.week)}${rec.partial === true ? '-part' : ''}`;
+
+/** A copy in js/proj-history.js's stored shape. Anything else is not sent. */
+function usableCopy(rec) {
+  return Boolean(rec) && rec.v === PROJHIST_SCHEMA && Number.isFinite(Number(rec.week)) &&
+    Array.isArray(rec.weeks) && rec.weeks.length > 0 &&
+    Boolean(rec.teams) && typeof rec.teams === 'object' && !Array.isArray(rec.teams);
+}
+
+/** What the list says about one copy. */
+function listingOf(rec) {
+  const out = { week: Number(rec.week), partial: rec.partial === true, takenAt: rec.takenAt || null };
+  if (out.partial) out.teams = Object.keys(rec.teams).map(Number);
+  return out;
+}
+
+/** The list as `{ [id]: listing }`; no list yet is `{}`. Throws what the transport throws. */
+async function projhistListed(t, base) {
+  const body = unpack(await t.getDoc(`${base}/projhist/index`));
+  return body && body.docs && typeof body.docs === 'object' ? body.docs : {};
+}
+
+/** Copies the list names that `lacks(week, partial, id)` wants, read three at a time. */
+async function projhistFetch(t, base, listed, lacks) {
+  const out = { copies: [], reads: 0, missing: 0 };
+  const want = Object.entries(listed).filter(([id, e]) => {
+    if (!e || !Number.isFinite(Number(e.week))) return false;
+    // A one-team copy adds nothing beside the whole copy of its week.
+    if (e.partial && listed[String(Number(e.week))]) return false;
+    try { return Boolean(lacks(Number(e.week), e.partial === true, id)); } catch { return false; }
+  });
+  for (let i = 0; i < want.length; i += 3) {
+    await Promise.all(want.slice(i, i + 3).map(async ([id]) => {
+      let got = null;
+      try {
+        got = unpack(await t.getDoc(`${base}/projhist/${enc(id)}`));
+      } catch {
+        got = null; // unreadable is a gap, never an exception
+      }
+      out.reads++;
+      if (usableCopy(got)) out.copies.push(got);
+      else out.missing++;
+    }));
+  }
+  out.copies.sort((a, b) => a.week - b.week);
+  return out;
+}
+
+async function writeProjhist(t, base, copies, syncedAt, sent) {
+  const out = { wrote: 0, skipped: 0, reads: 0, bytes: 0, largestDoc: 0, marks: {}, down: [], reason: '' };
+  const before = sent && typeof sent === 'object' ? sent : {};
+
+  const pending = [];
+  for (const rec of copies) {
+    const id = projhistId(rec);
+    if (before[id]) {
+      out.marks[id] = before[id];
+      out.skipped++;
+    } else {
+      pending.push([id, rec]);
+    }
+  }
+  // Everything marked, and the list read once before: nothing to ask.
+  if (before.index) out.marks.index = before.index;
+  if (!pending.length && before.index) return out;
+
+  let docs;
+  try {
+    docs = { ...(await projhistListed(t, base)) };
+    out.reads++;
+  } catch (err) {
+    out.reason = readable(err, 'Could not read the saved projections list.');
+    return out;
+  }
+  out.marks.index = syncedAt;
+
+  const added = [];
+  for (const [id, rec] of pending) {
+    const mark = rec.takenAt || syncedAt;
+    if (docs[id] || (rec.partial === true && docs[String(Number(rec.week))])) {
+      // Up already, or (a one-team copy) the whole week is.
+      out.marks[id] = (docs[id] && docs[id].takenAt) || mark;
+      out.skipped++;
+      continue;
+    }
+    const path = `${base}/projhist/${enc(id)}`;
+
+    // Not in the list is not proof it is not there (a list write can fail):
+    // look before writing, because what is there is never written over.
+    let there;
+    try {
+      there = await t.getDoc(path);
+      out.reads++;
+    } catch (err) {
+      out.reason = readable(err, `Could not check week ${rec.week} saved projections.`);
+      break;
+    }
+    if (there) {
+      const body = unpack(there);
+      if (usableCopy(body)) {
+        docs[id] = listingOf(body);
+        added.push(id);
+        out.marks[id] = body.takenAt || mark;
+      } else {
+        out.reason = out.reason || `Week ${rec.week} saved projections are up in a form this cannot read; left alone.`;
+      }
+      out.skipped++;
+      continue;
+    }
+
+    let job;
+    try {
+      job = pack('projhist', id, rec, syncedAt);
+    } catch {
+      out.reason = out.reason || `Week ${rec.week} saved projections could not be encoded.`;
+      continue;
+    }
+    if (job.bytes > MAX_DOC_BYTES) {
+      out.reason = out.reason || `Week ${rec.week} saved projections are ${Math.round(job.bytes / 1024)}KB, too big to send.`;
+      continue;
+    }
+    try {
+      await t.setDoc(path, job.doc);
+    } catch (err) {
+      // Stop at the first refusal: the rest would be refused the same way.
+      out.reason = readable(err, `Could not write week ${rec.week} saved projections.`);
+      break;
+    }
+    docs[id] = listingOf(rec);
+    added.push(id);
+    out.marks[id] = mark;
+    out.wrote++;
+    out.bytes += job.bytes;
+    out.largestDoc = Math.max(out.largestDoc, job.bytes);
+  }
+
+  if (added.length) {
+    try {
+      await t.setDoc(`${base}/projhist/index`, pack('projhist-index', 'index', { docs }, syncedAt).doc);
+    } catch (err) {
+      // Unlisted is unfindable from a phone, so those copies are not marked as
+      // done: the next sync finds them up, and lists them.
+      for (const id of added) delete out.marks[id];
+      out.reason = out.reason || readable(err, 'Could not write the saved projections list.');
+    }
+  }
+
+  // The list is in hand, so a week it names that this browser does not hold
+  // comes down now rather than costing a second look later.
+  const held = new Set(copies.map(projhistId));
+  const down = await projhistFetch(t, base, docs, (week, partial, id) =>
+    !held.has(id) && !(partial && held.has(String(week))));
+  out.reads += down.reads;
+  out.down = down.copies;
+  return out;
+}
+
+/**
+ * The projection history's copies, down: the list, then each copy it names
+ * that the caller lacks.
+ *
+ * Never throws. A league synced before this existed has no list, and that is
+ * `ok: true` with nothing in it, for one read.
+ *
+ * @param {Object} [opts]
+ * @param {(week:number, partial:boolean) => boolean} [opts.lacks] would this
+ *   copy add anything here? Default: every copy is wanted.
+ * @returns {Promise<{ok:boolean, listed:Object, copies:Object[], reads:number, complete:boolean, reason:string}>}
+ *   `complete` is false when a copy the list names could not be read
+ */
+export async function readProjhist(leagueId, season, { lacks = () => true } = {}) {
+  const none = (reason, reads = 0) => ({ ok: false, listed: {}, copies: [], reads, complete: false, reason });
+  if (!isConfigured()) return none(notConfigured().reason);
+  if (refuseDemo(leagueId, null)) return none('Demo data is never synced.');
+  const t = await getTransport();
+  if (!t) return none('Could not reach Firebase.');
+
+  const base = seasonPath(leagueId, season);
+  let listed;
+  try {
+    listed = await projhistListed(t, base);
+  } catch (err) {
+    return none(readable(err, 'Could not read the saved projections list.'), 1);
+  }
+  const got = await projhistFetch(t, base, listed, lacks);
+  return { ok: true, listed, copies: got.copies, reads: 1 + got.reads, complete: got.missing === 0, reason: '' };
 }
 
 // ----------------------------------------------------------------- staleness

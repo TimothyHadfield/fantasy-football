@@ -376,7 +376,16 @@ export const fetchFloors = process.env.CAP_WIRE
     return positionFloors(wire, { week });
   }
   : undefined;
-export async function buildCloudPayload() { throw new Error('not in this stub'); }
+// CAP_CLOUD_PAYLOAD (test-projhist-cloud.mjs, the bar): the smallest payload a
+// sync accepts, with the saved projections the real one adds out of storage.
+export async function buildCloudPayload() {
+  if (!process.env.CAP_CLOUD_PAYLOAD) throw new Error('not in this stub');
+  const projHistory = await import('../js/proj-history.js');
+  return {
+    leagueName: 'Capture Stub League', teams: TEAMS, rosters: new Map(), wire: new Map(),
+    projhist: projHistory.uploads('99', 2026),
+  };
+}
 
 // THE DECISIONS REVIEW'S `world` (docs/decisions-review-plan.md, "The
 // contract"), small and fixed, over this stub's own decided weeks and squads.

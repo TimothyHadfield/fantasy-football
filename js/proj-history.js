@@ -168,10 +168,18 @@ function readingRoster(snap) {
  * the one roster that reading kept. A schema-1 reading, and a schema-2 one
  * taken with no team chosen, keep no roster and are not listed.
  *
- * @returns {Array<{week:number, takenAt:string, teams:'all'|number[], source:'store'|'reading'}>}
+ * A week with only a one-team copy from the cloud (below) is listed last of
+ * all, as `source: 'cloud'`.
+ *
+ * @returns {Array<{week:number, takenAt:string, teams:'all'|number[], source:'store'|'reading'|'cloud'}>}
  */
 export function list(leagueId, season, io) {
   const out = new Map();
+  // Lowest first: a one-team copy that came down from the cloud is listed only
+  // for a week that has neither a reading's roster nor a whole copy here.
+  for (const rec of parts(leagueId, season, io)) {
+    out.set(rec.week, { week: rec.week, takenAt: rec.takenAt, teams: Object.keys(rec.teams).map(Number), source: 'cloud' });
+  }
   let snaps = [];
   try { snaps = readingsOf(io).list(leagueId, season) || []; } catch { snaps = []; }
   for (const snap of snaps) {
@@ -222,11 +230,204 @@ export function teamAsOf(leagueId, season, week, teamId, io) {
   let snap = null;
   try { snap = readingsOf(io).get(leagueId, season, week); } catch { snap = null; }
   const p = readingRoster(snap);
-  if (!p || Number(p.teamId) !== Number(teamId)) return null;
-  const cols = Array.isArray(p.cols) ? p.cols : COLS;
-  const weeks = p.weeks.slice();
+  if (p && Number(p.teamId) === Number(teamId)) {
+    const cols = Array.isArray(p.cols) ? p.cols : COLS;
+    const weeks = p.weeks.slice();
+    return {
+      week: Number(week), takenAt: snap.takenAt, weeks,
+      players: p.mine.map((r) => playerOf(r, cols, weeks)), source: 'reading',
+    };
+  }
+
+  // Last, a one-team copy from the cloud (see "THE CLOUD COPY" below).
+  const part = getPart(leagueId, season, week, io);
+  const rows = part ? part.teams[teamId] : null;
+  if (!Array.isArray(rows)) return null;
+  const cols = Array.isArray(part.cols) ? part.cols : COLS;
+  const weeks = part.weeks.slice();
   return {
-    week: Number(week), takenAt: snap.takenAt, weeks,
-    players: p.mine.map((r) => playerOf(r, cols, weeks)), source: 'reading',
+    week: Number(week), takenAt: part.takenAt, weeks,
+    players: rows.map((r) => playerOf(r, cols, weeks)), source: 'cloud',
   };
+}
+
+// ---------------------------------------------------------------------------
+// THE CLOUD COPY
+//
+// Tim, 2026-10-06: "can we make sure that we save it so that we don't lose it
+// after every week and it changes?" Browser storage is one browser's, and can
+// be emptied; so each week's copy also rides the cloud sync (js/cloud.js,
+// `…/projhist/<week>`), and a browser that lacks a week takes it back from
+// there — his phone, which never captures anything, most of all.
+//
+// A WHOLE copy that comes down is kept with `save`, in the store above, and is
+// from then on indistinguishable from one taken here.
+//
+// A ONE-TEAM copy (`partial: true` — a week from before the store existed,
+// which only a schema-2 reading's `mine` remembers) is kept under A KEY OF ITS
+// OWN, `ff.projhist-part.1.<league>.<season>.<week>`. `has` does not see it, so
+// it can never be the "first copy" that stops js/capture.js keeping the whole
+// one, and the readers consult it last.
+
+const PART_PREFIX = `ff.projhist-part.${SCHEMA}`;
+
+/** `ff.projhist-part.1.<league>.<season>.<week>` — a one-team copy from the cloud. */
+export function partKeyOf(leagueId, season, week) {
+  return `${PART_PREFIX}.${leagueId}.${season}.${week}`;
+}
+
+function getPart(leagueId, season, week, io) {
+  const s = storageOf(io);
+  if (!s) return null;
+  try {
+    const raw = s.getItem(partKeyOf(leagueId, season, week));
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    return usable(rec) ? rec : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every one-team copy held for a league and season. Scanned, as `list` scans. */
+function parts(leagueId, season, io) {
+  const out = [];
+  const s = storageOf(io);
+  const want = `${PART_PREFIX}.${leagueId}.${season}.`;
+  try {
+    const n = s && typeof s.key === 'function' && typeof s.length === 'number' ? s.length : 0;
+    for (let i = 0; i < n; i++) {
+      const k = s.key(i);
+      if (!k || !k.startsWith(want)) continue;
+      const week = Number(k.slice(want.length));
+      const rec = Number.isFinite(week) ? getPart(leagueId, season, week, io) : null;
+      if (rec) out.push({ ...rec, week });
+    }
+  } catch { /* what was found so far still stands */ }
+  return out;
+}
+
+/** Is there anywhere to keep a copy at all? */
+export function canKeep(io) {
+  return storageOf(io) !== null;
+}
+
+/**
+ * What the cloud sync sends: one copy per week this browser can answer for,
+ * earliest first.
+ *
+ * The stored copy where the week has one. Otherwise the roster a schema-2
+ * reading kept, in the same rows, with that one team under `teams`,
+ * `partial: true` and the reading's own `takenAt`. Nothing is written here.
+ *
+ * @returns {Array<Object>} copies in the stored shape
+ */
+export function uploads(leagueId, season, io) {
+  const out = [];
+  for (const e of list(leagueId, season, io)) {
+    if (e.source === 'store') {
+      const rec = get(leagueId, season, e.week, io);
+      if (rec) out.push(rec);
+    } else if (e.source === 'reading') {
+      let snap = null;
+      try { snap = readingsOf(io).get(leagueId, season, e.week); } catch { snap = null; }
+      const p = readingRoster(snap);
+      if (!p || !p.weeks.length) continue;
+      out.push({
+        v: SCHEMA, leagueId: String(leagueId), season: Number(season), week: Number(e.week),
+        takenAt: snap.takenAt, weeks: p.weeks.slice(),
+        cols: Array.isArray(p.cols) ? p.cols.slice() : COLS.slice(),
+        teams: { [p.teamId]: p.mine }, partial: true,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Would a copy of this week from the cloud add anything here?
+ *
+ * A whole one: when the store has none. A one-team one: when there is no whole
+ * copy, no one-team copy and no reading's roster for that week already.
+ */
+export function lacks(leagueId, season, week, partial, io) {
+  if (has(leagueId, season, week, io)) return false;
+  if (!partial) return true;
+  if (getPart(leagueId, season, week, io)) return false;
+  let snap = null;
+  try { snap = readingsOf(io).get(leagueId, season, week); } catch { snap = null; }
+  return !readingRoster(snap);
+}
+
+/**
+ * Keep copies that came down from the cloud. FIRST COPY WINS, here too: a week
+ * already held is left exactly as it is. Never throws.
+ *
+ * @returns {{kept:number, held:number, failed:number}}
+ */
+export function keepCloud(leagueId, season, copies, io) {
+  const out = { kept: 0, held: 0, failed: 0 };
+  for (const rec of copies || []) {
+    try {
+      if (!usable(rec) || !Number.isFinite(Number(rec.week)) ||
+          String(rec.leagueId) !== String(leagueId) || Number(rec.season) !== Number(season)) {
+        out.failed++;
+        continue;
+      }
+      const week = Number(rec.week);
+      let res;
+      if (rec.partial !== true) {
+        res = save({ ...rec, week }, io);
+      } else if (getPart(leagueId, season, week, io)) {
+        res = { written: false, held: true };
+      } else {
+        const s = storageOf(io);
+        const json = JSON.stringify({ ...rec, week });
+        if (!s || json.length > MAX_BYTES) res = { written: false };
+        else { s.setItem(partKeyOf(leagueId, season, week), json); res = { written: true }; }
+      }
+      if (res.written) out.kept++;
+      else if (res.held) out.held++;
+      else out.failed++;
+    } catch {
+      out.failed++;
+    }
+  }
+  return out;
+}
+
+// What this browser knows about the cloud's copies, one small key like
+// js/connection.js's `ff.cloud.decisions`: `sent` is js/cloud.js's own marks
+// for the weeks known to be up (so a sync neither reads nor writes them again),
+// `seen` the cloud sync whose copies have already been taken down.
+const CLOUD_NOTE_KEY = 'ff.cloud.projhist';
+
+/** @returns {{sent:Object|null, seen:string|null}} */
+export function cloudNote(leagueId, season, io) {
+  const s = storageOf(io);
+  try {
+    const all = JSON.parse((s && s.getItem(CLOUD_NOTE_KEY)) || '{}');
+    const mine = all && all[`${leagueId}::${season}`];
+    return {
+      sent: mine && mine.sent && typeof mine.sent === 'object' ? mine.sent : null,
+      seen: mine && typeof mine.seen === 'string' ? mine.seen : null,
+    };
+  } catch {
+    return { sent: null, seen: null };
+  }
+}
+
+/** Merge `{sent}` and/or `{seen}` into the note. A refusing browser forgets. */
+export function noteCloud(leagueId, season, patch, io) {
+  const s = storageOf(io);
+  if (!s) return false;
+  try {
+    const all = JSON.parse(s.getItem(CLOUD_NOTE_KEY) || '{}') || {};
+    const key = `${leagueId}::${season}`;
+    all[key] = { ...(all[key] && typeof all[key] === 'object' ? all[key] : {}), ...patch };
+    s.setItem(CLOUD_NOTE_KEY, JSON.stringify(all));
+    return true;
+  } catch {
+    return false;
+  }
 }
