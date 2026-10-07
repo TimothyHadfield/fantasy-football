@@ -433,7 +433,7 @@ const HEAD = [
   ['Spread', 'Spread: the standard deviation of your weekly scores. Low means week-to-week consistency. Needs at least two weeks.'],
   ['Opp proj', 'Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play in the whole season. High means a hard schedule.'],
   ['Luck/wk', 'Luck per week: your average score minus your average projection. Positive means you keep beating your projection.'],
-  ['PTW', 'Points to win: your average opponent’s score minus your own average luck — what you needed to score to beat a typical opponent.'],
+  ['PTW', 'Points to win: your average opponent’s score minus your own average luck — the projection you needed to beat a typical opponent.'],
   ['Close luck', 'Close-game luck (your sheet’s SD): weights each result by how close it was, so a one-point game scores near ±50 and a blowout near zero.'],
   ['Luck score', 'Luck score (your sheet’s LUCK) = league average − (PTW − close luck). One week counts ±50 at most. Above zero means the season has broken your way.'],
   ['Skill', 'Skill = your average projected score minus the league’s average projected score.'],

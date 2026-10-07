@@ -495,8 +495,8 @@ function renderMainTable() {
   $('mainTableNote').innerHTML = paras([
     '<strong>Opp proj</strong> = the average projected score of the opponents on your ' +
     'schedule, which needs no games played. <strong>Luck/wk</strong> = actual − ' +
-    'projected. <strong>PTW</strong> = what you ' +
-    'needed to score to beat a typical opponent. <strong>Skill</strong> = your average ' +
+    'projected. <strong>PTW</strong> = the projection you ' +
+    'needed to beat a typical opponent. <strong>Skill</strong> = your average ' +
     'projected score minus the league&rsquo;s.',
     '<strong>LS</strong>, <strong>PS</strong> ' +
     'and <strong>AS</strong> rank the league by luck score, by skill + luck, and by ' +
