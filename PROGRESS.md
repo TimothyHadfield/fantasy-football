@@ -62,6 +62,7 @@ One line each; detail in the archive snapshot named above unless a commit is giv
 ## Standing instructions
 - **Push every change when it is done** — Tim judges by the deployed site. Never push failing tests. Split into sensible commits.
 - **No long test runs before a push** (Tim, 2026-10-06: "make sure you don't ever do long test runs again, and if you do it can be after the push"). Run only the suites the change touches, push, and put any full `run-all.mjs` in the background AFTER the push; tell builders the same.
+- **Live in a minute, not eleven** (Tim, 2026-10-06, waiting on the gated deploy: "forget the test. push now."). After every push of a site change, run `gh workflow run deploy-now.yml -R TimothyHadfield/fantasy-football` (publishes main without waiting for CI; `.github/workflows/deploy-now.yml`), confirm the deployed file has the new code, tell him; the gated `tests` run still follows — check it afterwards and fix forward if red. (My interpretation: he wants this speed as the default, not only that once.)
 - **Many agents at once** (Tim, 2026-10-06: "your work seems to be pretty slow. You should be deploying many more sub-agents"). One builder per separable part, launched together, disjoint files, own worktrees.
 - **Give links, not prose directions.** Deep links; IDE-clickable paths.
 - **After pushing, tell him to hard-refresh** (Ctrl+Shift+R; iPhone: close/reopen tab or `?v=<sha>`). Pages cache is 10 min.
