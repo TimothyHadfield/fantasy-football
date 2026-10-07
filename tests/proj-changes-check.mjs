@@ -132,12 +132,20 @@ async function page(store) {
     const table = $(tableId);
     if (!table) return null;
     const heads = [...table.querySelectorAll('thead tr:last-child th')].map((th) => text(th));
+    // The number as printed, without the scale's ▲/▼ beside it.
+    const printed = (el) => {
+      if (!el) return '';
+      const c = el.cloneNode(true);
+      c.querySelectorAll('.heatmark').forEach((m) => m.remove());
+      return c.textContent.replace(/\s+/g, ' ').trim();
+    };
     const rowsOf = (sel) => [...table.querySelectorAll(sel)].map((tr) => ({
       player: tr.getAttribute('data-player'),
+      trCls: tr.getAttribute('class') || '',
       slot: tr.getAttribute('data-slot'),
       name: text(tr.children[0]),
       cells: Object.fromEntries([...tr.children].map((td, i) => [heads[i], {
-        t: text(td), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '',
+        t: printed(td), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '',
         title: td.getAttribute('title') || '',
       }])),
     }));
@@ -389,8 +397,22 @@ block('main', () => {
     ok('PLAYER: the heavy line is before week 8 in the body as in the head',
       P.rows.every((r) => /\bfut-start\b/.test(cell(r, 8).cls) && !/\bfut-start\b/.test(cell(r, 7).cls)),
       cell(P.rows[0], 8).cls);
-    ok('PLAYER: no cell is coloured', P.rows.every((r) => Object.values(r.cells).every((c) => !/\bheat-/.test(c.cls))),
-      '');
+    // COLOURED LIKE POSITION (Tim, 2026-10-06), against the starters at his position.
+    const weekCells = P.rows.flatMap((r) => WEEK_HEADS.map((h) => r.cells[h]).filter(Boolean));
+    const hot = weekCells.filter((c) => /\bheat-(up|dn)-/.test(c.cls));
+    ok('PLAYER: week cells are coloured, in history and in the weeks to come',
+      hot.length > 10 && P.rows.some((r) => /\bheat-(up|dn)-/.test(cell(r, 3).cls)) &&
+      P.rows.some((r) => /\bheat-(up|dn)-/.test(cell(r, 10).cls)), hot.length);
+    ok('PLAYER: every coloured cell says what it is compared with — starters at his position',
+      weekCells.filter((c) => /\bheat\b/.test(c.cls)).every((c) =>
+        /a starting (QB|RB|WR|TE|K|DEF) (around the league in week \d+|across the league)/.test(c.title)),
+      weekCells.filter((c) => /\bheat\b/.test(c.cls)).map((c) => c.title).find((t) => !/a starting/.test(t)));
+    ok('PLAYER: a cell with no number takes no colour',
+      weekCells.filter((c) => c.t === 'Bye' || c.t === '—').every((c) => !/\bheat\b/.test(c.cls)), '');
+    ok('PLAYER: one line, above the first man who is not starting',
+      P.rows.filter((r) => /\bbench-start\b/.test(r.trCls)).length === 1 && !/\bbench-start\b/.test(P.rows[0].trCls) &&
+      m.posSheet.rows.every((r) => !/\bbench-start\b/.test(r.trCls)),
+      P.rows.map((r) => r.trCls));
     ok('PLAYER: the Starting lineup band is the Position sheet’s, number for number',
       Boolean(P.band) && Boolean(m.posSheet.band) && same(Object.values(P.band.cells).map((c) => c.t), Object.values(m.posSheet.band.cells).map((c) => c.t)),
       P.band && Object.values(P.band.cells).map((c) => c.t));
@@ -551,6 +573,10 @@ block('demo', () => {
     ok('DEMO: the one line', x.changes.empty === 'Sample data has no saved projections.' && x.changes.tableHidden, x.changes.empty);
     ok('DEMO: Player rows work on the sample league too', x.season.heads[0] === 'Player' && x.season.rows.length >= 9 &&
       x.season.rows.every((r) => r.player), [x.season.heads[0], x.season.rows.length]);
+    // The stub's squads are identical at every position, so its Avg has no scale; the sample's differ.
+    ok('DEMO: a Player row’s Avg is on the scale too, against squads’ starters at his position',
+      x.season.rows.some((r) => /\bheat\b/.test(avgOf(r).cls) && /a squad’s starting \w+, on average/.test(avgOf(r).title)),
+      x.season.rows.map((r) => avgOf(r).cls));
   }
 });
 

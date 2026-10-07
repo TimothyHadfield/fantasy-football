@@ -4142,8 +4142,11 @@ function paintSeason() {
   // PLAYER ROWS (see `rowsMode`): the men instead of the slots. Everything
   // around the rows — the head's label and line, the band, the note — is the
   // same code either way, so the band under them shows the same numbers.
+  const menScales = rowsMode() === 'player' ? playerScales(rows, slots, weeks, hist, real, mode) : null;
   $('seasonSlots').innerHTML = rowsMode() === 'player'
-    ? playerRows(team, weeks, index, hist).map((row) => playerRowHtml(row, team, weeks, index, hist, fut)).join('')
+    ? playerRows(team, weeks, index, hist)
+      .map((row, i, all) => playerRowHtml(row, team, weeks, index, hist, fut, menScales,
+        i > 0 && !row.starter && all[i - 1].starter)).join('')
     : rows
     .map((row) => {
       const values = weeks.map((w) => {
@@ -4353,7 +4356,78 @@ function orderPlayers(list) {
   const starters = list.filter((r) => lineup(r.slotId))
     .sort((a, b) => (SLOT_ORDER[a.slotId] ?? 40) - (SLOT_ORDER[b.slotId] ?? 40) || byAvg(a, b));
   const bench = list.filter((r) => !lineup(r.slotId)).sort(byAvg);
-  return [...starters, ...bench].map((r, i) => ({ ...r, order: i }));
+  return [...starters, ...bench].map((r, i) => ({ ...r, order: i, starter: i < starters.length }));
+}
+
+/**
+ * THE PLAYER ROWS' SCALES (Tim, 2026-10-06: "colorize the boxes in the season
+ * by week player version, just like the position version"). A man is measured
+ * against the league's STARTERS AT HIS POSITION, never against another
+ * position (js/heat.js §1):
+ *
+ *   week(w, pos)  a history week: that week's real starters at his position,
+ *                 on the numbers shown. A week of part scores has none.
+ *   ahead         a week to come: every best-lineup value at his position over
+ *                 the weeks on screen — the Position rows' own pool
+ *                 (`slotThresholds`), by position instead of by slot.
+ *   avg           one number per squad: what its starters at that position
+ *                 show on average over the regular season.
+ */
+function playerScales(rows, slots, weeks, hist, real, mode) {
+  const fills = weeklyFills(rows, slots, weeks);
+  const add = (map, k, v) => {
+    if (typeof v !== 'number') return;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(v);
+  };
+  const ahead = new Map();
+  const byWeek = new Map();
+  const perTeam = new Map();
+  const ofTeam = (id) => {
+    if (!perTeam.has(id)) perTeam.set(id, new Map());
+    return perTeam.get(id);
+  };
+  for (const w of weeks) {
+    const regular = !isPlayoff(w);
+    for (const [id, fill] of fills.get(w) || []) {
+      for (const row of rows) {
+        const e = fill.get(row.key);
+        if (!e || !e.p || typeof e.v !== 'number') continue;
+        add(ahead, e.p.position, e.v);
+        if (regular && !hist.has(w)) add(ofTeam(id), e.p.position, e.v);
+      }
+    }
+    if (!hist.has(w) || partScores(w, hist)) continue;
+    const here = new Map();
+    for (const [id, got] of real.get(w) || []) {
+      for (const s of got.starters) {
+        const v = historyValue(s, mode);
+        add(here, s.position, v);
+        if (regular) add(ofTeam(id), s.position, v);
+      }
+    }
+    byWeek.set(w, here);
+  }
+  const scalesOf = (map) => new Map([...map].map(([pos, xs]) => [pos, heatScale(xs)]));
+  const means = new Map();
+  for (const byPos of perTeam.values()) {
+    for (const [pos, xs] of byPos) add(means, pos, avgOf(xs));
+  }
+  const weekScales = new Map([...byWeek].map(([w, here]) => [w, scalesOf(here)]));
+  return {
+    ahead: scalesOf(ahead),
+    avg: scalesOf(means),
+    week: (w, pos) => (weekScales.has(w) ? weekScales.get(w).get(pos) || null : null),
+  };
+}
+
+/** A finished cell with its place on a scale added: class, words, the mark. */
+function withHeat(td, heat) {
+  if (!heat) return td;
+  return td
+    .replace(/^<td class="([^"]*)"/, (m, c) => `<td class="${c} ${heat.cls}"`)
+    .replace(/ title="([^"]*)"/, (m, t) => ` title="${t} ${esc(heat.words)}"`)
+    .replace(/<\/td>$/, `${heatMarkHtml(heat)}</td>`);
 }
 
 /**
@@ -4376,7 +4450,7 @@ function playerRows(team, weeks, index, hist) {
       if (typeof v !== 'number') return null;
       return v === 0 && zeroOf(v, w, p, seasonStatus(index, w, p)) === 'bye' ? null : round1(v);
     });
-    return { p, slotId: p.lineupSlotId, ahead, avg: regularAvg(shown, weeks) };
+    return { p, slotId: p.lineupSlotId, ahead, shown, avg: regularAvg(shown, weeks) };
   }));
 }
 
@@ -4479,18 +4553,28 @@ function playerHistoryCell(p, week, mode, teamId, start = null) {
 }
 
 /** One Player row: name and position, Avg, then history and the weeks to come. */
-function playerRowHtml(row, team, weeks, index, hist, fut) {
+function playerRowHtml(row, team, weeks, index, hist, fut, scales = null, benchStart = false) {
   const p = row.p;
   const mode = historyMode();
-  const cells = weeks.map((w, i) => withFut(withPo(hist.has(w)
+  const pos = posLabel(p);
+  // His place among the league's starters at his position (`playerScales`). A
+  // cell that shows no number — "Bye", a dash — takes no colour.
+  const heatAt = (w, i) => (!scales ? null : hist.has(w)
+    ? heatOf(row.shown[i], scales.week(w, p.position), { what: `a starting ${pos} around the league in week ${w}` })
+    : heatOf(row.shown[i], scales.ahead.get(p.position), { what: `a starting ${pos} across the league` }));
+  const cells = weeks.map((w, i) => withFut(withPo(withHeat(hist.has(w)
     ? playerHistoryCell(p, w, mode, team.id)
     : seasonCell(row.ahead[i], w, p, w === state.week, null, seasonStatus(index, w, p)),
-  w, weeks), w, fut)).join('');
+  heatAt(w, i)), w, weeks), w, fut)).join('');
+  const ah = scales
+    ? heatOf(row.avg, scales.avg.get(p.position), { what: `a squad’s starting ${pos}, on average` })
+    : null;
   return `
-      <tr data-player="${esc(p.playerId)}">
+      <tr data-player="${esc(p.playerId)}"${benchStart ? ' class="bench-start"' : ''}>
         ${playerNameCell(row)}
-        <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
-        `title="${esc(`${p.name}: the mean of the regular-season numbers shown in his row.`)}">${fmt(row.avg)}</td>
+        <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
+        `title="${esc(`${p.name}: the mean of the regular-season numbers shown in his row.${ah ? ` ${ah.words}` : ''}`)}">` +
+        `${fmt(row.avg)}${heatMarkHtml(ah)}</td>
         ${cells}
       </tr>`;
 }
@@ -5387,8 +5471,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
       `started or not, on whichever squad in this league held him; a week nobody here held him is a ` +
       `dash. Switch Actual to <strong>Proj</strong> for what he was projected before kickoff. The ` +
       `weeks to come are his projection. <strong>Avg</strong> is the mean of the regular-season ` +
-      `numbers shown in his row, a bye left out. These rows are not coloured: the ` +
-      `scale below compares a lineup slot around the league, and a man is not a slot. The ` +
+      `numbers shown in his row, a bye left out. Colour compares him with the league’s ` +
+      `starters at his position; the line is where the bench begins. The ` +
       `<strong>Starting lineup</strong> band and everything below are as on Position.`
     );
   }
