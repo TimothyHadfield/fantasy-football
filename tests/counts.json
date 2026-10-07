@@ -200,7 +200,7 @@
       "assertions": 200
     },
     "decisions-check.mjs": {
-      "assertions": 381
+      "assertions": 385
     },
     "test-proj-history.mjs": {
       "assertions": 136

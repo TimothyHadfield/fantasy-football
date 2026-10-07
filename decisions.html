@@ -239,6 +239,16 @@ div.panel-note > p:last-child { margin-bottom: 0; }
   .dz-weeks:has(.wk-live) td.dz-vs { max-width: 0; width: 100%; }
   /* And for the arrow of the heading the table is sorted by. */
   .dz-weeks:has(th.sorted) td.dz-vs { max-width: 0; width: 100%; }
+  /* And for the lineup counts (Bench, Proj 0), when a lineup decision shows them. */
+  .dz-weeks:has(th.dz-lu:not([hidden])) td.dz-vs { max-width: 0; width: 100%; }
+  /* ...and "Hypothetical" is drawn "Hyp" beside them: the headings are what
+   * set this table's width, and two more did not fit a phone. The word in the
+   * page is unchanged, so its tooltip and a screen reader still have it. */
+  .dz-weeks:has(th.dz-lu:not([hidden])) th.dz-hyp-h { font-size: 0; }
+  .dz-weeks:has(th.dz-lu:not([hidden])) th.dz-hyp-h::before { content: "Hyp"; font-size: 11.5px; }
+  .dz-weeks:has(th.dz-lu:not([hidden])) th.dz-hyp-h::after { font-size: 11.5px; }
+  .dz-weeks th.dz-lu0 { white-space: normal; min-width: 0; }
+  .dz-weeks.dz-teams:has(th.dz-lu0:not([hidden])) th { padding-left: 2px; padding-right: 2px; }
   /* In the one-row-a-team table every column is as wide as its heading, and
    * the arrow of the sorted one was 4px more than the panel had: a pixel a
    * side off the headings pays for it. */
@@ -383,9 +393,11 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           <th data-sort title="The finished week.">Wk</th>
           <th data-sort title="Who the team played that week.">Vs</th>
           <th data-sort title="What the team really scored.">Actual</th>
-          <th data-sort title="What it would have scored.">Hypothetical</th>
+          <th data-sort class="dz-hyp-h" title="What it would have scored.">Hypothetical</th>
           <th data-sort title="Hypothetical minus actual. Each one opens the players behind it.">Diff</th>
           <th data-sort title="The matchup&rsquo;s result. An arrow marks one that would have flipped.">Result</th>
+          <th data-sort class="dz-lu" hidden title="Starters who should have been benched.">Bench</th>
+          <th data-sort class="dz-lu0" hidden title="Starters ESPN projected for 0 points.">Proj 0</th>
         </tr></thead>
         <tbody></tbody>
         <tbody class="dz-total"></tbody>
@@ -395,9 +407,11 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         <thead><tr>
           <th data-sort title="In the Standings order.">Team</th>
           <th data-sort title="The team&rsquo;s real record.">Actual</th>
-          <th data-sort title="Its record with every lineup set this way.">Hypothetical</th>
+          <th data-sort class="dz-hyp-h" title="Its record with every lineup set this way.">Hypothetical</th>
           <th data-sort title="Hypothetical minus actual.">Record</th>
           <th data-sort title="Points a week, hypothetical minus actual. Each one opens its weeks.">Points/wk</th>
+          <th data-sort class="dz-lu" hidden title="Starters who should have been benched.">Bench</th>
+          <th data-sort class="dz-lu0" hidden title="Starters ESPN projected for 0 points.">Proj 0</th>
         </tr></thead>
         <tbody></tbody>
       </table>

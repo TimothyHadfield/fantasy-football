@@ -611,6 +611,40 @@ function ledeOf(d) {
   return `Undone: ${d.label} (week ${d.week}).`;
 }
 
+// ------------------------------------------------- the lineup counts
+//
+// Tim, 2026-10-07: "for perfect, could you add a column that shows how many
+// players they should have benched (either just that week if the specific user
+// is selected, or in total if it's on all users) ... for reasonable, show how
+// many players they started that they should have benched based on highest
+// proj (also weekly or total). Additionally for reasonable show how many
+// players they started that were proj 0 points that week."
+//
+// Both are counted off the cell the table already prints: Benched is the real
+// starters the hypothetical lineup leaves out, Proj 0 the real starters ESPN
+// projected for nothing. A man the feed sent no projection for is not a zero.
+
+const benchedIn = (c) => (c
+  ? c.realStarters.filter((r) => !c.starters.some((s) => same(s.playerId, r.playerId))).length
+  : 0);
+const zeroIn = (c) => (c ? c.realStarters.filter((p) => p.projected === 0 && !p.noProj).length : 0);
+
+/** The two count cells of a row; a column the picked decision has no use for stays hidden. */
+function countCells(d, benched, zeros) {
+  const lineup = Boolean(d && LINEUP_SAID[d.kind]);
+  const zero = Boolean(d && d.kind === 'lineup-reasonable');
+  return `<td class="dz-lu"${lineup ? '' : ' hidden'} data-v="${benched}">${benched}</td>` +
+    `<td class="dz-lu0"${zero ? '' : ' hidden'} data-v="${zeros}">${zeros}</td>`;
+}
+
+/** The two headings follow the picked decision, in both tables. */
+function showCountHeads(d) {
+  const lineup = Boolean(d && LINEUP_SAID[d.kind]);
+  const zero = Boolean(d && d.kind === 'lineup-reasonable');
+  for (const th of document.querySelectorAll('#panelResult th.dz-lu')) th.hidden = !lineup;
+  for (const th of document.querySelectorAll('#panelResult th.dz-lu0')) th.hidden = !zero;
+}
+
 /**
  * ALL USERS: one row a team — its record in each world, the change, and its
  * points — in the Standings order, so the two panels read alike.
@@ -627,6 +661,8 @@ function renderTeams(d) {
     const { hyp, real, weeks } = seasonPoints(m, id);
     const each = perWeek(diffOf(hyp, real, 2), weeks);
     const live = partial !== null && liveCell(m, id, partial);
+    const cells = world.weeks.map((w) => m.teams.get(id).byWeek[w]);
+    const count = (of) => cells.reduce((a, c) => a + of(c), 0);
     // What each cell SORTS on, where that is not what it prints: the name
     // without its live tag, a record the way ESPN ranks one, a change in wins.
     return `<tr data-team="${esc(id)}">` +
@@ -636,7 +672,7 @@ function renderTeams(d) {
       `<td class="dz-res ${change ? diffClass(change.value) : ''}"${sortV(change && change.value)}>${change ? esc(change.text) : '—'}</td>` +
       `<td class="dz-diff ${diffClass(each)}"${sortV(each)}>` +
       whyHtml(`data-why="team" data-team="${esc(id)}"`, `${teamName(id)}: the weeks behind this number`, signedText(each)) +
-      `</td></tr>`;
+      `</td>${countCells(d, count(benchedIn), count(zeroIn))}</tr>`;
   }).join('');
   resort($('teamTable'));
   $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
@@ -649,6 +685,7 @@ function renderResult() {
   const [body, foot] = table.querySelectorAll('tbody');
   const teams = Boolean(d && state.all);
   closeWhy();
+  showCountHeads(d);
   table.hidden = teams;
   $('resultStats').hidden = teams;
   $('resultBig').hidden = teams;
@@ -670,6 +707,8 @@ function renderResult() {
   const noise = state.noise ? m.noise.get(id) || {} : {};
   let hyp = 0;
   let real = 0;
+  let benched = 0;
+  let zeros = 0;
 
   body.innerHTML = world.weeks.map((week) => {
     const c = mine.byWeek[week];
@@ -685,6 +724,8 @@ function renderResult() {
     const dim = dimStyle(noise[week]);
     hyp += c.total;
     real += c.realTotal;
+    benched += benchedIn(c);
+    zeros += zeroIn(c);
 
     const opp = g ? teamName(g.homeId === id ? g.awayId : g.homeId) : '—';
     const rs = scores(g, id);
@@ -704,7 +745,7 @@ function renderResult() {
       `<td class="dz-diff ${diffClass(diff)}"${sortV(diff)}${dim}>` +
       whyHtml(`data-why="week" data-wk="${week}"`, `Week ${week}: the players behind this difference`, signedText(diff)) +
       `</td>` +
-      result +
+      result + countCells(d, benchedIn(c), zeroIn(c)) +
       `</tr>`;
   }).join('');
 
@@ -716,7 +757,8 @@ function renderResult() {
   foot.innerHTML = `<tr><td colspan="2">Total</td>` +
     `<td class="dz-act">${pts1(real)}</td><td class="dz-hyp">${pts1(hyp)}</td>` +
     `<td class="dz-diff ${diffClass(shown)}" data-v="${shown}">${signedText(shown)}</td>` +
-    `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td></tr>`;
+    `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td>` +
+    `${countCells(d, benched, zeros)}</tr>`;
   // The reader's column survives a new team, a new decision and the noise switch.
   resort(table);
 

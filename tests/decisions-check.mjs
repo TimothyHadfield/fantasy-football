@@ -164,7 +164,11 @@ async function bootPage(prefs = {}) {
     return settle();
   };
 
-  const cells = (tr) => [...tr.children].map(text);
+  // The lineup counts (Bench, Proj 0) are read apart, in `counts` below.
+  const isCount = (c) => c.classList.contains('dz-lu') || c.classList.contains('dz-lu0');
+  const cells = (tr) => [...tr.children].filter((c) => !isCount(c)).map(text);
+  const countCells = (tr) => [...tr.children].filter(isCount).map((c) => (c.hasAttribute('hidden') ? null : Number(text(c))));
+  const countHeads = (id) => [...document.querySelectorAll(`#${id} thead th`)].filter((c) => isCount(c) && !c.hasAttribute('hidden')).map(text);
   const tableRows = (id) => [...document.querySelectorAll(`#${id} tbody tr`)].map(cells);
   // SEASON BY WEEK as these facts have always read it: the slot and the week
   // cells, each a name and what he counts for. The dim projection before a
@@ -203,6 +207,13 @@ async function bootPage(prefs = {}) {
       shown: ['teamTable', 'weekTable', 'resultStats', 'whatIfBox'].map((id) => Boolean($(id)) && !$(id).hasAttribute('hidden')),
     },
     groups: [...document.querySelectorAll('.dz-group')].map(text),
+    // Bench and Proj 0: the headings shown, then [bench, proj0] a row (null = hidden).
+    counts: {
+      weekHeads: countHeads('weekTable'), teamHeads: countHeads('teamTable'),
+      weeks: [...document.querySelectorAll('#weekTable tbody:not(.dz-total) tr')].map(countCells),
+      total: countCells(document.querySelector('#weekTable tbody.dz-total tr') || { children: [] }),
+      teams: Object.fromEntries([...document.querySelectorAll('#teamTable tbody tr')].map((tr) => [tr.getAttribute('data-team'), countCells(tr)])),
+    },
     lede: text($('resultLede')),
     total: cells(document.querySelector('#weekTable tbody.dz-total tr') || { children: [] }),
     stats: Object.fromEntries([...document.querySelectorAll('#resultStats .v')].map((v) => [v.dataset.stat, text(v)])),
@@ -210,7 +221,7 @@ async function bootPage(prefs = {}) {
     // "Biggest swap" line under the tiles.
     labels: {
       tiles: [...document.querySelectorAll('#resultStats .k')].map(text),
-      teams: [...document.querySelectorAll('#teamTable thead th')].map(text),
+      teams: [...document.querySelectorAll('#teamTable thead th')].filter((c) => !isCount(c)).map(text),
     },
     big: $('resultBig') ? {
       t: text($('resultBig')), wk: $('resultBig').getAttribute('data-wk'), tag: $('resultBig').tagName,
@@ -1581,6 +1592,21 @@ if (booted(everyone, 'all users')) {
   // The table's last column is points a WEEK: each season figure over the 3 weeks.
   ok('REASONABLE, every team: actual record, hypothetical record, the change, the points a week',
     same(on.all.rows, eachWeek(REASONABLE, 3)) && rowOf(on.all.rows, 'Manager 9')[4] === '+7.6' && rowOf(on.all.rows, 'Manager 7')[4] === '+12.0', on.all.rows);
+  // THE LINEUP COUNTS (Tim, 2026-10-07): Bench on both lineup decisions, Proj 0 on Reasonable only.
+  {
+    const add = (rows, i) => rows.reduce((a, r) => a + r[i], 0);
+    const sc = seven.counts;
+    const pc = everyone.sevenPerfect.counts;
+    ok('REASONABLE, one team: Bench and Proj 0 a week, and the Total row adds them up',
+      same(sc.weekHeads, ['Bench', 'Proj 0']) && sc.weeks.length === 3 && sc.weeks.every((r) => r.length === 2 && r.every(Number.isInteger)) &&
+      same(sc.total, [add(sc.weeks, 0), add(sc.weeks, 1)]) && sc.total[0] > 0, sc);
+    ok('PERFECT, one team: Bench only', same(pc.weekHeads, ['Bench']) && pc.weeks.every((r) => Number.isInteger(r[0]) && r[1] === null) &&
+      pc.total[0] === add(pc.weeks, 0) && pc.total[0] > 0 && pc.total[1] === null, pc);
+    ok('ALL USERS: each team’s counts are its season’s — squad 7 the same totals as alone',
+      same(on.counts.teamHeads, ['Bench', 'Proj 0']) && same(on.counts.teams['7'], sc.total) &&
+      same(everyone.perfect.counts.teamHeads, ['Bench']) && everyone.perfect.counts.teams["7"][0] === pc.total[0], [on.counts, everyone.perfect.counts.teams]);
+    ok('a move has neither column', same(everyone.start.counts.weekHeads, []) && everyone.start.counts.weeks.every((r) => r.every((v) => v === null)), everyone.start.counts);
+  }
   ok('and its last heading says so', same(on.labels.teams, ['Team', 'Actual', 'Hypothetical', 'Record', 'Points/wk']), on.labels);
   ok('squad 7: the same +35.9 (+12.0 a week) as alone, but 0-3 — squad 8’s 111.3 now beats its 110.5',
     rowOf(on.all.rows, 'Manager 7')[4] === seven.stats.points && rowOf(on.all.rows, 'Manager 7')[2] === '0-3' && seven.stats.mirror === '1-2',
