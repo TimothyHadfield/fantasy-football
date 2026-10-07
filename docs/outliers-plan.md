@@ -8,9 +8,25 @@
 ## Decided by Tim
 - 2026-10-06 · **Which number:** "the week by week column shows the breakdown of certain stats and whatnot, and the luck breakdown shows a user had a luck ranting of -90 one week, that skews the rest of their rating, when I think that a single unlucky event like shouldn't be able to affect your entire luck ranking for the season." → the target is **one week's total luck** (Stats → Week by week → Luck) and what it does to the **season luck rating** (Luck score / LUCK and the luck rank).
 - 2026-10-06 · **The close-game formula stays at ±50:** "I've experimented with this in other seasons before, and I think how it is is good for now. How your points are distributed between games and whatnot is a huge deal … If we don't have the very close measurements be high then it doesn't really contribute to luck in a meaningful way. I think there are good ways to adjust the luck rankings though potentially." → ~~lower the close-game cap~~ is off the table; adjust how weeks are **combined into the season rating**, not what a week scores.
+- 2026-10-06 · **The limit comes from the data, not a round number:** "use a mathematical limit, something to do with the natural spread of the distribution and whatnot. I know outliers have a specific definition based on a standard deviation I think. Tell me what you think it should be when you get it." → ~~fixed ±40~~ superseded; see "The limit" below. **Always on** (his pick). **Build: not yet** — "once you find the limit tell me".
 
 ## The answer (one sentence)
-Leave every week's luck exactly as it is and change only how weeks add up to the season rating: **no single week may count for more than a set limit (recommended ±40, about one ordinary week's swing)**, so a −90 week still shows as −90 in the breakdown but counts as −40 toward the season.
+Leave every week's luck exactly as it is and change only how weeks add up to the season rating: **no single week counts for more than 1.345 standard deviations of the league's weekly luck (≈ ±49 today — almost exactly one full close game)**, so a −90 week still shows as −90 in the breakdown but counts as about −50 toward the season.
+
+## The limit (found 2026-10-06, for Tim's go)
+Measured on league 1241838, 40 team-weeks of weekly luck: mean −1.8, SD 36.6.
+| Rule | Limit here | Weeks it touches (of 40) | A −90 week counts as | Verdict |
+|---|---|---|---|---|
+| Textbook outlier (Tukey: beyond 1.5 × the middle-half range) | −118 … +111 | 0 | −90 | Does nothing to his example |
+| 3 standard deviations | ±110 | 0 | −90 | Same |
+| 2 standard deviations | ±73 | 0 | −75 | Barely helps: at 4 weeks the rating moves −18.8 → −15.0 |
+| **1.345 standard deviations (Huber's robust mean)** | **±49** | 8 | **−51** | **Recommended** |
+| 1 standard deviation | ±37 | 15 | −38 | Trims a third of all weeks, incl. every close game |
+- **A −90 week is not an outlier by the textbook definitions** — it is 2.4 SDs out, which a normal spread produces about 1.6% of the time, i.e. roughly twice a season across a 10-team league. So "remove outliers" in the strict sense would never fire. What he described (one week must not swing the season) is a different, also standard, tool: a **robust mean**, where every week counts but none beyond a limit.
+- **1.345 SDs is that tool's standard setting** (Huber, 1964): the limit at which the average loses only 5% of its accuracy when the data are well-behaved, while one wild week can no longer drag it. It is not a number picked for this site.
+- It lands at ±49, so **a full ±50 close game still counts essentially whole** — consistent with his wish that close games stay meaningful; only weeks where several things pile up are held back.
+- Computed from the league's own weeks so far, around the league's mean. It settles quickly: ±61 after week 1, ±53, ±46, ±49 after week 4. Plain SD rather than an outlier-proof one: weekly luck here is two-humped (few weeks near zero), which makes the outlier-proof SD larger and jumpier (±57, and ±76 after week 1). *measured*
+- Effect on a team of ordinary +5 weeks with one −90: rating at 4 / 8 / 13 weeks is −9.0 / −2.0 / +0.7 (today −18.8 / −6.9 / −2.3). *measured*
 
 ## Blockers / deciding constraint
 - The weekly numbers and the close-game formula do not change (Tim, above). Facts (scores, records, points for, Actual grids) never change.
@@ -43,18 +59,18 @@ Measured 2026-10-06 on league 1241838, weeks 1–4 final, 10 teams, 40 team-week
 ## Options
 | Option | What it is | Cost (effort, $, risk) | How it fails |
 |---|---|---|---|
-| A. A limit on what one week counts | Season rating = mean of each week's luck held within ±LIMIT (a fixed number, recommended 40). Weekly cells keep their real number; a week over the limit is marked and its preview says "counts as −40". The Luck score preview gains one row, "Single-week limit +x", so it still adds up. PTW and Close luck columns stay as they are. | 1 builder, ~1 day. $0. Risk medium: one function, three pages inherit it; several tests pin today's luck numbers and move on purpose. | The limit is a judgement number. A team with two huge weeks is still pulled by both (each at the limit). |
+| A. A limit on what one week counts | Season rating = mean of each week's luck held within the limit (league mean ± 1.345 SDs of weekly luck, see "The limit"; ~~a fixed 40~~ superseded). Weekly cells keep their real number; a week over the limit is marked and its preview says "counts as −51". The Luck score preview gains one row, "Single-week limit +x", so it still adds up. PTW and Close luck columns stay as they are. | 1 builder, ~1 day. $0. Risk medium: one function, three pages inherit it; several tests pin today's luck numbers and move on purpose. | The limit is a judgement number. A team with two huge weeks is still pulled by both (each at the limit). |
 | B. The same as a soft limit | A smooth squeeze instead of a hard stop (a −90 week counts ≈ −36, a −40 week ≈ −29). | Same. | Every week's counted value differs slightly from its shown value, so every cell needs the "counts as" note — more to explain for the same ratings (measured: within 1 point of A). |
 | C. Drop each team's best and worst week | "Olympic scoring". | Small. | Measured: moves 6 of 10 ranks and up to 15 points — it deletes ordinary close-game weeks too, which he said matter. Needs ≥ 5 weeks. |
 | D. Average of weekly ranks | Rating = how lucky you ranked each week, averaged. | Medium: LUCK stops being in points; S+L (Skill + Luck) no longer adds. | Measured: 8 of 10 ranks change. Breaks the Skill + Luck column and the previews. |
 | E. Show it, change nothing | The Luck score preview names the week that moved it most and "without it: x". | Half a day. | Adjusts nothing. |
 
 ## Recommendation (ranked)
-1. If only one thing is built, build **A with LIMIT = 40**: it does exactly what he described (one event cannot swing the season), keeps his weekly formula and its ±50 close games visible and meaningful, changes the fewest ranks, and every number still adds up. 40 because it is about one SD of a week's luck (36.6 measured), rounded to a number he can say; a single ±50 close game on an otherwise flat week is trimmed only to ±40.
+1. If only one thing is built, build **A with the limit at 1.345 SDs** (see "The limit"): it does exactly what he described (one event cannot swing the season), keeps his weekly formula and its ±50 close games counting whole, and every number still adds up. ~~LIMIT = 40~~ superseded by his "use a mathematical limit".
 2. No switch: one rating everywhere (Stats, Summary, the shared image, phone and laptop cannot disagree). The raw mean stays one glance away — it is the Luck score minus the "Single-week limit" row. Build a switch only if he asks for one (question b).
 3. Nothing else now (sim spread, colours, part caps — see below).
 
-Technical decisions (mine): LIMIT is one exported constant in `js/stats.js`; the counted value is stored on the weekly row so every reader (Avg column, cumulative chart, margins, Summary, Decisions) takes the same one; the ± is computed from the counted weekly values; a fixed number, not a data-driven fence, so past weeks never re-limit themselves and Decisions' two worlds use the same rule; weeks without projections stay skipped as now (decision of 2026-10-06); ties and the close-game rule untouched; the sim, records and points for never read it.
+Technical decisions (mine): the multiplier 1.345 is one exported constant in `js/stats.js`; the limit is league mean ± 1.345 × the sample SD of every read team-week's luck in the weeks being shown (so Summary's week picker and the cumulative chart each use the weeks they cover); the counted value is stored on the weekly row so every reader (Avg column, cumulative chart, margins, Summary, Decisions) takes the same one; the ± is computed from the counted weekly values; the limit moves a little as weeks are added, so a past week can cross it — the page prints the limit in use; Decisions' hypothetical world uses the REAL world's limit, so a Diff never includes a moved limit; under 2 team-weeks (no SD) nothing is limited; weeks without projections stay skipped as now (decision of 2026-10-06); ties and the close-game rule untouched; the sim, records and points for never read it.
 
 ## Deliberately NOT planned
 - ~~Lowering the close-game cap~~ · Tim, 2026-10-06: "how it is is good for now".
@@ -65,8 +81,8 @@ Technical decisions (mine): LIMIT is one exported constant in `js/stats.js`; the
 - ~~Removing outlier weeks from any fact (records, points for, Actual grids, Decisions' Points/wk)~~ · facts.
 
 ## How this could be wrong
-- 40 may be too tight or too loose for his league → the build prints, per team, raw vs counted so he can judge on his own numbers; the constant is one line.
-- He may want the limit to bite only on truly freak weeks (−90) and leave a lone ±50 close game whole → then LIMIT = 50 or 60 (question a offers it).
+- 1.345 SDs may be too tight or too loose for his league (its SD is not measured yet) → the build prints the limit in use and, per over-limit week, raw vs counted; the multiplier is one line.
+- A limit that moves weekly could make a past week flip in and out of it → measured drift ±61 / 53 / 46 / 49 over weeks 1–4; if that reads as noise on the page, freeze it or switch to a fixed number.
 - He may mean the luck RANK only, not the Luck score → same code; the rank follows the score.
 - Four weeks of a public league is thin; his −90 week is in his own league → check the build on his league's numbers (phone's synced copy or his screen) before calling it done.
 
@@ -74,8 +90,8 @@ Technical decisions (mine): LIMIT is one exported constant in `js/stats.js`; the
 1. **The limit.** Done when: a new unit check fails on today's code (a −90 week counts −90) and passes after; with no week over the limit every luck number on every page is byte-identical to today; the cumulative chart's last point equals the Luck score; Week by week's Luck Avg equals the Luck score and an over-limit cell is marked with its counted value in the preview; the Luck score preview adds up with the new row; Summary LUCK and Decisions' copies equal Stats for the same league; word ceilings respected; headless 393 and 1440 on league 1241838 with a seeded −90 week (the live league has none) looked at.
 
 ## Questions for Tim
-a. How much may one week count toward the season rating? · recommended: **±40** (about one ordinary week's swing). Alternatives: ±50 (only weeks beyond a full close game are trimmed), ±60 (only true freaks).
-b. Always on, or a switch? · recommended: **always on**, with the raw figure recoverable from the preview row.
+a. ~~How much may one week count?~~ → "use a mathematical limit … Tell me what you think it should be when you get it" (2026-10-06). Found: 1.345 SDs ≈ ±49. **Open: his go on that figure.**
+b. ~~Always on, or a switch?~~ → Always on (2026-10-06).
 c. Wording, his to change: the mark on an over-limit week, "counts as −40", and the preview row "Single-week limit". · recommended: build with these and he edits.
 
 ## Sources
