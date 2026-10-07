@@ -210,7 +210,7 @@
       "scenarios": 10
     },
     "proj-changes-check.mjs": {
-      "assertions": 96
+      "assertions": 100
     },
     "test-must-win.mjs": {
       "assertions": 67

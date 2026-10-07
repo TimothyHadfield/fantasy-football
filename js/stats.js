@@ -441,11 +441,11 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
  * reported 65 games overall at 0.69, and tighter buckets at larger margins.
  */
 
-// Below this many games a bucket has no percentage worth printing: with five
-// games the only answers available are 0, 20, 40, 60, 80 and 100%, and a single
-// correct call in the >30 bucket reads as a flawless projection model. The
-// games and correct counts are still reported — only the ratio is withheld.
-const MIN_GAMES_FOR_ACCURACY = 20;
+// A PERCENTAGE ON EVERY BUCKET THAT HAS A GAME. Tim, 2026-10-06: "show the
+// accuracy % for all rows, not just the 'all' section. I don't care if there's
+// only been like 1 game there." It was withheld under twenty games; the Games
+// and Correct columns beside it say how much it rests on.
+const MIN_GAMES_FOR_ACCURACY = 1;
 
 export function predictionAccuracy(games, thresholds = [0, 5, 10, 15, 20, 25, 30]) {
   // A game where both teams carry the same projection makes no prediction at

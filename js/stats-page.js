@@ -1403,14 +1403,6 @@ function renderAccuracy() {
   resort(table);
 
   const notes = [];
-  const withheld = rows.some((a) => a.accuracy === null);
-  if (withheld) {
-    notes.push(
-      'A percentage is only shown once a bucket holds enough games to mean ' +
-      'something — out of five games the only answers available are 0, 20, 40, ' +
-      '60, 80 and 100%.'
-    );
-  }
   const ties = acc.tiedProjections || 0;
   if (ties) {
     notes.push(

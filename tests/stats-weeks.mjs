@@ -191,13 +191,13 @@ if (process.argv[2]) {
       if (spread.some((v) => v === '0.0')) problems.push('Std Dev 0.0 still shown at 1 week');
     }
 
-    // Accuracy: no empty buckets, no percentage from a handful of games.
+    // Accuracy: no empty buckets, and a percentage on every row (Tim, 2026-10-06).
     const accRows = Array.from($('accuracyTable').querySelectorAll('tbody tr'));
     for (const r of accRows) {
       const c = Array.from(r.children).map((x) => x.textContent.trim());
       if (c.length === 4 && c[1] === '0') problems.push(`empty accuracy bucket ${c[0]} rendered`);
-      if (c.length === 4 && Number(c[1]) < 20 && c[3] !== '—') {
-        problems.push(`accuracy ${c[3]} shown from ${c[1]} games`);
+      if (c.length === 4 && c[3] !== `${Math.round((Number(c[2]) / Number(c[1])) * 100)}%`) {
+        problems.push(`accuracy ${c[3]} shown for ${c[2]} of ${c[1]} games`);
       }
     }
 
@@ -402,7 +402,9 @@ for (const weeks of [0, 1, 2, 13]) {
     check(s.teams.every((t) => t.actualBox === null), '1wk: per-team box must be null');
     check(s.leagueActualBox !== null, '1wk: league box should exist (10 scores)');
     check(s.teams.some((t) => t.actualStanding !== null), '1wk: record ranks should exist');
-    check(s.predictionAccuracy[0].accuracy === null, '1wk: accuracy must be withheld');
+    // Tim, 2026-10-06: a percentage on every row that has a game, however few.
+    check(s.predictionAccuracy.every((b) => (b.games > 0) === (typeof b.accuracy === 'number')) &&
+      typeof s.predictionAccuracy[0].accuracy === 'number', '1wk: every bucket with a game has a percentage');
     check(s.weeklyLeagueAverages.length === 1, '1wk: league averages');
   }
   if (weeks === 13) {
