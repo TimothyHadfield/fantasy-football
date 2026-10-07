@@ -117,4 +117,5 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Decided (Tim, question box):** archive in the public repo = "Weekly readings only".
 - **Built:** `run-all.mjs --shard=I/N` + five-shard workflow (d58cebc); `data/snapshots/476225250-2026.json` readings-only (3c8e18f; `fetchRemote` imports all five weeks, checked in node); decisions-check waits out the 900 ms hover-quiet window (failed on CI only).
 - **Planned, NOT built:** `docs/outliers-plan.md` (plan-reviewer run; score-part caps cut). Measured: close-game term is the heavy tail (10 of 40 cells beyond two robust SDs; Andrew Worachek's LUCK −6.5 with it, +19.0 without).
-- **Open:** Tim's answers a–c on the outliers plan; first green sharded CI run + deploy to be confirmed.
+- **Then (same evening):** Tim's answers — the target is one week's total luck (a −90) swinging the season rating; close-game ±50 stays; "use a mathematical limit" → I reported 1.345 SDs ≈ ±49 (textbook outlier rules would not touch a −90); he said "lets just round it out to a limit of +- 50 then" and "build now". One builder → 5a7be67, merged 680a0da; see the plan's BUILT section. Sharded CI green and deploying (~11 min per push; a push right behind another cancels the earlier run — expected).
+- **Open:** his own league and iPhone for the limit; the new strings.
