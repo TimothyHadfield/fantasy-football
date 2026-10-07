@@ -19,6 +19,11 @@
  * move. Quieter than the figure, wide in week 1 and narrowing every week. */
 .pm { color: var(--dim); font-size: 10.5px; font-weight: 600; margin-left: 4px; }
 
+/* Week by week, Luck: a week past the single-week limit (js/stats.js
+ * WEEK_LUCK_LIMIT). The cell keeps its real number; the dotted line says it
+ * counts for less toward the season. A line, not a symbol: no cell gets wider. */
+td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
+
 /* Ranked bars for the schedule-luck panel.
  *
  * Deliberately NOT charts.js's histogram. Ten average opponent projections all
@@ -213,7 +218,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           <th data-sort title="Luck per week: your average score minus your average projection. Positive means you keep beating your projection.">Luck/wk</th>
           <th data-sort title="Points to win: your average opponent&rsquo;s score minus your own average luck &mdash; what you needed to score to beat a typical opponent.">PTW</th>
           <th data-sort title="Close-game luck (your sheet&rsquo;s SD): weights each result by how close it was, so a one-point game scores near &plusmn;50 and a blowout near zero. The &plusmn; beside it is how far it could still move, and it narrows every week.">Close luck</th>
-          <th data-sort title="Luck score (your sheet&rsquo;s LUCK) = league average &minus; (PTW &minus; close luck). Above zero means the season has broken your way.">Luck score</th>
+          <th data-sort title="Luck score (your sheet&rsquo;s LUCK) = league average &minus; (PTW &minus; close luck). One week counts &plusmn;50 at most. Above zero means the season has broken your way.">Luck score</th>
           <th data-sort title="Skill = your average projected score minus the league&rsquo;s average projected score.">Skill</th>
           <th data-sort title="Skill + luck score (your sheet&rsquo;s S+L).">S+L</th>
           <th data-sort title="LS: rank in the league by luck score.">LS</th>

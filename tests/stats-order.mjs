@@ -340,6 +340,50 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   const row0 = luck.get(t0.name);
   assert(num(row0[row0.length - 1].textContent) === whole(t0.exact.luckScore),
     `Luck Avg "${row0[row0.length - 1].textContent}" is not the Luck score ${t0.exact.luckScore.toFixed(2)}`);
+
+  // THE SINGLE-WEEK LIMIT ON THE GRID (Tim, 2026-10-06: "a single unlucky
+  // event … shouldn't be able to affect your entire luck ranking", "a limit of
+  // +- 50"). A week past ±50 keeps its REAL number in its cell (the sweep
+  // above read every cell), is marked, and says what it counts as; the Avg is
+  // of what the weeks COUNT, so it is still the Luck score — for every team,
+  // and the Luck score is the mean of the weeks held within ±50, worked here
+  // from the scores and not read off a field the code under test filled in.
+  const LIMIT = 50;
+  const held = (v) => Math.min(Math.max(v, -LIMIT), LIMIT);
+  let over = 0;
+  let moved = 0;
+  for (const t of st.teams) {
+    const cells = luck.get(t.name);
+    const raw = t.weekly.map(PART.luck);
+    const want = raw.reduce((a, v) => a + held(v), 0) / raw.length;
+    if (Math.abs(want - raw.reduce((a, v) => a + v, 0) / raw.length) > 0.05) moved++;
+    assert(Math.abs(t.exact.luckScore - want) < 1e-9,
+      `${t.name}: Luck score ${t.exact.luckScore.toFixed(3)}, its weeks held within ±50 average ${want.toFixed(3)}`);
+    assert(num(cells[cells.length - 1].textContent) === whole(want),
+      `${t.name}: Luck Avg "${cells[cells.length - 1].textContent}" is not the Luck score ${want.toFixed(2)}`);
+    raw.forEach((v, i) => {
+      const td = cells[i];
+      // By the number the cell prints: +50.3 reads "+50" and is left alone.
+      const isOver = Math.abs(whole(v)) > LIMIT;
+      if (isOver) over++;
+      const says = (td.getAttribute('title') || '').match(/Counts as ([+−]\d+) toward the season/);
+      assert(td.classList.contains('capped') === isOver,
+        `${t.name} wk ${t.weekly[i].week} (${v.toFixed(1)}): ${isOver ? 'not marked as past the limit' : 'marked, and it is inside the limit'}`);
+      assert(isOver ? says && num(says[1]) === (v > 0 ? LIMIT : -LIMIT) : !says,
+        `${t.name} wk ${t.weekly[i].week} (${v.toFixed(1)}): hover reads "${td.getAttribute('title')}"`);
+    });
+  }
+  assert(over > 0 && moved > 0,
+    `the demo season has ${over} weeks past ±50 moving ${moved} Luck scores, so the checks above prove nothing`);
+  assert(/Underlined: counts as ±50 toward the season\./.test($('weeklyKey').textContent),
+    `the key under the Luck grid does not say what the mark means: "${$('weeklyKey').textContent}"`);
+  // The mark is Luck's alone: a part's own cell is never held back.
+  for (const metric of ['luckProj', 'luckOpp', 'luckClose', 'actual']) {
+    press(metric);
+    assert(!$('weeklyTable').querySelector('td.capped') && !/Underlined/.test($('weeklyKey').textContent),
+      `"${metric}" marks a cell as past the single-week limit`);
+  }
+  press('luck');
   const tip = row0[0].getAttribute('title') || '';
   assert(/Opp scoring .+ · Act−Proj .+ · Close game /.test(tip), `Luck cell hover: "${tip}"`);
   const [o, p, c] = (tip.match(/[+−]?\d+/g) || []).slice(0, 3).map(num);
@@ -430,7 +474,10 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   // to the Luck score the standings print, to the tenth and beyond; Close luck
   // is that same average of its own cells; and the cumulative series ends on it.
   for (const t of st.teams) {
-    const totals = t.weekly.map((r) => weekLuckParts(r, lg).total);
+    // Each week as it COUNTS: held within ±50 (the single-week limit, Tim
+    // 2026-10-06 — checked on its own further down). Three teams here have a
+    // week past it: Robert, Tim and Watkins.
+    const totals = t.weekly.map((r) => Math.min(Math.max(weekLuckParts(r, lg).total, -50), 50));
     assert(Math.abs(avg(totals) - t.exact.luckScore) < 1e-9 && tenth(avg(totals)) === t.luckScore,
       `${t.name}${t.ties ? ' (tied once)' : ''}: weekly luck averages ${avg(totals).toFixed(3)}, ` +
       `its Luck score is ${t.exact.luckScore.toFixed(3)}`);
@@ -444,6 +491,179 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   const tieRow = tiedTeams[0].weekly.find((r) => r.tied);
   assert(tieRow.gameLuck === null && weekLuckParts(tieRow, lg).close === null,
     'a tied game still has no close-game figure of its own (the hover says "tie")');
+}
+
+// ------------------------------------------------- the single-week limit
+//
+// Tim, 2026-10-06: "the luck breakdown shows a user had a luck ranting of -90
+// one week, that skews the rest of their rating, when I think that a single
+// unlucky event like shouldn't be able to affect your entire luck ranking for
+// the season" … "lets just round it out to a limit of +- 50". And of the
+// close-game formula: "how it is is good for now".
+//
+// A league of the real shape (ten teams, four weeks, scores to the hundredth)
+// with three weeks planted in it, every expectation worked here from the
+// scores: a −90 week (hot opponent, 1.5-point loss, under projection), a +70
+// week, and a one-point game worth ±49.5 all told, which is inside the limit.
+{
+  const { computeLeagueStats, gameLuck } = await import(pathToFileURL(path.join(REPO, 'js/stats.js')).href);
+  const LIMIT = 50;
+  const held = (v) => Math.min(Math.max(v, -LIMIT), LIMIT);
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const tenth = (v) => Math.round(v * 10) / 10;
+  const sd = (a) => { const m = avg(a); return Math.sqrt(a.reduce((x, v) => x + (v - m) ** 2, 0) / (a.length - 1)); };
+  const PAIRS = {
+    1: [[1, 10], [2, 9], [3, 8], [4, 7], [5, 6]],
+    2: [[1, 2], [3, 10], [4, 9], [5, 8], [6, 7]],
+    3: [[3, 4], [1, 5], [2, 6], [7, 10], [8, 9]],
+    4: [[5, 6], [1, 7], [2, 8], [3, 9], [4, 10]],
+  };
+  // Ordinary weeks: a comfortable margin either way and a projection a few
+  // points off, so nothing but the planted weeks comes near the limit.
+  const act = (id, w) => 100 + 6 * id + ((id * w * 7) % 5) * 0.13;
+  const proj = (id, w) => act(id, w) - (((id + 2 * w) % 5) - 2) * 3.21;
+  const build = (planted) => {
+    const games = [];
+    for (const [w, pairs] of Object.entries(PAIRS)) {
+      for (const [h, a] of pairs) {
+        const week = Number(w);
+        games.push({
+          week, homeId: h, awayId: a,
+          homeActual: act(h, week), awayActual: act(a, week),
+          homeProjected: proj(h, week), awayProjected: proj(a, week),
+        });
+      }
+    }
+    const game = (week, h) => games.find((g) => g.week === week && g.homeId === h);
+    if (planted) {
+      // Week 2, team 1: scores 148 against 149.5 having been projected 171.
+      Object.assign(game(2, 1), { homeActual: 148, awayActual: 149.5, homeProjected: 171, awayProjected: 149.5 });
+      // Week 3, team 3: wins 90–88.5 having been projected 114.
+      Object.assign(game(3, 3), { homeActual: 90, awayActual: 88.5, homeProjected: 114, awayProjected: 110 });
+      // Week 4, teams 5 and 6: a one-point game, and projections set (below,
+      // once the league average is known) so the week comes to ±49.5 all told.
+      Object.assign(game(4, 5), { homeActual: 111, awayActual: 110 });
+      const lg = avg(games.flatMap((g) => [g.homeActual, g.awayActual]));
+      const g = game(4, 5);
+      g.homeProjected = g.homeActual + (lg - g.awayActual) + 0.5;
+      g.awayProjected = g.awayActual + (lg - g.homeActual) - 0.5;
+    }
+    return {
+      season: 2026, name: 'Limit', isDemo: false, weeks: 14,
+      teams: Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `T${i + 1}` })),
+      games,
+    };
+  };
+  // A week's luck by hand, against the league average of the weeks given.
+  const leagueOf = (st, through) => avg(st.teams.flatMap((t) =>
+    t.weekly.filter((r) => r.week <= through).map((r) => r.actual)));
+  const rawOf = (r, lg) => (lg - r.oppActual) + (r.actual - r.projected) + (gameLuck(r.actual - r.oppActual) ?? 0);
+
+  const st = computeLeagueStats(build(true));
+  const lg = leagueOf(st, 4);
+  const team = (id) => st.teams.find((t) => t.id === id);
+  const week = (id, w) => rawOf(team(id).weekly.find((r) => r.week === w), lg);
+  assert(week(1, 2) < -85 && week(1, 2) > -95, `the planted −90 week reads ${week(1, 2).toFixed(1)}`);
+  assert(week(3, 3) > 65 && week(3, 3) < 75, `the planted +70 week reads ${week(3, 3).toFixed(1)}`);
+  assert(Math.abs(week(5, 4) - 49.5) < 1e-6 && Math.abs(week(6, 4) + 49.5) < 1e-6,
+    `the planted close game reads ${week(5, 4).toFixed(2)} / ${week(6, 4).toFixed(2)}, not ±49.5`);
+  // The close-game formula itself is not what was limited: a one-point game
+  // is still a full ±50 of close-game luck.
+  assert(gameLuck(1) === 50 && gameLuck(-1) === -50 && gameLuck(1.5) === 50 && Math.abs(gameLuck(3) - 43) < 1e-9,
+    'the close-game formula has moved');
+
+  let overWeeks = 0;
+  for (const t of st.teams) {
+    const raw = t.weekly.map((r) => rawOf(r, lg));
+    overWeeks += raw.filter((v) => Math.abs(v) > LIMIT).length;
+    const want = avg(raw.map(held));
+    // THE RULE: the season Luck score is the mean of its weeks, each held
+    // within ±50.
+    assert(Math.abs(t.exact.luckScore - want) < 1e-9 && t.luckScore === tenth(want),
+      `${t.name}: Luck score ${t.exact.luckScore.toFixed(3)}; its weeks ` +
+      `(${raw.map((v) => v.toFixed(1)).join(', ')}) held within ±50 average ${want.toFixed(3)}`);
+    assert(Math.abs(t.exact.skillPlusLuck - (t.exact.skill + want)) < 1e-9,
+      `${t.name}: S+L ${t.exact.skillPlusLuck.toFixed(3)} is not Skill + that Luck score`);
+    // Each week carries both figures, so every reader takes the same ones.
+    assert(t.weekly.every((r, i) => Math.abs((r.weekLuck ?? NaN) - raw[i]) < 1e-9 &&
+        Math.abs((r.weekLuckCounted ?? NaN) - held(raw[i])) < 1e-9),
+      `${t.name}: its weekly rows do not carry the real and the counted luck`);
+    // The cumulative line: every point is the Luck score as it stood after
+    // that week — weeks 1..w, against the league average of weeks 1..w — and
+    // the last one is the Luck score.
+    t.cumulativeLuck.forEach((pt, i) => {
+      const lgThen = leagueOf(st, pt.week);
+      const then = avg(t.weekly.slice(0, i + 1).map((r) => held(rawOf(r, lgThen))));
+      assert(pt.value === tenth(then),
+        `${t.name}: cumulative luck after week ${pt.week} is ${pt.value}, by hand ${then.toFixed(3)}`);
+    });
+    assert(t.cumulativeLuck[3].value === t.luckScore,
+      `${t.name}: cumulative luck ends on ${t.cumulativeLuck[3].value}, not the Luck score ${t.luckScore}`);
+    // What the limit does NOT touch.
+    const lucks = t.weekly.map((r) => r.actual - r.projected);
+    assert(t.avgLuck === tenth(avg(lucks)) &&
+        Math.abs(t.exact.pointsToWin - (avg(t.weekly.map((r) => r.oppActual)) - avg(lucks))) < 1e-9 &&
+        t.scoreDiffLuck === tenth(avg(t.weekly.map((r) => gameLuck(r.actual - r.oppActual) ?? 0))),
+      `${t.name}: Luck/wk, PTW or Close luck moved with the single-week limit`);
+  }
+  assert(overWeeks === 2, `the fixture has ${overWeeks} weeks past ±50, expected the two planted`);
+  const counted = (id, w) => team(id).weekly.find((r) => r.week === w).weekLuckCounted;
+  assert(counted(1, 2) === -50, `a −90 week counts ${counted(1, 2)} toward the season, not −50`);
+  assert(counted(3, 3) === 50, `a +70 week counts ${counted(3, 3)} toward the season, not +50`);
+  assert(Math.abs(counted(5, 4) - 49.5) < 1e-6 && Math.abs(counted(6, 4) + 49.5) < 1e-6,
+    `a close game inside the limit counts ${counted(5, 4)} / ${counted(6, 4)}, not its own ±49.5`);
+  // One week in four held back 40 points is 10 points of the season rating.
+  const unheld = avg(team(1).weekly.map((r) => rawOf(r, lg)));
+  assert(Math.abs((team(1).exact.luckScore - unheld) - (-50 - week(1, 2)) / 4) < 1e-9,
+    `T1: the limit moved its Luck score by ${(team(1).exact.luckScore - unheld).toFixed(2)}`);
+  // The ranks follow the score that is printed.
+  const byLuck = [...st.teams].sort((a, b) => b.exact.luckScore - a.exact.luckScore).map((t) => t.id);
+  const bySum = [...st.teams].sort((a, b) => b.exact.skillPlusLuck - a.exact.skillPlusLuck).map((t) => t.id);
+  assert(byLuck.every((id, i) => team(id).luckStanding === i + 1) && bySum.every((id, i) => team(id).projectedStanding === i + 1),
+    'LS / PS are not the order of the limited Luck score and S+L');
+  // The ±: one standard error of the average of what the weeks COUNT.
+  const terms = st.teams.flatMap((t) => t.weekly.map((r) => held(rawOf(r, lg))));
+  const plus = st.teams.flatMap((t) => t.weekly.map((r) => held(rawOf(r, lg)) + r.projected));
+  for (const t of st.teams) {
+    assert(t.margins.luckScore === tenth(sd(terms) / 2) && t.margins.skillPlusLuck === tenth(sd(plus) / 2),
+      `${t.name}: ± ${t.margins.luckScore} / ${t.margins.skillPlusLuck}, by hand ` +
+      `${(sd(terms) / 2).toFixed(3)} / ${(sd(plus) / 2).toFixed(3)}`);
+  }
+  const unheldTerms = st.teams.flatMap((t) => t.weekly.map((r) => rawOf(r, lg)));
+  assert(tenth(sd(unheldTerms) / 2) !== tenth(sd(terms) / 2),
+    'the fixture cannot tell a ± of the counted weeks from one of the real weeks');
+
+  // NOTHING OVER THE LIMIT, NOTHING MOVES — to the last bit. The same league
+  // without the planted weeks: every luck figure is the sheet's own formula,
+  // compared with === and not to a tolerance.
+  const calm = computeLeagueStats(build(false));
+  const calmLg = leagueOf(calm, 4);
+  assert(calm.teams.every((t) => t.weekly.every((r) => Math.abs(rawOf(r, calmLg)) < LIMIT)),
+    'the calm fixture has a week past ±50');
+  const allTerms = calm.teams.flatMap((t) => t.weekly.map((r) =>
+    (gameLuck(r.actual - r.oppActual) ?? 0) - (r.oppActual - (r.actual - r.projected))));
+  const allPlus = calm.teams.flatMap((t) => t.weekly.map((r) =>
+    (gameLuck(r.actual - r.oppActual) ?? 0) - (r.oppActual - (r.actual - r.projected)) + r.projected));
+  const lgAll = avg(calm.teams.flatMap((t) => t.weekly.map((r) => r.actual)));
+  for (const t of calm.teams) {
+    const lucks = t.weekly.map((r) => r.actual - r.projected);
+    const ptw = avg(t.weekly.map((r) => r.oppActual)) - avg(lucks);
+    const close = avg(t.weekly.map((r) => gameLuck(r.actual - r.oppActual) ?? 0));
+    assert(t.exact.luckScore === lgAll - (ptw - close),
+      `${t.name}: with no week past the limit the Luck score is ${t.exact.luckScore}, the sheet's formula gives ${lgAll - (ptw - close)}`);
+    assert(t.parts.limit === 0 && t.weekly.every((r) => r.weekLuckCounted === r.weekLuck),
+      `${t.name}: the limit moved something in a season with no week past it`);
+    assert(t.margins.luckScore === tenth(sd(allTerms) / 2) && t.margins.skillPlusLuck === tenth(sd(allPlus) / 2),
+      `${t.name}: the ± moved in a season with no week past the limit`);
+    let opp = 0; let luck = 0; let cl = 0;
+    t.weekly.forEach((r, i) => {
+      opp += r.oppActual; luck += r.actual - r.projected; cl += gameLuck(r.actual - r.oppActual) ?? 0;
+      const n = i + 1;
+      const was = tenth(leagueOf(calm, r.week) - (opp / n - luck / n) + cl / n);
+      assert(t.cumulativeLuck[i].value === was,
+        `${t.name}: cumulative luck after week ${r.week} is ${t.cumulativeLuck[i].value}, was ${was}`);
+    });
+  }
 }
 
 // ---- the five season cells that open their parts ---------------------------
@@ -468,6 +688,7 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     'a cell that opens its parts also carries a title: two previews on one number');
   assert(cells.every((c) => c.getAttribute('tabindex') === '0'), 'an explained cell cannot be reached by keyboard');
   let rounded = 0;
+  const limitRows = [];
   for (const c of cells) {
     fire(c, 'mouseover');
     const pop = $('oppPop');
@@ -478,6 +699,12 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     const parts = rows.filter((r) => r[0] !== 'Rounding');
     const fix = rows.filter((r) => r[0] === 'Rounding');
     rounded += fix.length;
+    // The single-week limit is a row of the Luck score alone, and only where
+    // it prints as something.
+    const lim = rows.filter((r) => r[0] === 'Single-week limit');
+    if (lim.length) limitRows.push([c.parentElement.children[0].textContent.trim(), c.dataset.explain, tenths(lim[0][1])]);
+    assert(lim.length <= 1 && lim.every((r) => tenths(r[1]) !== 0 && /^[-+−]/.test(r[1].trim())),
+      `${what}: the Single-week limit row reads ${JSON.stringify(lim)}`);
     const sum = parts.reduce((a, r) => a + tenths(r[1]), 0);
     const mean = c.dataset.explain === 'scoreDiffLuck';
     const total = (mean ? Math.round(sum / parts.length) : sum) + fix.reduce((a, r) => a + tenths(r[1]), 0);
@@ -490,6 +717,24 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     assert(pop.querySelector('.op-close'), `${what}: the card has no Close for a finger`);
     fire(c, 'mouseout');
     assert(pop.hasAttribute('hidden'), `${what}: moving off the cell left the card open`);
+  }
+  // Which Luck scores carry the row, and how much, worked from the demo season:
+  // the mean over a team's weeks of (the week held within ±50) − (the week).
+  {
+    const { generateDemoLeague } = await import(pathToFileURL(path.join(REPO, 'js/demo.js')).href);
+    const { computeLeagueStats } = await import(pathToFileURL(path.join(REPO, 'js/stats.js')).href);
+    const st = computeLeagueStats(generateDemoLeague());
+    const all = st.teams.flatMap((t) => t.weekly.map((r) => r.actual));
+    const lg = all.reduce((a, b) => a + b, 0) / all.length;
+    const want = st.teams.map((t) => {
+      const raw = t.weekly.map((r) => (lg - r.oppActual) + (r.actual - r.projected) + (r.gameLuck ?? 0));
+      const off = raw.reduce((a, v) => a + Math.min(Math.max(v, -50), 50) - v, 0) / raw.length;
+      return [t.name, 'luckScore', Math.round(off * 10)];
+    }).filter((r) => r[2] !== 0);
+    const key = (rows) => JSON.stringify([...rows].sort((a, b) => a[0].localeCompare(b[0])));
+    assert(want.length > 0, 'no demo Luck score is moved a tenth by the single-week limit: nothing to show');
+    assert(key(limitRows) === key(want),
+      `the Single-week limit rows are ${key(limitRows)}, worked from the season ${key(want)}`);
   }
   // The same element as the schedule card, so only one can ever be open.
   assert(document.querySelectorAll('.opp-pop').length === 1, 'the two previews are separate elements');

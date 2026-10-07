@@ -387,11 +387,17 @@ export function standingsExplain(stats, team, key) {
   };
 
   if (key === 'luckScore') {
+    // What the single-week limit (`WEEK_LUCK_LIMIT`, js/stats.js) moved the
+    // score by is a row of its own, so the rows still add up — and only when
+    // it prints as something: a team with no week over the limit has the four
+    // rows it always had.
+    const limit = row('Single-week limit', p.limit || 0);
     return made('Luck score', [
       row(oneWeek ? `Week ${stats.weekNumbers[0]} avg` : 'League avg', p.league, false),
       row(h.oppAvg, -tenth(p.opp)),
       row('Luck/wk', p.luck),
       row('Close luck', p.close),
+      ...(limit.value ? [limit] : []),
     ]);
   }
   if (key === 'pointsToWin') {
@@ -429,7 +435,7 @@ const HEAD = [
   ['Luck/wk', 'Luck per week: your average score minus your average projection. Positive means you keep beating your projection.'],
   ['PTW', 'Points to win: your average opponent’s score minus your own average luck — what you needed to score to beat a typical opponent.'],
   ['Close luck', 'Close-game luck (your sheet’s SD): weights each result by how close it was, so a one-point game scores near ±50 and a blowout near zero.'],
-  ['Luck score', 'Luck score (your sheet’s LUCK) = league average − (PTW − close luck). Above zero means the season has broken your way.'],
+  ['Luck score', 'Luck score (your sheet’s LUCK) = league average − (PTW − close luck). One week counts ±50 at most. Above zero means the season has broken your way.'],
   ['Skill', 'Skill = your average projected score minus the league’s average projected score.'],
   ['S+L', 'Skill + luck score (your sheet’s S+L).'],
   ['LS', 'LS: rank in the league by luck score.'],

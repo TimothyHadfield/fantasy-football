@@ -10,6 +10,7 @@ import { generateDemoLeague } from './demo.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import {
   computeLeagueStats, teamFitPoints, playerFitPoints, boxStats, weekLuckParts, leagueAvgActualOf, closeLuckOf,
+  WEEK_LUCK_LIMIT,
 } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
 // THE POSITIONAL FLOOR (Tim, 2026-09-18). Schedule luck is the average
@@ -1826,7 +1827,18 @@ function renderWeeklyTable() {
   // that IS the Luck score, tie or no tie: js/stats.js forms it from these same
   // unrounded weekly terms (`weekLuckParts`, `closeLuckOf`), so this column and
   // the standings above cannot disagree.
-  const teamAvg = (t) => meanOf(t.weekly.map(valueOf).filter((v) => typeof v === 'number'));
+  //
+  // UNDER LUCK A WEEK PAST THE SINGLE-WEEK LIMIT COUNTS AS THE LIMIT (Tim,
+  // 2026-10-06; `WEEK_LUCK_LIMIT` in js/stats.js). The cell keeps its real
+  // number and is marked `capped`; the Avg is of what each week COUNTS
+  // (`weekLuckCounted`, off the row), which is what the Luck score averages.
+  const countedOf = (row) => (metric === 'luck' ? row.weekLuckCounted : valueOf(row));
+  const teamAvg = (t) => meanOf(t.weekly.map(countedOf).filter((v) => typeof v === 'number'));
+  // Marked by the number the cell PRINTS: a week of +50.3 prints "+50", and a
+  // "+50" underlined as "counts as +50" would be a mark that says nothing.
+  const capped = (row) => metric === 'luck' && row.weekLuck !== null &&
+    Math.abs(Number(row.weekLuck.toFixed(0))) > WEEK_LUCK_LIMIT;
+  let anyCapped = false;
 
   // Hovering (or, on a phone, tapping) a Luck cell names its three parts.
   const partsTitle = (row) => {
@@ -1834,13 +1846,20 @@ function renderWeeklyTable() {
     // Plain text: `signed` wraps its number in a span, which a title cannot hold.
     const pm = (v) => { const n = Number(v.toFixed(0)) + 0; return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}`; };
     return `Opp scoring ${pm(p.opp)} · Act−Proj ${pm(p.proj)} · Close game ` +
-      `${p.close === null ? 'tie' : pm(p.close)}`;
+      `${p.close === null ? 'tie' : pm(p.close)}` +
+      (capped(row) ? `. Counts as ${pm(row.weekLuckCounted)} toward the season` : '');
   };
-  const withParts = (td, row) => (metric !== 'luck'
-    ? td
-    : / title="/.test(td)
+  const withParts = (td, row) => {
+    if (metric !== 'luck') return td;
+    const out = / title="/.test(td)
       ? td.replace(' title="', ` title="${esc(partsTitle(row))}. `)
-      : td.replace('<td', `<td title="${esc(partsTitle(row))}"`));
+      : td.replace('<td', `<td title="${esc(partsTitle(row))}"`);
+    if (!capped(row)) return out;
+    anyCapped = true;
+    return / class="/.test(out)
+      ? out.replace(' class="', ' class="capped ')
+      : out.replace('<td', '<td class="capped"');
+  };
   // The Avg column is its own group: ten season averages, which are the same
   // kind of number as each other and NOT the same kind as a single week.
   const avgScale = showAvg ? heatScale(s.teams.map(teamAvg)) : null;
@@ -1899,11 +1918,13 @@ function renderWeeklyTable() {
   // the method (`describeHeatPerColumn` there says both). What a reader gets
   // wrong without this line is the DIRECTION of the comparison, and that has
   // to stay in view.
-  $('weeklyKey').innerHTML = anyScale
+  $('weeklyKey').innerHTML = (anyScale
     ? '<strong>Colour is down each week, not across the season</strong>: each cell against ' +
       'what the other nine did that week, green above and red below. Ends carry ▲▼ and bold.'
     : '<strong>Nothing is coloured yet</strong> — a week needs at least two teams with a ' +
-      'number in it before there is anything to compare.';
+      'number in it before there is anything to compare.') +
+    // Only under Luck, and only when a week on the grid is past the limit.
+    (anyCapped ? ` Underlined: counts as ±${WEEK_LUCK_LIMIT} toward the season.` : '');
 
   $('weeklyNote').innerHTML = paras([
     key
@@ -1925,7 +1946,8 @@ function renderWeeklyTable() {
     '<strong>Luck</strong> is the week’s share of the Luck score: <strong>Opp scoring</strong> ' +
     '(the league’s season average minus what your opponent scored), <strong>Act−Proj</strong> ' +
     '(your score minus your projection) and <strong>Close game</strong> (near ±50 for a ' +
-    'one-point result, near zero for a blowout), added up. Its Avg is the Luck score. ' +
+    'one-point result, near zero for a blowout), added up. Its Avg is the Luck score, ' +
+    `where one week counts ±${WEEK_LUCK_LIMIT} at most. ` +
     'Hover or tap a Luck cell for the three.',
   ]);
 
