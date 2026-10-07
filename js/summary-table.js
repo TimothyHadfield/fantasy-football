@@ -189,7 +189,7 @@ export function summaryRowsHtml(rows, {
 const HEAD = [
   ['Member', 'The person, not their ESPN team name. Resolved from ESPN\'s own member list.'],
   ['Record', 'Wins and losses in the weeks counted as decided. A tie adds a third number (7-1-1) and sorts as half a win.'],
-  ['LUCK', 'Your sheet\'s LUCK column, for the season so far: league average actual − (points to win − close-game luck). Above zero means the season has broken your way.'],
+  ['LUCK', 'Your sheet\'s LUCK column, for the season so far: league average actual − (points to win − close-game luck). One week counts ±50 at most. Above zero means the season has broken your way.'],
   ['Title %', 'How often this manager wins the CHAMPIONSHIP ROUND across the simulated seasons. Not the same as topping the table.'],
   ['Loser %', 'How often this manager finishes LAST IN THE REGULAR-SEASON STANDINGS. Tim\'s league rule, and nothing to do with the consolation ladder.'],
 ];

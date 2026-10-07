@@ -190,7 +190,8 @@ function buildWeeklyRows(data) {
  *
  *   Luck score = leagueAvg − mean(oppActual − luck) + mean(gameLuck)
  *
- * so week by week it is (leagueAvg − oppActual) + (actual − projected) +
+ * (before the single-week limit, `WEEK_LUCK_LIMIT`, which changes what a week
+ * COUNTS toward the season and never what this returns) so week by week it is (leagueAvg − oppActual) + (actual − projected) +
  * gameLuck, and a team's weeks average back to its Luck score. The league
  * average is the season's, the one the Luck score itself uses — not that
  * week's — or the weeks would not add up to it. A tied game has no close-game
@@ -207,6 +208,27 @@ export function weekLuckParts(row, leagueAvgActual) {
   const close = row.gameLuck;
   return { proj, opp, close, total: proj === null ? null : proj + opp + closeLuckOf(row) };
 }
+
+/**
+ * THE SINGLE-WEEK LIMIT (Tim, 2026-10-06). "A single unlucky event … shouldn't
+ * be able to affect your entire luck ranking for the season", and of the size:
+ * "lets just round it out to a limit of +- 50". So one week's TOTAL luck — the
+ * three parts added up — counts at most this far from zero toward the season
+ * Luck score. A fixed number around zero: no spread, no fences, no drift.
+ *
+ * It is a rule about how weeks are COMBINED, never about what a week scores:
+ * `gameLuck`, its own ±50 clamp and `weekLuckParts` are untouched, and every
+ * weekly cell prints its real number. A full close game (±50 on its own) still
+ * counts whole; only a week where several things pile up is held back.
+ */
+export const WEEK_LUCK_LIMIT = 50;
+
+/** What a week's total luck COUNTS as toward the season: held within the limit. */
+export const countedWeekLuck = (total) =>
+  (total === null ? null : Math.min(Math.max(total, -WEEK_LUCK_LIMIT), WEEK_LUCK_LIMIT));
+
+/** How far the limit moves a week: counted − real. Exactly 0 inside the limit. */
+const limitShift = (total) => countedWeekLuck(total) - total;
 
 /** The unrounded league average score over every team-week played. */
 export function leagueAvgActualOf(teams) {
@@ -240,13 +262,14 @@ export function leagueAvgActualOf(teams) {
  */
 function cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual) {
   const out = [];
+  const read = readRows(weekly);
   let oppTotal = 0;
   let luckTotal = 0;
   let closeTotal = 0;
 
   // Only the weeks luck can be formed for: a week with no projection adds no
   // point to the line rather than a false one.
-  readRows(weekly).forEach((w, i) => {
+  read.forEach((w, i) => {
     oppTotal += w.oppActual;
     luckTotal += w.luck;
     closeTotal += closeLuckOf(w);
@@ -256,7 +279,16 @@ function cumulativeLuckSeries(weekly, cumulativeLeagueAvgActual) {
     const sd = closeTotal / n;
     const league = cumulativeLeagueAvgActual.get(w.week) ?? 0;
 
-    out.push({ week: w.week, value: round1(league - ptw + sd) });
+    // THE SINGLE-WEEK LIMIT, AS IT STOOD THAT WEEK. Each point is the Luck
+    // score of weeks 1..w, so each of those weeks is held within the limit as
+    // its luck read THEN — against the league average of weeks 1..w, the one
+    // this point uses. It is what Summary prints with its week picker on w,
+    // and the last point is the Luck score. Written as "what the limit took
+    // off" so that with no week over it not a digit of the old line changes.
+    let shift = 0;
+    for (let k = 0; k <= i; k++) shift += limitShift(weekLuckParts(read[k], league).total);
+
+    out.push({ week: w.week, value: round1(league - ptw + sd + shift / n) });
   });
 
   return out;
@@ -301,7 +333,18 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
 
   // CONFIRMED: `=121.8-(AX3-AY3)`, i.e. leagueAvgActual - (PTW - SD). This is
   // the standings LUCK column, and it equals the final cumulative-luck value.
-  const luckScore = orNull(leagueAvgActual - (pointsToWin - (readClose ?? 0)));
+  //
+  // …LESS WHAT THE SINGLE-WEEK LIMIT HOLDS BACK (`WEEK_LUCK_LIMIT`). The line
+  // above is exactly the mean of the weekly totals (`weekLuckParts`), so the
+  // mean of the COUNTED weeks is that plus the mean of (counted − real), and
+  // with no week over the limit the second term is an exact 0: nothing moves.
+  // Each row keeps both figures so every reader takes the same ones.
+  for (const w of weekly) {
+    w.weekLuck = weekLuckParts(w, leagueAvgActual).total;
+    w.weekLuckCounted = countedWeekLuck(w.weekLuck);
+  }
+  const limit = read.length ? mean(read.map((w) => w.weekLuckCounted - w.weekLuck)) : 0;
+  const luckScore = orNull(leagueAvgActual - (pointsToWin - (readClose ?? 0)) + limit);
   const skill = orNull(mean(projecteds) - leagueAvgProjected);
   const actualStdev = stdev(actuals);
   const r1 = (v) => (v === null ? null : round1(v));
@@ -370,6 +413,9 @@ function teamMetrics(team, weekly, leagueAvgProjected, leagueAvgActual, cumulati
       opp: readOppAvg,
       luck: avgLuck,
       close: readClose ?? 0,
+      // What the single-week limit moved the Luck score by (0 when no week is
+      // over it): league − opp + luck + close + limit is the Luck score.
+      limit,
       proj: mean(projecteds),
       leagueProj: leagueAvgProjected,
     },
@@ -576,8 +622,9 @@ function rankBy(teams, valueFn, descending = true) {
  * Each of the three is (a constant plus) an AVERAGE over the team's games of a
  * per-game term:
  *   Close luck  = mean(gameLuck)
- *   Luck score  = leagueAvg − mean(oppActual − luck) + mean(gameLuck)
- *   S+L         = the luck score + mean(projected) − leagueAvgProjected
+ *   Luck score  = leagueAvg − mean(oppActual − luck) + mean(gameLuck),
+ *                 each week's total held within `WEEK_LUCK_LIMIT`
+ *   S+L        = the luck score + mean(projected) − leagueAvgProjected
  * so the margin is one standard error of that average: the spread of the
  * per-game term ÷ √games. The spread is POOLED across the whole league, since a
  * team's own one or two games cannot have a spread of their own, while the √n
@@ -600,7 +647,9 @@ function attachLuckMargins(teams) {
       const gl = closeLuckOf(w);
       closeTerms.push(gl);
       if (w.luck === null) continue;
-      const luckTerm = gl - (w.oppActual - w.luck);
+      // The week as the Luck score COUNTS it (held within the single-week
+      // limit), so the ± is the spread of what is actually averaged.
+      const luckTerm = gl - (w.oppActual - w.luck) + (w.weekLuckCounted - w.weekLuck);
       luckTerms.push(luckTerm);
       plusTerms.push(luckTerm + w.projected);
     }

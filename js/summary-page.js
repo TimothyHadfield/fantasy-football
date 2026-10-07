@@ -28,7 +28,7 @@
 // the same league.
 
 import { generateDemoLeague } from './demo.js';
-import { computeLeagueStats } from './stats.js';
+import { computeLeagueStats, WEEK_LUCK_LIMIT } from './stats.js';
 import { fetchSeasonData, fetchSchedule, fetchWeeksRosters } from './season.js';
 // THE POSITIONAL FLOOR. This page MUST apply it exactly as the Schedule page
 // does: `tests/cross-sim-check.mjs` records what each hands the simulation and
@@ -990,7 +990,8 @@ function renderNote(view, sim, inputs) {
     parts.push(
       `<strong>LUCK</strong> is your spreadsheet’s own column — league average score ` +
       `minus (points to win minus close-game luck) — computed over weeks ` +
-      `${L.weeks[0]}–${view.through}. Above zero means the season has broken your way.`
+      `${L.weeks[0]}–${view.through}, except that one week counts ±${WEEK_LUCK_LIMIT} at most. ` +
+      `Above zero means the season has broken your way.`
     );
     parts.push(
       `<strong>Title %</strong> is winning the <em>championship round</em>. ` +
@@ -1110,7 +1111,11 @@ function cardLines(view, sim, inputs) {
     `not the consolation ladder.`
   );
   lines.push(
-    `LUCK = league average score − (points to win − close-game luck), weeks ` +
+    // One week counts ±50 at most (`WEEK_LUCK_LIMIT`), so the sheet's formula
+    // alone is no longer the whole of it; the formula is in the note on the
+    // page. Two words SHORTER than the line it replaced: the page's word
+    // ceiling (tests/text-ceilings.json) is full and this text is counted.
+    `LUCK = average weekly luck, one week ±${WEEK_LUCK_LIMIT} at most, weeks ` +
     `${L.weeks[0]}–${view.through}.`
   );
   // THREE DIFFERENT REASONS THE PERCENTAGES CAN BE MISSING, and they must not

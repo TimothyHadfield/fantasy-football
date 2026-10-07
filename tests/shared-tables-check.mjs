@@ -353,6 +353,43 @@ ok(standingsScales(real).avg && standingsScales(real).opp.invert !== standingsSc
     }
   }
   eq(cellsChecked, 50, 'standings explain: all fifty cells add up to the tenth');
+  // THE SINGLE-WEEK LIMIT (Tim, 2026-10-06: one week counts ±50 at most toward
+  // the season Luck score). Worked from the fixture's scores: everybody is
+  // projected 100 and the league averages 127.5, so a week's luck is
+  // (127.5 − opponent) + (score − 100) + close-game luck. What the limit took
+  // off the season is one more row of the Luck score — "Single-week limit" —
+  // only where it prints as something, and of no other figure.
+  {
+    const g = (m) => Math.min(Math.max(150 / m - 7 * Math.sign(m), -50), 50);
+    const weeks = (t) => t.weekly.map((w) => (127.5 - w.oppActual) + (w.actual - 100) + g(w.actual - w.oppActual));
+    const held = (v) => Math.min(Math.max(v, -50), 50);
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    let withRow = 0;
+    let without = 0;
+    for (const t of real.teams) {
+      const raw = weeks(t);
+      const off = mean(raw.map((v) => held(v) - v));
+      ok(Math.abs(t.exact.luckScore - mean(raw.map(held))) < 1e-9,
+        `single-week limit: T${t.id} Luck score is its weeks held within ±50, averaged`,
+        `${t.exact.luckScore} vs ${mean(raw.map(held))} from ${raw.map((v) => v.toFixed(1)).join(', ')}`);
+      const rows = standingsExplain(real, t, 'luckScore').rows;
+      const lim = rows.filter((r) => r.label === 'Single-week limit');
+      if (tenths(off)) {
+        withRow++;
+        ok(lim.length === 1 && tenths(lim[0].value) === tenths(off) && lim[0].signed &&
+          rows.indexOf(lim[0]) === 4,
+          `single-week limit: T${t.id} has the row, after the four it always had, worth ${off.toFixed(2)}`, JSON.stringify(rows));
+      } else {
+        without++;
+        ok(lim.length === 0 && rows.filter((r) => r.label !== 'Rounding').length === 4,
+          `single-week limit: T${t.id} has no week past it and no row for it`, JSON.stringify(rows));
+      }
+      ok(EXPLAINED.filter((k) => k !== 'luckScore').every((k) =>
+        standingsExplain(real, t, k).rows.every((r) => r.label !== 'Single-week limit')),
+        `single-week limit: T${t.id} only the Luck score carries the row`);
+    }
+    ok(withRow > 0 && without > 0, 'single-week limit: the fixture has teams on both sides of it', `${withRow} / ${without}`);
+  }
   // By hand, T10: four wins, scoring 150 against opponents averaging 117.5,
   // everyone projected 100, so Luck/wk is +50.0 and PTW is 117.5 − 50.0.
   const t10 = real.teams.find((t) => t.id === 10);
