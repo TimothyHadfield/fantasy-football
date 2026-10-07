@@ -163,6 +163,8 @@ One line each; detail in the archive snapshot named above unless a commit is giv
 - 2026-10-06 · Schedule stays at 10,000 seasons by default (see Open for Tim).
 - 2026-10-06 · Season by week Player rows ARE coloured (Tim asked; overturns "a man is not a slot"): a man vs the league's STARTERS AT HIS POSITION — history week = that week's real starters, weeks ahead = every best-lineup value on screen, Avg = one mean per squad (`playerScales`, b2175f2). Bye/dash no colour. The comparison set is my choice, his to change.
 - 2026-10-06 · Player rows: white line above the first non-starter (`tr.bench-start`), hidden while sorted by anything but Player ascending (my choice).
+- 2026-10-07 · Decisions "What would have happened": **Bench** column on both lineup decisions (real starters the hypothetical lineup leaves out), **Proj 0** on Reasonable only (real starters projected exactly 0; a missing projection is not a zero). Per week + Total for one team, season total per team on All users; hidden for moves/what-ifs (`countCells`, `td.dz-lu`/`dz-lu0`). On a phone, with the columns shown, "Hypothetical" is DRAWN "Hyp" by CSS (DOM text unchanged) so the table still fits — my choice, his to change, as are the two headings.
+- 2026-10-06 · PTW wording: "the projection you needed to beat a typical opponent" (Tim: it is what you should be PROJECTED, not what you need to score).
 - 2026-10-06 · Projection accuracy: a % on every bucket with ≥1 game (Tim: "I don't care if there's only been like 1 game there"); the 20-game minimum and its note are gone (cb3761a). The Summary/Stats accuracy tile follows.
 
 ## NOT verified

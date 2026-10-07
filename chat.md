@@ -124,4 +124,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Asked:** "Could you colorize the boxes in the season by week player version, just like the position version?"; "draw a white line horizontally between the rows of the 'starting' players and the other players in the plyer version"; "for the proj accuracy, show the accuracy % for all rows, not just the 'all' section. I don't care if there's only been like 1 game there."
 - **Built:** `playerScales` + `withHeat` + `tr.bench-start` (b2175f2); `MIN_GAMES_FOR_ACCURACY = 1`, withheld note removed (cb3761a). Deployed by deploy-now; live files checked by curl.
 - **Verified how:** proj-changes-check 100 (3 new checks seen failing on unfixed code), an-test 2569, text-audit, touch-check 353, stats-weeks (flipped check seen failing first), stats-order 907, scatter-check 210; headless 393 + 1440 on 1241838: 267 coloured cells, 19 Avg cells on the scale, line above row 11 (2px #e6e8ec). Accuracy table not screenshotted.
-- **Open:** comparison set and line-when-sorted are my choices; gated `tests` run for cb3761a was in progress.
+- **Open:** comparison set and line-when-sorted are my choices. (Gated runs for cb3761a's code and the PTW wording 88f6d3f both ended green.)
+
+## 2026-10-07 — Decisions: Bench and Proj 0 columns
+- **Asked:** "for perfect, could you add a column that shows how many players they should have benched (either just that week if the specific user is selected, or in total if it's on all users). 2.) for reasonable, show how many players they started that they should have benched based on highest proj (also weekly or total). Additionally for reasonable show how many players they started that were proj 0 points that week."
+- **Built:** two columns in `#weekTable` and `#teamTable`, counted off the mirror cell the table already prints; phone-only "Hyp" heading so it fits.
+- **Verified how:** decisions-check 385 (3 new checks seen failing on unfixed code), text-audit, touch-check 353, link-check 135; headless 393 + 1440 on 1241838 in all four modes: no sideways scroll (measured 0 px), week counts add to the Total (Reasonable 0+3+0+1 = 4; Perfect 3+1+4+1 = 9). Deployed by deploy-now, live files checked by curl.
+- **Open:** headings "Bench" / "Proj 0" and the phone "Hyp" are my wording; not seen on Tim's league or iPhone; a week in play not seen.
