@@ -312,6 +312,34 @@ export function pickWeeks(weekTeams, weeks) {
 }
 
 /**
+ * THE WEEKS A RECORD IS BUILT FROM, READ FRESH WHERE THEY CAN STILL CHANGE.
+ *
+ * A reading and its projection history are kept for good, first write wins. So
+ * the weeks still projected are asked for with `fresh: true` — past the weeks
+ * this browser has stored (js/store.js, up to six hours each), which could
+ * otherwise freeze the teams from before a trade as the week's record. On the
+ * phone's synced copy `fresh` asks ESPN for nothing: js/season.js serves the
+ * copy. A week the fresh read could not get is asked for again the plain way,
+ * since a held week is better than no record. `decided` weeks cannot change and
+ * come from wherever they are held.
+ */
+async function readForRecord(fetchWeeksRosters, project, decided = []) {
+  const out = new Map();
+  const add = (m) => { if (m && typeof m.forEach === 'function') m.forEach((teams, w) => { if (teams && teams.length) out.set(w, teams); }); };
+  const rest = decided.filter((w) => !project.includes(w));
+  // One after the other, decided first: those are held already and cost nothing.
+  if (rest.length) {
+    try { add(await fetchWeeksRosters(rest)); } catch { /* gaps, as before */ }
+  }
+  try { add(await fetchWeeksRosters(project, { fresh: true })); } catch { /* asked for again below */ }
+  const missing = project.filter((w) => !out.has(w));
+  if (missing.length) {
+    try { add(await fetchWeeksRosters(missing)); } catch { /* a gap, as before */ }
+  }
+  return out;
+}
+
+/**
  * week -> teamId -> what that squad's STARTERS were projected to score.
  *
  * `projectedTotal` is js/season.js's own figure for the lineup actually set
@@ -1218,8 +1246,7 @@ export function keepHistory({ leagueId, season, week, data = null, weeks, weekTe
  * This is how the week in progress gets a copy the first time the site is
  * opened after this shipped — its reading was taken days before. Only the
  * weeks still projected are asked for (no decided weeks, no wire, no second
- * schedule read), through js/season.js, which serves the weeks the page has
- * just read from its own store. A failure is noted so the next page waits
+ * schedule read), read fresh (`readForRecord`). A failure is noted so the next page waits
  * `RETRY_MS`, and is nobody else's problem: not the reading's, not the chip's.
  */
 async function lateHistory({ id, season, week, data, fetchWeeksRosters, now }) {
@@ -1231,7 +1258,7 @@ async function lateHistory({ id, season, week, data, fetchWeeksRosters, now }) {
     let kept = false;
     try {
       const plan = rosterPlan(data);
-      const toProject = pickWeeks((await fetchWeeksRosters(plan.project)) || new Map(), plan.project);
+      const toProject = pickWeeks(await readForRecord(fetchWeeksRosters, plan.project), plan.project);
       kept = keepHistory({
         leagueId: id, season, week, data, weeks: [...toProject.keys()], weekTeams: toProject,
         takenAt: new Date(now()).toISOString(),
@@ -1306,7 +1333,7 @@ export async function takeReading({
 
   let weekTeams = new Map();
   try {
-    weekTeams = (await fetchWeeksRosters(plan.asking)) || new Map();
+    weekTeams = await readForRecord(fetchWeeksRosters, plan.project, plan.decided);
   } catch {
     weekTeams = new Map();
   }

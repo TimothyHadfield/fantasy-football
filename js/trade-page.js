@@ -10065,3 +10065,9 @@ onConnection((conn) => {
   if (conn.teamId != null) state.espnTeamId = Number(conn.teamId);
   if (state.source !== 'live' && prefs.get('source') !== 'demo') useLive();
 });
+
+// Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by
+// js/connection.js): the league is read again, as on a first load.
+document.addEventListener('ff:refresh', (e) => {
+  if (state.source === 'live' && !state.isDemo) e.detail.waitUntil(useLive());
+});

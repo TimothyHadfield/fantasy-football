@@ -207,6 +207,33 @@ function entryAt(s, key) {
   }
 }
 
+/**
+ * WHO OWNS WHOM, as one string: `teamId:playerId,playerId|teamId:…`, ids
+ * sorted. Two readings of a week with the same signature have the same men on
+ * the same teams, whatever has happened to their projections or lineup slots.
+ *
+ * Tim, 2026-10-08: "I recently made a trade and the players officially
+ * switched, however, there are some parts of the cite that are clearly not
+ * caught up". Every remaining week is stored separately and each was good for
+ * six hours, so a trade showed in one week and not the next. js/season.js
+ * compares the signature of a week it has just read from ESPN with the one
+ * held here, and a difference means every other open week is out of date.
+ *
+ * Stamped on every entry as `sig`; an entry written before the stamp existed
+ * has it worked out from its teams, so no held week needs re-reading for this.
+ */
+export function signatureOf(teams) {
+  if (!Array.isArray(teams)) return '';
+  return teams
+    .map((t) => [t && t.id, ((t && t.players) || [])
+      .map((p) => p && p.playerId)
+      .filter((id) => id !== null && id !== undefined)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))])
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([id, ids]) => `${id}:${ids.join(',')}`)
+    .join('|');
+}
+
 /** Is this entry still worth serving? See the freshness rule at the top. */
 function fresh(e, now) {
   if (!e) return false;
@@ -234,10 +261,32 @@ export function readWeek(leagueId, season, week) {
   const now = Date.now();
   const e = entryAt(s, keyOf(leagueId, season, week));
   if (!fresh(e, now)) return null;
+  return shapeOf(e, now);
+}
+
+/** An entry as a caller sees it. `finalAt` / `rechecked`: see `writeWeek`. */
+function shapeOf(e, now) {
   return {
     teams: e.teams, at: e.at, final: !!e.final, byesKnown: e.byesKnown === true,
     ageMs: Math.max(0, now - e.at),
+    sig: typeof e.sig === 'string' ? e.sig : signatureOf(e.teams),
+    finalAt: e.final ? (Number.isFinite(e.finalAt) ? e.finalAt : e.at) : null,
+    rechecked: e.rechecked === true,
   };
+}
+
+/**
+ * What is HELD for a week, at any age — the same shape as `readWeek`, or null.
+ *
+ * Not for serving: `readWeek` is the only answer to "may this be shown". This
+ * is for comparing — is the synced copy newer than this browser's, and does a
+ * week just read from ESPN have the same men on the same teams as the held one.
+ */
+export function peekWeek(leagueId, season, week) {
+  const s = store();
+  if (!s) return null;
+  const e = entryAt(s, keyOf(leagueId, season, week));
+  return e ? shapeOf(e, Date.now()) : null;
 }
 
 /**
@@ -255,10 +304,21 @@ export function readWeek(leagueId, season, week) {
  * week in progress pass for a reading taken this minute (js/season.js ages a
  * player's points by it). Absent, or in the future, is now.
  *
+ * AN OLDER READING NEVER REPLACES A NEWER ONE. A desktop whose extension was
+ * slow to say hello reads the synced copy for one page load, and that copy is
+ * as old as the last sync — writing it over a week this browser read from ESPN
+ * an hour later would put the clock back. So a write whose `at` is earlier
+ * than the held entry's is refused. A reading taken now is never older.
+ *
+ * `rechecked`: a played week is read ONCE more, three days after it was first
+ * stored final, for ESPN's stat corrections (js/season.js decides when). The
+ * entry keeps `finalAt` — when it was first stored final — and `rechecked`
+ * once that second read has landed; both survive any later rewrite.
+ *
  * @returns {boolean} whether it actually landed. Nothing depends on the answer;
  *   it exists so a test can tell "stored" from "silently dropped".
  */
-export function writeWeek(leagueId, season, week, teams, { final = false, byesKnown = false, at = null } = {}) {
+export function writeWeek(leagueId, season, week, teams, { final = false, byesKnown = false, at = null, rechecked = false } = {}) {
   const s = store();
   if (!s || !Array.isArray(teams) || !teams.length) return false;
 
@@ -267,7 +327,15 @@ export function writeWeek(leagueId, season, week, teams, { final = false, byesKn
   try {
     const now = Date.now();
     const readAt = Number.isFinite(at) && at > 0 && at <= now ? at : now;
-    json = JSON.stringify({ v: SCHEMA, at: readAt, final: !!final, byesKnown: !!byesKnown, teams });
+    const was = entryAt(s, key);
+    if (was && Number.isFinite(was.at) && was.at > readAt) return false;
+    const entry = { v: SCHEMA, at: readAt, final: !!final, byesKnown: !!byesKnown, sig: signatureOf(teams), teams };
+    if (entry.final) {
+      const first = was && was.final ? (Number.isFinite(was.finalAt) ? was.finalAt : was.at) : null;
+      entry.finalAt = Number.isFinite(first) ? first : readAt;
+      if (rechecked || (was && was.final && was.rechecked === true)) entry.rechecked = true;
+    }
+    json = JSON.stringify(entry);
   } catch {
     return false; // a shape that will not serialise is not a shape to keep
   }
@@ -418,6 +486,39 @@ export function forget(leagueId, season) {
     try { s.removeItem(k); } catch { /* leave it and carry on */ }
   }
   return gone;
+}
+
+/**
+ * Throw away the weeks that can still CHANGE, and nothing else — what **Sync
+ * now** in the connection bar does first (Tim, 2026-10-08: a trade had gone
+ * through and "the top bar says it's synced" while pages showed the old teams).
+ *
+ * Only a week of rosters that is not final goes. A played week stays: it is
+ * history and a roster move cannot reach it. Nothing else in this browser is
+ * touched — not a week's moves, not a reading, not the saved projections.
+ *
+ * `olderThan`: only entries read before that moment (epoch ms). `except`: one
+ * week to leave alone. js/season.js uses both when a week it has JUST read
+ * shows a roster move: that week is the news, and a week read after it is too.
+ *
+ * @returns {number[]} the weeks that went
+ */
+export function forgetOpen(leagueId, season, { olderThan = null, except = null } = {}) {
+  const s = store();
+  if (!s) return [];
+  const want = `${PREFIX}.${leagueId}.${season}.`;
+  const gone = [];
+  for (const k of keys()) {
+    if (!k.startsWith(want)) continue;
+    const week = Number(k.slice(want.length));
+    if (except !== null && week === Number(except)) continue;
+    const e = entryAt(s, k);
+    // Unreadable is not "final": it serves nobody and is re-read either way.
+    if (e && e.final) continue;
+    if (e && Number.isFinite(olderThan) && Number.isFinite(e.at) && e.at >= olderThan) continue;
+    try { s.removeItem(k); if (Number.isFinite(week)) gone.push(week); } catch { /* leave it and carry on */ }
+  }
+  return gone.sort((a, b) => a - b);
 }
 
 // ---------------------------------------------------------------------------

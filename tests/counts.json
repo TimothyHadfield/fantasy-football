@@ -41,7 +41,7 @@
       "scenarios": 12
     },
     "test-store.mjs": {
-      "assertions": 113
+      "assertions": 159
     },
     "nav-check.mjs": {
       "assertions": 141
@@ -71,8 +71,8 @@
       "assertions": 190
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 150,
-      "scenarios": 12
+      "assertions": 160,
+      "scenarios": 13
     },
     "test-trade-odds.mjs": {
       "assertions": 142
@@ -101,7 +101,7 @@
       "scenarios": 8
     },
     "test-capture.mjs": {
-      "assertions": 175
+      "assertions": 179
     },
     "cross-sim-check.mjs": {
       "assertions": 36
@@ -121,7 +121,7 @@
       "assertions": 135
     },
     "an-test.mjs": {
-      "assertions": 2583,
+      "assertions": 2588,
       "scenarios": 28
     },
     "test-summary.mjs": {
@@ -142,7 +142,7 @@
       "scenarios": 14
     },
     "wv-test.mjs": {
-      "assertions": 802,
+      "assertions": 807,
       "scenarios": 14
     },
     "tr-test.mjs": {

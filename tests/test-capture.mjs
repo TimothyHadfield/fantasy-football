@@ -653,6 +653,34 @@ if (!noBridge.boot) {
   ok('nor a "saved" one: nothing is connected', !noBridge.saved || noBridge.saved.text === '', JSON.stringify(noBridge.saved));
 }
 
+// ---- a reading is taken from a FRESH read of the weeks it projects ----------
+//
+// The week's reading is kept for good, first write wins. Taken through the
+// stored weeks (js/store.js, six hours each), a copy from before a trade could
+// be frozen as the week's record. So the weeks still projected are asked for
+// with `fresh: true`; the decided ones, which cannot change, are not.
+{
+  reset();
+  const asked = [];
+  const recording = async (weeks, opts = {}) => {
+    asked.push({ weeks: weeks.slice(), fresh: opts.fresh === true });
+    return stub.fetchWeeksRosters(weeks, opts);
+  };
+  const data = capture.normalizeSchedule(await stub.fetchSchedule(), { isDemo: false });
+  const plan = capture.rosterPlan(data);
+  const reading = await capture.takeReading({
+    leagueId: LEAGUE, season: SEASON, data, fetchWeeksRosters: recording, fetchFloors: stub.fetchFloors, myTeamId: 1,
+  });
+  ok('the reading was built', !!reading.snap, reading.text);
+  const freshWeeks = asked.filter((a) => a.fresh).flatMap((a) => a.weeks).sort((a, b) => a - b);
+  const heldWeeks = asked.filter((a) => !a.fresh).flatMap((a) => a.weeks).sort((a, b) => a - b);
+  eq(freshWeeks, plan.project.slice().sort((a, b) => a - b), 'every week it projects is read FRESH');
+  eq(heldWeeks, plan.decided.filter((w) => !plan.project.includes(w)).sort((a, b) => a - b),
+    'and the decided weeks, which cannot change, come from wherever they are held');
+  ok('the fixture has both kinds', plan.project.length > 0 && plan.decided.length > 0,
+    JSON.stringify({ project: plan.project, decided: plan.decided }));
+}
+
 // ---------------------------------------------------------------------------
 
 function diffHint(a, b) {

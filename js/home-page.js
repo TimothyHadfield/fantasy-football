@@ -1554,6 +1554,12 @@ onConnection((conn) => {
   }
 });
 
+// Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by
+// js/connection.js): the league is read again, as on a first load.
+document.addEventListener('ff:refresh', (e) => {
+  if (state.source === 'live' && !state.isDemo) e.detail.waitUntil(loadLive());
+});
+
 // Demo first, always: the page is never blank, and never shows an error before
 // it has shown anything. A live load replaces it a moment later.
 loadDemo();

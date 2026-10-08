@@ -590,7 +590,7 @@ async function boot(scenario) {
   if (cfg.after) await cfg.after({ document, window, waitFor });
   console.error = origError;
 
-  return { document, errors, fetchCalls, rejections, cfg, settles };
+  return { document, window, errors, fetchCalls, rejections, cfg, settles };
 }
 
 // ------------------------------------------------------------- assertions
@@ -1786,6 +1786,33 @@ async function check(scenario, boot) {
     c.ok('the strip states the weeks shown', stats.some((s) => /^Weeks shown/.test(s)), stats.join(' | '));
     c.ok('the strip names the best average by player',
       stats.some((s) => /^Best average/.test(s)), stats.join(' | '));
+  }
+
+  // ---- SYNC NOW: the page reads the league AGAIN ---------------------------
+  //
+  // Tim, 2026-10-08: "in the analysis section and the players section you can
+  // tell parts of it aren't caught up like the which team the players belong
+  // to." A page already showing the league used to ignore the press. Now
+  // js/connection.js sends `ff:refresh`, and the page must load again and hand
+  // the bar its load to wait for. Last here: it spends requests on purpose.
+  if (scenario === 'live') {
+    const season = await import('./wv-stub-season.mjs');
+    const espn = await import('./wv-stub-espn.mjs');
+    const before = { schedule: season.calls.schedule, wire: espn.calls.weeks.length };
+    const waits = [];
+    d.dispatchEvent(new boot.window.CustomEvent('ff:refresh', { detail: { waitUntil: (p) => waits.push(p) } }));
+    c.ok('SYNC NOW: the page hands the bar its reload to wait for',
+      waits.length === 1 && !!waits[0] && typeof waits[0].then === 'function', `${waits.length}`);
+    await Promise.all(waits);
+    await settleWaivers(d);
+    c.ok('SYNC NOW: the schedule is read again', season.calls.schedule === before.schedule + 1,
+      `${before.schedule} -> ${season.calls.schedule}`);
+    c.ok('SYNC NOW: and the wire, every shown week of it',
+      espn.calls.weeks.length === before.wire * 2, `${before.wire} -> ${espn.calls.weeks.length}`);
+    c.ok('SYNC NOW: and the same men are listed afterwards',
+      bodyRows($('waiverTable')).length === 60, `${bodyRows($('waiverTable')).length}`);
+    c.ok('SYNC NOW: with nothing thrown on the way', boot.errors.length === 0 && boot.rejections.length === 0,
+      boot.errors.concat(boot.rejections).slice(0, 2).join(' | '));
   }
 
   return c.out;

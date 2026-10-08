@@ -6264,3 +6264,13 @@ onConnection((conn) => {
     }
   }
 });
+
+// Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by
+// js/connection.js): the league is read again, as on a first load.
+document.addEventListener('ff:refresh', (e) => {
+  if (state.source !== 'live' || state.isDemo) return;
+  // The season table's weeks are held against the league, so that switching
+  // teams is free. This is the one time they are let go (`ensureSeasonWeeks`).
+  state.seasonKey = null;
+  e.detail.waitUntil(useLive());
+});
