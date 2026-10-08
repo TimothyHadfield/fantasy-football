@@ -3935,6 +3935,12 @@ onConnection((conn) => {
   loadLive();
 });
 
+// Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by
+// js/connection.js): the league is read again, as on a first load.
+document.addEventListener('ff:refresh', (e) => {
+  if (state.source === 'live' && !state.isDemo) e.detail.waitUntil(loadLive());
+});
+
 // A `?player=` link decides the span before the first request goes out, so the
 // weeks it needs are bought in the same pass rather than fetched three-wide and
 // then immediately widened. Set before the load, never after it.

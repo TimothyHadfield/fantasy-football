@@ -5729,6 +5729,38 @@ async function check(scenario, boot) {
   // ---- (z) "Actual history": the select, both tables, the League row -------
   if (scenario === 'history-proj') await checkHistory(c, scenario);
 
+  // ---- SYNC NOW: the page reads the league AGAIN ---------------------------
+  //
+  // Tim, 2026-10-08: "there are some parts of the cite that are clearly not
+  // caught up, even though the top bar says it's synced … in the analysis
+  // section and the players section you can tell parts of it aren't caught up
+  // like the which team the players belong to."
+  //
+  // A page already showing the league used to ignore the press altogether.
+  // js/connection.js now sends `ff:refresh`; the page must load again and hand
+  // the bar its load to wait for (`detail.waitUntil`), so the bar cannot say
+  // "synced" first. Last in this function: it spends requests on purpose.
+  if (scenario === 'live') {
+    const season = await import('./an-stub-season.mjs');
+    const before = { schedule: season.calls.schedule, week: season.calls.week.length, weeks: season.calls.weeks.length };
+    const waits = [];
+    d.dispatchEvent(new boot.window.CustomEvent('ff:refresh', { detail: { waitUntil: (p) => waits.push(p) } }));
+    c.ok('SYNC NOW: the page hands the bar its reload to wait for',
+      waits.length === 1 && !!waits[0] && typeof waits[0].then === 'function', `${waits.length}`);
+    await Promise.all(waits);
+    for (let i = 0; i < 100 && season.calls.weeks.length < before.weeks * 2; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    c.ok('SYNC NOW: the schedule is read again', season.calls.schedule === before.schedule + 1,
+      `${before.schedule} -> ${season.calls.schedule}`);
+    c.ok('SYNC NOW: and the week on screen, past the page\'s own cache',
+      season.calls.week.length === before.week + 1, `${before.week} -> ${season.calls.week.length}`);
+    c.ok('SYNC NOW: and every week of the season table',
+      season.calls.weeks.length === before.weeks * 2, `${before.weeks} -> ${season.calls.weeks.length}`);
+    c.ok('SYNC NOW: with nothing thrown on the way', boot.errors.length === 0 && boot.rejections.length === 0,
+      boot.errors.concat(boot.rejections).slice(0, 2).join(' | '));
+  }
+
   return c.out;
 }
 

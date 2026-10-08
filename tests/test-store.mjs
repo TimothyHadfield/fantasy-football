@@ -96,7 +96,27 @@ const TEAMS = [1, 2, 3, 4];
 
 /** One roster payload for a week. Projections move with the week, so a stale
  *  answer and a fresh one are told apart by their numbers and not by a flag. */
-function rosterPayload(week, bump = 0, { dst = false } = {}) {
+function rosterPayload(week, bump = 0, { dst = false, moved = false, dropped = false, points = false } = {}) {
+  const payload = rosterPayloadAsDealt(week, bump, { dst, points });
+  // THE ROSTER MOVE. `moved`: X (QB 1) is traded to team 2. `dropped`: he is
+  // cut and is on nobody's roster. Nothing else about the payload changes.
+  if (moved || dropped) {
+    const from = payload.teams.find((t) => t.id === 1).roster.entries;
+    const at = from.findIndex((e) => e.playerId === X);
+    const [entry] = from.splice(at, 1);
+    if (moved) payload.teams.find((t) => t.id === 2).roster.entries.push(entry);
+  }
+  return payload;
+}
+
+/** The man who changes hands in the roster-move scenarios: team 1's QB. */
+const X = 101;
+
+/** Which team holds `playerId` in a decoded week, or null. */
+const ownerOf = (teams, playerId = X) =>
+  ((teams || []).find((t) => (t.players || []).some((p) => p.playerId === playerId)) || { id: null }).id;
+
+function rosterPayloadAsDealt(week, bump = 0, { dst = false, points = false } = {}) {
   return {
     teams: TEAMS.map((id) => ({
       id,
@@ -127,6 +147,7 @@ function rosterPayload(week, bump = 0, { dst = false } = {}) {
                 fullName: `QB ${id}`, defaultPositionId: 1, proTeamId: id,
                 stats: [
                   { scoringPeriodId: week, statSourceId: 1, statSplitTypeId: 1, appliedTotal: 10 + week + bump },
+                  ...(points ? [{ scoringPeriodId: week, statSourceId: 0, statSplitTypeId: 1, appliedTotal: 6 + bump }] : []),
                   { seasonId: SEASON, statSourceId: 1, statSplitTypeId: 0, appliedTotal: 200 },
                 ],
               },
@@ -153,10 +174,17 @@ function rosterPayload(week, bump = 0, { dst = false } = {}) {
 const DST_PRO_TEAM = 30;
 const DST_BYE = 2;
 /** The bye read as ESPN answers it: every fixture NFL team, one bye each. */
-const byePayload = () => ({
+/** `kickoffs`: `{ [week]: epochMs }` — every fixture NFL team plays then. */
+const byePayload = (kickoffs = null) => ({
   settings: {
     proTeams: [
-      ...TEAMS.map((id) => ({ id, byeWeek: 9 })),
+      ...TEAMS.map((id) => ({
+        id, byeWeek: 9,
+        ...(kickoffs ? {
+          proGamesByScoringPeriod: Object.fromEntries(Object.entries(kickoffs)
+            .map(([week, at]) => [week, [{ id: Number(week) * 100 + id, date: at, statsOfficial: false }]])),
+        } : {}),
+      })),
       { id: DST_PRO_TEAM, byeWeek: DST_BYE },
     ],
   },
@@ -164,13 +192,13 @@ const byePayload = () => ({
 
 /** Weeks 1-2 decided, 3-4 not, unless told otherwise. That is what makes a
  *  week "final" or not. */
-const schedulePayload = (decidedThrough = 2) => ({
+const schedulePayload = (decidedThrough = 2, weeks = 4) => ({
   settings: {
     name: 'Store League',
-    scheduleSettings: { matchupPeriodCount: 4, playoffTeamCount: 2 },
+    scheduleSettings: { matchupPeriodCount: weeks, playoffTeamCount: 2 },
   },
   teams: TEAMS.map((id) => ({ id, abbrev: `T${id}`, location: 'Team', nickname: String(id) })),
-  schedule: [1, 2, 3, 4].flatMap((week) => [
+  schedule: Array.from({ length: weeks }, (_, i) => i + 1).flatMap((week) => [
     {
       matchupPeriodId: week, playoffTierType: 'NONE',
       home: { teamId: 1, totalPoints: week <= decidedThrough ? 100 : 0 },
@@ -190,7 +218,14 @@ const schedulePayload = (decidedThrough = 2) => ({
 /** `byes`: 'empty' (the default — an answer with no teams, which is unknown),
  *  'ok' (the real shape), or 'fail' (HTTP 429, what a rate limit looks like).
  *  `decidedThrough`: the last week with a result. `dst`: add the bye D/ST. */
-function installFetch({ bump = 0, byes = 'empty', decidedThrough = 2, dst = false } = {}) {
+/** `weeks`: how long the season is. `moved` / `dropped`: the roster move (see
+ *  `rosterPayload`); a dropped man is on the wire. `points`: every QB has
+ *  scored. `kickoffs`: `{week: epochMs}` on the NFL schedule. `schedule:
+ *  'fail'`: the league schedule will not answer. */
+function installFetch({
+  bump = 0, byes = 'empty', decidedThrough = 2, dst = false,
+  weeks = 4, moved = false, dropped = false, points = false, kickoffs = null, schedule = 'ok',
+} = {}) {
   const calls = [];
   globalThis.fetch = async (url) => {
     const u = String(url);
@@ -198,12 +233,16 @@ function installFetch({ bump = 0, byes = 'empty', decidedThrough = 2, dst = fals
     let body;
     if (/proTeamSchedules_wl/.test(u)) {
       if (byes === 'fail') return { ok: false, status: 429, async json() { return {}; } };
-      body = byes === 'ok' ? byePayload() : { settings: { proTeams: [] } };
+      body = byes === 'ok' ? byePayload(kickoffs) : { settings: { proTeams: [] } };
     }
-    else if (/kona_player_info/.test(u)) body = { players: [] };
+    else if (/kona_player_info/.test(u)) {
+      body = { players: dropped ? [{ player: { id: X, fullName: 'QB 1', defaultPositionId: 1, proTeamId: 1, stats: [] } }] : [] };
+    }
     else if (/scoringPeriodId=(\d+)/.test(u) && /view=mRoster/.test(u)) {
-      body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), bump, { dst });
-    } else body = schedulePayload(decidedThrough);
+      body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), bump, { dst, moved, dropped, points });
+    } else if (schedule === 'fail') {
+      return { ok: false, status: 500, async json() { return {}; } };
+    } else body = schedulePayload(decidedThrough, weeks);
     return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify(body)); } };
   };
   return calls;
@@ -212,18 +251,42 @@ function installFetch({ bump = 0, byes = 'empty', decidedThrough = 2, dst = fals
 const rosterCalls = (calls) => calls.filter((u) => /view=mRoster/.test(u));
 const byeCalls = (calls) => calls.filter((u) => /proTeamSchedules_wl/.test(u));
 
-/** Move every stored entry's clock back, as though the browser sat idle. */
-function ageEverything(storage, ms) {
+/** Move every stored entry's clock back, as though the browser sat idle.
+ *  `only`: just these weeks' roster entries. */
+function ageEverything(storage, ms, only = null) {
   for (const k of [...storage._map.keys()]) {
+    if (only && !only.some((w) => k.startsWith('ff.weeks.') && k.endsWith(`.${w}`))) continue;
     try {
       const e = JSON.parse(storage._map.get(k));
       if (e && typeof e.at === 'number') {
         e.at -= ms;
+        if (typeof e.finalAt === 'number') e.finalAt -= ms;
         storage._map.set(k, JSON.stringify(e));
       }
     } catch { /* not ours */ }
   }
 }
+
+const MINUTE = 60 * 1000;
+const DAY = 24 * 60 * 60 * 1000;
+const weeksAsked = (calls) => rosterCalls(calls)
+  .map((u) => Number(u.match(/scoringPeriodId=(\d+)/)[1])).sort((a, b) => a - b);
+
+/** The modules, on a fresh storage, with no cloud — what every seam scenario starts from. */
+async function boot() {
+  const storage = makeStorage();
+  globalThis.localStorage = storage;
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  cloud.configure({ apiKey: '' });
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const store = await import(moduleUrl('js/store.js'));
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  return { storage, espn, season, store };
+}
+
+/** A seven-week season with weeks 1-4 decided: week 5 is the CURRENT week. */
+const TRADE_SEASON = { weeks: 7, decidedThrough: 4, byes: 'ok' };
 
 const HOUR = 60 * 60 * 1000;
 
@@ -454,6 +517,204 @@ const SCENARIOS = {
     espn.configure({ leagueId: LEAGUE_ID });
   },
 
+  // =========================================================================
+  // A ROSTER MOVE REACHES EVERY WEEK
+  // =========================================================================
+  //
+  // Tim, 2026-10-08: "I recently made a trade and the players officially
+  // switched, however, there are some parts of the cite that are clearly not
+  // caught up, even though the top bar says it's synced."
+  //
+  // Every remaining week's stored copy kept the old teams for up to six hours,
+  // each expiring on its own, and Sync now read none of them again.
+
+  // ---- Sync now really re-reads --------------------------------------------
+  async syncNow() {
+    const { storage, season } = await boot();
+    // What must never be dropped by a Sync: readings, saved projections, moves.
+    const KEEP = {
+      [`ff.snapshots.${LEAGUE_ID}.${SEASON}`]: '{"keep":1}',
+      [`ff.projhist.1.${LEAGUE_ID}.${SEASON}.4`]: '{"keep":2}',
+      [`ff.decisions.1.${LEAGUE_ID}.${SEASON}.4`]: '{"v":1,"at":1,"moves":[],"players":{}}',
+    };
+    for (const [k, v] of Object.entries(KEEP)) storage.setItem(k, v);
+
+    let calls = installFetch(TRADE_SEASON);
+    await season.fetchSchedule();
+    let got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(rosterCalls(calls).length, 4, 'a cold load buys its four weeks');
+    eq([4, 5, 6, 7].map((w) => ownerOf(got.get(w))), [1, 1, 1, 1], 'X is on team 1 in every week');
+
+    // THE TRADE, and the press — seconds after the load, so js/espn.js's own
+    // minute-long shared reads are still warm. Sync has to clear those too.
+    calls = installFetch({ ...TRADE_SEASON, moved: true });
+    ok('season.js has a Sync-now entry point', typeof season.forgetOpen === 'function');
+    if (typeof season.forgetOpen === 'function') season.forgetOpen();
+    await season.fetchSchedule();
+    got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(ownerOf(got.get(6)), 2, 'after Sync now, X is on team 2 in week 6');
+    eq([5, 7].map((w) => ownerOf(got.get(w))), [2, 2], 'and in weeks 5 and 7');
+    eq(weeksAsked(calls), [5, 6, 7], 'the three open weeks were read again — and the FINAL week was not');
+    eq(ownerOf(got.get(4)), 1, 'week 4 is history: X played it for team 1');
+    const held = new Map(season.storedWeeks().map((e) => [e.week, e]));
+    eq(held.get(4) && held.get(4).final, true, 'and week 4 is still held, final');
+    for (const [k, v] of Object.entries(KEEP)) eq(storage.getItem(k), v, `${k.split('.')[1]} is untouched by a Sync`);
+  },
+
+  // ---- the automatic catch-up: nothing pressed -----------------------------
+  async autoCatchUp() {
+    const { storage, espn, season } = await boot();
+    let calls = installFetch(TRADE_SEASON);
+    await season.fetchSchedule();
+    let got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq([5, 6, 7].map((w) => ownerOf(got.get(w))), [1, 1, 1], 'X starts on team 1');
+
+    // SIX MINUTES ON, NOTHING HAS MOVED: the current week alone is read again.
+    ageEverything(storage, 6 * MINUTE);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, bump: 1 });
+    const sources = [];
+    got = await season.fetchWeeksRosters([4, 5, 6, 7], { onProgress: (d, t, week, from) => sources.push([week, from]) });
+    eq(weeksAsked(calls), [5], 'the CURRENT week is on the five-minute clock: one request, week 5');
+    eq(new Map(sources).get(6), 'store', 'a later week with nothing changed still comes from the store');
+    eq(new Map(sources).get(4), 'store', 'and so does the final week');
+
+    // THE TRADE. Only the current week's five minutes lapse — weeks 6 and 7
+    // are minutes old and would be served for another six hours.
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, moved: true });
+    got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(ownerOf(got.get(5)), 2, 'the current week shows the trade');
+    eq(ownerOf(got.get(6)), 2, 'and week 6 FOLLOWS, with nothing pressed');
+    eq(ownerOf(got.get(7)), 2, 'and week 7');
+    eq(weeksAsked(calls), [5, 6, 7], 'one request per remaining week, and none for the final one');
+    eq(ownerOf(got.get(4)), 1, 'week 4 is still history');
+    eq(season.storedWeeks().find((e) => e.week === 4).final, true, 'and still held, final');
+
+    // And it is settled: the next page costs nothing.
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, moved: true, bump: 5 });
+    got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(rosterCalls(calls).length, 0, 'the page after that buys nothing');
+    eq(ownerOf(got.get(7)), 2, 'and still shows the trade');
+  },
+
+  // ---- one LATER week asked for alone (the Trade page's selected week) ------
+  async autoCatchUpOneWeek() {
+    const { storage, espn, season } = await boot();
+    let calls = installFetch(TRADE_SEASON);
+    await season.fetchSchedule();
+    await season.fetchWeeksRosters([5, 6, 7]);
+
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, moved: true });
+    const w7 = await season.fetchWeekRosters(7);
+    eq(ownerOf(w7.teams), 2, 'week 7 read alone still learns of the trade from the current week');
+    eq(weeksAsked(calls), [5, 7], 'at the cost of the current week’s read and its own');
+  },
+
+  // ---- D: the wire says a man is free whom the stored rosters still own ----
+  async wireDisagrees() {
+    const { season } = await boot();
+    let calls = installFetch(TRADE_SEASON);
+    await season.fetchSchedule();
+    let got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(ownerOf(got.get(5)), 1, 'X is on team 1');
+
+    // He is cut. Seconds later the Players page reads the wire: it lists him
+    // free, while every stored week (seconds old) still has him on team 1.
+    calls = installFetch({ ...TRADE_SEASON, dropped: true });
+    const wire = await season.fetchWireWeek(5);
+    ok('the wire lists X', wire.some((p) => p.playerId === X), JSON.stringify(wire.map((p) => p.playerId)));
+    got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq([5, 6, 7].map((w) => ownerOf(got.get(w))), [null, null, null],
+      'so the rosters are read again: he is on nobody’s team, not on the wire AND a roster');
+    eq(weeksAsked(calls), [5, 6, 7], 'three open weeks, three requests; the final week untouched');
+    eq(ownerOf(got.get(4)), 1, 'week 4 is history');
+  },
+
+  // ---- C: a week under way, held, on a page that has no NFL schedule yet ----
+  async weekInPlayLate() {
+    const { espn, season, store } = await boot();
+    // The league schedule will not answer, so nothing says which week is the
+    // current one — the week-in-play rule is all there is.
+    const kickoffs = { 3: Date.now() - 2 * HOUR };
+    // The week as ESPN decodes it, got under ANOTHER season so that this
+    // process holds no NFL schedule for the season under test — which is the
+    // state of a page that has just been opened.
+    espn.configure({ season: SEASON - 1 });
+    installFetch({ byes: 'ok', kickoffs, points: true, schedule: 'fail' });
+    const decoded = (await season.fetchWeekRosters(3, { raw: true })).teams;
+    espn.configure({ season: SEASON });
+    eq(espn.heldProGames(), null, 'no NFL schedule has been read for this season');
+    store.writeWeek(LEAGUE_ID, SEASON, 3, decoded, { final: false, byesKnown: true, at: Date.now() - 10 * MINUTE });
+
+    espn.clearReadCache();
+    const calls = installFetch({ byes: 'ok', kickoffs, points: true, bump: 4, schedule: 'fail' });
+    const again = await season.fetchWeekRosters(3);
+    eq(rosterCalls(calls).length, 1, 'a week with points on it waits for the NFL schedule, then is re-read');
+    eq(again.from, 'espn', 'so ten-minute-old live points are not served as now');
+    ok('with what ESPN says now',
+      again.teams[0].players.some((p) => p.actual === 6 + 4), JSON.stringify(again.teams[0].players.map((p) => p.actual)));
+
+    // A FORECAST — nobody has a point — never asks for the NFL schedule.
+    espn.configure({ season: SEASON - 1 });
+    installFetch({ byes: 'ok', schedule: 'fail' });
+    const ahead = (await season.fetchWeekRosters(4, { raw: true })).teams;
+    espn.configure({ season: SEASON + 1 });
+    store.writeWeek(LEAGUE_ID, SEASON + 1, 4, ahead, { final: false, byesKnown: true, at: Date.now() - 10 * MINUTE });
+    espn.clearReadCache();
+    const quiet = installFetch({ byes: 'ok', kickoffs, schedule: 'fail' });
+    eq((await season.fetchWeekRosters(4)).from, 'store', 'a week nobody has scored in is served as held');
+    eq(quiet.length, 0, 'at no request of any kind');
+  },
+
+  // ---- F: a played week is checked ONCE for stat corrections ---------------
+  async finalRecheck() {
+    const { storage, espn, season } = await boot();
+    let calls = installFetch({ byes: 'ok' });
+    await season.fetchSchedule();
+    const first = await season.fetchWeekRosters(1);
+    eq(season.storedWeeks().find((e) => e.week === 1).final, true, 'week 1 is stored final');
+
+    ageEverything(storage, 2 * DAY);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', bump: 2 });
+    eq((await season.fetchWeekRosters(1)).from, 'store', 'two days on it is served as held');
+    eq(rosterCalls(calls).length, 0, 'at no cost');
+
+    ageEverything(storage, 2 * DAY);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', bump: 3 });
+    const checked = await season.fetchWeekRosters(1);
+    eq(rosterCalls(calls).length, 1, 'three days after it was stored final, it is read ONCE more');
+    eq(checked.teams[0].players[0].projected, first.teams[0].players[0].projected + 3,
+      'and a corrected number arrives');
+    eq(season.storedWeeks().find((e) => e.week === 1).final, true, 'still final');
+
+    ageEverything(storage, 30 * DAY);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok', bump: 9 });
+    const later = await season.fetchWeekRosters(1);
+    eq(rosterCalls(calls).length, 0, 'and never again: a month on, no request');
+    eq(later.teams[0].players[0].projected, first.teams[0].players[0].projected + 3, 'the checked copy is kept');
+
+    // A check that FAILS keeps the held week.
+    await season.fetchWeekRosters(2);
+    ageEverything(storage, 4 * DAY, [2]);
+    espn.clearReadCache();
+    calls = installFetch({ byes: 'ok' });
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url) => (/view=mRoster/.test(String(url))
+      ? { ok: false, status: 429, async json() { return {}; } }
+      : inner(url));
+    const kept = await season.fetchWeekRosters(2);
+    eq(kept.from, 'store', 'a refused check serves the held week');
+    eq(kept.teams.length, 4, 'whole');
+  },
+
   // ---- AUDIT §2.5: a forecast for a week that has since been decided ------
   //
   // Read week 3 before kickoff (stored final:false, six hours on the clock),
@@ -491,12 +752,13 @@ const SCENARIOS = {
     const listed = season.storedWeeks().find((e) => e.week === 3);
     eq(listed.final, true, 'and the re-read is stored FINAL');
 
-    // Final means kept: a fortnight on, no request at all.
-    ageEverything(storage, 14 * 24 * HOUR);
+    // Final means kept: two days on, no request at all. (Three days on it is
+    // checked once for stat corrections — the `finalRecheck` scenario.)
+    ageEverything(storage, 2 * 24 * HOUR);
     espn.clearReadCache();
     calls = installFetch({ byes: 'ok', decidedThrough: 3, bump: 50 });
     const later = await season.fetchWeekRosters(3);
-    eq(rosterCalls(calls).length, 0, 'after that it is kept for the season');
+    eq(rosterCalls(calls).length, 0, 'after that it is kept');
     eq(later.from, 'store', 'out of this browser');
 
     // A forecast for a week STILL undecided is untouched by this.

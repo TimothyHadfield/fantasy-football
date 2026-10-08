@@ -348,7 +348,112 @@ async function cloudProbe() {
   }
 }
 
-async function connect() {
+// =========================================================================
+// SYNC NOW REALLY READS AGAIN
+// =========================================================================
+//
+// Tim, 2026-10-08: "I recently made a trade and the players officially
+// switched, however, there are some parts of the cite that are clearly not
+// caught up, even though the top bar says it's synced."
+//
+// The button used to check that the league still answered and nothing more:
+// every week the pages had stored stayed as it was, for up to six hours each,
+// and a page already showing the league ignored the press. Now, pressed while
+// connected, it throws away everything that can still change (`season.js`
+// `forgetOpen` — the open weeks; never a played week, a reading, the saved
+// projections or anything in the cloud), asks every page on screen to load
+// again (`ff:refresh`), and goes on saying "Syncing…" until those reads have
+// landed.
+//
+// The same reload is asked for, quietly, when js/season.js notices a roster
+// move by itself (`ff:rosters`) and when a page left open comes back into view
+// with something out of date (`lookAgain`).
+
+/** How long the bar waits for the pages' own reads before it stops saying "Syncing…". */
+const REFRESH_WAIT_MS = 60 * 1000;
+
+/** A page come back to is looked at again at most this often. */
+const LOOK_EVERY_MS = 5 * 60 * 1000;
+let lookedAt = Date.now();
+
+let refreshing = null;
+
+/**
+ * Ask every page on screen to load its league again, and resolve when they
+ * have. A page answers by handing its load to `detail.waitUntil(promise)`; one
+ * that hands nothing back is not waited for. One at a time: a second ask while
+ * the first is running joins it.
+ */
+function announceRefresh() {
+  if (refreshing) return refreshing;
+  const waits = [];
+  const detail = {
+    ...(currentConnection() || {}),
+    waitUntil: (p) => { if (p && typeof p.then === 'function') waits.push(Promise.resolve(p).catch(() => {})); },
+  };
+  document.dispatchEvent(new CustomEvent('ff:refresh', { detail }));
+  refreshing = (async () => {
+    let timer = null;
+    const cap = new Promise((resolve) => { timer = setTimeout(resolve, REFRESH_WAIT_MS); });
+    try {
+      await Promise.race([Promise.all(waits), cap]);
+      // And the weeks those loads asked for after they returned.
+      if (waits.length) {
+        const season = await import('./season.js');
+        if (typeof season.readsSettled === 'function') await Promise.race([season.readsSettled(REFRESH_WAIT_MS), cap]);
+      }
+    } catch { /* a page that will not reload is not the bar's problem */ }
+    clearTimeout(timer);
+    refreshing = null;
+  })();
+  return refreshing;
+}
+
+/** The Sync now button, pressed while a league is connected. */
+async function resync() {
+  if (state.busy) return;
+  await connect({ again: true });
+}
+
+/** What the synced copy's dates are, as one string to compare. */
+const syncStamp = (a) => (a ? [a.rosters, a.schedule, a.wire].map((x) => (x && x.syncedAt) || '').join('|') : '');
+
+/**
+ * A PAGE THAT WAS LEFT OPEN HAS COME BACK INTO VIEW — a tab returned to, or the
+ * home-screen app on the phone, which never reloads. Is what it shows still
+ * current? At most once in five minutes.
+ *
+ * On the synced copy: ONE read of the cloud's index, and a reload only if the
+ * computer has synced since — no ESPN request, ever. On a live league:
+ * js/season.js's own clocks (`recheck`), which cost one request at most.
+ */
+async function lookAgain() {
+  if (!state.league || state.busy || state.syncing || refreshing) return;
+  if (Date.now() - lookedAt < LOOK_EVERY_MS) return;
+  lookedAt = Date.now();
+  try {
+    const season = await import('./season.js');
+    if (state.source === 'cloud') {
+      const ages = state.cloudAges;
+      const res = await cloudProbe();
+      if (!res.ok) { state.cloudAges = ages; return; }
+      render();
+      if (syncStamp(state.cloudAges) === syncStamp(ages)) return;
+      if (typeof season.forgetCloud === 'function') season.forgetCloud();
+      announceRefresh();
+      return;
+    }
+    if (typeof season.recheck === 'function' && await season.recheck()) announceRefresh();
+  } catch { /* the page stays as it was */ }
+}
+
+/**
+ * @param {Object} [opts]
+ * @param {boolean} [opts.again] the Sync now press on a connected league
+ *   (`resync`): the pages are asked to load again, and the bar stays busy until
+ *   they have.
+ */
+async function connect({ again = false } = {}) {
   if (!state.leagueId) {
     state.error = 'Enter your league ID.';
     render();
@@ -384,11 +489,12 @@ async function connect() {
     else res = await directProbe();
   }
 
-  state.busy = false;
+  // A Sync now is not finished until the pages have read again (below).
+  if (!(again && res.ok)) state.busy = false;
   if (res.ok) {
     state.source = source;
     state.league = res.data;
-    state.checkedAt = Date.now();
+    if (!again) state.checkedAt = Date.now();
     // If we only have one plausible team, do not make the user choose.
     if (state.teamId == null && res.data.teams?.length === 1) {
       state.teamId = res.data.teams[0].id;
@@ -402,6 +508,23 @@ async function connect() {
   }
   render();
   document.dispatchEvent(new CustomEvent('ff:connection', { detail: currentConnection() }));
+
+  if (again && res.ok) {
+    // Only once the league has answered: a press with no connection must not
+    // cost the weeks this browser is holding.
+    try {
+      // Imported here for the reason given in `syncNow()`: a harness may swap
+      // js/season.js for a stub without this export.
+      const season = await import('./season.js');
+      if (typeof season.forgetOpen === 'function') season.forgetOpen();
+    } catch { /* nothing held to forget */ }
+    await announceRefresh();
+    state.busy = false;
+    state.checkedAt = Date.now();
+    lookedAt = Date.now();
+    save();
+    render();
+  }
 
   // Publishing is the desktop's job and it happens after the connection is
   // known good, never before: there is nothing to publish until we know the
@@ -991,8 +1114,10 @@ function render() {
   el.className = cls;
   el.innerHTML = body + (state.error ? `<span class="conn-err">${esc(state.error)}</span>` : '');
 
+  // Connected already: the press means "read it again" (`resync`). Otherwise
+  // it is the Connect button.
   const sync = $('connSync');
-  if (sync) sync.addEventListener('click', connect);
+  if (sync) sync.addEventListener('click', () => (state.league && !$('connLeague') ? resync() : connect()));
 
   // A real click, and only a real click — see `signIn()` for why that is a
   // hard requirement rather than a preference.
@@ -1073,6 +1198,18 @@ async function init() {
   // Whichever page took the reading or kept the copy (js/snapshots.js
   // `announce`), the chip follows without a reload.
   document.addEventListener('ff:saved', refreshSaved);
+
+  // js/season.js saw a roster move while a page was already showing the old
+  // teams: the pages load again, as for a Sync now.
+  document.addEventListener('ff:rosters', () => { if (state.league) announceRefresh(); });
+
+  // A page left open is looked at again when it comes back into view.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') lookAgain();
+  });
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('pageshow', (e) => { if (e && e.persisted) lookAgain(); });
+  }
 
   const { available } = await bridge.ping();
   state.extension = available;

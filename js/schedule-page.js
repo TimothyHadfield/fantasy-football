@@ -3534,6 +3534,13 @@ onConnection((conn) => {
   loadLive();
 });
 
+// Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by
+// js/connection.js): the league is read again, as on a first load.
+document.addEventListener('ff:refresh', (e) => {
+  // Not while an archived reading is on screen: that is history, by choice.
+  if (state.source === 'live' && !state.replay) e.detail.waitUntil(loadLive());
+});
+
 /**
  * On a narrow screen the time machine starts folded to its status line.
  *

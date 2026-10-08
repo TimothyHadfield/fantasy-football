@@ -1992,6 +1992,12 @@ onConnection((conn) => {
   selectSource('live');
 });
 
+// Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by
+// js/connection.js): the league is read again, as on a first load.
+document.addEventListener('ff:refresh', (e) => {
+  if (state.source === 'live') e.detail.waitUntil(selectSource('live'));
+});
+
 async function start() {
   // Remembered source, but never a blank page: if the saved league will not
   // load, fall back to demo and keep the reason on screen.

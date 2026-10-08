@@ -127,14 +127,40 @@ const IR_SLOT = 21;
  * were still moving, which is the failure worth avoiding.
  */
 const playedSeen = new Map(); // `${leagueId}::${season}` -> Set<week>
+const weeksSeen = new Map();  // `${leagueId}::${season}` -> Set<week>, every week the schedule lists
 
 function markPlayed(games) {
   const { leagueId, season } = espn.getConfig();
   if (!realLeague(leagueId)) return;
   const key = `${leagueId}::${season}`;
   const set = playedSeen.get(key) || new Set();
-  for (const g of games || []) if (g && g.played) set.add(Number(g.week));
+  const all = weeksSeen.get(key) || new Set();
+  for (const g of games || []) {
+    if (!g || !Number.isFinite(Number(g.week))) continue;
+    all.add(Number(g.week));
+    if (g.played) set.add(Number(g.week));
+  }
   playedSeen.set(key, set);
+  weeksSeen.set(key, all);
+}
+
+/**
+ * THE CURRENT WEEK: the first week on the schedule ESPN has not decided, or
+ * null when the schedule has not been read (or every week is decided).
+ *
+ * It is the week a roster move shows in first, so it is the one week kept on
+ * the five-minute clock whether or not its games have begun — see "A ROSTER
+ * MOVE REACHES EVERY WEEK" below. Off the schedule, never off the date.
+ */
+function currentWeek() {
+  const { leagueId, season } = espn.getConfig();
+  const key = `${leagueId}::${season}`;
+  const all = weeksSeen.get(key);
+  if (!all || !all.size) return null;
+  const played = playedSeen.get(key) || new Set();
+  let first = null;
+  for (const w of all) if (!played.has(w) && (first === null || w < first)) first = w;
+  return first;
 }
 
 function weekIsFinal(week) {
@@ -179,6 +205,17 @@ function cloudAt(down) {
  * and a copy from the early games is two-thirds of a different Sunday.
  */
 const LIVE_FRESH_MS = 5 * 60 * 1000;
+
+/**
+ * A played week is read ONCE more, this long after it was first stored final.
+ *
+ * ESPN corrects statistics for a few days after a week closes, and a week kept
+ * "for the season" from the moment it closed never saw them — so a man's
+ * stored points could disagree with the matchup score beside them. Three days
+ * covers the corrections; js/store.js stamps the entry so it is not asked for
+ * a third time. Never on the phone's synced copy, which asks ESPN for nothing.
+ */
+const RECHECK_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
  * Has any NFL game of `week` kicked off? Answered only from a pro-schedule read
@@ -453,6 +490,246 @@ export function forgetStored() {
 /** Re-exported so a page can print an age without importing the store itself. */
 export const describeAge = store.describeAge;
 
+// ===========================================================================
+// A ROSTER MOVE REACHES EVERY WEEK
+// ===========================================================================
+//
+// Tim, 2026-10-08: "I recently made a trade and the players officially
+// switched, however, there are some parts of the cite that are clearly not
+// caught up, even though the top bar says it's synced. For example my list of
+// players in the trade menu is caught up, but in the analysis section and the
+// players section you can tell parts of it aren't caught up like the which team
+// the players belong to."
+//
+// WHY. Who is on which team is read per week and kept per week (js/store.js),
+// each week good for six hours on its own clock. A trade therefore showed in
+// whichever weeks happened to be read after it and not in the rest — the Trade
+// page's one selected week caught up while a grid across every remaining week
+// was a patchwork. And **Sync now** only checked that the league still
+// answered; it read no week again.
+//
+// THE RULE NOW, in three parts:
+//
+//   1. THE CURRENT WEEK IS ALWAYS ON THE FIVE-MINUTE CLOCK (`currentWeek`).
+//      Before any later open week is served from the store, the current week is
+//      looked at first (`checkCurrent`): free when it was read in the last five
+//      minutes, otherwise one request.
+//
+//   2. A WEEK JUST READ FROM ESPN IS COMPARED WITH THE COPY IT REPLACES — who
+//      owns whom (`store.signatureOf`), nothing else. A difference is a roster
+//      move, and every other open week is dropped so it is read again
+//      (`rosterMoved`). So a normal page load costs at most one extra request,
+//      and the load after a real move costs one per remaining week, once.
+//
+//   3. **Sync now** drops every open week and every memo below, and the pages
+//      load again (`forgetOpen`; js/connection.js sends `ff:refresh`).
+//
+// A PLAYED WEEK IS NEVER DROPPED BY ANY OF THIS: a move cannot reach history.
+// NOTHING HERE RUNS ON THE PHONE'S SYNCED COPY — that device asks ESPN for
+// nothing (rule 20); it catches up when the computer syncs again.
+
+/** How many roster moves this page has noticed — `recheck` reads it. */
+let ownershipMoves = 0;
+
+/** After the wire and the rosters disagreed, do not act on it again for this long. */
+const WIRE_MOVE_EVERY_MS = 10 * 60 * 1000;
+let wireMoveAt = 0;
+
+/**
+ * A ROSTER MOVE HAS BEEN SEEN: drop the open weeks so they are read again.
+ *
+ * `except` / `olderThan` leave alone the week that carried the news and any
+ * week read since that read began. The minute-long shared reads in js/espn.js
+ * and the floors go too — both were made before the move.
+ *
+ * A page that was already HANDED one of the dropped weeks is showing the old
+ * teams, so it is told (`ff:rosters`; js/connection.js turns that into the
+ * same reload Sync now asks for). A page still loading was handed nothing and
+ * simply reads the weeks fresh.
+ */
+function rosterMoved(cfg, { except = null, olderThan = null } = {}) {
+  const gone = store.forgetOpen(cfg.leagueId, cfg.season, { except, olderThan });
+  espn.clearReadCache();
+  floorCache.clear();
+  ownershipMoves++;
+  let handed = false;
+  for (const week of gone) {
+    if (readAt.delete(`${cfg.leagueId}::${cfg.season}::${week}`)) handed = true;
+  }
+  if (handed && typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+    try { document.dispatchEvent(new CustomEvent('ff:rosters')); } catch { /* nobody to tell */ }
+  }
+}
+
+let currentCheck = null; // { key, promise } — one look at the current week at a time
+let currentMissAt = 0;
+
+/**
+ * Look at the current week before a later one is served from the store.
+ *
+ * Nothing at all when it was read in the last five minutes; otherwise its
+ * ordinary read (`readWeekRosters`), which compares and drops. Shared while in
+ * flight, so a span read three weeks at a time asks once. Never throws: a week
+ * that cannot be read leaves the store as it was, and is not asked for again
+ * for a minute.
+ */
+function checkCurrent(byes) {
+  const cfg = storable();
+  const cur = currentWeek();
+  if (!cfg || cur === null) return Promise.resolve();
+  const held = store.readWeek(cfg.leagueId, cfg.season, cur);
+  if (held && (held.final || held.ageMs <= LIVE_FRESH_MS)) return Promise.resolve();
+  if (Date.now() - currentMissAt < PRO_RETRY_MS) return Promise.resolve();
+  const key = `${cfg.leagueId}::${cfg.season}::${cur}`;
+  if (!currentCheck || currentCheck.key !== key) {
+    const entry = { key, promise: null };
+    entry.promise = readWeekRosters(cur, byes ? { byes } : {})
+      .then(() => {}, () => { currentMissAt = Date.now(); })
+      .finally(() => { if (currentCheck === entry) currentCheck = null; });
+    currentCheck = entry;
+  }
+  return currentCheck.promise;
+}
+
+/**
+ * THE WIRE AND THE STORED ROSTERS DISAGREE: a man ESPN has just listed as a
+ * free agent is on a team in this browser's copy of the same week. The wire is
+ * always read live and the rosters may be hours old, so the Players page could
+ * show one man as free AND taken. That is a roster move like any other.
+ *
+ * Only for a week the schedule says is still open, against a copy read before
+ * the wire was asked for, and at most once in ten minutes — if ESPN's two
+ * answers ever disagree with each other, the pages must not reload in a loop.
+ * (The other direction — a man claimed since — cannot be seen from a list of
+ * the hundred most-owned free agents; the five-minute clock catches that.)
+ */
+function wireAgainstStore(week, players, startedAt) {
+  const cfg = storable();
+  if (!cfg || !Array.isArray(players) || !players.length) return;
+  if (!playedSeen.has(`${cfg.leagueId}::${cfg.season}`) || weekIsFinal(week)) return;
+  if (Date.now() - wireMoveAt < WIRE_MOVE_EVERY_MS) return;
+  const held = store.peekWeek(cfg.leagueId, cfg.season, week);
+  if (!held || held.final || !(held.at <= startedAt)) return;
+  const owned = new Set();
+  for (const t of held.teams) for (const p of (t && t.players) || []) owned.add(p.playerId);
+  if (!players.some((p) => owned.has(p.playerId))) return;
+  wireMoveAt = Date.now();
+  rosterMoved(cfg);
+}
+
+/** Every memo in this file that holds something read from ESPN or the cloud. */
+function clearMemos() {
+  espn.clearReadCache();
+  floorCache.clear();
+  downCache = null;
+  decisionsDownCache = null;
+  byesCache = null;
+  currentCheck = null;
+  currentMissAt = 0;
+  proMissAt = 0;
+}
+
+/**
+ * **SYNC NOW**: forget everything that can still change, so the next read of
+ * it is ESPN's. The open weeks' stored copies, the minute-long shared reads,
+ * the NFL schedule, the floors, the byes and the synced copy held for the page.
+ *
+ * Played weeks, a week's moves, the readings and the saved projections are not
+ * touched — see `store.forgetOpen`. js/connection.js calls this and then asks
+ * every open page to load again.
+ *
+ * @returns {number[]} the weeks whose stored copy went
+ */
+export function forgetOpen() {
+  const cfg = storable();
+  const gone = cfg ? store.forgetOpen(cfg.leagueId, cfg.season) : [];
+  clearMemos();
+  if (typeof espn.clearProSchedule === 'function') espn.clearProSchedule();
+  return gone;
+}
+
+/**
+ * The synced copy has been replaced by a newer sync (js/connection.js saw the
+ * date move): let go of the one this page was holding, so the next read takes
+ * the new one. No ESPN request follows from this.
+ */
+export function forgetCloud() {
+  downCache = null;
+  decisionsDownCache = null;
+  byesCache = null;
+  floorCache.clear();
+}
+
+/**
+ * A PAGE LEFT OPEN — a tab come back to, the home-screen app reopened — never
+ * reloads, so nothing above ever runs for it. js/connection.js asks this when
+ * the page becomes visible again: has anything this page was handed gone out of
+ * date? True means "load again".
+ *
+ * The same clocks as a page load, and nothing more: the current week is looked
+ * at (free inside five minutes, one request after), a roster move found there
+ * counts, a week in play that was re-read counts, and so does any open week
+ * this page was handed more than six hours ago. For a live league only — the
+ * caller never asks on the synced copy.
+ */
+export async function recheck() {
+  const cfg = storable();
+  if (!cfg) return false;
+  try {
+    if (await cloudDown()) return false;
+    const key = `${cfg.leagueId}::${cfg.season}`;
+    const moves = ownershipMoves;
+    const now = Date.now();
+    let changed = false;
+    for (const [k, at] of readAt) {
+      if (!k.startsWith(`${key}::`)) continue;
+      if (!weekIsFinal(Number(k.slice(key.length + 2))) && now - at > store.FRESH_MS) changed = true;
+    }
+    const cur = currentWeek();
+    if (cur !== null) {
+      const held = store.readWeek(cfg.leagueId, cfg.season, cur);
+      const due = !held || (!held.final && held.ageMs > LIVE_FRESH_MS);
+      await checkCurrent();
+      if (due && weekInPlay(cur)) changed = true;
+    }
+    if (changed) {
+      espn.clearReadCache();
+      floorCache.clear();
+    }
+    return changed || ownershipMoves !== moves;
+  } catch {
+    return false;
+  }
+}
+
+let reading = 0;          // roster reads in flight
+let quietWaiters = [];
+
+/**
+ * Resolves once no week of rosters has been in flight for a moment (or after
+ * `capMs`). What lets the connection bar keep saying "Syncing…" until the
+ * pages' re-reads have actually landed, rather than until they were asked for.
+ */
+export function readsSettled(capMs = 60000) {
+  return new Promise((resolve) => {
+    let quiet = null;
+    let cap = null;
+    const done = () => {
+      clearTimeout(quiet);
+      clearTimeout(cap);
+      quietWaiters = quietWaiters.filter((w) => w !== poke);
+      resolve();
+    };
+    const poke = () => {
+      clearTimeout(quiet);
+      if (reading === 0) quiet = setTimeout(() => (reading === 0 ? done() : null), 700);
+    };
+    quietWaiters.push(poke);
+    cap = setTimeout(done, capMs);
+    poke();
+  });
+}
+
 /**
  * How many free agents a wire document holds, and the default a caller of
  * `fetchWireWeek` gets.
@@ -651,7 +928,19 @@ export async function fetchWeekRosters(week, { byes, fresh = false, raw = false 
 }
 
 /** The read itself: store, cloud, ESPN. `final` only on a stored week that is frozen. */
-async function readWeekRosters(week, { byes, fresh = false } = {}) {
+async function counted(job) {
+  reading++;
+  try {
+    return await job();
+  } finally {
+    reading--;
+    for (const poke of quietWaiters.slice()) poke();
+  }
+}
+
+const readWeekRosters = (week, opts) => counted(() => readWeekRostersNow(week, opts));
+
+async function readWeekRostersNow(week, { byes, fresh = false } = {}) {
   // THE LOCAL STORE FIRST, ahead of the bridge — see "THE LOCAL STORE" above.
   // A week this browser read on the page you just came from is the same answer,
   // and it is the re-buying of it that Tim asked to be rid of. A week that is
@@ -673,12 +962,33 @@ async function readWeekRosters(week, { byes, fresh = false } = {}) {
   //   they are known — and then bought once, with the bye rule applied. If that
   //   re-read fails, the held week is still better than a gap: it is exactly
   //   what a bye-less read would have produced anyway.
+  //
+  // AND THREE MORE, each for something the held week cannot know about itself:
+  //
+  //   THE SYNCED COPY IS NEWER. The store used to answer a single week before
+  //   the cloud was even asked, while a span of weeks took the cloud first —
+  //   so after a new sync one page showed the new teams and the next the old.
+  //   Both now take whichever of the two was read from ESPN LATER
+  //   (`syncedWeek`), in either direction.
+  //
+  //   A LATER OPEN WEEK, before the current week has been looked at
+  //   (`checkCurrent`) — and the current week itself after five minutes. See
+  //   "A ROSTER MOVE REACHES EVERY WEEK".
+  //
+  //   A PLAYED WEEK THREE DAYS AFTER IT WAS STORED, once (`RECHECK_MS`).
+  //
+  // None of the last two runs on the synced copy: that device asks ESPN for
+  // nothing, and its weeks are replaced whole by the next sync.
   const cfg = storable();
   let byeMap = byes && typeof byes === 'object' ? byes : null;
   let fallback = null;
   let fallbackAt = null;
+  let recheck = false;
+  const down = await cloudDown();
+  const synced = syncedWeek(down, week);
   if (cfg && !fresh) {
-    const held = store.readWeek(cfg.leagueId, cfg.season, week);
+    let held = store.readWeek(cfg.leagueId, cfg.season, week);
+    if (held && synced && Number.isFinite(synced.at) && synced.at > held.at) held = null;
     if (held && held.teams.length) {
       const decidedSince = !held.final && weekIsFinal(week);
       let byesArrived = false;
@@ -686,16 +996,39 @@ async function readWeekRosters(week, { byes, fresh = false } = {}) {
         if (!byeMap) byeMap = await fetchByeWeeks();
         byesArrived = byesAreKnown(byeMap);
       }
-      // A WEEK UNDER WAY, held for more than a few minutes: its points have
-      // moved since. Re-read, and on a failed re-read the held copy still serves.
-      const stalePlay = !held.final && !decidedSince &&
-        held.ageMs > LIVE_FRESH_MS && weekInPlay(week);
+      const open = !held.final && !decidedSince;
+      const cur = down ? null : currentWeek();
+      // The current week first. If it shows a roster move, this week's copy has
+      // just been dropped and is read again below.
+      let moved = false;
+      if (open && cur !== null && Number(week) !== cur) {
+        await checkCurrent(byeMap);
+        moved = !store.readWeek(cfg.leagueId, cfg.season, week);
+      }
+      // THE CURRENT WEEK, or A WEEK UNDER WAY, held for more than a few
+      // minutes: its teams or its points may have moved since. Re-read, and on
+      // a failed re-read the held copy still serves.
+      let stalePlay = false;
+      if (open && held.ageMs > LIVE_FRESH_MS) {
+        stalePlay = Number(week) === cur || weekInPlay(week);
+        // The roster read can beat the NFL schedule to the page, and then
+        // nothing says the week is under way. Somebody already having points is
+        // reason enough to wait for it (one request, public, shared).
+        const games = typeof espn.heldProGames === 'function' ? espn.heldProGames() : null;
+        if (!stalePlay && !down && games === null &&
+            held.teams.some((t) => ((t && t.players) || []).some((p) => p && typeof p.actual === 'number'))) {
+          await seekProGames();
+          stalePlay = weekInPlay(week);
+        }
+      }
+      recheck = held.final && !held.rechecked && !down &&
+        Number.isFinite(held.finalAt) && Date.now() - held.finalAt >= RECHECK_MS;
       const served = { week: Number(week), teams: held.teams, from: 'store', final: held.final === true };
-      if (!decidedSince && !byesArrived && !stalePlay) {
+      if (!decidedSince && !byesArrived && !stalePlay && !moved && !recheck) {
         noteRead(week, held.at);
         return served;
       }
-      if (byesArrived || stalePlay) { fallback = served; fallbackAt = held.at; }
+      if (byesArrived || stalePlay || moved || recheck) { fallback = served; fallbackAt = held.at; }
     }
   }
 
@@ -704,24 +1037,13 @@ async function readWeekRosters(week, { byes, fresh = false } = {}) {
   // ESPN rather than being reported as empty: on a public league that still
   // works, and on a private one the page gets the same error it gets today.
   // A synced week was decoded — bye rule included — on the desktop.
-  const down = await cloudDown();
-  const synced = down && down.rosters instanceof Map ? down.rosters.get(Number(week)) : null;
-  if (synced && synced.length) {
-    // Kept, because the phone that reads the cloud is the device most likely to
-    // walk between four pages on one connection — and a synced week is already
-    // a copy, so storing it costs nothing but the bytes.
-    // The desktop decoded it with the byes it published alongside, so those say
-    // whether the bye rule was applied.
-    // Stamped with the SYNC's time, not this minute: the points on it are as old
-    // as the sync, and the next page must not take them for a reading just made.
-    if (cfg) {
-      store.writeWeek(cfg.leagueId, cfg.season, week, synced,
-        { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes), at: cloudAt(down) });
-    }
-    noteRead(week, cloudAt(down));
-    return { week: Number(week), teams: synced, from: 'cloud' };
+  if (synced) {
+    const got = keepSynced(cfg, down, week, synced);
+    noteRead(week, got.at);
+    return { week: Number(week), teams: got.teams, from: got.from };
   }
 
+  const startedAt = Date.now();
   let raw;
   try {
     [raw, byeMap] = await Promise.all([
@@ -816,12 +1138,57 @@ async function readWeekRosters(week, { byes, fresh = false } = {}) {
   // date — see `weekIsFinal` — and a week whose played-ness nobody has
   // established yet is stored as a forecast, which is the safe direction.
   // `byesKnown` records whether the bye rule could be applied (AUDIT §2.4).
+  //
+  // WHO OWNS WHOM is compared with the copy this replaces, for a week still
+  // open: a difference is a roster move, and every other open week read before
+  // this one was asked for is dropped (`rosterMoved`).
   if (cfg && teams.length) {
+    const final = weekIsFinal(week);
+    const was = final || recheck ? null : store.peekWeek(cfg.leagueId, cfg.season, week);
     store.writeWeek(cfg.leagueId, cfg.season, week, teams,
-      { final: weekIsFinal(week), byesKnown: byesAreKnown(byeMap) });
+      { final: final || recheck, byesKnown: byesAreKnown(byeMap), rechecked: recheck });
+    if (was && !was.final && was.sig !== store.signatureOf(teams)) {
+      rosterMoved(cfg, { except: week, olderThan: startedAt });
+    }
   }
 
   return { week, teams, from: 'espn' };
+}
+
+/** The synced copy's week, with when the sync was taken — or null. */
+function syncedWeek(down, week) {
+  const teams = down && down.rosters instanceof Map ? down.rosters.get(Number(week)) : null;
+  return teams && teams.length ? { teams, at: cloudAt(down) } : null;
+}
+
+/**
+ * A synced week, on its way to a page: kept in the store for the next page, and
+ * handed out — UNLESS this browser holds a copy of the week read from ESPN
+ * LATER than the sync, which then is the one handed out and the one kept.
+ *
+ * That happens on the computer, when the extension is slow to say hello and one
+ * page load reads the synced copy instead: the weeks it read through the
+ * extension an hour ago are newer than the last sync, and writing the sync over
+ * them put the clock back. js/store.js refuses the older write as well.
+ *
+ * Kept, because the phone that reads the cloud is the device most likely to
+ * walk between four pages on one connection — and a synced week is already a
+ * copy, so storing it costs nothing but the bytes. The desktop decoded it with
+ * the byes it published alongside, so those say whether the bye rule was
+ * applied. Stamped with the SYNC's time, not this minute: the points on it are
+ * as old as the sync, and the next page must not take them for a reading just
+ * made.
+ */
+function keepSynced(cfg, down, week, synced) {
+  if (cfg) {
+    const kept = store.peekWeek(cfg.leagueId, cfg.season, week);
+    if (kept && kept.teams.length && Number.isFinite(synced.at) && kept.at > synced.at) {
+      return { teams: kept.teams, at: kept.at, from: 'store' };
+    }
+    store.writeWeek(cfg.leagueId, cfg.season, week, synced.teams,
+      { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes), at: synced.at });
+  }
+  return { teams: synced.teams, at: synced.at, from: 'cloud' };
 }
 
 /**
@@ -849,7 +1216,13 @@ async function readWeekRosters(week, { byes, fresh = false } = {}) {
  * @param {boolean} [fresh] re-read from source, ignoring the local store
  * @returns {Promise<Map<number, Array>>} week -> the teams array for that week
  */
-export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {}) {
+export function fetchWeeksRosters(weeks, opts) {
+  // Counted from the moment it is asked for, not from its first request, so
+  // the bar's "Syncing…" does not end in the gap before one (`readsSettled`).
+  return counted(() => weeksRostersNow(weeks, opts));
+}
+
+async function weeksRostersNow(weeks, { onProgress, fresh = false } = {}) {
   const out = new Map();
   let done = 0;
 
@@ -865,18 +1238,17 @@ export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {
   if (down && down.rosters instanceof Map && weeks.some((w) => down.rosters.has(Number(w)))) {
     const cfg = storable();
     for (const week of weeks) {
-      const teams = down.rosters.get(Number(week));
-      if (teams && teams.length) {
-        noteRead(week, cloudAt(down));
-        if (cfg) {
-          store.writeWeek(cfg.leagueId, cfg.season, week, teams,
-            { final: weekIsFinal(week), byesKnown: byesAreKnown(down.byes), at: cloudAt(down) });
-        }
+      const synced = syncedWeek(down, week);
+      // The same choice a single week makes (`keepSynced`): the sync's copy,
+      // unless this browser read the week from ESPN after the sync was taken.
+      const got = synced ? keepSynced(cfg, down, week, synced) : null;
+      if (got) {
+        noteRead(week, got.at);
         // Stored raw, handed out annotated — the same as `fetchWeekRosters`.
-        out.set(Number(week), await annotateTeams(week, teams));
+        out.set(Number(week), await annotateTeams(week, got.teams));
       }
       done++;
-      if (onProgress) onProgress(done, weeks.length, week, teams && teams.length ? 'cloud' : 'gap');
+      if (onProgress) onProgress(done, weeks.length, week, got ? got.from : 'gap');
     }
     return out;
   }
@@ -938,7 +1310,11 @@ export async function fetchWeeksRosters(weeks, { onProgress, fresh = false } = {
  * @param {number} [limit] how many free agents to ask ESPN for
  * @returns {Promise<Array>} `espn.parseFreeAgent` results for that week
  */
-export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
+export function fetchWireWeek(week, limit = WIRE_LIMIT) {
+  return counted(() => wireWeekNow(week, limit));
+}
+
+async function wireWeekNow(week, limit = WIRE_LIMIT) {
   const w = Number(week);
 
   await bridge.settled();
@@ -966,10 +1342,13 @@ export async function fetchWireWeek(week, limit = WIRE_LIMIT) {
   }
 
   // The synced list above was decoded with the bye rule already applied.
+  const startedAt = Date.now();
   const [raw, byes] = await Promise.all([espn.fetchFreeAgents(w, limit), fetchByeWeeks()]);
   const parsed = (raw?.players || [])
     .map((entry) => espn.parseFreeAgent(entry, w, byes))
     .filter((p) => p.playerId !== null && p.playerId !== undefined);
+  // A man on this list who is on a team in the stored rosters has moved.
+  try { wireAgainstStore(w, parsed, startedAt); } catch { /* never the wire's problem */ }
   // In a week ESPN has not decided, a free agent whose game is over carries
   // `done`, `pregame` and his score as `projected` — the same rule as a roster.
   return annotateWire(w, parsed, Date.now());
@@ -1376,7 +1755,11 @@ function seasonFromCloud(down, settled = null) {
  * @param {function} onProgress optional (done, total, label) callback
  * @returns the canonical league-data shape, plus `projectionsAvailable`
  */
-export async function fetchSeasonData({ onProgress } = {}) {
+export function fetchSeasonData(opts) {
+  return counted(() => seasonDataNow(opts)); // see `readsSettled`
+}
+
+async function seasonDataNow({ onProgress } = {}) {
   const report = (done, total, label) => onProgress && onProgress(done, total, label);
 
   report(0, 1, 'Loading league…');
@@ -1959,7 +2342,7 @@ function assembleWorld({ isDemo, name, slots, teams, weeks, games, rosters, move
  *   is connected — for a page parked on Demo
  */
 export async function fetchDecisionWorld(opts = {}) {
-  return (await gatherDecisions(opts)).world;
+  return (await counted(() => gatherDecisions(opts))).world; // see `readsSettled`
 }
 
 // ---------------------------------------------- the world, in the synced copy

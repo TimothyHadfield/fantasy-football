@@ -755,6 +755,15 @@ async function readProSchedule() {
   return data;
 }
 
+/**
+ * Let go of the held NFL schedule, so the next ask reads it again. For **Sync
+ * now** (js/season.js `forgetOpen`): which games are over is on this payload,
+ * and a page left open since noon would otherwise keep noon's answer.
+ */
+export function clearProSchedule() {
+  kickoffStash = null;
+}
+
 /** The held read, when it has games in it. An empty one is asked for again. */
 const stashWithGames = () =>
   (kickoffStash && kickoffStash.season === config.season && Object.keys(kickoffStash.kickoffs).length

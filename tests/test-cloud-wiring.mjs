@@ -1017,6 +1017,79 @@ async function bootPage(page, { prefs = null, connection = null, espnScale = nul
   return { window, document, store: { espnCalls, bridgeCalls, saved } };
 }
 
+// --------------------------------------------------------------- newerWins
+//
+// Tim, 2026-10-08: "there are some parts of the cite that are clearly not
+// caught up, even though the top bar says it's synced."
+//
+// On the synced copy a week can be held twice: in this browser's own store and
+// in the cloud. One week on its own used to take the STORE first, and a span of
+// weeks the CLOUD first — so after a new sync, one page showed the new teams and
+// the next the old ones, and the span path wrote an older sync over a newer
+// stored week. Both now take whichever was read from ESPN later. And none of it
+// may cost an ESPN request (rule 20).
+
+SCENARIOS.newerWins = async () => {
+  const map = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() { return map.size; },
+  };
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+
+  const HOUR = 60 * 60 * 1000;
+  const fake = makeFake();
+  const seeded = await seedCloud(cloud, espn, season, fake);
+  ok('the desktop published a season', seeded.res.ok, seeded.res.reason);
+  // The sync is an hour old.
+  backdate(fake, { rosters: HOUR, wire: HOUR, schedule: HOUR });
+
+  const WEEK = 3; // not played: the kind of week a trade changes
+  const keyOf = () => [...map.keys()].find((k) => k.startsWith('ff.weeks.') && k.endsWith(`.${SEASON}.${WEEK}`));
+  ok('the week is in this browser\'s store', !!keyOf(), [...map.keys()].join(','));
+  /** This browser's own copy of the week: `ageMs` old, and recognisable. */
+  const plant = (ageMs, marker) => {
+    const e = JSON.parse(map.get(keyOf()));
+    e.at = Date.now() - ageMs;
+    // As on a real device, where the byes were read: this file's ESPN has no
+    // bye table, and a week decoded without one asks for it again.
+    e.byesKnown = true;
+    e.teams[0].players[0].projected = marker;
+    map.set(keyOf(), JSON.stringify(e));
+    return e.at;
+  };
+  const held = () => JSON.parse(map.get(keyOf()));
+
+  const espnCalls = installFetch(LIVE.scale, LIVE.name);
+
+  // --- stored BEFORE the sync: the sync is the newer one --------------------
+  plant(3 * HOUR, 777);
+  const one = await season.fetchWeekRosters(WEEK);
+  near(one.teams[0].players[0].projected, CLOUD.scale + 0 + 0.1 * WEEK,
+    'ONE WEEK, stored before the sync: the newer synced copy is served');
+  const span = await season.fetchWeeksRosters([WEEK]);
+  near(span.get(WEEK)[0].players[0].projected, CLOUD.scale + 0 + 0.1 * WEEK,
+    'and a SPAN of weeks agrees with it');
+
+  // --- stored AFTER the sync: this browser's copy is the newer one ----------
+  const at = plant(10 * 60 * 1000, 888);
+  const span2 = await season.fetchWeeksRosters([WEEK]);
+  eq(span2.get(WEEK)[0].players[0].projected, 888,
+    'A SPAN, stored after the sync: this browser\'s newer copy is served');
+  eq(held().teams[0].players[0].projected, 888, 'and the older sync was NOT written over it');
+  eq(held().at, at, 'nor was its clock put back');
+  const one2 = await season.fetchWeekRosters(WEEK);
+  eq(one2.teams[0].players[0].projected, 888, 'and ONE WEEK on its own agrees');
+
+  ok('ZERO ESPN calls through all of it', espnCalls.length === 0, espnCalls.join(' '));
+};
+
 // =========================================================================
 // RUNNER
 // =========================================================================
