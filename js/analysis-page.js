@@ -63,7 +63,13 @@ import { stdev } from './stats.js';
 // MANY scales — one per lineup slot — so there is no single pair of thresholds
 // to print in a sentence. The season sheet prints its nine pairs under the
 // table instead (`seasonBars`), which is the same promise kept table-shaped.
-import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn } from './heat.js';
+import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn, ordinal } from './heat.js';
+// THE STAT CARD AND THE SITE'S DEEP LINKS (Tim, 2026-10-08): "If the user is
+// curious about a number or it's breakdown … they should be able to hover over
+// it and show a preview. … build any connectors by clicking on the preview."
+// A number's card is js/pop.js; a man's is js/player-card.js, as before.
+import { statCard, teamWeekSpec, clearPops, wirePops, hidePop } from './pop.js';
+import { teamHref, weekHref } from './links.js';
 import * as espn from './espn.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
@@ -187,6 +193,11 @@ const state = {
   // A link into the roster detail (`?team=&week=`), or null. See "Landing on a
   // roster" below: it is this visit's answer, never a saved choice.
   landing: null,
+
+  // The regular-season games off the schedule read `useLive` already makes —
+  // kept for ONE thing, the record on a team's card. Null in demo and when the
+  // schedule would not load: the card then simply has no Record row.
+  games: null,
 };
 
 // Cache per week so flipping back to a week already loaded is instant.
@@ -271,9 +282,9 @@ function renderHeatBands(id, cols, lead = 'Full colour at (red / green):') {
   }).join('');
   el.innerHTML =
     `<span class="lg lg-lead" title="At or below the first number a cell in that column is fully ` +
-    `red and marked ▼; at or above the second it is fully green and marked ▲. Both are one ` +
-    `standard deviation from that column's own average across the league, and the shades between ` +
-    `them are quarter-deviation steps. A column the whole league sits inside one printed tenth ` +
+    `red and marked ▼; at or above the second it is fully green and marked ▲. Both sit the same ` +
+    `distance from that column's own average across the league, and the shades between them ` +
+    `deepen evenly. A column the whole league sits inside one printed tenth ` +
     `of shows a dash and is never coloured.">${esc(lead)}</span>${body}`;
 }
 
@@ -359,6 +370,281 @@ function playerRef(p, inner, title, attr = 'title') {
     `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" ${attr}="${esc(title)}">` +
     `${inner}</a>`
   );
+}
+
+// ============================================================ the stat cards
+//
+// Tim, 2026-10-08: "a bad preview is … the numbers in the week by week chart
+// that talk about SD and info we don't want or need." So every team total on
+// this page opens the TEAM-WEEK card (the total broken into its starters, slot ·
+// name · points), a team's name opens a small TEAM card, and the averages say
+// one plain line. All of them are js/pop.js's stat card; the builders below only
+// find the numbers. One preview per number: a cell with a card has no `title`.
+//
+// THE CONNECTOR IS THIS PAGE. A team card's link is
+// `analysis.html?team=&week=#rosterDetail` (js/links.js) — which is where the
+// reader already is. So a click on one is answered HERE, by `openRoster`, with
+// no reload: `data-go` carries the link for a mouse click and for Enter, and
+// the sheet's own button is caught by its href. From any other page the same
+// link lands through `requestedRoster`.
+
+const GO_ATTR = 'data-go';
+const ROSTER_LINK = /^analysis\.html\?team=(\d+)(?:&week=(\d+))?#rosterDetail$/;
+
+/**
+ * A card as the attribute for a tag, '' when there is nothing to show.
+ * `focusable` false for the dense week cells: 170 tab stops in one table is a
+ * keyboard trap, and the same card is on the row's Avg and name.
+ */
+function cardAttr(spec, prefix, focusable = true) {
+  if (!spec) return '';
+  const here = spec.href && ROSTER_LINK.test(spec.href) ? ` ${GO_ATTR}="${esc(spec.href)}"` : '';
+  return statCard(spec, { prefix, focusable }) + here;
+}
+
+/** "2nd of 10" — where a number ranks in its group, counted from the top. */
+const placeOf = (h) => (h ? `${ordinal(h.rank)} of ${h.of}` : '');
+
+/** The one dim line under a card's rows: the rank, and what the group averages. */
+const standingFoot = (h, group = '') =>
+  (h ? `${placeOf(h)}${group ? ` ${group}` : ''} · league avg ${h.avgText}` : '');
+
+/** An Avg cell's ONE plain line (Tim's plan: "Avg of N weeks · 2nd of 10"). */
+function avgLine(n, h) {
+  const of = n > 0 ? `Avg of ${plural(n, 'week')}` : 'Avg of the weeks shown';
+  return h ? `${of} · ${placeOf(h)}` : of;
+}
+
+/** How many regular-season numbers a row of week values holds. */
+const regularCount = (values, weeks) =>
+  values.filter((v, i) => !isPlayoff(weeks[i]) && typeof v === 'number').length;
+
+/** A team's W–L(–T) off the schedule already read, or null when there is none. */
+function recordOf(teamId) {
+  if (!Array.isArray(state.games)) return null;
+  let w = 0;
+  let l = 0;
+  let t = 0;
+  for (const g of state.games) {
+    if (!g || !g.played) continue;
+    const home = g.homeId === teamId;
+    if (!home && g.awayId !== teamId) continue;
+    const mine = home ? g.homeScore : g.awayScore;
+    const theirs = home ? g.awayScore : g.homeScore;
+    if (typeof mine !== 'number' || typeof theirs !== 'number') continue;
+    if (mine > theirs) w += 1; else if (mine < theirs) l += 1; else t += 1;
+  }
+  return w + l + t === 0 ? null : `${w}–${l}${t ? `–${t}` : ''}`;
+}
+
+/**
+ * A TEAM'S NAME: record, what its lineup is worth in an average week, and the
+ * week on screen. Click → that team's roster detail.
+ */
+function teamCardSpec(team) {
+  if (!team) return null;
+  const rows = [];
+  const record = recordOf(team.id);
+  if (record) rows.push({ label: 'Record', value: record });
+  const avg = teamWeeklyAverage(team.id);
+  if (avg !== null) rows.push({ label: 'Proj avg', value: avg });
+  const starters = (team.starters || []).map((p) => ({ p }));
+  const proj = sumOf(starters, (p) => weekLine(p).proj);
+  const actual = sumOf(starters, (p) => weekLine(p).actual);
+  if (proj !== null) rows.push({ label: `Week ${state.week} projected`, value: proj });
+  if (actual !== null && state.playedWeeks.includes(state.week)) {
+    rows.push({ label: `Week ${state.week} actual`, value: actual });
+  }
+  return { title: team.name, rows, href: teamHref(team.id, state.week), hrefLabel: 'Open roster' };
+}
+
+/**
+ * The starters behind one team's total in one week of the season sheet, in
+ * slot order: the lineup really started in a history week, the best legal
+ * lineup (floors included) in a week to come. Null when that week is not read.
+ */
+function weekStarterLines(teamId, week, rows, slots, weeks) {
+  const hist = historyWeeks(weeks);
+  if (hist.has(week)) {
+    const got = (realLineups(rows, weeks).get(week) || new Map()).get(teamId);
+    if (!got) return null;
+    const mode = historyMode();
+    const line = (slot, p) => {
+      const other = historyValue(p, mode === 'proj' ? 'actual' : 'proj');
+      return {
+        slot,
+        name: p.name,
+        pts: historyValue(p, mode),
+        proj: mode === 'proj' ? null : other,
+        note: mode === 'proj' && other !== null ? `scored ${fmt(other)}` : '',
+      };
+    };
+    const seen = new Set();
+    const lines = [];
+    for (const row of rows) {
+      const e = got.fill.get(row.key);
+      if (!e || !e.p) continue;
+      seen.add(e.p);
+      lines.push(line(row.key, e.p));
+    }
+    // A starter the slot rows had no place for still counts in the total.
+    for (const p of got.starters) if (!seen.has(p)) lines.push(line(p.position || '', p));
+    return lines;
+  }
+  const fill = (weeklyFills(rows, slots, weeks).get(week) || new Map()).get(teamId);
+  if (!fill) return null;
+  return rows.map((row) => {
+    const e = fill.get(row.key) || null;
+    const a = assessed(e, row);
+    return {
+      slot: row.key,
+      name: e ? e.p.name : 'Waiver floor',
+      pts: a.value,
+      note: a.assumed && e ? 'counted at the waiver floor' : '',
+    };
+  }).filter((l) => l.pts !== null);
+}
+
+/** The team-week card's spec from starter lines; `teamWeekSpec` adds Rounding. */
+function teamWeekCard(team, week, total, lines, { sub = '', foot = '' } = {}) {
+  if (!team || total === null || total === undefined || !lines || !lines.length) return null;
+  const spec = teamWeekSpec({
+    team: team.name,
+    week,
+    total,
+    starters: lines.map((l) => ({ slot: l.slot, name: l.name, pts: l.pts, proj: l.proj ?? null })),
+    href: teamHref(team.id, week),
+  });
+  // `teamWeekSpec` keeps the starters' order, so a note goes on by index.
+  lines.forEach((l, i) => { if (l.note && spec.rows[i]) spec.rows[i].note = l.note; });
+  if (sub) spec.sub = sub;
+  if (foot) spec.foot = foot;
+  return spec;
+}
+
+/** What kind of number a week of the season sheet holds, for the card's top line. */
+function weekKind(week, hist) {
+  if (!hist.has(week)) return `Week ${week} · best lineup, projected`;
+  if (historyMode() === 'proj') return `Week ${week} · projected before kickoff`;
+  return weekLive(week) ? `Week ${week} · scored so far` : `Week ${week} · scored`;
+}
+
+/** One cell of Weekly totals or of the Starting lineup band, as its card. */
+function sheetWeekCard(team, week, total, heat, rows, slots, weeks) {
+  return teamWeekCard(team, week, total, weekStarterLines(team.id, week, rows, slots, weeks), {
+    sub: weekKind(week, historyWeeks(weeks)),
+    foot: standingFoot(heat, 'that week'),
+  });
+}
+
+/**
+ * A finished `<td …>` given a card: the attribute goes on, and the sentence its
+ * `title` carried moves to an `aria-label` — a title beside a card is a second
+ * tooltip on top of it, and the words are still what a screen reader reads.
+ */
+function withCard(td, attr) {
+  if (!attr) return td;
+  // The attribute goes at the END of the opening tag: `withPo`, `withFut` and
+  // `withHeat` all find a cell by its leading `<td class="`.
+  return td
+    .replace(/^(\s*<td[^>]*?) title="/, '$1 aria-label="')
+    .replace(/^(\s*<td[^>]*)>/, (m, open) => `${open}${attr}>`);
+}
+
+/** The Team column's one line, wherever a table has one. */
+const TEAM_HEAD = 'The fantasy team. Point at a name for its record; click a row to open its roster.';
+
+/** A team's name cell in a grid: the name, and the team card on it. */
+const teamNameCell = (t, prefix, sortKey = false) =>
+  `<td class="name"${sortKey ? ` data-v="${esc(t.name)}"` : ''}${cardAttr(teamCardSpec(t), prefix)}>` +
+  `${esc(t.name)}</td>`;
+
+/**
+ * ALL TEAMS, A WEEK — the Total as its starters: the grid's own spots, each at
+ * the number the Total counts it at (the waiver floor where it is lifted).
+ */
+function gridTotalCard(team, row, slots, total, heat) {
+  const lines = slots.map((s) => {
+    const e = row[s.key];
+    const a = assessed(e && typeof e.v === 'number' ? e : null, s);
+    return {
+      slot: s.key,
+      name: e ? e.p.name : 'Waiver floor',
+      pts: a.value,
+      note: a.assumed && e ? 'counted at the waiver floor' : '',
+    };
+  }).filter((l) => l.pts !== null);
+  return teamWeekCard(team, state.week, total, lines, {
+    sub: `Week ${state.week} · projected`,
+    foot: standingFoot(heat, 'this week'),
+  });
+}
+
+/**
+ * ALL TEAMS, PROJ AVG — one slot's average: who fills it and for how many
+ * weeks, how many of those weeks are counted at the waiver floor, the rank.
+ */
+function slotAvgCard(team, row, cell, heat) {
+  const shown = cell.who.slice(0, 5);
+  const rest = cell.who.slice(5).reduce((n, p) => n + p.n, 0);
+  const rows = shown.map((p) => ({ label: p.name, value: plural(p.n, 'week') }));
+  if (rest) rows.push({ label: `${plural(cell.who.length - 5, 'other')}`, value: plural(rest, 'week') });
+  return {
+    title: team.name,
+    sub: `${row.key} · Proj avg`,
+    rows,
+    totals: cell.assumed
+      ? [{ label: 'Counted at the waiver floor', value: plural(cell.assumed, 'week') }]
+      : [],
+    total: { label: `Avg of ${plural(cell.n, 'week')}`, value: cell.avg },
+    foot: standingFoot(heat),
+    href: teamHref(team.id),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** ALL TEAMS, PROJ AVG — the Total as the slot averages it is the sum of. */
+function avgTotalCard(team, rows, got, heat) {
+  if (!got || got.total === null) return null;
+  const lines = rows.map((r) => {
+    const cell = got.slots.get(r.key);
+    if (!cell || cell.avg === null) return null;
+    const top = cell.who[0];
+    return {
+      slot: r.key,
+      name: top ? top.name : 'Waiver floor',
+      pts: round1(cell.avg),
+      note: cell.who.length > 1 ? `+${cell.who.length - 1} more` : '',
+    };
+  }).filter(Boolean);
+  if (!lines.length) return null;
+  const spec = teamWeekSpec({
+    team: team.name,
+    total: got.total,
+    starters: lines.map((l) => ({ slot: l.slot, name: l.name, pts: l.pts })),
+    href: teamHref(team.id),
+  });
+  lines.forEach((l, i) => { if (l.note && spec.rows[i]) spec.rows[i].note = l.note; });
+  spec.sub = 'Proj avg';
+  spec.total = { label: `Avg of ${plural(got.weeks, 'week')}`, value: got.total };
+  spec.foot = standingFoot(heat);
+  return spec;
+}
+
+/**
+ * A stat card left open over a table that has just been repainted belongs to a
+ * cell that no longer exists, and nothing would ever close it. A sheet is left
+ * alone (it was opened on purpose and has its own Close); a hover card stays
+ * only while the pointer or the focus is still on a figure that has one.
+ */
+function settlePops() {
+  const card = $('statCard');
+  if (!card || card.hidden || card.classList.contains('sheet')) return;
+  let live = false;
+  try {
+    live = !!document.querySelector(`[data-pop]:hover, [data-pop]:focus, th[${WEEK_HEAD_ATTR}]:hover`);
+  } catch { /* a harness without :hover — close it */ }
+  if (!live) hidePop();
 }
 
 /** "weeks 1–13" / "week 4" — an en dash, the way the rest of the site writes ranges. */
@@ -644,7 +930,59 @@ function weekHead(w, weeks, cls, title, tag = '') {
       '<span class="sr-only"> (playoffs)</span>'
     : `${w}${tag}`;
   const why = isPlayoff(w) ? `${title} A playoff week: shown, not counted in Avg.` : title;
-  return `<th data-sort class="${classes}" title="${why}">${label}</th>`;
+  // THE WEEK'S HEADING IS A CARD, NOT A `title` (2026-10-08): it says the same
+  // one line, and it is the connector to that week on Schedule. See
+  // `weekHeadCard` for who clicks what.
+  return `<th data-sort class="${classes}" ${WEEK_HEAD_ATTR}="${w}" data-def="${esc(why)}">` +
+    `${weekLink(w, label)}</th>`;
+}
+
+// ------------------------------------------- a week heading → that week on Schedule
+//
+// "A week heading → that week on Schedule" (docs/previews-plan.md), on a header
+// whose click already SORTS the column. Both are kept:
+//
+//   A MOUSE  the week's NUMBER is a link to `schedule.html?week=N`; a click
+//            anywhere else in the header sorts, as it always did. Hovering
+//            shows the heading's one line as a card.
+//   A FINGER the tap sorts, as it always did, and opens the card as a sheet
+//            whose button is the link — a week number is far too small a target
+//            to be a link under a thumb, and a tap meant to sort must never
+//            leave the page.
+//
+// So the card carries its `href` only for a finger (`weekHeadCard`), and the
+// number's own link is what a mouse follows.
+
+const WEEK_HEAD_ATTR = 'data-wkh';
+
+/** The week number as a link, with the rest of the heading's markup after it. */
+function weekLink(w, label) {
+  const n = String(w);
+  const rest = String(label).startsWith(n) ? String(label).slice(n.length) : null;
+  const href = weekHref(w);
+  if (rest === null || !href) return label;
+  // NOT `a.pref`: that class means "a player's page" to js/player-card.js.
+  return `<a class="wk-go" href="${esc(href)}" aria-label="Week ${n} on Schedule">${n}</a>${rest}`;
+}
+
+/** The card a week heading opens: built when asked for, from the heading itself. */
+function weekHeadCard(th) {
+  const w = Number(th.getAttribute(WEEK_HEAD_ATTR));
+  if (!Number.isFinite(w)) return null;
+  return {
+    title: `Week ${w}`,
+    sub: isPlayoff(w) ? 'playoffs' : w === state.week ? 'the week picked above' : '',
+    foot: th.getAttribute('data-def') || '',
+    href: coarsePointer() ? weekHref(w) : null,
+    hrefLabel: `Week ${w} matchups`,
+  };
+}
+
+/** Week headings open their card on this table. Safe to call again. */
+function wireWeekHeads(table) {
+  wirePops(table, { selector: `th[${WEEK_HEAD_ATTR}]`, card: weekHeadCard });
+  // On a finger the number's link must not fire before the sheet opens; pop.js
+  // prevents the tap's default, which is that link's navigation.
 }
 
 // ------------------------------------------------ the week run on the hover
@@ -676,11 +1014,14 @@ function weekHead(w, weeks, cls, title, tag = '') {
  * projections needs real layout, so this returns structure and the card in
  * js/player-card.js draws it.
  */
-function seasonRunData(index, p) {
+function seasonRunData(index, p, marks = null) {
   const weeks = spanWeeks();
   if (!index || !weeks.length) return null;
 
   return weekRun({
+    // `marks` (optional): `{ starts, splitAfter, startsNote }` — the weeks he
+    // makes the best lineup, bold on the card (rule 17: weeks to come only).
+    ...(marks || {}),
     heading: state.isDemo
       ? `Sample projections for ${weekRange(weeks)}`
       : `ESPN’s projection for ${weekRange(weeks)}`,
@@ -704,11 +1045,11 @@ function seasonRunData(index, p) {
  * the glance line — and hand back the key for `tipAttr`. `prefix` is the
  * table's own (`clearRuns`).
  */
-function nameCard(p, index, teamId, prefix) {
+function nameCard(p, index, teamId, prefix, marks = null) {
   const tier = injuryTier(p.injuryStatus);
   return registerRun({
     ident: `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}`,
-    run: seasonRunData(index, p),
+    run: seasonRunData(index, p, marks),
     href: p.playerId === null || p.playerId === undefined
       ? null
       : `waivers.html?player=${encodeURIComponent(p.playerId)}`,
@@ -716,6 +1057,26 @@ function nameCard(p, index, teamId, prefix) {
     glance: glanceFor(p),
   }, prefix);
 }
+
+/**
+ * THE WEEKS HE STARTS, for the card his row's week cells open (Tim, 2026-10-08:
+ * the classic player card "with start weeks marked"). `starters` is
+ * `weeklyStarters` — the one solve "Who to start" marks its cells from — so the
+ * bold week numbers on the card and the marked cells in that table are the
+ * same answer. The card bolds weeks to come only (`splitAfter`, rule 17).
+ */
+function startMarks(p, starters, hist, team) {
+  const weeks = spanWeeks();
+  const past = weeks.filter((w) => hist.has(w));
+  return {
+    starts: weeks.map((w) => (starters.has(w) ? starters.get(w).has(p.playerId) : null)),
+    splitAfter: past.length ? past[past.length - 1] : null,
+    startsNote: `weeks he makes ${team ? `${team.name}’s` : 'this team’s'} best lineup`,
+  };
+}
+
+/** A week cell given its man's card: a click (or Enter) opens his Players row. */
+const withPlayerCard = (td, key) => withCard(td, tipAttr(key, { go: true }));
 
 /** How a zero in this man's week reads: see `zeroKind` in js/player-card.js. */
 function zeroOf(v, week, p, status = p.injuryStatus) {
@@ -1099,6 +1460,7 @@ async function useDemo() {
   // legend says.
   state.floors = null;
   state.floorWeek = null;
+  state.games = null;           // the sample league has no schedule, so no record
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
   state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
@@ -1147,6 +1509,7 @@ async function useLive() {
   const byesRead = loadByes();
   try {
     const schedule = await fetchSchedule();
+    state.games = Array.isArray(schedule.games) ? schedule.games : null;
     scheduleWeeks = schedule.weeks || [];
     poWeeks = leaguePlayoffWeeks(schedule);
     // A week is played once EVERY game in it is. A matchup can be final before
@@ -1158,6 +1521,7 @@ async function useLive() {
       .sort((a, b) => a - b);
   } catch {
     state.playedWeeks = [];
+    state.games = null;
   }
   state.byes = await byesRead;
   if (state.source !== 'live') return;   // the reader went back to demo meanwhile
@@ -1287,10 +1651,14 @@ function requestedRoster() {
     const q = new URLSearchParams((window.location && window.location.search) || '');
     const team = q.get('team') || '';
     const week = q.get('week') || '';
-    if (!/^\d+$/.test(team) || !/^\d+$/.test(week)) return null;
+    // THE TEAM ALONE IS A LINK TOO (2026-10-08): `?team=7` is that squad on the
+    // week the page would have opened on anyway — what a team card's click
+    // means when it is not about one week. A week that is not a number is not
+    // "no week": that link is malformed and is ignored whole, as before.
+    if (!/^\d+$/.test(team) || (week !== '' && !/^\d+$/.test(week))) return null;
     return {
       team: Number(team),
-      week: Number(week),
+      week: week === '' ? null : Number(week),
       on: null,        // the source it has been settled against, hit or miss
       hit: false,      // whether that source had both the week and the team
       back: null,      // the week the page would have opened on without it
@@ -1313,7 +1681,7 @@ function aimAtLanding(fallback) {
   l.hit = false;
   l.follow = false;
   l.back = fallback;
-  return state.weeks.includes(l.week) ? l.week : fallback;
+  return l.week !== null && state.weeks.includes(l.week) ? l.week : fallback;
 }
 
 /**
@@ -1332,7 +1700,8 @@ function settleLanding() {
   if (!teams.length) return false;
 
   l.on = state.source;
-  l.hit = state.week === l.week && teams.some((t) => t.id === l.team);
+  // No week in the link: whichever week the page opened on is the right one.
+  l.hit = (l.week === null || state.week === l.week) && teams.some((t) => t.id === l.team);
   if (l.hit) {
     chooseTeam(l.team, false);
     l.follow = !l.touched;
@@ -1376,7 +1745,8 @@ function endLanding() {
   if (!l) return;
   // The week it opened on is the week they are now working in — picked this
   // visit, by following the link — so a later change of source keeps it.
-  if (l.hit && l.on === state.source) state.weekPicked = true;
+  // A team-only link chose no week, so it leaves nothing picked.
+  if (l.hit && l.on === state.source && l.week !== null) state.weekPicked = true;
   state.landing = null;
 }
 
@@ -1465,8 +1835,8 @@ function renderGridHead(table, benchCols, slots = gridSlots()) {
 
   table.querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort>Team</th>
-       ${slots.map((s) => `<th data-sort>${esc(s.key)}</th>`).join('')}
+       <th class="name" data-sort title="${TEAM_HEAD}">Team</th>
+       ${slots.map((s) => `<th data-sort title="Each team’s ${esc(s.key)} this week, and what he is projected.">${esc(s.key)}</th>`).join('')}
        <th class="grid-total grouped" data-sort title="The ${countWord(slots.length)} spots to the ` +
          `left added up, each counted at no less than the waiver floor for that spot — the same ` +
          `basis as the Proj avg Total.">Total</th>
@@ -1523,7 +1893,7 @@ function renderAvgGrid(grid) {
 
   table.querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort>Team</th>
+       <th class="name" data-sort title="${TEAM_HEAD}">Team</th>
        ${rows.map((r) => `<th data-sort title="What this squad's ${esc(r.key)} is worth in an ` +
          `average week: that slot's projection in every regular-season week read, averaged. ` +
          `Whoever fills it — it is a slot, not a man.">${esc(r.key)}</th>`).join('')}
@@ -1583,12 +1953,13 @@ function renderAvgGrid(grid) {
       const th = heatOf(total, totalScale, { what: 'the other squads’ lineups' });
       return `
       <tr class="${cls}" data-team="${t.id}">
-        <td class="name">${esc(t.name)}</td>
+        ${teamNameCell(t, 'ov')}
         ${cells}
-        <td class="grid-total grouped${th ? ` ${th.cls}` : ''}"` +
+        ${withCard(`<td class="grid-total grouped${th ? ` ${th.cls}` : ''}"` +
         `${total === null ? '' : ` data-v="${total}"`} ` +
         `title="${esc(totalAvgLabel(t, got) + (th ? ` ${th.words}` : ''))}">` +
-        `<strong>${fmt(total)}</strong>${heatMarkHtml(th)}</td>
+        `<strong>${fmt(total)}</strong>${heatMarkHtml(th)}</td>`,
+        cardAttr(avgTotalCard(t, rows, got, th), 'ov'))}
       </tr>`;
     })
     .join('');
@@ -1695,9 +2066,12 @@ function avgCell(cell, row, team, scale) {
   // together because the scale owns the background and `assumed` owns the text.
   const h = heatOf(cell.avg, scale, { what: `the other squads’ ${row.key}` });
 
-  return `<td class="${base}${cell.assumed ? ' assumed' : ''}${h ? ` ${h.cls}` : ''}" ` +
+  // THE CARD says it as rows (who, for how many weeks, the floor, the rank);
+  // the sentence stays as the cell's `aria-label`. Not a tab stop: ten of these
+  // a row, and the row's Total and name are.
+  return withCard(`<td class="${base}${cell.assumed ? ' assumed' : ''}${h ? ` ${h.cls}` : ''}" ` +
     `data-v="${cell.avg}" title="${esc(says + (h ? ` ${h.words}` : ''))}">` +
-    `${fmt(cell.avg)}${heatMarkHtml(h)}</td>`;
+    `${fmt(cell.avg)}${heatMarkHtml(h)}</td>`, cardAttr(slotAvgCard(team, row, cell, h), 'ov', false));
 }
 
 /** The Total cell's sentence — it is the one number that ties the two panels together. */
@@ -1876,15 +2250,16 @@ function renderGrid(grid) {
             : '.');
       return `
       <tr class="${cls}" data-team="${t.id}">
-        <td class="name">${esc(t.name)}</td>
+        ${teamNameCell(t, 'ov')}
         ${slots.map((s) => gridCell(row[s.key], {
           ...cellOpts,
           scale: colScale.get(s.key),
           what: `a ${s.key} in week ${state.week}, across the league`,
         })).join('')}
-        <td class="grid-total grouped${th ? ` ${th.cls}` : ''}" data-v="${total ?? ''}" ` +
+        ${withCard(`<td class="grid-total grouped${th ? ` ${th.cls}` : ''}" data-v="${total ?? ''}" ` +
         `title="${esc(totalSays + (th ? ` ${th.words}` : ''))}">` +
-        `<strong>${fmt(total)}</strong>${heatMarkHtml(th)}</td>
+        `<strong>${fmt(total)}</strong>${heatMarkHtml(th)}</td>`,
+        cardAttr(gridTotalCard(t, row, slots, total, th), 'ov'))}
         ${benchCells}
       </tr>`;
     })
@@ -1954,9 +2329,11 @@ function renderOverview() {
   // below registers cards of its own and is not being repainted here, and
   // clearing the lot from in here left its `data-tip`s pointing at nothing.
   clearRuns(grid.id);
+  clearPops('ov');
   renderMeasureToggle(grid);
   renderGrid(grid);
   renderOverviewNote(grid);
+  settlePops();
   // NOT hideTip() before the repaint any more. This runs once per batch while
   // the season loads, and closing the card each time made one opened in the
   // first seconds vanish under the reader. The card finds its man again among
@@ -2058,8 +2435,7 @@ function renderOverviewNote(grid) {
     // asked for it, so the note quotes the rule that makes it honest rather
     // than just describing the colours.
     parts.push(
-      `<strong>Green is a better number than the other squads have and red is a worse one</strong>, ` +
-      `deepening in four steps and reaching full colour one standard deviation out. ` +
+      `<strong>Green is a better number than the other squads have and red is a worse one</strong>. ` +
       describeHeatPerColumn({ group: 'column', what: 'the other nine squads' })
     );
 
@@ -2129,8 +2505,7 @@ function renderOverviewNote(grid) {
   // of it — otherwise an uncoloured "Bye" in a coloured column reads as a bug.
   parts.push(
     `<strong>Green is a better number than the other squads have in that column this week and red ` +
-    `is a worse one</strong>, deepening in four steps and reaching full colour one standard ` +
-    `deviation out. ` +
+    `is a worse one</strong>. ` +
     describeHeatPerColumn({ group: 'column', what: 'the other nine squads' })
   );
 
@@ -2456,19 +2831,88 @@ function renderRoster() {
     ? sumOf(starters, (p) => { const l = weekLine(p); return diff(l.actual, l.proj); })
     : diff(actualTotal, projTotal);
 
+  // EACH TILE IS A NUMBER AND THE CARD SAYS WHAT IT IS MADE OF (Tim,
+  // 2026-10-08). No link on any of them: the roster they describe is this one.
+  clearPops('rg');
+  const inOrder = [...starters].sort((a, b) => (SLOT_ORDER[a.slotId] ?? 40) - (SLOT_ORDER[b.slotId] ?? 40));
+  const lineupCard = (total, side, sub) => {
+    if (total === null) return null;
+    const spec = teamWeekSpec({
+      team: team.name,
+      total,
+      starters: inOrder.map((e) => {
+        const l = weekLine(e.p);
+        return {
+          slot: e.slot,
+          name: e.p.name,
+          pts: typeof l[side] === 'number' ? round1(l[side]) : null,
+          proj: side === 'actual' && typeof l.proj === 'number' ? round1(l.proj) : null,
+        };
+      }).filter((s) => s.pts !== null),
+    });
+    spec.sub = sub;
+    return spec.rows.length ? spec : null;
+  };
+  const countCard = (list, what) => {
+    if (!list.length) return null;
+    const by = new Map();
+    for (const e of list) by.set(posLabel(e.p), (by.get(posLabel(e.p)) || 0) + 1);
+    return {
+      title: team.name,
+      sub: what,
+      rows: [...by].map(([pos, n]) => ({ label: pos, value: String(n) })),
+      total: { label: what, value: String(list.length) },
+    };
+  };
+  const gridSlotsNow = leagueSlots();
+  const gridRowsNow = gridSlotsNow ? slotRows(gridSlotsNow) : [];
+  const avgGot = gridRowsNow.length
+    ? teamSlotAverages(gridRowsNow, gridSlotsNow, spanWeeks()).get(team.id)
+    : null;
+  const avgCard = avgTotalCard(team, gridRowsNow, avgGot, null);
+  if (avgCard) { avgCard.href = null; avgCard.hrefLabel = null; }
+  const benchScored = benched
+    .map((e) => ({ e, v: weekLine(e.p).actual }))
+    .filter((x) => typeof x.v === 'number');
   const glance = [
-    ['Week', state.week],
-    ['Proj avg', fmt(avgTotal)],
-    ['Projected', fmt(projTotal)],
-    ['Actual', fmt(actualTotal)],
-    ['Diff', signed(diffTotal)],
-    ['Bench points', fmt(benchActual)],
-    ['Starters', starters.length],
-    ['Bench', benched.length],
+    ['Week', state.week, null],
+    ['Proj avg', fmt(avgTotal), avgCard],
+    ['Projected', fmt(projTotal), lineupCard(projTotal, 'proj', `Week ${state.week} · projected`)],
+    ['Actual', fmt(actualTotal), lineupCard(actualTotal, 'actual',
+      `Week ${state.week} · ${midWeek ? 'scored so far' : 'scored'}`)],
+    ['Diff', signed(diffTotal), diffTotal === null ? null : {
+      title: team.name,
+      sub: `Week ${state.week} · Diff`,
+      rows: [
+        { label: 'Actual', value: actualTotal },
+        { label: 'Projected', note: midWeek ? 'finished players only' : '',
+          value: midWeek ? round1(actualTotal - diffTotal) : projTotal },
+      ],
+      total: { label: 'Diff', value: signed(diffTotal) },
+    }],
+    ['Bench points', fmt(benchActual), benchScored.length ? {
+      title: team.name,
+      sub: `Week ${state.week} · bench`,
+      rows: benchScored.map(({ e, v }) => ({ lead: posLabel(e.p), label: e.p.name, value: round1(v) })),
+      total: benchActual,
+    } : null],
+    ['Starters', starters.length, countCard(starters, 'Starters')],
+    ['Bench', benched.length, countCard(benched, 'Bench')],
   ];
   $('teamGlance').innerHTML = glance
-    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+    .map(([k, v, card]) => `<div class="stat"${cardAttr(card, 'rg')}><div class="k">${k}</div>` +
+      `<div class="v">${v}</div></div>`)
     .join('');
+
+  // THE COLOUR (Tim, 2026-10-08): a man against the league's STARTERS AT HIS
+  // POSITION, never down the column — a column here runs through every
+  // position at once, and that is what kept this table plain until now.
+  const tint = rosterScales();
+  const heatTd = (text, v, scale, what, attrs = '') => {
+    const h = typeof v === 'number' ? heatOf(v, scale, { what }) : null;
+    return `<td${h ? ` class="${h.cls}"` : ''}${attrs}${typeof v === 'number' ? ` data-v="${v}"` : ''}` +
+      `${h ? ` title="${esc(h.words)}"` : ''}>${text}${heatMarkHtml(h)}</td>`;
+  };
 
   // Only this table's cards: the grids above register their own under 'g'.
   clearRuns('r');
@@ -2514,11 +2958,17 @@ function renderRoster() {
           playerRef(p, esc(p.name), `${p.name}. Click to ${OPENS}.`, 'aria-label')}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
-        <td>${fmt(line.proj)}</td>
-        <td>${open ? '' : fmt(line.actual)}</td>
+        ${heatTd(fmt(line.proj), typeof line.proj === 'number' ? round1(line.proj) : null,
+          round1(line.proj || 0) === 0 ? null : tint.proj(p.position),
+          `a starting ${posLabel(p)} around the league in week ${state.week}`)}
+        ${heatTd(open ? '' : fmt(line.actual),
+          open || typeof line.actual !== 'number' ? null : round1(line.actual),
+          tint.actual(p.position), `a starting ${posLabel(p)} around the league in week ${state.week}`)}
         <td data-v="${d === null ? '' : d}">${open ? '' : signed(d)}</td>
-        <td>${fmt(avg)}</td>
-        <td>${fmt(p.seasonProjected, 0)}</td>
+        ${heatTd(fmt(avg), avg, avg ? tint.avg(p.position) : null, `a starting ${posLabel(p)} around the league, per week`)}
+        ${heatTd(fmt(p.seasonProjected, 0),
+          typeof p.seasonProjected === 'number' && p.seasonProjected > 0 ? p.seasonProjected : null,
+          tint.season(p.position), `a starting ${posLabel(p)} around the league, over the season`)}
         <td class="own" data-v="${typeof p.percentOwned === 'number' ? p.percentOwned : ''}">${own}</td>
         ${injuryCell(p.injuryStatus)}
       </tr>`;
@@ -2544,6 +2994,54 @@ function renderRoster() {
   renderRosterNote(view, team);
   resort(table);
   reopenTip();
+  settlePops();
+}
+
+/**
+ * THE ROSTER DETAIL'S SCALES, by position: the league's starters at it.
+ *
+ * LIKE WITH LIKE, from the week already on screen: every squad's starters at
+ * the position in the week picked, each at the SAME number the column prints
+ * for the man being coloured. Measured on league 1241838 before this: put on
+ * the Player rows' pooled scale (`playerScales` — a squad's best-lineup slot
+ * averaged over the season, about 18 for a quarterback), Avg/wk, which is the
+ * season projection over 17 games with the bye in it (about 14), read "lowest
+ * of 11" for every starter on the page. Two different statistics.
+ *
+ *   proj    their projections for the week picked.
+ *   actual  their scores. None while the week is being played (part scores)
+ *           and none before it.
+ *   avg     their Avg/wk.
+ *   season  their Season total.
+ */
+function rosterScales() {
+  const none = () => null;
+  const teams = state.data ? state.data.teams : [];
+  if (!teams.length) return { proj: none, actual: none, avg: none, season: none };
+  const starters = teams.flatMap((t) => t.starters || []);
+  const final = state.playedWeeks.includes(state.week) && !weekLive(state.week);
+  // The tenth the column prints, so a rank is counted on what a reader sees.
+  const num1 = (v) => (typeof v === 'number' ? round1(v) : null);
+  const scaleOf = (read, fmtAs) => {
+    const seen = new Map();
+    return (pos) => {
+      if (!seen.has(pos)) {
+        const sc = heatScale(starters.filter((p) => p.position === pos).map(read)
+          .filter((v) => typeof v === 'number'));
+        seen.set(pos, sc && fmtAs ? { ...sc, fmt: fmtAs } : sc);
+      }
+      return seen.get(pos);
+    };
+  };
+  return {
+    // A projected 0 is a bye or a man ruled out: a state, not a number on the
+    // scale (the grids above leave those out for the same reason).
+    proj: scaleOf((p) => num1(weekLine(p).proj) || null),
+    actual: final ? scaleOf((p) => (p.done === false ? null : num1(weekLine(p).actual))) : none,
+    avg: scaleOf((p) => avgWeek(p) || null),
+    season: scaleOf((p) => (typeof p.seasonProjected === 'number' && p.seasonProjected > 0
+      ? p.seasonProjected : null), (n) => Number(n).toFixed(0)),
+  };
 }
 
 /**
@@ -2588,7 +3086,20 @@ function bestLineupLine(team, view, projTotal, cards = new Map()) {
   const move = ins.length
     ? `start ${names(ins)}${outs.length ? ` over ${names(outs)}` : ''}`
     : 'fill the empty slot';
-  return `Best lineup for ${week}: ${move}, <span class="pos">+${gain.toFixed(1)}</span>`;
+  // THE GAIN, as the two totals it is the difference of (Tim, 2026-10-08:
+  // "best lineup 116.0 vs set 87.9").
+  clearPops('rb');
+  const set = typeof projTotal === 'number' ? projTotal : 0;
+  const card = cardAttr({
+    title: team.name,
+    sub: `Week ${state.week} · best lineup`,
+    rows: [
+      { label: 'Best lineup', value: round1(best.total) },
+      { label: 'Lineup as set', value: set },
+    ],
+    total: { label: 'Gain', value: `+${gain.toFixed(1)}` },
+  }, 'rb');
+  return `Best lineup for ${week}: ${move}, <span class="pos"${card}>+${gain.toFixed(1)}</span>`;
 }
 
 /**
@@ -2624,18 +3135,16 @@ function renderRosterNote(view, team) {
     );
   }
 
-  // WHY THIS TABLE IS NOT ON THE RED/GREEN SCALE. It is the one table on the
-  // page where the rule the scale rests on rules it out outright, so it is
-  // worth saying on screen: every other numeric table here is coloured, and a
-  // reader who does not know why this one is not will think it was missed.
+  // WHAT THE RED/GREEN MEASURES HERE (Tim, 2026-10-08). Never down the column —
+  // a column of this table runs through every position at once — so it is said
+  // on screen who each man IS measured against.
   parts.push(
-    `<strong>Nothing here is on the red/green scale</strong>, and it is the one table on this page ` +
-    `where that is a rule rather than a choice: a column down this table runs through every ` +
-    `position at once, so a quarterback&rsquo;s 22 would be sitting in the same column as a ` +
-    `kicker&rsquo;s 8. That is not a comparison, and colouring it would paint every kicker on the ` +
-    `squad red for being a kicker. The scale needs a column of one kind of number &mdash; one ` +
-    `lineup slot across the league &mdash; which is what the grid at the top of the page and ` +
-    `Season by week both are.`
+    `<strong>The red and green</strong> on Projected, Actual, Avg/wk and Season total measure each ` +
+    `man against the league&rsquo;s <strong>starters at his own position</strong> &mdash; never ` +
+    `against the other numbers in the column, where a quarterback&rsquo;s 22 sits above a ` +
+    `kicker&rsquo;s 8. Each column is compared with the same number for every squad&rsquo;s ` +
+    `starters in the week picked. So a bench man usually reads red: ` +
+    `he is below a starter. Actual takes no colour until the week is final. Diff is left plain.`
   );
 
   parts.push(
@@ -3991,7 +4500,7 @@ function paintTotals() {
   const avgScale = shownAvg.total;
 
   table.querySelector('thead').innerHTML = `${historyGroupRow(weeks, hist)}<tr>` +
-    `<th class="name" data-sort>Team</th>` +
+    `<th class="name" data-sort title="${TEAM_HEAD}">Team</th>` +
     `<th class="grouped" data-sort title="${hist.size ? AVG_HEAD_HISTORY : AVG_HEAD}">Avg</th>` +
     weeks.map((w) => weekHead(w, weeks,
       `wk${w === state.week ? ' now' : ''}${w === fut ? ' fut-start' : ''}`,
@@ -4003,15 +4512,21 @@ function paintTotals() {
       hist.has(w) && weekLive(w) ? LIVE_TAG : '')).join('') + `</tr>`;
 
   const avgs = [];
+  const slots = leagueSlots();
+  // Only this table's cards (`clearPops`): the grid above keeps its own.
+  clearPops('wt');
   bodyOf(table).innerHTML = teams.map((t) => {
     const vals = weeks.map((w) => (totals.get(w) || new Map()).get(t.id) ?? null);
     const avg = (shownAvg.byTeam.get(t.id) || { total: null }).total;
     avgs.push(avg);
     const ah = heatOf(avg, avgScale, { what: 'the other squads’ lineups' });
-    return `<tr>` +
-      `<td class="name" data-v="${esc(t.name)}">${esc(t.name)}</td>` +
+    const counted = regularCount(vals.map((v, i) => (partScores(weeks[i], hist) ? null : v)), weeks);
+    // `data-team`: a click on the row loads that team, as on the grid above.
+    return `<tr data-team="${t.id}">` +
+      teamNameCell(t, 'wt', true) +
       `<td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`} ` +
-      `title="${esc(bandAvgLabel(avg, t, ah, hist.size > 0))}">${fmt(avg)}${heatMarkHtml(ah)}</td>` +
+      `title="${esc(avg === null ? bandAvgLabel(avg, t, ah, hist.size > 0) : avgLine(counted, ah))}">` +
+      `${fmt(avg)}${heatMarkHtml(ah)}</td>` +
       vals.map((v, i) => {
         const w = weeks[i];
         const past = hist.has(w);
@@ -4021,11 +4536,13 @@ function paintTotals() {
             : `the other squads’ lineups in week ${w}`,
         });
         const says = past ? historyTotalLabel(v, w, weekLive(w)) : totalLabel(v, w, rows.length);
-        return withFut(withPo(
+        // THE TEAM-WEEK CARD: the total as the starters it adds up.
+        const card = cardAttr(sheetWeekCard(t, w, v, h, rows, slots, weeks), 'wt', false);
+        return withFut(withPo(withCard(
           `<td class="wk${past ? ' hist' : ''}${w === state.week ? ' now' : ''}${h ? ` ${h.cls}` : ''}"` +
           `${v === null ? '' : ` data-v="${v}"`} ` +
           `title="${esc(`${t.name}: ` + says + (h ? ` ${h.words}` : ''))}">` +
-          `${fmt(v)}${heatMarkHtml(h)}</td>`, w, weeks), w, fut);
+          `${fmt(v)}${heatMarkHtml(h)}</td>`, card), w, weeks), w, fut);
       }).join('') +
       `</tr>`;
   }).join('');
@@ -4058,6 +4575,7 @@ function paintTotals() {
       `</tr>`;
   }
   resort(table);
+  settlePops();
 }
 
 function paintSeason() {
@@ -4149,10 +4667,12 @@ function paintSeason() {
   // around the rows — the head's label and line, the band, the note — is the
   // same code either way, so the band under them shows the same numbers.
   const menScales = rowsMode() === 'player' ? playerScales(rows, slots, weeks, hist, real, mode) : null;
+  // The weeks each man makes the best lineup, for the card on his row.
+  const menStarts = rowsMode() === 'player' ? weeklyStarters(team.id, slots) : null;
   $('seasonSlots').innerHTML = rowsMode() === 'player'
     ? playerRows(team, weeks, index, hist)
       .map((row, i, all) => playerRowHtml(row, team, weeks, index, hist, fut, menScales,
-        i > 0 && !row.starter && all[i - 1].starter)).join('')
+        i > 0 && !row.starter && all[i - 1].starter, menStarts)).join('')
     : rows
     .map((row) => {
       const values = weeks.map((w) => {
@@ -4202,12 +4722,19 @@ function paintSeason() {
       const avg = shownAvg.slots.get(row.key) ?? null;
       const bar = bars.get(row.key);
       const ah = avgHeatOf(avg, row, avgScales);
+      // How many numbers that mean is OF — the regular-season cells of this
+      // row that show one, counted the way `shownAverages` counts them.
+      const counted = regularCount(weeks.map((w, i) => {
+        if (hist.has(w)) return drawn[i] ? historyValue(drawn[i].p, mode) : null;
+        const fill = byWeek.get(w);
+        return fill ? assessed(fill.get(row.key) || null, row).value : null;
+      }), weeks);
 
       return `
       <tr data-slot="${esc(row.key)}">
         <td class="name" data-v="${row.order}"><span class="slot-tag">${esc(row.key)}</span></td>
         <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`} ` +
-        `title="${esc(avgLabel(avg, row, team, ah, hist.size > 0))}">${fmt(avg)}${heatMarkHtml(ah)}</td>
+        `title="${esc(avg === null ? avgLabel(avg, row, team, ah, hist.size > 0) : avgLine(counted, ah))}">${fmt(avg)}${heatMarkHtml(ah)}</td>
         ${drawn.map((e, i) => withFut(withPo(hist.has(weeks[i])
           ? historyCell(e || null, row, weeks[i], histScale(weeks[i], row))
           : slotCell(e || null, row, weeks[i], bar, index), weeks[i], weeks), weeks[i], fut)).join('')}
@@ -4237,12 +4764,17 @@ function paintSeason() {
   const totalAvg = shownAvg.total;
   const totals = weeks.map((w) => (shown.get(w) || new Map()).get(team.id) ?? null);
   const bandAvgHeat = heatOf(totalAvg, bandAvgScale, { what: 'the other squads’ lineups' });
+  const bandCounted = regularCount(totals.map((t, i) => (partScores(weeks[i], hist) ? null : t)), weeks);
+  // Only this band's cards; the rows above carry player cards or none at all.
+  clearPops('sb');
   $('seasonTotals').innerHTML = `
     <tr class="split-row">
       <td class="name split-label">Starting lineup</td>
       <td class="avg grouped split-total${bandAvgHeat ? ` ${bandAvgHeat.cls}` : ''}"` +
       `${totalAvg === null ? '' : ` data-v="${totalAvg}"`} ` +
-      `title="${esc(bandAvgLabel(totalAvg, team, bandAvgHeat, hist.size > 0))}">` +
+      `title="${esc(totalAvg === null
+        ? bandAvgLabel(totalAvg, team, bandAvgHeat, hist.size > 0)
+        : avgLine(bandCounted, bandAvgHeat))}">` +
       `${fmt(totalAvg)}${heatMarkHtml(bandAvgHeat)}</td>
       ${totals.map((t, i) => {
         // ONE WEEK COLUMN IS ONE COMPARISON GROUP: this squad's week-9 lineup
@@ -4260,12 +4792,16 @@ function paintSeason() {
         const says = past
           ? historyTotalLabel(t, weeks[i], weekLive(weeks[i]))
           : totalLabel(t, weeks[i], rows.length);
-        return withFut(withPo(
+        // THE TEAM-WEEK CARD: the total broken into the starters it adds up,
+        // and a click opens that week's roster. A week with no total keeps its
+        // one line, which is all there is to say about it.
+        const card = cardAttr(sheetWeekCard(team, weeks[i], t, h, rows, slots, weeks), 'sb', false);
+        return withFut(withPo(withCard(
           `<td class="wk split-total${past ? ' hist' : ''}${weeks[i] === state.week ? ' now' : ''}` +
           `${h ? ` ${h.cls}` : ''}"` +
           `${t === null ? '' : ` data-v="${t}"`} ` +
           `title="${esc(says + (h ? ` ${h.words}` : ''))}">` +
-          `${fmt(t)}${heatMarkHtml(h)}</td>`, weeks[i], weeks), weeks[i], fut);
+          `${fmt(t)}${heatMarkHtml(h)}</td>`, card), weeks[i], weeks), weeks[i], fut);
       }).join('')}
     </tr>`;
 
@@ -4279,6 +4815,7 @@ function paintSeason() {
   // And an open card finds its cell again among the new ones, for the same
   // reason and by the same route the grids use.
   reopenTip();
+  settlePops();
 
   // Driven from here rather than from each of renderSeason's ten call sites:
   // the two panels read the same week cache for the same team, so every reason
@@ -4575,7 +5112,7 @@ function playerHistoryCell(p, week, mode, teamId, start = null) {
 }
 
 /** One Player row: name and position, Avg, then history and the weeks to come. */
-function playerRowHtml(row, team, weeks, index, hist, fut, scales = null, benchStart = false) {
+function playerRowHtml(row, team, weeks, index, hist, fut, scales = null, benchStart = false, starters = null) {
   const p = row.p;
   const mode = historyMode();
   const pos = posLabel(p);
@@ -4584,18 +5121,26 @@ function playerRowHtml(row, team, weeks, index, hist, fut, scales = null, benchS
   const heatAt = (w, i) => (!scales ? null : hist.has(w)
     ? heatOf(row.shown[i], scales.week(w, p.position), { what: `a starting ${pos} around the league in week ${w}` })
     : heatOf(row.shown[i], scales.ahead.get(p.position), { what: `a starting ${pos} across the league` }));
-  const cells = weeks.map((w, i) => withFut(withPo(withHeat(hist.has(w)
-    ? playerHistoryCell(p, w, mode, team.id)
-    : seasonCell(row.ahead[i], w, p, w === state.week, null, seasonStatus(index, w, p)),
-  heatAt(w, i)), w, weeks), w, fut)).join('');
+  // ONE CARD FOR THE ROW (Tim, 2026-10-08): his name and every week cell open
+  // the classic player card, with the weeks he makes the best lineup in bold.
+  // The sentence a cell's `title` used to carry is its `aria-label` now.
+  const card = nameCard(p, index, team.id, 's', starters ? startMarks(p, starters, hist, team) : null);
+  const cells = weeks.map((w, i) => {
+    const td = withHeat(hist.has(w)
+      ? playerHistoryCell(p, w, mode, team.id)
+      : seasonCell(row.ahead[i], w, p, w === state.week, null, seasonStatus(index, w, p)),
+    heatAt(w, i));
+    // A week not read (or refused) says so itself; there is no man in it yet.
+    return withFut(withPo(state.seasonWeeks.has(w) ? withPlayerCard(td, card) : td, w, weeks), w, fut);
+  }).join('');
   const ah = scales
     ? heatOf(row.avg, scales.avg.get(p.position), { what: `a squad’s starting ${pos}, on average` })
     : null;
   return `
       <tr data-player="${esc(p.playerId)}"${benchStart ? ' class="bench-start"' : ''}>
-        ${playerNameCell(row, nameCard(p, index, team.id, 's'))}
+        ${playerNameCell(row, card)}
         <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
-        `title="${esc(`${p.name}: the mean of the regular-season numbers shown in his row.${ah ? ` ${ah.words}` : ''}`)}">` +
+        `title="${esc(avgLine(regularCount(row.shown, weeks), ah))}">` +
         `${fmt(row.avg)}${heatMarkHtml(ah)}</td>
         ${cells}
       </tr>`;
@@ -5160,6 +5705,8 @@ function starterRows(team, weeks, index, starters, hist = new Set()) {
       return {
         p,
         values,
+        shown,
+        startsIn,
         held: onRosterNow.has(p.playerId),
         avg: regularAvg(shown, weeks),
         // Out of the weeks actually READ, never out of all of them: a squad
@@ -5216,9 +5763,9 @@ function renderStartersHead(weeks, hist, fut) {
   $('startersTable').querySelector('thead').innerHTML =
     `${historyGroupRow(weeks, hist, playerHistorySays(proj), 6)}<tr>
        <th class="left" data-sort title="How deep he is at his own position on this squad, by the Avg beside it.">Depth</th>
-       <th class="name" data-sort>Player</th>
-       <th class="left" data-sort>Pos</th>
-       <th class="left" data-sort>NFL</th>
+       <th class="name" data-sort title="Everyone who held this position for this team in the weeks shown.">Player</th>
+       <th class="left" data-sort title="His position.">Pos</th>
+       <th class="left" data-sort title="His NFL team.">NFL</th>
        <th class="grouped" data-sort title="${PLAYER_AVG_HEAD}">Avg</th>
        <th data-sort title="How many of the weeks read he is in the best legal lineup for, playoff weeks included.">Starts</th>
        ${cols}
@@ -5263,9 +5810,27 @@ function renderStarters() {
 
   // Only this table's cards: the other tables register their own.
   clearRuns('w');
+  clearPops('ws');
+  // THE COLOUR (Tim, 2026-10-08): each number against the league's starters at
+  // his position — the same week in a week played, the weeks to come pooled
+  // ahead. It is `playerScales`, the scale the sheet's Player rows use, so one
+  // man's week is one colour in both tables. The best-lineup mark sits on top.
+  const slotRowsNow = slots ? slotRows(slots) : [];
+  const scales = slotRowsNow.length
+    ? playerScales(slotRowsNow, slots, weeks, hist, realLineups(slotRowsNow, weeks), mode)
+    : null;
   tbody.innerHTML = rows
     .map((row) => {
       const p = row.p;
+      const pos = posLabel(p);
+      const heatAt = (w, i) => (!scales ? null : hist.has(w)
+        ? heatOf(row.shown[i], scales.week(w, p.position), { what: `a starting ${pos} around the league in week ${w}` })
+        : heatOf(row.shown[i], scales.ahead.get(p.position), { what: `a starting ${pos} across the league` }));
+      // THE SAME CARD AS THE ROSTER DETAIL (Tim, 2026-10-08): his projection
+      // and his score, week by week, on the name AND on every week cell, with
+      // the weeks he starts in bold. The card is the name's words now, so `who`
+      // moves to the link's aria-label — no title beside a card.
+      const card = nameCard(p, index, team.id, 'w', startMarks(p, starters, hist, team));
       const cells = row.values
         .map((v, i) => {
           const week = weeks[i];
@@ -5274,13 +5839,32 @@ function renderStarters() {
             slotId === undefined ? null : { slotId, flex: FLEX_SLOTS.has(slotId) };
           // A history week is what he scored, on whichever squad held him —
           // the very cell his Player row has on the sheet above.
-          return withFut(withPo(hist.has(week)
+          const td = withHeat(hist.has(week)
             ? playerHistoryCell(p, week, mode, team.id, start)
             : seasonCell(v, week, p, week === state.week, start, seasonStatus(index, week, p),
-              seasonDone(index, week, p)),
-          week, weeks), week, fut);
+              seasonDone(index, week, p)), heatAt(week, i));
+          return withFut(withPo(state.seasonWeeks.has(week) ? withPlayerCard(td, card) : td,
+            week, weeks), week, fut);
         })
         .join('');
+      const ah = scales
+        ? heatOf(row.avg, scales.avg.get(p.position), { what: `a squad’s starting ${pos}, on average` })
+        : null;
+      // STARTS, as the weeks it counts: which, in what slot, at what number.
+      const startsCard = row.starts > 0 ? cardAttr({
+        title: p.name,
+        sub: 'Starts',
+        head: ['Wk', 'Slot', 'Pts'],
+        rows: row.startsIn.map((w) => {
+          const slotId = starters.get(w).get(p.playerId);
+          return {
+            lead: w,
+            label: FLEX_SLOTS.has(slotId) ? 'FLEX' : (espn.SLOT_LABELS[slotId] || ''),
+            value: row.shown[weeks.indexOf(w)],
+          };
+        }),
+        total: { label: 'In the best lineup', value: `${row.starts} of ${plural(row.decided, 'week')}` },
+      }, 'ws') : '';
 
       const cls = [row.starts === 0 ? 'never' : '', row.held ? '' : 'gone']
         .filter(Boolean).join(' ');
@@ -5289,11 +5873,6 @@ function renderStarters() {
         : `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam} — not on this ` +
           `roster in week ${state.week}. He is here because he filled a lineup spot in one of the ` +
           `weeks shown, and a marked week with no row to put it on would read as an empty slot.`;
-      // THE SAME CARD AS THE ROSTER DETAIL (Tim, 2026-10-08): his projection
-      // and his score, week by week, on the name. The card is the name's words
-      // now, so `who` moves to the link's aria-label — no title beside a card.
-      const card = nameCard(p, index, team.id, 'w');
-
       return `
       <tr class="${cls}">
         <td class="left" data-v="${row.depthValue}"><span class="depth-tag${row.held ? '' : ' muted'}">${esc(row.depth)}</span></td>
@@ -5301,8 +5880,9 @@ function renderStarters() {
           playerRef(p, esc(p.name), `${who}${row.held ? '.' : ''} Click to ${OPENS}.`, 'aria-label')}</td>
         <td class="left">${esc(p.position === 'DST' ? 'DEF' : p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
-        <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`}>${fmt(row.avg)}</td>
-        <td class="starts" data-v="${row.starts}">${row.starts}</td>
+        <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
+        `title="${esc(avgLine(regularCount(row.shown, weeks), ah))}">${fmt(row.avg)}${heatMarkHtml(ah)}</td>
+        <td class="starts" data-v="${row.starts}"${startsCard}>${row.starts}</td>
         ${cells}
       </tr>`;
     })
@@ -5311,6 +5891,7 @@ function renderStarters() {
   renderStartersNote(weeks, rows, slots, label, unidentifiedCount(team, weeks));
   resort(table);
   reopenTip();
+  settlePops();
 }
 
 /** Which button is lit, decided by the code rather than by the last click. */
@@ -5369,7 +5950,7 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
   ], 'Across a row: his weeks · down a column: who covers');
 
   const paras = [
-    `One position at a time, deepest first. A <strong class="key-st">shaded, bold</strong> number is a week ` +
+    `One position at a time, deepest first. A <strong class="key-st">bold number with a green bar under it</strong> is a week ` +
     `this man is in the <strong>best legal lineup</strong> that team could field — the same rule the ` +
     `grid at the top of the page uses, run once per week on that week&rsquo;s own projections. ` +
     `A <strong>F</strong> beside it means he only gets in through the <strong>flex</strong>.`,
@@ -5388,7 +5969,7 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
     (gone
       ? `<strong>${plural(gone, 'player')}</strong> here ${gone === 1 ? 'is' : 'are'} <em>italic</em> and ` +
         `ranked &ldquo;&mdash;&rdquo;: not on this roster in week ${state.week}, but ${gone === 1 ? 'he' : 'they'} ` +
-        `filled a lineup spot in one of the weeks shown, and a shaded week with no row to sit on would ` +
+        `filled a lineup spot in one of the weeks shown, and a marked week with no row to sit on would ` +
         `read as a slot going empty. `
       : '') +
     (state.poWeeks.length
@@ -5398,17 +5979,16 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
     `<strong>Starts</strong> counts the weeks actually read from ESPN` +
     (pending > 0 ? ` — <strong>${plural(pending, 'week')}</strong> still loading, so it will rise.` : '.'),
 
-    // WHY THIS PANEL IS NOT ON THE RED/GREEN SCALE, said on screen rather than
-    // only in a comment, because every other table on this page now is and an
-    // unexplained gap reads as an oversight. Two independent reasons, and
-    // either alone would be enough.
-    `<strong>There is no red/green scale on this table</strong>, and that is deliberate. The ` +
-    `shading here already owns a cell&rsquo;s background and it answers a <em>yes/no</em> &mdash; ` +
-    `is he in the best lineup that week &mdash; which is the whole point of the panel; a value ` +
-    `spectrum underneath it would be two meanings fighting over one channel. And the only honest ` +
-    `comparison group for these numbers would be every ${label} in the league, which would paint a ` +
-    `depth chart red for being a depth chart. <strong>Where a value scale belongs is Season by ` +
-    `week above</strong>, whose rows are lineup slots and which carries it.`,
+    // THE RED/GREEN SCALE IS ON THIS TABLE since 2026-10-08 (Tim), and against
+    // whom is said on screen: the league's STARTERS at the position, which is
+    // why a depth chart's bench reads red and that is the honest reading.
+    `<strong>The red and green</strong> measure each number against the league&rsquo;s ` +
+    `<strong>starting</strong> ${label === 'FLEX' ? 'players at his position' : `${label}s`}: the ` +
+    `same week&rsquo;s starters in a week already played, and every starter over the weeks to come ` +
+    `ahead of it. Avg is measured against what a squad&rsquo;s starters there average. So a bench ` +
+    `man usually reads red &mdash; he is below a starter &mdash; and the green bar, not the ` +
+    `colour, is what says he is in the lineup. It is the scale the Player rows of Season by ` +
+    `week above use, so one man&rsquo;s week is one colour in both.`,
 
     `The swaps in the Roster detail above are a what-if for one week and are deliberately not ` +
     `applied here. Every name is a link to that man&rsquo;s next 13 weeks on the ` +
@@ -5419,7 +5999,7 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
       `<strong>${plural(unidentified, label)}</strong> at this position came back from ESPN ` +
       `with no player id, so ${unidentified === 1 ? 'he is' : 'they are'} left out of both the table ` +
       `and the lineups above &mdash; there is nothing to say the man in one week is the man in the ` +
-      `next, and a shaded week with no row to sit on would read as a slot going empty.`
+      `next, and a marked week with no row to sit on would read as a slot going empty.`
     );
   }
   $('startersNote').innerHTML = paras.map((t) => `<p>${t}</p>`).join('');
@@ -5556,8 +6136,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
   const withBar = rows.filter((r) => (bars.get(r.key) || {}).sd !== null);
   const sample = withBar.length ? (bars.get(withBar[0].key) || {}).n : 0;
   parts.push(
-    `<strong>Green is a good number for that slot and red is a poor one</strong>, deepening in ` +
-    `four steps and reaching full colour one standard deviation out — measured per slot across ` +
+    `<strong>Green is a good number for that slot and red is a poor one</strong>, deepening the ` +
+    `further it is from that slot’s average — measured per slot across ` +
     `<strong>every squad in the league</strong> over the weeks on screen ` +
     (sample ? `(${sample} values a slot) ` : '') +
     `— not against your own roster, which would have far too little of it and would quietly call ` +
@@ -5567,7 +6147,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
       ? 'The cells at either end also carry ▲ or ▼, and the type gets heavier the further out a ' +
         'number is, so none of it depends on telling red from green.'
       : '<strong>A slot with too little to go on is left uncoloured</strong> — fewer than two values ' +
-        'cannot have a standard deviation, and a confident colour there would be worse than none.')
+        'say nothing about what is usual, and a confident colour there would be worse than none.')
   );
 
   // WHY THE SCALE CHANGED, said once. Tim asked for it and will see it move, and
@@ -5576,8 +6156,8 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
   parts.push(
     `<strong>This scale replaced the old ▼ / ▼▼ low marks on 2026-09-19</strong> (Tim: “I want the ` +
     `range to be a lot tighter so it’s easier to be in green/red, not just the extremes”). Those ` +
-    `coloured nothing for being GOOD and started only a full standard deviation below the mean; ` +
-    `this one colours both directions and starts a quarter of a standard deviation out, so most ` +
+    `coloured nothing for being GOOD and only marked a number well below the slot’s average; ` +
+    `this one colours both directions and starts close to the average, so most ` +
     `cells carry some colour and the depth is the information. It is the same scale the ` +
     `all-teams grid at the top of the page uses, and the Stats page with it.`
   );
@@ -5609,7 +6189,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
         `them, on the same scale, so a cell here and that grid cannot come out different colours. ` +
         `It has to be a `) +
     `separate scale: averaging has already taken the week-to-week swing out, so ten season ` +
-    `averages sit well inside one weekly standard deviation and the cells’ scale would have ` +
+    `averages sit far closer together than single weeks do and the cells’ scale would have ` +
     `coloured none of them. The two sets of thresholds are printed at the foot of this note on two ` +
     `lines for the same reason.`
   );
@@ -5707,9 +6287,9 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
   }).join('');
   $('seasonBars').innerHTML =
     `<span class="lg lg-lead" title="At or below the first number a slot is fully red and marked ▼; ` +
-    `at or above the second it is fully green and marked ▲. Both are one standard deviation from ` +
+    `at or above the second it is fully green and marked ▲. Both sit the same distance from ` +
     `what that slot gives across the whole league over the weeks on screen, and the shades between ` +
-    `them are quarter-deviation steps. A slot with too little behind it shows a dash and is never ` +
+    `them deepen evenly. A slot with too little behind it shows a dash and is never ` +
     `coloured.">Week cells, full colour at (red / green):</span>${barText}`;
 
   // AND THE AVG COLUMN'S, which are different numbers against a different
@@ -6041,7 +6621,9 @@ $('lineupReset').addEventListener('click', () => {
 //
 // Registered ONCE, on the table, not on the rows: the measure switch repaints
 // every row, and a handler that lived on a row would be thrown away with it.
-$('overviewTable').addEventListener('click', (e) => {
+//
+// WEEKLY TOTALS ROWS DO THE SAME (Tim, 2026-10-08).
+const rowLoadsTeam = (e) => {
   if (!e.target.closest) return;
   // A number in these cells is now a link to that player, and the row it sits
   // in still drills into the team. Both would fire on one click: the reader
@@ -6049,11 +6631,102 @@ $('overviewTable').addEventListener('click', (e) => {
   // three panels below at a team he never picked, and find them changed when
   // he came back. The link wins, and the drill-down is left alone.
   if (clickIsPlayer(e)) return;
+  // A header's link, and a finger on a figure with a card: that tap opened the
+  // sheet (js/pop.js), whose "Open roster" is the way in.
+  if (e.target.closest('a[href]')) return;
   const tr = e.target.closest('tr[data-team]');
+  // A FINGER ON A TEAM'S NAME STILL LOADS THE TEAM, as it always has (the key
+  // under the grid says "tap a row to load that team", and tests/touch-check
+  // holds it). So on a phone the name opens no sheet; the Total beside it does.
+  if (tr && coarsePointer() && e.target.closest('tr[data-team] > td.name[data-pop]')) {
+    e.stopImmediatePropagation();
+    selectTeam(Number(tr.dataset.team));
+    revealRoster();
+    return;
+  }
+  if (coarsePointer() && e.target.closest('[data-pop], td[title]')) return;
+  // A mouse on a figure whose card points at a roster: `openRoster` answers
+  // that click (`goClick` below), with the card's week as well.
+  if (e.defaultPrevented || e.target.closest(`[${GO_ATTR}]`)) return;
   if (!tr) return;
   selectTeam(Number(tr.dataset.team));
   revealRoster();
+};
+$('overviewTable').addEventListener('click', rowLoadsTeam);
+$('totalsTable').addEventListener('click', rowLoadsTeam);
+
+/**
+ * A ROSTER LINK FOLLOWED WITHOUT LEAVING: `analysis.html?team=7[&week=3]` is
+ * this page, so a card that points there loads the team (and the week, when it
+ * names one this league has) in place and brings the roster detail on screen.
+ */
+function openRoster(teamId, week) {
+  hidePop();
+  const teams = state.data ? state.data.teams : [];
+  if (!teams.some((t) => t.id === teamId)) return;
+  if (week !== null && week !== state.week && state.weeks.includes(week)) {
+    endLanding();
+    state.week = week;
+    state.weekPicked = true;
+    chooseTeam(teamId, true);
+    renderWeekPicker();
+    Promise.resolve(loadWeek()).then(revealRoster, () => {});
+    return;
+  }
+  selectTeam(teamId);
+  revealRoster();
+}
+
+/** The roster link a click or a key press is on, as `{team, week}`; or null. */
+function rosterLinkAt(target) {
+  if (!target || !target.closest) return null;
+  const cell = target.closest(`[${GO_ATTR}]`);
+  // A real link inside a figure does its own job; so does a finger's tap,
+  // which opens the sheet.
+  if (!cell || coarsePointer() || target.closest('a[href]')) return null;
+  const m = ROSTER_LINK.exec(cell.getAttribute(GO_ATTR) || '');
+  return m ? { team: Number(m[1]), week: m[2] === undefined ? null : Number(m[2]) } : null;
+}
+
+// A figure whose card points at a roster is answered here, in place. These sit
+// on the SAME element as js/pop.js's own listeners and are registered FIRST, so
+// they run before it would leave the page for the same address (listeners on
+// one element run in the order they were added).
+const goClick = (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+  const to = rosterLinkAt(e.target);
+  if (!to) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  openRoster(to.team, to.week);
+};
+const goKey = (e) => {
+  if (e.key !== 'Enter' || !e.target || !e.target.matches || !e.target.matches(`[${GO_ATTR}]`)) return;
+  const to = rosterLinkAt(e.target);
+  if (!to) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  openRoster(to.team, to.week);
+};
+// The sheet's own "Open roster" link lives outside every table.
+document.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+  const open = e.target && e.target.closest ? e.target.closest('#statCard a.tc-open') : null;
+  const m = open ? ROSTER_LINK.exec(open.getAttribute('href') || '') : null;
+  if (!m) return;
+  e.preventDefault();
+  openRoster(Number(m[1]), m[2] === undefined ? null : Number(m[2]));
 });
+
+// THE STAT CARDS (js/pop.js): one delegated set per container, wired once.
+for (const id of ['overviewTable', 'totalsTable', 'seasonTable', 'startersTable', 'rosterTable',
+  'teamGlance', 'rosterBest']) {
+  $(id).addEventListener('click', goClick);
+  $(id).addEventListener('keydown', goKey);
+  wirePops($(id));
+}
+// And the week headers: the number is a link to that week's matchups.
+for (const id of ['totalsTable', 'seasonTable', 'changesTable', 'startersTable']) wireWeekHeads($(id));
 // The grid is the reason to be here, so it opens on the number that ranks
 // teams: Total, high first — the team, the spots, then it. This index is only
 // the opening guess; `sortShape` retargets Total once the league's slots are read.

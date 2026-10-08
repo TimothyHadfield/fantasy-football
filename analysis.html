@@ -548,24 +548,26 @@
   /* ------------------------------------------------- who to start, by week */
 
   /* The same week run as the season grid, narrowed to one position and with
-     the weeks a man actually makes the lineup marked. The season grid above is
-     deliberately uncoloured — everyone in it is already rostered, so a value
-     scale would light up nearly every cell — but this is not a value scale. It
-     is a yes/no about a decision, and it is the whole point of the panel. */
+     the weeks a man actually makes the lineup marked. TWO CLAIMS PER CELL since
+     2026-10-08 (Tim: colour these numbers against the league's starters at his
+     position, "with the st best-lineup mark still readable on top"): the
+     red/green tint is the cell's BACKGROUND (css/app.css `.heat-*`), so the
+     best-lineup mark gave its fill up and is a bar under the number instead. */
   #startersTable th, #startersTable td { white-space: nowrap; }
   #startersTable td.wk, #startersTable th.wk { padding-left: 7px; padding-right: 7px; }
   #startersTable td.avg { font-weight: 650; color: var(--text); }
 
-  /* In the best legal lineup that week. Tinted AND bold, never colour alone. */
-  #startersTable td.st { background: #16311f; font-weight: 700; color: var(--text); }
-  #startersTable tbody tr:hover td.st { background: #1b3b26; }
+  /* In the best legal lineup that week. A bar AND bold, never colour alone, and
+     nothing here sets a background: that channel is the scale's. */
+  #startersTable td.st { box-shadow: inset 0 -3px 0 #3ba55d; font-weight: 700; color: var(--text); }
+  /* The scale's own weight would make a strong bench week look like a start. */
+  #startersTable td.wk.heat:not(.st) { font-weight: 400; }
 
-  /* In it only through the FLEX. A quieter fill and an explicit marker, because
+  /* In it only through the FLEX. A quieter bar and an explicit marker, because
      "he starts" and "he starts because the flex had nobody better" are
      different answers to the question this panel exists to ask — and the second
      is exactly the one a manager wants to spot. */
-  #startersTable td.st.fx { background: #16311f66; }
-  #startersTable tbody tr:hover td.st.fx { background: #1b3b2699; }
+  #startersTable td.st.fx { box-shadow: inset 0 -3px 0 #3ba55d80; }
   #startersTable td.st.fx::after {
     content: 'F';
     font-size: 9px;
@@ -646,6 +648,12 @@
     display: inline-block;
   }
   a.pref:hover { color: var(--accent-hi); text-decoration: underline; text-underline-offset: 2px; }
+
+  /* A week heading's number: the link to that week on Schedule. It looks like
+     the heading it is until the pointer is on it, as a player's name does. */
+  th a.wk-go { color: inherit; text-decoration: none; }
+  th a.wk-go:hover { color: var(--accent-hi); text-decoration: underline; text-underline-offset: 2px; }
+  th a.wk-go:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--r-1); }
 
   /* These are keyboard-reachable now and there are a lot of them, so the ring
      has to be findable while tabbing without nudging a single column: inset
@@ -729,8 +737,8 @@
   .lg-mark.heat-up-4 { border-color: #1d5330; }
   .lg-mark.heat-dn-4 { border-color: #4a1b21; }
   .lg-mark.tot { background: var(--panel-2); border-color: var(--line-2); font-weight: 700; }
-  .lg-mark.st { background: #16311f; border-color: #16311f; font-weight: 700; }
-  .lg-mark.st.fx { background: #16311f66; }
+  .lg-mark.st { box-shadow: inset 0 -3px 0 #3ba55d; font-weight: 700; }
+  .lg-mark.st.fx { box-shadow: inset 0 -3px 0 #3ba55d80; }
   .lg-mark.st.fx::after {
     content: 'F';
     font-size: 9px;
@@ -1100,17 +1108,17 @@
     <p class="best-note" id="rosterBest"></p>
     <div class="table-scroll" id="rosterWrap"><table id="rosterTable">
       <thead><tr>
-        <th class="left" data-sort>Slot</th>
-        <th class="name" data-sort>Player</th>
-        <th class="left" data-sort>Pos</th>
-        <th class="left" data-sort>NFL</th>
-        <th data-sort>Projected</th>
-        <th data-sort>Actual</th>
-        <th data-sort>Diff</th>
-        <th data-sort>Avg/wk</th>
-        <th data-sort>Season total</th>
-        <th class="own" data-sort>% own</th>
-        <th class="left" data-sort>Status</th>
+        <th class="left" data-sort title="The lineup slot he is in this week. Click a tag to swap two players.">Slot</th>
+        <th class="name" data-sort title="The player. Point at a name for his season week by week.">Player</th>
+        <th class="left" data-sort title="His position.">Pos</th>
+        <th class="left" data-sort title="His NFL team.">NFL</th>
+        <th data-sort title="ESPN’s projection for him in the week picked, coloured against the league’s starters at his position.">Projected</th>
+        <th data-sort title="What he scored in the week picked, coloured against the league’s starters at his position.">Actual</th>
+        <th data-sort title="Actual minus Projected.">Diff</th>
+        <th data-sort title="His season projection per game, coloured against what a squad’s starters at his position average.">Avg/wk</th>
+        <th data-sort title="ESPN’s projection for his whole 17-game season.">Season total</th>
+        <th class="own" data-sort title="The share of ESPN leagues he is rostered in.">% own</th>
+        <th class="left" data-sort title="His injury status this week.">Status</th>
       </tr></thead>
       <!-- Three bodies, not one. The starters, the line that totals them, and
            the bench. sortable.js sorts each independently, so the grouping and

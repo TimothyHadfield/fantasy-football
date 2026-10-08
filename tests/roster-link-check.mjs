@@ -111,11 +111,13 @@ const SCENARIOS = {
     saved: { week: undefined, team: undefined },
   },
   'live-half': {
-    label: 'live: a team with no week is not a link',
+    // 2026-10-08: the team alone IS a link now — a team card's click when it is
+    // not about one week. It lands on that team, on the week the page opens on.
+    label: 'live: a team with no week lands on that team, on the week the page opens on',
     ...LIVE,
     search: '?team=7',
-    want: LIVE_AS_TODAY,
-    landed: false,
+    want: { ...LIVE_AS_TODAY, team: 7, name: 'Team 7' },
+    landed: true,
     saved: { week: undefined, team: undefined },
   },
   'live-junk': {
