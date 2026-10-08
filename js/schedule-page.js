@@ -134,7 +134,13 @@ const state = {
   // Whose season the forecast panel is about. null means "follow whoever I am",
   // so the panel tracks you until you deliberately look at someone else.
   forecastTeamId: prefs.get('forecastTeam', null),
-  strength: null,           // Map teamId -> comparable strength, any scale
+  // How each of the two bar charts adds its bars up (docs/charts-plan.md B3,
+  // B4). The same numbers either way: one bar per outcome, or the running
+  // total — "at least 7 wins", "3rd or better" — which is the question a
+  // reader usually has and otherwise answers by adding bars in their head.
+  forecastView: prefs.get('forecastView', 'exact') === 'atleast' ? 'atleast' : 'exact',
+  simView: prefs.get('simView', 'each') === 'better' ? 'better' : 'each',
+  strength: null,          // Map teamId -> comparable strength, any scale
   strengthNote: '',         // how that strength was derived; shown, never implied
   strengthToken: 0,         // guards against a slow fetch landing after a reload
   projection: null,         // per-week optimal-lineup points; see buildProjection
@@ -1330,6 +1336,41 @@ function syncSegmented(id, value) {
     .forEach((b) => b.classList.toggle('on', b.dataset.view === value));
 }
 
+/**
+ * Show or hide a chart's view switch, with the right button marked. It is
+ * hidden whenever its chart is — a switch over an empty box is a control that
+ * does nothing.
+ */
+function syncChartView(id, value, shown) {
+  syncSegmented(id, value);
+  if (shown) $(id).removeAttribute('hidden');
+  else $(id).setAttribute('hidden', '');
+}
+
+/**
+ * Running totals of percentages `xs`: from the start, or (fromEnd) from the far
+ * end back. Held at 100: the parts add to 100.00000001 as floats, and the
+ * chart's axis would step up to 150 to make room for that hair.
+ */
+function runningTotal(xs, fromEnd) {
+  const out = new Array(xs.length);
+  let acc = 0;
+  for (let k = 0; k < xs.length; k++) {
+    const i = fromEnd ? xs.length - 1 - k : k;
+    acc += xs[i];
+    out[i] = Math.min(100, acc);
+  }
+  return out;
+}
+
+/** A chance already in percent, as a bar's tooltip prints it: "24.6%", "<0.1%". */
+function barPct(v) {
+  if (!(v > 0)) return '0%';
+  if (v < 0.05) return '<0.1%';
+  // A running total can land a hair over through rounding; it is never >100.
+  return `${Math.min(100, v).toFixed(1)}%`;
+}
+
 function renderWeekPicker() {
   const sel = $('weekSelect');
   const weeks = state.data.weeks;
@@ -2265,6 +2306,7 @@ function renderForecast() {
     stats.innerHTML = '';
     tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${reason}</td></tr>`;
     chart.innerHTML = '';
+    syncChartView('forecastView', state.forecastView, false);
     setKey('forecastKey', '');
     $('forecastNote').innerHTML = note;
     resort(table);
@@ -2454,11 +2496,23 @@ function renderForecast() {
 
   // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
   // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
+  //
+  // TWO VIEWS OF THE SAME BARS. "At least N" is every bar from N upwards added
+  // together, so it starts at 100% and steps down. Same bins, same height, same
+  // margins: the drawing does not move when the view changes, only the bars.
+  const atLeast = state.forecastView === 'atleast';
+  const each = dist.map((x) => x.p * 100);
+  syncChartView('forecastView', state.forecastView, true);
   histogram(chart, {
     bins: dist.map((x) => String(x.wins)),
-    counts: dist.map((x) => x.p * 100),
+    counts: atLeast ? runningTotal(each, true) : each,
     yLabel: 'Chance (%)',
     height: 240,
+    tipFor: (i, bin, v) => ({
+      title: `${atLeast ? 'At least' : 'Exactly'} ${bin} ${Number(bin) === 1 ? 'win' : 'wins'}`,
+      value: barPct(v),
+      name: 'chance',
+    }),
   });
 
   const played = banked.w + banked.l + banked.t;
@@ -2468,8 +2522,8 @@ function renderForecast() {
     : 'Weeks already decided are banked; everything still open is forecast.';
 
   const shape = range
-    ? `Each bar is a final win total and its height is the chance of finishing on exactly ` +
-      `that many. ${range.lo === range.hi ? `${range.lo} wins alone holds` : `The ${range.lo}${EN}${range.hi} band holds`} ` +
+    ? `Each bar is a final win total and its height is the chance of finishing on ` +
+      `${atLeast ? 'at least' : 'exactly'} that many. ${range.lo === range.hi ? `${range.lo} wins alone holds` : `The ${range.lo}${EN}${range.hi} band holds`} ` +
       `${pctText(range.p)} of it, which is how wide the honest answer is.`
     : '';
 
@@ -2896,6 +2950,7 @@ function renderSimulation() {
     // divisions warning to be about.
     $('simWarn').hidden = true;
     $('simChart').innerHTML = '';
+    syncChartView('simView', state.simView, false);
     // Ten columns: the bracket has its own four, and the record sits by the name. A colspan that has drifted
     // short leaves the message boxed into the left of the table rather than
     // spanning it, which reads as a broken row rather than a sentence.
@@ -3036,15 +3091,28 @@ function paintSimulation(sim, inputs) {
         : `No bracket could be built, so these are regular-season places.`);
     // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
     // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
+    //
+    // "This place or better" is every bar from 1st down to that place, added:
+    // it climbs to 100% at last place. Same box either way (see the forecast).
+    const orBetter = state.simView === 'better';
+    const eachPlace = mine.places.map((p) => p * 100);
+    syncChartView('simView', state.simView, true);
     histogram(chart, {
       bins: mine.places.map((_, i) => ordinal(i + 1)),
-      counts: mine.places.map((p) => p * 100),
+      counts: orBetter ? runningTotal(eachPlace, false) : eachPlace,
       yLabel: 'Chance (%)',
       height: 240,
+      // 1st has nothing better than it, so "or better" would be noise there.
+      tipFor: (i, bin, v) => ({
+        title: `Finishes ${bin}${orBetter && i > 0 ? ' or better' : ''}`,
+        value: barPct(v),
+        name: 'of seasons',
+      }),
     });
   } else {
     $('simCap').textContent = '';
     chart.innerHTML = '';
+    syncChartView('simView', state.simView, false);
   }
 
   // ---- the projected final table ------------------------------------------
@@ -3546,6 +3614,29 @@ $('simRuns').addEventListener('click', (e) => {
   state.runs = runs;
   prefs.set('runs', runs);
   renderSimulation();   // the run count IS in the cache key, so this re-runs
+});
+
+// The two charts' view switches. Neither changes what was computed — the
+// forecast is arithmetic and the simulation comes back from its cache — so a
+// press only redraws.
+$('forecastView').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-view]');
+  if (!btn) return;
+  const view = btn.dataset.view === 'atleast' ? 'atleast' : 'exact';
+  if (view === state.forecastView) return;
+  state.forecastView = view;
+  prefs.set('forecastView', view);
+  renderForecast();
+});
+
+$('simView').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-view]');
+  if (!btn) return;
+  const view = btn.dataset.view === 'better' ? 'better' : 'each';
+  if (view === state.simView) return;
+  state.simView = view;
+  prefs.set('simView', view);
+  renderSimulation();
 });
 
 // Walking the season one week at a time used to mean thirteen trips through a

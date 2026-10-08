@@ -153,7 +153,11 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
-    chartWidth: 1362,          // the chart box on a 1440px laptop; every other scenario is a phone's 337
+    // A wide box; every other scenario is a phone's 337. The page now caps these
+    // two charts at 720px on a laptop, but 720 is also the drawing's own
+    // fallback width, so a 720 here could not tell "drawn at the box's width"
+    // from "drawn as the fallback picture". 1362 can.
+    chartWidth: 1362,
   },
   'live-noteam': {
     label: '(c) same, with no team set as the owner',
@@ -483,6 +487,76 @@ const SCENARIOS = {
         pickedName,
         prefs: globalThis.localStorage.getItem('ff.prefs'),
       };
+    },
+  },
+  // THE TWO CHARTS' VIEW SWITCHES (docs/charts-plan.md B3, B4).
+  //
+  // The page is opened with BOTH switches saved on their second view, so the
+  // first reading proves the choice is remembered; then each is pressed back
+  // and forth, and the box the bars are drawn in is read every time — a switch
+  // that moved the chart would be a switch nobody trusts.
+  'chart-views': {
+    label: '(j) the charts’ view switches: exactly / at least, each place / this place or better',
+    stub: false,
+    prefs: {
+      'schedule.source': 'demo', 'schedule.week': 5,
+      'schedule.forecastView': 'atleast', 'schedule.simView': 'better',
+    },
+    after: async ({ document, window }) => {
+      const $ = (id) => document.getElementById(id);
+      const box = { left: 0, top: 0, width: 337, height: 240 };
+      const snap = (chartId, viewId) => {
+        const chart = $(chartId);
+        const svg = chart.querySelector('svg');
+        const hits = svg ? [...svg.querySelectorAll('.ff-hit')] : [];
+        // The tooltip of the third bar, as a mouse would raise it.
+        let tip = '';
+        if (svg && hits[2]) {
+          svg.getBoundingClientRect = () => box;
+          chart.getBoundingClientRect = () => box;
+          hits[2].dispatchEvent(Object.assign(new window.Event('pointermove', { bubbles: true }),
+            { pointerType: 'mouse', clientX: 100, clientY: 50 }));
+          const el = chart.querySelector('div[role="status"]');
+          tip = el ? [...el.children].map((n) => [...n.children].length
+            ? [...n.children].map((x) => x.textContent).join(' ') : n.textContent).join(' / ') : '';
+        }
+        return {
+          on: [...$(viewId).querySelectorAll('button.on')].map((b) => b.getAttribute('data-view')),
+          shown: !$(viewId).hasAttribute('hidden'),
+          labels: [...$(viewId).querySelectorAll('button')].map((b) => b.textContent.trim()),
+          values: svg ? hits.map((h) => {
+            const bar = svg.querySelector(`.ff-bar[data-i="${h.getAttribute('data-i')}"] title`);
+            const m = bar ? /:\s*([\d.,]+)$/.exec(bar.textContent.trim()) : null;
+            return m ? Number(m[1].replace(/,/g, '')) : 0;
+          }) : [],
+          // The largest number printed down the y-axis (right-aligned ticks).
+          axisTop: svg ? Math.max(...[...svg.querySelectorAll('text[text-anchor="end"]')]
+            .map((t) => Number(t.textContent)).filter(Number.isFinite)) : 0,
+          viewBox: svg ? svg.getAttribute('viewBox') : '',
+          plot: hits[0] ? [hits[0].getAttribute('y'), hits[0].getAttribute('height')].join('/') : '',
+          bins: hits.length,
+          tip,
+        };
+      };
+      const press = (viewId, view) => $(viewId).querySelector(`button[data-view="${view}"]`)
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      const saved = () => JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}');
+      const out = { fc: {}, sim: {} };
+      out.fc.opened = snap('forecastChart', 'forecastView');
+      out.sim.opened = snap('simChart', 'simView');
+      press('forecastView', 'exact');
+      press('simView', 'each');
+      out.fc.first = snap('forecastChart', 'forecastView');
+      out.sim.first = snap('simChart', 'simView');
+      out.savedFirst = { fc: saved()['schedule.forecastView'], sim: saved()['schedule.simView'] };
+      out.tableRows = document.querySelectorAll('#simTable tbody tr:not(.empty-row)').length;
+      press('forecastView', 'atleast');
+      press('simView', 'better');
+      out.fc.second = snap('forecastChart', 'forecastView');
+      out.sim.second = snap('simChart', 'simView');
+      out.savedSecond = { fc: saved()['schedule.forecastView'], sim: saved()['schedule.simView'] };
+      out.note = $('forecastNote').textContent.replace(/\s+/g, ' ');
+      globalThis.__chartViews = out;
     },
   },
   // A SAVED WEEK EXPIRES ON LIVE DATA ONCE THE LEAGUE HAS MOVED PAST IT.
@@ -1161,6 +1235,81 @@ async function check(scenario, boot) {
       JSON.stringify(s.otherRows.map((r) => [r.week, r.title, r.last])) !== JSON.stringify(rows.map((r) => [r.week, r.title, r.last])),
       JSON.stringify(s.otherRows));
     c.ok('the method is behind the toggle', /Title ± and Last ±/.test(s.note || '') && /10,000 times each way/.test(s.note || ''), s.note);
+  }
+
+  // ---- (j): the charts' view switches --------------------------------------
+  if (scenario === 'chart-views') {
+    const v = globalThis.__chartViews || { fc: {}, sim: {} };
+    const sum = (xs) => (xs || []).reduce((a, b) => a + b, 0);
+    const falling = (xs) => (xs || []).every((x, i) => i === 0 || xs[i - 1] >= x - 1e-9);
+    const rising = (xs) => (xs || []).every((x, i) => i === 0 || xs[i - 1] <= x + 1e-9);
+    const running = (xs, fromEnd) => {
+      const out = [];
+      let acc = 0;
+      const order = fromEnd ? xs.map((_, i) => xs.length - 1 - i) : xs.map((_, i) => i);
+      for (const i of order) { acc += xs[i]; out[i] = acc; }
+      return out;
+    };
+    const near = (a, b, tol) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) <= tol);
+    const { fc, sim } = v;
+
+    c.ok('both switches are shown once there is a chart', Boolean(fc.opened && fc.opened.shown && sim.opened.shown));
+    c.ok('the forecast switch reads Exactly N / At least N',
+      (fc.opened?.labels || []).join('|') === 'Exactly N|At least N', (fc.opened?.labels || []).join('|'));
+    c.ok('the simulation switch reads Each place / This place or better',
+      (sim.opened?.labels || []).join('|') === 'Each place|This place or better', (sim.opened?.labels || []).join('|'));
+
+    // Remembered: the page was opened with both saved on their second view.
+    c.ok('THE SAVED VIEW IS THE ONE THE PAGE OPENS ON: forecast "at least"',
+      (fc.opened?.on || []).join() === 'atleast' && falling(fc.opened.values) && Math.abs(fc.opened.values[0] - 100) < 0.2,
+      JSON.stringify(fc.opened));
+    c.ok('and the simulation on "this place or better"',
+      (sim.opened?.on || []).join() === 'better' && rising(sim.opened.values) &&
+      Math.abs(sim.opened.values[sim.opened.values.length - 1] - 100) < 0.2, JSON.stringify(sim.opened));
+
+    // The plain views.
+    c.ok('"Exactly N" is the chance of each win total: the bars add up to 100',
+      (fc.first?.on || []).join() === 'exact' && Math.abs(sum(fc.first.values) - 100) < 1.5, JSON.stringify(fc.first));
+    c.ok('"Each place" is the chance of each place: the bars add up to 100',
+      (sim.first?.on || []).join() === 'each' && Math.abs(sum(sim.first.values) - 100) < 1.5, JSON.stringify(sim.first));
+
+    // The added-up views are the plain ones added up, bar for bar (each bar is
+    // printed to a tenth, so a ten-bar sum can sit half a point out).
+    c.ok('"At least N" is every bar from N upwards, added',
+      near(fc.second?.values || [], running(fc.first?.values || [1], true), 0.6),
+      `${JSON.stringify(fc.second?.values)} vs ${JSON.stringify(running(fc.first?.values || [], true))}`);
+    c.ok('"This place or better" is every bar from 1st down to that place, added',
+      near(sim.second?.values || [], running(sim.first?.values || [1], false), 0.6),
+      `${JSON.stringify(sim.second?.values)} vs ${JSON.stringify(running(sim.first?.values || [], false))}`);
+
+    // NOTHING MOVES WHEN SWITCHING: same drawing, same plot box, same bins.
+    for (const [name, ch] of [['forecast', fc], ['simulation', sim]]) {
+      const all = [ch.opened, ch.first, ch.second].filter(Boolean);
+      c.ok(`the ${name} chart is the same box in every view`,
+        all.length === 3 && new Set(all.map((s) => `${s.viewBox}|${s.plot}|${s.bins}`)).size === 1 && Boolean(all[0].viewBox),
+        all.map((s) => `${s.viewBox}|${s.plot}|${s.bins}`).join(' , '));
+    }
+
+    // A running total reaches 100 and no further; an axis running to 150%
+    // (which a float's 100.00000001 used to buy) is a chart of nothing.
+    c.ok('a running total never pushes the axis past 100%',
+      fc.second?.axisTop === 100 && sim.second?.axisTop === 100 && fc.opened?.axisTop === 100,
+      JSON.stringify([fc.opened?.axisTop, fc.second?.axisTop, sim.second?.axisTop]));
+
+    c.ok('each press is saved for the next visit',
+      v.savedFirst?.fc === 'exact' && v.savedFirst?.sim === 'each' &&
+      v.savedSecond?.fc === 'atleast' && v.savedSecond?.sim === 'better',
+      JSON.stringify([v.savedFirst, v.savedSecond]));
+    c.ok('switching a view does not blank the simulation table', v.tableRows === 10, String(v.tableRows));
+
+    // A bar read in words, in the view it is drawn in.
+    c.ok('a bar of "Exactly N" says so', /^Exactly \d+ wins? \/\s+[\d.]+% chance$/.test(fc.first?.tip || ''), fc.first?.tip);
+    c.ok('a bar of "At least N" says so', /^At least \d+ wins? \/\s+[\d.]+% chance$/.test(fc.second?.tip || ''), fc.second?.tip);
+    c.ok('a bar of "Each place" says so', /^Finishes 3rd \/\s+[\d.]+% of seasons$/.test(sim.first?.tip || ''), sim.first?.tip);
+    c.ok('a bar of "This place or better" says so',
+      /^Finishes 3rd or better \/\s+[\d.]+% of seasons$/.test(sim.second?.tip || ''), sim.second?.tip);
+    c.ok('the method note describes the view on screen',
+      /at least that many/.test(v.note || ''), (v.note || '').slice(0, 400));
   }
 
   // ---- (e): switching between teams --------------------------------------
