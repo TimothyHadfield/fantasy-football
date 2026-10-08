@@ -266,9 +266,11 @@ function teamCells(t, { scales, recordOf, oppProj, explain, moreColour = false, 
   if (!cards) return cells;
   // `cards`: every cell that prints something and has no parts preview names
   // its column and its team and takes focus, and gives up its `title` — the
-  // page's card says what the title said, and a cell opens one thing.
+  // page's card says what the title said, and a cell opens one thing. A
+  // record with a game in play keeps its title (its basis) and takes no card,
+  // as on Summary and Schedule.
   const blank = `<td>${dash}</td>`;
-  return cells.map((c, i) => (c === blank || / data-explain="/.test(c)
+  return cells.map((c, i) => (c === blank || / data-explain="/.test(c) || (CELL_KEYS[i] === 'record' && rec.live)
     ? c
     : c.replace(/ title="[^"]*"/, '')
       .replace(/^<td/, `<td data-cell="${CELL_KEYS[i]}" data-team="${esc(t.id)}" tabindex="0"`)));
