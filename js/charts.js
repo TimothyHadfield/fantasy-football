@@ -241,9 +241,25 @@ function emptyState(container, message, height) {
 /* ------------------------------------------------------------------ *
  * Tooltip (one positioned <div> per chart, built with DOM nodes only -
  * series names are untrusted text, so they go in via textContent)
+ *
+ * THE TOOLTIP CAN BE A CONNECTOR (2026-10-08, "build any connectors by
+ * clicking on the preview"). `show(…, href)` takes an optional fifth argument:
+ * where the mark being previewed goes. While such a tooltip is up the chart
+ * shows a pointer cursor and a click on it follows the link:
+ *   a mouse   the hover already previewed the mark, so the click goes;
+ *   a finger  the first tap only opens the tooltip (there was no hover to read
+ *             it by) and a second tap on the same mark goes.
+ * Ctrl/cmd/shift open a new tab. A tooltip shown with no href behaves exactly
+ * as before, and a chart whose caller passes no `hrefFor` never has one.
+ * `navigate(href, event)` replaces the page navigation (tests, or a page that
+ * wants to scroll instead). The line chart, the histogram and the box plot
+ * each say where their marks go through their own `hrefFor` / `href` option.
  * ------------------------------------------------------------------ */
-function createTooltip(container) {
+function createTooltip(container, { navigate = null } = {}) {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+  // Whatever the last render in this container left listening.
+  if (typeof container.__ffTipOff === 'function') container.__ffTipOff();
+  container.__ffTipOff = null;
   // The tooltip is absolutely positioned inside the container.
   try {
     const pos = container.style && container.style.position;
@@ -265,8 +281,16 @@ function createTooltip(container) {
    * @param {string} title    heading (e.g. "Week 7")
    * @param {Array}  rows     [{ color, name, value }] - value leads, name follows
    * @param {number} x,y      pointer position in container-local px
+   * @param {string} [href]   where a click on the previewed mark goes
    */
-  function show(title, rows, x, y) {
+  let curHref = null;      // the link of the mark the tooltip is showing
+  let pressTouch = false;  // was the last press a finger?
+  let pressHref = null;    // the link the last press was on
+  let tapSeen = null;      // the link the finger's PREVIOUS tap was on
+  let armed = false;       // should the click this press ends in follow it?
+  function show(title, rows, x, y, href = null) {
+    curHref = href ? String(href) : null;
+    try { container.style.cursor = curHref ? 'pointer' : ''; } catch (_) { /* no style here */ }
     el.textContent = '';
     if (title) {
       const h = document.createElement('div');
@@ -304,9 +328,59 @@ function createTooltip(container) {
     el.style.top = Math.max(2, y - th - 10) + 'px';
   }
 
-  function hide() { el.style.opacity = '0'; }
+  function hide() {
+    el.style.opacity = '0';
+    curHref = null;
+    try { container.style.cursor = ''; } catch (_) { /* no style here */ }
+  }
 
-  return { el, show, hide };
+  // One pair of listeners on the container, replaced on every re-render.
+  //
+  // They are on the CONTAINER and the chart's own are on marks inside it, so by
+  // the time a press bubbles here the chart has already called `show` for it:
+  // `curHref` is the mark under this press. That is what lets a finger be told
+  // apart from a mouse without a hover: its tap is what opens the tooltip, so
+  // the click that ends that same tap must not also follow it. A tap goes only
+  // when the tap BEFORE it was on the same mark. (A lifted finger also fires
+  // pointerleave, which hides the tooltip before the click arrives — so the
+  // finger's link is remembered from the press, not read off the tooltip.)
+  const go = typeof navigate === 'function'
+    ? navigate
+    : (href, evt) => {
+      if (typeof window === 'undefined' || !window) return;
+      const aside = evt && (evt.ctrlKey || evt.metaKey || evt.shiftKey);
+      if (aside && typeof window.open === 'function') window.open(href, '_blank', 'noopener');
+      else if (window.location) window.location.href = href;
+    };
+  const onDown = (evt) => {
+    pressTouch = evt.pointerType === 'touch';
+    pressHref = curHref;
+    if (pressTouch) {
+      armed = pressHref !== null && pressHref === tapSeen;
+      tapSeen = pressHref;
+    } else {
+      armed = pressHref !== null;
+    }
+  };
+  const onClick = (evt) => {
+    const was = armed;
+    armed = false;
+    // A mouse must still be on the mark; a finger left it when it lifted.
+    const href = pressTouch ? pressHref : curHref;
+    if (!was || !href) return;
+    if (pressTouch) tapSeen = null;   // gone: the next visit starts over
+    go(href, evt);
+  };
+  if (typeof container.addEventListener === 'function') {
+    container.addEventListener('pointerdown', onDown);
+    container.addEventListener('click', onClick);
+    container.__ffTipOff = () => {
+      container.removeEventListener('pointerdown', onDown);
+      container.removeEventListener('click', onClick);
+    };
+  }
+
+  return { el, show, hide, href: () => curHref };
 }
 
 /** Pointer position in SVG user units + container-local px. */
@@ -349,6 +423,13 @@ function pointerPos(svg, container, evt) {
  *                                   - which the per-chart "nice" scale, fitted
  *                                   to each chart's own data, cannot be.
  *                                   Ignored if not two finite, unequal numbers.
+ * @param {Function} [opts.hrefFor]  (index, xLabel) -> href|null: where a
+ *                                   click goes while the tooltip for that x
+ *                                   position is up (see createTooltip). A
+ *                                   line chart's tooltip is one x position
+ *                                   across every series, so the link is the
+ *                                   WEEK's, not one team's.
+ * @param {Function} [opts.navigate] (href, event) - replaces the navigation
  * @returns {SVGElement|null}
  */
 export function lineChart(container, opts) {
@@ -565,7 +646,8 @@ export function lineChart(container, opts) {
   if (!svg) return null;
 
   // --- interactivity ------------------------------------------------------
-  const tip = createTooltip(container);
+  const tip = createTooltip(container, { navigate: o.navigate });
+  const hrefFor = typeof o.hrefFor === 'function' ? o.hrefFor : null;
   const cross = svg.querySelector('.ff-cross');
   const focus = svg.querySelector('.ff-focus');
   const overlay = svg.querySelector('.ff-overlay');
@@ -600,7 +682,7 @@ export function lineChart(container, opts) {
       focus.setAttribute('opacity', '1');
       rows.sort((a, b) => parseFloat(String(b.value).replace(/,/g, '')) - parseFloat(String(a.value).replace(/,/g, '')));
       const heading = xLabels[i] == null ? String(i + 1) : String(xLabels[i]);
-      tip.show(heading, rows, p.px, p.py);
+      tip.show(heading, rows, p.px, p.py, hrefFor ? hrefFor(i, heading) : null);
     };
     const onLeave = () => {
       cross.setAttribute('opacity', '0');
@@ -646,6 +728,10 @@ export function lineChart(container, opts) {
  * @param {number[]} opts.counts
  * @param {string}  opts.yLabel
  * @param {number}  [opts.height=240]
+ * @param {Function} [opts.hrefFor]  (index, binLabel) -> href|null: where a
+ *                                   click on that bar goes while its tooltip
+ *                                   is up (see createTooltip)
+ * @param {Function} [opts.navigate] (href, event) - replaces the navigation
  * @returns {SVGElement|null}
  */
 export function histogram(container, opts) {
@@ -744,7 +830,8 @@ export function histogram(container, opts) {
   const svg = mount(container, markup);
   if (!svg) return null;
 
-  const tip = createTooltip(container);
+  const tip = createTooltip(container, { navigate: o.navigate });
+  const hrefFor = typeof o.hrefFor === 'function' ? o.hrefFor : null;
   const hits = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-hit') : [];
   const bars = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-bar') : [];
   const barByIndex = {};
@@ -757,7 +844,8 @@ export function histogram(container, opts) {
       const enter = (evt) => {
         const p = pointerPos(svg, container, evt);
         if (bar) bar.setAttribute('opacity', '0.8');
-        tip.show(bins[+i], [{ color, name: (o.yLabel || 'count'), value: fmt(counts[+i]) }], p.px, p.py);
+        tip.show(bins[+i], [{ color, name: (o.yLabel || 'count'), value: fmt(counts[+i]) }], p.px, p.py,
+          hrefFor ? hrefFor(+i, bins[+i]) : null);
       };
       hit.addEventListener('pointermove', enter);
       // A finger produces no `pointermove` before it lands, so on a phone a tap
@@ -792,9 +880,12 @@ export function histogram(container, opts) {
  *
  * @param {Element} container
  * @param {Object}  opts
- * @param {Array}   opts.rows  [{ name, min, q1, median, q3, max, outliers?, color? }]
+ * @param {Array}   opts.rows  [{ name, min, q1, median, q3, max, outliers?, color?, href? }]
  *                             `color` pins a row to its team's palette slot -
  *                             see the note on positional fallback below.
+ *                             `href`: where a click on that row goes while
+ *                             its tooltip is up (see createTooltip).
+ * @param {Function} [opts.navigate] (href, event) - replaces the navigation
  * @param {string}  opts.xLabel
  * @param {number}  [opts.height]     overrides the row-derived height
  * @param {string|number} [opts.highlight] row id (or name, for a row with
@@ -827,6 +918,7 @@ export function boxPlot(container, opts) {
       // "a team keeps its colour everywhere" rule the palette is built on. The
       // positional fallback only applies when the caller has no opinion.
       color: r.color || SERIES_COLORS[i % SERIES_COLORS.length],
+      href: r.href ? String(r.href) : null,
     });
   });
 
@@ -959,7 +1051,7 @@ export function boxPlot(container, opts) {
   // plot's numbers arrive looking like every other number on the site. Five
   // rows, because a five-number summary is five facts and running them into one
   // sentence is what the <title> was already doing badly.
-  const tip = createTooltip(container);
+  const tip = createTooltip(container, { navigate: o.navigate });
   const hits = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-box-hit') : [];
   if (tip) {
     for (const hit of hits) {
@@ -974,7 +1066,7 @@ export function boxPlot(container, opts) {
           { color: r.color, name: 'median', value: fmt(r.median) },
           { name: 'Q1 – Q3', value: `${fmt(r.q1)} – ${fmt(r.q3)}` },
           { name: 'min – max', value: `${fmt(r.min)} – ${fmt(r.max)}` },
-        ], p.px, p.py);
+        ], p.px, p.py, r.href || null);
       };
       hit.addEventListener('pointermove', enter);
       hit.addEventListener('pointerdown', enter);
@@ -1134,6 +1226,17 @@ const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
  * @param {string}  [opts.groupLabel]  accessible name of the chip row
  * @param {Function} [opts.navigate]  (href, event) - replaces the page
  *                                 navigation a click on the chart performs
+ * @param {Object}  [opts.card]    A DOT CAN CARRY A PLAYER CARD (2026-10-08).
+ *                                 `{ show(key, dotEl, point), hide() }` - pass
+ *                                 js/player-card.js `{ show: showCard, hide:
+ *                                 hideTip }`. A point with a `card` (the key
+ *                                 `registerRun` returned) then opens that card
+ *                                 beside its dot INSTEAD of the small text
+ *                                 preview; a point without one previews as
+ *                                 before. Selecting, the ring and the
+ *                                 click-through to `href` do not change. This
+ *                                 file imports nothing: the page hands the
+ *                                 card in.
  * @returns {SVGElement|null}  on the svg: `__ffFit` (the line, or null),
  *   `__ffFitPoints` (the points it was fitted to: all of them, or the focused
  *   group) and `__ffGap` (offPerfect of those)
@@ -1368,6 +1471,8 @@ export function scatterChart(container, opts) {
     container.appendChild(legend);
   }
 
+  const cardHook = o.card && typeof o.card.show === 'function' ? o.card : null;
+  let cardOpen = false;   // is the caller's card (not the text preview) what is showing?
   let active = -1;        // index of the dot the preview is showing
   let pending = -1;       // a different dot the pointer has moved onto
   let hideTimer = null, switchTimer = null;
@@ -1430,8 +1535,19 @@ export function scatterChart(container, opts) {
     tip.appendChild(line(`Proj ${tenth(p.x)} · Actual ${tenth(p.y)}`, false));
     if (p.href) tip.setAttribute('href', String(p.href));
     else tip.removeAttribute('href');
-    tip.removeAttribute('hidden');
-    tip.style.display = 'block';
+    // A dot that carries a card opens the card, and the text preview stays shut.
+    const carded = cardHook && p.card != null && p.card !== '';
+    if (cardOpen && !carded) { cardOpen = false; if (typeof cardHook.hide === 'function') cardHook.hide(); }
+    if (carded) {
+      tip.setAttribute('hidden', '');
+      tip.style.display = 'none';
+      const dot = typeof svg.querySelector === 'function' ? svg.querySelector(`circle[data-i="${i}"]`) : null;
+      cardOpen = true;
+      cardHook.show(p.card, dot || focus || svg, p);
+    } else {
+      tip.removeAttribute('hidden');
+      tip.style.display = 'block';
+    }
 
     if (focus) {
       focus.setAttribute('cx', px[i].toFixed(1));
@@ -1467,6 +1583,7 @@ export function scatterChart(container, opts) {
     // outranks the browser's own [hidden] rule); the attribute says so.
     tip.setAttribute('hidden', '');
     tip.style.display = 'none';
+    if (cardOpen) { cardOpen = false; if (typeof cardHook.hide === 'function') cardHook.hide(); }
     if (focus) focus.setAttribute('opacity', '0');
     if (svg.style) svg.style.cursor = '';
   }
@@ -1580,6 +1697,7 @@ export function scatterChart(container, opts) {
   if (canDoc) document.addEventListener('pointerdown', onDoc);
   container.__ffScatterOff = () => {
     clearTimeout(hideTimer); clearTimeout(switchTimer);
+    if (cardOpen) { cardOpen = false; if (typeof cardHook.hide === 'function') cardHook.hide(); }
     if (canDoc) document.removeEventListener('pointerdown', onDoc);
   };
 

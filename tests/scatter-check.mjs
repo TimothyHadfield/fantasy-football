@@ -738,5 +738,49 @@ const xy = (el) => ({ x: num(el, 'cx'), y: num(el, 'cy') });
   window.location = had;
 }
 
+// ============================================================ a dot's card
+//
+// 2026-10-08: a dot can carry a player card. The page hands the card in
+// (`opts.card = { show, hide }`, js/player-card.js `showCard` / `hideTip`) and
+// a point names its card by key; that dot then opens the card beside itself
+// INSTEAD of the small text preview. Everything else — which dot is selected,
+// the click-through — is unchanged, and a point with no card previews as before.
+{
+  const c = host();
+  const went = [];
+  const calls = [];
+  const pts = POINTS.map((p, i) => (i === 0 ? { ...p, card: 'p:7' } : p));
+  const svg = draw(c, {
+    points: pts,
+    navigate: (href) => went.push(href),
+    card: { show: (key, el, p) => calls.push(['show', key, el && el.getAttribute('data-i'), p.name]), hide: () => calls.push(['hide']) },
+  });
+  const [d0, d1] = dots(svg).map(xy);
+  fire(svg, 'pointermove', { clientX: d0.x, clientY: d0.y });
+  eq(JSON.stringify(calls), JSON.stringify([['show', 'p:7', '0', pts[0].name]]),
+    'a dot with a card: card.show(key, its circle, the point)');
+  ok(!open(c), 'and the small text preview stays shut: one preview per dot');
+  fire(svg, 'pointerdown', { clientX: d0.x, clientY: d0.y });
+  fire(svg, 'click', { clientX: d0.x, clientY: d0.y });
+  eq(went.join('|'), String(pts[0].href), 'a click still follows the dot’s href');
+  fire(svg, 'pointermove', { clientX: d1.x, clientY: d1.y });
+  await new Promise((r) => setTimeout(r, 200));     // the 140 ms switch delay
+  ok(open(c), 'moving to a dot with NO card opens the text preview as before');
+  eq(JSON.stringify(calls[calls.length - 1]), JSON.stringify(['hide']), 'and the card is put away first');
+  const shows = calls.filter((x) => x[0] === 'show').length;
+  fire(svg, 'pointermove', { clientX: d0.x, clientY: d0.y });
+  await new Promise((r) => setTimeout(r, 200));
+  eq(calls.filter((x) => x[0] === 'show').length, shows + 1, 'back on the carded dot: the card again');
+  fire(document.body, 'pointerdown', { clientX: 5, clientY: 900 });
+  eq(JSON.stringify(calls[calls.length - 1]), JSON.stringify(['hide']), 'a press elsewhere on the page puts the card away');
+
+  // No hook handed in: a `card` on a point is ignored, and the preview is the old one.
+  const c2 = host();
+  const svg2 = draw(c2, { points: pts, navigate: () => {} });
+  const [e0] = dots(svg2).map(xy);
+  fire(svg2, 'pointermove', { clientX: e0.x, clientY: e0.y });
+  ok(open(c2), 'with no `card` option the text preview opens for every dot');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -151,14 +151,14 @@ function readPage(document) {
   let pop = null;
   if (firstGap) {
     firstGap.dispatchEvent(new document.defaultView.Event('mouseover', { bubbles: true }));
-    const el = $('oppPop');
+    const el = $('statCard');
     if (el && !el.hasAttribute('hidden')) {
       const cells = (sel) => Array.from(el.querySelectorAll(sel))
         .map((tr) => Array.from(tr.children).map((td) => clean(td.textContent)));
-      pop = { head: clean(el.querySelector('.op-h')?.textContent), body: cells('tbody tr'), foot: cells('tfoot tr') };
+      pop = { head: clean(el.querySelector('.tc-ident')?.textContent), body: cells('tbody tr'), foot: cells('tfoot tr') };
     }
     firstGap.dispatchEvent(new document.defaultView.Event('mouseout', { bubbles: true }));
-    pop = pop && { ...pop, shutAfter: $('oppPop').hasAttribute('hidden') };
+    pop = pop && { ...pop, shutAfter: $('statCard').hasAttribute('hidden') };
   }
 
   return {

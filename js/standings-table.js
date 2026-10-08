@@ -72,7 +72,8 @@ export function signed(n, digits = 1) {
  * @param {number|null} v the value the scale is asked about
  * @param {Object|null} scale a `heatScale(...)` result, or null for no colour
  * @param {Object} [opts]
- * @param {string} [opts.what] the comparison group, in words, for the title
+ * @param {string} [opts.what] the comparison group, in words, for the title;
+ *        without one the title reads "3rd highest of 10 · league avg 118.2"
  * @param {string} [opts.text] what to print, when it is not just the number
  * @param {string} [opts.extra] extra attributes (a `data-v` for the sort)
  *
@@ -91,7 +92,7 @@ export function signed(n, digits = 1) {
  * `data-v` on the page is; a caller that already supplies its own `data-v` in
  * `extra` (the Opp proj cell) keeps it.
  */
-export function heatCell(v, scale, { what = 'the rest of the league', text = null, extra = '' } = {}) {
+export function heatCell(v, scale, { what = '', text = null, extra = '' } = {}) {
   const shown = text === null ? fmt(v) : text;
   const h = heatOf(v, scale, { what });
   const dv = typeof v === 'number' && Number.isFinite(v) && !/\bdata-v=/.test(extra)
@@ -174,12 +175,9 @@ export function standingsScales(stats, { oppProj = null } = {}) {
   };
 }
 
-const W_AVG = 'what the league averages a week';
-const W_PROJ = 'what the league is projected a week';
-const W_OPP = 'the opponents the rest of the league has faced';
-const W_OPP_PROJ = 'the schedules the rest of the league drew';
-const W_FA = 'the margins the rest of the league is winning by';
-const W_LUCK = 'how far the rest of the league is beating its projection';
+// Every scaled column here is one figure across the league, so a cell's title
+// is its rank and the league's average of that same column and names no other
+// group: "3rd highest of 10 · league avg 118.2" (js/heat.js, plain standing).
 
 // -------------------------------------------------------------------- the rows
 
@@ -221,14 +219,14 @@ function teamCells(t, { scales, recordOf, oppProj, explain }) {
   return [
     `<td class="name">${esc(t.name)}</td>`,
     `<td data-v="${recordSortKey(rec, t.pointsFor)}"${rec.live ? ` title="${esc(rec.title)}"` : ''}>${rec.text}</td>`,
-    heatCell(off ? null : t.avgActual, scales.avg, { what: W_AVG, text: n(t.avgActual) }),
-    heatCell(off ? null : t.avgProjected, scales.proj, { what: W_PROJ, text: n(t.avgProjected) }),
+    heatCell(off ? null : t.avgActual, scales.avg, { text: n(t.avgActual) }),
+    heatCell(off ? null : t.avgProjected, scales.proj, { text: n(t.avgProjected) }),
     `<td${off ? '' : ` data-v="${t.pointsFor}"`}>${off ? dash : pf(t.totalActual)}</td>`,
-    heatCell(off ? null : t.oppAvgActual, scales.opp, { what: W_OPP, text: n(t.oppAvgActual) }),
-    heatCell(off ? null : t.forMinusAgainst, scales.fa, { what: W_FA, text: g(t.forMinusAgainst) }),
+    heatCell(off ? null : t.oppAvgActual, scales.opp, { text: n(t.oppAvgActual) }),
+    heatCell(off ? null : t.forMinusAgainst, scales.fa, { text: g(t.forMinusAgainst) }),
     `<td>${n(t.actualStdev)}</td>`,
-    o ? heatCell(o.avgOpp, scales.oppProj, { what: W_OPP_PROJ, extra: `data-v="${o.avgOpp}"` }) : `<td>${dash}</td>`,
-    heatCell(off ? null : t.avgLuck, scales.luckWk, { what: W_LUCK, text: g(t.avgLuck) }),
+    o ? heatCell(o.avgOpp, scales.oppProj, { extra: `data-v="${o.avgOpp}"` }) : `<td>${dash}</td>`,
+    heatCell(off ? null : t.avgLuck, scales.luckWk, { text: g(t.avgLuck) }),
     `<td${ex('pointsToWin')}>${n(t.pointsToWin)}</td>`,
     lk('scoreDiffLuck'),
     lk('luckScore'),
@@ -430,11 +428,11 @@ const HEAD = [
   ['Total', 'Total points scored so far this season.'],
   ['Opp Avg', 'Average points your opponents scored against you.'],
   ['F−A', 'Points for minus points against, per week — your average weekly margin.'],
-  ['Spread', 'Spread: the standard deviation of your weekly scores. Low means week-to-week consistency. Needs at least two weeks.'],
+  ['Spread', 'Spread: how far your weekly scores swing from your average. Low means week-to-week consistency. Needs at least two weeks.'],
   ['Opp proj', 'Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play in the whole season. High means a hard schedule.'],
   ['Luck/wk', 'Luck per week: your average score minus your average projection. Positive means you keep beating your projection.'],
   ['PTW', 'Points to win: your average opponent’s score minus your own average luck — the projection you needed to beat a typical opponent.'],
-  ['Close luck', 'Close-game luck (your sheet’s SD): weights each result by how close it was, so a one-point game scores near ±50 and a blowout near zero.'],
+  ['Close luck', 'Close-game luck: weights each result by how close it was, so a one-point game scores near ±50 and a blowout near zero.'],
   ['Luck score', 'Luck score (your sheet’s LUCK) = league average − (PTW − close luck). One week counts ±50 at most. Above zero means the season has broken your way.'],
   ['Skill', 'Skill = your average projected score minus the league’s average projected score.'],
   ['S+L', 'Skill + luck score (your sheet’s S+L).'],

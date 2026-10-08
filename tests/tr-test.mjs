@@ -3916,8 +3916,8 @@ if (!fresh.boot) {
     fresh.tintedDepthCells > 0, String(fresh.tintedDepthCells));
   ok('its visible key says the three deepest and thinnest are tinted',
     /three deepest and three thinnest/.test(fresh.depthKey) && !fresh.depthKeyHidden, fresh.depthKey);
-  ok('and that this is not the ±1 SD scale used above',
-    /not the ±1 SD scale/.test(fresh.depthKey), fresh.depthKey);
+  ok('and that this is not the colour scale used above',
+    /not the colour scale above/.test(fresh.depthKey) && !/\bSD\b/.test(fresh.depthKey), fresh.depthKey);
   ok('in one sentence',
     (fresh.depthKey.match(/[.!?](\s|$)/g) || []).length === 1, fresh.depthKey);
 
@@ -4750,8 +4750,8 @@ if (!wk.boot) {
       rows.some((r) => r.myHeat.cls !== r.theirHeat.cls),
       JSON.stringify(rows.map((r) => `${r.myHeat.cls}/${r.theirHeat.cls}`)));
     ok('every tinted cell says in words exactly where it stands',
-      litMine.every((r) => /SD (above|below)/.test(r.myHeat.title)) &&
-      litTheirs.every((r) => /SD (above|below)/.test(r.theirHeat.title)),
+      litMine.every((r) => /(highest|lowest) of \d+ · /i.test(r.myHeat.title) && !/\bSD\b/.test(r.myHeat.title)) &&
+      litTheirs.every((r) => /(highest|lowest) of \d+ · /i.test(r.theirHeat.title) && !/\bSD\b/.test(r.theirHeat.title)),
       (litMine[0] || {}).title);
     ok('and names its own comparison group, never the other column’s',
       litMine.every((r) => /gain you/.test(r.myHeat.title)) &&
@@ -4788,7 +4788,9 @@ if (!wk.boot) {
       /per column and never across the table/i.test(wk.after.note),
       wk.after.note.slice(-900));
     ok('and the thresholds in points are in the method, so a cell can be checked by hand',
-      /reaching full colour 1 standard deviation away/i.test(wk.after.note),
+      // These two columns are percentage points of title chance, so the page
+      // asks for the thresholds without the " pts" unit.
+      /reaching full colour at [-\d.]+ or better, [-\d.]+ or worse/i.test(wk.after.note) && !/standard deviation/.test(wk.after.note.slice(-900)),
       wk.after.note.slice(-600));
     ok('which says the two columns are scaled apart and why',
       /two different squads’ answers/.test(wk.after.note), wk.after.note.slice(-400));
@@ -5036,7 +5038,7 @@ if (!wk.boot) {
         wk.deal.weeks.past.every((r) => !r.coloured),
         JSON.stringify(wk.deal.weeks.past.slice(0, 2)));
       ok('and the key under the table prints the thresholds in points',
-        /reaching full colour 1 standard deviation away/i.test(wk.deal.weeks.heatKey) &&
+        /reaching full colour at [-\d.]+ pts or better/i.test(wk.deal.weeks.heatKey) &&
           /Played and playoff weeks are in no total/.test(wk.deal.weeks.heatKey),
         wk.deal.weeks.heatKey.slice(0, 240));
     }
@@ -7620,7 +7622,7 @@ if (!gt.boot) {
     T.count.split(/\s+/).length < 60, `${T.count.split(/\s+/).length} words`);
   ok('and the method behind the toggle carries the measured band and the argument',
     /±0\.4 of a percentage point between seeds/.test(T.note) &&
-      /standard deviation of 0\.27/.test(T.note) &&
+      /typically 0\.27 points and at worst 0\.49/.test(T.note) && !/standard deviation/.test(T.note) &&
       /closer than 0\.4 of a point are shown as level/.test(T.note) &&
       /the grouping never moves a row/.test(T.note),
     T.note.slice(T.note.indexOf('It still moves'), T.note.indexOf('It still moves') + 700));

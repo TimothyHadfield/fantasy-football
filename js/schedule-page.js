@@ -41,6 +41,7 @@ import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
+import { readIntParam } from './links.js';
 import * as snapshots from './snapshots.js';
 import * as backup from './backup.js';
 
@@ -880,7 +881,26 @@ function adopt(data) {
   state.sim = null;
   state.simToken++;
   render();
+  landOnLinkedWeek(data);
   refreshStrength();
+}
+
+// ARRIVING FROM ANOTHER PAGE: `schedule.html?week=3` (js/links.js `weekHref`)
+// is a card somewhere else on the site saying "that week's matchups". The week
+// is shown and Week matchups brought into view. It is for this visit only — it
+// is not saved as the picked week — and the first week picked by hand ends it.
+let linkedWeek = readIntParam('week');
+const linkedLanded = new Set();
+
+function landOnLinkedWeek(data) {
+  if (linkedWeek === null || !data.weeks.includes(linkedWeek)) return;
+  // Once for the sample and once for the league that replaces it; a later
+  // re-sync must not drag the page back up the screen.
+  const kind = data.isDemo ? 'demo' : 'live';
+  if (linkedLanded.has(kind)) return;
+  linkedLanded.add(kind);
+  const head = $('matchupsTitle');
+  if (head && typeof head.scrollIntoView === 'function') head.scrollIntoView({ block: 'start' });
 }
 
 /**
@@ -906,6 +926,7 @@ function adopt(data) {
 function restoreWeek(data) {
   const current = currentWeek(data);
   const usable = (w) => w === 'all' || (typeof w === 'number' && data.weeks.includes(w));
+  if (linkedWeek !== null && usable(linkedWeek)) return linkedWeek;   // see landOnLinkedWeek
   if (!data.isDemo && state.weekPickedLive && usable(state.week)) return state.week;
   const saved = prefs.get('week', null);
   if (!usable(saved)) return current;
@@ -3493,6 +3514,7 @@ $('snapFile').addEventListener('change', async (e) => {
 
 /** The week picker drives the whole page, so changing it re-renders the page. */
 function setWeek(value) {
+  linkedWeek = null;       // a week picked by hand outranks the link that opened the page
   state.week = value === 'all' ? 'all' : Number(value);
   prefs.set('week', state.week);
   // Only a pick on live data pins a live reload; a demo pick is a replay point

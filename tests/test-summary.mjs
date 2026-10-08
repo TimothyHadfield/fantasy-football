@@ -806,7 +806,8 @@ if (!fresh.boot) {
       byTitle[0].heat.title === 'up', `${byTitle[0].name} -> ${byTitle[0].heat.title}`);
   }
   ok('a shaded cell says where it stands in words, for a tap on a phone',
-    fresh.rows.some((r) => /SD (above|below)/.test(r.titles.join(' '))),
+    fresh.rows.some((r) => /(highest|lowest) of \d+ · league avg/i.test(r.titles.join(' '))) &&
+      !fresh.rows.some((r) => /\bSD\b|standard deviation/.test(r.titles.join(' '))),
     JSON.stringify(fresh.rows[0].titles));
   // Channel 4. Without it the colour is unverifiable, and the inverted column
   // is an active trap.

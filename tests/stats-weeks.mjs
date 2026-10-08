@@ -254,7 +254,8 @@ if (process.argv[2]) {
         problems.push('a cell at the end of the scale carries no glyph');
       }
       const tinted = Array.from(main.querySelectorAll('td[class*="heat-up-"], td[class*="heat-dn-"]'));
-      if (tinted.some((td) => !(td.getAttribute('title') || '').includes('SD'))) {
+      if (tinted.some((td) => !/(highest|lowest) of \d+ · /i.test(td.getAttribute('title') || '') ||
+          /\bSD\b|standard deviation/.test(td.getAttribute('title') || ''))) {
         problems.push('a coloured cell does not say where it stands');
       }
       if (!/Green is good for that team, red is bad/.test(text('mainTableStatus'))) {

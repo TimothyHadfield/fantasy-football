@@ -730,8 +730,9 @@ async function checkStartsCard(c, document, window) {
     !handColumns(together).some((k) => /\bheat\b/.test(k.cls(k.th)) || /\bheat\b/.test(k.cls(k.act))),
     'the scale leaked off the Proj row');
   c.ok('every coloured cell carries its standing in words, for a reader who cannot see the colour',
-    heated.every((k) => /SD (above|below) the average for his own weeks/
-      .test(k.proj.getAttribute('aria-label') || '')),
+    heated.every((k) => /(highest|lowest) of \d+ · avg [\d.]+ for his own weeks/i
+      .test(k.proj.getAttribute('aria-label') || '') &&
+      !/\bSD\b|standard deviation/.test(k.proj.getAttribute('aria-label') || '')),
     heated[0] && heated[0].proj.getAttribute('aria-label'));
   c.ok('AS AN aria-label AND NOT A title — a title here would draw a second tooltip over the card',
     !handColumns(together).some((k) => k.proj && k.proj.hasAttribute('title')),

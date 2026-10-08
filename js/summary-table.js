@@ -88,8 +88,11 @@ export function summaryScales(rows, { shadeLuck = true, minSpread = PCT_MIN_SPRE
 }
 
 /** One shaded cell. The `title` is channel 3 of "never colour alone". */
-const shaded = (v, scale, what, inner) => {
-  const h = heatOf(v, scale, { what });
+const shaded = (v, scale, fmt, inner) => {
+  // No group is named: each column is one figure across the league, so the
+  // title reads "2nd highest of 10 · league avg 12%", the average printed the
+  // way the column prints it.
+  const h = heatOf(v, scale, { fmt });
   return `<td class="num${h ? ` ${h.cls}` : ''}" data-v="${v ?? ''}"` +
     `${h ? ` title="${esc(h.words)}"` : ''}>${inner}${heatMarkHtml(h)}</td>`;
 };
@@ -110,11 +113,11 @@ function rowCells(r, { enough, waiting, scales }) {
     nameCell(r),
     `<td class="num" data-v="${r.rec ? r.rec.wins : ''}"${
       r.rec && r.rec.live ? ` title="${esc(r.rec.title)}"` : ''}>${recordText(r)}</td>`,
-    shaded(r.luck, scales.luck, 'the rest of the league’s luck',
+    shaded(r.luck, scales.luck, null,
       `${enough ? signed(r.luck) : dash}${
         enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`),
-    shaded(r.title, scales.title, 'the rest of the league’s title chance', pctCell(r.title)),
-    shaded(r.last, scales.last, 'the rest of the league’s chance of finishing last', pctCell(r.last)),
+    shaded(r.title, scales.title, pct, pctCell(r.title)),
+    shaded(r.last, scales.last, pct, pctCell(r.last)),
   ];
 }
 

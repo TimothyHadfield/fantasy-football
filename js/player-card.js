@@ -74,6 +74,17 @@
 //   tipAttr(key)                                          ' data-tip="…"'
 //   clearRuns()                       every registered run on the page is dead
 //
+//   ADDED 2026-10-08 (the site-wide preview work; each is documented where it
+//   is defined):
+//   playerCardFromWeeks(weekTeams, player, opts) -> { ident, run, glance, href, … }
+//                       the whole card from a week -> teams map, for any page
+//                       that is not Analysis or Trade; hand it to registerRun
+//   tipAttr(key, { go: true })        a MOUSE click (and Enter) on the element
+//                                     follows the card's href — the connector
+//   showCard(key, el, { sheet })      open a registered card beside any element
+//                                     (a chart dot); close it with hideTip()
+//   Opening this card closes the stat card (js/pop.js) and the reverse.
+//
 //     `ident` is the identity line — name · position · NFL team · injury.
 //     `href`  is the player click-through (waivers.html?player=<espnPlayerId>)
 //             or null for a man ESPN gives no id for. It is only READ in the
@@ -335,6 +346,11 @@
 
 import { coarsePointer } from './connection.js';
 import { heatScale, heatOf } from './heat.js';
+// A cycle with js/pop.js (it imports `hideTip` from here), and a safe one: each
+// side only CALLS the other's function, from inside an event handler, long
+// after both modules have finished loading.
+import { hidePop } from './pop.js';
+import { playerHref } from './links.js';
 
 // A local copy rather than an import: this module has to stand on its own for
 // any page that wants the card, and a four-line escaper is a smaller price
@@ -697,7 +713,7 @@ function heatLine(scale) {
   const at = (v) => (Math.round(v * 10) / 10).toFixed(1);
   return 'Colour on the Proj row compares each week with HIS OWN other weeks — green is a good ' +
     'week for him, red a poor one. It is never a comparison with another player or another ' +
-    `position. Full colour ${edge} standard deviation out: ${at(scale.mean + edge * scale.sd)} pts ` +
+    `position. Full colour at ${at(scale.mean + edge * scale.sd)} pts ` +
     `or better, ${at(scale.mean - edge * scale.sd)} pts or worse, against an average of ` +
     `${at(scale.mean)} over the ${scale.n} week${scale.n === 1 ? '' : 's'} with a number. His best ` +
     'and worst weeks also carry ▲ or ▼, so none of it depends on telling red from green.';
@@ -776,10 +792,149 @@ export function glanceHtml(glance) {
  * Trade page's custom lists). Its touch route is another cell with the same key.
  */
 export const TIP_HOVER_ATTR = 'data-tip-hover';
-export function tipAttr(key, { hoverOnly = false } = {}) {
-  return ` ${TIP_ATTR}="${esc(key)}"${hoverOnly ? ` ${TIP_HOVER_ATTR}` : ''}`;
+/**
+ * `go` (2026-10-08, "build any connectors by clicking on the preview"): a MOUSE
+ * click on this element follows the card's registered `href`, and so does Enter
+ * from the keyboard — for a name that is plain text rather than an
+ * `<a class="pref">`. Opt-in, because the Analysis grids hang cards on cells
+ * inside a clickable team row and settle whose click it is with
+ * `clickIsPlayer`. A real link, button or form control inside the element keeps
+ * its own click; a card registered without an `href` goes nowhere. On a touch
+ * screen nothing changes: the tap opens the sheet, whose button is the link.
+ */
+export const TIP_GO_ATTR = 'data-tip-go';
+export function tipAttr(key, { hoverOnly = false, go = false } = {}) {
+  return ` ${TIP_ATTR}="${esc(key)}"${hoverOnly ? ` ${TIP_HOVER_ATTR}` : ''}${go ? ` ${TIP_GO_ATTR}` : ''}`;
+}
+
+/** Follow a card's link the way a click on a link would. */
+function follow(href) {
+  if (!href || typeof window === 'undefined' || !window.location) return;
+  if (typeof window.location.assign === 'function') window.location.assign(href);
+  else window.location.href = href;
 }
 const touchSkips = (cell) => coarsePointer() && cell.hasAttribute(TIP_HOVER_ATTR);
+
+// ------------------------------------------- a man's card from the weeks read
+//
+// THE SHARED BUILDER (2026-10-08). Analysis and Trade each build a card from
+// their own index of the season and keep doing so; this is the one every OTHER
+// page uses, so a name on Home, Stats, Schedule or Decisions opens the same
+// card — the 3-row chart of week, avg and proj with his main details on top —
+// from nothing but the weeks the page already holds.
+//
+//   playerCardFromWeeks(weekTeams, player, opts?) -> { ident, run, glance, href, id, openLabel }
+//     weekTeams  Map or object: week -> teams[], each `{ players: [...] }` as
+//                js/season.js returns them (`fetchWeekRosters`). A bare array
+//                of players for a week is accepted too.
+//     player     `{ playerId, name, position, proTeam, proTeamId?, injuryStatus?,
+//                   seasonAvg?, posRank? }` — any roster entry.
+//     opts       weeks        the weeks to draw, in order (default: every week
+//                             in `weekTeams`, ascending)
+//                currentWeek  ESPN's current scoring period: the highlighted
+//                             column and the week the glance line's Proj reads
+//                byes         js/season.js `fetchByeWeeks()` — what a 0.00 means
+//                demo, playoffWeeks, heading, href, openLabel, id
+//   The result goes straight to `registerRun`:
+//     `<span${tipAttr(registerRun(playerCardFromWeeks(weeks, p, o), 'home'), { go: true })}>`
+//
+// HE IS LOOKED FOR ON EVERY ROSTER of a week, not one team's: a man traded in
+// week 5 has a whole season, and this card is about him, not about a squad.
+// A week that has not been read, AND a week nobody held him, are both `wait`
+// (drawn "·"): this page has no number for him there and says so, where the
+// Analysis grids' `off` would claim to know which roster he was missing from.
+// `href` defaults to his row on the Players page (`playerHref`, js/links.js).
+
+const numOr = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+export function playerCardFromWeeks(weekTeams, player, {
+  weeks = null, currentWeek = null, byes = null, demo = false, playoffWeeks = [],
+  heading = null, href = undefined, openLabel = null, id = null,
+} = {}) {
+  const p = player || {};
+  const get = (w) => {
+    if (!weekTeams) return undefined;
+    if (typeof weekTeams.get === 'function') return weekTeams.get(w) ?? weekTeams.get(String(w));
+    return weekTeams[w];
+  };
+  const keys = !weekTeams ? []
+    : typeof weekTeams.keys === 'function' ? [...weekTeams.keys()] : Object.keys(weekTeams);
+  const given = Array.isArray(weeks) && weeks.length > 0;
+  const span = (given ? weeks : keys).map(Number).filter(Number.isFinite);
+  if (!given) span.sort((a, b) => a - b);
+
+  // His entry in one week: on whichever roster holds him.
+  const same = (q) => !!q && (p.playerId !== null && p.playerId !== undefined
+    ? q.playerId === p.playerId
+    : q.name === p.name && q.position === p.position);
+  const entry = (w) => {
+    const teams = get(w);
+    if (!Array.isArray(teams)) return null;
+    for (const t of teams) {
+      if (t && Array.isArray(t.players)) {
+        const hit = t.players.find(same);
+        if (hit) return hit;
+      } else if (same(t)) return t;
+    }
+    return null;
+  };
+  const found = span.map(entry);
+  // The same rule as the Analysis roster detail (`weekLine`): a finished man's
+  // `projected` is his score, so his projection is `pregame`; a running score
+  // is not a result.
+  const line = (q) => {
+    if (!q) return { proj: 'wait', actual: 'wait' };
+    if (q.done === true) {
+      return { proj: numOr(q.pregame), actual: numOr(q.actual) ?? numOr(q.projected) };
+    }
+    if (q.done === false) return { proj: numOr(q.projected), actual: null };
+    return { proj: numOr(q.projected), actual: numOr(q.actual) };
+  };
+  const lines = found.map(line);
+
+  const range = !span.length ? ''
+    : span.length === 1 ? `week ${span[0]}` : `weeks ${span[0]}–${span[span.length - 1]}`;
+  const run = weekRun({
+    heading: heading ?? (demo ? `Sample projections for ${range}` : `ESPN’s projection for ${range}`),
+    weeks: span,
+    projections: lines.map((l) => l.proj),
+    actuals: lines.map((l) => l.actual),
+    currentWeek,
+    demo,
+    byeWeek: byeWeekOf(p, byes),
+    injuryStatus: found.map((q) => (q && q.injuryStatus) || p.injuryStatus || null),
+    playoffWeeks,
+  });
+
+  // ESPN's three numbers: off the current week's entry, else the latest week
+  // that carries them, else the player object handed in.
+  const nowAt = span.indexOf(Number(currentWeek));
+  const here = nowAt >= 0 ? found[nowAt] : null;
+  const latest = (field) => {
+    for (let i = found.length - 1; i >= 0; i -= 1) {
+      const v = found[i] ? numOr(found[i][field]) : null;
+      if (v !== null) return v;
+    }
+    return null;
+  };
+  const glance = {
+    avg: numOr(here?.seasonAvg) ?? latest('seasonAvg') ?? numOr(p.seasonAvg),
+    proj: here ? line(here).proj : null,
+    rank: numOr(here?.posRank) ?? latest('posRank') ?? numOr(p.posRank),
+    pos: p.position || null,
+  };
+
+  const status = (here && here.injuryStatus) || p.injuryStatus || '';
+  const ident = [p.name, p.position, p.proTeam, status].filter(Boolean).join(' · ');
+  return {
+    ident,
+    run,
+    glance,
+    href: href === undefined ? playerHref(p.playerId) : href,
+    id,
+    openLabel,
+  };
+}
 
 /**
  * Every registered run on the page is dead — call this when the markup
@@ -1112,8 +1267,24 @@ function cardHtml({ ident, run, href, openLabel, glance }, sheet) {
  * @param {boolean} sheet open it as a tap-opened sheet rather than a hover card
  */
 function showTip(cell, sheet = false) {
-  const data = RUNS.get(cell.dataset ? cell.dataset.tip : cell.getAttribute(TIP_ATTR));
-  if (!data) return;
+  return showCard(cell.dataset ? cell.dataset.tip : cell.getAttribute(TIP_ATTR), cell, { sheet });
+}
+
+/**
+ * Open a registered card beside ANY element — for a mark that cannot carry a
+ * `data-tip` of its own because it is not hovered as an element: a dot on the
+ * scatter chart, found by a nearest-dot scan (js/charts.js `opts.card`).
+ * Close it with `hideTip()`. Returns whether a card opened.
+ *
+ * @param {string}  key    what `registerRun` returned
+ * @param {Element} cell   the element to place the card beside
+ * @param {Object}  [o]
+ * @param {boolean} [o.sheet=false] open it as a tap-opened sheet instead
+ */
+export function showCard(key, cell, { sheet = false } = {}) {
+  const data = RUNS.get(key);
+  if (!data || !cell) return false;
+  hidePop();                              // one card open at a time, site-wide
   const el = cardNode();
   asSheet = sheet;                        // read by cardHtml, so set it first
   openId = data.id ?? null;
@@ -1134,6 +1305,7 @@ function showTip(cell, sheet = false) {
   } else {
     placeTip(cell);
   }
+  return true;
 }
 
 /** Close whatever is open. */
@@ -1257,14 +1429,42 @@ export function wireTips(el) {
     if (cellOf(e) && !asSheet) hideTip();
   });
 
+  // THE CONNECTOR, for a mouse and the keyboard: only on a cell that asked for
+  // it (`tipAttr(key, { go: true })`), and never over a control of its own.
+  const goHref = (cell, target) => {
+    if (!cell || !cell.hasAttribute(TIP_GO_ATTR)) return null;
+    if (target && target !== cell && target.closest &&
+        target.closest('a[href], button, label, input, select, textarea, summary')) return null;
+    const data = RUNS.get(cell.getAttribute(TIP_ATTR));
+    return data && data.href ? data.href : null;
+  };
+
   el.addEventListener('click', (e) => {
-    if (!coarsePointer()) return;
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
     const cell = cellOf(e);
+    if (!coarsePointer()) {
+      const href = goHref(cell, e.target);
+      if (!href) return;
+      e.preventDefault();
+      hideTip();
+      follow(href);
+      return;
+    }
     if (!cell || cell.hasAttribute(TIP_HOVER_ATTR)) return;
     e.preventDefault();
     e.stopPropagation();
     showTip(cell, true);
+  });
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || coarsePointer()) return;
+    const cell = cellOf(e);
+    if (!cell || cell !== e.target) return;
+    if (cell.matches && cell.matches('a[href], button')) return;
+    const href = goHref(cell, e.target);
+    if (!href) return;
+    e.preventDefault();
+    hideTip();
+    follow(href);
   });
 }
 

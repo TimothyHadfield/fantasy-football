@@ -102,10 +102,12 @@
 //      matters most, at about one cell in six a side rather than on all of
 //      them. Steps 1–3 deliberately carry no glyph: marking 45% of a table is
 //      the noise this rule is trying to avoid.
-//   3. WORDS ON THE CELL. `heatOf().words` is a sentence for the cell's
-//      `title` — "0.9 SD above what a WR2 is worth across the league" — and
-//      js/touch-titles.js makes a title a tap on a phone, so it is not
-//      hover-only. Rule 7 (state the basis of every derived number) would
+//   3. WORDS ON THE CELL. `heatOf().words` is one short clause for the cell's
+//      preview — "2nd highest of 10 · avg 12.4 for a WR2 across the league" —
+//      in PLAIN STANDING (rank and the group's average), never in standard
+//      deviations: Tim, 2026-10-08, called the old wording "SD and info we
+//      don't want or need". js/touch-titles.js makes a title a tap on a phone,
+//      so it is not hover-only. Rule 7 (state the basis of every derived number) would
 //      require this even if the colour rule did not.
 //   4. WORDS IN THE KEY. `describeHeat()` writes the scale out under the table
 //      in points, not in adjectives, so any cell can be checked by hand.
@@ -224,12 +226,19 @@ const finite = (v) => typeof v === 'number' && Number.isFinite(v);
  *   deviation the column counts as flat and gets no scale — see the long note
  *   on HEAT_MIN_SPREAD, which is a real defect this caught rather than a
  *   precaution.
- * @returns {{n:number, mean:number, sd:number, invert:boolean, edges:number[]}|null}
- *   null when there is not enough to be sure — see section 4.
+ * @param {(n:number)=>string} [opts.fmt] how to PRINT a number of this kind in
+ *   the cell's words (the group's average). Default: one decimal, or two when
+ *   the whole group sits inside ±1 (a share or a chance). A column of
+ *   percentages passes e.g. `(v) => Math.round(v * 100) + '%'`.
+ * @returns {{n:number, mean:number, sd:number, invert:boolean, edges:number[],
+ *            sorted:number[], fmt:Function|null}|null}
+ *   null when there is not enough to be sure — see section 4. `sorted` is every
+ *   value of the group, highest first, kept so `heatOf` can say where one value
+ *   RANKS without the caller handing the group in a second time.
  */
 export function heatScale(
   values,
-  { invert = false, edges = HEAT_EDGES, minSpread = HEAT_MIN_SPREAD } = {}
+  { invert = false, edges = HEAT_EDGES, minSpread = HEAT_MIN_SPREAD, fmt = null } = {}
 ) {
   const xs = (values || []).filter(finite);
   const sd = stdev(xs);
@@ -239,21 +248,84 @@ export function heatScale(
   // the fifteenth decimal says.
   if (sd === null || !(sd > 0) || sd < minSpread) return null;
   const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
-  return { n: xs.length, mean, sd, invert: Boolean(invert), edges: edges.slice() };
+  return {
+    n: xs.length, mean, sd, invert: Boolean(invert), edges: edges.slice(),
+    sorted: xs.slice().sort((a, b) => b - a),
+    fmt: typeof fmt === 'function' ? fmt : null,
+  };
+}
+
+// Two values printed alike are the same value to a reader, and a sum of floats
+// must not be ranked apart from its twin by the fifteenth decimal.
+const SAME = 1e-9;
+
+/**
+ * Where one value stands in its group, as the pieces a card can lay out.
+ *
+ * @returns {{rank:number, lowRank:number, of:number, mean:number, member:boolean}|null}
+ *   `rank` counts from the HIGHEST value (1 = the highest number, whatever
+ *   direction is good — it is about the number, like `z`); `lowRank` counts
+ *   from the lowest. Tied values share a rank. `of` is the size of the group,
+ *   plus one when the value asked about is not itself one of its members.
+ */
+export function heatStanding(value, scale) {
+  if (!scale || !finite(value)) return null;
+  const sorted = scale.sorted || [];
+  let above = 0;
+  let below = 0;
+  let member = false;
+  for (const x of sorted) {
+    if (x > value + SAME) above += 1;
+    else if (x < value - SAME) below += 1;
+    else member = true;
+  }
+  return {
+    rank: above + 1,
+    lowRank: below + 1,
+    of: sorted.length + (member ? 0 : 1),
+    mean: scale.mean,
+    member,
+  };
+}
+
+/** 1 -> "1st", 2 -> "2nd", 11 -> "11th", 22 -> "22nd". */
+export function ordinal(n) {
+  const t = n % 100;
+  if (t >= 11 && t <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+}
+
+/** The group's average as that group's numbers are printed. */
+function meanText(scale, fmt) {
+  const f = typeof fmt === 'function' ? fmt : scale.fmt;
+  if (f) return String(f(scale.mean));
+  const sorted = scale.sorted || [];
+  const small = sorted.length > 0 &&
+    Math.max(Math.abs(sorted[0]), Math.abs(sorted[sorted.length - 1])) <= 1;
+  return scale.mean.toFixed(small ? 2 : 1);
 }
 
 /**
  * One value's standing on a scale, or null when it has none.
  *
  * @returns {{z:number, dir:-1|0|1, step:number, cls:string, mark:string,
- *            words:string}|null}
+ *            words:string, rank:number, lowRank:number, of:number, mean:number,
+ *            standing:string, avgText:string}|null}
  *
  * `z` is signed against the RAW value (above the mean is positive) and `dir` is
  * signed against GOODNESS (+1 is the good end, whichever end that is). Keeping
- * the two apart is what lets `words` say "above the league" on an inverted
- * column while the cell is still painted red.
+ * the two apart is what lets `words` say "Highest of 10" on an inverted column
+ * while the cell is still painted red.
+ *
+ * THE PIECES, for a caller laying them out in a card rather than a sentence:
+ * `rank` (1 = the highest number), `lowRank` (1 = the lowest), `of` (the size
+ * of the group), `mean` (its average, unrounded), `standing` ("2nd highest of
+ * 10") and `avgText` (the average as printed, "118.2"). `words` is
+ * `standing · avg avgText for <what>`, or `standing · league avg avgText` with
+ * no `what`. Options: `what` names the group; `fmt` prints the average (else
+ * the scale's own `fmt`, else one decimal).
  */
-export function heatOf(value, scale, { what = '' } = {}) {
+export function heatOf(value, scale, { what = '', fmt = null } = {}) {
   if (!scale || !finite(value)) return null;
   const z = (value - scale.mean) / scale.sd;
   const mag = Math.abs(z);
@@ -272,7 +344,7 @@ export function heatOf(value, scale, { what = '' } = {}) {
     step,
     cls: heatClassOf(dir, step),
     mark: step >= HEAT_MARK_STEP ? (dir > 0 ? HEAT_UP : HEAT_DOWN) : '',
-    words: heatWords(z, dir, step, scale, what),
+    ...heatWords(value, scale, what, fmt),
   };
 }
 
@@ -290,24 +362,30 @@ function heatClassOf(dir, step) {
 }
 
 /**
- * The sentence the cell's `title` carries — channel 3 of "never colour alone".
+ * The clause the cell's preview carries — channel 3 of "never colour alone".
  *
- * It quotes the z to one decimal and never rounds it away to a word: "well
- * below" is an adjective and 1.4 SD is a fact, and this is a site whose owner
- * checks the numbers by hand.
+ * PLAIN STANDING: where the number ranks in its group and what the group
+ * averages. Tim, 2026-10-08: "a bad preview is … the numbers in the week by
+ * week chart that talk about SD and info we don't want or need". So no
+ * standard deviations, no step numbers and nothing about the scale itself
+ * here — the key under a table explains the colours; this says where the
+ * number stands, in figures a reader can check against the column. The top
+ * half of a group counts down from the highest ("2nd highest of 10"), the
+ * bottom half up from the lowest ("2nd lowest of 10"), so the count is always
+ * the short one and never needs "which end is 1st?" answered.
  */
-function heatWords(z, dir, step, scale, what) {
-  const kind = what || 'the rest of the league';
-  const side = z >= 0 ? 'above' : 'below';
-  const sd = `${Math.abs(round1(z)).toFixed(1)} SD ${side}`;
-  if (!step) {
-    return `${sd} the average for ${kind} — inside the middle band, so it is left uncoloured.`;
-  }
-  const verdict = dir > 0 ? 'good' : 'poor';
-  const end = step >= HEAT_MARK_STEP
-    ? `, which is the end of the scale (${scale.edges[scale.edges.length - 1]} SD or more)`
-    : '';
-  return `${sd} the average for ${kind}${end} — step ${step} of ${HEAT_STEPS} on the ${verdict} side.`;
+function heatWords(value, scale, what, fmt) {
+  const st = heatStanding(value, scale);
+  const top = st.rank <= st.lowRank;
+  const r = top ? st.rank : st.lowRank;
+  const end = top ? 'highest' : 'lowest';
+  const place = r === 1 ? end[0].toUpperCase() + end.slice(1) : `${ordinal(r)} ${end}`;
+  const standing = `${place} of ${st.of}`;
+  const avgText = meanText(scale, fmt);
+  const words = what
+    ? `${standing} · avg ${avgText} for ${what}`
+    : `${standing} · league avg ${avgText}`;
+  return { words, rank: st.rank, lowRank: st.lowRank, of: st.of, mean: st.mean, standing, avgText };
 }
 
 /** Just the class, for a caller that wants nothing else. '' when there is no scale. */
@@ -357,10 +435,9 @@ export function describeHeat(scale, { what = 'the same column across the league'
     ? ` Green is ${high}; red is ${low}.`
     : '';
   return `Colour compares each number with ${what}: green above the average, red below, ` +
-    `deepening in ${HEAT_STEPS} steps and reaching full colour ${edge} standard deviation ` +
-    `away — ${greenAt.toFixed(1)}${u} or better, ${redAt.toFixed(1)}${u} or worse ` +
-    `(average ${round1(scale.mean).toFixed(1)}${u}, SD ${round1(scale.sd).toFixed(1)}${u}, ` +
-    `${scale.n} values). Cells at the end of the scale carry ${HEAT_UP} or ${HEAT_DOWN} as well ` +
+    `deepening in ${HEAT_STEPS} steps and reaching full colour at ` +
+    `${greenAt.toFixed(1)}${u} or better, ${redAt.toFixed(1)}${u} or worse ` +
+    `(average ${round1(scale.mean).toFixed(1)}${u}, ${scale.n} values). Cells at the end of the scale carry ${HEAT_UP} or ${HEAT_DOWN} as well ` +
     `as a colour, and the type gets heavier the further out a number is, so the scale can be ` +
     `read without separating the hues.${meaning}`;
 }
@@ -375,11 +452,10 @@ export function describeHeat(scale, { what = 'the same column across the league'
  * a disaster. That misreading is the exact thing section 1 exists to prevent.
  */
 export function describeHeatPerColumn({ group = 'column', what = 'the other squads' } = {}) {
-  const edge = HEAT_EDGES[HEAT_EDGES.length - 1];
   return `Colour is per ${group} and never across the table: each number is compared only with ` +
     `${what} in that same ${group}, so a quarterback is never measured against a kicker. Green is ` +
     `above that ${group}'s average and red below, in ${HEAT_STEPS} steps, reaching full colour ` +
-    `${edge} standard deviation out. Cells at the end of the scale carry ${HEAT_UP} or ` +
+    `at about the best and worst sixth of it. Cells at the end of the scale carry ${HEAT_UP} or ` +
     `${HEAT_DOWN}, and the type gets heavier the further out a number is, so none of it depends ` +
     `on telling red from green. Tap or hover any number for exactly where it stands.`;
 }
