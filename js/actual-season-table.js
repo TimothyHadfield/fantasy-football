@@ -220,11 +220,27 @@ export function seasonAvgHeat(squads = [], { rows = null, slots = null } = {}) {
  *        the difference view it is this lineup's Avg minus `diffFrom`'s, as printed.
  * @param {((slotKey:string|null) => Object|null)|null} [o.avgHeat]
  *        `seasonAvgHeat(...)`: the Avg column on the scale. Not in the difference view.
+ * @param {Object|null} [o.cards] A PREVIEW A CELL (Tim, 2026-10-08: "if the user
+ *        is curious about a number ... they should be able to hover over it and
+ *        show a preview"). Each function returns the ATTRIBUTE STRING of a card
+ *        the page registered (js/player-card.js `tipAttr`, js/pop.js
+ *        `statCard`), or '' for none; a cell that gets one carries NO `title`,
+ *        because a card and a title on one cell are two previews. All optional:
+ *          man(week, player, slotKey)        a man's cell: his player card
+ *          total(week, total, before)        a week's total (`before` is
+ *                                            `diffFrom`'s, in the difference view)
+ *          avg(slotKey, mean, cells, before) a row's Avg. `cells` is the row:
+ *                                            [{ week, p, points }]; slotKey null
+ *                                            is the total row, whose cells are
+ *                                            [{ week, points }]. `before` is
+ *                                            `diffFrom`'s mean, else undefined.
+ *        Without `cards` not a byte of the table differs.
  * @returns {string} `<table class="sbw-table">…`, to sit inside `.sbw`
  */
 export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } = {}, {
   diffFrom = null, dim = null, box = '', totalLabel = 'Total', live = null,
   sortable = false, heat = null, proj = false, mark = null, avg = false, avgHeat = null,
+  cards = null,
 } = {}) {
   const slotList = rows || slotRows(slots);
   const cols = [...weeks].sort((a, b) => a.week - b.week);
@@ -245,20 +261,28 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
 
   // `o.mark` and `o.avg`. Without them `chg` and `avgCell` add nothing at all.
   const chg = (e, week) => (mark && e && mark(week, e.p.playerId) ? ' sbw-chg' : '');
-  const avgCell = (mine, theirs, key, what) => {
+  // `o.cards`: the attribute of a cell's card, or '' — and with one, no title.
+  const cardOf = (fn, ...args) => (cards && typeof cards[fn] === 'function' ? cards[fn](...args) || '' : '');
+  const avgCell = (mine, theirs, key, what, cells) => {
     if (!avg) return '';
     const split = key === null ? ' split-total' : '';
     if (!diffFrom) {
       if (mine === null) return `<td class="avg${split} muted">—</td>`;
       const v = tenth(mine);
       const h = heatOf(v, avgHeat ? avgHeat(key) : null, { what });
+      const card = cardOf('avg', key, v, cells);
       return `<td class="avg${split}${h ? ` ${h.cls}` : ''}" data-v="${v}"` +
-        `${h ? ` title="${esc(h.words)}"` : ''}>${fmt(v)}${heatMarkHtml(h)}</td>`;
+        `${card || (h ? ` title="${esc(h.words)}"` : '')}>${fmt(v)}${heatMarkHtml(h)}</td>`;
     }
     const d = mine === null || theirs === null ? null : diffOf(mine, theirs);
     if (d === null) return `<td class="avg${split} muted">—</td>`;
-    return `<td class="avg${split} ${diffClass(d)}" data-v="${d}">${signedText(d)}</td>`;
+    return `<td class="avg${split} ${diffClass(d)}" data-v="${d}"${cardOf('avg', key, tenth(mine), cells, tenth(theirs))}>${signedText(d)}</td>`;
   };
+  /** A row as `cards.avg` is handed it: the man and the points of each week. */
+  const rowCells = (key) => cols.map((c, i) => {
+    const e = fills[i].get(key) || null;
+    return { week: c.week, p: e ? e.p : null, points: pointsOf(e) };
+  });
   const rowAvg = (list, key) => meanOf(list.map((fill) => (fill ? pointsOf(fill.get(key) || null) : null)));
 
   const body = slotList.map((row, place) => {
@@ -271,8 +295,9 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
         const h = heatOf(v, scaleOf(c.week, row.key), { what: `${row.key} in week ${c.week}` });
         const pj = proj ? projOf(e) : null;
         const both = pj === null ? '' : `: proj ${fmt(pj)}, scored ${fmt(scoreOf(e.p))}`;
-        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}${h ? ` ${h.cls}` : ''}${chg(e, c.week)}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
-          `title="${esc(saidOf(e) + both + (h ? `. ${h.words}` : ''))}">` +
+        const card = cardOf('man', c.week, e.p, row.key);
+        return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}${h ? ` ${h.cls}` : ''}${chg(e, c.week)}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at}` +
+          `${card || ` title="${esc(saidOf(e) + both + (h ? `. ${h.words}` : ''))}"`}>` +
           `${lines(e, (pj === null ? '' : `<span class="sbw-pj" data-r="${Math.round(pj)}">${fmt(pj)}</span> `) + fmt(scoreOf(e.p)) + heatMarkHtml(h))}</td>`;
       }
       // DIFFERENCE: this lineup minus the other, in the same slot row. An
@@ -287,12 +312,13 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       const title = swapped
         ? `${e ? saidOf(e) : 'Nobody'} instead of ${b ? b.p.name : 'nobody'}`
         : saidOf(e);
-      return `<td class="${cls}" data-v="${d}"${e ? ` data-pid="${esc(e.p.playerId ?? '')}"` : ''}${at} ` +
-        `title="${esc(title)}">${lines(e, signedText(d))}</td>`;
+      const card = e ? cardOf('man', c.week, e.p, row.key) : '';
+      return `<td class="${cls}" data-v="${d}"${e ? ` data-pid="${esc(e.p.playerId ?? '')}"` : ''}${at}` +
+        `${card || ` title="${esc(title)}"`}>${lines(e, signedText(d))}</td>`;
     });
     return `<tr data-slot="${esc(row.key)}"><td class="name"${sortable ? ` data-v="${place}"` : ''}><span class="slot-tag">${esc(row.key)}</span></td>` +
       `${cells.join('')}` +
-      `${avgCell(rowAvg(fills, row.key), rowAvg(beforeFills, row.key), row.key, `${row.key} averages`)}</tr>`;
+      `${avgCell(rowAvg(fills, row.key), rowAvg(beforeFills, row.key), row.key, `${row.key} averages`, cards ? rowCells(row.key) : null)}</tr>`;
   }).join('');
 
   const band = `<tr class="split-row"><td class="name split-label">${esc(totalLabel)}</td>` +
@@ -300,17 +326,18 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       const at = ` data-wk="${esc(c.week)}"${styles[i]}`;
       if (!diffFrom) {
         const h = heatOf(c.total, scaleOf(c.week, null), { what: `totals in week ${c.week}` });
+        const card = cardOf('total', c.week, c.total);
         return `<td class="wk split-total${h ? ` ${h.cls}` : ''}" data-v="${c.total}"${at}` +
-          `${h ? ` title="${esc(h.words)}"` : ''}>${fmt(c.total)}${heatMarkHtml(h)}</td>`;
+          `${card || (h ? ` title="${esc(h.words)}"` : '')}>${fmt(c.total)}${heatMarkHtml(h)}</td>`;
       }
       const b = beforeOf.get(c.week);
       const d = b ? diffOf(c.total, b.total) : null;
       if (d === null) return `<td class="wk split-total muted"${at}>—</td>`;
-      return `<td class="wk split-total ${diffClass(d)}" data-v="${d}"${at}>${signedText(d)}</td>`;
+      return `<td class="wk split-total ${diffClass(d)}" data-v="${d}"${at}${cardOf('total', c.week, c.total, b.total)}>${signedText(d)}</td>`;
     }).join('') +
     avgCell(meanOf(cols.map((c) => c.total)),
       meanOf(cols.map((c) => { const b = beforeOf && beforeOf.get(c.week); return b ? b.total : null; })),
-      null, 'average totals') + `</tr>`;
+      null, 'average totals', cards ? cols.map((c) => ({ week: c.week, points: c.total })) : null) + `</tr>`;
 
   return `<table class="sbw-table sbw-actual"${box ? ` data-box="${esc(box)}"` : ''}` +
     `${diffFrom ? ' data-view="diff"' : ''}><thead>${head}</thead>` +
