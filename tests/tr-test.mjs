@@ -250,6 +250,42 @@ function fire(el, type = 'change') {
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 
 /**
+ * THE PREVIEW ON A FIGURE (2026-10-08): hover it the way a mouse does and read
+ * the stat card (js/pop.js) it opens — '' when it opens nothing. Every figure
+ * on this page used to answer a hover with a raw `title`; the readers below
+ * that reported that attribute report this instead, and report the attribute
+ * separately (`rawTitle`) so "it carries no title any more" stays a claim.
+ */
+function popText(el) {
+  const document = globalThis.document;
+  if (!el || !document) return '';
+  const card0 = document.getElementById('statCard');
+  if (card0) card0.hidden = true;
+  el.dispatchEvent(new globalThis.Event('mouseover', { bubbles: true }));
+  const card = document.getElementById('statCard');
+  // CELL BY CELL, with a space between: `textContent` runs a table's cells
+  // together ("Wk" "Now" → "WkNow"), which no reader sees.
+  const out = card && !card.hidden
+    ? String(card.innerHTML).replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
+    : '';
+  el.dispatchEvent(new globalThis.Event('mouseout', { bubbles: true }));
+  return out;
+}
+
+/** The words above the week run on a man's player card: who he is, and his marks. */
+function cardWords(m) {
+  const document = globalThis.document;
+  const tip = m && (m.hasAttribute('data-tip') ? m : m.querySelector('[data-tip]'));
+  if (!tip || !document) return '';
+  tip.dispatchEvent(new globalThis.Event('mouseover', { bubbles: true }));
+  const card = document.getElementById('tipCard');
+  const out = card && !card.hidden ? `${text(card.querySelector('.tc-ident'))} ${text(card.querySelector('.tc-head'))}` : '';
+  tip.dispatchEvent(new globalThis.Event('mouseout', { bubbles: true }));
+  return out;
+}
+
+/**
  * THE PANELS, IN DOCUMENT ORDER — which is the whole of what this reads.
  *
  * Tim asked for them ordered by usefulness (2026-09-17): the finder, then the
@@ -288,7 +324,8 @@ function readDepth(document) {
       text: text(td),
       deep: (td.getAttribute('class') || '').includes('deep'),
       thin: (td.getAttribute('class') || '').includes('thin'),
-      tip: td.getAttribute('title') || '',
+      tip: popText(td),
+      rawTitle: td.getAttribute('title') || '',
     })),
     total: text(tr.querySelector('td.grouped')),
   }));
@@ -354,7 +391,8 @@ function readOfferRows(table) {
         on: /\bheat\b/.test(cls),
         cls: (cls.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
         mark: text(td.querySelector('.heatmark')),
-        title: td.getAttribute('title') || '',
+        title: popText(td),
+        rawTitle: td.getAttribute('title') || '',
         // Phase 5, V4: the mark sits BESIDE the number, i.e. before the cell's
         // `.sub` line. null when there is no mark or no sub to compare with.
         markBeforeSub: (() => {
@@ -423,7 +461,8 @@ function readOfferRows(table) {
           sub: subText,
           v: Number(td.getAttribute('data-v')),
           cls: td.getAttribute('class') || '',
-          title: td.getAttribute('title') || '',
+          title: popText(td),
+          rawTitle: td.getAttribute('title') || '',
           index: [...tr.children].indexOf(td),
         };
       })(),
@@ -442,7 +481,8 @@ function readOfferRows(table) {
           v: td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : NaN,
           cls: td.getAttribute('class') || '',
           wait: /\bgoal-wait\b/.test(td.getAttribute('class') || ''),
-          title: td.getAttribute('title') || '',
+          title: popText(td),
+          rawTitle: td.getAttribute('title') || '',
           index: [...tr.children].indexOf(td),
         };
       })(),
@@ -595,6 +635,9 @@ function readWeekTable(el) {
       // weeks of this deal. The played and playoff rows are in no total and so
       // in no scale, which is read separately below.
       heat: ((tds[3].getAttribute('class') || '').match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
+      // NOT hovered here: a hover on a week row also opens that week's slot
+      // panel, and a reader must not move the page it reads. The card behind
+      // this cell is opened, once, in the `previews` scenario.
       heatTitle: tds[3].getAttribute('title') || '',
     };
   });
@@ -2411,6 +2454,8 @@ function readByeMarks(root) {
       side: m.getAttribute('data-side') || '',
       cls: hl ? (hl.getAttribute('class') || '') : '',
       title: hl ? (hl.getAttribute('title') || '') : '',
+      // The marks' words, on the man's own player card since 2026-10-08.
+      card: hl || m.querySelector('.inj, .trend') ? cardWords(m) : '',
       hlText: hl ? visible(hl) : '',
       // The injury underline (2026-09-29): its class and its own tooltip.
       injCls: m.querySelector('.inj') ? (m.querySelector('.inj').getAttribute('class') || '') : '',
@@ -3749,6 +3794,180 @@ SCENARIOS.progress = async function progressScenario() {
   };
 };
 
+/**
+ * THE PREVIEWS (2026-10-08, docs/previews-plan.md). Demo, the weekly measure,
+ * a mouse. Every kind of figure on the page is hovered once and the stat card
+ * it opens is read back whole, beside the text of the cell it hangs off — so
+ * the assertions can hold each card to "ends on the number its cell prints".
+ * Then the custom builder is filled and its own figures are read the same way,
+ * and a finder row is opened for the pop-up's.
+ */
+SCENARIOS.previews = async function previews() {
+  const { document, window, errors, fetchCalls } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const q = (s) => document.querySelector(s);
+  const qa = (s) => [...document.querySelectorAll(s)];
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const cell = (el) => ({ text: textNoMark(el), card: popText(el), rawTitle: el ? el.getAttribute('title') || '' : null });
+
+  const row = q('#tradeTable tbody tr[data-key]');
+  const finder = {
+    partner: text(row && row.querySelector('.mgr')),
+    gain: cell(row && row.querySelector('td.gain')),
+    their: cell(row && row.querySelector('td.their-gain')),
+    lineup: cell(row && row.querySelector('td.before-after')),
+    goal: cell(row && row.querySelector('td.goal-cell')),
+    alt: cell(row && row.querySelector('td.alt-goal-cell')),
+    opp: cell(row && row.querySelector('td.opp-proj')),
+    mgr: cell(row && row.querySelector('.mgr')),
+    // Every gain in the table with its colour step: the zero-anchored scale.
+    gains: qa('#tradeTable td.gain, #tradeTable td.their-gain').map((td) => ({
+      v: Number(td.getAttribute('data-v')),
+      cls: ((td.getAttribute('class') || '').match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
+    })),
+    key: text($('finderKey') || q('#tradePanel .heat-key')),
+  };
+
+  const depthRow = q('#depthTable tbody tr');
+  const lineupCells = qa('#depthTable tbody tr td.grouped');
+  const depth = {
+    name: cell(depthRow && depthRow.querySelector('[data-tc]')),
+    lineup: cell(lineupCells[0]),
+    lineupCls: lineupCells.map((td) => ((td.getAttribute('class') || '').match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0]),
+    lineupV: lineupCells.map((td) => Number(td.getAttribute('data-v') || text(td).replace(/[^\d.-]/g, ''))),
+    // A chip opens the player card of the man who sets the bar — or, when the
+    // bar is the waiver floor and no man sets it, a stat card that says so.
+    chips: qa('#depthBars .bar-chip').map((c) => ({
+      text: text(c), rawTitle: c.getAttribute('title') || '',
+      card: cardWords(c) || popText(c.hasAttribute('data-pop') ? c : c.querySelector('[data-pop]')),
+    })),
+  };
+
+  // The builder: one man each way with whoever is on the other side.
+  const tick = (id) => { const b = q(`#${id} input[type="checkbox"]`); b.checked = true; fire(b, 'change'); };
+  tick('cuListA');
+  tick('cuListB');
+  await settle(800);
+  const liveWeek = (scope) => qa(`${scope} table.weeks tbody tr[data-wk]`)
+    .find((tr) => !/\bpast\b/.test(tr.getAttribute('class') || '') && tr.querySelector('td.delta'));
+  const cuTr = liveWeek('#cuInline');
+  const cuTrB = liveWeek('#cuInlineB');
+  const box = q('#cuSeason table.sbw-table');
+  const bandTd = box && [...box.querySelectorAll('td.split-total[data-wk]')].find((td) => !/\bplayed\b/.test(td.getAttribute('class') || ''));
+  const custom = {
+    partner: text(q('#cuTeamB option[selected]')).split(' · ')[0],
+    gainA: cell($('cuGainA')), gainB: cell($('cuGainB')),
+    meet: cell($('cuMeet')),
+    you: cell(q('#cuYou [data-tc]')), head: cell(q('#cuHeadB [data-tc]')),
+    deltaWeek: cuTr ? cuTr.getAttribute('data-wk') : null,
+    delta: cell(cuTr && cuTr.querySelector('td.delta')),
+    deltaB: cell(cuTrB && cuTrB.querySelector('td.delta')),
+    bandWeek: bandTd ? bandTd.getAttribute('data-wk') : null,
+    band: cell(bandTd),
+    weekHead: cell(box && box.querySelector('th[data-hw]')),
+    // A click on it is the connector: the Schedule page, on that week.
+    weekHeadLink: (() => {
+      const th = box && box.querySelector('th[data-hw]');
+      if (!th) return null;
+      fire(th, 'click');
+      return String(globalThis.location.href || '');
+    })(),
+  };
+  // Leave the builder as it was found.
+  fire($('cuClear'), 'click');
+  await settle(300);
+
+  // The pop-up: a mouse click on a figure still opens the deal (the card has
+  // no link of its own, so the click falls through to the row).
+  const gainTd = q('#tradeTable tbody tr[data-key] td.gain');
+  fire(gainTd, 'click');
+  await settle(800);
+  const dTr = liveWeek('#dealBody');
+  const deal = {
+    open: !$('dealModal').hidden,
+    title: text($('dealTitle')),
+    deltaWeek: dTr ? dTr.getAttribute('data-wk') : null,
+    delta: cell(dTr && dTr.querySelector('td.delta')),
+    slotNames: qa('#dealWeek .wkx-name').length,
+    slotNamesWithCard: qa('#dealWeek .wkx-name[data-tip]').length,
+  };
+  const mgrClick = (() => {
+    fire($('dealClose'), 'click');
+    const before = !$('dealModal').hidden;
+    // A manager's name is a link to his roster, not a way into the deal.
+    const m = q('#tradeTable tbody tr[data-key] .mgr');
+    const nav = [];
+    const old = window.location;
+    try { fire(m, 'click'); } catch (e) { nav.push(String(e)); }
+    return { before, openAfter: !$('dealModal').hidden, href: String((globalThis.location || old).href || '') };
+  })();
+
+  // Nothing a reader can see says SD; nothing that opens a card has a title.
+  const titled = qa('[title]').filter((el) => el.tagName !== 'TH')
+    .map((el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}.${(el.getAttribute('class') || '').split(' ')[0]}`);
+  const both = qa('[title]').filter((el) => el.hasAttribute('data-pop') || el.hasAttribute('data-rc') ||
+    el.hasAttribute('data-tc') || el.hasAttribute('data-tip')).length;
+  const said = qa('[title], [aria-label]').map((el) => `${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''}`).join(' ¦ ');
+  // The page's own column headings: not a week heading that opens a card, and
+  // not the cards' own tables (#tipCard, #statCard).
+  const heads = qa('thead th').filter((th) => !th.hasAttribute('data-hw') && !th.closest('#tipCard, #statCard'))
+    .map((th) => ({ text: text(th), title: th.getAttribute('title') || '', lines: (th.getAttribute('title') || '').split('\n').length }));
+
+  // What the deep-link scenario needs: a manager who is not the default one,
+  // two of his men and one of yours.
+  const opts = qa('#cuTeamB option').map((o) => o.getAttribute('value'));
+  const cur = $('cuTeamB').value;
+  const other = opts.find((v) => v !== cur);
+  $('cuTeamB').value = other;
+  fire($('cuTeamB'), 'change');
+  await settle(300);
+  const link = {
+    me: Number($('teamSelect').value), cur: Number(cur), b: Number(other),
+    get: qa('#cuListB input[type="checkbox"]').slice(0, 2).map((i) => i.getAttribute('value')),
+    send: qa('#cuListA input[type="checkbox"]').slice(1, 2).map((i) => i.getAttribute('value')),
+  };
+
+  return { errors, fetchCalls, finder, depth, custom, deal, mgrClick, titled, both, said, heads, link,
+    depthKey: text($('depthKey')) };
+};
+
+/**
+ * A DEAL HANDED OVER IN THE ADDRESS: `?with=<team>&get=<ids>&send=<ids>`
+ * (`TR_LINK`), on a browser that already holds a saved custom trade
+ * (`TR_LINK_SEED`, the whole `ff.prefs`). The builder must open on the link's
+ * deal, and the saved list must come through byte for byte — a link may not
+ * overwrite what the reader built.
+ */
+SCENARIOS.dealLink = async function dealLink() {
+  const seed = process.env.TR_LINK_SEED ? { 'ff.prefs': process.env.TR_LINK_SEED } : null;
+  const { document, window, errors } = await boot('trade.html', process.env.TR_LINK || '', seed);
+  const $ = (id) => document.getElementById(id);
+  const qa = (s) => [...document.querySelectorAll(s)];
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const saved = () => { try { return JSON.stringify(JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.custom'] ?? null); } catch { return 'unreadable'; } };
+  const ticked = (id) => qa(`#${id} input[type="checkbox"]`).filter((i) => i.checked || i.hasAttribute('checked')).map((i) => i.getAttribute('value'));
+  const read = () => ({
+    b: $('cuTeamB').value, a: ticked('cuListA'), bMen: ticked('cuListB'),
+    gainA: text($('cuGainA')), saved: saved(), savedRows: qa('#cuRows tr[data-cu]').length,
+  });
+  const opened = read();
+  // A repaint from elsewhere (the week picker) must not lose the link's deal…
+  fire($('weekSelect'), 'change');
+  await settleGoal(document);
+  const afterRepaint = read();
+  // …and the reader's own first change spends it: his manager, kept.
+  const other = qa('#cuTeamB option').map((o) => o.getAttribute('value')).find((v) => v !== opened.b);
+  $('cuTeamB').value = other;
+  fire($('cuTeamB'), 'change');
+  await settle(400);
+  fire($('weekSelect'), 'change');
+  await settleGoal(document);
+  const afterChange = { ...read(), want: other };
+  return { errors, opened, afterRepaint, afterChange };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);
@@ -3916,8 +4135,10 @@ if (!fresh.boot) {
     fresh.tintedDepthCells > 0, String(fresh.tintedDepthCells));
   ok('its visible key says the three deepest and thinnest are tinted',
     /three deepest and three thinnest/.test(fresh.depthKey) && !fresh.depthKeyHidden, fresh.depthKey);
-  ok('and that this is not the colour scale used above',
-    /not the colour scale above/.test(fresh.depthKey) && !/\bSD\b/.test(fresh.depthKey), fresh.depthKey);
+  // 2026-10-08 (docs/colour-plan.md): the Lineup column IS coloured against the
+  // league now, so the key says which part is the tint and which the scale.
+  ok('and that the Lineup column is coloured against the league',
+    /Lineup is coloured against the league/.test(fresh.depthKey) && !/\bSD\b/.test(fresh.depthKey), fresh.depthKey);
   ok('in one sentence',
     (fresh.depthKey.match(/[.!?](\s|$)/g) || []).length === 1, fresh.depthKey);
 
@@ -4010,9 +4231,16 @@ if (!fresh.boot) {
       !fresh.depth.rows.some((r) => r.cells[i].deep && r.cells[i].thin));
   }
 
-  ok('every cell explains itself on hover',
-    fresh.depth.rows.every((r) => r.cells.every((c) => /startable/.test(c.tip))),
+  // 2026-10-08: a card naming the starters, the spare men and the bar, in
+  // place of one sentence counting them.
+  ok('every cell opens a card: its starters over the bar, ending on the cell’s own figure',
+    fresh.depth.rows.every((r) => r.cells.every((c) => /over the bar/.test(c.tip) &&
+      /Starters over the bar/.test(c.tip) && c.rawTitle === '')),
     fresh.depth.rows[0].cells[0].tip);
+  ok('and the card’s last figure is the one the cell prints',
+    fresh.depth.rows.every((r) => r.cells.every((c) =>
+      c.tip.includes(`Starters over the bar ${(c.text.match(/^[+−-]?[\d.]+/) || [c.text])[0]}`))),
+    `${fresh.depth.rows[0].cells[0].text} / ${fresh.depth.rows[0].cells[0].tip}`);
 
   ok('the replacement bar for every column is stated, not implied',
     fresh.depth.bars.length === 6, fresh.depth.bars.join(' | '));
@@ -4737,26 +4965,41 @@ if (!wk.boot) {
     ok('every gain cell has been MEASURED, which is a different thing from painted',
       rows.length > 2 && rows.every((r) => r.myHeat.on && r.theirHeat.on),
       JSON.stringify(rows.slice(0, 2).map((r) => [r.myHeat.cls, r.theirHeat.cls])));
-    ok('some rows are tinted and not all of them — a scale with a middle band',
-      litMine.length > 0 && litMine.length < rows.length,
-      `${litMine.length} of ${rows.length} tinted in You gain`);
+    // ANCHORED AT ZERO since 2026-10-08, so "not all of them" is no longer a
+    // property of the scale: forty offers that all gain are forty green cells.
+    // What it must do is tint, and in more than one strength.
+    const strengths = (list, k) => new Set(list.map((r) => r[k].cls.match(/heat-(?:up|dn)-\d/)[0]));
+    ok('rows are tinted, and in more than one strength — a scale, not a flag',
+      litMine.length > 0 && strengths(litMine, 'myHeat').size > 1,
+      `${litMine.length} of ${rows.length} tinted in You gain: ${[...strengths(litMine, 'myHeat')].join(' ')}`);
     ok('and the same is true of He gains, which is its own scale',
-      litTheirs.length > 0 && litTheirs.length < rows.length,
-      `${litTheirs.length} of ${rows.length} tinted in He gains`);
+      litTheirs.length > 0 && strengths(litTheirs, 'theirHeat').size > 1,
+      `${litTheirs.length} of ${rows.length} tinted in He gains: ${[...strengths(litTheirs, 'theirHeat')].join(' ')}`);
     // THE TWO SCALES ARE NOT ONE. A row whose two gains are far apart must be
     // able to land on different steps; pooling them would make the top row of
     // one column and the top row of the other agree by construction.
     ok('the two columns are scaled apart, not pooled into one',
       rows.some((r) => r.myHeat.cls !== r.theirHeat.cls),
       JSON.stringify(rows.map((r) => `${r.myHeat.cls}/${r.theirHeat.cls}`)));
-    ok('every tinted cell says in words exactly where it stands',
-      litMine.every((r) => /(highest|lowest) of \d+ · /i.test(r.myHeat.title) && !/\bSD\b/.test(r.myHeat.title)) &&
-      litTheirs.every((r) => /(highest|lowest) of \d+ · /i.test(r.theirHeat.title) && !/\bSD\b/.test(r.theirHeat.title)),
-      (litMine[0] || {}).title);
-    ok('and names its own comparison group, never the other column’s',
-      litMine.every((r) => /gain you/.test(r.myHeat.title)) &&
-      litTheirs.every((r) => /gain the other manager/.test(r.theirHeat.title)),
-      `${(litMine[0] || {}).title} | ${(litTheirs[0] || {}).title}`);
+    // 2026-10-08 (docs/previews-plan.md): the cell's hover was a sentence about
+    // the colour ("3rd highest of 40 · …"). It is now the week table the figure
+    // is made of, and the cell carries no raw title beside it.
+    ok('every gain cell opens its week table: now, with the trade, the change',
+      rows.every((r) => /Wk Now With trade/.test(r.myHeat.title) && !/\bSD\b/.test(r.myHeat.title)) &&
+      rows.every((r) => /Wk Now With trade/.test(r.theirHeat.title) && !/\bSD\b/.test(r.theirHeat.title)),
+      (rows[0] || { myHeat: {} }).myHeat.title);
+    ok('titled as its own column, never the other’s',
+      rows.every((r) => /^You gain/.test(r.myHeat.title)) &&
+      rows.every((r) => /^He gains/.test(r.theirHeat.title)),
+      `${(rows[0] || { myHeat: {} }).myHeat.title.slice(0, 40)} | ${(rows[0] || { theirHeat: {} }).theirHeat.title.slice(0, 40)}`);
+    ok('and none carries a raw title to compete with it',
+      rows.every((r) => r.myHeat.rawTitle === '' && r.theirHeat.rawTitle === ''));
+    // THE COLOUR IS ANCHORED AT ZERO (docs/colour-plan.md): scaled against the
+    // other offers, the weakest good offer drew red.
+    ok('no gain above zero is drawn red, and none below zero green — in either column',
+      rows.every((r) => !(r.myGain > 0.05 && /heat-dn/.test(r.myHeat.cls)) && !(r.myGain < -0.05 && /heat-up/.test(r.myHeat.cls)) &&
+        !(r.theirGain > 0.05 && /heat-dn/.test(r.theirHeat.cls)) && !(r.theirGain < -0.05 && /heat-up/.test(r.theirHeat.cls))),
+      JSON.stringify(rows.map((r) => `${r.myGain}:${r.myHeat.cls} ${r.theirGain}:${r.theirHeat.cls}`)).slice(0, 240));
     // CHANNEL 2: the end of the scale carries a glyph as well as a tint.
     const ends = rows.filter((r) => /heat-(up|dn)-4/.test(r.myHeat.cls));
     ok('a cell at the end of the scale carries ▲ or ▼ as well as its colour',
@@ -4776,7 +5019,9 @@ if (!wk.boot) {
     // and took this one status line from 37px to 206px tall at 390px; they are
     // in the method below now, beside the thresholds they belong with.
     ok('the key under the finder says what the colour compares, in one line',
-      /only with the other offers in the same column/i.test(wk.after.count) &&
+      // A plus is green and a minus red since 2026-10-08 (anchored at zero); the
+      // other offers only set how strong.
+      /against the other offers in the same column; green plus, red minus/i.test(wk.after.count) &&
         /[▲▼]/.test(wk.after.count) && /heavier type/i.test(wk.after.count),
       wk.after.count.slice(0, 200));
     ok('and it is SHORT — a key, not the method',
@@ -4784,13 +5029,13 @@ if (!wk.boot) {
     // The THRESHOLDS in points live behind the toggle with the rest of the
     // method — the visible key is a small line, which is the panel shape
     // HANDOFF describes and what `text-audit.mjs` measures.
-    ok('and the method carries the per-column rule the visible line no longer spells out',
-      /per column and never across the table/i.test(wk.after.note),
+    ok('and the method carries the rule the visible line no longer spells out: colour starts at zero',
+      /Colour starts at zero: a plus is green and a minus is red, never the other way round/i.test(wk.after.note),
       wk.after.note.slice(-900));
     ok('and the thresholds in points are in the method, so a cell can be checked by hand',
       // These two columns are percentage points of title chance, so the page
       // asks for the thresholds without the " pts" unit.
-      /reaching full colour at [-\d.]+ or better, [-\d.]+ or worse/i.test(wk.after.note) && !/standard deviation/.test(wk.after.note.slice(-900)),
+      /begins at ±[\d.]+, deepens in \d+ steps and is full at ±[\d.]+/i.test(wk.after.note) && !/standard deviation/.test(wk.after.note.slice(-900)),
       wk.after.note.slice(-600));
     ok('which says the two columns are scaled apart and why',
       /two different squads’ answers/.test(wk.after.note), wk.after.note.slice(-400));
@@ -5029,8 +5274,11 @@ if (!wk.boot) {
       ok('the weeks are measured against each other, and some stand out',
         rows2.every((r) => r.heat !== '') && lit.length > 0 && lit.length < rows2.length,
         `${lit.length} of ${rows2.length} · ${rows2.map((r) => r.heat).join(',')}`);
-      ok('and every tinted week says where it stands against the others',
-        lit.every((r) => /other weeks of this deal/.test(r.heatTitle)),
+      // 2026-10-08: the sentence ranking the cell among the other weeks is
+      // gone (it was the "bad preview"); the cell opens the slot lines instead
+      // — see the `previews` scenario — and carries no raw title to compete.
+      ok('and no week carries the old ranking sentence as a raw title',
+        rows2.every((r) => r.heatTitle === ''),
         (lit[0] || {}).heatTitle);
       // A PLAYED WEEK IS IN NO TOTAL, so it is in no scale — putting it in
       // would move the mean of a set it is not drawn from.
@@ -6111,6 +6359,11 @@ if (!live.boot) {
   const green = (m) => /\bbye-hl\b/.test(m.cls) && /\bbye-send\b/.test(m.cls) && !/bye-get/.test(m.cls);
   const yellow = (m) => /\bbye-hl\b/.test(m.cls) && /\bbye-get\b/.test(m.cls) && !/bye-send/.test(m.cls);
   const plain = (m) => !m.cls && !m.title && !/bye/i.test(m.sr);
+  // 2026-10-08: the pill's words are in the heading of the man's player card
+  // (lower-cased, after his position), and the pill carries no `title` — it
+  // was a second preview on the name that already opens the card.
+  const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+  const onCard = (m, words) => m.title === '' && m.card.includes(lower(words));
   const every = (list, f) => list.length > 0 && list.every(f);
   const dump = (x) => JSON.stringify(x).slice(0, 240);
 
@@ -6121,7 +6374,7 @@ if (!live.boot) {
   // GREEN: a man she SENDS who is off in the meeting week.
   const sent = men(cyRows(sends), 'send');
   ok('finder: every man you send to Cy, off in week 8, is on green', every(sent, green), dump(sent));
-  ok('with the week and the partner in its tooltip', every(sent, (m) => m.title === WORDS), dump(sent));
+  ok('with the week and the partner on his card, and no tooltip of its own', every(sent, (m) => onCard(m, WORDS)), dump(sent));
   ok('and in sr-only words that say you send him', every(sent, (m) => /bye in week 8/i.test(m.sr) &&
     /play Cy/.test(m.sr) && /you send him/.test(m.sr)), dump(sent));
   ok('the sr-only words are not in the visible text', every(sent, (m) => !/bye in week/i.test(m.visible) &&
@@ -6158,7 +6411,7 @@ if (!live.boot) {
   // YELLOW: a man she GETS who is off in the meeting week.
   const got = men(cyRows(gets), 'recv');
   ok('finder: every man you get from Cy, off in week 8, is on yellow', every(got, yellow), dump(got));
-  ok('with the same tooltip', every(got, (m) => m.title === WORDS), dump(got));
+  ok('with the same words on his card', every(got, (m) => onCard(m, WORDS)), dump(got));
   ok('and sr-only words that say you get him', every(got, (m) => /you get him/.test(m.sr)), dump(got));
   ok('finder: the men you send (no bye) are not marked', every(men(cyRows(gets), 'send'), plain),
     dump(men(cyRows(gets), 'send')));
@@ -6191,11 +6444,11 @@ if (!live.boot) {
   const bo = (offWeek.finder || []).filter((x) => /^Bo\b/.test(x.partner));
   const boSent = men(bo, 'send');
   ok('Bo: every Bo deal the finder keeps marks the men you send, off in week 9, on green',
-    boSent.every((m) => green(m) && m.title === BO_WORDS), dump(boSent));
+    boSent.every((m) => green(m) && onCard(m, BO_WORDS)), dump(boSent));
   ok('and the finder key is there exactly when such a man is shown',
     /green/i.test(offWeek.finderKey) === boSent.length > 0, `${boSent.length} · ${offWeek.finderKey}`);
   ok('Bo, custom box: your men off in week 9 (a week you play Bo) are on green, the tooltip naming every week',
-    every(offWeek.listABo, (m) => plain(m) || (green(m) && m.title === BO_WORDS)) &&
+    every(offWeek.listABo, (m) => plain(m) || (green(m) && onCard(m, BO_WORDS))) &&
       offWeek.listABo.some(green), dump(offWeek.listABo));
   // The custom box prints the key itself only when no table above it has: once
   // on the page either way.
@@ -6308,13 +6561,14 @@ if (!live.boot) {
   ok('the questionable man is underlined everywhere he is drawn',
     q.length > 0 && q.every((m) => /\binj\b/.test(m.injCls)), dump(q));
   ok('with "Questionable" in his tooltip, as Home words it',
-    q.length > 0 && q.every((m) => /Questionable/.test(m.injTitle)), dump(q));
+    // On his player card since 2026-10-08, not in a second tooltip on the name.
+    q.length > 0 && q.every((m) => m.injTitle === '' && /Questionable/i.test(m.card)), dump(q));
   ok('and in his sr-only words, not his visible text',
     q.length > 0 && q.every((m) => /Questionable/.test(m.sr) && !/Questionable/.test(m.visible)), dump(q));
   ok('and the green bye pill is still on him',
     q.length > 0 && q.every((m) => /bye-send/.test(m.cls)), dump(q));
   ok('the IR man is underlined, labelled "IR"',
-    ir.length > 0 && ir.every((m) => /\binj\b/.test(m.injCls) && /\bIR\b/.test(m.injTitle) && /\bIR\b/.test(m.sr)),
+    ir.length > 0 && ir.every((m) => /\binj\b/.test(m.injCls) && m.injTitle === '' && /\bIR\b|INJURY_RESERVE/.test(m.card) && /\bIR\b/.test(m.sr)),
     dump(ir));
   ok('nobody healthy is underlined', rest.length > 20 && rest.every((m) => !m.injCls && !/injury/i.test(m.sr)),
     dump(rest.filter((m) => m.injCls)));
@@ -6381,8 +6635,18 @@ if (!live.boot) {
     dump(arrowed.map((m) => [m.id, m.trendSr])));
   ok('and never in the visible text', everyone.every((m) => !/preseason/.test(m.visible)),
     dump(everyone.filter((m) => /preseason/.test(m.visible))));
-  ok('the tooltip carries the same words', arrowed.every((m) => WORDS[m.id].test(m.trendTitle)),
+  // 2026-10-08: the arrow's own tooltip competed with the player card on the
+  // same name, so it is gone and the card's heading says it (shorter: the
+  // sources are in the sr-only words above and in "How this works").
+  const CARD = {
+    4431459: /up 2\.1 a week since preseason \(9\.9 → 12\.0\)/,
+    [-16033]: /up 5\.0 a week since preseason \(7\.0 → 12\.0\)/,
+    4429795: /down 4\.7 a week since preseason \(19\.7 → 15\.0\)/,
+  };
+  ok('the arrow carries no tooltip of its own', arrowed.every((m) => m.trendTitle === ''),
     dump(arrowed.map((m) => m.trendTitle)));
+  ok('and the man’s card says the same thing in its heading', arrowed.every((m) => CARD[m.id] && CARD[m.id].test(m.card)),
+    dump(arrowed.map((m) => [m.id, m.card])));
   // Coexisting marks: the Ravens D/ST is sent to Cy in the bye week AND questionable.
   const ravens = everyone.filter((m) => m.id === -16033 && m.cell === 'send');
   ok('the arrow sits with the green bye pill and the injury underline on one man',
@@ -7016,7 +7280,8 @@ if (!live.boot) {
     tinted.every((r) => r.card),
     `${tinted.filter((r) => r.card).length} of ${tinted.length}`);
   ok('the key under the lists says the scale is per position, not across the table',
-    /his own position/i.test(cu.heatKey) && /these two squads/i.test(cu.heatKey) &&
+    // Across the LEAGUE since 2026-10-08, as Players does — never the two squads.
+    /his own position across the league/i.test(cu.heatKey) && !/these two squads/i.test(cu.heatKey) &&
       /[▲▼]/.test(cu.heatKey) && /heavier type/i.test(cu.heatKey),
     cu.heatKey.slice(0, 200));
   ok('and it is one short line, with the reasoning in the method below',
@@ -8426,6 +8691,161 @@ if (!gl.boot) {
       `preview filled ${tl.timing.tAlt} ms; after switch: ranked ${tl.timing.tRanked2} ms, preview ${tl.timing.tAlt2} ms`);
   } catch (e) {
     ok('the slowed-live two-goals checks ran without throwing', false, String(e && e.stack).slice(0, 300));
+  }
+}
+
+// ---- the previews (2026-10-08, docs/previews-plan.md) -----------------------
+//
+// Tim: "If the user is curious about a number or it's breakdown … they should
+// be able to hover over it and show a preview." Each kind of figure opens a
+// card that ENDS ON THE NUMBER ITS CELL PRINTS; nothing that opens a card
+// carries a raw title beside it; and no card says SD.
+//
+// SEEN FAILING against the page as it was (js/trade-page.js at `main`,
+// 2026-10-08): every card below read '' and the link scenario opened on the
+// default manager with nothing ticked.
+{
+  const pv = run('previews');
+  ok('the previews scenario boots', !pv.boot, pv.boot);
+  if (!pv.boot) try {
+    ok('no console errors with every card opened', pv.errors.length === 0, pv.errors.slice(0, 2).join(' | '));
+    ok('and no card costs a request', pv.fetchCalls.length === 0, pv.fetchCalls.slice(0, 2).join(' | '));
+    const F = pv.finder;
+    const head = (c) => (c.text.match(/^[+−-]?\d+\.\d/) || [''])[0];
+    const sub = (c) => (c.text.match(/([+−-]?\d+\.\d) total/) || ['', ''])[1];
+
+    // -- You gain / He gains / Your lineup: the week table --------------------
+    for (const [name, c, title] of [['You gain', F.gain, /^You gain · with /], ['He gains', F.their, /^He gains · /],
+      ['Your lineup', F.lineup, /^Your lineup · with /]]) {
+      ok(`${name}: opens a week table — now, with the trade, the change`,
+        title.test(c.card) && /Wk Now With trade \+\/−/.test(c.card), c.card.slice(0, 120));
+      ok(`${name}: carries no raw title beside it`, c.rawTitle === '', c.rawTitle);
+    }
+    ok('You gain: the card’s Per week line is the cell’s own headline figure',
+      head(F.gain) !== '' && new RegExp(`Per week [\\d.]+ [\\d.]+ ${head(F.gain).replace('+', '\\+')}( |$)`).test(F.gain.card),
+      `${F.gain.text} / ${F.gain.card.slice(-90)}`);
+    ok('and its last line is the cell’s total',
+      sub(F.gain) !== '' && F.gain.card.includes(` ${sub(F.gain)}`) && /All \d+ /.test(F.gain.card),
+      `${F.gain.text} / ${F.gain.card.slice(-90)}`);
+    {
+      // The weeks add up to that total, to the tenth they are printed at.
+      const weeks = [...F.gain.card.matchAll(/(?<!All) (\d+)(?: ↑)? ([\d.]+) ([\d.]+) ([+−]?\d+\.\d)(?= )/g)].map((m) => m[4]);
+      const sum = weeks.reduce((a, s) => a + Math.round(Number(s.replace('−', '-')) * 10), 0) / 10;
+      ok('and the weeks in between add up to it', weeks.length > 3 && Math.abs(sum - Number(sub(F.gain).replace('−', '-'))) <= 0.051,
+        `${weeks.join(' ')} = ${sum} vs ${sub(F.gain)}`);
+    }
+    ok('He gains: ends on his own figure', head(F.their) !== '' && F.their.card.includes(` ${head(F.their)}`),
+      `${F.their.text} / ${F.their.card.slice(-90)}`);
+
+    // -- the goal: three lines ----------------------------------------------
+    ok('the goal cell: you now → with, him now → with, the chance he says yes',
+      /You now → with \d+\.\d% → \d+\.\d%/.test(F.goal.card) &&
+      F.goal.card.includes(`${F.partner} now → with`) && /Chance he says yes \d+%/.test(F.goal.card), F.goal.card);
+    ok('and not the long sentence about simulated seasons', !/simulated seasons/.test(F.goal.card) && F.goal.rawTitle === '',
+      F.goal.card + F.goal.rawTitle);
+    ok('the other goal: yours only, and it says it ranks nothing',
+      /You now → with/.test(F.alt.card) && /does not rank/.test(F.alt.card) && F.alt.rawTitle === '', F.alt.card);
+    ok('his projection against you opens a card of its own', new RegExp(`^${F.partner} vs you`).test(F.opp.card) &&
+      F.opp.rawTitle === '', F.opp.card);
+
+    // -- a manager's name -----------------------------------------------------
+    ok('a manager’s name opens his team card: record, average, this week’s projection',
+      F.mgr.card.startsWith(F.partner) && /Record \d+–\d+/.test(F.mgr.card) && /Avg score/.test(F.mgr.card) &&
+      /Week \d+ projected \d+\.\d/.test(F.mgr.card), F.mgr.card);
+    ok('and a click on it goes to his roster on Analysis, not into the deal',
+      /analysis\.html\?team=\d+.*#rosterDetail$/.test(pv.mgrClick.href) && !pv.mgrClick.openAfter, JSON.stringify(pv.mgrClick));
+    ok('the depth map’s names open the same card', /Record \d+–\d+/.test(pv.depth.name.card), pv.depth.name.card);
+
+    // -- the zero-anchored colour, on the page --------------------------------
+    ok('no gain above zero is red and none below zero green, anywhere in the finder',
+      F.gains.length > 0 && F.gains.every((g) => !(g.v > 0.05 && /heat-dn/.test(g.cls)) && !(g.v < -0.05 && /heat-up/.test(g.cls))),
+      JSON.stringify(F.gains.filter((g) => (g.v > 0.05 && /heat-dn/.test(g.cls)) || (g.v < -0.05 && /heat-up/.test(g.cls))).slice(0, 6)));
+
+    // -- the depth map ---------------------------------------------------------
+    ok('the depth Lineup cell opens the team’s lineup, slot by slot, ending on the cell',
+      /QB /.test(pv.depth.lineup.card) && pv.depth.lineup.card.endsWith(`Total ${pv.depth.lineup.text}`),
+      `${pv.depth.lineup.text} / ${pv.depth.lineup.card.slice(-80)}`);
+    {
+      // Coloured against the league: the best lineup is green, the worst red.
+      const v = pv.depth.lineupV; const c = pv.depth.lineupCls;
+      const hi = v.indexOf(Math.max(...v)); const lo = v.indexOf(Math.min(...v));
+      ok('the Lineup column is coloured against the league: highest green, lowest red',
+        c.every((x) => x !== '') && /heat-up/.test(c[hi]) && /heat-dn/.test(c[lo]), `${v.join(',')} / ${c.join(',')}`);
+    }
+    ok('every bar chip opens a card — the man who sets the bar — and carries no raw title',
+      pv.depth.chips.length === 6 && pv.depth.chips.every((ch) => ch.card.length > 0 && ch.rawTitle === ''),
+      JSON.stringify(pv.depth.chips).slice(0, 300));
+
+    // -- the builder -----------------------------------------------------------
+    const C = pv.custom;
+    ok('the builder’s You gain opens the same week table', /^You gain · with /.test(C.gainA.card) &&
+      head(C.gainA) !== '' && C.gainA.card.includes(` ${head(C.gainA)}`), `${C.gainA.text} / ${C.gainA.card.slice(-90)}`);
+    ok('and his figure opens his', /^He gains · /.test(C.gainB.card) && head(C.gainB) !== '' &&
+      C.gainB.card.includes(` ${head(C.gainB)}`), `${C.gainB.text} / ${C.gainB.card.slice(-90)}`);
+    ok('"You play him" opens the meetings', /^You play /.test(C.meet.card), C.meet.card);
+    ok('the builder’s two names open team cards', /Record/.test(C.you.card) && /Record/.test(C.head.card),
+      `${C.you.card} | ${C.head.card}`);
+    for (const [name, c] of [['yours', C.delta], ['his', C.deltaB]]) {
+      ok(`a Difference cell (${name}) opens that week’s slot lines, ending on the cell`,
+        c.card.startsWith(`Week ${C.deltaWeek}`) && /Lineup \d+\.\d → \d+\.\d/.test(c.card) &&
+        c.card.endsWith(`Difference ${head(c) || c.text.split(' ')[0]}`), `${c.text} / ${c.card}`);
+      ok(`and not a sentence ranking it among the other weeks (${name})`,
+        !/other weeks of this deal/.test(c.card + c.rawTitle) && c.rawTitle === '', c.rawTitle);
+    }
+    ok('a season-box lineup total opens that lineup, ending on the cell',
+      /QB /.test(C.band.card) && C.band.card.includes(`Total ${C.band.text}`), `${C.band.text} / ${C.band.card.slice(-80)}`);
+    ok('a season-box week heading opens the week, with a way to the Schedule',
+      /^Week \d+/.test(C.weekHead.card) && /schedule\.html\?week=\d+/.test(C.weekHeadLink || ''),
+      `${C.weekHead.card} / ${C.weekHeadLink}`);
+
+    // -- the pop-up ------------------------------------------------------------
+    ok('a mouse click on a figure still opens the deal', pv.deal.open && pv.deal.title.length > 0, JSON.stringify(pv.deal).slice(0, 200));
+    ok('the pop-up’s Difference opens that week’s slot lines, ending on the cell',
+      pv.deal.delta.card.startsWith(`Week ${pv.deal.deltaWeek}`) &&
+      pv.deal.delta.card.endsWith(`Difference ${head(pv.deal.delta)}`), `${pv.deal.delta.text} / ${pv.deal.delta.card}`);
+    ok('every name in the slot-by-slot panel opens a player card',
+      pv.deal.slotNames > 0 && pv.deal.slotNamesWithCard === pv.deal.slotNames,
+      `${pv.deal.slotNamesWithCard} of ${pv.deal.slotNames}`);
+
+    // -- the rules -------------------------------------------------------------
+    const cards = [F.gain, F.their, F.lineup, F.goal, F.alt, F.opp, F.mgr, pv.depth.name, pv.depth.lineup,
+      C.gainA, C.gainB, C.meet, C.delta, C.deltaB, C.band, C.weekHead, pv.deal.delta].map((c) => c.card).join(' ¦ ');
+    ok('no card says SD, z-score or "step n of 4"', !/\bSD\b|z-score|standard deviation|step \d of \d/i.test(cards),
+      (cards.match(/.{30}(\bSD\b|z-score|step \d of \d).{30}/i) || [''])[0]);
+    ok('nor does any title or aria-label on the page', !/\bSD\b|z-score|standard deviation|step \d of \d/i.test(pv.said),
+      (pv.said.match(/.{40}(\bSD\b|z-score|step \d of \d).{40}/i) || [''])[0]);
+    ok('nothing that opens a card also carries a raw title', pv.both === 0, String(pv.both));
+    ok('the raw titles left on the page are the ones Tim kept (the accept-by line, the connection chip)',
+      pv.titled.every((t) => /deal-accept|cuAccept|cu-you|conn|kind|site-|nav|week|source|^a\b|^button|^select|^input|^label|^summary|^abbr/.test(t)),
+      [...new Set(pv.titled)].join(' '));
+    const named = pv.heads.filter((h) => h.text && !h.title);
+    ok('every column heading keeps a title', named.length === 0, named.map((h) => h.text).join(' | '));
+    ok('and each is one line', pv.heads.every((h) => h.lines === 1), pv.heads.filter((h) => h.lines > 1).map((h) => h.text).join(' | '));
+
+    // -- a deal handed over in the address -------------------------------------
+    const L = pv.link;
+    const seeded = [{ a: L.me, b: L.cur, sendA: [L.send[0]], sendB: [] }];
+    const dl = run('dealLink', { env: {
+      TR_LINK: `?with=${L.b}&get=${L.get.join(',')}&send=${L.send.join(',')}`,
+      TR_LINK_SEED: JSON.stringify({ 'trade.custom': seeded }),
+    } });
+    ok('the link scenario boots', !dl.boot, dl.boot);
+    if (!dl.boot) {
+      ok('no console errors there', dl.errors.length === 0, dl.errors.slice(0, 2).join(' | '));
+      eq(dl.opened.b, String(L.b), 'the builder opens on the manager the link names');
+      eq(dl.opened.bMen.slice().sort().join(','), L.get.slice().sort().join(','), 'with the men you would get ticked');
+      eq(dl.opened.a.join(','), L.send.join(','), 'and the men you would send');
+      ok('and the deal is priced', /[+−]?\d+\.\d\/wk/.test(dl.opened.gainA), dl.opened.gainA);
+      eq(dl.opened.saved, JSON.stringify(seeded), 'THE SAVED TRADE IS UNTOUCHED: a link overwrites nothing');
+      eq(dl.opened.savedRows, 1, 'and is still listed');
+      ok('a repaint from elsewhere keeps the link’s deal',
+        dl.afterRepaint.b === dl.opened.b && dl.afterRepaint.bMen.join() === dl.opened.bMen.join(), JSON.stringify(dl.afterRepaint));
+      ok('the reader’s own change spends the link: his manager stays chosen through the next repaint',
+        dl.afterChange.b === dl.afterChange.want && dl.afterChange.bMen.length === 0, JSON.stringify(dl.afterChange));
+      eq(dl.afterChange.saved, JSON.stringify(seeded), 'and still nothing was saved');
+    }
+  } catch (e) {
+    ok('the previews checks ran to the end without throwing', false, String(e && e.stack).slice(0, 300));
   }
 }
 

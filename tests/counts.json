@@ -77,6 +77,9 @@
     "test-trade-odds.mjs": {
       "assertions": 142
     },
+    "test-trade-cards.mjs": {
+      "assertions": 66
+    },
     "hot-check.mjs": {
       "assertions": 120
     },
@@ -146,7 +149,7 @@
       "scenarios": 15
     },
     "tr-test.mjs": {
-      "assertions": 1089
+      "assertions": 1147
     },
     "test-proj-trend.mjs": {
       "assertions": 52

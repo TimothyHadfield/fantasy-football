@@ -138,13 +138,22 @@ const baselineRead = trend.loadBaseline();
 // alone", and it is not optional — but it is SPLIT in two (see `heatKeyShort`):
 // one short sentence in view, the thresholds in points behind "How this works".
 import {
-  heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn,
+  heatScale, heatOf, heatMarkHtml, describeHeat,
   HEAT_UP, HEAT_DOWN,
 } from './heat.js';
 // The ONE lineup-slot layout rule — QB, RB1, RB2, WR1…, FLEX, D/ST, K — shared
 // with the analysis page's "Season by week" panel so the two cannot disagree
 // about which receiver is WR1. See js/lineup-slots.js.
 import { slotRows, fillSlots } from './lineup-slots.js';
+// THE PREVIEWS (Tim, 2026-10-08): the stat card every page opens (js/pop.js),
+// the site's deep links (js/links.js), and this page's own card contents —
+// pure, in js/trade-cards.js, with the zero-anchored gain scale.
+import { statCard, clearPops, wirePops, hidePop, teamWeekSpec } from './pop.js';
+import { teamHref, weekHref, readParam } from './links.js';
+import {
+  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, altGoalSpec, oppSpec, depthSpec,
+  teamSpec, recordOf, meetSpec,
+} from './trade-cards.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('trade');
@@ -1769,7 +1778,7 @@ function cardFor(p, ctx = null) {
   const heading = state.isDemo
     ? `Sample projections for ${weekRange(weeks)}`
     : `ESPN’s projection for ${weekRange(weeks)}`;
-  const tail = startsPhrase(p);
+  const tail = startsPhrase(p) + marksPhrase(p, ctx);
   const bold = startsRun(p, weeks, ctx);
   const meet = meetingWeeks(ctx);
 
@@ -1808,6 +1817,33 @@ function cardFor(p, ctx = null) {
       vsName: meet.name,
     }),
   };
+}
+
+/**
+ * THE MARKS ON HIS NAME, SAID ON HIS CARD (2026-10-08). The bye pill and the
+ * preseason arrow each used to carry a raw tooltip of their own, on the very
+ * name that opens this card — two previews of one man, one over the other. So
+ * the card's heading line says both, and the marks carry no `title`. (The
+ * injury status is already on the identity line above it.)
+ *
+ * `ctx.dir` is 'send' / 'get' for a man in the custom lists, where every man is
+ * marked whether he is ticked or not; inside a deal it is read off the deal.
+ */
+function marksPhrase(p, ctx) {
+  let out = '';
+  if (ctx && (ctx.offer || ctx.pair)) {
+    const dir = ctx.dir || (ctx.offer ? dirIn(p, ctx.offer) : null);
+    const bye = dir ? byeMarkOf(p, dir, meetingWeeksAhead(ctx.offer ? { offer: ctx.offer } : { pair: ctx.pair })) : null;
+    if (bye) out += ` · ${bye.words.charAt(0).toLowerCase()}${bye.words.slice(1)}`;
+  }
+  if (basis() === 'weeks') {
+    const t = trend.trendOf(p.playerId, weeklyMean(p), state.scoring, '');
+    if (t) {
+      out += ` · ${t.dir} ${Math.abs(t.delta).toFixed(1)} a week since preseason ` +
+        `(${t.from.toFixed(1)} → ${t.to.toFixed(1)})`;
+    }
+  }
+  return out;
 }
 
 /**
@@ -1968,11 +2004,14 @@ function injuryMarkOf(p) {
 function nameMarksHtml(name, bye, inj) {
   if (!bye && !inj) return esc(name);
   const sr = `<span class="sr-only">${esc((bye ? bye.sr : '') + (inj ? inj.sr : ''))}</span>`;
+  // NO `title` ON EITHER MARK (2026-10-08): the name they sit on opens his
+  // card, and a raw tooltip beside a card is two previews of one man. The
+  // card's own heading says both (`cardFor`), and the sr-only words stay.
   const under = inj
-    ? `<span class="${inj.cls}" title="${esc(inj.words)}">${esc(name)}${bye ? '' : sr}</span>`
+    ? `<span class="${inj.cls}">${esc(name)}${bye ? '' : sr}</span>`
     : esc(name);
   return bye
-    ? `<span class="bye-hl ${bye.cls}" title="${esc(bye.words)}">${under}${sr}</span>`
+    ? `<span class="bye-hl ${bye.cls}">${under}${sr}</span>`
     : under;
 }
 
@@ -2020,7 +2059,11 @@ function syncMarkKeys() {
  */
 function trendMarkOf(p) {
   if (!p || basis() !== 'weeks') return '';
-  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), state.scoring, weekRange(weeklySpan())));
+  // The arrow's own `title` comes off here (2026-10-08): it sits on a name that
+  // opens his card, and the card's heading says it (`marksPhrase`). The
+  // sr-only words inside the arrow stay. js/proj-trend.js is another page's too.
+  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), state.scoring, weekRange(weeklySpan())))
+    .replace(/(<span class="trend trend-(?:up|down)") title="[^"]*"/, '$1');
 }
 
 /** The arrow's line behind "How this works", naming the weeks "now" averages. */
@@ -2517,7 +2560,13 @@ function renderDepthHead(positions) {
      </tr>`;
 }
 
-function depthCellHtml(cell, tints) {
+/**
+ * THE CELL'S PREVIEW (2026-10-08) names what the number is made of: each
+ * starter at the position with his points and how far over the bar he is, the
+ * spare men, and the bar itself. It used to be a sentence counting "startable"
+ * men, which said how many and never who.
+ */
+function depthCellHtml(cell, tints, row = null, map = null) {
   if (!cell || !Number.isFinite(cell.startersEdge)) {
     return '<td class="cell muted" data-v="">—</td>';
   }
@@ -2531,19 +2580,97 @@ function depthCellHtml(cell, tints) {
       ? `<span class="spare">spare ${signedText(cell.surplusEdge)}</span>`
       : '';
 
-  const tip =
-    `${cell.startable} startable ${cell.position}${cell.startable === 1 ? '' : 's'}, ` +
-    `${cell.needed} needed in the lineup. ` +
-    (cell.surplusEdge > 0
-      ? `The spare figure is what he could send without weakening his own lineup.`
-      : cell.net < 0
-        ? `He is a man short here.`
-        : `Nothing spare here.`);
-
   return (
-    `<td class="${cls.join(' ')}" data-v="${cell.startersEdge}" title="${esc(tip)}">` +
+    `<td class="${cls.join(' ')}" data-v="${cell.startersEdge}"` +
+    `${row && map ? statCard(depthCardSpec(cell, row, map), { prefix: 'depth' }) : ''}>` +
     `${signedText(cell.startersEdge)}${spare}</td>`
   );
+}
+
+/** The man who sets a position's bar: the best one starting nowhere. Null when every one starts. */
+function barManOf(map, position) {
+  const r = map.replacement.get(position);
+  if (!r || r.exhausted || !Number.isFinite(r.value)) return null;
+  const measure = measureFn();
+  let best = null;
+  for (const row of map.rows) {
+    const starting = new Set(row.lineup.starters.map((s) => s.playerId));
+    for (const p of row.team.players || []) {
+      if (p.position !== position || starting.has(p.playerId)) continue;
+      const v = measure(p);
+      if (!Number.isFinite(v)) continue;
+      // The bar is "the first man past the last starter" in the league's pool,
+      // which is a value; the man is whoever on a bench carries it.
+      if (Math.abs(v - r.value) < 1e-9 && !best) best = { p, v, team: row.team };
+    }
+  }
+  return best;
+}
+
+function depthCardSpec(cell, row, map) {
+  const position = cell.position;
+  const bar = map.replacement.get(position);
+  const barValue = bar ? bar.value : null;
+  const measure = measureFn();
+  const starting = new Set(row.lineup.starters.map((s) => s.playerId));
+  const mine = (row.team.players || [])
+    .filter((p) => p.position === position)
+    .map((p) => ({ name: p.name, v: measure(p), id: p.playerId }))
+    .filter((e) => Number.isFinite(e.v))
+    .sort((a, b) => b.v - a.v);
+  const startable = (v) => Number.isFinite(barValue) && (bar.exhausted ? v >= barValue : v > barValue);
+  const barMan = barManOf(map, position);
+  return depthSpec({
+    team: row.team.name,
+    position,
+    bar: barValue,
+    barName: barMan ? barMan.p.name : '',
+    starters: mine.filter((e) => starting.has(e.id)),
+    spare: mine.filter((e) => !starting.has(e.id) && startable(e.v)),
+    missing: Math.max(0, (map.required[position] || 0) - cell.starting),
+    edge: cell.startersEdge,
+    shown: signedText(cell.startersEdge),
+  });
+}
+
+// ------------------------------------------------------ a manager, as a card
+//
+// Every manager named on this page opens the same card (docs/previews-plan.md):
+// his record, what he has averaged, his best lineup's projection this week —
+// and a click goes to his roster on Analysis.
+
+function teamCardSpec(team) {
+  if (!team) return null;
+  const games = state.league && state.league.games ? state.league.games : [];
+  const rec = recordOf(games, team.id, (g) => capture.gameState(g) === 'final');
+  const week = glanceWeek();
+  let proj = null;
+  if (week !== null && weekly.byWeek.has(week) && state.slots) {
+    const pool = (team.players || []).map((p) => ({ ...p, projected: projFor(p, week) }));
+    const total = optimalLineup(pool, state.slots).total;
+    proj = Number.isFinite(total) && total > 0 ? total : null;
+  }
+  return teamSpec({
+    name: team.name, record: rec.text, avg: rec.avg, games: rec.games, week, proj,
+    href: teamHref(team.id),
+  });
+}
+
+/**
+ * The attribute for a manager's name. The card is built WHEN IT IS ASKED FOR
+ * (`wireTeamCards`), so nothing is registered and a repaint leaks nothing.
+ */
+const teamCardAttr = (team) => (team ? ` data-tc="${esc(team.id)}" tabindex="0"` : '');
+
+function wireTeamCards(el) {
+  wirePops(el, {
+    selector: '[data-tc]',
+    card: (cell) => {
+      const id = cell.getAttribute('data-tc');
+      const teams = state.data ? state.data.teams : [];
+      return teamCardSpec(teams.find((t) => String(t.id) === id) || null);
+    },
+  });
 }
 
 function renderDepth() {
@@ -2567,14 +2694,40 @@ function renderDepth() {
 
   const tints = new Map(map.positions.map((p) => [p, tintsFor(map.rows, p)]));
 
+  // THE LINEUP COLUMN IS ON THE SITE'S ONE SCALE (docs/colour-plan.md): each
+  // squad's best lineup against the league's. The position cells keep their own
+  // deep/thin tint — a rank within the column, and a different rule.
+  const lineupScale = heatScale(map.rows.map((r) => r.total));
+  const slotKeys = state.slots ? slotRows(state.slots) : [];
+  const lineupWeek = basis() === 'week' ? state.week : null;
+  const lineupCell = (row) => {
+    const h = heatOf(row.total, lineupScale);
+    const filled = slotKeys.length ? fillSlots(row.lineup.starters, slotKeys) : new Map();
+    const starters = slotKeys
+      .map((s) => ({ slot: s.key, pick: filled.get(s.key) }))
+      .filter((s) => s.pick && s.pick.p)
+      .map((s) => ({ slot: s.slot, name: s.pick.p.name, pts: s.pick.v }));
+    const spec = teamWeekSpec({
+      team: row.team.name, week: lineupWeek, total: row.total, starters,
+      href: teamHref(row.team.id, lineupWeek),
+    });
+    if (lineupWeek === null) spec.sub = 'best lineup, a week';
+    return (
+      `<td class="grouped${h ? ` ${h.cls}` : ''}" data-v="${row.total ?? ''}"` +
+      `${Number.isFinite(row.total) ? statCard(spec, { prefix: 'depth' }) : ''}>` +
+      `${fmt(row.total)}${h ? heatMarkHtml(h) : ''}</td>`
+    );
+  };
+
+  clearPops('depth');
   bodyOf(table).innerHTML = map.rows
     .map((row) => {
       const mine = row.team.id === state.myTeamId;
       return (
         `<tr${mine ? ' class="me"' : ''} data-team="${esc(row.team.id)}">` +
-        `<td class="name">${esc(row.team.name)}</td>` +
-        map.positions.map((p) => depthCellHtml(row.cells.get(p), tints.get(p))).join('') +
-        `<td class="grouped" data-v="${row.total ?? ''}">${fmt(row.total)}</td>` +
+        `<td class="name"><span class="mgr"${teamCardAttr(row.team)}>${esc(row.team.name)}</span></td>` +
+        map.positions.map((p) => depthCellHtml(row.cells.get(p), tints.get(p), row, map)).join('') +
+        lineupCell(row) +
         `</tr>`
       );
     })
@@ -2586,8 +2739,11 @@ function renderDepth() {
   // 16). Only when something is actually tinted: a league too small to rank
   // draws no shade, and a key for one would describe nothing on screen.
   const tinted = [...tints.values()].some((t) => t.deep !== null || t.thin !== null);
+  // Since 2026-10-08 the Lineup column IS on the colour scale (against the
+  // league), so the sentence says which column is which — in the same length.
   $('depthKey').innerHTML = tinted
-    ? 'Tint marks the three deepest and three thinnest per position — not the colour scale above.'
+    ? `Tint marks the three deepest and three thinnest per position; ${lineupScale
+      ? 'Lineup is coloured against the league.' : 'not the colour scale above.'}`
     : '';
 
   renderBars(map);
@@ -2602,13 +2758,25 @@ function renderBars(map) {
     .map((p) => {
       const r = map.replacement.get(p);
       if (!r || !Number.isFinite(r.value)) return '';
-      const tip = r.exhausted
-        ? `Every ${p} in the league is in somebody’s lineup, so there is no spare ` +
-          `man to set a bar with — the worst starter is used instead.`
-        : `${r.startedInLeague} of the ${r.pooled} ${p}s in the league are starting. ` +
-          `The bar is the best one who is not.`;
+      // THE BAR IS A MAN (2026-10-08), so the chip opens HIS card — the best one
+      // at the position starting nowhere — instead of a sentence about how many
+      // start. With every one of them starting there is no such man, and the
+      // chip says that in a small card of its own.
+      const man = barManOf(map, p);
+      if (man) {
+        const key = registerRun(cardFor(man.p), 'bar');
+        return (
+          `<span class="bar-chip"${tipAttr(key)}>` +
+          playerRef(man.p, `${esc(p)} <strong>${fmt(r.value)}</strong>`) + `</span>`
+        );
+      }
+      const spec = {
+        title: `${p} bar`,
+        rows: [{ label: r.exhausted ? 'The worst starter' : 'The best one not starting', value: r.value }],
+        foot: r.exhausted ? `Every ${p} in the league is in somebody’s lineup.` : '',
+      };
       return (
-        `<span class="bar-chip" title="${esc(tip)}">${esc(p)} ` +
+        `<span class="bar-chip"${statCard(spec, { prefix: 'depth' })}>${esc(p)} ` +
         `<strong>${fmt(r.value)}</strong>${r.exhausted ? ' *' : ''}</span>`
       );
     })
@@ -3114,6 +3282,7 @@ function customLoadButton(offer) {
 function loadIntoCustom(offer) {
   if (!customLoadable(offer)) return;
   if (state.deal) closeDeal();
+  spendDealLink();
   state.custom.a = state.myTeamId;
   state.custom.b = offer.partner.id;
   state.custom.sendA = offer.send.map((p) => String(p.playerId));
@@ -3272,8 +3441,9 @@ function offerRow(offer, i, key, opts = {}) {
   // one scale across both would rank you against him.
   const heatCell = (v, scale, what) => {
     const h = heatOf(v, scale, { what });
-    if (!h) return { cls: '', mark: '', title: '' };
-    return { cls: ` ${h.cls}`, mark: heatMarkHtml(h), title: ` title="${esc(h.words)}"` };
+    // No `title` (2026-10-08): the cell opens a card of its own (`data-rc`).
+    if (!h) return { cls: '', mark: '' };
+    return { cls: ` ${h.cls}`, mark: heatMarkHtml(h) };
   };
   // HIS side over the weeks he will play (trade plan Phase 3) — see `hisSideOf`.
   const his = hisSideOf(offer);
@@ -3325,7 +3495,7 @@ function offerRow(offer, i, key, opts = {}) {
     `<tr class="offer${picked}${offer.goalUnranked ? ' unranked' : ''}" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
-    `<td class="name"><span class="mgr">${esc(offer.partner.name)}</span>${merged}${from}</td>` +
+    `<td class="name"><span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}</td>` +
     // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
     // on the first screen rather than past four columns of names.
     (showGoal ? goalCellHtml(offer) + altGoalCellHtml(offer) : '') +
@@ -3338,17 +3508,17 @@ function offerRow(offer, i, key, opts = {}) {
     // pop-up carries the before and after now. Tim, 2026-09-17.
     `<td class="left pkg recv">${receive}</td>` +
     (showLineup
-      ? `<td class="before-after" data-v="${offer.myAfter}">` +
+      ? `<td class="before-after" data-rc="lineup" data-v="${offer.myAfter}">` +
         (weeks && Number.isFinite(offer.myBefore) && Number.isFinite(offer.myAfter)
           ? weeklyLineupHtml(offer.myBefore, offer.myAfter)
           : `${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}`) +
         `</td>`
       : '') +
     (showMyGain
-      ? `<td class="gain${signOf(myNet)}${mine.cls}" data-v="${myNet}"${mine.title}>` +
+      ? `<td class="gain${signOf(myNet)}${mine.cls}" data-rc="gain" data-v="${myNet}">` +
         `${gain(myNet, mine.mark)}</td>`
       : '') +
-    `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-v="${his.gain}"${theirs.title}>` +
+    `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-rc="their" data-v="${his.gain}">` +
       `${weeks && Number.isFinite(his.gain)
         ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
         : `${signedText(his.gain)}${theirs.mark}`}</td>` +
@@ -3377,9 +3547,13 @@ function offerRow(offer, i, key, opts = {}) {
  * page draws whatever it is handed.
  */
 function gainScales(rows) {
+  // ANCHORED AT ZERO since 2026-10-08 (docs/colour-plan.md): a gain has a real
+  // zero, so a plus is never red. Scaled against the other offers, the worst of
+  // forty good ones — +2.3 a week — was drawn in the deepest red. How strong a
+  // colour is still follows the column: `zeroScale` in js/trade-cards.js.
   return {
-    myScale: heatScale(rows.map(netGainOf)),
-    theirScale: heatScale(rows.map((o) => hisSideOf(o).gain)),
+    myScale: zeroScale(rows.map(netGainOf)),
+    theirScale: zeroScale(rows.map((o) => hisSideOf(o).gain)),
   };
 }
 
@@ -3948,7 +4122,30 @@ function goalChanceOf(result, teamId) {
 // ranking updates its progress there without rebuilding the table under it.
 let finderScales = { myScale: null, theirScale: null };
 
-function heatKeyShort({ thing = 'figure', what = 'the others in its own column' } = {}) {
+/**
+ * The thresholds of a zero-anchored gain scale, in points, for "How this
+ * works" — what `describeHeat` is for a scale centred on its average.
+ */
+function describeZeroHeat(scale) {
+  if (!scale) return 'Nothing here is coloured: every figure in the column is about zero.';
+  const full = round1(scale.edges[scale.edges.length - 1] * scale.sd).toFixed(1);
+  const first = round1(scale.edges[0] * scale.sd).toFixed(1);
+  return `Colour starts at zero: a plus is green and a minus is red, never the other way round. ` +
+    `It begins at ±${first}, deepens in ${scale.edges.length} steps and is full at ±${full} — the ` +
+    `typical size of a figure in this column (${scale.n} of them). The far end carries ` +
+    `${HEAT_UP} or ${HEAT_DOWN} and heavier type as well as a colour.`;
+}
+
+/*
+ * `gain` (2026-10-08): the two gain columns are anchored at zero now
+ * (`gainScales`), so their key says so — green is a plus and red a minus, and
+ * the other offers only set how strong. Same length as the sentence it replaces.
+ */
+function heatKeyShort({ thing = 'figure', what = 'the others in its own column', gain = false } = {}) {
+  if (gain) {
+    return `Colour sizes each ${thing} against ${what}; green plus, red minus, ` +
+      `${HEAT_UP} or ${HEAT_DOWN} and heavier type at the far end.`;
+  }
   return `Colour compares each ${thing} only with ${what}; green high, red low, ` +
     `${HEAT_UP} or ${HEAT_DOWN} and heavier type at the far end.`;
 }
@@ -3986,7 +4183,7 @@ function renderFinderNote(scales = finderScales) {
   // `tools/measure-layout.mjs --selector`.
   const anyHeat = !!(scales.myScale || scales.theirScale);
   const heatKey = anyHeat
-    ? `<br>${heatKeyShort({ what: 'the other offers in the same column' })}`
+    ? `<br>${heatKeyShort({ what: 'the other offers in the same column', gain: true })}`
     : '';
 
   // THE ORDER, said in view: it is the one thing on this panel that changed
@@ -4082,14 +4279,9 @@ function renderFinderNote(scales = finderScales) {
         // from the status line with the thresholds, so the two halves of the
         // same explanation are read together rather than one of them costing
         // 86 words of page.
-        `${describeHeatPerColumn({ group: 'column', what: 'the other offers listed here' })} ` +
-        `<strong>You gain</strong>: ${describeHeat(scales.myScale, {
-          what: 'the other offers listed here', unit: false,
-        })}` +
+        `<strong>You gain</strong>: ${describeZeroHeat(scales.myScale)}` +
         (scales.theirScale
-          ? ` <strong>He gains</strong>: ${describeHeat(scales.theirScale, {
-            what: 'the other offers listed here', unit: false,
-          })}`
+          ? ` <strong>He gains</strong>: ${describeZeroHeat(scales.theirScale)}`
           : '') +
         ` The two are scaled separately on purpose: they are two different ` +
         `squads’ answers, and one scale across both would be ranking you against the manager ` +
@@ -4835,7 +5027,7 @@ function goalCellHtml(offer) {
       : r.why
         ? `No ${g.chance} yet: ${r.why}.`
         : `No ${g.chance} yet.`;
-    return `<td class="goal-cell goal-wait" data-v="-1" title="${esc(why)}">${r.running ? '…' : '—'}</td>`;
+    return `<td class="goal-cell goal-wait" data-v="-1" data-rc="goal" data-why="${esc(why)}">${r.running ? '…' : '—'}</td>`;
   }
   const good = s.mine.gain > 0.0005 ? ' pos' : s.mine.gain < -0.0005 ? ' neg' : '';
   const yes = Number.isFinite(s.accept) ? Math.round(s.accept * 100) : null;
@@ -4846,24 +5038,12 @@ function goalCellHtml(offer) {
   const place = Number.isFinite(offer.goalPlace)
     ? `<span class="place">${offer.goalPlace}${offer.goalLevel ? '=' : ''}</span>`
     : '';
-  const levelWords = offer.goalLevel
-    ? ` Level with ${plural(offer.goalTieSize - 1, 'other offer')} — they are within ` +
-      `${bandText()} of a point of each other, which ${GOAL_RUNS.toLocaleString('en-US')} ` +
-      `seasons cannot separate, so they share rank ${offer.goalPlace}.`
-    : '';
-  const words =
-    `Your ${g.chance}: ${pct(s.mine.before)} now, ${pct(s.mine.after)} with this deal, over ` +
-    `${GOAL_RUNS.toLocaleString('en-US')} simulated seasons. His: ${pct(s.theirs.before)} → ` +
-    `${pct(s.theirs.after)}.` +
-    // ONE DECIMAL, NOT TWO. This tooltip used to quote the expected change to a
-    // hundredth of a percentage point on a quantity whose seed-to-seed spread is
-    // a third of a point, so the last two digits were a measurement of the seed.
-    (yes === null ? '' : ` Estimated ${yes}% that he says yes, so this deal is worth ` +
-      `${signedPct(s.value)} ± ${bandText()} to you on average — which is what the list is ` +
-      `ranked by.`) +
-    levelWords;
+  // THE PREVIEW IS THREE LINES (Tim, 2026-10-08) — you now → with, him now →
+  // with, the chance he says yes — built when it is asked for (`rowCardSpec`).
+  // It was one long sentence about simulated seasons; the method is in "How
+  // this works", and a level group still says so under the three lines.
   return (
-    `<td class="goal-cell${good}" data-v="${s.value}" title="${esc(words)}">` +
+    `<td class="goal-cell${good}" data-v="${s.value}" data-rc="goal">` +
     `${place}${pctChange(s.mine.before, s.mine.after)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (yes === null ? '' : ` · ${yes}% yes`) +
@@ -4990,20 +5170,16 @@ function altGoalCellHtml(offer) {
   const s = offer.altGoal;
   const r = state.goalRank;
   if (s === undefined && (r.running || r.altRunning)) {
-    return `<td class="alt-goal-cell goal-wait" data-v="-1" ` +
-      `title="${esc(`Your ${g.chance}, worked out once the ranking is done…`)}">…</td>`;
+    return `<td class="alt-goal-cell goal-wait" data-v="-1" data-rc="alt" ` +
+      `data-why="${esc(`Your ${g.chance}, worked out once the ranking is done…`)}">…</td>`;
   }
   if (!s || !Number.isFinite(s.before) || !Number.isFinite(s.after)) {
     const why = s && s.why ? s.why : r.why && r.why !== 'waiting' ? r.why : 'not worked out yet';
-    return `<td class="alt-goal-cell" data-v="-1" title="${esc(`No ${g.chance} preview: ${why}.`)}">—</td>`;
+    return `<td class="alt-goal-cell" data-v="-1" data-rc="alt" data-why="${esc(`No ${g.chance} preview: ${why}.`)}">—</td>`;
   }
   const good = s.gain > 0.0005 ? ' pos' : s.gain < -0.0005 ? ' neg' : '';
-  const words =
-    `A preview of the goal you are not on. Your ${g.chance}: ${pct(s.before)} now, ${pct(s.after)} with ` +
-    `this deal — priced over ${weekRange(s.weeks)}, the weeks that goal prices, on the same ` +
-    `${GOAL_RUNS.toLocaleString('en-US')} seasons. It does not rank the list; switch the goal to rank by it.`;
   return (
-    `<td class="alt-goal-cell${good}" data-v="${s.gain}" title="${esc(words)}">` +
+    `<td class="alt-goal-cell${good}" data-v="${s.gain}" data-rc="alt">` +
     `${pctChange(s.before, s.after)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.before)} → ${pct(s.after)}</span></td>`
   );
@@ -5079,7 +5255,11 @@ function oppProjOf(offer) {
   if (!weeks.length) return { weeks: [], sum: null, per: [] };
   const at = new Map(offer.theirByWeek.map((w) => [w.week, w.delta]));
   if (!weeks.every((w) => at.has(w))) return null;
-  const per = weeks.map((w) => ({ week: w, delta: at.get(w) }));
+  // `before` / `after` are his lineup that week, for the cell's card.
+  const whole = new Map(offer.theirByWeek.map((w) => [w.week, w]));
+  const per = weeks.map((w) => ({
+    week: w, delta: at.get(w), before: whole.get(w).before, after: whole.get(w).after,
+  }));
   const sum = Math.round(per.reduce((a, p) => a + (Number.isFinite(p.delta) ? p.delta : 0), 0) * 10) / 10;
   return { weeks, sum, per };
 }
@@ -5126,15 +5306,11 @@ function oppCellHtml(offer) {
     const why = !o
       ? 'Needs the remaining weeks priced week by week.'
       : `You do not play ${name} again in the regular season. A playoff meeting is not known in advance.`;
-    return `<td class="opp-proj" title="${esc(why)}">—</td>`;
+    return `<td class="opp-proj" data-rc="opp" data-why="${esc(why)}">—</td>`;
   }
   const cls = o.sum > 0.05 ? ' neg' : o.sum < -0.05 ? ' pos' : '';
-  const words =
-    `${name}’s projected starting lineup in the week${o.weeks.length > 1 ? 's' : ''} he plays you, ` +
-    `with this deal: ${o.per.map((p) => `wk ${p.week} ${signedText(p.delta)}`).join(', ')}` +
-    `${o.weeks.length > 1 ? ` — ${signedText(o.sum)} in all` : ''}. Plus means he is stronger against you.`;
   return (
-    `<td class="opp-proj${cls}" data-v="${o.sum}" title="${esc(words)}">${signedText(o.sum)}` +
+    `<td class="opp-proj${cls}" data-v="${o.sum}" data-rc="opp">${signedText(o.sum)}` +
     `<span class="sub">wk ${o.weeks.join(', ')}</span></td>`
   );
 }
@@ -5283,7 +5459,8 @@ function weekTableHtml(
   const heatBits = (v) => {
     const h = heatOf(v, deltaScale, { what: 'the other weeks of this deal' });
     return h
-      ? { cls: ` ${h.cls}`, mark: heatMarkHtml(h), title: ` title="${esc(h.words)}"` }
+      // No `title` (2026-10-08): the cell opens the slot lines that changed.
+      ? { cls: ` ${h.cls}`, mark: heatMarkHtml(h), title: '' }
       : { cls: '', mark: '', title: '' };
   };
 
@@ -6045,7 +6222,10 @@ function slotManHtml(entry, column, ctx) {
   }
 
   const tag = mark ? `<span class="wkx-mark ${mark.cls}">${esc(mark.word)}</span>` : '';
-  const inner = `<span class="wkx-name">${esc(p.name)}</span>`;
+  // HIS CARD, like every other name on the page (2026-10-08): the slot-by-slot
+  // names were the one place a man was named with nothing behind him.
+  const tip = ctx.cardKey && p.playerId !== null && p.playerId !== undefined ? tipAttr(ctx.cardKey(p)) : '';
+  const inner = `<span class="wkx-name"${tip}>${esc(p.name)}</span>`;
   return `${tag}${playerRef(p, inner)} <span class="wkx-v">${fmt(entry.v)}</span>`;
 }
 
@@ -6107,6 +6287,16 @@ function renderDealWeek(which = 'deal') {
     arriving: new Set((s.receive || []).map(idKey)),
     before: new Map(slice.before.starters.map((p) => [idKey(p), p.slotId])),
     after: new Map(slice.after.starters.map((p) => [idKey(p), p.slotId])),
+  };
+  // One card a man, however many cells name him; this panel's own are dropped
+  // each time it is redrawn (a hover redraws it).
+  const runPrefix = `wkx-${which}`;
+  clearRuns(runPrefix);
+  const cardKeys = new Map();
+  ctx.cardKey = (p) => {
+    const k = idKey(p);
+    if (!cardKeys.has(k)) cardKeys.set(k, registerRun(cardFor(p, { offer, side: 'mine' }), runPrefix));
+    return cardKeys.get(k);
   };
 
   const body = rows
@@ -6195,6 +6385,7 @@ function renderDealWeek(which = 'deal') {
     `IN is the man you receive; OUT is the man you send; promoted, benched and moved mark one ` +
     `of your own whose place the deal changes. The rest are untouched that week.` +
     `</span></p>`;
+  syncHeadTitles(host);   // a hover redraws this panel between paints
   // A new week can be a different height: keep the floating card on screen.
   if (which !== 'deal' && cuFloat && cuFloat.which === which) placeCuFloat();
 }
@@ -6438,7 +6629,8 @@ function comboTableHtml(rows, from, id) {
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
   // Per column, and this table has only one coloured column left.
-  const theirScale = heatScale(rows.map((o) => hisSideOf(o).gain));
+  // Zero-anchored, like the finder's (`gainScales`): a plus is never red.
+  const theirScale = zeroScale(rows.map((o) => hisSideOf(o).gain));
   // THE THRESHOLDS GO TO `#comboNote`, and this panel is why the split exists
   // at all. It draws the key ONCE PER PACKING — twice whenever "the most trades
   // possible" differs from the best — so `describeHeat`'s full sentence was
@@ -6466,7 +6658,7 @@ function comboTableHtml(rows, from, id) {
     `</tbody></table></div>` +
     (theirScale
       ? `<p class="heat-key">${heatKeyShort({
-        thing: 'manager', what: 'the others in this packing',
+        thing: 'manager', what: 'the others in this packing', gain: true,
       })}</p>`
       : '') +
     pageKeyHtml(rowsHtml)
@@ -6911,11 +7103,7 @@ function renderComboBody() {
             (comboHeatScales.length > 1
               ? `<em>${id === 'comboAltTable' ? 'The most trades possible' : 'The best combination'}:</em> `
               : '') +
-            describeHeat(scale, {
-              what: 'what the other managers in that packing gain',
-              high: 'a manager it helps most', low: 'one it barely helps',
-              unit: false,
-            }) + (i < comboHeatScales.length - 1 ? ' ' : ''))
+            describeZeroHeat(scale) + (i < comboHeatScales.length - 1 ? ' ' : ''))
           .join('') +
         ` Each packing is scaled on its own rows, never across the two: they are different ` +
         `slates of trades and one scale over both would rank a manager against a deal he is ` +
@@ -7494,6 +7682,7 @@ function paint() {
   // not clear them would grow one entry per offer for the life of the page.
   ESPN_OFFERS.clear();
   hideTip(); // it may be pointing at an element that is about to be replaced
+  hidePop(); // and so may the stat card
   // IN PANEL ORDER — toolbar, finder, combo, depth map — and the modal last,
   // which is the only one not in the flow of the page.
   //
@@ -7511,6 +7700,7 @@ function paint() {
   renderCustom();
   renderAssumed();
   renderDeal();
+  syncHeadTitles();
 }
 
 
@@ -7723,6 +7913,11 @@ function customSignature() {
  * So: per position, over BOTH squads shown. The bench is in it too; a bench
  * receiver is still a receiver, and leaving him out would measure the starters
  * against a group chosen by the thing being measured.
+ *
+ * SINCE 2026-10-08 THE GROUP IS THE WHOLE LEAGUE (docs/colour-plan.md): the
+ * caller hands in every squad, still per position. Two squads made a man green
+ * here and red on the Players page, where the same number is compared across
+ * the league; one man, one colour.
  */
 function customPositionScales(teamIds) {
   const byPos = new Map();
@@ -7800,7 +7995,7 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
     const lit = on.has(String(p.playerId));
     const v = customValue(p);
     const scale = scales.get(p.position) || null;
-    const h = heatOf(v, scale, { what: `a ${p.position} on these two squads` });
+    const h = heatOf(v, scale, { what: `a ${p.position} across the league` });
     // The card knows which deal it is inside, so a man on the OTHER squad who
     // is ticked bolds the weeks he would start FOR YOU with this trade made.
     // An unticked man is in nobody's receive list, so he falls back to his own
@@ -7820,7 +8015,8 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
         // still where a thumb opens the card (see the next comment).
         return `<span class="nm"${tipAttr(key, { hoverOnly: true })}>` +
           `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>` +
-          trendMarkOf(p);
+          // The arrow opens the same card as the name it belongs to (hover).
+          trendMarkOf(p).replace('<span class="trend', `<span${tipAttr(key, { hoverOnly: true })} class="trend`);
       })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
@@ -7988,7 +8184,7 @@ function renderCustomPickers() {
   // reasoning — that there used to be two and they could disagree — is in "How
   // a custom trade is priced" below, where the method lives.
   $('cuYou').innerHTML = a
-    ? `<strong>${esc(a.name)}</strong> — set by <em>Your team</em>, at the top of the page.`
+    ? `<strong${teamCardAttr(a)}>${esc(a.name)}</strong> — set by <em>Your team</em>, at the top of the page.`
     : 'Pick a manager in <em>Your team</em> at the top of the page.';
 
   // The B picker never offers the squad that is already "you": a trade with
@@ -8015,17 +8211,23 @@ function renderCustomPickers() {
   $('cuMeet').innerHTML = cuMeetHtml(a, b);
   renderCustomAccept();
 
-  $('cuHeadA').textContent = a ? `${a.name} sends` : 'Sends';
-  $('cuHeadB').textContent = b ? `${b.name} sends` : 'Sends';
+  $('cuHeadA').innerHTML = a ? `<span${teamCardAttr(a)}>${esc(a.name)}</span> sends` : 'Sends';
+  $('cuHeadB').innerHTML = b ? `<span${teamCardAttr(b)}>${esc(b.name)}</span> sends` : 'Sends';
 
-  const scales = customPositionScales([state.custom.a, state.custom.b]);
+  // ACROSS THE LEAGUE since 2026-10-08 (docs/colour-plan.md), like every other
+  // player figure on the site: it used to be the two squads on screen, so one
+  // man could be green here and red on the Players page. Still per position.
+  const scales = customPositionScales(customTeams().map((t) => t.id));
   // With nobody ticked there is no deal yet, but the two squads are chosen, so
   // the cards can still mark the weeks they meet (`meetingWeeks`).
   const ctx = state.customOffer
     ? { offer: state.customOffer, side: 'mine' }
     : (a && b ? { pair: { a: a.id, b: b.id, name: b.name } } : null);
-  $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a', { scales, ctx });
-  $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b', { scales, ctx });
+  // `dir`: which way a man on that list would move, for the bye words on his card.
+  $('cuListA').innerHTML = customList(state.custom.a, state.custom.sendA, 'a',
+    { scales, ctx: ctx && { ...ctx, dir: 'send' } });
+  $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b',
+    { scales, ctx: ctx && { ...ctx, dir: 'get' } });
   refreshCuByeKey();
 
   // Channel 4 of "never colour alone", in view under the lists it describes.
@@ -8034,7 +8236,7 @@ function renderCustomPickers() {
   // thresholds fall — is in "How a custom trade is priced" below.
   const any = [...scales.values()].some(Boolean);
   $('cuHeatKey').innerHTML = any
-    ? heatKeyShort({ thing: 'man', what: 'the others at his own position on these two squads' })
+    ? heatKeyShort({ thing: 'man', what: 'the others at his own position across the league' })
     : '';
 }
 
@@ -8220,7 +8422,7 @@ function renderCustomSaved() {
   const key = $('cuTableKey');
   if (key) {
     key.innerHTML = scales.myScale || scales.theirScale
-      ? heatKeyShort({ what: 'the other saved trades in the same column' })
+      ? heatKeyShort({ what: 'the other saved trades in the same column', gain: true })
       : '';
   }
 }
@@ -8965,7 +9167,7 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
   const head =
     `<tr><th class="name">Slot</th><th class="grouped">Avg</th>` +
     cols.map((c) =>
-      `<th class="${colCls(c, 'wk')}">${c.week}` +
+      `<th class="${colCls(c, 'wk')}" data-hw="${c.week}">${c.week}` +
       (c === firstPo ? '<span class="po-tag" aria-hidden="true">PO</span>' : '') +
       (vsWeeks.has(c.week) ? '<span class="sbw-vs" aria-hidden="true">↑</span>' : '') +
       (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
@@ -8998,8 +9200,7 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
       if (a.value === null) return `<td class="${cls} muted">—</td>`;
       const shown = zero === 'bye' ? 'Bye' : fmt(a.value);
       if (!e) {
-        return `<td class="${cls}" data-v="${a.value}" title="Nobody to fill ${esc(row.key)}: ` +
-          `assessed at the waiver floor.">${shown}${heatMarkHtml(h)}</td>`;
+        return `<td class="${cls}" data-v="${a.value}" data-empty="${esc(row.key)}">${shown}${heatMarkHtml(h)}</td>`;
       }
       const inner = `${shown}${heatMarkHtml(h)}`;
       return `<td class="${cls}" data-v="${a.value}" data-pid="${esc(e.p.playerId ?? '')}">` +
@@ -9112,6 +9313,7 @@ function renderCustomSeason() {
   const html = cuSeasonHtml(state.customOffer, state.cuSeasonSide, state.cuSeasonView);
   host.hidden = !html;
   host.innerHTML = html || '';
+  syncHeadTitles(host);   // the side and view toggles redraw this alone
 }
 
 /**
@@ -9197,6 +9399,7 @@ function cuSeasonHtml(offer, sideAsked, viewAsked, { nowBox = true, prefix = 'sb
 
 function renderCustom() {
   syncCustomPickers();
+  applyDealLink();   // a deal handed over in the address; never saved (see `dealLink`)
   // PRICED ONCE PER RENDER, and the offer object is built once from it. Three
   // panels read the same answer — the two big figures, the inline breakdown and
   // the card context on every roster row — and pricing it three times would be
@@ -9229,6 +9432,8 @@ function renderCustom() {
   renderCustomSeason();
   renderCustomSaved();
   renderCustomNote();
+  syncHeadTitles();
+  showDealLink();
 }
 
 /** Saved trades outlive a reload; the price never does. */
@@ -9478,6 +9683,7 @@ $('weekSelect').addEventListener('change', (e) => {
 
 $('teamSelect').addEventListener('change', (e) => {
   state.myTeamId = Number(e.target.value);
+  spendDealLink();
   prefs.set('team', state.myTeamId);
   if (String(state.partner) === String(state.myTeamId)) state.partner = 'all';
   renderPartnerPicker();
@@ -9518,6 +9724,455 @@ $('loadWeeks').addEventListener('click', () => {
   loadWeekly({ fresh: weeksButton().act === 'fresh' });
 });
 
+// ===========================================================================
+// THE PREVIEWS (Tim, 2026-10-08)
+// ===========================================================================
+//
+// "If the user is curious about a number or it's breakdown or a detail about a
+// stat or column or anything they should be able to hover over it and show a
+// preview. … a bad preview is … the numbers in the week by week chart that talk
+// about SD and info we don't want or need. … build any connectors by clicking
+// on the preview."
+//
+// Every figure on this page used to answer a hover with a raw `title` — a
+// sentence, and for the coloured ones a sentence about the colour. Each now
+// opens the site's stat card (js/pop.js) with what the number is MADE OF, and
+// none carries a `title`. What goes in each card is js/trade-cards.js (pure,
+// tested on its own); this section only fetches the figures and wires them.
+//
+// THE CARDS ARE BUILT WHEN THEY ARE ASKED FOR (`wirePops` with a selector), not
+// registered at render: the finder alone is forty rows of six cells, repainted
+// on every tick of the search, and a card nobody opens should cost nothing.
+//
+// THE CLICK. With a mouse a row already opens its deal on a click anywhere, so
+// these cards carry no link of their own and the click falls through to the
+// row. A finger has no hover: a tap on one of these cells opens the card as a
+// sheet, and the sheet's button ("Week by week") is the way into the deal.
+
+/** The offer a row key names: `f:3` the finder's, `c:0` the combo's, `cu:2` saved, `sg:1` suggested. */
+function offerByKey(key) {
+  if (!key) return null;
+  if (key === 'cu-build') return state.customOffer || null;
+  const [k, n] = String(key).split(':');
+  if (k === 'asm') return assume.offer || null;
+  const rows = { f: state.rows, c: state.comboRows, cu: state.customRows, sg: state.cuSugRows }[k];
+  return rows ? rows[Number(n)] || null : null;
+}
+
+const DEAL_HASH = '#deal=';
+
+/** The card behind one cell of an offer row (`data-rc`), or null for none. */
+function rowCardSpec(cell) {
+  const tr = cell.closest('tr[data-key]');
+  const key = tr ? tr.getAttribute('data-key') : cell.getAttribute('data-key');
+  const offer = offerByKey(key);
+  if (!offer) return null;
+  const kind = cell.getAttribute('data-rc');
+  const why = cell.getAttribute('data-why') || '';
+  const partner = offer.partner ? offer.partner.name : '';
+  const sub = partner ? `with ${partner}` : '';
+  // The assumed trade's row opens no pop-up, so its sheet has no button either.
+  const link = coarsePointer() && !/^asm:/.test(key)
+    ? { href: `${DEAL_HASH}${key}`, hrefLabel: 'Week by week' } : {};
+  const span = weeklySpan();
+  const weeks = basis() === 'weeks' && span.length > 0;
+  const n = span.length;
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  if (kind === 'gain') {
+    const net = netGainOf(offer);
+    const byWeek = weeks && Array.isArray(offer.byWeek) && offer.byWeek.length ? offer.byWeek : null;
+    const vs = byWeek ? vsOptsOf(offer) : {};
+    return {
+      ...gainWeeksSpec({
+        title: 'You gain', sub, byWeek,
+        vs: vs.vs || null, vsName: typeof vs.vsName === 'string' ? vs.vsName : '',
+        before: offer.myBefore, after: offer.myAfter,
+        shown: signedText(weeks ? weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, n) : net),
+        totalShown: weeks ? signedText(net) : null,
+      }),
+      ...link,
+    };
+  }
+  if (kind === 'lineup') {
+    const byWeek = weeks && Array.isArray(offer.byWeek) && offer.byWeek.length ? offer.byWeek : null;
+    return {
+      ...gainWeeksSpec({
+        title: 'Your lineup', sub, byWeek,
+        before: offer.myBefore, after: offer.myAfter,
+        shown: signedText(weeks
+          ? shownDiff(perWeekOf(offer.myBefore), perWeekOf(offer.myAfter))
+          : shownDiff(offer.myBefore, offer.myAfter)),
+        totalShown: weeks ? signedText(shownDiff(offer.myBefore, offer.myAfter)) : null,
+      }),
+      ...link,
+    };
+  }
+  if (kind === 'their' || kind === 'their-own') {
+    const byWeek = weeks && Array.isArray(offer.theirByWeek) && offer.theirByWeek.length ? offer.theirByWeek : null;
+    // A finder row counts each week by the chance he plays it (`hisSideOf`);
+    // the builder's big figure is his own lineup over every week.
+    const own = kind === 'their-own';
+    const his = own ? { gain: offer.theirGain, weeks: n } : hisSideOf(offer);
+    const r = !own && byWeek && offer.partner ? reachFor(offer.partner.id, span) : null;
+    return {
+      ...gainWeeksSpec({
+        title: 'He gains', sub: partner, byWeek,
+        reach: r ? new Map(span.map((w, i) => [w, r[i]])) : null,
+        before: offer.theirBefore, after: offer.theirAfter,
+        shown: signedText(!weeks ? his.gain
+          : own ? weekGainShown(his.gain, his.gain, offer.theirBefore, offer.theirAfter, n)
+            : perWeekOf(his.gain, his.weeks)),
+        totalShown: weeks ? signedText(his.gain) : null,
+      }),
+      ...link,
+    };
+  }
+  if (kind === 'goal') {
+    const g = goalOf(state.goal);
+    const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
+    if (why || !s) return { title: cap(g.chance), sub, rows: [], foot: why, ...link };
+    return {
+      ...goalSpec({ chance: g.chance, partner, mine: s.mine, theirs: s.theirs, accept: s.accept }),
+      foot: offer.goalLevel
+        ? `Level with ${plural(offer.goalTieSize - 1, 'other offer')}: too close to rank apart.` : '',
+      ...link,
+    };
+  }
+  if (kind === 'alt') {
+    const g = goalOf(otherGoal());
+    const s = offer.altGoal;
+    if (why || !s || !Number.isFinite(s.before)) return { title: cap(g.chance), sub, rows: [], foot: why, ...link };
+    return {
+      ...altGoalSpec({ chance: g.chance, partner, before: s.before, after: s.after, weeks: weekRange(s.weeks) }),
+      ...link,
+    };
+  }
+  if (kind === 'opp') {
+    const o = oppProjOf(offer);
+    return {
+      ...oppSpec({
+        partner: partner || 'He', per: o && o.sum !== null ? o.per : [],
+        shown: o && o.sum !== null ? signedText(o.sum) : '', why,
+      }),
+      ...link,
+    };
+  }
+  return null;
+}
+
+function wireRowCards(el) {
+  if (el) wirePops(el, { selector: '[data-rc]', card: rowCardSpec });
+}
+
+/** The team card on every manager's name (`teamCardAttr`). */
+function wireAllTeamCards() {
+  for (const id of ['depthTable', 'tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) {
+    const el = $(id);
+    if (el) wireTeamCards(el);
+  }
+}
+
+/** Every preview on the page, wired once at boot: the containers outlive their repaints. */
+function wirePreviews() {
+  for (const id of ['tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) wireRowCards($(id));
+  wireAllTeamCards();
+  for (const id of ['depthTable', 'depthBars']) if ($(id)) wirePops($(id));
+  if ($('depthBars')) wireTips($('depthBars'));
+  const delta = { selector: 'table.weeks tr[data-wk] td.delta', card: deltaCardSpec };
+  for (const id of ['dealBody', 'customPanel']) if ($(id)) wirePops($(id), delta);
+  for (const id of ['customPanel', 'assumedPanel']) {
+    const el = $(id);
+    if (!el) continue;
+    wirePops(el, { selector: 'table.sbw-table td.split-total[data-wk]', card: seasonBandSpec });
+    wirePops(el, { selector: 'table.sbw-table th[data-hw]', card: seasonWeekSpec });
+    wirePops(el, {
+      selector: 'table.sbw-table td[data-empty]',
+      card: (td) => ({
+        title: td.getAttribute('data-empty'), sub: 'nobody to fill it',
+        rows: [{ label: 'Waiver floor', value: Number(td.getAttribute('data-v')) }],
+        foot: 'What a free agent would score there.',
+      }),
+    });
+  }
+  if ($('customPanel')) wirePops($('customPanel'), { selector: '#cuMeet', card: meetCardSpec });
+  // The builder's two big figures are the deal being built, under the row key
+  // its pop-up already uses.
+  for (const [id, kind] of [['cuGainA', 'gain'], ['cuGainB', 'their-own']]) {
+    const el = $(id);
+    if (el) { el.setAttribute('data-rc', kind); el.setAttribute('data-key', 'cu-build'); }
+  }
+  // The sheet's "Week by week" button: into the deal pop-up, not a page jump.
+  document.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest(`#statCard a[href^="${DEAL_HASH}"]`) : null;
+    if (!a) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const key = a.getAttribute('href').slice(DEAL_HASH.length);
+    const offer = offerByKey(key);
+    hidePop();
+    if (offer) openDeal(offer, key);
+  }, true);
+}
+
+/** A squad's best-lineup projection in one week, or null when the week is not read. */
+function bestLineupTotal(team, week) {
+  if (!team || week === null || week === undefined || !weekly.byWeek.has(week) || !state.slots) return null;
+  const pool = (team.players || []).map((p) => ({ ...p, projected: projFor(p, week) }));
+  const total = optimalLineup(pool, state.slots).total;
+  return Number.isFinite(total) && total > 0 ? total : null;
+}
+
+/** "You play him" in the custom box: every meeting, with its score or both projections. */
+function meetCardSpec() {
+  const a = teamById(state.custom.a);
+  const b = teamById(state.custom.b);
+  if (!a || !b || !state.league || !state.league.games) return null;
+  const games = state.league.games
+    .filter((g) => {
+      const h = String(g.homeId);
+      const w = String(g.awayId);
+      return (h === String(a.id) && w === String(b.id)) || (h === String(b.id) && w === String(a.id));
+    })
+    .sort((x, y) => x.week - y.week);
+  const meetings = games.map((g) => {
+    const played = capture.gameState(g) === 'final';
+    const home = String(g.homeId) === String(a.id);
+    return {
+      week: g.week, played,
+      mine: played ? (home ? g.homeScore : g.awayScore) : bestLineupTotal(a, g.week),
+      theirs: played ? (home ? g.awayScore : g.homeScore) : bestLineupTotal(b, g.week),
+    };
+  });
+  const next = meetings.find((m) => !m.played) || meetings[meetings.length - 1];
+  return meetSpec({
+    partner: b.name, meetings,
+    href: next ? weekHref(next.week) : null, hrefLabel: next ? `Open week ${next.week}` : null,
+  });
+}
+
+/** One week's lineup, slot by slot, before and after a deal — for the cards below. */
+function slotLinesOf(offer, side, week) {
+  const rows = state.slots ? slotRows(state.slots) : [];
+  const slice = rows.length ? weekSlice(offer, side, week) : null;
+  if (!slice) return null;
+  const before = fillSlots(slice.before.starters, rows);
+  const after = fillSlots(slice.after.starters, rows);
+  // THE ASSESSED NUMBER, as the season boxes print it (`cuSeasonValue`): a man
+  // on a bye, or a slot nobody fills, counts at the slot's waiver floor — which
+  // is what the lineup total counts, so the lines add up to it.
+  const one = (e, r) => {
+    const man = e && e.p ? e : null;
+    const a = cuSeasonValue(man, r);
+    if (a.value === null) return man ? { name: man.p.name, v: man.v } : null;
+    return { name: man ? man.p.name : 'nobody', v: a.value, floor: a.assumed };
+  };
+  return {
+    slice, rows, before, after,
+    slots: rows.map((r) => ({ slot: r.key, before: one(before.get(r.key), r), after: one(after.get(r.key), r) })),
+  };
+}
+
+/**
+ * A Difference cell in a week table — the deal pop-up's, and the two halves
+ * beside the custom builder: the slot lines the deal changes that week. It was
+ * a sentence ranking the cell among the other weeks.
+ */
+function deltaCardSpec(cell) {
+  const which = cell.closest('#cuInlineB') ? 'customB' : cell.closest('#cuInline') ? 'custom' : 'deal';
+  const offer = BREAKDOWNS[which].offer();
+  const tr = cell.closest('tr[data-wk]');
+  if (!offer || !tr) return null;
+  const week = Number(tr.getAttribute('data-wk'));
+  // Each week table is one squad's: yours in the pop-up and the left half, his
+  // in the right half — whatever the slot-by-slot panel beside it is showing.
+  const side = which === 'customB' ? 'theirs' : 'mine';
+  const lines = slotLinesOf(offer, side, week);
+  if (!lines) return null;
+  const netted = /\bnetted\b/.test(cell.getAttribute('class') || '');
+  const vs = netted ? vsOptsOf(offer) : {};
+  const vsName = vs.vsName instanceof Map ? vs.vsName.get(week) || '' : vs.vsName || '';
+  // The cell's own printed figure: its first text, before the mark and the sub-line.
+  const shown = cell.firstChild && cell.firstChild.nodeType === 3 ? cell.firstChild.textContent.trim() : '';
+  const whose = side === 'theirs' ? sideLabel(offer, 'theirs') : 'your lineup';
+  // A week already played is a score, not a lineup the deal can still move.
+  if (lines.slice.kind === 'past') {
+    return {
+      title: `Week ${week}`, sub: `${whose}, played`,
+      rows: [
+        { label: 'As it was', value: lines.slice.row.before },
+        { label: 'With the trade', value: lines.slice.row.after },
+      ],
+      total: { label: 'Difference', html: esc(shown) },
+    };
+  }
+  return slotChangeSpec({
+    title: `Week ${week}`,
+    sub: whose,
+    slots: lines.slots,
+    before: lines.slice.row.before, after: lines.slice.row.after,
+    vs: netted && vs.vs ? vs.vs.get(week) : null, vsName,
+    shown,
+  });
+}
+
+/**
+ * The season boxes under the builder (and the assumed trade's): a week's
+ * Starting lineup total opens that lineup slot by slot, and a week heading
+ * opens the week. `withRealWorld` for the assumed block, which is priced on
+ * the real rosters.
+ */
+function seasonBoxOf(cell) {
+  const table = cell.closest('table.sbw-table');
+  if (!table) return null;
+  const inAsm = !!cell.closest('#assumedSeason');
+  const offer = inAsm ? assume.offer : state.customOffer;
+  if (!offer) return null;
+  const side = (inAsm ? state.asmSide : state.cuSeasonSide) === 'theirs' ? 'theirs' : 'mine';
+  const week = Number(cell.getAttribute('data-wk') || cell.getAttribute('data-hw'));
+  const lines = inAsm ? withRealWorld(() => slotLinesOf(offer, side, week)) : slotLinesOf(offer, side, week);
+  if (!lines) return null;
+  const s = sideOf(offer, side);
+  return {
+    offer, side, week, lines, team: s ? s.team : null,
+    box: table.getAttribute('data-box') === 'before' ? 'before' : 'after',
+    diff: table.getAttribute('data-view') === 'diff',
+  };
+}
+
+function seasonBandSpec(cell) {
+  const b = seasonBoxOf(cell);
+  if (!b) return null;
+  const shown = cell.firstChild && cell.firstChild.nodeType === 3 ? cell.firstChild.textContent.trim() : '';
+  if (b.diff) {
+    return slotChangeSpec({
+      title: `Week ${b.week}`, sub: b.team ? b.team.name : '',
+      slots: b.lines.slots, before: b.lines.slice.row.before, after: b.lines.slice.row.after, shown,
+      href: b.team ? teamHref(b.team.id, b.week) : null, hrefLabel: 'Open roster',
+    });
+  }
+  // The box prints each slot's ASSESSED number (lifted to the waiver floor), and
+  // the band is their sum — so the card's rows are those, not the raw projections.
+  const fill = b.lines[b.box];
+  const starters = b.lines.rows.map((row) => {
+    const e = fill.get(row.key) || null;
+    const a = cuSeasonValue(e, row);
+    return { slot: row.key, name: e && e.p ? e.p.name : 'nobody', pts: a.value };
+  }).filter((r) => r.pts !== null);
+  const spec = teamWeekSpec({
+    team: b.team ? b.team.name : '', week: b.week, total: b.lines.slice[b.box].total, starters,
+    href: b.team ? teamHref(b.team.id, b.week) : null,
+  });
+  if (b.box === 'after') spec.sub = `Week ${b.week}, after the trade`;
+  return spec;
+}
+
+function seasonWeekSpec(cell) {
+  const b = seasonBoxOf(cell);
+  if (!b) return null;
+  const row = b.lines.slice.row;
+  const meet = oppProjOf(b.offer);
+  const plays = meet && meet.weeks.includes(b.week);
+  return {
+    title: `Week ${b.week}`,
+    sub: b.lines.slice.kind === 'past' ? 'played' : b.lines.slice.kind === 'po' ? 'playoffs' : '',
+    rows: [
+      { label: `${b.team ? b.team.name : 'Lineup'} now`, value: row.before },
+      { label: 'With the trade', value: row.after },
+    ],
+    foot: plays ? 'The two squads play each other this week.' : '',
+    href: weekHref(b.week), hrefLabel: `Open week ${b.week}`,
+  };
+}
+
+// ------------------------------------------------- column headings, one line
+//
+// docs/previews-plan.md: "column headings keep a one-line `title`". Most of
+// this page's headings had none. One table of words, matched on the heading's
+// own text, so a heading the page rewrites (the goal's, the span's) is retitled
+// with it. A heading that opens a card of its own is left alone.
+const HEAD_TITLES = [
+  [/^(Manager|With)$/, 'The manager on the other side of the deal.'],
+  [/^Δ (title|last) chance$/, (m, th) => (/AltGoal/.test(th.id || '') || th.hasAttribute('data-alt')
+    ? `What the deal does to your ${m[1]} chance — the goal you are not on. It ranks nothing.`
+    : `What the deal does to your ${m[1]} chance. The list is ranked by it.`)],
+  [/^You send$/, 'The men you would give up.'],
+  [/^You get$/, 'The men you would receive.'],
+  [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],
+  [/^You gain/, 'What the deal adds to your best lineup, less his change in a week you play him.'],
+  [/^He gains/, 'What the deal adds to his best lineup.'],
+  [/^His proj vs you$/, 'How far his lineup moves in the weeks he plays you.'],
+  [/^ESPN$/, 'Open the deal on ESPN, or week by week here.'],
+  [/^Week$/, 'A week still to play. Open one to see it slot by slot.'],
+  [/^As (you are|he is) now$/, 'The best lineup that week as the squads stand.'],
+  [/^With the (trade|combination)$/, 'The best lineup that week with the deal made.'],
+  [/^Difference$/, 'With the deal, minus as things stand.'],
+  [/^Slot$/, 'The lineup slot.'],
+  [/^Avg$/, 'The average over the weeks still to play.'],
+];
+
+function syncHeadTitles(root = document) {
+  for (const th of root.querySelectorAll('thead th')) {
+    if (th.hasAttribute('data-hw') || th.hasAttribute('data-pop')) continue;
+    if (th.hasAttribute('title') && !th.hasAttribute('data-ht')) continue;   // its own, written by hand
+    const text = (th.textContent || '').trim();
+    let words = '';
+    for (const [re, to] of HEAD_TITLES) {
+      const m = re.exec(text);
+      if (m) { words = typeof to === 'function' ? to(m, th) : to; break; }
+    }
+    if (words) { th.setAttribute('title', words); th.setAttribute('data-ht', ''); }
+    else if (th.hasAttribute('data-ht')) { th.removeAttribute('title'); th.removeAttribute('data-ht'); }
+  }
+}
+
+// ---------------------------------------------- a deal handed over in a link
+//
+// `trade.html?with=<teamId>&get=<playerIds>&send=<playerIds>` opens the custom
+// builder on that manager with those men ticked — the Players page links here.
+// (`get` is who you would receive, off his roster; `send` is who you would give
+// up, off yours; ids comma-separated; either may be missing.)
+//
+// IT IS NEVER SAVED. The builder's ticks live in memory only — what is kept is
+// the SAVED list, and only the Save button writes that — so a link cannot
+// overwrite anything the reader built. It is applied each time the builder is
+// drawn until the reader changes something himself (a tick, the manager, Clear,
+// Save, the team picker), because the first draw is the sample league and the
+// real rosters arrive after it; from his first change on, the link is spent.
+const dealLink = (() => {
+  const ids = (name) => (readParam(name) || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const partner = readParam('with');
+  return { active: partner !== null, partner, get: ids('get'), send: ids('send'), shown: false };
+})();
+
+function applyDealLink() {
+  if (!dealLink.active) return;
+  const teams = customTeams();
+  const b = teams.find((t) => String(t.id) === dealLink.partner);
+  if (!b || b.id === state.custom.a) return;
+  const a = teamById(state.custom.a);
+  const on = (team, list) => {
+    const have = new Set(((team && team.players) || []).map((p) => String(p.playerId)));
+    return list.filter((id) => have.has(id));
+  };
+  state.custom.b = b.id;
+  state.custom.sendB = on(b, dealLink.get);
+  state.custom.sendA = on(a, dealLink.send);
+}
+
+/** Bring the builder into view, once, when a link's deal is first on screen. */
+function showDealLink() {
+  if (!dealLink.active || dealLink.shown || state.isDemo) return;
+  if (String(state.custom.b) !== dealLink.partner) return;
+  dealLink.shown = true;
+  const panel = $('customPanel');
+  if (panel && typeof panel.scrollIntoView === 'function') {
+    try { panel.scrollIntoView({ block: 'start' }); } catch { /* no layout */ }
+  }
+}
+
+const spendDealLink = () => { dealLink.active = false; };
+
 /**
  * A click on an offer row — in either table — opens that deal in the modal.
  *
@@ -9532,11 +10187,24 @@ $('loadWeeks').addEventListener('click', () => {
  * opened it would reach that handler a moment later and shut it again — the
  * same trap `js/player-card.js` documents for its sheet.
  */
+/**
+ * A click that belongs to a preview rather than to the row under it: a
+ * manager's name (its card's click goes to his roster), and — with a finger,
+ * which has no hover — any figure that opens a card as a sheet.
+ */
+function clickIsPreview(e) {
+  const t = e.target;
+  if (!t || typeof t.closest !== 'function') return false;
+  if (t.closest('[data-tc]')) return true;
+  return coarsePointer() && !!t.closest('[data-rc]');
+}
+
 function wireOfferClicks(el, rowsFor) {
   if (!el) return;
   el.addEventListener('click', (e) => {
     if (clickIsPlayer(e)) return;
     if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai]')) return;
+    if (clickIsPreview(e)) return;
     // A row carries both attributes, and so does the combo's headline button —
     // which is not in a row at all, because the whole packing is not one of the
     // offers. One selector covers both rather than two handlers that could come
@@ -9668,7 +10336,7 @@ document.addEventListener('click', (e) => {
   // is the thing. And the player card sits outside the modal in the DOM while
   // being visually on top of it, so a click on one of its buttons would
   // otherwise read as a click on the page behind.
-  if (t.closest('.modal-card') || t.closest('#tipCard')) return;
+  if (t.closest('.modal-card') || t.closest('#tipCard') || t.closest('#statCard')) return;
   closeDeal();
 });
 
@@ -9719,6 +10387,7 @@ wireTips($('spareStrip'));
 wireTips($('tradeTable'));
 wireTips($('dealPanel'));
 wireTips($('comboPanel'));
+wirePreviews();
 
 // ------------------------------------------------------------------- start up
 
@@ -9757,6 +10426,7 @@ $('measureSelect').value = state.measure;
 $('cuTeamB').addEventListener('change', (e) => {
   const id = Number(e.target.value);
   if (!Number.isFinite(id) || id === state.custom.a) return;
+  spendDealLink();
   state.custom.b = id;
   state.custom.sendB = [];
   // The week open in the inline breakdown belongs to the deal that is being
@@ -9771,6 +10441,7 @@ for (const listId of ['cuListA', 'cuListB']) {
   $(listId).addEventListener('change', (e) => {
     const box = e.target.closest ? e.target.closest('input[type="checkbox"]') : null;
     if (!box) return;
+    spendDealLink();
     const which = box.getAttribute('data-side') === 'b' ? 'b' : 'a';
     const side = which === 'b' ? 'sendB' : 'sendA';
     const id = String(box.value);
@@ -9807,6 +10478,7 @@ for (const listId of ['cuListA', 'cuListB']) {
 $('cuSave').addEventListener('click', () => {
   const priced = priceCustom(state.custom);
   if (priced.error) return;
+  spendDealLink();
   const entry = {
     a: state.custom.a,
     b: state.custom.b,
@@ -9830,6 +10502,7 @@ $('cuSave').addEventListener('click', () => {
 });
 
 $('cuClear').addEventListener('click', () => {
+  spendDealLink();
   state.custom.sendA = [];
   state.custom.sendB = [];
   renderCustom();
@@ -9884,6 +10557,7 @@ $('cuRows').addEventListener('click', (e) => {
   // alone, exactly as the finder's own click handler leaves them alone.
   if (clickIsPlayer(e)) return;
   if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai]')) return;
+  if (clickIsPreview(e)) return;
 
   // A saved row opens the SAME pop-up the finder's rows open — the per-week
   // breakdown, the slot-by-slot before and after, the side toggle. All of it
