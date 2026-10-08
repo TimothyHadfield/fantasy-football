@@ -63,7 +63,10 @@ function gainSnap(document) {
     return {
       id: tr.getAttribute('data-player'),
       mine: /\bmine\b/.test(tr.getAttribute('class') || ''),
-      text: flat(td),
+      // The figure itself: since 2026-10-08 the cell may also carry the scale's
+      // arrow, which is not part of the number.
+      text: flat((td && td.querySelector('.gn')) || td),
+      cls: td ? td.getAttribute('class') || '' : '',
       v: td ? td.getAttribute('data-v') : null,
       opens: Boolean(td && td.querySelector('.gn[data-gain][tabindex="0"][role="button"]')),
       wait: Boolean(td && /\bwait\b/.test(td.getAttribute('class') || '')),
@@ -76,6 +79,30 @@ function gainSnap(document) {
     cells: rows.map(cellOf),
     note: flat(document.getElementById('waiverNote')),
   };
+}
+
+/** Is the site's one stat card (js/pop.js) open? */
+const cardOpen = (pop) => Boolean(pop && pop.hidden !== true && !pop.hasAttribute('hidden'));
+
+/**
+ * What an element's preview says: hover it, read the card, move off again.
+ * '' when nothing opens. The harness answers `(hover: none)` with false, so
+ * this is the mouse's path; the finger's is the `previews` scenario.
+ */
+function cardText(el) {
+  if (!el) return '';
+  const doc = el.ownerDocument;
+  const W = doc.defaultView;
+  el.dispatchEvent(new W.Event('mouseover', { bubbles: true }));
+  const pop = doc.getElementById('statCard');
+  // Cell by cell with a space between, the way it reads — `textContent` would
+  // run a label straight into its number.
+  const said = cardOpen(pop)
+    ? pop.innerHTML.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&rarr;/g, '→')
+      .replace(/\s+/g, ' ').trim()
+    : '';
+  el.dispatchEvent(new W.Event('mouseout', { bubbles: true }));
+  return said;
 }
 
 /** Snap it, sort by it both ways, then open the best man's preview and shut it. */
@@ -96,22 +123,28 @@ async function gainProbe({ document, window }) {
   if (!gn) return out;
   out.cell = flat(gn);
   out.label = gn.getAttribute('aria-label') || '';
-  click(gn);
-  const pop = document.getElementById('gainPop');
-  const cells = (tr) => [...tr.children].map(flat);
+  // A HOVER opens it (2026-10-08: it is the site's stat card now, and a click
+  // on the figure goes to the man the move would drop — the `previews` scenario).
+  gn.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+  const pop = document.getElementById('statCard');
+  const cells = (tr) => (tr ? [...tr.children].map(flat) : []);
+  const dropLink = pop && pop.querySelector('.op-drop a');
   out.pop = pop && {
-    open: !pop.hasAttribute('hidden'),
-    head: flat(pop.querySelector('.op-h')),
+    open: cardOpen(pop),
+    shared: /\bstatcard\b/.test(pop.getAttribute('class') || '') && !document.getElementById('gainPop'),
+    head: flat(pop.querySelector('.tc-ident')),
     drop: flat(pop.querySelector('.op-drop')),
+    dropHref: dropLink ? dropLink.getAttribute('href') || '' : '',
     cols: cells(pop.querySelector('thead tr')),
     rows: [...pop.querySelectorAll('tbody tr')].map(cells),
     foot: [...pop.querySelectorAll('tfoot tr')].map(cells),
-    close: flat(pop.querySelector('.op-close')),
+    standing: flat(pop.querySelector('.sc-foot')),
+    buttons: pop.querySelectorAll('button, .tc-actions').length,
   };
   const esc = new window.Event('keydown', { bubbles: true });
   Object.defineProperty(esc, 'key', { value: 'Escape' });
   document.dispatchEvent(esc);
-  out.shut = Boolean(pop && pop.hasAttribute('hidden'));
+  out.shut = Boolean(pop && !cardOpen(pop));
   return out;
 }
 
@@ -445,6 +478,122 @@ const SCENARIOS = {
       globalThis.__wvGain = await gainProbe({ document, window, waitFor });
     },
   },
+  // THE PREVIEWS (2026-10-08, docs/previews-plan.md "Players"). Every figure on
+  // this page that had a `title` opens the site's stat card instead: what the
+  // number is made of, where it stands in the group its colour compares it
+  // with, and — where there is somewhere to go — a click that goes there.
+  // Read here: one card of each kind by hover, the clicks, and the finger's
+  // sheet. The page is put back the way it was found afterwards, because the
+  // click on a Gain figure selects a man, and the rest of this file's checks
+  // read the table as it first draws.
+  previews: {
+    label: '(p) the previews: a card on every figure, and where each click goes',
+    stub: false,
+    prefs: { 'waivers.source': 'demo' },
+    after: async ({ document, window, waitFor }) => {
+      const out = { cards: {}, went: {}, sheet: {} };
+      const fire = (el, type) => {
+        const ev = new window.Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'button', { value: 0 });
+        el.dispatchEvent(ev);
+        return ev;
+      };
+      const pop = () => document.getElementById('statCard');
+      const q = (sel) => document.querySelector(sel);
+      const SPOTS = {
+        avg: '#waiverTable tbody tr:not(.mine) td[data-c="avg"]',
+        avgMine: '#waiverTable tbody tr.mine td[data-c="avg"]',
+        wk: '#waiverTable tbody tr:not(.mine) td[data-c="wk"]',
+        beats: '#waiverTable tbody td.beats[data-c="wk"]',
+        past: '#waiverTable tbody td[data-c="past"]',
+        tag: '#waiverTable tbody .mine-tag',
+        gain: '#waiverTable tbody td.gain .gn[data-gain]',
+        tAvg: '#takenTable tbody td[data-c="avg"]',
+        tWk: '#takenTable tbody td[data-c="wk"]',
+        pos: '#takenTable tbody td[data-c="pos"][data-go]',
+        own: '#takenTable tbody td[data-c="own"]',
+      };
+      // The row a spot sits in, for the ids its link must carry.
+      for (const [k, sel] of Object.entries(SPOTS)) {
+        const el = q(sel);
+        const tr = el && el.closest('tr');
+        out.cards[k] = {
+          found: Boolean(el),
+          cell: flat(el),
+          pid: tr ? tr.getAttribute('data-player') : null,
+          week: el ? el.getAttribute('data-w') : null,
+          titled: Boolean(el && el.hasAttribute('title')),
+          said: cardText(el),
+        };
+      }
+      // WHERE A CLICK GOES, for a mouse. The page's own navigation is caught
+      // rather than followed.
+      const went = [];
+      const loc = window.location;
+      const hadAssign = loc.assign;
+      loc.assign = (href) => { went.push(String(href)); };
+      for (const k of ['avg', 'wk', 'past', 'tag', 'pos', 'own', 'tWk']) {
+        const el = q(SPOTS[k]);
+        went.length = 0;
+        if (el) fire(el, 'click');
+        out.went[k] = went.slice();
+      }
+      // THE FINGER: a tap opens the same card as a sheet, with the link as a
+      // button and a Close — and goes nowhere by itself.
+      const realMedia = window.matchMedia;
+      window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+      for (const k of ['pos', 'own', 'past', 'gain', 'avg']) {
+        const el = q(SPOTS[k]);
+        went.length = 0;
+        if (el) fire(el, 'click');
+        const p = pop();
+        const link = p && p.querySelector('.tc-open');
+        const drop = p && p.querySelector('.op-drop a');
+        out.sheet[k] = {
+          open: cardOpen(p),
+          sheet: Boolean(p && /\bsheet\b/.test(p.getAttribute('class') || '')),
+          href: link ? link.getAttribute('href') : null,
+          label: link ? flat(link) : '',
+          drop: drop ? drop.getAttribute('href') : null,
+          close: flat(p && p.querySelector('.tc-close')),
+          went: went.slice(),
+        };
+        const x = p && p.querySelector('.tc-close');
+        if (x) fire(x, 'click');
+        out.sheet[k].shut = !cardOpen(pop());
+      }
+      window.matchMedia = realMedia;
+      // THE GAIN FIGURE, clicked with a mouse: the man the move would drop is
+      // selected on this page, no reload.
+      const gn = q(SPOTS.gain);
+      const dropId = (/player=(\d+)/.exec((out.sheet.gain || {}).drop || '') || [])[1] || null;
+      went.length = 0;
+      if (gn) fire(gn, 'click');
+      await waitFor();
+      // His row is in whichever table holds him — your own man is a Taken one.
+      const picked = dropId && [...document.querySelectorAll(`tbody tr#p${dropId}`)]
+        .find((tr) => tr.nextElementSibling &&
+          /\bact-row\b/.test(tr.nextElementSibling.getAttribute('class') || ''));
+      out.jump = {
+        dropId,
+        went: went.slice(),
+        selected: Boolean(picked),
+        actual: Boolean(picked && picked.nextElementSibling &&
+          /\bact-row\b/.test(picked.nextElementSibling.getAttribute('class') || '')),
+        note: flat(document.getElementById('jumpNote')),
+        cardShut: !cardOpen(pop()),
+      };
+      if (hadAssign) loc.assign = hadAssign; else delete loc.assign;
+      // Put the page back: no man selected, three weeks, every position.
+      const clear = q('#jumpNote button[data-clear]');
+      if (clear) fire(clear, 'click');
+      fire(q('#spanFilter button[data-span="3"]'), 'click');
+      fire(q('#posFilter button[data-pos="ALL"]'), 'click');
+      fire(q('#takenPosFilter button[data-pos="ALL"]'), 'click');
+      await waitFor();
+      globalThis.__wvPreviews = out;
+    },
+  },
   // Nobody is "you": the column is dashes and its title says how to fix that.
   // Then a team is chosen on the page, and the column fills — for no request.
   // WV_TREND is the stub league that HAS squads (the plain one rosters nobody),
@@ -618,9 +767,10 @@ function bodyRows(table) {
       text: txt(td),
       v: td.getAttribute('data-v'),
       cls: td.getAttribute('class') || '',
-      // The sentence a coloured cell carries. On this page it is a `title` on a
-      // <td> with no link inside it, which js/touch-titles.js turns into a tap.
+      // A cell with a preview carries NO `title` (2026-10-08): the sentence it
+      // used to hold is in the stat card, read on demand with `cardText(c.el)`.
       title: td.getAttribute('title') || '',
+      el: td,
     })),
   }));
 }
@@ -686,13 +836,32 @@ function checkHeat(c, d, scenario, note) {
   const wireWeeks = wire.flatMap((r) => r.cells.slice(AVG + 2));
   const takenWeeks = taken.flatMap((r) => r.cells.slice(T_AVG + 1));
 
-  // ---- the wire: Avg yes, weeks no ---------------------------------------
-  c.ok('THE WIRE’S WEEK CELLS ARE NEVER ON THE SCALE — `td.beats` owns that ' +
-    'background, and a tint there would be erased rather than composed',
-    wireWeeks.every((td) => !/\bheat\b/.test(td.cls)),
-    JSON.stringify(wireWeeks.filter((td) => /\bheat\b/.test(td.cls))
-      .map((td) => td.cls).slice(0, 3)));
-  c.ok('and both greens are still on them, untouched',
+  // ---- the wire: Avg, and since 2026-10-08 every week still to play --------
+  // ("Available table future-week cells, position by week, the way the Taken
+  // table already does it — the existing `hot` and `beats` marks must still
+  // read on top.") `td.beats` paints a background-COLOR now, so the tint, a
+  // background-image, composes over it instead of being erased.
+  const RANKED = /\b\d+(st|nd|rd|th) of \d+ /;
+  if (wire.length > 2) {
+    c.ok('THE WIRE’S WEEK CELLS ARE ON THE SCALE: position by week, as the Taken table is',
+      wireWeeks.some((td) => /heat-(up|dn)-\d/.test(td.cls)),
+      JSON.stringify(wireWeeks.map((td) => td.cls).slice(0, 6)));
+    const claims = wireWeeks.filter((td) => /\b(hot|beats)\b/.test(td.cls));
+    c.ok('and a cell is BOTH: the claim green and the scale sit on the same cell',
+      claims.length === 0 || claims.some((td) => /\bheat\b/.test(td.cls)),
+      JSON.stringify(claims.map((td) => td.cls).slice(0, 3)));
+    c.ok('a Bye, a 0.0, a blank and a week already played are never coloured there',
+      wireWeeks.filter((td) => /\b(bye|zero|zero-out|wait|wk-past)\b/.test(td.cls) || td.v === null)
+        .every((td) => !/\bheat\b/.test(td.cls)),
+      JSON.stringify(wireWeeks.filter((td) => (/\b(bye|zero|zero-out|wait|wk-past)\b/.test(td.cls) || td.v === null) &&
+        /\bheat\b/.test(td.cls)).map((td) => `${td.text}:${td.cls}`).slice(0, 3)));
+    const wkCol = wireWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls)).slice(0, 40);
+    const wkBad = wkCol.map((td) => cardText(td.el))
+      .filter((s) => !(RANKED.test(s) && /free-agent \S+ this week/.test(s) && / · Week \d+/.test(s)) || /\bSD\b/.test(s));
+    c.ok('every coloured week cell’s preview says the position AND the week it was measured in',
+      wkBad.length === 0, wkBad[0]);
+  }
+  c.ok('and both greens are still on them',
     wireWeeks.some((td) => /\bhot\b/.test(td.cls)) || wire.length === 0,
     `${wireWeeks.filter((td) => /\bhot\b/.test(td.cls)).length} green-text cells`);
   // THE POSITIVE ASSERTION COMES FIRST AND IS UNGUARDED. Everything below it
@@ -725,14 +894,21 @@ function checkHeat(c, d, scenario, note) {
         .every((r) => r.cells[AVG].v === null || /\bheat\b/.test(r.cells[AVG].cls)),
       JSON.stringify(wire.filter((r) => /\bmine\b/.test(r.cls))
         .map((r) => `${r.cells[AVG].v}:${r.cells[AVG].cls}`)));
-    c.ok('and it says so on the cell, in words a tap opens',
-      wire.filter((r) => /\bmine\b/.test(r.cls) && /\bheat\b/.test(r.cells[AVG].cls))
-        .every((r) => /rather than counted among them/.test(r.cells[AVG].title)),
-      wire.filter((r) => /\bmine\b/.test(r.cls))[0]?.cells[AVG].title);
-    c.ok('THE COMPARISON GROUP IS HIS POSITION, said on every coloured Avg',
-      wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
-        .every((td) => /(highest|lowest) of \d+ · /i.test(td.title) && !/\bSD\b/.test(td.title) && /free-agent/.test(td.title)),
-      wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls))[0]?.title);
+    const mineSaid = wire.filter((r) => /\bmine\b/.test(r.cls) && /\bheat\b/.test(r.cells[AVG].cls))
+      .map((r) => cardText(r.cells[AVG].el));
+    c.ok('and it says so in the cell’s preview: yours, and where he WOULD stand among them',
+      mineSaid.every((s) => /Yours — would be \d+(st|nd|rd|th) of \d+ free-agent /.test(s)),
+      mineSaid[0]);
+    // THE ANSWER TO "it runs green, grey, green and looks broken": sorted by
+    // value the column mixes positions, so every coloured Avg names its group.
+    const avgSaid = wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls)).map((td) => cardText(td.el));
+    c.ok('THE COMPARISON GROUP IS HIS POSITION, said in every coloured Avg’s preview ("2nd of 17 free-agent QBs")',
+      avgSaid.length > 0 && avgSaid.every((s) => RANKED.test(s) && !/\bSD\b/.test(s) &&
+        /free-agent (QBs|RBs|WRs|TEs|kickers|defenses)/.test(s)),
+      avgSaid.find((s) => !(RANKED.test(s) && /free-agent (QBs|RBs|WRs|TEs|kickers|defenses)/.test(s))) ?? avgSaid[0]);
+    c.ok('and no cell with a preview carries a `title` as well',
+      wireAvg.concat(wireWeeks).filter((td) => td.el.hasAttribute('data-c')).every((td) => td.title === ''),
+      wireAvg.concat(wireWeeks).find((td) => td.el.hasAttribute('data-c') && td.title)?.title);
     // The swatch in the legend above the table, shown in the very treatment
     // the table draws. `data-when` hides it unless the mark is on screen, so
     // this also proves the selector in waivers.html addresses the right cells —
@@ -756,7 +932,7 @@ function checkHeat(c, d, scenario, note) {
     const wireKeyEl = d.getElementById('waiverHeatKey');
     const wireBandsEl = d.getElementById('waiverHeatBands');
     c.ok('THE VISIBLE KEY IS SHORT and names the group the colour compares',
-      /coloured against the other free agents at that position/.test(txt(wireKeyEl)) &&
+      /compares free agents at the same position, week by week/.test(txt(wireKeyEl)) &&
       txt(wireKeyEl).split(/\s+/).length <= 25,
       txt(wireKeyEl));
     c.ok('and it is OUTSIDE the toggle, so the colour is never unexplained on screen',
@@ -773,8 +949,10 @@ function checkHeat(c, d, scenario, note) {
     c.ok('and they are INSIDE “How to read this table”, where the method lives',
       wireBandsEl && !!wireBandsEl.closest('details.explain'),
       wireBandsEl ? 'no details.explain above it' : 'no #waiverHeatBands at all');
-    c.ok('the toggle still says why the week columns keep the two greens instead',
-      /week cells are deliberately left off that scale/.test(note), note.slice(0, 1400));
+    c.ok('the toggle says the week columns are on the scale, and how the two greens read on top of it',
+      /Each week cell is on the same scale, measured against the other free agents at his position in that same week/.test(note) &&
+      /shade with a ring round it/.test(note) && !/deliberately left off that scale/.test(note),
+      note.slice(note.indexOf('And on the week columns'), note.indexOf('And on the week columns') + 500));
     c.ok('the note argues the pool: the wire at his position, not the whole league',
       /compared only with the other free agents in that same position/.test(note) &&
       /nobody wanted/.test(note), note.slice(0, 1400));
@@ -798,10 +976,12 @@ function checkHeat(c, d, scenario, note) {
       JSON.stringify(takenWeeks
         .filter((td) => (/\b(bye|zero|zero-out|wait)\b/.test(td.cls) || td.v === null) &&
           /\bheat\b/.test(td.cls)).map((td) => `${td.text}:${td.cls}`).slice(0, 3)));
-    c.ok('every coloured week cell says which position AND which week it was measured in',
-      takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
-        .every((td) => /(highest|lowest) of \d+ · /i.test(td.title) && !/\bSD\b/.test(td.title) && /in week \d+/.test(td.title)),
-      takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls))[0]?.title);
+    const takenSaid = takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls)).slice(0, 60)
+      .map((td) => cardText(td.el));
+    c.ok('every coloured week cell’s preview says which position AND which week it was measured in',
+      takenSaid.length > 0 && takenSaid.every((s) => /\b\d+(st|nd|rd|th) of \d+ rostered \S+ this week/.test(s) &&
+        !/\bSD\b/.test(s) && / · Week \d+/.test(s)),
+      takenSaid.find((s) => !/\b\d+(st|nd|rd|th) of \d+ rostered \S+ this week/.test(s)) ?? takenSaid[0]);
     c.ok('a cell at the end of the scale carries the glyph, and only there',
       [...takenAvg, ...takenWeeks].filter((td) => /heat-(up|dn)-4/.test(td.cls))
         .every((td) => /[▲▼]/.test(td.text)) &&
@@ -995,6 +1175,112 @@ async function check(scenario, boot) {
         Math.abs(Number(x.text) - Number(x.v)) > 0.051));
     c.ok('GAIN: a figure is a signed per-week number that opens its preview; no gain is a dash with no sort key',
       bad.length === 0, JSON.stringify(bad.slice(0, 3)));
+    // GAIN AGAINST THE COLUMN (docs/colour-plan.md, 2026-10-08): the deeper the
+    // green, the bigger the gain among the gains on the wire. Every figure is a
+    // plus, so none of them is ever red, and a dash is never coloured.
+    const figs = fa.filter((x) => x.v !== null);
+    const stepUp = (x) => Number((x.cls.match(/heat-up-(\d)/) || [0, 0])[1]);
+    if (figs.length > 1) {
+      c.ok('GAIN IS ON THE SCALE, against the other gains in the column',
+        figs.every((x) => /\bheat\b/.test(x.cls)), JSON.stringify(figs.slice(0, 3)));
+      const byV = figs.slice().sort((a, b) => Number(b.v) - Number(a.v));
+      c.ok('and a bigger gain is never the paler one',
+        byV.every((x, i) => i === 0 || stepUp(x) <= stepUp(byV[i - 1])),
+        JSON.stringify(byV.map((x) => `${x.v}:${stepUp(x)}`).slice(0, 8)));
+    }
+    c.ok('GAIN: a plus is never red, and a dash is never coloured',
+      fa.every((x) => !/heat-dn/.test(x.cls)) && fa.filter((x) => x.v === null).every((x) => !/\bheat\b/.test(x.cls)),
+      JSON.stringify(fa.filter((x) => /heat-dn/.test(x.cls) || (x.v === null && /\bheat\b/.test(x.cls))).slice(0, 3)));
+  }
+
+  // ---- one preview a number, and a one-line title a heading -----------------
+  {
+    const carded = [...d.querySelectorAll('#waiverTable td[data-c], #takenTable td[data-c], .mine-tag')];
+    if (rows.length > 2) {
+      c.ok('PREVIEWS: the cells that open a card are marked, in both tables',
+        d.querySelectorAll('#waiverTable td[data-c]').length > 0 &&
+        (d.querySelectorAll('#takenTable tbody tr[data-player]').length === 0 ||
+          d.querySelectorAll('#takenTable td[data-c]').length > 0),
+        `${carded.length} cells`);
+    }
+    c.ok('PREVIEWS: an element with a card carries no `title` — one preview a number',
+      carded.every((el) => !el.hasAttribute('title')),
+      carded.find((el) => el.hasAttribute('title'))?.getAttribute('title'));
+    const who = [...d.querySelectorAll('.who')];
+    c.ok('the name in a stat line no longer repeats itself in a `title`',
+      who.every((el) => !el.hasAttribute('title')), who.find((el) => el.hasAttribute('title'))?.getAttribute('title'));
+    const names = ['Player', 'Pos', 'Tm', 'Owner', 'Avg', 'Gain'];
+    const heads = [...d.querySelectorAll('#waiverTable thead th, #takenTable thead th')]
+      .filter((th) => names.includes(txt(th)));
+    const oneLine = (t) => t.length > 0 && !/[.!?] \S/.test(t);
+    c.ok('HEADINGS: every identity column says what it is in one line',
+      heads.length >= 5 && heads.every((th) => oneLine(th.getAttribute('title') || '')),
+      heads.filter((th) => !oneLine(th.getAttribute('title') || ''))
+        .map((th) => `${txt(th)}: ${th.getAttribute('title')}`).join(' | '));
+  }
+
+  if (scenario === 'previews') {
+    const w = globalThis.__wvPreviews || { cards: {}, went: {}, sheet: {} };
+    const k = (name) => w.cards[name] || { said: '' };
+    for (const name of ['avg', 'avgMine', 'wk', 'beats', 'past', 'tag', 'gain', 'tAvg', 'tWk', 'pos', 'own']) {
+      c.ok(`CARD ${name}: the figure is there, opens a card on hover, and has no title`,
+        k(name).found && k(name).said.length > 0 && !k(name).titled, JSON.stringify(w.cards[name]));
+    }
+    c.ok('AVG: the weeks it is the mean of, the mean, and his rank among the free agents at his position',
+      /Avg, weeks? \d/.test(k('avg').said) && /Week \d+ ?\d+\.\d/.test(k('avg').said) &&
+      /Mean of \d+ weeks? ?\d+\.\d/.test(k('avg').said) &&
+      /\d+(st|nd|rd|th) of \d+ free-agent (QBs|RBs|WRs|TEs|kickers|defenses)$/.test(k('avg').said),
+      k('avg').said);
+    c.ok('AVG: the mean in the card is the number in the cell',
+      (k('avg').said.match(/Mean of \d+ weeks? ?(\d+\.\d)/) || [])[1] === k('avg').cell.replace(/\s*[▲▼]$/, ''),
+      `${k('avg').cell} | ${k('avg').said}`);
+    c.ok('A WEEK STILL TO PLAY: the projection, the average free agent at his position, and his rank that week',
+      new RegExp(` · Week ${k('wk').week}\\b`).test(k('wk').said) && /Projected ?\d+\.\d/.test(k('wk').said) &&
+      /Average free-agent \S+ ?\d+\.\d/.test(k('wk').said) &&
+      /\d+(st|nd|rd|th) of \d+ free-agent \S+ this week$/.test(k('wk').said), k('wk').said);
+    c.ok('A SHADED CELL says whose number it beats: your worst man at the position, by name',
+      /your worst (QB|RB|WR|TE|K|DST|D\/ST) ?\d+\.\d/.test(k('beats').said), k('beats').said);
+    c.ok('A PLAYED WEEK: "Projected" and "Scored", side by side',
+      /Projected ?(\d+\.\d|—)/.test(k('past').said) && /Scored ?(\d+\.\d|—)/.test(k('past').said), k('past').said);
+    c.ok('"Your QB2": your own men at that position, ranked by Avg',
+      /^Your \S+ · by Avg, weeks? \d/.test(k('tag').said) && /(QB|RB|WR|TE|K|DST)1 /.test(k('tag').said), k('tag').said);
+    c.ok('TAKEN Avg and week: ranked among the ROSTERED men at his position',
+      /\d+(st|nd|rd|th) of \d+ rostered \S+$/.test(k('tAvg').said) &&
+      /\d+(st|nd|rd|th) of \d+ rostered \S+ this week$/.test(k('tWk').said), `${k('tAvg').said} | ${k('tWk').said}`);
+    c.ok('"RB1": that manager’s men at the position, ranked by Avg, him among them',
+      / · \S+ by Avg, weeks? \d/.test(k('pos').said) && new RegExp(`${k('pos').cell} `).test(k('pos').said), k('pos').said);
+    c.ok('GAIN: its card is the same weeks table, and now says where the gain stands',
+      /^.+ · weeks? \d/.test(k('gain').said) && /Drop \S+/.test(k('gain').said) &&
+      /Per week ?\+\d+\.\d/.test(k('gain').said) && /\d+(st|nd|rd|th) of \d+ gains on the wire$/.test(k('gain').said),
+      k('gain').said);
+    const none = (name) => (w.went[name] || []).length === 0;
+    const one = (name, rx) => (w.went[name] || []).length === 1 && rx.test(w.went[name][0]);
+    c.ok('CLICK: a played week goes to that week on Schedule',
+      one('past', new RegExp(`^schedule\\.html\\?week=${k('past').week}$`)), JSON.stringify(w.went.past));
+    c.ok('CLICK: an owner goes to that team on Analysis',
+      one('own', /^analysis\.html\?team=\w+/), JSON.stringify(w.went.own));
+    c.ok('CLICK: "Your QB2" goes to your own roster',
+      one('tag', /^analysis\.html\?team=\w+/), JSON.stringify(w.went.tag));
+    c.ok('CLICK: a taken man’s rank goes to Trade, with his team and him — trade.html?with=<teamId>&get=<playerId>',
+      one('pos', new RegExp(`^trade\\.html\\?with=\\w+&get=${k('pos').pid}$`)), `${JSON.stringify(w.went.pos)} for ${k('pos').pid}`);
+    c.ok('CLICK: an Avg and a week still to play go nowhere — they only explain',
+      none('avg') && none('wk') && none('tWk'), JSON.stringify([w.went.avg, w.went.wk, w.went.tWk]));
+    for (const name of ['pos', 'own', 'past', 'gain', 'avg']) {
+      const s = w.sheet[name] || {};
+      c.ok(`FINGER ${name}: a tap opens the card as a sheet with a Close, goes nowhere, and Close shuts it`,
+        s.open && s.sheet && s.close === 'Close' && s.went.length === 0 && s.shut, JSON.stringify(s));
+    }
+    c.ok('FINGER: where a click would go is a button on the sheet',
+      /^trade\.html\?with=/.test(w.sheet.pos?.href || '') && /^Trade for him/.test(w.sheet.pos?.label || '') &&
+      /^analysis\.html\?team=/.test(w.sheet.own?.href || '') &&
+      /^schedule\.html\?week=\d+$/.test(w.sheet.past?.href || '') && w.sheet.avg?.href === null,
+      JSON.stringify([w.sheet.pos, w.sheet.own, w.sheet.past, w.sheet.avg]));
+    c.ok('GAIN, on a sheet: "Drop X" is a link to that man, and so is the button',
+      /^waivers\.html\?player=\d+$/.test(w.sheet.gain?.drop || '') &&
+      /[?&]player=\d+/.test(w.sheet.gain?.href || ''), JSON.stringify(w.sheet.gain));
+    const j = w.jump || {};
+    c.ok('GAIN, clicked with a mouse: the man it would drop is selected HERE — no reload, his Actual row open',
+      j.dropId && j.selected && j.actual && j.went.length === 0 && j.cardShut && j.note.length > 0, JSON.stringify(j));
   }
 
   if (scenario === 'gain' || scenario === 'gain-noteam') {
@@ -1038,8 +1324,13 @@ async function check(scenario, boot) {
     // weeks is the figure in the cell.
     const pop = w.pop || { rows: [], foot: [] };
     const n = (s) => Number(String(s).replace('+', '').replace('−', '-'));
-    c.ok('PREVIEW: a click on the figure opens it', pop.open === true, JSON.stringify(pop).slice(0, 200));
+    c.ok('PREVIEW: a hover on the figure opens it', pop.open === true, JSON.stringify(pop).slice(0, 200));
+    c.ok('PREVIEW: it is the site’s one stat card, not a pop-over of this page’s own',
+      pop.shared === true, JSON.stringify(pop).slice(0, 200));
     c.ok('PREVIEW: it names the man the move drops', /^Drop \S+/.test(pop.drop || ''), pop.drop);
+    c.ok('PREVIEW: and "Drop X" is a link to that man', /^waivers\.html\?player=\d+$/.test(pop.dropHref || ''), pop.dropHref);
+    c.ok('PREVIEW: it says where this gain stands among the gains on the wire',
+      /^\d+(st|nd|rd|th) of \d+ gains on the wire$/.test(pop.standing || ''), pop.standing);
     c.ok('PREVIEW: columns are Wk, Now, With him, +',
       JSON.stringify(pop.cols) === JSON.stringify(['Wk', 'Now', 'With him', '+']), JSON.stringify(pop.cols));
     c.ok('PREVIEW: one row per priced week, and each + is With him − Now',
@@ -1052,8 +1343,8 @@ async function check(scenario, boot) {
       pop.rows.length > 0 && `+${(total / pop.rows.length).toFixed(1)}` === w.cell &&
       pop.foot[1] && pop.foot[1][1] === w.cell,
       `${total} / ${pop.rows.length} vs ${w.cell} ${JSON.stringify(pop.foot)}`);
-    c.ok('PREVIEW: it has a Close button for a finger, and Escape shuts it',
-      pop.close === 'Close' && w.shut === true, `${pop.close} ${w.shut}`);
+    c.ok('PREVIEW: a hover card has no buttons (a finger gets Close on the sheet), and Escape shuts it',
+      pop.buttons === 0 && w.shut === true, `${pop.buttons} ${w.shut}`);
     c.ok('the figure is a labelled button, not a hover-only title',
       /where this gain comes from/.test(w.label || ''), w.label);
   }
@@ -1161,7 +1452,8 @@ async function check(scenario, boot) {
           text: g ? txt(g) : '',
           under: Boolean(g),
           acts: isAct ? [...act.querySelectorAll('td.wk-past')].map((t) => txt(t)) : [],
-          wk4: row ? txt(row.querySelector('td.fut-start')) : '',
+          // The number alone: the cell may carry the scale's arrow beside it.
+          wk4: row ? txt(row.querySelector('td.fut-start')).replace(/\s*[▲▼]$/, '') : '',
           pid: Number(pid),
         };
       };
@@ -1543,7 +1835,7 @@ async function check(scenario, boot) {
     c.ok('the failed weeks are blank', rows.every((r) => r.cells[W0 + 1].text === '—' && r.cells[W0 + 2].text === '—'),
       JSON.stringify(rows[0] && rows[0].cells.map((x) => x.text)));
     c.ok('week 4 still carries numbers',
-      rows.filter((r) => /^\d+\.\d$/.test(r.cells[W0].text)).length === 59,
+      rows.filter((r) => /^\d+\.\d( [▲▼])?$/.test(r.cells[W0].text)).length === 59,
       rows.slice(0, 2).map((r) => r.cells[W0].text).join(','));
     c.ok('the note names the weeks that failed',
       /ESPN did not return weeks 5 and 6/.test(note), note);

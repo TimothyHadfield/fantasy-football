@@ -44,33 +44,32 @@
 // else we already have built" — and this page is where that exception bites
 // hardest, because it is the one page with TWO greens of its own.
 //
-// WHAT THE COLLISION ACTUALLY IS. `js/heat.js` owns a cell's BACKGROUND and its
+// WHAT THE COLLISION WAS. `js/heat.js` owns a cell's BACKGROUND-IMAGE and its
 // WEIGHT. `td.beats` — "this free agent out-projects your own worst man that
-// week" — owns a cell's BACKGROUND, and it is written with the `background`
-// SHORTHAND at `#waiverTable tbody td.beats`, which both outranks a bare
-// `.heat-up-3` and RESETS `background-image` to none. So a scale laid on the
-// wire's week cells would be silently ERASED on exactly the cells that carry
-// the shading — the page would have made a claim it never drew. That is not a
-// styling problem to be worked around; it is the site telling us the channel is
-// already spoken for.
+// week" — used to own the BACKGROUND with the `background` SHORTHAND, which
+// reset `background-image` to none: a scale laid on the wire's week cells was
+// erased on exactly the cells that carried the shading. So until 2026-10-08
+// the wire's week cells carried no scale at all.
 //
-// SO THE SCALE GOES WHERE IT DOES NOT COLLIDE, and there are three such places:
+// WHERE THE SCALE IS NOW (Tim, 2026-10-08: colour every number that is a
+// comparison), five places:
 //
-//   1. THE WIRE'S Avg COLUMN. Neither green is ever on it — both are week cells
-//      — and Avg is the column that orders the table into an answer. Group: the
-//      other free agents AT HIS POSITION. See `wireAvgScales`.
+//   1. THE WIRE'S Avg COLUMN. Group: the other free agents AT HIS POSITION.
 //   2. THE TAKEN TABLE'S Avg COLUMN, same group over the rostered pool.
 //   3. THE TAKEN TABLE'S WEEK COLUMNS, one scale per position and week.
+//   4. THE WIRE'S WEEK COLUMNS, the same way: a free agent's week against the
+//      other free agents at his position in that week. The two claim greens
+//      sit ON TOP of it and are told apart by treatment, never by hue alone:
+//      "worth starting" is the accent TEXT at its own weight, and "beats your
+//      worst man" is the shade (now `background-color`, so the tint composes
+//      over it) WITH A RING round the cell — see `td.beats` in waivers.html.
+//   5. THE Gain COLUMN, against the other gains in the column and anchored at
+//      zero, so a plus is never red (`gainScale`).
 //
-// THE WIRE'S WEEK CELLS DELIBERATELY GET NOTHING, and that is the answer to
-// "why is half this page coloured". Those cells already answer two questions at
-// once — is he worth starting at all (green TEXT, an absolute bar), and does he
-// beat the man you would drop (green SHADE, a comparison with your own squad) —
-// and both are about the CLAIM. A third cue saying "and he is a good free agent
-// compared with the other free agents" would be a third meaning in a cell three
-// characters wide, and it would have to take the background off one of the two
-// cues that are already there. The Avg column answers that third question one
-// column to the left, where nothing else is competing for it.
+// EVERY NUMBER OPENS A PREVIEW (js/pop.js, the site's stat card) that says
+// what it is made of and which group it was measured against — "2nd of 17
+// free-agent QBs" — so a column that runs green, grey, green when it is sorted
+// by value explains itself. See "the previews" below.
 //
 // That table needs the weekly rosters whether or not a team is set as you, so
 // the roster read is now unconditional and every week costs TWO requests. The
@@ -90,9 +89,8 @@ import { zeroKind, byeWeekOf, outMark } from './player-card.js';
 import { glanceHtml } from './player-card.js';
 import { enableSort, resort } from './sortable.js';
 // THE ONE RED/GREEN SCALE (js/heat.js, rule 14). Imported for the two Avg
-// columns and the Taken table's week columns — see the block at the top of this
-// file for why the wire's own week cells are deliberately left to the two
-// greens. `describeHeatPerColumn` rather than `describeHeat` because both
+// columns, both tables' week columns and Gain — see the block at the top of
+// this file. `describeHeatPerColumn` rather than `describeHeat` because both
 // tables here carry MANY scales, one per position, so there is no single pair
 // of thresholds to put in a sentence; the per-position pairs are printed as a
 // strip inside each table's "How to read this table" toggle instead, which is
@@ -102,8 +100,12 @@ import { enableSort, resort } from './sortable.js';
 // HANDOFF's panel shape is a small visible key over a full method behind the
 // toggle. Deleting it was never an option — Tim checks numbers against ESPN by
 // hand, and a threshold he cannot read is a colour he cannot check.
-import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn } from './heat.js';
-import { savedConfig, onConnection } from './connection.js';
+import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn, ordinal } from './heat.js';
+import { savedConfig, onConnection, coarsePointer } from './connection.js';
+// THE PREVIEWS (Tim, 2026-10-08): every number on this page opens the site's
+// stat card, built when it is asked for — see "the previews" below.
+import { wirePops, hidePop } from './pop.js';
+import { teamHref, playerHref, weekHref } from './links.js';
 // The preseason arrows by a name (Tim, 2026-09-30) — see js/proj-trend.js.
 import * as trend from './proj-trend.js';
 import { scope } from './prefs.js';
@@ -115,7 +117,7 @@ import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // page reads the league's lineup slots, so both pages fill the same lineup.
 import { gainBase, gainOf } from './waiver-gain.js';
 import { slotsForLeague } from './trade.js';
-import { slotCountsFromLineups } from './projection.js';
+import { slotCountsFromLineups, projectionsFromWeekTeams } from './projection.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('waivers');
@@ -229,6 +231,8 @@ const state = {
   byes: {},
   // The league's scoringItems, for the preseason arrows; null = unknown.
   scoring: null,
+  // The schedule as read (live only), for a team card's record; null = none.
+  schedule: null,
   span: SPAN_CHOICE(prefs.get('span', '3')),
 
   // A position filter PER TABLE. They were one filter driving both, which meant
@@ -512,6 +516,7 @@ function resetData() {
   state.demoLadder = null;
   state.byes = {};
   state.scoring = null;
+  state.schedule = null;
   state.playedWeeks = [];
   state.past.wire.clear();
   state.past.rosters.clear();
@@ -660,6 +665,7 @@ async function loadLive() {
     const schedule = await fetchSchedule();
     if (token !== state.token) return;
     state.leagueName = schedule.leagueName || 'Your league';
+    state.schedule = schedule;
     // The league's scoring rules, for the preseason arrows (js/proj-trend.js).
     state.scoring = Array.isArray(schedule.scoringItems) ? schedule.scoringItems : null;
     state.seasonWeeks = schedule.weeks.slice();
@@ -1382,7 +1388,9 @@ function pastCell(p, week, wire) {
     }
     return `<td class="zero" data-v="0" title="${esc(p.name)} was projected at 0.0 in week ${week}.">0.0</td>`;
   }
-  return `<td data-v="${v}" title="ESPN’s projection for week ${week}, already played.">${fmt(v)}</td>`;
+  // A real number: the preview says what he scored against it, and its click
+  // is that week on the Schedule page (`playedCard`). No `title` beside a card.
+  return `<td data-v="${v}" data-c="past" data-go data-w="${week}">${fmt(v)}</td>`;
 }
 
 /** The same week in his Actual row: what he SCORED. */
@@ -1394,7 +1402,7 @@ function actualCell(p, week, wire) {
   if (typeof a !== 'number') {
     return `<td title="ESPN has no week ${week} score for ${esc(p.name)}.">${dash}</td>`;
   }
-  return `<td title="What ${esc(p.name)} scored in week ${week}.">${fmt(a)}</td>`;
+  return `<td data-c="act" data-go data-w="${week}">${fmt(a)}</td>`;
 }
 
 /**
@@ -1718,7 +1726,7 @@ function buildMineRows(weeks) {
     const worst = rated.reduce((a, b) =>
       b.avg < a.avg || (b.avg === a.avg && b.p.playerId < a.p.playerId) ? b : a
     );
-    rows.push({ ...worst, depth: group.length, label: `Your ${position}${group.length}` });
+    rows.push({ ...worst, depth: group.length, label: `Your ${position}${group.length}`, group });
   }
 
   // Football's own order, so an unsorted set of them reads QB first.
@@ -1846,7 +1854,7 @@ function prepareGain() {
   if (g.timer !== null) clearTimeout(g.timer);
   Object.assign(g, {
     key, weeks: why ? [] : weeks, base: null, by: new Map(), queue: [], timer: null,
-    slices: 0, longest: 0, busy: 0,
+    scale: null, slices: 0, longest: 0, busy: 0,
   });
   if (!key) return;
 
@@ -1902,8 +1910,32 @@ function runGain() {
     return;
   }
   gainMark('gain-end', { slices: g.slices, longest: g.longest, busy: g.busy });
+  // THE COLUMN IS WHOLE, so it can be coloured against itself: every figure is
+  // drawn again from the one builder, now with its shade.
+  g.scale = gainScale();
+  if (g.scale) {
+    $('waiverTable').querySelectorAll('tbody td.gain').forEach((td) => {
+      const tr = td.parentNode;
+      const mine = /\bmine\b/.test((tr && tr.getAttribute('class')) || '');
+      const man = tr && !mine ? poolMan(tr.getAttribute('data-player')) : null;
+      if (man && g.by.has(man.playerId)) td.outerHTML = gainCell(man);
+    });
+  }
   // The cells carry their sort keys now: put the rows back in the chosen order.
   resort($('waiverTable'));
+}
+
+/**
+ * THE Gain COLUMN'S SCALE: against the other gains in the column, ANCHORED AT
+ * ZERO. Every figure here is a plus, and a plus must never be drawn red — so
+ * the gains are mirrored round zero before the scale is taken, which puts the
+ * average at 0 and leaves only the green half in use: the bigger the gain
+ * beside the column's own, the deeper the shade. Built once the whole column
+ * is priced; null until then, and for a column with nothing to compare.
+ */
+function gainScale() {
+  const gains = [...state.gain.by.values()].filter((r) => r && r.total > 0).map((r) => r.perWeek);
+  return gains.length > 1 ? heatScale([...gains, ...gains.map((v) => -v)]) : null;
 }
 
 /** Fill in every cell still on its dot whose figure has arrived. */
@@ -1928,7 +1960,8 @@ const signed = (n) => `${n > 0 ? '+' : ''}${fmt(n)}`;
  * several weeks; the total is in the preview. No gain is the dash the rest of
  * the table uses for "nothing here", with no sort key, so it sinks to the foot
  * of the column either way. The figure is a button, not a titled cell: it
- * opens the preview (`gainPop` below), by hover, focus or tap.
+ * opens the preview (`gainCard` below), by hover, focus or tap, and a click
+ * goes to the man the move would drop.
  */
 function gainCellParts(p) {
   const g = state.gain;
@@ -1945,10 +1978,12 @@ function gainCellParts(p) {
       title: `Adding ${p.name} would not raise your lineup in ${weekRange(g.weeks)}.`,
     };
   }
+  const heat = heatOf(r.perWeek, g.scale || null);
   return {
-    cls: 'gain', v: r.perWeek.toFixed(3), title: '', wait: false,
+    cls: `gain${heat ? ` ${heat.cls}` : ''}`, v: r.perWeek.toFixed(3), title: '', wait: false,
     html: `<span class="gn" data-gain="${esc(p.playerId)}" tabindex="0" role="button" ` +
-      `aria-label="${esc(p.name)}: where this gain comes from">${signed(r.perWeek)}</span>`,
+      `aria-label="${esc(p.name)}: where this gain comes from">${signed(r.perWeek)}</span>` +
+      heatMarkHtml(heat),
   };
 }
 
@@ -1968,102 +2003,376 @@ function gainTitle() {
 
 // WHERE A GAIN COMES FROM: the man the move drops, then one row per week —
 // your best lineup now, with him, and the difference — summing to the total,
-// which over the weeks is the figure in the cell. The Stats page's Schedule
-// luck preview, to the letter: a mouse gets a card beside the figure on hover
-// or focus; a finger has no hover, so a tap opens it as a sheet with a Close
-// button; a tap outside or Escape also shuts it.
+// which over the weeks is the figure in the cell. It is the site's stat card
+// (js/pop.js) since 2026-10-08, drawn as this page's own pop-over drew it: a
+// mouse gets the card beside the figure on hover or focus; a finger has no
+// hover, so a tap opens it as a sheet with a Close button; a tap outside or
+// Escape also shuts it.
+//
+// "DROP X" IS A LINK TO THAT MAN — his row in the Taken table, opened the way
+// any name on this page opens. On the sheet it is the name itself and the
+// button under the table; with a mouse the card cannot be clicked (it is
+// never what the mouse is over), so the click on the figure is the link.
 
-let gainPop = null;
-
-function gainPopHtml(playerId) {
+function gainCard(playerId) {
   const g = state.gain;
   const p = poolMan(playerId);
   const r = p ? g.by.get(p.playerId) : null;
-  if (!r || !(r.total > 0) || !r.weeks.length) return '';
+  if (!r || !(r.total > 0) || !r.weeks.length) return null;
   const sum = (pick) => r.weeks.reduce((a, w) => a + pick(w), 0);
   const rows = r.weeks.map((w) =>
     `<tr><td class="num">${w.week}</td><td class="num">${fmt(w.before)}</td>` +
     `<td class="num">${fmt(w.after)}</td><td class="num">${signed(w.delta)}</td></tr>`).join('');
-  return (
-    `<div class="op-h">${esc(p.name)} <span class="muted">· ${weekRange(g.weeks)}</span></div>` +
-    (r.drop ? `<div class="op-drop">Drop ${esc(r.drop.name)}</div>` : '') +
-    '<table><thead><tr><th class="num">Wk</th><th class="num">Now</th>' +
-    '<th class="num">With him</th><th class="num">+</th></tr></thead>' +
-    `<tbody>${rows}</tbody><tfoot>` +
-    `<tr><td class="lbl">Total</td><td class="num">${fmt(sum((w) => w.before))}</td>` +
-    `<td class="num">${fmt(sum((w) => w.after))}</td><td class="num">${signed(r.total)}</td></tr>` +
-    `<tr class="op-gap"><td class="lbl" colspan="3">Per week</td><td class="num">${signed(r.perWeek)}</td></tr>` +
-    '</tfoot></table>' +
-    '<button type="button" class="op-close">Close</button>'
-  );
+  const dropHref = r.drop ? playerHref(r.drop.playerId) : null;
+  const dropName = r.drop
+    ? (dropHref ? `<a class="pref" href="${esc(dropHref)}">${esc(r.drop.name)}</a>` : esc(r.drop.name))
+    : '';
+  // His place among the gains, once the whole column is priced.
+  const gains = g.queue.length ? [] : [...g.by.values()].filter((x) => x && x.total > 0).map((x) => x.perWeek);
+  return {
+    title: p.name,
+    sub: weekRange(g.weeks),
+    tableHtml:
+      (r.drop ? `<div class="op-drop">Drop ${dropName}</div>` : '') +
+      '<table class="sc-rows"><thead><tr><th class="num">Wk</th><th class="num">Now</th>' +
+      '<th class="num">With him</th><th class="num">+</th></tr></thead>' +
+      `<tbody>${rows}</tbody><tfoot>` +
+      `<tr><td class="lbl">Total</td><td class="num">${fmt(sum((w) => w.before))}</td>` +
+      `<td class="num">${fmt(sum((w) => w.after))}</td><td class="num">${signed(r.total)}</td></tr>` +
+      `<tr class="sc-total"><td class="lbl" colspan="3">Per week</td><td class="num">${signed(r.perWeek)}</td></tr>` +
+      '</tfoot></table>',
+    foot: gains.length > 1
+      ? `${ordinal(rankIn(r.perWeek, gains))} of ${gains.length} gains on the wire`
+      : '',
+    href: dropHref,
+    hrefLabel: r.drop ? `Open ${r.drop.name}` : null,
+  };
 }
 
-function closeGainPop() {
-  if (gainPop) gainPop.hidden = true;
+/** The man a gain figure's move would drop, off the event; null for none. */
+function gainDropAt(e) {
+  const el = e.target && e.target.closest ? e.target.closest('.gn[data-gain]') : null;
+  const p = el ? poolMan(el.getAttribute('data-gain')) : null;
+  const r = p ? state.gain.by.get(p.playerId) : null;
+  return r && r.drop && r.drop.playerId !== null && r.drop.playerId !== undefined ? r.drop.playerId : null;
 }
 
-function openGainPop(el, sheet) {
-  const html = gainPopHtml(el.dataset.gain);
-  if (!html) return;
-  if (!gainPop) {
-    gainPop = document.createElement('div');
-    gainPop.id = 'gainPop';
-    document.body.appendChild(gainPop);
-    gainPop.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('.op-close')) closeGainPop();
+/**
+ * A MOUSE CLICK (or Enter) ON A GAIN FIGURE goes to the man it would drop —
+ * answered here, without the reload the card's own link would cost, exactly as
+ * a click on a name is (`jumpTo`). Registered BEFORE `wirePops`, so it gets
+ * the click first. A finger is left to the card: its tap opens the sheet.
+ */
+function wireGainJump(table) {
+  const jump = (e) => {
+    if (coarsePointer() || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+    const id = gainDropAt(e);
+    if (id === null) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    hidePop();
+    jumpTo(id);
+  };
+  table.addEventListener('click', jump);
+  table.addEventListener('keydown', (e) => { if (e.key === 'Enter') jump(e); });
+}
+
+// ---------------------------------------------------------------- the previews
+//
+// EVERY NUMBER ON THIS PAGE OPENS THE SITE'S STAT CARD (Tim, 2026-10-08: "If
+// the user is curious about a number or it's breakdown … they should be able
+// to hover over it and show a preview"). A cell that has one carries `data-c`
+// — what kind of number it is — and NO `title`; the card is built from `view`
+// when it is asked for, so three thousand cells register nothing.
+//
+//   data-c="avg"   the weeks it is the mean of, the ones left out and why, and
+//                  his place in the group the colour compares him with
+//   data-c="wk"    a week still to play: the number, that group's average, the
+//                  two claim cues in figures, his place that week
+//   data-c="past"  a week already played: projected and scored → Schedule
+//   data-c="act"   the same week in his Actual row → Schedule
+//   data-c="pos"   "RB2": that manager's men at the position, by Avg → Trade
+//   data-c="own"   the manager: record, points a week, this week → Analysis
+//   .mine-tag      "Your QB3": your men at that position → Analysis
+//   .gn            a Gain figure (above) → the man it would drop
+//
+// THE GROUP IS SAID IN WORDS, because the colour is per position: sorted by
+// value the Avg column runs green, grey, green, and "2nd of 17 free-agent QBs"
+// is what makes that read as right rather than broken.
+//
+// A Bye, a 0.0, a dash and a finished game keep the `title` they always had:
+// none of them is a number with parts.
+
+/** What the last paint drew, for the previews to be built from. */
+const view = {
+  weeks: [],
+  wireAll: [], wire: new Map(), mine: new Map(), wireWeekScales: new Map(),
+  takenAll: [], taken: new Map(), takenWeekScales: new Map(),
+  teamProj: null,
+};
+
+/** Rows by player id, as text — an attribute is always text. */
+const byId = (rows) => new Map(rows.map((r) => [String(r.p.playerId), r]));
+
+/** Every element that opens a preview, in both tables. */
+const PREVIEWS = '[data-c], .mine-tag, .gn[data-gain]';
+
+/** "QBs", "kickers" — a position as a group of men. */
+const posPlural = (pos) => ({ K: 'kickers', DST: 'defenses' }[pos] || `${pos}s`);
+
+/** 1 for the highest; equal numbers share a place. */
+const rankIn = (value, values) => values.filter((x) => x > value + 1e-9).length + 1;
+
+/**
+ * "2nd of 17 free-agent QBs". A "Your …" row is measured against the free
+ * agents without being one of them, and says so.
+ */
+function standingWords(kind, value, values, pos, tail = '') {
+  if (!values.length) return '';
+  const group = `${kind === 'taken' ? 'rostered' : 'free-agent'} ${posPlural(pos)}${tail}`;
+  const place = ordinal(rankIn(value, values));
+  return kind === 'mine'
+    ? `Yours — would be ${place} of ${values.length + 1} ${group}`
+    : `${place} of ${values.length} ${group}`;
+}
+
+/** The row an element sits in, and which of the three kinds of row it is. */
+function rowAt(el) {
+  const tr = el.closest('tr');
+  const table = el.closest('table');
+  if (!tr || !table) return null;
+  const id = tr.getAttribute('data-player') ?? tr.getAttribute('data-actual-for');
+  if (id === null || id === undefined) return null;
+  const taken = table.id === 'takenTable';
+  const mine = !taken && /\bmine\b/.test(tr.getAttribute('class') || '');
+  const kind = taken ? 'taken' : mine ? 'mine' : 'wire';
+  const row = view[kind].get(String(id));
+  return row ? { row, kind } : null;
+}
+
+/** Why a week is not in Avg, in a word or two. */
+function leftOutWord(p, v, week, roster) {
+  if (v === undefined) return 'not read yet';
+  if (v === null) return 'no projection';
+  const zero = zeroKind(v, {
+    week,
+    byeWeek: byeWeekOf(p, state.byes),
+    injuryStatus: roster ? rosterStatusFor(p, week) : p.injuryStatus,
+    demo: roster && state.isDemo,
+  });
+  return zero === 'bye' ? 'bye' : zero === 'out' ? 'ruled out' : 'projected 0.0';
+}
+
+/** Avg: the weeks it is the mean of, and where it stands at his position. */
+function avgCard(row, kind) {
+  if (row.avg === null) return null;
+  const weeks = view.weeks;
+  const use = avgMask(weeks);
+  const rows = [];
+  let counted = 0;
+  weeks.forEach((w, i) => {
+    if (!use[i]) return;          // a playoff week: never in Avg
+    const v = row.values[i];
+    const inIt = typeof v === 'number' && v > 0;
+    if (inIt) counted++;
+    rows.push({
+      label: `Week ${w}`,
+      note: inIt ? (row.done && row.done[i] ? 'scored' : '') : `${leftOutWord(row.p, v, w, kind !== 'wire')}, left out`,
+      value: inIt ? v : null,
+    });
+  });
+  const pos = row.p.position;
+  const pool = (kind === 'taken' ? view.takenAll : view.wireAll)
+    .filter((r) => r.p.position === pos && r.avg !== null).map((r) => r.avg);
+  return {
+    title: row.p.name,
+    sub: `Avg, ${weekRange(weeks)}`,
+    rows,
+    total: { label: `Mean of ${plural(counted, 'week')}`, value: row.avg },
+    foot: standingWords(kind, row.avg, pool, pos),
+  };
+}
+
+/** A week still to play: the number, its group, and the two claim cues. */
+function weekCard(row, kind, week) {
+  const i = view.weeks.indexOf(week);
+  const v = i < 0 ? null : row.values[i];
+  if (!measurable(v)) return null;
+  const pos = row.p.position;
+  const pool = (kind === 'taken' ? view.takenAll : view.wireAll)
+    .filter((r) => r.p.position === pos && measurable(r.values[i]) && !(r.done && r.done[i]))
+    .map((r) => r.values[i]);
+  const rows = [{ label: 'Projected', value: v }];
+  if (pool.length > 1) {
+    rows.push({
+      label: `Average ${kind === 'taken' ? 'rostered' : 'free-agent'} ${pos}`,
+      value: pool.reduce((a, b) => a + b, 0) / pool.length,
     });
   }
-  gainPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
-  gainPop.innerHTML = html;
-  gainPop.hidden = false;
-  gainPop.style.left = '';
-  gainPop.style.top = '';
-  if (sheet || typeof el.getBoundingClientRect !== 'function') return;
-  // Beside the figure: its right edge on the figure's, below it unless only
-  // above has the room.
-  const r = el.getBoundingClientRect();
-  const w = gainPop.offsetWidth;
-  const h = gainPop.offsetHeight;
-  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
-  const below = r.bottom + 6;
-  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
-  gainPop.style.left = `${left}px`;
-  gainPop.style.top = `${top}px`;
+  if (kind === 'wire') {
+    // The two greens, in figures: the bar he is over or under, and the number
+    // of the man a claim would drop.
+    const bar = STARTABLE[pos];
+    if (typeof bar === 'number') {
+      rows.push({ label: 'Worth starting', note: `over ${bar}`, value: v > bar ? 'Yes' : 'No' });
+    }
+    const yours = [...view.mine.values()].find((r) => r.p.position === pos) || null;
+    if (yours && !yours.done[i] && typeof yours.values[i] === 'number') {
+      rows.push({ label: yours.p.name, note: `your worst ${pos}`, value: yours.values[i] });
+    }
+  }
+  return {
+    title: row.p.name,
+    sub: `Week ${week}`,
+    rows,
+    foot: standingWords(kind, v, pool, pos, ' this week'),
+  };
 }
 
-/** One set of listeners on the table, which outlives every repaint. */
-function wireGainPop(table) {
-  const target = (e) => (e.target && e.target.closest ? e.target.closest('.gn[data-gain]') : null);
-  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
-  table.addEventListener('mouseover', (e) => {
-    const el = target(e);
-    if (el && !noHover()) openGainPop(el, false);
-  });
-  table.addEventListener('mouseout', (e) => {
-    if (target(e) && !noHover()) closeGainPop();
-  });
-  table.addEventListener('click', (e) => {
-    const el = target(e);
-    if (el) openGainPop(el, noHover());
-  });
-  table.addEventListener('focusin', (e) => {
-    const el = target(e);
-    if (el && !noHover()) openGainPop(el, false);
-  });
-  table.addEventListener('focusout', () => { if (!noHover()) closeGainPop(); });
-  // Enter or Space on the figure, for a keyboard on a touch screen.
-  table.addEventListener('keydown', (e) => {
-    const el = target(e);
-    if (!el || (e.key !== 'Enter' && e.key !== ' ')) return;
-    e.preventDefault();
-    openGainPop(el, noHover());
-  });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeGainPop(); });
-  document.addEventListener('click', (e) => {
-    if (!gainPop || gainPop.hidden) return;
-    if (gainPop.contains(e.target) || target(e)) return;
-    closeGainPop();
-  });
+/** A week already played: what ESPN projected and what he scored. */
+function playedCard(row, kind, week) {
+  const got = pastOf(row.p, week, kind === 'wire');
+  if (!got || typeof got !== 'object') return null;
+  return {
+    title: row.p.name,
+    sub: `Week ${week}`,
+    rows: [
+      { label: 'Projected', value: typeof got.projected === 'number' ? got.projected : null },
+      { label: 'Scored', value: got.actual },
+    ],
+    href: weekHref(week),
+    hrefLabel: `Week ${week} matchups`,
+  };
+}
+
+/** A short list of men as a card's table, the one the cell is about in bold. */
+function menTable(men) {
+  return '<table class="sc-rows"><tbody>' + men.map((m) =>
+    `<tr${m.here ? ' class="sc-here"' : ''}><td class="num sc-lead">${esc(m.lead)}</td>` +
+    `<td class="name">${esc(m.name)}</td>` +
+    `<td class="num">${m.value === null ? '—' : fmt(m.value)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+
+/** Best Avg first; a man with no Avg after every man with one; then by id. */
+const byAvg = (a, b) =>
+  (a.avg === null) - (b.avg === null) || (b.avg ?? 0) - (a.avg ?? 0) || a.p.playerId - b.p.playerId;
+
+/**
+ * WHERE "TRADE FOR HIM" GOES: the Trade page, with his manager chosen and him
+ * in the offer — `trade.html?with=<teamId>&get=<playerId>`, the form the Trade
+ * page reads. Null for your own man: there is nobody to trade with.
+ */
+function tradeHrefFor(row) {
+  if (row.ownerId === null || row.ownerId === undefined) return null;
+  if (row.p.playerId === null || row.p.playerId === undefined) return null;
+  const me = myTeamId();
+  if (me !== null && String(me) === String(row.ownerId)) return null;
+  return `trade.html?with=${encodeURIComponent(row.ownerId)}&get=${encodeURIComponent(row.p.playerId)}`;
+}
+
+/** "RB2": that manager's men at the position, ranked the way the cell is. */
+function posCard(row) {
+  const pos = row.p.position;
+  const men = view.takenAll
+    .filter((r) => String(r.ownerId) === String(row.ownerId) && r.p.position === pos)
+    .sort(byAvg);
+  const href = tradeHrefFor(row);
+  return {
+    title: row.owner,
+    sub: `${posPlural(pos)} by Avg, ${weekRange(view.weeks)}`,
+    tableHtml: menTable(men.map((r) => ({
+      lead: r.rank === null ? pos : `${pos}${r.rank}`, name: r.p.name, value: r.avg, here: r === row,
+    }))),
+    href,
+    hrefLabel: href ? 'Trade for him' : null,
+  };
+}
+
+/** "Your QB3": your men at that position, and which of them the row is. */
+function mineCard(row) {
+  const pos = row.p.position;
+  const men = (row.group || []).slice().sort(byAvg);
+  let place = 0;
+  return {
+    title: `Your ${posPlural(pos)}`,
+    sub: `by Avg, ${weekRange(view.weeks)}`,
+    tableHtml: menTable(men.map((r) => ({
+      lead: r.avg === null ? pos : `${pos}${++place}`,
+      name: r.p.name,
+      value: r.avg,
+      here: r.p.playerId === row.p.playerId,
+    }))),
+    href: teamHref(myTeamId(), state.currentWeek),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** Every squad's best lineup this week, worked out once per paint, on demand. */
+function teamProjFor(teamId) {
+  if (!view.teamProj) {
+    const held = (w) => w !== null && w !== undefined && state.rosterWeeks.has(w);
+    const week = held(state.currentWeek) ? state.currentWeek : view.weeks.find(held);
+    const got = week === undefined ? null
+      : projectionsFromWeekTeams(new Map([[week, state.rosterWeeks.get(week)]]));
+    view.teamProj = { week: week ?? null, by: (got && got.proj.get(week)) || new Map() };
+  }
+  for (const [id, total] of view.teamProj.by) {
+    if (String(id) === String(teamId)) return { week: view.teamProj.week, total };
+  }
+  return null;
+}
+
+/** A manager: his record, his points a week, and his best lineup this week. */
+function teamCard(row) {
+  const id = row.ownerId;
+  const rows = [];
+  const games = state.schedule && Array.isArray(state.schedule.games) ? state.schedule.games : [];
+  let won = 0;
+  let lost = 0;
+  let tied = 0;
+  let points = 0;
+  let played = 0;
+  for (const g of games) {
+    if (!g.played || typeof g.homeScore !== 'number' || typeof g.awayScore !== 'number') continue;
+    const home = String(g.homeId) === String(id);
+    if (!home && String(g.awayId) !== String(id)) continue;
+    const his = home ? g.homeScore : g.awayScore;
+    const theirs = home ? g.awayScore : g.homeScore;
+    played++;
+    points += his;
+    if (his > theirs) won++; else if (his < theirs) lost++; else tied++;
+  }
+  if (played) {
+    rows.push({ label: 'Record', value: `${won}-${lost}${tied ? `-${tied}` : ''}` });
+    rows.push({ label: 'Points a week', value: points / played });
+  }
+  const proj = teamProjFor(id);
+  if (proj) rows.push({ label: `Week ${proj.week} projection`, value: proj.total });
+  return {
+    title: row.owner,
+    rows,
+    href: teamHref(id, state.currentWeek),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** The preview for one element, or null when it has none. */
+function previewFor(el) {
+  if (el.matches('.gn[data-gain]')) return gainCard(el.getAttribute('data-gain'));
+  const at = rowAt(el);
+  if (!at) return null;
+  if (el.matches('.mine-tag')) return at.kind === 'mine' ? mineCard(at.row) : null;
+  const week = Number(el.getAttribute('data-w'));
+  switch (el.getAttribute('data-c')) {
+    case 'avg': return avgCard(at.row, at.kind);
+    case 'wk': return weekCard(at.row, at.kind, week);
+    case 'past':
+    case 'act': return playedCard(at.row, at.kind, week);
+    case 'pos': return at.kind === 'taken' ? posCard(at.row) : null;
+    case 'own': return at.kind === 'taken' ? teamCard(at.row) : null;
+    default: return null;
+  }
 }
 
 // ------------------------------------------------------- the taken players
@@ -2143,11 +2452,11 @@ function buildTakenRows(weeks) {
   }
 
   const rows = [];
-  for (const { owner, players } of squads.values()) {
+  for (const [ownerId, { owner, players }] of squads) {
     const byPosition = new Map();
     for (const p of players) {
       const values = weeks.map((w) => rosterValueFor(p.playerId, w));
-      const row = { p, values, done: doneRun(p, weeks, true), avg: avgOf(values, weeks), owner, rank: null };
+      const row = { p, values, done: doneRun(p, weeks, true), avg: avgOf(values, weeks), owner, ownerId, rank: null };
       rows.push(row);
       if (!byPosition.has(p.position)) byPosition.set(p.position, []);
       byPosition.get(p.position).push(row);
@@ -2506,10 +2815,10 @@ function renderHead(weeks) {
 
   $('waiverTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort>Player</th>
-       <th class="left" data-sort>Pos</th>
-       <th class="left" data-sort>Tm</th>
-       <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are left out, as on the Trade page.">Avg</th>
+       <th class="name" data-sort title="A free agent you could claim; click a name for the rest of his season and his actual scores.">Player</th>
+       <th class="left" data-sort title="His position.">Pos</th>
+       <th class="left" data-sort title="His NFL team.">Tm</th>
+       <th data-sort title="The mean of the regular-season weeks shown that project above zero — ours, not ESPN’s.">Avg</th>
        <th data-sort title="${esc(gainTitle())}">Gain</th>
        ${cols}
      </tr>`;
@@ -2673,14 +2982,12 @@ function heatBandsHtml(scales) {
  *
  * So they are a colour AND a treatment apart, not two shades of one colour.
  *
- * `scale` is the shared red/green scale for THIS position in THIS week, and it
- * is passed only by the Taken table. The wire's week cells never get one: see
- * the block at the top of this file — `td.beats` owns the background with a
- * `background` shorthand of higher specificity, so a tint here would be erased
- * rather than composed, and the two greens already answer the claim question
- * these cells exist for.
+ * `scale` is the shared red/green scale for THIS position in THIS week: the
+ * rostered men's on the Taken table, the free agents' on the wire (a "Your …"
+ * row is measured against the free agents too, and is not counted among them).
+ * On the wire the two greens sit on top of it — see `td.beats` in waivers.html.
  */
-function cell(v, week, p, roster = false, yours = null, scale = null, what = '', done = null) {
+function cell(v, week, p, roster = false, yours = null, scale = null, done = null) {
   const { name, position } = p;
   // `done`: his game that week is over and `v` is what he scored — see
   // doneCell(). A man with no game falls through to the Bye he always was.
@@ -2744,24 +3051,16 @@ function cell(v, week, p, roster = false, yours = null, scale = null, what = '',
   // zero is the week the claim would cover.
   const hot = !roster && isStartable(v, position);
   const beats = !roster && yours !== null && typeof yours.value === 'number' && v > yours.value;
-  // The scale, on the Taken table's cells only. `measurable` has already been
-  // satisfied by the returns above — every zero left before this line.
-  const heat = heatOf(v, scale, { what });
-  if (!hot && !beats && !heat) return `<td data-v="${v}">${fmt(v)}</td>`;
-
-  const why = [`${fmt(v)} projected in week ${week}`];
-  if (hot) why.push(`over the ${STARTABLE[position]} that makes a ${esc(position)} worth starting`);
-  if (beats) {
-    why.push(
-      `ahead of ${esc(yours.name)} on ${fmt(yours.value)} — your worst ${esc(position)}, ` +
-      `the man this claim would drop`
-    );
-  }
-
+  // The scale. `measurable` has already been satisfied by the returns above —
+  // every zero left before this line.
+  const heat = heatOf(v, scale);
+  // THE WORDS ARE IN THE PREVIEW (`weekCard`): the number, the group it was
+  // measured against, the bar and your own man's number. So no `title` here —
+  // a card and a title on one cell would be two tooltips.
   const cls = [hot ? 'hot' : '', beats ? 'beats' : '', heat ? heat.cls : '']
     .filter(Boolean).join(' ');
-  return `<td class="${cls}" data-v="${v}" ` +
-    `title="${why.join(', ')}.${heat ? ` ${esc(heat.words)}` : ''}">${fmt(v)}${heatMarkHtml(heat)}</td>`;
+  return `<td${cls ? ` class="${cls}"` : ''} data-v="${v}" data-c="wk" data-w="${week}">` +
+    `${fmt(v)}${heatMarkHtml(heat)}</td>`;
 }
 
 /**
@@ -2852,8 +3151,8 @@ function waiverTag(p) {
  *
  * THE Avg CELL IS WHERE THE RED/GREEN SCALE LIVES ON THIS PAGE. It is the
  * column that orders the table into an answer, neither green is ever on it, and
- * it has no link inside it — so a `title` is the right place for the words and
- * js/touch-titles.js makes that a tap on a phone.
+ * it has no link inside it — so the cell itself opens the preview (`avgCard`):
+ * hover with a mouse, a tap on a phone.
  *
  * ONE CHANNEL IS DELIBERATELY NOT USED HERE: the weight. `td.avg` in
  * waivers.html is 650 because this column is the one that orders the table, and
@@ -2863,10 +3162,10 @@ function waiverTag(p) {
  * worse cue than none. The other three channels all hold — the tint, the ▲/▼ at
  * the ends, and the sentence on the cell.
  */
-function identityCells({ p, avg }, heat = null, says = '') {
+function identityCells({ p, avg }, heat = null) {
   return `<td class="left" data-v="${POS_ORDER.get(p.position) ?? 9}">${esc(p.position)}</td>
       <td class="left">${esc(p.proTeam)}</td>
-      ${avgCellHtml(avg, heat, says)}`;
+      ${avgCellHtml(avg, heat)}`;
 }
 
 /**
@@ -2914,10 +3213,10 @@ function setTrendKey(id, html) {
   el.hidden = !on;
 }
 
-function avgCellHtml(avg, heat, says) {
-  const title = `${says}${says && heat ? ' ' : ''}${heat ? heat.words : ''}`;
-  return `<td class="avg grouped${heat ? ` ${heat.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`}` +
-    `${title ? ` title="${esc(title)}"` : ''}>${
+function avgCellHtml(avg, heat) {
+  // The words are the preview's (`avgCard`): the weeks it is the mean of, and
+  // his place in the group the colour compares him with.
+  return `<td class="avg grouped${heat ? ` ${heat.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}" data-c="avg"`}>${
       avg === null ? dash : `${fmt(avg)}${heatMarkHtml(heat)}`
     }</td>`;
 }
@@ -2930,35 +3229,31 @@ function avgCellHtml(avg, heat, says) {
  * UNFILTERED set, so the shading means the same thing whichever position
  * button is pressed.
  */
-function wireRow(row, weeks, mine, avgScales) {
+function wireRow(row, weeks, mine, avgScales, weekScales) {
   const { p, values } = row;
   const status = availability(p.injuryStatus);
   const yours = mine.get(p.position) || null;
+  const cols = weekScales.get(p.position) || [];
 
   const owned = p.percentOwned === null || p.percentOwned === undefined
     ? ''
     : ` — owned in ${fmt(p.percentOwned)}% of ESPN leagues`;
 
-  const heat = heatOf(row.avg, avgScales.get(p.position), {
-    what: `a free-agent ${p.position} over ${weekRange(weeks)}`,
-  });
-  const says = row.avg === null
-    ? ''
-    : `${p.name} averages ${fmt(row.avg)} over ${weekRange(weeks)}.`;
+  const heat = heatOf(row.avg, avgScales.get(p.position));
 
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
         playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row, show every ` +
           `remaining week and his actual scores`, true), trendMark(p, false),
         `${injuryTag(status)}${waiverTag(p)}`)}</td>
-      ${identityCells(row, heat, says)}
+      ${identityCells(row, heat)}
       ${gainCell(p)}
       ${weekCells(p, weeks, true, p.playerId === state.spotlight, (i) =>
         // Your own man's finished game is not a number a claim can still
         // beat: no shade against a score.
         cell(values[i], weeks[i], p, false,
           yours && !yours.done[i] ? { name: yours.p.name, value: yours.values[i] } : null,
-          null, '', row.done[i]))}
+          cols[i] || null, row.done[i]))}
     </tr>${actualRowIf(p, weeks, true, 4)}`;
 }
 
@@ -2976,29 +3271,26 @@ function wireRow(row, weeks, mine, avgScales) {
  * claimable: the scale describes what is ON the wire, and folding a rostered
  * man into it would move the thresholds every other cell is measured against.
  */
-function mineRow(row, weeks, avgScales) {
+function mineRow(row, weeks, avgScales, weekScales) {
   const { p, values, label, depth } = row;
+  const cols = weekScales.get(p.position) || [];
   const why =
     `${esc(p.name)} — on your roster, not on the wire. Your lowest-averaging ` +
     `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there.`;
 
-  const heat = heatOf(row.avg, avgScales.get(p.position), {
-    what: `a free-agent ${p.position} over ${weekRange(weeks)}`,
-  });
-  const says = row.avg === null
-    ? ''
-    : `${p.name} averages ${fmt(row.avg)} over ${weekRange(weeks)}. He is on your roster, so ` +
-      `he is measured against the free agents rather than counted among them.`;
+  const heat = heatOf(row.avg, avgScales.get(p.position));
 
   return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
         nameLine(playerLink(p, esc(p.name), why), trendMark(p, true),
-          injuryTag(availability(p.injuryStatus)), `<span class="mine-tag">${esc(label)}</span> `) +
+          injuryTag(availability(p.injuryStatus)),
+          // The label opens your men at that position (`mineCard`), keyboard included.
+          `<span class="mine-tag" tabindex="0">${esc(label)}</span> `) +
         `</td>
-      ${identityCells(row, heat, says)}
+      ${identityCells(row, heat)}
       <td class="gain"></td>
       ${weekCells(p, weeks, false, false, (i) =>
-        cell(values[i], weeks[i], p, true, null, null, '', row.done[i]))}
+        cell(values[i], weeks[i], p, true, null, cols[i] || null, row.done[i]))}
     </tr>`;
 }
 
@@ -3023,7 +3315,14 @@ function renderTable(weeks) {
   // `scalesByPosition` for why the group is the wire at his position and not
   // the whole pool.
   const avgScales = scalesByPosition(all, (r) => r.avg);
+  // THE WEEK COLUMNS, one scale per position and week, over the free agents —
+  // the way the Taken table has always done its own. Unfiltered, like Avg's.
+  const weekScales = weekScalesByPosition(all, weeks);
   renderWireHeatKey(avgScales, available.length + mine.length > 0);
+  // What the previews are built from, when one is asked for.
+  Object.assign(view, {
+    weeks, wireAll: all, wire: byId(all), mine: byId(mineAll), wireWeekScales: weekScales,
+  });
 
   if (!available.length && !mine.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(emptyReason(all.length))}</td></tr>`;
@@ -3036,8 +3335,8 @@ function renderTable(weeks) {
   // players who might replace him, which is the entire point of the feature:
   // sort by Avg and everyone above your row is an upgrade.
   tbody.innerHTML =
-    available.map((r) => wireRow(r, weeks, byPosition, avgScales)).join('') +
-    mine.map((r) => mineRow(r, weeks, avgScales)).join('');
+    available.map((r) => wireRow(r, weeks, byPosition, avgScales, weekScales)).join('') +
+    mine.map((r) => mineRow(r, weeks, avgScales, weekScales)).join('');
   setTrendKey('waiverTrendKey', tbody.innerHTML);
 
   // Keep whatever sort the user picked when the row set changes.
@@ -3049,9 +3348,9 @@ function renderTable(weeks) {
  *
  * ON SCREEN, one sentence: the group the colour compares (the other free agents
  * at that position — nobody would assume that, and it is the whole reason a
- * green here means "best of what you can actually have"), scoped to Avg so the
- * week columns are not read as unfinished, and the two cues that survive a
- * reader who cannot separate the hues.
+ * green here means "best of what you can actually have"), that a week column
+ * is compared within that week, and the two cues that survive a reader who
+ * cannot separate the hues.
  *
  * BEHIND "How to read this table", the thresholds in points. They are not
  * optional — they are what makes a cell checkable by hand — but the sentence
@@ -3059,9 +3358,11 @@ function renderTable(weeks) {
  * is what `node tests/text-audit.mjs` is for. See `heatBandsHtml`.
  *
  * The rest of the argument — why the pool is the wire and not the league, why
- * your own row is measured against them without being counted among them, why
- * the week cells keep the two greens instead — is in `renderNote`, where the
+ * your own row is measured against them without being counted among them, how
+ * the two greens sit on top of it on the week cells — is in `renderNote`, where the
  * method has always lived.
+ *
+ * The Gain column's shade is explained with Gain, in the same toggle.
  */
 function renderWireHeatKey(avgScales, anyRows) {
   const el = $('waiverHeatKey');
@@ -3071,7 +3372,7 @@ function renderWireHeatKey(avgScales, anyRows) {
   const drawn = anyRows && bands;
   el.innerHTML = !drawn
     ? ''
-    : `<strong>Avg is coloured against the other free agents at that position</strong>; ends ` +
+    : `<strong>Colour compares free agents at the same position, week by week</strong>; ends ` +
       `carry an arrow and heavier type.`;
   if (bandsEl) {
     bandsEl.innerHTML = !drawn
@@ -3125,11 +3426,11 @@ function renderTakenHead(weeks) {
 
   $('takenTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort>Player</th>
-       <th class="left" data-sort title="The position, and where he ranks on his own manager’s roster by the Avg below — best is 1. Ours, over the weeks shown, so widening the span can move him.">Pos</th>
-       <th class="left" data-sort>Tm</th>
+       <th class="name" data-sort title="A player already on a roster; click a name for the rest of his season and his actual scores.">Player</th>
+       <th class="left" data-sort title="His position, and his rank at it on his own manager’s roster by Avg — best is 1.">Pos</th>
+       <th class="left" data-sort title="His NFL team.">Tm</th>
        <th class="left" data-sort title="The manager whose roster he is on, as of the earliest week shown.">Owner</th>
-       <th data-sort title="The mean of the regular-season week columns shown; playoff weeks are not counted. Ours, not ESPN's: only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are left out, as on the Trade page. Worked out exactly the way the Avg above it is.">Avg</th>
+       <th data-sort title="The mean of the regular-season weeks shown that project above zero — ours, not ESPN’s.">Avg</th>
        ${cols}
      </tr>`;
 }
@@ -3156,32 +3457,18 @@ function takenRow(row, weeks, avgScales, weekScales) {
   const posOrder = POS_ORDER.get(p.position) ?? 9;
   const cols = weekScales.get(p.position) || [];
 
-  const posTitle = rank === null
-    ? `ESPN carried no projection for ${esc(p.name)} over ${weekRange(weeks)}, so there is ` +
-      `no Avg to rank him by. The position is shown on its own rather than with a made-up number.`
-    : `${esc(p.name)} is ${esc(owner)}’s ${esc(p.position)}${rank} by Avg over ` +
-      `${weekRange(weeks)}. That is our ordering, not ESPN’s depth chart, and widening ` +
-      `the span can change it.`;
-
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
         playerLink(p, esc(p.name), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
           `his row, show every remaining week and his actual scores`, true), trendMark(p, true),
         injuryTag(status))}</td>
-      <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" title="${posTitle}">${
+      <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" data-c="pos"${tradeHrefFor(row) ? ' data-go' : ''}>${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
       <td class="left">${esc(p.proTeam)}</td>
-      <td class="left owner" data-v="${esc(owner.toLowerCase())}" title="${esc(owner)}">${esc(owner)}</td>
-      ${avgCellHtml(
-        row.avg,
-        heatOf(row.avg, avgScales.get(p.position), {
-          what: `a rostered ${p.position} over ${weekRange(weeks)}`,
-        }),
-        row.avg === null ? '' : `${p.name} averages ${fmt(row.avg)} over ${weekRange(weeks)}.`
-      )}
+      <td class="left owner" data-v="${esc(owner.toLowerCase())}" data-c="own" data-go>${esc(owner)}</td>
+      ${avgCellHtml(row.avg, heatOf(row.avg, avgScales.get(p.position)))}
       ${weekCells(p, weeks, false, p.playerId === state.spotlight, (i) =>
-        cell(values[i], weeks[i], p, true, null, cols[i] || null,
-          `a ${p.position} in week ${weeks[i]}, across the league`, row.done[i]))}
+        cell(values[i], weeks[i], p, true, null, cols[i] || null, row.done[i]))}
     </tr>${actualRowIf(p, weeks, false, 4)}`;
 }
 
@@ -3199,6 +3486,7 @@ function renderTaken(weeks) {
   const avgScales = scalesByPosition(all, (r) => r.avg);
   const weekScales = weekScalesByPosition(all, weeks);
   renderTakenHeatKey(avgScales, shown.length > 0);
+  Object.assign(view, { weeks, takenAll: all, taken: byId(all), takenWeekScales: weekScales, teamProj: null });
 
   if (!shown.length) {
     tbody.innerHTML =
@@ -3308,7 +3596,7 @@ function renderTakenStats(weeks) {
   el.innerHTML = items
     .map(([k, v, who]) =>
       `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>` +
-      `${who ? `<div class="who" title="${esc(who)}">${esc(who)}</div>` : ''}</div>`)
+      `${who ? `<div class="who">${esc(who)}</div>` : ''}</div>`)
     .join('');
 }
 
@@ -3521,7 +3809,7 @@ function renderStats(weeks) {
   el.innerHTML = items
     .map(([k, v, who]) =>
       `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>` +
-      `${who ? `<div class="who" title="${esc(who)}">${esc(who)}</div>` : ''}</div>`)
+      `${who ? `<div class="who">${esc(who)}</div>` : ''}</div>`)
     .join('');
 }
 
@@ -3555,8 +3843,8 @@ function comparisonNote(weeks, status) {
     'currently shown, worked out exactly the way the wire’s is — so widening the span can ' +
     'change which of your men appears. The number is your depth there: QB3 because you hold ' +
     'three quarterbacks, K2 because you hold two kickers. These rows sort and filter with ' +
-    'everything else, which is why they are in the table rather than beside it. They are never ' +
-    'coloured green themselves — whether to start your own bench is a different question — and ' +
+    'everything else, which is why they are in the table rather than beside it. They are ' +
+    'never coloured green as a claim themselves — whether to start your own bench is a different question — and ' +
     'they are never counted on the position buttons, because you cannot add a player you ' +
     'already have. Their week numbers are what the green shading above is measured against.'
   );
@@ -3644,7 +3932,9 @@ function renderNote(weeks) {
       `in it and without the player it costs least to drop, minus your best lineup as the roster ` +
       `stands, a week, over ${weekRange(state.gain.weeks)}. It is priced exactly as the Trade page ` +
       `prices a trade, and your roster stays the size it is now. A dash means he would not ` +
-      `raise your lineup in any of those weeks. Click or tap a figure for the weeks behind it.`
+      `raise your lineup in any of those weeks. Hover or tap a figure for the weeks behind it ` +
+      `and the man it would drop; a click goes to him. The shade is deeper the bigger the gain, ` +
+      `against the other gains in the column, and a plus is never red.`
     );
   }
 
@@ -3683,12 +3973,12 @@ function renderNote(weeks) {
     );
   }
 
-  // THE THIRD CUE, AND WHERE IT IS NOT (Tim, 2026-09-19b: the scale "needs to
-  // be added to all the other places a number is referred to"). It goes after
-  // the two greens deliberately: a reader has to know what already owns those
-  // week cells before being told what the Avg column's colour is instead.
+  // THE THIRD CUE (Tim, 2026-09-19b: the scale "needs to be added to all the
+  // other places a number is referred to"). It goes after the two greens
+  // deliberately: a reader has to know what those mean before being told what
+  // sits underneath them.
   parts.push(
-    lead('The red/green scale, on Avg') +
+    lead('The red/green scale') +
     describeHeatPerColumn({ group: 'position', what: 'the other free agents' }) +
     ' Green reads “the best of what is actually available at this position”, which is the question ' +
     'this table exists to answer. It is deliberately not measured against the whole league at ' +
@@ -3696,20 +3986,20 @@ function renderNote(weeks) {
     'would come out red, which is true and useless. <strong>Your own player’s row is measured ' +
     'against the same free agents and is not counted among them</strong> — a deep red “Your RB5” ' +
     'under a green wire is the whole argument for a claim, in one column. The points each ' +
-    'position reaches full colour at are at the foot of this note; tap or hover any Avg for where ' +
+    'position reaches full colour at are at the foot of this note; tap or hover any number for where ' +
     'it stands. Pressing a position button — FLEX included — changes which rows you see and ' +
     '<strong>not one cell’s colour</strong>, because every scale is built from the whole wire ' +
     'before the filter is applied.'
   );
 
   parts.push(
-    lead('And not on the week columns') +
-    'The week cells are deliberately left off that scale. They already answer two questions at ' +
-    'once — worth starting at all, and better than the man you would drop — and both are about ' +
-    'the <em>claim</em>, which is what this table is for. A third cue in a cell three characters ' +
-    'wide would have to take the background off one of them, since the green shading and the ' +
-    'scale are the same channel. The Taken players table below has no claim cues in it at all, ' +
-    'so its week columns <em>are</em> on the scale, measured per position and per week.'
+    lead('And on the week columns') +
+    'Each week cell is on the same scale, measured against the other free agents at his position ' +
+    '<strong>in that same week</strong>, so a heavy bye week is not a red stripe down the table. ' +
+    'The two greens sit on top of it and are told apart by treatment: worth starting is the ' +
+    '<span class="hot-key">green number</span>, and beating your worst man is the ' +
+    '<span class="beats-key">shade with a ring round it</span>. A Bye, a 0.0, a blank and a week ' +
+    'already played are never coloured.'
   );
 
   parts.push(...comparisonNote(weeks, status));
@@ -3863,8 +4153,12 @@ function jumpTo(playerId) {
 
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-  const link = e.target.closest && e.target.closest('a.pref[href*="player="]');
+  // A name in a table — or, on a preview's sheet, the link to a man: the
+  // "Drop X" line and the button under it are answered here too, no reload.
+  const link = e.target.closest && e.target.closest(
+    'a.pref[href*="player="], #statCard a[href^="waivers.html?player="]');
   if (!link) return;
+  if (link.closest('#statCard')) hidePop();
   const m = /[?&]player=(\d+)/.exec(link.getAttribute('href') || '');
   if (!m) return;
   e.preventDefault();
@@ -3896,7 +4190,10 @@ $('jumpNote').addEventListener('click', (e) => {
 // The average is the only column that orders the whole table into an answer, so
 // that is where it opens: best first.
 enableSort($('waiverTable'), { defaultIndex: 3 });
-wireGainPop($('waiverTable'));
+// The gain figure's own click first, then the previews (see `wireGainJump`).
+wireGainJump($('waiverTable'));
+wirePops($('waiverTable'), { selector: PREVIEWS, card: previewFor });
+wirePops($('takenTable'), { selector: PREVIEWS, card: previewFor });
 // Same reasoning one column further right, the Owner column having pushed Avg
 // from index 3 to index 4.
 enableSort($('takenTable'), { defaultIndex: 4 });
