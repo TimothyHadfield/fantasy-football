@@ -178,6 +178,50 @@ function numCell(
 
 const round1 = (n) => Math.round(n * 10) / 10;
 
+/**
+ * What a man was PROJECTED for the week his roster entry is from, or null.
+ *
+ * A man whose NFL game is over in a week still being played carries his SCORE
+ * in `projected` and the projection he started with in `pregame` (js/season.js);
+ * everybody else, and every week ESPN has decided, carries it in `projected`.
+ */
+const projOf = (p) => (p.done === true
+  ? (isNum(p.pregame) ? p.pregame : null)
+  : isNum(p.projected) ? p.projected : null);
+
+/**
+ * ESPN's own box score for one game — who scored what, which this site does
+ * not rebuild (Tim, 2026-10-08: "Link to ESPN").
+ *
+ * LOCAL TO THIS PAGE on purpose: the Schedule page is getting the same link
+ * from another hand at the same time, and the two can be folded into one
+ * helper once both have landed.
+ *
+ * `week` goes in twice. A game's `week` is ESPN's `matchupPeriodId`
+ * (js/season.js `normaliseGame`), and the site reads that week's rosters with
+ * the same number as `scoringPeriodId` — one scoring week per matchup, which
+ * is how both leagues this site has seen are set up. `teamId` is the home
+ * side; ESPN opens the game that team played that week.
+ *
+ * null — and so no link — without a league id (the sample league), for a bye,
+ * or for a game with no week.
+ */
+function boxScoreUrl(league, g) {
+  const id = String(league?.leagueId ?? '').trim();
+  const season = Number(league?.season);
+  const week = Number(g?.week);
+  if (!id || !Number.isInteger(season) || !Number.isInteger(week) || week < 1) return null;
+  if (g.homeId == null || g.awayId == null) return null;
+  return (
+    'https://fantasy.espn.com/football/boxscore' +
+    `?leagueId=${encodeURIComponent(id)}` +
+    `&matchupPeriodId=${week}` +
+    `&scoringPeriodId=${week}` +
+    `&seasonId=${season}` +
+    `&teamId=${encodeURIComponent(g.homeId)}`
+  );
+}
+
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** A chance as the Schedule page prints it: whole percent, never 0% or 100%. */
@@ -208,6 +252,13 @@ export function buildModel({
   benchWeek = week, benchRosters = null,
   odds = null, oddsPending = false, chances = null,
   waiverClears = null, kickoffs = null, now = Date.now(),
+  // `{ leagueId, season }` of the league on screen, for the links out to ESPN;
+  // null on the sample league, which has no ESPN page to open.
+  league = null,
+  // `{ week, teams }`: the last finished week before `week` and its rosters,
+  // where the page already holds them (see lastScores) — the injury report's
+  // "Last" column. null when no week is finished.
+  last = null,
 }) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
   // The record beside each name: banked W–L, and for a team whose game is
@@ -287,6 +338,7 @@ export function buildModel({
 
     return {
       ...g,
+      espnUrl: isDemo ? null : boxScoreUrl(league, g),
       homeRecord: recordOf(g.homeId),
       awayRecord: bye ? null : recordOf(g.awayId),
       homeProjected: hp,
@@ -329,7 +381,8 @@ export function buildModel({
     totalGames: schedule.games.length,
     playedOverall: schedule.games.filter((g) => g.played).length,
     strength: rosterStrength(rosters),
-    injuries: injuredStarters(rosters),
+    injuries: injuredStarters(rosters, last?.teams ?? null),
+    lastWeek: last?.week ?? null,
     bench: benchReport(benchFrom, benchGames),
     benchWeek,
     // IS THE BENCH PANEL'S WEEK FINISHED FOR EVERYBODY? The red/green scale on
@@ -450,7 +503,15 @@ function rosterStrength(rosters) {
  * questionable starter is a decision the owner still has to make, this week,
  * whether or not a single game has been played.
  */
-function injuredStarters(rosters) {
+function injuredStarters(rosters, lastTeams = null) {
+  // playerId -> what he scored in the last finished week, whichever squad (or
+  // bench) he was on then. A man on nobody's roster that week has no entry.
+  const scored = new Map();
+  for (const t of lastTeams || []) {
+    for (const p of t.players || [...(t.starters || []), ...(t.bench || [])]) {
+      if (p.playerId != null && isNum(p.actual)) scored.set(p.playerId, p.actual);
+    }
+  }
   const out = [];
   for (const team of rosters?.teams || []) {
     for (const p of team.starters || []) {
@@ -472,9 +533,10 @@ function injuredStarters(rosters) {
         // A man whose NFL game is over carries his SCORE in `projected` (the
         // week in progress, js/season.js). This column is a projection, so he
         // shows the one he started with.
-        projected: p.done === true
-          ? (isNum(p.pregame) ? p.pregame : null)
-          : isNum(p.projected) ? p.projected : null,
+        projected: projOf(p),
+        // His score in the last finished week, or null: none finished, or he
+        // was on no roster this page holds for it.
+        last: p.playerId != null && scored.has(p.playerId) ? scored.get(p.playerId) : null,
       });
     }
   }
@@ -567,6 +629,44 @@ export function benchWeekFor(schedule, week, rosters = null) {
   if (final(week) && hasRow) return week;
   const earlier = schedule.weeks.filter((w) => w < week && final(w));
   return earlier.length ? earlier[earlier.length - 1] : week;
+}
+
+/** The latest week before `week` with a final score, or null. */
+export function lastFinalWeek(schedule, week) {
+  const final = (w) => (schedule.byWeek.get(w) || []).some((g) => g.played);
+  const earlier = schedule.weeks.filter((w) => w < week && final(w));
+  return earlier.length ? earlier[earlier.length - 1] : null;
+}
+
+/** The sample league's last finished week, generated once per week shown. */
+let demoLast = { week: null, teams: null };
+
+/**
+ * The last finished week and its rosters, FROM WHAT THE PAGE ALREADY HOLDS —
+ * never a read of its own (rule 20: the phone's synced copy asks ESPN for
+ * nothing, and a column is not worth a request on a laptop either).
+ *
+ * On the usual visit that week is the bench panel's, already read for it.
+ * Otherwise it is among the played weeks the win chance read; until those land
+ * the column shows dashes and the repaint that brings the chance fills it. The
+ * sample league's weeks are generated, so they cost nothing.
+ */
+function lastScores() {
+  const { schedule, week } = state;
+  const lw = schedule ? lastFinalWeek(schedule, week) : null;
+  if (lw === null) return null;
+  let teams = null;
+  if (state.benchWeek === lw && state.benchRosters?.teams?.length) {
+    teams = state.benchRosters.teams;
+  } else if (state.isDemo) {
+    if (demoLast.week !== lw) {
+      demoLast = { week: lw, teams: generateDemoWeekRosters(lw)?.teams || null };
+    }
+    teams = demoLast.teams;
+  } else {
+    teams = state.oddsTeams.get(lw) || null;
+  }
+  return { week: lw, teams };
 }
 
 function setStatus(html, isError = false) {
@@ -968,6 +1068,8 @@ function draw() {
     oddsPending: !state.isDemo && state.oddsPending,
     waiverClears: state.isDemo ? null : state.waiverClears,
     kickoffs: state.isDemo ? null : state.kickoffs,
+    league: state.isDemo ? null : espn.getConfig(),
+    last: lastScores(),
   }));
 }
 
@@ -1224,8 +1326,15 @@ function gameCard(g, teamId) {
   // The unrounded chance rides on the card, so a suite can hold it to the
   // Schedule page's figure more finely than the whole percent printed.
   const exact = isNum(g.homeWinPct) ? ` data-home-win="${g.homeWinPct}"` : '';
+  // Who scored what is ESPN's screen, so the card links to it rather than
+  // rebuilding it. An element of its own between the two labels: the first
+  // one stays the bare "Final" / "Upcoming" other code reads. Opens the way
+  // the Trade page's ESPN link does.
+  const box = g.espnUrl
+    ? `<a class="gbox" href="${esc(g.espnUrl)}" target="_blank" rel="noopener">ESPN box score</a>`
+    : '';
   return `<div class="game${g.played ? '' : ' upcoming'}${g.mine ? ' mine' : ''}"${exact}>
-      <div class="ghead"><span>${g.played ? 'Final' : 'Upcoming'}</span><span>Proj · Pts</span></div>
+      <div class="ghead"><span>${g.played ? 'Final' : 'Upcoming'}</span>${box}<span>Proj · Pts</span></div>
       ${side('home', g.homeName, g.homeProjected, g.homeScore, g.homeId)}
       ${bye ? '' : side('away', g.awayName, g.awayProjected, g.awayScore, g.awayId)}
       <div class="gmeta">${meta}</div>
@@ -1404,6 +1513,7 @@ function renderInjuries(m) {
           <td class="left wrap">${esc(p.teamName)}</td>
           <td>${esc(p.slot)}</td>
           ${numCell(p.projected, { wrap: (t) => pref(p.playerId, p.name, t) })}
+          ${numCell(p.last, { wrap: (t) => pref(p.playerId, p.name, t) })}
         </tr>`
     )
     .join('');
@@ -1415,6 +1525,7 @@ function renderInjuries(m) {
         <th class="left wrap" data-sort>Fantasy team</th>
         <th data-sort>Slot</th>
         <th data-sort>Proj</th>
+        <th data-sort>Last</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -1428,7 +1539,11 @@ function renderInjuries(m) {
     `${out ? `, ${out} of them ruled out` : ''}. Bench players are left out on purpose — ` +
     'these are players someone is currently planning to start. ' +
     'Every name and projection here links to that player on the Players page, ' +
-    'where his next 13 weeks are.';
+    'where his next 13 weeks are.' +
+    (m.lastWeek === null
+      ? ''
+      : ` Last is what he scored in week ${m.lastWeek}, the last finished week; a dash means ` +
+        'ESPN gave no score for him on a roster that week.');
 }
 
 function renderBench(m) {
@@ -1498,8 +1613,16 @@ function renderBench(m) {
   // BY THE SHORT NAME ("B. Robinson Jr."), as on the swap line of the cards:
   // two full names and two scores made this table wider than its half of the
   // page at 1280 and far wider than a phone. The full name is the link's title.
-  const who = (p) =>
-    pref(p.playerId, p.name, `${esc(shortName(p))} <span class="muted">(${fmt(p.actual)})</span>`);
+  //
+  // HIS PROJECTION FOR THAT WEEK rides beside his score, smaller (Tim,
+  // 2026-10-08): whether the call looked wrong BEFORE the games is the half of
+  // a miss the scores alone cannot say. Left off when ESPN gave none.
+  const who = (p) => {
+    const proj = projOf(p);
+    return pref(p.playerId, p.name,
+      `${esc(shortName(p))} <span class="muted">(${fmt(p.actual)}` +
+      `${proj === null ? '' : `<span class="bproj"> · proj ${fmt(proj)}</span>`})</span>`);
+  };
 
   const rows = m.bench
     .map((r) => {

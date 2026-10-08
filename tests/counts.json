@@ -98,7 +98,7 @@
       "assertions": 36
     },
     "home-winpct-check.mjs": {
-      "assertions": 81
+      "assertions": 85
     },
     "cmp-check.mjs": {
       "assertions": 115,

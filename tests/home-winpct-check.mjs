@@ -340,6 +340,7 @@ async function homeChild(league) {
       exact: c.hasAttribute('data-home-win') ? Number(c.getAttribute('data-home-win')) : null,
       claim: claimFrom(meta, names[0], names[1]),
       proj: Array.from(c.querySelectorAll('.tproj')).map((n) => clean(n.textContent)),
+      box: c.querySelector('a.gbox')?.getAttribute('href') ?? null,
     };
   });
   return {
@@ -532,6 +533,14 @@ for (const league of Object.keys(LEAGUES)) {
     const label = `${tag} ${g.home} v ${g.away}`;
     const h = home.cards.find((c) => c.home === g.home && c.away === g.away);
     const s = sched.cards.find((c) => c.home === g.home && c.away === g.away);
+
+    // On the connected league each card links to ESPN's box score for that
+    // game: the saved league and season, the week on screen as both periods,
+    // and the home team's id.
+    const boxWant = 'https://fantasy.espn.com/football/boxscore' +
+      `?leagueId=${LEAGUE_ID}&matchupPeriodId=${L.quoted}&scoringPeriodId=${L.quoted}` +
+      `&seasonId=${SEASON}&teamId=${TEAMS.find((t) => t.name === g.home).id}`;
+    ok(`${label}: Home links to ESPN's box score for the game`, h && h.box === boxWant, h && h.box);
     ok(`${label}: Home has the card`, Boolean(h), JSON.stringify(home.cards));
     ok(`${label}: Schedule has the card`, Boolean(s), JSON.stringify(sched.cards));
     if (!h || !s) continue;
