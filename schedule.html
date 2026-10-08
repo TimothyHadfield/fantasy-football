@@ -158,9 +158,11 @@ section.panel h2.h2-inline {
 
 /* Forecast. Inside this panel every row is already the chosen team, so the row
    highlight is free to mean "the next one to be played" rather than "you" —
-   which is the row you look for first and the one the chart is anchored on. */
-#forecastTable tbody tr.now td { background: #14261a; }
-#forecastTable tbody tr.now td.name { background: #14261a; color: #7fd99b; }
+   which is the row you look for first and the one the chart is anchored on.
+   background-COLOR, never the shorthand: the shorthand erases the red/green
+   tint on the row's Win % cell (tests/heat-draw-check.mjs). */
+#forecastTable tbody tr.now td { background-color: #14261a; }
+#forecastTable tbody tr.now td.name { background-color: #14261a; color: #7fd99b; }
 /* Title ± and Last ±: what one game is worth. A phone has room for one of the
    two, so it shows the one the Trade page's goal is set to (`.goal-last` on
    the table); the figure opens both either way. */

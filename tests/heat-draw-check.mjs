@@ -224,5 +224,54 @@ for (const tr of rows) tr.classList.remove('__hover');
 ok(offenders.size === 0, 'no app.css rule that matches a table cell uses the `background` shorthand',
   [...offenders].join(' | '));
 
+// --- the same lint, on every page's OWN <style> block ------------------------
+// (Tim, 2026-10-08: "our color system is either not shown or is having some
+// errors".) Everything above reads css/app.css only, and a page's own <style>
+// is parsed AFTER it, so a page rule with the `background` shorthand on a
+// whole row erases the tint just the same — and did, measured in Safari's
+// engine on 2026-10-08: the Players row a link lands on (`tr.spotlight`, all
+// 562 coloured cells matched), the Trade offer that is open (`tr.picked`, 64),
+// Trade's week being read (`tr.peeking`) and Schedule's next game
+// (`#forecastTable tr.now`, its Win % cell).
+//
+// THE RULE: a page rule whose subject is a table cell that can be ON the scale
+// sets `background-color`, never `background`. "Can be on the scale" is a bare
+// `td`, or a `td` carrying only classes that were seen beside a heat class in
+// the 2026-10-08 sweep of every page (below). A rule on a cell class that never
+// meets the scale (`td.name`, `td.st`, `td.deep`) is left alone, and so is
+// `#seasonTable td.lit`, which takes the cell's background on purpose.
+const HEAT_CELL_CLASSES = new Set([
+  'num', 'capped',                                                    // Summary, Stats
+  'slot-cell', 'grid-total', 'grouped', 'avg', 'wk', 'hist', 'now',   // Analysis
+  'fut-start', 'po-start', 'assumed', 'bye', 'split-total', 'slot-avg', 'zero', 'zero-out',
+  'sbw-chg', 'sbw-proj',                                              // Decisions
+  'gain', 'their-gain', 'pos', 'neg', 'delta', 'up', 'down', 'netted', // Trade
+]);
+const PAGES = ['index', 'summary', 'stats', 'analysis', 'schedule', 'waivers', 'trade', 'decisions', 'draft'];
+let pageRules = 0;
+for (const page of PAGES) {
+  const html = readFileSync(repoFile(`${page}.html`), 'utf8');
+  const styles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const bad = [];
+  for (const r of readRules(styles)) {
+    pageRules++;
+    const short = r.decls.find((d) => d.prop === 'background');
+    if (!short || /(gradient\(|url\()/.test(short.value)) continue;
+    for (const sel of r.selectors) {
+      if (/::/.test(sel)) continue;
+      const subject = sel.replace(/:(hover|focus-within|focus-visible|focus|active)/g, '')
+        .trim().split(/[\s>+~]+/).pop();
+      const m = /^td((?:\.[\w-]+)*)$/.exec(subject);
+      if (!m) continue;
+      const classes = m[1].split('.').filter(Boolean);
+      if (classes.every((c) => HEAT_CELL_CLASSES.has(c))) bad.push(`${sel} { background: ${short.value} }`);
+    }
+  }
+  ok(bad.length === 0, `${page}.html: no rule on a cell that can be on the scale uses the \`background\` shorthand`,
+    bad.join(' | '));
+}
+ok(pageRules > 500, 'the pages’ own <style> blocks were parsed', `${pageRules} rules`);
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

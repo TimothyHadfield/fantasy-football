@@ -314,7 +314,7 @@
   }
   /* The row being read, marked on the table as well as in the panel, so the
      two halves are visibly one thing. */
-  table.weeks tbody tr.peeking td { background: var(--panel-3); }
+  table.weeks tbody tr.peeking td { background-color: var(--panel-3); }
 
   .wkx { margin-top: 14px; }
   /* The custom box's slot-by-slot, as a card on the week label (2026-09-30).
@@ -1038,7 +1038,9 @@
 
   /* A finder row opens the deal. */
   #tradeTable tbody tr { cursor: pointer; }
-  #tradeTable tbody tr.picked td { background: var(--panel-2); }
+  /* background-COLOR, never the shorthand: the shorthand erased the red/green
+     tint on the open offer's two gain cells (tests/heat-draw-check.mjs). */
+  #tradeTable tbody tr.picked td { background-color: var(--panel-2); }
 
   /* --------------------------------------------------------------- the modal
 

@@ -17,8 +17,11 @@
     "test-heat.mjs": {
       "assertions": 168
     },
+    "test-heat-sweep.mjs": {
+      "assertions": 1300
+    },
     "heat-draw-check.mjs": {
-      "assertions": 162
+      "assertions": 172
     },
     "sortable-check.mjs": {
       "assertions": 60
