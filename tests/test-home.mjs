@@ -307,7 +307,7 @@ function directionOk(values, cells, goodHigh) {
 }
 
 /** Every panel whose subject is a fantasy team, not an NFL player. */
-const TEAM_PANELS = ['#matchups', '#strength'];
+const TEAM_PANELS = ['#matchups'];
 
 // --------------------------------------------------------- the source buttons
 //
@@ -430,13 +430,11 @@ if (process.argv[2]) {
       // --- demo boot -----------------------------------------------------
       facts.demoBadge = text('modeBadge');
       facts.demoGames = document.querySelectorAll('#matchups .game').length;
-      facts.demoRankRows = document.querySelectorAll('#strength .rank li').length;
       facts.demoBenchRows = document.querySelectorAll('#bench tbody tr').length;
       facts.demoWeekOptions = document.querySelectorAll('#weekSelect option').length;
 
       if (facts.demoBadge !== 'Demo') problems.push(`badge is "${facts.demoBadge}", expected Demo`);
       if (facts.demoGames !== 5) problems.push(`demo: ${facts.demoGames} matchup cards, expected 5`);
-      if (facts.demoRankRows !== 10) problems.push(`demo: ${facts.demoRankRows} strength rows, expected 10`);
       if (!facts.demoBenchRows) problems.push('demo: bench panel is empty on a completed week');
       if (facts.demoWeekOptions !== 13) problems.push(`demo: ${facts.demoWeekOptions} week options, expected 13`);
       if (process.env.DUMP_DEMO) console.error($(process.env.DUMP_DEMO)?.innerHTML || '(none)');
@@ -480,16 +478,18 @@ if (process.argv[2]) {
         problems.push(`record: the demo cards read ${JSON.stringify(demoRecs)}, expected ten W–L records over 13 games`);
       }
 
-      // Roster strength: the ▲/▼ sits in a slot EVERY row has, so a row with a
-      // mark and a row without keep the bar and the number in the same place.
-      const slots = Array.from(document.querySelectorAll('#strength .rank li'))
-        .map((li) => Array.from(li.querySelectorAll('.vv .heatmark')).map((el) => el.textContent.trim()));
-      facts.strengthSlots = slots.map((s) => s.join('') || '·').join('');
-      if (!slots.every((s) => s.length === 1)) {
-        problems.push(`strength: not every row has one mark slot — ${facts.strengthSlots}`);
-      } else if (!slots.some((s) => s[0]) || !slots.some((s) => !s[0])) {
-        problems.push(`strength: the demo rows are all marked or all plain (${facts.strengthSlots}), so this proves nothing`);
-      }
+      // ROSTER STRENGTH IS NOT ON THIS PAGE (Tim, 2026-10-08: "move it to the
+      // stats section right next to the schedule luck box"). Not the panel, not
+      // its heading, not its list, not its key or note — and no gap left where
+      // it was: the panel after the matchups is the next one that was there.
+      const gone = ['strength', 'strengthKey', 'strengthNote'].filter((id) => $(id));
+      facts.homeStrengthIds = gone.length;
+      if (gone.length) problems.push(`home: roster strength is still on the page — #${gone.join(', #')}`);
+      if (document.querySelector('.rank')) problems.push('home: a .rank list is still on the page');
+      const homeHeads = Array.from(document.querySelectorAll('h2')).map((h) => h.textContent.replace(/\s+/g, ' ').trim());
+      facts.homeHeads = homeHeads.length;
+      if (homeHeads.some((h) => /roster strength/i.test(h))) problems.push(`home: a "Roster strength" heading is still on the page — ${JSON.stringify(homeHeads)}`);
+      if (document.querySelector('section.panel:empty')) problems.push('home: an empty panel is left where roster strength was');
 
       // --- player references, against the real demo data -------------------
       //
@@ -540,65 +540,6 @@ if (process.argv[2]) {
       // split between what a colour MEANS and the thresholds behind the
       // toggle. That is the panel Tim kept, because luck, skill and S+L are
       // not on ESPN.
-
-      // (1) Roster strength: one column, ten squads, high is good.
-      const sRows = Array.from(document.querySelectorAll('#strength .rank li'));
-      // The step class sits INSIDE `.vv` rather than on it, because this page's
-      // own `.rank .vv { font-weight: 600 }` is two classes and would otherwise
-      // beat the scale's weight step — the tint would show and the weight would
-      // silently not. Read the inner element, and fall back to `.vv` so a page
-      // that moved the class back out fails on direction rather than on a
-      // missing node.
-      const sCells = sRows.map((li) => li.querySelector('.vv [class*="heat-"]') || li.querySelector('.vv'));
-      const sVals = sRows.map((li) => Number(stripMark(li.querySelector('.vv').textContent)));
-      facts.strengthHeat = sCells.filter((el) => heatSide(el)).length;
-      if (sVals.some((v) => !Number.isFinite(v))) {
-        problems.push(`heat: a strength value is unreadable ${JSON.stringify(sVals.slice(0, 3))}`);
-      }
-      const sBad = directionOk(sVals, sCells, true);
-      if (sBad) problems.push(`heat: roster strength points the wrong way — ${sBad}`);
-      // Rows are emitted best-first, so the top row must be on the green side
-      // and the bottom on the red. This is the assertion a flipped `invert`
-      // fails outright rather than subtly.
-      if (heatSide(sCells[0]) !== 'up') {
-        problems.push(`heat: the strongest roster is painted "${clsOf(sCells[0])}", expected green`);
-      }
-      if (heatSide(sCells[sCells.length - 1]) !== 'dn') {
-        problems.push(`heat: the weakest roster is painted "${clsOf(sCells[sCells.length - 1])}", expected red`);
-      }
-      // THE KEY IS SPLIT, the way the Stats page splits it: what is VISIBLE is
-      // what changes what a number means, and the thresholds — the half that
-      // lets a shaded cell be checked by hand — sit in the tucked note with the
-      // method. Both halves are required, so both are asserted, AND SO IS THE
-      // BOUNDARY BETWEEN THEM: an assertion that only checked the tucked note
-      // still passes when `describeHeat` creeps back under the table, which is
-      // exactly the regression this split was made to undo (2026-09-19, the
-      // colour sweep put ~90 words of thresholds on screen per panel; `node
-      // tests/text-audit.mjs index.html` measures it).
-      facts.strengthKey = text('strengthKey');
-      // ON SCREEN, not merely present (§3.4): the text below is the same text
-      // when the whole key has been moved inside a closed toggle.
-      if (!onScreen($('strengthKey'))) {
-        problems.push(`heat: the strength key is not on screen — ${placeOf($('strengthKey'))}`);
-      }
-      if (!/Green beats the other nine lineups/.test(facts.strengthKey)) {
-        problems.push(`heat: roster strength has no visible key line — "${facts.strengthKey.slice(0, 80)}"`);
-      }
-      // Channel 2 named in the key: without it a reader who cannot separate the
-      // hues has no way of knowing the ends are marked at all.
-      if (!/▲▼/.test(facts.strengthKey)) {
-        problems.push('heat: the strength key does not say the ends carry a glyph');
-      }
-      if (/pts or better|standard deviation/.test(facts.strengthKey)) {
-        problems.push(`heat: the thresholds are back in the VISIBLE strength key — "${facts.strengthKey.slice(0, 120)}"`);
-      }
-      const strengthMethod = text('strengthNote');
-      if (!/Colour compares each number/.test(strengthMethod)) {
-        problems.push('heat: the strength method note does not describe the scale');
-      }
-      if (!/\d+\.\d pts or better/.test(strengthMethod)) {
-        problems.push('heat: the strength note does not print its thresholds in points');
-      }
 
       // (3) Bench: Started is scaled, Bench and Cost are deliberately not.
       const bRows = Array.from(document.querySelectorAll('#bench tbody tr'))
@@ -669,7 +610,6 @@ if (process.argv[2]) {
         facts.preNote = text('matchupsNote');
         facts.preBench = text('bench');
         facts.preInjuryRows = document.querySelectorAll('#injuries tbody tr').length;
-        facts.preRankRows = document.querySelectorAll('#strength .rank li').length;
         facts.preBadge = text('modeBadge');
         facts.preSub = text('pageSub');
 
@@ -685,79 +625,23 @@ if (process.argv[2]) {
         if (!/Nothing has kicked off/.test(facts.preNote)) problems.push(`pre: matchup note reads "${facts.preNote}"`);
         if (!/has not finished/.test(facts.preBench)) problems.push(`pre: bench not empty-stated: "${facts.preBench.slice(0, 90)}"`);
         if (/0\.0/.test(facts.preBench)) problems.push('pre: a fabricated 0.0 reached the page');
-        if (facts.preRankRows !== 10) problems.push(`pre: ${facts.preRankRows} strength rows, expected 10`);
 
-        // ---- ROSTER STRENGTH IS PER WEEK, NOT PER SEASON -------------------
-        //
-        // Tim, 2026-09-19: "right now the roster strength box has the numbers
-        // on the right displayed as across the season. This means nothing to
-        // the user. Show it as per week." A season total for a starting lineup
-        // is four figures; a week is the hundred-and-something ESPN prints
-        // under a lineup, which is the only one of the two a manager can place.
-        //
-        // Checked against the MODEL's own season totals rather than against a
-        // hard-coded number, so the fixture can change without this rotting —
-        // and the ranks are checked as unchanged, because dividing every row by
-        // the same 17 must not be able to reorder anybody.
-        const strengthRows = Array.from(document.querySelectorAll('#strength .rank li'))
-          .map((li) => Number(stripMark(li.querySelector('.vv').textContent)));
-        const modelStrength = model.strength.filter((r) => r.value !== null);
-        facts.preStrengthShown = strengthRows.slice(0, 3);
-        facts.preStrengthSeason = modelStrength.slice(0, 3).map((r) => r.seasonTotal);
-
-        if (!strengthRows.length || strengthRows.some((v) => !Number.isFinite(v))) {
-          problems.push(`pre: strength values unreadable ${JSON.stringify(strengthRows)}`);
-        } else {
-          if (strengthRows.some((v) => v > 400)) {
-            problems.push(`pre: a strength figure is still a season total ${JSON.stringify(strengthRows)}`);
-          }
-          const offBy = modelStrength
-            .map((r, i) => Math.abs(strengthRows[i] - r.seasonTotal / 17))
-            .filter((d) => d > 0.06);
-          if (offBy.length) {
-            problems.push(`pre: ${offBy.length} strength rows are not the season total over 17 games`);
-          }
-          const ordered = strengthRows.every((v, i) => i === 0 || v <= strengthRows[i - 1]);
-          if (!ordered) problems.push(`pre: strength is no longer best-first ${JSON.stringify(strengthRows)}`);
-          if (!/typical week/i.test(text('strengthNote'))) {
-            problems.push('pre: the strength note does not say the figure is a week');
-          }
-          // The season total is the number ESPN actually published, so the
-          // panel still has to be able to hand it back rather than losing it.
-          const titled = document.querySelector('#strength .rank li[title]');
-          if (!titled || !/season-long projection/.test(titled.getAttribute('title'))) {
-            problems.push('pre: a strength row no longer carries its season total');
-          }
-        }
         if (facts.preInjuryRows !== 5) problems.push(`pre: ${facts.preInjuryRows} injured starters, expected 5`);
         if (facts.preBadge !== 'Live') problems.push(`pre: badge "${facts.preBadge}", expected Live`);
 
         // Rosters missing entirely: three panels degrade, page survives.
         const noRosters = home.buildModel({ ...fx, rosters: null });
         home.render(noRosters);
-        facts.noRosterStrength = text('strength');
         facts.noRosterInjuries = text('injuries');
-        if (!/unavailable/.test(facts.noRosterStrength)) problems.push('no-rosters: strength panel does not say why it is empty');
         if (!/unavailable/.test(facts.noRosterInjuries)) problems.push('no-rosters: injury panel does not say why it is empty');
 
-        // THE RANK IS ON THE RAW SEASON TOTAL, not the rounded week (AUDIT
-        // §1.9). Two squads 1.4 season points apart both print 104.7 a week;
-        // sorted on the rounded figure they tie and fall back to ESPN's team
-        // order, putting the smaller total (Aardvarks, team 1) first while the
-        // rows' own titles show it is smaller.
-        {
-          const near = preKickoff();
-          const bump = { 1: 1779.2, 2: 1780.6 };   // 104.66 and 104.74 a week
-          near.rosters.teams = near.rosters.teams.map((t) =>
-            bump[t.id] ? { ...t, seasonProjectedTotal: bump[t.id] } : t);
-          const s = home.buildModel(near).strength;
-          const [a, b] = s;
-          if (!(a && b && a.value === 104.7 && b.value === 104.7)) {
-            problems.push(`rank: the fixture no longer ties on the rounded figure ${JSON.stringify(s.slice(0, 2))}`);
-          } else if (a.id !== 2 || a.rank !== 1 || b.id !== 1 || b.rank !== 2) {
-            problems.push(`rank: sorted on the rounded week, not the season total — ${a.name} ${a.seasonTotal} ranked above ${b.name} ${b.seasonTotal}`);
-          }
-        }
+        // ROSTER STRENGTH LEFT THIS PAGE (Tim, 2026-10-08: "move it to the
+        // stats section right next to the schedule luck box"). The model no
+        // longer builds it, so nothing here can draw it back by accident; the
+        // number itself is held to account in future-check.mjs and
+        // test-lineup-avg.mjs.
+        if ('strength' in model) problems.push('home: buildModel still builds a roster-strength list');
+        if (document.querySelector('#strength, .rank')) problems.push('home: rendering a live week drew a roster-strength list');
 
         // ------------------------------------------------- player references
         //

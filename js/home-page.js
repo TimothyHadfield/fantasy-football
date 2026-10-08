@@ -380,7 +380,6 @@ export function buildModel({
     playedThisWeek: games.filter((g) => g.played).length,
     totalGames: schedule.games.length,
     playedOverall: schedule.games.filter((g) => g.played).length,
-    strength: rosterStrength(rosters),
     injuries: injuredStarters(rosters, last?.teams ?? null),
     lastWeek: last?.week ?? null,
     bench: benchReport(benchFrom, benchGames),
@@ -447,54 +446,9 @@ export function deadlineText({ deadline = null, waiverClears = null, now = Date.
   return parts.join(' · ');
 }
 
-/**
- * ESPN's season projection covers the 17-game regular season, so dividing by it
- * turns a season total into a typical week.
- *
- * There are two other copies of this number — `js/trade.js` exports one and
- * `js/analysis-page.js` keeps its own — and all three should be one constant.
- * They were left alone deliberately today: both of those files are being worked
- * on elsewhere as this goes in, and a shared constant landing under somebody
- * mid-edit is how a one-line change becomes a merge nobody asked for.
- */
-const SEASON_GAMES = 17;
-
-/**
- * Who has the best roster, before anyone has played a down.
- *
- * seasonProjectedTotal is the sum of the season-long projections of whoever is
- * in the lineup this week. It is the closest thing to an objective talent
- * ranking that exists in week 1, and it needs zero completed games.
- *
- * SHOWN PER WEEK, NOT PER SEASON (Tim, 2026-09-19: "right now the roster
- * strength box has the numbers on the right displayed as across the season.
- * This means nothing to the user. Show it as per week."). He is right, and the
- * reason is that nobody has a feel for 1,780: a fantasy manager reads scores in
- * the hundred-and-something a week that ESPN puts under a lineup, so a
- * four-figure season total has to be divided by something in the reader's head
- * before it says anything at all. The RANKING and the BARS are untouched by it
- * — dividing every row by the same 17 cannot reorder them — so this changes
- * what the column says, not what the panel claims.
- *
- * The season total is kept alongside it, because the note still has to be able
- * to say where the per-week figure came from.
- */
-function rosterStrength(rosters) {
-  const rows = (rosters?.teams || []).map((t) => ({
-    id: t.id,
-    name: t.name,
-    raw: isNum(t.seasonProjectedTotal) ? t.seasonProjectedTotal : null,
-    seasonTotal: isNum(t.seasonProjectedTotal) ? round1(t.seasonProjectedTotal) : null,
-    value: isNum(t.seasonProjectedTotal)
-      ? round1(t.seasonProjectedTotal / SEASON_GAMES)
-      : null,
-  }));
-  // RANKED ON THE RAW TOTAL, rounded for display only (AUDIT §1.9): sorted on
-  // the rounded week, two squads 1.8 season points apart tied at 104.7 and fell
-  // back to ESPN's team order, while their own titles showed them differing.
-  rows.sort((a, b) => (b.raw ?? -Infinity) - (a.raw ?? -Infinity));
-  return rows.map(({ raw, ...r }, i) => ({ ...r, rank: i + 1 }));
-}
+// (Roster strength — the set lineup's season projection over 17 games — was
+// built here until 2026-10-08. Tim moved it to the Stats page, where it is the
+// best lineup averaged over the weeks left: js/stats-page.js, js/lineup-avg.js.)
 
 /**
  * Starters carrying an injury designation.
@@ -1080,7 +1034,6 @@ export function render(m) {
   renderWeekPicker(m);
   renderDeadlines(m);
   renderMatchups(m);
-  renderStrength(m);
   renderInjuries(m);
   renderBench(m);
 }
@@ -1340,137 +1293,6 @@ function gameCard(g, teamId) {
       <div class="gmeta">${meta}</div>
       ${swapLines(g.swaps)}
     </div>`;
-}
-
-/** The mark slot of a row that carries no ▲/▼: js/heat.js's span, empty. */
-const NO_MARK = ' <span class="heatmark" aria-hidden="true"></span>';
-
-function renderStrength(m) {
-  const rows = m.strength.filter((r) => r.value !== null);
-
-  if (!rows.length) {
-    $('strength').innerHTML = `<div class="empty">${
-      m.hasRosters
-        ? 'ESPN has no season projections for these lineups yet.'
-        : 'Rosters for this week are unavailable, so there is nothing to rank.'
-    }</div>`;
-    $('strengthNote').textContent = '';
-    setKey('strengthKey', '');
-    tuck('strengthNote', false);
-    return;
-  }
-
-  // THE SCALE, on the one column this panel has. Comparison group: every
-  // squad's points in a typical week, which is the same number computed the
-  // same way for all ten — the textbook case for js/heat.js and the reason
-  // this panel was the easiest of the four here to decide.
-  //
-  // NOT INVERTED: more points a week is better, with nothing to argue about.
-  //
-  // It does NOT make the bars redundant and it is not a second drawing of
-  // them. The bars are scaled from the WEAKEST roster to the strongest, so bar
-  // length answers "how far apart are first and last"; the tint is measured in
-  // standard deviations from the mean, so it answers "is this squad unusual".
-  // A league where nine squads are level and one is miles clear draws nine
-  // near-full bars and nine uncoloured cells with one ▲ — which is the true
-  // shape, and neither channel shows it alone.
-  const strengthHeat = heatScale(rows.map((r) => r.value));
-
-  // Bars run from the weakest roster to the strongest, not from zero: every
-  // team's season projection is within a few percent of every other's, so
-  // zero-based bars would all be the same length and say nothing.
-  const values = rows.map((r) => r.value);
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const span = max - min || 1;
-
-  $('strength').innerHTML =
-    '<ol class="rank">' +
-    rows
-      .map((r) => {
-        const width = 8 + 92 * ((r.value - min) / span);
-        const h = heatOf(r.value, strengthHeat, { what: 'a starting lineup in this league' });
-        // ONE `title` PER ROW, not two. The row already carried a sentence —
-        // where the per-week figure came from — and a second `title` on the
-        // value span would give a phone two sheets to open from one tap
-        // (js/touch-titles.js walks up to the nearest titled element). So the
-        // scale's words are appended to the sentence that is already there,
-        // and the row keeps carrying ESPN's published season total either way.
-        const words = [
-          r.seasonTotal === null
-            ? ''
-            : `${r.name} projects ${r.value.toFixed(1)} points in a typical week — ` +
-              `ESPN's season-long projection for this lineup, ${r.seasonTotal.toFixed(0)} points, ` +
-              `over ${SEASON_GAMES} games.`,
-          h ? h.words : '',
-        ].filter(Boolean).join(' ');
-        const says = words ? ` title="${esc(words)}"` : '';
-        // The tint sits on the value, never on the whole row: the row is a name
-        // and a bar as well as a number, and only the number is the thing being
-        // compared.
-        //
-        // AND IT SITS ON AN ELEMENT INSIDE `.vv`, NOT ON `.vv` ITSELF — that is
-        // a specificity fix, not decoration. This page's own stylesheet has
-        // `.rank .vv { font-weight: 600 }`, which is two classes and therefore
-        // beats the scale's single-class `font-weight` outright. Put the step
-        // on `.vv` and the TINT would show while the WEIGHT silently did not,
-        // which is the scale losing one of its two hue-free channels without
-        // anything looking broken. Nothing in this page's CSS selects an
-        // element inside `.vv`, so the step lands there intact — and the fix
-        // needs no change to css/app.css, which another agent owns.
-        //
-        // THE ▲/▼ HAS A SLOT IN EVERY ROW, empty where there is no mark (the
-        // page's stylesheet gives it a fixed width). Without it a marked row's
-        // number, and the bar beside it, sat a mark's width to the left of the
-        // rows above and below.
-        const mark = (h && heatMarkHtml(h)) || NO_MARK;
-        const num = h
-          ? `<span class="${h.cls}">${r.value.toFixed(1)}</span>${mark}`
-          : `${r.value.toFixed(1)}${mark}`;
-        return `<li${r.id === m.teamId ? ' class="me"' : ''}${says}>
-            <span class="rk">${r.rank}</span>
-            <span class="nm">${esc(r.name)}</span>
-            <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
-            <span class="vv">${num}</span>
-          </li>`;
-      })
-      .join('') +
-    '</ol>';
-
-  // ONE LINE, NOT FOUR (2026-09-19). What it has to carry is the comparison
-  // group and the two hue-free channels; "in four steps", "full colour is one
-  // SD out" and "tap a row" are all method, and the toggle below already says
-  // every one of them. The long version measured 45 words here against a panel
-  // that showed 51 in total before the scale landed — `node
-  // tests/text-audit.mjs index.html` is the meter.
-  setKey('strengthKey', strengthHeat
-    ? '<strong>Green beats the other nine lineups, red trails.</strong> ' +
-      'Ends carry ▲▼ and bold.'
-    : '<strong>Nothing is shaded</strong>: the ten lineups are inside a tenth of a point ' +
-      'of each other.');
-
-  tuck('strengthNote', true);
-  $('strengthNote').innerHTML =
-    // The thresholds, in points, so a shaded row can be checked by hand rather
-    // than believed — tucked, because it is method rather than meaning.
-    (strengthHeat
-      ? `<strong>The colours.</strong> ${describeHeat(strengthHeat, {
-        what: 'the other nine starting lineups',
-        high: 'a stronger squad', low: 'a weaker one',
-      })} Tap or hover a row for exactly where it stands. `
-      : '') +
-    `<strong>Points in a typical week</strong>: ESPN&rsquo;s season-long projection for each ` +
-    `team&rsquo;s <em>current</em> starting lineup, divided by the ${SEASON_GAMES} games of an ` +
-    'NFL season. The season totals themselves are four figures, which nobody has a feel for; ' +
-    'a lineup is read in the hundred-and-something a week ESPN prints under it. Dividing every ' +
-    'team by the same number changes no rank and no bar. ' +
-    'It needs no completed games, which makes it the only honest answer to ' +
-    '&ldquo;who is good&rdquo; this early. Bar length shows the gap between first and last ' +
-    `(${(max - min).toFixed(1)} points a week), not the totals. ` +
-    '<strong>This is the lineup as it is set, averaged flat</strong> — it cannot see a bye week ' +
-    'or a squad whose depth never starts, so it will not match the ' +
-    '<a href="analysis.html">Analysis</a> page&rsquo;s <strong>Proj avg</strong>, which is built ' +
-    'from the best legal lineup in every individual week.';
 }
 
 /**

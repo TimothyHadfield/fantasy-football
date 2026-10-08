@@ -28,6 +28,10 @@ const EXPECTED = [
   'Standings & season totals',
   'Week by week',
   'Schedule luck — rest of season',
+  // Tim, 2026-10-08: roster strength moved here from Home, "right next to the
+  // schedule luck box", with the future proj diff box beside the pair.
+  'Roster strength',
+  'Future proj diff',
   'Early season',
   'Weekly scores',
   'Weekly luck — actual minus projected',
@@ -163,6 +167,8 @@ const idFor = Object.fromEntries(found.map((p) => [p.title, p.id]));
 for (const [title, id] of [
   ['Week by week', 'panelWeekGrid'],
   ['Schedule luck — rest of season', 'panelOppProj'],
+  ['Roster strength', 'panelStrength'],
+  ['Future proj diff', 'panelProjDiff'],
   ['Early season', 'panelEarly'],
   ['Weekly scores', 'panelWeekly'],
   ['Weekly luck — actual minus projected', 'panelLuck'],

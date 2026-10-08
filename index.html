@@ -90,30 +90,6 @@
 .ghead .gbox { margin: 0 auto 0 10px; color: var(--dim); }
 .ghead .gbox:hover { color: var(--accent-hi); }
 
-/* Ranked bars. A line chart of ten teams over one week draws no lines at all,
-   so week-1 rankings are bars. */
-.rank { list-style: none; margin: 0; padding: 0; }
-.rank li {
-  display: grid;
-  grid-template-columns: 20px minmax(90px, 1fr) 2fr auto;
-  gap: 10px;
-  align-items: center;
-  padding: 4px 0;
-  font-size: 13.5px;
-  font-variant-numeric: tabular-nums;
-}
-.rank .rk { color: var(--dim); font-size: 12px; text-align: right; }
-.rank .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rank .bar { background: var(--panel-2); border-radius: 3px; height: 9px; }
-.rank .bar i { display: block; height: 100%; border-radius: 3px; background: var(--good); }
-/* One width for every row's number, with the ▲/▼ in a slot of its own that an
-   unmarked row keeps empty — so the bars end, and the numbers line up, in the
-   same place whether or not a row carries a mark. */
-.rank .vv { font-weight: 600; min-width: 52px; text-align: right; white-space: nowrap; }
-.rank .vv .heatmark { display: inline-block; width: 10px; margin-left: 2px; text-align: center; }
-.rank li.me .nm { color: #7fd99b; font-weight: 650; }
-.rank li.me .bar i { background: var(--accent); }
-
 /* The two tables that share a line. A long cell wraps, so each table fits its
    half of the page instead of scrolling sideways; on a phone the first column
    wraps as well (below). The bench table carries two players a row, so it
@@ -167,22 +143,6 @@ a.pref:focus-visible {
   /* Matchup cards: 280px is wider than the panel, so auto-fill gives one
      column anyway — but it gives it by overflowing rather than by fitting. */
   .games { grid-template-columns: 1fr; }
-
-  /* The ranked bars are four things on one line — rank, team, bar, value — and
-     the bar is the one that can be squeezed to nothing without the row looking
-     broken, which is exactly the wrong one to lose: the bar IS the comparison.
-     So it drops to a line of its own at full width and the three labels keep
-     the line above. */
-  .rank li {
-    grid-template-columns: 20px minmax(0, 1fr) auto;
-    row-gap: 5px;
-    column-gap: 8px;
-    padding: 6px 0;
-  }
-  .rank .rk  { grid-row: 1; grid-column: 1; }
-  .rank .nm  { grid-row: 1; grid-column: 2; }
-  .rank .vv  { grid-row: 1; grid-column: 3; }
-  .rank .bar { grid-row: 2; grid-column: 1 / -1; }
 
   /* Five columns in 337px: every name may wrap, and there is less air between
      the columns so the names keep the room. */
@@ -253,31 +213,8 @@ a.pref:focus-visible {
     </details>
   </section>
 
-  <!-- Roster strength stands alone. The standings table that used to share this
-       line was deleted on 2026-09-23 for the reason the Schedule one went on
-       2026-09-17: Team / W-L / PF / PA / Diff is an ESPN screen, and this site
-       complements ESPN rather than rebuilding it. Record and points survive on
-       the Stats page, where they sit beside luck, skill and S+L — which ESPN
-       does not publish and which is why that panel is a different panel. -->
-  <section class="panel">
-    <h2>Roster strength</h2>
-    <p class="lede">Each team&rsquo;s current starting lineup, as points in a typical week. Bars show the gap from last to first, not totals.</p>
-    <div id="strength"></div>
-    <!-- The red/green scale's key. VISIBLE, never tucked inside "How this
-         works": a colour whose key is behind a closed toggle is a colour with
-         no key (HANDOFF rule 7, and js/heat.js channel 4). ONE SHORT LINE —
-         which way green points, and that the ends carry ▲▼ and heavier type.
-         The thresholds in points live in the toggle below, where the rest of
-         the method is; they are what lets a row be checked by hand, but
-         printing them here cost this panel 45 words of permanently visible
-         prose (node tests/text-audit.mjs index.html). -->
-    <p class="panel-note" id="strengthKey" hidden></p>
-    <details class="explain">
-      <summary>How this works</summary>
-      <p class="panel-note" id="strengthNote"></p>
-    </details>
-  </section>
-
+  <!-- Roster strength lived here until 2026-10-08, when Tim moved it to the
+       Stats page beside Schedule luck (stats.html, #panelStrength). -->
   <div class="panel-row">
     <section class="panel">
       <h2>Injury report</h2>

@@ -70,6 +70,9 @@ import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // The slot vocabulary is shared with the Trade page's per-week breakdown, so
 // the two cannot disagree about what WR2 means. See js/lineup-slots.js.
 import { SLOT_ORDER, slotRows, fillSlots } from './lineup-slots.js';
+// What a slot and a lineup's week count for: one copy, shared with the Stats
+// page's Roster strength, so the two pages cannot disagree about a squad's week.
+import { assessSlot, lineupTotal, bestFill, identified, slotsFromTeamLists } from './lineup-avg.js';
 // The small LIVE badge beside a week still being played — the Decisions page's.
 import { LIVE_TAG } from './actual-season-table.js';
 // THE POSITIONAL FLOOR — no slot assessed below what the wire would give you
@@ -3119,7 +3122,7 @@ function weeklyFills(rows, slots, weeks) {
     if (!shown.has(week)) continue;
     const perTeam = new Map();
     for (const team of teams) {
-      perTeam.set(team.id, fillSlots(optimalLineup(identified(team.players), slots).starters, rows));
+      perTeam.set(team.id, bestFill(team.players, slots, rows));
     }
     byWeek.set(week, perTeam);
   }
@@ -3150,24 +3153,8 @@ function weeklyFills(rows, slots, weeks) {
  * @returns {{value:number|null, assumed:boolean, exact:number|null}}
  */
 function assessed(entry, row) {
-  if (entry === undefined) return { value: null, assumed: false, exact: null };
-  if (entry === null) {
-    const sf = slotFloor(row.slotId, state.floors);
-    return { value: sf ? sf.value : null, assumed: Boolean(sf), exact: sf ? sf.value : null };
-  }
-  const raw = typeof entry.raw === 'number' ? entry.raw : entry.v;
-  // A FINISHED MAN'S SCORE IS A FACT (js/floor.js: a banked score is never
-  // floored) — no streaming decision can reach back into it.
-  if (entry.p && entry.p.done === true) return { value: entry.v, assumed: false, exact: raw };
-  // The SLOT's floor, not the man's position's (AUDIT §1.8): a zero TE in the
-  // FLEX is worth what an empty FLEX is, the best of RB/WR/TE on the wire.
-  const a = flooredValue({ position: entry.p.position, projected: entry.v }, state.floors, row.slotId);
-  const x = flooredValue({ position: entry.p.position, projected: raw }, state.floors, row.slotId);
-  return {
-    value: a.value === null ? entry.v : a.value,
-    assumed: a.assumed,
-    exact: x.value === null ? raw : x.value,
-  };
+  // The arithmetic is js/lineup-avg.js's `assessSlot`, on this page's floors.
+  return assessSlot(entry, row, state.floors);
 }
 
 /** Memoised against the league and how much of it has landed. */
@@ -3325,14 +3312,7 @@ function teamSlotAverages(rows, slots, weeks) {
     const totals = weeks.map((w) => {
       const perTeam = byWeek.get(w);
       const fill = perTeam ? perTeam.get(id) : null;
-      if (!fill) return null;
-      let sum = 0;
-      let any = false;
-      for (const row of rows) {
-        const a = assessed(fill.get(row.key) || null, row);
-        if (a.exact !== null) { sum += a.exact; any = true; }
-      }
-      return any ? round1(sum) : null;
+      return fill ? lineupTotal(fill, rows, state.floors) : null;
     });
 
     byTeam.set(id, {
@@ -3376,20 +3356,9 @@ function teamWeekTotals(rows, slots, weeks) {
     const perTeam = fills.get(w);
     const totals = new Map();
     if (perTeam) {
-      for (const [id, fill] of perTeam) {
-        let sum = 0;
-        let any = false;
-        for (const r of rows) {
-          // `|| null` for the same reason `teamSlotAverages` does it: a slot
-          // key the fill has no entry for is a slot nobody could fill, which
-          // is exactly what the waiver floor is for — not a week nobody read.
-          // UNROUNDED slots, rounded once (`exact`), so the total is the
-          // Schedule page's to the tenth.
-          const a = assessed(fill.get(r.key) || null, r);
-          if (a.exact !== null) { sum += a.exact; any = true; }
-        }
-        totals.set(id, any ? round1(sum) : null);
-      }
+      // UNROUNDED slots, rounded once, so the total is the Schedule page's to
+      // the tenth — `lineupTotal`, the sum the Stats page's Roster strength uses.
+      for (const [id, fill] of perTeam) totals.set(id, lineupTotal(fill, rows, state.floors));
     }
     byWeek.set(w, totals);
   }
@@ -5032,11 +5001,7 @@ const FLEX_SLOTS = new Set([3, 5, 7, 23]);
  * slot empty in the week on screen must not shrink the league's shape.
  */
 function leagueSlots() {
-  const pool = [];
-  if (state.data && state.data.teams) pool.push(...state.data.teams);
-  for (const teams of state.seasonWeeks.values()) pool.push(...teams);
-  const counts = slotCountsFromLineups(pool);
-  return counts ? slotsFromCounts(counts) : null;
+  return slotsFromTeamLists([state.data && state.data.teams, ...state.seasonWeeks.values()]);
 }
 
 /**
@@ -5088,9 +5053,7 @@ function weeklyStarters(teamId, slots) {
  * is the same reason the click-through refuses to link him rather than pointing
  * at `?player=undefined`.
  */
-function identified(players) {
-  return (players || []).filter((p) => p.playerId !== null && p.playerId !== undefined);
-}
+// (`identified` itself is js/lineup-avg.js's, imported above: one copy.)
 
 /** How many men at this position the panel had to leave out, in the shown weeks. */
 function unidentifiedCount(team, weeks) {

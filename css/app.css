@@ -1630,3 +1630,33 @@ tfoot tr.league-row td { border-top: 2px solid var(--dim); }
 #changesTable td.d-down { color: var(--err); }
 #changesTable td.d-zero { color: var(--dim); }
 #changesTable tr th.fut-start, #changesTable tr td.fut-start { border-left: 3px solid var(--accent); }
+
+/* --------------------------- Stats: three ranked-bar boxes on one line
+ * Tim, 2026-10-08: Roster strength "right next to the schedule luck box", and
+ * a future proj diff box beside them. `.panel-row.three` lowers the row's
+ * column floor so three panels share a line on a laptop (three 420px columns
+ * need 1292px, and a 1280px screen would leave the third alone at half
+ * width); on a phone `min()` in `.panel-row` still stacks them.
+ *
+ * `.oppbars.one` is the schedule-luck row (stats.html) with ONE figure at its
+ * end instead of two: same rank, name, bar and number, no empty fifth column.
+ * The figure keeps a fixed slot for the scale's mark so every row's number
+ * ends in the same place, and opens the page's preview card like the
+ * schedule-luck gap does. */
+.panel-row.three { --col-min: 300px; }
+.oppbars.one li { grid-template-columns: 22px minmax(90px, 1fr) 2fr auto; }
+.oppbars.one .vv { min-width: 62px; white-space: nowrap; cursor: help; border-radius: 3px; }
+.oppbars.one .vv:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.oppbars.one .vv .heatmark { display: inline-block; width: 10px; margin-left: 2px; text-align: center; }
+@media (max-width: 760px) {
+  .oppbars.one li { grid-template-columns: 22px minmax(0, 1fr) auto; }
+  .oppbars.one .vv { min-width: 0; }
+}
+/* A third of the page is a narrower box than schedule luck used to have, and
+ * at the old 1 : 2 split of name to bar a ten-letter name was cut to "Lisa
+ * Breitzma…" with its record gone. In this row the name takes the larger
+ * share; the bars are shorter and still run easiest to hardest. */
+@media (min-width: 761px) {
+  .panel-row.three .oppbars li { grid-template-columns: 22px minmax(90px, 3fr) 2fr auto auto; }
+  .panel-row.three .oppbars.one li { grid-template-columns: 22px minmax(90px, 3fr) 2fr auto; }
+}

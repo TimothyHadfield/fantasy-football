@@ -34,7 +34,10 @@ import { lineChart, histogram, boxPlot, scatterChart, leastSquares, SERIES_COLOR
 // THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
 // `heatScale()` that lived here — see `heatCell` below for what was wrong with
 // it and why the two could not coexist.
-import { heatScale, describeHeat, describeHeatPerColumn } from './heat.js';
+import { heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn } from './heat.js';
+// ROSTER STRENGTH AND FUTURE PROJ DIFF (Tim, 2026-10-08): a squad's best-lineup
+// week, the very arithmetic the Analysis page's Weekly totals are made of.
+import { lineupWeekTotals, futureAverages, futureDiffs } from './lineup-avg.js';
 // THE STANDINGS TABLE'S ROWS, and the cell helpers they are made of, live in
 // their own module since 2026-10-05 so a second page (the Decisions review)
 // draws the identical table. `heatCell` and the formatters are imported back
@@ -1018,6 +1021,7 @@ function buildOppProj(key, schedule, weekTeams, floors = null, floorWeek = null)
       weeks: countedWeeks,
       fixtures: restFixtures,
     },
+    future: buildFuture(schedule, weekTeams, restWeeks, floors),
     scheduleWeeks: schedule.weeks,
     projectedWeeks: built.weeks,
     countsKnown: built.countsKnown,
@@ -1049,6 +1053,8 @@ function renderOppPanel() {
     setHidden(warn, !gaps.length);
   }
   tuckIfEmpty('oppProjNote');
+  // The two boxes beside it are made of the same read and repaint with it.
+  renderFuturePanels();
 }
 
 /** "weeks 5–14", "week 14", or '' when nothing is left. */
@@ -1375,6 +1381,201 @@ function oppGaps(data, rows = oppRows()) {
     );
   }
   return out;
+}
+
+// ------------------------------------ roster strength and future proj diff
+//
+// Tim, 2026-10-08: "right now roster stength shows numbers closer to 100,
+// which is hard to understand because most of the time we're proj around
+// 120-130. Could you fix it so it matches our future avg proj like in the
+// analysis section? Also move it to the stats section right next to the
+// schedule luck box. Additionally show a future proj dif box that has the avg
+// proj difference between you and you're opponents as the proj stands right
+// now."
+//
+// Both are made of ONE thing: every squad's best legal lineup in each week
+// still to play, added up (`lineupWeekTotals`, js/lineup-avg.js — the function
+// the Analysis page's Weekly totals come out of, so a week here and a week
+// there are the same number). Roster strength is those weeks averaged; the
+// diff is, game by game, that week's total minus the opponent's, averaged.
+//
+// THE WEEKS ARE SCHEDULE LUCK'S OWN (`restWeeks` in `buildOppProj`), so the
+// three boxes on the line cover the same span and say so in their headings.
+// THE ROSTERS ARE ITS OWN TOO: nothing more is asked of ESPN.
+//
+// Drawn as the box beside them is — the same `.oppbars` rows — with the
+// number on the house red→green scale, each box against its own ten values.
+// The number opens the weeks behind it in the page's one preview card.
+
+/** week totals → the two boxes' numbers. */
+function buildFuture(schedule, weekTeams, restWeeks, floors) {
+  const ids = state.stats.teams.map((t) => t.id);
+  const totals = lineupWeekTotals(weekTeams, restWeeks, floors);
+  const weeks = restWeeks.filter((w) => totals.has(w));
+  return {
+    weeks,
+    strength: futureAverages(totals, weeks, ids),
+    diff: futureDiffs(schedule.games, totals, weeks, ids),
+  };
+}
+
+/** The two boxes: where each draws, what its rows are and what its number says. */
+const FUTURE_BOXES = [
+  {
+    kind: 'strength', chart: 'strengthChart', note: 'strengthNote', key: 'strengthKey', span: 'strengthSpan',
+    label: 'the weeks behind this number',
+    text: (v) => fmt(v),
+    what: 'the other teams’ lineups',
+    weeksOf: (got) => got.weeks.map((x) => x.week),
+  },
+  {
+    kind: 'diff', chart: 'projDiffChart', note: 'projDiffNote', key: 'projDiffKey', span: 'projDiffSpan',
+    label: 'the games behind this number',
+    text: (v) => gapOf(v).text,
+    what: 'the other teams’ gaps',
+    weeksOf: (got) => got.games.map((x) => x.week),
+  },
+];
+
+/** A box's rows, best first: sorted on the unrounded mean, printed to the tenth. */
+function futureRows(kind) {
+  const d = state.oppProj;
+  const byTeam = d && !d.error && d.future ? d.future[kind] : null;
+  if (!byTeam || !state.stats) return [];
+  return state.stats.teams
+    .map((t) => {
+      const got = byTeam.get(t.id);
+      return got && typeof got.avg === 'number'
+        ? { id: t.id, name: t.name, record: record(t), value: got.avg, raw: got.raw, got }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.raw - a.raw);
+}
+
+function renderFuturePanels() {
+  for (const box of FUTURE_BOXES) {
+    const chart = $(box.chart);
+    const note = $(box.note);
+    if (!chart || !note) continue;
+    wirePop(chart, '.vv[data-fut]', (el) => futurePopHtml(el.dataset.fut, el.dataset.team));
+    const key = $(box.key);
+    const said = $(box.span);
+    const plain = (html) => {
+      chart.innerHTML = html;
+      note.textContent = '';
+      if (said) said.textContent = '';
+      if (key) { key.textContent = ''; setHidden(key, true); }
+      tuckIfEmpty(box.note);
+    };
+
+    const d = state.oppProj;
+    if (state.oppPending || !d) { plain('<p class="empty">Loading the schedule&hellip;</p>'); continue; }
+    if (d.error) { plain('<p class="empty">No projections to rank.</p>'); continue; }
+    const rows = futureRows(box.kind);
+    if (!rows.length) { plain('<p class="empty">No weeks left to play.</p>'); continue; }
+
+    const span = restSpan([...new Set(rows.flatMap((r) => box.weeksOf(r.got)))].sort((a, b) => a - b));
+    if (said) said.textContent = span ? ` (${span})` : '';
+    const scale = heatScale(rows.map((r) => r.value));
+    chart.innerHTML = futureBars(box, rows, scale);
+    if (key) {
+      key.innerHTML = scale ? '<strong>Green is above the league, red below.</strong>' : '';
+      setHidden(key, !scale);
+    }
+    note.innerHTML = futureNote(box, rows, scale, d);
+    tuckIfEmpty(box.note);
+  }
+}
+
+/** The rows, in the markup of the schedule-luck bars beside them. */
+function futureBars(box, rows, scale) {
+  const values = rows.map((r) => r.value);
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min || 1;
+  const items = rows.map((r, i) => {
+    const width = 8 + 92 * ((r.value - min) / span);
+    const h = heatOf(r.value, scale, { what: box.what });
+    // The mark has a slot in every row, so the numbers end in one place.
+    const mark = (h && heatMarkHtml(h)) || ' <span class="heatmark" aria-hidden="true"></span>';
+    const num = h ? `<span class="${h.cls}">${box.text(r.value)}</span>` : box.text(r.value);
+    return `<li class="${state.highlight === r.id ? 'me' : ''}">
+        <span class="rk">${i + 1}</span>
+        <span class="nm">${esc(r.name)} <small class="muted rec">${r.record}</small></span>
+        <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
+        <span class="vv" data-fut="${box.kind}" data-team="${esc(r.id)}" data-v="${r.value}" tabindex="0" role="button" ` +
+          `aria-label="${esc(r.name)}: ${box.label}">${num}${mark}</span>
+      </li>`;
+  }).join('');
+  return `<ol class="oppbars one">${items}</ol>`;
+}
+
+/** The preview behind a number: its weeks, then their average — the number. */
+function futurePopHtml(kind, teamId) {
+  const d = state.oppProj;
+  const team = state.stats && state.stats.teams.find((t) => String(t.id) === String(teamId));
+  const got = team && d && d.future && d.future[kind] ? d.future[kind].get(team.id) : null;
+  if (!got) return '';
+  const close = '<button type="button" class="op-close">Close</button>';
+  if (kind === 'strength') {
+    const rows = got.weeks.map((x) =>
+      `<tr><td class="num">${x.week}</td><td class="num">${fmt(x.total)}</td></tr>`).join('');
+    return (
+      `<div class="op-h">${esc(team.name)} <span class="muted">· ${restSpan(got.weeks.map((x) => x.week))}</span></div>` +
+      '<table><thead><tr><th class="num">Wk</th><th class="num">Proj</th></tr></thead>' +
+      `<tbody>${rows}</tbody><tfoot>` +
+      `<tr class="op-gap"><td class="name">Average</td><td class="num">${fmt(got.avg)}</td></tr>` +
+      '</tfoot></table>' + close
+    );
+  }
+  const nameOf = (id) => {
+    const t = state.stats.teams.find((x) => x.id === id);
+    return t ? t.name : '—';
+  };
+  const rows = got.games.map((x) =>
+    `<tr><td class="num">${x.week}</td><td class="name">${esc(nameOf(x.oppId))}</td>` +
+    `<td class="num">${fmt(x.own)}</td><td class="num">${fmt(x.opp)}</td>` +
+    `<td class="num">${gapOf(x.gap).text}</td></tr>`).join('');
+  return (
+    `<div class="op-h">${esc(team.name)} <span class="muted">· ${restSpan(got.games.map((x) => x.week))}</span></div>` +
+    '<table><thead><tr><th class="num">Wk</th><th class="name">Opponent</th><th class="num">Proj</th>' +
+    '<th class="num">Opp proj</th><th class="num">Gap</th></tr></thead>' +
+    `<tbody>${rows}</tbody><tfoot>` +
+    `<tr class="op-gap"><td></td><td class="name">Average</td><td class="num">${fmt(got.own)}</td>` +
+    `<td class="num">${fmt(got.opp)}</td><td class="num">${gapOf(got.avg).text}</td></tr>` +
+    '</tfoot></table>' + close
+  );
+}
+
+/** What the number is and what it is made of (rule 7), behind the toggle. */
+function futureNote(box, rows, scale, data) {
+  const span = restSpan([...new Set(rows.flatMap((r) => box.weeksOf(r.got)))].sort((a, b) => a - b));
+  const lines = box.kind === 'strength'
+    ? [
+      '<strong>What each team&rsquo;s lineup is projected to score in an average week from here.</strong> ' +
+        'For every week still to play, the best legal lineup from the roster as it stands is filled ' +
+        'from ESPN&rsquo;s projections for that week — so a bye moves the next man in — and added up; ' +
+        `those week totals are then averaged over ${span}.`,
+      'They are the same week totals the <a href="analysis.html">Analysis</a> page shows under ' +
+        'Weekly totals for the weeks still to come. Tap or hover a number for its weeks.',
+    ]
+    : [
+      '<strong>How far ahead of its opponents each team is projected, per game.</strong> ' +
+        'For every game still to play, the team&rsquo;s projected lineup total that week minus its ' +
+        `opponent&rsquo;s, as the projections stand now; those gaps are then averaged over ${span}. ` +
+        'A plus means the team is projected to outscore the teams it still has to play.',
+      'The week totals are Roster strength&rsquo;s own. Tap or hover a number for its games.',
+    ];
+  if (data.floorSaid) lines.push(data.floorSaid);
+  if (scale) {
+    lines.push(`<strong>The colours.</strong> ${describeHeat(scale, {
+      what: box.kind === 'strength' ? 'the other teams’ lineups' : 'the other teams’ gaps',
+      high: box.kind === 'strength' ? 'a stronger squad' : 'a bigger edge',
+      low: box.kind === 'strength' ? 'a weaker one' : 'a smaller one',
+    })}`);
+  }
+  return paras(lines);
 }
 
 function renderAccuracy() {
