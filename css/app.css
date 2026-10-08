@@ -1607,6 +1607,13 @@ tr.colgroup th.fut-start,
 #seasonTable:not(:has(thead th.sorted)) tr.bench-start td,
 #seasonTable:has(thead th.name.sorted.asc) tr.bench-start td { border-top: 2px solid var(--text); }
 
+/* THE NAME LINE above Season by week also says the pointed week's projection
+ * and score (Tim, 2026-10-08). Its height is reserved, so when the whole line
+ * is too long for it the page drops parts (`fitPick` in js/analysis-page.js):
+ * first "over N games", then his position and team. */
+#seasonPick[data-fit] .pick-games,
+#seasonPick[data-fit="2"] .pick-rest { display: none; }
+
 /* THE LEAGUE ROW under a teams-by-week table (Stats "Week by week", Analysis
  * "Weekly totals"): the average of the teams above it, set off by a heavier
  * rule. It lives in a tfoot, so it is never sorted in among them. */

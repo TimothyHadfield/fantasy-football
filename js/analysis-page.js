@@ -156,6 +156,9 @@ const state = {
   // he holds, and naming him on the line above the table, is what puts the
   // person back into a grid made entirely of bare numbers.
   seasonLit: null,
+  // And the WEEK of the cell that named him, so the line can say that week's
+  // projection and score — the one number of the two the cell is not showing.
+  seasonLitWeek: null,
 
   // The week the "Proj changes" box was pointed at THIS visit, or null for its
   // own default (the newest saved week before the current one).
@@ -690,6 +693,25 @@ function seasonRunData(index, p) {
     injuryStatus: weeks.map((w) => seasonStatus(index, w, p)),
     playoffWeeks: state.poWeeks,
   });
+}
+
+/**
+ * Register the card a man's NAME carries — the one the Roster detail table
+ * builds: his identity line, his season week by week (Proj and Act rows) and
+ * the glance line — and hand back the key for `tipAttr`. `prefix` is the
+ * table's own (`clearRuns`).
+ */
+function nameCard(p, index, teamId, prefix) {
+  const tier = injuryTier(p.injuryStatus);
+  return registerRun({
+    ident: `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}`,
+    run: seasonRunData(index, p),
+    href: p.playerId === null || p.playerId === undefined
+      ? null
+      : `waivers.html?player=${encodeURIComponent(p.playerId)}`,
+    id: `${prefix}:${teamId}:${p.playerId ?? `x:${p.name}`}`,
+    glance: glanceFor(p),
+  }, prefix);
 }
 
 /** How a zero in this man's week reads: see `zeroKind` in js/player-card.js. */
@@ -2448,6 +2470,9 @@ function renderRoster() {
   // Only this table's cards: the grids above register their own under 'g'.
   clearRuns('r');
   const index = seasonIndexFor(team.id);
+  // Each man's card key, so the best-lineup line above the table opens the
+  // very card his row does rather than a second copy of it.
+  const cards = new Map();
   const row = (entry) => {
     const { p } = entry;
     const line = weekLine(p);
@@ -2478,6 +2503,7 @@ function renderRoster() {
       id: `r:${team.id}:${p.playerId ?? `x:${p.name}`}`,
       glance: glanceFor(p),
     }, 'r');
+    cards.set(p, key);
     return `
       <tr class="${cls}">
         ${slotControl(entry, held)}
@@ -2510,7 +2536,7 @@ function renderRoster() {
   // The best-lineup line compares like with like: the solver prices a finished
   // man at his score, so the lineup on screen is totalled the same way.
   $('rosterBest').innerHTML = bestLineupLine(team, view,
-    midWeek ? sumOf(starters, 'projected') : projTotal);
+    midWeek ? sumOf(starters, 'projected') : projTotal, cards);
 
   renderRosterNote(view, team);
   resort(table);
@@ -2527,7 +2553,7 @@ function renderRoster() {
  * are the league's own, read off the lineups already held, so this costs no
  * request. Nothing when the slots are not known yet.
  */
-function bestLineupLine(team, view, projTotal) {
+function bestLineupLine(team, view, projTotal, cards = new Map()) {
   const slots = leagueSlots();
   if (!team || !slots || !view.length) return '';
   const keyOf = (p) => (p.playerId === null || p.playerId === undefined ? `n:${p.name}` : p.playerId);
@@ -2547,7 +2573,11 @@ function bestLineupLine(team, view, projTotal) {
   const byKey = new Map(pool.map((p) => [keyOf(p), p]));
   const ins = best.starters.filter((s) => !current.has(keyOf(s))).map((s) => byKey.get(keyOf(s)) || s);
   const outs = view.filter((e) => e.started && !chosen.has(keyOf(e.p))).map((e) => e.p);
-  const name = (p) => playerRef(p, esc(p.name), `${p.name} — ${OPENS}`, 'aria-label');
+  // His name carries the card his row in the table below registered (`cards`).
+  const name = (p) => {
+    const link = playerRef(p, esc(p.name), `${p.name} — ${OPENS}`, 'aria-label');
+    return cards.has(p) ? `<span${tipAttr(cards.get(p))}>${link}</span>` : link;
+  };
   const names = (list) => andList(list.map(name));
 
   // A different set of men is the usual answer; the same men in different
@@ -3840,7 +3870,7 @@ function slotCell(entry, row, week, bar, index) {
   // who he is, and the link — moves to the line above the table (`paintLit`).
   // The two grids above keep their cards: there, one row is one team and a
   // cell really is the only place a man appears.
-  return `<td class="${cls(extra)}" data-v="${v}" data-pid="${esc(p.playerId ?? '')}">` +
+  return `<td class="${cls(extra)}" data-v="${v}" data-pid="${esc(p.playerId ?? '')}" data-wk="${week}">` +
     `${playerRef(p, `${shown}${mark}`, `${why}${assumedWhy}${says} Click to ${OPENS}.`, 'aria-label')}</td>`;
 }
 
@@ -3864,7 +3894,8 @@ function historyCell(entry, row, week, scale) {
   const v = historyValue(p, historyMode());
   // No id, no link (`playerRef`) — and then no `data-pid` either, so nothing
   // looks for a link the cell does not have.
-  const pid = p.playerId === null || p.playerId === undefined ? '' : ` data-pid="${esc(p.playerId)}"`;
+  const pid = p.playerId === null || p.playerId === undefined
+    ? '' : ` data-pid="${esc(p.playerId)}" data-wk="${week}"`;
   const who = `${p.name} started at ${row.key} in week ${week}`;
   if (v === null) {
     const why = proj
@@ -3873,7 +3904,11 @@ function historyCell(entry, row, week, scale) {
     return `<td class="${cls('muted')}"${pid}>${playerRef(p, '—', `${why} Click to ${OPENS}.`, 'aria-label')}</td>`;
   }
   const heat = heatOf(v, scale, { what: `the other squads’ ${row.key} in week ${week}` });
-  const why = proj ? `${who}, projected ${fmt(v)} before kickoff.` : `${who} and scored ${fmt(v)}.`;
+  // BOTH NUMBERS IN THE WORDS (Tim, 2026-10-08): the cell draws one of them.
+  const other = historyValue(p, proj ? 'actual' : 'proj');
+  const why = proj
+    ? `${who}, projected ${fmt(v)} before kickoff${other === null ? '' : `, and scored ${fmt(other)}`}.`
+    : `${who} and scored ${fmt(v)}${other === null ? '' : `, projected ${fmt(other)}`}.`;
   return `<td class="${cls(heat ? heat.cls : '')}" data-v="${v}"${pid}>` +
     `${playerRef(p, `${fmt(v)}${heatMarkHtml(heat)}`,
       `${why}${heat ? ` ${heat.words}` : ''} Click to ${OPENS}.`, 'aria-label')}</td>`;
@@ -4138,6 +4173,8 @@ function paintSeason() {
   // widest thing that could be repeated 160 times for something read for two
   // seconds. Rebuilt with the rows, so it can never describe a stale squad.
   seasonWho.clear();
+  // Only this table's cards (its Player rows' names): see `clearRuns`.
+  clearRuns('s');
 
   // PLAYER ROWS (see `rowsMode`): the men instead of the slots. Everything
   // around the rows — the head's label and line, the band, the note — is the
@@ -4159,22 +4196,33 @@ function paintSeason() {
         const got = (real.get(w) || new Map()).get(team.id);
         return got ? got.fill.get(row.key) : undefined;
       });
-      for (const e of drawn) {
+      drawn.forEach((e, i) => {
         if (e && e.p.playerId !== null && e.p.playerId !== undefined) {
           const p = e.p;
           const injured = injuryTier(p.injuryStatus);
           const scored = scoredToDate(index, p);
-          seasonWho.set(String(p.playerId), {
+          const before = seasonWho.get(String(p.playerId));
+          const his = {
             // The same identity line the grids' card draws, word for word. Two
             // spellings of "who is this" on one page is how two answers drift.
-            ident: `${p.name} · ${p.position} · ${p.proTeam}${injured ? ` · ${p.injuryStatus}` : ''}`,
+            name: p.name,
+            rest: ` · ${p.position} · ${p.proTeam}${injured ? ` · ${p.injuryStatus}` : ''}`,
             seasonProj: typeof p.seasonProjected === 'number' ? p.seasonProjected : null,
             avg: scored.avg,
             games: scored.games,
             href: `waivers.html?player=${encodeURIComponent(p.playerId)}`,
-          });
+            // week -> that week's two numbers, for the cell under the pointer:
+            // a history week's projection before kickoff and his score, a week
+            // to come's projection as ESPN gives it (the cell may show a floor).
+            weeks: before ? before.weeks : new Map(),
+          };
+          his.ident = `${his.name}${his.rest}`;
+          his.weeks.set(weeks[i], hist.has(weeks[i])
+            ? { played: true, proj: historyValue(p, 'proj'), scored: historyValue(p, 'actual') }
+            : { played: false, proj: typeof e.v === 'number' ? round1(e.v) : null, scored: null });
+          seasonWho.set(String(p.playerId), his);
         }
-      }
+      });
       // AVG AVERAGES WHAT THE ROW SHOWS, floors included. It used to average
       // ESPN's own numbers while the cells beside it showed the assessed ones,
       // so a row whose kicker was floored in three weeks reported an Avg no
@@ -4465,10 +4513,12 @@ function playerHistoryValue(p, week, mode) {
 }
 
 /** His name, a link like every other name on the page, then his position. */
-function playerNameCell(row) {
+function playerNameCell(row, card = null) {
   const p = row.p;
-  return `<td class="name" data-v="${row.order}">` +
-    `${playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}` +
+  // With a card (`nameCard`) the card is the name's words, so the link takes
+  // an aria-label: a title would draw the browser's tooltip over the card.
+  return `<td class="name" data-v="${row.order}"${card === null ? '' : tipAttr(card)}>` +
+    `${playerRef(p, esc(p.name), `${p.name} — ${OPENS}`, card === null ? 'title' : 'aria-label')}` +
     `<span class="row-pos">${esc(posLabel(p))}</span></td>`;
 }
 
@@ -4545,9 +4595,12 @@ function playerHistoryCell(p, week, mode, teamId, start = null) {
     return `<td class="${cls('muted')}" title="${esc(why + says)}">—</td>`;
   }
   const shown = round1(v);
+  // BOTH NUMBERS IN THE WORDS (Tim, 2026-10-08): the cell draws one of them.
+  const o = mode === 'proj' ? e.actual : e.proj;
+  const other = typeof o === 'number' ? fmt(round1(o)) : null;
   const why = (mode === 'proj'
-    ? `${p.name} was projected ${fmt(shown)} before kickoff in week ${week}.`
-    : `${p.name} scored ${fmt(shown)} in week ${week}.`) +
+    ? `${p.name} was projected ${fmt(shown)} before kickoff in week ${week}${other === null ? '' : `, and scored ${other}`}.`
+    : `${p.name} scored ${fmt(shown)} in week ${week}${other === null ? '' : `, projected ${other}`}.`) +
     (e.teamId === teamId ? '' : ' He was on another team then.');
   return `<td class="${cls()}" data-v="${shown}" title="${esc(why + says)}">${fmt(shown)}</td>`;
 }
@@ -4571,7 +4624,7 @@ function playerRowHtml(row, team, weeks, index, hist, fut, scales = null, benchS
     : null;
   return `
       <tr data-player="${esc(p.playerId)}"${benchStart ? ' class="bench-start"' : ''}>
-        ${playerNameCell(row)}
+        ${playerNameCell(row, nameCard(p, index, team.id, 's'))}
         <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
         `title="${esc(`${p.name}: the mean of the regular-season numbers shown in his row.${ah ? ` ${ah.words}` : ''}`)}">` +
         `${fmt(row.avg)}${heatMarkHtml(ah)}</td>
@@ -5245,6 +5298,8 @@ function renderStarters() {
     return;
   }
 
+  // Only this table's cards: the other tables register their own.
+  clearRuns('w');
   tbody.innerHTML = rows
     .map((row) => {
       const p = row.p;
@@ -5271,12 +5326,16 @@ function renderStarters() {
         : `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam} — not on this ` +
           `roster in week ${state.week}. He is here because he filled a lineup spot in one of the ` +
           `weeks shown, and a marked week with no row to put it on would read as an empty slot.`;
+      // THE SAME CARD AS THE ROSTER DETAIL (Tim, 2026-10-08): his projection
+      // and his score, week by week, on the name. The card is the name's words
+      // now, so `who` moves to the link's aria-label — no title beside a card.
+      const card = nameCard(p, index, team.id, 'w');
 
       return `
       <tr class="${cls}">
         <td class="left" data-v="${row.depthValue}"><span class="depth-tag${row.held ? '' : ' muted'}">${esc(row.depth)}</span></td>
-        <td class="name" title="${esc(who)}">${
-          playerRef(p, esc(p.name), `${p.name} — ${OPENS}`)}</td>
+        <td class="name"${tipAttr(card)}>${
+          playerRef(p, esc(p.name), `${who}${row.held ? '.' : ''} Click to ${OPENS}.`, 'aria-label')}</td>
         <td class="left">${esc(p.position === 'DST' ? 'DEF' : p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td class="avg grouped"${row.avg === null ? '' : ` data-v="${row.avg}"`}>${fmt(row.avg)}</td>
@@ -5288,6 +5347,7 @@ function renderStarters() {
 
   renderStartersNote(weeks, rows, slots, label, unidentifiedCount(team, weeks));
   resort(table);
+  reopenTip();
 }
 
 /** Which button is lit, decided by the code rather than by the last click. */
@@ -5792,14 +5852,29 @@ function paintLit() {
   // scoring per game. Either can legitimately be missing, and says so rather
   // than printing a confident zero.
   const who = seasonWho.get(pid);
+  // THE WEEK UNDER THE POINTER (Tim, 2026-10-08): the cell draws his score OR
+  // his projection, so the line says both for a week that has been played. A
+  // week to come is only his projection, which the cell already shows — said
+  // here only where the cell shows an assumed number in its place.
+  const wk = state.seasonLitWeek;
+  const at = wk === null ? null : who.weeks.get(wk);
+  const cell = at ? mine.find((td) => Number(td.getAttribute('data-wk')) === wk) : null;
+  const num = (label, v) => (v === null ? null : `${label} <strong>${fmt(v)}</strong>`);
+  const weekParts = !at || !cell
+    ? []
+    : at.played
+      ? [num('proj', at.proj), num('scored', at.scored)]
+      : /(^|\s)assumed(\s|$)/.test(cell.getAttribute('class') || '') ? [num('proj', at.proj)] : [];
+  const said = weekParts.filter(Boolean);
   const bits = [
+    said.length ? `<span class="pick-wk">Wk ${wk} · ${said.join(' · ')}</span>` : '',
     who.seasonProj === null
       ? '<span class="pick-none">no season projection</span>'
       : `season proj <strong>${fmt(who.seasonProj)}</strong>`,
     who.avg === null
       ? '<span class="pick-none">nothing scored yet</span>'
-      : `avg <strong>${fmt(who.avg)}</strong> over ${plural(who.games, 'game')}`,
-  ];
+      : `avg <strong>${fmt(who.avg)}</strong><span class="pick-games"> over ${plural(who.games, 'game')}</span>`,
+  ].filter(Boolean);
   // The link the card's sheet used to offer. It has to live here now: on a
   // phone the tap is answered by this line instead of by navigation, so
   // without it the click-through would be desktop-only from this panel.
@@ -5807,14 +5882,40 @@ function paintLit() {
     ? ` <a class="pref pick-open" href="${esc(who.href)}">Open player</a>`
     : '';
 
-  line.innerHTML = `<strong>${esc(who.ident)}</strong> — ${bits.join(' · ')}${open}`;
+  line.innerHTML = `<strong>${esc(who.name)}<span class="pick-rest">${esc(who.rest)}</span></strong>` +
+    ` — ${bits.join(' · ')}${open}`;
+  fitPick(line);
 }
 
-/** Light one man across the whole grid, or clear it. */
-function lightPlayer(pid) {
+/**
+ * THE LINE NEVER GROWS AND NEVER RUNS OUT OF ITS BOX: its height is reserved
+ * (one line; two on a phone), so when what it has to say is longer than that,
+ * parts are dropped instead — first "over N games", then his position and
+ * team — by `data-fit`, which css/app.css reads. MEASURED on the element, so
+ * it is the real font and the real width; with no layout (the tests) nothing
+ * measures as too long and the whole line stays.
+ */
+function fitPick(line) {
+  line.removeAttribute('data-fit');
+  if (typeof getComputedStyle !== 'function') return;
+  let reserved;
+  try { reserved = parseFloat(getComputedStyle(line).minHeight); } catch { return; }
+  if (!Number.isFinite(reserved) || reserved <= 0) return;
+  const over = () => line.scrollWidth > line.clientWidth + 1 || line.offsetHeight > reserved + 1;
+  for (const step of ['1', '2']) {
+    if (!over()) return;
+    line.setAttribute('data-fit', step);
+  }
+}
+
+/** Light one man across the whole grid (naming the week of the cell), or clear it. */
+function lightPlayer(pid, week = null) {
   const next = pid === null || pid === undefined || pid === '' ? null : String(pid);
-  if (state.seasonLit === next) return;
+  const wk = next === null || week === null || week === '' || !Number.isFinite(Number(week))
+    ? null : Number(week);
+  if (state.seasonLit === next && state.seasonLitWeek === wk) return;
   state.seasonLit = next;
+  state.seasonLitWeek = wk;
   paintLit();
 }
 
@@ -6061,9 +6162,11 @@ $('changesView').addEventListener('click', (e) => {
   paintChanges();
 });
 
-// NO `wireTips` HERE. This panel deliberately has no player card — Tim,
-// 2026-09-18 — so the line above the table and the highlight are the whole of
-// what pointing at a number does. See `slotCell`.
+// NO CARD ON THE POSITION CELLS. Tim, 2026-09-18 — the line above the table
+// and the highlight are the whole of what pointing at a number does (see
+// `slotCell`), and no number cell here carries a `data-tip`. The Player rows'
+// NAMES do (Tim, 2026-10-08), which is all this wiring can ever open.
+wireTips($('seasonTable'));
 
 // NAMING THE MAN, AND LIGHTING HIS OTHER WEEKS.
 //
@@ -6083,7 +6186,7 @@ $('changesView').addEventListener('click', (e) => {
   const cellOf = (e) => (e.target.closest ? e.target.closest('td[data-pid]') : null);
   const light = (e) => {
     const td = cellOf(e);
-    if (td) lightPlayer(td.getAttribute('data-pid'));
+    if (td) lightPlayer(td.getAttribute('data-pid'), td.getAttribute('data-wk'));
   };
   season.addEventListener('mouseover', light);
   season.addEventListener('focusin', light);
@@ -6118,6 +6221,9 @@ document.addEventListener('keydown', (e) => {
 // "Who to start" opens on Depth — RB1, RB2, RB3 — because a depth chart read
 // out of order is not a depth chart. Ascending, so the starter is at the top.
 enableSort($('startersTable'), { defaultIndex: 0, defaultAsc: true });
+// The card on each name there, and on the names in the best-lineup line.
+wireTips($('startersTable'));
+wireTips($('rosterBest'));
 
 $('starterPosToggle').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-pos]');
