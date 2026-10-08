@@ -59,32 +59,27 @@ td.wait { color: var(--line); }
 /* GAIN: what adding him is worth to your own lineup, a week. The figure opens
    the weeks it is formed from (js/waivers-page.js, "where a gain comes from"):
    a card beside it for a mouse, a sheet at the foot of the screen for a finger.
-   The card is the Stats page's Schedule luck preview, rule for rule. */
-td.gain .gn { color: var(--accent); font-weight: 650; cursor: help; border-radius: 3px; }
+   The card is the site's stat card (`.statcard`, css/app.css) since 2026-10-08;
+   only the two things this page puts inside it are styled here. A click on the
+   figure goes to the man the move would drop, so the cursor is a pointer. */
+td.gain .gn { color: var(--accent); font-weight: 650; cursor: pointer; border-radius: 3px; }
 td.gain .gn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.opp-pop {
-  position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
-  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
-  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
-  font-size: 13px; font-variant-numeric: tabular-nums;
-}
-.opp-pop[hidden] { display: none; }
-.opp-pop .op-h { font-weight: 650; margin-bottom: 2px; }
-.opp-pop .op-drop { color: var(--dim); margin-bottom: 6px; }
-.opp-pop table { width: 100%; border-collapse: collapse; }
-.opp-pop th { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
-.opp-pop th, .opp-pop td { padding: 3px 6px; }
-.opp-pop .num { text-align: right; }
-.opp-pop .lbl { text-align: left; }
-.opp-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
-.opp-pop tfoot td { color: var(--dim); }
-.opp-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
-.opp-pop .op-close { display: none; }
-.opp-pop.sheet {
-  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
-  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
-}
-.opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+/* "Drop X", under the card's title, where this page's own pop-over had it. */
+.statcard .op-drop { color: var(--dim); margin: -4px 0 6px; }
+.statcard .op-drop a.pref { text-decoration: underline; text-underline-offset: 2px; }
+.statcard td.lbl { text-align: left; }
+
+/* THE PREVIEWS (js/waivers-page.js, "the previews"). A cell that opens one
+   says so with the cursor, as `[data-pop]` does everywhere else on the site,
+   and one whose click goes somewhere looks like it does. Nothing here changes
+   a cell's size: the card is a fixed child of <body>. */
+td[data-c] { cursor: help; }
+td[data-c][data-go] { cursor: pointer; }
+.mine-tag[tabindex] { cursor: pointer; }
+.mine-tag:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* In a list of men (a manager's RBs, your own QBs), the one the cell is about. */
+.statcard tr.sc-here td { font-weight: 650; }
+.statcard .sc-lead { color: var(--dim); }
 
 /* A week worth actually starting the player for, by the per-position bar in
    STARTABLE. Colour AND weight, never colour alone: this is the one cue on the
@@ -94,6 +89,10 @@ td.hot {
   color: var(--accent);
   font-weight: 650;
 }
+/* The week cells are on the red/green scale too (2026-10-08), and the scale
+   sets a weight of its own at a higher specificity. "Worth starting" keeps
+   its weight on top of it: colour AND weight, as above. */
+#waiverTable tbody td.hot { font-weight: 650; }
 /* The word "green" in the note, shown in the colour it is describing. */
 .hot-key { color: var(--accent); font-weight: 650; }
 
@@ -107,14 +106,25 @@ td.hot {
    is also what keeps them legible to anyone who cannot separate the hues.
 
    Written twice, because the zebra band and the row hover each paint their own
-   background and this has to survive both. */
+   background and this has to survive both.
+
+   background-COLOR, never the shorthand (2026-10-08): the week cells carry the
+   red/green scale now, which is a background-IMAGE, and the shorthand erased
+   it. So the tint sits over this shade — and because a tinted green cell and
+   this shade are then close in colour, the shade carries a RING as well: the
+   ring is what says "beats your worst man" on a cell that is also coloured.
+   An inset shadow, so the cell keeps its size. */
 #waiverTable tbody td.beats,
-#waiverTable tbody tr:hover td.beats { background: #16311f; }
+#waiverTable tbody tr:hover td.beats {
+  background-color: #16311f;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 /* Over the shade, the startable green needs to stay clearly the brighter cue. */
 #waiverTable tbody td.hot.beats { color: var(--accent-hi); }
 /* The phrase in the note, shown in the treatment it is describing. */
 .beats-key {
   background: #16311f;
+  box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: var(--r-1);
   padding: 1px 6px;
   color: var(--text);
@@ -303,7 +313,7 @@ tbody tr.spotlight td.name {
   color: var(--text);
 }
 .legend .sw.hot { color: var(--accent); font-weight: 650; }
-.legend .sw.beats { background: #16311f; }
+.legend .sw.beats { background: #16311f; border-color: var(--accent); }
 .legend .sw.bye { color: var(--warn); font-size: 11px; letter-spacing: 0.04em; }
 .legend .mine-tag { margin-right: 0; }
 
@@ -340,8 +350,8 @@ td.zero-out, td.zero { color: var(--dim); }
    `node tests/text-audit.mjs` measured as taking this page from 106 to 299
    words of visible prose in one afternoon. HANDOFF's panel shape is "a small
    visible key, the full method behind the toggle", so the method moved and the
-   key stayed. Every cell still carries its own exact standing in its `title`,
-   which js/touch-titles.js makes a tap on a phone.
+   key stayed. Every cell still says its own exact standing in its preview —
+   hover with a mouse, a tap on a phone.
 
    Each is hidden when empty, so a paragraph with nothing to say cannot leave a
    gap under a table that has no colours to explain. */
@@ -608,17 +618,17 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
     <div class="status" id="waiverStatus"></div>
 
     <!-- Two greens, told apart by treatment: bold green TEXT (td.hot) and a
-         green SHADE (td.beats). The two comparison keys hide when nobody is set
-         as you, because then neither of those can appear. -->
+         green SHADE with a ring (td.beats). The two comparison keys hide when
+         nobody is set as you, because then neither of those can appear. -->
     <div class="legend" id="waiverLegend">
       <span class="key"><span class="sw hot">14.2</span> worth starting</span>
       <span class="key" data-compare><span class="sw beats">9.8</span> beats your worst man</span>
       <span class="key" data-compare><span class="mine-tag">Your QB3</span> your own player</span>
-      <!-- The shared red/green scale, which on this table is on the Avg column
-           ALONE — the week cells belong to the two greens above. Two swatches,
-           the two ends; the shades between them are the steps. -->
-      <span class="key" data-when="td.avg.heat-up-4" hidden><span class="sw heat heat-up-4">14.8 <span class="heatmark">&#9650;</span></span> Avg: best of the free agents at his position</span>
-      <span class="key" data-when="td.avg.heat-dn-4" hidden><span class="sw heat heat-dn-4">3.2 <span class="heatmark">&#9660;</span></span> Avg: worst of them</span>
+      <!-- The shared red/green scale: Avg and every week still to play, each
+           against the other free agents at his position. Two swatches, the two
+           ends; the shades between them are the steps. -->
+      <span class="key" data-when="td.avg.heat-up-4" hidden><span class="sw heat heat-up-4">14.8 <span class="heatmark">&#9650;</span></span> best of the free agents at his position</span>
+      <span class="key" data-when="td.avg.heat-dn-4" hidden><span class="sw heat heat-dn-4">3.2 <span class="heatmark">&#9660;</span></span> worst of them</span>
       <!-- `data-when`: shown only while the table draws that mark. -->
       <span class="key" data-when="span.tag.wv" hidden><span class="tag wv">W &middot; Fri</span> on waivers until that day</span>
       <span class="key" data-when="td.bye"><span class="sw bye">Bye</span> no game</span>
