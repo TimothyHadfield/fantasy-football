@@ -202,6 +202,10 @@ section.panel h2.h2-inline {
   padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
 }
 .opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+/* Ten or eleven bars do not need a laptop's whole width: at 1362px each sat in
+   a 120px band and four fifths of the plot was air (docs/charts-plan.md A1).
+   A phone's box is under the cap, so nothing changes there. */
+#forecastChart, #simChart { max-width: 720px; }
 #forecastChart { margin-top: 16px; }
 /* Nothing to chart is a sentence, not a blank rectangle. An empty box has no
    height of its own, so losing the margin is the whole of hiding it — and it
