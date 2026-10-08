@@ -76,6 +76,7 @@ const SUITES = [
   ['test-trade-progress.mjs', 'the trade page in a week partly played: a finished man’s number is his score, and one early final does not end the week'],
   ['test-live-week.mjs','the week in progress: played out from its score so far and the share of the spread left, not from kickoff'],
   ['test-decisions.mjs', 'the decisions review: one decision undone and the season replayed, flips, records, noise'],
+  ['test-draft-review.mjs', 'the draft looked back on: where each man went, what he is worth now, the bar at each position, on the real league’s draft'],
   ['test-start-sit.mjs', 'start A over B: the swaps to the best legal lineup, their points, their share of the win chance, who is locked'],
   ['test-accept-by.mjs','when a trade must be accepted: first kickoff among the men you get, minus the league’s review'],
   ['test-ask-ai.mjs', 'the "Ask AI" text: both sides’ +/-, the men, the date and league, nothing undefined'],
@@ -105,6 +106,7 @@ const SUITES = [
   ['record-live-check.mjs', 'a record while its game is being played: 3–2 at 20% reads 3.2–2.8, the same on Stats, Summary and Schedule'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
   ['decisions-check.mjs', 'the decisions review page: a squad’s decisions, the weekly totals and the flipped matchup with one undone, the three charts beside their hypotheticals, noise, a what-if trade'],
+  ['draft-review-check.mjs', 'the Draft page’s "Our draft": the board, a team’s steals and misses, the previews, and what it asks of ESPN — nothing on the phone’s copy'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],
   ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],
   // Last, because it boots all seven pages and is the slowest thing here that

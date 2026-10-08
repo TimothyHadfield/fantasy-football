@@ -1623,3 +1623,121 @@ tfoot tr.league-row td { border-top: 2px solid var(--dim); }
 #changesTable td.d-down { color: var(--err); }
 #changesTable td.d-zero { color: var(--dim); }
 #changesTable tr th.fut-start, #changesTable tr td.fut-start { border-left: 3px solid var(--accent); }
+
+/* ============================================ Draft: "Our draft" (draft.html)
+ * Tim, 2026-10-08: "expand the draft section to show what our draft looked
+ * like and allow the user to select a specific user and see which big misses
+ * or steals they had". Everything here is `dr-` and belongs to that one view
+ * (js/draft-page.js, "the draft, looked back on"); nothing else uses it.
+ *
+ * TWO LAYOUTS. A laptop: the team's steals and misses beside the board, both
+ * on screen. A phone: one column, the team first, and the board scrolling
+ * sideways inside its own panel - the page itself never does.
+ * NOTHING MOVES ON A TAP: picking a team redraws numbers in place (the two
+ * tiles keep their room when a team has no steal or no miss), and a preview is
+ * a card over the page, never a row pushed into it. */
+.dr-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; margin-bottom: 6px; }
+.dr-head h1 { margin: 0; }
+#reviewView > .sub { margin-bottom: 16px; min-height: 1.4em; }
+/* The draft room was laid out for the ordinary page width and keeps it. */
+#roomView { max-width: 1140px; margin: 14px auto 0; }
+/* A read in progress, or why one failed; no room at all when there is nothing to say. */
+.dr-status { margin: 0 0 12px; }
+.dr-status:empty { display: none; }
+/* Sample or league: under the draft (see draft.html). */
+.dr-source { margin: 14px 0 6px; }
+/* WHOSE PICKS, on the panel that answers it. */
+.dr-team-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+/* (`section.panel > h2`, which this one no longer is a child for.) */
+.dr-team-head h2 {
+  margin: 0; white-space: nowrap;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); font-weight: 600;
+}
+.dr-team-head select { width: auto; min-width: 0; max-width: 60%; flex: 0 1 190px; padding-top: 6px; padding-bottom: 6px; }
+
+.dr-main { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 16px; }
+.dr-main > section.panel { margin-bottom: 0; min-width: 0; }
+
+/* The two tiles: the number big, the man under it. */
+#teamStats { flex-wrap: nowrap; gap: 16px; margin-bottom: 12px; }
+.dr-tile { flex: 1 1 0; min-width: 0; }
+.dr-tile .dr-who { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A team's picks are read whole, not through a window. */
+#panelTeam .table-scroll { max-height: none; }
+.dr-picks td.name { font-weight: 400; }
+.dr-picks td.dr-diff { font-weight: 600; }
+
+/* A NUMBER THAT OPENS what it is made of: the dotted line says so, as on
+ * Decisions. A player's name opens his card instead (js/player-card.js). */
+.dr-why { cursor: pointer; border-radius: 3px; text-decoration: underline dotted var(--line-2); text-underline-offset: 3px; }
+.dr-why:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dr-name[data-tip] { cursor: help; }
+
+/* THE BOARD: a column a team, a row a round. Fixed columns of one width, so a
+ * long name is cut with an ellipsis and never widens its team. `--dr-cols` is
+ * the number of teams (set by the page); under 74px a column the board scrolls
+ * inside its panel instead of squeezing. */
+.dr-board { table-layout: fixed; min-width: calc(30px + var(--dr-cols, 10) * 74px); }
+.dr-board th, .dr-board td { padding: 4px 5px; text-align: left; }
+.dr-board .dr-rd {
+  width: 30px; text-align: center; color: var(--dim);
+  position: sticky; left: 0; background-color: var(--panel); z-index: 1;
+  border-right: 1px solid var(--line-2);
+}
+.dr-board th.dr-rd { z-index: 3; }
+.dr-board tbody tr:nth-child(even) td.dr-rd { background-color: var(--row-alt); }
+.dr-board td.dr-cell { border-left: 1px solid var(--line); vertical-align: top; overflow: hidden; }
+.dr-board th.dr-col { border-left: 1px solid var(--line); overflow: hidden; }
+/* The team's name is the button that picks it. */
+.dr-board .dr-pick-team {
+  display: block; width: 100%; min-height: 0; padding: 2px 0; border: 0; border-radius: 3px; background: none;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dr-board .dr-pick-team:hover:not(:disabled) { background: none; color: var(--text); }
+.dr-board .dr-top {
+  display: flex; justify-content: space-between; gap: 4px;
+  font-size: 10.5px; line-height: 1.35; color: var(--dim); text-decoration: none; white-space: nowrap;
+}
+.dr-board .dr-top .dr-d { color: var(--text); font-weight: 600; text-decoration: underline dotted var(--line-2); text-underline-offset: 2px; }
+.dr-board .dr-name { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* THE PICKED TEAM'S COLUMN: a line down each side in the site's "selected"
+ * blue. A shadow, not a border or a background, so no cell changes size and
+ * the red/green tint (a background-image) is left alone. */
+.dr-board .dr-mine { box-shadow: inset 2px 0 0 var(--good), inset -2px 0 0 var(--good); }
+.dr-board th.dr-mine { color: var(--text); box-shadow: inset 2px 0 0 var(--good), inset -2px 0 0 var(--good), inset 0 2px 0 var(--good); }
+.dr-board tbody tr:last-child td.dr-mine { box-shadow: inset 2px 0 0 var(--good), inset -2px 0 0 var(--good), inset 0 -2px 0 var(--good); }
+
+/* WHERE A NUMBER COMES FROM: the Stats page's .opp-pop, as Decisions copied it.
+ * A card beside the number for a mouse; a sheet at the foot of the screen, with
+ * a Close button, for a finger. */
+.dr-pop {
+  position: fixed; z-index: 60; min-width: 220px; max-width: calc(100vw - 16px);
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.dr-pop[hidden] { display: none; }
+.dr-pop .op-h { font-weight: 650; margin-bottom: 6px; }
+.dr-pop table { width: 100%; border-collapse: collapse; }
+.dr-pop td { padding: 3px 6px; border-bottom: 0; background: none; position: static; box-shadow: none; border-right: 0; font-weight: 400; }
+.dr-pop .num { text-align: right; white-space: nowrap; }
+.dr-pop .name { text-align: left; color: var(--dim); }
+.dr-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
+.dr-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
+.dr-pop .op-close { display: none; }
+.dr-pop.sheet {
+  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
+  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
+}
+.dr-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+
+/* Under ~1000px the two no longer fit side by side: one column, the team first. */
+@media (max-width: 1000px) {
+  .dr-main { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 12px; }
+}
+@media (max-width: 760px) {
+  .dr-head .segmented { width: auto; flex: 1 1 190px; }
+  #reviewView > .sub { margin-bottom: 12px; }
+}
+/* ====================================================== end of "Our draft" */
