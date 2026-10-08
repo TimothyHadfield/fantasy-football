@@ -11,6 +11,9 @@
     "test-projection.mjs": {
       "assertions": 38
     },
+    "test-lineup-avg.mjs": {
+      "assertions": 73
+    },
     "test-floor.mjs": {
       "assertions": 113
     },
@@ -86,10 +89,13 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 387
+      "assertions": 911
     },
     "opp-check.mjs": {
       "scenarios": 7
+    },
+    "future-check.mjs": {
+      "scenarios": 8
     },
     "test-capture.mjs": {
       "assertions": 175

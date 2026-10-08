@@ -267,16 +267,47 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     </details>
   </section>
 
-  <section class="panel" id="panelOppProj">
-    <h2>Schedule luck &mdash; rest of season<span id="oppProjSpan"></span></h2>
-    <p class="lede">Each team&rsquo;s average projected opponent over the weeks still to play, hardest first. The last figure is the gap from the league average: + is easier.</p>
-    <div id="oppProjChart"></div>
-    <p class="panel-note" id="oppProjWarn" hidden></p>
-    <details class="explain">
-      <summary>How this works</summary>
-      <div class="panel-note" id="oppProjNote"></div>
-    </details>
-  </section>
+  <!-- THREE TO A LINE (Tim, 2026-10-08: roster strength "right next to the
+       schedule luck box", and "a future proj dif box"). All three are made of
+       the same read — every team's projected lineup in each week still to
+       play — and are drawn as the same ranked bars. `three` narrows the row's
+       column floor so they share a line on a laptop; on a phone they stack.
+       Schedule luck keeps its place in Tim's order; the two new boxes follow
+       it. -->
+  <div class="panel-row three">
+    <section class="panel" id="panelOppProj">
+      <h2>Schedule luck &mdash; rest of season<span id="oppProjSpan"></span></h2>
+      <p class="lede">Each team&rsquo;s average projected opponent over the weeks still to play, hardest first. The last figure is the gap from the league average: + is easier.</p>
+      <div id="oppProjChart"></div>
+      <p class="panel-note" id="oppProjWarn" hidden></p>
+      <details class="explain">
+        <summary>How this works</summary>
+        <div class="panel-note" id="oppProjNote"></div>
+      </details>
+    </section>
+
+    <section class="panel" id="panelStrength">
+      <h2>Roster strength<span id="strengthSpan"></span></h2>
+      <p class="lede">Best lineup, averaged over weeks left.</p>
+      <div id="strengthChart"></div>
+      <p class="panel-note" id="strengthKey" hidden></p>
+      <details class="explain">
+        <summary>How this works</summary>
+        <div class="panel-note" id="strengthNote"></div>
+      </details>
+    </section>
+
+    <section class="panel" id="panelProjDiff">
+      <h2>Future proj diff<span id="projDiffSpan"></span></h2>
+      <p class="lede">Projection minus each opponent&rsquo;s, averaged.</p>
+      <div id="projDiffChart"></div>
+      <p class="panel-note" id="projDiffKey" hidden></p>
+      <details class="explain">
+        <summary>How this works</summary>
+        <div class="panel-note" id="projDiffNote"></div>
+      </details>
+    </section>
+  </div>
 
   <section class="panel" id="panelEarly" hidden>
     <h2>Early season</h2>
