@@ -2655,32 +2655,59 @@ function renderForecast() {
     return;
   }
 
+  // THE RED/GREEN SCALE, ON ALL THREE NUMERIC COLUMNS, WITH TWO DIFFERENT
+  // COMPARISON GROUPS — because this table is about ONE team, and "compared
+  // with what?" has a different honest answer for a chance and for a total.
+  //
+  //   Win % — against THIS TEAM'S OWN REMAINING GAMES. It is the only column
+  //     here that is comparable across weeks, and the reason is worth stating:
+  //     a win chance is a ratio of two projections FROM THE SAME WEEK, so
+  //     everything that makes a week low-scoring for everybody has already
+  //     cancelled out of it. Green is one of this team's better chances, red
+  //     one of its worse.
+  //
+  //   You / Opp (the two projected totals) — against THE TEN TEAMS THAT WEEK
+  //     (docs/colour-plan.md, 2026-10-08), one scale per row. Down this table
+  //     they would be a trap: both move with the week as much as with the
+  //     opponent, so a squad with three starters on bye in week 9 would read
+  //     red, reporting the NFL calendar as a weakness in the roster. Across the
+  //     league inside one week the calendar is the same for everybody and
+  //     cancels out — the comparison the Stats page's Opp proj column makes.
+  //     Opp is INVERTED: a low projection across the table is the good news.
+  //
   // data-v is omitted, never blanked, so a missing projection sinks to the
   // bottom whichever way the column is sorted.
-  const pts = (v) => (v === null ? `<td>${dash}</td>` : `<td data-v="${v}">${fmt(v)}</td>`);
-
-  // THE RED/GREEN SCALE, ON EXACTLY ONE OF THIS TABLE'S THREE NUMERIC COLUMNS.
-  //
-  // This table is about ONE team, so there is no league dimension in it at all
-  // and the comparison group can only be "this team's other remaining games".
-  // That is a real group for one of the columns and a trap for the other two:
-  //
-  //   Win % — SCALED. It is the only column here that is comparable across
-  //     weeks, and the reason is worth stating: a win chance is a ratio of two
-  //     projections FROM THE SAME WEEK, so everything that makes a week
-  //     low-scoring for everybody has already cancelled out of it. Green is one
-  //     of this team's better chances, red one of its worse, and high is good
-  //     with nothing to argue about.
-  //
-  //   You / Opp (the two projected totals) — NOT scaled, and not out of
-  //     caution. Both move for two reasons at once: who the opponent is, and
-  //     which week it is. A squad with three starters on bye in week 9 projects
-  //     low that week and so does everyone else, so a red cell there would be
-  //     reporting the NFL calendar as a weakness in the roster — and an
-  //     inverted scale on Opp would call the same week an easy fixture. The
-  //     honest version of "how hard is this opponent" is measured down the
-  //     league in one week, which is the Stats page's Opp proj column, and that
-  //     one is already coloured and already inverted.
+  const weekScales = new Map();
+  const weekScale = (w, invert) => {
+    const key = `${w}:${invert ? 1 : 0}`;
+    if (!weekScales.has(key)) {
+      const all = (d.byWeek.get(w) || [])
+        .filter((g) => g.homeId != null && g.awayId != null)
+        .flatMap((g) => [projectedPoints(g, 'home'), projectedPoints(g, 'away')])
+        .filter((v) => v !== null);
+      weekScales.set(key, heatScale(all, { invert }));
+    }
+    return weekScales.get(key);
+  };
+  const pts = (v, w, name, invert) => {
+    if (v === null) return `<td>${dash}</td>`;
+    const scale = weekScale(w, invert);
+    const h = heatOf(v, scale);
+    // The card: the number, what the league averages that week, where it
+    // stands. No `title` — one preview per number.
+    const card = statCard({
+      title: name,
+      sub: `Week ${w} projection`,
+      rows: [
+        { label: 'Projected', value: fmt(v) },
+        ...(h ? [
+          { label: 'League average that week', value: h.avgText },
+          { label: 'Among the ten teams', value: h.standing },
+        ] : []),
+      ],
+    }, { prefix: POP.forecast });
+    return `<td data-v="${v}"${h ? ` class="${h.cls}"` : ''}${card}>${fmt(v)}${heatMarkHtml(h)}</td>`;
+  };
   //
   // `PCT_MIN_SPREAD`, not the points default: these are probabilities printed
   // as whole per cent. A run-in where every game sits between 49% and 51% is a
@@ -2738,8 +2765,8 @@ function renderForecast() {
           <td data-v="${w}">${w}</td>
           <td class="name"${teamCard(oppId, w, facts, POP.forecast)}>${esc(r.oppName)}</td>
           <td class="left muted" data-v="${r.mineHome ? 1 : 0}">${r.mineHome ? 'Home' : 'Away'}</td>
-          ${pts(r.mine)}
-          ${pts(r.theirs)}
+          ${pts(r.mine, w, team.name, false)}
+          ${pts(r.theirs, w, r.oppName, true)}
           ${chance}
           ${swingCells(w, swingState(swingInputs, team.id, w, simFailed))}
         </tr>`;
@@ -2752,14 +2779,21 @@ function renderForecast() {
   // would assume. The thresholds go in the tucked note with the method, which
   // is the split the Stats page already uses and what keeps the panel from
   // gaining ninety words of prose.
-  // The comparison group is the whole point here and stays: this column is
-  // measured against THIS team's own remaining games, not the league, and
-  // nobody would assume that. Why the two point columns are plain went into
-  // `heatPara` with the rest of the method.
+  // The comparison group is the whole point here and stays: Win % is measured
+  // against THIS team's own remaining games, not the league, and nobody would
+  // assume that. The points are the other way about — the league, one week at
+  // a time — and the opponent's column is turned over, which is the second
+  // thing nobody would assume. The rest went into `heatPara` with the method.
+  const ptsShaded = [...weekScales.values()].some(Boolean);
+  const ptsKey = ptsShaded
+    ? ' Points are shaded against the league that week; a weaker opponent is green.'
+    : '';
   setKey('forecastKey', heatWin
     ? '<strong>Win %</strong> is shaded against this team’s <em>own</em> remaining games, ' +
-      'not the league: green a better chance, red a worse. Ends carry ▲▼ and bold.'
-    : '<strong>Nothing is shaded</strong>: every game left is about the same chance.');
+      `not the league: green a better chance, red a worse.${ptsKey} Ends carry ▲▼ and bold.`
+    : ptsShaded
+      ? `<strong>Win %</strong> is not shaded: every game left is about the same chance.${ptsKey}`
+      : '<strong>Nothing is shaded</strong>: every game left is about the same chance.');
 
   const dist = forecast.winTotalDistribution(probs, bankedWins);
   const range = forecast.credibleRange(dist, 0.8);
@@ -2920,11 +2954,18 @@ function renderForecast() {
     ? `<strong>The colours.</strong> ${describeHeat(heatWin, {
       what: 'this team’s other remaining games', unit: false,
       high: 'one of its better chances', low: 'one of its worse',
-    })} The two point columns are deliberately left plain: they rise and fall with the week as ` +
-      'much as with the opponent, so a red there would be reporting a bye week as a weakness ' +
-      'in the roster. A win chance has no such problem — it is a ratio of two projections from ' +
-      'the same week, so everything that makes a week low-scoring for everybody has already ' +
-      'cancelled out of it.'
+    })} A win chance can be compared from week to week because it is a ratio of two ` +
+      'projections from the same week, so everything that makes a week low-scoring for ' +
+      'everybody has already cancelled out of it.'
+    : '';
+  // The two points columns: a different group, said separately so it is still
+  // said when Win % has nothing to shade.
+  const ptsPara = ptsShaded
+    ? '<strong>The two points columns</strong> are shaded against every team’s projection in ' +
+      'that same week, not against this team’s other weeks: down the table they rise and fall ' +
+      'with the week as much as with the opponent, and a bye week would read as a weak roster. ' +
+      'Green is a projection well above the league’s that week for this team, and well below ' +
+      'it for the opponent — an easier game. A figure opens the week’s average and where it stands.'
     : '';
 
   const swingPara =
@@ -2950,6 +2991,7 @@ function renderForecast() {
     standing,
     shape,
     heatPara,
+    ptsPara,
     swingPara,
     derivedCaveat(),
     projectionCaveat(lastWeek),

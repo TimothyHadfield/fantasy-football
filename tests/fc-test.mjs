@@ -1344,7 +1344,11 @@ async function check(scenario, boot) {
         if (!back || back[1] !== v.name) continue;
         pairs++;
         if (Math.abs(Number(pct.replace('%','')) + Number(back[5].replace('%','')) - 100) > 1.5) badSum++;
-        if (mine !== back[4] || theirs !== back[3]) mismatched++;
+        // The NUMBERS mirror. The ▲▼ beside them need not: each column has its
+        // own direction (the opponent's is turned over), so the same 149.8 is
+        // good news in one view and bad news in the other.
+        const bare = (s) => s.replace(/[▲▼\s]/g, '');
+        if (bare(mine) !== bare(back[4]) || bare(theirs) !== bare(back[3])) mismatched++;
         if ((where === 'Home') === (back[2] === 'Home')) sameSide++;
       }
     }
@@ -1680,11 +1684,42 @@ async function check(scenario, boot) {
     const shadedWin = winCells.filter((td) => heatSide(td));
     const fcKey = txt($('forecastKey'));
 
-    // The points columns stay plain in EVERY scenario, shaded or not — this is
-    // the half that fails if a later pass "finishes the job" and colours them.
-    c.ok('the two projected-points columns stay plain',
-      !fcRows.some((r) => heatSide(r.td[3]) || heatSide(r.td[4])),
-      fcRows.map((r) => `${r.td[3].getAttribute('class')}/${r.td[4].getAttribute('class')}`).join(','));
+    // THE TWO POINTS COLUMNS ARE COLOURED TOO (docs/colour-plan.md, Schedule),
+    // and against the one group that makes them honest: THE TEN TEAMS THAT
+    // WEEK. They used to be left plain because down this table they rise and
+    // fall with the week as much as with the opponent — a bye week would have
+    // read as a weak roster. Measured across the league inside one week, the
+    // week cancels out. The opponent's column is turned over: a low projection
+    // across the table is the good news.
+    const ptsCells = fcRows.flatMap((r) => [
+      { td: r.td[3], opp: false, week: r.cells[0], v: r.cells[3] },
+      { td: r.td[4], opp: true, week: r.cells[0], v: r.cells[4] },
+    ]);
+    const measured = ptsCells.filter((x) => /\bheat\b/.test(x.td.getAttribute('class') || ''));
+    const painted = ptsCells.filter((x) => heatSide(x.td));
+    c.ok('both projected-points columns are measured against the league that week',
+      measured.length === ptsCells.length,
+      `${measured.length} of ${ptsCells.length} measured`);
+    if (scenario === 'demo-mid' || scenario === 'live') {
+      const cards = painted.map((x) => ({ ...x, card: sheetOf(x.td), side: heatSide(x.td) }));
+      c.ok('some of them are far enough from the league to be painted', painted.length >= 2, `${painted.length} painted`);
+      const wrong = cards.filter((x) => {
+        const high = /(Highest|\d+(st|nd|rd|th) highest) of 10/.test(x.card ? x.card.text : '');
+        return (x.side === 'up') !== (x.opp ? !high : high);
+      });
+      c.ok('GREEN IS A HIGH PROJECTION FOR THE TEAM AND A LOW ONE FOR ITS OPPONENT',
+        wrong.length === 0, wrong.slice(0, 3).map((x) => `wk ${x.week} ${x.opp ? 'opp' : 'own'} ${x.side}: ${x.card && x.card.text}`).join(' | '));
+      const one = cards[0] || {};
+      c.ok('a points cell opens a card: the projection, the league’s average that week, and where it stands',
+        Boolean(one.card) && new RegExp(` · Week ${one.week} projection$`).test(one.card.title) &&
+        numOf(rowOf(one.card, 'Projected')) === numOf(one.v) &&
+        Number.isFinite(numOf(rowOf(one.card, 'League average'))) &&
+        /^(Highest|Lowest|\d+(st|nd|rd|th) (highest|lowest)) of 10$/.test(rowOf(one.card, 'Among the ten') || '') &&
+        !one.td.hasAttribute('title'),
+        one.card ? one.card.text : 'no card');
+      c.ok('the key says the points are measured against the league that week, and that a weak opponent is green',
+        /league that week/.test(fcKey) && /weaker opponent is green/.test(fcKey), fcKey);
+    }
 
     // THE KEY IS ON SCREEN — asserted whether anything is shaded or not, since
     // both branches below depend on the reader being able to READ the key.
@@ -1750,8 +1785,11 @@ async function check(scenario, boot) {
       // A run-in with one game left, or ten games all at the same chance. Both
       // are real, and both have to SAY they are — an unexplained absence of
       // colour reads as the feature being broken.
+      // "Nothing" would be untrue while the points columns still carry their
+      // league scale, so then it is Win % alone that is said to be unshaded.
       c.ok('with nothing to tell apart, the key says so rather than going blank',
-        /Nothing is shaded/.test(fcKey), fcKey.slice(0, 200));
+        measured.length ? /Win % is not shaded/.test(fcKey) : /Nothing is shaded/.test(fcKey),
+        fcKey.slice(0, 200));
     }
 
     // stat row

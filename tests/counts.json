@@ -30,7 +30,7 @@
       "assertions": 60
     },
     "charts-check.mjs": {
-      "assertions": 114
+      "assertions": 125
     },
     "test-bye-rule.mjs": {
       "assertions": 85,
@@ -138,8 +138,8 @@
       "assertions": 4739
     },
     "fc-test.mjs": {
-      "assertions": 1172,
-      "scenarios": 14
+      "assertions": 1306,
+      "scenarios": 15
     },
     "wv-test.mjs": {
       "assertions": 807,
