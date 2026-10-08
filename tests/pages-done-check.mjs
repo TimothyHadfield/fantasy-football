@@ -591,7 +591,7 @@ function analysisChecks(an, name, floors) {
 
   // -- the grids price a finished man at his score, and say so --
   ok('the Starting lineup grid says a finished man’s week-8 number is a score, never "ESPN projects"',
-    an.startersWeek8.length > 0 && an.startersWeek8.every((t) => /^T1 Player \d\d scored (nothing|[\d.]+) in week 8\./.test(t)),
+    an.startersWeek8.length > 0 && an.startersWeek8.every((t) => /^T1 Player \d\d scored (nothing|[\d.]+) in week 8(, projected [\d.]+)?\./.test(t)),
     an.startersWeek8.slice(0, 3));
   // -- "ACTUAL HISTORY" (Tim, 2026-10-05): the week being played is history --
   //
