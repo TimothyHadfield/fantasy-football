@@ -2587,7 +2587,7 @@ function renderDepth() {
   // draws no shade, and a key for one would describe nothing on screen.
   const tinted = [...tints.values()].some((t) => t.deep !== null || t.thin !== null);
   $('depthKey').innerHTML = tinted
-    ? 'Tint marks the three deepest and three thinnest per position — not the ±1 SD scale above.'
+    ? 'Tint marks the three deepest and three thinnest per position — not the colour scale above.'
     : '';
 
   renderBars(map);
@@ -3821,7 +3821,7 @@ function goalMethodHtml(span) {
     // seeds. Hence the band, and hence "=" rather than a rank.
     `<strong>It still moves by about ±${bandText()} of a percentage point between seeds</strong> — ` +
     `measured on the sample league over twelve seeds: the seed-to-seed spread of one offer’s ` +
-    `expected change has a standard deviation of 0.27 points and a worst case of 0.49, and the ` +
+    `expected change is typically 0.27 points and at worst 0.49, and the ` +
     `spread of the GAP between two offers, which is what decides the order, 0.32 and 0.47. ` +
     `So <strong>two offers closer than ${bandText()} of a point are shown as level</strong>, ` +
     `sharing one rank number with an “=” after it, instead of being ranked one above the other: ` +

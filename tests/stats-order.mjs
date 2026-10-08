@@ -99,7 +99,9 @@ async function boot() {
   });
   window.localStorage = localStorage;
   window.ResizeObserver = globalThis.ResizeObserver;
-  if (!window.location) window.location = { origin: 'null', href: 'about:blank' };
+  // The page is opened the way a card elsewhere on the site links to it
+  // (js/links.js `statsHref(3)`): see "arriving from another page" at the foot.
+  window.location = { origin: 'null', href: 'about:blank?team=3', search: '?team=3' };
   if (!window.postMessage) window.postMessage = () => {};
 
   const errors = [];
@@ -697,7 +699,7 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   const limitRows = [];
   for (const c of cells) {
     fire(c, 'mouseover');
-    const pop = $('oppPop');
+    const pop = $('statCard');
     const what = `${c.parentElement.children[0].textContent.trim()} ${c.dataset.explain}`;
     if (!pop || pop.hasAttribute('hidden')) { assert(false, `${what}: no card opened`); continue; }
     const rows = [...pop.querySelectorAll('tbody tr')].map((r) => [r.children[0].textContent, r.children[1].textContent]);
@@ -720,7 +722,12 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     assert(fix.length <= 1 && fix.every((r) => Math.abs(tenths(r[1])) === 1),
       `${what}: a Rounding row is one tenth, once: ${JSON.stringify(fix)}`);
     assert(!/[.!?]\s|NaN|undefined/.test(pop.textContent), `${what}: the card is labels and numbers: ${pop.textContent}`);
-    assert(pop.querySelector('.op-close'), `${what}: the card has no Close for a finger`);
+    // The card is the site-wide one (js/pop.js): a hover card cannot be clicked,
+    // so it carries no button; the sheet a finger gets, with its Close, is
+    // pop-check.mjs's to prove.
+    assert((pop.getAttribute('class') || '').split(/\s+/).includes('statcard') && !pop.querySelector('button, a'),
+      `${what}: the hover card is not the shared stat card, or carries a control nobody can press`);
+    assert(!c.hasAttribute('title'), `${what}: opening the card left a title on the cell`);
     fire(c, 'mouseout');
     assert(pop.hasAttribute('hidden'), `${what}: moving off the cell left the card open`);
   }
@@ -743,16 +750,30 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
       `the Single-week limit rows are ${key(limitRows)}, worked from the season ${key(want)}`);
   }
   // The same element as the schedule card, so only one can ever be open.
-  assert(document.querySelectorAll('.opp-pop').length === 1, 'the two previews are separate elements');
+  assert(document.querySelectorAll('.statcard').length === 1 && !$('oppPop'),
+    'the two previews are separate elements, or the page still builds its own card');
   // Luck score's rows are figures the page already prints: the glance row's
   // league average, and that team's own Opp Avg, Luck/wk and Close luck cells.
   const first = mainRows[0];
   fire(first[12], 'mouseover');
-  const got = [...$('oppPop').querySelectorAll('tbody tr')].map((r) => tenths(r.children[1].textContent));
+  const got = [...$('statCard').querySelectorAll('tbody tr')].map((r) => tenths(r.children[1].textContent));
   assert(got[1] === -tenths(first[5].textContent) && got[2] === tenths(first[9].textContent) &&
     got[3] === tenths(first[11].textContent),
     `Luck score rows ${JSON.stringify(got)} are not the row's own Opp Avg, Luck/wk and Close luck cells`);
   fire(first[12], 'mouseout');
+}
+
+// ARRIVING FROM ANOTHER PAGE (2026-10-08): `stats.html?team=3` marks that
+// team's row and no other, and does not become the saved "My team".
+{
+  const linked = [...document.querySelectorAll('#mainTable tbody tr.linked')];
+  const teamOf = (tr) => tr.querySelector('[data-team]')?.getAttribute('data-team');
+  assert(linked.length === 1 && teamOf(linked[0]) === '3',
+    `?team=3 marked ${linked.length} row(s): ${linked.map(teamOf).join(',')}`);
+  assert(linked.every((tr) => !(tr.getAttribute('class') || '').split(/\s+/).includes('me')),
+    'the linked row was drawn as My team');
+  const saved = globalThis.localStorage.getItem('ff.prefs') || '';
+  assert(!/highlight"\s*:\s*"?3/.test(saved), `the link was saved as the My team choice: ${saved}`);
 }
 
 if (problems.length) {

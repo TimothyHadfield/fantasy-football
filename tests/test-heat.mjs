@@ -33,7 +33,7 @@
 
 import {
   heatScale, heatOf, heatClass, heatMarkHtml, describeHeat, describeHeatPerColumn,
-  HEAT_EDGES, HEAT_STEPS, HEAT_MARK_STEP, HEAT_UP, HEAT_DOWN, HEAT_MIN_SPREAD,
+  heatStanding, ordinal, HEAT_EDGES, HEAT_STEPS, HEAT_MARK_STEP, HEAT_UP, HEAT_DOWN, HEAT_MIN_SPREAD,
 } from '../js/heat.js';
 import { stdev } from '../js/stats.js';
 
@@ -135,15 +135,83 @@ ok(/aria-hidden="true"/.test(heatMarkHtml(heatOf(25, s))),
 eq(heatMarkHtml(heatOf(23.75, s)), '', 'and nothing is emitted when there is no glyph');
 
 // Channel 3: words on the cell, with the number in them rather than an adjective.
-ok(/1\.0 SD above/.test(heatOf(25, s).words), 'the cell says how far out it is, in SD',
-  heatOf(25, s).words);
-ok(/1\.0 SD below/.test(heatOf(15, s).words), 'in both directions', heatOf(15, s).words);
-ok(/uncoloured/.test(heatOf(20, s).words),
-  'and a neutral cell says why it has no colour rather than saying nothing',
-  heatOf(20, s).words);
-ok(heatOf(22.5, s).words.includes('step 2 of 4'),
-  'a middling cell names its step, so the spectrum is legible without seeing it',
-  heatOf(22.5, s).words);
+//
+// PLAIN STANDING, NOT STANDARD DEVIATIONS. Tim, 2026-10-08: "a bad preview is …
+// the numbers in the week by week chart that talk about SD and info we don't
+// want or need". The words are now where the number RANKS in its group and what
+// the group averages — both of which a reader can check against the column.
+// EXACT is 15, 15, 20, 25, 25: two tied at the top, two tied at the bottom.
+eq(heatOf(25, s).words, 'Highest of 5 · league avg 20.0',
+  'the cell says where it ranks and what the group averages, in plain words');
+eq(heatOf(15, s).words, 'Lowest of 5 · league avg 20.0', 'from the low end for the bottom half');
+eq(heatOf(20, s).words, '3rd highest of 5 · league avg 20.0',
+  'and a neutral cell says the same kind of thing rather than explaining the scale');
+eq(heatOf(25, s, { what: 'a WR2 across the league' }).words,
+  'Highest of 5 · avg 20.0 for a WR2 across the league',
+  'a caller that names the group has it named');
+{
+  const h = heatOf(15, s);
+  eq(`${h.rank}/${h.lowRank}/${h.of}/${h.mean}`, '4/1/5/20',
+    'THE PIECES ARE HANDED BACK TOO — rank from the top, rank from the bottom, the count and the mean');
+  eq(h.standing, 'Lowest of 5', 'with the standing as its own piece');
+  eq(h.avgText, '20.0', 'and the average as it is printed');
+  eq(JSON.stringify(heatStanding(15, s)),
+    JSON.stringify({ rank: 4, lowRank: 1, of: 5, mean: 20, member: true }),
+    'heatStanding gives the same pieces without a cell');
+  eq(heatStanding(15, null), null, 'and nothing without a scale');
+  eq(heatStanding(22, s).of, 6, 'a value that is not one of the group is ranked among it, plus itself');
+  eq(heatOf(22, s).standing, '3rd highest of 6', 'and its words count it');
+}
+// Ten teams' week: the brief's own shape — "2nd of 10 · league avg 118.2".
+{
+  const WEEK = [94.4, 118, 130.2, 121, 110, 125.5, 117, 122.3, 128, 115.6];
+  const wk = heatScale(WEEK);
+  eq(heatOf(128, wk).words, '2nd highest of 10 · league avg 118.2', 'a real week, second best');
+  eq(heatOf(94.4, wk, { what: 'the other teams’ scores in week 1' }).words,
+    'Lowest of 10 · avg 118.2 for the other teams’ scores in week 1', 'and its worst');
+  eq(heatOf(110, wk).words, '2nd lowest of 10 · league avg 118.2', 'the bottom half counts up from the lowest');
+  eq(heatOf(118, wk).rank, 6, 'while `rank` always counts from the top, for a caller that wants one number');
+  const pct = heatScale([0.1, 0.25, 0.5, 0.75, 0.9]);
+  eq(heatOf(0.9, pct).avgText, '0.50', 'a group inside ±1 (a chance, a share) prints two decimals');
+  eq(heatOf(0.9, heatScale([0.1, 0.25, 0.5, 0.75, 0.9], { fmt: (v) => `${Math.round(v * 100)}%` })).words,
+    'Highest of 5 · league avg 50%', 'and a scale can say how its own numbers are printed');
+  eq(heatOf(0.9, pct, { fmt: (v) => `${Math.round(v * 100)} in 100` }).avgText, '50 in 100',
+    'or the caller can, cell by cell');
+  eq([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal).join(' '),
+    '1st 2nd 3rd 4th 11th 12th 13th 21st 22nd 23rd 101st 111th', 'ordinals are English ones');
+}
+// THE RULE AS A PROPERTY: no value on any scale, either direction, with or
+// without a named group, produces a word about the scale's own arithmetic.
+{
+  const BANNED = /\bSD\b|standard deviation|σ|z-score|step \d|of 4 on|end of the scale|middle band|uncoloured|NaN|undefined/i;
+  const groups = [EXACT, SYMMETRIC, [0, 0.4, 3.3, 9.9, 40, 41, 200], [-30, -2.5, 0, 7, 55.5],
+    [0.02, 0.4, 0.61, 0.99], Array.from({ length: 14 }, (_, i) => 80 + ((i * 37) % 61) + i / 10)];
+  const bad = [];
+  let looked = 0;
+  for (const g of groups) {
+    for (const invert of [false, true]) {
+      const sc = heatScale(g, { invert });
+      const lo = Math.min(...g) - 3 * sc.sd;
+      for (let i = 0; i <= 60; i++) {
+        const v = lo + (i / 60) * (Math.max(...g) - lo + 3 * sc.sd);
+        for (const what of ['', 'the other squads’ WR2 in week 3', 'his own weeks in this run']) {
+          const w = heatOf(v, sc, { what }).words;
+          looked += 1;
+          if (BANNED.test(w) || w.length > 90 || !/^(Highest|Lowest|\d+(st|nd|rd|th) (highest|lowest)) of \d+ · /.test(w)) bad.push(w);
+        }
+      }
+      for (const v of g) {
+        const h = heatOf(v, sc);
+        if (h.rank + h.lowRank > h.of + 1 || h.of !== g.length) bad.push(`rank ${h.rank}/${h.lowRank} of ${h.of} for ${v}`);
+      }
+    }
+  }
+  ok(bad.length === 0, `NO HEAT WORDS MENTION SD, A STEP OR THE SCALE — ${looked} cells looked at`,
+    bad.slice(0, 3).join(' | '));
+  ok(!/\bSD\b|standard deviation|σ|z-score|NaN|undefined/i.test(describeHeat(s) + describeHeat(inv0()) + describeHeatPerColumn() + describeHeat(null)),
+    'AND NEITHER DOES THE KEY UNDER A TABLE', describeHeat(s));
+}
+function inv0() { return heatScale(EXACT, { invert: true }); }
 
 // Channel 2 again, as a property rather than a case: weight is the stylesheet's
 // job, but the STEP it keys off has to be monotone in distance from the mean or
@@ -175,8 +243,8 @@ ok(mirrorWrong.length === 0, 'A GOOD CELL AND A BAD ONE THE SAME DISTANCE OUT GE
 const inv = heatScale(EXACT, { invert: true });
 eq(heatOf(25, inv).cls, 'heat heat-dn-4', 'on an inverted scale the HIGH number is red');
 eq(heatOf(15, inv).cls, 'heat heat-up-4', 'and the low number is green');
-ok(/1\.0 SD above/.test(heatOf(25, inv).words),
-  'while the words still say it is above the average — the z is about the NUMBER, not about goodness',
+ok(/^Highest of 5/.test(heatOf(25, inv).words),
+  'while the words still say it is the highest — the rank is about the NUMBER, not about goodness',
   heatOf(25, inv).words);
 eq(heatOf(25, inv).step, heatOf(25, s).step, 'inverting changes the hue, never the step');
 
@@ -252,8 +320,8 @@ ok(said.includes('25.0'), 'the key prints the green threshold in points, so a ce
   said);
 ok(said.includes('15.0'), 'and the red one', said);
 ok(said.includes('the other squads at this slot'), 'named as the group the caller says it is', said);
-ok(/average 20\.0.*SD 5\.0.*5 values/.test(said),
-  'with the mean, the spread and the sample size it was all taken from', said);
+ok(/average 20\.0 pts, 5 values/.test(said),
+  'with the mean and the sample size it was all taken from', said);
 ok(said.includes(HEAT_UP) && said.includes(HEAT_DOWN),
   'and it names the glyph, so the mark is explained rather than mysterious', said);
 ok(/heavier/.test(said), 'and says the type gets heavier, which is the channel with no hue at all',
@@ -428,6 +496,8 @@ ok(!/heavier/.test(heatNote),
   'AND IT DOES NOT PROMISE A HEAVIER TYPE — the card gives the weight channel to bold, so a key ' +
   'borrowed whole from describeHeat() would describe a cue that is not drawn',
   heatNote);
+ok(!/\bSD\b|standard deviation/.test(states.notes.join(' ') + heatOfCol(4).words),
+  'and neither the card’s key nor a cell’s words speak in standard deviations', heatNote);
 ok(!/NaN|undefined/.test(states.notes.join(' ')), 'no note leaks a NaN or an undefined',
   states.notes.join(' '));
 

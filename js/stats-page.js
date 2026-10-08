@@ -49,6 +49,8 @@ import {
 import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
+import { wirePops, hidePop } from './pop.js';
+import { readParam, teamHref } from './links.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('stats');
@@ -454,12 +456,16 @@ function renderMainTable() {
   const { avg: heatAvg, opp: heatOpp, fa: heatFA, luckWk: heatLuckWk } = scales;
 
   // `explain`: PTW, Close luck, Luck score, Skill and S+L open their parts
-  // (`explainHtml`, further down). The cell a card hangs off is about to go.
-  closePop();
-  wirePop(table, 'td[data-explain]', (el) => explainHtml(el.dataset.team, el.dataset.explain));
+  // (`explainSpec`, further down). The cell a card hangs off is about to go.
+  hidePop();
+  wirePops(table, {
+    selector: 'td[data-explain]',
+    card: (el) => explainSpec(el.dataset.team, el.dataset.explain),
+  });
   tbody.innerHTML = standingsRowsHtml(s, {
     highlightId: state.highlight, recordOf, oppProj, scales, explain: true,
   });
+  markLinkedRow();
 
   // Single-week columns are that week's score, not an average of anything.
   const heads = standingsHeadings(s);
@@ -1066,13 +1072,13 @@ function restSpan(weeks) {
 }
 
 function paintOppPanel(chart, note) {
-  closePop();
+  hidePop();
   // The weeks the chart is formed over, said in the heading itself.
   const said = $('oppProjSpan');
   const d = state.oppProj;
   const span = !state.oppPending && d && !d.error && d.rest ? restSpan(d.rest.weeks) : '';
   if (said) said.textContent = span ? ` (${span})` : '';
-  wirePop(chart, '.dd[data-opp]', (el) => oppPopHtml(el.dataset.opp));
+  wirePops(chart, { selector: '.dd[data-opp]', card: (el) => oppPopSpec(el.dataset.opp) });
 
   if (state.oppPending) {
     const p = state.oppProgress;
@@ -1164,14 +1170,17 @@ function oppBars(rows, leagueAvg) {
 // opens it as a sheet with a Close button; a tap outside or Escape also shuts
 // it. Nothing here is reachable only by hovering.
 
-let oppPop = null;
+// THE CARD ITSELF IS SHARED (js/pop.js, 2026-10-08): this page opened the
+// first one, and the frame, the hover, the sheet and the closing were lifted
+// out of here so every page opens the same thing. What stays is what only this
+// page knows — the rows.
 
-function oppPopHtml(teamId) {
+function oppPopSpec(teamId) {
   const data = state.oppProj;
   const rest = data && data.rest;
   const team = state.stats && state.stats.teams.find((t) => String(t.id) === String(teamId));
   const list = team && rest && rest.fixtures ? rest.fixtures.get(team.id) : null;
-  if (!list || !list.length) return '';
+  if (!list || !list.length) return null;
   const nameOf = (id) => {
     const t = state.stats.teams.find((x) => x.id === id);
     return t ? t.name : '—';
@@ -1179,104 +1188,17 @@ function oppPopHtml(teamId) {
   const avg = list.reduce((a, f) => a + f.opp, 0) / list.length;
   const league = rest.leagueAvg;
   const gap = typeof league === 'number' ? league - avg : null;
-  const rows = list.map((f) =>
-    `<tr><td class="num">${f.week}</td><td class="name">${esc(nameOf(f.oppId))}</td>` +
-    `<td class="num">${fmt(f.opp)}</td></tr>`).join('');
-  return (
-    `<div class="op-h">${esc(team.name)} <span class="muted">· ${restSpan(list.map((f) => f.week))}</span></div>` +
-    '<table><thead><tr><th class="num">Wk</th><th class="name">Opponent</th><th class="num">Proj</th></tr></thead>' +
-    `<tbody>${rows}</tbody><tfoot>` +
-    `<tr><td></td><td class="name">Average</td><td class="num">${fmt(avg)}</td></tr>` +
-    (gap === null ? '' :
-      `<tr><td></td><td class="name">League average</td><td class="num">${fmt(league)}</td></tr>` +
-      `<tr class="op-gap"><td></td><td class="name">Gap</td><td class="num">${gapOf(gap).text}</td></tr>`) +
-    '</tfoot></table>' +
-    '<button type="button" class="op-close">Close</button>'
-  );
-}
-
-// ONE CARD FOR EVERY PREVIEW ON THE PAGE. The opponents behind a schedule
-// gap (above) and the parts of a season luck cell (`explainHtml`, below) are
-// the same element, opened, placed and shut by the same three functions, so
-// two previews can never be open at once and neither can drift from the other.
-
-function closePop() {
-  if (oppPop) oppPop.hidden = true;
-}
-
-/** Show `html` for the figure `el`: a card beside it, or (`sheet`) a sheet at
- *  the foot of the screen. Empty `html` opens nothing. */
-function openPop(el, html, sheet) {
-  if (!html) return;
-  if (!oppPop) {
-    oppPop = document.createElement('div');
-    oppPop.id = 'oppPop';
-    document.body.appendChild(oppPop);
-    oppPop.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('.op-close')) closePop();
-    });
-  }
-  oppPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
-  oppPop.innerHTML = html;
-  oppPop.hidden = false;
-  oppPop.style.left = '';
-  oppPop.style.top = '';
-  if (sheet) return;
-  // Beside the figure: its right edge on the figure's, below it unless only
-  // above has the room.
-  const r = el.getBoundingClientRect();
-  const w = oppPop.offsetWidth;
-  const h = oppPop.offsetHeight;
-  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
-  const below = r.bottom + 6;
-  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
-  oppPop.style.left = `${left}px`;
-  oppPop.style.top = `${top}px`;
-}
-
-const popTriggers = [];
-
-/**
- * One set of listeners on a host that outlives every repaint of what is in it.
- *
- * @param {Element} host
- * @param {string} selector the figures inside it that open the card
- * @param {(el: Element) => string} htmlFor the card for one of them
- */
-function wirePop(host, selector, htmlFor) {
-  if (host.dataset.popWired) return;
-  host.dataset.popWired = '1';
-  const target = (e) => (e.target && e.target.closest ? e.target.closest(selector) : null);
-  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
-  host.addEventListener('mouseover', (e) => {
-    const el = target(e);
-    if (el && !noHover()) openPop(el, htmlFor(el), false);
-  });
-  host.addEventListener('mouseout', (e) => {
-    const el = target(e);
-    // Moving between the parts of one figure (a value and its ±) is not leaving it.
-    if (el && !noHover() && !(e.relatedTarget && el.contains(e.relatedTarget))) closePop();
-  });
-  host.addEventListener('click', (e) => {
-    const el = target(e);
-    if (el) openPop(el, htmlFor(el), noHover());
-  });
-  host.addEventListener('focusin', (e) => {
-    const el = target(e);
-    if (el && !noHover()) openPop(el, htmlFor(el), false);
-  });
-  host.addEventListener('focusout', () => { if (!noHover()) closePop(); });
-  // Escape and a click outside belong to the card, not to a host: once.
-  if (!popTriggers.length) {
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
-    document.addEventListener('click', (e) => {
-      if (!oppPop || oppPop.hidden) return;
-      if (oppPop.contains(e.target)) return;
-      if (e.target && e.target.closest && popTriggers.some((sel) => e.target.closest(sel))) return;
-      closePop();
-    });
-  }
-  popTriggers.push(selector);
+  return {
+    title: team.name,
+    sub: restSpan(list.map((f) => f.week)),
+    head: ['Wk', 'Opponent', 'Proj'],
+    rows: list.map((f) => ({ lead: f.week, label: nameOf(f.oppId), html: fmt(f.opp) })),
+    totals: [
+      { label: 'Average', html: fmt(avg) },
+      ...(gap === null ? [] : [{ label: 'League average', html: fmt(league) }]),
+    ],
+    total: gap === null ? null : { label: 'Gap', html: gapOf(gap).text },
+  };
 }
 
 // ------------------------------------------ where a season luck cell comes from
@@ -1288,21 +1210,55 @@ function wirePop(host, selector, htmlFor) {
 // where the adding up is kept exact). No sentences: the definitions are behind
 // "What the columns mean".
 
-function explainHtml(teamId, key) {
+function explainSpec(teamId, key) {
   const team = state.stats && state.stats.teams.find((t) => String(t.id) === String(teamId));
   const ex = team ? standingsExplain(state.stats, team, key) : null;
-  if (!ex) return '';
+  if (!ex) return null;
   const num = (r) => (r.signed ? signed(r.value) : fmt(r.value));
-  const rows = ex.rows.map((r) =>
-    `<tr><td class="name">${esc(r.label)}</td><td class="num">${num(r)}</td></tr>`).join('');
-  return (
-    `<div class="op-h">${esc(team.name)} <span class="muted">· ${esc(ex.label)}</span></div>` +
-    `<table><tbody>${rows}</tbody><tfoot>` +
-    `<tr class="op-gap"><td class="name">${esc(ex.mean ? 'Average' : ex.foot.label)}</td>` +
-    `<td class="num">${num(ex.foot)}</td></tr>` +
-    '</tfoot></table>' +
-    '<button type="button" class="op-close">Close</button>'
-  );
+  return {
+    title: team.name,
+    sub: ex.label,
+    rows: ex.rows.map((r) => ({ label: r.label, html: num(r) })),
+    total: { label: ex.mean ? 'Average' : ex.foot.label, html: num(ex.foot) },
+  };
+}
+
+// ------------------------------------------------ arriving from another page
+//
+// `stats.html?team=7` (js/links.js `statsHref`) is a card somewhere else on the
+// site saying "this team, in the standings". The row is outlined and brought
+// into view. It is NOT the "My team" choice — that is a saved preference, and a
+// link must not rewrite it — so it lasts for this visit only.
+
+const linkedTeam = readParam('team');
+// THE LANDING lasts until the reader touches the page. The table is painted
+// several times on the way in — the sample first, then the league, then again
+// as lazy reads arrive — and the panels above it grow each time, so one scroll
+// on the first paint leaves the row wherever the later ones pushed it. Each
+// paint therefore puts it back, after the rest of that paint has landed; the
+// first scroll, tap or key of the reader's own ends it for good, so nothing
+// ever drags the page out from under him.
+let landing = linkedTeam !== null;
+if (landing && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  const stop = () => { landing = false; };
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+    window.addEventListener(type, stop, { passive: true, once: true });
+  }
+}
+
+function markLinkedRow() {
+  if (linkedTeam === null) return;
+  const row = [...$('mainTable').querySelectorAll('tbody tr')].find((tr) => {
+    const cell = tr.querySelector('[data-team]');
+    return (tr.dataset.team ?? (cell ? cell.dataset.team : null)) === linkedTeam;
+  });
+  if (!row) return;
+  row.classList.add('linked');
+  if (!landing) return;
+  setTimeout(() => {
+    const now = $('mainTable').querySelector('tbody tr.linked');
+    if (landing && now && typeof now.scrollIntoView === 'function') now.scrollIntoView({ block: 'center' });
+  }, 0);
 }
 
 /** What the number is, that it needs no games, how it was derived, and over what. */
@@ -1458,7 +1414,7 @@ function renderFuturePanels() {
     const chart = $(box.chart);
     const note = $(box.note);
     if (!chart || !note) continue;
-    wirePop(chart, '.vv[data-fut]', (el) => futurePopHtml(el.dataset.fut, el.dataset.team));
+    wirePops(chart, { selector: '.vv[data-fut]', card: (el) => futurePopSpec(el.dataset.fut, el.dataset.team) });
     const key = $(box.key);
     const said = $(box.span);
     const plain = (html) => {
@@ -1512,22 +1468,22 @@ function futureBars(box, rows, scale) {
 }
 
 /** The preview behind a number: its weeks, then their average — the number. */
-function futurePopHtml(kind, teamId) {
+function futurePopSpec(kind, teamId) {
   const d = state.oppProj;
   const team = state.stats && state.stats.teams.find((t) => String(t.id) === String(teamId));
   const got = team && d && d.future && d.future[kind] ? d.future[kind].get(team.id) : null;
-  if (!got) return '';
-  const close = '<button type="button" class="op-close">Close</button>';
+  if (!got) return null;
+  const card = (weeks, tableHtml) => ({
+    title: team.name, sub: restSpan(weeks), tableHtml, href: teamHref(team.id), hrefLabel: 'Open roster',
+  });
   if (kind === 'strength') {
     const rows = got.weeks.map((x) =>
       `<tr><td class="num">${x.week}</td><td class="num">${fmt(x.total)}</td></tr>`).join('');
-    return (
-      `<div class="op-h">${esc(team.name)} <span class="muted">· ${restSpan(got.weeks.map((x) => x.week))}</span></div>` +
-      '<table><thead><tr><th class="num">Wk</th><th class="num">Proj</th></tr></thead>' +
+    return card(got.weeks.map((x) => x.week),
+      '<table class="sc-rows"><thead><tr><th class="num">Wk</th><th class="num">Proj</th></tr></thead>' +
       `<tbody>${rows}</tbody><tfoot>` +
-      `<tr class="op-gap"><td class="name">Average</td><td class="num">${fmt(got.avg)}</td></tr>` +
-      '</tfoot></table>' + close
-    );
+      `<tr class="sc-total"><td class="name">Average</td><td class="num">${fmt(got.avg)}</td></tr>` +
+      '</tfoot></table>');
   }
   const nameOf = (id) => {
     const t = state.stats.teams.find((x) => x.id === id);
@@ -1537,15 +1493,13 @@ function futurePopHtml(kind, teamId) {
     `<tr><td class="num">${x.week}</td><td class="name">${esc(nameOf(x.oppId))}</td>` +
     `<td class="num">${fmt(x.own)}</td><td class="num">${fmt(x.opp)}</td>` +
     `<td class="num">${gapOf(x.gap).text}</td></tr>`).join('');
-  return (
-    `<div class="op-h">${esc(team.name)} <span class="muted">· ${restSpan(got.games.map((x) => x.week))}</span></div>` +
-    '<table><thead><tr><th class="num">Wk</th><th class="name">Opponent</th><th class="num">Proj</th>' +
+  return card(got.games.map((x) => x.week),
+    '<table class="sc-rows"><thead><tr><th class="num">Wk</th><th class="name">Opponent</th><th class="num">Proj</th>' +
     '<th class="num">Opp proj</th><th class="num">Gap</th></tr></thead>' +
     `<tbody>${rows}</tbody><tfoot>` +
-    `<tr class="op-gap"><td></td><td class="name">Average</td><td class="num">${fmt(got.own)}</td>` +
+    `<tr class="sc-total"><td></td><td class="name">Average</td><td class="num">${fmt(got.own)}</td>` +
     `<td class="num">${fmt(got.opp)}</td><td class="num">${gapOf(got.avg).text}</td></tr>` +
-    '</tfoot></table>' + close
-  );
+    '</tfoot></table>');
 }
 
 /** What the number is and what it is made of (rule 7), behind the toggle. */
@@ -2065,7 +2019,7 @@ function renderWeeklyTable() {
         const v = valueOf(row);
         if (v === null) return `<td>${dash}</td>`;
         return withParts(heatCell(v, weekScales.get(w), {
-          what: `what the league did in week ${w}`,
+          what: `week ${w}`,     // "3rd lowest of 10 · avg 123.5 for week 1"
           text: cell(v),
         }), row);
       });
@@ -2073,7 +2027,7 @@ function renderWeeklyTable() {
       return `<tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name">${esc(t.name)}</td>${cells.join('')}
         ${showAvg ? heatCell(avg, avgScale, {
-    what: 'what the rest of the league averages', text: cell(avg),
+    text: cell(avg),         // "2nd highest of 10 · league avg 118.2"
   }) : ''}
       </tr>`;
     })

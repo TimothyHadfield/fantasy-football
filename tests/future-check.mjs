@@ -153,17 +153,17 @@ function readBox(document, ids) {
     let pop = null;
     if (vv) {
       vv.dispatchEvent(new document.defaultView.Event('mouseover', { bubbles: true }));
-      const el = $('oppPop');
+      const el = $('statCard');
       if (el && !el.hasAttribute('hidden')) {
         const cells = (sel) => Array.from(el.querySelectorAll(sel))
           .map((tr) => Array.from(tr.children).map((td) => clean(td.textContent)));
         pop = {
-          head: clean(el.querySelector('.op-h')?.textContent),
+          head: clean(el.querySelector('.tc-ident')?.textContent),
           cols: cells('thead tr')[0] || [], body: cells('tbody tr'), foot: cells('tfoot tr'),
         };
       }
       vv.dispatchEvent(new document.defaultView.Event('mouseout', { bubbles: true }));
-      if (pop) pop.shutAfter = $('oppPop').hasAttribute('hidden');
+      if (pop) pop.shutAfter = $('statCard').hasAttribute('hidden');
     }
     return {
       rank: Number(get('.rk')),

@@ -523,6 +523,33 @@ const SCENARIOS = {
     prefs: { 'schedule.source': 'live', 'schedule.week': 6 },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
   },
+  // ARRIVING FROM ANOTHER PAGE (2026-10-08): `schedule.html?week=1`, the link a
+  // card elsewhere on the site carries (js/links.js `weekHref`). Week 1 is
+  // decided here, so the saved-week rule above would refuse it as a SAVED
+  // week — as a link it is what the reader asked to see. It is not written
+  // over the saved week, and the first week picked by hand ends it.
+  'week-link': {
+    label: '(i) ?week= opens on that week, for this visit only',
+    stub: true,
+    env: { FC_IN_PROGRESS: '1' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 6 },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    search: '?week=1',
+    reloads: true,
+    after: async ({ document, window, waitFor }) => {
+      const sel = document.getElementById('weekSelect');
+      const opened = sel.value;
+      const title = document.getElementById('matchupsTitle').textContent;
+      const savedAfterOpen = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['schedule.week'];
+      sel.value = '3';
+      sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await settle(50);
+      document.querySelector('#sourceToggle button[data-src="live"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      await waitFor();
+      globalThis.__weeks = { opened, title, savedAfterOpen, reloaded: document.getElementById('weekSelect').value };
+    },
+  },
   'week-all': {
     label: '(i) "All weeks" is not a week, and never expires',
     stub: true,
@@ -585,7 +612,7 @@ async function boot(scenario) {
   });
 
   if (!window.location) {
-    window.location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', pathname: '/schedule.html', search: '', hash: '' };
+    window.location = { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', pathname: '/schedule.html', search: cfg.search || '', hash: '' };
   }
   globalThis.location = window.location;
   if (!window.postMessage) window.postMessage = () => {};
@@ -1349,7 +1376,8 @@ async function check(scenario, boot) {
       const titled = shadedWin[0];
       c.ok('a shaded Win % keeps its original title and gains the scale’s words',
         /scoring spread/.test(titled.getAttribute('title') || '') &&
-        /SD (above|below)/.test(titled.getAttribute('title') || ''),
+        /(highest|lowest) of \d+ · /i.test(titled.getAttribute('title') || '') &&
+        !/\bSD\b/.test(titled.getAttribute('title') || ''),
         titled.getAttribute('title'));
       // THE KEY IS SPLIT, the way the Stats page splits it: VISIBLE is what
       // changes what a number means, and the thresholds — the half that lets a
@@ -1365,7 +1393,7 @@ async function check(scenario, boot) {
         /▲▼/.test(fcKey) && !/standard deviation|% or better/.test(fcKey),
         fcKey.slice(0, 220));
       c.ok('and the tucked note prints the thresholds it turns at',
-        /Colour compares each number/.test(note) && /standard deviation/.test(note),
+        /Colour compares each number/.test(note) && /reaching full colour at/.test(note) && !/standard deviation/.test(note),
         note.slice(0, 260));
     } else {
       // A run-in with one game left, or ten games all at the same chance. Both
@@ -1528,7 +1556,7 @@ async function check(scenario, boot) {
     // The thresholds are the tucked half of the key, with the method, exactly
     // as the Stats page splits the same sentence. Both halves are required.
     c.ok('and the tucked note prints the figures the colours turn at',
-      /Colour compares each number/.test(simNote) && /standard deviation/.test(simNote),
+      /Colour compares each number/.test(simNote) && /reaching full colour at/.test(simNote) && !/standard deviation/.test(simNote),
       simNote.slice(simNote.indexOf('The colours'), simNote.indexOf('The colours') + 260));
     c.ok('the tucked note says each column is measured on its own, never across the table',
       /never across the table/.test(simNote), simNote.slice(0, 200));
@@ -2356,6 +2384,14 @@ async function check(scenario, boot) {
   if (scenario === 'week-ahead') {
     c.ok('a saved week still ahead of the league is honoured',
       $('weekSelect').value === '6', $('weekSelect').value);
+  }
+  if (scenario === 'week-link') {
+    const w = globalThis.__weeks || {};
+    c.ok('?week=1 OPENS ON WEEK 1, though the league is on week 2 and week 6 is the saved one',
+      w.opened === '1' && /Week 1\b/.test(w.title || ''), `opened on week ${w.opened}, heading "${w.title}"`);
+    c.ok('and the link is not written over the saved week', w.savedAfterOpen === 6, `saved week is ${w.savedAfterOpen}`);
+    c.ok('a week picked by hand outranks the link from then on, through a reload',
+      w.reloaded === '3', `reloaded on week ${w.reloaded}`);
   }
   if (scenario === 'week-all') {
     c.ok('"All weeks" is kept', $('weekSelect').value === 'all', $('weekSelect').value);

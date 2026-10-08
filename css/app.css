@@ -782,6 +782,204 @@ th.po-start, td.po-start,
 }
 .tipcard .tc-glance b { color: var(--text); font-weight: 600; }
 
+/* ==========================================================================
+ * PREVIEW CARDS — ONE FRAME FOR BOTH KINDS (2026-10-08)
+ *
+ * Tim: "If the user is curious about a number or it's breakdown or a detail
+ * about a stat or column or anything they should be able to hover over it and
+ * show a preview." There are two kinds of preview and they are one family:
+ *
+ *   the PLAYER card  js/player-card.js   #tipCard   .tipcard
+ *                    a man: name, ESPN's glance line, his Week/Proj/Act run
+ *   the STAT card    js/pop.js           #statCard  .tipcard.statcard
+ *                    a number: label-and-number rows that add up to it
+ *
+ * Both wear `.tipcard`, so the frame below — panel, border, corner, shadow,
+ * the sheet a finger gets and its two buttons — is written once and the two
+ * cannot drift apart. A mouse gets a card beside the thing it points at
+ * (`pointer-events: none`, so it can never be what the mouse is over); a
+ * finger gets the same card as a sheet at the foot of the window with the
+ * link the tap preempted as a button, and Close.
+ *
+ * THIS BLOCK IS THE WHOLE CONTRACT: a page that links css/app.css can draw
+ * either card with no page-local CSS. analysis.html and trade.html still carry
+ * their own older copy of the player card's half; it is the same rules, and a
+ * page's own <style> comes after this file, so theirs win there unchanged.
+ *
+ * NOTHING MOVES OR RESIZES ON HOVER OR TAP: the cards are `position: fixed`
+ * children of <body>, out of the page's flow.
+ * ========================================================================== */
+
+/* ---- the frame ---------------------------------------------------------- */
+.tipcard {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;               /* over the sticky headers, which claim 2 and 3 */
+  max-width: min(92vw, 720px);
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-3);
+  box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.75);
+  font-size: 12.5px;
+  color: var(--text);
+  pointer-events: none;
+}
+.tipcard[hidden] { display: none; }
+.tipcard.sheet {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: none;
+  padding: 14px var(--pad-panel) 16px;
+  border-width: 1px 0 0;
+  border-radius: var(--r-4) var(--r-4) 0 0;
+  box-shadow: 0 -14px 34px -10px rgba(0, 0, 0, 0.8);
+  pointer-events: auto;
+  font-size: 13px;
+}
+.tipcard.sheet .tc-ident { font-size: 15px; }
+
+/* The link the tap preempted, given back as a button — and a Close. */
+.tc-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+}
+.tc-open {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: var(--r-2);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: 13.5px;
+  text-decoration: none;
+}
+.tc-open-off {
+  background: transparent;
+  color: var(--dim);
+  font-weight: 500;
+  text-align: center;
+}
+.tc-close { flex: 0 0 auto; min-height: 44px; }
+
+.tc-ident { font-weight: 650; margin-bottom: 2px; }
+.tc-head, .tc-pending, .tc-legend, .tc-note { color: var(--dim); font-size: 11.5px; }
+.tc-head { margin-bottom: 7px; }
+.tc-legend { margin-top: 7px; line-height: 1.5; }
+.tc-note { margin-top: 7px; line-height: 1.5; }
+
+/* ---- the player card's run (Week / Proj / Act) -------------------------- */
+.tc-chart { display: grid; gap: 9px; }
+.tc-run {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tc-run th, .tc-run td {
+  border: none;
+  padding: 2px 7px;
+  text-align: center;
+  min-width: 34px;
+}
+.tc-run .tc-lbl {
+  text-align: right;
+  padding-right: 10px;
+  color: var(--dim);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  position: static;          /* every th is sticky by default; not in here */
+  background: none;
+}
+.tc-run thead th {
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  position: static;
+  background: none;
+  border-bottom: 1px solid var(--line);
+}
+.tc-run tbody td { font-size: 12.5px; padding-top: 4px; }
+.tc-run tfoot td, .tc-run tfoot th {
+  font-size: 11.5px;
+  padding-top: 3px;
+  border-top: 1px solid var(--line);
+}
+.tc-run tfoot td { color: var(--dim); }
+.tc-run .a-num { color: var(--text); }
+.tc-run .a-wait { color: var(--line); }
+.tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+.tc-run .k-out { color: var(--dim); line-height: 1.1; }
+.tc-run .tc-mk { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--err); }
+.tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
+.tc-run .k-wait { color: var(--line); }
+.tc-run .now { border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); }
+.tc-run thead th.now { color: var(--text); }
+@media (max-width: 760px) {
+  .tc-run th, .tc-run td { min-width: 32px; padding: 2px 6px; }
+  .tc-run .tc-lbl { padding-right: 7px; }
+}
+
+/* ---- the stat card's rows (js/pop.js) ----------------------------------
+ * A label and a number a row, the last line the figure they come to. The
+ * measurements are the Stats page's first preview of this kind (`.opp-pop`,
+ * 2026-10-06), kept to the pixel so that page reads as it did. */
+.statcard {
+  min-width: 250px;
+  max-width: calc(100vw - 16px);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.statcard .tc-ident { margin-bottom: 6px; }
+.statcard table { width: 100%; border-collapse: collapse; }
+.statcard th {
+  position: static;
+  background: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.statcard th, .statcard td { padding: 3px 6px; }
+.statcard .num { text-align: right; white-space: nowrap; }
+/* A label cell is a site-wide `td.name`: it keeps that rule's hairline to its
+ * right, as the first card of this kind did, but it is not a frozen column —
+ * no sticking, no shadow, and no panel colour painted over the card's own. */
+.statcard td.name, .statcard th.name {
+  text-align: left; position: static; box-shadow: none; background-color: transparent;
+}
+.statcard .sc-note { color: var(--dim); font-size: 11.5px; margin-left: 6px; }
+.statcard tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
+.statcard tfoot td { color: var(--dim); }
+.statcard tfoot .sc-total td { color: var(--text); font-weight: 650; }
+.statcard .sc-foot { color: var(--dim); font-size: 11.5px; margin-top: 6px; }
+/* With no link beside it, Close keeps the right-hand corner it had. */
+.statcard .tc-actions { justify-content: flex-end; }
+.statcard.sheet {
+  font-size: 14.5px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+/* Something that opens a stat card says so with the cursor, takes a focus
+ * ring, and — when a click goes somewhere — looks like it does. */
+[data-pop] { cursor: help; }
+[data-pop][data-pop-go] { cursor: pointer; }
+[data-pop]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* Where a deep link landed (stats.html?team=…): one outline, no layout. */
+tr.linked > td { box-shadow: inset 0 2px 0 var(--focus), inset 0 -2px 0 var(--focus); }
+
 /* ------------------------------------------------------------------- charts */
 
 .chart { width: 100%; margin-top: 4px; }

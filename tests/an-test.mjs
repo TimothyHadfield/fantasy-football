@@ -4949,8 +4949,9 @@ async function check(scenario, boot) {
     c.ok('A ZERO IN ANY OTHER WEEK IS A REAL 0.0, not a bye',
       w.dstW9 && w.dstW9.text.startsWith('0.0') && /\bzero\b/.test(w.dstW9.cls) &&
       !/\bbye\b/.test(w.dstW9.cls) && w.dstW9.v === '0', JSON.stringify(w.dstW9));
-    c.ok('and the cell says where it stands, in words and in standard deviations',
-      w.dstW9 && /SD below the average for a D\/ST across the league/.test(w.dstW9.label) &&
+    c.ok('and the cell says where it stands, in plain words',
+      w.dstW9 && /lowest of \d+ · avg [\d.]+ for a D\/ST across the league/i.test(w.dstW9.label) &&
+      !/\bSD\b/.test(w.dstW9.label) &&
       /Full colour is [\d.]+ or below and [\d.]+ or above/.test(w.dstW9.label),
       w.dstW9 && w.dstW9.label);
     c.ok('and an untouched week is a number as before',
@@ -5646,7 +5647,7 @@ async function check(scenario, boot) {
         .map((td) => td.text).slice(0, 4).join(' | '));
     c.ok('and every coloured cell says where it stands, in the title a tap opens',
       cells.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
-        .every((td) => /SD (above|below)/.test(td.title)),
+        .every((td) => /(highest|lowest) of \d+ · /i.test(td.title) && !/\bSD\b/.test(td.title)),
       cells.filter((td) => /heat-dn-/.test(td.cls))[0]?.title);
     c.ok('THE KEY UNDER THE GRID SAYS THE COLOUR IS PER COLUMN, which nobody would assume',
       /never compared across columns/.test(w.legend), w.legend);
@@ -5782,7 +5783,7 @@ async function check(scenario, boot) {
     // sentence is on the link's aria-label and on the card, which a tap opens.
     c.ok('EVERY COLOURED CELL SAYS WHERE IT STANDS, in the words a tap opens',
       all.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
-        .every((td) => /SD (above|below)/.test(td.aria)),
+        .every((td) => /(highest|lowest) of \d+ · /i.test(td.aria) && !/\bSD\b/.test(td.aria)),
       all.filter((td) => /heat-dn-/.test(td.cls))[0]?.aria);
     c.ok('and those cells still carry NO `title`, so the browser cannot draw a second tooltip',
       all.every((td) => td.title === ''),

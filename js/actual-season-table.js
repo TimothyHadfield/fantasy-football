@@ -268,7 +268,7 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
       if (!diffFrom) {
         if (!e) return `<td class="wk muted"${at}>—</td>`;
         const v = pointsOf(e);
-        const h = heatOf(v, scaleOf(c.week, row.key), { what: `the other squads’ ${row.key} in week ${c.week}` });
+        const h = heatOf(v, scaleOf(c.week, row.key), { what: `${row.key} in week ${c.week}` });
         const pj = proj ? projOf(e) : null;
         const both = pj === null ? '' : `: proj ${fmt(pj)}, scored ${fmt(scoreOf(e.p))}`;
         return `<td class="wk${unknown(e) ? ' sbw-proj' : ''}${h ? ` ${h.cls}` : ''}${chg(e, c.week)}" data-v="${v}" data-pid="${esc(e.p.playerId ?? '')}"${at} ` +
@@ -292,14 +292,14 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
     });
     return `<tr data-slot="${esc(row.key)}"><td class="name"${sortable ? ` data-v="${place}"` : ''}><span class="slot-tag">${esc(row.key)}</span></td>` +
       `${cells.join('')}` +
-      `${avgCell(rowAvg(fills, row.key), rowAvg(beforeFills, row.key), row.key, `the other squads’ ${row.key} average`)}</tr>`;
+      `${avgCell(rowAvg(fills, row.key), rowAvg(beforeFills, row.key), row.key, `${row.key} averages`)}</tr>`;
   }).join('');
 
   const band = `<tr class="split-row"><td class="name split-label">${esc(totalLabel)}</td>` +
     cols.map((c, i) => {
       const at = ` data-wk="${esc(c.week)}"${styles[i]}`;
       if (!diffFrom) {
-        const h = heatOf(c.total, scaleOf(c.week, null), { what: `the other squads’ totals in week ${c.week}` });
+        const h = heatOf(c.total, scaleOf(c.week, null), { what: `totals in week ${c.week}` });
         return `<td class="wk split-total${h ? ` ${h.cls}` : ''}" data-v="${c.total}"${at}` +
           `${h ? ` title="${esc(h.words)}"` : ''}>${fmt(c.total)}${heatMarkHtml(h)}</td>`;
       }
@@ -310,7 +310,7 @@ export function actualSeasonTableHtml({ weeks = [], rows = null, slots = null } 
     }).join('') +
     avgCell(meanOf(cols.map((c) => c.total)),
       meanOf(cols.map((c) => { const b = beforeOf && beforeOf.get(c.week); return b ? b.total : null; })),
-      null, 'the other squads’ average totals') + `</tr>`;
+      null, 'average totals') + `</tr>`;
 
   return `<table class="sbw-table sbw-actual"${box ? ` data-box="${esc(box)}"` : ''}` +
     `${diffFrom ? ' data-view="diff"' : ''}><thead>${head}</thead>` +

@@ -18,7 +18,7 @@
       "assertions": 113
     },
     "test-heat.mjs": {
-      "assertions": 168
+      "assertions": 186
     },
     "test-heat-sweep.mjs": {
       "assertions": 1300
@@ -30,7 +30,7 @@
       "assertions": 60
     },
     "charts-check.mjs": {
-      "assertions": 97
+      "assertions": 114
     },
     "test-bye-rule.mjs": {
       "assertions": 85,
@@ -92,7 +92,7 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 911
+      "assertions": 964
     },
     "opp-check.mjs": {
       "scenarios": 7
@@ -170,7 +170,7 @@
       "assertions": 44
     },
     "scatter-check.mjs": {
-      "assertions": 210
+      "assertions": 218
     },
     "stats-fit.mjs": {
       "assertions": 142
@@ -236,6 +236,9 @@
     },
     "draft-review-check.mjs": {
       "assertions": 84
+    },
+    "pop-check.mjs": {
+      "assertions": 114
     }
   }
 }

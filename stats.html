@@ -62,28 +62,8 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
  * at the foot of the screen for a finger. */
 .oppbars .dd[data-opp] { cursor: help; border-radius: 3px; }
 .oppbars .dd[data-opp]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.opp-pop {
-  position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
-  background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
-  padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
-  font-size: 13px; font-variant-numeric: tabular-nums;
-}
-.opp-pop[hidden] { display: none; }
-.opp-pop .op-h { font-weight: 650; margin-bottom: 6px; }
-.opp-pop table { width: 100%; border-collapse: collapse; }
-.opp-pop th { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
-.opp-pop th, .opp-pop td { padding: 3px 6px; }
-.opp-pop .num { text-align: right; }
-.opp-pop .name { text-align: left; }
-.opp-pop tfoot tr:first-child td { border-top: 1px solid var(--line-2); }
-.opp-pop tfoot td { color: var(--dim); }
-.opp-pop tfoot .op-gap td { color: var(--text); font-weight: 650; }
-.opp-pop .op-close { display: none; }
-.opp-pop.sheet {
-  left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 12px 12px 0 0;
-  padding: 16px 16px 20px; font-size: 14.5px; max-height: 80vh; overflow-y: auto;
-}
-.opp-pop.sheet .op-close { display: block; margin: 12px 0 0 auto; }
+/* The card itself is the site-wide stat card: js/pop.js, styled in css/app.css
+ * ("PREVIEW CARDS"). */
 /* The same card, for the standings cells that are formed from other figures
  * (js/stats-page.js, "where a season luck cell comes from"). */
 #mainTable td[data-explain] { cursor: help; }
@@ -213,11 +193,11 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           <th data-sort title="Total points scored so far this season.">Total</th>
           <th data-sort id="thOppAvg" title="Average points your opponents scored against you.">Opp Avg</th>
           <th data-sort title="Points for minus points against, per week &mdash; your average weekly margin.">F&minus;A</th>
-          <th data-sort title="Spread: the standard deviation of your weekly scores. Low means week-to-week consistency. Needs at least two weeks.">Spread</th>
+          <th data-sort title="Spread: how far your weekly scores swing from your average. Low means week-to-week consistency. Needs at least two weeks.">Spread</th>
           <th data-sort id="thOppProj" title="Opponent projection: the average of what the teams on your schedule are projected to score, across every fixture you play in the whole season. High means a hard schedule, which is bad luck you had no part in. This is the one column that needs no games played &mdash; it comes from the fixture list and ESPN&rsquo;s own per-week player projections, so it is readable before week 1.">Opp proj</th>
           <th data-sort title="Luck per week: your average score minus your average projection. Positive means you keep beating your projection.">Luck/wk</th>
           <th data-sort title="Points to win: your average opponent&rsquo;s score minus your own average luck &mdash; the projection you needed to beat a typical opponent.">PTW</th>
-          <th data-sort title="Close-game luck (your sheet&rsquo;s SD): weights each result by how close it was, so a one-point game scores near &plusmn;50 and a blowout near zero. The &plusmn; beside it is how far it could still move, and it narrows every week.">Close luck</th>
+          <th data-sort title="Close-game luck: weights each result by how close it was, so a one-point game scores near &plusmn;50 and a blowout near zero. The &plusmn; beside it is how far it could still move, and it narrows every week.">Close luck</th>
           <th data-sort title="Luck score (your sheet&rsquo;s LUCK) = league average &minus; (PTW &minus; close luck). One week counts &plusmn;50 at most. Above zero means the season has broken your way.">Luck score</th>
           <th data-sort title="Skill = your average projected score minus the league&rsquo;s average projected score.">Skill</th>
           <th data-sort title="Skill + luck score (your sheet&rsquo;s S+L).">S+L</th>

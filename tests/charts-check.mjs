@@ -475,5 +475,130 @@ const num = (el, attr) => Number(el.getAttribute(attr));
   ok(kept.some((s) => s === long), 'while the full name stays available in a <title>');
 }
 
+// ====================================================== the tooltip as a link
+//
+// 2026-10-08, "build any connectors by clicking on the preview": the shared
+// tooltip takes an optional href. A mouse click follows the mark it is
+// previewing; a finger's first tap only opens the tooltip and the second goes;
+// a chart given no `hrefFor` / `href` behaves exactly as it always did.
+{
+  const rect = (el) => { el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 720, height: 300 }); return el; };
+  const fire = (el, type, props = {}) => {
+    const e = new window.Event(type, { bubbles: true });
+    Object.assign(e, { pointerType: 'mouse', clientX: 0, clientY: 0 }, props);
+    el.dispatchEvent(e);
+  };
+  const tipText = (c) => (c.querySelector('div[role="status"]')?.textContent || '');
+
+  // LINE: one x position across every series, so the link is the week's.
+  {
+    const c = rect(host());
+    const went = [];
+    const asked = [];
+    const svg = rect(lineChart(c, {
+      series: [{ id: 1, name: 'A', values: [10, 20, 30] }, { id: 2, name: 'B', values: [30, 20, 10] }],
+      xLabels: ['Wk 1', 'Wk 2', 'Wk 3'],
+      hrefFor: (i, label) => { asked.push([i, label]); return `schedule.html?week=${i + 1}`; },
+      navigate: (href) => went.push(href),
+    }));
+    const overlay = svg.querySelector('.ff-overlay');
+    const x0 = Number(overlay.getAttribute('x'));
+    const w = Number(overlay.getAttribute('width'));
+    fire(overlay, 'click', { clientX: x0 + w });
+    eq(went.length, 0, 'line: with no tooltip up, a click goes nowhere');
+    fire(overlay, 'pointermove', { clientX: x0 + w, clientY: 50 });
+    ok(/Wk 3/.test(tipText(c)), 'line: hovering the last x position previews it', tipText(c));
+    eq(JSON.stringify(asked[asked.length - 1]), JSON.stringify([2, 'Wk 3']), 'line: hrefFor is asked with the index and its label');
+    eq(c.style.cursor, 'pointer', 'line: the chart shows a pointer while a link is previewed');
+    eq(went.length, 0, 'line: a hover alone goes nowhere');
+    fire(overlay, 'pointerdown', { clientX: x0 + w, clientY: 50 });
+    fire(overlay, 'click', { clientX: x0 + w, clientY: 50 });
+    eq(went.join('|'), 'schedule.html?week=3', 'line: a mouse click follows the previewed week');
+    fire(overlay, 'pointerleave');
+    eq(c.style.cursor, '', 'line: the pointer cursor goes with the tooltip');
+    fire(overlay, 'click', { clientX: x0 + w });
+    eq(went.length, 1, 'line: once the tooltip has gone a click goes nowhere');
+
+    // A FINGER: the first tap opens, the second on the same mark goes.
+    went.length = 0;
+    fire(overlay, 'pointerdown', { pointerType: 'touch', clientX: x0, clientY: 50 });
+    fire(overlay, 'pointerleave', { pointerType: 'touch' });   // a lifted finger leaves: the tooltip hides before the click
+    fire(overlay, 'click', { pointerType: 'touch', clientX: x0, clientY: 50 });
+    ok(/Wk 1/.test(tipText(c)) && went.length === 0, 'line: a first tap opens the tooltip and does not navigate', went.join('|'));
+    fire(overlay, 'pointerdown', { pointerType: 'touch', clientX: x0 + w, clientY: 50 });
+    fire(overlay, 'pointerleave', { pointerType: 'touch' });   // a lifted finger leaves: the tooltip hides before the click
+    fire(overlay, 'click', { pointerType: 'touch', clientX: x0 + w, clientY: 50 });
+    eq(went.length, 0, 'line: a tap on a DIFFERENT position moves the tooltip, and still does not navigate');
+    fire(overlay, 'pointerdown', { pointerType: 'touch', clientX: x0 + w, clientY: 50 });
+    fire(overlay, 'pointerleave', { pointerType: 'touch' });   // a lifted finger leaves: the tooltip hides before the click
+    fire(overlay, 'click', { pointerType: 'touch', clientX: x0 + w, clientY: 50 });
+    eq(went.join('|'), 'schedule.html?week=3', 'line: the second tap on the same position goes');
+
+    // Re-rendering must not stack a second pair of listeners on the container.
+    went.length = 0;
+    const again = rect(lineChart(c, {
+      series: [{ id: 1, name: 'A', values: [10, 20, 30] }],
+      xLabels: ['Wk 1', 'Wk 2', 'Wk 3'],
+      hrefFor: (i) => `schedule.html?week=${i + 1}`,
+      navigate: (href) => went.push(href),
+    }));
+    const ov2 = again.querySelector('.ff-overlay');
+    fire(ov2, 'pointermove', { clientX: x0, clientY: 50 });
+    fire(ov2, 'pointerdown', { clientX: x0, clientY: 50 });
+    fire(ov2, 'click', { clientX: x0, clientY: 50 });
+    eq(went.join('|'), 'schedule.html?week=1', 'line: a re-render leaves ONE click listener, not two');
+  }
+  // LINE, no hrefFor: nothing changed.
+  {
+    const c = rect(host());
+    const svg = rect(lineChart(c, { series: [{ id: 1, name: 'A', values: [1, 2] }], xLabels: ['a', 'b'] }));
+    const overlay = svg.querySelector('.ff-overlay');
+    const had = window.location;
+    window.location = { href: 'start' };
+    fire(overlay, 'pointermove', { clientX: 100, clientY: 50 });
+    fire(overlay, 'pointerdown', { clientX: 100, clientY: 50 });
+    fire(overlay, 'click', { clientX: 100, clientY: 50 });
+    eq(window.location.href, 'start', 'a chart given no hrefFor never navigates');
+    ok(c.style.cursor !== 'pointer', 'and shows no pointer cursor');
+    window.location = had;
+  }
+  // HISTOGRAM: a bar.
+  {
+    const c = rect(host());
+    const went = [];
+    const svg = rect(histogram(c, {
+      bins: ['80–100', '100–120'], counts: [3, 5], yLabel: 'weeks',
+      hrefFor: (i, bin) => `stats.html?bin=${i}:${bin}`,
+      navigate: (href) => went.push(href),
+    }));
+    const hit = all(svg, '.ff-hit')[1];
+    fire(hit, 'pointermove', { clientX: 300, clientY: 50 });
+    fire(hit, 'pointerdown', { clientX: 300, clientY: 50 });
+    fire(hit, 'click', { clientX: 300, clientY: 50 });
+    eq(went.join('|'), 'stats.html?bin=1:100–120', 'histogram: a click on a bar follows hrefFor(index, bin)');
+  }
+  // BOX PLOT: a row carries its own href.
+  {
+    const c = rect(host());
+    const went = [];
+    const svg = rect(boxPlot(c, {
+      rows: [
+        { id: 7, name: 'Kenny', min: 80, q1: 100, median: 115, q3: 130, max: 150, href: 'analysis.html?team=7#rosterDetail' },
+        { id: 8, name: 'Kyle', min: 70, q1: 90, median: 105, q3: 120, max: 140 },
+      ],
+      navigate: (href) => went.push(href),
+    }));
+    const hits = all(svg, '.ff-box-hit');
+    fire(hits[1], 'pointermove', { clientX: 300, clientY: 50 });
+    fire(hits[1], 'pointerdown', { clientX: 300, clientY: 50 });
+    fire(hits[1], 'click', { clientX: 300, clientY: 50 });
+    eq(went.length, 0, 'box plot: a row with no href goes nowhere');
+    fire(hits[0], 'pointermove', { clientX: 300, clientY: 20 });
+    fire(hits[0], 'pointerdown', { clientX: 300, clientY: 20 });
+    fire(hits[0], 'click', { clientX: 300, clientY: 20 });
+    eq(went.join('|'), 'analysis.html?team=7#rosterDetail', 'box plot: a click on a row follows that row’s href');
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

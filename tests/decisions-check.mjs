@@ -701,8 +701,8 @@ const CHILDREN = {
             if (c.v === null) continue;
             // (The Avg column, the last: a slot's Avg against the other squads' Avg there.)
             const what = c.avg
-              ? `the other squads’ ${row.slot === 'Total' ? 'average totals' : `${row.slot} average`}`
-              : `the other squads’ ${row.slot === 'Total' ? 'totals' : row.slot} in week ${i + 1}`;
+              ? `${row.slot === 'Total' ? 'average totals' : `${row.slot} average`}`
+              : `${row.slot === 'Total' ? 'totals' : row.slot} in week ${i + 1}`;
             const want = H.heatOf(c.v, scale, { what }) || { cls: '', mark: '', words: '' };
             heat.cells++;
             if (c.avg) heat.avgCells = (heat.avgCells || 0) + 1;

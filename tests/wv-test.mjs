@@ -731,7 +731,7 @@ function checkHeat(c, d, scenario, note) {
       wire.filter((r) => /\bmine\b/.test(r.cls))[0]?.cells[AVG].title);
     c.ok('THE COMPARISON GROUP IS HIS POSITION, said on every coloured Avg',
       wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
-        .every((td) => /SD (above|below)/.test(td.title) && /free-agent/.test(td.title)),
+        .every((td) => /(highest|lowest) of \d+ · /i.test(td.title) && !/\bSD\b/.test(td.title) && /free-agent/.test(td.title)),
       wireAvg.filter((td) => /heat-(up|dn)-\d/.test(td.cls))[0]?.title);
     // The swatch in the legend above the table, shown in the very treatment
     // the table draws. `data-when` hides it unless the mark is on screen, so
@@ -800,7 +800,7 @@ function checkHeat(c, d, scenario, note) {
           /\bheat\b/.test(td.cls)).map((td) => `${td.text}:${td.cls}`).slice(0, 3)));
     c.ok('every coloured week cell says which position AND which week it was measured in',
       takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls))
-        .every((td) => /SD (above|below)/.test(td.title) && /in week \d+/.test(td.title)),
+        .every((td) => /(highest|lowest) of \d+ · /i.test(td.title) && !/\bSD\b/.test(td.title) && /in week \d+/.test(td.title)),
       takenWeeks.filter((td) => /heat-(up|dn)-\d/.test(td.cls))[0]?.title);
     c.ok('a cell at the end of the scale carries the glyph, and only there',
       [...takenAvg, ...takenWeeks].filter((td) => /heat-(up|dn)-4/.test(td.cls))
