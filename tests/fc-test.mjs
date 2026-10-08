@@ -153,7 +153,11 @@ const SCENARIOS = {
     stub: true,
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
-    chartWidth: 1362,          // the chart box on a 1440px laptop; every other scenario is a phone's 337
+    // A wide box; every other scenario is a phone's 337. The page now caps these
+    // two charts at 720px on a laptop, but 720 is also the drawing's own
+    // fallback width, so a 720 here could not tell "drawn at the box's width"
+    // from "drawn as the fallback picture". 1362 can.
+    chartWidth: 1362,
   },
   'live-noteam': {
     label: '(c) same, with no team set as the owner',
@@ -247,7 +251,7 @@ const SCENARIOS = {
 
       // ---- the preview: a finger, then a mouse ------------------------------
       const fig = table.querySelector('.sw-v[data-swing]');
-      const pop = () => $('swingPop');
+      const pop = () => $('statCard');   // the site's one stat card (js/pop.js)
       const shut = () => !pop() || pop().hasAttribute('hidden');
       if (fig) {
         const mm = globalThis.matchMedia;
@@ -260,9 +264,9 @@ const SCENARIOS = {
           open: !shut(), cls: pop() ? pop().getAttribute('class') : '',
           text: pop() ? pop().textContent.replace(/\s+/g, ' ').trim() : '',
           cells: pop() ? [...pop().querySelectorAll('tbody td.num, tfoot td.num')].map((c) => c.textContent.trim()) : [],
-          close: pop() ? pop().querySelectorAll('button.op-close').length : 0,
+          close: pop() ? pop().querySelectorAll('button.tc-close').length : 0,
         };
-        if (pop()) fire(pop().querySelector('.op-close'), 'click');
+        if (pop()) fire(pop().querySelector('.tc-close'), 'click');
         out.sheet.shutByClose = shut();
         fire(fig, 'click');
         fire(document.body, 'click');
@@ -483,6 +487,76 @@ const SCENARIOS = {
         pickedName,
         prefs: globalThis.localStorage.getItem('ff.prefs'),
       };
+    },
+  },
+  // THE TWO CHARTS' VIEW SWITCHES (docs/charts-plan.md B3, B4).
+  //
+  // The page is opened with BOTH switches saved on their second view, so the
+  // first reading proves the choice is remembered; then each is pressed back
+  // and forth, and the box the bars are drawn in is read every time — a switch
+  // that moved the chart would be a switch nobody trusts.
+  'chart-views': {
+    label: '(j) the charts’ view switches: exactly / at least, each place / this place or better',
+    stub: false,
+    prefs: {
+      'schedule.source': 'demo', 'schedule.week': 5,
+      'schedule.forecastView': 'atleast', 'schedule.simView': 'better',
+    },
+    after: async ({ document, window }) => {
+      const $ = (id) => document.getElementById(id);
+      const box = { left: 0, top: 0, width: 337, height: 240 };
+      const snap = (chartId, viewId) => {
+        const chart = $(chartId);
+        const svg = chart.querySelector('svg');
+        const hits = svg ? [...svg.querySelectorAll('.ff-hit')] : [];
+        // The tooltip of the third bar, as a mouse would raise it.
+        let tip = '';
+        if (svg && hits[2]) {
+          svg.getBoundingClientRect = () => box;
+          chart.getBoundingClientRect = () => box;
+          hits[2].dispatchEvent(Object.assign(new window.Event('pointermove', { bubbles: true }),
+            { pointerType: 'mouse', clientX: 100, clientY: 50 }));
+          const el = chart.querySelector('div[role="status"]');
+          tip = el ? [...el.children].map((n) => [...n.children].length
+            ? [...n.children].map((x) => x.textContent).join(' ') : n.textContent).join(' / ') : '';
+        }
+        return {
+          on: [...$(viewId).querySelectorAll('button.on')].map((b) => b.getAttribute('data-view')),
+          shown: !$(viewId).hasAttribute('hidden'),
+          labels: [...$(viewId).querySelectorAll('button')].map((b) => b.textContent.trim()),
+          values: svg ? hits.map((h) => {
+            const bar = svg.querySelector(`.ff-bar[data-i="${h.getAttribute('data-i')}"] title`);
+            const m = bar ? /:\s*([\d.,]+)$/.exec(bar.textContent.trim()) : null;
+            return m ? Number(m[1].replace(/,/g, '')) : 0;
+          }) : [],
+          // The largest number printed down the y-axis (right-aligned ticks).
+          axisTop: svg ? Math.max(...[...svg.querySelectorAll('text[text-anchor="end"]')]
+            .map((t) => Number(t.textContent)).filter(Number.isFinite)) : 0,
+          viewBox: svg ? svg.getAttribute('viewBox') : '',
+          plot: hits[0] ? [hits[0].getAttribute('y'), hits[0].getAttribute('height')].join('/') : '',
+          bins: hits.length,
+          tip,
+        };
+      };
+      const press = (viewId, view) => $(viewId).querySelector(`button[data-view="${view}"]`)
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      const saved = () => JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}');
+      const out = { fc: {}, sim: {} };
+      out.fc.opened = snap('forecastChart', 'forecastView');
+      out.sim.opened = snap('simChart', 'simView');
+      press('forecastView', 'exact');
+      press('simView', 'each');
+      out.fc.first = snap('forecastChart', 'forecastView');
+      out.sim.first = snap('simChart', 'simView');
+      out.savedFirst = { fc: saved()['schedule.forecastView'], sim: saved()['schedule.simView'] };
+      out.tableRows = document.querySelectorAll('#simTable tbody tr:not(.empty-row)').length;
+      press('forecastView', 'atleast');
+      press('simView', 'better');
+      out.fc.second = snap('forecastChart', 'forecastView');
+      out.sim.second = snap('simChart', 'simView');
+      out.savedSecond = { fc: saved()['schedule.forecastView'], sim: saved()['schedule.simView'] };
+      out.note = $('forecastNote').textContent.replace(/\s+/g, ' ');
+      globalThis.__chartViews = out;
     },
   },
   // A SAVED WEEK EXPIRES ON LIVE DATA ONCE THE LEAGUE HAS MOVED PAST IT.
@@ -1124,6 +1198,11 @@ async function check(scenario, boot) {
     const first = rows[0] || {};
     c.ok('a tap opens the sheet, with a Close button', Boolean(sheet.open) && /\bsheet\b/.test(sheet.cls) && sheet.close === 1,
       JSON.stringify(sheet));
+    // The page's own popover became the site's stat card (2026-10-08).
+    c.ok('it is the shared stat card, and the page’s own popover is gone',
+      /\bstatcard\b/.test(sheet.cls || '') && !d.getElementById('swingPop') &&
+      !/opp-pop|op-close|swingPop/.test(readFileSync(path.join(REPO, 'schedule.html'), 'utf8')),
+      sheet.cls);
     c.ok('a finger gets nothing from hover', s.touchHover === false, String(s.touchHover));
     c.ok('the sheet says win, lose, the swing and the count',
       /If you win/.test(sheet.text) && /If you lose/.test(sheet.text) && /Swing/.test(sheet.text) &&
@@ -1163,6 +1242,81 @@ async function check(scenario, boot) {
     c.ok('the method is behind the toggle', /Title ± and Last ±/.test(s.note || '') && /10,000 times each way/.test(s.note || ''), s.note);
   }
 
+  // ---- (j): the charts' view switches --------------------------------------
+  if (scenario === 'chart-views') {
+    const v = globalThis.__chartViews || { fc: {}, sim: {} };
+    const sum = (xs) => (xs || []).reduce((a, b) => a + b, 0);
+    const falling = (xs) => (xs || []).every((x, i) => i === 0 || xs[i - 1] >= x - 1e-9);
+    const rising = (xs) => (xs || []).every((x, i) => i === 0 || xs[i - 1] <= x + 1e-9);
+    const running = (xs, fromEnd) => {
+      const out = [];
+      let acc = 0;
+      const order = fromEnd ? xs.map((_, i) => xs.length - 1 - i) : xs.map((_, i) => i);
+      for (const i of order) { acc += xs[i]; out[i] = acc; }
+      return out;
+    };
+    const near = (a, b, tol) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) <= tol);
+    const { fc, sim } = v;
+
+    c.ok('both switches are shown once there is a chart', Boolean(fc.opened && fc.opened.shown && sim.opened.shown));
+    c.ok('the forecast switch reads Exactly N / At least N',
+      (fc.opened?.labels || []).join('|') === 'Exactly N|At least N', (fc.opened?.labels || []).join('|'));
+    c.ok('the simulation switch reads Each place / This place or better',
+      (sim.opened?.labels || []).join('|') === 'Each place|This place or better', (sim.opened?.labels || []).join('|'));
+
+    // Remembered: the page was opened with both saved on their second view.
+    c.ok('THE SAVED VIEW IS THE ONE THE PAGE OPENS ON: forecast "at least"',
+      (fc.opened?.on || []).join() === 'atleast' && falling(fc.opened.values) && Math.abs(fc.opened.values[0] - 100) < 0.2,
+      JSON.stringify(fc.opened));
+    c.ok('and the simulation on "this place or better"',
+      (sim.opened?.on || []).join() === 'better' && rising(sim.opened.values) &&
+      Math.abs(sim.opened.values[sim.opened.values.length - 1] - 100) < 0.2, JSON.stringify(sim.opened));
+
+    // The plain views.
+    c.ok('"Exactly N" is the chance of each win total: the bars add up to 100',
+      (fc.first?.on || []).join() === 'exact' && Math.abs(sum(fc.first.values) - 100) < 1.5, JSON.stringify(fc.first));
+    c.ok('"Each place" is the chance of each place: the bars add up to 100',
+      (sim.first?.on || []).join() === 'each' && Math.abs(sum(sim.first.values) - 100) < 1.5, JSON.stringify(sim.first));
+
+    // The added-up views are the plain ones added up, bar for bar (each bar is
+    // printed to a tenth, so a ten-bar sum can sit half a point out).
+    c.ok('"At least N" is every bar from N upwards, added',
+      near(fc.second?.values || [], running(fc.first?.values || [1], true), 0.6),
+      `${JSON.stringify(fc.second?.values)} vs ${JSON.stringify(running(fc.first?.values || [], true))}`);
+    c.ok('"This place or better" is every bar from 1st down to that place, added',
+      near(sim.second?.values || [], running(sim.first?.values || [1], false), 0.6),
+      `${JSON.stringify(sim.second?.values)} vs ${JSON.stringify(running(sim.first?.values || [], false))}`);
+
+    // NOTHING MOVES WHEN SWITCHING: same drawing, same plot box, same bins.
+    for (const [name, ch] of [['forecast', fc], ['simulation', sim]]) {
+      const all = [ch.opened, ch.first, ch.second].filter(Boolean);
+      c.ok(`the ${name} chart is the same box in every view`,
+        all.length === 3 && new Set(all.map((s) => `${s.viewBox}|${s.plot}|${s.bins}`)).size === 1 && Boolean(all[0].viewBox),
+        all.map((s) => `${s.viewBox}|${s.plot}|${s.bins}`).join(' , '));
+    }
+
+    // A running total reaches 100 and no further; an axis running to 150%
+    // (which a float's 100.00000001 used to buy) is a chart of nothing.
+    c.ok('a running total never pushes the axis past 100%',
+      fc.second?.axisTop === 100 && sim.second?.axisTop === 100 && fc.opened?.axisTop === 100,
+      JSON.stringify([fc.opened?.axisTop, fc.second?.axisTop, sim.second?.axisTop]));
+
+    c.ok('each press is saved for the next visit',
+      v.savedFirst?.fc === 'exact' && v.savedFirst?.sim === 'each' &&
+      v.savedSecond?.fc === 'atleast' && v.savedSecond?.sim === 'better',
+      JSON.stringify([v.savedFirst, v.savedSecond]));
+    c.ok('switching a view does not blank the simulation table', v.tableRows === 10, String(v.tableRows));
+
+    // A bar read in words, in the view it is drawn in.
+    c.ok('a bar of "Exactly N" says so', /^Exactly \d+ wins? \/\s+[\d.]+% chance$/.test(fc.first?.tip || ''), fc.first?.tip);
+    c.ok('a bar of "At least N" says so', /^At least \d+ wins? \/\s+[\d.]+% chance$/.test(fc.second?.tip || ''), fc.second?.tip);
+    c.ok('a bar of "Each place" says so', /^Finishes 3rd \/\s+[\d.]+% of seasons$/.test(sim.first?.tip || ''), sim.first?.tip);
+    c.ok('a bar of "This place or better" says so',
+      /^Finishes 3rd or better \/\s+[\d.]+% of seasons$/.test(sim.second?.tip || ''), sim.second?.tip);
+    c.ok('the method note describes the view on screen',
+      /at least that many/.test(v.note || ''), (v.note || '').slice(0, 400));
+  }
+
   // ---- (e): switching between teams --------------------------------------
   if (scenario === 'live-switch') {
     const views = globalThis.__views || {};
@@ -1190,7 +1344,11 @@ async function check(scenario, boot) {
         if (!back || back[1] !== v.name) continue;
         pairs++;
         if (Math.abs(Number(pct.replace('%','')) + Number(back[5].replace('%','')) - 100) > 1.5) badSum++;
-        if (mine !== back[4] || theirs !== back[3]) mismatched++;
+        // The NUMBERS mirror. The ▲▼ beside them need not: each column has its
+        // own direction (the opponent's is turned over), so the same 149.8 is
+        // good news in one view and bad news in the other.
+        const bare = (s) => s.replace(/[▲▼\s]/g, '');
+        if (bare(mine) !== bare(back[4]) || bare(theirs) !== bare(back[3])) mismatched++;
         if ((where === 'Home') === (back[2] === 'Home')) sameSide++;
       }
     }
@@ -1293,6 +1451,203 @@ async function check(scenario, boot) {
     c.ok('chart is drawn', $('forecastChart').querySelectorAll('path.ff-bar').length > 0);
   }
 
+  // ---- the previews (docs/previews-plan.md, Schedule) ----------------------
+  //
+  // Every number opens the site's one stat card (js/pop.js). A card is read
+  // here the way a FINGER opens it — as the sheet — because the sheet is the
+  // form that prints where a click goes (`a.tc-open`), so one reading gives
+  // the words and the connector both.
+  const W = d.defaultView;
+  const sheetOf = (el) => {
+    if (!el) return null;
+    const mm = globalThis.matchMedia;
+    globalThis.matchMedia = W.matchMedia = (q) =>
+      ({ matches: /hover:\s*none/.test(q), addEventListener() {}, removeEventListener() {} });
+    el.dispatchEvent(new W.Event('click', { bubbles: true, cancelable: true }));
+    const card = d.getElementById('statCard');
+    const open = Boolean(card) && !card.hasAttribute('hidden');
+    const out = open ? {
+      title: txt(card.querySelector('.tc-ident')),
+      rows: [...card.querySelectorAll('table tr')].map((tr) => [...tr.children].map((x) => txt(x))),
+      text: txt(card).replace(/\s*Close$/, ''),
+      href: card.querySelector('a.tc-open') ? card.querySelector('a.tc-open').getAttribute('href') : '',
+    } : null;
+    if (open) card.querySelector('.tc-close').dispatchEvent(new W.Event('click', { bubbles: true }));
+    globalThis.matchMedia = W.matchMedia = mm;
+    return out;
+  };
+  /** The value cell of the card row whose label starts with `label`. */
+  const rowOf = (card, label) => {
+    const r = card ? card.rows.find((x) => x.some((t) => t.startsWith(label))) : null;
+    return r ? r[r.length - 1] : null;
+  };
+  const numOf = (t) => (t == null ? NaN : Number(String(t).replace('−', '-').replace(/[^\d.+-]/g, '')));
+  const TEAM_LINK = /^analysis\.html\?team=\d+(&week=\d+)?#rosterDetail$/;
+
+  if (['demo-mid', 'live'].includes(scenario)) {
+    // -- nothing on the page is previewed twice, and no card talks method -----
+    const OPENS = '[data-pop], .sw-v[data-swing], td[data-pair], td[data-team]';
+    const popped = [...d.querySelectorAll(OPENS)];
+    const twice = popped.filter((el) => el.hasAttribute('title'));
+    c.ok('no element opens a card AND carries a title (one preview per number)',
+      twice.length === 0, `${twice.length} do`);
+    const texts = popped.map((el) => sheetOf(el)).filter(Boolean).map((s) => s.text);
+    c.ok('every one of them opens', texts.length === popped.length && popped.length > 80,
+      `${texts.length} of ${popped.length} opened`);
+    const jargon = texts.filter((t) => /\bSD\b|standard deviation|z-score|step \d of \d|scoring spread/i.test(t));
+    c.ok('NO CARD SAYS SD, z-score, "step n of 4" or "scoring spread"', jargon.length === 0, jargon.slice(0, 2).join(' | '));
+
+    // -- matchup cards: each side, projected · scored · difference ------------
+    const game = d.querySelector(scenario === 'live' ? '#matchups .game.upcoming' : '#matchups .game.final');
+    const sideName = game ? game.querySelector('.side.home .tname') : null;
+    const sideCard = sheetOf(sideName);
+    const scoreCard = sheetOf(game ? game.querySelector('.tscore.home') : null);
+    c.ok('a matchup side opens a card headed by that team, week and opponent',
+      Boolean(sideCard) && sideCard.title.startsWith(`${txt(sideName)} · Week `) && / · vs /.test(sideCard.title),
+      sideCard ? sideCard.title : 'no card');
+    c.ok('it gives Projected and Scored', rowOf(sideCard, 'Projected') !== null && rowOf(sideCard, 'Scored') !== null,
+      sideCard ? sideCard.text : '');
+    c.ok('its number opens the same card', Boolean(scoreCard) && scoreCard.text === sideCard.text, scoreCard ? scoreCard.text : 'no card');
+    c.ok('a click goes to that team and week on Analysis',
+      Boolean(sideCard) && TEAM_LINK.test(sideCard.href) &&
+      sideCard.href.includes(`&week=${(sideCard.title.match(/Week (\d+)/) || [])[1]}#`), sideCard ? sideCard.href : '');
+    if (scenario === 'demo-mid') {
+      const pr = numOf(rowOf(sideCard, 'Projected'));
+      const sc = numOf(rowOf(sideCard, 'Scored'));
+      const df = numOf(rowOf(sideCard, 'Difference'));
+      c.ok('a played game: the difference is the two printed figures apart',
+        Number.isFinite(df) && Math.abs((sc - pr) - df) < 0.051, `${sc} − ${pr} vs ${df}`);
+      c.ok('and it ends on the result', /^(Won|Lost) by \d+\.\d$|^Tied$/.test(rowOf(sideCard, 'Result') || ''),
+        sideCard ? sideCard.text : 'no card');
+    } else {
+      c.ok('a game to come: it ends on the win chance', /^\d+%$|^[<>]\d+%$/.test(rowOf(sideCard, 'Win chance') || ''),
+        sideCard ? sideCard.text : '');
+      const metaCard = sheetOf(game.querySelector('.gmeta'));
+      c.ok('the line under it opens both projections, the gap and who is favoured',
+        Boolean(metaCard) && rowOf(metaCard, 'Gap') !== null && / to win/.test(metaCard.text) &&
+        / v /.test(metaCard.title) && !game.querySelector('.gmeta').hasAttribute('title'),
+        metaCard ? metaCard.text : 'no card');
+      const away = sheetOf(game.querySelector('.side.away .tname'));
+      c.ok('the two sides’ chances add to 100',
+        Math.abs(numOf(rowOf(sideCard, 'Win chance')) + numOf(rowOf(away, 'Win chance')) - 100) <= 1,
+        `${rowOf(sideCard, 'Win chance')} + ${rowOf(away, 'Win chance')}`);
+    }
+
+    // -- the week summary tiles ------------------------------------------------
+    const sumTiles = [...d.querySelectorAll('#summary .stat')];
+    const hi = sheetOf(sumTiles[0]);
+    c.ok('every week-summary tile opens a card', sumTiles.length === 4 && sumTiles.every((t) => t.hasAttribute('data-pop')),
+      `${sumTiles.filter((t) => t.hasAttribute('data-pop')).length} of ${sumTiles.length}`);
+    c.ok('Highest-scoring game: the two scores add up to the tile, and a click opens that week',
+      Boolean(hi) && Math.abs(numOf(hi.rows[0][1]) + numOf(hi.rows[1][1]) - numOf(txt(sumTiles[0].querySelector('.v')))) < 0.11 &&
+      /^schedule\.html\?week=\d+$/.test(hi.href), hi ? `${hi.text} → ${hi.href}` : 'no card');
+
+    // -- the forecast table ------------------------------------------------------
+    const r0 = fcRows[0];
+    const win = sheetOf(r0.td[5]);
+    c.ok('WIN % OPENS YOU / THEM / GAP / WIN CHANCE, not a sentence about method',
+      Boolean(win) && /^Win chance · Week \d+ · vs /.test(win.title) &&
+      win.rows.filter((x) => /projected/.test(x[0])).length === 2 &&
+      rowOf(win, 'Gap') !== null && rowOf(win, 'Win chance') !== null, win ? win.text : 'no card');
+    c.ok('its two projections are the row’s own two', Boolean(win) &&
+      numOf(win.rows[0][1]) === numOf(r0.cells[3]) && numOf(win.rows[1][1]) === numOf(r0.cells[4]),
+      win ? `${win.rows[0][1]}/${win.rows[1][1]} vs ${r0.cells[3]}/${r0.cells[4]}` : '');
+    c.ok('the gap is those two apart, and the chance is the cell’s', Boolean(win) &&
+      Math.abs(numOf(rowOf(win, 'Gap')) - (numOf(r0.cells[3]) - numOf(r0.cells[4]))) < 0.11 &&
+      rowOf(win, 'Win chance') === r0.cells[5],
+      win ? `${rowOf(win, 'Gap')} ; ${rowOf(win, 'Win chance')} vs ${r0.cells[5]}` : '');
+    const opp = sheetOf(r0.td[1]);
+    c.ok('the Opponent cell opens that team: record, average, that week’s projection',
+      Boolean(opp) && opp.title === r0.cells[1] && rowOf(opp, 'Record') !== null &&
+      rowOf(opp, 'Average score') !== null && numOf(rowOf(opp, `Week ${r0.cells[0]} projection`)) === numOf(r0.cells[4]),
+      opp ? opp.text : 'no card');
+    c.ok('and a click opens that team that week', Boolean(opp) && TEAM_LINK.test(opp.href) &&
+      opp.href.includes(`&week=${r0.cells[0]}#`), opp ? opp.href : '');
+
+    // -- the forecast tiles -------------------------------------------------------
+    const fcTiles = [...d.querySelectorAll('#forecastStats .stat')];
+    const tile = (name) => fcTiles.find((t) => txt(t.querySelector('.k')) === name);
+    // A tile with nothing to show ("—": no strength measure yet) has nothing to open.
+    c.ok('all six forecast tiles open a card',
+      fcTiles.length === 6 && fcTiles.every((t) => t.hasAttribute('data-pop') || txt(t.querySelector('.v')) === '—') &&
+      fcTiles.filter((t) => t.hasAttribute('data-pop')).length >= 5,
+      fcTiles.map((t) => `${txt(t.querySelector('.k'))}:${t.hasAttribute('data-pop')}`).join(' '));
+    const ew = sheetOf(tile('Expected wins'));
+    const ewParts = ew ? ew.rows.filter((x) => /^\+?\d/.test(x[x.length - 1])).slice(0, -1).map((x) => numOf(x[x.length - 1])) : [];
+    c.ok('Expected wins is banked wins plus each game’s chance, and they add up to the tile',
+      ewParts.length === fcRows.length + 1 &&
+      Math.abs(ewParts.reduce((a, b) => a + b, 0) - numOf(txt(tile('Expected wins').querySelector('.v')))) < 0.11,
+      ew ? ew.text : 'no card');
+    const gl = sheetOf(tile('Games left'));
+    c.ok('Games left lists every game left', Boolean(gl) && gl.rows.filter((x) => /^(Home|Away)$/.test(x[2] || '')).length === fcRows.length,
+      gl ? gl.text : 'no card');
+
+    // -- the simulation -------------------------------------------------------------
+    const simRows = [...d.querySelectorAll('#simTable tbody tr:not(.empty-row)')];
+    const simCells = simRows.flatMap((tr) => [...tr.children].slice(2));
+    c.ok('every simulation figure opens a card and none carries a title',
+      simCells.length === 80 && simCells.every((td) => td.hasAttribute('data-pop') && !td.hasAttribute('title')),
+      `${simCells.filter((td) => td.hasAttribute('data-pop')).length} of ${simCells.length} open; ` +
+      `${simCells.filter((td) => td.hasAttribute('title')).length} titled`);
+    const titleCell = simRows[0].children[8];
+    const tc = sheetOf(titleCell);
+    const seasons = tc ? /^([\d,]+) of 10,000$/.exec(rowOf(tc, 'Seasons') || '') : null;
+    c.ok('A SIMULATION CHANCE SAYS "N of 10,000" SEASONS, and N is the cell',
+      Boolean(seasons) && Math.abs(numOf(seasons[1]) / 10000 - Number(titleCell.getAttribute('data-v'))) < 0.00006 &&
+      tc.title === `${txt(simRows[0].children[0])} · Title %`, tc ? tc.text : 'no card');
+    c.ok('and where it stands in its column, in plain words',
+      !heatSide(titleCell) && !/\bheat\b/.test(titleCell.getAttribute('class') || '') ||
+      /^(Highest|Lowest|\d+(st|nd|rd|th) (highest|lowest)) of 10$/.test(rowOf(tc, 'In this column') || ''),
+      tc ? tc.text : '');
+    const pw = sheetOf(simRows[0].children[2]);
+    c.ok('Proj. wins is wins banked plus the average from the games left',
+      Boolean(pw) && Math.abs(numOf(rowOf(pw, 'Wins banked')) + numOf(rowOf(pw, 'Average from')) - numOf(rowOf(pw, 'Projected wins'))) < 0.11,
+      pw ? pw.text : 'no card');
+    const sn = sheetOf(simRows[0].children[0]);
+    c.ok('a simulation team name opens the team card, and a click opens its roster',
+      Boolean(sn) && sn.title === txt(simRows[0].children[0]) && rowOf(sn, 'Record') !== null && TEAM_LINK.test(sn.href),
+      sn ? `${sn.text} → ${sn.href}` : 'no card');
+    const simTiles = [...d.querySelectorAll('#simStats .stat')];
+    c.ok('every simulation tile opens a card', simTiles.length >= 3 && simTiles.every((t) => t.hasAttribute('data-pop')),
+      `${simTiles.filter((t) => t.hasAttribute('data-pop')).length} of ${simTiles.length}`);
+    const most = sheetOf(simTiles[0]);
+    c.ok('a "most" tile names its top three, the tile’s own team first',
+      Boolean(most) && most.rows.length === 3 && most.rows[0][0] === txt(simTiles[0].querySelector('.who')) &&
+      most.rows[0][1] === txt(simTiles[0].querySelector('.v')) && /10,000 simulated seasons/.test(most.text),
+      most ? most.text : 'no card');
+
+    // -- the head-to-head grid ---------------------------------------------------------
+    const grid = [...d.querySelectorAll('#h2hGrid tbody tr')];
+    const records = txt($('h2hTitle')) === 'Head to head';
+    const pairCells = grid.flatMap((tr) => [...tr.children].slice(records ? 2 : 1))
+      .filter((td) => !/\bself\b/.test(td.getAttribute('class') || ''));
+    const met = pairCells.filter((td) => td.hasAttribute('data-pair'));
+    c.ok('every pairing that has a game opens a card, with no raw title left',
+      met.length > 40 && pairCells.every((td) => !td.hasAttribute('title')) &&
+      pairCells.every((td) => td.hasAttribute('data-pair') || txt(td) === '—'),
+      `${met.length} of ${pairCells.length} open; ${pairCells.filter((td) => td.hasAttribute('title')).length} titled`);
+    // BUILT WHEN IT IS OPENED: the grid was drawn before the rosters were read,
+    // and is not drawn again when they land. A card made at draw time would
+    // say "To play —" for every game to come; this one has the chance.
+    const ahead = met.map((td) => sheetOf(td)).filter((s) => s && s.rows.slice(1).some((x) => /^(Win chance|To play)/.test(x[1])));
+    c.ok('a game still to come gives its win chance and the two projections, not a dash',
+      scenario !== 'live' || (ahead.length > 20 &&
+        ahead.every((s) => s.rows.slice(1).every((x) => !/^To play/.test(x[1]))) &&
+        /^Win chanceproj \d+\.\d–\d+\.\d$/.test(ahead[0].rows.find((x) => /^Win chance/.test(x[1]))[1]) &&
+        /^\d+%$/.test(ahead[0].rows.find((x) => /^Win chance/.test(x[1]))[2])),
+      ahead.length ? JSON.stringify(ahead[0].rows) : 'no game to come has a card');
+    const pc = sheetOf(met[0]);
+    c.ok('it lists the meetings — a score, or the chance of one to come — and a click opens that week',
+      Boolean(pc) && / v /.test(pc.title) && pc.rows.length >= 2 &&
+      pc.rows.slice(1).every((x) => /^\d+$/.test(x[0]) && /^(Won|Lost|Tied|Win chance|To play|Being played)/.test(x[1])) &&
+      /^schedule\.html\?week=\d+$/.test(pc.href), pc ? `${JSON.stringify(pc.rows)} → ${pc.href}` : 'no card');
+    const gn = sheetOf(grid[0].children[0]);
+    c.ok('a grid team name opens the team card',
+      Boolean(gn) && gn.title === txt(grid[0].children[0]) && TEAM_LINK.test(gn.href), gn ? gn.text : 'no card');
+    c.ok('the column headings keep their full names',
+      [...d.querySelectorAll('#h2hGrid thead th[title]')].length === 10);
+  }
+
   // ---- forecasting scenarios ---------------------------------------------
   const forecasting = ['demo', 'demo-mid', 'live', 'live-pickteam'].includes(scenario);
   if (forecasting) {
@@ -1329,11 +1684,42 @@ async function check(scenario, boot) {
     const shadedWin = winCells.filter((td) => heatSide(td));
     const fcKey = txt($('forecastKey'));
 
-    // The points columns stay plain in EVERY scenario, shaded or not — this is
-    // the half that fails if a later pass "finishes the job" and colours them.
-    c.ok('the two projected-points columns stay plain',
-      !fcRows.some((r) => heatSide(r.td[3]) || heatSide(r.td[4])),
-      fcRows.map((r) => `${r.td[3].getAttribute('class')}/${r.td[4].getAttribute('class')}`).join(','));
+    // THE TWO POINTS COLUMNS ARE COLOURED TOO (docs/colour-plan.md, Schedule),
+    // and against the one group that makes them honest: THE TEN TEAMS THAT
+    // WEEK. They used to be left plain because down this table they rise and
+    // fall with the week as much as with the opponent — a bye week would have
+    // read as a weak roster. Measured across the league inside one week, the
+    // week cancels out. The opponent's column is turned over: a low projection
+    // across the table is the good news.
+    const ptsCells = fcRows.flatMap((r) => [
+      { td: r.td[3], opp: false, week: r.cells[0], v: r.cells[3] },
+      { td: r.td[4], opp: true, week: r.cells[0], v: r.cells[4] },
+    ]);
+    const measured = ptsCells.filter((x) => /\bheat\b/.test(x.td.getAttribute('class') || ''));
+    const painted = ptsCells.filter((x) => heatSide(x.td));
+    c.ok('both projected-points columns are measured against the league that week',
+      measured.length === ptsCells.length,
+      `${measured.length} of ${ptsCells.length} measured`);
+    if (scenario === 'demo-mid' || scenario === 'live') {
+      const cards = painted.map((x) => ({ ...x, card: sheetOf(x.td), side: heatSide(x.td) }));
+      c.ok('some of them are far enough from the league to be painted', painted.length >= 2, `${painted.length} painted`);
+      const wrong = cards.filter((x) => {
+        const high = /(Highest|\d+(st|nd|rd|th) highest) of 10/.test(x.card ? x.card.text : '');
+        return (x.side === 'up') !== (x.opp ? !high : high);
+      });
+      c.ok('GREEN IS A HIGH PROJECTION FOR THE TEAM AND A LOW ONE FOR ITS OPPONENT',
+        wrong.length === 0, wrong.slice(0, 3).map((x) => `wk ${x.week} ${x.opp ? 'opp' : 'own'} ${x.side}: ${x.card && x.card.text}`).join(' | '));
+      const one = cards[0] || {};
+      c.ok('a points cell opens a card: the projection, the league’s average that week, and where it stands',
+        Boolean(one.card) && new RegExp(` · Week ${one.week} projection$`).test(one.card.title) &&
+        numOf(rowOf(one.card, 'Projected')) === numOf(one.v) &&
+        Number.isFinite(numOf(rowOf(one.card, 'League average'))) &&
+        /^(Highest|Lowest|\d+(st|nd|rd|th) (highest|lowest)) of 10$/.test(rowOf(one.card, 'Among the ten') || '') &&
+        !one.td.hasAttribute('title'),
+        one.card ? one.card.text : 'no card');
+      c.ok('the key says the points are measured against the league that week, and that a weak opponent is green',
+        /league that week/.test(fcKey) && /weaker opponent is green/.test(fcKey), fcKey);
+    }
 
     // THE KEY IS ON SCREEN — asserted whether anything is shaded or not, since
     // both branches below depend on the reader being able to READ the key.
@@ -1370,15 +1756,15 @@ async function check(scenario, boot) {
     if (shadedWin.length) {
       const whyWin = heatDirection(winCells, true);
       c.ok('forecast Win % is shaded, higher-is-better', !whyWin, whyWin);
-      // The `title` already carried where the percentage came from, and the
-      // scale's words are APPENDED rather than substituted — two facts, one
-      // tap, because js/touch-titles.js can only open one sheet per element.
-      const titled = shadedWin[0];
-      c.ok('a shaded Win % keeps its original title and gains the scale’s words',
-        /scoring spread/.test(titled.getAttribute('title') || '') &&
-        /(highest|lowest) of \d+ · /i.test(titled.getAttribute('title') || '') &&
-        !/\bSD\b/.test(titled.getAttribute('title') || ''),
-        titled.getAttribute('title'));
+      // Where the percentage stands among this team's games is the last line
+      // of the cell's CARD, in plain words; the cell carries no `title` (one
+      // preview per number), and nothing about spreads or standard deviations.
+      const shadedCard = sheetOf(shadedWin[0]);
+      c.ok('a shaded Win % says where it stands in its card, in plain words, and has no title',
+        !shadedWin[0].hasAttribute('title') && Boolean(shadedCard) &&
+        /(highest|lowest) of \d+ · avg \d+% for this team’s remaining games/i.test(shadedCard.text) &&
+        !/\bSD\b|scoring spread/.test(shadedCard.text),
+        shadedCard ? shadedCard.text : 'no card');
       // THE KEY IS SPLIT, the way the Stats page splits it: VISIBLE is what
       // changes what a number means, and the thresholds — the half that lets a
       // shaded cell be checked by hand — sit in the tucked method note. Both
@@ -1399,8 +1785,11 @@ async function check(scenario, boot) {
       // A run-in with one game left, or ten games all at the same chance. Both
       // are real, and both have to SAY they are — an unexplained absence of
       // colour reads as the feature being broken.
+      // "Nothing" would be untrue while the points columns still carry their
+      // league scale, so then it is Win % alone that is said to be unshaded.
       c.ok('with nothing to tell apart, the key says so rather than going blank',
-        /Nothing is shaded/.test(fcKey), fcKey.slice(0, 200));
+        measured.length ? /Win % is not shaded/.test(fcKey) : /Nothing is shaded/.test(fcKey),
+        fcKey.slice(0, 200));
     }
 
     // stat row

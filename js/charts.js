@@ -772,6 +772,12 @@ export function lineChart(container, opts) {
  * @param {Function} [opts.hrefFor]  (index, binLabel) -> href|null: where a
  *                                   click on that bar goes while its tooltip
  *                                   is up (see createTooltip)
+ * @param {Function} [opts.tipFor]   (index, binLabel, count) ->
+ *                                   { title, value, name }: the tooltip's
+ *                                   words for that bar, when the bin and the
+ *                                   axis label do not make a sentence
+ *                                   ("Finishes 1st" / "2.3%" "of seasons").
+ *                                   Without it: the bin, the count, yLabel.
  * @param {Function} [opts.navigate] (href, event) - replaces the navigation
  * @returns {SVGElement|null}
  */
@@ -801,10 +807,16 @@ export function histogram(container, opts) {
   const ySpan = yS.hi - yS.lo || 1;
   const y = (v) => M.top + plotH - ((v - yS.lo) / ySpan) * plotH;
 
-  // Band per bin; the bar is capped at 24px so the band's leftover is air,
-  // and never wider than band - 2 (the surface gap between neighbours).
+  // Band per bin. The bar is 70% of its band up to 72px (docs/charts-plan.md
+  // A1: a fixed 24px left four fifths of a laptop's plot as air), never
+  // narrower than the 24px it used to be — so a phone's narrow bands draw as
+  // they always did — and never wider than band - 2 (the surface gap between
+  // neighbours).
   const band = plotW / n;
-  const barW = Math.max(2, Math.min(24, band - 2));
+  const barW = Math.max(2, Math.min(band - 2, Math.max(24, Math.min(band * 0.7, 72))));
+  // A band with room for a number carries one on every bar; a narrower one
+  // only on the peak, where the neighbours' numbers would run together.
+  const capEvery = band >= 34;
 
   const parts = [];
   for (const t of yS.ticks) {
@@ -844,10 +856,12 @@ export function histogram(container, opts) {
         `fill="${C.dim}" font-size="${TICK_SIZE}">${esc(bins[i])}</text>`
       );
     }
-    // Label selectively: only the peak bin gets a value on its cap.
-    if (i === peak) {
+    // The value on the cap: every bar that has one when the band has the
+    // room, else the peak alone. An empty bin, or one that prints as 0, gets
+    // nothing — a row of zeros along the axis is noise.
+    if (i === peak || (capEvery && bh > 0 && fmt(counts[i]) !== '0')) {
       parts.push(
-        `<text x="${cx.toFixed(1)}" y="${(by - 6).toFixed(1)}" text-anchor="middle" fill="${C.text}" ` +
+        `<text class="ff-cap" x="${cx.toFixed(1)}" y="${(by - 6).toFixed(1)}" text-anchor="middle" fill="${C.text}" ` +
         `font-size="${TICK_SIZE}" style="font-variant-numeric:tabular-nums">${esc(fmt(counts[i]))}</text>`
       );
     }
@@ -873,6 +887,7 @@ export function histogram(container, opts) {
 
   const tip = createTooltip(container, { navigate: o.navigate });
   const hrefFor = typeof o.hrefFor === 'function' ? o.hrefFor : null;
+  const tipFor = typeof o.tipFor === 'function' ? o.tipFor : null;
   const hits = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-hit') : [];
   const bars = typeof svg.querySelectorAll === 'function' ? svg.querySelectorAll('.ff-bar') : [];
   const barByIndex = {};
@@ -885,8 +900,12 @@ export function histogram(container, opts) {
       const enter = (evt) => {
         const p = pointerPos(svg, container, evt);
         if (bar) bar.setAttribute('opacity', '0.8');
-        tip.show(bins[+i], [{ color, name: (o.yLabel || 'count'), value: fmt(counts[+i]) }], p.px, p.py,
-          hrefFor ? hrefFor(+i, bins[+i]) : null);
+        const said = tipFor ? tipFor(+i, bins[+i], counts[+i]) : null;
+        tip.show(said ? said.title : bins[+i],
+          [said
+            ? { color, name: said.name || '', value: said.value == null ? fmt(counts[+i]) : String(said.value) }
+            : { color, name: (o.yLabel || 'count'), value: fmt(counts[+i]) }],
+          p.px, p.py, hrefFor ? hrefFor(+i, bins[+i]) : null);
       };
       hit.addEventListener('pointermove', enter);
       // A finger produces no `pointermove` before it lands, so on a phone a tap

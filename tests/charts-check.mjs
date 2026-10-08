@@ -348,6 +348,42 @@ const num = (el, attr) => Number(el.getAttribute(attr));
   const svg3 = histogram(c3, { bins: ['a', 'b'], counts: [4, -9] });
   eq(all(svg3, '.ff-bar').length, 1, 'and so is a negative one');
 }
+{
+  // BAR WIDTH AND CAP LABELS (docs/charts-plan.md A1, A7). On a laptop the bars
+  // were 24px in 60–130px bands: four fifths of the plot was air. A bar is now
+  // 70% of its band up to 72px — and never narrower than it was, so a phone's
+  // chart (bands under 34px) is drawn exactly as before.
+  const barWidth = (bar) => {
+    const xs = [...bar.getAttribute('d').matchAll(/[MLQ ]\s*(-?[\d.]+),/g)].map((m) => Number(m[1]));
+    return Math.max(...xs) - Math.min(...xs);
+  };
+  const capLabels = (svg) => all(svg, 'text.ff-cap').map((t) => t.textContent.trim());
+  // 720 wide: the plot is 660. Eleven bins -> 60px bands -> 42px bars.
+  const wide = histogram(host(720), {
+    bins: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'],
+    counts: [0.2, 1.4, 6, 15, 23.5, 24.6, 17, 8, 2, 0.5, 0],
+    yLabel: 'Chance (%)',
+  });
+  close(barWidth(all(wide, '.ff-bar')[3]), 42, 0.6, 'a 60px band draws a 42px bar (70% of the band), not a 24px one');
+  eq(capLabels(wide).join('|'), '0.2|1.4|6|15|23.5|24.6|17|8|2|0.5',
+    'a band of 34px or more labels every bar with its value — and prints nothing over an empty bin');
+  // Four bins -> 165px bands: 70% would be 115px, so the 72px cap decides.
+  const few = histogram(host(720), { bins: ['a', 'b', 'c', 'd'], counts: [1, 2, 3, 4] });
+  close(barWidth(all(few, '.ff-bar')[0]), 72, 0.6, 'a bar is never wider than 72px');
+  // A phone's 337px box: 277px of plot, ten bins, 27.7px bands.
+  const phone = histogram(host(337), {
+    bins: ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th'],
+    counts: [2, 3, 1.5, 5, 6, 10, 16, 20, 20.8, 15],
+  });
+  close(barWidth(all(phone, '.ff-bar')[0]), 24, 0.6, 'a phone’s bar is the 24px it always was');
+  eq(capLabels(phone).join('|'), '20.8', 'and under 34px a band still labels only the peak');
+  // The plot box is the same whatever is in it: a view switch must not move it.
+  const a = histogram(host(720), { bins: ['a', 'b'], counts: [1, 2], height: 240 });
+  const b = histogram(host(720), { bins: ['a', 'b'], counts: [100, 60], height: 240 });
+  eq(a.getAttribute('viewBox'), b.getAttribute('viewBox'), 'two data sets in the same box draw the same viewBox');
+  eq(all(a, '.ff-hit')[0].getAttribute('height'), all(b, '.ff-hit')[0].getAttribute('height'),
+    'and the same plot height');
+}
 
 // ============================================================== boxPlot
 {
@@ -576,6 +612,25 @@ const num = (el, attr) => Number(el.getAttribute(attr));
     fire(hit, 'pointerdown', { clientX: 300, clientY: 50 });
     fire(hit, 'click', { clientX: 300, clientY: 50 });
     eq(went.join('|'), 'stats.html?bin=1:100–120', 'histogram: a click on a bar follows hrefFor(index, bin)');
+    ok(/100–120/.test(tipText(c)) && /5\s*weeks/.test(tipText(c)),
+      'histogram: with no tipFor the tooltip is the bin and its count, as before', tipText(c));
+  }
+  // HISTOGRAM: the caller words the tooltip (`tipFor`), so a bar can be read as
+  // a sentence — "Finishes 1st / 2.3% of seasons" — instead of "1st / 2.3 Chance (%)".
+  {
+    const c = rect(host());
+    const asked = [];
+    const svg = rect(histogram(c, {
+      bins: ['1st', '2nd'], counts: [2.3, 9.1], yLabel: 'Chance (%)',
+      tipFor: (i, bin, count) => {
+        asked.push([i, bin, count].join('/'));
+        return { title: `Finishes ${bin}`, value: `${count}%`, name: 'of seasons' };
+      },
+    }));
+    fire(all(svg, '.ff-hit')[0], 'pointermove', { clientX: 100, clientY: 50 });
+    eq(asked.join('|'), '0/1st/2.3', 'histogram: tipFor is asked with (index, bin, count)');
+    eq(tipText(c), 'Finishes 1st2.3%of seasons', 'histogram: and its words are the tooltip');
+    ok(!/Chance/.test(tipText(c)), 'histogram: the axis label is not repeated in a worded tooltip');
   }
   // A PAGE THAT OPENS ITS OWN CARD ON THE MARKS turns the chart's preview off
   // on the container (`data-ff-tip="off"`): it never draws, and never links.

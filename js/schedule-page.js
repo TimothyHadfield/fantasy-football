@@ -41,7 +41,11 @@ import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
 import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection } from './connection.js';
 import { scope } from './prefs.js';
-import { readIntParam } from './links.js';
+import { readIntParam, teamHref, weekHref } from './links.js';
+// THE STAT CARD (js/pop.js): what a number on this page is made of, and where a
+// click on it goes. Every preview here is one of these — the page's own popover
+// for Title ± / Last ± was folded into it on 2026-10-08.
+import { statCard, clearPops, wirePops, hidePop } from './pop.js';
 import * as snapshots from './snapshots.js';
 import * as backup from './backup.js';
 
@@ -134,7 +138,13 @@ const state = {
   // Whose season the forecast panel is about. null means "follow whoever I am",
   // so the panel tracks you until you deliberately look at someone else.
   forecastTeamId: prefs.get('forecastTeam', null),
-  strength: null,           // Map teamId -> comparable strength, any scale
+  // How each of the two bar charts adds its bars up (docs/charts-plan.md B3,
+  // B4). The same numbers either way: one bar per outcome, or the running
+  // total — "at least 7 wins", "3rd or better" — which is the question a
+  // reader usually has and otherwise answers by adding bars in their head.
+  forecastView: prefs.get('forecastView', 'exact') === 'atleast' ? 'atleast' : 'exact',
+  simView: prefs.get('simView', 'each') === 'better' ? 'better' : 'each',
+  strength: null,          // Map teamId -> comparable strength, any scale
   strengthNote: '',         // how that strength was derived; shown, never implied
   strengthToken: 0,         // guards against a slow fetch landing after a reload
   projection: null,         // per-week optimal-lineup points; see buildProjection
@@ -1330,6 +1340,41 @@ function syncSegmented(id, value) {
     .forEach((b) => b.classList.toggle('on', b.dataset.view === value));
 }
 
+/**
+ * Show or hide a chart's view switch, with the right button marked. It is
+ * hidden whenever its chart is — a switch over an empty box is a control that
+ * does nothing.
+ */
+function syncChartView(id, value, shown) {
+  syncSegmented(id, value);
+  if (shown) $(id).removeAttribute('hidden');
+  else $(id).setAttribute('hidden', '');
+}
+
+/**
+ * Running totals of percentages `xs`: from the start, or (fromEnd) from the far
+ * end back. Held at 100: the parts add to 100.00000001 as floats, and the
+ * chart's axis would step up to 150 to make room for that hair.
+ */
+function runningTotal(xs, fromEnd) {
+  const out = new Array(xs.length);
+  let acc = 0;
+  for (let k = 0; k < xs.length; k++) {
+    const i = fromEnd ? xs.length - 1 - k : k;
+    acc += xs[i];
+    out[i] = Math.min(100, acc);
+  }
+  return out;
+}
+
+/** A chance already in percent, as a bar's tooltip prints it: "24.6%", "<0.1%". */
+function barPct(v) {
+  if (!(v > 0)) return '0%';
+  if (v < 0.05) return '<0.1%';
+  // A running total can land a hair over through rounding; it is never >100.
+  return `${Math.min(100, v).toFixed(1)}%`;
+}
+
 function renderWeekPicker() {
   const sel = $('weekSelect');
   const weeks = state.data.weeks;
@@ -1411,9 +1456,205 @@ function tablePlaces(asOf) {
   );
 }
 
+// ------------------------------------------------------------------- previews
+//
+// One card per number (js/pop.js). Each panel registers its cards under its own
+// prefix and forgets them (`clearPops`) before it draws again.
+
+const POP = {
+  summary: 'sch-sum', matchups: 'sch-mu',
+  forecast: 'sch-fc', simulation: 'sch-sim',
+};
+
+/** A whole-per-cent chance as a card value. `pctText` is already markup ("&lt;1%"). */
+const pctValue = (p) => ({ html: pctText(p) });
+
+/** "12 of 10,000": how many of the simulated seasons a chance was counted in. */
+const seasonsOf = (p, runs) => `${commas(Math.round(p * runs))} of ${commas(runs)}`;
+
+/**
+ * What a side was projected for its game. A game still to play reads the same
+ * number the cards and the forecast do; a decided one reads the projection the
+ * lineup it STARTED carried (`state.started`), or the one on the game (demo).
+ */
+function sideProjection(g, side) {
+  if (gameState(g) !== 'final') return projectedPoints(g, side);
+  const own = side === 'home' ? g.homeProjected : g.awayProjected;
+  if (typeof own === 'number' && own > 0) return own;
+  const id = side === 'home' ? g.homeId : g.awayId;
+  return state.started?.get(g.week)?.get(id) ?? null;
+}
+
+/** The game a team plays in a week, and which side of it, or null (a bye, no week). */
+function gameOf(teamId, week) {
+  for (const g of state.data.byWeek.get(Number(week)) || []) {
+    if (g.homeId === teamId) return { g, side: 'home' };
+    if (g.awayId === teamId) return { g, side: 'away' };
+  }
+  return null;
+}
+
+/**
+ * What the team card needs for every team, worked out once per render: the
+ * record as it stands (a game being played counted as its chance, as everywhere
+ * else on the site) and points per game.
+ */
+function teamFacts() {
+  const ctx = cardContext();
+  return { records: ctx.records, chances: ctx.chances, ppg: ctx.ppg };
+}
+
+/**
+ * THE TEAM CARD: record, average, that week's projection; a click opens the
+ * team's roster for that week on Analysis (docs/previews-plan.md).
+ */
+function teamCardSpec(teamId, week, facts) {
+  const team = state.data.teams.find((t) => t.id === teamId);
+  if (!team) return null;
+  const r = facts.records.get(teamId);
+  const rec = r ? capture.recordNow(r, facts.chances.get(teamId) ?? null, { sep: EN }) : null;
+  const avg = facts.ppg?.get(teamId);
+  const played = week == null ? null : gameOf(teamId, week);
+  const proj = played ? sideProjection(played.g, played.side) : null;
+  const rows = [
+    { label: 'Record', value: rec ? rec.text : '—' },
+    { label: 'Average score', value: typeof avg === 'number' ? fmt(avg) : '—' },
+  ];
+  if (week != null) rows.push({ label: `Week ${week} projection`, value: proj === null ? '—' : fmt(proj) });
+  return {
+    title: team.name,
+    rows,
+    href: teamHref(teamId, week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** `data-pop` for a team's card, or '' when there is no such team. */
+function teamCard(teamId, week, facts, prefix) {
+  const spec = teamId == null ? null : teamCardSpec(teamId, week, facts);
+  return spec ? statCard(spec, { prefix }) : '';
+}
+
+/**
+ * One side of one game: projected, scored, the difference, and the chance or
+ * the result. The difference is taken from the two figures as printed, so the
+ * three lines always add up on screen.
+ */
+function sideCardSpec(g, side, ctx) {
+  const home = side === 'home';
+  const id = home ? g.homeId : g.awayId;
+  if (id == null) return null;
+  const name = home ? g.homeName : g.awayName;
+  const oppId = home ? g.awayId : g.homeId;
+  const opp = home ? g.awayName : g.homeName;
+  const st = gameState(g);
+  const score = home ? g.homeScore : g.awayScore;
+  const scored = st === 'final' || (st === 'live' && typeof score === 'number' && score > 0) ? score : null;
+  const e = st === 'final' ? null : expectedFor(g, side, ctx);
+  const proj = st === 'final' ? sideProjection(g, side) : e && e.basis === 'Projected' ? e.v : null;
+
+  const rows = [{ label: 'Projected', value: proj === null ? '—' : fmt(proj) }];
+  if (e && e.basis !== 'Projected') rows.push({ label: 'Points per game so far', value: fmt(e.v) });
+  rows.push({ label: st === 'live' ? 'Scored so far' : 'Scored', value: scored === null ? '—' : fmt(scored) });
+  if (st === 'final' && proj !== null && scored !== null) {
+    rows.push({ label: 'Difference', value: signed(Number(fmt(scored)) - Number(fmt(proj))) });
+  }
+
+  let total = null;
+  if (oppId != null && st === 'final') {
+    const winner = winnerOf(g);
+    const margin = fmt(Math.abs(marginOf(g)));
+    total = {
+      label: 'Result',
+      value: winner === 'tie' ? 'Tied' : `${winner === side ? 'Won' : 'Lost'} by ${margin}`,
+    };
+  } else if (oppId != null) {
+    const p = homeWinChance(g, ctx.sigma);
+    if (p !== null) total = { label: 'Win chance', ...pctValue(home ? p : 1 - p) };
+  }
+
+  return {
+    title: name,
+    sub: oppId == null ? `Week ${g.week} · bye` : `Week ${g.week} · vs ${opp}`,
+    rows,
+    total,
+    href: teamHref(id, g.week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** The line under an unplayed game — "Kenny by 6.2 · 62%" — taken apart. */
+function gapCardSpec(g, ctx) {
+  const h = expectedFor(g, 'home', ctx);
+  const a = expectedFor(g, 'away', ctx);
+  if (!h || !a) return null;
+  const p = homeWinChance(g, ctx.sigma);
+  const hv = Number(fmt(h.v));
+  const av = Number(fmt(a.v));
+  const note = h.basis === 'Projected' ? '' : 'per game so far';
+  const spec = {
+    title: `${g.homeName} v ${g.awayName}`,
+    sub: `Week ${g.week}`,
+    rows: [
+      { label: g.homeName, note, value: fmt(h.v) },
+      { label: g.awayName, note, value: fmt(a.v) },
+    ],
+    totals: [{ label: 'Gap', value: fmt(Math.abs(hv - av)) }],
+  };
+  if (p !== null) {
+    const fav = p >= 0.5 ? g.homeName : g.awayName;
+    spec.total = { label: `${fav} to win`, ...pctValue(Math.max(p, 1 - p)) };
+    spec.foot = 'Worked out here from the gap. ESPN publishes projections, not odds.';
+  }
+  return spec;
+}
+
+/**
+ * Every meeting of two teams, from the row team's side: the score of a played
+ * one, the chance of one still to come. A click opens the next one's week.
+ */
+function meetingsSpec(row, col, games, ctx, foot = '') {
+  if (!games.length) return null;
+  const rows = games.map((g) => {
+    const side = g.homeId === row.id ? 'home' : 'away';
+    const other = side === 'home' ? 'away' : 'home';
+    const st = gameState(g);
+    if (st === 'final') {
+      const winner = winnerOf(g);
+      const mine = side === 'home' ? g.homeScore : g.awayScore;
+      const theirs = side === 'home' ? g.awayScore : g.homeScore;
+      return {
+        lead: g.week,
+        label: winner === 'tie' ? 'Tied' : winner === side ? 'Won' : 'Lost',
+        value: `${fmt(mine)}${EN}${fmt(theirs)}`,
+      };
+    }
+    const mine = projectedPoints(g, side);
+    const theirs = projectedPoints(g, other);
+    const ph = homeWinChance(g, ctx.sigma);
+    if (ph === null) return { lead: g.week, label: st === 'live' ? 'Being played' : 'To play', value: '—' };
+    return {
+      lead: g.week,
+      label: st === 'live' ? 'Being played' : 'Win chance',
+      note: `proj ${fmt(mine)}${EN}${fmt(theirs)}`,
+      ...pctValue(side === 'home' ? ph : 1 - ph),
+    };
+  });
+  const next = games.find((g) => gameState(g) !== 'final') || games[games.length - 1];
+  return {
+    title: `${row.name} v ${col.name}`,
+    head: ['Wk', '', ''],
+    rows,
+    foot,
+    href: weekHref(next.week),
+    hrefLabel: `Open week ${next.week}`,
+  };
+}
+
 // -------------------------------------------------------------------- summary
 
 function renderSummary() {
+  clearPops(POP.summary);
   const scoped = weekGames();
   const played = finalGames(scoped);
   const live = scoped.filter((g) => gameState(g) === 'live').length;
@@ -1439,15 +1680,44 @@ function renderSummary() {
   const blowout = played.reduce((a, b) => (gap(b) > gap(a) ? b : a));
   const closest = played.reduce((a, b) => (gap(b) < gap(a) ? b : a));
 
+  // Each tile opens the game it is about: the two scores, and the figure they
+  // make. A click goes to that game's week.
+  const gameSpec = (title, g, label, value) => ({
+    title,
+    sub: `Week ${g.week}`,
+    rows: [
+      { label: g.homeName, value: fmt(g.homeScore) },
+      { label: g.awayName, value: fmt(g.awayScore) },
+    ],
+    total: { label, value },
+    href: weekHref(g.week),
+    hrefLabel: `Open week ${g.week}`,
+  });
+  const upcoming = scoped.length - played.length - live;
+
   const items = [
-    ['Highest-scoring game', fmt(combined(highest))],
-    ['Biggest blowout', fmt(gap(blowout))],
-    ['Closest game', fmt(gap(closest))],
-    ['Games played', `${played.length}<span class="muted"> / ${scoped.length}</span>`],
+    ['Highest-scoring game', fmt(combined(highest)),
+      gameSpec('Highest-scoring game', highest, 'Combined', fmt(combined(highest)))],
+    ['Biggest blowout', fmt(gap(blowout)),
+      gameSpec('Biggest blowout', blowout, 'Margin', fmt(gap(blowout)))],
+    ['Closest game', fmt(gap(closest)),
+      gameSpec('Closest game', closest, 'Margin', fmt(gap(closest)))],
+    ['Games played', `${played.length}<span class="muted"> / ${scoped.length}</span>`, {
+      title: 'Games played',
+      sub: state.week === 'all' ? 'All weeks' : `Week ${state.week}`,
+      rows: [
+        { label: 'Played', value: String(played.length) },
+        { label: 'Being played', value: String(live) },
+        { label: 'Still to play', value: String(upcoming) },
+      ],
+      total: { label: 'Scheduled', value: String(scoped.length) },
+    }],
   ];
 
   $('summary').innerHTML = items
-    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+    .map(([k, v, spec]) =>
+      `<div class="stat"${statCard(spec, { prefix: POP.summary })}>` +
+      `<div class="k">${k}</div><div class="v">${v}</div></div>`)
     .join('');
 
   // The headline numbers are meaningless without the games behind them — and,
@@ -1631,6 +1901,7 @@ function renderMatchups() {
   const d = state.data;
   const weeks = state.week === 'all' ? d.weeks : [Number(state.week)];
   const ctx = cardContext();
+  clearPops(POP.matchups);
 
   $('matchupsTitle').textContent =
     state.week === 'all' ? 'Matchups — all weeks' : `Week ${state.week} matchups`;
@@ -1751,24 +2022,34 @@ function gameCard(g, ctx) {
     return `<span class="trec"${recTitle(rec)}>${rec.text}</span>`;
   };
 
+  // THE PREVIEW (docs/previews-plan.md): a side's name and its number both open
+  // that side's projected / scored / difference and its chance, and a click
+  // goes to that team and week on Analysis. On the name and the number rather
+  // than the whole side, so the record beside the name keeps its own `title`
+  // (one preview per element) and the ESPN link is nobody's click but its own.
+  const sideSpec = { home: sideCardSpec(g, 'home', ctx), away: sideCardSpec(g, 'away', ctx) };
+  const pop = (which) => (sideSpec[which] ? statCard(sideSpec[which], { prefix: POP.matchups }) : '');
+
   const side = (which, name, id) =>
     `<div class="side ${which}${sideClass(which)}">
-       <span class="tname">${esc(name)}</span>
+       <span class="tname"${pop(which)}>${esc(name)}</span>
        ${id == null ? '' : recordOf(id)}
      </div>`;
 
   const scoreCell = (which, score) => {
     if (st === 'final' || (st === 'live' && typeof score === 'number' && score > 0)) {
       const win = st === 'final' && winner === which ? ' win' : '';
-      return `<div class="tscore ${which}${win}">${fmt(score)}</div>`;
+      return `<div class="tscore ${which}${win}"${pop(which)}>${fmt(score)}</div>`;
     }
     const e = st === 'upcoming' ? expectedFor(g, which, ctx) : null;
-    return `<div class="tscore ${which} proj">${e ? fmt(e.v) : '—'}</div>`;
+    return `<div class="tscore ${which} proj"${pop(which)}>${e ? fmt(e.v) : '—'}</div>`;
   };
 
   let meta = '';
   let metaClass = 'gmeta';
-  let metaTitle = '';
+  // The line under an unplayed game opens the two numbers it compares. It was a
+  // `title` sentence; the card says the same thing in figures.
+  let metaSpec = null;
   if (bye) {
     meta = 'Bye week';
   } else if (st === 'live') {
@@ -1790,23 +2071,20 @@ function gameCard(g, ctx) {
       const level = Math.abs(diff) < 0.5;
       // The margin and the percentage are the same statement twice — the
       // percentage IS that margin read against the scoring spread — so they can
-      // never point opposite ways. The basis moves into the tooltip to keep the
+      // never point opposite ways. The basis moves into the card to keep the
       // cell short; the panel note carries it for everyone else.
       const p = homeWinChance(g, ctx.sigma);
       if (p === null) {
         meta = level
           ? `${h.basis} · level`
           : `${h.basis} · ${esc(diff > 0 ? g.homeName : g.awayName)} by ${fmt(Math.abs(diff))}`;
-        metaTitle = `${h.basis} points.`;
       } else {
         meta = level
           ? `Level · ${pctText(0.5)}`
           : `${esc(diff > 0 ? g.homeName : g.awayName)} by ${fmt(Math.abs(diff))} · ` +
             `${pctText(Math.max(p, 1 - p))}`;
-        metaTitle =
-          `${h.basis} points. The percentage is the favourite’s chance of winning, ` +
-          `derived here from that gap — ESPN publishes projections, not odds.`;
       }
+      metaSpec = gapCardSpec(g, ctx);
     } else if (hr && ar) {
       // Week 1, nobody has scored: a ranking is the only honest comparison left.
       meta = `Strength ${ordinal(hr)} v ${ordinal(ar)}`;
@@ -1822,7 +2100,7 @@ function gameCard(g, ctx) {
       ${bye ? '<div class="tscore away">—</div>' : scoreCell('away', g.awayScore)}
       ${bye ? '<div class="side away"><span class="tname muted">Bye</span></div>'
             : side('away', g.awayName, g.awayId)}
-      <div class="${metaClass}"${metaTitle ? ` title="${esc(metaTitle)}"` : ''}>${meta}</div>
+      <div class="${metaClass}"${metaSpec ? statCard(metaSpec, { prefix: POP.matchups }) : ''}>${meta}</div>
       ${box}
     </div>`;
 }
@@ -1912,6 +2190,7 @@ function renderH2H() {
   const teams = state.data.teams;
   const mode = h2hMode();
   syncSegmented('h2hView', mode);
+  hidePop();
 
   if (!teams.length) {
     $('h2hGrid').innerHTML = '<div class="empty">No teams to compare.</div>';
@@ -1937,6 +2216,31 @@ function renderH2H() {
   enableSort($('h2hGrid').querySelector('table'), grid.sort);
 }
 
+// THE GRID'S CARDS ARE BUILT WHEN THEY ARE ASKED FOR, not when it is drawn. The
+// grid is drawn once, as soon as the schedule is read — before the rosters that
+// every projection and win chance comes from — and it is not drawn again when
+// they land (that would throw away the reader's sort). A card registered at
+// draw time would say "To play —" for every game still to come, for good.
+// So a cell only says WHICH pairing or team it is, and js/pop.js asks
+// `h2hPairSpec` / `h2hTeamSpec` for the card at the moment it is opened.
+const pairAttr = (row, col) => ` data-pair="${row.id}:${col.id}" tabindex="0"`;
+const teamAttr = (row) => ` data-team="${row.id}" tabindex="0"`;
+
+function h2hPairSpec(el) {
+  const [a, b] = String(el.dataset.pair || '').split(':').map(Number);
+  const teams = state.data ? state.data.teams : [];
+  const row = teams.find((t) => t.id === a);
+  const col = teams.find((t) => t.id === b);
+  if (!row || !col) return null;
+  return meetingsSpec(row, col, pairWeeks().get(`${a}:${b}`) || [],
+    { sigma: scoringSpread().sigma }, el.dataset.foot || '');
+}
+
+function h2hTeamSpec(el) {
+  if (!state.data) return null;
+  return teamCardSpec(Number(el.dataset.team), forecastAsOf(), teamFacts());
+}
+
 function recordsGrid(teams, cols) {
   const record = headToHead();
 
@@ -1954,12 +2258,20 @@ function recordsGrid(teams, cols) {
     }
   }
   // Colour and sort by how far ahead the row team is, the live share included.
-  const cell = (r, p) => {
+  // `spec` (a pairing's cell) is its card: the meetings the record is made of.
+  // The basis of a decimal record then goes in the card's foot rather than a
+  // `title` — one preview per number. The Overall cell has no card and keeps
+  // its title, the same one every other page prints beside that record.
+  const cell = (r, p, pair = '') => {
     const rec = capture.recordNow(r, p, { sep: EN });
     const ahead = 2 * rec.wins - rec.games;          // wins − losses, a tie as half each
     const cls = ahead > 0 ? 'pos' : ahead < 0 ? 'neg' : 'muted';
-    return `<td data-v="${ahead}" class="${cls}"${recTitle(rec)}>${rec.text}</td>`;
+    const tip = pair
+      ? `${pair}${rec.live ? ` data-foot="${esc(rec.title)}"` : ''}`
+      : recTitle(rec);
+    return `<td data-v="${ahead}" class="${cls}"${tip}>${rec.text}</td>`;
   };
+  const pairs = pairWeeks();
 
   const body = teams
     .map((row) => {
@@ -1971,16 +2283,17 @@ function recordsGrid(teams, cols) {
           const r = record.get(row.id).get(col.id);
           w += r.w; l += r.l; t += r.t;
           const now = p !== null && playing.get(row.id) === col.id ? p : null;
-          if (!r.w && !r.l && !r.t && now === null) return `<td>${dash}</td>`;
+          const pair = (pairs.get(`${row.id}:${col.id}`) || []).length ? pairAttr(row, col) : '';
+          if (!r.w && !r.l && !r.t && now === null) return `<td${pair}>${dash}</td>`;
           // Sort a column by how far ahead the row team is against that opponent.
-          return cell(r, now);
+          return cell(r, now, pair);
         })
         .join('');
 
       // The overall record is the most important number in the row, so it gets
       // at least the colour the individual cells already had.
       return `<tr>
-          <td class="name">${esc(row.name)}</td>
+          <td class="name"${teamAttr(row)}>${esc(row.name)}</td>
           ${cell({ w, l, t }, p)}
           ${cells}
         </tr>`;
@@ -2030,13 +2343,14 @@ function scheduleGrid(teams, cols) {
           // Sorting a column puts the teams who play that opponent soonest
           // first, which is the only ordering a fixture list can usefully have.
           const sortKey = next ? next.week : weeks[weeks.length - 1];
-          return `<td data-v="${sortKey}" class="${next ? '' : 'done'}" ` +
-            `title="${esc(row.name)} v ${esc(col.name)} — week ${weeks.join(', week ')}">` +
-            `${label}</td>`;
+          // The card: each meeting's score, or its chance if it is still to
+          // come; a click opens that week. (It was a `title` that repeated the
+          // two names and the week numbers the cell already shows.)
+          return `<td data-v="${sortKey}" class="${next ? '' : 'done'}"${pairAttr(row, col)}>${label}</td>`;
         })
         .join('');
 
-      return `<tr><td class="name">${esc(row.name)}</td>${cells}</tr>`;
+      return `<tr><td class="name"${teamAttr(row)}>${esc(row.name)}</td>${cells}</tr>`;
     })
     .join('');
 
@@ -2251,6 +2565,8 @@ function renderForecast() {
   const isMine = Boolean(team) && team.id === state.myTeamId;
 
   renderForecastPicker();
+  clearPops(POP.forecast);
+  hidePop();
   // The picker names the team too, but a heading that reads "Season forecast"
   // alone loses the one word you scan for when flicking between teams.
   $('forecastTitle').textContent = team
@@ -2265,6 +2581,7 @@ function renderForecast() {
     stats.innerHTML = '';
     tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${reason}</td></tr>`;
     chart.innerHTML = '';
+    syncChartView('forecastView', state.forecastView, false);
     setKey('forecastKey', '');
     $('forecastNote').innerHTML = note;
     resort(table);
@@ -2338,38 +2655,71 @@ function renderForecast() {
     return;
   }
 
+  // THE RED/GREEN SCALE, ON ALL THREE NUMERIC COLUMNS, WITH TWO DIFFERENT
+  // COMPARISON GROUPS — because this table is about ONE team, and "compared
+  // with what?" has a different honest answer for a chance and for a total.
+  //
+  //   Win % — against THIS TEAM'S OWN REMAINING GAMES. It is the only column
+  //     here that is comparable across weeks, and the reason is worth stating:
+  //     a win chance is a ratio of two projections FROM THE SAME WEEK, so
+  //     everything that makes a week low-scoring for everybody has already
+  //     cancelled out of it. Green is one of this team's better chances, red
+  //     one of its worse.
+  //
+  //   You / Opp (the two projected totals) — against THE TEN TEAMS THAT WEEK
+  //     (docs/colour-plan.md, 2026-10-08), one scale per row. Down this table
+  //     they would be a trap: both move with the week as much as with the
+  //     opponent, so a squad with three starters on bye in week 9 would read
+  //     red, reporting the NFL calendar as a weakness in the roster. Across the
+  //     league inside one week the calendar is the same for everybody and
+  //     cancels out — the comparison the Stats page's Opp proj column makes.
+  //     Opp is INVERTED: a low projection across the table is the good news.
+  //
   // data-v is omitted, never blanked, so a missing projection sinks to the
   // bottom whichever way the column is sorted.
-  const pts = (v) => (v === null ? `<td>${dash}</td>` : `<td data-v="${v}">${fmt(v)}</td>`);
-
-  // THE RED/GREEN SCALE, ON EXACTLY ONE OF THIS TABLE'S THREE NUMERIC COLUMNS.
-  //
-  // This table is about ONE team, so there is no league dimension in it at all
-  // and the comparison group can only be "this team's other remaining games".
-  // That is a real group for one of the columns and a trap for the other two:
-  //
-  //   Win % — SCALED. It is the only column here that is comparable across
-  //     weeks, and the reason is worth stating: a win chance is a ratio of two
-  //     projections FROM THE SAME WEEK, so everything that makes a week
-  //     low-scoring for everybody has already cancelled out of it. Green is one
-  //     of this team's better chances, red one of its worse, and high is good
-  //     with nothing to argue about.
-  //
-  //   You / Opp (the two projected totals) — NOT scaled, and not out of
-  //     caution. Both move for two reasons at once: who the opponent is, and
-  //     which week it is. A squad with three starters on bye in week 9 projects
-  //     low that week and so does everyone else, so a red cell there would be
-  //     reporting the NFL calendar as a weakness in the roster — and an
-  //     inverted scale on Opp would call the same week an easy fixture. The
-  //     honest version of "how hard is this opponent" is measured down the
-  //     league in one week, which is the Stats page's Opp proj column, and that
-  //     one is already coloured and already inverted.
+  const weekScales = new Map();
+  const weekScale = (w, invert) => {
+    const key = `${w}:${invert ? 1 : 0}`;
+    if (!weekScales.has(key)) {
+      const all = (d.byWeek.get(w) || [])
+        .filter((g) => g.homeId != null && g.awayId != null)
+        .flatMap((g) => [projectedPoints(g, 'home'), projectedPoints(g, 'away')])
+        .filter((v) => v !== null);
+      weekScales.set(key, heatScale(all, { invert }));
+    }
+    return weekScales.get(key);
+  };
+  const pts = (v, w, name, invert) => {
+    if (v === null) return `<td>${dash}</td>`;
+    const scale = weekScale(w, invert);
+    const h = heatOf(v, scale);
+    // The card: the number, what the league averages that week, where it
+    // stands. No `title` — one preview per number.
+    const card = statCard({
+      title: name,
+      sub: `Week ${w} projection`,
+      rows: [
+        { label: 'Projected', value: fmt(v) },
+        ...(h ? [
+          { label: 'League average that week', value: h.avgText },
+          { label: 'Among the ten teams', value: h.standing },
+        ] : []),
+      ],
+    }, { prefix: POP.forecast });
+    return `<td data-v="${v}"${h ? ` class="${h.cls}"` : ''}${card}>${fmt(v)}${heatMarkHtml(h)}</td>`;
+  };
   //
   // `PCT_MIN_SPREAD`, not the points default: these are probabilities printed
   // as whole per cent. A run-in where every game sits between 49% and 51% is a
   // run-in with nothing to say, and should draw nothing.
-  const heatWin = heatScale(rows.map((r) => r.p), { minSpread: PCT_MIN_SPREAD });
-  const W_WIN = 'this team’s other remaining games';
+  const heatWin = heatScale(rows.map((r) => r.p), {
+    minSpread: PCT_MIN_SPREAD,
+    fmt: (v) => `${Math.round(v * 100)}%`,     // the average, as the column prints it
+  });
+  const W_WIN = 'this team’s remaining games';
+  const facts = teamFacts();
+  const popFc = { prefix: POP.forecast };
+  const mineLabel = isMine ? 'You' : team.name;
 
   // TITLE ± AND LAST ±. Filled from what is already worked out for this team
   // and this season; anything else is "…" until runSwings() gets to it, which
@@ -2380,7 +2730,6 @@ function renderForecast() {
     state.swingToken++;
     state.swing = null;
   }
-  closeSwingPop();
   // A phone shows one of the two: the one the Trade page's goal is set to.
   table.classList.toggle('goal-last', tradePrefs.get('goal', 'title') === 'last');
   const simFailed = Boolean(swingInputs) && state.sim?.key === swingInputs.key && !state.sim.result;
@@ -2389,26 +2738,35 @@ function renderForecast() {
     .map((r) => {
       const w = r.g.week;
       const gap = r.mine !== null && r.theirs !== null ? round1(r.mine - r.theirs) : null;
-      // The cell already carried a `title` saying where the percentage came
-      // from, and it keeps it: the scale's words are appended rather than
-      // substituted, because "a projected +6.2 against Badgers" and "0.9 SD
-      // above this team's other games" are two different things a reader wants
-      // and js/touch-titles.js can only open one sheet per tap.
+      // THE WIN % CARD (docs/previews-plan.md): the two projections, the gap
+      // between them and the chance it comes to — the figures, where a `title`
+      // used to describe the method. Its last line is where this chance stands
+      // among the team's games left, in plain words (never standard deviations).
       const h = heatOf(r.p, heatWin, { what: W_WIN });
+      const oppId = r.mineHome ? r.g.awayId : r.g.homeId;
       const chance =
         r.p === null
           ? `<td>${dash}</td>`
-          : `<td data-v="${r.p}"${h ? ` class="${h.cls}"` : ''} ` +
-            `title="A projected ${signed(gap)} against ${esc(r.oppName)}, read against a ` +
-            `${fmt(sigma)}-point scoring spread.${h ? ` ${esc(h.words)}` : ''}">` +
-            `${pctText(r.p)}${heatMarkHtml(h)}</td>`;
+          : `<td data-v="${r.p}"${h ? ` class="${h.cls}"` : ''}${statCard({
+            title: 'Win chance',
+            sub: `Week ${w} · vs ${r.oppName}`,
+            rows: [
+              { label: mineLabel, note: 'projected', value: fmt(r.mine) },
+              { label: r.oppName, note: 'projected', value: fmt(r.theirs) },
+            ],
+            totals: [{ label: 'Gap', value: signed(gap) }],
+            total: { label: 'Win chance', ...pctValue(r.p) },
+            foot: h ? h.words : '',
+            href: teamHref(team.id, w),
+            hrefLabel: 'Open roster',
+          }, popFc)}>${pctText(r.p)}${heatMarkHtml(h)}</td>`;
 
       return `<tr${w === nextWeek ? ' class="now"' : ''}>
           <td data-v="${w}">${w}</td>
-          <td class="name">${esc(r.oppName)}</td>
+          <td class="name"${teamCard(oppId, w, facts, POP.forecast)}>${esc(r.oppName)}</td>
           <td class="left muted" data-v="${r.mineHome ? 1 : 0}">${r.mineHome ? 'Home' : 'Away'}</td>
-          ${pts(r.mine)}
-          ${pts(r.theirs)}
+          ${pts(r.mine, w, team.name, false)}
+          ${pts(r.theirs, w, r.oppName, true)}
           ${chance}
           ${swingCells(w, swingState(swingInputs, team.id, w, simFailed))}
         </tr>`;
@@ -2421,14 +2779,21 @@ function renderForecast() {
   // would assume. The thresholds go in the tucked note with the method, which
   // is the split the Stats page already uses and what keeps the panel from
   // gaining ninety words of prose.
-  // The comparison group is the whole point here and stays: this column is
-  // measured against THIS team's own remaining games, not the league, and
-  // nobody would assume that. Why the two point columns are plain went into
-  // `heatPara` with the rest of the method.
+  // The comparison group is the whole point here and stays: Win % is measured
+  // against THIS team's own remaining games, not the league, and nobody would
+  // assume that. The points are the other way about — the league, one week at
+  // a time — and the opponent's column is turned over, which is the second
+  // thing nobody would assume. The rest went into `heatPara` with the method.
+  const ptsShaded = [...weekScales.values()].some(Boolean);
+  const ptsKey = ptsShaded
+    ? ' Points are shaded against the league that week; a weaker opponent is green.'
+    : '';
   setKey('forecastKey', heatWin
     ? '<strong>Win %</strong> is shaded against this team’s <em>own</em> remaining games, ' +
-      'not the league: green a better chance, red a worse. Ends carry ▲▼ and bold.'
-    : '<strong>Nothing is shaded</strong>: every game left is about the same chance.');
+      `not the league: green a better chance, red a worse.${ptsKey} Ends carry ▲▼ and bold.`
+    : ptsShaded
+      ? `<strong>Win %</strong> is not shaded: every game left is about the same chance.${ptsKey}`
+      : '<strong>Nothing is shaded</strong>: every game left is about the same chance.');
 
   const dist = forecast.winTotalDistribution(probs, bankedWins);
   const range = forecast.credibleRange(dist, 0.8);
@@ -2441,24 +2806,110 @@ function renderForecast() {
   const place = tablePlaces(asOf).get(team.id) || null;
   const sos = remainingSos()?.get(team.id) || null;
 
-  stats.innerHTML = [
-    ['Place now', place ? `${ordinal(place.place)}<span class="muted"> of ${place.of}</span>` : '—'],
-    ['Banked', recordText(banked)],
-    ['Games left', String(rows.length)],
-    ['Run-in', sos ? `${ordinal(sos.rank)}<span class="muted"> hardest of ${sos.of}</span>` : '—'],
-    ['Expected wins', fmt(expected)],
-    ['80% range', range ? (range.lo === range.hi ? `${range.lo}` : `${range.lo}${EN}${range.hi}`) : '—'],
-  ]
-    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+  // EVERY TILE OPENS WHAT IT IS MADE OF (docs/previews-plan.md). Six small
+  // cards, each a list a reader can add up against the figure on the tile.
+  const rangeText = range ? (range.lo === range.hi ? `${range.lo}` : `${range.lo}${EN}${range.hi}`) : '—';
+  const decided = d.games
+    .filter((g) => g.homeId != null && g.awayId != null &&
+      (g.homeId === team.id || g.awayId === team.id) && !isRemaining(g, asOf) && winnerOf(g) !== null)
+    .sort((a, b) => a.week - b.week);
+  const oppOf = (g) => (g.homeId === team.id
+    ? { id: g.awayId, name: g.awayName } : { id: g.homeId, name: g.homeName });
+  const tiles = [
+    ['Place now', place ? `${ordinal(place.place)}<span class="muted"> of ${place.of}</span>` : '—',
+      place && {
+        title: 'Place now',
+        sub: team.name,
+        rows: [
+          { label: 'Record', value: recordText(place.rec) },
+          { label: 'Points for', value: fmt(place.pf) },
+        ],
+        total: { label: 'Place', value: `${ordinal(place.place)} of ${place.of}` },
+        foot: 'Ordered by wins, a tie as half a win, then points for.',
+      }],
+    ['Banked', recordText(banked), decided.length && {
+      title: 'Banked',
+      sub: team.name,
+      head: ['Wk', '', ''],
+      rows: decided.map((g) => {
+        const home = g.homeId === team.id;
+        const winner = winnerOf(g);
+        return {
+          lead: g.week,
+          label: winner === 'tie' ? 'Tied' : (winner === 'home') === home ? 'Won' : 'Lost',
+          note: `v ${oppOf(g).name}`,
+          value: `${fmt(home ? g.homeScore : g.awayScore)}${EN}${fmt(home ? g.awayScore : g.homeScore)}`,
+        };
+      }),
+      total: { label: 'Record', value: recordText(banked) },
+    }],
+    ['Games left', String(rows.length), {
+      title: 'Games left',
+      sub: team.name,
+      head: ['Wk', '', ''],
+      rows: rows.map((r) => ({ lead: r.g.week, label: r.oppName, value: r.mineHome ? 'Home' : 'Away' })),
+      total: { label: 'Games left', value: String(rows.length) },
+    }],
+    ['Run-in', sos ? `${ordinal(sos.rank)}<span class="muted"> hardest of ${sos.of}</span>` : '—',
+      sos && {
+        title: 'Run-in',
+        sub: 'opponents still to play',
+        head: ['Wk', '', 'Strength'],
+        rows: d.games
+          .filter((g) => gameState(g) !== 'final' && g.homeId != null && g.awayId != null &&
+            (g.homeId === team.id || g.awayId === team.id))
+          .sort((a, b) => a.week - b.week)
+          .map((g) => ({ lead: g.week, label: oppOf(g).name, value: fmt(state.strength.get(oppOf(g).id)) })),
+        totals: [{ label: 'Average', value: fmt(sos.mean) }],
+        total: { label: 'Rank', value: `${ordinal(sos.rank)} hardest of ${sos.of}` },
+      }],
+    ['Expected wins', fmt(expected), {
+      title: 'Expected wins',
+      sub: 'banked wins plus each chance',
+      head: ['Wk', '', ''],
+      rows: [
+        { lead: '', label: 'Banked', value: fmt(bankedWins) },
+        ...rows.filter((r) => Number.isFinite(r.p)).map((r) => ({
+          lead: r.g.week, label: r.oppName, note: pctText(r.p).replace(/&lt;/g, '<').replace(/&gt;/g, '>'),
+          value: `+${r.p.toFixed(2)}`,
+        })),
+      ],
+      total: { label: 'Expected wins', value: fmt(expected) },
+    }],
+    ['80% range', rangeText, range && {
+      title: '80% range',
+      sub: 'final win totals',
+      rows: dist
+        .filter((x) => x.wins >= range.lo && x.wins <= range.hi)
+        .map((x) => ({ label: plural(x.wins, 'win'), ...pctValue(x.p) })),
+      total: { label: `${rangeText} wins`, ...pctValue(range.p) },
+    }],
+  ];
+  stats.innerHTML = tiles
+    .map(([k, v, spec]) =>
+      `<div class="stat"${spec ? statCard(spec, popFc) : ''}>` +
+      `<div class="k">${k}</div><div class="v">${v}</div></div>`)
     .join('');
 
   // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
   // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
+  //
+  // TWO VIEWS OF THE SAME BARS. "At least N" is every bar from N upwards added
+  // together, so it starts at 100% and steps down. Same bins, same height, same
+  // margins: the drawing does not move when the view changes, only the bars.
+  const atLeast = state.forecastView === 'atleast';
+  const each = dist.map((x) => x.p * 100);
+  syncChartView('forecastView', state.forecastView, true);
   histogram(chart, {
     bins: dist.map((x) => String(x.wins)),
-    counts: dist.map((x) => x.p * 100),
+    counts: atLeast ? runningTotal(each, true) : each,
     yLabel: 'Chance (%)',
     height: 240,
+    tipFor: (i, bin, v) => ({
+      title: `${atLeast ? 'At least' : 'Exactly'} ${bin} ${Number(bin) === 1 ? 'win' : 'wins'}`,
+      value: barPct(v),
+      name: 'chance',
+    }),
   });
 
   const played = banked.w + banked.l + banked.t;
@@ -2468,8 +2919,8 @@ function renderForecast() {
     : 'Weeks already decided are banked; everything still open is forecast.';
 
   const shape = range
-    ? `Each bar is a final win total and its height is the chance of finishing on exactly ` +
-      `that many. ${range.lo === range.hi ? `${range.lo} wins alone holds` : `The ${range.lo}${EN}${range.hi} band holds`} ` +
+    ? `Each bar is a final win total and its height is the chance of finishing on ` +
+      `${atLeast ? 'at least' : 'exactly'} that many. ${range.lo === range.hi ? `${range.lo} wins alone holds` : `The ${range.lo}${EN}${range.hi} band holds`} ` +
       `${pctText(range.p)} of it, which is how wide the honest answer is.`
     : '';
 
@@ -2503,11 +2954,18 @@ function renderForecast() {
     ? `<strong>The colours.</strong> ${describeHeat(heatWin, {
       what: 'this team’s other remaining games', unit: false,
       high: 'one of its better chances', low: 'one of its worse',
-    })} The two point columns are deliberately left plain: they rise and fall with the week as ` +
-      'much as with the opponent, so a red there would be reporting a bye week as a weakness ' +
-      'in the roster. A win chance has no such problem — it is a ratio of two projections from ' +
-      'the same week, so everything that makes a week low-scoring for everybody has already ' +
-      'cancelled out of it.'
+    })} A win chance can be compared from week to week because it is a ratio of two ` +
+      'projections from the same week, so everything that makes a week low-scoring for ' +
+      'everybody has already cancelled out of it.'
+    : '';
+  // The two points columns: a different group, said separately so it is still
+  // said when Win % has nothing to shade.
+  const ptsPara = ptsShaded
+    ? '<strong>The two points columns</strong> are shaded against every team’s projection in ' +
+      'that same week, not against this team’s other weeks: down the table they rise and fall ' +
+      'with the week as much as with the opponent, and a bye week would read as a weak roster. ' +
+      'Green is a projection well above the league’s that week for this team, and well below ' +
+      'it for the opponent — an easier game. A figure opens the week’s average and where it stands.'
     : '';
 
   const swingPara =
@@ -2533,6 +2991,7 @@ function renderForecast() {
     standing,
     shape,
     heatPara,
+    ptsPara,
     swingPara,
     derivedCaveat(),
     projectionCaveat(lastWeek),
@@ -2673,16 +3132,17 @@ function runSwings(inputs) {
 
 // The figure opens where it comes from: the team's two chances with the game
 // won, the same two with it lost, and how many seasons each was counted over.
-// The pattern is the Stats page's Schedule-luck preview (js/stats-page.js,
-// `oppPop`): hover or focus shows a card for a mouse; a tap opens a sheet with
-// a Close button; Escape or a tap outside shuts it. Nothing is hover-only.
+//
+// IT IS THE SITE'S STAT CARD (js/pop.js), built when it is asked for: the cells
+// fill in one at a time long after the table is drawn, so there is nothing to
+// register at render time. This page had its own popover for it (`#swingPop`)
+// until 2026-10-08; the shared card behaves the same — hover or focus for a
+// mouse, a sheet with Close for a finger, Escape or a tap outside to shut it.
 
-let swingPop = null;
-
-function swingPopHtml(week) {
+function swingSpec(week) {
   const sw = state.swing ? state.swing.cells.get(Number(week)) : null;
   const team = forecastTeam();
-  if (!sw || !team) return '';
+  if (!sw || !team) return null;
   const g = state.data.games.find((x) =>
     x.week === Number(week) && (x.homeId === team.id || x.awayId === team.id));
   const opp = g ? (g.homeId === team.id ? g.awayName : g.homeName) : '';
@@ -2692,80 +3152,18 @@ function swingPopHtml(week) {
   const row = (label, c) =>
     `<tr><td class="name">${label}</td><td class="num">${pct(c.title)}</td>` +
     `<td class="num">${pct(c.last)}</td></tr>`;
-  return (
-    `<div class="op-h">Week ${esc(week)} <span class="muted">· ${esc(opp)}</span></div>` +
-    '<table><thead><tr><th class="name"></th><th class="num">Title</th><th class="num">Last</th></tr></thead>' +
-    `<tbody>${row(`If ${who} win`, sw.win)}${row(`If ${who} lose`, sw.loss)}</tbody>` +
-    `<tfoot><tr class="op-gap"><td class="name">Swing</td><td class="num">${gap(sw.title)}</td>` +
-    `<td class="num">${gap(sw.last)}</td></tr></tfoot></table>` +
-    `<div class="op-foot">${commas(sw.runs)} simulated seasons each way</div>` +
-    '<button type="button" class="op-close">Close</button>'
-  );
-}
-
-function closeSwingPop() {
-  if (swingPop) swingPop.hidden = true;
-}
-
-function openSwingPop(el, sheet) {
-  const html = swingPopHtml(el.dataset.swing);
-  if (!html) return;
-  if (!swingPop) {
-    swingPop = document.createElement('div');
-    swingPop.id = 'swingPop';
-    document.body.appendChild(swingPop);
-    swingPop.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('.op-close')) closeSwingPop();
-    });
-  }
-  swingPop.className = sheet ? 'opp-pop sheet' : 'opp-pop';
-  swingPop.innerHTML = html;
-  swingPop.hidden = false;
-  swingPop.style.left = '';
-  swingPop.style.top = '';
-  if (sheet) return;
-  // Beside the figure: its right edge on the figure's, below it unless only
-  // above has the room.
-  const r = el.getBoundingClientRect();
-  const w = swingPop.offsetWidth;
-  const h = swingPop.offsetHeight;
-  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
-  const below = r.bottom + 6;
-  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
-  swingPop.style.left = `${left}px`;
-  swingPop.style.top = `${top}px`;
-}
-
-/** One set of listeners on the table, which outlives every repaint of its rows. */
-function wireSwingPop(table) {
-  const target = (e) => (e.target && e.target.closest ? e.target.closest('.sw-v[data-swing]') : null);
-  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
-  table.addEventListener('mouseover', (e) => {
-    const el = target(e);
-    if (el && !noHover()) openSwingPop(el, false);
-  });
-  table.addEventListener('mouseout', (e) => {
-    if (target(e) && !noHover()) closeSwingPop();
-  });
-  table.addEventListener('click', (e) => {
-    const el = target(e);
-    if (el) openSwingPop(el, noHover());
-  });
-  table.addEventListener('keydown', (e) => {
-    const el = target(e);
-    if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openSwingPop(el, noHover()); }
-  });
-  table.addEventListener('focusin', (e) => {
-    const el = target(e);
-    if (el && !noHover()) openSwingPop(el, false);
-  });
-  table.addEventListener('focusout', () => { if (!noHover()) closeSwingPop(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSwingPop(); });
-  document.addEventListener('click', (e) => {
-    if (!swingPop || swingPop.hidden) return;
-    if (swingPop.contains(e.target) || target(e)) return;
-    closeSwingPop();
-  });
+  return {
+    title: `Week ${week}`,
+    sub: opp,
+    // Two figures a row (title, last), so the table is given whole.
+    tableHtml:
+      '<table class="sc-rows"><thead><tr><th class="name"></th><th class="num">Title</th>' +
+      '<th class="num">Last</th></tr></thead>' +
+      `<tbody>${row(`If ${who} win`, sw.win)}${row(`If ${who} lose`, sw.loss)}</tbody>` +
+      `<tfoot><tr class="sc-total"><td class="name">Swing</td><td class="num">${gap(sw.title)}</td>` +
+      `<td class="num">${gap(sw.last)}</td></tr></tfoot></table>`,
+    foot: `${commas(sw.runs)} simulated seasons each way`,
+  };
 }
 
 // ------------------------------------------------------------ season simulation
@@ -2896,6 +3294,7 @@ function renderSimulation() {
     // divisions warning to be about.
     $('simWarn').hidden = true;
     $('simChart').innerHTML = '';
+    syncChartView('simView', state.simView, false);
     // Ten columns: the bracket has its own four, and the record sits by the name. A colspan that has drifted
     // short leaves the message boxed into the left of the table rather than
     // spanning it, which reads as a broken row rather than a sentence.
@@ -3001,20 +3400,55 @@ function paintSimulation(sim, inputs) {
   // title is the person who wins the league" — so "Wins the title" is the
   // championship round, and topping the regular-season table is its own,
   // separate line that is never called a title anywhere on this page.
-  const who = (id) => `<div class="who">${esc(nameById.get(id) || `Team ${id}`)}</div>`;
-  const stat = (k, v, id) =>
-    `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${id == null ? '' : who(id)}</div>`;
+  clearPops(POP.simulation);
+  hidePop();
+  const popSim = { prefix: POP.simulation };
+  const nameOf = (id) => nameById.get(id) || `Team ${id}`;
+  const who = (id) => `<div class="who">${esc(nameOf(id))}</div>`;
+  const stat = (k, v, id, spec) =>
+    `<div class="stat"${spec ? statCard(spec, popSim) : ''}><div class="k">${k}</div>` +
+    `<div class="v">${v}</div>${id == null ? '' : who(id)}</div>`;
   const po = sim.playoff;
+  const seasons = `${commas(sim.runs)} simulated seasons`;
+  // Where one team's chance ranks in the league, 1st = the most likely.
+  const rankOf = (pick, t) =>
+    `${ordinal(1 + sim.teams.filter((x) => pick(x) > pick(t)).length)} of ${sim.teams.length}`;
+  // A "most" tile: the three teams it happens to most often. Click → the leader.
+  const mostSpec = (title, pick) => {
+    const top = sim.teams.slice().sort((a, b) => pick(b) - pick(a)).slice(0, 3);
+    return {
+      title,
+      rows: top.map((t) => ({ label: nameOf(t.teamId), ...pctValue(pick(t)) })),
+      foot: seasons,
+      href: teamHref(top[0].teamId, inputs.asOf),
+      hrefLabel: 'Open roster',
+    };
+  };
+  // The picked team's own chance: the count it is, and where it ranks.
+  const ownSpec = (title, pick) => ({
+    title,
+    sub: nameOf(mine.teamId),
+    rows: [
+      { label: 'Seasons', value: seasonsOf(pick(mine), sim.runs) },
+      { label: 'Rank in the league', value: rankOf(pick, mine) },
+    ],
+    total: { label: title, ...pctValue(pick(mine)) },
+  });
 
   $('simStats').innerHTML = [
     po && sim.titleFavourite
-      ? stat('Wins the title most', pctText(sim.titleFavourite.pTitle), sim.titleFavourite.teamId)
+      ? stat('Wins the title most', pctText(sim.titleFavourite.pTitle), sim.titleFavourite.teamId,
+        mostSpec('Wins the title most', (t) => t.pTitle))
       : '',
-    stat('Tops the table most', pctText(sim.tableWinner.pFirst), sim.tableWinner.teamId),
-    stat('Finishes last most', pctText(sim.wooden.pLast), sim.wooden.teamId),
-    mine && po ? stat('Title chance', pctText(mine.pTitle), mine.teamId) : '',
-    mine && po ? stat('Makes the playoffs', pctText(mine.pPlayoffs), mine.teamId) : '',
-    mine ? stat('Last-place chance', pctText(mine.pLast), mine.teamId) : '',
+    stat('Tops the table most', pctText(sim.tableWinner.pFirst), sim.tableWinner.teamId,
+      mostSpec('Tops the table most', (t) => t.pFirst)),
+    stat('Finishes last most', pctText(sim.wooden.pLast), sim.wooden.teamId,
+      mostSpec('Finishes last most', (t) => t.pLast)),
+    mine && po ? stat('Title chance', pctText(mine.pTitle), mine.teamId, ownSpec('Title chance', (t) => t.pTitle)) : '',
+    mine && po
+      ? stat('Makes the playoffs', pctText(mine.pPlayoffs), mine.teamId, ownSpec('Makes the playoffs', (t) => t.pPlayoffs))
+      : '',
+    mine ? stat('Last-place chance', pctText(mine.pLast), mine.teamId, ownSpec('Last-place chance', (t) => t.pLast)) : '',
   ]
     .filter(Boolean)
     .join('');
@@ -3036,15 +3470,28 @@ function paintSimulation(sim, inputs) {
         : `No bracket could be built, so these are regular-season places.`);
     // Percentages, not 0..1 probabilities: the y-axis tick formatter prints one
     // decimal place, so a 0..1 axis renders as 0, 0.1, 0.2 and reads as broken.
+    //
+    // "This place or better" is every bar from 1st down to that place, added:
+    // it climbs to 100% at last place. Same box either way (see the forecast).
+    const orBetter = state.simView === 'better';
+    const eachPlace = mine.places.map((p) => p * 100);
+    syncChartView('simView', state.simView, true);
     histogram(chart, {
       bins: mine.places.map((_, i) => ordinal(i + 1)),
-      counts: mine.places.map((p) => p * 100),
+      counts: orBetter ? runningTotal(eachPlace, false) : eachPlace,
       yLabel: 'Chance (%)',
       height: 240,
+      // 1st has nothing better than it, so "or better" would be noise there.
+      tipFor: (i, bin, v) => ({
+        title: `Finishes ${bin}${orBetter && i > 0 ? ' or better' : ''}`,
+        value: barPct(v),
+        name: 'of seasons',
+      }),
     });
   } else {
     $('simCap').textContent = '';
     chart.innerHTML = '';
+    syncChartView('simView', state.simView, false);
   }
 
   // ---- the projected final table ------------------------------------------
@@ -3093,15 +3540,11 @@ function paintSimulation(sim, inputs) {
     title: pctScale((t) => t.pTitle),
     last: pctScale((t) => t.pLast, true),
   };
-  const W_SIM = {
-    wins: 'the wins the rest of the league is projected',
-    place: 'where the rest of the league finishes',
-    playoffs: 'the rest of the league’s chance of qualifying',
-    bye: 'the rest of the league’s chance of a bye',
-    first: 'the rest of the league’s chance of topping the table',
-    title: 'the rest of the league’s chance of the title',
-    last: 'the rest of the league’s chance of finishing last',
-  };
+  const facts = teamFacts();
+  const gamesLeft = new Map(d.teams.map((x) => [x.id, 0]));
+  for (const g of inputs.games) {
+    for (const id of [g.homeId, g.awayId]) if (gamesLeft.has(id)) gamesLeft.set(id, gamesLeft.get(id) + 1);
+  }
 
   tbody.innerHTML = sim.byMean
     .map((t) => {
@@ -3109,6 +3552,7 @@ function paintSimulation(sim, inputs) {
       const isPicked = Boolean(team) && t.teamId === team.id;
       const rec = simRecord(t.teamId, inputs);
       const cls = [isMe ? 'me' : '', isPicked ? 'picked' : ''].filter(Boolean).join(' ');
+      const name = nameOf(t.teamId);
 
       // A team with no bracket (the run could not be bracketed at all) gets a
       // dash rather than a 0%: "cannot be worked out" and "never happens" are
@@ -3119,24 +3563,52 @@ function paintSimulation(sim, inputs) {
       // css/app.css paints them with background-COLOR while the scale is a
       // background-IMAGE, so a row can be yours, picked and deep green at once
       // and all three claims survive.
-      const cell = (v, text, scale, what) => {
+      //
+      // EVERY FIGURE OPENS A CARD (docs/previews-plan.md): what it was counted
+      // from — "2,310 of 10,000 seasons" — and where it stands in its column,
+      // in the scale's plain words ("2nd highest of 10"). The card replaces the
+      // `title` those words used to sit in.
+      const cell = (v, text, scale, col, rows) => {
         if (v === null || v === undefined || Number.isNaN(v)) return `<td>${dash}</td>`;
-        const h = heatOf(v, scale, { what });
-        return `<td data-v="${v}"${h ? ` class="${h.cls}" title="${esc(h.words)}"` : ''}>` +
+        const h = heatOf(v, scale);
+        const all = h ? [...rows, { label: 'In this column', value: h.standing }] : rows;
+        return `<td data-v="${v}"${h ? ` class="${h.cls}"` : ''}` +
+          `${statCard({ title: name, sub: col, rows: all }, popSim)}>` +
           `${text}${heatMarkHtml(h)}</td>`;
       };
+      const chance = (p, col, scale) =>
+        cell(p, pctText(p), scale, col, [{ label: 'Seasons', value: seasonsOf(p, sim.runs) }]);
+      const b = inputs.banked?.get ? inputs.banked.get(t.teamId) : null;
+      const bankedWins = b && typeof b.wins === 'number' ? b.wins : rec.wins;
+      const left = gamesLeft.get(t.teamId) || 0;
 
       return `<tr${cls ? ` class="${cls}"` : ''}>
-          <td class="name">${esc(nameById.get(t.teamId) || `Team ${t.teamId}`)}</td>
+          <td class="name"${teamCard(t.teamId, inputs.asOf, facts, POP.simulation)}>${esc(name)}</td>
           <td class="num" data-v="${rec.wins}"${recTitle(rec)}>${rec.text}</td>
-          ${cell(t.meanWins, fmt(t.meanWins), heatCols.wins, W_SIM.wins)}
-          ${cell(t.meanPlace, fmt(t.meanPlace), heatCols.place, W_SIM.place)}
-          <td data-v="${t.modePlace}">${ordinal(t.modePlace)}</td>
-          ${cell(t.pPlayoffs, pctText(t.pPlayoffs), heatCols.playoffs, W_SIM.playoffs)}
-          ${cell(t.pBye, pctText(t.pBye), heatCols.bye, W_SIM.bye)}
-          ${cell(t.pFirst, pctText(t.pFirst), heatCols.first, W_SIM.first)}
-          ${cell(t.pTitle, pctText(t.pTitle), heatCols.title, W_SIM.title)}
-          ${cell(t.pLast, pctText(t.pLast), heatCols.last, W_SIM.last)}
+          ${cell(t.meanWins, fmt(t.meanWins), heatCols.wins, 'Proj. wins', [
+            { label: 'Wins banked', value: fmt(bankedWins) },
+            { label: `Average from ${plural(left, 'game')} left`, value: `+${fmt(t.meanWins - bankedWins)}` },
+            { label: 'Projected wins', value: fmt(t.meanWins) },
+          ])}
+          ${cell(t.meanPlace, fmt(t.meanPlace), heatCols.place, 'Avg place', [
+            { label: 'Most likely', value: `${ordinal(t.modePlace)}, ${seasonsOf(t.places[t.modePlace - 1], sim.runs)}` },
+            { label: 'Average place', value: fmt(t.meanPlace) },
+          ])}
+          <td data-v="${t.modePlace}"${statCard({
+            title: name,
+            sub: 'Most likely',
+            rows: t.places
+              .map((p, i) => ({ p, i }))
+              .sort((x, y) => y.p - x.p)
+              .slice(0, 3)
+              .map(({ p, i }) => ({ label: `Finishes ${ordinal(i + 1)}`, value: seasonsOf(p, sim.runs) })),
+            foot: seasons,
+          }, popSim)}>${ordinal(t.modePlace)}</td>
+          ${chance(t.pPlayoffs, 'Playoffs %', heatCols.playoffs)}
+          ${chance(t.pBye, 'Bye %', heatCols.bye)}
+          ${chance(t.pFirst, '1st in table %', heatCols.first)}
+          ${chance(t.pTitle, 'Title %', heatCols.title)}
+          ${chance(t.pLast, 'Last %', heatCols.last)}
         </tr>`;
     })
     .join('');
@@ -3548,6 +4020,29 @@ $('simRuns').addEventListener('click', (e) => {
   renderSimulation();   // the run count IS in the cache key, so this re-runs
 });
 
+// The two charts' view switches. Neither changes what was computed — the
+// forecast is arithmetic and the simulation comes back from its cache — so a
+// press only redraws.
+$('forecastView').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-view]');
+  if (!btn) return;
+  const view = btn.dataset.view === 'atleast' ? 'atleast' : 'exact';
+  if (view === state.forecastView) return;
+  state.forecastView = view;
+  prefs.set('forecastView', view);
+  renderForecast();
+});
+
+$('simView').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-view]');
+  if (!btn) return;
+  const view = btn.dataset.view === 'better' ? 'better' : 'each';
+  if (view === state.simView) return;
+  state.simView = view;
+  prefs.set('simView', view);
+  renderSimulation();
+});
+
 // Walking the season one week at a time used to mean thirteen trips through a
 // dropdown.
 function stepWeek(delta) {
@@ -3575,7 +4070,19 @@ $('h2hView').addEventListener('click', (e) => {
 
 // The forecast reads forwards in time, so it opens in week order.
 enableSort($('forecastTable'), { defaultIndex: 0, defaultAsc: true });
-wireSwingPop($('forecastTable'));
+
+// THE PREVIEWS. One set of listeners per panel, each outliving every repaint of
+// what is inside it. Title ± / Last ± are served by selector, because their
+// cells fill in after the table is drawn (see swingSpec).
+for (const id of ['summary', 'matchups', 'forecastStats', 'forecastTable', 'simStats', 'simTable']) {
+  wirePops($(id));
+}
+wirePops($('h2hGrid'), { selector: 'td[data-pair]', card: h2hPairSpec });
+wirePops($('h2hGrid'), { selector: 'td[data-team]', card: h2hTeamSpec });
+wirePops($('forecastTable'), {
+  selector: '.sw-v[data-swing]',
+  card: (el) => swingSpec(el.dataset.swing),
+});
 // The projected table opens on the most likely finishing order: average place,
 // lowest first. That IS the ranking the panel exists to give.
 enableSort($('simTable'), { defaultIndex: 3, defaultAsc: true });
