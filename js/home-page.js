@@ -42,7 +42,17 @@ import { INJURY_RANK, healthy, injuryLabel, injuryClass } from './injury.js';
 // import. Nothing here invents a comparison group: every scale on this page is
 // one column of the same kind of number, across the same ten squads, in the
 // same week.
-import { heatScale, heatOf, heatMarkHtml, describeHeat } from './heat.js';
+import { heatScale, heatOf, heatStanding, heatMarkHtml, describeHeat, ordinal } from './heat.js';
+// THE PREVIEWS (Tim, 2026-10-08: "a bad preview is any player reference in the
+// home section"). A player's name opens the classic player card, built from the
+// weeks this page already holds; a number opens a stat card of the parts it is
+// made of; a click on either follows its connector (js/links.js).
+import { statCard, registerPop, clearPops, wirePops, teamWeekSpec, POP_ATTR, POP_GO_ATTR } from './pop.js';
+import {
+  playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, reopenTip,
+  zeroKind, byeWeekOf,
+} from './player-card.js';
+import { teamHref, playerHref, weekHref, statsHref } from './links.js';
 // The positional floor's one sentence, so Home states it in the same words as
 // Analysis and Trade. See js/floor.js.
 import { describeFloors } from './floor.js';
@@ -89,6 +99,9 @@ const state = {
   // NFL kickoffs, `{ [proTeamId]: { [week]: epochMs } }`, or null until a swap
   // is on offer and they are needed to say who is locked. See readKickoffs().
   kickoffs: null,
+  // Every NFL team's bye week, `{ [proTeamId]: week }`, or null: what tells a
+  // bye's 0.00 from a ruled-out man's on the player cards. See readByes().
+  byes: null,
 };
 
 // ------------------------------------------------------------------ formatting
@@ -118,17 +131,56 @@ const dash = '<span class="muted">—</span>';
  * Players page, so the matchup cards, the strength bars and the bench table's
  * Team column stay plain text.
  *
- * @param {number|string|null|undefined} id  ESPN's playerId
- * @param {string} name   the player, for the title; escaped here
+ * EVERY ONE OPENS THE CLASSIC PLAYER CARD (Tim, 2026-10-08) — his name, ESPN's
+ * Avg · Proj · rank, and the Week / Proj / Act chart — built by
+ * `playerCardFromWeeks` from the weeks this page already holds (`cur.held`):
+ * the played weeks the win chance read, the week on screen and the bench
+ * panel's. A week the page does not hold is drawn as waiting; nothing is read
+ * for a card (rule 20). The link carries no `title`: one preview per reference.
+ * A man with no id still gets the card, on a plain focusable span.
+ *
+ * @param {Object} p      the roster entry (`playerId`, `name`, `position`, …)
  * @param {string} inner  already-escaped HTML to sit inside the link
+ * @param {Object} [o]
+ * @param {boolean} [o.card=true] false for a number whose own cell opens a
+ *        stat card instead — the link is then only the way to his row.
  */
-function pref(id, name, inner) {
-  if (id === null || id === undefined) return inner;
+function pref(p, inner, { card = true } = {}) {
+  const id = p ? p.playerId : null;
+  const none = id === null || id === undefined;
+  let tip = '';
+  if (card && cur) {
+    const made = playerCardFromWeeks(cur.held, p, {
+      weeks: cur.weeks,
+      currentWeek: cur.currentWeek,
+      byes: cur.byes,
+      demo: cur.isDemo,
+      id: `home:${none ? p.name : id}`,
+    });
+    // ESPN's word for a healthy man is "ACTIVE", which is no designation at
+    // all: the card's top line names him and stops.
+    made.ident = made.ident.replace(/ · ACTIVE$/, '');
+    tip = tipAttr(registerRun(made, 'home'));
+  }
+  if (none) return tip ? `<span class="pref"${tip} tabindex="0">${inner}</span>` : inner;
+  // Where the link goes, said as an `aria-label` — the `title` that used to
+  // say it would be a second tooltip on top of the card.
   return (
-    `<a class="pref" href="waivers.html?player=${encodeURIComponent(id)}"` +
-    ` title="${esc(name)} — open his next 13 weeks on the Players page">${inner}</a>`
+    `<a class="pref" href="${esc(playerHref(id))}"${tip}` +
+    ` aria-label="${esc(p.name)} — open his next 13 weeks on the Players page">${inner}</a>`
   );
 }
+
+/**
+ * The page being painted — set by `render`, read by the helpers that hang a
+ * card on something (`pref`, the spec builders below). The model is the only
+ * thing they read, so a suite that renders a model of its own gets cards built
+ * from that model and nothing else.
+ */
+let cur = null;
+
+/** A stat card's attribute for this page, or '' when there is no spec. */
+const pop = (spec, focusable = true) => (spec ? statCard(spec, { prefix: 'home', focusable }) : '');
 
 const isNum = (n) => typeof n === 'number' && !Number.isNaN(n);
 
@@ -150,8 +202,8 @@ const inline = (n, digits = 1) => (isNum(n) ? n.toFixed(digits) : dash);
  * `scale` is a scale from js/heat.js, or null for no colour at all. When one is
  * given the cell takes THREE of the four "never colour alone" channels at once:
  * the class carries both the tint and a heavier weight, the ▲/▼ goes on the end
- * of the number at the end of the scale, and the `title` says where the number
- * stands in words (js/touch-titles.js makes that a tap on a phone). The fourth
+ * of the number at the end of the scale, and the cell's card (`card`, below)
+ * says where the number stands in plain words. The fourth
  * — the key sentence under the table — is the caller's job and is not optional.
  *
  * `data-v` is emitted whatever else happens, which matters more than it looks:
@@ -163,16 +215,18 @@ const inline = (n, digits = 1) => (isNum(n) ? n.toFixed(digits) : dash);
  */
 function numCell(
   n,
-  { digits = 1, sign = false, cls = '', wrap = null, scale = null, what = '' } = {}
+  { digits = 1, sign = false, cls = '', wrap = null, scale = null, card = null } = {}
 ) {
   if (!isNum(n)) return `<td${cls ? ` class="${cls}"` : ''}>${dash}</td>`;
   const text = (sign && n > 0 ? '+' : '') + n.toFixed(digits);
-  const h = scale ? heatOf(n, scale, { what }) : null;
+  const h = scale ? heatOf(n, scale) : null;
   const klass = [cls, h ? h.cls : ''].filter(Boolean).join(' ');
+  // WHERE THE NUMBER STANDS IS THE CARD'S JOB NOW, not a `title`'s (Tim,
+  // 2026-10-08): `card(h)` returns the stat card's attribute, with the cell's
+  // standing in plain words on it. The cell carries no `title` beside it.
   return (
-    `<td${klass ? ` class="${klass}"` : ''} data-v="${n}"` +
-    `${h ? ` title="${esc(h.words)}"` : ''}>` +
-    `${wrap ? wrap(text) : text}${h ? heatMarkHtml(h) : ''}</td>`
+    `<td${klass ? ` class="${klass}"` : ''} data-v="${n}"${card ? card(h) : ''}>` +
+    `${wrap ? wrap(text, h) : text}${h ? heatMarkHtml(h) : ''}</td>`
   );
 }
 
@@ -259,8 +313,21 @@ export function buildModel({
   // where the page already holds them (see lastScores) — the injury report's
   // "Last" column. null when no week is finished.
   last = null,
+  // week -> teams: every roster week the page ALREADY holds beyond the ones
+  // above (the played weeks read for the win chance; the sample league's
+  // generated weeks). The player cards are drawn from these and nothing is
+  // read for them. `byes` is `{ [proTeamId]: week }` or null.
+  weekTeams = null,
+  byes = null,
 }) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
+  // THE WEEKS HELD, for the player cards: what was handed in, then the week on
+  // screen, the bench panel's and the last finished one where they are held.
+  const held = new Map();
+  for (const [w, teams] of weekTeams || []) if (teams?.length) held.set(Number(w), teams);
+  if (rosters?.teams?.length) held.set(Number(week), rosters.teams);
+  if (benchRosters?.teams?.length && benchWeek !== week) held.set(Number(benchWeek), benchRosters.teams);
+  if (last?.teams?.length && !held.has(Number(last.week))) held.set(Number(last.week), last.teams);
   // The record beside each name: banked W–L, and for a team whose game is
   // being played that game as its chance of winning it (`chances`).
   const banked = bankedRecords(schedule);
@@ -364,9 +431,35 @@ export function buildModel({
   const benchGames = benchSame ? games : schedule.byWeek.get(benchWeek) || [];
   const benchFrom = benchSame ? rosters : benchRosters;
 
+  // A TEAM, FOR ITS CARD: record, average and this week's projection, and the
+  // games behind the record. The average's rank is among the teams that have
+  // played; `proj` is the lineup as set for the week on screen.
+  const ranked = [...banked.values()].filter((t) => t.games.length)
+    .map((t) => t.pf / t.games.length).sort((a, b) => b - a);
+  const teamInfo = new Map((schedule.teams || []).map((t) => {
+    const b = banked.get(t.id);
+    const avg = b && b.games.length ? b.pf / b.games.length : null;
+    return [t.id, {
+      id: t.id,
+      name: t.name,
+      record: recordOf(t.id),
+      games: b ? b.games : [],
+      avg,
+      avgRank: avg === null ? null : ranked.findIndex((v) => v <= avg + 1e-9) + 1,
+      avgOf: ranked.length,
+      proj: roster.get(t.id)?.projectedTotal ?? null,
+    }];
+  }));
+
   return {
     isDemo,
     week,
+    currentWeek: currentWeek(schedule),
+    held,
+    byes,
+    squads: roster,
+    benchSquads: new Map((benchFrom?.teams || []).map((t) => [t.id, t])),
+    teamInfo,
     weeks: schedule.weeks,
     leagueName: schedule.leagueName,
     teamCount: schedule.teams.length,
@@ -380,7 +473,7 @@ export function buildModel({
     playedThisWeek: games.filter((g) => g.played).length,
     totalGames: schedule.games.length,
     playedOverall: schedule.games.filter((g) => g.played).length,
-    injuries: injuredStarters(rosters, last?.teams ?? null),
+    injuries: injuredStarters(rosters, last?.teams ?? null, { week, byes, isDemo }),
     lastWeek: last?.week ?? null,
     bench: benchReport(benchFrom, benchGames),
     benchWeek,
@@ -403,8 +496,10 @@ export function buildModel({
  */
 function bankedRecords(schedule) {
   const out = new Map();
+  // `games` and `pf` are the same final games one by one, for the record's
+  // card (W–L by week) and the team card's average.
   const of = (id) => {
-    if (!out.has(id)) out.set(id, { w: 0, l: 0, t: 0 });
+    if (!out.has(id)) out.set(id, { w: 0, l: 0, t: 0, pf: 0, games: [] });
     return out.get(id);
   };
   for (const t of schedule.teams || []) of(t.id);
@@ -417,7 +512,18 @@ function bankedRecords(schedule) {
     if (winner === 'tie') { home.t++; away.t++; }
     else if (winner === 'home') { home.w++; away.l++; }
     else { away.w++; home.l++; }
+    const note = (side, mine, theirs, oppName, won) => {
+      if (!isNum(mine) || !isNum(theirs)) return;
+      side.pf += mine;
+      side.games.push({
+        week: g.week, opp: oppName, pf: mine, pa: theirs,
+        result: winner === 'tie' ? 'T' : won ? 'W' : 'L',
+      });
+    };
+    note(home, g.homeScore, g.awayScore, g.awayName, winner === 'home');
+    note(away, g.awayScore, g.homeScore, g.homeName, winner === 'away');
   }
+  for (const t of out.values()) t.games.sort((a, b) => a.week - b.week);
   return out;
 }
 
@@ -457,7 +563,7 @@ export function deadlineText({ deadline = null, waiverClears = null, now = Date.
  * questionable starter is a decision the owner still has to make, this week,
  * whether or not a single game has been played.
  */
-function injuredStarters(rosters, lastTeams = null) {
+function injuredStarters(rosters, lastTeams = null, { week = null, byes = null, isDemo = false } = {}) {
   // playerId -> what he scored in the last finished week, whichever squad (or
   // bench) he was on then. A man on nobody's roster that week has no entry.
   const scored = new Map();
@@ -466,11 +572,43 @@ function injuredStarters(rosters, lastTeams = null) {
       if (p.playerId != null && isNum(p.actual)) scored.set(p.playerId, p.actual);
     }
   }
+  // THE POSITION SCALE (Tim, 2026-10-08, docs/colour-plan.md). Proj and Last
+  // are each measured against THE LEAGUE'S STARTERS AT HIS POSITION that week —
+  // the group the Analysis page's Player rows use — never against the other
+  // injured men, who are a quarterback above a kicker. A zero that is a bye or
+  // a ruled-out man's is not a projection of his play: it is left out of the
+  // group, and his own cell is left plain.
+  const real = (p) => {
+    const v = projOf(p);
+    if (v !== 0) return v;
+    const kind = zeroKind(0, {
+      week, byeWeek: byeWeekOf(p, byes), injuryStatus: p.injuryStatus, demo: isDemo,
+    });
+    return kind === 'zero' ? 0 : null;
+  };
+  const scalesBy = (teams, valueOf) => {
+    const by = new Map();
+    for (const t of teams || []) {
+      for (const p of t.starters || []) {
+        const v = valueOf(p);
+        if (!isNum(v)) continue;
+        if (!by.has(p.position)) by.set(p.position, []);
+        by.get(p.position).push(v);
+      }
+    }
+    return new Map([...by].map(([pos, vals]) => [pos, heatScale(vals)]));
+  };
+  const projScales = scalesBy(rosters?.teams, real);
+  const lastScales = scalesBy(lastTeams, (p) => p.actual);
   const out = [];
   for (const team of rosters?.teams || []) {
     for (const p of team.starters || []) {
       if (healthy(p.injuryStatus)) continue;
       out.push({
+        // The roster entry itself, for his card.
+        player: p,
+        projScale: isNum(real(p)) ? projScales.get(p.position) || null : null,
+        lastScale: lastScales.get(p.position) || null,
         teamId: team.id,
         teamName: team.name,
         // ESPN's own id, carried through so the row can link to the man rather
@@ -547,6 +685,8 @@ function benchReport(rosters, games) {
     .map((t) => ({
       id: t.id,
       name: t.name,
+      // The squad itself, for the cards that name its men.
+      squad: t,
       started: isNum(t.actualTotal) ? t.actualTotal : null,
       bench: t.benchActualTotal,
       miss: biggestMiss(t),
@@ -621,6 +761,29 @@ function lastScores() {
     teams = state.oddsTeams.get(lw) || null;
   }
   return { week: lw, teams };
+}
+
+/** The sample league's weeks, generated once: they cost nothing to make. */
+let demoHeld = { schedule: null, weeks: null };
+
+/**
+ * week -> teams for the player cards, FROM WHAT THE PAGE ALREADY HOLDS: the
+ * roster weeks the win chance read (its played weeks and the current one), or
+ * the sample league's generated weeks. Never a read of its own — a card is not
+ * worth a request, on a laptop or on the phone's synced copy (rule 20).
+ * `buildModel` adds the week on screen and the bench panel's.
+ */
+function heldWeeks() {
+  if (!state.isDemo) return state.oddsTeams;
+  if (demoHeld.schedule !== state.schedule) {
+    const weeks = new Map();
+    for (const w of state.schedule?.weeks || []) {
+      const teams = generateDemoWeekRosters(w)?.teams;
+      if (teams?.length) weeks.set(w, teams);
+    }
+    demoHeld = { schedule: state.schedule, weeks };
+  }
+  return demoHeld.weeks;
 }
 
 function setStatus(html, isError = false) {
@@ -734,6 +897,7 @@ async function loadLiveNow(cfg, wanted) {
     state.oddsTeams = new Map();
     state.waiverClears = null;
     state.waiverRead = null;
+    state.byes = null;
     state.rosters = rosters;
     const odds = startOdds();
     await loadBench();
@@ -864,6 +1028,9 @@ async function liveChances(data, weekTeams, floors) {
     if (typeof season.fetchProGames !== 'function') return new Map();
     if (await syncedCopy()) return new Map();
     const proGames = await season.fetchProGames();
+    // Did the NFL's schedule land? `readByes` asks for the byes only when it
+    // did, because then they are on the payload already held.
+    proHeld = !!proGames && Object.keys(proGames).length > 0;
     const week = capture.openWeeks(data)[0];
     return capture.liveWinChancesFrom({
       data, weekTeams, floors, proGames,
@@ -937,7 +1104,35 @@ function startOdds() {
   const waivers = state.waiverRead.then((at) => {
     if (token === state.oddsToken) state.waiverClears = at;
   });
-  return Promise.all([odds, waivers, readKickoffs()]).then(() => {});
+  // After the odds, whose own read of the NFL's games (`liveChances`) is the
+  // payload the byes come off — so they cost nothing by then.
+  const byes = odds.then(() => readByes(token));
+  return Promise.all([odds, waivers, readKickoffs(), byes]).then(() => {});
+}
+
+/**
+ * Every NFL team's bye week, for the player cards: what tells a bye's 0.00
+ * from a ruled-out man's. Kept for the visit.
+ *
+ * NOT ASKED ON THE SYNCED COPY (rule 20): `season.fetchByeWeeks` would go to
+ * ESPN when a sync carried no byes, and a card's wording is not worth a
+ * request. There a zero reads as the card has always read one with the byes
+ * unknown. On a laptop it is the payload `liveChances` has just read, so it
+ * adds no request — and when that read came back with no games in it
+ * (`proHeld`), the byes are not asked for at all rather than asked for again.
+ * Never throws.
+ */
+let proHeld = false;
+async function readByes(token) {
+  try {
+    if (state.byes || state.isDemo || !proHeld) return;
+    if (typeof season.fetchByeWeeks !== 'function') return;
+    if (await syncedCopy()) return;
+    const b = await season.fetchByeWeeks();
+    if (token === state.oddsToken && b && Object.keys(b).length) state.byes = b;
+  } catch {
+    /* no byes: the cards fall back to the old rule for a zero */
+  }
 }
 
 /**
@@ -1024,18 +1219,240 @@ function draw() {
     kickoffs: state.isDemo ? null : state.kickoffs,
     league: state.isDemo ? null : espn.getConfig(),
     last: lastScores(),
+    weekTeams: heldWeeks(),
+    byes: state.isDemo ? null : state.byes,
   }));
 }
 
 // --------------------------------------------------------------------- render
 
 export function render(m) {
+  // Every card registered by the last paint is dead: the markup that carried
+  // its key is about to be replaced.
+  clearRuns('home');
+  clearPops('home');
+  cur = m;
   renderHeader(m);
   renderWeekPicker(m);
   renderDeadlines(m);
   renderMatchups(m);
   renderInjuries(m);
   renderBench(m);
+  // A player card open across the repaint that brings the win chance is
+  // redrawn from the same man's new cell rather than left on a dead key.
+  reopenTip();
+}
+
+// ------------------------------------------------------- the cards' contents
+//
+// One function per kind of card, each returning a `statCard` spec (js/pop.js)
+// or null when the page does not hold what the card would say. Rows are a
+// label and a number and come to the figure the card hangs off; a row of
+// "Rounding" says so when one-decimal parts fall a tenth short of it.
+
+/** A "Rounding" row when the printed parts miss the printed total, else none. */
+function roundingRows(total, parts) {
+  const t10 = (v) => Math.round(v * 10);
+  if (!isNum(total) || !parts.every(isNum)) return [];
+  const miss = t10(total) - parts.reduce((a, v) => a + t10(v), 0);
+  return miss && Math.abs(miss) <= parts.length ? [{ label: 'Rounding', value: miss / 10 }] : [];
+}
+
+/** A number with a real minus sign, as the tables print a negative. */
+const minus = (n) => `−${fmt(Math.abs(n))}`;
+
+/**
+ * A team: record, average, and the projection of its lineup for the week on
+ * screen. Opens that team's roster on Analysis.
+ */
+function teamSpec(m, id) {
+  const t = m.teamInfo?.get(id);
+  if (!t) return null;
+  return {
+    title: t.name,
+    rows: [
+      { label: 'Record', value: t.record ? t.record.text : '—' },
+      {
+        label: 'Avg',
+        note: t.avgRank ? `${ordinal(t.avgRank)} of ${t.avgOf}` : '',
+        value: t.avg,
+      },
+      { label: `Week ${m.week} proj`, value: t.proj },
+    ],
+    href: teamHref(id, m.week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** A team's record, game by game. Opens its row in the Stats standings. */
+function recordSpec(m, id) {
+  const t = m.teamInfo?.get(id);
+  if (!t || !t.record) return null;
+  return {
+    title: t.name,
+    sub: 'Record',
+    head: t.games.length ? ['Wk', 'Opponent', 'Score'] : null,
+    rows: t.games.map((g) => ({
+      lead: g.week,
+      label: g.opp,
+      value: `${g.result} ${fmt(g.pf)}–${fmt(g.pa)}`,
+    })),
+    total: { label: 'Record', value: t.record.text },
+    // The basis of a decimal record (rule 7), where its `title` used to be.
+    foot: t.record.live ? t.record.title : '',
+    href: statsHref(id),
+    hrefLabel: 'Open standings',
+  };
+}
+
+const SLOT_ORDER = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'OP', 'D/ST', 'DST', 'K'];
+
+/**
+ * A team's week in its starters: what each scored (`pts`), with his projection
+ * beside his name, or what each is projected (`proj`). Opens that team and
+ * week on Analysis.
+ */
+function weekSpec(squad, { name, week, total, kind }) {
+  if (!squad?.starters?.length || !isNum(total)) return null;
+  // In lineup order, as ESPN's own roster screen lists a team — the payload's
+  // order is whatever order the men were added in.
+  const at = (p) => { const i = SLOT_ORDER.indexOf(p.slot); return i < 0 ? SLOT_ORDER.length : i; };
+  const lineup = squad.starters
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => at(a.p) - at(b.p) || a.i - b.i)
+    .map((x) => x.p);
+  const spec = teamWeekSpec({
+    team: name,
+    week,
+    total,
+    starters: lineup.map((p) => (kind === 'pts'
+      ? { slot: p.slot, name: shortName(p), pts: p.actual, proj: projOf(p) }
+      : { slot: p.slot, name: shortName(p), pts: projOf(p) })),
+    href: teamHref(squad.id, week),
+  });
+  if (kind === 'proj') spec.total.label = 'Projected';
+  return spec;
+}
+
+/** The bench's points, man by man. */
+function benchSpec(r, week) {
+  const men = (r.squad?.bench || []).filter((p) => isNum(p.actual));
+  if (!men.length) return null;
+  const spec = teamWeekSpec({
+    team: r.name,
+    week,
+    total: r.bench,
+    starters: men.map((p) => ({
+      slot: p.position, name: shortName(p), pts: p.actual, proj: projOf(p),
+    })),
+    href: teamHref(r.id, week),
+  });
+  spec.sub = `Week ${week} bench`;
+  spec.total.label = 'Bench';
+  return spec;
+}
+
+/**
+ * The cost of the biggest miss: the benched man's score less the starter's
+ * ("benched 25.2 − started 1.5 = 23.7"), with the total as the cell prints it.
+ */
+function costSpec(r, week) {
+  if (!r.miss) return null;
+  const { started, benched, gain } = r.miss;
+  return {
+    title: r.name,
+    sub: `Week ${week} biggest miss`,
+    rows: [
+      { label: shortName(benched), note: 'benched', value: benched.actual },
+      { label: shortName(started), note: 'started', value: started.actual },
+      ...roundingRows(gain, [benched.actual, -started.actual]),
+    ],
+    total: { label: 'Cost', html: minus(gain) },
+    href: teamHref(r.id, week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** "D/ST", not "DST", in words a reader sees. */
+const posWord = (pos) => (pos === 'DST' ? 'D/ST' : pos);
+
+/**
+ * Where one man's number stands among the league's starters at his position —
+ * the words behind a shaded Proj or Last cell. Opens his row on Players.
+ */
+function standingSpec(p, { label, value, h, scale, week }) {
+  const group = `starting ${posWord(p.position)}s`;
+  const st = heatStanding(value, scale);
+  return {
+    title: p.name,
+    sub: `${posWord(p.position)} · week ${week}`,
+    rows: [
+      { label, value },
+      { label: `Avg of ${group}`, value: h.avgText },
+    ],
+    // A man who was on a bench that week is not one of the starters he is
+    // set against, and the count says so rather than passing him off as one.
+    foot: st && !st.member ? `${h.standing}, counting him with the ${group}` : `${h.standing} ${group}`,
+    href: playerHref(p.playerId),
+    hrefLabel: 'His next 13 weeks',
+  };
+}
+
+/** The line under a matchup: both totals, the gap, and the chance. */
+function metaSpec(g, m) {
+  if (g.awayId === null || g.awayId === undefined) return null;
+  const base = {
+    title: `${g.homeName} v ${g.awayName}`,
+    sub: `Week ${m.week}`,
+    href: weekHref(m.week),
+    hrefLabel: `Week ${m.week} on Schedule`,
+  };
+  const projNote = (v) => (isNum(v) ? `proj ${fmt(v)}` : '');
+  if (g.played) {
+    if (!isNum(g.homeScore) || !isNum(g.awayScore)) return null;
+    return {
+      ...base,
+      rows: [
+        { label: g.homeName, note: projNote(g.homeProjected), value: g.homeScore },
+        { label: g.awayName, note: projNote(g.awayProjected), value: g.awayScore },
+      ],
+      total: { label: g.winner === 'tie' ? 'Tied' : 'Margin', value: Math.abs(g.margin) },
+    };
+  }
+  if (isNum(g.homeWinPct) && isNum(g.homeBest) && isNum(g.awayBest)) {
+    const p = g.homeWinPct;
+    const favName = g.favourite === 'home' ? g.homeName : g.favourite === 'away' ? g.awayName : '';
+    const hi = Math.max(g.homeBest, g.awayBest);
+    const lo = Math.min(g.homeBest, g.awayBest);
+    return {
+      ...base,
+      rows: [
+        { label: g.homeName, note: 'best lineup', value: g.homeBest },
+        { label: g.awayName, note: 'best lineup', value: g.awayBest },
+        ...roundingRows(g.projectedMargin, [hi, -lo]),
+      ],
+      totals: [{ label: 'Gap', value: g.projectedMargin }],
+      total: isNum(g.myWinPct)
+        ? { label: 'Your win chance', html: pctText(g.myWinPct) }
+        : { label: favName ? `${favName} win chance` : 'Win chance', html: pctText(Math.max(p, 1 - p)) },
+      // Rule 1: every percentage is ours and says so.
+      foot: 'Our model, from ESPN’s projections.',
+    };
+  }
+  if (g.marginBasis === 'set') {
+    const hi = Math.max(g.homeProjected, g.awayProjected);
+    const lo = Math.min(g.homeProjected, g.awayProjected);
+    return {
+      ...base,
+      rows: [
+        { label: g.homeName, note: 'lineup as set', value: g.homeProjected },
+        { label: g.awayName, note: 'lineup as set', value: g.awayProjected },
+        ...roundingRows(g.projectedMargin, [hi, -lo]),
+      ],
+      total: { label: 'Gap', value: g.projectedMargin },
+    };
+  }
+  return null;
 }
 
 function renderHeader(m) {
@@ -1130,7 +1547,16 @@ function tuck(noteId, on) {
  * "this team is good".
  */
 function renderMatchups(m) {
-  $('matchupsTitle').textContent = `Week ${m.week} of ${m.weeks.length}`;
+  // The week heading opens that week on the Schedule page. The card hangs off
+  // a span, so it sits beside the words and not at the far end of the heading.
+  const weekKey = registerPop({
+    title: `Week ${m.week}`,
+    rows: [{ label: 'Games final', value: `${m.playedThisWeek} of ${m.games.length}` }],
+    href: weekHref(m.week),
+    hrefLabel: `Week ${m.week} on Schedule`,
+  }, 'home');
+  $('matchupsTitle').innerHTML =
+    `<span ${POP_ATTR}="${esc(weekKey)}" ${POP_GO_ATTR} tabindex="0">Week ${m.week} of ${m.weeks.length}</span>`;
 
   if (!m.games.length) {
     $('matchups').innerHTML = '<div class="empty">No matchups scheduled for this week.</div>';
@@ -1140,7 +1566,7 @@ function renderMatchups(m) {
   }
 
   $('matchups').innerHTML =
-    `<div class="games">${m.games.map((g) => gameCard(g, m.teamId)).join('')}</div>`;
+    `<div class="games">${m.games.map((g) => gameCard(g, m)).join('')}</div>`;
 
   const withChance = m.games.some((g) => g.homeWinPct !== null);
   if (!m.playedThisWeek) {
@@ -1196,7 +1622,7 @@ function winText(p) {
 function swapLines(s) {
   if (!s) return '';
   if (s.best) return '<div class="gswap">Best lineup set</div>';
-  const who = (p) => pref(p.playerId, p.name, esc(shortName(p)));
+  const who = (p) => pref(p, esc(shortName(p)));
   return s.swaps.slice(0, MAX_SWAPS).map((w) =>
     `<div class="gswap">Start ${who(w.in)}${w.out ? ` over ${who(w.out)}` : ''}: ` +
     `<span class="pos">+${fmt(w.points)} pts</span>` +
@@ -1230,7 +1656,8 @@ function oddsExplain(spread, floorSaid = '') {
   );
 }
 
-function gameCard(g, teamId) {
+function gameCard(g, m) {
+  const teamId = m.teamId;
   const bye = g.awayId === null || g.awayId === undefined;
 
   const side = (which, name, proj, score, id) => {
@@ -1239,16 +1666,26 @@ function gameCard(g, teamId) {
     else if (!g.played && g.favourite === which) classes.push('fav');
     const you = teamId != null && id === teamId ? ' <span class="muted">(you)</span>' : '';
     // The record, small and dim beside the name as on the Schedule page's
-    // cards, with the basis of a decimal one on it (rule 7). Its own element:
-    // on a narrow card the NAME shortens to "…", never the record.
+    // cards. Its own element: on a narrow card the NAME shortens to "…",
+    // never the record. Its card is the games behind it, and carries the
+    // basis of a decimal one (rule 7) where a `title` used to.
     const rec = which === 'home' ? g.homeRecord : g.awayRecord;
     const record = rec
-      ? `<span class="trec"${rec.live ? ` title="${esc(rec.title)}"` : ''}>${rec.text}</span>`
+      ? `<span class="trec"${pop(recordSpec(m, id))}>${rec.text}</span>`
       : '';
+    // THE TEAM'S WEEK, IN ITS STARTERS, on each of the three figures: what the
+    // lineup is projected (Proj), what it scored (Pts), and on the name
+    // whichever of the two the week has reached. Without that week's rosters
+    // the name falls back to the team's own card.
+    const squad = m.squads?.get(id);
+    const asProj = weekSpec(squad, { name, week: m.week, total: proj, kind: 'proj' });
+    const asPts = g.played
+      ? weekSpec(squad, { name, week: m.week, total: score, kind: 'pts' })
+      : null;
     return `<div class="${classes.join(' ')}">
-        <span class="twho"><span class="tname">${esc(name)}${you}</span>${record}</span>
-        <span class="tproj">${inline(proj)}</span>
-        <span class="tscore">${g.played ? inline(score) : dash}</span>
+        <span class="twho"><span class="tname"${pop(asPts || asProj || teamSpec(m, id))}>${esc(name)}${you}</span>${record}</span>
+        <span class="tproj"${pop(asProj)}>${inline(proj)}</span>
+        <span class="tscore"${pop(asPts)}>${g.played ? inline(score) : dash}</span>
       </div>`;
   };
 
@@ -1290,27 +1727,25 @@ function gameCard(g, teamId) {
       <div class="ghead"><span>${g.played ? 'Final' : 'Upcoming'}</span>${box}<span>Proj · Pts</span></div>
       ${side('home', g.homeName, g.homeProjected, g.homeScore, g.homeId)}
       ${bye ? '' : side('away', g.awayName, g.awayProjected, g.awayScore, g.awayId)}
-      <div class="gmeta">${meta}</div>
+      <div class="gmeta"><span${pop(metaSpec(g, m))}>${meta}</span></div>
       ${swapLines(g.swaps)}
     </div>`;
 }
 
 /**
- * THE INJURY REPORT'S `Proj` COLUMN TAKES NO SCALE, and refusing it is the
- * clearest illustration on this page of the one rule js/heat.js enforces by the
- * shape of its own API.
+ * THE INJURY REPORT'S `Proj` AND `Last` TAKE THE POSITION SCALE (Tim,
+ * 2026-10-08, docs/colour-plan.md) — and never a scale over the column.
  *
- * The column is a quarterback's 22.4 above a kicker's 7.9 above a defence's
- * 6.2, because it is a list of whoever happens to be hurt this week. That is
- * not a comparison group, it is three different units printed in the same font,
- * and a scale over it would paint every injured kicker on the site red for
- * being a kicker. There is no honest version of it either: ten squads do not
- * each have an injured tight end to measure against each other, and "this WR is
- * 1.2 SD below the other injured WRs" is a sentence about a sample of two.
+ * The column itself is a quarterback's 22.4 above a kicker's 7.9 above a
+ * defence's 6.2, a list of whoever happens to be hurt: three different units
+ * in one font, and a scale over it would paint every injured kicker red for
+ * being a kicker. So each cell is measured against the group js/heat.js allows
+ * — every STARTER AT HIS POSITION across the league that week, hurt or not
+ * (`injuredStarters`), the group the Analysis page's Player rows use. A zero
+ * that is a bye or a ruled-out man's is left plain.
  *
- * The one thing that WOULD be a group here — every starter at a position across
- * the league — is not on this panel at all, and it lives on the Analysis page,
- * which already colours it.
+ * A shaded cell opens a stat card saying where the number stands in plain
+ * words; a plain one opens his player card, like his name.
  */
 function renderInjuries(m) {
   if (!m.injuries.length) {
@@ -1327,27 +1762,38 @@ function renderInjuries(m) {
   // Two references per row, both to the same man: his name, and the projection
   // that is his. The fantasy team column is a manager, not a player, so it is
   // left as plain text.
+  // His number: shaded against the starters at his position, with the standing
+  // on a stat card; or plain, and then the link opens his player card.
+  const figure = (p, value, scale, label, week) => numCell(value, {
+    scale,
+    card: (h) => (h ? pop(standingSpec(p.player, { label, value, h, scale, week })) : ''),
+    wrap: (t, h) => pref(p.player, t, { card: !h }),
+  });
   const rows = m.injuries
     .map(
       (p) => `<tr${p.teamId === m.teamId ? ' class="me"' : ''}>
-          <td class="name wrap">${pref(p.playerId, p.name, `${esc(p.name)} <span class="muted">${esc(p.position)}</span>`)}</td>
+          <td class="name wrap">${pref(p.player, `${esc(p.name)} <span class="muted">${esc(p.position)}</span>`)}</td>
           <td class="left" data-v="${p.rank}"><span class="badge ${injuryClass(p.status)}">${esc(injuryLabel(p.status))}</span></td>
-          <td class="left wrap">${esc(p.teamName)}</td>
+          <td class="left wrap"${pop(teamSpec(m, p.teamId))}>${esc(p.teamName)}</td>
           <td>${esc(p.slot)}</td>
-          ${numCell(p.projected, { wrap: (t) => pref(p.playerId, p.name, t) })}
-          ${numCell(p.last, { wrap: (t) => pref(p.playerId, p.name, t) })}
+          ${figure(p, p.projected, p.projScale, 'Projected', m.week)}
+          ${figure(p, p.last, p.lastScale, 'Scored', m.lastWeek)}
         </tr>`
     )
     .join('');
 
+  // One line a heading (docs/previews-plan.md): what the column is.
+  const lastHead = m.lastWeek === null
+    ? 'What he scored in the last finished week'
+    : `What he scored in week ${m.lastWeek}, the last finished week`;
   $('injuries').innerHTML = `<div class="table-scroll"><table id="injuryTable">
       <thead><tr>
-        <th class="name" data-sort>Player</th>
-        <th class="left" data-sort>Status</th>
-        <th class="left wrap" data-sort>Fantasy team</th>
-        <th data-sort>Slot</th>
-        <th data-sort>Proj</th>
-        <th data-sort>Last</th>
+        <th class="name" data-sort title="A starter with an injury designation">Player</th>
+        <th class="left" data-sort title="ESPN’s injury designation">Status</th>
+        <th class="left wrap" data-sort title="The team starting him">Fantasy team</th>
+        <th data-sort title="The lineup slot he is in">Slot</th>
+        <th data-sort title="ESPN’s projection for week ${m.week}">Proj</th>
+        <th data-sort title="${lastHead}">Last</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -1365,7 +1811,12 @@ function renderInjuries(m) {
     (m.lastWeek === null
       ? ''
       : ` Last is what he scored in week ${m.lastWeek}, the last finished week; a dash means ` +
-        'ESPN gave no score for him on a roster that week.');
+        'ESPN gave no score for him on a roster that week.') +
+    // The colours' basis (rule 7), with the rest of the method.
+    (m.injuries.some((p) => p.projScale || (p.lastScale && isNum(p.last)))
+      ? ' Proj and Last are shaded against the league’s starters at his position that week: ' +
+        'green above their average, red below. A bye or a ruled-out 0.0 is left plain.'
+      : '');
 }
 
 function renderBench(m) {
@@ -1441,9 +1892,18 @@ function renderBench(m) {
   // a miss the scores alone cannot say. Left off when ESPN gave none.
   const who = (p) => {
     const proj = projOf(p);
-    return pref(p.playerId, p.name,
+    return pref(p,
       `${esc(shortName(p))} <span class="muted">(${fmt(p.actual)}` +
       `${proj === null ? '' : `<span class="bproj"> · proj ${fmt(proj)}</span>`})</span>`);
+  };
+
+  // STARTED opens the team's week in its starters, and — where the week is
+  // final for everybody — where that total stands: "9th of 10 · league avg
+  // 121.7" (Tim, 2026-10-08: plain standing, never standard deviations).
+  const startedCard = (r) => (h) => {
+    const spec = weekSpec(r.squad, { name: r.name, week: m.benchWeek, total: r.started, kind: 'pts' });
+    if (spec && h) spec.foot = `${ordinal(h.rank)} of ${h.of} · league avg ${h.avgText}`;
+    return pop(spec);
   };
 
   const rows = m.bench
@@ -1452,26 +1912,25 @@ function renderBench(m) {
         ? `${who(r.miss.benched)} over ${who(r.miss.started)}`
         : '<span class="muted">started the right nine</span>';
       return `<tr${r.id === m.teamId ? ' class="me"' : ''}>
-          <td class="name wrap">${esc(r.name)}</td>
-          ${numCell(r.started, {
-    scale: heatStarted, what: `what the league scored in week ${m.benchWeek}`,
-  })}
-          ${numCell(r.bench)}
+          <td class="name wrap"${pop(teamSpec(m, r.id))}>${esc(r.name)}</td>
+          ${numCell(r.started, { scale: heatStarted, card: startedCard(r) })}
+          ${numCell(r.bench, { card: () => pop(benchSpec(r, m.benchWeek)) })}
           <td class="left wrap">${miss}</td>
           ${r.miss
-            ? `<td class="neg" data-v="${r.miss.gain}">−${fmt(r.miss.gain)}</td>`
+            ? `<td class="neg" data-v="${r.miss.gain}"${pop(costSpec(r, m.benchWeek))}>−${fmt(r.miss.gain)}</td>`
             : `<td>${dash}</td>`}
         </tr>`;
     })
     .join('');
 
+  const wk = m.benchWeek;
   $('bench').innerHTML = `<div class="table-scroll"><table id="benchTable">
       <thead><tr>
-        <th class="name" data-sort>Team</th>
-        <th data-sort>Started</th>
-        <th data-sort>Bench</th>
-        <th class="left wrap" data-sort>Biggest miss</th>
-        <th data-sort>Cost</th>
+        <th class="name" data-sort title="The fantasy team">Team</th>
+        <th data-sort title="Points its starting lineup scored in week ${wk}">Started</th>
+        <th data-sort title="Points its bench scored in week ${wk}">Bench</th>
+        <th class="left wrap" data-sort title="The benched player who most outscored a starter he could have replaced">Biggest miss</th>
+        <th data-sort title="Points that one call cost">Cost</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -1559,6 +2018,15 @@ onConnection((conn) => {
 document.addEventListener('ff:refresh', (e) => {
   if (state.source === 'live' && !state.isDemo) e.detail.waitUntil(loadLive());
 });
+
+// The cards, wired once on the three panels' own boxes: each is re-rendered
+// freely afterwards. Every player card here is opt-out of the click connector
+// because its element already is the link (an `a.pref`).
+for (const box of [$('matchups')?.closest('section'), $('injuries'), $('bench')]) {
+  if (!box) continue;
+  wireTips(box);
+  wirePops(box);
+}
 
 // Demo first, always: the page is never blank, and never shows an error before
 // it has shown anything. A live load replaces it a moment later.

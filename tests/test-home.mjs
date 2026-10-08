@@ -597,6 +597,19 @@ if (process.argv[2]) {
 
       // --- pre-kickoff ---------------------------------------------------
       const home = mods['js/home-page.js'];
+      // Open a preview the way a mouse does and read it back: the card's text,
+      // or null when nothing opened. `statCard` is js/pop.js's, `tipCard` is
+      // the player card's (js/player-card.js).
+      const cardBox = (el, id) => {
+        for (const other of ['statCard', 'tipCard']) document.getElementById(other)?.setAttribute('hidden', '');
+        el.dispatchEvent(new globalThis.Event('mouseover', { bubbles: true, cancelable: true }));
+        const box = document.getElementById(id);
+        return box && !box.hasAttribute('hidden') ? box : null;
+      };
+      const cardText = (el, id) => {
+        const box = cardBox(el, id);
+        return box ? (box.textContent || '').replace(/\s+/g, ' ').trim() : null;
+      };
       if (!home?.buildModel || !home?.render) {
         problems.push('home-page.js does not export buildModel/render');
       } else {
@@ -684,7 +697,7 @@ if (process.argv[2]) {
           if (cellText(c[0]) !== `${p.name} ${p.position}`) {
             problems.push(`pref: linking changed the name cell to "${cellText(c[0])}", expected "${p.name} ${p.position}"`);
           }
-          if (cellText(c[4]) !== p.projected.toFixed(1)) {
+          if (stripMark(cellText(c[4])) !== p.projected.toFixed(1)) {
             problems.push(`pref: linking changed ${p.name}'s Proj cell to "${cellText(c[4])}"`);
           }
           if (c[4].getAttribute('data-v') !== String(p.projected)) {
@@ -702,9 +715,14 @@ if (process.argv[2]) {
             problems.push(`pref: ${p.name}'s name and projection point at different players`);
           }
 
-          const title = nameA.getAttribute('title') || '';
-          if (!title.includes(p.name)) problems.push(`pref: ${p.name}'s link title does not name him: "${title}"`);
-          if (!/Players page/.test(title)) problems.push(`pref: a link title does not say where it goes: "${title}"`);
+          // The name opens the classic player card (Tim, 2026-10-08: "a bad
+          // preview is any player reference in the home section"), so it
+          // carries NO title — a title beside a card is two tooltips.
+          if (nameA.hasAttribute('title')) problems.push(`card: ${p.name}'s link still carries a raw title "${nameA.getAttribute('title')}"`);
+          if (!nameA.hasAttribute('data-tip')) problems.push(`card: ${p.name}'s name opens no player card`);
+          // Where it goes is still said, as the link's label.
+          const says = nameA.getAttribute('aria-label') || '';
+          if (!says.includes(p.name) || !/Players page/.test(says)) problems.push(`pref: ${p.name}'s link does not say where it goes: "${says}"`);
 
           // The "Fantasy team" column is a manager, not a player.
           if (c[2].querySelector('a')) problems.push('pref: the injury table linked a fantasy team name');
@@ -714,13 +732,262 @@ if (process.argv[2]) {
           }
         }
 
-        // THE INJURY TABLE'S Proj COLUMN MUST STAY PLAIN. It is a quarterback's
-        // 22 above a kicker's 8 above a defence's 6 — whoever happens to be
-        // hurt — which is the one comparison js/heat.js exists to refuse. This
-        // asserts the refusal rather than trusting the comment that states it.
-        const injHeat = document.querySelectorAll('#injuries td[class*="heat-"]').length;
-        if (injHeat) {
-          problems.push(`heat: ${injHeat} injury cell(s) were coloured — that column mixes positions`);
+        // ------------------------------------------- the previews (2026-10-08)
+        //
+        // Tim: "a bad preview is any player reference in the home section". So
+        // every player name opens the classic player card, built from the
+        // weeks Home already holds, and every number and team name opens a
+        // card that breaks it down and connects to the page that owns it.
+        // Each card is opened the way a mouse opens it and read back off the
+        // page; each figure expected is worked out from the fixture.
+        {
+          const q = (sel, root = document) => root.querySelector(sel);
+          const all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+          const seen = [];                       // every card's words, for the SD sweep
+          const card = (el, id = 'statCard') => {
+            const t = el ? cardText(el, id) : null;
+            if (t) seen.push(t);
+            return t || '';
+          };
+          // Where a mouse click on a figure sends the page (js/pop.js `go`).
+          const goes = (el) => {
+            const keep = globalThis.window.location;
+            const went = [];
+            globalThis.window.location = { assign: (h) => went.push(h), search: '', href: '' };
+            try {
+              el.dispatchEvent(new globalThis.Event('click', { bubbles: true, cancelable: true }));
+            } finally { globalThis.window.location = keep; }
+            return went[0] || null;
+          };
+          const r1 = (n) => Math.round(n * 10) / 10;
+          const sideOf = (name) => all('#matchups .side')
+            .find((s) => (q('.tname', s)?.textContent || '').trim().startsWith(name));
+
+          // (1) THE PLAYER CARD on every injured starter's name: him on top,
+          // his projection in week 1's column, and the twelve weeks this page
+          // has not read drawn as waiting — never as a zero or a blank.
+          for (const row of rowsOf('#injuries')) {
+            const a = q('a.pref', row.children[0]);
+            const p = injured.find((x) => cellText(row.children[0]).startsWith(x.name));
+            const box = a ? cardBox(a, 'tipCard') : null;
+            if (!box || !p) { problems.push(`card: no player card opened on "${cellText(row.children[0])}"`); continue; }
+            const t = cellText(box);
+            seen.push(t);
+            if (!t.startsWith(`${p.name} · ${p.position} · KC`)) problems.push(`card: ${p.name}'s card opens with "${t.slice(0, 40)}"`);
+            const weeks = all('thead th[scope="col"]', box).map(cellText).join(',');
+            if (weeks !== '1,2,3,4,5,6,7,8,9,10,11,12,13') problems.push(`card: ${p.name}'s card draws weeks ${weeks}`);
+            const projRow = all('tbody td', box).map(cellText);
+            if (projRow[0] !== p.projected.toFixed(1)) problems.push(`card: ${p.name}'s week 1 projection reads "${projRow[0]}"`);
+            if (projRow.slice(1).some((c) => c !== '·') || all('tbody td.k-wait', box).length !== 12) {
+              problems.push(`card: ${p.name}'s unread weeks are not all waiting: ${JSON.stringify(projRow)}`);
+            }
+          }
+          facts.cardsOnInjuries = rowsOf('#injuries').length;
+
+          // (2) BUILT FROM THE WEEKS HOME HOLDS, and nothing else: hand the
+          // model one more week and the card draws exactly that week more.
+          {
+            const fin2 = finishedWeek();
+            const wk3 = fin2.rosters.teams.map((t) => ({
+              ...t, players: t.players.map((p) => ({ ...p, projected: 9.9, actual: null })),
+            }));
+            home.render(home.buildModel({ ...fin2, weekTeams: new Map([[3, wk3]]) }));
+            const a = q('#bench tbody a.pref');
+            const box = a ? cardBox(a, 'tipCard') : null;
+            const projRow = box ? all('tbody td', box).map(cellText) : [];
+            const actRow = box ? all('tfoot td', box).map(cellText) : [];
+            const benched = fin2.rosters.teams.map((t) => t.bench[0])
+              .find((p) => a && a.getAttribute('href') === hrefOf(p));
+            facts.cardHeldWeeks = projRow.join(' ');
+            if (!benched) problems.push('card: the first bench link is nobody in the fixture');
+            else if (!box) problems.push(`card: no player card opened on ${benched.name} in the bench table`);
+            else {
+              if (projRow[0] !== benched.projected.toFixed(1) || actRow[0] !== benched.actual.toFixed(1)) {
+                problems.push(`card: ${benched.name}'s week 1 reads proj "${projRow[0]}" act "${actRow[0]}"`);
+              }
+              if (projRow[2] !== '9.9' || projRow[1] !== '·' || projRow.filter((c) => c === '·').length !== 11) {
+                problems.push(`card: a third week held by the page drew as ${JSON.stringify(projRow)}`);
+              }
+              const t = cellText(box);
+              seen.push(t);
+              // ESPN's word for healthy is not a designation.
+              if (/ACTIVE/.test(t)) problems.push(`card: a healthy man's card says ACTIVE: "${t.slice(0, 60)}"`);
+            }
+          }
+
+          // (3) A man ESPN gave no id still gets his card — on a span, since
+          // there is no page to link him to.
+          {
+            const f0 = finishedWeek().rosters.teams[0];
+            home.render(home.buildModel(finishedWeek({ blankIds: [f0.bench[0].playerId, f0.starters[1].playerId] })));
+            const spans = all('#bench span.pref[data-tip]');
+            facts.noIdCards = spans.length;
+            if (spans.length !== 2) problems.push(`card: ${spans.length} id-less men carry a card in the bench table, expected 2`);
+            else if (!card(spans[0], 'tipCard').startsWith(f0.bench[0].name)) {
+              problems.push('card: an id-less man\'s card does not open on him');
+            }
+          }
+
+          // (4) THE INJURY COLOURS ARE BY POSITION. The lowest-projected
+          // starting quarterback (18.0) is red though he out-projects every
+          // RB and WR on the page — pooled, he would be the greenest cell in
+          // the column. A ruled-out 0.0 is no projection and stays plain.
+          {
+            const fx4 = preKickoff();
+            fx4.rosters.teams[0].starters[0].injuryStatus = 'QUESTIONABLE';
+            Object.assign(fx4.rosters.teams[4].starters[2], { projected: 0 });
+            home.render(home.buildModel(fx4));
+            const cellOf = (name) => rowsOf('#injuries')
+              .find((r) => cellText(r.children[0]).startsWith(name))?.children[4];
+            const qb = cellOf('QB Aardvarks');
+            const top = cellOf('RB Jackals');
+            const low = cellOf('RB Aardvarks');
+            const out = cellOf('WR Egrets');
+            facts.injurySides = [qb, top, low, out].map(heatSide).join(',');
+            if (heatSide(qb) !== 'dn') problems.push(`heat: the lowest starting QB (18.0) is "${heatSide(qb)}" — the injury Proj column is not shaded by position`);
+            if (heatSide(top) !== 'up' || heatSide(low) !== 'dn') {
+              problems.push(`heat: the best and worst starting RBs read "${heatSide(top)}" and "${heatSide(low)}", expected up and dn`);
+            }
+            if (!out || heatSide(out) || stripMark(cellText(out)) !== '0.0') {
+              problems.push(`heat: a ruled-out 0.0 reads "${out && cellText(out)}" with colour "${heatSide(out)}", expected a plain 0.0`);
+            }
+            // The shaded cell's card: his number, the starters' average at his
+            // position, and where he stands among them.
+            const rbs = fx4.rosters.teams.map((t) => t.starters[1].projected);
+            const avg = (rbs.reduce((a, b) => a + b, 0) / rbs.length).toFixed(1);
+            const t = card(top);
+            facts.injuryStanding = t;
+            if (!t.startsWith('RB Jackals · RB · week 1') || !t.includes(`Projected13.8Avg of starting RBs${avg}`) ||
+                !/Highest of 10 starting RBs$/.test(t)) {
+              problems.push(`card: a shaded projection's card reads "${t}"`);
+            }
+            if (goes(top) !== hrefOf(fx4.rosters.teams[9].starters[1])) {
+              problems.push(`card: a shaded projection's card goes to "${goes(top)}"`);
+            }
+            home.render(model);
+          }
+
+          // (5) THE MATCHUP CARDS, before kick-off. A name and its projection
+          // open the lineup the projection is the sum of; the line beneath
+          // opens both totals and the gap; the heading opens the week.
+          {
+            const me = fx.rosters.teams[2];
+            const them = fx.rosters.teams[3];
+            const side = sideOf('Cobras');
+            const want = `Cobras · Week 1${me.starters.map((p) => `${p.slot}${short(p.name)}${p.projected.toFixed(1)}`).join('')}Projected${me.projectedTotal.toFixed(1)}`;
+            for (const part of ['.tname', '.tproj']) {
+              const el = q(part, side);
+              const t = card(el);
+              if (t !== want) problems.push(`card: the Cobras' ${part} card reads "${t}", expected "${want}"`);
+              if (goes(el) !== 'analysis.html?team=3&week=1#rosterDetail') problems.push(`card: the Cobras' ${part} card goes to "${goes(el)}"`);
+            }
+            const meta = q('.gmeta [data-pop]', side.closest('.game'));
+            const gap = r1(Math.abs(me.projectedTotal - them.projectedTotal)).toFixed(1);
+            const mt = card(meta);
+            facts.metaCard = mt;
+            if (!mt.includes(`Cobras`) || !mt.includes(me.projectedTotal.toFixed(1)) ||
+                !mt.includes(them.projectedTotal.toFixed(1)) || !mt.endsWith(`Gap${gap}`)) {
+              problems.push(`card: the line under a game reads "${mt}"`);
+            }
+            if (!meta || goes(meta) !== 'schedule.html?week=1') problems.push(`card: the line under a game goes to "${meta && goes(meta)}"`);
+            const head = q('#matchupsTitle [data-pop]');
+            if (!head || !/^Week 1Games final0 of 5$/.test(card(head)) || goes(head) !== 'schedule.html?week=1') {
+              problems.push(`card: the week heading's card reads "${head && card(head)}" and goes to "${head && goes(head)}"`);
+            }
+          }
+
+          // (6) THE SAME CARDS ONCE THE WEEK IS FINAL, and the bench table's.
+          {
+            const fin6 = finishedWeek();
+            home.render(home.buildModel(fin6));
+            const me = fin6.rosters.teams[2];
+            const them = fin6.rosters.teams[3];
+            const side = sideOf('Cobras');
+            const wantScore = `Cobras · Week 1${me.starters.map((p) => `${p.slot}${short(p.name)}proj ${p.projected.toFixed(1)}${p.actual.toFixed(1)}`).join('')}Total${me.actualTotal.toFixed(1)}`;
+            const st = card(q('.tscore', side));
+            if (st !== wantScore) problems.push(`card: a final score's card reads "${st}", expected "${wantScore}"`);
+
+            // The record, game by game, and on to the standings.
+            const rec = q('.trec', side);
+            const wantRec = `Cobras · RecordWkOpponentScore1DingoesL ${me.actualTotal.toFixed(1)}–${them.actualTotal.toFixed(1)}Record0–1`;
+            const rt = card(rec);
+            if (rt !== wantRec) problems.push(`card: a record's card reads "${rt}", expected "${wantRec}"`);
+            if (goes(rec) !== 'stats.html?team=3') problems.push(`card: a record's card goes to "${goes(rec)}"`);
+
+            const mt = card(q('.gmeta [data-pop]', side.closest('.game')));
+            const margin = r1(Math.abs(me.actualTotal - them.actualTotal)).toFixed(1);
+            if (!mt.includes(`${me.actualTotal.toFixed(1)}`) || !mt.includes(`${them.actualTotal.toFixed(1)}`) || !mt.endsWith(`Margin${margin}`)) {
+              problems.push(`card: a final game's line reads "${mt}"`);
+            }
+
+            const totals = fin6.rosters.teams.map((t) => t.actualTotal);
+            const leagueAvg = (totals.reduce((a, b) => a + b, 0) / totals.length).toFixed(1);
+            const ord = (n) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
+            let checked = 0;
+            for (const row of rowsOf('#bench')) {
+              const c = Array.from(row.children);
+              const t = fin6.rosters.teams.find((x) => x.name === cellText(c[0]));
+              if (!t) continue;
+              checked += 1;
+              const benched = t.bench[0];
+              const started = t.starters[1];
+              const rank = 1 + totals.filter((v) => v > t.actualTotal).length;
+
+              // Team name -> the team card -> its roster on Analysis.
+              const tt = card(c[0]);
+              if (!tt.startsWith(`${t.name}Record`) || !tt.endsWith(`Week 1 proj${t.projectedTotal.toFixed(1)}`)) {
+                problems.push(`card: ${t.name}'s team card reads "${tt}"`);
+              }
+              if (goes(c[0]) !== `analysis.html?team=${t.id}&week=1#rosterDetail`) problems.push(`card: ${t.name}'s team card goes to "${goes(c[0])}"`);
+
+              // Started -> its starters, then the plain standing Tim asked for
+              // ("104.8 · league avg 121.7 · 9th of 10").
+              const s = card(c[1]);
+              if (!s.includes(`Total${t.actualTotal.toFixed(1)}`) || !s.endsWith(`${ord(rank)} of 10 · league avg ${leagueAvg}`)) {
+                problems.push(`card: ${t.name}'s Started card reads "${s}", expected to end "${ord(rank)} of 10 · league avg ${leagueAvg}"`);
+              }
+              // Bench -> the men on it.
+              const b = card(c[2]);
+              if (b !== `${t.name} · Week 1 bench${benched.position}${short(benched.name)}proj ${benched.projected.toFixed(1)}${benched.actual.toFixed(1)}Bench${t.benchActualTotal.toFixed(1)}`) {
+                problems.push(`card: ${t.name}'s Bench card reads "${b}"`);
+              }
+              // Cost -> benched − started, and the total as the cell prints it.
+              const cost = card(c[4]);
+              const wantCost = `${t.name} · Week 1 biggest miss${short(benched.name)}benched${benched.actual.toFixed(1)}` +
+                `${short(started.name)}started${started.actual.toFixed(1)}Cost${cellText(c[4])}`;
+              if (cost !== wantCost) problems.push(`card: ${t.name}'s Cost card reads "${cost}", expected "${wantCost}"`);
+              if (r1(benched.actual - started.actual).toFixed(1) !== cellText(c[4]).replace('−', '')) {
+                problems.push(`card: ${t.name}'s Cost cell "${cellText(c[4])}" is not benched − started`);
+              }
+            }
+            facts.benchCardRows = checked;
+            if (checked !== 10) problems.push(`card: ${checked} bench rows had their cards checked, expected 10`);
+          }
+
+          // (7) ONE PREVIEW A FIGURE. Nothing that opens a card carries a
+          // `title` too; every column heading keeps a one-line definition; and
+          // no card, title or label speaks of standard deviations.
+          {
+            const both = all('[data-pop][title], [data-tip][title]').length;
+            if (both) problems.push(`card: ${both} element(s) carry a title beside their card`);
+            const heads = all('#injuryTable thead th, #benchTable thead th');
+            const bad = heads.filter((th) => {
+              const t = th.getAttribute('title') || '';
+              return !t || /\n/.test(t) || t.length > 90;
+            }).map(cellText);
+            facts.headTitles = heads.length - bad.length;
+            if (heads.length !== 11 || bad.length) problems.push(`card: headings without a one-line title: ${JSON.stringify(bad)} of ${heads.length}`);
+            const words = [
+              ...seen,
+              ...all('[title]').map((el) => el.getAttribute('title')),
+              ...all('[aria-label]').map((el) => el.getAttribute('aria-label')),
+            ];
+            const sd = words.filter((w) => /\bSDs?\b|standard deviation|z-?score|step \d of \d/i.test(w || ''));
+            facts.cardsRead = seen.length;
+            if (sd.length) problems.push(`card: SD wording a reader can reach: ${JSON.stringify(sd.slice(0, 2))}`);
+            if (seen.length < 40) problems.push(`card: only ${seen.length} cards were opened by this check`);
+          }
+          home.render(model);
         }
 
         facts.injuryNote = text('injuryNote');
@@ -810,8 +1077,14 @@ if (process.argv[2]) {
             if (href !== hrefOf(p)) {
               problems.push(`pref: ${t.name}'s miss links ${p.name} to "${href}", expected "${hrefOf(p)}"`);
             }
-            if (!(links[i].getAttribute('title') || '').includes(p.name)) {
-              problems.push(`pref: ${p.name}'s link in a miss has no title naming him`);
+            if (links[i].hasAttribute('title')) {
+              problems.push(`card: ${p.name}'s link in a miss still carries a raw title`);
+            }
+            if (!(links[i].getAttribute('aria-label') || '').includes(p.name)) {
+              problems.push(`pref: ${p.name}'s link in a miss does not name him in its label`);
+            }
+            if (!links[i].hasAttribute('data-tip')) {
+              problems.push(`card: ${p.name}'s link in a miss opens no player card`);
             }
           });
         }
@@ -950,14 +1223,14 @@ if (process.argv[2]) {
             const p = injured.find((x) => cellText(c[0]).startsWith(x.name));
             if (!p || c.length !== 6) { problems.push(`last: unrecognised injury row "${cellText(c[0])}" (${c.length} cells)`); continue; }
             const want = scoreIn1.get(p.playerId);
-            lastSeen[p.playerId] = cellText(c[5]);
+            lastSeen[p.playerId] = stripMark(cellText(c[5]));
             if (p.playerId === blankId) {
               if (cellText(c[5]) !== '—' || c[5].hasAttribute('data-v') || c[5].querySelector('a')) {
                 problems.push(`last: a man ESPN gave no score reads "${cellText(c[5])}" (data-v ${c[5].getAttribute('data-v')}), expected a plain dash`);
               }
               continue;
             }
-            if (cellText(c[5]) !== want.toFixed(1)) {
+            if (stripMark(cellText(c[5])) !== want.toFixed(1)) {
               problems.push(`last: ${p.name} reads "${cellText(c[5])}", expected his week 1 score ${want.toFixed(1)}`);
             }
             if (c[5].getAttribute('data-v') !== String(want)) {
@@ -968,7 +1241,7 @@ if (process.argv[2]) {
               problems.push(`last: ${p.name}'s Last is not a link to him ("${a && a.getAttribute('href')}")`);
             }
             // Proj is still this week's projection, untouched by the new column.
-            if (cellText(c[4]) !== p.projected.toFixed(1)) {
+            if (stripMark(cellText(c[4])) !== p.projected.toFixed(1)) {
               problems.push(`last: ${p.name}'s Proj cell now reads "${cellText(c[4])}"`);
             }
           }
@@ -978,9 +1251,6 @@ if (process.argv[2]) {
           }
           if (lastSeen[movedId] !== '31.4') {
             problems.push(`last: a man who was on another squad's bench reads "${lastSeen[movedId]}", expected 31.4`);
-          }
-          if (document.querySelectorAll('#injuries td[class*="heat-"]').length) {
-            problems.push('heat: the Last column was coloured — it mixes positions like Proj');
           }
           if (!/Last is what he scored in week 1\b/.test(text('injuryNote'))) {
             problems.push(`last: the injury note does not say which week Last is: "${text('injuryNote').slice(-140)}"`);
@@ -1254,8 +1524,14 @@ if (process.argv[2]) {
         if (recOf('Cobras')?.rec !== '0.2–1.8' || recOf('Dingoes')?.rec !== '1.8–0.2') {
           problems.push(`record: in play the pair reads ${recOf('Cobras')?.rec} and ${recOf('Dingoes')?.rec}, expected 0.2–1.8 and 1.8–0.2`);
         }
-        if (!/0–1 so far; 20% to win/.test(recOf('Cobras')?.title || '')) {
-          problems.push(`record: the decimal does not state its basis: "${recOf('Cobras')?.title}"`);
+        // The basis of the decimal is on the record's card now, not a title.
+        {
+          const el = Array.from(document.querySelectorAll('#matchups .side'))
+            .find((x) => /^Cobras/.test(x.querySelector('.tname')?.textContent || ''))?.querySelector('.trec');
+          const basis = el ? cardText(el, 'statCard') : '';
+          if (!/0–1 so far; 20% to win/.test(basis || '')) {
+            problems.push(`record: the decimal does not state its basis: "${basis}"`);
+          }
         }
         const others = sides().filter((s) => !/^(Cobras|Dingoes)/.test(s.name));
         if (others.length !== 8 || others.some((s) => !/^[01]–[01]$/.test(s.rec) || s.title)) {
