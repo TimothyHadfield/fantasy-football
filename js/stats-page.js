@@ -1120,23 +1120,63 @@ function paintOppPanel(chart, note) {
   note.innerHTML = oppNote(rows, data);
 }
 
+// ------------------------------------------------ bars from a zero line
+//
+// Tim, 2026-10-08: "right now the schedule luck, roster strength, and future
+// proj diff all show green bars coming from the right to display quanitity,
+// but because our numbers correlate to +- numbers, have the 0 bar run down the
+// middle and negative bars go to the left in red and positive bars to the
+// right in green."
+//
+// So each of the three boxes draws its bar from a line down the middle of the
+// track: a plus grows right, in green; a minus grows left, in red. ONE SCALE A
+// BOX — the biggest figure in it, either way, fills its half of the track and
+// every other bar is in proportion, so two bars in a box can be compared by
+// length and a bar twice as long is a figure twice as big.
+//
+// THE BAR IS THE PRINTED FIGURE, rounded as it is printed: a gap that prints
+// "0.0" draws no bar rather than a sliver on one side of the line.
+//
+//   Schedule luck     the gap from the league average (league − yours), so an
+//                     EASIER run of opponents is the plus: right, green.
+//   Future proj diff  the figure itself.
+//   Roster strength   prints an ABSOLUTE average (~120–130), which has no
+//                     minus. Its bar is that figure minus the league's average
+//                     of the same figures — above the league right, below it
+//                     left. The printed number stays the absolute one.
+
+/** One bar per value: which side of the line, and how much of the track. */
+function zeroBars(values) {
+  const shown = values.map((v) => (typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(1)) + 0 : 0));
+  const most = Math.max(0, ...shown.map(Math.abs));
+  return shown.map((v) => ({
+    side: v > 0 ? 'pos' : v < 0 ? 'neg' : '',
+    // Half the track is one side of the line, so the longest bar is 50% of it.
+    width: most ? (50 * Math.abs(v)) / most : 0,
+  }));
+}
+
+/** The track, its zero line (CSS, `.bar.zero`) and the bar. */
+const zeroBarHtml = (b) => '<span class="bar zero">' +
+  (b.side ? `<i class="${b.side}" style="width:${b.width.toFixed(1)}%"></i>` : '') + '</span>';
+
 /**
- * Ranked horizontal bars, hardest schedule first.
+ * Ranked horizontal bars, hardest schedule first, each drawn from the zero
+ * line: the gap from the league average (see "bars from a zero line").
  *
  * Not charts.js's histogram, which scales from zero: ten averages that all land
  * between about 105 and 120 would draw ten bars of near-identical full height,
- * hiding the differences that are the entire point. These run from the easiest
- * schedule in the league to the hardest, so bar length IS the spread.
+ * hiding the differences that are the entire point.
  */
 function oppBars(rows, leagueAvg) {
-  const values = rows.map((r) => r.avgOpp);
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const span = max - min || 1;
+  // Without a league figure to be a gap from, the mean of the rows stands in.
+  const base = typeof leagueAvg === 'number'
+    ? leagueAvg
+    : rows.reduce((a, r) => a + r.avgOpp, 0) / (rows.length || 1);
+  const bars = zeroBars(rows.map((r) => gapOf(base - r.avgOpp).value));
 
   const items = rows
     .map((r, i) => {
-      const width = 8 + 92 * ((r.avgOpp - min) / span);
       // League average minus yours, so an easier run of opponents reads as a
       // plus (Tim, 2026-10-05: "it's better to have a low future opponent proj").
       const d = typeof leagueAvg === 'number' ? gapOf(leagueAvg - r.avgOpp) : null;
@@ -1148,7 +1188,7 @@ function oppBars(rows, leagueAvg) {
       return `<li class="${state.highlight === r.id ? 'me' : ''}">
           <span class="rk">${i + 1}</span>
           <span class="nm">${esc(r.name)} <small class="muted rec">${r.record}</small></span>
-          <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
+          ${zeroBarHtml(bars[i])}
           <span class="vv">${fmt(r.avgOpp)}</span>
           ${gap}
         </li>`;
@@ -1302,9 +1342,9 @@ function oppNote(rows, data) {
         'the figure beside each bar is the gap from that: a positive number is that many ' +
         'points a week easier than the league&rsquo;s typical schedule, a negative one that ' +
         'much harder.',
-      `Hardest to easiest spans only ${fmt(spread)} points, which is why the ` +
-        'bars run between those two rather than from zero — zero-based bars would all be ' +
-        'the same length and show nothing.'
+      'The bar is that gap, drawn from the line down the middle: right and green for an ' +
+        'easier schedule than the league&rsquo;s, left and red for a harder one. Hardest to ' +
+        `easiest spans ${fmt(spread)} points; the longest bar is the biggest gap.`
     );
   }
 
@@ -1446,12 +1486,12 @@ function renderFuturePanels() {
 
 /** The rows, in the markup of the schedule-luck bars beside them. */
 function futureBars(box, rows, scale) {
+  // From the zero line (see "bars from a zero line"): the diff is its own
+  // figure; strength is the figure against the league's average of them.
   const values = rows.map((r) => r.value);
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const span = max - min || 1;
+  const league = values.reduce((a, v) => a + v, 0) / (values.length || 1);
+  const bars = zeroBars(box.kind === 'strength' ? values.map((v) => v - league) : values);
   const items = rows.map((r, i) => {
-    const width = 8 + 92 * ((r.value - min) / span);
     const h = heatOf(r.value, scale, { what: box.what });
     // The mark has a slot in every row, so the numbers end in one place.
     const mark = (h && heatMarkHtml(h)) || ' <span class="heatmark" aria-hidden="true"></span>';
@@ -1459,7 +1499,7 @@ function futureBars(box, rows, scale) {
     return `<li class="${state.highlight === r.id ? 'me' : ''}">
         <span class="rk">${i + 1}</span>
         <span class="nm">${esc(r.name)} <small class="muted rec">${r.record}</small></span>
-        <span class="bar"><i style="width:${width.toFixed(1)}%"></i></span>
+        ${zeroBarHtml(bars[i])}
         <span class="vv" data-fut="${box.kind}" data-team="${esc(r.id)}" data-v="${r.value}" tabindex="0" role="button" ` +
           `aria-label="${esc(r.name)}: ${box.label}">${num}${mark}</span>
       </li>`;
@@ -1521,6 +1561,12 @@ function futureNote(box, rows, scale, data) {
         'A plus means the team is projected to outscore the teams it still has to play.',
       'The week totals are Roster strength&rsquo;s own. Tap or hover a number for its games.',
     ];
+  lines.push(box.kind === 'strength'
+    ? 'The bar is the figure against the league&rsquo;s average of these figures, drawn from the ' +
+      'line down the middle: right and green above the league, left and red below it. The number ' +
+      'printed is the average itself.'
+    : 'The bar is the figure, drawn from the line down the middle: right and green for a plus, ' +
+      'left and red for a minus.');
   if (data.floorSaid) lines.push(data.floorSaid);
   if (scale) {
     lines.push(`<strong>The colours.</strong> ${describeHeat(scale, {

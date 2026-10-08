@@ -174,7 +174,11 @@ function readBox(document, ids) {
       dataV: vv ? vv.getAttribute('data-v') : null,
       title: vv ? vv.getAttribute('title') : null,
       heat: (vv?.querySelector('span[class*="heat"]')?.getAttribute('class') || ''),
-      width: Number(/width:([\d.]+)%/.exec(li.querySelector('.bar i')?.getAttribute('style') || '')?.[1]),
+      width: Number(/width:([\d.]+)%/.exec(li.querySelector('.bar i')?.getAttribute('style') || '')?.[1] ?? 0),
+      // Which side of the zero line the bar grows to: 'pos' (right, green),
+      // 'neg' (left, red), or '' for a figure that prints as zero (no bar).
+      side: (/\b(pos|neg)\b/.exec(li.querySelector('.bar i')?.getAttribute('class') || '') || [''])[0],
+      zeroLine: !!li.querySelector('.bar.zero'),
       me: (li.getAttribute('class') || '').split(/\s+/).includes('me'),
       pop,
     };
@@ -340,8 +344,27 @@ function checkStats(scenario, page, booted) {
       `${name}: top and bottom are not on the scale: "${box.rows[0].heat}" / "${box.rows[3].heat}"`);
     // The record sits by the name, as in the box beside it.
     ok(box.rows.every((r) => /^\d+–\d+/.test(r.record)), `${name}: records are ${box.rows.map((r) => r.record).join(' ')}`);
-    // Bars run 8..100 between the worst and the best.
-    ok(box.rows[0].width === 100 && box.rows[3].width === 8, `${name}: bar widths ${box.rows.map((r) => r.width).join(',')}`);
+    // THE BARS RUN FROM A ZERO LINE DOWN THE MIDDLE (Tim, 2026-10-08): right
+    // and green for a plus, left and red for a minus, one scale for the box.
+    // Future proj diff's bar is its printed figure. Roster strength prints an
+    // absolute average (~120–130), so its bar is that figure minus the league's
+    // average of the same figures — above the league right, below it left —
+    // while the printed number stays the absolute one.
+    {
+      const tenth = (v) => Math.round(v * 10) / 10 + 0;
+      const mean = values.reduce((a, v) => a + v, 0) / values.length;
+      const bar = values.map((v) => tenth(key === 'diff' ? v : v - mean));
+      const most = Math.max(...bar.map(Math.abs));
+      ok(box.rows.every((r) => r.zeroLine), `${name}: a bar track has no zero line`);
+      box.rows.forEach((r, i) => {
+        const side = bar[i] > 0 ? 'pos' : bar[i] < 0 ? 'neg' : '';
+        ok(r.side === side, `${name}: ${r.name} (${r.text}) draws "${r.side}", expected "${side}"`);
+        const wide = most ? 50 * Math.abs(bar[i]) / most : 0;
+        ok(Math.abs(r.width - wide) < 0.06, `${name}: ${r.name} is ${r.width}% wide, expected ${wide.toFixed(1)}%`);
+      });
+      ok(box.rows[0].side === 'pos' && box.rows[0].width === 50 && box.rows[3].side === 'neg',
+        `${name}: best and worst draw ${box.rows.map((r) => `${r.side}${r.width}`).join(',')}`);
+    }
     // ONE preview per number: no browser tooltip beside the house one.
     ok(box.rows.every((r) => r.title === null), `${name}: a number carries a title as well as its preview`);
 

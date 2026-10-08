@@ -34,8 +34,16 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
  * printed beside each one.
  *
  * Named .oppbars rather than .rank because app.css already has a .rank for the
- * small ordinal in a table cell, and the two would fight. */
-.oppbars { list-style: none; margin: 0; padding: 0; --bar: #2f6f49; }
+ * small ordinal in a table cell, and the two would fight.
+ *
+ * FROM A ZERO LINE (Tim, 2026-10-08: "have the 0 bar run down the middle and
+ * negative bars go to the left in red and positive bars to the right in
+ * green"). The track carries a line down its middle (`.bar.zero`); a plus
+ * grows right from it in green, a minus left in red, and the page writes each
+ * bar's share of the track (js/stats-page.js, "bars from a zero line"). A
+ * list is never wider than 820px: past that the bar is a long way from its
+ * name. */
+.oppbars { list-style: none; margin: 0; padding: 0; max-width: 820px; --bar-pos: #2f6f49; --bar-neg: #8f3a45; }
 .oppbars li {
   display: grid;
   grid-template-columns: 22px minmax(90px, 1fr) 2fr auto auto;
@@ -47,8 +55,17 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
 }
 .oppbars .rk { color: var(--dim); font-size: 12px; text-align: right; }
 .oppbars .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oppbars .bar { background: var(--panel-2); border-radius: 3px; height: 9px; }
-.oppbars .bar i { display: block; height: 100%; border-radius: 3px; background: var(--bar); }
+.oppbars .bar { position: relative; background: var(--panel-2); border-radius: 3px; height: 14px; }
+.oppbars .bar i { position: absolute; top: 0; bottom: 0; display: block; }
+.oppbars .bar i.pos { left: 50%; border-radius: 0 3px 3px 0; background: var(--bar-pos); }
+.oppbars .bar i.neg { right: 50%; border-radius: 3px 0 0 3px; background: var(--bar-neg); }
+/* The zero line. It overhangs the track by the row's own padding, so on a
+ * laptop — where the rows share their columns — it reads as one line down the
+ * whole list. */
+.oppbars .bar.zero::after {
+  content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px;
+  width: 1px; margin-left: -0.5px; background: var(--dim);
+}
 .oppbars .vv { font-weight: 600; min-width: 46px; text-align: right; }
 /* The gap from the league average, league minus team, so + is an easier run
  * of opponents. Amber for a harder-than-typical schedule, dim for an easier
@@ -56,7 +73,23 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
 .oppbars .dd { min-width: 58px; text-align: right; font-size: 12.5px; color: var(--dim); }
 .oppbars .dd.hard { color: var(--warn); }
 .oppbars li.me .nm { color: #7fd99b; font-weight: 650; }
-.oppbars li.me .bar i { background: var(--accent); }
+.oppbars li.me .bar i.pos { background: var(--accent); }
+.oppbars li.me .bar i.neg { background: var(--err); }
+/* ONE SET OF COLUMNS FOR THE WHOLE LIST, on a laptop. Each row used to be a
+ * grid of its own, which was fine while every bar started at the left edge;
+ * a zero line has to sit at the same x in every row. So the list owns the
+ * columns and the rows borrow them (subgrid): the name is as wide as the
+ * longest name, to 190px at most, and the bar takes what is left. A browser
+ * without subgrid keeps the per-row columns above, which are fixed shares and
+ * line up too. */
+@media (min-width: 761px) {
+  .oppbars { display: grid; column-gap: 10px; grid-template-columns: 22px fit-content(190px) minmax(60px, 1fr) auto auto; }
+  .oppbars.one { grid-template-columns: 22px fit-content(190px) minmax(60px, 1fr) auto; }
+  .oppbars li,
+  .oppbars.one li,
+  .panel-row.three .oppbars li,
+  .panel-row.three .oppbars.one li { grid-column: 1 / -1; grid-template-columns: subgrid; }
+}
 /* The last figure opens the fixtures it is formed from (js/stats-page.js,
  * "where the last figure comes from"): a card beside it for a mouse, a sheet
  * at the foot of the screen for a finger. */
