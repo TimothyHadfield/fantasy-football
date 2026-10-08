@@ -21,6 +21,19 @@ import {
   makeRng, opponentPick, simulateDraft, gradeDraft, gradeNotes, bestLineup,
 } from './draft-sim.js';
 import { enableSort, resort } from './sortable.js';
+// The draft, looked back on ("Our draft") — see the section of that name below.
+import * as espn from './espn.js';
+import * as season from './season.js';
+import * as capture from './capture.js';
+import * as draftReview from './draft-review.js';
+import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
+import { heatScale, heatOf, heatMarkHtml } from './heat.js';
+import {
+  weekRun, registerRun, tipAttr, clearRuns, wireTips, byeWeekOf,
+} from './player-card.js';
+import { shortName } from './actual-season-table.js';
+import { scope } from './prefs.js';
+import { savedConfig, onConnection } from './connection.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
@@ -897,6 +910,8 @@ function init() {
     $('setupMode').value = 'practice';
     $('setupRandomSlot').value = 'random';
     updateMode();
+    // Not remembered: a practice draft started from the bar is one visit.
+    showView('room', false);
     $('setupPanel').classList.remove('hidden');
     $('results').classList.add('hidden');
     enterRoom();
@@ -916,4 +931,631 @@ function init() {
   wireRoom();
 }
 
+// ================================================== the draft, looked back on
+//
+// Tim, 2026-10-08: "I also want to expand the draft section to show what our
+// draft looked like and allow the user to select a specific user and see which
+// big misses or steals they had based on current season proj and information."
+//
+// "Our draft" is the page's first view; the draft room above is the other half
+// of the switch and is not touched by anything below. The arithmetic — where a
+// man was drafted, what he is worth now, the difference — is js/draft-review.js
+// (pure, tests/test-draft-review.mjs). This section reads the weeks and draws.
+//
+// WHAT IT READS, on a league read directly (the laptop, or the bridge):
+//   - the schedule and every week's squads, through js/season.js and its store
+//     — the reads the Analysis page makes, so usually already in this browser;
+//   - the draft, once: `espn.fetchDraft()`. A finished draft never changes, so
+//     it is kept in this browser and not asked for again;
+//   - the weeks of drafted men who are on nobody's squad that week (dropped
+//     since), which no squad read carries: one `espn.fetchPlayersWeek` a week
+//     that has any. A finished week is kept for good; a week still to come for
+//     six hours, as its projection moves.
+// ON THE PHONE'S SYNCED COPY there is no draft (the copy does not carry one),
+// so nothing is asked of ESPN at all and the page says so over the sample.
+
+const prefs = scope('draft');
+const REVIEW_KEY = 'ff-draft-review-v1';
+const GAP_FRESH_MS = 6 * 60 * 60 * 1000;
+/** How many of those reads go out together. */
+const GAP_TOGETHER = 3;
+const same = (a, b) => String(a) === String(b);
+const finite = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+/** A place gained or lost, signed, with a real minus. */
+const signed = (d) => (d === null || d === undefined ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}`);
+const POS_SAID = { DST: 'D/ST' };
+const posSaid = (pos) => POS_SAID[pos] || pos || '';
+
+const review = {
+  source: 'demo',
+  world: null,
+  teamId: null,
+  leagueKey: 'demo',
+  /** ESPN reads this page load asked for, by kind — printed nowhere, read by tests and by hand. */
+  reads: { draft: 0, players: 0, squads: 0 },
+};
+if (typeof window !== 'undefined') window.ffDraftReads = review.reads;
+
+function setStatus(msg, isError = false) {
+  const el = $('sourceStatus');
+  el.innerHTML = msg;
+  el.style.color = isError ? 'var(--err)' : 'var(--dim)';
+}
+
+/** Is this page's data the phone's synced copy? */
+async function fromCloud() {
+  if (typeof season.cloudSource !== 'function') return false;
+  try { return Boolean(await season.cloudSource()); } catch { return false; }
+}
+
+// ---------------------------------------------------------- what is kept here
+
+function readKept(leagueKey) {
+  try {
+    const all = JSON.parse(localStorage.getItem(REVIEW_KEY) || '{}') || {};
+    return all.league === leagueKey && all.kept ? all.kept : {};
+  } catch { return {}; }
+}
+
+/** One league at a time: a second league's copy replaces the first. */
+function writeKept(leagueKey, kept) {
+  try { localStorage.setItem(REVIEW_KEY, JSON.stringify({ league: leagueKey, kept })); } catch { /* read again next time */ }
+}
+
+// ------------------------------------------------------------------ the world
+
+/** Every week of the season, and which of them are behind us. */
+function weeksOf(data) {
+  const poWeeks = capture.playoffWeeks(data);
+  const open = new Set(capture.openWeeks(data));
+  const finished = new Set([
+    ...data.weeks.filter((w) => !open.has(w)),
+    ...poWeeks.filter((w) => capture.playoffWeekDecided(data, w)),
+  ]);
+  const weeks = [...data.weeks, ...poWeeks];
+  return { weeks, poWeeks, finished, currentWeek: weeks.find((w) => !finished.has(w)) ?? weeks[weeks.length - 1] ?? null };
+}
+
+/**
+ * Put a draft and its weeks together: every drafted man's season week by week,
+ * then the review itself.
+ *
+ * @param {Object} o
+ * @param {Map<number, Array>} o.rosters week -> that week's squads
+ * @param {function(number, number):Object|null} o.gapOf (week, playerId) -> a
+ *   man's week when he was on nobody's squad: `{name, position, proTeamId,
+ *   projected, actual}`
+ */
+function assemble({ draft, data, rosters, gapOf, byes, isDemo }) {
+  const { weeks, poWeeks, finished, currentWeek } = weeksOf(data);
+  const drafted = new Set(draft.picks.map((p) => p.playerId));
+  const men = new Map();
+  const man = (id) => {
+    if (!men.has(id)) men.set(id, { playerId: id, name: '', position: '', proTeamId: null, injuryStatus: null, glance: null, byWeek: {} });
+    return men.get(id);
+  };
+
+  for (const w of weeks) {
+    const over = finished.has(w);
+    const on = new Set();
+    for (const t of rosters.get(w) || []) {
+      for (const p of t.players || []) {
+        if (!drafted.has(p.playerId) || on.has(p.playerId)) continue;
+        on.add(p.playerId);
+        const m = man(p.playerId);
+        m.name = p.name || m.name;
+        m.position = p.position || m.position;
+        m.proTeamId = p.proTeamId ?? m.proTeamId;
+        // The week in play: a man who has finished carries his score as
+        // `projected` and what was projected as `pregame` (js/season.js).
+        const played = over || p.done === true;
+        const score = played ? (finite(p.actual) ?? (over ? 0 : finite(p.projected)) ?? 0) : null;
+        const proj = p.done === true ? finite(p.pregame) : finite(p.projected);
+        m.byWeek[w] = { proj, act: score, counts: played ? score : proj, done: played };
+        if (w <= currentWeek || m.injuryStatus === null) m.injuryStatus = p.injuryStatus || m.injuryStatus;
+        if (w === currentWeek) m.glance = { avg: p.seasonAvg, proj, rank: p.posRank, pos: p.position };
+      }
+    }
+    for (const id of drafted) {
+      if (on.has(id)) continue;
+      const g = gapOf(w, id);
+      if (!g) continue;
+      const m = man(id);
+      m.name = m.name || g.name || '';
+      m.position = m.position || (g.position && g.position !== 'UNK' ? g.position : '');
+      m.proTeamId = m.proTeamId ?? g.proTeamId ?? null;
+      const proj = finite(espn.byeAdjustedProjection(g.projected, g.proTeamId, w, byes));
+      const score = over ? (finite(g.actual) ?? 0) : null;
+      m.byWeek[w] = { proj, act: score, counts: over ? score : proj, done: over };
+    }
+  }
+
+  // The lineup, off the latest week whose lineups are final (else the first).
+  const lineupWeek = [...weeks].reverse().find((w) => finished.has(w) && (rosters.get(w) || []).length) ?? weeks[0];
+  const slots = draftReview.slotsFromLineups(rosters.get(lineupWeek) || []);
+
+  const players = new Map();
+  for (const [id, m] of men) {
+    if (!m.position) continue;
+    players.set(id, { name: m.name, position: m.position, ...draftReview.seasonOf(m.byWeek, weeks) });
+  }
+  const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null });
+  return {
+    isDemo, name: data.leagueName, teams: data.teams, weeks, poWeeks, finished, currentWeek,
+    draft, men, byes, slots, rv,
+    board: draftReview.boardOf(draft),
+    // One scale for the whole draft: a pick's colour is its difference against everybody's.
+    scale: heatScale(rv.rows.map((r) => r.diff)),
+  };
+}
+
+/** The sample league never drafted, so its draft is made up from its week-1 squads. */
+function demoWorld() {
+  const data = capture.normalizeSchedule(generateDemoSchedule(), { isDemo: true });
+  const { weeks } = weeksOf(data);
+  const rosters = new Map(weeks.map((w) => [w, generateDemoWeekRosters(w).teams]));
+  const first = rosters.get(weeks[0]) || [];
+  const draft = draftReview.sampleDraft(first, draftReview.slotsFromLineups(first));
+  return assemble({ draft, data, rosters, gapOf: () => null, byes: {}, isDemo: true });
+}
+
+/** A league read directly. Throws what the reads throw. */
+async function liveWorld(cfg) {
+  const say = (msg) => setStatus(`<span class="searching">${esc(msg)}</span>`);
+  const data = capture.normalizeSchedule(await season.fetchSchedule(), { isDemo: false });
+  const { weeks, finished } = weeksOf(data);
+  const leagueKey = `${cfg.leagueId}-${cfg.season}`;
+  const kept = readKept(leagueKey);
+
+  let draft = kept.draft || null;
+  if (!draft) {
+    say('Reading the draft…');
+    review.reads.draft++;
+    draft = draftReview.parseDraft(await fetchDraft());
+    if (draft.done) kept.draft = draft;
+  }
+  if (!draft.picks.length) return { empty: true, isDemo: false, name: data.leagueName, teams: data.teams };
+
+  const rosters = await season.fetchWeeksRosters(weeks, {
+    onProgress: (done, total, week, from) => {
+      if (from === 'espn') review.reads.squads++;
+      say(`Reading week ${week} (${done}/${total})`);
+    },
+  });
+  const byes = await season.fetchByeWeeks();
+
+  // THE MEN ON NOBODY'S SQUAD. What is kept for a week stands while the week's
+  // state has not changed, and for a week still to come only six hours.
+  const now = Date.now();
+  if (!kept.weeks) kept.weeks = {};
+  const wanted = [];
+  for (const w of weeks) {
+    const over = finished.has(w);
+    let k = kept.weeks[w];
+    if (!k || k.over !== over || (!over && now - k.at > GAP_FRESH_MS)) k = kept.weeks[w] = { at: now, over, men: {} };
+    const on = new Set((rosters.get(w) || []).flatMap((t) => (t.players || []).map((p) => p.playerId)));
+    const ids = draft.picks.map((p) => p.playerId).filter((id) => !on.has(id) && !(id in k.men));
+    if (ids.length) wanted.push({ week: w, ids, k });
+  }
+  let read = 0;
+  for (let i = 0; i < wanted.length; i += GAP_TOGETHER) {
+    await Promise.all(wanted.slice(i, i + GAP_TOGETHER).map(async ({ week, ids, k }) => {
+      review.reads.players += Math.ceil(ids.length / 100);
+      const got = new Map((await espn.fetchPlayersWeek(ids, week))
+        .map((e) => espn.parsePlayerWeek(e, week)).map((p) => [Number(p.playerId), p]));
+      // A man ESPN does not know is kept as nothing, so he is not asked for again.
+      for (const id of ids) {
+        const p = got.get(Number(id));
+        k.men[id] = p ? [p.name, p.position, p.proTeamId, p.projected, p.actual] : 0;
+      }
+      say(`Reading dropped players (${++read}/${wanted.length})`);
+    }));
+  }
+  writeKept(leagueKey, kept);
+
+  const gapOf = (w, id) => {
+    const e = kept.weeks[w] && kept.weeks[w].men[id];
+    return e ? { name: e[0], position: e[1], proTeamId: e[2], projected: e[3], actual: e[4] } : null;
+  };
+  return assemble({ draft, data, rosters, gapOf, byes, isDemo: false });
+}
+
+/**
+ * Read one source's draft and put it on the page.
+ * @returns {Promise<boolean>} false when it could not be read; the reason is
+ *          then in the status line and whatever was on screen is left there
+ */
+async function loadReview(src) {
+  const demo = src === 'demo';
+  let world;
+  let leagueKey = 'demo';
+  let cfg = null;
+  if (demo) {
+    world = demoWorld();
+    setStatus('');
+  } else {
+    // Never read localStorage for the league directly — see PROGRESS.md rule 6.
+    cfg = savedConfig();
+    if (!cfg) {
+      setStatus('No league connected yet. Connect one on the bar above first.', true);
+      return false;
+    }
+    configure({ leagueId: cfg.leagueId, season: cfg.season });
+    // The phone's copy holds no draft: say so, and ask ESPN for nothing.
+    if (await fromCloud()) {
+      setStatus('This page needs the league read directly for now.', true);
+      return false;
+    }
+    setStatus('<span class="searching">Loading your league from ESPN…</span>');
+    try {
+      world = await liveWorld(cfg);
+    } catch (err) {
+      setStatus(esc(err.message), true);
+      return false;
+    }
+    leagueKey = `${cfg.leagueId}-${cfg.season}`;
+    // Loaded: the line under the heading names the league, so this one says nothing.
+    setStatus(world.empty ? 'No draft yet.' : '');
+  }
+
+  review.world = world;
+  review.leagueKey = leagueKey;
+  // Whose picks: the team last picked for THIS league, else the saved "my
+  // team", else the first — the Decisions page's rule.
+  const teamOf = (id) => (world.teams || []).find((t) => same(t.id, id)) || null;
+  const pick = [prefs.get(`team.${leagueKey}`), cfg && cfg.teamId].map(teamOf).find(Boolean) || world.teams[0] || null;
+  review.teamId = pick ? pick.id : null;
+  renderReview();
+  return true;
+}
+
+// -------------------------------------------------------------------- drawing
+
+const teamName = (id) => {
+  const t = (review.world.teams || []).find((x) => same(x.id, id));
+  return t ? t.name || `Team ${id}` : `Team ${id}`;
+};
+const nameOf = (r) => r.name || `Player ${r.playerId}`;
+/** Where he went, as the page prints it: a price in an auction, a pick in a snake. */
+const wentFor = (r) => (review.world.draft.type === 'auction' ? `$${r.bid}` : String(r.overall));
+
+/** A man's card: his season week by week (js/player-card.js). */
+function cardAttr(r) {
+  const w = review.world;
+  const m = w.men.get(r.playerId);
+  if (!m || !m.position) return '';
+  // One card a man, however many places on the page name him.
+  if (w.cards.has(r.playerId)) return tipAttr(w.cards.get(r.playerId));
+  const first = w.weeks[0];
+  const last = w.weeks[w.weeks.length - 1];
+  const run = weekRun({
+    heading: `${w.isDemo ? 'Sample projections' : 'ESPN’s projection'} for weeks ${first}–${last}`,
+    weeks: w.weeks,
+    projections: w.weeks.map((wk) => (m.byWeek[wk] ? m.byWeek[wk].proj : null)),
+    actuals: w.weeks.map((wk) => (m.byWeek[wk] && m.byWeek[wk].done ? m.byWeek[wk].act : null)),
+    currentWeek: w.currentWeek,
+    demo: w.isDemo,
+    byeWeek: byeWeekOf(m, w.byes),
+    injuryStatus: m.injuryStatus,
+    playoffWeeks: w.poWeeks,
+  });
+  const key = registerRun({
+    ident: `${m.name} · ${posSaid(m.position)}`,
+    run,
+    href: w.isDemo ? null : `waivers.html?player=${encodeURIComponent(r.playerId)}`,
+    id: `dr:${r.playerId}`,
+    glance: m.glance,
+  }, 'dr');
+  w.cards.set(r.playerId, key);
+  return tipAttr(key);
+}
+
+/** A difference that opens what it is made of. */
+function whyHtml(r, inner, cls = '') {
+  return `<span class="dr-why${cls ? ` ${cls}` : ''}" data-pid="${esc(r.playerId)}" tabindex="0" role="button" ` +
+    `aria-label="${esc(nameOf(r))}: where this number comes from">${inner}</span>`;
+}
+
+function renderReview() {
+  const w = review.world;
+  if (!w) return;
+  $('modeBadge').className = 'badge ' + (w.isDemo ? 'demo' : 'live');
+  $('modeBadge').textContent = w.isDemo ? 'Demo' : 'Live';
+  $('teamSelect').innerHTML = (w.teams || [])
+    .map((t) => `<option value="${esc(t.id)}"${same(t.id, review.teamId) ? ' selected' : ''}>${esc(teamName(t.id))}</option>`)
+    .join('');
+  closePop();
+
+  const any = !w.empty;
+  $('drMain').hidden = !any;
+  $('drExplain').hidden = !any;
+  if (!any) { $('pageSub').textContent = w.name || ''; return; }
+
+  const auction = w.draft.type === 'auction';
+  const played = w.weeks.filter((wk) => w.finished.has(wk)).length;
+  $('pageSub').textContent = [
+    w.name, auction ? 'Auction' : 'Snake', `${w.draft.picks.length} picks`,
+    played ? `${played} week${played === 1 ? '' : 's'} played` : '',
+  ].filter(Boolean).join(' · ');
+  $('thAt').textContent = auction ? 'Rank' : 'Pick';
+  $('teamTable').querySelector('th.dr-paid').hidden = !auction;
+
+  $('drNote').innerHTML =
+    '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
+    'points so far plus ESPN’s projection for every week left, measured against a typical bench player at his position.</p>' +
+    (auction
+      ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+      : '') +
+    `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Now. Above zero is a steal, below zero a miss. ` +
+    'Green and red compare it with every pick in the draft.</p>' +
+    '<p>A player counts for the team that drafted him, wherever he is now.</p>';
+
+  clearRuns('dr');
+  w.cards = new Map();
+  drawBoard();
+  drawTeam();
+}
+
+function drawBoard() {
+  const w = review.world;
+  const { teamIds, rows } = w.board;
+  const byId = new Map(w.rv.rows.map((r) => [r.playerId, r]));
+  const mine = (id) => (same(id, review.teamId) ? ' dr-mine' : '');
+  const table = $('draftBoard');
+  // How many columns the stylesheet keeps at a readable width (css/app.css, `.dr-board`).
+  table.setAttribute('style', `--dr-cols: ${teamIds.length}`);
+  table.querySelector('thead').innerHTML = '<tr><th class="dr-rd">Rd</th>' + teamIds.map((id) =>
+    `<th class="dr-col${mine(id)}" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}" ` +
+    `title="${esc(teamName(id))}">${esc(teamName(id))}</button></th>`).join('') + '</tr>';
+  table.querySelector('tbody').innerHTML = rows.map((row, i) =>
+    `<tr><td class="dr-rd">${i + 1}</td>` + row.map((pk, c) => {
+      const id = teamIds[c];
+      if (!pk) return `<td class="dr-cell dr-none${mine(id)}" data-team="${esc(id)}"></td>`;
+      const r = byId.get(pk.playerId);
+      const h = r.diff === null ? null : heatOf(r.diff, w.scale);
+      return `<td class="dr-cell${mine(id)}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
+        whyHtml(r, `<span class="dr-went">${esc(wentFor(r))}${r.position ? ` ${esc(posSaid(r.position))}` : ''}</span>` +
+          `<span class="dr-d">${signed(r.diff)}${heatMarkHtml(h)}</span>`, 'dr-top') +
+        `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
+        '</td>';
+    }).join('') + '</tr>').join('');
+}
+
+function drawTeam() {
+  const w = review.world;
+  const auction = w.draft.type === 'auction';
+  const t = draftReview.teamReview(w.rv.rows, review.teamId);
+  const who = (r) => `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
+    // (A defence's name says what it is: "Jaguars D/ST".)
+    (r.position && r.position !== 'DST' ? ` <span class="muted">${esc(posSaid(r.position))}</span>` : '');
+
+  // Both tiles keep their room when a team has no steal or no miss, so the
+  // table under them does not move from one team to the next.
+  const tile = (k, r, key) => `<div class="stat dr-tile" data-tile="${key}"><div class="k">${k}</div>` +
+    (r
+      ? `<div class="v">${whyHtml(r, `${signed(r.diff)}${heatMarkHtml(heatOf(r.diff, w.scale))}`)}</div><div class="dr-who">${who(r)}</div>`
+      : '<div class="v muted">—</div><div class="dr-who">&nbsp;</div>') +
+    '</div>';
+  $('teamStats').innerHTML = tile('Best steal', t.steal, 'steal') + tile('Biggest miss', t.miss, 'miss');
+
+  $('teamTable').querySelector('tbody').innerHTML = t.picks.map((r) => {
+    const h = r.diff === null ? null : heatOf(r.diff, w.scale);
+    const v = (n) => (n === null || n === undefined ? '' : ` data-v="${esc(n)}"`);
+    return `<tr data-pid="${esc(r.playerId)}">` +
+      `<td class="name" data-v="${esc(nameOf(r))}">${who(r)}</td>` +
+      `<td class="dr-paid"${auction ? '' : ' hidden'}${v(r.bid)}>${auction ? `$${r.bid}` : ''}</td>` +
+      `<td${v(r.at)}>${r.at}</td>` +
+      `<td${v(r.now)}>${r.now === null ? '—' : r.now}</td>` +
+      // No `title`: on a phone js/touch-titles.js would open it over the preview.
+      `<td class="dr-diff${h ? ` ${h.cls}` : ''}"${v(r.diff)}>` +
+      (r.diff === null ? '—' : whyHtml(r, `${signed(r.diff)}${heatMarkHtml(h)}`)) + '</td></tr>';
+  }).join('');
+  resort($('teamTable'));
+
+  // The picked team's column on the board.
+  for (const el of $('draftBoard').querySelectorAll('[data-team]')) {
+    if (el.tagName !== 'BUTTON') el.classList.toggle('dr-mine', same(el.dataset.team, review.teamId));
+  }
+}
+
+function pickTeam(id) {
+  const w = review.world;
+  const t = w && (w.teams || []).find((x) => same(x.id, id));
+  if (!t || w.empty) return;
+  review.teamId = t.id;
+  prefs.set(`team.${review.leagueKey}`, t.id);
+  $('teamSelect').value = String(t.id);
+  closePop();
+  // Only the team's own panel is redrawn; the board keeps its cells.
+  drawTeam();
+}
+
+// ------------------------------------------- where a difference comes from
+//
+// The house pattern (the Stats page's, as copied by Decisions): a mouse hovers
+// or focuses a number and gets a card beside it; a finger has no hover, so a
+// tap opens a sheet with a Close button. A tap outside or Escape shuts either.
+
+let pop = null;
+let popPid = null;
+
+function closePop() {
+  if (pop) pop.hidden = true;
+  popPid = null;
+}
+
+function popHtml(pid) {
+  const w = review.world;
+  const r = w && !w.empty && w.rv.rows.find((x) => same(x.playerId, pid));
+  if (!r) return '';
+  const auction = w.draft.type === 'auction';
+  const line = (k, v) => `<tr><td class="name">${k}</td><td class="num">${v}</td></tr>`;
+  const said = r.diff === null ? '' : r.diff > 0 ? 'Steal' : r.diff < 0 ? 'Miss' : 'Even';
+  return `<div class="op-h">${esc(nameOf(r))}${r.position ? ` <span class="muted">· ${esc(posSaid(r.position))}</span>` : ''}</div>` +
+    '<table><tbody>' +
+    line('Points so far', fmt(r.soFar)) +
+    line('Projected rest', fmt(r.rest)) +
+    (auction ? line('Paid', `$${r.bid}`) + line('Price rank', r.at) : line('Drafted', `Pick ${r.at}`)) +
+    (r.keeper ? line('Keeper', 'Yes') : '') +
+    line('Worth now', r.now === null ? '—' : `Pick ${r.now}`) +
+    '</tbody>' +
+    (said ? `<tfoot><tr class="op-gap"><td class="name">${said}</td><td class="num">${signed(r.diff)}</td></tr></tfoot>` : '') +
+    '</table><button type="button" class="op-close">Close</button>';
+}
+
+function openPop(el, sheet) {
+  const html = popHtml(el.dataset.pid);
+  if (!html) return;
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = 'drPop';
+    document.body.appendChild(pop);
+    pop.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('.op-close')) closePop(); });
+  }
+  popPid = el.dataset.pid;
+  pop.className = sheet ? 'dr-pop sheet' : 'dr-pop';
+  pop.innerHTML = html;
+  pop.hidden = false;
+  pop.style.left = '';
+  pop.style.top = '';
+  if (sheet || typeof el.getBoundingClientRect !== 'function') return;
+  const r = el.getBoundingClientRect();
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - pw, window.innerWidth - pw - 8));
+  const below = r.bottom + 6;
+  pop.style.left = `${left}px`;
+  pop.style.top = `${below + ph <= window.innerHeight - 8 ? below : Math.max(8, r.top - ph - 6)}px`;
+}
+
+function wirePop(root) {
+  const target = (e) => (e.target && e.target.closest ? e.target.closest('.dr-why') : null);
+  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  const within = (e, el) => Boolean(e.relatedTarget && el.contains(e.relatedTarget));
+  const open = (el) => Boolean(pop && !pop.hidden && same(popPid, el.dataset.pid));
+  root.addEventListener('mouseover', (e) => {
+    const el = target(e);
+    if (el && !noHover() && !within(e, el)) openPop(el, false);
+  });
+  root.addEventListener('mouseout', (e) => {
+    const el = target(e);
+    if (el && !noHover() && !within(e, el)) closePop();
+  });
+  root.addEventListener('click', (e) => {
+    const el = target(e);
+    if (!el) return;
+    if (noHover() && open(el)) closePop(); else openPop(el, noHover());
+  });
+  root.addEventListener('keydown', (e) => {
+    const el = target(e);
+    if (!el || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    openPop(el, noHover());
+  });
+  root.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && !noHover() && !open(el)) openPop(el, false);
+  });
+  root.addEventListener('focusout', () => { if (!noHover()) closePop(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
+  document.addEventListener('click', (e) => {
+    if (!pop || pop.hidden) return;
+    if (pop.contains(e.target) || target(e)) return;
+    closePop();
+  });
+}
+
+// ------------------------------------------------------------------- controls
+
+/** "Our draft" or the draft room. Remembered when picked on the switch, so a refresh mid-draft stays in the room. */
+function showView(view, remember = true) {
+  const room = view === 'room';
+  $('reviewView').classList.toggle('hidden', room);
+  $('roomView').classList.toggle('hidden', !room);
+  for (const b of $('viewToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.view === (room ? 'room' : 'review'));
+  if (remember) prefs.set('view', room ? 'room' : null);
+  if (room) closePop();
+}
+
+function paintSource() {
+  for (const b of $('sourceToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.src === review.source);
+}
+
+// One load at a time: the connection bar can announce a league while the page
+// is already reading one.
+let reviewLoading = false;
+// Whether the reader chose a source by hand this page load (the Decisions rule).
+let sourcePicked = false;
+
+async function selectSource(src) {
+  if (reviewLoading) return;
+  reviewLoading = true;
+  try {
+    if (await loadReview(src)) {
+      review.source = src;
+      prefs.set('source', src);
+    }
+  } finally {
+    reviewLoading = false;
+  }
+  paintSource();
+}
+
+/** The remembered source, but never a blank page: a failed read keeps its reason over the sample. */
+async function startReview() {
+  if (prefs.get('source') === 'live' && savedConfig()) {
+    reviewLoading = true;
+    try {
+      if (await loadReview('live')) { review.source = 'live'; return; }
+      const why = $('sourceStatus').innerHTML;
+      await loadReview('demo');
+      review.source = 'demo';
+      setStatus(`${why} Showing demo data instead.`, true);
+    } finally {
+      reviewLoading = false;
+      paintSource();
+    }
+    return;
+  }
+  await loadReview('demo');
+  review.source = 'demo';
+  paintSource();
+}
+
+function initReview() {
+  $('viewToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-view]');
+    if (btn) showView(btn.dataset.view);
+  });
+  $('sourceToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-src]');
+    if (!btn) return;
+    sourcePicked = true;
+    selectSource(btn.dataset.src);
+  });
+  $('teamSelect').addEventListener('change', (e) => pickTeam(e.target.value));
+  $('draftBoard').addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button.dr-pick-team');
+    if (btn) pickTeam(btn.dataset.team);
+  });
+  enableSort($('teamTable'), { defaultIndex: 4, defaultAsc: false });
+  wirePop($('reviewView'));
+  wireTips($('reviewView'));
+
+  showView(prefs.get('view') === 'room' ? 'room' : 'review');
+  paintSource();
+  startReview();
+
+  // The connection bar probes in the background, so a league arriving after the
+  // page has booted is the normal case.
+  let triedLive = false;
+  onConnection((conn) => {
+    if (!conn) return;
+    if (triedLive || sourcePicked || review.source === 'live') return;
+    triedLive = true;
+    selectSource('live');
+  });
+}
+
+initReview();
 init();

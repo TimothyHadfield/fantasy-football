@@ -15,11 +15,125 @@
 <script src="js/site-status.js" defer></script>
 <link rel="stylesheet" href="css/app.css">
 <link rel="stylesheet" href="css/draft.css">
+<style>
+  /* The player card (js/player-card.js). Its page half lives in each page that
+     shows one — these are analysis.html's rules, value for value; see the
+     comments there for why each is what it is. */
+  .tipcard {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 60;
+    max-width: min(92vw, 720px);
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-3);
+    box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.75);
+    font-size: 12.5px;
+    color: var(--text);
+    pointer-events: none;
+  }
+  .tipcard.sheet {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-width: none;
+    padding: 14px var(--pad-panel) 16px;
+    border-width: 1px 0 0;
+    border-radius: var(--r-4) var(--r-4) 0 0;
+    box-shadow: 0 -14px 34px -10px rgba(0, 0, 0, 0.8);
+    pointer-events: auto;
+    font-size: 13px;
+  }
+  .tipcard.sheet .tc-ident { font-size: 15px; }
+  .tc-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 11px;
+    border-top: 1px solid var(--line);
+  }
+  .tc-open {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px 14px;
+    border-radius: var(--r-2);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+    font-size: 13.5px;
+    text-decoration: none;
+  }
+  .tc-open-off {
+    background: transparent;
+    color: var(--dim);
+    font-weight: 500;
+    text-align: center;
+  }
+  .tc-close { flex: 0 0 auto; min-height: 44px; }
+  .tc-ident { font-weight: 650; margin-bottom: 2px; }
+  .tc-head, .tc-pending, .tc-legend, .tc-note { color: var(--dim); font-size: 11.5px; }
+  .tc-head { margin-bottom: 7px; }
+  .tc-legend { margin-top: 7px; line-height: 1.5; }
+  .tc-note { margin-top: 7px; line-height: 1.5; }
+  .tc-chart { display: grid; gap: 9px; }
+  .tc-run {
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .tc-run th, .tc-run td {
+    border: none;
+    padding: 2px 7px;
+    text-align: center;
+    min-width: 34px;
+  }
+  .tc-run .tc-lbl {
+    text-align: right;
+    padding-right: 10px;
+    color: var(--dim);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    position: static;
+    background: none;
+  }
+  .tc-run thead th {
+    color: var(--dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    position: static;
+    background: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .tc-run tbody td { font-size: 12.5px; padding-top: 4px; }
+  .tc-run tfoot td, .tc-run tfoot th {
+    font-size: 11.5px;
+    padding-top: 3px;
+    border-top: 1px solid var(--line);
+  }
+  .tc-run tfoot td { color: var(--dim); }
+  .tc-run .a-num { color: var(--text); }
+  .tc-run .a-wait { color: var(--line); }
+  .tc-run .k-bye { color: var(--warn); font-size: 11px; letter-spacing: 0.03em; }
+  .tc-run .k-out { color: var(--dim); line-height: 1.1; }
+  .tc-run .tc-mk { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--err); }
+  .tc-run .k-none, .tc-run .k-off { color: var(--line-2); }
+  .tc-run .k-wait { color: var(--line); }
+  .tc-run .now { border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); }
+  .tc-run thead th.now { color: var(--text); }
+</style>
 </head>
 <body>
 
 <header class="site">
-  <div class="wrap">
+  <div class="wrap wide">
     <span class="brand">Fantasy Football</span>
     <nav>
       <a href="index.html">Home</a>
@@ -37,10 +151,76 @@
 
 
 
-<div class="wrap">
+<div class="wrap wide">
 
   <div id="connBar"></div>
 
+  <!-- Tim, 2026-10-08: "expand the draft section to show what our draft looked
+       like and allow the user to select a specific user and see which big
+       misses or steals they had". The draft room is the other half of the
+       switch, untouched. -->
+  <div class="dr-head">
+    <h1>Draft <span id="modeBadge" class="badge demo">Demo</span></h1>
+    <div class="segmented" id="viewToggle">
+      <button type="button" data-view="review" class="on">Our draft</button>
+      <button type="button" data-view="room">Draft room</button>
+    </div>
+  </div>
+
+  <!-- ============================================== the draft, looked back on -->
+  <div id="reviewView">
+    <p class="sub" id="pageSub"></p>
+
+    <!-- Only while it has something to say: a read in progress, or why one failed. -->
+    <div id="sourceStatus" class="panel-note dr-status"></div>
+
+    <div class="dr-main" id="drMain" hidden>
+      <section class="panel" id="panelTeam">
+        <div class="dr-team-head">
+          <h2>Steals &amp; misses</h2>
+          <select id="teamSelect" aria-label="Team"></select>
+        </div>
+        <div class="stat-row" id="teamStats"></div>
+        <div class="table-scroll">
+          <table id="teamTable" class="dr-picks">
+            <thead><tr>
+              <th class="name" data-sort>Player</th>
+              <th data-sort class="dr-paid">Paid</th>
+              <th data-sort id="thAt">Pick</th>
+              <th data-sort>Now</th>
+              <th data-sort>+/&minus;</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" id="panelBoard">
+        <h2>Draft board</h2>
+        <div class="table-scroll">
+          <table id="draftBoard" class="dr-board">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <details class="explain" id="drExplain" hidden>
+      <summary>How this works</summary>
+      <div class="panel-note" id="drNote"></div>
+    </details>
+
+    <!-- Under the draft, not over it: the page goes to the connected league by
+         itself, so this is the rarely-used way back to the sample. -->
+    <div class="segmented dr-source" id="sourceToggle">
+      <button type="button" data-src="demo" class="on">Demo data</button>
+      <button type="button" data-src="live">My ESPN league</button>
+    </div>
+  </div>
+
+  <!-- ======================================================== the draft room -->
+  <div id="roomView" class="hidden">
 
   <!-- ============================================ setup, before the draft -->
   <section class="panel" id="setupPanel">
@@ -290,6 +470,8 @@
         Kept in this browser only. <button type="button" id="clearHistoryBtn" class="mark">Clear</button>
       </p>
     </section>
+  </div>
+
   </div>
 </div>
 
