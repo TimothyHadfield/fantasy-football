@@ -125,7 +125,7 @@
       "scenarios": 28
     },
     "test-summary.mjs": {
-      "assertions": 327
+      "assertions": 595
     },
     "touch-check.mjs": {
       "assertions": 353,

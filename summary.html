@@ -148,11 +148,14 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <p class="lede">Each manager&rsquo;s luck so far, chance of winning the title, and chance of finishing last.</p>
     <div class="table-scroll"><table id="summaryTable">
       <thead><tr>
-        <th class="name" data-sort title="The person, not their ESPN team name. Resolved from ESPN's own member list.">Member</th>
-        <th class="num" data-sort title="Wins and losses in the weeks counted as decided, up to the week picked above. A tie adds a third number (7-1-1) and sorts as half a win.">Record</th>
-        <th class="num" data-sort title="Your sheet's LUCK column, for the season so far: league average actual &minus; (points to win &minus; close-game luck). One week counts &plusmn;50 at most. Above zero means the season has broken your way.">LUCK</th>
-        <th class="num" data-sort title="How often this manager wins the CHAMPIONSHIP ROUND across the simulated seasons. Not the same as topping the table.">Title %</th>
-        <th class="num" data-sort title="How often this manager finishes LAST IN THE REGULAR-SEASON STANDINGS. Tim's league rule, and nothing to do with the consolation ladder.">Loser %</th>
+        <!-- ONE PLAIN SENTENCE A HEADING (docs/previews-plan.md). The formula,
+             the ±50 limit and the league's wooden-spoon rule are under "What
+             the numbers mean" below, and each cell's own card has its parts. -->
+        <th class="name" data-sort title="The person who runs the team, not the ESPN team name.">Member</th>
+        <th class="num" data-sort title="Wins and losses in the weeks counted so far, with ties as a third number.">Record</th>
+        <th class="num" data-sort title="How far the season has broken this manager&rsquo;s way; above zero is lucky.">LUCK</th>
+        <th class="num" data-sort title="How often this manager wins the championship round in the simulated seasons.">Title %</th>
+        <th class="num" data-sort title="How often this manager finishes last in the regular-season standings.">Loser %</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>

@@ -87,20 +87,32 @@ export function summaryScales(rows, { shadeLuck = true, minSpread = PCT_MIN_SPRE
   };
 }
 
-/** One shaded cell. The `title` is channel 3 of "never colour alone". */
-const shaded = (v, scale, fmt, inner) => {
+/** One shaded cell. The `title` is channel 3 of "never colour alone" — unless
+ *  the page hangs a card on the cell (`card`), which then says where the number
+ *  stands: one preview a number, so the card's attribute REPLACES the title. */
+const shaded = (v, scale, fmt, inner, card = '') => {
   // No group is named: each column is one figure across the league, so the
   // title reads "2nd highest of 10 · league avg 12%", the average printed the
   // way the column prints it.
   const h = heatOf(v, scale, { fmt });
   return `<td class="num${h ? ` ${h.cls}` : ''}" data-v="${v ?? ''}"` +
-    `${h ? ` title="${esc(h.words)}"` : ''}>${inner}${heatMarkHtml(h)}</td>`;
+    `${card || (h ? ` title="${esc(h.words)}"` : '')}>${inner}${heatMarkHtml(h)}</td>`;
 };
 
-const nameCell = (r) =>
-  `<td class="name"${r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : ''}>${esc(r.name)}</td>`;
+const nameCell = (r, card = '') =>
+  `<td class="name"${card || (r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : '')}>${esc(r.name)}</td>`;
 
-function rowCells(r, { enough, waiting, scales }) {
+function rowCells(r, { enough, waiting, scales, cards }) {
+  // A PREVIEW CARD PER CELL (`cards`, off unless a page asks for it — the
+  // Summary page does, the Decisions review does not): the attribute the page
+  // made for this row's cell, or '' for none.
+  const card = (key) => (cards && typeof cards[key] === 'function' ? cards[key](r) || '' : '');
+  // The decimal record's basis (rule 7) is the one title a card does not
+  // replace on the way out: the card says it too, but a record that reads
+  // "3.2-2.8" must carry its reason wherever the row is drawn. js/pop.js takes
+  // the title off as the card opens, so the two are never on screen together.
+  const recordCard = card('record');
+  const liveTitle = r.rec && r.rec.live ? ` title="${esc(r.rec.title)}"` : '';
   // Three different reasons a percentage cell can be empty, and they are not the
   // same fact. Saying which is the whole of the early-season honesty rule.
   const pctCell = (p) => {
@@ -110,14 +122,14 @@ function rowCells(r, { enough, waiting, scales }) {
     return `${pct(p)}`;
   };
   return [
-    nameCell(r),
-    `<td class="num" data-v="${r.rec ? r.rec.wins : ''}"${
-      r.rec && r.rec.live ? ` title="${esc(r.rec.title)}"` : ''}>${recordText(r)}</td>`,
+    nameCell(r, card('name')),
+    `<td class="num" data-v="${r.rec ? r.rec.wins : ''}"${recordCard}${liveTitle}>${recordText(r)}</td>`,
     shaded(r.luck, scales.luck, null,
       `${enough ? signed(r.luck) : dash}${
-        enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`),
-    shaded(r.title, scales.title, pct, pctCell(r.title)),
-    shaded(r.last, scales.last, pct, pctCell(r.last)),
+        enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`,
+      card('luck')),
+    shaded(r.title, scales.title, pct, pctCell(r.title), card('title')),
+    shaded(r.last, scales.last, pct, pctCell(r.last), card('last')),
   ];
 }
 
@@ -166,11 +178,17 @@ function rowDiffCells(r, c, { enough }) {
  * @param {*} [o.me] the reader's own team id: that row is `<tr class="me">`,
  *        the class the Stats standings put on it (css/app.css `tbody tr.me`).
  *        Left out, no row carries a class.
+ * @param {Object|null} [o.cards] a preview card per cell, for a page that opens
+ *        them (js/pop.js): `{ name, record, luck, title, last }`, each
+ *        `(row) => attribute string` (a `statCard(...)` result) or '' for no
+ *        card. A cell given one carries it INSTEAD of its `title` (the decimal
+ *        record's basis excepted). Off by default: without it not a byte of the
+ *        rows differs. The difference view takes none.
  * @returns {string} `<tr>`s, for a `<tbody>`
  */
 export function summaryRowsHtml(rows, {
   enough = true, waiting = false, shadeLuck = true, scales = null, diffFrom = null, dim = null,
-  me = null,
+  me = null, cards = null,
 } = {}) {
   const sc = diffFrom ? null : scales || summaryScales(rows, { shadeLuck });
   const before = diffFrom ? new Map(diffFrom.map((r) => [r.id, r])) : null;
@@ -178,7 +196,7 @@ export function summaryRowsHtml(rows, {
   return rows.map((r) => {
     const cells = diffFrom
       ? rowDiffCells(r, before.get(r.id) || null, { enough })
-      : rowCells(r, { enough, waiting, scales: sc });
+      : rowCells(r, { enough, waiting, scales: sc, cards });
     const style = dimStyle(dimOf(dim, r.id));
     const drawn = style ? cells.map((c, i) => (i ? c.replace(/^<td/, `<td${style}`) : c)) : cells;
     return `
