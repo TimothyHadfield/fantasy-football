@@ -30,7 +30,7 @@
       "assertions": 60
     },
     "charts-check.mjs": {
-      "assertions": 114
+      "assertions": 138
     },
     "test-bye-rule.mjs": {
       "assertions": 85,
@@ -92,7 +92,7 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 964
+      "assertions": 1003
     },
     "opp-check.mjs": {
       "scenarios": 7
@@ -170,7 +170,7 @@
       "assertions": 44
     },
     "scatter-check.mjs": {
-      "assertions": 218
+      "assertions": 229
     },
     "stats-fit.mjs": {
       "assertions": 142

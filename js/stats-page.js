@@ -590,18 +590,135 @@ function seriesFor(valueFn) {
   }));
 }
 
+// ---- view switches (Tim, 2026-10-08: "at least give the option of switching
+// it to a differnt view. I think cumulative graphs are often really nice but
+// there are also other great alternatives"; docs/charts-plan.md B1, B2, B5).
+// One small segmented control per chart, the first button being the view the
+// chart always had. The choice is remembered per viewer; the chart is drawn
+// at the same height from the same teams in every view, so its box - and
+// everything under it - holds still when a button is pressed.
+const VIEWS = {
+  scoresView: ['week', 'total', 'vsavg', 'rank'],
+  luckView: ['week', 'total'],
+  spreadView: ['boxes', 'dots'],
+};
+const view = {};
+for (const [id, list] of Object.entries(VIEWS)) {
+  const saved = prefs.get(id, list[0]);
+  view[id] = list.includes(saved) ? saved : list[0];
+}
+
+function paintViews() {
+  for (const id of Object.keys(VIEWS)) {
+    const seg = $(id);
+    if (!seg) continue;
+    seg.querySelectorAll('button[data-view]').forEach((b) => {
+      const on = b.dataset.view === view[id];
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  // Weekly luck's sentence follows its view. Both are in the markup, stacked
+  // (stats.html `.lede-swap`); the one not showing is invisible, not removed.
+  const total = view.luckView === 'total';
+  for (const [id, on] of [['luckLedeWeek', !total], ['luckLedeTotal', total]]) {
+    const el = $(id);
+    if (!el) continue;
+    if (on) el.removeAttribute('aria-hidden');
+    else el.setAttribute('aria-hidden', 'true');
+  }
+}
+
+for (const id of Object.keys(VIEWS)) {
+  const seg = $(id);
+  if (seg) {
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-view]');
+      if (!btn || !VIEWS[id].includes(btn.dataset.view)) return;
+      view[id] = btn.dataset.view;
+      prefs.set(id, view[id] === VIEWS[id][0] ? null : view[id]);
+      if (state.stats) renderCharts();
+    });
+  }
+}
+
+/**
+ * Weekly scores, four ways (B2). Every view is made of the same weekly scores:
+ *   week    the score itself
+ *   total   the season's points so far, after each week (a bye holds the line)
+ *   vsavg   the score minus what the league averaged THAT week
+ *   rank    where the score placed in the league that week, 1 = highest;
+ *           equal scores share a place
+ * A week still being played has only some teams' scores, so it has no league
+ * average and no ranking: those two views leave it out, as the Week by week
+ * grid leaves it uncoloured.
+ */
+function scoreView(kind) {
+  const s = state.stats;
+  const part = partWeek();
+  const base = { height: 320, yLabel: 'Points' };
+  if (kind === 'total') {
+    return {
+      ...base,
+      yLabel: 'Total points',
+      series: s.teams.map((t, i) => {
+        let sum = 0;
+        return {
+          id: t.id,
+          name: t.name,
+          color: SERIES_COLORS[i % SERIES_COLORS.length],
+          values: s.weekNumbers.map((w) => {
+            const row = t.weekly.find((x) => x.week === w);
+            if (!row) return w === part ? null : sum;
+            sum += row.actual;
+            return sum;
+          }),
+        };
+      }),
+    };
+  }
+  if (kind === 'vsavg' || kind === 'rank') {
+    const scores = new Map(s.weekNumbers.map((w) => [w, w === part ? [] : s.teams
+      .map((t) => t.weekly.find((x) => x.week === w))
+      .filter((r) => r && typeof r.actual === 'number').map((r) => r.actual)]));
+    if (kind === 'vsavg') {
+      const avg = (w) => { const v = scores.get(w); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+      return {
+        ...base,
+        yLabel: 'Points vs league average',
+        zeroLine: true,
+        series: seriesFor((r) => (avg(r.week) === null ? null : r.actual - avg(r.week))),
+      };
+    }
+    const n = s.teams.length;
+    return {
+      ...base,
+      yLabel: 'Rank that week',
+      // Half a place of room at each end, so 1st and last are not drawn on the frame.
+      yDomain: [0.5, Math.max(2, n) + 0.5],
+      yTicks: Array.from({ length: Math.max(2, n) }, (_, i) => i + 1),
+      yReverse: true,
+      series: seriesFor((r) => {
+        const v = scores.get(r.week);
+        return v.length ? 1 + v.filter((o) => o > r.actual).length : null;
+      }),
+    };
+  }
+  return { ...base, series: seriesFor((r) => r.actual) };
+}
+
 function renderCharts() {
   const s = state.stats;
   const weeks = weekCount();
   const trends = weeks >= MIN_WEEKS;
+  paintViews();
 
-  // The three ten-series line charts and the ten-row box plot need a season
-  // shape to draw. With one week they are ten dots in a vertical stripe, three
-  // times over, plus ten 1.5px slivers — about a thousand pixels of scrolling
+  // The two ten-series line charts and the ten-row box plot need a season
+  // shape to draw. With one week they are ten dots in a vertical stripe, twice
+  // over, plus ten 1.5px slivers — about a thousand pixels of scrolling
   // that says nothing. Hide them and say why once, at the top.
   show('panelWeekly', trends);
   show('panelLuck', trends);
-  show('panelCumLuck', trends);
   show('panelBox', trends);
   show('panelEarly', !trends);
   // With no weeks the grid is ten team names and no columns to put beside them.
@@ -625,34 +742,27 @@ function renderCharts() {
   const highlightId = state.highlight ?? undefined;
 
   lineChart($('chartWeekly'), {
-    series: seriesFor((r) => r.actual),
+    ...scoreView(view.scoresView),
     xLabels,
-    yLabel: 'Points',
-    height: 320,
     highlight: highlightId,
   });
 
+  // Weekly luck, two ways (B1). "Running total" is the chart that used to be
+  // its own Cumulative luck panel: the luck score as it stood after each week.
   lineChart($('chartLuck'), {
-    series: seriesFor((r) => r.luck),
+    series: view.luckView === 'total'
+      ? s.teams.map((t, i) => ({
+        id: t.id,
+        name: t.name,
+        color: SERIES_COLORS[i % SERIES_COLORS.length],
+        values: s.weekNumbers.map((w) => {
+          const row = t.cumulativeLuck.find((x) => x.week === w);
+          return row ? row.value : null;
+        }),
+      }))
+      : seriesFor((r) => r.luck),
     xLabels,
-    yLabel: 'Actual − projected',
-    height: 300,
-    zeroLine: true,
-    highlight: highlightId,
-  });
-
-  lineChart($('chartCumLuck'), {
-    series: s.teams.map((t, i) => ({
-      id: t.id,
-      name: t.name,
-      color: SERIES_COLORS[i % SERIES_COLORS.length],
-      values: s.weekNumbers.map((w) => {
-        const row = t.cumulativeLuck.find((x) => x.week === w);
-        return row ? row.value : null;
-      }),
-    })),
-    xLabels,
-    yLabel: 'Cumulative luck',
+    yLabel: view.luckView === 'total' ? 'Cumulative luck' : 'Actual − projected',
     height: 300,
     zeroLine: true,
     highlight: highlightId,
@@ -685,20 +795,30 @@ function renderCharts() {
     return;
   }
 
+  // A TEAM'S ROW IS ITS OWN COLOUR. The rows arrive sorted by median, and with
+  // no colour handed over the chart coloured them by position - so a team was
+  // one colour here and another on the line charts above (docs/charts-plan.md
+  // A5). The slot is the team's place in the league list, as in `seriesFor`.
+  const slot = new Map(s.teams.map((t, i) => [t.id, SERIES_COLORS[i % SERIES_COLORS.length]]));
   boxPlot($('chartBox'), {
     rows: withBox
       .sort((a, b) => b.box.median - a.box.median)
       .map(({ t, box }) => ({
         id: t.id,
         name: t.name,
+        color: slot.get(t.id),
         min: box.min,
         q1: box.q1,
         median: box.median,
         q3: box.q3,
         max: box.max,
         outliers: box.outliers,
+        // "Every week as a dot" (B5): the scores the box was made from.
+        points: (t.weekly || []).filter((w) => typeof w.actual === 'number')
+          .map((w) => ({ value: w.actual, label: `week ${w.week}`, href: teamHref(t.id, w.week) })),
       })),
     xLabel: 'Points',
+    mode: view.spreadView === 'dots' ? 'dots' : undefined,
     highlight: highlightId,
   });
 }
@@ -728,7 +848,8 @@ function renderEarly() {
     (weeks === 0
       ? '<strong>No week has been played yet.</strong> Weekly scores, weekly '
       : `<strong>${plural(weeks, 'week')} of data so far.</strong> Weekly scores, weekly `) +
-    `luck, cumulative luck and per-team spread appear from week ${MIN_WEEKS} — with ` +
+    // (Cumulative luck is a view of Weekly luck now, not a panel of its own.)
+    `luck and per-team spread appear from week ${MIN_WEEKS} — with ` +
     'less than that they draw a shape that is not in the data.' +
     (weeks === 0
       ? ' Schedule luck, further down the page, is the number that does not have to wait.'
@@ -1660,10 +1781,16 @@ function fitWords(fit, n, only = '') {
         'every dot on one line, 0 no relation at all.');
 }
 
-const FIT_PERFECT =
+const FIT_PERFECT_LINE =
   '<strong>Dotted line</strong> = actual equals projected, where a perfect projection would ' +
-  'put every dot. Above it beat the projection, below it fell short. Both axes share one ' +
-  'scale, so the dotted line is a true diagonal.';
+  'put every dot. Above it beat the projection, below it fell short.';
+const FIT_PERFECT = `${FIT_PERFECT_LINE} Both axes share one scale, so the dotted line is a true diagonal.`;
+// The teams graph is ZOOMED TO FIT (docs/charts-plan.md A4): team projections
+// sit within a few points of each other while scores range widely, and on one
+// shared scale the dots were a stripe a quarter of the graph wide.
+const FIT_PERFECT_ZOOMED = `${FIT_PERFECT_LINE} Each axis is fitted to its own numbers so the ` +
+  'dots fill the graph: across covers the projections, up covers the scores. The dotted line ' +
+  'is still actual = projected, but it is steeper than a corner-to-corner diagonal here.';
 
 // The two numbers above each graph, and their basis (rule 7).
 const FIT_NUMBERS =
@@ -1838,6 +1965,7 @@ function renderFit() {
     xLabel: 'Projected',
     yLabel: 'Actual',
     height: 320,
+    zoom: true,
     highlight: state.highlight ?? undefined,
     empty: 'No finished week has a projection yet',
   }, (svg, only) => {
@@ -1849,7 +1977,7 @@ function renderFit() {
           'numbers behind Proj, Avg and Weekly luck, so the graphs cannot disagree. ' +
           `${teamPts.length.toLocaleString('en-US')} dots: ${plural(teamCount, 'team')}, ${span}. ` +
           'Your team&rsquo;s dots are ringed when My team is set.',
-        FIT_PERFECT,
+        FIT_PERFECT_ZOOMED,
         fitWords(svg && svg.__ffFit, fitN(svg), only),
         FIT_NUMBERS,
         FIT_GROUPS,

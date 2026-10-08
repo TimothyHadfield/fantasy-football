@@ -143,6 +143,14 @@ div.panel-note > p:last-child { margin-bottom: 0; }
    the columns are blank. */
 .table-status { color: var(--dim); font-size: 13px; margin: 10px 0 0; }
 .table-status strong { color: var(--text); }
+
+/* A sentence that follows a view switch (Weekly luck). Both sentences sit in
+   one grid cell, so the cell is as tall as the taller one whichever is showing
+   and pressing the switch moves nothing below it. The one not showing is
+   invisible and aria-hidden, not display:none - that is what holds the space. */
+.lede-swap { display: grid; }
+.lede-swap > .lede { grid-area: 1 / 1; }
+.lede-swap > .lede[aria-hidden="true"] { visibility: hidden; }
 </style>
 </head>
 <body>
@@ -365,33 +373,58 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 
        ORDER IS UNTOUCHED, as ever: Weekly scores, Weekly luck, Cumulative
        luck, Score distribution, Projection accuracy, Score spread is exactly
-       the document order it was, and only the wrappers moved. -->
+       the document order it was, and only the wrappers moved.
+
+       VIEW SWITCHES (Tim, 2026-10-08: "at least give the option of switching
+       it to a differnt view"; docs/charts-plan.md B1, B2, B5). Weekly scores,
+       Weekly luck and Score spread each carry the small segmented control the
+       scatter graphs use for "Colour by". The choice is remembered
+       (js/prefs.js) and the chart is the same size in every view, so nothing
+       moves when one is pressed. CUMULATIVE LUCK IS NO LONGER A PANEL: it was
+       a 5:1 strip on a laptop, 480px below the chart it belongs with, and is
+       now Weekly luck's "Running total" (A2). The control has no visible
+       label - its buttons say what they are - and is named for a screen
+       reader by aria-label. Weekly luck's sentence follows its view: both are
+       in the markup, stacked in one cell, so the taller one holds the space
+       and swapping them moves nothing. -->
   <div class="panel-row">
     <section class="panel" id="panelWeekly">
       <h2>Weekly scores</h2>
       <p class="lede">Every team&rsquo;s score, week by week. Tap a team in the legend to pick out its line.</p>
+      <div class="row mb-12">
+        <div class="segmented seg-sm" id="scoresView" role="group" aria-label="Weekly scores, shown as">
+          <button type="button" data-view="week" class="on" aria-pressed="true">Per week</button>
+          <button type="button" data-view="total" aria-pressed="false">Running total</button>
+          <button type="button" data-view="vsavg" aria-pressed="false">vs league avg</button>
+          <button type="button" data-view="rank" aria-pressed="false">Rank</button>
+        </div>
+      </div>
       <div class="chart" id="chartWeekly"></div>
     </section>
     <section class="panel" id="panelLuck">
       <h2>Weekly luck &mdash; actual minus projected</h2>
-      <p class="lede">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
+      <div class="lede-swap">
+        <p class="lede" id="luckLedeWeek">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
+        <p class="lede" id="luckLedeTotal" aria-hidden="true">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
+      </div>
+      <div class="row mb-12">
+        <div class="segmented seg-sm" id="luckView" role="group" aria-label="Weekly luck, shown as">
+          <button type="button" data-view="week" class="on" aria-pressed="true">Per week</button>
+          <button type="button" data-view="total" aria-pressed="false">Running total</button>
+        </div>
+      </div>
       <div class="chart" id="chartLuck"></div>
+      <details class="explain">
+        <summary>How this works</summary>
+        <p class="panel-note">
+          Running total is the luck score as it stood after each week. Each point
+          is computed from every week up to that one, not from that week alone, so
+          the lines converge as the season goes on and single results stop
+          dominating.
+        </p>
+      </details>
     </section>
   </div>
-
-  <section class="panel" id="panelCumLuck">
-    <h2>Cumulative luck</h2>
-    <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
-    <div class="chart" id="chartCumLuck"></div>
-    <details class="explain">
-      <summary>How this works</summary>
-      <p class="panel-note">
-        Each point is computed from every week up to that one, not from that week
-        alone, so the lines converge as the season goes on and single results stop
-        dominating.
-      </p>
-    </details>
-  </section>
 
   <div class="panel-row">
     <section class="panel">
@@ -483,6 +516,12 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <h2>Score spread by team</h2>
     <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
     <p class="panel-note warn-line" id="boxEarly" hidden></p>
+    <div class="row mb-12">
+      <div class="segmented seg-sm" id="spreadView" role="group" aria-label="Score spread, shown as">
+        <button type="button" data-view="boxes" class="on" aria-pressed="true">Boxes</button>
+        <button type="button" data-view="dots" aria-pressed="false">Every week as a dot</button>
+      </div>
+    </div>
     <div class="chart" id="chartBox"></div>
     <details class="explain">
       <summary>How to read it</summary>

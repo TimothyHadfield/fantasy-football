@@ -35,7 +35,8 @@ const EXPECTED = [
   'Early season',
   'Weekly scores',
   'Weekly luck — actual minus projected',
-  'Cumulative luck',
+  // (Cumulative luck was a panel of its own here until 2026-10-08. It is now
+  // the "Running total" view of Weekly luck: docs/charts-plan.md A2 / B1.)
   'Score distribution',
   'Projection accuracy',
   // Tim, 2026-10-04: the two scatter graphs, directly under Projection accuracy.
@@ -174,10 +175,105 @@ for (const [title, id] of [
   ['Early season', 'panelEarly'],
   ['Weekly scores', 'panelWeekly'],
   ['Weekly luck — actual minus projected', 'panelLuck'],
-  ['Cumulative luck', 'panelCumLuck'],
   ['Score spread by team', 'panelBox'],
 ]) {
   assert(idFor[title] === id, `"${title}" carries id "${idFor[title]}", expected "${id}"`);
+}
+
+// ------------------------------------------------ the view switches (2026-10-08)
+//
+// docs/charts-plan.md B1, B2, B5 (Tim: "at least give the option of switching
+// it to a differnt view"). Each is the page's small segmented control, the
+// choice is remembered, and the chart it redraws is the SAME SIZE in every
+// view — "nothing moves when switching".
+{
+  const $id = (id) => document.getElementById(id);
+  const click = (el) => el.dispatchEvent(new document.defaultView.Event('click', { bubbles: true }));
+  const labels = (id) => [...($id(id) ? $id(id).querySelectorAll('button') : [])]
+    .map((b) => b.textContent.replace(/\s+/g, ' ').trim());
+  const box = (id) => { const s = $id(id).querySelector('svg'); return s ? s.getAttribute('viewBox') : null; };
+  const aria = (id) => { const s = $id(id).querySelector('svg'); return s ? s.getAttribute('aria-label') || '' : ''; };
+  const pick = (id, view) => click($id(id).querySelector(`button[data-view="${view}"]`));
+  const pressed = (id) => [...$id(id).querySelectorAll('button')]
+    .filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.getAttribute('data-view')).join(',');
+  const savedView = (key) => (JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'))[`stats.${key}`];
+
+  assert($id('chartCumLuck') === null, 'the separate Cumulative luck chart is still on the page');
+  for (const [id, panel, want] of [
+    ['luckView', 'panelLuck', 'Per week|Running total'],
+    ['scoresView', 'panelWeekly', 'Per week|Running total|vs league avg|Rank'],
+    ['spreadView', 'panelBox', 'Boxes|Every week as a dot'],
+  ]) {
+    const el = $id(id);
+    assert(!!el && /\bsegmented\b/.test(el.getAttribute('class')) && /\bseg-sm\b/.test(el.getAttribute('class')),
+      `#${id} is not the small segmented control`);
+    assert(!!el && !!el.closest(`#${panel}`), `#${id} is not inside #${panel}`);
+    assert(labels(id).join('|') === want, `#${id} offers "${labels(id).join('|')}", expected "${want}"`);
+    assert(!!el && !!(el.getAttribute('aria-label') || '').trim(), `#${id} has no accessible name`);
+    assert(!!el && pressed(id) === el.querySelector('button').getAttribute('data-view'),
+      `#${id} does not start on its first view (pressed: ${pressed(id)})`);
+  }
+
+  // Weekly luck: Running total is the old Cumulative luck chart, in the same box.
+  const luck0 = box('chartLuck');
+  assert(/Actual − projected/.test(aria('chartLuck')), `Weekly luck starts as "${aria('chartLuck')}"`);
+  pick('luckView', 'total');
+  assert(/Cumulative luck/.test(aria('chartLuck')), `Running total drew "${aria('chartLuck')}", not the cumulative luck`);
+  assert(box('chartLuck') === luck0, `Weekly luck changed size on switching: ${luck0} → ${box('chartLuck')}`);
+  assert(pressed('luckView') === 'total', `the luck switch shows "${pressed('luckView')}" pressed`);
+  assert(savedView('luckView') === 'total', `the luck view was not remembered: ${savedView('luckView')}`);
+  // The sentence under the title follows the view, and only one is ever shown.
+  const ledes = [...$id('panelLuck').querySelectorAll('.lede')];
+  const shownLede = ledes.filter((p) => p.getAttribute('aria-hidden') !== 'true');
+  assert(ledes.length === 2 && shownLede.length === 1 && /season so far/.test(shownLede[0].textContent),
+    `Running total shows ${shownLede.length} of ${ledes.length} sentences: "${shownLede.map((p) => p.textContent).join(' / ')}"`);
+  pick('luckView', 'week');
+  assert(/Actual − projected/.test(aria('chartLuck')) && savedView('luckView') == null,
+    'Per week does not put the weekly chart back (or stayed saved)');
+
+  // Weekly scores: four views, one box.
+  const scores0 = box('chartWeekly');
+  const lineEnds = () => [...$id('chartWeekly').querySelectorAll('path')].map((p) => {
+    const pts = p.getAttribute('d').slice(1).split(/[ML]/).map((s) => s.split(',').map(Number));
+    return pts[pts.length - 1][1];
+  });
+  for (const [view, word] of [['total', 'Total points'], ['vsavg', 'league average'], ['rank', 'Rank']]) {
+    pick('scoresView', view);
+    assert(aria('chartWeekly').includes(word), `Weekly scores "${view}" drew "${aria('chartWeekly')}"`);
+    assert(box('chartWeekly') === scores0, `Weekly scores changed size in "${view}": ${scores0} → ${box('chartWeekly')}`);
+    assert($id('chartWeekly').querySelectorAll('path').length === 10, `Weekly scores "${view}" lost a team's line`);
+  }
+  // Rank: whole places 1..10, and ten different final places (a rank, not a score).
+  const ends = lineEnds();
+  assert(new Set(ends.map((y) => y.toFixed(1))).size === 10, `Rank: the ten lines end on ${new Set(ends.map((y) => y.toFixed(1))).size} different places`);
+  const rankTicks = [...$id('chartWeekly').querySelectorAll('text')]
+    .filter((t) => t.getAttribute('text-anchor') === 'end' && t.getAttribute('x') === '46').map((t) => t.textContent);
+  assert(rankTicks[0] === '1' && rankTicks[rankTicks.length - 1] === '10', `Rank axis runs ${rankTicks.join(',')}`);
+  const tickYs = [...$id('chartWeekly').querySelectorAll('text')]
+    .filter((t) => t.getAttribute('text-anchor') === 'end' && t.getAttribute('x') === '46').map((t) => Number(t.getAttribute('y')));
+  assert(tickYs[0] < tickYs[tickYs.length - 1], 'Rank: 1st is not at the top');
+  pick('scoresView', 'week');
+  assert(/Points by/.test(aria('chartWeekly')), 'Per week does not put the scores back');
+
+  // Score spread: a team's row is its own colour (the line charts'), and the dots view.
+  const legend = new Map([...$id('chartWeekly').querySelectorAll('.ff-legend-item')]
+    .map((g) => [g.getAttribute('data-name'), g.querySelector('line').getAttribute('stroke')]));
+  const boxRows = [...$id('chartBox').querySelectorAll('svg > g')].map((g) => ({
+    name: g.querySelector('title').textContent.split(':')[0],
+    fill: g.querySelector('rect').getAttribute('fill'),
+  }));
+  assert(boxRows.length === 10 && boxRows.every((r) => legend.get(r.name) === r.fill),
+    `a box is not its team's line colour: ${boxRows.filter((r) => legend.get(r.name) !== r.fill).map((r) => r.name).join(', ')}`);
+  const spread0 = box('chartBox');
+  pick('spreadView', 'dots');
+  const weekDots = $id('chartBox').querySelectorAll('circle.ff-week-dot').length;
+  const played = [...$id('weeklyTable').querySelectorAll('tbody tr')].length *
+    ($id('weeklyHead').children.length - 2);
+  assert(weekDots === played, `Every week as a dot drew ${weekDots} dots for ${played} team-weeks`);
+  assert(box('chartBox') === spread0, `Score spread changed size on switching: ${spread0} → ${box('chartBox')}`);
+  assert(savedView('spreadView') === 'dots', 'the spread view was not remembered');
+  pick('spreadView', 'boxes');
+  assert($id('chartBox').querySelectorAll('circle.ff-week-dot').length === 0, 'Boxes does not put the boxes back');
 }
 
 // The panels that matter most must have rendered something, so a heading in the

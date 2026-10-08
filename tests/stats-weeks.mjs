@@ -127,7 +127,7 @@ if (process.argv[2]) {
     if (errors.length) problems.push(`console.error: ${errors[0]}`);
     if (fetchCalls.length) problems.push('made a network call');
 
-    for (const id of ['panelWeekly', 'panelLuck', 'panelCumLuck', 'panelBox']) {
+    for (const id of ['panelWeekly', 'panelLuck', 'panelBox']) {
       if (hidden(id) !== thin) problems.push(`${id} hidden=${hidden(id)} at ${weeks} weeks`);
     }
     if (hidden('panelEarly') !== !thin) problems.push(`panelEarly hidden=${hidden('panelEarly')} at ${weeks} weeks`);
@@ -298,7 +298,7 @@ if (process.argv[2]) {
     // one line is emphasised on each chart, and one row of the box plot. Keyed
     // on the name, both Autumns lit up.
     if (dup) {
-      for (const id of ['chartWeekly', 'chartLuck', 'chartCumLuck']) {
+      for (const id of ['chartWeekly', 'chartLuck']) {
         const thick = $(id).querySelectorAll('path[stroke-width="2.5"]').length;
         const dim = $(id).querySelectorAll('path[opacity="0.16"]').length;
         if (thick !== 1) problems.push(`${id}: ${thick} lines emphasised for one chosen team, expected 1`);

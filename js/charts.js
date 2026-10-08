@@ -430,6 +430,13 @@ function pointerPos(svg, container, evt) {
  *                                   across every series, so the link is the
  *                                   WEEK's, not one team's.
  * @param {Function} [opts.navigate] (href, event) - replaces the navigation
+ * @param {boolean} [opts.yReverse]  turn the axis over, smallest at the top
+ *                                   (a rank: 1st is up). With `yDomain`.
+ * @param {number[]} [opts.yTicks]   the ticks to draw, replacing the computed
+ *                                   ones (those inside the domain)
+ * @param {Function} [opts.tipTitle] (index, xLabel) -> the tooltip's heading
+ * @param {Function} [opts.tipExtra] (index, xLabel) -> [{ name, value, color? }]
+ *                                   rows added under the series in the tooltip
  * @returns {SVGElement|null}
  */
 export function lineChart(container, opts) {
@@ -477,8 +484,18 @@ export function lineChart(container, opts) {
   for (const s of series) for (const v of s.values) if (isNum(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
   if (o.zeroLine) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
   const yS = fixedScale(o.yDomain) || niceScale(lo, hi, 5);
+  // The caller's own ticks (a rank axis wants 1, 2, 3 … not 2, 4, 6), kept to
+  // the domain so none is drawn off the plot.
+  if (Array.isArray(o.yTicks)) {
+    const own = o.yTicks.filter((t) => isNum(t) && t >= yS.lo - 1e-9 && t <= yS.hi + 1e-9);
+    if (own.length) yS.ticks = own;
+  }
   const ySpan = yS.hi - yS.lo || 1;
-  const y = (v) => M.top + plotH - ((v - yS.lo) / ySpan) * plotH;
+  // `yReverse` turns the axis over: the SMALLEST value is at the top (a rank).
+  const yReverse = o.yReverse === true;
+  const y = (v) => (yReverse
+    ? M.top + ((v - yS.lo) / ySpan) * plotH
+    : M.top + plotH - ((v - yS.lo) / ySpan) * plotH);
 
   // --- x scale: evenly spaced categories. With a single point there is no
   //     interval to divide by, so it is centered instead. ------------------
@@ -614,25 +631,38 @@ export function lineChart(container, opts) {
     const legendLeft = 4;
     const legendRight = W - 4;
     // Longest label a single legend entry may use before it is ellipsized.
-    const maxLabel = Math.max(40, legendRight - legendLeft - 22 - 16);
+    //
+    // ON A PHONE (under 420px) ten team names wrapped to five rows under every
+    // chart - 100px of legend, three charts running. There the legend is a
+    // GRID: three rows at most, every entry one cell wide, its name shortened
+    // to the cell (and never past ~90px). The full name stays in the entry's
+    // <title>, its aria-label and the tooltip.
+    const narrow = W < 420;
+    const perRow = narrow ? Math.max(1, Math.ceil(series.length / 3)) : 0;
+    const cellW = narrow ? (legendRight - legendLeft) / perRow : 0;
+    const maxLabel = narrow
+      ? Math.max(24, Math.min(90, cellW - 22 - 6))
+      : Math.max(40, legendRight - legendLeft - 22 - 16);
     let cx = legendLeft, cy = height + 6, rows = 1;
-    for (const s of series) {
+    series.forEach((s, si) => {
       const label = truncateToWidth(s.name, LABEL_SIZE, maxLabel);
-      const iw = 22 + textWidth(label, LABEL_SIZE) + 16;
-      if (cx + iw > legendRight && cx > legendLeft) { cx = legendLeft; cy += rowH; rows++; }
+      const iw = narrow ? cellW : 22 + textWidth(label, LABEL_SIZE) + 16;
+      if (narrow) {
+        if (si > 0 && si % perRow === 0) { cx = legendLeft; cy += rowH; rows++; }
+      } else if (cx + iw > legendRight && cx > legendLeft) { cx = legendLeft; cy += rowH; rows++; }
       const isDim = dimmed(s.key);
       parts.push(
         `<g class="ff-legend-item" data-name="${esc(s.name)}" data-key="${esc(s.key)}" style="cursor:pointer" ` +
         `opacity="${isDim ? 0.4 : 1}" tabindex="0" role="button" aria-label="${esc(s.name)}">` +
         `<title>${esc(s.name)}</title>` +
-        `<rect x="${cx}" y="${cy - 12}" width="${(iw - 10).toFixed(1)}" height="${rowH}" fill="transparent"/>` +
-        `<line x1="${cx}" y1="${cy}" x2="${cx + 16}" y2="${cy}" stroke="${esc(s.color)}" ` +
+        `<rect x="${cx.toFixed(1)}" y="${cy - 12}" width="${(iw - (narrow ? 4 : 10)).toFixed(1)}" height="${rowH}" fill="transparent"/>` +
+        `<line x1="${cx.toFixed(1)}" y1="${cy}" x2="${(cx + 16).toFixed(1)}" y2="${cy}" stroke="${esc(s.color)}" ` +
         `stroke-width="${highlight === s.key ? 3 : 2}" stroke-linecap="round"/>` +
-        `<text x="${cx + 22}" y="${cy + 4}" fill="${C.text}" font-size="${LABEL_SIZE}">${esc(label)}</text>` +
+        `<text x="${(cx + 22).toFixed(1)}" y="${cy + 4}" fill="${C.text}" font-size="${LABEL_SIZE}">${esc(label)}</text>` +
         `</g>`
       );
       cx += iw;
-    }
+    });
     legendH = rows * rowH + 8;
   }
 
@@ -680,9 +710,17 @@ export function lineChart(container, opts) {
       }
       focus.innerHTML = markers;
       focus.setAttribute('opacity', '1');
-      rows.sort((a, b) => parseFloat(String(b.value).replace(/,/g, '')) - parseFloat(String(a.value).replace(/,/g, '')));
+      // Top of the chart first: the biggest value, or rank 1 on a turned axis.
+      const asNum = (r) => parseFloat(String(r.value).replace(/,/g, ''));
+      rows.sort((a, b) => (yReverse ? asNum(a) - asNum(b) : asNum(b) - asNum(a)));
       const heading = xLabels[i] == null ? String(i + 1) : String(xLabels[i]);
-      tip.show(heading, rows, p.px, p.py, hrefFor ? hrefFor(i, heading) : null);
+      // `tipTitle(index, label)` words the heading ("Week 3" for a bare "3");
+      // `tipExtra(index)` adds rows under the series (the caller's own facts
+      // about that x position). Both optional; neither changes a mark.
+      const said = typeof o.tipTitle === 'function' ? o.tipTitle(i, heading) : null;
+      const extra = typeof o.tipExtra === 'function' ? o.tipExtra(i, heading) : null;
+      if (Array.isArray(extra)) for (const r of extra) if (r) rows.push(r);
+      tip.show(said == null ? heading : String(said), rows, p.px, p.py, hrefFor ? hrefFor(i, heading) : null);
     };
     const onLeave = () => {
       cross.setAttribute('opacity', '0');
@@ -886,6 +924,12 @@ export function histogram(container, opts) {
  *                             `href`: where a click on that row goes while
  *                             its tooltip is up (see createTooltip).
  * @param {Function} [opts.navigate] (href, event) - replaces the navigation
+ * @param {string}  [opts.mode]  'dots' draws each row's `points`
+ *                             ([{ value, label, href? }], one per week) in
+ *                             place of its box, on the same scale in the same
+ *                             space. A row with no points keeps its box.
+ * @param {Function} [opts.tipRows] (row, point|null) -> [{ name, value, color? }]
+ *                             the tooltip's rows, in the page's own words
  * @param {string}  opts.xLabel
  * @param {number}  [opts.height]     overrides the row-derived height
  * @param {string|number} [opts.highlight] row id (or name, for a row with
@@ -919,19 +963,33 @@ export function boxPlot(container, opts) {
       // positional fallback only applies when the caller has no opinion.
       color: r.color || SERIES_COLORS[i % SERIES_COLORS.length],
       href: r.href ? String(r.href) : null,
+      // `mode: 'dots'` draws these instead of the box: one per week.
+      points: (Array.isArray(r.points) ? r.points : [])
+        .filter((p) => p && isNum(p.value))
+        .map((p) => ({
+          value: p.value,
+          label: p.label == null ? '' : String(p.label),
+          href: p.href ? String(p.href) : null,
+        })),
     });
   });
 
   const rowH = 30;
   if (!rows.length) return emptyState(container, 'No data to chart', o.height || 200);
+  const dotMode = o.mode === 'dots';
 
   resetContainer(container);
   const W = measureWidth(container);
 
-  // Label gutter: enough for the longest name, but never more than 38% of width.
-  const longest = rows.reduce((m, r) => Math.max(m, textWidth(r.name, LABEL_SIZE)), 0);
-  const gutter = Math.min(Math.max(64, longest + 12), W * 0.38);
-  const M = { top: 12, right: 18, bottom: 34, left: gutter };
+  // Label gutter: enough for the longest name, but never more than 38% of the
+  // width - 32% under 420px, where the names are also a size smaller (11px),
+  // so a phone's plot is not a third names.
+  const narrow = W < 420;
+  const nameSize = narrow ? TICK_SIZE : LABEL_SIZE;
+  const longest = rows.reduce((m, r) => Math.max(m, textWidth(r.name, nameSize)), 0);
+  const gutter = Math.min(Math.max(64, longest + 12), W * (narrow ? 0.32 : 0.38));
+  // 42 under the plot, not 34: the axis label used to touch the tick numbers.
+  const M = { top: 12, right: 18, bottom: 42, left: gutter };
   const plotW = Math.max(10, W - M.left - M.right);
   const plotH = rows.length * rowH;
   const height = isNum(o.height) && o.height > 60 ? o.height : M.top + plotH + M.bottom;
@@ -940,6 +998,9 @@ export function boxPlot(container, opts) {
 
   // x domain covers whiskers AND outliers so no mark falls off the plot.
   let lo = Infinity, hi = -Infinity;
+  // The weeks are NOT added to it: they are the numbers the box was made from,
+  // so they are inside it already, and the scale must not move when the view
+  // switches between boxes and dots.
   for (const r of rows) {
     lo = Math.min(lo, r.min, ...r.outliers);
     hi = Math.max(hi, r.max, ...r.outliers);
@@ -985,7 +1046,25 @@ export function boxPlot(container, opts) {
     const summary = `${r.name}: min ${fmt(r.min)}, Q1 ${fmt(r.q1)}, median ${fmt(r.median)}, ` +
       `Q3 ${fmt(r.q3)}, max ${fmt(r.max)}`;
 
-    parts.push(
+    // EVERY WEEK AS A DOT (docs/charts-plan.md B5): the same row on the same
+    // scale, with the weeks themselves where the box summarised them. A faint
+    // rule joins the lowest to the highest so a row reads as one team, and a
+    // ring (hidden until a dot is previewed) marks the week being read. A row
+    // handed no weeks keeps its box.
+    const asDots = dotMode && r.points.length > 0;
+    if (asDots) {
+      const xs = r.points.map((p) => x(p.value));
+      parts.push(
+        `<g opacity="${rowOp}"><title>${esc(summary)}</title>` +
+        `<line x1="${Math.min(...xs).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${Math.max(...xs).toFixed(1)}" ` +
+        `y2="${cy.toFixed(1)}" stroke="${esc(r.color)}" stroke-width="1.5" opacity="0.35"/>` +
+        r.points.map((p, k) =>
+          `<circle class="ff-week-dot" data-row="${i}" data-k="${k}" cx="${xs[k].toFixed(1)}" ` +
+          `cy="${cy.toFixed(1)}" r="4.5" fill="${esc(r.color)}" stroke="${C.surface}" stroke-width="1.5"/>`
+        ).join('') +
+        `</g>`
+      );
+    } else parts.push(
       `<g opacity="${rowOp}"><title>${esc(summary)}</title>` +
       // whisker rule + end caps
       `<line x1="${x1.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${cy.toFixed(1)}" ` +
@@ -1004,7 +1083,8 @@ export function boxPlot(container, opts) {
       `</g>`
     );
 
-    for (const ov of r.outliers) {
+    // (As dots, an outlier week is already one of the dots.)
+    for (const ov of asDots ? [] : r.outliers) {
       parts.push(
         `<circle cx="${x(ov).toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="${esc(r.color)}" ` +
         `stroke="${C.surface}" stroke-width="1.5" opacity="${(0.9 * rowOp).toFixed(2)}">` +
@@ -1018,9 +1098,9 @@ export function boxPlot(container, opts) {
     const labelMax = M.left - 14;
     parts.push(
       `<text x="${(M.left - 10).toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="end" ` +
-      `fill="${isDim ? C.dim : C.text}" font-size="${LABEL_SIZE}" ` +
+      `fill="${isDim ? C.dim : C.text}" font-size="${nameSize}" ` +
       `font-weight="${highlight && !isDim ? 600 : 400}">` +
-      `<title>${esc(r.name)}</title>${esc(truncateToWidth(r.name, LABEL_SIZE, labelMax))}</text>`
+      `<title>${esc(r.name)}</title>${esc(truncateToWidth(r.name, nameSize, labelMax))}</text>`
     );
 
     // A FULL-WIDTH INVISIBLE BAND PER ROW, so the five numbers can be read on a
@@ -1038,6 +1118,14 @@ export function boxPlot(container, opts) {
       `width="${W}" height="${actualRowH.toFixed(1)}" fill="transparent"/>`
     );
   });
+
+  // The ring for the week being read (dots only), above the marks and under no hit band's way.
+  if (dotMode) {
+    parts.push(
+      `<circle class="ff-week-focus" cx="0" cy="0" r="8" fill="none" stroke="${C.text}" ` +
+      `stroke-width="2" opacity="0" pointer-events="none"/>`
+    );
+  }
 
   const markup =
     `<svg viewBox="0 0 ${W} ${height}" width="100%" role="img" ` +
@@ -1060,9 +1148,33 @@ export function boxPlot(container, opts) {
       // `pointerdown` as well as `pointermove`: a finger produces no move before
       // it lands, so without it a tap does nothing at all. Same pair, and the
       // same reason, as the histogram's bars.
+      const ring = svg.querySelector('.ff-week-focus');
+      const rowIndex = +hit.getAttribute('data-i');
       const enter = (evt) => {
         const p = pointerPos(svg, container, evt);
-        tip.show(r.name, [
+        // AS DOTS: the week nearest the pointer along the row is the one read,
+        // and the click goes to THAT week (its own href, else the row's).
+        if (dotMode && r.points.length) {
+          let best = 0, bestD = Infinity;
+          r.points.forEach((pt, k) => {
+            const d = Math.abs(x(pt.value) - p.ux);
+            if (d < bestD) { bestD = d; best = k; }
+          });
+          const pt = r.points[best];
+          if (ring) {
+            ring.setAttribute('cx', x(pt.value).toFixed(1));
+            ring.setAttribute('cy', (M.top + actualRowH * (rowIndex + 0.5)).toFixed(1));
+            ring.setAttribute('opacity', '1');
+          }
+          const own = typeof o.tipRows === 'function' ? o.tipRows(r, pt) : null;
+          tip.show(r.name, Array.isArray(own) ? own
+            : [{ color: r.color, name: pt.label, value: fmt(pt.value) }], p.px, p.py, pt.href || r.href || null);
+          return;
+        }
+        // `tipRows(row)` lets the page word the three rows; the default is the
+        // statistician's.
+        const own = typeof o.tipRows === 'function' ? o.tipRows(r, null) : null;
+        tip.show(r.name, Array.isArray(own) ? own : [
           { color: r.color, name: 'median', value: fmt(r.median) },
           { name: 'Q1 – Q3', value: `${fmt(r.q1)} – ${fmt(r.q3)}` },
           { name: 'min – max', value: `${fmt(r.min)} – ${fmt(r.max)}` },
@@ -1070,7 +1182,10 @@ export function boxPlot(container, opts) {
       };
       hit.addEventListener('pointermove', enter);
       hit.addEventListener('pointerdown', enter);
-      hit.addEventListener('pointerleave', () => tip.hide());
+      hit.addEventListener('pointerleave', () => {
+        if (ring) ring.setAttribute('opacity', '0');
+        tip.hide();
+      });
     }
   }
 
@@ -1167,6 +1282,20 @@ function clipToSquare(slope, intercept, lo, hi) {
   return { x1, y1: slope * x1 + intercept, x2, y2: slope * x2 + intercept };
 }
 
+/** The same for a window whose two axes differ: x in [xlo, xhi], y in [ylo, yhi]. */
+function clipToRect(slope, intercept, xlo, xhi, ylo, yhi) {
+  let x1 = xlo, x2 = xhi;
+  if (Math.abs(slope) < 1e-12) {
+    if (intercept < ylo || intercept > yhi) return null;
+  } else {
+    const xa = (ylo - intercept) / slope, xb = (yhi - intercept) / slope;
+    x1 = Math.max(xlo, Math.min(xa, xb));
+    x2 = Math.min(xhi, Math.max(xa, xb));
+    if (!(x2 > x1)) return null;
+  }
+  return { x1, y1: slope * x1 + intercept, x2, y2: slope * x2 + intercept };
+}
+
 /** Points to a tenth, always with the decimal: 110.0, not 110. */
 const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
 
@@ -1215,6 +1344,8 @@ const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
  *                                     row below it
  * @param {string|number} [opts.highlight] key to emphasise
  * @param {string}  [opts.empty]   what to say when there is nothing to plot
+ * @param {boolean} [opts.zoom]    fit each axis to its own values instead of
+ *                                 one scale for both (see "ZOOM TO FIT" below)
  * @param {string}  [opts.perfectLabel='Perfect projection']
  * @param {string}  [opts.fitLabel='Best-fit line']
  * @param {Array}   [opts.groups]  [{ key, label, color }] in legend order; a
@@ -1267,23 +1398,44 @@ export function scatterChart(container, opts) {
     if (p.x > hi) hi = p.x; if (p.y > hi) hi = p.y;
   }
   const S = niceScale(lo, hi, 5);
-  const span = S.hi - S.lo || 1;
-  const x = (v) => M.left + ((v - S.lo) / span) * plotW;
-  const y = (v) => M.top + plotH - ((v - S.lo) / span) * plotH;
+  // ZOOM TO FIT (`zoom`, docs/charts-plan.md A4). Team projections bunch
+  // within twenty points of each other while scores range over a hundred, so
+  // on the shared scale the dots were a stripe a quarter of the plot wide.
+  // With `zoom` each axis is fitted to its own values. The dotted line is
+  // then still y = x - drawn where it truly runs, clipped to the plot - but it
+  // is no longer the corner-to-corner diagonal, which the caller's note has to
+  // say. Without `zoom` nothing here changes.
+  const zoom = o.zoom === true;
+  let SX = S, SY = S;
+  if (zoom) {
+    let xl = Infinity, xh = -Infinity, yl = Infinity, yh = -Infinity;
+    for (const p of pts) {
+      if (p.x < xl) xl = p.x; if (p.x > xh) xh = p.x;
+      if (p.y < yl) yl = p.y; if (p.y > yh) yh = p.y;
+    }
+    SX = niceScale(xl, xh, 5);
+    SY = niceScale(yl, yh, 5);
+  }
+  const spanX = SX.hi - SX.lo || 1;
+  const spanY = SY.hi - SY.lo || 1;
+  const x = (v) => M.left + ((v - SX.lo) / spanX) * plotW;
+  const y = (v) => M.top + plotH - ((v - SY.lo) / spanY) * plotH;
 
   const parts = [];
-  const xEvery = Math.max(1, Math.ceil(S.ticks.length / Math.max(2, Math.floor(plotW / 40))));
-  S.ticks.forEach((t, i) => {
-    const ty = y(t), tx = x(t);
+  for (const t of SY.ticks) {
+    const ty = y(t);
     parts.push(
       `<line x1="${M.left}" y1="${ty.toFixed(1)}" x2="${M.left + plotW}" y2="${ty.toFixed(1)}" ` +
       `stroke="${C.grid}" stroke-width="1"/>`,
       `<text x="${M.left - 8}" y="${(ty + 4).toFixed(1)}" text-anchor="end" fill="${C.dim}" ` +
       `font-size="${TICK_SIZE}" style="font-variant-numeric:tabular-nums">${esc(fmt(t))}</text>`
     );
-    if (i % xEvery === 0 || i === S.ticks.length - 1) {
+  }
+  const xEvery = Math.max(1, Math.ceil(SX.ticks.length / Math.max(2, Math.floor(plotW / 40))));
+  SX.ticks.forEach((t, i) => {
+    if (i % xEvery === 0 || i === SX.ticks.length - 1) {
       parts.push(
-        `<text x="${tx.toFixed(1)}" y="${M.top + plotH + 18}" text-anchor="middle" fill="${C.dim}" ` +
+        `<text x="${x(t).toFixed(1)}" y="${M.top + plotH + 18}" text-anchor="middle" fill="${C.dim}" ` +
         `font-size="${TICK_SIZE}" style="font-variant-numeric:tabular-nums">${esc(fmt(t))}</text>`
       );
     }
@@ -1359,15 +1511,24 @@ export function scatterChart(container, opts) {
   parts.push(`<g class="ff-dots" fill="${base}" fill-opacity="${alpha}">${dim.join('')}${back.join('')}${front.join('')}</g>`);
 
   // --- the two lines, over the dots so neither is buried ------------------
-  parts.push(
-    `<line class="ff-perfect" x1="${x(S.lo).toFixed(1)}" y1="${y(S.lo).toFixed(1)}" ` +
-    `x2="${x(S.hi).toFixed(1)}" y2="${y(S.hi).toFixed(1)}" stroke="${C.dim}" stroke-width="2" ` +
-    `stroke-dasharray="1 6" stroke-linecap="round" pointer-events="none"/>`
-  );
+  // Zoomed, y = x is clipped to the window like any other line - and left out
+  // when it does not cross it at all.
+  const perfect = zoom
+    ? clipToRect(1, 0, SX.lo, SX.hi, SY.lo, SY.hi)
+    : { x1: S.lo, y1: S.lo, x2: S.hi, y2: S.hi };
+  if (perfect) {
+    parts.push(
+      `<line class="ff-perfect" x1="${x(perfect.x1).toFixed(1)}" y1="${y(perfect.y1).toFixed(1)}" ` +
+      `x2="${x(perfect.x2).toFixed(1)}" y2="${y(perfect.y2).toFixed(1)}" stroke="${C.dim}" stroke-width="2" ` +
+      `stroke-dasharray="1 6" stroke-linecap="round" pointer-events="none"/>`
+    );
+  }
   // Fitted to what is highlighted: every dot, or the focused group alone.
   const fitPts = isLive ? live.map((i) => pts[i]) : pts;
   const fit = leastSquares(fitPts);
-  const seg = fit ? clipToSquare(fit.slope, fit.intercept, S.lo, S.hi) : null;
+  const seg = !fit ? null : zoom
+    ? clipToRect(fit.slope, fit.intercept, SX.lo, SX.hi, SY.lo, SY.hi)
+    : clipToSquare(fit.slope, fit.intercept, S.lo, S.hi);
   if (seg) {
     parts.push(
       `<line class="ff-fit" x1="${x(seg.x1).toFixed(1)}" y1="${y(seg.y1).toFixed(1)}" ` +
