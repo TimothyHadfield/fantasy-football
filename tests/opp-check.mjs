@@ -141,7 +141,11 @@ function readPage(document) {
       record,
       value: Number(get('.vv')),
       gap: get('.dd'),
-      width: Number(/width:([\d.]+)%/.exec(li.querySelector('.bar i')?.getAttribute('style') || '')?.[1]),
+      width: Number(/width:([\d.]+)%/.exec(li.querySelector('.bar i')?.getAttribute('style') || '')?.[1] ?? 0),
+      // Which side of the zero line the bar grows to: 'pos' (right, green),
+      // 'neg' (left, red), or '' for a figure that prints as zero (no bar).
+      side: (/\b(pos|neg)\b/.exec(li.querySelector('.bar i')?.getAttribute('class') || '') || [''])[0],
+      zeroLine: !!li.querySelector('.bar.zero'),
       me: (li.getAttribute('class') || '').includes('me'),
     };
   });
@@ -278,9 +282,22 @@ function check(scenario, page, boot) {
     const g = scenario === 'mid' ? '15.0' : '5.0';
     ok(gaps[0] === `-${g}` && gaps[3] === `+${g}`, `gaps are ${gaps.join(' ')}`);
 
-    // Bars are scaled between the min and max, not from zero.
-    ok(page.bars[0].width === 100 && page.bars[3].width === 8,
-      `bar widths ${page.bars.map((b) => b.width).join(',')} — should span 8..100`);
+    // THE BARS RUN FROM A ZERO LINE DOWN THE MIDDLE (Tim, 2026-10-08): the
+    // printed gap is the bar. A harder schedule than the league's is a minus —
+    // left, red; an easier one a plus — right, green. One scale for the box:
+    // the biggest gap fills its half of the track (50% of it), the rest in
+    // proportion.
+    const gapNum = page.bars.map((b) => Number(b.gap.replace('−', '-')));
+    const gapMax = Math.max(...gapNum.map(Math.abs));
+    ok(page.bars.every((b) => b.zeroLine), 'a bar track has no zero line');
+    page.bars.forEach((b, i) => {
+      const side = gapNum[i] > 0 ? 'pos' : gapNum[i] < 0 ? 'neg' : '';
+      ok(b.side === side, `${b.name}: gap ${b.gap} draws "${b.side}", expected "${side}"`);
+      const wide = 50 * Math.abs(gapNum[i]) / gapMax;
+      ok(Math.abs(b.width - wide) < 0.06, `${b.name}: gap ${b.gap} is ${b.width}% wide, expected ${wide.toFixed(1)}%`);
+    });
+    ok(page.bars[0].side === 'neg' && page.bars[0].width === 50 && page.bars[3].side === 'pos' && page.bars[3].width === 50,
+      `hardest and easiest: ${page.bars.map((b) => `${b.side}${b.width}`).join(',')} — should be neg50 … pos50`);
 
     // The owner's team (teamId 2 in the stub connection) is marked.
     ok(page.bars.some((b) => b.me && b.name === 'Team 2'), 'owner’s team not marked in the bars');

@@ -577,6 +577,27 @@ const num = (el, attr) => Number(el.getAttribute(attr));
     fire(hit, 'click', { clientX: 300, clientY: 50 });
     eq(went.join('|'), 'stats.html?bin=1:100–120', 'histogram: a click on a bar follows hrefFor(index, bin)');
   }
+  // A PAGE THAT OPENS ITS OWN CARD ON THE MARKS turns the chart's preview off
+  // on the container (`data-ff-tip="off"`): it never draws, and never links.
+  {
+    const c = rect(host());
+    c.setAttribute('data-ff-tip', 'off');
+    const went = [];
+    const svg = rect(histogram(c, {
+      bins: ['80–100', '100–120'], counts: [3, 5], yLabel: 'weeks',
+      hrefFor: (i) => `x${i}`, navigate: (href) => went.push(href),
+    }));
+    const hit = all(svg, '.ff-hit')[1];
+    fire(hit, 'pointermove', { clientX: 300, clientY: 50 });
+    fire(hit, 'pointerdown', { clientX: 300, clientY: 50 });
+    fire(hit, 'click', { clientX: 300, clientY: 50 });
+    const tip = c.querySelector('[role="status"]');
+    ok(tip && tip.textContent === '' && tip.style.opacity !== '1', 'a muted chart draws no preview of its own', tip && tip.textContent);
+    eq(went.length, 0, 'and its click goes nowhere');
+    c.removeAttribute('data-ff-tip');
+    fire(hit, 'pointermove', { clientX: 300, clientY: 50 });
+    ok(/5/.test(tip.textContent) && tip.style.opacity === '1', 'the same chart previews again once the mark is lifted', tip.textContent);
+  }
   // BOX PLOT: a row carries its own href.
   {
     const c = rect(host());
@@ -598,6 +619,125 @@ const num = (el, attr) => Number(el.getAttribute(attr));
     fire(hits[0], 'click', { clientX: 300, clientY: 20 });
     eq(went.join('|'), 'analysis.html?team=7#rosterDetail', 'box plot: a click on a row follows that row’s href');
   }
+}
+
+// =================================== view switches and phone sizes (2026-10-08)
+//
+// docs/charts-plan.md: "nothing moves when switching (same plot box)", a Rank
+// view (1 at the top), "Every week as a dot", and three phone fixes — the
+// legend's five rows, the box plot's gutter and its "Points" on the tick row.
+const firstY = (path) => Number(path.getAttribute('d').slice(1).split(/[ML]/)[0].split(',')[1]);
+{
+  // RANK: the axis is turned over, so 1 is at the top; the ticks are the ones asked for.
+  const base = { series: [{ name: 'A', values: [1, 2] }, { name: 'B', values: [2, 1] }], height: 300 };
+  const plain = lineChart(host(720), { ...base });
+  const [pa, pb] = all(plain, 'path').map(firstY);
+  ok(pa > pb, 'harness: on a plain axis the smaller value is lower down', `${pa} vs ${pb}`);
+  const turned = lineChart(host(720), { ...base, yDomain: [1, 2], yTicks: [1, 2], yReverse: true });
+  const [ra, rb] = all(turned, 'path').map(firstY);
+  ok(ra < rb, 'yReverse: the smaller value (rank 1) is drawn ABOVE the larger', `${ra} vs ${rb}`);
+  // (x = 46 is the tick column; the end-of-line value labels are also end-anchored.)
+  const ticks = all(turned, 'text')
+    .filter((t) => t.getAttribute('text-anchor') === 'end' && t.getAttribute('x') === '46').map(drawn);
+  eq(ticks.join('|'), '1|2', 'yTicks: exactly the ticks asked for are labelled');
+  eq(turned.getAttribute('viewBox'), plain.getAttribute('viewBox'),
+    'and the chart is the same size either way — nothing moves when the view switches');
+}
+{
+  // THE LEGEND ON A PHONE: ten teams used to take five rows under each of three charts.
+  const names = ['Kansas City Chefs', 'The Mighty Ducks', 'Touchdown Syndrome', 'Hurts So Good', 'Mahomes Alone',
+    'Fourth and Long', 'Bye Week Blues', 'Gridiron Gang', 'Sunday Scaries', 'End Zone Dancers'];
+  const series = names.map((name, i) => ({ id: i + 1, name, values: [i, i + 1, i + 2] }));
+  const phone = lineChart(host(345), { series, height: 300 });
+  const vbH = Number(phone.getAttribute('viewBox').split(' ')[3]);
+  ok(vbH <= 300 + 3 * 20 + 8, 'ten teams at phone width: the legend is three rows at most', String(vbH));
+  const items = all(phone, '.ff-legend-item');
+  eq(items.length, 10, 'and every team is still in it');
+  ok(items.every((g, i) => g.getAttribute('data-name') === names[i] && g.querySelector('title').textContent === names[i]),
+    'each entry keeps its full name in data-name and its <title>');
+  const right = Math.max(...items.map((g) => num(g.querySelector('rect'), 'x') + num(g.querySelector('rect'), 'width')));
+  ok(right <= 345, 'and no entry runs off the right edge', String(right));
+  const wide = lineChart(host(720), { series, height: 300 });
+  const drawnWide = all(wide, '.ff-legend-item text').map(drawn);
+  eq(drawnWide.join('|'), names.join('|'), 'at laptop width the names are whole, as before');
+}
+{
+  // THE BOX PLOT ON A PHONE: a narrower gutter, smaller labels; and "Points" clear of the ticks.
+  const long = 'A preposterously long team name that cannot possibly fit the gutter';
+  const rows = [{ name: long, min: 80, q1: 95, median: 100, q3: 110, max: 130 }];
+  const plotLeft = (svg) => Math.min(...all(svg, 'line')
+    .filter((l) => l.getAttribute('x1') === l.getAttribute('x2') && l.getAttribute('stroke-width') === '1')
+    .map((l) => num(l, 'x1')));
+  const phone = boxPlot(host(345), { rows, xLabel: 'Points' });
+  ok(plotLeft(phone) <= 345 * 0.32 + 0.5, 'under 420px the name gutter is 32% of the width at most', String(plotLeft(phone)));
+  const label = all(phone, 'text').find((t) => /…$/.test(drawn(t)));
+  eq(label && label.getAttribute('font-size'), '11', 'and the row names are 11px');
+  const wide = boxPlot(host(720), { rows, xLabel: 'Points' });
+  const wideLabel = all(wide, 'text').find((t) => t.getAttribute('text-anchor') === 'end');
+  eq(wideLabel && wideLabel.getAttribute('font-size'), '12', 'at laptop width they stay 12px');
+  const xl = all(wide, 'text').find((t) => drawn(t) === 'Points');
+  const tickY = Math.max(...all(wide, 'text').filter((t) => /^\d+$/.test(drawn(t))).map((t) => num(t, 'y')));
+  ok(num(xl, 'y') - tickY >= 18, 'the axis label sits a clear line below the tick numbers',
+    `${num(xl, 'y')} vs ${tickY}`);
+}
+{
+  // EVERY WEEK AS A DOT: the same rows, the same scale, the same box — dots instead of boxes.
+  const rect = (el) => { el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 720, height: 300 }); return el; };
+  const fire = (el, type, props = {}) => {
+    const e = new window.Event(type, { bubbles: true });
+    Object.assign(e, { pointerType: 'mouse', clientX: 0, clientY: 0 }, props);
+    el.dispatchEvent(e);
+  };
+  const rows = [
+    { id: 3, name: 'Ants', min: 80, q1: 95, median: 100, q3: 110, max: 130, color: SERIES_COLORS[4],
+      points: [{ value: 80, label: 'Week 1', href: 'a.html?week=1' }, { value: 100, label: 'Week 2', href: 'a.html?week=2' },
+        { value: 130, label: 'Week 3', href: 'a.html?week=3' }] },
+    { id: 4, name: 'Bees', min: 85, q1: 90, median: 92, q3: 99, max: 120,
+      points: [{ value: 85, label: 'Week 1' }, { value: 120, label: 'Week 2' }] },
+  ];
+  const boxes = boxPlot(host(720), { rows, xLabel: 'Points' });
+  const went = [];
+  const c = rect(host(720));
+  const svg = rect(boxPlot(c, { rows, xLabel: 'Points', mode: 'dots', navigate: (h) => went.push(h) }));
+  eq(svg.getAttribute('viewBox'), boxes.getAttribute('viewBox'), 'dots: the chart is the same size as the boxes');
+  const marks = all(svg, 'circle.ff-week-dot');
+  eq(marks.length, 5, 'one dot per week per team');
+  eq(all(svg, 'rect').filter((r) => r.getAttribute('fill') !== 'transparent').length, 0, 'and no interquartile box');
+  eq(marks[0].getAttribute('fill'), SERIES_COLORS[4], 'a dot takes its team’s colour');
+  // Same scale: the dot for 100 sits where the boxes view draws Ants' median (100).
+  const medianX = num(all(boxes, 'g')[0].querySelectorAll('line')[3], 'x1');
+  close(num(marks[1], 'cx'), medianX, 0.11, 'a week of 100 sits exactly where the box’s median of 100 was');
+  ok(num(marks[0], 'cx') < num(marks[1], 'cx') && num(marks[1], 'cx') < num(marks[2], 'cx'), 'and the dots run left to right by score');
+  const names = all(svg, 'text').map(drawn);
+  ok(names.includes('Ants') && names.includes('Bees'), 'the rows are still named');
+  // The nearest dot in the row is the one previewed, and a click follows ITS link.
+  const hits = all(svg, '.ff-box-hit');
+  const at = { clientX: num(marks[2], 'cx') - 3, clientY: num(marks[2], 'cy') };
+  fire(hits[0], 'pointermove', at);
+  const tip = c.querySelector('[role="status"]');
+  ok(/Ants/.test(tip.textContent) && /Week 3/.test(tip.textContent) && /130/.test(tip.textContent),
+    'hovering near a dot names the team, the week and the score', tip.textContent);
+  fire(hits[0], 'pointerdown', at);
+  fire(hits[0], 'click', at);
+  eq(went.join('|'), 'a.html?week=3', 'and a click goes to that week, not just the team');
+  // A row handed no points falls back to its boxes rather than drawing nothing.
+  const bare = boxPlot(host(720), { rows: [{ name: 'Bare', min: 1, q1: 2, median: 3, q3: 4, max: 5 }], mode: 'dots' });
+  eq(all(bare, 'rect').filter((r) => r.getAttribute('fill') !== 'transparent').length, 1,
+    'a row with no weeks to dot keeps its box');
+}
+{
+  // The caller can word the box tooltip (plain words on the page; the default is unchanged).
+  const rect = (el) => { el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 720, height: 300 }); return el; };
+  const c = rect(host(720));
+  const svg = rect(boxPlot(c, {
+    rows: [{ name: 'Ants', min: 80, q1: 95, median: 100, q3: 110, max: 130 }],
+    tipRows: (r) => [{ name: 'typical week', value: String(r.median) }],
+  }));
+  const e = new window.Event('pointermove', { bubbles: true });
+  Object.assign(e, { pointerType: 'mouse', clientX: 300, clientY: 20 });
+  all(svg, '.ff-box-hit')[0].dispatchEvent(e);
+  const tip = c.querySelector('[role="status"]');
+  ok(/typical week/.test(tip.textContent) && !/Q1/.test(tip.textContent), 'tipRows replaces the box tooltip’s rows', tip.textContent);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

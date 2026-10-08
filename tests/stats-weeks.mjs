@@ -127,7 +127,7 @@ if (process.argv[2]) {
     if (errors.length) problems.push(`console.error: ${errors[0]}`);
     if (fetchCalls.length) problems.push('made a network call');
 
-    for (const id of ['panelWeekly', 'panelLuck', 'panelCumLuck', 'panelBox']) {
+    for (const id of ['panelWeekly', 'panelLuck', 'panelBox']) {
       if (hidden(id) !== thin) problems.push(`${id} hidden=${hidden(id)} at ${weeks} weeks`);
     }
     if (hidden('panelEarly') !== !thin) problems.push(`panelEarly hidden=${hidden('panelEarly')} at ${weeks} weeks`);
@@ -147,7 +147,7 @@ if (process.argv[2]) {
     // signed figure and a margin; LS and PS rank. Spread still needs two weeks.
     for (const [i, label] of [[11, 'Close'], [12, 'LuckScore'], [14, 'S+L']]) {
       const allRows = Array.from(rows).map((r) => r.children[i].textContent.trim());
-      const bad = allRows.filter((c) => !/^[+−-]?\d+\.\d±\d+$/.test(c));
+      const bad = allRows.filter((c) => !/^[+−-]?\d+\.\d±\d+(\s*[▲▼])?$/.test(c));   // ▲▼: Luck score is on the colour scale since 2026-10-08
       // A tied game has no close luck; every other cell must carry both halves.
       if (bad.length && !(label === 'Close' && bad.every((c) => c === '—'))) {
         problems.push(`${label} at ${weeks} weeks: ${bad.slice(0, 2).join(', ')} — expected "+12.3±8"`);
@@ -254,9 +254,21 @@ if (process.argv[2]) {
         problems.push('a cell at the end of the scale carries no glyph');
       }
       const tinted = Array.from(main.querySelectorAll('td[class*="heat-up-"], td[class*="heat-dn-"]'));
-      if (tinted.some((td) => !/(highest|lowest) of \d+ · /i.test(td.getAttribute('title') || '') ||
-          /\bSD\b|standard deviation/.test(td.getAttribute('title') || ''))) {
-        problems.push('a coloured cell does not say where it stands');
+      // The words are in the cell's preview card since 2026-10-08 (they were a
+      // `title`): every coloured cell — Total, Skill and Luck score included —
+      // opens one, and it says where the number stands.
+      const said = (td) => {
+        td.dispatchEvent(new document.defaultView.Event('mouseover', { bubbles: true }));
+        const card = $('statCard');
+        const words = card && !card.hasAttribute('hidden') ? card.textContent : '';
+        td.dispatchEvent(new document.defaultView.Event('mouseout', { bubbles: true }));
+        return words;
+      };
+      const mute = tinted.filter((td) => !/(highest|lowest) of \d+/i.test(said(td)) ||
+        /\bSD\b|standard deviation/.test(said(td)) || td.hasAttribute('title'));
+      if (mute.length) {
+        problems.push(`a coloured cell does not say where it stands (${mute.length} of ${tinted.length}, ` +
+          `first in column ${Array.from(mute[0].parentElement.children).indexOf(mute[0])}: "${said(mute[0]).slice(0, 80)}")`);
       }
       if (!/Green is good for that team, red is bad/.test(text('mainTableStatus'))) {
         problems.push('the visible key does not say what the colours mean');
@@ -298,7 +310,7 @@ if (process.argv[2]) {
     // one line is emphasised on each chart, and one row of the box plot. Keyed
     // on the name, both Autumns lit up.
     if (dup) {
-      for (const id of ['chartWeekly', 'chartLuck', 'chartCumLuck']) {
+      for (const id of ['chartWeekly', 'chartLuck']) {
         const thick = $(id).querySelectorAll('path[stroke-width="2.5"]').length;
         const dim = $(id).querySelectorAll('path[opacity="0.16"]').length;
         if (thick !== 1) problems.push(`${id}: ${thick} lines emphasised for one chosen team, expected 1`);

@@ -34,8 +34,16 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
  * printed beside each one.
  *
  * Named .oppbars rather than .rank because app.css already has a .rank for the
- * small ordinal in a table cell, and the two would fight. */
-.oppbars { list-style: none; margin: 0; padding: 0; --bar: #2f6f49; }
+ * small ordinal in a table cell, and the two would fight.
+ *
+ * FROM A ZERO LINE (Tim, 2026-10-08: "have the 0 bar run down the middle and
+ * negative bars go to the left in red and positive bars to the right in
+ * green"). The track carries a line down its middle (`.bar.zero`); a plus
+ * grows right from it in green, a minus left in red, and the page writes each
+ * bar's share of the track (js/stats-page.js, "bars from a zero line"). A
+ * list is never wider than 820px: past that the bar is a long way from its
+ * name. */
+.oppbars { list-style: none; margin: 0; padding: 0; max-width: 820px; --bar-pos: #2f6f49; --bar-neg: #8f3a45; }
 .oppbars li {
   display: grid;
   grid-template-columns: 22px minmax(90px, 1fr) 2fr auto auto;
@@ -47,8 +55,17 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
 }
 .oppbars .rk { color: var(--dim); font-size: 12px; text-align: right; }
 .oppbars .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oppbars .bar { background: var(--panel-2); border-radius: 3px; height: 9px; }
-.oppbars .bar i { display: block; height: 100%; border-radius: 3px; background: var(--bar); }
+.oppbars .bar { position: relative; background: var(--panel-2); border-radius: 3px; height: 14px; }
+.oppbars .bar i { position: absolute; top: 0; bottom: 0; display: block; }
+.oppbars .bar i.pos { left: 50%; border-radius: 0 3px 3px 0; background: var(--bar-pos); }
+.oppbars .bar i.neg { right: 50%; border-radius: 3px 0 0 3px; background: var(--bar-neg); }
+/* The zero line. It overhangs the track by the row's own padding, so on a
+ * laptop — where the rows share their columns — it reads as one line down the
+ * whole list. */
+.oppbars .bar.zero::after {
+  content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px;
+  width: 1px; margin-left: -0.5px; background: var(--dim);
+}
 .oppbars .vv { font-weight: 600; min-width: 46px; text-align: right; }
 /* The gap from the league average, league minus team, so + is an easier run
  * of opponents. Amber for a harder-than-typical schedule, dim for an easier
@@ -56,7 +73,23 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
 .oppbars .dd { min-width: 58px; text-align: right; font-size: 12.5px; color: var(--dim); }
 .oppbars .dd.hard { color: var(--warn); }
 .oppbars li.me .nm { color: #7fd99b; font-weight: 650; }
-.oppbars li.me .bar i { background: var(--accent); }
+.oppbars li.me .bar i.pos { background: var(--accent); }
+.oppbars li.me .bar i.neg { background: var(--err); }
+/* ONE SET OF COLUMNS FOR THE WHOLE LIST, on a laptop. Each row used to be a
+ * grid of its own, which was fine while every bar started at the left edge;
+ * a zero line has to sit at the same x in every row. So the list owns the
+ * columns and the rows borrow them (subgrid): the name is as wide as the
+ * longest name, to 190px at most, and the bar takes what is left. A browser
+ * without subgrid keeps the per-row columns above, which are fixed shares and
+ * line up too. */
+@media (min-width: 761px) {
+  .oppbars { display: grid; column-gap: 10px; grid-template-columns: 22px fit-content(190px) minmax(60px, 1fr) auto auto; }
+  .oppbars.one { grid-template-columns: 22px fit-content(190px) minmax(60px, 1fr) auto; }
+  .oppbars li,
+  .oppbars.one li,
+  .panel-row.three .oppbars li,
+  .panel-row.three .oppbars.one li { grid-column: 1 / -1; grid-template-columns: subgrid; }
+}
 /* The last figure opens the fixtures it is formed from (js/stats-page.js,
  * "where the last figure comes from"): a card beside it for a mouse, a sheet
  * at the foot of the screen for a finger. */
@@ -68,6 +101,15 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
  * (js/stats-page.js, "where a season luck cell comes from"). */
 #mainTable td[data-explain] { cursor: help; }
 #mainTable td[data-explain]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* Every other number opens a card too (2026-10-08). The pointer is for the
+   ones a click takes somewhere: a team, a team's week, a week. */
+#mainTable td[data-cell], th[data-week], #accuracyTable td[data-acc],
+#glance .stat[data-glance], .fit-stats .stat { cursor: help; }
+#mainTable td[data-cell]:not([data-cell="oppProj"]):not([data-cell="ls"]):not([data-cell="ps"]):not([data-cell="as"]),
+td[data-wk], td[data-wkavg], td.name[data-team], tfoot td[data-week],
+#glance .stat[data-glance="high"], #glance .stat[data-glance="low"], #glance .stat[data-glance="record"] { cursor: pointer; }
+#mainTable td[data-cell]:focus-visible, td[data-team]:focus-visible, td[data-week]:focus-visible, #accuracyTable td[data-acc]:focus-visible,
+#glance .stat[data-glance]:focus-visible, .fit-stats .stat:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
 /* ------------------------------------------------------------------- phone
    Five things on one line — rank, team, bar, value, gap — and the bar is the
@@ -110,6 +152,14 @@ div.panel-note > p:last-child { margin-bottom: 0; }
    the columns are blank. */
 .table-status { color: var(--dim); font-size: 13px; margin: 10px 0 0; }
 .table-status strong { color: var(--text); }
+
+/* A sentence that follows a view switch (Weekly luck). Both sentences sit in
+   one grid cell, so the cell is as tall as the taller one whichever is showing
+   and pressing the switch moves nothing below it. The one not showing is
+   invisible and aria-hidden, not display:none - that is what holds the space. */
+.lede-swap { display: grid; }
+.lede-swap > .lede { grid-area: 1 / 1; }
+.lede-swap > .lede[aria-hidden="true"] { visibility: hidden; }
 </style>
 </head>
 <body>
@@ -332,33 +382,58 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 
        ORDER IS UNTOUCHED, as ever: Weekly scores, Weekly luck, Cumulative
        luck, Score distribution, Projection accuracy, Score spread is exactly
-       the document order it was, and only the wrappers moved. -->
+       the document order it was, and only the wrappers moved.
+
+       VIEW SWITCHES (Tim, 2026-10-08: "at least give the option of switching
+       it to a differnt view"; docs/charts-plan.md B1, B2, B5). Weekly scores,
+       Weekly luck and Score spread each carry the small segmented control the
+       scatter graphs use for "Colour by". The choice is remembered
+       (js/prefs.js) and the chart is the same size in every view, so nothing
+       moves when one is pressed. CUMULATIVE LUCK IS NO LONGER A PANEL: it was
+       a 5:1 strip on a laptop, 480px below the chart it belongs with, and is
+       now Weekly luck's "Running total" (A2). The control has no visible
+       label - its buttons say what they are - and is named for a screen
+       reader by aria-label. Weekly luck's sentence follows its view: both are
+       in the markup, stacked in one cell, so the taller one holds the space
+       and swapping them moves nothing. -->
   <div class="panel-row">
     <section class="panel" id="panelWeekly">
       <h2>Weekly scores</h2>
       <p class="lede">Every team&rsquo;s score, week by week. Tap a team in the legend to pick out its line.</p>
+      <div class="row mb-12">
+        <div class="segmented seg-sm" id="scoresView" role="group" aria-label="Weekly scores, shown as">
+          <button type="button" data-view="week" class="on" aria-pressed="true">Per week</button>
+          <button type="button" data-view="total" aria-pressed="false">Running total</button>
+          <button type="button" data-view="vsavg" aria-pressed="false">vs league avg</button>
+          <button type="button" data-view="rank" aria-pressed="false">Rank</button>
+        </div>
+      </div>
       <div class="chart" id="chartWeekly"></div>
     </section>
     <section class="panel" id="panelLuck">
       <h2>Weekly luck &mdash; actual minus projected</h2>
-      <p class="lede">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
+      <div class="lede-swap">
+        <p class="lede" id="luckLedeWeek">Each week&rsquo;s score minus its projection. Above the line means the team beat its projection that week.</p>
+        <p class="lede" id="luckLedeTotal" aria-hidden="true">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
+      </div>
+      <div class="row mb-12">
+        <div class="segmented seg-sm" id="luckView" role="group" aria-label="Weekly luck, shown as">
+          <button type="button" data-view="week" class="on" aria-pressed="true">Per week</button>
+          <button type="button" data-view="total" aria-pressed="false">Running total</button>
+        </div>
+      </div>
       <div class="chart" id="chartLuck"></div>
+      <details class="explain">
+        <summary>How this works</summary>
+        <p class="panel-note">
+          Running total is the luck score as it stood after each week. Each point
+          is computed from every week up to that one, not from that week alone, so
+          the lines converge as the season goes on and single results stop
+          dominating.
+        </p>
+      </details>
     </section>
   </div>
-
-  <section class="panel" id="panelCumLuck">
-    <h2>Cumulative luck</h2>
-    <p class="lede">Luck for the season so far, after each week. Above zero means the season has broken your way.</p>
-    <div class="chart" id="chartCumLuck"></div>
-    <details class="explain">
-      <summary>How this works</summary>
-      <p class="panel-note">
-        Each point is computed from every week up to that one, not from that week
-        alone, so the lines converge as the season goes on and single results stop
-        dominating.
-      </p>
-    </details>
-  </section>
 
   <div class="panel-row">
     <section class="panel">
@@ -411,8 +486,8 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           </div>
         </div>
         <div class="stat-row fit-stats">
-          <div class="stat"><div class="k">R&sup2;</div><div class="v" id="fitTeamsR2">&mdash;</div></div>
-          <div class="stat"><div class="k">Off perfect</div><div class="v" id="fitTeamsGap">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">R&sup2;</div><div class="v" id="fitTeamsR2">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">Off perfect</div><div class="v" id="fitTeamsGap">&mdash;</div></div>
         </div>
       </div>
       <div class="chart" id="chartFitTeams"></div>
@@ -434,8 +509,8 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           </div>
         </div>
         <div class="stat-row fit-stats">
-          <div class="stat"><div class="k">R&sup2;</div><div class="v" id="fitPlayersR2">&mdash;</div></div>
-          <div class="stat"><div class="k">Off perfect</div><div class="v" id="fitPlayersGap">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">R&sup2;</div><div class="v" id="fitPlayersR2">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">Off perfect</div><div class="v" id="fitPlayersGap">&mdash;</div></div>
         </div>
       </div>
       <div class="chart" id="chartFitPlayers"></div>
@@ -450,6 +525,12 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <h2>Score spread by team</h2>
     <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
     <p class="panel-note warn-line" id="boxEarly" hidden></p>
+    <div class="row mb-12">
+      <div class="segmented seg-sm" id="spreadView" role="group" aria-label="Score spread, shown as">
+        <button type="button" data-view="boxes" class="on" aria-pressed="true">Boxes</button>
+        <button type="button" data-view="dots" aria-pressed="false">Every week as a dot</button>
+      </div>
+    </div>
     <div class="chart" id="chartBox"></div>
     <details class="explain">
       <summary>How to read it</summary>

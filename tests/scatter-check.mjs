@@ -782,5 +782,53 @@ const xy = (el) => ({ x: num(el, 'cx'), y: num(el, 'cy') });
   ok(open(c2), 'with no `card` option the text preview opens for every dot');
 }
 
+// ============================================================ zoom to fit
+//
+// docs/charts-plan.md A4 (Tim, 2026-10-08, approved): the teams scatter's dots
+// filled a quarter of the width because one domain served both axes. `zoom`
+// fits each axis to its own values; the dotted y = x line is then no longer the
+// corner-to-corner diagonal, but it must still be y = x, clipped to the plot.
+{
+  // Projections bunch (100..120); scores spread (60..160). Two dots sit ON y = x.
+  const pts = [
+    { x: 100, y: 100, name: 'on-a' }, { x: 120, y: 120, name: 'on-b' },
+    { x: 104, y: 60, name: 'low' }, { x: 116, y: 160, name: 'high' }, { x: 110, y: 95, name: 'mid' },
+  ];
+  const spanX = (svg) => { const xs = dots(svg).map((d) => num(d, 'cx')); return Math.max(...xs) - Math.min(...xs); };
+  const plain = draw(host(), { points: pts, height: 320 });
+  const zoomed = draw(host(), { points: pts, height: 320, zoom: true });
+  ok(spanX(zoomed) > spanX(plain) * 2.5, 'zoom: the dots spread across the plot instead of a narrow stripe',
+    `${spanX(zoomed).toFixed(0)} vs ${spanX(plain).toFixed(0)}`);
+  eq(zoomed.getAttribute('viewBox'), plain.getAttribute('viewBox'), 'and the chart itself is the same size');
+  const [a, b] = dots(zoomed).slice(0, 2).map((d) => ({ x: num(d, 'cx'), y: num(d, 'cy') }));
+  const p = zoomed.querySelector('line.ff-perfect');
+  ok(p, 'the dotted perfect line is still drawn');
+  const L = { x1: num(p, 'x1'), y1: num(p, 'y1'), x2: num(p, 'x2'), y2: num(p, 'y2') };
+  // Both on-the-line dots are collinear with it: it is still y = x.
+  const off = (q) => Math.abs((L.x2 - L.x1) * (q.y - L.y1) - (L.y2 - L.y1) * (q.x - L.x1)) /
+    Math.hypot(L.x2 - L.x1, L.y2 - L.y1);
+  ok(off(a) < 0.6 && off(b) < 0.6, 'and still passes through every dot whose score equalled its projection',
+    `${off(a).toFixed(2)}, ${off(b).toFixed(2)}`);
+  // Clipped to the plot: the plot is the rect the gridlines span.
+  const grid = all(zoomed, 'line').filter((l) => l.getAttribute('y1') === l.getAttribute('y2') && !l.getAttribute('class'));
+  const left = Math.min(...grid.map((l) => num(l, 'x1'))), rightX = Math.max(...grid.map((l) => num(l, 'x2')));
+  const top = Math.min(...grid.map((l) => num(l, 'y1'))), bottom = Math.max(...grid.map((l) => num(l, 'y1')));
+  const inside = (x, y) => x >= left - 0.6 && x <= rightX + 0.6 && y >= top - 0.6 && y <= bottom + 0.6;
+  ok(inside(L.x1, L.y1) && inside(L.x2, L.y2), 'the dotted line stops at the edge of the plot',
+    JSON.stringify(L) + ` in ${left},${top},${rightX},${bottom}`);
+  const f = zoomed.querySelector('line.ff-fit');
+  ok(f && inside(num(f, 'x1'), num(f, 'y1')) && inside(num(f, 'x2'), num(f, 'y2')), 'and so does the solid one');
+  close(zoomed.__ffFit.slope, plain.__ffFit.slope, 1e-12, 'the fitted line is the same line: zooming changes the view, not the maths');
+  close(zoomed.__ffGap, plain.__ffGap, 1e-12, 'and so is Off perfect');
+  // The two axes now carry their own numbers.
+  const xTicks = all(zoomed, 'text').filter((t) => t.getAttribute('text-anchor') === 'middle').map((t) => t.textContent);
+  const yTicks = all(zoomed, 'text').filter((t) => t.getAttribute('text-anchor') === 'end').map((t) => t.textContent);
+  ok(xTicks.includes('100') && xTicks.includes('120') && !xTicks.includes('60'), 'across: the projections’ own range', xTicks.join('|'));
+  ok(yTicks.includes('60') && yTicks.includes('160'), 'up: the scores’ own range', yTicks.join('|'));
+  // A y = x that misses the zoomed window entirely is left out rather than drawn wrong.
+  const miss = draw(host(), { points: [{ x: 10, y: 200 }, { x: 20, y: 240 }, { x: 15, y: 210 }], zoom: true });
+  eq(miss.querySelector('line.ff-perfect'), null, 'when y = x does not cross the window, no dotted line is drawn');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -172,8 +172,22 @@ export function standingsScales(stats, { oppProj = null } = {}) {
     oppProj: heatScale(opps, { invert: true }),
     fa: heatScale(withGames.map((t) => t.forMinusAgainst)),
     luckWk: heatScale(withGames.map((t) => t.avgLuck)),
+    // Total, Skill and Luck score (docs/colour-plan.md, 2026-10-08). Built for
+    // everyone and USED only by a caller that passes `moreColour` — see
+    // `teamCells`. All three are high-is-good.
+    total: heatScale(withGames.map((t) => t.totalActual)),
+    skill: heatScale(withGames.map((t) => t.skill).filter((v) => v !== null && v !== undefined)),
+    luckScore: heatScale(withGames.map((t) => t.luckScore).filter((v) => v !== null && v !== undefined)),
   };
 }
+
+/** One key per column, in column order: what a `cards` cell calls itself in
+ *  `data-cell`. The five in `EXPLAINED` open their parts instead and never
+ *  carry one. */
+export const CELL_KEYS = [
+  'name', 'record', 'avg', 'proj', 'total', 'oppAvg', 'fa', 'spread', 'oppProj', 'luckWk',
+  'pointsToWin', 'scoreDiffLuck', 'luckScore', 'skill', 'skillPlusLuck', 'ls', 'ps', 'as',
+];
 
 // Every scaled column here is one figure across the league, so a cell's title
 // is its rank and the league's average of that same column and names no other
@@ -182,7 +196,12 @@ export function standingsScales(stats, { oppProj = null } = {}) {
 // -------------------------------------------------------------------- the rows
 
 /** The current (or hypothetical) cells of one team, name first. */
-function teamCells(t, { scales, recordOf, oppProj, explain }) {
+function teamCells(t, { scales, recordOf, oppProj, explain, moreColour = false, cards = false }) {
+  // `moreColour`: the colour of a cell that is not one of `heatCell`'s — the
+  // class and the ▲/▼ only. Its standing in words goes on a `title` only where
+  // the cell has no preview of its own (`explain`), one preview a cell.
+  const tint = (v, scale) => (moreColour && scale ? heatOf(v, scale) : null);
+  const cls = (h) => (h ? ` class="${h.cls}"` : '');
   const { none, ghosts } = scales;
   // No finished game of his own yet: every result column is a dash.
   const off = none || unplayed(t);
@@ -199,7 +218,10 @@ function teamCells(t, { scales, recordOf, oppProj, explain }) {
   const luck = (v, m, key) => {
     if (none || v === null || v === undefined) return `<td>${dash}</td>`;
     const pm = m === null || m === undefined ? '' : `<span class="pm">±${Math.round(m)}</span>`;
-    return `<td data-v="${v}"${ex(key)}>${signed(v)}${pm}</td>`;
+    const h = key === 'luckScore' ? tint(v, scales.luckScore) : null;
+    const e = ex(key);
+    return `<td${cls(h)} data-v="${v}"${e}${h && !e ? ` title="${esc(h.words)}"` : ''}>` +
+      `${signed(v)}${pm}${heatMarkHtml(h)}</td>`;
   };
   const rank = (v) => (none || v === null ? dash : `<span class="rank">${v}</span>`);
   const num = (v) => (none ? dash : fmt(v));
@@ -216,12 +238,16 @@ function teamCells(t, { scales, recordOf, oppProj, explain }) {
   // an empty data-v parses as 0 and would rank a team we know nothing about as
   // having the easiest schedule in the league.
   const o = oppOf(oppProj, t.id);
-  return [
+  const hTotal = off ? null : tint(t.totalActual, scales.total);
+  const hSkill = off || t.skill === null || t.skill === undefined ? null : tint(t.skill, scales.skill);
+  const exSkill = ex('skill');
+  const cells = [
     `<td class="name">${esc(t.name)}</td>`,
     `<td data-v="${recordSortKey(rec, t.pointsFor)}"${rec.live ? ` title="${esc(rec.title)}"` : ''}>${rec.text}</td>`,
     heatCell(off ? null : t.avgActual, scales.avg, { text: n(t.avgActual) }),
     heatCell(off ? null : t.avgProjected, scales.proj, { text: n(t.avgProjected) }),
-    `<td${off ? '' : ` data-v="${t.pointsFor}"`}>${off ? dash : pf(t.totalActual)}</td>`,
+    `<td${cls(hTotal)}${off ? '' : ` data-v="${t.pointsFor}"`}${hTotal ? ` title="${esc(hTotal.words)}"` : ''}>` +
+      `${off ? dash : pf(t.totalActual)}${heatMarkHtml(hTotal)}</td>`,
     heatCell(off ? null : t.oppAvgActual, scales.opp, { text: n(t.oppAvgActual) }),
     heatCell(off ? null : t.forMinusAgainst, scales.fa, { text: g(t.forMinusAgainst) }),
     `<td>${n(t.actualStdev)}</td>`,
@@ -230,12 +256,22 @@ function teamCells(t, { scales, recordOf, oppProj, explain }) {
     `<td${ex('pointsToWin')}>${n(t.pointsToWin)}</td>`,
     lk('scoreDiffLuck'),
     lk('luckScore'),
-    `<td${ex('skill')}>${g(t.skill)}</td>`,
+    `<td${cls(hSkill)}${hSkill ? ` data-v="${t.skill}"` : ''}${exSkill}` +
+      `${hSkill && !exSkill ? ` title="${esc(hSkill.words)}"` : ''}>${g(t.skill)}${heatMarkHtml(hSkill)}</td>`,
     lk('skillPlusLuck'),
     `<td>${rk(t.luckStanding)}</td>`,
     `<td>${rk(t.projectedStanding)}</td>`,
     `<td>${rk(t.actualStanding)}</td>`,
   ];
+  if (!cards) return cells;
+  // `cards`: every cell that prints something and has no parts preview names
+  // its column and its team and takes focus, and gives up its `title` — the
+  // page's card says what the title said, and a cell opens one thing.
+  const blank = `<td>${dash}</td>`;
+  return cells.map((c, i) => (c === blank || / data-explain="/.test(c)
+    ? c
+    : c.replace(/ title="[^"]*"/, '')
+      .replace(/^<td/, `<td data-cell="${CELL_KEYS[i]}" data-team="${esc(t.id)}" tabindex="0"`)));
 }
 
 /** One difference cell: signed, classed, sortable — or a dash when unknown. */
@@ -311,11 +347,18 @@ function teamDiffCells(t, c, { scales, base, oppProj, diffOppProj }) {
  *        S+L cells of the current view with `data-explain` (the figure),
  *        `data-team` and a tab stop, for a page that opens `standingsExplain`
  *        on them. Off by default: without it not a byte of the rows differs.
+ * @param {boolean} [o.moreColour] also put Total, Skill and Luck score on the
+ *        red/green scale (the Stats page; docs/colour-plan.md). Off by default.
+ * @param {boolean} [o.cards] mark every other cell of the current view that
+ *        prints something with `data-cell` (a `CELL_KEYS` name), `data-team`
+ *        and a tab stop, and drop its `title`, for a page that opens a preview
+ *        card on it. Off by default. Neither applies to a difference view.
  * @returns {string} `<tr>`s, for a `<tbody>`
  */
 export function standingsRowsHtml(stats, {
   highlightId = null, recordOf = bankedRecord, oppProj = null, scales = null,
   diffFrom = null, diffOppProj = null, dim = null, explain = false,
+  moreColour = false, cards = false,
 } = {}) {
   const sc = scales || standingsScales(stats, { oppProj });
   const base = diffFrom ? standingsScales(diffFrom, { oppProj: diffOppProj }) : null;
@@ -325,7 +368,7 @@ export function standingsRowsHtml(stats, {
     .map((t) => {
       const cells = diffFrom
         ? teamDiffCells(t, before.get(t.id) || null, { scales: sc, base, oppProj, diffOppProj })
-        : teamCells(t, { scales: sc, recordOf, oppProj, explain });
+        : teamCells(t, { scales: sc, recordOf, oppProj, explain, moreColour, cards });
       const style = dimStyle(dimOf(dim, t.id));
       const drawn = style ? cells.map((c, i) => (i ? c.replace(/^<td/, `<td${style}`) : c)) : cells;
       return `

@@ -718,6 +718,49 @@ function seasonOf(html) {
   eq(d.bySlot.get('RB1')[3].text, 'B. Robinson0.0', 'season live diff: an unchanged finished man is zero');
 }
 
+// (f) 2026-10-08, both asked for by the Stats page only and OFF for everyone
+// else: `moreColour` puts Total, Skill and Luck score on the red/green scale
+// (docs/colour-plan.md), and `cards` marks every cell for a preview card.
+{
+  const plain = standingsRowsHtml(real, { highlightId: 10, oppProj, explain: true });
+  const heatOfCell = (c) => (/\bheat-(up|dn)-\d\b/.exec(c.attrs) || [])[1] || '';
+  const before = rowsOf(plain);
+  ok(before.every((r) => [COL.total, COL.skill, COL.luck].every((i) => !/\bheat\b/.test(r.cells[i].attrs))),
+    'standings colour: Total, Skill and Luck score are uncoloured unless asked for');
+
+  const html = standingsRowsHtml(real, { highlightId: 10, oppProj, explain: true, moreColour: true });
+  const rows = rowsOf(html);
+  // Points for = 4 × (100 + 5i): T10 has the most, T1 the fewest.
+  eq(heatOfCell(rows[9].cells[COL.total]), 'up', 'standings colour: the most total points is green');
+  eq(heatOfCell(rows[0].cells[COL.total]), 'dn', 'standings colour: the fewest is red');
+  ok(rows.every((r) => /\bheat\b/.test(r.cells[COL.luck].attrs)), 'standings colour: every Luck score cell is on the scale');
+  const lucks = real.teams.map((t) => t.luckScore);
+  const top = lucks.indexOf(Math.max(...lucks)), bottom = lucks.indexOf(Math.min(...lucks));
+  eq(heatOfCell(rows[top].cells[COL.luck]), 'up', 'standings colour: the luckiest team is green');
+  eq(heatOfCell(rows[bottom].cells[COL.luck]), 'dn', 'standings colour: the unluckiest is red');
+  ok(rows.every((r) => /data-explain="luckScore"/.test(r.cells[COL.luck].attrs) && !/title="/.test(r.cells[COL.luck].attrs)),
+    'standings colour: a coloured Luck score cell still opens its parts and still has no title');
+  ok(rows.every((r) => /data-v="/.test(r.cells[COL.total].attrs) && /data-v="/.test(r.cells[COL.luck].attrs)),
+    'standings colour: and still sorts as a number');
+  // Every team projects 100 here, so Skill is 0 for all: no spread, no colour — not an error.
+  ok(rows.every((r) => !/\bheat-(up|dn)/.test(r.cells[COL.skill].attrs)), 'standings colour: a column with no spread stays plain');
+  const strip = (s) => s.replace(/ ?<span class="heatmark"[^>]*>[^<]*<\/span>/g, '').replace(/ class="heat[^"]*"/g, '')
+    .replace(/ title="[^"]*"/g, '');
+  ok(strip(html) === strip(plain), 'standings colour: nothing but the colour (and its words) differs');
+
+  const carded = standingsRowsHtml(real, { highlightId: 10, oppProj, explain: true, moreColour: true, cards: true });
+  const cr = rowsOf(carded);
+  eq(count(carded, / title="/g), 0, 'standings cards: no cell keeps a title — the card is the one preview');
+  ok(cr.every((r) => r.cells.every((c) => /data-cell="|data-explain="/.test(c.attrs))),
+    'standings cards: every cell of every row opens something');
+  ok(cr.every((r) => r.cells.every((c) => !(/data-cell="/.test(c.attrs) && /data-explain="/.test(c.attrs)))),
+    'standings cards: and never two things');
+  eq((/data-cell="([a-zA-Z]+)"/.exec(cr[0].cells[COL.total].attrs) || [])[1], 'total', 'standings cards: a cell names its column');
+  eq((/data-team="(\d+)"/.exec(cr[4].cells[0].attrs) || [])[1], '5', 'standings cards: and its team, the name cell included');
+  eq(count(standingsRowsHtml(real, { diffFrom: real, oppProj, diffOppProj: oppProj, cards: true, moreColour: true }), /data-cell|class="heat/g), 0,
+    'standings cards: a difference view takes neither');
+}
+
 if (fail) console.log(`${pass} passed, ${fail} failed`);
 else console.log(`All ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);
