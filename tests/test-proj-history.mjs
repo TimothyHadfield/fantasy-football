@@ -108,7 +108,7 @@ const CHILDREN = {
     const saved = document.getElementById('connSaved');
     return {
       saved: saved ? {
-        text: savedNow(), title: saved.getAttribute('title'), tag: saved.tagName,
+        text: savedNow(), title: saved.getAttribute('title'), tag: saved.tagName, href: saved.getAttribute('href'),
         after: saved.previousElementSibling && saved.previousElementSibling.id,
       } : null,
       said,
@@ -652,8 +652,9 @@ if (!bar.boot) {
   eq(bar.saved && bar.saved.text, 'Week 4 saved', 'once the late copy is in, the bar’s quiet chip says "Week 4 saved"');
   ok('with a title saying when and which weeks are held',
     bar.saved && /^Week 4 projections saved \S.* Week 4 held\.$/.test(bar.saved.title || ''), JSON.stringify(bar.saved));
-  eq(bar.saved && [bar.saved.tag, bar.saved.after], ['SPAN', 'connSync'],
-    'a plain span (so a tap opens its title), straight after the Sync button');
+  // 2026-10-08 (docs/previews-plan.md, "Top bar"): a link now, not a span.
+  eq(bar.saved && [bar.saved.tag, bar.saved.href, bar.saved.after], ['A', 'schedule.html#timePanel', 'connSync'],
+    'a link to the Schedule page’s time panel, straight after the Sync button');
   eq(bar.said, ['', 'Week 4 saved'], 'and it said nothing — not "not saved yet" — while the copy still had its chance');
 }
 

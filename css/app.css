@@ -1986,3 +1986,12 @@ tfoot tr.league-row td { border-top: 2px solid var(--dim); }
 :is(#depthTable, #tradeTable, #comboPanel, #customPanel, #assumedPanel) [data-tc],
 #customPanel #cuMeet { cursor: pointer; }
 /* ================================================= end of Trade page previews */
+/* ===================== TOP BAR (2026-10-08, docs/previews-plan.md "Top bar")
+ * The quiet "Week 5 saved" chip is a link to the Schedule page's time panel
+ * now: it keeps the chip's own colour and takes a link's cursor, nothing else.
+ * The league's name opens a card (js/connection.js `leagueCard`), so it takes
+ * the cursor a name with a card has everywhere else. No size changes. */
+a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer; }
+.conn-name { cursor: help; }
+.conn-name:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* ============================================================ end of top bar */

@@ -649,12 +649,54 @@ function savedView() {
 /**
  * In the bar whenever a live league is connected (the synced bar carries it in
  * its chip row, see `ages()`), hidden when it has nothing to say — so `refreshSaved()` can fill it in later without rebuilding the strip
- * (and the team picker somebody may have open) around it. A <span>, not a
- * link: js/touch-titles.js opens its `title` as a sheet on a phone.
+ * (and the team picker somebody may have open) around it. A LINK to the
+ * Schedule page's time panel, where the reading it speaks of is taken and kept
+ * (docs/previews-plan.md, "Top bar"); its `title` is still the mouse's tooltip.
  */
 function savedChip(v = savedView()) {
-  return `<span class="conn-chip conn-saved" id="connSaved"` +
-    (v ? ` title="${esc(v.title)}">${esc(v.text)}` : ' hidden>') + '</span>';
+  return `<a class="conn-chip conn-saved" id="connSaved" href="schedule.html#timePanel"` +
+    (v ? ` title="${esc(v.title)}">${esc(v.text)}` : ' hidden>') + '</a>';
+}
+
+/**
+ * The league's name in the bar opens a small card: the season, the week ESPN
+ * says it is, and when this was last read (or, on the phone's copy, sent).
+ * Built when asked for, from what the bar already holds — it reads nothing.
+ */
+function leagueCard() {
+  const lg = state.league;
+  if (!lg) return null;
+  const clock = (ts) => {
+    const d = ts ? new Date(ts) : null;
+    return d && Number.isFinite(d.getTime())
+      ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+  };
+  const week = Number.isFinite(lg.currentWeek) && lg.currentWeek > 0 ? lg.currentWeek : null;
+  const sent = state.cloudAges && state.cloudAges.rosters && state.cloudAges.rosters.syncedAt;
+  return {
+    title: lg.name,
+    rows: [
+      { label: 'Season', value: String(lg.season || state.season) },
+      ...(week ? [{ label: 'Current week', value: `Week ${week}` }] : []),
+      state.source === 'cloud'
+        ? { label: 'Copy sent', value: clock(sent) }
+        : { label: 'Last read', note: ago(state.checkedAt), value: clock(state.checkedAt) },
+    ],
+  };
+}
+/** The name itself, as the element the card hangs off. No `title`: it has the card. */
+const leagueNameHtml = (tag) =>
+  `<${tag} class="conn-name" id="connName" tabindex="0">${esc(state.league.name)}</${tag}>`;
+
+/**
+ * js/pop.js imports this module (for `coarsePointer`), so it cannot be imported
+ * at the top of this one; it is asked for once the bar is on the page. One
+ * delegated listener on the bar, which outlives every redraw of what is in it.
+ */
+function wireLeagueCard() {
+  import('./pop.js').then((pop) => {
+    if (typeof pop.wirePops === 'function') pop.wirePops($('connBar'), { selector: '#connName', card: leagueCard });
+  }).catch(() => { /* the bar works without its card */ });
 }
 
 /** A reading or a copy has just landed somewhere on this page: say so now. */
@@ -1031,7 +1073,7 @@ function render() {
       ? `<strong>Out of date.</strong> These numbers were sent from your computer ` +
         `${esc((state.cloudAges.rosters || {}).described || 'a long time ago')} and nothing on this page is current. ` +
         `Open the site on your computer to refresh them.`
-      : `<strong>Synced copy</strong> of ${esc(state.league.name)}, sent from your computer. ` +
+      : `<strong>Synced copy</strong> of ${leagueNameHtml('span')}, sent from your computer. ` +
         `Not live &mdash; a phone cannot read a private league.`;
     body = `
       <span class="conn-dot"></span>
@@ -1051,7 +1093,7 @@ function render() {
     body = `
       <span class="conn-dot"></span>
       <span class="conn-main">
-        Connected to <strong>${esc(state.league.name)}</strong>
+        Connected to ${leagueNameHtml('strong')}
         &middot; ${state.league.teams?.length || 0} teams
         &middot; checked ${ago(state.checkedAt)}
       </span>
@@ -1188,6 +1230,7 @@ async function init() {
   load();
   loadSyncRecord();
   render();
+  wireLeagueCard();
   watchCloudAuth();
 
   bridge.onAvailability(({ available }) => {

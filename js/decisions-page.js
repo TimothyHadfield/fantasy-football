@@ -57,12 +57,23 @@ import * as seasonTable from './actual-season-table.js';
 import { projectionsFromWeekTeams, opponentProjections } from './projection.js';
 import { standingsTableHtml } from './standings-table.js';
 import { summaryTableHtml } from './summary-table.js';
+// `standingsExplain` off the namespace, as `weekSwaps` above.
+import * as standingsTable from './standings-table.js';
 import {
   viewSwitchHtml, viewFromClick, signedText, diffOf, diffClass, recordDiff, dimStyle, esc, round1,
 } from './view-switch.js';
 import { enableSort, resort, sortBy } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
+// THE PREVIEWS (2026-10-08) — the shared stat card, the player card, the deep
+// links and the scale's plain standing words. All four off their namespaces:
+// every name this page takes from them is newer than a deploy somebody's
+// browser may still hold (PROGRESS.md, "Stale-module trap"), and a preview that
+// cannot be drawn must cost the reader the preview, never the page.
+import * as popCard from './pop.js';
+import * as manCard from './player-card.js';
+import * as siteLinks from './links.js';
+import * as heatScale from './heat.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('decisions');
@@ -107,6 +118,7 @@ const state = {
   selectedId: null,
   seasonTeamId: null,   // whose lineup "Season by week" shows
   markWeek: null,       // the week whose column "Season by week" outlines (see goSeason)
+  linkWeek: null,       // the week decisions.html?week= asked for: its row is marked
   noise: prefs.get('noise', false) === true,
   view: { season: 'total', standings: 'total', summary: 'total' },
   odds: null,           // see loadOdds()
@@ -297,6 +309,14 @@ async function loadWorld(src) {
     return false;
   }
 
+  // The byes, for what a 0.00 on a player card means. The world's own read has
+  // already bought them (js/season.js keeps them for the page), so this asks
+  // ESPN for nothing — and on the phone's synced copy it is not asked at all.
+  let byes = null;
+  if (!demo && typeof season.fetchByeWeeks === 'function' && !(await fromCloud())) {
+    try { byes = await season.fetchByeWeeks(); } catch { byes = null; }
+  }
+
   state.world = world;
   state.leagueKey = demo ? 'demo' : `${cfg.leagueId}-${cfg.season}`;
   state.season = demo ? null : cfg.season;
@@ -305,16 +325,22 @@ async function loadWorld(src) {
   simQueued = null;
   state.odds = null;
   state.oddsToken++;
+  resetMen(byes);
 
-  // Whose decisions: the team last picked for THIS league, else the saved "my
-  // team", else the first. Team ids collide across leagues, so the memory is
-  // per league.
+  // Whose decisions: the team a link asked for (decisions.html?team=7, for this
+  // visit only — a link never rewrites the remembered pick), else the team last
+  // picked for THIS league, else the saved "my team", else the first. Team ids
+  // collide across leagues, so the memory is per league.
   const remembered = prefs.get(`team.${state.leagueKey}`);
   const mine = demo ? null : cfg.teamId;
-  const pick = [remembered, mine].map(teamOf).find(Boolean) || world.teams[0] || null;
+  const asked = link.on ? teamOf(link.team) : null;
+  const pick = [asked && asked.id, remembered, mine].map(teamOf).find(Boolean) || world.teams[0] || null;
   state.teamId = pick ? pick.id : null;
-  // Remembered per league, like the team.
-  state.all = prefs.get(`all.${state.leagueKey}`) === true;
+  // Remembered per league, like the team. A link to one team is not all of them.
+  state.all = !asked && prefs.get(`all.${state.leagueKey}`) === true;
+  // The week a link asked for: its row marked, its column outlined below.
+  state.linkWeek = link.on && world.weeks.includes(link.week) ? link.week : null;
+  if (state.linkWeek !== null) state.markWeek = state.linkWeek;
 
   if (!demo) {
     setStatus(world.weeks.length
@@ -530,6 +556,17 @@ function headline(decision) {
   };
 }
 
+/** The man a move's row is about: added, else dropped, else the one the picked team got. Null for a lineup. */
+function rowMan(d) {
+  if (!d || LINEUP_SAID[d.kind]) return null;
+  const first = (list) => (list && list.length ? list[0] : null);
+  if (d.whatIf) return first(same(d.teamId, state.teamId) ? d.gets : d.gives);
+  const move = (state.world.moves || []).find((x) => x.id === d.moveId);
+  if (!move) return null;
+  if (move.trade) return first(same(move.teamId, state.teamId) ? move.trade.gets : move.trade.gives);
+  return first(move.adds) ?? first(move.drops);
+}
+
 function rowHtml(d) {
   const wk = d.week === null || d.week === undefined ? 'All' : `Wk ${d.week}`;
   const what = LINEUP_SAID[d.kind] || d.label;
@@ -542,9 +579,14 @@ function rowHtml(d) {
       `<span class="dz-rec ${h.record ? diffClass(h.record.value) : ''}">${h.record ? esc(h.record.text) : state.all ? '' : '—'}</span>` +
       `<span class="dz-pts ${diffClass(h.points)}">${signedText(h.points)}</span>`;
   }
+  // A MOVE'S ROW OPENS ITS MAN (2026-10-08: its title only said the row again):
+  // the player card of the man added, else dropped, else traded for. For a mouse
+  // and the keyboard only — a tap on a row picks it, as it always has. The two
+  // lineup rows keep their title: it says what "Reasonable" means.
+  const card = manAttr(rowMan(d), d.week, { go: false, hoverOnly: true });
   return `<div class="dz-item">` +
     `<button type="button" class="dz-row" role="option" data-id="${esc(d.id)}" data-kind="${esc(d.kind)}"` +
-    `${d.empty ? ' data-empty="1"' : ''} aria-selected="${d.id === state.selectedId}" title="${esc(d.label)}">` +
+    `${d.empty ? ' data-empty="1"' : ''} aria-selected="${d.id === state.selectedId}"${card || ` title="${esc(d.label)}"`}>` +
     `<span class="dz-wk">${wk}</span><span class="dz-what">${liveRow(d) ? LIVE_TAG : ''}${esc(what)}</span>${nums}</button>` +
     (d.whatIf
       ? `<button type="button" class="dz-x" data-remove="${esc(d.id)}" aria-label="Remove this trade" title="Remove this trade">×</button>`
@@ -630,11 +672,13 @@ const benchedIn = (c) => (c
 const zeroIn = (c) => (c ? c.realStarters.filter((p) => p.projected === 0 && !p.noProj).length : 0);
 
 /** The two count cells of a row; a column the picked decision has no use for stays hidden. */
-function countCells(d, benched, zeros) {
+function countCells(d, benched, zeros, at = '') {
   const lineup = Boolean(d && LINEUP_SAID[d.kind]);
   const zero = Boolean(d && d.kind === 'lineup-reasonable');
-  return `<td class="dz-lu"${lineup ? '' : ' hidden'} data-v="${benched}">${benched}</td>` +
-    `<td class="dz-lu0"${zero ? '' : ' hidden'} data-v="${zeros}">${zeros}</td>`;
+  // A count that is not nought opens the men it counts (`at` says whose: a
+  // week's, a team's, or with neither the picked team's whole season).
+  return `<td class="dz-lu"${lineup ? '' : ' hidden'} data-v="${benched}"${benched ? cardAt('bench', at) : ''}>${benched}</td>` +
+    `<td class="dz-lu0"${zero ? '' : ' hidden'} data-v="${zeros}"${zeros ? cardAt('zero', at) : ''}>${zeros}</td>`;
 }
 
 /** The two headings follow the picked decision, in both tables. */
@@ -665,14 +709,17 @@ function renderTeams(d) {
     const count = (of) => cells.reduce((a, c) => a + of(c), 0);
     // What each cell SORTS on, where that is not what it prints: the name
     // without its live tag, a record the way ESPN ranks one, a change in wins.
+    // Each cell opens what it is made of (see "what a cell is made of" below):
+    // the team, its games in each world, and the games that changed.
+    const at = ` data-team="${esc(id)}"`;
     return `<tr data-team="${esc(id)}">` +
-      `<td class="dz-team" data-v="${esc(teamName(id))}" title="${esc(teamName(id))}">${esc(teamName(id))}${live ? LIVE_TAG : ''}</td>` +
-      `<td class="dz-act"${sortV(recordKey(rec && rec.real, real))}>${recText(rec && rec.real)}</td>` +
-      `<td class="dz-hyp"${sortV(recordKey(rec && rec.mirror, hyp))}>${recText(rec && rec.mirror)}</td>` +
-      `<td class="dz-res ${change ? diffClass(change.value) : ''}"${sortV(change && change.value)}>${change ? esc(change.text) : '—'}</td>` +
+      `<td class="dz-team" data-v="${esc(teamName(id))}"${cardAt('team', at, true) || ` title="${esc(teamName(id))}"`}>${esc(teamName(id))}${live ? LIVE_TAG : ''}</td>` +
+      `<td class="dz-act"${sortV(recordKey(rec && rec.real, real))}${rec ? cardAt('recA', at) : ''}>${recText(rec && rec.real)}</td>` +
+      `<td class="dz-hyp"${sortV(recordKey(rec && rec.mirror, hyp))}${rec ? cardAt('recH', at) : ''}>${recText(rec && rec.mirror)}</td>` +
+      `<td class="dz-res ${change ? diffClass(change.value) : ''}"${sortV(change && change.value)}${change ? cardAt('recD', at) : ''}>${change ? esc(change.text) : '—'}</td>` +
       `<td class="dz-diff ${diffClass(each)}"${sortV(each)}>` +
       whyHtml(`data-why="team" data-team="${esc(id)}"`, `${teamName(id)}: the weeks behind this number`, signedText(each)) +
-      `</td>${countCells(d, count(benchedIn), count(zeroIn))}</tr>`;
+      `</td>${countCells(d, count(benchedIn), count(zeroIn), at)}</tr>`;
   }).join('');
   resort($('teamTable'));
   $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
@@ -684,7 +731,9 @@ function renderResult() {
   const table = $('weekTable');
   const [body, foot] = table.querySelectorAll('tbody');
   const teams = Boolean(d && state.all);
-  closeWhy();
+  // The cells are about to be other cells: no card stays open over them.
+  whyAt = null;
+  hidePop();
   showCountHeads(d);
   table.hidden = teams;
   $('resultStats').hidden = teams;
@@ -734,18 +783,27 @@ function renderResult() {
       ? `Actual ${pts1(rs[0])} to ${pts1(rs[1])}. Hypothetical ${pts1(ms[0])} to ${pts1(ms[1])}.`
       : '';
     const resCls = flip ? ` dz-flip ${RANK[is] > RANK[was] ? 'd-up' : 'd-down'}` : '';
+    // ONE PREVIEW A CELL (2026-10-08): the result's two scores, the opponent,
+    // and each total's starters are cards now (see "what a cell is made of"),
+    // and a cell with a card carries no title.
+    const at = ` data-wk="${week}"`;
     const result = c.pending
       ? `<td class="dz-res muted"${sortV(PENDING_KEY)}>In play</td>`
-      : `<td class="dz-res${resCls}"${sortV(resultKey(was, is))}${dim} title="${esc(said)}">${flip ? `${was} → ${is}` : was || '—'}</td>`;
-    return `<tr data-wk="${week}"${flip ? ' data-flip="1"' : ''}${c.pending ? ' data-pending="1"' : ''}>` +
+      : `<td class="dz-res${resCls}"${sortV(resultKey(was, is))}${dim}${said ? cardAt('res', at, true) || ` title="${esc(said)}"` : ''}>${flip ? `${was} → ${is}` : was || '—'}</td>`;
+    // THE SITE'S RED/GREEN SCALE (docs/colour-plan.md): each total against the
+    // league that week, each world on its own league. A week anybody is still
+    // playing has none, as in Season by week below.
+    const hA = heatAt(c.realTotal, weekScale(m, week, 'real'));
+    const hH = heatAt(c.total, weekScale(m, week, 'mirror'));
+    return `<tr data-wk="${week}"${week === state.linkWeek ? ' class="linked"' : ''}${flip ? ' data-flip="1"' : ''}${c.pending ? ' data-pending="1"' : ''}>` +
       `<td data-v="${week}">${wk}</td>` +
-      `<td class="dz-vs" title="${esc(opp)}">${esc(opp)}</td>` +
-      `<td class="dz-act"${sortV(c.realTotal)}>${pts1(c.realTotal)}</td>` +
-      `<td class="dz-hyp"${sortV(c.total)}${dim}>${pts1(c.total)}</td>` +
+      `<td class="dz-vs"${(g && cardAt('vs', at, true)) || ` title="${esc(opp)}"`}>${esc(opp)}</td>` +
+      `<td class="dz-act${hA ? ` ${hA.cls}` : ''}"${sortV(c.realTotal)}${cardAt('act', at, true)}>${pts1(c.realTotal)}${heatMark(hA)}</td>` +
+      `<td class="dz-hyp${hH ? ` ${hH.cls}` : ''}"${sortV(c.total)}${dim}${cardAt('hyp', at, true)}>${pts1(c.total)}${heatMark(hH)}</td>` +
       `<td class="dz-diff ${diffClass(diff)}"${sortV(diff)}${dim}>` +
       whyHtml(`data-why="week" data-wk="${week}"`, `Week ${week}: the players behind this difference`, signedText(diff)) +
       `</td>` +
-      result + countCells(d, benchedIn(c), zeroIn(c)) +
+      result + countCells(d, benchedIn(c), zeroIn(c), at) +
       `</tr>`;
   }).join('');
 
@@ -755,9 +813,9 @@ function renderResult() {
   const shown = diffOf(hyp, real);
   const change = rec ? recordDiff(rec.mirror, rec.real) : null;
   foot.innerHTML = `<tr><td colspan="2">Total</td>` +
-    `<td class="dz-act">${pts1(real)}</td><td class="dz-hyp">${pts1(hyp)}</td>` +
+    `<td class="dz-act"${cardAt('actT')}>${pts1(real)}</td><td class="dz-hyp"${cardAt('hypT')}>${pts1(hyp)}</td>` +
     `<td class="dz-diff ${diffClass(shown)}" data-v="${shown}">${signedText(shown)}</td>` +
-    `<td class="dz-res ${change ? diffClass(change.value) : ''}">${change ? esc(change.text) : '—'}</td>` +
+    `<td class="dz-res ${change ? diffClass(change.value) : ''}"${change ? cardAt('resT') : ''}>${change ? esc(change.text) : '—'}</td>` +
     `${countCells(d, benched, zeros)}</tr>`;
   // The reader's column survives a new team, a new decision and the noise switch.
   resort(table);
@@ -765,7 +823,7 @@ function renderResult() {
   $('resultLede').textContent = ledeOf(d) + (d.empty ? ' No change.' : '');
   const stat = (k, v, cls = '', key = '') =>
     `<div class="stat"><div class="k">${k}</div><div class="v${cls ? ` ${cls}` : ''}"` +
-    `${key ? ` data-stat="${key}"` : ''}>${v}</div></div>`;
+    `${key ? ` data-stat="${key}"${cardAt('tile')}` : ''}>${v}</div></div>`;
   // The third tile is a week's worth; the season's is the Total row's Diff.
   const each = perWeek(total, world.weeks.length);
   $('resultStats').innerHTML =
@@ -784,16 +842,23 @@ function renderResult() {
 // team's Points/wk opens its weeks the same way. And the biggest of the picked
 // decision's swaps is said in the box itself, on a button that opens its week.
 //
-// The Stats page's "where the last figure comes from", copied and not shared
-// (a possible follow-up): a mouse hovers or focuses and gets a card beside the
-// number; a finger has no hover, so a tap opens a sheet with a Close button. A
-// tap outside or Escape shuts either. Nothing here is reachable only by hovering.
+// THE SITE'S OWN STAT CARD (js/pop.js) since 2026-10-08 — it was this page's
+// copy of the Stats page's first one until then. A mouse hovers or focuses and
+// gets the card beside the number; a finger has no hover, so a tap opens it as
+// a sheet with its link and a Close button. A tap outside or Escape shuts
+// either. Nothing here is reachable only by hovering. WHEN one opens is still
+// decided here (`wireWhy`): a click on a number whose card is open goes on to
+// Season by week, which the shared wiring has no word for.
 
 const swapsOf = typeof engine.weekSwaps === 'function' ? engine.weekSwaps : null;
+/** js/pop.js's `showPop` is as new as these cards: without it the numbers are bare. */
+const showPop = typeof popCard.showPop === 'function' ? popCard.showPop : null;
+const hidePop = () => { if (typeof popCard.hidePop === 'function') popCard.hidePop(); };
+const popOpenOn = () => (typeof popCard.popOpenOn === 'function' ? popCard.popOpenOn() : null);
 
 /** A number that opens what it is made of — or the bare number, on an engine too old to say. */
 function whyHtml(attrs, label, inner) {
-  if (!swapsOf) return inner;
+  if (!swapsOf || !showPop) return inner;
   return `<span class="dz-why" ${attrs} tabindex="0" role="button" aria-label="${esc(label)}">${inner}</span>`;
 }
 
@@ -804,8 +869,10 @@ function whyHtml(attrs, label, inner) {
 // in that location". In a week's preview `pj` is what he was projected for,
 // before his score and dim, as Season by week prints the two (`.sbw-pj`); the
 // space between them does not break, so the pair wraps as one.
-const manHtml = (p, pj = null) => (p
-  ? `<span class="dz-man">${esc(shortName(p))} ` +
+//
+// `card` is the attribute of his player card (`manAttr`), when he has one.
+const manHtml = (p, pj = null, card = '') => (p
+  ? `<span class="dz-man"${card}>${esc(shortName(p))} ` +
     (pj === null ? '' : `<span class="dz-pj" data-r="${Math.round(pj)}">${pts1(pj)}</span>&nbsp;`) +
     `<span class="pv${p.known ? '' : ' dz-proj'}">${pts(p.points).replace('-', '−')}</span></span>`
   : '—');
@@ -821,8 +888,15 @@ const projIn = (starters, man) => {
   return p && !p.noProj && Number.isFinite(p.projected) ? p.projected : null;
 };
 
-/** "J. Warren 8.7 → O. Hampton 16.5": who really started, then who starts instead. */
-const swapHtml = (r) => `${manHtml(r.out)} → ${manHtml(r.in)}`;
+/**
+ * "J. Warren 8.7 → O. Hampton 16.5": who really started, then who starts
+ * instead. Each name opens his player card for a mouse; the line is a button,
+ * so a tap on it opens the week (where each name is a tap of its own).
+ */
+const swapHtml = (r, week) => {
+  const card = (p) => (p ? manAttr(p.playerId, week, { go: false, hoverOnly: true }) : '');
+  return `${manHtml(r.out, null, card(r.out))} → ${manHtml(r.in, null, card(r.in))}`;
+};
 
 /** The picked team's cell for a week in the picked decision's mirror, or null. */
 function cellOf(d, week) {
@@ -854,21 +928,30 @@ function renderBiggest(d) {
   if (!row) { el.removeAttribute('data-wk'); el.innerHTML = '<span class="k">Biggest swap</span>'; return; }
   el.setAttribute('data-wk', best.week);
   el.innerHTML = `<span class="k">Biggest swap</span>` +
-    `<span class="dz-big-what">Wk ${best.week} · ${swapHtml(row)}</span>` +
+    `<span class="dz-big-what">Wk ${best.week} · ${swapHtml(row, best.week)}</span>` +
     `<span class="dz-big-d ${diffClass(row.diff)}">${signedPts(row.diff)}</span>`;
 }
 
-/** One week of the picked team: its swaps, then Actual, Hypothetical and the Diff they add up to. */
-function weekWhyHtml(week) {
+/** The link every one of these cards carries: on to the lineups, further down this page. */
+const SEASON_LINK = { href: '#panelSeason', hrefLabel: 'Season by week' };
+
+/**
+ * One week of the picked team: its swaps, then Actual, Hypothetical and the
+ * Diff they add up to — as the spec of a stat card (js/pop.js). Four columns,
+ * so the table is handed over whole (`tableHtml`).
+ */
+function weekWhySpec(week) {
   const d = selected();
   const c = cellOf(d, week);
-  if (!c || !swapsOf) return '';
+  if (!c || !swapsOf) return null;
   const id = state.teamId;
   const g = gameOf(state.world.games, id, week);
   const w = swapsOf(c);
+  // In the sheet each name is a tap of its own: his player card.
+  const man = (p, starters) => manHtml(p, projIn(starters, p), p ? manAttr(p.playerId, week, { go: false }) : '');
   const rows = w.rows.map((r) =>
-    `<tr><td class="name">${esc(r.slot)}</td><td class="name">${manHtml(r.out, projIn(c.realStarters, r.out))}</td>` +
-    `<td class="name">${manHtml(r.in, projIn(c.starters, r.in))}</td><td class="num ${diffClass(r.diff)}">${signedPts(r.diff)}</td></tr>`).join('');
+    `<tr><td class="name">${esc(r.slot)}</td><td class="name">${man(r.out, c.realStarters)}</td>` +
+    `<td class="name">${man(r.in, c.starters)}</td><td class="num ${diffClass(r.diff)}">${signedPts(r.diff)}</td></tr>`).join('');
   const foot = (label, value, cls = '') =>
     `<tr${cls ? ` class="${cls}"` : ''}><td class="name" colspan="3">${label}</td><td class="num">${value}</td></tr>`;
   // The foot is the table's row: Actual and Hypothetical to the tenth, and the
@@ -877,26 +960,28 @@ function weekWhyHtml(week) {
   // row rounds away — is the Rounding line.
   const diff = diffOf(c.total, c.realTotal);
   const rest = round2(diff - w.sum);
-  return (
-    `<div class="op-h">Week ${week}${c.live ? LIVE_TAG : ''}` +
-    (g ? ` <span class="muted">· vs ${esc(teamName(g.homeId === id ? g.awayId : g.homeId))}</span>` : '') + `</div>` +
-    '<table><thead><tr><th class="name">Slot</th><th class="name">Started</th><th class="name">Instead</th><th class="num">+/−</th></tr></thead>' +
-    `<tbody>${rows || '<tr><td class="name muted" colspan="4">Same lineup</td></tr>'}</tbody><tfoot>` +
-    // The rows are the whole of the Diff. Were they ever not, the gap is said.
-    (rest ? foot('Rounding', signedPts(rest)) : '') +
-    foot('Actual', pts1(c.realTotal)) +
-    foot('Hypothetical', pts1(c.total)) +
-    foot('Diff', signedText(diff), 'op-gap') +
-    '</tfoot></table>' + WHY_ACTS
-  );
+  return {
+    titleHtml: `Week ${week}${c.live ? LIVE_TAG : ''}`,
+    sub: g ? `vs ${teamName(g.homeId === id ? g.awayId : g.homeId)}` : '',
+    tableHtml:
+      '<table class="sc-rows dz-swaps"><thead><tr><th class="name">Slot</th><th class="name">Started</th><th class="name">Instead</th><th class="num">+/−</th></tr></thead>' +
+      `<tbody>${rows || '<tr><td class="name muted" colspan="4">Same lineup</td></tr>'}</tbody><tfoot>` +
+      // The rows are the whole of the Diff. Were they ever not, the gap is said.
+      (rest ? foot('Rounding', signedPts(rest)) : '') +
+      foot('Actual', pts1(c.realTotal)) +
+      foot('Hypothetical', pts1(c.total)) +
+      foot('Diff', signedText(diff), 'sc-total') +
+      '</tfoot></table>',
+    ...SEASON_LINK,
+  };
 }
 
 /** ALL USERS: one team's weeks, their Total, and the Points/wk that is the Total over those weeks. */
-function teamWhyHtml(teamId) {
+function teamWhySpec(teamId) {
   const d = selected();
   const t = teamOf(teamId);
   const mine = d && t ? mirrorOf(d).teams.get(t.id) : null;
-  if (!mine) return '';
+  if (!mine) return null;
   const weeks = state.world.weeks.filter((w) => mine.byWeek[w]);
   const rows = weeks.map((week) => {
     const c = mine.byWeek[week];
@@ -907,64 +992,42 @@ function teamWhyHtml(teamId) {
   const { hyp, real } = seasonPoints(mirrorOf(d), t.id);
   // Points/wk is the season to the cent over its weeks, as in the table.
   const total = diffOf(hyp, real, 2);
-  return (
-    `<div class="op-h">${esc(teamName(t.id))} <span class="muted">· ${weeks.length} week${weeks.length === 1 ? '' : 's'}</span></div>` +
-    '<table><thead><tr><th class="num">Wk</th><th class="num">Actual</th><th class="num">Hypothetical</th><th class="num">Diff</th></tr></thead>' +
-    `<tbody>${rows}</tbody><tfoot>` +
-    `<tr><td class="num">Total</td><td class="num">${pts1(real)}</td><td class="num">${pts1(hyp)}</td>` +
-    `<td class="num">${signedText(diffOf(hyp, real))}</td></tr>` +
-    `<tr class="op-gap"><td class="num" colspan="3">Points/wk</td><td class="num">${signedText(perWeek(total, weeks.length))}</td></tr>` +
-    '</tfoot></table>' + WHY_ACTS
-  );
+  return {
+    title: teamName(t.id),
+    sub: `${weeks.length} week${weeks.length === 1 ? '' : 's'}`,
+    tableHtml:
+      '<table class="sc-rows"><thead><tr><th class="num">Wk</th><th class="num">Actual</th><th class="num">Hypothetical</th><th class="num">Diff</th></tr></thead>' +
+      `<tbody>${rows}</tbody><tfoot>` +
+      `<tr><td class="num">Total</td><td class="num">${pts1(real)}</td><td class="num">${pts1(hyp)}</td>` +
+      `<td class="num">${signedText(diffOf(hyp, real))}</td></tr>` +
+      `<tr class="sc-total"><td class="num" colspan="3">Points/wk</td><td class="num">${signedText(perWeek(total, weeks.length))}</td></tr>` +
+      '</tfoot></table>',
+    ...SEASON_LINK,
+  };
 }
 
-let whyPop = null;
-/** What the open preview is of: { why, key } — a week's number, or a team's. */
+/** What the open preview is of: { why, key } — a week's number, or a team's. Null when none is. */
 let whyAt = null;
 /** No card opens by hover or focus before this time: the page is moving under the mouse. */
 let quietUntil = 0;
 
 const whyKey = (el) => ({ why: el.dataset.why === 'team' ? 'team' : 'week', key: el.dataset.why === 'team' ? el.dataset.team : el.dataset.wk });
-const whyOpenFor = (el) => {
-  const k = whyKey(el);
-  return Boolean(whyPop && !whyPop.hidden && whyAt && whyAt.why === k.why && same(whyAt.key, k.key));
-};
+/** Is the card open beside THIS number? (The shared card says which element it stands by.) */
+const whyOpenFor = (el) => Boolean(whyAt) && popOpenOn() === el;
 
 function closeWhy() {
-  if (whyPop) whyPop.hidden = true;
+  // Only a card this section opened: another cell's is the shared wiring's.
+  const on = popOpenOn();
+  if (whyAt && on && on.hasAttribute && on.hasAttribute('data-why')) hidePop();
   whyAt = null;
 }
 
 function openWhy(el, sheet) {
-  const html = el.dataset.why === 'team' ? teamWhyHtml(el.dataset.team) : weekWhyHtml(Number(el.dataset.wk));
-  if (!html) return;
-  if (!whyPop) {
-    whyPop = document.createElement('div');
-    whyPop.id = 'whyPop';
-    document.body.appendChild(whyPop);
-    whyPop.addEventListener('click', (e) => {
-      if (!e.target.closest) return;
-      if (e.target.closest('.op-go') && whyAt) goSeason(whyAt, e);
-      else if (e.target.closest('.op-close')) closeWhy();
-    });
-  }
+  if (!showPop) return false;
+  const spec = el.dataset.why === 'team' ? teamWhySpec(el.dataset.team) : weekWhySpec(Number(el.dataset.wk));
+  if (!spec || !showPop(el, spec, { sheet })) return false;
   whyAt = whyKey(el);
-  whyPop.className = sheet ? 'dz-pop sheet' : 'dz-pop';
-  whyPop.innerHTML = html;
-  whyPop.hidden = false;
-  whyPop.style.left = '';
-  whyPop.style.top = '';
-  if (sheet || typeof el.getBoundingClientRect !== 'function') return;
-  // Beside the number: its right edge on the number's, below it unless only
-  // above has the room.
-  const r = el.getBoundingClientRect();
-  const w = whyPop.offsetWidth;
-  const h = whyPop.offsetHeight;
-  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
-  const below = r.bottom + 6;
-  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
-  whyPop.style.left = `${left}px`;
-  whyPop.style.top = `${top}px`;
+  return true;
 }
 
 // FROM A PREVIEW TO THE LINEUPS BEHIND IT (Tim, 2026-10-06: "if the user clicks
@@ -977,10 +1040,6 @@ function openWhy(el, sheet) {
 // WITH ALL USERS ON the team is picked in the panel's own "Lineup of", not in
 // the Team picker: that one leaves All users and swaps the decision, so the box
 // just clicked in would be redrawn as something else.
-
-/** The sheet's two buttons. A mouse's card has neither: it shuts as the mouse leaves the number. */
-const WHY_ACTS = '<div class="op-acts"><button type="button" class="op-go">Season by week</button>' +
-  '<button type="button" class="op-close">Close</button></div>';
 
 /** The click that set `state.markWeek`, so that same click does not clear it. */
 let markedBy = null;
@@ -1018,14 +1077,26 @@ function goSeason(at, e = null) {
 function wireWhy(panel) {
   const target = (e) => (e.target && e.target.closest ? e.target.closest('[data-why]') : null);
   const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  // A NAME INSIDE A NUMBER'S BUTTON (the Biggest swap line) is a man, and a
+  // mouse over him gets HIS card — so that is not a hover of the number, and
+  // coming off the name back onto the line is.
+  const onMan = (node) => Boolean(node && node.closest && node.closest('[data-tip]'));
   // Moving between the words of one number is not leaving it.
   const within = (e, el) => Boolean(e.relatedTarget && el.contains(e.relatedTarget));
   const quiet = () => Date.now() < quietUntil;
   // A number whose preview is open goes on to Season by week; any other opens its preview.
-  const hit = (el, e) => (whyOpenFor(el) ? goSeason(whyKey(el), e) : openWhy(el, noHover()));
+  const hit = (el, e) => {
+    if (whyOpenFor(el)) { goSeason(whyKey(el), e); return; }
+    const sheet = noHover();
+    // The tap that opens a sheet is not a tap outside it (js/pop.js shuts a
+    // sheet on one), so it stops here.
+    if (openWhy(el, sheet) && sheet && e && e.type === 'click') e.stopPropagation();
+  };
   panel.addEventListener('mouseover', (e) => {
     const el = target(e);
-    if (el && !noHover() && !quiet() && !within(e, el)) openWhy(el, false);
+    if (!el || noHover() || quiet()) return;
+    if (onMan(e.target)) { closeWhy(); return; }
+    if (!within(e, el) || onMan(e.relatedTarget)) openWhy(el, false);
   });
   panel.addEventListener('mouseout', (e) => {
     const el = target(e);
@@ -1047,11 +1118,15 @@ function wireWhy(panel) {
     // drawing it again would only move it.)
     if (el && !noHover() && !whyOpenFor(el)) openWhy(el, false);
   });
-  panel.addEventListener('focusout', () => { if (!noHover()) closeWhy(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWhy(); });
+  panel.addEventListener('focusout', (e) => { if (target(e) && !noHover()) closeWhy(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') whyAt = null; });
   document.addEventListener('click', (e) => {
-    if (!whyPop || whyPop.hidden) return;
-    if (whyPop.contains(e.target) || target(e)) return;
+    const inCard = e.target && e.target.closest ? e.target.closest('#statCard') : null;
+    // THE SHEET'S LINK goes on to Season by week — the lineups of what the
+    // card was of, not merely the panel — so this page follows it itself.
+    const link = inCard && e.target.closest(`a.tc-open[href="${SEASON_LINK.href}"]`);
+    if (link && whyAt) { e.preventDefault(); goSeason(whyAt, e); return; }
+    if (!whyAt || inCard || target(e)) return;
     closeWhy();
   });
   // The outlined week stays until the next click, wherever that is.
@@ -1060,6 +1135,584 @@ function wireWhy(panel) {
     state.markWeek = null;
     paintMark();
   });
+}
+
+// ======================================================= what a cell is made of
+//
+// Tim, 2026-10-08: "If the user is curious about a number or it's breakdown or
+// a detail about a stat or column or anything they should be able to hover over
+// it and show a preview. … Also connectors to other places in the cite using
+// previews is a huge advantage". Plan: docs/previews-plan.md, Decisions.
+//
+// THREE KINDS OF PREVIEW, and every one of them is the site's own:
+//
+//   a MAN     his player card (js/player-card.js), built from the weeks this
+//             page already holds — the world's squads, and the weeks to come
+//             once the chart's read has landed. No request of its own.
+//   a NUMBER  a stat card (js/pop.js): the rows it is made of, the figure they
+//             come to, and where it stands in the league.
+//   a TEAM    a stat card with its record and average, and a click through to
+//             that team (and week) on Analysis.
+//
+// THE NUMBERS' CARDS ARE BUILT WHEN ASKED FOR. A cell says only which card it
+// opens (`data-card`, and whose: `data-wk`, `data-team`); `cardFor` reads the
+// page's own state at that moment. Nothing is registered, so nothing goes stale
+// and a redraw costs nothing. The two shared tables (Standings, the chart) are
+// not this page's markup, so their cells are found by where they sit instead.
+//
+// A CELL WITH A CARD CARRIES NO TITLE — the browser would draw a second preview
+// over the first. What a shared table's title said (where the number stands in
+// the league) is kept as the card's last line.
+//
+// NO WORD HERE IS ALWAYS ON THE PAGE: the page is at its ceiling of visible
+// words (tests/text-audit.mjs), and a card is drawn only when it is opened.
+
+/** Can this page open the shared card at all? (js/pop.js as deployed with it.) */
+const canCard = typeof popCard.wirePops === 'function' && Boolean(showPop);
+
+/**
+ * The attributes of a cell that opens a card: which one, whose, whether a click
+ * goes somewhere (the cursor says so), and a tab stop. '' when it cannot.
+ */
+const cardAt = (kind, attrs = '', go = false) =>
+  (canCard ? ` data-card="${kind}"${attrs}${go ? ' data-go' : ''} tabindex="0"` : '');
+
+/** A deep link from js/links.js, or null on a copy of it too old to have one. */
+const hrefOf = (name, ...args) => (typeof siteLinks[name] === 'function' ? siteLinks[name](...args) : null);
+
+/** Where a link into this page pointed: decisions.html?team=7&week=3 (js/links.js spells the others). */
+const link = {
+  team: typeof siteLinks.readParam === 'function' ? siteLinks.readParam('team') : null,
+  week: typeof siteLinks.readIntParam === 'function' ? siteLinks.readIntParam('week') : null,
+  on: false,
+};
+// It lasts until the reader picks a team himself.
+link.on = link.team !== null || link.week !== null;
+
+// ------------------------------------------------------------------ the scale
+
+/** One value's standing on a scale (js/heat.js `heatOf`), to the tenth it is printed at. */
+const heatAt = (v, scale) => (scale && Number.isFinite(v) && typeof heatScale.heatOf === 'function'
+  ? heatScale.heatOf(round1(v), scale) : null);
+const heatMark = (h) => (h && typeof heatScale.heatMarkHtml === 'function' ? heatScale.heatMarkHtml(h) : '');
+const ord = (n) => (typeof heatScale.ordinal === 'function' ? heatScale.ordinal(n) : `#${n}`);
+
+/**
+ * Every team's total in one week of one world, as a scale: 'real' is what was
+ * scored, 'mirror' the hypothetical. Null for a week anybody is still playing.
+ */
+function weekScale(m, week, which) {
+  if (typeof heatScale.heatScale !== 'function') return null;
+  const teams = state.world.teams;
+  if (teams.some((t) => liveCell(m, t.id, week))) return null;
+  return heatScale.heatScale(teams.map((t) => {
+    const c = m.teams.get(t.id).byWeek[week];
+    return c ? round1(which === 'real' ? c.realTotal : c.total) : null;
+  }));
+}
+
+// ------------------------------------------------------------------- the men
+
+const MAN = 'dzm';
+/** The prefix of Season by week's Avg cards, registered afresh with each draw of it. */
+const AVG = 'dzs';
+/** `${playerId}|${week}` -> the key of his registered card. One a man and week, however often he is drawn. */
+const manKeys = new Map();
+let manWeeks = null;   // week -> squads: what his card is drawn from
+let manById = null;    // playerId -> his latest roster entry
+let manByes = null;    // js/season.js `fetchByeWeeks()`, or null
+
+/** Every card of a man is dead: the weeks they were drawn from have changed. */
+function resetMen(byes) {
+  if (byes !== undefined) manByes = byes;
+  manKeys.clear();
+  manWeeks = null;
+  manById = null;
+  if (typeof manCard.hideTip === 'function') manCard.hideTip();
+  if (typeof manCard.clearRuns === 'function') manCard.clearRuns(MAN);
+}
+
+/** The weeks this page holds: the world's, and over them the ones the chart read. */
+function weeksHeld() {
+  if (manWeeks) return manWeeks;
+  const world = state.world;
+  const out = new Map();
+  const held = world && world.rosters instanceof Map ? world.rosters : new Map();
+  for (const [w, teams] of held) {
+    // The week in play as the world keeps it has a finished man's projection
+    // in `projected` (js/season.js); the card looks for it in `pregame`.
+    const fixed = Number(w) === world.partialWeek
+      ? teams.map((t) => ({ ...t, players: (t.players || []).map((p) => (p.done === true && p.pregame === undefined ? { ...p, pregame: p.projected } : p)) }))
+      : teams;
+    out.set(Number(w), fixed);
+  }
+  const ahead = state.odds && state.odds.ahead instanceof Map ? state.odds.ahead : null;
+  if (ahead) for (const [w, teams] of ahead) if (teams && teams.length) out.set(Number(w), teams);
+  manWeeks = out;
+  return out;
+}
+
+/** A man as a roster has him — his latest entry — or what the world knows of one on none. */
+function manOf(id) {
+  if (!manById) {
+    manById = new Map();
+    const held = weeksHeld();
+    for (const w of [...held.keys()].sort((a, b) => a - b)) {
+      for (const t of held.get(w)) for (const p of t.players || []) manById.set(String(p.playerId), p);
+    }
+  }
+  const known = state.world.players && state.world.players.get(id);
+  return manById.get(String(id)) || { playerId: id, name: playerName(id), position: (known && known.position) || '' };
+}
+
+/** The week the league is on: the one in play, else the first still to come. */
+function nowWeek() {
+  const world = state.world;
+  if (Number.isFinite(world.partialWeek)) return world.partialWeek;
+  const o = state.odds;
+  const open = o && o.data && typeof capture.openWeeks === 'function' ? capture.openWeeks(o.data) : [];
+  return open.length ? open[0] : null;
+}
+
+/**
+ * The attribute that opens a man's player card, or '' when he has none.
+ *
+ * @param {*} id his player id
+ * @param {number|null} week the week he is named in: where his link lands
+ * @param {Object} [o]
+ * @param {boolean} [o.go] a mouse click on the name follows the link (default)
+ * @param {boolean} [o.hoverOnly] a tap is left to the button the name is on
+ */
+function manAttr(id, week = null, { go = true, hoverOnly = false } = {}) {
+  if (id === null || id === undefined || !state.world) return '';
+  if (typeof manCard.playerCardFromWeeks !== 'function' || typeof manCard.registerRun !== 'function') return '';
+  const k = `${id}|${week ?? ''}`;
+  if (!manKeys.has(k)) {
+    const demo = Boolean(state.world.isDemo);
+    const o = state.odds;
+    manKeys.set(k, manCard.registerRun(manCard.playerCardFromWeeks(weeksHeld(), manOf(id), {
+      currentWeek: nowWeek(), byes: manByes, demo,
+      playoffWeeks: o && o.data && typeof capture.playoffWeeks === 'function' ? capture.playoffWeeks(o.data) : [],
+      // The sample league's men are on no Players page.
+      href: demo ? null : hrefOf('playerHref', id, week),
+    }), MAN));
+  }
+  return manCard.tipAttr(manKeys.get(k), { go, hoverOnly });
+}
+
+// ------------------------------------------------------- the numbers' rows
+
+const tenths = (v) => Math.round(v * 10);
+/** A signed tenth, coloured as a difference is everywhere on this page. */
+const signedHtml = (d) => `<span class="${diffClass(d)}">${signedText(d)}</span>`;
+
+/** Rows printed to a tenth that should come to `total`: where they miss, the miss is a row. */
+function withRounding(rows, total) {
+  if (!Number.isFinite(total) || !rows.length || !rows.every((r) => Number.isFinite(r.value))) return rows;
+  const miss = tenths(total) - rows.reduce((a, r) => a + tenths(r.value), 0);
+  return miss ? [...rows, { lead: '', label: 'Rounding', value: miss / 10 }] : rows;
+}
+
+/** A team's decided games in a list of them, in week order: who, the letter, the score. */
+function gamesOf(games, teamId) {
+  const held = new Set(state.world.weeks);
+  return (games || [])
+    .filter((g) => held.has(g.week) && (same(g.homeId, teamId) || same(g.awayId, teamId)))
+    .map((g) => {
+      const home = same(g.homeId, teamId);
+      const mine = home ? g.homeActual : g.awayActual;
+      const theirs = home ? g.awayActual : g.homeActual;
+      if (!Number.isFinite(mine) || !Number.isFinite(theirs)) return null;
+      return {
+        week: g.week, opp: teamName(home ? g.awayId : g.homeId), mine, theirs,
+        letter: mine > theirs ? 'W' : mine < theirs ? 'L' : 'T',
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.week - b.week);
+}
+
+const scoreText = (g) => `${pts1(g.mine)}–${pts1(g.theirs)}`;
+
+/** A record, game by game: "W vs Kenny · 121.9–106.1" a week, coming to the record. */
+function recordSpec(teamId, which, m) {
+  const rec = m.records.get(teamId);
+  if (!rec) return null;
+  const games = gamesOf(which === 'real' ? countedGames(m) : m.games, teamId);
+  return {
+    title: teamName(teamId),
+    sub: which === 'real' ? 'Actual' : 'Hypothetical',
+    rows: games.map((g) => ({ lead: g.week, label: `${g.letter} vs ${g.opp}`, value: scoreText(g) })),
+    total: { label: 'Record', value: recText(rec[which]) },
+  };
+}
+
+/** The games whose result is not the real one, and the two records they make. */
+function flipSpec(teamId, m) {
+  const rec = m.records.get(teamId);
+  const change = rec ? recordDiff(rec.mirror, rec.real) : null;
+  if (!change) return null;
+  const real = new Map(gamesOf(countedGames(m), teamId).map((g) => [g.week, g]));
+  const rows = gamesOf(m.games, teamId)
+    .filter((g) => real.has(g.week) && real.get(g.week).letter !== g.letter)
+    .map((g) => ({ lead: g.week, label: `vs ${g.opp}`, note: scoreText(g), value: `${real.get(g.week).letter} → ${g.letter}` }));
+  return {
+    title: teamName(teamId),
+    sub: 'Record',
+    rows,
+    totals: [
+      { label: 'Actual', value: recText(rec.real) },
+      { label: 'Hypothetical', value: recText(rec.mirror) },
+    ],
+    total: { label: 'Diff', value: change.text },
+  };
+}
+
+/** One week's result: the score that happened over the score that would have. */
+function scoreSpec(week, m) {
+  const id = state.teamId;
+  const g = gameOf(state.world.games, id, week);
+  const rs = scores(g, id);
+  const ms = scores(gameOf(m.games, id, week), id);
+  if (!rs || !ms) return null;
+  const letter = (s) => (s[0] > s[1] ? 'W' : s[0] < s[1] ? 'L' : 'T');
+  const row = (label, s) => ({ label, note: letter(s), value: `${pts1(s[0])}–${pts1(s[1])}` });
+  return {
+    title: `Week ${week}`,
+    sub: `vs ${teamName(g.homeId === id ? g.awayId : g.homeId)}`,
+    rows: [row('Actual', rs), row('Hypothetical', ms)],
+    href: hrefOf('weekHref', week),
+    hrefLabel: 'Open Schedule',
+  };
+}
+
+/** A team's average over its finished weeks, as scored. */
+function avgOf(m, teamId) {
+  const mine = m.teams.get(teamId);
+  const done = Object.values((mine && mine.byWeek) || {}).filter((c) => !c.live);
+  return done.length ? done.reduce((a, c) => a + c.realTotal, 0) / done.length : null;
+}
+
+/** "2nd of 10": where `v` stands among `all`, the highest first. '' when it cannot be said. */
+function rankOf(v, all) {
+  const xs = all.filter(Number.isFinite);
+  if (!Number.isFinite(v) || xs.length < 2) return '';
+  return `${ord(1 + xs.filter((x) => x > v + 1e-9).length)} of ${xs.length}`;
+}
+
+/** A team: its record, its average and where that stands, the week asked about, and what it is projected for now. */
+function teamSpec(teamId, week = null) {
+  const d = selected();
+  const t = teamOf(teamId);
+  if (!d || !t) return null;
+  const m = mirrorOf(d);
+  const rec = m.records.get(t.id);
+  const avg = avgOf(m, t.id);
+  const c = week === null ? null : m.teams.get(t.id).byWeek[week];
+  const now = nowWeek();
+  const proj = state.odds && state.odds.proj && now !== null && state.odds.proj.get(now);
+  const mine = proj ? proj.get(t.id) : null;
+  return {
+    title: teamName(t.id),
+    sub: week === null ? '' : `Week ${week}`,
+    rows: [
+      { label: 'Record', value: recText(rec && rec.real) },
+      ...(avg === null ? [] : [{ label: 'Avg', note: rankOf(avg, state.world.teams.map((x) => avgOf(m, x.id))), value: round1(avg) }]),
+      ...(c ? [{ label: `Week ${week}`, value: round1(c.realTotal) }] : []),
+      ...(Number.isFinite(mine) ? [{ label: `Week ${now} proj`, value: round1(mine) }] : []),
+    ],
+    href: hrefOf('teamHref', t.id, week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** A team's week in one world, as the starters it is the sum of (js/pop.js `teamWeekSpec`). */
+function teamWeekOf(teamId, week, which, m) {
+  const mine = m.teams.get(teamId);
+  const c = mine && mine.byWeek[week];
+  if (!c || typeof popCard.teamWeekSpec !== 'function') return null;
+  const real = which === 'real';
+  const spec = popCard.teamWeekSpec({
+    team: teamName(teamId), week,
+    total: round1(real ? c.realTotal : c.total),
+    starters: (real ? c.realStarters : c.starters).map((p) => ({
+      slot: p.slot, name: shortName(p),
+      pts: p.value !== undefined ? p.value : p.actual,
+      proj: p.noProj || p.known === false ? null : p.projected,
+    })),
+    href: hrefOf('teamHref', teamId, week),
+  });
+  spec.sub = `Week ${week} · ${real ? 'Actual' : 'Hypothetical'}`;
+  const h = heatAt(real ? c.realTotal : c.total, weekScale(m, week, which));
+  if (h) spec.foot = h.words;
+  return spec;
+}
+
+/** A team's season in one world, week by week: the Total row's number. */
+function seasonSpec(teamId, which, m) {
+  const mine = m.teams.get(teamId);
+  if (!mine) return null;
+  const real = which === 'real';
+  const weeks = state.world.weeks.filter((w) => mine.byWeek[w]);
+  const of = (w) => (real ? mine.byWeek[w].realTotal : mine.byWeek[w].total);
+  const sum = weeks.reduce((a, w) => a + of(w), 0);
+  const games = new Map(gamesOf(real ? state.world.games : m.games, teamId).map((g) => [g.week, g]));
+  return {
+    title: teamName(teamId),
+    sub: real ? 'Actual' : 'Hypothetical',
+    rows: withRounding(weeks.map((w) => ({
+      lead: w, label: games.has(w) ? `vs ${games.get(w).opp}` : '', value: round1(of(w)),
+    })), round1(sum)),
+    totals: weeks.length ? [{ label: 'Avg', value: round1(sum / weeks.length) }] : [],
+    total: { label: 'Total', value: round1(sum) },
+  };
+}
+
+/** The men a count counts: the starters the lineup leaves out, or the ones projected for nothing. */
+function menSpec(kind, teamId, week, m) {
+  const mine = m.teams.get(teamId);
+  if (!mine) return null;
+  const bench = kind === 'bench';
+  const rows = [];
+  for (const w of week === null ? state.world.weeks : [week]) {
+    const c = mine.byWeek[w];
+    if (!c) continue;
+    const men = bench
+      ? c.realStarters.filter((r) => !c.starters.some((s) => same(s.playerId, r.playerId)))
+      : c.realStarters.filter((p) => p.projected === 0 && !p.noProj);
+    for (const p of men) {
+      rows.push({
+        lead: week === null ? w : p.slot,
+        label: shortName(p),
+        note: p.noProj || p.known === false ? '' : `proj ${pts1(p.projected)}`,
+        value: pts(p.value !== undefined ? p.value : p.actual).replace('-', '−'),
+      });
+    }
+  }
+  return {
+    title: teamName(teamId),
+    sub: week === null ? '' : `Week ${week}`,
+    rows,
+    total: { label: bench ? 'Bench' : 'Proj 0', value: String(rows.length) },
+  };
+}
+
+/** Hypothetical, Current, and the Difference a cell of a difference view prints. */
+function diffSpec(title, sub, hyp, cur, shown) {
+  return {
+    title, sub,
+    rows: [{ label: 'Hypothetical', value: hyp }, { label: 'Current', value: cur }],
+    total: { label: 'Difference', value: shown },
+  };
+}
+
+/** The card of a cell this page drew itself (`cardAt`). */
+function cardFor(el) {
+  const d = selected();
+  if (!d || !state.world) return null;
+  const m = mirrorOf(d);
+  const kind = el.getAttribute('data-card');
+  const wk = el.hasAttribute('data-wk') ? Number(el.getAttribute('data-wk')) : null;
+  const other = el.hasAttribute('data-team') ? teamOf(el.getAttribute('data-team')) : null;
+  const id = other ? other.id : state.teamId;
+  switch (kind) {
+    case 'res': return scoreSpec(wk, m);
+    case 'resT': case 'recD': return flipSpec(id, m);
+    case 'vs': {
+      const g = gameOf(state.world.games, state.teamId, wk);
+      return g ? teamSpec(g.homeId === state.teamId ? g.awayId : g.homeId, wk) : null;
+    }
+    case 'team': return teamSpec(id);
+    case 'act': return teamWeekOf(id, wk, 'real', m);
+    case 'hyp': return teamWeekOf(id, wk, 'mirror', m);
+    case 'actT': return seasonSpec(id, 'real', m);
+    case 'hypT': return seasonSpec(id, 'mirror', m);
+    case 'recA': return recordSpec(id, 'real', m);
+    case 'recH': return recordSpec(id, 'mirror', m);
+    case 'bench': case 'zero': return menSpec(kind, id, wk, m);
+    case 'tile': {
+      const stat = el.getAttribute('data-stat');
+      if (stat === 'real') return recordSpec(id, 'real', m);
+      if (stat === 'mirror') return recordSpec(id, 'mirror', m);
+      // Points/wk: the weeks it is the average of — the card a team's own
+      // Points/wk opens with all users on, without its way on (this is the team).
+      const spec = teamWhySpec(id);
+      return spec ? { ...spec, href: null, hrefLabel: null } : null;
+    }
+    // Season by week's total row: the starters of that week, or in the
+    // difference view the two totals it is the difference of.
+    case 'sbwT': case 'sbwD': {
+      const team = state.seasonTeamId;
+      const hypSide = Boolean(el.closest && el.closest('#seasonHyp'));
+      if (kind === 'sbwT') return teamWeekOf(team, wk, hypSide ? 'mirror' : 'real', m);
+      const c = m.teams.get(team).byWeek[wk];
+      return c ? diffSpec(teamName(team), `Week ${wk}`, round1(c.total), round1(c.realTotal), signedText(diffOf(c.total, c.realTotal))) : null;
+    }
+    default: return null;
+  }
+}
+
+// ------------------------------------------- the two shared tables' cells
+//
+// Standings and the chart are other pages' tables (js/standings-table.js,
+// js/summary-table.js), drawn here twice. Their cells carry nothing to say
+// which card they open, so a cell is known by its row — `data-place`, the place
+// it was drawn at (`sortPair`), which is its place in the list it was drawn
+// from — and by the column it stands in.
+
+/** What the two pairs were last drawn from: { real, hyp, diff }. */
+const shown = { standings: null, chart: null };
+
+/** A shared table's titles become its cards' last lines (one preview a cell). */
+function untitle(...ids) {
+  if (!canCard) return;
+  for (const id of ids) {
+    for (const td of $(id).querySelectorAll('tbody td[title]')) {
+      td.setAttribute('data-said', td.getAttribute('title'));
+      td.removeAttribute('title');
+    }
+  }
+}
+
+const cellText = (td) => td.textContent.replace(/[▲▼]/g, '').replace(/±\s*\d+/g, '').replace(/\s+/g, ' ').trim();
+const isBlank = (td) => /^[—…]?$/.test(cellText(td));
+const headText = (td, col) => {
+  const row = td.closest('table').querySelector('thead tr:last-child');
+  return row && row.children[col] ? row.children[col].textContent.trim() : '';
+};
+const said = (spec, td) => (spec && !spec.foot && td.getAttribute('data-said')
+  ? { ...spec, foot: td.getAttribute('data-said') } : spec);
+
+/** PTW, Close luck, Luck score, Skill, S+L: the formula with this team's numbers in it. */
+function explainSpec(stats, team, key) {
+  const ex = typeof standingsTable.standingsExplain === 'function'
+    ? standingsTable.standingsExplain(stats, team, key) : null;
+  if (!ex) return null;
+  const num = (r) => (r.signed ? signedText(r.value) : r.value.toFixed(1));
+  return {
+    title: team.name,
+    sub: ex.label,
+    rows: ex.rows.map((r) => ({ label: r.label, value: num(r) })),
+    total: { label: ex.mean ? 'Average' : ex.foot.label, value: num(ex.foot) },
+  };
+}
+
+/** A standings column by where it stands: the figure on a team it prints. */
+const STANDING_KEYS = [null, null, 'avgActual', 'avgProjected', 'totalActual', 'oppAvgActual', 'forMinusAgainst',
+  'actualStdev', null, 'avgLuck', 'pointsToWin', 'scoreDiffLuck', 'luckScore', 'skill', 'skillPlusLuck',
+  'luckStanding', 'projectedStanding', 'actualStanding'];
+
+function standingsCard(td) {
+  const s = shown.standings;
+  const tr = td.parentElement;
+  if (!s || !tr || isBlank(td)) return null;
+  const hypSide = Boolean(td.closest('#standingsHyp'));
+  const stats = hypSide ? s.hyp : s.real;
+  const team = stats.teams[Number(tr.getAttribute('data-place'))];
+  if (!team) return null;
+  const col = [...tr.children].indexOf(td);
+  const label = headText(td, col);
+  if (col === 0) return said(teamSpec(team.id), td);
+  const recOf = (t) => `${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ''}`;
+  const opp = (state.odds && state.odds.oppProj && state.odds.oppProj.get(team.id)) || null;
+
+  // THE DIFFERENCE VIEW: the two numbers the cell is the difference of.
+  if (hypSide && s.diff) {
+    const cur = s.real.teams.find((t) => same(t.id, team.id));
+    if (!cur) return null;
+    const key = STANDING_KEYS[col];
+    const val = (t) => (col === 1 ? recOf(t) : col === 8 ? (opp ? round1(opp.avgOpp) : null)
+      : col >= 15 ? String(t[key]) : Number.isFinite(t[key]) ? round1(t[key]) : null);
+    return diffSpec(team.name, label, val(team), val(cur), cellText(td));
+  }
+
+  if (td.hasAttribute('data-explain')) return explainSpec(stats, team, td.getAttribute('data-explain'));
+  const weekly = team.weekly || [];
+  const letter = (w) => (w.tied ? 'T' : w.won ? 'W' : 'L');
+  const byWeek = (of, how = (v) => round1(v)) => weekly.filter((w) => Number.isFinite(of(w)))
+    .map((w) => ({ lead: w.week, label: `vs ${teamName(w.oppId)}`, value: how(of(w)) }));
+  const base = { title: team.name, sub: label };
+  const total = { label, value: cellText(td) };
+  switch (col) {
+    case 1: return said({ ...base,
+      rows: weekly.map((w) => ({ lead: w.week, label: `${letter(w)} vs ${teamName(w.oppId)}`, value: `${pts1(w.actual)}–${pts1(w.oppActual)}` })),
+      total }, td);
+    case 2: case 4: case 7: return said({ ...base, rows: byWeek((w) => w.actual),
+      totals: col === 7 ? [{ label: headText(td, 2), value: round1(team.avgActual) }] : [], total }, td);
+    case 3: return said({ ...base, rows: byWeek((w) => w.projected), total }, td);
+    case 5: return said({ ...base, rows: byWeek((w) => w.oppActual), total }, td);
+    case 6: return said({ ...base,
+      rows: withRounding([
+        { label: headText(td, 2), value: round1(team.avgActual) },
+        { label: headText(td, 5), value: -round1(team.oppAvgActual) },
+      ], round1(team.forMinusAgainst)).map((r, i) => (i ? { ...r, html: signedText(r.value) } : r)),
+      total }, td);
+    case 8: {
+      if (!opp) return null;
+      const fixtures = (state.odds && state.odds.fixtures) || [];
+      const vs = (week) => {
+        const g = fixtures.find((x) => x.week === week && (same(x.homeId, team.id) || same(x.awayId, team.id)));
+        return g ? `vs ${teamName(same(g.homeId, team.id) ? g.awayId : g.homeId)}` : '';
+      };
+      return said({ ...base, rows: opp.weeks.map((w) => ({ lead: w.week, label: vs(w.week), value: round1(w.opp) })), total }, td);
+    }
+    case 9: return said({ ...base,
+      rows: byWeek((w) => w.luck).map((r) => ({ ...r, html: signedText(r.value) })), total }, td);
+    // A rank: the figure it ranks, and the place that figure takes.
+    case 15: return { ...base, rows: [{ label: headText(td, 12), value: signedText(round1(team.luckScore)) }], total: { label, value: `${ord(team.luckStanding)} of ${stats.teams.length}` } };
+    case 16: return { ...base, rows: [{ label: headText(td, 14), value: signedText(round1(team.skillPlusLuck)) }], total: { label, value: `${ord(team.projectedStanding)} of ${stats.teams.length}` } };
+    case 17: return { ...base,
+      rows: [{ label: headText(td, 1), value: recOf(team) }, { label: headText(td, 4), value: round1(team.totalActual) }],
+      total: { label, value: `${ord(team.actualStanding)} of ${stats.teams.length}` } };
+    default: return null;
+  }
+}
+
+function chartCard(td) {
+  const s = shown.chart;
+  const tr = td.parentElement;
+  if (!s || !tr) return null;
+  const hypSide = Boolean(td.closest('#summaryHyp'));
+  const side = hypSide ? s.hyp : s.real;
+  const row = side.rows[Number(tr.getAttribute('data-place'))];
+  if (!row) return null;
+  const col = [...tr.children].indexOf(td);
+  if (col === 0) return said(teamSpec(row.id), td);
+  if (isBlank(td)) return null;
+  const label = headText(td, col);
+  const pct = (p) => (Number.isFinite(p) ? `${(p * 100).toFixed(1)}%` : null);
+
+  if (hypSide && s.diff) {
+    const cur = s.real.rows.find((r) => same(r.id, row.id));
+    if (!cur) return null;
+    const val = (r) => (col === 1 ? recText(r.record) : col === 2 ? (Number.isFinite(r.luck) ? signedText(round1(r.luck)) : null)
+      : pct(col === 3 ? r.title : r.last));
+    return diffSpec(row.name, label, val(row), val(cur), cellText(td));
+  }
+
+  if (col === 1) {
+    return said({
+      title: row.name, sub: label,
+      rows: gamesOf(side.played, row.id).map((g) => ({ lead: g.week, label: `${g.letter} vs ${g.opp}`, value: scoreText(g) })),
+      total: { label, value: cellText(td) },
+    }, td);
+  }
+  if (col === 2) {
+    // The Stats page's own breakdown of this number, and the way there.
+    const team = side.stats.teams.find((t) => same(t.id, row.id));
+    const spec = team ? explainSpec(side.stats, team, 'luckScore') : null;
+    return spec ? said({ ...spec, sub: label, total: { ...spec.total, label }, href: hrefOf('statsHref', row.id), hrefLabel: 'Open Stats' }, td) : null;
+  }
+  // Title % and Loser %: the seasons it happened in, of the seasons played out.
+  const p = col === 3 ? row.title : row.last;
+  const runs = side.sim && side.sim.result ? side.sim.result.runs : null;
+  if (!Number.isFinite(p) || !runs) return null;
+  return said({
+    title: row.name, sub: label,
+    rows: [{ label: 'Seasons', value: `${commas(Math.round(p * runs))} of ${commas(runs)}` }],
+    total: { label, value: cellText(td) },
+    href: 'schedule.html#simPanel', hrefLabel: 'Open simulation',
+  }, td);
 }
 
 // ------------------------------------------------------------- the three charts
@@ -1127,13 +1780,39 @@ function renderSeason() {
   const avgHeat = (which) => (typeof seasonTable.seasonAvgHeat === 'function'
     ? seasonTable.seasonAvgHeat(world.teams.map((t) => weeksFromMirror(m.teams.get(t.id), which)), { slots: world.slots })
     : null);
+  // A CARD A CELL (2026-10-08; `cards` in js/actual-season-table.js): a man's
+  // cell opens his player card, a week's total its starters, and a row's Avg the
+  // weeks it is the average of with where it stands among the other squads.
+  if (typeof popCard.clearPops === 'function') popCard.clearPops(AVG);
+  const who = teamName(state.seasonTeamId);
+  const cardsOf = (scaleOf) => (canCard ? {
+    man: (week, p) => manAttr(p.playerId, week),
+    total: (week, total, before) => cardAt(before === undefined ? 'sbwT' : 'sbwD', ` data-wk="${week}"`, before === undefined),
+    avg: (slotKey, mean, cells, before) => {
+      if (typeof popCard.statCard !== 'function') return '';
+      const sub = `${slotKey || 'Total'} · Avg`;
+      if (before !== undefined) {
+        return popCard.statCard(diffSpec(who, sub, mean, before, signedText(diffOf(mean, before))), { prefix: AVG, focusable: false });
+      }
+      const h = heatAt(mean, scaleOf ? scaleOf(slotKey) : null);
+      return popCard.statCard({
+        title: who, sub,
+        rows: (cells || []).filter((c) => Number.isFinite(c.points))
+          .map((c) => ({ lead: c.week, label: c.p ? shortName(c.p) : '', value: round1(c.points) })),
+        total: { label: 'Avg', value: mean },
+        foot: h ? h.words : '',
+      }, { prefix: AVG, focusable: false });
+    },
+  } : null);
+  const avgReal = avgHeat('real');
+  const avgHyp = avgHeat('mirror');
   $('seasonCur').innerHTML = actualSeasonTableHtml({ weeks: real, slots: world.slots }, {
     box: 'current', live, sortable: true, heat: heat('real'),
-    proj: true, avg: true, avgHeat: avgHeat('real'), mark: markOf(outs),
+    proj: true, avg: true, avgHeat: avgReal, mark: markOf(outs), cards: cardsOf(avgReal),
   });
   $('seasonHyp').innerHTML = actualSeasonTableHtml({ weeks: hyp, slots: world.slots }, {
     box: 'hypothetical', dim, live, sortable: true, heat: heat('mirror'),
-    proj: true, avg: true, avgHeat: avgHeat('mirror'), mark: markOf(ins),
+    proj: true, avg: true, avgHeat: avgHyp, mark: markOf(ins), cards: cardsOf(avgHyp),
     diffFrom: state.view.season === 'diff' ? real : null,
   });
   sortPair('season');
@@ -1193,7 +1872,7 @@ function standingsOf(games) {
 function renderStandings() {
   const d = selected();
   $('standingsSwitch').innerHTML = viewSwitchHtml(state.view.standings, { box: 'standings' });
-  if (!d) { $('standingsCur').innerHTML = ''; $('standingsHyp').innerHTML = ''; return; }
+  if (!d) { $('standingsCur').innerHTML = ''; $('standingsHyp').innerHTML = ''; shown.standings = null; return; }
   const m = mirrorOf(d);
   // The same games on both sides: a matchup pending in the mirror is in neither.
   const real = standingsOf(countedGames(m));
@@ -1209,11 +1888,14 @@ function renderStandings() {
   // which no decision here moves: the one figure on both halves, so 0.0 as a
   // difference. Dashes until the chart's read has landed.
   const oppProj = (state.odds && state.odds.oppProj) || null;
-  $('standingsCur').innerHTML = standingsTableHtml(real, { highlightId, oppProj });
+  // `explain`: the five formed figures name themselves, for `standingsCard`.
+  $('standingsCur').innerHTML = standingsTableHtml(real, { highlightId, oppProj, explain: canCard });
   $('standingsHyp').innerHTML = standingsTableHtml(hyp, {
-    highlightId, dim: teamDim(m), oppProj,
+    highlightId, dim: teamDim(m), oppProj, explain: canCard,
     diffFrom: state.view.standings === 'diff' ? real : null, diffOppProj: oppProj,
   });
+  shown.standings = { real, hyp, diff: state.view.standings === 'diff' };
+  untitle('standingsCur', 'standingsHyp');
   sortPair('standings');
 }
 
@@ -1393,9 +2075,30 @@ async function loadOdds() {
     aheadFloors = floors;
   }
   o.ready = true;
+  o.ahead = aheadTeams;
   o.oppProj = oppProjOf(o.fixtures, aheadTeams, aheadFloors);
   if (o.oppProj && selected()) renderStandings();
   renderSummary();
+  // THE MEN'S CARDS gain the weeks just read (the rest of each run, and the
+  // week the league is on), so whatever names them is drawn once more.
+  // Never under a card the reader has open (a sheet tapped open in the first
+  // seconds was shut by this redraw, measured at 393px): it waits for the card.
+  if (aheadTeams && aheadTeams.size && selected()) {
+    const world = state.world;
+    const cardOpen = () => ['statCard', 'tipCard'].some((id) => {
+      const el = document.getElementById(id);
+      return Boolean(el) && !el.hasAttribute('hidden');
+    });
+    const redraw = () => {
+      if (state.world !== world || state.odds !== o || !selected()) return;
+      if (cardOpen()) { setTimeout(redraw, 1000); return; }
+      resetMen();
+      renderList();
+      renderResult();
+      renderSeason();
+    };
+    redraw();
+  }
 }
 
 /** How far the mirror moved one team-week, or null where it did not. */
@@ -1555,7 +2258,8 @@ function chartOf(o, m) {
       last: enough && s ? num(s.pLast) : null,
     };
   });
-  return { rows, enough, shadeLuck: enough && weeksPlayed >= MIN_WEEKS_TO_SHADE_LUCK, sim, want };
+  // `stats` and `played` are for the cards: LUCK's parts, the record's games.
+  return { rows, enough, shadeLuck: enough && weeksPlayed >= MIN_WEEKS_TO_SHADE_LUCK, sim, want, stats, played };
 }
 
 // A run is asked for only while the chart is on screen. It is a second or more
@@ -1620,6 +2324,7 @@ function renderSummary() {
   if (!o || !d) {
     $('summaryCur').innerHTML = '';
     $('summaryHyp').innerHTML = '';
+    shown.chart = null;
     oddsStatus(d ? '<span class="searching">Reading the season…</span>' : '');
     return;
   }
@@ -1645,6 +2350,8 @@ function renderSummary() {
     enough: hyp.enough, waiting: Boolean(pending && !hyp.sim), shadeLuck: hyp.shadeLuck,
     dim: teamDim(m), diffFrom: state.view.summary === 'diff' ? real.rows : null,
   });
+  shown.chart = { real, hyp, diff: state.view.summary === 'diff' };
+  untitle('summaryCur', 'summaryHyp');
   // Redrawn when the simulation lands, too: the reader's sort is put back.
   sortPair('summary');
 
@@ -1859,6 +2566,8 @@ $('teamSelect').addEventListener('change', (e) => {
   const t = teamOf(e.target.value);
   if (!t) return;
   prefs.set(`team.${state.leagueKey}`, t.id);
+  link.on = false;
+  state.linkWeek = null;
   simDelay = SIM_DELAY_MS;
   // Picking a team is asking for that team: all users goes off.
   if (state.all) {
@@ -1869,6 +2578,8 @@ $('teamSelect').addEventListener('change', (e) => {
 });
 
 $('allSwitch').addEventListener('change', (e) => {
+  link.on = false;
+  state.linkWeek = null;
   if (state.world) setAll(e.target.checked);
 });
 
@@ -1916,6 +2627,16 @@ document.addEventListener('click', (e) => {
 enableSort($('weekTable'));
 enableSort($('teamTable'));
 wireWhy($('panelResult'));
+// THE PREVIEWS, once for the page: a man's card wherever he is named (the sheet
+// of a week's card included — it is a child of <body>), the cards this page's
+// own cells ask for, and the two shared tables' cells.
+if (typeof manCard.wireTips === 'function') manCard.wireTips(document.body);
+if (canCard) {
+  popCard.wirePops(document.body);
+  popCard.wirePops(document.body, { selector: '[data-card]', card: cardFor });
+  popCard.wirePops(document.body, { selector: '#panelStandings tbody td', card: standingsCard });
+  popCard.wirePops(document.body, { selector: '#panelSummary tbody td', card: chartCard });
+}
 for (const [box, panel] of [['season', 'panelSeason'], ['standings', 'panelStandings'], ['summary', 'panelSummary']]) {
   $(panel).addEventListener('click', (e) => onPairSort(box, e));
   $(panel).addEventListener('keydown', (e) => onPairSort(box, e));

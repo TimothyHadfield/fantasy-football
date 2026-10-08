@@ -44,7 +44,7 @@
       "assertions": 159
     },
     "nav-check.mjs": {
-      "assertions": 141
+      "assertions": 154
     },
     "site-status-check.mjs": {
       "assertions": 95
@@ -212,7 +212,7 @@
       "assertions": 200
     },
     "decisions-check.mjs": {
-      "assertions": 398
+      "assertions": 419
     },
     "test-proj-history.mjs": {
       "assertions": 136
@@ -238,7 +238,7 @@
       "assertions": 87
     },
     "draft-review-check.mjs": {
-      "assertions": 84
+      "assertions": 135
     },
     "pop-check.mjs": {
       "assertions": 114

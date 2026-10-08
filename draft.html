@@ -128,6 +128,10 @@
   .tc-run .k-wait { color: var(--line); }
   .tc-run .now { border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); }
   .tc-run thead th.now { color: var(--text); }
+  /* The draft room's previews (js/draft-page.js, `roomCard`): the same cursor a
+     name with a player card has on "Our draft". Nothing else about the cell. */
+  [data-dcard] { cursor: help; }
+  [data-dcard]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -344,8 +348,8 @@
               <th data-sort>Pos</th>
               <th data-sort>Best now</th>
               <th data-sort>Expected later</th>
-              <th data-sort>Cost of waiting</th>
-              <th data-sort>Chasing it</th>
+              <th data-sort title="Points given up at this position by waiting for your next pick">Cost of waiting</th>
+              <th data-sort title="Teams picking before you that still need this position">Chasing it</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -379,9 +383,9 @@
             <th data-sort>Team</th>
             <th data-sort>Bye</th>
             <th data-sort>Proj</th>
-            <th data-sort>ADP</th>
-            <th data-sort>vs repl.</th>
-            <th data-sort>Lasts</th>
+            <th data-sort title="Average draft position: where he usually goes">ADP</th>
+            <th data-sort title="Projected points above a replacement player at his position">vs repl.</th>
+            <th data-sort title="Chance he is still there at your next pick">Lasts</th>
             <th>Why</th>
             <th><span class="visually-hidden">Mark drafted</span></th>
           </tr></thead>
@@ -426,7 +430,7 @@
               <th class="name" data-sort>Player</th>
               <th data-sort>Proj</th>
               <th data-sort>League avg</th>
-              <th data-sort>Edge</th>
+              <th data-sort title="His projection minus the league average at this slot">Edge</th>
             </tr></thead>
             <tbody></tbody>
           </table>

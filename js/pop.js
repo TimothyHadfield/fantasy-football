@@ -61,6 +61,13 @@
 //       Stats page's fifty cells do this — `td[data-explain]`).
 //   hidePop()              close whatever is open.
 //   statCardHtml(spec, sheet?) -> string   the card's markup, for a test.
+//   showPop(el, spec, { sheet }?) -> bool   open a card beside any element, for
+//                          a page that decides for itself WHEN one opens (the
+//                          Decisions page's Diff: a click with the card open
+//                          goes on, one without opens it). Close with hidePop().
+//   popOpenOn() -> Element|null             the element the open card is beside.
+//   spec.titleHtml         the bold line as trusted markup, in place of `title`
+//                          (a week number with its LIVE badge).
 //   teamWeekCard({ team, week, total, starters, href?, hrefLabel? }) -> attr
 //       a team's week broken into its starters — see below.
 //
@@ -149,7 +156,7 @@ export function statCardHtml(spec, sheet = false) {
   const rows = Array.isArray(s.rows) ? s.rows : [];
   const lead = rows.some((r) => r.lead !== undefined && r.lead !== null);
   const pad = lead ? '<td></td>' : '';
-  const title = `<div class="tc-ident">${esc(s.title ?? '')}` +
+  const title = `<div class="tc-ident">${s.titleHtml ? String(s.titleHtml) : esc(s.title ?? '')}` +
     `${s.sub ? ` <span class="muted">· ${esc(s.sub)}</span>` : ''}</div>`;
   const head = Array.isArray(s.head) && s.head.length
     ? `<thead><tr>${s.head.map((h, i) =>
@@ -246,6 +253,17 @@ function show(el, spec, sheet) {
   if (!sheet) place(el);
   return true;
 }
+
+/**
+ * Open a card beside ANY element, registered or not — the sibling of the
+ * player card's `showCard`. Returns whether one opened.
+ */
+export function showPop(el, spec, { sheet = false } = {}) {
+  return el ? show(el, spec, sheet) : false;
+}
+
+/** The element the open card is beside, or null when none is open. */
+export const popOpenOn = () => (cardEl && !cardEl.hidden ? openFor : null);
 
 /** Follow a card's link the way a click on a link would. */
 function go(href) {

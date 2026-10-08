@@ -33,9 +33,13 @@ import {
 } from './player-card.js';
 import { shortName } from './actual-season-table.js';
 import { scope } from './prefs.js';
-import { savedConfig, onConnection } from './connection.js';
+import { savedConfig, onConnection, coarsePointer } from './connection.js';
+// The shared stat card and the site's links, off their namespaces: a browser
+// holding an older copy of either must not fail this page's import.
+import * as popCard from './pop.js';
+import * as links from './links.js';
 
-const $ = (id) => document.getElementById(id);
+const $ =(id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
@@ -183,6 +187,157 @@ function recompute() {
     rounds: state.rounds,
   });
   state.rec = recommend(state.board, 5);
+  state.heat = roomScales(state.board);
+}
+
+// ------------------------------------------------------------------ previews
+//
+// Tim, 2026-10-08: "If the user is curious about a number or it's breakdown …
+// they should be able to hover over it and show a preview." The room's cards
+// are the shared stat card (js/pop.js), built when one is asked for: an element
+// carries `data-dcard="kind:id"` and `roomCard` reads the room as it stands.
+// No tab stops on the board's cells — there are a thousand of them.
+
+const dcard = (kind, id = '') => ` data-dcard="${kind}:${esc(id)}"`;
+const posWord = (pos) => (pos === 'DST' ? 'D/ST' : pos || '');
+const plus = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(1)}`;
+const hideCards = () => { if (typeof popCard.hidePop === 'function') popCard.hidePop(); };
+
+/** The red/green scales: vs repl. across the whole board, Proj inside each position. */
+function roomScales(board) {
+  const byPos = {};
+  for (const p of board.available) (byPos[p.pos] || (byPos[p.pos] = [])).push(p.proj);
+  const proj = {};
+  for (const [pos, xs] of Object.entries(byPos)) proj[pos] = heatScale(xs);
+  return { vorp: heatScale(board.available.map((p) => p.vorp)), proj };
+}
+
+/** A man in the room: as the board scores him while he is on it, else as the pool has him. */
+function roomPlayer(id) {
+  return (state.board && state.board.available.find((p) => p.id === id)) || playerById(id) || null;
+}
+
+/** `a − b = total`, each as it is printed; a tenth lost to rounding gets its own row. */
+function minusRows(aLabel, a, bLabel, b, total) {
+  const t10 = (v) => Math.round(v * 10);
+  const rows = [
+    { label: aLabel, value: a },
+    { label: bLabel, html: `−${Math.abs(b).toFixed(1)}` },
+  ];
+  const miss = t10(total) - (t10(a) - t10(Math.abs(b)));
+  if (miss) rows.push({ label: 'Rounding', html: plus(miss / 10) });
+  return rows;
+}
+
+function playerSpec(p) {
+  // The built-in pool's ids are made up, so only a league's own pool links out —
+  // and with a mouse only once the draft is over: a stray click on a name must
+  // not walk out of a draft with the clock running.
+  const canGo = state.source === 'live' && typeof links.playerHref === 'function' &&
+    (coarsePointer() || !$('results').classList.contains('hidden'));
+  return {
+    title: p.name,
+    sub: [posWord(p.pos), p.team].filter(Boolean).join(' · '),
+    rows: [
+      { label: 'Proj', value: p.proj },
+      { label: 'ADP', value: p.adp == null ? '—' : p.adp },
+      { label: 'Bye', value: p.bye ? String(p.bye) : '—' },
+      ...(p.injury && p.injury !== 'ACTIVE' ? [{ label: 'Injury', value: p.injury }] : []),
+      // Every note, where the Why column has room for the first.
+      ...(p.notes || []).map((n) => ({ label: n, html: '' })),
+    ],
+    href: canGo ? links.playerHref(p.id) : null,
+    hrefLabel: 'His next 13 weeks',
+  };
+}
+
+function roomCard(el) {
+  const at = String(el.dataset.dcard || '');
+  const kind = at.slice(0, at.indexOf(':'));
+  const raw = at.slice(at.indexOf(':') + 1);
+  const b = state.board;
+  const g = state.grade;
+
+  if (kind === 'g') {
+    if (!g) return null;
+    return {
+      title: `Grade ${g.grade}`,
+      rows: minusRows('Your lineup', g.myTotal, 'League average', g.leagueMean, g.myTotal - g.leagueMean),
+      total: { label: 'Difference', html: plus(g.myTotal - g.leagueMean) },
+      foot: `${ordinal(g.rank)} of ${g.teams} · best ${g.leagueBest.toFixed(1)}`,
+    };
+  }
+  if (kind === 'e') {
+    const s = g && g.bySlot[Number(raw)];
+    if (!s) return null;
+    return {
+      title: s.player ? s.player.name : 'Empty',
+      sub: s.slot,
+      rows: minusRows('Proj', s.proj, 'League avg', s.leagueAvg, s.edge),
+      total: { label: 'Edge', html: plus(s.edge) },
+    };
+  }
+  if (kind === 't') {
+    const i = Number(raw);
+    const l = g && g.lineups[i];
+    if (!l) return null;
+    const h = heatOf(l.total, state.finishScale);
+    return {
+      title: i === state.slot - 1 ? 'You' : `Manager ${i + 1}`,
+      sub: 'Starting lineup',
+      rows: l.slots.map((s) => ({ lead: s.slot, label: s.player ? s.player.name : 'empty', value: s.player ? s.player.proj : 0 })),
+      total: { label: 'Total', value: l.total },
+      foot: h ? h.words : '',
+    };
+  }
+  if (kind === 'c') {
+    const best = b && b.available.find((p) => p.pos === raw && !p.blocked);
+    if (!best) return null;
+    const later = b.expectedLaterByPos[raw] ?? 0;
+    if (best.vorp < later) return null;
+    return {
+      title: posWord(raw),
+      sub: 'Cost of waiting',
+      rows: minusRows(`${best.name} vs repl.`, best.vorp, 'Expected later', later, best.vorp - later),
+      total: { label: 'Cost of waiting', value: best.vorp - later },
+    };
+  }
+
+  const p = roomPlayer(Number(raw));
+  if (!p) return null;
+  if (kind === 'p') return playerSpec(p);
+  if (kind === 'j') {
+    const h = heatOf(p.proj, state.heat && state.heat.proj[p.pos], { what: `${posWord(p.pos)}s on the board` });
+    return { title: p.name, sub: 'Proj', rows: [{ label: 'Proj', value: p.proj }], foot: h ? h.words : '' };
+  }
+  if (!b || p.vorp === undefined) return null;
+  if (kind === 'v') {
+    const h = heatOf(p.vorp, state.heat && state.heat.vorp, { what: 'the board' });
+    return {
+      title: p.name,
+      sub: 'vs repl.',
+      rows: minusRows('Proj', p.proj, `Replacement ${posWord(p.pos)}`, b.replacement[p.pos] ?? 0, p.vorp),
+      total: { label: 'vs repl.', html: plus(p.vorp) },
+      foot: h ? h.words : '',
+    };
+  }
+  if (kind === 'l') {
+    if (!b.myNextPick) return null;
+    const gap = Math.max(0, (b.picksUntilNext ?? 1) - 1);
+    const share = (b.pressure || {})[p.pos] ?? 0;
+    return {
+      title: p.name,
+      sub: 'Lasts',
+      rows: [
+        { label: 'ADP', value: p.adp == null ? '—' : p.adp },
+        { label: 'Your next pick', value: pickLabel(b.myNextPick, state.teams) },
+        { label: 'Picks before it', value: String(gap) },
+        ...(gap ? [{ label: `Teams chasing ${posWord(p.pos)}`, value: `${Math.round(share * gap)} of ${gap}` }] : []),
+      ],
+      total: { label: 'Lasts', value: pct(p.survives) },
+    };
+  }
+  return null;
 }
 
 // ------------------------------------------------------------ practice mode
@@ -290,6 +445,7 @@ function pushHistory(entry) {
 function draftPlayer(id, mine) {
   if (state.drafted.some((d) => d.playerId === id)) return;
   if (draftIsOver()) return;
+  hideCards();
   state.drafted.push({ playerId: id, overall: currentPick(), mine: Boolean(mine) });
 
   if (state.mode === 'practice') {
@@ -306,6 +462,7 @@ function draftPlayer(id, mine) {
  * draft in a state that cannot happen.
  */
 function undo() {
+  hideCards();
   if (state.mode === 'practice') {
     while (state.drafted.length && !state.drafted[state.drafted.length - 1].mine) {
       state.drafted.pop();
@@ -392,6 +549,10 @@ function renderPick() {
   }
   card.classList.remove('hidden');
   $('pcName').textContent = p.name;
+  $('pcName').dataset.dcard = `p:${p.id}`;
+  $('pcVorp').dataset.dcard = `v:${p.id}`;
+  if (state.board.myNextPick) $('pcLast').dataset.dcard = `l:${p.id}`;
+  else delete $('pcLast').dataset.dcard;
   $('pcMeta').textContent =
     `${p.pos} · ${p.team}${p.bye ? ` · bye ${p.bye}` : ''}` +
     `${p.adp != null ? ` · ADP ${fmt(p.adp)}` : ''}` +
@@ -438,7 +599,7 @@ function renderRoster() {
   $('rosterSlots').innerHTML = bySlot.map(({ label, player }) => `
     <div class="slot${player ? '' : ' empty'}">
       <span class="slot-tag">${esc(label)}</span>
-      <span class="slot-name">${player ? esc(player.name) : 'empty'}</span>
+      <span class="slot-name"${player ? dcard('p', player.id) : ''}>${player ? esc(player.name) : 'empty'}</span>
     </div>`).join('');
 
   const bench = mine.filter((p) => !used.has(p.id));
@@ -467,9 +628,9 @@ function renderWait() {
   table.querySelector('tbody').innerHTML = rows.map((r) => `
     <tr>
       <td><strong>${esc(r.pos)}</strong></td>
-      <td data-v="${r.now}">${r.best ? esc(r.best.name) : '—'}</td>
+      <td data-v="${r.now}"${r.best ? dcard('p', r.best.id) : ''}>${r.best ? esc(r.best.name) : '—'}</td>
       <td data-v="${r.later}">${fmt(r.later)}</td>
-      <td data-v="${r.cost}">${fmt(r.cost)}</td>
+      <td data-v="${r.cost}"${r.best && r.now >= r.later ? dcard('c', r.pos) : ''}>${fmt(r.cost)}</td>
       <td data-v="${r.chasing}">${gap ? `${Math.round(r.chasing)} of ${gap}` : '—'}</td>
     </tr>`).join('');
   resort(table);
@@ -483,30 +644,37 @@ function renderBoard() {
     .slice(0, 120);
 
   const table = $('boardTable');
-  table.querySelector('tbody').innerHTML = rows.map((p, i) => `
+  const sc = state.heat || { vorp: null, proj: {} };
+  const heatCls = (h) => (h ? ` class="${h.cls}"` : '');
+  table.querySelector('tbody').innerHTML = rows.map((p, i) => {
+    // Proj against his own position, vs repl. against the whole board.
+    const hp = heatOf(p.proj, sc.proj[p.pos]);
+    const hv = heatOf(p.vorp, sc.vorp);
+    return `
     <tr class="${p.blocked ? 'gone' : ''}">
       <td data-v="${i + 1}">${i + 1}</td>
-      <td class="name">${esc(p.name)}</td>
+      <td class="name"${dcard('p', p.id)}>${esc(p.name)}</td>
       <td>${esc(p.pos)}</td>
       <td>${esc(p.team)}</td>
       <td data-v="${p.bye ?? 99}">${p.bye ?? '—'}</td>
-      <td data-v="${p.proj}">${fmt(p.proj)}</td>
+      <td${heatCls(hp)} data-v="${p.proj}"${dcard('j', p.id)}>${fmt(p.proj)}${heatMarkHtml(hp)}</td>
       <td data-v="${p.adp ?? 999}">${p.adp == null ? '—' : fmt(p.adp)}</td>
-      <td data-v="${p.vorp}">${fmt(p.vorp)}</td>
-      <td data-v="${p.survives}">${state.board.myNextPick ? pct(p.survives) : '—'}</td>
-      <td>${esc((p.notes || [])[0] || '')}</td>
+      <td${heatCls(hv)} data-v="${p.vorp}"${dcard('v', p.id)}>${fmt(p.vorp)}${heatMarkHtml(hv)}</td>
+      <td data-v="${p.survives}"${state.board.myNextPick ? dcard('l', p.id) : ''}>${state.board.myNextPick ? pct(p.survives) : '—'}</td>
+      <td${(p.notes || []).length ? dcard('p', p.id) : ''}>${esc((p.notes || [])[0] || '')}</td>
       <td>
         <button type="button" class="mark" data-id="${p.id}" data-mine="1">Mine</button>
         <button type="button" class="mark" data-id="${p.id}" data-mine="">Taken</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   resort(table);
 }
 
 function renderLog() {
   $('pickLog').innerHTML = state.drafted.slice().reverse().map((d) => {
     const p = playerById(d.playerId);
-    return `<span class="log-pick${d.mine ? ' mine' : ''}">` +
+    return `<span class="log-pick${d.mine ? ' mine' : ''}"${p ? dcard('p', p.id) : ''}>` +
       `<b>${pickLabel(d.overall, state.teams)}</b>${esc(p ? p.name : '?')}</span>`;
   }).join('');
 }
@@ -539,6 +707,10 @@ function showResults() {
     ...d, player: playerById(d.playerId),
   }));
   const g = gradeDraft({ rosters, myIndex: state.slot - 1, picks });
+  // Kept for the cards (`roomCard`): the grade, a slot's edge, a team's lineup.
+  state.grade = g;
+  state.finishScale = heatScale(g.totals);
+  hideCards();
 
   $('room').classList.add('hidden');
   $('setupPanel').classList.add('hidden');
@@ -547,6 +719,8 @@ function showResults() {
   const badge = $('gradeBadge');
   badge.textContent = g.grade;
   badge.dataset.tier = GRADE_TIER[g.grade] || 'ok';
+  badge.dataset.dcard = 'g:';
+  badge.tabIndex = 0;
 
   $('resultTitle').textContent =
     g.rank === 1 ? 'You won the draft' : `You finished ${ordinal(g.rank)} of ${g.teams}`;
@@ -558,13 +732,13 @@ function showResults() {
 
   // Slot-by-slot against the same slot on every other team.
   const lt = $('lineupTable');
-  lt.querySelector('tbody').innerHTML = g.bySlot.map((s) => `
+  lt.querySelector('tbody').innerHTML = g.bySlot.map((s, i) => `
     <tr>
       <td><span class="slot-tag">${esc(s.slot)}</span></td>
-      <td class="name">${s.player ? esc(s.player.name) : '<em>empty</em>'}</td>
+      <td class="name"${s.player ? dcard('p', s.player.id) : ''}>${s.player ? esc(s.player.name) : '<em>empty</em>'}</td>
       <td data-v="${s.proj}">${fmt(s.proj)}</td>
       <td data-v="${s.leagueAvg}">${fmt(s.leagueAvg)}</td>
-      <td data-v="${s.edge}" class="${s.edge >= 0 ? 'pos-edge' : 'neg-edge'}">
+      <td data-v="${s.edge}" class="${s.edge >= 0 ? 'pos-edge' : 'neg-edge'}"${dcard('e', i)}>
         ${s.edge >= 0 ? '+' : ''}${fmt(s.edge)}
       </td>
     </tr>`).join('');
@@ -582,11 +756,13 @@ function showResults() {
   lg.querySelector('tbody').innerHTML = order.map((row, idx) => {
     const isMe = row.i === state.slot - 1;
     const diff = row.total - g.myTotal;
+    // Every team's lineup against the room's.
+    const h = heatOf(row.total, state.finishScale);
     return `
       <tr class="${isMe ? 'me-row' : ''}">
         <td data-v="${idx + 1}">${idx + 1}</td>
         <td class="name">${isMe ? 'You' : `Manager ${row.i + 1}`} <span class="muted">(slot ${row.i + 1})</span></td>
-        <td data-v="${row.total}">${Math.round(row.total)}</td>
+        <td${h ? ` class="${h.cls}"` : ''} data-v="${row.total}"${dcard('t', row.i)}>${Math.round(row.total)}${heatMarkHtml(h)}</td>
         <td data-v="${diff}">${isMe ? '—' : `${diff >= 0 ? '+' : ''}${Math.round(diff)}`}</td>
       </tr>`;
   }).join('');
@@ -742,6 +918,11 @@ function wireRoom() {
     if (e.key === '/') { e.preventDefault(); $('search').focus(); }
     if (e.key === 'u') undo();
   });
+
+  // The room's previews, one delegated set for the room and its results.
+  if (typeof popCard.wirePops === 'function') {
+    popCard.wirePops($('roomView'), { selector: '[data-dcard]', card: roomCard });
+  }
 
   for (const id of ['waitTable', 'boardTable', 'lineupTable', 'leagueTable', 'historyTable']) {
     const el = $(id);
@@ -1080,9 +1261,33 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo }) {
     players.set(id, { name: m.name, position: m.position, ...draftReview.seasonOf(m.byWeek, weeks) });
   }
   const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null });
+
+  // A TEAM'S CARD (the board's headings): its record and average off the games
+  // that are final, and what its lineup is projected for in the week in play.
+  const standing = new Map(data.teams.map((t) => [String(t.id), { w: 0, l: 0, t: 0, pts: 0, n: 0, proj: null }]));
+  for (const g of data.games || []) {
+    if (capture.gameState(g) !== 'final') continue;
+    const win = capture.winnerOf(g);
+    for (const [side, other] of [['home', 'away'], ['away', 'home']]) {
+      const s = standing.get(String(g[`${side}Id`]));
+      if (!s) continue;
+      const pts = finite(g[`${side}Score`]);
+      if (pts !== null) { s.pts += pts; s.n += 1; }
+      if (g.awayId === null || g.awayId === undefined) continue;
+      if (win === side) s.w += 1; else if (win === other) s.l += 1; else if (win === 'tie') s.t += 1;
+    }
+  }
+  if (currentWeek !== null && !finished.has(currentWeek)) {
+    for (const t of rosters.get(currentWeek) || []) {
+      const s = standing.get(String(t.id));
+      const starters = (t.players || []).filter((p) => p.started);
+      if (s && starters.length) s.proj = starters.reduce((a, p) => a + (finite(p.projected) ?? 0), 0);
+    }
+  }
+
   return {
     isDemo, name: data.leagueName, teams: data.teams, weeks, poWeeks, finished, currentWeek,
-    draft, men, byes, slots, rv,
+    draft, men, byes, slots, rv, standing,
     board: draftReview.boardOf(draft),
     // One scale for the whole draft: a pick's colour is its difference against everybody's.
     scale: heatScale(rv.rows.map((r) => r.diff)),
@@ -1225,7 +1430,9 @@ function cardAttr(r) {
   const m = w.men.get(r.playerId);
   if (!m || !m.position) return '';
   // One card a man, however many places on the page name him.
-  if (w.cards.has(r.playerId)) return tipAttr(w.cards.get(r.playerId));
+  // `go`: with a mouse a click on his name goes on to him on Players (a league
+  // read directly; the sample's men have nowhere to go).
+  if (w.cards.has(r.playerId)) return tipAttr(w.cards.get(r.playerId), { go: true });
   const first = w.weeks[0];
   const last = w.weeks[w.weeks.length - 1];
   const run = weekRun({
@@ -1247,7 +1454,7 @@ function cardAttr(r) {
     glance: m.glance,
   }, 'dr');
   w.cards.set(r.playerId, key);
-  return tipAttr(key);
+  return tipAttr(key, { go: true });
 }
 
 /** A difference that opens what it is made of. */
@@ -1305,8 +1512,9 @@ function drawBoard() {
   // How many columns the stylesheet keeps at a readable width (css/app.css, `.dr-board`).
   table.setAttribute('style', `--dr-cols: ${teamIds.length}`);
   table.querySelector('thead').innerHTML = '<tr><th class="dr-rd">Rd</th>' + teamIds.map((id) =>
-    `<th class="dr-col${mine(id)}" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}" ` +
-    `title="${esc(teamName(id))}">${esc(teamName(id))}</button></th>`).join('') + '</tr>';
+    // No `title`: the heading opens the team's card, which carries its whole name.
+    `<th class="dr-col${mine(id)}" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}">` +
+    `${esc(teamName(id))}</button></th>`).join('') + '</tr>';
   table.querySelector('tbody').innerHTML = rows.map((row, i) =>
     `<tr><td class="dr-rd">${i + 1}</td>` + row.map((pk, c) => {
       const id = teamIds[c];
@@ -1365,104 +1573,89 @@ function pickTeam(id) {
   review.teamId = t.id;
   prefs.set(`team.${review.leagueKey}`, t.id);
   $('teamSelect').value = String(t.id);
-  closePop();
+  // The team's own panel is about to be redrawn, and a card open on one of its
+  // numbers with it. One open on a heading of the board stays: that is not redrawn.
+  const on = typeof popCard.popOpenOn === 'function' ? popCard.popOpenOn() : null;
+  if (!(on && on.classList && on.classList.contains('dr-pick-team'))) closePop();
   // Only the team's own panel is redrawn; the board keeps its cells.
   drawTeam();
 }
 
 // ------------------------------------------- where a difference comes from
 //
-// The house pattern (the Stats page's, as copied by Decisions): a mouse hovers
-// or focuses a number and gets a card beside it; a finger has no hover, so a
-// tap opens a sheet with a Close button. A tap outside or Escape shuts either.
-
-let pop = null;
-let popPid = null;
+// The shared stat card (js/pop.js), as everywhere on the site: a mouse hovers or
+// focuses a number and gets the card beside it; a finger has no hover, so a tap
+// opens the same card as a sheet with a Close. A tap outside or Escape shuts it.
 
 function closePop() {
-  if (pop) pop.hidden = true;
-  popPid = null;
+  hideCards();
 }
 
-function popHtml(pid) {
+/** A pick's difference: what he has scored, what is left, where he went and where he would go now. */
+function whySpec(pid) {
   const w = review.world;
   const r = w && !w.empty && w.rv.rows.find((x) => same(x.playerId, pid));
-  if (!r) return '';
+  if (!r) return null;
   const auction = w.draft.type === 'auction';
-  const line = (k, v) => `<tr><td class="name">${k}</td><td class="num">${v}</td></tr>`;
   const said = r.diff === null ? '' : r.diff > 0 ? 'Steal' : r.diff < 0 ? 'Miss' : 'Even';
-  return `<div class="op-h">${esc(nameOf(r))}${r.position ? ` <span class="muted">· ${esc(posSaid(r.position))}</span>` : ''}</div>` +
-    '<table><tbody>' +
-    line('Points so far', fmt(r.soFar)) +
-    line('Projected rest', fmt(r.rest)) +
-    (auction ? line('Paid', `$${r.bid}`) + line('Price rank', r.at) : line('Drafted', `Pick ${r.at}`)) +
-    (r.keeper ? line('Keeper', 'Yes') : '') +
-    line('Worth now', r.now === null ? '—' : `Pick ${r.now}`) +
-    '</tbody>' +
-    (said ? `<tfoot><tr class="op-gap"><td class="name">${said}</td><td class="num">${signed(r.diff)}</td></tr></tfoot>` : '') +
-    '</table><button type="button" class="op-close">Close</button>';
+  const h = r.diff === null ? null : heatOf(r.diff, w.scale);
+  return {
+    title: nameOf(r),
+    sub: r.position ? posSaid(r.position) : '',
+    rows: [
+      { label: 'Points so far', value: fmt(r.soFar) },
+      { label: 'Projected rest', value: fmt(r.rest) },
+      ...(auction
+        ? [{ label: 'Paid', value: `$${r.bid}` }, { label: 'Price rank', value: String(r.at) }]
+        : [{ label: 'Drafted', value: `Pick ${r.at}` }]),
+      ...(r.keeper ? [{ label: 'Keeper', value: 'Yes' }] : []),
+      { label: 'Worth now', value: r.now === null ? '—' : `Pick ${r.now}` },
+    ],
+    total: said ? { label: said, value: signed(r.diff) } : null,
+    // Where the difference stands among every pick of the draft.
+    foot: h ? `${h.standing} picks` : '',
+  };
 }
 
-function openPop(el, sheet) {
-  const html = popHtml(el.dataset.pid);
-  if (!html) return;
-  if (!pop) {
-    pop = document.createElement('div');
-    pop.id = 'drPop';
-    document.body.appendChild(pop);
-    pop.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('.op-close')) closePop(); });
-  }
-  popPid = el.dataset.pid;
-  pop.className = sheet ? 'dr-pop sheet' : 'dr-pop';
-  pop.innerHTML = html;
-  pop.hidden = false;
-  pop.style.left = '';
-  pop.style.top = '';
-  if (sheet || typeof el.getBoundingClientRect !== 'function') return;
-  const r = el.getBoundingClientRect();
-  const pw = pop.offsetWidth;
-  const ph = pop.offsetHeight;
-  const left = Math.max(8, Math.min(r.right - pw, window.innerWidth - pw - 8));
-  const below = r.bottom + 6;
-  pop.style.left = `${left}px`;
-  pop.style.top = `${below + ph <= window.innerHeight - 8 ? below : Math.max(8, r.top - ph - 6)}px`;
+// Set by the board's own click, read by the card: with a mouse the first click
+// on a heading picks that team, and a click on the team already picked goes on
+// to its roster.
+let headGo = false;
+
+/** A team, off the board's heading: its record, its average, this week, and its draft's two ends. */
+function teamSpec(id) {
+  const w = review.world;
+  const t = w && !w.empty && (w.teams || []).find((x) => same(x.id, id));
+  if (!t) return null;
+  const s = w.standing.get(String(t.id)) || null;
+  const avgOf = (x) => (x && x.n ? x.pts / x.n : null);
+  const avg = avgOf(s);
+  const all = [...w.standing.values()].map(avgOf).filter((v) => v !== null);
+  const rank = avg === null || all.length < 2 ? ''
+    : `${ordinal(1 + all.filter((v) => v > avg + 1e-9).length)} of ${all.length}`;
+  const tr = draftReview.teamReview(w.rv.rows, t.id);
+  const end = (label, r) => (r ? [{
+    label, note: shortName({ name: nameOf(r), position: r.position }), html: esc(signed(r.diff)),
+  }] : []);
+  const canGo = !w.isDemo && typeof links.teamHref === 'function' && (coarsePointer() || headGo);
+  return {
+    title: teamName(t.id),
+    rows: [
+      ...(s && s.w + s.l + s.t ? [{ label: 'Record', value: `${s.w}-${s.l}${s.t ? `-${s.t}` : ''}` }] : []),
+      ...(avg === null ? [] : [{ label: 'Avg', note: rank, value: avg }]),
+      ...(s && s.proj !== null ? [{ label: `Week ${w.currentWeek} proj`, value: s.proj }] : []),
+      ...end('Best steal', tr.steal),
+      ...end('Biggest miss', tr.miss),
+    ],
+    href: canGo ? links.teamHref(t.id) : null,
+    hrefLabel: 'Open roster',
+  };
 }
 
 function wirePop(root) {
-  const target = (e) => (e.target && e.target.closest ? e.target.closest('.dr-why') : null);
-  const noHover = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
-  const within = (e, el) => Boolean(e.relatedTarget && el.contains(e.relatedTarget));
-  const open = (el) => Boolean(pop && !pop.hidden && same(popPid, el.dataset.pid));
-  root.addEventListener('mouseover', (e) => {
-    const el = target(e);
-    if (el && !noHover() && !within(e, el)) openPop(el, false);
-  });
-  root.addEventListener('mouseout', (e) => {
-    const el = target(e);
-    if (el && !noHover() && !within(e, el)) closePop();
-  });
-  root.addEventListener('click', (e) => {
-    const el = target(e);
-    if (!el) return;
-    if (noHover() && open(el)) closePop(); else openPop(el, noHover());
-  });
-  root.addEventListener('keydown', (e) => {
-    const el = target(e);
-    if (!el || (e.key !== 'Enter' && e.key !== ' ')) return;
-    e.preventDefault();
-    openPop(el, noHover());
-  });
-  root.addEventListener('focusin', (e) => {
-    const el = target(e);
-    if (el && !noHover() && !open(el)) openPop(el, false);
-  });
-  root.addEventListener('focusout', () => { if (!noHover()) closePop(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
-  document.addEventListener('click', (e) => {
-    if (!pop || pop.hidden) return;
-    if (pop.contains(e.target) || target(e)) return;
-    closePop();
-  });
+  if (typeof popCard.wirePops !== 'function') return;
+  popCard.wirePops(root, { selector: '.dr-why', card: (el) => whySpec(el.dataset.pid) });
+  popCard.wirePops(root, { selector: 'button.dr-pick-team', card: (el) => teamSpec(el.dataset.team) });
 }
 
 // ------------------------------------------------------------------- controls
@@ -1536,7 +1729,10 @@ function initReview() {
   $('teamSelect').addEventListener('change', (e) => pickTeam(e.target.value));
   $('draftBoard').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button.dr-pick-team');
-    if (btn) pickTeam(btn.dataset.team);
+    if (!btn) return;
+    // (This runs before the card's own click, which is on a container above.)
+    headGo = same(btn.dataset.team, review.teamId);
+    pickTeam(btn.dataset.team);
   });
   enableSort($('teamTable'), { defaultIndex: 4, defaultAsc: false });
   wirePop($('reviewView'));

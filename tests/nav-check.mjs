@@ -132,6 +132,77 @@ for (const page of pages) {
   ok(/<meta name="apple-mobile-web-app-capable" content="yes">/.test(html), `${page} stays in the app on iOS`);
 }
 
+// ---- the connection bar under the nav (js/connection.js), connected -----------
+//
+// docs/previews-plan.md, "Top bar": the quiet "Week 5 saved" chip is a LINK to
+// the Schedule page's time panel, and the league's name opens a small card —
+// the season, the week, and when it was last read. Booted for real, with the
+// bridge extension answering at its own seam (cap-harness.mjs); `fetch` throws,
+// so anything the bar asks of the network beyond that would show.
+{
+  const { bootDom, waitFor } = await import('./cap-harness.mjs');
+  const { moduleUrl } = await import('./repo.mjs');
+  const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+  const errors = [];
+  process.on('unhandledRejection', (r) => errors.push(String((r && r.stack) || r)));
+  const { window, document } = bootDom({
+    html: '<!DOCTYPE html><html><body><div id="connBar"></div></body></html>',
+    store: { 'ff.connection': { leagueId: '99', season: 2026, teamId: 1 } },
+    bridge: true,
+    teams: [{ id: 1, name: 'One' }, { id: 2, name: 'Two' }],
+  });
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+  await import(moduleUrl('js/connection.js'));
+  const name = await waitFor(() => document.getElementById('connName'), 10000);
+  await new Promise((r) => setTimeout(r, 150));
+  const fire = (el, type, init = {}) => {
+    const ev = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.assign(ev, init);
+    el.dispatchEvent(ev);
+  };
+  const card = () => {
+    const c = document.getElementById('statCard');
+    return c && !c.hidden ? {
+      head: text(c.querySelector('.tc-ident')), sheet: c.classList.contains('sheet'),
+      rows: [...c.querySelectorAll('tbody tr')].map((tr) => [...tr.children].map(text)),
+      link: Boolean(c.querySelector('.tc-open')), close: Boolean(c.querySelector('.tc-close')),
+    } : null;
+  };
+
+  const chip = document.getElementById('connSaved');
+  ok(chip && chip.tagName === 'A' && chip.getAttribute('href') === 'schedule.html#timePanel',
+    'top bar: the saved chip is a link to the Schedule page’s time panel', chip ? `${chip.tagName} ${chip.getAttribute('href')}` : 'no chip');
+  ok(chip && /conn-chip/.test(chip.getAttribute('class') || '') && /conn-saved/.test(chip.getAttribute('class') || ''), 'top bar: and still the same chip');
+
+  ok(Boolean(name), 'top bar: the league’s name is an element of its own');
+  if (name) {
+    ok(text(name) === 'Capture Stub League' && name.tagName === 'STRONG', 'top bar: it reads as it did, in bold', `${name.tagName} ${text(name)}`);
+    ok(!name.hasAttribute('title') && name.getAttribute('tabindex') === '0', 'top bar: no `title` beside its card, and the keyboard reaches it');
+    ok(/^Connected to Capture Stub League · 2 teams · checked /.test(text(document.querySelector('#connBar .conn-main'))),
+      'top bar: the sentence around it is unchanged', text(document.querySelector('#connBar .conn-main')));
+    fire(name, 'mouseover');
+    const c = card();
+    ok(c && c.head === 'Capture Stub League' && !c.sheet && !c.close, 'top bar: pointing at the name opens the league’s card', JSON.stringify(c));
+    ok(c && c.rows[0][0] === 'Season' && c.rows[0][1] === '2026', 'top bar: the season', JSON.stringify(c && c.rows));
+    const last = c && c.rows[c.rows.length - 1];
+    ok(last && /^Last read/.test(last[0]) && /\d{1,2}:\d{2}/.test(last[1]), 'top bar: and when it was last read, as a time', JSON.stringify(last));
+    ok(c && !/\bSD\b|z-score|step \d of/i.test(JSON.stringify(c)), 'top bar: in plain words');
+    fire(name, 'mouseout');
+    ok(card() === null, 'top bar: moving off shuts it');
+    // A finger: the same card as a sheet with a Close.
+    const mouse = window.matchMedia;
+    const touch = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    window.matchMedia = touch; globalThis.matchMedia = touch;
+    fire(name, 'click');
+    const s = card();
+    window.matchMedia = mouse; globalThis.matchMedia = mouse;
+    ok(s && s.sheet && s.close && s.rows.length === c.rows.length, 'top bar: a tap opens the same card as a sheet with a Close', JSON.stringify(s));
+    fire(document.body, 'keydown', { key: 'Escape' });
+  }
+  ok(errors.length === 0, 'top bar: nothing thrown', errors.join(' | ').slice(0, 300));
+}
+
 for (const w of warnings) console.log(`WARN ${w}`);
 console.log(fail
   ? `${pass} passed, ${fail} failed`

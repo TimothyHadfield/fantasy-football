@@ -83,7 +83,9 @@ async function boot({ store = {}, stubs = true } = {}) {
   const read = () => {
     const board = $('draftBoard');
     const cells = [...board.querySelectorAll('tbody td.dr-cell')].filter((td) => td.querySelector('.dr-name'));
-    const pop = $('drPop');
+    // The shared stat card (js/pop.js); the page's own popover is gone.
+    const pop = $('statCard');
+    const link = pop && pop.querySelector('.tc-open');
     return {
       badge: text($('modeBadge')),
       sub: text($('pageSub')),
@@ -123,11 +125,33 @@ async function boot({ store = {}, stubs = true } = {}) {
       })),
       note: text($('drNote')),
       explainHidden: $('drExplain').hidden,
-      pop: pop && !pop.hidden ? { cls: pop.className, rows: [...pop.querySelectorAll('tr')].map((tr) => [...tr.children].map(text)), head: text(pop.querySelector('.op-h')) } : null,
-      titles: document.querySelectorAll('#reviewView td[title], #reviewView .dr-name[title]').length,
+      pop: pop && !pop.hidden ? {
+        cls: pop.className, rows: [...pop.querySelectorAll('tr')].map((tr) => [...tr.children].map(text)), head: text(pop.querySelector('.tc-ident')),
+        foot: text(pop.querySelector('.sc-foot')), link: link ? [text(link), link.getAttribute('href')] : null,
+        close: Boolean(pop.querySelector('.tc-close')),
+      } : null,
+      oldPop: Boolean($('drPop')),
+      titles: document.querySelectorAll('#reviewView td[title], #reviewView .dr-name[title], #reviewView button[title]').length,
+      goNames: document.querySelectorAll('#reviewView .dr-name[data-tip]:not([data-tip-go])').length,
     };
   };
-  return { ...dom, $, fire, settle, read, errors, calls: () => ({ ...(globalThis.__dr || {}) }) };
+  /** Until `fn()` is back, the pointer is a finger (`(hover: none)` matches). */
+  const asTouch = (fn) => {
+    const mouse = window.matchMedia;
+    const touch = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    window.matchMedia = touch;
+    globalThis.matchMedia = touch;
+    try { return fn(); } finally { window.matchMedia = mouse; globalThis.matchMedia = mouse; }
+  };
+  /** A mouse click, and where it went ('' when it went nowhere). */
+  const clickTo = (el) => {
+    window.location.href = '';
+    fire(el, 'click');
+    const went = window.location.href || '';
+    window.location.href = '';
+    return went;
+  };
+  return { ...dom, $, fire, settle, read, asTouch, clickTo, errors, calls: () => ({ ...(globalThis.__dr || {}) }) };
 }
 
 const CHILDREN = {
@@ -147,7 +171,87 @@ const CHILDREN = {
     const room = p.read();
     p.fire(p.$('viewToggle').querySelector('button[data-view="review"]'), 'click');
     const back = p.read();
-    return { ok, first, picked, byBoard, room, back, fetches: p.fetchCalls, errors: p.errors, prefs: JSON.parse(p.map.get('ff.prefs') || '{}') };
+    // THE SAMPLE GOES NOWHERE: its men and teams are made up.
+    const head = p.document.querySelector(`#draftBoard thead button[data-team="${first.teams[6][0]}"]`);
+    p.fire(head, 'mouseover');
+    const headCard = p.read().pop;
+    const headWent = p.clickTo(head);
+    p.fire(head, 'mouseout');
+    const nameWent = p.clickTo(p.document.querySelector('#teamTable tbody .dr-name'));
+    const headSheet = p.asTouch(() => { p.fire(head, 'click'); return p.read().pop; });
+    p.fire(p.document.body, 'keydown', { key: 'Escape' });
+    return {
+      ok, first, picked, byBoard, room, back, headCard, headWent, nameWent, headSheet,
+      fetches: p.fetchCalls, errors: p.errors, prefs: JSON.parse(p.map.get('ff.prefs') || '{}'),
+    };
+  },
+
+  // THE DRAFT ROOM, on the built-in pool: nothing connected, not one request.
+  async room() {
+    const p = await boot({ stubs: false });
+    await p.settle('demo');
+    const { document } = p;
+    p.fire(p.$('viewToggle').querySelector('button[data-view="room"]'), 'click');
+    p.fire(p.$('startBtn'), 'click');
+    const entered = await waitFor(() => !p.$('room').classList.contains('hidden') && document.querySelector('#boardTable tbody tr'), 20000);
+    const card = () => {
+      const c = p.$('statCard');
+      if (!c || c.hidden) return null;
+      const link = c.querySelector('.tc-open');
+      return {
+        head: text(c.querySelector('.tc-ident')), foot: text(c.querySelector('.sc-foot')),
+        rows: [...c.querySelectorAll('tbody tr')].map((tr) => [...tr.children].map(text)),
+        total: [...c.querySelectorAll('tfoot tr.sc-total td')].map(text),
+        link: link ? link.getAttribute('href') : null, sheet: c.classList.contains('sheet'),
+      };
+    };
+    const over = (el) => { if (!el) return null; p.fire(el, 'mouseover'); const c = card(); const went = p.clickTo(el); p.fire(el, 'mouseout'); return c && { ...c, went }; };
+    const th = (id) => Object.fromEntries([...p.$(id).querySelectorAll('thead th')].map((h) => [text(h), h.getAttribute('title') || '']));
+    const heatOf = (td) => (td.className.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0];
+
+    const rows = [...document.querySelectorAll('#boardTable tbody tr')];
+    const cols = rows.map((tr) => [...tr.children]);
+    const first = cols[0];
+    const board = {
+      rows: rows.length,
+      carded: cols.filter((c) => ['p', 'j', 'v', 'l'].every((k, i) => (c[[1, 5, 7, 8][i]].getAttribute('data-dcard') || '').startsWith(`${k}:`))).length,
+      tabStops: document.querySelectorAll('#boardTable tbody [tabindex]').length,
+      titled: document.querySelectorAll('#roomView [data-dcard][title]').length,
+      projHeat: new Set(cols.map((c) => heatOf(c[5]))).size,
+      vorpHeat: new Set(cols.map((c) => heatOf(c[7]))).size,
+      allHeat: cols.every((c) => heatOf(c[5]) && heatOf(c[7])),
+      otherHeat: cols.filter((c) => [0, 1, 2, 3, 4, 6, 8, 9].some((i) => /heat/.test(c[i].className))).length,
+      // The best QB by projection on the board is green; the best by vs repl. overall too.
+      vorpTop: heatOf(cols.slice().sort((a, b) => Number(b[7].dataset.v) - Number(a[7].dataset.v))[0][7]),
+      vorpLow: heatOf(cols.slice().sort((a, b) => Number(a[7].dataset.v) - Number(b[7].dataset.v))[0][7]),
+    };
+    const cells = { name: text(first[1]), pos: text(first[2]), proj: text(first[5]).replace(/\s*[▲▼]/g, ''), vorp: text(first[7]).replace(/\s*[▲▼]/g, ''), lasts: text(first[8]), why: text(first[9]) };
+    const previews = { name: over(first[1]), proj: over(first[5]), vorp: over(first[7]), lasts: over(first[8]), why: over(first[9]) };
+    const pick = { name: over(p.$('pcName')), vorp: over(p.$('pcVorp')), pcVorp: text(p.$('pcVorp')) };
+    const waitRow = [...document.querySelectorAll('#waitTable tbody tr')].map((tr) => [...tr.children]).find((c) => c[3].hasAttribute('data-dcard'));
+    const wait = waitRow ? { cost: text(waitRow[3]), card: over(waitRow[3]), best: over(waitRow[1]), bestName: text(waitRow[1]) } : null;
+    // A finger: the same card as a sheet, and on the built-in pool no link out of the draft.
+    const sheet = p.asTouch(() => { p.fire(first[1], 'click'); return card(); });
+    p.fire(document.body, 'keydown', { key: 'Escape' });
+    const heads = { board: th('boardTable'), wait: th('waitTable'), lineup: th('lineupTable') };
+
+    // THE WHOLE DRAFT, taking the recommendation every round.
+    let picks = 0;
+    while (p.$('results').classList.contains('hidden') && picks < 40) { p.fire(p.$('takeBtn'), 'click'); picks++; }
+    const done = !p.$('results').classList.contains('hidden');
+    const sub = text(p.$('resultSub'));
+    const lineup = [...document.querySelectorAll('#lineupTable tbody tr')].map((tr) => [...tr.children]);
+    const league = [...document.querySelectorAll('#leagueTable tbody tr')].map((tr) => [...tr.children]);
+    const results = {
+      done, picks, sub, title: text(p.$('resultTitle')), badge: text(p.$('gradeBadge')),
+      grade: over(p.$('gradeBadge')),
+      edge: { cell: text(lineup[0][4]), proj: text(lineup[0][2]), name: text(lineup[0][1]), card: over(lineup[0][4]) },
+      man: over(lineup[0][1]),
+      heat: league.map((c) => heatOf(c[2])),
+      otherHeat: league.filter((c) => [0, 1, 3].some((i) => /heat/.test(c[i].className))).length,
+      team: { cell: text(league[0][2]).replace(/\s*[▲▼]/g, ''), name: text(league[0][1]), card: over(league[0][2]) },
+    };
+    return { entered: Boolean(entered), board, cells, previews, pick, wait, sheet, heads, results, fetches: p.fetchCalls, errors: p.errors };
   },
 
   async live() {
@@ -159,15 +263,38 @@ const CHILDREN = {
 
     // A PREVIEW: the first number in the team's table (a mouse: `matchMedia` says hover).
     const why = p.document.querySelector('#teamTable tbody .dr-why');
-    p.fire(why, 'click');
+    p.fire(why, 'mouseover');
     const pop = p.read().pop;
-    p.fire(p.document.body, 'click');
+    const whyWent = p.clickTo(why);
+    p.fire(why, 'mouseout');
     const shut = p.read().pop;
     // The same man's number on the board opens the same thing.
-    p.fire(p.document.querySelector(`#draftBoard .dr-why[data-pid="${why.dataset.pid}"]`), 'click');
+    p.fire(p.document.querySelector(`#draftBoard .dr-why[data-pid="${why.dataset.pid}"]`), 'mouseover');
     const boardPop = p.read().pop;
     p.fire(p.document.body, 'keydown', { key: 'Escape' });
     const afterEsc = p.read().pop;
+    // A finger: the same card as a sheet with a Close.
+    const sheet = p.asTouch(() => { p.fire(why, 'click'); return p.read().pop; });
+    p.fire(p.document.body, 'keydown', { key: 'Escape' });
+
+    // THE CONNECTORS. His name goes to him on Players.
+    const nameEl = p.document.querySelector('#teamTable tbody .dr-name');
+    const namePid = nameEl.closest('tr').dataset.pid;
+    const nameWent = p.clickTo(nameEl);
+    // A team's heading on the board: its card; a click picks it, the next goes to its roster.
+    const head = p.document.querySelector('#draftBoard thead button[data-team="3"]');
+    p.fire(head, 'mouseover');
+    const headCard = p.read().pop;
+    const headFirst = p.clickTo(head);
+    const headPicked = p.$('teamSelect').value;
+    const headStill = p.read().pop;
+    const headSecond = p.clickTo(head);
+    p.fire(head, 'mouseout');
+    const other = p.document.querySelector('#draftBoard thead button[data-team="5"]');
+    const headSheet = p.asTouch(() => { p.fire(other, 'click'); return p.read().pop; });
+    const sheetPicked = p.$('teamSelect').value;
+    p.fire(p.document.body, 'keydown', { key: 'Escape' });
+    const cardsMeta = { oldPop: first.oldPop, titles: first.titles, goNames: first.goNames };
 
     // ANOTHER TEAM.
     p.$('teamSelect').value = '7';
@@ -184,6 +311,7 @@ const CHILDREN = {
     const again = p.read();
     return {
       ok, okDemo, okWarm, cold, warm, first, pop, shut, boardPop, afterEsc, seven, sample, again,
+      whyWent, sheet, namePid, nameWent, headCard, headFirst, headPicked, headStill, headSecond, headSheet, sheetPicked, cardsMeta,
       keptLeague: kept.league, keptPicks: kept.kept && kept.kept.draft ? kept.kept.draft.picks.length : 0,
       keptWeeks: kept.kept && kept.kept.weeks ? Object.keys(kept.kept.weeks).length : 0,
       fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
@@ -203,7 +331,7 @@ const CHILDREN = {
     const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
     const ok = await p.settle('live');
     const page = p.read();
-    p.fire(p.document.querySelector('#teamTable tbody .dr-why'), 'click');
+    p.fire(p.document.querySelector('#teamTable tbody .dr-why'), 'mouseover');
     return { ok, page, pop: p.read().pop, errors: p.errors };
   },
 };
@@ -312,6 +440,84 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq([r.room.reviewHidden, r.room.roomHidden], [true, false], 'demo: the switch shows the draft room');
     eq([r.back.reviewHidden, r.back.roomHidden], [false, true], 'demo: and back');
     eq(r.prefs['draft.team.demo'], Number(f.teams[6][0]), 'demo: the team is remembered');
+
+    // THE PREVIEWS (2026-10-08, docs/previews-plan.md).
+    eq([f.oldPop, f.goNames], [false, 0], 'demo: no popover of the page’s own, and every name is marked as one a click follows');
+    eq(r.headCard && [r.headCard.cls, r.headCard.head], ['tipcard statcard', f.teams[6][1]], 'demo: a team’s heading on the board opens that team’s card');
+    eq(r.headCard && r.headCard.rows.map((x) => x[0].replace(/(Avg|Best steal|Biggest miss).*/, '$1')),
+      ['Record', 'Avg', 'Week 14 proj', 'Best steal', 'Biggest miss'], 'demo: its record, its average, this week, and its draft’s two ends');
+    ok(r.headCard && /^Avg\d+(st|nd|rd|th) of 10$/.test(r.headCard.rows[1][0]), 'demo: the average says where it stands', r.headCard && r.headCard.rows[1][0]);
+    eq([r.headWent, r.nameWent], ['', ''], 'demo: the sample’s teams and men go nowhere on a click');
+    eq(r.headSheet && [r.headSheet.cls, r.headSheet.link, r.headSheet.close], ['tipcard statcard sheet', null, true], 'demo: a finger gets the same card as a sheet, with no link');
+  }
+}
+
+// ----------------------------------------------------------- the draft room
+{
+  const r = run('room');
+  ok(!r.boot, 'room: boots', r.boot);
+  if (!r.boot) {
+    const n = (s) => Number(String(s).replace('−', '-').replace('+', ''));
+    /** Do a card's rows come to its bold line? (The first row, less the rest.) */
+    const adds = (c) => Boolean(c && c.total.length) &&
+      Math.abs(c.rows.reduce((a, x) => a + n(x[x.length - 1]), 0) - n(c.total[c.total.length - 1])) < 0.01;
+    const { board: b, cells: c, previews: v, results: z } = r;
+    ok(r.entered, 'room: a practice draft opens');
+    eq([r.fetches, r.errors], [[], []], 'room: not one request, no errors');
+
+    // HEADINGS: a one-line title each, and no others.
+    const titled = (o) => Object.entries(o).filter(([, t]) => t).map(([k]) => k);
+    eq([titled(r.heads.board), titled(r.heads.wait), titled(r.heads.lineup)],
+      [['ADP', 'vs repl.', 'Lasts'], ['Cost of waiting', 'Chasing it'], ['Edge']], 'room: the six headings that needed one have a title');
+    ok(Object.values({ ...r.heads.board, ...r.heads.wait, ...r.heads.lineup }).every((t) => t.length < 70 && !/\n/.test(t)), 'room: each one line');
+
+    // THE BOARD.
+    eq([b.rows, b.carded, b.tabStops, b.titled], [120, 120, 0, 0], 'room: all 120 rows open a card on the name, Proj, vs repl. and Lasts — no tab stops, no title beside a card');
+    ok(b.allHeat && b.projHeat >= 5 && b.vorpHeat >= 5, 'room: Proj and vs repl. are on the red/green scale, in several steps', [b.projHeat, b.vorpHeat]);
+    // (The scale is the whole board's; the worst of the 120 rows shown is red, not always the reddest.)
+    eq([b.vorpTop, /^heat-dn-[2-4]$/.test(b.vorpLow), b.otherHeat], ['heat-up-4', true, 0], 'room: the best vs repl. is the greenest, the worst shown is red, and no other column is coloured');
+
+    // A NAME: who he is, his three figures, and every note (the Why column has room for one).
+    ok(v.name && v.name.head.startsWith(`${c.name} · ${c.pos}`), 'room: a name opens his card', v.name && v.name.head);
+    eq(v.name && v.name.rows.slice(0, 3).map((x) => x[0]), ['Proj', 'ADP', 'Bye'], 'room: Proj, ADP, bye');
+    eq(v.name && v.name.rows[0][1], c.proj, 'room: the projection the board prints');
+    // (A man who is hurt has an Injury row between the two.)
+    ok(v.name && v.name.rows.length > 3 && v.name.rows.slice(3).some((x) => x[0] === c.why && x[1] === '') &&
+      v.name.rows.slice(3).every((x) => x[1] === '' || x[0] === 'Injury'),
+      'room: and all his notes, the Why column’s among them', v.name && v.name.rows);
+    eq(v.why, v.name, 'room: the Why cell opens the same card');
+    eq([v.name && v.name.link, v.name && v.name.went, r.sheet && r.sheet.sheet, r.sheet && r.sheet.link], [null, '', true, null],
+      'room: on the built-in pool it links nowhere, with a mouse or as a finger’s sheet');
+    eq(r.sheet && r.sheet.rows, v.name && v.name.rows, 'room: the sheet is the same card');
+
+    // THE NUMBERS.
+    ok(adds(v.vorp), 'room: vs repl. is Proj less the replacement at his position', v.vorp);
+    eq(v.vorp && [v.vorp.rows[0], v.vorp.rows[1][0], n(v.vorp.total[1])], [['Proj', c.proj], `Replacement ${c.pos}`, n(c.vorp)], 'room: and comes to the cell');
+    ok(v.vorp && /of \d+ · avg -?[\d.]+ for the board$/.test(v.vorp.foot), 'room: with where it stands on the board', v.vorp && v.vorp.foot);
+    ok(v.proj && new RegExp(`of \\d+ · avg [\\d.]+ for ${c.pos}s on the board$`).test(v.proj.foot) && v.proj.rows[0][1] === c.proj,
+      'room: Proj says where he stands at his position', v.proj && v.proj.foot);
+    eq(v.lasts && [v.lasts.rows.map((x) => x[0]).slice(0, 3), v.lasts.total], [['ADP', 'Your next pick', 'Picks before it'], ['Lasts', c.lasts]],
+      'room: Lasts is his ADP against the picks before your next one');
+    eq(r.pick.vorp && r.pick.vorp.total[1], r.pick.pcVorp, 'room: the pick card’s own vs repl. opens its breakdown');
+    ok(r.pick.name && r.pick.name.rows.length >= 3, 'room: and its name his card');
+    ok(r.wait && adds(r.wait.card) && r.wait.card.total[1] === r.wait.cost, 'room: Cost of waiting is the best now less what is expected later', r.wait);
+    ok(r.wait && r.wait.best && r.wait.best.head.startsWith(r.wait.bestName), 'room: Best now opens that man');
+
+    // THE RESULTS.
+    ok(z.done && z.picks === 16, 'room: sixteen picks finish the draft', [z.done, z.picks]);
+    eq(z.grade && z.grade.head, `Grade ${z.badge}`, 'room: the grade opens what it is made of');
+    ok(adds(z.grade) && z.grade.rows[0][0] === 'Your lineup' && z.grade.rows[1][0] === 'League average', 'room: your lineup less the league’s average', z.grade);
+    ok(z.grade && z.sub.includes(`lineup: ${Math.round(n(z.grade.rows[0][1]))} points`), 'room: the lineup the page states', [z.sub, z.grade && z.grade.rows[0]]);
+    ok(z.grade && /^\d+(st|nd|rd|th) of 10 · best [\d.]+$/.test(z.grade.foot), 'room: and the finish', z.grade && z.grade.foot);
+    ok(adds(z.edge.card) && n(z.edge.card.total[1]) === n(z.edge.cell) && z.edge.card.rows[0][1] === z.edge.proj && z.edge.card.head.startsWith(z.edge.name),
+      'room: Edge is his projection less the league average at the slot', z.edge);
+    ok(z.man && z.man.head.startsWith(z.edge.name) && z.man.link === null, 'room: a name in the lineup opens his card');
+    ok(z.heat.length === 10 && z.heat.every(Boolean) && /up/.test(z.heat[0]) && /dn/.test(z.heat[9]) && z.otherHeat === 0,
+      'room: Starting lineup is on the scale across the ten teams, best green and worst red', z.heat);
+    ok(z.team.card && z.team.card.rows.length === 9 && adds(z.team.card) && Math.round(n(z.team.card.total[2])) === n(z.team.cell),
+      'room: and opens that team’s nine starters, which come to it', z.team);
+    ok(z.team.card && /of 10 · league avg [\d.]+$/.test(z.team.card.foot), 'room: with where it stands', z.team.card && z.team.card.foot);
+    ok(!/\bSD\b|z-score|standard dev|step \d of/i.test(JSON.stringify([v, r.pick, r.wait, z])), 'room: no card speaks of the scale’s workings');
   }
 }
 
@@ -367,7 +573,23 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
 
     // THE PREVIEW.
     const top = want.byId.get(f.table[0].pid);
-    eq(r.pop && r.pop.cls, 'dr-pop', 'live: a number opens its preview as a card');
+    eq(r.pop && r.pop.cls, 'tipcard statcard', 'live: a number opens its preview as the shared stat card');
+    eq(r.cardsMeta, { oldPop: false, titles: 0, goNames: 0 }, 'live: no popover of the page’s own, no `title` beside a card, every name follows a click');
+    ok(r.pop && /^(Highest|Lowest|\d+(st|nd|rd|th) (highest|lowest)) of 170 picks$/.test(r.pop.foot), 'live: and says where the difference stands among the 170 picks', r.pop && r.pop.foot);
+    eq([r.whyWent, r.pop && r.pop.close], ['', false], 'live: a mouse’s card has no Close and a click on the number goes nowhere');
+    eq(r.sheet && [r.sheet.cls, r.sheet.rows, r.sheet.close, r.sheet.link], ['tipcard statcard sheet', r.pop && r.pop.rows, true, null], 'live: a finger gets the same rows as a sheet with a Close');
+
+    // THE CONNECTORS.
+    eq(r.nameWent, `waivers.html?player=${r.namePid}`, 'live: a click on a name goes to him on Players');
+    const t3 = R.teamReview(want.rv.rows, 3);
+    const short = (x) => x.name.replace(/^(\S)\S*\s+/, '$1. ');
+    eq(r.headCard && [r.headCard.head, r.headCard.rows.map((x) => x[0].replace(/^(Avg).*/, '$1'))],
+      [nameOfTeam(3), ['Record', 'Avg', 'Week 5 proj', `Best steal${short(t3.steal)}`, `Biggest miss${short(t3.miss)}`]],
+      'live: a team’s heading opens its card — record, average, this week, its best steal and biggest miss');
+    eq(r.headCard && r.headCard.rows.slice(3).map((x) => x[1]), [signed(t3.steal.diff), signed(t3.miss.diff)], 'live: with those two differences');
+    eq([r.headFirst, r.headPicked, Boolean(r.headStill)], ['', '3', true], 'live: a click on a heading picks that team, and its card stays');
+    eq(r.headSecond, 'analysis.html?team=3#rosterDetail', 'live: a click on the team already picked goes to its roster on Analysis');
+    eq([r.sheetPicked, r.headSheet && r.headSheet.link], ['5', ['Open roster →', 'analysis.html?team=5#rosterDetail']], 'live: a tap picks the team and its sheet carries the link');
     eq(r.pop && r.pop.head, `${top.name} · ${top.position === 'DST' ? 'D/ST' : top.position}`, 'live: headed by the man');
     eq(r.pop && r.pop.rows, [
       ['Points so far', fmt(top.soFar)], ['Projected rest', fmt(top.rest)], ['Paid', `$${top.bid}`],

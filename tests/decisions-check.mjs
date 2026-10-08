@@ -160,12 +160,14 @@ function swapStub(wrapper) {
 // ------------------------------------------------------------------ children
 
 /** Boot decisions.html on the stub and hand back what a scenario drives it with. */
-async function bootPage(prefs = {}) {
+async function bootPage(prefs = {}, search = '') {
   const errors = trapErrors();
   const { document, window, map } = bootDom({
     html: html('decisions.html'),
     store: { 'ff.prefs': { 'decisions.source': 'live', ...prefs }, 'ff.connection': CONN },
   });
+  // A link in (`decisions.html?team=&week=`): the query the page is opened with.
+  if (search) window.location.search = search;
   const cloud = await import(moduleUrl('js/cloud.js'));
   cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
   await import(moduleUrl('js/decisions-page.js'));
@@ -195,7 +197,9 @@ async function bootPage(prefs = {}) {
 
   // The lineup counts (Bench, Proj 0) are read apart, in `counts` below.
   const isCount = (c) => c.classList.contains('dz-lu') || c.classList.contains('dz-lu0');
-  const cells = (tr) => [...tr.children].filter((c) => !isCount(c)).map(text);
+  // (Actual and Hypothetical are on the red/green scale since 2026-10-08; its
+  // arrow is read apart, in decisions-cards-check.mjs, and is not the number.)
+  const cells = (tr) => [...tr.children].filter((c) => !isCount(c)).map((c) => text(c).replace(/\s*[▲▼]/g, ''));
   const countCells = (tr) => [...tr.children].filter(isCount).map((c) => (c.hasAttribute('hidden') ? null : Number(text(c))));
   const countHeads = (id) => [...document.querySelectorAll(`#${id} thead th`)].filter((c) => isCount(c) && !c.hasAttribute('hidden')).map(text);
   const tableRows = (id) => [...document.querySelectorAll(`#${id} tbody tr`)].map(cells);
@@ -676,6 +680,7 @@ const CHILDREN = {
           v: td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : null,
           cls: (td.className.match(/\bheat(-[a-z0-9]+)*/g) || []).join(' '),
           mark: (text(td).match(/[▲▼]/) || [''])[0], title: td.getAttribute('title') || '', live: live[i + 1],
+          card: td.hasAttribute('data-tip') || td.hasAttribute('data-pop') || td.hasAttribute('data-card'),
           avg: td.classList.contains('avg'),
         })),
       }));
@@ -690,7 +695,7 @@ const CHILDREN = {
     for (const half of ['cur', 'hyp']) {
       for (const row of sheets[0][half]) {
         row.cells.forEach((first, i) => {
-          const same = sheets.map((s) => (s[half].find((r) => r.slot === row.slot) || { cells: [] }).cells[i] || { v: null, cls: '', mark: '', title: '' });
+          const same = sheets.map((s) => (s[half].find((r) => r.slot === row.slot) || { cells: [] }).cells[i] || { v: null, cls: '', mark: '', title: '', card: false });
           if (first.live) {
             heat.liveCells += same.length;
             heat.liveTinted += same.filter((c) => c.cls !== '' || c.mark !== '').length;
@@ -708,7 +713,9 @@ const CHILDREN = {
             if (c.avg) heat.avgCells = (heat.avgCells || 0) + 1;
             if (/heat-(up|dn)/.test(c.cls)) heat.tinted++;
             if (c.mark) heat.marked++;
-            if (want.words && c.title.includes(want.words)) heat.said++;
+            // ONE PREVIEW A CELL (2026-10-08): the words are the cell's card now —
+            // a man's player card, a total's or an Avg's stat card — and no title.
+            if (c.card && !c.title) heat.said++;
             if (c.cls !== want.cls || c.mark !== (want.mark || '')) heat.wrong.push([half, row.slot, i, c.v, c.cls, c.mark, want.cls, want.mark]);
           }
         });
@@ -780,7 +787,7 @@ const CHILDREN = {
                 pjFirst: pj ? pts.firstChild === pj : null,
                 shown: bare(pts || td, '.sbw-pj, .heatmark'), v: td.getAttribute('data-v'),
                 want: pid && projected.has(`${wk}|${pid}`) ? projected.get(`${wk}|${pid}`) : null,
-                title: td.getAttribute('title') || '', lines: pts ? pts.querySelectorAll('br').length : 0,
+                title: td.getAttribute('title') || '', card: td.hasAttribute('data-tip'), lines: pts ? pts.querySelectorAll('br').length : 0,
                 chg: td.classList.contains('sbw-chg'), at: td.classList.contains('dz-at'), inPlay: td.classList.contains('sbw-proj'),
               };
             }),
@@ -790,10 +797,10 @@ const CHILDREN = {
       };
     };
     const pop = () => {
-      const el = p.$('whyPop');
+      const el = p.$('statCard');
       return {
         open: Boolean(el) && !el.hasAttribute('hidden'), cls: el ? el.className : '',
-        buttons: el ? [...el.querySelectorAll('button')].map(text) : [],
+        buttons: el ? [...el.querySelectorAll('a.tc-open, button')].map((b) => text(b).replace(/\s*→$/, '')) : [],
       };
     };
     const weekWhy = (wk) => doc.querySelector(`#weekTable tr[data-wk="${wk}"] .dz-why`);
@@ -814,7 +821,7 @@ const CHILDREN = {
     const previews = () => [...doc.querySelectorAll('#weekTable tbody tr[data-wk]')].map((tr) => {
       const el = tr.querySelector('.dz-why');
       p.fire(el, 'mouseover');
-      const rows = [...p.$('whyPop').querySelectorAll('tbody tr')].filter((r) => r.children.length === 4);
+      const rows = [...p.$('statCard').querySelectorAll('tbody tr')].filter((r) => r.children.length === 4);
       const got = {
         wk: Number(tr.getAttribute('data-wk')),
         started: rows.map((r) => manName(r.children[1])).filter(Boolean),
@@ -901,7 +908,7 @@ const CHILDREN = {
     globalThis.matchMedia = touch;
     p.click(two);
     out.sheet = pop();
-    tap(p.$('whyPop').querySelector('.op-go'));
+    tap(p.$('statCard').querySelector('.tc-open'));
     out.finger = where();
     p.click(p.$('resultLede'));
     p.window.matchMedia = mouse;
@@ -930,7 +937,7 @@ const CHILDREN = {
     const four = doc.querySelector('#teamTable tr[data-team="4"] .dz-why');
     p.click(four);
     out.allSheet = pop();
-    tap(p.$('whyPop').querySelector('.op-go'));
+    tap(p.$('statCard').querySelector('.tc-open'));
     await p.settle();
     out.allFinger = where();
     p.window.matchMedia = mouse;
@@ -956,20 +963,21 @@ const CHILDREN = {
     // below are a man and his score, and his projection is held on its own.
     const cellsOf = (tr) => [...tr.children].map((td) => {
       const c = td.cloneNode(true);
-      for (const x of [...c.querySelectorAll('.dz-pj')]) x.remove();
+      // (nor the red/green scale's arrow beside a week's Actual or Hypothetical)
+      for (const x of [...c.querySelectorAll('.dz-pj, .heatmark')]) x.remove();
       return text(c);
     });
-    const pjOf = (td) => text(td && td.querySelector('.dz-man .dz-pj')) || null;
+    const pjOf =(td) => text(td && td.querySelector('.dz-man .dz-pj')) || null;
     const swapRows = (el) => [...el.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === 4);
     const read = () => {
-      const el = p.$('whyPop');
+      const el = p.$('statCard');
       if (!el) return { open: false };
       return {
-        open: !el.hasAttribute('hidden'), cls: el.className, head: text(el.querySelector('.op-h')),
+        open: !el.hasAttribute('hidden'), cls: el.className, head: text(el.querySelector('.tc-ident')),
         cols: [...el.querySelectorAll('thead th')].map(text),
         rows: [...el.querySelectorAll('tbody tr')].map(cellsOf),
         foot: [...el.querySelectorAll('tfoot tr')].map(cellsOf),
-        close: text(el.querySelector('.op-close')),
+        close: text(el.querySelector('.tc-close')),
         proj: [...el.querySelectorAll('.dz-proj')].map(text),
         // [Started, Instead] of each swap: the projection printed for each man...
         pj: swapRows(el).map((tr) => [pjOf(tr.children[1]), pjOf(tr.children[2])]),
@@ -1032,7 +1040,7 @@ const CHILDREN = {
     out.touchOver = read().open;
     p.click(el);
     out.sheet = read();
-    p.click(p.$('whyPop').querySelector('.op-close'));
+    p.click(p.$('statCard').querySelector('.tc-close'));
     out.afterClose = read().open;
     p.window.matchMedia = mouse;
     globalThis.matchMedia = mouse;
@@ -1087,6 +1095,94 @@ const CHILDREN = {
     if (seven) p.click(seven);
     await p.pick('lineup-perfect:all:all');
     out.all.afterPick = read().open;
+    out.errors = p.errors;
+    return out;
+  },
+
+  /**
+   * THE PREVIEWS (2026-10-08): what a mouse over each kind of cell opens, where
+   * a click on it goes, and that no cell with a card keeps a `title` beside it.
+   * DZ_LINK is the query the page is opened with (`?team=7&week=2`).
+   */
+  async cards() {
+    const p = await bootPage({}, process.env.DZ_LINK || '');
+    const out = { settled: await p.settle() };
+    const doc = p.document;
+    const rowsOf = (c, part) => [...c.querySelectorAll(`.sc-rows ${part} tr`)].map((tr) => [...tr.children].map(text));
+    /** The card a mouse over `el` gets, and where a click on `el` then goes. */
+    const open = (el) => {
+      if (!el) return null;
+      p.fire(el, 'mouseover');
+      const c = [p.$('statCard'), p.$('tipCard')].find((x) => x && !x.hasAttribute('hidden'));
+      const got = c ? {
+        id: c.id, head: text(c.querySelector('.tc-ident')), body: rowsOf(c, 'tbody'), foot: rowsOf(c, 'tfoot'),
+        said: text(c.querySelector('.sc-foot')), t: text(c).slice(0, 200),
+      } : null;
+      p.window.location.href = '';
+      p.click(el);
+      if (got) got.went = p.window.location.href || '';
+      p.fire(el, 'mouseout');
+      return got;
+    };
+    const cell = (td) => (td ? {
+      t: text(td).replace(/\s*[▲▼]/g, ''), heat: /(^| )heat( |$)/.test(td.className), title: td.getAttribute('title'),
+      card: open(td),
+    } : null);
+    const q = (sel) => doc.querySelector(sel);
+    const all = (sel) => [...doc.querySelectorAll(sel)];
+    const beside = () => all('[data-card][title], [data-tip][title], [data-pop][title]').length;
+    out.link = {
+      team: p.$('teamSelect').value, all: Boolean(p.$('allSwitch').checked),
+      linked: all('#weekTable tr.linked').map((tr) => tr.getAttribute('data-wk')),
+    };
+    p.choose(p.$('teamSelect'), 7);
+    await p.settle();
+    out.picked = { linked: all('#weekTable tr.linked').length };
+    await p.pick('lineup-perfect:7:all');
+    out.weeks =all('#weekTable tbody tr[data-wk]').map((tr) => ({
+      wk: tr.getAttribute('data-wk'), vs: cell(tr.querySelector('td.dz-vs')), act: cell(tr.querySelector('td.dz-act')),
+      hyp: cell(tr.querySelector('td.dz-hyp')), res: cell(tr.querySelector('td.dz-res')),
+      bench: cell(tr.querySelector('td.dz-lu')),
+    }));
+    out.total = ['dz-act', 'dz-hyp', 'dz-res'].map((k) => cell(q(`#weekTable tbody.dz-total td.${k}`)));
+    out.tiles = all('#resultStats .v').map(cell);
+    out.season = {
+      man: cell(q('#seasonCur tbody td[data-tip]')), avg: cell(q('#seasonCur tbody td.avg')),
+      total: cell(q('#seasonCur tbody.split td.wk')),
+      men: all('#seasonCur tbody td.wk').filter((td) => td.querySelector('.sbw-pj')).length,
+      menWithCard: all('#seasonCur tbody td.wk[data-tip]').length,
+    };
+    const col = (id, name) => {
+      const heads = all(`#${id} thead tr:last-child th`).map(text);
+      const i = heads.findIndex((h) => h.replace(/[▲▼↑↓]/g, '').trim() === name);
+      return i < 0 ? null : cell(q(`#${id} tbody tr`).children[i]);
+    };
+    out.standings = Object.fromEntries(['PTW', 'Close luck', 'Luck score', 'S+L'].map((n) => [n, col('standingsCur', n)]));
+    out.chart = Object.fromEntries(['LUCK', 'Title %', 'Loser %'].map((n) => [n, col('summaryCur', n)]));
+    out.chart.team = cell(q('#summaryCur tbody tr td'));
+    // (squad 1 is the one with moves on this stub)
+    p.choose(p.$('teamSelect'), 1);
+    await p.settle();
+    const moveId = 'move:mv-adddrop';
+    await p.pick(moveId);
+    const move = p.row(moveId);
+    const lineup = all('.dz-row').find((b) => /^lineup-/.test(b.dataset.kind || ''));
+    p.fire(move, 'mouseover');
+    out.rows = {
+      move: { title: move.getAttribute('title'), tip: move.hasAttribute('data-tip'), card: Boolean(p.$('tipCard') && !p.$('tipCard').hasAttribute('hidden')), who: text(p.$('tipCard') && p.$('tipCard').querySelector('.tc-ident')), t: text(move) },
+      lineup: { title: lineup.getAttribute('title'), tip: lineup.hasAttribute('data-tip') },
+    };
+    p.fire(move, 'mouseout');
+    out.beside = [beside()];
+    p.$('allSwitch').checked = true;
+    p.fire(p.$('allSwitch'), 'change');
+    await p.settle();
+    const tr = q('#teamTable tbody tr');
+    out.teams = {
+      id: tr.getAttribute('data-team'), team: cell(tr.querySelector('td.dz-team')), act: cell(tr.querySelector('td.dz-act')),
+      hyp: cell(tr.querySelector('td.dz-hyp')), res: cell(tr.querySelector('td.dz-res')),
+    };
+    out.beside.push(beside());
     out.errors = p.errors;
     return out;
   },
@@ -1202,12 +1298,14 @@ const RUNS = {
   'lineups-noproj': { child: 'lineups', env: { DZ_NOPROJ: '705:1' } },
   sort: { child: 'sort', env: {} },
   'sort-early': { child: 'sort', env: { CAP_EARLY: '1' } },
+  cards: { child: 'cards', env: {} },
+  'cards-link': { child: 'cards', env: { DZ_LINK: '?team=7&week=2' } },
 };
 
 function child(name, extra = {}) {
   const cfg = RUNS[name];
   const env = { ...process.env };
-  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'DZ_NOPROJ', 'FF_SCEN']) delete env[k];
+  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'DZ_NOPROJ', 'DZ_LINK', 'FF_SCEN']) delete env[k];
   Object.assign(env, cfg.env, extra);
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, cfg.child], {
     encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 64 * 1024 * 1024, timeout: 240000, env,
@@ -1768,7 +1866,9 @@ const cents = (n) => Math.round(n * 100) / 100;
 /** A week's card against its own row: the swaps add up to the Diff, and the foot is the row's. */
 const cardAddsUp = (w) => {
   const c = w.card;
-  if (!c.open || !same(c.cols, WEEK_COLS) || c.close !== 'Close' || !w.shut) return false;
+  // (The shared card draws its Close only in the finger's sheet — read below —
+  // where the page's own card drew one in both and hid the mouse's with CSS.)
+  if (!c.open || !same(c.cols, WEEK_COLS) || c.close !== '' || !w.shut) return false;
   const swaps = c.rows.filter((r) => r.length === 4);
   const foot = Object.fromEntries(c.foot);
   const sum = cents(swaps.reduce((a, r) => a + num(r[3]), 0) + (foot.Rounding ? num(foot.Rounding) : 0));
@@ -1805,7 +1905,7 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
         same(c.foot[1], ['Points/wk', t.row[4]]) && t.row[4] === perWk(c.foot[0][3], weeksHeld) && Number(t.v) === num(t.row[4]);
     }), why.all.teams.map((t) => [t.row, t.v, t.card.foot]));
   ok('a finger gets that as a sheet too, and picking the other lineup shuts what was open',
-    why.all.sheet && why.all.sheet.cls === 'dz-pop sheet' && why.all.sheet.head === `Manager 7 · ${weeksHeld} weeks` && why.all.afterPick === false,
+    why.all.sheet && why.all.sheet.cls === 'tipcard statcard sheet' && why.all.sheet.head === `Manager 7 · ${weeksHeld} weeks` && why.all.afterPick === false,
     [why.all.sheet, why.all.afterPick]);
 
   if (run === 'why') {
@@ -1833,7 +1933,7 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
     ]) && why.addDrop.big.t === 'Biggest swapWk 3 · M. 1 WR4 9.7 → M. 1 WR11 7.9−1.8', [why.addDrop.weeks.map((w) => w.card.rows), why.addDrop.big]);
     ok('the Diff is a button a keyboard reaches, and says what it opens',
       same(why.handle, { tab: '0', role: 'button', label: 'Week 2: the players behind this difference' }), why.handle);
-    const card = { open: true, cls: 'dz-pop', head: 'Week 2 · vs Manager 2' };
+    const card = { open: true, cls: 'tipcard statcard', head: 'Week 2 · vs Manager 2' };
     const is = (got, want) => Object.keys(want).every((k) => got[k] === want[k]);
     ok('a mouse: a click or Enter opens the card; Escape, a click elsewhere and leaving the number each shut it',
       is(why.clicked, card) && why.afterEscape === false && why.afterOutside === false && is(why.afterEnter, card) &&
@@ -1841,7 +1941,7 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
     ok('the Biggest swap line opens its own week', is(why.bigOpened, { open: true, head: 'Week 3 · vs Manager 3' }) &&
       same(why.bigOpened.rows, [['WR', 'M. 1 WR4 9.7', 'M. 1 WR11 7.9', '−1.8']]), why.bigOpened);
     ok('a finger: hovering does nothing, a tap opens a sheet with Close, and Close shuts it',
-      why.touchOver === false && is(why.sheet, { open: true, cls: 'dz-pop sheet', head: 'Week 2 · vs Manager 2', close: 'Close' }) && why.afterClose === false,
+      why.touchOver === false && is(why.sheet, { open: true, cls: 'tipcard statcard sheet', head: 'Week 2 · vs Manager 2', close: 'Close' }) && why.afterClose === false,
       [why.touchOver, why.sheet, why.afterClose]);
   } else {
     const w4 = why.onePerfect.weeks[3];
@@ -1921,11 +2021,11 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
   // every man on one line, with the whole point and 4px a side. A pair longer
   // still wraps (0 over, two men on two lines before the 4px) and never runs off.
   ok('the week preview on a phone: the projection to the whole point, as Season by week, 4px a side, and a sheet’s long pair wraps',
-    has(/\.dz-pop \.dz-pj \{ font-size: 0; \}/) && has(/\.dz-pop \.dz-pj::before \{ content: attr\(data-r\); font-size: 10px; \}/) &&
-    has(/\.dz-pop\.sheet td\.name \{ white-space: normal; max-width: none; \}/) &&
-    has(/\.dz-pop\.sheet td\.name, \.dz-pop\.sheet th\.name \{ padding-left: 4px; padding-right: 4px; \}/), phone.length);
+    has(/\.statcard \.dz-pj \{ font-size: 0; \}/) && has(/\.statcard \.dz-pj::before \{ content: attr\(data-r\); font-size: 10px; \}/) &&
+    has(/\.statcard\.sheet \.dz-swaps td\.name \{ white-space: normal; max-width: none; \}/) &&
+    has(/\.statcard\.sheet \.dz-swaps td\.name, \.statcard\.sheet \.dz-swaps th\.name \{ padding-left: 4px; padding-right: 4px; \}/), phone.length);
   ok('none of it outside the phone block: laptop width is as it was',
-    !/\.dz-fit \.sbw-actual/.test(rest) && !/has\(th\.sorted\)/.test(rest) && !/attr\(data-r\)/.test(rest) && !/white-space: normal; max-width: none/.test(rest) && !/\.dz-pop\.sheet th\.name/.test(rest), '');
+    !/\.dz-fit \.sbw-actual/.test(rest) && !/has\(th\.sorted\)/.test(rest) && !/attr\(data-r\)/.test(rest) && !/white-space: normal; max-width: none/.test(rest) && !/\.statcard\.sheet \.dz-swaps th\.name/.test(rest), '');
 }
 
 // ---- a man the feed sent no projection for: nothing is printed, never a 0
@@ -2007,7 +2107,8 @@ for (const run of ['lineups', 'lineups-early', 'lineups-cents']) {
           if (x.want === null || x.pj !== Number(x.want).toFixed(1) || x.whole !== String(Math.round(x.want)) || !x.pjFirst || x.lines) {
             bad.proj.push([c.id, r.slot, x.wk, x.pj, x.want, x.whole, x.pjFirst]);
           }
-          if (!x.title.includes(`proj ${x.pj}, scored ${x.shown}`)) bad.said.push([c.id, r.slot, x.wk, x.title]);
+          // His two numbers in words are his player card's now (one preview a cell).
+          if (!x.card || x.title) bad.said.push([c.id, r.slot, x.wk, x.title]);
           // Sorting and the scale stay on the score.
           if (Number(Number(x.v).toFixed(1)) !== num(x.shown)) bad.sorts.push([c.id, r.slot, x.wk, x.v, x.shown]);
         }
@@ -2031,7 +2132,7 @@ for (const run of ['lineups', 'lineups-early', 'lineups-cents']) {
     marks >= 20 && bad.marks.length === 0, bad.marks.slice(0, 3));
   ok(`THE PROJECTION: before every score, on the same line, and it is that man’s projection for that week (${projs} cells), with it to the whole point for a phone`,
     projs > 300 && bad.proj.length === 0, bad.proj.slice(0, 4));
-  ok('and the cell says both numbers in words', bad.said.length === 0, bad.said.slice(0, 3));
+  ok('and the cell opens his player card, with no title beside it', bad.said.length === 0, bad.said.slice(0, 3));
   ok(`THE WEEK PREVIEW prints it too: each man of Started and Instead has his Season by week projection before his score (${previewMen} men), one still playing none`,
     previewMen >= 20 && previewMen === marks && bad.preview.length === 0 && (run === 'lineups-early' ? previewInPlay > 0 : previewInPlay === 0), [previewMen, previewInPlay, bad.preview.slice(0, 3)]);
   ok('the Biggest swap line stays a man and his score', bad.big.length === 0, bad.big.slice(0, 3));
@@ -2124,7 +2225,7 @@ for (const run of ['sort', 'sort-early']) {
   ok('Season by week wears the site’s red/green scale: every cell of every squad’s sheet is the shared scale’s for its slot that week',
     h.squads === 10 && h.cells > 300 && h.tinted > 50 && h.marked > 0 && h.wrong.length === 0, h);
   ok('and so does its Avg column: each row’s Avg against the other squads’ Avg in that row', h.avgCells === 220, h.avgCells);
-  ok('a coloured cell says so in words too, never by colour alone', h.said === h.cells, [h.said, h.cells]);
+  ok('a coloured cell opens a card that says so in words, never colour alone — and no title beside the card', h.said === h.cells, [h.said, h.cells]);
   ok('both halves are coloured as the page opens; as a Difference the right half is the difference’s colours, not the scale’s',
     s.tintBefore[0] > 0 && s.tintBefore[1] > 0 && s.tintDiff[0] > 0 && s.tintDiff[1] === 0, [s.tintBefore, s.tintDiff]);
   ok(run === 'sort' ? 'no week is in play here' : 'the week in play is left uncoloured on every sheet',
@@ -2227,6 +2328,88 @@ ok('fewer than one finished week: said in a few words, and no empty panels', !no
   none.status === 'No finished week yet.' && none.hidden.every(Boolean), none.boot || none);
 ok('no console errors', !none.boot && none.errors.length === 0, none.errors);
 
+// ---- the previews (2026-10-08, docs/previews-plan.md): a card a cell
+// Tim: "every number should open what it is made of". Squad 7's perfect
+// hindsight on the stub; a mouse over each kind of cell, then a click on it.
+{
+  const c = child('cards');
+  if (booted(c, 'previews')) {
+    const sum = (card) => cents(card.body.reduce((a, r) => a + num(r[r.length - 1]), 0));
+    const last = (card) => card.foot[card.foot.length - 1];
+    const weekCard = (x, wk, side) => x.card && x.card.id === 'statCard' && x.title === null &&
+      x.card.head === `Manager 7 · Week ${wk} · ${side}` && x.card.body.length === 10 &&
+      same(last(x.card), ['', 'Total', x.t]) && Math.abs(sum(x.card) - num(x.t)) < 0.051 &&
+      x.card.went === `analysis.html?team=7&week=${wk}#rosterDetail`;
+    ok('a week’s Actual and Hypothetical each open the ten starters they are the sum of, and a click goes to that team and week on Analysis',
+      c.weeks.length === 3 && c.weeks.every((w) => weekCard(w.act, w.wk, 'Actual') && weekCard(w.hyp, w.wk, 'Hypothetical')),
+      c.weeks.map((w) => [w.act.card && w.act.card.head, w.act.card && sum(w.act.card), w.act.t, w.act.card && w.act.card.went]));
+    ok('both are on the red/green scale of the league that week, and the card says the standing in words',
+      c.weeks.every((w) => w.act.heat && w.hyp.heat && / of 10 · league avg \d/.test(w.act.card.said) && / of 10 · league avg \d/.test(w.hyp.card.said)),
+      c.weeks.map((w) => [w.act.heat, w.hyp.heat, w.act.card.said]));
+    ok('the opponent opens a team card (record, average and its place, that week) and a click goes to that team and week',
+      c.weeks.every((w) => w.vs.card && w.vs.title === null && w.vs.card.head === `${w.vs.t} · Week ${w.wk}` &&
+        w.vs.card.body[0][0] === 'Record' && /^Avg\d+(st|nd|rd|th) of 10$/.test(w.vs.card.body[1][0]) &&
+        /^analysis\.html\?team=\d+&week=\d#rosterDetail$/.test(w.vs.card.went) && w.vs.card.went.includes(`week=${w.wk}`)),
+      c.weeks.map((w) => [w.vs.card && w.vs.card.head, w.vs.card && w.vs.card.body, w.vs.card && w.vs.card.went]));
+    ok('Result opens the two scores as two rows, Actual over Hypothetical, with the row’s own numbers — and no raw title',
+      c.weeks.every((w) => w.res.card && w.res.title === null && w.res.card.body.length === 2 &&
+        w.res.card.body[0][0].startsWith('Actual') && w.res.card.body[1][0].startsWith('Hypothetical') &&
+        w.res.card.body[0][1].startsWith(`${w.act.t}–`) && w.res.card.body[1][1].startsWith(`${w.hyp.t}–`) &&
+        w.res.card.went === `schedule.html?week=${w.wk}`),
+      c.weeks.map((w) => [w.res.title, w.res.card && w.res.card.body, w.res.card && w.res.card.went]));
+    ok('a Bench count opens exactly the men it counts',
+      c.weeks.every((w) => num(w.bench.t) === 0 ? !w.bench.card || w.bench.card.body.length === 0
+        : w.bench.card && w.bench.card.body.length === num(w.bench.t) && same(last(w.bench.card), ['', 'Bench', w.bench.t])) &&
+      c.weeks.some((w) => num(w.bench.t) > 0),
+      c.weeks.map((w) => [w.bench.t, w.bench.card && w.bench.card.body.length]));
+    ok('the Total row: each total opens its weeks, which add up to it',
+      [0, 1].every((i) => c.total[i].card && c.total[i].card.body.length === 3 && same(last(c.total[i].card), ['', 'Total', c.total[i].t]) &&
+        Math.abs(cents(c.total[i].card.body.filter((r) => r[1] !== 'Rounding').reduce((a, r) => a + num(r[2]), 0)) - num(c.total[i].t)) < 0.16) &&
+      Boolean(c.total[2].card), c.total.map((t) => [t.t, t.card && t.card.body, t.card && t.card.foot]));
+    ok('the three tiles: each record opens its games, Points/wk its weeks',
+      c.tiles.length === 3 && c.tiles.every((t) => t.card && t.title === null && t.card.body.length === 3) &&
+      same(last(c.tiles[0].card), ['', 'Record', c.tiles[0].t]) && same(last(c.tiles[1].card), ['', 'Record', c.tiles[1].t]) &&
+      same(last(c.tiles[2].card), ['Points/wk', c.tiles[2].t]), c.tiles.map((t) => [t.t, t.card && t.card.foot]));
+    ok('Season by week: every man’s cell opens his player card (a click goes to him on Players, that week), with no title',
+      c.season.men === 30 && c.season.menWithCard === 30 && c.season.man.card && c.season.man.card.id === 'tipCard' &&
+      c.season.man.title === null && c.season.man.card.head.startsWith('Manager 7 QB0') && c.season.man.card.went === 'waivers.html?player=700&week=1',
+      [c.season.men, c.season.menWithCard, c.season.man]);
+    ok('its Avg opens the weeks it is the average of with its standing, and a week’s total its starters',
+      c.season.avg.card && c.season.avg.card.body.length === 3 && same(last(c.season.avg.card), ['', 'Avg', c.season.avg.t]) &&
+      Math.abs(sum(c.season.avg.card) / 3 - num(c.season.avg.t)) < 0.051 && / of 10 · league avg /.test(c.season.avg.card.said) &&
+      c.season.total.card && c.season.total.card.body.length === 10 && same(last(c.season.total.card), ['', 'Total', c.season.total.t]),
+      [c.season.avg, c.season.total.card && c.season.total.card.foot]);
+    ok('Standings: PTW, Close luck, Luck score and S+L each open the formula with that team’s numbers in it',
+      ['PTW', 'Close luck', 'Luck score', 'S+L'].every((k) => c.standings[k] && c.standings[k].card && c.standings[k].title === null &&
+        c.standings[k].card.head.endsWith(` · ${k}`) && c.standings[k].card.body.length >= 2 &&
+        num(last(c.standings[k].card)[1]) === num(c.standings[k].t)),
+      Object.entries(c.standings).map(([k, v]) => [k, v && v.t, v && v.card && v.card.foot]));
+    ok('the chart: LUCK opens its parts (and goes to Stats), Title % and Loser % the seasons counted (and go to the simulation), a name its team card',
+      c.chart.LUCK.card && c.chart.LUCK.card.body.length >= 3 && c.chart.LUCK.card.went === 'stats.html?team=10' &&
+      ['Title %', 'Loser %'].every((k) => c.chart[k].card && /^[\d,]+ of [\d,]+$/.test(c.chart[k].card.body[0][1]) &&
+        c.chart[k].card.body[0][0] === 'Seasons' && c.chart[k].card.went === 'schedule.html#simPanel') &&
+      c.chart.team.card && c.chart.team.card.went === 'analysis.html?team=10#rosterDetail',
+      [c.chart.LUCK.card, c.chart['Title %'].card, c.chart.team.card && c.chart.team.card.went]);
+    ok('a move’s row opens the player card of the man added, in place of a title that repeated the row; a lineup row keeps its title',
+      c.rows.move.title === null && c.rows.move.tip && c.rows.move.card && c.rows.move.who.startsWith('Free Agent WR') &&
+      Boolean(c.rows.lineup.title) && !c.rows.lineup.tip, c.rows);
+    ok('ALL USERS: a team’s name opens its team card and goes to it on Analysis; each record opens its games; Result the two records',
+      c.teams.team.card && c.teams.team.card.went === `analysis.html?team=${c.teams.id}#rosterDetail` &&
+      c.teams.act.card && c.teams.act.card.body.length === 3 && same(last(c.teams.act.card), ['', 'Record', c.teams.act.t]) &&
+      c.teams.hyp.card && same(last(c.teams.hyp.card), ['', 'Record', c.teams.hyp.t]) &&
+      c.teams.res.card && c.teams.res.title === null, c.teams);
+    ok('ONE PREVIEW A CELL: nothing that opens a card keeps a title beside it, with one user or all', same(c.beside, [0, 0]), c.beside);
+    ok('opened plain, the page is on its own team with no week marked', c.link.linked.length === 0 && c.link.all === false, c.link);
+  }
+  // decisions.html?team=7&week=2 — the way in other pages link to.
+  const l = child('cards-link');
+  if (booted(l, 'a link in')) {
+    ok('decisions.html?team=7&week=2 opens on squad 7, one user, with week 2’s row marked',
+      l.link.team === '7' && l.link.all === false && same(l.link.linked, ['2']), l.link);
+    ok('picking a team by hand ends the link: no week stays marked', l.picked.linked === 0, l.picked);
+  }
+}
+
 for (const f of fails) console.log('FAIL ' + f);
-console.log(fails.length ? `${pass} passed, ${fails.length} failed` : `All ${pass} assertions passed`);
+console.log(fails.length ?`${pass} passed, ${fails.length} failed` : `All ${pass} assertions passed`);
 process.exit(fails.length ? 1 : 0);
