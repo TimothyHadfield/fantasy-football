@@ -1281,9 +1281,11 @@ async function check(scenario, { document, window, errors, rejections }) {
         !document.querySelector('#overviewTable tbody a.pref'),
         `${document.querySelectorAll('#overviewTable td[data-tip]').length} tips, ` +
         `${document.querySelectorAll('#overviewTable tbody a.pref').length} links`);
-      c.ok('but it says who fills the slot in a title, which a finger can open',
+      // 2026-10-08: who fills the slot is a stat card now (js/pop.js) — rows a
+      // finger opens as a sheet — and a card and a `title` never share a cell.
+      c.ok('but it says who fills the slot in a card (or a title), which a finger can open',
         [...document.querySelectorAll('#overviewTable tbody td.slot-avg')]
-          .every((td) => td.hasAttribute('title')) &&
+          .every((td) => td.hasAttribute('title') !== td.hasAttribute('data-pop')) &&
         document.querySelectorAll('#overviewTable tbody td.slot-avg').length > 0,
         'a slot-average cell with nothing to say');
 

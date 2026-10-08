@@ -121,7 +121,7 @@
       "assertions": 135
     },
     "an-test.mjs": {
-      "assertions": 2588,
+      "assertions": 2613,
       "scenarios": 28
     },
     "test-summary.mjs": {
@@ -191,7 +191,7 @@
       "scenarios": 4
     },
     "pages-done-check.mjs": {
-      "assertions": 177
+      "assertions": 181
     },
     "record-live-check.mjs": {
       "assertions": 82
@@ -219,7 +219,7 @@
       "scenarios": 10
     },
     "proj-changes-check.mjs": {
-      "assertions": 100
+      "assertions": 102
     },
     "test-must-win.mjs": {
       "assertions": 67

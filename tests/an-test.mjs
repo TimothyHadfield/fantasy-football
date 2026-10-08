@@ -237,9 +237,12 @@ function historySnap(document) {
     v: td.getAttribute('data-v'),
     cls: td.getAttribute('class') || '',
     pid: td.getAttribute('data-pid'),
-    title: td.getAttribute('title') || '',
+    title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
     label: (td.querySelector('a.pref') || { getAttribute: () => '' }).getAttribute('aria-label') || '',
-    html: td.outerHTML,
+    // A card's KEY is a counter over the whole table (js/pop.js, js/player-card.js),
+    // so it moves when an earlier cell gains or loses a card. Which card a cell
+    // opens is asked elsewhere; here only that it has one.
+    html: td.outerHTML.replace(/ data-(pop|tip)="[^"]*"/g, ' data-$1="·"'),
   });
   const group = (table) => {
     const th = table.querySelector('thead th.hist-group');
@@ -386,7 +389,7 @@ const SCENARIOS = {
             text: td.textContent.trim(),
             v: td.getAttribute('data-v'),
             cls: td.getAttribute('class') || '',
-            title: td.getAttribute('title') || '',
+            title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
           })),
         })),
         legend: $('overviewLegend').textContent.replace(/\s+/g, ' ').trim(),
@@ -436,7 +439,7 @@ const SCENARIOS = {
         // words live on the link's aria-label and on the card itself.
         aria: (td.querySelector('a.pref') || { getAttribute: () => null })
           .getAttribute('aria-label') || '',
-        title: td.getAttribute('title') || '',
+        title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
       });
       globalThis.__an = {
         measure: [...$('measureToggle').querySelectorAll('button[data-measure]')]
@@ -563,12 +566,34 @@ const SCENARIOS = {
         pn.lineAfter = tx(line);
 
         pn.starters = names('#startersTable tbody td.name');
+        // THE HARD CONSTRAINT (Tim, 2026-09-18): a Position cell keeps NO card.
+        pn.positionCards = document.querySelectorAll('#seasonSlots td[data-pid][data-tip], #seasonSlots td[data-pid][data-pop]').length;
+        // The same card on a man's week cells as on his name (Tim, 2026-10-08).
+        const sameCard = (rows) => {
+          let cells = 0;
+          let wrong = 0;
+          let titled = 0;
+          for (const tr of rows) {
+            const key = tr.querySelector('td.name') && tr.querySelector('td.name').getAttribute('data-tip');
+            for (const td of tr.querySelectorAll('td.wk')) {
+              if (!/\d/.test(td.textContent)) continue;
+              cells += 1;
+              if (!key || td.getAttribute('data-tip') !== key) wrong += 1;
+              if (td.hasAttribute('title')) titled += 1;
+            }
+          }
+          return { cells, wrong, titled };
+        };
+        pn.startCells = sameCard([...document.querySelectorAll('#startersTable tbody tr')]);
+        pn.startCellCard = hover(document.querySelector('#startersTable tbody td.wk.hist[data-tip]'));
         document.querySelector('#seasonRowsToggle button[data-rows="player"]').click();
         await sleep(80);
         pn.players = names('#seasonSlots td.name');
         const wk1 = document.querySelector('#seasonSlots tr td.hist');
-        pn.playerWk1 = wk1 ? wk1.getAttribute('title') || '' : '';
+        pn.playerWk1 = wk1 ? wk1.getAttribute('title') || wk1.getAttribute('aria-label') || '' : '';
         pn.cellTips = document.querySelectorAll('#seasonTable tbody td.wk[data-tip]').length;
+        pn.playerCells = sameCard([...document.querySelectorAll('#seasonSlots tr')]);
+        pn.playerCellCard = hover(wk1);
         document.querySelector('#seasonRowsToggle button[data-rows="position"]').click();
         await sleep(80);
         out.pn = pn;
@@ -774,7 +799,7 @@ const SCENARIOS = {
               text: td.textContent.trim(),
               v: td.getAttribute('data-v'),
               cls: td.getAttribute('class') || '',
-              title: td.getAttribute('title') || '',
+              title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
             })),
           })),
         };
@@ -1043,7 +1068,8 @@ const SCENARIOS = {
             slot: tr.children[0].textContent.trim(),
             slotV: tr.children[0].getAttribute('data-v'),
             name: tr.children[1].textContent.trim(),
-            proj: tr.children[4].textContent.trim(),
+            // The number as drawn, without the ▲ / ▼ a coloured cell may carry.
+            proj: tr.children[4].textContent.replace(/[▲▼]/g, '').trim(),
             btn: b
               ? {
                   id: b.getAttribute('data-swap'),
@@ -1200,7 +1226,7 @@ const SCENARIOS = {
             v: td.getAttribute('data-v'),
             st: /\bst\b/.test(td.getAttribute('class') || ''),
             fx: /\bfx\b/.test(td.getAttribute('class') || ''),
-            title: td.getAttribute('title') || '',
+            title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
           })),
           links: [...tr.querySelectorAll('a.pref')].map((a) => a.getAttribute('href')),
         })),
@@ -1399,7 +1425,7 @@ const SCENARIOS = {
         text: td.textContent.replace(/\s+/g, ' ').trim(),
         cls: td.getAttribute('class') || '',
         v: td.getAttribute('data-v'),
-        title: td.getAttribute('title') || '',
+        title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
       };
       const w2 = gridTd(document, 'overview', 4, 2);
       out.weekCell02 = cellInfo(w2);
@@ -1695,7 +1721,7 @@ const SCENARIOS = {
         rows: [...table.querySelectorAll('tbody tr')].map((tr) => ({
           team: Number(tr.getAttribute('data-team')),
           total: totalAt >= 0 ? tr.children[totalAt].getAttribute('data-v') : null,
-          totalSays: totalAt >= 0 ? tr.children[totalAt].getAttribute('title') || '' : '',
+          totalSays: totalAt >= 0 ? tr.children[totalAt].getAttribute('title') || tr.children[totalAt].getAttribute('aria-label') || '' : '',
           // The kicker's own cell, which must stay ESPN's number: a man is
           // never floored, only the squad's total is.
           k: tr.children[head.findIndex((th) => th.textContent.trim() === 'K')]?.getAttribute('data-v') ?? null,
@@ -2170,7 +2196,7 @@ async function checkHistory(c, scenario) {
         new RegExp(`^T${TEAM} Player 01 was projected 19\\.3 before kickoff in week 1, and scored 14\\.3\\.`).test(p.title), p.title);
       c.ok('WHO TO START: the shading still says the best legal lineup, on the cell that now holds a score',
         /\bhist\b/.test(a.cls) && /\bst\b/.test(a.cls) &&
-        /is in the best legal lineup for week 1, at RB\.$/.test(a.title), `${a.cls} / ${a.title}`);
+        /is in the best legal lineup for week 1, at RB\./.test(a.title), `${a.cls} / ${a.title}`);
     }
     c.ok('WHO TO START: a played week is marked as history, a week to come never is',
       [SA, SP].every((snap) => snap.rows.every((r) =>
@@ -2306,8 +2332,22 @@ async function checkHistory(c, scenario) {
     }
     c.ok('PLAYER ROWS: a played cell says both numbers — “… scored 15.0 in week 1, projected 20.3.”',
       /^T4 Player 00 scored 15\.0 in week 1, projected 20\.3\./.test(pn.playerWk1 || ''), pn.playerWk1);
-    c.ok('PLAYER ROWS: the card is on the name only, never on a week cell',
-      pn.cellTips === 0, String(pn.cellTips));
+    // THE CLASSIC PLAYER CARD ON EVERY WEEK CELL WITH A NUMBER (Tim, 2026-10-08:
+    // "a bad preview is … the numbers in the week by week chart that talk about
+    // SD and info we don't want or need"). It is the card on his name, so a
+    // row has one card, not one per week; and the cell keeps no title under it.
+    for (const [what, cells, card, name, proj, act] of [
+      ['PLAYER ROWS', pn.playerCells, pn.playerCellCard, 'T4 Player 00', '20.3', '15.0'],
+      ['WHO TO START', pn.startCells, pn.startCellCard, 'T4 Player 01', '19.3', '14.3'],
+    ]) {
+      c.ok(`${what}: EVERY WEEK CELL WITH A NUMBER OPENS THE CARD ON THAT ROW’S NAME, and has no title`,
+        Boolean(cells) && cells.cells > 0 && cells.wrong === 0 && cells.titled === 0, JSON.stringify(cells));
+      c.ok(`${what}: pointing at ${name}’s week 1 opens HIS card — Proj ${proj} and Act ${act}`,
+        Boolean(card) && card.ident.startsWith(name) && runHas(card, 'Proj', proj) && runHas(card, 'Act', act),
+        JSON.stringify(card));
+    }
+    c.ok('POSITION ROWS: a Position cell still has NO card of either kind (Tim, 2026-09-18)',
+      pn.positionCards === 0, String(pn.positionCards));
   }
   return c.out;
 }
@@ -2560,7 +2600,7 @@ function bodyRows(table) {
         pid: td.getAttribute('data-pid'),
         // The sentence a coloured cell carries — channel 3 of "never colour
         // alone", and a tap on a phone via js/touch-titles.js.
-        title: td.getAttribute('title') || '',
+        title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
       })),
     }));
 }
@@ -2948,10 +2988,13 @@ async function check(scenario, boot) {
       avgCells.filter((x) => /heat-(up|dn)-4/.test(x.cls)).every((x) => /[\u25b2\u25bc]/.test(x.text)) &&
       avgCells.filter((x) => /heat-(up|dn)-[123]\b/.test(x.cls)).every((x) => !/[\u25b2\u25bc]/.test(x.text)),
       JSON.stringify(avgCells.map((x) => `${x.cls}|${x.text}`)).slice(0, 200));
-    c.ok('and every Avg cell says in words what it was measured against \u2014 it is a <td> ' +
-      'with no link in it, so a title is the right place and touch-titles makes it a tap',
-      numbered.every((x) => /in an average week/.test(x.title || '')),
-      numbered[0] && numbered[0].title);
+    // ONE PLAIN LINE (Tim, 2026-10-08: "Avg of N weeks \u00b7 2nd of 10"), where it
+    // used to be a sentence about what the scale was measured against.
+    c.ok('and every Avg cell says ONE PLAIN LINE \u2014 how many weeks, and where it ranks when it is coloured',
+      numbered.every((x) => (/\bheat\b/.test(x.cls)
+        ? /^Avg of \d+ weeks? \u00b7 \d+(st|nd|rd|th) of \d+$/
+        : /^Avg of (\d+ weeks?|the weeks shown)( \u00b7 \d+(st|nd|rd|th) of \d+)?$/).test(x.title || '')),
+      JSON.stringify(numbered.map((x) => x.title).filter((s) => !/^Avg of/.test(s || '')).slice(0, 3)) + (numbered[0] && numbered[0].title));
   }
 
   // ---- the name line: outside the table, reserved, idle until pointed at ---
@@ -3050,11 +3093,14 @@ async function check(scenario, boot) {
       d.querySelectorAll('#overviewTable tbody [data-tip]').length === 0,
       `${d.querySelectorAll('#overviewTable tbody a.pref').length} links, ` +
       `${d.querySelectorAll('#overviewTable tbody [data-tip]').length} cards`);
-    c.ok('and answers "who is that" in a title instead, which a tap opens on a phone',
+    // A CARD, not a sentence in a title (Tim, 2026-10-08): who fills the slot
+    // and for how many weeks. One preview per number, so never both.
+    c.ok('and answers "who is that" in a card instead, with no title under it',
       (() => {
         const cells = [...d.querySelectorAll('#overviewTable tbody td.slot-avg')];
-        return cells.length > 0 && cells.every((td) => td.hasAttribute('title'));
-      })(), 'a slot-average cell with nothing to say');
+        return cells.length > 0 && cells.some((td) => td.hasAttribute('data-pop')) &&
+          cells.every((td) => td.hasAttribute('title') !== td.hasAttribute('data-pop'));
+      })(), 'a slot-average cell with nothing to say, or with two previews');
   }
   c.ok('every reference is a real href, not a click handler',
     refs.every((a) => /^waivers\.html\?player=\d+$/.test(href(a))),
@@ -3195,9 +3241,12 @@ async function check(scenario, boot) {
   // season week by week box"). What the note has to own is unchanged in kind
   // and changed in content: where the distribution comes from, and that it is
   // the LEAGUE's rather than his own roster's.
-  c.ok('THE NOTE OWNS THE SCALE AS A LEAGUE-WIDE STANDARD DEVIATION, not his own roster',
+  // NO SD WORDING (Tim, 2026-10-08: "info we don't want or need"): the note
+  // still owns whose numbers the scale is measured against, in plain words.
+  c.ok('THE NOTE OWNS THE SCALE AS THE LEAGUE’S, not his own roster — and never says standard deviation',
     /Green is a good number for that slot and red is a poor one/.test(note) &&
-    /reaching full colour one standard deviation out/.test(note) &&
+    /deepening the further it is from that slot’s average/.test(note) &&
+    !/standard deviation|\bSD\b|z-score/i.test(note) &&
     /every squad in the league/.test(note) &&
     /not against your own roster/.test(note), note);
   c.ok('and says the printed thresholds are the ones the colour is decided against',
@@ -4345,10 +4394,25 @@ async function check(scenario, boot) {
     c.ok('the AVERAGE opens no player card at all — a slot is not a man',
       A.rows.every((r) => r.cells.every((td) => !/\bslot-cell\b/.test(td.cls))),
       JSON.stringify(A.rows[0].cells.map((td) => td.cls)));
-    c.ok('but it says who fills each slot, and how often, in a title a tap opens',
+    c.ok('but it says who fills each slot, and how often, in words',
       A.rows.every((r) => r.cells.slice(0, SLOT_ROWS.length)
         .every((td) => /Player \d\d \(\d+\)/.test(td.title))),
       A.rows[0].cells[0].title);
+    // …and in a small CARD (Tim, 2026-10-08): slot, who fills it and for how
+    // many weeks, the average, the rank. Read only when the grid on screen is
+    // the average one, which is where these cells exist.
+    {
+      const slotTd = d.querySelector('#overviewTable tbody td.slot-avg[data-pop]');
+      if (slotTd) {
+        slotTd.dispatchEvent(new boot.window.Event('mouseover', { bubbles: true }));
+        const el = d.getElementById('statCard');
+        const said = el && !el.hidden ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+        slotTd.dispatchEvent(new boot.window.Event('mouseout', { bubbles: true }));
+        c.ok('THE SLOT AVERAGE’S CARD: the slot, who fills it for how many weeks, the average',
+          /^Team \d+ · [A-Z/]+\d? · Proj avg/.test(said) && /Player \d\d \d+ weeks?/.test(said) &&
+          /Avg of \d+ weeks? \d/.test(said) && !slotTd.hasAttribute('title'), said.slice(0, 300));
+      }
+    }
     c.ok('and the WEEK measure still carries its cards',
       lineupCells.length > 0 &&
       [...lineupCells].slice(0, 6).map((td) => hoverCard(d, boot.window, td))
@@ -5547,7 +5611,8 @@ async function check(scenario, boot) {
       JSON.stringify(others.map((r) => r.wk8.text)));
     c.ok('and the note says a slot with too little to go on is left uncoloured',
       /A slot with too little to go on is left uncoloured/.test(w.note) &&
-      /fewer than two values cannot have a standard deviation/.test(w.note),
+      /fewer than two values say nothing about what is usual/.test(w.note) &&
+      !/standard deviation/i.test(w.note),
       w.note.slice(0, 900));
     // THE REFUSAL STAYS ON SCREEN. The thresholds moved into the toggle on
     // 2026-09-19c and a dash in there says nothing to a reader looking at a
@@ -5664,7 +5729,8 @@ async function check(scenario, boot) {
     c.ok('and the note spells the rule out in a sentence',
       /a quarterback is never measured against a kicker/.test(w.note), w.note.slice(0, 400));
     c.ok('the note also says where full colour is reached',
-      /reaching full colour one standard deviation out/.test(w.note), w.note.slice(0, 400));
+      /reaching full colour at about the best and worst sixth of it/.test(w.note) &&
+      !/standard deviation/i.test(w.note), w.note.slice(0, 400));
   }
 
   // ---- (v) the same scale on the `A week` measure -------------------------
@@ -5788,7 +5854,9 @@ async function check(scenario, boot) {
     c.ok('and those cells still carry NO `title`, so the browser cannot draw a second tooltip',
       all.every((td) => td.title === ''),
       JSON.stringify(all.filter((td) => td.title !== '').map((td) => td.title).slice(0, 2)));
-    c.ok('the Total cell DOES carry one, because it holds no link and no card',
+    // The Total is a team-week card now (Tim, 2026-10-08), so its sentence is
+    // the cell's aria-label; a Total with nothing to break down keeps a title.
+    c.ok('the Total cell says what it is in words, under its card',
       w.rows.every((r) => /projects? /.test(r.cells[totalIdx].title) ||
         /No projection/.test(r.cells[totalIdx].title)),
       w.rows[0] && w.rows[0].cells[totalIdx].title);
@@ -5848,6 +5916,153 @@ async function check(scenario, boot) {
 
   // ---- (z) "Actual history": the select, both tables, the League row -------
   if (scenario === 'history-proj') await checkHistory(c, scenario);
+
+  // ---- THE PREVIEWS (Tim, 2026-10-08) --------------------------------------
+  //
+  // "a bad preview is … the numbers in the week by week chart that talk about
+  // SD and info we don't want or need." Every team total opens the team-week
+  // card (the total as its starters), an average says one plain line, a week
+  // heading links to that week on Schedule, and nothing a reader can reach
+  // says SD. Every one of these was watched failing on the code before it.
+  if (scenario === 'live') {
+    const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+    const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+    const popOf = (el) => {
+      if (!el) return null;
+      el.dispatchEvent(new boot.window.Event('mouseover', { bubbles: true }));
+      const card = d.getElementById('statCard');
+      const got = card && !card.hidden ? txt(card) : null;
+      el.dispatchEvent(new boot.window.Event('mouseout', { bubbles: true }));
+      return got;
+    };
+    const numbered = (sel) => [...d.querySelectorAll(sel)].filter((td) => /\d/.test(td.textContent));
+
+    // -- Weekly totals: every week cell, and the row ------------------------
+    const wtCells = numbered('#totalsTable tbody tr[data-team] td.wk');
+    c.ok('PREVIEWS: every Weekly totals week cell with a number has the team-week card and no title',
+      wtCells.length > 0 && wtCells.every((td) => td.hasAttribute('data-pop') && !td.hasAttribute('title')),
+      `${wtCells.length} cells, ${wtCells.filter((td) => !td.hasAttribute('data-pop')).length} bare, ` +
+      `${wtCells.filter((td) => td.hasAttribute('title')).length} titled`);
+    const wtRow = d.querySelector('#totalsTable tbody tr[data-team]');
+    const wtFirst = wtRow && numbered('#totalsTable tbody tr[data-team] td.wk.hist')[0];
+    const wtCard = popOf(wtFirst) || '';
+    c.ok('PREVIEWS: that card is the total broken into its starters — slot, name, points, then Total',
+      /^Team \d+ · Week 1 · scored/.test(wtCard) && /QB\s*T\d+ Player 00\s*proj 20\.3\s*15\.0/.test(wtCard) &&
+      /K\s*T\d+ Player 08/.test(wtCard) && /Total\s*109\.8/.test(wtCard), wtCard.slice(0, 400));
+    c.ok('PREVIEWS: and it points at that team AND that week in Roster detail',
+      Boolean(wtFirst) && new RegExp(`^analysis\\.html\\?team=${wtRow.getAttribute('data-team')}&week=1#rosterDetail$`)
+        .test(wtFirst.getAttribute('data-go') || ''), wtFirst && wtFirst.getAttribute('data-go'));
+    const wtName = wtRow && wtRow.querySelector('td.name');
+    c.ok('PREVIEWS: a team’s name opens the team card — its record and what it projects',
+      /^Team \d+/.test(popOf(wtName) || '') && /Proj avg/.test(popOf(wtName) || ''), popOf(wtName));
+
+    // -- the Starting lineup band -------------------------------------------
+    const band = numbered('#seasonTotals tr td.wk');
+    c.ok('PREVIEWS: every Starting lineup total has the team-week card too',
+      band.length > 0 && band.every((td) => td.hasAttribute('data-pop') && !td.hasAttribute('title')) &&
+      /· Week 1 · scored/.test(popOf(band[0]) || '') && /Total/.test(popOf(band[0]) || ''),
+      `${band.length} cells — ${(popOf(band[0]) || '').slice(0, 160)}`);
+
+    // -- All teams, A week: the Total ---------------------------------------
+    const ovTotals = [...d.querySelectorAll('#overviewTable tbody tr[data-team] td[data-pop][data-go]:not(.name)')];
+    c.ok('PREVIEWS: every All teams Total has the team-week card',
+      ovTotals.length === d.querySelectorAll('#overviewTable tbody tr[data-team]').length && ovTotals.length > 0 &&
+      /^Team \d+ · Week \d+ · projected/.test(popOf(ovTotals[0]) || '') && /Total/.test(popOf(ovTotals[0]) || ''),
+      `${ovTotals.length} — ${(popOf(ovTotals[0]) || '').slice(0, 160)}`);
+
+    // -- week headings → Schedule --------------------------------------------
+    for (const id of ['totalsTable', 'seasonTable', 'startersTable']) {
+      const ths = [...d.querySelectorAll(`#${id} thead th[data-wkh]`)];
+      const off = ths.filter((th) => {
+        const a = th.querySelector('a.wk-go');
+        return !a || a.getAttribute('href') !== `schedule.html?week=${th.getAttribute('data-wkh')}` || th.hasAttribute('title');
+      });
+      c.ok(`PREVIEWS: every week heading of #${id} links its number to that week on Schedule, with no title`,
+        ths.length >= 13 && off.length === 0, `${ths.length} headings, ${off.length} wrong: ${off[0] && off[0].outerHTML}`);
+    }
+    c.ok('PREVIEWS: and pointing at one says which week it is',
+      /^Week 3/.test(popOf(d.querySelector('#totalsTable thead th[data-wkh="3"]')) || ''),
+      popOf(d.querySelector('#totalsTable thead th[data-wkh="3"]')));
+
+    // -- Who to start: Starts -----------------------------------------------
+    const startsTd = d.querySelector('#startersTable tbody td[data-pop]');
+    c.ok('PREVIEWS: a Starts count opens the weeks it counts',
+      /· Starts/.test(popOf(startsTd) || '') && /In the best lineup\s*\d+ of \d+ weeks/.test(popOf(startsTd) || ''),
+      popOf(startsTd));
+
+    // -- Roster detail: the stat row, and the colour -------------------------
+    const tiles = [...d.querySelectorAll('#teamGlance .stat[data-pop]')];
+    c.ok('PREVIEWS: the Roster detail stat row opens its breakdowns (Projected is the lineup added up)',
+      tiles.length >= 5 && tiles.some((el) => /· projected\s*QB\s*T\d+ Player 00/.test(popOf(el) || '') && /Total/.test(popOf(el) || '')),
+      `${tiles.length} tiles: ${tiles.map((el) => (popOf(el) || '').slice(0, 40)).join(' | ')}`);
+    const heads = [...d.querySelectorAll('#rosterTable thead th')].map(txt);
+    const colOf = (name) => heads.findIndex((h) => h.replace(/[▲▼]/g, '').trim() === name);
+    const rosterRows = [...d.querySelectorAll('#rosterStarters tr, #rosterBench tr')];
+    // LIKE WITH LIKE: each column against the same number for every squad's
+    // starters at the position. (The stub's squads are identical, so the spread
+    // is between a position's own starters — RB1 against RB2 — which is enough
+    // to show the column is measured at all.)
+    for (const name of ['Projected', 'Avg/wk', 'Season total']) {
+      const at = colOf(name);
+      const tds = rosterRows.map((tr) => tr.children[at]).filter((td) => td && /\d/.test(td.textContent));
+      const tinted = tds.filter((td) => /\bheat\b/.test(td.getAttribute('class') || ''));
+      c.ok(`COLOUR: Roster detail ${name} is measured against the league’s starters at his position`,
+        at >= 0 && tinted.length > 0 &&
+        tinted.every((td) => /for a starting [A-Z/]+ around the league/.test(td.getAttribute('title') || '') &&
+          / of \d+ · avg /.test(td.getAttribute('title') || '')),
+        `col ${at}, ${tds.length} numbers, ${tinted.length} measured — ${tinted[0] && tinted[0].getAttribute('title')}`);
+    }
+    c.ok('COLOUR: and Diff is left plain',
+      colOf('Diff') >= 0 && rosterRows.every((tr) => !/\bheat\b/.test((tr.children[colOf('Diff')] || tr).getAttribute('class') || '')),
+      String(colOf('Diff')));
+    const swCells = numbered('#startersTable tbody td.wk');
+    c.ok('COLOUR: Who to start week cells are measured too, and a best-lineup cell keeps its `st` mark on top',
+      swCells.some((td) => /\bheat\b/.test(td.className)) &&
+      swCells.some((td) => /\bst\b/.test(td.className) && /\bheat\b/.test(td.className)),
+      `${swCells.filter((td) => /\bheat\b/.test(td.className)).length} of ${swCells.length} measured`);
+
+    // -- NO SD WORDING, anywhere a reader or a screen reader can reach -------
+    const SD = /standard deviation|\bSD\b|z-score|\bstep \d of \d/i;
+    const page = txt(d.body);
+    c.ok('NO SD WORDING: nowhere in the page, the fold notes included',
+      !SD.test(page), (page.match(new RegExp(`.{0,80}(${SD.source}).{0,80}`, 'i')) || [''])[0]);
+    // A PREVIEW also never says "end of the scale" (docs/previews-plan.md). The
+    // shared method sentence in js/heat.js does, in a fold note; that is not a
+    // preview and is not this page's to reword.
+    const PREVIEW = new RegExp(`${SD.source}|end of the scale`, 'i');
+    const said = [];
+    for (const el of d.querySelectorAll('[title], [aria-label]')) {
+      said.push(el.getAttribute('title') || '', el.getAttribute('aria-label') || '');
+    }
+    for (const el of d.querySelectorAll('[data-pop]')) said.push(popOf(el) || '');
+    c.ok('NO SD WORDING: not in a title, an aria-label or any card either',
+      said.length > 100 && !said.some((s) => PREVIEW.test(s)), (said.find((s) => PREVIEW.test(s)) || '').slice(0, 300));
+
+    // -- a click on a total opens that team and week, in place ----------------
+    const target = numbered('#totalsTable tbody tr[data-team] td.wk.hist')
+      .find((td) => td.parentNode.getAttribute('data-team') !== String(d.getElementById('teamSelect').value) &&
+        /week=2#/.test(td.getAttribute('data-go') || ''));
+    const wantTeam = target && target.parentNode.getAttribute('data-team');
+    const href0 = boot.window.location.href;
+    if (target) target.dispatchEvent(new boot.window.Event('click', { bubbles: true, cancelable: true }));
+    for (let i = 0; i < 60 && d.getElementById('weekSelect').value !== '2'; i++) await sleepMs(50);
+    await sleepMs(200);
+    c.ok('CONNECTOR: clicking a Weekly totals number loads THAT team and THAT week below, without leaving the page',
+      Boolean(target) && String(d.getElementById('teamSelect').value) === wantTeam &&
+      d.getElementById('weekSelect').value === '2' && boot.window.location.href === href0 &&
+      txt(d.getElementById('rosterTitle')).includes(`Team ${wantTeam}`),
+      `team ${d.getElementById('teamSelect').value} (want ${wantTeam}) week ${d.getElementById('weekSelect').value} — ${txt(d.getElementById('rosterTitle'))}`);
+    // A plain click on a team's name still loads the team and keeps the week.
+    const otherRow = [...d.querySelectorAll('#totalsTable tbody tr[data-team]')]
+      .find((tr) => tr.getAttribute('data-team') !== wantTeam);
+    const otherName = otherRow && otherRow.querySelector('td.name');
+    if (otherName) otherName.dispatchEvent(new boot.window.Event('click', { bubbles: true, cancelable: true }));
+    await sleepMs(200);
+    c.ok('CONNECTOR: and a Weekly totals ROW loads its team, the way an All teams row does',
+      Boolean(otherRow) && String(d.getElementById('teamSelect').value) === otherRow.getAttribute('data-team') &&
+      d.getElementById('weekSelect').value === '2',
+      `team ${d.getElementById('teamSelect').value} week ${d.getElementById('weekSelect').value}`);
+  }
 
   // ---- SYNC NOW: the page reads the league AGAIN ---------------------------
   //

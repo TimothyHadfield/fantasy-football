@@ -66,7 +66,12 @@ const CHILDREN = {
       }
       const rows = [...document.querySelectorAll('#rosterStarters tr, #rosterBench tr')].map((tr) => {
         const c = [...tr.children];
-        return { slot: text(c[0]), name: text(c[1]), proj: text(c[4]), actual: text(c[5]),
+        // Projected and Actual are on the red/green scale since 2026-10-08, so
+        // the end of it carries ▲/▼ after the number; the number is what is read.
+        const bare = (el) => text(el).replace(/\s*[▲▼]\s*$/, '');
+        return { slot: text(c[0]), name: text(c[1]), proj: bare(c[4]), actual: bare(c[5]),
+          heat: [c[4], c[5], c[7], c[8]].map((td) => /\bheat\b/.test(td.getAttribute('class') || '')),
+          heatWords: [c[4], c[5], c[7], c[8]].map((td) => td.getAttribute('title') || ''),
           diff: text(c[6]), actualHtml: c[5].innerHTML.trim(), diffHtml: c[6].innerHTML.trim() };
       });
       return { glance, rows, split: cellsOf(document.querySelector('#rosterSplit tr') || { children: [] }),
@@ -100,8 +105,11 @@ const CHILDREN = {
     out.card305 = hover(3, 5);       // mid-game on 4.2
     out.card400 = hover(4, 0);       // mid-game on 6.6
     // The Starting lineup grid: every cell of the open week, by its title.
-    const wkTitles = (sel) => [...document.querySelectorAll(`${sel} td[title]`)]
-      .map((td) => td.getAttribute('title')).filter((t) => /in week 8\b/.test(t));
+    // A cell with a card (2026-10-08) says its sentence in an `aria-label`:
+    // a `title` beside a card would be a second tooltip on top of it.
+    const wkTitles = (sel) => [...document.querySelectorAll(`${sel} td[title], ${sel} td[aria-label]`)]
+      .map((td) => td.getAttribute('title') || td.getAttribute('aria-label'))
+      .filter((t) => /in week 8\b/.test(t));
     out.startersWeek8 = wkTitles('#startersTable');
     out.slotTitlesWeek8 = [...document.querySelectorAll('#seasonTable td[data-pid]')]
       .map((td) => ({ pid: td.getAttribute('data-pid'), v: td.getAttribute('data-v'),
@@ -534,6 +542,16 @@ function analysisChecks(an, name, floors) {
     t1.rows.every((r, i) => r.actual === f1(i === 6 ? 0 : act8(i))), t1.rows.map((r) => r.actual).join(' '));
   ok('and his Diff is the one against the other',
     t1.rows.every((r, i) => r.diff === sg(r1((i === 6 ? 0 : act8(i)) - proj8(i)))), t1.rows.map((r) => r.diff).join(' '));
+  // THE RED/GREEN SCALE ON ROSTER DETAIL (Tim, 2026-10-08): Projected against
+  // the league's starters at his position. Actual waits for the week to be
+  // final — week 8 is in play here, and half a slate is not a comparison.
+  ok('COLOUR: every Projected is measured against the league’s starters at his position, and says so with no SD',
+    t1.rows.some((r) => r.heat[0]) &&
+    t1.rows.every((r) => !r.heat[0] || (/ of \d+ · avg [\d.]+ for a starting /.test(r.heatWords[0]) &&
+      !/\bSD\b|standard deviation/i.test(r.heatWords[0]))),
+    t1.rows.map((r) => `${r.heat[0] ? 'Y' : 'n'}:${r.heatWords[0]}`).slice(0, 3).join(' | '));
+  ok('COLOUR: and Actual takes none while the week is still being played',
+    t1.rows.every((r) => !r.heat[1]), t1.rows.map((r) => (r.heat[1] ? 'Y' : 'n')).join(''));
   ok('the totals follow: Projected 165.6 (pre-game), Actual 99.0, Diff −66.6, Bench points 41.7',
     t1.glance.Projected === '165.6' && t1.glance.Actual === '99.0' && t1.glance.Diff === '-66.6' &&
     t1.glance['Bench points'] === '41.7', t1.glance);

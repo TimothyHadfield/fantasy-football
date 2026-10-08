@@ -146,7 +146,11 @@ async function page(store) {
       name: text(tr.children[0]),
       cells: Object.fromEntries([...tr.children].map((td, i) => [heads[i], {
         t: printed(td), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '',
-        title: td.getAttribute('title') || '',
+        // A cell with a card (2026-10-08) carries its sentence as an aria-label.
+        title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
+        tip: td.getAttribute('data-tip') || '',
+        pop: td.getAttribute('data-pop') || '',
+        hasTitle: td.hasAttribute('title'),
       }])),
     }));
     return {
@@ -190,7 +194,9 @@ const CHILDREN = {
       [histKey(5)]: COPY5,
     });
     const out = { order: [...p.d.querySelectorAll('section.panel')].map((s) => text(s.querySelector('h2')).split(' · ')[0]) };
-    const seasonHtml = () => p.$('seasonTable').innerHTML;
+    // A stat card's key is a bare counter that is never wound back (js/pop.js),
+    // so a repaint gives the band's cells new keys for the same cards.
+    const seasonHtml = () => p.$('seasonTable').innerHTML.replace(/data-pop="[^"]*"/g, 'data-pop');
 
     out.toggle0 = p.rowsToggle();
     out.pos0 = seasonHtml();
@@ -203,6 +209,18 @@ const CHILDREN = {
     p.click(rowsBtn(p, 'player'));
     out.toggle1 = p.rowsToggle();
     out.player = p.sheet('seasonTable', 'seasonSlots');
+    // Every word a reader can meet on the page as it stands — the text, and
+    // every `title` and `aria-label` — that still talks in standard deviations.
+    {
+      const bad = /standard deviation|\bSD\b|z-score|\bstep \d of \d/i;
+      const said = [p.d.body.textContent,
+        ...[...p.d.querySelectorAll('[title], [aria-label]')]
+          .flatMap((el) => [el.getAttribute('title'), el.getAttribute('aria-label')])];
+      out.sdWords = said.filter((s) => s && bad.test(s)).map((s) => {
+        const at = s.search(bad);
+        return s.slice(Math.max(0, at - 60), at + 60);
+      });
+    }
     p.choose(p.d.querySelector('#seasonTable select[data-history]'), 'proj');
     out.playerProj = p.sheet('seasonTable', 'seasonSlots');
     p.choose(p.d.querySelector('#seasonTable select[data-history]'), 'actual');
@@ -392,8 +410,19 @@ block('main', () => {
     ok('PLAYER: Avg is the mean of the numbers shown in his row (QB 18.8, not the 23.2 of the weeks to come)',
       P.rows.length === 15 && P.rows.every((r, i) => Math.abs(Number(avgOf(r).t) - avgShown(i)) < 0.051) &&
       avgOf(P.rows[0]).t === '18.8' && avgNow(0) !== 18.8 &&
-      /mean of the regular-season numbers shown in his row/.test(avgOf(P.rows[0]).title),
-      P.rows.map((r) => avgOf(r).t));
+      // ONE PLAIN LINE (Tim, 2026-10-08): how many weeks. (The stub's squads
+      // are identical at every position, so there is no rank to add here; the
+      // sample league below has one.)
+      avgOf(P.rows[0]).title === 'Avg of 13 weeks',
+      `${P.rows.map((r) => avgOf(r).t)} | ${avgOf(P.rows[0]).title}`);
+    // THE PLAYER CARD ON EVERY READ WEEK CELL (Tim, 2026-10-08), the one his
+    // name opens; and no cell carries a `title` beside it.
+    ok('PLAYER: every read week cell opens his card — the one on his name — and has no title of its own',
+      P.rows.every((r) => r.cells.Player && r.cells.Player.tip &&
+        WEEK_HEADS.map((h) => r.cells[h]).filter(Boolean).every((c) => c.tip === r.cells.Player.tip && !c.hasTitle)),
+      P.rows.map((r) => WEEK_HEADS.map((h) => r.cells[h]).filter((c) => c && c.tip !== r.cells.Player.tip).length));
+    ok('NO PREVIEW ON THE PAGE TALKS ABOUT STANDARD DEVIATIONS (Tim: "SD and info we don’t want or need")',
+      !m.sdWords.length, m.sdWords.slice(0, 3));
     ok('PLAYER: the heavy line is before week 8 in the body as in the head',
       P.rows.every((r) => /\bfut-start\b/.test(cell(r, 8).cls) && !/\bfut-start\b/.test(cell(r, 7).cls)),
       cell(P.rows[0], 8).cls);
@@ -575,8 +604,10 @@ block('demo', () => {
       x.season.rows.every((r) => r.player), [x.season.heads[0], x.season.rows.length]);
     // The stub's squads are identical at every position, so its Avg has no scale; the sample's differ.
     ok('DEMO: a Player row’s Avg is on the scale too, against squads’ starters at his position',
-      x.season.rows.some((r) => /\bheat\b/.test(avgOf(r).cls) && /a squad’s starting \w+, on average/.test(avgOf(r).title)),
-      x.season.rows.map((r) => avgOf(r).cls));
+      x.season.rows.some((r) => /\bheat\b/.test(avgOf(r).cls)) &&
+      // ONE PLAIN LINE (Tim, 2026-10-08): how many weeks, and where it ranks.
+      x.season.rows.every((r) => !/\bheat\b/.test(avgOf(r).cls) || /^Avg of \d+ weeks? · \d+(st|nd|rd|th) of \d+$/.test(avgOf(r).title)),
+      x.season.rows.map((r) => `${avgOf(r).cls} | ${avgOf(r).title}`));
   }
 });
 
