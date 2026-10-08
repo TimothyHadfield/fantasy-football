@@ -112,7 +112,7 @@
       "assertions": 135
     },
     "an-test.mjs": {
-      "assertions": 2569,
+      "assertions": 2583,
       "scenarios": 28
     },
     "test-summary.mjs": {

@@ -1225,8 +1225,19 @@ async function check(scenario, { document, window, errors, rejections }) {
   // own label, and swallowing that tap would break the one contract holding the
   // pages together; a tap on a button has to press the button. Both are why the
   // FLEX filters' and the run count's explanations were moved onto the page.
-  const titledLink = document.querySelector('a[title]');
-  if (titledLink) {
+  // Every player name on this page carries the card since 2026-10-08, so its
+  // links are aria-labelled and the page may hold no titled link at all. The
+  // rule is the module's, not the page's, so one is made rather than the two
+  // assertions quietly not running.
+  let titledLink = document.querySelector('a[title]');
+  if (!titledLink) {
+    titledLink = document.createElement('a');
+    titledLink.setAttribute('href', '#titled-link');
+    titledLink.setAttribute('title', 'A link’s own label');
+    titledLink.textContent = 'link';
+    document.body.appendChild(titledLink);
+  }
+  {
     const ev3 = clickOn(window, titledLink);
     const ts = document.getElementById('titleSheet');
     c.eq('a titled LINK is not swallowed', ev3.defaultPrevented, false);

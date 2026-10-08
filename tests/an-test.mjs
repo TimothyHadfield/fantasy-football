@@ -517,6 +517,62 @@ const SCENARIOS = {
       out.viaStarters = snap();
       pick('startersTable', 'actual');
       await sleep(80);
+
+      // ---- BOTH NUMBERS WHEREVER A MAN IS NAMED (Tim, 2026-10-08) ----------
+      // The name line over the Position rows, and the card on the names of
+      // "Who to start" and of the Player rows. On Actual, Position rows.
+      {
+        const tx = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+        const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+        const card = () => {
+          const el = document.getElementById('tipCard');
+          return el && !el.hidden
+            ? { ident: tx(el.querySelector('.tc-ident')), rows: [...el.querySelectorAll('.tc-run tr')].map((tr) => [...tr.children].map(tx)) }
+            : null;
+        };
+        const hover = (el) => {
+          if (!el) return null;
+          fire(el, 'mouseover');
+          const got = card();
+          fire(el, 'mouseout');
+          return got;
+        };
+        const names = (sel) => {
+          const tds = [...document.querySelectorAll(sel)];
+          return {
+            count: tds.length,
+            tips: tds.filter((td) => td.hasAttribute('data-tip')).length,
+            titled: tds.filter((td) => td.hasAttribute('title') || td.querySelector('[title]')).length,
+            first: tx(tds[0] && tds[0].querySelector('a.pref')),
+            card: hover(tds[0]),
+          };
+        };
+        const line = document.getElementById('seasonPick');
+        const qb = document.querySelector('#seasonSlots tr[data-slot="QB"]');
+        const at = (wk) => qb && qb.querySelector(`td[data-wk="${wk}"]`);
+        const pn = { line: {}, weekCells: document.querySelectorAll('#seasonSlots td[data-pid][data-wk]').length };
+        // Week 1 and 2 are played, week 8 is the first still to come. No
+        // mouseout between them: the same man, another week, must re-say it.
+        for (const wk of [1, 2, 8]) {
+          const td = at(wk);
+          if (td) fire(td, 'mouseover');
+          pn.line[wk] = tx(line);
+          pn.cardOnCell = pn.cardOnCell || Boolean(card());
+        }
+        if (at(8)) fire(at(8), 'mouseout');
+        pn.lineAfter = tx(line);
+
+        pn.starters = names('#startersTable tbody td.name');
+        document.querySelector('#seasonRowsToggle button[data-rows="player"]').click();
+        await sleep(80);
+        pn.players = names('#seasonSlots td.name');
+        const wk1 = document.querySelector('#seasonSlots tr td.hist');
+        pn.playerWk1 = wk1 ? wk1.getAttribute('title') || '' : '';
+        pn.cellTips = document.querySelectorAll('#seasonTable tbody td.wk[data-tip]').length;
+        document.querySelector('#seasonRowsToggle button[data-rows="position"]').click();
+        await sleep(80);
+        out.pn = pn;
+      }
       globalThis.__an = out;
     },
   },
@@ -1390,9 +1446,23 @@ const SCENARIOS = {
       // and Player 09 (a bench RB) is the best man who could replace him.
       const best = document.getElementById('rosterBest');
       out.best = best.textContent.replace(/\s+/g, ' ').trim();
-      out.bestLinks = [...best.querySelectorAll('a.pref')].map((a) => ({
-        href: a.getAttribute('href'), title: a.hasAttribute('title'),
-      }));
+      out.bestLinks = [...best.querySelectorAll('a.pref')].map((a) => {
+        // The card his name carries (2026-10-08), and whose it is.
+        const holder = a.closest('[data-tip]');
+        const key = holder ? holder.getAttribute('data-tip') : null;
+        const row = key === null ? null : document.querySelector(`#rosterTable td.name[data-tip="${key}"]`);
+        let ident = '';
+        if (holder) {
+          a.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+          const tip = document.getElementById('tipCard');
+          if (tip && !tip.hidden) ident = (tip.querySelector('.tc-ident') || { textContent: '' }).textContent;
+          a.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+        }
+        return {
+          href: a.getAttribute('href'), title: a.hasAttribute('title'),
+          name: a.textContent.trim(), rowName: row ? row.textContent.trim() : null, ident,
+        };
+      });
 
       // A row tap scrolls the detail into view only when it is off screen.
       const head = document.getElementById('rosterTitle');
@@ -1896,10 +1966,11 @@ async function checkHistory(c, scenario) {
   {
     const qbA = A.season.rows[0].cells[1];
     const qbP = P.season.rows[0].cells[1];
-    c.ok('HISTORY: a played cell says who started and what he scored…',
-      new RegExp(`^T${TEAM} Player 00 started at QB in week 1 and scored 15\\.0\\.`).test(qbA.label), qbA.label);
-    c.ok('HISTORY: …and on Proj, what he was projected before kickoff',
-      new RegExp(`^T${TEAM} Player 00 started at QB in week 1, projected 20\\.3 before kickoff\\.`).test(qbP.label),
+    // BOTH NUMBERS (Tim, 2026-10-08): the one drawn first, then the other.
+    c.ok('HISTORY: a played cell says who started, what he scored AND what he was projected',
+      new RegExp(`^T${TEAM} Player 00 started at QB in week 1 and scored 15\\.0, projected 20\\.3\\.`).test(qbA.label), qbA.label);
+    c.ok('HISTORY: …and on Proj, what he was projected before kickoff AND what he scored',
+      new RegExp(`^T${TEAM} Player 00 started at QB in week 1, projected 20\\.3 before kickoff, and scored 15\\.0\\.`).test(qbP.label),
       qbP.label);
   }
   const bandOf = (snap) => snap.season.band.slice(1, 1 + HIST).map((x) => num(x.v));
@@ -2092,11 +2163,11 @@ async function checkHistory(c, scenario) {
     {
       const a = wkCell(rowOfMan(SA, 1), 1);
       const p = wkCell(rowOfMan(SP, 1), 1);
-      c.ok('WHO TO START: a played cell says what it is — “… scored 14.3 in week 1.”',
-        new RegExp(`^T${TEAM} Player 01 scored 14\\.3 in week 1\\.`).test(a.title) && !/ESPN projects/.test(a.title),
+      c.ok('WHO TO START: a played cell says both numbers — “… scored 14.3 in week 1, projected 19.3.”',
+        new RegExp(`^T${TEAM} Player 01 scored 14\\.3 in week 1, projected 19\\.3\\.`).test(a.title) && !/ESPN projects/.test(a.title),
         a.title);
-      c.ok('WHO TO START: and on Proj — “… was projected 19.3 before kickoff in week 1.”',
-        new RegExp(`^T${TEAM} Player 01 was projected 19\\.3 before kickoff in week 1\\.`).test(p.title), p.title);
+      c.ok('WHO TO START: and on Proj — “… was projected 19.3 before kickoff in week 1, and scored 14.3.”',
+        new RegExp(`^T${TEAM} Player 01 was projected 19\\.3 before kickoff in week 1, and scored 14\\.3\\.`).test(p.title), p.title);
       c.ok('WHO TO START: the shading still says the best legal lineup, on the cell that now holds a score',
         /\bhist\b/.test(a.cls) && /\bst\b/.test(a.cls) &&
         /is in the best legal lineup for week 1, at RB\.$/.test(a.title), `${a.cls} / ${a.title}`);
@@ -2193,6 +2264,50 @@ async function checkHistory(c, scenario) {
       JSON.stringify(w.back) === JSON.stringify(w.actual), 'the tables did not come back as they were');
     c.ok('the method note says the played weeks are not solved',
       /are not solved at all/.test(A.note) && /Actual history/.test(A.note), A.note.slice(0, 300));
+
+    // ---- BOTH NUMBERS WHEREVER A MAN IS NAMED (Tim, 2026-10-08) ------------
+    //
+    // "there's often situations where I want to know a player's act and proj
+    // for a certain week … and I didn't have access to it directly in that
+    // location." By hand from the stub: Player 00 (QB) is projected 20 + 0.3 x
+    // week and scored 15.0 (the stub records 8 scores); Player 01 (RB) 19 +
+    // 0.3 x week and 14.3; the card's first week column is week 1. Every
+    // one of these failed on the code before it (watched), bar the two that
+    // say what must NOT appear.
+    const pn = w.pn || { line: {}, starters: {}, players: {} };
+    c.ok('NAME LINE: a played week says the week, his projection and his score — “Wk 1 · proj 20.3 · scored 15.0”',
+      /^T4 Player 00 · QB · BUF — Wk 1 · proj 20\.3 · scored 15\.0 · season proj /.test(pn.line[1] || ''), pn.line[1]);
+    c.ok('NAME LINE: moving to the same man’s next week re-says it — “Wk 2 · proj 20.6 · scored 15.0”',
+      / — Wk 2 · proj 20\.6 · scored 15\.0 · /.test(pn.line[2] || ''), pn.line[2]);
+    c.ok('NAME LINE: and it still carries what it always did — season proj, avg, the link',
+      / · season proj [\d.]+ · avg 15\.0 over 8 games Open player$/.test(pn.line[1] || ''), pn.line[1]);
+    c.ok('NAME LINE: a week to come adds nothing — its projection is the cell',
+      /^T4 Player 00 · QB · BUF — season proj /.test(pn.line[8] || '') && !/Wk|scored/.test(pn.line[8] || ''),
+      pn.line[8]);
+    c.ok('NAME LINE: every filled Position cell carries its week (90 = 9 slots × 13 weeks, less none)',
+      pn.weekCells > 0 && pn.weekCells === A.season.rows.reduce((n, r) => n + r.cells.slice(1).filter((x) => x.pid).length, 0),
+      String(pn.weekCells));
+    c.ok('NAME LINE: pointing at a Position cell still opens NO card (Tim, 2026-09-18), and leaving clears the line',
+      pn.cardOnCell === false && /Hover or tap a number/.test(pn.lineAfter || ''),
+      `${pn.cardOnCell} / ${pn.lineAfter}`);
+
+    const runHas = (card, label, value) => Boolean(card) &&
+      card.rows.some((r) => r[0].toLowerCase() === label.toLowerCase() && r[1] === value);
+    for (const [what, got, name, proj, act] of [
+      ['WHO TO START', pn.starters, 'T4 Player 01', '19.3', '14.3'],
+      ['PLAYER ROWS', pn.players, 'T4 Player 00', '20.3', '15.0'],
+    ]) {
+      c.ok(`${what}: every name carries the card, with no title beside it`,
+        got.count > 0 && got.tips === got.count && got.titled === 0, JSON.stringify(got));
+      c.ok(`${what}: hovering ${name} opens HIS card — Proj ${proj} and Act ${act} in week 1`,
+        got.first === name && Boolean(got.card) && got.card.ident.startsWith(name) &&
+        runHas(got.card, 'Proj', proj) && runHas(got.card, 'Act', act),
+        JSON.stringify(got.card));
+    }
+    c.ok('PLAYER ROWS: a played cell says both numbers — “… scored 15.0 in week 1, projected 20.3.”',
+      /^T4 Player 00 scored 15\.0 in week 1, projected 20\.3\./.test(pn.playerWk1 || ''), pn.playerWk1);
+    c.ok('PLAYER ROWS: the card is on the name only, never on a week cell',
+      pn.cellTips === 0, String(pn.cellTips));
   }
   return c.out;
 }
@@ -4827,8 +4942,8 @@ async function check(scenario, boot) {
         w.dstW6 && w.dstW6.text === '10.1' && w.dstW6.v === '10.1' &&
         /\bhist\b/.test(w.dstW6.cls) && !/\b(bye|assumed|zero)\b/.test(w.dstW6.cls),
         JSON.stringify(w.dstW6));
-      c.ok('and says so in words: who started there, and what he scored',
-        w.dstW6 && /^T4 Player 07 started at D\/ST in week 6 and scored 10\.1\./.test(w.dstW6.label),
+      c.ok('and says so in words: who started there, what he scored, and the 0.0 he was projected',
+        w.dstW6 && /^T4 Player 07 started at D\/ST in week 6 and scored 10\.1, projected 0\.0\./.test(w.dstW6.label),
         w.dstW6 && w.dstW6.label);
     }
     c.ok('A ZERO IN ANY OTHER WEEK IS A REAL 0.0, not a bye',
@@ -4867,6 +4982,10 @@ async function check(scenario, boot) {
       w.bestLinks[0].href === 'waivers.html?player=409' &&
       w.bestLinks[1].href === 'waivers.html?player=402' &&
       w.bestLinks.every((l) => !l.title), JSON.stringify(w.bestLinks));
+    c.ok('BEST LINEUP: each name opens the card his row in the table below builds (Tim, 2026-10-08)',
+      w.bestLinks.length === 2 &&
+      w.bestLinks.every((l) => l.rowName === l.name && l.ident.startsWith(`${l.name} · `)),
+      JSON.stringify(w.bestLinks));
 
     c.ok('A ROW TAP WITH THE DETAIL OFF SCREEN SCROLLS TO IT, once',
       w.scrollsOff === 1 && /Team 2$/.test(w.rosterAfter), `${w.scrollsOff} ${w.rosterAfter}`);
