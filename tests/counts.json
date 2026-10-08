@@ -129,7 +129,7 @@
       "assertions": 4739
     },
     "fc-test.mjs": {
-      "assertions": 1091,
+      "assertions": 1172,
       "scenarios": 14
     },
     "wv-test.mjs": {

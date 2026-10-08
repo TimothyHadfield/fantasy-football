@@ -1664,9 +1664,55 @@ function renderMatchups() {
     `${basis}${chance}${strength}${floorSaid ? ` ${floorSaid}` : ''}`).trim();
 }
 
+/**
+ * ESPN'S BOX SCORE FOR ONE GAME (Tim, 2026-10-08, asked how a matchup should
+ * give each player's numbers: "Link to ESPN"). Who scored what is ESPN's
+ * screen, so a card links to it rather than rebuilding it.
+ *
+ * '' when there is nothing to open: demo has no league, and a bye has no game.
+ *
+ * THE WEEK SERVES AS BOTH PERIODS. `g.week` is ESPN's `matchupPeriodId`
+ * (js/season.js), and this panel draws the regular season only — the bracket's
+ * games travel apart as `playoffGames` and nothing here draws them. In the
+ * regular season a matchup is one NFL week, so the scoring period is the same
+ * number (measured 2026-10-08 on league 1241838: `matchupPeriods` is
+ * {1:[1], 2:[2], …}). A playoff round of two weeks would break that, and is
+ * the thing to solve if this panel ever draws the bracket.
+ *
+ * `teamId` is the home side.
+ *
+ * Kept on this page. Home links its own cards the same way from its own file.
+ */
+function boxScoreUrl(g) {
+  if (!state.data || state.data.isDemo) return '';
+  if (g.homeId == null || g.awayId == null) return '';
+  const cfg = espn.getConfig();
+  if (!cfg.leagueId || !cfg.season) return '';
+  return (
+    'https://fantasy.espn.com/football/boxscore' +
+    `?leagueId=${encodeURIComponent(cfg.leagueId)}` +
+    `&matchupPeriodId=${encodeURIComponent(g.week)}` +
+    `&scoringPeriodId=${encodeURIComponent(g.week)}` +
+    `&seasonId=${encodeURIComponent(cfg.season)}` +
+    `&teamId=${encodeURIComponent(g.homeId)}`
+  );
+}
+
 function gameCard(g, ctx) {
   const st = gameState(g);
   const bye = g.awayId === null || g.awayId === undefined;
+  // NO `title` ON THE LINK, as on Trade's: js/touch-titles.js leaves controls
+  // alone, so a title here would be words a phone can never show. A real
+  // league keeps the link's column on every card, a bye included, so the
+  // scores stay in line down the panel.
+  const href = boxScoreUrl(g);
+  const boxOn = !state.data.isDemo;
+  const box = !boxOn
+    ? ''
+    : href
+      ? `<a class="gbox" href="${esc(href)}" target="_blank" rel="noopener"` +
+        ` aria-label="Box score on ESPN">ESPN</a>`
+      : '<span class="gbox"></span>';
   const winner = winnerOf(g);
 
   // Winner emphasised, loser dimmed. An unplayed or in-progress game gets
@@ -1748,7 +1794,7 @@ function gameCard(g, ctx) {
     }
   }
 
-  return `<div class="game ${st}">
+  return `<div class="game ${st}${boxOn ? ' has-box' : ''}">
       ${side('home', g.homeName, g.homeId)}
       ${scoreCell('home', g.homeScore)}
       <div class="vs">–</div>
@@ -1756,6 +1802,7 @@ function gameCard(g, ctx) {
       ${bye ? '<div class="side away"><span class="tname muted">Bye</span></div>'
             : side('away', g.awayName, g.awayId)}
       <div class="${metaClass}"${metaTitle ? ` title="${esc(metaTitle)}"` : ''}>${meta}</div>
+      ${box}
     </div>`;
 }
 

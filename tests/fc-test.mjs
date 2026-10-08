@@ -2361,6 +2361,48 @@ async function check(scenario, boot) {
     c.ok('"All weeks" is kept', $('weekSelect').value === 'all', $('weekSelect').value);
   }
 
+  // ---- each game links to ESPN's box score --------------------------------
+  //
+  // Tim, 2026-10-08, asked how a matchup should give each player's numbers:
+  // "Link to ESPN". So every game of a real league carries one link to ESPN's
+  // own box score for that game, and demo — which has no league to open —
+  // carries none. The stub's teams are "Team <id>" and its weeks are headed
+  // "Week <n>", so the whole address is checked against what is on the card.
+  if (scenario === 'demo' || scenario === 'demo-mid') {
+    c.ok('demo: the matchups are drawn', d.querySelectorAll('#matchups .game').length > 0);
+    c.ok('demo: no game links to ESPN — there is no league to open',
+      d.querySelectorAll('#matchups a, #matchups .gbox, #matchups .has-box').length === 0,
+      `${d.querySelectorAll('#matchups a, #matchups .gbox, #matchups .has-box').length} links or link columns`);
+  }
+  if (scenario === 'live') {
+    const blocks = [...d.querySelectorAll('#matchups .week-block')];
+    const cards = blocks.flatMap((b) => {
+      const week = Number((b.querySelector('.week-head')?.textContent.match(/\d+/) || [])[0]);
+      return [...b.querySelectorAll('.game')].map((card) => ({ week, card }));
+    });
+    c.ok('live: all 65 games of the stubbed season are on screen', cards.length === 65, String(cards.length));
+
+    const wrong = [];
+    for (const { week, card } of cards) {
+      const links = [...card.querySelectorAll('a')];
+      const home = Number((card.querySelector('.side.home .tname')?.textContent.match(/\d+/) || [])[0]);
+      const want =
+        'https://fantasy.espn.com/football/boxscore?leagueId=99' +
+        `&matchupPeriodId=${week}&scoringPeriodId=${week}&seasonId=2026&teamId=${home}`;
+      const a = links[0];
+      if (links.length !== 1) wrong.push(`week ${week} home ${home}: ${links.length} links`);
+      else if (a.getAttribute('href') !== want) wrong.push(`week ${week} home ${home}: ${a.getAttribute('href')}`);
+      else if (a.getAttribute('target') !== '_blank' || a.getAttribute('rel') !== 'noopener') {
+        wrong.push(`week ${week} home ${home}: target ${a.getAttribute('target')} rel ${a.getAttribute('rel')}`);
+      } else if (a.textContent.trim() !== 'ESPN') wrong.push(`week ${week} home ${home}: says "${a.textContent}"`);
+      // A control keeps no `title`: js/touch-titles.js leaves controls alone,
+      // so one here would be words a phone can never show.
+      else if (a.hasAttribute('title')) wrong.push(`week ${week} home ${home}: has a title`);
+    }
+    c.ok('live: every game has exactly one link, to ESPN’s box score for that week and home team',
+      cards.length > 0 && wrong.length === 0, wrong.slice(0, 3).join(' | '));
+  }
+
   return c.out;
 }
 
