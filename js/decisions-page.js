@@ -798,9 +798,28 @@ function whyHtml(attrs, label, inner) {
 }
 
 /** "J. Warren 8.7": a man and what he counts for. One still playing is his projection, drawn apart. */
-const manHtml = (p) => (p
-  ? `<span class="dz-man">${esc(shortName(p))} <span class="pv${p.known ? '' : ' dz-proj'}">${pts(p.points).replace('-', '−')}</span></span>`
+//
+// Tim, 2026-10-08: "there's often situations where I want to know a player's
+// act and proj for a certain week ... and I didn't have access to it directly
+// in that location". In a week's preview `pj` is what he was projected for,
+// before his score and dim, as Season by week prints the two (`.sbw-pj`); the
+// space between them does not break, so the pair wraps as one.
+const manHtml = (p, pj = null) => (p
+  ? `<span class="dz-man">${esc(shortName(p))} ` +
+    (pj === null ? '' : `<span class="dz-pj" data-r="${Math.round(pj)}">${pts1(pj)}</span>&nbsp;`) +
+    `<span class="pv${p.known ? '' : ' dz-proj'}">${pts(p.points).replace('-', '−')}</span></span>`
   : '—');
+
+/**
+ * What a man of a week's swaps was projected for, off the starters the cell
+ * already holds. Null for one still playing (the number beside his name IS his
+ * projection, and it is not printed twice) and for one the feed sent no
+ * projection for (`noProj`, js/decisions.js) — nothing is drawn then, never a 0.
+ */
+const projIn = (starters, man) => {
+  const p = man && man.known ? (starters || []).find((s) => same(s.playerId, man.playerId)) : null;
+  return p && !p.noProj && Number.isFinite(p.projected) ? p.projected : null;
+};
 
 /** "J. Warren 8.7 → O. Hampton 16.5": who really started, then who starts instead. */
 const swapHtml = (r) => `${manHtml(r.out)} → ${manHtml(r.in)}`;
@@ -848,8 +867,8 @@ function weekWhyHtml(week) {
   const g = gameOf(state.world.games, id, week);
   const w = swapsOf(c);
   const rows = w.rows.map((r) =>
-    `<tr><td class="name">${esc(r.slot)}</td><td class="name">${manHtml(r.out)}</td>` +
-    `<td class="name">${manHtml(r.in)}</td><td class="num ${diffClass(r.diff)}">${signedPts(r.diff)}</td></tr>`).join('');
+    `<tr><td class="name">${esc(r.slot)}</td><td class="name">${manHtml(r.out, projIn(c.realStarters, r.out))}</td>` +
+    `<td class="name">${manHtml(r.in, projIn(c.starters, r.in))}</td><td class="num ${diffClass(r.diff)}">${signedPts(r.diff)}</td></tr>`).join('');
   const foot = (label, value, cls = '') =>
     `<tr${cls ? ` class="${cls}"` : ''}><td class="name" colspan="3">${label}</td><td class="num">${value}</td></tr>`;
   // The foot is the table's row: Actual and Hypothetical to the tenth, and the

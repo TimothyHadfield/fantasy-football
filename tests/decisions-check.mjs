@@ -117,6 +117,35 @@ function scoreInCents() {
       }
       return world;
     }`;
+  swapStub(wrapper);
+}
+
+/**
+ * A MAN THE FEED SENT NO PROJECTION FOR (DZ_NOPROJ="player:week"): the stub
+ * projects everybody, so "nothing is printed for him, never a 0" could not be
+ * seen on it. His projection for that one week is taken away wherever it is
+ * read — his squad's roster and his own line. The stub file is untouched.
+ */
+function noProjection() {
+  const [id, week] = process.env.DZ_NOPROJ.split(':').map(Number);
+  const stub = new URL('./cap-stub-season.mjs', import.meta.url).href;
+  swapStub(`
+    export * from ${JSON.stringify(stub)};
+    import { fetchDecisionWorld as base } from ${JSON.stringify(stub)};
+    export async function fetchDecisionWorld(o) {
+      const world = await base(o);
+      for (const [w, teams] of world.rosters) {
+        if (Number(w) !== ${week}) continue;
+        for (const t of teams) for (const p of t.players) if (p.playerId === ${id}) p.projected = null;
+      }
+      const who = world.players.get(${id});
+      if (who && who.byWeek[${week}]) who.byWeek[${week}].projected = null;
+      return world;
+    }`);
+}
+
+/** The page's season.js is `wrapper` from here on: the stub, with something changed. */
+function swapStub(wrapper) {
   const hook = `
     const WRAPPER = ${JSON.stringify(`data:text/javascript,${encodeURIComponent(wrapper)}`)};
     const TESTS = ${JSON.stringify(new URL('./', import.meta.url).href)};
@@ -703,6 +732,7 @@ const CHILDREN = {
    */
   async lineups() {
     if (process.env.DZ_CENTS) scoreInCents();
+    if (process.env.DZ_NOPROJ) noProjection();
     const p = await bootPage();
     const out = { settled: await p.settle() };
     const doc = p.document;
@@ -767,7 +797,19 @@ const CHILDREN = {
       };
     };
     const weekWhy = (wk) => doc.querySelector(`#weekTable tr[data-wk="${wk}"] .dz-why`);
-    const manName = (td) => { const m = td.querySelector('.dz-man'); return m ? bare(m, '.pv') : null; };
+    const manName = (td) => { const m = td.querySelector('.dz-man'); return m ? bare(m, '.pv, .dz-pj') : null; };
+    // A man of a preview: his name, the projection printed for him (null for
+    // none), the same to the whole point, and whether it is right before his score.
+    const manOf = (td) => {
+      const m = td.querySelector('.dz-man');
+      if (!m) return null;
+      const pj = m.querySelector('.dz-pj');
+      const pv = m.querySelector('.pv');
+      return {
+        name: manName(td), pj: pj ? text(pj) : null, whole: pj ? pj.getAttribute('data-r') : null,
+        first: pj ? pj.nextElementSibling === pv : null, pts: text(pv),
+      };
+    };
     /** Every week's preview, as a mouse over its Diff gets it: who Started, who starts Instead. */
     const previews = () => [...doc.querySelectorAll('#weekTable tbody tr[data-wk]')].map((tr) => {
       const el = tr.querySelector('.dz-why');
@@ -777,6 +819,9 @@ const CHILDREN = {
         wk: Number(tr.getAttribute('data-wk')),
         started: rows.map((r) => manName(r.children[1])).filter(Boolean),
         instead: rows.map((r) => manName(r.children[2])).filter(Boolean),
+        men: { started: rows.map((r) => manOf(r.children[1])).filter(Boolean), instead: rows.map((r) => manOf(r.children[2])).filter(Boolean) },
+        // The Biggest swap line, while this week's preview is what is read.
+        bigPj: p.$('resultBig').querySelectorAll('.dz-pj').length,
       };
       p.fire(el, 'mouseout');
       return got;
@@ -907,7 +952,15 @@ const CHILDREN = {
     const p = await bootPage();
     const out = { settled: await p.settle() };
     const doc = p.document;
-    const cellsOf = (tr) => [...tr.children].map(text);
+    // A cell as it read before a projection stood in it: the hand numbers
+    // below are a man and his score, and his projection is held on its own.
+    const cellsOf = (tr) => [...tr.children].map((td) => {
+      const c = td.cloneNode(true);
+      for (const x of [...c.querySelectorAll('.dz-pj')]) x.remove();
+      return text(c);
+    });
+    const pjOf = (td) => text(td && td.querySelector('.dz-man .dz-pj')) || null;
+    const swapRows = (el) => [...el.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === 4);
     const read = () => {
       const el = p.$('whyPop');
       if (!el) return { open: false };
@@ -918,6 +971,10 @@ const CHILDREN = {
         foot: [...el.querySelectorAll('tfoot tr')].map(cellsOf),
         close: text(el.querySelector('.op-close')),
         proj: [...el.querySelectorAll('.dz-proj')].map(text),
+        // [Started, Instead] of each swap: the projection printed for each man...
+        pj: swapRows(el).map((tr) => [pjOf(tr.children[1]), pjOf(tr.children[2])]),
+        // ...and the two cells as they read whole, both numbers in them.
+        full: swapRows(el).map((tr) => [text(tr.children[1]), text(tr.children[2])]),
       };
     };
     const weekWhy = (wk) => doc.querySelector(`#weekTable tr[data-wk="${wk}"] .dz-why`);
@@ -1142,6 +1199,7 @@ const RUNS = {
   lineups: { child: 'lineups', env: {} },
   'lineups-early': { child: 'lineups', env: { CAP_EARLY: '1', CAP_BENCH_QB: '1' } },
   'lineups-cents': { child: 'lineups', env: { DZ_CENTS: '1' } },
+  'lineups-noproj': { child: 'lineups', env: { DZ_NOPROJ: '705:1' } },
   sort: { child: 'sort', env: {} },
   'sort-early': { child: 'sort', env: { CAP_EARLY: '1' } },
 };
@@ -1149,7 +1207,7 @@ const RUNS = {
 function child(name, extra = {}) {
   const cfg = RUNS[name];
   const env = { ...process.env };
-  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'FF_SCEN']) delete env[k];
+  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'DZ_NOPROJ', 'FF_SCEN']) delete env[k];
   Object.assign(env, cfg.env, extra);
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, cfg.child], {
     encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 64 * 1024 * 1024, timeout: 240000, env,
@@ -1757,6 +1815,17 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
       [['RB', 'M. 7 RB1 6.8', 'M. 7 RB10 9.5', '+2.7'], ['WR', 'M. 7 WR3 7.2', 'M. 7 WR11 6.6', '−0.6'], ['TE', 'M. 7 TE6 7.1', 'M. 7 TE13 13.9', '+6.8']],
       [['QB', 'M. 7 QB0 15.3', 'M. 7 QB12 21.1', '+5.8'], ['FLEX', 'M. 7 RB7 8.3', 'M. 7 RB10 18.2', '+9.9']],
     ]) && same(s7.weeks.map((w) => w.card.foot[w.card.foot.length - 1]), [['Diff', '+11.3'], ['Diff', '+8.9'], ['Diff', '+15.7']]), s7.weeks.map((w) => w.card.rows));
+    // Tim, 2026-10-08: "there's often situations where I want to know a
+    // player's act and proj for a certain week ... and I didn't have access to
+    // it directly in that location". The same men, with what each was projected
+    // for (the hand numbers at the top of this file): it is why "Reasonable"
+    // starts the one and sits the other.
+    ok('squad 7, Reasonable, by hand: each man’s projection for that week stands before his score', same(s7.weeks.map((w) => w.card.pj), [
+      [['10.6', '15.6'], ['10.0', '14.6']],
+      [['10.6', '15.6'], ['9.4', '10.3'], ['6.4', '12.5']],
+      [['17.9', '25.1'], ['11.7', '19.6']],
+    ]) && same(s7.weeks[0].card.full, [['M. 7 RB1 10.6 8.0', 'M. 7 RB10 15.6 10.1'], ['M. 7 WR5 10.0 5.6', 'M. 7 WR11 14.6 14.8']]),
+    [s7.weeks.map((w) => w.card.pj), s7.weeks[0].card.full]);
     ok('its Biggest swap: week 3 (+15.7) is its costliest, and the FLEX swap the larger one there',
       same(s7.big, { t: 'Biggest swapWk 3 · M. 7 RB7 8.3 → M. 7 RB10 18.2+9.9', wk: '3', tag: 'BUTTON', shown: true, hidden: false }), s7.big);
     ok('the add+drop: one swap a week, and the line names week 3’s −1.8', same(why.addDrop.weeks.map((w) => w.card.rows), [
@@ -1846,8 +1915,40 @@ for (const [run, weeksHeld] of [['why', 3], ['why-early', 4]]) {
     has(/\.dz-weeks th, \.dz-weeks td \{ padding-left: 4px; padding-right: 4px; \}/) &&
     has(/\.dz-weeks:has\(th\.sorted\) td\.dz-vs \{ max-width: 0; width: 100%; \}/) &&
     has(/\.dz-weeks\.dz-teams th \{ padding-left: 3px; padding-right: 3px; \}/), phone.length);
+  // The week preview with a projection beside each score (measured in Safari's
+  // engine, 2026-10-08, league 1241838, week 3 under Perfect hindsight — four
+  // swaps, "M. Washington Jr."): 23px wider than the sheet with the tenth; 0,
+  // every man on one line, with the whole point and 4px a side. A pair longer
+  // still wraps (0 over, two men on two lines before the 4px) and never runs off.
+  ok('the week preview on a phone: the projection to the whole point, as Season by week, 4px a side, and a sheet’s long pair wraps',
+    has(/\.dz-pop \.dz-pj \{ font-size: 0; \}/) && has(/\.dz-pop \.dz-pj::before \{ content: attr\(data-r\); font-size: 10px; \}/) &&
+    has(/\.dz-pop\.sheet td\.name \{ white-space: normal; max-width: none; \}/) &&
+    has(/\.dz-pop\.sheet td\.name, \.dz-pop\.sheet th\.name \{ padding-left: 4px; padding-right: 4px; \}/), phone.length);
   ok('none of it outside the phone block: laptop width is as it was',
-    !/\.dz-fit \.sbw-actual/.test(rest) && !/has\(th\.sorted\)/.test(rest), '');
+    !/\.dz-fit \.sbw-actual/.test(rest) && !/has\(th\.sorted\)/.test(rest) && !/attr\(data-r\)/.test(rest) && !/white-space: normal; max-width: none/.test(rest) && !/\.dz-pop\.sheet th\.name/.test(rest), '');
+}
+
+// ---- a man the feed sent no projection for: nothing is printed, never a 0
+//
+// Squad 7's WR5 (705) in week 1, his projection taken away (DZ_NOPROJ). Perfect
+// hindsight sits him for WR11 whatever anybody was projected for, so the swap
+// is the one of the hand numbers above: 5.6 out, 14.8 in.
+{
+  const N = child('lineups-noproj');
+  if (booted(N, 'a man with no projection')) {
+    const c = N.cases.find((x) => x.id === 'lineup-perfect:7:all');
+    const pv = c.previews.find((x) => x.wk === 1);
+    const men = pv.men || { started: [], instead: [] };
+    const out = men.started.find((m) => m.name === 'M. 7 WR5');
+    const inn = men.instead.find((m) => m.name === 'M. 7 WR11');
+    const cell = c.cur.rows.flatMap((r) => r.cells).find((x) => x.wk === 1 && x.name === 'M. 7 WR5');
+    const all = N.cases.flatMap((x) => x.previews.flatMap((v) => (v.men ? [...v.men.started, ...v.men.instead] : [])));
+    ok('the fixture is what it says: Season by week has no projection for him that week', Boolean(cell) && cell.pj === null && cell.shown === '5.6', cell);
+    ok('the preview prints his score alone, and the man beside him still has his projection',
+      Boolean(out && inn) && out.pj === null && out.pts === '5.6' && same([inn.pj, inn.whole, inn.first, inn.pts], ['14.6', '15', true, '14.8']), [out, inn]);
+    ok('and no man is given one he does not have: everybody else in every preview has his', all.length >= 20 &&
+      all.filter((m) => m.pj === null).every((m) => m.name === 'M. 7 WR5'), all.filter((m) => m.pj === null));
+  }
 }
 
 // ---- Season by week: what changed, the projection, the Avg, and the way there
@@ -1865,8 +1966,10 @@ for (const run of ['lineups', 'lineups-early', 'lineups-cents']) {
     const got = row.cells.map((c) => num(c.shown)).filter((v) => v !== null);
     return got.length ? tenth(got.reduce((a, b) => a + b, 0) / got.length).toFixed(1) : '—';
   };
-  const bad = { marks: [], proj: [], said: [], twice: [], sorts: [], avg: [], avgDiff: [], place: [] };
+  const bad = { marks: [], proj: [], said: [], twice: [], sorts: [], avg: [], avgDiff: [], place: [], preview: [], big: [] };
   let marks = 0;
+  let previewMen = 0;
+  let previewInPlay = 0;
   let projs = 0;
   let avgs = 0;
   let inPlay = 0;
@@ -1880,6 +1983,21 @@ for (const run of ['lineups', 'lineups-early', 'lineups-cents']) {
         bad.marks.push([c.id, pv.wk, marked(c.cur, pv.wk), pv.started, marked(c.hyp, pv.wk), pv.instead, marked(c.diff, pv.wk)]);
       }
       marks += pv.started.length + pv.instead.length;
+      // THE PREVIEW'S PROJECTION is the one Season by week prints in that
+      // man's cell: the same number, the same whole point, before his score —
+      // and none for a man still playing, whose number IS his projection.
+      for (const [h, men] of [[c.cur, (pv.men || {}).started || []], [c.hyp, (pv.men || {}).instead || []]]) {
+        for (const man of men) {
+          const cell = h.rows.flatMap((r) => r.cells).find((x) => x.chg && x.wk === pv.wk && x.name === man.name);
+          previewMen++;
+          if (cell && cell.inPlay) previewInPlay++;
+          if (!cell || man.pj !== cell.pj || man.whole !== cell.whole || (man.pj !== null && !man.first) ||
+            (cell.inPlay ? man.pj !== null : man.pj === null || man.pj !== Number(cell.want).toFixed(1))) {
+            bad.preview.push([c.id, pv.wk, man, cell && [cell.pj, cell.whole, cell.want, cell.inPlay]]);
+          }
+        }
+      }
+      if (pv.bigPj) bad.big.push([c.id, pv.wk, pv.bigPj]);
     }
     for (const h of [c.cur, c.hyp]) {
       for (const r of h.rows) {
@@ -1914,6 +2032,9 @@ for (const run of ['lineups', 'lineups-early', 'lineups-cents']) {
   ok(`THE PROJECTION: before every score, on the same line, and it is that man’s projection for that week (${projs} cells), with it to the whole point for a phone`,
     projs > 300 && bad.proj.length === 0, bad.proj.slice(0, 4));
   ok('and the cell says both numbers in words', bad.said.length === 0, bad.said.slice(0, 3));
+  ok(`THE WEEK PREVIEW prints it too: each man of Started and Instead has his Season by week projection before his score (${previewMen} men), one still playing none`,
+    previewMen >= 20 && previewMen === marks && bad.preview.length === 0 && (run === 'lineups-early' ? previewInPlay > 0 : previewInPlay === 0), [previewMen, previewInPlay, bad.preview.slice(0, 3)]);
+  ok('the Biggest swap line stays a man and his score', bad.big.length === 0, bad.big.slice(0, 3));
   ok('a man still playing shows his projection once, and a Difference shows none',
     bad.twice.length === 0 && (run === 'lineups-early' ? inPlay > 0 : inPlay === 0), [inPlay, bad.twice.slice(0, 3)]);
   ok('sorting and the colour scale stay on the score, not the projection', bad.sorts.length === 0, bad.sorts.slice(0, 3));
