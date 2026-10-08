@@ -219,7 +219,9 @@ function roomPlayer(id) {
 
 /** `a − b = total`, each as it is printed; a tenth lost to rounding gets its own row. */
 function minusRows(aLabel, a, bLabel, b, total) {
-  const t10 = (v) => Math.round(v * 10);
+  // Tenths as the card prints them (`toFixed`), which is not always what
+  // `Math.round(v * 10)` gives: 1.45 prints 1.4.
+  const t10 = (v) => Math.sign(v) * Math.round(Number(Math.abs(v).toFixed(1)) * 10);
   const rows = [
     { label: aLabel, value: a },
     { label: bLabel, html: `−${Math.abs(b).toFixed(1)}` },
