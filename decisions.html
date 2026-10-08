@@ -131,6 +131,9 @@
 .dz-big .d-zero, .dz-pop .d-zero { color: var(--dim); }
 /* A man still playing counts for his projection: drawn apart, as in Season by week. */
 .dz-big .dz-proj, .dz-pop .dz-proj { font-style: italic; opacity: 0.7; }
+/* What a man was projected for, before what he scored: Season by week's
+ * .sbw-pj, in a week's preview (not in the Biggest swap line). */
+.dz-pop .dz-pj { font-size: 11px; font-weight: 400; color: var(--dim); }
 .dz-pop {
   position: fixed; z-index: 60; min-width: 250px; max-width: calc(100vw - 16px);
   background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
@@ -275,6 +278,14 @@ div.panel-note > p:last-child { margin-bottom: 0; }
    * in the cell's title.) */
   #panelSeason .sbw-pj { font-size: 0; margin-right: 0; }
   #panelSeason .sbw-pj::before { content: attr(data-r); font-size: 10px; }
+  /* THE WEEK PREVIEW's projection the same way: with its tenth, four swaps and
+   * a long name were 23px wider than the sheet. And should a pair of men still
+   * be too long, the sheet's cell wraps (at the name, never between a man's two
+   * numbers) instead of running off the screen. */
+  .dz-pop .dz-pj { font-size: 0; }
+  .dz-pop .dz-pj::before { content: attr(data-r); font-size: 10px; }
+  .dz-pop.sheet td.name { white-space: normal; max-width: none; }
+  .dz-pop.sheet td.name, .dz-pop.sheet th.name { padding-left: 4px; padding-right: 4px; }
   #panelSeason th.avg, #panelSeason td.avg { padding-left: 4px; padding-right: 4px; }
   #resultStats { gap: 18px; }
 }
