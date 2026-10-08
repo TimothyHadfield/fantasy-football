@@ -307,6 +307,29 @@ const heatSide = (el) => {
   return m ? m[1] : null;
 };
 const mainRows = [...$('mainTable').querySelectorAll('tbody tr')].map((tr) => [...tr.children]);
+
+// A preview card, opened the way a mouse opens it and read back as printed:
+// `{ text, title, rows: [[cells…]], foot: [[cells…]] }`, or null when nothing opened.
+const fireOn = (el, type) => el.dispatchEvent(new document.defaultView.Event(type, { bubbles: true }));
+function hoverCard(el) {
+  const before = $('statCard');
+  if (before) before.setAttribute('hidden', '');
+  if (!el) return null;
+  fireOn(el, 'mouseover');
+  const pop = $('statCard');
+  if (!pop || pop.hasAttribute('hidden')) return null;
+  const cellsOf = (tr) => [...tr.children].map((c) => c.textContent.trim());
+  return {
+    text: pop.textContent,
+    title: (pop.querySelector('.tc-ident') || pop).textContent.trim(),
+    rows: [...pop.querySelectorAll('tbody tr')].map(cellsOf),
+    foot: [...pop.querySelectorAll('tfoot tr')].map(cellsOf),
+    links: pop.querySelectorAll('a, button').length,
+  };
+}
+const cardNum = (s) => Number(String(s).replace(/[▲▼,\s]/g, '').replace('−', '-').replace('+', ''));
+/** No statistician's wording where a reader can see it (Tim, 2026-10-08). */
+const JARGON = /\bSD\b|standard deviation|step \d of \d|z-score|\bsigma\b/i;
 const column = (i) => mainRows.map((c) => c[i]);
 
 /**
@@ -336,20 +359,24 @@ function direction(cells, goodHigh) {
 }
 
 // Column indices, from the second header row in stats.html.
-const C = { record: 1, avg: 2, total: 4, oppAvg: 5, fa: 6, spread: 7, luckWk: 9, ptw: 10, skill: 13 };
+const C = { record: 1, avg: 2, total: 4, oppAvg: 5, fa: 6, spread: 7, luckWk: 9, ptw: 10, luck: 12, skill: 13 };
 
+// Total, Skill and Luck score joined the scale on 2026-10-08 (docs/colour-plan.md).
 for (const [label, idx, goodHigh] of [
   ['F−A', C.fa, true],
   ['Luck/wk', C.luckWk, true],
   ['Avg', C.avg, true],
   ['Opp Avg', C.oppAvg, false],   // INVERTED: a low opponent average is an easy run
+  ['Total', C.total, true],
+  ['Skill', C.skill, true],
+  ['Luck score', C.luck, true],
 ]) {
   const why = direction(column(idx), goodHigh);
   assert(!why, `standings ${label} points the wrong way — ${why}`);
 }
 
 for (const [label, idx] of [
-  ['Total', C.total], ['Spread', C.spread], ['PTW', C.ptw], ['Skill', C.skill],
+  ['Spread', C.spread], ['PTW', C.ptw],
   ['W−L', C.record],
 ]) {
   assert(!column(idx).some((c) => heatSide(c)),
@@ -470,11 +497,13 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
       // By the number the cell prints: +50.3 reads "+50" and is left alone.
       const isOver = Math.abs(whole(v)) > LIMIT;
       if (isOver) over++;
-      const says = (td.getAttribute('title') || '').match(/Counts as ([+−]\d+) toward the season/);
+      // What it counts as is a line of the cell's card (it was a title).
+      const card = hoverCard(td);
+      const says = card ? card.foot.find((r) => r[0] === 'Counts as') : null;
       assert(td.classList.contains('capped') === isOver,
         `${t.name} wk ${t.weekly[i].week} (${v.toFixed(1)}): ${isOver ? 'not marked as past the limit' : 'marked, and it is inside the limit'}`);
-      assert(isOver ? says && num(says[1]) === (v > 0 ? LIMIT : -LIMIT) : !says,
-        `${t.name} wk ${t.weekly[i].week} (${v.toFixed(1)}): hover reads "${td.getAttribute('title')}"`);
+      assert(isOver ? says && num(says[1]) === (v > 0 ? LIMIT : -LIMIT) : card && !says,
+        `${t.name} wk ${t.weekly[i].week} (${v.toFixed(1)}): the card reads "${card ? card.text : '(none)'}"`);
     });
   }
   assert(over > 0 && moved > 0,
@@ -488,12 +517,20 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
       `"${metric}" marks a cell as past the single-week limit`);
   }
   press('luck');
-  const tip = row0[0].getAttribute('title') || '';
-  assert(/Opp scoring .+ · Act−Proj .+ · Close game /.test(tip), `Luck cell hover: "${tip}"`);
-  const [o, p, c] = (tip.match(/[+−]?\d+/g) || []).slice(0, 3).map(num);
+  // The three parts are rows of the cell's card, to a tenth, and add up to it.
+  const luckCard = hoverCard(press('luck').get(t0.name)[0]);
+  const part = (label) => {
+    const r = luckCard && luckCard.rows.find((x) => x[0] === label);
+    return r ? num(r[r.length - 1]) : NaN;
+  };
   const r0 = t0.weekly[0];
-  assert(o === whole(PART.luckOpp(r0)) && p === whole(PART.luckProj(r0)) && c === whole(r0.gameLuck ?? 0),
-    `Luck cell hover numbers ${o}/${p}/${c} are not the three parts: "${tip}"`);
+  const near = (a, b) => Math.abs(a - b) < 0.051;
+  assert(near(part('Opp scoring'), PART.luckOpp(r0)) && near(part('Act−Proj'), PART.luckProj(r0)) &&
+    near(part('Close game'), r0.gameLuck ?? 0),
+    `Luck cell card is not the three parts: "${luckCard ? luckCard.text : '(none)'}"`);
+  const luckLine = luckCard ? luckCard.foot.find((r) => r[0] === 'Luck') : null;
+  assert(luckLine && near(num(luckLine[luckLine.length - 1]), PART.luck(r0)),
+    `Luck cell card does not end on the week's luck ${PART.luck(r0).toFixed(1)}: "${luckCard ? luckCard.text : ''}"`);
   press('actual');
 }
 
@@ -857,6 +894,181 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     got[3] === tenths(first[11].textContent),
     `Luck score rows ${JSON.stringify(got)} are not the row's own Opp Avg, Luck/wk and Close luck cells`);
   fire(first[12], 'mouseout');
+}
+
+// ------------------------------------------- a preview on every number
+//
+// Tim, 2026-10-08: "If the user is curious about a number … they should be able
+// to hover over it and show a preview", and of the week-by-week grid's old
+// titles: "a bad preview is … SD and info we don't want or need". Each card is
+// opened with a mouse on the real page and its figures are worked out here from
+// the demo season, not read back off the page.
+{
+  const { generateDemoLeague } = await import(pathToFileURL(path.join(REPO, 'js/demo.js')).href);
+  const { computeLeagueStats } = await import(pathToFileURL(path.join(REPO, 'js/stats.js')).href);
+  const st = computeLeagueStats(generateDemoLeague());
+  const nameOf = (id) => st.teams.find((t) => t.id === id).name;
+  const near = (a, b) => Math.abs(a - b) < 0.051;
+  const last = (r) => (r ? r[r.length - 1] : '');
+  const row = (card, label) => (card ? [...card.rows, ...card.foot].find((r) => r.some((c) => c === label)) : null);
+  const goes = (el) => {
+    window.location.href = 'about:blank';
+    fireOn(el, 'click');
+    return window.location.href;
+  };
+  const seen = [];
+  const see = (what, card) => {
+    assert(card, `${what}: no card opened`);
+    if (!card) return false;
+    seen.push(card.text);
+    assert(!JARGON.test(card.text), `${what}: the card talks like a statistician: "${card.text}"`);
+    assert(!/NaN|undefined|null/.test(card.text), `${what}: the card prints a non-number: "${card.text}"`);
+    assert(card.links === 0, `${what}: a hover card carries a control nobody can press`);
+    return true;
+  };
+
+  // ONE PREVIEW A NUMBER: nothing in the two tables or the tiles keeps a title.
+  for (const sel of ['#weeklyTable td', '#mainTable tbody td', '#glance .stat', '#glance .stat *', '#accuracyTable td']) {
+    const left = [...document.querySelectorAll(sel)].filter((el) => el.hasAttribute('title'));
+    assert(left.length === 0, `${left.length} of "${sel}" still carry a title: "${left[0] && left[0].getAttribute('title')}"`);
+  }
+
+  // ---- week by week: the cell Tim named ----
+  const t0 = st.teams[0];
+  const r0 = t0.weekly[0];
+  const gridRow = [...$('weeklyTable').querySelectorAll('tbody tr')]
+    .find((tr) => tr.children[0].textContent.trim() === t0.name);
+  const wkCell = gridRow.children[1];
+  assert($('weeklyTable').querySelectorAll('tbody td[data-wk][data-team]').length === st.teams.reduce((n, t) => n + t.weekly.length, 0),
+    'not every played week on the grid opens a card');
+  const wk = hoverCard(wkCell);
+  if (see('week cell', wk)) {
+    assert(wk.title.includes(t0.name) && wk.title.includes(`Week ${r0.week}`), `week cell card is headed "${wk.title}"`);
+    const vs = wk.rows.find((r) => r[0].startsWith('vs '));
+    assert(vs && vs[0] === `vs ${nameOf(r0.oppId)}` && last(vs).startsWith(r0.won ? 'Won' : r0.tied ? 'Tied' : 'Lost') &&
+      last(vs).includes(r0.actual.toFixed(1)) && last(vs).includes(r0.oppActual.toFixed(1)),
+      `week cell card does not name the opponent and the result: ${JSON.stringify(vs)}`);
+    assert(near(cardNum(last(row(wk, 'Proj'))), r0.projected) && near(cardNum(last(row(wk, 'Scored'))), r0.actual) &&
+      near(cardNum(last(row(wk, 'Difference'))), r0.actual - r0.projected),
+      `week cell card's Proj / Scored / Difference are not the week's: "${wk.text}"`);
+    const that = st.teams.map((t) => t.weekly.find((x) => x.week === r0.week)).filter(Boolean).map((x) => x.actual);
+    const mean = that.reduce((a, b) => a + b, 0) / that.length;
+    const rank = that.filter((v) => v > r0.actual).length + 1;
+    assert(near(cardNum(last(row(wk, 'League that week'))), mean), `week cell card's league figure is not ${mean.toFixed(1)}: "${wk.text}"`);
+    assert(new RegExp(`^${rank}(st|nd|rd|th) of ${that.length}$`).test(last(row(wk, 'Rank that week'))),
+      `week cell card's rank is not ${rank} of ${that.length}: ${JSON.stringify(row(wk, 'Rank that week'))}`);
+  }
+  assert(goes(wkCell) === `analysis.html?team=${t0.id}&week=${r0.week}#rosterDetail`,
+    `a click on a week cell went to "${window.location.href}"`);
+  fireOn(wkCell, 'mouseout');
+  assert($('statCard').hasAttribute('hidden'), 'moving off a week cell left its card open');
+
+  // The trailing Avg: the weeks it is the average of.
+  const avgCard = hoverCard(gridRow.children[gridRow.children.length - 1]);
+  if (see('grid Avg', avgCard)) {
+    assert(avgCard.rows.length === t0.weekly.length && near(cardNum(last(row(avgCard, 'Average'))), t0.avgActual),
+      `grid Avg card is not the ${t0.weekly.length} weeks and their average: "${avgCard.text}"`);
+  }
+  // The League row and the week heading are the week itself; only the row links.
+  const foot = $('weeklyTable').querySelector('tfoot tr');
+  const lg = hoverCard(foot.children[1]);
+  if (see('League row', lg)) {
+    assert(lg.title.includes(`Week ${st.weekNumbers[0]}`) && lg.rows.length === st.teams.length / 2,
+      `League row card is not week ${st.weekNumbers[0]}'s ${st.teams.length / 2} games: "${lg.text}"`);
+  }
+  assert(goes(foot.children[1]) === `schedule.html?week=${st.weekNumbers[0]}`, `a click on the League row went to "${window.location.href}"`);
+  const head = $('weeklyHead').children[1];
+  see('week heading', hoverCard(head));
+  assert(goes(head) === 'about:blank', `a click on a week heading left the page (it sorts): "${window.location.href}"`);
+  assert(!head.hasAttribute('title'), 'the week heading has a card and a title');
+
+  // ---- standings: every cell opens one thing ----
+  const body = [...$('mainTable').querySelectorAll('tbody tr')];
+  assert(body.every((tr) => [...tr.children].every((td) => td.hasAttribute('data-cell') !== td.hasAttribute('data-explain'))),
+    'a standings cell opens nothing, or two things');
+  const mine = body.find((tr) => tr.children[0].textContent.trim() === t0.name);
+  const avg = hoverCard(mine.children[C.avg]);
+  if (see('standings Avg', avg)) {
+    assert(avg.rows.length === t0.weekly.length && near(cardNum(avg.rows[0][avg.rows[0].length - 1]), r0.actual),
+      `standings Avg card is not the weeks behind it: "${avg.text}"`);
+    assert(near(cardNum(last(row(avg, 'Avg'))), t0.avgActual) && near(cardNum(last(row(avg, 'League avg'))), st.leagueAvgActual) &&
+      /of 10$/.test(last(row(avg, 'Rank'))),
+      `standings Avg card does not end on the average, the league's and the rank: ${JSON.stringify(avg.foot)}`);
+  }
+  const rec = hoverCard(mine.children[C.record]);
+  if (see('standings W–L', rec)) {
+    const won = rec.rows.filter((r) => last(r).startsWith('Won')).length;
+    const lost = rec.rows.filter((r) => last(r).startsWith('Lost')).length;
+    assert(won === t0.wins && lost === t0.losses && rec.rows.length === t0.weekly.length,
+      `W–L card counts ${won}–${lost} for a ${t0.wins}–${t0.losses} team: "${rec.text}"`);
+  }
+  for (const [label, idx] of [['Total', C.total], ['Spread', C.spread], ['LS', 15], ['AS', 17], ['Opp proj', 8]]) {
+    see(`standings ${label}`, hoverCard(mine.children[idx]));
+  }
+  const total = hoverCard(mine.children[C.total]);
+  assert(total && near(cardNum(last(row(total, 'Total'))), t0.totalActual), `Total card does not add up to ${t0.totalActual.toFixed(1)}`);
+  const nameCard = hoverCard(mine.children[0]);
+  see('team name', nameCard);
+  assert(goes(mine.children[0]) === `analysis.html?team=${t0.id}#rosterDetail`, `a click on a team name went to "${window.location.href}"`);
+  see('grid team name', hoverCard(gridRow.children[0]));
+
+  // ---- the tiles: who and when ----
+  const tile = (label) => [...document.querySelectorAll('#glance .stat')]
+    .find((el) => el.querySelector('.k').textContent.trim() === label);
+  const all = st.teams.flatMap((t) => t.weekly.map((r) => ({ t, r })));
+  const top = all.reduce((a, b) => (b.r.actual > a.r.actual ? b : a));
+  const hi = hoverCard(tile('Highest week'));
+  if (see('Highest week', hi)) {
+    assert(hi.rows[0].includes(top.t.name) && hi.rows[0].includes(String(top.r.week)) && near(cardNum(last(hi.rows[0])), top.r.actual),
+      `Highest week card does not say ${top.t.name}, week ${top.r.week}, ${top.r.actual.toFixed(1)}: ${JSON.stringify(hi.rows[0])}`);
+  }
+  assert(goes(tile('Highest week')) === `analysis.html?team=${top.t.id}&week=${top.r.week}#rosterDetail`,
+    `a click on Highest week went to "${window.location.href}"`);
+  for (const label of ['League avg', 'Avg projected', 'Lowest week', 'Best record', 'Projection accuracy']) {
+    see(`tile ${label}`, hoverCard(tile(label)));
+  }
+  const la = hoverCard(tile('League avg'));
+  assert(la && la.rows.length === st.weekNumbers.length, 'League avg tile card is not one row a week');
+  for (const label of ['Teams', 'Weeks']) {
+    assert(!hoverCard(tile(label)), `the ${label} tile is a count of rows on the page and opens a card anyway`);
+  }
+
+  // ---- projection accuracy: the games counted ----
+  const accRow = $('accuracyTable').querySelector('tbody tr');
+  const acc = hoverCard(accRow.children[1]);
+  if (see('accuracy row', acc)) {
+    const pairs = acc.rows.map((r) => last(r).match(/^(\d+) of (\d+)$/)).filter(Boolean);
+    const right = pairs.reduce((a, m) => a + Number(m[1]), 0);
+    const games = pairs.reduce((a, m) => a + Number(m[2]), 0);
+    assert(pairs.length === acc.rows.length && games === Number(accRow.children[1].textContent) && right === Number(accRow.children[2].textContent),
+      `accuracy card's weeks come to ${right} of ${games}; the row prints ${accRow.children[2].textContent} of ${accRow.children[1].textContent}`);
+  }
+
+  // ---- the two numbers over each scatter: one plain line ----
+  const fitTiles = [...document.querySelectorAll('.fit-stats .stat')];
+  assert(fitTiles.length === 4, `expected four fit tiles, found ${fitTiles.length}`);
+  for (const el of fitTiles) {
+    const c = hoverCard(el);
+    if (see(`fit tile ${el.textContent.trim()}`, c)) {
+      assert(c.rows.length === 0 && c.text.trim().split(/\s+/).length <= 30, `fit tile card is not one plain line: "${c.text}"`);
+    }
+  }
+
+  // ---- score distribution: the scores in the bucket ----
+  const bar = [...$('chartDist').querySelectorAll('.ff-hit')]
+    .map((el) => ({ el, n: st.distribution10.counts[Number(el.getAttribute('data-i'))], bin: st.distribution10.bins[Number(el.getAttribute('data-i'))] }))
+    .filter((b) => b.n > 0 && b.n <= 10)[0];
+  const dist = hoverCard(bar.el);
+  if (see('distribution bar', dist)) {
+    const lo = parseInt(bar.bin, 10);
+    const vals = dist.rows.map((r) => cardNum(last(r)));
+    assert(dist.rows.length === bar.n && vals.every((v) => v >= lo && v < lo + 10),
+      `the ${bar.bin} bar counts ${bar.n}; its card lists ${JSON.stringify(dist.rows)}`);
+  }
+  assert($('chartDist').getAttribute('data-ff-tip') === 'off', 'the distribution chart still draws its own tooltip under the card');
+
+  assert(new Set(seen).size >= 20, `only ${new Set(seen).size} different cards opened`);
+  hoverCard(null);
 }
 
 // ARRIVING FROM ANOTHER PAGE (2026-10-08): `stats.html?team=3` marks that

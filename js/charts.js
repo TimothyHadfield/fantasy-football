@@ -289,6 +289,9 @@ function createTooltip(container, { navigate = null } = {}) {
   let tapSeen = null;      // the link the finger's PREVIOUS tap was on
   let armed = false;       // should the click this press ends in follow it?
   function show(title, rows, x, y, href = null) {
+    // A page that opens its own card on these marks says so on the container
+    // (`data-ff-tip="off"`), and this one stays shut: one preview a mark.
+    if (container.dataset && container.dataset.ffTip === 'off') return;
     curHref = href ? String(href) : null;
     try { container.style.cursor = curHref ? 'pointer' : ''; } catch (_) { /* no style here */ }
     el.textContent = '';

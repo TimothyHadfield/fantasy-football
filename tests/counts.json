@@ -30,7 +30,7 @@
       "assertions": 60
     },
     "charts-check.mjs": {
-      "assertions": 138
+      "assertions": 141
     },
     "test-bye-rule.mjs": {
       "assertions": 85,
@@ -92,7 +92,7 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 1003
+      "assertions": 1142
     },
     "opp-check.mjs": {
       "scenarios": 7
@@ -173,7 +173,7 @@
       "assertions": 229
     },
     "stats-fit.mjs": {
-      "assertions": 142
+      "assertions": 148
     },
     "roster-link-check.mjs": {
       "assertions": 107,
@@ -197,7 +197,7 @@
       "assertions": 82
     },
     "shared-tables-check.mjs": {
-      "assertions": 271
+      "assertions": 318
     },
     "test-decision-data.mjs": {
       "assertions": 201

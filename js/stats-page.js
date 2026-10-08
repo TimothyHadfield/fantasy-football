@@ -34,7 +34,9 @@ import { lineChart, histogram, boxPlot, scatterChart, leastSquares, SERIES_COLOR
 // THE SHARED RED/GREEN SCALE (Tim, 2026-09-19). It REPLACED a local
 // `heatScale()` that lived here — see `heatCell` below for what was wrong with
 // it and why the two could not coexist.
-import { heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn } from './heat.js';
+import {
+  heatScale, heatOf, heatMarkHtml, describeHeat, describeHeatPerColumn, heatStanding, ordinal,
+} from './heat.js';
 // ROSTER STRENGTH AND FUTURE PROJ DIFF (Tim, 2026-10-08): a squad's best-lineup
 // week, the very arithmetic the Analysis page's Weekly totals are made of.
 import { lineupWeekTotals, futureAverages, futureDiffs } from './lineup-avg.js';
@@ -44,13 +46,14 @@ import { lineupWeekTotals, futureAverages, futureDiffs } from './lineup-avg.js';
 // rather than kept twice.
 import {
   standingsRowsHtml, standingsScales, standingsHeadings, standingsExplain, heatCell, winPctOf,
-  fmt, dash, signed, esc,
+  fmt, pf, dash, signed, esc,
 } from './standings-table.js';
 import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
-import { savedConfig, onConnection } from './connection.js';
+import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { wirePops, hidePop } from './pop.js';
-import { readParam, teamHref } from './links.js';
+import { readParam, teamHref, weekHref } from './links.js';
+import { playerCardFromWeeks, registerRun, clearRuns, showCard, hideTip } from './player-card.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('stats');
@@ -368,11 +371,10 @@ function accuracyTile(bucket) {
     : `${Math.round(bucket.accuracy * 100)}% ${n}`;
 }
 
-/** "3–1 Name"; a record with a game in play carries its basis as a title (rule 7). */
+/** "3–1 Name". The basis of a record with a game in play (rule 7) is the last
+ *  line of the tile's card (`glanceSpec`); it was a title on the figure. */
 function bestRecordTile(top) {
-  const r = recordOf(top);
-  const rec = r.live ? `<span title="${esc(r.title)}">${r.text}</span>` : r.text;
-  return `${rec} ${esc(top.name)}`;
+  return `${recordOf(top).text} ${esc(top.name)}`;
 }
 
 function renderGlance() {
@@ -384,26 +386,30 @@ function renderGlance() {
 
   const none = noGames();
 
+  // The third entry names the tile's card (`glanceSpec`). Teams and Weeks have
+  // none: each is a count of things already on the page.
   const items = [
     ['Teams', s.teams.length],
     ['Weeks', weeks],
     // With one week an "average" is just that week, so it says so; with none
     // there is no average at all, and stats.js's 0 must not be printed as one.
     [weeks === 1 ? `Week ${s.weekNumbers[0]} avg` : 'League avg',
-      none ? dash : fmt(s.leagueAvgActual)],
+      none ? dash : fmt(s.leagueAvgActual), 'leagueAvg'],
     [weeks === 1 ? 'Projected' : 'Avg projected',
-      none ? dash : fmt(s.leagueAvgProjected)],
-    ['Highest week', box ? fmt(box.max) : dash],
-    ['Lowest week', box ? fmt(box.min) : dash],
-    ['Best record', top && !none ? bestRecordTile(top) : dash],
+      none ? dash : fmt(s.leagueAvgProjected), 'leagueProj'],
+    ['Highest week', box ? fmt(box.max) : dash, 'high'],
+    ['Lowest week', box ? fmt(box.min) : dash, 'low'],
+    ['Best record', top && !none ? bestRecordTile(top) : dash, 'record'],
     // The one tile that can say something before kickoff. It arrives late — the
     // schedule read is asynchronous — so renderOppProjPanel() repaints this row.
-    ['Hardest schedule', hardestScheduleTile()],
-    ['Projection accuracy', accuracyTile(overall)],
+    ['Hardest schedule', hardestScheduleTile(), 'schedule'],
+    ['Projection accuracy', accuracyTile(overall), 'accuracy'],
   ];
 
+  wirePops($('glance'), { selector: '.stat[data-glance]', card: (el) => glanceSpec(el.dataset.glance) });
   $('glance').innerHTML = items
-    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+    .map(([k, v, card]) => `<div class="stat"${card && v !== dash ? ` data-glance="${card}" tabindex="0"` : ''}>` +
+      `<div class="k">${k}</div><div class="v">${v}</div></div>`)
     .join('');
 }
 
@@ -462,8 +468,15 @@ function renderMainTable() {
     selector: 'td[data-explain]',
     card: (el) => explainSpec(el.dataset.team, el.dataset.explain),
   });
+  // `cards`: every other cell opens a preview of its own (`cellSpec`), and
+  // `moreColour` puts Total, Skill and Luck score on the scale (2026-10-08).
+  wirePops(table, {
+    selector: 'td[data-cell]',
+    card: (el) => cellSpec(el.dataset.team, el.dataset.cell),
+  });
   tbody.innerHTML = standingsRowsHtml(s, {
     highlightId: state.highlight, recordOf, oppProj, scales, explain: true,
+    moreColour: true, cards: true,
   });
   markLinkedRow();
 
@@ -559,16 +572,17 @@ function renderMainTable() {
     // WHICH COLUMNS ARE LEFT ALONE, AND WHY. Kept as one sentence a reader can
     // check against the table rather than a shrug: three different reasons, and
     // every one of them is a rule in js/heat.js rather than a preference.
+    '<strong>Total</strong>, <strong>Skill</strong> and <strong>Luck score</strong> are ' +
+    'coloured the same way, each down its own column: more is green.',
     'Every other column on this table is left uncoloured on purpose. <strong>LS</strong>, ' +
     '<strong>PS</strong> and <strong>AS</strong> are ranks, which are already an ordering. ' +
-    '<strong>Close luck</strong>, <strong>Luck score</strong> and <strong>S+L</strong> carry a ' +
-    '±, and early in a season that margin is wider than the gaps between the teams — a colour ' +
-    'would claim a ranking the ± says is not there yet. <strong>Total</strong> is the Avg ' +
-    'column multiplied by the same number of games for everyone and <strong>Skill</strong> is ' +
-    'the Proj column minus the same league average for everyone, so both would repeat a colour ' +
-    'that is already in the row. <strong>Spread</strong> and <strong>PTW</strong> have no good ' +
+    '<strong>Close luck</strong> and <strong>S+L</strong> carry a ' +
+    '±, and early in a season that margin is wider than the gaps between the teams. ' +
+    '<strong>Spread</strong> and <strong>PTW</strong> have no good ' +
     'end to point at: a low spread is consistency whether a team is good or bad, and PTW rises ' +
     'both when your opponents score more and when your own luck runs against you.',
+    'Hover or tap any number for what it is made of. A click on a team&rsquo;s name opens its ' +
+    'roster on Analysis.',
   ]);
 
   // Default to standings order; afterwards keep whatever the user picked.
@@ -741,10 +755,22 @@ function renderCharts() {
   // two managers showing the same string used to get both lines emphasised.
   const highlightId = state.highlight ?? undefined;
 
+  // The preview over a week names the week, and adds My team's game in it: the
+  // opponent and the result (docs/previews-plan.md).
+  const weekTip = {
+    tipTitle: (i, label) => `Week ${label}`,
+    tipExtra: (i) => {
+      const t = state.highlight === null ? null : teamOfId(state.highlight);
+      const r = t ? t.weekly.find((x) => x.week === s.weekNumbers[i]) : null;
+      return r ? [{ value: resultText(r), name: `vs ${teamName(r.oppId)}` }] : null;
+    },
+  };
+
   lineChart($('chartWeekly'), {
     ...scoreView(view.scoresView),
     xLabels,
     highlight: highlightId,
+    ...weekTip,
   });
 
   // Weekly luck, two ways (B1). "Running total" is the chart that used to be
@@ -766,6 +792,7 @@ function renderCharts() {
     height: 300,
     zeroLine: true,
     highlight: highlightId,
+    ...weekTip,
   });
 
   renderDistribution();
@@ -813,6 +840,7 @@ function renderCharts() {
         q3: box.q3,
         max: box.max,
         outliers: box.outliers,
+        href: teamHref(t.id),
         // "Every week as a dot" (B5): the scores the box was made from.
         points: (t.weekly || []).filter((w) => typeof w.actual === 'number')
           .map((w) => ({ value: w.actual, label: `week ${w.week}`, href: teamHref(t.id, w.week) })),
@@ -820,11 +848,35 @@ function renderCharts() {
     xLabel: 'Points',
     mode: view.spreadView === 'dots' ? 'dots' : undefined,
     highlight: highlightId,
+    // In plain words, and naming the weeks: a box is a typical week, the middle
+    // half of them, and the best and the worst; a dot is one week and its game.
+    tipRows: (row, pt) => {
+      const t = teamOfId(row.key);
+      const played = t ? t.weekly.filter((w) => isNum(w.actual)) : [];
+      if (!played.length) return null;
+      if (pt) {
+        const r = played.find((w) => `week ${w.week}` === pt.label);
+        return r ? [{ color: row.color, value: fmt(r.actual), name: `week ${r.week} vs ${teamName(r.oppId)}` }] : null;
+      }
+      const best = played.reduce((a, b) => (b.actual > a.actual ? b : a));
+      const worst = played.reduce((a, b) => (b.actual < a.actual ? b : a));
+      return [
+        { color: row.color, value: fmt(row.median), name: 'typical week' },
+        { value: `${fmt(row.q1)}–${fmt(row.q3)}`, name: 'middle half' },
+        { value: fmt(best.actual), name: `best, week ${best.week}` },
+        { value: fmt(worst.actual), name: `worst, week ${worst.week}` },
+      ];
+    },
   });
 }
 
 function renderDistribution() {
   const s = state.stats;
+  // A bar opens the scores in it (`distSpec`), so the chart's own small
+  // preview of the count stays shut: one preview a bar.
+  const box = $('chartDist');
+  box.dataset.ffTip = 'off';
+  wirePops(box, { selector: '.ff-hit', card: (el) => distSpec(Number(el.getAttribute('data-i'))) });
   histogram($('chartDist'), {
     bins: s.distribution10.bins,
     counts: s.distribution10.counts,
@@ -1376,11 +1428,409 @@ function explainSpec(teamId, key) {
   const ex = team ? standingsExplain(state.stats, team, key) : null;
   if (!ex) return null;
   const num = (r) => (r.signed ? signed(r.value) : fmt(r.value));
+  // Luck score and Skill are on the colour scale (2026-10-08), and a colour
+  // never goes without its words: where the figure stands, under the parts.
+  let foot = '';
+  if (key === 'luckScore' || key === 'skill') {
+    const scale = heatScale(state.stats.teams.filter((t) => t.weekly.length).map((t) => t[key]).filter(isNum));
+    const place = standingWords(team[key], scale);
+    // The standing alone: "League avg" is already a row of the Luck score's
+    // parts, where it means the league's scoring.
+    if (place) foot = place;
+  }
   return {
     title: team.name,
     sub: ex.label,
     rows: ex.rows.map((r) => ({ label: r.label, html: num(r) })),
     total: { label: ex.mean ? 'Average' : ex.foot.label, html: num(ex.foot) },
+    foot,
+  };
+}
+
+// ------------------------------------------------- a preview on every number
+//
+// Tim, 2026-10-08: "If the user is curious about a number or it's breakdown …
+// they should be able to hover over it and show a preview", and "connectors to
+// other places in the cite using previews". Every card below is built when it
+// is asked for (`wirePops` with a `card` function), from figures the page
+// already holds: nothing is registered, nothing is read from ESPN, and nothing
+// here talks about the colour scale — a card says where a number came from and
+// where it stands, in points and places (docs/previews-plan.md, Stats).
+
+const teamOfId = (id) => (state.stats
+  ? state.stats.teams.find((t) => String(t.id) === String(id)) || null
+  : null);
+const teamName = (id) => { const t = teamOfId(id); return t ? t.name : '—'; };
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+/** "Won 131.2–118.4", the team's own score first. */
+const resultText = (r) => `${r.tied ? 'Tied' : r.won ? 'Won' : 'Lost'} ${fmt(r.actual)}–${fmt(r.oppActual)}`;
+
+/** "3rd highest of 10": the short count, so nobody has to ask which end is 1st. */
+function standingWords(v, scale) {
+  const st = heatStanding(v, scale);
+  if (!st) return null;
+  const top = st.rank <= st.lowRank;
+  const r = top ? st.rank : st.lowRank;
+  const end = top ? 'highest' : 'lowest';
+  return `${r === 1 ? end[0].toUpperCase() + end.slice(1) : `${ordinal(r)} ${end}`} of ${st.of}`;
+}
+
+/** A team, in five lines, and the way to its roster. */
+function teamSpec(t) {
+  const s = state.stats;
+  const heads = standingsHeadings(s);
+  const played = t.weekly.length > 0 && !noGames();
+  return {
+    title: t.name,
+    sub: played ? recordOf(t).text : '',
+    rows: played ? [
+      { label: heads.avg, value: t.avgActual },
+      { label: 'Proj', value: t.avgProjected },
+      { label: 'Total', html: pf(t.totalActual) },
+      ...(isNum(t.luckScore) ? [{ label: 'Luck score', html: signed(t.luckScore) }] : []),
+      ...(isNum(t.actualStanding) ? [{ label: 'Standing', value: `${ordinal(t.actualStanding)} of ${s.teams.length}` }] : []),
+    ] : [],
+    href: teamHref(t.id),
+    hrefLabel: 'Open roster',
+  };
+}
+
+// The standings columns that are one number per week, averaged (or summed):
+// the weeks are the card.
+const WEEK_COLUMNS = {
+  avg: { of: (t) => t.avgActual, wk: (r) => r.actual, head: 'Scored' },
+  proj: { label: 'Proj', of: (t) => t.avgProjected, wk: (r) => r.projected, head: 'Proj' },
+  total: { label: 'Total', of: (t) => t.totalActual, wk: (r) => r.actual, head: 'Scored', show: (v) => pf(v) },
+  oppAvg: { of: (t) => t.oppAvgActual, wk: (r) => r.oppActual, head: 'They scored' },
+  fa: { label: 'F−A', of: (t) => t.forMinusAgainst, wk: (r) => r.actualDiff, head: 'Margin', sign: true },
+  luckWk: { label: 'Luck/wk', of: (t) => t.avgLuck, wk: (r) => r.luck, head: 'Act−Proj', sign: true },
+  spread: { label: 'Spread', of: (t) => t.actualStdev, wk: (r) => r.actual, head: 'Scored' },
+};
+const RANK_COLUMNS = {
+  ls: { label: 'LS', by: 'luckStanding', sub: 'by luck score', show: (t) => signed(t.luckScore) },
+  ps: { label: 'PS', by: 'projectedStanding', sub: 'by skill + luck', show: (t) => signed(t.skillPlusLuck) },
+  as: { label: 'AS', by: 'actualStanding', sub: 'by record', show: (t) => recordOf(t).text },
+};
+
+/** One cell of the standings table that is not one of `explainSpec`'s five. */
+function cellSpec(teamId, key) {
+  const s = state.stats;
+  const t = teamOfId(teamId);
+  if (!s || !t) return null;
+  if (key === 'name') return teamSpec(t);
+  const heads = standingsHeadings(s);
+  const link = { href: teamHref(t.id), hrefLabel: 'Open roster' };
+  const withGames = s.teams.filter((x) => x.weekly.length);
+
+  if (key === 'record') {
+    const rec = recordOf(t);
+    return {
+      title: t.name,
+      sub: 'W–L',
+      head: ['Wk', 'Opponent', 'Result'],
+      rows: t.weekly.map((r) => ({ lead: r.week, label: `vs ${teamName(r.oppId)}`, value: resultText(r) })),
+      total: { label: 'W–L', value: rec.text },
+      // Rule 7: the basis of a record with a game in play.
+      foot: rec.live ? rec.title : '',
+      ...link,
+    };
+  }
+
+  const col = WEEK_COLUMNS[key];
+  if (col) {
+    if (!t.weekly.length) return null;
+    const label = col.label || (key === 'avg' ? heads.avg : heads.oppAvg);
+    const show = col.show || (col.sign ? signed : fmt);
+    const scale = heatScale(withGames.map(col.of).filter(isNum));
+    const place = standingWords(col.of(t), scale);
+    return {
+      title: t.name,
+      sub: label,
+      head: ['Wk', 'Opponent', col.head],
+      rows: t.weekly.map((r) => ({
+        lead: r.week,
+        label: `vs ${teamName(r.oppId)}`,
+        html: col.sign ? signed(col.wk(r)) : fmt(col.wk(r)),
+      })),
+      totals: [
+        ...(scale ? [{ label: 'League avg', html: show(scale.mean) }] : []),
+        ...(place ? [{ label: 'Rank', value: place }] : []),
+      ],
+      total: { label, html: isNum(col.of(t)) ? show(col.of(t)) : dash },
+      ...link,
+    };
+  }
+
+  if (key === 'oppProj') {
+    const data = state.oppProj;
+    const o = data && data.byTeam ? data.byTeam.get(t.id) : null;
+    if (!o) return null;
+    const scale = heatScale(oppRows().map((r) => r.avgOpp));
+    const place = standingWords(o.avgOpp, scale);
+    return {
+      title: t.name,
+      sub: 'Opp proj',
+      rows: [{ label: 'Games on the schedule', value: String(o.games) }],
+      totals: [
+        ...(isNum(data.leagueAvg) ? [{ label: 'League avg', value: data.leagueAvg }] : []),
+        ...(place ? [{ label: 'Rank', value: place }] : []),
+      ],
+      total: { label: 'Opp proj', value: o.avgOpp },
+    };
+  }
+
+  const rank = RANK_COLUMNS[key];
+  if (rank) {
+    const order = withGames.filter((x) => isNum(x[rank.by])).sort((a, b) => a[rank.by] - b[rank.by]);
+    if (!order.length) return null;
+    return {
+      title: t.name,
+      sub: `${rank.label} · ${rank.sub}`,
+      rows: order.map((x) => ({ lead: x[rank.by], label: x.name, html: rank.show(x) })),
+    };
+  }
+  return null;
+}
+
+/**
+ * One week of the league: its games, and what the ten averaged.
+ * `link` is off for a column heading, whose click sorts.
+ */
+function weekSpec(week, { link = true } = {}) {
+  const s = state.stats;
+  if (!s) return null;
+  const w = Number(week);
+  const seen = new Set();
+  const rows = [];
+  for (const t of s.teams) {
+    const r = t.weekly.find((x) => x.week === w);
+    if (!r || seen.has(t.id)) continue;
+    seen.add(t.id);
+    seen.add(r.oppId);
+    // The winner first, so the score reads the way the sentence does.
+    const flip = r.actual < r.oppActual;
+    const [a, b] = flip ? [teamName(r.oppId), t.name] : [t.name, teamName(r.oppId)];
+    const [x, y] = flip ? [r.oppActual, r.actual] : [r.actual, r.oppActual];
+    rows.push({ label: `${a} ${r.tied ? 'tied' : 'beat'} ${b}`, value: `${fmt(x)}–${fmt(y)}` });
+  }
+  if (!rows.length) return null;
+  const lg = w === partWeek() ? null : s.weeklyLeagueAverages.find((a) => a.week === w);
+  return {
+    title: `Week ${w}`,
+    rows,
+    totals: lg ? [
+      { label: 'League avg', value: lg.avgActual },
+      { label: 'Avg projected', value: lg.avgProjected },
+    ] : [],
+    ...(link ? { href: weekHref(w), hrefLabel: 'Open week' } : {}),
+  };
+}
+
+// What `renderWeeklyTable` last drew, for the cards of its cells: the measure
+// on the grid, its value for a row, and the scale each week was coloured by.
+let grid = null;
+const GRID_LABEL = {
+  actual: 'Actual', projected: 'Projected', luck: 'Luck', luckProj: 'Act−Proj',
+  luckOpp: 'Opp scoring', luckClose: 'Close game', actualDiff: 'Margin',
+};
+
+/**
+ * One cell of the week-by-week grid — the preview Tim named (2026-10-08): the
+ * team and week, the opponent and the result, Proj / Scored / Difference, the
+ * league that week and where the cell ranks in it. Under a luck button the
+ * week's three parts follow, adding up to the week's luck; a week past the
+ * single-week limit says what it counts as.
+ */
+function gridSpec(teamId, week) {
+  const t = teamOfId(teamId);
+  const r = t && grid ? t.weekly.find((x) => x.week === Number(week)) : null;
+  if (!r) return null;
+  const { metric } = grid;
+  const v = grid.valueOf(r);
+  const scale = grid.weekScales.get(r.week) || null;
+  const st = isNum(v) ? heatStanding(v, scale) : null;
+  const show = grid.useSign ? signed : fmt;
+  const luckView = metric in LUCK_PART;
+  const p = luckView ? grid.partsOf(r) : null;
+  const what = metric === 'actual' ? '' : ` ${GRID_LABEL[metric].toLowerCase()}`;
+  return {
+    title: t.name,
+    sub: `Week ${r.week}`,
+    rows: [
+      { label: `vs ${teamName(r.oppId)}`, value: resultText(r) },
+      { label: 'Proj', value: r.projected },
+      { label: 'Scored', value: r.actual },
+      { label: 'Difference', html: signed(r.actual - r.projected) },
+      ...(metric === 'actualDiff' ? [{ label: 'Margin', html: signed(r.actualDiff) }] : []),
+      ...(p ? [
+        { label: 'Opp scoring', html: signed(p.opp) },
+        { label: 'Act−Proj', html: signed(p.proj) },
+        { label: 'Close game', html: p.close === null ? 'tie' : signed(p.close) },
+      ] : []),
+    ],
+    totals: [
+      ...(p ? [{ label: 'Luck', html: signed(p.total) }] : []),
+      ...(metric === 'luck' && grid.capped(r) ? [{ label: 'Counts as', html: signed(r.weekLuckCounted, 0) }] : []),
+      ...(st ? [
+        // Under any button but Actual the two lines say which measure they are of.
+        { label: what ? `League${what}` : 'League that week', html: show(st.mean) },
+        { label: what ? `Rank by${what}` : 'Rank that week', value: `${ordinal(st.rank)} of ${st.of}` },
+      ] : []),
+    ],
+    href: teamHref(t.id, r.week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** The grid's trailing Avg: the weeks it is the average of. */
+function gridAvgSpec(teamId) {
+  const t = teamOfId(teamId);
+  if (!t || !grid || !t.weekly.length) return null;
+  const show = grid.useSign ? signed : fmt;
+  const avg = grid.teamAvg(t);
+  const place = isNum(avg) ? standingWords(avg, grid.avgScale) : null;
+  return {
+    title: t.name,
+    sub: GRID_LABEL[grid.metric],
+    head: ['Wk', 'Opponent', GRID_LABEL[grid.metric]],
+    rows: t.weekly.map((r) => {
+      const v = grid.countedOf(r);
+      return { lead: r.week, label: `vs ${teamName(r.oppId)}`, html: isNum(v) ? show(v) : dash };
+    }),
+    totals: [
+      ...(grid.avgScale ? [{ label: 'League avg', html: show(grid.avgScale.mean) }] : []),
+      ...(place ? [{ label: 'Rank', value: place }] : []),
+    ],
+    total: { label: 'Average', html: isNum(avg) ? show(avg) : dash },
+    href: teamHref(t.id),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** Every finished game once, from the weekly rows the page holds. */
+function gamesPlayed() {
+  const out = [];
+  const seen = new Set();
+  for (const t of state.stats.teams) {
+    for (const r of t.weekly) {
+      const id = `${r.week}:${[String(t.id), String(r.oppId)].sort().join(':')}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ week: r.week, proj: r.projected, oppProj: r.oppProjected, pts: r.actual, oppPts: r.oppActual });
+    }
+  }
+  return out;
+}
+
+/**
+ * One row of Projection accuracy, week by week: "3 of 5" right. The games are
+ * counted here by the rule js/stats.js states (`predictionAccuracy`), and the
+ * card is offered only when that count is the row's own — a card that disagreed
+ * with the table it hangs off would be worse than none.
+ */
+function accSpec(threshold) {
+  const s = state.stats;
+  const t = Number(threshold);
+  const bucket = s && s.predictionAccuracy.find((a) => a.threshold === t);
+  if (!bucket || !bucket.games) return null;
+  const counted = gamesPlayed().filter((g) => g.proj > 0 && g.oppProj > 0 &&
+    g.proj !== g.oppProj && Math.abs(g.proj - g.oppProj) > t);
+  const right = (g) => (g.proj > g.oppProj) === (g.pts > g.oppPts);
+  if (counted.length !== bucket.games || counted.filter(right).length !== bucket.correct) return null;
+  const weeks = [...new Set(counted.map((g) => g.week))].sort((a, b) => a - b);
+  return {
+    title: 'Projection accuracy',
+    sub: t === 0 ? 'all games' : `projected gap over ${t}`,
+    rows: weeks.map((w) => {
+      const of = counted.filter((g) => g.week === w);
+      return { label: `Week ${w}`, value: `${of.filter(right).length} of ${of.length}` };
+    }),
+    total: {
+      label: 'Favourite won',
+      value: `${bucket.correct} of ${bucket.games}` +
+        (bucket.accuracy === null ? '' : ` · ${Math.round(bucket.accuracy * 100)}%`),
+    },
+  };
+}
+
+/** A tile of the glance row: who, and when. */
+function glanceSpec(kind) {
+  const s = state.stats;
+  if (!s || noGames()) return kind === 'schedule' ? scheduleSpec() : null;
+  if (kind === 'leagueAvg' || kind === 'leagueProj') {
+    const key = kind === 'leagueAvg' ? 'avgActual' : 'avgProjected';
+    const part = partWeek();
+    return {
+      title: kind === 'leagueAvg' ? 'League avg' : 'Avg projected',
+      sub: 'a team, a week',
+      rows: s.weeklyLeagueAverages.filter((a) => a.week !== part)
+        .map((a) => ({ label: `Week ${a.week}`, value: a[key] })),
+      total: { label: 'All weeks', value: kind === 'leagueAvg' ? s.leagueAvgActual : s.leagueAvgProjected },
+    };
+  }
+  if (kind === 'high' || kind === 'low') {
+    const all = s.teams.flatMap((t) => t.weekly.map((r) => ({ t, r })))
+      .sort((a, b) => (kind === 'high' ? b.r.actual - a.r.actual : a.r.actual - b.r.actual));
+    if (!all.length) return null;
+    return {
+      title: kind === 'high' ? 'Highest week' : 'Lowest week',
+      head: ['Wk', 'Team', 'Scored'],
+      rows: all.slice(0, 3).map(({ t, r }) => ({ lead: r.week, label: t.name, value: r.actual })),
+      href: teamHref(all[0].t.id, all[0].r.week),
+      hrefLabel: 'Open roster',
+    };
+  }
+  if (kind === 'record') {
+    const top = [...s.teams].sort(byRecord)[0];
+    return top ? cellSpec(top.id, 'record') : null;
+  }
+  if (kind === 'schedule') return scheduleSpec();
+  if (kind === 'accuracy') return accSpec(0);
+  return null;
+}
+
+/** The Hardest schedule tile: everyone's run of opponents, hardest first. */
+function scheduleSpec() {
+  const rest = restRows();
+  const rows = rest.length ? rest : oppRows();
+  if (!rows.length) return null;
+  return {
+    title: 'Hardest schedule',
+    sub: rest.length ? 'rest of season' : 'whole season',
+    head: ['Team', 'Opponents’ proj'],
+    rows: rows.map((r) => ({ label: r.name, value: r.avgOpp })),
+  };
+}
+
+/** The two numbers over each scatter, in one plain line each. */
+const FIT_LINES = {
+  R2: ['R²', 'How closely scores follow projections: 1 is exactly, 0 is not at all.'],
+  Gap: ['Off perfect', 'How far the scores sit from their projections, in points. 0 is spot on.'],
+};
+function fitSpec(el) {
+  const v = el.querySelector('.v');
+  const kind = v && /R2$/.test(v.id) ? 'R2' : 'Gap';
+  if (!v || v.textContent.trim() === '—') return null;
+  return { title: FIT_LINES[kind][0], sub: v.textContent.trim(), foot: FIT_LINES[kind][1] };
+}
+
+/** One bar of Score distribution: the scores in it, highest first. */
+const DIST_ROWS = 10;
+function distSpec(i) {
+  const s = state.stats;
+  const bin = s && s.distribution10.bins[i];
+  if (!bin) return null;
+  const lo = parseInt(bin, 10);
+  const all = s.teams.flatMap((t) => t.weekly.map((r) => ({ t, r })))
+    .filter(({ r }) => r.actual >= lo && r.actual < lo + 10)
+    .sort((a, b) => b.r.actual - a.r.actual);
+  if (!all.length) return null;
+  return {
+    title: bin,
+    sub: plural(all.length, 'score'),
+    head: ['Wk', 'Team', 'Scored'],
+    rows: all.slice(0, DIST_ROWS).map(({ t, r }) => ({ lead: r.week, label: t.name, value: r.actual })),
+    foot: all.length > DIST_ROWS ? `and ${all.length - DIST_ROWS} more` : '',
   };
 }
 
@@ -1707,15 +2157,18 @@ function renderAccuracy() {
   // An empty bucket is a row of zeroes pretending to be a finding, and early in
   // a season most of them are empty.
   const rows = acc.filter((a) => a.games > 0);
+  // Every cell of a row opens the games it counted, week by week (`accSpec`).
+  const accAttr = (a) => ` data-acc="${a.threshold}" tabindex="0"`;
+  wirePops(table, { selector: 'td[data-acc]', card: (el) => accSpec(el.dataset.acc) });
 
   tbody.innerHTML = rows.length
     ? rows
         .map((a) => `
           <tr>
-            <td class="name" data-v="${a.threshold}">${a.label}</td>
-            <td>${a.games}</td>
-            <td>${a.correct}</td>
-            <td data-v="${a.accuracy === null ? '' : a.accuracy}">${
+            <td class="name" data-v="${a.threshold}"${accAttr(a)}>${a.label}</td>
+            <td${accAttr(a)}>${a.games}</td>
+            <td${accAttr(a)}>${a.correct}</td>
+            <td data-v="${a.accuracy === null ? '' : a.accuracy}"${accAttr(a)}>${
               a.accuracy === null ? dash : `${Math.round(a.accuracy * 100)}%`}</td>
           </tr>`)
         .join('')
@@ -1930,6 +2383,13 @@ for (const which of Object.keys(fitBy)) {
   }
 }
 
+// The player cards the dots have opened so far: "playerId:week" -> run key.
+const fitRuns = new Map();
+// The two numbers over each graph open one plain line (`fitSpec`).
+if (typeof document.querySelectorAll === 'function') {
+  document.querySelectorAll('.fit-stats').forEach((row) => wirePops(row, { selector: '.stat', card: fitSpec }));
+}
+
 function renderFit() {
   const s = state.stats;
   const teamsBox = $('chartFitTeams');
@@ -2034,7 +2494,28 @@ function renderFit() {
     teamId: p.teamId,
     position: p.position,
     href: `waivers.html?player=${encodeURIComponent(p.playerId)}&week=${encodeURIComponent(p.week)}`,
+    // A DOT OPENS THE PLAYER CARD, with the dot's week marked (2026-10-08).
+    // `card` only says "this dot has one": the card itself is built when the
+    // dot is first pointed at (`playerDotCard`) — there are thousands of dots.
+    card: 'player',
+    playerId: p.playerId,
+    proTeam: p.proTeam,
   }));
+  clearRuns('fit');
+  fitRuns.clear();
+  const cardWeeks = [...held.keys()].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const playerDotCard = {
+    show: (key, el, p) => {
+      const id = `${p.playerId}:${p.week}`;
+      if (!fitRuns.has(id)) {
+        fitRuns.set(id, registerRun(playerCardFromWeeks(held, {
+          playerId: p.playerId, name: p.name, position: p.position, proTeam: p.proTeam,
+        }, { weeks: cardWeeks, currentWeek: p.week, demo: !!s.isDemo, href: p.href }), 'fit'));
+      }
+      showCard(fitRuns.get(id), el);
+    },
+    hide: hideTip,
+  };
   const readWeeks = playerWeeks.filter((w) => held.has(w));
   const missing = playerWeeks.filter((w) => !held.has(w));
   const pSpan = playerWeeks.length === 1
@@ -2047,6 +2528,7 @@ function renderFit() {
     yLabel: 'Actual',
     height: 320,
     empty: 'No player has both a projection and a score yet',
+    card: playerDotCard,
   }, (svg, only) => {
     paintFitStats('fitPlayers', svg);
     $('fitPlayersNote').innerHTML = playerPts.length
@@ -2107,7 +2589,7 @@ function renderWeeklyTable() {
 
   $('weeklyHead').innerHTML =
     '<th class="name" data-sort>Team</th>' +
-    s.weekNumbers.map((w) => `<th data-sort>${w}</th>`).join('') +
+    s.weekNumbers.map((w) => `<th data-sort data-week="${w}">${w}</th>`).join('') +
     (showAvg ? '<th data-sort>Avg</th>' : '');
 
   // Whole points everywhere in this grid, trailing average included. It used to
@@ -2161,20 +2643,14 @@ function renderWeeklyTable() {
     Math.abs(Number(row.weekLuck.toFixed(0))) > WEEK_LUCK_LIMIT;
   let anyCapped = false;
 
-  // Hovering (or, on a phone, tapping) a Luck cell names its three parts.
-  const partsTitle = (row) => {
-    const p = partsOf(row);
-    // Plain text: `signed` wraps its number in a span, which a title cannot hold.
-    const pm = (v) => { const n = Number(v.toFixed(0)) + 0; return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}`; };
-    return `Opp scoring ${pm(p.opp)} · Act−Proj ${pm(p.proj)} · Close game ` +
-      `${p.close === null ? 'tie' : pm(p.close)}` +
-      (capped(row) ? `. Counts as ${pm(row.weekLuckCounted)} toward the season` : '');
-  };
+  // EVERY CELL OPENS A CARD (`gridSpec`, 2026-10-08) and so carries no `title`:
+  // its place in the week, and under Luck its three parts and what a week past
+  // the limit counts as, are lines of the card. They were a title, which read
+  // "5th highest of 10 · avg 111.3 for week 1" and, before that, in standard
+  // deviations — the preview Tim named as the bad one.
+  const untitled = (td) => td.replace(/ title="[^"]*"/, '');
   const withParts = (td, row) => {
-    if (metric !== 'luck') return td;
-    const out = / title="/.test(td)
-      ? td.replace(' title="', ` title="${esc(partsTitle(row))}. `)
-      : td.replace('<td', `<td title="${esc(partsTitle(row))}"`);
+    const out = untitled(td);
     if (!capped(row)) return out;
     anyCapped = true;
     return / class="/.test(out)
@@ -2185,6 +2661,15 @@ function renderWeeklyTable() {
   // kind of number as each other and NOT the same kind as a single week.
   const avgScale = showAvg ? heatScale(s.teams.map(teamAvg)) : null;
 
+  grid = { metric, useSign, valueOf, partsOf, capped, countedOf, teamAvg, weekScales, avgScale };
+  wirePops(table, { selector: 'td[data-wk]', card: (el) => gridSpec(el.dataset.team, el.dataset.wk) });
+  wirePops(table, { selector: 'td[data-wkavg]', card: (el) => gridAvgSpec(el.dataset.team) });
+  wirePops(table, { selector: 'tbody td.name[data-team]', card: (el) => { const t = teamOfId(el.dataset.team); return t ? teamSpec(t) : null; } });
+  wirePops(table, { selector: 'tfoot td[data-week]', card: (el) => weekSpec(el.dataset.week) });
+  // A heading's click sorts, so its card links nowhere; and a finger has no
+  // hover, so on a phone the week's card is the League row's.
+  wirePops(table, { selector: 'th[data-week]', card: (el) => (coarsePointer() ? null : weekSpec(el.dataset.week, { link: false })) });
+
   tbody.innerHTML = s.teams
     .map((t) => {
       const cells = s.weekNumbers.map((w) => {
@@ -2193,16 +2678,17 @@ function renderWeeklyTable() {
         const v = valueOf(row);
         if (v === null) return `<td>${dash}</td>`;
         return withParts(heatCell(v, weekScales.get(w), {
-          what: `week ${w}`,     // "3rd lowest of 10 · avg 123.5 for week 1"
           text: cell(v),
+          extra: `data-wk="${w}" data-team="${esc(t.id)}" tabindex="0"`,
         }), row);
       });
       const avg = teamAvg(t);
       return `<tr class="${state.highlight === t.id ? 'me' : ''}">
-        <td class="name">${esc(t.name)}</td>${cells.join('')}
-        ${showAvg ? heatCell(avg, avgScale, {
-    text: cell(avg),         // "2nd highest of 10 · league avg 118.2"
-  }) : ''}
+        <td class="name" data-team="${esc(t.id)}" tabindex="0">${esc(t.name)}</td>${cells.join('')}
+        ${showAvg ? untitled(heatCell(avg, avgScale, {
+    text: cell(avg),
+    extra: `data-wkavg data-team="${esc(t.id)}" tabindex="0"`,
+  })) : ''}
       </tr>`;
     })
     .join('');
@@ -2222,7 +2708,8 @@ function renderWeeklyTable() {
       tfoot.innerHTML =
         // `league-row` is the heavier rule that sets it off from the teams (css/app.css).
         `<tr class="league-row"><td class="name">League</td>` +
-        weekly.map((a) => (a && a.week === part ? '<td></td>' : `<td>${a && typeof a[key] === 'number' ? cell(a[key]) : dash}</td>`)).join('') +
+        weekly.map((a) => (a && a.week === part ? '<td></td>'
+          : `<td${a ? ` data-week="${a.week}" tabindex="0"` : ''}>${a && typeof a[key] === 'number' ? cell(a[key]) : dash}</td>`)).join('') +
         (showAvg ? `<td>${cell(avg)}</td>` : '') +
         '</tr>';
     } else {
@@ -2270,6 +2757,9 @@ function renderWeeklyTable() {
     'one-point result, near zero for a blowout), added up. Its Avg is the Luck score, ' +
     `where one week counts ±${WEEK_LUCK_LIMIT} at most. ` +
     'Hover or tap a Luck cell for the three.',
+    'Hover or tap any cell for that week: the opponent and the result, what was projected ' +
+    'and scored, and where the cell stands in the league that week. A click opens that ' +
+    'team&rsquo;s roster for the week on Analysis; the League row opens the week on Schedule.',
   ]);
 
   // Headers are rebuilt above, but sortable.js delegates from the table

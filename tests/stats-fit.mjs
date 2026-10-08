@@ -254,7 +254,8 @@ for (const w of weeks) {
     const d = dots('chartFitPlayers')[411];
     tap(svg, d);
     const tip = host.querySelector('.ff-scatter-tip');
-    ok(tip && !tip.hasAttribute('hidden'), 'a tapped player dot opens its preview');
+    // Since 2026-10-08 a player's dot opens the PLAYER CARD; the small preview stays shut and still holds the link.
+    ok(tip && tip.hasAttribute('hidden') && $('tipCard') && !$('tipCard').hasAttribute('hidden'), 'a tapped player dot opens its preview');
     const href = (tip && tip.getAttribute('href')) || '';
     const m = /^waivers\.html\?player=(\d+)&week=(\d+)$/.exec(href);
     ok(m, 'which links to waivers.html?player=<id>&week=<n>', href);
@@ -379,7 +380,7 @@ for (const w of weeks) {
   for (const d of dots('chartFitPlayers').filter((_, i) => i % 23 === 0)) {
     tap(svg2, d);
     const tip = host.querySelector('.ff-scatter-tip');
-    if (tip.hasAttribute('hidden')) continue;
+    if (!$('tipCard') || $('tipCard').hasAttribute('hidden')) continue;
     opened++;
     const m = /player=(\d+)/.exec(tip.getAttribute('href') || '');
     if (!m || positionOf.get(Number(m[1])) !== 'RB') notRb++;
@@ -495,6 +496,36 @@ eq(generateDemoSchedule().weeks.length >= 13, true, 'sanity: the demo schedule c
   ok(!/#weeklyTable|#weeklyMetric/.test(wide), 'and none of it applies at laptop width');
   eq(all($('weeklyMetric'), 'button').length, 7, 'seven measures to lay out');
   ok($('weeklyTable').closest('.table-scroll'), 'past six weeks the table scrolls inside its own box');
+}
+
+// A PLAYER'S DOT OPENS THE PLAYER CARD, WITH THAT WEEK MARKED (2026-10-08): the
+// same card every other page opens on his name, in place of the small text
+// preview — and the teams graph, whose dots are not men, keeps its preview.
+{
+  const svg = $('chartFitPlayers').querySelector('svg');
+  const dot = dots('chartFitPlayers')[40];
+  const move = new window.Event('pointermove', { bubbles: true });
+  Object.assign(move, { pointerType: 'mouse', clientX: num(dot, 'cx'), clientY: num(dot, 'cy') });
+  svg.dispatchEvent(move);
+  const card = $('tipCard');
+  ok(card && !card.hasAttribute('hidden'), 'a player dot opens the player card');
+  const text = card ? card.textContent : '';
+  const small = [...$('chartFitPlayers').querySelectorAll('a, div')].find((el) => /^Proj /m.test(el.lastChild?.textContent || ''));
+  ok(!small || small.hasAttribute('hidden'), 'and the small text preview stays shut', small && small.textContent);
+  ok(/\b(QB|RB|WR|TE|K|D\/ST|DST)\b/.test(text) && !/\bSD\b|standard deviation|NaN|undefined/.test(text),
+    'the card names the man and his position, in plain figures', text.slice(0, 160));
+  ok(card && card.querySelector('.now, [class*="now"], [class*="cur"]'), 'the dot’s week is the marked column', card && card.innerHTML.slice(0, 400));
+  const leave = new window.Event('pointerdown', { bubbles: true });
+  Object.assign(leave, { pointerType: 'mouse', clientX: 5, clientY: 5 });
+  document.body.dispatchEvent(leave);
+  ok(card && card.hasAttribute('hidden'), 'a press elsewhere closes it');
+
+  const tsvg = $('chartFitTeams').querySelector('svg');
+  const tdot = dots('chartFitTeams')[3];
+  const tmove = new window.Event('pointermove', { bubbles: true });
+  Object.assign(tmove, { pointerType: 'mouse', clientX: num(tdot, 'cx'), clientY: num(tdot, 'cy') });
+  tsvg.dispatchEvent(tmove);
+  ok(!$('tipCard') || $('tipCard').hasAttribute('hidden'), 'a team dot opens no player card');
 }
 
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);

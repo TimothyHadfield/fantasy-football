@@ -577,6 +577,27 @@ const num = (el, attr) => Number(el.getAttribute(attr));
     fire(hit, 'click', { clientX: 300, clientY: 50 });
     eq(went.join('|'), 'stats.html?bin=1:100–120', 'histogram: a click on a bar follows hrefFor(index, bin)');
   }
+  // A PAGE THAT OPENS ITS OWN CARD ON THE MARKS turns the chart's preview off
+  // on the container (`data-ff-tip="off"`): it never draws, and never links.
+  {
+    const c = rect(host());
+    c.setAttribute('data-ff-tip', 'off');
+    const went = [];
+    const svg = rect(histogram(c, {
+      bins: ['80–100', '100–120'], counts: [3, 5], yLabel: 'weeks',
+      hrefFor: (i) => `x${i}`, navigate: (href) => went.push(href),
+    }));
+    const hit = all(svg, '.ff-hit')[1];
+    fire(hit, 'pointermove', { clientX: 300, clientY: 50 });
+    fire(hit, 'pointerdown', { clientX: 300, clientY: 50 });
+    fire(hit, 'click', { clientX: 300, clientY: 50 });
+    const tip = c.querySelector('[role="status"]');
+    ok(tip && tip.textContent === '' && tip.style.opacity !== '1', 'a muted chart draws no preview of its own', tip && tip.textContent);
+    eq(went.length, 0, 'and its click goes nowhere');
+    c.removeAttribute('data-ff-tip');
+    fire(hit, 'pointermove', { clientX: 300, clientY: 50 });
+    ok(/5/.test(tip.textContent) && tip.style.opacity === '1', 'the same chart previews again once the mark is lifted', tip.textContent);
+  }
   // BOX PLOT: a row carries its own href.
   {
     const c = rect(host());

@@ -101,6 +101,15 @@ td.capped { text-decoration: underline dotted; text-underline-offset: 3px; }
  * (js/stats-page.js, "where a season luck cell comes from"). */
 #mainTable td[data-explain] { cursor: help; }
 #mainTable td[data-explain]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* Every other number opens a card too (2026-10-08). The pointer is for the
+   ones a click takes somewhere: a team, a team's week, a week. */
+#mainTable td[data-cell], th[data-week], #accuracyTable td[data-acc],
+#glance .stat[data-glance], .fit-stats .stat { cursor: help; }
+#mainTable td[data-cell]:not([data-cell="oppProj"]):not([data-cell="ls"]):not([data-cell="ps"]):not([data-cell="as"]),
+td[data-wk], td[data-wkavg], td.name[data-team], tfoot td[data-week],
+#glance .stat[data-glance="high"], #glance .stat[data-glance="low"], #glance .stat[data-glance="record"] { cursor: pointer; }
+#mainTable td[data-cell]:focus-visible, td[data-team]:focus-visible, td[data-week]:focus-visible, #accuracyTable td[data-acc]:focus-visible,
+#glance .stat[data-glance]:focus-visible, .fit-stats .stat:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
 /* ------------------------------------------------------------------- phone
    Five things on one line — rank, team, bar, value, gap — and the bar is the
@@ -477,8 +486,8 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           </div>
         </div>
         <div class="stat-row fit-stats">
-          <div class="stat"><div class="k">R&sup2;</div><div class="v" id="fitTeamsR2">&mdash;</div></div>
-          <div class="stat"><div class="k">Off perfect</div><div class="v" id="fitTeamsGap">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">R&sup2;</div><div class="v" id="fitTeamsR2">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">Off perfect</div><div class="v" id="fitTeamsGap">&mdash;</div></div>
         </div>
       </div>
       <div class="chart" id="chartFitTeams"></div>
@@ -500,8 +509,8 @@ div.panel-note > p:last-child { margin-bottom: 0; }
           </div>
         </div>
         <div class="stat-row fit-stats">
-          <div class="stat"><div class="k">R&sup2;</div><div class="v" id="fitPlayersR2">&mdash;</div></div>
-          <div class="stat"><div class="k">Off perfect</div><div class="v" id="fitPlayersGap">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">R&sup2;</div><div class="v" id="fitPlayersR2">&mdash;</div></div>
+          <div class="stat" tabindex="0"><div class="k">Off perfect</div><div class="v" id="fitPlayersGap">&mdash;</div></div>
         </div>
       </div>
       <div class="chart" id="chartFitPlayers"></div>
