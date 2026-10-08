@@ -239,6 +239,10 @@ export function heatScale(
   // the fifteenth decimal says.
   if (sd === null || !(sd > 0) || sd < minSpread) return null;
   const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  // Numbers so large their sum overflows have no readable spread either: an
+  // infinite SD would put every z at 0 and an infinite mean at NaN — a whole
+  // column measured and left grey (tests/test-heat-sweep.mjs).
+  if (!finite(sd) || !finite(mean)) return null;
   return { n: xs.length, mean, sd, invert: Boolean(invert), edges: edges.slice() };
 }
 
@@ -255,6 +259,9 @@ export function heatScale(
  */
 export function heatOf(value, scale, { what = '' } = {}) {
   if (!scale || !finite(value)) return null;
+  // A scale without a real spread places nothing: a NaN z clears no edge and
+  // would come back as a measured, uncoloured cell however far out it sits.
+  if (!finite(scale.mean) || !finite(scale.sd) || !(scale.sd > 0)) return null;
   const z = (value - scale.mean) / scale.sd;
   const mag = Math.abs(z);
 

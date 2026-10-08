@@ -45,6 +45,7 @@ const SUITES = [
   ['test-lineup-avg.mjs', 'a squad’s best-lineup week, and the two averages on it: roster strength and the future proj diff, byes and no-games-left included'],
   ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],
+  ['test-heat-sweep.mjs', 'the scale walked outward: depth never falls with distance, the deepest step holds past the end'],
   ['test-proj-trend.mjs', 'the preseason arrows: ESPN’s preseason stats re-scored, the >2 a week threshold'],
   ['heat-draw-check.mjs', 'the red/green tint draws on even rows, your own row and under hover (the CSS cascade, run)'],
   ['sortable-check.mjs', 'click-to-sort on its own: data-v, the text fallback, and every glyph heat.js can emit'],

@@ -225,11 +225,13 @@ a.pref:focus-visible {
    row or a taken row and still has to read as one — so this is an edge and a
    tint rather than a repaint, the same treatment the comparison rows use for
    the same reason. Written twice so it survives the zebra band and the hover,
-   both of which paint their own background. */
+   both of which paint their own background. background-COLOR, never the
+   shorthand: the shorthand erased the red/green tint on every cell of the row
+   (tests/heat-draw-check.mjs). */
 tbody tr.spotlight td,
-tbody tr.spotlight:hover td { background: #16311f; }
+tbody tr.spotlight:hover td { background-color: #16311f; }
 tbody tr.spotlight td.name {
-  background: #16311f;
+  background-color: #16311f;
   box-shadow: inset 3px 0 0 var(--accent), 6px 0 7px -7px rgba(0, 0, 0, 0.85);
   padding-left: 12px;
 }
