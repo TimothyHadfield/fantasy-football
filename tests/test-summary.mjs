@@ -554,6 +554,91 @@ const SCENARIOS = {
     const { document, errors, drawn } = await boot({ canvas: true });
     return { errors, painted: drawn.text.map((t) => t.s), ...readPage(document) };
   },
+
+  /**
+   * THE PREVIEWS (Tim, 2026-10-08): every cell of the chart opens a card
+   * (js/pop.js) and a click on it goes somewhere. Each cell of each row is
+   * hovered and the card read back; then one of each kind is clicked with a
+   * mouse, and one tapped with a finger.
+   */
+  async cards() {
+    const { document, window, errors } = await boot();
+    const went = [];
+    window.location.assign = (h) => went.push(h);
+    const ev = (el, type) => el.dispatchEvent(new globalThis.Event(type, { bubbles: true, cancelable: true }));
+    const cardNow = () => {
+      const c = document.getElementById('statCard');
+      if (!c || c.hasAttribute('hidden')) return null;
+      const cells = (tr) => [...tr.children].map((x) => text(x));
+      const open = c.querySelector('.tc-open');
+      return {
+        ident: text(c.querySelector('.tc-ident')),
+        head: [...c.querySelectorAll('thead th')].map((x) => text(x)),
+        rows: [...c.querySelectorAll('tbody tr')].map(cells),
+        foot: [...c.querySelectorAll('tfoot tr')].map(cells),
+        note: text(c.querySelector('.sc-foot')),
+        sheet: (c.getAttribute('class') || '').includes('sheet'),
+        open: open ? { href: open.getAttribute('href'), text: text(open) } : null,
+      };
+    };
+    const KEYS = ['name', 'record', 'luck', 'title', 'last'];
+    const hoverAll = () => [...document.querySelectorAll('#summaryTable tbody tr')].map((tr) => {
+      const out = { name: text(tr.children[0]), cells: {}, cards: {} };
+      KEYS.forEach((k, i) => {
+        const td = tr.children[i];
+        // The attributes as DRAWN, before a card opening can take a title off.
+        out.cells[k] = {
+          pop: td.hasAttribute('data-pop'), go: td.hasAttribute('data-pop-go'),
+          title: td.getAttribute('title') || '', tab: td.getAttribute('tabindex'),
+        };
+        ev(td, 'mouseover');
+        out.cards[k] = cardNow();
+        ev(td, 'mouseout');
+      });
+      return out;
+    });
+    const rows = hoverAll();
+    const closedAfter = cardNow() === null;
+    const table = readTable(document);
+    const cardText = document.getElementById('shareText').textContent;
+
+    // A MOUSE CLICK IS THE CONNECTOR: one of each kind, on the first row.
+    const first = document.querySelector('#summaryTable tbody tr');
+    const clicks = {};
+    KEYS.forEach((k, i) => {
+      went.length = 0;
+      ev(first.children[i], 'click');
+      clicks[k] = went.slice();
+    });
+
+    // A FINGER: the same card as a sheet, with the link as a button, and no
+    // navigation.
+    window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    went.length = 0;
+    ev(first.children[3], 'click');
+    const sheet = cardNow();
+    const tapWent = went.slice();
+    window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    const close = document.querySelector('#statCard .tc-close');
+    if (close) ev(close, 'click');
+
+    // WEEK 1: the LUCK card's first row is that week's average, not a league one.
+    const sel = document.getElementById('weekSelect');
+    sel.value = '1';
+    fire(sel);
+    await waitFor(() => /simulated seasons/.test(text(document.getElementById('simStatus'))), 20000);
+    await new Promise((r) => setTimeout(r, 100));
+    const one = hoverAll();
+
+    return {
+      errors, rows, closedAfter, clicks, sheet, tapWent, one,
+      firstName: rows[0].name,
+      heads: [...document.querySelectorAll('#summaryTable thead th')].map((th) => ({
+        text: text(th), title: th.getAttribute('title') || '',
+      })),
+      table, cardText,
+    };
+  },
 };
 
 // --------------------------------------------------------------- child runner
@@ -805,9 +890,11 @@ if (!fresh.boot) {
     ok('the title favourite is GREEN on Title %',
       byTitle[0].heat.title === 'up', `${byTitle[0].name} -> ${byTitle[0].heat.title}`);
   }
-  ok('a shaded cell says where it stands in words, for a tap on a phone',
-    fresh.rows.some((r) => /(highest|lowest) of \d+ · league avg/i.test(r.titles.join(' '))) &&
-      !fresh.rows.some((r) => /\bSD\b|standard deviation/.test(r.titles.join(' '))),
+  // Where a shaded cell stands is said by its CARD since 2026-10-08 (the
+  // `cards` scenario below reads it), and a cell with a card carries no title:
+  // one preview a number.
+  ok('a shaded cell carries no title beside its card',
+    fresh.rows.every((r) => r.titles.every((t) => t === '')),
     JSON.stringify(fresh.rows[0].titles));
   // Channel 4. Without it the colour is unverifiable, and the inverted column
   // is an active trap.
@@ -1323,6 +1410,194 @@ if (!fb.boot) {
   ok('a team that is not in the chart marks nobody',
     opens(summaryRowsHtml(three, { me: 99 })).every((t) => t === '<tr>'));
   ok('the difference view marks it too', same(opens(summaryRowsHtml(three, { me: 9, diffFrom: three })), ['<tr>', '<tr>', '<tr class="me">']));
+
+  // THE CARD HOOK (`cards`) IS OPT-IN: the Decisions review passes none and its
+  // rows must not change by a byte; a page that passes one gets that attribute
+  // on the cell INSTEAD of the cell's title.
+  const named = three.map((r) => ({ ...r, teamName: `${r.name} FC` }));
+  const bare = summaryRowsHtml(named);
+  eq(summaryRowsHtml(named, { cards: null }), bare, 'cards: null draws the rows exactly as no option does');
+  ok('without the option no cell carries a card', !/data-pop/.test(bare), bare.slice(0, 300));
+  ok('and the titles it always had are there',
+    (bare.match(/title="ESPN team name: /g) || []).length === 3 && /of 3 · league avg/.test(bare), bare.slice(0, 400));
+  const carded = summaryRowsHtml(named, {
+    cards: Object.fromEntries(['name', 'record', 'luck', 'title', 'last'].map((k) => [k, (r) => ` data-pop="${k}:${r.id}"`])),
+  });
+  const tds = carded.match(/<td[^>]*>/g) || [];
+  eq(tds.length, 15, 'with the option, still five cells a row');
+  ok('every cell carries its own card', ['name', 'record', 'luck', 'title', 'last'].every((k, i) =>
+    [4, 7, 9].every((id, row) => tds[row * 5 + i].includes(`data-pop="${k}:${id}"`))), tds.slice(0, 5).join(' '));
+  ok('and none of them a title as well', !/title=/.test(carded), tds.slice(0, 5).join(' '));
+  eq(carded.replace(/ data-pop="[^"]*"/g, ''), bare.replace(/ title="[^"]*"/g, ''),
+    'nothing else about the rows differs');
+  const some = summaryRowsHtml(named, { cards: { luck: () => ' data-pop="x"', title: () => '' } });
+  ok('a column with no card (or an empty one) keeps its title',
+    (some.match(/data-pop="x"/g) || []).length === 3 && (some.match(/title="ESPN team name: /g) || []).length === 3 &&
+    (some.match(/of 3 · league avg/g) || []).length === 6, some.slice(0, 500));
+  ok('the difference view takes no cards', !/data-pop/.test(summaryRowsHtml(named, {
+    diffFrom: named, cards: { name: () => ' data-pop="x"', luck: () => ' data-pop="x"' },
+  })));
+}
+
+// ---- THE PREVIEWS: every cell opens a card, and a click goes somewhere ------
+//
+// Tim, 2026-10-08: "If the user is curious about a number or it's breakdown …
+// they should be able to hover over it and show a preview. … connectors to
+// other places in the cite using previews is a huge advantage". Every figure in
+// a card is re-derived here from the demo season, never read back off the page.
+
+const cards = run('cards');
+ok('cards: the page boots', !cards.boot, cards.boot);
+if (!cards.boot) {
+  ok('cards: no console errors', cards.errors.length === 0, cards.errors.slice(0, 2).join(' | '));
+  const commas = (n) => Number(n).toLocaleString('en-US');
+  const pctOf = (p) => (p <= 0 ? '0%' : p < 0.005 ? '<1%' : `${Math.round(p * 100)}%`);
+  const sgn = (v) => { const r = Math.round(v * 10) / 10 + 0; return `${r > 0 ? '+' : ''}${r.toFixed(1)}`; };
+  const tenths = (s) => Math.round(Number(String(s).replace('+', '')) * 10);
+  const idOf = new Map(demo.teams.map((t) => [t.name, t.id]));
+  const nameOf = new Map(demo.teams.map((t) => [t.id, t.name]));
+  const statsAt = (through) => {
+    const games = demo.games.filter((g) => g.week <= through);
+    return computeLeagueStats({
+      season: demo.season, name: demo.name, isDemo: true,
+      weeks: new Set(games.map((g) => g.week)).size, teams: demo.teams, games, injuries: [],
+    });
+  };
+  const stats8 = statsAt(THROUGH);
+  const team8 = new Map(stats8.teams.map((t) => [t.name, t]));
+  /** "2nd highest of 10" / "Lowest of 10", worked out here from the column. */
+  const standing = (v, all) => {
+    const hi = all.filter((x) => x > v + 1e-9).length + 1;
+    const lo = all.filter((x) => x < v - 1e-9).length + 1;
+    const top = hi <= lo;
+    const r = top ? hi : lo;
+    const end = top ? 'highest' : 'lowest';
+    const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+    return `${r === 1 ? end[0].toUpperCase() + end.slice(1) : `${ord(r)} ${end}`} of ${all.length}`;
+  };
+
+  eq(cards.rows.length, demo.teams.length, 'cards: a row a manager');
+  ok('cards: EVERY cell of every row opens a card',
+    cards.rows.every((r) => Object.values(r.cells).every((c) => c.pop) && Object.values(r.cards).every(Boolean)),
+    JSON.stringify(cards.rows.find((r) => !Object.values(r.cards).every(Boolean)) || cards.rows[0]).slice(0, 300));
+  ok('cards: none carries a title beside it (one preview a number)',
+    cards.rows.every((r) => Object.values(r.cells).every((c) => c.title === '')),
+    JSON.stringify(cards.rows[0] && cards.rows[0].cells));
+  ok('cards: each takes keyboard focus and is marked as going somewhere',
+    cards.rows.every((r) => Object.values(r.cells).every((c) => c.tab === '0' && c.go)));
+  ok('cards: moving off closes the card', cards.closedAfter === true);
+  const allText = JSON.stringify(cards.rows.map((r) => r.cards)) + JSON.stringify(cards.one.map((r) => r.cards));
+  ok('cards: no SD, z-score or "step n of 4" wording in any card',
+    !/\bSD\b|standard deviation|z-score|step \d|end of the scale/i.test(allText));
+  ok('cards: a hover card has no buttons', cards.rows.every((r) => Object.values(r.cards).every((c) => c && !c.sheet && !c.open)));
+
+  const lucks = cards.table.map((r) => r.luck);
+  const titles = cards.table.map((r) => r.title);
+  const lasts = cards.table.map((r) => r.last);
+  for (const r of cards.rows) {
+    const t = team8.get(r.name);
+    const page = fresh.rows.find((x) => x.name === r.name) || {};
+    const want = sim8.byName.get(r.name);
+    const id = idOf.get(r.name);
+
+    // ---- LUCK: the Stats page's luck breakdown, adding up to the cell.
+    const L = r.cards.luck || { rows: [], foot: [] };
+    eq(L.ident, `${r.name} · LUCK`, `${r.name}: the LUCK card names him and the figure`);
+    const row = (label) => (L.rows.find((x) => x[0] === label) || [])[1];
+    eq(row('League avg'), t.parts.league.toFixed(1), `${r.name}: LUCK card — League avg`);
+    // Rounded as the Opp Avg column prints it, THEN taken off.
+    eq(row('Opp Avg'), sgn(-(Math.round(t.parts.opp * 10) / 10)), `${r.name}: LUCK card — Opp Avg, taken off`);
+    eq(row('Luck/wk'), sgn(t.parts.luck), `${r.name}: LUCK card — Luck/wk`);
+    eq(row('Close luck'), sgn(t.parts.close), `${r.name}: LUCK card — Close luck`);
+    ok(`${r.name}: LUCK card — only those rows, a limit row and a rounding row`,
+      L.rows.every((x) => ['League avg', 'Opp Avg', 'Luck/wk', 'Close luck', 'Single-week limit', 'Rounding'].includes(x[0])),
+      JSON.stringify(L.rows));
+    eq(JSON.stringify(L.foot), JSON.stringify([['LUCK', sgn(t.luckScore)]]), `${r.name}: LUCK card — the total is the cell`);
+    eq(L.rows.reduce((a, x) => a + tenths(x[1]), 0), tenths(sgn(t.luckScore)), `${r.name}: LUCK card — the rows ADD UP to it`);
+    ok(`${r.name}: LUCK card — and the cell on the page prints that total`,
+      String(page.luckText || '').startsWith(sgn(t.luckScore)), page.luckText);
+    eq(L.note, standing(t.luckScore, lucks), `${r.name}: LUCK card — where it ranks`);
+
+    // ---- Title % and Loser %: N of 100,000 seasons · league average · rank.
+    for (const [key, label, count, p, all] of [
+      ['title', 'Title %', 'Seasons won', want.pTitle, titles],
+      ['last', 'Loser %', 'Seasons last', want.pLast, lasts],
+    ]) {
+      const C = r.cards[key] || { rows: [], foot: [] };
+      eq(C.ident, `${r.name} · ${label}`, `${r.name}: the ${label} card names him and the figure`);
+      eq(JSON.stringify(C.rows), JSON.stringify([
+        [count, `${commas(Math.round(p * RUNS))} of ${commas(RUNS)}`],
+        ['League average', pctOf(all.reduce((a, b) => a + b, 0) / all.length)],
+        ['Rank', standing(p, all)],
+      ]), `${r.name}: ${label} card — seasons, league average, rank`);
+      eq(JSON.stringify(C.foot), JSON.stringify([[label, pctOf(p)]]), `${r.name}: ${label} card — the total is the cell`);
+    }
+
+    // ---- Record: W–L by week, with opponent and score.
+    const R = r.cards.record || { rows: [], foot: [], head: [] };
+    eq(R.ident, `${r.name} · Record`, `${r.name}: the Record card names him`);
+    eq(R.head.join('|'), 'Wk|Opponent|Score', `${r.name}: Record card — its three headings`);
+    const mine = demo.games.filter((g) => g.week <= THROUGH && (g.homeId === id || g.awayId === id))
+      .sort((a, b) => a.week - b.week)
+      .map((g) => {
+        const home = g.homeId === id;
+        const [f, a] = home ? [g.homeActual, g.awayActual] : [g.awayActual, g.homeActual];
+        return [String(g.week), nameOf.get(home ? g.awayId : g.homeId),
+          `${f > a ? 'W' : f < a ? 'L' : 'T'} ${f.toFixed(1)}–${a.toFixed(1)}`];
+      });
+    eq(JSON.stringify(R.rows), JSON.stringify(mine), `${r.name}: Record card — every decided week, opponent and score`);
+    // (An empty cell first: the total sits under the Opponent column.)
+    eq(JSON.stringify(R.foot), JSON.stringify([['', 'Record', rec8.get(r.name).text]]),`${r.name}: Record card — the total is the cell`);
+    eq(R.rows.filter((x) => /^W /.test(x[2])).length, rec8.get(r.name).w, `${r.name}: Record card — its W rows count to the wins`);
+
+    // ---- the member: a team card (record, average, the next week's projection).
+    const N = r.cards.name || { rows: [] };
+    eq(N.ident, r.name, `${r.name}: the team card is headed by the member`);
+    const next = demo.games.find((g) => g.week === THROUGH + 1 && (g.homeId === id || g.awayId === id));
+    eq(JSON.stringify(N.rows), JSON.stringify([
+      ['Record', rec8.get(r.name).text],
+      ['Avg', t.avgActual.toFixed(1)],
+      [`Week ${THROUGH + 1} proj`, (next.homeId === id ? next.homeProjected : next.awayProjected).toFixed(1)],
+    ]), `${r.name}: team card — record, average, next week's projection`);
+  }
+
+  // ---- the connectors: where a click on each goes.
+  const firstId = idOf.get(cards.firstName);
+  eq(JSON.stringify(cards.clicks.luck), JSON.stringify([`stats.html?team=${firstId}`]), 'a click on LUCK goes to that team on Stats');
+  eq(JSON.stringify(cards.clicks.title), JSON.stringify(['schedule.html#simPanel']), 'a click on Title % goes to the Schedule simulation');
+  eq(JSON.stringify(cards.clicks.last), JSON.stringify(['schedule.html#simPanel']), 'and so does a click on Loser %');
+  eq(JSON.stringify(cards.clicks.record), JSON.stringify([`schedule.html?week=${THROUGH}`]), 'a click on Record goes to Schedule, on the last week counted');
+  eq(JSON.stringify(cards.clicks.name), JSON.stringify([`analysis.html?team=${firstId}&week=${THROUGH + 1}#rosterDetail`]),
+    'a click on the member goes to that team on Analysis');
+  ok('the simulation panel that link names exists on the Schedule page',
+    /<section[^>]*\bid="simPanel"/.test(readFileSync(path.join(REPO, 'schedule.html'), 'utf8')));
+
+  // ---- a finger: the same card as a sheet with the link as a button.
+  ok('a tap opens the card as a sheet', cards.sheet && cards.sheet.sheet === true, JSON.stringify(cards.sheet));
+  eq(cards.sheet && cards.sheet.open && cards.sheet.open.href, 'schedule.html#simPanel', 'with the connector as its button');
+  eq(cards.tapWent.length, 0, 'and the tap itself goes nowhere');
+
+  // ---- week 1: one week is that week's score, not an average.
+  {
+    const s1 = statsAt(1);
+    const c1 = cards.one.filter((r) => r.cards.luck);
+    eq(c1.length, s1.teams.filter((t) => t.luckScore !== null).length, 'week 1: a LUCK card for every team with a luck figure');
+    ok('week 1: its first row is that week’s average', c1.every((r) => r.cards.luck.rows[0][0] === 'Week 1 avg'),
+      JSON.stringify(c1[0] && c1[0].cards.luck.rows));
+    ok('week 1: and the rows still add up', c1.every((r) =>
+      r.cards.luck.rows.reduce((a, x) => a + tenths(x[1]), 0) === tenths(r.cards.luck.foot[0][1])));
+    ok('week 1: the Record card has one game', cards.one.every((r) => r.cards.record && r.cards.record.rows.length === 1));
+  }
+
+  // ---- headings: one plain sentence each, and the same five columns.
+  eq(cards.heads.map((h) => h.text).join('|'), 'Member|Record|LUCK|Title %|Loser %', 'the headings are unchanged');
+  for (const h of cards.heads) {
+    ok(`the ${h.text} heading's title is ONE plain sentence`,
+      /^[A-Z][^.!?]{10,}\.$/.test(h.title) && h.title.split(/\s+/).length <= 18 && !/[A-Z]{4,} [A-Z]{4,}/.test(h.title), h.title);
+  }
+
+  // ---- the text copy of the share image is untouched by any of this.
+  eq(cards.cardText, fresh.cardText, 'the text copy is word for word what it was');
 }
 
 // ---------------------------------------------------------------------------

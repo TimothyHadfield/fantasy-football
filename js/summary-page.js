@@ -46,12 +46,20 @@ import { enableSort, resort } from './sortable.js';
 // deliberately kept OFF THE IMAGE — the long argument for that split is above
 // renderCard(), and it is the most consequential decision in this file, because
 // the image is the thing that leaves the site.
-import { describeHeat } from './heat.js';
+import { describeHeat, heatScale, heatOf } from './heat.js';
+// THE PREVIEWS (Tim, 2026-10-08: "If the user is curious about a number or
+// it's breakdown … they should be able to hover over it and show a preview. …
+// build any connectors by clicking on the preview"). Every cell of the chart
+// opens the site's one stat card and a click goes where `chartCards` says. The
+// LUCK card is the Stats page's own breakdown (`standingsExplain`), read-only.
+import { statCard, clearPops, wirePops } from './pop.js';
+import { teamHref, statsHref, weekHref } from './links.js';
+import { standingsExplain } from './standings-table.js';
 // THE CHART'S ROWS, and the formatters they are made of, live in their own
 // module since 2026-10-05 so a second page (the Decisions review) draws the
 // identical chart. The formatters are imported back rather than kept twice.
 import {
-  summaryRowsHtml, summaryScales, pct, esc, recordText,
+  summaryRowsHtml, summaryScales, pct, esc, recordText, signed,
 } from './summary-table.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -587,6 +595,7 @@ function buildView() {
     banked,
     weeksPlayed,
     enough: weeksPlayed >= MIN_WEEKS,
+    stats,               // the LUCK card's parts are read off it (`chartCards`)
     luckById,
     luckMarginById,
     recordById: recordsOf(L.data),
@@ -856,7 +865,13 @@ function renderTable(view, rows, sim, inputs) {
   const cfg = state.league.isDemo ? null : savedConfig();
   const me = cfg && cfg.teamId != null ? cfg.teamId : null;
 
-  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales, me });
+  // A card on every cell (`cards` is this page's opt-in; the Decisions review's
+  // copy of the chart passes none). The cells the old cards hung off are about
+  // to go, so the cards go first.
+  clearPops(POP);
+  const cards = chartCards(view, rows, sim);
+
+  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales, me, cards });
 
   resort(table);
   // The scales are kept for renderNote, which prints their thresholds under
@@ -900,6 +915,169 @@ function renderTable(view, rows, sim, inputs) {
         ? ` ${plural(sim.result.games - inputs.playable, 'game')} had no projection to play with.`
         : '');
   }
+}
+
+// ------------------------------------------------------- what a cell is made of
+//
+// Tim, 2026-10-08: every number and name gets a preview, and a click on it is a
+// connector (docs/previews-plan.md, "Summary"). One card a cell, built from
+// what this page already holds — no read is made for any of them:
+//
+//   Member   the team card: record, average score, the next week's projection
+//            -> that team's roster on Analysis
+//   Record   W-L by week, each with its opponent and score
+//            -> Week matchups on Schedule, on the last week counted
+//   LUCK     the Stats page's own breakdown (`standingsExplain`): League avg,
+//            Opp Avg, Luck/wk, Close luck, adding up to the cell; where it ranks
+//            -> that team on Stats
+//   Title %  how many of the simulated seasons, the league's average, the rank
+//   Loser %  -> the simulation on Schedule
+//
+// The image and its text copy are drawn from `rows` and never see any of this.
+
+/** The prefix this page's cards are registered under (`clearPops`). */
+const POP = 'sum';
+
+/** The Schedule page's simulation panel — where the two chances are worked out
+ *  ten thousand seasons at a time. `tests/test-summary.mjs` checks the panel
+ *  still carries this id. */
+const SIM_HREF = 'schedule.html#simPanel';
+
+/**
+ * The `cards` option of `summaryRowsHtml`: for each column, a function from a
+ * row to the attribute of that cell's card ('' for a cell with nothing behind
+ * it — a dash).
+ */
+function chartCards(view, rows, sim) {
+  const L = state.league;
+  const same = (a, b) => String(a) === String(b);
+  const nameOf = (id) => (L.teams.find((t) => same(t.id, id)) || {}).name || '—';
+  const teamOf = (id) => view.stats.teams.find((t) => same(t.id, id)) || null;
+  const attr = (spec) => (spec ? statCard(spec, { prefix: POP }) : '');
+  const sideOf = (g, id) => (same(g.homeId, id) ? 'home' : same(g.awayId, id) ? 'away' : null);
+  const one = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—');
+
+  // WHERE A NUMBER RANKS, in the scale's own plain words ("2nd highest of 10").
+  // Its own three scales rather than the table's: LUCK is ranked from week 1,
+  // though it is not SHADED until week three.
+  const column = (key, opts) => heatScale(rows.map((r) => r[key]), opts);
+  const ranks = {
+    luck: column('luck'),
+    title: column('title', { minSpread: PCT_MIN_SPREAD }),
+    last: column('last', { minSpread: PCT_MIN_SPREAD }),
+  };
+  const standing = (key, v) => { const h = heatOf(v, ranks[key]); return h ? h.standing : ''; };
+  const mean = (key) => {
+    const xs = rows.map((r) => r[key]).filter(Number.isFinite);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  };
+
+  // The next week with a game still to play out — "this week", as of the picker.
+  const nextWeek = L.weeks.find((w) => (L.data.byWeek.get(w) || []).some(isRemaining)) ?? null;
+  const gameIn = (week, id) => (L.data.byWeek.get(week) || []).find((g) => sideOf(g, id)) || null;
+
+  const chance = (key, label, counted) => (r) => {
+    const p = r[key];
+    const res = sim && sim.result;
+    if (!res || !Number.isFinite(p)) return '';
+    const avg = mean(key);
+    const rank = standing(key, p);
+    return attr({
+      title: r.name,
+      sub: label,
+      rows: [
+        // With no game left the column is the final table, not a count.
+        ...(res.games > 0
+          ? [{ label: counted, value: `${commas(Math.round(p * res.runs))} of ${commas(res.runs)}` }] : []),
+        ...(avg === null ? [] : [{ label: 'League average', value: pct(avg) }]),
+        ...(rank ? [{ label: 'Rank', value: rank }] : []),
+      ],
+      total: { label, value: pct(p) },
+      href: SIM_HREF,
+      hrefLabel: 'Open simulation',
+    });
+  };
+
+  return {
+    name(r) {
+      const t = teamOf(r.id);
+      const g = nextWeek === null ? null : gameIn(nextWeek, r.id);
+      const proj = g ? capture.projectedPoints(g, sideOf(g, r.id), state.proj) : null;
+      return attr({
+        title: r.name,
+        sub: r.teamName || '',
+        rows: [
+          ...(r.rec ? [{ label: 'Record', value: r.rec.text }] : []),
+          ...(t && t.weekly.length ? [{ label: 'Avg', value: t.avgActual }] : []),
+          ...(proj === null ? [] : [{ label: `Week ${nextWeek} proj`, value: proj }]),
+        ],
+        href: teamHref(r.id, nextWeek),
+        hrefLabel: 'Open roster',
+      });
+    },
+
+    record(r) {
+      if (!r.rec) return '';
+      // The games `recordsOf` counted, by its own rule.
+      const games = L.data.games
+        .filter((g) => g.homeId != null && g.awayId != null && sideOf(g, r.id) &&
+          !isRemaining(g) && capture.winnerOf(g))
+        .sort((a, b) => a.week - b.week);
+      const list = games.map((g) => {
+        const home = sideOf(g, r.id) === 'home';
+        const winner = capture.winnerOf(g);
+        const res = winner === 'tie' ? 'T' : (winner === 'home') === home ? 'W' : 'L';
+        const [mine, theirs] = home ? [g.homeScore, g.awayScore] : [g.awayScore, g.homeScore];
+        const score = typeof mine === 'number' && typeof theirs === 'number'
+          ? ` ${one(mine)}–${one(theirs)}` : '';
+        return {
+          lead: g.week,
+          label: nameOf(home ? g.awayId : g.homeId),
+          html: `<span class="${res === 'W' ? 'pos' : res === 'L' ? 'neg' : 'muted'}">${res}</span>${score}`,
+        };
+      });
+      // The game being played, counted as its chance (the decimal in the cell).
+      const live = r.rec.live && state.liveWeek ? gameIn(state.liveWeek.week, r.id) : null;
+      if (live) {
+        const p = Math.min(1, Math.max(0, view.chanceById.get(r.id) ?? 0));
+        list.push({
+          lead: live.week,
+          label: nameOf(sideOf(live, r.id) === 'home' ? live.awayId : live.homeId),
+          value: `${Math.round(p * 100)}% to win`,
+        });
+      }
+      if (!list.length) return '';
+      return attr({
+        title: r.name,
+        sub: 'Record',
+        head: ['Wk', 'Opponent', 'Score'],
+        rows: list,
+        total: { label: 'Record', value: r.rec.text },
+        foot: r.rec.live ? r.rec.title : '',
+        href: weekHref(view.through),
+        hrefLabel: 'Open Schedule',
+      });
+    },
+
+    luck(r) {
+      const t = teamOf(r.id);
+      const ex = t && view.enough && r.luck !== null ? standingsExplain(view.stats, t, 'luckScore') : null;
+      if (!ex) return '';
+      const num = (x) => (x.signed ? signed(x.value) : one(x.value));
+      return attr({
+        title: r.name,
+        sub: 'LUCK',
+        rows: ex.rows.map((x) => ({ label: x.label, html: num(x) })),
+        total: { label: 'LUCK', html: num(ex.foot) },
+        foot: standing('luck', r.luck),
+        href: statsHref(r.id),
+        hrefLabel: 'Open Stats',
+      });
+    },
+
+    title: chance('title', 'Title %', 'Seasons won'),
+    last: chance('last', 'Loser %', 'Seasons last'),
+  };
 }
 
 /**
@@ -1657,6 +1835,9 @@ $('downloadBtn').addEventListener('click', onDownload);
 $('copyBtn').addEventListener('click', onCopy);
 
 enableSort($('summaryTable'));
+// One delegated set of listeners for the chart's cards; the rows are redrawn
+// freely underneath it.
+wirePops($('summaryTable'));
 
 // ------------------------------------------------------------------- boot
 
