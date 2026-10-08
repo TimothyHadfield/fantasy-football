@@ -202,9 +202,11 @@ function rosterPayload(week, decided) {
 }
 
 /** ESPN for the league's reads; a 404 for anything else (the snapshot archive). */
+const ESPN_READS = [];      // every request that reached ESPN, in order
 function installFetch(decided, { slowWeeks = [], slowMs = 0 } = {}) {
   globalThis.fetch = async (url) => {
     const u = String(url);
+    if (/fantasy\.espn\.com/.test(u)) ESPN_READS.push(u);
     const wk = Number((u.match(/scoringPeriodId=(\d+)/) || [])[1]);
     if (slowWeeks.includes(wk) && !/kona_player_info/.test(u)) await new Promise((r) => setTimeout(r, slowMs));
     const notFound = { ok: false, status: 404, async json() { return {}; }, async text() { return ''; } };
@@ -343,9 +345,45 @@ async function homeChild(league) {
       box: c.querySelector('a.gbox')?.getAttribute('href') ?? null,
     };
   });
+  // THE PREVIEWS (2026-10-08), opened the way a mouse opens them. The line
+  // under each game: both best lineups, the gap and the chance. A player name:
+  // the classic card, built from the weeks this page read for the win chance.
+  await new Promise((r) => setTimeout(r, 400));     // let any late read land
+  const over = (el) => el.dispatchEvent(new globalThis.Event('mouseover', { bubbles: true, cancelable: true }));
+  const boxOf = (id) => {
+    const b = document.getElementById(id);
+    return b && !b.hasAttribute('hidden') ? b : null;
+  };
+  cards().forEach((c, i) => {
+    const el = c.querySelector('.gmeta [data-pop]');
+    if (el) over(el);
+    out[i].metaCard = el ? clean(boxOf('statCard')?.textContent) : null;
+  });
+  const man = document.querySelector('a.pref[data-tip]');
+  let player = null;
+  if (man) {
+    over(man);
+    const b = boxOf('tipCard');
+    const row = (sel) => (b ? Array.from(b.querySelectorAll(sel)).map((x) => clean(x.textContent)) : []);
+    player = {
+      href: man.getAttribute('href'),
+      titled: man.hasAttribute('title'),
+      weeks: row('thead th[scope="col"]'),
+      proj: row('tbody td'),
+      act: row('tfoot td'),
+    };
+  }
+  // One line a request: the ESPN view(s) and the week asked for.
+  const reads = ESPN_READS.map((u) => {
+    const views = (u.match(/view=([\w]+)/g) || []).map((v) => v.slice(5)).join('+');
+    const wk = (u.match(/scoringPeriodId=(\d+)/) || [])[1];
+    return `${views}${wk ? `@${wk}` : ''}`;
+  });
   return {
     title,
     cards: out,
+    player,
+    reads,
     note: clean(document.getElementById('matchupsNote')?.textContent),
     explain: clean(document.getElementById('matchupsExplain')?.textContent),
   };
@@ -566,9 +604,62 @@ for (const league of Object.keys(LEAGUES)) {
     ok(`${label}: Home's Proj is the set lineup`,
       JSON.stringify(h.proj) === JSON.stringify([g.homeSet.toFixed(1), g.awaySet.toFixed(1)]), JSON.stringify(h.proj));
 
+    // THE LINE'S CARD (2026-10-08): both best lineups, the gap between them
+    // and the chance — the figures the line is worked out from, each from the
+    // reference rather than read back off the line.
+    {
+      const gap = Math.abs(g.homeBest - g.awayBest).toFixed(1);
+      const pct = pctOf(Math.max(g.p, 1 - g.p));
+      const mineHere = g.home === nameOf(MY_TEAM) || g.away === nameOf(MY_TEAM);
+      const myPct = pctOf(g.home === nameOf(MY_TEAM) ? g.p : 1 - g.p);
+      const t = h.metaCard || '';
+      ok(`${label}: the line's card gives both best lineups`,
+        t.includes(`${g.home}best lineup${g.homeBest.toFixed(1)}`) && t.includes(`${g.away}best lineup${g.awayBest.toFixed(1)}`), t);
+      ok(`${label}: the line's card gives the gap ${gap}`, t.includes(`Gap${gap}`), t);
+      ok(`${label}: the line's card gives the chance`,
+        mineHere ? t.includes(`Your win chance${myPct}%`) : t.includes(`win chance${pct}%`), t);
+      ok(`${label}: the line's card speaks no standard deviations`, !/\bSD\b|standard deviation|spread/i.test(t), t);
+    }
+
     const mine = g.home === nameOf(MY_TEAM) || g.away === nameOf(MY_TEAM);
     ok(`${label}: ${mine ? 'his card says "your win chance"' : 'no "your win chance" on another card'}`,
       /your win chance/.test(h.meta) === mine, h.meta);
+  }
+
+  // A PLAYER NAME ON THE REAL PAGE opens the classic card, built from the
+  // weeks Home read for the win chance: the decided weeks carry his scores,
+  // the week on screen his projection, and every later week waits.
+  {
+    const p = home.player;
+    ok(`${tag} a player name on Home opens the player card`, Boolean(p && p.weeks.length), JSON.stringify(p));
+    if (p && p.weeks.length) {
+      const all = Array.from({ length: REGULAR_WEEKS }, (_, i) => String(i + 1));
+      ok(`${tag} his card runs weeks 1–${REGULAR_WEEKS}`, JSON.stringify(p.weeks) === JSON.stringify(all), JSON.stringify(p.weeks));
+      ok(`${tag} the ${L.decided} decided week(s) carry his scores`,
+        p.act.slice(0, L.decided).every((c) => /^\d+\.\d$/.test(c)), JSON.stringify(p.act));
+      ok(`${tag} week ${L.quoted} carries his projection`, /^\d+\.\d$/.test(p.proj[L.quoted - 1] || ''), JSON.stringify(p.proj));
+      ok(`${tag} the weeks Home does not hold wait`,
+        p.proj.slice(L.quoted).length === REGULAR_WEEKS - L.quoted && p.proj.slice(L.quoted).every((c) => c === '·'), JSON.stringify(p.proj));
+      ok(`${tag} the name carries no raw title beside the card`, p.titled === false);
+    }
+  }
+
+  // AND THE CARDS COST NOTHING. Home reads each week it needs once — the
+  // decided weeks and the one on screen — and no week it does not show: a
+  // card that fetched a man's season would put weeks ${L.quoted + 1}+ on this list.
+  {
+    const rosterWeeks = home.reads.filter((r) => /^mRoster@/.test(r) || /mRoster/.test(r)).map((r) => Number(r.split('@')[1]));
+    const wantWeeks = Array.from({ length: L.quoted }, (_, i) => i + 1);
+    ok(`${tag} Home reads rosters for weeks 1–${L.quoted} once each and no other`,
+      JSON.stringify([...rosterWeeks].sort((a, b) => a - b)) === JSON.stringify(wantWeeks), JSON.stringify(home.reads));
+    const league = home.reads.filter((r) => r !== 'proTeamSchedules_wl');
+    ok(`${tag} no league request is made twice`, new Set(league).size === league.length, JSON.stringify(home.reads));
+    // The count measured on the page before it had a card on it (2026-10-08):
+    // the league, a roster read a week, the wire, and the NFL schedule three
+    // times — this stub answers that one with no teams, which is never kept.
+    // A card that asked for the byes on top of that made it four.
+    ok(`${tag} Home makes ${L.quoted + 5} ESPN requests in all, as it did before the cards`,
+      home.reads.length === L.quoted + 5, JSON.stringify(home.reads));
   }
 
   // The basis is stated, with the spread's real source.
