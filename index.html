@@ -85,6 +85,10 @@
   color: var(--dim);
   margin-bottom: 4px;
 }
+/* The way out to ESPN's box score for the game: beside "Final" / "Upcoming",
+   in the row's own small type, so a card is no taller for having it. */
+.ghead .gbox { margin: 0 auto 0 10px; color: var(--dim); }
+.ghead .gbox:hover { color: var(--accent-hi); }
 
 /* Ranked bars. A line chart of ten teams over one week draws no lines at all,
    so week-1 rankings are bars. */
@@ -116,6 +120,8 @@
    also gives up a little of the air between its columns. */
 #injuryTable .left.wrap, #benchTable .left.wrap { white-space: normal; }
 #benchTable th, #benchTable td { padding-left: 6px; padding-right: 6px; }
+/* A man's projection for that week, beside his score and smaller than it. */
+#benchTable .bproj { font-size: 11.5px; white-space: nowrap; }
 
 /* Injury severity. Red for "he is not playing", amber for "he might not". */
 .badge.out { background: #3a1418; color: var(--err); border: 1px solid #5c2027; }
@@ -183,6 +189,10 @@ a.pref:focus-visible {
   #injuryTable .wrap, #benchTable .wrap { white-space: normal; }
   #injuryTable th, #injuryTable td, #benchTable th, #benchTable td { padding-left: 4px; padding-right: 4px; }
   #injuryTable th, #benchTable th { letter-spacing: 0; }
+  /* Six columns since "Last": the injury table gives up one more pixel a side
+     and a little of the status pill's air, or it is wider than the panel. */
+  #injuryTable th, #injuryTable td { padding-left: 3px; padding-right: 3px; }
+  #injuryTable .badge { padding-left: 6px; padding-right: 6px; letter-spacing: 0; }
 
   .footnote { text-align: left; }
 }
