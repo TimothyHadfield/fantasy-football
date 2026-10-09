@@ -53,7 +53,7 @@ import { scope } from './prefs.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { wirePops, hidePop } from './pop.js';
 import { readParam, teamHref, weekHref } from './links.js';
-import { playerCardFromWeeks, registerRun, clearRuns, showCard, hideTip } from './player-card.js';
+import { playerCardFromWeeks, registerRun, clearRuns, showCard, hideTip, setValueSource } from './player-card.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('stats');
@@ -305,11 +305,36 @@ async function selectSource(src) {
   paintSource();
 }
 
+// ---------------------------------------------------------------- his Value
+//
+// Tim, 2026-10-09: "I want it to be displayed at the top of the player's
+// preview." Every player card on this page is made by `playerCardFromWeeks`,
+// which carries his `playerId`; this hands js/player-card.js the place to look
+// his Value up when a card opens (js/season.js `fetchPlayerValues`). Nothing
+// waits on it: the page paints first, and a card opened before the answer is
+// in — or when there is none — is the card as it always was.
+let valueFor = null;   // the league (or the sample) the cards' Values belong to
+
+function wireValue(demo) {
+  if (typeof season.fetchPlayerValues !== 'function') return;
+  const { leagueId, season: year } = demo ? {} : espn.getConfig();
+  const key = demo ? 'demo' : `${leagueId}::${year}`;
+  // Another league's numbers are never shown against this one's men.
+  if (key !== valueFor) setValueSource(null);
+  valueFor = key;
+  let asked;
+  try { asked = season.fetchPlayerValues({ demo: Boolean(demo) }); } catch { return; }
+  Promise.resolve(asked).then((v) => {
+    if (valueFor === key && v && typeof v.lookup === 'function') setValueSource(v.lookup);
+  }).catch(() => {});
+}
+
 // -------------------------------------------------------------------- render
 
 function render() {
   const s = state.stats;
   if (!s) return;
+  wireValue(s.isDemo);
 
   // Schedule luck belonging to a league we are no longer showing has to go
   // before anything is painted from it: team ids collide across leagues, so a

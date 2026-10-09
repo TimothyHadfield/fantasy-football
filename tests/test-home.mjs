@@ -355,10 +355,31 @@ const SAVED = {
 };
 const { league: _bar, ...UNREAD } = SAVED;
 
+// VALUE AT THE TOP OF A PLAYER'S CARD (Tim, 2026-10-09: "I want it to be
+// displayed at the top of the player's preview"). What js/season.js
+// `fetchPlayerValues` hands a page, in its shape, for the stub's squads (a man
+// is teamId * 100 + i): every man with an even id has a Value, the odd ones
+// none — `value: null`, as for a man whose position has no line.
+const valueOfId = (id) => (id % 2 === 0 ? Math.round(((id * 7) % 173) + 1) / 10 : null);
+const VALUES = {
+  base: {
+    v: 1, setAt: 0, week: 4,
+    lines: { RB: { waiver: 7.4, starter: 10.2, agents: 3, starters: 20 } },
+  },
+  weeks: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  players: Object.fromEntries(Array.from({ length: 10 }, (_, t) => t + 1).flatMap((t) =>
+    Array.from({ length: 30 }, (_, i) => t * 100 + i).map((id) =>
+      [id, { position: 'RB', avg: 11.3, value: valueOfId(id) }]))),
+};
+
 /** order -> what is in the browser, the stand-in's switches, and what must be on screen. */
 const TOGGLE_RUNS = {
   // A reload with a saved league: the bar answers first. THE BUG.
-  reload: { store: { 'ff.connection': SAVED }, want: 'Live' },
+  // (Its player cards are read too: the cards of a league with no Value.)
+  reload: { store: { 'ff.connection': SAVED }, want: 'Live', cards: true },
+  // The same reload once the league has its lines: Value leads every card of a
+  // man who has one, and nothing else on any card has moved.
+  value: { store: { 'ff.connection': SAVED }, env: { FF_VALUE: JSON.stringify(VALUES) }, want: 'Live', cards: true },
   // The same from the synced copy, as a phone reads it.
   cloud: { store: { 'ff.connection': { ...SAVED, source: 'cloud' } }, env: { CAP_CLOUD: '1' }, want: 'Live' },
   // A league id saved but never read: the boot's own load goes first.
@@ -380,7 +401,7 @@ if (process.argv[2] === 'toggle') {
   const { document, window } = bootDom({
     html: readFileSync(path.join(REPO, 'index.html'), 'utf8'), store: run.store,
   });
-  await import(pathToFileURL(path.join(REPO, 'js/home-page.js')).href);
+  const homePage = await import(pathToFileURL(path.join(REPO, 'js/home-page.js')).href);
   await import(pathToFileURL(path.join(REPO, 'js/connection.js')).href);
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -406,6 +427,32 @@ if (process.argv[2] === 'toggle') {
     out.then = await settled('Live');
   } else {
     out.first = await settled(run.want);
+  }
+  if (run.cards) {
+    // The stand-in league has nobody hurt and no bench panel, so no player is
+    // named on its Home. The league is left connected and this file's own
+    // finished week is painted by the page's own `render`: injured starters
+    // and a benched man on every squad (ids teamId * 100 + 1, 2, 3 and 9).
+    homePage.render(homePage.buildModel(finishedWeek()));
+    // Each man's card, opened the way a mouse opens it: the line under his name.
+    const clean =(s) => String(s || '').replace(/\s+/g, ' ').trim();
+    out.cards = {};
+    for (const a of document.querySelectorAll('a.pref[data-tip]')) {
+      const id = (a.getAttribute('href').match(/player=(\d+)/) || [])[1];
+      if (!id || out.cards[id]) continue;
+      document.getElementById('tipCard')?.setAttribute('hidden', '');
+      a.dispatchEvent(new window.Event('mouseover', { bubbles: true, cancelable: true }));
+      const box = document.getElementById('tipCard');
+      const line = box && !box.hasAttribute('hidden') ? box.querySelector('.tc-glance') : null;
+      const first = line ? line.firstElementChild : null;
+      out.cards[id] = {
+        ident: clean(box && box.querySelector('.tc-ident')?.textContent),
+        glance: line ? clean(line.textContent) : null,
+        lead: first ? first.className : null,
+        values: line ? line.querySelectorAll('.tc-value').length : 0,
+        card: clean(box && box.textContent),
+      };
+    }
   }
   out.errors = errors;
   emit(out);
@@ -1582,9 +1629,11 @@ for (const page of PAGES) {
 
 // The source buttons, one child per order of events: whatever the badge says is
 // on screen, exactly that button is lit.
+const cardsOf = {};      // run -> playerId -> his card, for the runs that open them
+let valueSeen = '';
 for (const [name, run] of Object.entries(TOGGLE_RUNS)) {
   const env = { ...process.env };
-  for (const k of ['CAP_EARLY', 'CAP_DECIDED', 'CAP_CLOUD', 'HOME_SCHED_DELAY', 'HOME_SCHED_FAIL']) delete env[k];
+  for (const k of ['CAP_EARLY', 'CAP_DECIDED', 'CAP_CLOUD', 'HOME_SCHED_DELAY', 'HOME_SCHED_FAIL', 'FF_VALUE']) delete env[k];
   const res = spawnSync(process.execPath, ['--import', REGISTER, self, 'toggle', name], {
     encoding: 'utf8', timeout: 60000, env: { ...env, ...(run.env || {}) },
   });
@@ -1604,9 +1653,42 @@ for (const [name, run] of Object.entries(TOGGLE_RUNS)) {
     check(got.first, run.want);
     if (run.click) check(got.then, 'Live');
     if (got.errors.length) problems.push(`error: ${got.errors[0]}`);
+    if (run.cards) {
+      cardsOf[name] = got.cards || {};
+      const ids = Object.keys(cardsOf[name]);
+      if (ids.length < 4) problems.push(`cards: only ${ids.length} player card(s) opened on Home`);
+      if (name === 'reload') {
+        // No lines, nobody with a Value: the card as it always was.
+        const led = ids.filter((id) => cardsOf[name][id].values || /Value/.test(cardsOf[name][id].card));
+        if (led.length) problems.push(`cards: with no Value known, ${led.length} card(s) say Value — ${JSON.stringify(cardsOf[name][led[0]])}`);
+      }
+      if (name === 'value') {
+        const plain = cardsOf.reload || {};
+        const withOne = ids.filter((id) => valueOfId(Number(id)) !== null);
+        const without = ids.filter((id) => valueOfId(Number(id)) === null);
+        if (!withOne.length || !without.length) problems.push(`cards: need a man with a Value and one without on screen (${withOne.length} / ${without.length})`);
+        if (JSON.stringify(ids) !== JSON.stringify(Object.keys(plain))) problems.push('cards: the two runs opened different men');
+        for (const id of withOne) {
+          const c = cardsOf[name][id];
+          const was = plain[id] || {};
+          const lead = `Value ${valueOfId(Number(id)).toFixed(1)}`;
+          const want = was.glance ? `${lead} · ${was.glance}` : lead;
+          if (c.lead !== 'tc-value' || c.values !== 1) problems.push(`cards: ${c.ident} — Value is not first on the line (first is "${c.lead}", ${c.values} of them)`);
+          if (c.glance !== want) problems.push(`cards: ${c.ident} — the line reads "${c.glance}", expected "${want}"`);
+          if (c.card.replace(`${lead} · `, '').replace(lead, '') !== was.card) problems.push(`cards: ${c.ident} — more than the Value changed on his card`);
+        }
+        for (const id of without) {
+          if (JSON.stringify(cardsOf[name][id]) !== JSON.stringify(plain[id])) {
+            problems.push(`cards: ${cardsOf[name][id].ident} has no Value, yet his card changed — ${JSON.stringify(cardsOf[name][id])}`);
+          }
+        }
+        if (got.cards) valueSeen = `${withOne.length} men with a Value, ${without.length} with none`;
+      }
+    }
   }
   console.log(`${problems.length ? 'FAIL' : 'PASS'} source buttons: ${name}`);
   if (got) console.log(`  ${JSON.stringify({ first: got.first, then: got.then })}`);
+  if (name === 'value' && valueSeen) console.log(`  player cards: ${valueSeen}`);
   for (const p of problems) console.log(`  - ${p.slice(0, 900)}`);
   if (problems.length) failed++;
 }

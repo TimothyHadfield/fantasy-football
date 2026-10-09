@@ -1100,6 +1100,40 @@ const CHILDREN = {
   },
 
   /**
+   * VALUE AT THE TOP OF A MAN'S CARD (2026-10-09): squad 7's Season by week,
+   * a mouse over each man's cell (his first week on it), and the line under the name on his card.
+   * FF_VALUE is what the stub's `fetchPlayerValues` hands the page.
+   */
+  async value() {
+    const p = await bootPage();
+    const out = { settled: await p.settle() };
+    p.choose(p.$('teamSelect'), 7);
+    await p.settle();
+    await p.pick('lineup-perfect:7:all');
+    out.men = {};
+    for (const td of p.document.querySelectorAll('#seasonCur tbody td[data-tip]')) {
+      const id = td.getAttribute('data-pid');
+      p.$('tipCard')?.setAttribute('hidden', '');
+      p.fire(td, 'mouseover');
+      const c = p.$('tipCard');
+      if (!c || c.hasAttribute('hidden')) continue;
+      const line = c.querySelector('.tc-glance');
+      if (id && !out.men[id]) {
+        out.men[id] = {
+          ident: text(c.querySelector('.tc-ident')),
+          glance: line ? text(line) : null,
+          lead: line && line.firstElementChild ? line.firstElementChild.className : null,
+          values: c.querySelectorAll('.tc-value').length,
+          card: text(c),
+        };
+      }
+      p.fire(td, 'mouseout');
+    }
+    out.errors = p.errors;
+    return out;
+  },
+
+  /**
    * THE PREVIEWS (2026-10-08): what a mouse over each kind of cell opens, where
    * a click on it goes, and that no cell with a card keeps a `title` beside it.
    * DZ_LINK is the query the page is opened with (`?team=7&week=2`).
@@ -1274,8 +1308,25 @@ if (CHILDREN[process.argv[2]]) {
   }
 }
 
+// What js/season.js `fetchPlayerValues` hands a page, in its shape, for the
+// stub's squads (a man is teamId * 100 + i): the even ids have a Value, the odd
+// ones none — `value: null`, as for a man whose position has no line.
+const valueOfId = (id) => (id % 2 === 0 ? Math.round(((id * 7) % 173) + 1) / 10 : null);
+const VALUES = {
+  base: {
+    v: 1, setAt: 0, week: 4,
+    lines: { RB: { waiver: 7.4, starter: 10.2, agents: 3, starters: 20 } },
+  },
+  weeks: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  players: Object.fromEntries(Array.from({ length: 10 }, (_, t) => t + 1).flatMap((t) =>
+    Array.from({ length: 30 }, (_, i) => t * 100 + i).map((id) =>
+      [id, { position: 'RB', avg: 11.3, value: valueOfId(id) }]))),
+};
+
 const RUNS = {
   page: { child: 'page', env: {} },
+  value: { child: 'value', env: { FF_VALUE: JSON.stringify(VALUES) } },
+  'value-none': { child: 'value', env: {} },
   reload: { child: 'reload', env: {} },
   other: { child: 'other', env: {} },
   summary: { child: 'summary', env: {} },
@@ -1305,7 +1356,7 @@ const RUNS = {
 function child(name, extra = {}) {
   const cfg = RUNS[name];
   const env = { ...process.env };
-  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'DZ_NOPROJ', 'DZ_LINK', 'FF_SCEN']) delete env[k];
+  for (const k of ['CAP_EARLY', 'CAP_BENCH_QB', 'CAP_DECIDED', 'CAP_WIRE', 'CAP_CLOUD', 'CAP_WORLD_FAIL', 'DZ_PREFS', 'DZ_CENTS', 'DZ_NOPROJ', 'DZ_LINK', 'FF_SCEN', 'FF_VALUE']) delete env[k];
   Object.assign(env, cfg.env, extra);
   const res = spawnSync(process.execPath, ['--import', './cap-register.mjs', self, cfg.child], {
     encoding: 'utf8', cwd: path.dirname(self), maxBuffer: 64 * 1024 * 1024, timeout: 240000, env,
@@ -2407,6 +2458,35 @@ ok('no console errors', !none.boot && none.errors.length === 0, none.errors);
     ok('decisions.html?team=7&week=2 opens on squad 7, one user, with week 2’s row marked',
       l.link.team === '7' && l.link.all === false && same(l.link.linked, ['2']), l.link);
     ok('picking a team by hand ends the link: no week stays marked', l.picked.linked === 0, l.picked);
+  }
+}
+
+// ---- Value at the top of a man's card (Tim, 2026-10-09: "I want it to be
+// displayed at the top of the player's preview"). Squad 7's men on Season by
+// week, with the league's values known and with none.
+{
+  const none = child('value-none');
+  const v = child('value');
+  if (booted(none, 'value: none known') && booted(v, 'value')) {
+    const ids = Object.keys(v.men);
+    const withOne = ids.filter((id) => valueOfId(Number(id)) !== null);
+    const without = ids.filter((id) => valueOfId(Number(id)) === null);
+    ok('the same men\'s cards opened in both runs, some with a Value to show and some with none',
+      ids.length >= 8 && same(ids, Object.keys(none.men)) && withOne.length >= 3 && without.length >= 3, [ids, Object.keys(none.men)]);
+    ok('with no Value known no card says one', Object.values(none.men).every((c) => c.values === 0 && !/Value/.test(c.card)),
+      Object.values(none.men).find((c) => c.values || /Value/.test(c.card)));
+    const off = withOne.map((id) => {
+      const c = v.men[id];
+      const was = none.men[id] || {};
+      const lead = `Value ${valueOfId(Number(id)).toFixed(1)}`;
+      const want = was.glance ? `${lead} · ${was.glance}` : lead;
+      return c.lead === 'tc-value' && c.values === 1 && c.glance === want &&
+        c.card.replace(`${lead} · `, '').replace(lead, '') === was.card ? null : { id, got: c.glance, want, lead: c.lead };
+    }).filter(Boolean);
+    ok('a man with a Value: it is first on the line under his name, to the tenth, and nothing else on his card has moved',
+      withOne.length > 0 && off.length === 0, off[0]);
+    ok('a man with none: his card is the card it was',
+      without.length > 0 && without.every((id) => same(v.men[id], none.men[id])), without.map((id) => v.men[id]).slice(0, 2));
   }
 }
 

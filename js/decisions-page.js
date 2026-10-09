@@ -326,6 +326,7 @@ async function loadWorld(src) {
   state.odds = null;
   state.oddsToken++;
   resetMen(byes);
+  wireValue(demo);
 
   // Whose decisions: the team a link asked for (decisions.html?team=7, for this
   // visit only — a link never rewrites the remembered pick), else the team last
@@ -1221,6 +1222,30 @@ const manKeys = new Map();
 let manWeeks = null;   // week -> squads: what his card is drawn from
 let manById = null;    // playerId -> his latest roster entry
 let manByes = null;    // js/season.js `fetchByeWeeks()`, or null
+
+// ---------------------------------------------------------------- his Value
+//
+// Tim, 2026-10-09: "I want it to be displayed at the top of the player's
+// preview." Every player card on this page is made by `playerCardFromWeeks`,
+// which carries his `playerId`; this hands js/player-card.js the place to look
+// his Value up when a card opens (js/season.js `fetchPlayerValues`). Nothing
+// waits on it: the page paints first, and a card opened before the answer is
+// in — or when there is none — is the card as it always was.
+let valueFor = null;   // the league (or the sample) the cards' Values belong to
+
+function wireValue(demo) {
+  if (typeof season.fetchPlayerValues !== 'function' || typeof manCard.setValueSource !== 'function') return;
+  const { leagueId, season: year } = demo ? {} : espn.getConfig();
+  const key = demo ? 'demo' : `${leagueId}::${year}`;
+  // Another league's numbers are never shown against this one's men.
+  if (key !== valueFor) manCard.setValueSource(null);
+  valueFor = key;
+  let asked;
+  try { asked = season.fetchPlayerValues({ demo: Boolean(demo) }); } catch { return; }
+  Promise.resolve(asked).then((v) => {
+    if (valueFor === key && v && typeof v.lookup === 'function') manCard.setValueSource(v.lookup);
+  }).catch(() => {});
+}
 
 /** Every card of a man is dead: the weeks they were drawn from have changed. */
 function resetMen(byes) {

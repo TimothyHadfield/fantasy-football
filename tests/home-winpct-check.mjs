@@ -644,22 +644,30 @@ for (const league of Object.keys(LEAGUES)) {
     }
   }
 
-  // AND THE CARDS COST NOTHING. Home reads each week it needs once — the
-  // decided weeks and the one on screen — and no week it does not show: a
-  // card that fetched a man's season would put weeks ${L.quoted + 1}+ on this list.
+  // AND A CARD ASKS FOR NOTHING. Home reads each week it shows once — the
+  // decided weeks and the one on screen. Since 2026-10-09 the page also asks
+  // for every man's Value (js/season.js `fetchPlayerValues`, for the top of
+  // the cards), and that is the one other reader: the squads of each week
+  // still to come, once each — weeks ${L.quoted + 1}–${REGULAR_WEEKS + 1} here, the last
+  // being the two-team final. Opening a card adds no request to either list.
   {
     const rosterWeeks = home.reads.filter((r) => /^mRoster@/.test(r) || /mRoster/.test(r)).map((r) => Number(r.split('@')[1]));
     const wantWeeks = Array.from({ length: L.quoted }, (_, i) => i + 1);
-    ok(`${tag} Home reads rosters for weeks 1–${L.quoted} once each and no other`,
-      JSON.stringify([...rosterWeeks].sort((a, b) => a - b)) === JSON.stringify(wantWeeks), JSON.stringify(home.reads));
+    const valueWeeks = Array.from({ length: REGULAR_WEEKS + 1 - L.quoted }, (_, i) => L.quoted + 1 + i);
+    const sorted = [...rosterWeeks].sort((a, b) => a - b);
+    ok(`${tag} Home reads rosters for weeks 1–${L.quoted} once each`,
+      JSON.stringify(sorted.filter((w) => w <= L.quoted)) === JSON.stringify(wantWeeks), JSON.stringify(home.reads));
+    ok(`${tag} and, for Value, the weeks left (${L.quoted + 1}–${REGULAR_WEEKS + 1}) once each and no other`,
+      JSON.stringify(sorted.filter((w) => w > L.quoted)) === JSON.stringify(valueWeeks), JSON.stringify(home.reads));
     const league = home.reads.filter((r) => r !== 'proTeamSchedules_wl');
     ok(`${tag} no league request is made twice`, new Set(league).size === league.length, JSON.stringify(home.reads));
     // The count measured on the page before it had a card on it (2026-10-08):
-    // the league, a roster read a week, the wire, and the NFL schedule three
-    // times — this stub answers that one with no teams, which is never kept.
-    // A card that asked for the byes on top of that made it four.
-    ok(`${tag} Home makes ${L.quoted + 5} ESPN requests in all, as it did before the cards`,
-      home.reads.length === L.quoted + 5, JSON.stringify(home.reads));
+    // the league, a roster read a week, and the wire — and nothing else but
+    // Value's weeks. The NFL schedule is left out of the count: this stub
+    // answers it with no teams, which is never kept, so it is asked again by
+    // each reader that wants the byes.
+    ok(`${tag} Home makes ${L.quoted + 2} league requests of its own, as it did before the cards, and Value's ${valueWeeks.length}`,
+      league.length === L.quoted + 2 + valueWeeks.length, JSON.stringify(home.reads));
   }
 
   // The basis is stated, with the spread's real source.
