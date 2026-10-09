@@ -257,3 +257,37 @@ export async function fetchWireWeek(week, limit = 150) {
     .filter((p) => p.playerId !== null && p.playerId !== undefined)
     .map((p) => withDone(p, Number(week)));
 }
+
+// ------------------------------------------------------------ player Value
+//
+// js/season.js `fetchValueBase` / `fetchPlayerValues` (docs/value-plan.md).
+// NONE by default — no lines, nobody with a Value — so a page booted on this
+// stub draws what it drew before Value existed. A test that wants some sets
+//   globalThis.__ffValue = { base, weeks, players: { [playerId]: { position, avg, value } } }
+// before the page boots, or passes the same thing as JSON in the FF_VALUE
+// environment variable (for a harness that runs the page in a child process).
+function valueStub() {
+  let v = globalThis.__ffValue;
+  if (!v && typeof process !== 'undefined' && process.env && process.env.FF_VALUE) {
+    try { v = JSON.parse(process.env.FF_VALUE); } catch { v = null; }
+  }
+  return v || null;
+}
+
+export async function fetchValueBase() {
+  const v = valueStub();
+  return (v && v.base) || null;
+}
+
+export async function fetchPlayerValues() {
+  const v = valueStub();
+  const byId = new Map();
+  for (const [id, row] of Object.entries((v && v.players) || {})) {
+    byId.set(Number(id), { position: row.position ?? null, avg: row.avg ?? null, value: row.value ?? null });
+  }
+  const lookup = (id) => {
+    const hit = byId.get(Number(id));
+    return hit && typeof hit.value === 'number' ? hit.value : null;
+  };
+  return { base: (v && v.base) || null, weeks: (v && v.weeks) || [], byId, lookup };
+}

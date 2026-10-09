@@ -128,9 +128,9 @@ function rosterPayload(week, scale, leagueName) {
 }
 
 /** The free-agent payload `fetchFreeAgents` reads, in the shape it comes in. */
-function wirePayload(week, scale) {
+function wirePayload(week, scale, count = 6) {
   return {
-    players: Array.from({ length: 6 }, (_, i) => ({
+    players: Array.from({ length: count }, (_, i) => ({
       player: {
         id: 9000 + i,
         fullName: `Free Agent ${i}`,
@@ -1088,6 +1088,263 @@ SCENARIOS.newerWins = async () => {
   eq(one2.teams[0].players[0].projected, 888, 'and ONE WEEK on its own agrees');
 
   ok('ZERO ESPN calls through all of it', espnCalls.length === 0, espnCalls.join(' '));
+};
+
+// =========================================================================
+// PLAYER VALUE: THE FROZEN LINES (docs/value-plan.md)
+// =========================================================================
+//
+// Tim, 2026-10-09: "I only want a player's value to change if their actual
+// future projections have changed for some reason, not because we're moving the
+// baselines or whatnot. This means you'll have to pick specific baselines and
+// stick to them throughout the season."
+//
+// The fixture above cannot make a baseline at all — its ESPN has no bye table
+// and its wire has no kicker or defence — which is why every scenario before
+// this one carries none. These two get an ESPN that has both.
+//
+// THE NUMBERS, BY HAND. Weeks left are 3 (not played) and the playoff weeks 4
+// and 5. A rostered man `i` is projected `R + i + week/10`, so his average is
+// `R + i + 0.4` — the two QBs at i = 0 are on pro team 1, whose bye is week 4,
+// and theirs is over weeks 3 and 5: `R + 0.4` as well. Free agent `i` is
+// projected `S - i` every week; with nine of them the wire holds one QB (i 0),
+// three RBs (1, 2, 6), two WRs (3, 4), a TE (5), a D/ST (7) and a K (8).
+// Four teams of QB RB RB WR WR TE FLEX D/ST K start, league-wide: the four QBs
+// at i 11; RBs i 14 and 9 and — in the four flex spots — i 6; WRs i 13 and 10;
+// TEs i 12; the D/STs (7) and the Ks (8). So, at R = S = 10:
+//   QB  waiver 10            starter 21.4      RB  waiver (9+8+4)/3 = 7   starter 16.4
+//   WR  waiver (7+6)/2 = 6.5 starter 20.4      TE  waiver 5               starter 22.4
+//   K   waiver 2             starter 18.4      DST waiver 3               starter 17.4
+
+const VALUE_KEY = `ff.value.${LEAGUE_ID}-${SEASON}`;
+const BYES_PAYLOAD = {
+  settings: { proTeams: Array.from({ length: 15 }, (_, i) => ({ id: i + 1, byeWeek: i === 0 ? 4 : 9 })) },
+};
+
+/** A browser's localStorage, as a Map the test can look inside. */
+function installStorage() {
+  const map = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() { return map.size; },
+  };
+  return map;
+}
+
+/**
+ * ESPN with a bye table and a wire that has every position on it.
+ *
+ * `wireScale` moves the free agents and nothing else — "the free agents have
+ * changed since". `byes: false` and `wireFails` are the two half-readings.
+ */
+function installValueFetch({ scale, name, wireScale = scale, byes = true, wireFails = null }) {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    const week = Number((u.match(/scoringPeriodId=(\d+)/) || [])[1] || 0);
+    if (/kona_player_info/.test(u) && wireFails === week) {
+      return { ok: false, status: 500, async json() { return {}; } };
+    }
+    const body = /proTeamSchedules_wl/.test(u)
+      ? (byes ? BYES_PAYLOAD : matchupPayload(scale, name))
+      : /kona_player_info/.test(u)
+        ? wirePayload(week || 1, wireScale, 9)
+        : week || /mRoster/.test(u)
+          ? rosterPayload(week || 1, scale, name)
+          : matchupPayload(scale, name);
+    return { ok: true, status: 200, async json() { return body; } };
+  };
+  return calls;
+}
+const wireReads = (calls) => calls.filter((u) => /kona_player_info/.test(u)).length;
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const lineIs = (base, pos, want, msg) => ok(msg, !!base && same(base.lines[pos], want),
+  `got ${JSON.stringify(base && base.lines && base.lines[pos])}, want ${JSON.stringify(want)}`);
+
+// -------------------------------------------------------------- value-sync
+//
+// The computer makes the lines, the sync carries them on the schedule, the
+// phone reads them with no request — and a later sync never replaces them.
+
+SCENARIOS['value-sync'] = async () => {
+  const map = installStorage();
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const fake = makeFake();
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  cloud.configure({ transport: fake });
+  /** What the cloud's schedule holds now, read the way a phone reads it. */
+  const inCloud = async () => {
+    const res = await cloud.readDown(LEAGUE_ID, SEASON, { shapes: ['schedule'] });
+    return res && res.ok && res.schedule ? res.schedule.valueBase : undefined;
+  };
+  const sync = async () => {
+    const payload = await season.buildCloudPayload();
+    const res = await cloud.syncUp(LEAGUE_ID, SEASON, payload, {});
+    return { payload, res };
+  };
+
+  // --- the first sync makes them ---------------------------------------------
+  installValueFetch({ scale: CLOUD.scale, name: CLOUD.name });
+  const first = await sync();
+  ok('the desktop published a season', first.res.ok, first.res.reason);
+  const base = first.payload.schedule.valueBase;
+  ok('the sync\'s schedule carries valueBase', !!base && base.v === 1 && !!base.lines, JSON.stringify(base));
+  eq(base && base.week, 3, 'set in the first week left');
+  lineIs(base, 'QB', { waiver: 10, starter: 21.4, agents: 1, starters: 4 }, 'QB: the one free-agent QB, and the worst of the four starting QBs (the bye week left out of both)');
+  lineIs(base, 'RB', { waiver: 7, starter: 16.4, agents: 3, starters: 12 }, 'RB: the top three free agents, and the worst starter counting the flex spots');
+  lineIs(base, 'WR', { waiver: 6.5, starter: 20.4, agents: 2, starters: 8 }, 'WR');
+  lineIs(base, 'TE', { waiver: 5, starter: 22.4, agents: 1, starters: 4 }, 'TE');
+  lineIs(base, 'K', { waiver: 2, starter: 18.4, agents: 1, starters: 4 }, 'K');
+  lineIs(base, 'DST', { waiver: 3, starter: 17.4, agents: 1, starters: 4 }, 'D/ST');
+  ok('and this browser kept them', same(JSON.parse(map.get(VALUE_KEY) || 'null'), base), map.get(VALUE_KEY));
+  ok('they are in the cloud\'s schedule document — no document of their own',
+    same(await inCloud(), base) && ![...fake.docs.keys()].some((p) => /value/i.test(p)),
+    [...fake.docs.keys()].join(' '));
+
+  // --- valueBase round-trips to the phone ------------------------------------
+  // A phone: nothing kept locally, and an ESPN that would answer differently.
+  map.clear();
+  season.forgetCloud();
+  const phoneCalls = installValueFetch({ scale: LIVE.scale, name: LIVE.name, wireScale: 80 });
+  const onPhone = await season.fetchValueBase();
+  ok('valueBase round-trips to the phone', same(onPhone, base), JSON.stringify(onPhone));
+  eq(phoneCalls.length, 0, 'fetchValueBase on the synced copy made ZERO ESPN requests');
+  // What a page reads for itself anyway; the values then cost nothing on top.
+  await season.fetchSchedule();
+  await season.fetchWeeksRosters([3, 4, 5]);
+  const pageReads = fake.log.reads;
+  const vals = await season.fetchPlayerValues();
+  eq(phoneCalls.length, 0, 'and so did fetchPlayerValues');
+  ok('over the weeks left', same(vals.weeks, [3, 4, 5]), JSON.stringify(vals.weeks));
+  ok('with the same lines', same(vals.base, base));
+  eq(vals.byId.size, 60, 'everybody on a squad has an entry');
+  eq(vals.byId.get(111).value, 5.7, 'a starting QB at the starter line: half of 21.4 − 10');
+  eq(vals.byId.get(100).value, 0.2, 'the backup QB (bye week 4 left out of his average): half of 10.4 − 10');
+  eq(vals.byId.get(114).value, 12.7, 'the best RB: half of 16.4 − 7, plus all of 24.4 − 16.4');
+  eq(vals.byId.get(114).position, 'RB', 'with his position');
+  near(vals.byId.get(114).avg, 24.4, 'and his average over the weeks left', 1e-9);
+  eq(vals.lookup('114'), 12.7, 'lookup(playerId) is what the player card asks');
+  eq(vals.lookup(999999), null, 'and null for a man nobody holds');
+  eq(fake.log.reads, pageReads, 'and not one document read beyond the ones the page had already made');
+  eq(map.has(VALUE_KEY), false, 'the phone keeps no copy of its own: the cloud\'s is the one');
+  ok('the sample league\'s are made in memory beside it, and never kept',
+    !!(await season.fetchValueBase({ demo: true })) && !same(await season.fetchValueBase({ demo: true }), base) &&
+    !map.has(VALUE_KEY) && phoneCalls.length === 0);
+
+  // --- a second sync does not replace the first baseline ---------------------
+  // The free agents have changed (every one is 20 points better) AND this
+  // browser has lost its copy. The cloud's are adopted and sent back.
+  // (A later sitting: nothing this page had read from ESPN is still held.)
+  map.clear();
+  season.forgetCloud();
+  espn.clearReadCache();
+  installValueFetch({ scale: CLOUD.scale, name: CLOUD.name, wireScale: 30 });
+  const second = await sync();
+  ok('the second sync went up', second.res.ok, second.res.reason);
+  ok('a second sync does not replace the first baseline',
+    same(second.payload.schedule.valueBase, base), JSON.stringify(second.payload.schedule.valueBase));
+  ok('nor is it replaced in the cloud', same(await inCloud(), base), JSON.stringify(await inCloud()));
+  ok('and the cleared browser has the first one again', same(JSON.parse(map.get(VALUE_KEY) || 'null'), base), map.get(VALUE_KEY));
+
+  // This browser holding DIFFERENT lines changes nothing: the cloud's win.
+  const other = JSON.parse(JSON.stringify(base));
+  other.lines.QB.waiver = 99;
+  other.lines.QB.starter = 99;
+  map.set(VALUE_KEY, JSON.stringify(other));
+  const third = await sync();
+  ok('a browser with lines of its own still sends the cloud\'s', same(third.payload.schedule.valueBase, base),
+    JSON.stringify(third.payload.schedule.valueBase.lines.QB));
+  ok('and takes the cloud\'s as its own', same(JSON.parse(map.get(VALUE_KEY)), base), map.get(VALUE_KEY));
+
+  // NOT VACUOUS: with none in the cloud and none here, the same sync makes NEW
+  // lines off the changed wire — so the three syncs above really were holding.
+  cloud.configure({ transport: makeFake() });   // a cloud this league was never synced to
+  map.clear();
+  const fresh = await sync();
+  lineIs(fresh.payload.schedule.valueBase, 'QB', { waiver: 30, starter: 30, agents: 1, starters: 4 },
+    '(with nothing to hold to, the changed wire WOULD have moved the lines: QB waiver 30, the starter never below it)');
+};
+
+// ------------------------------------------------------------ value-laptop
+//
+// The computer on its own, no sync involved: the lines are made on the first
+// ask, kept in this browser, and never made again.
+
+SCENARIOS['value-laptop'] = async () => {
+  const map = installStorage();
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  // A new page load: everything this module remembers is let go of.
+  const reload = () => { season.forgetCloud(); espn.clearReadCache(); };
+
+  // --- half a reading makes nothing, and keeps nothing -----------------------
+  installValueFetch({ scale: LIVE.scale, name: LIVE.name, byes: false });
+  eq(await season.fetchValueBase(), null, 'bye weeks unknown: no lines');
+  eq(map.has(VALUE_KEY), false, '…and nothing kept');
+  reload();
+  installValueFetch({ scale: LIVE.scale, name: LIVE.name, wireFails: 4 });
+  eq(await season.fetchValueBase(), null, 'one week of the wire refused: no lines');
+  eq(map.has(VALUE_KEY), false, '…and nothing kept, so the next load tries again');
+  reload();
+
+  // --- the first whole reading makes them ------------------------------------
+  const calls = installValueFetch({ scale: LIVE.scale, name: LIVE.name });
+  const first = await season.fetchValueBase();
+  lineIs(first, 'QB', { waiver: 50, starter: 61.4, agents: 1, starters: 4 }, 'made from ESPN: QB');
+  lineIs(first, 'RB', { waiver: 47, starter: 56.4, agents: 3, starters: 12 }, 'RB');
+  lineIs(first, 'K', { waiver: 42, starter: 58.4, agents: 1, starters: 4 }, 'K');
+  eq(wireReads(calls), 3, 'one wire request for each week left');
+  ok('kept in this browser under the league and season', same(JSON.parse(map.get(VALUE_KEY) || 'null'), first), [...map.keys()].join(' '));
+  ok('a second ask on the same page is the same answer', (await season.fetchValueBase()) === first);
+  eq(wireReads(calls), 3, 'for no further request');
+  eq((await season.fetchPlayerValues()).byId.get(111).value, 5.7, 'and a starting QB at the starter line is worth half of 61.4 − 50');
+
+  // --- the free agents change; the lines do not ------------------------------
+  reload();
+  const later = installValueFetch({ scale: LIVE.scale, name: LIVE.name, wireScale: 80 });
+  const second = await season.fetchValueBase();
+  ok('a second fetchValueBase after the free agents changed returns the same lines',
+    same(second, first), JSON.stringify(second && second.lines.QB));
+  eq(wireReads(later), 0, 'without reading the wire at all');
+  eq((await season.fetchPlayerValues()).byId.get(111).value, 5.7, 'so nobody\'s value moved');
+
+  // NOT VACUOUS: with the kept copy gone, the same ask makes different lines.
+  reload();
+  map.delete(VALUE_KEY);
+  const remade = await season.fetchValueBase();
+  lineIs(remade, 'QB', { waiver: 80, starter: 80, agents: 1, starters: 4 },
+    '(with nothing kept, the changed wire WOULD have moved them)');
+
+  // --- a browser that cannot keep them hands none out ------------------------
+  reload();
+  map.delete(VALUE_KEY);
+  const set = globalThis.localStorage.setItem;
+  globalThis.localStorage.setItem = (k, v) => {
+    if (k === VALUE_KEY) throw new Error('quota');
+    set(k, v);
+  };
+  eq(await season.fetchValueBase(), null, 'lines that cannot be kept are not handed out (they would differ next load)');
+  globalThis.localStorage.setItem = set;
+
+  // --- the sample league ------------------------------------------------------
+  const before = installValueFetch({ scale: LIVE.scale, name: LIVE.name });
+  map.delete(VALUE_KEY);
+  const demo = await season.fetchValueBase({ demo: true });
+  ok('the sample league has lines at every position', !!demo && ['QB', 'RB', 'WR', 'TE', 'K', 'DST'].every((p) => demo.lines[p]), JSON.stringify(demo));
+  const demoVals = await season.fetchPlayerValues({ demo: true });
+  ok('and values for its men', demoVals.byId.size >= 150 && [...demoVals.byId.values()].some((r) => r.value > 0), String(demoVals.byId.size));
+  eq(before.length, 0, 'for no request');
+  eq(map.has(VALUE_KEY), false, 'and they are never kept');
 };
 
 // =========================================================================
