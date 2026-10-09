@@ -346,6 +346,79 @@ async function teamVisit({ document, window }) {
   globalThis.__an = out;
 }
 
+// ---- Proj | Value (Tim, 2026-10-09) ------------------------------------------
+//
+// The league's frozen lines, in the shape js/value.js `buildBase` returns and
+// js/season.js `fetchPlayerValues` hands a page. NO LINE AT KICKER on purpose:
+// a position nobody can be measured at shows a dash, never a number. The one
+// player carries a Value no line here would give him (9.9), so a card that
+// shows it can only have got it through the page's `setValueSource` lookup.
+const VALUE_BASE = {
+  v: 1,
+  setAt: 1791504000000,
+  week: 8,
+  lines: {
+    QB: { waiver: 10, starter: 22, agents: 3, starters: 10 },
+    RB: { waiver: 9, starter: 14, agents: 3, starters: 25 },
+    WR: { waiver: 8, starter: 13, agents: 3, starters: 25 },
+    TE: { waiver: 7, starter: 9, agents: 3, starters: 10 },
+    DST: { waiver: 6, starter: 8, agents: 3, starters: 10 },
+  },
+};
+const VALUE_STUB = {
+  base: VALUE_BASE,
+  weeks: [8, 9, 10, 11, 12, 13, 14, 15, 16],
+  players: { 400: { position: 'QB', avg: 23.2, value: 9.9 } },
+};
+const SHOW_IDS = ['overviewShow', 'seasonShow', 'startersShow', 'rosterShow'];
+
+/** Everything the switch may and may not change, as it is on screen. */
+function valueSnap(document) {
+  const t = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+  const heads = (id) => [...document.querySelectorAll(`#${id} thead tr:last-child th`)].map(t);
+  const cell = (td) => ({
+    text: t(td), v: td.getAttribute('data-v'), cls: td.getAttribute('class') || '',
+    // A cell that carries a card says its sentence in `aria-label` instead.
+    title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
+  });
+  const cells = (tr) => (tr ? [...tr.children].map(cell) : []);
+  const rows = (sel) => [...document.querySelectorAll(sel)].map(cells);
+  return {
+    switches: SHOW_IDS.map((id) => {
+      const box = document.getElementById(id);
+      const on = box ? [...box.querySelectorAll('button')].filter((b) => /\bon\b/.test(b.getAttribute('class') || '')) : [];
+      return {
+        id,
+        there: Boolean(box),
+        hidden: !box || /\bhidden\b/.test(box.getAttribute('class') || ''),
+        labels: box ? [...box.querySelectorAll('button')].map(t) : [],
+        on: on.map((b) => b.getAttribute('data-show')).join(','),
+        pressed: box ? [...box.querySelectorAll('button')]
+          .filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.getAttribute('data-show')).join(',') : '',
+      };
+    }),
+    overview: {
+      head: heads('overviewTable'),
+      row: cells(document.querySelector('#overviewTable tbody tr[data-team="4"]')),
+      totals: [...document.querySelectorAll('#overviewTable tbody td.grid-total')].map(t),
+    },
+    season: { head: heads('seasonTable'), rows: rows('#seasonSlots tr'), band: cells(document.querySelector('#seasonTotals tr')) },
+    weekly: rows('#totalsTable tbody tr').map((r) => r.map((c) => c.text).join('|')),
+    starters: { head: heads('startersTable'), rows: rows('#startersTable tbody tr') },
+    roster: {
+      head: heads('rosterTable'),
+      starters: rows('#rosterStarters tr'),
+      bench: rows('#rosterBench tr'),
+      split: t(document.getElementById('rosterSplit')),
+      glance: t(document.getElementById('teamGlance')),
+      projTitle: (document.querySelectorAll('#rosterTable thead th')[4] || { getAttribute: () => '' }).getAttribute('title'),
+    },
+    notes: Object.fromEntries(['overviewNote', 'seasonNote', 'startersNote', 'rosterNote']
+      .map((id) => [id, t(document.getElementById(id))])),
+    prefs: JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'),
+  };
+}
+
 const SCENARIOS = {
   demo: {
     label: '(a) demo mode, nothing connected',
@@ -632,6 +705,54 @@ const SCENARIOS = {
     prefs: { 'analysis.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => { globalThis.__an = { actual: historySnap(document) }; },
+  },
+  // ---- Proj | Value (Tim, 2026-10-09) ----------------------------------------
+  value: {
+    label: '(ac) Proj | Value: every per-player number converts, no team total does',
+    stub: true,
+    env: { FF_VALUE: JSON.stringify(VALUE_STUB) },
+    prefs: { 'analysis.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window }) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const click = async (sel) => {
+        const el = document.querySelector(sel);
+        if (el) el.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+        await sleep(150);
+      };
+      const out = {};
+      out.proj = valueSnap(document);
+      await click('#measureToggle button[data-measure="avg"]');
+      out.projAvg = valueSnap(document);
+      // Flipped on ONE panel's switch; every panel must follow.
+      await click('#seasonShow button[data-show="value"]');
+      out.valueAvg = valueSnap(document);
+      await click('#measureToggle button[data-measure="week"]');
+      out.value = valueSnap(document);
+      const qb = document.querySelector('#overviewTable tbody tr[data-team="4"]');
+      out.card = qb ? hoverCard(document, window, qb.children[1]) : null;
+      await click('#seasonRowsToggle button[data-rows="player"]');
+      out.valuePlayers = valueSnap(document);
+      await click('#seasonRowsToggle button[data-rows="position"]');
+      await click('#rosterShow button[data-show="proj"]');
+      out.back = valueSnap(document);
+      globalThis.__an = out;
+    },
+  },
+  'value-kept': {
+    label: '(ad) Proj | Value: the choice is remembered, and the page opens on it',
+    stub: true,
+    env: { FF_VALUE: JSON.stringify(VALUE_STUB) },
+    prefs: { 'analysis.source': 'live', 'analysis.show': 'value' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => { globalThis.__an = { value: valueSnap(document) }; },
+  },
+  'value-nolines': {
+    label: '(ae) Proj | Value: no lines, no switch — even with Value remembered',
+    stub: true,
+    prefs: { 'analysis.source': 'live', 'analysis.show': 'value' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => { globalThis.__an = { value: valueSnap(document) }; },
   },
   'live-partial': {
     label: '(c) stubbed live league, weeks 5 and 11 reject',
@@ -2397,6 +2518,216 @@ async function checkFineSum(c) {
   return c.out;
 }
 
+/**
+ * PROJ | VALUE (Tim, 2026-10-09): "for all graphs or charts that show avg
+ * position's proj or value or anything like that (except total proj like a
+ * team's proj for that week), have a switch for that graph that also shows the
+ * data as value rather than just total proj."
+ *
+ * Every expected number is `valueOf` from js/value.js on the stub's own
+ * projection — the page's arithmetic is never re-derived here.
+ */
+async function checkValue(c, scenario) {
+  const A = globalThis.__an || {};
+  const stub = await import('./an-stub-season.mjs');
+  const { valueOf } = await import(pathToFileURL(path.join(REPO, 'js/value.js')).href);
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const worth = (i, week) => valueOf(VALUE_BASE, stub.POS[i], stub.projFor(i, week));
+  const mean = (xs) => r1(xs.reduce((a, b) => a + b, 0) / xs.length);
+  const WEEK = stub.SCHEDULE_PLAYED_THROUGH + 1;   // the page opens here: 8
+  const AHEAD = [];
+  for (let w = WEEK; w <= stub.WEEKS; w++) AHEAD.push(w);
+  const ALL = Array.from({ length: stub.WEEKS }, (_, i) => i + 1);
+  const col = (snap, table, name) => snap[table].head.indexOf(name);
+  const wk = (w) => w + 1;                          // Slot, Avg, then the weeks
+  const num = (x) => (x ? x.text.split(' ')[0] : '');  // the number, without a ▲/▼ or a position tag
+  const named = (rows, i, at = 0) => rows.find((r) => r[at] && r[at].text.startsWith(stub.playerName(4, i)));
+
+  if (scenario === 'value-nolines') {
+    const V = A.value;
+    c.ok('VALUE, NO LINES: all four switches are in the page and every one is hidden',
+      V.switches.length === 4 && V.switches.every((s) => s.there && s.hidden), JSON.stringify(V.switches));
+    c.ok('VALUE, NO LINES: a remembered "Value" converts nothing — the QB cell is ESPN’s projection',
+      V.overview.row[1] && V.overview.row[1].text === stub.projFor(0, WEEK).toFixed(1),
+      JSON.stringify(V.overview.row[1]));
+    c.ok('VALUE, NO LINES: and no note mentions Value',
+      Object.values(V.notes).every((n) => !/Value/.test(n)), JSON.stringify(V.notes).slice(0, 300));
+    return c.out;
+  }
+
+  if (scenario === 'value-kept') {
+    const V = A.value;
+    c.ok('VALUE KEPT: the page opens with every switch shown and Value lit',
+      V.switches.every((s) => !s.hidden && s.on === 'value' && s.pressed === 'value'), JSON.stringify(V.switches));
+    c.ok('VALUE KEPT: and the QB cell is already his Value, with no click',
+      V.overview.row[1] && V.overview.row[1].text === worth(0, WEEK).toFixed(1) &&
+        V.overview.row[1].text !== stub.projFor(0, WEEK).toFixed(1),
+      JSON.stringify(V.overview.row[1]));
+    return c.out;
+  }
+
+  const { proj: P, projAvg: PA, valueAvg: VA, value: V, valuePlayers: VP, back: B } = A;
+  c.ok('VALUE: the six snapshots were taken', Boolean(P && PA && VA && V && VP && B), Object.keys(A).join(','));
+  if (!(P && PA && VA && V && VP && B)) return c.out;
+
+  // ---- the switch itself
+  c.ok('VALUE: with lines known, each of the four panels shows a Proj | Value switch, Proj lit',
+    P.switches.length === 4 && P.switches.every((s) => s.there && !s.hidden && s.on === 'proj' &&
+      s.pressed === 'proj' && s.labels.join('|') === 'Proj|Value'), JSON.stringify(P.switches));
+  c.ok('VALUE: one click lights Value on all four — it is one choice for the page',
+    V.switches.every((s) => s.on === 'value' && s.pressed === 'value'), JSON.stringify(V.switches));
+  c.ok('VALUE: THE CHOICE IS REMEMBERED in this page’s prefs',
+    V.prefs['analysis.show'] === 'value' && P.prefs['analysis.show'] === undefined,
+    JSON.stringify([P.prefs, V.prefs]));
+  c.ok('VALUE: and going back to Proj forgets it',
+    B.prefs['analysis.show'] === undefined && B.switches.every((s) => s.on === 'proj'), JSON.stringify(B.prefs));
+
+  // ---- All teams, a week
+  const iTotal = col(P, 'overview', 'Total');
+  const iK = col(P, 'overview', 'K');
+  c.ok('VALUE: on Proj the QB cell is ESPN’s projection',
+    P.overview.row[1].text === stub.projFor(0, WEEK).toFixed(1), JSON.stringify(P.overview.row[1]));
+  c.ok(`VALUE: ALL TEAMS — THE QB CELL BECOMES EXACTLY valueOf(QB, ${stub.projFor(0, WEEK)}) = ${worth(0, WEEK)}`,
+    num(V.overview.row[1]) === worth(0, WEEK).toFixed(1) && V.overview.row[1].v === String(worth(0, WEEK)) &&
+      worth(0, WEEK) !== stub.projFor(0, WEEK),
+    JSON.stringify(V.overview.row[1]));
+  {
+    // Every lineup spot of the squad: the man filling it, at his own position.
+    const want = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => worth(i, WEEK).toFixed(1));
+    const got = V.overview.row.slice(1, 9).map(num);
+    c.ok('VALUE: every lineup spot is its own man’s Value, the FLEX at his position’s lines',
+      JSON.stringify(got) === JSON.stringify(want), `want ${want} got ${got}`);
+    const bench = V.overview.row.slice(iTotal + 1).map(num);
+    const wantBench = [9, 10, 11, 12, 13, 14].map((i) => worth(i, WEEK).toFixed(1));
+    c.ok('VALUE: and the bench cells too, a man under the waiver line at 0.0',
+      JSON.stringify(bench) === JSON.stringify(wantBench) && wantBench.includes('0.0'),
+      `want ${wantBench} got ${bench}`);
+  }
+  c.ok('VALUE: a position with no line shows a dash, not a number (the kicker)',
+    iK > 0 && V.overview.row[iK].text === '—' && V.overview.row[iK].v === null &&
+      P.overview.row[iK].text === stub.projFor(8, WEEK).toFixed(1),
+    JSON.stringify([P.overview.row[iK], V.overview.row[iK]]));
+  {
+    // The roster's Diff column is a signed difference in points; not a Value.
+    const iDiff = col(P, 'roster', 'Diff');
+    const all = [...V.overview.row, ...V.season.rows.flat(), ...V.starters.rows.flat(),
+      ...[...V.roster.starters, ...V.roster.bench].flatMap((r) => r.filter((x, i) => i !== iDiff))];
+    const neg = all.filter((x) => x.v !== null && x.v !== '' && Number(x.v) < 0);
+    c.ok('VALUE: no Value on the page is negative', all.length > 300 && neg.length === 0,
+      `${all.length} cells; ${JSON.stringify(neg.slice(0, 3))}`);
+  }
+  c.ok('VALUE: THE TEAM TOTAL IS UNTOUCHED — every squad’s Total cell, to the character',
+    P.overview.totals.length === 10 && JSON.stringify(V.overview.totals) === JSON.stringify(P.overview.totals),
+    JSON.stringify([P.overview.totals, V.overview.totals]));
+
+  // ---- All teams, Proj avg
+  {
+    const want = mean(ALL.map((w) => worth(0, w)));
+    const ofMean = valueOf(VALUE_BASE, 'QB', mean(ALL.map((w) => stub.projFor(0, w))));
+    c.ok(`VALUE: PROJ AVG — a slot is the MEAN OF ITS WEEKS’ VALUES (${want}), not the value of the mean (${ofMean})`,
+      num(VA.overview.row[1]) === want.toFixed(1) && want !== ofMean, JSON.stringify(VA.overview.row[1]));
+    c.ok('VALUE: and its Total column is the projection it was',
+      JSON.stringify(VA.overview.totals) === JSON.stringify(PA.overview.totals) && PA.overview.totals.length === 10,
+      JSON.stringify([PA.overview.totals, VA.overview.totals]));
+  }
+
+  // ---- Season by week, Position rows
+  {
+    const qbP = P.season.rows[0];
+    const qbV = V.season.rows[0];
+    const ahead = AHEAD.map((w) => num(qbV[wk(w)]));
+    const want = AHEAD.map((w) => worth(0, w).toFixed(1));
+    c.ok('VALUE: SEASON BY WEEK — every week to come in the QB row is that week’s Value',
+      JSON.stringify(ahead) === JSON.stringify(want), `want ${want} got ${ahead}`);
+    const past = (row) => ALL.filter((w) => w < WEEK).map((w) => row[wk(w)].text);
+    c.ok('VALUE: a played week under Actual history STAYS THE SCORE',
+      JSON.stringify(past(qbV)) === JSON.stringify(past(qbP)) && past(qbP).every((x) => /^\d/.test(x)),
+      JSON.stringify([past(qbP), past(qbV)]));
+    c.ok('VALUE: Avg is the mean of the row’s Value cells, the scores left out',
+      num(qbV[1]) === mean(AHEAD.map((w) => worth(0, w))).toFixed(1) && num(qbV[1]) !== num(qbP[1]),
+      JSON.stringify([qbP[1], qbV[1]]));
+    const kV = V.season.rows[8];
+    c.ok('VALUE: the kicker row is dashes ahead, and has no Avg',
+      AHEAD.every((w) => kV[wk(w)].text === '—') && kV[1].text === '—', JSON.stringify(kV.slice(0, 12).map((x) => x.text)));
+    c.ok('VALUE: THE STARTING LINEUP BAND IS UNTOUCHED',
+      P.season.band.length > 10 &&
+        JSON.stringify(V.season.band.map((x) => x.text)) === JSON.stringify(P.season.band.map((x) => x.text)),
+      JSON.stringify([P.season.band.map((x) => x.text), V.season.band.map((x) => x.text)]));
+    c.ok('VALUE: and so is Weekly totals, every squad, every week',
+      P.weekly.length === 10 && JSON.stringify(V.weekly) === JSON.stringify(P.weekly), '');
+  }
+
+  // ---- Season by week, Player rows
+  {
+    const him = named(VP.season.rows, 0);
+    c.ok('VALUE: PLAYER ROWS — a man’s week to come is his Value, and the title says both numbers',
+      Boolean(him) && num(him[wk(9)]) === worth(0, 9).toFixed(1) &&
+        new RegExp(`Value in week 9 is ${worth(0, 9).toFixed(1)}: ESPN projects ${stub.projFor(0, 9).toFixed(1)}`)
+          .test(him[wk(9)].title),
+      JSON.stringify(him && him[wk(9)]));
+    c.ok('VALUE: and his Avg is the mean of those',
+      Boolean(him) && num(him[1]) === mean(AHEAD.map((w) => worth(0, w))).toFixed(1), JSON.stringify(him && him[1]));
+  }
+
+  // ---- Who to start (the page opens it on RB)
+  {
+    const iAvg = col(V, 'starters', 'Avg');
+    const first = iAvg + 2;                         // Avg, Starts, then week 1
+    const him = named(V.starters.rows, 1, 1);
+    const was = named(P.starters.rows, 1, 1);
+    c.ok('VALUE: WHO TO START — a week to come is the man’s Value',
+      Boolean(him) && num(him[first + 8]) === worth(1, 9).toFixed(1) &&
+        num(was[first + 8]) === stub.projFor(1, 9).toFixed(1),
+      JSON.stringify([was && was[first + 8], him && him[first + 8]]));
+    c.ok('VALUE: his Avg is the mean of his Value cells; Starts is the count it was',
+      Boolean(him) && num(him[iAvg]) === mean(AHEAD.map((w) => worth(1, w))).toFixed(1) &&
+        him[iAvg + 1].text === was[iAvg + 1].text,
+      JSON.stringify(him && [him[iAvg], him[iAvg + 1]]));
+  }
+
+  // ---- Roster detail
+  {
+    const iProj = col(P, 'roster', 'Projected');
+    const iAvg = col(P, 'roster', 'Avg/wk');
+    const iAct = col(P, 'roster', 'Actual');
+    const iSeason = col(P, 'roster', 'Season total');
+    const was = named(P.roster.starters, 1, 1);
+    const him = named(V.roster.starters, 1, 1);
+    c.ok('VALUE: ROSTER DETAIL — Projected is valueOf(his position, the projection it showed)',
+      Boolean(was && him) && num(him[iProj]) === valueOf(VALUE_BASE, 'RB', Number(num(was[iProj]))).toFixed(1) &&
+        num(him[iProj]) !== num(was[iProj]),
+      JSON.stringify(was && him && [was[iProj], him[iProj]]));
+    c.ok('VALUE: and Avg/wk is valueOf(his position, the Avg/wk it showed)',
+      Boolean(was && him) && /^\d/.test(was[iAvg].text) &&
+        num(him[iAvg]) === valueOf(VALUE_BASE, 'RB', Number(num(was[iAvg]))).toFixed(1),
+      JSON.stringify(was && him && [was[iAvg], him[iAvg]]));
+    c.ok('VALUE: Actual and Season total stay points',
+      Boolean(was && him) && him[iAct].text === was[iAct].text && him[iSeason].text === was[iSeason].text,
+      JSON.stringify(was && him && [was[iAct], him[iAct], was[iSeason], him[iSeason]]));
+    c.ok('VALUE: THE LINEUP’S TOTAL ROW AND THE STAT TILES ARE UNTOUCHED',
+      P.roster.split.length > 0 && V.roster.split === P.roster.split && V.roster.glance === P.roster.glance,
+      JSON.stringify([P.roster.split, V.roster.split]));
+    c.ok('VALUE: the Projected heading says it is shown as Value, and stops saying so on Proj',
+      /Shown as Value\.$/.test(V.roster.projTitle) && !/Value/.test(P.roster.projTitle) &&
+        B.roster.projTitle === P.roster.projTitle, V.roster.projTitle);
+  }
+
+  // ---- the card, the notes, and the way back
+  c.ok('VALUE: A CARD OPENED ON THIS PAGE CARRIES THE MAN’S VALUE (9.9, from the lookup, by his id)',
+    Boolean(A.card) && /Value\s*9\.9/.test(A.card.text), A.card ? A.card.text.slice(0, 200) : 'no card');
+  c.ok('VALUE: each panel’s tucked note says what Value is',
+    Object.values(V.notes).every((n) => /Value is points a week over the waiver line\./.test(n)),
+    JSON.stringify(Object.fromEntries(Object.entries(V.notes).map(([k, n]) => [k, n.slice(0, 80)]))));
+  c.ok('VALUE: back on Proj every number is the one it was',
+    JSON.stringify(B.overview.row.map((x) => x.text)) === JSON.stringify(P.overview.row.map((x) => x.text)) &&
+      JSON.stringify(B.season.rows.map((r) => r.map((x) => x.text))) ===
+        JSON.stringify(P.season.rows.map((r) => r.map((x) => x.text))) &&
+      JSON.stringify(B.roster.starters.map((r) => r.map((x) => x.text))) ===
+        JSON.stringify(P.roster.starters.map((r) => r.map((x) => x.text))),
+    '');
+  return c.out;
+}
+
 async function checkThreeWr(c, boot) {
   const w = globalThis.__an;
   const stub = await import('./an-stub-season.mjs');
@@ -2704,6 +3035,14 @@ async function check(scenario, boot) {
   // below were all written about a league between weeks.
   if (scenario === 'history-live') return checkHistory(c, scenario);
   if (scenario === 'fine-sum') return checkFineSum(c);
+  if (scenario === 'value' || scenario === 'value-kept' || scenario === 'value-nolines') {
+    return checkValue(c, scenario);
+  }
+  // No Value lines in any stubbed scenario below, so no switch (Tim,
+  // 2026-10-09). The sample league has lines of its own (js/season.js).
+  if (boot.cfg.stub) c.ok('PROJ | VALUE: with no Value lines every one of the four switches is hidden',
+    SHOW_IDS.every((id) => $(id) && /\bhidden\b/.test($(id).getAttribute('class') || '')),
+    SHOW_IDS.map((id) => `${id}:${$(id) ? $(id).getAttribute('class') : 'missing'}`).join(' '));
 
   // ---- PANEL ORDER, which is Tim's and not a matter of taste --------------
   //
@@ -3406,7 +3745,11 @@ async function check(scenario, boot) {
         const acts = [...card.querySelectorAll('.tc-run tfoot td')].map((t) => t.textContent.trim());
         // The line sits right under the name, ahead of the chart.
         const order = g ? [...card.children].indexOf(g) : -1;
-        return { pid, text: g ? g.textContent.trim() : '', order,
+        // VALUE LEADS THE LINE (Tim, 2026-10-09: "displayed at the top of the
+        // player's preview"); the three figures that were there follow it.
+        const whole = g ? g.textContent.trim() : '';
+        const led = whole.match(/^Value (\d+\.\d) · (.*)$/);
+        return { pid, whole, value: led ? led[1] : null, text: led ? led[2] : whole, order,
           identAt: [...card.children].indexOf(card.querySelector('.tc-ident')),
           p4: projs[3] ? (projs[3].firstChild?.textContent || '').trim() : '', clean: projs.slice(0, 3).every((t) => /\bk-num\b/.test(t.className)),
           acts: acts.slice(0, 3) };
@@ -3432,7 +3775,25 @@ async function check(scenario, boot) {
         lines.every((l) => Number(l.text.match(RX)?.[4]) === g.byId.get(l.pid)?.rank),
         JSON.stringify(lines.find((l) => Number(l.text.match(RX)?.[4]) !== g.byId.get(l.pid)?.rank)));
       // Pinned, so a change to the sample or the format is seen.
-      c.ok('the first card reads exactly as pinned', lines[0].text === 'Avg 29.0 · Proj 21.0 · QB #1', lines[0].text);
+      c.ok('the first card reads exactly as pinned',
+        lines[0].whole === 'Value 4.5 · Avg 29.0 · Proj 21.0 · QB #1', lines[0].whole);
+      // THE CARD CARRIES THE MAN'S VALUE, by his id, through the lookup this
+      // page hands js/player-card.js — the sample league's own lines, from the
+      // real js/season.js (this scenario is not stubbed).
+      const realSeason = await import('../js/season.js');
+      const values = await realSeason.fetchPlayerValues({ demo: true });
+      const wantValue = (pid) => {
+        const v = values.lookup(pid);
+        return typeof v === 'number' ? v.toFixed(1) : null;
+      };
+      c.ok('EVERY demo card opens its glance line with the man’s Value, the one his id looks up',
+        lines.filter((l) => l.value !== null).length >= 20 && lines.every((l) => l.value === wantValue(l.pid)),
+        `${lines.filter((l) => l.value !== null).length} with a Value; ` +
+          JSON.stringify(lines.filter((l) => l.value !== wantValue(l.pid)).slice(0, 2)
+            .map((l) => ({ pid: l.pid, whole: l.whole, want: wantValue(l.pid) }))));
+      c.ok('and with the sample league’s lines known, its four Proj | Value switches are on show',
+        SHOW_IDS.every((id) => $(id) && !/\bhidden\b/.test($(id).getAttribute('class') || '')),
+        SHOW_IDS.map((id) => `${id}:${$(id) ? $(id).getAttribute('class') : 'missing'}`).join(' '));
     }
   }
 
@@ -6116,7 +6477,10 @@ if (process.argv[2]) {
 
 let failed = 0;
 let total = 0;
+// AN_ONLY=value,value-kept runs just those scenarios, for working on one.
+const only = (process.env.AN_ONLY || '').split(',').filter(Boolean);
 for (const [scenario, cfg] of Object.entries(SCENARIOS)) {
+  if (only.length && !only.includes(scenario)) continue;
   const args = cfg.stub ? ['--import', './an-register.mjs', self, scenario] : [self, scenario];
   const res = spawnSync(process.execPath, args, {
     encoding: 'utf8',

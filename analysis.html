@@ -538,6 +538,9 @@
   #changesTable tbody.split td.wk { font-weight: 700; font-size: 13.5px; }
   /* `.toolbar` is declared after app.css's `.hidden`, and would win. */
   #changesControls.hidden { display: none; }
+  /* Proj | Value, one per panel: hidden until the league's Value lines are
+     known. The phone's `.segmented` grid is declared after `.hidden` too. */
+  .show-as.hidden { display: none; }
   /* The switch is drawn into this box; the toolbar should lay out the switch
      itself, so on a phone it runs the full width like Position | Player. */
   #changesView { display: contents; }
@@ -936,6 +939,13 @@
         <label for="weekSelect">Week</label>
         <select id="weekSelect"></select>
       </div>
+      <!-- PROJ | VALUE (Tim, 2026-10-09): every per-player number in this panel
+           as its Value instead. One choice for the page, a switch on each panel
+           it changes; hidden until the league's Value lines are known. -->
+      <div class="segmented seg-sm show-as hidden" id="overviewShow" role="group" aria-label="Show as">
+        <button type="button" data-show="proj" class="on" aria-pressed="true">Proj</button>
+        <button type="button" data-show="value" aria-pressed="false">Value</button>
+      </div>
       <span class="ctl-hint" id="measureHint"></span>
     </div>
     <!-- Head rendered by the module: the bench is as many columns as the
@@ -998,6 +1008,10 @@
       <div class="segmented" id="seasonRowsToggle" role="group" aria-label="Rows are">
         <button type="button" data-rows="position" class="on" aria-pressed="true">Position</button>
         <button type="button" data-rows="player" aria-pressed="false">Player</button>
+      </div>
+      <div class="segmented seg-sm show-as hidden" id="seasonShow" role="group" aria-label="Show as">
+        <button type="button" data-show="proj" class="on" aria-pressed="true">Proj</button>
+        <button type="button" data-show="value" aria-pressed="false">Value</button>
       </div>
       <span class="ctl-hint">Drives &ldquo;Who to start&rdquo; and the roster detail below too.</span>
     </div>
@@ -1077,6 +1091,10 @@
         <button type="button" data-pos="DST">DEF</button>
         <button type="button" data-pos="K">K</button>
       </div>
+      <div class="segmented seg-sm show-as hidden" id="startersShow" role="group" aria-label="Show as">
+        <button type="button" data-show="proj" class="on" aria-pressed="true">Proj</button>
+        <button type="button" data-show="value" aria-pressed="false">Value</button>
+      </div>
       <span class="toolbar-note" id="startersShape"></span>
     </div>
     <div class="table-scroll" id="startersWrap"><table id="startersTable">
@@ -1098,6 +1116,10 @@
       <div class="select-md">
         <label for="teamSelect">Team</label>
         <select id="teamSelect"></select>
+      </div>
+      <div class="segmented seg-sm show-as hidden" id="rosterShow" role="group" aria-label="Show as">
+        <button type="button" data-show="proj" class="on" aria-pressed="true">Proj</button>
+        <button type="button" data-show="value" aria-pressed="false">Value</button>
       </div>
       <button type="button" id="lineupReset" class="hidden">Put the lineup back</button>
     </div>
