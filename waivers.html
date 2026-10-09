@@ -612,6 +612,17 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
         </div>
         <span class="cost" id="spanCost"></span>
       </div>
+
+      <!-- PROJ | VALUE (Tim, 2026-10-09): the table's projections, or each as
+           its Value. One setting for both tables, like the span; hidden until
+           the league's lines are known. -->
+      <div class="ctl" id="showCtl" hidden>
+        <span class="ctl-label" id="showLabel">Show</span>
+        <div class="segmented seg-sm" id="showToggle" role="group" aria-labelledby="showLabel">
+          <button type="button" data-show="proj" class="on">Proj</button>
+          <button type="button" data-show="value">Value</button>
+        </div>
+      </div>
     </div>
 
     <div class="stat-row" id="waiverStats"></div>
@@ -699,6 +710,15 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
           <button type="button" data-span="all">Rest of season</button>
         </div>
         <span class="cost" id="takenSpanCost"></span>
+      </div>
+
+      <!-- The same Proj | Value setting as the table above, shown here too. -->
+      <div class="ctl" id="takenShowCtl" hidden>
+        <span class="ctl-label" id="takenShowLabel">Show</span>
+        <div class="segmented seg-sm" id="takenShowToggle" role="group" aria-labelledby="takenShowLabel">
+          <button type="button" data-show="proj" class="on">Proj</button>
+          <button type="button" data-show="value">Value</button>
+        </div>
       </div>
     </div>
 
