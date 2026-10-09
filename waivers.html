@@ -426,6 +426,56 @@ td.act-glance b { color: var(--text); font-weight: 600; }
    size and no column moves. --assumed is the site's orange. */
 td.wk-box { outline: 2px solid var(--assumed); outline-offset: -2px; }
 
+/* ------------------------------------------------------------ who to start
+   THE ANALYSIS PAGE'S BOX, above the free agents (Tim, 2026-10-09). The rows
+   are drawn by js/who-to-start.js for both pages; these rules are COPIED from
+   analysis.html's `#startersTable` block, word for word, because that page
+   keeps its table rules in its own <style> and the box must look the same
+   here. Change one, change the other. */
+#startersTable th, #startersTable td { white-space: nowrap; }
+#startersTable td.wk, #startersTable th.wk { padding-left: 7px; padding-right: 7px; }
+#startersTable td.avg { font-weight: 650; color: var(--text); }
+#startersTable td.st { box-shadow: inset 0 -3px 0 #3ba55d; font-weight: 700; color: var(--text); }
+#startersTable td.wk.heat:not(.st) { font-weight: 400; }
+#startersTable td.st.fx { box-shadow: inset 0 -3px 0 #3ba55d80; }
+#startersTable td.st.fx::after {
+  content: 'F';
+  font-size: 9px;
+  font-weight: 700;
+  vertical-align: super;
+  margin-left: 2px;
+  color: var(--accent);
+}
+#startersTable tbody tr.never td { color: var(--dim); }
+#startersTable tbody tr.never td.name { color: var(--dim); }
+#startersTable tbody tr.gone td.name { font-style: italic; }
+.depth-tag {
+  display: inline-block;
+  min-width: 34px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+#startersTable td.starts { font-weight: 650; font-variant-numeric: tabular-nums; }
+#startersTable th.now, #startersTable td.now {
+  border-left: 1px solid var(--line-2);
+  border-right: 1px solid var(--line-2);
+}
+#startersTable th.now { color: var(--text); }
+#startersTable tr th.fut-start, #startersTable tr td.fut-start { border-left: 3px solid var(--accent); }
+#startersTable th a.wk-go { color: inherit; text-decoration: none; }
+#startersTable th a.wk-go:hover { color: var(--accent-hi); text-decoration: underline; text-underline-offset: 2px; }
+#startersTable th a.wk-go:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--r-1); }
+/* This page's own "Bye" and not-yet-read cells are amber and faint; in this
+   box they are plain, as they are on Analysis. */
+#startersTable td.bye { color: inherit; font-size: inherit; letter-spacing: normal; }
+#startersTable td.wait { color: inherit; }
+
 /* The long explanation, opened: one idea per paragraph, each led by a short
    bold label so it can be scanned. */
 details.explain > .panel-note p { margin: 0 0 10px; }
@@ -493,6 +543,7 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
   .source-panel #sourceStatus:empty { display: none; }
   .panel-head { margin-bottom: 11px; }
   .toolbar .ctl .cost { font-size: 12px; }
+  #startersTable td.wk, #startersTable th.wk { padding-left: 5px; padding-right: 5px; }
 }
 </style>
 </head>
@@ -546,6 +597,19 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       </div>
     </div>
     <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+  <!-- WHO TO START, FOR THE POSITION PICKED BELOW (Tim, 2026-10-09: "the who
+       to start box above the available players section, specifically when a
+       certain position is selected"). The Analysis page's box, drawn by the
+       same module (js/who-to-start.js) for your own squad. Hidden — and
+       empty — with "All" positions or nobody set as you. -->
+  <section class="panel" id="startPanel" hidden>
+    <h2 id="startersTitle">Who to start</h2>
+    <div class="table-scroll" id="startersWrap"><table id="startersTable">
+      <thead></thead>
+      <tbody></tbody>
+    </table></div>
   </section>
 
   <section class="panel">

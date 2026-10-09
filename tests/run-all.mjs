@@ -102,6 +102,7 @@ const SUITES = [
   ['test-waiver-gain.mjs', 'Gain on the Players page: an add-and-drop priced by the Trade engine, against a brute force, and the prune proved'],
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
+  ['wv-start-check.mjs', 'Players: the Analysis page’s Who to start box above the free agents, for the position picked — the shared renderer’s rows, and nothing asked of ESPN'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
   ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
