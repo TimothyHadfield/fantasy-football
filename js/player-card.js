@@ -351,6 +351,7 @@ import { heatScale, heatOf } from './heat.js';
 // after both modules have finished loading.
 import { hidePop } from './pop.js';
 import { playerHref } from './links.js';
+import { valueText } from './value.js';
 
 // A local copy rather than an import: this module has to stand on its own for
 // any page that wants the card, and a four-line escaper is a smaller price
@@ -732,7 +733,10 @@ export const TIP_ATTR = 'data-tip';
  * `prefix` is only a debugging courtesy — it lets you see which container a key
  * came from — and nothing reads it back. Uniqueness comes from the counter.
  */
-export function registerRun({ ident = '', run = null, href = null, id = null, openLabel = null, glance = null } = {}, prefix = 'p') {
+export function registerRun({
+  ident = '', run = null, href = null, id = null, openLabel = null, glance = null,
+  playerId = null, value = null,
+} = {}, prefix = 'p') {
   const key = `${prefix}:${seq++}`;
   // `id` is optional and is NOT the key: it is a stable name for "this man in
   // this place" (the analysis grids use grid + team + player), and it is only
@@ -740,8 +744,48 @@ export function registerRun({ ident = '', run = null, href = null, id = null, op
   // `openLabel` names the sheet's button when the link goes somewhere other
   // than his 13-week run (the Players page links to his row in its table).
   // `glance` is the "how ESPN sees him" line under the name — see glanceHtml.
-  RUNS.set(key, { ident, run, href, id, openLabel, glance });
+  // `value` / `playerId` are his Value, first on that line — see setValueSource.
+  RUNS.set(key, { ident, run, href, id, openLabel, glance, playerId, value });
   return key;
+}
+
+// ---------------------------------------------------------------- his Value
+//
+// Tim, 2026-10-09: "I want it to be displayed at the top of the player's
+// preview." A player's Value (js/value.js) is FIRST on the line under his name:
+// the word and the number, nothing else.
+//
+// A card gets it one of two ways. A page that has the number hands it in as
+// `registerRun({ ..., value })`. Otherwise the card is registered with his
+// `playerId` (`playerCardFromWeeks` passes it through) and the number is looked
+// up WHEN THE CARD OPENS, from the function a page gave `setValueSource` — so a
+// page whose values arrive after its names are painted repaints nothing. A
+// `value` handed in wins. With neither, or a source that has no number for
+// him, the card is exactly the card it was before this existed.
+
+let valueSource = null;
+
+/**
+ * Where a card registered with a `playerId` gets his Value.
+ *
+ * @param {?function(number|string): (number|null|undefined)} fn his Value, or
+ *   null for a man with none — js/season.js `fetchPlayerValues()`'s `lookup`
+ *   fits. `null` takes the source away.
+ */
+export function setValueSource(fn) {
+  valueSource = typeof fn === 'function' ? fn : null;
+}
+
+/** His Value for a card being opened now, or null. */
+function valueFor({ value = null, playerId = null } = {}) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (!valueSource || playerId === null || playerId === undefined) return null;
+  try {
+    const v = valueSource(playerId);
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // ------------------------------------------------- the line under the name
@@ -766,22 +810,31 @@ export function registerRun({ ident = '', run = null, href = null, id = null, op
 /** ESPN's name for a position, as its app prints it beside a rank. */
 const POS_LABEL = { DST: 'D/ST' };
 
-/** The glance line's markup, or '' when there is nothing to say. */
-export function glanceHtml(glance) {
-  if (!glance) return '';
+/**
+ * The glance line's markup, or '' when there is nothing to say.
+ *
+ * `value` (a number) is his Value, put FIRST on the line; a man with a Value
+ * and none of ESPN's three gets a line with only that. Without one the markup
+ * is what it always was.
+ */
+export function glanceHtml(glance, value = null) {
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const val = num(value);
+  const lead = val === null ? '' : `<span class="tc-value">Value <b>${esc(valueText(val))}</b></span>`;
+  const only = lead ? `<div class="tc-glance">${lead}</div>` : '';
+  if (!glance) return only;
   const avg = num(glance.avg);
   const proj = num(glance.proj);
   const rank = num(glance.rank);
-  if (avg === null && proj === null && rank === null) return '';
+  if (avg === null && proj === null && rank === null) return only;
   const pos = glance.pos ? (POS_LABEL[glance.pos] || glance.pos) : '';
-  const part = (label, value) => `${label} <b>${esc(value)}</b>`;
+  const part = (label, text) => `${label} <b>${esc(text)}</b>`;
   const parts = [
     part('Avg', fmt(avg)),
     part('Proj', fmt(proj)),
     pos ? part(esc(pos), rank === null ? '—' : `#${rank}`) : part('Rank', rank === null ? '—' : `#${rank}`),
   ];
-  return `<div class="tc-glance">${parts.join(' · ')}</div>`;
+  return `<div class="tc-glance">${lead ? `${lead} · ` : ''}${parts.join(' · ')}</div>`;
 }
 
 /**
@@ -933,6 +986,8 @@ export function playerCardFromWeeks(weekTeams, player, {
     href: href === undefined ? playerHref(p.playerId) : href,
     id,
     openLabel,
+    // For his Value, looked up when the card opens (setValueSource).
+    playerId: p.playerId ?? null,
   };
 }
 
@@ -1191,9 +1246,10 @@ function lineHtml(cols, vsName = '') {
  *     the heavy dividers and the ▲/▼ at the ends of the scale. Those are the
  *     chart, and several of them are the hue-free channels rule 14 is about.
  */
-function cardHtml({ ident, run, href, openLabel, glance }, sheet) {
-  // The name, and ESPN's Avg / Proj / rank right under it (glanceHtml).
-  const head = `<div class="tc-ident">${esc(ident)}</div>${glanceHtml(glance)}`;
+function cardHtml({ ident, run, href, openLabel, glance, playerId, value }, sheet) {
+  // The name, and right under it his Value and ESPN's Avg / Proj / rank
+  // (glanceHtml). The Value is read now, as the card opens — see setValueSource.
+  const head = `<div class="tc-ident">${esc(ident)}</div>${glanceHtml(glance, valueFor({ value, playerId }))}`;
   if (!run) return `${head}${actionsHtml(href, openLabel)}`;
 
   const sub = `<div class="tc-head">${esc(run.heading)}</div>`;

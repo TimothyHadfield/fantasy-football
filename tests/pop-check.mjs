@@ -377,5 +377,76 @@ const WEEKS = new Map([
   reset();
 }
 
+// ================================================= the player card's Value
+//
+// Tim, 2026-10-09: "I want it to be displayed at the top of the player's
+// preview." First on the line under the name; a card with no Value is the card
+// it was before Value existed.
+{
+  const c = card.playerCardFromWeeks(WEEKS, P, { weeks: [1, 2, 3, 4, 5, 6], currentWeek: 5 });
+  const OLD_HEAD = '<div class="tc-ident">Puka Nacua · WR · LAR · QUESTIONABLE</div>' +
+    '<div class="tc-glance">Avg <b>16.0</b> · Proj <b>15.5</b> · WR <b>#3</b></div>';
+  const html = () => $('tipCard').innerHTML;
+  const show = (key) => { card.hideTip(); card.showCard(key, $('pPlain')); return html(); };
+
+  eq(c.playerId, 77, 'playerCardFromWeeks passes his playerId through');
+  eq(card.playerCardFromWeeks(WEEKS, { name: 'No Id', position: 'K' }, { weeks: [1] }).playerId, null, '…and null for a man with none');
+
+  reset();
+  card.clearRuns();
+  card.setValueSource(null);
+  const { playerId: _id, ...bare } = c;
+  const kBare = card.registerRun(bare, 'val');          // no playerId, no value
+  const kId = card.registerRun(c, 'val');               // his playerId only
+  const kNum = card.registerRun({ ...bare, value: 5.5 }, 'val');
+  const kBoth = card.registerRun({ ...c, value: 2 }, 'val');
+  const kZero = card.registerRun({ ...bare, value: 0 }, 'val');
+  const kOnly = card.registerRun({ ident: 'Some Kicker · K', value: 1.25 }, 'val');
+  const kJunk = card.registerRun({ ...bare, value: 'lots' }, 'val');
+
+  // WITHOUT a value: the card as it always was.
+  const before = show(kBare);
+  ok(before.startsWith(OLD_HEAD), 'no value: the top of the card is byte for byte what it was', before.slice(0, 220));
+  ok(!/Value|tc-value/.test(before), '…and nothing about Value anywhere in it', before.slice(0, 220));
+  eq(show(kId), before, 'a playerId with no source set: the same card exactly');
+  eq(show(kJunk), before, 'a value that is not a number: the same card exactly');
+  eq(card.glanceHtml(c.glance), '<div class="tc-glance">Avg <b>16.0</b> · Proj <b>15.5</b> · WR <b>#3</b></div>', 'glanceHtml(glance) alone is unchanged (the Players page calls it)');
+  eq(card.glanceHtml(null), '', '…and still nothing for no glance');
+
+  // A `value` handed in.
+  const withNum = show(kNum);
+  ok(withNum.startsWith('<div class="tc-ident">Puka Nacua · WR · LAR · QUESTIONABLE</div>' +
+    '<div class="tc-glance"><span class="tc-value">Value <b>5.5</b></span> · Avg <b>16.0</b>'),
+    'value: "Value 5.5" is FIRST on the line under the name', withNum.slice(0, 260));
+  ok(/^Puka Nacua · WR · LAR · QUESTIONABLE ?Value 5\.5 · Avg 16\.0 · Proj 15\.5 · WR #3/.test(text('tipCard')),
+    '…above the chart, before ESPN’s three', text('tipCard').slice(0, 160));
+  eq(withNum.replace('<span class="tc-value">Value <b>5.5</b></span> · ', ''), before, '…and it is the only thing that changed in the card');
+  ok(/Value <b>0\.0<\/b>/.test(show(kZero)), 'a Value of 0 is shown as 0.0, not hidden', html().slice(0, 220));
+  ok(show(kOnly).startsWith('<div class="tc-ident">Some Kicker · K</div><div class="tc-glance"><span class="tc-value">Value <b>1.3</b></span></div>'),
+    'a man with a Value and no glance numbers gets a line with only that', html().slice(0, 220));
+
+  // A `playerId`, looked up when the card OPENS.
+  const asked = [];
+  let table = new Map();      // nothing yet: the page's values have not arrived
+  card.setValueSource((id) => { asked.push(id); return table.get(id); });
+  eq(show(kId), before, 'a source with no number for him: the same card exactly');
+  eq(asked, [77], 'the source is asked for HIS playerId');
+  table = new Map([[77, 7.25]]);
+  ok(/<span class="tc-value">Value <b>7\.3<\/b><\/span> · Avg/.test(show(kId)),
+    'values that arrive AFTER the card was registered show the next time it opens', html().slice(0, 220));
+  fire($('pPlain'), 'mouseout');
+  card.hideTip();
+  eq(show(kBare), before, 'a card registered with no playerId never asks, and is unchanged');
+  asked.length = 0;
+  ok(/Value <b>2\.0<\/b>/.test(show(kBoth)) && asked.length === 0, 'a `value` handed in wins over the source, which is not asked', `${html().slice(0, 200)} asked ${JSON.stringify(asked)}`);
+  card.setValueSource(() => { throw new Error('boom'); });
+  eq(show(kId), before, 'a source that throws costs the Value, never the card');
+  card.setValueSource(() => 'seven');
+  eq(show(kId), before, 'a source that answers with something that is not a number: no Value');
+  card.setValueSource(null);
+  eq(show(kId), before, 'setValueSource(null) takes the source away');
+  reset();
+}
+
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

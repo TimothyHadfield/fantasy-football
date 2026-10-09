@@ -32,6 +32,9 @@ import * as projHistory from './proj-history.js';
 // section of this file). Both are pure.
 import { slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
+// A player's Value: the arithmetic is pure and lives there; this file reads what
+// it needs and keeps the frozen lines. See "PLAYER VALUE" below.
+import * as value from './value.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -627,6 +630,7 @@ function clearMemos() {
   currentCheck = null;
   currentMissAt = 0;
   proMissAt = 0;
+  forgetValueMemos();
 }
 
 /**
@@ -658,6 +662,7 @@ export function forgetCloud() {
   decisionsDownCache = null;
   byesCache = null;
   floorCache.clear();
+  forgetValueMemos();
 }
 
 /**
@@ -1959,6 +1964,356 @@ export async function fetchProGames() {
 }
 
 // ===========================================================================
+// PLAYER VALUE: THE FROZEN LINES, AND EVERY ROSTERED MAN'S NUMBER
+// ===========================================================================
+//
+// Tim, 2026-10-09: "I only want a player's value to change if their actual
+// future projections have changed for some reason, not because we're moving the
+// baselines or whatnot. This means you'll have to pick specific baselines and
+// stick to them throughout the season."
+//
+// js/value.js is the arithmetic. THIS is where the two lines at each position
+// (`value.buildBase`) are made ONCE for a league's season and kept:
+//
+//   the phone's synced copy   `schedule.valueBase`, riding the schedule object
+//                             exactly as `scoringItems` does. Read, never made:
+//                             a page on the synced copy asks ESPN for nothing
+//                             (rule 20), so with none up there it is null.
+//   this browser              `localStorage['ff.value.<leagueId>-<season>']`.
+//   neither                   made now, from every week left (`valueWeeks`):
+//                             the squads (`fetchWeeksRosters`, usually already
+//                             in the store) and the wire of each of those weeks
+//                             (`fetchWireWeek`, about one request a week) —
+//                             once a league-season — then kept.
+//   the sample league         made in memory from the demo generators every
+//                             time (the same answer every time), never kept.
+//
+// FIRST COPY WINS. When the computer syncs and the cloud's schedule already
+// carries lines, the computer ADOPTS those and sends them back — it never
+// replaces them (`valueBaseForSync`). A cleared browser must not mint a second
+// baseline once one is up.
+//
+// IT IS MADE ONLY FROM A WHOLE READING: every week left has its squads, every
+// week's wire answered, the byes are known, and every position somebody holds
+// has a free agent to measure from. Anything less is null and nothing is kept,
+// so it is tried again on the next load — lines frozen for a season are not
+// made from half a read.
+//
+// A MAN'S AVERAGE is ESPN's projection over the weeks left with his bye left
+// out (`value.restAvg`). In the week in play a man who has finished counts at
+// his `pregame` projection, not his score, so nobody's Value jumps at kickoff.
+//
+// THE SLOTS are the league's lineup counted off the lineups in use
+// (`slotCountsFromLineups` + `slotsFromCounts`, pooled over every week left —
+// what js/lineup-avg.js `slotsFromTeamLists` does, and what the Decisions world
+// below already uses).
+
+const usableBase = (b) => value.isBase(b) && Object.keys(b.lines).length > 0;
+const valueKey = (cfg) => `ff.value.${cfg.leagueId}-${cfg.season}`;
+
+/** The lines this browser is keeping for the league, or null. */
+function keptValueBase(cfg) {
+  try {
+    const s = globalThis.localStorage;
+    if (!s) return null;
+    const got = JSON.parse(s.getItem(valueKey(cfg)) || 'null');
+    return usableBase(got) ? got : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keep them. False when this browser has nowhere to. */
+function keepValueBase(cfg, base) {
+  try {
+    globalThis.localStorage.setItem(valueKey(cfg), JSON.stringify(base));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE WEEKS LEFT: every week of the season that is not finished — the regular
+ * season's open weeks and the league's playoff weeks not yet decided. The rule
+ * of js/draft-page.js `weeksOf`, off the same three functions of js/capture.js.
+ * Every Value on the site is an average over exactly these.
+ *
+ * @param {Object} schedule what `fetchSchedule` returned (or the demo's)
+ * @returns {number[]} ascending; empty when the season is over or unreadable
+ */
+export function valueWeeks(schedule) {
+  try {
+    if (!schedule) return [];
+    const data = capture.normalizeSchedule(schedule, { isDemo: false });
+    return [...new Set([...capture.openWeeks(data), ...capture.playoffWeeksLeft(data)])]
+      .map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  } catch {
+    return [];
+  }
+}
+
+/** What ESPN projected a man for in a week: never the score of one who has finished. */
+function pregameOf(p) {
+  const v = p && p.done === true ? p.pregame : p && p.projected;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** week -> player rows (a squad's or the wire's)  =>  playerId -> his weeks. */
+function menOf(weekLists, weeks) {
+  const men = new Map();
+  for (const w of weeks) {
+    for (const p of weekLists.get(w) || []) {
+      if (!p || p.playerId === null || p.playerId === undefined) continue;
+      let m = men.get(p.playerId);
+      if (!m) {
+        m = { playerId: p.playerId, position: null, proTeamId: null, byWeek: {} };
+        men.set(p.playerId, m);
+      }
+      if (!m.position && p.position && p.position !== 'UNK') m.position = p.position;
+      if (m.proTeamId === null && p.proTeamId !== null && p.proTeamId !== undefined) m.proTeamId = p.proTeamId;
+      m.byWeek[w] = pregameOf(p);
+    }
+  }
+  return men;
+}
+
+/** Everybody on a squad in any of `weeks`. */
+function squadMen(weekTeams, weeks) {
+  return menOf(new Map(weeks.map((w) => [
+    w, (weekTeams.get(w) || []).flatMap((t) => (t && t.players) || []),
+  ])), weeks);
+}
+
+/** Each man with his average over `weeks`, his bye left out. */
+function withRestAvg(men, weeks, byes) {
+  return [...men.values()].map((m) => {
+    const bye = byes && m.proTeamId !== null ? Number(byes[m.proTeamId]) : NaN;
+    return {
+      playerId: m.playerId,
+      position: m.position,
+      avg: value.restAvg(m.byWeek, weeks, Number.isFinite(bye) ? bye : null),
+    };
+  });
+}
+
+/**
+ * The lines, from one whole reading — or null (see "IT IS MADE ONLY FROM A
+ * WHOLE READING"). Pure: the same reading gives the same lines.
+ *
+ * @param {Object} o
+ * @param {number[]} o.weeks the weeks left
+ * @param {Map<number, Array>} o.weekTeams week -> squads
+ * @param {Map<number, Array>} o.weekWire week -> free agents
+ * @param {Object} o.byes `{proTeamId: byeWeek}`
+ */
+function valueBaseFrom({ weeks, weekTeams, weekWire, byes, now = Date.now() }) {
+  if (!weeks || !weeks.length) return null;
+  const whole = weeks.every((w) =>
+    Array.isArray(weekTeams.get(w)) && weekTeams.get(w).length > 0 && Array.isArray(weekWire.get(w)));
+  if (!whole) return null;
+  const counts = slotCountsFromLineups(weeks.flatMap((w) => weekTeams.get(w)));
+  if (!counts) return null;
+
+  const owned = squadMen(weekTeams, weeks);
+  const free = menOf(weekWire, weeks);
+  // A man on a squad is not a free agent, whatever a wire read a minute apart says.
+  for (const id of owned.keys()) free.delete(id);
+  const rostered = withRestAvg(owned, weeks, byes);
+
+  const base = value.buildBase({
+    rostered,
+    freeAgents: withRestAvg(free, weeks, byes),
+    slots: slotsFromCounts(counts),
+    teams: weekTeams.get(weeks[0]).length,
+    week: weeks[0],
+    now,
+  });
+  if (!usableBase(base)) return null;
+  const held = (pos) => rostered.some((p) => p.position === pos && p.avg !== null);
+  if (value.VALUE_POSITIONS.some((pos) => held(pos) && !base.lines[pos])) return null;
+  return base;
+}
+
+let valueBaseMemo = null;     // { key, promise }
+let playerValuesMemo = null;  // { key, promise }
+let demoValueMemo = null;     // the sample league's weeks, squads and lines
+
+function forgetValueMemos() {
+  valueBaseMemo = null;
+  playerValuesMemo = null;
+}
+
+const valueMemoKey = (demo) => {
+  const { leagueId, season } = espn.getConfig();
+  return `${demo ? 'demo' : 'live'}|${leagueId}::${season}`;
+};
+
+/** The sample league: made in memory, the same every time, never kept. */
+function demoValueWorld() {
+  if (!demoValueMemo) {
+    demoValueMemo = (async () => {
+      const demo = await import('./demo-rosters.js');
+      const weeks = valueWeeks(demo.generateDemoSchedule());
+      const weekTeams = new Map(weeks.map((w) => [w, demo.generateDemoWeekRosters(w).teams]));
+      const weekWire = new Map(weeks.map((w) => [w, demo.generateDemoFreeAgents(w)]));
+      return { weeks, weekTeams, base: valueBaseFrom({ weeks, weekTeams, weekWire, byes: {}, now: 0 }) };
+    })();
+    demoValueMemo.catch(() => { demoValueMemo = null; });
+  }
+  return demoValueMemo;
+}
+
+/**
+ * THE FROZEN LINES for this league's season, or null when there are none (yet).
+ *
+ * One answer per page load. NEVER THROWS, and on the phone's synced copy it
+ * makes no ESPN request at all — see the top of this section for the order.
+ *
+ * @param {Object} [opts]
+ * @param {boolean} [opts.demo] the sample league's, whatever league is connected
+ *   (a page showing demo data beside a saved league). With no real league
+ *   connected it is the sample league's either way.
+ * @returns {Promise<Object|null>} `value.buildBase`'s shape
+ */
+export function fetchValueBase({ demo = false } = {}) {
+  const key = valueMemoKey(demo);
+  if (!valueBaseMemo || valueBaseMemo.key !== key) {
+    valueBaseMemo = { key, promise: valueBaseNow(demo).catch(() => null) };
+  }
+  return valueBaseMemo.promise;
+}
+
+async function valueBaseNow(demo) {
+  const cfg = demo ? null : storable();
+  if (!cfg) return (await demoValueWorld()).base;
+
+  // THE SYNCED COPY: what the computer sent, or nothing. Never made here.
+  const down = await cloudDown();
+  if (down) {
+    const up = down.schedule ? down.schedule.valueBase : null;
+    return usableBase(up) ? up : null;
+  }
+
+  const kept = keptValueBase(cfg);
+  if (kept) return kept;
+
+  const weeks = valueWeeks(await fetchSchedule());
+  if (!weeks.length) return null;
+  const byes = await fetchByeWeeks();
+  if (!byesAreKnown(byes)) return null;
+  const weekTeams = await fetchWeeksRosters(weeks);
+  const weekWire = new Map();
+  // A week the wire refuses throws, and then nothing is made this time.
+  await inBatches(weeks, 3, async (w) => { weekWire.set(w, await fetchWireWeek(w)); });
+
+  const base = valueBaseFrom({ weeks, weekTeams, weekWire, byes });
+  if (!base) return null;
+  // Another tab may have kept one while this read ran: the first one stands.
+  // And lines that cannot be kept are not handed out — they would be different
+  // lines on the next load, which is the one thing they may not be.
+  return keptValueBase(cfg) || (keepValueBase(cfg, base) ? base : null);
+}
+
+/**
+ * EVERY ROSTERED MAN'S VALUE, off the frozen lines.
+ *
+ * `weeks` is the weeks left (`valueWeeks`) — the list every Value on a page is
+ * averaged over. `byId` has a man for everybody on a squad in any of them:
+ * `position`, `avg` (his `restAvg`, null when no week counts) and `value`
+ * (`value.valueOf`; null with no lines, no line at his position, or no
+ * average). `lookup(playerId)` is his value or null — what the player card's
+ * `setValueSource` takes.
+ *
+ * One answer per page load; dropped with the other memos when the squads are
+ * re-read (Sync now, a newer sync). NEVER THROWS: a failure is an empty answer.
+ * On the phone's synced copy it asks ESPN for nothing beyond what
+ * `fetchSchedule` and `fetchWeeksRosters` already do there.
+ *
+ * @param {Object} [opts]
+ * @param {boolean} [opts.demo] see `fetchValueBase`
+ * @returns {Promise<{ base:Object|null, weeks:number[],
+ *   byId:Map<number, {position:string|null, avg:number|null, value:number|null}>,
+ *   lookup:function(number|string):number|null }>}
+ */
+export function fetchPlayerValues({ demo = false } = {}) {
+  const key = valueMemoKey(demo);
+  if (!playerValuesMemo || playerValuesMemo.key !== key) {
+    playerValuesMemo = { key, promise: playerValuesNow(demo).catch(() => playerValuesOf(null, [], new Map(), {})) };
+  }
+  return playerValuesMemo.promise;
+}
+
+function playerValuesOf(base, weeks, weekTeams, byes) {
+  const byId = new Map();
+  for (const m of withRestAvg(squadMen(weekTeams, weeks), weeks, byes)) {
+    byId.set(m.playerId, { position: m.position, avg: m.avg, value: value.valueOf(base, m.position, m.avg) });
+  }
+  const lookup = (id) => {
+    const hit = byId.get(id) ?? byId.get(Number(id));
+    return hit && typeof hit.value === 'number' ? hit.value : null;
+  };
+  return { base, weeks, byId, lookup };
+}
+
+async function playerValuesNow(demo) {
+  if (demo || !storable()) {
+    const world = await demoValueWorld();
+    return playerValuesOf(world.base, world.weeks, world.weekTeams, {});
+  }
+  const base = await fetchValueBase();
+  const weeks = valueWeeks(await fetchSchedule());
+  if (!weeks.length) return playerValuesOf(base, [], new Map(), {});
+  const weekTeams = await fetchWeeksRosters(weeks);
+  // On the synced copy the byes are the synced ones or none: `fetchByeWeeks`
+  // would go on to ask ESPN when the sync carried none, and this may not.
+  const down = await cloudDown();
+  const byes = down ? (down.byes || {}) : await fetchByeWeeks();
+  return playerValuesOf(base, weeks, weekTeams, byes);
+}
+
+/**
+ * The lines a sync sends — FIRST COPY WINS.
+ *
+ * The cloud's schedule is looked at before it is written over (two document
+ * reads a sync; the check-before-write of js/cloud.js `writeProjhist`): lines
+ * already up there are adopted — kept in this browser in place of its own — and
+ * sent back unchanged. Only when the cloud has answered and holds none are this
+ * browser's sent, made here from the sync's own reading if it has none either
+ * (no request: every squad and wire week was just read). When the cloud could
+ * not be asked, nothing new is minted.
+ */
+async function valueBaseForSync({ schedule, rosters, wire, byes }) {
+  const cfg = storable();
+  if (!cfg) return null;
+
+  let asked = false;
+  let up = null;
+  try {
+    const res = await cloud.readDown(cfg.leagueId, cfg.season, { shapes: ['schedule'] });
+    asked = Boolean(res && res.ok);
+    up = res && res.ok && res.found && res.schedule ? res.schedule.valueBase : null;
+  } catch {
+    asked = false;
+  }
+  if (usableBase(up)) {
+    keepValueBase(cfg, up);
+    forgetValueMemos();
+    return up;
+  }
+
+  const kept = keptValueBase(cfg);
+  if (kept) return kept;
+  if (!asked || !byesAreKnown(byes)) return null;
+
+  const base = valueBaseFrom({ weeks: valueWeeks(schedule), weekTeams: rosters, weekWire: wire, byes });
+  if (!base) return null;
+  keepValueBase(cfg, base);
+  forgetValueMemos();
+  return base;
+}
+
+// ===========================================================================
 // GATHERING WHAT GETS PUBLISHED
 // ===========================================================================
 
@@ -2116,6 +2471,16 @@ export async function buildCloudPayload({ onProgress } = {}) {
     const cfg = storable();
     const held = cfg ? projHistory.uploads(cfg.leagueId, cfg.season) : [];
     if (held.length) payload.projhist = held;
+  } catch { /* nothing of it goes up this time */ }
+
+  // PLAYER VALUE'S FROZEN LINES ride the schedule as `valueBase`, the way
+  // `scoringItems` does, so the phone has them with no read of its own. The
+  // first copy up wins (`valueBaseForSync`). On a copy of the schedule: the
+  // one above is what the rest of this function was handed. A failure sends
+  // none, and the sync is still a sync.
+  try {
+    const base = await valueBaseForSync({ schedule, rosters, wire, byes });
+    if (base) payload.schedule = { ...schedule, valueBase: base };
   } catch { /* nothing of it goes up this time */ }
   return payload;
 }

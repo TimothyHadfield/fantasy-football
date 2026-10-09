@@ -17,6 +17,9 @@
     "test-floor.mjs": {
       "assertions": 113
     },
+    "test-value.mjs": {
+      "assertions": 102
+    },
     "test-heat.mjs": {
       "assertions": 186
     },
@@ -71,8 +74,8 @@
       "assertions": 190
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 160,
-      "scenarios": 13
+      "assertions": 217,
+      "scenarios": 15
     },
     "test-trade-odds.mjs": {
       "assertions": 142
@@ -241,7 +244,7 @@
       "assertions": 161
     },
     "pop-check.mjs": {
-      "assertions": 114
+      "assertions": 135
     }
   }
 }

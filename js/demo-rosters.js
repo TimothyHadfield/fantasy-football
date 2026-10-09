@@ -573,6 +573,40 @@ export function generateDemoWeekRosters(week) {
   return built;
 }
 
+/**
+ * The sample league's free agents in a week: every man of the universe no team
+ * holds that week, with the same raw projection for it that a squad would have
+ * started from. For js/season.js's player Value lines (the sample league's are
+ * made in memory from this, never stored). Nothing here changes any number this
+ * file already produced.
+ *
+ * @param {number} week 1-16
+ * @returns {Array<{playerId:number, name:string, position:string, proTeam:string,
+ *   projected:number, actual:null, injuryStatus:string, percentOwned:number}>}
+ */
+export function generateDemoFreeAgents(week) {
+  const target = clamp(Math.round(week) || 1, 1, LAST_WEEK);
+  const uni = buildUniverse();
+  const held = new Set();
+  for (const ids of rosterStateForWeek(target).values()) for (const id of ids) held.add(id);
+  const out = [];
+  for (const player of uni.byId.values()) {
+    if (held.has(player.playerId)) continue;
+    const status = injuryStatusFor(player, target);
+    out.push({
+      playerId: player.playerId,
+      name: player.name,
+      position: player.position,
+      proTeam: player.proTeam,
+      projected: round1(rawWeek(player, target, status).projected),
+      actual: null,
+      injuryStatus: status,
+      percentOwned: player.percentOwned,
+    });
+  }
+  return out;
+}
+
 // ------------------------------------------------- the glance (Avg / rank)
 //
 // The sample season "is" at week 4 — the Players page has always said so

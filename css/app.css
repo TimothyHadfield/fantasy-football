@@ -1997,3 +1997,9 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
 .conn-name { cursor: help; }
 .conn-name:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* ============================================================ end of top bar */
+/* ============ PLAYER VALUE ON THE CARD (2026-10-09, docs/value-plan.md)
+ * "Value 5.5" is first on the line under the name (js/player-card.js
+ * `glanceHtml`) and takes that line's own look — dim word, bright number. All
+ * this adds is that the word and its number never part at a line end. */
+.tc-glance .tc-value { white-space: nowrap; }
+/* =================================================== end of player value */
