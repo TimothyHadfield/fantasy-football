@@ -199,9 +199,20 @@ eq(futureDiffs(GAMES, totals, [], IDS).size, 0, 'no weeks: empty');
 const analysis = readFileSync(path.join(REPO, 'js/analysis-page.js'), 'utf8');
 const imp = /import\s*\{([^}]*)\}\s*from\s*'\.\/lineup-avg\.js'/.exec(analysis);
 ok(imp, 'js/analysis-page.js imports from ./lineup-avg.js');
+// Since 2026-10-09 the week cells and "Who to start" are js/who-to-start.js's
+// (the Players page draws the same box), and the two calls that fill a lineup
+// went with them. Still one copy: a name counts when the file that calls it —
+// the page, or that module the page draws with — takes it from lineup-avg.js.
+const shared = readFileSync(path.join(REPO, 'js/who-to-start.js'), 'utf8');
+const sharedImp = /import\s*\{([^}]*)\}\s*from\s*'\.\/lineup-avg\.js'/.exec(shared);
+const drawsWithShared = /from\s*'\.\/who-to-start\.js'/.test(analysis);
+const names = (m) => (m ? m[1].split(',').map((s) => s.trim()) : []);
+const calls = (src, name) => new RegExp(`\\b${name}\\(`).test(src.replace(/import[^;]*;/g, ''));
 for (const name of ['assessSlot', 'lineupTotal', 'bestFill', 'slotsFromTeamLists']) {
-  ok(imp && imp[1].split(',').map((s) => s.trim()).includes(name), `Analysis imports ${name}`);
-  ok(new RegExp(`\\b${name}\\(`).test(analysis.replace(/import[^;]*;/g, '')), `Analysis calls ${name}`);
+  const here = names(imp).includes(name);
+  const there = drawsWithShared && names(sharedImp).includes(name);
+  ok(here || there, `Analysis imports ${name}`);
+  ok((here && calls(analysis, name)) || (there && calls(shared, name)), `Analysis calls ${name}`);
 }
 ok(!/^function identified\(/m.test(analysis), 'Analysis keeps no second copy of identified()');
 const stats = readFileSync(path.join(REPO, 'js/stats-page.js'), 'utf8');

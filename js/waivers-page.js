@@ -122,6 +122,9 @@ import { optimalLineup } from './forecast.js';
 import { slotCountsFromLineups, projectionsFromWeekTeams } from './projection.js';
 // A player's Value: points a week over what is free (docs/value-plan.md).
 import * as value from './value.js';
+// THE ANALYSIS PAGE'S "WHO TO START" BOX, above the free agents (Tim,
+// 2026-10-09) — see "who to start" below. One renderer for both pages.
+import * as starters from './who-to-start.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('waivers');
@@ -328,6 +331,7 @@ const state = {
   past: {
     wire: new Map(),             // week -> Map(playerId -> { projected, actual, injuryStatus })
     rosters: new Map(),          // week -> the same shape, from that week's rosters
+    teams: new Map(),            // week -> that week's teams array, whole ("who to start")
     failed: new Set(),           // 'wire:2' / 'roster:2' — refused; drawn "—", never retried
     inFlight: new Set(),         // same keys, asked for and not yet back
   },
@@ -537,6 +541,8 @@ function resetData() {
   state.value = { base: null, players: null, asked: false, synced: false };
   state.past.wire.clear();
   state.past.rosters.clear();
+  state.past.teams.clear();
+  startRev++;
   state.past.failed.clear();
   state.past.inFlight.clear();
   // A linked man has to be looked for again in the league now being read: the
@@ -1411,6 +1417,7 @@ function doneCell(v, done) {
  */
 function absorbRosterWeek(teams, week) {
   state.rosterWeeks.set(week, teams);
+  startRev++;
 
   const byPlayer = new Map();
   const status = new Map();
@@ -1497,6 +1504,9 @@ function absorbPastRosters(teams, week) {
     }
   }
   state.past.rosters.set(week, byPlayer);
+  // The whole squads too: "who to start" marks each played week's real lineup.
+  state.past.teams.set(week, teams || []);
+  startRev++;
 }
 
 /** Both kinds of played week, once each — the columns need them on every visit. */
@@ -2916,6 +2926,124 @@ function renderJump(weeks) {
     `<button type="button" data-clear>Clear</button>`;
 }
 
+// ---------------------------------------------------------------- who to start
+//
+// THE ANALYSIS PAGE'S BOX, ABOVE THE FREE AGENTS (Tim, 2026-10-09: "the who to
+// start box above the available players section, specifically when a certain
+// position is selected. this will help the user know if and how useful an
+// added player will be"). Your own men at the position the filter is on, week
+// by week, with the weeks each makes your best lineup marked.
+//
+// IT IS THE SAME BOX, not a likeness: js/who-to-start.js draws it for both
+// pages. That module reads the Analysis page's `state` by name, so this page
+// hands it a VIEW of its own state in those names (`startView`) — nothing is
+// copied, every getter reads what the page holds at that moment.
+//
+// THE WEEKS ARE THE AVAILABLE TABLE'S COLUMNS, in the same order: the played
+// weeks, then the weeks being priced (the span). So Avg, Starts and the depth
+// tags are over the weeks on screen — the Analysis page's are over the whole
+// season, and the two agree when the span is "Rest of season".
+//
+// NO REQUEST IS MADE FOR IT. Every week it shows is a roster week this page
+// already holds for the "Your …" rows and the Taken table; a week still in the
+// air is a blank cell until it lands. On the phone's synced copy that is zero
+// ESPN requests, as for the rest of the page.
+//
+// ABSENT, NOT EMPTY, with "All" positions or nobody set as you: the panel is
+// `hidden` and its table is blank, so the page is what it was.
+
+/** Bumped whenever a roster week lands or the league changes: the memo key. */
+let startRev = 0;
+
+/** The box's columns: the played weeks, then the weeks being priced. */
+function startWeeks() {
+  const shown = shownWeeks();
+  return [...pastWeeks(shown), ...shown];
+}
+
+/** week -> that week's squads, for the box's weeks that have landed. */
+let startHeld = { key: null, map: new Map() };
+function startSeasonWeeks() {
+  const weeks = startWeeks();
+  const key = `${state.token}:${startRev}:${weeks.join(',')}`;
+  if (startHeld.key === key) return startHeld.map;
+  const map = new Map();
+  for (const w of weeks) {
+    const teams = state.rosterWeeks.get(w) || state.past.teams.get(w);
+    if (teams && teams.length) map.set(w, teams);
+  }
+  startHeld = { key, map };
+  return map;
+}
+
+/** The week the box is anchored on: this week, else the first one held. */
+function startAnchor() {
+  const held = startSeasonWeeks();
+  if (held.has(state.currentWeek)) return state.currentWeek;
+  const shown = shownWeeks().find((w) => held.has(w));
+  return shown ?? [...held.keys()][0] ?? null;
+}
+
+/** Actual | Proj for the played weeks — the select in the box's own header. */
+const startHistory = () => (prefs.get('startHistory', 'actual') === 'proj' ? 'proj' : 'actual');
+
+/** This page's state, in the names js/who-to-start.js reads. */
+const startView = {
+  get seasonWeeks() { return startSeasonWeeks(); },
+  get seasonFailed() {
+    return new Set(startWeeks().filter((w) =>
+      state.failedRosterWeeks.has(w) || state.past.failed.has(`roster:${w}`)));
+  },
+  get weeks() { return startWeeks().filter((w) => !isPlayoff(w)); },
+  get poWeeks() { return startWeeks().filter(isPlayoff); },
+  get playedWeeks() { return state.playedWeeks; },
+  get week() { return startAnchor(); },
+  get data() {
+    const w = startAnchor();
+    return w === null ? null : { teams: startSeasonWeeks().get(w) };
+  },
+  get isDemo() { return state.isDemo; },
+  get byes() { return state.byes; },
+  get startersPos() { return state.position; },
+};
+
+starters.configure({
+  state: startView,
+  valueOn,
+  asValue,
+  historyMode: startHistory,
+  sourceKey: () => `players:${state.token}:${startRev}`,
+  glanceFor: (p) => glanceFor(p, false),
+});
+
+/** Your squad in the anchor week, or null when the box has nobody to be about. */
+function startTeam() {
+  if (state.position === 'ALL') return null;
+  const me = myTeamId();
+  if (me === null || me === undefined) return null;
+  const data = startView.data;
+  return (data && (data.teams || []).find((t) => String(t.id) === String(me))) || null;
+}
+
+function renderStartBox() {
+  const panel = $('startPanel');
+  const table = $('startersTable');
+  if (!panel || !table) return;
+  const team = startTeam();
+  const d = team ? starters.startersData(team) : null;
+  if (!d || !d.show) {
+    panel.hidden = true;
+    table.querySelector('thead').innerHTML = '';
+    table.querySelector('tbody').innerHTML = '';
+    return;
+  }
+  $('startersTitle').textContent = `Who to start · ${d.label}`;
+  table.querySelector('thead').innerHTML = starters.startersHeadHtml(d);
+  table.querySelector('tbody').innerHTML = starters.startersBodyHtml(team, d);
+  panel.hidden = false;
+  resort(table);
+}
+
 // --------------------------------------------------------------------- render
 
 function render() {
@@ -2949,6 +3077,7 @@ function render() {
 
   renderCost(weeks);
   renderCounts(weeks);
+  renderStartBox();
   renderTable(weeks);
   renderStats(weeks);
   renderNote(weeks);
@@ -4565,6 +4694,20 @@ wirePops($('takenTable'), { selector: PREVIEWS, card: previewFor });
 // Same reasoning one column further right, the Owner column having pushed Avg
 // from index 3 to index 4.
 enableSort($('takenTable'), { defaultIndex: 4 });
+// "Who to start" opens as it does on Analysis: by depth, starter first. Its
+// Starts figures and week headings open the same cards; Actual | Proj is the
+// select in its header, kept for this page.
+if ($('startersTable')) {
+  enableSort($('startersTable'), { defaultIndex: 0, defaultAsc: true });
+  wirePops($('startersTable'));
+  starters.wireWeekHeads($('startersTable'));
+  $('startersTable').addEventListener('change', (e) => {
+    const pick = e.target.closest ? e.target.closest('select[data-history]') : null;
+    if (!pick) return;
+    prefs.set('startHistory', pick.value === 'proj' ? 'proj' : null);
+    render();
+  });
+}
 
 /**
  * Go live on our own when the connection bar finds a league, so the page shows
