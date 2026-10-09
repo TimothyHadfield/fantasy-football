@@ -154,6 +154,9 @@
     "tr-test.mjs": {
       "assertions": 1147
     },
+    "tr-value-check.mjs": {
+      "assertions": 73
+    },
     "test-proj-trend.mjs": {
       "assertions": 52
     },
