@@ -5165,11 +5165,11 @@ if (!wk.boot) {
         `${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}`;
     };
     for (const [where, k] of [['a finder name', wk.card], ['a spare chip', wk.spareCard], ['a man in the deal pop-up', wk.dealCard]]) {
-      ok(`GLANCE: ${where} shows Avg · Proj · rank right under the name`,
-        !!k && k.glanceUnderName && /^Avg \d+\.\d · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #\d+$/.test(k.glance),
+      ok(`GLANCE: ${where} shows Value · Avg · Proj · rank right under the name`,
+        !!k && k.glanceUnderName && /^Value \d+\.\d · Avg \d+\.\d · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #\d+$/.test(k.glance),
         JSON.stringify(k && { g: k.glance, under: k.glanceUnderName, id: k.ident }));
       ok(`GLANCE: ${where} carries HIS week-${DEMO_CURRENT_WEEK} numbers`,
-        !!k && k.pid !== null && want(k.pid) !== null && k.glance === want(k.pid),
+        !!k && k.pid !== null && want(k.pid) !== null && k.glance.replace(/^Value \d+\.\d · /, '') === want(k.pid),
         `${k && k.glance} vs ${k && want(k.pid)}`);
     }
   }

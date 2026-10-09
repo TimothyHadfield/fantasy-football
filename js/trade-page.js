@@ -123,8 +123,11 @@ import {
 import { optimalLineup } from './forecast.js';
 import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
-  zeroKind, byeWeekOf,
+  zeroKind, byeWeekOf, setValueSource,
 } from './player-card.js';
+// A player's VALUE (Tim, 2026-10-09; docs/value-plan.md): the arithmetic. The
+// frozen lines it needs come from js/season.js (`readValue` below).
+import { valueOf, isBase as isValueBase } from './value.js';
 // Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
 import { healthy, injuryLabel, injuryClass } from './injury.js';
 // The preseason arrows by a name (Tim, 2026-09-30): ESPN's preseason projection
@@ -305,6 +308,11 @@ const state = {
   // 'mine' (the builder's left squad) or 'theirs' (the partner).
   cuSeasonSide: 'mine',
   cuSeasonView: 'total',      // the after box: 'total' or 'diff' (after − before)
+  // PROJ | VALUE (Tim, 2026-10-09): the league's frozen Value lines, null until
+  // read (and then no switch is drawn and nothing on the page differs), and
+  // which of the two the per-player numbers are shown as. One state for the page.
+  valueBase: null,
+  valueView: 'proj',
   // THE PARTNER'S HALF of the custom box (2026-09-29) has its own week table
   // and its own slot-by-slot panel, opening on HIS lineup — but NOT its own
   // week. Tim, 2026-09-29: "it shows different numbers in different places for
@@ -1711,6 +1719,104 @@ function renderCost() {
   warnEl.hidden = !warns.length;
 }
 
+// ------------------------------------------------------------ Proj | Value
+//
+// Tim, 2026-10-09: "for all graphs or charts that show avg position's proj or
+// value or anything like that (except total proj like a team's proj for that
+// week), have a switch for that graph that also shows the data as value rather
+// than just total proj."
+//
+// ONE RULE (docs/value-plan.md): a per-player figure x shown as Value is
+// `valueOf(base, his position, x)`; a slot cell takes the position of the man
+// filling it; an average is the mean of the converted numbers; the colour
+// follows the number shown. A team total is never converted, and neither is
+// the depth map (already measured from a bar of its own). Nothing here reaches
+// a price, a search or a ranking.
+//
+// The lines come from js/season.js once the page's own weeks are in hand
+// (`readValue`, called from `paint`): on a real league that read walks the same
+// weeks this page buys, and asking for both at once would buy them twice.
+
+/** Are the per-player numbers being shown as Value right now? */
+const valueOn = () => state.valueView === 'value' && !!state.valueBase;
+/** A per-player projection as his Value — or null when it cannot be said. */
+const asValue = (position, x) => valueOf(state.valueBase, position, x);
+/** The number a per-player figure is drawn as, whichever view is on. */
+const shownAs = (position, x) => (valueOn() ? asValue(position, x) : x);
+
+/** The switch, for a panel drawn by this file. '' while there are no lines. */
+function valueSwitchHtml() {
+  if (!state.valueBase) return '';
+  const btn = (v, label) =>
+    `<button type="button" data-value-view="${v}"${state.valueView === v ? ' class="on"' : ''} ` +
+    `aria-pressed="${state.valueView === v}">${label}</button>`;
+  return `<div class="segmented seg-sm value-view" role="group" aria-label="Player numbers shown as">` +
+    `${btn('proj', 'Proj')}${btn('value', 'Value')}</div>`;
+}
+
+/** The switch that lives in the markup (the custom panel's toolbar). */
+function syncValueSwitch() {
+  const el = $('cuValueView');
+  if (!el) return;
+  el.hidden = !state.valueBase;
+  for (const b of el.querySelectorAll('button[data-value-view]')) {
+    const on = b.getAttribute('data-value-view') === state.valueView;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
+
+let valueReadKey = null;
+/** playerId -> his Value (season.js's own figure), or null. Null with no lines. */
+let valueLookup = null;
+
+/**
+ * What a custom deal does to each side's TOTAL VALUE.
+ *
+ * Tim, 2026-10-09: "at the top of the custom trades by where it shows +-/week,
+ * show +- total value for each user."
+ *
+ * A side's change is the Value of the men it RECEIVES less the Value of the
+ * men it GIVES, each man's Value being the one his card shows (season.js's
+ * `fetchPlayerValues`). A man with no Value counts 0. Null with no lines, and
+ * then nothing is drawn. It follows no switch: it is always a Value.
+ */
+function customValueChange(sendA, sendB) {
+  if (!state.valueBase || typeof valueLookup !== 'function') return null;
+  const sum = (ids) => ids.reduce((t, id) => {
+    const v = valueLookup(id);
+    return t + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  }, 0);
+  const r1 = (n) => { const r = Math.round(n * 10) / 10; return r === 0 ? 0 : r; };
+  const a = r1(sum(sendB) - sum(sendA));
+  return { a, b: a === 0 ? 0 : -a };
+}
+
+/**
+ * Read the lines and every man's Value, once per source. The player cards get
+ * the lookup (Value at the top of every preview); the page keeps the lines.
+ * Never throws; a season module without the read (an older stub) is no lines.
+ */
+function readValue() {
+  const key = sourceKey();
+  if (valueReadKey === key) return;
+  valueReadKey = key;
+  if (state.valueBase) state.valueBase = null;   // another league's lines are not this one's
+  valueLookup = null;
+  setValueSource(null);
+  if (typeof season.fetchPlayerValues !== 'function') return;
+  const demo = state.isDemo;
+  Promise.resolve().then(() => season.fetchPlayerValues({ demo })).catch(() => null).then((got) => {
+    if (valueReadKey !== key || sourceKey() !== key) return;
+    setValueSource(got && typeof got.lookup === 'function' ? got.lookup : null);
+    const base = got && isValueBase(got.base) && Object.keys(got.base.lines).length ? got.base : null;
+    if (!base) return;                           // no lines: the page stays exactly as it was
+    valueLookup = typeof got.lookup === 'function' ? got.lookup : null;
+    state.valueBase = base;
+    if (state.data) paint();
+  });
+}
+
 // -------------------------------------------------------- player references
 //
 // The site's one contract, unchanged here: every name is a real <a href> to
@@ -1785,6 +1891,9 @@ function cardFor(p, ctx = null) {
   return {
     ident,
     href,
+    // His Value, first on the card's glance line: looked up when the card opens
+    // (`setValueSource`, in `readValue`). No id, or no number for him: no change.
+    playerId: p.playerId ?? null,
     glance: glanceFor(p),
     run: weekRun({
       heading: heading + tail,
@@ -7676,6 +7785,11 @@ function paint() {
   // The rosters an assumed trade makes moved (a week landed, the goal changed
   // the span): everything on screen was found on the old ones, so search again.
   if (syncAssumed()) { runSearch(); return; }
+  // Another league's Value lines are not this one's: gone before anything draws.
+  if (valueReadKey !== null && valueReadKey !== sourceKey() && state.valueBase) {
+    state.valueBase = null;
+    setValueSource(null);
+  }
   clearRuns();
   // Same reason as clearRuns(): the offers behind the ESPN links are registered
   // by counter and the Map has no other way of shrinking, so a repaint that did
@@ -7701,6 +7815,9 @@ function paint() {
   renderAssumed();
   renderDeal();
   syncHeadTitles();
+  syncValueSwitch();
+  // Value's lines, once the page's own weeks are in (see `readValue`).
+  if (!weekly.loading && weeklyReady()) readValue();
 }
 
 
@@ -7925,7 +8042,8 @@ function customPositionScales(teamIds) {
     const team = teamById(id);
     for (const p of (team && team.players) || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
-      const v = customValue(p);
+      // The colour follows the number SHOWN (Proj | Value).
+      const v = shownAs(p.position, customValue(p));
       if (!Number.isFinite(v)) continue;
       if (!byPos.has(p.position)) byPos.set(p.position, []);
       byPos.get(p.position).push(v);
@@ -7993,7 +8111,9 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
       );
     }
     const lit = on.has(String(p.playerId));
-    const v = customValue(p);
+    // Proj | Value: the ORDER above stays the lineup on the page's measure — only
+    // the number drawn changes, so nothing moves when the switch is pressed.
+    const v = shownAs(p.position, customValue(p));
     const scale = scales.get(p.position) || null;
     const h = heatOf(v, scale, { what: `a ${p.position} across the league` });
     // The card knows which deal it is inside, so a man on the OTHER squad who
@@ -8264,11 +8384,15 @@ function renderCustomPickers() {
  * rule the depth map's tints and the Players page's two greens follow, and it
  * is what keeps the number readable to anyone who cannot separate the hues.
  */
-function customGainHtml(delta, perWeek = perWeekOf(delta)) {
+function customGainHtml(delta, perWeek = perWeekOf(delta), value = null) {
   const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+  // The side's change in total Value, on the small line (so the reserved height
+  // holds). Absent with no lines, and then this is the markup it always was.
+  const val = value === null ? '' :
+    ` · <span class="cu-val ${value > 0 ? 'up' : value < 0 ? 'down' : 'flat'}">${signedText(value)} value</span>`;
   return (
     `<span class="cu-num ${cls}">${signedText(perWeek)}<span class="unit">/wk</span></span>` +
-    `<span class="cu-sub">${signedText(delta)} over ${esc(weekRange(weeklySpan()))}</span>`
+    `<span class="cu-sub">${signedText(delta)} over ${esc(weekRange(weeklySpan()))}${val}</span>`
   );
 }
 
@@ -8302,10 +8426,11 @@ function renderCustomPreview(priced) {
   // Per week as the week table's "Per week" row and a saved row print it.
   const cuOffer = customOffer(state.custom, priced);
   const n = weeklySpan().length;
+  const val = customValueChange(sendA.map(String), sendB.map(String));
   $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer),
-    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n));
+    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n), val ? val.a : null);
   $('cuGainB').innerHTML = customGainHtml(priced.forB.delta,
-    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n));
+    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n), val ? val.b : null);
   // The sentence above them is now about the DEAL rather than about the
   // numbers: who moves which way, which the two columns cannot say between
   // them. The figures are under their own squads and do not need naming twice.
@@ -8691,6 +8816,11 @@ function renderCustomNote() {
     `he is ruled out at 0.00 are out of its divisor &mdash; while a gain is spread over every week ` +
     `in the span. For a man who is out for a while that figure flatters him, deliberately: it ` +
     `answers what you get when he plays.` +
+    // Rule 7, for the Proj | Value switch — only while there is a switch.
+    (state.valueBase
+      ? ` <strong>Value</strong> is points a week over the waiver line at his position; points ` +
+        `below the starter line count half. Both lines are fixed for the season.`
+      : '') +
     `<br><br>` +
     `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
     `shows trades where BOTH squads improve; this prices whatever you build, including a deal that ` +
@@ -9104,7 +9234,7 @@ let cuSeasonLeague = { key: null, floors: null, slots: null, val: null };
 /** Every squad's best lineup over the unplayed weeks, measured as Analysis measures it. */
 function cuSeasonScales(rows, weeks, regular) {
   const key = `${sourceKey()}|${weekly.byWeek.size}|${weeks.join(',')}|${rows.map((r) => r.key).join(',')}|` +
-    `${realWorld ? 'R' : 'A'}${assume.version}`;
+    `${realWorld ? 'R' : 'A'}${assume.version}|${valueOn() ? 'V' : 'P'}`;
   const L = cuSeasonLeague;
   if (L.key === key && L.floors === state.floors && L.slots === state.slots) return L.val;
   const teams = state.data ? state.data.teams : [];
@@ -9122,9 +9252,12 @@ function cuSeasonScales(rows, weeks, regular) {
       const slots = fillSlots(wk.starters, rows);
       for (const row of rows) {
         const e = slots.get(row.key) || null;
-        if (e && Number.isFinite(e.v)) cellVals.get(row.key).push(e.v);
+        // Proj | Value: the slot rows are measured in what they are drawn in.
+        // The band below is a team total and is the same in both.
+        const cv = e ? shownAs(e.p.position, e.v) : null;
+        if (Number.isFinite(cv)) cellVals.get(row.key).push(cv);
         if (regular.has(wk.week)) {
-          const a = cuSeasonValue(e, row);
+          const a = cuSeasonShown(e, row);
           if (a.value !== null) perSlot.get(row.key).push(a.value);
         }
       }
@@ -9158,6 +9291,16 @@ function cuSeasonValue(entry, row) {
   return { value: a.value === null ? entry.v : a.value, assumed: a.assumed };
 }
 
+/**
+ * The same, as DRAWN (Proj | Value). As Value the slot's number becomes the
+ * Value of the man filling it, at HIS position; a slot nobody fills has none.
+ */
+function cuSeasonShown(entry, row) {
+  const a = cuSeasonValue(entry, row);
+  if (!valueOn()) return a;
+  return { value: entry ? asValue(entry.p.position, a.value) : null, assumed: a.assumed };
+}
+
 /** One season box: slot rows, Avg, a column a week, the Starting lineup band (and the opponent row). */
 function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsWeeks, diff = false }) {
   const firstPo = cols.find((c) => c.po);
@@ -9189,7 +9332,7 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
     const vals = [];
     const cells = cols.map((c, i) => {
       const e = fills[i].get(row.key) || null;
-      const a = cuSeasonValue(e, row);
+      const a = cuSeasonShown(e, row);
       if (counted(c) && a.value !== null) vals.push(a.value);
       const h = c.played ? null : heatOf(a.value, scales.cells.get(row.key), { what: `a ${row.key} across the league` });
       const zero = e && e.p.projected === 0 && !a.assumed
@@ -9263,8 +9406,8 @@ function cuSeasonDiffBody(cols, rows, afterFills, cardKey, colCls, avgOf, counte
     const bVals = [];
     const cells = cols.map((c, i) => {
       const e = afterFills[i].get(row.key) || null;
-      const a = cuSeasonValue(e, row).value;
-      const b = cuSeasonValue(beforeFills[i].get(row.key) || null, row).value;
+      const a = cuSeasonShown(e, row).value;
+      const b = cuSeasonShown(beforeFills[i].get(row.key) || null, row).value;
       if (counted(c) && a !== null && b !== null) { aVals.push(a); bVals.push(b); }
       const d = a === null || b === null ? null : cuRound1(cuRound1(a) - cuRound1(b));
       const cls = cuDiffCls(c, d, colCls, 'wk');
@@ -9377,16 +9520,20 @@ function cuSeasonHtml(offer, sideAsked, viewAsked, { nowBox = true, prefix = 'sb
     `<button type="button" data-sbw-view="${v}"${view === v ? ' class="on"' : ''} ` +
     `aria-pressed="${view === v}">${label}</button>`;
 
+  // PROJ | VALUE beside the names (2026-10-09): the slot rows and their Avg; the
+  // Starting lineup band and the opponent row are team totals and never change.
+  // With no lines the markup is what it always was.
+  const names = `<div class="segmented sbw-who" role="group" aria-label="Whose season">` +
+    `${btn('mine', nameA)}${btn('theirs', nameB)}</div>`;
+  const who = state.valueBase ? `<div class="sbw-top">${names}${valueSwitchHtml()}</div>` : names;
   if (!nowBox) {
-    return `<div class="segmented sbw-who" role="group" aria-label="Whose season">` +
-      `${btn('mine', nameA)}${btn('theirs', nameB)}</div>` +
+    return who +
       `<h3 class="sbw-title">After the trade · ${esc(shownName)}</h3>` +
       `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'after', { ...opts, opp })}</div>` +
       `<p class="panel-note heat-key">${heatKeyShort({ thing: 'week', what: 'the same slot across the league' })}</p>`;
   }
   return (
-    `<div class="segmented sbw-who" role="group" aria-label="Whose season">` +
-    `${btn('mine', nameA)}${btn('theirs', nameB)}</div>` +
+    who +
     `<h3 class="sbw-title">Season by week · ${esc(shownName)}</h3>` +
     `<div class="table-scroll sbw-scroll">${cuSeasonTableHtml(cols, 'before', opts)}</div>` +
     `<div class="sbw-after-head"><h3 class="sbw-title">After the trade · ${esc(shownName)}</h3>` +
@@ -10707,11 +10854,24 @@ if ($('assumedPanel')) {
   });
   wireTips($('assumedPanel'));
 }
+// PROJ | VALUE: every copy of the switch moves the one state; remembered.
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  const btn = t && typeof t.closest === 'function' ? t.closest('button[data-value-view]') : null;
+  if (!btn) return;
+  const v = btn.getAttribute('data-value-view') === 'value' ? 'value' : 'proj';
+  if (v === state.valueView) return;
+  state.valueView = v;
+  prefs.set('valueView', v);
+  if (state.data) paint(); else syncValueSwitch();
+});
 // And the two roster lists, whose names now carry a card of their own.
 wireTips($('cuListA'));
 wireTips($('cuListB'));
 wireTips($('cuRows'));
 wireTips($('cuSug'));
+
+if (prefs.get('valueView', 'proj') === 'value') state.valueView = 'value';
 
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {

@@ -111,6 +111,7 @@ const SUITES = [
   ['pages-done-check.mjs', 'the week in progress on Analysis, Home, Stats, Schedule and Summary: finished players and early-final matchups count'],
   ['record-live-check.mjs', 'a record while its game is being played: 3–2 at 20% reads 3.2–2.8, the same on Stats, Summary and Schedule'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
+  ['tr-value-check.mjs', 'Trade: the Proj | Value switch on the custom lists, the season boxes and the assumed trade, and Value on its player cards'],
   ['decisions-check.mjs', 'the decisions review page: a squad’s decisions, the weekly totals and the flipped matchup with one undone, the three charts beside their hypotheticals, noise, a what-if trade'],
   ['draft-review-check.mjs', 'the Draft page’s "Our draft": the board, a team’s steals and misses, the previews, and what it asks of ESPN — nothing on the phone’s copy'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],

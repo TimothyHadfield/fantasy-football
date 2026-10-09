@@ -776,6 +776,13 @@
      weeks and the ↑ on a week the two squads meet. */
   .sbw { margin-top: 14px; }
   .sbw .sbw-who { margin-bottom: 10px; }
+  /* The names and the Proj | Value switch on one line (only drawn with Value). */
+  .sbw-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+  .sbw .sbw-top .sbw-who { margin-bottom: 0; }
+  /* The custom toolbar's copy: in line with its buttons on a laptop, a row of
+     its own under them on a phone (where a segmented control is full width). */
+  #cuValueView { vertical-align: middle; }
+  @media (max-width: 760px) { #cuValueView { margin-top: 8px; } }
   /* The same look as `.cu-inline-title`, under its own name. */
   .sbw-title {
     font-size: 11px;
@@ -939,6 +946,11 @@
   .cu-gain .cu-num.down { color: var(--err); }
   .cu-gain .cu-num.flat { color: var(--dim); }
   .cu-gain .cu-sub { font-size: 11px; color: var(--cu-sub); font-variant-numeric: tabular-nums; }
+  /* The side's change in total Value, on that small line: the same green and
+     red as the big figure over it, and its sign always printed. */
+  .cu-gain .cu-val { font-weight: 600; white-space: nowrap; }
+  .cu-gain .cu-val.up { color: var(--accent); }
+  .cu-gain .cu-val.down { color: var(--err); }
 
   /* Reserved, so ticking a man never moves the table under the pointer. */
   .cu-preview { min-height: 34px; margin: 12px 0 4px; font-size: 13px; line-height: 1.45; }
@@ -1719,6 +1731,16 @@
         <button type="button" id="cuOpen" data-open="cu-build" disabled>Week by week</button>
         <button type="button" id="cuSave">Save this trade</button>
         <button type="button" id="cuClear">Clear</button>
+        <!-- PROJ | VALUE (Tim, 2026-10-09: "have a switch for that graph that
+             also shows the data as value rather than just total proj"). The
+             number beside each man below, and the slot rows of the season
+             boxes (which carry a copy of this switch). Hidden until the
+             league's Value lines are read; what Value is, is in "How a custom
+             trade is priced". -->
+        <div class="segmented seg-sm value-view" id="cuValueView" role="group" aria-label="Player numbers shown as" hidden>
+          <button type="button" data-value-view="proj" class="on" aria-pressed="true">Proj</button>
+          <button type="button" data-value-view="value" aria-pressed="false">Value</button>
+        </div>
       </div>
     </div>
 
