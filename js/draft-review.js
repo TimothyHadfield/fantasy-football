@@ -18,6 +18,23 @@
 //   difference   drafted at − worth now. Above zero he went later than he is
 //                worth (a steal); below zero, earlier (a miss).
 //
+// THE OTHER COMPARISON (Tim, 2026-10-08: "instead of showing where the players
+// should have been drafted, show where they were drafted relative to where they
+// were ranked at the start of the season. for example if Jahmar gibbs was
+// drafted 5th, then his number should show +4, because he was ranked #1 at the
+// start of the season. If a player was drafted earlier than they were ranked
+// then put it negative (-)"):
+//
+//   preseason    his place among everyone drafted by ESPN's own draft rank
+//                (`draftRanksByRankType.PPR.rank`, which ESPN sets before the
+//                season). AMONG THE MEN DRAFTED, not ESPN's number itself:
+//                measured on league 1241838, its ranks run to 981 (16 of the
+//                170 drafted are past 250 — every kicker and defence), so a
+//                defence taken 140th would read −380. Gibbs is ESPN's 1 and
+//                the first of the drafted either way.
+//   difference   drafted at − preseason (`preDiff`). Above zero he went later
+//                than he was ranked; below zero, earlier.
+//
 // VALUE is his season as it stands — points scored in the weeks that are over
 // plus ESPN's projection for every week left — MINUS THE BAR AT HIS POSITION,
 // so a quarterback's bigger totals do not make every quarterback a steal.
@@ -104,6 +121,26 @@ export function draftedAt(picks, type) {
     for (let k = i; k <= j; k++) out.set(byPrice[k].playerId, at);
     i = j + 1;
   }
+  return out;
+}
+
+/**
+ * Each drafted man's place among the men drafted, by ESPN's preseason rank:
+ * `Map<playerId, number>`, 1 the best ranked. Equal ranks go in pick order; a
+ * man ESPN did not rank (no rank, or 0) has no place.
+ *
+ * @param {Array} picks
+ * @param {Map<number, number>|Object<number, number>|null} ranks playerId -> ESPN's rank
+ */
+export function preseasonPlaces(picks, ranks) {
+  const get = (id) => {
+    const v = ranks instanceof Map ? ranks.get(id) ?? ranks.get(String(id)) : ranks ? ranks[id] : null;
+    return num(v) !== null && v > 0 ? v : null;
+  };
+  const ranked = (picks || []).map((p) => ({ p, rank: get(p.playerId) })).filter((x) => x.rank !== null)
+    .sort((a, b) => a.rank - b.rank || a.p.overall - b.p.overall);
+  const out = new Map();
+  ranked.forEach((x, i) => out.set(x.p.playerId, { place: i + 1, rank: x.rank }));
   return out;
 }
 
@@ -226,13 +263,16 @@ export function leagueBars(pool, slots, teams) {
  * @param {number[]} o.slots one team's starting lineup
  * @param {number} [o.teams] defaults to the teams that drafted
  * @param {'bar'|'starterBar'} [o.against] which bar value is measured from
+ * @param {Map|Object|null} [o.ranks] playerId -> ESPN's preseason rank
  * @returns {{ rows:Array, bars:Map, ranked:number }} `rows` in pick order, each
- *   the pick plus `{ at, name, position, soFar, rest, total, value, now, diff }`
- *   (`value`, `now`, `diff` null for a man with no numbers); `ranked` is how
+ *   the pick plus `{ at, name, position, soFar, rest, total, value, now, diff,
+ *   espnRank, pre, preDiff }` (`value`, `now`, `diff` null for a man with no
+ *   numbers; the last three null for a man ESPN did not rank); `ranked` is how
  *   many men have a place.
  */
-export function reviewDraft({ draft, players, slots, teams = null, against = 'bar' }) {
+export function reviewDraft({ draft, players, slots, teams = null, against = 'bar', ranks = null }) {
   const at = draftedAt(draft.picks, draft.type);
+  const pre = preseasonPlaces(draft.picks, ranks);
   const rows = draft.picks.map((pk) => {
     const p = players.get(pk.playerId) || null;
     const known = Boolean(p && p.position && num(p.total) !== null);
@@ -245,6 +285,10 @@ export function reviewDraft({ draft, players, slots, teams = null, against = 'ba
       rest: known ? p.rest : null,
       total: known ? p.total : null,
       value: null, now: null, diff: null,
+      // ESPN's preseason rank, his place by it among the drafted, and the difference.
+      espnRank: pre.has(pk.playerId) ? pre.get(pk.playerId).rank : null,
+      pre: pre.has(pk.playerId) ? pre.get(pk.playerId).place : null,
+      preDiff: pre.has(pk.playerId) ? at.get(pk.playerId) - pre.get(pk.playerId).place : null,
     };
   });
 
@@ -258,20 +302,42 @@ export function reviewDraft({ draft, players, slots, teams = null, against = 'ba
   return { rows, bars, ranked: order.length };
 }
 
-/** One team's picks, with its best steal and its biggest miss (null when it has none). */
-export function teamReview(rows, teamId) {
+/**
+ * One team's picks, with its best steal and its biggest miss (null when it has
+ * none). `key` is the difference they are the ends of: `diff` (worth now) or
+ * `preDiff` (preseason rank).
+ */
+export function teamReview(rows, teamId, key = 'diff') {
   const picks = (rows || []).filter((r) => String(r.teamId) === String(teamId));
-  const rated = picks.filter((r) => r.diff !== null);
-  const best = rated.reduce((a, r) => (a === null || r.diff > a.diff ? r : a), null);
-  const worst = rated.reduce((a, r) => (a === null || r.diff < a.diff ? r : a), null);
+  const rated = picks.filter((r) => r[key] !== null && r[key] !== undefined);
+  const best = rated.reduce((a, r) => (a === null || r[key] > a[key] ? r : a), null);
+  const worst = rated.reduce((a, r) => (a === null || r[key] < a[key] ? r : a), null);
   return {
     picks,
-    steal: best && best.diff > 0 ? best : null,
-    miss: worst && worst.diff < 0 ? worst : null,
+    steal: best && best[key] > 0 ? best : null,
+    miss: worst && worst[key] < 0 ? worst : null,
   };
 }
 
 // ------------------------------------------------------------ the sample draft
+
+/** What was expected of a sample man before the season, over the bar at his position. */
+function sampleWorth(list, slots) {
+  const pool = list.flatMap((t) => (t.players || []).map((p) => ({ position: p.position, total: num(p.seasonProjected) ?? 0 })));
+  const bars = leagueBars(pool, slots, list.length);
+  return (p) => (num(p.seasonProjected) ?? 0) - ((bars.get(p.position) || {}).bar || 0);
+}
+
+/**
+ * The sample league's preseason ranks, which no one ever published: every man
+ * in it best first by the same worth `sampleDraft` drafts on. `Map<playerId, rank>`.
+ */
+export function sampleRanks(teams, slots) {
+  const list = teams || [];
+  const worth = sampleWorth(list, slots);
+  const all = list.flatMap((t) => t.players || []).slice().sort((a, b) => worth(b) - worth(a) || a.playerId - b.playerId);
+  return new Map(all.map((p, i) => [p.playerId, i + 1]));
+}
 
 /**
  * A draft for the sample league, which never had one: a snake in the order the
@@ -284,9 +350,7 @@ export function teamReview(rows, teamId) {
  */
 export function sampleDraft(teams, slots) {
   const list = teams || [];
-  const pool = list.flatMap((t) => (t.players || []).map((p) => ({ position: p.position, total: num(p.seasonProjected) ?? 0 })));
-  const bars = leagueBars(pool, slots, list.length);
-  const worth = (p) => (num(p.seasonProjected) ?? 0) - ((bars.get(p.position) || {}).bar || 0);
+  const worth = sampleWorth(list, slots);
   const lists = list.map((t) => (t.players || []).slice().sort((a, b) => worth(b) - worth(a) || a.playerId - b.playerId));
   const rounds = Math.max(0, ...lists.map((l) => l.length));
   const n = list.length;

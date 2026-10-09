@@ -319,6 +319,50 @@ const CHILDREN = {
     };
   },
 
+  // AGAINST THE PRESEASON RANK: the other half of the comparison switch.
+  async pre() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const sw = () => ({
+      hidden: p.$('compareToggle').hidden,
+      on: [...p.$('compareToggle').querySelectorAll('button.on')].map((b) => b.dataset.compare),
+    });
+    const now = p.read();
+    const swNow = sw();
+    const cold = p.calls();
+    const kept = JSON.parse(p.map.get('ff-draft-review-v1') || '{}');
+    p.fire(p.$('compareToggle').querySelector('button[data-compare="pre"]'), 'click');
+    const pre = p.read();
+    const swPre = sw();
+    const afterSwitch = p.calls();
+    const why = p.document.querySelector('#teamTable tbody .dr-why');
+    p.fire(why, 'mouseover');
+    const pop = p.read().pop;
+    const popPid = why.dataset.pid;
+    p.fire(why, 'mouseout');
+    const head = p.document.querySelector('#draftBoard thead button[data-team="3"]');
+    p.fire(head, 'mouseover');
+    const headCard = p.read().pop;
+    p.fire(head, 'mouseout');
+    const prefsPre = JSON.parse(p.map.get('ff.prefs') || '{}');
+    // To the sample and back: the ranks are kept, and the view stays.
+    p.fire(p.$('sourceToggle').querySelector('button[data-src="demo"]'), 'click');
+    await p.settle('demo');
+    const sample = p.read();
+    p.fire(p.$('sourceToggle').querySelector('button[data-src="live"]'), 'click');
+    await p.settle('live');
+    const warm = p.calls();
+    const again = p.read();
+    p.fire(p.$('compareToggle').querySelector('button[data-compare="now"]'), 'click');
+    const back = p.read();
+    return {
+      ok, now, pre, swNow, swPre, cold, afterSwitch, warm, pop, popPid, headCard, sample, again, back, prefsPre,
+      keptRanks: kept.kept && kept.kept.ranks ? Object.keys(kept.kept.ranks).length : 0,
+      prefsBack: JSON.parse(p.map.get('ff.prefs') || '{}'),
+      fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
+    };
+  },
+
   // THE PHONE'S SYNCED COPY (DR_CLOUD=1): there is no draft in it.
   async cloud() {
     const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
@@ -607,6 +651,70 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq(r.prefs['draft.team.1241838-2026'], 7, 'live: remembered for this league');
     ok(r.okDemo && r.sample.badge === 'Demo' && r.sample.cells.length === 160, 'live: the switch goes to the sample');
     ok(r.okWarm && r.again.badge === 'Live' && r.again.team === '7', 'live: and back, to the team that was picked');
+  }
+}
+
+// ----------------------------------------------- against the preseason rank
+// Tim, 2026-10-08: "show where they were drafted relative to where they were
+// ranked at the start of the season … if Jahmar gibbs was drafted 5th, then his
+// number should show +4, because he was ranked #1".
+{
+  const r = run('pre');
+  ok(!r.boot, 'pre: boots', r.boot);
+  if (!r.boot) {
+    const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+    const draft = R.parseDraft(RAW);
+    const base = expected(RAW);
+    const players = new Map(base.rv.rows.map((x) => [x.playerId, { name: x.name, position: x.position, soFar: x.soFar, rest: x.rest, total: x.total }]));
+    const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK });
+    const byId = new Map(rv.rows.map((x) => [String(x.playerId), x]));
+    ok(r.ok, 'pre: settles on the league');
+    eq(r.errors, [], 'pre: no errors');
+    eq(r.fetches, [], 'pre: nothing went to ESPN around the stubs');
+    eq([r.swNow, r.swPre], [{ hidden: false, on: ['now'] }, { hidden: false, on: ['pre'] }], 'pre: the switch opens on worth now and moves');
+    eq([r.cold.ranks, r.cold.rankIds, r.keptRanks], [1, 170, 170], 'pre: the ranks are read once, for the 170 drafted, and kept');
+    eq([r.afterSwitch.ranks, r.warm.ranks, r.warm.draft], [1, 1, 1], 'pre: the switch asks ESPN for nothing, and neither does coming back');
+    eq(r.now.cells.map((c) => c.d), [...r.now.cells].map((c) => signed(base.byId.get(c.pid).diff)), 'pre: before the switch the board is on worth now');
+
+    const wrong = r.pre.cells.filter((c) => c.d !== signed(byId.get(c.pid).preDiff));
+    eq(wrong.slice(0, 3), [], 'pre: every cell of the board is drafted-at less the preseason place');
+    eq(r.pre.cells.map((c) => [c.pid, c.went]), r.now.cells.map((c) => [c.pid, c.went]), 'pre: the same men in the same places at the same prices');
+    ok(r.pre.cells.some((c, i) => c.d !== r.now.cells[i].d), 'pre: and the numbers did change');
+    const gibbs = rv.rows.find((x) => x.name === 'Jahmyr Gibbs');
+    const cell = r.pre.cells.find((c) => c.pid === String(gibbs.playerId));
+    eq([gibbs.pre, cell && cell.d], [1, signed(gibbs.at - 1)], 'pre: Gibbs, ranked 1, shows where he went less one');
+    ok(new Set(r.pre.cells.map((c) => c.heat)).size >= 5 && r.pre.cells.every((c) => c.heat), 'pre: on the heat scale, in several steps');
+
+    const t8 = R.teamReview(rv.rows, 8, 'preDiff');
+    eq(r.pre.tableHeads, ['Player', 'Paid', 'Rank', 'Pre', '+/−'], 'pre: the column is Pre');
+    eq(r.now.tableHeads, ['Player', 'Paid', 'Rank', 'Now', '+/−'], 'pre: and was Now');
+    const rowWrong = r.pre.table.filter((t) => {
+      const w = byId.get(t.pid);
+      return t.cells[2] !== String(w.at) || t.cells[3] !== String(w.pre) || t.cells[4] !== signed(w.preDiff);
+    });
+    eq(rowWrong, [], 'pre: every row’s rank, preseason place and difference');
+    eq(r.pre.tiles.map((t) => [t.k, t.v, t.pid]), [
+      ['Biggest slide', signed(t8.steal.preDiff), String(t8.steal.playerId)],
+      ['Biggest reach', signed(t8.miss.preDiff), String(t8.miss.playerId)],
+    ], 'pre: the two tiles are the team’s ends on this difference');
+    ok(/ESPN ranked/.test(r.pre.note) && !/drafted again today/.test(r.pre.note), 'pre: how it works explains Pre, not Now', r.pre.note);
+
+    const top = byId.get(r.popPid);
+    eq(r.pop && r.pop.rows, [
+      ['Paid', `$${top.bid}`], ['Price rank', String(top.at)], ...(top.keeper ? [['Keeper', 'Yes']] : []),
+      ['ESPN preseason rank', String(top.espnRank)], ['Among players drafted', String(top.pre)],
+      [top.preDiff > 0 ? 'Later than ranked' : top.preDiff < 0 ? 'Earlier than ranked' : 'As ranked', signed(top.preDiff)],
+    ], 'pre: a number opens what it is made of — paid, price rank, ESPN’s rank, the place, the difference');
+    ok(r.pop && /of 170 picks$/.test(r.pop.foot), 'pre: and where it stands among the 170', r.pop && r.pop.foot);
+    const t3 = R.teamReview(rv.rows, 3, 'preDiff');
+    eq(r.headCard && r.headCard.rows.slice(3).map((x) => [x[0].replace(/^(Biggest (?:slide|reach)).*/, '$1'), x[1]]),
+      [['Biggest slide', signed(t3.steal.preDiff)], ['Biggest reach', signed(t3.miss.preDiff)]], 'pre: a team’s card carries its two ends on this difference');
+
+    eq(r.prefsPre['draft.compare'], 'pre', 'pre: the view is remembered');
+    ok(r.sample.cells.length === 160 && r.sample.cells.every((c) => /^[+−]?\d+$/.test(c.d)), 'pre: the sample has preseason ranks of its own');
+    eq(r.again.cells.map((c) => c.d), r.pre.cells.map((c) => c.d), 'pre: back on the league, still against the preseason rank');
+    eq(r.back.cells.map((c) => c.d), r.now.cells.map((c) => c.d), 'pre: and the switch goes back to worth now');
+    eq(r.prefsBack['draft.compare'], undefined, 'pre: which is not stored, being the default');
   }
 }
 

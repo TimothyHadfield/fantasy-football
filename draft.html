@@ -178,6 +178,13 @@
     <!-- Only while it has something to say: a read in progress, or why one failed. -->
     <div id="sourceStatus" class="panel-note dr-status"></div>
 
+    <!-- What every pick is set against (Tim, 2026-10-08: "show where they were
+         drafted relative to where they were ranked at the start of the season"). -->
+    <div class="segmented seg-sm dr-compare" id="compareToggle" hidden>
+      <button type="button" data-compare="now" class="on">vs worth now</button>
+      <button type="button" data-compare="pre">vs preseason rank</button>
+    </div>
+
     <div class="dr-main" id="drMain" hidden>
       <section class="panel" id="panelTeam">
         <div class="dr-team-head">
@@ -191,7 +198,7 @@
               <th class="name" data-sort>Player</th>
               <th data-sort class="dr-paid">Paid</th>
               <th data-sort id="thAt">Pick</th>
-              <th data-sort>Now</th>
+              <th data-sort id="thThen">Now</th>
               <th data-sort>+/&minus;</th>
             </tr></thead>
             <tbody></tbody>

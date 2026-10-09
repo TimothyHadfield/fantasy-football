@@ -20,7 +20,18 @@ const DRAFT = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-1241838-20
 const FX = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-players-1241838-2026.json'), 'utf8'));
 const POS_ID = { QB: 1, RB: 2, WR: 3, TE: 4, K: 5, DST: 16 };
 
-const calls = (globalThis.__dr = globalThis.__dr || { draft: 0, players: 0, playerIds: 0, schedule: 0, squads: 0, byes: 0 });
+// ESPN's preseason PPR rank of each of the 170, as kona_player_info sent them on 2026-10-08.
+const RANKS = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+
+const calls = (globalThis.__dr = globalThis.__dr || { draft: 0, players: 0, playerIds: 0, schedule: 0, squads: 0, byes: 0, ranks: 0, rankIds: 0 });
+
+export async function fetchDraftRanks(ids) {
+  calls.ranks++;
+  calls.rankIds += ids.length;
+  const out = {};
+  for (const id of ids) if (RANKS[id] > 0) out[id] = RANKS[id];
+  return out;
+}
 
 export async function fetchDraft() {
   calls.draft++;

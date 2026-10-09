@@ -1154,9 +1154,19 @@ const review = {
   world: null,
   teamId: null,
   leagueKey: 'demo',
+  // What a pick is set against: what he is worth 'now', or where ESPN ranked
+  // him before the season ('pre'). Tim, 2026-10-08: "instead of showing where
+  // the players should have been drafted, show where they were drafted relative
+  // to where they were ranked at the start of the season."
+  compare: prefs.get('compare') === 'pre' ? 'pre' : 'now',
   /** ESPN reads this page load asked for, by kind — printed nowhere, read by tests and by hand. */
-  reads: { draft: 0, players: 0, squads: 0 },
+  reads: { draft: 0, players: 0, squads: 0, ranks: 0 },
 };
+const isPre = () => review.compare === 'pre';
+/** The difference on show, and the scale it is coloured on. */
+const diffKey = () => (isPre() ? 'preDiff' : 'diff');
+const dOf = (r) => r[diffKey()];
+const scaleOf = (w) => (isPre() ? w.preScale : w.scale);
 if (typeof window !== 'undefined') window.ffDraftReads = review.reads;
 
 function setStatus(msg, isError = false) {
@@ -1209,7 +1219,7 @@ function weeksOf(data) {
  *   man's week when he was on nobody's squad: `{name, position, proTeamId,
  *   projected, actual}`
  */
-function assemble({ draft, data, rosters, gapOf, byes, isDemo }) {
+function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null }) {
   const { weeks, poWeeks, finished, currentWeek } = weeksOf(data);
   const drafted = new Set(draft.picks.map((p) => p.playerId));
   const men = new Map();
@@ -1262,7 +1272,7 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo }) {
     if (!m.position) continue;
     players.set(id, { name: m.name, position: m.position, ...draftReview.seasonOf(m.byWeek, weeks) });
   }
-  const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null });
+  const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null, ranks });
 
   // A TEAM'S CARD (the board's headings): its record and average off the games
   // that are final, and what its lineup is projected for in the week in play.
@@ -1293,6 +1303,7 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo }) {
     board: draftReview.boardOf(draft),
     // One scale for the whole draft: a pick's colour is its difference against everybody's.
     scale: heatScale(rv.rows.map((r) => r.diff)),
+    preScale: heatScale(rv.rows.map((r) => r.preDiff)),
   };
 }
 
@@ -1302,8 +1313,10 @@ function demoWorld() {
   const { weeks } = weeksOf(data);
   const rosters = new Map(weeks.map((w) => [w, generateDemoWeekRosters(w).teams]));
   const first = rosters.get(weeks[0]) || [];
-  const draft = draftReview.sampleDraft(first, draftReview.slotsFromLineups(first));
-  return assemble({ draft, data, rosters, gapOf: () => null, byes: {}, isDemo: true });
+  const slots = draftReview.slotsFromLineups(first);
+  const draft = draftReview.sampleDraft(first, slots);
+  const ranks = draftReview.sampleRanks(first, slots);
+  return assemble({ draft, data, rosters, gapOf: () => null, byes: {}, isDemo: true, ranks });
 }
 
 /** A league read directly. Throws what the reads throw. */
@@ -1358,13 +1371,25 @@ async function liveWorld(cfg) {
       say(`Reading dropped players (${++read}/${wanted.length})`);
     }));
   }
+  // ESPN'S PRESEASON RANKS of the men drafted, once: they are set before the
+  // season and a finished draft's men never change. A failed read leaves the
+  // preseason view on dashes and is tried again next time.
+  let ranks = kept.ranks || null;
+  if (!ranks && typeof espn.fetchDraftRanks === 'function') {
+    say('Reading preseason ranks…');
+    review.reads.ranks++;
+    try {
+      ranks = await espn.fetchDraftRanks(draft.picks.map((p) => p.playerId));
+      if (draft.done && Object.keys(ranks).length) kept.ranks = ranks;
+    } catch { ranks = null; }
+  }
   writeKept(leagueKey, kept);
 
   const gapOf = (w, id) => {
     const e = kept.weeks[w] && kept.weeks[w].men[id];
     return e ? { name: e[0], position: e[1], proTeamId: e[2], projected: e[3], actual: e[4] } : null;
   };
-  return assemble({ draft, data, rosters, gapOf, byes, isDemo: false });
+  return assemble({ draft, data, rosters, gapOf, byes, isDemo: false, ranks });
 }
 
 /**
@@ -1476,6 +1501,8 @@ function renderReview() {
   closePop();
 
   const any = !w.empty;
+  $('compareToggle').hidden = !any;
+  for (const b of $('compareToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.compare === review.compare);
   $('drMain').hidden = !any;
   $('drExplain').hidden = !any;
   if (!any) { $('pageSub').textContent = w.name || ''; return; }
@@ -1487,10 +1514,18 @@ function renderReview() {
     played ? `${played} week${played === 1 ? '' : 's'} played` : '',
   ].filter(Boolean).join(' · ');
   $('thAt').textContent = auction ? 'Rank' : 'Pick';
+  $('thThen').textContent = isPre() ? 'Pre' : 'Now';
   $('teamTable').querySelector('th.dr-paid').hidden = !auction;
 
-  $('drNote').innerHTML =
-    '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
+  $('drNote').innerHTML = isPre()
+    ? '<p><strong>Pre</strong> is where ESPN ranked a player before the season, counted among the players drafted: ' +
+    'the best-ranked player drafted is 1.</p>' +
+    (auction
+      ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+      : '') +
+    `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero he went later than he was ranked, below zero earlier. ` +
+    'Green and red compare it with every pick in the draft.</p>'
+    : '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
     'points so far plus ESPN’s projection for every week left, measured against a typical bench player at his position.</p>' +
     (auction
       ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
@@ -1522,19 +1557,23 @@ function drawBoard() {
       const id = teamIds[c];
       if (!pk) return `<td class="dr-cell dr-none${mine(id)}" data-team="${esc(id)}"></td>`;
       const r = byId.get(pk.playerId);
-      const h = r.diff === null ? null : heatOf(r.diff, w.scale);
+      const d = dOf(r);
+      const h = d === null ? null : heatOf(d, scaleOf(w));
       return `<td class="dr-cell${mine(id)}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
         whyHtml(r, `<span class="dr-went">${esc(wentFor(r))}${r.position ? ` ${esc(posSaid(r.position))}` : ''}</span>` +
-          `<span class="dr-d">${signed(r.diff)}${heatMarkHtml(h)}</span>`, 'dr-top') +
+          `<span class="dr-d">${signed(d)}${heatMarkHtml(h)}</span>`, 'dr-top') +
         `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
         '</td>';
     }).join('') + '</tr>').join('');
 }
 
+/** What a team's two ends are called: against worth now, or against the preseason rank. */
+const endNames = () => (isPre() ? ['Biggest slide', 'Biggest reach'] : ['Best steal', 'Biggest miss']);
+
 function drawTeam() {
   const w = review.world;
   const auction = w.draft.type === 'auction';
-  const t = draftReview.teamReview(w.rv.rows, review.teamId);
+  const t = draftReview.teamReview(w.rv.rows, review.teamId, diffKey());
   const who = (r) => `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
     // (A defence's name says what it is: "Jaguars D/ST".)
     (r.position && r.position !== 'DST' ? ` <span class="muted">${esc(posSaid(r.position))}</span>` : '');
@@ -1543,22 +1582,25 @@ function drawTeam() {
   // table under them does not move from one team to the next.
   const tile = (k, r, key) => `<div class="stat dr-tile" data-tile="${key}"><div class="k">${k}</div>` +
     (r
-      ? `<div class="v">${whyHtml(r, `${signed(r.diff)}${heatMarkHtml(heatOf(r.diff, w.scale))}`)}</div><div class="dr-who">${who(r)}</div>`
+      ? `<div class="v">${whyHtml(r, `${signed(dOf(r))}${heatMarkHtml(heatOf(dOf(r), scaleOf(w)))}`)}</div><div class="dr-who">${who(r)}</div>`
       : '<div class="v muted">—</div><div class="dr-who">&nbsp;</div>') +
     '</div>';
-  $('teamStats').innerHTML = tile('Best steal', t.steal, 'steal') + tile('Biggest miss', t.miss, 'miss');
+  const [up, down] = endNames();
+  $('teamStats').innerHTML = tile(up, t.steal, 'steal') + tile(down, t.miss, 'miss');
 
   $('teamTable').querySelector('tbody').innerHTML = t.picks.map((r) => {
-    const h = r.diff === null ? null : heatOf(r.diff, w.scale);
+    const d = dOf(r);
+    const then = isPre() ? r.pre : r.now;
+    const h = d === null ? null : heatOf(d, scaleOf(w));
     const v = (n) => (n === null || n === undefined ? '' : ` data-v="${esc(n)}"`);
     return `<tr data-pid="${esc(r.playerId)}">` +
       `<td class="name" data-v="${esc(nameOf(r))}">${who(r)}</td>` +
       `<td class="dr-paid"${auction ? '' : ' hidden'}${v(r.bid)}>${auction ? `$${r.bid}` : ''}</td>` +
       `<td${v(r.at)}>${r.at}</td>` +
-      `<td${v(r.now)}>${r.now === null ? '—' : r.now}</td>` +
+      `<td${v(then)}>${then === null ? '—' : then}</td>` +
       // No `title`: on a phone js/touch-titles.js would open it over the preview.
-      `<td class="dr-diff${h ? ` ${h.cls}` : ''}"${v(r.diff)}>` +
-      (r.diff === null ? '—' : whyHtml(r, `${signed(r.diff)}${heatMarkHtml(h)}`)) + '</td></tr>';
+      `<td class="dr-diff${h ? ` ${h.cls}` : ''}"${v(d)}>` +
+      (d === null ? '—' : whyHtml(r, `${signed(d)}${heatMarkHtml(h)}`)) + '</td></tr>';
   }).join('');
   resort($('teamTable'));
 
@@ -1599,6 +1641,28 @@ function whySpec(pid) {
   const r = w && !w.empty && w.rv.rows.find((x) => same(x.playerId, pid));
   if (!r) return null;
   const auction = w.draft.type === 'auction';
+  const went = [
+    ...(auction
+      ? [{ label: 'Paid', value: `$${r.bid}` }, { label: 'Price rank', value: String(r.at) }]
+      : [{ label: 'Drafted', value: `Pick ${r.at}` }]),
+    ...(r.keeper ? [{ label: 'Keeper', value: 'Yes' }] : []),
+  ];
+  if (isPre()) {
+    const d = r.preDiff;
+    const hp = d === null ? null : heatOf(d, w.preScale);
+    const word = d === null ? '' : d > 0 ? 'Later than ranked' : d < 0 ? 'Earlier than ranked' : 'As ranked';
+    return {
+      title: nameOf(r),
+      sub: r.position ? posSaid(r.position) : '',
+      rows: [
+        ...went,
+        { label: 'ESPN preseason rank', value: r.espnRank === null ? '—' : String(r.espnRank) },
+        { label: 'Among players drafted', value: r.pre === null ? '—' : String(r.pre) },
+      ],
+      total: word ? { label: word, value: signed(d) } : null,
+      foot: hp ? `${hp.standing} picks` : '',
+    };
+  }
   const said = r.diff === null ? '' : r.diff > 0 ? 'Steal' : r.diff < 0 ? 'Miss' : 'Even';
   const h = r.diff === null ? null : heatOf(r.diff, w.scale);
   return {
@@ -1607,10 +1671,7 @@ function whySpec(pid) {
     rows: [
       { label: 'Points so far', value: fmt(r.soFar) },
       { label: 'Projected rest', value: fmt(r.rest) },
-      ...(auction
-        ? [{ label: 'Paid', value: `$${r.bid}` }, { label: 'Price rank', value: String(r.at) }]
-        : [{ label: 'Drafted', value: `Pick ${r.at}` }]),
-      ...(r.keeper ? [{ label: 'Keeper', value: 'Yes' }] : []),
+      ...went,
       { label: 'Worth now', value: r.now === null ? '—' : `Pick ${r.now}` },
     ],
     total: said ? { label: said, value: signed(r.diff) } : null,
@@ -1635,9 +1696,10 @@ function teamSpec(id) {
   const all = [...w.standing.values()].map(avgOf).filter((v) => v !== null);
   const rank = avg === null || all.length < 2 ? ''
     : `${ordinal(1 + all.filter((v) => v > avg + 1e-9).length)} of ${all.length}`;
-  const tr = draftReview.teamReview(w.rv.rows, t.id);
+  const tr = draftReview.teamReview(w.rv.rows, t.id, diffKey());
+  const [up, down] = endNames();
   const end = (label, r) => (r ? [{
-    label, note: shortName({ name: nameOf(r), position: r.position }), html: esc(signed(r.diff)),
+    label, note: shortName({ name: nameOf(r), position: r.position }), html: esc(signed(dOf(r))),
   }] : []);
   const canGo = !w.isDemo && typeof links.teamHref === 'function' && (coarsePointer() || headGo);
   return {
@@ -1646,8 +1708,8 @@ function teamSpec(id) {
       ...(s && s.w + s.l + s.t ? [{ label: 'Record', value: `${s.w}-${s.l}${s.t ? `-${s.t}` : ''}` }] : []),
       ...(avg === null ? [] : [{ label: 'Avg', note: rank, value: avg }]),
       ...(s && s.proj !== null ? [{ label: `Week ${w.currentWeek} proj`, value: s.proj }] : []),
-      ...end('Best steal', tr.steal),
-      ...end('Biggest miss', tr.miss),
+      ...end(up, tr.steal),
+      ...end(down, tr.miss),
     ],
     href: canGo ? links.teamHref(t.id) : null,
     hrefLabel: 'Open roster',
@@ -1729,6 +1791,13 @@ function initReview() {
     selectSource(btn.dataset.src);
   });
   $('teamSelect').addEventListener('change', (e) => pickTeam(e.target.value));
+  $('compareToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-compare]');
+    if (!btn || btn.dataset.compare === review.compare) return;
+    review.compare = btn.dataset.compare === 'pre' ? 'pre' : 'now';
+    prefs.set('compare', isPre() ? 'pre' : null);
+    renderReview();
+  });
   $('draftBoard').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button.dr-pick-team');
     if (!btn) return;

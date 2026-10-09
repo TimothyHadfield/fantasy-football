@@ -281,6 +281,31 @@ export async function fetchPlayersWeek(ids, week) {
 }
 
 /**
+ * ESPN's own preseason draft rank for the players asked: `{ playerId: rank }`.
+ *
+ * `draftRanksByRankType` rides on every `kona_player_info` entry (measured
+ * 2026-10-08, league 1241838, week 5: Gibbs PPR 1, Robinson 2, a D/ST 520 — the
+ * ranks ESPN set before the season, not a running one). The PPR list, as the
+ * draft room's pool reads it, else the standard one; a man with neither, or
+ * with ESPN's 0 for "unranked", is left out.
+ */
+export async function fetchDraftRanks(ids) {
+  const want = [...new Set((ids || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  const out = {};
+  for (let i = 0; i < want.length; i += PLAYER_IDS_PER_READ) {
+    const filter = { players: { filterIds: { value: want.slice(i, i + PLAYER_IDS_PER_READ) } } };
+    const data = await leagueRead(['kona_player_info'], { filter });
+    for (const e of data?.players || []) {
+      const by = e?.player?.draftRanksByRankType || {};
+      const rank = Number(by.PPR?.rank) || Number(by.STANDARD?.rank) || 0;
+      const id = e?.player?.id ?? e?.id;
+      if (rank > 0 && id !== undefined && id !== null) out[id] = rank;
+    }
+  }
+  return out;
+}
+
+/**
  * One `fetchPlayersWeek` entry, cut to what a week of his is: who he is, what
  * he was projected and what he scored.
  *

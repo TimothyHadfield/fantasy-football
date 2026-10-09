@@ -273,6 +273,61 @@ const man = (playerId, position, total, lineupSlotId = 20) => ({ playerId, posit
     t8.miss.diff === Math.min(...t8.picks.map((r) => r.diff)), 'real: its best steal and biggest miss are its extremes');
 }
 
+// ------------------------------------------------- against the preseason rank
+// Tim, 2026-10-08: "if Jahmar gibbs was drafted 5th, then his number should
+// show +4, because he was ranked #1 at the start of the season. If a player was
+// drafted earlier than they were ranked then put it negative (-)".
+{
+  const pk = (overall, playerId) => ({ overall, round: 1, roundPick: overall, teamId: overall, playerId, bid: null, keeper: false });
+  // Five picks. ESPN's ranks: the fifth man taken is its 1; the first is its 3;
+  // the third is a defence ESPN has 520th; the fourth it never ranked.
+  const d = { type: 'snake', done: true, order: [1, 2, 3, 4, 5], picks: [pk(1, 11), pk(2, 12), pk(3, 13), pk(4, 14), pk(5, 15)] };
+  const ranks = { 11: 3, 12: 2, 13: 520, 14: 0, 15: 1 };
+  const places = R.preseasonPlaces(d.picks, ranks);
+  eq([15, 12, 11, 13].map((id) => places.get(id).place), [1, 2, 3, 4], 'pre: places run best rank first among the men drafted');
+  eq(places.get(13), { place: 4, rank: 520 }, 'pre: ESPN’s 520th is the fourth of the four ranked, and keeps ESPN’s number beside it');
+  ok(!places.has(14), 'pre: a man ESPN did not rank (0) has no place');
+  eq(R.preseasonPlaces(d.picks, new Map(Object.entries(ranks).map(([k, v]) => [Number(k), v]))).get(15).place, 1, 'pre: a Map of ranks reads the same');
+  eq(R.preseasonPlaces(d.picks, null).size, 0, 'pre: no ranks, no places');
+
+  const players = new Map([11, 12, 13, 14, 15].map((id) => [id, { name: `P${id}`, position: 'RB', soFar: 0, rest: 100 - id, total: 100 - id }]));
+  const rv = R.reviewDraft({ draft: d, players, slots: [2], teams: 5, ranks });
+  const by = new Map(rv.rows.map((r) => [r.playerId, r]));
+  eq([by.get(15).at, by.get(15).pre, by.get(15).preDiff], [5, 1, 4], 'pre: drafted 5th, ranked 1st: +4');
+  eq([by.get(11).at, by.get(11).pre, by.get(11).preDiff], [1, 3, -2], 'pre: drafted 1st, ranked 3rd: −2 (earlier than ranked)');
+  eq(by.get(12).preDiff, 0, 'pre: drafted where he was ranked: 0');
+  eq([by.get(13).espnRank, by.get(13).pre, by.get(13).preDiff], [520, 4, -1], 'pre: the defence is −1, not −517');
+  eq([by.get(14).espnRank, by.get(14).pre, by.get(14).preDiff], [null, null, null], 'pre: the unranked man has no difference');
+  ok(rv.rows.every((r) => r.diff !== null), 'pre: and the worth-now difference is untouched by it');
+  const noRanks = R.reviewDraft({ draft: d, players, slots: [2], teams: 5 });
+  eq(noRanks.rows.map((r) => r.diff), rv.rows.map((r) => r.diff), 'pre: with or without ranks, worth now is the same');
+  ok(noRanks.rows.every((r) => r.preDiff === null), 'pre: without ranks every preseason difference is empty');
+
+  // A team's two ends, on either difference.
+  const two = { ...d, picks: d.picks.map((p) => ({ ...p, teamId: p.overall <= 3 ? 1 : 2 })) };
+  const rv2 = R.reviewDraft({ draft: two, players, slots: [2], teams: 2, ranks });
+  const t2 = R.teamReview(rv2.rows, 2, 'preDiff');
+  eq([t2.steal && t2.steal.playerId, t2.miss], [15, null], 'pre: team 2’s biggest slide is the +4, and it reached for nobody ranked');
+  const t1 = R.teamReview(rv2.rows, 1, 'preDiff');
+  eq([t1.steal, t1.miss && t1.miss.playerId], [null, 11], 'pre: team 1’s biggest reach is the −2');
+  eq(R.teamReview(rv2.rows, 1).picks.length, 3, 'pre: left alone, a team’s review is still on worth now');
+}
+
+// THE REAL LEAGUE'S RANKS (fixtures/draft-ranks-1241838-2026.json: ESPN's PPR
+// draft rank of each of the 170, as kona_player_info sent them on 2026-10-08).
+{
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const players = new Map(Object.entries(FX.players).map(([id, p]) => [Number(id), { name: p.name, position: p.position, soFar: 0, rest: 0, total: 0 }]));
+  const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK });
+  eq(Object.keys(RK).length, 170, 'real ranks: every drafted man has one');
+  ok(Math.max(...Object.values(RK)) > 900, 'real ranks: ESPN’s own numbers run past 900 (why the page counts among the drafted)');
+  eq(rv.rows.map((r) => r.pre).sort((a, b) => a - b), Array.from({ length: 170 }, (_, i) => i + 1), 'real ranks: the places are 1 to 170, each once');
+  const gibbs = rv.rows.find((r) => r.name === 'Jahmyr Gibbs');
+  eq([gibbs.espnRank, gibbs.pre, gibbs.preDiff], [1, 1, gibbs.at - 1], 'real ranks: Gibbs is ESPN’s 1, so his number is where he went less one');
+  ok(rv.rows.every((r) => r.preDiff === r.at - r.pre), 'real ranks: every difference is drafted-at less the place');
+  ok(Math.min(...rv.rows.map((r) => r.preDiff)) > -170 && Math.max(...rv.rows.map((r) => r.preDiff)) < 170, 'real ranks: and none is off the draft’s own scale');
+}
+
 // ------------------------------------------------------------ the sample draft
 {
   const teams = demo.generateDemoWeekRosters(1).teams;
@@ -291,6 +346,10 @@ const man = (playerId, position, total, lineupSlotId = 20) => ({ playerId, posit
   ok(d.picks.every((p) => own.get(p.playerId) === p.teamId), 'sample: each team drafts its own men');
   const b = R.boardOf(d);
   ok(b.rows.every((row, r) => row.every((p) => p && p.round === r + 1)), 'sample board: row r is round r');
+  const sr = R.sampleRanks(teams, slots);
+  eq([...sr.values()].sort((x, y) => x - y), Array.from({ length: n * size }, (_, i) => i + 1), 'sample ranks: every man ranked once, 1 to the last');
+  const first = d.picks.filter((p) => p.round === 1).map((p) => sr.get(p.playerId));
+  ok(Math.min(...first) === 1, 'sample ranks: the best-ranked man went in round one', first.join(','));
 }
 
 console.log(fail ? `\n${fail} failed, ${pass} passed` : `\nAll ${pass} assertions passed`);

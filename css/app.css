@@ -1881,6 +1881,8 @@ tfoot tr.league-row td { border-top: 2px solid var(--dim); }
 .dr-status:empty { display: none; }
 /* Sample or league: under the draft (see draft.html). */
 .dr-source { margin: 14px 0 6px; }
+.dr-compare { margin: 0 0 12px; }
+.dr-compare[hidden] { display: none; }
 /* WHOSE PICKS, on the panel that answers it. */
 .dr-team-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 /* (`section.panel > h2`, which this one no longer is a child for.) */
