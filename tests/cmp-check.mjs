@@ -30,6 +30,22 @@ const LIVE = { 'waivers.source': 'live' };
 const PAST = 3;
 const WEEK0 = 5 + PAST;   // the wire table's first PRICED week cell (week 4)
 
+// A league's frozen Value lines, in the shape js/value.js `buildBase` writes
+// (the same ones wv-test.mjs uses): they sit inside the stub wire's projections.
+const VALUE_BASE = {
+  v: 1,
+  setAt: Date.UTC(2026, 8, 29, 12),
+  week: 4,
+  lines: {
+    QB: { waiver: 14, starter: 18, agents: 3, starters: 10 },
+    RB: { waiver: 8, starter: 11, agents: 3, starters: 20 },
+    WR: { waiver: 8, starter: 11, agents: 3, starters: 20 },
+    TE: { waiver: 5.5, starter: 7.5, agents: 3, starters: 10 },
+    K: { waiver: 7, starter: 9.5, agents: 3, starters: 10 },
+    DST: { waiver: 6, starter: 8, agents: 3, starters: 10 },
+  },
+};
+
 const SCENARIOS = {
   mine: {
     label: '(a) your worst man at each position, in the same table',
@@ -146,6 +162,28 @@ const SCENARIOS = {
   // is still a Bye; Player 03 (team 4, OUT) is 0.00 in week 4, which is not;
   // and your Wynn Larch (TEN = 10, OUT) is 0.00 in week 5, which is not his
   // bye either. Plus two wire men on waivers.
+  value: {
+    label: '(h) Proj | Value: the green box is judged on projections in both',
+    prefs: LIVE, conn: CONN,
+    env: { FF_VALUE: JSON.stringify({ base: VALUE_BASE, weeks: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13], players: {} }) },
+    after: async ({ document, window }) => {
+      const snap = () => [...document.querySelectorAll('#waiverTable tbody tr:not(.mine)')]
+        .flatMap((tr) => [...tr.children].slice(WEEK0).map((td, i) => ({
+          key: `${tr.getAttribute('data-player')}|${i}`,
+          v: td.getAttribute('data-v'),
+          boxed: /\bbeats\b/.test(td.getAttribute('class') || ''),
+        })));
+      const out = { proj: snap() };
+      document.querySelector('#showToggle button[data-show="value"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 300));
+      const on = document.querySelector('#showToggle button.on');
+      out.shown = on ? on.getAttribute('data-show') : null;
+      out.value = snap();
+      out.hot = document.querySelectorAll('td.hot').length;
+      globalThis.__cmp = out;
+    },
+  },
   'byes-waivers': {
     label: '(g) a zero is a bye only in the bye week; the W tag; the phone jump link',
     prefs: LIVE, conn: CONN,
@@ -155,7 +193,7 @@ const SCENARIOS = {
   },
 };
 
-/** The "Your …" rows as {label, name, pos, avg, hot, weekValues}. */
+/** The "Your …" rows as {label, name, pos, avg, boxed, weekValues}. */
 function mineSnapshot(document) {
   return [...document.querySelectorAll('#waiverTable tbody tr.mine')].map((tr) => {
     const cells = [...tr.children];
@@ -164,7 +202,7 @@ function mineSnapshot(document) {
       name: cells[0].textContent.replace(/\s+/g, ' ').trim(),
       pos: cells[1].textContent.trim(),
       avg: cells[3].getAttribute('data-v'),
-      hot: cells.slice(WEEK0).filter((td) => /\bhot\b/.test(td.getAttribute('class') || '')).length,
+      boxed: cells.slice(WEEK0).filter((td) => /\bbeats\b/.test(td.getAttribute('class') || '')).length,
       week: cells.slice(WEEK0).map((td) => td.getAttribute('data-v')),
     };
   });
@@ -358,13 +396,85 @@ async function check(scenario, boot) {
     c.ok('and the better tight end is not punished for a week ESPN had no number for',
       te && te.name.includes('Tobin Nash'), te && te.name);
 
-    // Never green.
-    c.ok('not one comparison-row week cell is green',
-      mine.every((m) => m.hot === 0), JSON.stringify(mine.map((m) => [m.label, m.hot])));
-    const qb = mine.find((m) => m.pos === 'QB');
-    c.ok('even though a wire QB on the same numbers would be',
-      qb && [...d.querySelectorAll('#waiverTable tbody tr:not(.mine) td.hot')].length > 0,
-      'no green anywhere');
+    // Never boxed: the box is about a man you could add.
+    c.ok('not one comparison-row week cell is boxed',
+      mine.every((m) => m.boxed === 0), JSON.stringify(mine.map((m) => [m.label, m.boxed])));
+
+    // ---- THE GREEN NUMBER IS GONE (Tim, 2026-10-09) -------------------------
+    c.ok('NO CELL CARRIES THE GREEN-NUMBER CLASS, in either table',
+      d.querySelectorAll('td.hot').length === 0, `${d.querySelectorAll('td.hot').length} td.hot`);
+    c.ok('nor does the key or the note show it',
+      !$('waiverLegend').querySelector('.hot') && !$('waiverNote').querySelector('.hot-key') &&
+      !/worth starting/i.test(txt($('waiverLegend')) + ' ' + note),
+      txt($('waiverLegend')));
+
+    // ---- THE GREEN BOX: YOU WOULD START HIM THAT WEEK -----------------------
+    //
+    // Nobody in the stub is in a lineup, so the league's slots are the site's
+    // default: QB, 2 RB, 3 WR, TE, FLEX, D/ST, K. Your best lineup, by hand:
+    //   QB 24 · RB 15, 12 · WR 16, 13, 11 · TE 6 in week 4 (Mercer has no number),
+    //   12 after · FLEX 9 (Falkner; Kelso's 9 is level) · K 9 · D/ST EMPTY.
+    // So a free agent starts for you by projecting STRICTLY over:
+    const BAR = {
+      4: { QB: 24, RB: 9, WR: 9, TE: 6, K: 9, DST: -Infinity },
+      5: { QB: 24, RB: 9, WR: 9, TE: 9, K: 9, DST: -Infinity },
+      6: { QB: 24, RB: 9, WR: 9, TE: 9, K: 9, DST: -Infinity },
+    };
+    // ...which is NOT what the box used to mean — over your worst man there
+    // (the "Your …" row), these numbers:
+    const WORST = {
+      4: { QB: 13, RB: 8, WR: 4, TE: 6, K: 7 },
+      5: { QB: 13, RB: 8, WR: 0, TE: 6, K: 7 },
+      6: { QB: 13, RB: 8, WR: 4, TE: 6, K: 7 },
+    };
+    const wrongBox = [];
+    const seen = { cells: 0, boxed: 0, oldOnly: 0, newOnly: 0, flex: 0, benchOnly: 0 };
+    for (const tr of allRows) {
+      if (/\bmine\b/.test(tr.getAttribute('class') || '')) continue;
+      const pos = tr.children[1].textContent.trim();
+      for (const week of [4, 5, 6]) {
+        const td = tr.children[WEEK0 + week - 4];
+        const raw = td.getAttribute('data-v');
+        const boxed = /\bbeats\b/.test(td.getAttribute('class') || '');
+        if (raw === null || Number(raw) === 0) {
+          if (boxed) wrongBox.push(`${pos} wk${week} ${raw} boxed`);
+          continue;
+        }
+        const v = Number(raw);
+        const want = v > BAR[week][pos];
+        const old = WORST[week][pos] !== undefined && v > WORST[week][pos];
+        seen.cells++;
+        if (boxed) seen.boxed++;
+        if (old && !want) seen.oldOnly++;
+        if (!old && want) seen.newOnly++;
+        // Through the FLEX alone: over your flex man, not over your RB2 / WR3.
+        if (want && ((pos === 'RB' && v <= 12) || (pos === 'WR' && v <= 11))) seen.flex++;
+        // Better than a man on your bench, and still not a starter.
+        if (!want && pos === 'RB' && v > 8) seen.benchOnly++;
+        if (boxed !== want) wrongBox.push(`${pos} wk${week} ${v} ${boxed ? 'boxed' : 'not boxed'}`);
+      }
+    }
+    c.ok('A WEEK IS BOXED EXACTLY WHEN HE WOULD MAKE YOUR BEST LINEUP THAT WEEK',
+      seen.cells > 150 && wrongBox.length === 0,
+      `${wrongBox.length} of ${seen.cells} wrong: ${wrongBox.slice(0, 6).join(' | ')}`);
+    c.ok('some are boxed and some are not', seen.boxed > 20 && seen.cells - seen.boxed > 20,
+      JSON.stringify(seen));
+    c.ok('the fixture tells the two meanings apart: weeks that beat your worst man and would not start',
+      seen.oldOnly > 20 && seen.benchOnly > 0, JSON.stringify(seen));
+    c.ok('and weeks that start with nobody of yours to beat — the empty D/ST slot',
+      seen.newOnly > 0, JSON.stringify(seen));
+    c.ok('FLEX counts: an RB or WR over your flex man is boxed without beating a starter at his own position',
+      seen.flex > 0, JSON.stringify(seen));
+    c.ok('no wire QB is boxed: none out-projects your starter, though most beat Your QB3',
+      [...allRows].filter((tr) => !/\bmine\b/.test(tr.getAttribute('class') || '') &&
+        tr.children[1].textContent.trim() === 'QB')
+        .every((tr) => !tr.querySelector('td.beats')), 'a boxed QB');
+    c.ok('the key says what the box means, in Tim’s words',
+      /you would start him/.test(txt($('waiverLegend'))) && !/beats your worst man/.test(txt($('waiverLegend'))),
+      txt($('waiverLegend')));
+    c.ok('and the note says it in one sentence',
+      /boxed in green is one where he would make your best lineup/.test(note) &&
+      !/out-projects your own worst man/.test(note), note.slice(0, 300));
 
     // In the table with everyone else.
     c.ok('the comparison rows live in the same tbody as the wire',
@@ -584,6 +694,36 @@ async function check(scenario, boot) {
       'a comparison key is still showing');
   }
 
+  // ---- no lineup of yours, no box -------------------------------------------
+  if (scenario === 'no-team' || scenario === 'roster-refused') {
+    c.ok('NOBODY’S LINEUP TO CRACK: not one cell is boxed, and none is a green number',
+      allRows.length === 60 && d.querySelectorAll('td.beats').length === 0 &&
+      d.querySelectorAll('td.hot').length === 0,
+      `${d.querySelectorAll('td.beats').length} boxed, ${d.querySelectorAll('td.hot').length} green`);
+  }
+  if (scenario === 'roster-partial') {
+    const boxedIn = (week) => allRows.filter((tr) =>
+      /\bbeats\b/.test(tr.children[WEEK0 + week - 4].getAttribute('class') || '')).length;
+    c.ok('a week whose rosters never arrived has no lineup to judge: no box in it, boxes beside it',
+      boxedIn(5) === 0 && boxedIn(4) > 0 && boxedIn(6) > 0, `${boxedIn(4)} / ${boxedIn(5)} / ${boxedIn(6)}`);
+  }
+
+  // ---- (h) Proj | Value: the box is a lineup question, so it does not move ---
+  if (scenario === 'value') {
+    const w = globalThis.__cmp || {};
+    c.ok('the switch is there and was pressed', w.shown === 'value', String(w.shown));
+    // By man and week, never by place: the table re-sorts on the Values.
+    const onValue = new Map((w.value || []).map((x) => [x.key, x]));
+    const changed = (w.proj || []).filter((x) => onValue.has(x.key) && x.v !== onValue.get(x.key).v).length;
+    c.ok('the numbers really did change to Values',
+      w.proj && w.value && w.proj.length === w.value.length && changed > 50, `${changed} cells changed`);
+    const moved = (w.proj || []).filter((x) => !onValue.has(x.key) || x.boxed !== onValue.get(x.key).boxed);
+    c.ok('NOT ONE BOX MOVES between Proj and Value',
+      w.proj && w.proj.some((x) => x.boxed) && w.proj.some((x) => !x.boxed) && moved.length === 0,
+      `${moved.length} moved: ${moved.slice(0, 4).map((x) => x.key).join(',')}`);
+    c.ok('and no green number in either', w.hot === 0, `${w.hot}`);
+  }
+
   // ---- (e) every roster week refused ---------------------------------------
   if (scenario === 'roster-refused') {
     c.ok('there are no comparison rows to draw', mine.length === 0, JSON.stringify(mine));
@@ -659,9 +799,13 @@ async function check(scenario, boot) {
       .filter((tr) => tr.children[1].textContent.trim() === 'WR')
       .map((tr) => at(tr, 5))
       .filter((c5) => c5 && c5.v !== null && Number(c5.v) > 0);
-    c.ok('every wire WR with a number in week 5 is shaded against that zero',
-      wrWeek5.length > 5 && wrWeek5.every((c5) => /\bbeats\b/.test(c5.cls)),
-      `${wrWeek5.filter((c5) => !/\bbeats\b/.test(c5.cls)).length} of ${wrWeek5.length} unshaded`);
+    // His zero is not what a claim is measured against any more: a wire WR is
+    // boxed in week 5 only over the 9 your flex man projects.
+    c.ok('a wire WR in week 5 is boxed for cracking your lineup, not for beating that zero',
+      wrWeek5.length > 5 && wrWeek5.some((c5) => Number(c5.v) <= 9) &&
+      wrWeek5.every((c5) => /\bbeats\b/.test(c5.cls) === (Number(c5.v) > 9)),
+      wrWeek5.filter((c5) => /\bbeats\b/.test(c5.cls) !== (Number(c5.v) > 9))
+        .map((c5) => `${c5.v}:${c5.cls}`).join(' | '));
 
     const keyShown = (sel) => !$('waiverLegend').querySelector(`[data-when="${sel}"]`).hasAttribute('hidden');
     c.ok('the key shows the ruled-out zero and the bye, because both are on screen',

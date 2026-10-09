@@ -81,46 +81,25 @@ td[data-c][data-go] { cursor: pointer; }
 .statcard tr.sc-here td { font-weight: 650; }
 .statcard .sc-lead { color: var(--dim); }
 
-/* A week worth actually starting the player for, by the per-position bar in
-   STARTABLE. Colour AND weight, never colour alone: this is the one cue on the
-   page that says "look here", and roughly one man in twelve cannot separate
-   the green from the grey around it. */
-td.hot {
-  color: var(--accent);
-  font-weight: 650;
-}
-/* The week cells are on the red/green scale too (2026-10-08), and the scale
-   sets a weight of its own at a higher specificity. "Worth starting" keeps
-   its weight on top of it: colour AND weight, as above. */
-#waiverTable tbody td.hot { font-weight: 650; }
-/* The word "green" in the note, shown in the colour it is describing. */
-.hot-key { color: var(--accent); font-weight: 650; }
-
-/* A week where this free agent out-projects your own worst man at his position
-   — the "Your RB5" row he is sorted in among.
-
-   A SHADE rather than a text colour, because td.hot above has already spent the
-   text colour on a different question and the two answers are independent: a
-   cell can be worth starting, worth claiming, both, or neither. Both cues are
-   green because both say "look here"; they are told apart by treatment, which
-   is also what keeps them legible to anyone who cannot separate the hues.
+/* THE GREEN BOX (Tim, 2026-10-09): a week you would start this free agent —
+   with him on your roster, your best lineup that week has him in it. The one
+   claim cue on the table: the green NUMBER ("worth starting", td.hot) is gone.
+   The class is still `beats`, from when the box meant "beats your worst man".
 
    Written twice, because the zebra band and the row hover each paint their own
    background and this has to survive both.
 
    background-COLOR, never the shorthand (2026-10-08): the week cells carry the
-   red/green scale now, which is a background-IMAGE, and the shorthand erased
-   it. So the tint sits over this shade — and because a tinted green cell and
-   this shade are then close in colour, the shade carries a RING as well: the
-   ring is what says "beats your worst man" on a cell that is also coloured.
+   red/green scale, which is a background-IMAGE, and the shorthand erased it.
+   So the tint sits over this shade — and because a tinted green cell and this
+   shade are then close in colour, the shade carries a RING as well: the ring
+   is what says "you would start him" on a cell that is also coloured.
    An inset shadow, so the cell keeps its size. */
 #waiverTable tbody td.beats,
 #waiverTable tbody tr:hover td.beats {
   background-color: #16311f;
   box-shadow: inset 0 0 0 1px var(--accent);
 }
-/* Over the shade, the startable green needs to stay clearly the brighter cue. */
-#waiverTable tbody td.hot.beats { color: var(--accent-hi); }
 /* The phrase in the note, shown in the treatment it is describing. */
 .beats-key {
   background: #16311f;
@@ -138,8 +117,8 @@ td.hot {
    An edge and a bracketing rule rather than a filled background. The zebra
    striping owns the backgrounds here — td.name is sticky and carries its own
    opaque one — so a fill would have to be stated twice and would still lose the
-   banding. A rule survives both. --good, not --accent: green already means
-   "worth starting" two rules up, and it is deliberately not that. */
+   banding. A rule survives both. --good, not --accent: the accent green is
+   the box one rule up, and it is deliberately not that. */
 tbody tr.mine td {
   border-top: 1px solid var(--good);
   border-bottom: 1px solid var(--good);
@@ -185,8 +164,8 @@ tbody tr.unavailable td.name { font-weight: 500; }
 
 .empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
 
-/* THE TAKEN TABLE carries no colour at all — no td.hot, no td.beats — because
-   both of those cues argue for a claim and nobody here can be claimed. The only
+/* THE TAKEN TABLE carries no green box (td.beats), because
+   that cue argues for a claim and nobody here can be claimed. The only
    thing it needs of its own is the manager's name, which is free text and long
    enough to push the week columns off the screen if it is left to size itself. */
 #takenTable td.owner {
@@ -312,7 +291,6 @@ tbody tr.spotlight td.name {
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
-.legend .sw.hot { color: var(--accent); font-weight: 650; }
 .legend .sw.beats { background: #16311f; border-color: var(--accent); }
 .legend .sw.bye { color: var(--warn); font-size: 11px; letter-spacing: 0.04em; }
 .legend .mine-tag { margin-right: 0; }
@@ -628,12 +606,11 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
     <div class="stat-row" id="waiverStats"></div>
     <div class="status" id="waiverStatus"></div>
 
-    <!-- Two greens, told apart by treatment: bold green TEXT (td.hot) and a
-         green SHADE with a ring (td.beats). The two comparison keys hide when
-         nobody is set as you, because then neither of those can appear. -->
+    <!-- The green box (td.beats): a week you would start him. The two
+         comparison keys hide when nobody is set as you, because then neither
+         the box nor a Your row can appear. -->
     <div class="legend" id="waiverLegend">
-      <span class="key"><span class="sw hot">14.2</span> worth starting</span>
-      <span class="key" data-compare><span class="sw beats">9.8</span> beats your worst man</span>
+      <span class="key" data-compare><span class="sw beats">9.8</span> you would start him</span>
       <span class="key" data-compare><span class="mine-tag">Your QB3</span> your own player</span>
       <!-- The shared red/green scale: Avg and every week still to play, each
            against the other free agents at his position. Two swatches, the two
@@ -734,13 +711,13 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <span class="key" data-when="td.po-start" hidden><span class="sw po-key"><span class="po-tag">PO</span></span> playoff weeks &mdash; not in Avg</span>
       <!-- The two ENDS of the shared scale, shown in the treatment the table
            draws. This chip used to read "No colours — nobody here can be
-           claimed", which was true of the two CLAIM greens and is still true of
-           them; it was never true of a good/bad comparison, and since
-           2026-09-19b this table carries one. The claim half of that sentence
-           is kept, where it belongs, next to it. -->
+           claimed", which was true of the claim green (now one: the box) and
+           is still true of it; it was never true of a good/bad comparison, and
+           since 2026-09-19b this table carries one. The claim half of that
+           sentence is kept, where it belongs, next to it. -->
       <span class="key" data-when="td.heat-up-4" hidden><span class="sw heat heat-up-4">18.7 <span class="heatmark">&#9650;</span></span> best at his position in the league</span>
       <span class="key" data-when="td.heat-dn-4" hidden><span class="sw heat heat-dn-4">9.8 <span class="heatmark">&#9660;</span></span> worst of them; paler shades are the steps between</span>
-      <span class="key">Neither claim green &mdash; nobody here can be claimed</span>
+      <span class="key">No green box &mdash; nobody here can be claimed</span>
     </div>
 
     <div class="table-scroll"><table id="takenTable">

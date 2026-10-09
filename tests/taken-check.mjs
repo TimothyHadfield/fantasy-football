@@ -1257,10 +1257,14 @@ async function check(scenario, boot) {
   const overBar = rows.reduce((n, r) => n + r.week.filter((td) =>
     td.v !== null && typeof BARS[bareOf(r.pos)] === 'number' &&
     Number(td.v) > BARS[bareOf(r.pos)]).length, 0);
-  c.ok('and plenty of those numbers clear the startable bar, so that is not vacuous',
+  c.ok('and plenty of those numbers clear the old startable bar, so that is not vacuous',
     overBar > 0, `${overBar} over the bar`);
-  c.ok('the wire above is still coloured, so the difference is the table and not the data',
-    [...d.querySelectorAll('#waiverTable tbody td.hot')].length > 0, 'no green on the wire either');
+  // The wire's own green number went on 2026-10-09; its green box is the claim cue.
+  c.ok('the wire above is boxed and has no green number either, so the difference is the table and not the data',
+    [...d.querySelectorAll('#waiverTable tbody td.beats')].length > 0 &&
+    [...d.querySelectorAll('#waiverTable tbody td.hot')].length === 0,
+    `${[...d.querySelectorAll('#waiverTable tbody td.beats')].length} boxed, ` +
+    `${[...d.querySelectorAll('#waiverTable tbody td.hot')].length} green numbers on the wire`);
 
   // ---- a bye is not a blank -------------------------------------------------
   // Since 2026-09-16 a zero is a bye only in the bye week. The stub league's
@@ -1300,8 +1304,8 @@ async function check(scenario, boot) {
     /our ordering rather than ESPN’s depth chart/.test(note), note);
   c.ok('the note says an unratable man gets no rank',
     /cannot be ranked at all/.test(note) && /bare position/.test(note), note);
-  c.ok('the note says nothing is highlighted',
-    /Nothing here is highlighted, on purpose/.test(note), note);
+  c.ok('the note says nothing is boxed',
+    /Nothing here is boxed, on purpose/.test(note) && !/both greens/.test(note), note);
   c.ok('and says why — nobody here can be claimed',
     /nobody on this list can be claimed/.test(note), note);
   c.ok('the note distinguishes a Bye cell from a blank one',

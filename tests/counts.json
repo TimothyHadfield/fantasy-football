@@ -84,7 +84,7 @@
       "assertions": 66
     },
     "hot-check.mjs": {
-      "assertions": 120
+      "assertions": 51
     },
     "test-pages-render.mjs": {
       "pages": 10,
@@ -116,8 +116,8 @@
       "assertions": 119
     },
     "cmp-check.mjs": {
-      "assertions": 115,
-      "scenarios": 7
+      "assertions": 134,
+      "scenarios": 8
     },
     "taken-check.mjs": {
       "assertions": 444,

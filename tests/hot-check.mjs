@@ -1,12 +1,15 @@
-// Checks the per-position green highlighting on the Add players table:
-// the right cells go green, the boundary does NOT, and nothing else moves.
+// Checks the one claim cue on the Players page's Available table, on the demo
+// league: THE GREEN BOX — "you would start him that week" (Tim, 2026-10-09) —
+// and that the green NUMBER it used to share the table with is gone.
 import { parseHTML } from 'linkedom';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 import { REPO } from './repo.mjs';
-const BARS = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 9 };
+// The set bars the removed green number used: only to prove that weeks over
+// them are still on screen, uncoloured.
+const OLD_BARS = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 9 };
 
 let pass = 0, fail = 0;
 const ok = (c, msg, extra = '') => {
@@ -69,10 +72,9 @@ const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent
 const posCol = heads.findIndex((h) => /^Pos$/i.test(h));
 const avgCol = heads.findIndex((h) => /^Avg$/i.test(h));
 // The weeks already played are columns too (2026-10-04), drawn between Avg and
-// the weeks still to price. They are PLAIN on purpose — the green and the shade
-// are claims about weeks you could still start a man in — so the rule below
-// starts at the first priced week, and the previous weeks are checked to carry
-// neither cue.
+// the weeks still to price. They are PLAIN on purpose — the box is a claim
+// about a week you could still start a man in — so the rule below starts at
+// the first priced week, and the previous weeks are checked to carry no cue.
 const pastCols = table.querySelectorAll('thead th.wk-past').length;
 // Gain (2026-10-06) sits between Avg and the weeks; it is not a week either.
 const gainCol = heads.findIndex((h) => /^Gain$/i.test(h));
@@ -82,159 +84,114 @@ ok(pastCols === 3, 'the three played weeks are columns before the priced ones', 
 {
   const past = [...table.querySelectorAll('tbody td.wk-past')];
   ok(past.length > 100 && past.every((td) => !td.classList.contains('hot') && !td.classList.contains('beats')),
-    'a played week is never green or shaded',
+    'a played week is never green or boxed',
     `${past.filter((td) => td.classList.contains('hot') || td.classList.contains('beats')).length} of ${past.length}`);
 }
 
 const allRows = [...table.querySelectorAll('tbody tr')].filter((r) => !r.classList.contains('empty-row'));
 // The "Your …" comparison rows share this tbody but are NOT wire players, and
-// the green is a claim-worthiness cue, so they are excluded from the rule below
-// and checked separately at the bottom of this file. (Before those rows existed
-// this loop ran over every row in the tbody, which was the same set.)
+// the box is a claim cue, so they are checked separately below.
 const mineRows = allRows.filter((r) => r.classList.contains('mine'));
 const rows = allRows.filter((r) => !r.classList.contains('mine'));
 ok(rows.length > 0, 'demo table has rows', `${rows.length}`);
-
-let checked = 0, greens = 0, wrongGreen = 0, missedGreen = 0, byPos = {};
-for (const tr of rows) {
-  const cells = [...tr.querySelectorAll('td')];
-  const pos = cells[posCol].textContent.trim();
-  for (let i = firstWeekCol; i < cells.length; i++) {
-    const td = cells[i];
-    const raw = td.getAttribute('data-v');
-    const isHot = td.classList.contains('hot');
-    if (isHot) { greens++; byPos[pos] = (byPos[pos] || 0) + 1; }
-
-    // Only numeric, non-bye cells can qualify.
-    if (raw === null || raw === '') { ok(!isHot, 'a cell with no value is never green'); continue; }
-    const v = Number(raw);
-    if (td.classList.contains('bye')) { ok(!isHot, 'a bye is never green'); continue; }
-
-    const bar = BARS[pos];
-    const should = typeof bar === 'number' && v > bar;
-    checked++;
-    if (should && !isHot) { missedGreen++; console.log(`  missed: ${pos} ${v} > ${bar}`); }
-    if (!should && isHot) { wrongGreen++; console.log(`  wrong:  ${pos} ${v} vs bar ${bar}`); }
-  }
-}
-ok(checked > 50, 'checked a decent number of cells', `${checked}`);
-ok(missedGreen === 0, 'every qualifying cell is green', `${missedGreen} missed`);
-ok(wrongGreen === 0, 'no cell is green that should not be', `${wrongGreen} wrong`);
-ok(greens > 0, 'some cells actually qualified', `${greens} green`);
-console.log(`  green cells by position: ${JSON.stringify(byPos)}`);
-
-// --- the boundary: exactly at the bar must NOT be green --------------------
-// Exercise the module's own rule through a synthetic row rather than trusting
-// that the demo pool happens to contain an exact-threshold value.
-const mod = await import(pathToFileURL(path.join(REPO, 'js/waivers-page.js')).href);
-for (const [pos, bar] of Object.entries(BARS)) {
-  // Re-derive from the rendered DOM: find any cell of this position at/over bar.
-  const over = rows.some((tr) => {
-    const cells = [...tr.querySelectorAll('td')];
-    if (cells[posCol].textContent.trim() !== pos) return false;
-    return cells.slice(firstWeekCol).some((td) => {
-      const raw = td.getAttribute('data-v');
-      if (raw === null) return false;
-      return Number(raw) === bar && td.classList.contains('hot');
-    });
-  });
-  ok(!over, `${pos} exactly at ${bar} is not green (over means over)`);
-}
-
-// --- your own rows are never green ----------------------------------------
-// The green says "worth starting, so worth claiming". On a man already on your
-// bench that answers a different question, so those weeks stay uncoloured
-// however high the number is.
 ok(mineRows.length > 0, 'the demo table carries comparison rows at all', `${mineRows.length}`);
-let mineHot = 0, mineOverBar = 0;
-for (const tr of mineRows) {
-  const cells = [...tr.querySelectorAll('td')];
-  const pos = cells[posCol].textContent.trim();
-  for (let i = firstWeekCol; i < cells.length; i++) {
-    const td = cells[i];
-    if (td.classList.contains('hot')) mineHot++;
-    const raw = td.getAttribute('data-v');
-    if (raw !== null && typeof BARS[pos] === 'number' && Number(raw) > BARS[pos]) mineOverBar++;
+
+// --- THE GREEN NUMBER IS GONE ----------------------------------------------
+// It used to mark a week over a set bar per position ("worth starting").
+ok(document.querySelectorAll('td.hot').length === 0,
+  'NO CELL IN EITHER TABLE CARRIES THE GREEN-NUMBER CLASS', `${document.querySelectorAll('td.hot').length} td.hot`);
+{
+  let over = 0;
+  for (const tr of rows) {
+    const cells = [...tr.querySelectorAll('td')];
+    const bar = OLD_BARS[cells[posCol].textContent.trim()];
+    for (const td of cells.slice(firstWeekCol)) {
+      const raw = td.getAttribute('data-v');
+      if (raw !== null && Number(raw) > bar) over++;
+    }
   }
+  ok(over > 0, 'and weeks over the old bars are on screen, so that is not a vacuous check', `${over} over`);
 }
-ok(mineHot === 0, 'not one comparison-row cell is green', `${mineHot} green`);
-ok(mineOverBar > 0, 'and some of them clear the bar, so that is not a vacuous check',
-  `${mineOverBar} over`);
-ok(mineRows.every((tr) => ![...tr.querySelectorAll('td')].some((td) => td.classList.contains('beats'))),
-  'nor is one of them shaded — a row cannot beat itself');
+const legend = document.getElementById('waiverLegend');
+ok(!legend.querySelector('.hot') && !/worth starting/i.test(legend.textContent),
+  'the key no longer shows a green number', legend.textContent.replace(/\s+/g, ' ').trim());
 
-// --- the SECOND green: beating your own worst man at that position ---------
-// A separate cue answering a separate question, so it is a separate class. The
-// rule is: strictly ahead of the "Your …" row's number for that same week.
-const mineByPos = new Map();
-for (const tr of mineRows) {
-  const cells = [...tr.querySelectorAll('td')];
-  mineByPos.set(cells[posCol].textContent.trim(), cells);
-}
-ok(mineByPos.size >= 4, 'the demo squad covers several positions', `${mineByPos.size}`);
-
-let shadeChecked = 0, shades = 0, wrongShade = 0, missedShade = 0, comparable = 0;
+// --- THE GREEN BOX: YOU WOULD START HIM THAT WEEK ---------------------------
+// The rule itself is pinned cell for cell against a hand-built squad in
+// cmp-check.mjs. Here, on the demo league, what must hold whatever the squad:
+// the box is a THRESHOLD within a position and a week — if a free agent is
+// boxed, every free agent at his position projecting more that week is too —
+// and nothing that is not a number above zero is ever boxed.
+const byPosWeek = new Map();
+let boxes = 0, numbers = 0;
 for (const tr of rows) {
   const cells = [...tr.querySelectorAll('td')];
   const pos = cells[posCol].textContent.trim();
-  const mineCells = mineByPos.get(pos);
   for (let i = firstWeekCol; i < cells.length; i++) {
     const td = cells[i];
-    const isShaded = td.classList.contains('beats');
-    if (isShaded) shades++;
-
+    const boxed = td.classList.contains('beats');
     const raw = td.getAttribute('data-v');
-    if (raw === null) { ok(!isShaded, 'a cell with no value is never shaded'); continue; }
-    if (td.classList.contains('bye')) { ok(!isShaded, 'a bye is never shaded — 0.00 beats nobody'); continue; }
-    if (!mineCells) { ok(!isShaded, `a position you hold nobody at (${pos}) is never shaded`); continue; }
-
-    const mineRaw = mineCells[i].getAttribute('data-v');
-    if (mineRaw === null) { ok(!isShaded, 'no number of yours that week means no comparison'); continue; }
-
-    comparable++;
-    const should = Number(raw) > Number(mineRaw);
-    shadeChecked++;
-    if (should && !isShaded) { missedShade++; console.log(`  missed shade: ${pos} ${raw} > ${mineRaw}`); }
-    if (!should && isShaded) { wrongShade++; console.log(`  wrong shade:  ${pos} ${raw} vs ${mineRaw}`); }
+    if (raw === null || raw === '') { ok(!boxed, 'a cell with no value is never boxed'); continue; }
+    if (td.classList.contains('bye')) { ok(!boxed, 'a bye is never boxed'); continue; }
+    if (Number(raw) === 0) { ok(!boxed, 'a zero is never boxed'); continue; }
+    numbers++;
+    if (boxed) boxes++;
+    const key = `${pos}|${i}`;
+    if (!byPosWeek.has(key)) byPosWeek.set(key, []);
+    byPosWeek.get(key).push({ v: Number(raw), boxed });
   }
 }
-ok(shadeChecked > 50, 'checked a decent number of cells against your own men', `${shadeChecked}`);
-ok(missedShade === 0, 'every cell that beats your man is shaded', `${missedShade} missed`);
-ok(wrongShade === 0, 'no cell is shaded that does not beat him', `${wrongShade} wrong`);
-ok(shades > 0, 'some cells actually beat him', `${shades} shaded`);
-ok(shades < comparable, 'and some do not, so the table is not uniformly green',
-  `${shades} of ${comparable}`);
-// The two cues are independent, and the demo must actually exercise that.
-const both = rows.flatMap((tr) => [...tr.querySelectorAll('td')])
-  .filter((td) => td.classList.contains('hot') && td.classList.contains('beats')).length;
-const shadeOnly = rows.flatMap((tr) => [...tr.querySelectorAll('td')])
-  .filter((td) => td.classList.contains('beats') && !td.classList.contains('hot')).length;
-ok(both > 0, 'a cell can carry both greens at once', `${both}`);
-ok(shadeOnly > 0, 'and a cell can beat your man without clearing the startable bar', `${shadeOnly}`);
-console.log(`  shaded: ${shades} of ${comparable} comparable (${both} also over the bar)`);
-
-// --- the note explains the colour -----------------------------------------
-const note = document.getElementById('waiverNote').textContent;
-ok(/green/i.test(note), 'the note mentions the colour');
-for (const [pos, bar] of Object.entries(BARS)) {
-  ok(note.includes(`${pos} over ${bar}`), `note states the ${pos} bar`, note.slice(0, 200));
+ok(numbers > 50, 'checked a decent number of cells', `${numbers}`);
+ok(boxes > 0, 'some weeks are boxed', `${boxes} boxed`);
+ok(boxes < numbers, 'and some are not, so the table is not uniformly boxed', `${boxes} of ${numbers}`);
+{
+  let broken = '';
+  let mixed = 0;
+  for (const [key, cellsAt] of byPosWeek) {
+    const lowestBoxed = Math.min(...cellsAt.filter((c) => c.boxed).map((c) => c.v));
+    const highestPlain = Math.max(...cellsAt.filter((c) => !c.boxed).map((c) => c.v));
+    if (Number.isFinite(lowestBoxed) && Number.isFinite(highestPlain)) mixed++;
+    if (highestPlain >= lowestBoxed && !broken) broken = `${key}: ${highestPlain} plain, ${lowestBoxed} boxed`;
+  }
+  ok(!broken, 'within a position and a week the box is a threshold: nobody plain out-projects a boxed man', broken);
+  ok(mixed > 0, 'and some position-weeks have both, so the threshold is really tested', `${mixed}`);
 }
-ok(document.getElementById('waiverNote').querySelector('.hot-key') !== null,
-  'the word green is shown in green');
-ok(/out-projects your own worst man at his position/.test(note),
-  'the note explains the shading too', note.slice(0, 200));
-ok(/a bye is never shaded/.test(note), 'and says a bye cannot beat anybody', note.slice(0, 200));
-ok(document.getElementById('waiverNote').querySelector('.beats-key') !== null,
-  'the shading is shown in the note in the treatment it describes');
+console.log(`  boxed: ${boxes} of ${numbers} numbered wire weeks`);
 
-// --- FLEX changes WHICH ROWS you see, and nothing about the colour ---------
+// --- your own rows are never boxed ------------------------------------------
+ok(mineRows.every((tr) => ![...tr.querySelectorAll('td')].some((td) => td.classList.contains('beats'))),
+  'not one comparison-row cell is boxed — the box is about a man you could add');
+// --- nor is anybody in the Taken table --------------------------------------
+ok(document.querySelectorAll('#takenTable td.beats').length === 0 &&
+  document.querySelectorAll('#takenTable tbody tr').length > 10,
+  'nor one cell of the Taken table', `${document.querySelectorAll('#takenTable td.beats').length}`);
+// --- nor the Avg column ------------------------------------------------------
+ok(rows.every((tr) => !tr.querySelectorAll('td')[avgCol].classList.contains('beats')),
+  'Avg is never boxed: the box is per week');
+
+// --- the key and the note say what the box means ----------------------------
+const flat = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+ok(/you would start him/.test(flat(legend)) && !/beats your worst man/.test(flat(legend)),
+  'the key reads "you would start him"', flat(legend));
+ok(legend.querySelectorAll('[data-compare]').length === 2 &&
+  [...legend.querySelectorAll('[data-compare]')].every((k) => !k.hasAttribute('hidden')),
+  'and it is one of the two keys that need a team, both shown');
+const noteEl = document.getElementById('waiverNote');
+const note = noteEl.textContent;
+const sentence = 'A week boxed in green is one where he would make your best lineup.';
+ok(note.includes(sentence), 'the note says it in one sentence', note.slice(0, 200));
+ok(sentence.split(/\s+/).length < 15, 'of under fifteen words', `${sentence.split(/\s+/).length}`);
+ok(noteEl.querySelector('.beats-key') !== null, 'with the box shown in the treatment it describes');
+ok(noteEl.querySelector('.hot-key') === null && !/worth starting/i.test(note) &&
+  !/QB over 17/.test(note) && !/out-projects your own worst man/.test(note) && !/two greens/.test(note),
+  'and nothing of the green number or the old meaning is left in it',
+  (note.match(/.{0,40}(worth starting|over 17|worst man at his|two greens).{0,40}/i) || [''])[0]);
+
+// --- FLEX changes WHICH ROWS you see, and nothing about the box -------------
 //
-// FLEX is a filter across RB, WR and TE, so the danger it introduces is that
-// somebody "helpfully" gives it a startable bar of its own, or measures a tight
-// end against a flex bar while it is pressed. Both would be invisible: the table
-// would still be full of plausible green. So the cues are recorded per player
-// per week BEFORE the button is pressed and compared cell for cell after, and
-// the note is re-read to prove no seventh bar appeared in it.
+// FLEX is a filter across RB, WR and TE. The box reads your whole roster and
+// the league's slots, never the button, so the cues are recorded per player per
+// week BEFORE the button is pressed and compared cell for cell after.
 const cueKey = (tr) => tr.getAttribute('data-player');
 function cuesOf(scope) {
   const out = new Map();
@@ -273,39 +230,20 @@ for (const [key, after] of cuesAfter) {
     if (!firstMoved) firstMoved = `${key}: ${JSON.stringify(before && before.cues)} -> ${JSON.stringify(after.cues)}`;
   }
 }
-ok(movedCue === 0, 'NOT ONE CELL CHANGES COLOUR BECAUSE FLEX IS PRESSED', firstMoved);
-
-// And the greens are actually there to have been preserved, per position.
-const greensNow = {};
-for (const r of cuesAfter.values()) {
-  for (const cue of r.cues) if (cue.startsWith('H')) greensNow[r.pos] = (greensNow[r.pos] || 0) + 1;
-}
-ok(Object.keys(greensNow).length > 1,
-  'more than one of the three still has green weeks under FLEX', JSON.stringify(greensNow));
-ok((greensNow.WR || 0) > 0, 'a receiver over 12 is still green under FLEX', JSON.stringify(greensNow));
-const overBarWr = [...cuesAfter.values()].filter((r) => r.pos === 'WR')
-  .flatMap((r) => r.cues)
-  .filter((cue) => {
-    const v = cue.split(':')[1];
-    return v !== 'null' && Number(v) > BARS.WR;
-  });
-ok(overBarWr.length > 0 && overBarWr.every((cue) => cue.startsWith('H')),
-  'and every receiver week over the WR bar is green, by that bar and no other',
-  overBarWr.filter((cue) => !cue.startsWith('H')).slice(0, 3).join(','));
+ok(movedCue === 0, 'NOT ONE CELL CHANGES ITS BOX BECAUSE FLEX IS PRESSED', firstMoved);
 ok([...cuesAfter.values()].some((r) => r.cues.some((cue) => cue.slice(1, 2) === 'B')),
-  'the second green survives it too');
+  'and there are boxes under FLEX to have been preserved');
+ok([...cuesAfter.values()].every((r) => r.cues.every((cue) => !cue.startsWith('H'))),
+  'and still no green number');
 
 const flexNote = document.getElementById('waiverNote').textContent;
-for (const [pos, bar] of Object.entries(BARS)) {
-  ok(flexNote.includes(`${pos} over ${bar}`), `the note still states the ${pos} bar under FLEX`);
-}
-ok(!/FLEX over \d/.test(flexNote), 'and states no FLEX bar, because there is not one',
+ok(!/FLEX over \d/.test(flexNote) && !/over 12/.test(flexNote), 'the note states no bar, FLEX or otherwise',
   flexNote.slice(0, 200));
 ok(/FLEX<\/strong> is not a position but a filter across three/
   .test(document.getElementById('waiverNote').innerHTML),
   'the note says what FLEX is', flexNote.slice(0, 200));
-ok(/measured against his own position’s bar/.test(flexNote),
-  'and that a flex-eligible player is still measured against his own bar', flexNote.slice(0, 200));
+ok(/a week boxed in green under WR is boxed under FLEX/.test(flexNote),
+  'and that the filter does not move a box', flexNote.slice(0, 200));
 
 ok(errors.length === 0, 'no console errors', errors.slice(0, 2).join(' | '));
 

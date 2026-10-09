@@ -402,7 +402,7 @@ const SCENARIOS = {
   // reasonable: every cell would carry a class, the table would be green at the
   // top and red at the bottom, and the colour would silently be about the
   // FILTER rather than about the player. `hot-check.mjs` already pins exactly
-  // this for the two greens; this is the same promise for the third cue.
+  // this for the green box; this is the same promise for the scale.
   //
   // Both tables, because they have independent filters and could drift apart.
   'heat-filter': {
@@ -1018,15 +1018,16 @@ function ordered(values, asc) {
 // "The coloring is good right now but it needs to be added to all the other
 // places a number is referred to across the whole site."
 //
-// This page was the hard case, because it is the one with TWO greens of its
-// own, and the collision is real rather than aesthetic: `td.beats` owns a
+// This page was the hard case, because it is the one with a green of its own
+// (two until 2026-10-09, when the green NUMBER was removed and the box became
+// "you would start him"), and the collision is real rather than aesthetic: `td.beats` owns a
 // cell's BACKGROUND with a `background` SHORTHAND at higher specificity than
 // `.heat-up-3`, so a tint on a shaded week cell would be ERASED — the page
 // would have made a claim it never drew. So the scale went where nothing is
 // competing for the channel, and what is asserted here is that split:
 //
 //   - the wire's Avg column IS coloured, per position, over the wire;
-//   - the wire's WEEK cells are NOT, and both greens are still there;
+//   - the wire's WEEK cells are NOT, and the green box is still there;
 //   - the Taken table's Avg AND week columns are coloured, per position (and,
 //     for the weeks, per week), which is new — that table carried no colour of
 //     any kind before this;
@@ -1055,7 +1056,7 @@ function checkHeat(c, d, scenario, note) {
   // ---- the wire: Avg, and since 2026-10-08 every week still to play --------
   // ("Available table future-week cells, position by week, the way the Taken
   // table already does it — the existing `hot` and `beats` marks must still
-  // read on top.") `td.beats` paints a background-COLOR now, so the tint, a
+  // read on top." `hot`, the green number, was removed 2026-10-09.) `td.beats` paints a background-COLOR now, so the tint, a
   // background-image, composes over it instead of being erased.
   const RANKED = /\b\d+(st|nd|rd|th) of \d+ /;
   if (wire.length > 2) {
@@ -1077,9 +1078,11 @@ function checkHeat(c, d, scenario, note) {
     c.ok('every coloured week cell’s preview says the position AND the week it was measured in',
       wkBad.length === 0, wkBad[0]);
   }
-  c.ok('and both greens are still on them',
-    wireWeeks.some((td) => /\bhot\b/.test(td.cls)) || wire.length === 0,
-    `${wireWeeks.filter((td) => /\bhot\b/.test(td.cls)).length} green-text cells`);
+  // Tim, 2026-10-09: "Remove the highlighting the actual number in green feature".
+  c.ok('and NOT ONE CELL in either table is a green number any more',
+    [...wireWeeks, ...takenWeeks].every((td) => !/\bhot\b/.test(td.cls)) &&
+    d.querySelectorAll('td.hot, .legend .hot, .hot-key').length === 0,
+    `${[...wireWeeks, ...takenWeeks].filter((td) => /\bhot\b/.test(td.cls)).length} green-text cells`);
   // THE POSITIVE ASSERTION COMES FIRST AND IS UNGUARDED. Everything below it
   // reads the colours that are there, so a page that drew none would simply
   // skip the lot and "pass" — which is exactly the vacuous green this suite
@@ -1165,9 +1168,10 @@ function checkHeat(c, d, scenario, note) {
     c.ok('and they are INSIDE “How to read this table”, where the method lives',
       wireBandsEl && !!wireBandsEl.closest('details.explain'),
       wireBandsEl ? 'no details.explain above it' : 'no #waiverHeatBands at all');
-    c.ok('the toggle says the week columns are on the scale, and how the two greens read on top of it',
+    c.ok('the toggle says the week columns are on the scale, and that the green box sits on top of it',
       /Each week cell is on the same scale, measured against the other free agents at his position in that same week/.test(note) &&
-      /shade with a ring round it/.test(note) && !/deliberately left off that scale/.test(note),
+      /The green box sits on top of it/.test(note) && !/two greens|green number/.test(note) &&
+      !/deliberately left off that scale/.test(note),
       note.slice(note.indexOf('And on the week columns'), note.indexOf('And on the week columns') + 500));
     c.ok('the note argues the pool: the wire at his position, not the whole league',
       /compared only with the other free agents in that same position/.test(note) &&
@@ -1182,7 +1186,7 @@ function checkHeat(c, d, scenario, note) {
     c.ok('AND SO ARE ITS WEEK COLUMNS, which carry no claim cue to collide with',
       takenWeeks.some((td) => /heat-(up|dn)-\d/.test(td.cls)),
       JSON.stringify(takenWeeks.map((td) => td.cls).slice(0, 5)));
-    c.ok('but NEITHER GREEN is on that table — nobody here can be claimed',
+    c.ok('but NO GREEN BOX is on that table — nobody here can be claimed',
       takenWeeks.every((td) => !/\b(hot|beats)\b/.test(td.cls)),
       JSON.stringify(takenWeeks.filter((td) => /\b(hot|beats)\b/.test(td.cls))
         .map((td) => td.cls).slice(0, 3)));
@@ -1284,8 +1288,8 @@ function checkHeat(c, d, scenario, note) {
         el && !el.hasAttribute('hidden'),
         d.getElementById('takenLegend').innerHTML.slice(0, 200));
     }
-    c.ok('and the claim-green chip beside it still says why NEITHER green is on this table',
-      /Neither claim green/.test(txt(d.getElementById('takenLegend'))),
+    c.ok('and the chip beside it still says why there is NO GREEN BOX on this table',
+      /No green box — nobody here can be claimed/.test(txt(d.getElementById('takenLegend'))),
       txt(d.getElementById('takenLegend')));
 
     const takenKeyEl = d.getElementById('takenHeatKey');
@@ -1454,8 +1458,9 @@ async function check(scenario, boot) {
       new RegExp(` · Week ${k('wk').week}\\b`).test(k('wk').said) && /Projected ?\d+\.\d/.test(k('wk').said) &&
       /Average free-agent \S+ ?\d+\.\d/.test(k('wk').said) &&
       /\d+(st|nd|rd|th) of \d+ free-agent \S+ this week$/.test(k('wk').said), k('wk').said);
-    c.ok('A SHADED CELL says whose number it beats: your worst man at the position, by name',
-      /your worst (QB|RB|WR|TE|K|DST|D\/ST) ?\d+\.\d/.test(k('beats').said), k('beats').said);
+    c.ok('A BOXED CELL says you would start him, and names the man of yours who would sit',
+      /You would start him ?Yes/.test(k('beats').said) && /\S he would sit ?\d+\.\d/.test(k('beats').said) &&
+      !/your worst|Worth starting/.test(k('beats').said), k('beats').said);
     c.ok('A PLAYED WEEK: "Projected" and "Scored", side by side',
       /Projected ?(\d+\.\d|—)/.test(k('past').said) && /Scored ?(\d+\.\d|—)/.test(k('past').said), k('past').said);
     c.ok('"Your QB2": your own men at that position, ranked by Avg',
