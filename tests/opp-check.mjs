@@ -233,12 +233,12 @@ function check(scenario, page, boot) {
       `rosters not asked for every week: ${calls.join(' | ')}`);
 
     ok(page.bars.length === 4, `${page.bars.length} bars, expected 4`);
-    // Hardest first.
+    // Luckiest (the easiest run of opponents) first — Tim, 2026-10-09.
     const values = page.bars.map((b) => b.value);
-    ok(values.every((v, i) => i === 0 || values[i - 1] >= v),
-      `bars not ordered hardest-first: ${values.join(', ')}`);
+    ok(values.every((v, i) => i === 0 || values[i - 1] <= v),
+      `bars not ordered easiest-first: ${values.join(', ')}`);
     ok(page.bars.map((b) => b.rank).join(',') === '1,2,3,4', 'bar ranks not 1..4');
-    ok(page.bars[0].name === 'Team 1' && page.bars[3].name === 'Team 4',
+    ok(page.bars[0].name === 'Team 4' && page.bars[3].name === 'Team 1',
       `bar order is ${page.bars.map((b) => b.name).join(' > ')}`);
 
     // Hand-computed averages. The table cell is the whole season; the bars are
@@ -256,13 +256,13 @@ function check(scenario, page, boot) {
     // Two weeks in that is Team 1 at 133.0, where the whole season says 122.0.
     ok(page.tile === `${REST[1].toFixed(1)} Team 1 · rest of season`,
       `the Hardest schedule tile reads "${page.tile}", the chart's top row is ${REST[1].toFixed(1)} Team 1`);
-    ok(Number(page.tile.split(' ')[0]) === page.bars[0].value,
-      `tile ${page.tile.split(' ')[0]} against the chart's top bar ${page.bars[0].value}`);
+    ok(Number(page.tile.split(' ')[0]) === page.bars[3].value,
+      `tile ${page.tile.split(' ')[0]} against the chart's bottom bar ${page.bars[3].value}`);
     // No gap is ever a signed zero.
     ok(page.bars.every((b) => !/^[-+−]0\.0$/.test(b.gap)), `a gap prints a signed zero: ${page.bars.map((b) => b.gap).join(' ')}`);
     // The record sits by the name.
     const recs = page.bars.map((b) => b.record).join(' ');
-    ok(recs === (scenario === 'mid' ? '0–2 1–1 1–1 2–0' : '0–0 0–0 0–0 0–0'), `records by the names: ${recs}`);
+    ok(recs === (scenario === 'mid' ? '2–0 1–1 1–1 0–2' : '0–0 0–0 0–0 0–0'), `records by the names: ${recs}`);
     for (const r of page.rows) {
       const id = Number(r.cells[0].replace('Team ', ''));
       ok(Math.abs(Number(r.cells[8]) - EXPECT[id]) < 0.05,
@@ -280,7 +280,7 @@ function check(scenario, page, boot) {
     // the EASIEST run of opponents carries the plus (Tim, 2026-10-05).
     const gaps = page.bars.map((b) => b.gap);
     const g = scenario === 'mid' ? '15.0' : '5.0';
-    ok(gaps[0] === `-${g}` && gaps[3] === `+${g}`, `gaps are ${gaps.join(' ')}`);
+    ok(gaps[0] === `+${g}` && gaps[3] === `-${g}`, `gaps are ${gaps.join(' ')}`);
 
     // THE BARS RUN FROM A ZERO LINE DOWN THE MIDDLE (Tim, 2026-10-08): the
     // printed gap is the bar. A harder schedule than the league's is a minus —
@@ -296,8 +296,8 @@ function check(scenario, page, boot) {
       const wide = 50 * Math.abs(gapNum[i]) / gapMax;
       ok(Math.abs(b.width - wide) < 0.06, `${b.name}: gap ${b.gap} is ${b.width}% wide, expected ${wide.toFixed(1)}%`);
     });
-    ok(page.bars[0].side === 'neg' && page.bars[0].width === 50 && page.bars[3].side === 'pos' && page.bars[3].width === 50,
-      `hardest and easiest: ${page.bars.map((b) => `${b.side}${b.width}`).join(',')} — should be neg50 … pos50`);
+    ok(page.bars[0].side === 'pos' && page.bars[0].width === 50 && page.bars[3].side === 'neg' && page.bars[3].width === 50,
+      `easiest and hardest: ${page.bars.map((b) => `${b.side}${b.width}`).join(',')} — should be pos50 … neg50`);
 
     // The owner's team (teamId 2 in the stub connection) is marked.
     ok(page.bars.some((b) => b.me && b.name === 'Team 2'), 'owner’s team not marked in the bars');
@@ -317,9 +317,9 @@ function check(scenario, page, boot) {
     const pop = page.pop;
     ok(pop, 'hovering the last figure opens nothing');
     if (pop) {
-      ok(pop.head === `Team 1 · ${said}`, `preview heading is "${pop.head}"`);
+      ok(pop.head === `Team 4 · ${said}`, `preview heading is "${pop.head}"`);
       ok(pop.body.length === (scenario === 'mid' ? 1 : 3), `${pop.body.length} fixtures in the preview`);
-      ok(pop.body.every((r) => /^\d+$/.test(r[0]) && /^Team [234]$/.test(r[1]) && /^\d+\.\d$/.test(r[2])),
+      ok(pop.body.every((r) => /^\d+$/.test(r[0]) && /^Team [123]$/.test(r[1]) && /^\d+\.\d$/.test(r[2])),
         `preview rows: ${JSON.stringify(pop.body)}`);
       const mean = pop.body.reduce((a, r) => a + Number(r[2]), 0) / pop.body.length;
       ok(Math.abs(mean - page.bars[0].value) < 0.06, `fixtures average ${mean}, the bar says ${page.bars[0].value}`);

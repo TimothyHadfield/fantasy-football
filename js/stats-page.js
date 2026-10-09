@@ -981,7 +981,7 @@ function oppRows(byTeam = state.oppProj && state.oppProj.byTeam) {
 const restRows = () => oppRows(state.oppProj && state.oppProj.rest ? state.oppProj.rest.byTeam : new Map());
 
 /**
- * The tile is the top row of the chart beside it: the hardest run of opponents
+ * The tile is the bottom row of the chart beside it: the hardest run of opponents
  * STILL TO PLAY (Tim, 2026-10-05: schedule luck is rest of season), and it says
  * so. It used to be the whole season's figure, so it read 127.5 for a team the
  * chart had at 127.8. Before a game is played the two are the same number.
@@ -1289,7 +1289,11 @@ function paintOppPanel(chart, note) {
     return;
   }
 
-  chart.innerHTML = oppBars(rows, data.rest.leagueAvg);
+  // LUCKIEST AT THE TOP. Tim, 2026-10-09: "list schedule luck in the stats menu
+  // from lowest to highest so the luckiest person is at the top, not the other
+  // way around." The rows come hardest first (the Hardest schedule tile reads
+  // the first), so the chart draws them the other way up.
+  chart.innerHTML = oppBars([...rows].reverse(), data.rest.leagueAvg);
   note.innerHTML = oppNote(rows, data);
 }
 
@@ -1334,7 +1338,8 @@ const zeroBarHtml = (b) => '<span class="bar zero">' +
   (b.side ? `<i class="${b.side}" style="width:${b.width.toFixed(1)}%"></i>` : '') + '</span>';
 
 /**
- * Ranked horizontal bars, hardest schedule first, each drawn from the zero
+ * Ranked horizontal bars, in the order given (the page gives the easiest
+ * schedule first), each drawn from the zero
  * line: the gap from the league average (see "bars from a zero line").
  *
  * Not charts.js's histogram, which scales from zero: ten averages that all land
