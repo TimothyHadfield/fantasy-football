@@ -131,6 +131,12 @@ function valueStub() {
   return v || null;
 }
 
+// WV_CLOUD=1 makes this the phone's synced copy (js/season.js `cloudSource`):
+// the page must then ask ESPN for nothing on Value's account (rule 20).
+export async function cloudSource() {
+  return process.env.WV_CLOUD === '1' ? { uid: 'stub-phone', leagueId: '99', season: 2026 } : null;
+}
+
 export async function fetchValueBase() {
   const v = valueStub();
   return (v && v.base) || null;

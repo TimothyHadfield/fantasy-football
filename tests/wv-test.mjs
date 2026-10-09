@@ -148,6 +148,140 @@ async function gainProbe({ document, window }) {
   return out;
 }
 
+// ------------------------------------------------------- Proj | Value (2026-10-09)
+//
+// Tim: "for all graphs or charts that show avg position's proj or value or
+// anything like that ... have a switch for that graph that also shows the data
+// as value rather than just total proj", and Value "displayed at the top of the
+// player's preview". The lines below are a league's frozen baseline in the shape
+// js/value.js `buildBase` writes; they sit inside the stub's projections
+// (QB 11.2–24, RB/WR 6.3–13.5, TE 4.2–9, K 5.6–12, DST 4.9–10.5), so every
+// position has men under the waiver line, between the lines and over both.
+const VALUE_BASE = {
+  v: 1,
+  setAt: Date.UTC(2026, 8, 29, 12),
+  week: 4,
+  lines: {
+    QB: { waiver: 14, starter: 18, agents: 3, starters: 10 },
+    RB: { waiver: 8, starter: 11, agents: 3, starters: 20 },
+    WR: { waiver: 8, starter: 11, agents: 3, starters: 20 },
+    TE: { waiver: 5.5, starter: 7.5, agents: 3, starters: 10 },
+    K: { waiver: 7, starter: 9.5, agents: 3, starters: 10 },
+    DST: { waiver: 6, starter: 8, agents: 3, starters: 10 },
+  },
+};
+// The weeks left in the stub's October: 4–13, no playoff weeks.
+const VALUE_WEEKS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+const valueEnv = (players = {}) => ({
+  FF_VALUE: JSON.stringify({ base: VALUE_BASE, weeks: VALUE_WEEKS, players }),
+});
+// A plain free agent (no injury tag, no missing week): Player 08 QB.
+const VALUE_MAN = 5008;
+
+/** A table as drawn: per row its position, its Avg cell and its week cells by week number. */
+function valueSnap(document, tableId) {
+  const table = document.getElementById(tableId);
+  const heads = [...table.querySelectorAll('thead th')].map(flat);
+  const col = (name) => heads.findIndex((h) => h === name || h.startsWith(`${name} `));
+  const posCol = col('Pos');
+  const avgCol = col('Avg');
+  const cellOf = (td) => (td ? {
+    text: flat(td).replace(/\s*[▲▼]$/, ''),
+    v: td.getAttribute('data-v'),
+    cls: td.getAttribute('class') || '',
+  } : null);
+  const rows = [...table.querySelectorAll('tbody tr[data-player]')].map((tr) => {
+    const weeks = {};
+    heads.forEach((h, i) => { if (/^\d+/.test(h)) weeks[parseInt(h, 10)] = cellOf(tr.children[i]); });
+    return {
+      id: Number(tr.getAttribute('data-player')),
+      mine: /\bmine\b/.test(tr.getAttribute('class') || ''),
+      pos: flat(tr.children[posCol]).replace(/\d+$/, ''),
+      avg: cellOf(tr.children[avgCol]),
+      weeks,
+    };
+  });
+  return { rows, posCol, avgCol };
+}
+
+const hiddenEl = (el) => !el || el.hidden === true || el.hasAttribute('hidden');
+const showState = (document) => ({
+  wire: !hiddenEl(document.getElementById('showCtl')),
+  taken: !hiddenEl(document.getElementById('takenShowCtl')),
+  on: ['showToggle', 'takenShowToggle'].map((id) => {
+    const b = document.querySelector(`#${id} button.on`);
+    return b ? b.getAttribute('data-show') : null;
+  }),
+});
+
+/** The glance line in a man's open Actual row; '' when there is none. */
+function glanceOf(document, tableId, pid) {
+  const row = document.querySelector(`#${tableId} tbody tr#p${pid}`);
+  const act = row && row.nextElementSibling;
+  const g = act && /\bact-row\b/.test(act.getAttribute('class') || '') ? act.querySelector('.act-glance') : null;
+  return g ? flat(g) : '';
+}
+
+function tapName(document, window, tableId, pid) {
+  const link = document.querySelector(`#${tableId} tbody tr#p${pid} a.pref`);
+  if (!link) return false;
+  const ev = new window.Event('click', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'button', { value: 0 });
+  link.dispatchEvent(ev);
+  return true;
+}
+
+/**
+ * The switch end to end on the wire: as it opens, on Value, a free agent's row
+ * opened, then the league read again with that row still open on Next 3 — the
+ * one case where his Value needs weeks the page is not showing.
+ */
+async function valueProbe({ document, window, waitFor }) {
+  const espn = await import('./wv-stub-espn.mjs');
+  const q = (s) => document.querySelector(s);
+  const click = (el) => el && el.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const out = { ctl: showState(document), proj: valueSnap(document, 'waiverTable') };
+  out.loadCalls = espn.calls.weeks.slice();
+
+  click(q('#showToggle button[data-show="value"]'));
+  out.switchCalls = espn.calls.weeks.length;
+  out.ctlValue = showState(document);
+  out.value = valueSnap(document, 'waiverTable');
+  out.prefs = globalThis.localStorage.getItem('ff.prefs');
+  out.note = flat(document.getElementById('waiverNote'));
+  out.takenNote = flat(document.getElementById('takenNote'));
+
+  // His row opened: selecting a man shows every week left, so his Value has
+  // every week it needs for no request of its own.
+  out.tapped = tapName(document, window, 'waiverTable', VALUE_MAN);
+  await waitFor();
+  await settle(30);
+  await waitFor();
+  out.glance = glanceOf(document, 'waiverTable', VALUE_MAN);
+  out.openCalls = espn.calls.weeks.slice();
+
+  // Back to Next 3 with the row still open, and the league read again: the
+  // table needs weeks 4–6 (and the played 1–3); his Value needs 4–13.
+  click(q('#spanFilter button[data-span="3"]'));
+  const waits = [];
+  document.dispatchEvent(new window.CustomEvent('ff:refresh', { detail: { waitUntil: (p) => waits.push(p) } }));
+  await Promise.all(waits);
+  await waitFor();
+  await settle(30);
+  await waitFor();
+  out.reGlance = glanceOf(document, 'waiverTable', VALUE_MAN);
+  out.reCalls = espn.calls.weeks.slice(out.openCalls.length);
+  out.reShown = [...document.querySelectorAll('#waiverTable thead th')].map(flat).filter((h) => /^\d+/.test(h));
+
+  // Put the page back for the checks every scenario shares.
+  click(q('#showToggle button[data-show="proj"]'));
+  click(q('#jumpNote button[data-clear]'));
+  click(q('#posFilter button[data-pos="ALL"]'));
+  click(q('#takenPosFilter button[data-pos="ALL"]'));
+  await waitFor();
+  globalThis.__wvValue = out;
+}
+
 const SCENARIOS = {
   demo: {
     label: '(a) demo mode, nothing connected',
@@ -617,6 +751,88 @@ const SCENARIOS = {
       out.picked = await gainProbe({ document, window, waitFor });
       out.spentAfter = spent();
       globalThis.__wvGain = out;
+    },
+  },
+  // PROJ | VALUE. The league's frozen lines arrive through the stub (FF_VALUE),
+  // in the shape js/season.js hands them over.
+  value: {
+    label: '(v) Proj | Value on the wire, and a free agent’s own Value',
+    stub: true,
+    env: valueEnv(),
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: valueProbe,
+  },
+  // The same, on the phone's synced copy: nothing is asked of ESPN for Value.
+  'value-cloud': {
+    label: '(v+) the synced copy: no request for a Value, a dash where it cannot be said',
+    stub: true,
+    env: { ...valueEnv(), WV_CLOUD: '1' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: valueProbe,
+  },
+  // No lines for this league: no switch, and a saved "Value" changes nothing.
+  'value-nobase': {
+    label: '(v−) no baseline: the switch is hidden and the page is as it was',
+    stub: true,
+    prefs: { 'waivers.source': 'live', 'waivers.show': 'value' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window, waitFor }) => {
+      const out = { ctl: showState(document), proj: valueSnap(document, 'waiverTable') };
+      out.note = flat(document.getElementById('waiverNote'));
+      tapName(document, window, 'waiverTable', VALUE_MAN);
+      await waitFor();
+      await settle(30);
+      await waitFor();
+      out.glance = glanceOf(document, 'waiverTable', VALUE_MAN);
+      const click = (el) => el && el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      click(document.querySelector('#jumpNote button[data-clear]'));
+      click(document.querySelector('#spanFilter button[data-span="3"]'));
+      click(document.querySelector('#posFilter button[data-pos="ALL"]'));
+      await waitFor();
+      globalThis.__wvValue = out;
+    },
+  },
+  // The league with squads: the Taken table on Value, your own rows on the
+  // wire, and a rostered man's Value from js/season.js on his glance line.
+  // 7399's Value is deliberately NOT what his 9.0 a week would give (0.5), so
+  // the glance line can only have read it from `fetchPlayerValues().lookup`.
+  'value-taken': {
+    label: '(v++) Proj | Value on the Taken table, and a rostered man’s own Value',
+    stub: true,
+    env: { ...valueEnv({ 7399: { position: 'WR', avg: 9.4, value: 0.7 } }), WV_TREND: '1' },
+    prefs: { 'waivers.source': 'live', 'waivers.show': 'value' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document, window, waitFor }) => {
+      const out = {
+        ctl: showState(document),
+        taken: valueSnap(document, 'takenTable'),
+        wire: valueSnap(document, 'waiverTable'),
+      };
+      const click = (el) => el && el.dispatchEvent(new window.Event('click', { bubbles: true }));
+      const glance = async (pid) => {
+        // Selecting a man narrows the table to his position: back to All first.
+        click(document.querySelector('#takenPosFilter button[data-pos="ALL"]'));
+        tapName(document, window, 'takenTable', pid);
+        await waitFor();
+        await settle(30);
+        await waitFor();
+        return glanceOf(document, 'takenTable', pid);
+      };
+      out.known = await glance(7399);
+      out.unknown = await glance(4431459);
+      click(document.querySelector('#takenShowToggle button[data-show="proj"]'));
+      click(document.querySelector('#takenPosFilter button[data-pos="ALL"]'));
+      out.back = showState(document);
+      out.takenProj = valueSnap(document, 'takenTable');
+      out.prefs = globalThis.localStorage.getItem('ff.prefs');
+      click(document.querySelector('#jumpNote button[data-clear]'));
+      click(document.querySelector('#spanFilter button[data-span="3"]'));
+      click(document.querySelector('#posFilter button[data-pos="ALL"]'));
+      click(document.querySelector('#takenPosFilter button[data-pos="ALL"]'));
+      await waitFor();
+      globalThis.__wvValue = out;
     },
   },
   'live-empty': {
@@ -1365,7 +1581,7 @@ async function check(scenario, boot) {
   // `trend` rosters one man per position, and a group of one has nothing to be
   // coloured against — the scale is not what that scenario is about.
   // (`gain-noteam` is the same stub league.)
-  if (scenario !== 'trend' && scenario !== 'gain-noteam') checkHeat(c, d, scenario, note);
+  if (scenario !== 'trend' && scenario !== 'gain-noteam' && scenario !== 'value-taken') checkHeat(c, d, scenario, note);
 
   // ---- (a) demo ------------------------------------------------------------
   if (scenario === 'demo') {
@@ -1429,7 +1645,7 @@ async function check(scenario, boot) {
     // of the scores in his Actual row (weeks 1–3); a sample squad man's line is
     // re-derived from the week-4 sample rosters.
     {
-      const RX = /^Avg (\d+\.\d|—) · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #(\d+)$/;
+      const RX = /^(?:Value (?:\d+\.\d|—) · )?Avg (\d+\.\d|—) · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #(\d+)$/;
       const W = d.defaultView;
       const press = (el) => el.dispatchEvent(new W.Event('click', { bubbles: true }));
       const tap = (el) => {
@@ -1484,11 +1700,25 @@ async function check(scenario, boot) {
       const now = generateDemoWeekRosters(4).teams.flatMap((t) => t.players);
       const f = (v) => (typeof v === 'number' ? v.toFixed(1) : '—');
       const taken = takenIds.map((pid) => open('takenTable', 'takenPosFilter', pid));
+      // Value first (Tim, 2026-10-09): the number js/season.js holds for him —
+      // the same module instance the page asked, so the same answer.
+      const seasonReal = await import(pathToFileURL(path.join(REPO, 'js/season.js')).href);
+      const held = await seasonReal.fetchPlayerValues({ demo: true });
+      const lead = (pid) => {
+        const v = held.lookup(pid);
+        return `Value ${typeof v === 'number' ? v.toFixed(1) : '—'} · `;
+      };
       const want = (pid) => {
         const p = now.find((x) => x.playerId === pid);
-        return p ? `Avg ${f(p.seasonAvg)} · Proj ${f(p.projected)} · ${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}` : null;
+        return p ? `${lead(pid)}Avg ${f(p.seasonAvg)} · Proj ${f(p.projected)} · ${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}` : null;
       };
-      c.ok('GLANCE: a rostered man’s Actual row carries his week-4 sample numbers',
+      c.ok('GLANCE: the sample league has lines, and its rostered men have Values over zero',
+        takenIds.some((pid) => held.lookup(Number(pid)) > 0), JSON.stringify(takenIds.slice(0, 4).map((pid) => held.lookup(Number(pid)))));
+      // A free agent, now that the Values have landed: his own leads his line.
+      const again = open('waiverTable', 'posFilter', ids('waiverTable')[0]);
+      c.ok('GLANCE: a sample free agent’s Actual row leads with his Value',
+        /^Value \d+\.\d · Avg /.test(again.text), again.text);
+      c.ok('GLANCE: a rostered man’s Actual row leads with his Value, then his week-4 sample numbers',
         taken.length >= 5 && taken.every((s) => s.under && s.text === want(s.pid)),
         `${taken.length}; ${JSON.stringify(taken.find((s) => !s.under || s.text !== want(s.pid)))} want ${
           JSON.stringify(taken.map((s) => want(s.pid)).slice(0, 1))}`);
@@ -2060,7 +2290,7 @@ async function check(scenario, boot) {
       note.slice(-900));
     c.ok('and the Taken table’s explanation says it too',
       /re-scored with your league’s rules/.test(txt($('takenNote'))), txt($('takenNote')).slice(-600));
-  } else if (scenario !== 'live-empty' && scenario !== 'gain-noteam') {
+  } else if (scenario !== 'live-empty' && scenario !== 'gain-noteam' && scenario !== 'value-taken') {
     // Every other scenario is stub ids or the invented demo: nobody is in the
     // preseason copy, so there must be no arrow and no key for one.
     c.ok('no preseason arrow for a man the copy has never heard of',
@@ -2069,6 +2299,153 @@ async function check(scenario, boot) {
     c.ok('and no key for an arrow that is not there',
       ['waiverTrendKey', 'takenTrendKey'].every((id) => !$(id) || $(id).hasAttribute('hidden')),
       ['waiverTrendKey', 'takenTrendKey'].map((id) => $(id) && txt($(id))).join(' | '));
+  }
+
+  // ---- PROJ | VALUE (Tim, 2026-10-09) --------------------------------------
+  if (scenario === 'value' || scenario === 'value-cloud') {
+    const w = globalThis.__wvValue || {};
+    const espn = await import('./wv-stub-espn.mjs');
+    const { valueOf, restAvg } = await import(pathToFileURL(path.join(REPO, 'js/value.js')).href);
+    const f1 = (n) => n.toFixed(1);
+    const projRows = new Map(((w.proj || {}).rows || []).map((r) => [r.id, r]));
+    const rows = ((w.value || {}).rows || []).filter((r) => !r.mine);
+    c.ok('VALUE: with lines for the league the switch is shown on both tables, on Proj',
+      w.ctl && w.ctl.wire && w.ctl.taken && w.ctl.on.join() === 'proj,proj', JSON.stringify(w.ctl));
+    const man = projRows.get(VALUE_MAN);
+    c.ok('VALUE: on Proj a cell is still ESPN’s projection',
+      man && man.weeks[4].text === f1(espn.expected(VALUE_MAN, 4)),
+      `${man && man.weeks[4].text} want ${f1(espn.expected(VALUE_MAN, 4))}`);
+    c.ok('VALUE: loading the page bought nothing for it: the three weeks shown and the three played',
+      JSON.stringify((w.loadCalls || []).slice().sort((a, b) => a - b)) === '[1,2,3,4,5,6]', JSON.stringify(w.loadCalls));
+    c.ok('VALUE: the switch is a repaint, no request', w.switchCalls === (w.loadCalls || []).length,
+      `${(w.loadCalls || []).length} -> ${w.switchCalls}`);
+    c.ok('VALUE: pressing it lights Value in both toolbars', w.ctlValue && w.ctlValue.on.join() === 'value,value',
+      JSON.stringify(w.ctlValue));
+    c.ok('VALUE: and the choice is remembered', JSON.parse(w.prefs || '{}')['waivers.show'] === 'value', w.prefs);
+
+    let converted = 0;
+    let zeros = 0;
+    let kept = 0;
+    const wrong = [];
+    for (const r of rows) {
+      for (const wk of [4, 5, 6]) {
+        const x = espn.expected(r.id, wk);
+        const cell = r.weeks[wk];
+        if (typeof x === 'number' && x > 0) {
+          const want = valueOf(VALUE_BASE, r.pos, x);
+          converted++;
+          if (want === 0) zeros++;
+          if (!cell || cell.text !== f1(want) || Number(cell.v) !== want) wrong.push([r.id, wk, x, want, cell && cell.text, cell && cell.v]);
+        } else {
+          kept++;
+          const was = projRows.get(r.id) && projRows.get(r.id).weeks[wk];
+          if (!cell || !was || cell.text !== was.text) wrong.push([r.id, wk, x, 'kept', cell && cell.text, was && was.text]);
+        }
+      }
+    }
+    c.ok('VALUE: every projected week cell is exactly valueOf(lines, his position, that projection)',
+      rows.length === 60 && converted >= 170 && wrong.length === 0,
+      `${rows.length} rows, ${converted} cells; ${JSON.stringify(wrong.slice(0, 3))}`);
+    c.ok('VALUE: a Bye, a blank and a missing week stay what they were', kept >= 3 && wrong.length === 0, `${kept}`);
+    const low = rows.find((r) => r.pos === 'QB' && espn.expected(r.id, 4) > 0 && espn.expected(r.id, 4) < VALUE_BASE.lines.QB.waiver);
+    c.ok('VALUE: a free agent projected under the waiver line shows 0.0, never a negative',
+      zeros >= 20 && low && low.weeks[4].text === '0.0' &&
+      rows.every((r) => [4, 5, 6].every((wk) => !/^[-−]/.test(r.weeks[wk].text))),
+      `${zeros} zeros; ${low && JSON.stringify(low.weeks[4])}`);
+    const avgWant = (r) => {
+      const vs = [4, 5, 6].map((wk) => espn.expected(r.id, wk)).filter((x) => typeof x === 'number' && x > 0)
+        .map((x) => valueOf(VALUE_BASE, r.pos, x));
+      return vs.length ? Math.round((vs.reduce((a, b) => a + b, 0) / vs.length) * 10) / 10 : null;
+    };
+    const avgBad = rows.filter((r) => {
+      const want = avgWant(r);
+      return want === null ? r.avg.text !== '—' : r.avg.text !== f1(want) || Number(r.avg.v) !== want;
+    });
+    c.ok('VALUE: Avg is the mean of the Values shown', rows.length === 60 && avgBad.length === 0,
+      JSON.stringify(avgBad.slice(0, 2).map((r) => [r.id, r.avg, avgWant(r)])));
+    const order = ordered(rows.map((r) => (r.avg.v === null ? null : Number(r.avg.v))), false);
+    const projOrder = [...projRows.keys()].join();
+    c.ok('VALUE: the table is sorted by the Avg shown, so its order is not the Proj order',
+      order.monotonic && order.nullsLast && rows.map((r) => r.id).join() !== projOrder,
+      JSON.stringify(rows.slice(0, 6).map((r) => r.avg.v)));
+    c.ok('VALUE: both tucked notes say what Value is',
+      /Points a week over the waiver line at his position/.test(w.note || '') &&
+      /Points a week over the waiver line at his position/.test(w.takenNote || ''),
+      (w.note || '').slice(-300));
+
+    // A free agent's own Value: his average over the weeks left, as a Value.
+    const byWeek = {};
+    for (const wk of VALUE_WEEKS) byWeek[wk] = espn.expected(VALUE_MAN, wk);
+    const own = valueOf(VALUE_BASE, 'QB', restAvg(byWeek, VALUE_WEEKS, null));
+    c.ok('GLANCE: a free agent’s open row leads with his Value over the weeks left',
+      own > 0 && new RegExp(`^Value ${f1(own).replace('.', '\\.')} · Avg `).test(w.glance || ''),
+      `${w.glance} want Value ${f1(own)}`);
+    const opened = (w.openCalls || []).slice().sort((a, b) => a - b);
+    // Selecting a man shows every week left (4–13 and the playoff weeks 14–16).
+    c.ok('GLANCE: and that cost no request of its own — each week on screen asked for once',
+      JSON.stringify(opened) === '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]', JSON.stringify(w.openCalls));
+    const re = (w.reCalls || []).slice().sort((a, b) => a - b);
+    c.ok('the league read again shows Next 3', JSON.stringify(w.reShown) === '["1","2","3","4","5","6"]',
+      JSON.stringify(w.reShown));
+    if (scenario === 'value') {
+      c.ok('ON THE LAPTOP: an open row on Next 3 buys the weeks his Value still needs, once each',
+        JSON.stringify(re) === '[1,2,3,4,5,6,7,8,9,10,11,12,13]', JSON.stringify(w.reCalls));
+      c.ok('ON THE LAPTOP: and his Value is the same number again',
+        (w.reGlance || '').startsWith(`Value ${f1(own)} · Avg `), w.reGlance);
+    } else {
+      c.ok('ON THE SYNCED COPY: nothing is asked of ESPN for a Value — only the weeks on screen',
+        JSON.stringify(re) === '[1,2,3,4,5,6]', JSON.stringify(w.reCalls));
+      c.ok('ON THE SYNCED COPY: his Value is a dash, not a guess from three weeks',
+        (w.reGlance || '').startsWith('Value — · Avg '), w.reGlance);
+    }
+  }
+
+  if (scenario === 'value-nobase') {
+    const w = globalThis.__wvValue || {};
+    const espn = await import('./wv-stub-espn.mjs');
+    const man = ((w.proj || {}).rows || []).find((r) => r.id === VALUE_MAN);
+    c.ok('NO LINES: the switch is hidden on both tables', w.ctl && !w.ctl.wire && !w.ctl.taken, JSON.stringify(w.ctl));
+    c.ok('NO LINES: a saved "Value" still shows ESPN’s projection',
+      man && man.weeks[4].text === espn.expected(VALUE_MAN, 4).toFixed(1),
+      `${man && man.weeks[4].text} want ${espn.expected(VALUE_MAN, 4).toFixed(1)}`);
+    c.ok('NO LINES: the glance line is the one it always was', /^Avg \S+ · Proj \S+ · QB /.test(w.glance || '') && !/Value/.test(w.glance || ''), w.glance);
+    c.ok('NO LINES: and the note says nothing about Value', !/waiver line/.test(w.note || ''), (w.note || '').slice(-200));
+  }
+
+  if (scenario === 'value-taken') {
+    const w = globalThis.__wvValue || {};
+    const { valueOf } = await import(pathToFileURL(path.join(REPO, 'js/value.js')).href);
+    const { TREND_SQUADS } = await import('./wv-stub-season.mjs');
+    const f1 = (n) => n.toFixed(1);
+    c.ok('TAKEN: a saved "Value" opens both tables on Value', w.ctl && w.ctl.wire && w.ctl.taken && w.ctl.on.join() === 'value,value',
+      JSON.stringify(w.ctl));
+    const men = TREND_SQUADS.flatMap((t) => t.players);
+    const rows = (w.taken || {}).rows || [];
+    const bad = [];
+    for (const m of men) {
+      const r = rows.find((x) => x.id === m.playerId);
+      const want = f1(valueOf(VALUE_BASE, m.position, m.flat));
+      if (!r || r.avg.text !== want || ![4, 5, 6].every((wk) => r.weeks[wk].text === want)) {
+        bad.push([m.name, want, r && r.avg.text, r && r.weeks[4].text]);
+      }
+    }
+    c.ok('TAKEN: every rostered man’s week cells and Avg are valueOf(lines, his position, his projection)',
+      men.length === 4 && bad.length === 0, JSON.stringify(bad));
+    const stub = rows.find((x) => x.id === 7399);
+    c.ok('TAKEN: by hand — a WR at 9.0 with lines 8 / 11 is half of the point over the waiver line, 0.5',
+      stub && stub.weeks[4].text === '0.5' && stub.avg.text === '0.5', JSON.stringify(stub && [stub.weeks[4], stub.avg]));
+    const mine = ((w.wire || {}).rows || []).find((r) => r.mine && r.id === 2985659);
+    c.ok('TAKEN: your own row on the wire is on Value too (a K at 11.0 with lines 7 / 9.5: 2.8)',
+      mine && mine.weeks[4].text === f1(valueOf(VALUE_BASE, 'K', 11)) && mine.weeks[4].text === '2.8',
+      JSON.stringify(mine && mine.weeks[4]));
+    c.ok('GLANCE: a rostered man’s open row leads with the Value js/season.js holds for him',
+      /^Value 0\.7 · Avg /.test(w.known || ''), w.known);
+    c.ok('GLANCE: a rostered man it holds none for gets a dash', /^Value — · Avg /.test(w.unknown || ''), w.unknown);
+    const back = ((w.takenProj || {}).rows || []).find((x) => x.id === 7399);
+    c.ok('TAKEN: back on Proj the cell is his projection again, and that is remembered',
+      back && back.weeks[4].text === '9.0' && w.back.on.join() === 'proj,proj' &&
+      JSON.parse(w.prefs || '{}')['waivers.show'] === 'proj',
+      `${back && back.weeks[4].text} ${JSON.stringify(w.back)} ${w.prefs}`);
   }
 
   // ---- the summary strip ---------------------------------------------------
