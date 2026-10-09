@@ -104,6 +104,17 @@ async function boot({ store = {}, stubs = true } = {}) {
       mineHead: [...board.querySelectorAll('thead th.dr-mine')].map((th) => th.dataset.team),
       mineCells: board.querySelectorAll('tbody td.dr-mine').length,
       mineTeams: [...new Set([...board.querySelectorAll('tbody td.dr-mine')].map((td) => td.dataset.team))],
+      // THE BOX SWITCH ("Drafted" / "Own now"), and the cells boxed one by one.
+      box: $('boxToggle') ? {
+        hidden: $('boxToggle').hidden,
+        labels: [...$('boxToggle').querySelectorAll('button')].map((b) => [b.dataset.box, text(b)]),
+        on: [...$('boxToggle').querySelectorAll('button.on')].map((b) => b.dataset.box),
+      } : null,
+      ownPids: [...board.querySelectorAll('tbody td.dr-own')].map((td) => (td.querySelector('.dr-why') ? td.querySelector('.dr-why').dataset.pid : null)),
+      ownOther: board.querySelectorAll('.dr-own:not(td.dr-cell)').length,
+      boardOwn: board.classList.contains('dr-own-on'),
+      // Every cell of the board as drawn, the box classes left out: flipping the switch must change none of it.
+      boardHtml: board.innerHTML.replace(/ dr-(?:mine|own)\b/g, ''),
       cells: cells.map((td) => ({
         team: td.dataset.team,
         pid: td.querySelector('.dr-why').dataset.pid,
@@ -415,12 +426,74 @@ const CHILDREN = {
     // The other view, and back.
     p.fire(p.$('compareToggle').querySelector('button[data-compare="pre"]'), 'click');
     const pre = p.read();
+    // In that view a number's preview carries his own preseason Value.
+    const whyPre = p.document.querySelector('#teamTable tbody .dr-why');
+    p.fire(whyPre, 'mouseover');
+    const prePop = p.read().pop;
+    const prePopPid = whyPre.dataset.pid;
+    p.fire(whyPre, 'mouseout');
     p.fire(p.$('compareToggle').querySelector('button[data-compare="now"]'), 'click');
     const back = p.read();
     return {
-      ok, cold, first, pop, popPid, headCard, cards, seven, pre, back,
+      ok, cold, first, pop, popPid, headCard, cards, seven, pre, back, prePop, prePopPid,
       fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
     };
+  },
+
+  // WHOSE MEN ARE BOXED: the column a team drafted, or the men it owns now
+  // (Tim, 2026-10-09: "make a switch that instead boxes all the players that
+  // you currently own. Nothing else changes except the white boarders").
+  // Team 3 on the real league: 12 of its 17 picks still its own, 3 dropped, 2 on
+  // other squads, and one man another team drafted.
+  async own() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', 'draft.team.1241838-2026': 3 }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const cold = p.calls();
+    const click = (sel) => p.fire(p.document.querySelector(sel), 'click');
+    const prefs = () => JSON.parse(p.map.get('ff.prefs') || '{}');
+    const drafted = p.read();
+    click('#boxToggle button[data-box="own"]');
+    const own = p.read();
+    const prefsOwn = prefs();
+    const afterSwitch = p.calls();
+    // Another team, by the picker and then by the board's heading: the boxes follow.
+    p.$('teamSelect').value = '1';
+    p.fire(p.$('teamSelect'), 'change');
+    const one = p.read();
+    click('#draftBoard thead button[data-team="3"]');
+    p.fire(p.document.body, 'keydown', { key: 'Escape' });
+    const three = p.read();
+    // The other comparison redraws the board: the boxes are the same men.
+    click('#compareToggle button[data-compare="pre"]');
+    const pre = p.read();
+    click('#compareToggle button[data-compare="now"]');
+    // To the sample and back: still on.
+    click('#sourceToggle button[data-src="demo"]');
+    await p.settle('demo');
+    const sample = p.read();
+    click('#sourceToggle button[data-src="live"]');
+    await p.settle('live');
+    const again = p.read();
+    click('#boxToggle button[data-box="drafted"]');
+    const back = p.read();
+    return {
+      ok, cold, afterSwitch, warm: p.calls(), drafted, own, one, three, pre, sample, again, back, prefsOwn, prefsBack: prefs(),
+      fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
+    };
+  },
+
+  // …AND REMEMBERED: a page opened with the choice stored.
+  async ownKept() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', 'draft.team.1241838-2026': 3, 'draft.box': 'own' }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    return { ok, page: p.read(), errors: p.errors };
+  },
+
+  // A LEAGUE THAT HAS NOT DRAFTED (DR_EMPTY=1): nothing to box.
+  async empty() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', 'draft.box': 'own' }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    return { ok, page: p.read(), compareHidden: p.$('compareToggle').hidden, errors: p.errors };
   },
 
   // THE PHONE'S SYNCED COPY (DR_CLOUD=1): there is no draft in it.
@@ -770,6 +843,7 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
       ['Biggest reach', signed(t8.miss.preDiff), String(t8.miss.playerId)],
     ], 'pre: the two tiles are the team’s ends on this difference');
     ok(/ESPN ranked/.test(r.pre.note) && !/drafted again today/.test(r.pre.note), 'pre: how it works explains Pre, not Now', r.pre.note);
+    run.plainPreNote = r.pre.note;
 
     const top = byId.get(r.popPid);
     eq(r.pop && r.pop.rows, [
@@ -873,8 +947,108 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq(r.pre.cells.filter((c) => c.d !== signed(byId.get(c.pid).preDiff)).slice(0, 3), [], 'value: "vs preseason rank" is still drafted-at less the preseason place');
     eq([r.pre.tableHeads, r.pre.tiles.map((t) => t.k)], [['Player', 'Paid', 'Rank', 'Pre', '+/−'], ['Biggest slide', 'Biggest reach']], 'value: with its own column and tiles');
     ok(/ESPN ranked/.test(r.pre.note) && !/smoothed/.test(r.pre.note), 'value: and its own words');
-    eq(r.pre.totalRow, tot, 'value: the totals stay over that view too');
-    eq([r.back.cells, r.back.totalRow], [f.cells, tot], 'value: and the switch comes back to Value');
+    // ITS ROW OF TOTALS adds up each man's OWN preseason Value (Tim, 2026-10-09:
+    // "for the "vs preseason rank" setting, put the value at the top … as what
+    // it was proj to be based on preseason predictions (which is different than
+    // the preseason expected value we talked about before)").
+    const VV = await import(moduleUrl('js/value.js'));
+    const preTotals = R.teamValues(rv.rows, 'valuePre');
+    const byHand = (id) => Math.round(rv.rows.filter((x) => x.teamId === id)
+      .reduce((a, x) => a + (VAL.BASE.lines[x.position] ? VV.valueOf(VAL.BASE, x.position, VAL.preOf(x.playerId)) ?? 0 : 0), 0) * 10) / 10;
+    const pt = r.pre.totalRow;
+    eq(pt && [pt.index, pt.label], [0, 'Value'], 'value, pre: the row of totals stays where it was, under the same label');
+    eq(pt && pt.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), byHand(id).toFixed(1)]),
+      'value, pre: each team’s total is the sum of its seventeen men’s own preseason Values');
+    eq(draft.order.map((id) => preTotals.get(id)), draft.order.map(byHand), 'value, pre: (which is what js/draft-review.js adds up)');
+    ok(pt && pt.cells.every((c, i) => c.v !== tot.cells[i].v), 'value, pre: and every one differs from the total today', pt && pt.cells.map((c) => c.v).join(' '));
+    const lineSum = (id) => Math.round(rv.rows.filter((x) => x.teamId === id).reduce((a, x) => a + x.expected, 0) * 10) / 10;
+    ok(pt && pt.cells.some((c) => c.v !== lineSum(Number(c.team)).toFixed(1)), 'value, pre: nor is it the smoothed line’s expected value added up');
+    const preSorted = [...preTotals.entries()].sort((a, b) => b[1] - a[1]);
+    const preHeat = (id) => pt.cells.find((c) => c.team === String(id)).heat;
+    ok(pt && /^heat-up/.test(preHeat(preSorted[0][0])) && /^heat-dn/.test(preHeat(preSorted[9][0])), 'value, pre: coloured on the totals shown — the best preseason total green, the worst red', pt && pt.cells.map((c) => c.heat).join(' '));
+    ok(preSorted[0][0] !== sorted[0][0] || preSorted[9][0] !== sorted[9][0], 'value, pre: (the two rankings of teams are not the same one)');
+    ok(/Value on the board adds up each drafted player’s preseason Value\./.test(r.pre.note), 'value, pre: how it works says what the row adds up', r.pre.note);
+    ok(run.plainPreNote && !/preseason Value/.test(run.plainPreNote), 'value, pre: and says nothing of it for a league with no lines');
+    const ptop = byId.get(r.prePopPid);
+    eq(r.prePop && r.prePop.rows, [
+      ['Paid', `$${ptop.bid}`], ['Price rank', String(ptop.at)], ...(ptop.keeper ? [['Keeper', 'Yes']] : []),
+      ['ESPN preseason rank', String(ptop.espnRank)], ['Among players drafted', String(ptop.pre)],
+      ['Preseason value', ptop.valuePre.toFixed(1)],
+      [ptop.preDiff > 0 ? 'Later than ranked' : ptop.preDiff < 0 ? 'Earlier than ranked' : 'As ranked', signed(ptop.preDiff)],
+    ], 'value, pre: a number’s preview carries his own preseason Value');
+    eq([r.back.cells, r.back.totalRow], [f.cells, tot], 'value: and the switch comes back to Value, its totals with it');
+  }
+}
+
+// ------------------------------------------------- drafted, or owned now
+// Tim, 2026-10-09: "In the draft room right now there's a white highlighted box
+// around the players you drafted which is just one column. Could you make a
+// switch that instead boxes all the players that you currently own. Nothing
+// else changes except the white boarders the highlight the players."
+{
+  const VAL = await import('./draft-stub-value.mjs');
+  const draft = R.parseDraft(RAW);
+  const draftedBy = (id) => draft.picks.filter((p) => p.teamId === id).map((p) => String(p.playerId));
+  const ownedBy = (id) => draft.picks.filter((p) => FX.players[p.playerId] && FX.players[p.playerId].onTeamId === id).map((p) => String(p.playerId));
+  const sortS = (a) => [...a].sort();
+  const r = run('own', { FF_VALUE: JSON.stringify(VAL.VALUES) });
+  ok(!r.boot, 'own: boots', r.boot);
+  if (!r.boot) {
+    const d = r.drafted;
+    const o = r.own;
+    ok(r.ok, 'own: settles on the league');
+    eq([r.errors, r.fetches], [[], []], 'own: no errors, and nothing went to ESPN around the stubs');
+    // (The fixture is the real league: team 3 drafted 17, holds 12 of them and one man another team drafted.)
+    const mine3 = draftedBy(3);
+    const own3 = ownedBy(3);
+    const got = own3.filter((pid) => !mine3.includes(pid));
+    const gone = mine3.filter((pid) => !own3.includes(pid));
+    const dropped = gone.filter((pid) => !(FX.players[pid].onTeamId > 0));
+    eq([mine3.length, own3.length, got.length, gone.length, dropped.length], [17, 13, 1, 5, 3], 'own: (team 3 — 17 drafted, 13 of the drafted held now, one of them another team’s pick, five of its own gone, three of those dropped)');
+
+    // DEFAULT: the column, exactly as before.
+    eq(d.box, { hidden: false, labels: [['drafted', 'Drafted'], ['own', 'Own now']], on: ['drafted'] }, 'own: the switch is on the page, on Drafted');
+    eq([d.team, d.mineHead, d.mineTeams, d.mineCells], ['3', ['3'], ['3'], 18], 'own, Drafted: the team’s column is boxed as it was — its total and seventeen rounds');
+    eq([d.ownPids, d.ownOther, d.boardOwn], [[], 0, false], 'own, Drafted: and no cell is boxed on its own');
+
+    // OWN NOW: the men on its squad today, wherever they were drafted.
+    eq(o.box.on, ['own'], 'own: the switch moves');
+    eq(sortS(o.ownPids), sortS(own3), 'own, Own now: exactly the thirteen men on team 3’s squad today are boxed');
+    ok(got.every((pid) => o.ownPids.includes(pid)) && o.cells.find((c) => c.pid === got[0]).team !== '3', 'own, Own now: the man another team drafted among them, in that team’s column', got);
+    ok(gone.every((pid) => !o.ownPids.includes(pid)), 'own, Own now: and not the three it dropped nor the two now on other squads', gone);
+    eq([o.mineCells, o.mineTeams, o.ownOther, o.boardOwn], [0, [], 0, true], 'own, Own now: the column is not boxed, nor its total, nor an empty cell');
+    eq([o.mineHead, o.team], [['3'], '3'], 'own, Own now: the team’s heading keeps its mark, and it is still the team picked');
+    // NOTHING ELSE CHANGES.
+    eq(o.cells, d.cells, 'own: every cell’s text and colour is the same in the two states');
+    eq(o.boardHtml === d.boardHtml, true, 'own: the board is the same board to the letter, the box classes apart');
+    eq([o.totalRow.cells.map((c) => [c.team, c.v, c.heat]), o.table, o.tiles, o.note, o.sub],
+      [d.totalRow.cells.map((c) => [c.team, c.v, c.heat]), d.table, d.tiles, d.note, d.sub], 'own: the totals, the team’s table, its tiles and the words are untouched');
+    eq([r.afterSwitch, r.warm.draft, r.warm.players, r.warm.ranks], [r.cold, r.cold.draft, r.cold.players, r.cold.ranks], 'own: the switch asks nothing of anybody, and nor does the rest');
+    eq(r.prefsOwn['draft.box'], 'own', 'own: the choice is remembered');
+
+    // ANOTHER TEAM: the boxes follow it.
+    eq([r.one.team, sortS(r.one.ownPids), r.one.mineCells, r.one.mineHead], ['1', sortS(ownedBy(1)), 0, ['1']], 'own: picking team 1 boxes its men instead');
+    eq(r.one.cells, d.cells, 'own: and the board does not change');
+    eq([r.three.team, sortS(r.three.ownPids)], ['3', sortS(own3)], 'own: a heading on the board picks its team, boxes and all');
+    eq([sortS(r.pre.ownPids), r.pre.mineCells, r.pre.box.on], [sortS(own3), 0, ['own']], 'own: the other comparison redraws the board with the same men boxed');
+    // (The sample's squads change hands too: by week 14 a team holds some of its sixteen picks, not all.)
+    ok(r.sample.box.on[0] === 'own' && r.sample.ownPids.length > 0 && r.sample.ownPids.length < 16 && r.sample.mineCells === 0,
+      'own: on the sample, the men its picked team still holds', [r.sample.box.on, r.sample.ownPids.length, r.sample.mineCells]);
+    eq([sortS(r.again.ownPids), r.again.box.on, r.again.mineCells], [sortS(own3), ['own'], 0], 'own: and back on the league it is still Own now');
+    eq([r.back.box.on, r.back.ownPids, r.back.mineCells, r.back.mineTeams, r.back.boardOwn], [['drafted'], [], 18, ['3'], false], 'own: Drafted puts the column’s box back');
+    eq(r.prefsBack['draft.box'], undefined, 'own: which is not stored, being the default');
+  }
+  const k = run('ownKept', { FF_VALUE: JSON.stringify(VAL.VALUES) });
+  ok(!k.boot, 'own, kept: boots', k.boot);
+  if (!k.boot) {
+    eq([k.ok, k.errors, k.page.box && k.page.box.on, sortS(k.page.ownPids), k.page.mineCells], [true, [], ['own'], sortS(ownedBy(3)), 0],
+      'own, kept: a page opened with the choice stored opens on Own now');
+  }
+  const e = run('empty', { DR_EMPTY: '1' });
+  ok(!e.boot, 'empty: boots', e.boot);
+  if (!e.boot) {
+    eq([e.ok, e.errors, e.page.status, e.page.mainHidden, e.compareHidden], [true, [], 'No draft yet.', true, true], 'empty: a league that has not drafted shows no draft');
+    eq(e.page.box && e.page.box.hidden, true, 'empty: and no box switch');
   }
 }
 

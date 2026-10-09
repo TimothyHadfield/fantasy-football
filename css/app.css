@@ -2012,3 +2012,19 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
 .dr-board tr.dr-total td.dr-tot { border-left: 1px solid var(--line); }
 .dr-board tr.dr-total td.dr-rd { font-size: 9.5px; font-weight: 400; padding-left: 1px; padding-right: 1px; }
 /* ============================================== end of the draft's value row */
+/* ============ DRAFT BOARD: DRAFTED / OWN NOW (2026-10-09)
+ * Tim: "make a switch that instead boxes all the players that you currently
+ * own. Nothing else changes except the white boarders the highlight the
+ * players." On "Own now" each man the picked team holds today is boxed where
+ * he sits on the board, in the column box's own colour and weight. An inset
+ * shadow, as the column's is, so no cell changes size and the red/green tint
+ * is left alone. The team's heading keeps its mark, closed underneath now that
+ * no column hangs from it. The switch sits beside the panel's title at its own
+ * width (on a phone a segmented control is otherwise a full-width grid: this
+ * one keeps its two buttons side by side, as wide as their words). */
+.dr-box { flex: 0 0 auto; width: auto; grid-template-columns: repeat(2, auto); }
+.dr-box button { white-space: nowrap; padding-left: 12px; padding-right: 12px; }
+.dr-box[hidden] { display: none; }
+.dr-board td.dr-own { box-shadow: inset 0 0 0 2px var(--good); }
+.dr-board.dr-own-on th.dr-mine { box-shadow: inset 0 0 0 2px var(--good); }
+/* ============================================ end of drafted / own now */
