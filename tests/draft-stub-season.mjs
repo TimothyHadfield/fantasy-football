@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_PPR } from '../js/proj-trend.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FX = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-players-1241838-2026.json'), 'utf8'));
@@ -45,6 +46,9 @@ export async function fetchSchedule() {
   return {
     leagueName: 'The Keeper League', teams: FX.teams.map((t) => ({ id: t.id, name: t.name })),
     games, playoffs: { playoffTeams: 6 }, playoffGames: [],
+    // The league's scoring rules, as js/season.js hands them on (ESPN's default
+    // PPR here): what the preseason projection is re-scored with for Value.
+    scoringItems: DEFAULT_PPR,
   };
 }
 

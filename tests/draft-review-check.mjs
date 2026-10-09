@@ -15,6 +15,9 @@
 //            cold and then again warm
 //   cloud    the phone's synced copy: nothing asked of ESPN at all
 //   snake    the same page on a hand-made snake draft, where Paid is hidden
+//   value    the same league with its frozen Value lines known (FF_VALUE, the
+//            shape js/season.js hands on): "vs worth now" on Value, and the
+//            row of team totals over round one
 //
 // The arithmetic itself is test-draft-review.mjs's; this checks the page draws
 // what that module says and reads no more than it should.
@@ -124,6 +127,19 @@ async function boot({ store = {}, stubs = true } = {}) {
         pid: t.querySelector('.dr-why') ? t.querySelector('.dr-why').dataset.pid : null,
       })),
       note: text($('drNote')),
+      // The team totals (Value): which row of the board's body it is, its label, a number a team.
+      totalRow: (() => {
+        const tr = board.querySelector('tbody tr.dr-total');
+        if (!tr) return null;
+        return {
+          index: [...board.querySelectorAll('tbody tr')].indexOf(tr),
+          label: text(tr.querySelector('td.dr-rd')),
+          cells: [...tr.querySelectorAll('td.dr-tot')].map((td) => ({
+            team: td.dataset.team, v: text(td).replace(/\s*[▲▼]/g, ''), mine: td.classList.contains('dr-mine'),
+            heat: (td.className.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
+          })),
+        };
+      })(),
       explainHidden: $('drExplain').hidden,
       pop: pop && !pop.hidden ? {
         cls: pop.className, rows: [...pop.querySelectorAll('tr')].map((tr) => [...tr.children].map(text)), head: text(pop.querySelector('.tc-ident')),
@@ -363,6 +379,50 @@ const CHILDREN = {
     };
   },
 
+  // VALUE KNOWN (FF_VALUE: the league's frozen lines and every rostered man's
+  // figure, through draft-stub-season.mjs). "vs worth now" is on Value.
+  async value() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const cold = p.calls();
+    const first = p.read();
+    const why = p.document.querySelector('#teamTable tbody .dr-why');
+    p.fire(why, 'mouseover');
+    const pop = p.read().pop;
+    const popPid = why.dataset.pid;
+    p.fire(why, 'mouseout');
+    const head = p.document.querySelector('#draftBoard thead button[data-team="3"]');
+    p.fire(head, 'mouseover');
+    const headCard = p.read().pop;
+    p.fire(head, 'mouseout');
+    // A PLAYER'S CARD carries his Value: a man on a squad, and one nobody holds.
+    const cardOf = (pid) => {
+      const el = p.document.querySelector(`#draftBoard .dr-why[data-pid="${pid}"]`).closest('td').querySelector('.dr-name');
+      p.fire(el, 'mouseover');
+      const c = p.$('tipCard');
+      const v = c && !c.hidden && c.querySelector('.tc-value');
+      const said = v ? text(v) : null;
+      p.fire(el, 'mouseout');
+      return said;
+    };
+    const cards = Object.fromEntries((process.env.DR_CARDS || '').split(',').filter(Boolean).map((pid) => [pid, cardOf(pid)]));
+    // Another team: only its own panel is redrawn.
+    p.$('teamSelect').value = '7';
+    p.fire(p.$('teamSelect'), 'change');
+    const seven = p.read();
+    p.$('teamSelect').value = '8';
+    p.fire(p.$('teamSelect'), 'change');
+    // The other view, and back.
+    p.fire(p.$('compareToggle').querySelector('button[data-compare="pre"]'), 'click');
+    const pre = p.read();
+    p.fire(p.$('compareToggle').querySelector('button[data-compare="now"]'), 'click');
+    const back = p.read();
+    return {
+      ok, cold, first, pop, popPid, headCard, cards, seven, pre, back,
+      fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
+    };
+  },
+
   // THE PHONE'S SYNCED COPY (DR_CLOUD=1): there is no draft in it.
   async cloud() {
     const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
@@ -407,6 +467,8 @@ const ok = (cond, name, detail = '') => {
 };
 const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), name, `got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
 const signed = (d) => `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}`;
+/** A difference in Value, as the page prints it. */
+const sv = (d) => `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d).toFixed(1)}`;
 
 // WHAT THE PAGE SHOULD SAY, worked out here from the same fixtures.
 const R = await import(moduleUrl('js/draft-review.js'));
@@ -455,28 +517,35 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq([f.reviewHidden, f.roomHidden], [false, true], 'demo: "Our draft" is the view the page opens on');
     ok(/^Demo League · Snake · 160 picks · 13 weeks played$/.test(f.sub), 'demo: the line under the heading', f.sub);
     eq(f.status, '', 'demo: nothing in the status line');
-    eq([f.teams.length, f.heads.length, f.boardRows, f.cells.length], [10, 11, 16, 160], 'demo: ten teams, sixteen rounds, 160 picks on the board');
+    eq([f.teams.length, f.heads.length, f.boardRows, f.cells.length], [10, 11, 17, 160], 'demo: ten teams, the totals and sixteen rounds, 160 picks on the board');
     eq(f.heads[0], 'Rd', 'demo: the round column');
     eq(f.heads.slice(1), f.teams.map((t) => t[1]), 'demo: a column a team, in the picker’s order');
     eq(f.cells.slice(0, 10).map((c) => c.went.split(' ')[0]), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], 'demo: round one runs 1-10');
     eq(f.cells.slice(10, 20).map((c) => c.went.split(' ')[0]), ['20', '19', '18', '17', '16', '15', '14', '13', '12', '11'], 'demo: round two snakes back');
-    ok(f.cells.every((c) => c.card && c.name && /^[+−]?\d+$/.test(c.d)), 'demo: every pick has a name with a card and a difference');
+    // (The sample league's Value is made in memory, so its "vs worth now" is on Value.)
+    ok(f.cells.every((c) => c.card && c.name && /^[+−]?\d+\.\d$/.test(c.d)), 'demo: every pick has a name with a card and a difference in Value', f.cells.slice(0, 5).map((c) => c.d).join(' '));
     ok(new Set(f.cells.map((c) => c.heat)).size >= 5 && f.cells.every((c) => c.heat), 'demo: the board is on the heat scale, in several steps');
-    eq(f.cells.reduce((a, c) => a + Number(c.d.replace('−', '-')), 0), 0, 'demo: a snake’s differences cancel');
-    eq([f.team, f.mineHead, f.mineTeams, f.mineCells], [f.teams[0][0], [f.teams[0][0]], [f.teams[0][0]], 16], 'demo: the first team is picked and its column marked');
+    const tot = f.totalRow;
+    eq(tot && [tot.index, tot.label, tot.cells.map((c) => c.team)], [0, 'Value', f.teams.map((t) => t[0])], 'demo: the row of team totals is the first under the headings, a number a team');
+    ok(tot && tot.cells.every((c) => /^\d+\.\d$/.test(c.v) && Number(c.v) > 0), 'demo: each a Value', tot && tot.cells.map((c) => c.v).join(' '));
+    ok(tot && new Set(tot.cells.map((c) => c.heat)).size >= 3, 'demo: coloured against the other teams', tot && tot.cells.map((c) => c.heat).join(' '));
+    eq([f.team, f.mineHead, f.mineTeams, f.mineCells], [f.teams[0][0], [f.teams[0][0]], [f.teams[0][0]], 17], 'demo: the first team is picked and its column marked, its total with it');
     eq(f.tableHeads, ['Player', 'Pick', 'Now', '+/−'], 'demo: a snake has no Paid column');
     eq([f.table.length, f.sorted], [16, ['+/−']], 'demo: the team’s sixteen picks, sorted by the difference');
     const diffs = f.table.map((t) => Number(t.cells[3].replace('−', '-')));
     ok(diffs.every((d, i) => i === 0 || diffs[i - 1] >= d), 'demo: biggest steal first, biggest miss last', diffs.join(','));
     ok(f.table.every((t) => t.why && t.card), 'demo: every row has a preview and a card');
-    eq(f.tiles.map((t) => [t.k, t.v]), [['Best steal', signed(diffs[0])], ['Biggest miss', signed(diffs[diffs.length - 1])]], 'demo: the two tiles are the table’s ends');
+    eq(f.tiles.map((t) => [t.k, t.v]), [['Best steal', sv(diffs[0])], ['Biggest miss', sv(diffs[diffs.length - 1])]], 'demo: the two tiles are the table’s ends');
+    ok(f.table.every((t) => /^\d+\.\d$/.test(t.cells[2])), 'demo: Now is his Value today', f.table.slice(0, 4).map((t) => t.cells[2]).join(' '));
     eq(f.tiles.map((t) => t.pid), [f.table[0].pid, f.table[f.table.length - 1].pid], 'demo: and name those two men');
     ok(f.table.every((t) => f.cells.find((c) => c.pid === t.pid && c.team === f.team && c.d === t.cells[3])), 'demo: the table and the board agree on every pick');
     eq(f.titles, 0, 'demo: no `title` on a cell (a phone would open it over the preview)');
-    ok(/drafted again today/.test(f.note) && !/Rank/.test(f.note), 'demo: how it works is said under the fold, without the auction’s line');
+    ok(/smoothed line/.test(f.note) && /read at his pick/.test(f.note) && !/Rank/.test(f.note) && !/drafted again today/.test(f.note),
+      'demo: how it works is said under the fold — the line, read at his pick — without the auction’s line', f.note);
 
     const p = r.picked;
-    eq([p.team, p.mineHead, p.mineTeams, p.mineCells], [f.teams[3][0], [f.teams[3][0]], [f.teams[3][0]], 16], 'demo: picking a team moves the mark to its column');
+    eq([p.team, p.mineHead, p.mineTeams, p.mineCells], [f.teams[3][0], [f.teams[3][0]], [f.teams[3][0]], 17], 'demo: picking a team moves the mark to its column');
+    eq(p.totalRow && p.totalRow.cells.filter((c) => c.mine).map((c) => c.team), [f.teams[3][0]], 'demo: and to its total');
     ok(p.table.length === 16 && p.table[0].pid !== f.table[0].pid, 'demo: and lists its picks');
     eq(p.cells, f.cells, 'demo: the board itself does not change');
     eq(r.byBoard.team, f.teams[6][0], 'demo: a team’s heading on the board picks it too');
@@ -583,6 +652,7 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq([r.keptLeague, r.keptPicks, r.keptWeeks], ['1241838-2026', 170, 17], 'live: the draft and those weeks are kept in this browser');
     eq([r.warm.draft, r.warm.players], [1, 17], 'live, warm: neither is asked for again');
     eq(r.again.cells, f.cells, 'live, warm: and the board is the same board');
+    run.plain = f;
 
     // THE BOARD against js/draft-review.js on the same fixtures: all 170.
     eq([f.heads.length, f.boardRows, f.cells.length], [11, 17, 170], 'live: ten teams, seventeen rows, 170 picks');
@@ -614,6 +684,8 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
       ['Biggest miss', signed(t8.miss.diff), String(t8.miss.playerId)],
     ], 'live: the two tiles');
     ok(/Rank/.test(f.note) && /price/.test(f.note), 'live: how it works explains the auction’s Rank');
+    // NO VALUE LINES for this league (the stub hands none): nothing of Value is drawn.
+    eq([f.totalRow, /drafted again today/.test(f.note), /smoothed|Expected value/.test(f.note)], [null, true, false], 'live, no lines: no row of totals, and the place-based words');
 
     // THE PREVIEW.
     const top = want.byId.get(f.table[0].pid);
@@ -715,6 +787,94 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq(r.again.cells.map((c) => c.d), r.pre.cells.map((c) => c.d), 'pre: back on the league, still against the preseason rank');
     eq(r.back.cells.map((c) => c.d), r.now.cells.map((c) => c.d), 'pre: and the switch goes back to worth now');
     eq(r.prefsBack['draft.compare'], undefined, 'pre: which is not stored, being the default');
+  }
+}
+
+// ------------------------------------------------- vs worth now, on Value
+// Tim, 2026-10-09: "Instead of basing the "vs worth now" on position in the
+// draft, base it off of their current value - their expected value based on
+// their rank in the draft. … Additionally I want you to display the total value
+// of all the player's that that user drafted at the top as a row above the
+// first round picks below their name."
+{
+  const VAL = await import('./draft-stub-value.mjs');
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const plain = expected(RAW);
+  const draft = R.parseDraft(RAW);
+  const players = new Map(plain.rv.rows.map((x) => [x.playerId, { name: x.name, position: x.position, soFar: x.soFar, rest: x.rest, total: x.total }]));
+  const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: VAL.WORTH });
+  const byId = new Map(rv.rows.map((x) => [String(x.playerId), x]));
+  const totals = R.teamValues(rv.rows);
+  const achane = rv.rows.find((x) => x.name === "De'Von Achane");
+  const gibbs = rv.rows.find((x) => x.name === 'Jahmyr Gibbs');
+  const r = run('value', { FF_VALUE: JSON.stringify(VAL.VALUES), DR_CARDS: `${gibbs.playerId},${achane.playerId}` });
+  ok(!r.boot, 'value: boots', r.boot);
+  if (!r.boot) {
+    const f = r.first;
+    ok(r.ok, 'value: settles on the league');
+    eq([r.errors, r.fetches], [[], []], 'value: no errors, and nothing went to ESPN around the stubs');
+    eq([r.cold.draft, r.cold.players, r.cold.ranks], [1, 17, 1], 'value: it asks ESPN for no more than the page did before');
+    ok(!(String(achane.playerId) in VAL.VALUES.players) && String(gibbs.playerId) in VAL.VALUES.players, 'value: (Achane is on nobody’s squad, so the league’s figures do not have him; Gibbs is)');
+
+    // THE BOARD: every difference is his Value today less the line at his price's rank.
+    eq(f.cells.length, 170, 'value: 170 picks on the board');
+    eq(f.cells.filter((c) => c.d !== sv(byId.get(c.pid).valueDiff)).slice(0, 3), [], 'value: every cell’s difference, to the tenth');
+    eq(f.cells.map((c) => [c.pid, c.went]), run.plain.cells.map((c) => [c.pid, c.went]), 'value: the same men in the same places at the same prices');
+    ok(f.cells.some((c, i) => c.d !== run.plain.cells[i].d), 'value: and the numbers are not the place-based ones');
+    ok(new Set(f.cells.map((c) => c.heat)).size >= 5 && f.cells.every((c) => c.heat), 'value: on the heat scale, in several steps');
+    const ach = f.cells.find((c) => c.pid === String(achane.playerId));
+    eq([ach.went, ach.d, ach.heat], ['$44 RB', sv(achane.valueDiff), 'heat-dn-4'], 'value: Achane, $44 and dropped, is the bottom of the scale');
+    ok(achane.valueNow === 0 && achane.valueDiff < -5, 'value: (worth nothing now against about seven expected)', [achane.expected, achane.valueNow]);
+
+    // THE ROW OF TOTALS, between the headings and round one.
+    const tot = f.totalRow;
+    eq(tot && [tot.index, tot.label], [0, 'Value'], 'value: the totals are the first row under the team names');
+    eq(f.boardRows, 18, 'value: one row more than the seventeen rounds');
+    eq(tot && tot.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), totals.get(id).toFixed(1)]), 'value: each team’s total is the Value today of the seventeen men it drafted');
+    eq(f.cells.slice(0, 10).map((c) => c.team), draft.order.map(String), 'value: and round one comes straight after it');
+    const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    const heatOfTeam = (id) => tot.cells.find((c) => c.team === String(id)).heat;
+    ok(/^heat-up/.test(heatOfTeam(sorted[0][0])) && /^heat-dn/.test(heatOfTeam(sorted[9][0])), 'value: the best total is green and the worst red', tot.cells.map((c) => c.heat).join(' '));
+    eq([tot.cells.filter((c) => c.mine).map((c) => c.team), f.mineCells], [['8'], 18], 'value: the picked team’s mark runs through its total');
+
+    // THE TEAM.
+    const t8 = R.teamReview(rv.rows, 8, 'valueDiff');
+    eq(f.tableHeads, ['Player', 'Paid', 'Rank', 'Now', '+/−'], 'value: the same columns');
+    const rowWrong = f.table.filter((t) => {
+      const w = byId.get(t.pid);
+      return t.cells[1] !== `$${w.bid}` || t.cells[2] !== String(w.at) || t.cells[3] !== w.valueNow.toFixed(1) || t.cells[4] !== sv(w.valueDiff);
+    });
+    eq([f.table.length, rowWrong], [17, []], 'value: every row’s price, rank, Value today and difference');
+    eq(f.tiles.map((t) => [t.k, t.v, t.pid]), [
+      ['Best steal', sv(t8.steal.valueDiff), String(t8.steal.playerId)],
+      ['Biggest miss', sv(t8.miss.valueDiff), String(t8.miss.playerId)],
+    ], 'value: the two tiles are the team’s ends on this difference');
+    const t7 = R.teamReview(rv.rows, 7, 'valueDiff');
+    eq(r.seven.tiles.map((t) => t.pid), [String(t7.steal.playerId), String(t7.miss.playerId)], 'value: another team’s own two');
+    eq(r.seven.cells, f.cells, 'value: and the board does not change');
+
+    // THE PREVIEW adds up: expected, today, the difference.
+    const top = byId.get(r.popPid);
+    eq(r.pop && r.pop.rows, [
+      ['Paid', `$${top.bid}`], ['Price rank', String(top.at)], ...(top.keeper ? [['Keeper', 'Yes']] : []),
+      ['Expected value', top.expected.toFixed(1)], ['Value now', top.valueNow.toFixed(1)],
+      [top.valueDiff > 0 ? 'Steal' : top.valueDiff < 0 ? 'Miss' : 'Even', sv(top.valueDiff)],
+    ], 'value: a number opens paid, price rank, expected value, value now and the difference');
+    ok(r.pop && /of 170 picks$/.test(r.pop.foot), 'value: and where it stands among the 170', r.pop && r.pop.foot);
+    const t3 = R.teamReview(rv.rows, 3, 'valueDiff');
+    eq(r.headCard && r.headCard.rows.slice(3).map((x) => [x[0].replace(/^(Best steal|Biggest miss).*/, '$1'), x[1]]),
+      [['Best steal', sv(t3.steal.valueDiff)], ['Biggest miss', sv(t3.miss.valueDiff)]], 'value: a team’s card carries its two ends on Value');
+    ok(/smoothed line/.test(f.note) && /read at his price rank/.test(f.note) && /Rank/.test(f.note) && !/drafted again today/.test(f.note), 'value: how it works explains the line, and the auction’s Rank', f.note);
+
+    // THE CARDS: a man on a squad is looked up; a man nobody holds is handed in.
+    eq(r.cards, { [gibbs.playerId]: `Value ${gibbs.valueNow.toFixed(1)}`, [achane.playerId]: 'Value 0.0' }, 'value: a player’s card opens with his Value, held or dropped');
+
+    // THE OTHER VIEW is the one it was, with the totals still over it.
+    eq(r.pre.cells.filter((c) => c.d !== signed(byId.get(c.pid).preDiff)).slice(0, 3), [], 'value: "vs preseason rank" is still drafted-at less the preseason place');
+    eq([r.pre.tableHeads, r.pre.tiles.map((t) => t.k)], [['Player', 'Paid', 'Rank', 'Pre', '+/−'], ['Biggest slide', 'Biggest reach']], 'value: with its own column and tiles');
+    ok(/ESPN ranked/.test(r.pre.note) && !/smoothed/.test(r.pre.note), 'value: and its own words');
+    eq(r.pre.totalRow, tot, 'value: the totals stay over that view too');
+    eq([r.back.cells, r.back.totalRow], [f.cells, tot], 'value: and the switch comes back to Value');
   }
 }
 

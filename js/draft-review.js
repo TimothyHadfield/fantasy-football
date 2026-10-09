@@ -56,9 +56,35 @@
 // 138th, and 2 of the 20 are defences (the two best ones). Both bars are
 // returned (`bar`, `starterBar`), and `against` picks one.
 
+//
+// "VS WORTH NOW" ON VALUE (Tim, 2026-10-09: "Instead of basing the "vs worth
+// now" on position in the draft, base it off of their current value - their
+// expected value based on their rank in the draft. … list all the players based
+// on preseason rank, and then take their expected value (before the season
+// started). This expected value can fluctuate quite a bit so make a smoothed
+// equation line based on these numbers. … Then, to get the expected value just
+// plug in that player's preseason rank in the draft."):
+//
+//   the line        the men drafted in ESPN's preseason-rank order (`pre`, 1 the
+//                   best ranked), each at his PRESEASON Value — js/value.js's
+//                   `valueOf` on what ESPN projected him for a week before the
+//                   season — made into ONE line that never rises and never goes
+//                   under 0 (`expectedCurve`).
+//   expected        that line read at WHERE HE WAS DRAFTED (`at`: his pick, or
+//                   his price's rank in an auction). Read at his own preseason
+//                   rank it would grade the player; read at the slot it grades
+//                   the pick, which is what a steal or a miss is.
+//   value now       his Value today (js/season.js `fetchPlayerValues`).
+//   difference      value now − expected (`valueDiff`), in points a week.
+//
+// All of it only when the league's frozen lines are known (`worth.base`);
+// without them every row's three new numbers are null and nothing else moves.
+
 import { optimalLineup } from './forecast.js';
+import { valueOf, isBase } from './value.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const round1 = (v) => Math.round(v * 10) / 10;
 
 // ------------------------------------------------------------------ the draft
 
@@ -251,6 +277,115 @@ export function leagueBars(pool, slots, teams) {
   return out;
 }
 
+// ------------------------------------------------- the expected-value line
+
+/**
+ * How far each side of a place the line is averaged over, for `n` places: about
+ * a fortieth of the draft, at least 1. Twice over (see `expectedCurve`).
+ */
+export const curveRadius = (n) => Math.max(1, Math.round(n / 40));
+
+/**
+ * The expected-value line: what a place in the draft was worth before the
+ * season — see "VS WORTH NOW ON VALUE" at the top.
+ *
+ * Three steps, each of which keeps the line from ever rising:
+ *   1. the nearest never-rising line to the points (pool-adjacent-violators:
+ *      wherever a later place is worth more than an earlier one, the run is
+ *      replaced by its average). It comes out as flat steps;
+ *   2. a place with no point is filled from the line either side of it;
+ *   3. each place becomes the average of itself and its neighbours
+ *      (`curveRadius` each side, fewer near an end), done twice, which turns
+ *      the steps into slopes. An average of never-rising runs never rises.
+ *
+ * @param {Array<{place:number, value:number|null}>} points one a man drafted:
+ *   his place by ESPN's preseason rank among the drafted (1 the best), and his
+ *   preseason Value — null when ESPN had no preseason projection for him (he is
+ *   skipped, and still counts as a place)
+ * @param {Object} [o]
+ * @param {number} [o.radius] the averaging in step 3 (0 for none)
+ * @returns {{n:number, y:number[]}|null} `y[i]` is place `i + 1`; null with no
+ *   point at all
+ */
+export function expectedCurve(points, { radius = null } = {}) {
+  const all = (points || []).filter((p) => p && Number.isFinite(p.place) && p.place >= 1);
+  const pts = all.filter((p) => num(p.value) !== null)
+    .map((p) => ({ x: Math.round(p.place), y: Math.max(0, p.value) }))
+    .sort((a, b) => a.x - b.x);
+  if (!pts.length) return null;
+  const n = Math.max(...all.map((p) => Math.round(p.place)));
+
+  // 1. Pool adjacent violators, for a line that never rises.
+  const blocks = [];
+  for (const p of pts) {
+    blocks.push({ sum: p.y, w: 1 });
+    while (blocks.length > 1) {
+      const b = blocks[blocks.length - 1];
+      const a = blocks[blocks.length - 2];
+      if (a.sum / a.w >= b.sum / b.w) break;
+      a.sum += b.sum; a.w += b.w;
+      blocks.pop();
+    }
+  }
+  const fit = [];
+  for (const b of blocks) for (let i = 0; i < b.w; i++) fit.push(b.sum / b.w);
+
+  // 2. Every place 1..n: the fitted places, and straight lines between them.
+  const y = new Array(n).fill(null);
+  pts.forEach((p, i) => { y[p.x - 1] = fit[i]; });
+  let last = -1;
+  for (let i = 0; i < n; i++) {
+    if (y[i] === null) continue;
+    if (last < 0) for (let k = 0; k < i; k++) y[k] = y[i];
+    else for (let k = last + 1; k < i; k++) y[k] = y[last] + ((y[i] - y[last]) * (k - last)) / (i - last);
+    last = i;
+  }
+  for (let k = last + 1; k < n; k++) y[k] = y[last];
+
+  // 3. The light smoothing.
+  const r = radius === null ? curveRadius(n) : Math.max(0, Math.round(radius));
+  let out = y;
+  for (let pass = 0; pass < 2 && r > 0; pass++) {
+    const src = out;
+    out = src.map((_, i) => {
+      // Near an end the window narrows to what there is on BOTH sides, so the
+      // first and last places keep their own height (a window hanging over the
+      // end would pull the top of the draft down) and the line still never rises.
+      const k = Math.min(r, i, n - 1 - i);
+      let sum = 0;
+      for (let j = i - k; j <= i + k; j++) sum += src[j];
+      return sum / (2 * k + 1);
+    });
+  }
+  return { n, y: out.map((v) => Math.max(0, v)) };
+}
+
+/**
+ * The line read at a place: held at its ends, and a place between two whole
+ * ones (an auction's shared places) read off the straight line between them.
+ * @returns {number|null} unrounded; null with no line or no place
+ */
+export function expectedAt(curve, place) {
+  if (!curve || !Array.isArray(curve.y) || !curve.y.length || num(place) === null) return null;
+  const p = Math.min(curve.y.length, Math.max(1, place));
+  const lo = Math.floor(p);
+  const hi = Math.ceil(p);
+  const a = curve.y[lo - 1];
+  return lo === hi ? a : a + (curve.y[hi - 1] - a) * (p - lo);
+}
+
+/**
+ * Each team's total: the Value today of every man it DRAFTED, wherever he is
+ * now. `Map<teamId, number>` to the tenth, in the order teams first picked; a
+ * man with no Value adds nothing.
+ */
+export function teamValues(rows) {
+  const out = new Map();
+  for (const r of rows || []) out.set(r.teamId, (out.get(r.teamId) || 0) + (num(r.valueNow) ?? 0));
+  for (const [id, v] of out) out.set(id, round1(v));
+  return out;
+}
+
 // ----------------------------------------------------------------- the review
 
 /**
@@ -264,15 +399,22 @@ export function leagueBars(pool, slots, teams) {
  * @param {number} [o.teams] defaults to the teams that drafted
  * @param {'bar'|'starterBar'} [o.against] which bar value is measured from
  * @param {Map|Object|null} [o.ranks] playerId -> ESPN's preseason rank
- * @returns {{ rows:Array, bars:Map, ranked:number }} `rows` in pick order, each
- *   the pick plus `{ at, name, position, soFar, rest, total, value, now, diff,
- *   espnRank, pre, preDiff }` (`value`, `now`, `diff` null for a man with no
- *   numbers; the last three null for a man ESPN did not rank); `ranked` is how
- *   many men have a place.
+ * @param {Object|null} [o.worth] the league's Value, when its lines are known:
+ *   `{ base, now, pre }` — `base` js/value.js's frozen lines; `now` playerId ->
+ *   his Value today; `pre` playerId -> what ESPN projected him for a week
+ *   before the season (points, not Value). Each a Map or a function.
+ * @returns {{ rows:Array, bars:Map, ranked:number, curve:Object|null }} `rows`
+ *   in pick order, each the pick plus `{ at, name, position, soFar, rest, total,
+ *   value, now, diff, espnRank, pre, preDiff, valueNow, expected, valueDiff }`
+ *   (`value`, `now`, `diff` null for a man with no numbers; the next three null
+ *   for a man ESPN did not rank; the last three null without `worth` or without
+ *   a line — see the top); `ranked` is how many men have a place; `curve` is
+ *   the expected-value line (`expectedCurve`).
  */
-export function reviewDraft({ draft, players, slots, teams = null, against = 'bar', ranks = null }) {
+export function reviewDraft({ draft, players, slots, teams = null, against = 'bar', ranks = null, worth = null }) {
   const at = draftedAt(draft.picks, draft.type);
   const pre = preseasonPlaces(draft.picks, ranks);
+  const read = (src, id) => num(typeof src === 'function' ? src(id) : src instanceof Map ? src.get(id) : null);
   const rows = draft.picks.map((pk) => {
     const p = players.get(pk.playerId) || null;
     const known = Boolean(p && p.position && num(p.total) !== null);
@@ -289,8 +431,26 @@ export function reviewDraft({ draft, players, slots, teams = null, against = 'ba
       espnRank: pre.has(pk.playerId) ? pre.get(pk.playerId).rank : null,
       pre: pre.has(pk.playerId) ? pre.get(pk.playerId).place : null,
       preDiff: pre.has(pk.playerId) ? at.get(pk.playerId) - pre.get(pk.playerId).place : null,
+      // His Value today, what his slot was expected to be worth, and the difference.
+      valueNow: null, expected: null, valueDiff: null,
     };
   });
+
+  // VS WORTH NOW ON VALUE — see the top.
+  let curve = null;
+  if (worth && isBase(worth.base)) {
+    curve = expectedCurve(rows.filter((r) => r.pre !== null).map((r) => ({
+      place: r.pre,
+      value: r.position ? valueOf(worth.base, r.position, read(worth.pre, r.playerId)) : null,
+    })));
+    for (const r of curve ? rows : []) {
+      const e = expectedAt(curve, r.at);
+      r.valueNow = read(worth.now, r.playerId);
+      r.expected = e === null ? null : round1(e);
+      // The printed difference is its two printed ends subtracted.
+      r.valueDiff = r.valueNow === null || r.expected === null ? null : round1(r.valueNow - r.expected);
+    }
+  }
 
   const pool = rows.filter((r) => r.total !== null);
   const bars = leagueBars(pool, slots, teams || draft.order.length);
@@ -299,13 +459,13 @@ export function reviewDraft({ draft, players, slots, teams = null, against = 'ba
   const order = pool.slice().sort((a, b) => b.value - a.value || b.total - a.total || a.overall - b.overall);
   order.forEach((r, i) => { r.now = i + 1; r.diff = r.at - r.now; });
 
-  return { rows, bars, ranked: order.length };
+  return { rows, bars, ranked: order.length, curve };
 }
 
 /**
  * One team's picks, with its best steal and its biggest miss (null when it has
- * none). `key` is the difference they are the ends of: `diff` (worth now) or
- * `preDiff` (preseason rank).
+ * none). `key` is the difference they are the ends of: `diff` (worth now, by
+ * place), `valueDiff` (worth now, on Value) or `preDiff` (preseason rank).
  */
 export function teamReview(rows, teamId, key = 'diff') {
   const picks = (rows || []).filter((r) => String(r.teamId) === String(teamId));

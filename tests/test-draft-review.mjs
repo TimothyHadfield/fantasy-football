@@ -352,5 +352,136 @@ const man = (playerId, position, total, lineupSlotId = 20) => ({ playerId, posit
   ok(Math.min(...first) === 1, 'sample ranks: the best-ranked man went in round one', first.join(','));
 }
 
+// ------------------------------------------------- the expected-value line
+// Tim, 2026-10-09: "list all the players based on preseason rank, and then take
+// their expected value (before the season started). This expected value can
+// fluctuate quite a bit so make a smoothed equation line based on these numbers."
+const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12);
+{
+  eq(R.expectedCurve([]), null, 'curve: no points, no line');
+  eq(R.expectedCurve([{ place: 1, value: null }, { place: 2, value: null }]), null, 'curve: nobody with a preseason projection, no line');
+  eq([R.curveRadius(170), R.curveRadius(40), R.curveRadius(5)], [4, 1, 1], 'curve: the averaging is a fortieth of the draft each side, at least 1');
+
+  // BY HAND, unsmoothed: 5 then 7 is a rise, so the two share their average.
+  const steps = R.expectedCurve([10, 5, 7, 2].map((value, i) => ({ place: i + 1, value })), { radius: 0 });
+  eq(steps, { n: 4, y: [10, 6, 6, 2] }, 'curve: a later place worth more than an earlier one is pooled with it');
+  // Smoothed with one each side, twice; the ends keep their own height.
+  const soft = R.expectedCurve([10, 5, 7, 2].map((value, i) => ({ place: i + 1, value })), { radius: 1 });
+  // pass 1: [10, 22/3, 14/3, 2]; pass 2: [10, 22/3, 14/3, 2] (a straight line is left alone)
+  near(soft.y[0], 10, 'curve: the first place keeps its height');
+  near(soft.y[1], 22 / 3, 'curve: a step becomes a slope');
+  near(soft.y[2], 14 / 3, 'curve: on both sides of it');
+  near(soft.y[3], 2, 'curve: the last place keeps its height');
+
+  // A place nobody has a projection for is skipped, and filled from the line.
+  const gap = R.expectedCurve([{ place: 1, value: 9 }, { place: 2, value: null }, { place: 3, value: 5 }, { place: 4, value: null }], { radius: 0 });
+  eq(gap, { n: 4, y: [9, 7, 5, 5] }, 'curve: a missing place is filled from the line, and counts as a place');
+  eq(R.expectedCurve([{ place: 2, value: 4 }, { place: 1, value: null }], { radius: 0 }).y, [4, 4], 'curve: a missing first place takes the next one’s height');
+  eq(R.expectedCurve([{ place: 1, value: -3 }, { place: 2, value: 1 }], { radius: 0 }).y, [0.5, 0.5], 'curve: nothing counts for less than 0');
+
+  // A NOISY DRAFT: a falling line with big swings on it (the same every run).
+  let seed = 7;
+  const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const noisy = Array.from({ length: 170 }, (_, i) => ({ place: i + 1, value: Math.max(0, 12 * Math.exp(-i / 35) + (rand() - 0.5) * 5) }));
+  const raw = noisy.map((p) => p.value);
+  const c = R.expectedCurve(noisy);
+  const c0 = R.expectedCurve(noisy, { radius: 0 });
+  ok(raw.some((v, i) => i > 0 && v > raw[i - 1] + 1), 'noisy: the input really does rise in places');
+  eq([c.n, c.y.length], [170, 170], 'noisy: a height for every place');
+  ok(neverRises(c) && neverRises(c0), 'noisy: the line never rises');
+  ok(c.y.every((v) => v >= 0), 'noisy: and is never below 0');
+  const biggest = (ys) => Math.max(...ys.slice(1).map((v, i) => Math.abs(v - ys[i])));
+  const rough = (ys) => ys.slice(2).reduce((a, v, i) => a + Math.abs(v - 2 * ys[i + 1] + ys[i]), 0);
+  ok(biggest(c.y) < biggest(c0.y) / 2 && biggest(c0.y) < biggest(raw) , 'noisy: its biggest step is under half the stepped line’s', [biggest(raw), biggest(c0.y), biggest(c.y)]);
+  ok(rough(c.y) < rough(c0.y) / 3, 'noisy: and it bends far less', [rough(c0.y), rough(c.y)]);
+  const mean = (ys) => ys.reduce((a, b) => a + b, 0) / ys.length;
+  near(mean(c0.y), mean(raw), 'noisy: pooling keeps the average of the points', 1e-9);
+  near(mean(c.y), mean(raw), 'noisy: and smoothing all but keeps it', 0.05);
+  near(c.y[0], c0.y[0], 'noisy: the first place is not pulled down by the smoothing');
+
+  // READING IT.
+  const line = { n: 4, y: [10, 6, 4, 1] };
+  eq([R.expectedAt(line, 1), R.expectedAt(line, 3), R.expectedAt(line, 4)], [10, 4, 1], 'read: at a place');
+  eq([R.expectedAt(line, 0), R.expectedAt(line, -5), R.expectedAt(line, 4.5), R.expectedAt(line, 900)], [10, 10, 1, 1], 'read: held at both ends');
+  near(R.expectedAt(line, 1.5), 8, 'read: half way between two places');
+  near(R.expectedAt(line, 3.25), 3.25, 'read: a quarter of the way');
+  eq([R.expectedAt(null, 2), R.expectedAt(line, null), R.expectedAt(line, NaN)], [null, null, null], 'read: no line or no place, nothing');
+}
+
+// ------------------------------------------ vs worth now on Value, by hand
+// Five running backs taken 1-5; ESPN ranked them 13, 11, 12, 14, 15. Lines:
+// waiver 6, starter 10. Preseason points a week by id: 11→18, 12→14, 13→20,
+// 14→9, 15→(none). So in preseason order (13, 11, 12, 14, 15) the preseason
+// Values are 12, 10, 6, 1.5, — and that already never rises.
+{
+  const base = { v: 1, setAt: 0, week: 5, lines: { RB: { waiver: 6, starter: 10, agents: 3, starters: 4 } } };
+  const d = R.parseDraft({
+    settings: { draftSettings: { type: 'SNAKE' } },
+    draftDetail: { drafted: true, picks: [11, 12, 13, 14, 15].map((playerId, i) => ({ overallPickNumber: i + 1, roundId: 1, roundPickNumber: i + 1, teamId: (i % 2) + 1, playerId, bidAmount: 0 })) },
+  });
+  const players = new Map([11, 12, 13, 14, 15].map((id) => [id, { name: `P${id}`, position: 'RB', soFar: 0, rest: 100 - id, total: 100 - id }]));
+  const ranks = { 11: 20, 12: 30, 13: 10, 14: 40, 15: 50 };
+  const pre = new Map([[11, 18], [12, 14], [13, 20], [14, 9]]);
+  const now = new Map([[11, 12.5], [12, 0], [13, 9.9], [14, 4.2], [15, 0.4]]);
+  const rv = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base, now, pre } });
+  // The line, unsmoothed: 12, 10, 6, 1.5, 1.5 (the fifth has no point). With
+  // one each side: [12, 9.333, 5.833, 3, 1.5]; and again: [12, 9.056, 6.056, 3.444, 1.5].
+  eq(rv.curve.n, 5, 'value: a line over the five places');
+  near(rv.curve.y[1], (12 + (12 + 10 + 6) / 3 + (10 + 6 + 1.5) / 3) / 3, 'value: the line at place 2, by hand');
+  // Pick 1 (id 11) is read at place 1 — where he was DRAFTED — not at 2, his own preseason place.
+  eq(rv.rows.map((r) => r.expected), [12, 9.1, 6.1, 3.4, 1.5], 'value: expected is the line at the pick, to the tenth');
+  eq(rv.rows.map((r) => r.valueNow), [12.5, 0, 9.9, 4.2, 0.4], 'value: his Value today');
+  eq(rv.rows.map((r) => r.valueDiff), [0.5, -9.1, 3.8, 0.8, -1.1], 'value: the difference is today less expected');
+  ok(rv.rows.every((r) => Math.abs(r.valueDiff - (r.valueNow - r.expected)) < 1e-9 + 0.05 && Number.isInteger(Math.round(r.valueDiff * 10))), 'value: the printed ends subtract to the printed difference');
+  eq(rv.rows.map((r) => [r.now, r.diff, r.preDiff]), R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks }).rows.map((r) => [r.now, r.diff, r.preDiff]), 'value: the place-based numbers are untouched');
+
+  eq([...R.teamValues(rv.rows)], [[1, 22.8], [2, 4.2]], 'value: a team’s total is the Value today of the men it drafted');
+  const t1 = R.teamReview(rv.rows, 1, 'valueDiff');
+  eq([t1.steal.playerId, t1.miss.playerId], [13, 15], 'value: a team’s two ends on this difference');
+
+  // WITHOUT THE LINES nothing is made up.
+  const none = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks });
+  eq([none.curve, none.rows.map((r) => [r.valueNow, r.expected, r.valueDiff])], [null, Array(5).fill([null, null, null])], 'value: no lines, no Value numbers');
+  const bad = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base: { v: 99 }, now, pre } });
+  eq(bad.curve, null, 'value: lines this code cannot read count as none');
+  const noPre = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base, now, pre: new Map() } });
+  eq([noPre.curve, noPre.rows[0].valueDiff], [null, null], 'value: no preseason projection for anybody, no line and no difference');
+  eq([...R.teamValues(none.rows)], [[1, 0], [2, 0]], 'value: and a total of nothing');
+  // A function does as well as a Map.
+  const fn = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base, now: (id) => now.get(id), pre: (id) => pre.get(id) ?? null } });
+  eq(fn.rows.map((r) => r.valueDiff), rv.rows.map((r) => r.valueDiff), 'value: the two sources may be functions');
+}
+
+// --------------------------------------------- vs worth now on Value, real
+// The real league: its own frozen lines, every man's weeks as captured, and the
+// repo's preseason file (tests/draft-stub-value.mjs).
+{
+  const { WORTH, nowOf, preOf, BASE } = await import('./draft-stub-value.mjs');
+  const V = await import(moduleUrl('js/value.js'));
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const players = new Map(Object.entries(FX.players).map(([id, p]) => [Number(id), { name: p.name, position: p.position, soFar: 0, rest: 0, total: 0 }]));
+  const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: WORTH });
+  const by = (name) => rv.rows.find((r) => r.name === name);
+  eq([rv.curve.n, rv.rows.filter((r) => r.valueDiff !== null).length], [170, 170], 'real: a line over 170 places and a difference for all 170');
+  ok(draft.picks.every((p) => preOf(p.playerId) > 0), 'real: every man drafted is in the preseason file');
+  ok(neverRises(rv.curve) && rv.curve.y.every((v) => v >= 0), 'real: the line never rises and is never below 0');
+  const gibbs = by('Jahmyr Gibbs');
+  eq([gibbs.pre, gibbs.at], [1, 1], 'real: Gibbs, ranked first and the dearest');
+  near(rv.curve.y[0], V.valueOf(BASE, 'RB', preOf(gibbs.playerId)), 'real: the top of the line is his own preseason Value', 0.05);
+  ok(rv.curve.y[0] > 10 && rv.curve.y[24] > 4 && rv.curve.y[24] < 8 && rv.curve.y[99] < 2 && rv.curve.y[169] < 0.5, 'real: about 13 at the top, 6 at 25, under 2 by 100, nothing at the end',
+    [1, 25, 50, 100, 170].map((p) => rv.curve.y[p - 1].toFixed(2)).join(' '));
+  ok(rv.rows.every((r) => r.expected === Math.round(R.expectedAt(rv.curve, r.at) * 10) / 10), 'real: every pick is read at its price’s rank');
+  eq(rv.rows.filter((r) => r.valueNow !== nowOf(r.playerId)).length, 0, 'real: every man’s Value today');
+  // A dear man hurt since is the miss; a dollar man who starts is the steal.
+  const achane = by("De'Von Achane");
+  const hubbard = by('Chuba Hubbard');
+  ok(achane.bid === 44 && achane.valueNow === 0 && achane.valueDiff < -5, 'real: Achane, $44 and worth nothing now, is a big miss', JSON.stringify([achane.expected, achane.valueNow, achane.valueDiff]));
+  ok(hubbard.bid === 1 && hubbard.valueDiff > 3 && hubbard.expected < 1, 'real: Hubbard, $1 and a starter, is a steal', JSON.stringify([hubbard.expected, hubbard.valueNow, hubbard.valueDiff]));
+  const totals = R.teamValues(rv.rows);
+  eq(totals.size, 10, 'real: a total for each of the ten teams');
+  near([...totals.values()].reduce((a, b) => a + b, 0), rv.rows.reduce((a, r) => a + r.valueNow, 0), 'real: which together are everybody’s Value', 0.5);
+  eq(totals.get(8), Math.round(rv.rows.filter((r) => r.teamId === 8).reduce((a, r) => a + r.valueNow, 0) * 10) / 10, 'real: team 8’s is its seventeen men’s');
+}
+
 console.log(fail ? `\n${fail} failed, ${pass} passed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

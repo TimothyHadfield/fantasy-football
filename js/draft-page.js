@@ -29,8 +29,12 @@ import * as draftReview from './draft-review.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import { heatScale, heatOf, heatMarkHtml } from './heat.js';
 import {
-  weekRun, registerRun, tipAttr, clearRuns, wireTips, byeWeekOf,
+  weekRun, registerRun, tipAttr, clearRuns, wireTips, byeWeekOf, setValueSource,
 } from './player-card.js';
+// Player Value (docs/value-plan.md): the arithmetic, and ESPN's preseason
+// projection re-scored under the league's rules.
+import { valueOf, restAvg, lineOf, valueText } from './value.js';
+import { loadBaseline, baselineOf } from './proj-trend.js';
 import { shortName } from './actual-season-table.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
@@ -1146,6 +1150,8 @@ const same = (a, b) => String(a) === String(b);
 const finite = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 /** A place gained or lost, signed, with a real minus. */
 const signed = (d) => (d === null || d === undefined ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}`);
+/** A Value gained or lost, signed, to the tenth as Value is printed. */
+const signedValue = (d) => (d === null || d === undefined ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d).toFixed(1)}`);
 const POS_SAID = { DST: 'D/ST' };
 const posSaid = (pos) => POS_SAID[pos] || pos || '';
 
@@ -1163,11 +1169,20 @@ const review = {
   reads: { draft: 0, players: 0, squads: 0, ranks: 0 },
 };
 const isPre = () => review.compare === 'pre';
-/** The difference on show, and the scale it is coloured on. */
-const diffKey = () => (isPre() ? 'preDiff' : 'diff');
+// "VS WORTH NOW" ON VALUE (Tim, 2026-10-09: "Instead of basing the "vs worth
+// now" on position in the draft, base it off of their current value - their
+// expected value based on their rank in the draft."). Only when the league's
+// frozen lines are known and the expected-value line could be drawn
+// (`world.valued`); otherwise the view is the place-based one it was.
+const onValue = () => !isPre() && Boolean(review.world && review.world.valued);
+/** The difference on show, how it is printed, and the scale it is coloured on. */
+const diffKey = () => (isPre() ? 'preDiff' : onValue() ? 'valueDiff' : 'diff');
 const dOf = (r) => r[diffKey()];
-const scaleOf = (w) => (isPre() ? w.preScale : w.scale);
+const dSaid = (d) => (onValue() ? signedValue(d) : signed(d));
+const scaleOf = (w) => (isPre() ? w.preScale : onValue() ? w.valueScale : w.scale);
 if (typeof window !== 'undefined') window.ffDraftReads = review.reads;
+// The same way, the review itself (`world.rv.curve` is the expected-value line).
+if (typeof window !== 'undefined') window.ffDraftReview = review;
 
 function setStatus(msg, isError = false) {
   const el = $('sourceStatus');
@@ -1219,7 +1234,7 @@ function weeksOf(data) {
  *   man's week when he was on nobody's squad: `{name, position, proTeamId,
  *   projected, actual}`
  */
-function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null }) {
+function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, values = null, preOf = null }) {
   const { weeks, poWeeks, finished, currentWeek } = weeksOf(data);
   const drafted = new Set(draft.picks.map((p) => p.playerId));
   const men = new Map();
@@ -1272,7 +1287,26 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null }) {
     if (!m.position) continue;
     players.set(id, { name: m.name, position: m.position, ...draftReview.seasonOf(m.byWeek, weeks) });
   }
-  const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null, ranks });
+
+  // HIS VALUE TODAY (docs/value-plan.md). A man on a squad: the league's own
+  // figure. A man nobody holds: the same arithmetic on his own weeks left, which
+  // this page has already read; 0 when ESPN projects him nothing.
+  const base = values && values.base ? values.base : null;
+  const valueNow = new Map();
+  const held = (id) => Boolean(values && values.byId && (values.byId.has(id) || values.byId.has(Number(id))));
+  if (base) {
+    for (const [id, m] of men) {
+      if (!m.position || !lineOf(base, m.position)) continue;
+      const proj = {};
+      for (const wk of values.weeks || []) proj[wk] = m.byWeek[wk] ? m.byWeek[wk].proj : null;
+      const own = () => valueOf(base, m.position, restAvg(proj, values.weeks || [], byeWeekOf(m, byes)));
+      valueNow.set(id, (held(id) ? values.lookup(id) : null) ?? own() ?? 0);
+    }
+  }
+  const worth = base && preOf ? { base, now: valueNow, pre: preOf } : null;
+  const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null, ranks, worth });
+  const valued = Boolean(rv.curve);
+  const teamTotals = valued ? draftReview.teamValues(rv.rows) : new Map();
 
   // A TEAM'S CARD (the board's headings): its record and average off the games
   // that are final, and what its lineup is projected for in the week in play.
@@ -1304,11 +1338,18 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null }) {
     // One scale for the whole draft: a pick's colour is its difference against everybody's.
     scale: heatScale(rv.rows.map((r) => r.diff)),
     preScale: heatScale(rv.rows.map((r) => r.preDiff)),
+    // On Value: the differences, and each team's total against the other teams'.
+    valued, valueNow, held, lookup: values && base ? values.lookup : null,
+    valueScale: heatScale(rv.rows.map((r) => r.valueDiff)),
+    teamTotals, totalScale: heatScale([...teamTotals.values()]),
   };
 }
 
+/** How many games a sample man's season projection is spread over (he has no preseason file). */
+const SAMPLE_GAMES = 17;
+
 /** The sample league never drafted, so its draft is made up from its week-1 squads. */
-function demoWorld() {
+async function demoWorld() {
   const data = capture.normalizeSchedule(generateDemoSchedule(), { isDemo: true });
   const { weeks } = weeksOf(data);
   const rosters = new Map(weeks.map((w) => [w, generateDemoWeekRosters(w).teams]));
@@ -1316,13 +1357,19 @@ function demoWorld() {
   const slots = draftReview.slotsFromLineups(first);
   const draft = draftReview.sampleDraft(first, slots);
   const ranks = draftReview.sampleRanks(first, slots);
-  return assemble({ draft, data, rosters, gapOf: () => null, byes: {}, isDemo: true, ranks });
+  // The sample's Value is made in memory (js/season.js); its "preseason
+  // projection" is the season it was drafted on, a game.
+  const values = await season.fetchPlayerValues({ demo: true });
+  const pre = new Map(first.flatMap((t) => t.players || [])
+    .map((p) => [p.playerId, finite(p.seasonProjected) === null ? null : p.seasonProjected / SAMPLE_GAMES]));
+  return assemble({ draft, data, rosters, gapOf: () => null, byes: {}, isDemo: true, ranks, values, preOf: pre });
 }
 
 /** A league read directly. Throws what the reads throw. */
 async function liveWorld(cfg) {
   const say = (msg) => setStatus(`<span class="searching">${esc(msg)}</span>`);
-  const data = capture.normalizeSchedule(await season.fetchSchedule(), { isDemo: false });
+  const schedule = await season.fetchSchedule();
+  const data = capture.normalizeSchedule(schedule, { isDemo: false });
   const { weeks, finished } = weeksOf(data);
   const leagueKey = `${cfg.leagueId}-${cfg.season}`;
   const kept = readKept(leagueKey);
@@ -1389,7 +1436,22 @@ async function liveWorld(cfg) {
     const e = kept.weeks[w] && kept.weeks[w].men[id];
     return e ? { name: e[0], position: e[1], proTeamId: e[2], projected: e[3], actual: e[4] } : null;
   };
-  return assemble({ draft, data, rosters, gapOf, byes, isDemo: false, ranks });
+
+  // VALUE: the league's frozen lines and every rostered man's figure
+  // (js/season.js — made once a league-season, then kept), and ESPN's preseason
+  // projection per game under this league's own scoring (js/proj-trend.js: the
+  // season total ÷ his projected games, which is what a weekly projection with
+  // the bye left out is compared with). No lines, or no scoring: the old view.
+  const values = await season.fetchPlayerValues();
+  let preOf = null;
+  const scoring = Array.isArray(schedule && schedule.scoringItems) && schedule.scoringItems.length ? schedule.scoringItems : null;
+  if (values && values.base && scoring && await loadBaseline()) {
+    preOf = (id) => {
+      const b = baselineOf(id, scoring);
+      return b ? b.total / b.games : null;
+    };
+  }
+  return assemble({ draft, data, rosters, gapOf, byes, isDemo: false, ranks, values, preOf });
 }
 
 /**
@@ -1403,7 +1465,7 @@ async function loadReview(src) {
   let leagueKey = 'demo';
   let cfg = null;
   if (demo) {
-    world = demoWorld();
+    world = await demoWorld();
     setStatus('');
   } else {
     // Never read localStorage for the league directly — see PROGRESS.md rule 6.
@@ -1431,6 +1493,8 @@ async function loadReview(src) {
   }
 
   review.world = world;
+  // A card's Value: a man on a squad is looked up when his card opens.
+  setValueSource(world.lookup || null);
   review.leagueKey = leagueKey;
   // Whose picks: the team last picked for THIS league, else the saved "my
   // team", else the first — the Decisions page's rule.
@@ -1479,6 +1543,10 @@ function cardAttr(r) {
     href: w.isDemo ? null : `waivers.html?player=${encodeURIComponent(r.playerId)}`,
     id: `dr:${r.playerId}`,
     glance: m.glance,
+    // His Value, first on the card: looked up for a man on a squad, handed in
+    // for one nobody holds (worked out here from his own weeks).
+    ...(w.held && w.held(r.playerId) ? { playerId: r.playerId }
+      : w.valueNow && w.valueNow.has(r.playerId) ? { value: w.valueNow.get(r.playerId) } : {}),
   }, 'dr');
   w.cards.set(r.playerId, key);
   return tipAttr(key, { go: true });
@@ -1525,7 +1593,19 @@ function renderReview() {
       : '') +
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero he went later than he was ranked, below zero earlier. ` +
     'Green and red compare it with every pick in the draft.</p>'
-    : '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
+    : onValue()
+      ? '<p><strong>Now</strong> is his Value today, in points a week.</p>' +
+      '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
+      'Their preseason Values make one smoothed line. ' +
+      `It is read at ${auction ? 'his price rank' : 'his pick'}.</p>` +
+      (auction
+        ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+        : '') +
+      '<p><strong>+/−</strong> is Now minus expected value. Above zero is a steal, below zero a miss. ' +
+      'Green and red compare it with every pick in the draft.</p>' +
+      '<p><strong>Value</strong> on the board adds up Now for every player a team drafted.</p>' +
+      '<p>A player counts for the team that drafted him, wherever he is now.</p>'
+      : '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
     'points so far plus ESPN’s projection for every week left, measured against a typical bench player at his position.</p>' +
     (auction
       ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
@@ -1552,7 +1632,15 @@ function drawBoard() {
     // No `title`: the heading opens the team's card, which carries its whole name.
     `<th class="dr-col${mine(id)}" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}">` +
     `${esc(teamName(id))}</button></th>`).join('') + '</tr>';
-  table.querySelector('tbody').innerHTML = rows.map((row, i) =>
+  // THE TOTAL ROW (Tim, 2026-10-09: "display the total value of all the player's
+  // that that user drafted at the top as a row above the first round picks
+  // below their name"). Only when Value is known; both views.
+  const totalRow = !w.valued ? '' : '<tr class="dr-total"><td class="dr-rd">Value</td>' + teamIds.map((id) => {
+    const total = w.teamTotals.has(id) ? w.teamTotals.get(id) : null;
+    const h = total === null ? null : heatOf(total, w.totalScale);
+    return `<td class="dr-tot${mine(id)}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${valueText(total)}${heatMarkHtml(h)}</td>`;
+  }).join('') + '</tr>';
+  table.querySelector('tbody').innerHTML = totalRow + rows.map((row, i) =>
     `<tr><td class="dr-rd">${i + 1}</td>` + row.map((pk, c) => {
       const id = teamIds[c];
       if (!pk) return `<td class="dr-cell dr-none${mine(id)}" data-team="${esc(id)}"></td>`;
@@ -1561,7 +1649,7 @@ function drawBoard() {
       const h = d === null ? null : heatOf(d, scaleOf(w));
       return `<td class="dr-cell${mine(id)}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
         whyHtml(r, `<span class="dr-went">${esc(wentFor(r))}${r.position ? ` ${esc(posSaid(r.position))}` : ''}</span>` +
-          `<span class="dr-d">${signed(d)}${heatMarkHtml(h)}</span>`, 'dr-top') +
+          `<span class="dr-d">${dSaid(d)}${heatMarkHtml(h)}</span>`, 'dr-top') +
         `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
         '</td>';
     }).join('') + '</tr>').join('');
@@ -1582,7 +1670,7 @@ function drawTeam() {
   // table under them does not move from one team to the next.
   const tile = (k, r, key) => `<div class="stat dr-tile" data-tile="${key}"><div class="k">${k}</div>` +
     (r
-      ? `<div class="v">${whyHtml(r, `${signed(dOf(r))}${heatMarkHtml(heatOf(dOf(r), scaleOf(w)))}`)}</div><div class="dr-who">${who(r)}</div>`
+      ? `<div class="v">${whyHtml(r, `${dSaid(dOf(r))}${heatMarkHtml(heatOf(dOf(r), scaleOf(w)))}`)}</div><div class="dr-who">${who(r)}</div>`
       : '<div class="v muted">—</div><div class="dr-who">&nbsp;</div>') +
     '</div>';
   const [up, down] = endNames();
@@ -1590,17 +1678,18 @@ function drawTeam() {
 
   $('teamTable').querySelector('tbody').innerHTML = t.picks.map((r) => {
     const d = dOf(r);
-    const then = isPre() ? r.pre : r.now;
+    const then = isPre() ? r.pre : onValue() ? r.valueNow : r.now;
+    const thenSaid = then === null ? '—' : onValue() ? valueText(then) : then;
     const h = d === null ? null : heatOf(d, scaleOf(w));
     const v = (n) => (n === null || n === undefined ? '' : ` data-v="${esc(n)}"`);
     return `<tr data-pid="${esc(r.playerId)}">` +
       `<td class="name" data-v="${esc(nameOf(r))}">${who(r)}</td>` +
       `<td class="dr-paid"${auction ? '' : ' hidden'}${v(r.bid)}>${auction ? `$${r.bid}` : ''}</td>` +
       `<td${v(r.at)}>${r.at}</td>` +
-      `<td${v(then)}>${then === null ? '—' : then}</td>` +
+      `<td${v(then)}>${thenSaid}</td>` +
       // No `title`: on a phone js/touch-titles.js would open it over the preview.
       `<td class="dr-diff${h ? ` ${h.cls}` : ''}"${v(d)}>` +
-      (d === null ? '—' : whyHtml(r, `${signed(d)}${heatMarkHtml(h)}`)) + '</td></tr>';
+      (d === null ? '—' : whyHtml(r, `${dSaid(d)}${heatMarkHtml(h)}`)) + '</td></tr>';
   }).join('');
   resort($('teamTable'));
 
@@ -1663,6 +1752,22 @@ function whySpec(pid) {
       foot: hp ? `${hp.standing} picks` : '',
     };
   }
+  if (onValue()) {
+    const d = r.valueDiff;
+    const hv = d === null ? null : heatOf(d, w.valueScale);
+    const word = d === null ? '' : d > 0 ? 'Steal' : d < 0 ? 'Miss' : 'Even';
+    return {
+      title: nameOf(r),
+      sub: r.position ? posSaid(r.position) : '',
+      rows: [
+        ...went,
+        { label: 'Expected value', value: valueText(r.expected) },
+        { label: 'Value now', value: valueText(r.valueNow) },
+      ],
+      total: word ? { label: word, value: signedValue(d) } : null,
+      foot: hv ? `${hv.standing} picks` : '',
+    };
+  }
   const said = r.diff === null ? '' : r.diff > 0 ? 'Steal' : r.diff < 0 ? 'Miss' : 'Even';
   const h = r.diff === null ? null : heatOf(r.diff, w.scale);
   return {
@@ -1699,7 +1804,7 @@ function teamSpec(id) {
   const tr = draftReview.teamReview(w.rv.rows, t.id, diffKey());
   const [up, down] = endNames();
   const end = (label, r) => (r ? [{
-    label, note: shortName({ name: nameOf(r), position: r.position }), html: esc(signed(dOf(r))),
+    label, note: shortName({ name: nameOf(r), position: r.position }), html: esc(dSaid(dOf(r))),
   }] : []);
   const canGo = !w.isDemo && typeof links.teamHref === 'function' && (coarsePointer() || headGo);
   return {

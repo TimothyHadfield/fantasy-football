@@ -2003,3 +2003,12 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
  * this adds is that the word and its number never part at a line end. */
 .tc-glance .tc-value { white-space: nowrap; }
 /* =================================================== end of player value */
+/* ============ DRAFT BOARD: THE VALUE ROW (2026-10-09, docs/value-plan.md 2b)
+ * Tim: "display the total value of all the player's that that user drafted at
+ * the top as a row above the first round picks below their name". One row of
+ * the board's own cells: the number bold, a line under it, and its label small
+ * enough for the 30px round column. */
+.dr-board tr.dr-total td { font-weight: 600; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.dr-board tr.dr-total td.dr-tot { border-left: 1px solid var(--line); }
+.dr-board tr.dr-total td.dr-rd { font-size: 9.5px; font-weight: 400; padding-left: 1px; padding-right: 1px; }
+/* ============================================== end of the draft's value row */

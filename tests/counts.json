@@ -238,10 +238,10 @@
       "assertions": 164
     },
     "test-draft-review.mjs": {
-      "assertions": 111
+      "assertions": 163
     },
     "draft-review-check.mjs": {
-      "assertions": 161
+      "assertions": 199
     },
     "pop-check.mjs": {
       "assertions": 135
