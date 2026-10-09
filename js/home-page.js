@@ -49,7 +49,7 @@ import { heatScale, heatOf, heatStanding, heatMarkHtml, describeHeat, ordinal } 
 // made of; a click on either follows its connector (js/links.js).
 import { statCard, registerPop, clearPops, wirePops, teamWeekSpec, POP_ATTR, POP_GO_ATTR } from './pop.js';
 import {
-  playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, reopenTip,
+  playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, reopenTip, setValueSource,
   zeroKind, byeWeekOf,
 } from './player-card.js';
 import { teamHref, playerHref, weekHref, statsHref } from './links.js';
@@ -178,6 +178,30 @@ function pref(p, inner, { card = true } = {}) {
  * from that model and nothing else.
  */
 let cur = null;
+
+// ---------------------------------------------------------------- his Value
+//
+// Tim, 2026-10-09: "I want it to be displayed at the top of the player's
+// preview." Every player card on this page is made by `playerCardFromWeeks`,
+// which carries his `playerId`; this hands js/player-card.js the place to look
+// his Value up when a card opens (js/season.js `fetchPlayerValues`). Nothing
+// waits on it: the page paints first, and a card opened before the answer is
+// in — or when there is none — is the card as it always was.
+let valueFor = null;   // the league (or the sample) the cards' Values belong to
+
+function wireValue(demo) {
+  if (typeof season.fetchPlayerValues !== 'function') return;
+  const { leagueId, season: year } = demo ? {} : espn.getConfig();
+  const key = demo ? 'demo' : `${leagueId}::${year}`;
+  // Another league's numbers are never shown against this one's men.
+  if (key !== valueFor) setValueSource(null);
+  valueFor = key;
+  let asked;
+  try { asked = season.fetchPlayerValues({ demo: Boolean(demo) }); } catch { return; }
+  Promise.resolve(asked).then((v) => {
+    if (valueFor === key && v && typeof v.lookup === 'function') setValueSource(v.lookup);
+  }).catch(() => {});
+}
 
 /** A stat card's attribute for this page, or '' when there is no spec. */
 const pop = (spec, focusable = true) => (spec ? statCard(spec, { prefix: 'home', focusable }) : '');
@@ -1232,6 +1256,7 @@ export function render(m) {
   clearRuns('home');
   clearPops('home');
   cur = m;
+  wireValue(m.isDemo);
   renderHeader(m);
   renderWeekPicker(m);
   renderDeadlines(m);

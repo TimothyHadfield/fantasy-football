@@ -528,5 +528,50 @@ eq(generateDemoSchedule().weeks.length >= 13, true, 'sanity: the demo schedule c
   ok(!$('tipCard') || $('tipCard').hasAttribute('hidden'), 'a team dot opens no player card');
 }
 
+// VALUE LEADS THE CARD (Tim, 2026-10-09: "I want it to be displayed at the top
+// of the player's preview"). The sample league's own lines and squads (weeks
+// 14–16 are still to come in it), worked out by js/season.js; a man who was on
+// a squad in a played week but is on none of the weeks left has no Value, and
+// his card is the card it always was.
+{
+  const season = await mod('js/season.js');
+  const vals = await season.fetchPlayerValues({ demo: true });
+  ok(vals.base && vals.byId.size > 100, 'the sample league has its lines and its men\'s values', String(vals.byId.size));
+  await new Promise((r) => setTimeout(r, 50));
+  const svg = $('chartFitPlayers').querySelector('svg');
+  const host = $('chartFitPlayers');
+  const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  const wrong = [];
+  let led = 0, plain = 0;
+  for (const dot of dots('chartFitPlayers').filter((_, i) => i % 23 === 0)) {
+    $('tipCard')?.setAttribute('hidden', '');
+    tap(svg, dot);      // a finger: each tap on another dot opens that dot's card at once
+    const card = $('tipCard');
+    if (!card || card.hasAttribute('hidden')) continue;
+    const m = /player=(\d+)/.exec(host.querySelector('.ff-scatter-tip')?.getAttribute('href') || '');
+    if (!m) continue;
+    const row = vals.byId.get(Number(m[1]));
+    const line = card.querySelector('.tc-glance');
+    const text = clean(line && line.textContent);
+    const who = clean(card.querySelector('.tc-ident')?.textContent);
+    if (row && typeof row.value === 'number') {
+      led++;
+      const want = `Value ${row.value.toFixed(1)}`;
+      if (!line || line.firstElementChild?.className !== 'tc-value' || !(text === want || text.startsWith(`${want} · Avg `))) {
+        wrong.push(`${who}: "${text}", expected to lead with "${want}"`);
+      }
+      if (line && line.querySelectorAll('.tc-value').length !== 1) wrong.push(`${who}: Value is on his card more than once`);
+    } else {
+      plain++;
+      if (card.querySelector('.tc-value') || /Value/.test(card.textContent)) wrong.push(`${who}: no Value, yet his card says "${text}"`);
+      if (text && !text.startsWith('Avg ')) wrong.push(`${who}: his line no longer starts with Avg — "${text}"`);
+    }
+  }
+  ok(led > 20, 'cards of men with a Value were opened', String(led));
+  ok(plain > 5, 'and of men with none', String(plain));
+  eq(wrong.length, 0, `Value is first on the line under the name, to the tenth, on every card of a man who has one — and on no other${wrong[0] ? ` (${wrong[0]})` : ''}`);
+  eq(fetchCalls.length, 0, 'and the sample league\'s values ask ESPN for nothing');
+}
+
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);
