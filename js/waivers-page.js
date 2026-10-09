@@ -31,8 +31,7 @@
 // holds him and where he ranks on that manager's squad. It answers a different
 // question from the wire — not "who can I add" but "who has what" — so it is a
 // separate table rather than more rows in the first one, and it carries
-// NEITHER OF THE TWO GREENS: both of them argue for a claim, and nobody here
-// can be claimed.
+// NO GREEN BOX: the box argues for a claim, and nobody here can be claimed.
 //
 // ============================================================================
 // THE RED/GREEN SCALE ON THIS PAGE, and the collision it had to be fitted round
@@ -42,7 +41,7 @@
 // all the other places a number is referred to across the whole site." He had
 // already named the exception himself — "unless it conflicts with something
 // else we already have built" — and this page is where that exception bites
-// hardest, because it is the one page with TWO greens of its own.
+// hardest, because it is the one page with a green of its own.
 //
 // WHAT THE COLLISION WAS. `js/heat.js` owns a cell's BACKGROUND-IMAGE and its
 // WEIGHT. `td.beats` — "this free agent out-projects your own worst man that
@@ -58,11 +57,12 @@
 //   2. THE TAKEN TABLE'S Avg COLUMN, same group over the rostered pool.
 //   3. THE TAKEN TABLE'S WEEK COLUMNS, one scale per position and week.
 //   4. THE WIRE'S WEEK COLUMNS, the same way: a free agent's week against the
-//      other free agents at his position in that week. The two claim greens
-//      sit ON TOP of it and are told apart by treatment, never by hue alone:
-//      "worth starting" is the accent TEXT at its own weight, and "beats your
-//      worst man" is the shade (now `background-color`, so the tint composes
-//      over it) WITH A RING round the cell — see `td.beats` in waivers.html.
+//      other free agents at his position in that week. THE GREEN BOX sits ON
+//      TOP of it: "you would start him that week" (`lineupTest`) is a shade
+//      (`background-color`, so the tint composes over it) WITH A RING round
+//      the cell — see `td.beats` in waivers.html. It is the only claim cue:
+//      the green NUMBER ("worth starting", a set bar per position) was removed
+//      on 2026-10-09 — Tim: "3 different colorizers ... looks so messy".
 //   5. THE Gain COLUMN, against the other gains in the column and anchored at
 //      zero, so a plus is never red (`gainScale`).
 //
@@ -117,6 +117,8 @@ import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // page reads the league's lineup slots, so both pages fill the same lineup.
 import { gainBase, gainOf } from './waiver-gain.js';
 import { slotsForLeague } from './trade.js';
+// The site's one lineup solver, for the green box: would he make your lineup.
+import { optimalLineup } from './forecast.js';
 import { slotCountsFromLineups, projectionsFromWeekTeams } from './projection.js';
 // A player's Value: points a week over what is free (docs/value-plan.md).
 import * as value from './value.js';
@@ -164,11 +166,11 @@ const POS_ORDER = new Map(POSITIONS.map((p, i) => [p, i + 1]));
  *
  * It is deliberately NOT in POSITIONS and never in POS_ORDER, and no player's
  * own position changes when it is pressed. A tight end under a FLEX filter is
- * still a TE: still measured against the TE bar in STARTABLE, still his
+ * still a TE: still his
  * manager's TE2 in the taken table, still "Your TE3" on a comparison row. The
  * alternative — rewriting the Pos column to read FLEX while the button is
- * pressed — would turn a filter into a claim about the player, and the ranks and
- * the greens would both become lies. So this constant is consulted in exactly
+ * pressed — would turn a filter into a claim about the player, and the ranks
+ * would become lies. So this constant is consulted in exactly
  * two places: whether a row survives the filter, and what the button's count is.
  */
 const FLEX = 'FLEX';
@@ -421,10 +423,9 @@ const DEMO_TEAMS = [
 // Roughly the spread a real waiver wire has at the top of the ownership order.
 const DEMO_PLAN = [['QB', 6], ['RB', 9], ['WR', 12], ['TE', 4], ['K', 4], ['DST', 5]];
 // Nudged up from where these started so the best demo player at each position
-// clears the startable bar in STARTABLE at least some weeks. They previously
-// topped out just under it for RB, WR and TE — arithmetically fine, but it
-// meant the green highlight could never appear for three of the six positions
-// and the feature looked broken to anyone reading the demo.
+// cleared the set "worth starting" bars of the time (QB 17, RB/WR 12, TE 9) in
+// at least some weeks. Those bars and their green number went on 2026-10-09;
+// the numbers stay, because every demo fixture is built on them.
 const DEMO_BASE = { QB: 15, RB: 9.5, WR: 9.5, TE: 6.5, K: 7.5, DST: 6.5 };
 
 /** A tiny LCG, so the pool is identical on every load and in every browser. */
@@ -1802,7 +1803,7 @@ function buildRows(weeks) {
  * The FLEX branch is the whole of what FLEX does. It reads the player's real
  * position and answers whether a flex spot would take him; it does not write
  * anything back, which is why nothing downstream — the Pos column, the rank
- * beside it, the STARTABLE bar, the "Your QB3" label — has to know this button
+ * beside it, the green box, the "Your QB3" label — has to know this button
  * exists.
  */
 const matches = (row, position) => {
@@ -2342,7 +2343,7 @@ function wireGainJump(table) {
 /** What the last paint drew, for the previews to be built from. */
 const view = {
   weeks: [],
-  wireAll: [], wire: new Map(), mine: new Map(), wireWeekScales: new Map(),
+  wireAll: [], wire: new Map(), mine: new Map(), wireWeekScales: new Map(), lineup: null,
   takenAll: [], taken: new Map(), takenWeekScales: new Map(),
   teamProj: null,
 };
@@ -2446,7 +2447,7 @@ function valueRows(p, x) {
   ];
 }
 
-/** A week still to play: the number, its group, and the two claim cues. */
+/** A week still to play: the number, its group, and whether you would start him. */
 function weekCard(row, kind, week) {
   const i = view.weeks.indexOf(week);
   const v = i < 0 ? null : row.values[i];
@@ -2479,15 +2480,13 @@ function weekCard(row, kind, week) {
     });
   }
   if (kind === 'wire') {
-    // The two greens, in figures: the bar he is over or under, and the number
-    // of the man a claim would drop.
-    const bar = STARTABLE[pos];
-    if (typeof bar === 'number') {
-      rows.push({ label: 'Worth starting', note: `over ${bar}`, value: v > bar ? 'Yes' : 'No' });
-    }
-    const yours = [...view.mine.values()].find((r) => r.p.position === pos) || null;
-    if (yours && !yours.done[i] && typeof yours.values[i] === 'number') {
-      rows.push({ label: yours.p.name, note: `your worst ${pos}`, value: yours.values[i] });
+    // The green box, in figures: whether he would make your lineup this week,
+    // and the man of yours that turns on.
+    const got = view.lineup && !(row.done && row.done[i]) ? view.lineup(row.p, v, i) : null;
+    if (got) {
+      rows.push({ label: 'You would start him', value: got.starts ? 'Yes' : 'No' });
+      if (got.out) rows.push({ label: got.out.name, note: 'he would sit', value: got.out.projected });
+      if (got.bar) rows.push({ label: got.bar.name, note: 'starts ahead of him', value: got.bar.projected });
     }
   }
   return {
@@ -3113,20 +3112,107 @@ function renderHead(weeks) {
      </tr>`;
 }
 
-/**
- * What counts as a genuinely startable week, by position — Tim's numbers.
- *
- * These are thresholds, not percentiles: a week is worth noticing on its own
- * terms, not relative to whoever else happens to be on the wire this week. A
- * position with no entry is never highlighted rather than being given a
- * borrowed number.
- */
-const STARTABLE = { QB: 17, RB: 12, WR: 12, TE: 9, DST: 7, K: 9 };
+// ====================================================================
+// THE GREEN BOX: YOU WOULD START THIS PLAYER THIS WEEK
+// ====================================================================
+//
+// Tim, 2026-10-09: "instead of having the box in green be beats your worst man,
+// have it be 'you would start this player this week' if it's boxed in green."
+//
+// So, per week cell and each on its own week: put the free agent on your
+// roster, fill the league's lineup slots with the site's solver
+// (`optimalLineup`, each man at his projection for THAT week), and box the
+// cell when he is one of the starters. A FLEX is a slot like any other, so a
+// back who cannot beat your RB2 but beats your flex man is boxed.
+//
+//   - YOUR ROSTER is the squad you hold in the earliest week on screen — the
+//     one the "Your …" rows and Gain use: a claim made now joins the roster as
+//     it stands now. Each man's number is that week's roster read.
+//   - THE SLOTS are the Gain column's: counted off the league's lineups.
+//   - A BYE OR A RULED-OUT MAN of yours projects 0 and simply loses his place;
+//     a man with no number that week is not in the lineup at all.
+//   - LEVEL DOES NOT START: the solver gives a tie to the man listed first,
+//     and the free agent is listed last.
+//   - A WEEK IN PROGRESS: a man of yours whose game is over is locked — a
+//     starter keeps his slot, a bench man cannot be used — so the free agent
+//     is judged for the slots still open.
+//   - NO LINEUP, NO BOX: nobody set as you, or that week's rosters not read.
+//
+// ALWAYS ON PROJECTIONS, also when the table is showing Value: this is a
+// lineup question and a lineup is filled on projections.
+//
+// The old meaning of the box — "out-projects your own worst man at his
+// position" — is gone with it, and so is the green NUMBER (a set bar per
+// position, "worth starting"): one claim cue on this table, not two.
 
-/** Strictly over the line: "over 17" does not include 17. */
-function isStartable(v, position) {
-  const bar = STARTABLE[position];
-  return typeof bar === 'number' && typeof v === 'number' && v > bar;
+/**
+ * The judge for one paint: `(p, v, i) -> null | { starts, out, bar }` for free
+ * agent `p` projecting `v` in `weeks[i]`, or null when there is no lineup of
+ * yours to judge him against at all.
+ *
+ * `out` is the starter he would send to your bench (null when he fills an
+ * empty slot); `bar` is, when he would NOT start, your weakest starter in a
+ * slot his position may fill. Both are `{ name, projected }` for the preview.
+ */
+function lineupTest(weeks) {
+  const teamId = myTeamId();
+  if (teamId === null) return null;
+  const anchor = weeks.find((w) => state.rosterWeeks.has(w));
+  if (anchor === undefined) return null;
+  const teams = state.rosterWeeks.get(anchor) || [];
+  const team = teams.find((t) => t.id === teamId);
+  if (!team || !(team.players || []).length) return null;
+  const slots = slotsForLeague(slotCountsFromLineups(teams));
+
+  const squads = weeks.map((week) => {
+    if (!state.rosterProj.has(week)) return null;
+    const over = state.rosterDone.get(week) || new Map();
+    const thatWeek = (state.rosterWeeks.get(week) || []).find((t) => t.id === teamId);
+    const seat = new Map(((thatWeek && thatWeek.players) || []).map((p) => [p.playerId, p]));
+    const open = slots.slice();
+    const pool = [];
+    for (const p of team.players) {
+      if (p.playerId === null || p.playerId === undefined) continue;
+      const v = rosterValueFor(p.playerId, week);
+      if (typeof v !== 'number') continue;
+      const done = over.get(p.playerId);
+      // Locked: his game is over. (`done` with a 0 he was never projected to
+      // beat is a man with no game — a bye — and he is an ordinary zero.)
+      if (done && !(v === 0 && !(done.pregame > 0))) {
+        const was = seat.get(p.playerId);
+        const at = was && was.started ? open.indexOf(was.lineupSlotId) : -1;
+        if (at >= 0) open.splice(at, 1);
+        continue;
+      }
+      pool.push({ playerId: p.playerId, name: p.name, position: p.position, projected: v });
+    }
+    return { open, pool, before: optimalLineup(pool, open).starters };
+  });
+
+  const memo = new Map();
+  return (p, v, i) => {
+    const squad = squads[i];
+    // A zero or less is never a man you would start, whatever slot is empty.
+    if (!squad || typeof v !== 'number' || !(v > 0)) return null;
+    const key = `${i}|${p.position}|${v}`;
+    if (memo.has(key)) return memo.get(key);
+    const after = optimalLineup(
+      [...squad.pool, { position: p.position, projected: v, claimed: true }], squad.open).starters;
+    const starts = after.some((s) => s.claimed);
+    const man = (s) => (s ? { name: s.name, projected: s.projected } : null);
+    const eligible = (s) => (espn.SLOT_ELIGIBILITY[s.slotId] || []).includes(p.position);
+    const got = {
+      starts,
+      out: starts
+        ? man(squad.before.find((b) => !after.some((a) => a.playerId === b.playerId)))
+        : null,
+      bar: starts
+        ? null
+        : man(squad.before.filter(eligible).reduce((a, b) => (!a || b.projected < a.projected ? b : a), null)),
+    };
+    memo.set(key, got);
+    return got;
+  };
 }
 
 // ====================================================================
@@ -3160,8 +3246,8 @@ function isStartable(v, position) {
 // THE POOL IS ALWAYS THE UNFILTERED ONE. Every scale is built before the
 // position buttons are applied, so pressing RB — or FLEX, which is three
 // positions at once — repaints the table and changes NOT ONE CELL'S COLOUR.
-// That is the same rule the two greens already follow (`hot-check.mjs` asserts
-// it for them), and for the same reason: a colour that moved when you filtered
+// That is the same rule the green box already follows (`hot-check.mjs` asserts
+// it), and for the same reason: a colour that moved when you filtered
 // would be a colour about the filter rather than about the player.
 
 /**
@@ -3258,26 +3344,19 @@ function heatBandsHtml(scales) {
  * `roster` marks a cell whose number came from the roster payload rather than
  * the wire — a comparison row, or any row in the Taken players table. It
  * changes two things: the week it is waiting on is the ROSTER read rather than
- * the wire read, and it is never coloured green. Both greens are arguments for
- * a claim, and a man already on a roster cannot be claimed, so on those rows
- * they would be answering a question that does not arise.
+ * the wire read, and it is never boxed. The box is an argument for a claim,
+ * and a man already on a roster cannot be claimed.
  *
- * `yours` is the matching "Your …" row's number for the SAME week, when you
- * hold anyone at that position. A wire week that beats it is shaded, because
- * that is the whole question a waiver claim asks. The two greens are separate
- * cues answering separate questions and a cell can carry both at once:
- *
- *   the accent text  he is worth starting in his own right (the STARTABLE bar)
- *   the green shade  he out-projects the man you would drop, that week
- *
- * So they are a colour AND a treatment apart, not two shades of one colour.
+ * `starts`: with him on your roster, your best lineup that week has him in it
+ * (`lineupTest`). That cell is boxed in green — the class is still `beats`,
+ * from when the box meant "beats your worst man" (the suites assert on it).
  *
  * `scale` is the shared red/green scale for THIS position in THIS week: the
  * rostered men's on the Taken table, the free agents' on the wire (a "Your …"
  * row is measured against the free agents too, and is not counted among them).
- * On the wire the two greens sit on top of it — see `td.beats` in waivers.html.
+ * On the wire the box sits on top of it — see `td.beats` in waivers.html.
  */
-function cell(v, week, p, roster = false, yours = null, scale = null, done = null, shown = undefined) {
+function cell(v, week, p, roster = false, starts = false, scale = null, done = null, shown = undefined) {
   const { name, position } = p;
   // `done`: his game that week is over and `v` is what he scored — see
   // doneCell(). A man with no game falls through to the Bye he always was.
@@ -3327,34 +3406,30 @@ function cell(v, week, p, roster = false, yours = null, scale = null, done = nul
     const why = `${esc(name)} is projected at 0.0 in week ${week}` +
       (bye ? `, which is not his bye (week ${bye})` : '') +
       (zero === 'out' ? ` — listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())} that week.` : '.');
-    // A real zero. It cannot be startable and cannot beat anybody, so neither
-    // green applies; the word is what says it is not a bye.
+    // A real zero. Nobody would start it, so it is never boxed; the word is
+    // what says it is not a bye.
     if (zero === 'out') {
       return `<td class="zero-out" data-v="0" title="${why}">0.0 ` +
         `<span class="zmark">${esc(outMark(status))}</span></td>`;
     }
     return `<td class="zero" data-v="0" title="${why}">0.0</td>`;
   }
-  // A zero has already returned above, so neither cue can fire on one — which
-  // is right for both: 0.00 is never startable, and it cannot beat anybody. A
-  // wire man IS shaded against your own man's zero, bye or ruled out: that
-  // zero is the week the claim would cover.
-  const hot = !roster && isStartable(v, position);
-  const beats = !roster && yours !== null && typeof yours.value === 'number' && v > yours.value;
+  // A zero has already returned above, so the box cannot fire on one.
+  const beats = !roster && starts === true;
   // The scale. `measurable` has already been satisfied by the returns above —
   // every zero left before this line.
   // ON VALUE (`shown`, from `withShown`) the cell prints that projection's
-  // Value and is coloured and sorted by it. The two greens stay facts about
-  // the projection: worth starting, and better than the man a claim would drop.
+  // Value and is coloured and sorted by it. The box stays a fact about the
+  // projection: a lineup is filled on projections (`lineupTest`).
   const n = shown === undefined ? v : shown;
   if (n === null) {
     return `<td title="No Value can be said at ${esc(position)}.">${dash}</td>`;
   }
   const heat = heatOf(n, scale);
   // THE WORDS ARE IN THE PREVIEW (`weekCard`): the number, the group it was
-  // measured against, the bar and your own man's number. So no `title` here —
+  // measured against, and the man of yours he would sit. So no `title` here —
   // a card and a title on one cell would be two tooltips.
-  const cls = [hot ? 'hot' : '', beats ? 'beats' : '', heat ? heat.cls : '']
+  const cls = [beats ? 'beats' : '', heat ? heat.cls : '']
     .filter(Boolean).join(' ');
   return `<td${cls ? ` class="${cls}"` : ''} data-v="${n}" data-c="wk" data-w="${week}">` +
     `${fmt(n)}${heatMarkHtml(heat)}</td>`;
@@ -3447,7 +3522,7 @@ function waiverTag(p) {
  * The three columns after the name, shared by both kinds of row.
  *
  * THE Avg CELL IS WHERE THE RED/GREEN SCALE LIVES ON THIS PAGE. It is the
- * column that orders the table into an answer, neither green is ever on it, and
+ * column that orders the table into an answer, the green box is never on it, and
  * it has no link inside it — so the cell itself opens the preview (`avgCard`):
  * hover with a mouse, a tap on a phone.
  *
@@ -3521,15 +3596,14 @@ function avgCellHtml(avg, heat) {
 /**
  * A player you could claim.
  *
- * `mine` is the position -> comparison row map, so each week's cell can be
- * measured against your own man's number for that same week. Built from the
- * UNFILTERED set, so the shading means the same thing whichever position
- * button is pressed.
+ * `lineup` is this paint's `lineupTest` (null with no lineup of yours): each
+ * week's cell is boxed when he would start for you that week. It reads your
+ * whole roster, so the box means the same thing whichever position button is
+ * pressed.
  */
-function wireRow(row, weeks, mine, avgScales, weekScales) {
+function wireRow(row, weeks, lineup, avgScales, weekScales) {
   const { p, values } = row;
   const status = availability(p.injuryStatus);
-  const yours = mine.get(p.position) || null;
   const cols = weekScales.get(p.position) || [];
 
   const owned = p.percentOwned === null || p.percentOwned === undefined
@@ -3546,10 +3620,9 @@ function wireRow(row, weeks, mine, avgScales, weekScales) {
       ${identityCells(row, heat)}
       ${gainCell(p)}
       ${weekCells(p, weeks, true, p.playerId === state.spotlight, (i) =>
-        // Your own man's finished game is not a number a claim can still
-        // beat: no shade against a score.
+        // His own finished game is a score, not a week you could start him in.
         cell(values[i], weeks[i], p, false,
-          yours && !yours.done[i] ? { name: yours.p.name, value: yours.values[i] } : null,
+          Boolean(lineup && !row.done[i] && (lineup(p, values[i], i) || {}).starts),
           cols[i] || null, row.done[i], valueOn() ? row.shown[i] : undefined))}
     </tr>${actualRowIf(p, weeks, true, 4)}`;
 }
@@ -3587,7 +3660,7 @@ function mineRow(row, weeks, avgScales, weekScales) {
       ${identityCells(row, heat)}
       <td class="gain"></td>
       ${weekCells(p, weeks, false, false, (i) =>
-        cell(values[i], weeks[i], p, true, null, cols[i] || null, row.done[i],
+        cell(values[i], weeks[i], p, true, false, cols[i] || null, row.done[i],
           valueOn() ? row.shown[i] : undefined))}
     </tr>`;
 }
@@ -3602,9 +3675,8 @@ function renderTable(weeks) {
   const all = withShown(buildRows(weeks), weeks);
   const available = all.filter(matchesFilter);
   const mineAll = withShown(buildMineRows(weeks), weeks);
-  // Keyed by position for the shading, and built before the filter: a wire RB
-  // is measured against your worst RB whether or not the RB button is pressed.
-  const byPosition = new Map(mineAll.map((r) => [r.p.position, r]));
+  // The green box's judge, from your whole roster: no filter can move a box.
+  const lineup = lineupTest(weeks);
   const mine = mineAll.filter(matchesFilter);
   const cols = pastWeeks(weeks).length + weeks.length + 5;
 
@@ -3619,7 +3691,7 @@ function renderTable(weeks) {
   renderWireHeatKey(avgScales, available.length + mine.length > 0);
   // What the previews are built from, when one is asked for.
   Object.assign(view, {
-    weeks, wireAll: all, wire: byId(all), mine: byId(mineAll), wireWeekScales: weekScales,
+    weeks, wireAll: all, wire: byId(all), mine: byId(mineAll), wireWeekScales: weekScales, lineup,
   });
 
   if (!available.length && !mine.length) {
@@ -3633,7 +3705,7 @@ function renderTable(weeks) {
   // players who might replace him, which is the entire point of the feature:
   // sort by Avg and everyone above your row is an upgrade.
   tbody.innerHTML =
-    available.map((r) => wireRow(r, weeks, byPosition, avgScales, weekScales)).join('') +
+    available.map((r) => wireRow(r, weeks, lineup, avgScales, weekScales)).join('') +
     mine.map((r) => mineRow(r, weeks, avgScales, weekScales)).join('');
   setTrendKey('waiverTrendKey', tbody.innerHTML);
 
@@ -3657,7 +3729,7 @@ function renderTable(weeks) {
  *
  * The rest of the argument — why the pool is the wire and not the league, why
  * your own row is measured against them without being counted among them, how
- * the two greens sit on top of it on the week cells — is in `renderNote`, where the
+ * the green box sits on top of it on the week cells — is in `renderNote`, where the
  * method has always lived.
  *
  * The Gain column's shade is explained with Gain, in the same toggle.
@@ -3766,7 +3838,7 @@ function takenRow(row, weeks, avgScales, weekScales) {
       <td class="left owner" data-v="${esc(owner.toLowerCase())}" data-c="own" data-go>${esc(owner)}</td>
       ${avgCellHtml(row.shownAvg, heatOf(row.shownAvg, avgScales.get(p.position)))}
       ${weekCells(p, weeks, false, p.playerId === state.spotlight, (i) =>
-        cell(values[i], weeks[i], p, true, null, cols[i] || null, row.done[i],
+        cell(values[i], weeks[i], p, true, false, cols[i] || null, row.done[i],
           valueOn() ? row.shown[i] : undefined))}
     </tr>${actualRowIf(p, weeks, false, 4)}`;
 }
@@ -3804,9 +3876,9 @@ function renderTaken(weeks) {
  * The visible key under the Taken table.
  *
  * WHY THIS TABLE TAKES THE SCALE AT ALL, when it has carried no colour since it
- * was built: the two greens it refuses are CLAIM cues — worth starting, beats
- * your man — and nobody here can be claimed, which is still true and still the
- * reason they are absent. The red/green scale answers a different question
+ * was built: the green box it refuses is a CLAIM cue — you would start him —
+ * and nobody here can be claimed, which is still true and still the reason it
+ * is absent. The red/green scale answers a different question
  * entirely, and one this table is the only place on the site that can answer:
  * of everyone in the league holding this position, how good is this one. So
  * there is no collision to fit round here, which is exactly why it is the
@@ -3959,15 +4031,14 @@ function renderTakenNote(weeks) {
     'reason, and a blank Avg carries no sort key at all.'
   );
 
-  // THE CLAIM GREENS, AND WHY NEITHER IS HERE. The lead scopes the sentence to
-  // the two greens, which is what it was always about: this table has carried
-  // the shared red/green scale since 2026-09-19b and the exception is named in
-  // the same breath so the paragraph cannot be read as "no colour at all".
+  // THE GREEN BOX, AND WHY IT IS NOT HERE. The lead scopes the sentence to the
+  // box: this table has carried the shared red/green scale since 2026-09-19b
+  // and the exception is named in the same breath so the paragraph cannot be
+  // read as "no colour at all".
   parts.push(
-    lead('Neither claim green') +
-    'Nothing here is highlighted, on purpose: both greens in the table above argue for a waiver ' +
-    'claim — worth starting at all, and better than the man the claim would drop — and nobody on ' +
-    'this list can be claimed. Colouring them would be answering a question that does not arise. ' +
+    lead('No green box') +
+    'Nothing here is boxed, on purpose: the green box in the table above argues for a waiver ' +
+    'claim, and nobody on this list can be claimed. ' +
     'The red/green scale below is a different thing and asks a different question.'
   );
 
@@ -4051,8 +4122,8 @@ function renderTakenNote(weeks) {
 
 /** What the playoff columns are, said in both tables' notes. */
 const PLAYOFF_NOTE =
-  'The playoff weeks sit after a heavy line, headed PO: ESPN’s projection for each, green and ' +
-  'shading included, but left out of Avg — so Avg, the ranks and which of your men is the worst ' +
+  'The playoff weeks sit after a heavy line, headed PO: ESPN’s projection for each, colour and ' +
+  'green box included, but left out of Avg — so Avg, the ranks and which of your men is the worst ' +
   'are regular-season figures. With only playoff weeks left to show, they are what Avg averages.';
 
 /** What the columns left of the heavy line are, said in both tables' notes. */
@@ -4147,7 +4218,7 @@ function comparisonNote(weeks, status) {
     'everything else, which is why they are in the table rather than beside it. They are ' +
     'never coloured green as a claim themselves — whether to start your own bench is a different question — and ' +
     'they are never counted on the position buttons, because you cannot add a player you ' +
-    'already have. Their week numbers are what the green shading above is measured against.'
+    'already have.'
   );
 
   if (state.isDemo) {
@@ -4249,35 +4320,18 @@ function renderNote(weeks) {
     );
   }
 
-  // The green has to say what it means, or it is just decoration.
-  parts.push(
-    lead('Green text') +
-    'A week in <span class="hot-key">green</span> is one worth starting the player for: ' +
-    Object.entries(STARTABLE)
-      .map(([pos, bar]) => `${esc(pos)} over ${bar}`)
-      .join(', ') +
-    '. Those are set bars, not a ranking against the rest of the wire, so a quiet week for ' +
-    'everyone stays uncoloured rather than promoting the best of a bad set.'
-  );
-
+  // The green box has to say what it means, or it is just decoration. One
+  // sentence (Tim, 2026-10-09); the rule itself is over `lineupTest`.
   if (comparing()) {
     parts.push(
-      lead('Green shading') +
-      'A week on a <span class="beats-key">green background</span> is a different claim: that ' +
-      'player out-projects your own worst man at his position — the ' +
-      '<span class="mine-key">Your …</span> row further down — in that week specifically. It ' +
-      'does not say he is any good, only that he is better than the man the claim would drop, ' +
-      'so a shaded run against an unshaded one is the argument for making the move. Strictly ' +
-      'ahead: level does not count, and a bye is never shaded because 0.00 cannot beat anybody. ' +
-      'The two greens are independent — a cell can be worth starting, worth claiming, both or ' +
-      'neither.'
+      lead('Green box') +
+      'A week <span class="beats-key">boxed in green</span> is one where he would make your best lineup.'
     );
   }
 
-  // THE THIRD CUE (Tim, 2026-09-19b: the scale "needs to be added to all the
-  // other places a number is referred to"). It goes after the two greens
-  // deliberately: a reader has to know what those mean before being told what
-  // sits underneath them.
+  // THE SCALE (Tim, 2026-09-19b: it "needs to be added to all the other places
+  // a number is referred to"). It goes after the green box deliberately: a
+  // reader has to know what that means before being told what sits under it.
   parts.push(
     lead('The red/green scale') +
     describeHeatPerColumn({ group: 'position', what: 'the other free agents' }) +
@@ -4297,9 +4351,7 @@ function renderNote(weeks) {
     lead('And on the week columns') +
     'Each week cell is on the same scale, measured against the other free agents at his position ' +
     '<strong>in that same week</strong>, so a heavy bye week is not a red stripe down the table. ' +
-    'The two greens sit on top of it and are told apart by treatment: worth starting is the ' +
-    '<span class="hot-key">green number</span>, and beating your worst man is the ' +
-    '<span class="beats-key">shade with a ring round it</span>. A Bye, a 0.0, a blank and a week ' +
+    'The <span class="beats-key">green box</span> sits on top of it. A Bye, a 0.0, a blank and a week ' +
     'already played are never coloured.'
   );
 
@@ -4311,10 +4363,8 @@ function renderNote(weeks) {
     '<strong>FLEX</strong> is not a position but a filter across three: press it and the table ' +
     'shows every running back, receiver and tight end at once — the men who could fill a flex ' +
     'spot — with the count on the button being those three added together. It changes nothing ' +
-    'about the players themselves. Each one keeps his own position in the Pos column and is still ' +
-    'measured against his own position’s bar for the green above, so a receiver over 12 is green ' +
-    'under FLEX exactly as he is under WR; there is no separate flex bar, because what makes a ' +
-    'week worth starting does not depend on which button you pressed to find it.'
+    'about the players themselves: each one keeps his own position in the Pos column, and a week ' +
+    'boxed in green under WR is boxed under FLEX.'
   );
 
   parts.push(
@@ -4362,7 +4412,7 @@ function renderNote(weeks) {
   $('waiverNote').innerHTML = paragraphs(parts);
 
   // The key shows only the cues this table can actually draw right now: with
-  // nobody set as you there is no shading and no Your row to explain.
+  // nobody set as you there is no green box and no Your row to explain.
   $('waiverLegend')
     .querySelectorAll('[data-compare]')
     .forEach((el) => {
@@ -4383,7 +4433,7 @@ $('sourceToggle').addEventListener('click', (e) => {
 });
 
 // Who "you" are is a repaint too: every roster week carries every squad, so the
-// "Your …" rows and the "beats your worst man" shading just re-pick a team.
+// "Your …" rows and the green box ("you would start him") just re-pick a team.
 $('teamSelect').addEventListener('change', (e) => {
   const v = e.target.value;
   state.pickedTeamId = /^\d+$/.test(v) ? Number(v) : v;

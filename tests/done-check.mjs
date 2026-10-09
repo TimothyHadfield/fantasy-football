@@ -271,13 +271,25 @@ async function check(scenario, { document, window, errors, rejections, first }) 
     const posOf = (tr) => txt(tr.children[1]);
     const shaded = (week, pos) => wire.column(week)
       .filter(({ tr, td }) => !tr.classList.contains('mine') && posOf(tr) === pos && td.classList.contains('beats')).length;
-    ok('1 · Wire: no RB is shaded as beating your RB in week 4 — his game is over',
-      shaded(4, 'RB') === 0, `${shaded(4, 'RB')} shaded`);
-    ok('1 · Wire: week 5 still shades them against him', shaded(5, 'RB') > 0, `${shaded(5, 'RB')}`);
-    ok('1 · Wire: and a QB still to play is still shaded against your QB still to play',
-      shaded(4, 'QB') > 0, `${shaded(4, 'QB')}`);
-    ok('1 · Wire: a man still to play keeps his green',
-      wire.column(4).some(({ tr, td }) => !tr.classList.contains('mine') && td.classList.contains('hot')));
+    // THE GREEN BOX IS "YOU WOULD START HIM" (2026-10-09), judged for the
+    // lineup you can still set. Your QBs: Ross 22, Calder 16, Dunlow 10. In
+    // week 4 Ross has played (30.5) and nobody in this stub is in a lineup, so
+    // he is a bench man whose game is over: he cannot be started, the QB slot
+    // is Calder's, and a wire QB starts over 16. In week 5 he must beat 22.
+    const qbWeek = (week) => wire.column(week)
+      .filter(({ tr, td }) => !tr.classList.contains('mine') && posOf(tr) === 'QB' &&
+        !td.hasAttribute('data-done') && Number(td.getAttribute('data-v')) > 0)
+      .map(({ td }) => ({ v: Number(td.getAttribute('data-v')), boxed: td.classList.contains('beats') }));
+    const offQb = (week, bar) => qbWeek(week).filter((x) => x.boxed !== (x.v > bar)).map((x) => x.v);
+    ok('1 · Wire: week 4 — your finished QB cannot be started, so a QB is boxed over Calder’s 16, not Ross’s score',
+      qbWeek(4).some((x) => x.v > 16 && x.v <= 22) && offQb(4, 16).length === 0,
+      `${offQb(4, 16).join(',')} of ${qbWeek(4).map((x) => x.v).join(',')}`);
+    ok('1 · Wire: week 5 — nobody has played, and a QB must beat Ross’s 22',
+      qbWeek(5).some((x) => x.v > 16 && x.v <= 22) && offQb(5, 22).length === 0, offQb(5, 22).join(','));
+    ok('1 · Wire: your RBs have both played on the bench, so week 4’s RB slots are open to the wire',
+      shaded(4, 'RB') > 0, `${shaded(4, 'RB')}`);
+    ok('1 · Wire: no cell is a green number any more',
+      document.querySelectorAll('td.hot').length === 0, `${document.querySelectorAll('td.hot').length} td.hot`);
 
     // ---- 6 · the one sentence, behind the toggle only
     for (const id of ['waiverNote', 'takenNote']) {
