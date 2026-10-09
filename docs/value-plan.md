@@ -49,6 +49,17 @@ Each: pass `playerId` (or `value`) at every `registerRun` call site on its pages
 - **Trade** (`js/trade-page.js`, `trade.html`): Custom trades roster lists, the Season by week / After the trade boxes, Assumed trade. The Depth map is already a value-over-replacement figure on a different bar: leave it, list it in the report.
 - **Home, Stats, Decisions, Draft** (cards only — no switch): `playerId` at every card call site so Value shows at the top of every preview; Draft's dropped men get `value` from their own `byWeek`.
 
+## Wave 2b — Draft "vs worth now" on Value (Tim, 2026-10-09, after wave 1 was launched)
+
+Tim, verbatim: "This new value measurement has huge implications. First, lets apply it to the draft section. Instead of basing the "vs worth now" on position in the draft, base it off of their current value - their expected value based on their rank in the draft. I think the best way to do this is as follows: In order to get the number from their rank in the draft, list all the players based on preseason rank, and then take their expected value (before the season started). This expected value can fluctuate quite a bit so make a smoothed equation line based on these numbers. In order to get a more accurate line you can take historical years of fantasy data for the equation, but It's not necessary if you can't. Then, to get the expected value just plug in that player's preseason rank in the draft. … Additionally I want you to display the total value of all the player's that that user drafted at the top as a row above the first round picks below their name."
+
+- **The curve:** the drafted players in ESPN preseason-rank order (place among drafted, 1..N — already `preseasonPlaces`); each one's preseason Value = `valueOf(base, position, preseason points per week)`, the preseason projection from `data/baselines/2026-preseason.json` scored under the league's scoring as `js/proj-trend.js` does. Smoothed into one never-rising line (pool-adjacent-violators, then a light moving average). Pure, in `js/draft-review.js`, tested.
+- **Expected value of a pick:** the curve read at WHERE HE WAS DRAFTED (pick number; auction: price rank) — reading taken by Claude of "expected value based on their rank in the draft"; reading it at his own preseason rank would grade the player, not the pick. Flag to Tim.
+- **+/− in "vs worth now"** = his Value now − expected value of his pick, in points a week. "Now" column = his Value now. A dropped man: his Value from his own remaining weeks (0 if nothing). "vs preseason rank" view unchanged.
+- **Total row:** on the board, directly under each team's name and above round 1: the sum of the current Value of every player that team drafted.
+- This year only for the curve (flag: past seasons would need old preseason projections that are not in the repo).
+- No baseline (phone before a sync carries it): the view keeps today's place-based numbers.
+
 ## Deliberately NOT in this build
 
 - Replacing the three older bars (Trade replacement level, Draft "worth now", Analysis waiver floor) — Tim has not asked.
