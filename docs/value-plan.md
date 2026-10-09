@@ -66,6 +66,14 @@ Tim, verbatim: "This new value measurement has huge implications. First, lets ap
 - A Value column on Schedule / Summary (team-level pages).
 - Sorting or ranking the league by Value.
 
+## BUILT 2026-10-09 (all live at f3177ba)
+
+- Wave 1 (119f7a9): as planned. Differences: no lines are made unless byes are known, every week's squads and wire answered, every held position has a free agent and the browser could store them; first-copy-wins is checked inside `buildCloudPayload` (two extra document reads per sync), `js/cloud.js` unchanged; `js/demo-rosters.js` gained `generateDemoFreeAgents(week)`; `season.valueWeeks(schedule)` is the shared weeks-left list; slots = `slotCountsFromLineups` + `slotsFromCounts`. Value sits first on the `.tc-glance` line (`span.tc-value`).
+- Wave 2: Analysis 38caf9d, Players 135a4e2, Trade 8a8ab5b (new suite `tests/tr-value-check.mjs`; adds "±n value" per side, Tim's later ask), cards on Home/Stats/Decisions 2493805 (Home now reads the weeks left on the laptop for Value).
+- Wave 2b Draft 0eebd3c: curve = pool-adjacent-violators, gaps filled straight, moving average twice (radius = draft size ÷ 40); on 1241838: place 1 → 11.5, 5 → 8.6, 10 → 6.8, 25 → 4.3, 50 → 2.1, 100 → 0.6. Then e85e948: "Drafted / Own now" box switch and the pre view's total = sum of own preseason Values (`valuePre`), both Tim's follow-up asks.
+- Baseline measured on 1241838 (week 5), waiver / starter: QB 16.65 / 18.09 · RB 6.17 / 10.28 · WR 8.34 / 9.85 · TE 8.75 / 10.29 · K 9.03 / 9.03 · DST 5.64 / 5.64.
+- Where the plan was thin: played-week cells also convert on Value in Trade and Players (projection cells only; scores stay); Avg on Value = mean of the converted cells.
+
 ## NOT verifiable here
 
 Tim's private league through the bridge, his iPhone, the first real sync carrying the baseline to the phone.
