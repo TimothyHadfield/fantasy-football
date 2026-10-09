@@ -3954,7 +3954,7 @@ function renderFinder() {
   // every offer in the list makes him worse. WORDING IS TIM'S — this is the
   // placeholder from the plan (question f), and it follows the goal he picked
   // rather than naming the title under both.
-  const finderTitle = `Trades ranked by your ${goalOf(state.goal).chance}`;
+  const finderTitle = 'Trades ranked by net increase';
   $('finderTitle').textContent = me ? `${finderTitle} · ${me.name}` : finderTitle;
 
   // The two gain columns are the page's most dangerous numbers, because the
@@ -4088,9 +4088,8 @@ function goalMethodHtml(span) {
   const base = r.base ? goalChanceOf(r.base, state.myTeamId) : null;
   const sigma = r.spread && Number.isFinite(r.spread.sigma) ? r.spread.sigma : null;
   return (
-    `<strong>Your goal: ${esc(g.label)}.</strong> The list is ranked by what each deal does ` +
-    `to your <strong>${esc(g.chance)}</strong> — the change in it, times the chance he says ` +
-    `yes. Each offer is played out in the <strong>same season simulation as the Schedule ` +
+    `<strong>Your goal: ${esc(g.label)}.</strong> The list is ordered by <strong>You gain + He gains</strong>, ` +
+    `largest first; equal sums share a rank. Each offer is played out in the <strong>same season simulation as the Schedule ` +
     `page</strong>, ${GOAL_RUNS.toLocaleString('en-US')} seasons, once as the league stands and ` +
     `once with the deal made, on the same seed, so the difference is the deal and not two ` +
     `different runs of luck. ` +
@@ -4105,13 +4104,7 @@ function goalMethodHtml(span) {
     `<strong>It still moves by about ±${bandText()} of a percentage point between seeds</strong> — ` +
     `measured on the sample league over twelve seeds: the seed-to-seed spread of one offer’s ` +
     `expected change is typically 0.27 points and at worst 0.49, and the ` +
-    `spread of the GAP between two offers, which is what decides the order, 0.32 and 0.47. ` +
-    `So <strong>two offers closer than ${bandText()} of a point are shown as level</strong>, ` +
-    `sharing one rank number with an “=” after it, instead of being ranked one above the other: ` +
-    `every pair that close changed places in between 2 and 9 of the twelve seeds, and the one ` +
-    `pair further apart than that never changed places at all. The rows inside a level group are ` +
-    `still printed in the order the simulation gave them — <strong>the grouping never moves a ` +
-    `row</strong>, it only stops the page claiming an order it cannot support. ` +
+    `spread of the GAP between two offers, 0.32 and 0.47. ` +
     `The deal reaches the simulation as the per-week ` +
     `points it adds or takes away from BOTH lineups, exactly as priced in this row — so a deal ` +
     `that makes a rival stronger costs you, and points in a game you would win anyway are worth ` +
@@ -4312,14 +4305,18 @@ function renderFinderNote(scales = finderScales) {
   // WHICH ORDER IS ON SCREEN, while it is still being worked out (Phase 2):
   // before the first ten are in, the finder's points order; after, those ten by
   // the goal and the faded rows under them still in points order.
+  // SINCE 2026-10-09 THAT ORDER IS NET INCREASE THROUGHOUT (`runGoalRank` sorts
+  // before the first offer is played out), so nothing here is "in points order"
+  // any more: the faded rows are only waiting for their chance figures, and a
+  // list that cannot be played out is still in net order and says why it has
+  // no chance column.
+  const net = ` · <strong>ranked by net increase</strong> (You gain + He gains).`;
   const order = r.running
-    ? ` · <span class="searching">${r.staged
-      ? `top ${r.staged} ranked by your ${esc(g.chance)}; faded rows in points order; `
-      : 'in points order; '}playing each offer out (${r.done} of ${r.total})…</span>`
+    ? ` · <span class="searching">playing each offer out (${r.done} of ${r.total})…</span>`
     : ranked
-      ? ` · <strong>ranked by your ${esc(g.chance)}</strong>, allowing for how likely he is to say yes.`
+      ? net
       : r.why && r.why !== 'waiting'
-        ? ` · <strong>not ranked by your ${esc(g.chance)}</strong>: ${esc(r.why)}. Ranked by points.`
+        ? `${net} No ${esc(g.chance)} yet: ${esc(r.why)}.`
         : '.';
 
   $('tradeCount').innerHTML = state.searching || !shown
@@ -4795,6 +4792,10 @@ function runGoalRank() {
     for (const o of search.offers) {
       o.goalScore = null; o.goalPlace = null; o.goalLevel = false; o.goalUnranked = false;
     }
+    // NET-INCREASE ORDER FROM THE START (Tim, 2026-10-09), so the list reads the
+    // same way before the offers are played out and when they cannot be. A new
+    // array, as at the end: the combo panel may be holding the finder's own.
+    search.offers = byNetIncrease(search.offers.slice());
   }
   r.staged = 0;
   if (basis() !== 'weeks') {
@@ -4861,7 +4862,7 @@ function runGoalRank() {
     for (const o of offers) o.goalUnranked = false;
     // A NEW ARRAY, not a sort in place: the combo panel may be holding the old
     // one, and its own order is its own business.
-    search.offers = offers.slice().sort(compareByGoalNet);
+    search.offers = byNetIncrease(offers.slice().sort(compareByGoalNet));
     search.goalRanked = true;
     markTies(search.offers);
     // The preview of the other goal follows, after the ranked column is done —
@@ -4900,9 +4901,32 @@ function compareByGoalNet(a, b) {
   return compareByGoal(view(a), view(b));
 }
 
+/**
+ * NET INCREASE (Tim, 2026-10-09: "order them from top to bottom by net increase
+ * (your dif+op dif)"): the row's "You gain" plus its "He gains", each the
+ * headline figure exactly as `offerRow` prints it, added in tenths — so the
+ * order can be checked by eye off the two cells.
+ */
+function netIncreaseOf(offer) {
+  const span = weeklySpan();
+  const weeks = basis() === 'weeks' && span.length > 0;
+  const net = netGainOf(offer);
+  const his = hisSideOf(offer, span);
+  const mine = weeks ? weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, span.length) : net;
+  const theirs = weeks && Number.isFinite(his.gain) ? perWeekOf(his.gain, his.weeks) : his.gain;
+  if (!Number.isFinite(mine) || !Number.isFinite(theirs)) return -Infinity;
+  return Math.round(round1(mine) * 10) + Math.round(round1(theirs) * 10);
+}
+
+/** Largest net increase first, in place; equal ones keep the order they came in (the sort is stable). */
+function byNetIncrease(list) {
+  const key = new Map(list.map((o) => [o, netIncreaseOf(o)]));
+  return list.sort((a, b) => key.get(b) - key.get(a) || 0);
+}
+
 function stageGoalRank(search, offers, scored) {
   const r = state.goalRank;
-  const top = offers.slice(0, scored).sort(compareByGoalNet);
+  const top = byNetIncrease(offers.slice(0, scored).sort(compareByGoalNet));
   markTies(top);
   const rest = offers.slice(scored);
   // Marked as a group, not by "has no score yet": a row scored after this
@@ -4930,7 +4954,9 @@ function stageGoalRank(search, offers, scored) {
  * reason the band is not in the comparator (see `compareByGoal`).
  */
 function markTies(offers) {
-  const marks = tieGroups(offers);
+  // The list is in net-increase order since 2026-10-09, so the rank is the
+  // row's place in THAT order and "=" is an equal net increase (band 0).
+  const marks = tieGroups(offers.map((o) => ({ goalScore: { value: netIncreaseOf(o) } })), 0);
   offers.forEach((o, i) => {
     const m = marks[i];
     o.goalPlace = Number.isFinite(o.goalScore?.value) ? m.place : null;
@@ -5130,7 +5156,7 @@ function goalCellHtml(offer) {
   if (!s || !Number.isFinite(s.mine.gain) || offer.goalUnranked) {
     const r = state.goalRank;
     const why = offer.goalUnranked
-      ? 'Not ranked yet: still in the order the search found it, until every offer has been played out.'
+      ? 'No rank or chance yet: every offer is still being played out.'
       : r.running
       ? `Being played out in ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons…`
       : r.why
@@ -8625,7 +8651,8 @@ function findSuggestions() {
     o.altGoal = altScore(o, c.a);
   }
   if (offers.every((o) => o.goalScore)) offers.sort(compareByGoalNet);
-  return offers;
+  // Then by net increase, as the finder's list is (Tim, 2026-10-09).
+  return byNetIncrease(offers);
 }
 
 function renderCustomSuggest() {
@@ -10242,7 +10269,7 @@ const HEAD_TITLES = [
   [/^(Manager|With)$/, 'The manager on the other side of the deal.'],
   [/^Δ (title|last) chance$/, (m, th) => (/AltGoal/.test(th.id || '') || th.hasAttribute('data-alt')
     ? `What the deal does to your ${m[1]} chance — the goal you are not on. It ranks nothing.`
-    : `What the deal does to your ${m[1]} chance. The list is ranked by it.`)],
+    : `What the deal does to your ${m[1]} chance.`)],
   [/^You send$/, 'The men you would give up.'],
   [/^You get$/, 'The men you would receive.'],
   [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],

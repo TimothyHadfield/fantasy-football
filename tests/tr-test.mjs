@@ -231,7 +231,7 @@ async function settleGoal(document, idleMax = 45000) {
   };
   while (Date.now() - t0 < max) {
     const count = txt('tradeCount');
-    const done = /ranked by your|not ranked by your/.test(count) && !/playing each offer out/.test(count);
+    const done = /ranked by net increase/.test(count) && !/playing each offer out/.test(count);
     const empty = !document.querySelector('#tradeTable tbody tr') && !/Trying every swap/.test(txt('tradeEmpty')) &&
       txt('tradeEmpty').length > 0;
     if ((done || empty) && !/Trying every set/.test(txt('comboBody'))) break;
@@ -435,6 +435,8 @@ function readOfferRows(table) {
         return Math.round((v + s) * 10) / 10;
       })(),
       theirGain: their ? Number(their.getAttribute('data-v')) : NaN,
+      // "He gains" as printed, for the net-increase order (`netOf`).
+      theirText: textNoMark(their),
       // THE GOAL CELL (2026-09-21): the headline change, the "before → after ·
       // N% yes" line under it, and `data-v` — the expected change, the rank key.
       //
@@ -558,6 +560,25 @@ const noMark = (s) => String(s).replace(/\s*[▲▼]/g, '').replace(/\s+/g, ' ')
 const num = (s) => Number(noMark(s).replace(/−/g, '-').replace(/\+/g, ''));
 /** A cell's text with the scale's glyph taken off, for the format assertions. */
 const textNoMark = (el) => noMark(text(el));
+
+// NET INCREASE (Tim, 2026-10-09: "order them from top to bottom by net increase
+// (your dif+op dif)"). Read off the two cells AS PRINTED — the headline figure
+// of "You gain" plus the headline figure of "He gains", in tenths — so these
+// check what a reader can check by eye. NaN when either cell has no figure.
+const headTenths = (s) => {
+  const m = noMark(s).replace(/−/g, '-').replace(/\+/g, '').match(/^-?\d+\.\d/);
+  return m ? Math.round(Number(m[0]) * 10) : NaN;
+};
+const netOf = (t) => headTenths(t.gainText) + headTenths(t.theirText);
+/** Largest net increase first, never rising down the list, every row with a figure. */
+const netOrdered = (rows) => rows.length > 0 && rows.every((t) => Number.isFinite(netOf(t))) &&
+  rows.every((t, i, a) => i === 0 || netOf(a[i - 1]) >= netOf(t));
+/** Rows with one net increase stay in the goal's order (the order before 2026-10-09). */
+const netTiesKeepGoal = (rows) => rows.every((t, i, a) => i === 0 || netOf(a[i - 1]) !== netOf(t) ||
+  a[i - 1].goal.v >= t.goal.v - 0.0001);
+/** "+1.2 −0.4 =0.8 | …" for a failure message. */
+const netLine = (rows) => rows.map((t) =>
+  `${String(t.gainText).split('/wk')[0]} ${String(t.theirText).split('/wk')[0]} =${netOf(t) / 10}`).join(' | ');
 
 /** The week-by-week table inside a container: one row per week, then totals. */
 function readWeekTable(el) {
@@ -2807,6 +2828,7 @@ SCENARIOS.goalTitle = async function goalTitle() {
   const read = () => ({
     trades: readTrades(document),
     heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
+    headTitles: [...document.querySelectorAll('#tradeTable thead th')].map((th) => th.getAttribute('title') || ''),
     count: text(document.getElementById('tradeCount')),
     note: text(document.getElementById('tradeNote')),
     // THE PANEL'S OWN WORDS. Both were claims about what the search does, and
@@ -2858,9 +2880,20 @@ SCENARIOS.goalTitle = async function goalTitle() {
   const stored = (() => {
     try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.goal']; } catch { return null; }
   })();
+  // LAST, so nothing above is disturbed: "The selected week" prices one week,
+  // which the goal cannot play out — the list the page used to leave in the
+  // finder's own points order.
+  document.getElementById('measureSelect').value = 'week';
+  fire(document.getElementById('measureSelect'));
+  await settleGoal(document);
+  const oneWeek = {
+    count: text(document.getElementById('tradeCount')),
+    ranked: document.getElementById('tradeTable').getAttribute('data-ranked'),
+    trades: readTrades(document),
+  };
   return {
     errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, cuHeads,
-    comboHeads, comboRows, comboGoal, last, stored,
+    comboHeads, comboRows, comboGoal, last, stored, oneWeek,
   };
 };
 
@@ -3195,7 +3228,7 @@ SCENARIOS.customSuggest = async function customSuggest() {
       heads: [...h.querySelectorAll('thead th')].map(text),
       rows: readOfferRows($('cuSugTable')).map((r) => ({
         partner: r.partner, send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)),
-        myGain: r.myGain, theirGain: r.theirGain, gainText: r.gainText, goal: r.goal && r.goal.head,
+        myGain: r.myGain, theirGain: r.theirGain, gainText: r.gainText, theirText: r.theirText, goal: r.goal && r.goal.head,
         alt: r.alt && r.alt.head,
       })),
       buttons: [...h.querySelectorAll('tbody tr')].map((tr) => ({
@@ -3378,7 +3411,7 @@ SCENARIOS.goalStaged = async function goalStaged() {
     const running = /playing each offer out/.test(s.count);
     if (running) sawRunning = true;
     if (running && s.trades.some((t) => t.goal && t.goal.place)) { staged = s; break; }
-    if (sawRunning && !running && /ranked by your/.test(s.count)) break;
+    if (sawRunning && !running && /ranked by net increase/.test(s.count)) break;
     await settle(20);
   }
   await settleGoal(document);
@@ -3411,11 +3444,14 @@ SCENARIOS.searchOnce = async function searchOnce() {
   // week read…", which settleGoal accepts as finished (rightly, for a settled
   // goal) — it returned with the title ranking at 2 of 40 (2026-09-25), so the
   // count was read before a second search could have happened. Wait for the
-  // goal ranking itself: "ranked by your", not "not ranked", not still playing.
+  // goal ranking itself: `data-ranked` names the goal (it is "points" while the
+  // offers cannot be played out — the line then reads "No … chance yet: …"), and
+  // the line is not still playing.
   const max = scaledBudget(150000, machineFactor());
   const t0 = Date.now();
   const line = () => (document.getElementById('tradeCount')?.textContent || '').replace(/\s+/g, ' ');
-  const ranked = () => /ranked by your/.test(line()) && !/not ranked/.test(line()) &&
+  const ranked = () => /ranked by net increase/.test(line()) && !/ yet: /.test(line()) &&
+    /^(title|last)$/.test(document.getElementById('tradeTable').getAttribute('data-ranked') || '') &&
     !/playing each offer out/.test(line());
   while (Date.now() - t0 < max && !ranked()) await settle(250);
   await settle(400);
@@ -3628,8 +3664,11 @@ SCENARIOS.twoGoals = async function twoGoals() {
   const { document, errors, fetchCalls } = await boot('trade.html', '', seed);
   const max = scaledBudget(150000, machineFactor());
   const line = () => text(document.getElementById('tradeCount'));
-  const rankedOn = (chance) => new RegExp(`ranked by your ${chance}`).test(line()) &&
-    !/not ranked/.test(line()) && !/playing each offer out/.test(line());
+  // The status line no longer names the goal (the order is net increase since
+  // 2026-10-09), so the goal the finished ranking ran on is read off `data-ranked`.
+  const rankedOn = (chance) => /ranked by net increase/.test(line()) &&
+    document.getElementById('tradeTable').getAttribute('data-ranked') === (/title/.test(chance) ? 'title' : 'last') &&
+    !/ yet: /.test(line()) && !/playing each offer out/.test(line());
   const altPending = () => document.querySelectorAll('#tradeTable td.alt-goal-cell.goal-wait').length;
   const hasAlt = () => !!document.querySelector('#tradeTable td.alt-goal-cell');
   const startGoal = process.env.TR_GOAL || 'last';
@@ -3750,6 +3789,8 @@ SCENARIOS.progress = async function progressScenario() {
     count: text($('tradeCount')),
     note: text($('tradeNote')),
     trades: readTrades(document).length,
+    // The two gain cells as printed, row by row, for the net-increase order.
+    rows: readTrades(document).map((t) => ({ gainText: t.gainText, theirText: t.theirText })),
     asked: stub.calls.week.slice(),
   };
 
@@ -3780,6 +3821,14 @@ SCENARIOS.progress = async function progressScenario() {
     mine: readCustomList(document, 'cuListA').map((r) => ({ name: r.name, v: r.v })),
     his: readCustomList(document, 'cuListB').map((r) => ({ name: r.name, v: r.v })),
     warn: { hidden: !!$('depthWarn').hidden, text: text($('depthWarn')) },
+  };
+  // The finder on that one-week measure: it cannot be played out by the goal
+  // (not every remaining week is priced), and is read once it has said so.
+  await settleGoal(document);
+  weekMeasure.list = {
+    count: text($('tradeCount')),
+    ranked: $('tradeTable').getAttribute('data-ranked'),
+    rows: readTrades(document).map((t) => ({ gainText: t.gainText, theirText: t.theirText })),
   };
 
   return {
@@ -4169,7 +4218,7 @@ if (!fresh.boot) {
   // heading names that goal's chance.
   eq(
     fresh.panels.map((p) => p.heading).join(' > '),
-    'Data source > Trades ranked by your chance of finishing last > Best combo > Depth map > Custom trades',
+    'Data source > Trades ranked by net increase > Best combo > Depth map > Custom trades',
     'the panels read finder, combo, depth map, custom — under the toolbar'
   );
   ok('and the finder no longer claims a trade helps both squads — it cannot, and does not',
@@ -4269,10 +4318,11 @@ if (!fresh.boot) {
     ok('no offer costs him more than 2 points a week — the tolerance, and no more',
       !!n && fresh.trades.every((t) => t.theirGain >= -2 * n - 0.05),
       JSON.stringify(fresh.trades.map((t) => t.theirGain)));
-    ok('offers are ranked by the expected change in your goal, best first',
-      /ranked by your chance of finishing last/.test(fresh.count) &&
-        fresh.trades.every((t, i) => i === 0 || fresh.trades[i - 1].goal.v >= t.goal.v - 0.0001),
-      `${fresh.count.slice(0, 160)} · ${fresh.trades.map((t) => t.goal && t.goal.v.toFixed(4)).join(',')}`);
+    // Since 2026-10-09 (Tim: "order them from top to bottom by net increase
+    // (your dif+op dif)") the order is the two printed gains added, not the goal.
+    ok('offers are ranked by net increase (You gain + He gains, as printed), largest first',
+      /ranked by net increase/.test(fresh.count) && netOrdered(fresh.trades),
+      `${fresh.count.slice(0, 160)} · ${netLine(fresh.trades)}`);
   }
 
   ok('every offer names who it is with',
@@ -5239,7 +5289,10 @@ if (!wk.boot) {
       `deal ${totalRow.shown} (yours ${totalRow.delta}) vs the row it was opened on ${wk.dealRowGain}`);
     ok('the per-week average is shown as well as the total',
       wk.deal.weeks.totals.length === 2 && wk.deal.weeks.perRow &&
-      Math.abs(wk.deal.weeks.perRow.delta - totalRow.delta / rows.length) <= 0.06,
+      // 0.11, not 0.06: the Per week row prints after − before of two figures
+      // each rounded to a tenth (113.8 − 111.0 for a true 2.87), and the row
+      // now on top of the net-increase order lands on that edge.
+      Math.abs(wk.deal.weeks.perRow.delta - totalRow.delta / rows.length) <= 0.11,
       JSON.stringify(wk.deal.weeks.totals));
     ok('and per week comes FIRST, the total under it', wk.deal.weeks.perFirst,
       JSON.stringify(wk.deal.weeks.totals.map((r) => r.label)));
@@ -7709,18 +7762,42 @@ if (!gt.boot) {
     ok('the top row opens its pop-up', false, JSON.stringify(gt.deal).slice(0, 200));
   }
 
-  // -- RANKED BY THE GOAL ------------------------------------------------------
-  ok('the status line says the list is ranked by the title chance',
-    /ranked by your title chance/.test(T.count), T.count.slice(0, 300));
+  // -- RANKED BY NET INCREASE (Tim, 2026-10-09) --------------------------------
+  // "for the recommended trades, could you order them from top to bottom by net
+  // increase (your dif+op dif)". It was the goal's order until then: expected
+  // change in your chance (Δ chance × the chance he says yes), best first.
+  ok('the status line says the list is ranked by net increase, and names the two columns',
+    /ranked by net increase \(You gain \+ He gains\)/.test(T.count), T.count.slice(0, 300));
   const scored = T.trades.filter((t) => t.goal && Number.isFinite(t.goal.v) && /%/.test(t.goal.head));
   ok('every offer was played out — each goal cell holds a percentage',
     scored.length === T.trades.length, `${scored.length} of ${T.trades.length}`);
-  ok('and the rows are in the order of that expected change, best first',
-    T.trades.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
+  ok('and the rows run from the largest net increase to the smallest — the two printed gains added',
+    netOrdered(T.trades), netLine(T.trades));
+  ok('under both goals', netOrdered(gt.last.trades), netLine(gt.last.trades));
+  ok('which is NOT the goal\'s order it had before: the expected change goes UP somewhere down the list',
+    T.trades.some((t, i, a) => i > 0 && a[i - 1].goal.v < t.goal.v - 0.0001),
     T.trades.map((t) => t.goal.v.toFixed(4)).join(','));
-  ok('which is NOT simply the points order — the goal really does re-rank',
+  // WHEN THE OFFERS CANNOT BE PLAYED OUT ("The selected week": one week priced,
+  // nothing for the goal to simulate) the list used to fall back to the
+  // finder's points order and say "Ranked by points". It is net increase too.
+  {
+    const W = gt.oneWeek;
+    ok('a list the goal cannot play out is in net-increase order as well',
+      W.ranked === 'points' && W.trades.length > 5 && netOrdered(W.trades), `${W.ranked} · ${netLine(W.trades)}`);
+    ok('which there too is not the order of your own gain',
+      W.trades.some((t, i, a) => i > 0 && headTenths(a[i - 1].gainText) < headTenths(t.gainText)), netLine(W.trades));
+    ok('and its line says the order, and why there is no chance to show',
+      /ranked by net increase \(You gain \+ He gains\)\. No title chance yet: /.test(W.count) ||
+        /ranked by net increase \(You gain \+ He gains\)\. No chance of finishing last yet: /.test(W.count),
+      W.count.slice(0, 240));
+    ok('with nothing left saying "Ranked by points"', !/Ranked by points|not ranked by your/.test(W.count), W.count.slice(0, 240));
+  }
+  ok('NOR the order of your own gain alone — the other side really does count',
     T.trades.some((t, i, a) => i > 0 && a[i - 1].myGain < t.myGain),
     T.trades.map((t) => t.myGain).join(','));
+  ok('and rows with the SAME net increase keep the goal\'s order between them',
+    T.trades.some((t, i, a) => i > 0 && netOf(a[i - 1]) === netOf(t)) && netTiesKeepGoal(T.trades),
+    T.trades.map((t) => `${netOf(t) / 10}:${t.goal.v.toFixed(4)}`).join(' '));
   ok('each cell says before → after and how likely he is to say yes',
     scored.every((t) => /^\d+\.\d% → \d+\.\d% · \d+% yes$/.test(t.goal.sub)),
     scored.slice(0, 3).map((t) => t.goal.sub).join(' | '));
@@ -7794,7 +7871,10 @@ if (!gt.boot) {
   // printed before → after must be that answer. FALSIFIABLE: shift only your
   // side (drop `theirByWeek`), or price the regular season alone, and it moves.
   {
-    const top = scored[0];
+    // The row with the best title figure (the top row until 2026-10-09; the
+    // list is in net-increase order now, and this flat-span re-derivation of
+    // "yes" is only within a point for a partner sure to reach the bracket).
+    const top = scored.slice().sort((a, b) => b.goal.v - a.goal.v)[0];
     const re = top ? await rederiveGoal(T, top, 'title') : null;
     const shown = top ? top.goal.sub.match(/^(\d+\.\d)% → (\d+\.\d)% · (\d+)% yes$/) : null;
     ok('the top row’s title chance re-derives from the engine alone',
@@ -7830,16 +7910,16 @@ if (!gt.boot) {
 
   // (1) THE PANEL SAYS WHAT IT FINDS. "Trades that help both squads" / "Every
   // swap that raises both starting lineups" described the old points finder.
-  eq(T.finderTitle.split(' · ')[0], 'Trades ranked by your title chance',
-    'the finder is titled by the goal it ranks on, not by a rule it dropped');
+  eq(T.finderTitle.split(' · ')[0], 'Trades ranked by net increase',
+    'the finder is titled by what it ranks on, not by a rule it dropped');
   ok('and neither the heading nor the lede claims both squads gain',
     !/both squads/i.test(T.finderTitle) && !/both starting lineups/i.test(T.lede),
     `${T.finderTitle} | ${T.lede}`);
 
-  // (2) LEVEL, NOT RANKED. Tim, 2026-09-23: show near-ties as tied. The band is
-  // 0.4 of a percentage point, measured over twelve seeds (js/trade-odds.js
-  // TIE_BAND). Every row carries its rank; rows the simulation cannot separate
-  // share one with an "=" after it.
+  // (2) LEVEL, NOT RANKED. Tim, 2026-09-23: show near-ties as tied. Every row
+  // carries its rank; rows the order cannot separate share one with an "=" after
+  // it. (Until 2026-10-09 that was the goal's 0.4-point band, js/trade-odds.js
+  // TIE_BAND; the list is in net-increase order now and level means equal.)
   ok('every played-out row carries a rank number',
     scored.length > 0 && scored.every((t) => /^\d+=?$/.test(t.goal.place)),
     scored.map((t) => t.goal.place).slice(0, 8).join(' '));
@@ -7848,10 +7928,18 @@ if (!gt.boot) {
     T.trades.every((t, i, a) => i === 0 ||
       Number(a[i - 1].goal.place.replace('=', '')) <= Number(t.goal.place.replace('=', ''))),
     T.trades.map((t) => t.goal.place).join(','));
-  // THE DEMO LIST HAS A TIE — measured: the top offer stands alone at +1.5 pp
-  // clear, and the rows under it sit inside 0.4 pp of each other. Without one
-  // there is nothing to assert, so its absence is a failure rather than a skip.
+  // SINCE 2026-10-09 THE RANK FOLLOWS THE NET-INCREASE ORDER: a row's number is
+  // its place in that order, and rows share one (with "=") when their net
+  // increase is the same to the tenth printed. The demo list has such rows;
+  // without one there is nothing to assert, so its absence is a failure.
   const levelled = T.trades.filter((t) => t.goal && t.goal.level);
+  ok('a row is marked "=" exactly when a neighbour has the same net increase',
+    T.trades.every((t, i, a) => t.goal.level ===
+      ((i > 0 && netOf(a[i - 1]) === netOf(t)) || (i + 1 < a.length && netOf(a[i + 1]) === netOf(t)))),
+    T.trades.map((t) => `${t.goal.place}:${netOf(t) / 10}`).join(' '));
+  ok('and rows share a rank number exactly when they share a net increase',
+    T.trades.every((t, i, a) => i === 0 || (a[i - 1].goal.place === t.goal.place) === (netOf(a[i - 1]) === netOf(t))),
+    T.trades.map((t) => `${t.goal.place}:${netOf(t) / 10}`).join(' '));
   ok('the sample league really does produce a group of level offers',
     levelled.length > 1, `${levelled.length} rows marked level`);
   ok('a level group shares ONE rank number, and every row in it is marked "="',
@@ -7885,12 +7973,16 @@ if (!gt.boot) {
     /\(=\)/.test(T.lede) && /too close to separate/.test(T.lede), T.lede);
   ok('and the status line is still a short key, not the method',
     T.count.split(/\s+/).length < 60, `${T.count.split(/\s+/).length} words`);
-  ok('and the method behind the toggle carries the measured band and the argument',
+  ok('and the method behind the toggle carries the measured band',
     /±0\.4 of a percentage point between seeds/.test(T.note) &&
-      /typically 0\.27 points and at worst 0\.49/.test(T.note) && !/standard deviation/.test(T.note) &&
-      /closer than 0\.4 of a point are shown as level/.test(T.note) &&
-      /the grouping never moves a row/.test(T.note),
+      /typically 0\.27 points and at worst 0\.49/.test(T.note) && !/standard deviation/.test(T.note),
     T.note.slice(T.note.indexOf('It still moves'), T.note.indexOf('It still moves') + 700));
+  ok('and says how the list is ordered now, not how it was',
+    /The list is ordered by You gain \+ He gains, largest first; equal sums share a rank\./.test(T.note) &&
+      !/The list is ranked by what each deal does/.test(T.note) && !/shown as level/.test(T.note),
+    T.note.slice(0, 300));
+  ok('and no column heading still says the list is ranked by a chance',
+    T.headTitles.length > 5 && !T.headTitles.some((t) => /ranked by it/.test(t)), T.headTitles.join(' | '));
 
   // (3) THE SIGN ON THE TWO GAIN CELLS. `offerRow` wrote `pos` on both of them
   // whatever the number was, so on the sample league all forty "He gains" cells
@@ -7975,8 +8067,8 @@ if (!gt.boot) {
   eq(L.heads[1], 'Δ last chance', 'the column becomes the chance of finishing last');
   ok('and the span drops back to the regular season — the playoffs cannot move last place',
     L.heads.some((h) => h === `You gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
-  ok('the status line names the new goal',
-    /chance of finishing last/.test(L.count), L.count.slice(0, 300));
+  ok('the status line still says net increase under the new goal',
+    /ranked by net increase \(You gain \+ He gains\)\./.test(L.count), L.count.slice(0, 300));
   ok('and the method says why the regular season alone is priced',
     /regular-season<\/strong>|regular-season table/.test(L.note) || /bottom of the regular-season/.test(L.note),
     L.note.slice(0, 500));
@@ -8214,6 +8306,16 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
       JSON.stringify(sg.one.buttons));
     ok('SUGGESTED: rows are goal-scored', sg.one.rows.every((r) => r.goal && /%/.test(r.goal)),
       sg.one.rows.map((r) => r.goal).join(','));
+    // NET INCREASE (Tim, 2026-10-09): every suggested list, largest first.
+    for (const [what, L] of [['his man ticked', sg.one], ['one each', sg.two], ['two of his', sg.dbl],
+      ['assumed', sg.asm.rows], ['assumed, sending the man you got', sg.asm.gotRows]]) {
+      ok(`SUGGESTED: ${what} - the rows run from the largest net increase (You gain + He gains) down`,
+        netOrdered(L.rows), netLine(L.rows));
+    }
+    ok('SUGGESTED: and somewhere that is not the order of your own gain',
+      [sg.one, sg.two, sg.dbl, sg.asm.rows, sg.asm.gotRows].some((L) =>
+        L.rows.some((t, i, a) => i > 0 && headTenths(a[i - 1].gainText) < headTenths(t.gainText))),
+      [sg.one, sg.two, sg.dbl].map((L) => netLine(L.rows)).join(' || '));
     ok('SUGGESTED: the list says how long it took', Number.isFinite(sg.one.ms) && sg.one.ms > 0, String(sg.one.ms));
     ok('SUGGESTED: one of mine ticked too - every row has BOTH',
       rowsOk(sg.two, (r) => has(r.receive, sg.hisId) && has(r.send, sg.mineId)), sum(sg.two));
@@ -8382,26 +8484,29 @@ if (!gs.boot) {
     ok('the ranked rows are the top of the table, in one block',
       ranked.length >= 10 && S.trades.slice(0, ranked.length).every((t) => t.goal && t.goal.place),
       S.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
-    ok('in the order of their expected change, best first',
-      ranked.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
-      ranked.map((t) => t.goal.v.toFixed(4)).join(','));
+    ok('in the order of their net increase, largest first',
+      netOrdered(ranked), netLine(ranked));
     ok('every row under them is marked unranked', firstUnranked === ranked.length &&
       S.rows.slice(ranked.length).every((r) => r.unranked),
       `first unranked ${firstUnranked}, ranked ${ranked.length}, rows ${S.rows.length}`);
     ok('and an unranked row prints no rank and no chance, even once it has been scored',
       S.trades.slice(ranked.length).every((t) => t.goal && !t.goal.place && !/%/.test(t.goal.head)),
       S.trades.slice(ranked.length, ranked.length + 3).map((t) => t.goal && t.goal.head).join(' | '));
-    ok('the status line says which part is ranked and which is still in points order',
-      new RegExp(`top ${ranked.length} ranked by your title chance`).test(S.count) &&
-        /faded rows in points order/.test(S.count), S.count);
+    // The whole list is in net-increase order from the start now (2026-10-09),
+    // so the line no longer calls the faded rows "in points order" — and they
+    // are not: every row on screen, faded or not, is already in that order.
+    ok('the status line says it is still playing offers out, and no longer speaks of points order',
+      /playing each offer out \(\d+ of \d+\)/.test(S.count) && !/points order/.test(S.count), S.count);
+    ok('and the faded rows are ALREADY in net-increase order, under the ranked ones',
+      netOrdered(S.trades), netLine(S.trades));
   }
   const F = gs.final;
   ok('once finished, nothing is left marked unranked', F.rows.length > 0 && F.rows.every((r) => !r.unranked),
     `${F.rows.filter((r) => r.unranked).length} of ${F.rows.length}`);
   ok('and every row has its rank', F.trades.every((t) => t.goal && t.goal.place),
     F.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
-  ok('with the line back to plain "ranked by your title chance"',
-    /ranked by your title chance/.test(F.count) && !/points order/.test(F.count), F.count);
+  ok('with the line back to plain "ranked by net increase"',
+    /ranked by net increase/.test(F.count) && !/points order/.test(F.count), F.count);
 }
 
 // ---- ONE WEEKLY SEARCH PER LOAD (trade plan Phase 3, 2026-09-24) -----------
@@ -8416,7 +8521,7 @@ for (const goal of ['title', 'last']) {
   ok(`search-once (${goal}): no console errors`, so.errors.length === 0, so.errors.slice(0, 2).join(' | '));
   eq(so.searches, 1, `a live load under "${goal}" runs ONE weekly search, not a points search and then another`);
   ok(`search-once (${goal}): and it still ends ranked by the goal, with offers`,
-    so.trades > 0 && /ranked by your/.test(so.count) && !/not ranked/.test(so.count), so.count.slice(0, 200));
+    so.trades > 0 && /ranked by net increase/.test(so.count) && !/ yet: /.test(so.count), so.count.slice(0, 200));
 }
 
 // ---- THE PAGE STAYS ALIVE WHILE IT RANKS (2026-10-06) ----------------------
@@ -8498,11 +8603,12 @@ if (!gl.boot) {
   eq(gl.heads[1], 'Δ title chance', 'the live page carries the title-chance column');
   ok('and every live offer was played out and ranked',
     gl.trades.length > 0 && gl.trades.every((t) => t.goal && /%/.test(t.goal.head)) &&
-      /ranked by your title chance/.test(gl.count),
+      /ranked by net increase/.test(gl.count),
     `${gl.count.slice(0, 200)} · ${JSON.stringify(gl.trades.slice(0, 2).map((t) => t.goal))}`);
-  ok('in order of the expected change',
-    gl.trades.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
-    gl.trades.map((t) => t.goal.v).join(','));
+  ok('in order of the net increase (You gain + He gains, as printed), largest first',
+    netOrdered(gl.trades), netLine(gl.trades));
+  ok('and rows with the same net increase keep the goal\'s order',
+    netTiesKeepGoal(gl.trades), netLine(gl.trades));
   ok('and the live bracket weeks (15–16) are in the priced span',
     gl.heads.some((h) => /You gain a week \(weeks \d+–16\)/.test(h)), gl.heads.join(' | '));
 }
@@ -8554,9 +8660,8 @@ if (!gl.boot) {
     ok('and the sample league offers both colours there, or the check above is vacuous',
       A.trades.some((t) => /\bpos\b/.test((t.alt || NA).cls)) || A.trades.some((t) => /\bneg\b/.test((t.alt || NA).cls)),
       A.trades.map((t) => (t.alt || NA).cls).slice(0, 8).join(' '));
-    ok('the ranking is unchanged: still in the order of the TITLE figure, best first',
-      A.trades.every((t, i, a) => i === 0 || a[i - 1].goal.v >= t.goal.v - 0.0001),
-      A.trades.map((t) => t.goal.v.toFixed(4)).join(','));
+    ok('the ranking is unchanged by the preview column: still net increase, largest first',
+      netOrdered(A.trades), netLine(A.trades));
     ok('the method names what the preview column is and what it is priced over',
       /Δ last chance/.test(A.note) && /regular season/.test(A.note.slice(A.note.indexOf('Δ last chance'))),
       A.note.slice(A.note.indexOf('Δ last chance'), A.note.indexOf('Δ last chance') + 300));
@@ -8648,7 +8753,7 @@ if (!gl.boot) {
     eq(tw.stored, 'last', 'and the choice is remembered, one preference');
     eq(B.heads[1], 'Δ last chance', 'the ranked column becomes the chance of finishing last');
     eq(B.heads[2], 'Δ title chance', 'and the preview becomes the title chance');
-    ok('and the list is re-ranked on it', /ranked by your chance of finishing last/.test(B.count), B.count.slice(0, 200));
+    ok('and the list is ranked again', /ranked by net increase/.test(B.count), B.count.slice(0, 200));
     {
       const key = (t) => `${t.partner}|${names(t.send)}|${names(t.receive)}`;
       ok('in exactly the order the top control produces',

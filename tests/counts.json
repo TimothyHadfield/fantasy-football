@@ -152,7 +152,7 @@
       "scenarios": 19
     },
     "tr-test.mjs": {
-      "assertions": 1147
+      "assertions": 1166
     },
     "tr-value-check.mjs": {
       "assertions": 73
@@ -193,7 +193,7 @@
       "scenarios": 11
     },
     "test-trade-progress.mjs": {
-      "assertions": 42
+      "assertions": 45
     },
     "done-check.mjs": {
       "assertions": 58,

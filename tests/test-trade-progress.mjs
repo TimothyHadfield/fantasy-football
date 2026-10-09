@@ -72,8 +72,30 @@ const value = (list, name) => ((list.find((x) => x.name === name) || {}).v || ''
     ok('accept-by counts from the week in progress: too late for it, in time for the next',
       new RegExp(`for wk ${W + 1}`).test(r.accept.text) && new RegExp(`too late for ${W}\\b`).test(r.accept.text),
       r.accept.text);
-    ok('offers are found and ranked by the goal', r.page.trades > 0 && /ranked by your chance/.test(r.page.count),
+    ok('offers are found and ranked', r.page.trades > 0 && /ranked by net increase/.test(r.page.count),
       r.page.count);
+    // NET INCREASE (Tim, 2026-10-09: "order them from top to bottom by net
+    // increase (your dif+op dif)"): each row's printed "You gain" a week plus
+    // its printed "He gains" a week, in tenths, never rising down the table.
+    {
+      const tenths = (s) => Math.round(Number(String(s).replace('−', '-').replace('+', '').match(/^-?\d+\.\d/)[0]) * 10);
+      const net = r.page.rows.map((t) => tenths(t.gainText) + tenths(t.theirText));
+      ok('the offers run from the largest net increase (You gain + He gains, as printed) to the smallest',
+        net.length === r.page.trades && net.length > 3 && net.every((v, i) => i === 0 || net[i - 1] >= v),
+        r.page.rows.map((t, i) => `${t.gainText.split('/wk')[0]}${t.theirText.split('/wk')[0]}=${net[i] / 10}`).join(' '));
+      ok('and that is a different order from your own gain alone',
+        r.page.rows.some((t, i, a) => i > 0 && tenths(a[i - 1].gainText) < tenths(t.gainText)),
+        r.page.rows.map((t) => t.gainText.split('/wk')[0]).join(' '));
+      // AND WHEN THE OFFERS CANNOT BE PLAYED OUT — "The selected week" prices
+      // one week, so the goal has nothing to simulate. The list used to fall
+      // back to the finder's own order ("Ranked by points").
+      // (The ORDER of that list is held in tr-test on the demo league: on this
+      // stub the finder's own order and net increase happen to coincide.)
+      const L = r.weekMeasure.list;
+      ok('on a measure the goal cannot play out, the line still says net increase, with why there is no chance column',
+        /ranked by net increase \(You gain \+ He gains\)\. No .* yet: /.test(L.count) && !/Ranked by points/.test(L.count),
+        L.count.slice(0, 220));
+    }
 
     // A finished man: his number IS his score, and the card sets it against
     // the projection as it was.
