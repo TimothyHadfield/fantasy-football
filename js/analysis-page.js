@@ -44,8 +44,11 @@ import { savedConfig, onConnection, coarsePointer } from './connection.js';
 // of js/player-card.js.
 import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, reopenTip, clickIsPlayer,
-  zeroKind, byeWeekOf, outMark,
+  zeroKind, byeWeekOf, outMark, setValueSource,
 } from './player-card.js';
+// A PLAYER'S VALUE (Tim, 2026-10-09): pure arithmetic; the frozen lines come
+// from js/season.js. See the "Proj | Value" block below.
+import { valueOf } from './value.js';
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
@@ -198,6 +201,12 @@ const state = {
   // kept for ONE thing, the record on a team's card. Null in demo and when the
   // schedule would not load: the card then simply has no Record row.
   games: null,
+
+  // The league's frozen Value lines (js/value.js), null until read — and while
+  // null the Proj | Value switches stay hidden. `valueKey` is the source they
+  // were read for.
+  valueBase: null,
+  valueKey: null,
 };
 
 // Cache per week so flipping back to a week already loaded is instant.
@@ -224,6 +233,99 @@ const esc = (s) =>
   );
 
 const round1 = (n) => Math.round(n * 10) / 10;
+
+// ------------------------------------------------------------ Proj | Value
+//
+// TIM, 2026-10-09: "for all graphs or charts that show avg position's proj or
+// value or anything like that (except total proj like a team's proj for that
+// week), have a switch for that graph that also shows the data as value rather
+// than just total proj."
+//
+// ONE RULE (docs/value-plan.md): a per-player projection figure x shown "as
+// value" is `valueOf(base, his position, x)`. A slot cell takes the position of
+// the man filling it, and an average is the MEAN OF THE CONVERTED VALUES, never
+// the conversion of the mean. Team totals are never converted, and neither is a
+// score: a played week under "Actual history" stays what was scored.
+//
+// One choice for the whole page (`show` in this page's prefs), drawn on each
+// panel it changes. Until the league's lines are known (`state.valueBase`) the
+// switches are hidden and nothing here does anything.
+
+/** The four switches, one per panel. */
+const SHOW_SWITCHES = ['overviewShow', 'seasonShow', 'startersShow', 'rosterShow'];
+
+/** Is the page showing Value? Never before the lines are known. */
+function valueOn() {
+  return Boolean(state.valueBase) && prefs.get('show') === 'value';
+}
+
+/** A man's projection figure as Value: to the tenth, never below 0, null when it cannot be said. */
+function asValue(p, x) {
+  return valueOf(state.valueBase, p ? p.position : null, x);
+}
+
+/** The words a heading's hover adds while the numbers under it are Value. */
+const valueWords = () => (valueOn() ? ' Shown as Value.' : '');
+
+/** The tucked note's line (rule 7): what Value is. Empty while there are no lines. */
+function valueNote(history = false) {
+  if (!state.valueBase) return '';
+  return '<strong>Value</strong> is points a week over the waiver line. ' +
+    'Points below the starter line count half. Both lines are fixed for the season.' +
+    (history ? ' Scores under “Actual history” stay scores.' : '');
+}
+
+/** Show or hide the switches, and light the button the code says is on. */
+function syncShow() {
+  const on = valueOn() ? 'value' : 'proj';
+  for (const id of SHOW_SWITCHES) {
+    const box = $(id);
+    if (!box) continue;
+    box.classList.toggle('hidden', !state.valueBase);
+    box.querySelectorAll('button[data-show]').forEach((b) => {
+      const lit = b.dataset.show === on;
+      b.classList.toggle('on', lit);
+      b.setAttribute('aria-pressed', String(lit));
+    });
+  }
+}
+
+/** Every panel the switch changes, repainted from what is already held. */
+function repaintShown() {
+  if (!state.data) return;
+  if (!currentGrid().slotGrid) renderOverview();
+  renderSeason();   // the sheet, Who to start, the roster detail, and the grid on Proj avg
+}
+
+/**
+ * Read the league's Value lines and every rostered man's Value, once per source.
+ * Never throws and never blocks the page: no lines means no switch, and the
+ * page is exactly as it was. The lookup goes to the player card, which reads it
+ * when a card opens.
+ */
+async function loadValue() {
+  const key = sourceKey();
+  if (state.valueKey !== key) {
+    state.valueKey = key;
+    state.valueBase = null;
+    syncShow();
+  }
+  if (typeof season.fetchPlayerValues !== 'function') return;
+  let got = null;
+  try {
+    got = await season.fetchPlayerValues({ demo: state.isDemo });
+  } catch {
+    got = null;
+  }
+  if (sourceKey() !== key) return;   // the reader changed league meanwhile
+  const base = got && got.base ? got.base : null;
+  if (got && typeof got.lookup === 'function') setValueSource(got.lookup);
+  const changed = base !== state.valueBase;
+  state.valueBase = base;
+  syncShow();
+  // The notes say what Value is as soon as there is a switch to explain.
+  if (changed) repaintShown();
+}
 
 /** actual − projected, or null when either half is missing. */
 function diff(actual, projected) {
@@ -591,7 +693,7 @@ function slotAvgCard(team, row, cell, heat) {
   if (rest) rows.push({ label: `${plural(cell.who.length - 5, 'other')}`, value: plural(rest, 'week') });
   return {
     title: team.name,
-    sub: `${row.key} · Proj avg`,
+    sub: `${row.key} · ${cell.value ? 'Value avg' : 'Proj avg'}`,
     rows,
     totals: cell.assumed
       ? [{ label: 'Counted at the waiver floor', value: plural(cell.assumed, 'week') }]
@@ -1055,6 +1157,7 @@ function nameCard(p, index, teamId, prefix, marks = null) {
       : `waivers.html?player=${encodeURIComponent(p.playerId)}`,
     id: `${prefix}:${teamId}:${p.playerId ?? `x:${p.name}`}`,
     glance: glanceFor(p),
+    playerId: p.playerId,
   }, prefix);
 }
 
@@ -1219,7 +1322,18 @@ function gridMeasure(entry, weekGrid) {
   const tier = injuryTier(entry.p.injuryStatus);
   if (tier === 'out' || tier === 'ir') return null;
   if (weekGrid && zeroOf(entry.v, state.week, entry.p) !== null) return null;
-  return entry.v;
+  // On Value the cell prints `val` (see `withValue`), so that is what is scaled.
+  return entry.val !== undefined ? entry.val : entry.v;
+}
+
+/**
+ * A grid entry with its Value beside its projection, while the page shows
+ * Value. `v` stays ESPN's number — the Total, the bye test and the ranks read
+ * it — and `val` is what the cell prints, sorts on and is coloured by.
+ */
+function withValue(entry) {
+  if (!entry || !valueOn()) return entry;
+  return { ...entry, val: typeof entry.v === 'number' ? asValue(entry.p, entry.v) : null };
 }
 
 /**
@@ -1241,7 +1355,11 @@ function gridMeasure(entry, weekGrid) {
 function gridCell(entry, { withPosition = false, weekGrid = false, index = null, tipKey = '', ranks = null, teamId = null, scale = null, what = '' } = {}) {
   if (!entry) return '<td class="slot-cell muted">—</td>';
 
-  const { p, v } = entry;
+  // `raw` is ESPN's projection; `v` is the number DRAWN — his Value while the
+  // page shows Value (`withValue`), the projection otherwise.
+  const { p, v: raw } = entry;
+  const asVal = entry.val !== undefined;
+  const v = asVal ? entry.val : raw;
   const cls = ['slot-cell'];
   const tier = injuryTier(p.injuryStatus);
   if (tier === 'out' || tier === 'ir') cls.push(`st-${tier}`);
@@ -1250,7 +1368,7 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
   // the week grid may read it either way: a season average of zero is a man
   // ESPN projects nothing for all year, which is a different fact. Which of the
   // two it is gets decided in js/player-card.js against his team's bye week.
-  const zero = weekGrid ? zeroOf(v, state.week, p) : null;
+  const zero = weekGrid ? zeroOf(raw, state.week, p) : null;
   const bye = zero === 'bye';
   if (bye) cls.push('bye');
   if (zero === 'out') cls.push('zero-out');
@@ -1266,6 +1384,7 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
   // season under it, drawn by the tip card rather than crammed into a `title`.
   const ident =
     `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}` +
+    (asVal && v !== null && !bye ? ` · Value ${fmt(v)} on a projection of ${fmt(raw)}` : '') +
     (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '') +
     (zero === 'out' ? ' · projected at 0.0 because he is ruled out, not on bye' : '');
 
@@ -1301,7 +1420,7 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
   const run = seasonRunData(index, p);
   if (heat && run) run.legend = [...(run.legend || []), `Colour: ${heat.words}`];
   const cardIdent = heat && !run ? `${ident} · ${heat.words}` : ident;
-  const key = registerRun({ ident: cardIdent, run, href, id, glance: glanceFor(p) }, tipKey || 'g');
+  const key = registerRun({ ident: cardIdent, run, href, id, glance: glanceFor(p), playerId: p.playerId }, tipKey || 'g');
 
   const shown = v === null
     ? '—'
@@ -1470,6 +1589,7 @@ async function useDemo() {
   setToggle('demo');
   renderWeekPicker();
   await loadWeek();
+  loadValue();
 }
 
 /** Every failed route into live mode ends here, so none of them can lie. */
@@ -1567,6 +1687,7 @@ async function useLive() {
 
   renderWeekPicker();
   await loadWeek();
+  loadValue();
   await floorRead;
 }
 
@@ -1836,7 +1957,7 @@ function renderGridHead(table, benchCols, slots = gridSlots()) {
   table.querySelector('thead').innerHTML =
     `<tr>
        <th class="name" data-sort title="${TEAM_HEAD}">Team</th>
-       ${slots.map((s) => `<th data-sort title="Each team’s ${esc(s.key)} this week, and what he is projected.">${esc(s.key)}</th>`).join('')}
+       ${slots.map((s) => `<th data-sort title="Each team’s ${esc(s.key)} this week, and what he is projected.${valueWords()}">${esc(s.key)}</th>`).join('')}
        <th class="grid-total grouped" data-sort title="The ${countWord(slots.length)} spots to the ` +
          `left added up, each counted at no less than the waiver floor for that spot — the same ` +
          `basis as the Proj avg Total.">Total</th>
@@ -1896,7 +2017,7 @@ function renderAvgGrid(grid) {
        <th class="name" data-sort title="${TEAM_HEAD}">Team</th>
        ${rows.map((r) => `<th data-sort title="What this squad's ${esc(r.key)} is worth in an ` +
          `average week: that slot's projection in every regular-season week read, averaged. ` +
-         `Whoever fills it — it is a slot, not a man.">${esc(r.key)}</th>`).join('')}
+         `Whoever fills it — it is a slot, not a man.${valueWords()}">${esc(r.key)}</th>`).join('')}
        <th class="grid-total grouped" data-sort title="What this squad's whole starting lineup ` +
          `projects in an average week. It is the week-by-week lineup total averaged` +
          (historyWeeks(weeks).size ? '' : `, which is the ` +
@@ -1904,7 +2025,7 @@ function renderAvgGrid(grid) {
          `leave it a tenth off adding the columns.">Total</th>
      </tr>`;
 
-  const byTeam = teamSlotAverages(rows, slots, weeks);
+  const byTeam = drawnSlotAverages(rows, slots, weeks);
 
   // ------------------------------------------- the red/green scale, per COLUMN
   //
@@ -2016,7 +2137,8 @@ function renderAvgGrid(grid) {
  */
 function slotAvgScales(rows, weeks) {
   const teams = state.data ? state.data.teams : [];
-  const byTeam = teamSlotAverages(rows, leagueSlots(), weeks);
+  // As DRAWN: on Value the columns are scaled on the Values in them.
+  const byTeam = drawnSlotAverages(rows, leagueSlots(), weeks);
   const cols = new Map(rows.map((r) => [r.key, heatScale(
     teams.map((t) => {
       const got = byTeam.get(t.id);
@@ -2051,9 +2173,11 @@ function avgCell(cell, row, team, scale) {
     .map((p) => `${p.name} (${p.n})`)
     .join(', ');
   const more = cell.who.length > 3 ? `, and ${cell.who.length - 3} more` : '';
-  const says =
-    `${team.name}'s ${row.key} is worth ${fmt(cell.avg)} in an average week — that slot's ` +
-    `projection over ${plural(cell.n, 'regular-season week')} read, whoever fills it` +
+  const says = (cell.value
+    ? `${team.name}'s ${row.key} has a Value of ${fmt(cell.avg)} in an average week — each ` +
+      `week's man at his own Value, averaged over ${plural(cell.n, 'regular-season week')} read`
+    : `${team.name}'s ${row.key} is worth ${fmt(cell.avg)} in an average week — that slot's ` +
+      `projection over ${plural(cell.n, 'regular-season week')} read, whoever fills it`) +
     (who ? `: ${who}${more}.` : '.') +
     (cell.assumed
       ? ` ${cell.assumed} of those ${cell.assumed === 1 ? 'is' : 'are'} assessed at the waiver ` +
@@ -2199,8 +2323,15 @@ function renderGrid(grid) {
   // block above this function for why a column is the group and why a bench
   // column and a state cell are both left out.
   const lineups = new Map(teams.map((t) => [t.id, gridLineup(t, grid.measure, slots)]));
+  // What the CELLS draw: the same men, each at his Value while the page shows
+  // Value. The Total below keeps reading `lineups` — a team total is never
+  // converted.
+  const drawn = new Map(teams.map((t) => {
+    const row = lineups.get(t.id);
+    return [t.id, Object.fromEntries(Object.entries(row).map(([k, e]) => [k, withValue(e)]))];
+  }));
   const colScale = new Map(slots.map((s) => [s.key, heatScale(
-    teams.map((t) => gridMeasure(lineups.get(t.id)[s.key], opts.weekGrid))
+    teams.map((t) => gridMeasure(drawn.get(t.id)[s.key], opts.weekGrid))
   )]));
   // The Total is a comparison group of exactly the same kind — ten whole
   // starting lineups in one week — so it takes the scale too. It is measured on
@@ -2217,7 +2348,8 @@ function renderGrid(grid) {
       const row = lineups.get(t.id);
       const total = totals.get(t.id);
       const lifted = assessedTotals.get(t.id).lifted;
-      const bench = benchEntries(t, grid.measure);
+      const bench = benchEntries(t, grid.measure).map(withValue);
+      const shownRow = drawn.get(t.id);
       const th = heatOf(total, totalScale, { what: 'the other squads’ lineups this week' });
       // "picked" is the drill-down; "me" stays reserved for the reader's own
       // team, and only means anything once a real league says which that is.
@@ -2251,7 +2383,7 @@ function renderGrid(grid) {
       return `
       <tr class="${cls}" data-team="${t.id}">
         ${teamNameCell(t, 'ov')}
-        ${slots.map((s) => gridCell(row[s.key], {
+        ${slots.map((s) => gridCell(shownRow[s.key], {
           ...cellOpts,
           scale: colScale.get(s.key),
           what: `a ${s.key} in week ${state.week}, across the league`,
@@ -2455,6 +2587,7 @@ function renderOverviewNote(grid) {
       `it does not change these averages, which are the whole season either way.`
     );
 
+    if (valueNote()) parts.unshift(valueNote());
     el.innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
     return;
   }
@@ -2546,6 +2679,7 @@ function renderOverviewNote(grid) {
     `follow it, whichever measure this grid is on.`
   );
 
+  if (valueNote()) parts.unshift(valueNote());
   el.innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 }
 
@@ -2928,6 +3062,14 @@ function renderRoster() {
     // result yet, which is a different fact from ESPN having no number.
     const open = p.done === false;
     const avg = avgWeek(p);
+    // PROJECTED AND AVG/WK AS VALUE while the page shows Value: the same two
+    // figures, each as what it is worth at his position. Actual, Diff, Season
+    // total and the lineup's total row stay points.
+    const val = valueOn();
+    const projShown = val
+      ? (typeof line.proj === 'number' ? asValue(p, round1(line.proj)) : null)
+      : line.proj;
+    const avgShown = val ? asValue(p, avg) : avg;
     const own = typeof p.percentOwned === 'number' ? `${p.percentOwned.toFixed(0)}%` : '—';
     const tier = injuryTier(p.injuryStatus);
     const cls = [
@@ -2949,6 +3091,7 @@ function renderRoster() {
       href,
       id: `r:${team.id}:${p.playerId ?? `x:${p.name}`}`,
       glance: glanceFor(p),
+      playerId: p.playerId,
     }, 'r');
     cards.set(p, key);
     return `
@@ -2958,14 +3101,14 @@ function renderRoster() {
           playerRef(p, esc(p.name), `${p.name}. Click to ${OPENS}.`, 'aria-label')}</td>
         <td class="left">${esc(p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
-        ${heatTd(fmt(line.proj), typeof line.proj === 'number' ? round1(line.proj) : null,
+        ${heatTd(fmt(projShown), typeof projShown === 'number' ? round1(projShown) : null,
           round1(line.proj || 0) === 0 ? null : tint.proj(p.position),
           `a starting ${posLabel(p)} around the league in week ${state.week}`)}
         ${heatTd(open ? '' : fmt(line.actual),
           open || typeof line.actual !== 'number' ? null : round1(line.actual),
           tint.actual(p.position), `a starting ${posLabel(p)} around the league in week ${state.week}`)}
         <td data-v="${d === null ? '' : d}">${open ? '' : signed(d)}</td>
-        ${heatTd(fmt(avg), avg, avg ? tint.avg(p.position) : null, `a starting ${posLabel(p)} around the league, per week`)}
+        ${heatTd(fmt(avgShown), avgShown, avg ? tint.avg(p.position) : null, `a starting ${posLabel(p)} around the league, per week`)}
         ${heatTd(fmt(p.seasonProjected, 0),
           typeof p.seasonProjected === 'number' && p.seasonProjected > 0 ? p.seasonProjected : null,
           tint.season(p.position), `a starting ${posLabel(p)} around the league, over the season`)}
@@ -2974,7 +3117,14 @@ function renderRoster() {
       </tr>`;
   };
 
-  const columns = table.querySelectorAll('thead th').length;
+  const heads = table.querySelectorAll('thead th');
+  const columns = heads.length;
+  // Projected and Avg/wk say so on their headings while they hold Values.
+  for (const th of [heads[4], heads[7]]) {
+    if (!th) continue;
+    if (th.dataset.says === undefined) th.dataset.says = th.getAttribute('title') || '';
+    th.setAttribute('title', th.dataset.says + valueWords());
+  }
   $('rosterStarters').innerHTML = starters.map(row).join('');
   $('rosterSplit').innerHTML = splitRow(projTotal, team.projectedTotal, held, columns);
   $('rosterBench').innerHTML = benched.map(row).join('');
@@ -3022,6 +3172,9 @@ function rosterScales() {
   const final = state.playedWeeks.includes(state.week) && !weekLive(state.week);
   // The tenth the column prints, so a rank is counted on what a reader sees.
   const num1 = (v) => (typeof v === 'number' ? round1(v) : null);
+  // And as the column prints it: his Value while the page shows Value.
+  const val = valueOn();
+  const shownAs = (p, x) => (x === null || !val ? x : asValue(p, x));
   const scaleOf = (read, fmtAs) => {
     const seen = new Map();
     return (pos) => {
@@ -3036,9 +3189,9 @@ function rosterScales() {
   return {
     // A projected 0 is a bye or a man ruled out: a state, not a number on the
     // scale (the grids above leave those out for the same reason).
-    proj: scaleOf((p) => num1(weekLine(p).proj) || null),
+    proj: scaleOf((p) => shownAs(p, num1(weekLine(p).proj) || null)),
     actual: final ? scaleOf((p) => (p.done === false ? null : num1(weekLine(p).actual))) : none,
-    avg: scaleOf((p) => avgWeek(p) || null),
+    avg: scaleOf((p) => shownAs(p, avgWeek(p) || null)),
     season: scaleOf((p) => (typeof p.seasonProjected === 'number' && p.seasonProjected > 0
       ? p.seasonProjected : null), (n) => Number(n).toFixed(0)),
   };
@@ -3181,6 +3334,7 @@ function renderRosterNote(view, team) {
     'ESPN, and the swaps are forgotten the moment you change team or week.'
   );
 
+  if (valueNote()) parts.unshift(valueNote());
   $('rosterNote').innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 
   // A changed lineup is said where it cannot be missed, not in the toggle.
@@ -3493,6 +3647,21 @@ function seasonCell(v, week, p, isNow, start = null, status = p.injuryStatus, sc
     return `<td class="${cls('muted')}" title="ESPN’s week ${week} roster carried no projection ` +
       `for ${esc(name)}.">—</td>`;
   }
+  // ON VALUE a week to come draws what his projection is WORTH. A bye and a
+  // zero keep their own cells below — a zero is worth 0.0 either way — and a
+  // score is never converted.
+  if (!scored && valueOn()) {
+    const bye = v === 0 && zeroOf(v, week, p, status) === 'bye';
+    const worth = bye ? 0 : asValue(p, round1(v));
+    if (worth === null) {
+      return `<td class="${cls('muted')}" title="ESPN projects ${fmt(v)} for ${esc(name)} in week ` +
+        `${week}. ${esc(p.position)} has no waiver line, so he has no Value.${says}">—</td>`;
+    }
+    if (v !== 0) {
+      return `<td class="${cls()}" data-v="${worth}" title="${esc(name)}’s Value in week ${week} is ` +
+        `${fmt(worth)}: ESPN projects ${fmt(v)}.${says}">${fmt(worth)}</td>`;
+    }
+  }
   if (v === 0) {
     // A 0.00 is his bye only when the week IS his team's bye; otherwise it is a
     // real zero, and a ruled-out man's carries the word. Decided once, in
@@ -3689,7 +3858,9 @@ let slotBars = { key: null, bars: new Map() };
  * rather than one hidden in a decimal nobody can see.
  */
 function slotThresholds(rows, slots, weeks) {
-  const key = fillsKey(rows, weeks);
+  // On Value the bars are measured on the Values the cells draw.
+  const val = valueOn();
+  const key = `${fillsKey(rows, weeks)}${val ? '|value' : ''}`;
   if (slotBars.key === key) return slotBars.bars;
 
   const values = new Map(rows.map((r) => [r.key, []]));
@@ -3697,7 +3868,9 @@ function slotThresholds(rows, slots, weeks) {
     for (const fill of perTeam.values()) {
       for (const row of rows) {
         const e = fill.get(row.key);
-        if (e && typeof e.v === 'number') values.get(row.key).push(e.v);
+        if (!e || typeof e.v !== 'number') continue;
+        const v = val ? asValue(e.p, e.v) : e.v;
+        if (typeof v === 'number') values.get(row.key).push(v);
       }
     }
   }
@@ -3832,6 +4005,50 @@ function teamSlotAverages(rows, slots, weeks) {
   }
 
   slotAvgs = { key, byTeam };
+  return byTeam;
+}
+
+/** Memoised like the averages; only ever filled while the page shows Value. */
+let slotValueAvgs = { key: null, byTeam: new Map() };
+
+/**
+ * `teamSlotAverages` AS THE GRID DRAWS IT. On Proj that is the thing itself.
+ * On Value every slot's average is the mean of its weeks' VALUES — each week's
+ * man at his own position's lines — over the same regular-season weeks, and
+ * nothing is floored: a man under the waiver line is simply worth 0. A week
+ * nobody fills the slot has no man to value and is not counted. The Total is
+ * the projection it always was.
+ */
+function drawnSlotAverages(rows, slots, weeks) {
+  const plain = teamSlotAverages(rows, slots, weeks);
+  if (!valueOn()) return plain;
+  const key = `${fillsKey(rows, weeks)}|value`;
+  if (slotValueAvgs.key === key) return slotValueAvgs.byTeam;
+
+  const byWeek = weeklyFills(rows, slots, weeks);
+  const byTeam = new Map();
+  for (const [id, got] of plain) {
+    const cells = new Map();
+    for (const row of rows) {
+      const values = weeks.map((w) => {
+        const perTeam = byWeek.get(w);
+        const fill = perTeam ? perTeam.get(id) : null;
+        const e = fill ? fill.get(row.key) : null;
+        return e && typeof e.v === 'number' ? asValue(e.p, e.v) : null;
+      });
+      const avg = regularAvg(values, weeks);
+      cells.set(row.key, {
+        ...got.slots.get(row.key),
+        avg: avg === null ? null : round1(avg),
+        n: regularCount(values, weeks),
+        assumed: 0,
+        value: true,
+      });
+    }
+    byTeam.set(id, { ...got, slots: cells });
+  }
+
+  slotValueAvgs = { key, byTeam };
   return byTeam;
 }
 
@@ -4048,19 +4265,26 @@ function shownAverages(rows, slots, weeks) {
 
   // To the tenth, as the cell prints it: a 7.96 shown as 8.0 counts as 8.0.
   const tenth = (v) => (typeof v === 'number' ? round1(v) : null);
+  // ON VALUE the mean is of the row's VALUE cells and of nothing else: a score
+  // under "Actual history" is not a Value and is left out (`slotValueAt`).
+  const val = valueOn();
   const byTeam = new Map();
   for (const t of teams) {
     const cells = new Map();
     for (const row of rows) {
-      cells.set(row.key, regularAvg(weeks.map((w) => {
+      const shown = weeks.map((w) => {
         if (hist.has(w)) {
           const got = (real.get(w) || new Map()).get(t.id);
           const e = got ? got.fill.get(row.key) : null;
+          if (val) return slotValueAt(e, true, mode);
           return e ? tenth(historyValue(e.p, mode)) : null;
         }
         const fill = (fills.get(w) || new Map()).get(t.id);
+        if (val) return slotValueAt(fill ? fill.get(row.key) : null, false, mode);
         return fill ? tenth(assessed(fill.get(row.key) || null, row).value) : null;
-      }), weeks));
+      });
+      const mean = regularAvg(shown, weeks);
+      cells.set(row.key, val && mean !== null ? round1(mean) : mean);
     }
     byTeam.set(t.id, {
       slots: cells,
@@ -4076,6 +4300,20 @@ function shownAverages(rows, slots, weeks) {
     cols: new Map(rows.map((r) => [r.key, scaleOf((got) => got.slots.get(r.key))])),
     total: scaleOf((got) => got.total),
   };
+}
+
+/**
+ * ONE SLOT'S WEEK AS VALUE — the number its cell draws while the page shows
+ * Value, or null when the cell draws no Value: nobody in the slot, no line at
+ * his position, or a history week showing scores.
+ *
+ * `past` is a history week, where the entry is the real starter and only his
+ * projection before kickoff can be valued.
+ */
+function slotValueAt(e, past, mode) {
+  if (!e || !e.p) return null;
+  if (past) return mode === 'proj' ? asValue(e.p, historyValue(e.p, 'proj')) : null;
+  return typeof e.v === 'number' ? asValue(e.p, e.v) : null;
 }
 
 /** What a history total says on a hover. */
@@ -4242,7 +4480,8 @@ function slotCell(entry, row, week, bar, index) {
     // with no kicker left does not field an empty kicker slot — it streams
     // one — so the honest assessment is the best free agent there. With no
     // wire read this stays the dash it always was.
-    const sf = slotFloor(row.slotId, state.floors);
+    // On Value there is no man to value and nothing is floored: a dash.
+    const sf = valueOn() ? null : slotFloor(row.slotId, state.floors);
     if (sf) {
       // It carries a real assessed number, so it takes the scale like any
       // other cell — a streamed replacement that is still well below what the
@@ -4272,9 +4511,22 @@ function slotCell(entry, row, week, bar, index) {
   // beside it cannot disagree about a FLEX (AUDIT §1.8).
   // A man who has finished is never floored: his number is a score (`assessed`).
   const scored = p.done === true;
-  const lifted = scored
-    ? { value: raw, raw, assumed: false, floor: null }
-    : flooredValue({ position: p.position, projected: raw }, state.floors, row.slotId);
+  // ON VALUE the cell draws what his projection is WORTH — over his own
+  // position's lines — and nothing is floored: a man under the waiver line is
+  // worth 0, which is the floor said another way. A score is never converted.
+  const val = valueOn() && !scored;
+  const worth = val ? asValue(p, raw) : null;
+  if (val && worth === null) {
+    return `<td class="${cls('muted')}" data-pid="${esc(p.playerId ?? '')}" data-wk="${week}">` +
+      `${playerRef(p, '—', `${p.name} is this squad’s ${row.key} in week ${week}, projected ` +
+        `${fmt(raw)}. ${p.position} has no waiver line, so he has no Value. Click to ${OPENS}.`,
+      'aria-label')}</td>`;
+  }
+  const lifted = val
+    ? { value: worth, raw, assumed: false, floor: null }
+    : scored
+      ? { value: raw, raw, assumed: false, floor: null }
+      : flooredValue({ position: p.position, projected: raw }, state.floors, row.slotId);
   const v = lifted.value === null ? raw : lifted.value;
   const assumed = lifted.assumed;
 
@@ -4289,7 +4541,7 @@ function slotCell(entry, row, week, bar, index) {
         ? `${p.name} fills ${row.key} in week ${week} at 0.0: ESPN has ruled him out, and ` +
           `nobody on this roster projected higher.`
         : `${p.name} is this squad’s ${row.key} in week ${week}, ` +
-          `${scored ? 'and scored' : 'projected'} ${fmt(raw)}.`;
+          `${scored ? 'and scored' : 'projected'} ${fmt(raw)}${val ? `, a Value of ${fmt(v)}` : ''}.`;
   // The assumption, said in full on the cell that carries it. It is a number
   // ESPN never published, so a reader who cannot see where it came from has no
   // way to check it — and this is a panel Tim checks by hand.
@@ -4369,14 +4621,19 @@ function historyCell(entry, row, week, scale) {
   }
   const p = entry.p;
   const proj = historyMode() === 'proj';
-  const v = historyValue(p, historyMode());
+  // ON VALUE only the Proj side converts: a score stays the score.
+  const val = valueOn() && proj;
+  const was = historyValue(p, historyMode());
+  const v = val ? asValue(p, was) : was;
   // No id, no link (`playerRef`) — and then no `data-pid` either, so nothing
   // looks for a link the cell does not have.
   const pid = p.playerId === null || p.playerId === undefined
     ? '' : ` data-pid="${esc(p.playerId)}" data-wk="${week}"`;
   const who = `${p.name} started at ${row.key} in week ${week}`;
   if (v === null) {
-    const why = proj
+    const why = val && was !== null
+      ? `${who}, projected ${fmt(was)}. ${p.position} has no waiver line, so he has no Value.`
+      : proj
       ? `${who}; no projection was recorded for him.`
       : p.done === false ? `${who} and has not finished yet.` : `${who}; no score was recorded for him.`;
     return `<td class="${cls('muted')}"${pid}>${playerRef(p, '—', `${why} Click to ${OPENS}.`, 'aria-label')}</td>`;
@@ -4385,7 +4642,8 @@ function historyCell(entry, row, week, scale) {
   // BOTH NUMBERS IN THE WORDS (Tim, 2026-10-08): the cell draws one of them.
   const other = historyValue(p, proj ? 'actual' : 'proj');
   const why = proj
-    ? `${who}, projected ${fmt(v)} before kickoff${other === null ? '' : `, and scored ${fmt(other)}`}.`
+    ? `${who}, projected ${fmt(was)} before kickoff${val ? `, a Value of ${fmt(v)}` : ''}` +
+      `${other === null ? '' : `, and scored ${fmt(other)}`}.`
     : `${who} and scored ${fmt(v)}${other === null ? '' : `, projected ${fmt(other)}`}.`;
   return `<td class="${cls(heat ? heat.cls : '')}" data-v="${v}"${pid}>` +
     `${playerRef(p, `${fmt(v)}${heatMarkHtml(heat)}`,
@@ -4421,8 +4679,8 @@ function renderSeasonHead(weeks) {
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : hist.has(w)
           ? `Week ${w}: the lineup really started, slot by slot — ` +
-            (proj ? 'what each starter was projected before kickoff.' : 'what each starter scored.')
-          : `The best legal lineup's projection for week ${w}, slot by slot.`;
+            (proj ? `what each starter was projected before kickoff.${valueWords()}` : 'what each starter scored.')
+          : `The best legal lineup's projection for week ${w}, slot by slot.${valueWords()}`;
       return weekHead(w, weeks, cls, title, hist.has(w) && weekLive(w) ? LIVE_TAG : '');
     })
     .join('');
@@ -4639,7 +4897,9 @@ function paintSeason() {
   const histScale = (w, row) => (partScores(w, hist) ? null : heatScale(
     [...(real.get(w) || new Map()).values()].map((got) => {
       const e = got.fill.get(row.key);
-      return e ? historyValue(e.p, mode) : null;
+      if (!e) return null;
+      // The numbers the cells draw (`historyCell`): Values on Proj, scores on Actual.
+      return valueOn() && mode === 'proj' ? slotValueAt(e, true, mode) : historyValue(e.p, mode);
     })
   ));
   const bandAvgScale = avgScales.total;
@@ -4725,6 +4985,7 @@ function paintSeason() {
       // How many numbers that mean is OF — the regular-season cells of this
       // row that show one, counted the way `shownAverages` counts them.
       const counted = regularCount(weeks.map((w, i) => {
+        if (valueOn()) return slotValueAt(drawn[i], hist.has(w), mode);
         if (hist.has(w)) return drawn[i] ? historyValue(drawn[i].p, mode) : null;
         const fill = byWeek.get(w);
         return fill ? assessed(fill.get(row.key) || null, row).value : null;
@@ -4928,6 +5189,7 @@ function orderPlayers(list) {
  *                 show on average over the regular season.
  */
 function playerScales(rows, slots, weeks, hist, real, mode) {
+  const val = valueOn();
   const fills = weeklyFills(rows, slots, weeks);
   const add = (map, k, v) => {
     if (typeof v !== 'number') return;
@@ -4947,17 +5209,21 @@ function playerScales(rows, slots, weeks, hist, real, mode) {
       for (const row of rows) {
         const e = fill.get(row.key);
         if (!e || !e.p || typeof e.v !== 'number') continue;
-        add(ahead, e.p.position, e.v);
-        if (regular && !hist.has(w)) add(ofTeam(id), e.p.position, e.v);
+        // The number the cells draw: his Value while the page shows Value.
+        const v = val ? asValue(e.p, e.v) : e.v;
+        add(ahead, e.p.position, v);
+        if (regular && !hist.has(w)) add(ofTeam(id), e.p.position, v);
       }
     }
     if (!hist.has(w) || partScores(w, hist)) continue;
     const here = new Map();
     for (const [id, got] of real.get(w) || []) {
       for (const s of got.starters) {
-        const v = historyValue(s, mode);
+        const was = historyValue(s, mode);
+        const v = val && mode === 'proj' ? asValue(s, was) : was;
         add(here, s.position, v);
-        if (regular) add(ofTeam(id), s.position, v);
+        // On Value a score is in no Avg (`avgCounted`), so it is in no Avg scale.
+        if (regular && !(val && mode === 'actual')) add(ofTeam(id), s.position, v);
       }
     }
     byWeek.set(w, here);
@@ -4998,24 +5264,47 @@ function playerRows(team, weeks, index, hist) {
   const mode = historyMode();
   return orderPlayers(identified(team.players).map((p) => {
     const ahead = weeks.map((w) => (hist.has(w) ? null : seasonValue(index, w, p.playerId)));
-    const shown = weeks.map((w, i) => {
-      if (hist.has(w)) return playerHistoryValue(p, w, mode);
-      const v = ahead[i];
-      if (typeof v !== 'number') return null;
-      return v === 0 && zeroOf(v, w, p, seasonStatus(index, w, p)) === 'bye' ? null : round1(v);
-    });
-    return { p, slotId: p.lineupSlotId, ahead, shown, avg: regularAvg(shown, weeks) };
+    const shown = weeks.map((w, i) => (hist.has(w)
+      ? playerHistoryValue(p, w, mode)
+      : aheadShown(p, ahead[i], w, index)));
+    const counted = avgCounted(shown, weeks, hist);
+    return { p, slotId: p.lineupSlotId, ahead, shown, counted, avg: regularAvg(counted, weeks) };
   }));
 }
 
+/**
+ * What a man's week TO COME shows: his projection to the tenth — or, while the
+ * page shows Value, what that projection is worth. A bye shows no number.
+ * `plain` is the projection whatever the page shows.
+ */
+function aheadShown(p, v, week, index, plain = false) {
+  if (typeof v !== 'number') return null;
+  if (v === 0 && zeroOf(v, week, p, seasonStatus(index, week, p)) === 'bye') return null;
+  return valueOn() && !plain ? asValue(p, round1(v)) : round1(v);
+}
+
+/**
+ * THE NUMBERS A MAN'S AVG COUNTS: the ones his row shows — except that on Value
+ * a score under "Actual history" is not a Value, and a mean of the two would be
+ * a number about nothing. There Avg is the mean of his Value cells.
+ */
+function avgCounted(shown, weeks, hist) {
+  return valueOn() && historyMode() === 'actual'
+    ? shown.map((v, i) => (hist.has(weeks[i]) ? null : v))
+    : shown;
+}
+
 /** The number a Player row's history cell shows, or null when it shows none. */
-function playerHistoryValue(p, week, mode) {
+function playerHistoryValue(p, week, mode, plain = false) {
   const byPlayer = state.seasonWeeks.has(week) ? leagueIndex().get(week) : null;
   const e = byPlayer ? byPlayer.get(p.playerId) : null;
   const v = e ? (mode === 'proj' ? e.proj : e.actual) : null;
   if (typeof v !== 'number') return null;
   const bye = byeWeekOf(p, state.byes);
-  return v === 0 && bye !== null && Number(bye) === Number(week) ? null : round1(v);
+  if (v === 0 && bye !== null && Number(bye) === Number(week)) return null;
+  // On Value his projection before kickoff is shown as what it was worth; a
+  // score stays the score. `plain` is the number whatever the page shows.
+  return valueOn() && mode === 'proj' && !plain ? asValue(p, round1(v)) : round1(v);
 }
 
 /** His name, a link like every other name on the page, then his position. */
@@ -5045,8 +5334,8 @@ function playerWeekHeads(weeks, hist, fut, proj, ahead = (w) => `Each player’s
       const title = failed
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : hist.has(w)
-          ? `Week ${w}: ` + (proj ? 'what each player was projected before kickoff.' : 'what each player scored.')
-          : ahead(w);
+          ? `Week ${w}: ` + (proj ? `what each player was projected before kickoff.${valueWords()}` : 'what each player scored.')
+          : ahead(w) + valueWords();
       return weekHead(w, weeks, cls, title, hist.has(w) && weekLive(w) ? LIVE_TAG : '');
     })
     .join('');
@@ -5100,12 +5389,20 @@ function playerHistoryCell(p, week, mode, teamId, start = null) {
         : `No score was recorded for ${p.name} in week ${week}.`;
     return `<td class="${cls('muted')}" title="${esc(why + says)}">—</td>`;
   }
-  const shown = round1(v);
+  const was = round1(v);
+  // ON VALUE the Proj side shows what that projection was worth (`playerHistoryValue`).
+  const val = valueOn() && mode === 'proj';
+  const shown = val ? asValue(p, was) : was;
+  if (shown === null) {
+    return `<td class="${cls('muted')}" title="${esc(`${p.name} was projected ${fmt(was)} in week ` +
+      `${week}. ${posLabel(p)} has no waiver line, so he has no Value.${says}`)}">—</td>`;
+  }
   // BOTH NUMBERS IN THE WORDS (Tim, 2026-10-08): the cell draws one of them.
   const o = mode === 'proj' ? e.actual : e.proj;
   const other = typeof o === 'number' ? fmt(round1(o)) : null;
   const why = (mode === 'proj'
-    ? `${p.name} was projected ${fmt(shown)} before kickoff in week ${week}${other === null ? '' : `, and scored ${other}`}.`
+    ? `${p.name} was projected ${fmt(was)} before kickoff in week ${week}${val ? `, a Value of ${fmt(shown)}` : ''}` +
+      `${other === null ? '' : `, and scored ${other}`}.`
     : `${p.name} scored ${fmt(shown)} in week ${week}${other === null ? '' : `, projected ${other}`}.`) +
     (e.teamId === teamId ? '' : ' He was on another team then.');
   return `<td class="${cls()}" data-v="${shown}" title="${esc(why + says)}">${fmt(shown)}</td>`;
@@ -5140,7 +5437,7 @@ function playerRowHtml(row, team, weeks, index, hist, fut, scales = null, benchS
       <tr data-player="${esc(p.playerId)}"${benchStart ? ' class="bench-start"' : ''}>
         ${playerNameCell(row, card)}
         <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
-        `title="${esc(avgLine(regularCount(row.shown, weeks), ah))}">` +
+        `title="${esc(avgLine(regularCount(row.counted, weeks), ah))}">` +
         `${fmt(row.avg)}${heatMarkHtml(ah)}</td>
         ${cells}
       </tr>`;
@@ -5692,12 +5989,14 @@ function starterRows(team, weeks, index, starters, hist = new Set()) {
   const rows = positionPool(team, weeks)
     .map((p) => {
       const values = weeks.map((w) => seasonValue(index, w, p.playerId));
-      const shown = weeks.map((w, i) => {
-        const v = values[i];
-        if (hist.has(w)) return playerHistoryValue(p, w, mode);
-        if (typeof v !== 'number') return null;
-        return v === 0 && zeroOf(v, w, p, seasonStatus(index, w, p)) === 'bye' ? null : round1(v);
-      });
+      const shown = weeks.map((w, i) => (hist.has(w)
+        ? playerHistoryValue(p, w, mode)
+        : aheadShown(p, values[i], w, index)));
+      // The same weeks in POINTS whatever the page shows: the Starts card's column.
+      const points = weeks.map((w, i) => (hist.has(w)
+        ? playerHistoryValue(p, w, mode, true)
+        : aheadShown(p, values[i], w, index, true)));
+      const counted = avgCounted(shown, weeks, hist);
       const startsIn = weeks.filter((w) => {
         const wk = starters.get(w);
         return wk && wk.has(p.playerId);
@@ -5706,9 +6005,11 @@ function starterRows(team, weeks, index, starters, hist = new Set()) {
         p,
         values,
         shown,
+        points,
+        counted,
         startsIn,
         held: onRosterNow.has(p.playerId),
-        avg: regularAvg(shown, weeks),
+        avg: regularAvg(counted, weeks),
         // Out of the weeks actually READ, never out of all of them: a squad
         // half-loaded would otherwise look like a squad half-benched. The
         // playoff weeks count here: Starts is the number of marked cells on
@@ -5860,7 +6161,7 @@ function renderStarters() {
           return {
             lead: w,
             label: FLEX_SLOTS.has(slotId) ? 'FLEX' : (espn.SLOT_LABELS[slotId] || ''),
-            value: row.shown[weeks.indexOf(w)],
+            value: row.points[weeks.indexOf(w)],
           };
         }),
         total: { label: 'In the best lineup', value: `${row.starts} of ${plural(row.decided, 'week')}` },
@@ -5881,7 +6182,7 @@ function renderStarters() {
         <td class="left">${esc(p.position === 'DST' ? 'DEF' : p.position)}</td>
         <td class="left">${esc(p.proTeam)}</td>
         <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
-        `title="${esc(avgLine(regularCount(row.shown, weeks), ah))}">${fmt(row.avg)}${heatMarkHtml(ah)}</td>
+        `title="${esc(avgLine(regularCount(row.counted, weeks), ah))}">${fmt(row.avg)}${heatMarkHtml(ah)}</td>
         <td class="starts" data-v="${row.starts}"${startsCard}>${row.starts}</td>
         ${cells}
       </tr>`;
@@ -6002,6 +6303,7 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
       `next, and a marked week with no row to sit on would read as a slot going empty.`
     );
   }
+  if (valueNote()) paras.unshift(valueNote(true));
   $('startersNote').innerHTML = paras.map((t) => `<p>${t}</p>`).join('');
 }
 
@@ -6226,6 +6528,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     'him out — nothing ties the man in one week to the man in the next.'
   );
 
+  if (valueNote()) parts.unshift(valueNote(true));
   $('seasonNote').innerHTML = parts.map((t) => `<p>${t}</p>`).join('');
 
   // Weeks ESPN refused are an error, so they are said on screen, not in the toggle.
@@ -6748,6 +7051,22 @@ $('measureToggle').addEventListener('click', (e) => {
   prefs.set('measure', state.measure);
   renderOverview();
 });
+
+// PROJ | VALUE (Tim, 2026-10-09): one choice for the page, a switch on each
+// panel it changes. Nothing is fetched: every number is already held.
+for (const id of SHOW_SWITCHES) {
+  const box = $(id);
+  if (!box) continue;
+  box.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('button[data-show]') : null;
+    if (!btn || !state.valueBase) return;
+    const show = btn.dataset.show === 'value' ? 'value' : 'proj';
+    if ((show === 'value') === valueOn()) return;
+    prefs.set('show', show === 'value' ? 'value' : null);
+    syncShow();
+    repaintShown();
+  });
+}
 
 enableSort($('rosterTable'), { defaultIndex: 0, defaultAsc: true });
 wireTips($('rosterTable'));
