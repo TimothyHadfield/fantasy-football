@@ -207,7 +207,15 @@
       </section>
 
       <section class="panel" id="panelBoard">
-        <h2>Draft board</h2>
+        <!-- Whose men the board boxes (Tim, 2026-10-09: "make a switch that
+             instead boxes all the players that you currently own"). -->
+        <div class="dr-team-head">
+          <h2>Draft board</h2>
+          <div class="segmented seg-sm dr-box" id="boxToggle" hidden>
+            <button type="button" data-box="drafted" class="on">Drafted</button>
+            <button type="button" data-box="own">Own now</button>
+          </div>
+        </div>
         <div class="table-scroll">
           <table id="draftBoard" class="dr-board">
             <thead></thead>

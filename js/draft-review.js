@@ -378,10 +378,16 @@ export function expectedAt(curve, place) {
  * Each team's total: the Value today of every man it DRAFTED, wherever he is
  * now. `Map<teamId, number>` to the tenth, in the order teams first picked; a
  * man with no Value adds nothing.
+ *
+ * `key` is which Value is added up: `valueNow` (today), or `valuePre` — each
+ * man's OWN preseason Value, for the "vs preseason rank" view (Tim, 2026-10-09:
+ * "put the value at the top … as what it was proj to be based on preseason
+ * predictions (which is different than the preseason expected value we talked
+ * about before)").
  */
-export function teamValues(rows) {
+export function teamValues(rows, key = 'valueNow') {
   const out = new Map();
-  for (const r of rows || []) out.set(r.teamId, (out.get(r.teamId) || 0) + (num(r.valueNow) ?? 0));
+  for (const r of rows || []) out.set(r.teamId, (out.get(r.teamId) || 0) + (num(r[key]) ?? 0));
   for (const [id, v] of out) out.set(id, round1(v));
   return out;
 }
@@ -405,11 +411,13 @@ export function teamValues(rows) {
  *   before the season (points, not Value). Each a Map or a function.
  * @returns {{ rows:Array, bars:Map, ranked:number, curve:Object|null }} `rows`
  *   in pick order, each the pick plus `{ at, name, position, soFar, rest, total,
- *   value, now, diff, espnRank, pre, preDiff, valueNow, expected, valueDiff }`
- *   (`value`, `now`, `diff` null for a man with no numbers; the next three null
- *   for a man ESPN did not rank; the last three null without `worth` or without
- *   a line — see the top); `ranked` is how many men have a place; `curve` is
- *   the expected-value line (`expectedCurve`).
+ *   value, now, diff, espnRank, pre, preDiff, valueNow, expected, valueDiff,
+ *   valuePre }` (`value`, `now`, `diff` null for a man with no numbers; the next
+ *   three null for a man ESPN did not rank; the next three null without `worth`
+ *   or without a line — see the top; `valuePre`, his own preseason Value — the
+ *   raw point the line is drawn through, not the line — null without `worth` or
+ *   for a man ESPN projected nothing before the season); `ranked` is how many
+ *   men have a place; `curve` is the expected-value line (`expectedCurve`).
  */
 export function reviewDraft({ draft, players, slots, teams = null, against = 'bar', ranks = null, worth = null }) {
   const at = draftedAt(draft.picks, draft.type);
@@ -433,16 +441,16 @@ export function reviewDraft({ draft, players, slots, teams = null, against = 'ba
       preDiff: pre.has(pk.playerId) ? at.get(pk.playerId) - pre.get(pk.playerId).place : null,
       // His Value today, what his slot was expected to be worth, and the difference.
       valueNow: null, expected: null, valueDiff: null,
+      // What ESPN's own preseason projection made him worth (not the line).
+      valuePre: null,
     };
   });
 
   // VS WORTH NOW ON VALUE — see the top.
   let curve = null;
   if (worth && isBase(worth.base)) {
-    curve = expectedCurve(rows.filter((r) => r.pre !== null).map((r) => ({
-      place: r.pre,
-      value: r.position ? valueOf(worth.base, r.position, read(worth.pre, r.playerId)) : null,
-    })));
+    for (const r of rows) r.valuePre = r.position ? valueOf(worth.base, r.position, read(worth.pre, r.playerId)) : null;
+    curve = expectedCurve(rows.filter((r) => r.pre !== null).map((r) => ({ place: r.pre, value: r.valuePre })));
     for (const r of curve ? rows : []) {
       const e = expectedAt(curve, r.at);
       r.valueNow = read(worth.now, r.playerId);

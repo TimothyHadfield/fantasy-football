@@ -1165,10 +1165,16 @@ const review = {
   // the players should have been drafted, show where they were drafted relative
   // to where they were ranked at the start of the season."
   compare: prefs.get('compare') === 'pre' ? 'pre' : 'now',
+  // What the board boxes for the picked team: the column it 'drafted', or the
+  // men it has now ('own'). Tim, 2026-10-09: "make a switch that instead boxes
+  // all the players that you currently own. Nothing else changes except the
+  // white boarders the highlight the players."
+  box: prefs.get('box') === 'own' ? 'own' : 'drafted',
   /** ESPN reads this page load asked for, by kind — printed nowhere, read by tests and by hand. */
   reads: { draft: 0, players: 0, squads: 0, ranks: 0 },
 };
 const isPre = () => review.compare === 'pre';
+const boxOwn = () => review.box === 'own';
 // "VS WORTH NOW" ON VALUE (Tim, 2026-10-09: "Instead of basing the "vs worth
 // now" on position in the draft, base it off of their current value - their
 // expected value based on their rank in the draft."). Only when the league's
@@ -1307,6 +1313,18 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
   const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null, ranks, worth });
   const valued = Boolean(rv.curve);
   const teamTotals = valued ? draftReview.teamValues(rv.rows) : new Map();
+  // The same row in "vs preseason rank": each man's OWN preseason Value added
+  // up (Tim, 2026-10-09: "put the value at the top … as what it was proj to be
+  // based on preseason predictions (which is different than the preseason
+  // expected value we talked about before)").
+  const teamTotalsPre = valued ? draftReview.teamValues(rv.rows, 'valuePre') : new Map();
+
+  // WHO HOLDS EACH DRAFTED MAN TODAY: the squads of the week in play, which
+  // this page has already read. A man on nobody's squad has no entry.
+  const ownerNow = new Map();
+  for (const t of rosters.get(currentWeek) || []) {
+    for (const p of t.players || []) if (drafted.has(p.playerId)) ownerNow.set(p.playerId, t.id);
+  }
 
   // A TEAM'S CARD (the board's headings): its record and average off the games
   // that are final, and what its lineup is projected for in the week in play.
@@ -1342,6 +1360,8 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
     valued, valueNow, held, lookup: values && base ? values.lookup : null,
     valueScale: heatScale(rv.rows.map((r) => r.valueDiff)),
     teamTotals, totalScale: heatScale([...teamTotals.values()]),
+    teamTotalsPre, totalScalePre: heatScale([...teamTotalsPre.values()]),
+    ownerNow,
   };
 }
 
@@ -1571,6 +1591,8 @@ function renderReview() {
   const any = !w.empty;
   $('compareToggle').hidden = !any;
   for (const b of $('compareToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.compare === review.compare);
+  $('boxToggle').hidden = !any;
+  for (const b of $('boxToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.box === review.box);
   $('drMain').hidden = !any;
   $('drExplain').hidden = !any;
   if (!any) { $('pageSub').textContent = w.name || ''; return; }
@@ -1592,7 +1614,8 @@ function renderReview() {
       ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
       : '') +
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero he went later than he was ranked, below zero earlier. ` +
-    'Green and red compare it with every pick in the draft.</p>'
+    'Green and red compare it with every pick in the draft.</p>' +
+    (w.valued ? '<p><strong>Value</strong> on the board adds up each drafted player’s preseason Value.</p>' : '')
     : onValue()
       ? '<p><strong>Now</strong> is his Value today, in points a week.</p>' +
       '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
@@ -1624,35 +1647,63 @@ function drawBoard() {
   const w = review.world;
   const { teamIds, rows } = w.board;
   const byId = new Map(w.rv.rows.map((r) => [r.playerId, r]));
-  const mine = (id) => (same(id, review.teamId) ? ' dr-mine' : '');
+  // (Which cells are boxed is `paintBox`'s, once the board is drawn.)
+  // In "vs preseason rank" the totals are of the preseason Values, coloured on those.
+  const totals = isPre() ? w.teamTotalsPre : w.teamTotals;
+  const totalScale = isPre() ? w.totalScalePre : w.totalScale;
   const table = $('draftBoard');
   // How many columns the stylesheet keeps at a readable width (css/app.css, `.dr-board`).
   table.setAttribute('style', `--dr-cols: ${teamIds.length}`);
   table.querySelector('thead').innerHTML = '<tr><th class="dr-rd">Rd</th>' + teamIds.map((id) =>
     // No `title`: the heading opens the team's card, which carries its whole name.
-    `<th class="dr-col${mine(id)}" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}">` +
+    `<th class="dr-col" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}">` +
     `${esc(teamName(id))}</button></th>`).join('') + '</tr>';
   // THE TOTAL ROW (Tim, 2026-10-09: "display the total value of all the player's
   // that that user drafted at the top as a row above the first round picks
-  // below their name"). Only when Value is known; both views.
+  // below their name"). Only when Value is known; both views — Value today in
+  // "vs worth now", each man's own preseason Value in "vs preseason rank".
   const totalRow = !w.valued ? '' : '<tr class="dr-total"><td class="dr-rd">Value</td>' + teamIds.map((id) => {
-    const total = w.teamTotals.has(id) ? w.teamTotals.get(id) : null;
-    const h = total === null ? null : heatOf(total, w.totalScale);
-    return `<td class="dr-tot${mine(id)}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${valueText(total)}${heatMarkHtml(h)}</td>`;
+    const total = totals.has(id) ? totals.get(id) : null;
+    const h = total === null ? null : heatOf(total, totalScale);
+    return `<td class="dr-tot${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${valueText(total)}${heatMarkHtml(h)}</td>`;
   }).join('') + '</tr>';
   table.querySelector('tbody').innerHTML = totalRow + rows.map((row, i) =>
     `<tr><td class="dr-rd">${i + 1}</td>` + row.map((pk, c) => {
       const id = teamIds[c];
-      if (!pk) return `<td class="dr-cell dr-none${mine(id)}" data-team="${esc(id)}"></td>`;
+      if (!pk) return `<td class="dr-cell dr-none" data-team="${esc(id)}"></td>`;
       const r = byId.get(pk.playerId);
       const d = dOf(r);
       const h = d === null ? null : heatOf(d, scaleOf(w));
-      return `<td class="dr-cell${mine(id)}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
+      return `<td class="dr-cell${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
         whyHtml(r, `<span class="dr-went">${esc(wentFor(r))}${r.position ? ` ${esc(posSaid(r.position))}` : ''}</span>` +
           `<span class="dr-d">${dSaid(d)}${heatMarkHtml(h)}</span>`, 'dr-top') +
         `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
         '</td>';
     }).join('') + '</tr>').join('');
+  paintBox();
+}
+
+/**
+ * THE BOX on the board, for the picked team. 'Drafted': its column (heading,
+ * total and every round), as it always was. 'Own now': each cell whose man is
+ * on its squad today, whoever drafted him — and its heading, so the board still
+ * says whose they are. Classes only: nothing is redrawn and no cell changes size.
+ */
+function paintBox() {
+  const w = review.world;
+  if (!w || w.empty) return;
+  const board = $('draftBoard');
+  const own = boxOwn();
+  board.classList.toggle('dr-own-on', own);
+  for (const el of board.querySelectorAll('[data-team]')) {
+    if (el.tagName === 'BUTTON') continue;
+    const picked = same(el.dataset.team, review.teamId);
+    el.classList.toggle('dr-mine', picked && (!own || el.tagName === 'TH'));
+    if (el.tagName !== 'TD') continue;
+    const why = own ? el.querySelector('.dr-why') : null;
+    const pid = why ? Number(why.dataset.pid) : null;
+    el.classList.toggle('dr-own', pid !== null && w.ownerNow.has(pid) && same(w.ownerNow.get(pid), review.teamId));
+  }
 }
 
 /** What a team's two ends are called: against worth now, or against the preseason rank. */
@@ -1693,10 +1744,8 @@ function drawTeam() {
   }).join('');
   resort($('teamTable'));
 
-  // The picked team's column on the board.
-  for (const el of $('draftBoard').querySelectorAll('[data-team]')) {
-    if (el.tagName !== 'BUTTON') el.classList.toggle('dr-mine', same(el.dataset.team, review.teamId));
-  }
+  // The picked team's box on the board.
+  paintBox();
 }
 
 function pickTeam(id) {
@@ -1747,6 +1796,8 @@ function whySpec(pid) {
         ...went,
         { label: 'ESPN preseason rank', value: r.espnRank === null ? '—' : String(r.espnRank) },
         { label: 'Among players drafted', value: r.pre === null ? '—' : String(r.pre) },
+        // His own preseason Value — what the board's Value row adds up in this view.
+        ...(w.valued ? [{ label: 'Preseason value', value: valueText(r.valuePre) }] : []),
       ],
       total: word ? { label: word, value: signed(d) } : null,
       foot: hp ? `${hp.standing} picks` : '',
@@ -1902,6 +1953,15 @@ function initReview() {
     review.compare = btn.dataset.compare === 'pre' ? 'pre' : 'now';
     prefs.set('compare', isPre() ? 'pre' : null);
     renderReview();
+  });
+  $('boxToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-box]');
+    if (!btn || btn.dataset.box === review.box) return;
+    review.box = btn.dataset.box === 'own' ? 'own' : 'drafted';
+    prefs.set('box', boxOwn() ? 'own' : null);
+    for (const b of $('boxToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.box === review.box);
+    // Classes only: the board keeps every cell it has.
+    paintBox();
   });
   $('draftBoard').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button.dr-pick-team');

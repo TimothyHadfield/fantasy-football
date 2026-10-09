@@ -439,9 +439,19 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
   const t1 = R.teamReview(rv.rows, 1, 'valueDiff');
   eq([t1.steal.playerId, t1.miss.playerId], [13, 15], 'value: a team’s two ends on this difference');
 
+  // HIS OWN PRESEASON VALUE (Tim, 2026-10-09: "put the value at the top … as
+  // what it was proj to be based on preseason predictions (which is different
+  // than the preseason expected value we talked about before)"): the raw figure
+  // of each man, not the line. 18 → 2 + 8, 14 → 2 + 4, 20 → 2 + 10, 9 → 1.5.
+  eq(rv.rows.map((r) => r.valuePre), [10, 6, 12, 1.5, null], 'valuePre: each man’s own preseason Value; none without a preseason projection');
+  ok(rv.rows.some((r) => r.valuePre !== null && r.valuePre !== r.expected), 'valuePre: which is not the line read at his pick', JSON.stringify(rv.rows.map((r) => [r.valuePre, r.expected])));
+  eq([...R.teamValues(rv.rows, 'valuePre')], [[1, 22], [2, 7.5]], 'valuePre: a team’s preseason total adds them up, a man without one adding 0');
+  eq([...R.teamValues(rv.rows, 'valueNow')], [...R.teamValues(rv.rows)], 'valuePre: and the total is of Value today unless asked otherwise');
+
   // WITHOUT THE LINES nothing is made up.
   const none = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks });
   eq([none.curve, none.rows.map((r) => [r.valueNow, r.expected, r.valueDiff])], [null, Array(5).fill([null, null, null])], 'value: no lines, no Value numbers');
+  eq(none.rows.map((r) => r.valuePre), Array(5).fill(null), 'valuePre: no lines, no preseason Value');
   const bad = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base: { v: 99 }, now, pre } });
   eq(bad.curve, null, 'value: lines this code cannot read count as none');
   const noPre = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base, now, pre: new Map() } });
@@ -481,6 +491,11 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
   eq(totals.size, 10, 'real: a total for each of the ten teams');
   near([...totals.values()].reduce((a, b) => a + b, 0), rv.rows.reduce((a, r) => a + r.valueNow, 0), 'real: which together are everybody’s Value', 0.5);
   eq(totals.get(8), Math.round(rv.rows.filter((r) => r.teamId === 8).reduce((a, r) => a + r.valueNow, 0) * 10) / 10, 'real: team 8’s is its seventeen men’s');
+  // THE PRESEASON TOTALS: each man's own preseason Value, added up a team.
+  eq(rv.rows.filter((r) => r.valuePre !== V.valueOf(BASE, r.position, preOf(r.playerId))).length, 0, 'real: every man’s own preseason Value');
+  const preTotals = R.teamValues(rv.rows, 'valuePre');
+  eq(preTotals.get(8), Math.round(rv.rows.filter((r) => r.teamId === 8).reduce((a, r) => a + r.valuePre, 0) * 10) / 10, 'real: team 8’s preseason total is its seventeen men’s');
+  ok([...preTotals].every(([id, v]) => v > 0 && v !== totals.get(id)), 'real: ten preseason totals, none of them the total today', JSON.stringify([...preTotals]));
 }
 
 console.log(fail ? `\n${fail} failed, ${pass} passed` : `\nAll ${pass} assertions passed`);

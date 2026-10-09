@@ -41,6 +41,11 @@ export async function fetchDraft() {
     raw.settings.draftSettings.type = 'SNAKE';
     for (const p of raw.draftDetail.picks) p.bidAmount = 0;
   }
+  // DR_EMPTY=1: the league before it has drafted — ESPN sends no picks.
+  if (process.env.DR_EMPTY === '1') {
+    raw.draftDetail.picks = [];
+    raw.draftDetail.drafted = false;
+  }
   return raw;
 }
 
