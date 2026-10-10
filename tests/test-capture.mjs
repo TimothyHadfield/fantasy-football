@@ -94,7 +94,8 @@ const CHILDREN = {
     cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
     const { document, map, fetchCalls, bridgeCalls } = bootDom({
       html: '<!DOCTYPE html><html><body><div id="connBar"></div></body></html>',
-      store: { 'ff.connection': { leagueId: LEAGUE, season: SEASON, teamId: 1 } },
+      // CAP_PAST: an earlier season, as the main menu opens one.
+      store: { 'ff.connection': { leagueId: LEAGUE, season: process.env.CAP_PAST ? SEASON - 1 : SEASON, teamId: 1 } },
       bridge: !process.env.CAP_NO_BRIDGE,
       teams: TEAMS,
     });
@@ -102,7 +103,7 @@ const CHILDREN = {
     document.addEventListener('ff:capture', (e) => events.push(e.detail));
     await import(moduleUrl('js/connection.js'));
     const settled = () => map.get(SNAP_KEY) || map.get(NOTE_KEY);
-    await waitFor(() => settled() && events.length, process.env.CAP_NO_BRIDGE ? 3000 : 15000);
+    await waitFor(() => settled() && events.length, process.env.CAP_NO_BRIDGE || process.env.CAP_PAST ? 3000 : 15000);
     await new Promise((r) => setTimeout(r, 100));
     const stub = await import('./cap-stub-season.mjs');
     const chip = document.getElementById('connCapture');
@@ -651,6 +652,19 @@ if (!noBridge.boot) {
   eq(noBridge.schedule + noBridge.rosters.length, 0, 'and nothing is asked of ESPN for a reading');
   ok('and there is no chip', !noBridge.chip, JSON.stringify(noBridge.chip));
   ok('nor a "saved" one: nothing is connected', !noBridge.saved || noBridge.saved.text === '', JSON.stringify(noBridge.saved));
+}
+
+// An EARLIER SEASON (opened from the main menu, 2026-10-10) has no week to
+// read: the bar connects to it and takes nothing, asks nothing, says nothing.
+const past = child('bar', { CAP_PAST: '1' });
+ok('the bar boots on an earlier season', !past.boot, past.boot);
+if (!past.boot) {
+  ok('and connects to it through the extension', /Connected to Capture Stub League/.test(past.bar) && past.bridgeCalls.includes('PROBE'), past.bar);
+  eq(past.keys, [], 'NO reading is taken for an earlier season, and no attempt is noted');
+  eq(past.schedule + past.rosters.length, 0, 'nothing is asked of ESPN for one');
+  eq(past.events, [], 'no capture is announced');
+  ok('there is no "NOT recorded" chip', !past.chip, JSON.stringify(past.chip));
+  ok('and no "Week N saved / not saved yet" chip', !past.saved || past.saved.text === '', JSON.stringify(past.saved));
 }
 
 // ---- a reading is taken from a FRESH read of the weeks it projects ----------

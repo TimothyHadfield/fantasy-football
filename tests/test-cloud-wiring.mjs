@@ -662,6 +662,10 @@ SCENARIOS['page-synced'] = async () => {
 
   // And nothing was asked of ESPN to draw any of it.
   eq(store.espnCalls.length, 0, 'the page made no ESPN requests at all');
+
+  // The main menu's list says this league came from the synced copy, which is
+  // what stops "Add a league" asking ESPN from the phone (rule 20).
+  eq((JSON.parse(store.saved.get('ff.leagues') || '{}')).source, 'cloud', 'and the main menu’s list notes that it is the synced copy');
 };
 
 // ---------------------------------------------------------------- page-stale
@@ -725,6 +729,7 @@ SCENARIOS['page-plain'] = async () => {
   ok('with real rows in it', document.querySelectorAll('tbody td').length > 10,
     String(document.querySelectorAll('tbody td').length));
   eq(store.espnCalls.length, 0, 'and made no network calls');
+  ok('and the main menu’s list is not written by a browser that connected to nothing', !store.saved.has('ff.leagues'));
 };
 
 // -------------------------------------------------------------- desktop-sync
@@ -788,6 +793,13 @@ SCENARIOS['desktop-sync'] = async () => {
   // import, before any of this, and that one request is not the bar's.)
   ok('the bar never fell back to a direct probe',
     store.espnCalls.filter((u) => /mSettings/.test(u)).length === 0, store.espnCalls.join(' '));
+
+  // The main menu's list (js/leagues.js) is kept current by the bar.
+  const menu = JSON.parse(store.saved.get('ff.leagues') || '{}');
+  const mine = (menu.leagues || []).find((e) => e.leagueId === LEAGUE_ID) || {};
+  eq(JSON.stringify([mine.name, mine.teamCount, mine.seasons, mine.teams, menu.source]),
+    JSON.stringify([LIVE.name, TEAMS.length, [SEASON], { [SEASON]: { id: 1, name: 'Tim' } }, 'espn']),
+    'the main menu’s list now holds the league: its name, size, this season, the "You are" team, read live');
 };
 
 // ------------------------------------------------------------ profile-saved
@@ -911,6 +923,223 @@ SCENARIOS['desktop-throttled'] = async () => {
 };
 
 // =========================================================================
+// THE MAIN MENU: EARLIER SEASONS, AND LEAGUES CHOSEN THERE
+// =========================================================================
+//
+// Tim, 2026-10-10: "look into past leagues aswell". An earlier season opened
+// from the menu is READ and nothing else. Every cloud copy is first-copy-wins
+// (the Value lines above all), so one minted from a finished season could never
+// be taken back; the account's saved league is where the phone lands, and it
+// must stay on this season; and there is no week to save, so nothing is said
+// about one.
+
+const PAST = SEASON - 1;
+
+SCENARIOS['past-season'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake();
+  cloud.configure({ transport: fake });
+  // The account already holds this season's league and team.
+  const profile = { leagueId: String(LEAGUE_ID), season: SEASON, teamId: 2, updatedAt: 'x' };
+  await fake.setDoc(`users/${OWNER_UID}`, profile);
+  fake.log.writes = 0;
+  fake.log.paths.length = 0;
+
+  const { document, store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'live' },
+    connection: { leagueId: LEAGUE_ID, season: PAST, teamId: 3 },
+    withBridge: LIVE,
+    waitMs: 5000,
+  });
+
+  const bar = document.getElementById('connBar');
+  const text = bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '';
+  ok('the earlier season connected live through the extension', /connected to/i.test(text) && text.includes(LIVE.name), text);
+  eq(JSON.parse(store.saved.get('ff.connection') || '{}').season, PAST, 'and it is the earlier season that is connected');
+
+  eq(fake.log.paths.join(' '), '', 'NOTHING WAS SENT TO THE CLOUD: no squads, no schedule, no Value lines, no decisions');
+  eq(store.saved.has('ff.cloud'), false, 'no sync was even attempted (no sync record)');
+  eq(fake.docs.get(`users/${OWNER_UID}`), JSON.stringify(profile), 'THE ACCOUNT’S LEAGUE IS UNTOUCHED: still this season, still its team');
+  eq(store.saved.has('ff.profileSaved'), false, 'and this browser did not note a profile write');
+
+  eq([...store.saved.keys()].filter((k) => /^ff\.snap/.test(k)).join(' '), '', 'no reading was taken, and no attempt noted');
+  ok('no "NOT recorded" chip', !document.getElementById('connCapture'));
+  const savedChip = document.getElementById('connSaved');
+  ok('and no "Week N saved / not saved yet" chip', !savedChip || savedChip.hasAttribute('hidden'), savedChip && savedChip.textContent);
+  ok('nothing in the bar speaks of a week being saved', !/saved|recorded/i.test(text), text);
+  ok('there is no Send to phone button', !document.getElementById('connCloudSync'));
+  ok('nor a claim about sending', !/sent to your phone|not sent to your phone/i.test(text), text);
+  ok('it still says who is signed in', /signed in as tim@example\.com/i.test(text), text);
+
+  // The menu's list learns the season and the team chosen for it.
+  const mine = ((JSON.parse(store.saved.get('ff.leagues') || '{}')).leagues || []).find((e) => e.leagueId === LEAGUE_ID) || {};
+  eq(JSON.stringify([mine.seasons, mine.teams]), JSON.stringify([[PAST], { [PAST]: { id: 3, name: 'Cal' } }]),
+    'the main menu’s list holds the earlier season and the "You are" team for it');
+};
+
+// The account's team belongs to the account's season. A league-season opened
+// from the menu with no team chosen is not handed this season's team id.
+SCENARIOS['past-season-team'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake();
+  cloud.configure({ transport: fake });
+  await fake.setDoc(`users/${OWNER_UID}`, { leagueId: String(LEAGUE_ID), season: SEASON, teamId: 2, updatedAt: 'x' });
+  fake.log.writes = 0;
+
+  const { document, store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'live' },
+    connection: { leagueId: LEAGUE_ID, season: PAST, teamId: null },
+    withBridge: LIVE,
+    waitMs: 3000,
+  });
+  const conn = JSON.parse(store.saved.get('ff.connection') || '{}');
+  eq(JSON.stringify([conn.leagueId, conn.season, conn.teamId]), JSON.stringify([LEAGUE_ID, PAST, null]),
+    'the league-season chosen on the menu is kept, and this season’s team is NOT put on it');
+  const picked = document.querySelector('#connTeam option[selected]');
+  eq(picked ? picked.getAttribute('value') : '', '', 'the team picker still asks');
+  eq(fake.log.writes, 0, 'and nothing is written to the account');
+};
+
+// The control for the one above: the SAME season still takes the account's team.
+SCENARIOS['profile-team-same-season'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake();
+  cloud.configure({ transport: fake });
+  await fake.setDoc(`users/${OWNER_UID}`, { leagueId: String(LEAGUE_ID), season: SEASON, teamId: 2, updatedAt: 'x' });
+
+  const { store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'live' },
+    connection: { leagueId: LEAGUE_ID, season: SEASON, teamId: null },
+    withBridge: LIVE,
+    waitMs: 3000,
+  });
+  eq(JSON.parse(store.saved.get('ff.connection') || '{}').teamId, 2, 'this season, with no team chosen here, takes the account’s as before');
+};
+
+// ------------------------------------------------------------- menu-opened
+//
+// `leagues.open()` writes the slot with no name and no teams. The bar must ASK
+// before it says anything — also on a browser with no extension and no account,
+// which until now only reconnected by itself when it had one of the two.
+
+SCENARIOS['menu-opened'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+  installStorage();
+  const leagues = await import(moduleUrl('js/leagues.js'));
+  leagues.add({ leagueId: LEAGUE_ID, name: 'Before', teamCount: 4, seasons: [SEASON], season: SEASON, team: { id: 4, name: 'Dee' } });
+  const opened = leagues.open(LEAGUE_ID, SEASON);
+  eq(opened.ok, true, 'the menu opened the league');
+  const slot = globalThis.localStorage.getItem('ff.connection');
+  eq(slot, JSON.stringify({ leagueId: LEAGUE_ID, season: SEASON, teamId: 4 }), 'leaving only the league, season and team in the slot');
+
+  const { document, store } = await bootPage('index.html', {
+    prefs: JSON.parse(globalThis.localStorage.getItem('ff.prefs')),
+    connection: JSON.parse(slot),
+    extra: { 'ff.leagues': globalThis.localStorage.getItem('ff.leagues') },
+    espnScale: LIVE,
+    waitMs: 3000,
+  });
+  const text = (document.getElementById('connBar') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
+  ok('THE BAR PROBED BY ITSELF and now names the league', /connected to/i.test(text) && text.includes(LIVE.name), text);
+  ok('through a real request for the league', store.espnCalls.some((u) => /mSettings/.test(u)), store.espnCalls.join(' '));
+  const conn = JSON.parse(store.saved.get('ff.connection') || '{}');
+  eq(JSON.stringify([conn.teamId, conn.league && conn.league.name]), JSON.stringify([4, LIVE.name]), 'with the team the menu opened it as');
+  const menu = JSON.parse(store.saved.get('ff.leagues') || '{}');
+  eq(JSON.stringify([menu.probe, (menu.leagues[0] || {}).name]), JSON.stringify([null, LIVE.name]),
+    'and the list is told: probed, and the league’s real name');
+};
+
+// The control: the same slot with no menu behind it is left for a Connect
+// press, exactly as before the menu existed.
+SCENARIOS['menu-not-opened'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+  const { document, store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'demo' },   // so any ESPN request here is the bar's own
+    connection: { leagueId: LEAGUE_ID, season: SEASON, teamId: 4 },
+    espnScale: LIVE,
+    waitMs: 3000,
+  });
+  const text = (document.getElementById('connBar') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
+  ok('with no extension, no account and no menu, the bar does not probe by itself', /not connected/i.test(text), text);
+  eq(store.espnCalls.filter((u) => /mSettings/.test(u)).length, 0, 'and asks ESPN nothing for the league');
+};
+
+// ------------------------------------------------------------ removed-sticks
+//
+// Remove on the menu empties the connection slot. Two things used to refill an
+// empty slot unasked — the league id in the extension's popup and the league
+// on the account — and either would walk the site straight back in.
+
+SCENARIOS['removed-sticks'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake();
+  cloud.configure({ transport: fake });
+  await fake.setDoc(`users/${OWNER_UID}`, { leagueId: String(LEAGUE_ID), season: SEASON, teamId: 2, updatedAt: 'x' });
+
+  // What `leagues.remove()` leaves behind: an empty slot and the league noted
+  // as removed. Written by hand because js/leagues.js imports js/bridge.js,
+  // which must not load before the page's window has its extension attached;
+  // tests/test-leagues.mjs holds `remove()` to exactly this shape.
+  const { document, store } = await bootPage('index.html', {
+    extra: { 'ff.leagues': { v: 1, leagues: [], removed: [LEAGUE_ID], probe: null, source: null } },
+    withBridge: LIVE,          // its popup holds this very league id
+    waitMs: 3000,
+  });
+  const text = (document.getElementById('connBar') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
+  ok('the extension is there', /bridge extension detected/i.test(text) && store.bridgeCalls.includes('GET_CONFIG'), text);
+  ok('THE SITE DID NOT WALK BACK IN: the bar asks for a league id', !!document.getElementById('connLeague') && !/connected to/i.test(text), text);
+  eq(store.bridgeCalls.filter((c) => c === 'PROBE').length, 0, 'the removed league was never probed');
+  ok('and it is not saved back into the slot', !JSON.parse(store.saved.get('ff.connection') || '{}').leagueId, store.saved.get('ff.connection'));
+  eq((JSON.parse(store.saved.get('ff.leagues') || '{}').leagues || []).length, 0, 'nor put back on the list');
+};
+
+// The control: with nothing removed, the popup's league id still connects by itself.
+SCENARIOS['popup-league'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  cloud.configure({ apiKey: '', authDomain: '', projectId: '', appId: '', ownerUid: '' });
+  const { document, store } = await bootPage('index.html', { withBridge: LIVE, waitMs: 3000 });
+  const text = (document.getElementById('connBar') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
+  ok('a league id typed in the extension’s popup connects by itself, as before', /connected to/i.test(text) && text.includes(LIVE.name), text);
+  eq(store.bridgeCalls.filter((c) => c === 'PROBE').length, 1, 'through one probe');
+};
+
+// --------------------------------------------------------------- menu-phone
+//
+// RULE 20, on the menu: "Add a league" on the phone's synced copy asks ESPN
+// nothing. Here the slot is as the menu itself leaves it — no `source` — and
+// the list has no note either, so the answer has to come from js/season.js's
+// own `cloudSource()`.
+
+SCENARIOS['menu-phone'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const leagues = await import(moduleUrl('js/leagues.js'));
+
+  const fake = makeFake();
+  const seeded = await seedCloud(cloud, espn, season, fake);
+  ok('a season was published', seeded.res.ok, seeded.res.reason);
+
+  const map = installStorage();
+  map.set('ff.connection', JSON.stringify({ leagueId: LEAGUE_ID, season: SEASON, teamId: 1 }));
+  espn.configure({ leagueId: '', season: SEASON });   // the menu page has told js/espn.js nothing
+  const calls = installFetch(LIVE.scale, LIVE.name);
+
+  const res = await leagues.lookup('1241838');
+  eq(calls.length, 0, 'ON THE SYNCED COPY, LOOKING A LEAGUE UP MAKES ZERO ESPN REQUESTS');
+  ok('and says why instead', res.ok === false && /synced copy/i.test(res.reason || ''), JSON.stringify(res));
+
+  // A league nobody has synced is not a synced copy, and may be asked for.
+  map.set('ff.connection', JSON.stringify({ leagueId: '555', season: SEASON, teamId: null }));
+  espn.configure({ leagueId: '555', season: SEASON });
+  const live = await leagues.lookup('1241838');
+  eq(JSON.stringify([live.ok, live.name, calls.length]), JSON.stringify([true, LIVE.name, 1]),
+    'with no synced copy behind the open league, the same call reads ESPN once');
+};
+
+// =========================================================================
 // BOOTING A REAL PAGE
 // =========================================================================
 //
@@ -919,7 +1148,7 @@ SCENARIOS['desktop-throttled'] = async () => {
 // not <select>.value, the table conveniences, or a window location. See
 // tests/README.md for the two gotchas.
 
-async function bootPage(page, { prefs = null, connection = null, espnScale = null, cloudRecord = null, withBridge = null, waitMs = 2200 } = {}) {
+async function bootPage(page, { prefs = null, connection = null, espnScale = null, cloudRecord = null, withBridge = null, waitMs = 2200, extra = null } = {}) {
   const { parseHTML } = await import('linkedom');
   const html = readFileSync(repoFile(page), 'utf8');
   const { window, document } = parseHTML(html);
@@ -966,6 +1195,8 @@ async function bootPage(page, { prefs = null, connection = null, espnScale = nul
   if (prefs) saved.set('ff.prefs', JSON.stringify(prefs));
   if (connection) saved.set('ff.connection', JSON.stringify(connection));
   if (cloudRecord) saved.set('ff.cloud', JSON.stringify(cloudRecord));
+  // Anything else a scenario needs in the browser beforehand (the main menu's list).
+  for (const [k, v] of Object.entries(extra || {})) saved.set(k, typeof v === 'string' ? v : JSON.stringify(v));
   const localStorage = {
     getItem: (k) => (saved.has(k) ? saved.get(k) : null),
     setItem: (k, v) => saved.set(k, String(v)),

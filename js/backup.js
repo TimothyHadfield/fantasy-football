@@ -39,6 +39,11 @@
 //     because assuming it rewrites both rosters on the Trade page and that is
 //     not something a file should switch on behind anyone's back.
 //
+//   - and they are ONE LEAGUE-SEASON'S (js/leagues.js parks them per league):
+//     a file from another league-season than the one open here brings its
+//     weeks and leaves the preferences alone. Its saved trades name that
+//     league's teams and players, and would mean nothing in this one.
+//
 // Readings and copies go in through their own modules' `save`, so their own
 // checks apply. A decisions week is written as it was read: js/store.js's
 // writer stamps the time and replaces the record, and this may do neither.
@@ -51,6 +56,8 @@ import * as prefs from './prefs.js';
 export const BACKUP = 1;
 
 const PREFS_KEY = 'ff.prefs';
+/** js/prefs.js's mark of whose preferences these are ("<leagueId>-<season>"). */
+const STAMP = '@league';
 const DECISIONS_SCHEMA = 1;
 const DECISIONS_PREFIX = `ff.decisions.${DECISIONS_SCHEMA}`;
 /** Refuse to keep something absurd, as the other stores do. */
@@ -104,6 +111,22 @@ function storedPrefs() {
   }
 }
 
+/** The league-season open in this browser, as the mark spells it; '' for none. */
+function openLeague() {
+  const s = storage();
+  for (const key of ['ff.connection', 'ff.config']) {
+    try {
+      const saved = JSON.parse(s?.getItem(key) || '{}');
+      if (saved && saved.leagueId) {
+        const now = new Date();
+        const season = Number(saved.season) || (now.getMonth() < 6 ? now.getFullYear() - 1 : now.getFullYear());
+        return `${saved.leagueId}-${season}`;
+      }
+    } catch { /* try the next key */ }
+  }
+  return '';
+}
+
 /** A JSON array with one record to a line, at the envelope's indent. */
 const lines = (list) => (list.length
   ? `[\n${list.map((x) => `    ${JSON.stringify(x)}`).join(',\n')}\n  ]`
@@ -150,10 +173,12 @@ export function exportBackup(leagueId, season) {
  * Read a file back: this build's, an older one's, or a bare reading.
  *
  * @returns {{snapshots:Array, projhist:Array, projhistPart:Array, decisions:Array,
- *            prefs:Object|null, error:string|null}}
+ *            prefs:Object|null, league:string|null, error:string|null}}
+ *   `league` is the league-season the file's preferences are from
+ *   ("<leagueId>-<season>"), or null when the file does not say
  */
 export function parseBackup(text) {
-  const out = { snapshots: [], projhist: [], projhistPart: [], decisions: [], prefs: null, error: null };
+  const out = { snapshots: [], projhist: [], projhistPart: [], decisions: [], prefs: null, league: null, error: null };
   const readings = snapshots.parseImport(text);
   out.snapshots = readings.snapshots;
 
@@ -166,6 +191,12 @@ export function parseBackup(text) {
     out.decisions = rows(parsed.decisions);
     const p = parsed.prefs;
     out.prefs = p && typeof p === 'object' && !Array.isArray(p) ? p : null;
+    // The preferences' own mark says it best; a file from before the mark is
+    // the league-season it was exported for.
+    if (out.prefs && typeof out.prefs[STAMP] === 'string' && out.prefs[STAMP]) out.league = out.prefs[STAMP];
+    else if (/^\d+$/.test(String(parsed.leagueId ?? '')) && Number.isFinite(Number(parsed.season))) {
+      out.league = `${parsed.leagueId}-${Number(parsed.season)}`;
+    }
   }
 
   const anything = out.snapshots.length || out.projhist.length || out.projhistPart.length ||
@@ -187,19 +218,27 @@ function tradeKey(e) {
 /**
  * The preferences, by the rule in the header.
  *
+ * @param {Object|null} filePrefs
+ * @param {string|null} fileLeague  the league-season they are from, when known
  * @returns {{mode:'none'|'restored'|'merged', trades:number}}
  */
-function importPrefs(filePrefs) {
+function importPrefs(filePrefs, fileLeague = null) {
   if (!filePrefs) return { mode: 'none', trades: 0 };
   const s = storage();
   if (!s) return { mode: 'none', trades: 0 };
+
+  // Another league-season's preferences are not this one's to take.
+  const open = openLeague();
+  if (open && fileLeague && open !== fileLeague) return { mode: 'none', trades: 0 };
 
   let here = null;
   try { here = s.getItem(PREFS_KEY); } catch { here = null; }
   if (here == null) {
     // Through js/prefs.js, so a page that has already read its preferences
     // does not write an older picture back over these on its next change.
-    for (const [name, value] of Object.entries(filePrefs)) prefs.set(name, value);
+    for (const [name, value] of Object.entries(filePrefs)) {
+      if (name !== STAMP) prefs.set(name, value);   // the mark is js/prefs.js's to write
+    }
     return { mode: 'restored', trades: 0 };
   }
 
@@ -293,7 +332,7 @@ export function importBackup(file) {
   }
 
   let prefsDone = { mode: 'none', trades: 0 };
-  try { prefsDone = importPrefs(file.prefs); } catch { /* the weeks are in either way */ }
+  try { prefsDone = importPrefs(file.prefs, file.league ?? null); } catch { /* the weeks are in either way */ }
 
   const outcomes = [...weeks.values()];
   return {

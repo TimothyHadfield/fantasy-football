@@ -12,6 +12,7 @@ import * as cloud from './cloud.js';
 import * as capture from './capture.js';
 import * as snapshots from './snapshots.js';
 import * as projHistory from './proj-history.js';
+import * as leagues from './leagues.js';
 import { configure, fetchLeague, AuthError } from './espn.js';
 
 const KEY = 'ff.connection';
@@ -115,6 +116,38 @@ const state = {
   // it has finished. See `maybeCapture()`.
   capture: null,
 };
+
+/**
+ * Is the league in the bar an EARLIER season (opened from the main menu)?
+ *
+ * A finished season is read, never written about: nothing is sent to the
+ * cloud (its copies are first-copy-wins and must never be minted from an old
+ * season), no reading is taken, no "Week N not saved yet" is said, and the
+ * account's saved league is left alone.
+ */
+const pastSeason = () => Number(state.season) !== bridge.currentSeason();
+
+/**
+ * Keep the main menu's list (js/leagues.js) current with what the bar knows:
+ * the league's name and size, this season, and the "You are" team for it.
+ * Never demo. Never the page's problem.
+ */
+function noteLeague() {
+  if (!state.league || !/^\d+$/.test(String(state.leagueId))) return;
+  try {
+    const teams = state.league.teams || [];
+    const mine = state.teamId == null ? null : teams.find((t) => String(t.id) === String(state.teamId));
+    leagues.add({
+      leagueId: state.leagueId,
+      name: state.league.name,
+      teamCount: state.league.teamCount ?? teams.length,
+      seasons: [state.season],
+      season: state.season,
+      team: mine ? { id: mine.id, name: mine.name } : undefined,
+      source: state.source,
+    });
+  } catch { /* the list is the menu's; the bar carries on */ }
+}
 
 /**
  * Has the extension been given its chance to answer yet?
@@ -500,6 +533,7 @@ async function connect({ again = false } = {}) {
       state.teamId = res.data.teams[0].id;
     }
     save();
+    noteLeague();
     rememberProfile();
   } else {
     state.source = 'espn';
@@ -561,6 +595,7 @@ async function connect({ again = false } = {}) {
  */
 async function maybeCapture() {
   if (!bridge.isAvailable() || state.source !== 'espn') return;
+  if (pastSeason()) return;   // an earlier season has no week to read
   if (!/^\d+$/.test(String(state.leagueId))) return;
   try {
     const season = await import('./season.js');
@@ -595,6 +630,7 @@ async function maybeCapture() {
  */
 function captureChip() {
   if (!bridge.isAvailable() || !state.league || state.source !== 'espn') return '';
+  if (pastSeason()) return '';
   let week = null;
   const c = state.capture;
   if (c) {
@@ -631,6 +667,7 @@ function captureChip() {
  */
 function savedView() {
   if (!state.league || typeof projHistory.savedStatus !== 'function') return null;
+  if (pastSeason()) return null;   // nothing is saved for an earlier season, so nothing is said
   const id = { leagueId: state.leagueId, season: state.season };
   if (state.source === 'cloud') return projHistory.savedStatus({ ...id, synced: true });
   if (captureChip()) return null;
@@ -733,6 +770,7 @@ function canSync() {
     state.cloudUser &&
     state.league &&
     state.source === 'espn' &&
+    !pastSeason() &&                        // never an earlier season
     /^\d+$/.test(String(state.leagueId))   // never demo; cloud.js refuses too
   );
 }
@@ -944,7 +982,8 @@ function cloudControls() {
   // No bridge means no private league to read, so there is nothing this
   // browser could publish that it did not get from the cloud in the first
   // place. It says who is signed in and stops.
-  if (!bridge.isAvailable() || !state.league) {
+  // Nor is an earlier season ever sent (see `pastSeason`).
+  if (!bridge.isAvailable() || !state.league || pastSeason()) {
     return `<span class="conn-note">Signed in as ${who}.</span>` +
       `<button type="button" id="connSignOut" class="conn-btn conn-btn-ghost">Sign out</button>`;
   }
@@ -991,6 +1030,7 @@ function setProfileNote(uid, value) {
 async function rememberProfile() {
   if (!cloud.isConfigured() || !state.cloudUser || !state.league) return;
   if (!/^\d+$/.test(String(state.leagueId))) return;   // never demo
+  if (pastSeason()) return;   // the account lands in a league's current season
   const uid = state.cloudUser.uid;
   const value = JSON.stringify({ leagueId: String(state.leagueId), season: state.season, teamId: state.teamId ?? null });
   if (profileNote(uid) === value) return;
@@ -1018,12 +1058,16 @@ async function adoptProfile() {
   if (!res || !res.found || !res.profile) return false;
   const p = res.profile;
   let filled = false;
-  if (!state.leagueId) {
+  // A league taken off the main menu is not walked back into by the account.
+  if (!state.leagueId && !leagues.isRemoved(p.leagueId)) {
     state.leagueId = p.leagueId;
     if (p.season) state.season = p.season;
     filled = true;
   }
-  if (String(state.leagueId) === String(p.leagueId) && state.teamId == null && p.teamId != null) {
+  // The team is the account's for ITS season: a league-season chosen on the
+  // main menu keeps the team it was opened with.
+  if (String(state.leagueId) === String(p.leagueId) && Number(p.season ?? state.season) === Number(state.season) &&
+      state.teamId == null && p.teamId != null) {
     state.teamId = p.teamId;
   }
   // Note what the ACCOUNT holds, so `rememberProfile` writes only if this
@@ -1185,6 +1229,7 @@ function render() {
     team.addEventListener('change', (e) => {
       state.teamId = e.target.value ? Number(e.target.value) : null;
       save();
+      noteLeague();
       rememberProfile();
       document.dispatchEvent(new CustomEvent('ff:connection', { detail: currentConnection() }));
     });
@@ -1262,7 +1307,8 @@ async function init() {
   // typed once.
   if (available && !state.leagueId) {
     const cfg = await bridge.getConfig();
-    if (cfg.ok && cfg.data?.leagueId) state.leagueId = String(cfg.data.leagueId);
+    // (Not one taken off the main menu: Remove has to stick.)
+    if (cfg.ok && cfg.data?.leagueId && !leagues.isRemoved(cfg.data.leagueId)) state.leagueId = String(cfg.data.leagueId);
   }
   render();
 
@@ -1276,7 +1322,11 @@ async function init() {
   // for, and a saved league plus a signed-in account is everything the cloud
   // probe needs. Without this he would have to press Connect on every page
   // load on the one device where connecting cannot fail for any other reason.
-  if (state.leagueId && (available || (cloud.isConfigured() && state.cloudUser))) connect();
+  //
+  // And a league-season the main menu has just opened: its slot holds no name
+  // and no teams, so the bar asks before it says anything about it.
+  if (state.leagueId && (available || (cloud.isConfigured() && state.cloudUser) ||
+      leagues.awaitingProbe(state.leagueId, state.season))) connect();
 }
 
 // The bar is decoration around the page's own data, so a failure probing the

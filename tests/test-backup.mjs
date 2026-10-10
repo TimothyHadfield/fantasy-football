@@ -277,6 +277,68 @@ eq(snapshots.parseImport(file.json).snapshots.map((s) => s.week), [1, 2, 4],
   eq([none.count, JSON.parse(none.json).snapshots, JSON.parse(none.json).prefs], [0, [], null], 'an empty browser exports a well-formed file that counts no weeks');
 }
 
+// =========================================================================
+// 6. THE PREFERENCES ARE ONE LEAGUE-SEASON'S (the main menu, 2026-10-10)
+// =========================================================================
+//
+// js/leagues.js keeps a set of preferences per league-season. A file's saved
+// trades name ITS league's teams and players, so they are merged only into the
+// league-season they came from; the weeks in the file go in regardless, being
+// keyed by league already.
+{
+  const own = { a: 6, b: 8, sendA: ['1'], sendB: ['2'] };
+  const open = (leagueId, season) => store.set('ff.connection', JSON.stringify({ leagueId, season, teamId: 1 }));
+
+  eq(backup.parseBackup(file.json).league, `${LEAGUE}-${SEASON}`, 'a file says which league-season its preferences are from');
+  eq(backup.parseBackup(oldFile.json).league ?? null, null, 'an old file, with none, says nothing');
+
+  // The file's own league-season is open: merged exactly as before.
+  store.clear();
+  open(LEAGUE, SEASON);
+  prefs.set('trade.custom', [own]);
+  let res = backup.importBackup(backup.parseBackup(file.json));
+  eq(res.prefs, { mode: 'merged', trades: 3 }, 'into its own league-season the file’s saved trades are merged, as before');
+  eq(JSON.parse(store.get('ff.prefs'))['trade.custom'], [own, TRADE_1, TRADE_2, ASSUMED.entry], 'after the ones already here');
+
+  // ANOTHER LEAGUE is open.
+  store.clear();
+  open('555', SEASON);
+  const other = JSON.stringify({ 'trade.custom': [own], 'trade.goal': 'last', '@league': `555-${SEASON}` });
+  store.set('ff.prefs', other);
+  res = backup.importBackup(backup.parseBackup(file.json));
+  eq(res.prefs, { mode: 'none', trades: 0 }, 'with ANOTHER LEAGUE open, the file’s preferences are not merged');
+  ok('that league’s preferences are untouched, byte for byte', store.get('ff.prefs') === other, store.get('ff.prefs'));
+  eq([res.added, res.failed], [4, []], 'while the file’s weeks still go in: they are keyed by their own league');
+
+  // The same league, ANOTHER SEASON.
+  store.clear();
+  open(LEAGUE, SEASON - 1);
+  const lastYear = JSON.stringify({ 'trade.custom': [own], '@league': `${LEAGUE}-${SEASON - 1}` });
+  store.set('ff.prefs', lastYear);
+  res = backup.importBackup(backup.parseBackup(file.json));
+  eq([res.prefs, store.get('ff.prefs') === lastYear], [{ mode: 'none', trades: 0 }, true],
+    'another season of the same league is another league-season: not merged either');
+
+  // Another league open and no preferences in it yet: the file's are not "restored" into it.
+  store.clear();
+  open('555', SEASON);
+  res = backup.importBackup(backup.parseBackup(file.json));
+  eq([res.prefs, store.has('ff.prefs')], [{ mode: 'none', trades: 0 }, false],
+    'nor are they restored whole into another league that has none');
+
+  // The mark inside the preferences wins over the file's envelope, and is never copied by hand.
+  const marked = JSON.parse(file.json);
+  marked.prefs = { ...marked.prefs, '@league': `555-${SEASON}` };
+  eq(backup.parseBackup(JSON.stringify(marked)).league, `555-${SEASON}`, 'preferences that carry their own mark are that league-season’s');
+  res = backup.importBackup(backup.parseBackup(JSON.stringify(marked)));
+  eq(res.prefs.mode, 'restored', 'and are restored into it');
+  eq([JSON.parse(store.get('ff.prefs'))['@league'], JSON.parse(store.get('ff.prefs'))['trade.custom']], [`555-${SEASON}`, [TRADE_1, TRADE_2]],
+    'with every preference, under the open league’s mark');
+  marked.prefs['@league'] = `${LEAGUE}-${SEASON}`;
+  store.delete('ff.prefs');
+  eq(backup.importBackup(backup.parseBackup(JSON.stringify(marked))).prefs.mode, 'none', 'and refused when the mark names another');
+}
+
 // ---------------------------------------------------------------------------
 
 for (const f of fails) console.log('FAIL ' + f);

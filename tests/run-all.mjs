@@ -66,6 +66,7 @@ const SUITES = [
   ['owner-names.mjs', 'real names instead of team names: the ESPN members join'],
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
   ['test-backup.mjs', 'Export archive / Import: every kind of saved week and the preferences in one file, back byte for byte, nothing overwritten'],
+  ['test-leagues.mjs', 'the main menu’s data layer: the list of leagues, park and restore on a switch, the mark that stops a stale page overwriting, looking a league up'],
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['test-cloud.mjs', 'the phone bridge: what is synced up, what comes back down, and how old it is'],
   ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],

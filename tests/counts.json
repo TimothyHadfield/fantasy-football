@@ -74,8 +74,8 @@
       "assertions": 190
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 217,
-      "scenarios": 15
+      "assertions": 265,
+      "scenarios": 23
     },
     "test-trade-odds.mjs": {
       "assertions": 142
@@ -107,7 +107,7 @@
       "scenarios": 8
     },
     "test-capture.mjs": {
-      "assertions": 179
+      "assertions": 186
     },
     "cross-sim-check.mjs": {
       "assertions": 36
@@ -238,7 +238,10 @@
       "assertions": 67
     },
     "test-backup.mjs": {
-      "assertions": 67
+      "assertions": 80
+    },
+    "test-leagues.mjs": {
+      "assertions": 139
     },
     "test-start-sit.mjs": {},
     "test-waiver-gain.mjs": {
