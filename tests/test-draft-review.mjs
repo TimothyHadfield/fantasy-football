@@ -512,5 +512,58 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
   ok([...preTotals].every(([id, v]) => v > 0 && v !== totals.get(id)), 'real: ten preseason totals, none of them the total today', JSON.stringify([...preTotals]));
 }
 
+// ------------------------------------------------- the board's Avg column
+// Tim, 2026-10-10: "add a column on the far left that is just the avg of that
+// row or that line of drafting". By hand first, then the real league.
+{
+  near(R.meanOf([1, 2, 4]), 7 / 3, 'mean: of three numbers, unrounded');
+  near(R.meanOf([1.25, null, 2.5, undefined, '—', NaN]), 1.875, 'mean: what is not a number is left out, not counted as 0');
+  eq([R.meanOf([]), R.meanOf([null, undefined, '—']), R.meanOf(null)], [null, null, null], 'mean: nothing to average is null');
+  eq(R.meanOf([0, 0]), 0, 'mean: a real 0 is a number and counts');
+
+  // Three teams, four rows: a full row, a row with an empty slot, a row with
+  // one man who has no figure, and a row nobody picked in.
+  const pk = (id) => ({ playerId: id });
+  const board = [
+    [pk(1), pk(2), pk(3)],
+    [pk(4), null, pk(5)],
+    [null, pk(6), pk(7)],
+    [null, null, null],
+  ];
+  const rows = [
+    { playerId: 1, diff: 3, valueNow: 10.1 }, { playerId: 2, diff: -1, valueNow: 5.2 }, { playerId: 3, diff: 2, valueNow: 0 },
+    { playerId: 4, diff: -7, valueNow: 3.3 }, { playerId: 5, diff: 4, valueNow: 1.2 },
+    { playerId: 6, diff: null, valueNow: null }, { playerId: 7, diff: 5, valueNow: 0.4 },
+  ];
+  const d = R.roundAverages(board, rows, 'diff');
+  eq(d.length, 4, 'avg: one a row of the board');
+  near(d[0], 4 / 3, 'avg: a full row is the mean of its three, not rounded');
+  near(d[1], -1.5, 'avg: an empty slot is left out — the mean of the other two');
+  near(d[2], 5, 'avg: and so is a man with no figure');
+  eq(d[3], null, 'avg: a row with no number at all is null');
+  const v = R.roundAverages(board, rows, 'valueNow');
+  near(v[0], (10.1 + 5.2 + 0) / 3, 'avg: on another figure — and a Value of 0 counts');
+  near(v[1], 2.25, 'avg: another figure, the empty slot left out');
+  near(R.roundAverages(board, rows)[0], 4 / 3, 'avg: the figure defaults to the place difference');
+  eq([R.roundAverages([], rows, 'diff'), R.roundAverages(null, null, 'diff')], [[], []], 'avg: no board, no averages');
+  eq(R.roundAverages(board, [], 'diff'), [null, null, null, null], 'avg: picks the review does not know are left out');
+
+  // THE REAL LEAGUE: ten men a row, seventeen rows, each figure of the four views.
+  const { WORTH } = await import('./draft-stub-value.mjs');
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const players = new Map(Object.entries(FX.players).map(([id, p]) => [Number(id), { name: p.name, position: p.position, soFar: 0, rest: 0, total: 0 }]));
+  const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: WORTH });
+  const b = R.boardOf(draft);
+  const byId = new Map(rv.rows.map((r) => [r.playerId, r]));
+  for (const key of ['valueDiff', 'expected', 'valueNow', 'preDiff', 'diff']) {
+    const got = R.roundAverages(b.rows, rv.rows, key);
+    const want = b.rows.map((row) => row.reduce((a, p) => a + byId.get(p.playerId)[key], 0) / 10);
+    ok(got.length === 17 && got.every((x, i) => Math.abs(x - want[i]) < 1e-9), `real avg: ${key} — each of seventeen rows is the mean of its ten men`, got.slice(0, 3).join(' '));
+  }
+  const now = R.roundAverages(b.rows, rv.rows, 'valueNow');
+  ok(now[0] > 5 && now[16] < 1.5 && now.slice(1).every((x) => x < now[0]), 'real avg: the dearest row is worth far more today than any other, the cheapest next to nothing', [now[0], now[8], now[16]].map((x) => x.toFixed(2)).join(' '));
+  ok(now.some((x) => Math.abs(x * 10 - Math.round(x * 10)) > 1e-6), 'real avg: (and they are not rounded to the tenth)');
+}
+
 console.log(fail ? `\n${fail} failed, ${pass} passed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

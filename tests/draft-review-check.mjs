@@ -122,7 +122,29 @@ async function boot({ store = {}, stubs = true } = {}) {
       boardOwn: board.classList.contains('dr-own-on'),
       // Every cell of the board as drawn, the box classes left out: flipping the switch must change none of it.
       boardHtml: board.innerHTML.replace(/ dr-(?:mine|own)\b/g, ''),
+      // THE AVG COLUMN: where its heading is, and its cell in each round's row and in the totals.
+      avg: (() => {
+        const cellOf = (tr) => {
+          const td = tr && tr.querySelector('.dr-avg');
+          return td ? {
+            v: text(td).replace(/[▲▼\s]/g, ''), index: [...tr.children].indexOf(td), tag: td.tagName,
+            heat: (td.className.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
+            boxed: /\bdr-(?:mine|own)\b/.test(td.className), team: td.hasAttribute('data-team'),
+          } : null;
+        };
+        return {
+          count: board.querySelectorAll('.dr-avg').length,
+          head: cellOf(board.querySelector('thead tr')),
+          total: cellOf(board.querySelector('tbody tr.dr-total')),
+          rows: [...board.querySelectorAll('tbody tr')].filter((tr) => !tr.classList.contains('dr-total')).map(cellOf),
+        };
+      })(),
+      // The board with the Avg column taken out again: what it was before there was one.
+      boardLessAvg: board.innerHTML.replace(/ dr-(?:mine|own)\b/g, '')
+        .replace(/<th class="dr-avg[^"]*"[^>]*>[\s\S]*?<\/th>/g, '').replace(/<td class="dr-avg[^"]*"[^>]*>[\s\S]*?<\/td>/g, ''),
       cells: cells.map((td) => ({
+        // Which round's row it is in (the totals row not counted).
+        row: [...board.querySelectorAll('tbody tr')].filter((tr) => !tr.classList.contains('dr-total')).indexOf(td.parentNode),
         team: td.dataset.team,
         pid: td.querySelector('.dr-why').dataset.pid,
         went: text(td.querySelector('.dr-went')),
@@ -486,6 +508,18 @@ const CHILDREN = {
     };
   },
 
+  // TWO PICKS NEVER MADE (DR_SHORT=1): the last row of the board has two empty
+  // slots, which the Avg column leaves out of that row's average.
+  async short() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const now = p.read();
+    p.fire(p.$('compareToggle').querySelector('button[data-compare="val"]'), 'click');
+    const val = p.read();
+    const empty = [...p.document.querySelectorAll('#draftBoard tbody tr')].map((tr) => tr.querySelectorAll('td.dr-none').length);
+    return { ok, now, val, empty, errors: p.errors };
+  },
+
   // WHOSE MEN ARE BOXED: the column a team drafted, or the men it owns now
   // (Tim, 2026-10-09: "make a switch that instead boxes all the players that
   // you currently own. Nothing else changes except the white boarders").
@@ -611,6 +645,50 @@ function expected(raw) {
 const nameOfTeam = (id) => FX.teams.find((t) => t.id === id).name;
 const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
 
+// ------------------------------------------------------- the Avg column
+// Tim, 2026-10-10: "Also in the draft section add a column on the far left
+// that is just the avg of that row or that line of drafting". Worked out HERE
+// from each row's own cells — not by the page's helper — and printed as that
+// view prints its cells: rounded first, then signed.
+const HEAT = await import(moduleUrl('js/heat.js'));
+const heatCls = (h) => (h ? (h.cls.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0] : '');
+const r1 = (m) => Math.round(m * 10) / 10;
+const AVG_SAID = {
+  tenthSigned: (m) => sv(r1(m)),
+  tenth: (m) => r1(m).toFixed(1),
+  whole: (m) => signed(Math.round(m)),
+};
+/** What a cell printed, as a number ("−3.2" → -3.2); null for a dash. */
+const printed = (c) => (/\d/.test(c.d) ? Number(c.d.replace('−', '-').replace('+', '')) : null);
+/**
+ * A page's Avg column against the figure its cells show.
+ * @param {(cell:object)=>number|null} figure the unrounded figure of a cell of the board
+ * @param {'tenthSigned'|'tenth'|'whole'} said how this view prints a number
+ * @returns {Array<number|null>} the means worked out here, a round
+ */
+function checkAvg(page, name, figure, said, rounds) {
+  const a = page.avg || { count: 0, head: null, total: null, rows: [] };
+  eq([page.heads[0], page.heads[1], a.head && [a.head.index, a.head.tag]], ['Rd', 'Avg', [1, 'TH']], `${name}: a column headed “Avg”, straight after the round number`);
+  eq([a.rows.length, a.rows.every((c) => c && c.index === 1 && c.tag === 'TD')], [rounds, true], `${name}: with a cell in every round’s row, second in it`);
+  eq(a.rows.filter((c) => !c || c.boxed || c.team).length, 0, `${name}: none of them boxed or anybody’s column`);
+  const means = Array.from({ length: rounds }, (_, i) => {
+    const xs = page.cells.filter((c) => c.row === i).map(figure).filter((v) => typeof v === 'number' && Number.isFinite(v));
+    return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : null;
+  });
+  eq(a.rows.map((c) => c && c.v), means.map((m) => (m === null ? '—' : AVG_SAID[said](m))), `${name}: each the mean of the figures shown in its row, printed as they are`);
+  const scale = HEAT.heatScale(means);
+  eq(a.rows.map((c) => c && c.heat), means.map((m) => heatCls(m === null ? null : HEAT.heatOf(m, scale))), `${name}: coloured against the other rounds’ averages`);
+  if (page.totalRow) {
+    const totals = page.totalRow.cells.map((c) => Number(c.v));
+    eq(a.total && [a.total.index, a.total.v, a.total.heat, a.total.boxed, a.total.team],
+      [1, r1(totals.reduce((s, v) => s + v, 0) / totals.length).toFixed(1), '', false, false], `${name}: in the totals row it is the mean of the team totals`);
+  } else {
+    eq(a.total, null, `${name}: no totals row, so nothing of Avg in one`);
+  }
+  eq(a.count, 1 + rounds + (page.totalRow ? 1 : 0), `${name}: and nothing else on the board is an Avg cell`);
+  return means;
+}
+
 // --------------------------------------------------- the card's page half
 // player-card.js draws the card; each page that shows one carries its rules.
 // Without them the card is an unstyled block at the foot of the document —
@@ -636,9 +714,9 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq([f.reviewHidden, f.roomHidden], [false, true], 'demo: "Our draft" is the view the page opens on');
     ok(/^Demo League · Snake · 160 picks · 13 weeks played$/.test(f.sub), 'demo: the line under the heading', f.sub);
     eq(f.status, '', 'demo: nothing in the status line');
-    eq([f.teams.length, f.heads.length, f.boardRows, f.cells.length], [10, 11, 17, 160], 'demo: ten teams, the totals and sixteen rounds, 160 picks on the board');
+    eq([f.teams.length, f.heads.length, f.boardRows, f.cells.length], [10, 12, 17, 160], 'demo: ten teams (after the round and its average), the totals and sixteen rounds, 160 picks on the board');
     eq(f.heads[0], 'Rd', 'demo: the round column');
-    eq(f.heads.slice(1), f.teams.map((t) => t[1]), 'demo: a column a team, in the picker’s order');
+    eq(f.heads.slice(2), f.teams.map((t) => t[1]), 'demo: a column a team, in the picker’s order');
     eq(f.cells.slice(0, 10).map((c) => c.went.split(' ')[0]), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], 'demo: round one runs 1-10');
     eq(f.cells.slice(10, 20).map((c) => c.went.split(' ')[0]), ['20', '19', '18', '17', '16', '15', '14', '13', '12', '11'], 'demo: round two snakes back');
     // (The sample league's Value is made in memory, so its "vs worth now" is on Value.)
@@ -649,6 +727,9 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     ok(tot && tot.cells.every((c) => /^\d+\.\d$/.test(c.v) && Number(c.v) > 0), 'demo: each a Value', tot && tot.cells.map((c) => c.v).join(' '));
     ok(tot && new Set(tot.cells.map((c) => c.heat)).size >= 3, 'demo: coloured against the other teams', tot && tot.cells.map((c) => c.heat).join(' '));
     eq([f.team, f.mineHead, f.mineTeams, f.mineCells], [f.teams[0][0], [f.teams[0][0]], [f.teams[0][0]], 17], 'demo: the first team is picked and its column marked, its total with it');
+    checkAvg(f, 'demo, Avg', printed, 'tenthSigned', 16);
+    ok(/Avg is each round’s average across teams\./.test(f.note), 'demo: how it works says what Avg is', f.note);
+    eq([r.picked.avg, r.byBoard.avg], [f.avg, f.avg], 'demo: picking a team leaves the Avg column as it was');
     eq(f.tableHeads, ['Player', 'Pick', 'Now', '+/−'], 'demo: a snake has no Paid column');
     eq([f.table.length, f.sorted], [16, ['+/−']], 'demo: the team’s sixteen picks, sorted by the difference');
     const diffs = f.table.map((t) => Number(t.cells[3].replace('−', '-')));
@@ -774,8 +855,8 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     run.plain = f;
 
     // THE BOARD against js/draft-review.js on the same fixtures: all 170.
-    eq([f.heads.length, f.boardRows, f.cells.length], [11, 17, 170], 'live: ten teams, seventeen rows, 170 picks');
-    eq(f.heads.slice(1), want.draft.order.map(nameOfTeam), 'live: the columns are ESPN’s draft order');
+    eq([f.heads.length, f.boardRows, f.cells.length], [12, 17, 170], 'live: ten teams (after the round and its average), seventeen rows, 170 picks');
+    eq(f.heads.slice(2), want.draft.order.map(nameOfTeam), 'live: the columns are ESPN’s draft order');
     const wrong = f.cells.filter((c) => {
       const w = want.byId.get(c.pid);
       return !w || c.d !== signed(w.diff) || c.went !== `$${w.bid} ${w.position === 'DST' ? 'D/ST' : w.position}` || String(w.teamId) !== c.team;
@@ -805,6 +886,12 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     ok(/Rank/.test(f.note) && /price/.test(f.note), 'live: how it works explains the auction’s Rank');
     // NO VALUE LINES for this league (the stub hands none): nothing of Value is drawn.
     eq([f.totalRow, /drafted again today/.test(f.note), /smoothed|Expected value/.test(f.note)], [null, true, false], 'live, no lines: no row of totals, and the place-based words');
+    // …AND THE AVG COLUMN averages those place-based numbers, in whole places as they are printed.
+    const lm = checkAvg(f, 'live, no lines, Avg', (c) => want.byId.get(c.pid).diff, 'whole', 17);
+    ok(lm.every((m) => m !== null) && f.avg.rows.every((c) => c && /^[+−]?\d+$/.test(c.v)) && new Set(f.avg.rows.map((c) => c && c.v)).size >= 5,
+      'live, no lines, Avg: seventeen whole numbers, not all alike', f.avg.rows.map((c) => c && c.v).join(' '));
+    ok(/Avg is each round’s average across teams\./.test(f.note), 'live, no lines: how it works says what Avg is', f.note);
+    eq(r.seven.avg, f.avg, 'live: picking another team leaves the Avg column as it was');
 
     // THE PREVIEW.
     const top = want.byId.get(f.table[0].pid);
@@ -875,6 +962,9 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     const cell = r.pre.cells.find((c) => c.pid === String(gibbs.playerId));
     eq([gibbs.pre, cell && cell.d], [1, signed(gibbs.at - 1)], 'pre: Gibbs, ranked 1, shows where he went less one');
     ok(new Set(r.pre.cells.map((c) => c.heat)).size >= 5 && r.pre.cells.every((c) => c.heat), 'pre: on the heat scale, in several steps');
+    checkAvg(r.pre, 'pre, Avg', (c) => byId.get(c.pid).preDiff, 'whole', 17);
+    ok(r.pre.avg.rows.some((c, i) => c && r.now.avg.rows[i] && c.v !== r.now.avg.rows[i].v), 'pre, Avg: and it changed with the view', r.pre.avg.rows.map((c) => c && c.v).join(' '));
+    eq(r.back.avg, r.now.avg, 'pre, Avg: and comes back with it');
 
     const t8 = R.teamReview(rv.rows, 8, 'preDiff');
     eq(r.pre.tableHeads, ['Player', 'Paid', 'Rank', 'Pre', '+/−'], 'pre: the column is Pre');
@@ -1105,6 +1195,32 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     ok(/Value on the board adds up Now for every player a team drafted\./.test(r.val.page.note), 'val: and so does Value now', r.val.page.note);
     ok(r.exp.page.cells.some((c, i) => c.d !== r.val.page.cells[i].d) && r.exp.page.totalRow.cells.every((c, i) => c.v !== r.val.page.totalRow.cells[i].v), 'views: (the two new views are not the same numbers)');
 
+    // THE AVG COLUMN, in each of the four views: the mean of what that view's cells show.
+    {
+      const fig = (key) => (c) => byId.get(c.pid)[key];
+      const m = {
+        now: checkAvg(r.opened, 'now, Avg', fig('valueDiff'), 'tenthSigned', 17),
+        exp: checkAvg(r.exp.page, 'exp, Avg', fig('expected'), 'tenth', 17),
+        val: checkAvg(r.val.page, 'val, Avg', fig('valueNow'), 'tenth', 17),
+        pre: checkAvg(r.pre.page, 'pre (with Value), Avg', fig('preDiff'), 'whole', 17),
+      };
+      const shown = [r.opened, r.exp.page, r.val.page, r.pre.page].map((p) => (p.avg ? p.avg.rows.map((c) => c && c.v).join(' ') : ''));
+      eq(new Set(shown).size, 4, 'views, Avg: the column changes with every view');
+      ok(m.now.some((x) => x !== null && Math.abs(x * 10 - Math.round(x * 10)) > 1e-6), 'views, Avg: (the means are not round tenths themselves — they are rounded only to be printed)');
+      // Round one's men are worth far more than the last round's, and were expected to be.
+      ok(m.val[0] > 5 && m.val[16] < 1.5 && m.exp[0] > m.exp[16] + 5, 'views, Avg: round one averages well above the last round, today and as expected', [m.val[0], m.val[16], m.exp[0], m.exp[16]]);
+      const va = r.val.page.avg;
+      ok(va && va.rows.length === 17 && va.rows[0] && /^heat-up/.test(va.rows[0].heat) && /^heat-dn/.test(va.rows[16].heat), 'val, Avg: round one green, the last round red', va && va.rows.map((c) => c && c.heat).join(' '));
+      eq([Boolean(r.exp.page.avg.total && va.total && r.exp.page.avg.total.v !== va.total.v), r.back.page.avg], [true, r.opened.avg], 'views, Avg: its totals cell follows the view too, and Value difference comes back as it opened');
+      ok(/Avg is each round’s average across teams\./.test(r.opened.note) && [r.exp.page, r.val.page, r.pre.page].every((p) => /Avg is each round’s average across teams\./.test(p.note)),
+        'views: how it works says what Avg is, in all four');
+      // THE REST OF THE BOARD: take the column out and every row is the round, then a cell a team.
+      const less = r.opened.boardLessAvg || '';
+      const trs = less.match(/<tr[\s\S]*?<\/tr>/g) || [];
+      eq([/dr-avg/.test(less), trs.length, trs.filter((tr) => (tr.match(/<t[dh][ >]/g) || []).length !== 11).length], [false, 19, 0],
+        'views, Avg: without it each of the board’s nineteen rows is the round and ten teams, as before');
+    }
+
     // THE PREVIEW still explains the difference: it is what joins the three Value views.
     const top = byId.get(r.expPopPid);
     eq(r.expPop && r.expPop.rows, [
@@ -1148,6 +1264,28 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     eq([n.opened.cells.length, n.opened.cells.filter((c) => c.d !== signed(plain.byId.get(c.pid).diff)).slice(0, 3), n.opened.totalRow],
       [170, [], null], `views, no lines (${stored}): which is the place-based board it was, with no totals`);
     eq([n.opened.tableHeads, n.opened.tiles.map((t) => t.k)], [['Player', 'Paid', 'Rank', 'Now', '+/−'], ['Best steal', 'Biggest miss']], `views, no lines (${stored}): its table and tiles too`);
+  }
+
+  // AN EMPTY SLOT IS LEFT OUT OF ITS ROW'S AVERAGE: the same league, two teams
+  // a pick short, so the last row has eight men and two empty slots.
+  {
+    const { shortPicks } = await import('./draft-stub-espn.mjs');
+    const raw = JSON.parse(JSON.stringify(RAW));
+    raw.draftDetail.picks = shortPicks(raw.draftDetail.picks);
+    const d2 = R.parseDraft(raw);
+    const rv2 = R.reviewDraft({ draft: d2, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: VAL.WORTH });
+    const by2 = new Map(rv2.rows.map((x) => [String(x.playerId), x]));
+    const s = run('short', { ...ENV, DR_SHORT: '1' });
+    ok(!s.boot, 'short: boots', s.boot);
+    if (!s.boot) {
+      eq([s.ok, s.errors, s.now.cells.length, s.empty.slice(-1), s.empty.slice(0, -1).some(Boolean)], [true, [], 168, [2], false],
+        'short: 168 picks on the board, and two empty slots in its last row only');
+      const mn = checkAvg(s.now, 'short, Value difference, Avg', (c) => by2.get(c.pid).valueDiff, 'tenthSigned', 17);
+      const mv = checkAvg(s.val, 'short, Value now, Avg', (c) => by2.get(c.pid).valueNow, 'tenth', 17);
+      const last = s.val.cells.filter((c) => c.row === 16).map((c) => by2.get(c.pid).valueNow);
+      eq([last.length, (s.val.avg.rows[16] || {}).v], [8, r1(last.reduce((a, v) => a + v, 0) / 8).toFixed(1)], 'short, Avg: the last row is the mean of its eight men');
+      ok(r1(last.reduce((a, v) => a + v, 0) / 10) !== r1(mv[16]) && mn[16] !== null, 'short, Avg: which is not what counting the two empty slots as 0 would print', [mv[16], last.reduce((a, v) => a + v, 0) / 10]);
+    }
   }
 
   // THE BOARD AT ITS FULL HEIGHT (Tim, 2026-10-09: "extend the draft board down
@@ -1206,6 +1344,8 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
     // NOTHING ELSE CHANGES.
     eq(o.cells, d.cells, 'own: every cell’s text and colour is the same in the two states');
     eq(o.boardHtml === d.boardHtml, true, 'own: the board is the same board to the letter, the box classes apart');
+    eq([o.avg.rows.length, [...o.avg.rows, ...d.avg.rows, o.avg.total, d.avg.total, o.avg.head, d.avg.head].filter((c) => !c || c.boxed).length],
+      [17, 0], 'own: the Avg column is there and boxed in neither state');
     eq([o.totalRow.cells.map((c) => [c.team, c.v, c.heat]), o.table, o.tiles, o.note, o.sub],
       [d.totalRow.cells.map((c) => [c.team, c.v, c.heat]), d.table, d.tiles, d.note, d.sub], 'own: the totals, the team’s table, its tiles and the words are untouched');
     eq([r.afterSwitch, r.warm.draft, r.warm.players, r.warm.ranks], [r.cold, r.cold.draft, r.cold.players, r.cold.ranks], 'own: the switch asks nothing of anybody, and nor does the rest');

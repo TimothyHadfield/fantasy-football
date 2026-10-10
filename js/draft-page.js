@@ -1636,7 +1636,7 @@ function renderReview() {
   $('teamTable').classList.toggle('dr-plain', isPlain());
   $('teamTable').querySelector('th.dr-paid').hidden = !auction;
 
-  $('drNote').innerHTML = isPre()
+  $('drNote').innerHTML = (isPre()
     ? '<p><strong>Pre</strong> is where ESPN ranked a player before the season, counted among the players drafted: ' +
     'the best-ranked player drafted is 1.</p>' +
     (auction
@@ -1676,7 +1676,9 @@ function renderReview() {
       : '') +
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Now. Above zero is a steal, below zero a miss. ` +
     'Green and red compare it with every pick in the draft.</p>' +
-    '<p>A player counts for the team that drafted him, wherever he is now.</p>';
+    '<p>A player counts for the team that drafted him, wherever he is now.</p>') +
+    // The board's Avg column, whichever view is on.
+    '<p><strong>Avg</strong> is each round’s average across teams.</p>';
 
   clearRuns('dr');
   w.cards = new Map();
@@ -1696,7 +1698,22 @@ function drawBoard() {
   const table = $('draftBoard');
   // How many columns the stylesheet keeps at a readable width (css/app.css, `.dr-board`).
   table.setAttribute('style', `--dr-cols: ${teamIds.length}`);
-  table.querySelector('thead').innerHTML = '<tr><th class="dr-rd">Rd</th>' + teamIds.map((id) =>
+  // THE AVG COLUMN (Tim, 2026-10-10: "add a column on the far left that is just
+  // the avg of that row or that line of drafting"). Beside the round number: a
+  // row's mean across teams of the figure its cells show, whichever view is on
+  // — worked out unrounded (js/draft-review.js), printed as the cells are
+  // (rounded first, then signed), and coloured against the other rounds'
+  // averages. In the totals row: the mean of the team totals. It carries no
+  // `data-team`, so `paintBox` never boxes it.
+  const avgSaid = (a) => (a === null ? '—' : dSaid(isPlain() || onValue() ? Math.round(a * 10) / 10 : Math.round(a)));
+  const avgs = draftReview.roundAverages(rows, w.rv.rows, diffKey());
+  const avgScale = heatScale(avgs);
+  const avgCell = (a) => {
+    const h = a === null ? null : heatOf(a, avgScale);
+    return `<td class="dr-avg${h ? ` ${h.cls}` : ''}">${avgSaid(a)}${heatMarkHtml(h)}</td>`;
+  };
+  const totalAvg = draftReview.meanOf(teamIds.map((id) => (totals.has(id) ? totals.get(id) : null)));
+  table.querySelector('thead').innerHTML = '<tr><th class="dr-rd">Rd</th><th class="dr-avg">Avg</th>' + teamIds.map((id) =>
     // No `title`: the heading opens the team's card, which carries its whole name.
     `<th class="dr-col" data-team="${esc(id)}"><button type="button" class="dr-pick-team" data-team="${esc(id)}">` +
     `${esc(teamName(id))}</button></th>`).join('') + '</tr>';
@@ -1704,13 +1721,14 @@ function drawBoard() {
   // that that user drafted at the top as a row above the first round picks
   // below their name"). Only when Value is known; both views — Value today in
   // "vs worth now", each man's own preseason Value in "vs preseason rank".
-  const totalRow = !w.valued ? '' : '<tr class="dr-total"><td class="dr-rd">Value</td>' + teamIds.map((id) => {
+  const totalRow = !w.valued ? '' : '<tr class="dr-total"><td class="dr-rd">Value</td>' +
+    `<td class="dr-avg">${valueText(totalAvg === null ? null : Math.round(totalAvg * 10) / 10)}</td>` + teamIds.map((id) => {
     const total = totals.has(id) ? totals.get(id) : null;
     const h = total === null ? null : heatOf(total, totalScale);
     return `<td class="dr-tot${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${valueText(total)}${heatMarkHtml(h)}</td>`;
   }).join('') + '</tr>';
   table.querySelector('tbody').innerHTML = totalRow + rows.map((row, i) =>
-    `<tr><td class="dr-rd">${i + 1}</td>` + row.map((pk, c) => {
+    `<tr><td class="dr-rd">${i + 1}</td>${avgCell(avgs[i])}` + row.map((pk, c) => {
       const id = teamIds[c];
       if (!pk) return `<td class="dr-cell dr-none" data-team="${esc(id)}"></td>`;
       const r = byId.get(pk.playerId);

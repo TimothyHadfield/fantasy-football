@@ -2053,3 +2053,21 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
   .dr-picks.dr-plain th.name, .dr-picks.dr-plain td.name { padding-left: 9px; padding-right: 6px; }
 }
 /* ================================= end of four views and the whole board */
+/* ============ DRAFT BOARD: THE AVG COLUMN (2026-10-10)
+ * Tim: "add a column on the far left that is just the avg of that row or that
+ * line of drafting". One narrow column beside the round number, a number wide,
+ * in the board's own small figures. It stays put with the round column when
+ * the board scrolls sideways on a phone (30px is that column's width), and the
+ * board's least width grows by its own 40px so no team is squeezed. The tint is
+ * a background-image over the cell's own colour, as everywhere (rule 14). */
+.dr-board { min-width: calc(70px + var(--dr-cols, 10) * 74px); }
+.dr-board .dr-avg {
+  width: 40px; padding-left: 2px; padding-right: 2px; text-align: center; white-space: nowrap;
+  position: sticky; left: 30px; background-color: var(--panel); z-index: 1;
+  border-right: 1px solid var(--line-2);
+}
+.dr-board th.dr-avg { z-index: 3; color: var(--dim); }
+.dr-board td.dr-avg { font-size: 10.5px; font-weight: 600; color: var(--text); }
+.dr-board tbody tr:nth-child(even) td.dr-avg { background-color: var(--row-alt); }
+.dr-board tr.dr-total td.dr-avg { font-size: 11px; }
+/* ============================================ end of the draft's avg column */

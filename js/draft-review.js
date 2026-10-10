@@ -392,6 +392,35 @@ export function teamValues(rows, key = 'valueNow') {
   return out;
 }
 
+/**
+ * The mean of the numbers in a list, unrounded; null when it holds none. What
+ * is not a finite number (null, undefined, a dash) is left out, not counted 0.
+ */
+export function meanOf(values) {
+  const xs = (values || []).map(num).filter((v) => v !== null);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+}
+
+/**
+ * THE BOARD'S "AVG" COLUMN (Tim, 2026-10-10: "add a column on the far left
+ * that is just the avg of that row or that line of drafting"): for each row of
+ * the board, the mean across teams of one figure of its picks.
+ *
+ * @param {Array<Array<object|null>>} boardRows `boardOf(draft).rows`
+ * @param {Array} rows `reviewDraft(...).rows` (the picks with their figures)
+ * @param {string} key the figure on show: `diff`, `valueDiff`, `expected`,
+ *   `valueNow` or `preDiff`
+ * @returns {Array<number|null>} one a row, unrounded. An empty slot and a pick
+ *   with no such figure are left out; a row with none is null.
+ */
+export function roundAverages(boardRows, rows, key = 'diff') {
+  const byId = new Map((rows || []).map((r) => [r.playerId, r]));
+  return (boardRows || []).map((row) => meanOf((row || []).map((pk) => {
+    const r = pk ? byId.get(pk.playerId) : null;
+    return r ? r[key] : null;
+  })));
+}
+
 // ----------------------------------------------------------------- the review
 
 /**

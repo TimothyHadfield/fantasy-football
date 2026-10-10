@@ -33,6 +33,14 @@ export async function fetchDraftRanks(ids) {
   return out;
 }
 
+/** ESPN's picks without the last pick of the draft and the last pick of one other team. */
+export function shortPicks(picks) {
+  const sorted = picks.slice().sort((x, y) => x.overallPickNumber - y.overallPickNumber);
+  const last = sorted[sorted.length - 1];
+  const other = sorted.slice().reverse().find((p) => p.teamId !== last.teamId);
+  return sorted.filter((p) => p !== last && p !== other);
+}
+
 export async function fetchDraft() {
   calls.draft++;
   const raw = JSON.parse(JSON.stringify(DRAFT));
@@ -41,6 +49,9 @@ export async function fetchDraft() {
     raw.settings.draftSettings.type = 'SNAKE';
     for (const p of raw.draftDetail.picks) p.bidAmount = 0;
   }
+  // DR_SHORT=1: two teams never made their last pick (each left a roster spot
+  // empty), so two slots of the board's last row are empty.
+  if (process.env.DR_SHORT === '1') raw.draftDetail.picks = shortPicks(raw.draftDetail.picks);
   // DR_EMPTY=1: the league before it has drafted — ESPN sends no picks.
   if (process.env.DR_EMPTY === '1') {
     raw.draftDetail.picks = [];
