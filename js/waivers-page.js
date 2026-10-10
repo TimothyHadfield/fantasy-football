@@ -691,7 +691,8 @@ async function loadLive() {
     state.leagueName = schedule.leagueName || 'Your league';
     state.schedule = schedule;
     // The league's scoring rules, for the preseason arrows (js/proj-trend.js).
-    state.scoring = Array.isArray(schedule.scoringItems) ? schedule.scoringItems : null;
+    // Only for the season the preseason copy is of: another season gets no arrow.
+    state.scoring = trend.scoringForSeason(schedule.scoringItems, espn.getConfig().season);
     state.seasonWeeks = schedule.weeks.slice();
     state.playoffWeeks = leaguePlayoffWeeks(schedule);
     state.currentWeek = currentWeekOf(schedule);

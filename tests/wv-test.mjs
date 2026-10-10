@@ -599,6 +599,16 @@ const SCENARIOS = {
       globalThis.__wvTrend = out;
     },
   },
+  // AN EARLIER SEASON of the same league (main menu, 2026-10-10): the very men
+  // who carry an arrow above carry none — the preseason copy is of 2026, and a
+  // 2025 projection set against it would be two different years.
+  'trend-past': {
+    label: '(g2) an earlier season: the same men, and no preseason arrow or key',
+    stub: true,
+    env: { WV_TREND: '1' },
+    prefs: { 'waivers.source': 'live' },
+    conn: { leagueId: '99', season: 2025, teamId: 4 },
+  },
   // GAIN (2026-10-06): what adding a free agent is worth to YOUR lineup — one
   // sortable column after Avg, filled in after the table paints, whose figure
   // opens the weeks it is formed from. The arithmetic is proved against a brute
@@ -1603,7 +1613,7 @@ async function check(scenario, boot) {
   // `trend` rosters one man per position, and a group of one has nothing to be
   // coloured against — the scale is not what that scenario is about.
   // (`gain-noteam` is the same stub league.)
-  if (scenario !== 'trend' && scenario !== 'gain-noteam' && scenario !== 'value-taken') checkHeat(c, d, scenario, note);
+  if (scenario !== 'trend' && scenario !== 'trend-past' && scenario !== 'gain-noteam' && scenario !== 'value-taken') checkHeat(c, d, scenario, note);
 
   // ---- (a) demo ------------------------------------------------------------
   if (scenario === 'demo') {

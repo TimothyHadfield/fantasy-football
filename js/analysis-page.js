@@ -74,6 +74,7 @@ import { heatScale, heatOf, heatMarkHtml, describeHeatPerColumn } from './heat.j
 import { statCard, teamWeekSpec, clearPops, wirePops, hidePop } from './pop.js';
 import { teamHref } from './links.js';
 import * as espn from './espn.js';
+import { currentSeason } from './bridge.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
 import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 // The slot vocabulary is shared with the Trade page's per-week breakdown, so
@@ -4719,12 +4720,17 @@ function paintChanges() {
   const empty = $('changesEmpty');
   if (!show) {
     const now = currentWeek(weeks);
+    // AN EARLIER SEASON (opened from the main menu) has no week "now" and
+    // nothing is saved for it any more: the first sentence alone, with no week.
+    const past = !state.isDemo && Number(espn.getConfig().season) < currentSeason();
     empty.textContent = state.isDemo
       ? 'Sample data has no saved projections.'
       : !ready
         ? ''
-        : `No saved projections for this team${now === null ? '' : ` before week ${now}`}. ` +
-          `Saved weekly from now on.`;
+        : past
+          ? 'No saved projections for this team.'
+          : `No saved projections for this team${now === null ? '' : ` before week ${now}`}. ` +
+            `Saved weekly from now on.`;
     empty.classList.toggle('hidden', !empty.textContent);
     table.querySelector('thead').innerHTML = '<tr></tr>';
     $('changesRows').innerHTML = '';

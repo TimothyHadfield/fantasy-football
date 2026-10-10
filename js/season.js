@@ -2008,6 +2008,17 @@ export async function fetchProGames() {
 // what js/lineup-avg.js `slotsFromTeamLists` does, and what the Decisions world
 // below already uses).
 
+// AN EARLIER SEASON HAS NO VALUE AT ALL (main menu, 2026-10-10: a league's
+// earlier seasons can be opened). Value is an average over the weeks LEFT, and
+// a finished season has none — but "none left" is read off the bracket, and a
+// league whose feed carries no bracket games keeps its playoff weeks "left" for
+// ever, with ESPN still answering their squads and wire. Lines made from that
+// would be kept, and sent up, for good. So a season before the one being played
+// (`bridge.currentSeason`) is never asked: no lines made, kept, adopted or
+// sent, no weeks, nobody's Value — the switches stay hidden and the cards carry
+// none. The sample league is not a season and is untouched.
+const pastSeason = () => Number(espn.getConfig().season) < bridge.currentSeason();
+
 const usableBase = (b) => value.isBase(b) && Object.keys(b.lines).length > 0;
 const valueKey = (cfg) => `ff.value.${cfg.leagueId}-${cfg.season}`;
 
@@ -2187,6 +2198,7 @@ export function fetchValueBase({ demo = false } = {}) {
 async function valueBaseNow(demo) {
   const cfg = demo ? null : storable();
   if (!cfg) return (await demoValueWorld()).base;
+  if (pastSeason()) return null;
 
   // THE SYNCED COPY: what the computer sent, or nothing. Never made here.
   const down = await cloudDown();
@@ -2261,6 +2273,7 @@ async function playerValuesNow(demo) {
     const world = await demoValueWorld();
     return playerValuesOf(world.base, world.weeks, world.weekTeams, {});
   }
+  if (pastSeason()) return playerValuesOf(null, [], new Map(), {});
   const base = await fetchValueBase();
   const weeks = valueWeeks(await fetchSchedule());
   if (!weeks.length) return playerValuesOf(base, [], new Map(), {});
@@ -2285,7 +2298,7 @@ async function playerValuesNow(demo) {
  */
 async function valueBaseForSync({ schedule, rosters, wire, byes }) {
   const cfg = storable();
-  if (!cfg) return null;
+  if (!cfg || pastSeason()) return null;
 
   let asked = false;
   let up = null;

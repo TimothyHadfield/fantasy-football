@@ -56,7 +56,26 @@ const DEFAULT_ROWS = [
 export const DEFAULT_PPR = DEFAULT_ROWS.map(([statId, points, pointsOverrides]) =>
   (pointsOverrides ? { statId, points, pointsOverrides } : { statId, points }));
 
-const BASELINE_URL = new URL('../data/baselines/2026-preseason.json', import.meta.url);
+/**
+ * THE ONE SEASON THE COPY IS OF. A league opened on any other season (an
+ * earlier one from the main menu) gets no arrow and no preseason figure: a
+ * 2025 projection set against the 2026 preseason is two different years.
+ */
+export const BASELINE_SEASON = 2026;
+
+const BASELINE_URL = new URL(`../data/baselines/${BASELINE_SEASON}-preseason.json`, import.meta.url);
+
+/**
+ * The league's rules when the copy is of THIS season, else null — and null
+ * rules mean no arrow anywhere (`baselineOf`, `trendOf`), exactly as for a
+ * league whose scoring is not known.
+ *
+ * @param {Array|null} scoring the league's rules (or DEFAULT_PPR)
+ * @param {number|string} season the season the page is showing
+ */
+export function scoringForSeason(scoring, season) {
+  return Array.isArray(scoring) && Number(season) === BASELINE_SEASON ? scoring : null;
+}
 
 let baseline = null;
 let loading = null;

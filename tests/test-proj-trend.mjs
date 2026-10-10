@@ -134,6 +134,23 @@ ok(trend.trendOf(3, 30, ONE) === null, 'a zero preseason total: no arrow');
 ok(trend.trendOf(1, 30, null) === null, 'no league scoring known: no arrow');
 ok(trend.trendOf(1, null, ONE) === null && trend.trendOf(1, 0, ONE) === null,
   'no current figure (null, or nothing above zero): no arrow');
+
+// ---- 3b. the copy is of ONE season ------------------------------------------
+// A league opened on an earlier season (main menu, 2026-10-10): the page hands
+// the rules through `scoringForSeason`, and another season's are null — so
+// there is no arrow and no preseason figure, the same as "scoring not known".
+ok(trend.BASELINE_SEASON === 2026 && /^2026-/.test(file.captured),
+  'the copy says which season it is of, and it is the committed file\'s', `${trend.BASELINE_SEASON} ${file.captured}`);
+ok(trend.scoringForSeason(ONE, 2026) === ONE && trend.scoringForSeason(ONE, '2026') === ONE,
+  'its own season: the league\'s rules, untouched (number or string)');
+ok(trend.trendOf(1, 30, trend.scoringForSeason(ONE, 2026))?.dir === 'up', '…so the arrow is drawn as before');
+for (const other of [2025, 2021, 2027, null, undefined, NaN]) {
+  ok(trend.scoringForSeason(ONE, other) === null, `season ${other}: no rules handed on`);
+  ok(trend.trendOf(1, 30, trend.scoringForSeason(ONE, other)) === null, `season ${other}: no arrow`);
+  ok(trend.baselineOf(1, trend.scoringForSeason(ONE, other)) === null, `season ${other}: no preseason figure`);
+}
+ok(trend.scoringForSeason(null, 2026) === null, 'no league scoring known stays null in its own season');
+
 trend.setBaseline(null);
 ok(!trend.ready() && trend.trendOf(1, 30, ONE) === null, 'before the copy is read: no arrow');
 
