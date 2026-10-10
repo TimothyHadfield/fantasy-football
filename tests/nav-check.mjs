@@ -16,7 +16,12 @@
 //     today, which a screen reader cannot see; this line lists the pages still
 //     missing it until they all have it.
 //
-// Pages with no site nav at all (none today) are listed, not failed.
+// THE MAIN MENU (leagues.html, 2026-10-10) is the one page with no site nav: it
+// is outside the sections. That is checked rather than noted — exactly that
+// page has none, so a section page that loses its nav fails here — and so is
+// the way into it: on every other page the brand is a link to the menu, sitting
+// in the header OUTSIDE the nav (the nav's links are compared page against
+// page, and the brand is not one of them); on the menu it is plain text.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,8 +66,29 @@ for (const page of pages) {
   const n = readNav(page);
   if (n) navs.push(n); else without.push(page);
 }
-if (without.length) console.log(`note: no site nav on ${without.join(', ')}`);
 ok(navs.length > 0, 'at least one page has a nav');
+
+// ---- the main menu, and the brand that leads to it ---------------------------
+const MENU = 'leagues.html';
+const BRAND = 'Fantasy Football';
+ok(without.length === 1 && without[0] === MENU, `the main menu (${MENU}) is the only page with no site nav`, `without a nav: ${without.join(', ') || 'none'}`);
+for (const page of pages) {
+  const { document } = parseHTML(fs.readFileSync(path.join(REPO, page), 'utf8'));
+  const brands = [...document.querySelectorAll('header.site .brand')];
+  ok(brands.length === 1, `${page} has one brand in its header`, `found ${brands.length}`);
+  const brand = brands[0];
+  if (!brand) continue;
+  ok(brand.textContent.trim() === BRAND, `${page}: the brand reads "${BRAND}"`, brand.textContent.trim());
+  ok(!brand.closest('nav'), `${page}: the brand is outside the nav`);
+  if (page === MENU) {
+    ok(brand.tagName !== 'A' && !brand.querySelector('a') && document.querySelectorAll('header.site a').length === 0,
+      `${page}: on the menu itself the brand is plain text, and the header links nowhere`, brand.outerHTML);
+  } else {
+    ok(brand.tagName === 'A' && brand.getAttribute('href') === MENU, `${page}: the brand is a link to the main menu`, brand.outerHTML);
+    // A `title` draws nothing under a finger, and the words are the link's own.
+    ok(!brand.hasAttribute('title'), `${page}: the brand carries no title`);
+  }
+}
 
 // ---- the same links, in the same order, everywhere --------------------------
 const sig = (n) => n.links.map((l) => `${l.label} -> ${l.href}`);

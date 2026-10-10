@@ -2071,3 +2071,12 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
 .dr-board tbody tr:nth-child(even) td.dr-avg { background-color: var(--row-alt); }
 .dr-board tr.dr-total td.dr-avg { font-size: 11px; }
 /* ============================================ end of the draft's avg column */
+/* ============ THE BRAND IS THE WAY TO THE MAIN MENU (2026-10-10)
+ * Tim: "To go to this main menu you will click on the fantasy button in the top
+ * left." On every section page the brand is now a link to leagues.html. It is
+ * drawn exactly as the plain text was — the header's own colour, no underline,
+ * the weight and size from `header.site .brand` above — and takes the shared
+ * focus ring, with a radius so the ring does not cut square corners round it. */
+header.site a.brand { color: inherit; text-decoration: none; }
+header.site a.brand:focus-visible { border-radius: var(--r-1); }
+/* ===================================================== end of the brand link */
