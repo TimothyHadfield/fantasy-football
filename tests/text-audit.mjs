@@ -40,6 +40,8 @@ import { emit } from './emit.mjs';
 const PAGES = [
   'index.html', 'stats.html', 'analysis.html', 'schedule.html',
   'waivers.html', 'trade.html', 'summary.html', 'decisions.html',
+  // The main menu (2026-10-10): an empty browser, so its empty state.
+  'leagues.html',
 ];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

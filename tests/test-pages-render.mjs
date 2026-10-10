@@ -25,6 +25,9 @@ import { REPO } from './repo.mjs';
 const PAGES = [
   'index.html', 'stats.html', 'analysis.html', 'schedule.html', 'trade.html', 'summary.html',
   'waivers.html', 'draft.html', 'debug.html', 'decisions.html',
+  // The main menu (2026-10-10). Booted with the real js/leagues.js on an empty
+  // browser, so what renders here is its empty state.
+  'leagues.html',
 ];
 
 /** Parse the <script type="module" src="..."> tags a page actually declares. */
