@@ -2028,3 +2028,28 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
 .dr-board td.dr-own { box-shadow: inset 0 0 0 2px var(--good); }
 .dr-board.dr-own-on th.dr-mine { box-shadow: inset 0 0 0 2px var(--good); }
 /* ============================================ end of drafted / own now */
+/* ============ DRAFT "OUR DRAFT": FOUR VIEWS, AND THE WHOLE BOARD (2026-10-09)
+ * Tim: "add a expected value and value now tab … along with the vs worth now
+ * and vs preseason rank tabs". Four tabs on one switch: side by side on a
+ * laptop; on a phone two rows of two, since four across would cut the words.
+ * The two that need Value are hidden without it (a segmented button has a
+ * display of its own, so `hidden` has to be said here).
+ * Tim: "extend the draft board down so you don't have to scroll in the box
+ * itself". The board's box loses the height cap every `.table-scroll` has, so
+ * all rounds are on the page and the page scrolls; it still scrolls sideways
+ * inside its panel on a phone. (With no cap the headings no longer stick: a
+ * heading only sticks against a box that scrolls.) */
+.dr-compare button[hidden] { display: none; }
+#panelBoard .table-scroll { max-height: none; }
+@media (max-width: 760px) {
+  .dr-compare { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* In the two new views the team's table carries the heading "Expected", 38px
+ * wider than "+/−" (measured at 1440): beside the board its panel is 380px, so
+ * the last column ran out under the panel's edge. Its cells sit a little
+ * closer there and it fits again. (A phone's panel is the screen: it fitted.) */
+@media (min-width: 1001px) {
+  .dr-picks.dr-plain th, .dr-picks.dr-plain td { padding-left: 4px; padding-right: 4px; }
+  .dr-picks.dr-plain th.name, .dr-picks.dr-plain td.name { padding-left: 9px; padding-right: 6px; }
+}
+/* ================================= end of four views and the whole board */

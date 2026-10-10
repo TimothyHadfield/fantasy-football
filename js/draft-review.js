@@ -474,16 +474,20 @@ export function reviewDraft({ draft, players, slots, teams = null, against = 'ba
  * One team's picks, with its best steal and its biggest miss (null when it has
  * none). `key` is the difference they are the ends of: `diff` (worth now, by
  * place), `valueDiff` (worth now, on Value) or `preDiff` (preseason rank).
+ *
+ * `plain` is for a figure that is not a difference (`expected`, `valueNow` —
+ * the "Expected value" and "Value now" views): the two ends are then simply
+ * the team's highest and lowest, whatever their sign; of equals, the earlier pick.
  */
-export function teamReview(rows, teamId, key = 'diff') {
+export function teamReview(rows, teamId, key = 'diff', { plain = false } = {}) {
   const picks = (rows || []).filter((r) => String(r.teamId) === String(teamId));
   const rated = picks.filter((r) => r[key] !== null && r[key] !== undefined);
   const best = rated.reduce((a, r) => (a === null || r[key] > a[key] ? r : a), null);
   const worst = rated.reduce((a, r) => (a === null || r[key] < a[key] ? r : a), null);
   return {
     picks,
-    steal: best && best[key] > 0 ? best : null,
-    miss: worst && worst[key] < 0 ? worst : null,
+    steal: best && (plain || best[key] > 0) ? best : null,
+    miss: worst && (plain || worst[key] < 0) ? worst : null,
   };
 }
 

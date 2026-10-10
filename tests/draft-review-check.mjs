@@ -110,6 +110,13 @@ async function boot({ store = {}, stubs = true } = {}) {
         labels: [...$('boxToggle').querySelectorAll('button')].map((b) => [b.dataset.box, text(b)]),
         on: [...$('boxToggle').querySelectorAll('button.on')].map((b) => b.dataset.box),
       } : null,
+      // THE COMPARISON SWITCH: each tab's key, its words and whether it is hidden, and the one lit.
+      compare: {
+        labels: [...$('compareToggle').querySelectorAll('button')].map((b) => [b.dataset.compare, text(b), b.hasAttribute('hidden')]),
+        on: [...$('compareToggle').querySelectorAll('button.on')].map((b) => b.dataset.compare),
+      },
+      // The box the board sits in, and the panel that box is in (its height is the stylesheet's).
+      boardBox: [board.parentNode.className, board.parentNode.parentNode.id],
       ownPids: [...board.querySelectorAll('tbody td.dr-own')].map((td) => (td.querySelector('.dr-why') ? td.querySelector('.dr-why').dataset.pid : null)),
       ownOther: board.querySelectorAll('.dr-own:not(td.dr-cell)').length,
       boardOwn: board.classList.contains('dr-own-on'),
@@ -436,6 +443,45 @@ const CHILDREN = {
     const back = p.read();
     return {
       ok, cold, first, pop, popPid, headCard, cards, seven, pre, back, prePop, prePopPid,
+      fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
+    };
+  },
+
+  // THE FOUR VIEWS (Tim, 2026-10-09: "add a expected value and value now tab
+  // … along with the vs worth now and vs preseason rank tabs? Also rename the
+  // worth now tab to value difference and the vs preseason rank to rank
+  // difference."). DR_COMPARE is a choice already stored when the page opens:
+  // then only what it opened on is read.
+  async views() {
+    const stored = process.env.DR_COMPARE ? { 'draft.compare': process.env.DR_COMPARE } : {};
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', ...stored }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const opened = p.read();
+    if (process.env.DR_COMPARE) return { ok, opened, errors: p.errors };
+    const prefs = () => JSON.parse(p.map.get('ff.prefs') || '{}')['draft.compare'];
+    /** A tab clicked (false when the switch has no such tab), then the page and what is remembered. */
+    const go = (k) => {
+      const b = p.$('compareToggle').querySelector(`button[data-compare="${k}"]`);
+      if (b) p.fire(b, 'click');
+      return { there: Boolean(b), page: p.read(), pref: prefs() };
+    };
+    const hover = (el) => {
+      p.fire(el, 'mouseover');
+      const pop = p.read().pop;
+      p.fire(el, 'mouseout');
+      return pop;
+    };
+    const exp = go('exp');
+    const why = p.document.querySelector('#teamTable tbody .dr-why');
+    const expPop = hover(why);
+    const expPopPid = why.dataset.pid;
+    const expHead = hover(p.document.querySelector('#draftBoard thead button[data-team="3"]'));
+    const val = go('val');
+    const valHead = hover(p.document.querySelector('#draftBoard thead button[data-team="3"]'));
+    const pre = go('pre');
+    const back = go('now');
+    return {
+      ok, opened, exp, expPop, expPopPid, expHead, val, valHead, pre, back, calls: p.calls(),
       fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors,
     };
   },
@@ -977,6 +1023,145 @@ const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
       [ptop.preDiff > 0 ? 'Later than ranked' : ptop.preDiff < 0 ? 'Earlier than ranked' : 'As ranked', signed(ptop.preDiff)],
     ], 'value, pre: a number’s preview carries his own preseason Value');
     eq([r.back.cells, r.back.totalRow], [f.cells, tot], 'value: and the switch comes back to Value, its totals with it');
+  }
+}
+
+// ------------------------------------------- the four views of the switch
+// Tim, 2026-10-09: "Could you also add a expected value and value now tab in
+// the draft room along with the vs worth now and vs preseason rank tabs? Also
+// rename the worth now tab to value difference and the vs preseason rank to
+// rank difference."
+{
+  const VAL = await import('./draft-stub-value.mjs');
+  const H = await import(moduleUrl('js/heat.js'));
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const plain = expected(RAW);
+  const draft = R.parseDraft(RAW);
+  const players = new Map(plain.rv.rows.map((x) => [x.playerId, { name: x.name, position: x.position, soFar: x.soFar, rest: x.rest, total: x.total }]));
+  const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: VAL.WORTH });
+  const byId = new Map(rv.rows.map((x) => [String(x.playerId), x]));
+  const gibbs = rv.rows.find((x) => x.name === 'Jahmyr Gibbs');
+  const FOUR = [['now', 'Value difference'], ['exp', 'Expected value'], ['val', 'Value now'], ['pre', 'Rank difference']];
+  const ENV = { FF_VALUE: JSON.stringify(VAL.VALUES) };
+  /** A team's sum of one figure, added up here pick by pick. */
+  const sumOf = (id, key) => (Math.round(rv.rows.filter((x) => x.teamId === id).reduce((a, x) => a + x[key], 0) * 10) / 10).toFixed(1);
+  const heatWant = (key) => {
+    const scale = H.heatScale(rv.rows.map((x) => x[key]));
+    return (pid) => (H.heatOf(byId.get(pid)[key], scale).cls.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0];
+  };
+
+  const r = run('views', ENV);
+  ok(!r.boot, 'views: boots', r.boot);
+  if (!r.boot) {
+    ok(r.ok, 'views: settles on the league');
+    eq([r.errors, r.fetches], [[], []], 'views: no errors, and nothing went to ESPN around the stubs');
+    eq(r.opened.compare.labels, FOUR.map(([k, said]) => [k, said, false]), 'views: four tabs — Value difference, Expected value, Value now, Rank difference');
+    eq([r.opened.compare.on, r.opened.cells.filter((c) => c.d !== sv(byId.get(c.pid).valueDiff)).slice(0, 3)], [['now'], []], 'views: it opens on Value difference, as it did');
+    eq([r.calls.draft, r.calls.ranks], [1, 1], 'views: and no tab asks ESPN for anything');
+
+    // EACH NEW VIEW: one figure, on the board, in its totals, in the team's table and tiles.
+    const VIEW = [
+      ['exp', r.exp, 'expected', 'valueNow', ['Player', 'Paid', 'Rank', 'Now', 'Expected'], r.expHead],
+      ['val', r.val, 'valueNow', 'expected', ['Player', 'Paid', 'Rank', 'Expected', 'Now'], r.valHead],
+    ];
+    for (const [k, v, key, other, heads, headCard] of VIEW) {
+      const f = v.page;
+      ok(v.there, `${k}: the tab is on the switch`);
+      eq([f.compare.on, v.pref], [[k], k], `${k}: it lights, and is remembered`);
+      eq([f.cells.length, f.cells.filter((c) => c.d !== byId.get(c.pid)[key].toFixed(1)).slice(0, 3)], [170, []], `${k}: every cell of the board is his ${key}, one decimal, unsigned`);
+      const g = f.cells.find((c) => c.pid === String(gibbs.playerId));
+      eq(g && g.d, gibbs[key].toFixed(1), `${k}: Gibbs’s cell prints his ${key}`);
+      eq(f.cells.map((c) => [c.pid, c.went]), r.opened.cells.map((c) => [c.pid, c.went]), `${k}: the same men in the same places at the same prices`);
+      const want = heatWant(key);
+      eq(f.cells.filter((c) => c.heat !== want(c.pid)).slice(0, 3), [], `${k}: every cell is coloured on the figure shown, against every pick`);
+      ok(f.cells.some((c, i) => c.heat !== r.opened.cells[i].heat), `${k}: which is not the colour its difference had`);
+      const tot = f.totalRow;
+      eq(tot && [tot.index, tot.label], [0, 'Value'], `${k}: the totals stay the first row, under the same label`);
+      eq(tot && tot.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), sumOf(id, key)]), `${k}: each team’s total is the sum of the ${key} shown under it`);
+      const ranked = draft.order.map((id) => [id, Number(sumOf(id, key))]).sort((a, b) => b[1] - a[1]);
+      const heatOfTeam = (id) => tot.cells.find((c) => c.team === String(id)).heat;
+      ok(tot && /^heat-up/.test(heatOfTeam(ranked[0][0])) && /^heat-dn/.test(heatOfTeam(ranked[9][0])), `${k}: the best total green and the worst red`, tot && tot.cells.map((c) => c.heat).join(' '));
+
+      // THE TEAM: the pair of figures, the one shown last and sorted on, high to low.
+      eq([f.tableHeads, f.sorted], [heads, [heads[4]]], `${k}: the table keeps its columns, its last under “${heads[4]}” and sorted on`);
+      const rowWrong = f.table.filter((t) => {
+        const w = byId.get(t.pid);
+        return t.cells[1] !== `$${w.bid}` || t.cells[2] !== String(w.at) || t.cells[3] !== w[other].toFixed(1) || t.cells[4] !== w[key].toFixed(1);
+      });
+      eq([f.table.length, rowWrong], [17, []], `${k}: every row’s price, rank, ${other} and ${key}`);
+      const shown = f.table.map((t) => Number(t.cells[4]));
+      ok(shown.every((n, i) => i === 0 || shown[i - 1] >= n), `${k}: highest first`, shown.join(' '));
+      const mine = rv.rows.filter((x) => x.teamId === 8);
+      const hi = Math.max(...mine.map((x) => x[key]));
+      const lo = Math.min(...mine.map((x) => x[key]));
+      eq(f.tiles.map((t) => [t.k, t.v]), [['Highest', hi.toFixed(1)], ['Lowest', lo.toFixed(1)]], `${k}: the two tiles are the team’s highest and lowest`);
+      ok(f.tiles.every((t, i) => byId.get(t.pid).teamId === 8 && byId.get(t.pid)[key] === [hi, lo][i]), `${k}: each naming a man of its own who has that figure`, f.tiles.map((t) => t.pid));
+      const three = rv.rows.filter((x) => x.teamId === 3).map((x) => x[key]);
+      eq(headCard && headCard.rows.slice(3).map((x) => [x[0].replace(/^(Highest|Lowest).*/, '$1'), x[1]]),
+        [['Highest', Math.max(...three).toFixed(1)], ['Lowest', Math.min(...three).toFixed(1)]], `${k}: a team’s card carries the same two ends`);
+      ok(/smoothed line/.test(f.note) && /Value today/.test(f.note) && !/Above zero/.test(f.note), `${k}: how it works explains both figures and no difference`, f.note);
+    }
+    ok(/Value on the board adds up expected value for every player a team drafted\./.test(r.exp.page.note), 'exp: how it works says what its totals add up', r.exp.page.note);
+    ok(/Value on the board adds up Now for every player a team drafted\./.test(r.val.page.note), 'val: and so does Value now', r.val.page.note);
+    ok(r.exp.page.cells.some((c, i) => c.d !== r.val.page.cells[i].d) && r.exp.page.totalRow.cells.every((c, i) => c.v !== r.val.page.totalRow.cells[i].v), 'views: (the two new views are not the same numbers)');
+
+    // THE PREVIEW still explains the difference: it is what joins the three Value views.
+    const top = byId.get(r.expPopPid);
+    eq(r.expPop && r.expPop.rows, [
+      ['Paid', `$${top.bid}`], ['Price rank', String(top.at)], ...(top.keeper ? [['Keeper', 'Yes']] : []),
+      ['Expected value', top.expected.toFixed(1)], ['Value now', top.valueNow.toFixed(1)],
+      [top.valueDiff > 0 ? 'Steal' : top.valueDiff < 0 ? 'Miss' : 'Even', sv(top.valueDiff)],
+    ], 'exp: a number opens paid, price rank, expected value, value now and the difference');
+
+    // THE TWO OLD VIEWS, under their new names.
+    eq([r.pre.page.compare.on, r.pre.pref], [['pre'], 'pre'], 'views: Rank difference is stored as it always was');
+    eq(r.pre.page.cells.filter((c) => c.d !== signed(byId.get(c.pid).preDiff)).slice(0, 3), [], 'views: and is still drafted-at less the preseason place');
+    eq([r.pre.page.tableHeads, r.pre.page.tiles.map((t) => t.k)], [['Player', 'Paid', 'Rank', 'Pre', '+/−'], ['Biggest slide', 'Biggest reach']], 'views: with its own column and tiles');
+    eq([r.back.page.compare.on, r.back.pref], [['now'], undefined], 'views: Value difference is not stored, being the default');
+    eq([r.back.page.cells, r.back.page.totalRow, r.back.page.table, r.back.page.tiles, r.back.page.tableHeads, r.back.page.note],
+      [r.opened.cells, r.opened.totalRow, r.opened.table, r.opened.tiles, ['Player', 'Paid', 'Rank', 'Now', '+/−'], r.opened.note], 'views: and comes back exactly as it opened');
+  }
+
+  // REMEMBERED: a page opened with a choice stored — a new one, and the old 'pre'.
+  const ke = run('views', { ...ENV, DR_COMPARE: 'exp' });
+  ok(!ke.boot, 'views, kept exp: boots', ke.boot);
+  if (!ke.boot) {
+    eq([ke.ok, ke.errors, ke.opened.compare.on], [true, [], ['exp']], 'views, kept: a page opened with Expected value stored opens on it');
+    eq(ke.opened.cells.filter((c) => c.d !== byId.get(c.pid).expected.toFixed(1)).slice(0, 3), [], 'views, kept: every cell his expected value');
+  }
+  const kp = run('views', { ...ENV, DR_COMPARE: 'pre' });
+  ok(!kp.boot, 'views, kept pre: boots', kp.boot);
+  if (!kp.boot) {
+    eq([kp.ok, kp.errors, kp.opened.compare.on], [true, [], ['pre']], 'views, kept: the old stored “pre” still lands on Rank difference');
+    eq(kp.opened.cells.filter((c) => c.d !== signed(byId.get(c.pid).preDiff)).slice(0, 3), [], 'views, kept: with its numbers');
+  }
+
+  // NO LINES (no FF_VALUE): the two new tabs have nothing to show.
+  for (const stored of ['val', 'exp']) {
+    const n = run('views', { DR_COMPARE: stored });
+    ok(!n.boot, `views, no lines (${stored}): boots`, n.boot);
+    if (n.boot) continue;
+    eq([n.ok, n.errors], [true, []], `views, no lines (${stored}): settles without an error`);
+    eq(n.opened.compare.labels, [['now', 'Value difference', false], ['exp', 'Expected value', true], ['val', 'Value now', true], ['pre', 'Rank difference', false]],
+      `views, no lines (${stored}): the two new tabs are hidden`);
+    eq(n.opened.compare.on, ['now'], `views, no lines (${stored}): a stored new view falls back to Value difference`);
+    eq([n.opened.cells.length, n.opened.cells.filter((c) => c.d !== signed(plain.byId.get(c.pid).diff)).slice(0, 3), n.opened.totalRow],
+      [170, [], null], `views, no lines (${stored}): which is the place-based board it was, with no totals`);
+    eq([n.opened.tableHeads, n.opened.tiles.map((t) => t.k)], [['Player', 'Paid', 'Rank', 'Now', '+/−'], ['Best steal', 'Biggest miss']], `views, no lines (${stored}): its table and tiles too`);
+  }
+
+  // THE BOARD AT ITS FULL HEIGHT (Tim, 2026-10-09: "extend the draft board down
+  // so you don't have to scroll in the box itself"). There is no layout here,
+  // so this reads the stylesheet: the board's own box must lift the height cap
+  // every other `.table-scroll` has, by a rule no phone rule can outrank.
+  if (!r.boot) {
+    eq(r.opened.boardBox, ['table-scroll', 'panelBoard'], 'board: it sits in the board panel’s own scroll box');
+    const css = readFileSync(path.join(REPO, 'css/app.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1].trim(), m[2]]);
+    const lifts = rules.filter(([sel, body]) => sel.split(',').some((s) => /^#panelBoard\s+\.table-scroll$/.test(s.trim())) && /max-height:\s*none/.test(body));
+    ok(lifts.length >= 1, 'board: that box has no height cap, so every round is on the page and nothing scrolls up and down inside it', lifts.length);
+    const caps = rules.filter(([sel, body]) => /#panelBoard|\.dr-board|#draftBoard/.test(sel) && /max-height:(?!\s*none)/.test(body));
+    eq(caps.map(([sel]) => sel), [], 'board: and no other rule of the board’s puts one back');
   }
 }
 

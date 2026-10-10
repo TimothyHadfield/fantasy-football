@@ -181,8 +181,10 @@
     <!-- What every pick is set against (Tim, 2026-10-08: "show where they were
          drafted relative to where they were ranked at the start of the season"). -->
     <div class="segmented seg-sm dr-compare" id="compareToggle" hidden>
-      <button type="button" data-compare="now" class="on">vs worth now</button>
-      <button type="button" data-compare="pre">vs preseason rank</button>
+      <button type="button" data-compare="now" class="on">Value difference</button>
+      <button type="button" data-compare="exp" hidden>Expected value</button>
+      <button type="button" data-compare="val" hidden>Value now</button>
+      <button type="button" data-compare="pre">Rank difference</button>
     </div>
 
     <div class="dr-main" id="drMain" hidden>
@@ -199,7 +201,7 @@
               <th data-sort class="dr-paid">Paid</th>
               <th data-sort id="thAt">Pick</th>
               <th data-sort id="thThen">Now</th>
-              <th data-sort>+/&minus;</th>
+              <th data-sort id="thDiff">+/&minus;</th>
             </tr></thead>
             <tbody></tbody>
           </table>

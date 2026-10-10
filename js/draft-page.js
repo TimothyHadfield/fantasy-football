@@ -1155,6 +1155,9 @@ const signedValue = (d) => (d === null || d === undefined ? '—' : `${d > 0 ? '
 const POS_SAID = { DST: 'D/ST' };
 const posSaid = (pos) => POS_SAID[pos] || pos || '';
 
+/** The comparison switch's states, as stored ('now' is the default and is not stored). */
+const COMPARES = ['now', 'exp', 'val', 'pre'];
+
 const review = {
   source: 'demo',
   world: null,
@@ -1164,7 +1167,11 @@ const review = {
   // him before the season ('pre'). Tim, 2026-10-08: "instead of showing where
   // the players should have been drafted, show where they were drafted relative
   // to where they were ranked at the start of the season."
-  compare: prefs.get('compare') === 'pre' ? 'pre' : 'now',
+  // 2026-10-09: "add a expected value and value now tab … Also rename the worth
+  // now tab to value difference and the vs preseason rank to rank difference."
+  // Four states: 'now' (Value difference), 'exp' (Expected value), 'val' (Value
+  // now), 'pre' (Rank difference). The stored words are the old ones.
+  compare: COMPARES.includes(prefs.get('compare')) ? prefs.get('compare') : 'now',
   // What the board boxes for the picked team: the column it 'drafted', or the
   // men it has now ('own'). Tim, 2026-10-09: "make a switch that instead boxes
   // all the players that you currently own. Nothing else changes except the
@@ -1181,11 +1188,18 @@ const boxOwn = () => review.box === 'own';
 // frozen lines are known and the expected-value line could be drawn
 // (`world.valued`); otherwise the view is the place-based one it was.
 const onValue = () => !isPre() && Boolean(review.world && review.world.valued);
-/** The difference on show, how it is printed, and the scale it is coloured on. */
-const diffKey = () => (isPre() ? 'preDiff' : onValue() ? 'valueDiff' : 'diff');
+// THE TWO PLAIN VIEWS — "Expected value" and "Value now": one figure a pick,
+// not a difference. They need Value; without it the page is on Value
+// difference whatever is stored (and the two tabs are hidden).
+const view = () => (isPre() ? 'pre' : onValue() && (review.compare === 'exp' || review.compare === 'val') ? review.compare : 'now');
+const isPlain = () => view() === 'exp' || view() === 'val';
+/** The figure on show, how it is printed, and the scale it is coloured on. */
+const diffKey = () => (isPre() ? 'preDiff' : view() === 'exp' ? 'expected' : view() === 'val' ? 'valueNow' : onValue() ? 'valueDiff' : 'diff');
 const dOf = (r) => r[diffKey()];
-const dSaid = (d) => (onValue() ? signedValue(d) : signed(d));
-const scaleOf = (w) => (isPre() ? w.preScale : onValue() ? w.valueScale : w.scale);
+const dSaid = (d) => (isPlain() ? valueText(d) : onValue() ? signedValue(d) : signed(d));
+const scaleOf = (w) => (isPre() ? w.preScale : view() === 'exp' ? w.expScale : view() === 'val' ? w.nowScale : onValue() ? w.valueScale : w.scale);
+/** A team's two ends on the figure on show (js/draft-review.js). */
+const endsOf = (w, teamId) => draftReview.teamReview(w.rv.rows, teamId, diffKey(), { plain: isPlain() });
 if (typeof window !== 'undefined') window.ffDraftReads = review.reads;
 // The same way, the review itself (`world.rv.curve` is the expected-value line).
 if (typeof window !== 'undefined') window.ffDraftReview = review;
@@ -1318,6 +1332,8 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
   // based on preseason predictions (which is different than the preseason
   // expected value we talked about before)").
   const teamTotalsPre = valued ? draftReview.teamValues(rv.rows, 'valuePre') : new Map();
+  // …and in "Expected value": the line read at each of its picks, added up.
+  const teamTotalsExp = valued ? draftReview.teamValues(rv.rows, 'expected') : new Map();
 
   // WHO HOLDS EACH DRAFTED MAN TODAY: the squads of the week in play, which
   // this page has already read. A man on nobody's squad has no entry.
@@ -1361,6 +1377,11 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
     valueScale: heatScale(rv.rows.map((r) => r.valueDiff)),
     teamTotals, totalScale: heatScale([...teamTotals.values()]),
     teamTotalsPre, totalScalePre: heatScale([...teamTotalsPre.values()]),
+    // "Expected value" and "Value now": each figure against every pick's.
+    // ("Value now" adds up `teamTotals`, as Value difference does.)
+    expScale: heatScale(rv.rows.map((r) => r.expected)),
+    nowScale: heatScale(rv.rows.map((r) => r.valueNow)),
+    teamTotalsExp, totalScaleExp: heatScale([...teamTotalsExp.values()]),
     ownerNow,
   };
 }
@@ -1590,7 +1611,11 @@ function renderReview() {
 
   const any = !w.empty;
   $('compareToggle').hidden = !any;
-  for (const b of $('compareToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.compare === review.compare);
+  for (const b of $('compareToggle').querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.compare === view());
+    // The two plain views have nothing to show without Value.
+    if (b.dataset.compare === 'exp' || b.dataset.compare === 'val') b.hidden = !w.valued;
+  }
   $('boxToggle').hidden = !any;
   for (const b of $('boxToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.box === review.box);
   $('drMain').hidden = !any;
@@ -1604,7 +1629,11 @@ function renderReview() {
     played ? `${played} week${played === 1 ? '' : 's'} played` : '',
   ].filter(Boolean).join(' · ');
   $('thAt').textContent = auction ? 'Rank' : 'Pick';
-  $('thThen').textContent = isPre() ? 'Pre' : 'Now';
+  // The plain views show the pair of figures, the one picked last.
+  $('thThen').textContent = isPre() ? 'Pre' : view() === 'val' ? 'Expected' : 'Now';
+  $('thDiff').textContent = view() === 'exp' ? 'Expected' : view() === 'val' ? 'Now' : '+/−';
+  // ("Expected" is a wider heading than "+/−": css/app.css keeps the table in its panel.)
+  $('teamTable').classList.toggle('dr-plain', isPlain());
   $('teamTable').querySelector('th.dr-paid').hidden = !auction;
 
   $('drNote').innerHTML = isPre()
@@ -1616,6 +1645,18 @@ function renderReview() {
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero he went later than he was ranked, below zero earlier. ` +
     'Green and red compare it with every pick in the draft.</p>' +
     (w.valued ? '<p><strong>Value</strong> on the board adds up each drafted player’s preseason Value.</p>' : '')
+    : isPlain()
+      ? '<p><strong>Now</strong> is his Value today, in points a week.' +
+      (view() === 'val' ? ' Green and red compare it with every pick in the draft.' : '') + '</p>' +
+      '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
+      'Their preseason Values make one smoothed line. ' +
+      `It is read at ${auction ? 'his price rank' : 'his pick'}.` +
+      (view() === 'exp' ? ' Green and red compare it with every pick in the draft.' : '') + '</p>' +
+      (auction
+        ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+        : '') +
+      `<p><strong>Value</strong> on the board adds up ${view() === 'exp' ? 'expected value' : 'Now'} for every player a team drafted.</p>` +
+      '<p>A player counts for the team that drafted him, wherever he is now.</p>'
     : onValue()
       ? '<p><strong>Now</strong> is his Value today, in points a week.</p>' +
       '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
@@ -1649,8 +1690,9 @@ function drawBoard() {
   const byId = new Map(w.rv.rows.map((r) => [r.playerId, r]));
   // (Which cells are boxed is `paintBox`'s, once the board is drawn.)
   // In "vs preseason rank" the totals are of the preseason Values, coloured on those.
-  const totals = isPre() ? w.teamTotalsPre : w.teamTotals;
-  const totalScale = isPre() ? w.totalScalePre : w.totalScale;
+  // In "Expected value" they are of the expected values, coloured the same way.
+  const totals = isPre() ? w.teamTotalsPre : view() === 'exp' ? w.teamTotalsExp : w.teamTotals;
+  const totalScale = isPre() ? w.totalScalePre : view() === 'exp' ? w.totalScaleExp : w.totalScale;
   const table = $('draftBoard');
   // How many columns the stylesheet keeps at a readable width (css/app.css, `.dr-board`).
   table.setAttribute('style', `--dr-cols: ${teamIds.length}`);
@@ -1707,12 +1749,12 @@ function paintBox() {
 }
 
 /** What a team's two ends are called: against worth now, or against the preseason rank. */
-const endNames = () => (isPre() ? ['Biggest slide', 'Biggest reach'] : ['Best steal', 'Biggest miss']);
+const endNames = () => (isPre() ? ['Biggest slide', 'Biggest reach'] : isPlain() ? ['Highest', 'Lowest'] : ['Best steal', 'Biggest miss']);
 
 function drawTeam() {
   const w = review.world;
   const auction = w.draft.type === 'auction';
-  const t = draftReview.teamReview(w.rv.rows, review.teamId, diffKey());
+  const t = endsOf(w, review.teamId);
   const who = (r) => `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
     // (A defence's name says what it is: "Jaguars D/ST".)
     (r.position && r.position !== 'DST' ? ` <span class="muted">${esc(posSaid(r.position))}</span>` : '');
@@ -1729,7 +1771,7 @@ function drawTeam() {
 
   $('teamTable').querySelector('tbody').innerHTML = t.picks.map((r) => {
     const d = dOf(r);
-    const then = isPre() ? r.pre : onValue() ? r.valueNow : r.now;
+    const then = isPre() ? r.pre : view() === 'val' ? r.expected : onValue() ? r.valueNow : r.now;
     const thenSaid = then === null ? '—' : onValue() ? valueText(then) : then;
     const h = d === null ? null : heatOf(d, scaleOf(w));
     const v = (n) => (n === null || n === undefined ? '' : ` data-v="${esc(n)}"`);
@@ -1852,7 +1894,7 @@ function teamSpec(id) {
   const all = [...w.standing.values()].map(avgOf).filter((v) => v !== null);
   const rank = avg === null || all.length < 2 ? ''
     : `${ordinal(1 + all.filter((v) => v > avg + 1e-9).length)} of ${all.length}`;
-  const tr = draftReview.teamReview(w.rv.rows, t.id, diffKey());
+  const tr = endsOf(w, t.id);
   const [up, down] = endNames();
   const end = (label, r) => (r ? [{
     label, note: shortName({ name: nameOf(r), position: r.position }), html: esc(dSaid(dOf(r))),
@@ -1950,8 +1992,8 @@ function initReview() {
   $('compareToggle').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button[data-compare]');
     if (!btn || btn.dataset.compare === review.compare) return;
-    review.compare = btn.dataset.compare === 'pre' ? 'pre' : 'now';
-    prefs.set('compare', isPre() ? 'pre' : null);
+    review.compare = COMPARES.includes(btn.dataset.compare) ? btn.dataset.compare : 'now';
+    prefs.set('compare', review.compare === 'now' ? null : review.compare);
     renderReview();
   });
   $('boxToggle').addEventListener('click', (e) => {

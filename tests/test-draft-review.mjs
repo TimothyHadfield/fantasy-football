@@ -439,6 +439,20 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
   const t1 = R.teamReview(rv.rows, 1, 'valueDiff');
   eq([t1.steal.playerId, t1.miss.playerId], [13, 15], 'value: a team’s two ends on this difference');
 
+  // A FIGURE THAT IS NOT A DIFFERENCE ("Expected value" and "Value now", Tim
+  // 2026-10-09): a team's two ends are its highest and lowest, whatever the sign.
+  // Team 1 drafted 11, 13, 15 (expected 12 / 6.1 / 1.5; today 12.5 / 9.9 / 0.4); team 2 drafted 12, 14 (9.1 / 3.4; 0 / 4.2).
+  const plain = (team, key) => {
+    const t = R.teamReview(rv.rows, team, key, { plain: true });
+    return [t.steal && t.steal.playerId, t.miss && t.miss.playerId];
+  };
+  eq([plain(1, 'expected'), plain(2, 'expected')], [[11, 15], [12, 14]], 'plain ends: a team’s highest and lowest expected value');
+  eq([plain(1, 'valueNow'), plain(2, 'valueNow')], [[11, 15], [14, 12]], 'plain ends: and its highest and lowest Value today — a man worth 0 is its lowest');
+  const signedEnds = R.teamReview(rv.rows, 2, 'valueNow');
+  eq([signedEnds.steal.playerId, signedEnds.miss], [14, null], 'plain ends: (left alone, the two ends are still a steal above zero and a miss below it)');
+  eq(R.teamReview(rv.rows, 1, 'expected', { plain: true }).picks.map((r) => r.playerId), [11, 13, 15], 'plain ends: the picks are the same picks');
+  eq([...R.teamValues(rv.rows, 'expected')], [[1, 19.6], [2, 12.5]], 'expected: a team’s total of the line read at each of its picks');
+
   // HIS OWN PRESEASON VALUE (Tim, 2026-10-09: "put the value at the top … as
   // what it was proj to be based on preseason predictions (which is different
   // than the preseason expected value we talked about before)"): the raw figure
