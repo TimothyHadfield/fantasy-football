@@ -28,7 +28,7 @@ const cfg = globalThis.__leaguesStub || {};
 const env = (globalThis.process && globalThis.process.env) || {};
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
-export const SEASON_MIN = 2018;
+export const SEASON_MIN = 2019;
 export const keyOf = (leagueId, season) => `${leagueId}-${season}`;
 
 export const SAMPLE = [

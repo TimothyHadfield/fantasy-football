@@ -29,8 +29,11 @@
 
 import * as bridge from './bridge.js';
 
-/** The earliest season offered: older ones live on an ESPN endpoint the site does not build. */
-export const SEASON_MIN = 2018;
+/**
+ * The earliest season offered. Measured 2026-10-10 on league 1241838: weekly
+ * rosters, schedule and draft answer for 2019 on; 2018 and older are refused.
+ */
+export const SEASON_MIN = 2019;
 
 /** The single-slot keys that belong to one league-season. */
 export const PARKED = ['ff.prefs', 'ff-draft-review-v1'];

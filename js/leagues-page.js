@@ -251,4 +251,21 @@ function refresh() {
 window.addEventListener('pageshow', refresh);
 window.addEventListener('focus', refresh);
 
+// A league that came in through the connection bar is known for one season
+// only. Its earlier seasons are asked for once, here, quietly: a failure (or
+// the phone's synced copy, which asks ESPN nothing) leaves the row as it is.
+async function fillSeasons() {
+  for (const l of readList()) {
+    if ((l.seasons || []).length > 1) continue;
+    let r = null;
+    try { r = await leagues.lookup(String(l.leagueId)); } catch { r = null; }
+    if (!r || !r.ok || !(r.seasons || []).length) continue;
+    try {
+      leagues.add({ leagueId: String(l.leagueId), name: r.name, teamCount: r.teamCount, seasons: r.seasons });
+    } catch { continue; }
+    refresh();
+  }
+}
+
 render();
+fillSeasons();

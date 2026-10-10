@@ -3,7 +3,7 @@
 > **Tim asked (2026-10-10):** "I want to make a main menu that is outside all of our current sections where the user can add different leagues to their account as well as look into past leagues aswell. To go to this main menu you will click on the fantasy button in the top left. If you go inside any specific league it will look just like how the cite currently is but the information will reflect the information that is specific for that leauge."
 > **Instruction:** build (no "don't build yet").
 
-**Status:** NOTHING IS BUILT · phases 1 and 3 authorized by the ask; phase 2 authorized by his "Anyone can sign up" answer.
+**Status:** Phases 1 and 3 BUILT 2026-10-10 (see BUILT below) · phase 2 (accounts for anyone) NOT built; authorized by his "Anyone can sign up" answer.
 
 ## Decided by Tim
 - 2026-10-10 (question box) · Accounts: **"Anyone can sign up"** (not just his account).
@@ -106,6 +106,12 @@ c. ~~Landing?~~ → last league (2026-10-10).
 d. Each account's cloud copy is private to that account (two friends in one league each keep their own copy). · assumed yes; Tim to confirm.
 e. Page name and words on the menu ("Leagues", "Add a league", "Remove") · plainest; his to change.
 f. A stranger could use up the free daily cloud quota; nothing at $0 fully prevents it. · accepted risk? assumed yes for now (flag once).
+
+## BUILT 2026-10-10 (phases 1 and 3; phase 2 NOT built)
+- Shipped: `js/leagues.js` (list `ff.leagues` = `{v:1, leagues, removed, probe, source}`; park/restore of `ff.prefs` + `ff-draft-review-v1` under `<key>@<league>-<season>`; `lookup`, `open`, `remove`), prefs stamp (`@league`) in `js/prefs.js`, earlier-season guards in `js/connection.js` (no auto-sync, capture, chip, profile write; Send to phone hidden; the year shown after the league name in the bar), backup import guard (1883886). `leagues.html` + `js/leagues-page.js`, brand link on the 10 pages (b4975c9). Finished-season pages: preseason arrows only on their own season, no Value lines minted/kept/synced for an earlier season, Analysis and Trade empty-state words (e64daa9). Main chat: `SEASON_MIN` 2019, the menu fills in earlier seasons for a league that came in through the bar (`fillSeasons`), neutral names in the test stub.
+- Plan was wrong about: "2018 and later" — measured on 1241838: 2019–2025 answer rosters/schedule/draft, 2018 is 401. `decisions.noise`/`decisions.source` carry across leagues (builder's call); keys containing `.live:` are league-specific too.
+- Verified: headless WebKit at 393 and 1440 on 1241838 — connect in the bar, brand → menu (2026…2019 listed), open 2025 (bar says "· 2025", no chips, no `ff.value.*` key), brand back. Suites: test-leagues 139, leagues-check 72, nav-check 212, test-cloud-wiring 265, test-capture 186, test-backup 80, test-past-season 49, test-proj-trend 74, wv-test 1284, proj-changes-check 110, text-audit 10/10.
+- Still open: phase 2 (accounts, incl. review item 10). On a finished season, left for Tim: Players "Next 3" over playoff weeks, Analysis draws playoff weeks as projections, Home injury report, Draft "Value difference" falls back to place, Schedule Simulate over an empty table, Trade finder on a typical week. Known limits (builder A): a league typed into the old bar while prefs are stamped for another league is not re-parked; prefs restored from a backup with no league open are adopted by the next league. `ff-draft-review-v1` is written for an earlier season (parked per league-season). NOT verified: iPhone, private league through the bridge, phone synced copy, a second account.
 
 ## Sources
 - ESPN league endpoint `…/seasons/2026/…/leagues/1241838?view=mStatus` (`status.previousSeasons`), measured 2026-10-10.

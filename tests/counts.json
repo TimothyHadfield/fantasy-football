@@ -261,8 +261,8 @@
       "assertions": 135
     },
     "leagues-check.mjs": {
-      "assertions": 68,
-      "scenarios": 4
+      "assertions": 72,
+      "scenarios": 5
     }
   }
 }

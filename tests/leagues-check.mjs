@@ -25,7 +25,7 @@ import { REPO, moduleUrl } from './repo.mjs';
 import { emit } from './emit.mjs';
 
 const PAGE = 'leagues.html';
-const SCENARIOS = ['list', 'add', 'remove', 'empty'];
+const SCENARIOS = ['list', 'add', 'remove', 'empty', 'fill'];
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 const words = (s) => (String(s || '').trim().match(/\S+/g) || []).length;
@@ -112,6 +112,22 @@ if (process.argv[2]) {
   const results = [];
   const ok = (pass, msg, extra = '') => results.push({ pass: Boolean(pass), msg, extra: pass ? '' : String(extra).slice(0, 400) });
   try {
+    if (scenario === 'fill') {
+      // A league that came from the connection bar: one season known.
+      const one = { leagueId: '777', name: 'Bar League', teamCount: 10, seasons: [2026], teams: {}, lastOpened: null };
+      const full = { leagueId: '888', name: 'Full League', teamCount: 8, seasons: [2026, 2025], teams: {}, lastOpened: null };
+      const p = await boot({
+        list: [one, full], current: { leagueId: '777', season: 2026, teamId: null },
+        lookups: { 777: { ok: true, leagueId: '777', name: 'Bar League', teamCount: 10, seasons: [2026, 2025, 2024], teams: [] } },
+      });
+      await tick(40);
+      const by = (id) => p.rows().find((x) => x.id === id);
+      const r = [by('777'), by('888')];
+      ok(r[0] && r[0].seasons.join() === '2026,2025,2024', 'a league known for one season gets its earlier seasons without being asked', r[0] && r[0].seasons);
+      ok(p.calls().filter((c) => c[0] === 'lookup').map((c) => c[1]).join() === '777', 'and only that league is looked up', JSON.stringify(p.calls()));
+      ok(r[1] && r[1].seasons.join() === '2026,2025', 'a league whose seasons are known is left alone', r[1] && r[1].seasons);
+      ok(p.errors.length === 0 && p.msg() === '', 'quietly: no message, no error', p.errors.join(' | ') + p.msg());
+    }
     if (scenario === 'list') {
       // The stub reads its settings when it is first imported, so: boot first.
       const p = await boot({ openFail: { '476225-2024': 'This browser is full.' } });

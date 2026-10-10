@@ -1137,7 +1137,7 @@ function render() {
     body = `
       <span class="conn-dot"></span>
       <span class="conn-main">
-        Connected to ${leagueNameHtml('strong')}
+        Connected to ${leagueNameHtml('strong')}${pastSeason() ? ` &middot; <strong class="conn-season">${Number(state.season)}</strong>` : ''}
         &middot; ${state.league.teams?.length || 0} teams
         &middot; checked ${ago(state.checkedAt)}
       </span>

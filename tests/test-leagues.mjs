@@ -120,7 +120,7 @@ const dataIntact = () => Object.entries(DATA).every(([k, v]) => store.get(k) ===
 // 1. A BROWSER THAT HAS NEVER SEEN THE MENU
 // =========================================================================
 {
-  eq([leagues.SEASON_MIN, leagues.PARKED, leagues.keyOf(A, NOW)], [2018, ['ff.prefs', 'ff-draft-review-v1'], `${A}-${NOW}`],
+  eq([leagues.SEASON_MIN, leagues.PARKED, leagues.keyOf(A, NOW)], [2019, ['ff.prefs', 'ff-draft-review-v1'], `${A}-${NOW}`],
     'the constants the menu page is written against');
 
   browser();
@@ -159,9 +159,9 @@ const dataIntact = () => Object.entries(DATA).every(([k, v]) => store.get(k) ===
     seasons: [NOW, NOW - 1, NOW - 2, 2019, 2018, 2017, 2016],
   });
   eq(added, {
-    leagueId: B, name: 'Work League', teamCount: 12, seasons: [NOW, NOW - 1, NOW - 2, 2019, 2018].filter((s, i, a) => a.indexOf(s) === i),
+    leagueId: B, name: 'Work League', teamCount: 12, seasons: [NOW, NOW - 1, NOW - 2, 2019].filter((s, i, a) => a.indexOf(s) === i),
     teams: {}, lastOpened: null,
-  }, 'a league is added with its seasons newest first, and nothing before 2018');
+  }, 'a league is added with its seasons newest first, and nothing before 2019');
   eq(leagues.list().map((e) => e.leagueId), [A, B], 'the list is most recently opened first: the open league, then the new one');
   ok('the seeded league went into the stored list with it', json('ff.leagues').leagues.some((e) => e.leagueId === A));
   ok('adding parked nothing and left the preferences alone',
@@ -462,7 +462,7 @@ const dataIntact = () => Object.entries(DATA).every(([k, v]) => store.get(k) ===
     status: { currentMatchupPeriod: 6, previousSeasons: [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025].filter((s) => s < NOW) },
     teams: Array.from({ length: 12 }, (_, i) => ({ id: i + 1, location: 'Team', nickname: `No ${i + 1}`, abbrev: `N${i + 1}` })),
   };
-  const WANT_SEASONS = [NOW, ...RAW.status.previousSeasons.filter((s) => s >= 2018).sort((a, b) => b - a)];
+  const WANT_SEASONS = [NOW, ...RAW.status.previousSeasons.filter((s) => s >= 2019).sort((a, b) => b - a)];
   const fetcher = (status = 200, body = RAW) => {
     const calls = [];
     const f = async (url, init) => { calls.push({ url: String(url), init }); return { ok: status >= 200 && status < 300, status, json: async () => body }; };
@@ -483,7 +483,7 @@ const dataIntact = () => Object.entries(DATA).every(([k, v]) => store.get(k) ===
   eq(res, {
     ok: true, leagueId: B, name: 'Work League', teamCount: 12, seasons: WANT_SEASONS,
     teams: RAW.teams.map((t) => ({ id: t.id, name: `Team ${t.nickname}` })),
-  }, 'through the extension: the league, its size, its teams, and this season plus the earlier ones ESPN lists from 2018 on');
+  }, 'through the extension: the league, its size, its teams, and this season plus the earlier ones ESPN lists from 2019 on');
   eq([br.asked.length, br.asked[0].leagueId, br.asked[0].season, br.asked[0].views.includes('mStatus'), f.calls.length], [1, B, NOW, true, 0],
     'one bridge read of the current season with the status view, and no direct request');
   res = await leagues.lookup(B, { bridge: withBridge({ ok: false, error: 'ESPN said no.' }), fetch: f });
