@@ -69,6 +69,8 @@ const SUITES = [
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
   ['test-backup.mjs', 'Export archive / Import: every kind of saved week and the preferences in one file, back byte for byte, nothing overwritten'],
   ['test-leagues.mjs', 'the main menu’s data layer: the list of leagues, park and restore on a switch, the mark that stops a stale page overwriting, looking a league up'],
+  ['test-accounts.mjs', 'an account’s main menu: the list in a document of its own, two lists merged (newest "You are", removed stays removed), sent marks kept per account'],
+  ['menu-account-check.mjs', 'the main menu signed in: the sign-in control, a second device shows the account’s leagues, one read on load and one write on a change'],
   ['test-trade.mjs', 'the trade engine: replacement level, the depth map, the finder'],
   ['test-cloud.mjs', 'the phone bridge: what is synced up, what comes back down, and how old it is'],
   ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],

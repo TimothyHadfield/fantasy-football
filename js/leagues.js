@@ -134,7 +134,7 @@ function clean(e) {
     }
   }
   const lo = e.lastOpened;
-  return {
+  const out = {
     leagueId: String(e.leagueId),
     name: typeof e.name === 'string' && e.name ? e.name : `League ${e.leagueId}`,
     teamCount: Number.isFinite(e.teamCount) ? e.teamCount : null,
@@ -144,6 +144,26 @@ function clean(e) {
       ? { season: Number(lo.season), at: Number(lo.at) || 0 } : null,
     addedAt: Number(e.addedAt) || 0,
   };
+  // WHEN each thing was last changed, for the account's list (`mergeAccount`):
+  // the name and size, and each season's "You are" team. Absent means "not
+  // known", which loses to any time that is.
+  const infoAt = stampOf(e.infoAt);
+  if (infoAt) out.infoAt = infoAt;
+  const teamAt = {};
+  if (e.teamAt && typeof e.teamAt === 'object') {
+    for (const season of Object.keys(teams)) {
+      const at = stampOf(e.teamAt[season]);
+      if (at) teamAt[season] = at;
+    }
+  }
+  if (Object.keys(teamAt).length) out.teamAt = teamAt;
+  return out;
+}
+
+/** A time in milliseconds, or 0 for anything that is not one. */
+function stampOf(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /** The connection slot, as it is saved: `ff.connection`, then the older `ff.config`. */
@@ -202,6 +222,16 @@ function load() {
     probe: stored && typeof raw.probe === 'string' ? raw.probe : null,
     source: stored && (raw.source === 'cloud' || raw.source === 'espn') ? raw.source : null,
   };
+  // When each removed league was taken off (`mergeAccount`). Kept only while
+  // there is one, so a list nobody has removed from is stored as it always was.
+  const removedAt = {};
+  if (stored && raw.removedAt && typeof raw.removedAt === 'object') {
+    for (const id of state.removed) {
+      const at = stampOf(raw.removedAt[id]);
+      if (at) removedAt[id] = at;
+    }
+  }
+  if (Object.keys(removedAt).length) state.removedAt = removedAt;
   // One entry per league, whatever storage held.
   const seen = new Set();
   state.leagues = state.leagues.filter((e) => !seen.has(e.leagueId) && seen.add(e.leagueId));
@@ -274,12 +304,22 @@ export function add({ leagueId, name, teamCount, seasons, season, team, source }
     e = clean({ leagueId: id, addedAt: Date.now() });
     state.leagues.push(e);
   }
+  const infoBefore = `${e.name}|${e.teamCount}`;
   if (typeof name === 'string' && name) e.name = name;
   if (Number.isFinite(teamCount)) e.teamCount = teamCount;
+  if (`${e.name}|${e.teamCount}` !== infoBefore) e.infoAt = Date.now();
   const forSeason = Number(season);
   e.seasons = seasonList([...e.seasons, ...(Array.isArray(seasons) ? seasons : []), forSeason]);
   const mine = teamOf(team);
-  if (mine && Number.isInteger(forSeason)) e.teams[String(forSeason)] = mine;
+  if (mine && Number.isInteger(forSeason)) {
+    const was = e.teams[String(forSeason)];
+    e.teams[String(forSeason)] = mine;
+    // A different team (or a new name for it) is a newer choice than any the
+    // account holds; the same one said again is not.
+    if (!was || String(was.id) !== String(mine.id) || was.name !== mine.name) {
+      e.teamAt = { ...(e.teamAt || {}), [String(forSeason)]: Date.now() };
+    }
+  }
 
   // A league the bar has just connected to IS the open one.
   const cur = current();
@@ -289,6 +329,7 @@ export function add({ leagueId, name, teamCount, seasons, season, team, source }
   }
 
   state.removed = state.removed.filter((x) => x !== id);
+  forgetRemoval(state, id);
   if (Number.isInteger(forSeason) && state.probe === keyOf(id, forSeason)) state.probe = null;
   if (source === 'cloud' || source === 'espn') state.source = source;
 
@@ -304,15 +345,21 @@ export function add({ leagueId, name, teamCount, seasons, season, team, source }
  * site does not walk straight back into it. Its preferences are parked first
  * and the slot is left with the neutral ones a new league would start from.
  *
+ * @param {string|number} leagueId
+ * @param {number} [at] when it was removed; now, unless the account's list
+ *   says another device removed it earlier (`mergeAccount`)
  * @returns {boolean} was it on the list
  */
-export function remove(leagueId) {
+export function remove(leagueId, at = Date.now()) {
   const id = String(leagueId ?? '');
   let state;
   try { state = load(); } catch { return false; }
   const had = state.leagues.some((e) => e.leagueId === id);
   state.leagues = state.leagues.filter((e) => e.leagueId !== id);
-  if (realId(id) && !state.removed.includes(id)) state.removed.push(id);
+  if (realId(id)) {
+    if (!state.removed.includes(id)) state.removed.push(id);
+    state.removedAt = { ...(state.removedAt || {}), [id]: stampOf(at) || Date.now() };
+  }
 
   const cur = current();
   const open = Boolean(cur && cur.leagueId === id);
@@ -342,6 +389,12 @@ export function remove(leagueId) {
   return had;
 }
 
+function forgetRemoval(state, id) {
+  if (!state.removedAt) return;
+  delete state.removedAt[id];
+  if (!Object.keys(state.removedAt).length) delete state.removedAt;
+}
+
 /** Was this league taken off the list (and not added back since)? */
 export function isRemoved(leagueId) {
   try {
@@ -364,6 +417,192 @@ export function awaitingProbe(leagueId, season) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------- the account's list
+//
+// Tim, 2026-10-10: "add different leagues to their account". Signed in, the
+// menu shows this device's leagues AND the account's (js/cloud.js keeps the
+// account's at `users/{uid}/menu/leagues`; js/leagues-page.js does the one
+// read and the one write). This is the merge, and it touches storage only.
+//
+//   IN OR OUT    a league is on the account's list while it was added later
+//                than it was last removed. A league removed on any device goes
+//                from the others when they next open the menu; adding it again
+//                brings it back.
+//   REMOVED HERE STAYS REMOVED HERE, whatever the account says, until it is
+//                added again on this device.
+//   SEASONS      every season either side knows. None is ever dropped.
+//   "YOU ARE"    per season, whichever was chosen later. A team with no time
+//                (chosen before times were kept) loses to one that has one.
+//   NAME, SIZE   whichever was read later.
+//
+// The account's copy is { v, leagues: [{ leagueId, name, teamCount, seasons,
+// teams, teamAt, infoAt, addedAt }], removed: { id: when } } — no "last
+// opened", which is this device's own business and would cost a write on
+// every switch. Whatever comes down is cleaned like anything read from
+// storage. NOTHING STORED FOR A LEAGUE IS DELETED by any of it.
+
+/** One league as the account keeps it, keys in a fixed order (it is compared as text). */
+function accountEntry(e) {
+  const seasons = Object.keys(e.teams).sort();
+  return {
+    leagueId: e.leagueId,
+    name: e.name,
+    teamCount: e.teamCount,
+    seasons: e.seasons.slice(),
+    teams: Object.fromEntries(seasons.map((s) => [s, { id: e.teams[s].id, name: e.teams[s].name }])),
+    teamAt: Object.fromEntries(seasons.filter((s) => e.teamAt && e.teamAt[s]).map((s) => [s, e.teamAt[s]])),
+    infoAt: e.infoAt || 0,
+    addedAt: e.addedAt || 0,
+  };
+}
+
+/** The account's copy, made safe: `{ leagues: Map<id, entry>, removed: { id: when } }`. */
+function accountOf(remote) {
+  const out = { leagues: new Map(), removed: {} };
+  if (!remote || typeof remote !== 'object') return out;
+  for (const raw of Array.isArray(remote.leagues) ? remote.leagues : []) {
+    const e = clean(raw);
+    if (e && !out.leagues.has(e.leagueId)) out.leagues.set(e.leagueId, e);
+  }
+  if (remote.removed && typeof remote.removed === 'object' && !Array.isArray(remote.removed)) {
+    for (const [id, at] of Object.entries(remote.removed)) {
+      if (realId(id) && stampOf(at)) out.removed[id] = stampOf(at);
+    }
+  }
+  return out;
+}
+
+/** The account's copy as it is written, in one fixed order. */
+function accountDoc(leagueList, removed) {
+  return {
+    v: 1,
+    leagues: leagueList.slice().sort((a, b) => a.leagueId.localeCompare(b.leagueId)).map(accountEntry),
+    removed: Object.fromEntries(Object.keys(removed).sort().map((id) => [id, removed[id]])),
+  };
+}
+
+/** Two copies of one league as one. `mine` is this device's, `theirs` the account's; either may be null. */
+function mergedEntry(mine, theirs) {
+  if (!mine || !theirs) {
+    const one = mine || theirs;
+    return { ...one, seasons: one.seasons.slice(), teams: { ...one.teams }, teamAt: { ...(one.teamAt || {}) } };
+  }
+  const placeholder = `League ${mine.leagueId}`;
+  let info = (mine.infoAt || 0) > (theirs.infoAt || 0) ? mine : theirs;
+  if (info.name === placeholder && (info === mine ? theirs : mine).name !== placeholder) info = info === mine ? theirs : mine;
+  const teams = {};
+  const teamAt = {};
+  for (const season of new Set([...Object.keys(mine.teams), ...Object.keys(theirs.teams)])) {
+    const a = mine.teams[season];
+    const b = theirs.teams[season];
+    const aAt = (mine.teamAt && mine.teamAt[season]) || 0;
+    const bAt = (theirs.teamAt && theirs.teamAt[season]) || 0;
+    const mineWins = Boolean(a) && (!b || aAt > bAt);
+    teams[season] = mineWins ? a : b;
+    if (mineWins ? aAt : bAt) teamAt[season] = mineWins ? aAt : bAt;
+  }
+  return {
+    leagueId: mine.leagueId,
+    name: info.name,
+    teamCount: info.teamCount ?? mine.teamCount ?? theirs.teamCount,
+    seasons: seasonList([...mine.seasons, ...theirs.seasons]),
+    teams,
+    teamAt,
+    infoAt: Math.max(mine.infoAt || 0, theirs.infoAt || 0),
+    addedAt: Math.max(mine.addedAt || 0, theirs.addedAt || 0),
+  };
+}
+
+/**
+ * Bring this device's list and the account's together.
+ *
+ * Writes this device's list when it gained or lost anything, and hands back
+ * the account's copy as it should now be. Asks the network nothing.
+ *
+ * @param {Object|null} remote the account's copy as it was read; null for none
+ * @param {Object} [opts]
+ * @param {number} [opts.now]
+ * @returns {{ok:boolean, list:Object, changed:boolean, local:boolean}} `changed`:
+ *   the account's copy is not `list` yet, so it wants writing. `local`: this
+ *   device's list was changed by the merge.
+ */
+export function mergeAccount(remote, { now = Date.now() } = {}) {
+  const theirs = accountOf(remote);
+  const asRead = JSON.stringify(accountDoc([...theirs.leagues.values()], theirs.removed));
+  let state;
+  try { state = load(); } catch { return { ok: false, list: JSON.parse(asRead), changed: false, local: false }; }
+
+  const before = JSON.stringify(state);
+  const mineById = new Map(state.leagues.map((e) => [e.leagueId, e]));
+  const cur = current();
+  const outLeagues = [];
+  const outRemoved = {};
+  const goes = [];          // [id, when]: on this device's list, removed on another
+  let slotTeam;             // the open league-season's team, if the account's is newer
+
+  const ids = new Set([...mineById.keys(), ...theirs.leagues.keys(), ...state.removed, ...Object.keys(theirs.removed)]);
+  for (const id of ids) {
+    const mine = mineById.get(id) || null;
+    const acct = theirs.leagues.get(id) || null;
+    // Removed here, and when. A league that is on this device's list is not
+    // removed here, whatever an older note says.
+    let removedHere = 0;
+    if (!mine && state.removed.includes(id)) {
+      removedHere = (state.removedAt && state.removedAt[id]) || now;
+      state.removedAt = { ...(state.removedAt || {}), [id]: removedHere };
+    }
+    const removedAt = Math.max(removedHere, theirs.removed[id] || 0);
+    if (!mine && !acct) {
+      if (removedAt) outRemoved[id] = removedAt;
+      continue;
+    }
+    const addedAt = Math.max(mine ? mine.addedAt : 0, acct ? acct.addedAt : 0);
+    if (removedAt && removedAt >= addedAt) {
+      outRemoved[id] = removedAt;
+      if (mine) goes.push([id, removedAt]);
+      continue;
+    }
+
+    const both = mergedEntry(mine, acct);
+    outLeagues.push(both);
+    if (removedHere) continue;      // on the account, and still off this device's list
+
+    if (!mine) {
+      state.leagues.push(clean({ ...both, lastOpened: null }));
+      continue;
+    }
+    const open = cur && cur.leagueId === id ? String(cur.season) : null;
+    const was = open ? mine.teams[open] : null;
+    mine.name = both.name;
+    mine.teamCount = both.teamCount;
+    mine.seasons = both.seasons;
+    mine.teams = both.teams;
+    if (Object.keys(both.teamAt).length) mine.teamAt = both.teamAt;
+    if (both.infoAt) mine.infoAt = both.infoAt;
+    mine.addedAt = both.addedAt;
+    const is = open ? mine.teams[open] : null;
+    if (is && (!was || String(was.id) !== String(is.id))) slotTeam = is.id;
+  }
+
+  const list = accountDoc(outLeagues, outRemoved);
+  let local = JSON.stringify(state) !== before;
+  try {
+    if (local) save(state);
+    // The open league-season follows a newer "You are" from the account, as
+    // `open()` would have written it.
+    if (slotTeam !== undefined) {
+      const slot = readJson(CONN_KEY);
+      if (slot && String(slot.leagueId) === cur.leagueId) {
+        storage().setItem(CONN_KEY, JSON.stringify({ ...slot, teamId: slotTeam }));
+      }
+    }
+  } catch { /* storage refused: the account's copy is still right */ }
+  for (const [id, when] of goes) {
+    try { if (remove(id, when)) local = true; } catch { /* stays listed here */ }
+  }
+  return { ok: true, list, changed: JSON.stringify(list) !== asRead, local };
 }
 
 // ------------------------------------------------------------------ switching

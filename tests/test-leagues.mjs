@@ -337,7 +337,11 @@ const dataIntact = () => Object.entries(DATA).every(([k, v]) => store.get(k) ===
     'what is left in the slot is no league’s: display choices only, unmarked, sources as they were');
   eq(leagues.isRemoved(A), true, 'it is remembered as removed, so nothing reconnects to it by itself');
   // The stored shape test-cloud-wiring.mjs `removed-sticks` hands the bar.
-  eq(json('ff.leagues'), { v: 1, leagues: [], removed: [A], probe: null, source: null }, 'the list as stored: empty, with the league noted as removed');
+  // `removedAt` (when, for the account's list) rides beside it; nothing reads
+  // it but js/leagues.js `mergeAccount`.
+  const { removedAt, ...asStored } = json('ff.leagues');
+  eq(asStored, { v: 1, leagues: [], removed: [A], probe: null, source: null }, 'the list as stored: empty, with the league noted as removed');
+  ok('and when it was removed, for the account’s list', removedAt && Object.keys(removedAt).join() === A && removedAt[A] > 1.7e12, JSON.stringify(removedAt));
 
   // Added back by hand, it opens with everything it had.
   leagues.add({ leagueId: A, name: 'The Keeper League', teamCount: 10, seasons: [NOW], season: NOW, team: { id: 7, name: 'Team 7' } });

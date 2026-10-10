@@ -20,7 +20,16 @@
 // Add field keeps its height when it is empty. League and team names come from
 // ESPN and are written with textContent only.
 
+//
+//   account   the connection bar's own "Sign in with Google", in the header's
+//             corner. Signed in, the list is this device's leagues AND the
+//             account's: ONE read of the account's list when the page loads,
+//             and ONE write whenever the two together are not what the account
+//             holds (js/leagues.js `mergeAccount` decides; js/cloud.js stores).
+//             Signed out, the page is the device's list alone, as it always was.
+
 import * as leagues from './leagues.js';
+import * as cloud from './cloud.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -33,6 +42,7 @@ const msgEl = $('lgMsg');
 
 let busy = false;          // a lookup is in the air
 let confirming = null;     // the league id whose Remove is being confirmed
+let redraw = false;        // the account's list arrived while a choice was half made
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -173,6 +183,7 @@ function removeLeague(id) {
   }
   confirming = null;
   render();
+  pushAccount();
 }
 
 listEl.addEventListener('click', (ev) => {
@@ -183,12 +194,12 @@ listEl.addEventListener('click', (ev) => {
   const cls = btn.getAttribute('class') || '';
   if (/\blg-season\b/.test(cls)) openSeason(id, Number(btn.getAttribute('data-season')));
   else if (/\blg-remove\b/.test(cls)) setConfirming(id);
-  else if (/\blg-no\b/.test(cls)) setConfirming(null);
+  else if (/\blg-no\b/.test(cls)) { setConfirming(null); if (redraw) drawMerged(); }
   else if (/\blg-yes\b/.test(cls)) removeLeague(id);
 });
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && confirming) setConfirming(null);
+  if (ev.key === 'Escape' && confirming) { setConfirming(null); if (redraw) drawMerged(); }
 });
 
 // -------------------------------------------------------------- add a league
@@ -214,6 +225,7 @@ async function addLeague() {
   try { r = await leagues.lookup(id); } catch (err) { r = { ok: false, reason: err && err.message }; }
   busy = false;
   addBtn.disabled = false;
+  if (redraw) drawMerged();
 
   if (!r || !r.ok) { say(reasonOf(r, 'Could not find that league.'), true); return; }
   try {
@@ -235,6 +247,7 @@ async function addLeague() {
   input.value = '';
   say('');
   render();
+  pushAccount();
 }
 
 form.addEventListener('submit', (ev) => {
@@ -255,6 +268,7 @@ window.addEventListener('focus', refresh);
 // only. Its earlier seasons are asked for once, here, quietly: a failure (or
 // the phone's synced copy, which asks ESPN nothing) leaves the row as it is.
 async function fillSeasons() {
+  let filled = false;
   for (const l of readList()) {
     if ((l.seasons || []).length > 1) continue;
     let r = null;
@@ -263,9 +277,122 @@ async function fillSeasons() {
     try {
       leagues.add({ leagueId: String(l.leagueId), name: r.name, teamCount: r.teamCount, seasons: r.seasons });
     } catch { continue; }
+    filled = true;
     refresh();
   }
+  if (filled) pushAccount();
+}
+
+// ---------------------------------------------------------------- the account
+//
+// `cloud.signIn` opens a pop-up, so it is wired to a real click and nothing
+// else (js/connection.js `signIn` says why). Everything here is quiet: an
+// account that cannot be read or written leaves the device's own list on
+// screen, exactly as it is signed out.
+
+const acctEl = $('lgAccount');
+const cloudOn = () => {
+  try { return typeof cloud.isConfigured === 'function' && cloud.isConfigured(); } catch { return false; }
+};
+
+let user = null;          // {uid, email, name} | null
+let known = false;        // has sign-in answered at all yet?
+let readFor = null;       // the uid whose list this page load has read
+let held;                 // the account's list as last read or written; undefined until read
+let turn = Promise.resolve();   // one read or write at a time, in order
+
+function drawAccount() {
+  if (!acctEl) return;
+  while (acctEl.firstChild) acctEl.removeChild(acctEl.firstChild);
+  // Nothing until sign-in has answered once: a control that flashed "Sign in"
+  // and then became an address on every load would be worse than a beat of
+  // nothing. The room is kept either way.
+  if (!cloudOn() || !known) return;
+  if (!user) {
+    const b = el('button', null, 'Sign in with Google');
+    b.setAttribute('type', 'button');
+    b.setAttribute('id', 'lgSignIn');
+    acctEl.appendChild(b);
+    return;
+  }
+  const who = user.email || user.name || 'signed in';
+  acctEl.appendChild(el('span', 'lg-signed', `Signed in as ${who}.`));
+  const out = el('button', null, 'Sign out');
+  out.setAttribute('type', 'button');
+  out.setAttribute('id', 'lgSignOut');
+  acctEl.appendChild(out);
+}
+
+/** The merge changed this device's list: draw it, unless a choice is half made. */
+function drawMerged() {
+  if (busy || confirming) { redraw = true; return; }
+  redraw = false;
+  render();
+}
+
+/**
+ * Bring the device's list and the account's together, and save the account's
+ * if it is not what the two make. No read: `held` is what the account holds.
+ */
+function pushAccount() {
+  turn = turn.then(async () => {
+    if (!user || held === undefined || typeof leagues.mergeAccount !== 'function') return;
+    let m;
+    try { m = leagues.mergeAccount(held); } catch { return; }
+    if (!m || !m.ok) return;
+    if (m.local) drawMerged();
+    if (!m.changed) return;
+    let res = null;
+    try { res = await cloud.saveLeagueList(m.list); } catch { res = null; }
+    if (res && res.ok) held = m.list;
+  }).catch(() => {});
+  return turn;
+}
+
+/** The one read of the account's list, once per account per page load. */
+function readAccount() {
+  if (!user || readFor === user.uid || typeof leagues.mergeAccount !== 'function') return turn;
+  const uid = user.uid;
+  readFor = uid;
+  held = undefined;
+  turn = turn.then(async () => {
+    let res = null;
+    try { res = await cloud.loadLeagueList(); } catch { res = null; }
+    // Could not be read: nothing is merged and nothing is written over it.
+    if (!res || !res.ok || !user || user.uid !== uid) return;
+    held = res.found ? res.list : null;
+  }).catch(() => {});
+  return pushAccount();
+}
+
+function setUser(next) {
+  user = next || null;
+  known = true;
+  if (!user) { readFor = null; held = undefined; }
+  drawAccount();
+  if (user) readAccount();
+}
+
+if (acctEl) {
+  acctEl.addEventListener('click', async (ev) => {
+    const btn = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+    if (!btn) return;
+    const id = btn.getAttribute('id');
+    if (id === 'lgSignIn') {
+      let res = null;
+      try { res = await cloud.signIn(); } catch { res = null; }
+      if (res && res.ok) { say(''); setUser(res.user); }
+      else say(reasonOf(res, 'Sign-in did not complete.'), true);
+    } else if (id === 'lgSignOut') {
+      try { await cloud.signOut(); } catch { /* signed out as far as this page goes */ }
+      setUser(null);
+    }
+  });
 }
 
 render();
+drawAccount();
 fillSeasons();
+if (cloudOn() && typeof cloud.onAuth === 'function') {
+  try { cloud.onAuth(setUser); } catch { /* no account: the device's list alone */ }
+}

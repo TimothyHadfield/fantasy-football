@@ -206,7 +206,20 @@ function syncRecords() {
   }
 }
 
-const syncKey = (leagueId, season) => `${leagueId}::${season}`;
+/**
+ * WHOSE note it is. The owner's account — and a browser nobody is signed in
+ * on — keeps the keys these notes have always had, so nothing already noted is
+ * lost. Any other account gets keys of its own, with its uid in front: two
+ * accounts on one browser each have a copy in the cloud, and one must not be
+ * told its weeks were sent because the other's were.
+ */
+function syncKey(leagueId, season) {
+  let account = '';
+  try {
+    if (typeof cloud.accountScope === 'function') account = cloud.accountScope(state.cloudUser) || '';
+  } catch { /* the plain key */ }
+  return `${account ? `${account}/` : ''}${leagueId}::${season}`;
+}
 
 function loadSyncRecord() {
   state.lastSync = syncRecords()[syncKey(state.leagueId, state.season)] || null;
@@ -892,6 +905,7 @@ async function signIn() {
   if (res && res.ok) {
     state.cloudUser = res.user;
     state.cloudKnown = true;
+    loadSyncRecord();   // this account's own note of what it has sent
     render();
     // Signing in is usually the last thing standing between a phone and its
     // league, so fill in the league from the account and connect straight away
@@ -906,6 +920,7 @@ async function signIn() {
 async function signOutOfCloud() {
   await cloud.signOut();
   state.cloudUser = null;
+  loadSyncRecord();
   render();
 }
 
@@ -1254,6 +1269,8 @@ function watchCloudAuth() {
     const was = state.cloudUser && state.cloudUser.uid;
     state.cloudUser = user || null;
     state.cloudKnown = true;
+    // The note of what was sent is kept per account (`syncKey`).
+    if ((user && user.uid) !== was) loadSyncRecord();
     render();
     if (!user || user.uid === was) return;
     // NEVER connect before the bridge question has been settled. A session

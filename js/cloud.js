@@ -89,6 +89,20 @@
 //       (added 2026-10-06, optional, with a list of its own at projhist/index
 //       — see "the projection history's weeks")
 //
+// WHOSE COPY (2026-10-10, "Anyone can sign up"). The paths above are the
+// OWNER's (`ownerUid` below) and are exactly what they have always been. Any
+// other Google account keeps a private copy of its own, the same documents one
+// level down:
+//
+//   users/{uid}                                              the profile (four fields)
+//   users/{uid}/menu/leagues                                 the main menu's list
+//   users/{uid}/leagues/{leagueId}/seasons/{season}/...      as above
+//
+// ONE function decides which (`rootOf`), every read and write goes through
+// it, and it is asked only AFTER sign-in has answered (`authSettled`): a read
+// sent while the session was still being restored would go to the wrong copy.
+// Nothing is ever moved between the two.
+//
 // A Firestore document is capped at 1 MiB, and PROGRESS.md warns that a week
 // of rosters is "about a megabyte". THAT FIGURE IS ABOUT ESPN'S RAW PAYLOAD,
 // which is what `snapshots.js` refuses to store. What goes up here is the
@@ -276,9 +290,9 @@ const MAX_DOC_BYTES = 700 * 1024;
  * network, no error, no change to any page.
  *
  * `ownerUid` is filled in on a SECOND sitting, because it does not exist until
- * he has signed in once. It is not a secret either; it only exists here so
- * that a wrong-account sign-in produces a sentence rather than a Firestore
- * permission error. The rule that actually enforces it lives in the console.
+ * he has signed in once. It is not a secret either. It says whose copy lives
+ * at `leagues/...` (see `rootOf`); every other account keeps its own under
+ * `users/{uid}/`. What enforces both is firebase/firestore.rules.
  */
 export const DEFAULT_CONFIG = {
   apiKey: 'AIzaSyDLatA-0XyFDeeqVbrglvKcxk3k6B5zlGw',
@@ -321,6 +335,12 @@ let cachedUser = null;
 /** Callbacks registered before the SDK finished loading. */
 const authListeners = new Set();
 
+/** Resolves once the transport has said who is signed in (or that nobody is). */
+let authAnswered = null;
+
+/** How long a read waits to be told who is signed in before going on as nobody. */
+const AUTH_WAIT_MS = 8000;
+
 // ----------------------------------------------------------------- configure
 
 /**
@@ -340,6 +360,7 @@ export function configure(opts = {}) {
     injected = opts.transport || null;
     transportPromise = injected ? Promise.resolve(injected) : null;
     cachedUser = null;
+    authAnswered = null;
   }
   return { ...config };
 }
@@ -562,11 +583,65 @@ function readable(err, fallback) {
 
 const enc = (s) => encodeURIComponent(String(s)).replace(/%2F/gi, '_');
 
-function seasonPath(leagueId, season) {
-  return `leagues/${enc(leagueId)}/seasons/${enc(season)}`;
+/**
+ * Has sign-in answered yet? Resolves once the transport has said who is signed
+ * in, or that nobody is — a session restored from an earlier visit arrives a
+ * moment after the page does, and until then "nobody" is only "not yet".
+ *
+ * Asked once per transport; the listener stays on, so `cachedUser` follows a
+ * later sign-in or sign-out too. Never rejects, and never waits for ever.
+ */
+function authSettled(t) {
+  if (cachedUser) return Promise.resolve();
+  if (!authAnswered) {
+    authAnswered = new Promise((resolve) => {
+      let timer = null;
+      const done = () => { if (timer) clearTimeout(timer); resolve(); };
+      try {
+        t.onAuth((user) => { cachedUser = user || null; done(); });
+      } catch {
+        done();
+      }
+      timer = setTimeout(resolve, AUTH_WAIT_MS);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    });
+  }
+  return authAnswered;
 }
-function docPath(leagueId, season, kind, id) {
-  return `${seasonPath(leagueId, season)}/${kind}/${enc(id)}`;
+
+/**
+ * Which account's copy is this, as a short string: '' for the owner — and for
+ * a project with no owner set, and for nobody signed in — else the uid.
+ *
+ * Exported for the notes a browser keeps about what it has sent
+ * (js/connection.js, js/proj-history.js): '' keeps the keys they have always
+ * had, and another account on the same browser gets keys of its own.
+ */
+export function accountScope(user = currentUser()) {
+  if (!user || !user.uid) return '';
+  if (!config.ownerUid || user.uid === config.ownerUid) return '';
+  return String(user.uid);
+}
+
+/**
+ * THE ONE PLACE THAT DECIDES WHERE AN ACCOUNT'S LEAGUES LIVE.
+ *
+ *   the owner            leagues/...                 (never moved, never changed)
+ *   any other account    users/{uid}/leagues/...     (private to that account)
+ */
+function rootOf(user) {
+  const uid = accountScope(user);
+  return uid ? `users/${enc(uid)}/` : '';
+}
+
+function seasonPath(leagueId, season, user) {
+  return `${rootOf(user)}leagues/${enc(leagueId)}/seasons/${enc(season)}`;
+}
+
+/** The season's path for whoever is signed in — asked only once sign-in has answered. */
+async function seasonBase(t, leagueId, season) {
+  await authSettled(t);
+  return seasonPath(leagueId, season, currentUser());
 }
 
 // ------------------------------------------------------------------ profile
@@ -636,6 +711,68 @@ export async function saveProfile({ leagueId, season = null, teamId = null } = {
     return { ok: true, reason: '' };
   } catch (err) {
     return { ok: false, reason: readable(err, 'Could not save your league.') };
+  }
+}
+
+// ------------------------------------------------------- the main menu's list
+//
+//   users/{uid}/menu/leagues
+//
+// The leagues an account has on its main menu (js/leagues.js `mergeAccount`),
+// so a second device shows them without being told. A DOCUMENT OF ITS OWN, and
+// that matters: the profile above is written whole, four fields, by every
+// build of this site there has ever been — a list kept inside it would be
+// erased by the next cached copy of an old page that connected. Packed like
+// every other document here; tests/test-accounts.mjs measures one.
+
+function menuPath(uid) {
+  return `users/${enc(uid)}/menu/leagues`;
+}
+
+/**
+ * The signed-in account's list, as it was saved. One read. Never throws.
+ *
+ * @returns {Promise<{ok:boolean, found:boolean, list:(Object|null), reason:string}>}
+ */
+export async function loadLeagueList() {
+  const none = (reason) => ({ ok: false, found: false, list: null, reason });
+  if (!isConfigured()) return none(notConfigured().reason);
+  const t = await getTransport();
+  if (!t) return none('Could not load Firebase.');
+  await authSettled(t);
+  const user = currentUser();
+  if (!user) return none('Not signed in.');
+  try {
+    const body = unpack(await t.getDoc(menuPath(user.uid)));
+    const found = Boolean(body) && typeof body === 'object' && !Array.isArray(body);
+    return { ok: true, found, list: found ? body : null, reason: '' };
+  } catch (err) {
+    return none(readable(err, 'Could not read your leagues.'));
+  }
+}
+
+/**
+ * Save the signed-in account's list. One write. Never throws.
+ *
+ * @param {Object} list what js/leagues.js `mergeAccount` made
+ * @returns {Promise<{ok:boolean, bytes:number, reason:string}>}
+ */
+export async function saveLeagueList(list) {
+  const no = (reason) => ({ ok: false, bytes: 0, reason });
+  if (!isConfigured()) return no(notConfigured().reason);
+  if (!list || typeof list !== 'object' || Array.isArray(list)) return no('That is not a list of leagues.');
+  const t = await getTransport();
+  if (!t) return no('Could not load Firebase.');
+  await authSettled(t);
+  const user = currentUser();
+  if (!user) return no('Not signed in.');
+  try {
+    const job = pack('menu', 'leagues', list, new Date().toISOString());
+    if (job.bytes > MAX_DOC_BYTES) return no('That list is too big to save.');
+    await t.setDoc(menuPath(user.uid), job.doc);
+    return { ok: true, bytes: job.bytes, reason: '' };
+  } catch (err) {
+    return no(readable(err, 'Could not save your leagues.'));
   }
 }
 
@@ -840,18 +977,15 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
   const t = await getTransport();
   if (!t) return { ok: false, wrote: 0, reason: 'Could not load Firebase. Check the connection.' };
 
+  await authSettled(t);
   const user = currentUser();
   if (!user) return { ok: false, wrote: 0, reason: 'Sign in with Google before syncing.' };
-  if (config.ownerUid && user.uid !== config.ownerUid) {
-    return {
-      ok: false,
-      wrote: 0,
-      reason: `Signed in as ${user.email || user.uid}, which is not the account this league belongs to.`,
-    };
-  }
 
   const syncedAt = new Date().toISOString();
-  const base = seasonPath(leagueId, season);
+  // The owner's copy or this account's own (`rootOf`). First copy wins — the
+  // frozen Value lines, the saved projections — is settled per copy, because
+  // every look-before-write is made under this same path.
+  const base = seasonPath(leagueId, season, user);
 
   // Everything that will be written, built before anything is sent, so a
   // payload that cannot be encoded fails before it has half-replaced what is
@@ -1033,7 +1167,8 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
 // A REFUSED WRITE IS SILENT. If the project's rules ever stopped covering this
 // path, the sync carries on to its index and reports exactly what it always
 // did; the refusal is a `reason` on `result.decisions` and nothing else.
-// (firebase/firestore.rules covers it today: everything under /leagues.)
+// (firebase/firestore.rules covers it: everything under /leagues for the
+// owner, `decisions/{week}` under each other account's own seasons.)
 
 /** A short fingerprint of a document's text: its length and an FNV-1a hash. */
 function markOf(json) {
@@ -1105,7 +1240,7 @@ export async function readDecisions(leagueId, season, weeks = []) {
   const t = await getTransport();
   if (!t) return none('Could not reach Firebase.');
 
-  const base = seasonPath(leagueId, season);
+  const base = await seasonBase(t, leagueId, season);
   const decisions = new Map();
   let reads = 0;
   const list = [...new Set((weeks || []).map(Number))].filter((w) => Number.isFinite(w));
@@ -1165,7 +1300,8 @@ export async function readDecisions(leagueId, season, weeks = []) {
 //
 // A REFUSAL IS SILENT, as for the Decisions weeks: a `reason` on
 // `result.projhist`, and the sync is otherwise what it always was.
-// (firebase/firestore.rules covers this path: everything under /leagues.)
+// (firebase/firestore.rules covers this path, for the owner and for each
+// other account's own copy.)
 
 const PROJHIST_SCHEMA = 1;
 
@@ -1346,7 +1482,7 @@ export async function readProjhist(leagueId, season, { lacks = () => true } = {}
   const t = await getTransport();
   if (!t) return none('Could not reach Firebase.');
 
-  const base = seasonPath(leagueId, season);
+  const base = await seasonBase(t, leagueId, season);
   let listed;
   try {
     listed = await projhistListed(t, base);
@@ -1436,7 +1572,7 @@ export async function cloudStatus(leagueId, season, { now = Date.now() } = {}) {
 
   let meta;
   try {
-    meta = await t.getDoc(seasonPath(leagueId, season));
+    meta = await t.getDoc(await seasonBase(t, leagueId, season));
   } catch (err) {
     return { ...blank, ok: false, found: false, reason: readable(err, 'Could not read the league index.') };
   }
@@ -1516,7 +1652,7 @@ export async function readDown(leagueId, season, { weeks, shapes, now = Date.now
   const t = await getTransport();
   if (!t) return { ...empty, ok: false, found: false, reason: 'Could not reach Firebase.' };
 
-  const base = seasonPath(leagueId, season);
+  const base = await seasonBase(t, leagueId, season);
   let reads = 0;
 
   let meta;

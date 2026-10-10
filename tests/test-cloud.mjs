@@ -122,18 +122,28 @@ function makeFake({
   user = { uid: 'uid-tim', email: 'sharedhadfield@gmail.com', name: 'Timothy' },
   failWrites = null,
   failReads = null,
+  // A session being restored: nobody is signed in when the page asks, and
+  // `user` arrives this many milliseconds later (the real SDK's first
+  // onAuthStateChanged). Null for an account that is simply there.
+  arrivesAfter = null,
 } = {}) {
   const docs = new Map();
-  const log = { reads: 0, writes: 0, paths: [] };
+  const log = { reads: 0, writes: 0, paths: [], readPaths: [] };
+  let here = arrivesAfter == null ? user : null;
   return {
     docs,
     log,
     async signIn() { return user; },
     async signOut() { /* nothing to do */ },
-    currentUser() { return user; },
-    onAuth(cb) { cb(user); return () => {}; },
+    currentUser() { return here; },
+    onAuth(cb) {
+      if (arrivesAfter == null) cb(user);
+      else setTimeout(() => { here = user; cb(user); }, arrivesAfter);
+      return () => {};
+    },
     async getDoc(path) {
       log.reads++;
+      log.readPaths.push(path);
       if (failReads) throw new Error(failReads);
       const raw = docs.get(path);
       return raw === undefined ? null : JSON.parse(raw);
@@ -728,13 +738,103 @@ ok('and says to sign in', /sign in/i.test(r.reason), r.reason);
 
 // --- signed in as somebody else ---
 
-cloud.configure({
-  transport: makeFake({ user: { uid: 'uid-someone-else', email: 'nosy@example.com', name: 'Nosy' } }),
-  ownerUid: 'uid-tim',
-});
-r = await mustReturn('syncUp as the wrong account', () => cloud.syncUp(LEAGUE, SEASON, payload));
-eq(r.ok, false, 'syncUp as a different Google account is refused before it writes');
-ok('and names the account, rather than showing a permission error', /nosy@example.com/.test(r.reason), r.reason);
+// "Anyone can sign up" (Tim, 2026-10-10). The owner's copy is where it has
+// always been; any other Google account keeps a copy of its own one level
+// down, and neither ever touches the other's. Everything below runs with an
+// owner SET, which is how the live site runs.
+
+const PATHS_OF = (root) => [
+  ...WEEKS.flatMap((w) => [`${root}/rosters/${w}`, `${root}/wire/${w}`]),
+  `${root}/parts/schedule`,
+  root,
+].sort();
+const OWNER_ROOT = 'leagues/476225250/seasons/2026';
+const FRIEND = { uid: 'uid-someone-else', email: 'friend@example.com', name: 'A Friend' };
+const FRIEND_ROOT = 'users/uid-someone-else/leagues/476225250/seasons/2026';
+const bodies = (f, root) => PATHS_OF(root).filter((p) => p !== root).map((p) => JSON.parse(f.docs.get(p)).json.join(''));
+
+// THE OWNER: the same 28 documents at the same 28 paths as a project with no
+// owner set has always written (section 2 above), with the same bodies.
+const ownerFake = makeFake();
+cloud.configure({ transport: ownerFake, ownerUid: 'uid-tim' });
+r = await mustReturn('syncUp as the owner', () => cloud.syncUp(LEAGUE, SEASON, payload));
+eq(r.ok, true, 'the owner syncs');
+eq(JSON.stringify(ownerFake.log.paths.slice().sort()), JSON.stringify(PATHS_OF(OWNER_ROOT)),
+  'THE OWNER WRITES EXACTLY THE PATHS IT ALWAYS HAS: leagues/{id}/seasons/{season} and the 27 beneath it');
+eq(ownerFake.log.paths[ownerFake.log.paths.length - 1], OWNER_ROOT, 'the league index last, as ever');
+eq(JSON.stringify([...ownerFake.docs.keys()].sort()), JSON.stringify([...fake.docs.keys()].sort()),
+  'which are the paths a project with no owner set writes');
+ok('and every body is the same, character for character',
+  JSON.stringify(bodies(ownerFake, OWNER_ROOT)) === JSON.stringify(bodies(fake, OWNER_ROOT)));
+ownerFake.log.readPaths.length = 0;
+r = await cloud.readDown(LEAGUE, SEASON);
+eq(r.ok, true, 'the owner reads it back');
+ok('from under leagues/ and nowhere else', ownerFake.log.readPaths.length > 0 && ownerFake.log.readPaths.every((p) => p === OWNER_ROOT || p.startsWith(`${OWNER_ROOT}/`)),
+  ownerFake.log.readPaths.filter((p) => !p.startsWith(OWNER_ROOT)).join(' '));
+
+// ANOTHER ACCOUNT, in the same Firestore, which already holds the owner's copy.
+const ownerDocs = JSON.stringify([...ownerFake.docs.entries()]);
+const friendFake = makeFake({ user: FRIEND });
+for (const [p, raw] of ownerFake.docs) friendFake.docs.set(p, raw);
+cloud.configure({ transport: friendFake, ownerUid: 'uid-tim' });
+const friendPayload = { ...payload, leagueName: 'A Friend’s League' };
+r = await mustReturn('syncUp as another account', () => cloud.syncUp(LEAGUE, SEASON, friendPayload));
+eq(r.ok, true, 'syncUp as a different Google account is NOT refused: it has a copy of its own');
+eq(r.reason, '', 'and no sentence about whose league it is');
+eq(r.wrote, 28, 'it writes the same 28 documents');
+eq(JSON.stringify(friendFake.log.paths.slice().sort()), JSON.stringify(PATHS_OF(FRIEND_ROOT)),
+  'EVERY ONE UNDER users/{uid}/leagues/{id}/seasons/{season}');
+eq(friendFake.log.paths.filter((p) => !p.startsWith('users/uid-someone-else/')).length, 0,
+  'not one write outside its own account');
+eq(JSON.stringify([...friendFake.docs.entries()].filter(([p]) => p.startsWith('leagues/'))), ownerDocs,
+  'THE OWNER’S COPY IS UNTOUCHED, byte for byte');
+
+friendFake.log.readPaths.length = 0;
+const friendDown = await cloud.readDown(LEAGUE, SEASON);
+const friendStatus = await cloud.cloudStatus(LEAGUE, SEASON);
+eq(friendDown.ok, true, 'the other account reads its copy back');
+eq(friendDown.leagueName, 'A Friend’s League', 'ITS OWN, not the owner’s of the same league id');
+same(friendDown.rosters.get(7), payload.rosters.get(7), 'whole');
+eq(friendStatus.found, true, 'cloudStatus sees it');
+ok('and none of its reads touched leagues/', friendFake.log.readPaths.length > 28
+  && friendFake.log.readPaths.every((p) => p.startsWith('users/uid-someone-else/')),
+  friendFake.log.readPaths.filter((p) => !p.startsWith('users/')).slice(0, 3).join(' '));
+eq(typeof cloud.accountScope === 'function' ? cloud.accountScope() : null, 'uid-someone-else',
+  'accountScope names the account, for the notes a browser keeps');
+eq(typeof cloud.accountScope === 'function' ? cloud.accountScope({ uid: 'uid-tim' }) : null, '',
+  'and is empty for the owner, whose notes keep their names');
+
+// An account with nothing synced is told so; it is not shown the owner's.
+const strangerFake = makeFake({ user: { uid: 'uid-new', email: 'new@example.com', name: 'New' } });
+for (const [p, raw] of ownerFake.docs) strangerFake.docs.set(p, raw);
+cloud.configure({ transport: strangerFake, ownerUid: 'uid-tim' });
+r = await cloud.cloudStatus(LEAGUE, SEASON);
+eq(r.found, false, 'an account that has synced nothing finds nothing, though the owner has this very league');
+
+// SIGN-IN ANSWERS A BEAT AFTER THE PAGE. The session of an earlier visit is
+// restored asynchronously: asked at once, the SDK says nobody is signed in.
+// A read sent then must wait to be told, not go to the owner's copy.
+const lateFake = makeFake({ user: FRIEND, arrivesAfter: 40 });
+for (const [p, raw] of friendFake.docs) lateFake.docs.set(p, raw);
+cloud.configure({ transport: lateFake, ownerUid: 'uid-tim' });
+eq(cloud.currentUser(), null, '(the page loads before sign-in has answered)');
+const [lateStatus, lateDown] = await Promise.all([cloud.cloudStatus(LEAGUE, SEASON), cloud.readDown(LEAGUE, SEASON, { weeks: [7] })]);
+eq(lateFake.log.readPaths.filter((p) => !p.startsWith('users/uid-someone-else/')).length, 0,
+  'A READ MADE BEFORE SIGN-IN ANSWERED STILL GOES TO THE ACCOUNT’S OWN COPY');
+eq([lateStatus.found, lateDown.leagueName].join(), 'true,A Friend’s League', 'and finds it');
+
+const lateOwner = makeFake({ arrivesAfter: 40 });
+for (const [p, raw] of ownerFake.docs) lateOwner.docs.set(p, raw);
+cloud.configure({ transport: lateOwner, ownerUid: 'uid-tim' });
+r = await cloud.readDown(LEAGUE, SEASON, { weeks: [7] });
+eq([r.ok, lateOwner.log.readPaths.length > 0 && lateOwner.log.readPaths.every((p) => p.startsWith('leagues/'))].join(), 'true,true',
+  'the owner, restored the same way, reads leagues/ as ever');
+
+const lateUp = makeFake({ user: FRIEND, arrivesAfter: 40 });
+cloud.configure({ transport: lateUp, ownerUid: 'uid-tim' });
+r = await cloud.syncUp(LEAGUE, SEASON, { leagueName: 'x', teams: [], rosters: new Map([[1, payload.rosters.get(1)]]) });
+eq([r.ok, lateUp.log.paths.length > 0 && lateUp.log.paths.every((p) => p.startsWith('users/uid-someone-else/'))].join(), 'true,true',
+  'and a sync started in that beat is neither refused as signed out nor sent to the owner’s paths');
 
 // --- the write fails halfway (quota, a dropped connection) ---
 

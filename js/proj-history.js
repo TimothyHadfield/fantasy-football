@@ -42,6 +42,8 @@
 // so the suites drive this in Node with a Map behind it.
 
 import * as snapshots from './snapshots.js';
+// Only for whose note a cloud note is (`noteName`). js/cloud.js imports nothing.
+import * as cloud from './cloud.js';
 
 /** Bumped when the stored shape changes; a copy of another schema is absent. */
 export const SCHEMA = 1;
@@ -406,12 +408,27 @@ export function keepCloud(leagueId, season, copies, io) {
 // `seen` the cloud sync whose copies have already been taken down.
 const CLOUD_NOTE_KEY = 'ff.cloud.projhist';
 
+/**
+ * The note's name inside the key. The owner's account (and nobody signed in)
+ * keeps the name it has always had; any other account's has its uid in front,
+ * because each account has a copy of its own in the cloud (js/cloud.js
+ * `accountScope`) and one must not be told its weeks are up because another's
+ * are.
+ */
+function noteName(leagueId, season) {
+  let account = '';
+  try {
+    if (typeof cloud.accountScope === 'function') account = cloud.accountScope() || '';
+  } catch { /* the plain name */ }
+  return `${account ? `${account}/` : ''}${leagueId}::${season}`;
+}
+
 /** @returns {{sent:Object|null, seen:string|null}} */
 export function cloudNote(leagueId, season, io) {
   const s = storageOf(io);
   try {
     const all = JSON.parse((s && s.getItem(CLOUD_NOTE_KEY)) || '{}');
-    const mine = all && all[`${leagueId}::${season}`];
+    const mine = all && all[noteName(leagueId, season)];
     return {
       sent: mine && mine.sent && typeof mine.sent === 'object' ? mine.sent : null,
       seen: mine && typeof mine.seen === 'string' ? mine.seen : null,
@@ -427,7 +444,7 @@ export function noteCloud(leagueId, season, patch, io) {
   if (!s) return false;
   try {
     const all = JSON.parse(s.getItem(CLOUD_NOTE_KEY) || '{}') || {};
-    const key = `${leagueId}::${season}`;
+    const key = noteName(leagueId, season);
     all[key] = { ...(all[key] && typeof all[key] === 'object' ? all[key] : {}), ...patch };
     s.setItem(CLOUD_NOTE_KEY, JSON.stringify(all));
     return true;

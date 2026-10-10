@@ -3,27 +3,99 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // The one account this data belongs to.
+    // WHO MAY TOUCH WHAT (2026-10-10, "Anyone can sign up")
     //
-    // Sitting two replaces the string below with your own user id. Until it
-    // does, isOwner() is false for everybody — including you — so nothing can
-    // be read or written. That is the correct state to leave it in overnight:
-    // an empty locked box is fine, an open one is not.
+    //   the owner            /leagues/**                  everything, as always
+    //                        /users/{owner's uid}         everything, as always
+    //   any signed-in        /users/{its own uid}         and the documents named
+    //   account                                           below it, nothing else
+    //   nobody signed in     nothing
+    //
+    // Nothing is listed twice and nothing is open by default: a path with no
+    // match below is refused to everybody.
+
+    // The one account the data under /leagues belongs to.
     function isOwner() {
       return request.auth != null
           && request.auth.uid == 'rYpbExZGM0fCeuuYakAxR6OzG452';
     }
 
-    // Everything the site stores lives under /leagues. Both matches are
-    // needed: the outer one for the league document itself, the inner one for
-    // every season, week and wire document beneath it.
-    // Which league an account uses, so it is typed once on any device
-    // (cloud.saveProfile / loadProfile). An account reads and writes only its
-    // own document, and only the owner's account at all.
-    match /users/{uid} {
-      allow read, write: if isOwner() && request.auth.uid == uid;
+    // The signed-in account is the one named in the path.
+    function isSelf(uid) {
+      return request.auth != null && request.auth.uid == uid;
     }
 
+    // ---- What another account may store, so the free project is not a free
+    // ---- disk. Rules cannot count an account's documents, so these only
+    // ---- confine each one to the shapes the site really writes.
+    //
+    // Every document js/cloud.js writes below an account is "packed": v 1, a
+    // kind, and its body as `json`, a list of strings of at most 4,000
+    // characters. Measured (tests/test-cloud.mjs, ten squads of sixteen, 150
+    // free agents): a week of rosters 53 KB = 14 pieces, a week of the wire
+    // 36 KB = 10 pieces, the schedule 13 KB, the league index 1.5 KB with 11
+    // fields, the main menu's list 3.6 KB for four leagues of eight seasons
+    // (tests/test-accounts.mjs). js/cloud.js itself refuses to send a
+    // document over 700 KiB. So: at most 180 pieces and 720,000 characters
+    // (180 x 4,000, the site's own limit and 13 times the largest real
+    // document) and at most 16 fields.
+    function packed() {
+      let d = request.resource.data;
+      return d.v == 1
+          && d.kind is string
+          && d.json is list
+          && d.json.size() <= 180
+          && d.json.join('').size() <= 720000
+          && d.keys().size() <= 16;
+    }
+
+    // The profile (cloud.saveProfile): exactly these four fields, written
+    // whole by every build of the site.
+    function profile() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['leagueId', 'season', 'teamId', 'updatedAt'])
+          && d.leagueId is string
+          && d.leagueId.size() <= 20;
+    }
+
+    match /users/{uid} {
+      // Which league an account uses, so it is typed once on any device.
+      // The owner's own document is under no new limit.
+      allow read, delete: if isSelf(uid);
+      allow create, update: if isSelf(uid) && (isOwner() || profile());
+
+      // The main menu's list of leagues (cloud.saveLeagueList).
+      match /menu/leagues {
+        allow read, delete: if isSelf(uid);
+        allow create, update: if isSelf(uid) && packed();
+      }
+
+      // The account's own copy of a league: the same documents the owner
+      // keeps under /leagues, one level down. A league id is ESPN's number, a
+      // season is a year.
+      match /leagues/{league}/seasons/{season} {
+        function named() {
+          return league.matches('[0-9]{1,12}') && season.matches('[0-9]{4}');
+        }
+
+        // The league index.
+        allow read, delete: if isSelf(uid);
+        allow create, update: if isSelf(uid) && named() && packed();
+
+        // parts/schedule, rosters/{week}, wire/{week}, decisions/{week},
+        // projhist/{week}, projhist/{week}-part, projhist/index.
+        match /{kind}/{id} {
+          allow read, delete: if isSelf(uid);
+          allow create, update: if isSelf(uid) && named() && packed()
+              && kind in ['parts', 'rosters', 'wire', 'decisions', 'projhist']
+              && id.matches('[0-9a-z-]{1,12}');
+        }
+      }
+    }
+
+    // Everything the owner's account stores lives under /leagues. Both
+    // matches are needed: the outer one for the league document itself, the
+    // inner one for every season, week and wire document beneath it.
     match /leagues/{league} {
       allow read, write: if isOwner();
 

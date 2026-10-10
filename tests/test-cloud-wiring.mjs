@@ -192,19 +192,28 @@ const SEASON = 2026;
 const OWNER_UID = (readFileSync(repoFile('js/cloud.js'), 'utf8')
   .match(/ownerUid:\s*'([^']*)'/) || [])[1] || 'uid-tim';
 
-function makeFake({ user = { uid: OWNER_UID, email: 'tim@example.com', name: 'Tim' } } = {}) {
+// `arrivesAfter`: the session of an earlier visit being restored — nobody is
+// signed in when the page first asks, and `user` arrives that many milliseconds
+// later, which is how the real SDK always answers.
+function makeFake({ user = { uid: OWNER_UID, email: 'tim@example.com', name: 'Tim' }, arrivesAfter = null } = {}) {
   const docs = new Map();
-  const log = { reads: 0, writes: 0, paths: [] };
+  const log = { reads: 0, writes: 0, paths: [], readPaths: [] };
+  let here = arrivesAfter == null ? user : null;
   return {
     docs,
     log,
     user,
     async signIn() { return user; },
     async signOut() { /* nothing to do */ },
-    currentUser() { return user; },
-    onAuth(cb) { cb(user); return () => {}; },
+    currentUser() { return here; },
+    onAuth(cb) {
+      if (arrivesAfter == null) cb(user);
+      else setTimeout(() => { here = user; cb(user); }, arrivesAfter);
+      return () => {};
+    },
     async getDoc(p) {
       log.reads++;
+      log.readPaths.push(p);
       const raw = docs.get(p);
       return raw === undefined ? null : JSON.parse(raw);
     },
@@ -782,6 +791,20 @@ SCENARIOS['desktop-sync'] = async () => {
   ok('the league index went LAST, so it never promises a week that is missing',
     [...fake.docs.keys()].pop() === `leagues/${LEAGUE_ID}/seasons/${SEASON}`,
     [...fake.docs.keys()].pop());
+  // THE OWNER'S PATHS, every one, spelled out ("Anyone can sign up",
+  // 2026-10-10, moved nothing of the owner's). The fake user is the real
+  // pinned owner (`OWNER_UID`).
+  const S0 = 'leagues/476225250/seasons/2026';
+  eq(JSON.stringify([...new Set(fake.log.paths)].sort()), JSON.stringify([
+    S0,
+    `${S0}/decisions/1`, `${S0}/decisions/2`,
+    `${S0}/parts/schedule`,
+    `${S0}/rosters/1`, `${S0}/rosters/2`, `${S0}/rosters/3`, `${S0}/rosters/4`, `${S0}/rosters/5`,
+    `${S0}/wire/1`, `${S0}/wire/2`, `${S0}/wire/3`, `${S0}/wire/4`, `${S0}/wire/5`,
+    `users/${OWNER_UID}`,
+  ].sort()), 'THE OWNER WRITES EXACTLY THE DOCUMENTS IT ALWAYS HAS, at the paths it always has');
+  eq(Object.keys(JSON.parse(store.saved.get('ff.cloud') || '{}')).join(), `${LEAGUE_ID}::${SEASON}`,
+    'and its notes of what it sent keep the names they have always had');
 
   ok('the bar says when it last sent', /sent to your phone/i.test(text), text);
   ok('and how much went', /12 files/.test(text), text);
@@ -1137,6 +1160,105 @@ SCENARIOS['menu-phone'] = async () => {
   const live = await leagues.lookup('1241838');
   eq(JSON.stringify([live.ok, live.name, calls.length]), JSON.stringify([true, LIVE.name, 1]),
     'with no synced copy behind the open league, the same call reads ESPN once');
+};
+
+// =========================================================================
+// ANOTHER GOOGLE ACCOUNT ("Anyone can sign up", Tim 2026-10-10)
+// =========================================================================
+//
+// Not the owner: it keeps a copy of its own under users/{uid}/leagues/, the
+// bar says nothing about whose league it is, and what this browser remembers
+// having sent is kept per account — the owner may have used the same browser
+// an hour ago.
+
+const FRIEND = { uid: 'uid-friend', email: 'friend@example.com', name: 'A Friend' };
+const MINE = `users/${FRIEND.uid}/`;
+
+SCENARIOS['account-desktop'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const fake = makeFake({ user: FRIEND });
+  cloud.configure({ transport: fake });
+
+  // The owner synced this league from this browser an hour ago.
+  const KEY = `${LEAGUE_ID}::${SEASON}`;
+  const ownerRecord = { at: Date.now() - 60 * 60 * 1000, ok: true, wrote: 8, reason: '' };
+  const ownerMarks = { 1: 'the-owners-mark-for-week-1', 2: 'the-owners-mark-for-week-2' };
+  const { document, store } = await bootPage('index.html', {
+    prefs: { 'home.source': 'live' },
+    connection: { leagueId: LEAGUE_ID, season: SEASON, teamId: 1 },
+    cloudRecord: { [KEY]: ownerRecord },
+    extra: { 'ff.cloud.decisions': { [KEY]: ownerMarks } },
+    withBridge: LIVE,
+    waitMs: 5000,
+  });
+
+  const text = (document.getElementById('connBar') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
+  const season = fake.log.paths.filter((p) => !/\/decisions\//.test(p) && p !== `users/${FRIEND.uid}`);
+  eq(season.length, 12, 'ANOTHER ACCOUNT’S DESKTOP PUBLISHES THE SEASON: not refused, and not held back by the owner’s sync an hour ago');
+  eq(fake.log.paths.filter((p) => !p.startsWith(MINE) && p !== `users/${FRIEND.uid}`).join(' '), '',
+    'every document under users/{uid}/ — nothing at leagues/');
+  eq([...fake.docs.keys()].filter((p) => p.startsWith('leagues/')).length, 0, 'the owner’s paths hold nothing of it');
+  ok('its league index is at users/{uid}/leagues/{id}/seasons/{season}', fake.docs.has(`${MINE}leagues/${LEAGUE_ID}/seasons/${SEASON}`),
+    [...fake.docs.keys()].slice(-3).join(' '));
+  eq(fake.log.paths.filter((p) => /\/decisions\//.test(p)).map((p) => p.replace(MINE, '')).join(),
+    `leagues/${LEAGUE_ID}/seasons/${SEASON}/decisions/1,leagues/${LEAGUE_ID}/seasons/${SEASON}/decisions/2`,
+    'the decided weeks went too — the owner’s marks for them did not stop this account’s');
+
+  ok('the bar says it was sent', /sent to your phone/i.test(text) && /12 files/.test(text), text);
+  ok('and nothing about whose league it is', !/belongs|not the account|not the one/i.test(text), text);
+
+  const records = JSON.parse(store.saved.get('ff.cloud') || '{}');
+  const marks = JSON.parse(store.saved.get('ff.cloud.decisions') || '{}');
+  eq(Object.keys(records).sort().join(), [KEY, `${FRIEND.uid}/${KEY}`].sort().join(), 'this account’s sync record has a name of its own');
+  eq(JSON.stringify(records[KEY]), JSON.stringify(ownerRecord), 'THE OWNER’S RECORD IS EXACTLY AS IT WAS');
+  eq(JSON.stringify(marks[KEY]), JSON.stringify(ownerMarks), 'and so are the owner’s marks for the decided weeks');
+  eq(Object.keys(marks[`${FRIEND.uid}/${KEY}`] || {}).join(), '1,2', 'this account’s marks are its own');
+
+  const profile = JSON.parse(fake.docs.get(`users/${FRIEND.uid}`) || '{}');
+  eq(Object.keys(profile).sort().join(), 'leagueId,season,teamId,updatedAt', 'its saved league is the same four fields, at users/{uid}');
+};
+
+// The phone of that account: nothing saved in the browser, signed in — and
+// sign-in answers a beat after the page, as it really does. The owner has a
+// copy of the very same league id in the same Firestore.
+SCENARIOS['account-phone'] = async () => {
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+
+  const desk = makeFake({ user: FRIEND });
+  const seeded = await seedCloud(cloud, espn, season, desk);
+  ok('the account’s desktop published a season', seeded.res.ok, seeded.res.reason);
+  ok('(under its own account)', seeded.res.ok && [...desk.docs.keys()].every((p) => p.startsWith(MINE)), [...desk.docs.keys()].slice(0, 2).join(' '));
+
+  const fake = makeFake({ user: FRIEND, arrivesAfter: 30 });
+  for (const [p, raw] of desk.docs) {
+    fake.docs.set(p, raw);
+    // The owner's copy of the same league: same documents, another name.
+    const theirs = p.replace(MINE, '');
+    const doc = JSON.parse(raw);
+    if (theirs === `leagues/${LEAGUE_ID}/seasons/${SEASON}`) doc.leagueName = 'The Owner League';
+    fake.docs.set(theirs, JSON.stringify(doc));
+  }
+  fake.docs.set(`users/${FRIEND.uid}`, JSON.stringify({ leagueId: String(LEAGUE_ID), season: SEASON, teamId: 2, updatedAt: 'x' }));
+  cloud.configure({ transport: fake });
+
+  const { document, store } = await bootPage('index.html', {
+    espnScale: LIVE,   // anything ESPN answers with would be wrong here
+    waitMs: 3500,
+  });
+
+  const text = (document.getElementById('connBar') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
+  ok('THE OTHER ACCOUNT’S PHONE CONNECTED TO ITS SYNCED COPY', /synced copy/i.test(text), text);
+  ok('its own league', text.includes(CLOUD.name) && !text.includes('The Owner League'), text);
+  ok('with no sentence about whose league it is', !/belongs|not the account|not the one/i.test(text), text);
+  const conn = JSON.parse(store.saved.get('ff.connection') || '{}');
+  eq([conn.leagueId, conn.teamId].join(), `${LEAGUE_ID},2`, 'the league and team came from its account');
+  eq(store.espnCalls.length, 0, 'ESPN WAS NEVER ASKED');
+  ok('the cloud was read', fake.log.readPaths.length > 1, fake.log.readPaths.join(' '));
+  eq(fake.log.readPaths.filter((p) => !p.startsWith(MINE) && p !== `users/${FRIEND.uid}`).join(' '), '',
+    'AND NOT ONE READ WENT TO leagues/ — though sign-in answered after the page had loaded');
+  eq(fake.log.paths.join(' '), '', 'nothing was written');
 };
 
 // =========================================================================

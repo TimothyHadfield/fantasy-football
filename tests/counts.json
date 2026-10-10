@@ -71,11 +71,11 @@
       "assertions": 1491
     },
     "test-cloud.mjs": {
-      "assertions": 190
+      "assertions": 215
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 265,
-      "scenarios": 23
+      "assertions": 291,
+      "scenarios": 25
     },
     "test-trade-odds.mjs": {
       "assertions": 142
@@ -245,7 +245,7 @@
       "assertions": 80
     },
     "test-leagues.mjs": {
-      "assertions": 139
+      "assertions": 140
     },
     "test-start-sit.mjs": {},
     "test-waiver-gain.mjs": {
@@ -263,6 +263,13 @@
     "leagues-check.mjs": {
       "assertions": 72,
       "scenarios": 5
+    },
+    "test-accounts.mjs": {
+      "assertions": 62
+    },
+    "menu-account-check.mjs": {
+      "assertions": 46,
+      "scenarios": 7
     }
   }
 }
