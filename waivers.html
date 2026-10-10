@@ -432,6 +432,28 @@ td.wk-box { outline: 2px solid var(--assumed); outline-offset: -2px; }
    analysis.html's `#startersTable` block, word for word, because that page
    keeps its table rules in its own <style> and the box must look the same
    here. Change one, change the other. */
+/* WHERE IT SITS (Tim, later the same day): inside the Available panel, right
+   on top of its table, so your men and the free agents are on screen together.
+   No chrome of its own — a heading line in the panel-title style with the
+   Actual | Proj select on it, then the table — and small gaps. */
+.start-box { margin: 0 0 6px; }
+.start-box[hidden] { display: none; }
+.start-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+  margin: 0 0 2px;
+}
+.start-head > h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0;
+  font-weight: 600;
+}
+.start-hist { font-size: 11.5px; color: var(--text); white-space: nowrap; }
 #startersTable th, #startersTable td { white-space: nowrap; }
 #startersTable td.wk, #startersTable th.wk { padding-left: 7px; padding-right: 7px; }
 #startersTable td.avg { font-weight: 650; color: var(--text); }
@@ -599,19 +621,6 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
-  <!-- WHO TO START, FOR THE POSITION PICKED BELOW (Tim, 2026-10-09: "the who
-       to start box above the available players section, specifically when a
-       certain position is selected"). The Analysis page's box, drawn by the
-       same module (js/who-to-start.js) for your own squad. Hidden — and
-       empty — with "All" positions or nobody set as you. -->
-  <section class="panel" id="startPanel" hidden>
-    <h2 id="startersTitle">Who to start</h2>
-    <div class="table-scroll" id="startersWrap"><table id="startersTable">
-      <thead></thead>
-      <tbody></tbody>
-    </table></div>
-  </section>
-
   <section class="panel">
     <div class="panel-head">
       <h2>Available players</h2>
@@ -690,6 +699,25 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <span class="key" data-when="td.po-start" hidden><span class="sw po-key"><span class="po-tag">PO</span></span> playoff weeks &mdash; not in Avg</span>
     </div>
 
+    <!-- WHO TO START, FOR THE POSITION PICKED ABOVE, RIGHT ON TOP OF THE LIST
+         (Tim, 2026-10-09: "move that who to start box in the players section
+         to right above the list of available players so you don't have to
+         scroll to compare"). The Analysis page's box, drawn by the same module
+         (js/who-to-start.js) for the men on your roster now. Not a panel: a
+         heading line and the table, and nothing may come between it and
+         #waiverTable's wrapper. Hidden — and empty — with "All" positions or
+         nobody set as you. Actual | Proj for the played weeks is the select on
+         the heading line (on Analysis it is a band row of the table). -->
+    <div class="start-box" id="startBox" hidden>
+      <div class="start-head">
+        <h3 id="startersTitle">Who to start</h3>
+        <span class="start-hist" id="startHist" hidden><select class="hist-pick" data-history aria-label="History shows"><option value="actual">Actual</option><option value="proj">Proj</option></select> history</span>
+      </div>
+      <div class="table-scroll" id="startersWrap"><table id="startersTable">
+        <thead></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
     <div class="table-scroll"><table id="waiverTable">
       <thead></thead>
       <tbody></tbody>
