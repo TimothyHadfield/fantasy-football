@@ -3,7 +3,7 @@
 > **Tim asked (2026-10-10):** "I want to make a main menu that is outside all of our current sections where the user can add different leagues to their account as well as look into past leagues aswell. To go to this main menu you will click on the fantasy button in the top left. If you go inside any specific league it will look just like how the cite currently is but the information will reflect the information that is specific for that leauge."
 > **Instruction:** build (no "don't build yet").
 
-**Status:** Phases 1 and 3 BUILT 2026-10-10 (see BUILT below) · phase 2 (accounts for anyone) NOT built; authorized by his "Anyone can sign up" answer.
+**Status:** Phases 1 and 3 BUILT 2026-10-10 (see BUILT below) · phase 2 (accounts for anyone) BUILT and its rules deployed 2026-10-10 (second BUILT section).
 
 ## Decided by Tim
 - 2026-10-10 (question box) · Accounts: **"Anyone can sign up"** (not just his account).
@@ -112,6 +112,12 @@ f. A stranger could use up the free daily cloud quota; nothing at $0 fully preve
 - Plan was wrong about: "2018 and later" — measured on 1241838: 2019–2025 answer rosters/schedule/draft, 2018 is 401. `decisions.noise`/`decisions.source` carry across leagues (builder's call); keys containing `.live:` are league-specific too.
 - Verified: headless WebKit at 393 and 1440 on 1241838 — connect in the bar, brand → menu (2026…2019 listed), open 2025 (bar says "· 2025", no chips, no `ff.value.*` key), brand back. Suites: test-leagues 139, leagues-check 72, nav-check 212, test-cloud-wiring 265, test-capture 186, test-backup 80, test-past-season 49, test-proj-trend 74, wv-test 1284, proj-changes-check 110, text-audit 10/10.
 - Still open: phase 2 (accounts, incl. review item 10). On a finished season, left for Tim: Players "Next 3" over playoff weeks, Analysis draws playoff weeks as projections, Home injury report, Draft "Value difference" falls back to place, Schedule Simulate over an empty table, Trade finder on a typical week. Known limits (builder A): a league typed into the old bar while prefs are stamped for another league is not re-parked; prefs restored from a backup with no league open are adopted by the next league. `ff-draft-review-v1` is written for an earlier season (parked per league-season). NOT verified: iPhone, private league through the bridge, phone synced copy, a second account.
+
+## BUILT 2026-10-10 — phase 2, accounts for anyone (1b224a9; rules DEPLOYED to `fantasy-football-th` the same day)
+- Shipped: `js/cloud.js` picks the root after auth answers (`leagues/…` for `ownerUid`, `users/{uid}/leagues/…` for anyone else); `syncUp` accepts any account; the league list is `users/{uid}/menu/leagues`; `leagues.mergeAccount` (union, newest team wins, removals travel between devices via `removedAt`); sign-in control in the menu header; sent marks keyed `{uid}/{league}::{season}` for non-owner accounts (owner's keys unchanged). `firebase/firestore.rules`: owner as before; any signed-in account only its own `users/{uid}` (four-field profile), `menu/leagues`, and packed documents of the five known kinds under `users/{uid}/leagues/{digits}/seasons/{year}`; size caps 180 pieces × 4,000 chars, 16 fields.
+- Verified: owner sync paths asserted identical before/after (test-cloud, test-cloud-wiring `desktop-sync`); builder ran the rules on the cached local emulator, 91 allow/deny cases; after deploy, unauthenticated REST reads of `leagues/…`, `users/x`, `users/x/menu/leagues` all 403 (curl). Suites: test-cloud 215, test-cloud-wiring 291, test-accounts 62, menu-account-check 46, test-leagues 140.
+- Roll back the rules: `git show 85769a8:firebase/firestore.rules` → deploy with `firebase deploy --only firestore:rules --project fantasy-football-th` from `firebase/`.
+- NOT verified (needs a real sign-in; Tim's own account first, then a second Google account): the Google pop-up on the menu (iOS Safari especially), Tim's own sync still landing after the rules change, a non-owner sync landing under `users/{uid}/…`, the list appearing on a second device, two accounts taking turns on one browser.
 
 ## Sources
 - ESPN league endpoint `…/seasons/2026/…/leagues/1241838?view=mStatus` (`status.previousSeasons`), measured 2026-10-10.
