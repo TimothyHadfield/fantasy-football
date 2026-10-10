@@ -152,7 +152,7 @@
       "scenarios": 15
     },
     "wv-test.mjs": {
-      "assertions": 1250,
+      "assertions": 1257,
       "scenarios": 19
     },
     "tr-test.mjs": {

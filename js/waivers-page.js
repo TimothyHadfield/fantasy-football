@@ -1094,10 +1094,12 @@ const asValue = (p, x) => value.valueOf(state.value.base, p.position, x);
 
 /**
  * Every rostered man's Value and the weeks left, asked for the first time a
- * row is open (the only thing on this page that shows a man's own Value).
+ * row is open or a name is hovered (`state.value.want`) — the two things on
+ * this page that show a man's own Value.
  */
 function ensurePlayerValues() {
-  if (!state.value.base || state.value.asked || state.open === null) return;
+  if (!state.value.base || state.value.asked) return;
+  if (state.open === null && !state.value.want) return;
   if (typeof season.fetchPlayerValues !== 'function') return;
   state.value.asked = true;
   const token = state.token;
@@ -1126,7 +1128,8 @@ async function onSyncedCopy() {
 async function ensureValueWeeks(token) {
   if (state.isDemo || token !== state.token) return;
   const got = state.value.players;
-  if (!state.value.base || !got || state.open === null || !state.pool.has(state.open)) return;
+  if (!state.value.base || !got) return;
+  if (!state.value.want && (state.open === null || !state.pool.has(state.open))) return;
   if (!got.weeks.some(wantsWire)) return;
   if (await onSyncedCopy()) {
     if (token === state.token && !state.value.synced) {
@@ -2367,7 +2370,7 @@ const view = {
 const byId = (rows) => new Map(rows.map((r) => [String(r.p.playerId), r]));
 
 /** Every element that opens a preview, in both tables. */
-const PREVIEWS = '[data-c], .mine-tag, .gn[data-gain]';
+const PREVIEWS = '[data-c], .mine-tag, .gn[data-gain], td.name a.pref';
 
 /** "QBs", "kickers" — a position as a group of men. */
 const posPlural = (pos) => ({ K: 'kickers', DST: 'defenses' }[pos] || `${pos}s`);
@@ -2575,6 +2578,36 @@ function posCard(row) {
   };
 }
 
+/**
+ * A NAME'S PREVIEW (Tim, 2026-10-10: "make a player preview when you hover over
+ * thier name, but only show the main things like avg, value, etc, not their
+ * future proj or scoring or anything because that's already shown there"): the
+ * glance line's four numbers and nothing else. For a mouse and the keyboard
+ * only — a tap on a name opens his row, which carries the same line — and not
+ * on the row already open, for the same reason.
+ */
+function nameCard(row, kind) {
+  const { p } = row;
+  if (coarsePointer() || p.playerId === state.open) return null;
+  const wire = kind === 'wire';
+  // The first hover asks for the Values, as the first open row does.
+  if (state.value.base && !state.value.want) {
+    state.value.want = true;
+    if (state.value.asked) ensureValueWeeks(state.token);
+    else ensurePlayerValues();
+  }
+  const g = glanceFor(p, wire) || {};
+  const rows = [];
+  if (state.value.base) {
+    const v = wire ? wireValue(p) : takenValue(p);
+    if (v !== undefined) rows.push({ label: 'Value', value: v });
+  }
+  rows.push({ label: 'Avg', value: g.avg }, { label: 'Proj', value: g.proj });
+  const pos = p.position === 'DST' ? 'D/ST' : p.position;
+  rows.push({ label: `${pos} rank`, value: typeof g.rank === 'number' ? `#${g.rank}` : null });
+  return { title: p.name, sub: `${pos} · ${p.proTeam}`, rows };
+}
+
 /** "Your QB3": your men at that position, and which of them the row is. */
 function mineCard(row) {
   const pos = row.p.position;
@@ -2648,6 +2681,7 @@ function previewFor(el) {
   if (el.matches('.gn[data-gain]')) return gainCard(el.getAttribute('data-gain'));
   const at = rowAt(el);
   if (!at) return null;
+  if (el.matches('a.pref')) return nameCard(at.row, at.kind);
   if (el.matches('.mine-tag')) return at.kind === 'mine' ? mineCard(at.row) : null;
   const week = Number(el.getAttribute('data-w'));
   switch (el.getAttribute('data-c')) {
@@ -4851,7 +4885,7 @@ document.addEventListener('click', (e) => {
   const link = e.target.closest && e.target.closest(
     'a.pref[href*="player="], #statCard a[href^="waivers.html?player="]');
   if (!link) return;
-  if (link.closest('#statCard')) hidePop();
+  hidePop();    // a name's own preview too: his row is about to say the same
   const m = /[?&]player=(\d+)/.exec(link.getAttribute('href') || '');
   if (!m) return;
   e.preventDefault();

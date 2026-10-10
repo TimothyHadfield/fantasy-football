@@ -646,6 +646,9 @@ const SCENARIOS = {
         tWk: '#takenTable tbody td[data-c="wk"]',
         pos: '#takenTable tbody td[data-c="pos"][data-go]',
         own: '#takenTable tbody td[data-c="own"]',
+        name: '#waiverTable tbody tr:not(.mine) td.name a.pref',
+        nameMine: '#waiverTable tbody tr.mine td.name a.pref',
+        tName: '#takenTable tbody td.name a.pref',
       };
       // The row a spot sits in, for the ids its link must carry.
       for (const [k, sel] of Object.entries(SPOTS)) {
@@ -696,6 +699,8 @@ const SCENARIOS = {
         if (x) fire(x, 'click');
         out.sheet[k].shut = !cardOpen(pop());
       }
+      // A NAME under a finger has no card: the tap is left to open his row.
+      out.nameTouch = cardText(q(SPOTS.name));
       window.matchMedia = realMedia;
       // THE GAIN FIGURE, clicked with a mouse: the man the move would drop is
       // selected on this page, no reload.
@@ -1446,6 +1451,18 @@ async function check(scenario, boot) {
       c.ok(`CARD ${name}: the figure is there, opens a card on hover, and has no title`,
         k(name).found && k(name).said.length > 0 && !k(name).titled, JSON.stringify(w.cards[name]));
     }
+    // A NAME'S PREVIEW (Tim, 2026-10-10): "only show the main things like avg,
+    // value, etc, not their future proj or scoring".
+    for (const name of ['name', 'nameMine', 'tName']) {
+      const said = k(name).said;
+      c.ok(`NAME ${name}: hovering a name opens his main numbers — Avg, Proj and his position rank`,
+        k(name).found && / Avg (\d+\.\d|—) Proj (\d+\.\d|—) (QB|RB|WR|TE|K|D\/ST) rank (#\d+|—)$/.test(said) &&
+        k(name).cell.length > 0 && said.startsWith(k(name).cell.split(' ')[0]), JSON.stringify(w.cards[name]));
+      c.ok(`NAME ${name}: and nothing the row already shows — no week, no score`,
+        !/Week|Mean|scored|Actual/.test(said), said);
+    }
+    c.ok('NAME: under a finger a name opens no card, so the tap still opens his row',
+      w.nameTouch === '', w.nameTouch);
     c.ok('AVG: the weeks it is the mean of, the mean, and his rank among the free agents at his position',
       /Avg, weeks? \d/.test(k('avg').said) && /Week \d+ ?\d+\.\d/.test(k('avg').said) &&
       /Mean of \d+ weeks? ?\d+\.\d/.test(k('avg').said) &&
