@@ -18,7 +18,8 @@
 // HOW A PAGE USES IT
 //
 //   configure({ state, valueOn, asValue, historyMode, sourceKey, glanceFor, nowSays,
-//               currentOnly, historyBand })   (the last two: the Players page only)
+//               currentOnly, historyBand, alignCols, lineBefore })
+//                                             (the last four: the Players page only)
 //       once, before the first paint. `state` is read LIVE on every call (the
 //       page keeps mutating its own object, or hands over an object of getters):
 //         seasonWeeks  Map week -> teams[] as js/season.js returns them
@@ -68,8 +69,8 @@ let historyMode = () => 'actual';
 let sourceKey = () => '';
 let glanceFor = () => null;
 let nowSays = '';
-// THE PLAYERS PAGE'S TWO DIFFERENCES (Tim, 2026-10-09), both off unless a page
-// asks — the Analysis page passes neither, so its box is what it was:
+// THE PLAYERS PAGE'S DIFFERENCES (Tim, 2026-10-09 and -10), all off unless a
+// page asks — the Analysis page passes none, so its box is what it was:
 //   currentOnly        only the men on the roster NOW get a row. A man since
 //                      dropped or traded has none, and the week he started in
 //                      simply has no mark for it: the best lineups are still
@@ -77,8 +78,26 @@ let nowSays = '';
 //                      mark moves and no lineup is solved again without him.
 //   historyBand false  no "Actual history" band row over the played weeks;
 //                      the page draws that select itself, beside its heading.
+//   alignCols          the box's columns are the Available table's, one over
+//                      the other (Tim, 2026-10-10: "line up the appropriate
+//                      collumns in the who to start chart with the actual
+//                      available players chart"): Player · Pos · NFL · Avg ·
+//                      Starts · the weeks. The depth tag moves INSIDE the
+//                      Player cell, leading the name the way "Your WR7" does
+//                      below it, and the Player column sorts by it; Starts
+//                      sits over that table's Gain. Every header cell says
+//                      which column it is (`data-col`), the same keys the
+//                      Available table's header carries. Nothing is left out.
+//   lineBefore         `(weeks, hist) => week | undefined`: the week the heavy
+//                      line is drawn before. Without it the line follows the
+//                      history — after a week in play. The Available table
+//                      draws its own before the first week it prices, and the
+//                      two are one line down the screen. Only the line moves:
+//                      what a week's cells hold is decided as it always was.
 let currentOnly = false;
 let historyBand = true;
+let alignCols = false;
+let lineBefore = null;
 
 /** Point the box at a page. Call it once, before anything here is drawn. */
 export function configure(page) {
@@ -91,6 +110,8 @@ export function configure(page) {
   nowSays = page.nowSays || '';
   currentOnly = page.currentOnly === true;
   historyBand = page.historyBand !== false;
+  alignCols = page.alignCols === true;
+  lineBefore = typeof page.lineBefore === 'function' ? page.lineBefore : null;
 }
 
 export const fmt = (n, digits = 1) =>
@@ -228,7 +249,7 @@ export function weekHead(w, weeks, cls, title, tag = '') {
   // THE WEEK'S HEADING IS A CARD, NOT A `title` (2026-10-08): it says the same
   // one line, and it is the connector to that week on Schedule. See
   // `weekHeadCard` for who clicks what.
-  return `<th data-sort class="${classes}" ${WEEK_HEAD_ATTR}="${w}" data-def="${esc(why)}">` +
+  return `<th data-sort class="${classes}" ${WEEK_HEAD_ATTR}="${w}"${alignCols ? ` data-col="w${w}"` : ''} data-def="${esc(why)}">` +
     `${weekLink(w, label)}</th>`;
 }
 
@@ -1165,7 +1186,7 @@ export function startersData(team) {
   const weeks = spanWeeks();
   const label = state.startersPos === 'DST' ? 'DEF' : state.startersPos;
   const hist = historyWeeks(weeks);
-  const fut = firstFuture(weeks, hist);
+  const fut = lineBefore ? lineBefore(weeks, hist) : firstFuture(weeks, hist);
   const mode = historyMode();
   const slots = leagueSlots();
   const index = team ? seasonIndex(team.id) : new Map();
@@ -1187,6 +1208,19 @@ export function startersHeadHtml({ weeks, hist, fut }) {
   const proj = historyMode() === 'proj';
   const cols = playerWeekHeads(weeks, hist, fut, proj,
     (w) => `ESPN’s projected points for week ${w}, and whether he starts.`);
+
+  // The Players page's columns (`alignCols`): the Available table's, in its
+  // order. Depth's sentence rides on Player, whose cell now leads with the tag.
+  if (alignCols) {
+    return `${historyBand ? historyGroupRow(weeks, hist, playerHistorySays(proj), 5) : ''}<tr>
+       <th class="name" data-sort data-col="player" title="Everyone who held this position for this team in the weeks shown. How deep he is at his own position on this squad, by the Avg beside it.">Player</th>
+       <th class="left" data-sort data-col="pos" title="His position.">Pos</th>
+       <th class="left" data-sort data-col="team" title="His NFL team.">NFL</th>
+       <th class="grouped" data-sort data-col="avg" title="${PLAYER_AVG_HEAD}">Avg</th>
+       <th data-sort data-col="extra" title="How many of the weeks read he is in the best legal lineup for, playoff weeks included.">Starts</th>
+       ${cols}
+     </tr>`;
+  }
 
   return `${historyBand ? historyGroupRow(weeks, hist, playerHistorySays(proj), 6) : ''}<tr>
        <th class="left" data-sort title="How deep he is at his own position on this squad, by the Avg beside it.">Depth</th>
@@ -1266,6 +1300,22 @@ export function startersBodyHtml(team, { weeks, hist, fut, mode, slots, index, s
         : `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam} — not on this ` +
           `roster in week ${state.week}. He is here because he filled a lineup spot in one of the ` +
           `weeks shown, and a marked week with no row to put it on would read as an empty slot.`;
+      // On the Players page (`alignCols`) depth and name are ONE cell: the tag
+      // leads the name, and the cell sorts by the tag.
+      if (alignCols) {
+        return `
+      <tr class="${cls}">
+        <td class="name" data-v="${row.depthValue}"${tipAttr(card)}><span class="nm-line">` +
+        `<span class="depth-tag${row.held ? '' : ' muted'}">${esc(row.depth)}</span>${
+          playerRef(p, esc(p.name), `${who}${row.held ? '.' : ''} Click to ${OPENS}.`, 'aria-label')}</span></td>
+        <td class="left">${esc(p.position === 'DST' ? 'DEF' : p.position)}</td>
+        <td class="left">${esc(p.proTeam)}</td>
+        <td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${row.avg === null ? '' : ` data-v="${row.avg}"`} ` +
+        `title="${esc(avgLine(regularCount(row.counted, weeks), ah))}">${fmt(row.avg)}${heatMarkHtml(ah)}</td>
+        <td class="starts" data-v="${row.starts}"${startsCard}>${row.starts}</td>
+        ${cells}
+      </tr>`;
+      }
       return `
       <tr class="${cls}">
         <td class="left" data-v="${row.depthValue}"><span class="depth-tag${row.held ? '' : ' muted'}">${esc(row.depth)}</span></td>

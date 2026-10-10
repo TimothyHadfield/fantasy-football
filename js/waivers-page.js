@@ -840,7 +840,10 @@ function pastWeeks(weeks) {
 const boxWeekIn = (past) => (past.includes(state.boxWeek) ? state.boxWeek : null);
 
 /** A week's header: the number, and — for a playoff week — say so in words. */
-function weekHead(w, weeks, { cls = '', title = '' } = {}) {
+function weekHead(w, weeks, { cls = '', title = '', keyed = false } = {}) {
+  // `keyed` (the Available table only): the column says which week it is, the
+  // key the "Who to start" box's header carries over it (`alignStartBox`).
+  const col = keyed ? ` data-col="w${w}"` : '';
   // `weeks` is every column drawn, previous ones included, so the playoff line
   // falls on the first playoff week whichever side of today it is on.
   const po = isPlayoff(w);
@@ -851,7 +854,7 @@ function weekHead(w, weeks, { cls = '', title = '' } = {}) {
       '<span class="sr-only"> (playoffs)</span>'
     : String(w);
   const why = po ? `${title} A playoff week: shown for reference, not counted in Avg.` : title;
-  return `<th data-sort${classes ? ` class="${classes}"` : ''} title="${why}">${label}</th>`;
+  return `<th data-sort${classes ? ` class="${classes}"` : ''}${col} title="${why}">${label}</th>`;
 }
 
 /** A week's wire is worth asking for: not held, not refused, not already in the air. */
@@ -2170,6 +2173,8 @@ function runGain() {
   }
   // The cells carry their sort keys now: put the rows back in the chosen order.
   resort($('waiverTable'));
+  // The Gain column has its figures: the box above follows its new width.
+  alignStartBox();
 }
 
 /**
@@ -3032,6 +3037,16 @@ starters.configure({
   // moves) — and no band row in the table: Actual | Proj is on the heading.
   currentOnly: true,
   historyBand: false,
+  // And a third (Tim, 2026-10-10): its columns are the Available table's —
+  // see "the box's columns over the list's" below.
+  alignCols: true,
+  // The heavy line is the Available table's: before the first week it prices,
+  // when there are played weeks left of it. (On Analysis a week in play is
+  // left of the line; here that would put the two lines a column apart.)
+  lineBefore: () => {
+    const shown = shownWeeks();
+    return pastWeeks(shown).length ? shown[0] : undefined;
+  },
 });
 
 /** Your squad in the anchor week, or null when the box has nobody to be about. */
@@ -3071,6 +3086,156 @@ function renderStartBox() {
   resort(table);
 }
 
+// ------------------------------------------- the box's columns over the list's
+//
+// Tim, 2026-10-10: "in the players section, line up the appropriate collumns
+// in the who to start chart with the actual available players chart so that
+// you can compare them quickly and easily".
+//
+// THE SAME COLUMNS: js/who-to-start.js's `alignCols` draws the box as Player
+// (the depth tag inside the cell) · Pos · NFL · Avg · Starts · the weeks —
+// the Available table's Player · Pos · Tm · Avg · Gain · the weeks, one for
+// one. Both headers carry the same `data-col` keys in the same order, and the
+// weeks are the same list (`startWeeks` is the Available table's columns).
+//
+// THE SAME PIXELS, and not by two tables happening to agree. The Available
+// table lays itself out as it always has; the box is then MADE to match it:
+// `table-layout: fixed`, a <colgroup> holding the width MEASURED off each of
+// the list's header cells, and the list's own total width. A fixed table takes
+// its columns from that colgroup and from nothing in its cells, so the two
+// cannot drift.
+//
+// THE ONE THING THE LIST GIVES WAY ON: a column the box needs wider than the
+// list has it (the word "Starts" over a narrow Gain, a long name behind its
+// tag). The box's own needs are measured first — laid out on its own, shrunk
+// to its content — and any column of the list that falls short is given that
+// width as a floor: a `min-width` on its header cell. (Not a <col> width:
+// measured 2026-10-10, Safari's engine takes that as a preferred width only,
+// and a list already wider than a phone ignored it.) Repeated until nothing
+// falls short: on a laptop the list is as wide as the panel, so widening one
+// column takes the slack out of the others. With "All" positions, or nobody
+// set as you, there is no box and the list carries no floor at all.
+//
+// WHEN: after every paint, and whenever a header cell of the list changes
+// size (a ResizeObserver on each) — the Gain figures arrive after the paint,
+// a row opens, the window turns. Nothing here runs without a layout engine.
+//
+// SIDEWAYS, TOGETHER: each table keeps its own scroller (the list's is also
+// its vertical one, with the frozen header — one shared scroller would carry
+// the box away as the list is read), and each follows the other's
+// `scrollLeft`. The write that makes one follow comes back as its own scroll
+// event; it is recognised (`scrollLed`) and not answered, so there is no loop.
+// The box's scroller is trimmed by the width of the list's vertical scrollbar,
+// when it has one, so the two have the same distance to scroll.
+
+const colsOf = (table) => [...table.querySelectorAll('thead tr:last-child th')];
+const widthOf = (el) => el.getBoundingClientRect().width;
+
+/** Hand both tables back to their own layout. */
+function unalignStartBox(box, wire, wrap) {
+  const group = box.querySelector('colgroup');
+  if (group) group.remove();
+  box.style.tableLayout = '';
+  box.style.width = '';
+  wrap.style.marginRight = '';
+  for (const th of colsOf(wire)) th.style.minWidth = '';
+}
+
+/**
+ * Widen a header cell of the list to at least `width`, edge to edge. A cell's
+ * `min-width` is its content's, so the padding and borders it has now are
+ * taken off first.
+ */
+function floorCol(th, width) {
+  const inner = parseFloat(getComputedStyle(th).width);
+  const around = Number.isFinite(inner) ? Math.max(0, widthOf(th) - inner) : 0;
+  th.style.minWidth = `${Math.max(0, width - around)}px`;
+}
+
+/** The header cells being watched for a change of size. */
+let alignWatch = { ro: null, first: null, count: 0, due: false };
+
+function watchWireCols(wire, wrap) {
+  if (typeof ResizeObserver !== 'function') return;
+  const ths = colsOf(wire);
+  // Watching a cell again reports it again, and the report is what calls
+  // `alignStartBox`: only a NEW header (a repaint replaces it) is taken up.
+  if (alignWatch.ro && alignWatch.first === ths[0] && alignWatch.count === ths.length) return;
+  if (alignWatch.ro) alignWatch.ro.disconnect();
+  // On the next frame, not inside the report: matching the box can move the
+  // very cells being watched, and a watcher that resizes what it watches in
+  // its own callback is the browser's "ResizeObserver loop" error.
+  const ro = new ResizeObserver(() => {
+    if (alignWatch.due) return;
+    alignWatch.due = true;
+    requestAnimationFrame(() => { alignWatch.due = false; alignStartBox(); });
+  });
+  ths.forEach((th) => ro.observe(th));
+  ro.observe(wrap);
+  alignWatch = { ro, first: ths[0] || null, count: ths.length, due: alignWatch.due };
+}
+
+function alignStartBox() {
+  const box = $('startersTable');
+  const wire = $('waiverTable');
+  const wrap = $('startersWrap');
+  if (!box || !wire || !wrap || typeof wire.getBoundingClientRect !== 'function') return;
+  // Nothing is laid out (no engine, or the page is not displayed): touch nothing.
+  if (!(widthOf(wire) > 0)) return;
+  const wireWrap = wire.parentNode;
+
+  unalignStartBox(box, wire, wrap);
+  watchWireCols(wire, wireWrap);
+  if ($('startBox').hidden) return;
+  const mine = colsOf(box);
+  const theirs = colsOf(wire);
+  if (!mine.length || mine.length !== theirs.length) return;
+
+  // What the box needs, on its own: shrunk to its content, no slack shared out.
+  box.style.width = 'auto';
+  const need = mine.map((th) => Math.ceil(widthOf(th)));
+  box.style.width = '';
+  if (!need.some((w) => w > 0)) return;   // nothing is laid out (no engine, or not displayed)
+
+  // The list as it lays itself out — given a floor wherever the box needs more.
+  for (let pass = 0; pass < 8; pass++) {
+    const short = theirs.filter((th, i) => widthOf(th) < need[i] - 0.5);
+    if (!short.length) break;
+    for (const th of short) floorCol(th, need[theirs.indexOf(th)]);
+  }
+
+  // The box, made the list: its columns and its width, to the measured pixel.
+  const group = document.createElement('colgroup');
+  group.innerHTML = theirs.map((th) => `<col style="width:${widthOf(th)}px">`).join('');
+  box.insertBefore(group, box.firstChild);
+  box.style.tableLayout = 'fixed';
+  box.style.width = `${widthOf(wire)}px`;
+
+  // The same distance to scroll: the list's scroller may carry a vertical bar.
+  const bar = wrap.clientWidth - wireWrap.clientWidth;
+  if (bar > 0) wrap.style.marginRight = `calc(${bar}px - var(--pad-panel))`;
+  if (wrap.scrollLeft !== wireWrap.scrollLeft) {
+    scrollLed = { el: wrap, at: Date.now() };
+    wrap.scrollLeft = wireWrap.scrollLeft;
+  }
+}
+
+/** The scroller last moved by this code rather than by a hand, and when. */
+let scrollLed = { el: null, at: 0 };
+
+/** Each of two scrollers follows the other sideways. */
+function scrollTogether(a, b) {
+  const follow = (from, to) => from.addEventListener('scroll', () => {
+    // Our own write to `from`, coming back: not a hand, nothing to pass on.
+    if (scrollLed.el === from && Date.now() - scrollLed.at < 150) return;
+    if (to.scrollLeft === from.scrollLeft) return;
+    scrollLed = { el: to, at: Date.now() };
+    to.scrollLeft = from.scrollLeft;
+  }, { passive: true });
+  follow(a, b);
+  follow(b, a);
+}
+
 // --------------------------------------------------------------------- render
 
 function render() {
@@ -3106,6 +3271,8 @@ function render() {
   renderCounts(weeks);
   renderStartBox();
   renderTable(weeks);
+  // Both are drawn: put the box's columns over the list's.
+  alignStartBox();
   renderStats(weeks);
   renderNote(weeks);
   // The second panel is drawn from the same cache in the same pass, so neither
@@ -3221,7 +3388,7 @@ function renderCounts(weeks) {
  * takes: with previous weeks drawn, the bracket off Avg (`grouped`) moves to
  * the first of them and the first priced week carries the heavy line instead.
  */
-function pastHeads(weeks) {
+function pastHeads(weeks, keyed = false) {
   const past = pastWeeks(weeks);
   const every = [...past, ...weeks];
   return {
@@ -3229,6 +3396,7 @@ function pastHeads(weeks) {
     first: past.length ? 'fut-start' : 'grouped',
     html: past
       .map((w, i) => weekHead(w, every, {
+        keyed,
         cls: `wk-past${i === 0 ? ' grouped' : ''}`,
         title: `ESPN’s projection for week ${w}, already played${valueOn() ? ', as a Value' : ''}. Not in Avg.`,
       }))
@@ -3245,7 +3413,9 @@ const avgTitle = () => (valueOn()
   : 'The mean of the regular-season weeks shown that project above zero — ours, not ESPN’s.');
 
 function renderHead(weeks) {
-  const past = pastHeads(weeks);
+  // Every column says which it is (`data-col`): the keys the "Who to start"
+  // box's header carries, column over column (see `alignStartBox`).
+  const past = pastHeads(weeks, true);
   const cols = past.html + weeks
     .map((w, i) => {
       const failed = state.failedWeeks.has(w);
@@ -3253,17 +3423,17 @@ function renderHead(weeks) {
       const title = failed
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : weekTitle(w);
-      return weekHead(w, past.every, { cls, title });
+      return weekHead(w, past.every, { cls, title, keyed: true });
     })
     .join('');
 
   $('waiverTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort title="A free agent you could claim; click a name for the rest of his season and his actual scores.">Player</th>
-       <th class="left" data-sort title="His position.">Pos</th>
-       <th class="left" data-sort title="His NFL team.">Tm</th>
-       <th data-sort title="${avgTitle()}">Avg</th>
-       <th data-sort title="${esc(gainTitle())}">Gain</th>
+       <th class="name" data-sort data-col="player" title="A free agent you could claim; click a name for the rest of his season and his actual scores.">Player</th>
+       <th class="left" data-sort data-col="pos" title="His position.">Pos</th>
+       <th class="left" data-sort data-col="team" title="His NFL team.">Tm</th>
+       <th data-sort data-col="avg" title="${avgTitle()}">Avg</th>
+       <th data-sort data-col="extra" title="${esc(gainTitle())}">Gain</th>
        ${cols}
      </tr>`;
 }
@@ -4721,10 +4891,13 @@ wirePops($('takenTable'), { selector: PREVIEWS, card: previewFor });
 // Same reasoning one column further right, the Owner column having pushed Avg
 // from index 3 to index 4.
 enableSort($('takenTable'), { defaultIndex: 4 });
-// "Who to start" opens as it does on Analysis: by depth, starter first. Its
-// Starts figures and week headings open the same cards; Actual | Proj is the
-// select on its heading line, kept for this page.
+// "Who to start" opens as it does on Analysis: by depth, starter first — the
+// first column here is Player, which leads with the depth tag and sorts by it.
+// Its Starts figures and week headings open the same cards; Actual | Proj is
+// the select on its heading line, kept for this page.
 if ($('startersTable')) {
+  // The box and the list scroll sideways as one (see `alignStartBox`).
+  scrollTogether($('startersWrap'), $('waiverTable').parentNode);
   enableSort($('startersTable'), { defaultIndex: 0, defaultAsc: true });
   wirePops($('startersTable'));
   starters.wireWeekHeads($('startersTable'));
