@@ -152,8 +152,8 @@
       "scenarios": 15
     },
     "wv-test.mjs": {
-      "assertions": 1257,
-      "scenarios": 19
+      "assertions": 1284,
+      "scenarios": 20
     },
     "tr-test.mjs": {
       "assertions": 1166
@@ -162,7 +162,11 @@
       "assertions": 73
     },
     "test-proj-trend.mjs": {
-      "assertions": 52
+      "assertions": 74
+    },
+    "test-past-season.mjs": {
+      "assertions": 49,
+      "scenarios": 7
     },
     "test-accept-by.mjs": {
       "assertions": 24
@@ -232,7 +236,7 @@
       "scenarios": 10
     },
     "proj-changes-check.mjs": {
-      "assertions": 102
+      "assertions": 110
     },
     "test-must-win.mjs": {
       "assertions": 67

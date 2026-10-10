@@ -34,7 +34,7 @@ import {
 // Player Value (docs/value-plan.md): the arithmetic, and ESPN's preseason
 // projection re-scored under the league's rules.
 import { valueOf, restAvg, lineOf, valueText } from './value.js';
-import { loadBaseline, baselineOf } from './proj-trend.js';
+import { loadBaseline, baselineOf, scoringForSeason } from './proj-trend.js';
 import { shortName } from './actual-season-table.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
@@ -1485,7 +1485,9 @@ async function liveWorld(cfg) {
   // the bye left out is compared with). No lines, or no scoring: the old view.
   const values = await season.fetchPlayerValues();
   let preOf = null;
-  const scoring = Array.isArray(schedule && schedule.scoringItems) && schedule.scoringItems.length ? schedule.scoringItems : null;
+  // (Only for the season the preseason copy is of — js/proj-trend.js `scoringForSeason`.)
+  const scoring = Array.isArray(schedule && schedule.scoringItems) && schedule.scoringItems.length
+    ? scoringForSeason(schedule.scoringItems, espn.getConfig().season) : null;
   if (values && values.base && scoring && await loadBaseline()) {
     preOf = (id) => {
       const b = baselineOf(id, scoring);

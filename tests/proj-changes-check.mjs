@@ -276,6 +276,16 @@ const CHILDREN = {
     return { changes: p.changes(), ...p.done() };
   },
 
+  /**
+   * AN EARLIER SEASON of the league, opened from the main menu (2026-10-10):
+   * nothing was saved for it and nothing will be. (SEASON − 1 is before the
+   * season being played whatever today's date is.)
+   */
+  async past() {
+    const p = await page({ 'ff.prefs': { 'analysis.source': 'live' }, 'ff.connection': { ...CONN, season: SEASON - 1 } });
+    return { changes: p.changes(), ...p.done() };
+  },
+
   /** The sample league. */
   async demo() {
     const p = await page({ 'ff.prefs': { 'analysis.source': 'demo' } });
@@ -591,6 +601,22 @@ block('none', () => {
     ok('NO COPY: no controls and no table', x.changes.controlsHidden && x.changes.tableHidden && Boolean(x.changes.sheet) && x.changes.sheet.rows.length === 0,
       [x.changes.controlsHidden, x.changes.tableHidden]);
     ok('NO COPY: the page did not write one either', x.histKeys.length === 0, x.histKeys);
+  }
+});
+
+// ------------------------------------------------------------------ past
+// An earlier season has no week "now", and nothing is saved for it any more:
+// the first sentence alone — never "before week 8", never "from now on".
+block('past', () => {
+  const x = run('past');
+  if (x) {
+    quiet('past', x);
+    ok('EARLIER SEASON: the one sentence, with no week and no promise',
+      x.changes.empty === 'No saved projections for this team.' && !x.changes.emptyHidden, x.changes.empty);
+    ok('EARLIER SEASON: it is the start of this season\'s line, not new words', NO_COPY.startsWith('No saved projections for this team'));
+    ok('EARLIER SEASON: no controls and no table', x.changes.controlsHidden && x.changes.tableHidden && Boolean(x.changes.sheet) && x.changes.sheet.rows.length === 0,
+      [x.changes.controlsHidden, x.changes.tableHidden]);
+    ok('EARLIER SEASON: the page did not write a copy', x.histKeys.length === 0, x.histKeys);
   }
 });
 

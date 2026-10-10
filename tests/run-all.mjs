@@ -48,6 +48,7 @@ const SUITES = [
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],
   ['test-heat-sweep.mjs', 'the scale walked outward: depth never falls with distance, the deepest step holds past the end'],
   ['test-proj-trend.mjs', 'the preseason arrows: ESPN’s preseason stats re-scored, the >2 a week threshold'],
+  ['test-past-season.mjs', 'an earlier season of a league: no Value lines made, kept or sent — and this season untouched'],
   ['heat-draw-check.mjs', 'the red/green tint draws on even rows, your own row and under hover (the CSS cascade, run)'],
   ['sortable-check.mjs', 'click-to-sort on its own: data-v, the text fallback, and every glyph heat.js can emit'],
   ['charts-check.mjs', 'the inline-SVG charts on their own: marks placed from the data, identity never by hue alone'],

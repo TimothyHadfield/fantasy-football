@@ -1710,6 +1710,12 @@ function renderCost() {
             `of ${weekly.progress.total}` : '') +
           `. Until they are all in, every figure below is <strong>a typical week</strong>, ` +
           `which is a different number on a different scale.`
+        // A FINISHED SEASON: there is no week to read and the button above is
+        // dead, so "press it" would be an instruction nobody can follow. The
+        // deal pop-up's own sentence, and what the figures still are.
+        : !span.length
+          ? `<strong>Every week of the regular season has been played</strong>, so there is ` +
+            `nothing left for a trade to change. The page is showing <strong>a typical week</strong>.`
         : `<strong>Every remaining week is selected but not loaded</strong>, so the page is ` +
           `showing <strong>a typical week</strong>. Press the button above to read them again.`)
       : '',
@@ -1946,7 +1952,7 @@ function marksPhrase(p, ctx) {
     if (bye) out += ` · ${bye.words.charAt(0).toLowerCase()}${bye.words.slice(1)}`;
   }
   if (basis() === 'weeks') {
-    const t = trend.trendOf(p.playerId, weeklyMean(p), state.scoring, '');
+    const t = trend.trendOf(p.playerId, weeklyMean(p), trendScoring(), '');
     if (t) {
       out += ` · ${t.dir} ${Math.abs(t.delta).toFixed(1)} a week since preseason ` +
         `(${t.from.toFixed(1)} → ${t.to.toFixed(1)})`;
@@ -2158,6 +2164,15 @@ function syncMarkKeys() {
 }
 
 /**
+ * The league's rules as the arrow may use them: only for the season the
+ * preseason copy is of (js/proj-trend.js `scoringForSeason`). An earlier
+ * season opened from the menu gets no arrow; the sample league always does.
+ */
+function trendScoring() {
+  return trend.scoringForSeason(state.scoring, state.isDemo ? trend.BASELINE_SEASON : espn.getConfig().season);
+}
+
+/**
  * THE PRESEASON ARROW (Tim, 2026-09-30): "put a up or down arrow by that
  * player's name if their rest-of-season proj/week has increased or decreased by
  * more than 2 than it was at the begginning of the season … make sure it's
@@ -2171,7 +2186,7 @@ function trendMarkOf(p) {
   // The arrow's own `title` comes off here (2026-10-08): it sits on a name that
   // opens his card, and the card's heading says it (`marksPhrase`). The
   // sr-only words inside the arrow stay. js/proj-trend.js is another page's too.
-  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), state.scoring, weekRange(weeklySpan())))
+  return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), trendScoring(), weekRange(weeklySpan())))
     .replace(/(<span class="trend trend-(?:up|down)") title="[^"]*"/, '$1');
 }
 
