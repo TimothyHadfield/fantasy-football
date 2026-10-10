@@ -483,6 +483,10 @@ td.wk-box { outline: 2px solid var(--assumed); outline-offset: -2px; }
   background: var(--panel-2);
   border: 1px solid var(--line);
 }
+/* ON THIS PAGE the tag is inside the Player cell, leading the name the way
+   "Your WR7" does in the list below (Tim, 2026-10-10: the box's columns sit
+   over the list's). `.nm-line` drops the space after it, so a margin. */
+#startersTable .nm-line > .depth-tag { margin-right: 6px; }
 #startersTable td.starts { font-weight: 650; font-variant-numeric: tabular-nums; }
 #startersTable th.now, #startersTable td.now {
   border-left: 1px solid var(--line-2);

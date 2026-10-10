@@ -26,6 +26,17 @@
 // (`currentOnly`, `historyBand: false`), which the Analysis page does not
 // pass — so `expectedBox` takes `page`, and the `departed` scenario draws the
 // box both ways.
+//
+// SINCE 2026-10-10 (Tim: "line up the appropriate collumns in the who to start
+// chart with the actual available players chart so that you can compare them
+// quickly and easily"): on this page the box's columns ARE the Available
+// table's, one over the other — Player (the depth tag inside it, leading the
+// name) · Pos · NFL · Avg · Starts (over Gain) · the same weeks in the same
+// order. That is the module's third opt-in option (`alignCols`). There is no
+// layout in this harness, so what is asserted here is the STRUCTURE the pixel
+// alignment is built on (`lined`): the two header rows carry the same column
+// keys (`data-col`) in the same order, in every span, on Value, and with a
+// row open. The pixels themselves are measured in a headless browser.
 
 import { parseHTML } from 'linkedom';
 import { readFileSync } from 'node:fs';
@@ -91,6 +102,10 @@ const SCENARIOS = {
   departed: {
     label: '(h) a man who started for you and has since left: no row, no mark, nobody else’s mark moved',
     prefs: { ...LIVE, 'waivers.position': 'WR' }, conn: CONN, env: { START_DEPARTED: '1' },
+  },
+  inPlay: {
+    label: '(i) a week in play: the line between played and coming weeks is where the list has it',
+    prefs: { ...LIVE, 'waivers.position': 'RB' }, conn: CONN, env: { AN_DONE: '1' },
   },
 };
 
@@ -210,9 +225,33 @@ function snap(d) {
   const panel = d.getElementById('startBox');
   const table = d.getElementById('startersTable');
   const rows = table ? [...table.querySelectorAll('tbody tr')] : [];
+  const wire = d.getElementById('waiverTable');
+  const keys = (t) => (t ? [...t.querySelectorAll('thead tr:last-child th')].map((th) => th.getAttribute('data-col')) : []);
+  const futKey = (t) => {
+    const th = t ? [...t.querySelectorAll('thead tr:last-child th')]
+      .find((x) => /\bfut-start\b/.test(x.getAttribute('class') || '')) : null;
+    return th ? th.getAttribute('data-col') : null;
+  };
+  const wireRow = wire ? wire.querySelector('tbody tr:not(.empty-row):not(.act-row)') : null;
   return {
-    depth: rows.map((tr) => txt(tr.children[0])),
-    avg: rows.map((tr) => txt(tr.children[4])),
+    // THE TWO TABLES, COLUMN FOR COLUMN: each header's keys, in order.
+    cols: keys(table),
+    wireCols: keys(wire),
+    wireHeads: wire ? [...wire.querySelectorAll('thead tr:last-child th')].slice(0, 5).map(txt) : [],
+    wireWeeks: wire ? [...wire.querySelectorAll('thead tr:last-child th')]
+      .map((th) => txt(th)).filter((t) => /^\d+/.test(t)).map((t) => parseInt(t, 10)) : [],
+    fut: futKey(table),
+    wireFut: futKey(wire),
+    rowCells: rows.map((tr) => tr.children.length),
+    wireRowCells: wireRow ? wireRow.children.length : 0,
+    wireOpen: wire ? wire.querySelectorAll('tbody tr.act-row').length : 0,
+    // The depth tag: where it is, and that it is nowhere else on the row.
+    tagInName: rows.filter((tr) => tr.children[0] && /\bname\b/.test(tr.children[0].getAttribute('class') || '') &&
+      tr.children[0].querySelectorAll('.depth-tag').length === 1).length,
+    tags: rows.map((tr) => tr.querySelectorAll('.depth-tag').length),
+    sortKeys: rows.map((tr) => Number(tr.children[0] && tr.children[0].getAttribute('data-v'))),
+    depth: rows.map((tr) => txt(tr.querySelector('td.name .depth-tag'))),
+    avg: rows.map((tr) => txt(tr.children[3])),
     gone: rows.filter((tr) => /\bgone\b/.test(tr.getAttribute('class') || '')).length,
     headRows: table ? table.querySelectorAll('thead tr').length : 0,
     exists: Boolean(panel && table),
@@ -220,15 +259,40 @@ function snap(d) {
     title: txt(d.getElementById('startersTitle')),
     headCells: table ? table.querySelectorAll('thead th').length : 0,
     weeks: table ? [...table.querySelectorAll('thead th[data-wkh]')].map((th) => Number(th.getAttribute('data-wkh'))) : [],
-    heads: table ? [...table.querySelectorAll('thead tr:last-child th')].slice(0, 6).map(txt) : [],
-    names: rows.map((tr) => txt(tr.querySelector('td.name'))),
-    pos: rows.map((tr) => txt(tr.children[2])),
+    heads: table ? [...table.querySelectorAll('thead tr:last-child th')].slice(0, 5).map(txt) : [],
+    // The name is the link; the tag before it is `depth`.
+    names: rows.map((tr) => txt(tr.querySelector('td.name a.pref'))),
+    pos: rows.map((tr) => txt(tr.children[1])),
     rows: rows.map((tr) => tr.outerHTML),
-    cells: rows.map((tr) => [...tr.children].slice(6).map((td) => ({
+    cells: rows.map((tr) => [...tr.children].slice(5).map((td) => ({
       text: txt(td), cls: td.getAttribute('class') || '', v: td.getAttribute('data-v'),
     }))),
-    starts: rows.map((tr) => txt(tr.children[5])),
+    starts: rows.map((tr) => txt(tr.children[4])),
   };
+}
+
+/**
+ * THE BOX'S COLUMNS ARE THE AVAILABLE TABLE'S (Tim, 2026-10-10), as far as a
+ * document without layout can say it: `s` is a `snap` with the box shown, and
+ * `weeks` the week columns both tables must lay out, in order.
+ */
+function lined(c, s, weeks, label) {
+  const want = ['player', 'pos', 'team', 'avg', 'extra', ...weeks.map((w) => `w${w}`)];
+  c.ok(`${label}: THE SAME COLUMNS IN THE SAME ORDER — both headers carry the same keys`,
+    s.cols.length === want.length && s.cols.join(',') === want.join(',') && s.wireCols.join(',') === want.join(','),
+    `box ${s.cols.join(',')} | wire ${s.wireCols.join(',')} | want ${want.join(',')}`);
+  c.ok(`${label}: the lead columns read Player, Pos, NFL, Avg, Starts over Player, Pos, Tm, Avg, Gain`,
+    s.heads.join('|') === 'Player|Pos|NFL|Avg|Starts' && s.wireHeads.join('|') === 'Player|Pos|Tm|Avg|Gain',
+    `${s.heads.join('|')} over ${s.wireHeads.join('|')}`);
+  c.ok(`${label}: every row of the box has a cell for each column, as a row of the list does`,
+    s.rowCells.length > 0 && s.rowCells.every((n) => n === want.length) && s.wireRowCells === want.length,
+    `box ${s.rowCells.join(',')} wire ${s.wireRowCells} want ${want.length}`);
+  c.ok(`${label}: THE DEPTH TAG IS INSIDE THE PLAYER CELL, the row's first, and nowhere else`,
+    s.rows.length > 0 && s.tagInName === s.rows.length && s.tags.every((n) => n === 1) &&
+    s.depth.every((x) => /^(QB|RB|WR|TE|DEF|K)\d+$/.test(x)),
+    `${s.tagInName} of ${s.rows.length}; ${s.tags.join(',')}; ${s.depth.join(',')}`);
+  c.ok(`${label}: the line between played and coming weeks is before the same week in both`,
+    s.fut !== null && s.fut === s.wireFut, `box ${s.fut} wire ${s.wireFut}`);
 }
 
 /**
@@ -266,7 +330,7 @@ async function expectedBox(d, { weeks, pos, valueBase = null, history = 'actual'
     historyMode: () => history,
     sourceKey: () => `check:${pos}:${weeks.join(',')}:${valueBase ? 'v' : 'p'}:${history}`,
     glanceFor: () => null,
-    ...(page ? { currentOnly: true, historyBand: false } : {}),
+    ...(page ? { currentOnly: true, historyBand: false, alignCols: true } : {}),
   });
   const team = state.data.teams.find((t) => t.id === ME);
   const data = shared.startersData(team);
@@ -276,6 +340,13 @@ async function expectedBox(d, { weeks, pos, valueBase = null, history = 'actual'
   return {
     rows: trs.map((tr) => tr.outerHTML),
     weeks: [...scratch.querySelectorAll('thead th[data-wkh]')].map((th) => Number(th.getAttribute('data-wkh'))),
+    heads: [...scratch.querySelectorAll('thead tr:last-child th')].slice(0, 6).map(txt),
+    head: scratch.querySelector('thead').innerHTML,
+    keyed: scratch.querySelectorAll('[data-col]').length,
+    tagFirst: trs.filter((tr) => tr.children[0].querySelectorAll('.depth-tag').length === 1 &&
+      !/\bname\b/.test(tr.children[0].getAttribute('class') || '') &&
+      tr.querySelectorAll('td.name .depth-tag').length === 0).length,
+    cellsPerRow: trs.map((tr) => tr.children.length),
     count: data.rows.length,
     headRows: scratch.querySelectorAll('thead tr').length,
     bandSelect: scratch.querySelectorAll('thead select[data-history]').length,
@@ -400,6 +471,21 @@ async function check(scenario, boot) {
     // The other table's filter is not this one.
     click('#takenPosFilter button[data-pos="QB"]');
     seen.afterTaken = snap(d);
+    click('#spanFilter button[data-span="all"]');
+    await sleep(1500);
+    seen.rest = snap(d);
+  }
+  if (scenario === 'wr') {
+    // A name on the list, clicked with a mouse: his Actual row opens (and the
+    // span goes to every remaining week).
+    const link = d.querySelector('#waiverTable tbody tr:not(.mine) td.name a.pref');
+    if (link) link.dispatchEvent(Object.assign(new w.Event('click', { bubbles: true, cancelable: true }), { button: 0 }));
+    await sleep(1500);
+    seen.open = snap(d);
+    // Sorting the list is the list's own business.
+    const avg = d.querySelectorAll('#waiverTable thead th')[3];
+    if (avg) avg.dispatchEvent(new w.Event('click', { bubbles: true }));
+    seen.sorted = snap(d);
   }
   if (scenario === 'value') {
     seen.switchShown = !d.getElementById('showCtl').hasAttribute('hidden');
@@ -470,13 +556,23 @@ async function check(scenario, boot) {
       first.names.every((n) => n.startsWith(`T${ME} `)) && first.pos.every((p) => p === 'WR'),
       `${JSON.stringify(first.names)} ${JSON.stringify(first.pos)}`);
 
-    c.ok('the columns are the Analysis box’s: Depth, Player, Pos, NFL, Avg, Starts',
-      first.heads.join('|') === 'Depth|Player|Pos|NFL|Avg|Starts', first.heads.join('|'));
-    const wireWeeks = [...d.querySelectorAll('#waiverTable thead tr:last-child th')]
-      .map((th) => txt(th)).filter((t) => /^\d+/.test(t)).map((t) => parseInt(t, 10));
+    lined(c, first, near3, 'Next 3');
+    c.ok('it opens by depth, starter first: WR1 to WR5 down the rows, the Player column sorting by the tag',
+      first.depth.join(',') === 'WR1,WR2,WR3,WR4,WR5' &&
+      first.sortKeys.every((v, i) => Number.isFinite(v) && (i === 0 || v > first.sortKeys[i - 1])),
+      `${first.depth.join(',')} keys ${first.sortKeys.join(',')}`);
+    const restWeeks = seen.open.weeks;
+    c.ok('WITH A ROW OF THE LIST OPEN its Actual row is there, and every remaining week is laid out',
+      seen.open.wireOpen === 1 && restWeeks.length > near3.length &&
+      restWeeks.slice(0, near3.length).join(',') === near3.join(','), `${seen.open.wireOpen} open; ${restWeeks.join(',')}`);
+    lined(c, seen.open, restWeeks, 'a row open');
+    c.ok('sorting the list moves no column of either table',
+      seen.sorted.cols.length > 5 && seen.sorted.cols.join(',') === seen.open.cols.join(',') &&
+      seen.sorted.wireCols.join(',') === seen.open.wireCols.join(',') &&
+      sameRows(seen.sorted.rows, seen.open.rows), `${seen.sorted.cols.join(',')} | ${seen.sorted.wireCols.join(',')}`);
     c.ok('the weeks are the Available table’s week columns, in the same order',
-      first.weeks.join(',') === near3.join(',') && wireWeeks.join(',') === near3.join(','),
-      `box ${first.weeks.join(',')} wire ${wireWeeks.join(',')}`);
+      first.weeks.join(',') === near3.join(',') && first.wireWeeks.join(',') === near3.join(','),
+      `box ${first.weeks.join(',')} wire ${first.wireWeeks.join(',')}`);
 
     c.ok('THE SAME BOX: every row is the shared renderer’s for this league, cell for cell',
       sameRows(first.rows, want.rows), firstDiff(first.rows, want.rows));
@@ -521,6 +617,9 @@ async function check(scenario, boot) {
       seen.flex.pos.filter((p) => p === 'RB').length === 4 && seen.flex.pos.filter((p) => p === 'WR').length === 5 &&
       seen.flex.pos.filter((p) => p === 'TE').length === 2 && seen.flex.pos.length === 11,
       JSON.stringify(seen.flex.pos));
+    lined(c, seen.rb, near3, 'RB');
+    lined(c, seen.flex, near3, 'FLEX');
+    lined(c, seen.dst, near3, 'DEF');
     c.ok('FLICKING THROUGH THE POSITIONS BUYS NOTHING: no roster or wire read was added',
       seen.askedAfterFilters === askedAtBoot, `${askedAtBoot} -> ${seen.askedAfterFilters}`);
 
@@ -531,6 +630,10 @@ async function check(scenario, boot) {
       sameRows(seen.six.rows, want6.rows), firstDiff(seen.six.rows, want6.rows));
     c.ok('the Taken table’s own filter does not move it',
       seen.afterTaken.title === 'Who to start · WR' && sameRows(seen.afterTaken.rows, seen.six.rows), seen.afterTaken.title);
+    lined(c, seen.six, near6, 'Next 6');
+    c.ok('Rest of season lays out more weeks still', seen.rest.weeks.length > near6.length &&
+      seen.rest.weeks.slice(0, near6.length).join(',') === near6.join(','), seen.rest.weeks.join(','));
+    lined(c, seen.rest, seen.rest.weeks, 'Rest of season');
   }
 
   // ---- (e) Proj | Value -------------------------------------------------
@@ -542,6 +645,8 @@ async function check(scenario, boot) {
     c.ok('ON VALUE THE BOX IS THE SHARED RENDERER’S IN VALUE', sameRows(seen.value.rows, val.rows),
       firstDiff(seen.value.rows, val.rows));
     c.ok('which is not what it showed on Proj', !sameRows(seen.value.rows, first.rows), 'identical');
+    lined(c, first, near3, 'on Proj');
+    lined(c, seen.value, near3, 'on Value');
     // By hand: T4 Player 01, an RB projected 19.7 + 0.3·9 … in week 9 = 21.7;
     // against the RB lines (8 free, 11 a starter) that is far over a starter.
     const p = season.projFor(1, 9);
@@ -580,6 +685,7 @@ async function check(scenario, boot) {
       .map((th) => txt(th)).filter((t) => /^\d+/.test(t)).map((t) => parseInt(t, 10));
     c.ok('its weeks are the Available table’s', first.weeks.length > 3 && first.weeks.join(',') === wireWeeks.join(','),
       `box ${first.weeks.join(',')} wire ${wireWeeks.join(',')}`);
+    lined(c, first, first.weeks, 'sample league');
     c.ok('somebody is marked as a start', first.cells.some((cells) => cells.some((x) => /\bst\b/.test(x.cls))), 'no marks');
     c.ok('nobody in it is a man the team no longer holds', first.gone === 0 && first.depth.every((x) => x !== '—'),
       `${first.gone} departed rows; depth ${first.depth.join(',')}`);
@@ -592,8 +698,30 @@ async function check(scenario, boot) {
     c.ok('every man the box says you hold is that team’s in the Taken table',
       team.length > 0 && [...d.querySelectorAll('#startersTable tbody tr')]
         .filter((tr) => !/\bgone\b/.test(tr.getAttribute('class') || ''))
-        .every((tr) => mine.some((n) => n.includes(txt(tr.querySelector('td.name'))))),
+        .every((tr) => mine.some((n) => n.includes(txt(tr.querySelector('td.name a.pref'))))),
       `${team}: ${JSON.stringify(first.names)} v ${JSON.stringify(mine.slice(0, 20))}`);
+  }
+
+  // ---- (i) a week in play -----------------------------------------------
+  // Week 8 has kicked off (an-stub-season.mjs, AN_DONE): on Analysis the box
+  // counts it as history and draws its line after it. The Available table
+  // draws its line BEFORE the week being priced — and here the box's line is
+  // the list's, so the two are one line down the screen. What the week's
+  // cells hold is untouched.
+  if (scenario === 'inPlay') {
+    const an = await expectedBox(d, { weeks: near3, pos: 'RB', page: false });
+    c.ok('THE FIXTURE: week 8 is in play — the Analysis box draws its line before week 9',
+      /class="[^"]*\bfut-start\b[^"]*" data-wkh="9"/.test(an.head), an.head.slice(0, 300));
+    c.ok('the box is shown', first.shown && first.rows.length > 0, `${first.shown} ${first.rows.length}`);
+    lined(c, first, near3, 'a week in play');
+    c.ok('and that line is before week 8, the first week the list prices', first.fut === 'w8' && first.wireFut === 'w8',
+      `box ${first.fut} wire ${first.wireFut}`);
+    const k = near3.indexOf(8);
+    c.ok('the cells under it are on the same side: the line is on week 8’s cell in every row, and on no other',
+      first.cells.every((cells) => cells.every((x, i) => /\bfut-start\b/.test(x.cls) === (i === k))),
+      JSON.stringify(first.cells.map((cells) => cells.map((x) => (/\bfut-start\b/.test(x.cls) ? 1 : 0)).join(''))));
+    c.ok('week 8’s cells are still the week in play’s own (history cells), as on Analysis',
+      first.cells.every((cells) => /\bhist\b/.test(cells[k].cls)), JSON.stringify(first.cells.map((cells) => cells[k].cls)));
   }
 
   // ---- (h) a man who started for you and has since left -----------------
@@ -622,6 +750,11 @@ async function check(scenario, boot) {
       Boolean(anHim) && anHim.marked.join(',') === season.DEPARTED_WEEKS.join(','), anHim ? anHim.marked.join(',') : 'no row');
     c.ok('and its header keeps the "Actual history" band row with the select in it',
       an.headRows === 2 && an.bandSelect === 1, `${an.headRows} rows, ${an.bandSelect} selects`);
+    c.ok('and its six lead columns: Depth, Player, Pos, NFL, Avg, Starts — the tag in a cell of its own, no column keys',
+      an.heads.join('|') === 'Depth|Player|Pos|NFL|Avg|Starts' && an.keyed === 0 && an.tagFirst === an.count &&
+      an.cellsPerRow.every((n) => n === near3.length + 6),
+      `${an.heads.join('|')}; ${an.keyed} keyed; ${an.tagFirst} of ${an.count}; ${an.cellsPerRow.join(',')}`);
+    lined(c, first, near3, 'your receivers');
 
     // The Players page.
     const want = await expectedBox(d, { weeks: near3, pos: 'WR' });
@@ -633,9 +766,23 @@ async function check(scenario, boot) {
     c.ok('no row is a departed man’s', first.gone === 0, `${first.gone}`);
     c.ok('every row is the shared renderer’s with the option, cell for cell',
       sameRows(first.rows, want.rows), firstDiff(first.rows, want.rows));
+    // The two pages lay the depth tag out differently (a cell of its own
+    // there, inside the Player cell here), so a row is compared as what it
+    // SAYS: the tag, the name's link, then every cell after the name.
+    const said = (html) => {
+      const body = d.createElement('tbody');
+      body.innerHTML = html;
+      const tr = body.querySelector('tr');
+      const kids = [...tr.children];
+      const name = kids.findIndex((td) => /\bname\b/.test(td.getAttribute('class') || ''));
+      return [tr.getAttribute('class') || '', tr.querySelector('.depth-tag').outerHTML,
+        tr.querySelector('td.name a.pref').outerHTML, kids[0].getAttribute('data-v'),
+        ...kids.slice(name + 1).map((td) => td.outerHTML)].join('\n');
+    };
     const kept = an.rows.filter((html) => !an.gone.some((g) => g.html === html));
     c.ok('THE REMAINING MEN’S ROWS ARE WHAT THEY WERE: the Analysis rows with his taken out, cell for cell',
-      kept.length === 5 && sameRows(first.rows, kept), firstDiff(first.rows, kept));
+      kept.length === 5 && sameRows(first.rows.map(said), kept.map(said)) && !sameRows(first.rows, kept),
+      firstDiff(first.rows.map(said), kept.map(said)));
 
     const row = (i) => first.names.indexOf(season.playerName(ME, i));
     const cell = (i, week) => (first.cells[row(i)] || [])[near3.indexOf(week)] || { cls: 'no cell' };
