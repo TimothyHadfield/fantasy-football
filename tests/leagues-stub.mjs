@@ -34,11 +34,11 @@ export const keyOf = (leagueId, season) => `${leagueId}-${season}`;
 export const SAMPLE = [
   {
     leagueId: '1241838',
-    name: 'Wasatch Front Keeper League 2018',
+    name: 'Sample Keeper League',
     teamCount: 10,
     seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018],
     teams: {
-      2026: { id: 4, name: 'Christian McCaffeine and Friends' },
+      2026: { id: 4, name: 'Sample Team Four' },
       2025: { id: 4, name: 'Last Year’s Name' },
     },
     lastOpened: { season: 2026, at: Date.UTC(2026, 9, 10, 15) },
