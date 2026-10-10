@@ -17,7 +17,8 @@
 //
 // HOW A PAGE USES IT
 //
-//   configure({ state, valueOn, asValue, historyMode, sourceKey, glanceFor, nowSays })
+//   configure({ state, valueOn, asValue, historyMode, sourceKey, glanceFor, nowSays,
+//               currentOnly, historyBand })   (the last two: the Players page only)
 //       once, before the first paint. `state` is read LIVE on every call (the
 //       page keeps mutating its own object, or hands over an object of getters):
 //         seasonWeeks  Map week -> teams[] as js/season.js returns them
@@ -67,6 +68,17 @@ let historyMode = () => 'actual';
 let sourceKey = () => '';
 let glanceFor = () => null;
 let nowSays = '';
+// THE PLAYERS PAGE'S TWO DIFFERENCES (Tim, 2026-10-09), both off unless a page
+// asks — the Analysis page passes neither, so its box is what it was:
+//   currentOnly        only the men on the roster NOW get a row. A man since
+//                      dropped or traded has none, and the week he started in
+//                      simply has no mark for it: the best lineups are still
+//                      solved over each week's real squad, so nobody else's
+//                      mark moves and no lineup is solved again without him.
+//   historyBand false  no "Actual history" band row over the played weeks;
+//                      the page draws that select itself, beside its heading.
+let currentOnly = false;
+let historyBand = true;
 
 /** Point the box at a page. Call it once, before anything here is drawn. */
 export function configure(page) {
@@ -77,6 +89,8 @@ export function configure(page) {
   sourceKey = page.sourceKey;
   glanceFor = page.glanceFor;
   nowSays = page.nowSays || '';
+  currentOnly = page.currentOnly === true;
+  historyBand = page.historyBand !== false;
 }
 
 export const fmt = (n, digits = 1) =>
@@ -1109,7 +1123,8 @@ export function starterRows(team, weeks, index, starters, hist = new Set()) {
     // started has no mark to explain and is only clutter. Left in, the sample
     // league's running backs ran to fourteen rows, nine of them men Tim no
     // longer holds and seven of those never in a lineup at all.
-    .filter((row) => row.held || row.starts > 0)
+    // `currentOnly` (the Players page): not even then — see `configure`.
+    .filter((row) => row.held || (!currentOnly && row.starts > 0))
     .sort((a, b) => (b.avg ?? -Infinity) - (a.avg ?? -Infinity) || a.p.playerId - b.p.playerId);
 
   // Depth rank, per real position, over the men actually held right now.
@@ -1173,7 +1188,7 @@ export function startersHeadHtml({ weeks, hist, fut }) {
   const cols = playerWeekHeads(weeks, hist, fut, proj,
     (w) => `ESPN’s projected points for week ${w}, and whether he starts.`);
 
-  return `${historyGroupRow(weeks, hist, playerHistorySays(proj), 6)}<tr>
+  return `${historyBand ? historyGroupRow(weeks, hist, playerHistorySays(proj), 6) : ''}<tr>
        <th class="left" data-sort title="How deep he is at his own position on this squad, by the Avg beside it.">Depth</th>
        <th class="name" data-sort title="Everyone who held this position for this team in the weeks shown.">Player</th>
        <th class="left" data-sort title="His position.">Pos</th>

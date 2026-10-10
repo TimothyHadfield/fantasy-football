@@ -15,6 +15,17 @@
 //
 // The squads are an-stub-season.mjs's (through start-stub-season.mjs): real
 // lineups, seven weeks played, week 8 the one a claim made now would be for.
+//
+// SINCE 2026-10-09 (Tim: "move that who to start box in the players section to
+// right above the list of available players so you don't have to scroll to
+// compare. Also remove any players on the who to start list that aren't
+// currently on your team. Just don't mark the past weeks with a green line if
+// a player who isn't currently on the team started"): the box sits INSIDE the
+// Available players panel, directly on top of its table, and lists only the
+// men on your roster now. Those are the shared module's two opt-in options
+// (`currentOnly`, `historyBand: false`), which the Analysis page does not
+// pass — so `expectedBox` takes `page`, and the `departed` scenario draws the
+// box both ways.
 
 import { parseHTML } from 'linkedom';
 import { readFileSync } from 'node:fs';
@@ -76,6 +87,10 @@ const SCENARIOS = {
   demo: {
     label: '(g) the sample league: the box for the stand-in team',
     prefs: { 'waivers.source': 'demo', 'waivers.position': 'RB' }, conn: null,
+  },
+  departed: {
+    label: '(h) a man who started for you and has since left: no row, no mark, nobody else’s mark moved',
+    prefs: { ...LIVE, 'waivers.position': 'WR' }, conn: CONN, env: { START_DEPARTED: '1' },
   },
 };
 
@@ -192,10 +207,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** What the page has on screen for the box, read off the document. */
 function snap(d) {
-  const panel = d.getElementById('startPanel');
+  const panel = d.getElementById('startBox');
   const table = d.getElementById('startersTable');
   const rows = table ? [...table.querySelectorAll('tbody tr')] : [];
   return {
+    depth: rows.map((tr) => txt(tr.children[0])),
+    avg: rows.map((tr) => txt(tr.children[4])),
+    gone: rows.filter((tr) => /\bgone\b/.test(tr.getAttribute('class') || '')).length,
+    headRows: table ? table.querySelectorAll('thead tr').length : 0,
     exists: Boolean(panel && table),
     shown: Boolean(panel && !panel.hasAttribute('hidden')),
     title: txt(d.getElementById('startersTitle')),
@@ -217,8 +236,11 @@ function snap(d) {
  * `weeks` are the columns; `pos` the filter; `valueBase` the lines when the
  * page is on Value. Returned as rows of outerHTML read back through the same
  * parser the page's went through, so the two can be compared as strings.
+ *
+ * `page` true hands the module the two options the Players page passes;
+ * false is the Analysis page's call — neither option.
  */
-async function expectedBox(d, { weeks, pos, valueBase = null, history = 'actual' }) {
+async function expectedBox(d, { weeks, pos, valueBase = null, history = 'actual', page = true }) {
   const season = await import('./start-stub-season.mjs');
   const shared = await import(pathToFileURL(path.join(REPO, 'js/who-to-start.js')).href);
   const value = await import(pathToFileURL(path.join(REPO, 'js/value.js')).href);
@@ -244,15 +266,28 @@ async function expectedBox(d, { weeks, pos, valueBase = null, history = 'actual'
     historyMode: () => history,
     sourceKey: () => `check:${pos}:${weeks.join(',')}:${valueBase ? 'v' : 'p'}:${history}`,
     glanceFor: () => null,
+    ...(page ? { currentOnly: true, historyBand: false } : {}),
   });
   const team = state.data.teams.find((t) => t.id === ME);
   const data = shared.startersData(team);
   const scratch = d.createElement('table');
   scratch.innerHTML = `<thead>${shared.startersHeadHtml(data)}</thead><tbody>${shared.startersBodyHtml(team, data)}</tbody>`;
+  const trs = [...scratch.querySelectorAll('tbody tr')];
   return {
-    rows: [...scratch.querySelectorAll('tbody tr')].map((tr) => tr.outerHTML),
+    rows: trs.map((tr) => tr.outerHTML),
     weeks: [...scratch.querySelectorAll('thead th[data-wkh]')].map((th) => Number(th.getAttribute('data-wkh'))),
     count: data.rows.length,
+    headRows: scratch.querySelectorAll('thead tr').length,
+    bandSelect: scratch.querySelectorAll('thead select[data-history]').length,
+    // The men no longer held: name, depth tag, the weeks marked on the row.
+    gone: trs.filter((tr) => /\bgone\b/.test(tr.getAttribute('class') || '')).map((tr) => ({
+      name: txt(tr.querySelector('td.name')),
+      depth: txt(tr.children[0]),
+      marked: [...tr.children].slice(6)
+        .map((td, i) => (/\bst\b/.test(td.getAttribute('class') || '') ? weeks[i] : null))
+        .filter((w) => w !== null),
+      html: tr.outerHTML,
+    })),
   };
 }
 
@@ -282,11 +317,67 @@ async function check(scenario, boot) {
   const espn = await import('./wv-stub-espn.mjs');
   const asked = () => JSON.stringify({ rosters: season.calls.weeks, one: season.calls.week, wire: espn.calls.weeks });
 
+  // On a busy machine the wire's played weeks are still landing when the boot
+  // wait ends; "the reads at boot" are the reads once they have stopped.
+  for (let was = asked(), still = 0, n = 0; still < 3 && n < 60; n++) {
+    await sleep(250);
+    const now = asked();
+    still = now === was ? still + 1 : 0;
+    was = now;
+  }
+
   // Read everything the page shows BEFORE the shared module is pointed at the
   // league built here: it is one module, and the page's box is drawn from it.
   const first = snap(d);
   const askedAtBoot = asked();
   const seen = {};
+
+  // WHERE IT IS, read off the document in order.
+  const order = [...d.querySelectorAll('*')];
+  const at = (el) => (el ? order.indexOf(el) : -1);
+  const box = d.getElementById('startBox');
+  const wire = d.getElementById('waiverTable');
+  const pickEl = () => d.querySelector('#startBox select[data-history]');
+  const place = {
+    box: Boolean(box),
+    samePanel: Boolean(box && wire && box.closest('section.panel') &&
+      box.closest('section.panel') === wire.closest('section.panel')),
+    ownPanel: Boolean(box && /\bpanel\b/.test(box.getAttribute('class') || '')),
+    nextHoldsWire: Boolean(box && box.nextElementSibling &&
+      box.nextElementSibling.children.length === 1 && box.nextElementSibling.firstElementChild === wire),
+    notBefore: ['posFilter', 'spanFilter', 'showToggle', 'waiverStats', 'waiverStatus', 'waiverLegend']
+      .filter((id) => !(at(d.getElementById(id)) > -1 && at(d.getElementById(id)) < at(box))),
+    pick: box ? box.querySelectorAll('select[data-history]').length : 0,
+    pickInTable: d.querySelectorAll('#startersTable select[data-history]').length,
+    pickBesideTitle: Boolean(pickEl() && d.getElementById('startersTitle') &&
+      pickEl().parentNode.parentNode === d.getElementById('startersTitle').parentNode),
+  };
+
+  if (scenario === 'demo') {
+    // The sample league's receivers: one of the men who started for the
+    // stand-in team (Cassius Marchetti) is no longer on it.
+    click('#posFilter button[data-pos="WR"]');
+    seen.wr = snap(d);
+    click('#posFilter button[data-pos="RB"]');
+  }
+  if (scenario === 'departed') {
+    seen.pickShown = Boolean(pickEl() && !pickEl().closest('[hidden]'));
+    click('#posFilter button[data-pos="FLEX"]');
+    seen.flex = snap(d);
+    click('#posFilter button[data-pos="RB"]');
+    seen.rb = snap(d);
+    click('#posFilter button[data-pos="WR"]');
+    seen.back = snap(d);
+    if (pickEl()) {
+      pickEl().value = 'proj';
+      pickEl().dispatchEvent(new w.Event('change', { bubbles: true }));
+      seen.proj = snap(d);
+      seen.projPicked = pickEl() ? pickEl().value : null;
+      pickEl().value = 'actual';
+      pickEl().dispatchEvent(new w.Event('change', { bubbles: true }));
+      seen.actual = snap(d);
+    }
+  }
 
   if (scenario === 'all') {
     click('#posFilter button[data-pos="WR"]');
@@ -329,12 +420,15 @@ async function check(scenario, boot) {
   c.ok('no console errors', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
   c.ok('no unhandled rejections', boot.rejections.length === 0, boot.rejections.slice(0, 2).join(' | '));
   c.ok('no unexpected network calls', boot.fetchCalls.length === 0, boot.fetchCalls.slice(0, 2).join(' | '));
-  c.ok('the box is in the page, directly above the Available players panel', first.exists &&
-    (() => {
-      const panel = d.getElementById('startPanel');
-      const next = panel.nextElementSibling;
-      return next && next.contains(d.getElementById('waiverTable'));
-    })(), 'not there, or not just above');
+  c.ok('THE BOX IS INSIDE THE AVAILABLE PLAYERS PANEL, and is no panel of its own',
+    first.exists && place.samePanel && !place.ownPanel, JSON.stringify(place));
+  c.ok('IMMEDIATELY ABOVE THE LIST: its next element is the Available table’s own wrapper',
+    place.nextHoldsWire, JSON.stringify(place));
+  c.ok('the filters, the tiles, the status and the legend all come before it',
+    place.box && place.notBefore.length === 0, `not before the box: ${place.notBefore.join(', ')}`);
+  c.ok('Actual | Proj is ONE select, on the heading line and not a row of the table',
+    place.pick === 1 && place.pickInTable === 0 && place.pickBesideTitle, JSON.stringify(place));
+  c.ok('so the box’s header is a single row', first.headCells === 0 || first.headRows === 1, `${first.headRows} rows`);
 
   const near3 = [...PLAYED, 8, 9, 10];
 
@@ -487,6 +581,11 @@ async function check(scenario, boot) {
     c.ok('its weeks are the Available table’s', first.weeks.length > 3 && first.weeks.join(',') === wireWeeks.join(','),
       `box ${first.weeks.join(',')} wire ${wireWeeks.join(',')}`);
     c.ok('somebody is marked as a start', first.cells.some((cells) => cells.some((x) => /\bst\b/.test(x.cls))), 'no marks');
+    c.ok('nobody in it is a man the team no longer holds', first.gone === 0 && first.depth.every((x) => x !== '—'),
+      `${first.gone} departed rows; depth ${first.depth.join(',')}`);
+    c.ok('nor at WR, where the sample league has a starter who has since left',
+      seen.wr.names.length >= 3 && seen.wr.gone === 0 && seen.wr.depth.every((x) => /^WR\d$/.test(x)),
+      `${seen.wr.gone} departed rows; ${JSON.stringify(seen.wr.names)} ${seen.wr.depth.join(',')}`);
     const team = txt(d.querySelector('#teamSelect option[selected]'));
     const mine = [...d.querySelectorAll('#takenTable tbody tr')]
       .filter((tr) => txt(tr).includes(team)).map((tr) => txt(tr.querySelector('td.name')));
@@ -495,6 +594,96 @@ async function check(scenario, boot) {
         .filter((tr) => !/\bgone\b/.test(tr.getAttribute('class') || ''))
         .every((tr) => mine.some((n) => n.includes(txt(tr.querySelector('td.name'))))),
       `${team}: ${JSON.stringify(first.names)} v ${JSON.stringify(mine.slice(0, 20))}`);
+  }
+
+  // ---- (h) a man who started for you and has since left -----------------
+  if (scenario === 'departed') {
+    const HIM = season.playerName(ME, season.DEPARTED_INDEX);
+    const himId = ME * 100 + season.DEPARTED_INDEX;
+    const mineIn = async (wk) => (await season.fetchWeekRosters(wk)).teams.find((t) => t.id === ME).players;
+    const wk2 = await mineIn(2);
+    const now = await mineIn(NOW);
+
+    // The fixture, from the stub's raw squads.
+    const was = wk2.find((p) => p.playerId === himId);
+    c.ok('THE FIXTURE: he STARTED for you in a played week, at WR',
+      season.DEPARTED && was && was.started === true && was.lineupSlotId === 4 && was.position === 'WR' &&
+      PLAYED.includes(2), JSON.stringify(was));
+    c.ok('and he is not on your roster now', !now.some((p) => p.playerId === himId) && now.length === 15,
+      `${now.length} men`);
+
+    // The Analysis page's call — neither option — on the same league.
+    const an = await expectedBox(d, { weeks: near3, pos: 'WR', page: false });
+    const anHim = an.gone.find((r) => r.name === HIM);
+    c.ok('ANALYSIS IS UNCHANGED: without the option he keeps his row, with no depth tag',
+      an.count === 6 && an.gone.length === 1 && Boolean(anHim) && anHim.depth === '—',
+      `${an.count} rows; ${JSON.stringify(an.gone.map((r) => [r.name, r.depth]))}`);
+    c.ok('his three starts are marked on it there',
+      Boolean(anHim) && anHim.marked.join(',') === season.DEPARTED_WEEKS.join(','), anHim ? anHim.marked.join(',') : 'no row');
+    c.ok('and its header keeps the "Actual history" band row with the select in it',
+      an.headRows === 2 && an.bandSelect === 1, `${an.headRows} rows, ${an.bandSelect} selects`);
+
+    // The Players page.
+    const want = await expectedBox(d, { weeks: near3, pos: 'WR' });
+    c.ok('ONLY CURRENT PLAYERS: he has no row here', first.shown && !first.names.includes(HIM), JSON.stringify(first.names));
+    const mine = now.filter((p) => p.position === 'WR').map((p) => p.name);
+    c.ok('the rows are exactly the receivers on your roster now',
+      mine.length === 5 && first.names.length === 5 && mine.every((n) => first.names.includes(n)),
+      `${JSON.stringify(first.names)} want ${JSON.stringify(mine)}`);
+    c.ok('no row is a departed man’s', first.gone === 0, `${first.gone}`);
+    c.ok('every row is the shared renderer’s with the option, cell for cell',
+      sameRows(first.rows, want.rows), firstDiff(first.rows, want.rows));
+    const kept = an.rows.filter((html) => !an.gone.some((g) => g.html === html));
+    c.ok('THE REMAINING MEN’S ROWS ARE WHAT THEY WERE: the Analysis rows with his taken out, cell for cell',
+      kept.length === 5 && sameRows(first.rows, kept), firstDiff(first.rows, kept));
+
+    const row = (i) => first.names.indexOf(season.playerName(ME, i));
+    const cell = (i, week) => (first.cells[row(i)] || [])[near3.indexOf(week)] || { cls: 'no cell' };
+    const marked = (week) => first.names.filter((n, r) => /\bst\b/.test(first.cells[r][near3.indexOf(week)].cls));
+    for (const wk of season.DEPARTED_WEEKS) {
+      c.ok(`week ${wk}: his start has NO mark on any row — two receivers marked where three started`,
+        marked(wk).length === 2 && marked(wk).includes(season.playerName(ME, 3)) &&
+        marked(wk).includes(season.playerName(ME, 4)), JSON.stringify(marked(wk)));
+      c.ok(`week ${wk}: NOT SOLVED AGAIN WITHOUT HIM — Player 06, who would then take the flex, is unmarked`,
+        !/\bst\b/.test(cell(6, wk).cls), cell(6, wk).cls);
+      c.ok(`week ${wk}: Player 04 keeps the flex mark he had with him in the lineup`,
+        /\bst\b/.test(cell(4, wk).cls) && /\bfx\b/.test(cell(4, wk).cls), cell(4, wk).cls);
+    }
+    c.ok('week 4, after he left: three receivers marked, Player 06 in the flex',
+      marked(4).length === 3 && /\bfx\b/.test(cell(6, 4).cls), JSON.stringify(marked(4)));
+
+    c.ok('STARTS is the marked cells on the row shown',
+      first.cells.every((cells, i) => cells.filter((x) => /\bst\b/.test(x.cls)).length === Number(first.starts[i])),
+      first.starts.join(','));
+    c.ok('so Player 06’s is every week shown but those three',
+      Number(first.starts[row(6)]) === near3.length - season.DEPARTED_WEEKS.length, `${first.starts[row(6)]} of ${near3.length}`);
+    const byAvg = first.names.map((n, i) => ({ n, avg: Number(first.avg[i]), depth: first.depth[i] }))
+      .sort((a, b) => b.avg - a.avg);
+    c.ok('DEPTH runs WR1–WR5 down the Avg column of the rows shown: no gap, no dash',
+      byAvg.map((r) => r.depth).join(',') === 'WR1,WR2,WR3,WR4,WR5', JSON.stringify(byAvg));
+    c.ok('AVG is the mean of the numbers on the row shown',
+      first.cells.length === 5 && first.cells.every((cells, i) => {
+        const xs = cells.filter((x) => x.v !== null && !/\bbye\b/.test(x.cls)).map((x) => Number(x.v));
+        return xs.length > 0 &&
+          Math.abs(Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 - Number(first.avg[i])) < 0.051;
+      }), first.avg.join(','));
+
+    // The filter moves; he stays out.
+    c.ok('FLEX: every RB, WR and TE you hold NOW, and not him',
+      seen.flex.names.length === 11 && !seen.flex.names.includes(HIM) && seen.flex.gone === 0,
+      JSON.stringify(seen.flex.names));
+    c.ok('RB: your four backs', seen.rb.names.length === 4 && seen.rb.gone === 0, JSON.stringify(seen.rb.names));
+    c.ok('back on WR: the same five rows as at first', sameRows(seen.back.rows, first.rows), firstDiff(seen.back.rows, first.rows));
+
+    // The select beside the heading still does its job.
+    const proj = await expectedBox(d, { weeks: near3, pos: 'WR', history: 'proj' });
+    c.ok('the heading’s select is shown while there are played weeks', seen.pickShown, 'hidden or missing');
+    c.ok('picking Proj redraws the played weeks as projections, still without him',
+      Boolean(seen.proj) && seen.projPicked === 'proj' && sameRows(seen.proj.rows, proj.rows) &&
+      !seen.proj.names.includes(HIM) && !sameRows(seen.proj.rows, first.rows),
+      seen.proj ? `${seen.projPicked} ${firstDiff(seen.proj.rows, proj.rows)}` : 'no select');
+    c.ok('and Actual brings the first rows back', Boolean(seen.actual) && sameRows(seen.actual.rows, first.rows),
+      seen.actual ? firstDiff(seen.actual.rows, first.rows) : 'no select');
   }
 
   return c.out;

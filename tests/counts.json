@@ -120,8 +120,8 @@
       "scenarios": 8
     },
     "wv-start-check.mjs": {
-      "assertions": 84,
-      "scenarios": 7
+      "assertions": 152,
+      "scenarios": 8
     },
     "taken-check.mjs": {
       "assertions": 444,

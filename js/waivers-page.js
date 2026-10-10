@@ -2949,8 +2949,20 @@ function renderJump(weeks) {
 // air is a blank cell until it lands. On the phone's synced copy that is zero
 // ESPN requests, as for the rest of the page.
 //
-// ABSENT, NOT EMPTY, with "All" positions or nobody set as you: the panel is
+// ABSENT, NOT EMPTY, with "All" positions or nobody set as you: the box is
 // `hidden` and its table is blank, so the page is what it was.
+//
+// WHERE, AND WHO (Tim, later on 2026-10-09: "move that who to start box … to
+// right above the list of available players so you don't have to scroll to
+// compare. Also remove any players on the who to start list that aren't
+// currently on your team. Just don't mark the past weeks with a green line if
+// a player who isn't currently on the team started"). It is `#startBox`,
+// inside the Available panel and directly on top of `#waiverTable`. Its rows
+// are the men on your roster now (`currentOnly`); the marks are still each
+// week's best lineup over that week's real squad, so a week a departed man
+// started in shows one mark fewer and nobody else's mark, Starts, Avg or depth
+// tag changes — each is counted on the man's own row, and depth already ranked
+// only the men held now.
 
 /** Bumped whenever a roster week lands or the league changes: the memo key. */
 let startRev = 0;
@@ -3014,6 +3026,12 @@ starters.configure({
   historyMode: startHistory,
   sourceKey: () => `players:${state.token}:${startRev}`,
   glanceFor: (p) => glanceFor(p, false),
+  // This page's two differences from the Analysis box (Tim, 2026-10-09):
+  // only the men on your roster NOW — a man since dropped or traded has no
+  // row, and the week he started in has no mark for it (nobody else's mark
+  // moves) — and no band row in the table: Actual | Proj is on the heading.
+  currentOnly: true,
+  historyBand: false,
 });
 
 /** Your squad in the anchor week, or null when the box has nobody to be about. */
@@ -3026,7 +3044,7 @@ function startTeam() {
 }
 
 function renderStartBox() {
-  const panel = $('startPanel');
+  const panel = $('startBox');
   const table = $('startersTable');
   if (!panel || !table) return;
   const team = startTeam();
@@ -3038,6 +3056,15 @@ function renderStartBox() {
     return;
   }
   $('startersTitle').textContent = `Who to start · ${d.label}`;
+  // The select the Analysis box carries in its band row, on the heading line
+  // here: shown while the box has a played week to be about.
+  const hist = $('startHist');
+  if (hist) {
+    const proj = d.mode === 'proj';
+    hist.hidden = !d.weeks.some((w) => d.hist.has(w));
+    hist.title = starters.playerHistorySays(proj);
+    hist.querySelector('select').value = proj ? 'proj' : 'actual';
+  }
   table.querySelector('thead').innerHTML = starters.startersHeadHtml(d);
   table.querySelector('tbody').innerHTML = starters.startersBodyHtml(team, d);
   panel.hidden = false;
@@ -4696,12 +4723,12 @@ wirePops($('takenTable'), { selector: PREVIEWS, card: previewFor });
 enableSort($('takenTable'), { defaultIndex: 4 });
 // "Who to start" opens as it does on Analysis: by depth, starter first. Its
 // Starts figures and week headings open the same cards; Actual | Proj is the
-// select in its header, kept for this page.
+// select on its heading line, kept for this page.
 if ($('startersTable')) {
   enableSort($('startersTable'), { defaultIndex: 0, defaultAsc: true });
   wirePops($('startersTable'));
   starters.wireWeekHeads($('startersTable'));
-  $('startersTable').addEventListener('change', (e) => {
+  $('startBox').addEventListener('change', (e) => {
     const pick = e.target.closest ? e.target.closest('select[data-history]') : null;
     if (!pick) return;
     prefs.set('startHistory', pick.value === 'proj' ? 'proj' : null);
