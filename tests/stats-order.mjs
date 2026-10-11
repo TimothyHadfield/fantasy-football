@@ -455,15 +455,33 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     assert(grid, `no "${metric}" button on the week-by-week grid`);
     if (!grid) continue;
     let wrong = '';
+    // OPP SCORING PRINTS THE OPPONENT'S SCORE and is coloured by the luck part
+    // behind it, from zero (Tim, 2026-10-11): ▲ only on a lucky week (an
+    // opponent under the league's season average), ▼ only on an unlucky one.
+    const opp = metric === 'luckOpp';
+    let ups = 0;
+    let downs = 0;
+    let miscoloured = '';
     for (const t of st.teams) {
       const cells = grid.get(t.name) || [];
       t.weekly.forEach((r, i) => {
-        const want = f(r);
+        const want = opp ? r.oppActual : f(r);
         if (want === null) return;
-        if (num(cells[i]?.textContent) !== whole(want) && !wrong) {
-          wrong = `${t.name} wk ${r.week}: "${cells[i]?.textContent}" for ${want.toFixed(2)}`;
+        const said = cells[i]?.textContent || '';
+        if (num(said) !== whole(want) && !wrong) {
+          wrong = `${t.name} wk ${r.week}: "${said}" for ${want.toFixed(2)}`;
+        }
+        if (opp) {
+          if (/[-+−]/.test(said) && !wrong) wrong = `${t.name} wk ${r.week}: "${said}" still carries a sign`;
+          const luck = f(r);
+          if (said.includes('▲')) { ups += 1; if (!(luck > 0)) miscoloured = `${t.name} wk ${r.week}: ▲ on ${luck.toFixed(1)}`; }
+          if (said.includes('▼')) { downs += 1; if (!(luck < 0)) miscoloured = `${t.name} wk ${r.week}: ▼ on ${luck.toFixed(1)}`; }
         }
       });
+    }
+    if (opp) {
+      assert(!miscoloured, `Opp scoring is not coloured from zero — ${miscoloured}`);
+      assert(ups > 0 && downs > 0, `Opp scoring shows ${ups} ▲ and ${downs} ▼, so the colour check proves nothing`);
     }
     assert(!wrong, `${metric} grid is not the worked figure — ${wrong}`);
   }

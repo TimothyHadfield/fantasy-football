@@ -2958,6 +2958,25 @@ function renderWeeklyTable() {
   // changed precision halfway across.
   const cell = (v) => (useSign ? signed(v, 0) : fmt(v, 0));
 
+  // OPP SCORING PRINTS THE OPPONENT'S OWN SCORE (Tim, 2026-10-11: "instead of
+  // displaying opp scoring as the avg is 0 and unlucky is -, lucky is +, just
+  // put the numbers as the actual numbers the opp scored (134, 114, etc.), and
+  // base the color off of the +- from 0"). The cell reads 134; its COLOUR is
+  // still the luck part behind it (the league's season average minus that
+  // score), measured from zero rather than against the other nine that week —
+  // green for an opponent under the average, red for one over. The cell's card
+  // keeps the signed figure.
+  const oppView = metric === 'luckOpp';
+  const shownOf = (row) => (oppView ? row.oppActual : valueOf(row));
+  const text = (shown) => (oppView ? fmt(shown, 0) : cell(shown));
+  // A scale whose middle is zero: the values and their mirror images have a
+  // mean of exactly 0 and the spread of the values about 0. One for the whole
+  // grid — "from zero" is the same question in every week.
+  const zeroScale = (vals) => {
+    const xs = vals.filter((v) => typeof v === 'number');
+    return heatScale([...xs, ...xs.map((v) => -v)]);
+  };
+
   const table = $('weeklyTable');
   const tbody = table.querySelector('tbody');
 
@@ -3021,6 +3040,17 @@ function renderWeeklyTable() {
   // The Avg column is its own group: ten season averages, which are the same
   // kind of number as each other and NOT the same kind as a single week.
   const avgScale = showAvg ? heatScale(s.teams.map(teamAvg)) : null;
+  // What the cells are COLOURED by. Under Opp scoring that is the distance
+  // from zero; the per-week scales above still tell the card where a cell
+  // ranks.
+  const oppZero = oppView
+    ? zeroScale(s.teams.flatMap((t) => t.weekly.filter((x) => x.week !== part).map(valueOf)))
+    : null;
+  const paintWeek = (w) => (oppView ? (w === part ? null : oppZero) : weekScales.get(w));
+  const paintAvg = oppView && showAvg ? zeroScale(s.teams.map(teamAvg)) : avgScale;
+  const shownAvg = (t) => (oppView
+    ? meanOf(t.weekly.map((r) => r.oppActual).filter((v) => typeof v === 'number'))
+    : teamAvg(t));
 
   grid = { metric, useSign, valueOf, partsOf, capped, countedOf, teamAvg, weekScales, avgScale };
   wirePops(table, { selector: 'td[data-wk]', card: (el) => gridSpec(el.dataset.team, el.dataset.wk) });
@@ -3038,17 +3068,18 @@ function renderWeeklyTable() {
         if (!row) return w === part ? '<td></td>' : `<td>${dash}</td>`;
         const v = valueOf(row);
         if (v === null) return `<td>${dash}</td>`;
-        return withParts(heatCell(v, weekScales.get(w), {
-          text: cell(v),
-          extra: `data-wk="${w}" data-team="${esc(t.id)}" tabindex="0"`,
+        return withParts(heatCell(v, paintWeek(w), {
+          text: text(shownOf(row)),
+          // Sorted by the number printed, not the luck that colours it.
+          extra: `data-wk="${w}" data-team="${esc(t.id)}" tabindex="0"${oppView ? ` data-v="${shownOf(row)}"` : ''}`,
         }), row);
       });
       const avg = teamAvg(t);
       return `<tr class="${state.highlight === t.id ? 'me' : ''}">
         <td class="name" data-team="${esc(t.id)}" tabindex="0">${esc(t.name)}</td>${cells.join('')}
-        ${showAvg ? untitled(heatCell(avg, avgScale, {
-    text: cell(avg),
-    extra: `data-wkavg data-team="${esc(t.id)}" tabindex="0"`,
+        ${showAvg ? untitled(heatCell(avg, paintAvg, {
+    text: text(shownAvg(t)),
+    extra: `data-wkavg data-team="${esc(t.id)}" tabindex="0"${oppView && isNum(shownAvg(t)) ? ` data-v="${shownAvg(t)}"` : ''}`,
   })) : ''}
       </tr>`;
     })
@@ -3061,7 +3092,7 @@ function renderWeeklyTable() {
     if (key) {
       const weekly = s.weekNumbers.map((w) => (key === 'own'
         ? { week: w, own: meanOf(s.teams.map((t) => t.weekly.find((x) => x.week === w))
-          .map((row) => (row ? valueOf(row) : null)).filter((v) => typeof v === 'number')) }
+          .map((row) => (row ? shownOf(row) : null)).filter((v) => typeof v === 'number')) }
         : s.weeklyLeagueAverages.find((a) => a.week === w)));
       const vals = weekly.filter((a) => !a || a.week !== part)
         .map((a) => (a ? a[key] : null)).filter((v) => typeof v === 'number');
@@ -3070,8 +3101,8 @@ function renderWeeklyTable() {
         // `league-row` is the heavier rule that sets it off from the teams (css/app.css).
         `<tr class="league-row"><td class="name">League</td>` +
         weekly.map((a) => (a && a.week === part ? '<td></td>'
-          : `<td${a ? ` data-week="${a.week}" tabindex="0"` : ''}>${a && typeof a[key] === 'number' ? cell(a[key]) : dash}</td>`)).join('') +
-        (showAvg ? `<td>${cell(avg)}</td>` : '') +
+          : `<td${a ? ` data-week="${a.week}" tabindex="0"` : ''}>${a && typeof a[key] === 'number' ? text(a[key]) : dash}</td>`)).join('') +
+        (showAvg ? `<td>${text(avg)}</td>` : '') +
         '</tr>';
     } else {
       // Every margin is cancelled by its opposite, so the league's average
@@ -3082,12 +3113,15 @@ function renderWeeklyTable() {
 
   // The visible key, and it says the one thing a reader would otherwise get
   // wrong: the colour runs DOWN a week, not across a team's season.
-  const anyScale = [...weekScales.values()].some(Boolean);
+  const anyScale = oppView ? Boolean(oppZero) : [...weekScales.values()].some(Boolean);
   // The four steps and the tap hint moved into `weeklyNote` with the rest of
   // the method (`describeHeatPerColumn` there says both). What a reader gets
   // wrong without this line is the DIRECTION of the comparison, and that has
   // to stay in view.
-  $('weeklyKey').innerHTML = (anyScale
+  $('weeklyKey').innerHTML = (anyScale && oppView
+    ? '<strong>What each opponent scored.</strong> Green: under the league&rsquo;s season average ' +
+      '(lucky). Red: over it. Ends carry ▲▼ and bold.'
+    : anyScale
     ? '<strong>Colour is down each week, not across the season</strong>: each cell against ' +
       'what the other nine did that week, green above and red below. Ends carry ▲▼ and bold.'
     : '<strong>Nothing is coloured yet</strong> — a week needs at least two teams with a ' +
