@@ -71,11 +71,11 @@
       "assertions": 1491
     },
     "test-cloud.mjs": {
-      "assertions": 215
+      "assertions": 229
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 291,
-      "scenarios": 25
+      "assertions": 329,
+      "scenarios": 26
     },
     "test-trade-odds.mjs": {
       "assertions": 142
@@ -165,8 +165,8 @@
       "assertions": 74
     },
     "test-past-season.mjs": {
-      "assertions": 49,
-      "scenarios": 7
+      "assertions": 84,
+      "scenarios": 10
     },
     "test-accept-by.mjs": {
       "assertions": 24
@@ -281,6 +281,9 @@
     "bell-check.mjs": {
       "assertions": 145,
       "scenarios": 11
+    },
+    "test-pending.mjs": {
+      "assertions": 95
     }
   }
 }

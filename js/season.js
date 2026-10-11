@@ -35,6 +35,9 @@ import { slotCountsFromLineups } from './projection.js';
 // A player's Value: the arithmetic is pure and lives there; this file reads what
 // it needs and keeps the frozen lines. See "PLAYER VALUE" below.
 import * as value from './value.js';
+// The trade offers waiting on ESPN: the decoding is pure and lives there; this
+// file asks. See "THE TRADE OFFERS WAITING" below.
+import * as pending from './pending.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -2336,6 +2339,123 @@ async function valueBaseForSync({ schedule, rosters, wire, byes }) {
 }
 
 // ===========================================================================
+// THE TRADE OFFERS WAITING ON ESPN FOR YOUR TEAM
+// ===========================================================================
+//
+// Tim, 2026-10-11: "messages on any trade notifications you have".
+//
+// js/pending.js decodes ESPN's answer (and says how sure anybody is of its
+// shape: not very — it could not be measured). THIS is where it is asked for:
+//
+//   the computer   `espn.fetchPendingTransactions`, through the bridge — the
+//                  one route with a login, and ESPN tells only an owner. Read
+//                  without a login the answer has no offers in it, which is
+//                  `[]` here and not an error.
+//   the phone      `schedule.pendingTrades` in the synced copy, riding the
+//                  schedule object exactly as `valueBase` does: a document kind
+//                  of its own would be refused to every account but the owner's
+//                  (firebase/firestore.rules, the `kind in [...]` list), and
+//                  the schedule is a document every account may already write.
+//                  `{ teamId, at, offers }` — whose offers they are, when ESPN
+//                  was asked, and at most `pending.MAX_OFFERS` of them cut to
+//                  the contract's fields (`pending.cleanOffers`), about 150
+//                  bytes each beside a 13 KB schedule. Each offer read back
+//                  carries `asOf`, that time, so the page can say how old it is.
+//
+// NOT KEPT IN THIS BROWSER (js/store.js): an offer is answered, withdrawn or
+// lapses by the minute, and a stored one would be a notification about nothing.
+// Identical asks inside a minute share one read (js/espn.js `leagueRead`).
+//
+// WHOSE TEAM: the one chosen in the connection bar, read from where
+// js/connection.js saves it (`ff.connection`, then the older `ff.config`) —
+// that module imports this one, so it cannot be asked. A caller that knows the
+// team may pass it. With none chosen there is nobody to have offers.
+//
+// AN EARLIER SEASON, THE SAMPLE LEAGUE, NO TEAM, ANY FAILURE: `[]`.
+
+/** The team chosen for the connected league, or null. */
+function myTeamId(cfg, given) {
+  const asTeam = (v) => {
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  if (given !== undefined && given !== null) return asTeam(given);
+  try {
+    const s = globalThis.localStorage;
+    if (!s) return null;
+    for (const key of ['ff.connection', 'ff.config']) {
+      let saved = null;
+      try { saved = JSON.parse(s.getItem(key) || 'null'); } catch { saved = null; }
+      if (!saved || !saved.leagueId) continue;
+      // The slot holds ONE league. Another league's team is not this one's.
+      return String(saved.leagueId) === String(cfg.leagueId) ? asTeam(saved.teamId) : null;
+    }
+  } catch { /* storage refused: nobody chosen */ }
+  return null;
+}
+
+/**
+ * The trade offers waiting on ESPN that involve your team.
+ *
+ * `[{ id, withTeamId, get: [playerId], send: [playerId], proposedAt,
+ * expiresAt, fromMe }]` (js/pending.js `pendingTrades`): `get` the men coming
+ * to you, `send` the men leaving, `fromMe` true when you proposed it. Read from
+ * the synced copy, each also carries `asOf` — when the computer asked ESPN
+ * (epoch ms) — because on a phone an offer is as old as the last sync.
+ *
+ * NEVER THROWS AND NEVER REJECTS. `[]` is "none, or could not be read": the
+ * sample league, an earlier season, no team chosen, no login behind the read,
+ * a copy synced for another team, ESPN or the cloud refusing.
+ *
+ * @param {Object} [opts]
+ * @param {number|string} [opts.teamId] your team, when the caller knows it;
+ *   otherwise the one saved by the connection bar
+ * @returns {Promise<Array>}
+ */
+export async function fetchPendingTrades(opts) {
+  try {
+    const cfg = storable();
+    if (!cfg || pastSeason()) return [];
+    const team = myTeamId(cfg, opts ? opts.teamId : undefined);
+    if (team === null) return [];
+
+    const down = await cloudDown();
+    if (down) {
+      const kept = down.schedule ? down.schedule.pendingTrades : null;
+      if (!kept || typeof kept !== 'object' || Number(kept.teamId) !== team) return [];
+      const at = Number(kept.at);
+      // The sync's own time (an ISO string) when the copy carries no time of its own.
+      const synced = typeof down.syncedAt === 'string' ? Date.parse(down.syncedAt) : NaN;
+      const asOf = Number.isFinite(at) && at > 0 ? at : (Number.isFinite(synced) && synced > 0 ? synced : null);
+      const now = Date.now();
+      return pending.cleanOffers(kept.offers)
+        .filter((o) => !pending.expired(o, now))
+        .map((o) => ({ ...o, asOf }));
+    }
+
+    return pending.pendingTrades(await espn.fetchPendingTransactions(), team, { now: Date.now() });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * What a sync sends of them, or null for nothing (no team chosen, an earlier
+ * season, none waiting, ESPN refusing): one read, through the bridge.
+ */
+async function pendingForSync() {
+  const cfg = storable();
+  if (!cfg || pastSeason()) return null;
+  const team = myTeamId(cfg);
+  if (team === null) return null;
+  const at = Date.now();
+  const offers = pending.cleanOffers(
+    pending.pendingTrades(await espn.fetchPendingTransactions(), team, { now: at }));
+  return offers.length ? { teamId: team, at, offers } : null;
+}
+
+// ===========================================================================
 // GATHERING WHAT GETS PUBLISHED
 // ===========================================================================
 
@@ -2504,6 +2624,20 @@ export async function buildCloudPayload({ onProgress } = {}) {
     const base = await valueBaseForSync({ schedule, rosters, wire, byes });
     if (base) payload.schedule = { ...schedule, valueBase: base };
   } catch { /* nothing of it goes up this time */ }
+
+  // THE TRADE OFFERS WAITING ride the schedule too, as `pendingTrades` (see
+  // "THE TRADE OFFERS WAITING" above). Absent, not empty, when there are none.
+  // NEVER LAST SYNC'S: a schedule that was itself read out of the synced copy
+  // (a sync made with no extension) still has the old ones on it, and an offer
+  // answered since must not go back up. So they are taken off first, always.
+  let waiting = null;
+  try {
+    waiting = await pendingForSync();
+  } catch { /* nothing of it goes up this time */ }
+  if (waiting || 'pendingTrades' in payload.schedule) {
+    const { pendingTrades: old, ...rest } = payload.schedule;
+    payload.schedule = waiting ? { ...rest, pendingTrades: waiting } : rest;
+  }
   return payload;
 }
 

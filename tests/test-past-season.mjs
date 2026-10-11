@@ -325,6 +325,158 @@ SCENARIOS['current-sync'] = async () => {
 };
 
 // =========================================================================
+// THE TRADE OFFERS WAITING (`season.fetchPendingTrades`): every way to `[]`
+// =========================================================================
+//
+// Tim, 2026-10-11: "messages on any trade notifications you have". The records
+// are the DOCUMENTED shape (js/pending.js lists the sources) — no real one
+// could be measured. I am team 1; the round trip through the synced copy is
+// tests/test-cloud-wiring.mjs `pending-sync`.
+
+const HOUR = 3600 * 1000;
+const leg = (playerId, fromTeamId, toTeamId) => ({ type: 'TRADE', playerId, fromTeamId, toTeamId });
+const offersPayload = () => ({
+  pendingTransactions: [
+    { id: 'offer-to-me', type: 'TRADE_PROPOSAL', status: 'PENDING', isPending: true, executionType: 'EXECUTE', teamId: 3,
+      proposedDate: Date.now() - HOUR, expirationDate: Date.now() + 48 * HOUR, items: [leg(301, 3, 1), leg(101, 1, 3)] },
+    { id: 'offer-by-me', type: 'TRADE_PROPOSAL', status: 'PENDING', isPending: true, executionType: 'EXECUTE', teamId: 1,
+      proposedDate: Date.now() - HOUR, expirationDate: Date.now() + 48 * HOUR, items: [leg(102, 1, 2), leg(201, 2, 1)] },
+    { id: 'offer-theirs', type: 'TRADE_PROPOSAL', status: 'PENDING', isPending: true, executionType: 'EXECUTE', teamId: 3,
+      proposedDate: Date.now() - HOUR, expirationDate: Date.now() + 48 * HOUR, items: [leg(302, 3, 4), leg(401, 4, 3)] },
+  ],
+});
+
+/**
+ * ESPN as `world` left it, plus an answer to `view=mPendingTransactions`.
+ * `mode.how`: 'offers' (a logged-in owner's answer), 'open' (the read without
+ * a login: no such key), 'refused' (HTTP 500), 'offline' (fetch itself throws).
+ */
+function answerPending(mode) {
+  const inner = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (!/mPendingTransactions/.test(u)) return inner(url);
+    asked.push(u);
+    if (mode.how === 'offline') throw new TypeError('Failed to fetch');
+    if (mode.how === 'refused') return { ok: false, status: 500, async json() { return {}; } };
+    const body = mode.how === 'open' ? { id: Number(LEAGUE_ID), scoringPeriodId: 4 } : offersPayload();
+    return { ok: true, status: 200, async json() { return body; } };
+  };
+  return asked;
+}
+const chooseTeam = (w, teamId, { leagueId = LEAGUE_ID, key = 'ff.connection' } = {}) =>
+  w.map.set(key, JSON.stringify({ leagueId, season: w.year, teamId }));
+/** Asked the way a page asks: awaited, and a rejection is a failure of its own. */
+async function waiting(w, opts) {
+  w.espn.clearReadCache();
+  try {
+    return await w.season.fetchPendingTrades(opts);
+  } catch (err) {
+    return `REJECTED: ${String(err && err.message)}`;
+  }
+}
+
+// ------------------------------------------------------------- pending-none
+SCENARIOS['pending-none'] = async () => {
+  const w = await world({ seasonOffset: 0, bracket: 'none' });
+  const mode = { how: 'offers' };
+  const asked = answerPending(mode);
+
+  // NOT VACUOUS FIRST: with a team chosen, this season, the offers come back.
+  chooseTeam(w, 1);
+  const got = await waiting(w);
+  ok('(this season, team chosen: my two offers are read — so every [] below is a rule)',
+    Array.isArray(got) && same(got.map((o) => o.id), ['offer-to-me', 'offer-by-me']), JSON.stringify(got));
+  eq(asked.length, 1, '(for one request)');
+  ok('(read live they carry no asOf: that is the synced copy\'s)', Array.isArray(got) && got.every((o) => !('asOf' in o)));
+  ok('(a second ask inside the minute shares that read)',
+    same((await w.season.fetchPendingTrades()).map((o) => o.id), ['offer-to-me', 'offer-by-me']) && asked.length === 1, String(asked.length));
+  ok('(the older ff.config key is read when it is the only one)', await (async () => {
+    w.map.delete('ff.connection');
+    chooseTeam(w, 1, { key: 'ff.config' });
+    const r = await waiting(w);
+    w.map.delete('ff.config');
+    return Array.isArray(r) && r.length === 2;
+  })());
+
+  // --- no team chosen ---------------------------------------------------------
+  let before = asked.length;
+  ok('no team chosen: []', same(await waiting(w), []));
+  eq(asked.length, before, 'and ESPN is not asked');
+  w.map.set('ff.connection', JSON.stringify({ leagueId: LEAGUE_ID, season: w.year, teamId: null }));
+  ok('a league saved with teamId null: []', same(await waiting(w), []));
+  eq(asked.length, before, 'still not asked');
+  ok('a team that is not a number: []', same(await waiting(w, { teamId: 'mine' }), []));
+  eq(asked.length, before, 'still not asked');
+
+  // --- the saved team belongs to another league -------------------------------
+  chooseTeam(w, 1, { leagueId: '999999' });
+  ok('the saved slot holds ANOTHER league\'s team: []', same(await waiting(w), []));
+  eq(asked.length, before, 'and ESPN is not asked');
+
+  // --- the read without a login ----------------------------------------------
+  chooseTeam(w, 1);
+  mode.how = 'open';
+  ok('the open read (ESPN sends no pendingTransactions key): []', same(await waiting(w), []));
+  eq(asked.length, before + 1, 'after asking once');
+
+  // --- any error ---------------------------------------------------------------
+  mode.how = 'refused';
+  ok('ESPN answers HTTP 500: [] — resolved, not rejected', same(await waiting(w), []));
+  mode.how = 'offline';
+  ok('the request itself fails: [] — resolved, not rejected', same(await waiting(w), []));
+  globalThis.localStorage.getItem = () => { throw new Error('storage refused'); };
+  mode.how = 'offers';
+  ok('storage that throws when read: [] (nobody is chosen)', same(await waiting(w), []));
+  ok('though a caller naming the team is still answered', (await waiting(w, { teamId: 1 })).length === 2);
+  globalThis.localStorage.getItem = (k) => (w.map.has(k) ? w.map.get(k) : null);
+
+  // --- the sample league, and nothing connected --------------------------------
+  before = asked.length;
+  w.espn.configure({ leagueId: 'demo', season: w.year });
+  ok('the sample league: []', same(await waiting(w), []));
+  ok('even named a team', same(await waiting(w, { teamId: 1 }), []));
+  w.espn.configure({ leagueId: '', season: w.year });
+  ok('nothing connected: []', same(await waiting(w, { teamId: 1 }), []));
+  eq(asked.length, before, 'and none of those asked ESPN');
+
+  // And back on the league, it still works: nothing above stuck.
+  w.espn.configure({ leagueId: LEAGUE_ID, season: w.year });
+  eq((await waiting(w)).length, 2, '(back on the league with the team chosen: two offers again)');
+};
+
+// ------------------------------------------------------------- pending-past
+//
+// An earlier season is finished: nobody has an offer waiting in it, and ESPN
+// would answer the view all the same (it is not a per-season question there).
+SCENARIOS['pending-past'] = async () => {
+  const w = await world({ seasonOffset: -1, bracket: 'none', withCloud: true });
+  const asked = answerPending({ how: 'offers' });
+  chooseTeam(w, 1);
+  ok('last season, team chosen, ESPN ready to answer: []', same(await waiting(w), []));
+  ok('named a team: still []', same(await waiting(w, { teamId: 1 }), []));
+  eq(asked.length, 0, 'and ESPN is not asked');
+  const payload = await w.season.buildCloudPayload();
+  ok('a sync of it carries no pendingTrades on the schedule', !!payload.schedule && !('pendingTrades' in payload.schedule),
+    JSON.stringify(payload.schedule && payload.schedule.pendingTrades));
+  eq(asked.length, 0, 'and reads none');
+};
+
+// ---------------------------------------------------------- pending-current
+SCENARIOS['pending-current'] = async () => {
+  const w = await world({ seasonOffset: 0, bracket: 'none', withCloud: true });
+  const asked = answerPending({ how: 'offers' });
+  chooseTeam(w, 1);
+  const payload = await w.season.buildCloudPayload();
+  const sent = payload.schedule.pendingTrades;
+  ok('this season: the same sync DOES carry them', !!sent && sent.teamId === 1 &&
+    same(sent.offers.map((o) => o.id), ['offer-to-me', 'offer-by-me']), JSON.stringify(sent));
+  eq(asked.length, 1, 'for one read');
+  ok('and Value\'s lines still ride beside them', !!payload.schedule.valueBase && !!payload.schedule.valueBase.lines.QB);
+};
+
+// =========================================================================
 // RUNNER (the shape of tests/test-cloud-wiring.mjs)
 // =========================================================================
 

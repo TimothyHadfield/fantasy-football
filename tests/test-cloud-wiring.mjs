@@ -1700,6 +1700,179 @@ SCENARIOS['value-laptop'] = async () => {
   eq(map.has(VALUE_KEY), false, 'and they are never kept');
 };
 
+// ------------------------------------------------------------ pending-sync
+//
+// The trade offers waiting (Tim, 2026-10-11: "messages on any trade
+// notifications you have"). The computer reads them off ESPN, the sync carries
+// them on the schedule — no document of their own — and the phone reads them
+// back with no request, each stamped with when ESPN was asked.
+//
+// The records are the DOCUMENTED shape (js/pending.js lists the sources); no
+// real one could be measured. I am team 1.
+
+const WAITING_KEY = 'ff.connection';
+const offerRecord = (id, teamId, legs, over = {}) => ({
+  id, type: 'TRADE_PROPOSAL', status: 'PENDING', isPending: true, executionType: 'EXECUTE', teamId,
+  memberId: '{00000000-0000-0000-0000-000000000000}', scoringPeriodId: 3,
+  proposedDate: Date.now() - 3600 * 1000, expirationDate: Date.now() + 2 * DAY, teamActions: {},
+  items: legs.map(([playerId, fromTeamId, toTeamId]) => ({ type: 'TRADE', playerId, fromTeamId, toTeamId })),
+  ...over,
+});
+
+/** ESPN as before, plus an answer to `view=mPendingTransactions`. Returns the pending reads made. */
+function answerPending(records) {
+  const inner = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (!/mPendingTransactions/.test(u)) return inner(url);
+    asked.push(u);
+    const body = records === null ? { id: Number(LEAGUE_ID) } : { pendingTransactions: records };
+    return { ok: true, status: 200, async json() { return body; } };
+  };
+  return asked;
+}
+
+SCENARIOS['pending-sync'] = async () => {
+  const map = installStorage();
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const fake = makeFake();
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  cloud.configure({ transport: fake });
+  const choose = (teamId) => map.set(WAITING_KEY, JSON.stringify({ leagueId: LEAGUE_ID, season: SEASON, teamId }));
+  const sync = async () => {
+    espn.clearReadCache();
+    const payload = await season.buildCloudPayload();
+    const res = await cloud.syncUp(LEAGUE_ID, SEASON, payload, {});
+    return { payload, res };
+  };
+  const inCloud = async () => {
+    const res = await cloud.readDown(LEAGUE_ID, SEASON, { shapes: ['schedule'] });
+    return res && res.ok && res.schedule ? res.schedule.pendingTrades : 'no schedule';
+  };
+  const RECORDS = [
+    offerRecord('offer-to-me', 3, [[301, 3, 1], [302, 3, 1], [101, 1, 3]]),
+    offerRecord('offer-by-me', 1, [[102, 1, 2], [201, 2, 1]]),
+    offerRecord('offer-theirs', 3, [[303, 3, 4], [401, 4, 3]]),
+    { id: 'a-claim', type: 'WAIVER', status: 'PENDING', teamId: 1, items: [{ type: 'ADD', playerId: 900, toTeamId: 1 }] },
+  ];
+
+  // --- nobody chosen: nothing is asked and nothing rides ----------------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  let asked = answerPending(RECORDS);
+  const none = await sync();
+  ok('a sync with no team chosen goes up', none.res.ok, none.res.reason);
+  eq(asked.length, 0, 'with no team chosen ESPN is not asked for offers at all');
+  ok('and the schedule carries no pendingTrades', !('pendingTrades' in none.payload.schedule));
+  const plainWrites = none.res.wrote;
+
+  // --- team 1 chosen: the sync reads them once and carries them ---------------
+  choose(1);
+  const before = Date.now();
+  const first = await sync();
+  const after = Date.now();
+  ok('the sync went up', first.res.ok, first.res.reason);
+  eq(asked.length, 1, 'one read of the offers a sync');
+  const sent = first.payload.schedule.pendingTrades;
+  ok('the sync\'s schedule carries pendingTrades', !!sent, JSON.stringify(Object.keys(first.payload.schedule)));
+  eq(sent && sent.teamId, 1, 'saying whose they are');
+  ok('and when ESPN was asked', !!sent && sent.at >= before && sent.at <= after, String(sent && sent.at));
+  ok('my two offers, and neither the other teams\' nor the waiver claim',
+    same((sent ? sent.offers : []).map((o) => o.id), ['offer-to-me', 'offer-by-me']), JSON.stringify(sent && sent.offers));
+  ok('cut to the contract\'s fields', !!sent && sent.offers.every((o) =>
+    same(Object.keys(o), ['id', 'withTeamId', 'get', 'send', 'proposedAt', 'expiresAt', 'fromMe'])), JSON.stringify(sent && sent.offers[0]));
+  ok('the schedule beside them is what it was', same(first.payload.schedule.games, none.payload.schedule.games));
+  eq(first.res.wrote, plainWrites, 'in the same number of documents');
+  ok('no document of their own: they are in the schedule document',
+    same(await inCloud(), sent) && ![...fake.docs.keys()].some((p) => /pending|offer/i.test(p)), [...fake.docs.keys()].join(' '));
+
+  // --- the phone: nothing local but the team, and ESPN must not be asked ------
+  season.forgetCloud();
+  espn.clearReadCache();
+  const phoneCalls = installFetch(LIVE.scale, LIVE.name);
+  asked = answerPending([offerRecord('a-live-one', 2, [[202, 2, 1]])]);
+  const onPhone = await season.fetchPendingTrades();
+  eq(phoneCalls.length + asked.length, 0, 'fetchPendingTrades on the synced copy made ZERO ESPN requests');
+  ok('the phone is told the two offers', same(onPhone.map((o) => o.id), ['offer-to-me', 'offer-by-me']), JSON.stringify(onPhone));
+  ok('each with asOf — when the computer asked ESPN', onPhone.length === 2 && onPhone.every((o) => o.asOf === sent.at),
+    JSON.stringify(onPhone.map((o) => o.asOf)));
+  const { asOf, ...bare } = onPhone[0] || {};
+  ok('and otherwise exactly what went up', same(bare, sent.offers[0]), JSON.stringify(bare));
+  ok('to me: the men coming, the man leaving, not from me',
+    same([onPhone[0].withTeamId, onPhone[0].get, onPhone[0].send, onPhone[0].fromMe], [3, [301, 302], [101], false]));
+  ok('by me: fromMe', same([onPhone[1].withTeamId, onPhone[1].get, onPhone[1].send, onPhone[1].fromMe], [2, [201], [102], true]));
+  ok('a caller may name the team itself', same((await season.fetchPendingTrades({ teamId: '1' })).map((o) => o.id), ['offer-to-me', 'offer-by-me']));
+
+  // Whose they are is checked: a copy synced for team 1 says nothing to team 3.
+  ok('a copy synced for team 1, asked for team 3: []', same(await season.fetchPendingTrades({ teamId: 3 }), []));
+  choose(3);
+  ok('nor to a phone whose chosen team is another', same(await season.fetchPendingTrades(), []));
+  map.delete(WAITING_KEY);
+  ok('nor to a phone with no team chosen', same(await season.fetchPendingTrades(), []));
+  choose(1);
+  eq(phoneCalls.length + asked.length, 0, 'and none of that asked ESPN either');
+
+  // An offer that has lapsed since the sync is not shown as waiting.
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 3 * DAY;
+    ok('three days on, both have lapsed: []', same(await season.fetchPendingTrades(), []));
+  } finally {
+    Date.now = realNow;
+  }
+  eq((await season.fetchPendingTrades()).length, 2, '(and back at today they are there again)');
+
+  // A copy that carries no time of its own falls back on the sync's.
+  {
+    const p = `leagues/${LEAGUE_ID}/seasons/${SEASON}/parts/schedule`;
+    const kept = fake.docs.get(p);
+    const doc = JSON.parse(kept);
+    const body = JSON.parse(doc.json.join(''));
+    delete body.pendingTrades.at;
+    body.pendingTrades.offers.push({ id: 'rubbish' }, null, 7);
+    fake.docs.set(p, JSON.stringify({ ...doc, json: [JSON.stringify(body)] }));
+    season.forgetCloud();
+    const got = await season.fetchPendingTrades();
+    const meta = JSON.parse(fake.docs.get(`leagues/${LEAGUE_ID}/seasons/${SEASON}`));
+    ok('with no time of its own, asOf is the sync\'s', got.length === 2 && got.every((o) => o.asOf === Date.parse(meta.syncedAt)),
+      JSON.stringify(got.map((o) => o.asOf)));
+    ok('and rubbish in the copy is dropped, not thrown on', same(got.map((o) => o.id), ['offer-to-me', 'offer-by-me']));
+    fake.docs.set(p, kept);
+    season.forgetCloud();
+  }
+
+  // --- more than twenty waiting: twenty go up ---------------------------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  asked = answerPending(Array.from({ length: 25 }, (_, i) => offerRecord(`many-${i}`, 3, [[500 + i, 3, 1], [101, 1, 3]])));
+  const many = await sync();
+  eq(many.payload.schedule.pendingTrades.offers.length, 20, 'twenty-five waiting: twenty go up');
+  ok('the first twenty, in ESPN\'s order',
+    same(many.payload.schedule.pendingTrades.offers.map((o) => o.id), Array.from({ length: 20 }, (_, i) => `many-${i}`)));
+
+  // --- the offers are answered: the next sync takes them away -----------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  asked = answerPending(null);          // ESPN's answer with nothing waiting: no key at all
+  const gone = await sync();
+  ok('the next sync went up', gone.res.ok, gone.res.reason);
+  eq(asked.length, 1, '(ESPN was asked)');
+  ok('with none waiting the schedule carries no pendingTrades — absent, not empty', !('pendingTrades' in gone.payload.schedule));
+  eq(await inCloud(), undefined, 'and they are gone from the cloud\'s schedule');
+  season.forgetCloud();
+  ok('so the phone is told none', same(await season.fetchPendingTrades(), []));
+
+  // --- ESPN refusing the offers does not stop a sync --------------------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url) => (/mPendingTransactions/.test(String(url))
+    ? { ok: false, status: 500, async json() { return {}; } }
+    : inner(url));
+  const refused = await sync();
+  ok('a sync whose offers read is refused still goes up', refused.res.ok, refused.res.reason);
+  ok('carrying none', !('pendingTrades' in refused.payload.schedule));
+};
+
 // =========================================================================
 // RUNNER
 // =========================================================================

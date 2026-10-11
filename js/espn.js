@@ -243,6 +243,19 @@ export function fetchTransactions(week) {
   return leagueRead(['mTransactions2'], Number.isInteger(wk) && wk > 0 ? { scoringPeriodId: wk } : {});
 }
 
+/**
+ * What is waiting on ESPN — trade offers and waiver claims — raw. Decode the
+ * trade offers with js/pending.js `pendingTrades`.
+ *
+ * ONLY A LOGGED-IN OWNER IS TOLD: through the bridge the answer carries
+ * `pendingTransactions`; read without a login (measured on public league
+ * 1241838, 2026-10-11) the view is accepted and the key is simply absent. The
+ * view is on the extension's allow-list (extension/background.js).
+ */
+export function fetchPendingTransactions() {
+  return leagueRead(['mPendingTransactions']);
+}
+
 // ------------------------------------------------- what the managers DID
 //
 // For the Decisions review (docs/decisions-review-plan.md). Every shape below

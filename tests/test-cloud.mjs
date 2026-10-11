@@ -933,6 +933,64 @@ const wideBack = await cloud.readDown(LEAGUE, SEASON, { shapes: ['rosters'] });
 eq(wideBack.rosters.get(1)[0].name, wide, 'a name that has to be split across pieces comes back whole');
 
 // =========================================================================
+// THE TRADE OFFERS WAITING RIDE THE SCHEDULE (js/season.js, `pendingTrades`)
+// =========================================================================
+//
+// No document of their own: firebase/firestore.rules lets another account
+// write only the kinds it names, and the schedule (`parts/schedule`) is one of
+// them. So the question this answers is whether the schedule DOCUMENT, with
+// the most offers a sync ever sends (twenty, eight men a side, ESPN's uuids
+// for ids), is still inside what that rule's `packed()` allows: v 1, a kind,
+// `json` a list of at most 180 strings of at most 720,000 characters in all,
+// at most 16 fields.
+{
+  const pendingMod = await import('../js/pending.js');
+  const offers = pendingMod.cleanOffers(Array.from({ length: 20 }, (_, i) => ({
+    id: `0f8fad5b-d9cb-469f-a165-7086772895${String(i).padStart(2, '0')}`,
+    withTeamId: 1 + (i % 9),
+    get: Array.from({ length: 8 }, (_, k) => 4000000 + i * 10 + k),
+    send: Array.from({ length: 8 }, (_, k) => -16001 - k - i),
+    proposedAt: 1760000000000 + i,
+    expiresAt: 1760172800000 + i,
+    fromMe: i % 2 === 0,
+  })));
+  eq(offers.length, 20, 'twenty offers, the most a sync sends');
+  const waiting = { teamId: 10, at: 1760000001234, offers };
+
+  const plainFake = makeFake();
+  cloud.configure({ transport: plainFake, ownerUid: '' });
+  await cloud.syncUp(LEAGUE, SEASON, payload);
+  const path = `leagues/${LEAGUE}/seasons/${SEASON}/parts/schedule`;
+  const plainBytes = Buffer.byteLength(plainFake.docs.get(path), 'utf8');
+
+  const withFake = makeFake();
+  cloud.configure({ transport: withFake, ownerUid: '' });
+  const sent = await cloud.syncUp(LEAGUE, SEASON, { ...payload, schedule: { ...payload.schedule, pendingTrades: waiting } });
+  eq(sent.ok, true, 'a sync whose schedule carries the offers goes up');
+  eq(sent.wrote, 28, 'in the same 28 documents: the offers have none of their own');
+  ok('and no path anywhere names them', ![...withFake.docs.keys()].some((p) => /pending|trade/i.test(p)),
+    [...withFake.docs.keys()].filter((p) => /pending|trade/i.test(p)).join(' '));
+
+  const doc = JSON.parse(withFake.docs.get(path));
+  const grew = Buffer.byteLength(withFake.docs.get(path), 'utf8') - plainBytes;
+  console.log(`  the schedule with 20 trade offers riding on it ......... ${kb(plainBytes + grew)} (+${grew} bytes)`);
+  ok('twenty offers add under 8 KB to the schedule document', grew > 0 && grew < 8 * 1024, `${grew} bytes`);
+  // The rule's own conditions, one by one (firestore.rules `packed()`).
+  eq(doc.v, 1, 'rules: v is 1');
+  eq(typeof doc.kind, 'string', 'rules: kind is a string');
+  ok('rules: json is a list of at most 180 pieces', Array.isArray(doc.json) && doc.json.length <= 180, `${doc.json.length}`);
+  ok('rules: of strings, none over 4,000 characters',
+    doc.json.every((s) => typeof s === 'string' && s.length <= 4000), `${Math.max(...doc.json.map((s) => s.length))}`);
+  ok('rules: at most 720,000 characters in all', doc.json.join('').length <= 720000, `${doc.json.join('').length}`);
+  ok('rules: at most 16 fields', Object.keys(doc).length <= 16, Object.keys(doc).join(' '));
+  ok('and the schedule is still a small document: under a tenth of the 180 pieces', doc.json.length <= 18, `${doc.json.length} pieces`);
+
+  const back = await cloud.readDown(LEAGUE, SEASON, { shapes: ['schedule'] });
+  same(back.schedule.pendingTrades, waiting, 'the offers round-trip unchanged, with whose they are and when ESPN was asked');
+  same(back.schedule.games, payload.schedule.games, 'and the schedule beside them is untouched');
+}
+
+// =========================================================================
 
 console.log('');
 if (fails.length) {
