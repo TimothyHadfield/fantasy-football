@@ -7,7 +7,11 @@
 // the waivers, or the trade notification on the cite."
 //
 // ONE LIST, most urgent first, under three short headings; each line is a few
-// words and ONE button. What the lines are is js/notify.js (pure) and where
+// words and ONE button, with the SUGGESTED ACTION on its own line underneath
+// (Tim, 2026-10-11: "could you also show a suggested action underneath it. For
+// example, "drop ____, add ___ for 1 week" or whatever") — `note.suggest`,
+// absent when the engine has nothing to name.
+// What the lines are is js/notify.js (pure) and where
 // their numbers come from is js/notify-load.js; this file only draws them and
 // works the lineup button.
 //
@@ -71,6 +75,7 @@ function rowHtml(note) {
   return `<div class="nt-row nt-${esc(note.level)}" data-note="${esc(note.id)}" data-kind="${esc(note.kind)}">
     <span class="nt-title">${esc(note.title)}</span>
     <span class="nt-detail${failed ? ' nt-bad' : ''}">${esc(failed ? 'Could not change it' : note.detail)}</span>
+    ${note.suggest ? `<span class="nt-suggest">${esc(note.suggest)}</span>` : ''}
     ${buttonHtml(note)}
   </div>`;
 }

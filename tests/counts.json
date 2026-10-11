@@ -281,11 +281,11 @@
       "scenarios": 7
     },
     "test-notify.mjs": {
-      "assertions": 52
+      "assertions": 75
     },
     "notify-check.mjs": {
-      "assertions": 93,
-      "scenarios": 9
+      "assertions": 121,
+      "scenarios": 11
     },
     "bell-check.mjs": {
       "assertions": 145,

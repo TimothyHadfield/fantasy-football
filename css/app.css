@@ -2145,6 +2145,18 @@ body.nt-page > footer.site-stamp { flex: none; width: 100%; max-width: 1600px; m
 .nt-title { grid-area: title; min-width: 0; font-weight: 600; }
 .nt-detail { grid-area: detail; min-width: 0; font-size: 13px; color: var(--dim); }
 .nt-title, .nt-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The suggested action (Tim, 2026-10-11: "show a suggested action underneath
+ * it"): its own line under the title and detail, in the site's green behind a
+ * small arrow. A line with nothing to suggest has no second line. */
+.nt-row:has(.nt-suggest) { grid-template-areas: "title detail go" "suggest suggest go"; row-gap: 1px; }
+.nt-suggest {
+  grid-area: suggest;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--accent-hi);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nt-suggest::before { content: "\2192\00a0"; }
 /* This week's lines carry the site's amber at their edge. */
 .nt-row.nt-now { box-shadow: inset 3px 0 0 var(--warn); }
 .nt-wait { display: block; color: var(--dim); font-size: 13px; }
@@ -2178,8 +2190,11 @@ a.nt-go:hover { background: #2b3140; }
     row-gap: 1px;
     padding: 8px 10px;
   }
+  .nt-row:has(.nt-suggest) { grid-template-areas: "title go" "detail go" "suggest go"; }
   /* A swap names two men: the title may take a second line, the detail not. */
   .nt-title { white-space: normal; line-height: 1.3; }
+  /* The suggestion names two men as well. */
+  .nt-suggest { white-space: normal; line-height: 1.3; }
   .nt-go { min-height: 44px; display: flex; align-items: center; justify-content: center; }
 }
 /* ===================================================== end of notifications */

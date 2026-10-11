@@ -30,7 +30,7 @@ import { bootDom, waitFor } from './cap-harness.mjs';
 const PAGE = 'notifications.html';
 const LEAGUE = '99';
 const ME = 4;
-const SCENARIOS = ['demo', 'live', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'past', 'noTeam', 'over'];
+const SCENARIOS = ['demo', 'live', 'farHoles', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'syncedHeld', 'past', 'noTeam', 'over'];
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -89,6 +89,9 @@ async function boot({ conn = null, stub = {}, store = {} } = {}) {
       el, id: el.getAttribute('data-note'), kind: el.getAttribute('data-kind'),
       level: ((el.getAttribute('class') || '').split(/\s+/).find((c) => /^nt-(now|soon|idea)$/.test(c)) || '').slice(3),
       title: text(el.querySelector('.nt-title')), detail: text(el.querySelector('.nt-detail')),
+      // The suggested action: '' when the line has none. `parts` is the order the line is drawn in.
+      suggest: text(el.querySelector('.nt-suggest')), suggests: el.querySelectorAll('.nt-suggest').length,
+      parts: [...el.children].map((c) => ((c.getAttribute('class') || '').match(/nt-(title|detail|suggest|go)/) || [])[1]),
       controls: go.length, tag: go[0] ? go[0].tagName : '', label: text(go[0]),
       href: go[0] ? go[0].getAttribute('href') : null, target: go[0] ? go[0].getAttribute('target') : null,
       lineup: go[0] ? go[0].hasAttribute('data-lineup') : false, go: go[0] || null,
@@ -142,6 +145,13 @@ if (process.argv[2]) {
       const pick = r.filter((x) => x.kind === 'pickup');
       ok(pick.length >= 1 && pick.length <= 3 && pick.every((x) => /^waivers\.html\?player=\d+$/.test(x.href)), 'up to three pick-ups, each opening that man on Players', pick.map((x) => x.href));
       ok(r.filter((x) => x.kind === 'trade').length === 1 && r.some((x) => x.id === 'trade-look' && x.href === 'trade.html'), 'one trade line, opening Trade');
+      // THE SUGGESTED ACTION, under the title and detail.
+      const said = r.filter((x) => x.suggest);
+      ok(said.length >= 1 && pick.every((x) => /^Drop .+, add .+$/.test(x.suggest)), 'lines carry a suggested action; a pick-up says who to drop and who to add', r.map((x) => `${x.kind}: ${x.suggest}`));
+      ok(r.every((x) => x.suggests <= 1 && x.suggest.split(/\s+/).length <= 10), 'one suggestion a line at most, ten words or fewer', r.map((x) => x.suggest));
+      ok(said.every((x) => x.parts.join() === 'title,detail,suggest,go'), 'it is drawn after the detail and before the button', said.map((x) => x.parts.join()));
+      ok(r.every((x) => !x.suggest || (x.suggest !== x.detail && !/drop/i.test(x.detail))), 'and the detail does not say it as well', r.map((x) => x.detail));
+      eq(r.find((x) => x.id === 'trade-look').suggests, 0, '"Look for trades" has no suggestion, and no empty line for one');
       ok(![...p.map.keys()].some((k) => k.startsWith('ff.notes')), 'the sample league saves no count', [...p.map.keys()]);
       eq(p.calls().filter((c) => c[0] !== 'canSetLineup'), [], 'and reads no league');
       ok(p.fetchCalls.length === 0, 'the page asked the network nothing', p.fetchCalls);
@@ -182,14 +192,29 @@ if (process.argv[2]) {
         ['Week 6: no K', 'T4 Man 08 is on bye', 'Find one', 'waivers.html?pos=K'], 'hole: the week, the slot, why, and Players opened on kickers');
       eq(r.filter((x) => x.kind === 'hole').length, 1, 'hole: the other nine weeks are whole and say nothing');
       // pickup: the kicker is worth 4 + 12 + 4 over weeks 5-7, the tight end 13 + 2 + 2.
-      eq(r.filter((x) => x.kind === 'pickup').map((x) => [x.title, x.detail.split(' · ')[0], x.label, x.href]), [
+      eq(r.filter((x) => x.kind === 'pickup').map((x) => [x.title, x.detail, x.label, x.href]), [
         ['Pick up Free Kicker', '+6.7 pts a week', 'See him', 'waivers.html?player=901'],
         ['Pick up Free Tightend', '+5.7 pts a week', 'See him', 'waivers.html?player=902'],
       ], 'pickup: the free agents who beat your men, best first, and never the one who does not');
-      eq(p.calls('wire').map((c) => c[1]).sort((a, b) => a - b), [5, 6, 7], 'pickup: priced over the next three weeks, one wire read each');
+      eq(p.calls('wire').map((c) => c[1]).sort((a, b) => a - b), [5, 6, 7], 'pickup: priced over the next three weeks, one wire read each — and the hole in week 6 costs no read of its own');
       // trade
       eq([by('trade-0-2').title, by('trade-0-2').detail, by('trade-0-2').label, by('trade-0-2').href],
-        ['Trade with Team 2', 'Get T2 Man 03 for T4 Man 06 · found 3 hours ago', 'Open it', 'trade.html?with=2&get=203&send=406'], 'trade: the deal the Trade page saved, with its age');
+        ['Trade with Team 2', '+1.2 pts a week · found 3 hours ago', 'Open it', 'trade.html?with=2&get=203&send=406'], 'trade: the deal the Trade page saved, with its gain and its age');
+
+      // THE SUGGESTED ACTION of every kind, under its line.
+      const drops = r.filter((x) => x.kind === 'pickup').map((x) => (x.suggest.match(/^Drop (T4 Man \d\d), add /) || [])[1]);
+      ok(drops.length === 2 && drops.every(Boolean), 'suggest, pickup: each names one of your men to drop', r.filter((x) => x.kind === 'pickup').map((x) => x.suggest));
+      eq(r.map((x) => [x.id, x.suggest]), [
+        ['start-409-402', 'Move T4 Man 09 into RB, bench T4 Man 02'],
+        ['bad-405', 'Add a TE this week'],
+        ['offer-abc', 'Check it on Trade before it expires'],
+        ['hole-6-17', `Drop ${drops[0]}, add Free Kicker for 1 week`],
+        ['pickup-901', `Drop ${drops[0]}, add Free Kicker`],
+        ['pickup-902', `Drop ${drops[1]}, add Free Tightend`],
+        ['trade-0-2', 'Offer T4 Man 06 for T2 Man 03'],
+      ], 'suggest: the swap’s slots, a position to add, the offer, the bye week’s fill (the same drop as the pick-up, "for 1 week"), the pick-ups and the deal');
+      ok(r.every((x) => x.suggests === 1 && x.parts.join() === 'title,detail,suggest,go'), 'suggest: one line each, after the detail and before the button', r.map((x) => x.parts.join()));
+      ok(r.every((x) => x.suggest.split(/\s+/).length <= 10), 'suggest: ten words or fewer', r.map((x) => x.suggest));
 
       // What was read, and how often.
       eq(p.calls('schedule').length, 1, 'the schedule is read once');
@@ -216,6 +241,26 @@ if (process.argv[2]) {
       const lines = await mod.refresh();
       ok(Array.isArray(lines) && lines.length === r.length && lines.every((n) => n.id && n.level), 'refresh() resolves with the lines', lines && lines.length);
       ok(p.calls('schedule').length === before + 1, 'and works them out again');
+      ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
+    }
+
+    if (scenario === 'farHoles') {
+      // Holes beyond the three weeks the pick-ups read (your kicker projects 0
+      // in weeks 9-12 as well): each wants its own week's wire for the man to
+      // add, and that is capped.
+      const p = await boot({ conn, stub: { zeroK: [9, 10, 11, 12] } });
+      const mod = await import(moduleUrl('js/notify-load.js'));
+      ok(p.settled(), 'the list finishes');
+      const holes = p.rows().filter((x) => x.kind === 'hole');
+      eq(holes.map((x) => x.id), ['hole-6-17', 'hole-9-17', 'hole-10-17', 'hole-11-17', 'hole-12-17'], 'five weeks with no kicker');
+      eq(mod.HOLE_WIRE_MAX, 3, 'at most three extra wire reads');
+      eq(p.calls('wire').map((c) => c[1]).sort((a, b) => a - b), [5, 6, 7, 9, 10, 11],
+        'the wire is read for the pick-ups’ three weeks and the NEAREST three holes beyond them, once each — never week 12');
+      ok(/^Drop T4 Man \d\d, add Free Kicker for 1 week$/.test(holes[0].suggest), 'the bye week: drop one of yours, add that week’s kicker, for 1 week', holes[0].suggest);
+      ok(holes.slice(1, 4).every((x, i) => new RegExp(`^Drop T4 Man \\d\\d, add Free Kicker for week ${9 + i}$`).test(x.suggest)),
+        'a later hole with no known bye names its week', holes.map((x) => x.suggest));
+      eq([holes[4].detail, holes[4].suggest], ['T4 Man 08 projects 0', 'Add a K before week 12'], 'past the cap the position is named and no player is invented');
+      ok(p.fetchCalls.length === 0, 'the page asked the network nothing itself', p.fetchCalls);
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
 
@@ -251,6 +296,7 @@ if (process.argv[2]) {
       ok(row(), 'ESPN does not show the change, so the line STAYS');
       eq(row() && [row().tag, row().label, row().href, row().detail], ['A', 'Open ESPN', ESPN(season), 'Could not change it'],
         'it says so and its button is the link to ESPN’s lineup screen');
+      eq(row() && row().suggest, 'Move T4 Man 09 into RB, bench T4 Man 02', 'and the suggestion still says what to do there by hand');
       ok(p.rows().every((x) => x.controls === 1), 'still one button a line');
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
@@ -280,6 +326,24 @@ if (process.argv[2]) {
       eq(r.find((x) => x.kind === 'start') && r.find((x) => x.kind === 'start').tag, 'A', 'the lineup button is the link');
       const rec = p.saved(season);
       ok(rec && rec.until === null, 'the count is saved, with no kickoff to end it', rec);
+      // The copy holds this week's wire only: week 6's is NOT asked for (it
+      // would fall through to ESPN), so the hole names a position and no man.
+      eq(p.calls('wire').map((c) => c[1]), [5], 'only the wire week the copy holds is read: the hole’s week is not');
+      eq(r.find((x) => x.id === 'hole-6-17').suggest, 'Add a K before week 6', 'so the hole says the position, and invents nobody');
+      ok(p.fetchCalls.length === 0, 'the page asked the network nothing itself', p.fetchCalls);
+      ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
+    }
+
+    if (scenario === 'syncedHeld') {
+      // A copy that holds the wire of weeks 5, 6 and 9; holes in 6, 9 and 10.
+      const p = await boot({ conn, stub: { cloud: true, cloudWire: [5, 6, 9], zeroK: [9, 10] } });
+      ok(p.settled(), 'the list finishes');
+      eq(p.calls('wire').map((c) => c[1]).sort((a, b) => a - b), [5, 6, 9], 'the wire is read for the weeks the copy holds, and no other');
+      const holes = p.rows().filter((x) => x.kind === 'hole');
+      ok(holes.length === 3 && /^Drop T4 Man \d\d, add Free Kicker for 1 week$/.test(holes[0].suggest) &&
+        /^Drop T4 Man \d\d, add Free Kicker for week 9$/.test(holes[1].suggest), 'a held week names the man to add', holes.map((x) => x.suggest));
+      eq(holes[2] && holes[2].suggest, 'Add a K before week 10', 'a week the copy lacks names the position only');
+      eq(p.calls('byes').length + p.calls('kickoffs').length, 0, 'the NFL’s byes and kickoffs are still not asked for');
       ok(p.fetchCalls.length === 0, 'the page asked the network nothing itself', p.fetchCalls);
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }

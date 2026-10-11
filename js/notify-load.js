@@ -7,8 +7,10 @@
 //   refresh()      works the list out and resolves with the lines. The cheap
 //                  ones first (this week's lineup, offers, saved deals), then
 //                  the coming weeks, then the pick-ups, which want the waiver
-//                  wire of every week they are priced over. `onUpdate(notes)`
-//                  is called as each part arrives.
+//                  wire of every week they are priced over (and the wire of a
+//                  later week that has a hole, for the man to add:
+//                  `HOLE_WIRE_MAX`). `onUpdate(notes)` is called as each part
+//                  arrives.
 //   load()         the same run, resolving with the whole state the page draws
 //                  (`status`, `notes`, `week`, …).
 //   savedCount()   `{ now, soon, idea, fresh }` — the counts the last run left,
@@ -33,6 +35,14 @@ export const FRESH_MS = 3 * 60 * 60 * 1000;
 
 /** How many weeks the pick-ups are priced over: the Players page's default span. */
 export const GAIN_WEEKS = 3;
+
+/**
+ * A coming week with a slot nobody can fill is answered with a man to add, and
+ * he comes off THAT week's wire. A hole beyond the weeks the pick-ups already
+ * read costs one more wire read; this many at most, nearest holes first. A
+ * hole past them says the position and names nobody.
+ */
+export const HOLE_WIRE_MAX = 3;
 
 export const countKey = (leagueId, season) => `ff.notes.${leagueId}-${season}`;
 export const tradesKey = (leagueId, season) => `ff.notes.trades.${leagueId}-${season}`;
@@ -116,6 +126,10 @@ function rosterProjections(weekTeams) {
  * builds it: your men off the rosters, a free agent off the wire, anything but
  * a number is "no projection".
  *
+ * `projFor` knows every week in `wires` — the weeks priced and the weeks read
+ * only because they have a hole — but the POOL of pick-ups is the priced weeks'
+ * alone, so a hole's wire never changes which pick-ups are suggested.
+ *
  * @param {number[]} weeks the weeks priced, ascending
  * @param {Map<number, Array>} wires week -> that week's free agents
  * @param {Map<number, Array>} weekTeams week -> squads
@@ -126,12 +140,13 @@ function wireInput({ weeks, wires, weekTeams, team, floors }) {
   const rosterProj = rosterProjections(weekTeams);
   const wireProj = new Map();
   const pool = new Map();
-  for (const w of weeks) {
+  for (const [w, agents] of wires) {
     const by = new Map();
-    for (const p of wires.get(w) || []) {
+    const priced = weeks.includes(w);
+    for (const p of agents || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
       by.set(p.playerId, p.projected);
-      if (!pool.has(p.playerId)) pool.set(p.playerId, { playerId: p.playerId, name: p.name, position: p.position });
+      if (priced && !pool.has(p.playerId)) pool.set(p.playerId, { playerId: p.playerId, name: p.name, position: p.position });
     }
     wireProj.set(w, by);
   }
@@ -145,6 +160,13 @@ function wireInput({ weeks, wires, weekTeams, team, floors }) {
     return n;
   };
   return { weeks, pool: [...pool.values()], projFor, floors: floors || null };
+}
+
+/** The weeks with a hole whose wire is not being read already: the nearest `HOLE_WIRE_MAX`. */
+function holeWireWeeks(engine, { coming, slots, span, allowed = null }) {
+  return engine.holeWeeks({ coming, slots })
+    .filter((w) => !span.includes(w) && (!allowed || allowed.has(Number(w))))
+    .slice(0, HOLE_WIRE_MAX);
 }
 
 // -------------------------------------------------------------- the runs
@@ -194,9 +216,11 @@ async function runDemo(emit) {
   emit({ ...state, notes: m.engine.buildNotes({ ...base, coming }), pending: true });
 
   const weeks = [week, ...later].slice(0, GAIN_WEEKS);
-  const wires = new Map(weeks.map((w) => [w, demo.generateDemoFreeAgents(w)]));
+  const extra = holeWireWeeks(m.engine, { coming, slots: base.slots, span: weeks });
+  const wires = new Map([...weeks, ...extra].map((w) => [w, demo.generateDemoFreeAgents(w)]));
   const wire = team ? wireInput({ weeks, wires, weekTeams, team, floors: null }) : null;
-  return { ...state, notes: m.engine.buildNotes({ ...base, coming, wire }), pending: false };
+  const fill = wire ? { byWeek: wires, weeks, projFor: wire.projFor, floors: null } : null;
+  return { ...state, notes: m.engine.buildNotes({ ...base, coming, wire, fill }), pending: false };
 }
 
 async function runLive(cfg, emit, { fresh = false } = {}) {
@@ -291,11 +315,15 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
   // THE PICK-UPS: the wire of each week priced. A week with a finished game in
   // it is locked — no claim made now can move it (the Players page's rule).
   const underWay = teams.some((t) => (t.players || []).some((p) => p.done === true));
-  const span = [week, ...later].slice(0, GAIN_WEEKS)
-    .filter((w) => !(w === week && underWay))
-    .filter((w) => !cloud || heldWire.has(Number(w)));
+  const near = [week, ...later].slice(0, GAIN_WEEKS).filter((w) => !(w === week && underWay));
+  const span = near.filter((w) => !cloud || heldWire.has(Number(w)));
+  // THE HOLES' OWN WIRE: a hole beyond those weeks is one more read each, a
+  // few at most — and on the synced copy only a week the copy holds.
+  const extra = holeWireWeeks(m.engine, {
+    coming, slots: base.slots, span, allowed: cloud ? heldWire : null,
+  });
   const wires = new Map();
-  await Promise.all(span.map(async (w) => {
+  await Promise.all([...span, ...extra].map(async (w) => {
     try {
       const got = await season.fetchWireWeek(w);
       if (got && got.length) wires.set(w, got);
@@ -313,8 +341,14 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
     const f = weeks.length && has('fetchFloors') ? await season.fetchFloors(week) : null;
     floors = f && f.size ? f : null;
   } catch { floors = null; }
-  const wire = weeks.length ? wireInput({ weeks, wires, weekTeams, team, floors }) : null;
-  const notes = m.engine.buildNotes({ ...base, coming, wire });
+  const input = wireInput({ weeks, wires, weekTeams, team, floors });
+  const wire = weeks.length ? input : null;
+  // Who to drop for a hole's man is priced over the pick-ups' weeks (whether or
+  // not their wire was read: your own men's numbers come off the rosters).
+  const fill = {
+    byWeek: wires, weeks: near.filter((w) => weekTeams.has(w)), projFor: input.projFor, floors,
+  };
+  const notes = m.engine.buildNotes({ ...base, coming, wire, fill });
 
   writeJson(countKey(cfg.leagueId, cfg.season), {
     v: 1, team: cfg.teamId, week, at: Date.now(), ...m.engine.countNotes(notes),

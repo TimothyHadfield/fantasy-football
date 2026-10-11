@@ -23,6 +23,10 @@
 //   playedThrough  the last week with its games final (default 4)
 //   offers         what `fetchPendingTrades` answers
 //   cloud          true: this is the phone's synced copy (`cloudSource`)
+//   cloudWire      the weeks of the waiver wire that copy holds (default: this
+//                  week's alone)
+//   zeroK          more weeks in which your kicker projects 0 (no bye is known
+//                  for them): holes beyond the weeks the pick-ups read
 //   moved          lineup moves ESPN "took" (notify-stub-bridge.mjs adds them):
 //                  week 5's roster is answered with those men moved
 // Every call is recorded in `calls`.
@@ -62,7 +66,7 @@ function buildTeams(week) {
       };
       if (id === ME && week === NOW_WEEK && i === 9) p.projected = 14.0;
       if (id === ME && week === NOW_WEEK && i === 5) { p.projected = 0; p.injuryStatus = 'OUT'; }
-      if (id === ME && week === 6 && i === 8) p.projected = 0;
+      if (id === ME && (week === 6 || (cfg().zeroK || []).includes(week)) && i === 8) p.projected = 0;
       return p;
     });
     if (id === ME && week === NOW_WEEK) {
@@ -135,7 +139,7 @@ export async function cloudSource() {
   // `weeks` as js/cloud.js `readDown` reports them: the weeks the copy holds.
   const all = Array.from({ length: 17 }, (_, i) => i + 1);
   return cfg().cloud
-    ? { byes: { ...BYES }, at: Date.now() - 2 * 60 * 60 * 1000, weeks: { rosters: all, wire: [NOW_WEEK] } }
+    ? { byes: { ...BYES }, at: Date.now() - 2 * 60 * 60 * 1000, weeks: { rosters: all, wire: cfg().cloudWire || [NOW_WEEK] } }
     : null;
 }
 export function weekReadAt() { return Date.now() - 2 * 60 * 60 * 1000 - 1000; }

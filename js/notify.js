@@ -18,7 +18,12 @@
 //   offer      season.fetchPendingTrades()      a trade offer waiting on ESPN
 //   trade      the deals the Trade page saved   its ranked list, with their age
 //
-// A line is `{ id, kind, level, title, detail, action }`.
+// A line is `{ id, kind, level, title, detail, suggest, action }`.
+//   suggest the SUGGESTED ACTION, drawn under the line (Tim, 2026-10-11: "could
+//           you also show a suggested action underneath it. For example, "drop
+//           ____, add ___ for 1 week" or whatever"): one short instruction that
+//           names the men, or null when there is nothing honest to name. It
+//           never repeats the detail, and never invents a player.
 //   level   'now'  this week, acts before a kickoff
 //           'soon' a coming week
 //           'idea' pick-ups and trades
@@ -94,6 +99,9 @@ export function onBye(p, week, byes) {
 
 const listNames = (men) => men.map((m) => m.name).filter(Boolean).join(', ');
 
+/** A man as the Gain engine wants him. */
+const bare = (p) => ({ playerId: p.playerId, name: p.name, position: p.position });
+
 // ------------------------------------------------------------------ start
 
 /**
@@ -141,6 +149,23 @@ export function movesFor(swap, { players = [], slots = [], isLocked = hasPlayed 
   ];
 }
 
+/**
+ * The moves of a swap in words: "Move A into FLEX, bench B" — every man who
+ * goes into a starting slot (the new man first), then the man who comes out.
+ * null without moves.
+ */
+function movesText(moves, players) {
+  if (!moves || !moves.length) return null;
+  const nameOf = new Map((players || []).map((p) => [p.playerId, p.name]));
+  const into = moves.filter((m) => m.toSlotId !== BENCH_SLOT);
+  const off = moves.filter((m) => m.toSlotId === BENCH_SLOT);
+  if (!into.length || moves.some((m) => !nameOf.get(m.playerId))) return null;
+  into.sort((a, b) => (b.fromSlotId === BENCH_SLOT) - (a.fromSlotId === BENCH_SLOT));
+  const parts = into.map((m, i) => `${i ? '' : 'Move '}${nameOf.get(m.playerId)} into ${slotLabel(m.toSlotId)}`);
+  for (const m of off) parts.push(`bench ${nameOf.get(m.playerId)}`);
+  return parts.join(', ');
+}
+
 function startNotes({ week, teamId, league, team, slots, isLocked }) {
   const players = (team && team.players) || [];
   const s = startSit({ players, slots, isLocked });
@@ -149,12 +174,12 @@ function startNotes({ week, teamId, league, team, slots, isLocked }) {
   const benched = new Set();
   const notes = s.swaps.map((w) => {
     if (w.out && has(w.out.playerId)) benched.add(w.out.playerId);
-    const moves = href ? movesFor(w, { players, slots, isLocked }) : null;
+    const moves = movesFor(w, { players, slots, isLocked });
     // The sample league has no ESPN page: the button shows the man instead.
     const action = href
       ? { label: 'Open ESPN', href }
       : { label: 'See him', href: playerHref(w.in.playerId) };
-    if (moves && moves.length <= MOVES_MAX) {
+    if (href && moves && moves.length <= MOVES_MAX) {
       action.lineup = { label: 'Change it', week, teamId, moves };
     }
     return {
@@ -163,6 +188,7 @@ function startNotes({ week, teamId, league, team, slots, isLocked }) {
       level: 'now',
       title: w.out ? `Start ${w.in.name} over ${w.out.name}` : `Start ${w.in.name}`,
       detail: `+${fmt1(w.points)} pts this week`,
+      suggest: movesText(moves, players),
       action,
     };
   });
@@ -171,20 +197,40 @@ function startNotes({ week, teamId, league, team, slots, isLocked }) {
 
 // -------------------------------------------------------------- bad-start
 
+/**
+ * The best man on the bench who may stand in `p`'s slot: fits it, can still be
+ * moved, is not himself out or on bye, and is not already named for another
+ * slot. The highest projection; null when the bench has nobody.
+ */
+function standIn(p, { week, team, isLocked, byes, taken }) {
+  let best = null;
+  for (const b of (team && team.players) || []) {
+    if (!b || b.started || b.lineupSlotId === IR_SLOT || b.slot === 'IR') continue;
+    if (!has(b.playerId) || !b.name || taken.has(b.playerId)) continue;
+    if (!fits(p.lineupSlotId, b.position) || isLocked(b) || whyNot(b, week, byes)) continue;
+    if (!best || num(b.projected) > num(best.projected)) best = b;
+  }
+  return best;
+}
+
 function badStartNotes({ week, team, isLocked, byes, benched }) {
   const out = [];
+  const taken = new Set();
   for (const p of (team && team.players) || []) {
     if (!p || !p.started || p.lineupSlotId === IR_SLOT) continue;
     if (isLocked(p)) continue;                       // his game has started: nothing to do
     if (has(p.playerId) && benched.has(p.playerId)) continue;   // a swap line already says it
     const why = whyNot(p, week, byes);
     if (!why) continue;
+    const sub = standIn(p, { week, team, isLocked, byes, taken });
+    if (sub) taken.add(sub.playerId);
     out.push({
       id: `bad-${p.playerId}`,
       kind: 'bad-start',
       level: 'now',
       title: `${p.name} ${why}`,
       detail: `In your lineup at ${p.slot || slotLabel(p.lineupSlotId)}`,
+      suggest: sub ? `Start ${sub.name} instead` : `Add a ${slotLabel(p.lineupSlotId)} this week`,
       action: { label: 'See him', href: playerHref(p.playerId) },
     });
   }
@@ -217,21 +263,76 @@ export function holesIn(players, slots) {
   return out;
 }
 
-function holeNotes({ coming, slots, byes }) {
+/** The coming weeks that have a hole, soonest first: the weeks whose wire is worth reading. */
+export function holeWeeks({ coming = [], slots = [] } = {}) {
+  return (coming || [])
+    .filter((c) => c && c.players && c.players.length && holesIn(c.players, slots).length)
+    .map((c) => Number(c.week))
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Who fills a hole: the best free agent of THAT week who fits the slot, and
+ * the man the Gain engine would drop for him (js/waiver-gain.js `gainOf`, as
+ * for a pick-up line), priced over `fill.weeks` and the week of the hole.
+ *
+ * @param {Object|null} o.fill `{ byWeek: Map<week, freeAgents>, weeks, projFor, floors }`
+ * @returns {{add:Object, drop:Object|null}|null} null when that week's wire was
+ *   not read, or has nobody for the slot — a player is never invented
+ */
+function fillFor({ week, slotId, players, slots, fill, used }) {
+  const agents = fill && fill.byWeek && typeof fill.byWeek.get === 'function' ? fill.byWeek.get(Number(week)) : null;
+  if (!agents || !agents.length) return null;
+  const held = new Set(players.map((p) => p && p.playerId));
+  let add = null;
+  for (const a of agents) {
+    if (!a || !has(a.playerId) || !a.name || held.has(a.playerId) || used.add.has(a.playerId)) continue;
+    if (!fits(slotId, a.position) || !(num(a.projected) > 0)) continue;
+    if (!add || a.projected > add.projected) add = a;
+  }
+  if (!add) return null;
+  used.add.add(add.playerId);
+
+  // One week alone cannot say who to drop: a star on bye that week would cost
+  // it nothing. With fewer than two weeks to price, nobody is named.
+  const weeks = [...new Set([...(fill.weeks || []).map(Number), Number(week)])].sort((a, b) => a - b);
+  let drop = null;
+  if (weeks.length >= 2 && typeof fill.projFor === 'function') {
+    const mine = players.filter((p) => p && has(p.playerId)).map(bare);
+    const base = gainBase({ players: mine, slots, weeks, projFor: fill.projFor, floors: fill.floors || null });
+    const g = gainOf(base, bare(add), { prune: false });
+    if (g.drop && g.drop.name && !used.drop.has(g.drop.playerId)) {
+      drop = g.drop;
+      used.drop.add(drop.playerId);
+    }
+  }
+  return { add, drop };
+}
+
+function holeNotes({ coming, slots, byes, fill }) {
   const out = [];
   const weeks = (coming || []).slice().sort((a, b) => a.week - b.week);
   for (const { week, players } of weeks) {
     if (!players || !players.length) continue;       // that week could not be read
+    const used = { add: new Set(), drop: new Set() };   // two holes never name the same man
     for (const { slotId, men } of holesIn(players, slots)) {
       const label = slotLabel(slotId);
       const man = men[0] || null;
       const why = man ? whyNot(man, week, byes) || 'projects 0' : '';
+      // "for 1 week" only when it IS one week: his own man is on a known bye
+      // and back the week after. Anything else names the week.
+      const span = man && onBye(man, week, byes) ? 'for 1 week' : `for week ${week}`;
+      const f = fillFor({ week, slotId, players, slots, fill, used });
+      const suggest = !f ? `Add a ${label} before week ${week}`
+        : f.drop ? `Drop ${f.drop.name}, add ${f.add.name} ${span}`
+          : `Add ${f.add.name} ${span}`;
       out.push({
         id: `hole-${week}-${slotId}`,
         kind: 'hole',
         level: 'soon',
         title: `Week ${week}: no ${label}`,
         detail: man ? `${man.name} ${why}` : 'Nobody on your roster fits',
+        suggest,
         action: { label: 'Find one', href: positionHref(filterOf(slotId)) || 'waivers.html' },
       });
     }
@@ -251,7 +352,7 @@ function holeNotes({ coming, slots, byes }) {
  */
 export function pickups({ team, slots, wire }) {
   if (!wire || !team || !(wire.weeks || []).length) return [];
-  const man = (p) => ({ playerId: p.playerId, name: p.name, position: p.position });
+  const man = bare;
   const mine = (team.players || []).filter((p) => p && has(p.playerId)).map(man);
   if (!mine.length) return [];
   const base = gainBase({
@@ -276,12 +377,24 @@ function pickupNotes(input) {
     kind: 'pickup',
     level: 'idea',
     title: `Pick up ${player.name}`,
-    detail: `+${fmt1(gain.perWeek)} pts a week` + (gain.drop ? ` · drop ${gain.drop.name}` : ''),
+    detail: `+${fmt1(gain.perWeek)} pts a week`,
+    // Without a man to drop the title has already said it all.
+    suggest: gain.drop && gain.drop.name ? `Drop ${gain.drop.name}, add ${player.name}` : null,
     action: { label: 'See him', href: playerHref(player.playerId) },
   }));
 }
 
 // ------------------------------------------------------------------ offer
+
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** " Saturday" for an expiry inside the coming six days (so a day's name means one day); else ''. */
+function expiryDay(expiresAt, now) {
+  if (!Number.isFinite(expiresAt) || !Number.isFinite(now)) return '';
+  const ahead = expiresAt - now;
+  if (ahead <= 0 || ahead >= 6 * 24 * 60 * 60 * 1000) return '';
+  return ` ${DAYS[new Date(expiresAt).getDay()]}`;
+}
 
 function offerNotes({ offers, teams, offersAt, now }) {
   const nameOf = new Map();
@@ -307,6 +420,9 @@ function offerNotes({ offers, teams, offersAt, now }) {
       level: o.fromMe ? 'idea' : 'now',
       title: o.fromMe ? `Your offer to ${who}` : `Trade offer from ${who}`,
       detail: deal + age,
+      // No verdict is worked out here (that is the Trade page's own search).
+      // Your own offer waits on him: there is nothing for you to do.
+      suggest: o.fromMe ? null : `Check it on Trade before it expires${expiryDay(o.expiresAt, now)}`,
       action: {
         label: 'Open it',
         href: dealHref({ with: o.withTeamId, get: o.get, send: o.send }) || 'trade.html',
@@ -334,19 +450,25 @@ function tradeNotes({ saved, teamId, now }) {
       level: 'idea',
       title: 'Look for trades',
       detail: 'No deals found yet',
+      suggest: null,
       action: { label: 'Open Trade', href: 'trade.html' },
     }];
   }
-  const age = Number.isFinite(saved.at) ? ` · found ${describeAge(now - saved.at)}` : '';
+  const age = Number.isFinite(saved.at) ? `found ${describeAge(now - saved.at)}` : '';
+  const unit = saved.perWeek === false ? 'pts' : 'pts a week';
   return mine.map((d, i) => {
     const get = listNames(d.get || []);
     const send = listNames(d.send || []);
+    // The deal itself is the suggestion; the detail keeps why, and how old.
+    const gain = Number.isFinite(d.gain) && d.gain > 0 ? `+${fmt1(d.gain)} ${unit}` : '';
+    const why = [gain, age].filter(Boolean).join(' · ') || 'saved on Trade';
     return {
       id: `trade-${i}-${d.withTeamId}`,
       kind: 'trade',
       level: 'idea',
       title: `Trade with ${d.withName || 'another team'}`,
-      detail: (get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : `Send ${send}`) + age,
+      detail: why.charAt(0).toUpperCase() + why.slice(1),
+      suggest: get && send ? `Offer ${send} for ${get}` : get ? `Ask for ${get}` : send ? `Offer ${send}` : null,
       action: {
         label: 'Open it',
         href: dealHref({ with: d.withTeamId, get: (d.get || []).map((p) => p.id), send: (d.send || []).map((p) => p.id) }),
@@ -376,11 +498,13 @@ function tradeNotes({ saved, teamId, now }) {
  * @param {number|null} [o.offersAt]  when the offers were read, if that is not now (a synced copy)
  * @param {Object|null} [o.saved]  the Trade page's saved deals
  * @param {number} [o.now]      epoch ms, for the ages
- * @returns {Array<{id, kind, level, title, detail, action}>}
+ * @param {Object|null} [o.fill]  `{ byWeek: Map<week, freeAgents>, weeks, projFor, floors }`:
+ *                              the wire of the weeks that have a hole, for what to do about it
+ * @returns {Array<{id, kind, level, title, detail, suggest, action}>}
  */
 export function buildNotes({
   week, teamId, league = null, team = null, teams = [], slots = [],
-  isLocked = hasPlayed, byes = null, coming = [], wire = null,
+  isLocked = hasPlayed, byes = null, coming = [], wire = null, fill = null,
   offers = [], offersAt = null, saved = null, now = Date.now(),
 } = {}) {
   if (!team) return [];
@@ -388,7 +512,7 @@ export function buildNotes({
   const all = [
     ...start.notes,
     ...badStartNotes({ week, team, isLocked, byes, benched: start.benched }),
-    ...holeNotes({ coming, slots, byes }),
+    ...holeNotes({ coming, slots, byes, fill }),
     ...pickupNotes({ team, slots, wire }),
     ...offerNotes({ offers, teams, offersAt, now }),
     ...tradeNotes({ saved, teamId, now }),

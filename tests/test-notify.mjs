@@ -83,8 +83,9 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   eq(ns.map((n) => n.id), ['trade-look'], 'a lineup set right, nothing else known: only the one trade line');
   eq(ns[0], {
     id: 'trade-look', kind: 'trade', level: 'idea', title: 'Look for trades', detail: 'No deals found yet',
+    suggest: null,
     action: { label: 'Open Trade', href: 'trade.html' },
-  }, 'trade: with no saved deals, one idea line that opens Trade');
+  }, 'trade: with no saved deals, one idea line that opens Trade, and no suggestion');
   eq(buildNotes({ week: WEEK, teamId: ME, team: null, slots: SLOTS }), [], 'no team: no lines at all');
 }
 
@@ -97,6 +98,7 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   eq(ns[0], {
     id: 'start-110-103', kind: 'start', level: 'now',
     title: 'Start Jon Ross over Cal Rivers', detail: '+1.6 pts this week',
+    suggest: 'Move Jon Ross into RB, bench Cal Rivers',
     action: {
       label: 'Open ESPN', href: ESPN,
       lineup: {
@@ -112,6 +114,7 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   // The sample league has no ESPN page and no lineup to change.
   const demo = kind(buildNotes({ week: WEEK, teamId: ME, league: null, team: teamOf(s), slots: SLOTS, isLocked: unlocked }), 'start');
   eq(demo[0] && demo[0].action, { label: 'See him', href: 'waivers.html?player=110' }, 'start: on the sample league the button shows the man, and offers no lineup change');
+  eq(demo[0] && demo[0].suggest, 'Move Jon Ross into RB, bench Cal Rivers', 'start: the sample league still says which slot');
 
   // His game has started: nothing to change.
   const locked = kind(notes({ team: teamOf(s), isLocked: (p) => p.playerId === 110 }), 'start');
@@ -123,6 +126,13 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   eq(fill.map((n) => [n.id, n.title, n.detail, n.action.lineup && n.action.lineup.moves]),
     [['start-114-0', 'Start Ned Kane', '+7.5 pts this week', [{ playerId: 114, fromSlotId: 20, toSlotId: 17 }]]],
     'start: an empty slot is filled in one move');
+  eq(fill.map((n) => n.suggest), ['Move Ned Kane into K'], 'start: an empty slot names the slot and benches nobody');
+
+  // A receiver in for a back while the flex holds a back: three men move, and all three are named.
+  const via = squad({ flex: { position: 'RB' }, bWr: { projected: 14.0 } });
+  eq(kind(notes({ team: teamOf(via) }), 'start').map((n) => [n.title, n.suggest]),
+    [['Start Kit West over Cal Rivers', 'Move Kit West into FLEX, Gus Wolfe into RB, bench Cal Rivers']],
+    'start: a swap through the flex says every move, the new man first');
 }
 
 // The moves of a swap whose man does not fit the slot being emptied.
@@ -152,8 +162,18 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   const ns = notes({ team: teamOf(s) });
   eq(kind(ns, 'bad-start'), [{
     id: 'bad-106', kind: 'bad-start', level: 'now', title: 'Finn Tate is out', detail: 'In your lineup at TE',
+    suggest: 'Add a TE this week',
     action: { label: 'See him', href: 'waivers.html?player=106' },
-  }], 'bad-start: a starter ruled out with nobody to swap in');
+  }], 'bad-start: a starter ruled out with nobody to swap in, so the suggestion is to add one');
+
+  // Ruled out but still projected above the bench man: no swap line, so this
+  // line names the best man on the bench who may stand in.
+  const sub = kind(notes({ team: teamOf(squad({ te: { injuryStatus: 'OUT', projected: 5.0 }, bTe: { projected: 4.0 } })) }), 'bad-start');
+  eq(sub.map((n) => [n.id, n.suggest]), [['bad-106', 'Start Lou Thorn instead']], 'bad-start: a bench man who fits is named');
+  const subOut = kind(notes({ team: teamOf(squad({ te: { injuryStatus: 'OUT', projected: 5.0 }, bTe: { projected: 4.0, injuryStatus: 'OUT' } })) }), 'bad-start');
+  eq(subOut.map((n) => n.suggest), ['Add a TE this week'], 'bad-start: a bench man who is out himself is not the answer');
+  const subLocked = kind(notes({ team: teamOf(squad({ te: { injuryStatus: 'OUT', projected: 5.0 }, bTe: { projected: 4.0 } })), isLocked: (p) => p.playerId === 112 }), 'bad-start');
+  eq(subLocked.map((n) => n.suggest), ['Add a TE this week'], 'bad-start: nor one whose game has started');
   eq(kind(ns, 'start'), [], 'bad-start: and no swap line beside it');
 
   // With a tight end on the bench the swap line says it, once.
@@ -164,7 +184,7 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   // A bye is known only from the bye table; a kicker on bye with no other.
   const b = squad({ k: { projected: 0 } }, ['bK']);
   const bye = kind(notes({ team: teamOf(b), byes: { 4: 5, 12: 9 } }), 'bad-start');
-  eq(bye.map((n) => [n.id, n.title, n.detail]), [['bad-109', 'Ike Kemp is on bye', 'In your lineup at K']], 'bad-start: a starter on bye');
+  eq(bye.map((n) => [n.id, n.title, n.detail, n.suggest]), [['bad-109', 'Ike Kemp is on bye', 'In your lineup at K', 'Add a K this week']], 'bad-start: a starter on bye');
   eq(kind(notes({ team: teamOf(b), byes: { 4: 6 } }), 'bad-start'), [], 'bad-start: another week’s bye is not this week’s');
   eq(kind(notes({ team: teamOf(b), byes: null }), 'bad-start'), [], 'bad-start: byes unknown, nothing is claimed');
   eq(kind(notes({ team: teamOf(b), byes: { 4: 5 }, isLocked: (p) => p.playerId === 109 }), 'bad-start'), [], 'bad-start: his game has started, nothing to do');
@@ -187,10 +207,57 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   const ns = kind(notes({ team: teamOf(squad()), coming, byes: { 4: 6 } }), 'hole');
   eq(ns, [
     { id: 'hole-6-17', kind: 'hole', level: 'soon', title: 'Week 6: no K', detail: 'Ike Kemp is on bye',
+      suggest: 'Add a K before week 6',
       action: { label: 'Find one', href: 'waivers.html?pos=K' } },
     { id: 'hole-8-6', kind: 'hole', level: 'soon', title: 'Week 8: no TE', detail: 'Nobody on your roster fits',
+      suggest: 'Add a TE before week 8',
       action: { label: 'Find one', href: 'waivers.html?pos=TE' } },
-  ], 'hole: one line per short slot, soonest week first, opening Players on that position');
+  ], 'hole: one line per short slot, soonest week first, opening Players on that position; no wire read, so no man is named');
+  eq(N.holeWeeks({ coming, slots: SLOTS }), [6, 8], 'holeWeeks: the weeks whose wire is worth reading, soonest first');
+
+  // THE SUGGESTION, with that week's wire read. One roster all through (as in
+  // life): sixteen men, the only kicker on bye in week 6.
+  {
+    const mine = squad({}, ['bK']);
+    const team = teamOf(mine);
+    const rosterIn = (w) => list(squad(w === 6 ? { k: { projected: 0 } } : {}, ['bK']));
+    const agents = [
+      { playerId: 901, name: 'Ray Keane', position: 'K', projected: 9.0 },
+      { playerId: 907, name: 'Wes Kirk', position: 'K', projected: 11.0 },
+      { playerId: 908, name: 'Xan Kell', position: 'K', projected: 0 },
+      { playerId: 902, name: 'Sam Teller', position: 'TE', projected: 30.0 },
+    ];
+    const heldIds = new Set(list(mine).map((p) => p.playerId));
+    const projFor = (p, w) => {
+      if (heldIds.has(p.playerId)) return (rosterIn(w).find((x) => x.playerId === p.playerId) || {}).projected ?? null;
+      return w === 6 ? (agents.find((a) => a.playerId === p.playerId) || {}).projected ?? null : null;
+    };
+    const fill = { byWeek: new Map([[6, agents]]), weeks: [5, 6, 7], projFor, floors: null };
+    const comingK = [{ week: 6, players: rosterIn(6) }];
+    const hole = (o) => kind(notes({ team, coming: comingK, byes: { 4: 6 }, fill, ...o }), 'hole');
+
+    // Who the Gain engine drops for him over weeks 5-7, worked out the long way.
+    const G = await import(pathToFileURL(path.join(REPO, 'js/waiver-gain.js')).href);
+    const bare = (p) => ({ playerId: p.playerId, name: p.name, position: p.position });
+    const base = G.gainBase({ players: list(mine).map(bare), slots: SLOTS, weeks: [5, 6, 7], projFor, floors: null });
+    const drop = G.gainOf(base, bare(agents[1]), { prune: false }).drop;
+    ok(drop && heldIds.has(drop.playerId) && drop.playerId !== 109, 'hole: the engine names one of your men to drop, and not the kicker who is back next week', JSON.stringify(drop));
+    const h = hole({});
+    eq(h.map((n) => [n.id, n.detail, n.suggest]), [['hole-6-17', 'Ike Kemp is on bye', `Drop ${drop && drop.name}, add Wes Kirk for 1 week`]],
+      'hole: drop the Gain engine’s man, add the best free kicker OF THAT WEEK, "for 1 week" because it is a bye');
+    ok(h[0] && h[0].suggest.split(/\s+/).length <= 10, 'hole: the suggestion is ten words or fewer', h[0] && h[0].suggest);
+
+    // Not a known bye (he just projects 0): the week is named instead.
+    eq(hole({ byes: null }).map((n) => [n.detail, n.suggest]), [['Ike Kemp projects 0', `Drop ${drop && drop.name}, add Wes Kirk for week 6`]],
+      'hole: with no known bye it says "for week 6", not "for 1 week"');
+    // One week alone cannot say who to drop (a star on bye would cost it nothing).
+    eq(hole({ fill: { ...fill, weeks: [] } }).map((n) => n.suggest), ['Add Wes Kirk for 1 week'], 'hole: one priced week names nobody to drop');
+    // That week's wire was not read / has no kicker who scores: nobody is invented.
+    eq(hole({ fill: { ...fill, byWeek: new Map([[7, agents]]) } }).map((n) => n.suggest), ['Add a K before week 6'], 'hole: another week’s wire is not this week’s');
+    eq(hole({ fill: { ...fill, byWeek: new Map([[6, [agents[2], agents[3]]]]) } }).map((n) => n.suggest), ['Add a K before week 6'], 'hole: no free agent who fits and scores, no name');
+    eq(hole({ fill: { ...fill, byWeek: new Map([[6, [agents[1], { ...agents[0], playerId: 109 }]]]) } }).map((n) => n.suggest),
+      [`Drop ${drop && drop.name}, add Wes Kirk for 1 week`], 'hole: a man you hold is never the one to add');
+  }
 
   // The bench covers it: the BEST legal lineup is what is judged, not the one set.
   const covered = list(squad({ k: { projected: 0 } }));
@@ -246,9 +313,10 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
     ['pickup-902', 'idea', 'Pick up Sam Teller', { label: 'See him', href: 'waivers.html?player=902' }],
     ['pickup-903', 'idea', 'Pick up Quarry D/ST', { label: 'See him', href: 'waivers.html?player=903' }],
   ], 'pickup: a line each, opening that man on Players');
-  ok(ns.length === 3 && /^\+4\.0 pts a week · drop .+/.test(ns[0].detail), 'pickup: the gain a week and who to drop', ns[0] && ns[0].detail);
+  eq(ns.map((n) => n.detail), ['+4.0 pts a week', '+2.0 pts a week', '+1.0 pts a week'], 'pickup: the detail is the gain a week, and no longer who to drop');
   const dropped = got[0] && got[0].gain.drop;
-  ok(dropped && held.has(dropped.playerId) && ns[0].detail === `+4.0 pts a week · drop ${dropped.name}`, 'pickup: the man to drop is one of yours', JSON.stringify(dropped));
+  ok(dropped && held.has(dropped.playerId) && ns[0].suggest === `Drop ${dropped.name}, add Ray Keane`, 'pickup: the suggestion is who to drop (one of yours) and who to add', `${JSON.stringify(dropped)} / ${ns[0] && ns[0].suggest}`);
+  ok(ns.every((n) => /^Drop .+, add .+$/.test(n.suggest || '') && !/drop/i.test(n.detail)), 'pickup: said once on each line', ns.map((n) => `${n.detail} | ${n.suggest}`));
 
   // Nobody better: no line. Nothing read yet: no line.
   eq(kind(notes({ team, wire: { ...wire, pool: [pool[4], pool[5]] } }), 'pickup'), [], 'pickup: a free agent who beats nobody is not suggested');
@@ -271,11 +339,16 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   eq(ns, [
     { id: 'offer-abc', kind: 'offer', level: 'now', title: 'Trade offer from Team Three',
       detail: 'Get Quin Ashby for Eli Ward, Jon Ross',
+      suggest: 'Check it on Trade before it expires Saturday',
       action: { label: 'Open it', href: 'trade.html?with=3&get=301&send=105,110' } },
     { id: 'offer-def', kind: 'offer', level: 'idea', title: 'Your offer to Team Seven',
       detail: 'Get Sol Vance for Lou Thorn',
+      suggest: null,
       action: { label: 'Open it', href: 'trade.html?with=7&get=701&send=112' } },
-  ], 'offer: one line per offer, theirs this week and yours an idea, opening that deal on Trade');
+  ], 'offer: one line per offer, theirs this week (with the day it expires) and yours an idea with nothing to do, opening that deal on Trade');
+  const when = (expiresAt) => kind(notes({ team, offers: [{ ...offers[0], expiresAt }] }), 'offer').map((n) => n.suggest);
+  eq([when(null), when(NOW - HOUR), when(NOW + 9 * 24 * HOUR)].flat(),
+    Array(3).fill('Check it on Trade before it expires'), 'offer: no expiry known, one already past, or one over six days off: no day is named');
   // On the synced copy the offer is as old as the sync.
   const old = kind(notes({ team, offers: [offers[0]], offersAt: NOW - 2 * HOUR }), 'offer');
   eq(old[0] && old[0].detail, 'Get Quin Ashby for Eli Ward, Jon Ross · as of 2 hours ago', 'offer: a synced copy says how old it is');
@@ -299,15 +372,22 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
       deal(7, 'Team Seven', ['Sol Vance'], ['Ned Kane']),
     ],
   };
+  saved.deals[0].gain = 1.2;   // as js/notify-trades.js saves it: points a week unless `perWeek` is false
   const ns = kind(notes({ team, saved }), 'trade');
   eq(ns, [
     { id: 'trade-0-3', kind: 'trade', level: 'idea', title: 'Trade with Team Three',
-      detail: 'Get Quin Ashby for Eli Ward · found 3 hours ago', action: { label: 'Open it', href: 'trade.html?with=3&get=300&send=100' } },
+      detail: '+1.2 pts a week · found 3 hours ago', suggest: 'Offer Eli Ward for Quin Ashby',
+      action: { label: 'Open it', href: 'trade.html?with=3&get=300&send=100' } },
     { id: 'trade-1-7', kind: 'trade', level: 'idea', title: 'Trade with Team Seven',
-      detail: 'Get Sol Vance for Lou Thorn, Kit West · found 3 hours ago', action: { label: 'Open it', href: 'trade.html?with=7&get=300&send=100,101' } },
+      detail: 'Found 3 hours ago', suggest: 'Offer Lou Thorn, Kit West for Sol Vance',
+      action: { label: 'Open it', href: 'trade.html?with=7&get=300&send=100,101' } },
     { id: 'trade-2-3', kind: 'trade', level: 'idea', title: 'Trade with Team Three',
-      detail: 'Get Rex Stone for Jon Ross · found 3 hours ago', action: { label: 'Open it', href: 'trade.html?with=3&get=300&send=100' } },
-  ], 'trade: the first three saved deals, with their age, each opening that deal on Trade');
+      detail: 'Found 3 hours ago', suggest: 'Offer Jon Ross for Rex Stone',
+      action: { label: 'Open it', href: 'trade.html?with=3&get=300&send=100' } },
+  ], 'trade: the first three saved deals — the deal as the suggestion, its gain and age as the detail — each opening that deal on Trade');
+  eq(kind(notes({ team, saved: { ...saved, perWeek: false } }), 'trade')[0].detail, '+1.2 pts · found 3 hours ago', 'trade: a gain saved as a total is not called "a week"');
+  const lone = { ...saved, at: undefined, deals: [{ withTeamId: 3, withName: 'Team Three', get: [{ id: 300, name: 'Quin Ashby' }], send: [] }] };
+  eq(kind(notes({ team, saved: lone }), 'trade').map((n) => [n.detail, n.suggest]), [['Saved on Trade', 'Ask for Quin Ashby']], 'trade: nothing sent, no gain, no age: still a detail, and the ask alone');
   eq(kind(notes({ team, saved: { ...saved, team: 3 } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: another team’s saved list is not yours');
   eq(kind(notes({ team, saved: { ...saved, v: 2 } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: a record of another shape is not read');
   eq(kind(notes({ team, saved: { ...saved, deals: [] } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: an empty list is the one "look" line');
@@ -330,6 +410,11 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   ok(ns.every((n) => n.title && n.detail && n.action && n.action.label && n.action.href), 'every line has a title, a detail and one button with somewhere to go');
   ok(ns.every((n) => n.title.split(/\s+/).length <= 8 && n.action.label.split(/\s+/).length <= 2), 'a line is a few words and its button one or two');
   eq(countNotes([]), { now: 0, soon: 0, idea: 0 }, 'counts: none');
+  // The suggested action: on every line here but the "look" one, and short.
+  ok(ns.every((n) => 'suggest' in n && (n.suggest === null || (typeof n.suggest === 'string' && n.suggest))), 'every line carries `suggest`: words or null', ns.map((n) => n.suggest));
+  eq(ns.filter((n) => n.suggest === null).map((n) => n.id), ['trade-look'], 'only "Look for trades" has nothing to suggest');
+  ok(ns.every((n) => !n.suggest || n.suggest.split(/\s+/).length <= 10), 'a suggestion is ten words or fewer', ns.map((n) => n.suggest));
+  ok(ns.every((n) => !n.suggest || n.suggest !== n.detail), 'and never the detail said again');
 }
 
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
