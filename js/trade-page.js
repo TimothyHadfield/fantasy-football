@@ -106,7 +106,9 @@ import {
   weekWeights, weekWeightsSliced, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
   finishedWeeks, someoneFinished, espnLookPerWeek, playoffReach, goalChance, goalGain, shiftSeason,
 } from './trade-odds.js';
-import { stageTrade, isAvailable as bridgeAvailable, extensionVersion } from './bridge.js';
+import { stageTrade, isAvailable as bridgeAvailable, extensionVersion, currentSeason } from './bridge.js';
+// The finished list's best deals, kept for the Notifications page.
+import { tradesNote, saveTradesNote } from './notify-trades.js';
 import {
   depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
   priceTradeAcrossWeeks, bestComboSliced, mergeComboByPartner, seasonLineupValue,
@@ -4006,6 +4008,9 @@ function renderFinder() {
     : state.search.goalRanked ? state.goal : rank.why && rank.why !== 'waiting' ? 'points' : null;
   if (final) table.setAttribute('data-ranked', final);
   else table.removeAttribute('data-ranked');
+  // The order is final here and nowhere else, so this is where its best deals
+  // are kept for the Notifications page (`keepTradeNotes`).
+  keepTradeNotes(final);
 
   if (state.searching) {
     state.rows = [];
@@ -4923,15 +4928,81 @@ function compareByGoalNet(a, b) {
  * order can be checked by eye off the two cells.
  */
 function netIncreaseOf(offer) {
+  const { mine, theirs } = shownGainsOf(offer);
+  if (!Number.isFinite(mine) || !Number.isFinite(theirs)) return -Infinity;
+  return Math.round(round1(mine) * 10) + Math.round(round1(theirs) * 10);
+}
+
+/**
+ * A row's two headline figures as `offerRow` prints them, before rounding:
+ * "You gain" and "He gains", a week on the weekly measure and totals otherwise
+ * (`perWeek` says which).
+ */
+function shownGainsOf(offer) {
   const span = weeklySpan();
   const weeks = basis() === 'weeks' && span.length > 0;
   const net = netGainOf(offer);
   const his = hisSideOf(offer, span);
   const mine = weeks ? weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, span.length) : net;
   const theirs = weeks && Number.isFinite(his.gain) ? perWeekOf(his.gain, his.weeks) : his.gain;
-  if (!Number.isFinite(mine) || !Number.isFinite(theirs)) return -Infinity;
-  return Math.round(round1(mine) * 10) + Math.round(round1(theirs) * 10);
+  return { mine, theirs, perWeek: weeks };
 }
+
+/**
+ * THE BEST DEALS, KEPT FOR THE NOTIFICATIONS PAGE (Tim, 2026-10-11: "elete
+ * trade opportunities … shown in the notifications setting").
+ *
+ * Called from `renderFinder`, the one place that knows the order on screen is
+ * final (`data-ranked`), and writes once per finished list: at most three deals
+ * off the top of the whole search, in the page's own order, whose two printed
+ * gains are both above zero (js/notify-trades.js decides and stores). A search
+ * that found nothing is kept as an empty list, so "none right now" is known.
+ *
+ * NOTHING IS KEPT for a search or a ranking still running (or cancelled — its
+ * list never becomes final), the sample league, an earlier season, a search
+ * from somebody else's squad, rosters changed by an assumed trade, or the
+ * typical-week stand-in shown while the weeks are still being read. A search
+ * narrowed to one shape keeps what it finds but is no proof there is nothing.
+ */
+function keepTradeNotes(final) {
+  const search = state.search;
+  if (!search || state.searching || state.goalRank.running) return;
+  if (state.isDemo || state.source !== 'live') return;
+  const offers = search.offers;
+  if (keepTradeNotes.list === offers && keepTradeNotes.final === final) return;
+  const onWeeks = basis() === 'weeks';
+  if (state.measure === 'weeks' && !onWeeks) return;
+  if (offers.length) {
+    if (!final) return;
+  } else if (onWeeks && !search.goalTried) {
+    // Searched on points before the simulation could run: it runs again once
+    // the played weeks are in, unless the simulation has said it never can.
+    const { why } = goalInputs();
+    if (!why || why === 'waiting') return;
+  }
+  const cfg = espn.getConfig();
+  if (!cfg.leagueId || !(Number(cfg.season) >= currentSeason())) return;
+  if (tradingForSomeoneElse() || activeAssumed()) return;
+  const note = tradesNote({
+    team: state.myTeamId,
+    // The week the league is on — the first not yet final, as Home and the
+    // connection bar count it — NOT the first week a trade can still change
+    // (`playedWeeks()`), which is one later from the first kickoff on.
+    week: state.weeks.find((w) => !(state.playedWeeks || []).includes(w)) ?? state.week,
+    at: Date.now(),
+    perWeek: onWeeks && weeklySpan().length > 0,
+    rows: offers.map((o) => {
+      const shown = shownGainsOf(o);
+      return { partner: o.partner, send: o.send, receive: o.receive, gain: shown.mine, theirGain: shown.theirs };
+    }),
+  });
+  keepTradeNotes.list = offers;
+  keepTradeNotes.final = final;
+  if (state.kind !== 'all' && !note.deals.length) return;
+  saveTradesNote(cfg.leagueId, cfg.season, note);
+}
+keepTradeNotes.list = null;
+keepTradeNotes.final = null;
 
 /** Largest net increase first, in place; equal ones keep the order they came in (the sort is stable). */
 function byNetIncrease(list) {
