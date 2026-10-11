@@ -42,6 +42,8 @@ const PAGES = [
   'waivers.html', 'trade.html', 'summary.html', 'decisions.html',
   // The main menu (2026-10-10): an empty browser, so its empty state.
   'leagues.html',
+  // Notifications (2026-10-11): the sample league's lines.
+  'notifications.html',
 ];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

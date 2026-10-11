@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notifications &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0f1115">
+<script src="js/site-status.js" defer></script>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<!-- NOTIFICATIONS (Tim, 2026-10-11): what needs doing for your team, most
+     urgent first, each line with one button. Reached by the bell in the top
+     bar, so it is not one of the nav's links and none of them is marked.
+     The page never scrolls: the list scrolls inside its panel (css/app.css,
+     the NOTIFICATIONS block at the end). -->
+<body class="nt-page">
+
+<header class="site">
+  <div class="wrap wide">
+    <a class="brand" href="leagues.html">Fantasy Football</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="waivers.html">Players</a>
+      <a href="trade.html">Trade</a>
+      <a href="decisions.html">Decisions</a>
+      <a href="draft.html">Draft</a>
+      <a href="summary.html">Summary</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wide nt-wrap">
+
+  <div id="connBar"></div>
+
+  <h1>Notifications <span id="modeBadge" class="badge demo">Demo</span></h1>
+
+  <section class="panel nt-panel" id="panelNotes">
+    <!-- One sentence when there is no list to show (an earlier season, nobody
+         set as you), and the sample league's one-line label. -->
+    <p class="nt-say" id="ntSay" hidden></p>
+    <div class="nt-list" id="ntList" aria-live="polite"></div>
+  </section>
+
+</div>
+
+<script type="module" src="js/notifications-page.js"></script>
+<script type="module" src="js/connection.js"></script>
+</body>
+</html>

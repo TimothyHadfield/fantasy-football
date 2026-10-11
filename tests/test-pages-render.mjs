@@ -28,6 +28,8 @@ const PAGES = [
   // The main menu (2026-10-10). Booted with the real js/leagues.js on an empty
   // browser, so what renders here is its empty state.
   'leagues.html',
+  // Notifications (2026-10-11): no league connected, so the sample league's lines.
+  'notifications.html',
 ];
 
 /** Parse the <script type="module" src="..."> tags a page actually declares. */

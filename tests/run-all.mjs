@@ -88,6 +88,8 @@ const SUITES = [
   ['test-decisions.mjs', 'the decisions review: one decision undone and the season replayed, flips, records, noise'],
   ['test-draft-review.mjs', 'the draft looked back on: where each man went, what he is worth now, the bar at each position, on the real league’s draft'],
   ['test-start-sit.mjs', 'start A over B: the swaps to the best legal lineup, their points, their share of the win chance, who is locked'],
+  ['test-notify.mjs', 'the notification lines: a swap and its moves, a starter who is out or on bye, a coming week with a hole, pick-ups, trade offers, saved deals, their order'],
+  ['notify-check.mjs', 'the Notifications page: one list under three headings, one button a line, the count it saves, the one-click lineup change believed only when the roster shows it, an earlier season, no team'],
   ['test-accept-by.mjs','when a trade must be accepted: first kickoff among the men you get, minus the league’s review'],
   ['test-ask-ai.mjs', 'the "Ask AI" text: both sides’ +/-, the men, the date and league, nothing undefined'],
   ['hot-check.mjs', 'the hot/cold thresholds on the analysis grid'],

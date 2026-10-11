@@ -1,0 +1,406 @@
+// NOTIFICATIONS — what needs doing for YOUR team, as a list of lines.
+//
+// Tim, 2026-10-11: "a notifications section which basically helps the user with
+// basic instrucitons or important issues or upcoming decisions … suggested
+// players to pick up, warnings for future weeks that have missing positions or
+// if you're currently starting someone you shouldn't, messages on any trade
+// notifications you have, or elete trade opportunities … for the easy ones like
+// the weekly lineup, make it so you just have to click a button".
+//
+// THERE IS NO NEW MATHS IN HERE. Every line is the answer of an engine a page
+// already shows, so a line can never disagree with the page its button opens:
+//
+//   start      js/start-sit.js `startSit`       Home's "Start A over B"
+//   bad-start  js/injury.js + the bye weeks     a starter who is out or on bye
+//   hole       js/forecast.js `optimalLineup`   a coming week with a slot the
+//                                               best legal lineup cannot fill
+//   pickup     js/waiver-gain.js `gainOf`       the Players page's Gain column
+//   offer      season.fetchPendingTrades()      a trade offer waiting on ESPN
+//   trade      the deals the Trade page saved   its ranked list, with their age
+//
+// A line is `{ id, kind, level, title, detail, action }`.
+//   level   'now'  this week, acts before a kickoff
+//           'soon' a coming week
+//           'idea' pick-ups and trades
+//   action  `{ label, href }`, or for a lineup change
+//           `{ label, href, lineup: { label, week, teamId, moves } }` where
+//           `moves` is `[{ playerId, fromSlotId, toSlotId }]` in ESPN's own
+//           lineupSlotIds (bench 20) and `href` is the fallback: ESPN's lineup
+//           screen for that team and week.
+//
+// A line disappears when its cause does: there is no dismiss and no read mark.
+//
+// Pure: no DOM, no clock (`now` comes in), no request, no storage. See
+// tests/test-notify.mjs.
+
+import { SLOT_ELIGIBILITY, SLOT_LABELS } from './espn.js';
+import { startSit, hasPlayed } from './start-sit.js';
+import { optimalLineup } from './forecast.js';
+import { gainBase, gainOf } from './waiver-gain.js';
+import { INJURY_RANK } from './injury.js';
+import { playerHref, positionHref, dealHref, espnLineupHref } from './links.js';
+import { describeAge } from './store.js';
+
+const BENCH_SLOT = 20;
+const IR_SLOT = 21;
+
+/** The three levels, most urgent first — the order of the list. */
+export const LEVELS = ['now', 'soon', 'idea'];
+
+/** How many pick-ups are suggested, and how many saved deals are listed. */
+export const PICKUP_MAX = 3;
+export const TRADE_MAX = 3;
+
+/** ESPN will not take more than this many moves in one lineup change. */
+export const MOVES_MAX = 4;
+
+const has = (v) => v !== null && v !== undefined;
+const num = (v) => (Number.isFinite(v) ? v : 0);
+const fmt1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
+const fits = (slotId, position) => (SLOT_ELIGIBILITY[slotId] || []).includes(position);
+const slotLabel = (slotId) => SLOT_LABELS[slotId] ?? String(slotId);
+
+/** A slot as the Players page's position filter names it. */
+const filterOf = (slotId) => {
+  const eligible = SLOT_ELIGIBILITY[slotId] || [];
+  if (eligible.length === 1) return eligible[0];
+  return eligible.length ? 'FLEX' : null;
+};
+
+/** Ruled out, on IR, suspended: ESPN's worst designations (js/injury.js). */
+const ruledOut = (p) => (INJURY_RANK[p && p.injuryStatus] ?? 0) === 3;
+
+/** Why a man cannot play, in two or three words; '' when nothing is known. */
+function whyNot(p, week, byes) {
+  if (onBye(p, week, byes)) return 'is on bye';
+  if (p.injuryStatus === 'INJURY_RESERVE') return 'is on IR';
+  if (p.injuryStatus === 'SUSPENSION') return 'is suspended';
+  if (ruledOut(p)) return 'is out';
+  return '';
+}
+
+/**
+ * Is this week his NFL team's bye? Only ever a KNOWN bye: `byes` is
+ * `{ [proTeamId]: week }` (js/season.js `fetchByeWeeks`), and a team missing
+ * from it is "unknown", never "no bye".
+ */
+export function onBye(p, week, byes) {
+  if (!p || !has(week)) return false;
+  if (Number.isFinite(p.byeWeek)) return p.byeWeek === Number(week);
+  if (!byes || !has(p.proTeamId)) return false;
+  const b = Number(byes[p.proTeamId]);
+  return Number.isFinite(b) && b > 0 && b === Number(week);
+}
+
+const listNames = (men) => men.map((m) => m.name).filter(Boolean).join(', ');
+
+// ------------------------------------------------------------------ start
+
+/**
+ * The moves that make one swap on ESPN, or null when it cannot be done in
+ * `MOVES_MAX` moves.
+ *
+ * `startSit` pairs a man coming in with a man going out only to SAY the change
+ * (same position first, then whoever is left), so the man coming in does not
+ * always fit the other's slot — a receiver in for a running back when the flex
+ * holds a back. Then a third man moves: the starter whose slot takes the new
+ * man and who himself fits the slot being emptied.
+ */
+export function movesFor(swap, { players = [], slots = [], isLocked = hasPlayed } = {}) {
+  const inn = swap && swap.in;
+  if (!inn || !has(inn.playerId)) return null;
+  const from = has(inn.lineupSlotId) ? inn.lineupSlotId : BENCH_SLOT;
+  const starters = (players || []).filter((p) => p && p.started && p.lineupSlotId !== IR_SLOT);
+  const out = swap.out;
+
+  if (!out) {
+    // Into a slot that stands empty: the league's slots less the ones taken.
+    const open = (slots || []).slice();
+    for (const p of starters) {
+      const i = open.indexOf(p.lineupSlotId);
+      if (i >= 0) open.splice(i, 1);
+    }
+    const to = open.find((id) => fits(id, inn.position));
+    return to === undefined ? null : [{ playerId: inn.playerId, fromSlotId: from, toSlotId: to }];
+  }
+
+  if (!has(out.playerId)) return null;
+  const emptied = out.lineupSlotId;
+  const bench = { playerId: out.playerId, fromSlotId: emptied, toSlotId: BENCH_SLOT };
+  if (fits(emptied, inn.position)) {
+    return [bench, { playerId: inn.playerId, fromSlotId: from, toSlotId: emptied }];
+  }
+  const via = starters.find((p) =>
+    p.playerId !== out.playerId && has(p.playerId) && !isLocked(p) &&
+    fits(p.lineupSlotId, inn.position) && fits(emptied, p.position));
+  if (!via) return null;
+  return [
+    bench,
+    { playerId: via.playerId, fromSlotId: via.lineupSlotId, toSlotId: emptied },
+    { playerId: inn.playerId, fromSlotId: from, toSlotId: via.lineupSlotId },
+  ];
+}
+
+function startNotes({ week, teamId, league, team, slots, isLocked }) {
+  const players = (team && team.players) || [];
+  const s = startSit({ players, slots, isLocked });
+  if (!s || s.best) return { notes: [], benched: new Set() };
+  const href = espnLineupHref({ ...(league || {}), teamId, week });
+  const benched = new Set();
+  const notes = s.swaps.map((w) => {
+    if (w.out && has(w.out.playerId)) benched.add(w.out.playerId);
+    const moves = href ? movesFor(w, { players, slots, isLocked }) : null;
+    // The sample league has no ESPN page: the button shows the man instead.
+    const action = href
+      ? { label: 'Open ESPN', href }
+      : { label: 'See him', href: playerHref(w.in.playerId) };
+    if (moves && moves.length <= MOVES_MAX) {
+      action.lineup = { label: 'Change it', week, teamId, moves };
+    }
+    return {
+      id: `start-${w.in.playerId}-${w.out ? w.out.playerId : 0}`,
+      kind: 'start',
+      level: 'now',
+      title: w.out ? `Start ${w.in.name} over ${w.out.name}` : `Start ${w.in.name}`,
+      detail: `+${fmt1(w.points)} pts this week`,
+      action,
+    };
+  });
+  return { notes, benched };
+}
+
+// -------------------------------------------------------------- bad-start
+
+function badStartNotes({ week, team, isLocked, byes, benched }) {
+  const out = [];
+  for (const p of (team && team.players) || []) {
+    if (!p || !p.started || p.lineupSlotId === IR_SLOT) continue;
+    if (isLocked(p)) continue;                       // his game has started: nothing to do
+    if (has(p.playerId) && benched.has(p.playerId)) continue;   // a swap line already says it
+    const why = whyNot(p, week, byes);
+    if (!why) continue;
+    out.push({
+      id: `bad-${p.playerId}`,
+      kind: 'bad-start',
+      level: 'now',
+      title: `${p.name} ${why}`,
+      detail: `In your lineup at ${p.slot || slotLabel(p.lineupSlotId)}`,
+      action: { label: 'See him', href: playerHref(p.playerId) },
+    });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------- hole
+
+/**
+ * The starting slots of one week the best legal lineup cannot fill: left
+ * empty, or filled by a man projected 0 (a bye, a man ruled out).
+ *
+ * @returns {Array<{slotId:number, men:Object[]}>} one entry per kind of slot
+ *   that is short; `men` are the zero-projected men standing in it.
+ */
+export function holesIn(players, slots) {
+  const pool = (players || [])
+    .filter((p) => p && p.lineupSlotId !== IR_SLOT && p.slot !== 'IR')
+    .map((p) => ({ position: p.position, projected: num(p.projected), p }));
+  const lineup = optimalLineup(pool, slots);
+  const asked = new Map();
+  for (const id of slots || []) asked.set(id, (asked.get(id) || 0) + 1);
+  const out = [];
+  for (const [slotId, want] of asked) {
+    const here = lineup.starters.filter((s) => s.slotId === slotId);
+    const real = here.filter((s) => s.projected > 0);
+    if (real.length >= want) continue;
+    out.push({ slotId, men: here.filter((s) => !(s.projected > 0)).map((s) => s.p) });
+  }
+  return out;
+}
+
+function holeNotes({ coming, slots, byes }) {
+  const out = [];
+  const weeks = (coming || []).slice().sort((a, b) => a.week - b.week);
+  for (const { week, players } of weeks) {
+    if (!players || !players.length) continue;       // that week could not be read
+    for (const { slotId, men } of holesIn(players, slots)) {
+      const label = slotLabel(slotId);
+      const man = men[0] || null;
+      const why = man ? whyNot(man, week, byes) || 'projects 0' : '';
+      out.push({
+        id: `hole-${week}-${slotId}`,
+        kind: 'hole',
+        level: 'soon',
+        title: `Week ${week}: no ${label}`,
+        detail: man ? `${man.name} ${why}` : 'Nobody on your roster fits',
+        action: { label: 'Find one', href: positionHref(filterOf(slotId)) || 'waivers.html' },
+      });
+    }
+  }
+  return out;
+}
+
+// ----------------------------------------------------------------- pickup
+
+/**
+ * The free agents worth most to your lineup, best first: the Players page's
+ * Gain, fed exactly as that page feeds it (`gainBase` once, `gainOf` per man).
+ *
+ * @param {Object} wire `{ weeks, pool, projFor, floors }` — the weeks priced,
+ *   the free agents (`playerId`, `name`, `position`), and the projection of any
+ *   man in any of those weeks
+ */
+export function pickups({ team, slots, wire }) {
+  if (!wire || !team || !(wire.weeks || []).length) return [];
+  const man = (p) => ({ playerId: p.playerId, name: p.name, position: p.position });
+  const mine = (team.players || []).filter((p) => p && has(p.playerId)).map(man);
+  if (!mine.length) return [];
+  const base = gainBase({
+    players: mine, slots, weeks: wire.weeks, projFor: wire.projFor, floors: wire.floors || null,
+  });
+  const held = new Set(mine.map((p) => p.playerId));
+  const out = [];
+  for (const p of wire.pool || []) {
+    if (!p || !has(p.playerId) || held.has(p.playerId)) continue;
+    const g = gainOf(base, man(p));
+    // "+0.0 a week" is not a suggestion: the gain has to show at the figure printed.
+    if (!(g.total > 0) || Math.round(g.perWeek * 10) < 1) continue;
+    out.push({ player: man(p), gain: g });
+  }
+  out.sort((a, b) => b.gain.total - a.gain.total || a.player.playerId - b.player.playerId);
+  return out.slice(0, PICKUP_MAX);
+}
+
+function pickupNotes(input) {
+  return pickups(input).map(({ player, gain }) => ({
+    id: `pickup-${player.playerId}`,
+    kind: 'pickup',
+    level: 'idea',
+    title: `Pick up ${player.name}`,
+    detail: `+${fmt1(gain.perWeek)} pts a week` + (gain.drop ? ` · drop ${gain.drop.name}` : ''),
+    action: { label: 'See him', href: playerHref(player.playerId) },
+  }));
+}
+
+// ------------------------------------------------------------------ offer
+
+function offerNotes({ offers, teams, offersAt, now }) {
+  const nameOf = new Map();
+  const teamName = new Map();
+  for (const t of teams || []) {
+    teamName.set(String(t.id), t.name);
+    for (const p of t.players || []) if (has(p.playerId)) nameOf.set(String(p.playerId), p.name);
+  }
+  const names = (ids) => (ids || []).map((id) => nameOf.get(String(id))).filter(Boolean).join(', ');
+  // On the phone an offer is as old as the last sync, and the line says so.
+  const age = Number.isFinite(offersAt) ? ` · as of ${describeAge(now - offersAt)}` : '';
+  const out = [];
+  for (const o of Array.isArray(offers) ? offers : []) {
+    if (!o || !has(o.withTeamId)) continue;
+    const who = teamName.get(String(o.withTeamId)) || 'another team';
+    const get = names(o.get);
+    const send = names(o.send);
+    const deal = get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : send ? `Send ${send}` : 'Open it to see the deal';
+    out.push({
+      id: `offer-${has(o.id) ? o.id : `${o.withTeamId}-${(o.get || []).join('.')}-${(o.send || []).join('.')}`}`,
+      kind: 'offer',
+      // An offer to you waits on YOUR answer; your own is waiting on him.
+      level: o.fromMe ? 'idea' : 'now',
+      title: o.fromMe ? `Your offer to ${who}` : `Trade offer from ${who}`,
+      detail: deal + age,
+      action: {
+        label: 'Open it',
+        href: dealHref({ with: o.withTeamId, get: o.get, send: o.send }) || 'trade.html',
+      },
+    });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ trade
+
+/**
+ * The deals the Trade page saved when its ranked list last finished
+ * (`ff.notes.trades.<leagueId>-<season>`), for THIS team only: another team's
+ * list is nobody's suggestion here.
+ */
+function tradeNotes({ saved, teamId, now }) {
+  const mine = saved && saved.v === 1 && String(saved.team) === String(teamId) && Array.isArray(saved.deals)
+    ? saved.deals.filter((d) => d && has(d.withTeamId)).slice(0, TRADE_MAX)
+    : [];
+  if (!mine.length) {
+    return [{
+      id: 'trade-look',
+      kind: 'trade',
+      level: 'idea',
+      title: 'Look for trades',
+      detail: 'No deals found yet',
+      action: { label: 'Open Trade', href: 'trade.html' },
+    }];
+  }
+  const age = Number.isFinite(saved.at) ? ` · found ${describeAge(now - saved.at)}` : '';
+  return mine.map((d, i) => {
+    const get = listNames(d.get || []);
+    const send = listNames(d.send || []);
+    return {
+      id: `trade-${i}-${d.withTeamId}`,
+      kind: 'trade',
+      level: 'idea',
+      title: `Trade with ${d.withName || 'another team'}`,
+      detail: (get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : `Send ${send}`) + age,
+      action: { label: 'Open Trade', href: 'trade.html' },
+    };
+  });
+}
+
+// ------------------------------------------------------------------- all
+
+/**
+ * Every line for one team, most urgent first.
+ *
+ * @param {Object} o
+ * @param {number} o.week       the week being played next
+ * @param {*} o.teamId          your team
+ * @param {{leagueId, season}|null} [o.league]  for the link to ESPN; null on the sample league
+ * @param {Object|null} o.team  your squad this week (js/season.js shape: `players` with
+ *                              `playerId`, `position`, `lineupSlotId`, `started`, `projected`)
+ * @param {Array} [o.teams]     every squad this week (names for the offers)
+ * @param {number[]} o.slots    the lineupSlotIds the league starts
+ * @param {(p) => boolean} [o.isLocked]  true for a man whose game has started
+ * @param {Object|null} [o.byes]  `{ [proTeamId]: byeWeek }`, or null when unknown
+ * @param {Array<{week, players}>} [o.coming]  your squad as read for each later week
+ * @param {Object|null} [o.wire]  see `pickups`; null until the wire has been read
+ * @param {Array} [o.offers]    `season.fetchPendingTrades()`
+ * @param {number|null} [o.offersAt]  when the offers were read, if that is not now (a synced copy)
+ * @param {Object|null} [o.saved]  the Trade page's saved deals
+ * @param {number} [o.now]      epoch ms, for the ages
+ * @returns {Array<{id, kind, level, title, detail, action}>}
+ */
+export function buildNotes({
+  week, teamId, league = null, team = null, teams = [], slots = [],
+  isLocked = hasPlayed, byes = null, coming = [], wire = null,
+  offers = [], offersAt = null, saved = null, now = Date.now(),
+} = {}) {
+  if (!team) return [];
+  const start = startNotes({ week, teamId, league, team, slots, isLocked });
+  const all = [
+    ...start.notes,
+    ...badStartNotes({ week, team, isLocked, byes, benched: start.benched }),
+    ...holeNotes({ coming, slots, byes }),
+    ...pickupNotes({ team, slots, wire }),
+    ...offerNotes({ offers, teams, offersAt, now }),
+    ...tradeNotes({ saved, teamId, now }),
+  ];
+  // Stable: within a level the lines keep the order they were made in — swaps
+  // biggest first, weeks soonest first, pick-ups by Gain.
+  return all
+    .map((n, i) => ({ n, i }))
+    .sort((a, b) => LEVELS.indexOf(a.n.level) - LEVELS.indexOf(b.n.level) || a.i - b.i)
+    .map(({ n }) => n);
+}
+
+/** How many lines stand at each level: what the bell's count is made of. */
+export function countNotes(notes) {
+  const c = { now: 0, soon: 0, idea: 0 };
+  for (const n of notes || []) if (n && n.level in c) c[n.level]++;
+  return c;
+}

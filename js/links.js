@@ -5,7 +5,7 @@
 // on the preview."
 //
 // Every card on the site (js/player-card.js for a man, js/pop.js for a number)
-// takes an `href`, and these four functions are the only place those hrefs are
+// takes an `href`, and the functions here are the only place those hrefs are
 // spelled. A page that builds one by hand will drift from the page that reads
 // it; a page that calls these cannot.
 //
@@ -17,6 +17,12 @@
 //                               Week matchups, on that week
 //   statsHref(teamId?)          stats.html[?team=7]
 //                               the standings, with that team's row marked
+//   positionHref(pos)           waivers.html?pos=TE
+//                               the Players page, filtered to that position
+//   dealHref({with, get, send}) trade.html?with=7&get=11,12&send=13
+//                               the Trade page's custom builder on that deal
+//   espnLineupHref({...})       ESPN's own lineup screen for a team and week
+//                               (the one link here that leaves the site)
 //
 // Each returns null when the thing it needs is missing — a man ESPN gives no id
 // for has no page to land on — so a caller can hand the result straight to a
@@ -52,6 +58,36 @@ export function weekHref(week) {
 /** The standings on the Stats page, with one team's row marked when given. */
 export function statsHref(teamId = null) {
   return has(teamId) ? `stats.html?team=${enc(teamId)}` : 'stats.html';
+}
+
+/** The Players page with its position filter set (QB, RB, WR, TE, FLEX, K, DST). */
+export function positionHref(pos) {
+  if (!has(pos)) return null;
+  return `waivers.html?pos=${enc(pos)}`;
+}
+
+/**
+ * A deal on the Trade page's custom builder: `with` is the other manager's
+ * team id, `get` the player ids you would receive, `send` the ones you would
+ * give up (js/trade-page.js `dealLink` reads exactly these three names).
+ */
+export function dealHref({ with: partner, get = [], send = [] } = {}) {
+  if (!has(partner)) return null;
+  const ids = (list) => (list || []).filter(has).map(enc).join(',');
+  const g = ids(get);
+  const s = ids(send);
+  return `trade.html?with=${enc(partner)}${g ? `&get=${g}` : ''}${s ? `&send=${s}` : ''}`;
+}
+
+/**
+ * ESPN's lineup screen for one team, on one week when given. null without a
+ * league, a season or a team: the sample league has no ESPN page to open.
+ */
+export function espnLineupHref({ leagueId, season, teamId, week = null } = {}) {
+  if (!has(leagueId) || !has(season) || !has(teamId)) return null;
+  return 'https://fantasy.espn.com/football/team' +
+    `?leagueId=${enc(leagueId)}&seasonId=${enc(season)}&teamId=${enc(teamId)}` +
+    (has(week) ? `&scoringPeriodId=${enc(week)}` : '');
 }
 
 /**

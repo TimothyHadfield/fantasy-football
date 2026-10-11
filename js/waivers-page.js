@@ -259,7 +259,10 @@ const state = {
   // Both are read back through FILTER_CHOICE, so a saved FLEX comes back as
   // FLEX and a saved anything-else comes back as ALL rather than wedging the
   // page on a filter no button can turn off.
-  position: FILTER_CHOICE(prefs.get('position', 'ALL')),
+  // `?pos=TE` (js/links.js `positionHref`, a Notifications line's "Find one")
+  // opens the wire on that position. An answer to a link, not a change of
+  // mind: it is not saved, so a reload without it gives back the filter chosen.
+  position: FILTER_CHOICE(requestedPosition() ?? prefs.get('position', 'ALL')),
   takenPosition: FILTER_CHOICE(prefs.get('takenPosition', 'ALL')),
 
   // PROJ | VALUE (Tim, 2026-10-09 — see "player Value" below). One setting for
@@ -2888,6 +2891,16 @@ function requestedPlayer() {
     return m ? Number(m[1]) : null;
   } catch {
     return null;   // no location at all is simply "no player asked for"
+  }
+}
+
+/** `?pos=` from the URL: the position the wire opens on. Null when absent. */
+function requestedPosition() {
+  try {
+    const m = /[?&]pos=([A-Za-z]+)/.exec((window.location && window.location.search) || '');
+    return m ? m[1].toUpperCase() : null;
+  } catch {
+    return null;
   }
 }
 

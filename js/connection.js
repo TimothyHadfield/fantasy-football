@@ -124,8 +124,12 @@ const state = {
  * cloud (its copies are first-copy-wins and must never be minted from an old
  * season), no reading is taken, no "Week N not saved yet" is said, and the
  * account's saved league is left alone.
+ *
+ * Exported for the pages that have to say so themselves (Notifications): a
+ * page asks about the saved league's season, which it can do before the bar
+ * has finished its own round trip.
  */
-const pastSeason = () => Number(state.season) !== bridge.currentSeason();
+export const pastSeason = (season = state.season) => Number(season) !== bridge.currentSeason();
 
 /**
  * Keep the main menu's list (js/leagues.js) current with what the bar knows:

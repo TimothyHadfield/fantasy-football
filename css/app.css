@@ -2080,3 +2080,106 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
 header.site a.brand { color: inherit; text-decoration: none; }
 header.site a.brand:focus-visible { border-radius: var(--r-1); }
 /* ===================================================== end of the brand link */
+/* ============ NOTIFICATIONS (notifications.html, 2026-10-11)
+ * Tim: "a notifications section which basically helps the user with basic
+ * instrucitons or important issues or upcoming decisions". One list, most
+ * urgent first, each line a few words and ONE button.
+ *
+ * THE PAGE NEVER SCROLLS: the body is exactly the screen, a column of header,
+ * connection bar, heading and the panel, and the LIST is the one part that
+ * gives way — it scrolls inside its panel (the main menu's own shape,
+ * leagues.html). The "Site updated" line keeps its place under it.
+ *
+ * A line is title | detail | button on a laptop, and on a phone the title over
+ * the detail with the button beside both. The button column has one width, so
+ * "Changing…" moves nothing. */
+body.nt-page {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 12px;
+}
+body.nt-page > header.site { flex: none; }
+body.nt-page > footer.site-stamp { flex: none; width: 100%; max-width: 1600px; margin-top: 10px; }
+.nt-wrap { flex: 0 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+.nt-wrap > * { flex: none; }
+.nt-wrap > h1 { margin-bottom: 10px; }
+.nt-wrap > .nt-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-width: 1180px;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+.nt-say { flex: none; margin: 0; font-size: 14px; color: var(--dim); }
+.nt-say.nt-bad, .nt-detail.nt-bad { color: var(--err); }
+.nt-say:not([hidden]) + .nt-list:not([hidden]) { margin-top: 12px; }
+.nt-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+}
+.nt-group {
+  position: sticky; top: 0; z-index: 1;
+  padding: 4px 11px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--dim);
+}
+.nt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 22em) minmax(0, 1fr) 112px;
+  grid-template-areas: "title detail go";
+  align-items: center;
+  column-gap: 16px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.nt-row:last-child { border-bottom: none; }
+.nt-title { grid-area: title; min-width: 0; font-weight: 600; }
+.nt-detail { grid-area: detail; min-width: 0; font-size: 13px; color: var(--dim); }
+.nt-title, .nt-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* This week's lines carry the site's amber at their edge. */
+.nt-row.nt-now { box-shadow: inset 3px 0 0 var(--warn); }
+.nt-wait { display: block; color: var(--dim); font-size: 13px; }
+/* The one button: a link drawn as the site's button, or the button itself. */
+.nt-go {
+  grid-area: go;
+  justify-self: stretch;
+  text-align: center;
+  white-space: nowrap;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.4;
+  border-radius: var(--r-2);
+}
+a.nt-go {
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+}
+a.nt-go:hover { background: #2b3140; }
+@media (max-width: 760px) {
+  body.nt-page { padding-bottom: 8px; }
+  .nt-wrap > h1 { margin-bottom: 8px; }
+  .nt-wrap > .nt-panel { padding: 12px; }
+  .nt-row {
+    grid-template-columns: minmax(0, 1fr) 104px;
+    grid-template-areas: "title go" "detail go";
+    column-gap: 10px;
+    row-gap: 1px;
+    padding: 8px 10px;
+  }
+  /* A swap names two men: the title may take a second line, the detail not. */
+  .nt-title { white-space: normal; line-height: 1.3; }
+  .nt-go { min-height: 44px; display: flex; align-items: center; justify-content: center; }
+}
+/* ===================================================== end of notifications */
