@@ -65,7 +65,10 @@ export function seasonAvgOf(playerId, weekTeams, currentWeek = null) {
 function rowOf(p, pre, avg, team) {
   const from = num(pre);
   const to = num(avg);
-  if (!p || !known(p.playerId) || from === null || to === null) return null;
+  // ESPN sends 0 as the average of a man who has not played: that is "no
+  // average", not a score, so he is not a row (measured 2026-10-11: 11 such men
+  // sat on the chart's floor).
+  if (!p || !known(p.playerId) || from === null || to === null || to === 0) return null;
   return {
     playerId: p.playerId,
     name: p.name || '',

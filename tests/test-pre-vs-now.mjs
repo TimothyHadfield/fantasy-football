@@ -100,6 +100,16 @@ eq(pvn.buildRows({ teams: split, preOf }).length, fx.expected({ wire: false }).l
     preOf: () => 10, avgOf: (id) => pvn.seasonAvgOf(id, weeks, 3),
   });
   eq(viaWeeks.length === 1 && viaWeeks[0].avg, 11.25, 'and `avgOf` hands that to the row');
+  // ESPN's 0 for a man who has not played is "no average", not a score.
+  const unplayed = pvn.buildRows({
+    teams: [{ id: 2, name: 'B', players: [
+      { playerId: 7, name: 'Seven', position: 'RB', seasonAvg: 0 },
+      { playerId: 8, name: 'Eight', position: 'RB', seasonAvg: 0.4 },
+    ] }],
+    wire: [{ playerId: 9, name: 'Nine', position: 'WR', seasonAvg: 0 }],
+    preOf: () => 10,
+  });
+  eq(unplayed.map((r) => r.playerId).join(), '8', 'an average of exactly 0 (not played) is not a row, rostered or free');
 }
 
 // --------------------------------------------------------------- the filters

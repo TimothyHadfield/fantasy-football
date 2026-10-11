@@ -295,7 +295,7 @@
       "assertions": 95
     },
     "test-pre-vs-now.mjs": {
-      "assertions": 85
+      "assertions": 86
     },
     "pre-now-check.mjs": {
       "assertions": 164,
