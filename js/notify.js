@@ -347,7 +347,10 @@ function tradeNotes({ saved, teamId, now }) {
       level: 'idea',
       title: `Trade with ${d.withName || 'another team'}`,
       detail: (get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : `Send ${send}`) + age,
-      action: { label: 'Open Trade', href: 'trade.html' },
+      action: {
+        label: 'Open it',
+        href: dealHref({ with: d.withTeamId, get: (d.get || []).map((p) => p.id), send: (d.send || []).map((p) => p.id) }),
+      },
     };
   });
 }

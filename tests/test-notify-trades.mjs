@@ -308,7 +308,7 @@ if (!process.argv[2]) {
   }
 
   if (mod) {
-    const { pickDeals, tradesNote, goodForBoth, tradesKey, saveTradesNote, readTradesNote, validNote, MAX_DEALS } = mod;
+    const { pickDeals, tradesNote, goodForBoth, worthSaving, tradesKey, saveTradesNote, readTradesNote, validNote, MAX_DEALS } = mod;
 
     // A man as a roster read hands him to the Trade page, and an offer as the
     // finder hands it to the row (js/trade.js `findTrades`), with the two
@@ -349,8 +349,11 @@ if (!process.argv[2]) {
     ];
     const deals = pickDeals(RANKED);
     eq('three kept out of four that qualify, in the list’s own order', deals.map((d) => [d.withTeamId, d.gain, d.theirGain]),
-      [[3, 1.2, 0.9], [4, 0.3, 0.1], [2, 0.1, 0.1]]);
-    eq('a deal in full: who with, the men each way by id and name, the two printed figures', deals[1], {
+      [[3, 1.2, 0.9], [2, 2.6, -0.4], [4, 0.3, 0.1]]);
+    ok('you gain and the pair gains: kept though he loses a little', worthSaving({ gain: 2.6, theirGain: -0.4 }));
+    ok('he loses more than you gain: not kept', !worthSaving({ gain: 0.5, theirGain: -0.6 }));
+    ok('you lose: not kept whatever he gains', !worthSaving({ gain: -0.2, theirGain: 1.9 }));
+    eq('a deal in full: who with, the men each way by id and name, the two printed figures', deals[2], {
       withTeamId: 4, withName: 'Di',
       get: [{ id: 400, name: 'Di QB1' }],
       send: [{ id: 100, name: 'Ana QB1' }, { id: 110, name: 'Ana TE2' }],
@@ -358,7 +361,7 @@ if (!process.argv[2]) {
     });
     eq('a deal carries nothing else', Object.keys(deals[0]).sort(), ['gain', 'get', 'send', 'theirGain', 'withName', 'withTeamId']);
     eq('a man is his id and his name, nothing else', Object.keys(deals[0].get[0]).sort(), ['id', 'name']);
-    eq('the fourth is there when four are asked for', pickDeals(RANKED, 4).map((d) => d.withTeamId), [3, 4, 2, 4]);
+    eq('the fourth is there when four are asked for', pickDeals(RANKED, 4).map((d) => d.withTeamId), [3, 2, 4, 2]);
     eq('one asked for is the top one', pickDeals(RANKED, 1).map((d) => d.gain), [1.2]);
     ok('the rows handed in are not touched', RANKED[0].gain === 1.24 && RANKED[0].send[0] === A.te);
 
@@ -374,7 +377,7 @@ if (!process.argv[2]) {
     ok('no figure for you (−Infinity, NaN): not kept', !goodForBoth({ gain: -Infinity, theirGain: 2 }) && !goodForBoth({ gain: NaN, theirGain: 2 }));
     ok('nothing at all: not kept', !goodForBoth(null) && !goodForBoth(undefined) && !goodForBoth({}));
 
-    eq('nobody qualifies: an empty list', pickDeals([RANKED[1], RANKED[3], RANKED[4]]), []);
+    eq('nobody qualifies: an empty list', pickDeals([RANKED[3], { ...RANKED[1], gain: 0.5, theirGain: -0.6 }]), []);
     eq('an empty list in, an empty list out', pickDeals([]), []);
     eq('no list at all: an empty list, no throw', [pickDeals(null), pickDeals(undefined)], [[], []]);
     eq('a row with no partner, or nobody on one side, is passed over',
@@ -416,7 +419,8 @@ if (!process.argv[2]) {
   const key = `${KEY_HEAD}${LEAGUE}-${season}`;
 
   /** What the note should hold, read off the table on screen. */
-  const fromTable = (rows) => rows.filter((r) => r.gain > 0 && r.theirGain > 0).slice(0, 3);
+  const good = (r) => r.gain > 0 && Math.round((r.gain + r.theirGain) * 10) > 0;
+  const fromTable = (rows) => rows.filter(good).slice(0, 3);
   const matches = (deal, r) => deal && r && deal.withName === r.withName && deal.gain === r.gain && deal.theirGain === r.theirGain &&
     deal.send.length === r.sendMen && deal.get.length === r.getMen &&
     deal.send.every((p) => r.send.includes(p.name)) && deal.get.every((p) => r.get.includes(p.name));
@@ -435,7 +439,7 @@ if (!process.argv[2]) {
       // proves the order, the cap of three and the figures; rows that must be
       // passed over are half A's.
       ok('live: the table has more good rows than are kept (or the cap proves nothing)',
-        want.length === 3 && live.rows.filter((r) => r.gain > 0 && r.theirGain > 0).length > 3,
+        want.length === 3 && live.rows.filter(good).length > 3,
         JSON.stringify(live.rows.map((r) => [r.gain, r.theirGain])));
       eq('live: as many deals as the table has good ones, up to three', note.deals.length, want.length);
       note.deals.forEach((d, i) => ok(`live: deal ${i + 1} is the table’s good row ${i + 1} — manager, men, both printed figures`,

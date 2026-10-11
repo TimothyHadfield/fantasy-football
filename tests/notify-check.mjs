@@ -110,7 +110,7 @@ const OFFER = { id: 'abc', withTeamId: 3, get: [303], send: [404, 410], proposed
 const DEALS = (season) => ({
   [`ff.notes.trades.${LEAGUE}-${season}`]: {
     v: 1, team: ME, at: Date.now() - 3 * 60 * 60 * 1000,
-    deals: [{ withTeamId: 2, withName: 'Team 2', get: [{ playerId: 203, name: 'T2 Man 03' }], send: [{ playerId: 406, name: 'T4 Man 06' }] }],
+    deals: [{ withTeamId: 2, withName: 'Team 2', get: [{ id: 203, name: 'T2 Man 03' }], send: [{ id: 406, name: 'T4 Man 06' }], gain: 1.2, theirGain: -0.3 }],
   },
 });
 const ESPN = (season) => `https://fantasy.espn.com/football/team?leagueId=${LEAGUE}&seasonId=${season}&teamId=${ME}&scoringPeriodId=5`;
@@ -189,7 +189,7 @@ if (process.argv[2]) {
       eq(p.calls('wire').map((c) => c[1]).sort((a, b) => a - b), [5, 6, 7], 'pickup: priced over the next three weeks, one wire read each');
       // trade
       eq([by('trade-0-2').title, by('trade-0-2').detail, by('trade-0-2').label, by('trade-0-2').href],
-        ['Trade with Team 2', 'Get T2 Man 03 for T4 Man 06 · found 3 hours ago', 'Open Trade', 'trade.html'], 'trade: the deal the Trade page saved, with its age');
+        ['Trade with Team 2', 'Get T2 Man 03 for T4 Man 06 · found 3 hours ago', 'Open it', 'trade.html?with=2&get=203&send=406'], 'trade: the deal the Trade page saved, with its age');
 
       // What was read, and how often.
       eq(p.calls('schedule').length, 1, 'the schedule is read once');

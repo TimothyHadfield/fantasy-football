@@ -71,11 +71,24 @@ export function goodForBoth(row) {
  * @param {number} [max] how many to keep
  * @returns {Array<{withTeamId, withName, get, send, gain, theirGain}>}
  */
+/**
+ * Is this row worth a line on Notifications? You gain, and the two squads
+ * together gain (the Trade page's own order is by that net increase).
+ *
+ * Measured 2026-10-11 on a real league: none of 40 ranked deals gained for BOTH
+ * sides — the finder lets the other manager lose a little — so "good for both"
+ * left the line empty nearly always.
+ */
+export function worthSaving(row) {
+  if (!row || !Number.isFinite(row.gain) || !Number.isFinite(row.theirGain)) return false;
+  return tenth(row.gain) > 0 && tenth(tenth(row.gain) + tenth(row.theirGain)) > 0;
+}
+
 export function pickDeals(rows, max = MAX_DEALS) {
   const out = [];
   for (const row of Array.isArray(rows) ? rows : []) {
     if (out.length >= max) break;
-    if (!row || !row.partner || row.partner.id == null || !goodForBoth(row)) continue;
+    if (!row || !row.partner || row.partner.id == null || !worthSaving(row)) continue;
     const get = men(row.receive);
     const send = men(row.send);
     // A deal with nobody on one side is not a trade anybody can open.

@@ -216,7 +216,16 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
   state.week = week;
   if (cfg.teamId === null || cfg.teamId === undefined) return { ...state, status: 'noteam', notes: [], pending: false };
 
-  const rosters = await season.fetchWeekRosters(week, fresh ? { fresh: true } : undefined);
+  // Known BEFORE any roster is read: on the synced copy the byes are handed to
+  // every roster read (the copy's own, or none), because a read left to find
+  // them itself asks ESPN when the copy has none.
+  let cloud = null;
+  try { cloud = has('cloudSource') ? await season.cloudSource() : null; } catch { cloud = null; }
+  const cloudByes = cloud ? (cloud.byes || {}) : null;
+
+  const rosters = await season.fetchWeekRosters(week, {
+    ...(fresh ? { fresh: true } : {}), ...(cloud ? { byes: cloudByes } : {}),
+  });
   const teams = (rosters && rosters.teams) || [];
   const team = teams.find((t) => sameId(t.id, cfg.teamId)) || null;
   if (!team) return { ...state, status: 'noteam', notes: [], pending: false };
@@ -224,8 +233,6 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
   // THE SYNCED COPY ASKS ESPN FOR NOTHING: its byes ride the copy itself, and
   // the NFL's kickoffs are not on it, so there the roster's own evidence locks
   // who has played (as on Home).
-  let cloud = null;
-  try { cloud = has('cloudSource') ? await season.cloudSource() : null; } catch { cloud = null; }
   let byes = null;
   let kickoffs = null;
   try {
@@ -260,10 +267,21 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
 
   // THE COMING WEEKS: one roster read a week, out of the store where held.
   const left = has('valueWeeks') ? season.valueWeeks(schedule) : (schedule.weeks || []);
-  const later = left.filter((w) => w > week);
+  // On the synced copy only the weeks it HOLDS are asked for: a week it lacks
+  // would fall through to ESPN, and the phone asks ESPN for nothing.
+  const held = (shape) => new Set(((cloud && cloud.weeks && cloud.weeks[shape]) || []).map(Number));
+  const heldRosters = held('rosters');
+  const heldWire = held('wire');
+  const later = left.filter((w) => w > week && (!cloud || heldRosters.has(Number(w))));
   let weekTeams = new Map();
   try {
-    if (later.length) weekTeams = (await season.fetchWeeksRosters(later)) || new Map();
+    if (later.length && cloud) {
+      // Week by week with the copy's byes: the span read fetches the byes itself.
+      for (const w of later) {
+        const got = await season.fetchWeekRosters(w, { byes: cloudByes });
+        if (got && got.teams && got.teams.length) weekTeams.set(w, got.teams);
+      }
+    } else if (later.length) weekTeams = (await season.fetchWeeksRosters(later)) || new Map();
   } catch { weekTeams = new Map(); }
   const coming = later.map((w) => ({
     week: w, players: ((weekTeams.get(w) || []).find((t) => sameId(t.id, cfg.teamId)) || {}).players || [],
@@ -273,7 +291,9 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
   // THE PICK-UPS: the wire of each week priced. A week with a finished game in
   // it is locked — no claim made now can move it (the Players page's rule).
   const underWay = teams.some((t) => (t.players || []).some((p) => p.done === true));
-  const span = [week, ...later].slice(0, GAIN_WEEKS).filter((w) => !(w === week && underWay));
+  const span = [week, ...later].slice(0, GAIN_WEEKS)
+    .filter((w) => !(w === week && underWay))
+    .filter((w) => !cloud || heldWire.has(Number(w)));
   const wires = new Map();
   await Promise.all(span.map(async (w) => {
     try {

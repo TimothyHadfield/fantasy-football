@@ -168,7 +168,7 @@
       "assertions": 73
     },
     "test-notify-trades.mjs": {
-      "assertions": 64
+      "assertions": 67
     },
     "test-proj-trend.mjs": {
       "assertions": 74

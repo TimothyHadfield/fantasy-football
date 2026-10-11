@@ -132,7 +132,11 @@ export async function fetchWireWeek(week) {
 export async function fetchFloors() { return new Map(); }
 
 export async function cloudSource() {
-  return cfg().cloud ? { byes: { ...BYES }, at: Date.now() - 2 * 60 * 60 * 1000 } : null;
+  // `weeks` as js/cloud.js `readDown` reports them: the weeks the copy holds.
+  const all = Array.from({ length: 17 }, (_, i) => i + 1);
+  return cfg().cloud
+    ? { byes: { ...BYES }, at: Date.now() - 2 * 60 * 60 * 1000, weeks: { rosters: all, wire: [NOW_WEEK] } }
+    : null;
 }
 export function weekReadAt() { return Date.now() - 2 * 60 * 60 * 1000 - 1000; }
 

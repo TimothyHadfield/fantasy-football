@@ -288,7 +288,7 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
 {
   const team = teamOf(squad());
   const deal = (withTeamId, withName, get, send) => ({
-    withTeamId, withName, get: get.map((name, i) => ({ playerId: 300 + i, name })), send: send.map((name, i) => ({ playerId: 100 + i, name })),
+    withTeamId, withName, get: get.map((name, i) => ({ id: 300 + i, name })), send: send.map((name, i) => ({ id: 100 + i, name })),
   });
   const saved = {
     v: 1, team: ME, at: NOW - 3 * HOUR,
@@ -302,12 +302,12 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   const ns = kind(notes({ team, saved }), 'trade');
   eq(ns, [
     { id: 'trade-0-3', kind: 'trade', level: 'idea', title: 'Trade with Team Three',
-      detail: 'Get Quin Ashby for Eli Ward · found 3 hours ago', action: { label: 'Open Trade', href: 'trade.html' } },
+      detail: 'Get Quin Ashby for Eli Ward · found 3 hours ago', action: { label: 'Open it', href: 'trade.html?with=3&get=300&send=100' } },
     { id: 'trade-1-7', kind: 'trade', level: 'idea', title: 'Trade with Team Seven',
-      detail: 'Get Sol Vance for Lou Thorn, Kit West · found 3 hours ago', action: { label: 'Open Trade', href: 'trade.html' } },
+      detail: 'Get Sol Vance for Lou Thorn, Kit West · found 3 hours ago', action: { label: 'Open it', href: 'trade.html?with=7&get=300&send=100,101' } },
     { id: 'trade-2-3', kind: 'trade', level: 'idea', title: 'Trade with Team Three',
-      detail: 'Get Rex Stone for Jon Ross · found 3 hours ago', action: { label: 'Open Trade', href: 'trade.html' } },
-  ], 'trade: the first three saved deals, with their age, opening Trade');
+      detail: 'Get Rex Stone for Jon Ross · found 3 hours ago', action: { label: 'Open it', href: 'trade.html?with=3&get=300&send=100' } },
+  ], 'trade: the first three saved deals, with their age, each opening that deal on Trade');
   eq(kind(notes({ team, saved: { ...saved, team: 3 } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: another team’s saved list is not yours');
   eq(kind(notes({ team, saved: { ...saved, v: 2 } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: a record of another shape is not read');
   eq(kind(notes({ team, saved: { ...saved, deals: [] } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: an empty list is the one "look" line');
