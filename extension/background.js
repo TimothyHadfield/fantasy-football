@@ -8,9 +8,11 @@
 // An extension can. Requests made from here are the extension's own, and
 // because espn.com is in host_permissions the browser attaches your real ESPN
 // cookies — extensions are treated as same-site for hosts they have permission
-// for, so even SameSite=Strict cookies are sent, and no "cookies" permission is
-// needed. Nothing is stored and nothing is forwarded: the data goes straight
-// back to the tab that asked.
+// for, so even SameSite=Strict cookies are sent. Reading needs no "cookies"
+// permission; that permission is in the manifest for one thing only, which is
+// finding out which team is the owner's before a lineup change (readSwid).
+// Nothing is stored and nothing is forwarded: the data goes straight back to
+// the tab that asked.
 //
 // SECURITY NOTE. A web page can ask this worker to make requests carrying the
 // user's ESPN cookies, so every input from the page is hostile until proven
@@ -19,17 +21,38 @@
 // the query string, and one containing "../.." walks to a different endpoint
 // entirely. Do not "simplify" buildUrl back into a template literal.
 //
-// Reads only. Writes (lineups, add/drops, trades) will need the write host and
-// must NOT be exposed through the page bridge unauthenticated — see the note at
-// the message listener.
+// READS, AND EXACTLY ONE WRITE.
 //
-// STAGING A TRADE IS NOT A WRITE. The block near the foot of this file lets the
-// site hand over a trade for content-espn-trade.js to TICK CHECKBOXES with, on
+// Until 2026-10-11 this extension could not write to ESPN at all: the manifest
+// held the read host and nothing else. That changed on Tim's own decision, and
+// only as far as he said. Asked "May the site change your ESPN lineup for you
+// (through the laptop extension, using your ESPN login) when you press the
+// button?", he answered: "Yes, lineup only" (Tim, 2026-10-11).
+//
+// WHAT IS NOW ALLOWED: moving players between lineup slots (starters and
+// bench) on HIS OWN team, for the CURRENT week, one to four moves at a time,
+// asked for by the live site, and only while the switch in the popup ("Let the
+// site set my lineup") is on. It is OFF until he turns it on. Every one of
+// those conditions is enforced in this extension — see "The one write" below
+// and lineup-guard.js — not in the page.
+//
+// WHAT IS STILL FORBIDDEN, and has no code path here: adds, drops, waiver
+// claims, proposing, accepting or declining a trade, anything on another
+// manager's team, anything as league manager, any other week. The write host
+// is named once, in lineupWriteUrl, and that function can build one URL. If you
+// find yourself reaching for it from anywhere else, stop: that is a different
+// feature and it needs Tim's own yes, as this one did.
+//
+// STAGING A TRADE IS STILL NOT A WRITE. The block further down lets the site
+// hand over a trade for content-espn-trade.js to TICK CHECKBOXES with, on
 // ESPN's own trade page, in a tab the owner opened himself. No request is made
-// to ESPN by this extension as a result, and host_permissions below holds the
-// read host and nothing else. If you ever find yourself adding
-// lm-api-writes.fantasy.espn.com here, stop: that is a different feature with a
-// different safety model, and this one does not need it.
+// to ESPN by this extension as a result, and "NEVER SUBMIT" in that file stands
+// exactly as it did.
+
+// The lineup rules live in their own file so they can be tested without a
+// browser. A classic worker loads a second script this way, and it must happen
+// here, synchronously, at the top.
+importScripts('lineup-guard.js');
 
 const READ_HOST = 'https://lm-api-reads.fantasy.espn.com';
 const API_PREFIX = '/apis/v3/games/ffl/';
@@ -134,7 +157,7 @@ const SIGN_IN_HELP =
   'If you block third-party cookies, or Edge tracking prevention is set to ' +
   'Strict, add espn.com to your allowed sites — that is the usual cause.';
 
-async function espnFetch(url, filter) {
+async function espnFetch(url, filter, { fresh = false } = {}) {
   const headers = { Accept: 'application/json' };
   // ESPN's player pool is filtered through this header rather than the query
   // string. A sort clause is mandatory: without one it returns an empty list
@@ -149,6 +172,9 @@ async function espnFetch(url, filter) {
       headers,
       credentials: 'include',
       signal: AbortSignal.timeout(15000),
+      // The read a write is checked against must be ESPN's answer now, never a
+      // copy the browser kept.
+      ...(fresh ? { cache: 'no-store' } : {}),
     });
   } catch (err) {
     const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError';
@@ -191,9 +217,10 @@ async function probe({ season, leagueId }) {
     abbrev: t.abbrev,
   }));
 
-  // Which team is yours is deliberately not detected. ESPN identifies owners by
-  // the SWID in your cookie, and reading that needs the "cookies" permission —
-  // a bigger ask than this is worth. The site asks you once and remembers.
+  // Which team is yours is deliberately not reported here. ESPN identifies
+  // owners by the SWID in your cookie; the extension reads that only to check a
+  // lineup change (readSwid) and never hands it, or what it implies, to a page.
+  // The site asks you once and remembers.
   return {
     ok: true,
     status: res.status,
@@ -441,6 +468,133 @@ function takeStagedTrade(msg) {
   return next;
 }
 
+// ---------------------------------------------------------------------------
+// The one write: a lineup change on the owner's own team
+// ---------------------------------------------------------------------------
+//
+// Allowed by Tim on 2026-10-11 ("Yes, lineup only"). The request shape, its
+// sources and what nobody could confirm are at the top of lineup-guard.js.
+//
+// Every gate is here or in lineup-guard.js, in this order, and the page is
+// believed about nothing:
+//
+//   1. WHO IS ASKING. The live site only — https://timothyhadfield.github.io
+//      under /fantasy-football/, a top-level tab. Not localhost, not 127.0.0.1,
+//      not this extension's own popup. The sender is Chrome's, not the page's.
+//   2. THE SWITCH. chrome.storage.local "allowLineup" must be exactly true. Only
+//      the popup sets it; a page cannot reach extension storage.
+//   3. THE SHAPE. 1–4 moves, each a LINEUP move with whole-number slot ids.
+//   4. ONE AT A TIME. A second request while one is in flight is refused.
+//   5. WHO HE IS. His ESPN member id, read from his own SWID cookie.
+//   6. A FRESH READ of the league, made here, now.
+//   7. HIS TEAM, THIS WEEK, THESE MEN, WHERE ESPN SAYS THEY ARE, NOT LOCKED.
+//   8. ONE POST. No retry, ever: a request that timed out may have landed, and
+//      sending it again is how a lineup gets changed twice.
+//
+// WHAT IS LEFT. While the switch is on, any script running on the live site's
+// own pages can move his starters and bench for this week. That is the whole
+// of it — the worst a compromised page can do is set a bad lineup he can put
+// back on ESPN — and it is the risk he accepted by turning the switch on.
+
+const WRITE_HOST = 'https://lm-api-writes.fantasy.espn.com';
+const ALLOW_LINEUP_KEY = 'allowLineup';
+
+/**
+ * The only URL on the write host this extension can build. Same construction
+ * as buildUrl, and the same proof at the end — it must be the transactions
+ * endpoint of one league, and nothing else on that host.
+ */
+function lineupWriteUrl({ season, leagueId }) {
+  const s = requireSeason(season);
+  const id = requireLeagueId(leagueId);
+  const path = `${API_PREFIX}seasons/${s}/segments/0/leagues/${id}/transactions/`;
+  const url = new URL(path, WRITE_HOST);
+  if (url.origin !== WRITE_HOST || url.pathname !== path || url.search || url.hash) {
+    throw new Error('Refusing to build a write outside the lineup endpoint.');
+  }
+  return url.toString();
+}
+
+async function lineupSwitchOn() {
+  const stored = await chrome.storage.local.get([ALLOW_LINEUP_KEY]);
+  return stored[ALLOW_LINEUP_KEY] === true;
+}
+
+/**
+ * His ESPN member id, from the SWID cookie. Asked for by the read host's URL:
+ * the cookie belongs to .espn.com, so it is one of the cookies that URL is
+ * sent, and the read host is a host this extension already has. Used to find
+ * his team and as the request's memberId; never stored, never sent to the page.
+ */
+async function readSwid() {
+  try {
+    const cookie = await chrome.cookies.get({ url: `${READ_HOST}/`, name: 'SWID' });
+    return LineupGuard.normalizeSwid(cookie && cookie.value);
+  } catch {
+    return null;
+  }
+}
+
+let lineupInFlight = false;
+
+async function setLineup(msg, sender) {
+  const no = (reason) => ({ ok: false, reason });
+
+  if (!LineupGuard.senderIsLiveSite(sender)) return no('origin');
+  if (!(await lineupSwitchOn())) return no('off');
+
+  const parsed = LineupGuard.parseRequest(msg);
+  if (!parsed.ok) return parsed;
+  const request = parsed.request;
+
+  if (lineupInFlight) return no('busy');
+  lineupInFlight = true;
+  try {
+    const swid = await readSwid();
+    if (!swid) return no('signed-out');
+
+    const read = await espnFetch(
+      leagueUrl({ season: request.season, leagueId: request.leagueId, views: ['mTeam', 'mRoster', 'mSettings'] }),
+      null,
+      { fresh: true }
+    );
+    // espnFetch gives the sign-in message for a 401, a 403, and a 200 that is
+    // really ESPN's login page.
+    if (!read.ok) return no(read.error === SIGN_IN_HELP ? 'signed-out' : 'read-failed');
+
+    const checked = LineupGuard.check({ request, league: read.data, swid });
+    if (!checked.ok) return checked;
+
+    let res;
+    try {
+      res = await fetch(lineupWriteUrl(request), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(checked.body),
+        credentials: 'include',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (err) {
+      // It may or may not have reached ESPN. Say which kind of not-knowing it
+      // is and stop; the page re-reads the roster to find out.
+      return no(err.name === 'TimeoutError' || err.name === 'AbortError' ? 'timeout' : 'network');
+    }
+
+    let body = null;
+    try { body = await res.json(); } catch { /* an unreadable answer is judged on its status */ }
+    return LineupGuard.outcome(res.status, body);
+  } finally {
+    lineupInFlight = false;
+  }
+}
+
+/** "May this page press the button?" — the switch is on AND it is the live site. */
+async function canSetLineup(sender) {
+  const allowed = LineupGuard.senderIsLiveSite(sender) && (await lineupSwitchOn());
+  return { ok: true, data: { allowed } };
+}
+
 const HANDLERS = {
   PING: async () => ({ ok: true, data: { version: chrome.runtime.getManifest().version } }),
 
@@ -467,6 +621,10 @@ const HANDLERS = {
   STAGE_TRADE: async (msg) => stageTrade(msg),
 
   TAKE_STAGED_TRADE: async (msg) => takeStagedTrade(msg),
+
+  SET_LINEUP: async (msg, sender) => setLineup(msg, sender),
+
+  CAN_SET_LINEUP: async (msg, sender) => canSetLineup(sender),
 };
 
 /**
@@ -503,11 +661,15 @@ function senderMayAsk(type, sender) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Only our own popup, or a page we explicitly trust, may drive this.
   //
-  // When writes are added they must NOT simply join this table: any page on an
-  // allowed page could then drop players or send trades. Route writes behind
-  // a popup confirmation, or a nonce the popup issues. Staging a trade is not
-  // a write — see the block above HANDLERS — and is the only thing here that
-  // any espn.com page may touch at all.
+  // A write must NOT simply join this table: any page in an allowed scope could
+  // then drop players or send trades. The one write there is — SET_LINEUP,
+  // allowed by Tim on 2026-10-11, "Yes, lineup only" — passes this gate like
+  // any other request and is then held to its own, much narrower one inside
+  // setLineup: the live site alone (never localhost, never the popup), and only
+  // after he has turned the switch on in the popup, which is the confirmation
+  // this comment always asked for. Any further write needs the same: his yes,
+  // and a gate of its own. Staging a trade is not a write — see the block
+  // above it — and is the only thing here any espn.com page may touch at all.
   if (sender.id !== chrome.runtime.id) return false;
   if (!senderMayAsk(msg?.type, sender)) {
     sendResponse({ ok: false, error: 'This page is not allowed to use the bridge.' });
@@ -519,7 +681,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: false, error: `Unknown request "${msg?.type}".` });
     return false;
   }
-  handler(msg)
+  handler(msg, sender)
     .then(sendResponse)
     .catch((err) => sendResponse({ ok: false, error: err.message }));
   return true; // keep the channel open for the async reply

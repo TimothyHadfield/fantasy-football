@@ -265,3 +265,96 @@ export function stageTrade({
     theirPlayerIds: (theirPlayerIds || []).map(Number),
   }, { timeoutMs });
 }
+
+// ---------------------------------------------------------------------------
+// THE ONE WRITE: a lineup change on your own team (Tim, 2026-10-11: "Yes,
+// lineup only").
+// ---------------------------------------------------------------------------
+//
+//   if (await canSetLineup()) { …show the button… }
+//
+//   const res = await setLineup({
+//     leagueId, season,
+//     week,            // ESPN's CURRENT scoring period — any other is refused
+//     teamId,          // YOUR team id (a number); any other is refused
+//     moves: [         // 1–4; a swap is BOTH men, each with his own slots
+//       { playerId: 4429023, fromSlotId: 20, toSlotId: 2 },
+//       { playerId: 4568490, fromSlotId: 2, toSlotId: 20 },
+//     ],
+//   });
+//   res → { ok: true }  or  { ok: false, reason }
+//
+// Slot ids are ESPN's lineupSlotIds (bench is 20). Neither call ever rejects.
+//
+// `reason` is a short machine word, not a sentence — the page chooses what to
+// say. From the extension: `off` (the switch in its popup is off), `origin`
+// (not the live site — localhost can never write), `bad-request`, `too-many`,
+// `not-lineup`, `same-slot`, `busy` (one at a time), `signed-out`,
+// `read-failed`, `not-your-team`, `stale` (not the current week, or a man is
+// not in the slot the page thought), `not-on-roster`, `locked` (his game has
+// started), `bad-slot`, `not-executed`, `espn-<status>`, `timeout`, `network`.
+// From here: `no-extension`, `old-extension`, `timeout`.
+//
+// `timeout` and `network` mean NOT KNOWN, not "did not happen": the request
+// may have reached ESPN. Never send it again on those — re-read the roster and
+// believe that. `ok: true` is ESPN saying it executed; re-read all the same
+// before taking the line away.
+//
+// The page is not trusted with any of this. Every rule — whose team, which
+// week, which men, where they are now — is checked inside the extension against
+// a read it makes itself, so nothing here is a gate. See
+// extension/lineup-guard.js.
+
+// One ESPN read and one write, each allowed fifteen seconds by the extension.
+// The usual limit would give up, and report a failure, while a write that is
+// about to succeed is still in the air.
+const LINEUP_TIMEOUT_MS = 35000;
+
+/**
+ * May this page change the lineup? True only when the extension is installed,
+ * new enough to know the question, its switch is on, and this is the live site.
+ * False for everything else, including no answer. Never rejects.
+ */
+export async function canSetLineup() {
+  try {
+    if (!(await settled())) return false;
+    const res = await ask({ type: 'CAN_SET_LINEUP' }, { timeoutMs: PING_TIMEOUT_MS });
+    return Boolean(res && res.ok === true && res.data && res.data.allowed === true);
+  } catch {
+    return false;
+  }
+}
+
+/** Change the lineup. See the contract above. Never rejects. */
+export async function setLineup({ leagueId, season, week, teamId, moves, timeoutMs } = {}) {
+  try {
+    if (!(await settled())) return { ok: false, reason: 'no-extension' };
+    const res = await ask({
+      type: 'SET_LINEUP',
+      leagueId: String(leagueId),
+      season: Number(season),
+      week: Number(week),
+      teamId: Number(teamId),
+      // Shallow, as in stageTrade: numbers made numbers, and the extension
+      // refuses whatever is left. The type is fixed here; there is no other.
+      moves: (Array.isArray(moves) ? moves : []).map((m) => ({
+        type: 'LINEUP',
+        playerId: Number(m && m.playerId),
+        fromSlotId: Number(m && m.fromSlotId),
+        toSlotId: Number(m && m.toSlotId),
+      })),
+    }, { timeoutMs: timeoutMs ?? LINEUP_TIMEOUT_MS });
+
+    if (res && res.ok === true) return { ok: true };
+    if (res && typeof res.reason === 'string' && res.reason) return { ok: false, reason: res.reason };
+    // No reason means the extension never ran the request: an older build that
+    // does not know it, a page it will not talk to, or no answer at all.
+    const error = String((res && res.error) || '');
+    if (/Unknown request/.test(error)) return { ok: false, reason: 'old-extension' };
+    if (/not allowed/.test(error)) return { ok: false, reason: 'origin' };
+    if (/did not answer in time/.test(error)) return { ok: false, reason: 'timeout' };
+    return { ok: false, reason: 'no-extension' };
+  } catch {
+    return { ok: false, reason: 'no-extension' };
+  }
+}

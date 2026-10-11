@@ -17,9 +17,10 @@
 //      leagueId containing "../.." walks to a different endpoint entirely.
 //   2. Only the site may drive it at all — its origin AND its /fantasy-football/
 //      path, because every project Tim publishes shares the github.io origin.
-//   3. host_permissions holds the READ host and NOTHING else. No write to ESPN
-//      is possible from this extension, and that is not a policy — it is the
-//      absence of a permission.
+//   3. host_permissions holds ESPN's read host and, since Tim allowed one write
+//      on 2026-10-11 ("Yes, lineup only"), its write host — and nothing else.
+//      The write host is reachable from one function. What that one write may
+//      do is its own suite, test-lineup-guard.mjs.
 //   4. A staged trade expires, is single-use, and is validated to the same
 //      standard as the URLs.
 
@@ -94,6 +95,15 @@ function makeWorker({ reply } = {}) {
     AbortSignal,
     setTimeout,
     clearTimeout,
+    // A classic service worker pulls in its second file this way. Run the
+    // SHIPPED file in the same context, as Chrome does; a name outside the
+    // extension folder is a bug worth failing on.
+    importScripts: (...names) => {
+      for (const name of names) {
+        if (!/^[\w-]+\.js$/.test(name)) throw new Error(`importScripts("${name}") leaves the extension folder`);
+        vm.runInContext(fs.readFileSync(repoFile('extension/' + name), 'utf8'), context, { filename: name });
+      }
+    },
     fetch: async (url, init) => {
       const r = answer(url, init);
       calls.push({ url, init, headers: (init && init.headers) || {} });
@@ -559,21 +569,49 @@ for (const { patch, why } of [
 }
 
 // ===========================================================================
-// PART THREE — the permission that must never grow
+// PART THREE — the permissions, and the one that grew on purpose
 // ===========================================================================
 //
-// This is the load-bearing one. The trade feature ticks checkboxes on a page
-// the owner opened; it does NOT write to ESPN, and the proof of that is that
-// the extension cannot.
+// Until 2026-10-11 this block proved the extension COULD NOT write to ESPN: the
+// read host was the only host it held. Tim then allowed one write ("Yes, lineup
+// only"), so the write host and the cookies permission are here now, and the
+// proof has changed shape: the manifest holds exactly these and no more, and
+// the write host is reachable from ONE function that can build ONE URL. What
+// that write may do is tests/test-lineup-guard.mjs. The trade feature is
+// untouched by any of it — it still ticks checkboxes and submits nothing.
 
 eq(
   JSON.stringify(MANIFEST.host_permissions),
-  JSON.stringify(['https://lm-api-reads.fantasy.espn.com/*']),
-  'host_permissions is the READ host and nothing else'
+  JSON.stringify([
+    'https://lm-api-reads.fantasy.espn.com/*',
+    'https://lm-api-writes.fantasy.espn.com/*',
+  ]),
+  'host_permissions is ESPN’s read host and its write host, and nothing else'
 );
-ok(!/lm-api-writes/.test(stripComments(BACKGROUND)), 'the worker has no write host in its code');
-ok(!/lm-api-writes/.test(JSON.stringify(MANIFEST)), 'nor does the manifest');
-eq(JSON.stringify(MANIFEST.permissions), JSON.stringify(['storage']), 'and the only API permission is storage');
+eq(
+  JSON.stringify(MANIFEST.permissions),
+  JSON.stringify(['storage', 'cookies']),
+  'the API permissions are storage and cookies, and nothing else'
+);
+{
+  const code = stripComments(BACKGROUND);
+  eq((code.match(/lm-api-writes/g) || []).length, 1, 'the write host is written once in the worker');
+  eq((code.match(/\bWRITE_HOST\b/g) || []).length, 3,
+    'and its constant is used by lineupWriteUrl alone (declared, then two uses there)');
+  const fn = code.slice(code.indexOf('function lineupWriteUrl'), code.indexOf('async function lineupSwitchOn'));
+  eq((fn.match(/\bWRITE_HOST\b/g) || []).length, 2, 'both uses sit inside lineupWriteUrl');
+  eq((code.match(/lineupWriteUrl\(/g) || []).length, 2, 'which is called from one place');
+  eq((code.match(/method:\s*'POST'/g) || []).length, 1, 'and the worker makes exactly one POST');
+  eq((code.match(/chrome\.cookies\./g) || []).length, 1, 'the cookies API is touched once');
+  ok(/chrome\.cookies\.get\(\{.*name:\s*'SWID' \}\)/.test(code),'to read the SWID, by name, and nothing else');
+  ok(!/isLeagueManager/.test(code), 'the worker never builds the request body itself — lineup-guard.js does');
+  const guard = stripComments(fs.readFileSync(repoFile('extension/lineup-guard.js'), 'utf8'));
+  eq((guard.match(/isLeagueManager/g) || []).length, 1, 'isLeagueManager is written once in the guard');
+  ok(/isLeagueManager:\s*false,/.test(guard), 'and it is the literal false');
+  ok(!/\bfetch\s*\(|XMLHttpRequest|chrome\./.test(guard), 'the guard itself makes no request and touches no chrome API');
+  ok(!/TRADE|DROP|ADD|WAIVER|FREEAGENT/.test(guard.replace(/TRAN_\w+/g, '')),
+    'and names no transaction but a lineup move');
+}
 
 {
   const scripts = MANIFEST.content_scripts || [];
@@ -664,7 +702,7 @@ eq(JSON.stringify(MANIFEST.permissions), JSON.stringify(['storage']), 'and the o
     b.ask();
     eq(b.sent.length, 0, `content-site forwards nothing on ${href}`);
   }
-  eq(MANIFEST.version, '0.3.3', 'the scoped bridge ships as 0.3.3');
+  eq(MANIFEST.version, '0.4.0', 'the bridge with the lineup switch ships as 0.4.0');
 }
 
 {

@@ -53,10 +53,16 @@
       "assertions": 95
     },
     "test-extension.mjs": {
-      "assertions": 324
+      "assertions": 334
     },
     "test-bridge-settle.mjs": {
       "assertions": 7
+    },
+    "test-lineup-guard.mjs": {
+      "assertions": 357
+    },
+    "test-bridge-lineup.mjs": {
+      "assertions": 46
     },
     "test-espn-tick.mjs": {
       "assertions": 82

@@ -14,6 +14,15 @@
   #out { margin-top: 10px; padding: 9px 10px; border-radius: 7px; background: #f1f5f9; white-space: pre-wrap; }
   #out.good { background: #dcfce7; }
   #out.bad { background: #fee2e2; }
+  .allow { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; cursor: pointer; }
+  .allow span { font-weight: 600; }
+  .switch { flex: none; position: relative; width: 36px; height: 20px; padding: 0; border-radius: 10px; background: #cbd5e1; transition: background .15s; }
+  .switch:hover { background: #94a3b8; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch[aria-checked="true"] { background: #16a34a; }
+  .switch[aria-checked="true"]:hover { background: #15803d; }
+  .switch[aria-checked="true"]::after { transform: translateX(16px); }
+  .switch:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -24,6 +33,12 @@
     <button id="test">Test</button>
   </div>
   <div id="out">Enter your league ID and press Test.</div>
+  <div class="allow" id="allow-row">
+    <button id="allow" class="switch" type="button" role="switch" aria-checked="false"
+            aria-labelledby="allow-label" aria-describedby="allow-note"></button>
+    <span id="allow-label">Let the site set my lineup</span>
+  </div>
+  <p id="allow-note">Moves your own starters and bench, this week only. Nothing else.</p>
   <p style="margin-top:10px">
     <a href="https://timothyhadfield.github.io/fantasy-football/" target="_blank">Open the site</a>
   </p>
