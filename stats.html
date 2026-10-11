@@ -521,6 +521,73 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     </section>
   </div>
 
+  <!-- PRESEASON VS NOW (Tim, 2026-10-11: "the proj season avg (before the
+       season started) vs the current season avg for every player ... sort/
+       filter them by position, rostered, or user"). One dot or one row a
+       player: across, ESPN's 9 Sep projection per game under this league's
+       rules (js/proj-trend.js); up, ESPN's season average (the card's "Avg").
+       Rows and filters: js/pre-vs-now.js. HIDDEN until there is something to
+       show - the sample league's men are invented and an earlier season has no
+       preseason copy, so neither ever shows it. Chart and List sit in ONE grid
+       cell (`.pvn-swap`): the one not showing is invisible, not removed, so
+       pressing the switch moves nothing. Team is the LAST column so the three
+       numbers are on a phone's screen and the team scrolls into view. No lede, as on the two graphs above:
+       the axes and columns are labelled and the rest is behind the toggle. -->
+  <section class="panel" id="panelPreNow" hidden>
+    <h2>Preseason vs now &mdash; players</h2>
+    <div class="row fit-head pvn-head">
+      <div class="ctl pvn-pos">
+        <span class="ctl-label" id="preNowPosLabel">Position</span>
+        <div class="segmented seg-sm" id="preNowPos" role="group" aria-labelledby="preNowPosLabel">
+          <button type="button" data-pos="all" class="on" aria-pressed="true">All</button>
+          <button type="button" data-pos="QB" aria-pressed="false">QB</button>
+          <button type="button" data-pos="RB" aria-pressed="false">RB</button>
+          <button type="button" data-pos="WR" aria-pressed="false">WR</button>
+          <button type="button" data-pos="TE" aria-pressed="false">TE</button>
+          <button type="button" data-pos="K" aria-pressed="false">K</button>
+          <button type="button" data-pos="DST" aria-pressed="false">D/ST</button>
+        </div>
+      </div>
+      <div class="ctl pvn-ros">
+        <span class="ctl-label" id="preNowRosLabel">Rostered</span>
+        <div class="segmented seg-sm" id="preNowRos" role="group" aria-labelledby="preNowRosLabel">
+          <button type="button" data-ros="all" class="on" aria-pressed="true">All</button>
+          <button type="button" data-ros="rostered" aria-pressed="false">Rostered</button>
+          <button type="button" data-ros="free" aria-pressed="false">Free agents</button>
+        </div>
+      </div>
+      <div class="ctl pvn-team">
+        <label class="ctl-label" for="preNowTeam">User</label>
+        <select id="preNowTeam"><option value="all">All teams</option></select>
+      </div>
+      <div class="ctl pvn-view">
+        <span class="ctl-label" id="preNowViewLabel">Show</span>
+        <div class="segmented seg-sm" id="preNowView" role="group" aria-labelledby="preNowViewLabel">
+          <button type="button" data-view="chart" class="on" aria-pressed="true">Chart</button>
+          <button type="button" data-view="list" aria-pressed="false">List</button>
+        </div>
+      </div>
+    </div>
+    <p class="panel-note pvn-msg" id="preNowMsg" hidden></p>
+    <div class="pvn-swap">
+      <div class="chart pvn-chart" id="chartPreNow"></div>
+      <div class="table-scroll pvn-list" id="preNowList" aria-hidden="true" inert>
+        <table id="preNowTable">
+          <thead><tr>
+            <th class="name" data-sort>Player</th><th data-sort>Pos</th>
+            <th data-sort>Pre</th><th data-sort>Avg</th><th data-sort>Diff</th>
+            <th class="pvn-teamcol" data-sort>Team</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <details class="explain">
+      <summary>How this works</summary>
+      <div class="panel-note" id="preNowNote"></div>
+    </details>
+  </section>
+
   <section class="panel" id="panelBox">
     <h2>Score spread by team</h2>
     <p class="lede">How much each team&rsquo;s score moves week to week. The box is its middle half of weeks; the line is its median.</p>
