@@ -12,7 +12,7 @@
 // `calls` records every read, so "the wire was never asked for" is checked.
 
 import {
-  SEASON, WEEKS, PLAYED, TEAMS, SCORING, teamsForWeek, wireForWeek,
+  SEASON, WEEKS, PLAYED, TEAMS, SCORING, CURRENT, hasRest, restOf, teamsForWeek, wireForWeek,
 } from './pre-now-fixture.mjs';
 
 const SCEN = process.env.FF_SCEN || 'live';
@@ -61,6 +61,19 @@ export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
 export async function fetchWeekRosters(week) {
   calls.push(`fetchWeekRosters:${week}`);
   return { week, teams: rosters(week) };
+}
+
+// js/season.js `fetchPlayerValues`: rostered players only, `projAvg` the
+// rest-of-season projected average.
+export async function fetchPlayerValues() {
+  calls.push('fetchPlayerValues');
+  const byId = new Map();
+  for (const t of teamsForWeek(CURRENT)) {
+    for (const p of t.players) {
+      byId.set(p.playerId, { position: p.position, avg: 0, value: 0, projAvg: hasRest(p.playerId) ? restOf(p.playerId) : null });
+    }
+  }
+  return { base: null, weeks: [], byId, lookup: () => null };
 }
 
 export async function fetchWireWeek(week) {

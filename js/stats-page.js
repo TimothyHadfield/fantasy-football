@@ -884,7 +884,8 @@ function renderCharts() {
       })),
     xLabel: 'Points',
     mode: view.spreadView === 'dots' ? 'dots' : undefined,
-    highlight: highlightId,
+    // Nobody is picked out here, My team included (Tim, 2026-10-11: "change it
+    // so no one is selected by default"): every row keeps its full colour.
     // In plain words, and naming the weeks: a box is a typical week, the middle
     // half of them, and the best and the worst; a dot is one week and its game.
     tipRows: (row, pt) => {
@@ -2672,6 +2673,21 @@ function preNowWeek(schedule, weekTeams) {
  * the copy holds is asked for; a week it lacks, or a read that fails, leaves
  * the squads' players and one line saying so.
  */
+/** His rest-of-season projections, asked once per league-season (store in front). */
+function ensurePreNowRest(key) {
+  if ((pvn.rest && pvn.rest.key === key) || pvn.restPending === key) return;
+  pvn.restPending = key;
+  Promise.resolve()
+    .then(() => season.fetchPlayerValues())
+    .then((values) => {
+      if (pvn.restPending !== key) return;
+      pvn.restPending = null;
+      pvn.rest = { key, values: values && values.byId ? values : null };
+      if (pvn.rest.values) renderPreNow();
+    })
+    .catch(() => { if (pvn.restPending === key) { pvn.restPending = null; pvn.rest = { key, values: null }; } });
+}
+
 async function ensurePreNowWire(key, week) {
   if (pvn.wire && pvn.wire.key === key && pvn.wire.week === week) return;
   const tag = `${key}:${week}`;
@@ -2802,6 +2818,15 @@ function renderPreNow() {
     wire: wire ? wire.players : [],
     preOf: (id) => { const b = trend.baselineOf(id, scoring); return b ? b.perWeek : null; },
     avgOf: (id) => preNow.seasonAvgOf(id, held, week),
+    // REST = his projected average over the weeks left, bye and ruled-out
+    // weeks left out — the Proj on his card (js/season.js `fetchPlayerValues`).
+    // Known for men on a squad; a free agent's would take every remaining
+    // week's wire, so his cell is a dash.
+    restOf: (id) => {
+      const got = pvn.rest && pvn.rest.key === key ? pvn.rest.values : null;
+      const hit = got ? got.byId.get(id) ?? got.byId.get(Number(id)) : null;
+      return hit && isNum(hit.projAvg) ? hit.projAvg : null;
+    },
   });
   const counts = preNow.countRows(rows);
   // Nobody on a squad has both numbers (nothing played yet): nothing to show.
@@ -2810,6 +2835,7 @@ function renderPreNow() {
 
   const wantWire = preNow.needsWire(pvn.filters);
   if (wantWire && !wire) ensurePreNowWire(key, week);
+  ensurePreNowRest(key);
   const reading = wantWire && !wire;
   paintPreNowControls();
 
@@ -2891,12 +2917,13 @@ function renderPreNow() {
           <td>${esc(posLabel(r.position))}</td>
           <td data-v="${r.pre}">${fmt(r.pre)}</td>
           <td data-v="${r.avg}">${fmt(r.avg)}</td>
+          <td${r.rest === null ? '' : ` data-v="${r.rest}"`}>${r.rest === null ? dash : fmt(r.rest)}</td>
           ${heatCell(r.diffRaw, scale, { what: 'every player here', text: signed(r.diff) })}
           <td class="pvn-teamcol${r.rostered ? '' : ' muted'}">${r.rostered ? esc(r.teamName) : 'Free agent'}</td>
         </tr>`).join('')
-    : `<tr><td class="name" colspan="6">${reading ? 'Reading free agents…' : 'No player matches.'}</td></tr>`;
+    : `<tr><td class="name" colspan="7">${reading ? 'Reading free agents…' : 'No player matches.'}</td></tr>`;
   // Diff, biggest first, until a heading is pressed.
-  enableSort(table, { defaultIndex: 4 });
+  enableSort(table, { defaultIndex: 5 });
   resort(table);
 
   // ---- the note ----
@@ -2905,13 +2932,14 @@ function renderPreNow() {
     '<strong>Each dot or row is one player.</strong> <strong>Pre</strong> (across) is ESPN&rsquo;s ' +
       `${trend.BASELINE_DATE} projection for the season, per game, re-scored with this league&rsquo;s ` +
       'rules. <strong>Avg</strong> (up) is ESPN&rsquo;s season average so far, the Avg on his card: ' +
-      'the weeks he played. <strong>Diff</strong> = Avg &minus; Pre, as printed.',
+      'the weeks he played. <strong>Rest</strong> is his projected average over the weeks left, ' +
+      'bye and ruled-out weeks left out (rostered players only). ' +
+      '<strong>Diff</strong> = Avg &minus; Pre, as printed.',
     `<strong>${n(counts.all)} players:</strong> ${n(counts.rostered)} on a roster in week ${week}` +
       (wire && !wire.said
         ? `, and ${n(counts.free)} of the ${n(wire.players.length)} most-owned free agents ESPN lists`
         : ', free agents not read') +
-      '. Left out: a player ESPN had no preseason projection for, and one with no season average. ' +
-      'A player who has not played shows ESPN&rsquo;s 0.0.',
+      '. Left out: a player ESPN had no preseason projection for, and one who has not played.',
     '<strong>Dotted line</strong> = no change: Avg equals Pre. Above it he is beating his preseason ' +
       'projection, below it he is short. Both axes share one scale. <strong>Solid line</strong> = the ' +
       'least-squares line through the dots shown.',

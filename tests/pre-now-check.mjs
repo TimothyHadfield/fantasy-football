@@ -141,15 +141,16 @@ async function run(scenario) {
   const press = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
   const btn = (id, attr, v) => $(id).querySelector(`button[data-${attr}="${v}"]`);
   const dots = () => all($('chartPreNow'), 'circle.ff-dot');
-  const rows = () => all($('preNowTable'), 'tbody tr').filter((tr) => tr.children.length === 6)
+  const rows = () => all($('preNowTable'), 'tbody tr').filter((tr) => tr.children.length === 7)
     .map((tr) => {
       const c = Array.from(tr.children);
       const a = c[0].querySelector('a');
       return {
         id: Number((/player=(\d+)/.exec((a && a.getAttribute('href')) || '') || [])[1]),
         name: clean(c[0].textContent), pos: clean(c[1].textContent),
-        pre: clean(c[2].textContent), avg: clean(c[3].textContent), diff: clean(c[4].textContent),
-        diffV: Number(c[4].getAttribute('data-v')), team: clean(c[5].textContent),
+        pre: clean(c[2].textContent), avg: clean(c[3].textContent), rest: clean(c[4].textContent),
+        restV: c[4].getAttribute('data-v'), diff: clean(c[5].textContent),
+        diffV: Number(c[5].getAttribute('data-v')), team: clean(c[6].textContent),
         tip: a ? a.getAttribute('data-tip') : null, link: a ? a.getAttribute('href') : null,
       };
     });
@@ -251,6 +252,21 @@ async function run(scenario) {
     if (Math.abs(Number(r.avg) - Number(r.pre) - Number(r.diff.replace('+', ''))) > 0.051) bad = bad || `Diff of ${r.name}`;
   }
   eq(bad, '', 'every row prints his Pre, Avg, Diff = Avg − Pre, position and team');
+  // REST (Tim, 2026-10-11: "add a rest-of-season proj column"): his projected
+  // average over the weeks left, after Avg; a dash where it is not known.
+  eq(all($('preNowTable'), 'thead th').map((th) => clean(th.textContent)).join(),
+    'Player,Pos,Pre,Avg,Rest,Diff,Team', 'the list has a Rest column after Avg');
+  await until(() => rows().some((r) => r.restV !== null));
+  let badRest = '';
+  for (const r of rows()) {
+    const w = wantById.get(r.id);
+    const known = w.teamId !== null && fx.hasRest(r.id);
+    const text = known ? (Math.round(fx.restOf(r.id) * 10) / 10).toFixed(1) : '—';
+    if (r.rest !== text || (known ? Number(r.restV) !== Number(text) : r.restV !== null)) badRest = badRest || JSON.stringify(r);
+  }
+  eq(badRest, '', 'Rest is each rostered man’s rest-of-season projected average; a dash for a free agent or an unknown');
+  ok(rows().some((r) => r.rest !== '—') && rows().some((r) => r.rest === '—' && r.team !== 'Free agent'), 'both kinds are in the fixture');
+  ok(/<strong>Rest<\/strong>/.test($('preNowNote').innerHTML), 'and the note says what Rest is');
   const first = rows()[0];
   ok(first.link === `waivers.html?player=${first.id}` && first.tip, 'a name links to him on Players and carries his card');
   eq(new Set(rows().map((r) => r.tip)).size, want.length, 'one card a player');
@@ -262,7 +278,7 @@ async function run(scenario) {
   ok(sortedDesc(rows().map((r) => r.diffV)), 'the list opens on Diff, biggest first');
   eq(rows()[0].diffV, Math.max(...want.map((w) => w.avg - w.pre)), 'the top row is the biggest riser');
   const head = (text) => all($('preNowTable'), 'th').find((th) => clean(th.textContent) === text);
-  eq(all($('preNowTable'), 'th').map((th) => clean(th.textContent)).join(' '), 'Player Pos Pre Avg Diff Team', 'the columns');
+  eq(all($('preNowTable'), 'th').map((th) => clean(th.textContent)).join(' '), 'Player Pos Pre Avg Rest Diff Team', 'the columns');
   press(head('Pre'));
   ok(sortedDesc(rows().map((r) => Number(r.pre))), 'pressing Pre sorts by it, biggest first');
   press(head('Pre'));

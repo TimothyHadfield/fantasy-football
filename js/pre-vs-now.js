@@ -62,7 +62,7 @@ export function seasonAvgOf(playerId, weekTeams, currentWeek = null) {
   return null;
 }
 
-function rowOf(p, pre, avg, team) {
+function rowOf(p, pre, avg, team, rest = null) {
   const from = num(pre);
   const to = num(avg);
   // ESPN sends 0 as the average of a man who has not played: that is "no
@@ -81,6 +81,8 @@ function rowOf(p, pre, avg, team) {
     avg: to,
     diff: round1(round1(to) - round1(from)),
     diffRaw: to - from,
+    // His rest-of-season projected average (Tim, 2026-10-11), or null when not known.
+    rest: num(rest) === null ? null : round1(num(rest)),
   };
 }
 
@@ -96,13 +98,13 @@ function rowOf(p, pre, avg, team) {
  * @param {Function} [o.avgOf] playerId -> season average for a rostered man;
  *                            default: the `seasonAvg` on his row
  */
-export function buildRows({ teams = [], wire = [], preOf, avgOf = null } = {}) {
+export function buildRows({ teams = [], wire = [], preOf, avgOf = null, restOf = null } = {}) {
   if (typeof preOf !== 'function') return [];
   const rows = [];
   const seen = new Set();
   const add = (p, avg, team) => {
     if (!p || !known(p.playerId) || seen.has(String(p.playerId))) return;
-    const row = rowOf(p, preOf(p.playerId), avg, team);
+    const row = rowOf(p, preOf(p.playerId), avg, team, typeof restOf === 'function' ? restOf(p.playerId) : null);
     if (!row) return;
     seen.add(String(p.playerId));
     rows.push(row);

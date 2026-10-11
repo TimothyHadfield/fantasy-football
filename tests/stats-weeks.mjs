@@ -307,7 +307,8 @@ if (process.argv[2]) {
 
     // THE CHART HIGHLIGHT IS THE TEAM ID, NOT THE NAME (rule 9, AUDIT §1.9).
     // Teams 1 and 2 both render as "Autumn" and only team 2 is chosen: exactly
-    // one line is emphasised on each chart, and one row of the box plot. Keyed
+    // one line is emphasised on each chart. The box plot picks nobody out
+    // (Tim, 2026-10-11: "no one is selected by default"). Keyed
     // on the name, both Autumns lit up.
     if (dup) {
       for (const id of ['chartWeekly', 'chartLuck']) {
@@ -317,7 +318,9 @@ if (process.argv[2]) {
         if (dim !== 9) problems.push(`${id}: ${dim} lines dimmed, expected the other 9`);
       }
       const bold = Array.from($('chartBox').querySelectorAll('text[font-weight="600"]')).length;
-      if (bold !== 1) problems.push(`chartBox: ${bold} rows emphasised for one chosen team, expected 1`);
+      if (bold !== 0) problems.push(`chartBox: ${bold} rows emphasised, expected none`);
+      const faded = Array.from($('chartBox').querySelectorAll('[opacity="0.22"]')).length;
+      if (faded !== 0) problems.push(`chartBox: ${faded} parts dimmed, expected none`);
     }
 
     // The toggle must still say Demo.

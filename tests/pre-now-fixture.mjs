@@ -30,6 +30,9 @@ export const hasPre = (id) => id % 13 !== 0;
 export const hasAvg = (id) => id % 11 !== 0;
 export const preOf = (id) => 3 + (id % 19);
 export const avgOf = (id) => preOf(id) + ((id * 7) % 13) - 6 + 0.04;
+// Rest-of-season projected average: known for most rostered men, never a free agent.
+export const hasRest = (id) => id % 7 !== 0;
+export const restOf = (id) => preOf(id) + ((id * 5) % 9) - 3 + 0.26;
 
 const rosterId = (teamId, i) => teamId * 100 + i;          // 100..1015
 const wireId = (i) => 5000 + i;                            // 5000..5149

@@ -71,6 +71,17 @@ ok(stale && stale.rostered && stale.teamId === 1, 'a free agent who is on a squa
 ok(rows.find((r) => r.position === 'DST'), 'a defence is keyed DST whatever the roster calls it');
 ok(!rows.find((r) => r.position === 'D/ST'), 'and never D/ST');
 
+// Rest-of-season projection (Tim, 2026-10-11): handed in, rounded to the tenth.
+ok(rows.every((r) => r.rest === null), 'with no rest-of-season lookup every Rest is null');
+{
+  const withRest = pvn.buildRows({ teams, wire, preOf, restOf: (id) => (fx.hasRest(id) ? fx.restOf(id) : undefined) });
+  eq(withRest.length, rows.length, 'a rest-of-season lookup adds no row and drops none');
+  ok(withRest.every((r) => (fx.hasRest(r.playerId)
+    ? r.rest === Math.round(fx.restOf(r.playerId) * 10) / 10 : r.rest === null)),
+    'Rest is his projected average to the tenth, or null when it is not known');
+  ok(withRest.some((r) => r.rest === null) && withRest.some((r) => r.rest !== null), 'both kinds are in the fixture');
+}
+
 eq(pvn.buildRows({ teams, wire: [], preOf }).length, fx.expected({ wire: false }).length,
   'without the wire it is the squads’ players alone');
 eq(pvn.buildRows({ teams, wire }).length, 0, 'no preseason lookup, no rows');

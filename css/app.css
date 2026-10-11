@@ -2294,9 +2294,9 @@ header.site .wrap:not(:has(.site-bell)) nav { margin-right: 42px; }
   #preNowTable { table-layout: fixed; width: 100%; min-width: 0; }
   #preNowTable th, #preNowTable td { padding-left: 4px; padding-right: 4px; }
   #preNowTable th:nth-child(2) { width: 36px; }
-  #preNowTable th:nth-child(3), #preNowTable th:nth-child(4) { width: 36px; }
-  #preNowTable th:nth-child(5) { width: 60px; }
-  #preNowTable th:nth-child(6) { width: 54px; }
+  #preNowTable th:nth-child(3), #preNowTable th:nth-child(4), #preNowTable th:nth-child(5) { width: 36px; }
+  #preNowTable th:nth-child(6) { width: 60px; }
+  #preNowTable th:nth-child(7) { width: 44px; }
   #preNowTable td.name, #preNowTable td.pvn-teamcol { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 /* ===================================================== end of Preseason vs now */
