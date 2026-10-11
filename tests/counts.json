@@ -277,6 +277,10 @@
     "notify-check.mjs": {
       "assertions": 93,
       "scenarios": 9
+    },
+    "bell-check.mjs": {
+      "assertions": 145,
+      "scenarios": 11
     }
   }
 }

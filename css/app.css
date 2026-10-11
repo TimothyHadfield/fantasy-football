@@ -2183,3 +2183,61 @@ a.nt-go:hover { background: #2b3140; }
   .nt-go { min-height: 44px; display: flex; align-items: center; justify-content: center; }
 }
 /* ===================================================== end of notifications */
+/* ============ THE BELL (2026-10-11)
+ * Tim: "I want to make a notifications section …" — and where it lives: "Bell
+ * in the top bar". js/connection.js mounts a link to notifications.html into
+ * the header on every section page. It is drawn as one of the page links (their
+ * dim ink, their hover), with the count of things to do as a small red pill
+ * over its corner — over it, so the bell is the same width with or without a
+ * number and nothing beside it moves when the number arrives.
+ *
+ * Wide: after the page links, at the far right; the room it takes is held open
+ * before the script has run, so the links do not step sideways on every load.
+ * Phone: on the brand's own line, at the right, no taller than that line — the
+ * two rows of page links below are exactly where they were. */
+header.site .site-bell {
+  order: 1;
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 33px;
+  margin-left: -12px;
+  color: var(--dim);
+  border-radius: var(--r-2);
+  text-decoration: none;
+}
+header.site .site-bell:hover { color: var(--text); background: var(--panel-2); }
+header.site .site-bell[aria-current="page"] { color: var(--accent-hi); }
+header.site .site-bell svg { display: block; }
+header.site .site-bell-count {
+  position: absolute;
+  top: 0;
+  left: 19px;
+  box-sizing: border-box;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--err);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+header.site .site-bell-count[hidden] { display: none; }
+header.site .wrap:not(:has(.site-bell)) nav { margin-right: 42px; }
+@media (max-width: 760px) {
+  header.site .brand { flex: 1 1 0; min-width: 0; }
+  header.site .site-bell { order: 0; height: 22px; margin-left: 0; }
+  /* A finger's worth of target round a 22px line. */
+  header.site .site-bell::before { content: ""; position: absolute; inset: -10px -8px -8px; }
+  header.site .site-bell-count { top: -5px; }
+  header.site .wrap:not(:has(.site-bell)) nav { margin-right: 0; }
+}
+/* ========================================================== end of the bell */
