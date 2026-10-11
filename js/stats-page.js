@@ -52,8 +52,14 @@ import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { wirePops, hidePop } from './pop.js';
-import { readParam, teamHref, weekHref } from './links.js';
-import { playerCardFromWeeks, registerRun, clearRuns, showCard, hideTip, setValueSource } from './player-card.js';
+import { readParam, teamHref, weekHref, playerHref } from './links.js';
+import {
+  playerCardFromWeeks, registerRun, clearRuns, showCard, hideTip, setValueSource, tipAttr, wireTips,
+} from './player-card.js';
+// PRESEASON VS NOW (Tim, 2026-10-11): the preseason side is js/proj-trend.js's
+// (read only), the rows and filters are js/pre-vs-now.js's. See `renderPreNow`.
+import * as trend from './proj-trend.js';
+import * as preNow from './pre-vs-now.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('stats');
@@ -89,6 +95,10 @@ const state = {
   // same read (`capture.liveWinChancesFrom`). Empty unless a matchup is under
   // way; null on demo and until the read lands. See `recordOf`.
   live: null,           // { key, chances: Map<teamId, 0..1> }
+
+  // What the Preseason vs now panel needs off that same schedule read: the
+  // league's scoring rules and the current week. Nothing extra is asked.
+  sched: null,          // { key, scoringItems, week }
 };
 
 // "Which team am I" is the same answer every visit, so it is remembered; the
@@ -344,6 +354,7 @@ function render() {
   if (state.oppPending && state.oppPending !== key) state.oppPending = null;
   if (state.weekTeams && state.weekTeams.key !== key) state.weekTeams = null;
   if (state.live && state.live.key !== key) state.live = null;
+  if (state.sched && state.sched.key !== key) state.sched = null;
 
   const weeks = weekCount();
 
@@ -361,6 +372,7 @@ function render() {
   renderCharts();
   renderAccuracy();
   renderFit();
+  renderPreNow();
   renderWeeklyTable();
 
   // Last, and deliberately not awaited: the schedule-luck panel costs a request
@@ -1093,6 +1105,12 @@ async function refreshOppProj(key) {
     if (stale()) return;
     // Kept for the players scatter, whatever happens to the averages below.
     state.weekTeams = { key, map: weekTeams };
+    // And for Preseason vs now: the rules and the current week, off this read.
+    state.sched = {
+      key,
+      scoringItems: Array.isArray(schedule.scoringItems) ? schedule.scoringItems : null,
+      week: preNowWeek(schedule, weekTeams),
+    };
 
     // One wire read, for the current week (the first still being projected —
     // `capture.floorWeek`, the week Schedule, Home and Summary read), used for
@@ -1242,6 +1260,7 @@ function afterOppProj() {
   renderMainTable();
   renderOppPanel();
   renderFit();
+  renderPreNow();
 }
 
 function renderOppPanel() {
@@ -2589,6 +2608,318 @@ function renderFit() {
       : '';
     tuckIfEmpty('fitPlayersNote');
   });
+}
+
+// ------------------------------------------------- preseason vs now, by player
+//
+// Tim, 2026-10-11: "could you add a chart in the stats section that has to do
+// with the proj vs actual that is the proj season avg (before the season
+// started) vs the current season avg for every player? Allow the user to
+// sort/filter them by position, rostered, or user."
+//
+// READING TAKEN: one panel, a graph and a table of the same players (he calls
+// a table a chart as often as a graph, and only a list can be sorted), with
+// three filters that work on both.
+//
+// WHERE THE NUMBERS COME FROM - nothing is worked out here:
+//   Pre   js/proj-trend.js `baselineOf`: ESPN's 9 Sep projection per game,
+//         re-scored with this league's rules. Season 2026 only, never the
+//         sample league (its men are invented), never without the rules.
+//   Avg   ESPN's season average, the "Avg" on the player card (`seasonAvg`).
+//   who   the squads as they stand in the current week, off the roster read
+//         Schedule luck already made; free agents off ONE wire read for that
+//         week (`season.fetchWireWeek`, the read the positional floor makes),
+//         asked for only while the Rostered filter shows free agents.
+//
+// THE PHONE'S SYNCED COPY ASKS ESPN FOR NOTHING (rule 20, as js/notify-load.js
+// does it): a wire week the copy does not hold is not asked for at all - the
+// read would fall through to ESPN - and the panel says so in one line.
+//
+// THE PANEL IS HIDDEN until it has a player to show, as the two graphs above
+// are before a game is played.
+
+const PRE_NOW_VIEWS = ['chart', 'list'];
+const pvn = {
+  view: 'chart',
+  filters: preNow.defaultFilters(),
+  focus: null,          // the position chip pressed under the graph
+  wire: null,           // { key, week, players, said } - the answer, kept
+  wirePending: null,    // `${key}:${week}` of a read in flight
+  baselineAsked: false,
+  cards: new Map(),     // playerId -> run key
+  cardsFor: '',
+  teamsFor: '',
+};
+{
+  const saved = prefs.get('preNowView', PRE_NOW_VIEWS[0]);
+  if (PRE_NOW_VIEWS.includes(saved)) pvn.view = saved;
+}
+
+const PRE_NOW_NO_WIRE = 'Free agents are not in the synced copy: rostered players only.';
+const PRE_NOW_WIRE_FAILED = 'Free agents could not be read: rostered players only.';
+
+/** The current week: the first still being projected, else the last one read. */
+function preNowWeek(schedule, weekTeams) {
+  let week = null;
+  try { week = capture.floorWeek(capture.normalizeSchedule(schedule, { isDemo: false })); } catch { week = null; }
+  if (week !== null && week !== undefined && weekTeams.has(week)) return week;
+  const read = [...weekTeams.keys()].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  return read.length ? read[read.length - 1] : null;
+}
+
+/**
+ * The free agents, once per league and week. On the synced copy only a week
+ * the copy holds is asked for; a week it lacks, or a read that fails, leaves
+ * the squads' players and one line saying so.
+ */
+async function ensurePreNowWire(key, week) {
+  if (pvn.wire && pvn.wire.key === key && pvn.wire.week === week) return;
+  const tag = `${key}:${week}`;
+  if (pvn.wirePending === tag) return;
+  pvn.wirePending = tag;
+  let got = { key, week, players: [], said: PRE_NOW_WIRE_FAILED };
+  try {
+    let copy = null;
+    try { copy = typeof season.cloudSource === 'function' ? await season.cloudSource() : null; } catch { copy = null; }
+    const heldWire = copy ? ((copy.weeks && copy.weeks.wire) || []).map(Number) : null;
+    if (heldWire && !heldWire.includes(Number(week))) {
+      got = { key, week, players: [], said: PRE_NOW_NO_WIRE };
+    } else if (typeof season.fetchWireWeek === 'function') {
+      const players = await season.fetchWireWeek(week);
+      got = { key, week, players: Array.isArray(players) ? players : [], said: '' };
+    }
+  } catch {
+    /* the wire would not answer: the squads' players stand, and the line says so */
+  }
+  if (pvn.wirePending !== tag) return;
+  pvn.wirePending = null;
+  if (scheduleKey() !== key) return;
+  pvn.wire = got;
+  renderPreNow();
+}
+
+function paintPreNowControls() {
+  const seg = (id, attr, value) => {
+    const el = $(id);
+    if (!el) return;
+    el.querySelectorAll(`button[data-${attr}]`).forEach((b) => {
+      const on = b.dataset[attr] === String(value);
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  };
+  seg('preNowPos', 'pos', pvn.filters.position);
+  seg('preNowRos', 'ros', pvn.filters.rostered);
+  seg('preNowView', 'view', pvn.view);
+
+  // The team list is rebuilt only when the league's teams change, so a repaint
+  // behind an open picker never shuts it.
+  const sel = $('preNowTeam');
+  const teams = state.stats ? state.stats.teams : [];
+  if (sel) {
+    const sig = `${scheduleKey()}|${teams.map((t) => `${t.id}:${t.name}`).join('|')}`;
+    if (pvn.teamsFor !== sig) {
+      pvn.teamsFor = sig;
+      sel.innerHTML = '<option value="all">All teams</option>' +
+        teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+    }
+    sel.value = String(pvn.filters.team);
+  }
+
+  // Both views stay in the layout (stats.html `.pvn-swap`); the one not
+  // showing is invisible and out of reach.
+  for (const [id, on] of [['chartPreNow', pvn.view === 'chart'], ['preNowList', pvn.view === 'list']]) {
+    const el = $(id);
+    if (!el) continue;
+    if (on) { el.removeAttribute('aria-hidden'); el.removeAttribute('inert'); }
+    else { el.setAttribute('aria-hidden', 'true'); el.setAttribute('inert', ''); }
+  }
+}
+
+function changePreNowFilter(name, value) {
+  const next = preNow.setFilter(pvn.filters, name, value);
+  // A team no longer in this league names nobody.
+  if (next.team !== 'all' && !(state.stats && state.stats.teams.some((t) => String(t.id) === String(next.team)))) {
+    next.team = 'all';
+  }
+  if (next.position !== pvn.filters.position) pvn.focus = null;
+  pvn.filters = next;
+  renderPreNow();
+}
+
+for (const [id, attr, name] of [['preNowPos', 'pos', 'position'], ['preNowRos', 'ros', 'rostered']]) {
+  const seg = $(id);
+  if (seg) {
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest(`button[data-${attr}]`);
+      if (btn) changePreNowFilter(name, btn.dataset[attr]);
+    });
+  }
+}
+if ($('preNowTeam')) {
+  $('preNowTeam').addEventListener('change', (e) => changePreNowFilter('team', e.target.value));
+}
+if ($('preNowView')) {
+  $('preNowView').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-view]');
+    if (!btn || !PRE_NOW_VIEWS.includes(btn.dataset.view)) return;
+    pvn.view = btn.dataset.view;
+    prefs.set('preNowView', pvn.view === PRE_NOW_VIEWS[0] ? null : pvn.view);
+    hideTip();
+    renderPreNow();
+  });
+}
+if ($('preNowTable')) wireTips($('preNowTable'));
+
+function renderPreNow() {
+  const panel = $('panelPreNow');
+  const box = $('chartPreNow');
+  const table = $('preNowTable');
+  if (!panel || !box || !table) return;
+  const s = state.stats;
+  const key = scheduleKey();
+  const sched = state.sched && state.sched.key === key ? state.sched : null;
+  const held = state.weekTeams && state.weekTeams.key === key ? state.weekTeams.map : null;
+  // An earlier season, the sample league, or rules not known: no preseason
+  // figure exists for these men (`scoringForSeason`), so there is no panel.
+  const scoring = s && !s.isDemo && sched ? trend.scoringForSeason(sched.scoringItems, s.season) : null;
+  if (!scoring || !held || sched.week === null) { setHidden(panel, true); return; }
+  if (!trend.ready()) {
+    setHidden(panel, true);
+    if (!pvn.baselineAsked) {
+      pvn.baselineAsked = true;
+      trend.loadBaseline().then((b) => { if (b) renderPreNow(); });
+    }
+    return;
+  }
+
+  const week = sched.week;
+  const wire = pvn.wire && pvn.wire.key === key && pvn.wire.week === week ? pvn.wire : null;
+  const nameOf = new Map(s.teams.map((t) => [String(t.id), t.name]));
+  const teams = (held.get(week) || []).map((t) => ({ ...t, name: nameOf.get(String(t.id)) || t.name || '' }));
+  const rows = preNow.buildRows({
+    teams,
+    wire: wire ? wire.players : [],
+    preOf: (id) => { const b = trend.baselineOf(id, scoring); return b ? b.perWeek : null; },
+    avgOf: (id) => preNow.seasonAvgOf(id, held, week),
+  });
+  const counts = preNow.countRows(rows);
+  // Nobody on a squad has both numbers (nothing played yet): nothing to show.
+  if (!counts.rostered) { setHidden(panel, true); return; }
+  setHidden(panel, false);
+
+  const wantWire = preNow.needsWire(pvn.filters);
+  if (wantWire && !wire) ensurePreNowWire(key, week);
+  const reading = wantWire && !wire;
+  paintPreNowControls();
+
+  const msg = $('preNowMsg');
+  const said = wantWire && wire ? wire.said : '';
+  if (msg) { msg.textContent = said; setHidden(msg, !said); }
+
+  // The cards belong to one set of weeks and one wire: any change retires them.
+  const gen = `${key}|${week}|${held.size}|${wire ? wire.players.length : 'none'}`;
+  if (pvn.cardsFor !== gen) {
+    pvn.cardsFor = gen;
+    clearRuns('pre');
+    pvn.cards.clear();
+  }
+  const source = new Map();
+  for (const p of wire ? wire.players : []) if (p) source.set(String(p.playerId), p);
+  for (const t of teams) for (const p of t.players || []) if (p) source.set(String(p.playerId), p);
+  const cardWeeks = [...held.keys()].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const cardOf = (r) => {
+    const id = String(r.playerId);
+    if (!pvn.cards.has(id)) {
+      const p = source.get(id) || {};
+      const made = playerCardFromWeeks(held, {
+        ...p, playerId: r.playerId, name: r.name, position: p.position || r.position, proTeam: r.proTeam,
+      }, { weeks: cardWeeks, currentWeek: week });
+      // ESPN's word for a healthy man is no designation at all (as on Home).
+      made.ident = made.ident.replace(/ · ACTIVE$/, '');
+      pvn.cards.set(id, registerRun(made, 'pre'));
+    }
+    return pvn.cards.get(id);
+  };
+
+  const shown = preNow.filterRows(rows, pvn.filters);
+  const posLabel = (k) => POSITION_LABEL[k] || k;
+  const posColor = (k) => (k in POSITION_SLOT ? SERIES_COLORS[POSITION_SLOT[k]] : undefined);
+
+  // ---- the graph ----
+  // Every position at once: coloured by position, with the chips under it.
+  // One position: its dots keep that position's colour.
+  const every = pvn.filters.position === 'all';
+  const groups = every
+    ? preNow.POSITIONS.map((k) => ({ key: k, label: posLabel(k), color: posColor(k) }))
+    : undefined;
+  scatterChart(box, {
+    points: shown.map((r) => ({
+      x: r.pre,
+      y: r.avg,
+      name: r.name,
+      detail: [posLabel(r.position), r.proTeam].filter(Boolean).join(' · '),
+      key: `p${r.playerId}`,
+      group: every ? r.position : undefined,
+      color: every ? undefined : posColor(r.position),
+      href: playerHref(r.playerId),
+      card: 'player',
+      row: r,
+    })),
+    groups,
+    groupLabel: 'Position',
+    focus: every ? pvn.focus ?? undefined : undefined,
+    onFocus: (k) => { pvn.focus = k; },
+    xLabel: 'Preseason avg',
+    yLabel: 'Season avg',
+    perfectLabel: 'No change',
+    height: 320,
+    empty: reading ? 'Reading free agents…' : 'No player matches',
+    card: { show: (k, el, p) => showCard(cardOf(p.row), el), hide: hideTip },
+  });
+
+  // ---- the list ----
+  // One red/green scale for the Diff column, over every player the panel
+  // holds, so a filter never recolours a row.
+  const scale = heatScale(rows.map((r) => r.diffRaw));
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = shown.length
+    ? shown.map((r) => `
+        <tr>
+          <td class="name"><a class="pref" href="${esc(playerHref(r.playerId))}"${tipAttr(cardOf(r))}` +
+            ` aria-label="${esc(r.name)} — open him on the Players page">${esc(r.name)}</a></td>
+          <td>${esc(posLabel(r.position))}</td>
+          <td data-v="${r.pre}">${fmt(r.pre)}</td>
+          <td data-v="${r.avg}">${fmt(r.avg)}</td>
+          ${heatCell(r.diffRaw, scale, { what: 'every player here', text: signed(r.diff) })}
+          <td class="pvn-teamcol${r.rostered ? '' : ' muted'}">${r.rostered ? esc(r.teamName) : 'Free agent'}</td>
+        </tr>`).join('')
+    : `<tr><td class="name" colspan="6">${reading ? 'Reading free agents…' : 'No player matches.'}</td></tr>`;
+  // Diff, biggest first, until a heading is pressed.
+  enableSort(table, { defaultIndex: 4 });
+  resort(table);
+
+  // ---- the note ----
+  const n = (v) => v.toLocaleString('en-US');
+  $('preNowNote').innerHTML = paras([
+    '<strong>Each dot or row is one player.</strong> <strong>Pre</strong> (across) is ESPN&rsquo;s ' +
+      `${trend.BASELINE_DATE} projection for the season, per game, re-scored with this league&rsquo;s ` +
+      'rules. <strong>Avg</strong> (up) is ESPN&rsquo;s season average so far, the Avg on his card: ' +
+      'the weeks he played. <strong>Diff</strong> = Avg &minus; Pre, as printed.',
+    `<strong>${n(counts.all)} players:</strong> ${n(counts.rostered)} on a roster in week ${week}` +
+      (wire && !wire.said
+        ? `, and ${n(counts.free)} of the ${n(wire.players.length)} most-owned free agents ESPN lists`
+        : ', free agents not read') +
+      '. Left out: a player ESPN had no preseason projection for, and one with no season average. ' +
+      'A player who has not played shows ESPN&rsquo;s 0.0.',
+    '<strong>Dotted line</strong> = no change: Avg equals Pre. Above it he is beating his preseason ' +
+      'projection, below it he is short. Both axes share one scale. <strong>Solid line</strong> = the ' +
+      'least-squares line through the dots shown.',
+    'Diff is coloured on the site&rsquo;s red&ndash;green scale against every player in the panel, ' +
+      'whatever the filters show. Choosing a user shows that team&rsquo;s roster, so Rostered follows; ' +
+      'All or Free agents lets go of the user.',
+    'Hover or tap a dot or a name for the player&rsquo;s card; a click then opens him on Players.',
+  ]);
 }
 
 // The league's own week, as a baseline under the grid. It was already computed

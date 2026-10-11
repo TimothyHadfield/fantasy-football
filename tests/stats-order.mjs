@@ -42,6 +42,8 @@ const EXPECTED = [
   // Tim, 2026-10-04: the two scatter graphs, directly under Projection accuracy.
   'Projected vs actual — teams',
   'Projected vs actual — players',
+  // Tim, 2026-10-11: preseason average against the season's, directly after them.
+  'Preseason vs now — players',
   'Score spread by team',
 ];
 

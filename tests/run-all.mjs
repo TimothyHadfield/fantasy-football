@@ -104,6 +104,8 @@ const SUITES = [
   ['opp-check.mjs', 'opponent strength on the stats page'],
   ['future-check.mjs', 'roster strength and future proj diff beside schedule luck: worked on paper, and week for week against the Analysis page'],
   ['stats-fit.mjs', 'the stats page’s two projected-vs-actual graphs: which team-weeks and player-weeks are dots, and where a tapped dot links'],
+  ['test-pre-vs-now.mjs', 'preseason vs now: which players are rows, and the position, rostered and user filters'],
+  ['pre-now-check.mjs', 'the stats page’s preseason-vs-now panel: both views, the three filters, the sort, and when it stays hidden'],
   ['fc-test.mjs', 'the schedule page forecast and simulation panels'],
   ['test-capture.mjs', 'the weekly reading: identical from the schedule page and the bar, refusals, status line'],
   ['test-proj-history.mjs', 'projection history: every squad’s roster and its projection in every week ahead, kept once a week beside the reading, and read back'],

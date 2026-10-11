@@ -104,7 +104,7 @@
       "scenarios": 7
     },
     "stats-order.mjs": {
-      "assertions": 1142
+      "assertions": 1143
     },
     "opp-check.mjs": {
       "scenarios": 7
@@ -293,6 +293,13 @@
     },
     "test-pending.mjs": {
       "assertions": 95
+    },
+    "test-pre-vs-now.mjs": {
+      "assertions": 85
+    },
+    "pre-now-check.mjs": {
+      "assertions": 164,
+      "scenarios": 8
     }
   }
 }

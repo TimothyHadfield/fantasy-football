@@ -2256,3 +2256,47 @@ header.site .wrap:not(:has(.site-bell)) nav { margin-right: 42px; }
   header.site .wrap:not(:has(.site-bell)) nav { margin-right: 0; }
 }
 /* ========================================================== end of the bell */
+
+/* ============================================ Stats: Preseason vs now (players)
+ * Tim, 2026-10-11. One panel, a graph and a list of the same players.
+ *
+ * `.pvn-swap`: BOTH views sit in one grid cell and the one not showing is
+ * invisible, not removed (stats.html marks it `aria-hidden` + `inert`), so the
+ * switch moves nothing on the page. The graph sets the cell's height; the list
+ * asks for none of its own (`height: 0`) and then fills the cell, scrolling
+ * inside it - which is also what keeps its header stuck (see `.table-scroll`).
+ * `min-height` is for the moment the graph has not been drawn. */
+.pvn-swap { display: grid; }
+.pvn-swap > * { grid-area: 1 / 1; min-width: 0; }
+.pvn-swap > [aria-hidden="true"] { visibility: hidden; }
+.pvn-swap > .pvn-list { height: 0; min-height: 100%; max-height: none; }
+.pvn-swap > .pvn-chart { min-height: 342px; }
+.pvn-head { gap: 10px 22px; margin-bottom: 10px; }
+/* The picker is as tall as the small segmented controls beside it. */
+.pvn-team select { width: 170px; height: 34px; padding: 0 10px; font-size: 13px; }
+.pvn-team label { margin-bottom: 0; }
+.pvn-msg { margin: 8px 0 0; }
+#preNowTable td.pvn-teamcol, #preNowTable th.pvn-teamcol { text-align: left; }
+/* A name is a link that reads as the text it is (as on Home and Analysis). */
+#preNowTable a.pref { color: inherit; text-decoration: none; }
+#preNowTable a.pref:hover { color: var(--accent-hi); text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 760px) {
+  /* Position gets the whole line, seven across; Rostered the next; the user
+   * picker and the Chart | List switch share the third. */
+  .pvn-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px; align-items: end; }
+  .pvn-head .pvn-pos, .pvn-head .pvn-ros { grid-column: 1 / -1; }
+  .pvn-pos .segmented { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  /* 16px: iOS zooms the page into a smaller form control when it is focused. */
+  .pvn-team select { width: 100%; height: auto; font-size: 16px; padding: 5px 10px; }
+  /* A name column narrow enough to leave the numbers on screen. */
+  /* Fixed columns: the numbers keep their width, the name takes what is left and
+   * the team is cut short, so the list never scrolls sideways. */
+  #preNowTable { table-layout: fixed; width: 100%; min-width: 0; }
+  #preNowTable th, #preNowTable td { padding-left: 4px; padding-right: 4px; }
+  #preNowTable th:nth-child(2) { width: 36px; }
+  #preNowTable th:nth-child(3), #preNowTable th:nth-child(4) { width: 36px; }
+  #preNowTable th:nth-child(5) { width: 60px; }
+  #preNowTable th:nth-child(6) { width: 54px; }
+  #preNowTable td.name, #preNowTable td.pvn-teamcol { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+/* ===================================================== end of Preseason vs now */
