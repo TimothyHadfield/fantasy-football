@@ -1287,6 +1287,97 @@ function watchCloudAuth() {
   });
 }
 
+// ------------------------------------------------------------------ the bell
+//
+// Tim, 2026-10-11: "I want to make a notifications section …" and, asked where
+// it lives, "Bell in the top bar": a bell with a count on every page; clicking
+// it opens notifications.html (docs/notifications-plan.md).
+//
+// It is mounted HERE, into the page's own `header.site`, because this module is
+// the one thing every section page already loads: one file, and the bell is in
+// the same place on all of them. The main menu (leagues.html) does not load
+// this module and has no bell.
+//
+// The bell itself is always there once the bar is. The COUNT is the lines that
+// need doing (`now` + `soon`), and it is only ever asked for when there is a
+// team to ask about: a connected league, a "You are" team, this season. It
+// comes from `js/notify-load.js`, the one writer of the saved count, which is
+// imported lazily and late — a page's own numbers come first — and whose
+// absence or failure leaves a plain bell and nothing said.
+
+const BELL_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
+const BELL_NAME = 'Notifications';
+const BELL_WAIT_MS = 1500;   // where the browser cannot say it is idle (Safari)
+
+let bellLoader = null;   // the one import of the loader, kept
+let bellTimer = null;
+let bellTurn = 0;
+
+function mountBell() {
+  if ($('siteBell')) return;
+  const wrap = document.querySelector('header.site .wrap');
+  const brand = wrap && wrap.querySelector('.brand');
+  if (!brand) return;
+  const a = document.createElement('a');
+  a.id = 'siteBell';
+  a.className = 'site-bell';
+  a.setAttribute('href', 'notifications.html');
+  a.setAttribute('aria-label', BELL_NAME);
+  try {
+    if (/\/notifications\.html$/.test(window.location.pathname || '')) a.setAttribute('aria-current', 'page');
+  } catch { /* no location: it is simply not marked */ }
+  a.innerHTML = `${BELL_ICON}<span class="site-bell-count" id="siteBellCount" hidden></span>`;
+  // After the brand and before the nav: on a phone that is the brand's own line.
+  wrap.insertBefore(a, brand.nextSibling);
+}
+
+/** A whole number above zero is shown; zero and "not known" are both a plain bell. */
+function showBellCount(n) {
+  const a = $('siteBell');
+  const out = $('siteBellCount');
+  if (!a || !out) return;
+  const has = Number.isFinite(n) && n > 0;
+  out.textContent = has ? (n > 99 ? '99+' : String(n)) : '';
+  if (has) out.removeAttribute('hidden'); else out.setAttribute('hidden', '');
+  a.setAttribute('aria-label', has ? `${BELL_NAME}, ${n}` : BELL_NAME);
+}
+
+async function updateBell() {
+  const turn = ++bellTurn;
+  if (!$('siteBell')) return;
+  // No league, no "You are" team, or an earlier season: nothing to count.
+  if (!state.league || state.teamId == null || pastSeason()) { showBellCount(null); return; }
+  try {
+    if (!bellLoader) bellLoader = import('./notify-load.js').catch(() => null);
+    const mod = await bellLoader;
+    if (!mod || turn !== bellTurn) return;
+    let c = mod.savedCount();
+    if (!c || !c.fresh) {
+      await mod.refresh();
+      if (turn !== bellTurn) return;
+      c = mod.savedCount();
+    }
+    showBellCount(c && c.fresh ? (Number(c.now) || 0) + (Number(c.soon) || 0) : null);
+  } catch {
+    if (turn === bellTurn) showBellCount(null);
+  }
+}
+
+/** Ask for the count once the page has gone quiet; a second ask replaces the first. */
+function scheduleBell() {
+  if (!$('siteBell')) return;
+  const run = () => { bellTimer = null; updateBell(); };
+  const idle = typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function';
+  if (bellTimer) (bellTimer.idle ? window.cancelIdleCallback : clearTimeout)(bellTimer.id);
+  const id = idle ? window.requestIdleCallback(run, { timeout: 2 * BELL_WAIT_MS }) : setTimeout(run, BELL_WAIT_MS);
+  // A test process must not be held open by a bell.
+  if (!idle && id && typeof id.unref === 'function') id.unref();
+  bellTimer = { idle, id };
+}
+
 async function init() {
   if (!$('connBar')) return;
   load();
@@ -1294,6 +1385,12 @@ async function init() {
   render();
   wireLeagueCard();
   watchCloudAuth();
+
+  // The bell beside the page links, and its count whenever the league or the
+  // "You are" team changes.
+  mountBell();
+  document.addEventListener('ff:connection', scheduleBell);
+  scheduleBell();
 
   bridge.onAvailability(({ available }) => {
     state.extension = available;

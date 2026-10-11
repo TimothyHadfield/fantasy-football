@@ -60,6 +60,7 @@ const SUITES = [
   ['test-store.mjs', 'the weeks kept in this browser between pages: two freshness clocks, eviction, and the seam in season.js'],
   ['test-decision-data.mjs', 'what the managers did, from ESPN: real transaction payloads decoded, a decided week’s moves frozen, the world’s cold and warm cost'],
   ['nav-check.mjs','the hand-copied nav: the same links in the same order on every page'],
+  ['bell-check.mjs', 'the bell in the top bar: where it sits, its name, the count (now + soon) only for a team this season, a plain bell when the loader is missing or fails'],
   ['leagues-check.mjs', 'the main menu: the leagues and their seasons, opening one, Add by id or pasted link, Remove behind its confirm step, the empty state'],
   ['site-status-check.mjs', 'the Site updated stamp, the newer-version bar, the failed-to-load strip'],
   ['test-extension.mjs', 'the bridge worker: URL injection, who may drive it, and the staged trade'],
