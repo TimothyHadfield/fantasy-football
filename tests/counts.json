@@ -1,6 +1,6 @@
 {
   "_": "Per-suite counts off a green run. run-all.mjs FAILS when one of these falls (AUDIT §3.5); a rise is fine and is recorded by `node run-all.mjs --bless`. Do not hand-edit: re-bless on a green run and say what changed.",
-  "measured": "2026-10-10",
+  "measured": "2026-10-11",
   "suites": {
     "test-forecast.mjs": {
       "assertions": 68
@@ -71,11 +71,11 @@
       "assertions": 1491
     },
     "test-cloud.mjs": {
-      "assertions": 215
+      "assertions": 229
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 291,
-      "scenarios": 25
+      "assertions": 329,
+      "scenarios": 26
     },
     "test-trade-odds.mjs": {
       "assertions": 142
@@ -165,8 +165,8 @@
       "assertions": 74
     },
     "test-past-season.mjs": {
-      "assertions": 49,
-      "scenarios": 7
+      "assertions": 84,
+      "scenarios": 10
     },
     "test-accept-by.mjs": {
       "assertions": 24
@@ -270,6 +270,9 @@
     "menu-account-check.mjs": {
       "assertions": 46,
       "scenarios": 7
+    },
+    "test-pending.mjs": {
+      "assertions": 95
     }
   }
 }
