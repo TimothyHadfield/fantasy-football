@@ -5206,19 +5206,24 @@ if (!wk.boot) {
     // page reads, so his Proj is "—"; his Avg and rank still come through.
     const every = Array.from({ length: 16 }, (_, i) => generateDemoWeekRosters(i + 1).teams)
       .flat().flatMap((t) => t.players);
+    // Proj is the rest of his season (Tim, 2026-10-11): the mean over the weeks
+    // left he plays, as js/season.js `fetchPlayerValues` carries it; this
+    // week's projection only where that is not known.
+    const held = await (await import(moduleUrl('js/season.js'))).fetchPlayerValues({ demo: true });
     const want = (pid) => {
       const here = now.find((x) => x.playerId === pid);
       const p = here || every.find((x) => x.playerId === pid);
       if (!p) return null;
       const f = (v) => (typeof v === 'number' ? v.toFixed(1) : '—');
-      return `Avg ${f(p.seasonAvg)} · Proj ${f(here ? here.projected : null)} · ` +
+      const rest = (held.byId.get(pid) || held.byId.get(Number(pid)) || {}).projAvg;
+      return `Avg ${f(p.seasonAvg)} · Proj ${f(typeof rest === 'number' ? rest : here ? here.projected : null)} · ` +
         `${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}`;
     };
     for (const [where, k] of [['a finder name', wk.card], ['a spare chip', wk.spareCard], ['a man in the deal pop-up', wk.dealCard]]) {
       ok(`GLANCE: ${where} shows Value · Avg · Proj · rank right under the name`,
         !!k && k.glanceUnderName && /^Value \d+\.\d · Avg \d+\.\d · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #\d+$/.test(k.glance),
         JSON.stringify(k && { g: k.glance, under: k.glanceUnderName, id: k.ident }));
-      ok(`GLANCE: ${where} carries HIS week-${DEMO_CURRENT_WEEK} numbers`,
+      ok(`GLANCE: ${where} carries HIS numbers, Proj over the weeks left`,
         !!k && k.pid !== null && want(k.pid) !== null && k.glance.replace(/^Value \d+\.\d · /, '') === want(k.pid),
         `${k && k.glance} vs ${k && want(k.pid)}`);
     }

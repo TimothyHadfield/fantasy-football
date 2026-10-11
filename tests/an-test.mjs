@@ -3761,9 +3761,16 @@ async function check(scenario, boot) {
       // (A man who was on another squad in week 4 shows "off" on this squad's
       // run, while the glance still carries ESPN's league-wide number for him.)
       const onSquad = lines.filter((l) => /^\d+\.\d$/.test(l.p4));
-      c.ok('Proj is his week-4 projection, not the picked week’s',
-        onSquad.length >= 20 && onSquad.every((l) => l.text.match(RX)?.[2] === l.p4),
-        `${onSquad.length} checked; ${JSON.stringify(onSquad.find((l) => l.text.match(RX)?.[2] !== l.p4))}`);
+      // Proj is the rest of his season (Tim, 2026-10-11): the mean over the
+      // weeks left he plays, from the real js/season.js; week 4's where unknown.
+      const rest = await (await import('../js/season.js')).fetchPlayerValues({ demo: true });
+      const projOf = (l) => {
+        const r = (rest.byId.get(l.pid) || {}).projAvg;
+        return typeof r === 'number' ? r.toFixed(1) : l.p4;
+      };
+      c.ok('Proj is his average over the weeks left, not the picked week’s',
+        onSquad.length >= 20 && onSquad.every((l) => l.text.match(RX)?.[2] === projOf(l)),
+        `${onSquad.length} checked; ${JSON.stringify(onSquad.find((l) => l.text.match(RX)?.[2] !== projOf(l)))}`);
       const full = lines.filter((l) => l.clean && l.acts.every((a) => /^\d+\.\d$/.test(a)));
       c.ok('Avg is the mean of the weeks he played (weeks 1–3, off his Act row)',
         full.length >= 5 && full.every((l) => l.text.match(RX)?.[1] ===
@@ -3776,7 +3783,7 @@ async function check(scenario, boot) {
         JSON.stringify(lines.find((l) => Number(l.text.match(RX)?.[4]) !== g.byId.get(l.pid)?.rank)));
       // Pinned, so a change to the sample or the format is seen.
       c.ok('the first card reads exactly as pinned',
-        lines[0].whole === 'Value 4.5 · Avg 29.0 · Proj 21.0 · QB #1', lines[0].whole);
+        lines[0].whole === 'Value 4.5 · Avg 29.0 · Proj 21.2 · QB #1', lines[0].whole);
       // THE CARD CARRIES THE MAN'S VALUE, by his id, through the lookup this
       // page hands js/player-card.js — the sample league's own lines, from the
       // real js/season.js (this scenario is not stubbed).
