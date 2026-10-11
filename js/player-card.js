@@ -788,6 +788,23 @@ function valueFor({ value = null, playerId = null } = {}) {
   }
 }
 
+/**
+ * HIS "Proj" FOR A CARD BEING OPENED NOW (Tim, 2026-10-11): the average of the
+ * weeks left he is projected to play — bye and ruled-out weeks left out — when
+ * the page's source knows it (`lookup.proj`, js/season.js). Otherwise the
+ * glance keeps the number the page gave it (ESPN's projection for this week).
+ */
+function projFor(glance, playerId) {
+  if (!glance || !valueSource || typeof valueSource.proj !== 'function') return glance;
+  if (playerId === null || playerId === undefined) return glance;
+  try {
+    const v = valueSource.proj(playerId);
+    return typeof v === 'number' && Number.isFinite(v) ? { ...glance, proj: v } : glance;
+  } catch {
+    return glance;
+  }
+}
+
 // ------------------------------------------------- the line under the name
 //
 // Tim, 2026-10-02: "could you also show the player's avg points, this week
@@ -1249,7 +1266,7 @@ function lineHtml(cols, vsName = '') {
 function cardHtml({ ident, run, href, openLabel, glance, playerId, value }, sheet) {
   // The name, and right under it his Value and ESPN's Avg / Proj / rank
   // (glanceHtml). The Value is read now, as the card opens — see setValueSource.
-  const head = `<div class="tc-ident">${esc(ident)}</div>${glanceHtml(glance, valueFor({ value, playerId }))}`;
+  const head = `<div class="tc-ident">${esc(ident)}</div>${glanceHtml(projFor(glance, playerId), valueFor({ value, playerId }))}`;
   if (!run) return `${head}${actionsHtml(href, openLabel)}`;
 
   const sub = `<div class="tc-head">${esc(run.heading)}</div>`;

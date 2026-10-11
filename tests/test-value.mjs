@@ -51,6 +51,15 @@ eq(v.restAvg({ 5: 10, 6: 0, 7: 20 }, [5, 6, 7], 6), 15, 'his bye is left out: (1
 eq(v.restAvg({ 5: 10, 6: 0, 7: 20 }, [5, 6, 7], null), 10, 'a 0 with no bye known counts as the 0 it is');
 eq(v.restAvg({ 5: 10, 6: 0, 7: 20 }, [5, 6, 7], 9), 10, 'a 0 in a week that is NOT his bye (hurt, suspended) counts');
 eq(v.restAvg({ 5: 10, 6: null, 7: 20 }, [5, 6, 7]), 15, 'a week ESPN said nothing about is skipped');
+
+// --------------------------------------------------------------- restProjAvg
+// Tim, 2026-10-11: the preview's Proj is the "rest-of-season proj avg (not
+// including bye or injury)".
+eq(v.restProjAvg({ 5: 10, 6: 0, 7: 20 }, [5, 6, 7], 6), 15, 'PROJ: his bye is left out');
+eq(v.restProjAvg({ 5: 10, 6: 0, 7: 20 }, [5, 6, 7], 9), 15, 'PROJ: a week he is projected nothing (hurt) is left out too — unlike restAvg');
+eq(v.restProjAvg({ 5: 10, 6: null, 7: 20, 8: 30 }, [5, 6, 7]), 15, 'PROJ: an unread week is skipped, and only the weeks left count');
+eq(v.restProjAvg({ 5: 0, 6: 0 }, [5, 6], 6), null, 'PROJ: no week he plays: nothing to say');
+eq(v.restProjAvg(new Map([[5, 12]]), [5]), 12, 'PROJ: a Map works as the object does');
 eq(v.restAvg({ 5: 10, 7: 20 }, [5, 6, 7]), 15, 'and so is a week that is absent');
 eq(v.restAvg({ 4: 99, 5: 10, 7: 20 }, [5, 7]), 15, 'a week that is not left does not count');
 eq(v.restAvg(new Map([[5, 10], [6, 0], [7, 20]]), [5, 6, 7], 6), 15, 'a Map works the same');

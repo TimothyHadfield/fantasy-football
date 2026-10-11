@@ -75,6 +75,30 @@ export function restAvg(byWeek, weeks, byeWeek = null) {
 }
 
 /**
+ * THE PREVIEW'S "Proj" (Tim, 2026-10-11: "make the proj stat in a players
+ * preview reflect their rest-of-season proj avg (not including bye or injury)
+ * instead of just the proj for that week"): his average over the weeks left
+ * that ESPN projects him to PLAY — the bye left out, and so is any week
+ * projected at nothing (a man ruled out). Not `restAvg`: a Value counts the
+ * weeks a man misses, this says what he scores when he plays.
+ *
+ * @returns {number|null} null when no week counts
+ */
+export function restProjAvg(byWeek, weeks, byeWeek = null) {
+  const get = (w) => (byWeek instanceof Map ? byWeek.get(w) : byWeek ? byWeek[w] : null);
+  let sum = 0;
+  let n = 0;
+  for (const w of weeks || []) {
+    if (byeWeek !== null && byeWeek !== undefined && Number(byeWeek) === Number(w)) continue;
+    const v = num(get(w));
+    if (v === null || v <= 0) continue;
+    sum += v;
+    n += 1;
+  }
+  return n ? sum / n : null;
+}
+
+/**
  * The two lines at every position, from the league as it stands — run once a
  * season and kept (see the top).
  *

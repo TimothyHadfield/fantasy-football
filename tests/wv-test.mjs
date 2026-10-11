@@ -1742,7 +1742,9 @@ async function check(scenario, boot) {
       };
       const want = (pid) => {
         const p = now.find((x) => x.playerId === pid);
-        return p ? `${lead(pid)}Avg ${f(p.seasonAvg)} · Proj ${f(p.projected)} · ${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}` : null;
+        // Proj is the rest of his season (Tim, 2026-10-11): the weeks left he plays.
+        const rest = (held.byId.get(pid) || held.byId.get(Number(pid)) || {}).projAvg;
+        return p ? `${lead(pid)}Avg ${f(p.seasonAvg)} · Proj ${f(typeof rest === 'number' ? rest : p.projected)} · ${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}` : null;
       };
       c.ok('GLANCE: the sample league has lines, and its rostered men have Values over zero',
         takenIds.some((pid) => held.lookup(Number(pid)) > 0), JSON.stringify(takenIds.slice(0, 4).map((pid) => held.lookup(Number(pid)))));
@@ -1750,7 +1752,7 @@ async function check(scenario, boot) {
       const again = open('waiverTable', 'posFilter', ids('waiverTable')[0]);
       c.ok('GLANCE: a sample free agent’s Actual row leads with his Value',
         /^Value \d+\.\d · Avg /.test(again.text), again.text);
-      c.ok('GLANCE: a rostered man’s Actual row leads with his Value, then his week-4 sample numbers',
+      c.ok('GLANCE: a rostered man’s Actual row leads with his Value, then his sample numbers, Proj over the weeks left',
         taken.length >= 5 && taken.every((s) => s.under && s.text === want(s.pid)),
         `${taken.length}; ${JSON.stringify(taken.find((s) => !s.under || s.text !== want(s.pid)))} want ${
           JSON.stringify(taken.map((s) => want(s.pid)).slice(0, 1))}`);

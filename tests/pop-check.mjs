@@ -443,6 +443,16 @@ const WEEKS = new Map([
   eq(show(kId), before, 'a source that throws costs the Value, never the card');
   card.setValueSource(() => 'seven');
   eq(show(kId), before, 'a source that answers with something that is not a number: no Value');
+  // PROJ AS THE REST OF HIS SEASON (Tim, 2026-10-11): the source's `.proj`.
+  const src = (id) => table.get(id);
+  src.proj = (id) => (id === 77 ? 12.34 : null);
+  card.setValueSource(src);
+  ok(/Proj <b>12\.3<\/b>/.test(show(kId)), 'a source that knows his rest-of-season projection: the Proj on the card is that', html().slice(0, 260));
+  ok(!/Proj <b>12\.3<\/b>/.test(show(kBare)), 'a card with no playerId keeps the Proj the page gave it');
+  src.proj = () => null;
+  ok(!/Proj <b>12\.3<\/b>/.test(show(kId)) && /Proj <b>/.test(html()), 'no rest-of-season number for him: the Proj the page gave stays');
+  src.proj = () => { throw new Error('boom'); };
+  ok(/Proj <b>/.test(show(kId)), 'a proj source that throws costs nothing');
   card.setValueSource(null);
   eq(show(kId), before, 'setValueSource(null) takes the source away');
   reset();

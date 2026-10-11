@@ -1726,6 +1726,35 @@ const actualRowIf = (p, weeks, wire, lead) =>
  * rank here is the one the Trade and Analysis pages show.
  */
 function glanceFor(p, wire) {
+  const g = glanceNow(p, wire);
+  const rest = restProj(p, wire);
+  return rest === null ? g : { ...g, proj: rest };
+}
+
+/**
+ * "Proj" AS THE REST OF HIS SEASON (Tim, 2026-10-11): the average of the weeks
+ * left he is projected to play, bye and ruled-out weeks left out
+ * (js/value.js `restProjAvg`). null until those weeks are known — the line
+ * then keeps this week's projection.
+ */
+function restProj(p, wire) {
+  const got = state.value.players;
+  if (!got || !Array.isArray(got.weeks) || !got.weeks.length) return null;
+  if (!wire) {
+    const hit = got.byId && (got.byId.get(p.playerId) ?? got.byId.get(Number(p.playerId)));
+    return hit && typeof hit.projAvg === 'number' ? hit.projAvg : null;
+  }
+  const byWeek = {};
+  for (const w of got.weeks) {
+    const v = valueFor(p.playerId, w);
+    if (v === undefined) return null;
+    const done = doneFor(p.playerId, w, false);
+    byWeek[w] = done ? done.pregame : v;
+  }
+  return value.restProjAvg(byWeek, got.weeks, byeWeekOf(p, state.byes));
+}
+
+function glanceNow(p, wire) {
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const now = state.currentWeek;
   if (wire) {

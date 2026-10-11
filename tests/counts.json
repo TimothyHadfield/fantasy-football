@@ -18,7 +18,7 @@
       "assertions": 113
     },
     "test-value.mjs": {
-      "assertions": 102
+      "assertions": 107
     },
     "test-heat.mjs": {
       "assertions": 186
@@ -258,7 +258,7 @@
       "assertions": 391
     },
     "pop-check.mjs": {
-      "assertions": 135
+      "assertions": 139
     },
     "leagues-check.mjs": {
       "assertions": 72,

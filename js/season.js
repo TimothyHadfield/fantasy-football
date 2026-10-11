@@ -2104,6 +2104,7 @@ function withRestAvg(men, weeks, byes) {
       playerId: m.playerId,
       position: m.position,
       avg: value.restAvg(m.byWeek, weeks, Number.isFinite(bye) ? bye : null),
+      projAvg: value.restProjAvg(m.byWeek, weeks, Number.isFinite(bye) ? bye : null),
     };
   });
 }
@@ -2259,11 +2260,19 @@ export function fetchPlayerValues({ demo = false } = {}) {
 function playerValuesOf(base, weeks, weekTeams, byes) {
   const byId = new Map();
   for (const m of withRestAvg(squadMen(weekTeams, weeks), weeks, byes)) {
-    byId.set(m.playerId, { position: m.position, avg: m.avg, value: value.valueOf(base, m.position, m.avg) });
+    byId.set(m.playerId, {
+      position: m.position, avg: m.avg, projAvg: m.projAvg, value: value.valueOf(base, m.position, m.avg),
+    });
   }
   const lookup = (id) => {
     const hit = byId.get(id) ?? byId.get(Number(id));
     return hit && typeof hit.value === 'number' ? hit.value : null;
+  };
+  // The preview's "Proj" rides the same function a page hands the card
+  // (`setValueSource`): his average over the weeks left he is projected to play.
+  lookup.proj = (id) => {
+    const hit = byId.get(id) ?? byId.get(Number(id));
+    return hit && typeof hit.projAvg === 'number' ? hit.projAvg : null;
   };
   return { base, weeks, byId, lookup };
 }
