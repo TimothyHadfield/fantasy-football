@@ -161,6 +161,9 @@
     "tr-value-check.mjs": {
       "assertions": 73
     },
+    "test-notify-trades.mjs": {
+      "assertions": 64
+    },
     "test-proj-trend.mjs": {
       "assertions": 74
     },
