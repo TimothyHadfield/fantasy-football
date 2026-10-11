@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Fantasy Football Bridge",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Connects your private ESPN fantasy league to your Fantasy Football site, without making the league public.",
   "permissions": [
-    "storage"
+    "storage",
+    "cookies"
   ],
   "host_permissions": [
-    "https://lm-api-reads.fantasy.espn.com/*"
+    "https://lm-api-reads.fantasy.espn.com/*",
+    "https://lm-api-writes.fantasy.espn.com/*"
   ],
   "background": {
     "service_worker": "background.js"

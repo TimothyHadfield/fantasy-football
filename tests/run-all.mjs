@@ -66,6 +66,8 @@ const SUITES = [
   ['site-status-check.mjs', 'the Site updated stamp, the newer-version bar, the failed-to-load strip'],
   ['test-extension.mjs', 'the bridge worker: URL injection, who may drive it, and the staged trade'],
   ['test-bridge-settle.mjs', 'a private league’s first read waits for the extension’s hello'],
+  ['test-lineup-guard.mjs', 'the one write: a lineup change on your own team, this week, switch on, live site only — every refusal and the exact body sent'],
+  ['test-bridge-lineup.mjs', 'the site’s half of the lineup change: canSetLineup and setLineup never reject, and say why not'],
   ['test-espn-tick.mjs', 'ticking your own side on ESPN’s trade page — and never submitting'],
   ['owner-names.mjs', 'real names instead of team names: the ESPN members join'],
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],

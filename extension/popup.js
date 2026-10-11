@@ -15,6 +15,30 @@ chrome.storage.local.get(['leagueId'], ({ leagueId }) => {
   if (leagueId) $('league').value = leagueId;
 });
 
+// "Let the site set my lineup". OFF until he turns it on here, and this popup
+// is the only thing that can turn it on: background.js refuses every lineup
+// change while the stored value is anything but exactly `true`, and a web page
+// cannot reach extension storage. (Tim, 2026-10-11: "Yes, lineup only".)
+const ALLOW_LINEUP_KEY = 'allowLineup';
+
+function paintAllow(on) {
+  $('allow').setAttribute('aria-checked', on ? 'true' : 'false');
+}
+
+chrome.storage.local.get([ALLOW_LINEUP_KEY], (stored) => {
+  paintAllow(stored[ALLOW_LINEUP_KEY] === true);
+});
+
+// The whole row is the target, the way a labelled switch behaves anywhere.
+$('allow-row').addEventListener('click', () => {
+  const on = $('allow').getAttribute('aria-checked') !== 'true';
+  // Painted only once it is saved, so the switch never shows a state the
+  // worker would not act on.
+  chrome.storage.local.set({ [ALLOW_LINEUP_KEY]: on }, () => {
+    if (!chrome.runtime.lastError) paintAllow(on);
+  });
+});
+
 function show(text, cls) {
   const out = $('out');
   out.textContent = text;
