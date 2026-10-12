@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 import { REPO } from './repo.mjs';
 
 const imp = (rel) => import(pathToFileURL(path.join(REPO, rel)).href);
-const { priceTradeAcrossWeeks } = await imp('js/trade.js');
+const { priceTradeAcrossWeeks, setCutValue } = await imp('js/trade.js');
 const { positionFloors } = await imp('js/floor.js');
 const { SLOT_ELIGIBILITY } = await imp('js/espn.js');
 const { positionsToAdd, movesFor } = await imp('js/trade-moves.js');
@@ -128,6 +128,50 @@ for (const done of [true, false, null]) {
   eq(positionsToAdd(noK, noK.slice(1), SLOTS, SLOT_ELIGIBILITY).length, 0, 'a squad already without a kicker is not told to add one');
   eq(positionsToAdd([], [], SLOTS, SLOT_ELIGIBILITY).length, 0, 'nothing in, nothing out');
   eq(movesFor({ before: [], priced: null, slots: SLOTS, eligibility: SLOT_ELIGIBILITY }).drop.length, 0, 'no pricing, no lists');
+}
+
+// ------------------------------------------- Value decides who is dropped
+//
+// Tim, 2026-10-12: "I have Kyler murray who has a value of 0.1, but it suggests
+// me to drop Juwan Jhonson, the #3 TE avg 13pts and a value of 0.8. I think
+// Value should probably be the biggest priority when choosing who to drop".
+// His case, in the fixture: the second TE starts nowhere and is worth 0.8; the
+// second QB starts nowhere either and is worth 0.1.
+{
+  const mine = squad(1, { done: null });
+  const his = squad(2, { done: null });
+  const te2 = mine.filter((p) => p.position === 'TE')[1];
+  const qb2 = mine.filter((p) => p.position === 'QB')[1];
+  const k = kickerOf(mine);
+  const got = his.filter((p) => p.position === 'WR').slice(0, 1);
+  const VALUES = new Map(mine.concat(his).map((p) => [p.playerId, 3]));
+  VALUES.set(te2.playerId, 0.8);
+  VALUES.set(qb2.playerId, 0.1);
+  VALUES.set(k.playerId, 0);                       // a kicker: worth nothing, and the only one
+  const dropOf = (receive) => price(mine, [], receive).cut.map((p) => p.playerId).join();
+
+  setCutValue(null);
+  const old = dropOf(got);
+  ok(old !== '' && old !== String(qb2.playerId), 'with no Values the old rule stands, and it is not the second QB', old);
+
+  setCutValue((id) => VALUES.get(id) ?? null);
+  eq(dropOf(got), String(qb2.playerId), 'with Values, the lowest Value goes: the 0.1, not the 0.8');
+  ok(!dropOf(got).split(',').includes(String(k.playerId)), 'the only kicker is not dropped, though his Value is the lowest of all');
+  const two = his.filter((p) => p.position === 'WR').slice(0, 2);
+  eq(dropOf(two).split(',').sort().join(), [qb2.playerId, te2.playerId].map(String).sort().join(), 'two over: the two lowest go');
+  VALUES.delete(te2.playerId);
+  eq(dropOf(got), String(te2.playerId), 'a man with no Value counts 0');
+  VALUES.set(te2.playerId, 0.8);
+  // Values are compared as printed (to the tenth): level ones leave it to the old rule.
+  for (const p of mine) VALUES.set(p.playerId, 0.84);
+  VALUES.set(got[0].playerId, 0.8);
+  eq(dropOf(got), old, 'level Values (0.84 and 0.8 both print 0.8): the old rule settles it');
+  VALUES.set(got[0].playerId, 0);
+  eq(dropOf(got), String(got[0].playerId), 'the man just received goes, when his is the lowest Value');
+  setCutValue(() => { throw new Error('no'); });
+  eq(dropOf(got), old, 'a lookup that throws is no Value, not a crash');
+  setCutValue(null);
+  eq(dropOf(got), old, 'and taking the Values away puts the old rule back');
 }
 
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);

@@ -112,7 +112,7 @@ import { stageTrade, isAvailable as bridgeAvailable, extensionVersion, currentSe
 import { tradesNote, saveTradesNote } from './notify-trades.js';
 import {
   depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
-  priceTradeAcrossWeeks, bestComboSliced, mergeComboByPartner, seasonLineupValue,
+  priceTradeAcrossWeeks, setCutValue, bestComboSliced, mergeComboByPartner, seasonLineupValue,
 } from './trade.js';
 // THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
 // forecast, the trade finder, "Who to start" and the per-week valuation all
@@ -1776,6 +1776,11 @@ function syncValueSwitch() {
 }
 
 let valueReadKey = null;
+/** The current read of the Values (never rejects). */
+let valueRead = Promise.resolve();
+/** The source a weekly search priced before its Values were in, or null. */
+let searchedWithoutValue = null;
+const VALUE_WAIT_MS = 4000;
 /** playerId -> his Value (season.js's own figure), or null. Null with no lines. */
 let valueLookup = null;
 
@@ -1808,22 +1813,47 @@ function customValueChange(sendA, sendB) {
  */
 function readValue() {
   const key = sourceKey();
-  if (valueReadKey === key) return;
+  if (valueReadKey === key) return valueRead;
   valueReadKey = key;
   if (state.valueBase) state.valueBase = null;   // another league's lines are not this one's
   valueLookup = null;
   setValueSource(null);
-  if (typeof season.fetchPlayerValues !== 'function') return;
+  setCutValue(null);
+  valueRead = Promise.resolve();
+  if (typeof season.fetchPlayerValues !== 'function') return valueRead;
   const demo = state.isDemo;
-  Promise.resolve().then(() => season.fetchPlayerValues({ demo })).catch(() => null).then((got) => {
+  valueRead = Promise.resolve().then(() => season.fetchPlayerValues({ demo })).catch(() => null).then((got) => {
     if (valueReadKey !== key || sourceKey() !== key) return;
     setValueSource(got && typeof got.lookup === 'function' ? got.lookup : null);
     const base = got && isValueBase(got.base) && Object.keys(got.base.lines).length ? got.base : null;
     if (!base) return;                           // no lines: the page stays exactly as it was
     valueLookup = typeof got.lookup === 'function' ? got.lookup : null;
     state.valueBase = base;
-    if (state.data) paint();
+    // WHO A TRADE FORCES OUT IS THE LOWEST VALUE (Tim, 2026-10-12; js/trade.js
+    // `setCutValue`). A weekly search that ran before the lines landed chose
+    // its drops without them, so it runs again; one still waiting for them
+    // (`valueSettled`) has not started and simply goes on.
+    setCutValue(valueLookup);
+    if (!state.data) return;
+    if (searchedWithoutValue === key) { searchedWithoutValue = null; runSearch({ keepDeal: true }); return; }
+    paint();
   });
+  return valueRead;
+}
+
+
+/**
+ * The Values, before a weekly search prices anything: the drop a lopsided deal
+ * forces is chosen on them. Waits a few seconds at most — a slow read must not
+ * hold the finder up — and a search that went ahead without them is run again
+ * when they land (`readValue`).
+ */
+async function valueSettled() {
+  const key = sourceKey();
+  const read = readValue();
+  let late = false;
+  await Promise.race([read, new Promise((r) => setTimeout(() => { late = true; r(); }, VALUE_WAIT_MS))]);
+  if (late && sourceKey() === key && !state.valueBase) searchedWithoutValue = key;
 }
 
 // -------------------------------------------------------- player references
@@ -4472,7 +4502,7 @@ function renderFinderNote(scales = finderScales) {
       : '') +
     `<br><br>` +
     `<strong>Two-for-ones.</strong> A <strong>two-for-one</strong> forces the side receiving two ` +
-    `to drop somebody, and that cut is modelled — his worst man goes — because it is what makes ` +
+    `to drop somebody, and that cut is modelled — the man with the lowest Value goes — because it is what makes ` +
     `lopsided packages worse than they look. ` +
     // THE EMPTIED SPOT (2026-09-21). This sentence used to say the short side
     // was "not credited with a waiver claim", which stopped being true the day
@@ -4626,6 +4656,8 @@ function runSearch({ keepDeal = false } = {}) {
     // weighted gain, so a deal that loses points in October and wins the
     // final is found at all. Until the played weeks are in (the spread is
     // measured from them) it searches on points and `loadHistory` re-runs it.
+    if (weeks) await valueSettled();
+    if (stale()) return;
     const ctx = weeks ? goalContext() : null;
     const W = ctx && ctx.inputs ? await goalWeightsSliced(ctx, state.myTeamId, weeks, stale) : null;
     if (stale()) return;

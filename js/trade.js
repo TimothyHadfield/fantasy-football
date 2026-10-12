@@ -540,6 +540,53 @@ function solveWeeks(roster, ctx) {
 const CUT_EPS = 1e-6;
 const seasonOf = (p) => (Number.isFinite(p.projected) ? p.projected : -Infinity);
 
+// VALUE DECIDES WHO IS DROPPED, WHEN THE PAGE KNOWS IT (Tim, 2026-10-12: "it
+// suggests me to drop Juwan Jhonson, the #3 TE avg 13pts and a value of 0.8 …
+// Value should probably be the biggest priority when choosing who to drop
+// because high value means you can probably trade for another player").
+//
+// A page that holds the league's Values hands the lookup over once
+// (`setCutValue`), and from then on the forced cut is THE LOWEST VALUE on the
+// roster, compared as printed (to the tenth; a man with none counts 0). The
+// rule above — least cost to the priced weeks, then the lower season total —
+// only settles men level on Value. With no lookup it is the whole rule, as
+// before, which is what every caller without Values (and every test of the
+// engine alone) still gets.
+//
+// ONE GUARD: a man is not dropped if that leaves a one-position slot (QB, K,
+// D/ST…) with nobody to fill it. Dropping your only kicker — Value 0.0, like
+// most kickers — means adding one straight back, which frees no roster spot.
+// When every man is such a man, the guard is off.
+let cutValue = null;
+
+/** @param {?function(*): (number|null)} fn playerId -> his Value; null to forget it */
+export function setCutValue(fn) {
+  cutValue = typeof fn === 'function' ? fn : null;
+}
+
+const valueTenth = (p) => {
+  let v = null;
+  try { v = cutValue(p.playerId); } catch { v = null; }
+  return Number.isFinite(v) ? Math.round(v * 10) : 0;
+};
+
+/** The men Value says go first: the lowest Value among those the lineup can spare. */
+function cutPool(roster, slots) {
+  if (!cutValue) return roster;
+  const starts = new Map();
+  for (const s of slots || []) {
+    const el = SLOT_ELIGIBILITY[s];
+    if (el && el.length === 1) starts.set(el[0], (starts.get(el[0]) || 0) + 1);
+  }
+  const held = new Map();
+  for (const p of roster) held.set(p.position, (held.get(p.position) || 0) + 1);
+  const spare = roster.filter((p) => (held.get(p.position) || 0) > (starts.get(p.position) || 0));
+  const from = spare.length ? spare : roster;
+  let low = Infinity;
+  for (const p of from) low = Math.min(low, valueTenth(p));
+  return from.filter((p) => valueTenth(p) === low);
+}
+
 function forcedCut(kept, over, ctx, solved) {
   let roster = kept;
   let weeks = solved;
@@ -547,12 +594,13 @@ function forcedCut(kept, over, ctx, solved) {
   for (let k = 0; k < over && roster.length; k++) {
     const starting = new Set();
     for (const w of weeks) for (const id of w.ids) starting.add(id);
+    const pool = cutPool(roster, ctx.slots);
 
     let best = null;
     let bestCost = Infinity;
     let bestWeeks = null;
     // Idle men first: cost 0, nothing to re-fill.
-    for (const p of roster) {
+    for (const p of pool) {
       if (starting.has(p.playerId)) continue;
       if (best === null || seasonOf(p) < seasonOf(best)) best = p;
     }
@@ -565,7 +613,7 @@ function forcedCut(kept, over, ctx, solved) {
     // under the floor, when the slot he leaves is assessed at the floor either
     // way (a bye-week backup projected below the wire's third man). So only
     // those are costed; with nobody idle, everyone is.
-    for (const p of roster) {
+    for (const p of pool) {
       if (!starting.has(p.playerId)) continue;
       if (best !== null && bestCost <= CUT_EPS && !(seasonOf(p) < seasonOf(best))) continue;
       const rest = roster.filter((q) => q !== p);
