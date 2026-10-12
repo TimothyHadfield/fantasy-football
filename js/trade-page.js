@@ -137,6 +137,7 @@ import { healthy, injuryLabel, injuryClass } from './injury.js';
 // The preseason arrows by a name (Tim, 2026-09-30): ESPN's preseason projection
 // kept in data/baselines/, re-scored with the league's rules.
 import * as trend from './proj-trend.js';
+import * as outlook from './outlook-mark.js';
 // Read once, from the moment the page loads; useLive awaits it with the byes.
 const baselineRead = trend.loadBaseline();
 // THE ONE RED/GREEN SCALE (HANDOFF rule 14). Pure, and it compares a number
@@ -2128,6 +2129,8 @@ function marksPhrase(p, ctx) {
         `(${t.from.toFixed(1)} → ${t.to.toFixed(1)})`;
     }
   }
+  const o = outlookOfMan(p);
+  if (o) out += ` · ${outlook.outlookWords(o).replace(/^P/, 'p')}`;
   return out;
 }
 
@@ -2348,7 +2351,10 @@ function nameMarksHtml(name, bye, inj) {
 const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
 const INJ_KEY = 'Underlined: on ESPN’s injury report.';
 const BYE_PAST_KEY = 'Green name on his side: bye already played.';
-const MARK_KEYS = { bye: () => BYE_KEY, past: () => BYE_PAST_KEY, inj: () => INJ_KEY, trend: () => trend.TREND_KEY };
+const MARK_KEYS = {
+  bye: () => BYE_KEY, past: () => BYE_PAST_KEY, inj: () => INJ_KEY, trend: () => trend.TREND_KEY,
+  outlook: () => outlook.OUTLOOK_KEY,
+};
 /** Which marks a block of markup carries: some of `bye`, `inj`, `trend`. */
 function marksIn(html) {
   return [
@@ -2356,6 +2362,7 @@ function marksIn(html) {
     /\bbye-past\b/.test(html) ? 'past' : '',
     /\binj\b/.test(html) ? 'inj' : '',
     trend.hasTrend(html) ? 'trend' : '',
+    outlook.hasOutlook(html) ? 'outlook' : '',
   ].filter(Boolean);
 }
 const marksKeyText = (html) => marksIn(html).map((m) => MARK_KEYS[m]()).join(' ');
@@ -2405,6 +2412,21 @@ function trendMarkOf(p) {
   return trend.trendHtml(trend.trendOf(p.playerId, weeklyMean(p), trendScoring(), weekRange(weeklySpan())))
     .replace(/(<span class="trend trend-(?:up|down)") title="[^"]*"/, '$1');
 }
+
+/**
+ * THE DIAMOND AND THE COIN (Tim, 2026-10-12): "If the player's future proj is
+ * 2 more than their current avg, then put a diamond symbol by their name. If
+ * it's 2 less, then put a coin symbol by their name." Future proj and current
+ * avg are the two numbers at the top of his card (`glanceFor`): his average
+ * projection over the weeks left, and ESPN's season average. The rule is
+ * js/outlook-mark.js's. Not in the sample league, whose men are invented.
+ */
+function outlookOfMan(p) {
+  if (!p || state.isDemo) return null;
+  const g = glanceFor(p);
+  return outlook.outlookOf(g.proj, g.avg);
+}
+const outlookMarkOf = (p) => outlook.outlookHtml(outlookOfMan(p));
 
 /** The arrow's line behind "How this works", naming the weeks "now" averages. */
 function trendExplainHtml() {
@@ -2881,7 +2903,7 @@ function manLine(p, ctx = null) {
   const shown = ctx && ctx.short && ctx.offer
     ? lastNameOf(p, ctx.offer.send.concat(ctx.offer.receive))
     : p.name;
-  const inner = `${nameMarksHtml(shown, mark, injuryMarkOf(p))}${trendMarkOf(p)}${posTag(p.position)}${val}`;
+  const inner = `${nameMarksHtml(shown, mark, injuryMarkOf(p))}${trendMarkOf(p)}${outlookMarkOf(p)}${posTag(p.position)}${val}`;
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
@@ -4516,6 +4538,7 @@ function extraColumnsHtml() {
     `found include it; He gains does not.` +
     BYE_EXPLAIN +
     trendExplainHtml() +
+    (state.isDemo ? '' : ` ${outlook.OUTLOOK_EXPLAIN}`) +
     `<br><br>`
   );
 }
@@ -8564,7 +8587,8 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
         return `<span class="nm"${tipAttr(key, { hoverOnly: true })}>` +
           `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet) || (mirror ? byePastMarkOf(p) : null), injuryMarkOf(p))}</span>` +
           // The arrow opens the same card as the name it belongs to (hover).
-          trendMarkOf(p).replace('<span class="trend', `<span${tipAttr(key, { hoverOnly: true })} class="trend`);
+          trendMarkOf(p).replace('<span class="trend', `<span${tipAttr(key, { hoverOnly: true })} class="trend`) +
+          outlookMarkOf(p).replace('<span class="outlook', `<span${tipAttr(key, { hoverOnly: true })} class="outlook`);
       })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
