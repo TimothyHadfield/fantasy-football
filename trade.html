@@ -89,6 +89,8 @@
     flex: 0 0 auto;
   }
   .trend-up { color: var(--accent); }
+  /* The diamond and the coin (Tim, 2026-10-12): as small as the arrow's row allows. */
+  .outlook { position: relative; font-size: 10px; margin-left: 3px; vertical-align: 1px; flex: 0 0 auto; }
   .trend-down { color: var(--err); }
   .pkg .pp, .deal-side .pp {
     color: var(--dim);
@@ -573,6 +575,42 @@
 
   /* ------------------------------------------------------- custom trades */
   .cu-pick { margin-bottom: 12px; }
+  /* Value measurement: top middle of the box, two sides and the gap between. */
+  .vm { max-width: 640px; margin: 0 auto 14px; text-align: center; }
+  .vm-grid { display: grid; grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr); gap: 0 8px; align-items: start; margin-top: 4px; }
+  .vm-side { position: relative; min-width: 0; text-align: left; }
+  .vm-find { width: 100%; box-sizing: border-box; }
+  .vm-list {
+    position: absolute; z-index: 30; left: 0; right: 0; top: 100%;
+    margin: 2px 0 0; padding: 4px; list-style: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+  }
+  .vm-list li { display: flex; gap: 6px; align-items: baseline; padding: 5px 7px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .vm-list li.on, .vm-list li:hover { background: var(--panel-2); }
+  .vm-list li .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vm-list li .ps, .vm-chip .ps { color: var(--cu-sub); font-size: 11px; flex: 0 0 auto; }
+  .vm-list li .vl, .vm-chip .vl { font-variant-numeric: tabular-nums; font-weight: 600; flex: 0 0 auto; }
+  .vm-list li.none { cursor: default; color: var(--dim); }
+  .vm-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .vm-chip {
+    display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%;
+    padding: 2px 4px 2px 8px; font-size: 12.5px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-pill);
+  }
+  .vm-chip .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vm-chip button { border: 0; background: none; color: var(--dim); padding: 0 4px; font-size: 14px; line-height: 1; cursor: pointer; min-height: 0; }
+  .vm-chip button:hover { color: var(--text); }
+  .vm-total { margin: 5px 0 0; font-size: 12.5px; color: var(--cu-sub); min-height: 1.45em; }
+  .vm-total strong { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
+  .vm-total.more strong { color: var(--accent); }
+  .vm-diff { margin: 0; padding-top: 7px; text-align: center; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--dim); }
+  .vm-diff.gap { color: var(--text); }
+  /* A phone has no room for a name on one line beside its figures: it wraps. */
+  @media (max-width: 600px) {
+    .vm-chip { border-radius: 10px; }
+    .vm-chip .nm, .vm-list li .nm { white-space: normal; }
+  }
   .cu-head { margin: 0 0 6px; font-size: 12px; color: var(--cu-sub); font-weight: 600; }
   /* THE WHOLE ROSTER, AT FULL HEIGHT, AND NO SCROLLER (Tim, 2026-09-19: "just
      show all 16-17 positions, don't make a scrolling space so the view is
@@ -1702,6 +1740,33 @@
          the first sentence of "How a custom trade is priced" below, and saying
          it twice was two lines of a panel Tim asked to be condensed. -->
     <p class="lede">Build any trade between any two squads and keep it here.</p>
+
+    <!-- VALUE MEASUREMENT (Tim, 2026-10-12: "Add a "vlaue measurement" tool at
+         the top middle of the custom trades box when you can search for any
+         players traded to any other players and see how the value diff
+         measurements line up. This is just for fun or personal use when you
+         hear trades online"). Any rostered men against any others, by Value;
+         it prices nothing and touches no trade below. Hidden until the league's
+         Value lines are read (js/trade-page.js `renderMeasure`; the search is
+         js/value-measure.js). -->
+    <div class="vm" id="valueMeasure" hidden>
+      <span class="src-label">Value measurement</span>
+      <div class="vm-grid">
+        <div class="vm-side" data-vm="a">
+          <input type="search" class="vm-find" id="vmFindA" placeholder="Add a player" autocomplete="off" spellcheck="false" aria-label="One side: add a player">
+          <ul class="vm-list" id="vmListA" hidden></ul>
+          <div class="vm-chips" id="vmChipsA"></div>
+          <p class="vm-total" id="vmTotalA"></p>
+        </div>
+        <p class="vm-diff" id="vmDiff" aria-live="polite"></p>
+        <div class="vm-side" data-vm="b">
+          <input type="search" class="vm-find" id="vmFindB" placeholder="Add a player" autocomplete="off" spellcheck="false" aria-label="Other side: add a player">
+          <ul class="vm-list" id="vmListB" hidden></ul>
+          <div class="vm-chips" id="vmChipsB"></div>
+          <p class="vm-total" id="vmTotalB"></p>
+        </div>
+      </div>
+    </div>
 
     <!-- "YOU" IS NOT A PICKER HERE (Tim, 2026-09-19: "the custom trade section
          has the user choose both users to trade, but the 'You' should always be
