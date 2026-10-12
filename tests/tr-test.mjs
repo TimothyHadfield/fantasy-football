@@ -1576,6 +1576,95 @@ const SCENARIOS = {
    * style, because "hidden" would keep every one of those costs and would keep
    * a stale week table one resize away from being shown.
    */
+  /**
+   * SAVED TRADES, BY MANAGER (Tim, 2026-10-12: "for saved trades, make it so
+   * that they're sorted by user on the left, and the user's name is only said
+   * once in the middle of all the trades they're in").
+   *
+   * Four deals with two managers, saved ALTERNATELY — so the saved order
+   * (0,1,2,3) is not the drawn one (one manager's two, then the other's). Then
+   * Remove on a drawn row that is not the first of its group, and a click on
+   * another such row. Who each was saved with is read back from the prefs.
+   */
+  async savedGroups() {
+    const { document, window, errors } = await boot();
+    const $ = (id) => document.getElementById(id);
+    const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+    await settleGoal(document);
+    const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+    const opts = [...$('cuTeamB').querySelectorAll('option')]
+      .map((o) => ({ id: String(o.value), name: text(o).split(' · ')[0] }));
+    // Two managers; `late` is the one whose name sorts after the other's.
+    const pair = opts.slice(0, 2).sort((x, y) => x.name.localeCompare(y.name));
+    const [early, late] = pair;
+    const saveOne = async (partner, k) => {
+      $('cuTeamB').value = partner.id;
+      fire($('cuTeamB'), 'change');
+      await settle(400);
+      const a = boxes('cuListA')[k];
+      a.checked = true; fire(a, 'change');
+      // Re-queried: the first tick re-renders both lists.
+      const b = boxes('cuListB')[k];
+      b.checked = true; fire(b, 'change');
+      await settle(600);
+      const men = { a: String(a.value), b: String(b.value) };
+      fire($('cuSave'), 'click');
+      await settle(600);
+      return men;
+    };
+    const savedMen = [];
+    savedMen.push(await saveOne(late, 0));
+    savedMen.push(await saveOne(early, 0));
+    savedMen.push(await saveOne(late, 1));
+    savedMen.push(await saveOne(early, 1));
+    await settleGoal(document);
+
+    const readPrefs = () => {
+      try { return JSON.parse(window.localStorage.getItem('ff.prefs') || '{}')['trade.custom'] || []; } catch { return []; }
+    };
+    const draw = () => [...$('cuRows').querySelectorAll('tr')].map((tr) => {
+      const name = tr.querySelector('td.name');
+      return {
+        cu: tr.getAttribute('data-cu'),
+        key: tr.getAttribute('data-key'),
+        first: tr.hasAttribute('data-cu-first'),
+        nameCells: tr.querySelectorAll('td.name').length,
+        name: name ? text(name.querySelector('.mgr')) : null,
+        rowspan: name ? name.getAttribute('rowspan') : null,
+        cells: tr.children.length,
+        firstCell: tr.children[0] ? (tr.children[0].getAttribute('class') || '') : '',
+        drop: (tr.querySelector('button[data-drop]') || { getAttribute: () => null }).getAttribute('data-drop'),
+        assume: (tr.querySelector('button[data-assume]') || { getAttribute: () => null }).getAttribute('data-assume'),
+        send: [...tr.querySelectorAll('.hv.send a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))),
+        recv: [...tr.querySelectorAll('.hv.recv a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))),
+      };
+    });
+    const before = { rows: draw(), stored: readPrefs() };
+
+    // REMOVE on the SECOND drawn row — the second of the first manager's two,
+    // which has no name cell and is not the saved trade its position suggests.
+    const second = $('cuRows').querySelectorAll('tr')[1];
+    const removed = second ? second.getAttribute('data-cu') : null;
+    fire(second && second.querySelector('button[data-drop]'), 'click');
+    await settle(800);
+    const afterRemove = { rows: draw(), stored: readPrefs() };
+
+    // A CLICK on the last drawn row (again not the first of its group): the
+    // box must hold THAT trade's men.
+    const all = [...$('cuRows').querySelectorAll('tr')];
+    const lastTr = all[all.length - 1];
+    const clicked = lastTr ? {
+      cu: lastTr.getAttribute('data-cu'), first: lastTr.hasAttribute('data-cu-first'),
+      send: [...lastTr.querySelectorAll('.hv.send a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))),
+      recv: [...lastTr.querySelectorAll('.hv.recv a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))),
+    } : null;
+    fire(lastTr, 'click');
+    await settle(600);
+    const ticked = (id) => boxes(id).filter((b) => b.hasAttribute('checked') || b.checked).map((b) => String(b.value)).sort();
+    const box = { partner: String($('cuTeamB').value), a: ticked('cuListA'), b: ticked('cuListB'), pop: !$('dealModal').hidden };
+    return { errors, early, late, savedMen, before, removed, afterRemove, clicked, box };
+  },
+
   async customNarrow() {
     const { document, window, errors } = await boot('trade.html', '', null, { wide: false });
     const out = { errors };
@@ -8217,6 +8306,77 @@ if (!live.boot) {
   ok('and the pop-up has the deal in it', cu.modalBody > 40, String(cu.modalBody));
 
   eq(cu.rowsAfterDrop, 0, 'removing the row empties the box');
+
+  // -- SAVED TRADES, BY MANAGER, EACH NAMED ONCE (Tim, 2026-10-12) -----------
+  //
+  // Seen failing against the page of the commit before: this scenario was run
+  // on a copy of the repo with bae88ce's js/trade-page.js. There the rows came
+  // out 0,1,2,3 with a name cell in every row, no rowspan and no
+  // `data-cu-first`, and the second drawn row was saved index 1 — so the
+  // order, first-row, named-once, one-cell-fewer, "not the second saved" and
+  // after-Remove checks all fail on it.
+  {
+    const sv = run('savedGroups');
+    // WHO each trade was saved with is read off what the page STORED, not
+    // assumed from the order the scenario picked them in; the drawn order the
+    // page owes is worked out here from that and the two names.
+    const nameOf = (id) => (String(id) === sv.early.id ? sv.early.name : String(id) === sv.late.id ? sv.late.name : '?');
+    const partners = sv.before.stored.map((s) => String(s.b));
+    const wantOrder = partners.map((_, i) => i)
+      .sort((x, y) => nameOf(partners[x]).localeCompare(nameOf(partners[y])) || x - y).join(',');
+    ok('GROUPS: the scenario ran clean, with four trades saved for two managers ALTERNATELY — so saved order and manager order differ',
+      !sv.boot && sv.errors.length === 0 && sv.before.stored.length === 4 && sv.early.name.localeCompare(sv.late.name) < 0 &&
+        partners[0] !== partners[1] && partners[0] === partners[2] && partners[1] === partners[3] &&
+        partners.every((p) => nameOf(p) !== '?') && wantOrder !== '0,1,2,3',
+      sv.boot || JSON.stringify([sv.errors, sv.early, sv.late, partners, wantOrder]).slice(0, 400));
+    if (!sv.boot) {
+      const R = sv.before.rows;
+      eq(R.map((r) => r.cu).join(','), wantOrder,
+        'GROUPS: the rows are drawn by manager — his name A to Z, then as saved — not in saved order');
+      ok('GROUPS: the first row of each manager’s group is marked `data-cu-first`, and only that one',
+        R.length === 4 && R.map((r) => r.first).join(',') === 'true,false,true,false', JSON.stringify(R.map((r) => r.first)));
+      ok('GROUPS: each manager is named ONCE — one name cell on his first row, spanning his two rows',
+        R.length === 4 && R.map((r) => r.nameCells).join(',') === '1,0,1,0' && R[0].name === sv.early.name && R[2].name === sv.late.name &&
+          R[0].rowspan === '2' && R[2].rowspan === '2',
+        JSON.stringify(R.map((r) => [r.nameCells, r.name, r.rowspan])));
+      ok('GROUPS: his other rows have no name cell at all — one cell fewer, starting at Chance',
+        R.length === 4 && R[1].cells === R[0].cells - 1 && R[3].cells === R[2].cells - 1 &&
+          /\bchance\b/.test(R[1].firstCell) && /\bchance\b/.test(R[3].firstCell) && /\bname\b/.test(R[0].firstCell),
+        JSON.stringify(R.map((r) => [r.cells, r.firstCell])));
+      ok('GROUPS: every row still carries its own SAVED index — on the row, its key, Remove and Assume',
+        R.every((r) => r.key === `cu:${r.cu}` && r.drop === r.cu && r.assume === r.cu) && new Set(R.map((r) => r.cu)).size === 4,
+        JSON.stringify(R.map((r) => [r.cu, r.key, r.drop, r.assume])));
+      ok('GROUPS: and each row prints the men of the trade saved under that index',
+        R.every((r) => {
+          const s = sv.before.stored[Number(r.cu)];
+          return !!s && JSON.stringify(s.sendA.map(String)) === JSON.stringify(r.send) && JSON.stringify(s.sendB.map(String)) === JSON.stringify(r.recv);
+        }), JSON.stringify(R.map((r) => [r.cu, r.send, r.recv])));
+
+      // Remove, pressed on the second DRAWN row (saved index 3, not 1).
+      const A = sv.afterRemove;
+      const gone = sv.before.stored[Number(sv.removed)];
+      const keyOf = (s) => `${s.b}|${s.sendA.join(',')}|${s.sendB.join(',')}`;
+      ok('GROUPS: the second drawn row is NOT the second trade saved (or the next check proves nothing)',
+        sv.removed === wantOrder.split(',')[1] && sv.removed !== '1', `${sv.removed} of ${wantOrder}`);
+      ok('GROUPS: Remove on a row that is not the first of its group removes THAT trade and no other',
+        A.stored.length === 3 && !!gone && !A.stored.some((s) => keyOf(s) === keyOf(gone)) &&
+          [0, 1, 2, 3].filter((i) => i !== Number(sv.removed))
+            .every((i) => A.stored.some((s) => keyOf(s) === keyOf(sv.before.stored[i]))),
+        JSON.stringify([gone, A.stored]).slice(0, 400));
+      ok('GROUPS: the manager left with one trade keeps his name with no rowspan; the other still spans two',
+        A.rows.length === 3 && A.rows.map((r) => r.nameCells).join(',') === '1,1,0' && A.rows[0].rowspan === null &&
+          A.rows[0].name === sv.early.name && A.rows[1].rowspan === '2' && A.rows[1].name === sv.late.name,
+        JSON.stringify(A.rows.map((r) => [r.cu, r.nameCells, r.name, r.rowspan])));
+
+      // A click on a row with no name cell of its own.
+      ok('GROUPS: a click on a row that is not the first of its group loads THAT trade into the custom box, and opens no pop-up',
+        !!sv.clicked && sv.clicked.first === false && sv.box.pop === false && sv.box.partner === sv.late.id &&
+          sv.clicked.send.length > 0 && sv.clicked.recv.length > 0 &&
+          JSON.stringify(sv.box.a) === JSON.stringify([...sv.clicked.send].sort()) &&
+          JSON.stringify(sv.box.b) === JSON.stringify([...sv.clicked.recv].sort()),
+        JSON.stringify([sv.clicked, sv.box]));
+    }
+  }
   ok('and forgets it', !cu.storedAfterDrop || cu.storedAfterDrop.length === 0,
     JSON.stringify(cu.storedAfterDrop));
 
