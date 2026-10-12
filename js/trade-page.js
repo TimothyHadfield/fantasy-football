@@ -3876,18 +3876,32 @@ function valueCellHtml(offer) {
  * are the ones his mark reads (`glanceFor`). A dash when no man in the deal has
  * both, and in the sample league, whose men are invented.
  */
-function appealOfOffer(offer, hisShown = undefined) {
+function appealOfOffer(offer) {
   const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: g.avg }; });
-  if (state.isDemo) return null;
-  // Plus his own gain a week, the "Him" figure of the row (Tim, 2026-10-12;
-  // js/outlook-mark.js `appealShown`).
+  return state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
+}
+
+/**
+ * TOTAL (Tim, 2026-10-12: "a new "total" collumn that is just the appeal +
+ * both user's pts/week diff"): the row's Appeal, its "You" gain a week and its
+ * "Him" gain a week, added (js/outlook-mark.js `totalOf`). The custom box hands
+ * in the two figures it prints under the names, so the sum there is of the
+ * numbers on screen.
+ */
+function totalOfOffer(offer, shown = null) {
+  const weeks = basis() === 'weeks' ? weeklySpan() : null;
   const his = hisSideOf(offer);
-  // `hisShown`: the custom box hands in the figure it prints under his name,
-  // so the sum is of the two numbers on screen there.
-  const perWeek = hisShown !== undefined ? hisShown
+  const mine = shown ? shown.mine : myPerWeekShown(offer, weeks);
+  const theirs = shown ? shown.his
     : !Number.isFinite(his.gain) ? null
-    : basis() === 'weeks' ? perWeekOf(his.gain, his.weeks) : his.gain;
-  return outlook.appealShown(outlook.appealOf(side(offer.receive), side(offer.send)), perWeek);
+    : weeks ? perWeekOf(his.gain, his.weeks) : his.gain;
+  return outlook.totalOf(appealOfOffer(offer), mine, theirs);
+}
+
+function totalCellHtml(offer) {
+  const a = totalOfOffer(offer);
+  if (a === null) return `<td class="total">—</td>`;
+  return `<td class="total${a > 0 ? ' pos' : a < 0 ? ' neg' : ''}" data-v="${a}">${signedText(a)}</td>`;
 }
 
 function appealCellHtml(offer) {
@@ -4020,6 +4034,7 @@ function offerRow(offer, i, key, opts = {}) {
     `</td>` +
     valueCellHtml(offer) +
     appealCellHtml(offer) +
+    totalCellHtml(offer) +
     (showOpp ? oppCellHtml(offer) : '') +
     // "Ask AI" (Tim, 2026-09-30), STACKED with the row's other buttons (Tim,
     // 2026-10-01: "stack the "assume" "remove" and "ask" buttons on the right so
@@ -7273,6 +7288,7 @@ function comboTableHtml(rows, from, id) {
     `<th class="left">${esc(GAIN_HEAD('Gain', weeks, span))}</th>` +
     `<th>Value</th>` +
     `<th>Appeal</th>` +
+    `<th>Total</th>` +
     // His own side, like He gains: each manager's figure is his squad's alone.
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
@@ -8974,15 +8990,16 @@ function renderCustomPreview(priced) {
   const n = weeklySpan().length;
   const val = customValueChange(sendA.map(String), sendB.map(String));
   const hisWeek = weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n);
-  const appeal = appealOfOffer(cuOffer, hisWeek);
-  $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer),
-    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n));
+  const myWeek = weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n);
+  const appeal = appealOfOffer(cuOffer);
+  const total = totalOfOffer(cuOffer, { mine: myWeek, his: hisWeek });
+  $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer), myWeek);
   $('cuGainB').innerHTML = customGainHtml(priced.forB.delta, hisWeek);
   // Once, above both names, and yours only: his are the same figures with the
   // sign turned (Tim, 2026-10-12).
   const top = (label, v) => (v === null || v === undefined ? '' :
     `${label}<b class="${v > 0 ? 'up' : v < 0 ? 'down' : 'flat'}">${signedText(v)}</b>`);
-  $('cuTop').innerHTML = [top('Value', val ? val.a : null), top('Appeal', appeal)]
+  $('cuTop').innerHTML = [top('Value', val ? val.a : null), top('Appeal', appeal), top('Total', total)]
     .filter(Boolean).join('<span class="sep">·</span>');
   // The sentence above them is now about the DEAL rather than about the
   // numbers: who moves which way, which the two columns cannot say between
@@ -9062,7 +9079,7 @@ function renderCustomSaved() {
   state.customRows = offers;
 
   // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, assume/remove/ask AI
-  const cols = 12;
+  const cols = 13;
   $('cuRows').innerHTML = rows.map((entry, i) => {
     const drop = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
@@ -10808,7 +10825,8 @@ const HEAD_TITLES = [
   [/^Send$/, 'The men you would give up, and the men he would.'],
   [/^Gain/, 'Points a week the deal adds to your best lineup, and to his.'],
   [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
-  [/^Appeal$/, 'Projection less season average, the men you get minus the men you send, plus his gain a week.'],
+  [/^Appeal$/, 'Projection less season average, the men you get minus the men you send.'],
+  [/^Total$/, 'Appeal plus your gain a week plus his.'],
   [/^You send$/, 'The men you would give up.'],
   [/^You get$/, 'The men you would receive.'],
   [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],
