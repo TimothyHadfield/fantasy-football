@@ -194,10 +194,43 @@ function gainText(el) {
   const subText = sub ? text(sub).slice(0, val ? text(sub).length - text(val).length : undefined).replace(/\s*·\s*$/, '') : '';
   return `${text(el.querySelector('.cu-num'))} ${subText}`.trim();
 }
-/** A side's change in total Value: its words and its colour class, or null. */
-function valText(el) {
-  const val = el && el.querySelector('.cu-val');
-  return val ? { txt: text(val), cls: cls(val).filter((c) => c !== 'cu-val').join(' '), line: text(el.querySelector('.cu-sub')) } : null;
+/**
+ * YOUR change in total Value, where the box prints it since 2026-10-12: once,
+ * on the one line above both names (`#cuTop`: "Value +0.8 · Appeal +4.1"). Its
+ * figure and colour class, the whole line, how many Value figures the line
+ * holds, and your own small line under the big figure — or null with no Value
+ * on the line.
+ */
+function topValue(document) {
+  const top = document.getElementById('cuTop');
+  if (!top) return null;
+  const found = [];
+  let label = '';
+  for (const node of top.childNodes) {
+    if (node.nodeType === 3) label = node.textContent.trim() || label;
+    else if (node.nodeType === 1 && node.tagName === 'B') { found.push({ label, b: node }); label = ''; }
+  }
+  const vals = found.filter((f) => f.label === 'Value');
+  if (!vals.length) return null;
+  const sub = document.getElementById('cuGainA').querySelector('.cu-sub');
+  return {
+    txt: text(vals[0].b), cls: cls(vals[0].b).join(' '), line: text(top), count: vals.length,
+    first: found[0].label, sub: text(sub),
+  };
+}
+/**
+ * A Value figure where it USED to be: on either side's small line ("· +1.5
+ * value", `.cu-val`). Tim, 2026-10-12: "value is the same for both users …
+ * just make it the value dif for me" — so there is none, and no figure for him
+ * anywhere. null when neither line carries one.
+ */
+function oldValue(document) {
+  const hits = ['cuGainA', 'cuGainB'].map((id) => {
+    const el = document.getElementById(id);
+    const sub = el && el.querySelector('.cu-sub');
+    return { id, cuVal: el ? el.querySelectorAll('.cu-val').length : 0, says: /value/i.test(text(sub)) };
+  }).filter((h) => h.cuVal || h.says);
+  return hits.length ? hits : null;
 }
 
 function readList(document, id) {
@@ -253,8 +286,8 @@ function readPage(document) {
     after: readBox(sec, 'after'),
     gainA: gainText($('cuGainA')),
     gainB: gainText($('cuGainB')),
-    valA: valText($('cuGainA')),
-    valB: valText($('cuGainB')),
+    valA: topValue(document),
+    valB: oldValue(document),
     depth: text($('depthTable')),
     // THE FINDER, LESS ITS VALUE COLUMN (2026-10-12). A trade row carries a
     // "Value" split cell now (Tim: "Do Value change / (top) you, (bottom)
@@ -264,21 +297,21 @@ function readPage(document) {
     finder: [...$('tradeTable').querySelectorAll('tr')].map((tr) => [...tr.children]
       .filter((td) => !/\bvalue\b/.test(td.getAttribute('class') || '')).map(text).join(' ')).join(' ¦ '),
     finderValue: [...$('tradeTable').querySelectorAll('tbody tr')].map((tr) => {
-      const td = tr.querySelector('td.split.value');
+      // ONE FIGURE, yours (Tim, 2026-10-12: "make it so it's not a
+      // split-collumn thing anymore … just make it the value dif for me"):
+      // `td.value.val-change`, not `td.split.value` with two halves.
+      const td = tr.querySelector('td.value');
       const ids = (sel) => [...tr.querySelectorAll(`${sel} .man a.pref`)]
         .map((a) => Number((String(a.getAttribute('href')).match(/player=(-?\d+)/) || [])[1]));
       return {
-        cells: tr.querySelectorAll('td.split.value').length,
+        cells: tr.querySelectorAll('td.value').length,
+        cls: td ? cls(td).filter((c) => c !== 'pos' && c !== 'neg').join(' ') : '',
         v: td && td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : null,
-        halves: td ? [...td.querySelectorAll('.sp')].map((sp) => {
-          const hv = sp.querySelector('.hv.val-change');
-          return {
-            label: text(sp.querySelector('.hk')),
-            txt: text(hv),
-            v: hv && hv.hasAttribute('data-v') ? Number(hv.getAttribute('data-v')) : null,
-            sign: (hv ? cls(hv) : []).filter((c) => c === 'pos' || c === 'neg').join(' '),
-          };
-        }) : [],
+        txt: text(td),
+        sign: (td ? cls(td) : []).filter((c) => c === 'pos' || c === 'neg').join(' '),
+        // What a split cell was made of: halves, their labels, their figures.
+        halves: td ? td.querySelectorAll('.sp, .hv').length : -1,
+        labels: td ? [...td.querySelectorAll('.hk')].map(text) : [],
         send: ids('.hv.send'),
         get: ids('.hv.recv'),
       };
@@ -391,7 +424,7 @@ SCENARIOS.twofer = async function twofer() {
   const { document, window, errors } = await boot(liveSeed());
   const $ = (id) => document.getElementById(id);
   const fire = await buildDeal(document, window, TWO, [ONE]);
-  const read = () => ({ valA: valText($('cuGainA')), valB: valText($('cuGainB')), gainA: gainText($('cuGainA')), gainB: gainText($('cuGainB')), preview: text($('cuPreview')) });
+  const read = () => ({ valA: topValue(document), valB: oldValue(document), gainA: gainText($('cuGainA')), gainB: gainText($('cuGainB')), preview: text($('cuPreview')) });
   const proj = read();
   const b = $('cuValueView').querySelector('button[data-value-view="value"]');
   if (b && !$('cuValueView').hidden) { fire(b, 'click'); await settle(300); }
@@ -706,13 +739,19 @@ if (!process.argv[2]) {
   ok('total Value, no lines: neither side shows one', none.first.valA === null && none.first.valB === null,
     JSON.stringify([none.first.valA, none.first.valB]));
   ok('total Value, one for one: yours is what you get less what you give',
-    P.valA && P.valA.txt === `${sgn(one)} value` && P.valA.cls === kind(one), `${JSON.stringify(P.valA)}, want ${sgn(one)}`);
-  ok('total Value, one for one: his is the other way round',
-    P.valB && P.valB.txt === `${sgn(-one)} value` && P.valB.cls === kind(-one), `${JSON.stringify(P.valB)}, want ${sgn(-one)}`);
+    P.valA && P.valA.txt === sgn(one) && P.valA.cls === kind(one), `${JSON.stringify(P.valA)}, want ${sgn(one)}`);
+  // REPLACED, 2026-10-12: was "his is the other way round" (a "−1.5 value" on
+  // his small line). Tim: "value is the same for both users … just make it the
+  // value dif for me" — so the claim is that he has none.
+  ok('total Value, one for one: there is no figure for him — one Value on the top line, none on either small line',
+    !!P.valA && P.valA.count === 1 && P.valB === null && V.valB === null, JSON.stringify([P.valA, P.valB, V.valB]));
   ok('total Value: the same on Value as on Proj (it follows no switch)', same(P.valA, V.valA) && same(P.valB, V.valB),
     JSON.stringify([V.valA, V.valB]));
-  ok('total Value: it sits on the small line under the big figure, after the weeks',
-    P.valA && /over weeks? [\d–-]+ · [+−]?\d+\.\d value$/.test(P.valA.line), P.valA && P.valA.line);
+  // REPLACED, 2026-10-12: was "it sits on the small line under the big figure,
+  // after the weeks". It is on the one line above both names now, first.
+  ok('total Value: it leads the one line above both names ("Value +x"), and your small line ends at the weeks',
+    !!P.valA && P.valA.first === 'Value' && P.valA.line.replace(/\s+/g, '').startsWith(`Value${sgn(one)}`) &&
+      /over weeks? [\d–-]+$/.test(P.valA.sub), P.valA && `${P.valA.line} / ${P.valA.sub}`);
 
   // Two for one: Ana QB1 (1.5) and Ana TE2 for Cy RB1 (7.0).
   const two = run('twofer', { FF_VALUE });
@@ -722,11 +761,12 @@ if (!process.argv[2]) {
   ok('total Value, 2 for 1: the men are worth what the hand sum says (7.0 − (1.5 + TE2))',
     players[301].value === 7 && players[100].value === 1.5 && r1(want2) !== 0 && r1(want2) !== r1(one), `${want2}`);
   ok('total Value, 2 for 1: yours is the one man you get less BOTH men you give',
-    two.proj.valA && two.proj.valA.txt === `${sgn(want2)} value` && two.proj.valA.cls === kind(want2),
+    two.proj.valA && two.proj.valA.txt === sgn(want2) && two.proj.valA.cls === kind(want2),
     `${JSON.stringify(two.proj.valA)}, want ${sgn(want2)}`);
-  ok('total Value, 2 for 1: his is both men he gets less the one he gives',
-    two.proj.valB && two.proj.valB.txt === `${sgn(-want2)} value` && two.proj.valB.cls === kind(-want2),
-    `${JSON.stringify(two.proj.valB)}, want ${sgn(-want2)}`);
+  // REPLACED, 2026-10-12: was "his is both men he gets less the one he gives".
+  ok('total Value, 2 for 1: and again no figure for him, on either small line',
+    !!two.proj.valA && two.proj.valA.count === 1 && two.proj.valB === null && two.value.valB === null,
+    JSON.stringify([two.proj.valA, two.proj.valB]));
   ok('total Value, 2 for 1: unchanged by the Value switch', same(two.proj, two.value), JSON.stringify(two.value));
   ok('total Value: gone when the deal is cleared', two.cleared.valA === null && two.cleared.valB === null, JSON.stringify(two.cleared));
   const two0 = run('twofer');
@@ -744,25 +784,29 @@ if (!process.argv[2]) {
   {
     const rowsP = P.finderValue || [];
     const rows0 = none.first.finderValue || [];
-    ok('row Value, no lines: every row has the cell, two halves "You" over "Him", each a dash with no number behind it',
-      rows0.length > 3 && rows0.every((r) => r.cells === 1 && r.v === null && same(r.halves.map((h) => [h.label, h.txt, h.v, h.sign]),
-        [['You', '—', null, ''], ['Him', '—', null, '']])),
+    // REWRITTEN the same day for ONE figure (Tim: "because value is the same
+    // for both users … make it so it's not a split-collumn thing anymore …
+    // just make it the value dif for me"). The You/Him halves became "there is
+    // no Him half"; on the split page of that morning `cls` was "split value",
+    // `halves` 4 and `labels` You,Him, so the first, second and fourth fail.
+    ok('row Value, no lines: every row has the one cell, a dash with no number behind it, no colour and no halves',
+      rows0.length > 3 && rows0.every((r) => r.cells === 1 && r.cls === 'value val-change' && r.v === null && r.txt === '—' &&
+        r.sign === '' && r.halves === 0 && r.labels.length === 0),
       JSON.stringify(rows0.slice(0, 2)));
-    ok('row Value, lines: every row has the cell, "You" over "Him"',
-      rowsP.length > 3 && rowsP.every((r) => r.cells === 1 && same(r.halves.map((h) => h.label), ['You', 'Him'])),
-      JSON.stringify(rowsP.slice(0, 2).map((r) => r.halves)));
+    ok('row Value, lines: every row has the one cell, a whole `td.value.val-change` and not a split one',
+      rowsP.length > 3 && rowsP.every((r) => r.cells === 1 && r.cls === 'value val-change'),
+      JSON.stringify(rowsP.slice(0, 2)));
     const sumOf = (ids) => ids.reduce((t, id) => t + ((players[id] && Number.isFinite(players[id].value)) ? players[id].value : 0), 0);
-    const off = rowsP.filter((r) => r.halves.length !== 2 || r.halves[0].v !== r1(sumOf(r.get) - sumOf(r.send)));
-    ok('row Value, lines: yours is the Value of the men you get less the men you give, by hand from the fixture',
-      rowsP.length > 3 && off.length === 0 && rowsP.some((r) => r.halves[0].v !== 0),
-      JSON.stringify(off.slice(0, 2).map((r) => [r.send, r.get, r.halves[0], r1(sumOf(r.get) - sumOf(r.send))])));
-    ok('row Value, lines: his is the same number the other way round, and the cell sorts by yours',
-      rowsP.length > 3 && rowsP.every((r) => r.halves.length === 2 && r.halves[1].v === (r.halves[0].v === 0 ? 0 : -r.halves[0].v) &&
-        r.v === r.halves[0].v),
-      JSON.stringify(rowsP.slice(0, 3).map((r) => [r.v, r.halves.map((h) => h.v)])));
-    ok('row Value, lines: each half prints its number to the tenth with its sign, and is coloured by that sign',
-      rowsP.every((r) => r.halves.every((h) => h.txt === (r1(h.v) === 0 ? h.txt : sgn(h.v)) && h.sign === (h.v > 0 ? 'pos' : h.v < 0 ? 'neg' : ''))),
-      JSON.stringify(rowsP.slice(0, 3).map((r) => r.halves.map((h) => [h.txt, h.v, h.sign]))));
+    const off = rowsP.filter((r) => r.v !== r1(sumOf(r.get) - sumOf(r.send)));
+    ok('row Value, lines: the figure is YOURS — the Value of the men you get less the men you give, by hand from the fixture — and the cell sorts by it',
+      rowsP.length > 3 && off.length === 0 && rowsP.some((r) => r.v !== 0),
+      JSON.stringify(off.slice(0, 2).map((r) => [r.send, r.get, r.v, r1(sumOf(r.get) - sumOf(r.send))])));
+    ok('row Value, lines: there is no Him half — no "You"/"Him" label, no halves, and one number in the cell',
+      rowsP.length > 3 && rowsP.every((r) => r.halves === 0 && r.labels.length === 0 && /^[+−]?\d+\.\d$/.test(r.txt)),
+      JSON.stringify(rowsP.slice(0, 3).map((r) => [r.txt, r.halves, r.labels])));
+    ok('row Value, lines: it prints its number to the tenth with its sign, and is coloured by that sign',
+      rowsP.every((r) => r.txt === (r1(r.v) === 0 ? r.txt : sgn(r.v)) && r.sign === (r.v > 0 ? 'pos' : r.v < 0 ? 'neg' : '')),
+      JSON.stringify(rowsP.slice(0, 3).map((r) => [r.txt, r.v, r.sign])));
     ok('row Value: the same on Value as on Proj (it follows no switch)', same(P.finderValue, V.finderValue),
       where({ f: P.finderValue }, { f: V.finderValue }));
   }
