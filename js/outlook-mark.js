@@ -36,6 +36,51 @@ export function outlookOf(proj, avg) {
   return { kind: delta > 0 ? 'diamond' : 'coin', delta, avg: from, proj: to };
 }
 
+/**
+ * APPEAL — how much of a trade is buying men about to do better and selling
+ * men who have been doing better than they will.
+ *
+ * Tim, 2026-10-12: "Make a new collumn in the trade display titled "appeal".
+ * This is simply calculated by the (act avg- future proj of their players)
+ * minus (act avg-future proj of my players). This is also associated with the
+ * diamond and coin features so that high appeal correlates with their players
+ * having a diamond and my players having a coin. If a player has never played a
+ * game so their act avg is 0 … then just have their act avg be = to their
+ * future proj, or essentially don't calculate their number at all."
+ *
+ * THE SIGN IS THE ONE HIS SECOND SENTENCE ASKS FOR. A diamond is proj ABOVE
+ * avg, so "high when their players have a diamond and mine a coin" is
+ *   (proj − avg, summed over the men you GET) − (proj − avg, summed over the men you SEND)
+ * which is his formula with each bracket turned round (as written it would be
+ * at its LOWEST for exactly the trade he calls high).
+ *
+ * Each man's two numbers go to the tenth first, as the mark reads them. A man
+ * with no average (never played) or no projection adds nothing. Null when no
+ * man on either side has both numbers — "not known", never 0.
+ *
+ * @param {Array<{proj:number|null, avg:number|null}>} get  the men you receive
+ * @param {Array<{proj:number|null, avg:number|null}>} send the men you give
+ * @returns {number|null} points a week, to the tenth
+ */
+export function appealOf(get, send) {
+  let known = 0;
+  const gap = (list) => (list || []).reduce((t, m) => {
+    if (!m || !num(m.proj) || !num(m.avg) || m.avg <= 0 || m.proj <= 0) return t;
+    known++;
+    return t + (round1(m.proj) - round1(m.avg));
+  }, 0);
+  const total = gap(get) - gap(send);
+  if (!known) return null;
+  const r = round1(total);
+  return r === 0 ? 0 : r;
+}
+
+/** The line behind "How this works". */
+export const APPEAL_EXPLAIN =
+  `<strong>Appeal</strong>: projection for the weeks left minus season average, added up over the men you get, ` +
+  `less the same over the men you send. High means you get men due to score more than they have (💎) for men ` +
+  `who have scored more than they are due to (🪙). A man with no average yet adds nothing.`;
+
 /** The words a screen reader gets, and the card's heading line. */
 export function outlookWords(o) {
   if (!o) return '';

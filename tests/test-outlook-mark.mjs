@@ -63,5 +63,34 @@ ok(o.OUTLOOK_KEY.split(/\s+/).length <= 20 && o.OUTLOOK_KEY.includes('💎') && 
   'the key is one short sentence naming both symbols', o.OUTLOOK_KEY);
 ok(o.OUTLOOK_EXPLAIN.includes(String(o.THRESHOLD)) && o.THRESHOLD === 2, 'the explanation states the threshold, which is 2');
 
+// --- Appeal ------------------------------------------------------------------
+// Tim, 2026-10-12: "high appeal correlates with their players having a diamond
+// and my players having a coin" / "If a player has never played a game so their
+// act avg is 0 … essentially don't calculate their number at all."
+const M = (proj, avg) => ({ proj, avg });
+eq(o.appealOf([M(14.1, 11.0)], [M(9.5, 13.0)]), 6.6, 'you get a diamond (+3.1) for a coin (−3.5): +6.6');
+eq(o.appealOf([M(9.5, 13.0)], [M(14.1, 11.0)]), -6.6, 'the same trade from the other side: −6.6');
+ok(o.appealOf([M(14.1, 11.0)], [M(9.5, 13.0)]) > o.appealOf([M(12, 12)], [M(12, 12)]),
+  'his diamond for your coin is higher than a trade of men on their averages');
+eq(o.appealOf([M(12, 12)], [M(8, 8)]), 0, 'everybody on his average: 0');
+eq(o.appealOf([M(13, 11), M(10, 9.5)], [M(12, 12.4)]), 2.9, 'added up over each side: (2.0 + 0.5) − (−0.4)');
+eq(o.appealOf([M(12.5, 11)], [M(12.5, 11)]), 0, 'the same gap both ways cancels, and is 0 not −0');
+ok(Object.is(o.appealOf([M(12.5, 11)], [M(12.5, 11)]), 0), 'a plain 0');
+eq(o.appealOf([M(12.2, 11.1)], []), 1.1, 'a clean tenth, not 1.0999');
+// A man who has never played adds nothing (Tim's own case).
+eq(o.appealOf([M(11.4, 0), M(14.1, 11.0)], [M(9.5, 13.0)]), 6.6, 'a man with a 0 average adds nothing');
+eq(o.appealOf([M(14.1, 11.0)], [M(11.4, 0), M(9.5, 13.0)]), 6.6, 'on either side');
+eq(o.appealOf([M(11.4, null)], [M(9.5, 13.0)]), 3.5, 'no average at all is the same as never played');
+eq(o.appealOf([M(null, 12)], [M(9.5, 13.0)]), 3.5, 'no projection: nothing from him either');
+eq(o.appealOf([M(0, 12)], [M(9.5, 13.0)]), 3.5, 'projected at nothing (out): nothing from him');
+eq(o.appealOf([M(11.4, 0)], [M(8, null)]), null, 'nobody with both numbers: not known, never 0');
+eq(o.appealOf([], []), null, 'nobody at all: not known');
+eq(o.appealOf(null, undefined), null, 'no lists: not known, not a crash');
+// It moves with the marks: a diamond got is at least +2, a coin sent at least +2.
+ok(o.outlookOf(13, 11).kind === 'diamond' && o.appealOf([M(13, 11)], [M(10, 10)]) >= 2, 'a diamond you get is worth 2 or more of appeal');
+ok(o.outlookOf(11, 13).kind === 'coin' && o.appealOf([M(10, 10)], [M(11, 13)]) >= 2, 'a coin you send is worth 2 or more of appeal');
+ok(o.appealOf([M(11, 13)], [M(10, 10)]) <= -2, 'a coin you GET counts against it');
+ok(o.APPEAL_EXPLAIN.includes('💎') && o.APPEAL_EXPLAIN.includes('🪙'), 'the explanation ties it to both marks');
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

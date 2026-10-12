@@ -3837,6 +3837,20 @@ function valueCellHtml(offer) {
     splitHalf('You', box(v ? v.a : null)) + splitHalf('Him', box(v ? v.b : null)) + `</td>`;
 }
 
+/**
+ * APPEAL (Tim, 2026-10-12: "Make a new collumn in the trade display titled
+ * "appeal""): the diamonds you get and the coins you send, as one number. The
+ * rule and its sign are js/outlook-mark.js `appealOf`; each man's two numbers
+ * are the ones his mark reads (`glanceFor`). A dash when no man in the deal has
+ * both, and in the sample league, whose men are invented.
+ */
+function appealCellHtml(offer) {
+  const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: g.avg }; });
+  const a = state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
+  if (a === null) return `<td class="appeal">—</td>`;
+  return `<td class="appeal${a > 0 ? ' pos' : a < 0 ? ' neg' : ''}" data-v="${a}">${signedText(a)}</td>`;
+}
+
 function offerRow(offer, i, key, opts = {}) {
   // `goal` draws BOTH chance columns since 2026-09-29: the ranked goal, then the
   // other one as a preview (`altGoalCellHtml`). `opp` draws his projection in
@@ -3960,6 +3974,7 @@ function offerRow(offer, i, key, opts = {}) {
           : `${signedText(his.gain)}${theirs.mark}`}</td>`) +
     `</td>` +
     valueCellHtml(offer) +
+    appealCellHtml(offer) +
     (showOpp ? oppCellHtml(offer) : '') +
     // "Ask AI" (Tim, 2026-09-30), STACKED with the row's other buttons (Tim,
     // 2026-10-01: "stack the "assume" "remove" and "ask" buttons on the right so
@@ -4538,7 +4553,7 @@ function extraColumnsHtml() {
     `found include it; He gains does not.` +
     BYE_EXPLAIN +
     trendExplainHtml() +
-    (state.isDemo ? '' : ` ${outlook.OUTLOOK_EXPLAIN}`) +
+    (state.isDemo ? '' : ` ${outlook.OUTLOOK_EXPLAIN} ${outlook.APPEAL_EXPLAIN}`) +
     `<br><br>`
   );
 }
@@ -7210,6 +7225,7 @@ function comboTableHtml(rows, from, id) {
     `<th class="left">Send</th>` +
     `<th class="left">${esc(GAIN_HEAD('Gain', weeks, span))}</th>` +
     `<th class="left">Value</th>` +
+    `<th>Appeal</th>` +
     // His own side, like He gains: each manager's figure is his squad's alone.
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
@@ -8985,7 +9001,7 @@ function renderCustomSaved() {
   state.customRows = offers;
 
   // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, assume/remove/ask AI
-  const cols = 11;
+  const cols = 12;
   $('cuRows').innerHTML = rows.map((entry, i) => {
     const drop = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
