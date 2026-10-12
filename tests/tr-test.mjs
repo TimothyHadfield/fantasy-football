@@ -19,6 +19,7 @@ import path from 'node:path';
 import { REPO, moduleUrl } from './repo.mjs';
 import { machineSpeed, scaledBudget } from './settle.mjs';
 import { emit } from './emit.mjs';
+import { shownNames, printedName } from './last-name.mjs';
 
 // ------------------------------------------------------------------ harness
 
@@ -374,13 +375,43 @@ function readOfferRows(table) {
     // cell there and reported the ESPN link as a gain. The classes are what
     // `offerRow` writes and are the same in all three tables that use it.
     const cell = (c) => tr.querySelector(`td.${c}`);
+    // A HALF OF A SPLIT CELL (2026-10-12): the figure's own box, a `div.hv`
+    // inside `td.split`, wearing the classes the old whole cell wore.
+    const half = (c) => tr.querySelector(`.hv.${c}`);
+    /** The column a box stands in: the index of the <td> that holds it. */
+    const colOf = (el) => [...tr.children].indexOf(el && el.closest ? el.closest('td') : el);
     const name = cell('name');
-    const send = cell('send');
-    const recv = cell('recv');
-    const ba = cell('before-after');
-    const gain = cell('gain');
-    const their = cell('their-gain');
+    const send = half('send');
+    const recv = half('recv');
+    // The "Your lineup, a week" column is GONE (2026-10-12); anything of that
+    // class anywhere in the row is reported so its absence stays a claim.
+    const ba = tr.querySelector('.before-after');
+    const gain = half('gain');
+    const their = half('their-gain');
     const espn = cell('espn');
+    // THE ROW'S OWN SHAPE (2026-10-12): each cell by its classes, in order, and
+    // each split cell's two halves by label and by the box under the label.
+    // (a cell's sign, `pos`/`neg`, is not part of which cell it is)
+    const cells = [...tr.children].map((td) => (td.getAttribute('class') || '').replace(/\b(pos|neg)\b/g, '').replace(/\s+/g, ' ').trim());
+    const splitOf = (c) => {
+      const td = cell(`split.${c}`);
+      if (!td) return null;
+      return {
+        v: td.hasAttribute('data-v') ? td.getAttribute('data-v') : null,
+        halves: [...td.children].map((sp) => {
+          const hv = sp.querySelector('.hv');
+          return {
+            wrap: (sp.getAttribute('class') || '').trim(),
+            label: text(sp.querySelector('.hk')),
+            cls: hv ? (hv.getAttribute('class') || '').trim().split(/\s+/) : [],
+            v: hv && hv.hasAttribute('data-v') ? hv.getAttribute('data-v') : null,
+            rc: hv ? hv.getAttribute('data-rc') || '' : '',
+            text: hv ? textNoMark(hv) : '',
+            labelFirst: !!hv && sp.children[0] === sp.querySelector('.hk') && sp.children[1] === hv && sp.children.length === 2,
+          };
+        }),
+      };
+    };
     // A COLOURED CELL IS COLOURED BY js/heat.js AND NOTHING ELSE. `heat` is on
     // every measured cell (including the neutral band), the step class is what
     // paints, and `.heatmark` is the end-of-scale glyph.
@@ -410,7 +441,27 @@ function readOfferRows(table) {
       merged: !!tr.querySelector('.merged-tag'),
       mergedText: text(tr.querySelector('.merged-tag')),
       fromTag: text(tr.querySelector('.from-tag')),
-      shape: text(cell('deal')),
+      // The removed "Deal" (2-for-1) column: a cell of that class which is NOT
+      // the Send split. '' now, always.
+      shape: text(tr.querySelector('td.deal:not(.split)')),
+      cells,
+      chance: splitOf('chance'),
+      deal: splitOf('deal'),
+      gains: splitOf('gains'),
+      value: splitOf('value'),
+      // The full name, off the man's link ("Kenneth Walker III — …"), beside
+      // what the row prints for him.
+      fullNames: [...tr.querySelectorAll('.hv.pkg .man')].map((m) => {
+        const a = m.querySelector('a.pref');
+        return {
+          id: a ? idOfHref(a.getAttribute('href')) : null,
+          full: a ? (a.getAttribute('aria-label') || '').split(' — ')[0] : '',
+          pos: text(m.querySelector('.pp')),
+          shown: printedName(m),
+          side: m.closest('.hv.send') ? 'send' : 'recv',
+          text: text(m),
+        };
+      }),
       send: men(send),
       receive: men(recv),
       churn: text(recv ? recv.querySelector('.churn') : null),
@@ -447,7 +498,7 @@ function readOfferRows(table) {
       // the new claim. `head` does now carry the ± band after the figure, which is
       // deliberate — a change is not printed anywhere on this page without it.
       goal: (() => {
-        const td = cell('goal-cell');
+        const td = half('goal-cell');
         if (!td) return null;
         const sub = td.querySelector('.sub');
         const all = text(td);
@@ -465,14 +516,16 @@ function readOfferRows(table) {
           cls: td.getAttribute('class') || '',
           title: popText(td),
           rawTitle: td.getAttribute('title') || '',
-          index: [...tr.children].indexOf(td),
+          // The COLUMN it stands in, and which half of that column's cell.
+          index: colOf(td),
+          half: text(td.parentNode && td.parentNode.querySelector('.hk')),
         };
       })(),
       // THE OTHER GOAL, AS A PREVIEW (2026-09-29, Tim: "show 2 columns on the
       // trade, one for change of win % and one for change of losing %"). The
       // ranked goal stays `goal`; this is the goal NOT selected, read the same way.
       alt: (() => {
-        const td = cell('alt-goal-cell');
+        const td = half('alt-goal-cell');
         if (!td) return null;
         const sub = td.querySelector('.sub');
         const all = text(td);
@@ -485,7 +538,8 @@ function readOfferRows(table) {
           wait: /\bgoal-wait\b/.test(td.getAttribute('class') || ''),
           title: popText(td),
           rawTitle: td.getAttribute('title') || '',
-          index: [...tr.children].indexOf(td),
+          index: colOf(td),
+          half: text(td.parentNode && td.parentNode.querySelector('.hk')),
         };
       })(),
       // HIS PROJECTION IN THE WEEK(S) HE PLAYS YOU (2026-09-29, Tim: "make a opp
@@ -529,7 +583,7 @@ function readOfferRows(table) {
       // "Ask AI" (Tim, 2026-09-30: "just remove the "deal" column … and then
       // add the ask ai button on the end"). Read off the row's LAST cell, so a
       // button anywhere else does not count.
-      hasDeal: !!cell('deal'),
+      hasDeal: !!tr.querySelector('td.deal:not(.split)'),
       lastAsk: (() => {
         const last = tr.children[tr.children.length - 1];
         const b = last ? last.querySelector('button.ask-ai') : null;
@@ -1588,12 +1642,12 @@ const SCENARIOS = {
     };
     out.row = {
       partner: text(tr.querySelector('.mgr')),
-      gain: split(tr.querySelector('td.gain')),
-      their: split(tr.querySelector('td.their-gain')),
-      send: [...tr.querySelectorAll('td.send .man')].map((m) => ({ name: nameOf(m), val: text(m.querySelector('.val')) })),
-      receive: [...tr.querySelectorAll('td.recv .man')].map((m) => ({ name: nameOf(m), val: text(m.querySelector('.val')) })),
+      gain: split(tr.querySelector('.hv.gain')),
+      their: split(tr.querySelector('.hv.their-gain')),
+      send: [...tr.querySelectorAll('.hv.send .man')].map((m) => ({ name: nameOf(m), val: text(m.querySelector('.val')) })),
+      receive: [...tr.querySelectorAll('.hv.recv .man')].map((m) => ({ name: nameOf(m), val: text(m.querySelector('.val')) })),
       goal: (() => {
-        const td = tr.querySelector('td.goal-cell');
+        const td = tr.querySelector('.hv.goal-cell');
         const sub = text(td && td.querySelector('.sub'));
         // `all`: the whole cell, rank and band included — the printed change is in it.
         return { sub, yes: (sub.match(/(\d+)% yes/) || [])[1] || null, all: text(td) };
@@ -1771,7 +1825,7 @@ const SCENARIOS = {
     // re-rank behind the pop-up, and `after.trades` was read before that.
     const row = document.querySelector('#tradeTable tbody tr');
     const dealRowGain = row
-      ? Number((row.querySelector('td.gain') || {}).getAttribute?.('data-v'))
+      ? Number((row.querySelector('.hv.gain') || {}).getAttribute?.('data-v'))
       : NaN;
     if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     await settle(1200);
@@ -2155,8 +2209,8 @@ const SCENARIOS = {
       el.setAttribute('data-probe', flag);
       return openCard(document, `[data-probe="${flag}"]`);
     };
-    const sendCard = markAndOpen('td.send .man[data-tip]', 'send');
-    const getCard = markAndOpen('td.recv .man[data-tip]', 'get');
+    const sendCard = markAndOpen('.hv.send .man[data-tip]', 'send');
+    const getCard = markAndOpen('.hv.recv .man[data-tip]', 'get');
     const topOffer = readTrades(document)[0] || null;
 
     // The scalar measure, deliberately chosen. Nothing is fetched — every week
@@ -3513,7 +3567,7 @@ SCENARIOS.rankSliced = async function rankSliced() {
   // WHO AND WHOM, not `data-key`: that is the row's place in the list ("f:0"),
   // which every search's first row shares.
   const dealOf = (tr) => ['name', 'send', 'recv']
-    .map((c) => txt(tr.querySelector(`td.${c}`)).trim()).join(' | ');
+    .map((c) => txt(tr.querySelector(c === 'name' ? 'td.name' : `.hv.${c}`)).trim()).join(' | ');
   let last = null;
   const timer = setInterval(() => {
     const document = globalThis.document;
@@ -3689,8 +3743,8 @@ SCENARIOS.twoGoals = async function twoGoals() {
   const rankedOn = (chance) => /ranked by net increase/.test(line()) &&
     document.getElementById('tradeTable').getAttribute('data-ranked') === (/title/.test(chance) ? 'title' : 'last') &&
     !/ yet: /.test(line()) && !/playing each offer out/.test(line());
-  const altPending = () => document.querySelectorAll('#tradeTable td.alt-goal-cell.goal-wait').length;
-  const hasAlt = () => !!document.querySelector('#tradeTable td.alt-goal-cell');
+  const altPending = () => document.querySelectorAll('#tradeTable .hv.alt-goal-cell.goal-wait').length;
+  const hasAlt = () => !!document.querySelector('#tradeTable .hv.alt-goal-cell');
   const startGoal = process.env.TR_GOAL || 'last';
   const chanceOf = (g) => (g === 'title' ? 'title chance' : 'chance of finishing last');
 
@@ -3883,15 +3937,20 @@ SCENARIOS.previews = async function previews() {
   const row = q('#tradeTable tbody tr[data-key]');
   const finder = {
     partner: text(row && row.querySelector('.mgr')),
-    gain: cell(row && row.querySelector('td.gain')),
-    their: cell(row && row.querySelector('td.their-gain')),
-    lineup: cell(row && row.querySelector('td.before-after')),
-    goal: cell(row && row.querySelector('td.goal-cell')),
-    alt: cell(row && row.querySelector('td.alt-goal-cell')),
+    gain: cell(row && row.querySelector('.hv.gain')),
+    their: cell(row && row.querySelector('.hv.their-gain')),
+    // The "Your lineup, a week" cell and its card are GONE (2026-10-12): how
+    // many cells of that class, and how many `data-rc="lineup"` figures, any
+    // offer row on the page still has.
+    lineupCells: qa('tr.offer .before-after').length,
+    lineupCards: qa('tr.offer [data-rc="lineup"]').length,
+    offerRows: qa('tr.offer').length,
+    goal: cell(row && row.querySelector('.hv.goal-cell')),
+    alt: cell(row && row.querySelector('.hv.alt-goal-cell')),
     opp: cell(row && row.querySelector('td.opp-proj')),
     mgr: cell(row && row.querySelector('.mgr')),
     // Every gain in the table with its colour step: the zero-anchored scale.
-    gains: qa('#tradeTable td.gain, #tradeTable td.their-gain').map((td) => ({
+    gains: qa('#tradeTable .hv.gain, #tradeTable .hv.their-gain').map((td) => ({
       v: Number(td.getAttribute('data-v')),
       cls: ((td.getAttribute('class') || '').match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
     })),
@@ -3949,7 +4008,7 @@ SCENARIOS.previews = async function previews() {
 
   // The pop-up: a mouse click on a figure still opens the deal (the card has
   // no link of its own, so the click falls through to the row).
-  const gainTd = q('#tradeTable tbody tr[data-key] td.gain');
+  const gainTd = q('#tradeTable tbody tr[data-key] .hv.gain');
   fire(gainTd, 'click');
   await settle(800);
   const dTr = liveWeek('#dealBody');
@@ -4332,7 +4391,7 @@ if (!fresh.boot) {
   // lets HIM lose up to 2 a week, discounted by how likely he is to say yes —
   // and the list is ranked by the goal's expected change, not by points.
   {
-    const m = (fresh.heads.find((h) => /^You gain a week \(weeks/.test(h)) || '').match(/weeks (\d+)–(\d+)/);
+    const m = (fresh.heads.find((h) => /^Gain a week \(weeks/.test(h)) || '').match(/weeks (\d+)–(\d+)/);
     const n = m ? Number(m[2]) - Number(m[1]) + 1 : null;
     ok('the gain heading names the priced span', !!n, fresh.heads.join(' | '));
     ok('no offer costs him more than 2 points a week — the tolerance, and no more',
@@ -4349,8 +4408,118 @@ if (!fresh.boot) {
     fresh.trades.every((t) => t.partner.length > 0));
   ok('every offer moves at least one man each way',
     fresh.trades.every((t) => t.send.length >= 1 && t.receive.length >= 1));
-  ok('every offer shows your lineup before and after',
-    fresh.trades.every((t) => /→/.test(t.beforeAfter)), fresh.trades[0].beforeAfter);
+
+  // ---- THE ROW'S SHAPE: SPLIT CELLS, LAST NAMES (2026-10-12) ---------------
+  //
+  // Tim: "get rid of the your lineup a week column. Next name the players as
+  // their lastname only. finally make some columns split-row columns where each
+  // cell is split into 2 cells with the top and bottom refering to different
+  // info … Chance / (top) first: (bottom) last: . Send / (top) you: (bottom)
+  // him: . Gain / (top) you: (bottom) him:" and "Another split colum I want to
+  // add to the trade is Value. Do Value change / (top) you, (bottom) them."
+  //
+  // WHAT EACH WOULD CATCH on the page as it was the day before (5eac0df): a row
+  // there was ten whole cells (name, goal-cell, alt-goal-cell, pkg send, pkg
+  // recv, before-after, gain, their-gain, opp-proj, espn), with no `.split`, no
+  // `.hk` label and no Value cell, and it printed every man's full name — so
+  // the cell order, every "two halves" check, the Value check and the
+  // last-name check all fail there. Each was also run once against a wrong
+  // expectation (halves swapped, labels swapped, full names) and seen to fail.
+  {
+    const rows = fresh.trades;
+    const WANT_CELLS = 'name | split chance | split left deal | split gains | split value | opp-proj | left espn';
+    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, Value, His proj vs you, ESPN — in that order',
+      rows.length > 0 && rows.every((t) => t.cells.join(' | ') === WANT_CELLS),
+      [...new Set(rows.map((t) => t.cells.join(' | ')))].join(' ¦ '));
+    ok('ROW: and the head names those seven columns, one heading per cell',
+      fresh.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') ===
+        'Manager | Chance | Send | Gain | Value | His proj vs you | ESPN',
+      fresh.heads.join(' | '));
+    {
+      const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');
+      const gone = ['thAltGoal', 'thLineup', 'thTheirGain', 'cuThGoal', 'cuThAltGoal', 'cuSugThGoal', 'cuSugThAltGoal'];
+      const kept = ['thGoal', 'thMyGain', 'thOpp'];
+      ok('ROW: the headings of the columns that were folded away are out of the markup; the three the page still writes to remain',
+        gone.every((id) => !html.includes(`id="${id}"`)) && kept.every((id) => html.includes(`id="${id}"`)),
+        `still there: ${gone.filter((id) => html.includes(`id="${id}"`)).join(',')} · missing: ${kept.filter((id) => !html.includes(`id="${id}"`)).join(',')}`);
+    }
+    const labels = (s) => (s ? s.halves.map((h) => h.label).join(',') : 'none');
+    const shaped = (s) => !!s && s.halves.every((h) => h.wrap === 'sp' && h.labelFirst && h.cls[0] === 'hv');
+    ok('ROW: Chance is two halves, "First" over "Last", each a label and then its figure',
+      rows.every((t) => labels(t.chance) === 'First,Last' && shaped(t.chance)),
+      JSON.stringify(rows.slice(0, 2).map((t) => t.chance)));
+    // This scenario runs on "Don't finish last" (see `boot`): the ranked goal
+    // is the LAST half. The title goal's own check is in `twoGoals`.
+    ok('ROW: under "Don’t finish last" the First half is the preview (`.alt-goal-cell`, data-rc "alt") and the Last half the ranked goal (`.goal-cell`, data-rc "goal")',
+      rows.every((t) => t.chance && t.chance.halves.length === 2 &&
+        t.chance.halves[0].cls.includes('alt-goal-cell') && !t.chance.halves[0].cls.includes('goal-cell') && t.chance.halves[0].rc === 'alt' &&
+        t.chance.halves[1].cls.includes('goal-cell') && t.chance.halves[1].rc === 'goal'),
+      JSON.stringify(rows.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.'), h.rc]))));
+    ok('ROW: the Chance cell sorts by the RANKED goal — its own data-v is the Last half’s here, not the preview’s',
+      rows.every((t) => t.chance && t.chance.v !== null && t.chance.v === t.chance.halves[1].v) &&
+        rows.some((t) => t.chance.halves[0].v !== t.chance.halves[1].v),
+      JSON.stringify(rows.slice(0, 3).map((t) => t.chance && [t.chance.v, t.chance.halves.map((h) => h.v)])));
+    ok('ROW: Send is two halves, "You" (the men you send) over "Him" (the men he sends)',
+      rows.every((t) => labels(t.deal) === 'You,Him' && shaped(t.deal) &&
+        ['left', 'pkg', 'send'].every((c) => t.deal.halves[0].cls.includes(c)) &&
+        ['left', 'pkg', 'recv'].every((c) => t.deal.halves[1].cls.includes(c))),
+      JSON.stringify(rows.slice(0, 2).map((t) => t.deal && t.deal.halves.map((h) => [h.label, h.cls.join('.')]))));
+    ok('ROW: Gain is two halves, "You" (`.gain`) over "Him" (`.their-gain`), each with its own number and card',
+      rows.every((t) => labels(t.gains) === 'You,Him' && shaped(t.gains) &&
+        t.gains.halves[0].cls.includes('gain') && t.gains.halves[0].rc === 'gain' && Number(t.gains.halves[0].v) === t.myGain &&
+        t.gains.halves[1].cls.includes('their-gain') && t.gains.halves[1].rc === 'their' && Number(t.gains.halves[1].v) === t.theirGain),
+      JSON.stringify(rows.slice(0, 2).map((t) => t.gains)));
+    ok('ROW: the Gain cell sorts by YOUR net gain',
+      rows.every((t) => t.gains && Number(t.gains.v) === t.myGain) && rows.some((t) => t.myGain !== t.theirGain),
+      JSON.stringify(rows.slice(0, 3).map((t) => [t.gains && t.gains.v, t.myGain, t.theirGain])));
+    ok('ROW: Value is two halves, "You" over "Him", each a `.val-change`',
+      rows.every((t) => labels(t.value) === 'You,Him' && shaped(t.value) && t.value.halves.every((h) => h.cls.includes('val-change'))),
+      JSON.stringify(rows.slice(0, 2).map((t) => t.value)));
+    // The sample league may have no Value lines read: then both halves are a
+    // dash with no number. Where there are numbers they are opposite — the
+    // arithmetic itself is held on real Values in tr-value-check.mjs §10.
+    const valued = rows.filter((t) => t.value && t.value.halves.some((h) => h.v !== null));
+    ok('ROW: the two Value halves are opposite numbers (yours is his the other way round), or both a dash when no Values are read',
+      rows.every((t) => {
+        const [a, b] = t.value ? t.value.halves : [];
+        if (!a || !b) return false;
+        if (a.v === null || b.v === null) return a.v === null && b.v === null && a.text === '—' && b.text === '—' && t.value.v === null;
+        return Number(a.v) + Number(b.v) === 0 && t.value.v === a.v;
+      }),
+      JSON.stringify(rows.slice(0, 3).map((t) => t.value && t.value.halves.map((h) => [h.text, h.v]))));
+    console.log(`fresh: ${valued.length} of ${rows.length} finder rows print a Value change (the rest a dash)`);
+
+    // LAST NAMES. The row's own rule, written out again in tests/last-name.mjs,
+    // over the men of BOTH sides of the deal (that is who can share a name).
+    const men = rows.flatMap((t) => {
+      const want = shownNames(t.fullNames.map((m) => ({ name: m.full, position: m.pos })));
+      return t.fullNames.map((m, i) => ({ ...m, want: want[i], partner: t.partner }));
+    });
+    const wrong = men.filter((m) => m.shown !== m.want);
+    ok('NAMES: every man in a row is printed by his last name — suffix dropped, "St." kept, a defence whole, an initial where two share one',
+      men.length >= rows.length * 2 && men.every((m) => m.full.length > 0) && wrong.length === 0,
+      wrong.slice(0, 5).map((m) => `${m.full} → "${m.shown}", want "${m.want}"`).join(' | '));
+    const multi = men.filter((m) => !/D\/ST$/.test(m.full) && m.full.trim().split(' ').length > 1);
+    ok('NAMES: and so no man with a first name has it printed in full (or the check above proves nothing)',
+      multi.length > 3 && multi.every((m) => m.shown !== m.full && m.shown.length < m.full.length && !m.text.startsWith(m.full)),
+      multi.filter((m) => m.shown === m.full || m.text.startsWith(m.full)).slice(0, 4).map((m) => `${m.full} → ${m.text}`).join(' | '));
+    ok('NAMES: his full name is still on his link for a screen reader, which is where this reads it from',
+      men.every((m) => m.full.includes(m.shown.replace(/^[A-Z]\. /, '')) && m.id !== null),
+      men.filter((m) => !m.full.includes(m.shown.replace(/^[A-Z]\. /, ''))).slice(0, 4).map((m) => `${m.full} / ${m.shown}`).join(' | '));
+    const clash = men.filter((m) => /^[A-Z]\. /.test(m.want));
+    // Two men of one deal sharing a last name: held by the exact comparison
+    // above whenever the sample league deals such a pair. It says how many.
+    console.log(`fresh: ${clash.length} men printed with an initial (two of one last name in one deal)${clash.length ? '' : ' — none on this league, the initial rule is not exercised here'}`);
+  }
+  // REPLACED, 2026-10-12. This asserted "every offer shows your lineup before
+  // and after" off the row's `td.before-after`. Tim had that column removed
+  // ("get rid of the your lineup a week column"), so the claim is its absence:
+  // no cell of that class in any row, and no heading for it.
+  ok('no offer row carries a "Your lineup, a week" cell any more',
+    fresh.trades.length > 0 && fresh.trades.every((t) => !t.hasLineup && t.beforeAfter === ''),
+    JSON.stringify(fresh.trades.slice(0, 2).map((t) => [t.hasLineup, t.beforeAfter])));
+  ok('and the finder has no heading for it',
+    fresh.heads.length > 0 && !/Your lineup/i.test(fresh.heads.join(' | ')), fresh.heads.join(' | '));
 
   // REPLACED, 2026-09-17. This used to assert that every row printed
   // "starts: … / drops out: …" under the You get column. Tim had that removed —
@@ -4999,7 +5168,7 @@ if (!wk.boot) {
 
   // -- THE SCALE IS STATED, which is the trap worth nine times the truth ----
   ok('the gain column says it is per week, and over which weeks',
-    /You gain a week \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
+    /Gain a week \(weeks \d+–\d+\)/.test(wk.after.heads.join(' | ')), wk.after.heads.join(' | '));
   // PER WEEK LEADS, the total follows — Tim, 2026-09-16. The leading number is
   // re-derived from the row's own total (its sort key) over the demo span.
   // Since 2026-10-06 it is the row's two printed lineup figures subtracted, so
@@ -5472,11 +5641,22 @@ if (!wk.boot) {
   ok('and no combo row carries its own lineup before-and-after',
     combo.rows.every((r) => r.hasLineup === false),
     JSON.stringify(combo.rows.map((r) => r.beforeAfter)));
-  ok('the FINDER still carries both, so this is the combo’s rule and not a lost column',
-    wk.after.trades.every((r) => r.hasMyGain && r.hasLineup),
+  // 2026-10-12: the lineup column left the FINDER too (Tim: "get rid of the
+  // your lineup a week column"), so what the finder still carries that the
+  // combo does not is the "You" half of Gain — and that is how the two tables
+  // differ now, since both are headed "Gain".
+  ok('the FINDER still carries your gain, so this is the combo’s rule and not a lost half — and no lineup cell either',
+    wk.after.trades.length > 0 && wk.after.trades.every((r) => r.hasMyGain && !r.hasLineup),
     JSON.stringify(wk.after.trades.slice(0, 2).map((r) => [r.hasMyGain, r.hasLineup])));
-  ok('the combo’s headings name only the manager’s own gain, never yours',
-    !/You gain/.test(combo.heads.join(' | ')) && /He gains/.test(combo.heads.join(' | ')),
+  ok('a combo row’s Gain cell has ONE half, "Him" — never yours',
+    combo.rows.length > 0 && combo.rows.every((r) => r.gains && r.gains.halves.map((h) => h.label).join(',') === 'Him' &&
+      r.gains.halves[0].cls.includes('their-gain')),
+    JSON.stringify(combo.rows.map((r) => r.gains && r.gains.halves.map((h) => [h.label, h.cls.join('.')]))));
+  ok('while a finder row’s has two, "You" over "Him"',
+    wk.after.trades.every((r) => r.gains && r.gains.halves.map((h) => h.label).join(',') === 'You,Him'),
+    JSON.stringify(wk.after.trades.slice(0, 2).map((r) => r.gains && r.gains.halves.map((h) => h.label))));
+  ok('the combo’s headings carry no Chance and no "Your lineup" column: Manager, Send, Gain, Value, His proj vs you, ESPN',
+    combo.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') === 'Manager | Send | Gain | Value | His proj vs you | ESPN',
     combo.heads.join(' | '));
   ok('the whole packing’s lineup before-and-after is on the headline, once',
     /Your lineup, a week/i.test(combo.lineup) && /→/.test(combo.lineup) &&
@@ -7704,9 +7884,11 @@ if (!live.boot) {
       r.send.length + r.receive.length >= 2 &&
       [...r.send, ...r.receive].every((m) => m.id !== null),
       JSON.stringify([r.send.map((m) => m.text), r.receive.map((m) => m.text)]));
-    ok('it shows the lineup before and after, per week over the total',
-      r.hasLineup && /→/.test(r.beforeAfter) && /\/wk/.test(r.beforeAfter),
-      r.beforeAfter);
+    // REPLACED, 2026-10-12: it used to show the lineup before and after in a
+    // cell of its own. That column is gone from every trade row.
+    ok('it has no "Your lineup, a week" cell, and no heading for one',
+      !r.hasLineup && r.beforeAfter === '' && !/Your lineup/i.test(cu.savedHeads.join(' | ')),
+      `${r.hasLineup} ${r.beforeAfter} ${cu.savedHeads.join(' | ')}`);
     ok('it carries both gains, per week with the season total under them',
       r.hasMyGain && /\/wk/.test(r.gainText) && /total/.test(r.gainText) &&
         Number.isFinite(r.myGain) && Number.isFinite(r.theirGain),
@@ -7717,9 +7899,7 @@ if (!live.boot) {
       /No ESPN league in demo/.test(r.espn), r.espn);
     eq(cu.savedRemove, 1, 'and Remove as one extra cell on the end');
     ok('the head names every column the row draws',
-      cu.savedHeads.join(' | ').includes('You send') &&
-      cu.savedHeads.join(' | ').includes('You gain') &&
-      cu.savedHeads.join(' | ').includes('ESPN'),
+      cu.savedHeads.slice(0, 7).join(' | ') === 'With | Chance | Send | Gain | Value | His proj vs you | ESPN',
       cu.savedHeads.join(' | '));
   }
 
@@ -7779,9 +7959,10 @@ if (!gt.boot) {
   eq(T.goalOn, 'Win it all', 'the page opens with the goal "Win it all" lit');
 
   // -- the column, second, beside the manager --------------------------------
-  eq(T.heads[1], 'Δ title chance', 'the column right after Manager is the title chance');
-  ok('every row carries a goal cell in that position',
-    T.trades.length > 2 && T.trades.every((t) => t.goal && t.goal.index === 1),
+  // 2026-10-12: one "Chance" column, split — First (the title) over Last.
+  eq(T.heads[1], 'Chance', 'the column right after Manager is Chance');
+  ok('every row carries a goal cell in that position — the "First" half under this goal',
+    T.trades.length > 2 && T.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'First'),
     JSON.stringify(T.trades.slice(0, 2).map((t) => t.goal)));
 
   // -- THE SPAN REACHES THE PLAYOFF WEEKS -------------------------------------
@@ -7789,7 +7970,7 @@ if (!gt.boot) {
   // heading names the priced weeks; under this goal they run to 16.
   const firstWeek = Number(T.week) + 1;
   ok('the playoff weeks are priced: the gains run through week 16',
-    T.heads.some((h) => h === `You gain a week (weeks ${firstWeek}–16)`), T.heads.join(' | '));
+    T.heads.some((h) => h === `Gain a week (weeks ${firstWeek}–16)`), T.heads.join(' | '));
   ok('and the method says so, and why',
     /The playoff weeks are priced/.test(T.note) && /where the title is won/.test(T.note), T.note.slice(0, 400));
   if (gt.deal && gt.deal.weeks) {
@@ -7888,14 +8069,16 @@ if (!gt.boot) {
       off.map((r) => `${r.label}: ${r.before} → ${r.after}, ${r.delta}`).join(' | '));
   }
   {
-    // The finder: "You gain" a week beside "Your lineup, a week", where the gain
-    // is your own lineup's (a netted one has his meeting week off it).
-    const own = T.trades.filter((t) => t.myGain === t.ownGain)
-      .map((t) => ({ ba: t.beforeAfter.match(/^(\d+\.\d) → (\d+\.\d)\/wk/), g: t.gainText.match(/^([+−]?\d+\.\d)\/wk/), t }))
-      .filter((x) => x.ba && x.g);
-    const off = own.filter((x) => tenths(x.ba[2]) - tenths(x.ba[1]) !== tenths(x.g[1]));
-    ok('finder: a row’s gain a week is its lineup a week, after minus before, as printed',
-      own.length > 3 && off.length === 0, `${own.length} rows · ` + off.slice(0, 4).map((x) => `${x.t.beforeAfter} ${x.t.gainText}`).join(' | '));
+    // REPLACED, 2026-10-12. This held a row's "You gain" a week to the
+    // "Your lineup, a week" cell beside it (after minus before, as printed).
+    // That cell is gone from the row (Tim: "get rid of the your lineup a week
+    // column"), and with it the two printed ends this compared — so the claim
+    // on the row is that the column is NOT there. (The week table in the
+    // pop-up is held to "after − before" just above.)
+    ok('finder: no row carries a lineup before-and-after cell, and no heading names one',
+      T.trades.length > 3 && T.trades.every((t) => !t.hasLineup && t.beforeAfter === '') &&
+        !/Your lineup/i.test(T.heads.join(' | ')),
+      `${T.heads.join(' | ')} · ${JSON.stringify(T.trades.slice(0, 2).map((t) => t.beforeAfter))}`);
     ok('finder: no figure on a row is a signed zero',
       T.trades.every((t) => !/[+−-]0\.0(?!\d)/.test(`${t.gainText} ${(t.opp || {}).head}`)),
       T.trades.map((t) => `${t.gainText} ${(t.opp || {}).head}`).filter((s) => /[+−-]0\.0(?!\d)/.test(s)).slice(0, 4).join(' | '));
@@ -8035,8 +8218,8 @@ if (!gt.boot) {
     return per > 0.05 ? 'pos' : per < -0.05 ? 'neg' : '';
   };
   {
-    const n = Number((T.heads.find((h) => /^You gain a week \(weeks (\d+)–16\)$/.test(h)) || '')
-      .replace(/^You gain a week \(weeks (\d+)–16\)$/, '$1'));
+    const n = Number((T.heads.find((h) => /^Gain a week \(weeks (\d+)–16\)$/.test(h)) || '')
+      .replace(/^Gain a week \(weeks (\d+)–16\)$/, '$1'));
     const span = 16 - n + 1;
     ok('a negative gain cell is red and a positive one green — both columns, by the number in them',
       T.trades.every((t) => t.mySign === signWanted(t.myGain, span) &&
@@ -8094,20 +8277,25 @@ if (!gt.boot) {
     !!gt.cuRow && gt.cuRow.goal && /%/.test(gt.cuRow.goal.head) && gt.cuRow.goal.index === 1,
     JSON.stringify(gt.cuRow && gt.cuRow.goal));
   // 2026-09-29: the saved table matches the finder's new columns, header and cell.
-  ok('the saved table’s head matches the finder’s: both chances, and his projection vs you',
-    gt.cuHeads[1] === 'Δ title chance' && gt.cuHeads[2] === 'Δ last chance' && gt.cuHeads.includes('His proj vs you'),
+  // 2026-10-12: both chances are ONE split column now ("Chance": First over Last).
+  ok('the saved table’s head matches the finder’s: Chance, and his projection vs you',
+    gt.cuHeads[1] === 'Chance' && gt.cuHeads[2] === 'Send' && gt.cuHeads.includes('His proj vs you'),
     gt.cuHeads.join(' | '));
-  ok('and the saved row fills the preview and his-projection cells',
-    !!gt.cuRow && gt.cuRow.alt && gt.cuRow.alt.index === 2 && /%/.test(gt.cuRow.alt.head) && !!gt.cuRow.opp,
+  ok('and the saved row fills the preview (the "Last" half of the same cell) and his-projection cells',
+    !!gt.cuRow && gt.cuRow.alt && gt.cuRow.alt.index === 1 && gt.cuRow.alt.half === 'Last' && gt.cuRow.goal.half === 'First' &&
+      /%/.test(gt.cuRow.alt.head) && !!gt.cuRow.opp,
     JSON.stringify(gt.cuRow && [gt.cuRow.alt, gt.cuRow.opp]));
 
   // -- AND THE OTHER GOAL ----------------------------------------------------
   const L = gt.last;
   eq(L.goalOn, 'Don’t finish last', 'pressing "Don’t finish last" lights it');
   eq(gt.stored, 'last', 'and the choice is remembered');
-  eq(L.heads[1], 'Δ last chance', 'the column becomes the chance of finishing last');
+  eq(L.heads[1], 'Chance', 'the column is still headed Chance');
+  ok('and the ranked goal moves to its "Last" half: the chance of finishing last',
+    L.trades.length > 0 && L.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'Last'),
+    JSON.stringify(L.trades.slice(0, 2).map((t) => t.goal && [t.goal.index, t.goal.half])));
   ok('and the span drops back to the regular season — the playoffs cannot move last place',
-    L.heads.some((h) => h === `You gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
+    L.heads.some((h) => h === `Gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
   ok('the status line still says net increase under the new goal',
     /ranked by net increase \(You gain \+ He gains\)\./.test(L.count), L.count.slice(0, 300));
   ok('and the method says why the regular season alone is priced',
@@ -8338,8 +8526,7 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('SUGGESTED: every row ADDS a man to the ticked deal',
       sg.one.rows.every((r) => r.send.length + r.receive.length > 1), sum(sg.one));
     ok('SUGGESTED: rows carry the saved table\'s columns', JSON.stringify(sg.one.heads) === JSON.stringify(
-      ['With', 'Δ last chance', 'Δ title chance', 'You send', 'You get', 'Your lineup, a week', 'You gain', 'He gains',
-        'His proj vs you', 'ESPN']) || (sg.one.heads.length === 10 && sg.one.heads[3] === 'You send'), sg.one.heads.join(' | '));
+      ['With', 'Chance', 'Send', 'Gain', 'Value', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
     ok('SUGGESTED: every row is with the custom partner', sg.one.rows.every((r) => r.partner === sg.partnerName),
       sg.one.rows.map((r) => r.partner).join(','));
     ok('SUGGESTED: every row has Open in custom trades, Ask AI and the week-by-week button',
@@ -8641,7 +8828,10 @@ if (!gl.boot) {
     gl.combo.slice(0, 240));
   ok('the shape filter offers 2 for 2', gl.kinds.includes('2 for 2'), gl.kinds.join(' | '));
   ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
-  eq(gl.heads[1], 'Δ title chance', 'the live page carries the title-chance column');
+  eq(gl.heads[1], 'Chance', 'the live page carries the Chance column');
+  ok('with the title chance in its "First" half on every live row',
+    gl.trades.length > 0 && gl.trades.every((t) => t.goal && t.goal.half === 'First'),
+    JSON.stringify(gl.trades.slice(0, 2).map((t) => t.goal && t.goal.half)));
   ok('and every live offer was played out and ranked',
     gl.trades.length > 0 && gl.trades.every((t) => t.goal && /%/.test(t.goal.head)) &&
       /ranked by net increase/.test(gl.count),
@@ -8651,7 +8841,7 @@ if (!gl.boot) {
   ok('and rows with the same net increase keep the goal\'s order',
     netTiesKeepGoal(gl.trades), netLine(gl.trades));
   ok('and the live bracket weeks (15–16) are in the priced span',
-    gl.heads.some((h) => /You gain a week \(weeks \d+–16\)/.test(h)), gl.heads.join(' | '));
+    gl.heads.some((h) => /Gain a week \(weeks \d+–16\)/.test(h)), gl.heads.join(' | '));
 }
 
 // ---- BOTH GOALS, THE SWITCH ON EVERY PANEL, HIS PROJECTION VS YOU ----------
@@ -8681,10 +8871,16 @@ if (!gl.boot) {
     const NA = { head: '', sub: '', cls: '', v: NaN, sign: '?' };
 
     // -- (1) TWO CHANCE COLUMNS: the ranked one, then the other as a preview --
-    eq(A.heads[1], 'Δ title chance', 'under "Win it all" the ranked column, second, is the title chance');
-    eq(A.heads[2], 'Δ last chance', 'and beside it, a preview column for the chance of finishing last');
-    ok('every row carries the preview cell, third, filled in (not still waiting)',
-      A.trades.length > 2 && A.trades.every((t) => t.alt && t.alt.index === 2 && !t.alt.wait),
+    // 2026-10-12 (Tim: "Chance / (top) first: (bottom) last:"): the two chance
+    // columns are ONE split column. "First" is always the title chance and
+    // "Last" always last place; which half is the RANKED goal follows the goal.
+    eq(A.heads[1], 'Chance', 'the second column is Chance — one column for both chances');
+    eq(A.heads[2], 'Send', 'and the next column is Send: there is no second chance column');
+    ok('under "Win it all" the ranked goal is the "First" half on every row',
+      A.trades.length > 2 && A.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'First'),
+      JSON.stringify(A.trades.slice(0, 2).map((t) => t.goal && [t.goal.index, t.goal.half])));
+    ok('every row carries the preview in the same cell, its "Last" half, filled in (not still waiting)',
+      A.trades.length > 2 && A.trades.every((t) => t.alt && t.alt.index === 1 && t.alt.half === 'Last' && !t.alt.wait),
       JSON.stringify(A.trades.slice(0, 2).map((t) => t.alt)));
     ok('each preview states the change with its ± band, and before → after under it',
       A.trades.every((t) => t.alt && chanceRe.test(t.alt.head) && subRe.test(t.alt.sub)),
@@ -8792,8 +8988,18 @@ if (!gl.boot) {
       g.buttons.every((b) => b.pressed === String(b.on) && b.on === (b.goal === 'last'))),
     JSON.stringify(B.toggles.map((g) => [g.panel, g.on, g.buttons.map((b) => b.pressed)])));
     eq(tw.stored, 'last', 'and the choice is remembered, one preference');
-    eq(B.heads[1], 'Δ last chance', 'the ranked column becomes the chance of finishing last');
-    eq(B.heads[2], 'Δ title chance', 'and the preview becomes the title chance');
+    // "First" stays on top and "Last" under it; the RANKED goal changes halves.
+    eq(B.heads[1], 'Chance', 'the column is still Chance');
+    ok('under "Don’t finish last" the FIRST half is the preview (`.alt-goal-cell`) and the LAST half the ranked goal (`.goal-cell`)',
+      B.trades.length > 2 && B.trades.every((t) => t.chance && t.chance.halves.length === 2 &&
+        t.chance.halves[0].label === 'First' && t.chance.halves[0].cls.includes('alt-goal-cell') && !t.chance.halves[0].cls.includes('goal-cell') &&
+        t.chance.halves[1].label === 'Last' && t.chance.halves[1].cls.includes('goal-cell')),
+      JSON.stringify(B.trades.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.')]))));
+    ok('and under "Win it all" it was the other way round: First ranked, Last the preview',
+      A.trades.every((t) => t.chance && t.chance.halves.length === 2 &&
+        t.chance.halves[0].label === 'First' && t.chance.halves[0].cls.includes('goal-cell') &&
+        t.chance.halves[1].label === 'Last' && t.chance.halves[1].cls.includes('alt-goal-cell')),
+      JSON.stringify(A.trades.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.')]))));
     ok('and the list is ranked again', /ranked by net increase/.test(B.count), B.count.slice(0, 200));
     {
       const key = (t) => `${t.partner}|${names(t.send)}|${names(t.receive)}`;
@@ -8861,12 +9067,16 @@ if (!gl.boot) {
     const sub = (c) => (c.text.match(/([+−-]?\d+\.\d) total/) || ['', ''])[1];
 
     // -- You gain / He gains / Your lineup: the week table --------------------
-    for (const [name, c, title] of [['You gain', F.gain, /^You gain · with /], ['He gains', F.their, /^He gains · /],
-      ['Your lineup', F.lineup, /^Your lineup · with /]]) {
+    for (const [name, c, title] of [['You gain', F.gain, /^You gain · with /], ['He gains', F.their, /^He gains · /]]) {
       ok(`${name}: opens a week table — now, with the trade, the change`,
         title.test(c.card) && /Wk Now With trade \+\/−/.test(c.card), c.card.slice(0, 120));
       ok(`${name}: carries no raw title beside it`, c.rawTitle === '', c.rawTitle);
     }
+    // REPLACED, 2026-10-12: "Your lineup" was a third figure here, with a week
+    // table of its own. Its column is gone from the row, so its two checks are
+    // that neither the cell nor its card is on any offer row.
+    eq(F.offerRows > 0 ? F.lineupCells : -1, 0, 'Your lineup: no offer row carries the cell any more');
+    eq(F.offerRows > 0 ? F.lineupCards : -1, 0, 'Your lineup: and no figure on an offer row opens a lineup card');
     ok('You gain: the card’s Per week line is the cell’s own headline figure',
       head(F.gain) !== '' && new RegExp(`Per week [\\d.]+ [\\d.]+ ${head(F.gain).replace('+', '\\+')}( |$)`).test(F.gain.card),
       `${F.gain.text} / ${F.gain.card.slice(-90)}`);
