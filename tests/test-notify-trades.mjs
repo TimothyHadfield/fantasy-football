@@ -495,7 +495,7 @@ if (!process.argv[2]) {
       eq('live: no row has a "Your lineup, a week" cell any more', live.rows.reduce((n, r) => n + r.lineupCells, 0), 0);
       eq('live: every row is Manager, Chance, Send, Gain, Value, His proj, ESPN',
         [...new Set(live.rows.map((r) => r.cells.join(' | ')))],
-        ['name | split chance | split left deal | split gains | value val-change | appeal | opp-proj | left espn']);
+        ['name | split chance | split left deal | split gains | value val-change | appeal | total | opp-proj | left espn']);
 
       // From another squad.
       ok('other squad: its list finished too', !!live.rankedOther && /Cy/.test(live.otherTitle), JSON.stringify([live.rankedOther, live.otherTitle]));

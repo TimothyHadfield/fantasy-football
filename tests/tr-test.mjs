@@ -620,16 +620,23 @@ function readOfferRows(table) {
       })(),
       // APPEAL (2026-10-12): one whole cell straight after Value. '—' with no
       // number in the demo league.
-      appeal: (() => {
-        const td = tr.querySelector('td.appeal');
-        if (!td) return null;
-        return {
-          text: text(td),
-          v: td.hasAttribute('data-v') && td.getAttribute('data-v') !== '' ? Number(td.getAttribute('data-v')) : null,
-          sign: (((td.getAttribute('class') || '').match(/\b(pos|neg)\b/) || ['', ''])[1]),
-          index: [...tr.children].indexOf(td),
-          split: /\bsplit\b/.test(td.getAttribute('class') || ''),
+      // VALUE (one figure, yours, since later that day) and TOTAL (after
+      // Appeal) are whole cells of the same make; `whole` reads any of them.
+      ...(() => {
+        const whole = (c) => {
+          const td = tr.querySelector(`td.${c}`);
+          if (!td) return null;
+          return {
+            text: text(td),
+            v: td.hasAttribute('data-v') && td.getAttribute('data-v') !== '' ? Number(td.getAttribute('data-v')) : null,
+            sign: (((td.getAttribute('class') || '').match(/\b(pos|neg)\b/) || ['', ''])[1]),
+            index: [...tr.children].indexOf(td),
+            split: /\bsplit\b/.test(td.getAttribute('class') || ''),
+            parts: td.querySelectorAll('.sp, .hv, .hk').length,
+            cls: (td.getAttribute('class') || '').replace(/\b(pos|neg)\b/g, '').replace(/\s+/g, ' ').trim(),
+          };
         };
+        return { appeal: whole('appeal'), total: whole('total'), valueCell: whole('value') };
       })(),
       myHeat: heat(gain),
       theirHeat: heat(their),
@@ -4585,20 +4592,27 @@ if (!fresh.boot) {
   // expectation (halves swapped, labels swapped, full names) and seen to fail.
   {
     const rows = fresh.trades;
-    const WANT_CELLS = 'name | split chance | split left deal | split gains | split value | appeal | opp-proj | left espn';
-    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, Value, Appeal, His proj vs you, ESPN — in that order',
+    const WANT_CELLS = 'name | split chance | split left deal | split gains | value val-change | appeal | total | opp-proj | left espn';
+    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, Value, Appeal, Total, His proj vs you, ESPN — in that order',
       rows.length > 0 && rows.every((t) => t.cells.join(' | ') === WANT_CELLS),
       [...new Set(rows.map((t) => t.cells.join(' | ')))].join(' ¦ '));
-    ok('ROW: and the head names those eight columns, one heading per cell',
+    ok('ROW: and the head names those nine columns, one heading per cell',
       fresh.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') ===
-        'Manager | Chance | Send | Gain | Value | Appeal | His proj vs you | ESPN',
+        'Manager | Chance | Send | Gain | Value | Appeal | Total | His proj vs you | ESPN',
       fresh.heads.join(' | '));
+    // TOTAL (Tim, 2026-10-12) = Appeal + both gains a week: a whole cell right
+    // after Appeal, and with no Appeal on the sample league a dash as well. Its
+    // arithmetic is held in test-outlook-mark.mjs. (No such cell before bae88ce.)
+    ok('ROW: Total is one whole cell straight after Appeal; on the sample league a dash, with no number and no colour',
+      rows.length > 0 && rows.every((t) => t.total && !t.total.split && t.total.parts === 0 && t.appeal && t.total.index === t.appeal.index + 1 &&
+        t.total.text === '—' && t.total.v === null && t.total.sign === ''),
+      JSON.stringify(rows.slice(0, 3).map((t) => t.total)));
     // APPEAL (Tim, 2026-10-12), on the sample league: the cell is there, one
     // whole cell (not two halves) straight after Value, and — the demo has no
     // season averages to set a projection against — a dash with no number and
     // no colour. Its arithmetic is held in test-outlook-mark.mjs.
     ok('ROW: Appeal is one whole cell after Value; on the sample league a dash, with no number to sort by and no colour',
-      rows.length > 0 && rows.every((t) => t.appeal && !t.appeal.split && t.appeal.index === 5 &&
+      rows.length > 0 && rows.every((t) => t.appeal && !t.appeal.split && t.appeal.index === 5 && t.appeal.parts === 0 &&
         t.appeal.text === '—' && t.appeal.v === null && t.appeal.sign === ''),
       JSON.stringify(rows.slice(0, 3).map((t) => t.appeal)));
     // THE +1 A WEEK FLOOR (Tim, 2026-10-12: "don't suggest any trades that
@@ -4612,8 +4626,13 @@ if (!fresh.boot) {
       under.slice(0, 6).map((t) => `${t.partner} ${String(t.gainText).split('/wk')[0]}`).join(' | '));
     ok('FLOOR: and the list still holds no more than forty rows', rows.length <= 40, String(rows.length));
     ok('FLOOR: the method note says so, in those words',
-      fresh.tradeNote.includes('A trade worth less than +1.0 a week to you is left out.'),
+      fresh.tradeNote.includes('A trade worth less than +1.0 a week to you is left out'),
       fresh.tradeNote.slice(0, 600));
+    // OUT FOR THE SEASON (2026-10-12): the same sentence goes on to say such a
+    // man is in no trade. The rule itself is held in test-trade-moves.mjs.
+    ok('FLOOR: and that a trade with a man out for the rest of the season is left out too',
+      /is left out, and so is any trade with a man who is out for the rest of the season \(listed as out, and projected at nothing in every week left\)\./
+        .test(fresh.tradeNote), fresh.tradeNote.slice(300, 900));
     {
       const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');
       const gone = ['thAltGoal', 'thLineup', 'thTheirGain', 'cuThGoal', 'cuThAltGoal', 'cuSugThGoal', 'cuSugThAltGoal'];
@@ -4651,21 +4670,27 @@ if (!fresh.boot) {
     ok('ROW: the Gain cell sorts by YOUR net gain',
       rows.every((t) => t.gains && Number(t.gains.v) === t.myGain) && rows.some((t) => t.myGain !== t.theirGain),
       JSON.stringify(rows.slice(0, 3).map((t) => [t.gains && t.gains.v, t.myGain, t.theirGain])));
-    ok('ROW: Value is two halves, "You" over "Him", each a `.val-change`',
-      rows.every((t) => labels(t.value) === 'You,Him' && shaped(t.value) && t.value.halves.every((h) => h.cls.includes('val-change'))),
-      JSON.stringify(rows.slice(0, 2).map((t) => t.value)));
-    // The sample league may have no Value lines read: then both halves are a
-    // dash with no number. Where there are numbers they are opposite — the
-    // arithmetic itself is held on real Values in tr-value-check.mjs §10.
-    const valued = rows.filter((t) => t.value && t.value.halves.some((h) => h.v !== null));
-    ok('ROW: the two Value halves are opposite numbers (yours is his the other way round), or both a dash when no Values are read',
+    // REPLACED, 2026-10-12 (later the same day): was "Value is two halves,
+    // You over Him". Tim: "because value is the same for both users … make it
+    // so it's not a split-collumn thing anymore … just make it the value dif
+    // for me". One whole cell; on the split page `cls` was "split value" and
+    // `parts` 6, so both of these fail there.
+    ok('ROW: Value is ONE whole cell (`td.value.val-change`) — no halves, no "You"/"Him" label',
+      rows.length > 0 && rows.every((t) => t.valueCell && t.valueCell.cls === 'value val-change' && !t.valueCell.split &&
+        t.valueCell.parts === 0 && t.valueCell.index === 4),
+      JSON.stringify(rows.slice(0, 2).map((t) => t.valueCell)));
+    // REPLACED with it: was "the two Value halves are opposite numbers". There
+    // is one number now, yours; the arithmetic is held in tr-value-check §10.
+    const valued = rows.filter((t) => t.valueCell && t.valueCell.v !== null);
+    ok('ROW: the Value cell is one signed figure, coloured by its sign, that the column sorts by — or a dash with no number',
       rows.every((t) => {
-        const [a, b] = t.value ? t.value.halves : [];
-        if (!a || !b) return false;
-        if (a.v === null || b.v === null) return a.v === null && b.v === null && a.text === '—' && b.text === '—' && t.value.v === null;
-        return Number(a.v) + Number(b.v) === 0 && t.value.v === a.v;
+        const c = t.valueCell;
+        if (!c) return false;
+        if (c.v === null) return c.text === '—' && c.sign === '';
+        return /^[+−]?\d+\.\d$/.test(c.text) && num(c.text) === Math.round(c.v * 10) / 10 &&
+          c.sign === (c.v > 0 ? 'pos' : c.v < 0 ? 'neg' : '');
       }),
-      JSON.stringify(rows.slice(0, 3).map((t) => t.value && t.value.halves.map((h) => [h.text, h.v]))));
+      JSON.stringify(rows.slice(0, 3).map((t) => t.valueCell && [t.valueCell.text, t.valueCell.v, t.valueCell.sign])));
     console.log(`fresh: ${valued.length} of ${rows.length} finder rows print a Value change (the rest a dash)`);
 
     // LAST NAMES. The row's own rule, written out again in tests/last-name.mjs,
@@ -5849,7 +5874,7 @@ if (!wk.boot) {
     wk.after.trades.every((r) => r.gains && r.gains.halves.map((h) => h.label).join(',') === 'You,Him'),
     JSON.stringify(wk.after.trades.slice(0, 2).map((r) => r.gains && r.gains.halves.map((h) => h.label))));
   ok('the combo’s headings carry no Chance and no "Your lineup" column: Manager, Send, Gain, Value, His proj vs you, ESPN',
-    combo.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') === 'Manager | Send | Gain | Value | Appeal | His proj vs you | ESPN',
+    combo.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') === 'Manager | Send | Gain | Value | Appeal | Total | His proj vs you | ESPN',
     combo.heads.join(' | '));
   ok('the whole packing’s lineup before-and-after is on the headline, once',
     /Your lineup, a week/i.test(combo.lineup) && /→/.test(combo.lineup) &&
@@ -8154,7 +8179,7 @@ if (!live.boot) {
       /No ESPN league in demo/.test(r.espn), r.espn);
     eq(cu.savedRemove, 1, 'and Remove as one extra cell on the end');
     ok('the head names every column the row draws',
-      cu.savedHeads.slice(0, 8).join(' | ') === 'With | Chance | Send | Gain | Value | Appeal | His proj vs you | ESPN',
+      cu.savedHeads.slice(0, 9).join(' | ') === 'With | Chance | Send | Gain | Value | Appeal | Total | His proj vs you | ESPN',
       cu.savedHeads.join(' | '));
   }
 
@@ -8796,7 +8821,7 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('SUGGESTED: every row ADDS a man to the ticked deal',
       sg.one.rows.every((r) => r.send.length + r.receive.length > 1), sum(sg.one));
     ok('SUGGESTED: rows carry the saved table\'s columns', JSON.stringify(sg.one.heads) === JSON.stringify(
-      ['With', 'Chance', 'Send', 'Gain', 'Value', 'Appeal', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
+      ['With', 'Chance', 'Send', 'Gain', 'Value', 'Appeal', 'Total', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
     ok('SUGGESTED: every row is with the custom partner', sg.one.rows.every((r) => r.partner === sg.partnerName),
       sg.one.rows.map((r) => r.partner).join(','));
     // REPLACED, 2026-10-12: was "every row has Open in custom trades, Ask AI
