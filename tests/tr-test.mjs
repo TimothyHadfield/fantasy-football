@@ -246,6 +246,64 @@ function fire(el, type = 'change') {
   el.dispatchEvent(ev);
 }
 
+/**
+ * THE WEEK-BY-WEEK POP-UP OF A TRADE ROW, THE WAY A READER REACHES IT NOW.
+ *
+ * Tim, 2026-10-12: "remove the week by week button on the far right side of
+ * the trade, as well as the "open in custom trades" button. Because we already
+ * have the week-by-week details in the custom trades, just remove that feature
+ * entirely when you click on the trade. Instead when you click on the trade
+ * automatically open up in custom trades."
+ *
+ * So a click on a row no longer opens the pop-up: it loads the deal into the
+ * custom box, and the box's own "Week by week" button (`#cuOpen`) opens the
+ * same breakdown of the same deal. Every scenario that used to click a row and
+ * read the pop-up goes through here: the click, a wait, and — only when the
+ * click did not open the pop-up by itself (a deal the builder cannot hold still
+ * does) — the button. It reports which route it took, so "a row click opens no
+ * pop-up" stays a claim and not an assumption.
+ */
+async function openRowDeal(document, row, wait = 1200) {
+  const out = { clicked: !!row, popOnClick: false, viaBox: false, open: false, boxPartner: '' };
+  if (!row) return out;
+  const modal = document.getElementById('dealModal');
+  const sel = document.getElementById('cuTeamB');
+  out.partnerBefore = sel ? sel.value : '';
+  row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+  await settle(Math.min(wait, 600));
+  out.popOnClick = !modal.hidden;
+  if (!out.popOnClick) {
+    const on = sel && [...sel.querySelectorAll('option')].find((o) => o.selected || o.hasAttribute('selected'));
+    out.boxPartner = on ? on.textContent.replace(/\s+/g, ' ').trim().replace(/ · wks? [\d, ]+$/, '') : '';
+    const btn = document.getElementById('cuOpen');
+    // The button waits for the box's own pricing; give it a few beats.
+    for (let i = 0; i < 15 && btn && btn.disabled; i++) await settle(200);
+    if (btn && !btn.disabled) {
+      btn.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+      out.viaBox = true;
+    }
+  }
+  await settle(wait);
+  out.open = !modal.hidden;
+  return out;
+}
+
+/**
+ * Put the custom box back as it stood before `openRowDeal` loaded a row into
+ * it: the partner it had, and nobody ticked. For the scenarios that go on to
+ * build a deal of their own in the box, which used to find it untouched.
+ */
+async function emptyBox(document, route) {
+  const sel = document.getElementById('cuTeamB');
+  if (route && sel && route.partnerBefore && sel.value !== route.partnerBefore) {
+    sel.value = route.partnerBefore;
+    fire(sel);
+    await settle(300);
+  }
+  fire(document.getElementById('cuClear'), 'click');
+  await settle(300);
+}
+
 // ------------------------------------------------------------------- reading
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
@@ -1827,8 +1885,9 @@ const SCENARIOS = {
     const dealRowGain = row
       ? Number((row.querySelector('.hv.gain') || {}).getAttribute?.('data-v'))
       : NaN;
-    if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(1200);
+    // (2026-10-12: the row loads into the custom box, whose own button opens
+    // the breakdown — `openRowDeal`.)
+    const dealRoute = await openRowDeal(document, row, 1200);
     const deal = readDeal(document);
 
     // And a card on a player name, which is ask 1.
@@ -1851,8 +1910,7 @@ const SCENARIOS = {
       // Looked up fresh each time: the table can repaint behind the pop-up.
       const r = document.querySelectorAll('#tradeTable tbody tr')[i];
       if (!r) break;
-      r.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-      await settle(600);
+      await openRowDeal(document, r, 600);
       ownOpened++;
       const d = readDeal(document);
       if (!d.hidden && d.churnEntries.some((e) => e.own)) { ownDeal = d; break; }
@@ -1864,7 +1922,7 @@ const SCENARIOS = {
       : openCard(document, '#dealModal [data-tip]');
 
     return {
-      errors, fetchCalls, before, after, deal, card, spareCard, dealCard, ownDeal, ownOpened, dealRowGain,
+      errors, fetchCalls, before, after, deal, dealRoute, card, spareCard, dealCard, ownDeal, ownOpened, dealRowGain,
       // What the parent needs to rebuild the same league and price the same
       // packing independently.
       myTeamId: document.getElementById('teamSelect').value,
@@ -1905,9 +1963,58 @@ const SCENARIOS = {
     // Nothing has been clicked yet, so there must be no dialog and no table.
     const before = readDeal(document);
 
-    // -- from a finder row, by its KEYBOARD route rather than the row click,
-    //    because that is the half a <tr> cannot do on its own.
-    click(document.querySelector('#tradeTable tbody tr button.wk-open'));
+    // -- from a finder row, by its KEYBOARD route: ENTER ON THE ROW ITSELF
+    //    (2026-10-12). The row had a "Week by week" button for this; Tim had
+    //    both row buttons removed, so the row is in the tab order
+    //    (`tabindex="0"`) and Enter does what a click does — it loads the deal
+    //    into the custom box, and opens no pop-up.
+    const row0 = document.querySelector('#tradeTable tbody tr');
+    const rowShape = {
+      tabindex: row0 ? row0.getAttribute('tabindex') : null,
+      buttons: [...document.querySelectorAll('tr.offer button')].map((b) => (b.getAttribute('class') || '').trim()),
+      wkOpen: document.querySelectorAll('tr.offer button.wk-open').length,
+      cuLoad: document.querySelectorAll('tr.offer button.cu-load, tr.offer button[data-cu-load]').length,
+      offerRows: document.querySelectorAll('tr.offer').length,
+      partner: row0 ? text(row0.querySelector('.mgr')) : '',
+      send: row0 ? [...row0.querySelectorAll('.hv.send .man a.pref')].map((a) => idOfHref(a.getAttribute('href'))) : [],
+      recv: row0 ? [...row0.querySelectorAll('.hv.recv .man a.pref')].map((a) => idOfHref(a.getAttribute('href'))) : [],
+    };
+    const boxNow = () => ({
+      partner: text([...document.getElementById('cuTeamB').querySelectorAll('option')].find((o) => o.selected || o.hasAttribute('selected')) || null)
+        .replace(/ · wks? [\d, ]+$/, ''),
+      a: [...document.querySelectorAll('#cuListA input[type="checkbox"]')].filter((b) => b.hasAttribute("checked"))
+        .map((b) => Number(b.getAttribute('value'))),
+      b: [...document.querySelectorAll('#cuListB input[type="checkbox"]')].filter((b) => b.hasAttribute("checked"))
+        .map((b) => Number(b.getAttribute('value'))),
+      popOpen: !document.getElementById('dealModal').hidden,
+      openEnabled: !document.getElementById('cuOpen').disabled,
+    });
+    const boxBefore = boxNow();
+    {
+      const ev = new globalThis.Event('keydown', { bubbles: true });
+      ev.key = 'Enter';
+      if (row0) row0.dispatchEvent(ev);
+    }
+    await settle(1200);
+    const byEnter = boxNow();
+    // Any other key on the row does nothing.
+    click(document.getElementById('cuClear'));
+    await settle(300);
+    {
+      const ev = new globalThis.Event('keydown', { bubbles: true });
+      ev.key = 'a';
+      const r = document.querySelector('#tradeTable tbody tr');
+      if (r) r.dispatchEvent(ev);
+    }
+    await settle(300);
+    const byOtherKey = boxNow();
+    // And a CLICK on the row does the same as Enter.
+    click(document.querySelector('#tradeTable tbody tr'));
+    await settle(1200);
+    const byClick = boxNow();
+
+    // The pop-up is the custom box's own button now.
+    click(document.getElementById('cuOpen'));
     await settle(1200);
     const opened = readDeal(document);
 
@@ -1917,24 +2024,21 @@ const SCENARIOS = {
     const closedByButton = readDeal(document);
 
     // -- opened again, closed by Escape
-    click(document.querySelector('#tradeTable tbody tr'));
-    await settle(1200);
+    await openRowDeal(document, document.querySelector('#tradeTable tbody tr'), 1200);
     const reopened = readDeal(document);
     key('Escape');
     await settle(600);
     const closedByEscape = readDeal(document);
 
     // -- opened again, closed by a click anywhere outside the card
-    click(document.querySelector('#tradeTable tbody tr'));
-    await settle(1200);
+    await openRowDeal(document, document.querySelector('#tradeTable tbody tr'), 1200);
     click(document.getElementById('depthNote'));
     await settle(600);
     const closedByOutside = readDeal(document);
 
     // -- and from a COMBO row, which is the other half of the ask
     const comboRow = document.querySelector('#comboTable tbody tr');
-    click(comboRow);
-    await settle(1200);
+    const comboRoute = await openRowDeal(document, comboRow, 1200);
     const fromCombo = readDeal(document);
 
     // A click INSIDE the card must not close it — the backdrop is outside, the
@@ -1957,6 +2061,7 @@ const SCENARIOS = {
       errors, fetchCalls,
       before, opened, closedByButton, reopened, closedByEscape, closedByOutside,
       fromCombo, stillOpen, wholeCombo,
+      rowShape, boxBefore, byEnter, byOtherKey, byClick, comboRoute,
       hadHeadButton: !!headButton,
       headLabel: text(headButton),
       // Nothing may be printing a week-by-week table outside the pop-up now.
@@ -2010,7 +2115,13 @@ const SCENARIOS = {
     };
     const row = document.querySelector('#tradeTable tbody tr');
     const title = row ? text(row.querySelector('.mgr')) : '';
+    // 2026-10-12: the row loads into the custom box (no pop-up), and the box's
+    // own button is what opens the breakdown — at once, as the row click did.
     if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(600);
+    const afterRowClick = readDeal(document);
+    const boxButtonReady = !document.getElementById('cuOpen').disabled;
+    document.getElementById('cuOpen').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     const immediately = readDeal(document);
     await settle(weeksChosen ? 12000 : 1500);
     const deal = readDeal(document);
@@ -2018,7 +2129,7 @@ const SCENARIOS = {
     document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     await settle(300);
     return {
-      errors, fetchCalls, before, immediately, deal, title,
+      errors, fetchCalls, before, immediately, deal, title, afterRowClick, boxButtonReady,
       closed: readDeal(document),
       afterTrades: trades,
       measure: document.getElementById('measureSelect').value,
@@ -2039,52 +2150,49 @@ const SCENARIOS = {
     const click = (el) => { if (el) el.dispatchEvent(new globalThis.Event('click', { bubbles: true })); };
     await settleGoal(document);
 
-    const checkedNames = (id) => readCustomList(document, id).filter((r) => r.checked).map((r) => r.name);
-    const rowOf = (i) => {
-      const row = document.querySelectorAll('#tradeTable tbody tr')[i];
-      if (!row) return null;
-      return {
+    // 2026-10-12 (Tim: "when you click on the trade automatically open up in
+    // custom trades"): the button on the row and the one inside the pop-up are
+    // both gone and the ROW is the control. Clicked on a finder row, then on a
+    // second finder row with a different deal (the box must follow, not add),
+    // then on a combo row. The men are compared by ESPN id: the row prints
+    // last names, the box full ones.
+    const ticked = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')]
+      .filter((b) => b.hasAttribute('checked')).map((b) => Number(b.getAttribute('value'))).sort((a, b) => a - b);
+    const idsOf = (row, sel) => [...row.querySelectorAll(`${sel} .man a.pref`)]
+      .map((a) => idOfHref(a.getAttribute('href'))).sort((a, b) => a - b);
+    const press = async (row) => {
+      if (!row) return { had: false };
+      const before = {
         partner: text(row.querySelector('.mgr')),
-        send: text(row.querySelector('.pkg.send')),
-        recv: text(row.querySelector('.pkg.recv')),
-        button: row.querySelector('button[data-cu-load]'),
+        send: idsOf(row, '.hv.send'),
+        recv: idsOf(row, '.hv.recv'),
+        // What the row carries to press: nothing but the row itself.
+        buttons: [...row.querySelectorAll('button')].map((b) => (b.getAttribute('class') || '').trim()),
+        loadButtons: row.querySelectorAll('button[data-cu-load], button.cu-load').length,
+        wkButtons: row.querySelectorAll('button.wk-open').length,
+        tabindex: row.getAttribute('tabindex'),
+      };
+      click(row);
+      await settle(1500);
+      return {
+        had: true, ...before,
+        pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null).replace(/ · wks? [\d, ]+$/, ''),
+        ticksA: ticked('cuListA'),
+        ticksB: ticked('cuListB'),
+        dealOpen: !readDeal(document).hidden,
+        popButtons: document.querySelectorAll('#dealBody button[data-cu-load]').length,
+        priced: /\/wk/.test(text($('cuGainA'))),
+        openEnabled: !$('cuOpen').disabled,
       };
     };
 
-    const r0 = rowOf(0);
-    click(r0 && r0.button);
-    await settle(1500);
-    const fromRow = {
-      partner: r0 ? r0.partner : '',
-      send: r0 ? r0.send : '',
-      recv: r0 ? r0.recv : '',
-      hadButton: !!(r0 && r0.button),
-      buttonText: r0 && r0.button ? text(r0.button) : '',
-      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null).replace(/ · wks? [\d, ]+$/, ''),
-      ticksA: checkedNames('cuListA'),
-      ticksB: checkedNames('cuListB'),
-      dealOpen: !readDeal(document).hidden,
-    };
-
-    // From the pop-up: open the second row's deal, press the button inside it.
-    const r1 = rowOf(1);
-    click(document.querySelectorAll('#tradeTable tbody tr')[1]);
-    await settle(1500);
-    const popButton = document.querySelector('#dealBody button[data-cu-load]');
-    const popHadButton = !!popButton;
-    click(popButton);
-    await settle(1500);
-    const fromPop = {
-      partner: r1 ? r1.partner : '',
-      send: r1 ? r1.send : '',
-      recv: r1 ? r1.recv : '',
-      hadButton: popHadButton,
-      pickedB: text([...$('cuTeamB').querySelectorAll('option')].find((o) => o.selected) || null).replace(/ · wks? [\d, ]+$/, ''),
-      ticksA: checkedNames('cuListA'),
-      ticksB: checkedNames('cuListB'),
-      dealOpen: !readDeal(document).hidden,
-    };
-    return { errors, fromRow, fromPop };
+    const rows = () => [...document.querySelectorAll('#tradeTable tbody tr')];
+    const fromRow = await press(rows()[0]);
+    const dealKey = (x) => (x.send || []).concat(['|'], x.recv || []).join();
+    const other = rows().find((r) => dealKey({ send: idsOf(r, '.hv.send'), recv: idsOf(r, '.hv.recv') }) !== dealKey(fromRow));
+    const fromSecond = await press(other);
+    const fromCombo = await press(document.querySelector('#comboTable tbody tr'));
+    return { errors, fromRow, fromSecond, fromCombo };
   },
 
   /**
@@ -2248,8 +2356,7 @@ const SCENARIOS = {
     // Drill into the offer with Cy, which survives both measures.
     const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
     const idx = after.trades.findIndex((t) => t.partner === 'Cy');
-    if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(1500);
+    const dealRoute = idx >= 0 ? await openRowDeal(document, rows[idx], 1500) : null;
     const deal = readDeal(document);
     const dealLinkKeyed = !!document.querySelector('#dealBody a.espn-open[data-offer]');
 
@@ -2367,8 +2474,7 @@ SCENARIOS.weekPeek = async function weekPeek() {
   // exactly how this scenario first passed while doing nothing at all.
   const openOffer = async (i) => {
     const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
-    if (rows[i]) rows[i].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(1500);
+    return openRowDeal(document, rows[i], 1500);
   };
   await openOffer(idx);
 
@@ -2475,8 +2581,7 @@ SCENARIOS.weekPeekNarrow = async function weekPeekNarrow() {
   const trades = readTrades(document);
   const idx = trades.findIndex((t) => t.partner === 'Cy');
   const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
-  if (rows[idx]) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-  await settle(1500);
+  await openRowDeal(document, rows[idx], 1500);
   const fireOn = (el, type) => { if (el) el.dispatchEvent(new globalThis.Event(type, { bubbles: true })); };
   const weekBtn = (w) => document.querySelector(`#dealBody .wk-peek[data-wk="${w}"]`);
 
@@ -2507,8 +2612,7 @@ SCENARIOS.liveByes = async function liveByes() {
   await settleGoal(document);
   const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
   const idx = readTrades(document).findIndex((t) => t.partner === 'Cy');
-  if (idx >= 0) rows[idx].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-  await settle(1500);
+  if (idx >= 0) await openRowDeal(document, rows[idx], 1500);
   const men = [...document.querySelectorAll('.man')].map(readMan);
   const bills = men.find((m) => m.id === 112) || null;
   const probe = [...document.querySelectorAll('.man')].find((m) => {
@@ -2540,7 +2644,9 @@ function readByeMarks(root) {
   return [...root.querySelectorAll('.man, .cu-man[data-man]')].map((m) => {
     const a = m.querySelector('a.pref');
     const hl = m.querySelector('.bye-hl');
-    const td = m.closest ? m.closest('td') : null;
+    // The box he is drawn in: half of the Send cell (`.hv.send` / `.hv.recv`)
+    // on a trade row since 2026-10-12, a whole cell anywhere else.
+    const td = m.closest ? m.closest('.hv, td') : null;
     const tr = m.closest ? m.closest('tr') : null;
     return {
       partner: tr ? text(tr.querySelector('td.name')) : '',
@@ -2598,14 +2704,16 @@ SCENARIOS.byeMark = async function byeMark() {
   let deal = [];
   let dealKey = '';
   if (idx >= 0) {
-    click(trs[idx]);
-    await settle(1500);
+    const route = await openRowDeal(document, trs[idx], 1500);
     deal = [...document.querySelectorAll('#dealBody .deal-side')].map((s) => ({
       head: text(s.querySelector('h3')), men: readByeMarks(s),
     }));
     dealKey = text(document.querySelector('#dealBody .bye-key'));
     const shut = document.querySelector('#dealClose, [data-close]');
     if (shut) click(shut);
+    // The row loaded its deal into the custom box on the way (2026-10-12);
+    // what follows reads the box with nothing ticked.
+    await emptyBox(document, route);
   }
   // The custom box with Bo first (whom Ana plays nearly every week), then Cy.
   // Since the net gain (2026-09-30) the finder may offer no Bo deal at all —
@@ -2671,8 +2779,7 @@ SCENARIOS.acceptBy = async function acceptByScenario() {
   const idx = demo ? 0 : trs.findIndex((tr) => /^Cy\b/.test(text(tr.querySelector('td.name'))));
   let deal = null;
   if (idx >= 0 && trs[idx]) {
-    click(trs[idx]);
-    await settle(1500);
+    const route = await openRowDeal(document, trs[idx], 1500);
     const line = document.querySelector('#dealBody .deal-accept');
     const espnAt = [...document.querySelectorAll('#dealBody > *')].findIndex((el) => el.querySelector && el.querySelector('a.espn-open, .espn-off'));
     const lineAt = [...document.querySelectorAll('#dealBody > *')].indexOf(line);
@@ -2686,6 +2793,9 @@ SCENARIOS.acceptBy = async function acceptByScenario() {
     };
     const shut = document.querySelector('#dealClose, [data-close]');
     if (shut) click(shut);
+    // The row loaded its deal into the box on the way; "before" below is the
+    // box with nobody ticked.
+    await emptyBox(document, route);
   }
   const box = () => ({ hidden: !!$('cuAcceptBox').hidden, text: text($('cuAccept')), title: $('cuAccept').getAttribute('title') });
   if (!demo) {
@@ -2921,12 +3031,14 @@ SCENARIOS.goalTitle = async function goalTitle() {
   // The top row's pop-up: under this goal the bracket weeks are IN the priced
   // table, so there is no "for reference" section after it.
   const row = document.querySelector('#tradeTable tbody tr');
-  if (row) row.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-  await settle(3000);
+  const route = await openRowDeal(document, row, 3000);
   const deal = readDeal(document);
   const dealGoal = text(document.querySelector('#dealBody .deal-goal'));
   document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
   await settle(300);
+  // The row loaded its deal into the box; the custom deal below is built from
+  // an empty one, as it always was.
+  await emptyBox(document, route);
 
   // A CUSTOM deal: one man ticked each side, then saved.
   const tick = (sel) => {
@@ -3344,16 +3456,9 @@ SCENARIOS.customSuggest = async function customSuggest() {
   const rightAfter2 = read();
   const two = await waitList();
 
-  // The pop-up from a suggested row.
+  // (The pop-up is no longer a row click away — 2026-10-12. It is read below,
+  // after the row has loaded into the box, from the box's own button.)
   let pop = null;
-  const firstRow = host().querySelector('tbody tr');
-  if (firstRow) {
-    fire(firstRow.querySelector('td.name'), 'click');
-    await settle(300);
-    pop = { open: !$('dealModal').hidden, title: text($('dealTitle')) };
-    fire($('dealClose'), 'click');
-    await settle(100);
-  }
 
   // A FAST DOUBLE TICK: a second of his men before the first answer is in.
   tick(mineBox, false);
@@ -3366,11 +3471,21 @@ SCENARIOS.customSuggest = async function customSuggest() {
   // OPEN IN CUSTOM TRADES from a suggestion: its men become the ticks, and the
   // builder's own figures equal the row's.
   let load = null;
-  const lb = host().querySelector('tbody tr button[data-cu-load]');
+  // The ROW is the control since 2026-10-12 (it had a button for it before).
+  const lb = host().querySelector('tbody tr');
   const lrow = dbl.rows[0] || null;
   if (lb) {
-    fire(lb, 'click');
+    fire(lb.querySelector('td.name'), 'click');
     await settle(200);
+    pop = { onRowClick: !$('dealModal').hidden, boxButton: !$('cuOpen').disabled };
+    fire($('cuOpen'), 'click');
+    await settle(300);
+    pop.open = !$('dealModal').hidden;
+    pop.title = text($('dealTitle'));
+    pop.sides = [...document.querySelectorAll('#dealBody .deal-side')].map((s) =>
+      [...s.querySelectorAll('a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))).sort());
+    fire($('dealClose'), 'click');
+    await settle(100);
     // The ATTRIBUTE: a re-rendered box carries `checked` in its markup, which
     // linkedom does not mirror into the property (readCustomList reads it so).
     const ticked = (id) => boxes(id).filter((b) => b.hasAttribute('checked')).map((b) => String(b.value)).sort();
@@ -5719,20 +5834,34 @@ if (!wk.boot) {
   ok('the cuLoad scenario boots', !cl.boot, cl.boot);
   if (!cl.boot) {
     ok('OPEN IN CUSTOM: no console errors', cl.errors.length === 0, JSON.stringify(cl.errors).slice(0, 300));
+    // REWRITTEN, 2026-10-12 (Tim: "remove the week by week button … as well as
+    // the "open in custom trades" button … when you click on the trade
+    // automatically open up in custom trades"). These were "the button is
+    // there" / "says what it does" on the row and inside the pop-up; the row
+    // itself is the control now. On the page before that day a row click
+    // opened the pop-up and ticked nothing, so every `good` check but the
+    // first fails there.
     const good = (x, label) => {
-      ok(`OPEN IN CUSTOM (${label}): the button is there`, x.hadButton, JSON.stringify(x).slice(0, 300));
-      ok(`OPEN IN CUSTOM (${label}): the partner is picked on the right`,
+      ok(`OPEN IN CUSTOM (${label}): the row has no button to press for it, nor a Week by week one — the row is the control, in the tab order`,
+        x.had && x.loadButtons === 0 && x.wkButtons === 0 && x.tabindex === '0', JSON.stringify(x).slice(0, 300));
+      ok(`OPEN IN CUSTOM (${label}): a click picks the partner on the right`,
         !!x.partner && x.pickedB === x.partner, `${x.pickedB} v ${x.partner}`);
-      ok(`OPEN IN CUSTOM (${label}): your men are ticked on the left, his on the right, and nobody else`,
-        (x.ticksA.length + x.ticksB.length) > 0 &&
-          x.ticksA.every((n) => x.send.includes(n)) && x.ticksB.every((n) => x.recv.includes(n)),
-        `A ${JSON.stringify(x.ticksA)} in "${x.send}"; B ${JSON.stringify(x.ticksB)} in "${x.recv}"`);
-      ok(`OPEN IN CUSTOM (${label}): no pop-up left open`, !x.dealOpen);
+      ok(`OPEN IN CUSTOM (${label}): your men are ticked on the left, his on the right, and nobody else (by ESPN id)`,
+        (x.ticksA || []).length > 0 && (x.ticksB || []).length > 0 &&
+          JSON.stringify(x.ticksA) === JSON.stringify(x.send) && JSON.stringify(x.ticksB) === JSON.stringify(x.recv),
+        `A ${JSON.stringify(x.ticksA)} v ${JSON.stringify(x.send)}; B ${JSON.stringify(x.ticksB)} v ${JSON.stringify(x.recv)}`);
+      ok(`OPEN IN CUSTOM (${label}): and NO pop-up opens`, x.dealOpen === false && x.popButtons === 0, `${x.dealOpen} ${x.popButtons}`);
+      ok(`OPEN IN CUSTOM (${label}): the box prices the deal and offers its own Week by week`,
+        x.priced === true && x.openEnabled === true, `${x.priced} ${x.openEnabled}`);
     };
     good(cl.fromRow, 'row');
-    ok('OPEN IN CUSTOM (row): says what it does', cl.fromRow.buttonText === 'Open in custom trades',
-      cl.fromRow.buttonText);
-    good(cl.fromPop, 'pop-up');
+    ok('OPEN IN CUSTOM (row): the only button left on a row is "Ask AI"',
+      JSON.stringify(cl.fromRow.buttons) === JSON.stringify(['ask-ai']) || (cl.fromRow.buttons.length === 1 && /ask-ai/.test(cl.fromRow.buttons[0])),
+      JSON.stringify(cl.fromRow.buttons));
+    ok('OPEN IN CUSTOM: a second, different row was there to click',
+      cl.fromSecond.had && JSON.stringify([cl.fromSecond.send, cl.fromSecond.recv]) !== JSON.stringify([cl.fromRow.send, cl.fromRow.recv]));
+    good(cl.fromSecond, 'a second row replaces the first');
+    good(cl.fromCombo, 'combo row');
   }
 }
 
@@ -5768,8 +5897,43 @@ if (!md.boot) {
   ok('nothing locked the page’s own scrolling',
     !/overflow/.test(md.bodyStyle), md.bodyStyle);
 
-  // -- it opens from the finder, BY KEYBOARD ---------------------------------
-  ok('the Week by week button opens it', !md.opened.hidden, JSON.stringify(md.opened).slice(0, 200));
+  // -- A ROW HAS NO BUTTONS OF ITS OWN; IT OPENS IN CUSTOM TRADES (2026-10-12) --
+  //
+  // Tim: "remove the week by week button on the far right side of the trade,
+  // as well as the "open in custom trades" button … just remove that feature
+  // entirely when you click on the trade. Instead when you click on the trade
+  // automatically open up in custom trades."
+  //
+  // REPLACES "the Week by week button [on the row] opens it" and the row-click
+  // route into the pop-up. On the page of the day before, a row carried both
+  // buttons and no tabindex, Enter on a row did nothing and a click opened the
+  // pop-up — each of the six below fails there.
+  {
+    const S = md.rowShape;
+    const sorted = (a) => a.slice().sort((x, y) => x - y);
+    const holds = (box) => box.partner === S.partner && JSON.stringify(sorted(box.a)) === JSON.stringify(sorted(S.send)) &&
+      JSON.stringify(sorted(box.b)) === JSON.stringify(sorted(S.recv));
+    ok('ROW BUTTONS: no trade row anywhere on the page has a "Week by week" or an "Open in custom trades" button',
+      S.offerRows > 3 && S.wkOpen === 0 && S.cuLoad === 0, JSON.stringify([S.offerRows, S.wkOpen, S.cuLoad]));
+    ok('ROW BUTTONS: the one button a row keeps is "Ask AI"',
+      S.buttons.length === S.offerRows && S.buttons.every((c) => /\bask-ai\b/.test(c)), [...new Set(S.buttons)].join(' | '));
+    eq(S.tabindex, '0', 'ROW: with no button of its own the row itself is in the tab order');
+    ok('ROW: the custom box was empty before anything was pressed (or the next checks prove nothing)',
+      md.boxBefore.a.length === 0 && md.boxBefore.b.length === 0 && !md.boxBefore.popOpen, JSON.stringify(md.boxBefore));
+    ok('ROW: Enter on a row loads ITS deal into the custom box — partner picked, the men of both sides ticked',
+      S.send.length > 0 && S.recv.length > 0 && holds(md.byEnter), `${JSON.stringify(md.byEnter)} v ${JSON.stringify(S)}`);
+    ok('ROW: and opens NO pop-up', md.byEnter.popOpen === false);
+    ok('ROW: any other key on the row does nothing',
+      md.byOtherKey.a.length === 0 && md.byOtherKey.b.length === 0 && !md.byOtherKey.popOpen, JSON.stringify(md.byOtherKey));
+    ok('ROW: a click does what Enter does — the same deal in the box, and no pop-up',
+      holds(md.byClick) && md.byClick.popOpen === false && md.byClick.openEnabled === true, JSON.stringify(md.byClick));
+    ok('ROW: a combo row goes the same way: into the box first, the pop-up only from the box',
+      md.comboRoute.clicked && md.comboRoute.popOnClick === false && md.comboRoute.viaBox === true &&
+        md.comboRoute.boxPartner === md.comboPartner, JSON.stringify([md.comboRoute, md.comboPartner]));
+  }
+
+  // -- the pop-up opens from the custom box's own button ----------------------
+  ok('the custom box’s Week by week button opens it', !md.opened.hidden, JSON.stringify(md.opened).slice(0, 200));
   ok('and it holds the deal week by week', md.opened.present && md.opened.weeks &&
     md.opened.weeks.weeks.length > 1,
     md.opened.weeks ? `${md.opened.weeks.weeks.length} rows` : 'no table');
@@ -5777,7 +5941,7 @@ if (!md.boot) {
   // -- THREE WAYS OUT, and all three are tested ------------------------------
   ok('its own Close button shuts it', md.closedByButton.hidden);
   ok('and empties it on the way out', !md.closedByButton.present);
-  ok('a row click opens it again', !md.reopened.hidden);
+  ok('a row click and the box’s button open it again', !md.reopened.hidden);
   ok('Escape shuts it', md.closedByEscape.hidden);
   ok('a click outside shuts it', md.closedByOutside.hidden);
   ok('but a click INSIDE it does not', !md.stillOpen.hidden,
@@ -5785,7 +5949,7 @@ if (!md.boot) {
 
   // -- and it is reachable from the best combo, which is the other half ------
   ok('the combo has a row to open', md.hadComboRow, 'no combo row rendered');
-  ok('clicking a combo row opens the same pop-up', !md.fromCombo.hidden);
+  ok('a combo row, through the box, opens the same pop-up', !md.fromCombo.hidden);
   ok('and it is about THAT deal — the one with that manager',
     md.fromCombo.title.includes(md.comboPartner),
     `${md.fromCombo.title} vs ${md.comboPartner}`);
@@ -5864,7 +6028,12 @@ if (!up.boot) {
   ok('demo still costs no request', up.fetchCalls.length === 0, up.fetchCalls.join(' | '));
   eq(up.before.measure, 'typical', 'a saved choice of a typical week is honoured');
   ok('no pop-up on load', up.before.deal.hidden && !up.before.deal.present);
-  ok('clicking a deal opens it at once', !up.immediately.hidden);
+  // 2026-10-12: was "clicking a deal opens it at once". A row click opens the
+  // deal in custom trades now, and the box's button is what opens the pop-up.
+  ok('clicking a deal opens NO pop-up: it goes to the custom box, whose Week by week button is ready',
+    up.afterRowClick.hidden && !up.afterRowClick.present && up.boxButtonReady === true,
+    JSON.stringify([up.afterRowClick.hidden, up.boxButtonReady]));
+  ok('and that button opens it at once', !up.immediately.hidden);
   ok('and it does not tell him to press a button first',
     !/Press/.test(up.immediately.body) && !/Press/.test(up.deal.body), up.deal.body.slice(0, 200));
   ok('it fills with the week-by-week table whatever measure the page is on',

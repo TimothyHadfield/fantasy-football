@@ -46,7 +46,7 @@ export function lastNameShown(full, { position = '', others = [] } = {}) {
 export function printedName(man) {
   const host = (man && man.querySelector('a.pref')) || man;
   if (!host) return '';
-  const STOP = /\b(pp|val|trend|per)\b/;
+  const STOP = /\b(pp|val|trend|outlook|per)\b/;
   const read = (node) => {
     if (node.nodeType === 3) return node.textContent;
     if (node.nodeType !== 1) return '';
