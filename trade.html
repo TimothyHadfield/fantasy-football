@@ -1006,6 +1006,11 @@
   /* The side's change in total Value, on that small line: the same green and
      red as the big figure over it, and its sign always printed. */
   .cu-gain .cu-val { font-weight: 600; white-space: nowrap; }
+  .cu-top { margin: 0 0 6px; min-height: 22px; text-align: center; font-size: 13px; color: var(--cu-sub); font-variant-numeric: tabular-nums; }
+  .cu-top b { font-size: 16px; font-weight: 700; margin-left: 4px; color: var(--text); }
+  .cu-top b.up { color: var(--accent); }
+  .cu-top b.down { color: var(--err); }
+  .cu-top .sep { margin: 0 12px; }
   .cu-gain .cu-val.up { color: var(--accent); }
   .cu-gain .cu-val.down { color: var(--err); }
 
@@ -1866,6 +1871,12 @@
          the right-hand one scrolling the whole document sideways (see HANDOFF,
          "The phone layout": a grid or flex child's default min-width is its
          content). -->
+    <!-- VALUE AND APPEAL, ONCE, FOR YOU (Tim, 2026-10-12: "instead of putting
+         appeal and value on both sides in small, just put them once right above
+         the two user's names and only for me, because we know that +value and
+         +appeal for me is -value and -appeal for the other user"). Its height
+         is reserved, so the first tick moves nothing. -->
+    <p class="cu-top" id="cuTop" aria-live="polite"></p>
     <div class="cu-build">
       <!-- THE TWO ROSTERS, MIRRORED AND CONDENSED. The right list reads
            value · pos · name · slot so the two value columns face each other

@@ -8941,6 +8941,7 @@ function renderCustomPreview(priced) {
   const blank = () => {
     $('cuGainA').innerHTML = CU_BLANK;
     $('cuGainB').innerHTML = CU_BLANK;
+    $('cuTop').innerHTML = '';
     $('cuMovesA').innerHTML = '';
     $('cuMovesB').innerHTML = '';
     $('cuSave').disabled = true;
@@ -8967,10 +8968,15 @@ function renderCustomPreview(priced) {
   const val = customValueChange(sendA.map(String), sendB.map(String));
   const appeal = appealOfOffer(cuOffer);
   $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer),
-    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n), val ? val.a : null, appeal);
+    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n));
   $('cuGainB').innerHTML = customGainHtml(priced.forB.delta,
-    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n), val ? val.b : null,
-    appeal === null ? null : (appeal === 0 ? 0 : -appeal));
+    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n));
+  // Once, above both names, and yours only: his are the same figures with the
+  // sign turned (Tim, 2026-10-12).
+  const top = (label, v) => (v === null || v === undefined ? '' :
+    `${label}<b class="${v > 0 ? 'up' : v < 0 ? 'down' : 'flat'}">${signedText(v)}</b>`);
+  $('cuTop').innerHTML = [top('Value', val ? val.a : null), top('Appeal', appeal)]
+    .filter(Boolean).join('<span class="sep">·</span>');
   // The sentence above them is now about the DEAL rather than about the
   // numbers: who moves which way, which the two columns cannot say between
   // them. The figures are under their own squads and do not need naming twice.
