@@ -184,7 +184,7 @@
       "assertions": 1625
     },
     "test-trade-moves.mjs": {
-      "assertions": 40
+      "assertions": 49
     },
     "test-trade-net.mjs": {
       "assertions": 45

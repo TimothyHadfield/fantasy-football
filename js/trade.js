@@ -844,6 +844,28 @@ function dropRedundant(offers) {
   });
 }
 
+/**
+ * ONE ROW PER TRADE, NOT ONE PER VERSION OF IT (Tim, 2026-10-12: "stop makeing
+ * suggested trades that are just virtually identical different versions of the
+ * same trade. Just do the best version and that's it.").
+ *
+ * On his league the forty rows held "your QB for his QB" seven times over, each
+ * with a different second man attached. Two offers are the same trade when they
+ * are with the same manager and share a man going EACH way — the swap at the
+ * heart of both. `sorted` is in the finder's order, so the first one met is the
+ * best version and the later ones are dropped.
+ */
+function dropVariants(sorted) {
+  const kept = [];
+  const shares = (a, b) => a.some((p) => b.some((q) => q.playerId === p.playerId));
+  for (const o of sorted) {
+    const twin = kept.some((k) => k.partner.id === o.partner.id &&
+      shares(k.send, o.send) && shares(k.receive, o.receive));
+    if (!twin) kept.push(o);
+  }
+  return kept;
+}
+
 /** The finder's order: kept-by figure, then his gain, then fewer men, then partner. */
 function compareOffers(a, b) {
   return rankGain(b) - rankGain(a) ||
@@ -946,6 +968,9 @@ function pickCompletions(sorted, gates) {
  *   `theirMinPerWeek` gate and the ceiling that prunes it — is priced over the
  *   weeks he will actually play; `theirPoints` keeps the flat figure and
  *   `theirWeeks` the expected number of weeks. Weekly measure only.
+ * @param {boolean} [opts.distinct] one row per trade: of the offers with one
+ *   manager that share a man going each way, only the best is returned
+ *   (`dropVariants`). Off by default, so every other caller is untouched.
  * @param {function} [opts.rankBy] `(offer) -> number`: what an offer is KEPT
  *   and ordered by, when given. The goal-ranked page passes the weighted gain
  *   × the chance he says yes. WITHOUT IT, on 2026-09-21, the weighted finder
@@ -1048,6 +1073,7 @@ function* findTradesSteps({
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
   meetWeeks = null, exhaustive = false,
   partnerId = null, mustSend = null, mustReceive = null, complete = false,
+  distinct = false,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -1101,7 +1127,8 @@ function* findTradesSteps({
     for (const o of offers) delete o.finish;
     return { offers: picked, mine, considered, basis: 'weeks' };
   }
-  const ranked = dropRedundant(bestPerTarget(offers)).sort(compareOffers).slice(0, limit);
+  const sorted = dropRedundant(bestPerTarget(offers)).sort(compareOffers);
+  const ranked = (distinct ? dropVariants(sorted) : sorted).slice(0, limit);
   // The two churn lists are filled only for the offers handed back.
   for (const o of ranked) { finishOffer(o); yield; }
   for (const o of offers) delete o.finish;

@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 import { REPO } from './repo.mjs';
 
 const imp = (rel) => import(pathToFileURL(path.join(REPO, rel)).href);
-const { priceTradeAcrossWeeks, setCutValue } = await imp('js/trade.js');
+const { priceTradeAcrossWeeks, setCutValue, findTrades } = await imp('js/trade.js');
 const { positionFloors } = await imp('js/floor.js');
 const { SLOT_ELIGIBILITY } = await imp('js/espn.js');
 const { positionsToAdd, movesFor } = await imp('js/trade-moves.js');
@@ -174,5 +174,49 @@ for (const done of [true, false, null]) {
   eq(dropOf(got), old, 'and taking the Values away puts the old rule back');
 }
 
-console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
+// ------------------------------------------- one row per trade, not per version
+//
+// Tim, 2026-10-12: "stop makeing suggested trades that are just virtually
+// identical different versions of the same trade. Just do the best version and
+// that's it." And: "a switch … that makes it so that all suggested trades are
+// beneficial for both teams" — which is the finder with no tolerance for the
+// other manager's loss.
+{
+  // Two squads weak in opposite places, so there is a real swap to be had and
+  // a bench of spare men to hang on it.
+  const lift = (players, by) => players.map((p) => ({ ...p, perGame: Math.max(1, p.perGame + (by[p.position] || 0)) }));
+  const teams = [
+    { id: 1, name: 'A', players: lift(squad(1, { done: null }), { QB: -8, WR: 5 }) },
+    { id: 2, name: 'B', players: lift(squad(2, { done: null }), { QB: 3, WR: -6 }) },
+  ];
+  const find = (extra) => findTrades({
+    teams, myTeamId: 1, slots: SLOTS, weeks: WEEKS, projFor, zeroIsBye: true, floors: FLOORS, limit: 400, ...extra,
+  }).offers;
+  const shares = (a, b) => a.some((p) => b.some((q) => q.playerId === p.playerId));
+  const twins = (list) => list.filter((o, i) => list.some((k, j) => j < i &&
+    k.partner.id === o.partner.id && shares(k.send, o.send) && shares(k.receive, o.receive))).length;
+  const key = (o) => `${o.send.map((p) => p.playerId).sort()}>${o.receive.map((p) => p.playerId).sort()}`;
+
+  const plain = find({});
+  const one = find({ distinct: true });
+  ok(plain.length > 3 && twins(plain) > 0, 'the fixture has versions of one trade in it', `${plain.length} offers, ${twins(plain)} twins`);
+  eq(twins(one), 0, 'asked for one row per trade, no two rows share a man going each way');
+  ok(one.length < plain.length, 'so the list is shorter', `${one.length} of ${plain.length}`);
+  // Every row left out is a version of a row that was KEPT, and ranked below it.
+  ok(plain.every((o, i) => one.some((k) => key(k) === key(o)) || one.some((k) =>
+    plain.findIndex((x) => key(x) === key(k)) < i && k.partner.id === o.partner.id &&
+    shares(k.send, o.send) && shares(k.receive, o.receive))),
+  'each row left out is a version of a better row that stayed');
+  eq(key(one[0]), key(plain[0]), 'the best version is the one kept');
+  ok(one.every((o) => plain.some((k) => key(k) === key(o))), 'nothing is added, only left out');
+  ok(one.every((o, i) => i === 0 || plain.findIndex((k) => key(k) === key(one[i - 1])) < plain.findIndex((k) => key(k) === key(o))),
+    'and the order is the finder’s own');
+
+  // The switch: a tolerance lets in deals that cost him; without it he gains.
+  const loose = find({ theirMinPerWeek: -2 });
+  ok(loose.some((o) => o.theirGain < 0), 'with a tolerance, some offers cost the other manager', loose.length);
+  ok(plain.length > 0 && plain.every((o) => o.theirGain > 0 && o.myGain > 0), 'without one, every offer raises both lineups');
+}
+
+console.log(fail ?`\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

@@ -1566,6 +1566,14 @@
       <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
     </div>
     <h2 id="finderTitle">Trades ranked by net increase</h2>
+    <!-- Tim, 2026-10-12: "make a switch at the top of the suggested trades box
+         that makes it so that all suggested trades are beneficial for both
+         teams". Off is the list as it was. Wording is Tim's to change. -->
+    <label class="switch" for="bothWin">
+      <input type="checkbox" role="switch" id="bothWin">
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-text">Both teams gain</span>
+    </label>
     <p class="lede">Rows sharing a rank (=) are too close to separate. Tap a row for its weeks.</p>
     <p class="panel-note" id="assumeNote" hidden></p>
     <div class="row mb-12">

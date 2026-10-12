@@ -269,6 +269,7 @@ const state = {
   // preference still wins; see the boot block at the foot of this file.
   measure: 'weeks',    // what the reader ASKED for; see basis() for what is drawn
   kind: 'all',         // which package shapes the finder searches
+  bothWin: false,      // the finder keeps only deals that raise BOTH lineups (the switch)
   partner: 'all',      // limit the results to one manager
   search: null,        // the last finder result
   searching: false,
@@ -4143,7 +4144,7 @@ function emptyMessage() {
   // quoted the old rule was explaining a test the page no longer applies.
   // Wording is Tim's; this is the plainest thing that is true of both goals.
   return (
-    `<strong>No trade here helps your goal.</strong> ` +
+    `<strong>${state.bothWin ? 'No trade here helps both teams.' : 'No trade here helps your goal.'}</strong> ` +
     (narrowed
       ? 'Try <em>Any shape</em> and every manager before reading much into that. '
       : 'That is a real answer rather than a gap: it needs two managers who are weak ' +
@@ -4426,7 +4427,10 @@ function renderFinderNote(scales = finderScales) {
   $('tradeNote').innerHTML =
     `<strong>How offers are found.</strong> Every offer here was found by ` +
     `<strong>re-filling both starting lineups</strong> — before the trade and after it — and ` +
-    (weighted
+    (weighted && state.bothWin
+      ? `keeping the ones that <strong>raise your goal-weighted total</strong> (below) and ` +
+        `<strong>raise his lineup too</strong> — the switch above the table. `
+      : weighted
       ? `keeping the ones that <strong>raise your goal-weighted total</strong> (below) while his ` +
         `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs him ` +
         `a little is kept and marked down by how likely he is to say yes, not hidden. `
@@ -4679,7 +4683,12 @@ function runSearch({ keepDeal = false } = {}) {
       // wire read lands, which prices exactly as this page always did.
       floors: state.floors,
       weights: W ? W.weights : null,
-      theirMinPerWeek: W ? THEIR_MIN_PER_WEEK : null,
+      // THE SWITCH (Tim, 2026-10-12: "a switch … that makes it so that all
+      // suggested trades are beneficial for both teams"): no tolerance for his
+      // loss, which is the finder's own default — his lineup must gain.
+      theirMinPerWeek: W && !state.bothWin ? THEIR_MIN_PER_WEEK : null,
+      // One row per trade, never its near-copies (`dropVariants`).
+      distinct: true,
       // KEPT BY EXPECTED VALUE, not by your gain alone: weighted gain × the
       // chance he says yes — the same product the final ranking uses. Without
       // it every finalist was a fleece at the edge of the tolerance.
@@ -7480,7 +7489,7 @@ function runCombo() {
       weights: state.goalWeights ? state.goalWeights.weights : null,
       // And the same tolerance for a partner's loss that let those offers into
       // the finder — the headline's yes-chance is what marks them down.
-      partnerMin: state.search && state.search.weighted ? THEIR_MIN_PER_WEEK * weeklySpan().length : 0,
+      partnerMin: state.search && state.search.weighted && !state.bothWin ? THEIR_MIN_PER_WEEK * weeklySpan().length : 0,
       // Netted the same way as the finder: each manager's change in the weeks
       // you play HIM comes off your side (`netDelta`, and what is chosen by).
       meetWeeks: meetWeeksOf(state.myTeamId),
@@ -10019,6 +10028,13 @@ function onGoalPress(e) {
 }
 for (const el of document.querySelectorAll('[data-goal-toggle]')) el.addEventListener('click', onGoalPress);
 
+// The switch: a SEARCH option like the shape, so it searches again.
+$('bothWin').addEventListener('change', (e) => {
+  state.bothWin = !!e.target.checked;
+  prefs.set('bothWin', state.bothWin);
+  runSearch();
+});
+
 $('kindToggle').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-kind]');
   if (!btn || btn.dataset.kind === state.kind) return;
@@ -11091,6 +11107,8 @@ wireTips($('cuSug'));
 
 if (prefs.get('valueView', 'proj') === 'value') state.valueView = 'value';
 
+state.bothWin = prefs.get('bothWin', false) === true;
+$('bothWin').checked = state.bothWin;
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {
   state.kind = rememberedKind;
