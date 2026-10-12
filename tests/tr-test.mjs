@@ -19,7 +19,7 @@ import path from 'node:path';
 import { REPO, moduleUrl } from './repo.mjs';
 import { machineSpeed, scaledBudget } from './settle.mjs';
 import { emit } from './emit.mjs';
-import { shownNames, printedName } from './last-name.mjs';
+import { shownNames, printedName, bareLast } from './last-name.mjs';
 
 // ------------------------------------------------------------------ harness
 
@@ -618,6 +618,19 @@ function readOfferRows(table) {
           index: [...tr.children].indexOf(td),
         };
       })(),
+      // APPEAL (2026-10-12): one whole cell straight after Value. '—' with no
+      // number in the demo league.
+      appeal: (() => {
+        const td = tr.querySelector('td.appeal');
+        if (!td) return null;
+        return {
+          text: text(td),
+          v: td.hasAttribute('data-v') && td.getAttribute('data-v') !== '' ? Number(td.getAttribute('data-v')) : null,
+          sign: (((td.getAttribute('class') || '').match(/\b(pos|neg)\b/) || ['', ''])[1]),
+          index: [...tr.children].indexOf(td),
+          split: /\bsplit\b/.test(td.getAttribute('class') || ''),
+        };
+      })(),
       myHeat: heat(gain),
       theirHeat: heat(their),
       // THE SIGN ON THE TWO GAIN CELLS (2026-09-23). `offerRow` wrote `pos` on
@@ -638,6 +651,9 @@ function readOfferRows(table) {
       // The keyboard route into the pop-up, and the key focus returns to.
       openKey: tr.getAttribute('data-key'),
       opener: !!tr.querySelector('button.wk-open'),
+      // Since 2026-10-12 the row has no button of its own: it is the control.
+      tab: tr.getAttribute('tabindex'),
+      loader: !!tr.querySelector('button.cu-load, button[data-cu-load]'),
       // "Ask AI" (Tim, 2026-09-30: "just remove the "deal" column … and then
       // add the ask ai button on the end"). Read off the row's LAST cell, so a
       // button anywhere else does not count.
@@ -1506,8 +1522,21 @@ const SCENARIOS = {
     fire($('cuSave'), 'click');
     out.rowsAfterDuplicate = $('cuRows').querySelectorAll('tr').length;
 
-    // A saved row opens the finder's own pop-up.
-    fire($('cuRows').querySelector('tr'), 'click');
+    // A saved row, clicked, goes back into the box (2026-10-12: it opened the
+    // pop-up before); the box's own button then opens the finder's pop-up.
+    {
+      const ticked = (id) => boxes(id).filter((b) => b.hasAttribute('checked') || b.checked).map((b) => String(b.value)).sort();
+      const savedTr = $('cuRows').querySelector('tr');
+      out.savedRowMen = {
+        send: [...savedTr.querySelectorAll('.hv.send a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))).sort(),
+        recv: [...savedTr.querySelectorAll('.hv.recv a.pref')].map((a) => String(idOfHref(a.getAttribute('href')))).sort(),
+      };
+      out.boxBeforeRowClick = { a: ticked('cuListA'), b: ticked('cuListB') };
+      fire(savedTr, 'click');
+      out.popOnRowClick = !$('dealModal').hidden;
+      out.boxAfterRowClick = { a: ticked('cuListA'), b: ticked('cuListB') };
+      fire($('cuOpen'), 'click');
+    }
     out.modalOpen = !$('dealModal').hidden;
     out.modalTitle = text($('dealTitle'));
     out.modalWeeks = $('dealBody').querySelectorAll('tbody tr').length;
@@ -3918,12 +3947,12 @@ SCENARIOS.twoGoals = async function twoGoals() {
   const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
   const meetAt = first.trades.findIndex((t) => t.opp && t.opp.v !== null);
   if (meetAt >= 0 && rows[meetAt]) {
-    rows[meetAt].dispatchEvent(new globalThis.Event('click', { bubbles: true }));
-    await settle(2500);
+    const route = await openRowDeal(document, rows[meetAt], 2500);
     const weeks = readWeekTable(document.getElementById('dealBody'));
     deal = { row: meetAt, weeks, goal: text(document.querySelector('#dealBody .deal-goal')) };
     document.getElementById('dealClose').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     await settle(300);
+    await emptyBox(document, route);
   }
 
   // SWITCH FROM A COPY, not from the top control: the combo panel's.
@@ -4123,11 +4152,22 @@ SCENARIOS.previews = async function previews() {
 
   // The pop-up: a mouse click on a figure still opens the deal (the card has
   // no link of its own, so the click falls through to the row).
+  // Since 2026-10-12 that click loads the row into the custom box and opens no
+  // pop-up; the box's "Week by week" button opens it.
   const gainTd = q('#tradeTable tbody tr[data-key] .hv.gain');
   fire(gainTd, 'click');
   await settle(800);
+  const figureClick = {
+    popOpen: !$('dealModal').hidden,
+    ticked: qa('#cuListA input[type="checkbox"], #cuListB input[type="checkbox"]')
+      .filter((b) => b.hasAttribute('checked') || b.checked).length,
+    rowMen: gainTd ? gainTd.closest('tr').querySelectorAll('.hv.pkg a.pref').length : -1,
+  };
+  fire($('cuOpen'), 'click');
+  await settle(800);
   const dTr = liveWeek('#dealBody');
   const deal = {
+    figureClick,
     open: !$('dealModal').hidden,
     title: text($('dealTitle')),
     deltaWeek: dTr ? dTr.getAttribute('data-wk') : null,
@@ -4145,6 +4185,9 @@ SCENARIOS.previews = async function previews() {
     try { fire(m, 'click'); } catch (e) { nav.push(String(e)); }
     return { before, openAfter: !$('dealModal').hidden, href: String((globalThis.location || old).href || '') };
   })();
+  // The row went into the builder on the way to the pop-up: empty it again.
+  fire($('cuClear'), 'click');
+  await settle(300);
 
   // Nothing a reader can see says SD; nothing that opens a card has a title.
   const titled = qa('[title]').filter((el) => el.tagName !== 'TH')
@@ -4542,14 +4585,35 @@ if (!fresh.boot) {
   // expectation (halves swapped, labels swapped, full names) and seen to fail.
   {
     const rows = fresh.trades;
-    const WANT_CELLS = 'name | split chance | split left deal | split gains | split value | opp-proj | left espn';
-    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, Value, His proj vs you, ESPN — in that order',
+    const WANT_CELLS = 'name | split chance | split left deal | split gains | split value | appeal | opp-proj | left espn';
+    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, Value, Appeal, His proj vs you, ESPN — in that order',
       rows.length > 0 && rows.every((t) => t.cells.join(' | ') === WANT_CELLS),
       [...new Set(rows.map((t) => t.cells.join(' | ')))].join(' ¦ '));
-    ok('ROW: and the head names those seven columns, one heading per cell',
+    ok('ROW: and the head names those eight columns, one heading per cell',
       fresh.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') ===
-        'Manager | Chance | Send | Gain | Value | His proj vs you | ESPN',
+        'Manager | Chance | Send | Gain | Value | Appeal | His proj vs you | ESPN',
       fresh.heads.join(' | '));
+    // APPEAL (Tim, 2026-10-12), on the sample league: the cell is there, one
+    // whole cell (not two halves) straight after Value, and — the demo has no
+    // season averages to set a projection against — a dash with no number and
+    // no colour. Its arithmetic is held in test-outlook-mark.mjs.
+    ok('ROW: Appeal is one whole cell after Value; on the sample league a dash, with no number to sort by and no colour',
+      rows.length > 0 && rows.every((t) => t.appeal && !t.appeal.split && t.appeal.index === 5 &&
+        t.appeal.text === '—' && t.appeal.v === null && t.appeal.sign === ''),
+      JSON.stringify(rows.slice(0, 3).map((t) => t.appeal)));
+    // THE +1 A WEEK FLOOR (Tim, 2026-10-12: "don't suggest any trades that
+    // have less than +1 pt/week for the user suggesting the trade"). Read off
+    // the "You" half AS PRINTED, in tenths. On the page before 07a9fa0 the
+    // sample league's list carried rows under +1.0 (and negative ones), so the
+    // first check fails there; the sentence was not in the note at all.
+    const under = rows.filter((t) => !(headTenths(t.gainText) >= 10));
+    ok('FLOOR: no finder row is worth less than +1.0 a week to you, as printed',
+      rows.length > 3 && under.length === 0,
+      under.slice(0, 6).map((t) => `${t.partner} ${String(t.gainText).split('/wk')[0]}`).join(' | '));
+    ok('FLOOR: and the list still holds no more than forty rows', rows.length <= 40, String(rows.length));
+    ok('FLOOR: the method note says so, in those words',
+      fresh.tradeNote.includes('A trade worth less than +1.0 a week to you is left out.'),
+      fresh.tradeNote.slice(0, 600));
     {
       const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');
       const gone = ['thAltGoal', 'thLineup', 'thTheirGain', 'cuThGoal', 'cuThAltGoal', 'cuSugThGoal', 'cuSugThAltGoal'];
@@ -5441,7 +5505,8 @@ if (!wk.boot) {
     JSON.stringify(wk.card));
   if (wk.card) {
     ok('the card names the man it was opened on',
-      wk.card.ident.length > 0 && wk.card.hovered.includes(wk.card.ident.split(' · ')[0]),
+      // The row prints his last name only (2026-10-12); the card his whole name.
+      wk.card.ident.length > 0 && wk.card.hovered.startsWith(bareLast(wk.card.ident.split(' · ')[0])),
       `${wk.card.ident} vs ${wk.card.hovered}`);
     // THE WHOLE SEASON, WEEK 1 ONWARDS (Tim, 2026-09-19: "it doesn't actually
     // display any previous weeks in the chart, so that whole row is useless ...
@@ -5544,9 +5609,18 @@ if (!wk.boot) {
   // could say: which of these men are HIS, promoted or benched by the deal
   // without ever being part of it.
   const churn = (wk.deal && wk.deal.churnEntries) || [];
-  ok('the pop-up still carries the before-and-after the rows gave up',
-    /starts/.test((wk.deal && wk.deal.churn) || '') && churn.length > 0,
-    ((wk.deal && wk.deal.churn) || '').slice(0, 200));
+  // REPLACED, 2026-10-12. Was "the pop-up still carries the before-and-after
+  // the rows gave up" (a "starts: … / drops out: …" block). A finder row's
+  // pop-up is now the CUSTOM box's (Tim: "we already have the week-by-week
+  // details in the custom trades"), and a deal built in the box carries no
+  // such block — the same breakdown a hand-built deal always had. So the claim
+  // is what the reader gets instead: the route, and the week table. (Reported
+  // to the manager: the "starts / drops out" block is no longer reachable from
+  // a finder row. The two checks below now have nothing to bite on.)
+  ok('the row’s pop-up is the custom box’s: reached by its Week by week button, with the week table and no "starts / drops out" block',
+    !!wk.dealRoute && wk.dealRoute.popOnClick === false && wk.dealRoute.viaBox && wk.dealRoute.open &&
+      !!wk.deal.weeks && JSON.stringify(wk.deal.weeks).length > 200 && (wk.deal.churn || '') === '' && churn.length === 0,
+    `${JSON.stringify(wk.dealRoute)} · ${(wk.deal.churn || '').slice(0, 120)}`);
   // The two packages, read off the pop-up's own head rather than assumed.
   const dealt = (wk.deal.men || []).map((m) => m.text);
   const inDeal = (name) => dealt.some((t) => t.startsWith(name));
@@ -5559,8 +5633,12 @@ if (!wk.boot) {
   // Checked on the first offer that moves one of his own men (see `weekly`):
   // the top row need not be one since the goal chooses the candidates.
   const ownChurn = (wk.ownDeal && wk.ownDeal.churnEntries) || [];
-  ok('some offer names at least one man of his own that the deal moves',
-    ownChurn.some((e) => e.own), `opened ${wk.ownOpened} offers; top: ${JSON.stringify(churn)}`);
+  // REPLACED, 2026-10-12. Was "some offer names at least one man of his own
+  // that the deal moves", read off the finder pop-up's block. No row reaches
+  // that block now, so the claim is that every row was tried and none did.
+  ok('every finder row was opened through the custom box and none carries a "yours" tag any more',
+    wk.ownOpened === wk.after.trades.length && wk.ownOpened > 3 && !wk.ownDeal && !ownChurn.some((e) => e.own),
+    `opened ${wk.ownOpened} of ${wk.after.trades.length} offers; top: ${JSON.stringify(churn)}`);
   if (wk.ownDeal) {
     const ownDealt = (wk.ownDeal.men || []).map((m) => m.text);
     ok('and on that deal too, every man tagged "yours" is NOT in the trade',
@@ -5771,7 +5849,7 @@ if (!wk.boot) {
     wk.after.trades.every((r) => r.gains && r.gains.halves.map((h) => h.label).join(',') === 'You,Him'),
     JSON.stringify(wk.after.trades.slice(0, 2).map((r) => r.gains && r.gains.halves.map((h) => h.label))));
   ok('the combo’s headings carry no Chance and no "Your lineup" column: Manager, Send, Gain, Value, His proj vs you, ESPN',
-    combo.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') === 'Manager | Send | Gain | Value | His proj vs you | ESPN',
+    combo.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') === 'Manager | Send | Gain | Value | Appeal | His proj vs you | ESPN',
     combo.heads.join(' | '));
   ok('the whole packing’s lineup before-and-after is on the headline, once',
     /Your lineup, a week/i.test(combo.lineup) && /→/.test(combo.lineup) &&
@@ -5794,9 +5872,13 @@ if (!wk.boot) {
   ok('and carries no churn block either, exactly as the finder does not',
     combo.rows.every((r) => r.churn === ''),
     combo.rows.map((r) => r.churn.slice(0, 40)).join(' | '));
-  ok('and offers the same week-by-week pop-up',
-    combo.rows.every((r) => r.opener && /^c:\d+$/.test(r.openKey || '')),
-    JSON.stringify(combo.rows.map((r) => r.openKey)));
+  // REPLACED, 2026-10-12: was "and offers the same week-by-week pop-up", off a
+  // `button.wk-open` in each row. Tim had the row buttons removed; the row is
+  // the control (keyed, in the tab order), exactly as a finder row is. The
+  // combination's own "All N trades week by week" button is held in `modal`.
+  ok('and its rows are keyed and in the tab order like the finder’s, with no Week by week or Open in custom button of their own',
+    combo.rows.length > 0 && combo.rows.every((r) => !r.opener && !r.loader && r.tab === '0' && /^c:\d+$/.test(r.openKey || '')),
+    JSON.stringify(combo.rows.map((r) => [r.openKey, r.tab, r.opener, r.loader])));
   ok('and every man in it links to his row on the Players page',
     combo.names.length >= combo.rows.length * 2 &&
     combo.names.every((h) => /^waivers\.html\?player=\d+$/.test(h)),
@@ -6183,7 +6265,9 @@ if (!live.boot) {
   // `scalar` is what a reader sees having deliberately picked a typical week,
   // and `after` is the page left alone. Which end the comparison starts from
   // does not matter — that the two disagree is the whole claim.
-  const gotQB = (list) => list.filter((t) => /Bo QB/.test(names(t.receive)));
+  // By his FULL name, off the link's label: the row prints "QB1" (last name
+  // only, 2026-10-12), which is also what Ana's own quarterback is called.
+  const gotQB = (list) => list.filter((t) => t.fullNames.some((m) => m.side === 'recv' && /^Bo QB/.test(m.full)));
   ok('on a typical week the page offers the steady quarterback',
     gotQB(live.scalar.trades).length > 0,
     live.scalar.trades.map((t) => names(t.receive)).join(' | '));
@@ -7500,7 +7584,7 @@ if (!live.boot) {
       'hovering, tapping, focusing and flipping sides cost NO extra ESPN requests');
 
     // ---- and a plain mouse click still opens an offer ----------------------
-    ok('a mouse click on another offer still opens that offer',
+    ok('a mouse click on another offer, then the box’s Week by week button, opens THAT offer',
       !!peek.afterOtherClick.partner && peek.afterOtherClick.title.includes(peek.afterOtherClick.partner),
       `${peek.afterOtherClick.title} for ${peek.afterOtherClick.partner}`);
     // Re-aimed with V17: not "no week", but ITS OWN opening week — never the
@@ -8062,13 +8146,15 @@ if (!live.boot) {
       r.hasMyGain && /\/wk/.test(r.gainText) && /total/.test(r.gainText) &&
         Number.isFinite(r.myGain) && Number.isFinite(r.theirGain),
       `${r.gainText} · ${r.myGain}/${r.theirGain}`);
-    ok('it has the same Week by week button the finder’s rows carry',
-      r.opener && r.openKey === 'cu:0', `${r.opener} ${r.openKey}`);
+    // REPLACED, 2026-10-12: was "it has the same Week by week button the
+    // finder's rows carry". No row has one now; the row is the control.
+    ok('it is keyed and in the tab order like a finder row, with no Week by week or Open in custom button',
+      !r.opener && !r.loader && r.tab === '0' && r.openKey === 'cu:0', `${r.opener} ${r.loader} ${r.tab} ${r.openKey}`);
     ok('an ESPN cell, honest about demo like every other row',
       /No ESPN league in demo/.test(r.espn), r.espn);
     eq(cu.savedRemove, 1, 'and Remove as one extra cell on the end');
     ok('the head names every column the row draws',
-      cu.savedHeads.slice(0, 7).join(' | ') === 'With | Chance | Send | Gain | Value | His proj vs you | ESPN',
+      cu.savedHeads.slice(0, 8).join(' | ') === 'With | Chance | Send | Gain | Value | Appeal | His proj vs you | ESPN',
       cu.savedHeads.join(' | '));
   }
 
@@ -8090,7 +8176,16 @@ if (!live.boot) {
   eq(cu.rowsAfterDuplicate, 1, 'saving the same deal twice keeps one row');
 
   // The pop-up is the finder's own, which is the point of reusing its shape.
-  eq(cu.modalOpen, true, 'a saved row opens the finder’s own pop-up');
+  // 2026-10-12: a saved row, clicked, goes back into the box; the pop-up is the
+  // box's "Week by week" button away. (Was: the row click opened it.)
+  ok('the box was empty before the saved row was clicked (or the next check proves nothing)',
+    cu.boxBeforeRowClick.a.length === 0 && cu.boxBeforeRowClick.b.length === 0, JSON.stringify(cu.boxBeforeRowClick));
+  ok('a click on a saved row opens no pop-up: it ticks that deal’s men in the custom box',
+    cu.popOnRowClick === false && cu.savedRowMen.send.length > 0 && cu.savedRowMen.recv.length > 0 &&
+      JSON.stringify(cu.boxAfterRowClick.a) === JSON.stringify(cu.savedRowMen.send) &&
+      JSON.stringify(cu.boxAfterRowClick.b) === JSON.stringify(cu.savedRowMen.recv),
+    JSON.stringify([cu.popOnRowClick, cu.savedRowMen, cu.boxAfterRowClick]));
+  eq(cu.modalOpen, true, 'and the box’s Week by week button opens the finder’s own pop-up on it');
   ok('and it is titled as a CUSTOM trade, not as one of the finder’s shapes',
     /^Custom trade/.test(cu.modalTitle) && !/undefined/.test(cu.modalTitle), cu.modalTitle);
   ok('naming the squad on the other side', cu.modalTitle.includes('with'), cu.modalTitle);
@@ -8175,8 +8270,14 @@ if (!gt.boot) {
     const W = gt.oneWeek;
     ok('a list the goal cannot play out is in net-increase order as well',
       W.ranked === 'points' && W.trades.length > 5 && netOrdered(W.trades), `${W.ranked} · ${netLine(W.trades)}`);
-    ok('which there too is not the order of your own gain',
-      W.trades.some((t, i, a) => i > 0 && headTenths(a[i - 1].gainText) < headTenths(t.gainText)), netLine(W.trades));
+    // REPLACED, 2026-10-12. Was "which there too is not the order of your own
+    // gain". With every row under +1.0 a week to you left out, the few rows
+    // this one-week list keeps on the sample league run the same way by either
+    // order, so that claim has nothing to stand on here (it is still held on
+    // the full list above, against the goal's order). What is new on this list
+    // is the floor itself.
+    ok('and on that list too no row is worth less than +1.0 a week to you',
+      W.trades.every((t) => headTenths(t.gainText) >= 10), netLine(W.trades));
     ok('and its line says the order, and why there is no chance to show',
       /ranked by net increase \(You gain \+ He gains\)\. No title chance yet: /.test(W.count) ||
         /ranked by net increase \(You gain \+ He gains\)\. No chance of finishing last yet: /.test(W.count),
@@ -8695,11 +8796,13 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('SUGGESTED: every row ADDS a man to the ticked deal',
       sg.one.rows.every((r) => r.send.length + r.receive.length > 1), sum(sg.one));
     ok('SUGGESTED: rows carry the saved table\'s columns', JSON.stringify(sg.one.heads) === JSON.stringify(
-      ['With', 'Chance', 'Send', 'Gain', 'Value', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
+      ['With', 'Chance', 'Send', 'Gain', 'Value', 'Appeal', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
     ok('SUGGESTED: every row is with the custom partner', sg.one.rows.every((r) => r.partner === sg.partnerName),
       sg.one.rows.map((r) => r.partner).join(','));
-    ok('SUGGESTED: every row has Open in custom trades, Ask AI and the week-by-week button',
-      sg.one.buttons.length === sg.one.rows.length && sg.one.buttons.every((b) => b.load && b.ask && b.open),
+    // REPLACED, 2026-10-12: was "every row has Open in custom trades, Ask AI
+    // and the week-by-week button". The first and last were removed.
+    ok('SUGGESTED: every row keeps Ask AI and has neither an Open in custom trades nor a week-by-week button',
+      sg.one.buttons.length === sg.one.rows.length && sg.one.buttons.every((b) => !b.load && b.ask && !b.open),
       JSON.stringify(sg.one.buttons));
     ok('SUGGESTED: rows are goal-scored', sg.one.rows.every((r) => r.goal && /%/.test(r.goal)),
       sg.one.rows.map((r) => r.goal).join(','));
@@ -8716,11 +8819,15 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('SUGGESTED: the list says how long it took', Number.isFinite(sg.one.ms) && sg.one.ms > 0, String(sg.one.ms));
     ok('SUGGESTED: one of mine ticked too - every row has BOTH',
       rowsOk(sg.two, (r) => has(r.receive, sg.hisId) && has(r.send, sg.mineId)), sum(sg.two));
-    ok('SUGGESTED: a row click opens the week-by-week pop-up', !!sg.pop && sg.pop.open, JSON.stringify(sg.pop));
+    // 2026-10-12: was "a row click opens the week-by-week pop-up".
+    ok('SUGGESTED: a row click opens NO pop-up; the box’s Week by week button then opens it on that row’s men',
+      !!sg.pop && sg.pop.onRowClick === false && sg.pop.boxButton && sg.pop.open && !!sg.load &&
+        JSON.stringify(sg.pop.sides.flat().sort()) === JSON.stringify([...sg.load.row.send, ...sg.load.row.receive].sort()),
+      JSON.stringify([sg.pop, sg.load && sg.load.row]));
     ok('SUGGESTED: a fast second tick never shows the first tick\'s rows',
       sg.between.rows.length === 0 && rowsOk(sg.dbl, (r) => has(r.receive, sg.hisId) && has(r.receive, sg.his2Id)),
       `${sg.between.rows.length} stale; ${sum(sg.dbl)}`);
-    ok('SUGGESTED: Open in custom trades ticks the row\'s men, and the builder agrees with the row', !!sg.load
+    ok('SUGGESTED: a click on a row ticks the row\'s men, and the builder agrees with the row', !!sg.load
       && JSON.stringify(sg.load.a) === JSON.stringify([...sg.load.row.send].sort())
       && JSON.stringify(sg.load.b) === JSON.stringify([...sg.load.row.receive].sort())
       && sg.load.gainA.startsWith(sg.load.row.gainText.split('/wk')[0] + '/wk'), JSON.stringify(sg.load));
@@ -9324,7 +9431,12 @@ if (!gl.boot) {
       `${C.weekHead.card} / ${C.weekHeadLink}`);
 
     // -- the pop-up ------------------------------------------------------------
-    ok('a mouse click on a figure still opens the deal', pv.deal.open && pv.deal.title.length > 0, JSON.stringify(pv.deal).slice(0, 200));
+    // 2026-10-12: was "a mouse click on a figure still opens the deal". The
+    // click still falls through to the row; the row now goes to the custom box.
+    ok('a mouse click on a figure falls through to the row: no pop-up, that row’s men ticked in the custom box',
+      pv.deal.figureClick.popOpen === false && pv.deal.figureClick.rowMen >= 2 &&
+        pv.deal.figureClick.ticked === pv.deal.figureClick.rowMen, JSON.stringify(pv.deal.figureClick));
+    ok('and the box’s Week by week button opens the deal', pv.deal.open && pv.deal.title.length > 0, JSON.stringify(pv.deal).slice(0, 200));
     ok('the pop-up’s Difference opens that week’s slot lines, ending on the cell',
       pv.deal.delta.card.startsWith(`Week ${pv.deal.deltaWeek}`) &&
       pv.deal.delta.card.endsWith(`Difference ${head(pv.deal.delta)}`), `${pv.deal.delta.text} / ${pv.deal.delta.card}`);
@@ -9333,7 +9445,7 @@ if (!gl.boot) {
       `${pv.deal.slotNamesWithCard} of ${pv.deal.slotNames}`);
 
     // -- the rules -------------------------------------------------------------
-    const cards = [F.gain, F.their, F.lineup, F.goal, F.alt, F.opp, F.mgr, pv.depth.name, pv.depth.lineup,
+    const cards = [F.gain, F.their, F.goal, F.alt, F.opp, F.mgr, pv.depth.name, pv.depth.lineup,
       C.gainA, C.gainB, C.meet, C.delta, C.deltaB, C.band, C.weekHead, pv.deal.delta].map((c) => c.card).join(' ¦ ');
     ok('no card says SD, z-score or "step n of 4"', !/\bSD\b|z-score|standard deviation|step \d of \d/i.test(cards),
       (cards.match(/.{30}(\bSD\b|z-score|step \d of \d).{30}/i) || [''])[0]);
