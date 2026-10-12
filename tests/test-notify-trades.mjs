@@ -28,6 +28,7 @@ import path from 'node:path';
 import { REPO } from './repo.mjs';
 import { machineSpeed, scaledBudget } from './settle.mjs';
 import { emit } from './emit.mjs';
+import { shownNames, printedName } from './last-name.mjs';
 
 const KEY_HEAD = 'ff.notes.trades.';
 const LEAGUE = '476225250';   // the stub's league id (tests/tr-stub-season.mjs)
@@ -189,14 +190,25 @@ const shown = (el) => {
 /** The ranked table as it is on screen, top to bottom. */
 function readTable(document) {
   return [...document.querySelectorAll('#tradeTable tbody tr.offer')].map((tr) => {
-    const mine = tr.querySelector('td.gain');
-    const his = tr.querySelector('td.their-gain');
+    // THE SPLIT CELLS (2026-10-12): each figure is a box (`.hv`) in half of a
+    // cell now, wearing the classes its own cell used to. And a man is printed
+    // by his LAST NAME, so each one is read as the row prints him
+    // (`printedName`: his link's text in front of his tag and his number).
+    const mine = tr.querySelector('.hv.gain');
+    const his = tr.querySelector('.hv.their-gain');
+    const printed = (sel) => [...tr.querySelectorAll(`${sel} .man`)].map(printedName);
     return {
       withName: text(tr.querySelector('.mgr')),
-      send: text(tr.querySelector('td.pkg.send')),
-      sendMen: tr.querySelectorAll('td.pkg.send .man').length,
-      get: text(tr.querySelector('td.pkg.recv')),
-      getMen: tr.querySelectorAll('td.pkg.recv .man').length,
+      send: text(tr.querySelector('.hv.pkg.send')),
+      sendMen: tr.querySelectorAll('.hv.pkg.send .man').length,
+      sendNames: printed('.hv.pkg.send'),
+      get: text(tr.querySelector('.hv.pkg.recv')),
+      getMen: tr.querySelectorAll('.hv.pkg.recv .man').length,
+      getNames: printed('.hv.pkg.recv'),
+      // The removed "Your lineup, a week" column, and the row's cells in order.
+      lineupCells: tr.querySelectorAll('.before-after').length,
+      // (a cell's sign, `pos`/`neg`, is not part of which cell it is)
+      cells: [...tr.children].map((td) => (td.getAttribute('class') || '').replace(/\b(pos|neg)\b/g, '').replace(/\s+/g, ' ').trim()),
       gain: shown(mine),
       gainPos: cls(mine).includes('pos'),
       perWeek: /\/wk/.test(text(mine)),
@@ -421,9 +433,18 @@ if (!process.argv[2]) {
   /** What the note should hold, read off the table on screen. */
   const good = (r) => r.gain > 0 && Math.round((r.gain + r.theirGain) * 10) > 0;
   const fromTable = (rows) => rows.filter(good).slice(0, 3);
+  // THE NOTE KEEPS FULL NAMES; THE ROW PRINTS LAST NAMES (Tim, 2026-10-12:
+  // "name the players as their lastname only"). So a deal's men are put through
+  // the row's own rule (tests/last-name.mjs, the men of both sides together)
+  // and must be the row's men, name for name and in its order.
+  const asPrinted = (deal) => {
+    const all = shownNames(deal.send.concat(deal.get));
+    return { send: all.slice(0, deal.send.length), get: all.slice(deal.send.length) };
+  };
+  const same2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const matches = (deal, r) => deal && r && deal.withName === r.withName && deal.gain === r.gain && deal.theirGain === r.theirGain &&
     deal.send.length === r.sendMen && deal.get.length === r.getMen &&
-    deal.send.every((p) => r.send.includes(p.name)) && deal.get.every((p) => r.get.includes(p.name));
+    same2(asPrinted(deal).send, r.sendNames) && same2(asPrinted(deal).get, r.getNames);
 
   const live = run('live');
   ok('live: the page boots clean and the list finishes', !live.boot && live.errors.length === 0 && !!live.ranked && live.rows.length > 0,
@@ -454,6 +475,27 @@ if (!process.argv[2]) {
         JSON.stringify([note.deals.map((d) => [d.withTeamId, d.withName]), live.teams]));
       ok('live: the men carry numeric ids and names', note.deals.every((d) => d.get.concat(d.send).every((p) =>
         Number.isFinite(p.id) && typeof p.name === 'string' && p.name.length > 0)));
+
+      // THE ROW'S NEW SHAPE (2026-10-12) must not reach the note: the note is
+      // what the bell prints, away from the table, so it keeps whole names.
+      // On the page before that day the row printed the whole name too, and the
+      // second of these fails there ("Cy RB1" is in the row's text).
+      const kept = note.deals.flatMap((d) => d.get.concat(d.send));
+      const short = kept.filter((p) => !/D\/ST$/.test(p.name));
+      ok('live: the note keeps each man’s WHOLE name (first and last), not the row’s short one',
+        short.length > 0 && short.every((p) => p.name.trim().split(' ').length >= 2), JSON.stringify(short.map((p) => p.name)));
+      ok('live: while the row prints him by his last name only — his whole name is nowhere in it',
+        short.length > 0 && note.deals.every((d, i) => d.get.concat(d.send).filter((p) => !/D\/ST$/.test(p.name))
+          .every((p) => !`${want[i].send} ${want[i].get}`.includes(p.name))),
+        JSON.stringify(want.map((r) => [r.send, r.get])));
+      ok('live: a defence keeps its whole name in the row',
+        note.deals.every((d, i) => d.send.concat(d.get).filter((p) => /D\/ST$/.test(p.name))
+          .every((p) => want[i].sendNames.concat(want[i].getNames).includes(p.name))),
+        JSON.stringify(want.map((r) => [r.sendNames, r.getNames])));
+      eq('live: no row has a "Your lineup, a week" cell any more', live.rows.reduce((n, r) => n + r.lineupCells, 0), 0);
+      eq('live: every row is Manager, Chance, Send, Gain, Value, His proj, ESPN',
+        [...new Set(live.rows.map((r) => r.cells.join(' | ')))],
+        ['name | split chance | split left deal | split gains | split value | appeal | opp-proj | left espn']);
 
       // From another squad.
       ok('other squad: its list finished too', !!live.rankedOther && /Cy/.test(live.otherTitle), JSON.stringify([live.rankedOther, live.otherTitle]));

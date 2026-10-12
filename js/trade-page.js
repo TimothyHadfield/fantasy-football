@@ -10803,13 +10803,19 @@ const HEAD_TITLES = [
   [/^Δ (title|last) chance$/, (m, th) => (/AltGoal/.test(th.id || '') || th.hasAttribute('data-alt')
     ? `What the deal does to your ${m[1]} chance — the goal you are not on. It ranks nothing.`
     : `What the deal does to your ${m[1]} chance.`)],
+  // The split columns and the two single figures (2026-10-12).
+  [/^Chance$/, 'What the deal does to your chance of finishing first, and of finishing last.'],
+  [/^Send$/, 'The men you would give up, and the men he would.'],
+  [/^Gain/, 'Points a week the deal adds to your best lineup, and to his.'],
+  [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
+  [/^Appeal$/, 'Projection less season average, the men you get minus the men you send, plus his gain a week.'],
   [/^You send$/, 'The men you would give up.'],
   [/^You get$/, 'The men you would receive.'],
   [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],
   [/^You gain/, 'What the deal adds to your best lineup, less his change in a week you play him.'],
   [/^He gains/, 'What the deal adds to his best lineup.'],
   [/^His proj vs you$/, 'How far his lineup moves in the weeks he plays you.'],
-  [/^ESPN$/, 'Open the deal on ESPN, or week by week here.'],
+  [/^ESPN$/, 'Open the deal on ESPN.'],
   [/^Week$/, 'A week still to play. Open one to see it slot by slot.'],
   [/^As (you are|he is) now$/, 'The best lineup that week as the squads stand.'],
   [/^With the (trade|combination)$/, 'The best lineup that week with the deal made.'],

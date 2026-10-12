@@ -256,7 +256,33 @@ function readPage(document) {
     valA: valText($('cuGainA')),
     valB: valText($('cuGainB')),
     depth: text($('depthTable')),
-    finder: text($('tradeTable')),
+    // THE FINDER, LESS ITS VALUE COLUMN (2026-10-12). A trade row carries a
+    // "Value" split cell now (Tim: "Do Value change / (top) you, (bottom)
+    // them"): the custom box's own figure, which follows no switch and is a
+    // dash with no lines — so, like `valA`/`valB`, it is read on its own
+    // (`finderValue`) and the rest of the table is what "has not moved".
+    finder: [...$('tradeTable').querySelectorAll('tr')].map((tr) => [...tr.children]
+      .filter((td) => !/\bvalue\b/.test(td.getAttribute('class') || '')).map(text).join(' ')).join(' ¦ '),
+    finderValue: [...$('tradeTable').querySelectorAll('tbody tr')].map((tr) => {
+      const td = tr.querySelector('td.split.value');
+      const ids = (sel) => [...tr.querySelectorAll(`${sel} .man a.pref`)]
+        .map((a) => Number((String(a.getAttribute('href')).match(/player=(-?\d+)/) || [])[1]));
+      return {
+        cells: tr.querySelectorAll('td.split.value').length,
+        v: td && td.hasAttribute('data-v') ? Number(td.getAttribute('data-v')) : null,
+        halves: td ? [...td.querySelectorAll('.sp')].map((sp) => {
+          const hv = sp.querySelector('.hv.val-change');
+          return {
+            label: text(sp.querySelector('.hk')),
+            txt: text(hv),
+            v: hv && hv.hasAttribute('data-v') ? Number(hv.getAttribute('data-v')) : null,
+            sign: (hv ? cls(hv) : []).filter((c) => c === 'pos' || c === 'neg').join(' '),
+          };
+        }) : [],
+        send: ids('.hv.send'),
+        get: ids('.hv.recv'),
+      };
+    }),
     note: text($('cuNote')),
   };
 }
@@ -536,7 +562,10 @@ if (!process.argv[2]) {
     sw0(P.seasonSwitches).classes.includes('seg-sm'), JSON.stringify(P.seasonSwitches));
   ok('lines: none on the depth map, and none anywhere else', P.depthSwitch === 0 && P.everySwitch === 2,
     `depth ${P.depthSwitch}, all ${P.everySwitch}`);
-  const strip = (s) => ({ ...s, toolbar: 0, seasonSwitches: 0, seasonTop: 0, whoParent: 0, everySwitch: 0, note: 0, valA: 0, valB: 0 });
+  // `finderValue` joins `valA`/`valB` (2026-10-12): the row's Value column is a
+  // Value whichever view is on, so it is the one thing on a row that lines
+  // change. It is held to its own claims in section 10.
+  const strip = (s) => ({ ...s, toolbar: 0, seasonSwitches: 0, seasonTop: 0, whoParent: 0, everySwitch: 0, note: 0, valA: 0, valB: 0, finderValue: 0 });
   ok('lines, on Proj: every number on the page is what it is with no lines', same(strip(P), strip(none.first)),
     where(strip(P), strip(none.first)));
   ok('lines: the tucked note says what Value is',
@@ -704,6 +733,39 @@ if (!process.argv[2]) {
   ok('total Value, 2 for 1 with no lines: absent, and the figures are the same figures',
     !two0.boot && two0.proj.valA === null && two0.proj.valB === null && two0.proj.gainA === two.proj.gainA &&
     two0.proj.gainB === two.proj.gainB, two0.boot || JSON.stringify(two0.proj));
+
+  // ------------------------------------- 10. the Value column on a trade row
+  // Tim, 2026-10-12: "Another split colum I want to add to the trade is Value.
+  // Do Value change / (top) you, (bottom) them." The custom box's own figure
+  // (section 9) for the men of that row: what you get less what you give, at
+  // each man's Value; his is the same number the other way round. A dash with
+  // no lines. (Before that day a row had no such cell: `cells` was 0 and every
+  // one of these fails.)
+  {
+    const rowsP = P.finderValue || [];
+    const rows0 = none.first.finderValue || [];
+    ok('row Value, no lines: every row has the cell, two halves "You" over "Him", each a dash with no number behind it',
+      rows0.length > 3 && rows0.every((r) => r.cells === 1 && r.v === null && same(r.halves.map((h) => [h.label, h.txt, h.v, h.sign]),
+        [['You', '—', null, ''], ['Him', '—', null, '']])),
+      JSON.stringify(rows0.slice(0, 2)));
+    ok('row Value, lines: every row has the cell, "You" over "Him"',
+      rowsP.length > 3 && rowsP.every((r) => r.cells === 1 && same(r.halves.map((h) => h.label), ['You', 'Him'])),
+      JSON.stringify(rowsP.slice(0, 2).map((r) => r.halves)));
+    const sumOf = (ids) => ids.reduce((t, id) => t + ((players[id] && Number.isFinite(players[id].value)) ? players[id].value : 0), 0);
+    const off = rowsP.filter((r) => r.halves.length !== 2 || r.halves[0].v !== r1(sumOf(r.get) - sumOf(r.send)));
+    ok('row Value, lines: yours is the Value of the men you get less the men you give, by hand from the fixture',
+      rowsP.length > 3 && off.length === 0 && rowsP.some((r) => r.halves[0].v !== 0),
+      JSON.stringify(off.slice(0, 2).map((r) => [r.send, r.get, r.halves[0], r1(sumOf(r.get) - sumOf(r.send))])));
+    ok('row Value, lines: his is the same number the other way round, and the cell sorts by yours',
+      rowsP.length > 3 && rowsP.every((r) => r.halves.length === 2 && r.halves[1].v === (r.halves[0].v === 0 ? 0 : -r.halves[0].v) &&
+        r.v === r.halves[0].v),
+      JSON.stringify(rowsP.slice(0, 3).map((r) => [r.v, r.halves.map((h) => h.v)])));
+    ok('row Value, lines: each half prints its number to the tenth with its sign, and is coloured by that sign',
+      rowsP.every((r) => r.halves.every((h) => h.txt === (r1(h.v) === 0 ? h.txt : sgn(h.v)) && h.sign === (h.v > 0 ? 'pos' : h.v < 0 ? 'neg' : ''))),
+      JSON.stringify(rowsP.slice(0, 3).map((r) => r.halves.map((h) => [h.txt, h.v, h.sign]))));
+    ok('row Value: the same on Value as on Proj (it follows no switch)', same(P.finderValue, V.finderValue),
+      where({ f: P.finderValue }, { f: V.finderValue }));
+  }
 
   // --------------------------------------------------------------- 8. assumed
   const asm = run('assumed', { FF_VALUE });

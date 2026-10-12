@@ -162,13 +162,13 @@
       "scenarios": 20
     },
     "tr-test.mjs": {
-      "assertions": 1172
+      "assertions": 1216
     },
     "tr-value-check.mjs": {
-      "assertions": 73
+      "assertions": 79
     },
     "test-notify-trades.mjs": {
-      "assertions": 67
+      "assertions": 72
     },
     "test-proj-trend.mjs": {
       "assertions": 74
