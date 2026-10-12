@@ -55,6 +55,16 @@ const span = (r) => (r.page.heads.find((h) => /weeks/.test(h)) || '').replace(/^
 const outToo = (r) => /out too/.test(r.page.note);
 /** One card's cell for a week: `cell(card, 'Proj', 5)`. */
 const cell = (card, row, week) => (card ? card.rows[row][card.weeks.indexOf(String(week))] : undefined);
+/**
+ * The glance line's Proj (Tim, 2026-10-11: "the avg future proj", bye and out
+ * weeks left out): the mean of his card's Proj cells from `from` on that carry
+ * a number above zero. Never this week's score.
+ */
+const restOf = (card, from) => {
+  const vs = card.weeks.map((w, i) => (Number(w) >= from ? Number(card.rows.Proj[i]) : NaN))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  return vs.length ? fmt(vs.reduce((a, b) => a + b, 0) / vs.length) : '—';
+};
 const value = (list, name) => ((list.find((x) => x.name === name) || {}).v || '').replace(/[^\d.]/g, '');
 
 // ---- 1. one matchup final early, the week still in progress ----------------
@@ -99,8 +109,9 @@ const value = (list, name) => ((list.find((x) => x.name === name) || {}).v || ''
 
     // A finished man: his number IS his score, and the card sets it against
     // the projection as it was.
-    ok('a finished man’s glance line carries his score', (done.glance || '').includes(`Proj ${fmt(r.want.done.act)}`),
-      done.glance);
+    ok('a finished man’s glance line is his average over the weeks AHEAD, not his score',
+      (done.glance || '').includes(`Proj ${restOf(done, W + 1)}`) && restOf(done, W + 1) !== fmt(r.want.done.act),
+      `${done.glance} vs ${restOf(done, W + 1)}`);
     eq(cell(done, 'Proj', W), fmt(r.want.done.proj), 'his card’s Proj cell is the PRE-GAME projection');
     eq(cell(done, 'Act', W), fmt(r.want.done.act), 'and its Act cell his score');
     eq(value(r.weekMeasure.mine, 'Ana QB1'), fmt(r.want.done.act), '“The selected week” values him at his score');
@@ -151,8 +162,8 @@ const value = (list, name) => ((list.find((x) => x.name === name) || {}).v || ''
       r.accept.text);
     eq(cell(r.cards.done, 'Proj', W), fmt(r.want.done.proj), 'a card’s Proj cell is the projection');
     eq(cell(r.cards.done, 'Act', W), '', 'and its Act cell is blank');
-    ok('the glance line is the projection', (r.cards.done.glance || '').includes(`Proj ${fmt(r.want.done.proj)}`),
-      r.cards.done.glance);
+    ok('the glance line is his average over the weeks left', (r.cards.done.glance || '').includes(`Proj ${restOf(r.cards.done, W)}`),
+      `${r.cards.done.glance} vs ${restOf(r.cards.done, W)}`);
     eq(value(r.weekMeasure.mine, 'Ana QB1'), fmt(r.want.done.proj), '“The selected week” is the projection');
     ok('and no played-week warning', !r.weekMeasure.warn.text);
   }
