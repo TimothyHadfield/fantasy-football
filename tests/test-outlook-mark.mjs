@@ -92,19 +92,22 @@ ok(o.outlookOf(11, 13).kind === 'coin' && o.appealOf([M(10, 10)], [M(11, 13)]) >
 ok(o.appealOf([M(11, 13)], [M(10, 10)]) <= -2, 'a coin you GET counts against it');
 ok(o.APPEAL_EXPLAIN.includes('💎') && o.APPEAL_EXPLAIN.includes('🪙'), 'the explanation ties it to both marks');
 
-// --- Appeal as shown: plus the other manager's points a week -----------------
-// Tim, 2026-10-12: "if our current appeal shows +7, and the user's pts/week dif
-// is -2, then the new appeal shows +5."
-eq(o.appealShown(7, -2), 5, 'his own example: +7 and −2 a week is +5');
-eq(o.appealShown(7, 2), 9, 'a trade he gains from is more appealing');
-eq(o.appealShown(-3.5, 0.4), -3.1, 'a clean tenth');
-eq(o.appealShown(5.2, -1.14), 4.1, 'his figure goes in as printed (−1.1)');
-eq(o.appealShown(2, -2), 0, 'cancelling out is 0');
-ok(Object.is(o.appealShown(2, -2), 0), 'a plain 0, never −0');
-eq(o.appealShown(null, -2), null, 'no appeal known: still not known');
-eq(o.appealShown(6.6, null), 6.6, 'no figure for him: the appeal as it was');
-eq(o.appealShown(6.6, NaN), 6.6, 'NaN for him: the same');
-ok(o.APPEAL_EXPLAIN.includes('other manager'), 'the explanation says his gain is in it');
+// --- Total: Appeal plus both gains a week --------------------------------------
+// Tim, 2026-10-12: "Ex: appeal=+4, my pts/week dif = +2, opp pts/week dif = -1,
+// total=+5."
+eq(o.totalOf(4, 2, -1), 5, 'his own example: +4, +2 and −1 is +5');
+eq(o.totalOf(4, 2, 1), 7, 'a trade he gains from too is higher');
+eq(o.totalOf(-3.5, 1.2, 0.4), -1.9, 'a clean tenth');
+eq(o.totalOf(5.2, 2.84, -1.14), 6.9, 'each gain goes in as printed (+2.8, −1.1)');
+eq(o.totalOf(1, -3, 2), 0, 'cancelling out is 0');
+ok(Object.is(o.totalOf(1, -3, 2), 0), 'a plain 0, never −0');
+eq(o.totalOf(null, 2, -1), null, 'no Appeal known: no Total');
+eq(o.totalOf(6.6, null, -1), 5.6, 'no figure for you: the rest');
+eq(o.totalOf(6.6, 2, NaN), 8.6, 'no figure for him: the rest');
+ok(o.totalOf(4, 2, -1) !== o.appealOf([M(14, 10)], []), 'Total is not Appeal: Appeal alone stays +4');
+ok(o.APPEAL_EXPLAIN.includes('Total') && !/plus the other manager’s gain a week\. High/.test(o.APPEAL_EXPLAIN),
+  'the explanation gives Total its own sentence and takes his gain back out of Appeal');
+ok(typeof o.appealShown === 'undefined', 'the Appeal that added his gain is gone');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
