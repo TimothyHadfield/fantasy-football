@@ -4001,7 +4001,11 @@ function offerRow(offer, i, key, opts = {}) {
     `<tr class="offer${picked}${offer.goalUnranked ? ' unranked' : ''}" tabindex="0" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
-    `<td class="name"><span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}</td>` +
+    // `nameSpan` (the saved list): the manager is named ONCE for all his rows —
+    // N on the first of them, 0 (no cell at all) on the rest.
+    (opts.nameSpan === 0 ? '' :
+      `<td class="name"${opts.nameSpan > 1 ? ` rowspan="${opts.nameSpan}"` : ''}>` +
+      `<span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}</td>`) +
     // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
     // on the first screen rather than past four columns of names.
     // CHANCE: finishing first on top, finishing last under it, whichever the
@@ -9080,7 +9084,25 @@ function renderCustomSaved() {
 
   // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, assume/remove/ask AI
   const cols = 13;
-  $('cuRows').innerHTML = rows.map((entry, i) => {
+  // BY MANAGER, EACH NAMED ONCE (Tim, 2026-10-12: "for saved trades, make it so
+  // that they're sorted by user on the left, and the user's name is only said
+  // once in the middle of all the trades they're in"). Drawn in manager order —
+  // by name, then as saved — with the name cell spanning his rows. Every row
+  // keeps its own saved index (`data-cu`), which is what Remove, Assume and the
+  // click read. A deal sent from another squad carries its own tag, so it is a
+  // group of its own; one that will not price goes last, on its own line.
+  const groupOf = (i) => (offers[i]
+    ? `${offers[i].partner.name} ${offers[i].partner.id} ${offers[i].fromLabel || ''}` : null);
+  const order = rows.map((_, i) => i).sort((x, y) => {
+    const gx = groupOf(x), gy = groupOf(y);
+    if (gx === null || gy === null) return (gx === null) - (gy === null) || x - y;
+    return gx.localeCompare(gy) || x - y;
+  });
+  const sizeOf = new Map();
+  for (const i of order) { const g = groupOf(i); if (g !== null) sizeOf.set(g, (sizeOf.get(g) || 0) + 1); }
+  const seen = new Set();
+  $('cuRows').innerHTML = order.map((i) => {
+    const entry = rows[i];
     const drop = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
     if (priced[i].error) {
@@ -9102,10 +9124,14 @@ function renderCustomSaved() {
     const tail = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop cu-assume" data-assume="${i}">Assume</button>` +
       `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
+    const g = groupOf(i);
+    const first = !seen.has(g);
+    seen.add(g);
     return offerRow(offers[i], i, `cu:${i}`, {
       ...scales,
       goal: true,
-      attrs: ` data-cu="${i}"`,
+      attrs: ` data-cu="${i}"${first ? ' data-cu-first' : ''}`,
+      nameSpan: first ? sizeOf.get(g) : 0,
       tail,
     });
   }).join('');

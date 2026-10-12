@@ -915,6 +915,9 @@
   /* The saved table is drawn by the finder's own row builder, so it inherits
      `table.offers` wholesale. Only the extra cell is new. */
   #cuTable td.cu-remove { white-space: nowrap; }
+  /* One name for all of a manager's saved trades, in the middle of them. */
+  #cuTable td.name[rowspan] { vertical-align: middle; }
+  #cuTable tbody tr[data-cu-first]:not(:first-child) > td { border-top: 2px solid var(--line); }
   #cuTable tbody tr.cu-broken td.name { white-space: normal; }
   #cuTable tbody tr.cu-broken { cursor: default; }
   /* SUGGESTED (2026-10-01): the saved table's look, under the two rosters. */
