@@ -218,5 +218,41 @@ for (const done of [true, false, null]) {
   ok(plain.length > 0 && plain.every((o) => o.theirGain > 0 && o.myGain > 0), 'without one, every offer raises both lineups');
 }
 
+// --------------------------------------------- a man out for the season is in no trade
+//
+// Tim, 2026-10-12: "I just saw a trade offer with a player that was out for the
+// rest of the season, which should never happen."
+{
+  const lift = (players, by) => players.map((p) => ({ ...p, perGame: Math.max(1, p.perGame + (by[p.position] || 0)) }));
+  const teams = [
+    { id: 1, name: 'A', players: lift(squad(1, { done: null }), { QB: -8, WR: 5 }) },
+    { id: 2, name: 'B', players: lift(squad(2, { done: null }), { QB: 3, WR: -6 }) },
+  ];
+  const find = (extra) => findTrades({
+    teams, myTeamId: 1, slots: SLOTS, weeks: WEEKS, projFor, zeroIsBye: true, floors: FLOORS, limit: 400, ...extra,
+  }).offers;
+  const ids = (list) => list.map((p) => String(p.playerId));
+  const has = (o, id) => ids(o.send).includes(id) || ids(o.receive).includes(id);
+  const key = (o) => `${ids(o.send).sort()}>${ids(o.receive).sort()}`;
+
+  const plain = find({});
+  // One man you would send and one you would get, both in plenty of offers.
+  const mineOut = String(plain[0].send[0].playerId);
+  const hisOut = String(plain[0].receive[0].playerId);
+  ok(plain.filter((o) => has(o, mineOut)).length > 0 && plain.filter((o) => has(o, hisOut)).length > 0,
+    'the fixture offers both men when nobody is barred');
+  const got = find({ skip: new Set([mineOut, hisOut]) });
+  ok(got.length > 0, 'there are still trades to suggest', got.length);
+  ok(got.every((o) => !has(o, mineOut)), 'no offer SENDS the man who is out');
+  ok(got.every((o) => !has(o, hisOut)), 'no offer GETS the man who is out');
+  ok(got.some((o) => !plain.some((k) => key(k) === key(o))),
+    'and trades that sat behind his come up in their place', `${got.length} against ${plain.length}`);
+  eq(find({ skip: new Set() }).map(key).join('|'), plain.map(key).join('|'), 'an empty list bars nobody');
+  eq(find({ skip: null }).map(key).join('|'), plain.map(key).join('|'), 'and no list is the search as it was');
+  // A man the reader ticked himself is his own choice.
+  const ticked = find({ skip: new Set([hisOut]), partnerId: 2, mustReceive: [hisOut], complete: true });
+  ok(ticked.every((o) => ids(o.receive).includes(hisOut)), 'a man ticked by hand in the custom box is still completed around', ticked.length);
+}
+
 console.log(fail ?`\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

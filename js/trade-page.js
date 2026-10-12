@@ -2203,6 +2203,40 @@ function restProjOf(p) {
 }
 
 /**
+ * OUT FOR THE REST OF THE SEASON (Tim, 2026-10-12: "I just saw a trade offer
+ * with a player that was out for the rest of the season, which should never
+ * happen"). ESPN has no field that says so — its status is "Out" or "IR" for a
+ * man back in a fortnight too — so it is read off what ESPN projects: a man it
+ * lists as out (OUT, IR, suspended, not active) and projects at NOTHING in
+ * every week left that the page holds for him. His bye is not a week he could
+ * have played. A man the page holds no week for is not known, so not barred.
+ */
+function outForSeason(p) {
+  if (!p || p.playerId === null || p.playerId === undefined) return false;
+  if (healthy(p.injuryStatus) || injuryClass(String(p.injuryStatus)) !== 'out') return false;
+  const bye = byeWeekOf(p, state.byes);
+  let held = 0;
+  for (const w of spanFor('title')) {
+    if (Number.isFinite(bye) && Number(bye) === Number(w)) continue;
+    const e = weekly.byWeek.get(w)?.get(p.playerId);
+    if (!e) continue;
+    held += 1;
+    const v = e.done === true ? e.pregame : e.projected;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return false;
+  }
+  return held > 0;
+}
+
+/** Their ids, for the search (js/trade.js `skip`): no suggested trade hands one over. */
+function outForSeasonIds() {
+  const out = new Set();
+  for (const t of (state.data ? state.data.teams : [])) {
+    for (const p of (t.players || [])) if (outForSeason(p)) out.add(String(p.playerId));
+  }
+  return out;
+}
+
+/**
  * THE WEEKS YOU PLAY HIM. Tim, 2026-09-21: "add a little arrow pointing to the
  * week that the user is playing you in the preview … In a trade with nick … it
  * will show an arrow on week 4 when I play him."
@@ -4681,7 +4715,8 @@ function renderFinderNote(scales = finderScales) {
         `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs him ` +
         `a little is kept and marked down by how likely he is to say yes, not hidden. `
       : `keeping only the ones where <strong>both totals go up</strong>. `) +
-    `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out. ` +
+    `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out, ` +
+    `and so is any trade with a man who is out for the rest of the season (listed as out, and projected at nothing in every week left). ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
     `starter to somebody else, which is why a deal can help both sides at once. ` +
@@ -4949,6 +4984,7 @@ function runSearch({ keepDeal = false } = {}) {
       theirMinPerWeek: W && !state.bothWin ? THEIR_MIN_PER_WEEK : null,
       // One row per trade, never its near-copies (`dropVariants`).
       distinct: true,
+      skip: weeks ? outForSeasonIds() : null,
       limit: FINDER_ROWS * 4,
       // KEPT BY EXPECTED VALUE, not by your gain alone: weighted gain × the
       // chance he says yes — the same product the final ranking uses. Without
@@ -9101,6 +9137,7 @@ function findSuggestions() {
       : null,
     theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
     meetWeeks: meetWeeksOf(c.a),
+    skip: outForSeasonIds(),
     partnerId: c.b,
     mustSend: c.sendA,
     mustReceive: c.sendB,

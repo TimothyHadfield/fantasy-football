@@ -184,7 +184,7 @@
       "assertions": 1625
     },
     "test-trade-moves.mjs": {
-      "assertions": 49
+      "assertions": 57
     },
     "test-outlook-mark.mjs": {
       "assertions": 51

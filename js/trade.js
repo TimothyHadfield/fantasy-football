@@ -1073,7 +1073,7 @@ function* findTradesSteps({
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
   meetWeeks = null, exhaustive = false,
   partnerId = null, mustSend = null, mustReceive = null, complete = false,
-  distinct = false,
+  distinct = false, skip = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -1112,6 +1112,17 @@ function* findTradesSteps({
           )
         : yield* tradesWithSteps(myScored, scored(theirs.players, measure), theirs, slots, kinds)
     );
+  }
+
+  // MEN WHO MAY NOT BE IN A SUGGESTED TRADE (Tim, 2026-10-12: "I just saw a
+  // trade offer with a player that was out for the rest of the season, which
+  // should never happen"). `skip` is the page's list of them, as ids. They stay
+  // on their squads — a roster spot is still a roster spot, and the lineups are
+  // priced as they are — but no offer hands one over, either way. A man the
+  // reader ticked himself (`mustSend` / `mustReceive`) is his own choice.
+  if (skip && skip.size) {
+    const barred = (list, own) => list.some((p) => skip.has(String(idOf(p))) && !own.has(String(idOf(p))));
+    offers = offers.filter((o) => !barred(o.send, must.send) && !barred(o.receive, must.receive));
   }
 
   const considered = offers.length;
