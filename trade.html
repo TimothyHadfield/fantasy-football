@@ -932,6 +932,12 @@
     justify-content: center;
     gap: 1px;
   }
+  /* WHO THIS SIDE MUST DROP, AND WHAT IT MUST ADD (Tim, 2026-10-12), at the top
+     of its column. One line is reserved so ticking a man moves nothing. */
+  .cu-moves { margin: 0 0 8px; min-height: 17px; font-size: 12px; line-height: 17px; color: var(--cu-sub); }
+  .cu-moves .cu-move { margin-right: 10px; }
+  .cu-moves .cu-move.drop b { color: var(--err); }
+  .cu-moves .cu-move.add b { color: var(--text); }
   .cu-gain .cu-num {
     font-size: 24px;
     font-weight: 700;
@@ -1808,6 +1814,7 @@
         <div class="cu-side">
           <p class="cu-head" id="cuHeadA">Sends</p>
           <p class="cu-gain" id="cuGainA" aria-live="polite"></p>
+          <p class="cu-moves" id="cuMovesA" aria-live="polite"></p>
           <div class="cu-roster" id="cuListA"></div>
         </div>
       </div>
@@ -1815,6 +1822,7 @@
         <div class="cu-side">
           <p class="cu-head" id="cuHeadB">Sends</p>
           <p class="cu-gain" id="cuGainB" aria-live="polite"></p>
+          <p class="cu-moves" id="cuMovesB" aria-live="polite"></p>
           <div class="cu-roster" id="cuListB"></div>
         </div>
         <div class="cu-inline" id="cuInlineB"></div>

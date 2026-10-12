@@ -89,6 +89,7 @@ import { enableSort, resort } from './sortable.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
+import { movesFor } from './trade-moves.js';
 import { acceptBy } from './accept-by.js';
 // "Ask AI" (2026-09-30): the text a row copies for an AI chat. Pure.
 import { askAiText } from './ask-ai.js';
@@ -8554,6 +8555,28 @@ function customGainHtml(delta, perWeek = perWeekOf(delta), value = null) {
   );
 }
 
+/**
+ * WHAT THIS SIDE HAS TO DO NEXT, at the top of its column (Tim, 2026-10-12: "if
+ * the trade needs a player to drop someone, put it at the top as a list of
+ * players that user needs to drop. If it also shows you need to add a player,
+ * show the position you need to add from the waivers after the trade"). The
+ * drops are the ones the price already counts (js/trade-moves.js). Empty when
+ * there is nothing to do — the line's height is reserved either way.
+ */
+function customMovesHtml(team, side) {
+  if (!team || !side) return '';
+  const m = movesFor({ before: team.players, priced: side, slots: state.slots, eligibility: espn.SLOT_ELIGIBILITY });
+  const parts = [];
+  if (m.drop.length) {
+    parts.push(`<span class="cu-move drop"><b>Must drop:</b> ${m.drop.map((p) => esc(p.name)).join(', ')}</span>`);
+  }
+  if (m.add.length) {
+    parts.push(`<span class="cu-move add"><b>Then add from waivers:</b> ` +
+      `${m.add.map((a) => (a.count > 1 ? `${a.count} ${esc(a.label)}` : esc(a.label))).join(', ')}</span>`);
+  }
+  return parts.join(' ');
+}
+
 /** Nothing to show under a side yet — reserved, so the panel cannot jump. */
 const CU_BLANK = '<span class="cu-num flat">—</span>';
 
@@ -8563,6 +8586,8 @@ function renderCustomPreview(priced) {
   const blank = () => {
     $('cuGainA').innerHTML = CU_BLANK;
     $('cuGainB').innerHTML = CU_BLANK;
+    $('cuMovesA').innerHTML = '';
+    $('cuMovesB').innerHTML = '';
     $('cuSave').disabled = true;
     $('cuOpen').disabled = true;
   };
@@ -8595,6 +8620,8 @@ function renderCustomPreview(priced) {
   // THE GOAL, as he ticks (2026-09-21): the deal being built, played out in
   // the season simulation like any finder row. Memoised on the deal, so a
   // repaint that did not change who moves costs nothing.
+  $('cuMovesA').innerHTML = customMovesHtml(priced.teamA, priced.forA);
+  $('cuMovesB').innerHTML = customMovesHtml(priced.teamB, priced.forB);
   const s = basis() === 'weeks'
     ? scoreGoalCached(customOffer(state.custom, priced), state.custom.a, priced.weeks)
     : null;

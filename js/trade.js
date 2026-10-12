@@ -1239,7 +1239,13 @@ function scoreAcrossWeeks(players, weeks, projFor, zeroIsBye = true) {
     for (let i = 0; i < ws.length; i++) {
       const raw = read(p, ws[i]);
       const v = Number.isFinite(raw) ? raw : null;
-      weekly[i] = { ...p, projected: v, week: ws[i] };
+      // `done` AND `pregame` ARE FACTS ABOUT THE WEEK THE ROW WAS READ IN, not
+      // about week ws[i]. Carried along, a man whose game had finished THIS
+      // week was "finished" in every week to come, so js/floor.js never lifted
+      // him to the waiver line — and trading him away left an empty slot that
+      // WAS lifted, which priced giving up a kicker as a gain (Tim, 2026-10-12:
+      // "it showed her gain +0.7 pts/week, which doesn't make sense").
+      weekly[i] = { ...p, projected: v, week: ws[i], done: undefined, pregame: undefined };
       if (v !== null) {
         sum += v;
         counted++;

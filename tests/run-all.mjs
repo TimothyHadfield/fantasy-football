@@ -81,6 +81,7 @@ const SUITES = [
   ['test-decision-cloud.mjs', 'the decisions review on the phone: the world rides in the synced copy and reads back the same'],
   ['test-trade-weekly.mjs', 'the weekly measure: depth across the season, and the combo packer'],
   ['test-trade-cut.mjs', 'the forced cut: the man whose loss costs the priced weeks least goes, so receiving never lowers a week'],
+  ['test-trade-moves.mjs', 'what a trade makes a manager do: who he must drop, what he must add, and giving a kicker away is never a gain'],
   ['test-trade-net.mjs', 'net gain: your change minus his in the weeks you play him, and the pruned finder keeps what an exhaustive one does'],
   ['test-trade-suggest.mjs', 'the Suggested list under the custom builder: every completion of the ticked men, against a brute force'],
   ['test-trade-odds.mjs', 'the goal: a trade ranked by the title (or last-place) chance it moves, and will he say yes'],

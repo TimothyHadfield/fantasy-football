@@ -183,6 +183,9 @@
     "test-trade-cut.mjs": {
       "assertions": 1625
     },
+    "test-trade-moves.mjs": {
+      "assertions": 31
+    },
     "test-trade-net.mjs": {
       "assertions": 45
     },
