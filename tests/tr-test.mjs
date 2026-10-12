@@ -6492,11 +6492,26 @@ if (!live.boot) {
   for (const [k, r] of [['bye in week 9, not a meeting week with Cy', offWeek], ['meeting week already played', past]]) {
     const withCy = (list) => (list || []).filter((m) => /^Cy\b/.test(m.partner));
     const everyone = [...cyRows(r).flatMap((x) => x.men), ...withCy(r.combo),
-      ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
+      ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r === past ? [] : (r.listB || [])), ...(r.saved || [])];
     ok(`${k}: the page still draws men`, everyone.length > 20, everyone.length);
     ok(`${k}: nobody is marked`, everyone.every(plain), dump(everyone.filter((m) => !plain(m))));
-    ok(`${k}: and no key on the pop-up or the custom box`, !r.cuKey && !r.dealKey,
+    ok(`${k}: and no key on the pop-up${r === past ? '' : ' or the custom box'}`, (r === past || !r.cuKey) && !r.dealKey,
       JSON.stringify([r.cuKey, r.dealKey]));
+  }
+  // HIS BYE IS BEHIND HIM (Tim, 2026-10-11): "highlight any opposing team's
+  // players in green in the custome trade box if they have already had their
+  // BYE week". In the `past` run both squads' byes were week 3, played: his
+  // list is on green, yours is not, and the box says what the green is.
+  {
+    const done = (m) => /bye-hl/.test(m.cls) && /bye-past/.test(m.cls) && !/bye-send|bye-get/.test(m.cls);
+    ok('custom box: every man on HIS list whose bye is played is on green',
+      every(past.listB, done), dump(past.listB));
+    ok('in sr-only words, not in the visible text',
+      every(past.listB, (m) => /bye already played, week 3/.test(m.sr) && !/bye already/i.test(m.visible)), dump(past.listB));
+    ok('your own list is not marked for it', every(past.listA, plain), dump(past.listA));
+    ok('and the custom box says what that green is', /bye already played/i.test(past.cuKey), past.cuKey);
+    ok('a bye still to come marks nobody on his list that way',
+      [...sends.listB, ...gets.listB, ...offWeek.listB].every((m) => !/bye-past/.test(m.cls)));
   }
   const BO_WORDS = 'Bye in week 9, one of the weeks you play Bo (5, 6, 7, 9, 10, 11, 12, 13, 14)';
   const bo = (offWeek.finder || []).filter((x) => /^Bo\b/.test(x.partner));

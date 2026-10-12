@@ -2286,7 +2286,9 @@ async function playerValuesNow(demo) {
     return playerValuesOf(world.base, world.weeks, world.weekTeams, {});
   }
   if (pastSeason()) return playerValuesOf(null, [], new Map(), {});
-  const base = await fetchValueBase();
+  // The lines failing must not take the projections down with them: "Proj"
+  // on a card needs the weeks, not the lines.
+  const base = await fetchValueBase().catch(() => null);
   const weeks = valueWeeks(await fetchSchedule());
   if (!weeks.length) return playerValuesOf(base, [], new Map(), {});
   const weekTeams = await fetchWeeksRosters(weeks);

@@ -1998,7 +1998,37 @@ function glanceFor(p) {
   }
   if (avg === null) avg = num(p.seasonAvg);
   if (rank === null) rank = num(p.posRank);
-  return { avg, proj: num(here?.projected), rank, pos: p.position };
+  // PROJ IS THE WEEKS AHEAD, NEVER THIS WEEK'S SCORE (Tim, 2026-10-11: "it
+  // still shows proj at the top as the actual scoring just for this week
+  // instead of the avg future proj"). `here.projected` IS his score once his
+  // game is over, and it was what the card printed whenever the league's Value
+  // read had no number for him. So the page works his average out of the weeks
+  // it holds, and the card's own source (`lookup.proj`) still wins when it answers.
+  return { avg, proj: restProjOf(p), rank, pos: p.position };
+}
+
+/**
+ * His average projection over the weeks left that he is projected to PLAY: his
+ * bye is left out, and so is any week projected at nothing (ruled out). The
+ * same rule as js/value.js `restProjAvg`, off this page's own weeks. In a week
+ * under way a finished man counts at what ESPN projected (`pregame`), not at
+ * his score. Null when no week counts.
+ */
+function restProjOf(p) {
+  if (!p || p.playerId === null || p.playerId === undefined) return null;
+  const bye = byeWeekOf(p, state.byes);
+  let sum = 0;
+  let n = 0;
+  for (const w of spanFor('title')) {
+    if (Number.isFinite(bye) && Number(bye) === Number(w)) continue;
+    const e = weekly.byWeek.get(w)?.get(p.playerId);
+    if (!e) continue;
+    const v = e.done === true ? e.pregame : e.projected;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) continue;
+    sum += v;
+    n += 1;
+  }
+  return n ? sum / n : null;
 }
 
 /**
@@ -2083,6 +2113,20 @@ function byeMarkOf(p, dir, meet) {
   };
 }
 
+/**
+ * HIS BYE IS BEHIND HIM (Tim, 2026-10-11: "highlight any opposing team's
+ * players in green in the custome trade box if they have already had their BYE
+ * week"). His NFL team's known bye, before the first week still to come. Only
+ * the custom box's other squad asks. `{cls, words, sr}` or null.
+ */
+function byePastMarkOf(p) {
+  const bye = p ? byeWeekOf(p, state.byes) : NaN;
+  const next = spanFor('title')[0];
+  if (!Number.isFinite(bye) || next === undefined || !(bye < next)) return null;
+  const words = `Bye already played (week ${bye})`;
+  return { cls: 'bye-past', words, sr: ` (bye already played, week ${bye})` };
+}
+
 /** Which way a man moves in a deal, from its "you" side: 'send', 'get' or null. */
 function dirIn(p, offer) {
   if (!p || !offer) return null;
@@ -2135,11 +2179,13 @@ function nameMarksHtml(name, bye, inj) {
 /** The one-sentence keys, only for a mark that is on screen (rule 16). */
 const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
 const INJ_KEY = 'Underlined: on ESPN’s injury report.';
-const MARK_KEYS = { bye: () => BYE_KEY, inj: () => INJ_KEY, trend: () => trend.TREND_KEY };
+const BYE_PAST_KEY = 'Green name on his side: bye already played.';
+const MARK_KEYS = { bye: () => BYE_KEY, past: () => BYE_PAST_KEY, inj: () => INJ_KEY, trend: () => trend.TREND_KEY };
 /** Which marks a block of markup carries: some of `bye`, `inj`, `trend`. */
 function marksIn(html) {
   return [
-    /\bbye-hl\b/.test(html) ? 'bye' : '',
+    /\bbye-(?:send|get)\b/.test(html) ? 'bye' : '',
+    /\bbye-past\b/.test(html) ? 'past' : '',
     /\binj\b/.test(html) ? 'inj' : '',
     trend.hasTrend(html) ? 'trend' : '',
   ].filter(Boolean);
@@ -8246,7 +8292,7 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
         // only: a tap on the name still ticks him, and the number below is
         // still where a thumb opens the card (see the next comment).
         return `<span class="nm"${tipAttr(key, { hoverOnly: true })}>` +
-          `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet), injuryMarkOf(p))}</span>` +
+          `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet) || (mirror ? byePastMarkOf(p) : null), injuryMarkOf(p))}</span>` +
           // The arrow opens the same card as the name it belongs to (hover).
           trendMarkOf(p).replace('<span class="trend', `<span${tipAttr(key, { hoverOnly: true })} class="trend`);
       })(),
