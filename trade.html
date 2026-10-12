@@ -46,7 +46,7 @@
 
   /* The two package columns carry names, so they get the room and everything
      else is squeezed. A player and his number belong on one line. */
-  #tradeTable td.pkg { white-space: normal; min-width: 190px; }
+  #tradeTable .pkg { white-space: normal; }
   /* `.deal-side` too: the pop-up's You send / You get draw the same `manLine`
      markup, and scoped to `.pkg` alone they ran together as one line with no
      spaces ("Rhett HathawayRB14.2/wkRoscoe MarchettiRB7.6/wk"). */
@@ -176,15 +176,15 @@
   /* The two gain columns. Yours is the one that decides, so it carries the
      weight; his is what decides whether he says yes, so it is still a real
      number rather than a footnote. */
-  #tradeTable td.gain { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
-  #tradeTable td.their-gain { font-variant-numeric: tabular-nums; }
+  #tradeTable .gain { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  #tradeTable .their-gain { font-variant-numeric: tabular-nums; }
   /* THE GOAL COLUMN: the rank key, so it reads first and heaviest. Green or red
      is carried by the sign as well as the hue — "+3.1%" / "−2.0%" — so the colour
      is never the only channel. A cell still waiting on the simulation is dim —
      `goal-wait`, NOT `pending`: app.css's `.pending` is a whole notice banner
      (background, dashed border, margin) and a cell wearing it drew one. */
-  td.goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
-  td.goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  .goal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  .goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
   /* Not played out yet, and still in points order under the ranked top ten
      (trade plan Phase 2). Faded, not hidden: the reader can still open it. */
   #tradeTable tr.unranked { opacity: 0.55; }
@@ -193,7 +193,7 @@
      read alongside the chance. Two offers the simulation cannot separate share
      one of these — the band is measured, and js/trade-odds.js `TIE_BAND` holds
      both the number and the measurement. */
-  td.goal-cell .place {
+  .goal-cell .place {
     display: inline-block;
     min-width: 22px;
     margin-right: 4px;
@@ -209,14 +209,27 @@
   .combo-goal, .deal-goal { margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
   .combo-goal .lbl, .deal-goal .lbl { color: var(--dim); margin-right: 4px; }
   .combo-goal strong, .deal-goal strong { font-size: 15px; }
-  #tradeTable td.before-after { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12.5px; }
+
+  /* A SPLIT CELL (Tim, 2026-10-12): two halves, one over the other, each a
+     short label and then the figure's own box (`splitHalf`). Chance = first /
+     last, Send = you / him, Gain = you / him. */
+  td.split { white-space: nowrap; text-align: left; }
+  td.split .sp { display: flex; align-items: baseline; gap: 6px; }
+  td.split .sp + .sp { margin-top: 3px; }
+  td.split .hk { flex: 0 0 30px; color: var(--dim); font-size: 11.5px; font-weight: 400; }
+  td.split .hv { flex: 1 1 auto; padding: 1px 6px; border-radius: 4px; }
+  td.split .hv .sub { display: inline; margin-left: 6px; }
+  td.split .pkg { padding-left: 0; }
+  td.split .val-change { font-variant-numeric: tabular-nums; font-weight: 600; }
+  td.split .pkg .man { display: inline-block; margin: 0 10px 0 0; }
+  td.split .pkg .man + .man { margin-top: 0; }
 
   .searching { color: var(--dim); font-style: italic; }
 
   /* THE OTHER GOAL, AS A PREVIEW (2026-09-29): the ranked column's figure in the
      ranked column's type, one step lighter — it ranks nothing. */
-  td.alt-goal-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
-  td.alt-goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  .alt-goal-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .alt-goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
   /* His lineup in the week(s) he plays you. His plus is your red. */
   td.opp-proj { font-variant-numeric: tabular-nums; }
   .alt-inline { color: var(--dim); white-space: nowrap; }
@@ -477,10 +490,9 @@
      row. Selecting on both table ids rather than restyling means the two can
      never drift apart visually while claiming to be the same thing. */
   table.offers th, table.offers td { vertical-align: top; }
-  table.offers td.pkg { white-space: normal; min-width: 190px; }
-  table.offers td.gain { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
-  table.offers td.their-gain { font-variant-numeric: tabular-nums; }
-  table.offers td.before-after { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12.5px; }
+  table.offers .pkg { white-space: normal; }
+  table.offers .gain { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  table.offers .their-gain { font-variant-numeric: tabular-nums; }
   table.offers tbody tr { cursor: pointer; }
 
   /* "Two deals with this manager, sent as one." Loud enough to be read before
@@ -1353,8 +1365,7 @@
        one line, but 190px twice over is most of the screen spent before the
        gains are reached. The table scrolls sideways either way; this decides
        how much of it a first glance covers. */
-    #tradeTable td.pkg { min-width: 132px; }
-    #tradeTable td.gain { font-size: 14px; }
+    #tradeTable .gain { font-size: 14px; }
 
     /* A tap-opened card is read at arm's length, so the run inside it keeps its
        type size while the card around it is what shrinks. Same two pixels of
@@ -1379,8 +1390,7 @@
     .wkx-side { padding: 7px 12px; font-size: 12px; }
     table.weeks button.wk-peek { padding: 6px 0; }
 
-    table.offers td.pkg { min-width: 132px; }
-    table.offers td.gain { font-size: 14px; }
+    table.offers .gain { font-size: 14px; }
 
     /* THE BUILDER IS ONE COLUMN. The two rosters keep their side-by-side
        pairing for as long as `.panel-row` can give each one its 232px — that
@@ -1602,13 +1612,12 @@
     <div class="table-scroll" id="tradeWrap"><table id="tradeTable">
       <thead><tr>
         <th class="name" data-sort>Manager</th>
-        <th data-sort id="thGoal">Title chance</th>
-        <th data-sort id="thAltGoal">Δ last chance</th>
-        <th class="left" data-sort>You send</th>
-        <th class="left" data-sort>You get</th>
-        <th data-sort id="thLineup">Your lineup</th>
-        <th data-sort id="thMyGain">You gain</th>
-        <th data-sort id="thTheirGain">He gains</th>
+        <!-- Three SPLIT columns (Tim, 2026-10-12): Chance = first / last,
+             Send = you / him, Gain = you / him. Room is left on the right. -->
+        <th class="left" data-sort id="thGoal">Chance</th>
+        <th class="left" data-sort>Send</th>
+        <th class="left" data-sort id="thMyGain">Gain</th>
+        <th class="left" data-sort>Value</th>
         <th data-sort id="thOpp">His proj vs you</th>
         <th class="left">ESPN</th>
       </tr></thead>
@@ -1850,13 +1859,10 @@
       <div class="table-scroll"><table id="cuSugTable" class="offers">
         <thead><tr>
           <th class="name">With</th>
-          <th id="cuSugThGoal">Title chance</th>
-          <th id="cuSugThAltGoal">Δ last chance</th>
-          <th class="left">You send</th>
-          <th class="left">You get</th>
-          <th>Your lineup, a week</th>
-          <th>You gain</th>
-          <th>He gains</th>
+          <th class="left">Chance</th>
+          <th class="left">Send</th>
+          <th class="left">Gain</th>
+          <th class="left">Value</th>
           <th>His proj vs you</th>
           <th class="left">ESPN</th>
         </tr></thead>
@@ -1898,13 +1904,10 @@
     <div class="table-scroll" id="cuWrap" hidden><table id="cuTable" class="offers">
       <thead><tr>
         <th class="name">With</th>
-        <th id="cuThGoal">Title chance</th>
-        <th id="cuThAltGoal">Δ last chance</th>
-        <th class="left">You send</th>
-        <th class="left">You get</th>
-        <th>Your lineup, a week</th>
-        <th>You gain</th>
-        <th>He gains</th>
+        <th class="left">Chance</th>
+        <th class="left">Send</th>
+        <th class="left">Gain</th>
+        <th class="left">Value</th>
         <th>His proj vs you</th>
         <th class="left">ESPN</th>
         <th></th>

@@ -2706,6 +2706,32 @@ function perWeekValue(p) {
  *   so his card can answer "would he start for me if this were made" rather
  *   than "does he start for his own manager". Null everywhere there is no deal.
  */
+/** Name suffixes that are not a last name. */
+const NAME_SUFFIX = new Set(['jr.', 'jr', 'sr.', 'sr', 'ii', 'iii', 'iv', 'v']);
+
+/**
+ * A man's LAST NAME, for a trade row (Tim, 2026-10-12: "name the players as
+ * their lastname only"). A suffix is dropped ("Kenneth Walker III" → "Walker"),
+ * "St." stays with its name ("St. Brown"), and a defence keeps its whole name.
+ * `others` are the men in the same deal: two who share a last name get their
+ * first initial back ("K. Coleman"), or the row could not tell them apart.
+ */
+function lastNameOf(p, others = []) {
+  const full = String((p && p.name) || '').trim();
+  if (!full || full.endsWith('D/ST') || p.position === 'DST' || p.position === 'D/ST') return full;
+  const last = (name) => {
+    const parts = String(name || '').trim().split(' ').filter(Boolean);
+    while (parts.length > 1 && NAME_SUFFIX.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+    if (parts.length < 2) return parts.join(' ');
+    const tail = parts[parts.length - 1];
+    const before = parts[parts.length - 2].toLowerCase();
+    return (before === 'st.' || before === 'st') && parts.length > 2 ? `${parts[parts.length - 2]} ${tail}` : tail;
+  };
+  const mine = last(full);
+  const clash = others.some((q) => q && q.playerId !== p.playerId && last(q.name) === mine);
+  return clash ? `${full.charAt(0)}. ${mine}` : mine;
+}
+
 function manLine(p, ctx = null) {
   const key = registerRun(cardFor(p, ctx), 'pkg');
   const v = perWeekValue(p);
@@ -2716,7 +2742,10 @@ function manLine(p, ctx = null) {
   const mark = ctx && ctx.offer
     ? byeMarkOf(p, dirIn(p, ctx.offer), meetingWeeksAhead({ offer: ctx.offer }))
     : null;
-  const inner = `${nameMarksHtml(p.name, mark, injuryMarkOf(p))}${trendMarkOf(p)}${posTag(p.position)}${val}`;
+  const shown = ctx && ctx.short && ctx.offer
+    ? lastNameOf(p, ctx.offer.send.concat(ctx.offer.receive))
+    : p.name;
+  const inner = `${nameMarksHtml(shown, mark, injuryMarkOf(p))}${trendMarkOf(p)}${posTag(p.position)}${val}`;
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
@@ -3611,12 +3640,49 @@ const GAIN_HEAD = (who, weeks, span) =>
  * @param {string} [opts.attrs] extra attributes for the <tr>
  * @param {string} [opts.tail] extra cells after the ESPN one
  */
+/**
+ * A SPLIT CELL (Tim, 2026-10-12: "make some columns split-row columns where
+ * each cell is split into 2 cells with the top and bottom refering to different
+ * info"). One half: its label, then the box the figure was always drawn in —
+ * a builder's own `<td …>…</td>` turned into a `<div class="hv …">`, so its
+ * classes, `data-v` and `data-rc` are exactly what they were as a cell.
+ */
+const splitBox = (tdHtml) => {
+  const s = String(tdHtml);
+  const open = '<td class="';
+  const close = '</td>';
+  if (!s.startsWith(open) || !s.endsWith(close)) return s;
+  return `<div class="hv ${s.slice(open.length, s.length - close.length)}</div>`;
+};
+const splitHalf = (label, tdHtml) =>
+  `<div class="sp"><span class="hk">${esc(label)}</span>${splitBox(tdHtml)}</div>`;
+const dataVOf = (html) => (String(html).match(/ data-v="([^"]*)"/) || [null, ''])[1];
+
+/**
+ * VALUE CHANGE, you over him (Tim, 2026-10-12: "Another split colum I want to
+ * add to the trade is Value. Do Value change / (top) you, (bottom) them").
+ * The custom box's own figure (`customValueChange`): the Value of the men a
+ * side receives less the Value of the men it gives. A dash while the league's
+ * Values are not read.
+ */
+function valueCellHtml(offer) {
+  const ids = (list) => list.map((p) => String(p.playerId));
+  const v = customValueChange(ids(offer.send), ids(offer.receive));
+  const box = (n) => {
+    if (!v) return `<td class="val-change">—</td>`;
+    const cls = n > 0 ? ' pos' : n < 0 ? ' neg' : '';
+    return `<td class="val-change${cls}" data-v="${n}">${signedText(n)}</td>`;
+  };
+  return `<td class="split value"${v ? ` data-v="${v.a}"` : ''}>` +
+    splitHalf('You', box(v ? v.a : null)) + splitHalf('Him', box(v ? v.b : null)) + `</td>`;
+}
+
 function offerRow(offer, i, key, opts = {}) {
   // `goal` draws BOTH chance columns since 2026-09-29: the ranked goal, then the
   // other one as a preview (`altGoalCellHtml`). `opp` draws his projection in
   // the week(s) he plays you (`oppCellHtml`), after He gains.
   const {
-    myGain: showMyGain = true, lineup: showLineup = true, goal: showGoal = false, opp: showOpp = true,
+    myGain: showMyGain = true, goal: showGoal = false, opp: showOpp = true,
     myScale = null, theirScale = null, attrs = '', tail = '',
   } = opts;
   // THE CARD KNOWS WHICH SIDE OF THE DEAL HE IS ON (Tim, 2026-09-19). A man in
@@ -3624,7 +3690,7 @@ function offerRow(offer, i, key, opts = {}) {
   // the weeks he would start for YOU with the deal made; a man in "You send" is
   // still his own manager's until it is. `.map(manLine)` would hand the array
   // index in as the context, which is why these are written out.
-  const ctx = { offer, side: 'mine' };
+  const ctx = { offer, side: 'mine', short: true };
   const send = offer.send.map((p) => manLine(p, ctx)).join('');
   const receive = offer.receive.map((p) => manLine(p, ctx)).join('');
   const weeks = basis() === 'weeks' && weeklySpan().length > 0;
@@ -3702,30 +3768,35 @@ function offerRow(offer, i, key, opts = {}) {
     `<td class="name"><span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}</td>` +
     // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
     // on the first screen rather than past four columns of names.
-    (showGoal ? goalCellHtml(offer) + altGoalCellHtml(offer) : '') +
-    // NO DEAL COLUMN (Tim, 2026-09-30: "The trade display is a little crowded
-    // now so just remove the "deal" column"). Its "Week by week" button moved
-    // into the ESPN cell below, with the row's other buttons.
-    `<td class="left pkg send">${send}</td>` +
-    // NO CHURN LINE HERE. It printed two coloured lists under this column and
-    // they mostly repeated the two columns either side of them; the week-by-week
-    // pop-up carries the before and after now. Tim, 2026-09-17.
-    `<td class="left pkg recv">${receive}</td>` +
-    (showLineup
-      ? `<td class="before-after" data-rc="lineup" data-v="${offer.myAfter}">` +
-        (weeks && Number.isFinite(offer.myBefore) && Number.isFinite(offer.myAfter)
-          ? weeklyLineupHtml(offer.myBefore, offer.myAfter)
-          : `${fmt(offer.myBefore)} → ${fmt(offer.myAfter)}`) +
+    // CHANCE: finishing first on top, finishing last under it, whichever the
+    // goal is — the ranked one keeps its rank number and its weight. The cell
+    // sorts by the ranked one.
+    (showGoal
+      ? `<td class="split chance" data-v="${esc(dataVOf(goalCellHtml(offer)))}">` +
+        (state.goal === 'title'
+          ? splitHalf('First', goalCellHtml(offer)) + splitHalf('Last', altGoalCellHtml(offer))
+          : splitHalf('First', altGoalCellHtml(offer)) + splitHalf('Last', goalCellHtml(offer))) +
         `</td>`
       : '') +
-    (showMyGain
-      ? `<td class="gain${signOf(myNet)}${mine.cls}" data-rc="gain" data-v="${myNet}">` +
-        `${gain(myNet, mine.mark)}</td>`
-      : '') +
-    `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-rc="their" data-v="${his.gain}">` +
-      `${weeks && Number.isFinite(his.gain)
-        ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
-        : `${signedText(his.gain)}${theirs.mark}`}</td>` +
+    // SEND: what you send on top, what he sends under it. No deal column, no
+    // churn line and (2026-10-12) no "Your lineup, a week" column: the
+    // week-by-week pop-up carries the before and after.
+    `<td class="split left deal">` +
+      splitHalf('You', `<td class="left pkg send">${send}</td>`) +
+      splitHalf('Him', `<td class="left pkg recv">${receive}</td>`) +
+    `</td>` +
+    // GAIN: yours on top (not in the combo — see `comboTableHtml`), his under it.
+    `<td class="split gains" data-v="${showMyGain ? myNet : his.gain}">` +
+      (showMyGain
+        ? splitHalf('You', `<td class="gain${signOf(myNet)}${mine.cls}" data-rc="gain" data-v="${myNet}">` +
+          `${gain(myNet, mine.mark)}</td>`)
+        : '') +
+      splitHalf('Him', `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-rc="their" data-v="${his.gain}">` +
+        `${weeks && Number.isFinite(his.gain)
+          ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
+          : `${signedText(his.gain)}${theirs.mark}`}</td>`) +
+    `</td>` +
+    valueCellHtml(offer) +
     (showOpp ? oppCellHtml(offer) : '') +
     // "Ask AI" (Tim, 2026-09-30), STACKED with the row's other buttons (Tim,
     // 2026-10-01: "stack the "assume" "remove" and "ask" buttons on the right so
@@ -4057,13 +4128,9 @@ function renderFinder() {
   // heading says which, every time, rather than the note alone.
   const weeks = basis() === 'weeks';
   const span = weeklySpan();
-  $('thMyGain').textContent = GAIN_HEAD('You gain', weeks, span);
-  $('thTheirGain').textContent = GAIN_HEAD('He gains', weeks, span);
-  $('thLineup').textContent = 'Your lineup, a week';
+  $('thMyGain').textContent = GAIN_HEAD('Gain', weeks, span);
   // The ranked goal, then the other as a preview (2026-09-29). Header wording
   // is a placeholder for Tim.
-  $('thGoal').textContent = `Δ ${CHANCE_SHORT[state.goal]}`;
-  $('thAltGoal').textContent = `Δ ${CHANCE_SHORT[otherGoal()]}`;
 
   // Both halves are written on EVERY path, and that is not tidiness. Hiding
   // the table without emptying it left the previous search's rows sitting in
@@ -5524,14 +5591,14 @@ function refreshAltCells() {
   const table = $('tradeTable');
   if (!table) return;
   for (const tr of bodyOf(table).querySelectorAll('tr.offer')) {
-    const td = tr.querySelector('td.alt-goal-cell.goal-wait');
-    if (!td) continue;
+    const box = tr.querySelector('.alt-goal-cell.goal-wait');
+    if (!box) continue;
     const o = state.rows[Number(tr.getAttribute('data-i'))];
     if (!o || (o.altGoal === undefined && state.goalRank.altRunning)) continue;
-    const holder = document.createElement('tr');
-    holder.innerHTML = altGoalCellHtml(o);
-    const fresh = holder.querySelector('td');
-    if (fresh) tr.replaceChild(fresh, td);
+    const holder = document.createElement('div');
+    holder.innerHTML = splitBox(altGoalCellHtml(o));
+    const fresh = holder.firstElementChild;
+    if (fresh) box.parentNode.replaceChild(fresh, box);
   }
 }
 
@@ -6949,16 +7016,16 @@ function comboTableHtml(rows, from, id) {
   if (theirScale) comboHeatScales.push({ id, scale: theirScale });
   const rowsHtml = rows
     .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
-      myGain: false, lineup: false, theirScale,
+      myGain: false, theirScale,
     }))
     .join('');
   return (
     `<div class="table-scroll"><table id="${esc(id)}" class="offers">` +
     `<thead><tr>` +
     `<th class="name">Manager</th>` +
-    `<th class="left">You send</th>` +
-    `<th class="left">You get</th>` +
-    `<th>${esc(GAIN_HEAD('He gains', weeks, span))}</th>` +
+    `<th class="left">Send</th>` +
+    `<th class="left">${esc(GAIN_HEAD('Gain', weeks, span))}</th>` +
+    `<th class="left">Value</th>` +
     // His own side, like He gains: each manager's figure is his squad's alone.
     `<th>His proj vs you</th>` +
     `<th class="left">ESPN</th>` +
@@ -8734,8 +8801,6 @@ function renderCustomSaved() {
 
   // manager, goal, other goal, send, get, lineup, gain, his gain, his proj vs you, espn, assume/remove/ask AI
   const cols = 11;
-  $('cuThGoal').textContent = `Δ ${CHANCE_SHORT[state.goal]}`;
-  $('cuThAltGoal').textContent = `Δ ${CHANCE_SHORT[otherGoal()]}`;
   $('cuRows').innerHTML = rows.map((entry, i) => {
     const drop = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
@@ -8915,8 +8980,6 @@ function drawCustomSuggest() {
     return;
   }
   host.hidden = false;
-  $('cuSugThGoal').textContent = `Δ ${CHANCE_SHORT[state.goal]}`;
-  $('cuSugThAltGoal').textContent = `Δ ${CHANCE_SHORT[otherGoal()]}`;
   $('cuSugWait').hidden = !!rows;
   state.cuSugRows = rows || [];
   const scales = rows ? gainScales(rows) : {};
