@@ -10849,7 +10849,7 @@ const HEAD_TITLES = [
   // The split columns and the two single figures (2026-10-12).
   [/^Chance$/, 'What the deal does to your chance of finishing first, and of finishing last.'],
   [/^Send$/, 'The men you would give up, and the men he would.'],
-  [/^Gain/, 'Points a week the deal adds to your best lineup, and to his.'],
+  [/^Gain\b/, 'Points a week the deal adds to your best lineup, and to his.'],
   [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
   [/^Appeal$/, 'Projection less season average, the men you get minus the men you send.'],
   [/^Total$/, 'Appeal plus your gain a week plus his.'],
