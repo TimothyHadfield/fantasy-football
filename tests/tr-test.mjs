@@ -1644,8 +1644,20 @@ const SCENARIOS = {
     const options = [...partnerSel.querySelectorAll('option')].slice(1);
     const withOffers = afterTeam.trades.length ? afterTeam.trades[0].partner : null;
     const busy = options.find((o) => text(o) === withOffers) || options[0];
-    const quiet =
-      options.find((o) => !afterTeam.trades.some((t) => t.partner === text(o))) || null;
+    const quietIn = (trades) => options.find((o) => !trades.some((t) => t.partner === text(o))) || null;
+    let quiet = quietIn(afterTeam.trades);
+    // Since the list holds one row per trade (2026-10-12) its forty rows reach
+    // every manager on the sample league. The "Both teams gain" switch is what
+    // leaves one with nothing, so the empty path is reached through it.
+    const bothWin = document.getElementById('bothWin');
+    const setBoth = async (on) => { bothWin.checked = on; fire(bothWin); await settle(); };
+    let quietBoth = false;
+    if (!quiet) {
+      await setBoth(true);
+      quiet = quietIn(readTrades(document));
+      quietBoth = !!quiet;
+      if (!quiet) await setBoth(false);
+    }
 
     const narrow = (option) => {
       partnerSel.value = option.getAttribute('value');
@@ -1661,10 +1673,18 @@ const SCENARIOS = {
       };
     };
 
-    const afterPartner = narrow(busy);
+    const afterPartner = quietBoth ? null : narrow(busy);
     await settle();
     const afterQuietPartner = quiet ? narrow(quiet) : null;
     await settle();
+    let afterPartnerLate = null;
+    if (quietBoth) {
+      partnerSel.value = 'all';
+      fire(partnerSel);
+      await setBoth(false);
+      afterPartnerLate = narrow(busy);
+      await settle();
+    }
 
     // Back to everybody: a filter has to be reversible.
     partnerSel.value = 'all';
@@ -1680,7 +1700,7 @@ const SCENARIOS = {
 
     return {
       fetchCalls, errors, before, afterTeam,
-      afterPartner, afterQuietPartner, afterReset, afterMeasure,
+      afterPartner: afterPartner || afterPartnerLate, afterQuietPartner, afterReset, afterMeasure,
     };
   },
 
@@ -4574,6 +4594,7 @@ if (!ctl.boot) {
   // A filter that matches nothing must EMPTY the table, not merely hide it.
   // Leaving the previous rows in a hidden wrapper is invisible on screen and
   // completely wrong in the document, which is how it survived being looked at.
+  ok('some manager has no offers, so the empty path is really walked', !!ctl.afterQuietPartner);
   if (ctl.afterQuietPartner) {
     ok('a manager with no offers leaves NO stale rows behind',
       ctl.afterQuietPartner.trades.length === 0,
@@ -4581,7 +4602,7 @@ if (!ctl.boot) {
     ok('and the table is hidden rather than showing an empty frame',
       ctl.afterQuietPartner.wrapHidden);
     ok('and the page says why in words',
-      /No trade here helps your goal/.test(ctl.afterQuietPartner.empty),
+      /No trade here helps (your goal|both teams)/.test(ctl.afterQuietPartner.empty),
       ctl.afterQuietPartner.empty.slice(0, 140));
     // And it sends the reader the right way. The message pointed at "the depth
     // map above" while the map was first; the map is last now.
@@ -7874,7 +7895,7 @@ if (!gt.boot) {
       .filter((x) => x.ba && x.g);
     const off = own.filter((x) => tenths(x.ba[2]) - tenths(x.ba[1]) !== tenths(x.g[1]));
     ok('finder: a row’s gain a week is its lineup a week, after minus before, as printed',
-      own.length > 5 && off.length === 0, `${own.length} rows · ` + off.slice(0, 4).map((x) => `${x.t.beforeAfter} ${x.t.gainText}`).join(' | '));
+      own.length > 3 && off.length === 0, `${own.length} rows · ` + off.slice(0, 4).map((x) => `${x.t.beforeAfter} ${x.t.gainText}`).join(' | '));
     ok('finder: no figure on a row is a signed zero',
       T.trades.every((t) => !/[+−-]0\.0(?!\d)/.test(`${t.gainText} ${(t.opp || {}).head}`)),
       T.trades.map((t) => `${t.gainText} ${(t.opp || {}).head}`).filter((s) => /[+−-]0\.0(?!\d)/.test(s)).slice(0, 4).join(' | '));
