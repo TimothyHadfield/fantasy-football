@@ -3878,9 +3878,13 @@ function valueCellHtml(offer) {
  * are the ones his mark reads (`glanceFor`). A dash when no man in the deal has
  * both, and in the sample league, whose men are invented.
  */
-function appealCellHtml(offer) {
+function appealOfOffer(offer) {
   const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: g.avg }; });
-  const a = state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
+  return state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
+}
+
+function appealCellHtml(offer) {
+  const a = appealOfOffer(offer);
   if (a === null) return `<td class="appeal">—</td>`;
   return `<td class="appeal${a > 0 ? ' pos' : a < 0 ? ' neg' : ''}" data-v="${a}">${signedText(a)}</td>`;
 }
@@ -8888,15 +8892,21 @@ function renderCustomPickers() {
  * rule the depth map's tints and the Players page's two greens follow, and it
  * is what keeps the number readable to anyone who cannot separate the hues.
  */
-function customGainHtml(delta, perWeek = perWeekOf(delta), value = null) {
+function customGainHtml(delta, perWeek = perWeekOf(delta), value = null, appeal = null) {
   const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
   // The side's change in total Value, on the small line (so the reserved height
   // holds). Absent with no lines, and then this is the markup it always was.
   const val = value === null ? '' :
     ` · <span class="cu-val ${value > 0 ? 'up' : value < 0 ? 'down' : 'flat'}">${signedText(value)} value</span>`;
+  // APPEAL, beside it (Tim, 2026-10-12: "appeal isn't shown in custom trade
+  // section as you're switching things up. Could you make it so that it is
+  // shown at the top as you select and deselect players?"). The row's own
+  // figure (`appealOf`), from this side's point of view.
+  const app = appeal === null ? '' :
+    ` · <span class="cu-val cu-appeal ${appeal > 0 ? 'up' : appeal < 0 ? 'down' : 'flat'}">${signedText(appeal)} appeal</span>`;
   return (
     `<span class="cu-num ${cls}">${signedText(perWeek)}<span class="unit">/wk</span></span>` +
-    `<span class="cu-sub">${signedText(delta)} over ${esc(weekRange(weeklySpan()))}${val}</span>`
+    `<span class="cu-sub">${signedText(delta)} over ${esc(weekRange(weeklySpan()))}${val}${app}</span>`
   );
 }
 
@@ -8955,10 +8965,12 @@ function renderCustomPreview(priced) {
   const cuOffer = customOffer(state.custom, priced);
   const n = weeklySpan().length;
   const val = customValueChange(sendA.map(String), sendB.map(String));
+  const appeal = appealOfOffer(cuOffer);
   $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer),
-    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n), val ? val.a : null);
+    weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n), val ? val.a : null, appeal);
   $('cuGainB').innerHTML = customGainHtml(priced.forB.delta,
-    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n), val ? val.b : null);
+    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n), val ? val.b : null,
+    appeal === null ? null : (appeal === 0 ? 0 : -appeal));
   // The sentence above them is now about the DEAL rather than about the
   // numbers: who moves which way, which the two columns cannot say between
   // them. The figures are under their own squads and do not need naming twice.
