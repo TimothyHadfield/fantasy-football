@@ -131,6 +131,7 @@ import {
 // A player's VALUE (Tim, 2026-10-09; docs/value-plan.md): the arithmetic. The
 // frozen lines it needs come from js/season.js (`readValue` below).
 import { valueOf, isBase as isValueBase } from './value.js';
+import { searchPlayers, measure as measureValues } from './value-measure.js';
 // Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
 import { healthy, injuryLabel, injuryClass } from './injury.js';
 // The preseason arrows by a name (Tim, 2026-09-30): ESPN's preseason projection
@@ -1764,8 +1765,143 @@ function valueSwitchHtml() {
     `${btn('proj', 'Proj')}${btn('value', 'Value')}</div>`;
 }
 
+/* ------------------------------------------------------- value measurement
+ *
+ * Tim, 2026-10-12: "Add a "vlaue measurement" tool at the top middle of the
+ * custom trades box when you can search for any players traded to any other
+ * players and see how the value diff measurements line up. This is just for
+ * fun or personal use when you hear trades online and whatnot."
+ *
+ * Two lists of men and their Values added up. It is NOT a trade: nothing here
+ * is priced, saved, or handed to the builder below. The men it can find are
+ * the ones the league's Values cover — everybody on a squad.
+ */
+const vm = { a: [], b: [], hit: { a: 0, b: 0 } };
+const VM_SIDES = ['a', 'b'];
+const vmEl = (name, side) => $(`vm${name}${side.toUpperCase()}`);
+
+/** Every rostered man once, with his Value (null when he has none). */
+function measurePlayers() {
+  const seen = new Map();
+  for (const t of (state.data ? state.data.teams : [])) {
+    for (const p of (t.players || [])) {
+      if (p.playerId === null || p.playerId === undefined || seen.has(String(p.playerId))) continue;
+      seen.set(String(p.playerId), {
+        playerId: String(p.playerId), name: p.name, position: p.position,
+        team: p.proTeam || espn.PRO_TEAMS[proTeamOf(p)] || '',
+        value: valueLookup ? valueLookup(p.playerId) : null,
+      });
+    }
+  }
+  return seen;
+}
+
+const vmValueText = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—');
+
+function vmFound(side) {
+  const input = vmEl('Find', side);
+  if (!input || !input.value.trim()) return null;
+  return searchPlayers([...measurePlayers().values()], input.value, { exclude: [...vm.a, ...vm.b] });
+}
+
+function renderMeasureList(side) {
+  const list = vmEl('List', side);
+  if (!list) return;
+  const found = vmFound(side);
+  list.hidden = !found;
+  if (!found) { list.innerHTML = ''; return; }
+  vm.hit[side] = Math.max(0, Math.min(vm.hit[side], found.length - 1));
+  list.innerHTML = found.length
+    ? found.map((p, i) =>
+      `<li data-vm-add="${esc(p.playerId)}"${i === vm.hit[side] ? ' class="on"' : ''}>` +
+      `<span class="nm">${esc(p.name)}</span><span class="ps">${esc(p.position || '')}</span>` +
+      `<span class="vl">${vmValueText(p.value)}</span></li>`).join('')
+    : `<li class="none">No player found</li>`;
+}
+
+function renderMeasure() {
+  const host = $('valueMeasure');
+  if (!host) return;
+  host.hidden = !state.valueBase || !valueLookup || !state.data;
+  if (host.hidden) return;
+  const men = measurePlayers();
+  // A man who left every squad (another league, a re-sync) leaves the lists.
+  for (const s of VM_SIDES) vm[s] = vm[s].filter((id) => men.has(id));
+  const sums = measureValues(vm.a.map((id) => men.get(id).value), vm.b.map((id) => men.get(id).value));
+  const any = vm.a.length || vm.b.length;
+  for (const s of VM_SIDES) {
+    vmEl('Chips', s).innerHTML = vm[s].map((id) => {
+      const p = men.get(id);
+      return `<span class="vm-chip"><span class="nm">${esc(p.name)}</span><span class="ps">${esc(p.position || '')}</span>` +
+        `<span class="vl">${vmValueText(p.value)}</span>` +
+        `<button type="button" data-vm-x="${esc(id)}" aria-label="Remove ${esc(p.name)}">×</button></span>`;
+    }).join('');
+    const total = vmEl('Total', s);
+    total.innerHTML = any ? `Value <strong>${sums[s].toFixed(1)}</strong>` : '';
+    total.classList.toggle('more', !!any && (s === 'a' ? sums.diff > 0 : sums.diff < 0));
+    renderMeasureList(s);
+  }
+  const diff = $('vmDiff');
+  const gap = Math.abs(sums.diff).toFixed(1);
+  diff.textContent = !any ? 'vs' : sums.diff === 0 ? 'Even' : sums.diff > 0 ? `◀ +${gap}` : `+${gap} ▶`;
+  diff.classList.toggle('gap', !!any && sums.diff !== 0);
+}
+
+function wireMeasure() {
+  const host = $('valueMeasure');
+  if (!host) return;
+  const add = (side, id) => {
+    if (!id || vm.a.includes(id) || vm.b.includes(id)) return;
+    vm[side].push(id);
+    const input = vmEl('Find', side);
+    input.value = '';
+    vm.hit[side] = 0;
+    renderMeasure();
+    input.focus();
+  };
+  for (const side of VM_SIDES) {
+    const input = vmEl('Find', side);
+    const list = vmEl('List', side);
+    input.addEventListener('input', () => { vm.hit[side] = 0; renderMeasureList(side); });
+    input.addEventListener('focus', () => renderMeasureList(side));
+    input.addEventListener('blur', () => { list.hidden = true; });
+    input.addEventListener('keydown', (e) => {
+      const found = vmFound(side) || [];
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!found.length) return;
+        e.preventDefault();
+        vm.hit[side] = (vm.hit[side] + (e.key === 'ArrowDown' ? 1 : found.length - 1)) % found.length;
+        renderMeasureList(side);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const p = found[vm.hit[side]] || found[0];
+        if (p) add(side, p.playerId);
+      } else if (e.key === 'Escape') {
+        input.value = '';
+        renderMeasureList(side);
+      }
+    });
+    // Pressing a name must not blur the box first, or the list is gone before
+    // the press lands (a finger as much as a mouse).
+    list.addEventListener('pointerdown', (e) => e.preventDefault());
+    list.addEventListener('mousedown', (e) => e.preventDefault());
+    list.addEventListener('click', (e) => {
+      const li = e.target.closest ? e.target.closest('li[data-vm-add]') : null;
+      if (li) add(side, li.getAttribute('data-vm-add'));
+    });
+  }
+  host.addEventListener('click', (e) => {
+    const x = e.target.closest ? e.target.closest('button[data-vm-x]') : null;
+    if (!x) return;
+    const id = x.getAttribute('data-vm-x');
+    for (const s of VM_SIDES) vm[s] = vm[s].filter((v) => v !== id);
+    renderMeasure();
+  });
+}
+
 /** The switch that lives in the markup (the custom panel's toolbar). */
 function syncValueSwitch() {
+  renderMeasure();
   const el = $('cuValueView');
   if (!el) return;
   el.hidden = !state.valueBase;
@@ -3483,7 +3619,9 @@ function espnTradeUrl(offer) {
  * its own face instead.
  */
 function espnCell(offer) {
-  return espnLinkOrReason(offer) + customLoadButton(offer);
+  // No "Open in custom trades" button since 2026-10-12: the row itself opens
+  // there (`openRow`).
+  return espnLinkOrReason(offer);
 }
 
 /**
@@ -3755,14 +3893,17 @@ function offerRow(offer, i, key, opts = {}) {
   // own it would make the whole breakdown unreachable without a pointer. The
   // button is the keyboard route in AND the element focus returns to when the
   // modal closes. No `title` on it: js/touch-titles.js leaves controls alone.
-  const open =
-    `<button type="button" class="wk-open" data-open="${esc(key)}">Week by week</button>`;
+  // NO BUTTON SINCE 2026-10-12 (Tim: "remove the week by week button on the
+  // far right side of the trade, as well as the "open in custom trades"
+  // button … when you click on the trade automatically open up in custom
+  // trades"). The row is in the tab order instead and answers Enter (`openRow`).
+  const open = '';
 
   return (
     // `offer`, NOT `row`: app.css's `.row` is the flex control bar, and a <tr>
     // wearing it became a wrapping flex box — every offer's cells stacked
     // down the page instead of across it.
-    `<tr class="offer${picked}${offer.goalUnranked ? ' unranked' : ''}" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
+    `<tr class="offer${picked}${offer.goalUnranked ? ' unranked' : ''}" tabindex="0" data-i="${i}" data-key="${esc(key)}"${attrs}>` +
     // The manager's name gets its own element so the merged badge beside it is
     // never read as part of it — by a test, by a sort, or by anyone.
     `<td class="name"><span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}</td>` +
@@ -4502,6 +4643,7 @@ function renderFinderNote(scales = finderScales) {
         `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs him ` +
         `a little is kept and marked down by how likely he is to say yes, not hidden. `
       : `keeping only the ones where <strong>both totals go up</strong>. `) +
+    `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out. ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
     `starter to somebody else, which is why a deal can help both sides at once. ` +
@@ -4660,6 +4802,19 @@ const breathe = (() => {
  * them. `runSearch.token` is the cancel token: a newer search, asked after every
  * pause, ends this one before it can write a thing.
  */
+/** How many rows the finder shows, and the least a suggested trade must gain YOU a week. */
+const FINDER_ROWS = 40;
+const MIN_MY_PER_WEEK = 1;
+/** A finder offer's "You" gain a week, to the tenth it is printed at. */
+function myPerWeekShown(offer, weeks) {
+  const net = netGainOf(offer);
+  if (!Number.isFinite(net)) return -Infinity;
+  const v = weeks && weeks.length
+    ? weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, weeks.length)
+    : net;
+  return Math.round(v * 10) / 10;
+}
+
 function runSearch({ keepDeal = false } = {}) {
   // An assumed trade's rosters first, so the search starts from them.
   syncAssumed();
@@ -4756,6 +4911,7 @@ function runSearch({ keepDeal = false } = {}) {
       theirMinPerWeek: W && !state.bothWin ? THEIR_MIN_PER_WEEK : null,
       // One row per trade, never its near-copies (`dropVariants`).
       distinct: true,
+      limit: FINDER_ROWS * 4,
       // KEPT BY EXPECTED VALUE, not by your gain alone: weighted gain × the
       // chance he says yes — the same product the final ranking uses. Without
       // it every finalist was a fleece at the edge of the tolerance.
@@ -4771,6 +4927,11 @@ function runSearch({ keepDeal = false } = {}) {
       meetWeeks: weeks ? meetWeeksOf(state.myTeamId) : null,
     }, { pause: breathe, stale });
     if (!result || stale()) return;
+    // AT LEAST +1 A WEEK FOR YOU (Tim, 2026-10-12: "don't suggest any trades
+    // that have less than +1 pt/week for the user suggesting the trade"). The
+    // figure is the row's own "You" gain as printed; the search hands back more
+    // than the list holds so the cut does not leave it short.
+    result.offers = result.offers.filter((o) => myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK).slice(0, FINDER_ROWS);
     // Whether this search had the goal to work with — even when the weights
     // came back null (the goal is settled), it has been tried and a re-run
     // would find the same thing.
@@ -10643,8 +10804,31 @@ function clickIsPreview(e) {
   return coarsePointer() && !!t.closest('[data-rc]');
 }
 
+/**
+ * A TRADE ROW OPENS IN CUSTOM TRADES (Tim, 2026-10-12: "Because we already have
+ * the week-by-week details in the custom trades, just remove that feature
+ * entirely when you click on the trade. Instead when you click on the trade
+ * automatically open up in custom trades."). The pop-up is still what opens for
+ * the one thing the builder cannot hold: a whole combination, or a deal from a
+ * squad the builder's left side is not following (`customLoadable`).
+ */
+function openRow(offer, key) {
+  if (customLoadable(offer)) loadIntoCustom(offer);
+  else openDeal(offer, key);
+}
+
+wireMeasure();
+
 function wireOfferClicks(el, rowsFor) {
   if (!el) return;
+  // The keyboard's way in, now that the row has no button of its own.
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target || !e.target.matches || !e.target.matches('tr.offer[data-i]')) return;
+    const offer = rowsFor()[Number(e.target.getAttribute('data-i'))];
+    if (!offer) return;
+    e.preventDefault();
+    openRow(offer, e.target.getAttribute('data-key'));
+  });
   el.addEventListener('click', (e) => {
     if (clickIsPlayer(e)) return;
     if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai]')) return;
@@ -10658,7 +10842,9 @@ function wireOfferClicks(el, rowsFor) {
     const offer = rowsFor()[Number(host.getAttribute('data-i'))];
     if (!offer) return;
     e.stopPropagation();
-    openDeal(offer, host.getAttribute('data-key'));
+    // The combo's headline button is not a row: it is the whole packing.
+    if (host.matches && host.matches('tr.offer')) openRow(offer, host.getAttribute('data-key'));
+    else openDeal(offer, host.getAttribute('data-key'));
   });
 }
 
@@ -11020,7 +11206,7 @@ $('cuRows').addEventListener('click', (e) => {
   // without this the pop-up opened and the very same click shut it again — it
   // looked like a row that did nothing at all.
   e.stopPropagation();
-  openDeal(offer, `cu:${i}`);
+  openRow(offer, `cu:${i}`);
 });
 
 // ---- custom trades: the breakdown beside the builder ---------------------

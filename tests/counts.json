@@ -186,6 +186,9 @@
     "test-trade-moves.mjs": {
       "assertions": 49
     },
+    "test-value-measure.mjs": {
+      "assertions": 48
+    },
     "test-trade-net.mjs": {
       "assertions": 45
     },
