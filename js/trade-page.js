@@ -3862,13 +3862,11 @@ const dataVOf = (html) => (String(html).match(/ data-v="([^"]*)"/) || [null, '']
 function valueCellHtml(offer) {
   const ids = (list) => list.map((p) => String(p.playerId));
   const v = customValueChange(ids(offer.send), ids(offer.receive));
-  const box = (n) => {
-    if (!v) return `<td class="val-change">—</td>`;
-    const cls = n > 0 ? ' pos' : n < 0 ? ' neg' : '';
-    return `<td class="val-change${cls}" data-v="${n}">${signedText(n)}</td>`;
-  };
-  return `<td class="split value"${v ? ` data-v="${v.a}"` : ''}>` +
-    splitHalf('You', box(v ? v.a : null)) + splitHalf('Him', box(v ? v.b : null)) + `</td>`;
+  // ONE FIGURE, YOURS (Tim, 2026-10-12: "because value is the same for both
+  // users … make it so it's not a split-collumn thing anymore … just make it
+  // the value dif for me, and it's assumed the other player has the opposite").
+  if (!v) return `<td class="value val-change">—</td>`;
+  return `<td class="value val-change${v.a > 0 ? ' pos' : v.a < 0 ? ' neg' : ''}" data-v="${v.a}">${signedText(v.a)}</td>`;
 }
 
 /**
@@ -3878,9 +3876,18 @@ function valueCellHtml(offer) {
  * are the ones his mark reads (`glanceFor`). A dash when no man in the deal has
  * both, and in the sample league, whose men are invented.
  */
-function appealOfOffer(offer) {
+function appealOfOffer(offer, hisShown = undefined) {
   const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: g.avg }; });
-  return state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
+  if (state.isDemo) return null;
+  // Plus his own gain a week, the "Him" figure of the row (Tim, 2026-10-12;
+  // js/outlook-mark.js `appealShown`).
+  const his = hisSideOf(offer);
+  // `hisShown`: the custom box hands in the figure it prints under his name,
+  // so the sum is of the two numbers on screen there.
+  const perWeek = hisShown !== undefined ? hisShown
+    : !Number.isFinite(his.gain) ? null
+    : basis() === 'weeks' ? perWeekOf(his.gain, his.weeks) : his.gain;
+  return outlook.appealShown(outlook.appealOf(side(offer.receive), side(offer.send)), perWeek);
 }
 
 function appealCellHtml(offer) {
@@ -7264,7 +7271,7 @@ function comboTableHtml(rows, from, id) {
     `<th class="name">Manager</th>` +
     `<th class="left">Send</th>` +
     `<th class="left">${esc(GAIN_HEAD('Gain', weeks, span))}</th>` +
-    `<th class="left">Value</th>` +
+    `<th>Value</th>` +
     `<th>Appeal</th>` +
     // His own side, like He gains: each manager's figure is his squad's alone.
     `<th>His proj vs you</th>` +
@@ -8966,11 +8973,11 @@ function renderCustomPreview(priced) {
   const cuOffer = customOffer(state.custom, priced);
   const n = weeklySpan().length;
   const val = customValueChange(sendA.map(String), sendB.map(String));
-  const appeal = appealOfOffer(cuOffer);
+  const hisWeek = weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n);
+  const appeal = appealOfOffer(cuOffer, hisWeek);
   $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer),
     weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n));
-  $('cuGainB').innerHTML = customGainHtml(priced.forB.delta,
-    weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n));
+  $('cuGainB').innerHTML = customGainHtml(priced.forB.delta, hisWeek);
   // Once, above both names, and yours only: his are the same figures with the
   // sign turned (Tim, 2026-10-12).
   const top = (label, v) => (v === null || v === undefined ? '' :

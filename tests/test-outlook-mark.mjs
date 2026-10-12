@@ -92,5 +92,19 @@ ok(o.outlookOf(11, 13).kind === 'coin' && o.appealOf([M(10, 10)], [M(11, 13)]) >
 ok(o.appealOf([M(11, 13)], [M(10, 10)]) <= -2, 'a coin you GET counts against it');
 ok(o.APPEAL_EXPLAIN.includes('💎') && o.APPEAL_EXPLAIN.includes('🪙'), 'the explanation ties it to both marks');
 
+// --- Appeal as shown: plus the other manager's points a week -----------------
+// Tim, 2026-10-12: "if our current appeal shows +7, and the user's pts/week dif
+// is -2, then the new appeal shows +5."
+eq(o.appealShown(7, -2), 5, 'his own example: +7 and −2 a week is +5');
+eq(o.appealShown(7, 2), 9, 'a trade he gains from is more appealing');
+eq(o.appealShown(-3.5, 0.4), -3.1, 'a clean tenth');
+eq(o.appealShown(5.2, -1.14), 4.1, 'his figure goes in as printed (−1.1)');
+eq(o.appealShown(2, -2), 0, 'cancelling out is 0');
+ok(Object.is(o.appealShown(2, -2), 0), 'a plain 0, never −0');
+eq(o.appealShown(null, -2), null, 'no appeal known: still not known');
+eq(o.appealShown(6.6, null), 6.6, 'no figure for him: the appeal as it was');
+eq(o.appealShown(6.6, NaN), 6.6, 'NaN for him: the same');
+ok(o.APPEAL_EXPLAIN.includes('other manager'), 'the explanation says his gain is in it');
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -75,11 +75,27 @@ export function appealOf(get, send) {
   return r === 0 ? 0 : r;
 }
 
+/**
+ * APPEAL AS SHOWN: the figure above PLUS what the trade does to the other
+ * manager's points a week (Tim, 2026-10-12: "change the appeal so that it's
+ * calculated exactly how it's calculated now, but then you add the other user's
+ * pts/week dif to the appeal and that's what you show. For example if our
+ * current appeal shows +7, and the user's pts/week dif is -2, then the new
+ * appeal shows +5"). His figure goes in to the tenth, as his "Him" gain is
+ * printed. Not known stays not known; with no figure for him it is the base.
+ */
+export function appealShown(base, hisPerWeek) {
+  if (!num(base)) return null;
+  const r = round1(base + (num(hisPerWeek) ? round1(hisPerWeek) : 0));
+  return r === 0 ? 0 : r;
+}
+
 /** The line behind "How this works". */
 export const APPEAL_EXPLAIN =
   `<strong>Appeal</strong>: projection for the weeks left minus season average, added up over the men you get, ` +
-  `less the same over the men you send. High means you get men due to score more than they have (💎) for men ` +
-  `who have scored more than they are due to (🪙). A man with no average yet adds nothing.`;
+  `less the same over the men you send, plus the other manager’s gain a week. High means you get men due to ` +
+  `score more than they have (💎) for men who have scored more than they are due to (🪙), in a trade he gains ` +
+  `from too. A man with no average yet adds nothing.`;
 
 /** The words a screen reader gets, and the card's heading line. */
 export function outlookWords(o) {
