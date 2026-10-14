@@ -692,6 +692,14 @@ export function seasonAverageOf(stats, seasonId) {
   const line = (stats || []).find(
     (s) => s && s.statSourceId === 0 && s.statSplitTypeId === 0 && s.seasonId === seasonId
   );
+  // NO GAMES, NO AVERAGE (rule 5; audit finding 15, 2026-10-14). ESPN sends
+  // 0.00 for a man who has not played (Zach Charbonnet, measured on 1241838):
+  // the line's `stats` has no games played (stat "210"). A man who played and
+  // scored 0 keeps his 0 (De'Zhaun Stribling: "210": 1). A line without a
+  // `stats` map at all says nothing either way and keeps ESPN's figure.
+  if (line && line.stats && typeof line.stats === 'object' && !(Number(line.stats['210']) > 0)) {
+    return null;
+  }
   return typeof line?.appliedAverage === 'number' && Number.isFinite(line.appliedAverage)
     ? line.appliedAverage
     : null;

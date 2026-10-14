@@ -1310,6 +1310,12 @@ async function readWeekRostersNow(week, { byes, fresh = false } = {}) {
       { final: final || recheck, byesKnown: byesAreKnown(byeMap), rechecked: recheck });
     if (was && !was.final && was.sig !== store.signatureOf(teams)) {
       rosterMoved(cfg, { except: week, olderThan: startedAt });
+    } else if (was && !was.final && store.newlyOut(was.teams, teams).length &&
+      !down && store.outRereadDue(cfg.leagueId, cfg.season)) {
+      // A man went OUT (audit finding 11): the weeks ahead still carry his old
+      // projection, so they are read again — at most once an hour, never on
+      // the synced copy (rule 20; this is the ESPN read path).
+      rosterMoved(cfg, { except: week, olderThan: startedAt });
     }
   }
 

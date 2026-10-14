@@ -396,6 +396,24 @@ const SCENARIOS = {
     const lastYear = espn.parseFreeAgent({ ...fa, ratings: {}, player: { ...fa.player, stats: fa.player.stats.slice(0, 2) } }, 4);
     eq([lastYear.seasonAvg, lastYear.posRank], [null, null], 'only LAST season’s line, empty ratings: null, never last year’s 8.8');
 
+    // NO GAMES PLAYED → null, so pages print "—" (rule 5; audit finding 15).
+    // Lines copied from public league 1241838's mRoster read, 2026-10-14: Zach
+    // Charbonnet (OUT, no games: `stats` {}), De'Zhaun Stribling (played one
+    // game, scored 0: "210": 1), Omarion Hampton (five games, 47.1).
+    const seasonLine = (total, avg, stats) => ({
+      appliedAverage: avg, appliedStats: {}, appliedTotal: total, externalId: String(SEASON),
+      id: `00${SEASON}`, proTeamId: 0, scoringPeriodId: 0, seasonId: SEASON,
+      statSourceId: 0, statSplitTypeId: 0, stats,
+    });
+    eq(espn.seasonAverageOf([seasonLine(0, 0, {})], SEASON), null,
+      'a man with no games played (ESPN’s 0.00, no stat 210): Avg is null, not 0.0');
+    eq(espn.seasonAverageOf([seasonLine(0, 0, { 155: 1, 210: 1 })], SEASON), 0,
+      'a man who played one game and scored 0 keeps his real 0.0');
+    eq(espn.seasonAverageOf([seasonLine(47.1, 9.42, { 210: 5, 53: 22 })], SEASON), 9.42,
+      'a man with five games keeps ESPN’s own average');
+    const noGames = espn.parseFreeAgent({ ...fa, player: { ...fa.player, stats: [fa.player.stats[0], seasonLine(0, 0, {})] } }, 4);
+    eq(noGames.seasonAvg, null, 'free agent with no games: seasonAvg null on the parsed row');
+
     // Roster shape (mRoster `teams[].roster.entries[]`): ratings on playerPoolEntry.
     installFetch({ glance: true });
     const week = await season.fetchWeekRosters(4);
