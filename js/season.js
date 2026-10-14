@@ -38,6 +38,9 @@ import * as value from './value.js';
 // The trade offers waiting on ESPN: the decoding is pure and lives there; this
 // file asks. See "THE TRADE OFFERS WAITING" below.
 import * as pending from './pending.js';
+// ESPN's injury classes, read one way across the site. See "WHO IS OUT FOR THE
+// SEASON" below.
+import { healthy, injuryClass } from './injury.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -650,6 +653,8 @@ function clearMemos() {
 export function forgetOpen() {
   const cfg = storable();
   const gone = cfg ? store.forgetOpen(cfg.leagueId, cfg.season) : [];
+  if (cfg) store.forgetInjury(cfg.leagueId, cfg.season);
+  forgetInjuryMemo();
   clearMemos();
   if (typeof espn.clearProSchedule === 'function') espn.clearProSchedule();
   return gone;
@@ -932,7 +937,155 @@ async function inBatches(items, size, fn) {
 export async function fetchWeekRosters(week, { byes, fresh = false, raw = false } = {}) {
   const { final, ...got } = await readWeekRosters(week, { byes, fresh });
   if (raw) return got;
-  return { ...got, teams: await annotateTeams(week, got.teams, { final: final === true }) };
+  const teams = await annotateTeams(week, got.teams, { final: final === true });
+  return { ...got, teams: await withInjuryDetails(teams) };
+}
+
+// ===========================================================================
+// WHO IS OUT FOR THE SEASON — ESPN'S OWN WORD
+// ===========================================================================
+//
+// Tim, 2026-10-12: "I just saw a trade offer with a player that was out for the
+// rest of the season, which should never happen." ESPN's status says only Out
+// or IR, for a man back next week too; its projections are 0 in every week left
+// for most IR men, returners included. What says "for the season" is
+// `injuryDetails.outForSeason`, on `kona_playercard` only (`espn.
+// fetchInjuryDetails`).
+//
+// WHO IS ASKED ABOUT: only a man whose status is in the out class (js/injury.js)
+// — fifteen of 181 on 1241838, one request. Nobody out, no request.
+//
+// WHERE IT COMES FROM, in the order a roster read uses:
+//   the synced copy   `schedule.injuryDetails` (`{ at, byId }`), riding the
+//                     schedule as `pendingTrades` does — ZERO ESPN requests
+//                     (rule 20). An older copy without it: nobody is known.
+//   this browser      js/store.js `readInjury`, six hours.
+//   ESPN              one read for the men not yet asked about this page load,
+//                     shared by every week read in flight. A failure leaves
+//                     them unknown for the page's life rather than re-asking on
+//                     every week.
+//
+// Each out man ESPN spoke for gets `injuryDetails: { outForSeason, returnDate,
+// type }` on his roster entry. A man without it is not known, and a reader
+// must fall back to whatever it did before (js/trade-page.js `outForSeason`).
+
+const isOutClass = (p) => !!p && p.playerId !== null && p.playerId !== undefined
+  && !healthy(p.injuryStatus) && injuryClass(String(p.injuryStatus)) === 'out';
+
+/** A `byId` object as stored or synced, checked entry by entry, as a Map. */
+function injuryMapOf(byId) {
+  const out = new Map();
+  if (!byId || typeof byId !== 'object') return out;
+  for (const [id, d] of Object.entries(byId)) {
+    if (!d || typeof d !== 'object' || typeof d.outForSeason !== 'boolean') continue;
+    out.set(String(id), {
+      outForSeason: d.outForSeason,
+      returnDate: typeof d.returnDate === 'string' ? d.returnDate : null,
+      type: typeof d.type === 'string' ? d.type : null,
+    });
+  }
+  return out;
+}
+
+/** Decoded `kona_playercard` entries as a `byId` object. */
+function injuryByIdOf(entries) {
+  const byId = {};
+  for (const e of entries || []) {
+    const d = espn.parseInjuryDetails(e);
+    if (d) byId[d.playerId] = { outForSeason: d.outForSeason, returnDate: d.returnDate, type: d.type };
+  }
+  return byId;
+}
+
+let injuryHeld = null;   // { key, byId: Map, at, asked: Set, jobs: Promise[] }
+
+/** Forget what this page holds (Sync now, tests). */
+function forgetInjuryMemo() {
+  injuryHeld = null;
+}
+
+/**
+ * ESPN's word on these men, as a Map id -> details, for the men it is known
+ * for. Never throws. The synced copy makes no request.
+ */
+async function injuryDetailsFor(ids) {
+  try {
+    const cfg = storable();
+    if (!cfg || pastSeason() || !ids.length) return new Map();
+    const down = await cloudDown();
+    if (down) return injuryMapOf(down.schedule && down.schedule.injuryDetails ? down.schedule.injuryDetails.byId : null);
+
+    const key = `${cfg.leagueId}::${cfg.season}`;
+    if (!injuryHeld || injuryHeld.key !== key) {
+      injuryHeld = { key, byId: new Map(), at: null, asked: new Set(), jobs: [] };
+      const kept = store.readInjury(cfg.leagueId, cfg.season);
+      if (kept) {
+        injuryHeld.byId = injuryMapOf(kept.byId);
+        injuryHeld.at = kept.at;
+        for (const id of injuryHeld.byId.keys()) injuryHeld.asked.add(id);
+      }
+    }
+    const held = injuryHeld;
+    const missing = [...new Set(ids.map(String))].filter((id) => !held.asked.has(id));
+    if (missing.length) {
+      for (const id of missing) held.asked.add(id);
+      held.jobs.push((async () => {
+        const at = Date.now();
+        const got = injuryMapOf(injuryByIdOf(await espn.fetchInjuryDetails(missing.map(Number))));
+        if (injuryHeld !== held) return;
+        for (const [id, d] of got) held.byId.set(id, d);
+        // The store's age is its OLDEST reading: a merge never makes old news young.
+        held.at = held.at === null ? at : Math.min(held.at, at);
+        store.writeInjury(cfg.leagueId, cfg.season, Object.fromEntries(held.byId), { at: held.at });
+      })().catch(() => { /* unknown for this page load: the old rule stands */ }));
+    }
+    await Promise.all(held.jobs);
+    return held.byId;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Every out man ESPN spoke for carries `injuryDetails`. Nobody out: no read, same teams. */
+async function withInjuryDetails(teams) {
+  try {
+    if (!Array.isArray(teams) || !teams.length) return teams;
+    const ids = teams.flatMap((t) => ((t && t.players) || []).filter(isOutClass).map((p) => p.playerId));
+    if (!ids.length) return teams;
+    const byId = await injuryDetailsFor(ids);
+    if (!byId.size) return teams;
+    return teams.map((t) => {
+      if (!t || !Array.isArray(t.players) || !t.players.some((p) => isOutClass(p) && byId.has(String(p.playerId)))) return t;
+      const tag = (p) => (isOutClass(p) && byId.has(String(p.playerId)) ? { ...p, injuryDetails: byId.get(String(p.playerId)) } : p);
+      const players = t.players.map(tag);
+      const out = { ...t, players };
+      if (Array.isArray(t.starters)) out.starters = t.starters.map(tag);
+      if (Array.isArray(t.bench)) out.bench = t.bench.map(tag);
+      return out;
+    });
+  } catch {
+    return teams;
+  }
+}
+
+/**
+ * What a sync sends: `{ at, byId }` for every out man on any synced week's
+ * roster, read fresh from ESPN, or null (nobody out, ESPN refusing).
+ */
+async function injuryForSync(rosters) {
+  const cfg = storable();
+  if (!cfg || pastSeason()) return null;
+  const ids = new Set();
+  for (const teams of rosters.values()) {
+    for (const t of teams || []) for (const p of (t && t.players) || []) if (isOutClass(p)) ids.add(Number(p.playerId));
+  }
+  if (!ids.size) return null;
+  const at = Date.now();
+  const byId = injuryByIdOf(await espn.fetchInjuryDetails([...ids]));
+  if (!Object.keys(byId).length) return null;
+  store.writeInjury(cfg.leagueId, cfg.season, byId, { at });
+  forgetInjuryMemo();
+  return { at, byId };
 }
 
 /** The read itself: store, cloud, ESPN. `final` only on a stored week that is frozen. */
@@ -2639,6 +2792,19 @@ export async function buildCloudPayload({ onProgress } = {}) {
   if (waiting || 'pendingTrades' in payload.schedule) {
     const { pendingTrades: old, ...rest } = payload.schedule;
     payload.schedule = waiting ? { ...rest, pendingTrades: waiting } : rest;
+  }
+
+  // ESPN'S WORD ON WHO IS OUT FOR THE SEASON rides the schedule as
+  // `injuryDetails` (see "WHO IS OUT FOR THE SEASON"), so the phone's Trade page
+  // bars the same men with no request of its own. Never last sync's: taken off
+  // first, as `pendingTrades` is. Absent when nobody is out or ESPN refused.
+  let injury = null;
+  try {
+    injury = await injuryForSync(rosters);
+  } catch { /* nothing of it goes up this time */ }
+  if (injury || 'injuryDetails' in payload.schedule) {
+    const { injuryDetails: oldInjury, ...rest } = payload.schedule;
+    payload.schedule = injury ? { ...rest, injuryDetails: injury } : rest;
   }
   return payload;
 }

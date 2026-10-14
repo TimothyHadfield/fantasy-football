@@ -186,6 +186,9 @@
     "test-trade-moves.mjs": {
       "assertions": 57
     },
+    "test-out-for-season.mjs": {
+      "assertions": 18
+    },
     "test-outlook-mark.mjs": {
       "assertions": 63
     },

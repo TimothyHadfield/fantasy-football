@@ -133,7 +133,7 @@ import {
 import { valueOf, isBase as isValueBase } from './value.js';
 import { searchPlayers, measure as measureValues } from './value-measure.js';
 // Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
-import { healthy, injuryLabel, injuryClass } from './injury.js';
+import { healthy, injuryLabel, injuryClass, outForSeasonRule } from './injury.js';
 // The preseason arrows by a name (Tim, 2026-09-30): ESPN's preseason projection
 // kept in data/baselines/, re-scored with the league's rules.
 import * as trend from './proj-trend.js';
@@ -2205,26 +2205,27 @@ function restProjOf(p) {
 /**
  * OUT FOR THE REST OF THE SEASON (Tim, 2026-10-12: "I just saw a trade offer
  * with a player that was out for the rest of the season, which should never
- * happen"). ESPN has no field that says so — its status is "Out" or "IR" for a
- * man back in a fortnight too — so it is read off what ESPN projects: a man it
- * lists as out (OUT, IR, suspended, not active) and projects at NOTHING in
- * every week left that the page holds for him. His bye is not a week he could
- * have played. A man the page holds no week for is not known, so not barred.
+ * happen"). ESPN DOES say so: `injuryDetails.outForSeason`, on its player card
+ * (js/espn.js `fetchInjuryDetails`; js/season.js puts it on every out man as
+ * `p.injuryDetails`, from the synced copy on a phone). When it is known it is
+ * the answer: a man ESPN expects back is NOT barred, and stays priced exactly as
+ * ESPN projects him. When it is not known (the read failed, an older synced
+ * copy) the old guess stands: listed as out (OUT, IR, suspended, not active)
+ * and projected at NOTHING in every week left that the page holds for him. His
+ * bye is not a week he could have played. The rule: js/injury.js
+ * `outForSeasonRule`.
  */
 function outForSeason(p) {
   if (!p || p.playerId === null || p.playerId === undefined) return false;
-  if (healthy(p.injuryStatus) || injuryClass(String(p.injuryStatus)) !== 'out') return false;
   const bye = byeWeekOf(p, state.byes);
-  let held = 0;
+  const values = [];
   for (const w of spanFor('title')) {
     if (Number.isFinite(bye) && Number(bye) === Number(w)) continue;
     const e = weekly.byWeek.get(w)?.get(p.playerId);
     if (!e) continue;
-    held += 1;
-    const v = e.done === true ? e.pregame : e.projected;
-    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return false;
+    values.push(e.done === true ? e.pregame : e.projected);
   }
-  return held > 0;
+  return outForSeasonRule(p, values);
 }
 
 /** Their ids, for the search (js/trade.js `skip`): no suggested trade hands one over. */
@@ -4746,7 +4747,7 @@ function renderFinderNote(scales = finderScales) {
         `a little is kept and marked down by how likely he is to say yes, not hidden. `
       : `keeping only the ones where <strong>both totals go up</strong>. `) +
     `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out, ` +
-    `and so is any trade with a man who is out for the rest of the season (listed as out, and projected at nothing in every week left). ` +
+    `and so is any trade with a man ESPN lists as out for the rest of the season. ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
     `starter to somebody else, which is why a deal can help both sides at once. ` +

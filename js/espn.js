@@ -319,6 +319,55 @@ export async function fetchDraftRanks(ids) {
 }
 
 /**
+ * ESPN'S OWN WORD ON AN INJURY, for the players asked — raw `players[]` entries.
+ * Decode each with `parseInjuryDetails`.
+ *
+ * `player.injuryDetails` = `{ expectedReturnDate: [y, m, d], outForSeason,
+ * type }` rides ONLY on `kona_playercard` (measured on public league 1241838,
+ * 2026-10-14: the 15 rostered men listed out/IR came back as 15 entries in one
+ * request, each with the field; `mRoster` and `kona_player_info` carry none of
+ * it). Same `filterIds` filter as `fetchPlayersWeek`, a hundred ids a request.
+ * About 12 KB an entry, so callers ask only for the men who are out.
+ *
+ * @param {Array<number>} ids ESPN player ids
+ * @returns {Promise<Array>}
+ */
+export async function fetchInjuryDetails(ids) {
+  const want = [...new Set((ids || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < want.length; i += PLAYER_IDS_PER_READ) {
+    const filter = { players: { filterIds: { value: want.slice(i, i + PLAYER_IDS_PER_READ) } } };
+    const data = await leagueRead(['kona_playercard'], { filter });
+    out.push(...(data?.players || []));
+  }
+  return out;
+}
+
+/**
+ * One `fetchInjuryDetails` entry: `{ playerId, outForSeason, returnDate, type }`,
+ * or null when ESPN said nothing usable about him (no `injuryDetails`, or no
+ * true/false `outForSeason` on it) — null is "not known", never "not out".
+ * `returnDate` is ESPN's expected return as 'YYYY-MM-DD', or null.
+ */
+export function parseInjuryDetails(entry) {
+  const p = entry?.player || {};
+  const id = p.id ?? entry?.id;
+  const d = p.injuryDetails;
+  if (id === undefined || id === null || !d || typeof d !== 'object') return null;
+  if (typeof d.outForSeason !== 'boolean') return null;
+  const r = Array.isArray(d.expectedReturnDate) ? d.expectedReturnDate.map(Number) : null;
+  const pad = (n) => String(n).padStart(2, '0');
+  const returnDate = r && r.length === 3 && r.every(Number.isInteger)
+    ? `${r[0]}-${pad(r[1])}-${pad(r[2])}` : null;
+  return {
+    playerId: Number(id),
+    outForSeason: d.outForSeason,
+    returnDate,
+    type: typeof d.type === 'string' && d.type ? d.type : null,
+  };
+}
+
+/**
  * One `fetchPlayersWeek` entry, cut to what a week of his is: who he is, what
  * he was projected and what he scored.
  *

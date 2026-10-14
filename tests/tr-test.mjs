@@ -4718,9 +4718,10 @@ if (!fresh.boot) {
       fresh.tradeNote.includes('A trade worth less than +1.0 a week to you is left out'),
       fresh.tradeNote.slice(0, 600));
     // OUT FOR THE SEASON (2026-10-12): the same sentence goes on to say such a
-    // man is in no trade. The rule itself is held in test-trade-moves.mjs.
+    // man is in no trade. The rule itself is held in test-trade-moves.mjs and
+    // test-out-for-season.mjs (2026-10-14: ESPN's own out-for-season flag).
     ok('FLOOR: and that a trade with a man out for the rest of the season is left out too',
-      /is left out, and so is any trade with a man who is out for the rest of the season \(listed as out, and projected at nothing in every week left\)\./
+      /is left out, and so is any trade with a man ESPN lists as out for the rest of the season\./
         .test(fresh.tradeNote), fresh.tradeNote.slice(300, 900));
     {
       const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');

@@ -659,6 +659,51 @@ export function writeOpenDecisionWeek(leagueId, season, week, { moves, players, 
   }
 }
 
+// ---------------------------------------------------------------------------
+// ESPN'S WORD ON WHO IS OUT, AND FOR HOW LONG (`espn.parseInjuryDetails`)
+//
+// ONE key a league-season (`ff.injury.…`), `{ v, at, byId }` with `byId` keyed
+// by player id. Good for `FRESH_MS`, like a week still to be played: a return
+// date moves with the news. A man not in `byId` is simply not known.
+
+const INJURY_SCHEMA = 1;
+const injuryKeyOf = (leagueId, season) => `ff.injury.${INJURY_SCHEMA}.${leagueId}.${season}`;
+
+/** `{ byId, at, ageMs }` while fresh, else null. */
+export function readInjury(leagueId, season) {
+  const s = store();
+  if (!s) return null;
+  try {
+    const e = JSON.parse(s.getItem(injuryKeyOf(leagueId, season)) || 'null');
+    if (!e || e.v !== INJURY_SCHEMA || !Number.isFinite(e.at) || !e.byId || typeof e.byId !== 'object') return null;
+    const ageMs = Math.max(0, Date.now() - e.at);
+    return ageMs > FRESH_MS ? null : { byId: e.byId, at: e.at, ageMs };
+  } catch {
+    return null;
+  }
+}
+
+/** Keep them, whole. `at` is when ESPN was asked. @returns {boolean} whether it landed */
+export function writeInjury(leagueId, season, byId, { at = null } = {}) {
+  const s = store();
+  if (!s || !byId || typeof byId !== 'object') return false;
+  try {
+    s.setItem(injuryKeyOf(leagueId, season), JSON.stringify({
+      v: INJURY_SCHEMA, at: Number.isFinite(at) ? at : Date.now(), byId,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Sync now: the next read is ESPN's. */
+export function forgetInjury(leagueId, season) {
+  const s = store();
+  if (!s) return;
+  try { s.removeItem(injuryKeyOf(leagueId, season)); } catch { /* nothing to do */ }
+}
+
 /**
  * "4 minutes ago" / "just now" — the one spelling of an age on this site's
  * stored weeks, so three panels cannot describe the same timestamp three ways.

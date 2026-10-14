@@ -92,6 +92,31 @@ const POS = [1, 2, 2, 3, 3, 4, 2, 16, 5, 2, 3, 1, 4, 3, 2];  // ESPN position id
  * ESPN is serving live. Any number the pages show can then be traced to one
  * source or the other without asking the code which path it took.
  */
+// OUT FOR THE SEASON (2026-10-14). Off unless a scenario turns it on, so every
+// other scenario's request counts are what they were. On: three men are out —
+// ESPN says 114 is out for the season, 213 is back on 10/25, and says nothing
+// usable about 312 (no `injuryDetails`), so he is "not known".
+let OUT_MEN = false;
+const OUT_STATUS = { 114: 'INJURY_RESERVE', 213: 'OUT', 312: 'INJURY_RESERVE' };
+const OUT_DETAILS = {
+  114: { expectedReturnDate: [2027, 2, 15], outForSeason: true, type: 'Knee - ACL' },
+  213: { expectedReturnDate: [2026, 10, 25], outForSeason: false, type: 'Ankle' },
+};
+
+/** `kona_playercard` for the ids in a filterIds filter, in ESPN's shape. */
+function cardPayload(filter) {
+  const ids = (filter && filter.players && filter.players.filterIds && filter.players.filterIds.value) || [];
+  return {
+    players: ids.map((id) => ({
+      id, onTeamId: Math.floor(id / 100), status: 'ONTEAM',
+      player: {
+        id, fullName: `Player ${id}`, injured: true, injuryStatus: OUT_STATUS[id] || 'ACTIVE',
+        ...(OUT_DETAILS[id] ? { injuryDetails: OUT_DETAILS[id] } : {}),
+      },
+    })),
+  };
+}
+
 function rosterPayload(week, scale, leagueName) {
   return {
     settings: { name: leagueName, size: TEAMS.length, rosterSettings: { lineupSlotCounts: { 0: 1, 2: 2, 4: 2, 6: 1, 23: 1, 16: 1, 17: 1, 20: 6 } } },
@@ -110,7 +135,7 @@ function rosterPayload(week, scale, leagueName) {
               fullName: `${t.abbrev} Player ${i}`,
               defaultPositionId: POS[i],
               proTeamId: (i % 30) + 1,
-              injuryStatus: 'ACTIVE',
+              injuryStatus: (OUT_MEN && OUT_STATUS[t.id * 100 + i]) || 'ACTIVE',
               ownership: { percentOwned: 50 + i },
               stats: [
                 { scoringPeriodId: week, statSourceId: 1, statSplitTypeId: 1, appliedTotal: scale + i + week * 0.1 },
@@ -263,10 +288,17 @@ function backdate(fake, ages) {
  */
 function installFetch(scale, name) {
   const calls = [];
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, opts) => {
     const u = String(url);
     calls.push(u);
     const week = Number((u.match(/scoringPeriodId=(\d+)/) || [])[1] || 0);
+    if (/kona_playercard/.test(u)) {
+      let filter = null;
+      try { filter = JSON.parse((opts && opts.headers && opts.headers['x-fantasy-filter']) || 'null'); } catch { /* none */ }
+      calls.filters = (calls.filters || []).concat([filter]);
+      const card = cardPayload(filter);
+      return { ok: true, status: 200, async json() { return card; } };
+    }
     const body = /kona_player_info/.test(u)
       ? wirePayload(week || 1, scale)
       : week || /mRoster/.test(u)
@@ -292,6 +324,7 @@ function bridgeAnswer(req, scale, name) {
   }
   if (req.type === 'LEAGUE') {
     const views = req.views || [];
+    if (views.includes('kona_playercard')) return cardPayload(req.filter);
     if (views.includes('kona_player_info')) return wirePayload(req.scoringPeriodId || 1, scale);
     if (req.scoringPeriodId || views.includes('mRoster')) return rosterPayload(req.scoringPeriodId || 1, scale, name);
     return matchupPayload(scale, name);
@@ -628,9 +661,14 @@ SCENARIOS['page-synced'] = async () => {
   const espn = await import(moduleUrl('js/espn.js'));
   const season = await import(moduleUrl('js/season.js'));
 
+  // Three men out (2026-10-14), so ESPN's out-for-season flag has to ride the
+  // synced copy for the page to have it.
+  OUT_MEN = true;
   const fake = makeFake();
   const seeded = await seedCloud(cloud, espn, season, fake);
   ok('a season was published', seeded.res.ok, seeded.res.reason);
+  eq(seeded.calls.filter((u) => /kona_playercard/.test(u)).length, 1,
+    'OUT FOR THE SEASON: the sync asked ESPN once for the out men\'s injury details');
   backdate(fake, { rosters: 3 * DAY, wire: 3 * DAY, schedule: 3 * DAY });
 
   const { document, store } = await bootPage('index.html', {
@@ -671,6 +709,20 @@ SCENARIOS['page-synced'] = async () => {
 
   // And nothing was asked of ESPN to draw any of it.
   eq(store.espnCalls.length, 0, 'the page made no ESPN requests at all');
+
+  // OUT FOR THE SEASON on the synced copy: the flags are there, and asking for
+  // them asked ESPN for nothing — no kona_playercard, no anything (rule 20).
+  {
+    const wk = await season.fetchWeekRosters(3);
+    const man = (id) => wk.teams.flatMap((t) => t.players).find((p) => String(p.playerId) === String(id));
+    eq(store.espnCalls.filter((u) => /kona_playercard/.test(u)).length, 0,
+      'OUT FOR THE SEASON: the synced copy made no kona_playercard request');
+    eq(store.espnCalls.length, 0, 'nor any other ESPN request to get them');
+    eq(man(114) && man(114).injuryDetails && man(114).injuryDetails.outForSeason, true,
+      'and still has ESPN\'s flag: 114 is out for the season');
+    eq(man(213) && man(213).injuryDetails && man(213).injuryDetails.outForSeason, false,
+      'and 213 is not (back 2026-10-25)');
+  }
 
   // The main menu's list says this league came from the synced copy, which is
   // what stops "Add a league" asking ESPN from the phone (rule 20).
@@ -1871,6 +1923,87 @@ SCENARIOS['pending-sync'] = async () => {
   const refused = await sync();
   ok('a sync whose offers read is refused still goes up', refused.res.ok, refused.res.reason);
   ok('carrying none', !('pendingTrades' in refused.payload.schedule));
+};
+
+// ---------------------------------------------------------- out-for-season
+//
+// Tim, 2026-10-12: "I just saw a trade offer with a player that was out for the
+// rest of the season, which should never happen." ESPN's own flag
+// (`injuryDetails.outForSeason`, kona_playercard only) is read once for the
+// out men, kept in this browser, carried up in the sync, and read back on the
+// phone with no request (rule 20).
+
+SCENARIOS['out-for-season'] = async () => {
+  OUT_MEN = true;
+  const map = installStorage();
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const man = (teams, id) => teams.flatMap((t) => t.players).find((p) => String(p.playerId) === String(id));
+  const cards = (calls) => calls.filter((u) => /kona_playercard/.test(u));
+
+  // --- live, no cloud: one read for the whole span ----------------------------
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  let calls = installFetch(LIVE.scale, LIVE.name);
+  const live = await season.fetchWeeksRosters(WEEKS);
+  eq(cards(calls).length, 1, 'live: ONE kona_playercard request for three weeks of rosters');
+  ok('asking for exactly the three out men',
+    same(((calls.filters || [])[0] || {}).players?.filterIds?.value, [114, 213, 312]), JSON.stringify(calls.filters));
+  const w3 = live.get(3);
+  eq(man(w3, 114).injuryDetails?.outForSeason, true, 'live: 114 carries ESPN\'s out-for-season flag');
+  ok('live: 213 carries outForSeason false and his return date',
+    same(man(w3, 213).injuryDetails, { outForSeason: false, returnDate: '2026-10-25', type: 'Ankle' }),
+    JSON.stringify(man(w3, 213).injuryDetails));
+  ok('live: 312, whom ESPN said nothing usable about, carries nothing (not known)',
+    !('injuryDetails' in man(w3, 312)), JSON.stringify(man(w3, 312)));
+  ok('live: a healthy man carries nothing', !('injuryDetails' in man(w3, 100)));
+  ok('the starters view carries it too', man(w3.map((t) => ({ players: [...(t.starters || []), ...(t.bench || [])] })), 114)?.injuryDetails?.outForSeason === true);
+  ok('kept in this browser', [...map.keys()].some((k) => k.startsWith('ff.injury.1.')), [...map.keys()].join(' '));
+  await season.fetchWeekRosters(2);
+  eq(cards(calls).length, 1, 'a later week read on the same page asks again for nothing');
+
+  // --- the sync carries them ---------------------------------------------------
+  espn.clearReadCache();     // the minute-long shared read would answer the sync
+  const fake = makeFake();
+  const seeded = await seedCloud(cloud, espn, season, fake);
+  ok('the sync went up', seeded.res.ok, seeded.res.reason);
+  eq(cards(seeded.calls).length, 1, 'the sync read the injury details once, fresh');
+  const sent = seeded.payload.schedule.injuryDetails;
+  ok('the sync\'s schedule carries injuryDetails', !!sent, JSON.stringify(Object.keys(seeded.payload.schedule)));
+  ok('for 114 (out for the season) and 213 (back), not 312',
+    !!sent && same(Object.keys(sent.byId).sort(), ['114', '213']) && sent.byId[114].outForSeason === true
+      && sent.byId[213].outForSeason === false, JSON.stringify(sent));
+  ok('with when ESPN was asked', !!sent && Number.isFinite(sent.at));
+
+  // --- the phone: nothing local, ESPN must not be asked ------------------------
+  // This browser's own copies go, as on a phone that never read ESPN.
+  map.clear();
+  season.forgetOpen();
+  season.forgetCloud();
+  espn.clearReadCache();
+  calls = installFetch(LIVE.scale, LIVE.name);
+  const onPhone = await season.fetchWeekRosters(3);
+  eq(cards(calls).length, 0, 'PHONE: no kona_playercard request on the synced copy');
+  eq(calls.length, 0, 'PHONE: no ESPN request at all');
+  eq(man(onPhone.teams, 114).injuryDetails?.outForSeason, true, 'PHONE: 114 still carries ESPN\'s out-for-season flag');
+  eq(man(onPhone.teams, 213).injuryDetails?.outForSeason, false, 'PHONE: and 213 still carries false');
+  ok('PHONE: 312 carries nothing', !('injuryDetails' in man(onPhone.teams, 312)));
+
+  // --- an older synced copy, from before this existed --------------------------
+  {
+    const p = `leagues/${LEAGUE_ID}/seasons/${SEASON}/parts/schedule`;
+    const doc = JSON.parse(fake.docs.get(p));
+    const body = JSON.parse(doc.json.join(''));
+    delete body.injuryDetails;
+    fake.docs.set(p, JSON.stringify({ ...doc, json: [JSON.stringify(body)] }));
+    season.forgetCloud();
+    const old = await season.fetchWeekRosters(3);
+    // (The NFL schedule is re-read here after forgetCloud with or without this
+    // change — measured 2026-10-14 — so the claim is about the injury read.)
+    eq(cards(calls).length, 0, 'OLD COPY: still no kona_playercard request');
+    ok('OLD COPY: nobody carries the flag — not known, so the old rule stands',
+      old.teams.every((t) => t.players.every((p) => !('injuryDetails' in p))));
+  }
 };
 
 // =========================================================================

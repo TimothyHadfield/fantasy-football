@@ -96,6 +96,9 @@ const ALLOWED_VIEWS = new Set([
   'mSettings', 'mTeam', 'mRoster', 'mMatchup', 'mMatchupScore',
   'mDraftDetail', 'mTransactions2', 'mNav', 'mStandings',
   'kona_player_info', 'mPositionalRatings', 'mPendingTransactions',
+  // ESPN's injury details (out for the season, return date): js/espn.js
+  // `fetchInjuryDetails`. A read like kona_player_info, with a filterIds filter.
+  'kona_playercard',
 ]);
 
 const ALLOWED_SEASON_VIEWS = new Set(['proTeamSchedules_wl', 'kona_game_state']);
