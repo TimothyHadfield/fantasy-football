@@ -4184,8 +4184,11 @@ async function check(scenario, boot) {
           const k = hoverCard(d, boot.window, cell);
           for (let wk = 1; wk <= 13; wk++) {
             const got = k.values[wk - 1];
-            const v = season.onRoster(i, wk) ? season.projFor(i, wk) : 'off';
-            const expect = v === 'off' ? 'off' : v === null ? '—' : v === 0 ? 'Bye' : v.toFixed(1);
+            // A week he was on no roster (signed later): never "off" on the card
+            // (Tim, 2026-10-14). The stub season has no read for those weeks, so
+            // the card says "—" — tests/test-loose-weeks.mjs has the real read.
+            const v = season.onRoster(i, wk) ? season.projFor(i, wk) : null;
+            const expect = v === null ? '—' : v === 0 ? 'Bye' : v.toFixed(1);
             if (got !== expect) bad.push(`p${i} wk${wk} want ${expect} got ${got}`);
           }
         }
@@ -4207,7 +4210,11 @@ async function check(scenario, boot) {
         /ESPN carried no number for him/.test(gap.legend),
         `${gap.values[6]} / ${gap.legend}`);
       // (He has to be on the roster in the week on screen to have a cell to hover.)
-      if (season.onRoster(season.SIZE - 1, OPEN)) c.ok('a week he was not on the roster for is its own third thing',
+      // 2026-10-14, Tim: "right now the player preview doesn't show any previous
+      // weeks if that player wasn't on your team, instead jsut shows "off". Make
+      // is so that never happens". The card fills such a week from his line off
+      // every roster; the stub has none to give, so it reads "—" — and never "off".
+      if (season.onRoster(season.SIZE - 1, OPEN)) c.ok('a week he was on no roster is NEVER "off" on his card',
         (() => {
           const last = grid4('overview').find((td) => {
             const k = hoverCard(d, boot.window, td);
@@ -4215,10 +4222,10 @@ async function check(scenario, boot) {
           });
           if (!last) return false;
           const k = hoverCard(d, boot.window, last);
-          return k.values[0] === 'off' && /off = he was not on this roster that week/.test(k.legend);
-        })(), 'no off token');
-      c.ok('the three no-number states are told apart by class as well as by word',
-        new Set([bye.kinds[5], gap.kinds[6], 'k-off']).size === 3,
+          return k.values[0] === '—' && !k.values.includes('off') && !/off = /.test(k.legend);
+        })(), 'an off token on the card');
+      c.ok('the no-number states are told apart by class as well as by word',
+        new Set([bye.kinds[5], gap.kinds[6]]).size === 2,
         `${bye.kinds[5]} / ${gap.kinds[6]}`);
     }
 

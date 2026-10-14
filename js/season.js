@@ -3639,3 +3639,163 @@ async function demoDecisionWorld() {
     requests: 0,
   });
 }
+
+// ------------------------------------------- a man's week OFF every roster
+//
+// Tim, 2026-10-14: "right now the player preview doesn't show any previous
+// weeks if that player wasn't on your team, instead jsut shows "off". Make is
+// so that never happens and it always has all the weeks filled that can be
+// filled."
+//
+// The roster reads (`fetchWeekRosters`) only carry the men somebody held that
+// week, so a man picked up in week 4 had nothing for weeks 1–3. ESPN does have
+// those weeks: `kona_player_info` with `scoringPeriodId` and a `filterIds`
+// filter (`espn.fetchPlayersWeek`, the read the Decisions page already makes)
+// answers any player's projection AND score for that week, rostered or not —
+// measured on public league 1241838, 2026-10-14: Drew Lock, a free agent, week
+// 2 actual 21.4. One request per week for up to a hundred men (rule 3).
+//
+// `looseLine(id, week)` is the synchronous half, for a card being drawn now:
+//   { projected, actual }  his line that week (actual null until the week is
+//                          final — a running score is not a result)
+//   null                   asked, and there is nothing to be had: ESPN knows no
+//                          line for him, or this copy may not ask (demo, the
+//                          phone's synced copy — rule 20)
+//   undefined              not asked yet: call `fetchLooseWeeks`.
+// A played (final) week's lines are kept in this browser for the season; the
+// Decisions page's own stored week records answer too, at no cost.
+
+const LOOSE_PREFIX = 'ff.loose.';
+const loose = { key: null, weeks: new Map(), held: null, asking: new Map() };
+
+function looseKey() {
+  const { leagueId, season } = espn.getConfig();
+  return `${leagueId}-${season}`;
+}
+
+/** This league-season's memory, emptied when the league changes. */
+function looseMemo() {
+  const key = looseKey();
+  if (loose.key !== key) {
+    loose.key = key;
+    loose.weeks = new Map();
+    loose.asking = new Map();
+    loose.held = null;
+    loose.blocked = false;
+    try {
+      const raw = globalThis.localStorage && globalThis.localStorage.getItem(LOOSE_PREFIX + key);
+      loose.held = raw ? JSON.parse(raw) : {};
+    } catch { loose.held = {}; }
+    for (const [w, byId] of Object.entries(loose.held || {})) {
+      const m = new Map();
+      // Only a final week was ever kept, so its score is a result.
+      for (const [id, l] of Object.entries(byId || {})) m.set(String(id), l && { ...l, final: true });
+      loose.weeks.set(Number(w), m);
+    }
+  }
+  return loose;
+}
+
+function looseKeep(week, id, line, final) {
+  const memo = looseMemo();
+  if (!memo.weeks.has(week)) memo.weeks.set(week, new Map());
+  memo.weeks.get(week).set(String(id), line);
+  if (!final) return;
+  memo.held = memo.held || {};
+  (memo.held[week] = memo.held[week] || {})[String(id)] = line;
+}
+
+function looseSave() {
+  const memo = looseMemo();
+  try {
+    if (globalThis.localStorage) globalThis.localStorage.setItem(LOOSE_PREFIX + memo.key, JSON.stringify(memo.held || {}));
+  } catch { /* storage full or blocked: the memory copy still answers */ }
+}
+
+/** A line the Decisions page already stored for him that week, or undefined. */
+function looseFromDecisions(week, id) {
+  try {
+    const { leagueId, season } = espn.getConfig();
+    const rec = store.readDecisionWeek(leagueId, season, week);
+    const p = rec && rec.players ? rec.players[id] ?? rec.players[String(id)] : null;
+    if (!p || (p.projected === null && p.actual === null)) return undefined;
+    return {
+      projected: typeof p.projected === 'number' ? p.projected : null,
+      actual: typeof p.actual === 'number' ? p.actual : null,
+    };
+  } catch { return undefined; }
+}
+
+/** His line in a week off every roster, synchronously — see above. */
+export function looseLine(playerId, week) {
+  const { leagueId } = espn.getConfig();
+  if (!realLeague(leagueId)) return null;
+  const memo = looseMemo();
+  const w = Number(week);
+  const got = memo.weeks.get(w)?.get(String(playerId));
+  // A week ESPN has not closed: the score may still be running, so it is not
+  // given out as a result (and the line is not kept past this page).
+  if (got && !got.final && !weekIsFinal(w)) return { projected: got.projected, actual: null };
+  if (got !== undefined) return got;
+  if (weekIsFinal(w)) {
+    const dec = looseFromDecisions(w, playerId);
+    if (dec !== undefined) { looseKeep(w, playerId, dec, true); return dec; }
+  }
+  return memo.blocked ? null : undefined;
+}
+
+/**
+ * Ask ESPN for these men's lines in these weeks — one request per week (a
+ * hundred men a request). Never throws; a week ESPN refuses leaves its men
+ * `null` (drawn "—"). On the phone's synced copy nothing is asked (rule 20).
+ *
+ * @returns {Promise<void>} once every asked week has an answer
+ */
+export async function fetchLooseWeeks(ids, weeks) {
+  const { leagueId } = espn.getConfig();
+  if (!realLeague(leagueId)) return;
+  const memo = looseMemo();
+  const key = memo.key;
+  if (await cloudDown()) {
+    memo.blocked = true;
+    return;
+  }
+  let byes = {};
+  try { byes = await fetchByeWeeks(); } catch { byes = {}; }
+  const want = [...new Set((ids || []).map(String))];
+  const jobs = [];
+  for (const week of [...new Set((weeks || []).map(Number).filter((w) => Number.isInteger(w) && w > 0))]) {
+    // A read already fetching some of them: wait for it rather than ask twice.
+    for (const id of want) {
+      const p = memo.asking.get(`${week}:${id}`);
+      if (p && !jobs.includes(p)) jobs.push(p);
+    }
+    const need = want.filter((id) => looseLine(id, week) === undefined && !memo.asking.get(`${week}:${id}`));
+    if (!need.length) continue;
+    const job = (async () => {
+      const final = weekIsFinal(week);
+      let got = null;
+      try {
+        got = await espn.fetchPlayersWeek(need.map(Number), week);
+      } catch { got = null; }
+      if (loose.key !== key) return; // the league changed under the read
+      const seen = new Set();
+      for (const entry of got || []) {
+        const p = espn.parsePlayerWeek(entry, week);
+        if (p.playerId === null || p.playerId === undefined) continue;
+        seen.add(String(p.playerId));
+        looseKeep(week, p.playerId, {
+          projected: p.projected === null ? null
+            : espn.byeAdjustedProjection(p.projected, p.proTeamId ?? null, week, byes),
+          // Given out only once the week is final (`looseLine`).
+          actual: p.actual,
+        }, final && got !== null);
+      }
+      for (const id of need) if (!seen.has(id)) looseKeep(week, id, null, final && got !== null);
+      if (final && got !== null) looseSave();
+    })();
+    for (const id of need) memo.asking.set(`${week}:${id}`, job);
+    jobs.push(job.finally(() => { for (const id of need) memo.asking.delete(`${week}:${id}`); }));
+  }
+  await Promise.all(jobs);
+}

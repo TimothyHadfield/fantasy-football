@@ -51,6 +51,8 @@
 import {
   weekRun, registerRun, tipAttr, clearRuns, zeroKind, byeWeekOf, outMark,
 } from './player-card.js';
+// A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
+import './loose-weeks.js';
 import { coarsePointer } from './connection.js';
 import { optimalLineup } from './forecast.js';
 import { heatScale, heatOf, heatMarkHtml, ordinal } from './heat.js';
@@ -310,8 +312,11 @@ export function seasonRunData(index, p, marks = null) {
     weeks,
     // The Proj row is the projection as it stood before kickoff: for a man who
     // has finished in a week still open, `pregame`, never his score twice.
-    projections: weeks.map((w) => seasonField(index, w, p.playerId, 'pregame')),
-    actuals: weeks.map((w) => seasonActual(index, w, p.playerId)),
+    // A week he was on ANOTHER squad is read off that squad (Tim, 2026-10-14:
+    // the preview must never say "off"); a week on nobody's stays `off` here
+    // and the card fills it from ESPN as it opens (js/player-card.js).
+    projections: weeks.map((w) => cardField(index, w, p.playerId, 'proj')),
+    actuals: weeks.map((w) => cardField(index, w, p.playerId, 'actual')),
     currentWeek: state.week,
     demo: state.isDemo,
     // Whether a 0.00 is his bye or a man ruled out — player-card.js decides.
@@ -319,6 +324,25 @@ export function seasonRunData(index, p, marks = null) {
     injuryStatus: weeks.map((w) => seasonStatus(index, w, p)),
     playoffWeeks: state.poWeeks,
   });
+}
+
+/**
+ * One week of his CARD: this squad's line when he was on it, else whichever
+ * squad held him that week (the card is about the man, the tables about the
+ * squad), else `off` — on no roster, filled by the card itself.
+ */
+function cardField(index, week, playerId, which) {
+  const v = seasonField(index, week, playerId, which === 'proj' ? 'pregame' : 'actual');
+  if (v !== 'off') return v;
+  const teams = state.seasonWeeks && state.seasonWeeks.get(week);
+  for (const t of teams || []) {
+    const q = (t.players || []).find((x) => x.playerId === playerId);
+    if (!q) continue;
+    const line = weekLine(q);
+    const n = which === 'proj' ? line.proj : line.actual;
+    return typeof n === 'number' ? n : null;
+  }
+  return 'off';
 }
 
 /**

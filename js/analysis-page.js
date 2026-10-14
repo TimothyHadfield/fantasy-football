@@ -46,6 +46,8 @@ import {
   registerRun, tipAttr, clearRuns, wireTips, reopenTip, clickIsPlayer,
   byeWeekOf, outMark, setValueSource,
 } from './player-card.js';
+// A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
+import './loose-weeks.js';
 // A PLAYER'S VALUE (Tim, 2026-10-09): pure arithmetic; the frozen lines come
 // from js/season.js. See the "Proj | Value" block below.
 import { valueOf } from './value.js';

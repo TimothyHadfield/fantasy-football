@@ -72,6 +72,8 @@ import { savedConfig, onConnection } from './connection.js';
 // cannot be drawn must cost the reader the preview, never the page.
 import * as popCard from './pop.js';
 import * as manCard from './player-card.js';
+// A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
+import './loose-weeks.js';
 import * as siteLinks from './links.js';
 import * as heatScale from './heat.js';
 

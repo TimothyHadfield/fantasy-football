@@ -288,6 +288,9 @@
     "pop-check.mjs": {
       "assertions": 139
     },
+    "test-loose-weeks.mjs": {
+      "assertions": 52
+    },
     "leagues-check.mjs": {
       "assertions": 72,
       "scenarios": 5

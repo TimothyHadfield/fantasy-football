@@ -18,7 +18,7 @@
 //   * teamWeekCard's rows come to its total;
 //   * the four hrefs in js/links.js, spelled once;
 //   * playerCardFromWeeks builds the classic card from a week -> teams map,
-//     with a week nobody held him drawn as `wait`.
+//     with a week nobody held him `off` in the run (the card fills it).
 //
 // The pointer is ONE global (`matchMedia('(hover: none)')`), flipped between
 // sections; nothing else distinguishes the two halves.
@@ -306,7 +306,10 @@ const WEEKS = new Map([
   const flat = JSON.stringify(cols);
   ok(/14\.2/.test(JSON.stringify(cols[0])) && /18\.4/.test(JSON.stringify(cols[0])), 'week 1: projection and score', JSON.stringify(cols[0]));
   ok(/13\.1/.test(JSON.stringify(cols[1])), 'week 2: found on ANOTHER roster — the card is about him, not a squad', JSON.stringify(cols[1]));
-  ok(/wait/.test(JSON.stringify(cols[2])) && !/"off"/.test(JSON.stringify(cols[2])), 'week 3: nobody held him — `wait`, not `off`', JSON.stringify(cols[2]));
+  // 2026-10-14 (Tim: the preview must never show "off"): a week READ in which
+  // nobody held him is `off` in the run, and the CARD fills it from his line off
+  // every roster as it opens — tests/test-loose-weeks.mjs. Never drawn "off".
+  ok(cols[2].proj.kind === 'off', 'week 3: nobody held him — `off` in the run, for the card to fill', JSON.stringify(cols[2]));
   ok(/wait/.test(JSON.stringify(cols[3])), 'week 4: never read — `wait`', JSON.stringify(cols[3]));
   ok(/15\.5/.test(JSON.stringify(cols[4])) && /21\.7/.test(JSON.stringify(cols[4])),
     'week 5, finished early: Proj is the pre-game number and Act his score, never his score twice', JSON.stringify(cols[4]));
@@ -317,7 +320,8 @@ const WEEKS = new Map([
   const asObject = card.playerCardFromWeeks(Object.fromEntries(WEEKS), P, { currentWeek: 5 });
   eq(asObject.run.cols.length, 5, 'a plain object works, and with no `weeks` it draws every week it holds');
   const none = card.playerCardFromWeeks(new Map([[1, [{ players: [] }]], [2, [{ players: [] }]]]), P, { weeks: [1, 2] });
-  ok(none.run && /Not read yet/.test(none.run.pending || ''), 'a man held in no week at all says so, rather than drawing empty columns', JSON.stringify(none.run));
+  ok(none.run && none.run.cols.length === 2 && none.run.cols.every((x) => x.proj.kind === 'off'),
+    'a man held in no week read (a free agent) gets a column a week, each for the card to fill', JSON.stringify(none.run));
   eq(none.glance, { avg: 15.1, proj: null, rank: 4, pos: 'WR' }, '…and his glance line falls back to the player handed in');
   eq(card.playerCardFromWeeks(WEEKS, { name: 'No Id', position: 'K' }, { weeks: [1] }).href, null, 'no playerId: no link');
   eq(card.playerCardFromWeeks(WEEKS, P, { weeks: [1], href: 'x.html', openLabel: 'Go' }).href, 'x.html', 'the caller can point it elsewhere');
