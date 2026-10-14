@@ -4321,7 +4321,15 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
         `${signedText(Math.round((offer.myGain - net) * 10) / 10)} in the week(s) I play him`;
     })(),
     myLineup: myGainShown ? lineup : `this deal alone; the app suggests it as part of a combo`,
-    hisGain: gainText(his.gain, his.weeks),
+    // NET the same way (2026-10-14): his own lineup less MY change in the
+    // week(s) he plays me, both parts stated when they differ.
+    hisGain: (() => {
+      const t = gainText(his.gain, his.weeks);
+      const mineVs = myVsHimOf(offer);
+      if (!t || !fin(his.gain) || mineVs === null || Math.abs(mineVs) < 0.05) return t;
+      return `${t}, net: his own lineup ${signedText(Math.round((his.gain + mineVs) * 10) / 10)} minus mine ` +
+        `${signedText(mineVs)} in the week(s) he plays me`;
+    })(),
     hisNote: weeks && his.weeks !== span.length ? 'playoff weeks weighted by his chance of playing them' : null,
     meet,
     goal,
@@ -5124,7 +5132,7 @@ function runSearch({ keepDeal = false } = {}) {
       rankBy: state.benchValue
         ? (o) => { o.benchGain = benchGainOf(o, myPlayers, benchBefore); return o.benchGain; }
         : W
-        ? (o) => o.goalPoints * (acceptFor(o.theirGain, o.send, o.receive, weeks, o.theirWeeks ?? weeks.length) ?? 1)
+        ? (o) => { const h = hisSideOf(o, weeks); return o.goalPoints * (acceptFor(h.gain, o.send, o.receive, weeks, h.weeks) ?? 1); }
         : null,
       myMin: state.benchValue ? 0 : null,
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
@@ -5142,7 +5150,14 @@ function runSearch({ keepDeal = false } = {}) {
     // than the list holds so the cut does not leave it short.
     // With the bench-value switch on, the rule is instead: your bench value
     // goes up, and your "You" figure as printed does not go below zero.
-    result.offers = result.offers.filter((o) => (state.benchValue
+    // HIS side, NETTED by your change in the weeks you play him (`hisSideOf`),
+    // held to the finder's own gate for him: no more than THEIR_MIN_PER_WEEK a
+    // week of loss, or a gain with the "Both teams gain" switch (and before the
+    // goal's weights are in). The engine gates his own lineup; this is the
+    // figure the row prints as Him.
+    const hisMin = W && !state.bothWin ? (o) => THEIR_MIN_PER_WEEK * hisSideOf(o, weeks || undefined).weeks : () => 0.1;
+    const hisOk = (o) => { const h = hisSideOf(o, weeks || undefined); return !Number.isFinite(h.gain) || h.gain >= hisMin(o) - 0.05; };
+    result.offers = result.offers.filter((o) => hisOk(o) && (state.benchValue
       ? Number.isFinite(o.benchGain) && o.benchGain >= 0.1 && myPerWeekShown(o, weeks) >= 0
       : myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK)).slice(0, FINDER_ROWS);
     // The bench gains kept, on the table, for a test (invisible; nothing reads it).
@@ -5687,6 +5702,34 @@ function reachFor(partnerId, span = weeklySpan()) {
  * run there is nothing to weight by and it is his flat gain over the span.
  */
 function hisSideOf(offer, span = weeklySpan()) {
+  const own = hisOwnSideOf(offer, span);
+  // NETTED THE SAME WAY AS YOURS (Tim, 2026-10-14: "I don't think the
+  // opponent's total pts/week calculation consider's my change in proj like
+  // how it does for me. could you make it so that both sides consider this?"):
+  // your lineup change in the regular-season weeks you play him is his loss —
+  // your +2 that week is his −2. The mirror of `netGainOf`.
+  const yours = myVsHimOf(offer);
+  if (!own || !Number.isFinite(own.gain) || yours === null) return own;
+  const r = Math.round((own.gain - yours) * 10) / 10;
+  return { ...own, gain: r === 0 ? 0 : r };
+}
+
+/**
+ * YOUR lineup change in the regular-season weeks you play him (each week to the
+ * tenth, as your row prints it), or null when there is none to count — no
+ * meeting left, no week-by-week figures, a whole packing.
+ */
+function myVsHimOf(offer) {
+  if (!offer || offer.combined || !offer.partner || !Array.isArray(offer.byWeek)) return null;
+  const o = oppProjOf(offer);
+  if (!o || !o.weeks.length) return null;
+  const at = new Map(offer.byWeek.map((w) => [w.week, w.delta]));
+  if (!o.weeks.every((w) => at.has(w))) return null;
+  return Math.round(o.weeks.reduce((a, w) => a + (Number.isFinite(at.get(w)) ? Math.round(at.get(w) * 10) / 10 : 0), 0) * 10) / 10;
+}
+
+/** His own lineup's change, each week by the chance he plays it (not netted). */
+function hisOwnSideOf(offer, span = weeklySpan()) {
   if (!offer) return { gain: null, weeks: span.length || 1 };
   if (Number.isFinite(offer.theirWeeks)) return { gain: offer.theirGain, weeks: offer.theirWeeks };
   const reach = Array.isArray(offer.theirByWeek) ? reachFor(offer.partner && offer.partner.id, span) : null;
@@ -5998,8 +6041,9 @@ function refreshAltCells() {
 //
 // SINCE 2026-09-30 YOU GAIN IS NETTED BY IT (Tim: "add the change in opponent
 // proj to the total +/- gain"): `netGainOf` below, and the finder keeps and
-// ranks on the same figure (js/trade.js `meetWeeks`). He gains is still his
-// own lineup, and the simulation still gets the raw changes (no double count).
+// ranks on the same figure (js/trade.js `meetWeeks`). Since 2026-10-14 He gains
+// is netted the same way by YOUR change in those weeks (`hisSideOf`). The
+// simulation still gets the raw changes (no double count).
 
 /** `{weeks, sum, per}` for one deal; `sum` null when you do not meet again; null when unpriced. */
 function oppProjOf(offer) {

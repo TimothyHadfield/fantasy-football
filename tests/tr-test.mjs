@@ -1850,6 +1850,17 @@ const SCENARIOS = {
     await settle(2200);
     out.labelLater = text(btn);
 
+    // EVERY finder row's copied His line (2026-10-14, net both ways); the copies
+    // are taken back off so the combo check below reads only its own.
+    out.hisLines = [];
+    for (const b of document.querySelectorAll('#tradeTable tbody tr button.ask-ai')) {
+      const at = copied.length;
+      b.dispatchEvent(new window.Event('click', { bubbles: true }));
+      await settle(20);
+      const c = copied[at];
+      if (c) out.hisLines.push(((c.text.match(/His lineup gain:.*/) || [''])[0]));
+      copied.length = out.copied.length;
+    }
     // A COMBO row's button copies its own deal too.
     const comboBtn = document.querySelector('#comboBody table tbody tr button.ask-ai');
     if (comboBtn) {
@@ -5036,6 +5047,20 @@ for (const noApi of [false, true]) {
       Math.abs(hisMeet) < 0.05 ? !/net:/.test(line)
         : !!m && Math.abs(num(m[3]) - hisMeet) <= 0.051 && Math.abs(num(m[2]) - num(m[3]) - num(m[1])) <= 0.051,
       `${line} · his ${hisMeet}`);
+  }
+  // NET BOTH WAYS (Tim, 2026-10-14: "could you make it so that both sides
+  // consider this?"): He gains is his own lineup less MY change in the week(s)
+  // he plays me. Over every finder row's copy: some row says so with both
+  // parts, and wherever it does they add up. Seen failing before the change
+  // (no row had a net His line).
+  if (!noApi) {
+    const parts = (ai.hisLines || []).map((l) =>
+      l.match(/\(([+−-]?[\d.]+) total\), net: his own lineup ([+−-]?[\d.]+) minus mine ([+−-]?[\d.]+) in the week/));
+    ok('HIS +/- is net of my change in the week(s) he plays me, on some row, both parts stated',
+      parts.some(Boolean), `${(ai.hisLines || []).length} rows: ${(ai.hisLines || []).slice(0, 3).join(' | ')}`);
+    ok('and on every row that states it, his own less mine is the printed total',
+      parts.filter(Boolean).every((m) => Math.abs(num(m[2]) - num(m[3]) - num(m[1])) <= 0.051),
+      JSON.stringify(parts.filter(Boolean).slice(0, 3).map((m) => m.slice(1))));
   }
   ok(`HIS +/- is the row's own He gains, per week and total${tag}`,
     !!ai.row.their && t.includes(`His lineup gain: ${ai.row.their.head} (${ai.row.their.sub}`),
