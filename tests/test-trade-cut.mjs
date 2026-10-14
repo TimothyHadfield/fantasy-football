@@ -279,5 +279,133 @@ const round1 = (x) => Math.round(x * 10) / 10;
   ok(offers > 0 && agree === offers, 'the finder prices every offer week by week as the pricing does', `${agree}/${offers}`);
 }
 
+// ===========================================================================
+// 4. The IR slot (trade audit finding 6, 2026-10-14)
+// ===========================================================================
+//
+// Shaped like public league 1241838: slots QB, RB×2, WR×3, TE, FLEX, D/ST, K
+// (10 starters) + 7 bench = 17 active men, and 2 IR slots (ESPN lineupSlotId
+// 21). Measured there: the finder named Jonah Coleman — IR slot, projected 0
+// every week — as the forced drop in 7 of one team's top 25 offers.
+{
+  const T = await imp('js/trade.js');
+  const WEEKS = [6, 7, 8, 9, 10, 11, 12, 13, 14];
+  const SLOTS = [0, 2, 2, 4, 4, 4, 6, 23, 16, 17];
+  const table = new Map();
+  let id = 41000;
+  const man = (name, position, level, { slot = 20, status = 'ACTIVE', weeks = null } = {}) => {
+    const p = { playerId: id++, name, position, lineupSlotId: slot, injuryStatus: status };
+    WEEKS.forEach((w, i) => table.set(`${p.playerId}:${w}`, weeks ? weeks[i] : level));
+    return p;
+  };
+  const projFor = (p, w) => { const v = table.get(`${p.playerId}:${w}`); return Number.isFinite(v) ? v : null; };
+  const active17 = () => [
+    man('QB1', 'QB', 19, { slot: 0 }), man('QB2', 'QB', 15),
+    man('RB1', 'RB', 14, { slot: 2 }), man('RB2', 'RB', 12, { slot: 2 }), man('RB3', 'RB', 9, { slot: 23 }), man('RB4', 'RB', 6), man('RB5', 'RB', 4),
+    man('WR1', 'WR', 15, { slot: 4 }), man('WR2', 'WR', 13, { slot: 4 }), man('WR3', 'WR', 11, { slot: 4 }), man('WR4', 'WR', 7), man('WR5', 'WR', 5), man('WR6', 'WR', 3.5),
+    man('TE1', 'TE', 10, { slot: 6 }), man('TE2', 'TE', 4),
+    man('DST1', 'DST', 6, { slot: 16 }), man('K1', 'K', 8, { slot: 17 }),
+  ];
+  const coleman = man('Jonah Coleman', 'RB', 0, { slot: 21, status: 'INJURY_RESERVE' });
+  const tyson = man('Jordyn Tyson', 'WR', 0, { slot: 21, status: 'INJURY_RESERVE', weeks: [0, 0, 0, 8.2, 8.6, 8.6, 8.2, 8.5, 8.5] });
+  const full = active17().concat([coleman, tyson]);            // 17 active + 2 IR, both slots used
+  const oneIr = active17().concat([coleman]);                  // 17 active + 1 IR
+  ok(full.filter((p) => p.lineupSlotId !== 21).length === 17 && full.length === 19, 'IR fixture: 17 active + 2 in IR slots, like 1241838');
+
+  const star = man('Arriving WR', 'WR', 16);
+  const back = man('Arriving RB', 'RB', 13);
+  const outMan = man('Charbonnet (Out)', 'RB', 0, { status: 'OUT', weeks: [0, 10.9, 12.4, 14.3, 13.2, 0, 10.4, 14.1, 13.4] });
+  const price = (players, send, receive) => T.priceTradeAcrossWeeks({ players, send, receive, slots: SLOTS, weeks: WEEKS, projFor });
+  const names = (r) => r.cut.map((p) => p.name);
+  const noIrCut = (r) => r.cut.every((p) => p.lineupSlotId !== 21);
+  const activeAfter = (r, players, reserveIds) => r.roster.filter((p) => !reserveIds.includes(p.playerId)).length;
+
+  T.setIrSlots?.(null);
+  // Receive one, send none: the old rule cut the idle lowest-total man — Coleman.
+  const r1 = price(full, [], [star]);
+  eq(r1.cut.length, 1, 'IR: receive one, send none — one cut');
+  ok(noIrCut(r1), 'IR: an IR-slot man is never the forced drop (receive-only)', names(r1).join());
+  // Two for one the other way: same.
+  const r2 = price(full, [full[4]], [star, back]);
+  ok(r2.cut.length === 1 && noIrCut(r2), 'IR: an IR-slot man is never the forced drop (receive two, send one)', names(r2).join());
+  // Send the IR-slot man, receive an active one: one ACTIVE man over → a cut.
+  const r3 = price(full, [tyson], [star]);
+  eq(r3.cut.length, 1, 'IR: sending an IR-slot man for an active one leaves you an active man over — a cut is charged');
+  ok(noIrCut(r3) && activeAfter(r3, full, [coleman.playerId]) === 17, 'IR: and after it you hold 17 active men again', names(r3).join());
+  // Send an active man for a partner's IR man: this roster's IR slots are both
+  // full, so he takes the active spot just freed — one for one, no cut.
+  const r4 = price(full, [full[12]], [man('IR arrival', 'WR', 0, { slot: 21, status: 'INJURY_RESERVE' })]);
+  eq(r4.cut.length, 0, 'IR: one active man out, one man in — no cut');
+
+  // AN IR-ELIGIBLE ARRIVAL TAKES AN OPEN IR SLOT. League has 2 IR slots, this
+  // roster uses 1: receive an active RB + an Out RB, send one — no cut.
+  T.setIrSlots?.(2);
+  const r5 = price(oneIr, [oneIr[12]], [back, outMan]);
+  eq(r5.cut.length, 0, 'IR: with an open IR slot, the Out arrival takes it — no forced cut (2-for-1)');
+  // Receive only the Out man: no cut either.
+  const r6 = price(oneIr, [], [outMan]);
+  eq(r6.cut.length, 0, 'IR: an Out arrival alone fills the open IR slot — no cut');
+  // Both IR slots full: the Out arrival must take an active spot → a cut, never an IR man.
+  const r7 = price(full, [], [outMan]);
+  ok(r7.cut.length === 1 && noIrCut(r7), 'IR: both IR slots full — the Out arrival forces a cut, and not of an IR-slot man', names(r7).join());
+  // A Questionable arrival is not IR-eligible: a cut.
+  const quest = man('Questionable RB', 'RB', 11, { status: 'QUESTIONABLE' });
+  eq(price(oneIr, [], [quest]).cut.length, 1, 'IR: a Questionable arrival is not IR-eligible — a cut');
+  // League IR slots unknown: no slot is invented.
+  T.setIrSlots?.(null);
+  eq(price(oneIr, [], [outMan]).cut.length, 1, 'IR: IR slots unknown — no open slot is assumed, the Out arrival forces a cut');
+  // Unknown, but you SEND your IR-slot man: his slot is seen, the Out arrival takes it.
+  eq(price(oneIr, [coleman], [outMan, back]).cut.length, 1,
+    'IR: send your IR man, receive an Out man + an active man — the Out man takes the freed slot, one cut for the active one');
+
+  // THE FINDER: across a small league with IR men on every side, no offer's
+  // pricing names an IR-slot man as a drop, on either side, and every side
+  // ends at its active count.
+  const team = (tid) => {
+    const ps = active17().concat([
+      man(`T${tid} IR0`, 'RB', 0, { slot: 21, status: 'INJURY_RESERVE' }),
+      man(`T${tid} IR1`, 'WR', 0, { slot: 21, status: 'OUT', weeks: [0, 0, 9, 9, 9, 9, 9, 9, 9] }),
+    ]);
+    // Skew each squad: strong at one position, thin at another, so trades exist.
+    const strong = ['RB', 'WR', 'QB', 'TE'][tid % 4];
+    const weak = ['WR', 'RB', 'TE', 'QB'][tid % 4];
+    ps.forEach((p, k) => {
+      if (p.lineupSlotId === 21) return;
+      const f = (p.position === strong ? 1.5 : p.position === weak ? 0.55 : 1) * (0.85 + ((k * 7 + tid * 3) % 7) / 20);
+      WEEKS.forEach((w) => table.set(`${p.playerId}:${w}`, round1(projFor(p, w) * f)));
+    });
+    return { id: tid, name: `T${tid}`, players: ps };
+  };
+  const league = [1, 2, 3, 4].map(team);
+  let priced = 0;
+  let irDrops = 0;
+  let overActive = 0;
+  let movesIr = 0;
+  for (const me of league) {
+    const res = T.findTrades({ teams: league, myTeamId: me.id, slots: SLOTS, weeks: WEEKS, projFor, limit: Infinity });
+    for (const o of res.offers) {
+      const partner = league.find((t) => t.id === o.partner.id);
+      if (o.send.concat(o.receive).some((p) => p.lineupSlotId === 21)) movesIr++;
+      for (const [side, send, receive] of [[me, o.send, o.receive], [partner, o.receive, o.send]]) {
+        const r = price(side.players, send, receive);
+        priced++;
+        if (!noIrCut(r)) irDrops++;
+        const sent = new Set(send.map((p) => p.playerId));
+        const irKept = side.players.filter((p) => p.lineupSlotId === 21 && !sent.has(p.playerId)).length;
+        // Every side holds 2 IR men, so the slots it frees by sending them are
+        // the only open ones; an IR/Out arrival may take one.
+        const intoIr = Math.min(2 - irKept, receive.filter((p) => ['INJURY_RESERVE', 'OUT'].includes(p.injuryStatus)).length);
+        if (r.roster.length - irKept - intoIr > 17) overActive++;
+      }
+    }
+  }
+  ok(priced > 50, 'IR finder: enough offers priced to mean something', priced);
+  ok(movesIr > 0, 'IR finder: some offers move an IR-slot man (so the rule is exercised)', movesIr);
+  eq(irDrops, 0, 'IR finder: no offer names an IR-slot man as a forced drop, either side');
+  eq(overActive, 0, 'IR finder: no side ends a deal over its 17 active men');
+  console.log(`IR: ${priced} sides priced, ${movesIr} offers move an IR-slot man, ${irDrops} IR drops, ${overActive} sides over`);
+  T.setIrSlots?.(null);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

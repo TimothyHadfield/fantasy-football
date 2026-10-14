@@ -260,5 +260,40 @@ console.log(`timing over ${searches} searches: pruned ${times.pruned} ms, exhaus
   ok(packings >= 2, 'at least two demo squads had a packing to check', packings);
 }
 
+// ===========================================================================
+// 4. IR slots (2026-10-14): pruned == exhaustive still
+// ===========================================================================
+//
+// A man sent from an IR slot frees no roster spot, so a 2-for-2 that takes two
+// of his IR men leaves him TWO active men over — the netting bound must allow
+// two cuts there. Every demo squad gets three men moved into IR slots (status
+// IR / Out, as ESPN marks them), the league has four IR slots (one open each),
+// and the pruned search must keep exactly what the exhaustive one keeps.
+{
+  const T = await imp('js/trade.js');
+  const irTeams = teams.map((t) => {
+    const bench = t.players.filter((p) => !p.started).slice(-3).map((p) => p.playerId);
+    return {
+      ...t,
+      players: t.players.map((p) => (bench.includes(p.playerId)
+        ? { ...p, lineupSlotId: 21, started: false, injuryStatus: bench.indexOf(p.playerId) === 0 ? 'OUT' : 'INJURY_RESERVE' }
+        : p)),
+    };
+  });
+  ok(irTeams.every((t) => t.players.filter((p) => p.lineupSlotId === 21).length === 3), 'IR demo: three IR-slot men a squad');
+  T.setIrSlots(4);
+  let irOffers = 0;
+  for (const me of irTeams.slice(0, 2)) {
+    const opts = { teams: irTeams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors: FLOORS, limit: Infinity, meetWeeks: meetFor(me.id) };
+    const pruned = findTrades(opts);
+    const full = findTrades({ ...opts, exhaustive: true });
+    eq(summary(pruned), summary(full), `IR demo · ${me.name}: the pruned search keeps exactly the exhaustive one's offers`);
+    irOffers += pruned.offers.filter((o) => o.send.concat(o.receive).some((p) => p.lineupSlotId === 21)).length;
+  }
+  T.setIrSlots(null);
+  ok(irOffers > 0, 'IR demo: some kept offers move an IR-slot man (so the two-cut bound is exercised)', irOffers);
+  console.log(`IR demo: ${irOffers} kept offers move an IR-slot man`);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
