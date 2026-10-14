@@ -113,6 +113,7 @@ import { tradesNote, saveTradesNote } from './notify-trades.js';
 import {
   depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
   priceTradeAcrossWeeks, setCutValue, bestComboSliced, mergeComboByPartner, seasonLineupValue,
+  setIrSlots, setSeasonClock,
 } from './trade.js';
 // THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
 // forecast, the trade finder, "Who to start" and the per-week valuation all
@@ -8131,6 +8132,8 @@ async function useDemo() {
   state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
   state.poPlayed = [];
   state.league = demoSeason();
+  setIrSlots(null);          // the engine counts only the IR slots it sees in use
+  setSeasonClock(null);      // and the typical week divides by a whole season
   state.tradeRules = null;   // a sample league has no deadline to warn about
   state.kickoffs = {};       // nor real kickoffs, so no "accept by" line
   state.proGames = {};       // and no game in progress
@@ -8217,6 +8220,9 @@ async function useLive() {
       state.league = capture.normalizeSchedule(schedule, { isDemo: false });
       // The deadline and review window, off the same read (espn.parseTrades).
       state.tradeRules = schedule.trades || null;
+      // The league's IR slots, so a man in one is never counted as a roster
+      // spot or named as the drop (js/trade.js `setIrSlots`).
+      setIrSlots(Number.isInteger(schedule.irSlots) ? schedule.irSlots : null);
       // The league's scoring rules, for the preseason arrows (js/proj-trend.js).
       state.scoring = Array.isArray(schedule.scoringItems) ? schedule.scoringItems : null;
       state.scheduleError = null;
@@ -8237,6 +8243,12 @@ async function useLive() {
   await baselineRead;
   if (state.source !== 'live') return;   // the reader went back to demo meanwhile
   state.byes = byes && typeof byes === 'object' ? byes : {};
+  // ESPN's season line is the REST of the season from the first week not yet
+  // played, so the typical week divides by the games left (js/trade.js).
+  setSeasonClock({
+    week: (state.playedWeeks && state.playedWeeks.length ? Math.max(...state.playedWeeks) : 0) + 1,
+    byes: state.byes,
+  });
   // The kickoffs for the "accept by" line: after the byes, so on the desktop
   // they come off the same payload (no request). Not awaited — nothing is
   // priced from them; the pop-up and the custom box redraw when they land.

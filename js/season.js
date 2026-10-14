@@ -1796,6 +1796,9 @@ export async function fetchSchedule(opts) {
     // The trade deadline and review window (`espn.parseTrades`), for the
     // Trade page's deadline line. Null on anything that did not carry them.
     trades: parsed.trades || null,
+    // How many IR slots the league has (`parseLeague().irSlots`), for the trade
+    // engine's roster count (js/trade.js `setIrSlots`). Null when not carried.
+    irSlots: Number.isInteger(parsed.irSlots) ? parsed.irSlots : null,
     // The league's scoring rules, cut to {statId, points, pointsOverrides}, for
     // the preseason arrows (js/proj-trend.js re-scores ESPN's preseason stats
     // with them). Riding the schedule means the phone's synced copy carries them
