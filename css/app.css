@@ -1711,6 +1711,8 @@ table.summary-table td.num, table.summary-table th.num { text-align: right; font
   user-select: none;
   -webkit-user-select: none;
 }
+/* Two switches in a row (Trade: Both teams gain, Bench value) keep apart. */
+.switch + .switch { margin-left: 18px; }
 .switch input {
   position: absolute;
   width: 1px;

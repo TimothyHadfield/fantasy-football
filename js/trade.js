@@ -804,7 +804,8 @@ const topIds = (list) => new Set(list.slice(0, TWO_CAP).map((p) => p.playerId));
  */
 export const PACKAGE_KINDS = ['even', 'consolidate', 'depth', 'two'];
 
-function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds) {
+function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds, myMin = null) {
+  const myFloor = Number.isFinite(myMin) ? myMin : MIN_GAIN;
   const myBase = optimalLineup(myScored, slots);
   const theirBase = optimalLineup(theirScored, slots);
 
@@ -831,9 +832,10 @@ function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds) {
 
       // Mine first, and bail before touching theirs. Most pairs fail here, and
       // the second lineup fill is the expensive half of the loop.
-      const myAfter = optimalLineup(afterTrade(myScored, send, receive, cutCtx).roster, slots);
+      const mine = afterTrade(myScored, send, receive, cutCtx);
+      const myAfter = optimalLineup(mine.roster, slots);
       const myGain = round1(myAfter.total - myBase.total);
-      if (myGain < MIN_GAIN) continue;
+      if (myGain < myFloor) continue;
 
       const theirAfter = optimalLineup(afterTrade(theirScored, receive, send, cutCtx).roster, slots);
       const theirGain = round1(theirAfter.total - theirBase.total);
@@ -847,6 +849,7 @@ function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds) {
         shape: `${send.length}-for-${receive.length}`,
         myGain,
         theirGain,
+        myCut: mine.cut.map(idOf),
         myBefore: myBase.total,
         myAfter: myAfter.total,
         theirBefore: theirBase.total,
@@ -1091,6 +1094,11 @@ function pickCompletions(sorted, gates) {
  *   loss, so `netGain` = `myGain` − his change in those weeks, and the offer is
  *   kept and ranked on the net (`goalPoints` is the weighted net). Weeks not in
  *   `weeks` are ignored. Weekly measure only; omitted, nothing changes.
+ * @param {number} [opts.myMin] the least YOUR kept figure may be (the
+ *   goal-weighted or netted gain, or the points on the scalar measure).
+ *   Default MIN_GAIN, as always. The bench-value switch passes 0: your
+ *   lineup may not get worse, and a deal that leaves it level is a candidate.
+ *   Every offer also carries `myCut`, the ids of YOUR men its forced cut drops.
  * @param {boolean} [opts.exhaustive] TESTS ONLY: switch every ceiling off, so
  *   a suite can prove the pruned search keeps exactly what a full one keeps.
  * @param {number} [opts.partnerId] search with this one squad only.
@@ -1178,7 +1186,7 @@ function* findTradesSteps({
   teams, myTeamId, slots, measure = typicalWeek, kinds = PACKAGE_KINDS, limit = 40,
   weeks = null, projFor = null, zeroIsBye = true, floors = null,
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
-  meetWeeks = null, exhaustive = false,
+  meetWeeks = null, exhaustive = false, myMin = null,
   partnerId = null, mustSend = null, mustReceive = null, complete = false,
   distinct = false, skip = null,
 }) {
@@ -1215,9 +1223,10 @@ function* findTradesSteps({
               })(),
               meet: meetIndices(weeks, typeof meetWeeks === 'function' ? meetWeeks(theirs.id) : null),
               exhaustive: !!exhaustive,
+              myMin,
               must, complete: !!complete, gates }
           )
-        : yield* tradesWithSteps(myScored, scored(theirs.players, measure), theirs, slots, kinds)
+        : yield* tradesWithSteps(myScored, scored(theirs.players, measure), theirs, slots, kinds, myMin)
     );
   }
 
@@ -1821,7 +1830,10 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
   // The two gates as the finder applies them — handed back for the
   // suggestion list's "good enough for a fourth row" test (`pickCompletions`).
   if (options.gates) { options.gates.minGain = minGain; options.gates.theirMin = theirMin; }
-  const keepMin = complete ? -Infinity : minGain;
+  // YOUR side's floor: `myMin` when given (the bench-value switch, 0), else
+  // minGain. The pruning below uses it too, so it stays exact.
+  const myFloor = Number.isFinite(options.myMin) ? options.myMin : minGain;
+  const keepMin = complete ? -Infinity : myFloor;
   const keepTheirMin = complete ? -Infinity : theirMin;
 
   // How a week is solved for the forced cut — the same fill and assessment as
@@ -1930,7 +1942,7 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
     const extra = prune ? meetCeilings(receive) : { noCut: 0, cut: 0 };
     const extraMax = Math.max(extra.noCut, extra.cut);
     yield;
-    if (prune && giftedCeiling + extraMax + NET_SLACK < minGain) continue;
+    if (prune && giftedCeiling + extraMax + NET_SLACK < myFloor) continue;
     const giftedStarters = gifted.byWeek.map((wk) => new Set(wk.starters.map((s) => s.playerId)));
 
     for (let k = 0; k < myPackages.length; k++) {
@@ -1979,7 +1991,7 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
       // (a cut on his side only when you send more than you take).
       const mineOnly = w ? myGoal : myGain;
       const canAdd = send.length > activeIn(receive) ? extra.cut : extra.noCut;
-      if (prune && mineOnly + canAdd + NET_SLACK < minGain) continue;
+      if (prune && mineOnly + canAdd + NET_SLACK < myFloor) continue;
 
       const takenIds = receive.map((p) => p.playerId);
       const hisCut = afterTrade(theirScored, receive, send, cutCtx,
@@ -2008,6 +2020,8 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
         shape: `${send.length}-for-${receive.length}`,
         basis: 'weeks',
         weeks: weeks.slice(),
+        // Your men the forced cut drops (ids) — the bench-value switch reads it.
+        myCut: myCut.cut.map(idOf),
         // YOUR LINEUP's change over the span — raw, his side not in it.
         myGain,
         // NETTED (2026-09-30): `myGain` minus his lineup change in the weeks

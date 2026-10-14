@@ -113,7 +113,7 @@ import { tradesNote, saveTradesNote } from './notify-trades.js';
 import {
   depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
   priceTradeAcrossWeeks, setCutValue, bestComboSliced, mergeComboByPartner, seasonLineupValue,
-  setIrSlots, setSeasonClock,
+  setIrSlots, setSeasonClock, lineupValue,
 } from './trade.js';
 // THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
 // forecast, the trade finder, "Who to start" and the per-week valuation all
@@ -273,6 +273,7 @@ const state = {
   measure: 'weeks',    // what the reader ASKED for; see basis() for what is drawn
   kind: 'all',         // which package shapes the finder searches
   bothWin: false,      // the finder keeps only deals that raise BOTH lineups (the switch)
+  benchValue: false,   // the finder keeps and orders deals by YOUR bench value gain (the switch)
   partner: 'all',      // limit the results to one manager
   search: null,        // the last finder result
   searching: false,
@@ -4413,7 +4414,7 @@ function renderFinder() {
   // every offer in the list makes him worse. WORDING IS TIM'S — this is the
   // placeholder from the plan (question f), and it follows the goal he picked
   // rather than naming the title under both.
-  const finderTitle = 'Trades ranked by net increase';
+  const finderTitle = state.benchValue ? 'Trades ranked by bench value' : 'Trades ranked by net increase';
   $('finderTitle').textContent = me ? `${finderTitle} · ${me.name}` : finderTitle;
 
   // The two gain columns are the page's most dangerous numbers, because the
@@ -4504,7 +4505,7 @@ function emptyMessage() {
   // quoted the old rule was explaining a test the page no longer applies.
   // Wording is Tim's; this is the plainest thing that is true of both goals.
   return (
-    `<strong>${state.bothWin ? 'No trade here helps both teams.' : 'No trade here helps your goal.'}</strong> ` +
+    `<strong>${state.benchValue ? 'No trade here raises your bench value.' : state.bothWin ? 'No trade here helps both teams.' : 'No trade here helps your goal.'}</strong> ` +
     (narrowed
       ? 'Try <em>Any shape</em> and every manager before reading much into that. '
       : 'That is a real answer rather than a gap: it needs two managers who are weak ' +
@@ -4770,7 +4771,9 @@ function renderFinderNote(scales = finderScales) {
   // any more: the faded rows are only waiting for their chance figures, and a
   // list that cannot be played out is still in net order and says why it has
   // no chance column.
-  const net = ` · <strong>ranked by net increase</strong> (You gain + He gains).`;
+  const net = state.benchValue
+    ? ` · <strong>ranked by bench value</strong> (the Value your bench gains).`
+    : ` · <strong>ranked by net increase</strong> (You gain + He gains).`;
   const order = r.running
     ? ` · <span class="searching">playing each offer out (${r.done} of ${r.total})…</span>`
     : ranked
@@ -4797,7 +4800,11 @@ function renderFinderNote(scales = finderScales) {
         `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs him ` +
         `a little is kept, not hidden. `
       : `keeping only the ones where <strong>both totals go up</strong>. `) +
-    `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out, ` +
+    (state.benchValue
+      ? `<strong>Bench value is on:</strong> a trade is kept only when it raises your <strong>bench value</strong> ` +
+        `(the Values of the men outside your best lineup) and your lineup loses nothing a week, and the ` +
+        `list is ordered by the bench gain. `
+      : `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out, `) +
     `and so is any trade with a man ESPN lists as out for the rest of the season. ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
@@ -4970,6 +4977,44 @@ function myPerWeekShown(offer, weeks) {
   return Math.round(v * 10) / 10;
 }
 
+/**
+ * BENCH VALUE (Tim, 2026-10-14: "could you make a "bench value" trade switch
+ * that makes all the suggested trades made to increase your bench value
+ * instead of anything else?"). A squad's bench is its active men who do not
+ * make its best lineup on the page's measure — a man in an IR slot holds no
+ * roster spot and is on neither. Its bench value is their Values added, each
+ * at least 0: a man below the waiver line is worth no more than the free one
+ * who would replace him. Null while the league's Values are not read.
+ */
+const BENCH_IR_SLOT = 21;
+function benchValueOf(players) {
+  if (typeof valueLookup !== 'function') return null;
+  const active = (players || []).filter((p) => p && p.lineupSlotId !== BENCH_IR_SLOT);
+  const starting = new Set(lineupValue(active, state.slots, measureFn()).starters.map((s) => String(s.playerId)));
+  let sum = 0;
+  for (const p of active) {
+    if (starting.has(String(p.playerId))) continue;
+    const v = valueLookup(p.playerId);
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) sum += v;
+  }
+  return sum;
+}
+
+/**
+ * What a deal does to YOUR bench value, to the tenth: your roster after it
+ * (his men in, yours out, the forced cut gone — `myCut`) less before. Null
+ * without Values.
+ */
+function benchGainOf(offer, mine, before = benchValueOf(mine)) {
+  if (!Number.isFinite(before)) return null;
+  const gone = new Set([...offer.send, ...(offer.myCut || [])].map((p) => String(p && typeof p === 'object' ? p.playerId : p)));
+  const after = (mine || []).concat(offer.receive).filter((p) => !gone.has(String(p.playerId)));
+  const now = benchValueOf(after);
+  if (!Number.isFinite(now)) return null;
+  const r = Math.round((now - before) * 10) / 10;
+  return r === 0 ? 0 : r;
+}
+
 function runSearch({ keepDeal = false } = {}) {
   // An assumed trade's rosters first, so the search starts from them.
   syncAssumed();
@@ -5043,6 +5088,8 @@ function runSearch({ keepDeal = false } = {}) {
     const W = ctx && ctx.inputs ? await goalWeightsSliced(ctx, state.myTeamId, weeks, stale) : null;
     if (stale()) return;
     state.goalWeights = W;
+    const myPlayers = (teams.find((t) => t.id === state.myTeamId) || {}).players || [];
+    const benchBefore = state.benchValue ? benchValueOf(myPlayers) : null;
     const result = await findTradesSliced({
       teams,
       myTeamId: state.myTeamId,
@@ -5071,9 +5118,15 @@ function runSearch({ keepDeal = false } = {}) {
       // KEPT BY EXPECTED VALUE, not by your gain alone: weighted gain × the
       // chance he says yes — the same product the final ranking uses. Without
       // it every finalist was a fleece at the edge of the tolerance.
-      rankBy: W
+      //
+      // THE BENCH-VALUE SWITCH: kept and ordered by YOUR bench value gain
+      // instead, and your side need only not lose (`myMin` 0).
+      rankBy: state.benchValue
+        ? (o) => { o.benchGain = benchGainOf(o, myPlayers, benchBefore); return o.benchGain; }
+        : W
         ? (o) => o.goalPoints * (acceptFor(o.theirGain, o.send, o.receive, weeks, o.theirWeeks ?? weeks.length) ?? 1)
         : null,
+      myMin: state.benchValue ? 0 : null,
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
       // the yes-chance all read this — the base run, so it costs nothing.
       theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
@@ -5087,7 +5140,13 @@ function runSearch({ keepDeal = false } = {}) {
     // that have less than +1 pt/week for the user suggesting the trade"). The
     // figure is the row's own "You" gain as printed; the search hands back more
     // than the list holds so the cut does not leave it short.
-    result.offers = result.offers.filter((o) => myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK).slice(0, FINDER_ROWS);
+    // With the bench-value switch on, the rule is instead: your bench value
+    // goes up, and your "You" figure as printed does not go below zero.
+    result.offers = result.offers.filter((o) => (state.benchValue
+      ? Number.isFinite(o.benchGain) && o.benchGain >= 0.1 && myPerWeekShown(o, weeks) >= 0
+      : myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK)).slice(0, FINDER_ROWS);
+    // The bench gains kept, on the table, for a test (invisible; nothing reads it).
+    $('tradeTable').setAttribute('data-bench-gains', state.benchValue ? result.offers.map((o) => o.benchGain).join(',') : '');
     // Whether this search had the goal to work with — even when the weights
     // came back null (the goal is settled), it has been tried and a re-run
     // would find the same thing.
@@ -5478,7 +5537,9 @@ keepTradeNotes.final = null;
 
 /** Largest net increase first, in place; equal ones keep the order they came in (the sort is stable). */
 function byNetIncrease(list) {
-  const key = new Map(list.map((o) => [o, netIncreaseOf(o)]));
+  // The bench-value switch orders the finder's rows by bench value gain.
+  const key = new Map(list.map((o) => [o,
+    state.benchValue && Number.isFinite(o.benchGain) ? o.benchGain : netIncreaseOf(o)]));
   return list.sort((a, b) => key.get(b) - key.get(a) || 0);
 }
 
@@ -10462,6 +10523,11 @@ $('bothWin').addEventListener('change', (e) => {
   prefs.set('bothWin', state.bothWin);
   runSearch();
 });
+$('benchValue').addEventListener('change', (e) => {
+  state.benchValue = !!e.target.checked;
+  prefs.set('benchValue', state.benchValue);
+  runSearch();
+});
 
 $('kindToggle').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-kind]');
@@ -11570,6 +11636,8 @@ if (prefs.get('valueView', 'proj') === 'value') state.valueView = 'value';
 
 state.bothWin = prefs.get('bothWin', false) === true;
 $('bothWin').checked = state.bothWin;
+state.benchValue = prefs.get('benchValue', false) === true;
+$('benchValue').checked = state.benchValue;
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {
   state.kind = rememberedKind;
