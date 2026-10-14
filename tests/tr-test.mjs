@@ -3252,6 +3252,74 @@ SCENARIOS.customHalves = async function customHalves() {
 };
 
 /**
+ * THE BOX QUOTES THE ROW (trade audit finding 5, 2026-10-14). Under "Win it
+ * all" — where his side is counted by the chance he plays each week and so the
+ * flat figure differs — a deal opened from a finder row shows the row's own
+ * You, Him and Total in `#cuGainA`, `#cuGainB` and `#cuTop`, and a deal built
+ * in the box that no row has shows what its saved row then prints.
+ */
+SCENARIOS.boxMatchesRow = async function boxMatchesRow() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const rowFig = (tr) => ({
+    key: tr.getAttribute('data-key'),
+    partner: text(tr.querySelector('.mgr')),
+    you: textNoMark(tr.querySelector('.hv.gain')),
+    him: textNoMark(tr.querySelector('.hv.their-gain')),
+    total: text(tr.querySelector('td.total')),
+    men: [...tr.querySelectorAll('.hv.pkg .man')].map((m) => text(m.querySelector('a.pref') || m)).join(' | '),
+  });
+  const boxFig = () => ({
+    you: `${text($('cuGainA').querySelector('.cu-num'))} ${text($('cuGainA').querySelector('.cu-sub'))}`,
+    him: `${text($('cuGainB').querySelector('.cu-num'))} ${text($('cuGainB').querySelector('.cu-sub'))}`,
+    top: text($('cuTop')),
+  });
+  const rows = [];
+  const N = Math.min(8, document.querySelectorAll('#tradeTable tbody tr.offer').length);
+  for (let i = 0; i < N; i++) {
+    const tr = document.querySelectorAll('#tradeTable tbody tr.offer')[i];
+    if (!tr) break;
+    const row = rowFig(tr);
+    tr.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await settle(500);
+    // The finder can re-rank behind the box; read the SAME row again by key.
+    const again = document.querySelector(`#tradeTable tbody tr.offer[data-key="${row.key}"]`);
+    rows.push({ row, rowAfter: again ? rowFig(again) : null, box: boxFig() });
+  }
+
+  // A deal BUILT in the box: one man each way with the first partner whose
+  // pair no finder row offers, then saved — its saved row is the yardstick.
+  const finder = new Set([...document.querySelectorAll('#tradeTable tbody tr.offer')]
+    .map((tr) => { const f = rowFig(tr); return `${f.partner}|${f.men}`; }));
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  let built = null;
+  for (const v of [...$('cuTeamB').querySelectorAll('option')].map((o) => o.value)) {
+    $('cuTeamB').value = v;
+    fire($('cuTeamB'), 'change');
+    await settle(200);
+    for (const b of [...boxes('cuListA'), ...boxes('cuListB')]) if (b.checked) { b.checked = false; fire(b, 'change'); }
+    const a = boxes('cuListA')[1];
+    const b = boxes('cuListB')[1];
+    if (!a || !b) continue;
+    a.checked = true; fire(a, 'change');
+    b.checked = true; fire(b, 'change');
+    await settle(600);
+    built = { partner: v, box: boxFig() };
+    break;
+  }
+  if (built) {
+    $('cuSave').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await settle(1500);
+    const saved = [...document.querySelectorAll('#cuTable tbody tr.offer')];
+    built.saved = saved.length ? rowFig(saved[saved.length - 1]) : null;
+    built.inFinder = built.saved ? finder.has(`${built.saved.partner}|${built.saved.men}`) : null;
+  }
+  return { errors, rows, built };
+};
+
+/**
  * THE TWO SEASON BOXES UNDER THE BUILDER (Tim, 2026-09-30: "have 2 different
  * boxes of the season by week box … One is an exact copy of the current season
  * by week box, and the other is a 'after the trade' season by week box. Also
@@ -8819,6 +8887,56 @@ if (!ch.boot) {
     ch.weeksB && ch.weeksB.perRow && /he plays/.test(ch.weeksB.perRow.label) &&
       /chance of playing/.test(ch.weeksB.totalRow.label),
     JSON.stringify(ch.weeksB && [ch.weeksB.perRow, ch.weeksB.totalRow].map((r) => r && r.label)));
+}
+
+// ---- THE BOX QUOTES THE ROW (trade audit finding 5, 2026-10-14) -----------
+// Measured on 1241838 before the fix: his side −1.0/wk −10.8 in the row and
+// −1.1/wk −13.7 in the box; Total −0.6 vs −0.7. The row is the truth.
+const bm = run('boxMatchesRow', { env: { TR_GOAL: 'title' } });
+ok('the box-matches-row scenario boots', !bm.boot, bm.boot);
+if (!bm.boot) {
+  ok('no console errors in it', bm.errors.length === 0, bm.errors.slice(0, 2).join(' | '));
+  // "+4.0/wk +47.5 total" / "+4.0/wk +47.5 over weeks 6–17" -> [4.0, 47.5]
+  const two = (s) => (String(s || '').match(/[+−-]?\d+(?:\.\d+)?/g) || []).slice(0, 2).map(num);
+  const totalOfTop = (s) => num((String(s || '').match(/Total\s*([+−-]?\d+(?:\.\d+)?)/) || [])[1] || 'NaN');
+  const same = (a, b) => a.length === 2 && b.length === 2 && a[0] === b[0] && a[1] === b[1];
+  ok('BOX = ROW: rows were opened (not vacuous)', bm.rows.length >= 3, `${bm.rows.length} rows`);
+  const stable = bm.rows.filter((r) => r.rowAfter && r.rowAfter.you === r.row.you && r.rowAfter.him === r.row.him);
+  ok('BOX = ROW: the rows held still while the box was read', stable.length === bm.rows.length,
+    JSON.stringify(bm.rows.filter((r) => !stable.includes(r)).map((r) => [r.row, r.rowAfter])).slice(0, 400));
+  const bad = (pick) => stable.filter((r) => !pick(r)).map((r) => ({ row: r.row, box: r.box }));
+  ok('BOX = ROW: You — the box prints the row’s per week and total',
+    bad((r) => same(two(r.row.you), two(r.box.you))).length === 0,
+    JSON.stringify(bad((r) => same(two(r.row.you), two(r.box.you)))).slice(0, 400));
+  ok('BOX = ROW: Him — the box prints the row’s per week and total (his weeks counted by his chance of playing)',
+    bad((r) => same(two(r.row.him), two(r.box.him))).length === 0,
+    JSON.stringify(bad((r) => same(two(r.row.him), two(r.box.him)))).slice(0, 400));
+  // The sample league has no Appeal, so its Total is a dash and the box prints
+  // none; a number has to be the row's own. (A numeric Total is checked
+  // headless on the live league — the sample cannot produce one.)
+  const totalAgrees = (rowTotal, top) => (rowTotal === '—' ? !/Total/.test(top) : num(rowTotal) === totalOfTop(top));
+  ok('BOX = ROW: Total above the names is the row’s Total (none when the row has none)',
+    bad((r) => totalAgrees(r.row.total, r.box.top)).length === 0,
+    JSON.stringify(bad((r) => totalAgrees(r.row.total, r.box.top))).slice(0, 400));
+  // Not vacuous: on this goal his side IS weighted for some row — its per week
+  // is its total over FEWER weeks than the span ("over weeks 6–17" in the box).
+  const spanN = (s) => { const m = String(s || '').match(/weeks (\d+)–(\d+)/); return m ? Number(m[2]) - Number(m[1]) + 1 : NaN; };
+  const weighted = stable.filter((r) => {
+    const [w, t] = two(r.row.him);
+    return Math.abs(t) >= 1 && Math.abs(w - t / spanN(r.box.you)) > 0.051;
+  });
+  ok('BOX = ROW: his side is weighted on some opened row (so the Him check can fail)', weighted.length > 0,
+    JSON.stringify(stable.map((r) => [r.row.him, spanN(r.box.you)])));
+  const b = bm.built;
+  ok('BUILT IN THE BOX: a deal was built and saved', !!(b && b.saved), JSON.stringify(b).slice(0, 300));
+  if (b && b.saved) {
+    ok('BUILT IN THE BOX: You matches its saved row', same(two(b.box.you), two(b.saved.you)),
+      `box ${b.box.you} · saved ${b.saved.you}`);
+    ok('BUILT IN THE BOX: Him matches its saved row (same weighting as any row)', same(two(b.box.him), two(b.saved.him)),
+      `box ${b.box.him} · saved ${b.saved.him}`);
+    ok('BUILT IN THE BOX: Total matches its saved row', totalAgrees(b.saved.total, b.box.top),
+      `box ${b.box.top} · saved ${b.saved.total}`);
+  }
 }
 
 // ---- THE TWO SEASON BOXES UNDER THE BUILDER (2026-09-30) -------------------

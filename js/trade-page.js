@@ -3898,8 +3898,56 @@ function totalOfOffer(offer, shown = null) {
   return outlook.totalOf(appealOfOffer(offer), mine, theirs);
 }
 
-function totalCellHtml(offer) {
-  const a = totalOfOffer(offer);
+/**
+ * ONE DEAL'S THREE QUOTED FIGURES — You, Him and Total — in ONE place (trade
+ * audit finding 5, 2026-10-14). A finder row and the custom box both print
+ * these, so the same deal reads the same in both:
+ *   - `myNet` / `myWeek`: your gain netted by his change in the weeks he plays
+ *     you (`netGainOf`), and its per-week figure as printed (`weekGainShown`);
+ *   - `his` / `hisWeek`: his gain counted by the chance he plays each week
+ *     (`hisSideOf`), and that over the weeks he is expected to play;
+ *   - `appeal`, and `total` (the row's own Total, `totalOfOffer`).
+ * The row's figures are the truth: they feed the +1 a week gate and the order.
+ */
+function dealFigures(offer) {
+  const span = weeklySpan();
+  const myNet = netGainOf(offer);
+  const his = hisSideOf(offer, span);
+  return {
+    myNet,
+    myWeek: Number.isFinite(myNet)
+      ? weekGainShown(myNet, offer.myGain, offer.myBefore, offer.myAfter, span.length)
+      : myNet,
+    his,
+    hisWeek: Number.isFinite(his.gain) ? perWeekOf(his.gain, his.weeks) : his.gain,
+    appeal: appealOfOffer(offer),
+    total: totalOfOffer(offer),
+  };
+}
+
+/**
+ * THE ROW A CUSTOM DEAL IS, when one on the page is exactly it: your squad,
+ * the same partner, the same men each way. A deal opened from a row is that
+ * row, and the box quotes the row's own figures rather than a re-pricing that
+ * could round or weight a tenth differently. Only rows still on the page (a
+ * new search replaces them), and only on the week-by-week measure the box
+ * prices on.
+ */
+function rowTwinOf(entry) {
+  if (!entry || basis() !== 'weeks' || String(entry.a) !== String(state.myTeamId)) return null;
+  const ids = (list) => (list || []).map(String).sort().join(',');
+  const want = `${entry.b}|${ids(entry.sendA)}|${ids(entry.sendB)}`;
+  const sig = (o) => `${o.partner && o.partner.id}|${ids(o.send.map((p) => p.playerId))}|` +
+    `${ids(o.receive.map((p) => p.playerId))}`;
+  for (const rows of [state.rows, state.cuSugRows]) {
+    for (const o of rows || []) {
+      if (o && !o.combined && !o.custom && o.partner && Array.isArray(o.send) && sig(o) === want) return o;
+    }
+  }
+  return null;
+}
+
+function totalCellHtml(offer, a = totalOfOffer(offer)) {
   if (a === null) return `<td class="total">—</td>`;
   return `<td class="total${a > 0 ? ' pos' : a < 0 ? ' neg' : ''}" data-v="${a}">${signedText(a)}</td>`;
 }
@@ -3927,12 +3975,13 @@ function offerRow(offer, i, key, opts = {}) {
   const send = offer.send.map((p) => manLine(p, ctx)).join('');
   const receive = offer.receive.map((p) => manLine(p, ctx)).join('');
   const weeks = basis() === 'weeks' && weeklySpan().length > 0;
+  // You, Him and Total: the figures the custom box quotes too (`dealFigures`).
+  const fig = dealFigures(offer);
   // The heat mark goes beside the number, never after the sub-line (V4).
   // The per-week figure agrees with "Your lineup, a week" beside it (`weekGainShown`).
   const gain = (v, mark) =>
     (weeks && Number.isFinite(v)
-      ? weeklyGainHtml(v, undefined, mark,
-        weekGainShown(v, offer.myGain, offer.myBefore, offer.myAfter, weeklySpan().length))
+      ? weeklyGainHtml(v, undefined, mark, fig.myWeek)
       : `${signedText(v)}${mark}`);
   const picked = state.deal && state.deal === offer ? ' picked' : '';
 
@@ -3949,10 +3998,10 @@ function offerRow(offer, i, key, opts = {}) {
     return { cls: ` ${h.cls}`, mark: heatMarkHtml(h) };
   };
   // HIS side over the weeks he will play (trade plan Phase 3) — see `hisSideOf`.
-  const his = hisSideOf(offer);
+  const his = fig.his;
   // YOUR GAIN IS NETTED (2026-09-30): his change in the weeks he plays you
   // comes off it — see `netGainOf`. "Your lineup, a week" stays your own.
-  const myNet = netGainOf(offer);
+  const myNet = fig.myNet;
   const mine = heatCell(myNet, myScale, 'what these offers gain you');
   const theirs = heatCell(his.gain, theirScale, 'what these offers gain the other manager');
 
@@ -4033,12 +4082,12 @@ function offerRow(offer, i, key, opts = {}) {
         : '') +
       splitHalf('Him', `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-rc="their" data-v="${his.gain}">` +
         `${weeks && Number.isFinite(his.gain)
-          ? weeklyGainHtml(his.gain, his.weeks, theirs.mark)
+          ? weeklyGainHtml(his.gain, his.weeks, theirs.mark, fig.hisWeek)
           : `${signedText(his.gain)}${theirs.mark}`}</td>`) +
     `</td>` +
     valueCellHtml(offer) +
     appealCellHtml(offer) +
-    totalCellHtml(offer) +
+    totalCellHtml(offer, fig.total) +
     (showOpp ? oppCellHtml(offer) : '') +
     // "Ask AI" (Tim, 2026-09-30), STACKED with the row's other buttons (Tim,
     // 2026-10-01: "stack the "assume" "remove" and "ask" buttons on the right so
@@ -8987,18 +9036,20 @@ function renderCustomPreview(priced) {
   }
   $('cuSave').disabled = false;
   $('cuOpen').disabled = false;
-  // Your side NETTED by his change in the weeks you play him (`netGainOf`), as
-  // every finder row is; his side is his own lineup, as He gains is.
-  // Per week as the week table's "Per week" row and a saved row print it.
+  // THE ROW'S FIGURES (trade audit finding 5, 2026-10-14): You, Him and Total
+  // are `dealFigures` of the finder's own row when this deal is one, and of the
+  // box's pricing on the same footing otherwise — your side netted by his
+  // change in the weeks you play him, his counted by the chance he plays each
+  // week. The box used to print his flat change, so one deal read two ways.
   const cuOffer = customOffer(state.custom, priced);
-  const n = weeklySpan().length;
+  const f = dealFigures(rowTwinOf(state.custom) || cuOffer);
   const val = customValueChange(sendA.map(String), sendB.map(String));
-  const hisWeek = weekGainShown(priced.forB.delta, priced.forB.delta, cuOffer.theirBefore, cuOffer.theirAfter, n);
-  const myWeek = weekGainShown(netGainOf(cuOffer), cuOffer.myGain, cuOffer.myBefore, cuOffer.myAfter, n);
-  const appeal = appealOfOffer(cuOffer);
-  const total = totalOfOffer(cuOffer, { mine: myWeek, his: hisWeek });
-  $('cuGainA').innerHTML = customGainHtml(netGainOf(cuOffer), myWeek);
-  $('cuGainB').innerHTML = customGainHtml(priced.forB.delta, hisWeek);
+  const appeal = f.appeal;
+  // The box always prices week by week; on another measure the row's Total is
+  // of one-week figures, so the box adds the two it prints instead.
+  const total = basis() === 'weeks' ? f.total : totalOfOffer(cuOffer, { mine: f.myWeek, his: f.hisWeek });
+  $('cuGainA').innerHTML = customGainHtml(f.myNet, f.myWeek);
+  $('cuGainB').innerHTML = customGainHtml(f.his.gain, f.hisWeek);
   // Once, above both names, and yours only: his are the same figures with the
   // sign turned (Tim, 2026-10-12).
   const top = (label, v) => (v === null || v === undefined ? '' :
@@ -10515,7 +10566,9 @@ const DEAL_HASH = '#deal=';
 function rowCardSpec(cell) {
   const tr = cell.closest('tr[data-key]');
   const key = tr ? tr.getAttribute('data-key') : cell.getAttribute('data-key');
-  const offer = offerByKey(key);
+  // The box's two big figures are the row's when the deal is a row (`rowTwinOf`),
+  // so their cards are that row's cards too.
+  const offer = (key === 'cu-build' && rowTwinOf(state.custom)) || offerByKey(key);
   if (!offer) return null;
   const kind = cell.getAttribute('data-rc');
   const why = cell.getAttribute('data-why') || '';
@@ -10530,7 +10583,8 @@ function rowCardSpec(cell) {
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
   if (kind === 'gain') {
-    const net = netGainOf(offer);
+    const f = dealFigures(offer);
+    const net = f.myNet;
     const byWeek = weeks && Array.isArray(offer.byWeek) && offer.byWeek.length ? offer.byWeek : null;
     const vs = byWeek ? vsOptsOf(offer) : {};
     return {
@@ -10538,7 +10592,7 @@ function rowCardSpec(cell) {
         title: 'You gain', sub, byWeek,
         vs: vs.vs || null, vsName: typeof vs.vsName === 'string' ? vs.vsName : '',
         before: offer.myBefore, after: offer.myAfter,
-        shown: signedText(weeks ? weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, n) : net),
+        shown: signedText(weeks ? f.myWeek : net),
         totalShown: weeks ? signedText(net) : null,
       }),
       ...link,
@@ -10558,21 +10612,19 @@ function rowCardSpec(cell) {
       ...link,
     };
   }
-  if (kind === 'their' || kind === 'their-own') {
+  if (kind === 'their') {
     const byWeek = weeks && Array.isArray(offer.theirByWeek) && offer.theirByWeek.length ? offer.theirByWeek : null;
-    // A finder row counts each week by the chance he plays it (`hisSideOf`);
-    // the builder's big figure is his own lineup over every week.
-    const own = kind === 'their-own';
-    const his = own ? { gain: offer.theirGain, weeks: n } : hisSideOf(offer);
-    const r = !own && byWeek && offer.partner ? reachFor(offer.partner.id, span) : null;
+    // Each week counted by the chance he plays it (`hisSideOf`) — the row's
+    // "He gains", and since 2026-10-14 the builder's big figure as well.
+    const f = dealFigures(offer);
+    const his = f.his;
+    const r = byWeek && offer.partner ? reachFor(offer.partner.id, span) : null;
     return {
       ...gainWeeksSpec({
         title: 'He gains', sub: partner, byWeek,
         reach: r ? new Map(span.map((w, i) => [w, r[i]])) : null,
         before: offer.theirBefore, after: offer.theirAfter,
-        shown: signedText(!weeks ? his.gain
-          : own ? weekGainShown(his.gain, his.gain, offer.theirBefore, offer.theirAfter, n)
-            : perWeekOf(his.gain, his.weeks)),
+        shown: signedText(!weeks ? his.gain : f.hisWeek),
         totalShown: weeks ? signedText(his.gain) : null,
       }),
       ...link,
@@ -10648,7 +10700,7 @@ function wirePreviews() {
   if ($('customPanel')) wirePops($('customPanel'), { selector: '#cuMeet', card: meetCardSpec });
   // The builder's two big figures are the deal being built, under the row key
   // its pop-up already uses.
-  for (const [id, kind] of [['cuGainA', 'gain'], ['cuGainB', 'their-own']]) {
+  for (const [id, kind] of [['cuGainA', 'gain'], ['cuGainB', 'their']]) {
     const el = $(id);
     if (el) { el.setAttribute('data-rc', kind); el.setAttribute('data-key', 'cu-build'); }
   }
