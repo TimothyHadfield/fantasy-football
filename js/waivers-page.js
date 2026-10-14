@@ -125,6 +125,11 @@ import * as value from './value.js';
 // THE ANALYSIS PAGE'S "WHO TO START" BOX, above the free agents (Tim,
 // 2026-10-09) — see "who to start" below. One renderer for both pages.
 import * as starters from './who-to-start.js';
+// THE DIAMOND AND THE COIN by a name (Tim, 2026-10-14: "show the diamond or
+// coin just like in the trade section") — the Trade page's rule and markup.
+import * as outlook from './outlook-mark.js';
+// THE GREEN NAME: his bye is behind him (Tim, 2026-10-14) — the Trade page's rule.
+import { byePastOf, byePastHtml } from './bye-past.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('waivers');
@@ -198,6 +203,10 @@ const FILTER_CHOICE = (v) => (FILTERS.includes(String(v)) ? String(v) : 'ALL');
 
 /** What the two tables' numbers are shown as: ESPN's projection, or its Value. */
 const SHOW_CHOICE = (v) => (v === 'value' ? 'value' : 'proj');
+
+/** The mark filter's choices; a stale or hand-edited value falls back to ALL. */
+const MARKS = ['ALL', 'diamond', 'coin', 'none'];
+const MARK_CHOICE = (v) => (MARKS.includes(String(v)) ? String(v) : 'ALL');
 
 /**
  * The selected filter as a headline label — "WR", "RB/WR/TE".
@@ -312,6 +321,16 @@ const state = {
   // players menu, just like the other manus"). Null = nobody picked here, so
   // the connection's team (or the demo's stand-in) is you, as before.
   pickedTeamId: prefs.get('team', null),
+  // SHOW MY PLAYERS (Tim, 2026-10-14: "a "show my players" switch on the
+  // players section that is default on, but you can turn it off to remove the
+  // who to start graph and any of your players in the list"). Off hides the
+  // Who to start box and the "Your …" rows; it changes no number (the green
+  // box and Gain still read your roster).
+  showMine: prefs.get('showMine', true) !== false,
+  // THE MARK FILTER (Tim, 2026-10-14: "allow to sort between coin and diamond
+  // players aswell or neither"): ALL, 'diamond', 'coin' or 'none'. One setting
+  // for both tables, like the span, shown in both toolbars.
+  mark: MARK_CHOICE(prefs.get('mark', 'ALL')),
 
   // GAIN (see "the Gain column" below). `key` names what the figures in `by`
   // were worked out for — league, team, weeks — and is '' while there is
@@ -3139,7 +3158,8 @@ function renderStartBox() {
   const panel = $('startBox');
   const table = $('startersTable');
   if (!panel || !table) return;
-  const team = startTeam();
+  // "Show my players" off takes the box away (Tim, 2026-10-14).
+  const team = state.showMine ? startTeam() : null;
   const d = team ? starters.startersData(team) : null;
   if (!d || !d.show) {
     panel.hidden = true;
@@ -3335,6 +3355,14 @@ function render() {
     $(box).hidden = state.value.base === null;
     syncSegmented(id, 'show', state.show);
   }
+  // The mark filter: one setting, both tables; not on the sample league, which
+  // draws no marks. The switch: on unless turned off.
+  for (const [box, id] of [['markCtl', 'markFilter'], ['takenMarkCtl', 'takenMarkFilter']]) {
+    if (!$(box) || !$(id)) continue;
+    $(box).hidden = state.isDemo;
+    syncSegmented(id, 'mark', state.mark);
+  }
+  if ($('showMine')) $('showMine').checked = state.showMine;
 
   $('modeBadge').className = 'badge ' + (state.isDemo ? 'demo' : 'live');
   $('modeBadge').textContent = state.isDemo ? 'Demo' : 'Live';
@@ -3964,6 +3992,47 @@ const trendMark = (p, rostered) => trend.trendHtml(
   trend.trendOf(p.playerId, rosNow(p, rostered), state.scoring, weekRange(rosWeeks())));
 
 /**
+ * THE DIAMOND AND THE COIN (Tim, 2026-10-14: "in the players section show the
+ * diamond or coin just like in the trade section by the player's name"). The
+ * rule and markup are js/outlook-mark.js's, the Trade page's: his projection
+ * for the weeks left 2 or more a week above (💎) or below (🪙) ESPN's season
+ * average. The two numbers are his card's (`glanceFor`): Avg off ESPN, and
+ * Proj = the rest of his season (`restProj`, else the arrows' `rosNow` over
+ * the regular weeks to come). Null until those weeks are read — no mark rather
+ * than one that would change. Not in the sample league, whose men are
+ * invented (the Trade page's rule too). `wire`: a free agent.
+ */
+function outlookOfMan(p, wire) {
+  if (!p || state.isDemo) return null;
+  const proj = restProj(p, wire) ?? rosNow(p, !wire);
+  return outlook.outlookOf(proj, glanceNow(p, wire).avg);
+}
+const outlookMark = (p, wire) => outlook.outlookHtml(outlookOfMan(p, wire));
+
+/** An empty table under the mark filter says so. */
+const MARK_EMPTY = 'Nobody here matches the mark filter.';
+
+/** Does this man pass the mark filter (All / Diamonds / Coins / Neither)? */
+function matchesMark(p, wire) {
+  if (state.mark === 'ALL' || state.isDemo) return true;
+  const o = outlookOfMan(p, wire);
+  return (o ? o.kind : 'none') === state.mark;
+}
+
+/**
+ * HIS BYE IS BEHIND HIM: the name on the Trade page's green pill (Tim,
+ * 2026-10-14, "just like in the trade section"; rule in js/bye-past.js). The
+ * first week still to come is the current week, or the one after it once a
+ * game of it has been played — the Trade page counts a started week as played.
+ */
+function nextWeekToCome() {
+  const now = state.currentWeek;
+  if (!Number.isFinite(now)) return undefined;
+  return weekUnderWay(now) ? now + 1 : now;
+}
+const nameHtml = (p) => byePastHtml(esc(p.name), byePastOf(byeWeekOf(p, state.byes), nextWeekToCome()));
+
+/**
  * A name cell's contents. With an arrow, they go in a `.nm-line` flex row
  * whose NAME is the one part allowed to shrink: on a phone the frozen column
  * is capped at 44vw and a long "Your QB2 Bodie Ravenscroft" used to lose the
@@ -4017,8 +4086,8 @@ function wireRow(row, weeks, lineup, avgScales, weekScales) {
 
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
-        playerLink(p, esc(p.name), `${esc(p.name)}${owned} — jump to his row, show every ` +
-          `remaining week and his actual scores`, true), trendMark(p, false),
+        playerLink(p, nameHtml(p), `${esc(p.name)}${owned} — jump to his row, show every ` +
+          `remaining week and his actual scores`, true), trendMark(p, false) + outlookMark(p, true),
         `${injuryTag(status)}${waiverTag(p)}`)}</td>
       ${identityCells(row, heat)}
       ${gainCell(p)}
@@ -4055,7 +4124,7 @@ function mineRow(row, weeks, avgScales, weekScales) {
 
   return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
-        nameLine(playerLink(p, esc(p.name), why), trendMark(p, true),
+        nameLine(playerLink(p, nameHtml(p), why), trendMark(p, true) + outlookMark(p, false),
           injuryTag(availability(p.injuryStatus)),
           // The label opens your men at that position (`mineCard`), keyboard included.
           `<span class="mine-tag" tabindex="0">${esc(label)}</span> `) +
@@ -4076,11 +4145,12 @@ function renderTable(weeks) {
   renderHead(weeks);
 
   const all = withShown(buildRows(weeks), weeks);
-  const available = all.filter(matchesFilter);
+  const available = all.filter((r) => matchesFilter(r) && matchesMark(r.p, true));
   const mineAll = withShown(buildMineRows(weeks), weeks);
   // The green box's judge, from your whole roster: no filter can move a box.
   const lineup = lineupTest(weeks);
-  const mine = mineAll.filter(matchesFilter);
+  // "Show my players" off: none of your men in the list (the box above goes too).
+  const mine = state.showMine ? mineAll.filter((r) => matchesFilter(r) && matchesMark(r.p, false)) : [];
   const cols = pastWeeks(weeks).length + weeks.length + 5;
 
   // THE Avg COLUMN'S SCALES, from `all` and NOT from `available`: the filter
@@ -4098,7 +4168,8 @@ function renderTable(weeks) {
   });
 
   if (!available.length && !mine.length) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(emptyReason(all.length))}</td></tr>`;
+    const why = state.mark !== 'ALL' && all.some(matchesFilter) ? MARK_EMPTY : emptyReason(all.length);
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(why)}</td></tr>`;
     setTrendKey('waiverTrendKey', '');
     resort(table);
     return;
@@ -4232,8 +4303,8 @@ function takenRow(row, weeks, avgScales, weekScales) {
 
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
-        playerLink(p, esc(p.name), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
-          `his row, show every remaining week and his actual scores`, true), trendMark(p, true),
+        playerLink(p, nameHtml(p), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
+          `his row, show every remaining week and his actual scores`, true), trendMark(p, true) + outlookMark(p, false),
         injuryTag(status))}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" data-c="pos"${tradeHrefFor(row) ? ' data-go' : ''}>${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
@@ -4252,7 +4323,7 @@ function renderTaken(weeks) {
   renderTakenHead(weeks);
 
   const all = withShown(buildTakenRows(weeks), weeks);
-  const shown = all.filter(matchesTaken);
+  const shown = all.filter((r) => matchesTaken(r) && matchesMark(r.p, false));
   const cols = pastWeeks(weeks).length + weeks.length + 5;
 
   // Built from `all`, never from `shown`: this table's own position buttons
@@ -4264,7 +4335,8 @@ function renderTaken(weeks) {
 
   if (!shown.length) {
     tbody.innerHTML =
-      `<tr class="empty-row"><td colspan="${cols}">${esc(takenEmptyReason(all.length))}</td></tr>`;
+      `<tr class="empty-row"><td colspan="${cols}">${esc(state.mark !== 'ALL' && all.some(matchesTaken)
+        ? MARK_EMPTY : takenEmptyReason(all.length))}</td></tr>`;
     setTrendKey('takenTrendKey', '');
     resort(table);
     return;
@@ -4812,6 +4884,8 @@ function renderNote(weeks) {
   if (progress) status.push(`<span class="muted">${esc(progress)}</span>`);
 
   $('waiverStatus').innerHTML = paragraphs(status);
+  // The marks by a name, behind the toggle (rule 16); the key line is the legend's.
+  if (!state.isDemo) parts.push(outlook.OUTLOOK_EXPLAIN);
   $('waiverNote').innerHTML = paragraphs(parts);
 
   // The key shows only the cues this table can actually draw right now: with
@@ -4819,7 +4893,8 @@ function renderNote(weeks) {
   $('waiverLegend')
     .querySelectorAll('[data-compare]')
     .forEach((el) => {
-      if (comparing()) el.removeAttribute('hidden');
+      // The "Your …" key goes with the rows when "Show my players" is off.
+      if (comparing() && (state.showMine || !el.querySelector('.mine-tag'))) el.removeAttribute('hidden');
       else el.setAttribute('hidden', '');
     });
 }
@@ -4894,6 +4969,29 @@ function onShowClick(id) {
 }
 onShowClick('showToggle');
 onShowClick('takenShowToggle');
+
+// The mark filter (All / 💎 / 🪙 / Neither): a repaint, both tables, remembered.
+function onMarkClick(id) {
+  if (!$(id)) return;
+  $(id).addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mark]');
+    if (!btn || btn.dataset.mark === state.mark) return;
+    state.mark = MARK_CHOICE(btn.dataset.mark);
+    prefs.set('mark', state.mark);
+    render();
+  });
+}
+onMarkClick('markFilter');
+onMarkClick('takenMarkFilter');
+
+// "Show my players": a repaint, remembered. Nothing is bought or re-priced.
+if ($('showMine')) {
+  $('showMine').addEventListener('change', (e) => {
+    state.showMine = Boolean(e.target.checked);
+    prefs.set('showMine', state.showMine);
+    render();
+  });
+}
 
 /**
  * Jump to a player without leaving the page.

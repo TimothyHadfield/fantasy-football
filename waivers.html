@@ -351,6 +351,22 @@ td.zero-out, td.zero { color: var(--dim); }
 }
 .trend-up { color: var(--accent); }
 .trend-down { color: var(--err); }
+/* THE DIAMOND AND THE COIN (Tim, 2026-10-14: "just like in the trade
+   section"). trade.html's rule, word for word — that page keeps it in its own
+   <style>. Change one, change the other. */
+.outlook { position: relative; font-size: 10px; margin-left: 3px; vertical-align: 1px; flex: 0 0 auto; }
+/* HIS BYE IS BEHIND HIM: trade.html's green name pill (`.bye-hl.bye-past`),
+   copied for the same reason. js/bye-past.js draws it. */
+.bye-hl {
+  position: relative; /* holds its sr-only words inside the scroll box */
+  border-radius: var(--r-pill);
+  padding: 0 6px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.bye-hl.bye-past { background-color: var(--accent); color: var(--on-accent); }
+/* "Show my players" on the panel's heading line, before the Taken link. */
+.panel-head .switch { margin-left: auto; font-size: 13px; white-space: nowrap; }
 /* A name WITH an arrow: the name shrinks (with an ellipsis) before the arrow or
    a tag does, so on a phone's 44vw frozen column the arrow is never the part
    cut off. Flex drops the space after "Your QB2", so its margin carries it. */
@@ -568,6 +584,10 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
   .source-panel .team-pick { flex: 1 1 100%; width: 100%; }
   .source-panel #sourceStatus:empty { display: none; }
   .panel-head { margin-bottom: 11px; }
+  /* The heading and the Taken link do not leave room for the switch on a
+     phone: it takes the line under them. */
+  .panel-head { flex-wrap: wrap; row-gap: 0; }
+  .panel-head .switch { order: 3; margin-left: 0; }
   .toolbar .ctl .cost { font-size: 12px; }
   #startersTable td.wk, #startersTable th.wk { padding-left: 5px; padding-right: 5px; }
 }
@@ -628,6 +648,13 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
   <section class="panel">
     <div class="panel-head">
       <h2>Available players</h2>
+      <!-- SHOW MY PLAYERS (Tim, 2026-10-14): default on; off takes away the
+           Who to start box and the "Your …" rows. The Trade page's switch. -->
+      <label class="switch" for="showMine">
+        <input type="checkbox" role="switch" id="showMine" checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-text">Show my players</span>
+      </label>
       <a class="to-taken" href="#takenPanel">Taken players &darr;</a>
     </div>
     <p class="lede">Free agents you could claim, with ESPN&rsquo;s projected points for each week.</p>
@@ -678,6 +705,19 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
           <button type="button" data-show="value">Value</button>
         </div>
       </div>
+
+      <!-- THE MARK FILTER (Tim, 2026-10-14): only the diamonds, only the
+           coins, or only the men with neither. One setting for both tables;
+           hidden on the sample league, which draws no marks. -->
+      <div class="ctl" id="markCtl" hidden>
+        <span class="ctl-label" id="markLabel">Marks</span>
+        <div class="segmented seg-sm" id="markFilter" role="group" aria-labelledby="markLabel">
+          <button type="button" data-mark="ALL" class="on">All</button>
+          <button type="button" data-mark="diamond" aria-label="Diamonds">&#128142;</button>
+          <button type="button" data-mark="coin" aria-label="Coins">&#129689;</button>
+          <button type="button" data-mark="none">Neither</button>
+        </div>
+      </div>
     </div>
 
     <div class="stat-row" id="waiverStats"></div>
@@ -695,6 +735,9 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
       <span class="key" data-when="td.avg.heat-up-4" hidden><span class="sw heat heat-up-4">14.8 <span class="heatmark">&#9650;</span></span> best of the free agents at his position</span>
       <span class="key" data-when="td.avg.heat-dn-4" hidden><span class="sw heat heat-dn-4">3.2 <span class="heatmark">&#9660;</span></span> worst of them</span>
       <!-- `data-when`: shown only while the table draws that mark. -->
+      <!-- The Trade page's two name marks (Tim, 2026-10-14), shown only while drawn. -->
+      <span class="key" data-when="span.outlook" hidden>&#128142; / &#129689; projected 2+ above / below his average</span>
+      <span class="key" data-when="span.bye-past" hidden><span class="bye-hl bye-past">Name</span> bye already played</span>
       <span class="key" data-when="span.tag.wv" hidden><span class="tag wv">W &middot; Fri</span> on waivers until that day</span>
       <span class="key" data-when="td.bye"><span class="sw bye">Bye</span> no game</span>
       <span class="key" data-when="td.zero-out" hidden><span class="sw zero-out">0.0 <span class="zmark">OUT</span></span> ruled out, not a bye</span>
@@ -793,6 +836,17 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
           <button type="button" data-show="value">Value</button>
         </div>
       </div>
+
+      <!-- The same mark filter as the table above, shown here too. -->
+      <div class="ctl" id="takenMarkCtl" hidden>
+        <span class="ctl-label" id="takenMarkLabel">Marks</span>
+        <div class="segmented seg-sm" id="takenMarkFilter" role="group" aria-labelledby="takenMarkLabel">
+          <button type="button" data-mark="ALL" class="on">All</button>
+          <button type="button" data-mark="diamond" aria-label="Diamonds">&#128142;</button>
+          <button type="button" data-mark="coin" aria-label="Coins">&#129689;</button>
+          <button type="button" data-mark="none">Neither</button>
+        </div>
+      </div>
     </div>
 
     <div class="stat-row" id="takenStats"></div>
@@ -800,6 +854,8 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
 
     <div class="legend" id="takenLegend">
       <span class="key"><span class="sw">QB<span class="muted">3</span></span> his rank on his own squad</span>
+      <span class="key" data-when="span.outlook" hidden>&#128142; / &#129689; projected 2+ above / below his average</span>
+      <span class="key" data-when="span.bye-past" hidden><span class="bye-hl bye-past">Name</span> bye already played</span>
       <span class="key" data-when="td.bye"><span class="sw bye">Bye</span> no game</span>
       <span class="key" data-when="td.zero-out" hidden><span class="sw zero-out">0.0 <span class="zmark">OUT</span></span> ruled out, not a bye</span>
       <span class="key" data-when="td.zero" hidden><span class="sw">0.0</span> projected at zero, not a bye</span>

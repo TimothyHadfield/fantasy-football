@@ -121,6 +121,7 @@ const SUITES = [
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
   ['wv-start-check.mjs', 'Players: the Analysis page’s Who to start box above the free agents, for the position picked — the shared renderer’s rows, and nothing asked of ESPN'],
+  ['wv-marks-check.mjs', 'Players: Show my players, the diamond / coin by a name and its filter, and the green name for a bye already played'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
   ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
