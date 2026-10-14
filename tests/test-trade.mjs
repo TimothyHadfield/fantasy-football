@@ -125,12 +125,12 @@ close(weekProjection({ seasonProjected: 170, projected: 0 }), 0, 1e-9,
   close(typicalWeek(hampton), 6.7, 1e-9, 'typicalWeek: with no season clock, ÷ 17 as before');
 }
 
-// ONE ROUNDING RULE (trade audit finding 15): the engine rounds the way the
-// page prints — `toFixed`, not `Math.round` — so the two never part on a half.
+// ONE ROUNDING RULE (trade audit finding 15): the engine rounds a half up, as
+// the Players page does, so a man's Avg there equals his perWeek here.
 {
-  const pageRound1 = (n) => Number(Number(n).toFixed(1));   // js/trade-page.js `round1` / `fmt`
+  const playersRound1 = (n) => Math.round(n * 10) / 10;   // js/waivers-page.js
   for (const v of [121.55, 1.15, 10.45, -0.05, -121.55, 2.25, 0.05, 33.35]) {
-    eq(weekProjection({ projected: v }), pageRound1(v), `rounding: ${v} rounds as the page prints it (${pageRound1(v).toFixed(1)})`);
+    eq(weekProjection({ projected: v }), playersRound1(v), `rounding: ${v} rounds as the Players page does (${playersRound1(v)})`);
   }
 }
 

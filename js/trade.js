@@ -53,12 +53,11 @@ export const POSITIONS_IN_ORDER = ['QB', 'RB', 'WR', 'TE', 'DST', 'K'];
 // Same constant, and the same reasoning, as the first grid on the analysis page.
 export const SEASON_GAMES = 17;
 
-// ROUNDED THE WAY THE PAGE PRINTS (trade audit, 2026-10-14). `Math.round(n*10)/10`
-// and `toFixed(1)` part company on a half — 121.55 is 121.6 one way and 121.5
-// the other — so a figure rounded here and printed by js/trade-page.js (`fmt`,
-// `signedText`, its own `round1`, all `toFixed`) could disagree with itself by a
-// tenth. One rule, the page's: `toFixed`.
-const round1 = (n) => Number(Number(n).toFixed(1));
+// ONE ROUNDING RULE WITH THE PLAYERS PAGE: `Math.round(n*10)/10`, a half up.
+// (2026-10-14: switching this to `toFixed` made the Players page Avg and this
+// engine's perWeek part by a tenth on a half — tests/wv-test.mjs §1.7. The
+// Trade page prints the engine's already-rounded tenths, so they agree.)
+const round1 = (n) => Math.round(n * 10) / 10;
 
 // ESPN's rest-of-season projection runs to the end of the NFL season (week 18),
 // not the fantasy one: Hampton's 114.4 in week 6 is his weeks 6–18 added up.
