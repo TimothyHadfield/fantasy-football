@@ -9092,7 +9092,7 @@ function renderCustomSaved() {
   // click read. A deal sent from another squad carries its own tag, so it is a
   // group of its own; one that will not price goes last, on its own line.
   const groupOf = (i) => (offers[i]
-    ? `${offers[i].partner.name} ${offers[i].partner.id} ${offers[i].fromLabel || ''}` : null);
+    ? `${offers[i].partner.name}\u0000${offers[i].partner.id}\u0000${offers[i].fromLabel || ''}` : null);
   const order = rows.map((_, i) => i).sort((x, y) => {
     const gx = groupOf(x), gy = groupOf(y);
     if (gx === null || gy === null) return (gx === null) - (gy === null) || x - y;

@@ -6,7 +6,11 @@
 **Status:** NOTHING IS BUILT · Read first: The answer, Findings, Phases, Questions for Tim.
 
 ## Decided by Tim
-- (none yet for this plan) · Earlier rulings this plan must respect: list order = net increase (2026-10-09), +1 a week floor (2026-10-12), Value-first forced cut (2026-10-12), Appeal = Σ(proj−avg) got − sent and Total = Appeal + both gains (2026-10-12), "complement ESPN, don't replace it".
+- 2026-10-14 · (a) List order: "Yes, add that guard" — keep You + He gains, never a goal-lowering deal above a goal-raising one; +1 gate also needs chance not to fall.
+- 2026-10-14 · (b) Yes-chance: "Rebuild, show words" — likely / maybe / unlikely + one-line why.
+- 2026-10-14 · (c) Total: "Keep as I set it" (Appeal + both gains).
+- 2026-10-14 · Phase 1: "Build Phase 1 now". Phases 2–5 not yet authorized to build.
+- Earlier rulings this plan must respect: list order = net increase (2026-10-09), +1 a week floor (2026-10-12), Value-first forced cut (2026-10-12), Appeal = Σ(proj−avg) got − sent and Total = Appeal + both gains (2026-10-12), "complement ESPN, don't replace it".
 
 ## The answer (one sentence)
 The pricing engine is sound, but the page ranks trades by a figure that can put a deal that LOWERS your title chance first, its "chance he accepts" is far too generous and blind to what the other manager sees on ESPN, ESPN's own out-for-season flag is ignored (so men coming back are wrongly barred), several numbers disagree between the row and the custom box, and on a phone the answer is ~3 screens down behind a 45-second load.
