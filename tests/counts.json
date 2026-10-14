@@ -129,6 +129,10 @@
       "assertions": 229,
       "scenarios": 9
     },
+    "wv-marks-check.mjs": {
+      "assertions": 62,
+      "scenarios": 4
+    },
     "taken-check.mjs": {
       "assertions": 444,
       "scenarios": 12
