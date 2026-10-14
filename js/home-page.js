@@ -52,6 +52,8 @@ import {
   playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, reopenTip, setValueSource,
   zeroKind, byeWeekOf,
 } from './player-card.js';
+// A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
+import './loose-weeks.js';
 import { teamHref, playerHref, weekHref, statsHref } from './links.js';
 // The positional floor's one sentence, so Home states it in the same words as
 // Analysis and Trade. See js/floor.js.

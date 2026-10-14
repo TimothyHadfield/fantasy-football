@@ -663,8 +663,92 @@ export function weekRun({
   if (scale) notes.push(heatLine(scale));
   if (cols.some((c) => c.vs)) notes.push(vsLine(vsName, cols));
 
-  return { heading, pending: '', cols, legend, notes, scale, vsName };
+  const out = { heading, pending: '', cols, legend, notes, scale, vsName };
+  // What it was built from, so a card being opened can build it again with his
+  // weeks off every roster filled in (`filledRun`). Kept beside the run rather
+  // than on it: the run's own fields are an API, and tests compare them.
+  RUN_ARGS.set(out, {
+    heading, weeks, projections, actuals, currentWeek, demo, byeWeek, injuryStatus,
+    playoffWeeks, starts, splitAfter, startsNote, vsWeeks, vsName, heat,
+  });
+  return out;
 }
+
+// ------------------------------------------ the weeks he was on NO roster
+//
+// Tim, 2026-10-14: "right now the player preview doesn't show any previous
+// weeks if that player wasn't on your team, instead jsut shows "off". Make is
+// so that never happens and it always has all the weeks filled that can be
+// filled."
+//
+// A page builds a run from the rosters it read, and a week nobody held him is
+// `'off'` there — the roster reads simply do not carry him. ESPN does have his
+// line for that week (js/season.js `looseLine` / `fetchLooseWeeks`), so the
+// CARD fills it in when it opens: `'off'` is never drawn. A week whose line is
+// still being read draws the unread dot and the card redraws itself when it
+// lands; a week ESPN has nothing for (or this copy may not ask — the phone's
+// synced copy) draws "—". The page's own tables keep their `off` cells: those
+// are about a roster, and this card is about the man.
+//
+// `setLooseSource({ lookup, request })` — js/loose-weeks.js sets it on import:
+//   lookup(playerId, week) -> {projected, actual} | null (nothing to be had)
+//                             | undefined (not read yet)
+//   request(playerId, weeks) -> Promise, settled once those weeks are read
+
+const RUN_ARGS = new WeakMap();
+let looseSource = null;
+
+export function setLooseSource(src) {
+  looseSource = src && typeof src.lookup === 'function' ? src : null;
+}
+
+/**
+ * The run with every `'off'` week filled from the loose source. Returns the
+ * run untouched when it has none. `onMore` is called once the weeks still
+ * unread have been read (the caller redraws).
+ */
+export function filledRun(run, playerId, onMore = null) {
+  const args = run ? RUN_ARGS.get(run) : null;
+  if (!args) return run;
+  const offAt = args.weeks
+    .map((w, i) => (args.projections[i] === 'off' || args.actuals[i] === 'off' ? i : -1))
+    .filter((i) => i >= 0);
+  if (!offAt.length) return run;
+  const projections = args.projections.slice();
+  const actuals = args.actuals.slice();
+  const unread = [];
+  const known = playerId !== null && playerId !== undefined && looseSource;
+  for (const i of offAt) {
+    let line = null;
+    if (known) {
+      try { line = looseSource.lookup(playerId, args.weeks[i]); } catch { line = null; }
+    }
+    // Asked once already and still nothing: there is nothing to be had, and
+    // asking again would only redraw the card in a loop.
+    if (line === undefined && (typeof looseSource.request !== 'function' ||
+      LOOSE_ASKED.has(`${playerId}:${args.weeks[i]}`))) line = null;
+    if (line === undefined) {
+      unread.push(args.weeks[i]);
+      projections[i] = 'wait';
+      actuals[i] = 'wait';
+      continue;
+    }
+    projections[i] = line && typeof line.projected === 'number' ? line.projected : null;
+    actuals[i] = line && typeof line.actual === 'number' ? line.actual : null;
+  }
+  if (unread.length && typeof looseSource.request === 'function') {
+    Promise.resolve()
+      .then(() => looseSource.request(playerId, unread))
+      .catch(() => {})
+      .then(() => {
+        for (const w of unread) LOOSE_ASKED.add(`${playerId}:${w}`);
+        if (typeof onMore === 'function') onMore();
+      });
+  }
+  return weekRun({ ...args, projections, actuals });
+}
+
+const LOOSE_ASKED = new Set();
 
 /**
  * What BOLD means on this card — which is a different sentence depending on who
@@ -910,9 +994,9 @@ const touchSkips = (cell) => coarsePointer() && cell.hasAttribute(TIP_HOVER_ATTR
 //
 // HE IS LOOKED FOR ON EVERY ROSTER of a week, not one team's: a man traded in
 // week 5 has a whole season, and this card is about him, not about a squad.
-// A week that has not been read, AND a week nobody held him, are both `wait`
-// (drawn "·"): this page has no number for him there and says so, where the
-// Analysis grids' `off` would claim to know which roster he was missing from.
+// A week that has not been read is `wait` (drawn "·"). A week read in which
+// nobody held him is `off` in the run, and the card fills it from his line off
+// every roster when it opens (`filledRun`, 2026-10-14) — never drawn "off".
 // `href` defaults to his row on the Players page (`playerHref`, js/links.js).
 
 const numOr = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -960,7 +1044,11 @@ export function playerCardFromWeeks(weekTeams, player, {
     if (q.done === false) return { proj: numOr(q.projected), actual: null };
     return { proj: numOr(q.projected), actual: numOr(q.actual) };
   };
-  const lines = found.map(line);
+  // A week READ in which nobody held him is `off` — and the card fills it from
+  // his line off every roster when it opens (`filledRun`), so `off` is never
+  // drawn. A week not read at all stays `wait`.
+  const lines = found.map((q, i) => (q || !Array.isArray(get(span[i]))
+    ? line(q) : { proj: 'off', actual: 'off' }));
 
   const range = !span.length ? ''
     : span.length === 1 ? `week ${span[0]}` : `weeks ${span[0]}–${span[span.length - 1]}`;
@@ -1031,6 +1119,7 @@ export function clearRuns(prefix = null) {
 let cardEl = null;
 let asSheet = false;      // is the card currently open as a tap-opened sheet?
 let openId = null;        // the stable `id` of the run the open card shows, if it has one
+let openKey = null;       // the key of the card open now (a late redraw checks it)
 
 // `coarsePointer` is imported from connection.js rather than written again
 // here. Two things turn on it — whether this card opens as a tap-opened sheet,
@@ -1361,7 +1450,13 @@ export function showCard(key, cell, { sheet = false } = {}) {
   const el = cardNode();
   asSheet = sheet;                        // read by cardHtml, so set it first
   openId = data.id ?? null;
-  el.innerHTML = cardHtml(data, sheet);
+  openKey = key;
+  // His weeks on no roster, filled in (see `filledRun`); when some are still
+  // being read the card draws itself again once they land, if still open.
+  const run = filledRun(data.run, data.playerId, () => {
+    if (openKey === key && cardEl && !cardEl.hidden) showCard(key, cell, { sheet: asSheet });
+  });
+  el.innerHTML = cardHtml(run === data.run ? data : { ...data, run }, sheet);
   el.classList.toggle('sheet', sheet);
   // A hover card is a tooltip; a thing you opened, can read and must dismiss is
   // a dialog, and the difference is what a screen reader announces.
@@ -1386,6 +1481,7 @@ export function hideTip() {
   if (cardEl) cardEl.hidden = true;
   asSheet = false;
   openId = null;
+  openKey = null;
 }
 
 /**

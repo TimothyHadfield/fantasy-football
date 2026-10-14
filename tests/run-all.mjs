@@ -54,6 +54,7 @@ const SUITES = [
   ['sortable-check.mjs', 'click-to-sort on its own: data-v, the text fallback, and every glyph heat.js can emit'],
   ['charts-check.mjs', 'the inline-SVG charts on their own: marks placed from the data, identity never by hue alone'],
   ['pop-check.mjs', 'the preview foundation: the stat card (hover shows, click follows, a tap opens a sheet), the deep links, the player card built from the weeks read'],
+  ['test-loose-weeks.mjs', 'a player’s preview never says "off": his weeks on no roster read from ESPN (kona_player_info) as the card opens, another squad’s weeks off that squad'],
   ['scatter-check.mjs','the projected-vs-actual scatter: the least-squares line by hand, one scale on both axes, the preview that is a link'],
   ['shared-tables-check.mjs', 'the standings, the Summary chart and season-by-week as current / hypothetical / difference: hand-made inputs, signed cells, the dimming'],
   ['test-bye-rule.mjs', 'a known bye week projects 0 (ESPN projects D/STs through theirs), playoff weeks in the phone copy, points for to the tenth'],

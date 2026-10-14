@@ -56,6 +56,8 @@ import { readParam, teamHref, weekHref, playerHref } from './links.js';
 import {
   playerCardFromWeeks, registerRun, clearRuns, showCard, hideTip, setValueSource, tipAttr, wireTips,
 } from './player-card.js';
+// A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
+import './loose-weeks.js';
 // PRESEASON VS NOW (Tim, 2026-10-11): the preseason side is js/proj-trend.js's
 // (read only), the rows and filters are js/pre-vs-now.js's. See `renderPreNow`.
 import * as trend from './proj-trend.js';
