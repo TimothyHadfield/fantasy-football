@@ -53,7 +53,47 @@ export const POSITIONS_IN_ORDER = ['QB', 'RB', 'WR', 'TE', 'DST', 'K'];
 // Same constant, and the same reasoning, as the first grid on the analysis page.
 export const SEASON_GAMES = 17;
 
-const round1 = (n) => Math.round(n * 10) / 10;
+// ROUNDED THE WAY THE PAGE PRINTS (trade audit, 2026-10-14). `Math.round(n*10)/10`
+// and `toFixed(1)` part company on a half — 121.55 is 121.6 one way and 121.5
+// the other — so a figure rounded here and printed by js/trade-page.js (`fmt`,
+// `signedText`, its own `round1`, all `toFixed`) could disagree with itself by a
+// tenth. One rule, the page's: `toFixed`.
+const round1 = (n) => Number(Number(n).toFixed(1));
+
+// ESPN's rest-of-season projection runs to the end of the NFL season (week 18),
+// not the fantasy one: Hampton's 114.4 in week 6 is his weeks 6–18 added up.
+const NFL_LAST_WEEK = 18;
+
+// THE SEASON CLOCK, when a page knows it (`setSeasonClock`): the week being
+// read and the bye weeks. Without it `typicalWeek` divides by the whole season,
+// as it always did.
+let seasonClock = null;
+
+/**
+ * Tell `typicalWeek` where in the season it is.
+ *
+ * @param {?{week:number, byes?:Object|Map, lastWeek?:number}} c the week ESPN's
+ *   rest-of-season line was read in, and proTeamId -> bye week; null to forget
+ */
+export function setSeasonClock(c) {
+  const week = c && Number(c.week);
+  seasonClock = Number.isInteger(week) && week > 0
+    ? { week, byes: c.byes || null, lastWeek: Number.isInteger(c.lastWeek) ? c.lastWeek : NFL_LAST_WEEK }
+    : null;
+}
+
+/** The games a man has left in ESPN's rest-of-season line: weeks left, less his bye if it is still ahead. */
+function gamesLeft(p) {
+  if (!seasonClock) return SEASON_GAMES;
+  const { week, byes, lastWeek } = seasonClock;
+  let bye = Number.isFinite(p.byeWeek) ? p.byeWeek : null;
+  if (bye === null && byes && p.proTeamId !== null && p.proTeamId !== undefined) {
+    const b = Number(byes instanceof Map ? byes.get(p.proTeamId) : byes[p.proTeamId]);
+    bye = Number.isFinite(b) && b > 0 ? b : null;
+  }
+  const weeks = lastWeek - week + 1 - (bye !== null && bye >= week && bye <= lastWeek ? 1 : 0);
+  return Math.max(1, weeks);
+}
 
 /**
  * A player id, whether you were handed the player or just his id.
@@ -79,10 +119,19 @@ const idOf = (p) => (p && typeof p === 'object' ? p.playerId : p);
  * — a just-signed body, a deep bench flier — because a number on a slightly
  * different footing beats a hole in the table. Same rule as `avgWeek` on the
  * analysis page, so the two pages agree about how good a player is.
+ *
+ * ÷ THE GAMES HE HAS LEFT, NOT ÷ 17 (trade audit finding 12, 2026-10-14).
+ * ESPN's season line is REST OF SEASON — measured on 1241838 in week 6:
+ * Hampton's 114.4 is his weeks 6–18 added up — so ÷ 17 printed 6.7 for a man
+ * projected ~9.5 every week he plays, about 30% low for everybody mid-season.
+ * With the season clock set (`setSeasonClock`) it is ÷ (weeks left to week 18,
+ * less his bye if it is still ahead): measured over 171 rostered men, mean error
+ * −0.2% against the mean of his own weekly projections (÷ 17: −29%). Without
+ * the clock it is ÷ 17 as before. Still only a stand-in for the weekly figure.
  */
 export function typicalWeek(p) {
   if (p && typeof p.seasonProjected === 'number' && p.seasonProjected > 0) {
-    return round1(p.seasonProjected / SEASON_GAMES);
+    return round1(p.seasonProjected / gamesLeft(p));
   }
   return p && typeof p.projected === 'number' ? round1(p.projected) : null;
 }
@@ -516,9 +565,65 @@ function afterTrade(scoredPlayers, outgoing, incoming, ctx, preSolved = null) {
   const gone = new Set((outgoing || []).map(idOf));
   const kept = scoredPlayers.filter((p) => !gone.has(p.playerId)).concat(incoming);
 
-  const over = kept.length - scoredPlayers.length;
+  // Only ACTIVE men count against the roster limit (see THE IR SLOT below).
+  const reserve = reserveAfter(scoredPlayers, gone, incoming);
+  const activeBefore = scoredPlayers.reduce((n, p) => n + (inIrSlot(p) ? 0 : 1), 0);
+  const over = kept.length - reserve.size - activeBefore;
   if (over <= 0) return { roster: kept, cut: [], solved: preSolved };
-  return forcedCut(kept, over, ctx, preSolved || solveWeeks(kept, ctx));
+  return forcedCut(kept, over, ctx, preSolved || solveWeeks(kept, ctx), reserve);
+}
+
+// THE IR SLOT (trade audit finding 6, 2026-10-14). A man in an IR slot (ESPN
+// `lineupSlotId` 21) holds no roster spot: ESPN's roster size is starters +
+// bench (`parseLeague` `rosterSize`), and the IR slots are on top. Counting him
+// as a spot did two wrong things, both measured on public league 1241838:
+//   - he was named as the forced drop (7 of one team's top 25 offers said "drop
+//     Jonah Coleman", who sits in an IR slot — dropping him frees no spot);
+//   - a deal SENDING him for an active man left that side an active man over
+//     with no cut charged.
+// So the limit is the active men a roster had before the deal; a man who stays
+// in an IR slot is neither counted nor ever cut; and an ARRIVING man ESPN would
+// let into an IR slot (status IR or Out) takes an open one instead of forcing a
+// cut. Open = the league's IR slots (`setIrSlots`) less the IR men who stay; a
+// page that has not said how many the league has gets only the slots this
+// roster is seen using, so an IR slot is never invented.
+//
+// An IR-slot man still plays in the weeks ESPN projects him, as before — the
+// activation he would then need is not modelled here.
+const IR_SLOT = 21;
+const IR_ELIGIBLE = new Set(['INJURY_RESERVE', 'OUT']);
+const inIrSlot = (p) => !!p && p.lineupSlotId === IR_SLOT;
+const irEligible = (p) => !!p && IR_ELIGIBLE.has(String(p.injuryStatus || ''));
+
+let irSlots = null;
+
+/** @param {?number} n the league's IR slots (`parseLeague().irSlots`); null when unknown */
+export function setIrSlots(n) {
+  irSlots = Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/**
+ * The ids in an IR slot after the deal: his own IR men who stay, then IR-eligible
+ * arrivals while slots are open (least rest-of-season first, then id).
+ */
+function reserveAfter(scoredPlayers, gone, incoming) {
+  const out = new Set();
+  let held = 0;
+  for (const p of scoredPlayers) {
+    if (!inIrSlot(p)) continue;
+    held++;
+    if (!gone.has(p.playerId)) out.add(p.playerId);
+  }
+  let open = (irSlots === null ? held : Math.max(irSlots, held)) - out.size;
+  if (open <= 0) return out;
+  const eligible = (incoming || []).filter(irEligible)
+    .sort((a, b) => seasonOf(a) - seasonOf(b) || String(a.playerId).localeCompare(String(b.playerId)));
+  for (const p of eligible) {
+    if (open <= 0) break;
+    out.add(p.playerId);
+    open--;
+  }
+  return out;
 }
 
 /** One week of a roster: its assessed best-lineup total and who starts. */
@@ -567,7 +672,8 @@ export function setCutValue(fn) {
 const valueTenth = (p) => {
   let v = null;
   try { v = cutValue(p.playerId); } catch { v = null; }
-  return Number.isFinite(v) ? Math.round(v * 10) : 0;
+  // As printed: `toFixed`, like the page (a Value of 0.25 prints 0.3 and 0.35 prints 0.3).
+  return Number.isFinite(v) ? Math.round(round1(v) * 10) : 0;
 };
 
 /** The men Value says go first: the lowest Value among those the lineup can spare. */
@@ -587,14 +693,16 @@ function cutPool(roster, slots) {
   return from.filter((p) => valueTenth(p) === low);
 }
 
-function forcedCut(kept, over, ctx, solved) {
+function forcedCut(kept, over, ctx, solved, reserve = null) {
   let roster = kept;
   let weeks = solved;
   const cut = [];
   for (let k = 0; k < over && roster.length; k++) {
     const starting = new Set();
     for (const w of weeks) for (const id of w.ids) starting.add(id);
-    const pool = cutPool(roster, ctx.slots);
+    // A man in an IR slot is never the drop: it frees no roster spot.
+    const pool = cutPool(reserve && reserve.size ? roster.filter((p) => !reserve.has(p.playerId)) : roster, ctx.slots);
+    if (!pool.length) break;
 
     let best = null;
     let bestCost = Infinity;
@@ -1761,9 +1869,9 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
   // Σ_meet w·(his week before − the least his week can be after the deal).
   //
   // The least it can be: he keeps his roster minus what he sends you, plus
-  // what you send him, minus at most ONE forced cut — and only when you send
-  // more men than you take (two for one; MAX_PACKAGE caps the overshoot at
-  // one). With no cut his after roster CONTAINS (his − sent), so a week is at
+  // what you send him, minus his forced cuts — only when you send more men
+  // than the ACTIVE men you take (a man from his IR slot frees no spot), so at
+  // most one, or two when you take two of his IR men (see HIS FORCED CUTS). With no cut his after roster CONTAINS (his − sent), so a week is at
   // least that roster's best. With the cut it contains (his − sent − one
   // man), so a week is at least the worst of those removals — whichever man
   // the season-long cut picks, which is chosen on ALL the priced weeks and so
@@ -1775,20 +1883,31 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
   // `NET_SLACK` covers the rounding of the netted figure (each meeting week
   // rounded to a tenth on its own), so a bound is never beaten by a hair.
   const NET_SLACK = meet ? 0.05 * (meet.length + 2) : 0;
+  // HIS FORCED CUTS, AT MOST (the IR slot, 2026-10-14): a man he sends from an
+  // IR slot frees no roster spot, so his cuts are what I send less the ACTIVE
+  // men I take — up to two when I take two of his IR men for two of mine.
+  const activeIn = (pkg) => pkg.reduce((n, p) => n + (inIrSlot(p) ? 0 : 1), 0);
   const meetCeilings = (receive) => {
     if (!meet) return { noCut: 0, cut: 0 };
     const taken = new Set(receive.map((p) => p.playerId));
     const left = theirScored.filter((p) => !taken.has(p.playerId));
+    const maxCuts = MAX_PACKAGE - activeIn(receive);
     let noCut = 0;
     let cut = 0;
     for (const i of meet) {
       const base = solveWeek(left, i, cutCtx);
       let least = base.total;
       // A cut is only possible if I can send more than I take.
-      if (receive.length < MAX_PACKAGE) {
-        for (const id of base.ids) {
-          const t = solveWeek(left.filter((p) => p.playerId !== id), i, cutCtx).total;
+      if (maxCuts >= 1) {
+        const ids = [...base.ids];
+        for (let a = 0; a < ids.length; a++) {
+          const t = solveWeek(left.filter((p) => p.playerId !== ids[a]), i, cutCtx).total;
           if (t < least) least = t;
+          if (maxCuts < 2) continue;
+          for (let b = a + 1; b < ids.length; b++) {
+            const t2 = solveWeek(left.filter((p) => p.playerId !== ids[a] && p.playerId !== ids[b]), i, cutCtx).total;
+            if (t2 < least) least = t2;
+          }
         }
       }
       noCut += wAt(i) * (theirBase.weekTotals[i] - base.total);
@@ -1860,7 +1979,7 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
       // Your own side, plus the most netting could still add for this shape
       // (a cut on his side only when you send more than you take).
       const mineOnly = w ? myGoal : myGain;
-      const canAdd = send.length > receive.length ? extra.cut : extra.noCut;
+      const canAdd = send.length > activeIn(receive) ? extra.cut : extra.noCut;
       if (prune && mineOnly + canAdd + NET_SLACK < minGain) continue;
 
       const takenIds = receive.map((p) => p.playerId);

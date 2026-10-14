@@ -74,7 +74,7 @@
       "assertions": 147
     },
     "test-trade.mjs": {
-      "assertions": 1491
+      "assertions": 1503
     },
     "test-cloud.mjs": {
       "assertions": 229
@@ -181,7 +181,7 @@
       "assertions": 24
     },
     "test-trade-cut.mjs": {
-      "assertions": 1625
+      "assertions": 1642
     },
     "test-trade-moves.mjs": {
       "assertions": 57
@@ -193,7 +193,7 @@
       "assertions": 48
     },
     "test-trade-net.mjs": {
-      "assertions": 45
+      "assertions": 49
     },
     "test-ask-ai.mjs": {
       "assertions": 39

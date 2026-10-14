@@ -105,6 +105,35 @@ close(typicalWeek({ seasonProjected: 170, projected: 0 }), 10, 1e-9,
 close(weekProjection({ seasonProjected: 170, projected: 0 }), 0, 1e-9,
   'a bye is a zero in the selected week, which is the truth about that week');
 
+// ÷ THE GAMES HE HAS LEFT (trade audit finding 12, 2026-10-14). ESPN's season
+// line is REST OF SEASON. Real numbers, public league 1241838 read in week 6:
+// Omarion Hampton (LAC, proTeamId 24, bye week 7) ROS 114.38578425 = his
+// weeks 6–18; his weekly projections 6–17 average 9.54 over the weeks he plays.
+{
+  const TR = await import('../js/trade.js');
+  const hampton = { seasonProjected: 114.38578425, projected: 0, proTeamId: 24 };
+  const byes = { 24: 7 };
+  TR.setSeasonClock?.({ week: 6, byes });
+  close(typicalWeek(hampton), 9.5, 1e-9,
+    'typicalWeek mid-season: rest of season ÷ games left (114.4 ÷ 12 = 9.5, weeks 6–18 less his bye), not ÷ 17 (6.7)');
+  close(typicalWeek({ ...hampton, proTeamId: 99 }), 8.8, 1e-9,
+    'typicalWeek: a man whose bye is unknown or behind him has every week left (114.4 ÷ 13)');
+  TR.setSeasonClock?.({ week: 8, byes: new Map([[24, 7]]) });
+  close(typicalWeek({ ...hampton, seasonProjected: 99.0 }), 9, 1e-9,
+    'typicalWeek: a bye already played is not taken off again (99 ÷ 11, weeks 8–18)');
+  TR.setSeasonClock?.(null);
+  close(typicalWeek(hampton), 6.7, 1e-9, 'typicalWeek: with no season clock, ÷ 17 as before');
+}
+
+// ONE ROUNDING RULE (trade audit finding 15): the engine rounds the way the
+// page prints — `toFixed`, not `Math.round` — so the two never part on a half.
+{
+  const pageRound1 = (n) => Number(Number(n).toFixed(1));   // js/trade-page.js `round1` / `fmt`
+  for (const v of [121.55, 1.15, 10.45, -0.05, -121.55, 2.25, 0.05, 33.35]) {
+    eq(weekProjection({ projected: v }), pageRound1(v), `rounding: ${v} rounds as the page prints it (${pageRound1(v).toFixed(1)})`);
+  }
+}
+
 // ---- slots ----------------------------------------------------------------
 
 const need = dedicatedSlots([0, 2, 2, 4, 4, 4, 6, 23, 16, 17]);
