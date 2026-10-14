@@ -9780,7 +9780,9 @@ function cuFloatNode(which) {
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', 'This week, slot by slot');
   document.body.appendChild(el);
-  el.addEventListener('mouseenter', () => clearTimeout(cuFloatTimer));
+  // NOT kept up by hovering the card itself (Tim, 2026-10-14: "Make is so it
+  // has to stay over the week in order for the preview to be up"). A pinned
+  // card is the way to keep it; leaving the week starts the short grace.
   el.addEventListener('mouseleave', (e) => {
     if (cuFloat && !cuFloat.pinned && !(e.relatedTarget && cuFloat.anchor.contains(e.relatedTarget))) {
       hideCuFloatSoon();
@@ -11569,9 +11571,10 @@ function wireInlineHalf(node, which) {
   node.addEventListener('mouseout', (e) => {
     const l = labelOf(e);
     const to = e.relatedTarget;
+    // Onto the card is off the week too (Tim, 2026-10-14): it hides either way.
+    if (l && !(to && l.cell.contains(to)) && cuFloat && !cuFloat.pinned) hideCuFloatSoon();
     const intoCard = to && typeof to.closest === 'function' && to.closest('.wkx-float');
-    if (l && !(to && l.cell.contains(to)) && !intoCard && cuFloat && !cuFloat.pinned) hideCuFloatSoon();
-    if (leftWeekTable(e) && !intoCard) unpeekDealWeek(which);
+    if (leftWeekTable(e) && !(intoCard && cuFloat && cuFloat.pinned)) unpeekDealWeek(which);
   });
   node.addEventListener('focusin', (e) => {
     const l = labelOf(e);

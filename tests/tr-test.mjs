@@ -1471,6 +1471,15 @@ const SCENARIOS = {
         out.float.leaveStillShownAtOnce = !f.hidden;
         await new Promise((res) => setTimeout(res, 300));
         out.float.leaveHides = f.hidden;
+        // ONTO THE CARD IS STILL OFF THE WEEK (Tim, 2026-10-14: "Make is so it
+        // has to stay over the week in order for the preview to be up").
+        label.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+        const e3 = new window.Event('mouseout', { bubbles: true });
+        Object.defineProperty(e3, 'relatedTarget', { value: f });
+        label.dispatchEvent(e3);
+        f.dispatchEvent(new window.Event('mouseenter'));
+        await new Promise((res) => setTimeout(res, 300));
+        out.float.intoCardHides = f.hidden;
       }
     }
     // The weeks the two squads meet, at the top of the box (Tim, 2026-09-30).
@@ -8343,6 +8352,8 @@ if (!live.boot) {
       JSON.stringify(f));
     ok('SLOT CARD: leaving the label hides it after a short grace, not at once',
       f.leaveStillShownAtOnce === true && f.leaveHides === true, JSON.stringify(f));
+    ok('SLOT CARD: moving off the week onto the card still hides it (it shows only while the week is hovered)',
+      f.intoCardHides === true, JSON.stringify(f));
     ok('SLOT CARD: a click pins it, and it stays when the pointer leaves',
       f.clickPins === true && f.pinnedStays === true, JSON.stringify(f));
     ok('SLOT CARD: Close, Escape and a click elsewhere each put it away',
