@@ -4513,13 +4513,14 @@ function goalMethodHtml(span) {
     `expected change is typically 0.27 points and at worst 0.49, and the ` +
     `spread of the GAP between two offers, 0.32 and 0.47. ` +
     `The deal reaches the simulation as the per-week ` +
-    `points it adds or takes away from BOTH lineups, exactly as priced in this row — so a deal ` +
+    `points it adds or takes away from BOTH lineups, exactly as priced in this row — so in the ` +
+    `chance columns (not the order) a deal ` +
     `that makes a rival stronger costs you, and points in a game you would win anyway are worth ` +
     `less than points in a coin flip.` +
     (state.goal === 'title'
       ? ` <strong>The playoff weeks are priced</strong>, because that is where the title is ` +
         `won: ${weekRange(span)}. A deal that is weaker in October and stronger in the ` +
-        `championship can rank above one that is the other way round.`
+        `championship can show a bigger chance change than one that is the other way round.`
       : ` Last place is the bottom of the <strong>regular-season</strong> table, so only the ` +
         `regular season is priced (${weekRange(span)}); the playoffs cannot change it.`) +
     (base !== null ? ` As things stand your ${esc(g.chance)} is <strong>${pct(base)}</strong>.` : '') +
@@ -4743,7 +4744,7 @@ function renderFinderNote(scales = finderScales) {
       : weighted
       ? `keeping the ones that <strong>raise your goal-weighted total</strong> (below) while his ` +
         `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs him ` +
-        `a little is kept and marked down by how likely he is to say yes, not hidden. `
+        `a little is kept, not hidden. `
       : `keeping only the ones where <strong>both totals go up</strong>. `) +
     `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out, ` +
     `and so is any trade with a man who is out for the rest of the season (listed as out, and projected at nothing in every week left). ` +
@@ -6096,7 +6097,9 @@ function weekTableHtml(
   const ownOf = (w) => (Number.isFinite(w.before) && Number.isFinite(w.after)
     ? shownDiff(w.before, w.after) : w.delta);
   const shownOf = (w) => (nettedAt(w) ? round1(ownOf(w) - round1(vs.get(w.week))) : ownOf(w));
-  const deltaScale = heatScale(byWeek.map(shownOf));
+  // ZERO-ANCHORED (audit finding 29, 2026-10-14), like the gain columns
+  // (`gainScales`): a plus is never red. The other weeks still size the colour.
+  const deltaScale = zeroScale(byWeek.map(shownOf));
   const heatBits = (v) => {
     const h = heatOf(v, deltaScale, { what: 'the other weeks of this deal' });
     return h
@@ -6174,12 +6177,8 @@ function weekTableHtml(
     // can check any shaded cell against the column by hand.
     (deltaScale
       ? `<p class="heat-key">${shortKey
-        ? heatKeyShort({ thing: 'week', what: 'the other priced weeks of this deal' })
-        : `${describeHeat(deltaScale, {
-          what: 'the other weeks of this deal',
-          high: 'a week the trade is really buying',
-          low: 'a week it does little or costs you',
-        })} Played and playoff weeks are in no total, so they are in no scale either.`}</p>`
+        ? heatKeyShort({ thing: 'week', what: 'the other priced weeks of this deal', gain: true })
+        : `${describeZeroHeat(deltaScale)} Played and playoff weeks are in no total, so they are in no scale either.`}</p>`
       : '') +
     (net && byWeek.some(nettedAt)
       ? `<p class="heat-key">${NET_KEY}</p>`
@@ -9384,7 +9383,7 @@ function inlineWeekScale() {
   if (!roomBesideBuilder() || !state.customOffer || !weeklyReady()) return null;
   const sets = dealSets(state.customOffer, 'mine');
   if (!sets || !sets.span) return null;
-  return heatScale(sets.span.byWeek.map((w) => w.delta));
+  return zeroScale(sets.span.byWeek.map((w) => w.delta));
 }
 
 /** The custom panel's bye key: its two lists and its saved rows, as drawn. */
@@ -9453,11 +9452,7 @@ function renderCustomNote() {
     (inlineScale
       ? `The colour on its difference column compares each week only with the other priced weeks ` +
         `of this same deal. ` +
-        describeHeat(inlineScale, {
-          what: 'the other weeks of this deal',
-          high: 'a week the trade is really buying',
-          low: 'a week it does little or costs you',
-        }) + ` Played and playoff weeks are in no total, so they are in no scale either.`
+        describeZeroHeat(inlineScale) + ` Played and playoff weeks are in no total, so they are in no scale either.`
       : '') +
     `<br><br>` +
     `<strong>The colour beside each man</strong> compares him only with the other men at ` +
@@ -11533,8 +11528,24 @@ else useDemo();
 // clicked "Demo data" on purpose is left where they are.
 onConnection((conn) => {
   if (!conn) return;
+  const was = state.espnTeamId;
   if (conn.teamId != null) state.espnTeamId = Number(conn.teamId);
-  if (state.source !== 'live' && prefs.get('source') !== 'demo') useLive();
+  if (state.source !== 'live' && prefs.get('source') !== 'demo') { useLive(); return; }
+  // "YOU ARE" CHANGED WHILE LIVE (audit finding 27, 2026-10-14): the page is
+  // already showing this league, so nothing above re-reads the team. Act as a
+  // pick in `Your team` would: that squad becomes you and the finder searches
+  // again (`runSearch` cancels the search still in flight).
+  const now = state.espnTeamId;
+  if (state.source !== 'live' || state.isDemo || now == null || now === was) return;
+  const teams = state.data ? state.data.teams : [];
+  if (!teams.some((t) => t.id === now)) return;
+  state.myTeamId = now;
+  spendDealLink();
+  prefs.set('team', state.myTeamId);
+  if (String(state.partner) === String(state.myTeamId)) state.partner = 'all';
+  renderTeamPicker();
+  renderPartnerPicker();
+  repaint();
 });
 
 // Sync now, or a roster move js/season.js noticed (`ff:refresh`, sent by

@@ -96,8 +96,15 @@ const TEAMS = [1, 2, 3, 4];
 
 /** One roster payload for a week. Projections move with the week, so a stale
  *  answer and a fresh one are told apart by their numbers and not by a flag. */
-function rosterPayload(week, bump = 0, { dst = false, moved = false, dropped = false, points = false } = {}) {
+function rosterPayload(week, bump = 0, { dst = false, moved = false, dropped = false, points = false, status = null } = {}) {
   const payload = rosterPayloadAsDealt(week, bump, { dst, points });
+  // X's ESPN injury status (`player.injuryStatus`, e.g. 'OUT', 'QUESTIONABLE'),
+  // as ESPN sends it on every week's roster read: his CURRENT status.
+  if (status) {
+    for (const t of payload.teams) {
+      for (const e of t.roster.entries) if (e.playerId === X) e.playerPoolEntry.player.injuryStatus = status;
+    }
+  }
   // THE ROSTER MOVE. `moved`: X (QB 1) is traded to team 2. `dropped`: he is
   // cut and is on nobody's roster. Nothing else about the payload changes.
   if (moved || dropped) {
@@ -225,6 +232,7 @@ const schedulePayload = (decidedThrough = 2, weeks = 4) => ({
 function installFetch({
   bump = 0, byes = 'empty', decidedThrough = 2, dst = false,
   weeks = 4, moved = false, dropped = false, points = false, kickoffs = null, schedule = 'ok',
+  status = null,
 } = {}) {
   const calls = [];
   globalThis.fetch = async (url) => {
@@ -239,7 +247,7 @@ function installFetch({
       body = { players: dropped ? [{ player: { id: X, fullName: 'QB 1', defaultPositionId: 1, proTeamId: 1, stats: [] } }] : [] };
     }
     else if (/scoringPeriodId=(\d+)/.test(u) && /view=mRoster/.test(u)) {
-      body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), bump, { dst, moved, dropped, points });
+      body = rosterPayload(Number(u.match(/scoringPeriodId=(\d+)/)[1]), bump, { dst, moved, dropped, points, status });
     } else if (schedule === 'fail') {
       return { ok: false, status: 500, async json() { return {}; } };
     } else body = schedulePayload(decidedThrough, weeks);
@@ -598,6 +606,70 @@ const SCENARIOS = {
     got = await season.fetchWeeksRosters([4, 5, 6, 7]);
     eq(rosterCalls(calls).length, 0, 'the page after that buys nothing');
     eq(ownerOf(got.get(7)), 2, 'and still shows the trade');
+  },
+
+  // ---- a man goes OUT: the weeks ahead are read again (audit finding 11) ----
+  async goesOut() {
+    const { storage, espn, season, store } = await boot();
+    const statusIn = (teams) => {
+      for (const t of teams || []) for (const p of t.players || []) if (p.playerId === X) return p.injuryStatus;
+      return null;
+    };
+    // The rule on its own: only a move INTO the out class, by a man in both.
+    const mk = (s) => [{ id: 1, players: [{ playerId: X, injuryStatus: s }, { playerId: 102, injuryStatus: 'ACTIVE' }] }];
+    eq(store.newlyOut(mk('ACTIVE'), mk('OUT')), [X], 'Active → Out is news');
+    eq(store.newlyOut(mk('QUESTIONABLE'), mk('INJURY_RESERVE')), [X], 'Questionable → IR is news');
+    eq(store.newlyOut(mk('ACTIVE'), mk('QUESTIONABLE')), [], 'Active → Questionable is not (not the out class)');
+    eq(store.newlyOut(mk('OUT'), mk('INJURY_RESERVE')), [], 'Out → IR is not (he was already out)');
+    eq(store.newlyOut([{ id: 1, players: [] }], mk('OUT')), [], 'a man not in the older reading is a roster move, not this');
+
+    let calls = installFetch(TRADE_SEASON);
+    await season.fetchSchedule();
+    let got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(statusIn(got.get(7)), 'ACTIVE', 'X starts healthy in week 7');
+
+    // HE GOES OUT. Only the current week's five minutes lapse — weeks 6 and 7
+    // are minutes old and would otherwise be served for another six hours.
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, status: 'OUT', bump: 2 });
+    got = await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(statusIn(got.get(5)), 'OUT', 'the current week shows him Out');
+    eq(weeksAsked(calls), [5, 6, 7], 'and the weeks ahead are read again: one request each, none for the final week');
+    eq(statusIn(got.get(7)), 'OUT', 'so week 7 carries the new reading');
+
+    // AT MOST ONCE AN HOUR. He is back, then out again 12 minutes later: the
+    // current week shows it, the weeks ahead wait for their own clock.
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    installFetch({ ...TRADE_SEASON, status: 'ACTIVE' });
+    await season.fetchWeeksRosters([5, 6, 7]);
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, status: 'OUT' });
+    await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(weeksAsked(calls), [5], 'a second move into Out inside the hour reads only the current week');
+
+    // An hour after the first re-read, the next one is allowed again.
+    const key = `ff.out-reread.${LEAGUE_ID}.${SEASON}`;
+    storage.setItem(key, String(Number(storage.getItem(key)) - 61 * MINUTE));
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    installFetch({ ...TRADE_SEASON, status: 'QUESTIONABLE' });
+    await season.fetchWeeksRosters([5, 6, 7]);
+    ageEverything(storage, 6 * MINUTE, [5]);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, status: 'INJURY_RESERVE' });
+    await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(weeksAsked(calls), [5, 6, 7], 'after the hour, Questionable → IR re-reads the weeks ahead again');
+
+    // A status change OUTSIDE the out class never does.
+    ageEverything(storage, 6 * MINUTE, [5]);
+    storage.setItem(key, '1');
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, status: 'DOUBTFUL' });
+    await season.fetchWeeksRosters([4, 5, 6, 7]);
+    eq(weeksAsked(calls), [5], 'IR → Doubtful is not a move into Out: only the current week is read');
   },
 
   // ---- one LATER week asked for alone (the Trade page's selected week) ------

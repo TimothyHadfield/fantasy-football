@@ -40,11 +40,11 @@
       "scenarios": 11
     },
     "test-season-rules.mjs": {
-      "assertions": 141,
+      "assertions": 145,
       "scenarios": 12
     },
     "test-store.mjs": {
-      "assertions": 159
+      "assertions": 171
     },
     "nav-check.mjs": {
       "assertions": 225
@@ -162,7 +162,7 @@
       "scenarios": 20
     },
     "tr-test.mjs": {
-      "assertions": 1230
+      "assertions": 1243
     },
     "tr-value-check.mjs": {
       "assertions": 79

@@ -2380,6 +2380,41 @@ const SCENARIOS = {
   },
 
   /**
+   * "YOU ARE" CHANGED WHILE LIVE (audit finding 27, 2026-10-14). The bar's
+   * `#connTeam` saves the team and sends `ff:connection`; before the fix the
+   * Trade page kept the old manager in its title, its picker and its search.
+   */
+  async liveYouAre() {
+    const conn = { leagueId: '476225250', season: 2026, teamId: 1 };
+    const seed = {
+      'ff.connection': JSON.stringify(conn),
+      'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+    };
+    const { document, errors } = await boot('trade.html', '', seed);
+    await settleGoal(document);
+    const nameOf = (id) =>
+      text([...document.querySelectorAll('#teamSelect option')].find((o) => o.getAttribute('value') === String(id)));
+    const read = () => ({
+      title: text(document.getElementById('finderTitle')),
+      me: (readDepth(document).rows.find((r) => r.me) || {}).team || null,
+      selected: (document.querySelector('#teamSelect option[selected]') || { getAttribute: () => null }).getAttribute('value'),
+      rows: document.querySelectorAll('#tradeTable tbody tr').length,
+      links: document.querySelectorAll('#tradeTable a.espn-open').length,
+    });
+    const before = read();
+    // What js/connection.js does on a "You are" change: save, then announce.
+    const next = { ...conn, teamId: 2 };
+    globalThis.localStorage.setItem('ff.connection', JSON.stringify(next));
+    document.dispatchEvent(new window.CustomEvent('ff:connection', { detail: next }));
+    await settleGoal(document);
+    const after = read();
+    return {
+      errors, before, after, names: [nameOf(1), nameOf(2)],
+      saved: globalThis.localStorage.getItem('ff.prefs'),
+    };
+  },
+
+  /**
    * A real league, stubbed: what the weekly measure COSTS, and what the ESPN
    * deep link says.
    *
@@ -4722,6 +4757,16 @@ if (!fresh.boot) {
     ok('FLOOR: and that a trade with a man out for the rest of the season is left out too',
       /is left out, and so is any trade with a man who is out for the rest of the season \(listed as out, and projected at nothing in every week left\)\./
         .test(fresh.tradeNote), fresh.tradeNote.slice(300, 900));
+    // THE ORDER IS NET INCREASE (2026-10-09), so the note may not say the yes-
+    // chance or a rival's gain ranks a deal (audit 2026-10-14, notes fix).
+    // Before the fix the note said a deal costing him a little is "marked down
+    // by how likely he is to say yes" and that a rival made stronger "costs you".
+    ok('NOTE: no sentence says the order marks a deal down by how likely he is to say yes',
+      !/marked down by how likely he is to say yes/.test(fresh.tradeNote), fresh.tradeNote.slice(0, 600));
+    ok('NOTE: a rival made stronger costs you in the chance columns, said not to be the order',
+      /in the chance columns \(not the order\) a deal that makes a rival stronger costs you/.test(fresh.tradeNote) &&
+        /ordered by You gain \+ He gains/.test(fresh.tradeNote),
+      fresh.tradeNote.slice(600, 1800));
     {
       const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');
       const gone = ['thAltGoal', 'thLineup', 'thTheirGain', 'cuThGoal', 'cuThAltGoal', 'cuSugThGoal', 'cuSugThAltGoal'];
@@ -5835,13 +5880,21 @@ if (!wk.boot) {
       ok('and no week carries the old ranking sentence as a raw title',
         rows2.every((r) => r.heatTitle === ''),
         (lit[0] || {}).heatTitle);
+      // A PLUS IS NEVER RED (audit finding 29, 2026-10-14), as in the gain
+      // columns: the scale is anchored at zero. Before the fix the demo deal
+      // drew its +0.5 week on red (heat-dn-1).
+      const wrongWay = (ws) => ws.filter((r) => (r.shown > 0 && /heat-dn/.test(r.heat)) || (r.shown < 0 && /heat-up/.test(r.heat)));
+      ok('a plus week is never red and a minus week never green',
+        wrongWay(rows2).length === 0, wrongWay(rows2).map((r) => `${r.label} ${r.shown} ${r.heat}`).join(' | '));
       // A PLAYED WEEK IS IN NO TOTAL, so it is in no scale — putting it in
       // would move the mean of a set it is not drawn from.
       ok('a played week is in no total and therefore carries no colour at all',
         wk.deal.weeks.past.every((r) => !r.coloured),
         JSON.stringify(wk.deal.weeks.past.slice(0, 2)));
       ok('and the key under the table prints the thresholds in points',
-        /reaching full colour at [-\d.]+ pts or better/i.test(wk.deal.weeks.heatKey) &&
+        // Zero-anchored key since finding 29 (was "reaching full colour at N pts").
+        /Colour starts at zero/.test(wk.deal.weeks.heatKey) &&
+          /begins at ±[\d.]+.*full at ±[\d.]+/.test(wk.deal.weeks.heatKey) &&
           /Played and playoff weeks are in no total/.test(wk.deal.weeks.heatKey),
         wk.deal.weeks.heatKey.slice(0, 240));
     }
@@ -6213,6 +6266,22 @@ if (!lo.boot) {
   ok('and every row says why', lo.cells.every((c) => /Only from your own team/.test(c)),
     lo.cells.slice(0, 3).join(' | '));
   eq(lo.afterWeek, lo.otherName, 'a squad picked by hand survives a change of week');
+}
+
+// ---- "You are" changed while live re-searches as that team (finding 27) ----
+const ya = run('liveYouAre', { stub: true });
+ok('the You-are scenario boots', !ya.boot, ya.boot);
+if (!ya.boot) {
+  ok('YOU ARE: no console errors', ya.errors.length === 0, ya.errors.slice(0, 2).join(' | '));
+  ok('YOU ARE: the page opens as team 1', ya.before.me === ya.names[0] && ya.before.title.endsWith(`· ${ya.names[0]}`),
+    JSON.stringify(ya.before));
+  ok('YOU ARE: after the change the title names the new manager',
+    ya.after.title.endsWith(`· ${ya.names[1]}`), ya.after.title);
+  eq(ya.after.me, ya.names[1], 'YOU ARE: and the depth map marks his row as yours');
+  eq(ya.after.selected, '2', 'YOU ARE: and Your team shows him');
+  ok('YOU ARE: and the finder searched again as him — his own rows carry the ESPN links',
+    ya.after.rows > 0 && ya.after.links > 0, JSON.stringify(ya.after));
+  ok('YOU ARE: and the pick is remembered', /"trade\.team":2\b/.test(ya.saved || ''), ya.saved);
 }
 
 // ---- the pop-up fetches its own weeks: "not just words" --------------------
@@ -8102,6 +8171,15 @@ if (!live.boot) {
     ok('and HIS numbers, not a copy of yours',
       bw.some((r, i) => aw[i] && r.before !== aw[i].before),
       JSON.stringify([bw[0], aw[0]]));
+    // A PLUS IS NEVER RED, A MINUS NEVER GREEN, in both halves (audit finding
+    // 29, 2026-10-14). Before the fix this deal drew -5.3, -7.0, -10.3 and -4.9
+    // on green in your half and -2.3 on green in his.
+    const wrongWay = (ws) => ws.filter((r) => (r.shown > 0 && /heat-dn/.test(r.heat)) || (r.shown < 0 && /heat-up/.test(r.heat)));
+    ok('CUSTOM: no week in either half is coloured against its sign',
+      aw.length > 1 && wrongWay(aw).length === 0 && wrongWay(bw).length === 0,
+      [...wrongWay(aw), ...wrongWay(bw)].map((r) => `${r.label} ${r.shown} ${r.heat}`).join(' | '));
+    ok('CUSTOM: and the colour is still there (some weeks tinted)',
+      aw.some((r) => /heat-(up|dn)-\d/.test(r.heat)), aw.map((r) => r.heat).join(','));
     ok('its "before" column is headed as his',
       B.weeks && B.weeks.heads[1] === 'As he is now', JSON.stringify(B.weeks && B.weeks.heads));
     ok('its slot-by-slot panel opens by itself, on HIS lineup',

@@ -126,6 +126,8 @@
 // That is the same rule the cloud follows and the same rule `js/prefs.js`
 // follows: **no failure here may stop a page rendering.**
 
+import { INJURY_RANK } from './injury.js';
+
 /** Bumped when the stored shape changes; an entry of another schema is absent. */
 const SCHEMA = 1;
 
@@ -232,6 +234,62 @@ export function signatureOf(teams) {
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .map(([id, ids]) => `${id}:${ids.join(',')}`)
     .join('|');
+}
+
+/**
+ * A MAN GONE OUT IS NEWS FOR EVERY WEEK AHEAD (audit finding 11, 2026-10-14).
+ * The current week is re-read every five minutes, so his Out badge shows
+ * at once — while weeks 7–17 kept his old projection for up to six hours,
+ * because `signatureOf` above compares who owns whom and nothing else.
+ *
+ * `newlyOut(was, now)`: the men who are in BOTH readings and whose status moved
+ * INTO the out class (`injuryClass` in js/injury.js: Out, IR, suspended, not
+ * active) between them. A man who was already out, or who left the roster, is
+ * not news here (the second is a roster move, which `signatureOf` catches).
+ */
+const OUT_STATUSES = new Set(Object.keys(INJURY_RANK).filter((s) => INJURY_RANK[s] === 3));
+const isOut = (s) => typeof s === 'string' && OUT_STATUSES.has(s);
+
+export function newlyOut(wasTeams, teams) {
+  if (!Array.isArray(wasTeams) || !Array.isArray(teams)) return [];
+  const before = new Map();
+  for (const t of wasTeams) {
+    for (const p of (t && t.players) || []) {
+      if (p && p.playerId !== null && p.playerId !== undefined) before.set(String(p.playerId), p.injuryStatus);
+    }
+  }
+  const out = [];
+  for (const t of teams) {
+    for (const p of (t && t.players) || []) {
+      if (!p || !before.has(String(p.playerId))) continue;
+      if (isOut(p.injuryStatus) && !isOut(before.get(String(p.playerId)))) out.push(p.playerId);
+    }
+  }
+  return out;
+}
+
+/** At most one re-read of the weeks ahead an hour for this reason. */
+export const OUT_REREAD_MS = 60 * 60 * 1000;
+
+const outKeyOf = (leagueId, season) => `ff.out-reread.${leagueId}.${season}`;
+
+/**
+ * May the weeks ahead be re-read now because a man went out? True at most once
+ * an hour per league-season; a true answer starts the hour. js/season.js asks
+ * only after a read FROM ESPN — never on the phone's synced copy (rule 20).
+ * No storage: false, because the hour could not be kept.
+ */
+export function outRereadDue(leagueId, season, now = Date.now()) {
+  const s = store();
+  if (!s) return false;
+  try {
+    const last = Number(s.getItem(outKeyOf(leagueId, season)));
+    if (Number.isFinite(last) && last > 0 && now - last < OUT_REREAD_MS && now >= last) return false;
+    s.setItem(outKeyOf(leagueId, season), String(now));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Is this entry still worth serving? See the freshness rule at the top. */
