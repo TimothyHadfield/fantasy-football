@@ -184,6 +184,12 @@
     "test-accept-by.mjs": {
       "assertions": 24
     },
+    "test-send-after.mjs": {
+      "assertions": 33
+    },
+    "tr-send-after-check.mjs": {
+      "assertions": 36
+    },
     "test-trade-cut.mjs": {
       "assertions": 1642
     },

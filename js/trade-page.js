@@ -92,6 +92,8 @@ import * as espn from './espn.js';
 import { movesFor } from './trade-moves.js';
 import { pastTradeBars, undoesPastTrade } from './past-trades.js';
 import { acceptBy } from './accept-by.js';
+// "Send: now / after week N" in the custom box (Tim, 2026-10-15). Pure.
+import { sendAfterChoices, liveSendAfter, weeksAfter, weeksBefore } from './send-after.js';
 // "Ask AI" (2026-09-30): the text a row copies for an AI chat. Pure.
 import { askAiText } from './ask-ai.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
@@ -307,7 +309,9 @@ const state = {
   // A SAVED trade keeps its own `a` and `b` and is NOT rewritten when the top
   // picker moves: it is a historical record of a deal he built, and silently
   // re-pointing it at whoever is selected today would change what he saved.
-  custom: { a: null, b: null, sendA: [], sendB: [] },
+  // `sendAfter` (Tim, 2026-10-15): the week the deal is sent AFTER, or null for
+  // now. See SEND AFTER WEEK N by `spanFor`.
+  custom: { a: null, b: null, sendA: [], sendB: [], sendAfter: null },
   // The week-by-week breakdown that now sits BESIDE the builder (Tim,
   // 2026-09-19: "I'd like it to be shown to the side of the custom trade setup
   // while the trade is being chosen"). Its own week and side, kept apart from
@@ -378,6 +382,9 @@ const cache = new Map(); // `${source}:${week}` -> {week, teams}
 // its declaration is evaluated is a throw, not an undefined, and the only thing
 // keeping this safe otherwise is the order the boot block happens to run in.
 let ageLine = { at: 0, text: '' };
+// The custom box's send week while it is being priced (SEND AFTER WEEK N, by
+// `spanFor`); null everywhere else.
+let sendCut = null;
 
 /**
  * Every remaining week's numbers, and what they cost to get.
@@ -582,7 +589,57 @@ function weeklySpan() {
 function spanFor(goal) {
   const played = new Set(playedWeeks());
   const regular = state.weeks.filter((w) => !played.has(w));
-  return goal === 'title' ? regular.concat(bracketWeeksAhead()) : regular;
+  const span = goal === 'title' ? regular.concat(bracketWeeksAhead()) : regular;
+  return sendCut === null ? span : weeksAfter(span, sendCut);
+}
+
+// ---- SEND AFTER WEEK N (Tim, 2026-10-15) ----------------------------------
+//
+// "make a button at the top of the custom trade menu that says "send ___" that
+// says now, but can be changed so that it says "after week ___" so that it only
+// considers the difference in proj if the trade is sent after that time ...
+// Adjust all data so it behaves as if the trade is actually sent after that
+// date."
+//
+// ONE SWITCH, IN THE ONE PLACE THE SPAN IS DECIDED. While `sendCut` is N, every
+// span this page prices over (`spanFor`, so `weeklySpan()` and the other goal's
+// span too) starts after week N. So everything priced inside it is the deal
+// sent after week N: the gains and their per-week figures (over the weeks after
+// N), the meeting weeks (`oppProjOf`), the season simulation (its deltas are the
+// deal's own by-week figures, so weeks up to N play the old rosters), the yes
+// chance, Appeal's partner figures and Total, and the Suggested search. Weeks up
+// to N are shown as "no change" (`preSendWeeks`).
+//
+// Set only by `withSendCut`, around the custom box's own drawing and around
+// anything that later reads one of its offers (an offer carries `sendAfter`).
+// Everything else on the page runs with it null, exactly as before.
+// (`sendCut` itself is declared with `ageLine`, near the top, for the same
+// reason that one is.)
+
+/** Run `fn` with the span starting after week `n` (null = now), then put it back. */
+function withSendCut(n, fn) {
+  const held = sendCut;
+  sendCut = n === null || n === undefined ? null : n;
+  try { return fn(); } finally { sendCut = held; }
+}
+
+/** The same, for whatever cut an offer was priced under (none for a finder row). */
+function withOfferCut(offer, fn) {
+  return withSendCut(offer && Number.isFinite(offer.sendAfter) ? offer.sendAfter : null, fn);
+}
+
+/** The page's own span with no send week applied. */
+const uncutSpan = (goal = state.goal) => withSendCut(null, () => spanFor(goal));
+
+/** A chosen send week as it counts today: null when it is now, or has since been played. */
+const cutOf = (n) => liveSendAfter(n, uncutSpan());
+
+/** The custom box's own cut, for its drawing. */
+const atCustomCut = (fn) => withSendCut(cutOf(state.custom.sendAfter), fn);
+
+/** The weeks still to play before the deal is sent — none for now. */
+function preSendWeeks() {
+  return sendCut === null ? [] : weeksBefore(uncutSpan(), sendCut);
 }
 
 /** The playoff weeks still to be played. A bracket week with a result is banked. */
@@ -3720,6 +3777,9 @@ function loadIntoCustom(offer) {
   state.custom.b = offer.partner.id;
   state.custom.sendA = offer.send.map((p) => String(p.playerId));
   state.custom.sendB = offer.receive.map((p) => String(p.playerId));
+  // Its send week comes with it: a saved or suggested trade's own, now for a
+  // finder row (the finder prices every deal as sent now).
+  state.custom.sendAfter = Number.isFinite(offer.sendAfter) ? offer.sendAfter : null;
   state.customWeek = null;
   state.customPeek = null;
   renderCustom();
@@ -3941,6 +4001,8 @@ function dealFigures(offer) {
  */
 function rowTwinOf(entry) {
   if (!entry || basis() !== 'weeks' || String(entry.a) !== String(state.myTeamId)) return null;
+  // A deal sent after week N is not the finder's row: that row is priced as sent now.
+  if (cutOf(entry.sendAfter) !== null) return null;
   const ids = (list) => (list || []).map(String).sort().join(',');
   const want = `${entry.b}|${ids(entry.sendA)}|${ids(entry.sendB)}`;
   const sig = (o) => `${o.partner && o.partner.id}|${ids(o.send.map((p) => p.playerId))}|` +
@@ -3964,7 +4026,12 @@ function appealCellHtml(offer) {
   return `<td class="appeal${a > 0 ? ' pos' : a < 0 ? ' neg' : ''}" data-v="${a}">${signedText(a)}</td>`;
 }
 
+/** A row is drawn under its own send week (a saved or suggested trade can be sent later). */
 function offerRow(offer, i, key, opts = {}) {
+  return withOfferCut(offer, () => offerRowAt(offer, i, key, opts));
+}
+
+function offerRowAt(offer, i, key, opts = {}) {
   // `goal` draws BOTH chance columns since 2026-09-29: the ranked goal, then the
   // other one as a preview (`altGoalCellHtml`). `opp` draws his projection in
   // the week(s) he plays you (`oppCellHtml`), after He gains.
@@ -4123,9 +4190,10 @@ function gainScales(rows) {
   // zero, so a plus is never red. Scaled against the other offers, the worst of
   // forty good ones — +2.3 a week — was drawn in the deepest red. How strong a
   // colour is still follows the column: `zeroScale` in js/trade-cards.js.
+  // Each row read under its own send week (a saved trade can be sent later).
   return {
-    myScale: zeroScale(rows.map(netGainOf)),
-    theirScale: zeroScale(rows.map((o) => hisSideOf(o).gain)),
+    myScale: zeroScale(rows.map((o) => withOfferCut(o, () => netGainOf(o)))),
+    theirScale: zeroScale(rows.map((o) => withOfferCut(o, () => hisSideOf(o).gain))),
   };
 }
 
@@ -4395,7 +4463,8 @@ document.addEventListener('click', (e) => {
   if (!held) return;
   let text = '';
   try {
-    text = held.real ? withRealWorld(() => askAiTextFor(held.offer, held)) : askAiTextFor(held.offer, held);
+    const read = () => withOfferCut(held.offer, () => askAiTextFor(held.offer, held));
+    text = held.real ? withRealWorld(read) : read();
   } catch (err) { console.warn('Ask AI', err); }
   if (!text) return;
   copyText(text, (ok) => {
@@ -6251,7 +6320,7 @@ function vsNoteHtml(delta, name, text = null) {
 function weekTableHtml(
   byWeek, total, {
     label = 'With the trade', past = [], playoff = [], shortKey = false, vs = null, vsName = '',
-    nowLabel = 'As you are now', vsText = null, reach = null,
+    nowLabel = 'As you are now', vsText = null, reach = null, pre = [], sendAfter = null,
   } = {}
 ) {
   // `reach` (the partner's half of the custom box, 2026-09-29): week -> the
@@ -6282,9 +6351,25 @@ function weekTableHtml(
         `</tr>`
     )
     .join('');
+  const onlyBelow = `Only the ${plural(byWeek.length, 'week')} below are in the totals.`;
   const divider = past.length
-    ? `<tr class="divider"><td colspan="4">Played — not counted. ` +
-      `Only the ${plural(byWeek.length, 'week')} below are in the totals.</td></tr>`
+    ? `<tr class="divider"><td colspan="4">Played — not counted.${pre.length ? '' : ` ${onlyBelow}`}</td></tr>`
+    : '';
+  // SENT AFTER WEEK N (Tim, 2026-10-15): the weeks before it are still played
+  // on the rosters as they are, so each is the same lineup twice and a 0 —
+  // uncoloured and in no total, under a line like the played weeks.
+  const preRows = pre
+    .map((w) =>
+      `<tr class="pre" data-wk="${w.week}">` +
+      weekCell(w.week) +
+      `<td>${fmt(w.before)}</td>` +
+      `<td>${fmt(w.before)}</td>` +
+      `<td class="delta">${signedText(0)}</td>` +
+      `</tr>`)
+    .join('');
+  const preDivider = pre.length
+    ? `<tr class="divider pre-divider"><td colspan="4">Sent after week ${esc(sendAfter ?? pre[pre.length - 1].week)}` +
+      ` — no change before. ${onlyBelow}</td></tr>`
     : '';
   // THE RED/GREEN SCALE ON THE DIFFERENCE COLUMN (HANDOFF rule 14). The
   // comparison group is THE OTHER WEEKS OF THIS DEAL and nothing else — which
@@ -6381,7 +6466,7 @@ function weekTableHtml(
     `<table class="weeks">` +
     `<thead><tr><th class="name">Week</th><th>${esc(nowLabel)}</th>` +
     `<th>${esc(label)}</th><th>Difference</th></tr></thead>` +
-    `<tbody>${pastRows}${divider}${rows}` +
+    `<tbody>${pastRows}${divider}${preRows}${preDivider}${rows}` +
     // Per week FIRST, the total under it — Tim's order for every figure here.
     `<tr class="total"><td class="name">${weighted ? 'Per week he plays' : 'Per week'}</td>` +
     `<td>${fmt(beforeTotal / n)}</td><td>${fmt(afterTotal / n)}</td>` +
@@ -6390,7 +6475,7 @@ function weekTableHtml(
     `<tr class="total sub-row"><td class="name">` +
     (weighted
       ? `All weeks, by his chance of playing`
-      : `All ${plural(byWeek.length, 'week')}${past.length ? ' left' : ''}`) +
+      : `All ${plural(byWeek.length, 'week')}${pre.length ? ' after it' : past.length ? ' left' : ''}`) +
     `</td>` +
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}${nettedTotal ? ' netted' : ''}">` +
@@ -6520,6 +6605,17 @@ function priceSide(offer, side, weeks) {
   });
 }
 
+/** A priced set with the deal not made yet: after = before, no difference. Null stays null. */
+function unsent(set) {
+  if (!set) return null;
+  return {
+    ...set,
+    after: set.before,
+    delta: 0,
+    byWeek: set.byWeek.map((w) => ({ ...w, after: w.before, delta: 0 })),
+  };
+}
+
 /**
  * The three spans for one deal and one side, priced and kept.
  *
@@ -6531,7 +6627,8 @@ function priceSide(offer, side, weeks) {
  */
 function dealSets(offer, side) {
   const key = `${sourceKey()}|${weekly.byWeek.size}|${weekly.failed.size}|` +
-    `${state.week}|${state.myTeamId}|${side}|${offerId(offer)}|${realWorld ? 'R' : 'A'}${assume.version}`;
+    `${state.week}|${state.myTeamId}|${side}|${offerId(offer)}|${realWorld ? 'R' : 'A'}${assume.version}|` +
+    `${sendCut ?? 'now'}|${state.goal}`;
   const held = dealCache.get(key);
   if (held) return held;
 
@@ -6540,6 +6637,9 @@ function dealSets(offer, side) {
     span: priceSide(offer, side, weeklySpan()),
     past: priceSide(offer, side, inHand(pastWeeksShown())),
     po: priceSide(offer, side, inHand(playoffWeeksShown())),
+    // SENT AFTER WEEK N (2026-10-15): the weeks before it, on the rosters as
+    // they are — `after` IS `before` there, because nothing has moved yet.
+    pre: unsent(priceSide(offer, side, inHand(preSendWeeks()))),
   };
   // A key names every input, so a stale entry cannot be served — but nothing
   // ever removes one, and a page left open re-ranks all day. Oldest out first.
@@ -6610,7 +6710,12 @@ function dealGoalHtml(offer) {
   );
 }
 
+/** The pop-up, under the send week of the deal it shows (none for a finder row). */
 function renderDeal() {
+  return withOfferCut(state.deal, renderDealAt);
+}
+
+function renderDealAt() {
   const modal = $('dealModal');
   const offer = state.deal;
   if (!offer) {
@@ -6773,6 +6878,8 @@ function renderDeal() {
         weekTableHtml(priced.byWeek, priced.delta, {
           label: offer.combined ? 'With the combination' : 'With the trade',
           past: pastPriced,
+          pre: (dealSets(offer, 'mine').pre || { byWeek: [] }).byWeek,
+          sendAfter: sendCut,
           playoff: playoffPriced(me, offer),
           ...vsOptsOf(offer),
         }) +
@@ -7030,7 +7137,7 @@ const idKey = (p) => String(p && typeof p === 'object' ? p.playerId : p);
  */
 function weekSlice(offer, side, week) {
   const sets = dealSets(offer, side);
-  for (const kind of ['past', 'span', 'po']) {
+  for (const kind of ['past', 'pre', 'span', 'po']) {
     const set = sets[kind];
     if (!set) continue;
     const i = set.byWeek.findIndex((w) => w.week === week);
@@ -7100,6 +7207,10 @@ function slotManHtml(entry, column, ctx) {
  * to repaint this without replacing the table the pointer is sitting on.
  */
 function renderDealWeek(which = 'deal') {
+  return withOfferCut(BREAKDOWNS[which].offer(), () => renderDealWeekAt(which));
+}
+
+function renderDealWeekAt(which) {
   const cx = BREAKDOWNS[which];
   const host = $(cx.host);
   if (!host) return;
@@ -7208,6 +7319,8 @@ function renderDealWeek(which = 'deal') {
       : slice.kind === 'po'
         ? `<p class="wkx-scope">Week ${esc(week)} is a playoff week — shown for reference, and in ` +
           `no total on this page.</p>`
+        : slice.kind === 'pre'
+          ? `<p class="wkx-scope">Sent after week ${esc(sendCut)}, so nothing changes in week ${esc(week)}.</p>`
         : picked === null || picked === undefined
           ? `<p class="wkx-lead">The week this deal moves most. Hover, tap or Tab to another week to ` +
             `see it.</p>`
@@ -8767,6 +8880,7 @@ function customSignature() {
   return [
     sourceKey(), state.week, weeklySpan().length, c.a, c.b,
     c.sendA.map(String).sort().join(','), c.sendB.map(String).sort().join(','),
+    cutOf(c.sendAfter) ?? 'now',
   ].join('|');
 }
 
@@ -8985,6 +9099,7 @@ function priceCustom(entry) {
     };
   }
   if (!sendA.length && !sendB.length) return { error: 'Nobody is moving in this trade.' };
+  if (!weeks.length && sendCut !== null) return { error: `No week is left to play after week ${sendCut}.` };
   if (!weeks.length) return { error: 'Every week has been played, so there is nothing left to price.' };
 
   const priceOne = (mine, send, receive) => priceTradeAcrossWeeks({
@@ -9030,6 +9145,9 @@ function customOffer(entry, priced) {
     shape: `${priced.sendA.length}-for-${priced.sendB.length}`,
     basis: 'weeks',
     weeks: priced.weeks.slice(),
+    // The send week it was priced under (null = now); everything that reads
+    // this offer later reads it under the same week (`withOfferCut`).
+    sendAfter: sendCut,
     myGain: priced.forA.delta,
     theirGain: priced.forB.delta,
     myBefore: priced.forA.before.total,
@@ -9197,6 +9315,10 @@ function customMovesHtml(team, side) {
 const CU_BLANK = '<span class="cu-num flat">—</span>';
 
 function renderCustomPreview(priced) {
+  atCustomCut(() => renderCustomPreviewAt(priced));
+}
+
+function renderCustomPreviewAt(priced) {
   const el = $('cuPreview');
   const { sendA, sendB } = state.custom;
   const blank = () => {
@@ -9331,20 +9453,24 @@ function renderCustomSaved() {
 
   // Priced first, so the colour scale over the two gain columns is built from
   // the rows that will actually be drawn — the same rule the finder follows.
-  const priced = rows.map((entry) => priceCustom(entry));
+  // EACH UNDER ITS OWN SEND WEEK (2026-10-15): a trade saved to send after
+  // week N is priced as sent then; one whose week has since been played, as now.
+  const cuts = rows.map((entry) => cutOf(entry.sendAfter));
+  const priced = rows.map((entry, i) => withSendCut(cuts[i], () => priceCustom(entry)));
   const offers = rows.map((entry, i) =>
-    priced[i].error ? null : customOffer(entry, priced[i]));
+    priced[i].error ? null : withSendCut(cuts[i], () => customOffer(entry, priced[i])));
   const good = offers.filter(Boolean);
   const scales = gainScales(good);
   // THE GOAL ON A SAVED DEAL (2026-09-21): the same simulation, the same
   // yes-chance, read for the deal's own "you" — memoised, because this panel
   // repaints on every tick in the builder above it.
-  const span = weeklySpan();
   rows.forEach((entry, i) => {
     if (!offers[i]) return;
-    offers[i].goalScore = basis() === 'weeks' ? scoreGoalCached(offers[i], entry.a, span) : null;
-    // And the other goal, on its own weeks (2026-09-29) — memoised the same way.
-    offers[i].altGoal = altScore(offers[i], entry.a);
+    withSendCut(cuts[i], () => {
+      offers[i].goalScore = basis() === 'weeks' ? scoreGoalCached(offers[i], entry.a, weeklySpan()) : null;
+      // And the other goal, on its own weeks (2026-09-29) — memoised the same way.
+      offers[i].altGoal = altScore(offers[i], entry.a);
+    });
   });
 
   // The click handler reads these by index, exactly as the finder's and the
@@ -9492,6 +9618,8 @@ function findSuggestions() {
   // Played out in the season simulation, as the finder's rows are, and put in
   // the finder's final order — only these few, so it costs a few runs.
   for (const o of offers) {
+    // Found under the box's send week, and read under it from now on.
+    o.sendAfter = sendCut;
     o.goalScore = scoreGoalCached(o, c.a, weeks);
     o.altGoal = altScore(o, c.a);
   }
@@ -9501,6 +9629,10 @@ function findSuggestions() {
 }
 
 function renderCustomSuggest() {
+  atCustomCut(renderCustomSuggestAt);
+}
+
+function renderCustomSuggestAt() {
   const host = $('cuSug');
   if (!host) return;
   const c = state.custom;
@@ -9523,6 +9655,9 @@ function renderCustomSuggest() {
     cuSug.rows = null;
     cuSug.tickAt = Date.now();
     const token = ++cuSug.token;
+    // The send week this search is for, carried into the timer (the cut is
+    // only set while the box is being drawn).
+    const cut = sendCut;
     clearTimeout(cuSug.timer);
     cuSug.timer = setTimeout(async () => {
       const stale = () => token !== cuSug.token;
@@ -9534,9 +9669,9 @@ function renderCustomSuggest() {
         // cache. Measured in its own one go they held the page for seconds —
         // whenever the box was built from another squad, or the finder was
         // still measuring its own.
-        await goalWeightsSliced(goalContext(), state.custom.a, weeklySpan(), stale);
+        await goalWeightsSliced(goalContext(), state.custom.a, withSendCut(cut, weeklySpan), stale);
         if (stale()) return;
-        rows = findSuggestions();
+        rows = withSendCut(cut, findSuggestions);
       } catch (err) { console.error(err); rows = []; }
       if (stale()) return;
       cuSug.rows = rows;
@@ -9852,8 +9987,10 @@ function cuInlineHostB() {
  * above it, and a stale week table one media query away from being shown again.
  */
 function renderCustomInline(priced) {
-  renderInlineHalf(cuInlineHost(), 'mine', priced);
-  renderInlineHalf(cuInlineHostB(), 'theirs', priced);
+  atCustomCut(() => {
+    renderInlineHalf(cuInlineHost(), 'mine', priced);
+    renderInlineHalf(cuInlineHostB(), 'theirs', priced);
+  });
   // A float whose week table has gone (no deal, no room) closes with it.
   if (cuFloat && !document.querySelector(`${BREAKDOWNS[cuFloat.which].scope} table.weeks`)) closeCuFloat();
   else placeCuFloat();
@@ -10059,6 +10196,8 @@ function renderInlineHalf(host, side, priced) {
     weekTableHtml(sets.span.byWeek, sets.span.delta, {
       label: 'With the trade',
       past: sets.past ? sets.past.byWeek : [],
+      pre: sets.pre ? sets.pre.byWeek : [],
+      sendAfter: sendCut,
       playoff: sets.po ? sets.po.byWeek : [],
       // The short key here, the thresholds in "How a custom trade is priced"
       // below (see `weekTableHtml`). In the pop-up the same table keeps the
@@ -10321,7 +10460,7 @@ function renderCustomSeason() {
   const host = cuSeasonHost();
   if (!host) return;
   clearRuns('sbw');
-  const html = cuSeasonHtml(state.customOffer, state.cuSeasonSide, state.cuSeasonView);
+  const html = atCustomCut(() => cuSeasonHtml(state.customOffer, state.cuSeasonSide, state.cuSeasonView));
   host.hidden = !html;
   host.innerHTML = html || '';
   syncHeadTitles(host);   // the side and view toggles redraw this alone
@@ -10340,7 +10479,7 @@ function cuSeasonHtml(offer, sideAsked, viewAsked, { nowBox = true, prefix = 'sb
   const played = new Set(playedWeeks());
   const isPo = (w) => state.poWeeks.includes(w) && !state.weeks.includes(w);
   const cols = [];
-  for (const kind of ['past', 'span', 'po']) {
+  for (const kind of ['past', 'pre', 'span', 'po']) {
     const set = sets[kind];
     if (!set) continue;
     set.byWeek.forEach((w, i) => cols.push({
@@ -10420,6 +10559,31 @@ function renderCustom() {
   // the card context on every roster row — and pricing it three times would be
   // three chances to disagree as well as three times the work.
   const building = !!(state.custom.sendA.length || state.custom.sendB.length);
+  // "Send" (2026-10-15): a week that has gone, or that no longer leaves one
+  // after it, is now again.
+  renderSendAfter();
+  // Priced under the box's send week (SEND AFTER WEEK N, by `spanFor`).
+  atCustomCut(() => renderCustomBuilt(building));
+}
+
+/**
+ * "Send: now / after week N" (Tim, 2026-10-15). One option a week still to
+ * play that leaves at least one after it. A choice that is no longer one of
+ * them (played since, or the goal's weeks changed) goes back to now.
+ */
+function renderSendAfter() {
+  const sel = $('cuSendAfter');
+  const choices = sendAfterChoices(uncutSpan());
+  if (!choices.includes(state.custom.sendAfter)) state.custom.sendAfter = null;
+  if (!sel) return;
+  const now = state.custom.sendAfter;
+  sel.innerHTML = `<option value=""${now === null ? ' selected' : ''}>now</option>` +
+    choices.map((w) => `<option value="${w}"${w === now ? ' selected' : ''}>after week ${w}</option>`).join('');
+  sel.disabled = choices.length === 0;
+}
+
+/** The deal in the builder, priced and drawn under its send week. */
+function renderCustomBuilt(building) {
   const priced = building ? priceCustom(state.custom) : { error: null, empty: true };
   // THE OFFER OBJECT IS KEPT WHILE THE DEAL IS THE SAME ONE, and that is not
   // tidiness. `dealSets` caches on the offer's own IDENTITY — it has to, since
@@ -10440,7 +10604,9 @@ function renderCustom() {
     state.customWeek = made ? state.customWeek : null;
     state.customPeek = null;
   }
-  renderCustomPickers();
+  // The pickers name the weeks the two squads meet as the calendar has them,
+  // not as the deal does: drawn with no send week.
+  withSendCut(null, renderCustomPickers);
   renderCustomSuggest();
   renderCustomPreview(priced);
   renderCustomInline(priced);
@@ -10563,8 +10729,9 @@ function acceptDeadlineFor(received) {
   if (state.isDemo || !received || !received.length) return null;
   const r = state.tradeRules || {};
   const final = new Set(state.playedWeeks || []);
+  // A deal sent after week N is for the weeks after it (2026-10-15).
   const weeks = [...new Set([...(state.weeks || []), ...(state.poWeeks || [])])]
-    .filter((w) => !final.has(w)).sort((a, b) => a - b);
+    .filter((w) => !final.has(w) && (sendCut === null || w > sendCut)).sort((a, b) => a - b);
   const a = acceptBy({
     teams: received.map(proTeamOf),
     kickoffs: state.kickoffs,
@@ -10603,6 +10770,10 @@ function dealAcceptHtml(offer) {
 
 /** The custom box's "Accept by" value: the time and week, short. */
 function renderCustomAccept() {
+  atCustomCut(renderCustomAcceptAt);
+}
+
+function renderCustomAcceptAt() {
   const box = $('cuAcceptBox');
   if (!box) return;
   const live = !state.isDemo && Object.keys(state.kickoffs || {}).length > 0;
@@ -10892,8 +11063,20 @@ function rowCardSpec(cell) {
   return null;
 }
 
+// A card is built when it is asked for, long after the panel was drawn — so it
+// is read under the send week of the deal it is about (SEND AFTER WEEK N).
+const cardAt = (spec, offerOf) => (cell) => withOfferCut(offerOf(cell), () => spec(cell));
+const rowCellOffer = (cell) => {
+  const tr = cell.closest('tr[data-key]');
+  const key = tr ? tr.getAttribute('data-key') : cell.getAttribute('data-key');
+  return (key === 'cu-build' && rowTwinOf(state.custom)) || offerByKey(key);
+};
+const deltaCellOffer = (cell) =>
+  BREAKDOWNS[cell.closest('#cuInlineB') ? 'customB' : cell.closest('#cuInline') ? 'custom' : 'deal'].offer();
+const seasonCellOffer = (cell) => (cell.closest('#assumedSeason') ? assume.offer : state.customOffer);
+
 function wireRowCards(el) {
-  if (el) wirePops(el, { selector: '[data-rc]', card: rowCardSpec });
+  if (el) wirePops(el, { selector: '[data-rc]', card: cardAt(rowCardSpec, rowCellOffer) });
 }
 
 /** The team card on every manager's name (`teamCardAttr`). */
@@ -10910,13 +11093,13 @@ function wirePreviews() {
   wireAllTeamCards();
   for (const id of ['depthTable', 'depthBars']) if ($(id)) wirePops($(id));
   if ($('depthBars')) wireTips($('depthBars'));
-  const delta = { selector: 'table.weeks tr[data-wk] td.delta', card: deltaCardSpec };
+  const delta = { selector: 'table.weeks tr[data-wk] td.delta', card: cardAt(deltaCardSpec, deltaCellOffer) };
   for (const id of ['dealBody', 'customPanel']) if ($(id)) wirePops($(id), delta);
   for (const id of ['customPanel', 'assumedPanel']) {
     const el = $(id);
     if (!el) continue;
-    wirePops(el, { selector: 'table.sbw-table td.split-total[data-wk]', card: seasonBandSpec });
-    wirePops(el, { selector: 'table.sbw-table th[data-hw]', card: seasonWeekSpec });
+    wirePops(el, { selector: 'table.sbw-table td.split-total[data-wk]', card: cardAt(seasonBandSpec, seasonCellOffer) });
+    wirePops(el, { selector: 'table.sbw-table th[data-hw]', card: cardAt(seasonWeekSpec, seasonCellOffer) });
     wirePops(el, {
       selector: 'table.sbw-table td[data-empty]',
       card: (td) => ({
@@ -11500,6 +11683,18 @@ $('cuTeamB').addEventListener('change', (e) => {
   renderCustom();
 });
 
+// "Send: now / after week N" (Tim, 2026-10-15). The ticks stay; only when the
+// deal takes effect changes, so the open week goes (it may be a week before it).
+if ($('cuSendAfter')) {
+  $('cuSendAfter').addEventListener('change', (e) => {
+    const n = Number(e.target.value);
+    state.custom.sendAfter = e.target.value !== '' && Number.isFinite(n) ? n : null;
+    state.customWeek = null;
+    state.customPeek = null;
+    renderCustom();
+  });
+}
+
 for (const listId of ['cuListA', 'cuListB']) {
   $(listId).addEventListener('change', (e) => {
     const box = e.target.closest ? e.target.closest('input[type="checkbox"]') : null;
@@ -11539,7 +11734,7 @@ for (const listId of ['cuListA', 'cuListB']) {
 }
 
 $('cuSave').addEventListener('click', () => {
-  const priced = priceCustom(state.custom);
+  const priced = atCustomCut(() => priceCustom(state.custom));
   if (priced.error) return;
   spendDealLink();
   const entry = {
@@ -11548,9 +11743,14 @@ $('cuSave').addEventListener('click', () => {
     sendA: state.custom.sendA.map(String),
     sendB: state.custom.sendB.map(String),
   };
+  // Its send week, when it is not now (2026-10-15). Optional: absent = now.
+  const cut = cutOf(state.custom.sendAfter);
+  if (cut !== null) entry.sendAfter = cut;
   // The same deal twice is one deal. Saving it again would be two identical
-  // rows priced identically, which reads as a bug rather than as a list.
-  const key = (x) => `${x.a}|${x.b}|${x.sendA.slice().sort().join(',')}|${x.sendB.slice().sort().join(',')}`;
+  // rows priced identically, which reads as a bug rather than as a list. The
+  // same men sent at another week are another deal.
+  const key = (x) => `${x.a}|${x.b}|${x.sendA.slice().sort().join(',')}|${x.sendB.slice().sort().join(',')}|` +
+    `${Number.isFinite(x.sendAfter) ? x.sendAfter : 'now'}`;
   if (!state.customSaved.some((x) => key(x) === key(entry))) {
     // Newest first: the one just built is the one being looked at.
     state.customSaved = [entry].concat(state.customSaved);
@@ -11592,10 +11792,13 @@ $('cuClear').addEventListener('click', () => {
  * pop-up would reach that handler a moment later and shut it again.
  */
 $('cuOpen').addEventListener('click', (e) => {
-  const priced = priceCustom(state.custom);
-  if (priced.error) return;
+  const offer = atCustomCut(() => {
+    const priced = priceCustom(state.custom);
+    return priced.error ? null : customOffer(state.custom, priced);
+  });
+  if (!offer) return;
   e.stopPropagation();
-  openDeal(customOffer(state.custom, priced), 'cu-build');
+  openDeal(offer, 'cu-build');
 });
 
 // SEND LATER: the picked week goes on the saved entry (see `sendLaterHtml`).
