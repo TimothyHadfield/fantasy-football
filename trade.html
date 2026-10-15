@@ -751,6 +751,25 @@
   .cu-man.empty-slot { cursor: default; padding-left: 33px; }
   .cu-man.empty-slot.mirror { padding-left: 9px; padding-right: 33px; }
   .cu-man .muted { color: var(--dim); font-style: italic; }
+  /* THE ORANGE AND RED BOXES (Tim, 2026-10-15): orange, one more tick puts
+     Value, You and Total in his range; red, the man was traded between these
+     two managers already. A tint and an edge on the outer side — the row keeps
+     its size, so nothing moves when they come and go. After `.on` and the
+     hover rule, so they win over both. */
+  .cu-man.cu-hint { background: rgba(232, 131, 58, 0.26); box-shadow: inset 3px 0 0 var(--assumed); }
+  .cu-man.cu-past { background: rgba(224, 82, 95, 0.24); box-shadow: inset 3px 0 0 var(--err); }
+  .cu-man.mirror.cu-hint { box-shadow: inset -3px 0 0 var(--assumed); }
+  .cu-man.mirror.cu-past { box-shadow: inset -3px 0 0 var(--err); }
+  /* Its line is held empty, so the marks coming and going on a tick move nothing below. */
+  #cuHintKey { min-height: 1.5em; }
+  .cu-hint-key .lg-mark { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 5px 0 0; vertical-align: -1px; }
+  .cu-hint-key .cu-hint-mark { background: rgba(232, 131, 58, 0.6); box-shadow: inset 2px 0 0 var(--assumed); }
+  .cu-hint-key .cu-past-mark { background: rgba(224, 82, 95, 0.6); box-shadow: inset 2px 0 0 var(--err); }
+  /* WHAT EACH SIDE NEEDS, after its name (Tim, 2026-10-15): red needed, green
+     had — the Analysis grid's own two colours. */
+  .cu-head .cu-needs { font-weight: 500; }
+  .cu-head .cu-needs .need { color: var(--err); font-weight: 650; }
+  .cu-head .cu-needs .has { color: var(--accent); font-weight: 650; }
 
   /* THE BUILDER AND ITS BREAKDOWN, SIDE BY SIDE — AND ONLY SIDE BY SIDE.
      Narrower than 900px of window the breakdown is not in the document at all
@@ -1984,6 +2003,9 @@
          rather than behind the toggle: it changes what a reader takes a number
          to mean. -->
     <p class="panel-note heat-key" id="cuHeatKey"></p>
+    <!-- THE ORANGE AND RED BOXES (Tim, 2026-10-15), said in words while one is
+         on the lists: js/custom-hint.js, `applyCuMarks`. -->
+    <p class="panel-note cu-hint-key" id="cuHintKey"></p>
     <p class="panel-note bye-key" id="cuByeKey" hidden></p>
     <p class="panel-note avg-key" id="cuAvgKey" hidden></p>
 

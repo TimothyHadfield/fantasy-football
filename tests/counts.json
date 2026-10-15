@@ -169,7 +169,7 @@
       "scenarios": 20
     },
     "tr-test.mjs": {
-      "assertions": 1263
+      "assertions": 1274
     },
     "tr-value-check.mjs": {
       "assertions": 81
@@ -210,6 +210,9 @@
     },
     "test-past-trades.mjs": {
       "assertions": 11
+    },
+    "test-custom-hint.mjs": {
+      "assertions": 35
     },
     "test-trade-bench.mjs": {
       "assertions": 16
