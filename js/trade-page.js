@@ -4671,7 +4671,11 @@ function goalMethodHtml(span) {
         `how far ten extra points in it move your ${esc(g.chance)} (the same simulation), ` +
         `averaged to 1 — so a deal is kept when its points go up <em>where they matter</em>, even ` +
         `if it loses a few in weeks that do not: ` +
-        span.map((w, i) => `wk ${w} ×${state.goalWeights.weights[i].toFixed(1)}`).join(', ') + '.'
+        // A goal switch repaints before the new weights land, so the old goal's
+        // (shorter) weights can meet the new span: print only weeks weighed.
+        span.map((w, i) => [w, state.goalWeights.weights[i]])
+          .filter(([, x]) => Number.isFinite(x))
+          .map(([w, x]) => `wk ${w} ×${x.toFixed(1)}`).join(', ') + '.'
       : state.search && state.search.goalTried
         ? ` Your ${esc(g.chance)} barely moves whatever you add, so the deals are found on points.`
         : '') +
