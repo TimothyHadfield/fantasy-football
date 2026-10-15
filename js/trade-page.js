@@ -5684,7 +5684,11 @@ function keepTradeNotes(final) {
     perWeek: onWeeks && weeklySpan().length > 0,
     rows: offers.map((o) => {
       const shown = shownGainsOf(o);
-      return { partner: o.partner, send: o.send, receive: o.receive, gain: shown.mine, theirGain: shown.theirs };
+      // `lowersGoal`: the finder's guard, so a deal that lowers your chance by
+      // more than the band is never kept — the +1 gate drops those already, the
+      // bench-value switch does not (Tim, 2026-10-14: "Yes, add that guard").
+      return { partner: o.partner, send: o.send, receive: o.receive, gain: shown.mine, theirGain: shown.theirs,
+        lowersGoal: lowersGoal(o) };
     }),
   });
   keepTradeNotes.list = offers;
@@ -10014,8 +10018,12 @@ function findSuggestions() {
     o.altGoal = altScore(o, c.a);
   }
   if (offers.every((o) => o.goalScore)) offers.sort(compareByGoalNet);
-  // Then by net increase, as the finder's list is (Tim, 2026-10-09).
-  return byNetIncrease(offers);
+  // Then by net increase, as the finder's list is (Tim, 2026-10-09), with the
+  // finder's goal guard (Tim, 2026-10-14: "Yes, add that guard"): a suggestion
+  // that lowers your chance by more than the band never sits above one that
+  // does not. Order only — NOT the +1 gate: this list has no floor and keeps
+  // its "at least 3", so nothing is dropped here.
+  return byNetIncreaseGuarded(offers);
 }
 
 function renderCustomSuggest() {

@@ -132,8 +132,9 @@ if (have) {
 // The page module cannot be imported on its own (it boots on a document), so
 // its sorting sites are read off the source: both goal sorts go through the
 // guarded order after the +1 gate's goal half, and the "=" marks keep the two
-// groups apart. The custom box's Suggested list is NOT this list (its order is
-// a separate change) and keeps `byNetIncrease`.
+// groups apart. The custom box's Suggested list takes the same guarded order
+// (wave 2, 2026-10-15) but NOT the +1 gate: it has no floor and keeps its
+// "at least 3", so nothing may be dropped from it.
 {
   const src = readFileSync(path.join(REPO, 'js/trade-page.js'), 'utf8');
   const body = (name) => {
@@ -151,6 +152,32 @@ if (have) {
   ok(/lowersGoal\(o\)/.test(body('markTies')), 'markTies never joins a lowering row to the group above it');
   ok(/goalGateOk\(o\)/.test(src) && /const finderGoalOk = \(o\) => state\.benchValue \|\| goalGateOk\(o\)/.test(src),
     'the +1 gate\'s goal half applies when the bench-value switch is off');
+
+  // ------------------------------------------- 5. the custom box's Suggested list
+  const sug = body('findSuggestions');
+  ok(sug.length > 0, 'findSuggestions is found in js/trade-page.js');
+  ok(/return byNetIncreaseGuarded\(offers\);/.test(sug),
+    'the Suggested list is put in the guarded order (byNetIncreaseGuarded), not plain byNetIncrease',
+    (sug.match(/return [^\n]*/g) || []).join(' | '));
+  ok(!/finderGoalOk|goalGateOk|\.filter\(/.test(sug.slice(sug.indexOf('const offers = result.offers'))),
+    'the Suggested list drops nothing after the search: no +1 gate, no goal gate, so its "at least 3" holds');
+
+  // ----------------------------------------------- 6. the Notifications note
+  const keep = body('keepTradeNotes');
+  ok(/lowersGoal: lowersGoal\(o\)/.test(keep),
+    'keepTradeNotes hands each row\'s goal guard (lowersGoal) to the note, so a lowering deal is never kept');
+}
+
+// A Suggested list in its real shape (3 to 5 rows, the "at least 3" kept when
+// none is good): the guarded order moves the lowering one down and drops nothing.
+if (have) {
+  const list = [row('lowers-big', 120, -0.021), row('raises', 40, 0.018), row('flat', 15, 0.001)];
+  const out = order(list);
+  eq(ids(out), ['raises', 'flat', 'lowers-big'],
+    'Suggested: a goal-lowering suggestion with the largest net increase ends below the goal-raising ones');
+  ok(out.length === 3, 'Suggested: the guard drops nothing (three in, three out)');
+  const allLow = [row('a', 9, -0.05), row('b', 30, -0.02), row('c', 3, -0.01)];
+  eq(ids(order(allLow)), ['b', 'a', 'c'], 'Suggested: when every one lowers the chance, all three stay, by net increase');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

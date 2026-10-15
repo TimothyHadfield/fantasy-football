@@ -396,6 +396,21 @@ if (!process.argv[2]) {
       pickDeals([{ ...RANKED[0], partner: null }, { ...RANKED[0], send: [] }, { ...RANKED[0], receive: undefined }, RANKED[2]])
         .map((d) => d.withTeamId), [4]);
 
+    // THE GOAL GUARD (Tim, 2026-10-14: "Yes, add that guard"): a deal that
+    // lowers your goal chance by more than the band is never kept, whatever its
+    // gains — the page marks it `lowersGoal` (js/trade-odds.js `lowersGoal`).
+    // The case that reaches here: the bench-value switch, whose gate does not
+    // drop such deals, so they sit below the rest and fill the top three when
+    // fewer than three others qualify.
+    {
+      const lower = { ...RANKED[1], lowersGoal: true };
+      const kept = pickDeals([RANKED[0], lower, { ...RANKED[2], lowersGoal: false }]);
+      eq('a goal-lowering deal is never kept, however good its gains', kept.map((d) => [d.withTeamId, d.gain]), [[3, 1.2], [4, 0.3]]);
+      eq('only goal-lowering deals: nothing kept', pickDeals([lower, { ...RANKED[0], lowersGoal: true }]), []);
+      eq('no mark (not played out yet): kept as before', pickDeals([{ ...RANKED[0], lowersGoal: undefined }]).length, 1);
+      eq('the mark does not leak into the note', Object.keys(kept[0]).sort(), ['gain', 'get', 'send', 'theirGain', 'withName', 'withTeamId']);
+    }
+
     // The whole note.
     const note = tradesNote({ team: 1, week: 5, at: 1760000000000, rows: RANKED });
     eq('the note’s fields', Object.keys(note).sort(), ['at', 'deals', 'perWeek', 'team', 'v', 'week']);

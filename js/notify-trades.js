@@ -25,7 +25,9 @@
 // its row prints — "You gain" and "He gains", to the tenth, in the units the
 // row shows — are above zero: the rows whose two gain cells the page colours
 // as gains. The order is the page's (net increase, largest first), so "the
-// best" is simply the first few of those.
+// best" is simply the first few of those. A row the page marks `lowersGoal`
+// (it lowers your goal chance by more than the band, js/trade-odds.js) is
+// never kept.
 //
 // The league is in the key's NAME, so js/leagues.js (which parks the two
 // single-slot keys on a switch) has nothing to do for it, and js/backup.js
@@ -89,6 +91,10 @@ export function pickDeals(rows, max = MAX_DEALS) {
   for (const row of Array.isArray(rows) ? rows : []) {
     if (out.length >= max) break;
     if (!row || !row.partner || row.partner.id == null || !worthSaving(row)) continue;
+    // The finder's goal guard (Tim, 2026-10-14: "Yes, add that guard"): a deal
+    // the page marks as lowering your goal chance by more than the band is
+    // never kept. No mark (not played out yet): judged on its gains alone.
+    if (row.lowersGoal === true) continue;
     const get = men(row.receive);
     const send = men(row.send);
     // A deal with nobody on one side is not a trade anybody can open.
