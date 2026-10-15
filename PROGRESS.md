@@ -62,7 +62,8 @@ One line each; detail in the archive snapshot named above unless a commit is giv
 
 ## Authorized next steps
 - **2026-10-15 · Trade audit Phases 2 and 3** (`docs/trade-audit-plan.md`; designs decided 2026-10-14: "Yes, add that guard", "Rebuild, show words"). DONE 2026-10-15, both waves live. Leftover: `findSuggestions` still feeds the reach-weighted (not flat) figure into the yes-chance.
-- Not authorized: Phase 4 (needs his answers to plan questions d, e, f), 5a/5b (5b needs his phone-layout call), Phase 6 (old trade-rework plan; Claude recommended skipping it).
+- **2026-10-15 · Trade audit Phase 4 + phone cards.** Tim's answers: d "Rest of season (Recommended)" (K/DST floor = 3rd-best FA by ROS); e "Free cut first, Value breaks ties"; f "whatever you reccommend" → cards on phone, laptop table unchanged. Wave of 5 builders started 2026-10-15: cut rule, floor, 2-for-1 fills freed spot, 💎/🪙 threshold + whole-% chances, phone cards. NOT in it (need his go): per-player current-week lock (reverses D12), availability discount.
+- Not authorized: 5a, the rest of 5b (speed, row-tap back control, one goal toggle), Phase 6 (old trade-rework plan; Claude recommended skipping it).
 - Tim did both of his jobs 2026-10-06: exported the archive (weeks 1–5, committed readings-only) and set Pages Source → GitHub Actions (`build_type: workflow`). **The site now publishes ONLY when the `tests` workflow is green** — a push is live after the CI run (five shards, `run-all.mjs --shard=I/5`, slice 1 = tr-test), not after a minute; a red or cancelled run means the old site stays up. The live-check hook's "not live after 6 min" is expected now: check `gh run list -R TimothyHadfield/fantasy-football -w tests`.
 
 ## Standing instructions
