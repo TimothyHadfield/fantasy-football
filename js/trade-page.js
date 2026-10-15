@@ -4991,6 +4991,20 @@ function totalOk(offer) {
 }
 
 /**
+ * NO VALUE GAP OVER 5 (Tim, 2026-10-15: "also don't suggest trades with a
+ * value dif of over 5"): the row's Value change (`valueCellHtml`), either way —
+ * more than 5 up is a deal he would not take, more than 5 down one you should
+ * not. No Values read yet: not held to it.
+ */
+const MAX_VALUE_GAP = 5;
+function valueGapOk(offer) {
+  if (!offer || !Array.isArray(offer.send) || !Array.isArray(offer.receive)) return true;
+  const ids = (list) => list.map((p) => String(p.playerId));
+  const v = customValueChange(ids(offer.send), ids(offer.receive));
+  return !v || !Number.isFinite(v.a) || Math.abs(v.a) <= MAX_VALUE_GAP;
+}
+
+/**
  * NO UNDOING A TRADE ALREADY MADE (Tim, 2026-10-15: "don't suggest trades from
  * players that you've already traded with that user? Ex: I give away saquon
  * Barkely, so don't suggest I buy him back from the same user, or vice
@@ -5210,7 +5224,7 @@ function runSearch({ keepDeal = false } = {}) {
     // figure the row prints as Him.
     const hisMin = W && !state.bothWin ? (o) => THEIR_MIN_PER_WEEK * hisSideOf(o, weeks || undefined).weeks : () => 0.1;
     const hisOk = (o) => { const h = hisSideOf(o, weeks || undefined); return !Number.isFinite(h.gain) || h.gain >= hisMin(o) - 0.05; };
-    result.offers = result.offers.filter((o) => hisOk(o) && totalOk(o) && !pastTradeBarred(o) && (state.benchValue
+    result.offers = result.offers.filter((o) => hisOk(o) && totalOk(o) && valueGapOk(o) && !pastTradeBarred(o) && (state.benchValue
       ? Number.isFinite(o.benchGain) && o.benchGain >= 0.1 && myPerWeekShown(o, weeks) >= 0
       : myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK)).slice(0, FINDER_ROWS);
     // The bench gains kept, on the table, for a test (invisible; nothing reads it).
@@ -9435,8 +9449,9 @@ function findSuggestions() {
   const ticked = c.sendA.length + c.sendB.length;
   // Nothing can be added (the ticks are at the package limits): no list.
   if (!result.offers.some((o) => o.send.length + o.receive.length > ticked)) return [];
-  // The finder's two rules: no Total below -5, no undoing a trade made.
-  const offers = result.offers.filter((o) => totalOk(o) && !pastTradeBarred(o, c.a));
+  // The finder's rules: no Total below -5, no Value gap over 5, no undoing a
+  // trade made.
+  const offers = result.offers.filter((o) => totalOk(o) && valueGapOk(o) && !pastTradeBarred(o, c.a));
   // Played out in the season simulation, as the finder's rows are, and put in
   // the finder's final order — only these few, so it costs a few runs.
   for (const o of offers) {
