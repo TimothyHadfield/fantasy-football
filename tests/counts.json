@@ -175,7 +175,7 @@
       "assertions": 81
     },
     "test-notify-trades.mjs": {
-      "assertions": 72
+      "assertions": 76
     },
     "test-proj-trend.mjs": {
       "assertions": 74
@@ -218,7 +218,7 @@
       "assertions": 16
     },
     "test-list-order.mjs": {
-      "assertions": 120
+      "assertions": 127
     },
     "test-trade-net.mjs": {
       "assertions": 49
