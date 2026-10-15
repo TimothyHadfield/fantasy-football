@@ -129,6 +129,14 @@ g. Does ESPN's app still show a "Trade Grade" on a received offer, and does the 
 - Verified: each fix's tests seen failing first (except the notes test); quick suites green on the merged tree (trade 1503, net 49, moves 57, out-for-season 18, cloud-wiring 356, store 171, season-rules 145, heat-draw 172, value-check 79, notify-trades 72); headless WebKit 1440 on 1241838: 40 rows ranked in ~60 s, no drop names Coleman.
 - Still open: trade word count at its ceiling (429/429); `signedText` prints "0.0" for a rounded zero (rule says "0"); Analysis page still ÷17 for its season line; IR/Out allowed into an IR slot (Tim's league setting unchecked); demo-league one-off row +47.5 vs box week table +39.5 seen once on old code; private league through the extension not exercised.
 
+## BUILT 2026-10-15 (Phases 2 and 3)
+- Tim: "okay let's follow your recommendation" … "go" (Claude recommended 2 + 3, not 4–6).
+- Phase 2: d396876 (finder: goal-lowering deals below the rest, +1 gate needs Δchance > −TIE_BAND, helpers in `js/trade-odds.js`, `tests/test-list-order.mjs`); 3d0469e (custom Suggested takes the same order, no +1 gate, at-least-3 kept; Notifications never store a goal-lowering deal — the Bench value switch let them through).
+- Phase 3: 81234f9 (`js/accept.js`: lineup ×0.5, ESPN look AVG/LAST 25%/rank bonus ×0.5, Out −3 / Doubtful −1, empty hole +1.5 / thin +0.75, out of race −0.75 and half lineup weight, ownership 4%, logistic ÷2; likely ≥ 60%, unlikely < 35%; `tests/test-accept.mjs`); 0f6600e (words + why on screen, % and parts in the preview, flat lineup input, `tests/tr-yes-check.mjs`).
+- Plan was wrong about: finding 1 does not show on 1241838 today (0 rows below −0.4 pp of 392 finder rows, 0 of 332 Suggested lists) — the goal-weighted candidate search already avoids them; the guard is insurance.
+- Verified: fail-first tests per builder; merged-tree suites (see chat.md 2026-10-15); demo median yes 90% → 48%; screenshots 393 + 1440.
+- Still open: `findSuggestions` yes input not flat; constants unvalidated (Phase 5 outcome recording); wording and the custom-box height change are Tim's.
+
 ## Sources
 - ESPN trades: https://support.espn.com/hc/en-us/articles/360000959252-Proposing-and-Accepting-Trade-Offers · review/veto: https://support.espn.com/hc/en-us/articles/360000071412-Trade-Review · columns: https://support.espn.com/hc/en-us/articles/115003862972-Fantasy-Football-Acronyms · 2025 app: https://www.espn.com/fantasy/football/story/_/id/45844949/2025-fantasy-football-where-play-new-features-espn
 - ESPN/IBM Trade Grades: https://newsroom.ibm.com/2024-09-10-ibm-brings-next-generation-of-ai-powered-insights-to-espn-fantasy-football-platform
