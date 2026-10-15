@@ -4,7 +4,7 @@ Live: https://timothyhadfield.github.io/fantasy-football/ · Repo: https://githu
 
 ## START HERE
 1. Read this file, then the last entries of `chat.md`.
-2. **In flight 2026-10-15:** Trade audit Phase 2 (main-list guard) and Phase 3 (yes-chance engine) on two builder worktrees, not yet merged; two OTHER chats' agents are mid-way on the custom trade box (see Traps). **CI `tests` is red on main** since f840c3c (see Traps). Everything else is on `main` and live (2fad7a5).
+2. **In flight 2026-10-15:** Trade audit wave 1 (Phase 2 main-list guard d396876, Phase 3 yes-chance engine 81234f9, note + tr-test cd9ea49/b9e00c9) is merged and LIVE. Wave 2 (Phase 3 words + why on screen, Phase 2 for the custom Suggested list) launched after the other chats' custom-box agents merged (fdc26f5). **CI red, not from this work:** text-audit (trade.html 565 words vs ceiling 429, already at 1b8a249 before wave 1), tr-value-check ▲ placement differs with/without Value lines (red since 2fad7a5).
 3. Full history: `docs/archive/progress-2026-10-15.md` (this file before the 2026-10-15 trim: full Decisions D1–D16 + 2026-10-06 list, full NOT verified for 2026-10-06/08), `docs/archive/progress-2026-10-09.md` (this file before the 2026-10-09 trim: the long 2026-10-08 paragraphs), `docs/archive/progress-2026-10-06.md` (this file before the 2026-10-06 trim — the long per-feature Status paragraphs with Tim's quotes, data shapes and measurements live THERE; read the matching paragraph before touching a feature), `docs/archive/progress-2026-10-02.md`, `docs/archive/progress-2026-09-21.md` (the old 250 KB PROGRESS), `docs/archive/handoff-2026-09-21.md` (old HANDOFF, rules 1–18 in full). Work queues: `AUDIT.md` and `docs/trade-rework-plan.md` (Phases 1–3 and 5 built; 4 and 6 not).
 
 Last updated: 2026-10-15 (Trade audit Phase 1 live; 10-14/15 Trade + Players additions from other chats; Phases 2 + 3 started; see chat.md last three entries).
@@ -61,7 +61,7 @@ One line each; detail in the archive snapshot named above unless a commit is giv
 - Archive export: committed as "Weekly readings only" (`data/snapshots/476225250-2026.json`); strip a new export the same way (folder README).
 
 ## Authorized next steps
-- **2026-10-15 · Trade audit Phases 2 and 3** (`docs/trade-audit-plan.md`; designs decided 2026-10-14: "Yes, add that guard", "Rebuild, show words"). Wave 1 running; wave 2 (custom-box parts) waits for the other chats' custom-box agents to push. Merge, push, `deploy-now`, tell Tim.
+- **2026-10-15 · Trade audit Phases 2 and 3** (`docs/trade-audit-plan.md`; designs decided 2026-10-14: "Yes, add that guard", "Rebuild, show words"). Wave 1 live 2026-10-15 (on 1241838 the guard moves nothing today: 0 goal-lowering rows; demo median yes 90% → 48%). Wave 2 running. Then: his lineup input flat (not playoff-weighted) — noted in `acceptVerdictFor`.
 - Not authorized: Phase 4 (needs his answers to plan questions d, e, f), 5a/5b (5b needs his phone-layout call), Phase 6 (old trade-rework plan; Claude recommended skipping it).
 - Tim did both of his jobs 2026-10-06: exported the archive (weeks 1–5, committed readings-only) and set Pages Source → GitHub Actions (`build_type: workflow`). **The site now publishes ONLY when the `tests` workflow is green** — a push is live after the CI run (five shards, `run-all.mjs --shard=I/5`, slice 1 = tr-test), not after a minute; a red or cancelled run means the old site stays up. The live-check hook's "not live after 6 min" is expected now: check `gh run list -R TimothyHadfield/fantasy-football -w tests`.
 
