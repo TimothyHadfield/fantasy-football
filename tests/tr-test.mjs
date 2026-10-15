@@ -1674,6 +1674,56 @@ const SCENARIOS = {
     return { errors, early, late, savedMen, before, removed, afterRemove, clicked, box };
   },
 
+  /**
+   * SEND LATER (Tim, 2026-10-15: "make a "send later" button near the other
+   * buttons on the trade slip with all the saved trades where you select after
+   * a future week"). One saved trade; its select is set to the first week
+   * offered, then back to now. What the page STORED is read back each time.
+   */
+  async sendLater() {
+    const { document, window, errors } = await boot();
+    const $ = (id) => document.getElementById(id);
+    const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+    await settleGoal(document);
+    const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+    const a = boxes('cuListA')[0];
+    a.checked = true; fire(a, 'change');
+    const b = boxes('cuListB')[0];
+    b.checked = true; fire(b, 'change');
+    await settle(600);
+    fire($('cuSave'), 'click');
+    await settle(800);
+    const stored = () => {
+      try { return JSON.parse(window.localStorage.getItem('ff.prefs') || '{}')['trade.custom'] || []; } catch { return []; }
+    };
+    const sel = () => $('cuRows').querySelector('select[data-later]');
+    const look = () => {
+      const s = sel();
+      if (!s) return null;
+      const opts = [...s.querySelectorAll('option')];
+      const on = opts.find((o) => o.hasAttribute('selected')) || opts[0];
+      return {
+        inStack: !!s.closest('td.cu-remove'), lit: /\bon\b/.test(s.getAttribute('class') || ''),
+        shown: text(on), options: opts.map((o) => [o.getAttribute('value'), text(o)]),
+      };
+    };
+    const before = { look: look(), stored: stored() };
+    // A click on the select must not open the deal's pop-up.
+    fire(sel(), 'click');
+    await settle(300);
+    const popOnClick = !$('dealModal').hidden;
+    const pick = before.look && before.look.options.find(([v]) => v !== '');
+    const s1 = sel();
+    if (s1 && pick) { s1.value = pick[0]; fire(s1, 'change'); }
+    await settle(800);
+    const set = { look: look(), stored: stored(), week: pick ? Number(pick[0]) : null };
+    const s2 = sel();
+    if (s2) { s2.value = ''; fire(s2, 'change'); }
+    await settle(800);
+    const cleared = { look: look(), stored: stored() };
+    return { errors, before, popOnClick, set, cleared };
+  },
+
   async customNarrow() {
     const { document, window, errors } = await boot('trade.html', '', null, { wide: false });
     const out = { errors };
@@ -8559,6 +8609,30 @@ if (!live.boot) {
           JSON.stringify(sv.box.b) === JSON.stringify([...sv.clicked.recv].sort()),
         JSON.stringify([sv.clicked, sv.box]));
     }
+  }
+
+  // -- SEND LATER (Tim, 2026-10-15) ------------------------------------------
+  // Seen failing against the page before it: no select on the row at all.
+  {
+    const sl = run('sendLater');
+    const B = sl.before || {};
+    ok('SEND LATER: the scenario ran clean with one saved trade',
+      !sl.boot && sl.errors.length === 0 && (B.stored || []).length === 1, sl.boot || JSON.stringify(sl.errors).slice(0, 300));
+    ok('SEND LATER: the saved row has a "Send later" select in its button stack, unset, offering "After wk N" weeks',
+      !!B.look && B.look.inStack && !B.look.lit && B.look.shown === 'Send later' &&
+        B.look.options.length > 1 && B.look.options.slice(1).every(([v, t]) => /^\d+$/.test(v) && t === `After wk ${v}`) &&
+        !('sendAfter' in B.stored[0]),
+      JSON.stringify(B).slice(0, 400));
+    ok('SEND LATER: clicking it opens no pop-up', sl.popOnClick === false);
+    const S = sl.set || {};
+    ok('SEND LATER: picking a week saves it on the entry as `sendAfter`, and the row reads "After wk N", lit',
+      Number.isFinite(S.week) && (S.stored || []).length === 1 && S.stored[0].sendAfter === S.week &&
+        !!S.look && S.look.lit && S.look.shown === `After wk ${S.week}` && S.look.options[0][1] === 'Send now',
+      JSON.stringify(S).slice(0, 400));
+    const C = sl.cleared || {};
+    ok('SEND LATER: "Send now" clears it back',
+      (C.stored || []).length === 1 && !('sendAfter' in C.stored[0]) && !!C.look && !C.look.lit && C.look.shown === 'Send later',
+      JSON.stringify(C).slice(0, 400));
   }
   ok('and forgets it', !cu.storedAfterDrop || cu.storedAfterDrop.length === 0,
     JSON.stringify(cu.storedAfterDrop));

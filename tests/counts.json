@@ -166,7 +166,7 @@
       "scenarios": 20
     },
     "tr-test.mjs": {
-      "assertions": 1258
+      "assertions": 1263
     },
     "tr-value-check.mjs": {
       "assertions": 79
@@ -306,7 +306,7 @@
       "scenarios": 7
     },
     "test-notify.mjs": {
-      "assertions": 75
+      "assertions": 86
     },
     "notify-check.mjs": {
       "assertions": 121,
