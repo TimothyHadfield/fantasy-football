@@ -18,8 +18,9 @@
 import { heatScale, heatOf } from '../js/heat.js';
 import {
   zeroScale, signed, gainWeeksSpec, slotChangeSpec, goalSpec, altGoalSpec, oppSpec, depthSpec,
-  teamSpec, recordOf, meetSpec,
+  teamSpec, recordOf, meetSpec, yesSpec,
 } from '../js/trade-cards.js';
+import { acceptVerdict } from '../js/accept.js';
 
 let pass = 0;
 const fails = [];
@@ -181,9 +182,48 @@ const tableOf = (spec) => {
   eq(g.rows[1].label, 'Luke', 'him, by name');
   eq(g.rows[1].value, '15.4% → 12.1%', 'him, now → with');
   ok('and the chance he says yes', g.rows[2].label === 'Chance he says yes' && g.rows[2].value === '95%');
+  // Since 2026-10-15 (trade audit Phase 3, "show words") the page hands the word in.
+  const gw = goalSpec({ mine: { before: 0.024, after: 0.053 }, accept: 0.2, word: 'unlikely' });
+  eq(gw.rows[gw.rows.length - 1].value, 'unlikely (20%)', 'the chance he says yes is the word, then its %');
   eq(g.title, 'Title chance', 'titled by the goal');
   const a = altGoalSpec({ chance: 'chance of finishing last', partner: 'Luke', before: 0.155, after: 0.098, weeks: 'weeks 5–14' });
   ok('the other goal: yours only, and it says it ranks nothing', a.rows.length === 1 && /does not rank/.test(a.foot), a.foot);
+}
+
+// ------------------------------------------------- 4b. will he say yes?
+//
+// The yes-word's preview (trade audit Phase 3; Tim, 2026-10-14: "Rebuild, show
+// words"). The verdict is js/accept.js's own, on the Allen + Charbonnet shape:
+// he loses 2 a week, gets an Out RB, gives up more on ESPN's numbers.
+{
+  const v = acceptVerdict({
+    lineupPerWeek: -2,
+    gets: [{ name: 'Charbonnet', pos: 'RB', avg: 9.4, last: 0, rank: 30, status: 'OUT' },
+      { name: 'Hollywood', pos: 'WR', avg: 7.1, last: 6.3, rank: 50 }],
+    sends: [{ name: 'Allen', pos: 'QB', avg: 22.3, last: 19.8, rank: 3 }],
+    standing: 0.6,
+  });
+  const y = yesSpec({ partner: 'Nolan', verdicts: [{ v }] });
+  ok('one manager: a row per part of the verdict', y.rows.length >= v.parts.length && v.parts.length >= 3, JSON.stringify(y.rows));
+  const val = (h) => Number(String(h).replace('−', '-'));
+  const sum = Math.round(y.rows.reduce((a, r) => a + val(r.html), 0) * 10) / 10;
+  ok('the parts (and Rounding) add up to "In all"', y.totals[0].label === 'In all' && Math.abs(sum - val(y.totals[0].html)) < 0.051,
+    `${y.rows.map((r) => r.html).join(' ')} = ${sum} vs ${y.totals[0].html}`);
+  eq(y.totals[0].html, signed(v.feel), '"In all" is the verdict’s feel, rounded then signed');
+  eq(y.total.value, `${v.word} (${Math.round(v.p * 100)}%)`, 'the last line is the word and its %');
+  ok('the Allen + Charbonnet shape reads unlikely', v.word === 'unlikely', v.word);
+  ok('and the why is in the foot', y.foot.includes(v.why), y.foot);
+  ok('a part is labelled by its own words, capitalised', y.rows.some((r) => /^He loses 2 a week$/.test(r.label)), JSON.stringify(y.rows.map((r) => r.label)));
+  // Rounding: three parts of 0.04 each print 0.0 but add to 0.1.
+  const tiny = { p: 0.51, word: 'maybe', why: 'about even for him', feel: 0.12,
+    parts: [{ key: 'a', v: 0.04, text: 'a' }, { key: 'b', v: 0.04, text: 'b' }, { key: 'c', v: 0.04, text: 'c' }] };
+  const t = yesSpec({ verdicts: [{ v: tiny }] });
+  ok('tenths that miss say "Rounding"', t.rows.some((r) => r.label === 'Rounding' && r.html === '+0.1'), JSON.stringify(t.rows));
+  // Several managers: each one's word, then all of them.
+  const m = yesSpec({ verdicts: [{ partner: 'Nolan', v: { p: 0.7, word: 'likely' } }, { partner: 'Bo', v: { p: 0.5, word: 'maybe' } }],
+    p: 0.35, word: 'maybe' });
+  ok('a packing: one row a manager, and the chance they all say yes',
+    m.rows.length === 2 && m.rows[0].value === 'likely (70%)' && m.total.value === 'maybe (35%)', JSON.stringify(m));
 }
 
 // ------------------------------------------------- 5. his lineup against you

@@ -1892,7 +1892,8 @@ const SCENARIOS = {
         const td = tr.querySelector('.hv.goal-cell');
         const sub = text(td && td.querySelector('.sub'));
         // `all`: the whole cell, rank and band included — the printed change is in it.
-        return { sub, yes: (sub.match(/(\d+)% yes/) || [])[1] || null, all: text(td) };
+        // `yes`: the word where "62% yes" was (trade audit Phase 3, "show words").
+        return { sub, yes: (sub.match(/yes: (likely|maybe|unlikely)$/) || [])[1] || null, all: text(td) };
       })(),
       opp: text(tr.querySelector('td.opp-proj')),
     };
@@ -4720,6 +4721,73 @@ SCENARIOS.sendAfter = async function sendAfter() {
   return out;
 };
 
+/**
+ * WILL HE SAY YES, AS WORDS (trade audit Phase 3; Tim, 2026-10-14: "Rebuild,
+ * show words"). Read by tr-yes-check.mjs: every scored finder row's goal cell
+ * (its sub-line, its yes-word and that word's preview), each row's "He gains"
+ * preview (its flat "All N" line), the top row's pop-up line and the word's
+ * preview there, a custom deal's line under his figure, and the packing's line.
+ * Demo league; run with TR_GOAL=title ("Win it all"), so his playoff weeks are
+ * reach-weighted in "He gains" and the flat input is testable.
+ */
+SCENARIOS.yesWords = async function yesWords() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  await settleGoal(document);
+  const goalOn = text(document.querySelector('#goalToggle button.on'));
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer')].slice(0, 12).map((tr) => {
+    const td = tr.querySelector('.hv.goal-cell');
+    const word = td && td.querySelector('[data-rc="yes"]');
+    return {
+      key: tr.getAttribute('data-key'),
+      sub: text(td && td.querySelector('.sub')),
+      word: text(word),
+      wordCls: word ? String(word.getAttribute('class') || '') : null,
+      card: word ? popText(word) : '',
+      goalCard: td ? popText(td) : '',
+      their: text(tr.querySelector('.hv.their-gain')),
+      theirCard: popText(tr.querySelector('.hv.their-gain')),
+    };
+  });
+  const comboGoal = text(document.querySelector('#comboBody .combo-goal'));
+  const comboWord = document.querySelector('#comboBody .combo-goal [data-rc="yes"]');
+  const comboCard = comboWord ? popText(comboWord) : '';
+
+  // The top row's pop-up.
+  const route = await openRowDeal(document, document.querySelector('#tradeTable tbody tr.offer'), 2500);
+  const dealWord = document.querySelector('#dealBody .deal-goal [data-rc="yes"]');
+  const deal = {
+    open: route.open,
+    line: text(document.querySelector('#dealBody .deal-goal')),
+    word: text(dealWord),
+    card: dealWord ? popText(dealWord) : '',
+  };
+  fire($('dealClose'), 'click');
+  await settle(300);
+  await emptyBox(document, route);
+
+  // A custom deal: one man each way.
+  const tick = (sel) => {
+    const box = document.querySelector(sel);
+    if (!box) return false;
+    box.checked = true;
+    box.dispatchEvent(new window.Event('change', { bubbles: true }));
+    return true;
+  };
+  const ticked = tick('#cuListA input[type="checkbox"]') && tick('#cuListB input[type="checkbox"]');
+  await settle(1500);
+  const cuWord = $('cuGainB').querySelector('[data-rc="yes"]');
+  const custom = {
+    ticked,
+    yes: text($('cuGainB').querySelector('.cu-yes')),
+    word: text(cuWord),
+    card: cuWord ? popText(cuWord) : '',
+    preview: text($('cuPreview')),
+    gainB: text($('cuGainB').querySelector('.cu-sub')),
+  };
+  return { errors, goalOn, rows, comboGoal, comboCard, deal, custom };
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);
@@ -5336,7 +5404,7 @@ for (const noApi of [false, true]) {
     (t.match(/^Date:.*/m) || [''])[0]);
   ok(`and the league's own shape${tag}`, /^League: 10 teams · PPR · starters: QB/m.test(t), (t.match(/^League:.*/m) || [''])[0]);
   ok(`the goal and the yes chance as the goal cell gives them${tag}`,
-    !!ai.row.goal.yes && t.includes(`${ai.row.goal.yes}% he accepts`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
+    !!ai.row.goal.yes && t.includes(`whether he accepts: ${ai.row.goal.yes}`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
     `${JSON.stringify(ai.row.goal)} / ${(t.match(/chance \(my goal.*/) || [''])[0]}`);
   {
     // "5.9% → 10.3% (+4.4% ±0.4)": the change it quotes is those two subtracted
@@ -8932,7 +9000,7 @@ if (!gt.boot) {
     T.trades.some((t, i, a) => i > 0 && netOf(a[i - 1]) === netOf(t)) && netTiesKeepGoal(T.trades),
     T.trades.map((t) => `${netOf(t) / 10}:${t.goal.v.toFixed(4)}`).join(' '));
   ok('each cell says before → after and how likely he is to say yes',
-    scored.every((t) => /^\d+\.\d% → \d+\.\d% · \d+% yes$/.test(t.goal.sub)),
+    scored.every((t) => /^\d+\.\d% → \d+\.\d% · yes: (likely|maybe|unlikely)$/.test(t.goal.sub)),
     scored.slice(0, 3).map((t) => t.goal.sub).join(' | '));
   ok('and a green cell is one that helps, a red one one that hurts — by sign as well as hue',
     scored.every((t) => (/\bpos\b/.test(t.goal.cls) ? /^\+/.test(t.goal.head) : true) &&
@@ -9014,7 +9082,7 @@ if (!gt.boot) {
     // "yes" is only within a point for a partner sure to reach the bracket).
     const top = scored.slice().sort((a, b) => b.goal.v - a.goal.v)[0];
     const re = top ? await rederiveGoal(T, top, 'title') : null;
-    const shown = top ? top.goal.sub.match(/^(\d+\.\d)% → (\d+\.\d)% · (\d+)% yes$/) : null;
+    const shown = top ? top.goal.sub.match(/^(\d+\.\d)% → (\d+\.\d)% · yes: (likely|maybe|unlikely)$/) : null;
     ok('the top row’s title chance re-derives from the engine alone',
       !!re && !!shown && Math.abs(Number(shown[1]) - re.before * 100) <= 0.051 &&
         Math.abs(Number(shown[2]) - re.after * 100) <= 0.151,
@@ -9022,9 +9090,10 @@ if (!gt.boot) {
     // Since 2026-10-15 (trade audit Phase 3) the yes-chance also reads each
     // man's ESPN average, last game, rank, injury tag, his holes and standing
     // (js/accept.js, pinned by test-accept.mjs) — not re-derivable from the
-    // engine alone, so this only holds the row to a real whole percent.
-    ok('and the row prints the chance he says yes as a whole percent',
-      !!shown && Number(shown[3]) >= 0 && Number(shown[3]) <= 100,
+    // engine alone, so this only holds the row to one of its words (since
+    // wave 2, "show words"; tr-yes-check.mjs holds the word to its %).
+    ok('and the row prints the chance he says yes as a word',
+      !!shown && /^(likely|maybe|unlikely)$/.test(shown[3]),
       `page ${top && top.goal.sub}`);
   }
 
@@ -9191,7 +9260,7 @@ if (!gt.boot) {
     `${gt.dealGoal} vs ${scored[0] && `${scored[0].goal.head} ${scored[0].goal.sub}`}`);
   ok('a custom deal was built by ticking a man each side', gt.ticked);
   ok('the builder says what the deal does to the title chance as it is built',
-    /title chance [+−]?\d+\.\d%/.test(gt.cuPreview) && /he says yes/.test(gt.cuPreview), gt.cuPreview);
+    /title chance [+−]?\d+\.\d%/.test(gt.cuPreview), gt.cuPreview);
   ok('and the saved row carries the goal column like a finder row',
     !!gt.cuRow && gt.cuRow.goal && /%/.test(gt.cuRow.goal.head) && gt.cuRow.goal.index === 1,
     JSON.stringify(gt.cuRow && gt.cuRow.goal));
@@ -10130,7 +10199,8 @@ if (!gl.boot) {
     // -- the goal: three lines ----------------------------------------------
     ok('the goal cell: you now → with, him now → with, the chance he says yes',
       /You now → with \d+\.\d% → \d+\.\d%/.test(F.goal.card) &&
-      F.goal.card.includes(`${F.partner} now → with`) && /Chance he says yes \d+%/.test(F.goal.card), F.goal.card);
+      F.goal.card.includes(`${F.partner} now → with`) &&
+      /Chance he says yes (likely|maybe|unlikely) \(\d+%\)/.test(F.goal.card), F.goal.card);
     ok('and not the long sentence about simulated seasons', !/simulated seasons/.test(F.goal.card) && F.goal.rawTitle === '',
       F.goal.card + F.goal.rawTitle);
     ok('the other goal: yours only, and it says it ranks nothing',
